@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -978,5 +979,48 @@ func TestTurnSummaryBoundsHighVolumeDetail(t *testing.T) {
 	got := engine.Snapshot().Turns[0]
 	if len(got.Items) != 1 || len(got.Items[0].Detail) > (12<<10)+3 || !strings.HasPrefix(got.Items[0].Detail, "…") {
 		t.Fatalf("command output was not bounded: %d %#v", len(got.Items[0].Detail), got.Items)
+	}
+}
+
+func TestWindowedSnapshotAndMessagesPage(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	for i := 0; i < 12; i++ {
+		message, err := engine.Send(context.Background(), SendRequest{
+			Text: fmt.Sprintf("message-%02d", i), To: []model.ActorID{model.ActorClaude},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		input := receiveInput(t, adapters[model.ActorClaude])
+		if input.MessageID != message.ID {
+			t.Fatalf("submission %d correlated to %q, want %q", i, input.MessageID, message.ID)
+		}
+	}
+
+	window := engine.WindowedSnapshot(5)
+	if len(window.Messages) != 5 {
+		t.Fatalf("window messages = %d, want 5", len(window.Messages))
+	}
+	if window.MessageWindow == nil || window.MessageWindow.Total != 12 || window.MessageWindow.Loaded != 5 || !window.MessageWindow.HasMore {
+		t.Fatalf("unexpected window metadata: %#v", window.MessageWindow)
+	}
+	if got := window.Messages[0].Text; got != "message-07" {
+		t.Fatalf("oldest window message = %q, want message-07", got)
+	}
+
+	page := engine.MessagesPage(window.Messages[0].Seq, 4)
+	if len(page.Messages) != 4 || page.Total != 12 || !page.HasMore {
+		t.Fatalf("unexpected page: %#v", page)
+	}
+	if page.Messages[0].Text != "message-03" || page.Messages[3].Text != "message-06" {
+		t.Fatalf("unexpected page order: %#v", page.Messages)
+	}
+
+	oldest := engine.MessagesPage(page.Messages[0].Seq, 10)
+	if len(oldest.Messages) != 3 || oldest.HasMore {
+		t.Fatalf("unexpected oldest page: %#v", oldest)
+	}
+	if oldest.Messages[0].Text != "message-00" || oldest.Messages[2].Text != "message-02" {
+		t.Fatalf("unexpected oldest page messages: %#v", oldest.Messages)
 	}
 }

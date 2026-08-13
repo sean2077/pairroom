@@ -25,6 +25,12 @@
     lightboxIndex: -1,
     lightboxRequest: 0,
     lightboxZoom: 1,
+    lightboxRotation: 0,
+    lightboxMode: 'fit',
+    loadingOlder: false,
+    unreadCount: 0,
+    lastSeenSeq: 0,
+    draftKey: '',
     expandedMessages: new Set(),
     conversationFilter: 'all',
     threadFilter: '',
@@ -76,9 +82,10 @@
   }
 
   async function loadSnapshot() {
-    state.snapshot = await api('/api/v1/snapshot');
+    state.snapshot = await api('/api/v1/snapshot?message_limit=250');
     state.drafts = { claude: '', codex: '' };
     state.draftCorrelation = { claude: '', codex: '' };
+    initializeRoomLocalState();
     render(true);
     connectEvents();
     refreshGitStatus();
@@ -131,6 +138,12 @@
         if (!state.snapshot.messages.some((item) => item.id === data.id)) {
           data.seq = event.seq;
           state.snapshot.messages.push(data);
+          if (state.snapshot.message_window) {
+            state.snapshot.message_window.total = Number(state.snapshot.message_window.total || 0) + 1;
+            state.snapshot.message_window.loaded = state.snapshot.messages.length;
+            if (!state.snapshot.message_window.oldest_seq) state.snapshot.message_window.oldest_seq = data.seq;
+          }
+          handleIncomingMessage(data, event.seq);
         }
         if (data.from === 'claude' || data.from === 'codex') {
           state.drafts[data.from] = '';
@@ -382,7 +395,20 @@
     }
     items.sort((a, b) => a.seq - b.seq);
 
-    if (!items.length && !state.drafts.claude && !state.drafts.codex) {
+    const windowInfo = state.snapshot.message_window;
+    if (windowInfo?.has_more && !state.threadFilter) {
+      const older = document.createElement('button');
+      older.type = 'button';
+      older.className = 'load-older-button';
+      older.dataset.loadOlder = 'true';
+      older.disabled = state.loadingOlder;
+      older.textContent = state.loadingOlder
+        ? '正在加载更早消息…'
+        : `加载更早消息 · 已显示 ${windowInfo.loaded || state.snapshot.messages.length} / ${windowInfo.total}`;
+      timeline.appendChild(older);
+    }
+
+    if (!items.length && !state.drafts.claude && !state.drafts.codex && !windowInfo?.has_more) {
       const empty = document.createElement('div');
       empty.className = 'timeline-empty';
       const inner = document.createElement('div');
@@ -818,7 +844,10 @@
       ? `${state.lightboxIndex + 1} / ${state.lightboxItems.length}` : '';
     $('lightbox-prev').disabled = state.lightboxItems.length < 2;
     $('lightbox-next').disabled = state.lightboxItems.length < 2;
+    state.lightboxRotation = 0;
+    state.lightboxMode = 'fit';
     setLightboxZoom(1);
+    updateLightboxMode();
     try {
       const url = knownURL || await loadAttachmentURL(attachment);
       if (request !== state.lightboxRequest) return;
@@ -842,10 +871,49 @@
   }
 
   function setLightboxZoom(value) {
-    state.lightboxZoom = Math.min(4, Math.max(0.5, Number(value) || 1));
-    $('lightbox-image').style.transform = `scale(${state.lightboxZoom})`;
+    state.lightboxZoom = Math.min(8, Math.max(0.25, Number(value) || 1));
+    applyLightboxTransform();
+  }
+
+  function rotateLightbox(delta) {
+    state.lightboxRotation = (state.lightboxRotation + delta + 360) % 360;
+    applyLightboxTransform();
+  }
+
+  function setLightboxMode(mode) {
+    state.lightboxMode = mode === 'actual' ? 'actual' : 'fit';
+    state.lightboxZoom = 1;
+    updateLightboxMode();
+    applyLightboxTransform();
+  }
+
+  function updateLightboxMode() {
+    const image = $('lightbox-image');
+    image.classList.toggle('actual-size', state.lightboxMode === 'actual');
+    $('lightbox-fit').classList.toggle('active', state.lightboxMode === 'fit');
+    $('lightbox-actual').classList.toggle('active', state.lightboxMode === 'actual');
+  }
+
+  function applyLightboxTransform() {
+    $('lightbox-image').style.transform = `rotate(${state.lightboxRotation}deg) scale(${state.lightboxZoom})`;
     $('lightbox-zoom-value').textContent = `${Math.round(state.lightboxZoom * 100)}%`;
-    $('lightbox-stage').classList.toggle('zoomed', state.lightboxZoom > 1);
+    $('lightbox-stage').classList.toggle('zoomed', state.lightboxZoom > 1 || state.lightboxMode === 'actual');
+  }
+
+  async function copyLightboxImage() {
+    const attachment = state.lightboxItems[state.lightboxIndex];
+    if (!attachment || !navigator.clipboard || typeof ClipboardItem === 'undefined') {
+      toast('当前浏览器不支持复制图片', 'error');
+      return;
+    }
+    try {
+      const blob = await apiBlob(`/api/v1/attachments/${encodeURIComponent(attachment.id)}`);
+      const type = blob.type || attachment.media_type || 'image/png';
+      await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
+      toast('图片已复制到剪贴板', 'success');
+    } catch (error) {
+      toast(`复制图片失败：${error.message}`, 'error');
+    }
   }
 
   function imageMeta(value) {
@@ -1388,6 +1456,7 @@
         }),
       });
       messageInput.value = '';
+      persistComposerDraft();
       clearReply();
       clearPendingAttachments(true);
       autoSizeComposer();
@@ -1582,7 +1651,119 @@
     document.querySelectorAll('.target-button').forEach((button) => button.classList.toggle('active', button.dataset.target === target));
     const labels = { all: '发送给 Claude 与 Codex', claude: '仅发送给 Claude', codex: '仅发送给 Codex' };
     $('delivery-hint').textContent = labels[target];
+    persistComposerDraft();
     messageInput.focus();
+  }
+
+  function initializeRoomLocalState() {
+    const roomID = state.snapshot?.meta?.id || 'default';
+    state.draftKey = `pairroom.draft.${roomID}`;
+    const seenKey = `pairroom.lastSeen.${roomID}`;
+    const storedSeen = Number(localStorage.getItem(seenKey) || 0);
+    if (storedSeen > 0) state.lastSeenSeq = storedSeen;
+    else {
+      state.lastSeenSeq = Number(state.snapshot.latest_seq || 0);
+      localStorage.setItem(seenKey, String(state.lastSeenSeq));
+    }
+    try {
+      const draft = JSON.parse(localStorage.getItem(state.draftKey) || 'null');
+      if (draft && typeof draft === 'object') {
+        messageInput.value = String(draft.text || '');
+        if (['all', 'claude', 'codex'].includes(draft.target)) state.selectedTarget = draft.target;
+        if (['append', 'next_turn', 'supersede'].includes(draft.intent)) $('message-intent').value = draft.intent;
+      }
+    } catch { localStorage.removeItem(state.draftKey); }
+    setTarget(state.selectedTarget);
+    autoSizeComposer();
+    recomputeUnread();
+    updateNotificationButton();
+  }
+
+  function persistComposerDraft() {
+    if (!state.draftKey) return;
+    const value = { text: messageInput.value, target: state.selectedTarget, intent: $('message-intent').value };
+    if (!value.text) localStorage.removeItem(state.draftKey);
+    else localStorage.setItem(state.draftKey, JSON.stringify(value));
+  }
+
+  function recomputeUnread() {
+    state.unreadCount = (state.snapshot?.messages || []).filter((message) =>
+      ['claude', 'codex'].includes(message.from) && Number(message.seq || 0) > state.lastSeenSeq).length;
+    updateUnreadUI();
+  }
+
+  function handleIncomingMessage(message, seq) {
+    if (!['claude', 'codex'].includes(message.from) || Number(seq || 0) <= state.lastSeenSeq) return;
+    const nearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 160;
+    if (!document.hidden && nearBottom) {
+      markConversationRead(true);
+      return;
+    }
+    state.unreadCount += 1;
+    updateUnreadUI();
+    if (document.hidden && Notification.permission === 'granted') {
+      const body = truncate(message.text || attachmentSummary(message), 180);
+      const notification = new Notification(`${displayName(message.from)} · PairRoom`, { body, tag: `pairroom-${message.id}` });
+      notification.onclick = () => { window.focus(); scrollToMessage(message.id); notification.close(); };
+    }
+  }
+
+  function markConversationRead(force = false) {
+    if (!state.snapshot || document.hidden) return;
+    const nearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 160;
+    if (!force && !nearBottom) return;
+    state.lastSeenSeq = Number(state.snapshot.latest_seq || state.lastSeenSeq);
+    state.unreadCount = 0;
+    localStorage.setItem(`pairroom.lastSeen.${state.snapshot.meta.id}`, String(state.lastSeenSeq));
+    updateUnreadUI();
+  }
+
+  function updateUnreadUI() {
+    document.title = state.unreadCount > 0 ? `(${state.unreadCount}) PairRoom` : 'PairRoom';
+    $('scroll-bottom').textContent = state.unreadCount > 0 ? `跳到最新 (${state.unreadCount})` : '跳到最新';
+  }
+
+  async function requestNotifications() {
+    if (!('Notification' in window)) { toast('当前浏览器不支持桌面通知', 'error'); return; }
+    const permission = await Notification.requestPermission();
+    updateNotificationButton();
+    toast(permission === 'granted' ? '桌面通知已启用' : '桌面通知未启用', permission === 'granted' ? 'success' : 'error');
+  }
+
+  function updateNotificationButton() {
+    const button = $('notification-button');
+    if (!('Notification' in window)) { button.disabled = true; button.textContent = '×'; return; }
+    button.textContent = Notification.permission === 'granted' ? '◆' : '♢';
+    button.title = Notification.permission === 'granted' ? '桌面通知已启用' : '启用桌面通知';
+  }
+
+  async function loadOlderMessages(button) {
+    if (state.loadingOlder || !state.snapshot?.message_window?.has_more) return;
+    const oldest = Math.min(...(state.snapshot.messages || []).map((message) => Number(message.seq || 0)).filter((value) => value > 0));
+    if (!Number.isFinite(oldest)) return;
+    state.loadingOlder = true;
+    if (button) button.disabled = true;
+    const oldHeight = timeline.scrollHeight;
+    const oldTop = timeline.scrollTop;
+    try {
+      const page = await api(`/api/v1/messages?before_seq=${oldest}&limit=100`);
+      const existing = new Set((state.snapshot.messages || []).map((message) => message.id));
+      const added = (page.messages || []).filter((message) => !existing.has(message.id));
+      state.snapshot.messages = [...added, ...(state.snapshot.messages || [])].sort((a, b) => Number(a.seq) - Number(b.seq));
+      state.snapshot.message_window = {
+        total: page.total,
+        loaded: state.snapshot.messages.length,
+        has_more: Boolean(page.has_more),
+        oldest_seq: state.snapshot.messages[0]?.seq || 0,
+      };
+      renderTimeline();
+      requestAnimationFrame(() => { timeline.scrollTop = oldTop + Math.max(0, timeline.scrollHeight - oldHeight); });
+    } catch (error) {
+      toast(`加载历史消息失败：${error.message}`, 'error');
+    } finally {
+      state.loadingOlder = false;
+      queueRender();
+    }
   }
 
   function setConnection(connected, label) {
@@ -1715,7 +1896,10 @@
     state.lightboxRequest += 1;
     state.lightboxItems = [];
     state.lightboxIndex = -1;
+    state.lightboxRotation = 0;
+    state.lightboxMode = 'fit';
     setLightboxZoom(1);
+    updateLightboxMode();
     if (dialog.open) dialog.close();
     $('lightbox-image').removeAttribute('src');
     $('lightbox-open').href = '#';
@@ -1797,6 +1981,8 @@
   }
 
   document.addEventListener('click', (event) => {
+    const loadOlder = event.target.closest('[data-load-older]');
+    if (loadOlder) { void loadOlderMessages(loadOlder); return; }
     const targetButton = event.target.closest('.target-button');
     if (targetButton) setTarget(targetButton.dataset.target);
     const action = event.target.closest('[data-action][data-actor]');
@@ -1853,7 +2039,7 @@
       sendMessage();
     }
   });
-  messageInput.addEventListener('input', autoSizeComposer);
+  messageInput.addEventListener('input', () => { autoSizeComposer(); persistComposerDraft(); });
   messageInput.addEventListener('paste', (event) => {
     const files = Array.from(event.clipboardData?.files || []);
     if (!files.length) return;
@@ -1880,12 +2066,16 @@
   });
   $('export-markdown').addEventListener('click', () => downloadExport('markdown'));
   $('export-json').addEventListener('click', () => downloadExport('json'));
+  $('notification-button').addEventListener('click', requestNotifications);
+  $('message-intent').addEventListener('change', persistComposerDraft);
   $('theme-button').addEventListener('click', () => {
     state.theme = state.theme === 'dark' ? 'light' : 'dark';
     document.documentElement.dataset.theme = state.theme;
     localStorage.setItem('pairroom.theme', state.theme);
   });
-  $('scroll-bottom').addEventListener('click', scrollBottom);
+  $('scroll-bottom').addEventListener('click', () => { scrollBottom(); markConversationRead(true); });
+  timeline.addEventListener('scroll', () => markConversationRead(false), { passive: true });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) markConversationRead(false); });
   $('refresh-diff').addEventListener('click', refreshDiff);
   $('inspector-agent').addEventListener('change', (event) => { state.inspectorAgent = event.target.value; renderActivity(); });
   $('clear-inspector-scope').addEventListener('click', clearInspectorScope);
@@ -1895,6 +2085,12 @@
   $('lightbox-zoom-out').addEventListener('click', () => setLightboxZoom(state.lightboxZoom - 0.25));
   $('lightbox-zoom-reset').addEventListener('click', () => setLightboxZoom(1));
   $('lightbox-zoom-in').addEventListener('click', () => setLightboxZoom(state.lightboxZoom + 0.25));
+  $('lightbox-rotate-left').addEventListener('click', () => rotateLightbox(-90));
+  $('lightbox-rotate-right').addEventListener('click', () => rotateLightbox(90));
+  $('lightbox-fit').addEventListener('click', () => setLightboxMode('fit'));
+  $('lightbox-actual').addEventListener('click', () => setLightboxMode('actual'));
+  $('lightbox-copy').addEventListener('click', copyLightboxImage);
+  $('lightbox-stage').addEventListener('wheel', (event) => { if (!event.ctrlKey && !event.metaKey) return; event.preventDefault(); setLightboxZoom(state.lightboxZoom + (event.deltaY < 0 ? 0.25 : -0.25)); }, { passive: false });
   $('lightbox-image').addEventListener('dblclick', () => setLightboxZoom(state.lightboxZoom === 1 ? 2 : 1));
   $('image-lightbox').addEventListener('click', (event) => {
     if (event.target === $('image-lightbox')) closeLightbox();
@@ -1931,6 +2127,8 @@
       if (event.key === '+' || event.key === '=') { event.preventDefault(); setLightboxZoom(state.lightboxZoom + 0.25); return; }
       if (event.key === '-') { event.preventDefault(); setLightboxZoom(state.lightboxZoom - 0.25); return; }
       if (event.key === '0') { event.preventDefault(); setLightboxZoom(1); return; }
+      if (event.key.toLocaleLowerCase() === 'r') { event.preventDefault(); rotateLightbox(event.shiftKey ? -90 : 90); return; }
+      if (event.key.toLocaleLowerCase() === 'f') { event.preventDefault(); setLightboxMode('fit'); return; }
     }
     if (event.key === 'Escape') {
       if ($('image-lightbox').open) closeLightbox();

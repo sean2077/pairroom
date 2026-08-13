@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -471,5 +472,50 @@ func TestAttachmentUploadRejectsNonImageAndSecurityHeadersAllowBlobPreview(t *te
 	server.Handler().ServeHTTP(traversal, localRequest(http.MethodGet, "/api/v1/attachments/../../etc/passwd", nil))
 	if traversal.Code == http.StatusOK {
 		t.Fatal("path traversal unexpectedly served content")
+	}
+}
+
+func TestWindowedSnapshotAndMessagePaginationAPI(t *testing.T) {
+	t.Parallel()
+	server, engine := newTestServer(t, "")
+	for i := 0; i < 9; i++ {
+		if _, err := engine.Send(context.Background(), room.SendRequest{
+			Text: fmt.Sprintf("history-%02d", i), To: []model.ActorID{model.ActorClaude},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	windowRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(windowRecorder, localRequest(http.MethodGet, "/api/v1/snapshot?message_limit=3", nil))
+	if windowRecorder.Code != http.StatusOK {
+		t.Fatalf("window snapshot status = %d: %s", windowRecorder.Code, windowRecorder.Body.String())
+	}
+	var window model.RoomSnapshot
+	if err := json.Unmarshal(windowRecorder.Body.Bytes(), &window); err != nil {
+		t.Fatal(err)
+	}
+	if len(window.Messages) != 3 || window.MessageWindow == nil || window.MessageWindow.Total != 9 || !window.MessageWindow.HasMore {
+		t.Fatalf("unexpected window snapshot: messages=%d window=%#v", len(window.Messages), window.MessageWindow)
+	}
+
+	pageRecorder := httptest.NewRecorder()
+	target := fmt.Sprintf("/api/v1/messages?before_seq=%d&limit=4", window.Messages[0].Seq)
+	server.Handler().ServeHTTP(pageRecorder, localRequest(http.MethodGet, target, nil))
+	if pageRecorder.Code != http.StatusOK {
+		t.Fatalf("message page status = %d: %s", pageRecorder.Code, pageRecorder.Body.String())
+	}
+	var page model.MessagePage
+	if err := json.Unmarshal(pageRecorder.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Messages) != 4 || page.Total != 9 || !page.HasMore {
+		t.Fatalf("unexpected message page: %#v", page)
+	}
+
+	bad := httptest.NewRecorder()
+	server.Handler().ServeHTTP(bad, localRequest(http.MethodGet, "/api/v1/messages?before_seq=nope", nil))
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("invalid cursor status = %d", bad.Code)
 	}
 }

@@ -389,14 +389,29 @@ type SystemNotice struct {
 	Text  string `json:"text"`
 }
 
+type MessageWindow struct {
+	Total     int    `json:"total"`
+	Loaded    int    `json:"loaded"`
+	HasMore   bool   `json:"has_more"`
+	OldestSeq uint64 `json:"oldest_seq,omitempty"`
+}
+
+type MessagePage struct {
+	Messages  []Message `json:"messages"`
+	Total     int       `json:"total"`
+	HasMore   bool      `json:"has_more"`
+	OldestSeq uint64    `json:"oldest_seq,omitempty"`
+}
+
 type RoomSnapshot struct {
-	Meta         RoomMeta                        `json:"meta"`
-	Settings     RoomSettings                    `json:"settings"`
-	Participants map[ActorID]ParticipantSnapshot `json:"participants"`
-	Messages     []Message                       `json:"messages"`
-	Approvals    []Approval                      `json:"approvals"`
-	Turns        []TurnSummary                   `json:"turns,omitempty"`
-	LatestSeq    uint64                          `json:"latest_seq"`
+	Meta          RoomMeta                        `json:"meta"`
+	Settings      RoomSettings                    `json:"settings"`
+	Participants  map[ActorID]ParticipantSnapshot `json:"participants"`
+	Messages      []Message                       `json:"messages"`
+	Approvals     []Approval                      `json:"approvals"`
+	Turns         []TurnSummary                   `json:"turns,omitempty"`
+	MessageWindow *MessageWindow                  `json:"message_window,omitempty"`
+	LatestSeq     uint64                          `json:"latest_seq"`
 	// Events is a bounded recent tail used by the work inspector. The complete
 	// append-only history remains in events.jsonl.
 	Events []Event `json:"events,omitempty"`

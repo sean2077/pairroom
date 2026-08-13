@@ -74,53 +74,45 @@ PairRoom 是面向现成顶级 Coding Agent 的本地协作控制面：用户、
 - [x] 已进入 transcript 的附件不可删除；
 - [x] ETag、nosniff、CSP 和认证读取。
 
-## 4. 下一阶段：v0.4 工作区隔离与过程卡片
+## 4. v0.4–v0.8 已交付
 
-### P0：Reviewer 工作区隔离
+### v0.4：Reviewer 工作区隔离
 
-目标不是仅依赖提示词，而是让“只读审查”在工作区层更容易验证。
+- Git HEAD + dirty tracked patch + untracked regular files 的独立快照；
+- 快照来源、摘要、dirty 状态和只读强度可观察；
+- 角色交换在安全边界执行，失败回滚；
+- Claude/Codex 原生 Reviewer 策略与工作区路径同时约束。
 
-1. 设计 Reviewer snapshot/worktree，不让 Reviewer 直接修改 Driver 工作树；
-2. 在审查开始时记录 source HEAD、dirty patch hash、untracked manifest；
-3. 将原生 permission/sandbox、文件系统能力与实际路径同时显示；
-4. Role 切换必须在安全边界完成，并解释 session/cwd 影响；
-5. 隔离不可用的平台明确降级，不宣称绝对只读。
+### v0.5：显式消息控制
 
-这里需要特别处理未提交修改：普通 detached worktree 看不到 Driver 的 dirty state，因此不能只做 `git worktree add` 就声称已完成审查隔离。
+- `append`、`next_turn`、`supersede` 三种意图；
+- 单目标取消、可审计重试和过期自动接力抑制；
+- Codex active turn steering 与 next-turn 排队语义分离。
 
-### P0：结构化 Work Inspector
+### v0.6：持久化 Work Inspector
 
-- 命令卡片：状态、exit code、持续时间、可折叠输出；
-- 文件变化卡片：新增/修改/删除、per-file diff；
-- 测试卡片：框架、通过/失败、耗时、失败摘要；
-- Plan 与 Finding 卡片；
-- 每 Turn 的 token、费用和耗时汇总；
-- Vendor 原始事件默认折叠，必要时展开。
+- Turn、工具、命令、计划、Diff、用量和完成状态的紧凑摘要；
+- 高频输出保持有界，重启后仍可查看关键过程；
+- 消息到 Turn/工作项的关联。
 
-### P1：消息控制
+### v0.7：验证、备份与恢复
 
-- 区分“补充当前 Turn”和“替换/取消旧指令”；
-- 对 Claude/Codex 分别显示 steer/queue/cancel 结果；
-- 显式 supersede 单个目标；
-- 会话标题、归档、固定消息和任务模板；
-- 图片标注、局部裁剪和将截图区域作为新附件发送。
+- `verify`、`backup`、`restore`、`diagnostics`；
+- 清单、SHA-256、路径穿越、重复文件、超限和原子替换防护；
+- diagnostics 默认不包含消息正文和附件字节。
 
-### P1：诊断与真实 dogfooding
+### v0.8：长房间与图片查看
 
-- 最新官方版本的自动 smoke fixture，而不是历史版本矩阵；
-- 脱敏 diagnostics 包；
-- 真实长 Turn、resume、compaction、子 Agent 和审批回放；
-- Windows/macOS/Linux 各至少一条真实使用路径。
+- 首屏窗口化、向前分页和滚动位置保持；
+- 每房间草稿、未读、桌面通知；
+- 图片旋转、Fit/1:1、25%–800% 缩放和复制。
 
-## 5. v0.5 多房间与可扩展 Runtime
+## 5. 下一阶段：v0.9 发布前安全与运维
 
-- 一个 daemon 承载多个 room/workspace；
-- 房间列表、归档、标签和模板；
-- Unix socket / Windows named pipe 管理 API；
-- RuntimeAdapter 外部进程协议；
-- 可选 Gemini CLI/OpenCode；
-- 可选桌面壳，Web daemon 仍是核心；
-- 远程 Worker 只经明确配对和加密隧道连接。
+- 一次性启动凭据换取 HttpOnly 浏览器会话，清除 URL/Storage Token；
+- 浏览器写操作 CSRF、防滥用速率限制和会话过期；
+- 明确的本地/远程监听安全模式；
+- 发布验收、CI、构建溯源、SBOM 和操作手册。
 
 ## 6. v1.0 门槛
 
@@ -128,8 +120,8 @@ PairRoom 是面向现成顶级 Coding Agent 的本地协作控制面：用户、
 - Reviewer 工作区边界可观察且不会隐式成为 Writer；
 - 所有自动路由都有可解释原因和事件；
 - 附件、备份、迁移和恢复经破坏性测试；
-- 至少一个月真实项目 dogfooding，无数据损坏和未解释自动回路；
-- 安全威胁模型和发布流程稳定。
+- 安全威胁模型、发布流程和跨平台构建稳定；
+- 真实 Claude/Codex 账号验证仍由发布者在目标机器执行，不以 Mock 冒充。
 
 ## 7. 明确不做
 

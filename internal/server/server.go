@@ -53,6 +53,7 @@ func New(cfg Config) (*Server, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", s.health)
 	mux.HandleFunc("GET /api/v1/snapshot", s.snapshot)
+	mux.HandleFunc("GET /api/v1/messages", s.messages)
 	mux.HandleFunc("GET /api/v1/events", s.events)
 	mux.HandleFunc("POST /api/v1/messages", s.sendMessage)
 	mux.HandleFunc("POST /api/v1/attachments", s.uploadAttachment)
@@ -100,8 +101,27 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (s *Server) snapshot(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("message_limit"))
+	if limit > 0 {
+		writeJSON(w, http.StatusOK, s.engine.WindowedSnapshot(limit))
+		return
+	}
 	writeJSON(w, http.StatusOK, s.engine.Snapshot())
+}
+
+func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
+	before, err := strconv.ParseUint(r.URL.Query().Get("before_seq"), 10, 64)
+	if err != nil && r.URL.Query().Get("before_seq") != "" {
+		writeError(w, http.StatusBadRequest, "invalid before_seq")
+		return
+	}
+	limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
+	if err != nil && r.URL.Query().Get("limit") != "" {
+		writeError(w, http.StatusBadRequest, "invalid limit")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.engine.MessagesPage(before, limit))
 }
 
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {

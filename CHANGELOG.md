@@ -1,3 +1,18 @@
+## [0.8.0] - 2026-08-14
+
+### Added
+
+- Windowed room snapshots and cursor-based history pagination for long-running conversations.
+- Per-room persistent composer drafts, target/intent restoration, unread counts, and optional desktop notifications.
+- Enhanced image viewer with 25%–800% zoom, rotation, fit/1:1 modes, wheel zoom, and clipboard copy.
+- Message-window metadata that makes partial transcript loading explicit instead of silently hiding history.
+
+### Changed
+
+- The browser loads the newest 250 messages initially and fetches older pages without losing scroll position.
+- Incoming Agent messages update unread state only when the room is hidden or the user has scrolled away from the latest discussion.
+- Public snapshot pagination is transport-only; the event-sourced room retains the complete transcript.
+
 ## [0.7.0] - 2026-08-14
 
 ### Added

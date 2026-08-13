@@ -548,3 +548,23 @@ button { color: inherit; }
   background: rgba(234,191,99,.07); color: var(--yellow); cursor: pointer; font-size: 9px;
 }
 .cancel-message-button:hover { background: rgba(234,191,99,.14); }
+
+
+/* v0.8 long-room and image-viewer refinements */
+.load-older-button {
+  display: block; margin: 4px auto 14px; padding: 7px 12px; border: 1px solid var(--border);
+  border-radius: 999px; background: var(--surface-2); color: var(--muted); cursor: pointer; font-size: 9px;
+}
+.load-older-button:hover { border-color: var(--border-strong); color: var(--text); }
+.load-older-button:disabled { opacity: .55; cursor: wait; }
+.lightbox-tools { display: flex; align-items: center; gap: 3px; }
+.lightbox-tools button {
+  min-width: 29px; height: 29px; padding: 0 6px; border: 1px solid var(--border); border-radius: 7px;
+  background: var(--surface-2); color: var(--muted); cursor: pointer; font-size: 9px;
+}
+.lightbox-tools button:hover, .lightbox-tools button.active { color: var(--text); border-color: var(--border-strong); background: var(--surface-3); }
+.lightbox-stage img.actual-size { max-width: none; max-height: none; width: auto; height: auto; }
+@media (max-width: 760px) {
+  .lightbox-tools { display: none; }
+  #notification-button { display: none; }
+}

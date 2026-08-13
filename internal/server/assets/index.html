@@ -24,6 +24,7 @@
       </div>
       <div class="topbar-actions">
         <div id="connection" class="connection disconnected"><span class="status-dot"></span><span>Connecting</span></div>
+        <button id="notification-button" class="icon-button" title="启用桌面通知" aria-label="启用桌面通知">♢</button>
         <button id="theme-button" class="icon-button" title="切换主题" aria-label="切换主题">◐</button>
         <button id="refresh-button" class="icon-button" title="刷新房间" aria-label="刷新房间">↻</button>
       </div>
@@ -181,6 +182,13 @@
           <button id="lightbox-zoom-out" type="button" aria-label="缩小">−</button>
           <button id="lightbox-zoom-reset" type="button"><span id="lightbox-zoom-value">100%</span></button>
           <button id="lightbox-zoom-in" type="button" aria-label="放大">＋</button>
+        </div>
+        <div class="lightbox-tools" aria-label="图片查看工具">
+          <button id="lightbox-rotate-left" type="button" title="向左旋转">↶</button>
+          <button id="lightbox-rotate-right" type="button" title="向右旋转">↷</button>
+          <button id="lightbox-fit" type="button" title="适应窗口">Fit</button>
+          <button id="lightbox-actual" type="button" title="原始像素">1:1</button>
+          <button id="lightbox-copy" type="button" title="复制图片">Copy</button>
         </div>
         <a id="lightbox-open" class="secondary-button" href="#" target="_blank" rel="noopener">打开原图</a>
       </div>

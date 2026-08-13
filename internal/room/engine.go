@@ -457,6 +457,62 @@ func (e *Engine) Snapshot() model.RoomSnapshot {
 	return cloneSnapshot(e.snapshot)
 }
 
+// WindowedSnapshot returns the newest messages while retaining full room and
+// runtime state. The authoritative in-memory/event-sourced transcript remains
+// complete; this is only a transport optimization for long-lived rooms.
+func (e *Engine) WindowedSnapshot(limit int) model.RoomSnapshot {
+	snapshot := e.Snapshot()
+	total := len(snapshot.Messages)
+	if limit <= 0 || limit > 1000 {
+		limit = 250
+	}
+	if total > limit {
+		snapshot.Messages = append([]model.Message(nil), snapshot.Messages[total-limit:]...)
+	}
+	window := &model.MessageWindow{Total: total, Loaded: len(snapshot.Messages), HasMore: total > len(snapshot.Messages)}
+	if len(snapshot.Messages) > 0 {
+		window.OldestSeq = snapshot.Messages[0].Seq
+	}
+	snapshot.MessageWindow = window
+	return snapshot
+}
+
+// MessagesPage returns messages immediately before beforeSeq. A zero cursor
+// addresses the newest page. Results remain chronological for direct merging.
+func (e *Engine) MessagesPage(beforeSeq uint64, limit int) model.MessagePage {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	end := len(e.snapshot.Messages)
+	if beforeSeq > 0 {
+		end = 0
+		for i := range e.snapshot.Messages {
+			if e.snapshot.Messages[i].Seq >= beforeSeq {
+				break
+			}
+			end = i + 1
+		}
+	}
+	start := end - limit
+	if start < 0 {
+		start = 0
+	}
+	messages := make([]model.Message, end-start)
+	for i := start; i < end; i++ {
+		messages[i-start] = cloneMessage(e.snapshot.Messages[i])
+	}
+	page := model.MessagePage{Messages: messages, Total: len(e.snapshot.Messages), HasMore: start > 0}
+	if len(messages) > 0 {
+		page.OldestSeq = messages[0].Seq
+	}
+	return page
+}
+
 func (e *Engine) Subscribe() (<-chan model.Event, func()) { return e.cfg.Hub.Subscribe() }
 
 func (e *Engine) AttachmentReferenced(id string) bool {
@@ -2013,20 +2069,11 @@ func cloneSnapshot(in model.RoomSnapshot) model.RoomSnapshot {
 	out := in
 	out.Messages = make([]model.Message, len(in.Messages))
 	for i, message := range in.Messages {
-		out.Messages[i] = message
-		out.Messages[i].To = append([]model.ActorID(nil), message.To...)
-		out.Messages[i].Delivery = cloneDelivery(message.Delivery)
-		out.Messages[i].DeliveryDetail = cloneDetails(message.DeliveryDetail)
-		out.Messages[i].Processing = cloneProcessing(message.Processing)
-		out.Messages[i].ProcessingDetail = cloneDetails(message.ProcessingDetail)
-		out.Messages[i].ProcessingTurn = cloneDetails(message.ProcessingTurn)
-		out.Messages[i].ProcessingLastUpdatedAt = cloneTimes(message.ProcessingLastUpdatedAt)
-		if message.Supersedes != nil {
-			out.Messages[i].Supersedes = make(map[model.ActorID][]string, len(message.Supersedes))
-			for actor, ids := range message.Supersedes {
-				out.Messages[i].Supersedes[actor] = append([]string(nil), ids...)
-			}
-		}
+		out.Messages[i] = cloneMessage(message)
+	}
+	if in.MessageWindow != nil {
+		window := *in.MessageWindow
+		out.MessageWindow = &window
 	}
 	out.Approvals = make([]model.Approval, len(in.Approvals))
 	for i, approval := range in.Approvals {
@@ -2047,6 +2094,25 @@ func cloneSnapshot(in model.RoomSnapshot) model.RoomSnapshot {
 	for i, event := range in.Events {
 		out.Events[i] = event
 		out.Events[i].Data = append(json.RawMessage(nil), event.Data...)
+	}
+	return out
+}
+
+func cloneMessage(message model.Message) model.Message {
+	out := message
+	out.To = append([]model.ActorID(nil), message.To...)
+	out.Attachments = append([]model.Attachment(nil), message.Attachments...)
+	out.Delivery = cloneDelivery(message.Delivery)
+	out.DeliveryDetail = cloneDetails(message.DeliveryDetail)
+	out.Processing = cloneProcessing(message.Processing)
+	out.ProcessingDetail = cloneDetails(message.ProcessingDetail)
+	out.ProcessingTurn = cloneDetails(message.ProcessingTurn)
+	out.ProcessingLastUpdatedAt = cloneTimes(message.ProcessingLastUpdatedAt)
+	if message.Supersedes != nil {
+		out.Supersedes = make(map[model.ActorID][]string, len(message.Supersedes))
+		for actor, ids := range message.Supersedes {
+			out.Supersedes[actor] = append([]string(nil), ids...)
+		}
 	}
 	return out
 }
