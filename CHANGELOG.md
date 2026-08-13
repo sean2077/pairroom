@@ -1,3 +1,16 @@
+## [0.6.0] - 2026-08-14
+
+### Added
+
+- Durable vendor-neutral Turn summaries for tools, commands, plans, diffs, usage, final responses, failures, and duration.
+- Compact Work Inspector cards that survive daemon restart while retaining recent native events for diagnostics.
+- Message-to-Turn correlation in the Inspector, with bounded item and output retention for long sessions.
+
+### Changed
+
+- High-frequency command output updates the live summary without forcing a disk sync for every chunk; terminal Turn events persist the bounded projection.
+- Incomplete work items are settled when their native Turn completes, avoiding permanently working Inspector rows.
+
 ## [0.5.0] - 2026-08-14
 
 ### Added

@@ -899,3 +899,84 @@ func TestCancelMessageMarksParticipantQueue(t *testing.T) {
 	waitForProcessingState(t, engine, first.ID, model.ActorClaude, model.ProcessingCancelled)
 	waitForProcessingState(t, engine, second.ID, model.ActorClaude, model.ProcessingCancelled)
 }
+
+func TestTurnSummaryPersistsAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	engine, adapters := newTestEngine(t, model.RoutingManual, dir)
+	message, err := engine.Send(context.Background(), SendRequest{
+		Text: "inspect and verify", To: []model.ActorID{model.ActorClaude},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+	started := time.Now().UTC().Add(-2 * time.Second)
+	events := []model.RuntimeEvent{
+		{Agent: model.ActorClaude, Kind: model.RuntimeTurnStarted, TurnID: "turn-summary", SessionID: "session-summary", CorrelationID: message.ID, CreatedAt: started},
+		{Agent: model.ActorClaude, Kind: model.RuntimeToolStarted, TurnID: "turn-summary", CorrelationID: message.ID, ItemID: "tool-1", Name: "Read", Text: "README.md", CreatedAt: started.Add(100 * time.Millisecond)},
+		{Agent: model.ActorClaude, Kind: model.RuntimeCommandOutput, TurnID: "turn-summary", CorrelationID: message.ID, ItemID: "tool-1", Text: "line one\nline two\n", CreatedAt: started.Add(200 * time.Millisecond)},
+		{Agent: model.ActorClaude, Kind: model.RuntimeToolCompleted, TurnID: "turn-summary", CorrelationID: message.ID, ItemID: "tool-1", Name: "Read", Text: "completed", CreatedAt: started.Add(300 * time.Millisecond)},
+		{Agent: model.ActorClaude, Kind: model.RuntimePlanUpdated, TurnID: "turn-summary", CorrelationID: message.ID, Text: "1. Inspect\n2. Verify", CreatedAt: started.Add(400 * time.Millisecond)},
+		{Agent: model.ActorClaude, Kind: model.RuntimeDiffUpdated, TurnID: "turn-summary", CorrelationID: message.ID, Text: "diff --git a/a b/a", CreatedAt: started.Add(500 * time.Millisecond)},
+		{Agent: model.ActorClaude, Kind: model.RuntimeUsageUpdated, TurnID: "turn-summary", CorrelationID: message.ID, Data: json.RawMessage(`{"input_tokens":12,"output_tokens":7}`), CreatedAt: started.Add(600 * time.Millisecond)},
+		{Agent: model.ActorClaude, Kind: model.RuntimeFinal, TurnID: "turn-summary", CorrelationID: message.ID, Text: "Verified successfully.", CreatedAt: started.Add(700 * time.Millisecond)},
+		{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "turn-summary", CorrelationID: message.ID, Name: "completed", CreatedAt: started.Add(2 * time.Second)},
+	}
+	for _, event := range events {
+		engine.HandleRuntimeEvent(event)
+	}
+
+	assertSummary := func(t *testing.T, snapshot model.RoomSnapshot) {
+		t.Helper()
+		if len(snapshot.Turns) != 1 {
+			t.Fatalf("turn summaries = %d, want 1: %#v", len(snapshot.Turns), snapshot.Turns)
+		}
+		got := snapshot.Turns[0]
+		if got.TurnID != "turn-summary" || got.Agent != model.ActorClaude || got.SessionID != "session-summary" {
+			t.Fatalf("unexpected summary identity: %#v", got)
+		}
+		if got.Status != "completed" || got.DurationMillis != 2000 || got.CompletedAt == nil {
+			t.Fatalf("unexpected completion projection: %#v", got)
+		}
+		if len(got.MessageIDs) != 1 || got.MessageIDs[0] != message.ID {
+			t.Fatalf("message correlation lost: %#v", got.MessageIDs)
+		}
+		if got.Plan != "1. Inspect\n2. Verify" || got.Diff == "" || got.FinalText != "Verified successfully." {
+			t.Fatalf("summary content incomplete: %#v", got)
+		}
+		if len(got.Items) != 1 || got.Items[0].Status != "completed" || !strings.Contains(got.Items[0].Detail, "completed") {
+			t.Fatalf("work item projection incomplete: %#v", got.Items)
+		}
+		if !strings.Contains(string(got.Usage), "input_tokens") {
+			t.Fatalf("usage missing: %s", got.Usage)
+		}
+	}
+	assertSummary(t, engine.Snapshot())
+	if err := engine.Close(); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+
+	reopenedStore, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(Config{Name: "ignored", Repo: t.TempDir(), Store: reopenedStore, Settings: model.DefaultRoomSettings()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	assertSummary(t, reopened.Snapshot())
+}
+
+func TestTurnSummaryBoundsHighVolumeDetail(t *testing.T) {
+	engine, _ := newTestEngine(t, model.RoutingManual, "")
+	started := time.Now().UTC()
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorCodex, Kind: model.RuntimeTurnStarted, TurnID: "bounded", CreatedAt: started})
+	payload := strings.Repeat("x", 20<<10)
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorCodex, Kind: model.RuntimeCommandOutput, TurnID: "bounded", ItemID: "command", Text: payload, CreatedAt: started.Add(time.Second)})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorCodex, Kind: model.RuntimeTurnCompleted, TurnID: "bounded", CreatedAt: started.Add(2 * time.Second)})
+	got := engine.Snapshot().Turns[0]
+	if len(got.Items) != 1 || len(got.Items[0].Detail) > (12<<10)+3 || !strings.HasPrefix(got.Items[0].Detail, "…") {
+		t.Fatalf("command output was not bounded: %d %#v", len(got.Items[0].Detail), got.Items)
+	}
+}

@@ -165,6 +165,13 @@
         }
         break;
       }
+      case 'turn.summary.updated': {
+        state.snapshot.turns = state.snapshot.turns || [];
+        const index = state.snapshot.turns.findIndex((item) => item.id === data.id);
+        if (index >= 0) state.snapshot.turns[index] = data;
+        else state.snapshot.turns.push(data);
+        break;
+      }
       case 'approval.updated': {
         state.snapshot.approvals = state.snapshot.approvals || [];
         const index = state.snapshot.approvals.findIndex((item) => item.id === data.id);
@@ -853,7 +860,7 @@
     const scopedMessage = state.inspectorCorrelation
       ? (state.snapshot.messages || []).find((message) => message.id === state.inspectorCorrelation)
       : null;
-    const turns = new Set(scopedMessage ? Object.values(scopedMessage.processing_turn || {}).filter(Boolean) : []);
+    const turnIDs = new Set(scopedMessage ? Object.values(scopedMessage.processing_turn || {}).filter(Boolean) : []);
     if (scopedMessage) {
       scope.classList.remove('hidden');
       $('inspector-scope-text').textContent = `仅显示 ${displayName(scopedMessage.from)} 消息 ${truncate(scopedMessage.id, 18)} 的工作过程`;
@@ -861,22 +868,33 @@
       scope.classList.add('hidden');
       $('inspector-scope-text').textContent = '';
     }
+
+    const summaries = (state.snapshot.turns || [])
+      .filter((turn) => state.inspectorAgent === 'all' || turn.agent === state.inspectorAgent)
+      .filter((turn) => !scopedMessage || (turn.message_ids || []).includes(scopedMessage.id) || turnIDs.has(turn.turn_id))
+      .sort((a, b) => String(b.updated_at || b.started_at).localeCompare(String(a.updated_at || a.started_at)))
+      .slice(0, 40);
+    if (summaries.length) {
+      const title = document.createElement('div');
+      title.className = 'activity-section-title';
+      title.textContent = 'Turn summaries';
+      container.appendChild(title);
+      summaries.forEach((summary) => container.appendChild(renderTurnSummary(summary)));
+    }
+
     const events = (state.snapshot.events || [])
       .filter((event) => event.kind === 'runtime.event')
       .map((event) => ({ seq: event.seq, ...event.data }))
       .filter((event) => state.inspectorAgent === 'all' || event.agent === state.inspectorAgent)
       .filter((event) => !['text.delta', 'state', 'session'].includes(event.kind))
-      .filter((event) => !scopedMessage || event.correlation_id === scopedMessage.id || (event.turn_id && turns.has(event.turn_id)))
+      .filter((event) => !scopedMessage || event.correlation_id === scopedMessage.id || (event.turn_id && turnIDs.has(event.turn_id)))
       .slice(-100)
       .reverse();
-    if (!events.length) {
-      const empty = document.createElement('div');
-      empty.className = 'activity-empty';
-      empty.textContent = scopedMessage
-        ? '该消息暂时没有可重放的持久运行事件；高频流式文本和命令增量仅在实时连接期间展示。'
-        : 'Agent 的工具调用、命令、计划、Diff 和运行日志会显示在这里。';
-      container.appendChild(empty);
-      return;
+    if (events.length) {
+      const title = document.createElement('div');
+      title.className = 'activity-section-title';
+      title.textContent = 'Recent native events';
+      container.appendChild(title);
     }
     for (const event of events) {
       const card = document.createElement('div');
@@ -905,6 +923,94 @@
       }
       container.appendChild(card);
     }
+    if (!summaries.length && !events.length) {
+      const empty = document.createElement('div');
+      empty.className = 'activity-empty';
+      empty.textContent = scopedMessage
+        ? '该消息暂时没有持久化工作摘要。'
+        : 'Agent 的 Turn、工具调用、命令、计划、Diff 和运行日志会显示在这里。';
+      container.appendChild(empty);
+    }
+  }
+
+  function renderTurnSummary(summary) {
+    const card = document.createElement('details');
+    card.className = `turn-card turn-${summary.agent} status-${summary.status || 'unknown'}`;
+    card.open = summary.status === 'working' || summary.status === 'waiting' || Boolean(state.inspectorCorrelation);
+    const head = document.createElement('summary');
+    head.className = 'turn-card-head';
+    const title = document.createElement('div');
+    title.className = 'turn-card-title';
+    const status = document.createElement('span');
+    status.className = `turn-status status-${summary.status || 'unknown'}`;
+    status.textContent = turnStatusText(summary.status);
+    const name = document.createElement('strong');
+    name.textContent = `${displayName(summary.agent)} · ${truncate(summary.turn_id || summary.id, 20)}`;
+    title.append(status, name);
+    const meta = document.createElement('span');
+    meta.className = 'turn-card-meta';
+    meta.textContent = [
+      summary.duration_millis ? formatDuration(summary.duration_millis) : '',
+      `${(summary.items || []).length} items`,
+      formatTime(summary.updated_at || summary.started_at),
+    ].filter(Boolean).join(' · ');
+    head.append(title, meta);
+    card.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'turn-card-body';
+    if (summary.error) body.appendChild(turnSection('Error', summary.error, 'error'));
+    if (summary.plan) body.appendChild(turnSection('Plan', summary.plan));
+    if (summary.diff) body.appendChild(turnSection('Diff', summary.diff));
+    if (summary.final_text) body.appendChild(turnSection('Final', summary.final_text));
+    const items = summary.items || [];
+    if (items.length) {
+      const list = document.createElement('div');
+      list.className = 'turn-item-list';
+      items.slice(-40).forEach((item) => {
+        const row = document.createElement('div');
+        row.className = `turn-item item-${item.kind || 'event'} status-${item.status || 'unknown'}`;
+        const tag = document.createElement('span');
+        tag.className = 'turn-item-tag';
+        tag.textContent = item.kind || 'event';
+        const text = document.createElement('span');
+        text.className = 'turn-item-text';
+        text.textContent = [item.name, item.detail ? truncate(item.detail, 380) : ''].filter(Boolean).join(' · ') || item.id;
+        const itemStatus = document.createElement('span');
+        itemStatus.className = 'turn-item-status';
+        itemStatus.textContent = item.status || '';
+        row.append(tag, text, itemStatus);
+        list.appendChild(row);
+      });
+      body.appendChild(list);
+    }
+    if (summary.usage) body.appendChild(turnSection('Usage', prettyJSON(summary.usage)));
+    card.appendChild(body);
+    return card;
+  }
+
+  function turnSection(label, value, tone = '') {
+    const details = document.createElement('details');
+    details.className = `turn-section ${tone}`;
+    const title = document.createElement('summary');
+    title.textContent = label;
+    const content = document.createElement('pre');
+    content.textContent = value;
+    details.append(title, content);
+    return details;
+  }
+
+  function turnStatusText(status) {
+    return ({ working: 'Working', waiting: 'Waiting', completed: 'Done', cancelled: 'Cancelled', failed: 'Failed' })[status] || (status || 'Unknown');
+  }
+
+  function formatDuration(milliseconds) {
+    const value = Math.max(0, Number(milliseconds) || 0);
+    if (value < 1000) return `${Math.round(value)} ms`;
+    if (value < 60_000) return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)} s`;
+    const minutes = Math.floor(value / 60_000);
+    const seconds = Math.round((value % 60_000) / 1000);
+    return `${minutes}m ${seconds}s`;
   }
 
   function renderApprovals() {

@@ -312,6 +312,39 @@ type RuntimeEvent struct {
 	CreatedAt     time.Time       `json:"created_at"`
 }
 
+type TurnWorkItem struct {
+	ID          string          `json:"id"`
+	Kind        string          `json:"kind"`
+	Name        string          `json:"name,omitempty"`
+	Status      string          `json:"status"`
+	Detail      string          `json:"detail,omitempty"`
+	Data        json.RawMessage `json:"data,omitempty"`
+	StartedAt   time.Time       `json:"started_at,omitempty"`
+	CompletedAt *time.Time      `json:"completed_at,omitempty"`
+}
+
+// TurnSummary is the durable, vendor-neutral projection shown by the Work
+// Inspector. Raw vendor events remain available in the event log; this compact
+// shape is deliberately bounded so long sessions stay useful after restart.
+type TurnSummary struct {
+	ID             string          `json:"id"`
+	Agent          ActorID         `json:"agent"`
+	TurnID         string          `json:"turn_id"`
+	SessionID      string          `json:"session_id,omitempty"`
+	MessageIDs     []string        `json:"message_ids,omitempty"`
+	Status         string          `json:"status"`
+	StartedAt      time.Time       `json:"started_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+	CompletedAt    *time.Time      `json:"completed_at,omitempty"`
+	DurationMillis int64           `json:"duration_millis,omitempty"`
+	Items          []TurnWorkItem  `json:"items,omitempty"`
+	Plan           string          `json:"plan,omitempty"`
+	Diff           string          `json:"diff,omitempty"`
+	Usage          json.RawMessage `json:"usage,omitempty"`
+	FinalText      string          `json:"final_text,omitempty"`
+	Error          string          `json:"error,omitempty"`
+}
+
 const (
 	RuntimeSession           = "session"
 	RuntimeInfoUpdated       = "runtime.info"
@@ -362,6 +395,7 @@ type RoomSnapshot struct {
 	Participants map[ActorID]ParticipantSnapshot `json:"participants"`
 	Messages     []Message                       `json:"messages"`
 	Approvals    []Approval                      `json:"approvals"`
+	Turns        []TurnSummary                   `json:"turns,omitempty"`
 	LatestSeq    uint64                          `json:"latest_seq"`
 	// Events is a bounded recent tail used by the work inspector. The complete
 	// append-only history remains in events.jsonl.

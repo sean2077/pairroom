@@ -4,7 +4,7 @@ PairRoom 是一个面向 **Claude Code + Codex** 的本地三方协作房间：�
 
 > PairRoom 是全新的独立项目，不依赖 OMA、CCCC、ccteam、wmux、Cherry Studio、Chatbox 或其他 Agent 编排框架。原生模式只启动用户本机已有的官方 `claude` 与 `codex` 命令；Go 核心没有第三方 module，前端没有 npm 依赖和构建步骤。
 
-当前版本：**v0.5.0**
+当前版本：**v0.6.0**
 
 ## 核心目标
 
