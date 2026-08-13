@@ -4,9 +4,9 @@ PairRoom 是一个面向 **Claude Code + Codex** 的本地三方协作房间：�
 
 > PairRoom 是全新的独立项目，不依赖 OMA、CCCC、ccteam、wmux、Cherry Studio、Chatbox 或其他 Agent 编排框架。原生模式只启动用户本机已有的官方 `claude` 与 `codex` 命令；Go 核心没有第三方 module，前端没有 npm 依赖和构建步骤。
 
-当前版本：**v0.8.0**
+当前版本：**v0.9.0**
 
-> v0.8 面向长期使用的房间：首屏只加载最近消息，支持向前分页；草稿、未读和通知按房间保存；图片查看器增加旋转、Fit/1:1、滚轮缩放和复制。
+> v0.9 是正式版前的安全收口：远程绑定使用 URL fragment 中的一次性启动凭据，换取 HttpOnly、SameSite=Strict 的短期浏览器会话；浏览器写操作需要 CSRF，API 具备本地防滥用限流。Token 不再写入查询参数或 Web Storage。
 
 ## 核心目标
 
@@ -180,6 +180,16 @@ PairRoom 不维护历史版本兼容矩阵，也不把长期兼容旧 CLI 当成
 5. 供应商升级后运行一次 `doctor` 和 Mock/非关键仓库 smoke test。
 
 详见 [`docs/RUNTIME_COMPATIBILITY.md`](docs/RUNTIME_COMPATIBILITY.md)。
+
+## 浏览器会话安全
+
+默认 loopback 模式不需要 Token。非 loopback 绑定会生成 Bearer Token，但浏览器只在启动 URL 的 fragment 中短暂读取它：
+
+```text
+#token=... → POST /api/v1/session → HttpOnly Session Cookie + CSRF
+```
+
+fragment 不会随 HTTP 请求或 Referer 发送，交换成功后立即从地址栏移除；Token 不写入 `sessionStorage`/`localStorage`。命令行 API 客户端仍可直接使用 `Authorization: Bearer ...`。PairRoom 不内置 TLS，远程访问仍应经 SSH tunnel、VPN 或受控反向代理。
 
 ## 快速开始
 

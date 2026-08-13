@@ -34,11 +34,13 @@ type Config struct {
 }
 
 type Server struct {
-	engine *room.Engine
-	repo   string
-	token  string
-	media  *attachment.Store
-	http   *http.Server
+	engine   *room.Engine
+	repo     string
+	token    string
+	media    *attachment.Store
+	sessions *sessionStore
+	limiter  *rateLimiter
+	http     *http.Server
 }
 
 func New(cfg Config) (*Server, error) {
@@ -49,8 +51,14 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open embedded assets: %w", err)
 	}
-	s := &Server{engine: cfg.Engine, repo: cfg.Repo, token: cfg.Token, media: cfg.Attachments}
+	s := &Server{
+		engine: cfg.Engine, repo: cfg.Repo, token: cfg.Token, media: cfg.Attachments,
+		sessions: newSessionStore(), limiter: newRateLimiter(),
+	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/session", s.createBrowserSession)
+	mux.HandleFunc("GET /api/v1/session", s.readBrowserSession)
+	mux.HandleFunc("DELETE /api/v1/session", s.deleteBrowserSession)
 	mux.HandleFunc("GET /api/v1/health", s.health)
 	mux.HandleFunc("GET /api/v1/snapshot", s.snapshot)
 	mux.HandleFunc("GET /api/v1/messages", s.messages)
@@ -71,7 +79,7 @@ func New(cfg Config) (*Server, error) {
 	mux.Handle("/", http.FileServer(http.FS(assets)))
 
 	s.http = &http.Server{
-		Handler:           s.securityHeaders(s.authenticate(s.sameOrigin(mux))),
+		Handler:           s.securityHeaders(s.sameOrigin(s.rateLimit(s.authenticate(s.csrf(mux))))),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       20 * time.Second,
 		IdleTimeout:       90 * time.Second,
@@ -92,6 +100,55 @@ func (s *Server) Serve(listenerAddr string) error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error { return s.http.Shutdown(ctx) }
+
+func (s *Server) createBrowserSession(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if s.token == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"required": false})
+		return
+	}
+	auth := authFromContext(r.Context())
+	if auth.Mode != authBearer {
+		writeError(w, http.StatusForbidden, "a bearer bootstrap token is required")
+		return
+	}
+	value, err := s.sessions.create()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "create browser session: "+err.Error())
+		return
+	}
+	setBrowserSessionCookie(w, r, value)
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"required": true, "csrf_token": value.CSRF,
+		"created_at": value.CreatedAt, "expires_at": value.ExpiresAt,
+	})
+}
+
+func (s *Server) readBrowserSession(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if s.token == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"required": false})
+		return
+	}
+	auth := authFromContext(r.Context())
+	if auth.Mode != authBrowserSession {
+		writeJSON(w, http.StatusOK, map[string]any{"required": true, "mode": "bearer"})
+		return
+	}
+	setBrowserSessionCookie(w, r, auth.Session)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"required": true, "csrf_token": auth.Session.CSRF,
+		"created_at": auth.Session.CreatedAt, "expires_at": auth.Session.ExpiresAt,
+	})
+}
+
+func (s *Server) deleteBrowserSession(w http.ResponseWriter, r *http.Request) {
+	if cookie, err := r.Cookie(browserSessionCookie); err == nil {
+		s.sessions.delete(cookie.Value)
+	}
+	clearBrowserSessionCookie(w, r)
+	w.WriteHeader(http.StatusNoContent)
+}
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -526,24 +583,72 @@ func (s *Server) runGit(parent context.Context, args ...string) (string, error) 
 }
 
 func (s *Server) authenticate(next http.Handler) http.Handler {
-	if s.token == "" {
-		return next
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/api/") {
 			next.ServeHTTP(w, r)
 			return
 		}
-		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		// Native EventSource cannot attach an Authorization header. Permit the
-		// query-token fallback only for the read-only SSE endpoint; every other
-		// API must use the bearer header so credentials do not spread through
-		// arbitrary URLs, browser history, referrers, or copied export links.
-		if token == "" && r.Method == http.MethodGet && r.URL.Path == "/api/v1/events" {
-			token = r.URL.Query().Get("token")
+		if s.token == "" {
+			next.ServeHTTP(w, withAuth(r, requestAuth{Mode: authNone}))
+			return
 		}
-		if token != s.token {
-			writeError(w, http.StatusUnauthorized, "invalid PairRoom token")
+
+		header := strings.TrimSpace(r.Header.Get("Authorization"))
+		if strings.HasPrefix(header, "Bearer ") {
+			candidate := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+			if constantTimeEqual(candidate, s.token) {
+				next.ServeHTTP(w, withAuth(r, requestAuth{Mode: authBearer}))
+				return
+			}
+		}
+		if cookie, err := r.Cookie(browserSessionCookie); err == nil {
+			if value, ok := s.sessions.get(cookie.Value); ok {
+				// Keep the browser cookie and the in-memory sliding expiry aligned.
+				// Without this refresh an actively used room would lose its cookie
+				// at the original creation deadline even though the server session
+				// itself remained alive.
+				setBrowserSessionCookie(w, r, value)
+				next.ServeHTTP(w, withAuth(r, requestAuth{Mode: authBrowserSession, Session: value}))
+				return
+			}
+		}
+		writeError(w, http.StatusUnauthorized, "PairRoom authentication is required")
+	})
+}
+
+func (s *Server) csrf(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/") || r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+			next.ServeHTTP(w, r)
+			return
+		}
+		auth := authFromContext(r.Context())
+		if auth.Mode != authBrowserSession {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !constantTimeEqual(strings.TrimSpace(r.Header.Get(csrfHeaderName)), auth.Session.CSRF) {
+			writeError(w, http.StatusForbidden, "missing or invalid CSRF token")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) rateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		allowed, retryAfter := s.limiter.allow(requestClientKey(r))
+		if !allowed {
+			seconds := int(retryAfter.Round(time.Second).Seconds())
+			if seconds < 1 {
+				seconds = 1
+			}
+			w.Header().Set("Retry-After", strconv.Itoa(seconds))
+			writeError(w, http.StatusTooManyRequests, "PairRoom API rate limit exceeded")
 			return
 		}
 		next.ServeHTTP(w, r)

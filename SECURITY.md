@@ -21,8 +21,11 @@ PairRoom 同时保存敏感讨论、运行事件和用户图片，因此威胁�
 
 - 默认绑定 `127.0.0.1:7332`；
 - 非 loopback 绑定且未提供 Token 时自动生成 Bearer Token；
-- URL Token 会从浏览器历史移除，保存在单标签 `sessionStorage`；
-- query token 只允许只读 SSE，其余 API 必须使用 Authorization Header；
+- 非 loopback 启动 URL 只在 fragment 中携带一次性启动凭据，fragment 不随 HTTP 请求或 Referer 发送；
+- 浏览器将启动凭据交换成 12 小时滑动过期的 `HttpOnly`、`SameSite=Strict` Session Cookie；
+- 浏览器写操作要求每会话 CSRF Token，Token 不进入 URL 查询、`sessionStorage` 或 `localStorage`；
+- query token 不授权任何 API；命令行 API 客户端继续使用 Authorization Header；
+- API 具备按客户端固定窗口限流，降低意外循环和本地滥用风险；
 - tokenless server 只接受 loopback Host，降低 DNS rebinding 风险；
 - API 请求执行 same-origin 检查；
 - CSP、`frame-ancestors 'none'`、no-referrer、no-sniff 和权限策略默认开启。

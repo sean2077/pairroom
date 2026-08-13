@@ -1,14 +1,14 @@
 (() => {
   'use strict';
 
-  const tokenQuery = new URLSearchParams(window.location.search).get('token') || '';
-  if (tokenQuery) {
-    sessionStorage.setItem('pairroom.token', tokenQuery);
-    const cleanURL = new URL(window.location.href);
-    cleanURL.searchParams.delete('token');
-    history.replaceState(null, '', `${cleanURL.pathname}${cleanURL.search}${cleanURL.hash}`);
+  const bootstrapParameters = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  let bootstrapToken = bootstrapParameters.get('token') || '';
+  if (bootstrapToken) {
+    // Fragments are not sent in HTTP requests or Referer headers. Remove the
+    // one-time bootstrap secret from the address bar immediately and keep it
+    // only in memory until it is exchanged for an HttpOnly browser session.
+    history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
   }
-  const token = tokenQuery || sessionStorage.getItem('pairroom.token') || '';
   const savedTheme = localStorage.getItem('pairroom.theme');
   const initialTheme = savedTheme || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
   document.documentElement.dataset.theme = initialTheme;
@@ -41,17 +41,38 @@
     theme: initialTheme,
     source: null,
     renderQueued: false,
+    csrfToken: '',
   };
 
   const $ = (id) => document.getElementById(id);
   const timeline = $('timeline');
   const messageInput = $('message-input');
 
+  async function initializeSession() {
+    const headers = new Headers();
+    let method = 'GET';
+    if (bootstrapToken) {
+      method = 'POST';
+      headers.set('Authorization', `Bearer ${bootstrapToken}`);
+    }
+    const response = await fetch('/api/v1/session', { method, headers, credentials: 'same-origin' });
+    const payload = await response.json().catch(() => ({}));
+    bootstrapToken = '';
+    if (!response.ok) {
+      const message = payload.error || (response.status === 401
+        ? '浏览器会话无效；请从 PairRoom 启动输出中的完整地址重新打开。'
+        : response.statusText);
+      throw new Error(message);
+    }
+    state.csrfToken = payload.csrf_token || '';
+  }
+
   async function api(path, options = {}) {
     const headers = new Headers(options.headers || {});
-    if (token) headers.set('Authorization', `Bearer ${token}`);
+    const method = String(options.method || 'GET').toUpperCase();
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && state.csrfToken) headers.set('X-PairRoom-CSRF', state.csrfToken);
     if (options.body && !(options.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-    const response = await fetch(path, { ...options, headers });
+    const response = await fetch(path, { ...options, method, headers, credentials: 'same-origin' });
     const type = response.headers.get('content-type') || '';
     const payload = type.includes('application/json') ? await response.json() : await response.text();
     if (!response.ok) {
@@ -62,9 +83,7 @@
   }
 
   async function apiBlob(path) {
-    const headers = new Headers();
-    if (token) headers.set('Authorization', `Bearer ${token}`);
-    const response = await fetch(path, { headers });
+    const response = await fetch(path, { credentials: 'same-origin' });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error || response.statusText);
@@ -95,7 +114,6 @@
     if (state.source) state.source.close();
     const since = state.snapshot ? state.snapshot.latest_seq || 0 : 0;
     const query = new URLSearchParams({ since: String(since) });
-    if (token) query.set('token', token);
     const source = new EventSource(`/api/v1/events?${query}`);
     state.source = source;
     setConnection(false, 'Connecting');
@@ -1533,9 +1551,7 @@
 
   async function downloadExport(format) {
     try {
-      const headers = new Headers();
-      if (token) headers.set('Authorization', `Bearer ${token}`);
-      const response = await fetch(`/api/v1/export?format=${encodeURIComponent(format)}`, { headers });
+      const response = await fetch(`/api/v1/export?format=${encodeURIComponent(format)}`, { credentials: 'same-origin' });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.error || response.statusText);
@@ -2148,7 +2164,7 @@
     state.mediaObjectURLs.forEach((value) => { if (typeof value === 'string') URL.revokeObjectURL(value); });
   });
 
-  loadSnapshot().catch((error) => {
+  initializeSession().then(loadSnapshot).catch((error) => {
     toast(error.message, 'error');
     setConnection(false, 'Offline');
   });

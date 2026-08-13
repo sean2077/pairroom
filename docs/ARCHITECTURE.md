@@ -71,9 +71,9 @@ favicon.svg
 - 附件上传、读取和未引用附件删除；
 - Git status/diff；
 - 会话导出；
-- Bearer Token、同源、Host 与安全头检查。
+- Bearer bootstrap、HttpOnly browser session、CSRF、同源、Host、速率限制与安全头检查。
 
-静态页面始终可打开；配置 Token 时，敏感 API 和附件内容必须认证。
+静态页面始终可打开；配置 Token 时，浏览器通过 fragment bootstrap 换取短期 HttpOnly Session，敏感 API 和附件内容必须认证。CLI 客户端可继续使用 Bearer Header。
 
 ### 3.3 Room Engine
 

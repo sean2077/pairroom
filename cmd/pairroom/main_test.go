@@ -15,3 +15,13 @@ func TestUnknownCommandReturnsError(t *testing.T) {
 		t.Fatal("unknown command must fail")
 	}
 }
+
+func TestBrowserURLUsesFragmentBootstrapToken(t *testing.T) {
+	value := browserURL("0.0.0.0:7332", "top-secret")
+	if value != "http://127.0.0.1:7332/#token=top-secret" {
+		t.Fatalf("browserURL=%q", value)
+	}
+	if got := browserURL("127.0.0.1:7332", ""); got != "http://127.0.0.1:7332/" {
+		t.Fatalf("tokenless browserURL=%q", got)
+	}
+}

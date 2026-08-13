@@ -626,9 +626,9 @@ func browserURL(address, token string) string {
 	}
 	result := url.URL{Scheme: "http", Host: address, Path: "/"}
 	if token != "" {
-		query := result.Query()
-		query.Set("token", token)
-		result.RawQuery = query.Encode()
+		fragment := url.Values{}
+		fragment.Set("token", token)
+		result.Fragment = fragment.Encode()
 	}
 	return result.String()
 }

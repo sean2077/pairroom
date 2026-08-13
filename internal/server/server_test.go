@@ -129,10 +129,13 @@ func TestRichConversationAssetsAreEmbedded(t *testing.T) {
 
 	app := httptest.NewRecorder()
 	server.Handler().ServeHTTP(app, localRequest(http.MethodGet, "/app.js", nil))
-	for _, marker := range []string{"threadFilter", "uploadPendingAttachment", "openLightbox", "renderClaudeQuestions"} {
+	for _, marker := range []string{"threadFilter", "uploadPendingAttachment", "openLightbox", "renderClaudeQuestions", "initializeSession", "X-PairRoom-CSRF"} {
 		if app.Code != http.StatusOK || !strings.Contains(app.Body.String(), marker) {
 			t.Fatalf("app asset omitted %q: status=%d", marker, app.Code)
 		}
+	}
+	if strings.Contains(app.Body.String(), "pairroom.token") || strings.Contains(app.Body.String(), "sessionStorage.setItem") {
+		t.Fatal("browser asset must not persist the bootstrap token in Web Storage")
 	}
 }
 
@@ -161,26 +164,101 @@ func TestBearerTokenProtectsOnlyAPI(t *testing.T) {
 	}
 }
 
-func TestQueryTokenIsRestrictedToSSE(t *testing.T) {
+func TestQueryTokenNeverAuthorizesAPI(t *testing.T) {
 	t.Parallel()
 	server, _ := newTestServer(t, "secret")
 
+	for _, target := range []string{"/api/v1/snapshot?token=secret", "/api/v1/events?token=secret"} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		server.Handler().ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("query token must not authorize %s: status=%d body=%s", target, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
+func TestBrowserSessionAndCSRF(t *testing.T) {
+	t.Parallel()
+	server, _ := newTestServer(t, "secret")
+
+	bootstrap := httptest.NewRecorder()
+	bootstrapRequest := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/v1/session", nil)
+	bootstrapRequest.Header.Set("Authorization", "Bearer secret")
+	server.Handler().ServeHTTP(bootstrap, bootstrapRequest)
+	if bootstrap.Code != http.StatusCreated {
+		t.Fatalf("bootstrap status=%d body=%s", bootstrap.Code, bootstrap.Body.String())
+	}
+	var session struct {
+		CSRF string `json:"csrf_token"`
+	}
+	if err := json.Unmarshal(bootstrap.Body.Bytes(), &session); err != nil {
+		t.Fatal(err)
+	}
+	if session.CSRF == "" {
+		t.Fatal("browser session omitted CSRF token")
+	}
+	cookies := bootstrap.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("bootstrap cookies=%d", len(cookies))
+	}
+	cookie := cookies[0]
+	if cookie.Name != browserSessionCookie || !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode {
+		t.Fatalf("unexpected session cookie: %#v", cookie)
+	}
+
 	snapshot := httptest.NewRecorder()
-	server.Handler().ServeHTTP(snapshot, httptest.NewRequest(http.MethodGet, "/api/v1/snapshot?token=secret", nil))
-	if snapshot.Code != http.StatusUnauthorized {
-		t.Fatalf("query token must not authorize snapshot API: %d", snapshot.Code)
+	snapshotRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/v1/snapshot", nil)
+	snapshotRequest.AddCookie(cookie)
+	server.Handler().ServeHTTP(snapshot, snapshotRequest)
+	if snapshot.Code != http.StatusOK {
+		t.Fatalf("session snapshot status=%d body=%s", snapshot.Code, snapshot.Body.String())
+	}
+
+	missingCSRF := httptest.NewRecorder()
+	missingRequest := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/v1/messages", strings.NewReader(`{"text":"blocked","to":["claude"]}`))
+	missingRequest.Header.Set("Content-Type", "application/json")
+	missingRequest.AddCookie(cookie)
+	server.Handler().ServeHTTP(missingCSRF, missingRequest)
+	if missingCSRF.Code != http.StatusForbidden {
+		t.Fatalf("missing CSRF status=%d body=%s", missingCSRF.Code, missingCSRF.Body.String())
+	}
+
+	accepted := httptest.NewRecorder()
+	acceptedRequest := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/v1/messages", strings.NewReader(`{"text":"accepted","to":["claude"]}`))
+	acceptedRequest.Header.Set("Content-Type", "application/json")
+	acceptedRequest.Header.Set(csrfHeaderName, session.CSRF)
+	acceptedRequest.AddCookie(cookie)
+	server.Handler().ServeHTTP(accepted, acceptedRequest)
+	if accepted.Code != http.StatusAccepted {
+		t.Fatalf("valid CSRF status=%d body=%s", accepted.Code, accepted.Body.String())
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	events := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/events?token=secret", nil).WithContext(ctx)
-	server.Handler().ServeHTTP(events, request)
-	if events.Code != http.StatusOK {
-		t.Fatalf("query token must authorize EventSource endpoint: %d: %s", events.Code, events.Body.String())
+	eventsRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/v1/events", nil).WithContext(ctx)
+	eventsRequest.AddCookie(cookie)
+	server.Handler().ServeHTTP(events, eventsRequest)
+	if events.Code != http.StatusOK || events.Header().Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("session SSE status=%d content-type=%q body=%s", events.Code, events.Header().Get("Content-Type"), events.Body.String())
 	}
-	if got := events.Header().Get("Content-Type"); got != "text/event-stream" {
-		t.Fatalf("SSE content type = %q", got)
+
+	logout := httptest.NewRecorder()
+	logoutRequest := httptest.NewRequest(http.MethodDelete, "http://127.0.0.1/api/v1/session", nil)
+	logoutRequest.Header.Set(csrfHeaderName, session.CSRF)
+	logoutRequest.AddCookie(cookie)
+	server.Handler().ServeHTTP(logout, logoutRequest)
+	if logout.Code != http.StatusNoContent {
+		t.Fatalf("logout status=%d body=%s", logout.Code, logout.Body.String())
+	}
+
+	after := httptest.NewRecorder()
+	afterRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/v1/snapshot", nil)
+	afterRequest.AddCookie(cookie)
+	server.Handler().ServeHTTP(after, afterRequest)
+	if after.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked session status=%d body=%s", after.Code, after.Body.String())
 	}
 }
 

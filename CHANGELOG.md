@@ -1,3 +1,18 @@
+## [0.9.0] - 2026-08-14
+
+### Added
+
+- One-time URL-fragment bootstrap exchange for short-lived HttpOnly browser sessions.
+- SameSite=Strict session cookies, per-session CSRF secrets, explicit logout, and sliding 12-hour expiry.
+- Fixed-window per-client API abuse protection with bounded in-memory state.
+- Browser-session and CSRF tests covering bootstrap, authenticated SSE, mutation rejection, and revocation.
+
+### Changed
+
+- Browser credentials are no longer placed in query parameters, browser history, `sessionStorage`, or `localStorage`.
+- Native/API clients may continue using the configured Bearer token directly; browser EventSource now authenticates with its session cookie.
+- Query-string tokens no longer authorize any API endpoint, including SSE.
+
 ## [0.8.0] - 2026-08-14
 
 ### Added
