@@ -343,3 +343,7 @@ codex
 - UI 不嵌入完整供应商 TUI；
 - 供应商协议变化需要跟随当前公开接口更新；
 - 没有内建 TLS、账号系统或多人权限模型。
+
+## Reviewer workspace boundary (v0.4)
+
+PairRoom materializes the reviewer view as a detached Git worktree, applies the complete `git diff HEAD` (including staged and unstaged tracked changes), then copies untracked regular files. Untracked symlinks and symlinks that escape the snapshot are rejected. The snapshot records its source HEAD and a digest over the patch and untracked file hashes. On POSIX systems PairRoom removes write bits after construction; vendor-native plan/read-only policies remain the primary enforcement layer on Windows.

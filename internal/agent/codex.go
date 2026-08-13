@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -1196,6 +1197,56 @@ func (c *CodexAdapter) SetRole(_ context.Context, role model.ParticipantRole) er
 	if c.state == model.StateStarting || c.state == model.StateWorking || c.state == model.StateWaiting ||
 		c.currentTurn != "" || c.startingInput != nil || len(c.wireInputs) > 0 || len(c.queued) > 0 || len(c.approvals) > 0 {
 		return errors.New("interrupt or stop Codex before changing its role")
+	}
+	return nil
+}
+
+// SetWorkspace updates both the app-server process directory and the cwd sent
+// to thread/turn requests. Like role changes, it is rejected while any input
+// can still be in flight so a turn is never relabelled after it started.
+func (c *CodexAdapter) SetWorkspace(ctx context.Context, workspace string) error {
+	workspace = filepath.Clean(strings.TrimSpace(workspace))
+	if workspace == "." || workspace == "" {
+		return errors.New("Codex workspace is required")
+	}
+	info, err := os.Stat(workspace)
+	if err != nil {
+		return fmt.Errorf("stat Codex workspace: %w", err)
+	}
+	if !info.IsDir() {
+		return errors.New("Codex workspace is not a directory")
+	}
+
+	c.mu.Lock()
+	if filepath.Clean(c.cfg.Repo) == workspace {
+		c.mu.Unlock()
+		return nil
+	}
+	if c.state == model.StateStarting || c.state == model.StateWorking || c.state == model.StateWaiting ||
+		c.currentTurn != "" || c.startingInput != nil || len(c.wireInputs) > 0 || len(c.queued) > 0 || len(c.approvals) > 0 {
+		c.mu.Unlock()
+		return errors.New("interrupt or stop Codex before changing its workspace")
+	}
+	wasRunning := c.cmd != nil && c.cmd.Process != nil
+	old := c.cfg.Repo
+	c.cfg.Repo = workspace
+	c.protocolSent = false
+	c.mu.Unlock()
+
+	if !wasRunning {
+		return nil
+	}
+	if err := c.Stop(ctx); err != nil {
+		c.mu.Lock()
+		c.cfg.Repo = old
+		c.mu.Unlock()
+		return err
+	}
+	if err := c.Start(ctx); err != nil {
+		c.mu.Lock()
+		c.cfg.Repo = old
+		c.mu.Unlock()
+		return fmt.Errorf("restart Codex in reviewer workspace: %w", err)
 	}
 	return nil
 }

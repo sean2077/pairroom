@@ -25,6 +25,7 @@ type fakeAdapter struct {
 	beforeReturn func(model.AgentInput)
 	submitErr    error
 	role         model.ParticipantRole
+	workspace    string
 }
 
 func (f *fakeAdapter) Actor() model.ActorID { return f.actor }
@@ -77,6 +78,12 @@ func (f *fakeAdapter) ResolveApproval(context.Context, string, model.ApprovalRes
 func (f *fakeAdapter) SetRole(_ context.Context, role model.ParticipantRole) error {
 	f.mu.Lock()
 	f.role = role
+	f.mu.Unlock()
+	return nil
+}
+func (f *fakeAdapter) SetWorkspace(_ context.Context, workspace string) error {
+	f.mu.Lock()
+	f.workspace = workspace
 	f.mu.Unlock()
 	return nil
 }

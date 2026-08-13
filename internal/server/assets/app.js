@@ -298,6 +298,23 @@
       policyLine.title = policy.title;
       main.appendChild(policyLine);
 
+	  const workspace = p.workspace || {};
+	  if (workspace.kind) {
+		const workspaceLine = document.createElement('div');
+		workspaceLine.className = `workspace-boundary ${workspace.read_only ? 'protected' : ''}`;
+		const parts = [workspace.kind === 'reviewer-snapshot' ? '独立审查快照' : '实时工作区'];
+		if (workspace.dirty) parts.push('含未提交改动');
+		if (workspace.untracked_count) parts.push(`${workspace.untracked_count} 个未跟踪文件`);
+		workspaceLine.textContent = parts.join(' · ');
+		workspaceLine.title = [
+		  workspace.path,
+		  workspace.source_head ? `HEAD ${workspace.source_head}` : '',
+		  workspace.patch_sha256 ? `snapshot ${workspace.patch_sha256}` : '',
+		  ...(workspace.warnings || []),
+		].filter(Boolean).join('\n');
+		main.appendChild(workspaceLine);
+	  }
+
       const roleSelect = document.createElement('select');
       roleSelect.className = 'role-select';
       roleSelect.dataset.roleActor = actor;

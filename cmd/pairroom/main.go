@@ -29,6 +29,7 @@ import (
 	"github.com/sean2077/pairroom/internal/server"
 	"github.com/sean2077/pairroom/internal/store"
 	"github.com/sean2077/pairroom/internal/version"
+	"github.com/sean2077/pairroom/internal/workspace"
 )
 
 func main() {
@@ -144,6 +145,11 @@ func runServe(args []string) error {
 		_ = eventStore.Close()
 		return err
 	}
+	workspaceManager, err := workspace.New(repo, dataDir)
+	if err != nil {
+		_ = eventStore.Close()
+		return err
+	}
 	claudeFactory := agent.ClaudeFactory
 	codexFactory := agent.CodexFactory
 	if *mockFlag {
@@ -167,6 +173,7 @@ func runServe(args []string) error {
 			ApprovalPolicy: *codexApproval, Sandbox: *codexSandbox,
 		},
 		Attachments: attachmentStore,
+		Workspaces:  workspaceManager,
 		AutoStart:   *autoStartFlag,
 	})
 	if err != nil {

@@ -35,6 +35,7 @@ type Adapter interface {
 	Stop(context.Context) error
 	ResolveApproval(context.Context, string, model.ApprovalResolution) error
 	SetRole(context.Context, model.ParticipantRole) error
+	SetWorkspace(context.Context, string) error
 	State() model.AgentState
 	SessionID() string
 }

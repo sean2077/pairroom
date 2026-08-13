@@ -1,3 +1,18 @@
+## [0.4.0] - 2026-08-14
+
+### Added
+
+- Reviewer Git snapshot that includes committed HEAD, dirty tracked changes, and untracked regular files.
+- Durable workspace-boundary metadata with source HEAD, snapshot digest, dirty state, and read-only enforcement status.
+- Safe workspace reconfiguration for Claude Code, Codex, and mock adapters.
+- Atomic two-participant driver/reviewer switch event with rollback on adapter reconfiguration failure.
+- Reviewer snapshot tests covering dirty files, untracked files, replacement, and symlink rejection.
+
+### Changed
+
+- Reviewer sessions now run from an isolated snapshot by default instead of the live driver working tree.
+- POSIX snapshots are made filesystem read-only; Windows reports the weaker boundary explicitly and continues to rely on native reviewer sandboxing.
+
 # Changelog
 
 ## 0.3.0 — 2026-08-13

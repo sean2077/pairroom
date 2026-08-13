@@ -27,6 +27,7 @@ const (
 	EventRuntime            = "runtime.event"
 	EventApprovalUpdated    = "approval.updated"
 	EventSystemNotice       = "system.notice"
+	EventParticipantsBatch  = "participants.batch.updated"
 
 	recentEventLimit = 600
 )
@@ -42,6 +43,7 @@ type Config struct {
 	ClaudeConfig  agent.Config
 	CodexConfig   agent.Config
 	Attachments   AttachmentStore
+	Workspaces    WorkspaceManager
 	AutoStart     bool
 }
 
@@ -50,6 +52,17 @@ type Config struct {
 type AttachmentStore interface {
 	Resolve(id string) (model.Attachment, string, error)
 	DiscoverRepoImages(text, source string) []model.Attachment
+}
+
+type WorkspaceManager interface {
+	DriverBoundary() model.WorkspaceBoundary
+	Refresh(context.Context) (model.WorkspaceBoundary, error)
+	Cleanup(context.Context) error
+}
+
+type participantBatch struct {
+	Reason       string                      `json:"reason"`
+	Participants []model.ParticipantSnapshot `json:"participants"`
 }
 
 type SendRequest struct {
@@ -306,23 +319,42 @@ func (e *Engine) Start(parent context.Context) error {
 		return nil
 	}
 	e.ctx, e.cancel = context.WithCancel(parent)
-	e.started = true
-
 	claudeParticipant := e.snapshot.Participants[model.ActorClaude]
 	codexParticipant := e.snapshot.Participants[model.ActorCodex]
+	repo := e.snapshot.Meta.Repo
+	roomName := e.snapshot.Meta.Name
+	e.mu.Unlock()
+
+	boundaries, err := e.prepareWorkspaceBoundaries(parent, claudeParticipant.Role, codexParticipant.Role)
+	if err != nil {
+		e.mu.Lock()
+		if e.cancel != nil {
+			e.cancel()
+		}
+		e.ctx, e.cancel = nil, nil
+		e.mu.Unlock()
+		return err
+	}
+
 	claudeCfg := e.cfg.ClaudeConfig
 	claudeCfg.Actor = model.ActorClaude
-	claudeCfg.Repo = e.snapshot.Meta.Repo
+	claudeCfg.Repo = boundaries[model.ActorClaude].Path
 	claudeCfg.DataDir = e.cfg.Store.Dir()
-	claudeCfg.RoomName = e.snapshot.Meta.Name
+	claudeCfg.RoomName = roomName
 	claudeCfg.SessionID = claudeParticipant.SessionID
 	codexCfg := e.cfg.CodexConfig
 	codexCfg.Actor = model.ActorCodex
-	codexCfg.Repo = e.snapshot.Meta.Repo
+	codexCfg.Repo = boundaries[model.ActorCodex].Path
 	codexCfg.DataDir = e.cfg.Store.Dir()
-	codexCfg.RoomName = e.snapshot.Meta.Name
+	codexCfg.RoomName = roomName
 	codexCfg.SessionID = codexParticipant.SessionID
 
+	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return errors.New("room is closed")
+	}
+	e.started = true
 	e.adapters[model.ActorClaude] = e.cfg.ClaudeFactory(claudeCfg, e.HandleRuntimeEvent)
 	e.adapters[model.ActorCodex] = e.cfg.CodexFactory(codexCfg, e.HandleRuntimeEvent)
 	claudeAdapter := e.adapters[model.ActorClaude]
@@ -332,6 +364,16 @@ func (e *Engine) Start(parent context.Context) error {
 	e.lastRuntimeActivity[model.ActorClaude] = now
 	e.lastRuntimeActivity[model.ActorCodex] = now
 	e.mu.Unlock()
+
+	for actor, boundary := range boundaries {
+		actor, boundary := actor, boundary
+		_ = e.mutateParticipant(model.ActorSystem, actor, func(p *model.ParticipantSnapshot) {
+			p.Workspace = boundary
+			if p.Workspace.Path == "" {
+				p.Workspace.Path = repo
+			}
+		})
+	}
 
 	// Apply the restored room roles before either native process starts. Codex
 	// enforces reviewer policy per turn; Claude maps reviewer to native plan mode.
@@ -357,6 +399,47 @@ func (e *Engine) Start(parent context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (e *Engine) prepareWorkspaceBoundaries(ctx context.Context, claudeRole, codexRole model.ParticipantRole) (map[model.ActorID]model.WorkspaceBoundary, error) {
+	e.mu.RLock()
+	repo := e.snapshot.Meta.Repo
+	e.mu.RUnlock()
+	driver := model.WorkspaceBoundary{Kind: "driver-live", Path: repo}
+	if e.cfg.Workspaces != nil {
+		driver = e.cfg.Workspaces.DriverBoundary()
+	}
+	boundaries := map[model.ActorID]model.WorkspaceBoundary{
+		model.ActorClaude: driver,
+		model.ActorCodex:  driver,
+	}
+	if claudeRole != model.RoleReviewer && codexRole != model.RoleReviewer {
+		return boundaries, nil
+	}
+	if e.cfg.Workspaces == nil {
+		fallback := driver
+		fallback.Kind = "reviewer-live-fallback"
+		fallback.ReadOnly = false
+		fallback.Warnings = []string{"reviewer snapshot manager is unavailable; reviewer sees the live working tree"}
+		if claudeRole == model.RoleReviewer {
+			boundaries[model.ActorClaude] = fallback
+		}
+		if codexRole == model.RoleReviewer {
+			boundaries[model.ActorCodex] = fallback
+		}
+		return boundaries, nil
+	}
+	reviewer, err := e.cfg.Workspaces.Refresh(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("prepare reviewer workspace: %w", err)
+	}
+	if claudeRole == model.RoleReviewer {
+		boundaries[model.ActorClaude] = reviewer
+	}
+	if codexRole == model.RoleReviewer {
+		boundaries[model.ActorCodex] = reviewer
+	}
+	return boundaries, nil
 }
 
 func (e *Engine) Snapshot() model.RoomSnapshot {
@@ -655,22 +738,61 @@ func (e *Engine) SetRole(ctx context.Context, actor model.ActorID, role model.Pa
 	if !role.Valid() {
 		return fmt.Errorf("invalid role %q", role)
 	}
+	other := model.OtherParticipant(actor)
+	e.mu.RLock()
+	actorSnapshot := e.snapshot.Participants[actor]
+	otherSnapshot := e.snapshot.Participants[other]
+	e.mu.RUnlock()
+	if err := roleChangeSafe(actorSnapshot); err != nil {
+		return err
+	}
+
+	boundaries, err := e.prepareWorkspaceBoundaries(ctx,
+		roleFor(actor, model.ActorClaude, role, otherSnapshot.Role),
+		roleFor(actor, model.ActorCodex, role, otherSnapshot.Role),
+	)
+	if err != nil {
+		return err
+	}
 	adapter, err := e.adapter(actor)
 	if err != nil {
 		return err
 	}
-	if err := adapter.SetRole(ctx, role); err != nil {
+	wasRunning := adapter.State() != model.StateStopped
+	oldBoundary := actorSnapshot.Workspace
+	if oldBoundary.Path == "" {
+		oldBoundary = model.WorkspaceBoundary{Kind: "driver-live", Path: e.snapshot.Meta.Repo}
+	}
+	if wasRunning {
+		if err := adapter.Stop(ctx); err != nil {
+			return fmt.Errorf("stop %s before role change: %w", actor.DisplayName(), err)
+		}
+	}
+	rollback := func() {
+		_ = adapter.SetWorkspace(context.Background(), oldBoundary.Path)
+		_ = adapter.SetRole(context.Background(), actorSnapshot.Role)
+		if wasRunning {
+			_ = adapter.Start(context.Background())
+		}
+	}
+	if err := adapter.SetWorkspace(ctx, boundaries[actor].Path); err != nil {
+		rollback()
 		return err
+	}
+	if err := adapter.SetRole(ctx, role); err != nil {
+		rollback()
+		return err
+	}
+	if wasRunning {
+		if err := adapter.Start(ctx); err != nil {
+			rollback()
+			return fmt.Errorf("restart %s after role change: %w", actor.DisplayName(), err)
+		}
 	}
 	return e.mutateParticipant(model.ActorUser, actor, func(participant *model.ParticipantSnapshot) {
 		participant.Role = role
-		if actor == model.ActorClaude {
-			if role == model.RoleReviewer {
-				participant.Runtime.PermissionMode = "plan"
-			} else if e.cfg.ClaudeConfig.PermissionMode != "" {
-				participant.Runtime.PermissionMode = e.cfg.ClaudeConfig.PermissionMode
-			}
-		}
+		participant.Workspace = boundaries[actor]
+		applyRoleRuntimeProjection(participant, actor, role, e.cfg)
 	})
 }
 
@@ -680,19 +802,129 @@ func (e *Engine) SwitchDriver(ctx context.Context, driver model.ActorID) error {
 	}
 	reviewer := model.OtherParticipant(driver)
 	e.mu.RLock()
-	oldDriverRole := e.snapshot.Participants[driver].Role
-	oldReviewerRole := e.snapshot.Participants[reviewer].Role
+	old := map[model.ActorID]model.ParticipantSnapshot{
+		model.ActorClaude: e.snapshot.Participants[model.ActorClaude],
+		model.ActorCodex:  e.snapshot.Participants[model.ActorCodex],
+	}
 	e.mu.RUnlock()
-	if err := e.SetRole(ctx, driver, model.RoleDriver); err != nil {
+	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+		if err := roleChangeSafe(old[actor]); err != nil {
+			return err
+		}
+	}
+
+	roles := map[model.ActorID]model.ParticipantRole{
+		driver:   model.RoleDriver,
+		reviewer: model.RoleReviewer,
+	}
+	boundaries, err := e.prepareWorkspaceBoundaries(ctx, roles[model.ActorClaude], roles[model.ActorCodex])
+	if err != nil {
 		return err
 	}
-	if err := e.SetRole(ctx, reviewer, model.RoleReviewer); err != nil {
-		// Best-effort rollback keeps native policy and room projection aligned.
-		_ = e.SetRole(ctx, driver, oldDriverRole)
-		_ = e.SetRole(ctx, reviewer, oldReviewerRole)
-		return err
+	adapters := map[model.ActorID]agent.Adapter{}
+	running := map[model.ActorID]bool{}
+	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+		adapter, err := e.adapter(actor)
+		if err != nil {
+			return err
+		}
+		adapters[actor] = adapter
+		running[actor] = adapter.State() != model.StateStopped
 	}
-	return nil
+	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+		if running[actor] {
+			if err := adapters[actor].Stop(ctx); err != nil {
+				for _, stopped := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+					if stopped == actor {
+						break
+					}
+					if running[stopped] {
+						_ = adapters[stopped].Start(context.Background())
+					}
+				}
+				return fmt.Errorf("stop %s before driver switch: %w", actor.DisplayName(), err)
+			}
+		}
+	}
+	rollback := func() {
+		for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+			_ = adapters[actor].Stop(context.Background())
+			path := old[actor].Workspace.Path
+			if path == "" {
+				path = e.snapshot.Meta.Repo
+			}
+			_ = adapters[actor].SetWorkspace(context.Background(), path)
+			_ = adapters[actor].SetRole(context.Background(), old[actor].Role)
+		}
+		for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+			if running[actor] {
+				_ = adapters[actor].Start(context.Background())
+			}
+		}
+	}
+	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+		if err := adapters[actor].SetWorkspace(ctx, boundaries[actor].Path); err != nil {
+			rollback()
+			return fmt.Errorf("set %s workspace: %w", actor.DisplayName(), err)
+		}
+		if err := adapters[actor].SetRole(ctx, roles[actor]); err != nil {
+			rollback()
+			return fmt.Errorf("set %s role: %w", actor.DisplayName(), err)
+		}
+	}
+	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+		if running[actor] {
+			if err := adapters[actor].Start(ctx); err != nil {
+				rollback()
+				return fmt.Errorf("restart %s after driver switch: %w", actor.DisplayName(), err)
+			}
+		}
+	}
+	participants := make([]model.ParticipantSnapshot, 0, 2)
+	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+		participant := old[actor]
+		participant.Role = roles[actor]
+		participant.Workspace = boundaries[actor]
+		applyRoleRuntimeProjection(&participant, actor, roles[actor], e.cfg)
+		participants = append(participants, participant)
+	}
+	_, err = e.record(EventParticipantsBatch, model.ActorUser, participantBatch{
+		Reason: "driver_switched", Participants: participants,
+	})
+	return err
+}
+
+func roleFor(changed, target model.ActorID, requested, other model.ParticipantRole) model.ParticipantRole {
+	if changed == target {
+		return requested
+	}
+	return other
+}
+
+func roleChangeSafe(participant model.ParticipantSnapshot) error {
+	switch participant.State {
+	case model.StateStopped, model.StateIdle, model.StateError:
+		return nil
+	default:
+		return fmt.Errorf("interrupt or stop %s before changing roles or workspaces", participant.DisplayName)
+	}
+}
+
+func applyRoleRuntimeProjection(participant *model.ParticipantSnapshot, actor model.ActorID, role model.ParticipantRole, cfg Config) {
+	if actor == model.ActorClaude {
+		if role == model.RoleReviewer {
+			participant.Runtime.PermissionMode = "plan"
+		} else if cfg.ClaudeConfig.PermissionMode != "" {
+			participant.Runtime.PermissionMode = cfg.ClaudeConfig.PermissionMode
+		}
+	}
+	if actor == model.ActorCodex {
+		if role == model.RoleReviewer {
+			participant.Runtime.Sandbox = "readOnly"
+		} else if cfg.CodexConfig.Sandbox != "" {
+			participant.Runtime.Sandbox = cfg.CodexConfig.Sandbox
+		}
+	}
 }
 
 func (e *Engine) Close() error {
@@ -715,6 +947,9 @@ func (e *Engine) Close() error {
 	defer cancel()
 	for _, adapter := range adapters {
 		_ = adapter.Stop(ctx)
+	}
+	if e.cfg.Workspaces != nil {
+		_ = e.cfg.Workspaces.Cleanup(ctx)
 	}
 	return e.cfg.Store.Close()
 }
@@ -1367,6 +1602,20 @@ func (e *Engine) applyLocked(event model.Event) error {
 			e.snapshot.Participants = make(map[model.ActorID]model.ParticipantSnapshot)
 		}
 		e.snapshot.Participants[participant.ID] = participant
+	case EventParticipantsBatch:
+		var update participantBatch
+		if err := json.Unmarshal(event.Data, &update); err != nil {
+			return err
+		}
+		if e.snapshot.Participants == nil {
+			e.snapshot.Participants = make(map[model.ActorID]model.ParticipantSnapshot)
+		}
+		for _, participant := range update.Participants {
+			if !participant.ID.ValidParticipant() {
+				return fmt.Errorf("invalid participant in batch update: %q", participant.ID)
+			}
+			e.snapshot.Participants[participant.ID] = participant
+		}
 	case EventMessageCreated:
 		var message model.Message
 		if err := json.Unmarshal(event.Data, &message); err != nil {
@@ -1496,6 +1745,7 @@ func cloneSnapshot(in model.RoomSnapshot) model.RoomSnapshot {
 	out.Participants = make(map[model.ActorID]model.ParticipantSnapshot, len(in.Participants))
 	for key, value := range in.Participants {
 		value.Runtime = cloneRuntimeInfo(value.Runtime)
+		value.Workspace.Warnings = append([]string(nil), value.Workspace.Warnings...)
 		out.Participants[key] = value
 	}
 	out.Events = make([]model.Event, len(in.Events))

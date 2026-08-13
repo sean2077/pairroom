@@ -212,17 +212,36 @@ type RuntimeInfo struct {
 	Data           json.RawMessage `json:"data,omitempty"`
 }
 
+// WorkspaceBoundary describes the filesystem view assigned to a participant.
+// The driver uses the live repository while the reviewer can be placed in an
+// independently materialized Git snapshot.  The metadata is deliberately
+// durable and visible so the UI never implies stronger isolation than the
+// runtime actually provides.
+type WorkspaceBoundary struct {
+	Kind             string    `json:"kind"`
+	Path             string    `json:"path,omitempty"`
+	SourceHead       string    `json:"source_head,omitempty"`
+	PatchSHA256      string    `json:"patch_sha256,omitempty"`
+	Dirty            bool      `json:"dirty"`
+	UntrackedCount   int       `json:"untracked_count,omitempty"`
+	ReadOnly         bool      `json:"read_only"`
+	ReadOnlyEnforced bool      `json:"read_only_enforced"`
+	RefreshedAt      time.Time `json:"refreshed_at,omitempty"`
+	Warnings         []string  `json:"warnings,omitempty"`
+}
+
 type ParticipantSnapshot struct {
-	ID           ActorID         `json:"id"`
-	DisplayName  string          `json:"display_name"`
-	Role         ParticipantRole `json:"role"`
-	State        AgentState      `json:"state"`
-	SessionID    string          `json:"session_id,omitempty"`
-	Model        string          `json:"model,omitempty"`
-	CurrentTurn  string          `json:"current_turn,omitempty"`
-	LastError    string          `json:"last_error,omitempty"`
-	LastActivity time.Time       `json:"last_activity,omitempty"`
-	Runtime      RuntimeInfo     `json:"runtime,omitempty"`
+	ID           ActorID           `json:"id"`
+	DisplayName  string            `json:"display_name"`
+	Role         ParticipantRole   `json:"role"`
+	State        AgentState        `json:"state"`
+	SessionID    string            `json:"session_id,omitempty"`
+	Model        string            `json:"model,omitempty"`
+	CurrentTurn  string            `json:"current_turn,omitempty"`
+	LastError    string            `json:"last_error,omitempty"`
+	LastActivity time.Time         `json:"last_activity,omitempty"`
+	Runtime      RuntimeInfo       `json:"runtime,omitempty"`
+	Workspace    WorkspaceBoundary `json:"workspace,omitempty"`
 }
 
 type RoomSettings struct {

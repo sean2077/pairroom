@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -274,6 +275,20 @@ func (m *MockAdapter) ResolveApproval(context.Context, string, model.ApprovalRes
 }
 
 func (m *MockAdapter) SetRole(context.Context, model.ParticipantRole) error { return nil }
+
+func (m *MockAdapter) SetWorkspace(_ context.Context, workspace string) error {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return errors.New("mock workspace is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.state == model.StateWorking || m.state == model.StateWaiting || m.state == model.StateStarting {
+		return errors.New("interrupt or stop mock agent before changing its workspace")
+	}
+	m.cfg.Repo = workspace
+	return nil
+}
 
 func chunks(s string, n int) []string {
 	if n <= 0 || len(s) <= n {
