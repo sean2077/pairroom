@@ -141,7 +141,7 @@ func TestOpenCreatesMetadata(t *testing.T) {
 	if err := store.LoadJSON("metadata.json", &metadata); err != nil {
 		t.Fatal(err)
 	}
-	if metadata.Format != "pairroom-jsonl" || metadata.SchemaVersion != 2 {
+	if metadata.Format != "pairroom-jsonl" || metadata.SchemaVersion != version.StoreSchema {
 		t.Fatalf("unexpected metadata: %#v", metadata)
 	}
 }

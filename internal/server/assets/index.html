@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark light">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <title>PairRoom</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -79,6 +80,11 @@
             <div class="chat-description">你、Claude Code 与 Codex 的公共时间线</div>
           </div>
           <div class="toolbar-actions">
+            <select id="conversation-filter" class="mini-select" title="筛选时间线">
+              <option value="all">全部消息</option>
+              <option value="agents">仅 Agent 对话</option>
+              <option value="human">仅我的消息</option>
+            </select>
             <label class="search-box" title="搜索消息">
               <span>⌕</span>
               <input id="message-search" type="search" placeholder="搜索讨论…">
@@ -87,6 +93,10 @@
             <button id="export-json" class="ghost-button" title="导出 JSON">JSON</button>
             <button id="scroll-bottom" class="ghost-button">跳到最新</button>
           </div>
+        </div>
+        <div id="timeline-scope" class="timeline-scope hidden">
+          <div><span class="scope-label">线程视图</span><span id="timeline-scope-text"></span></div>
+          <button id="clear-timeline-scope" class="bare-button" type="button">返回全部讨论</button>
         </div>
         <div id="timeline" class="timeline" aria-live="polite"></div>
         <div id="reply-banner" class="reply-banner hidden">
@@ -99,16 +109,20 @@
             <button class="target-button" data-target="claude">@ Claude</button>
             <button class="target-button" data-target="codex">@ Codex</button>
           </div>
+          <div id="attachment-strip" class="attachment-strip hidden" aria-live="polite"></div>
           <div class="composer">
+            <input id="attachment-input" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple>
+            <button id="attach-button" class="attach-button" type="button" title="添加图片；也可粘贴或拖入">＋</button>
             <textarea id="message-input" rows="3" placeholder="向两个 Agent 发消息；Enter 发送，Shift+Enter 换行…"></textarea>
             <button id="send-button" class="send-button" aria-label="发送消息">
               <span>发送</span><span class="send-arrow">↑</span>
             </button>
           </div>
           <div class="composer-footnote">
-            <span>用户消息拥有最高优先级</span>
+            <span>支持拖拽或粘贴图片；用户消息拥有最高优先级</span>
             <span id="delivery-hint">发送给 Claude 与 Codex</span>
           </div>
+          <div id="drop-overlay" class="drop-overlay hidden">释放图片以加入消息</div>
         </div>
       </section>
 
@@ -145,7 +159,29 @@
       </aside>
     </main>
   </div>
+  <dialog id="image-lightbox" class="image-lightbox" aria-label="图片预览">
+    <button id="lightbox-close" class="lightbox-close" type="button" aria-label="关闭图片预览">×</button>
+    <button id="lightbox-prev" class="lightbox-nav lightbox-prev" type="button" aria-label="上一张图片">‹</button>
+    <button id="lightbox-next" class="lightbox-nav lightbox-next" type="button" aria-label="下一张图片">›</button>
+    <div id="lightbox-stage" class="lightbox-stage"><img id="lightbox-image" alt=""></div>
+    <div class="lightbox-footer">
+      <div class="lightbox-info">
+        <strong id="lightbox-title"></strong>
+        <span id="lightbox-meta"></span>
+        <span id="lightbox-counter" class="lightbox-counter"></span>
+      </div>
+      <div class="lightbox-actions">
+        <div class="lightbox-zoom" aria-label="图片缩放">
+          <button id="lightbox-zoom-out" type="button" aria-label="缩小">−</button>
+          <button id="lightbox-zoom-reset" type="button"><span id="lightbox-zoom-value">100%</span></button>
+          <button id="lightbox-zoom-in" type="button" aria-label="放大">＋</button>
+        </div>
+        <a id="lightbox-open" class="secondary-button" href="#" target="_blank" rel="noopener">打开原图</a>
+      </div>
+    </div>
+  </dialog>
   <div id="toast-stack" class="toast-stack" aria-live="assertive"></div>
+  <script src="/richtext.js" defer></script>
   <script src="/app.js" defer></script>
 </body>
 </html>

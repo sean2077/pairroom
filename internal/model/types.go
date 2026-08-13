@@ -111,6 +111,29 @@ func (m RoutingMode) Valid() bool {
 	return m == RoutingManual || m == RoutingMentions || m == RoutingRoundtable
 }
 
+// Attachment is durable, presentation-safe metadata for an item attached to a
+// room message. PairRoom v0.3 accepts raster images only. Absolute host paths
+// never enter the transcript or API response.
+type Attachment struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	MediaType string    `json:"media_type"`
+	Kind      string    `json:"kind"`
+	Size      int64     `json:"size"`
+	SHA256    string    `json:"sha256"`
+	Width     int       `json:"width,omitempty"`
+	Height    int       `json:"height,omitempty"`
+	Source    string    `json:"source,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// AgentAttachment adds the host-local path required at the native harness
+// boundary. The path is explicitly excluded from JSON.
+type AgentAttachment struct {
+	Attachment
+	Path string `json:"-"`
+}
+
 type Message struct {
 	ID                      string                      `json:"id"`
 	Seq                     uint64                      `json:"seq"`
@@ -129,6 +152,7 @@ type Message struct {
 	ProcessingDetail        map[ActorID]string          `json:"processing_detail,omitempty"`
 	ProcessingTurn          map[ActorID]string          `json:"processing_turn,omitempty"`
 	ProcessingLastUpdatedAt map[ActorID]time.Time       `json:"processing_last_updated_at,omitempty"`
+	Attachments             []Attachment                `json:"attachments,omitempty"`
 }
 
 type Event struct {
@@ -230,6 +254,15 @@ type Approval struct {
 	ResolvedAt  *time.Time      `json:"resolved_at,omitempty"`
 }
 
+// ApprovalResolution is the user response sent back to a native harness.
+// Most approvals need only Decision. Interactive questions may additionally
+// carry Answers keyed by the exact question text emitted by the harness.
+type ApprovalResolution struct {
+	Decision string            `json:"decision"`
+	Message  string            `json:"message,omitempty"`
+	Answers  map[string]string `json:"answers,omitempty"`
+}
+
 type RuntimeEvent struct {
 	Agent         ActorID         `json:"agent"`
 	Kind          string          `json:"kind"`
@@ -271,16 +304,17 @@ const (
 )
 
 type AgentInput struct {
-	MessageID   string          `json:"message_id"`
-	ThreadID    string          `json:"thread_id"`
-	Hop         int             `json:"hop"`
-	From        ActorID         `json:"from"`
-	To          ActorID         `json:"to"`
-	Text        string          `json:"text"`
-	ReplyTo     string          `json:"reply_to,omitempty"`
-	Role        ParticipantRole `json:"role"`
-	RoutingMode RoutingMode     `json:"routing_mode"`
-	MaxHops     int             `json:"max_hops"`
+	MessageID   string            `json:"message_id"`
+	ThreadID    string            `json:"thread_id"`
+	Hop         int               `json:"hop"`
+	From        ActorID           `json:"from"`
+	To          ActorID           `json:"to"`
+	Text        string            `json:"text"`
+	ReplyTo     string            `json:"reply_to,omitempty"`
+	Role        ParticipantRole   `json:"role"`
+	RoutingMode RoutingMode       `json:"routing_mode"`
+	MaxHops     int               `json:"max_hops"`
+	Attachments []AgentAttachment `json:"attachments,omitempty"`
 }
 
 type SystemNotice struct {

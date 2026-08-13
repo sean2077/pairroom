@@ -15,8 +15,19 @@
   const state = {
     snapshot: null,
     drafts: { claude: '', codex: '' },
+    draftCorrelation: { claude: '', codex: '' },
     selectedTarget: 'all',
     replyTo: '',
+    pendingAttachments: [],
+    attachmentObjectURLs: new Set(),
+    mediaObjectURLs: new Map(),
+    lightboxItems: [],
+    lightboxIndex: -1,
+    lightboxRequest: 0,
+    lightboxZoom: 1,
+    expandedMessages: new Set(),
+    conversationFilter: 'all',
+    threadFilter: '',
     inspectorAgent: 'all',
     inspectorTab: 'activity',
     inspectorCorrelation: '',
@@ -33,7 +44,7 @@
   async function api(path, options = {}) {
     const headers = new Headers(options.headers || {});
     if (token) headers.set('Authorization', `Bearer ${token}`);
-    if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+    if (options.body && !(options.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
     const response = await fetch(path, { ...options, headers });
     const type = response.headers.get('content-type') || '';
     const payload = type.includes('application/json') ? await response.json() : await response.text();
@@ -42,6 +53,17 @@
       throw new Error(message);
     }
     return payload;
+  }
+
+  async function apiBlob(path) {
+    const headers = new Headers();
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    const response = await fetch(path, { headers });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || response.statusText);
+    }
+    return response.blob();
   }
 
   function queueRender() {
@@ -56,6 +78,7 @@
   async function loadSnapshot() {
     state.snapshot = await api('/api/v1/snapshot');
     state.drafts = { claude: '', codex: '' };
+    state.draftCorrelation = { claude: '', codex: '' };
     render(true);
     connectEvents();
     refreshGitStatus();
@@ -109,7 +132,10 @@
           data.seq = event.seq;
           state.snapshot.messages.push(data);
         }
-        if (data.from === 'claude' || data.from === 'codex') state.drafts[data.from] = '';
+        if (data.from === 'claude' || data.from === 'codex') {
+          state.drafts[data.from] = '';
+          state.draftCorrelation[data.from] = '';
+        }
         break;
       }
       case 'message.delivery.updated': {
@@ -163,8 +189,17 @@
     if (state.snapshot.participants && state.snapshot.participants[actor]) {
       state.snapshot.participants[actor].last_activity = runtime.created_at || new Date().toISOString();
     }
-    if (runtime.kind === 'turn.started') state.drafts[actor] = '';
-    if (runtime.kind === 'text.delta') state.drafts[actor] = (state.drafts[actor] || '') + (runtime.text || '');
+    if (runtime.kind === 'turn.started') {
+      state.drafts[actor] = '';
+      state.draftCorrelation[actor] = runtime.correlation_id || '';
+    }
+    if (runtime.kind === 'text.delta') {
+      if (runtime.correlation_id && state.draftCorrelation[actor] && state.draftCorrelation[actor] !== runtime.correlation_id) {
+        state.drafts[actor] = '';
+      }
+      state.draftCorrelation[actor] = runtime.correlation_id || state.draftCorrelation[actor] || '';
+      state.drafts[actor] = (state.drafts[actor] || '') + (runtime.text || '');
+    }
     if (runtime.kind === 'error' && runtime.text) toast(`${displayName(actor)}：${runtime.text}`, 'error');
   }
 
@@ -182,6 +217,8 @@
     $('repo-path').textContent = state.snapshot.meta.repo;
     renderParticipants();
     renderSettings();
+    renderAttachmentStrip();
+    updateComposerAvailability();
     renderTimeline();
     renderActivity();
     renderApprovals();
@@ -254,6 +291,13 @@
         main.appendChild(warning);
       }
 
+      const policy = participantPolicy(actor, p);
+      const policyLine = document.createElement('div');
+      policyLine.className = `native-policy ${policy.protected ? 'protected' : ''}`;
+      policyLine.textContent = policy.text;
+      policyLine.title = policy.title;
+      main.appendChild(policyLine);
+
       const roleSelect = document.createElement('select');
       roleSelect.className = 'role-select';
       roleSelect.dataset.roleActor = actor;
@@ -302,10 +346,15 @@
 
   function renderTimeline() {
     timeline.replaceChildren();
+    renderTimelineScope();
     const items = [];
-    for (const message of state.snapshot.messages || []) items.push({ seq: message.seq, type: 'message', value: message });
+    for (const message of state.snapshot.messages || []) {
+      items.push({ seq: message.seq, type: 'message', value: message, createdAt: message.created_at });
+    }
     for (const event of state.snapshot.events || []) {
-      if (event.kind === 'system.notice') items.push({ seq: event.seq, type: 'notice', value: event.data });
+      if (event.kind === 'system.notice') {
+        items.push({ seq: event.seq, type: 'notice', value: event.data, createdAt: event.created_at });
+      }
     }
     items.sort((a, b) => a.seq - b.seq);
 
@@ -321,31 +370,105 @@
 
     const query = state.searchQuery.trim().toLocaleLowerCase();
     let visibleCount = 0;
+    let lastDateKey = '';
+    const appendVisible = (node, createdAt) => {
+      const key = localDateKey(createdAt);
+      if (key && key !== lastDateKey) {
+        timeline.appendChild(dateSeparatorNode(createdAt));
+        lastDateKey = key;
+      }
+      timeline.appendChild(node);
+      visibleCount += 1;
+    };
+
     for (const item of items) {
       if (item.type === 'notice') {
-        const visible = !query || String(item.value.text || '').toLocaleLowerCase().includes(query);
-        const node = noticeNode(item.value);
-        if (!visible) node.classList.add('search-hidden');
-        else visibleCount += 1;
-        timeline.appendChild(node);
-      } else {
-        const visible = !query || `${displayName(item.value.from)} ${item.value.text}`.toLocaleLowerCase().includes(query);
-        const node = messageNode(item.value);
-        if (!visible) node.classList.add('search-hidden');
-        else visibleCount += 1;
-        timeline.appendChild(node);
+        const visible = !state.threadFilter && (!query || String(item.value.text || '').toLocaleLowerCase().includes(query));
+        if (visible) appendVisible(noticeNode(item.value), item.createdAt);
+        continue;
       }
+      const filterVisible = state.conversationFilter === 'all'
+        || (state.conversationFilter === 'agents' && ['claude', 'codex'].includes(item.value.from))
+        || (state.conversationFilter === 'human' && item.value.from === 'user');
+      const threadVisible = !state.threadFilter || item.value.thread_id === state.threadFilter;
+      const attachmentText = (item.value.attachments || []).map((attachment) => attachment.name).join(' ');
+      const searchVisible = !query || `${displayName(item.value.from)} ${item.value.text} ${attachmentText}`.toLocaleLowerCase().includes(query);
+      if (threadVisible && filterVisible && searchVisible) appendVisible(messageNode(item.value), item.createdAt);
     }
     ['claude', 'codex'].forEach((actor) => {
       const text = state.drafts[actor];
-      if (text) timeline.appendChild(draftNode(actor, text));
+      const correlated = (state.snapshot.messages || []).find((message) => message.id === state.draftCorrelation[actor]);
+      const threadVisible = !state.threadFilter || correlated?.thread_id === state.threadFilter;
+      if (text && threadVisible && state.conversationFilter !== 'human') {
+        timeline.appendChild(draftNode(actor, text, state.draftCorrelation[actor]));
+        visibleCount += 1;
+      }
     });
-    if (query && visibleCount === 0) {
+    if ((query || state.conversationFilter !== 'all' || state.threadFilter) && visibleCount === 0) {
       const empty = document.createElement('div');
       empty.className = 'timeline-empty';
-      empty.innerHTML = '<div><h2>没有匹配消息</h2><p>修改搜索关键词即可恢复完整时间线。</p></div>';
+      empty.innerHTML = '<div><h2>没有匹配消息</h2><p>修改搜索、消息筛选或退出线程视图即可恢复完整时间线。</p></div>';
       timeline.appendChild(empty);
     }
+  }
+
+  function renderTimelineScope() {
+    const banner = $('timeline-scope');
+    if (!state.threadFilter) {
+      banner.classList.add('hidden');
+      $('timeline-scope-text').textContent = '';
+      return;
+    }
+    const messages = (state.snapshot?.messages || []).filter((message) => message.thread_id === state.threadFilter);
+    const root = messages[0];
+    const summary = root ? truncate(root.text || attachmentSummary(root), 100) : state.threadFilter;
+    $('timeline-scope-text').textContent = `${messages.length} 条消息 · ${summary}`;
+    banner.classList.remove('hidden');
+  }
+
+  function focusThread(threadId) {
+    if (!threadId) return;
+    state.threadFilter = threadId;
+    timeline.scrollTop = 0;
+    queueRender();
+  }
+
+  function clearThreadFilter() {
+    state.threadFilter = '';
+    timeline.scrollTop = 0;
+    queueRender();
+  }
+
+  function localDateKey(value) {
+    const date = new Date(value || '');
+    if (Number.isNaN(date.getTime())) return '';
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  function dateSeparatorNode(value) {
+    const separator = document.createElement('div');
+    separator.className = 'timeline-date';
+    const date = new Date(value || '');
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    const key = localDateKey(date);
+    let label = '';
+    if (key === localDateKey(today)) label = '今天';
+    else if (key === localDateKey(yesterday)) label = '昨天';
+    else {
+      label = new Intl.DateTimeFormat('zh-CN', {
+        year: date.getFullYear() === today.getFullYear() ? undefined : 'numeric',
+        month: 'long', day: 'numeric', weekday: 'short',
+      }).format(date);
+    }
+    const span = document.createElement('span');
+    span.textContent = label;
+    separator.appendChild(span);
+    return separator;
   }
 
   function messageNode(message) {
@@ -367,17 +490,27 @@
     author.textContent = displayName(actor);
     const time = document.createElement('time');
     time.textContent = formatTime(message.created_at);
+    time.dateTime = message.created_at || '';
     const actions = document.createElement('span');
     actions.className = 'message-actions';
     const inspect = document.createElement('button');
     inspect.className = 'reply-action inspect-action';
     inspect.textContent = '过程';
     inspect.dataset.inspectId = message.id;
+    const copy = document.createElement('button');
+    copy.className = 'reply-action';
+    copy.textContent = '复制';
+    copy.dataset.copyMessage = message.id;
+    const thread = document.createElement('button');
+    thread.className = 'reply-action';
+    thread.textContent = '线程';
+    thread.dataset.threadId = message.thread_id || '';
+    thread.title = '仅查看这条讨论线程';
     const reply = document.createElement('button');
     reply.className = 'reply-action';
     reply.textContent = '回复';
     reply.dataset.replyId = message.id;
-    actions.append(inspect, reply);
+    actions.append(inspect, copy, thread, reply);
     meta.append(author, time);
     if (message.retry_of) {
       const retryMarker = document.createElement('span');
@@ -390,16 +523,38 @@
 
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
+    const body = document.createElement('div');
+    body.className = 'message-body';
     if (message.reply_to) {
       const parent = state.snapshot.messages.find((item) => item.id === message.reply_to);
       if (parent) {
-        const quote = document.createElement('div');
+        const quote = document.createElement('button');
+        quote.type = 'button';
         quote.className = 'reply-quote';
-        quote.textContent = `${displayName(parent.from)}：${truncate(parent.text, 110)}`;
-        bubble.appendChild(quote);
+        quote.dataset.scrollMessage = parent.id;
+        const parentSummary = parent.text || (parent.attachments || []).map((item) => item.name).join('、') || '图片消息';
+        quote.textContent = `${displayName(parent.from)}：${truncate(parentSummary, 110)}`;
+        body.appendChild(quote);
       }
     }
-    appendRichText(bubble, message.text);
+    const usedAttachments = appendRichContent(body, message.text, { message });
+    appendAttachmentGallery(body, message.attachments || [], usedAttachments);
+    bubble.appendChild(body);
+
+    const isLongMessage = String(message.text || '').length > 3200
+      || String(message.text || '').split('\n').length > 85
+      || (message.attachments || []).length > 6;
+    const isExpanded = state.expandedMessages.has(message.id);
+    if (isLongMessage) {
+      if (!isExpanded) body.classList.add('long-message-fade');
+      const expand = document.createElement('button');
+      expand.type = 'button';
+      expand.className = 'expand-message';
+      expand.dataset.expandMessage = message.id;
+      expand.textContent = isExpanded ? '收起消息' : '展开完整消息';
+      expand.setAttribute('aria-expanded', String(isExpanded));
+      bubble.appendChild(expand);
+    }
     content.append(meta, bubble);
 
     if (message.delivery) {
@@ -413,7 +568,8 @@
         chip.textContent = `${displayName(target)} · ${deliveryText(status)}${processing ? ` / ${processingText(processing)}` : ''}`;
         const deliveryDetail = message.delivery_detail && message.delivery_detail[target];
         const processingDetail = message.processing_detail && message.processing_detail[target];
-        chip.title = [deliveryDetail, processingDetail].filter(Boolean).join('\n');
+        const turn = message.processing_turn && message.processing_turn[target];
+        chip.title = [deliveryDetail, processingDetail, turn ? `Turn: ${turn}` : ''].filter(Boolean).join('\n');
         delivery.appendChild(chip);
         if (isRetryable(message, target)) {
           const retryButton = document.createElement('button');
@@ -430,7 +586,7 @@
     return row;
   }
 
-  function draftNode(actor, text) {
+  function draftNode(actor, text, correlation) {
     const row = document.createElement('article');
     row.className = `message-row ${actor} streaming`;
     const avatar = document.createElement('div');
@@ -440,10 +596,15 @@
     content.className = 'message-content';
     const meta = document.createElement('div');
     meta.className = 'message-meta';
-    meta.innerHTML = `<span class="message-author">${displayName(actor)}</span><span>正在输入</span>`;
+    const author = document.createElement('span');
+    author.className = 'message-author';
+    author.textContent = displayName(actor);
+    const typing = document.createElement('span');
+    typing.textContent = '正在输入';
+    meta.append(author, typing);
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
-    appendRichText(bubble, text);
+    appendRichContent(bubble, text, { draft: true, correlation });
     const caret = document.createElement('span');
     caret.className = 'typing-caret';
     bubble.appendChild(caret);
@@ -462,22 +623,191 @@
     return row;
   }
 
-  function appendRichText(parent, text) {
-    const parts = String(text || '').split(/(@(?:claude|codex|all|peer|human|user)\b)/gi);
-    parts.forEach((part) => {
-      if (/^@(?:claude|codex|all|peer|human|user)$/i.test(part)) {
-        const span = document.createElement('span');
-        span.className = 'mention';
-        span.textContent = part;
-        parent.appendChild(span);
-      } else {
-        const lines = part.split('\n');
-        lines.forEach((line, index) => {
-          if (index) parent.appendChild(document.createElement('br'));
-          parent.appendChild(document.createTextNode(line));
-        });
-      }
+  function appendRichContent(parent, text, options = {}) {
+    const attachments = options.message ? (options.message.attachments || []) : [];
+    const used = new Set();
+    if (!String(text || '').trim()) return used;
+    const renderer = window.PairRoomRichText;
+    if (!renderer || typeof renderer.render !== 'function') {
+      const fallback = document.createElement('div');
+      fallback.className = 'rich-content';
+      fallback.textContent = String(text || '');
+      parent.appendChild(fallback);
+      return used;
+    }
+    renderer.render(parent, text, {
+      onCopyError: () => toast('浏览器不允许写入剪贴板', 'error'),
+      createImage: (reference, alt, title) => createMarkdownImage(reference, alt, title, attachments, used),
     });
+    return used;
+  }
+
+  function createMarkdownImage(reference, alt, title, attachments, used) {
+    const match = matchAttachment(reference, attachments, used);
+    if (match) {
+      used.add(match.id);
+      return createAttachmentCard(match, { inline: true, alt: alt || match.name, title });
+    }
+    const value = String(reference || '').trim();
+    const placeholder = document.createElement('div');
+    placeholder.className = /^https?:\/\//i.test(value) ? 'external-image-placeholder' : 'external-image-placeholder missing-local-image';
+    const label = document.createElement('span');
+    label.textContent = /^https?:\/\//i.test(value)
+      ? `外部图片未自动加载：${alt || value}`
+      : `未找到可安全预览的本地图片：${alt || value}`;
+    placeholder.appendChild(label);
+    if (/^https?:\/\//i.test(value)) {
+      const link = document.createElement('a');
+      link.href = value;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = '打开链接';
+      placeholder.appendChild(link);
+    }
+    return placeholder;
+  }
+
+  function matchAttachment(reference, attachments, used) {
+    let decoded = String(reference || '').trim().replace(/^file:\/\//i, '');
+    try { decoded = decodeURIComponent(decoded); } catch { /* preserve original */ }
+    decoded = decoded.replace(/\\/g, '/').replace(/[?#].*$/, '');
+    const basename = decoded.split('/').filter(Boolean).pop() || decoded;
+    return attachments.find((item) => !used.has(item.id)
+      && (item.id === decoded || item.name === decoded || item.name === basename)) || null;
+  }
+
+  function appendAttachmentGallery(parent, attachments, used = new Set()) {
+    const remaining = (attachments || []).filter((value) => !used.has(value.id));
+    if (!remaining.length) return;
+    const gallery = document.createElement('div');
+    gallery.className = `message-attachments${remaining.length === 1 ? ' single' : ''}`;
+    remaining.forEach((value) => gallery.appendChild(createAttachmentCard(value)));
+    parent.appendChild(gallery);
+  }
+
+  function createAttachmentCard(attachment, options = {}) {
+    const inline = Boolean(options.inline);
+    const card = document.createElement(inline ? 'figure' : 'div');
+    card.className = inline ? 'inline-markdown-image' : 'message-image-card';
+    const stage = document.createElement('button');
+    stage.type = 'button';
+    stage.className = inline ? 'message-image-stage inline-image-stage' : 'message-image-stage';
+    stage.title = `预览 ${attachment.name}`;
+    stage.dataset.openAttachment = attachment.id;
+    const loading = document.createElement('span');
+    loading.className = 'image-loading';
+    loading.textContent = '加载图片…';
+    stage.appendChild(loading);
+    const caption = document.createElement(inline ? 'figcaption' : 'div');
+    caption.className = inline ? 'inline-image-caption' : 'message-image-caption';
+    const name = document.createElement('span');
+    name.textContent = options.title || options.alt || attachment.name;
+    name.title = attachment.name;
+    const meta = document.createElement('span');
+    meta.textContent = imageMeta(attachment);
+    caption.append(name, meta);
+    card.append(stage, caption);
+
+    loadAttachmentURL(attachment).then((url) => {
+      if (!stage.isConnected && !card.isConnected) return;
+      stage.replaceChildren();
+      const image = document.createElement('img');
+      image.src = url;
+      image.alt = options.alt || attachment.name;
+      image.loading = 'lazy';
+      image.decoding = 'async';
+      stage.appendChild(image);
+    }).catch((error) => {
+      stage.replaceChildren();
+      const failed = document.createElement('span');
+      failed.className = 'image-loading image-error';
+      failed.textContent = `图片加载失败：${error.message}`;
+      stage.appendChild(failed);
+    });
+    return card;
+  }
+
+  async function loadAttachmentURL(attachment) {
+    const existing = state.mediaObjectURLs.get(attachment.id);
+    if (typeof existing === 'string') return existing;
+    if (existing && typeof existing.then === 'function') return existing;
+    const pending = apiBlob(`/api/v1/attachments/${encodeURIComponent(attachment.id)}`)
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        state.mediaObjectURLs.set(attachment.id, url);
+        return url;
+      })
+      .catch((error) => {
+        state.mediaObjectURLs.delete(attachment.id);
+        throw error;
+      });
+    state.mediaObjectURLs.set(attachment.id, pending);
+    return pending;
+  }
+
+  function lightboxGroup(attachment) {
+    const message = (state.snapshot?.messages || []).find((item) => (item.attachments || []).some((value) => value.id === attachment.id));
+    const values = message ? (message.attachments || []) : [attachment];
+    const seen = new Set();
+    return values.filter((value) => value?.id && !seen.has(value.id) && seen.add(value.id));
+  }
+
+  function openLightbox(attachment, url) {
+    state.lightboxItems = lightboxGroup(attachment);
+    state.lightboxIndex = Math.max(0, state.lightboxItems.findIndex((value) => value.id === attachment.id));
+    const dialog = $('image-lightbox');
+    if (!dialog.open) dialog.showModal();
+    void showLightboxAttachment(url);
+  }
+
+  async function showLightboxAttachment(knownURL = '') {
+    const attachment = state.lightboxItems[state.lightboxIndex];
+    if (!attachment) return;
+    const request = ++state.lightboxRequest;
+    const image = $('lightbox-image');
+    const stage = $('lightbox-stage');
+    stage.classList.add('loading');
+    image.removeAttribute('src');
+    image.alt = attachment.name;
+    $('lightbox-title').textContent = attachment.name;
+    $('lightbox-meta').textContent = `${attachment.media_type || 'image'} · ${imageMeta(attachment)}`;
+    $('lightbox-counter').textContent = state.lightboxItems.length > 1
+      ? `${state.lightboxIndex + 1} / ${state.lightboxItems.length}` : '';
+    $('lightbox-prev').disabled = state.lightboxItems.length < 2;
+    $('lightbox-next').disabled = state.lightboxItems.length < 2;
+    setLightboxZoom(1);
+    try {
+      const url = knownURL || await loadAttachmentURL(attachment);
+      if (request !== state.lightboxRequest) return;
+      image.src = url;
+      $('lightbox-open').href = url;
+      $('lightbox-open').download = attachment.name || 'pairroom-image';
+    } catch (error) {
+      if (request !== state.lightboxRequest) return;
+      $('lightbox-title').textContent = `图片加载失败：${attachment.name}`;
+      $('lightbox-meta').textContent = error.message;
+      $('lightbox-open').href = '#';
+    } finally {
+      if (request === state.lightboxRequest) stage.classList.remove('loading');
+    }
+  }
+
+  function moveLightbox(delta) {
+    if (state.lightboxItems.length < 2) return;
+    state.lightboxIndex = (state.lightboxIndex + delta + state.lightboxItems.length) % state.lightboxItems.length;
+    void showLightboxAttachment();
+  }
+
+  function setLightboxZoom(value) {
+    state.lightboxZoom = Math.min(4, Math.max(0.5, Number(value) || 1));
+    $('lightbox-image').style.transform = `scale(${state.lightboxZoom})`;
+    $('lightbox-zoom-value').textContent = `${Math.round(state.lightboxZoom * 100)}%`;
+    $('lightbox-stage').classList.toggle('zoomed', state.lightboxZoom > 1);
+  }
+
+  function imageMeta(value) {
+    const dimensions = value.width && value.height ? `${value.width}×${value.height}` : '';
+    return [dimensions, formatBytes(value.size)].filter(Boolean).join(' · ');
   }
 
   function renderActivity() {
@@ -549,36 +879,171 @@
     if (!pending.length) {
       const empty = document.createElement('div');
       empty.className = 'approvals-empty';
-      empty.textContent = '当前没有待处理审批。Codex 的命令和文件变更请求会在这里等待你的决定。';
+      empty.textContent = '当前没有待处理审批。Claude 的工具权限/交互问题与 Codex 的命令、文件和权限请求都会显示在这里。';
       container.appendChild(empty);
       return;
     }
     pending.forEach((approval) => {
-      const card = document.createElement('div');
-      card.className = 'approval-card';
+      const detail = approvalDetail(approval);
+      const card = document.createElement('section');
+      card.className = `approval-card approval-${approval.agent}`;
+      card.dataset.approvalCard = approval.id;
+
       const title = document.createElement('div');
       title.className = 'approval-title';
-      title.textContent = approval.title;
+      title.textContent = approval.title || 'Native agent request';
       const meta = document.createElement('div');
       meta.className = 'approval-meta';
-      meta.textContent = `${displayName(approval.agent)} · ${approval.kind}`;
-      const detail = document.createElement('pre');
-      detail.className = 'approval-detail';
-      detail.textContent = prettyJSON(approval.detail);
-      const actions = document.createElement('div');
-      actions.className = 'approval-actions';
-      actions.append(
-        approvalButton(approval.id, 'accept', '允许一次', 'approve-button'),
-        approvalButton(approval.id, 'acceptForSession', '本会话允许', 'approve-button'),
-        approvalButton(approval.id, 'decline', '拒绝', 'decline-button'),
-      );
-      card.append(title, meta, detail, actions);
+      meta.textContent = `${displayName(approval.agent)} · ${approval.kind} · ${formatTime(approval.requested_at)}`;
+      card.append(title, meta);
+
+      if (approval.kind === 'claude.userQuestion') {
+        renderClaudeQuestions(card, approval, detail);
+      } else {
+        const summary = document.createElement('div');
+        summary.className = 'approval-summary';
+        summary.textContent = approvalSummary(approval, detail);
+        card.appendChild(summary);
+
+        const raw = document.createElement('details');
+        raw.className = 'approval-raw';
+        const rawTitle = document.createElement('summary');
+        rawTitle.textContent = '查看完整原生请求';
+        const rawBody = document.createElement('pre');
+        rawBody.className = 'approval-detail';
+        rawBody.textContent = prettyJSON(approval.detail);
+        raw.append(rawTitle, rawBody);
+        card.appendChild(raw);
+
+        const actions = document.createElement('div');
+        actions.className = 'approval-actions';
+        actions.appendChild(approvalButton(approval.id, 'accept', '允许一次', 'approve-button'));
+        if (approval.agent === 'codex' || detail.permission_suggestions) {
+          actions.appendChild(approvalButton(approval.id, 'acceptForSession', '本会话允许', 'approve-button secondary-approve'));
+        }
+        actions.appendChild(approvalButton(approval.id, 'decline', '拒绝', 'decline-button'));
+        card.appendChild(actions);
+      }
       container.appendChild(card);
     });
   }
 
+  function approvalDetail(approval) {
+    const value = approval?.detail;
+    if (!value) return {};
+    if (typeof value === 'object') return value;
+    try { return JSON.parse(value); } catch { return { raw: String(value) }; }
+  }
+
+  function approvalSummary(approval, detail) {
+    const input = detail.input && typeof detail.input === 'object' ? detail.input : {};
+    const command = Array.isArray(input.command) ? input.command.join(' ') : (input.command || input.cmd || '');
+    const path = input.file_path || input.path || input.cwd || detail.path || '';
+    const description = detail.description || input.description || '';
+    const tool = detail.tool_name || detail.method || approval.kind;
+    return [tool, command ? `命令：${truncate(command, 260)}` : '', path ? `路径：${path}` : '', description].filter(Boolean).join('\n');
+  }
+
+  function renderClaudeQuestions(card, approval, detail) {
+    const questions = Array.isArray(detail?.input?.questions) ? detail.input.questions : [];
+    if (!questions.length) {
+      const warning = document.createElement('div');
+      warning.className = 'approval-summary approval-warning';
+      warning.textContent = 'Claude 发出了交互问题，但请求中没有可解析的问题列表。为安全起见只能拒绝。';
+      card.appendChild(warning);
+      const actions = document.createElement('div');
+      actions.className = 'approval-actions';
+      actions.appendChild(approvalButton(approval.id, 'decline', '拒绝', 'decline-button'));
+      card.appendChild(actions);
+      return;
+    }
+
+    const form = document.createElement('form');
+    form.className = 'question-form';
+    form.dataset.questionForm = approval.id;
+    questions.forEach((question, index) => {
+      const text = String(question.question || question.header || `Question ${index + 1}`);
+      const block = document.createElement('fieldset');
+      block.className = 'question-block';
+      block.dataset.questionText = text;
+      const multiSelect = Boolean(question.multiSelect ?? question.multi_select);
+      block.dataset.multiSelect = multiSelect ? 'true' : 'false';
+      const legend = document.createElement('legend');
+      legend.textContent = text;
+      block.appendChild(legend);
+      if (question.header && question.header !== text) {
+        const header = document.createElement('div');
+        header.className = 'question-header';
+        header.textContent = question.header;
+        block.appendChild(header);
+      }
+
+      const options = Array.isArray(question.options) ? question.options : [];
+      const inputType = multiSelect ? 'checkbox' : 'radio';
+      options.forEach((option, optionIndex) => {
+        const label = document.createElement('label');
+        label.className = 'question-option';
+        const input = document.createElement('input');
+        input.type = inputType;
+        input.name = `question-${approval.id}-${index}`;
+        input.value = String(option.label || option.value || `Option ${optionIndex + 1}`);
+        const copy = document.createElement('span');
+        const strong = document.createElement('strong');
+        strong.textContent = input.value;
+        copy.appendChild(strong);
+        if (option.description) {
+          const description = document.createElement('small');
+          description.textContent = option.description;
+          copy.appendChild(description);
+        }
+        label.append(input, copy);
+        block.appendChild(label);
+      });
+
+      const other = document.createElement('input');
+      other.type = 'text';
+      other.className = 'question-other';
+      other.placeholder = options.length ? '其他回答（可选）' : '请输入回答';
+      other.dataset.questionOther = 'true';
+      block.appendChild(other);
+      form.appendChild(block);
+    });
+
+    const actions = document.createElement('div');
+    actions.className = 'approval-actions';
+    const submit = document.createElement('button');
+    submit.type = 'button';
+    submit.className = 'approve-button';
+    submit.dataset.questionSubmit = approval.id;
+    submit.textContent = '提交回答';
+    actions.append(submit, approvalButton(approval.id, 'decline', '拒绝', 'decline-button'));
+    form.appendChild(actions);
+    card.appendChild(form);
+  }
+
+  function collectQuestionAnswers(approvalId) {
+    const form = document.querySelector(`[data-question-form="${CSS.escape(approvalId)}"]`);
+    if (!form) return null;
+    const answers = {};
+    for (const block of form.querySelectorAll('.question-block')) {
+      const question = block.dataset.questionText || '';
+      const selected = Array.from(block.querySelectorAll('input[type="radio"]:checked, input[type="checkbox"]:checked')).map((input) => input.value);
+      const other = block.querySelector('[data-question-other]')?.value.trim() || '';
+      if (other) selected.push(other);
+      if (!selected.length) {
+        block.classList.add('invalid');
+        block.querySelector('input')?.focus();
+        return null;
+      }
+      block.classList.remove('invalid');
+      answers[question] = selected.join(', ');
+    }
+    return answers;
+  }
+
   function approvalButton(id, decision, label, className) {
     const button = document.createElement('button');
+    button.type = 'button';
     button.className = className;
     button.dataset.approvalId = id;
     button.dataset.decision = decision;
@@ -586,24 +1051,208 @@
     return button;
   }
 
+  const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+  const MAX_MESSAGE_IMAGE_BYTES = 20 * 1024 * 1024;
+  const MAX_IMAGES_PER_MESSAGE = 8;
+  const ACCEPTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+  async function addImageFiles(fileList) {
+    const files = Array.from(fileList || []).filter((file) => file && file.size > 0);
+    if (!files.length) return;
+    let currentCount = state.pendingAttachments.length;
+    let currentBytes = state.pendingAttachments.reduce((sum, item) => sum + Number(item.file?.size || item.attachment?.size || 0), 0);
+    for (const file of files) {
+      const duplicate = state.pendingAttachments.some((item) => item.file
+        && item.file.name === file.name
+        && item.file.size === file.size
+        && item.file.lastModified === file.lastModified);
+      if (duplicate) continue;
+      if (currentCount >= MAX_IMAGES_PER_MESSAGE) {
+        toast(`每条消息最多添加 ${MAX_IMAGES_PER_MESSAGE} 张图片`, 'error');
+        break;
+      }
+      const extensionLooksValid = /\.(png|jpe?g|gif|webp)$/i.test(file.name || '');
+      if (!ACCEPTED_IMAGE_TYPES.has(String(file.type || '').toLowerCase()) && !extensionLooksValid) {
+        toast(`${file.name || '文件'}：仅支持 PNG、JPEG、GIF 和 WebP`, 'error');
+        continue;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        toast(`${file.name}：超过 5 MiB 单图限制`, 'error');
+        continue;
+      }
+      if (currentBytes + file.size > MAX_MESSAGE_IMAGE_BYTES) {
+        toast('本条消息的图片总大小不能超过 20 MiB', 'error');
+        break;
+      }
+      const previewURL = URL.createObjectURL(file);
+      state.attachmentObjectURLs.add(previewURL);
+      const item = {
+        key: window.crypto?.randomUUID ? window.crypto.randomUUID() : `upload-${Date.now()}-${Math.random()}`,
+        file,
+        previewURL,
+        status: 'uploading',
+        attachment: null,
+        error: '',
+        controller: null,
+        removed: false,
+      };
+      state.pendingAttachments.push(item);
+      currentCount += 1;
+      currentBytes += file.size;
+      void uploadPendingAttachment(item);
+    }
+    renderAttachmentStrip();
+    updateComposerAvailability();
+  }
+
+  async function uploadPendingAttachment(item) {
+    if (!item || item.removed) return;
+    if (item.controller) item.controller.abort();
+    item.controller = new AbortController();
+    item.status = 'uploading';
+    item.error = '';
+    renderAttachmentStrip();
+    updateComposerAvailability();
+    const form = new FormData();
+    form.append('file', item.file, item.file.name || 'image');
+    try {
+      const attachment = await api('/api/v1/attachments', { method: 'POST', body: form, signal: item.controller.signal });
+      if (item.removed || !state.pendingAttachments.includes(item)) {
+        await api(`/api/v1/attachments/${encodeURIComponent(attachment.id)}`, { method: 'DELETE' }).catch(() => {});
+        return;
+      }
+      item.attachment = attachment;
+      item.status = 'ready';
+    } catch (error) {
+      if (error.name === 'AbortError' || item.removed) return;
+      item.status = 'error';
+      item.error = error.message;
+      toast(`${item.file.name || '图片'} 上传失败：${error.message}`, 'error');
+    } finally {
+      item.controller = null;
+      renderAttachmentStrip();
+      updateComposerAvailability();
+    }
+  }
+
+  function renderAttachmentStrip() {
+    const strip = $('attachment-strip');
+    strip.replaceChildren();
+    strip.classList.toggle('hidden', state.pendingAttachments.length === 0);
+    state.pendingAttachments.forEach((item) => {
+      const card = document.createElement('div');
+      card.className = `pending-attachment ${item.status}`;
+      card.dataset.pendingAttachment = item.key;
+      const image = document.createElement('img');
+      image.src = item.previewURL;
+      image.alt = item.file.name || '待发送图片';
+      const meta = document.createElement('div');
+      meta.className = 'pending-attachment-meta';
+      const status = item.status === 'uploading' ? '上传中…'
+        : item.status === 'error' ? `失败 · ${truncate(item.error, 48)}`
+          : `${item.attachment?.width && item.attachment?.height ? `${item.attachment.width}×${item.attachment.height} · ` : ''}${formatBytes(item.attachment?.size || item.file.size)}`;
+      meta.textContent = `${item.file.name || 'image'} · ${status}`;
+      meta.title = item.error || item.file.name || '';
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'remove-attachment';
+      remove.dataset.removeAttachment = item.key;
+      remove.setAttribute('aria-label', `移除 ${item.file.name || '图片'}`);
+      remove.textContent = '×';
+      card.append(image, meta, remove);
+      if (item.status === 'error') {
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'retry-upload';
+        retry.dataset.retryUpload = item.key;
+        retry.textContent = '重试';
+        card.appendChild(retry);
+      }
+      strip.appendChild(card);
+    });
+  }
+
+  async function removePendingAttachment(key) {
+    const index = state.pendingAttachments.findIndex((item) => item.key === key);
+    if (index < 0) return;
+    const [item] = state.pendingAttachments.splice(index, 1);
+    item.removed = true;
+    if (item.controller) item.controller.abort();
+    if (item.previewURL) {
+      URL.revokeObjectURL(item.previewURL);
+      state.attachmentObjectURLs.delete(item.previewURL);
+    }
+    renderAttachmentStrip();
+    updateComposerAvailability();
+    if (item.attachment?.id) {
+      api(`/api/v1/attachments/${encodeURIComponent(item.attachment.id)}`, { method: 'DELETE' }).catch(() => {
+        // A durable transcript reference intentionally wins over composer cleanup.
+      });
+    }
+  }
+
+  function retryPendingAttachment(key) {
+    const item = state.pendingAttachments.find((value) => value.key === key);
+    if (!item || item.removed || item.status !== 'error') return;
+    void uploadPendingAttachment(item);
+  }
+
+  function clearPendingAttachments(preserveServer = false) {
+    for (const item of state.pendingAttachments) {
+      if (!preserveServer && item.attachment?.id) {
+        void api(`/api/v1/attachments/${encodeURIComponent(item.attachment.id)}`, { method: 'DELETE' }).catch(() => {});
+      }
+      if (item.controller) item.controller.abort();
+      item.removed = true;
+      if (item.previewURL) URL.revokeObjectURL(item.previewURL);
+      state.attachmentObjectURLs.delete(item.previewURL);
+    }
+    state.pendingAttachments = [];
+    renderAttachmentStrip();
+    updateComposerAvailability();
+  }
+
+  function updateComposerAvailability() {
+    const uploading = state.pendingAttachments.some((item) => item.status === 'uploading');
+    $('send-button').disabled = uploading;
+    $('send-button').title = uploading ? '图片上传完成后才能发送' : '';
+  }
+
   async function sendMessage() {
     const text = messageInput.value.trim();
-    if (!text) return;
+    const uploading = state.pendingAttachments.some((item) => item.status === 'uploading');
+    const failed = state.pendingAttachments.some((item) => item.status === 'error');
+    const attachments = state.pendingAttachments.filter((item) => item.status === 'ready' && item.attachment).map((item) => ({ id: item.attachment.id }));
+    if (uploading) {
+      toast('请等待图片上传完成', 'error');
+      return;
+    }
+    if (failed) {
+      toast('请重试或移除上传失败的图片', 'error');
+      return;
+    }
+    if (!text && attachments.length === 0) return;
     const targetMap = { all: ['claude', 'codex'], claude: ['claude'], codex: ['codex'] };
     $('send-button').disabled = true;
     try {
       await api('/api/v1/messages', {
         method: 'POST',
-        body: JSON.stringify({ text, to: targetMap[state.selectedTarget], reply_to: state.replyTo || undefined }),
+        body: JSON.stringify({
+          text,
+          to: targetMap[state.selectedTarget],
+          reply_to: state.replyTo || undefined,
+          attachments,
+        }),
       });
       messageInput.value = '';
       clearReply();
+      clearPendingAttachments(true);
       autoSizeComposer();
       scrollBottom();
     } catch (error) {
       toast(error.message, 'error');
     } finally {
-      $('send-button').disabled = false;
+      updateComposerAvailability();
       messageInput.focus();
     }
   }
@@ -692,15 +1341,30 @@
     }
   }
 
-  async function resolveApproval(id, decision, button) {
+  async function resolveApproval(id, decision, button, extra = {}) {
     button.disabled = true;
+    const card = button.closest('[data-approval-card]');
+    if (card) card.classList.add('submitting');
     try {
-      await api(`/api/v1/approvals/${id}`, { method: 'POST', body: JSON.stringify({ decision }) });
-      toast('审批决定已提交', 'success');
+      await api(`/api/v1/approvals/${encodeURIComponent(id)}`, {
+        method: 'POST',
+        body: JSON.stringify({ decision, ...extra }),
+      });
+      toast(decision === 'decline' || decision === 'cancel' ? '已拒绝原生请求' : '审批决定已提交', 'success');
     } catch (error) {
       toast(error.message, 'error');
       button.disabled = false;
+      if (card) card.classList.remove('submitting');
     }
+  }
+
+  function submitQuestionApproval(id, button) {
+    const answers = collectQuestionAnswers(id);
+    if (!answers) {
+      toast('请回答所有问题后再提交', 'error');
+      return;
+    }
+    void resolveApproval(id, 'accept', button, { answers });
   }
 
   async function refreshGitStatus() {
@@ -727,7 +1391,7 @@
     const message = state.snapshot.messages.find((item) => item.id === messageId);
     if (!message) return;
     state.replyTo = messageId;
-    $('reply-preview').textContent = `${displayName(message.from)}：${truncate(message.text, 120)}`;
+    $('reply-preview').textContent = `${displayName(message.from)}：${truncate(message.text || attachmentSummary(message), 120)}`;
     $('reply-banner').classList.remove('hidden');
     messageInput.focus();
   }
@@ -771,6 +1435,13 @@
     node.lastElementChild.textContent = label;
   }
 
+  function insertComposerText(text) {
+    const start = Number.isInteger(messageInput.selectionStart) ? messageInput.selectionStart : messageInput.value.length;
+    const end = Number.isInteger(messageInput.selectionEnd) ? messageInput.selectionEnd : start;
+    messageInput.setRangeText(text, start, end, 'end');
+    autoSizeComposer();
+  }
+
   function autoSizeComposer() {
     messageInput.style.height = 'auto';
     messageInput.style.height = `${Math.min(messageInput.scrollHeight, 150)}px`;
@@ -784,6 +1455,39 @@
     node.textContent = message;
     $('toast-stack').appendChild(node);
     setTimeout(() => node.remove(), 4300);
+  }
+
+  function participantPolicy(actor, participant) {
+    const role = participant.role || 'peer';
+    const runtime = participant.runtime || {};
+    if (role === 'reviewer') {
+      if (actor === 'claude') {
+        return {
+          protected: true,
+          text: '原生保护 · Plan mode',
+          title: 'Reviewer 使用 Claude Code 原生 plan permission mode；避免执行修改，但不是操作系统级文件隔离。',
+        };
+      }
+      return {
+        protected: true,
+        text: '原生保护 · Read-only sandbox',
+        title: 'Reviewer 的每个 Codex turn 使用 App Server 原生 readOnly sandbox policy。',
+      };
+    }
+    if (actor === 'claude') {
+      const mode = runtime.permission_mode || 'configured permission mode';
+      return {
+        protected: false,
+        text: `${role === 'driver' ? '写入者' : '平级协作'} · ${mode}`,
+        title: '该角色按 Claude Code 当前 permission mode 工作，可能修改工作区。',
+      };
+    }
+    const sandbox = runtime.sandbox || 'workspaceWrite';
+    return {
+      protected: false,
+      text: `${role === 'driver' ? '写入者' : '平级协作'} · ${sandbox}`,
+      title: '该角色按 Codex 当前 sandbox policy 工作，可能修改工作区。',
+    };
   }
 
   function participantLooksStalled(participant) {
@@ -829,6 +1533,76 @@
     const text = String(value || '').replace(/\s+/g, ' ');
     return text.length > length ? `${text.slice(0, length)}…` : text;
   }
+  function formatBytes(value) {
+    const bytes = Number(value || 0);
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+    const units = ['B', 'KiB', 'MiB', 'GiB'];
+    const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+    const amount = bytes / (1024 ** index);
+    return `${amount >= 10 || index === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[index]}`;
+  }
+  function attachmentSummary(message) {
+    const attachments = (message?.attachments || []).map((item) => `[图片] ${item.name}`).join('、');
+    return attachments || '图片消息';
+  }
+  async function openAttachment(attachment) {
+    try {
+      const url = await loadAttachmentURL(attachment);
+      openLightbox(attachment, url);
+    } catch (error) {
+      toast(`图片加载失败：${error.message}`, 'error');
+    }
+  }
+  function closeLightbox() {
+    const dialog = $('image-lightbox');
+    state.lightboxRequest += 1;
+    state.lightboxItems = [];
+    state.lightboxIndex = -1;
+    setLightboxZoom(1);
+    if (dialog.open) dialog.close();
+    $('lightbox-image').removeAttribute('src');
+    $('lightbox-open').href = '#';
+    $('lightbox-open').removeAttribute('download');
+    $('lightbox-counter').textContent = '';
+  }
+
+  function findAttachment(id) {
+    for (const message of state.snapshot?.messages || []) {
+      const found = (message.attachments || []).find((value) => value.id === id);
+      if (found) return found;
+    }
+    const pending = state.pendingAttachments.find((value) => value.attachment?.id === id);
+    return pending ? pending.attachment : null;
+  }
+  function scrollToMessage(id) {
+    const node = timeline.querySelector(`[data-message-id="${CSS.escape(id)}"]`);
+    if (!node) {
+      toast('引用的消息当前被筛选隐藏', 'error');
+      return;
+    }
+    node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    node.classList.remove('flash');
+    requestAnimationFrame(() => node.classList.add('flash'));
+    setTimeout(() => node.classList.remove('flash'), 1300);
+  }
+  async function copyText(value) {
+    const text = String(value || '');
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    const temporary = document.createElement('textarea');
+    temporary.value = text;
+    temporary.setAttribute('readonly', '');
+    temporary.style.position = 'fixed';
+    temporary.style.opacity = '0';
+    document.body.appendChild(temporary);
+    temporary.select();
+    const copied = document.execCommand('copy');
+    temporary.remove();
+    if (!copied) throw new Error('browser copy command failed');
+  }
+
   function prettyJSON(value) {
     if (value === null || value === undefined || value === '') return '';
     if (typeof value === 'string') {
@@ -874,17 +1648,46 @@
     if (reply) setReply(reply.dataset.replyId);
     const inspect = event.target.closest('[data-inspect-id]');
     if (inspect) inspectMessage(inspect.dataset.inspectId);
+    const thread = event.target.closest('[data-thread-id]');
+    if (thread) focusThread(thread.dataset.threadId);
     const tab = event.target.closest('.tab');
     if (tab) switchTab(tab.dataset.tab);
+    const questionSubmit = event.target.closest('[data-question-submit]');
+    if (questionSubmit) submitQuestionApproval(questionSubmit.dataset.questionSubmit, questionSubmit);
     const approval = event.target.closest('[data-approval-id][data-decision]');
-    if (approval) resolveApproval(approval.dataset.approvalId, approval.dataset.decision, approval);
+    if (approval) void resolveApproval(approval.dataset.approvalId, approval.dataset.decision, approval);
     const retry = event.target.closest('[data-retry-id][data-retry-target]');
     if (retry) retryMessage(retry.dataset.retryId, retry.dataset.retryTarget, retry);
+    const copy = event.target.closest('[data-copy-message]');
+    if (copy) {
+      const message = (state.snapshot.messages || []).find((item) => item.id === copy.dataset.copyMessage);
+      if (message) copyText(message.text || attachmentSummary(message)).then(() => toast('消息已复制', 'success')).catch(() => toast('无法访问剪贴板', 'error'));
+    }
+    const expand = event.target.closest('[data-expand-message]');
+    if (expand) {
+      const id = expand.dataset.expandMessage;
+      if (state.expandedMessages.has(id)) state.expandedMessages.delete(id);
+      else state.expandedMessages.add(id);
+      queueRender();
+    }
+    const scroll = event.target.closest('[data-scroll-message], [data-jump-message]');
+    if (scroll) scrollToMessage(scroll.dataset.scrollMessage || scroll.dataset.jumpMessage);
+    const openImage = event.target.closest('[data-open-attachment]');
+    if (openImage) {
+      const attachment = findAttachment(openImage.dataset.openAttachment);
+      if (attachment) openAttachment(attachment);
+    }
+    const removeAttachment = event.target.closest('[data-remove-attachment]');
+    if (removeAttachment) void removePendingAttachment(removeAttachment.dataset.removeAttachment);
+    const retryUpload = event.target.closest('[data-retry-upload]');
+    if (retryUpload) retryPendingAttachment(retryUpload.dataset.retryUpload);
   });
   document.addEventListener('change', (event) => {
     if (event.target.matches('[data-role-actor]')) setRole(event.target.dataset.roleActor, event.target.value);
   });
   $('send-button').addEventListener('click', sendMessage);
+  $('attach-button').addEventListener('click', () => $('attachment-input').click());
+  $('attachment-input').addEventListener('change', (event) => { void addImageFiles(event.target.files); event.target.value = ''; });
   messageInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -892,12 +1695,30 @@
     }
   });
   messageInput.addEventListener('input', autoSizeComposer);
+  messageInput.addEventListener('paste', (event) => {
+    const files = Array.from(event.clipboardData?.files || []);
+    if (!files.length) return;
+    const text = event.clipboardData?.getData('text/plain') || '';
+    event.preventDefault();
+    if (text) insertComposerText(text);
+    void addImageFiles(files);
+  });
   $('cancel-reply').addEventListener('click', clearReply);
+  $('clear-timeline-scope').addEventListener('click', clearThreadFilter);
   $('save-settings').addEventListener('click', saveSettings);
   $('max-hops').addEventListener('input', () => { $('max-hops-value').value = $('max-hops').value; });
   $('stall-disabled').addEventListener('change', () => { $('stall-warning').disabled = $('stall-disabled').checked; });
   $('refresh-button').addEventListener('click', loadSnapshot);
-  $('message-search').addEventListener('input', (event) => { state.searchQuery = event.target.value; queueRender(); });
+  $('message-search').addEventListener('input', (event) => {
+    state.searchQuery = event.target.value;
+    timeline.scrollTop = 0;
+    queueRender();
+  });
+  $('conversation-filter').addEventListener('change', (event) => {
+    state.conversationFilter = event.target.value;
+    timeline.scrollTop = 0;
+    queueRender();
+  });
   $('export-markdown').addEventListener('click', () => downloadExport('markdown'));
   $('export-json').addEventListener('click', () => downloadExport('json'));
   $('theme-button').addEventListener('click', () => {
@@ -909,13 +1730,53 @@
   $('refresh-diff').addEventListener('click', refreshDiff);
   $('inspector-agent').addEventListener('change', (event) => { state.inspectorAgent = event.target.value; renderActivity(); });
   $('clear-inspector-scope').addEventListener('click', clearInspectorScope);
+  $('lightbox-close').addEventListener('click', closeLightbox);
+  $('lightbox-prev').addEventListener('click', () => moveLightbox(-1));
+  $('lightbox-next').addEventListener('click', () => moveLightbox(1));
+  $('lightbox-zoom-out').addEventListener('click', () => setLightboxZoom(state.lightboxZoom - 0.25));
+  $('lightbox-zoom-reset').addEventListener('click', () => setLightboxZoom(1));
+  $('lightbox-zoom-in').addEventListener('click', () => setLightboxZoom(state.lightboxZoom + 0.25));
+  $('lightbox-image').addEventListener('dblclick', () => setLightboxZoom(state.lightboxZoom === 1 ? 2 : 1));
+  $('image-lightbox').addEventListener('click', (event) => {
+    if (event.target === $('image-lightbox')) closeLightbox();
+  });
+  let dragDepth = 0;
+  window.addEventListener('dragenter', (event) => {
+    if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
+    dragDepth += 1;
+    $('drop-overlay').classList.remove('hidden');
+  });
+  window.addEventListener('dragleave', () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) $('drop-overlay').classList.add('hidden');
+  });
+  window.addEventListener('dragover', (event) => {
+    if (Array.from(event.dataTransfer?.types || []).includes('Files')) event.preventDefault();
+  });
+  window.addEventListener('drop', (event) => {
+    dragDepth = 0;
+    $('drop-overlay').classList.add('hidden');
+    const files = Array.from(event.dataTransfer?.files || []);
+    if (!files.length) return;
+    event.preventDefault();
+    void addImageFiles(files);
+  });
   document.addEventListener('keydown', (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'k') {
       event.preventDefault();
       $('message-search').focus();
     }
+    if ($('image-lightbox').open) {
+      if (event.key === 'ArrowLeft') { event.preventDefault(); moveLightbox(-1); return; }
+      if (event.key === 'ArrowRight') { event.preventDefault(); moveLightbox(1); return; }
+      if (event.key === '+' || event.key === '=') { event.preventDefault(); setLightboxZoom(state.lightboxZoom + 0.25); return; }
+      if (event.key === '-') { event.preventDefault(); setLightboxZoom(state.lightboxZoom - 0.25); return; }
+      if (event.key === '0') { event.preventDefault(); setLightboxZoom(1); return; }
+    }
     if (event.key === 'Escape') {
-      if (state.replyTo) clearReply();
+      if ($('image-lightbox').open) closeLightbox();
+      else if (state.replyTo) clearReply();
+      else if (state.threadFilter) clearThreadFilter();
       else if (state.inspectorCorrelation) clearInspectorScope();
       else if (state.searchQuery) {
         state.searchQuery = '';
@@ -923,6 +1784,11 @@
         queueRender();
       }
     }
+  });
+
+  window.addEventListener('beforeunload', () => {
+    state.attachmentObjectURLs.forEach((url) => URL.revokeObjectURL(url));
+    state.mediaObjectURLs.forEach((value) => { if (typeof value === 'string') URL.revokeObjectURL(value); });
   });
 
   loadSnapshot().catch((error) => {

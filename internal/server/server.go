@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sean2077/pairroom/internal/attachment"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/room"
 	"github.com/sean2077/pairroom/internal/version"
@@ -25,15 +27,17 @@ import (
 var embeddedAssets embed.FS
 
 type Config struct {
-	Engine *room.Engine
-	Repo   string
-	Token  string
+	Engine      *room.Engine
+	Repo        string
+	Token       string
+	Attachments *attachment.Store
 }
 
 type Server struct {
 	engine *room.Engine
 	repo   string
 	token  string
+	media  *attachment.Store
 	http   *http.Server
 }
 
@@ -45,12 +49,15 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open embedded assets: %w", err)
 	}
-	s := &Server{engine: cfg.Engine, repo: cfg.Repo, token: cfg.Token}
+	s := &Server{engine: cfg.Engine, repo: cfg.Repo, token: cfg.Token, media: cfg.Attachments}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", s.health)
 	mux.HandleFunc("GET /api/v1/snapshot", s.snapshot)
 	mux.HandleFunc("GET /api/v1/events", s.events)
 	mux.HandleFunc("POST /api/v1/messages", s.sendMessage)
+	mux.HandleFunc("POST /api/v1/attachments", s.uploadAttachment)
+	mux.HandleFunc("GET /api/v1/attachments/{id}", s.serveAttachment)
+	mux.HandleFunc("DELETE /api/v1/attachments/{id}", s.deleteAttachment)
 	mux.HandleFunc("POST /api/v1/messages/{id}/retry", s.retryMessage)
 	mux.HandleFunc("GET /api/v1/export", s.exportRoom)
 	mux.HandleFunc("PUT /api/v1/settings", s.updateSettings)
@@ -179,6 +186,79 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, message)
 }
 
+func (s *Server) uploadAttachment(w http.ResponseWriter, r *http.Request) {
+	if s.media == nil {
+		writeError(w, http.StatusServiceUnavailable, "attachment storage is unavailable")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, attachment.MaxImageBytes+(1<<20))
+	if err := r.ParseMultipartForm(1 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid image upload: "+err.Error())
+		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "multipart field 'file' is required")
+		return
+	}
+	defer file.Close()
+	value, err := s.media.SaveImage(header.Filename, file, "user-upload")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, value)
+}
+
+func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request) {
+	if s.media == nil {
+		writeError(w, http.StatusServiceUnavailable, "attachment storage is unavailable")
+		return
+	}
+	value, file, err := s.media.OpenFile(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "stat attachment: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", value.MediaType)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": value.Name}))
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	etag := `"sha256-` + value.SHA256 + `"`
+	w.Header().Set("ETag", etag)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	http.ServeContent(w, r, value.Name, info.ModTime(), file)
+}
+
+func (s *Server) deleteAttachment(w http.ResponseWriter, r *http.Request) {
+	if s.media == nil {
+		writeError(w, http.StatusServiceUnavailable, "attachment storage is unavailable")
+		return
+	}
+	id := r.PathValue("id")
+	if s.engine.AttachmentReferenced(id) {
+		writeError(w, http.StatusConflict, "attachment is already part of the durable room transcript")
+		return
+	}
+	if err := s.media.Remove(id); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) exportRoom(w http.ResponseWriter, r *http.Request) {
 	snapshot := s.engine.Snapshot()
 	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
@@ -242,6 +322,12 @@ func renderMarkdownTranscript(snapshot model.RoomSnapshot) string {
 		}
 		for _, line := range strings.Split(strings.ReplaceAll(message.Text, "\r\n", "\n"), "\n") {
 			fmt.Fprintf(&out, "> %s\n", line)
+		}
+		if len(message.Attachments) > 0 {
+			out.WriteString("\nAttachments:\n")
+			for _, value := range message.Attachments {
+				fmt.Fprintf(&out, "- `%s` — %s, %d bytes, `%s`\n", strings.ReplaceAll(value.Name, "`", "'"), value.MediaType, value.Size, value.ID)
+			}
 		}
 		out.WriteString("\n")
 		for _, target := range message.To {
@@ -338,11 +424,13 @@ func (s *Server) participantRole(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSON(w, r, &request); err != nil {
 		return
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
 	var err error
 	if request.Role == model.RoleDriver {
-		err = s.engine.SwitchDriver(actor)
+		err = s.engine.SwitchDriver(ctx, actor)
 	} else {
-		err = s.engine.SetRole(actor, request.Role)
+		err = s.engine.SetRole(ctx, actor, request.Role)
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -352,15 +440,13 @@ func (s *Server) participantRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) resolveApproval(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		Decision string `json:"decision"`
-	}
+	var request model.ApprovalResolution
 	if err := decodeJSON(w, r, &request); err != nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	if err := s.engine.ResolveApproval(ctx, r.PathValue("id"), request.Decision); err != nil {
+	if err := s.engine.ResolveApproval(ctx, r.PathValue("id"), request); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -474,7 +560,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'")
 		next.ServeHTTP(w, r)
 	})
 }

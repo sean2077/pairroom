@@ -57,7 +57,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !probe.SupportedFlags["--resume"] || probe.SupportedFlags["--include-partial-messages"] {
+	if !probe.SupportedFlags["--resume"] || !probe.SupportedFlags["--permission-prompt-tool"] || probe.SupportedFlags["--include-partial-messages"] {
 		t.Fatalf("unexpected negotiated flags: %#v", probe.SupportedFlags)
 	}
 	if containsString(probe.Capabilities, "partial-messages") {
@@ -85,6 +85,32 @@ esac
 	}
 	if !probe.SupportedFlags["--input-format"] || !probe.SupportedFlags["--output-format"] {
 		t.Fatalf("required stream-json flags were not retained: %#v", probe.SupportedFlags)
+	}
+}
+
+func TestProbeClaudeDefersApprovalCapabilityToNativeHandshake(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	path := writeProbeFixture(t, `#!/bin/sh
+case "$1" in
+  --version) echo "2.1.231 (Claude Code)" ;;
+  --help) echo "--input-format --output-format --resume --session-id --model --permission-mode --disallowedTools --include-partial-messages --forward-subagent-text --verbose" ;;
+  *) exit 2 ;;
+esac
+`)
+	probe, err := ProbeRuntime(context.Background(), Config{Actor: model.ActorClaude, Command: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !probe.SupportedFlags["--disallowedTools"] {
+		t.Fatalf("current Claude probe omitted reviewer deny rules: %#v", probe.SupportedFlags)
+	}
+	if !containsString(probe.Capabilities, "control-handshake-pending") {
+		t.Fatalf("native control handshake capability omitted: %#v", probe.Capabilities)
+	}
+	if containsString(probe.Capabilities, "interactive-approvals") {
+		t.Fatalf("approval capability must be advertised only after the native initialize handshake: %#v", probe.Capabilities)
 	}
 }
 

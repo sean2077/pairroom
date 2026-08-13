@@ -1,272 +1,345 @@
 # PairRoom 架构设计
 
-## 1. 架构原则
+## 1. 设计目标
 
-PairRoom 采用“薄协作控制面 + 官方原生运行时”架构：
+PairRoom 的核心约束是：
+
+> 保留官方 Claude Code 和 Codex 的完整 Harness，只实现两者之上的本地三方协作、介入、审批、可观察性与持久化层。
+
+PairRoom 不实现模型调用、Agent loop、工具执行器、上下文压缩、代码补丁算法或供应商账号系统。
+
+## 2. 总体结构
 
 ```text
-Browser
-  │ REST + SSE
-  ▼
-PairRoom Server
-  ├── Room Engine
-  │   ├── shared message timeline
-  │   ├── routing / role policy
-  │   ├── delivery + processing lifecycle
-  │   └── stale-handoff / hop / stall guards
-  ├── Event Store (append-only JSONL)
-  ├── Git Inspector
-  └── Runtime Adapters
-      ├── runtime probe / capability negotiation
-      ├── Claude Code stream-json
-      ├── Codex app-server JSON-RPC
-      └── deterministic Mock
+┌────────────────────────── Browser ────────────────────────────┐
+│ Shared timeline                                               │
+│ rich text · image gallery · reply · thread · search           │
+│                                                               │
+│ Work Inspector                                                │
+│ tools · commands · plan · diff · usage · approvals            │
+└──────────────────────── REST / SSE ───────────────────────────┘
+                              │
+┌──────────────────────── PairRoom daemon ──────────────────────┐
+│ HTTP/API        Room engine        Event store                │
+│ Media store     Router             Runtime projection         │
+│ Role policy     Approval bridge    Git inspector              │
+└───────────────┬─────────────────────────────┬─────────────────┘
+                │                             │
+┌───────────────▼──────────────┐  ┌──────────▼──────────────────┐
+│ ClaudeAdapter                │  │ CodexAdapter                │
+│ stream-json                  │  │ app-server JSON-RPC         │
+│ native control protocol      │  │ thread/turn lifecycle       │
+│ image content blocks         │  │ localImage                  │
+└───────────────┬──────────────┘  └──────────┬──────────────────┘
+                │                             │
+          official claude                official codex
 ```
 
-PairRoom 不进入模型推理链，不执行 Agent 工具，也不把一种供应商协议转译成另一种模型 API。Adapter 只负责：
+## 3. 组件边界
 
-1. 探测、启动和恢复官方 Harness。
-2. 提交结构化房间消息。
-3. 将官方事件归一化成 `RuntimeEvent`。
-4. 处理中断、停止及供应商明确支持的审批。
+### 3.1 Web UI
 
-## 2. 模块边界
+职责：
 
-### `internal/model`
+- 展示共享时间线；
+- 安全渲染 Markdown；
+- 上传、预览和浏览图片；
+- 发送 `@mention`、引用回复和线程聚焦；
+- 显示每个目标的 Delivery/Processing 状态；
+- 展示 Runtime 事件、Git Diff 和审批；
+- 执行启停、打断、角色切换和重试；
+- 通过 SSE 接收增量事件，发现序列缺口时重取 snapshot。
 
-稳定的数据契约：
+前端是内嵌静态资源：
 
-- Actor、ParticipantRole、AgentState。
-- Message、DeliveryState、ProcessingState。
-- RoomSettings、RoomSnapshot、RuntimeInfo。
-- RuntimeEvent、Approval、append-only Event envelope。
-
-该包不依赖 server、room 或具体 Agent。
-
-### `internal/store`
-
-JSONL 事件存储：
-
-- 每行一个完整 JSON event。
-- 单调递增 sequence。
-- append 后 `fsync`，再发布到内存总线。
-- 打开时修复仅位于文件尾部的半行 JSON；中间损坏仍是硬错误。
-- `metadata.json` 记录格式、schema 和应用版本。
-- 旧 schema 可前向升级；高于当前实现的 schema 安全拒绝。
-
-事件存储是房间持久状态的事实源；`RoomSnapshot` 是事件重放得到的投影。
-
-### `internal/bus`
-
-进程内 pub/sub，用于把已持久化事件发送给 SSE 客户端。慢订阅者不会阻塞房间写路径；断线后浏览器可凭 sequence 从 snapshot tail 接续。
-
-### `internal/room`
-
-核心状态机：
-
-- 创建/恢复房间。
-- 接收用户消息并解析目标。
-- 异步投递，避免 HTTP send 等待 CLI 启动或模型网络。
-- 分离 transport delivery 与 runtime processing。
-- 接收 Runtime final，形成公共 Agent 消息。
-- 根据 Manual/Mentions/Roundtable 决定是否触发 Peer。
-- 控制最大 hop、停止标记和用户新指令优先级。
-- 重试、停止、重启、审批失效和无事件提醒。
-- 持久化角色、设置、session/thread、消息生命周期和审计事件。
-
-### `internal/prompt`
-
-只定义协作增量，不替换供应商系统提示：
-
-- 房间规则与用户最高权威。
-- 结构化 AgentInput envelope。
-- Driver/Reviewer/Peer 角色规则。
-- @mention 和 Roundtable 控制标记。
-
-### `internal/agent`
-
-统一接口：
-
-```go
-type Adapter interface {
-    Actor() model.ActorID
-    Start(context.Context) error
-    Submit(context.Context, model.AgentInput) (model.DeliveryState, error)
-    Interrupt(context.Context) error
-    Stop(context.Context) error
-    ResolveApproval(context.Context, string, string) error
-    State() model.AgentState
-    SessionID() string
-}
+```text
+index.html
+styles.css
+richtext.js
+app.js
+favicon.svg
 ```
 
-Adapter 不能直接修改 RoomSnapshot，只能产生 `RuntimeEvent`；Room Engine 统一持久化和投影。
+没有 npm 依赖、打包器或运行时框架。
 
-`ProbeRuntime` 是无副作用能力探测层：检查可执行文件、版本、必要协议入口与可选参数，不登录、不创建会话、不读取仓库。
+### 3.2 HTTP/API 层
 
-### `internal/server`
+职责：
 
-- Go `net/http` REST API。
-- SSE 增量事件流。
-- 内嵌静态 SPA。
-- Git status/diff 只读接口。
-- Transcript export。
-- Token、同源、Host 检查、CSP、安全响应头和请求体限制。
+- REST 命令入口；
+- SSE 事件流；
+- 附件上传、读取和未引用附件删除；
+- Git status/diff；
+- 会话导出；
+- Bearer Token、同源、Host 与安全头检查。
 
-## 3. Claude Adapter
+静态页面始终可打开；配置 Token 时，敏感 API 和附件内容必须认证。
 
-典型启动形态：
+### 3.3 Room Engine
+
+Room Engine 是领域状态机，负责：
+
+- 消息、线程、引用和目标；
+- Manual/Mentions/Roundtable 路由；
+- 用户新指令抢占旧自动接力；
+- Delivery 与 Processing 双生命周期；
+- Runtime correlation；
+- Agent final response 投影；
+- 角色切换和审批生命周期；
+- 失败重试；
+- 重启时瞬态状态收口；
+- 将领域事件先持久化再发布。
+
+Engine 不解析 ANSI 终端文本，也不执行模型推理。
+
+### 3.4 Event Store
+
+事件存储采用 append-only JSONL：
+
+```text
+events.jsonl
+metadata.json
+```
+
+重要性质：
+
+- `seq` 单调递增；
+- 领域变化在发布到 SSE 前先写入并同步；
+- 启动时通过重放恢复 snapshot；
+- 只修复损坏的最后半行，不静默跳过中间损坏；
+- metadata 记录 Store schema；
+- 高于当前二进制支持的未来 schema 会被拒绝。
+
+v0.3 Store schema 为 `3`。
+
+### 3.5 Media Store
+
+媒体库位于：
+
+```text
+<data-dir>/attachments/
+├── att-<opaque-id>.json
+└── att-<opaque-id>.<ext>
+```
+
+只接受 PNG、JPEG、GIF、WebP。每个附件包含：
+
+```text
+opaque id
+safe display name
+media type
+byte size
+SHA-256
+width / height
+source
+created_at
+```
+
+关键边界：
+
+- 本机路径只存在于进程内部的 `AgentAttachment.Path`；
+- Message、Event、API 和 transcript 只保存安全元数据；
+- 每次跨浏览器/Agent 边界前重新校验文件类型、大小、维度与 SHA-256；
+- Agent 回答中的图片只允许从当前仓库内部导入；
+- 路径经过 canonicalization 和 symlink 边界检查；
+- 远程 URL 不进入自动导入流程。
+
+### 3.6 ClaudeAdapter
+
+ClaudeAdapter 启动官方 `claude`：
 
 ```text
 claude -p
   --input-format stream-json
   --output-format stream-json
-  [--verbose]
-  [--include-partial-messages]
-  [--replay-user-messages]
-  [--forward-subagent-text]
-  [--include-hook-events]
-  [--append-system-prompt-file <pairroom-prompt>]
-  [--permission-mode <configured>]
-  [--session-id <uuid> | --resume <uuid>]
+  --permission-prompt-tool stdio
+  ...optional current flags
 ```
 
-方括号中的参数由当前 CLI `--help` 协商，而不是无条件发送。
+职责：
 
-关键点：
+- 长驻双向 stream-json；
+- 启动后先完成原生 `control_request/initialize` 握手，再接收第一条用户消息；
+- 通过 `--permission-prompt-tool stdio` 接收 `can_use_tool` 与 `AskUserQuestion`；
+- session ID 创建、持久化和 resume；
+- 用户输入队列与每条消息 correlation；
+- 文本、工具、Hook、子 Agent 和结果事件投影；
+- 将图片编码为原生 base64 image content blocks；
+- 将 UI 决策写回 `control_response`；
+- 进程退出时收口输入、审批和 control waiter。
 
-- 一个长驻进程接收多条 stream-json 用户输入。
-- 输入按到达顺序排队，PairRoom 为每条输入维护独立 correlation 与 processing 状态。
-- `stream_event` 文本增量是 transient SSE；`result` 是 durable lifecycle/final 事件。
-- 官方 session ID 持久化，支持时用 `--resume` 恢复。
-- CLI 不支持可选功能时降级运行并在 RuntimeInfo 中警告。
-- `Interrupt` 终止当前 Claude 进程；未完成输入由适配器标记取消，下次输入可恢复 session。
-- Claude 交互审批尚未映射为 PairRoom Approval。
+Control handshake 成功前不会把 Claude 标记为可用。未知 control request 直接返回协议错误，不做通用“允许”。
 
-## 4. Codex Adapter
+Reviewer 策略：
 
-启动形态：
+```text
+permission mode = plan
+disallowed tools = Edit, Write, NotebookEdit, ExitPlanMode
+```
+
+控制层仍会对到达的写请求再次 fail closed。
+
+### 3.7 CodexAdapter
+
+CodexAdapter 启动：
 
 ```text
 codex app-server
 ```
 
-握手与生命周期：
+职责：
 
-```text
-initialize
-initialized
-thread/resume | thread/start
-turn/start
-turn/steer
-turn/interrupt
+- `initialize`；
+- `thread/start` / `thread/resume`；
+- `turn/start` / `turn/steer` / `turn/interrupt`；
+- `clientUserMessageId` correlation；
+- 多条用户输入绑定同一 active Turn；
+- `localImage` 输入；
+- item/plan/diff/usage/command 等结构化事件；
+- command/file/additional-permission 审批；
+- app-server overload 有界重试；
+- 未知 server request fail closed。
+
+Reviewer 的每个 Turn 使用：
+
+```json
+{"type":"readOnly"}
 ```
 
-关键点：
+### 3.8 MockAdapter
 
-- stdio 每行一个 JSON-RPC/notification 对象。
-- thread ID 持久化并恢复。
-- 空闲时 `turn/start`；active turn 时优先 `turn/steer`。
-- App Server 拒绝 steer 时保留消息并在下一安全 Turn 边界启动。
-- `turn/started` 可能早于 `turn/start` response；`startingInput` 解决该顺序竞态。
-- 同一 active Turn 可以包含多个房间输入；Turn 结束时所有关联输入都会被 settle，最终回答关联到最新输入。
-- 命令、文件和追加权限请求转换为 PairRoom Approval。
-- 未明确支持的 server request fail closed。
-- Reviewer 使用 read-only sandbox；Driver/Peer 使用配置 sandbox。
-- `turn/start` 与 `turn/steer` 使用公开的 `clientUserMessageId`，并读取 `userMessage.clientId` 做精确关联；内部队列仍作为旧版本/异常事件的回退。
+MockAdapter 使用相同 Adapter 接口和 RuntimeEvent 流，用于：
 
-## 5. 两层消息生命周期
+- 无供应商 CLI 的产品体验；
+- 路由、状态和 UI E2E；
+- 崩溃恢复与消息关联测试；
+- 确定性发行验证。
 
-### DeliveryState：输入如何进入 Harness
+Mock 不用于证明真实模型行为。
 
-```text
-pending → started | injected | queued | failed | skipped
-```
+## 4. 状态事实源
 
-Delivery 是 transport disposition，不表示任务已经完成。
+PairRoom 刻意避免多个相互竞争的状态源。
 
-### ProcessingState：进入 Harness 后发生了什么
-
-```text
-waiting → working → completed | cancelled | failed
-```
-
-终态不可被迟到的 started/working 事件覆盖。RuntimeError 只改变 processing，不覆盖已经成功的 delivery。
-
-重试不会回写旧消息，而是创建：
-
-```text
-new_message.retry_of = old_message.id
-```
-
-这保留了完整审计链。
-
-## 6. 公共消息与运行事件分离
-
-```text
-RuntimeTextDelta / Tool / Command / Diff / Plan
-                         │
-                         └── Work Inspector
-
-RuntimeFinal
-     │
-     └── MessageCreated ── Shared Room
-```
-
-高频文本和命令增量只实时发布，不逐 token `fsync`。会影响可恢复状态的事件仍必须持久化后再发布。
-
-## 7. 路由状态机
-
-### 用户消息
-
-```text
-User send
-  → persist MessageCreated
-  → resolve targets
-  → async Submit(target)
-  → persist delivery disposition
-  → project processing lifecycle
-```
-
-### Agent 最终回复
-
-```text
-RuntimeFinal
-  → persist public MessageCreated
-  → strip hidden control marker
-  → evaluate routing mode
-  → stale human message guard
-  → hop budget guard
-  → optional async Submit(peer)
-```
-
-当 Turn 源消息之后出现了更新用户消息，旧 final 仍显示，但自动 Peer handoff 被阻止。
-
-## 8. 并发模型
-
-- RoomSnapshot 由 `RWMutex` 保护。
-- Event Store 在单锁内分配 sequence、append、sync。
-- 用户 Send 只同步完成持久化，Adapter Submit 异步执行。
-- 每个 Adapter 串行化进程启动和协议写入。
-- Codex 额外使用 submit mutex，避免两个 goroutine 同时观察 idle 并发起两个 `turn/start`。
-- delivery/processing 的 transition 验证与 append 在同一房间锁下完成，防止快错误被迟到 Submit 结果覆盖。
-- SSE 先订阅再读取 snapshot tail；sequence 消除重放重复。
-
-## 9. 故障与恢复
-
-| 故障 | 行为 |
+| 信息 | 唯一事实源 |
 |---|---|
-| PairRoom 写到半行后退出 | 下次打开截断损坏尾部再追加 |
-| 事件日志中间损坏 | 启动失败，不静默丢数据 |
-| Store schema 比应用新 | 安全拒绝启动 |
-| Adapter Submit 失败 | delivery=`failed`，processing=`failed`，公共消息保留 |
-| Agent 进程异常退出 | outstanding processing 被 settle，Participant 进入 error/stopped |
-| PairRoom 重启 | pending delivery skipped；waiting/working processing cancelled；审批过期 |
-| 浏览器 SSE 丢序 | 前端重新获取 snapshot 并重连 |
-| 工作 Agent 长时间无事件 | 一次性 warning，不自动宣告失败 |
-| 未知 Codex server request | fail closed |
-| Agent 无限互答 | hop 上限、停止标记和用户抢占终止 |
+| 房间消息、角色、路由、审批投影 | PairRoom event log |
+| 图片元数据引用 | PairRoom event log |
+| 图片二进制 | PairRoom media store |
+| Claude 原生会话上下文 | Claude Code |
+| Codex 原生 thread/turn 上下文 | Codex App Server |
+| Git 工作区内容 | Repository |
+| UI | snapshot + SSE 的派生投影 |
 
-## 10. 独立性
+PairRoom 不复制供应商完整会话数据库，也不声称能从自己的日志恢复供应商内部推理状态。
 
-PairRoom 源码不引用第三方 Agent 编排项目；Go 核心没有第三方 module。运行时外部依赖只有用户主动安装的 Git、官方 Claude Code CLI、官方 Codex CLI/App Server 和浏览器。
+## 5. 一条富媒体消息的数据流
+
+```text
+Browser selects/pastes images
+        │
+        ├─ POST /attachments
+        │      └─ validate → hash → durable media ID
+        │
+        └─ POST /messages {text, attachment IDs}
+                  │
+                  ├─ Engine resolves canonical metadata
+                  ├─ Message event fsync
+                  ├─ Delivery pending
+                  │
+                  ├─ Claude boundary
+                  │      └─ base64 image block + text envelope
+                  │
+                  └─ Codex boundary
+                         └─ localImage + text input
+```
+
+浏览器读取附件时不会直接拿本机文件路径，而是通过认证 API 获取 Blob，再创建页面内 object URL。
+
+## 6. Agent 生成图片的数据流
+
+```text
+Agent writes repo/docs/chart.png
+Agent final: ![chart](docs/chart.png)
+        │
+        └─ Media Store discovers candidate
+               ├─ resolve canonical path
+               ├─ confirm inside repo
+               ├─ reject symlink escape/remote URL
+               ├─ import immutable copy
+               └─ attach safe metadata to final room message
+```
+
+这使 Agent 生成的截图和图表可以进入聊天预览，同时不允许回答文本任意导入仓库外文件。
+
+## 7. 审批数据流
+
+### Claude
+
+```text
+Claude control_request(can_use_tool)
+        │
+        ├─ reviewer deny check
+        ├─ durable ApprovalRequested event
+        ├─ Web Approvals panel
+        └─ control_response allow/deny/updatedInput/updatedPermissions
+```
+
+### Codex
+
+```text
+App Server requestApproval
+        │
+        ├─ durable ApprovalRequested event
+        ├─ Web Approvals panel
+        └─ JSON-RPC result/error
+```
+
+连接中断后旧审批不能安全复用，因此会过期。
+
+## 8. 角色切换
+
+角色变化遵循：
+
+1. 校验角色；
+2. 要求 Runtime 处于安全边界；
+3. 先把策略应用到 Adapter；
+4. 必要时重启空闲的 Claude 进程并恢复 session；
+5. Adapter 成功后再持久化房间角色。
+
+这样 UI 不会显示“Reviewer”，但底层仍按 Driver 权限运行。
+
+## 9. 并发模型
+
+- Engine 用互斥锁保护 snapshot 与 Adapter map；
+- 每个 Adapter 负责自己的 stdin/RPC 写锁和 pending correlation；
+- Claude Submit 串行化队列变更与 stdin 写入；
+- Codex RPC request 使用唯一 ID 与 waiter；
+- Store 串行追加并在发布前同步；
+- SSE 使用 durable `seq`，瞬态 Runtime event 不推进 replay cursor；
+- 前端采用批量 render，避免每个 token delta 触发完整重排。
+
+## 10. 依赖边界
+
+```bash
+go list -m all
+```
+
+只包含 PairRoom 自身 module。运行时外部程序只有：
+
+```text
+git
+claude
+codex
+```
+
+浏览器是用户界面，不需要 Node.js server。
+
+## 11. 当前限制
+
+- 单 daemon / 单 room / 单 repository；
+- Reviewer 使用供应商原生约束，不是 OS 级只读文件系统；
+- 共享 working tree 中仍应维持单写入者；
+- UI 不嵌入完整供应商 TUI；
+- 供应商协议变化需要跟随当前公开接口更新；
+- 没有内建 TLS、账号系统或多人权限模型。

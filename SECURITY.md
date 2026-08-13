@@ -2,75 +2,120 @@
 
 ## Threat model
 
-PairRoom launches highly capable local coding agents. Those agents may read files, modify repositories, execute commands and call configured MCP servers. PairRoom's Web UI is a control and observation surface, not the primary execution sandbox; the official Claude Code and Codex permission systems remain important security boundaries.
+PairRoom 启动具有高权限的本地 Coding Agent。Agent 可能读取文件、修改仓库、执行命令、访问网络并调用用户配置的 MCP/Skills/Hooks。PairRoom Web UI 是控制与观察面，不替代 Claude Code/Codex 自身的权限与沙箱。
+
+PairRoom 同时保存敏感讨论、运行事件和用户图片，因此威胁模型还包括：
+
+- 非授权浏览器访问本地 API；
+- DNS rebinding / cross-origin command；
+- 恶意图片或伪造媒体类型；
+- 路径穿越、symlink escape 和仓库外文件导入；
+- 远程 Markdown 图片造成访问泄漏；
+- 未知高权限供应商请求被错误允许；
+- 角色 UI 与实际 Runtime 权限不一致；
+- 崩溃后遗留审批或“幽灵 working”。
 
 ## Safe defaults
 
-- HTTP binds to `127.0.0.1:7332` by default.
-- A non-loopback bind automatically generates a bearer token when none is supplied.
-- The UI removes a URL token from browser history and keeps it in per-tab `sessionStorage`.
-- Query-string tokens are accepted only by the read-only SSE endpoint; all other APIs require the `Authorization` header.
-- A tokenless server accepts only loopback Host headers, reducing DNS-rebinding exposure.
-- API requests enforce same-origin checks.
-- Security headers include CSP, `frame-ancestors 'none'`, no-referrer and no-sniff.
-- State directories use `0700`; event and runtime-prompt files use `0600` on POSIX.
-- Codex Reviewer turns request a read-only sandbox.
-- Unsupported Codex server requests fail closed.
-- Additional Codex permissions can receive only the subset originally requested.
-- Store schema newer than this binary is rejected instead of being rewritten.
-- Normal transcript export excludes verbose Inspector event data unless explicitly requested.
+### Network
+
+- 默认绑定 `127.0.0.1:7332`；
+- 非 loopback 绑定且未提供 Token 时自动生成 Bearer Token；
+- URL Token 会从浏览器历史移除，保存在单标签 `sessionStorage`；
+- query token 只允许只读 SSE，其余 API 必须使用 Authorization Header；
+- tokenless server 只接受 loopback Host，降低 DNS rebinding 风险；
+- API 请求执行 same-origin 检查；
+- CSP、`frame-ancestors 'none'`、no-referrer、no-sniff 和权限策略默认开启。
+
+### Attachments
+
+- 只接受 PNG、JPEG、GIF、WebP；
+- 拒绝 SVG、HTML、脚本和任意二进制；
+- 检查真实内容签名，而不是信任文件扩展名；
+- 限制单张大小、单消息总大小、边长和总像素；
+- 文件和 manifest 使用随机不透明 ID 与保守权限；
+- 每次 Resolve 都校验大小、普通文件、非 symlink、维度和 SHA-256；
+- Message/API/export 不包含附件本机绝对路径；
+- 仓库图片导入经过 canonical path 和 symlink 边界检查；
+- 远程 Markdown 图片不自动加载；
+- 已进入 durable transcript 的附件不可通过 DELETE API 移除；
+- Blob fetch 需要 API 认证，响应使用 `nosniff`、ETag 和 inline content disposition。
+
+### Runtime and approvals
+
+- Claude 启动必须完成 native control initialize；
+- 未知 Claude control request 返回 error；
+- 未知 Codex server request fail closed；
+- Codex 追加权限只能授予原 request 的子集；
+- 中断、停止、重启、Runtime error/exit 和 PairRoom restart 使未决审批过期；
+- Claude Reviewer 使用 plan mode + disallowed write tools；
+- Codex Reviewer 使用 readOnly sandbox；
+- 角色先应用 Adapter、后写入 durable room state。
+
+### Persistence
+
+- 状态目录使用 `0700`，事件、prompt、图片和 manifest 使用 `0600`（POSIX）；
+- append-only 事件先同步再发布；
+- 只修复损坏的最后半行；
+- 高于当前版本的 Store schema 被拒绝；
+- 普通 transcript export 不包含 verbose Inspector events；
+- 本机路径不进入图片附件元数据。
 
 ## Important caveats
 
 ### No built-in TLS
 
-Do not expose PairRoom directly to the public internet. For remote access, keep it on loopback and use an authenticated SSH tunnel/VPN, or place it behind a trusted TLS reverse proxy. A bearer token does not protect plaintext traffic from network observers.
+不要直接暴露到公网。远程访问应使用可信 SSH tunnel/VPN，或置于受控 TLS reverse proxy 后。Bearer Token 不能防止明文网络监听。
 
-### Local transcripts are sensitive
+### Local room data is sensitive
 
-`events.jsonl` can contain:
+`events.jsonl` 可能包含：
 
-- user prompts and Agent responses
-- file names, diffs and tool arguments
-- command output and errors
-- local paths, model/runtime diagnostics
-- approval details
+- 用户提示与 Agent 回答；
+- 文件名、Diff、工具参数；
+- 命令输出、错误、本机路径；
+- 模型/runtime 诊断；
+- 审批详情。
 
-Treat the PairRoom data directory as project-sensitive. Do not commit or casually share it.
-
-Markdown and normal JSON exports intentionally omit Inspector events, but still contain the full human/Agent conversation. `include_events=1` creates a more sensitive forensic export.
+`attachments/` 可能包含错误截图、产品 UI、架构图、数据图和其他项目敏感材料。整个 data directory 都应按私有代码资产处理。
 
 ### Vendor data handling still applies
 
-When Claude Code or Codex uses a cloud model, repository content and tool results may be sent to the corresponding provider under that product's terms and settings. PairRoom does not change or proxy that data path.
+使用云模型时，代码、图片和工具结果可能发送给对应供应商。PairRoom 不代理、加密或改变 Claude Code/Codex 的供应商数据路径。
 
-### Existing Agent customizations remain active
+### Existing Agent customization remains active
 
-Official CLIs can load user/project configuration, Skills, MCP servers, Hooks and plugins. A malicious or overly broad customization can expand access. Review those configurations separately.
+官方 CLI 仍加载用户/项目配置、Skills、MCP、Hooks 和插件。恶意或过宽配置可能扩大访问范围。PairRoom 不审计这些内容。
 
-### Claude Reviewer isolation
+### Reviewer is not an OS read-only mount
 
-Reviewer instructions do not guarantee OS-level read-only access for Claude Code. Codex receives a read-only sandbox policy, but actual enforcement depends on the installed runtime and platform. Use a dedicated read-only checkout or conservative vendor permissions for untrusted review tasks.
+Claude plan mode/disallowed tools 与 Codex readOnly sandbox 是供应商原生策略，但不等价于跨平台操作系统级只读文件系统。Runtime bug、外部 MCP 或配置可能影响实际边界。对不可信任务应使用独立 checkout、容器或受控 VM。
 
 ### Shared working tree
 
-Two agents can technically write the same working tree when permissions allow it. PairRoom recommends one Driver and one Reviewer. Concurrent writes can create semantic conflicts even when Git has no textual conflict.
+两个 Agent 在权限允许时仍可同时写入同一 tree。默认保持一个 Driver 和一个 Reviewer。若需要并行实现，使用独立 worktree 并由人类明确合并。
 
-### Runtime probing
+### Remote links
 
-`pairroom doctor` and adapter startup run only CLI `--version`/`--help`/`app-server --help` checks. Wrapper scripts are executable code; configure only trusted commands and paths.
+PairRoom 不自动加载远程 Markdown 图片，但普通 `https` 链接可由用户主动打开。打开后由浏览器直接访问目标站点。
+
+### Browser object URLs
+
+附件通过认证 API 下载为 Blob，并在当前页面创建 object URL。关闭页面或重新渲染清理 object URL；它们不应作为持久共享链接。
 
 ## Recommended operation
 
-1. Run only on trusted repositories.
-2. Keep secrets outside the repository or deny Agent access.
-3. Start with conservative vendor permissions.
-4. Review command/file approval details before accepting.
-5. Keep the listener on loopback.
-6. Back up or remove room state according to repository sensitivity.
-7. Use separate worktrees when intentionally asking both Agents to implement.
-8. Run `pairroom doctor` after upgrading either vendor CLI.
+1. 只对可信仓库运行；
+2. 将 secrets 放在 Agent 无需读取的位置；
+3. 使用一个 Driver、一个 Reviewer；
+4. 从保守 vendor permission/sandbox 开始；
+5. 仔细查看审批中的命令、路径和权限范围；
+6. 图片发送前确认不含不应上传给供应商的数据；
+7. 保持 listener 在 loopback；
+8. 升级 Claude/Codex 后运行 `pairroom doctor` 和非关键仓库 smoke test；
+9. 按项目敏感度备份或删除整个 room data directory；
+10. 对强隔离需求使用容器/VM/独立 checkout，而不是只依赖 UI role。
 
 ## Reporting vulnerabilities
 
-Do not open a public issue containing secrets, exploit payloads or private repository data. Once the repository is published, use its private security-reporting channel and include only the minimum reproducible details.
+不要在公开 Issue 中附带 secrets、私有仓库内容、真实附件、认证 Token 或可直接利用的敏感 payload。仓库发布后应使用私有安全报告渠道，并只提供最小复现信息。

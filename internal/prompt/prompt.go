@@ -22,6 +22,7 @@ PairRoom rules:
 - To explicitly request a response from the peer, mention @%s in the final response. Use @human when you need the user. Do not mention the peer merely as prose unless you want another turn.
 - Do not invent delivery/read state or claim you sent a private message. PairRoom handles routing.
 - Keep implementation/tool details concise in the room; the UI separately exposes commands, file changes, plans, and diffs.
+- When you create a screenshot, diagram, chart, or other image that the human should see, save it inside the repository and include a repository-relative Markdown image reference such as ![preview](path/to/image.png) in your final response. PairRoom can then attach a safe preview.
 - When your current role is reviewer, inspect independently and do not edit files unless the human explicitly authorizes it.
 - Avoid unbounded agreement loops. State disagreements clearly, converge on evidence, and stop mentioning the peer once no further response is needed.
 - In roundtable mode, place one standalone control marker at the end when useful: [PAIRROOM:CONTINUE] asks the peer to continue; [PAIRROOM:CONSENSUS], [PAIRROOM:WAIT], [PAIRROOM:BLOCKED], or [PAIRROOM:DONE] stops automatic handoff. The marker is hidden from the room transcript.
@@ -55,10 +56,22 @@ func Envelope(input model.AgentInput) string {
 	fmt.Fprintf(&b, "role_rule: %s\n", roleRule)
 	fmt.Fprintf(&b, "routing_mode: %s\n", input.RoutingMode)
 	fmt.Fprintf(&b, "remaining_agent_hops: %d\n", max(0, input.MaxHops-input.Hop))
+	if len(input.Attachments) > 0 {
+		fmt.Fprintf(&b, "attachments:\n")
+		for _, value := range input.Attachments {
+			fmt.Fprintf(&b, "- name: %s\n  media_type: %s\n  size: %d\n  id: %s\n", value.Name, value.MediaType, value.Size, value.ID)
+			if value.Path != "" {
+				fmt.Fprintf(&b, "  local_path: %s\n", value.Path)
+			}
+		}
+	}
 	fmt.Fprintf(&b, "\n--- message body ---\n%s\n--- end message ---\n", input.Text)
 
 	peer := model.OtherParticipant(input.To)
 	fmt.Fprintf(&b, "\nRespond as %s. Keep the shared-room answer focused on conclusions, evidence, disagreements, and next actions; tool details are visible in the Inspector.", input.To.DisplayName())
+	if len(input.Attachments) > 0 {
+		fmt.Fprintf(&b, " Inspect every attached image that is relevant to the request. PairRoom supplies each image through the target harness's native multimodal input and also lists its durable local path for tool-based inspection. Refer to images by filename in the shared-room answer.")
+	}
 	switch input.RoutingMode {
 	case model.RoutingManual:
 		fmt.Fprintf(&b, " PairRoom will not automatically forward your answer to the peer. Mentioning @%s is conversational only in manual mode.", peer)

@@ -24,6 +24,7 @@ type fakeAdapter struct {
 	sessionID    string
 	beforeReturn func(model.AgentInput)
 	submitErr    error
+	role         model.ParticipantRole
 }
 
 func (f *fakeAdapter) Actor() model.ActorID { return f.actor }
@@ -70,8 +71,14 @@ func (f *fakeAdapter) Stop(context.Context) error {
 	f.mu.Unlock()
 	return nil
 }
-func (f *fakeAdapter) ResolveApproval(context.Context, string, string) error {
+func (f *fakeAdapter) ResolveApproval(context.Context, string, model.ApprovalResolution) error {
 	return agent.ErrApprovalUnsupported
+}
+func (f *fakeAdapter) SetRole(_ context.Context, role model.ParticipantRole) error {
+	f.mu.Lock()
+	f.role = role
+	f.mu.Unlock()
+	return nil
 }
 
 func newTestEngine(t *testing.T, mode model.RoutingMode, dir string) (*Engine, map[model.ActorID]*fakeAdapter) {
@@ -668,5 +675,160 @@ func TestSubmitFailureSettlesDeliveryAndProcessing(t *testing.T) {
 	}
 	if !strings.Contains(got.ProcessingDetail[model.ActorClaude], "did not accept") {
 		t.Fatalf("processing failure did not explain pre-execution rejection: %#v", got.ProcessingDetail)
+	}
+}
+
+type fakeAttachmentStore struct {
+	metadata   map[string]model.Attachment
+	paths      map[string]string
+	discovered []model.Attachment
+}
+
+func (f *fakeAttachmentStore) Resolve(id string) (model.Attachment, string, error) {
+	value, ok := f.metadata[id]
+	if !ok {
+		return model.Attachment{}, "", errors.New("unknown fake attachment")
+	}
+	return value, f.paths[id], nil
+}
+
+func (f *fakeAttachmentStore) DiscoverRepoImages(string, string) []model.Attachment {
+	return append([]model.Attachment(nil), f.discovered...)
+}
+
+func newAttachmentEngine(t *testing.T, media AttachmentStore) (*Engine, map[model.ActorID]*fakeAdapter) {
+	t.Helper()
+	eventStore, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapters := map[model.ActorID]*fakeAdapter{}
+	factory := func(cfg agent.Config, sink agent.EventSink) agent.Adapter {
+		value := &fakeAdapter{actor: cfg.Actor, sink: sink, state: model.StateStopped, submissions: make(chan model.AgentInput, 16)}
+		adapters[cfg.Actor] = value
+		return value
+	}
+	engine, err := New(Config{
+		Name: "media", Repo: t.TempDir(), Store: eventStore, Hub: bus.New(64),
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 4, StallWarningSeconds: 300},
+		ClaudeFactory: factory, CodexFactory: factory, Attachments: media,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+	return engine, adapters
+}
+
+func TestSendCanonicalizesImagesAndResolvesPathsOnlyForAgentBoundary(t *testing.T) {
+	image := model.Attachment{
+		ID: "att-0123456789abcdef01234567", Name: "diagram.png", MediaType: "image/png", Kind: "image",
+		Size: 68, SHA256: strings.Repeat("a", 64), Width: 1, Height: 1, CreatedAt: time.Now().UTC(),
+	}
+	media := &fakeAttachmentStore{
+		metadata: map[string]model.Attachment{image.ID: image},
+		paths:    map[string]string{image.ID: "/private/pairroom/attachments/diagram.png"},
+	}
+	engine, adapters := newAttachmentEngine(t, media)
+	message, err := engine.Send(context.Background(), SendRequest{
+		Text: "Review the image", To: []model.ActorID{model.ActorClaude},
+		Attachments: []model.Attachment{{ID: image.ID, Name: "forged-name.exe", Size: 999999}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(message.Attachments) != 1 || message.Attachments[0].Name != "diagram.png" || message.Attachments[0].Size != 68 {
+		t.Fatalf("durable message did not use canonical metadata: %#v", message.Attachments)
+	}
+	if encoded, _ := json.Marshal(message); strings.Contains(string(encoded), "/private/pairroom") {
+		t.Fatalf("host-local path leaked into durable transcript: %s", encoded)
+	}
+	input := receiveInput(t, adapters[model.ActorClaude])
+	if len(input.Attachments) != 1 || input.Attachments[0].Path != "/private/pairroom/attachments/diagram.png" || input.Attachments[0].Name != "diagram.png" {
+		t.Fatalf("native adapter did not receive resolved image: %#v", input.Attachments)
+	}
+}
+
+func TestAgentFinalImportsSafeImagePreviewIntoSharedRoom(t *testing.T) {
+	generated := model.Attachment{
+		ID: "att-89abcdef0123456789abcdef", Name: "architecture.png", MediaType: "image/png", Kind: "image",
+		Size: 512, SHA256: strings.Repeat("b", 64), Width: 1280, Height: 720, CreatedAt: time.Now().UTC(), Source: "claude-artifact",
+	}
+	media := &fakeAttachmentStore{metadata: map[string]model.Attachment{}, paths: map[string]string{}, discovered: []model.Attachment{generated}}
+	engine, adapters := newAttachmentEngine(t, media)
+	incoming, err := engine.Send(context.Background(), SendRequest{Text: "Show the architecture", To: []model.ActorID{model.ActorClaude}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeFinal, CorrelationID: incoming.ID, TurnID: "turn-image",
+		Text: "Rendered the result: ![architecture](docs/architecture.png)", CreatedAt: time.Now().UTC(),
+	})
+
+	snapshot := engine.Snapshot()
+	var response *model.Message
+	for i := range snapshot.Messages {
+		if snapshot.Messages[i].From == model.ActorClaude && snapshot.Messages[i].ReplyTo == incoming.ID {
+			copy := snapshot.Messages[i]
+			response = &copy
+		}
+	}
+	if response == nil || len(response.Attachments) != 1 || response.Attachments[0].ID != generated.ID {
+		t.Fatalf("agent-produced image was not projected into the room: %#v", response)
+	}
+}
+
+func TestSwitchDriverAppliesNativeRoleBeforeFutureTurns(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	if err := engine.SwitchDriver(context.Background(), model.ActorCodex); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := engine.Snapshot()
+	if snapshot.Participants[model.ActorCodex].Role != model.RoleDriver || snapshot.Participants[model.ActorClaude].Role != model.RoleReviewer {
+		t.Fatalf("room roles did not switch atomically: %#v", snapshot.Participants)
+	}
+	adapters[model.ActorClaude].mu.Lock()
+	claudeRole := adapters[model.ActorClaude].role
+	adapters[model.ActorClaude].mu.Unlock()
+	adapters[model.ActorCodex].mu.Lock()
+	codexRole := adapters[model.ActorCodex].role
+	adapters[model.ActorCodex].mu.Unlock()
+	if claudeRole != model.RoleReviewer || codexRole != model.RoleDriver {
+		t.Fatalf("native role policies were not applied: claude=%q codex=%q", claudeRole, codexRole)
+	}
+
+	_, err := engine.Send(context.Background(), SendRequest{Text: "Compare", To: []model.ActorID{model.ActorClaude, model.ActorCodex}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := receiveInput(t, adapters[model.ActorClaude]).Role; got != model.RoleReviewer {
+		t.Fatalf("Claude turn role = %q", got)
+	}
+	if got := receiveInput(t, adapters[model.ActorCodex]).Role; got != model.RoleDriver {
+		t.Fatalf("Codex turn role = %q", got)
+	}
+}
+
+func TestRuntimeErrorExpiresConnectionLocalApproval(t *testing.T) {
+	engine, _ := newTestEngine(t, model.RoutingManual, "")
+	approval := model.Approval{
+		ID: model.NewID("approval"), Agent: model.ActorClaude, Kind: "claude.toolApproval",
+		Title: "Use Bash", Status: "pending", RequestedAt: time.Now().UTC(),
+	}
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeApprovalRequested, Approval: &approval, CreatedAt: time.Now().UTC()})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeError, Text: "native process exited", CreatedAt: time.Now().UTC()})
+	var got *model.Approval
+	for _, value := range engine.Snapshot().Approvals {
+		if value.ID == approval.ID {
+			copy := value
+			got = &copy
+		}
+	}
+	if got == nil || got.Status != "expired" || got.Decision != "runtime_error" {
+		t.Fatalf("runtime error left stale approval pending: %#v", got)
 	}
 }

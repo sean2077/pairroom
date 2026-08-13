@@ -1,0 +1,39 @@
+{
+  "pairroom_version": "0.3.0",
+  "message_count": 10,
+  "agent_messages": {
+    "claude": 4,
+    "codex": 3
+  },
+  "first_user_attachment_count": 2,
+  "first_user_attachment_media_types": [
+    "image/png",
+    "image/png"
+  ],
+  "markdown": {
+    "heading": true,
+    "table": true,
+    "code_block": true,
+    "task_list": true,
+    "inline_image": true
+  },
+  "lightbox": {
+    "gallery_count": 2,
+    "first_title": "diagram.png",
+    "second_title": "chart.png",
+    "zoom_verified": true
+  },
+  "conversation_controls": {
+    "search": true,
+    "participant_filter": true,
+    "reply": true,
+    "process_inspector": true,
+    "long_message_fold": true,
+    "date_separator": true
+  },
+  "external_image_auto_fetched": false,
+  "desktop_screenshot": "docs/images/pairroom-v0.3-desktop.png",
+  "mobile_screenshot": "docs/images/pairroom-v0.3-mobile.png",
+  "console_errors": [],
+  "page_errors": []
+}

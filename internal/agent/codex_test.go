@@ -137,12 +137,26 @@ func TestCodexTurnRequestsUseDocumentedCorrelationFields(t *testing.T) {
 		t.Fatalf("turn/start threadId = %#v", got)
 	}
 
-	steered := codexTurnSteerParams("thread-1", "turn-1", "change direction", input.MessageID)
+	steered := codexTurnSteerParams("thread-1", "turn-1", "change direction", input)
 	if got := steered["clientUserMessageId"]; got != input.MessageID {
 		t.Fatalf("turn/steer clientUserMessageId = %#v", got)
 	}
 	if got := steered["expectedTurnId"]; got != "turn-1" {
 		t.Fatalf("turn/steer expectedTurnId = %#v", got)
+	}
+}
+
+func TestCodexInputItemsIncludeLocalImages(t *testing.T) {
+	items := codexInputItems("inspect", []model.AgentAttachment{{
+		Attachment: model.Attachment{Name: "diagram.png", MediaType: "image/png"},
+		Path:       "/tmp/diagram.png",
+	}})
+	if len(items) != 2 {
+		t.Fatalf("expected text and image input, got %#v", items)
+	}
+	image, ok := items[1].(map[string]any)
+	if !ok || image["type"] != "localImage" || image["path"] != "/tmp/diagram.png" {
+		t.Fatalf("unexpected image input: %#v", items[1])
 	}
 }
 
@@ -335,5 +349,32 @@ func TestCodexFailPendingRPCsClearsConnectionState(t *testing.T) {
 	}
 	if len(adapter.pending) != 0 || len(adapter.approvals) != 0 {
 		t.Fatalf("connection-scoped state was not cleared: pending=%d approvals=%d", len(adapter.pending), len(adapter.approvals))
+	}
+}
+
+func TestCodexRoleChangeRequiresSafeTurnBoundary(t *testing.T) {
+	adapter := NewCodex(Config{}, func(model.RuntimeEvent) {})
+	if err := adapter.SetRole(context.Background(), model.RoleReviewer); err != nil {
+		t.Fatalf("idle role change failed: %v", err)
+	}
+	if err := adapter.SetRole(context.Background(), model.ParticipantRole("invalid")); err == nil {
+		t.Fatal("expected invalid role rejection")
+	}
+
+	adapter.mu.Lock()
+	adapter.state = model.StateWorking
+	adapter.currentTurn = "turn-active"
+	adapter.mu.Unlock()
+	if err := adapter.SetRole(context.Background(), model.RoleDriver); err == nil || !strings.Contains(err.Error(), "interrupt or stop") {
+		t.Fatalf("expected active-turn rejection, got %v", err)
+	}
+
+	adapter.mu.Lock()
+	adapter.state = model.StateIdle
+	adapter.currentTurn = ""
+	adapter.queued = []model.AgentInput{{MessageID: "queued"}}
+	adapter.mu.Unlock()
+	if err := adapter.SetRole(context.Background(), model.RoleReviewer); err == nil {
+		t.Fatal("expected queued-input role rejection")
 	}
 }

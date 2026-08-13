@@ -77,14 +77,15 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 		// exhaustive flag inventory. Treat these documented flags as available and
 		// let process startup provide the authoritative compatibility result instead
 		// of rejecting a valid wrapper or release based on incomplete help output.
-		for _, flag := range []string{"--input-format", "--output-format"} {
+		for _, flag := range []string{"--input-format", "--output-format", "--permission-prompt-tool"} {
 			result.SupportedFlags[flag] = true
 		}
 		optional := []string{
 			"--append-system-prompt", "--append-system-prompt-file",
 			"--include-partial-messages", "--replay-user-messages",
 			"--forward-subagent-text", "--include-hook-events",
-			"--model", "--permission-mode", "--resume", "--session-id", "--verbose",
+			"--model", "--permission-mode", "--disallowedTools",
+			"--resume", "--session-id", "--verbose", "--add-dir",
 		}
 		if helpErr != nil {
 			result.Warnings = append(result.Warnings, "could not inspect optional Claude Code flags: "+helpErr.Error())
@@ -92,7 +93,8 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 			// wrapper suppresses help output. Newer telemetry flags stay disabled.
 			for _, flag := range []string{
 				"--append-system-prompt", "--include-partial-messages", "--replay-user-messages",
-				"--model", "--permission-mode", "--resume", "--session-id", "--verbose",
+				"--model", "--permission-mode", "--disallowedTools",
+				"--resume", "--session-id", "--verbose", "--add-dir",
 			} {
 				result.SupportedFlags[flag] = true
 			}
@@ -108,6 +110,13 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 		} else {
 			result.Warnings = append(result.Warnings, "Claude Code does not advertise --resume; native session recovery will start a fresh session")
 		}
+		if result.SupportedFlags["--add-dir"] {
+			result.Capabilities = append(result.Capabilities, "additional-directories")
+		}
+		// The native initialize handshake is negotiated after process start. The
+		// permission-prompt-tool=stdio flag is the documented switch used by the
+		// official Agent SDK to make tool approvals arrive on that control channel.
+		result.Capabilities = append(result.Capabilities, "control-handshake-pending")
 		if result.SupportedFlags["--include-partial-messages"] {
 			result.Capabilities = append(result.Capabilities, "partial-messages")
 		}

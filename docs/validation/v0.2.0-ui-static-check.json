@@ -1,0 +1,39 @@
+{
+  "html_contract": {
+    "html_ids": 36,
+    "duplicate_ids": [],
+    "js_static_id_refs": 35,
+    "missing_js_ids": []
+  },
+  "render_mode": "embedded production HTML/CSS/JS with a captured Mock snapshot and stubbed fetch/EventSource",
+  "desktop": {
+    "viewport": {
+      "width": 1600,
+      "height": 1000
+    },
+    "message_rows": 5,
+    "activity_cards": 22,
+    "page_errors": [],
+    "horizontal_overflow": false,
+    "composer_inside_viewport": true,
+    "send_button_inside_viewport": true,
+    "participants_visible": true,
+    "inspector_visible": true
+  },
+  "mobile": {
+    "viewport": {
+      "width": 430,
+      "height": 932
+    },
+    "message_rows": 5,
+    "activity_cards": 22,
+    "page_errors": [],
+    "horizontal_overflow": false,
+    "composer_inside_viewport": true,
+    "send_button_inside_viewport": true,
+    "participants_visible": false,
+    "inspector_visible": false
+  },
+  "visual_inspection": "passed",
+  "limitations": "not a pixel baseline and does not exercise the live SSE network path"
+}

@@ -1,63 +1,73 @@
-# PairRoom 运行时兼容策略
+# PairRoom 运行时跟随策略
 
 基准日期：2026-08-13
 
-PairRoom 不实现 Claude Code 或 Codex 的 Agent loop。它只通过供应商公开的结构化接口驱动用户本机安装的官方 CLI，因此兼容性同时取决于：
+PairRoom 不维护 Claude Code/Codex 的历史版本兼容矩阵。项目面向两套官方 Coding Agent 的**当前稳定版/最新公开协议面**开发：供应商升级后及时跟随，旧版本只在仍然自然可用时继续工作，不承诺长期回溯适配。
 
-1. PairRoom 的 Adapter 实现。
-2. 用户安装的 CLI 版本。
-3. 供应商协议在该版本中的字段与事件。
-4. 用户自身的登录、权限、Skills、MCP、Hooks 和项目配置。
+这不是“忽略兼容性”，而是把精力放在真正有价值的部分：结构化协议、失败可诊断、消息不丢失、权限不静默放宽，以及升级后能快速验证。
 
-## 1. Claude Code
+## 1. 总原则
 
-PairRoom 使用 Claude Code print mode 的双向 stream-json：
+1. 只连接官方结构化接口，不解析终端 ANSI/TUI 文本作为控制事实。
+2. 当前公开协议是实现基线；不为历史版本维护分支矩阵。
+3. 可选事件缺失时降级展示；必需握手失败时明确停止。
+4. 未知高权限请求默认拒绝，不猜测供应商意图。
+5. Delivery 与 Processing 分离，Adapter 失败不会抹掉已持久化消息。
+6. `doctor` 用于环境诊断，不用于证明真实账号下的完整 Turn 一定成功。
+7. 每次升级 Claude Code、Codex 或 PairRoom 后，在非关键仓库做一次 smoke test。
+
+## 2. Claude Code
+
+PairRoom 启动官方 CLI 的 headless 双向 stream-json 模式：
 
 ```text
 claude -p
   --input-format stream-json
   --output-format stream-json
+  --permission-prompt-tool stdio
 ```
 
-### 必需能力
+### 必需协议面
 
-- `--input-format stream-json`
-- `--output-format stream-json`
-- stdin 接收多条结构化 user message
-- stdout 输出 `system`、`assistant`、`user`、`stream_event`、`result` 等 stream-json 事件
+- stdin 接收多条结构化 `user` 消息；
+- stdout 输出 `system`、`assistant`、`user`、`stream_event`、`result`；
+- `--permission-prompt-tool stdio` 将工具权限请求发送到同一控制通道；
+- 启动后能够完成 `control_request/initialize` → `control_response` 握手；
+- `can_use_tool` 请求可以由 PairRoom 回写 allow/deny；
+- session ID 能被读取；当前版本支持时使用 `--resume`。
 
-Claude Code 官方明确说明 `claude --help` 不是完整 flag 清单。因此 `doctor` 不会仅因帮助输出未列出 `--input-format` / `--output-format` 就误判不兼容；它会确认命令和版本，真正的 Runtime 启动结果才是必需协议的最终判据。PairRoom 不会退化为解析 ANSI 终端文本。
+PairRoom 会在 initialize 成功前阻止第一条普通用户消息，避免权限、Hook 或 SDK 配置尚未安装完成时提前进入 Turn。
 
-### 可选能力
+### 可选展示能力
 
-PairRoom 结合 `claude --help` 与版本信息保守启用以下可选参数。帮助输出缺失只意味着“不主动启用或需要版本门槛”，不等价于官方 CLI 一定不支持；不可用时只降低 Inspector 丰富度或会话体验：
-
-| 能力 | CLI 参数 | 不可用时的行为 |
+| 能力 | 常见 CLI 参数 | 缺失时 |
 |---|---|---|
-| 流式文本增量 | `--include-partial-messages` | 仍等待最终 `result` |
-| 用户消息回放 | `--replay-user-messages` | 不依赖原生回放做房间审计 |
-| 子 Agent 文本 | `--forward-subagent-text` | 仍显示 Agent tool 生命周期，不展开子 Agent 文本 |
-| Hook 生命周期 | `--include-hook-events` | Hooks 仍由 Claude Code 执行，但 PairRoom Inspector 不一定看到事件 |
-| 追加协作规则 | `--append-system-prompt-file` / `--append-system-prompt` | 首条普通用户输入前置协议文本 |
-| 原生会话恢复 | `--resume` | 新建 Claude session，并更新持久化 ID |
+| 文本增量 | `--include-partial-messages` | 等待最终结果，公共消息不丢失 |
+| 用户消息回放 | `--replay-user-messages` | PairRoom 自己的公共日志仍完整 |
+| 子 Agent 文本 | `--forward-subagent-text` | 只显示子 Agent/工具生命周期 |
+| Hook 生命周期 | `--include-hook-events` | Hook 仍由 Claude 执行，Inspector 可能更简略 |
+| 协作规则追加 | `--append-system-prompt-file` / `--append-system-prompt` | 首条输入中附加房间协议 |
+| 附件目录 | `--add-dir` | 多模态图片仍以 base64 内容块发送 |
 
-Claude Code 官方文档注明：`--forward-subagent-text` 至少需要 v2.1.211；嵌套子 Agent 文本转发至少需要 v2.1.219。PairRoom 会按版本关闭不兼容参数，不把它们当成启动硬要求。
+这些能力不会通过维护固定版本表来判断；PairRoom 结合当前 CLI 的帮助输出、已知公开参数和实际启动结果进行协商。
 
-### 当前限制
+### 图片与审批
 
-- PairRoom 的 Claude Adapter 不是交互式 TUI，因此不复制终端界面快捷键。
-- Claude 的交互式权限请求尚未转换为 PairRoom Approval；实际权限由 Claude Code permission mode、规则与 Hooks 管理。
-- 工作期间的新输入按 Claude stream-json 原生顺序排队，不宣称具备与 Codex `turn/steer` 完全相同的同 Turn 注入语义。
+- 图片以 Claude 原生 base64 image content block 进入用户消息；
+- 图片在 Adapter 边界前重新检查类型、大小和不可变哈希；
+- `can_use_tool` 被投影为统一 Approval；
+- `AskUserQuestion` 被投影为单选、多选或文本表单；
+- Reviewer 使用原生 `plan` permission mode，并移除写工具；控制层对仍到达的写请求再次拒绝。
 
-## 2. Codex
+## 3. Codex
 
-PairRoom 使用官方 Codex App Server 的默认 stdio 传输：
+PairRoom 启动：
 
 ```text
 codex app-server
 ```
 
-该传输为逐行 JSON-RPC/JSONL。PairRoom 使用：
+连接使用逐行 JSON-RPC/JSONL：
 
 ```text
 initialize → initialized
@@ -69,76 +79,64 @@ item/*
 turn/completed
 ```
 
-### 必需能力
+### 必需协议面
 
-- `codex app-server` 可启动并完成 initialize 握手。
-- `thread/start` 或 `thread/resume`。
-- `turn/start` 与 Turn 生命周期事件。
+- App Server 能完成 initialize；
+- 能创建或恢复 thread；
+- 能启动 Turn 并发出 Turn 生命周期事件；
+- 最终完成或中断能得到结构化状态。
 
-### 使用但可降级的能力
+### 使用能力
 
-| 能力 | 协议面 | 不可用或拒绝时的行为 |
+| 能力 | 协议面 | 失败时 |
 |---|---|---|
-| 活跃 Turn 介入 | `turn/steer` + `expectedTurnId` | 输入进入 PairRoom 本地队列，等待安全边界重新 `turn/start` |
-| 精确输入关联 | `clientUserMessageId` / `userMessage.clientId` | `startingInput` 与 Turn ID 回退关联仍保留基础顺序 |
-| 原生恢复 | `thread/resume` | 创建新 thread，重新注入房间协作规则 |
-| 审批 | command/file/permissions server request | 已实现类型进入 UI；未知 request fail closed |
-| Inspector | item、plan、diff、usage notifications | 未识别字段保留在原始 event data，不参与控制决策 |
+| 活跃 Turn 介入 | `turn/steer` + `expectedTurnId` | 进入本地队列，等安全边界重新启动 Turn |
+| 图片输入 | `localImage` | 目标处理失败并显示精确诊断，不静默丢图 |
+| 输入关联 | `clientUserMessageId` / `userMessage.clientId` | 使用 Turn 与提交顺序作保守关联 |
+| 原生恢复 | `thread/resume` | 建立新 thread，并保留 PairRoom 公共历史 |
+| 审批 | command/file/permissions request | 支持的请求进入 UI；未知请求 fail closed |
+| Reviewer | `sandboxPolicy: {type: "readOnly"}` | 若运行时拒绝该策略，Turn 直接失败而不是退回写权限 |
 
-同一 Codex Turn 可以接受多次 `turn/steer`。PairRoom 会保存该 Turn 接收的所有输入，并在 `turn/completed` 后分别结算其 ProcessingState；公共最终回复关联最近一次有效介入。
+一个 active Turn 可以接收多次 steer；PairRoom 仍为每条用户输入分别记录 Delivery/Processing。
 
-## 3. `pairroom doctor`
+## 4. `pairroom doctor`
 
 ```bash
 pairroom doctor --repo /path/to/repo
 pairroom doctor --repo /path/to/repo --json
 ```
 
-检查内容：
+检查：
 
-- Git 路径与版本。
-- Claude/Codex 可执行文件实际路径。
-- CLI 版本字符串。
-- Claude 公开 stream-json 协议的命令/版本基础条件，以及可从帮助或版本安全识别的可选参数。
-- Codex `app-server` 入口。
-- 推断出的协议、能力和兼容警告。
+- Git、Claude Code、Codex 的可执行路径和版本字符串；
+- Claude stream-json/control 所需入口与可选参数；
+- Codex `app-server` 是否存在；
+- 推断出的协议、能力、降级项与错误。
 
-Doctor 是非破坏性检查：不会创建供应商会话、不会触发模型调用，也不会读取仓库文件内容。它不能替代真实登录后的 Turn 验证。
+Doctor 不登录、不创建模型会话、不读取仓库文件内容。包装脚本本身是可执行代码，只应配置可信命令。
 
-## 4. 支持等级
+## 5. 升级后的推荐 smoke test
 
-| 等级 | 含义 |
-|---|---|
-| Available | 可执行文件与必需协议面通过探测，Runtime init 也成功 |
-| Degraded | 必需协议可用，但一个或多个可选能力被关闭；UI 显示 warning |
-| Unsupported | 命令不存在、版本探测失败、Runtime 实际启动不接受 Claude stream-json，或 Codex 缺少 app-server |
-| Unverified | 能编译且协议单元测试通过，但尚未在该具体 CLI 版本与账号环境完成真实 Turn |
+1. 运行 `pairroom doctor --json`。
+2. 在 Mock 模式确认网页和本地状态目录可用。
+3. 在非关键仓库给 Claude/Codex 分别发送一条文本消息。
+4. 粘贴一张图片并同时发送给两者。
+5. 对 Codex 正在运行的 Turn 发送补充消息，确认显示 `injected` 或明确降级为 `queued`。
+6. 触发一项 Claude/Codex 审批并在 UI 处理。
+7. 切换 Reviewer，确认原生只读/plan 策略显示在参与者卡片。
+8. Stop/Restart 后恢复原生 session/thread。
 
-v0.2.0 仍处于真实环境兼容矩阵建立阶段。推荐使用供应商当前稳定版，先运行 `doctor`，再在非关键仓库验证：
+## 6. 不兼容时的处理
 
-1. 新建会话与恢复。
-2. Claude 排队输入。
-3. Codex active-turn steering。
-4. Interrupt/Stop/Restart。
-5. Codex command/file/permission approvals。
-6. Skills、MCP 与项目说明文件是否按用户预期加载。
-7. 长 Turn、压缩和子 Agent 事件。
+- **可选事件变化**：保留原始 payload，减少 Inspector 展示。
+- **字段新增**：忽略未使用字段，除非它改变安全语义。
+- **权限请求新增**：默认拒绝，待明确实现后再开放。
+- **必需握手变化**：Runtime 标记为 error，消息保留并允许重试。
+- **CLI 删除结构化入口**：不退回终端抓屏或键盘模拟。
 
-## 5. 协议变化原则
+## 7. 官方参考
 
-当供应商协议变化时，PairRoom遵循：
-
-1. 不解析 ANSI/TUI 文本作为控制事实。
-2. 不为未知字段猜测高权限语义。
-3. 未知 server request 默认拒绝。
-4. 已持久化消息不会因 Adapter 失败而消失。
-5. Transport 已接受与 Runtime 已完成分开记录。
-6. 可选能力优先降级；必需能力缺失则明确失败。
-7. 新版本事件先保留原始 payload，再逐步加入 canonical projection。
-
-## 6. 官方参考
-
-- Claude Code CLI reference: https://code.claude.com/docs/en/cli-reference
-- Claude Code hooks: https://code.claude.com/docs/en/hooks
-- Codex App Server: https://developers.openai.com/codex/app-server
-- Codex App Server source README: https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md
+- Claude Code CLI / Agent SDK 文档：<https://code.claude.com/docs/>
+- Claude Agent SDK Python 实现：<https://github.com/anthropics/claude-agent-sdk-python>
+- Codex App Server：<https://developers.openai.com/codex/app-server>
+- Codex App Server source README：<https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md>

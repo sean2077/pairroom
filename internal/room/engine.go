@@ -41,13 +41,22 @@ type Config struct {
 	CodexFactory  agent.Factory
 	ClaudeConfig  agent.Config
 	CodexConfig   agent.Config
+	Attachments   AttachmentStore
 	AutoStart     bool
 }
 
+// AttachmentStore keeps presentation metadata durable while resolving an
+// opaque attachment ID to a local path only at the native-agent boundary.
+type AttachmentStore interface {
+	Resolve(id string) (model.Attachment, string, error)
+	DiscoverRepoImages(text, source string) []model.Attachment
+}
+
 type SendRequest struct {
-	Text    string          `json:"text"`
-	To      []model.ActorID `json:"to,omitempty"`
-	ReplyTo string          `json:"reply_to,omitempty"`
+	Text        string             `json:"text"`
+	To          []model.ActorID    `json:"to,omitempty"`
+	ReplyTo     string             `json:"reply_to,omitempty"`
+	Attachments []model.Attachment `json:"attachments,omitempty"`
 }
 
 type RetryRequest struct {
@@ -316,11 +325,22 @@ func (e *Engine) Start(parent context.Context) error {
 
 	e.adapters[model.ActorClaude] = e.cfg.ClaudeFactory(claudeCfg, e.HandleRuntimeEvent)
 	e.adapters[model.ActorCodex] = e.cfg.CodexFactory(codexCfg, e.HandleRuntimeEvent)
+	claudeAdapter := e.adapters[model.ActorClaude]
+	codexAdapter := e.adapters[model.ActorCodex]
 	autoStart := e.cfg.AutoStart
 	now := time.Now().UTC()
 	e.lastRuntimeActivity[model.ActorClaude] = now
 	e.lastRuntimeActivity[model.ActorCodex] = now
 	e.mu.Unlock()
+
+	// Apply the restored room roles before either native process starts. Codex
+	// enforces reviewer policy per turn; Claude maps reviewer to native plan mode.
+	if err := claudeAdapter.SetRole(parent, claudeParticipant.Role); err != nil {
+		return fmt.Errorf("apply Claude role: %w", err)
+	}
+	if err := codexAdapter.SetRole(parent, codexParticipant.Role); err != nil {
+		return fmt.Errorf("apply Codex role: %w", err)
+	}
 
 	go e.monitorStalledTurns()
 
@@ -347,10 +367,31 @@ func (e *Engine) Snapshot() model.RoomSnapshot {
 
 func (e *Engine) Subscribe() (<-chan model.Event, func()) { return e.cfg.Hub.Subscribe() }
 
+func (e *Engine) AttachmentReferenced(id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for _, message := range e.snapshot.Messages {
+		for _, value := range message.Attachments {
+			if value.ID == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, error) {
 	text := strings.TrimSpace(req.Text)
-	if text == "" {
-		return model.Message{}, errors.New("message text is required")
+	attachments, err := e.canonicalAttachments(req.Attachments)
+	if err != nil {
+		return model.Message{}, err
+	}
+	if text == "" && len(attachments) == 0 {
+		return model.Message{}, errors.New("message text or image is required")
 	}
 	targets := e.resolveUserTargets(text, req.To)
 	if len(targets) == 0 {
@@ -371,6 +412,7 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 		ProcessingDetail:        make(map[model.ActorID]string, len(targets)),
 		ProcessingTurn:          make(map[model.ActorID]string, len(targets)),
 		ProcessingLastUpdatedAt: make(map[model.ActorID]time.Time, len(targets)),
+		Attachments:             attachments,
 	}
 	for _, target := range targets {
 		message.Delivery[target] = model.DeliveryPending
@@ -439,6 +481,7 @@ func (e *Engine) Retry(ctx context.Context, messageID string, req RetryRequest) 
 		ProcessingDetail:        make(map[model.ActorID]string, len(targets)),
 		ProcessingTurn:          make(map[model.ActorID]string, len(targets)),
 		ProcessingLastUpdatedAt: make(map[model.ActorID]time.Time, len(targets)),
+		Attachments:             append([]model.Attachment(nil), original.Attachments...),
 	}
 	if retry.ThreadID == "" {
 		retry.ThreadID = model.NewID("thread")
@@ -549,10 +592,14 @@ func (e *Engine) Interrupt(ctx context.Context, actor model.ActorID) error {
 	if err != nil {
 		return err
 	}
-	return adapter.Interrupt(ctx)
+	if err := adapter.Interrupt(ctx); err != nil {
+		return err
+	}
+	e.expireApprovals(actor, "runtime_interrupted")
+	return nil
 }
 
-func (e *Engine) ResolveApproval(ctx context.Context, approvalID, decision string) error {
+func (e *Engine) ResolveApproval(ctx context.Context, approvalID string, resolution model.ApprovalResolution) error {
 	e.mu.RLock()
 	var current *model.Approval
 	for i := range e.snapshot.Approvals {
@@ -573,12 +620,12 @@ func (e *Engine) ResolveApproval(ctx context.Context, approvalID, decision strin
 	if err != nil {
 		return err
 	}
-	if err := adapter.ResolveApproval(ctx, approvalID, decision); err != nil {
+	if err := adapter.ResolveApproval(ctx, approvalID, resolution); err != nil {
 		return err
 	}
 	now := time.Now().UTC()
 	current.Status = "resolved"
-	current.Decision = decision
+	current.Decision = resolution.Decision
 	current.ResolvedAt = &now
 	_, err = e.record(EventApprovalUpdated, model.ActorUser, *current)
 	return err
@@ -601,27 +648,51 @@ func (e *Engine) UpdateSettings(settings model.RoomSettings) error {
 	return err
 }
 
-func (e *Engine) SetRole(actor model.ActorID, role model.ParticipantRole) error {
+func (e *Engine) SetRole(ctx context.Context, actor model.ActorID, role model.ParticipantRole) error {
 	if !actor.ValidParticipant() {
 		return errors.New("participant must be claude or codex")
 	}
 	if !role.Valid() {
 		return fmt.Errorf("invalid role %q", role)
 	}
+	adapter, err := e.adapter(actor)
+	if err != nil {
+		return err
+	}
+	if err := adapter.SetRole(ctx, role); err != nil {
+		return err
+	}
 	return e.mutateParticipant(model.ActorUser, actor, func(participant *model.ParticipantSnapshot) {
 		participant.Role = role
+		if actor == model.ActorClaude {
+			if role == model.RoleReviewer {
+				participant.Runtime.PermissionMode = "plan"
+			} else if e.cfg.ClaudeConfig.PermissionMode != "" {
+				participant.Runtime.PermissionMode = e.cfg.ClaudeConfig.PermissionMode
+			}
+		}
 	})
 }
 
-func (e *Engine) SwitchDriver(driver model.ActorID) error {
+func (e *Engine) SwitchDriver(ctx context.Context, driver model.ActorID) error {
 	if !driver.ValidParticipant() {
 		return errors.New("driver must be claude or codex")
 	}
 	reviewer := model.OtherParticipant(driver)
-	if err := e.SetRole(driver, model.RoleDriver); err != nil {
+	e.mu.RLock()
+	oldDriverRole := e.snapshot.Participants[driver].Role
+	oldReviewerRole := e.snapshot.Participants[reviewer].Role
+	e.mu.RUnlock()
+	if err := e.SetRole(ctx, driver, model.RoleDriver); err != nil {
 		return err
 	}
-	return e.SetRole(reviewer, model.RoleReviewer)
+	if err := e.SetRole(ctx, reviewer, model.RoleReviewer); err != nil {
+		// Best-effort rollback keeps native policy and room projection aligned.
+		_ = e.SetRole(ctx, driver, oldDriverRole)
+		_ = e.SetRole(ctx, reviewer, oldReviewerRole)
+		return err
+	}
+	return nil
 }
 
 func (e *Engine) Close() error {
@@ -686,6 +757,12 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 	participant := e.snapshot.Participants[target]
 	settings := e.snapshot.Settings
 	e.mu.RUnlock()
+	attachments, err := e.agentAttachments(message.Attachments)
+	if err != nil {
+		e.delivery(message.ID, target, model.DeliveryFailed, err.Error())
+		e.processing(message.ID, target, model.ProcessingFailed, "image resolution failed: "+err.Error(), "")
+		return
+	}
 	input := model.AgentInput{
 		MessageID:   message.ID,
 		ThreadID:    message.ThreadID,
@@ -697,6 +774,7 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 		Role:        participant.Role,
 		RoutingMode: settings.RoutingMode,
 		MaxHops:     settings.MaxHops,
+		Attachments: attachments,
 	}
 	deliveryCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
@@ -838,6 +916,7 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 		if runtimeEvent.CorrelationID != "" {
 			e.processing(runtimeEvent.CorrelationID, runtimeEvent.Agent, model.ProcessingFailed, runtimeEvent.Text, runtimeEvent.TurnID)
 		}
+		e.expireApprovals(runtimeEvent.Agent, "runtime_error")
 		e.updateParticipant(runtimeEvent.Agent, func(p *model.ParticipantSnapshot) {
 			p.State = model.StateError
 			p.LastError = runtimeEvent.Text
@@ -908,6 +987,7 @@ func (e *Engine) onFinal(runtimeEvent model.RuntimeEvent) {
 		ProcessingDetail:        make(map[model.ActorID]string, len(targets)),
 		ProcessingTurn:          make(map[model.ActorID]string, len(targets)),
 		ProcessingLastUpdatedAt: make(map[model.ActorID]time.Time, len(targets)),
+		Attachments:             e.discoverAgentImages(runtimeEvent.Agent, cleanText),
 	}
 	if message.ThreadID == "" {
 		message.ThreadID = model.NewID("thread")
@@ -1141,6 +1221,69 @@ func (e *Engine) resolveUserTargets(text string, explicit []model.ActorID) []mod
 		return targets
 	}
 	return []model.ActorID{model.ActorClaude, model.ActorCodex}
+}
+
+func (e *Engine) canonicalAttachments(values []model.Attachment) ([]model.Attachment, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	if len(values) > 8 {
+		return nil, errors.New("a message can include at most 8 images")
+	}
+	if e.cfg.Attachments == nil {
+		return nil, errors.New("image storage is unavailable")
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]model.Attachment, 0, len(values))
+	var total int64
+	for _, value := range values {
+		id := strings.TrimSpace(value.ID)
+		if id == "" {
+			return nil, errors.New("image attachment id is required")
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		resolved, _, err := e.cfg.Attachments.Resolve(id)
+		if err != nil {
+			return nil, fmt.Errorf("resolve image %q: %w", id, err)
+		}
+		if resolved.Kind != "image" || !strings.HasPrefix(strings.ToLower(resolved.MediaType), "image/") {
+			return nil, fmt.Errorf("attachment %q is not a supported image", id)
+		}
+		total += resolved.Size
+		if total > 20<<20 {
+			return nil, errors.New("message images exceed the 20 MiB total limit")
+		}
+		seen[id] = struct{}{}
+		out = append(out, resolved)
+	}
+	return out, nil
+}
+
+func (e *Engine) agentAttachments(values []model.Attachment) ([]model.AgentAttachment, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	if e.cfg.Attachments == nil {
+		return nil, errors.New("image storage is unavailable")
+	}
+	out := make([]model.AgentAttachment, 0, len(values))
+	for _, value := range values {
+		resolved, path, err := e.cfg.Attachments.Resolve(value.ID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve image %q: %w", value.ID, err)
+		}
+		out = append(out, model.AgentAttachment{Attachment: resolved, Path: path})
+	}
+	return out, nil
+}
+
+func (e *Engine) discoverAgentImages(actor model.ActorID, text string) []model.Attachment {
+	if e.cfg.Attachments == nil {
+		return nil
+	}
+	return e.cfg.Attachments.DiscoverRepoImages(text, string(actor)+"-artifact")
 }
 
 func (e *Engine) threadForReply(replyTo string) string {

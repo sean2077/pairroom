@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.3.0 — 2026-08-13
+
+Rich conversation, native approvals and reviewer-policy release.
+
+### Added
+
+- Safe DOM-based Markdown rendering for headings, lists, task lists, quotes, tables, inline formatting, links and fenced code with copy controls
+- Durable PNG/JPEG/GIF/WebP message attachments with paste, drag/drop, picker upload and image-only messages
+- Native multimodal delivery: Claude image content blocks and Codex App Server `localImage` inputs
+- Message-scoped image galleries, full-screen lightbox, navigation, zoom and original-image access
+- Safe discovery and import of repository-local images referenced by Agent final responses
+- Thread-focus view in addition to quote reply and message-to-Inspector correlation
+- Claude Code native control-protocol initialization and unified tool/`AskUserQuestion` approvals
+- Structured Claude single-select, multi-select and free-text question responses
+- Native reviewer policies: Claude plan mode plus write-tool deny rules; Codex read-only sandbox per turn
+- Attachment API with authenticated fetch, ETag, immutable cache semantics and durable-reference protection
+- Attachment content hash verification and image dimension/pixel limits
+- Conservative common image limits: 5 MiB per image, 20 MiB per message, 8000 px per side and 64 MP decoded pixels
+- Browser E2E validation for rich conversation, image preview and mobile layout
+
+### Changed
+
+- Runtime policy now follows the current stable/latest Claude Code and Codex public interfaces rather than maintaining a historical version matrix
+- Role changes are applied to the native adapter before room state is persisted and are rejected during active turns or pending approvals
+- Codex role changes now also reject starting inputs, queued inputs and active App Server turns before changing sandbox policy
+- Unknown Claude control requests and unsupported Codex high-privilege requests fail closed
+- User and Agent messages may contain images without requiring accompanying text
+- Normal transcript exports include attachment metadata but never host-local attachment paths
+- CSP permits only local/data/blob image rendering; remote Markdown images are represented as explicit placeholders instead of being fetched
+- Store schema advanced to version 3
+
+### Fixed
+
+- Claude permission and interactive-question requests are no longer invisible to the PairRoom UI when the native control handshake is available
+- Reviewer role no longer depends only on prompt instructions
+- Orphaned uploaded images can be removed before send, while attachments already referenced by the durable transcript cannot be deleted
+- Same-size local attachment tampering is detected by SHA-256 verification
+- Image upload cancellation, retry and composer cleanup no longer leak object URLs or silently discard durable messages
+- Long messages, image galleries and the composer remain usable in narrow/mobile layouts
+- Missing favicon no longer creates a browser console error
+
 ## 0.2.0 — 2026-08-13
 
 Reliability and observability release focused on real Claude Code/Codex operation.
@@ -17,15 +58,13 @@ Reliability and observability release focused on real Claude Code/Codex operatio
 - Event-store schema versioning and forward-version rejection
 - Host-header protection for tokenless loopback deployments
 - API and tests for export/retry, restart recovery and processing lifecycle
-- Regression coverage ensuring each Claude stream-json submission is written and queued exactly once
 
 ### Changed
 
 - Runtime execution failures no longer overwrite an already accepted transport delivery result
-- Adapter lookup/submit failures now settle both delivery and processing, avoiding orphaned waiting states
-- Restart/stop now settles orphaned processing and expires connection-local approvals
-- Codex request construction uses documented App Server fields, including `clientUserMessageId` correlation
-- Codex plan projection supports current `item/plan/delta` and whole-plan compatibility events
+- Adapter lookup/submit failures now settle both delivery and processing
+- Restart/stop settles orphaned processing and expires connection-local approvals
+- Codex request construction uses documented App Server fields, including `clientUserMessageId`
 - JSON transcript exports omit verbose Inspector events by default
 - UI automatically resynchronizes when it detects an SSE sequence gap
 
@@ -34,9 +73,9 @@ Reliability and observability release focused on real Claude Code/Codex operatio
 - Partial JSONL tails are truncated before subsequent appends
 - Multiple inputs steered into one Codex Turn are all settled on completion
 - Fast runtime events can no longer be overwritten by a late Submit result
-- Incomplete `claude --help` output no longer causes a false stream-json incompatibility rejection
+- Incomplete `claude --help` output no longer causes a false protocol rejection
+- URL query tokens are accepted only by the read-only SSE endpoint
 - Stale pending/working state no longer survives a PairRoom restart
-- Case-colliding duplicate documentation filenames were removed for Windows/macOS archives
 
 ## 0.1.0 — 2026-08-13
 

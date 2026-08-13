@@ -33,7 +33,8 @@ type Adapter interface {
 	Submit(context.Context, model.AgentInput) (model.DeliveryState, error)
 	Interrupt(context.Context) error
 	Stop(context.Context) error
-	ResolveApproval(context.Context, string, string) error
+	ResolveApproval(context.Context, string, model.ApprovalResolution) error
+	SetRole(context.Context, model.ParticipantRole) error
 	State() model.AgentState
 	SessionID() string
 }

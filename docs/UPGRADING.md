@@ -1,31 +1,43 @@
 # PairRoom 升级与回退
 
-## v0.1.0 → v0.2.0
+## v0.2.0 → v0.3.0
 
-v0.2.0 的 Store schema 为 `2`。首次打开 v0.1 房间目录时，PairRoom 会：
+v0.3.0 的 Store schema 为 `3`。升级重点是富对话、图片附件、Claude 原生审批和 Reviewer 原生保护。
 
-1. 重放原有 `events.jsonl`。
-2. 为旧消息补齐 Delivery/Processing 生命周期默认值。
-3. 将无法跨进程确认的 `waiting` / `working` 处理标记为 `cancelled`。
-4. 将尚未提交的 `pending` delivery 标记为 `skipped`。
-5. 将连接级 pending approval 标记为 `expired`。
-6. 保留 Claude session ID、Codex thread ID、消息、角色与房间设置。
-7. 将 `metadata.json` 升级到 schema 2，并写入当前 PairRoom 版本。
+首次打开 v0.2 房间时，PairRoom 会：
 
-这些收口事件会追加到日志，不会重写历史事件。
+1. 重放原有 `events.jsonl`；
+2. 保留消息、角色、路由、Delivery/Processing、Claude session ID 和 Codex thread ID；
+3. 创建受限权限的 `attachments/` 媒体目录；
+4. 将 metadata schema 升级为 3；
+5. 对上次异常退出遗留的 pending/working/approval 状态执行与 v0.2 相同的明确收口；
+6. 继续以追加事件的方式记录升级结果，不重写历史 JSONL。
 
-## 升级前备份
+旧消息没有附件字段时按空数组处理，不需要手工迁移。
 
-先停止 PairRoom，再复制完整房间目录：
+## 状态目录变化
+
+v0.3 房间目录：
 
 ```text
 pairroom/rooms/<repo-name>-<path-hash>/
 ├── events.jsonl
 ├── metadata.json
+├── attachments/
+│   ├── att-<opaque-id>.json
+│   └── att-<opaque-id>.<ext>
 └── runtime/
+    └── claude-pairroom-prompt.md
 ```
 
-使用显式 `--data-dir` 时，备份该目录即可。不要在进程运行中只复制 `events.jsonl` 而遗漏刚写入的 metadata 或 runtime 文件。
+备份时必须同时复制 `attachments/`。只复制 `events.jsonl` 会留下可见的附件引用，却丢失图片内容。
+
+## 升级前
+
+1. 停止 PairRoom；
+2. 复制完整房间目录；
+3. 记录当前二进制版本；
+4. 确认备份不位于将被 Agent 修改的工作树内。
 
 ## 升级后检查
 
@@ -35,29 +47,31 @@ pairroom doctor --repo /path/to/repo
 pairroom serve --repo /path/to/repo --auto-start=false
 ```
 
-打开房间后检查：
+在网页中检查：
 
-- 历史消息和角色是否存在。
-- 原有 Claude session / Codex thread ID 是否显示。
-- 旧的在途消息是否被明确标记为取消，而不是继续显示 Working。
-- 旧审批是否显示 expired。
-- 两个 Runtime 的版本、协议和 warnings。
+- 历史消息和角色；
+- Claude session / Codex thread ID；
+- 旧在途状态是否已标记 cancelled/skipped；
+- 旧审批是否 expired；
+- 图片上传、粘贴、删除未发送图片和灯箱；
+- Markdown、代码块、表格、引用和线程视图；
+- Runtime 警告与 Reviewer 原生策略。
 
-确认后再启动 Agent。
+确认后再启动真实 Agent。
+
+## v0.1.0 → v0.2.0 → v0.3.0
+
+可以直接使用 v0.3 打开 v0.1 数据目录。迁移按顺序应用：先补齐 v0.2 的 Delivery/Processing 和 schema 2 语义，再升级到 schema 3。
 
 ## 回退
 
-不建议让 v0.1 与 v0.2 交替写入同一数据目录。v0.1 不理解 ProcessingState、RuntimeInfo、retry 和 schema 2 的完整语义。
+不建议让旧版与新版交替写同一目录。v0.2 不理解 schema 3 的附件生命周期和 Claude 审批语义，并会拒绝打开未来 schema。
 
 需要回退时：
 
-1. 停止 v0.2。
-2. 保留当前目录作为取证副本。
-3. 恢复升级前备份到一个新目录。
-4. 用 v0.1 的 `--data-dir` 指向该备份副本。
+1. 停止 v0.3；
+2. 保留当前目录作为取证副本；
+3. 恢复升级前完整备份到新目录；
+4. 让旧版 `--data-dir` 指向该备份。
 
-不要手工降低 `metadata.json` 中的 schema 数字；这不会删除 v0.2 事件，反而可能让旧版本对新事件做不完整投影。
-
-## 未来 schema
-
-v0.2 会拒绝打开高于自身支持版本的 Store schema。该策略用于防止旧二进制静默损坏新格式数据。遇到该错误时，应升级 PairRoom 或使用与该数据目录匹配的版本，而不是修改 metadata。
+不要手工降低 `metadata.json` 的 schema 数字。数字变化不会移除新事件，只会让旧版产生不完整投影。

@@ -3,7 +3,9 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/agent"
+	"github.com/sean2077/pairroom/internal/attachment"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/room"
 	"github.com/sean2077/pairroom/internal/store"
@@ -19,7 +22,12 @@ import (
 func newTestServer(t *testing.T, token string) (*Server, *room.Engine) {
 	t.Helper()
 	repo := t.TempDir()
-	eventStore, err := store.Open(t.TempDir())
+	dataDir := t.TempDir()
+	eventStore, err := store.Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	media, err := attachment.Open(dataDir, repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,6 +37,7 @@ func newTestServer(t *testing.T, token string) (*Server, *room.Engine) {
 		ClaudeFactory: agent.MockFactory, CodexFactory: agent.MockFactory,
 		ClaudeConfig: agent.Config{MockDelay: 5 * time.Millisecond},
 		CodexConfig:  agent.Config{MockDelay: 5 * time.Millisecond},
+		Attachments:  media,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +46,7 @@ func newTestServer(t *testing.T, token string) (*Server, *room.Engine) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = engine.Close() })
-	server, err := New(Config{Engine: engine, Repo: repo, Token: token})
+	server, err := New(Config{Engine: engine, Repo: repo, Token: token, Attachments: media})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,6 +102,36 @@ func TestHealthSnapshotAndMessageAPI(t *testing.T) {
 	}
 	if len(state.Messages) == 0 || state.Messages[0].ID != created.ID {
 		t.Fatalf("message was not projected into snapshot: %#v", state.Messages)
+	}
+}
+
+func TestRichConversationAssetsAreEmbedded(t *testing.T) {
+	t.Parallel()
+	server, _ := newTestServer(t, "")
+
+	index := httptest.NewRecorder()
+	server.Handler().ServeHTTP(index, localRequest(http.MethodGet, "/", nil))
+	if index.Code != http.StatusOK {
+		t.Fatalf("index status = %d", index.Code)
+	}
+	for _, marker := range []string{"timeline-scope", "attachment-input", "image-lightbox", "/richtext.js"} {
+		if !strings.Contains(index.Body.String(), marker) {
+			t.Fatalf("index omitted rich-conversation marker %q", marker)
+		}
+	}
+
+	rich := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rich, localRequest(http.MethodGet, "/richtext.js", nil))
+	if rich.Code != http.StatusOK || !strings.Contains(rich.Body.String(), "createImage") || !strings.Contains(rich.Body.String(), "code-copy") {
+		t.Fatalf("richtext asset is incomplete: status=%d", rich.Code)
+	}
+
+	app := httptest.NewRecorder()
+	server.Handler().ServeHTTP(app, localRequest(http.MethodGet, "/app.js", nil))
+	for _, marker := range []string{"threadFilter", "uploadPendingAttachment", "openLightbox", "renderClaudeQuestions"} {
+		if app.Code != http.StatusOK || !strings.Contains(app.Body.String(), marker) {
+			t.Fatalf("app asset omitted %q: status=%d", marker, app.Code)
+		}
 	}
 }
 
@@ -292,5 +331,145 @@ func TestRetryAndExportAPI(t *testing.T) {
 	}
 	if len(forensicSnapshot.Events) == 0 {
 		t.Fatal("forensic JSON export should retain the Inspector event tail")
+	}
+}
+
+const serverTestPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+
+func uploadImageRequest(t *testing.T, target, name string, data []byte) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := localRequest(http.MethodPost, target, &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	return request
+}
+
+func testPNGBytes(t *testing.T) []byte {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString(serverTestPNG)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func TestAttachmentUploadServeDeleteAndTranscriptReference(t *testing.T) {
+	server, _ := newTestServer(t, "")
+
+	upload := httptest.NewRecorder()
+	server.Handler().ServeHTTP(upload, uploadImageRequest(t, "/api/v1/attachments", "diagram.png", testPNGBytes(t)))
+	if upload.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d: %s", upload.Code, upload.Body.String())
+	}
+	var image model.Attachment
+	if err := json.Unmarshal(upload.Body.Bytes(), &image); err != nil {
+		t.Fatal(err)
+	}
+	if image.ID == "" || image.MediaType != "image/png" || image.Width != 1 || image.Height != 1 || image.Size <= 0 {
+		t.Fatalf("unexpected attachment metadata: %#v", image)
+	}
+
+	get := httptest.NewRecorder()
+	server.Handler().ServeHTTP(get, localRequest(http.MethodGet, "/api/v1/attachments/"+image.ID, nil))
+	if get.Code != http.StatusOK || get.Header().Get("Content-Type") != "image/png" || !bytes.Equal(get.Body.Bytes(), testPNGBytes(t)) {
+		t.Fatalf("unexpected image response: status=%d type=%q bytes=%d", get.Code, get.Header().Get("Content-Type"), get.Body.Len())
+	}
+	etag := get.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("attachment response omitted ETag")
+	}
+	cached := httptest.NewRecorder()
+	cachedRequest := localRequest(http.MethodGet, "/api/v1/attachments/"+image.ID, nil)
+	cachedRequest.Header.Set("If-None-Match", etag)
+	server.Handler().ServeHTTP(cached, cachedRequest)
+	if cached.Code != http.StatusNotModified {
+		t.Fatalf("conditional attachment status = %d", cached.Code)
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"text": "Review this diagram", "to": []string{"claude"}, "attachments": []model.Attachment{image},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := httptest.NewRecorder()
+	request := localRequest(http.MethodPost, "/api/v1/messages", bytes.NewBuffer(payload))
+	request.Header.Set("Content-Type", "application/json")
+	server.Handler().ServeHTTP(send, request)
+	if send.Code != http.StatusAccepted {
+		t.Fatalf("send image message status = %d: %s", send.Code, send.Body.String())
+	}
+	var message model.Message
+	if err := json.Unmarshal(send.Body.Bytes(), &message); err != nil {
+		t.Fatal(err)
+	}
+	if len(message.Attachments) != 1 || message.Attachments[0].ID != image.ID {
+		t.Fatalf("message omitted canonical image: %#v", message.Attachments)
+	}
+
+	deleteReferenced := httptest.NewRecorder()
+	server.Handler().ServeHTTP(deleteReferenced, localRequest(http.MethodDelete, "/api/v1/attachments/"+image.ID, nil))
+	if deleteReferenced.Code != http.StatusConflict {
+		t.Fatalf("referenced image delete status = %d: %s", deleteReferenced.Code, deleteReferenced.Body.String())
+	}
+
+	markdown := httptest.NewRecorder()
+	server.Handler().ServeHTTP(markdown, localRequest(http.MethodGet, "/api/v1/export?format=markdown", nil))
+	if markdown.Code != http.StatusOK || !strings.Contains(markdown.Body.String(), "diagram.png") || !strings.Contains(markdown.Body.String(), image.ID) {
+		t.Fatalf("markdown export omitted image metadata: %d %q", markdown.Code, markdown.Body.String())
+	}
+
+	uploadUnused := httptest.NewRecorder()
+	server.Handler().ServeHTTP(uploadUnused, uploadImageRequest(t, "/api/v1/attachments", "unused.png", testPNGBytes(t)))
+	if uploadUnused.Code != http.StatusCreated {
+		t.Fatalf("unused upload status = %d: %s", uploadUnused.Code, uploadUnused.Body.String())
+	}
+	var unused model.Attachment
+	if err := json.Unmarshal(uploadUnused.Body.Bytes(), &unused); err != nil {
+		t.Fatal(err)
+	}
+	deleted := httptest.NewRecorder()
+	server.Handler().ServeHTTP(deleted, localRequest(http.MethodDelete, "/api/v1/attachments/"+unused.ID, nil))
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("unused image delete status = %d: %s", deleted.Code, deleted.Body.String())
+	}
+	missing := httptest.NewRecorder()
+	server.Handler().ServeHTTP(missing, localRequest(http.MethodGet, "/api/v1/attachments/"+unused.ID, nil))
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("deleted image get status = %d", missing.Code)
+	}
+}
+
+func TestAttachmentUploadRejectsNonImageAndSecurityHeadersAllowBlobPreview(t *testing.T) {
+	server, _ := newTestServer(t, "")
+
+	rejected := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rejected, uploadImageRequest(t, "/api/v1/attachments", "payload.txt", []byte("not an image")))
+	if rejected.Code != http.StatusBadRequest {
+		t.Fatalf("non-image upload status = %d: %s", rejected.Code, rejected.Body.String())
+	}
+
+	index := httptest.NewRecorder()
+	server.Handler().ServeHTTP(index, localRequest(http.MethodGet, "/", nil))
+	csp := index.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "img-src 'self' data: blob:") {
+		t.Fatalf("CSP does not allow authenticated blob previews: %q", csp)
+	}
+
+	traversal := httptest.NewRecorder()
+	server.Handler().ServeHTTP(traversal, localRequest(http.MethodGet, "/api/v1/attachments/../../etc/passwd", nil))
+	if traversal.Code == http.StatusOK {
+		t.Fatal("path traversal unexpectedly served content")
 	}
 }

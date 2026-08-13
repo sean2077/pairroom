@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/agent"
+	"github.com/sean2077/pairroom/internal/attachment"
 	"github.com/sean2077/pairroom/internal/config"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/openbrowser"
@@ -88,6 +89,9 @@ func runServe(args []string) error {
 	codexApproval := flags.String("codex-approval-policy", fileCfg.Codex.ApprovalPolicy, "Codex approval policy")
 	codexSandbox := flags.String("codex-sandbox", fileCfg.Codex.Sandbox, "Codex sandbox mode")
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	_ = configFlag
@@ -135,6 +139,11 @@ func runServe(args []string) error {
 	if err != nil {
 		return err
 	}
+	attachmentStore, err := attachment.Open(dataDir, repo)
+	if err != nil {
+		_ = eventStore.Close()
+		return err
+	}
 	claudeFactory := agent.ClaudeFactory
 	codexFactory := agent.CodexFactory
 	if *mockFlag {
@@ -157,7 +166,8 @@ func runServe(args []string) error {
 			ClientVersion: version.Current, Command: *codexCommand, Model: *codexModel, Effort: *codexEffort,
 			ApprovalPolicy: *codexApproval, Sandbox: *codexSandbox,
 		},
-		AutoStart: *autoStartFlag,
+		Attachments: attachmentStore,
+		AutoStart:   *autoStartFlag,
 	})
 	if err != nil {
 		_ = eventStore.Close()
@@ -169,7 +179,7 @@ func runServe(args []string) error {
 		_ = engine.Close()
 		return err
 	}
-	web, err := server.New(server.Config{Engine: engine, Repo: repo, Token: token})
+	web, err := server.New(server.Config{Engine: engine, Repo: repo, Token: token, Attachments: attachmentStore})
 	if err != nil {
 		_ = engine.Close()
 		return err
@@ -247,6 +257,9 @@ func runDoctor(args []string) error {
 	codexCommand := flags.String("codex-command", fileCfg.Codex.Command, "Codex executable")
 	jsonFlag := flags.Bool("json", false, "emit a machine-readable report")
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	_ = configFlag

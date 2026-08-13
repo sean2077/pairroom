@@ -2,165 +2,140 @@
 
 ## 1. 产品定义
 
-PairRoom 是面向现成顶级 Coding Agent 的本地协作控制面：用户、Claude Code 和 Codex 在同一个共享房间讨论；两个 Agent 继续运行各自官方 Harness；用户能随时介入、观察执行过程、处理审批并控制协作节奏。
+PairRoom 是面向现成顶级 Coding Agent 的本地协作控制面：用户、Claude Code 和 Codex 在一个共享房间讨论；两个 Agent 继续运行官方 Harness；用户随时介入、查看执行过程、处理审批并控制协作节奏。
 
-它不是：
+它不是新的 Agent loop、模型网关、固定流水线，也不依赖第三方多 Agent daemon。
 
-- 新的 Coding Agent 或模型客户端。
-- Claude/Codex 的统一模型 API 兼容层。
-- 固定的“规划 → 实现 → 审查”流水线。
-- 依赖第三方多 Agent daemon 的插件。
-- 默认让两个 Agent 无限制自主互答的黑盒系统。
+## 2. 核心产品原则
 
-## 2. 核心用户故事
-
-### 三方讨论
-
-开发者可以把任务同时发给 Claude 和 Codex，让二者在公共房间提出方案、暴露分歧并相互回应，而不需要复制粘贴。
-
-### 实时介入
-
-Agent 工作时，用户可以向 Claude、Codex 或双方发送新指令，并看到消息是启动 Turn、注入 Turn、进入队列、执行中、完成、取消还是失败。
-
-### 过程检查
-
-聊天时间线保持结论可读，工具、命令、计划、Diff、测试、审批、错误和会话状态在 Inspector 中按 Agent、消息和 Turn 查看。
-
-### 角色约束
-
-用户可以指定一个 Driver 和一个 Reviewer，也可以让二者以 Peer 身份讨论；切换角色不需要重建房间。
-
-### 可恢复与可审计
-
-关闭应用后，消息、状态和供应商 session/thread ID 仍存在；失败重试不改历史，所有重要状态变化可从事件日志重放。
-
-## 3. 非功能目标
-
-| 目标 | 验收方向 |
+| 原则 | 含义 |
 |---|---|
-| 独立性 | Go 核心无第三方 module；不依赖外部编排 daemon |
-| 原生性 | 只驱动官方 Claude Code/Codex Harness，不重写 Agent loop |
-| 本地优先 | 默认 loopback；状态留在本机 |
-| 可观察性 | transport 与 processing 分开；运行事件可关联消息 |
-| 可恢复性 | 事件重放恢复持久状态；瞬态状态异常退出后明确收口 |
-| 防失控 | 最大 hop、停止标记、用户抢占、fail-closed 审批 |
-| 低部署成本 | 单个 Go 二进制内嵌 Web UI |
-| 跨平台 | Linux/Windows/macOS 构建通过 |
+| Harness 原生 | 官方 Claude Code/Codex 负责推理、工具、会话和上下文 |
+| 三方可见 | 用户与两位 Agent 共享同一公共时间线 |
+| 结论与过程分层 | 聊天保留可读结论，工具/命令/Diff 在 Inspector |
+| 用户优先 | 用户新指令阻止旧结果继续自动扩散 |
+| 权限不降级 | 未知高权限请求 fail closed |
+| 消息不丢失 | 先持久化再提交，失败可审计重试 |
+| 单写入者优先 | 默认 Driver + Reviewer，而不是两个隐式 Writer |
+| 最新优先 | 跟随当前官方协议，不维护历史版本矩阵 |
 
-## 4. 已交付：v0.1.0 MVP
+## 3. 已交付
 
-- 单房间、单仓库、本机单用户。
-- Claude Code stream-json adapter。
-- Codex app-server adapter。
-- Mock adapter。
-- 共享 IM 时间线、@mention、引用回复。
-- Manual / Mentions / Roundtable。
-- Driver / Reviewer / Peer。
-- 基础投递状态、启停/重启/打断。
-- Codex 审批、Git status/diff。
-- Append-only JSONL + SSE。
-- loopback 默认、Token、同源和安全头。
+### v0.1.0：MVP
 
-## 5. 已交付：v0.2.0 可靠性与可观察性
+- Claude stream-json、Codex App Server、Mock Adapter；
+- 三方时间线、@mention、引用；
+- Manual/Mentions/Roundtable；
+- Driver/Reviewer/Peer；
+- 启停、重启、打断、Codex 审批；
+- Git status/diff；
+- JSONL + SSE；
+- 本地安全默认值。
 
-### 运行时兼容
+### v0.2.0：可靠性与可观察性
 
-- [x] `pairroom doctor --json`。
-- [x] 可执行文件路径、版本、协议入口和能力探测。
-- [x] Claude 必需/可选参数协商与能力降级。
-- [x] UI 展示 RuntimeInfo、实际版本、协议、能力和警告。
-- [x] Codex 请求只使用公开稳定字段。
+- Delivery 与 Processing 分离；
+- started/injected/queued 与 waiting/working/completed 等状态；
+- per-target 可审计重试；
+- RuntimeInfo、doctor、stall 提醒；
+- 重启收口和 schema 迁移；
+- 搜索、主题、导出和 Inspector correlation；
+- DNS rebinding、同源和敏感导出防护。
 
-### 消息生命周期
+### v0.3.0：富对话、原生审批与角色保护
 
-- [x] Delivery 与 Processing 分离。
-- [x] waiting/working/completed/cancelled/failed durable projection。
-- [x] 同一 Codex Turn 内多次 steer 的输入全部 settle。
-- [x] 运行时失败不覆盖已成功的 transport disposition。
-- [x] stop/restart/process exit 对遗留输入和审批收口。
-- [x] 可审计 per-target retry。
-- [x] Turn 无事件提醒。
+#### 富对话
 
-### 产品体验
+- [x] 安全 Markdown：标题、引用、列表、任务、表格、代码块；
+- [x] 引用跳转、线程聚焦、复制、长消息折叠；
+- [x] 搜索、参与者筛选、桌面/移动响应式布局；
+- [x] PNG/JPEG/GIF/WebP 持久化附件；
+- [x] 文件选择、拖拽、剪贴板粘贴；
+- [x] 图片画廊、灯箱、前后导航、缩放、原图；
+- [x] Agent 生成的仓库内图片自动发现和预览；
+- [x] 远程 Markdown 图片不自动加载。
 
-- [x] 消息搜索。
-- [x] 深色/浅色主题。
-- [x] Markdown/JSON transcript export。
-- [x] 从消息筛选关联 Turn 与 Inspector 事件。
-- [x] SSE gap 自动重新同步。
-- [x] 更清晰的运行时和处理状态提示。
+#### Harness 原生集成
 
-### 数据与安全
+- [x] Claude 原生多模态 image content blocks；
+- [x] Codex App Server `localImage`；
+- [x] Claude initialize/control handshake；
+- [x] Claude 工具权限和 `AskUserQuestion` 统一 UI；
+- [x] Codex/Claude 未知高权限请求 fail closed；
+- [x] Claude Reviewer plan mode + 写工具拒绝；
+- [x] Codex Reviewer read-only sandbox。
 
-- [x] Store schema metadata、旧版升级和未来版本拒绝。
-- [x] JSONL 半行修复后安全继续追加。
-- [x] Tokenless loopback Host 检查，降低 DNS rebinding 风险。
-- [x] 普通 transcript 默认不导出 verbose Inspector events。
-- [x] 移除大小写冲突文档文件，避免 Windows/macOS 包解压覆盖。
+#### 附件安全
 
-## 6. 下一阶段：v0.3 工作区安全与真实环境兼容
+- [x] 不透明 ID，不暴露 host path；
+- [x] 内容类型、真实解码、维度和像素上限；
+- [x] SHA-256 不可变校验；
+- [x] symlink/仓库逃逸防护；
+- [x] 已进入 transcript 的附件不可删除；
+- [x] ETag、nosniff、CSP 和认证读取。
 
-优先级高于增加更多 Agent。
+## 4. 下一阶段：v0.4 工作区隔离与过程卡片
 
-### P0：真实 CLI dogfooding
+### P0：Reviewer 工作区隔离
 
-1. 建立 Claude Code/Codex 版本兼容矩阵。
-2. 保存脱敏协议 fixture，加入回放回归测试。
-3. 完成真实账号下 session/thread resume、interrupt、approval、compaction 验证。
-4. 为协议变化提供明确的 degraded/unsupported 状态，而不是隐式猜测。
-5. 增加 `pairroom diagnostics` 支持包：只导出脱敏版本、状态和错误，不导出代码内容。
+目标不是仅依赖提示词，而是让“只读审查”在工作区层更容易验证。
 
-### P0：单写入者强约束
+1. 设计 Reviewer snapshot/worktree，不让 Reviewer 直接修改 Driver 工作树；
+2. 在审查开始时记录 source HEAD、dirty patch hash、untracked manifest；
+3. 将原生 permission/sandbox、文件系统能力与实际路径同时显示；
+4. Role 切换必须在安全边界完成，并解释 session/cwd 影响；
+5. 隔离不可用的平台明确降级，不宣称绝对只读。
 
-1. 可选 Driver worktree。
-2. Reviewer 只读 checkout 或操作系统级写保护。
-3. 展示“角色策略”与“实际 sandbox 能力”的差异。
-4. 发现两个 Agent 都具备写权限时给出显著警告。
-5. Agent 角色切换时安全迁移工作区绑定。
+这里需要特别处理未提交修改：普通 detached worktree 看不到 Driver 的 dirty state，因此不能只做 `git worktree add` 就声称已完成审查隔离。
 
-### P1：Inspector 结构化
+### P0：结构化 Work Inspector
 
-1. 命令状态、exit code、持续时间。
-2. 文件变化列表和 per-file diff。
-3. 测试结果卡片。
-4. Token、费用和耗时的 per-turn / session 汇总。
-5. 可折叠原始 vendor event，默认展示 canonical 摘要。
+- 命令卡片：状态、exit code、持续时间、可折叠输出；
+- 文件变化卡片：新增/修改/删除、per-file diff；
+- 测试卡片：框架、通过/失败、耗时、失败摘要；
+- Plan 与 Finding 卡片；
+- 每 Turn 的 token、费用和耗时汇总；
+- Vendor 原始事件默认折叠，必要时展开。
 
 ### P1：消息控制
 
-1. 显式 Cancel/Supersede 单条目标处理。
-2. “补充当前指令”与“替换当前指令”分开。
-3. 用户消息对两个 Agent 的独立投递/处理时间线。
-4. 失败重试可选择复用或新建 thread。
-5. 会话归档、标题和任务模板。
+- 区分“补充当前 Turn”和“替换/取消旧指令”；
+- 对 Claude/Codex 分别显示 steer/queue/cancel 结果；
+- 显式 supersede 单个目标；
+- 会话标题、归档、固定消息和任务模板；
+- 图片标注、局部裁剪和将截图区域作为新附件发送。
 
-## 7. v0.4 多房间与可扩展运行时
+### P1：诊断与真实 dogfooding
 
-- 一个 daemon 承载多个 workspace/room。
-- 房间列表、归档、模板和标签。
-- 本地 Unix socket / Windows named pipe 管理 API。
-- RuntimeAdapter 外部进程协议；核心仍不依赖第三方编排框架。
-- 可选 Gemini CLI/OpenCode adapter。
-- 可选桌面壳；Web daemon 仍是核心。
-- 远程 Worker 仅通过明确配对和加密隧道连接。
+- 最新官方版本的自动 smoke fixture，而不是历史版本矩阵；
+- 脱敏 diagnostics 包；
+- 真实长 Turn、resume、compaction、子 Agent 和审批回放；
+- Windows/macOS/Linux 各至少一条真实使用路径。
 
-## 8. v1.0 稳定门槛
+## 5. v0.5 多房间与可扩展 Runtime
 
-v1.0 的门槛不是“支持更多模型”，而是：
+- 一个 daemon 承载多个 room/workspace；
+- 房间列表、归档、标签和模板；
+- Unix socket / Windows named pipe 管理 API；
+- RuntimeAdapter 外部进程协议；
+- 可选 Gemini CLI/OpenCode；
+- 可选桌面壳，Web daemon 仍是核心；
+- 远程 Worker 只经明确配对和加密隧道连接。
 
-- Claude/Codex 兼容策略清晰且自动验证。
-- 中断、排队、恢复和审批在异常退出后不产生幽灵状态。
-- 默认共享工作区不会发生两个 Writer 的隐式并发修改。
-- 所有自动路由都有可解释原因和可重放事件。
-- 安全威胁模型、升级/迁移、备份恢复经过验证。
-- 至少一个月真实项目 dogfooding，无数据损坏和未解释自动回路。
+## 6. v1.0 门槛
 
-## 9. 明确不做
+- 消息、审批、中断、排队、恢复无幽灵状态；
+- Reviewer 工作区边界可观察且不会隐式成为 Writer；
+- 所有自动路由都有可解释原因和事件；
+- 附件、备份、迁移和恢复经破坏性测试；
+- 至少一个月真实项目 dogfooding，无数据损坏和未解释自动回路；
+- 安全威胁模型和发布流程稳定。
 
-- 托管模型 Key 或转售模型调用。
-- 训练、微调或内建专有模型。
-- 替代 GitHub/GitLab 的代码评审和 CI。
-- 默认上传私有代码到 PairRoom 服务。
-- 依靠解析终端 ANSI 文本判断协议状态。
-- 模拟键盘并声称可靠实现 active-turn steering。
-- 用一个通用 Agent loop 包装所有模型并宣称等价于官方 Harness。
+## 7. 明确不做
+
+- 托管或转售模型 Key；
+- 重写 Claude/Codex Agent loop；
+- 用通用模型 API 假装等价于官方 Harness；
+- 依赖 ANSI 文本或键盘模拟判断 Turn 状态；
+- 默认把私有代码/图片上传到 PairRoom 服务；
+- 替代 GitHub/GitLab Review 与 CI。

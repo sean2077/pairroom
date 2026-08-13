@@ -298,7 +298,7 @@ func (c *CodexAdapter) Submit(ctx context.Context, input model.AgentInput) (mode
 
 	if active {
 		c.stageWireInput(input)
-		result, err := c.call(ctx, "turn/steer", codexTurnSteerParams(threadID, turnID, text, input.MessageID))
+		result, err := c.call(ctx, "turn/steer", codexTurnSteerParams(threadID, turnID, text, input))
 		c.unstageWireInput(input.MessageID)
 		if err == nil {
 			_ = result
@@ -379,14 +379,14 @@ func (c *CodexAdapter) Submit(ctx context.Context, input model.AgentInput) (mode
 	return model.DeliveryStarted, nil
 }
 
-func codexTurnSteerParams(threadID, turnID, text, clientUserMessageID string) map[string]any {
+func codexTurnSteerParams(threadID, turnID, text string, input model.AgentInput) map[string]any {
 	params := map[string]any{
 		"threadId":       threadID,
 		"expectedTurnId": turnID,
-		"input":          []any{map[string]any{"type": "text", "text": text}},
+		"input":          codexInputItems(text, input.Attachments),
 	}
-	if clientUserMessageID != "" {
-		params["clientUserMessageId"] = clientUserMessageID
+	if input.MessageID != "" {
+		params["clientUserMessageId"] = input.MessageID
 	}
 	return params
 }
@@ -394,7 +394,7 @@ func codexTurnSteerParams(threadID, turnID, text, clientUserMessageID string) ma
 func (c *CodexAdapter) turnStartParams(threadID, text string, input model.AgentInput) map[string]any {
 	params := map[string]any{
 		"threadId":       threadID,
-		"input":          []any{map[string]any{"type": "text", "text": text}},
+		"input":          codexInputItems(text, input.Attachments),
 		"cwd":            c.cfg.Repo,
 		"approvalPolicy": c.cfg.ApprovalPolicy,
 		"sandboxPolicy":  c.sandboxPolicy(input.Role),
@@ -409,6 +409,18 @@ func (c *CodexAdapter) turnStartParams(threadID, text string, input model.AgentI
 		params["effort"] = c.cfg.Effort
 	}
 	return params
+}
+
+func codexInputItems(text string, attachments []model.AgentAttachment) []any {
+	items := make([]any, 0, 1+len(attachments))
+	items = append(items, map[string]any{"type": "text", "text": text})
+	for _, value := range attachments {
+		if value.Path == "" || !strings.HasPrefix(strings.ToLower(value.MediaType), "image/") {
+			continue
+		}
+		items = append(items, map[string]any{"type": "localImage", "path": value.Path})
+	}
+	return items
 }
 
 func (c *CodexAdapter) legacySandbox() string {
@@ -1140,8 +1152,9 @@ func (c *CodexAdapter) sendRawResponse(id json.RawMessage, result any, rpcErr *c
 	return c.send(message)
 }
 
-func (c *CodexAdapter) ResolveApproval(ctx context.Context, approvalID, decision string) error {
+func (c *CodexAdapter) ResolveApproval(ctx context.Context, approvalID string, resolution model.ApprovalResolution) error {
 	_ = ctx
+	decision := resolution.Decision
 	allowed := map[string]bool{
 		"accept": true, "acceptForSession": true, "decline": true, "cancel": true,
 	}
@@ -1167,6 +1180,23 @@ func (c *CodexAdapter) ResolveApproval(ctx context.Context, approvalID, decision
 	// The room engine owns the user-facing approval projection after this call
 	// succeeds. serverRequest/resolved remains available for server-side clears.
 	c.setState(model.StateWorking, "")
+	return nil
+}
+
+// Codex receives sandbox policy per turn, so a role change does not require an
+// app-server restart. It must still happen at a safe turn boundary: already
+// queued or in-flight inputs retain the role/policy captured when they were
+// created and must not be relabelled midway through execution.
+func (c *CodexAdapter) SetRole(_ context.Context, role model.ParticipantRole) error {
+	if !role.Valid() {
+		return fmt.Errorf("invalid Codex role %q", role)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.state == model.StateStarting || c.state == model.StateWorking || c.state == model.StateWaiting ||
+		c.currentTurn != "" || c.startingInput != nil || len(c.wireInputs) > 0 || len(c.queued) > 0 || len(c.approvals) > 0 {
+		return errors.New("interrupt or stop Codex before changing its role")
+	}
 	return nil
 }
 

@@ -63,7 +63,7 @@ func (m *MockAdapter) Start(ctx context.Context) error {
 	m.mu.Unlock()
 	m.setState(model.StateIdle)
 	info := model.RuntimeInfo{
-		Available: true, Command: "mock", Protocol: "pairroom-mock", Version: "0.2.0",
+		Available: true, Command: "mock", Protocol: "pairroom-mock", Version: "0.3.0",
 		Model: "deterministic-mock", Capabilities: []string{"queued-input", "interrupt", "tool-events"}, ProbedAt: time.Now().UTC(),
 	}
 	emitRuntimeInfo(m.sink, m.cfg.Actor, info)
@@ -269,9 +269,11 @@ func (m *MockAdapter) Stop(ctx context.Context) error {
 	}
 }
 
-func (m *MockAdapter) ResolveApproval(context.Context, string, string) error {
+func (m *MockAdapter) ResolveApproval(context.Context, string, model.ApprovalResolution) error {
 	return ErrApprovalUnsupported
 }
+
+func (m *MockAdapter) SetRole(context.Context, model.ParticipantRole) error { return nil }
 
 func chunks(s string, n int) []string {
 	if n <= 0 || len(s) <= n {
