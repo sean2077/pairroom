@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/version"
 )
 
 type MockAdapter struct {
@@ -64,7 +65,7 @@ func (m *MockAdapter) Start(ctx context.Context) error {
 	m.mu.Unlock()
 	m.setState(model.StateIdle)
 	info := model.RuntimeInfo{
-		Available: true, Command: "mock", Protocol: "pairroom-mock", Version: "0.3.0",
+		Available: true, Command: "mock", Protocol: "pairroom-mock", Version: version.Current,
 		Model: "deterministic-mock", Capabilities: []string{"queued-input", "interrupt", "tool-events"}, ProbedAt: time.Now().UTC(),
 	}
 	emitRuntimeInfo(m.sink, m.cfg.Actor, info)

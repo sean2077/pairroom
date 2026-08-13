@@ -1,142 +1,63 @@
-# PairRoom 产品规划
+# PairRoom Product Plan
 
-## 1. 产品定义
+## Product definition
 
-PairRoom 是面向现成顶级 Coding Agent 的本地协作控制面：用户、Claude Code 和 Codex 在一个共享房间讨论；两个 Agent 继续运行官方 Harness；用户随时介入、查看执行过程、处理审批并控制协作节奏。
+PairRoom is a local collaboration control surface for existing top-tier Coding Agent Harnesses. A human, official Claude Code, and official Codex share one visible room; the official Harnesses continue to own reasoning, tools, context, sandbox, sessions, Skills, MCP, and project instructions.
 
-它不是新的 Agent loop、模型网关、固定流水线，也不依赖第三方多 Agent daemon。
+PairRoom is not a model gateway, replacement Agent loop, terminal-output parser, hosted collaboration service, or credential broker.
 
-## 2. 核心产品原则
+## 1.0 principles
 
-| 原则 | 含义 |
+| Principle | Contract |
 |---|---|
-| Harness 原生 | 官方 Claude Code/Codex 负责推理、工具、会话和上下文 |
-| 三方可见 | 用户与两位 Agent 共享同一公共时间线 |
-| 结论与过程分层 | 聊天保留可读结论，工具/命令/Diff 在 Inspector |
-| 用户优先 | 用户新指令阻止旧结果继续自动扩散 |
-| 权限不降级 | 未知高权限请求 fail closed |
-| 消息不丢失 | 先持久化再提交，失败可审计重试 |
-| 单写入者优先 | 默认 Driver + Reviewer，而不是两个隐式 Writer |
-| 最新优先 | 跟随当前官方协议，不维护历史版本矩阵 |
+| Native Harness | PairRoom uses structured official interfaces and does not emulate Claude Code/Codex with generic model APIs. |
+| Three-party visibility | Human and both Agents share one readable public timeline. |
+| Process separation | Conclusions stay in chat; tools, commands, plans, diffs, usage, and approvals stay in the Inspector. |
+| Human priority | New human instructions can cancel/supersede stale automatic handoff. |
+| Single writer by default | Driver uses the live tree; Reviewer uses an independently materialized snapshot and native read-only policy. |
+| Durable honesty | Delivery and processing are separate, terminal states are explicit, retries create new records, and restarts settle orphaned state. |
+| Fail closed | Unsafe workspace creation, unknown privileged requests, invalid attachments, and corrupt restores are rejected. |
+| Local-first privacy | No PairRoom cloud, telemetry, hosted credentials, or automatic remote-image fetch. |
 
-## 3. 已交付
+## Delivered milestones
 
-### v0.1.0：MVP
+- **v0.1:** native adapters, shared room, routing, roles, SSE/JSONL, Git inspector, Mock mode.
+- **v0.2:** delivery/processing lifecycle, retries, runtime probing, restart settlement, export/security hardening.
+- **v0.3:** safe Markdown, native multimodal images, gallery, Claude control approvals, native Reviewer policies.
+- **v0.4:** Reviewer Git snapshot with dirty/untracked state, boundary metadata, role-switch rollback.
+- **v0.5:** append/next-turn/supersede/cancel semantics and stale-handoff suppression.
+- **v0.6:** durable structured Turn/Tool/Command/Plan/Diff/Usage summaries.
+- **v0.7:** strict verification, self-verifying backup/restore, redacted diagnostics.
+- **v0.8:** long-room pagination, drafts, unread state, notifications, enhanced image viewer.
+- **v0.9:** HttpOnly browser sessions, CSRF, query-token removal, rate limiting.
+- **v1.0:** stable contract, CI, release automation, four-platform artifacts, SBOM, provenance, operations/privacy/support documentation.
 
-- Claude stream-json、Codex App Server、Mock Adapter；
-- 三方时间线、@mention、引用；
-- Manual/Mentions/Roundtable；
-- Driver/Reviewer/Peer；
-- 启停、重启、打断、Codex 审批；
-- Git status/diff；
-- JSONL + SSE；
-- 本地安全默认值。
+## Stable 1.0 boundary
 
-### v0.2.0：可靠性与可观察性
+```text
+one daemon
+one Git repository
+one human
+one Claude Code participant
+one Codex participant
+one Driver + one Reviewer by default
+```
 
-- Delivery 与 Processing 分离；
-- started/injected/queued 与 waiting/working/completed 等状态；
-- per-target 可审计重试；
-- RuntimeInfo、doctor、stall 提醒；
-- 重启收口和 schema 迁移；
-- 搜索、主题、导出和 Inspector correlation；
-- DNS rebinding、同源和敏感导出防护。
+The stable contract does not include multi-user identity, remote workers, cloud synchronization, team RBAC, hosted TLS, or additional Agent vendors.
 
-### v0.3.0：富对话、原生审批与角色保护
+## Post-1.0 priorities
 
-#### 富对话
+1. Real-world dogfooding reports from current official Claude Code and Codex releases.
+2. Better per-file Diff/test cards and explicit verification artifacts in the shared room.
+3. Optional OS/container-grade Reviewer isolation without weakening the portable default.
+4. Room archive/list management while keeping each active room single-repository.
+5. Structured external RuntimeAdapter protocol only after the native two-Agent path remains stable.
 
-- [x] 安全 Markdown：标题、引用、列表、任务、表格、代码块；
-- [x] 引用跳转、线程聚焦、复制、长消息折叠；
-- [x] 搜索、参与者筛选、桌面/移动响应式布局；
-- [x] PNG/JPEG/GIF/WebP 持久化附件；
-- [x] 文件选择、拖拽、剪贴板粘贴；
-- [x] 图片画廊、灯箱、前后导航、缩放、原图；
-- [x] Agent 生成的仓库内图片自动发现和预览；
-- [x] 远程 Markdown 图片不自动加载。
+## Explicit non-goals
 
-#### Harness 原生集成
-
-- [x] Claude 原生多模态 image content blocks；
-- [x] Codex App Server `localImage`；
-- [x] Claude initialize/control handshake；
-- [x] Claude 工具权限和 `AskUserQuestion` 统一 UI；
-- [x] Codex/Claude 未知高权限请求 fail closed；
-- [x] Claude Reviewer plan mode + 写工具拒绝；
-- [x] Codex Reviewer read-only sandbox。
-
-#### 附件安全
-
-- [x] 不透明 ID，不暴露 host path；
-- [x] 内容类型、真实解码、维度和像素上限；
-- [x] SHA-256 不可变校验；
-- [x] symlink/仓库逃逸防护；
-- [x] 已进入 transcript 的附件不可删除；
-- [x] ETag、nosniff、CSP 和认证读取。
-
-## 4. v0.4–v0.8 已交付
-
-### v0.4：Reviewer 工作区隔离
-
-- Git HEAD + dirty tracked patch + untracked regular files 的独立快照；
-- 快照来源、摘要、dirty 状态和只读强度可观察；
-- 角色交换在安全边界执行，失败回滚；
-- Claude/Codex 原生 Reviewer 策略与工作区路径同时约束。
-
-### v0.5：显式消息控制
-
-- `append`、`next_turn`、`supersede` 三种意图；
-- 单目标取消、可审计重试和过期自动接力抑制；
-- Codex active turn steering 与 next-turn 排队语义分离。
-
-### v0.6：持久化 Work Inspector
-
-- Turn、工具、命令、计划、Diff、用量和完成状态的紧凑摘要；
-- 高频输出保持有界，重启后仍可查看关键过程；
-- 消息到 Turn/工作项的关联。
-
-### v0.7：验证、备份与恢复
-
-- `verify`、`backup`、`restore`、`diagnostics`；
-- 清单、SHA-256、路径穿越、重复文件、超限和原子替换防护；
-- diagnostics 默认不包含消息正文和附件字节。
-
-### v0.8：长房间与图片查看
-
-- 首屏窗口化、向前分页和滚动位置保持；
-- 每房间草稿、未读、桌面通知；
-- 图片旋转、Fit/1:1、25%–800% 缩放和复制。
-
-## 5. v0.9 已交付：发布前安全
-
-- 一次性 fragment 启动凭据换取 HttpOnly 浏览器会话；
-- Token 不进入 URL 查询或 Web Storage；
-- 浏览器写操作 CSRF、会话滑动过期和显式撤销；
-- query token 全面禁用；
-- API 防滥用速率限制；
-- 本地/远程监听安全模式保持明确。
-
-## 6. 下一阶段：v1.0 发布工程
-
-- 稳定产品契约、CI、跨平台构建与发布脚本；
-- SBOM、构建溯源、校验值和验收门禁；
-- 操作、隐私、支持、贡献与 PR 文档；
-- 最终破坏性恢复、Mock E2E、竞态和发行包复验。
-
-## 7. v1.0 门槛
-
-- 消息、审批、中断、排队、恢复无幽灵状态；
-- Reviewer 工作区边界可观察且不会隐式成为 Writer；
-- 所有自动路由都有可解释原因和事件；
-- 附件、备份、迁移和恢复经破坏性测试；
-- 安全威胁模型、发布流程和跨平台构建稳定；
-- 真实 Claude/Codex 账号验证仍由发布者在目标机器执行，不以 Mock 冒充。
-
-## 8. 明确不做
-
-- 托管或转售模型 Key；
-- 重写 Claude/Codex Agent loop；
-- 用通用模型 API 假装等价于官方 Harness；
-- 依赖 ANSI 文本或键盘模拟判断 Turn 状态；
-- 默认把私有代码/图片上传到 PairRoom 服务；
-- 替代 GitHub/GitLab Review 与 CI。
+- hosting or reselling model keys;
+- replacing vendor Agent loops;
+- parsing ANSI terminal output to infer state;
+- silently uploading private code or images to a PairRoom service;
+- replacing GitHub/GitLab PR review or CI;
+- maintaining a permanent compatibility matrix for obsolete vendor CLIs.

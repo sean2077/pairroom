@@ -1,328 +1,188 @@
-# PairRoom v0.3.0 验证记录
+# PairRoom 1.0 Validation Record
 
-验证日期：2026-08-13
+Validation date: **2026-08-14**
 
-## 1. 验证范围
+This document distinguishes PairRoom-controlled verification from vendor-network verification. The release pipeline can fully exercise PairRoom's room, storage, browser API, Mock adapters, workspace isolation, media, archive, and packaging behavior. It cannot honestly claim a real Claude Code/Codex model run unless both official CLIs are installed and authenticated in the build environment.
 
-v0.3.0 的验证重点从“能同时驱动两个 Agent”扩展到“能长期阅读、介入和审计三方协作”：
+## 1. Source checks
 
-- 富 Markdown 与安全渲染；
-- 图片选择、拖拽、剪贴板上传、持久化、预览和灯箱；
-- 同一图片进入 Claude 原生 image block 与 Codex `localImage` 输入；
-- Agent 最终回答引用仓库内图片时的安全导入；
-- 搜索、参与者筛选、引用跳转、线程聚焦、长消息折叠和过程关联；
-- Claude native control handshake、工具审批与 `AskUserQuestion`；
-- Claude Reviewer plan/write deny 与 Codex Reviewer read-only policy；
-- Attachment 认证、不可变哈希、路径边界和删除生命周期；
-- v0.2 已有的 Delivery/Processing、重试、崩溃恢复和 JSONL 语义回归；
-- 桌面与移动端真实浏览器运行；
-- 四个平台静态交叉编译。
-
-## 2. 静态与自动测试
-
-执行：
+The following release gate succeeds on the retained `release/v1.0.0` branch:
 
 ```bash
-gofmt -w $(find . -name '*.go' -type f)
+make check
+```
+
+It runs:
+
+```text
 go test -count=1 ./...
 go test -race -count=1 ./...
 go vet ./...
+gofmt cleanliness
 node --check internal/server/assets/app.js
 node --check internal/server/assets/richtext.js
+go list -m all dependency assertion
 git diff --check
-go list -m all
 ```
 
-结果：全部通过。
+The source contains **111 top-level Go test functions**. Race-enabled tests pass across all testable packages.
 
-当前共有 **90 个顶层 Go 测试函数**：
+Coverage snapshot:
 
-```text
-cmd/pairroom            2
-internal/agent         37
-internal/attachment     8
-internal/config         4
-internal/prompt         3
-internal/room          19
-internal/server        11
-internal/store          6
-```
+| Package | Statement coverage |
+|---|---:|
+| `internal/agent` | 46.5% |
+| `internal/archive` | 69.5% |
+| `internal/attachment` | 62.1% |
+| `internal/config` | 80.0% |
+| `internal/prompt` | 75.0% |
+| `internal/room` | 71.0% |
+| `internal/server` | 65.2% |
+| `internal/store` | 69.2% |
+| `internal/version` | 100.0% |
+| `internal/workspace` | 68.9% |
 
-重点覆盖：
+Coverage is used as a diagnostic rather than a release percentage gate. The most important state transitions, archive rejection paths, workspace failure paths, browser-session boundary, and adapter correlation logic have focused tests.
 
-- Claude control initialize、tool approval、`AskUserQuestion` 结构化答案、Reviewer 写请求 fail closed；
-- Claude 文本 + 多图片原生内容块及附件内容变化拒绝；
-- Codex text + `localImage`、`turn/start`、多次 `turn/steer`、输入关联和审批；
-- Codex 活跃 Turn、队列或未决审批期间拒绝角色切换；
-- 图片真实格式检测、解码、大小/边长/像素限制、SHA-256 校验；
-- attachment ID/path traversal、symlink content 与 repository escape 拒绝；
-- Message 只接受 canonical attachment metadata，Host path 只到 Adapter 边界；
-- Agent 最终回答引用仓库图片后投影到公共消息；
-- 图片上传、认证读取、ETag、未引用删除和 transcript 引用保护；
-- Delivery/Processing、retry、stop/restart、approval expiry；
-- Store schema 3、未来 schema 拒绝、损坏尾行修复；
-- API health/snapshot/message/attachment/export/SSE/security headers。
-
-## 3. 覆盖率快照
-
-```text
-cmd/pairroom          20.2%
-internal/agent        48.5%
-internal/attachment   62.1%
-internal/config       80.0%
-internal/prompt       75.9%
-internal/room         70.7%
-internal/server       62.9%
-internal/store        69.2%
-全项目 statement      55.8%
-```
-
-CLI 启动壳层、浏览器打开逻辑和纯数据类型仍主要由端到端路径覆盖。后续应继续提高真实 Adapter 异常事件、审批断线和 Work Inspector 结构化卡片的覆盖率。
-
-## 4. Mock 三方讨论端到端
-
-使用本次源码构建的 Linux 二进制，在临时 Git 仓库和独立 data directory 中启动：
+## 2. Full Mock collaboration and recovery smoke test
 
 ```bash
-pairroom serve \
-  --repo <temporary-repo> \
-  --data-dir <temporary-data> \
-  --listen 127.0.0.1:<free-port> \
-  --mock \
-  --no-browser
+make smoke
 ```
 
-执行流程：
+The smoke test builds PairRoom, creates a temporary Git repository, starts the daemon with both Mock Harnesses, then exercises:
 
-1. 等待 health 成功；
-2. 向 Claude 与 Codex 同时发送 `@all`；
-3. 等待双方首轮和 mention 自动接力结束；
-4. 检查所有 Agent processing 进入终态且参与者回到 idle；
-5. 导出 Markdown、普通 JSON、取证 JSON；
-6. 检查事件日志、Store schema 和 Git Inspector；
-7. 正常停止 daemon。
+1. human message delivered to Claude and Codex;
+2. independent Driver/Reviewer workspace assignment;
+3. durable Turn summaries;
+4. raster-image upload and attachment transcript;
+5. bounded snapshot plus cursor message API;
+6. graceful daemon shutdown;
+7. strict room verification;
+8. self-verifying backup creation;
+9. restore into a fresh directory;
+10. strict verification of restored data;
+11. redacted diagnostics generation.
 
-结果：
+Observed machine-readable result:
 
 ```json
 {
-  "version": "0.3.0",
-  "messages": 5,
-  "latest_seq": 87,
-  "initial_delivery": {
-    "claude": "started",
-    "codex": "started"
-  },
-  "initial_processing": {
-    "claude": "completed",
-    "codex": "completed"
-  },
-  "open_processing": 0,
-  "event_log_lines": 87,
-  "metadata_schema": 3,
-  "normal_json_has_events": false,
-  "forensic_json_events": 87,
-  "git_status_ok": true
+  "pairroom_version": "1.0.0",
+  "message_count": 5,
+  "turn_count": 3,
+  "latest_seq": 88,
+  "attachment_messages": 1,
+  "verification_ok": true,
+  "restored_verification_ok": true,
+  "event_count": 96,
+  "attachment_count": 1
 }
 ```
 
-原始结果：[`validation/v0.3.0-mock-e2e.json`](validation/v0.3.0-mock-e2e.json)。
+The complete result is in [`validation/v1.0.0-mock-e2e.json`](validation/v1.0.0-mock-e2e.json). The diagnostics archive hash varies because the archive records current timestamps.
 
-## 5. 富对话真实浏览器 E2E
+## 3. Reviewer workspace verification
 
-使用系统 Chromium + Playwright 连接实际运行的 PairRoom Mock daemon，而不是静态 HTML fixture。测试页面尺寸为桌面 `1440×1000` 和移动端 `430×932`。
+Tests create temporary Git repositories containing:
 
-实际操作：
+- committed HEAD;
+- dirty tracked text and binary changes;
+- untracked regular files;
+- unsafe symlink cases;
+- repeated refresh/cleanup and role-switch rollback.
 
-1. 通过文件选择器同时上传两张 PNG；
-2. 发送包含标题、引用、表格、任务列表、Go 代码块和 Markdown 图片引用的消息；
-3. 等待 Claude/Codex 产生多轮公共消息；
-4. 验证图片内联、同消息画廊、灯箱前后切换和缩放；
-5. 验证引用回复、消息到 Inspector 的关联筛选；
-6. 验证全文搜索和 Agent/用户筛选；
-7. 发送远程 Markdown 图片，确认浏览器没有自动请求；
-8. 发送长消息，验证折叠和展开；
-9. 捕获桌面、灯箱和移动端截图；
-10. 记录 browser console/page errors 与 snapshot。
+The Reviewer snapshot must reproduce the source state without changing the Driver tree. Unsafe symlinks, invalid patch application, unavailable HEAD, or unsafe role transition fail explicitly. POSIX read-only enforcement and Windows advisory boundary metadata are separately represented.
 
-结果：
+## 4. Message and Turn lifecycle verification
 
-```json
-{
-  "pairroom_version": "0.3.0",
-  "message_count": 10,
-  "agent_messages": {
-    "claude": 4,
-    "codex": 3
-  },
-  "first_user_attachment_count": 2,
-  "first_user_attachment_media_types": [
-    "image/png",
-    "image/png"
-  ],
-  "markdown": {
-    "heading": true,
-    "table": true,
-    "code_block": true,
-    "task_list": true,
-    "inline_image": true
-  },
-  "lightbox": {
-    "gallery_count": 2,
-    "zoom_verified": true
-  },
-  "external_image_auto_fetched": false,
-  "console_errors": [],
-  "page_errors": []
-}
-```
+Focused tests cover:
 
-证据：
+- pending/started/injected/queued/failed/skipped delivery;
+- waiting/working/completed/cancelled/failed/superseded processing;
+- append, next-turn, supersede, per-target cancel, and retry;
+- stale human-message precedence and hop limits;
+- Codex current-Turn steer versus next-Turn queue;
+- Claude queue/cancel and process-exit settlement;
+- multiple inputs correlated to one vendor Turn;
+- restart settlement of orphaned processing and approvals;
+- durable bounded Turn/Tool/Command/Plan/Diff/Usage summaries.
 
-- [桌面时间线](images/pairroom-v0.3-desktop.png)
-- [图片灯箱](images/pairroom-v0.3-lightbox.png)
-- [移动端布局](images/pairroom-v0.3-mobile.png)
-- [机器可读结果](validation/v0.3.0-rich-conversation-e2e.json)
+## 5. Browser/API security verification
 
-该测试证明 PairRoom 自身的浏览器、API、SSE、媒体库和 Mock Runtime 链路可以共同工作；它不证明真实供应商模型一定会正确理解任意图片。
+Server and browser-asset tests cover:
 
-## 6. 强制终止与恢复
+- URL-fragment bootstrap instead of query Token;
+- HttpOnly, SameSite=Strict browser-session cookie;
+- session sliding expiry and revocation;
+- CSRF rejection/acceptance for browser mutations;
+- authenticated SSE with the browser cookie;
+- query Token rejection for all endpoints;
+- Bearer API compatibility;
+- same-origin and Host/DNS-rebinding checks;
+- fixed-window API rate limiting;
+- CSP, `nosniff`, frame, referrer, and permissions headers;
+- absence of Token persistence in `sessionStorage` or `localStorage`;
+- JavaScript syntax and embedded asset serving.
 
-在 Mock Agent 的 ProcessingState 为 `working` 时强制终止 PairRoom，然后使用同一 data directory 和 `--auto-start=false` 重启。
+The retained v0.3 browser E2E screenshots continue to document the rich conversation and lightbox UI. The 1.0 release environment had a managed system Chromium policy that blocked local navigation, so no new Chromium screenshot is represented as having passed. This does not affect the Go/HTTP/session tests above, but a maintainer browser smoke remains part of the public-release checklist.
 
-结果：
+## 6. Attachment verification
 
-```json
-{
-  "before": {
-    "delivery": "started",
-    "processing": "working",
-    "participant": "working"
-  },
-  "after": {
-    "delivery": "started",
-    "processing": "cancelled",
-    "detail": "PairRoom restarted before the native runtime reported completion",
-    "participant": "stopped"
-  }
-}
-```
+Tests and smoke flow verify:
 
-这验证了 transport 已接受的事实不会被覆盖，但无法确认完成的运行状态会被明确取消，不会永久显示为 Working。
+- PNG/JPEG/GIF/WebP signature and decode checks;
+- per-image, per-message, dimension, and pixel limits;
+- opaque attachment IDs and absence of host paths in transcript JSON;
+- immutable SHA-256 validation at browser and Harness boundaries;
+- authenticated media reads, ETag, CSP, and `nosniff`;
+- symlink/repository escape rejection for Agent-generated images;
+- remote Markdown images not auto-fetched;
+- durable attachment references surviving backup and restore.
 
-原始结果：[`validation/v0.3.0-restart-e2e.json`](validation/v0.3.0-restart-e2e.json)。
+## 7. Archive and corruption verification
 
-## 7. 图片安全与生命周期验证
+Archive tests cover:
 
-自动测试和浏览器 E2E共同验证：
+- event sequence, metadata schema, room identity, attachment manifest, size, and SHA-256 verification;
+- partial final JSONL line recovery;
+- mid-log corruption rejection;
+- archive traversal, absolute path, links, duplicate paths, undeclared files, oversized entries, and hash mismatch rejection;
+- atomic forced restore preserving the prior destination until validation succeeds;
+- diagnostics redaction of message text and attachment bytes.
+
+## 8. Native runtime boundary
+
+The release environment reports:
 
 ```text
-formats              PNG / JPEG / GIF / WebP
-max per image         5 MiB
-max per message       8 images / 20 MiB
-max side              8000 px
-max decoded pixels    64 MP
+Git: available
+Claude Code CLI: not installed
+Codex CLI: not installed
 ```
 
-拒绝项：
+See [`validation/v1.0.0-doctor.json`](validation/v1.0.0-doctor.json).
 
-- 扩展名伪装的非图片；
-- 只有签名但无法解码的截断图片；
-- 超限边长/像素；
-- 无效 attachment ID；
-- symlink 替换后的附件文件；
-- 同大小内容篡改；
-- 仓库外路径和 symlink escape；
-- SVG/HTML/任意二进制；
-- 自动加载远程 Markdown 图片；
-- 删除已被 durable transcript 引用的附件。
+Therefore this validation does **not** claim:
 
-浏览器只通过认证 API 获取图片 Blob；本机绝对路径不会进入 Message、Snapshot、Event 或导出。
+- a real authenticated Claude Code long Turn;
+- a real Codex `turn/steer` network/model round trip;
+- current vendor approval prompts against a live account;
+- real Skills/MCP/Hooks and long-context compaction/resume;
+- Windows vendor sandbox behavior on a physical Windows host.
 
-## 8. Runtime 协议测试边界
+The adapter request/response shapes, control state machines, image input encoding, approvals, role policies, process exits, and correlation are covered by fixtures and unit tests. Before using an important repository, run `pairroom doctor` and one full real session on the target machine.
 
-当前容器没有安装 `claude` 和 `codex`。`pairroom doctor --json` 正确报告：
+## 9. Release artifact gate
 
-```json
-{
-  "pairroom": "0.3.0",
-  "git": {"available": true},
-  "runtimes": {
-    "claude": {"error": "... executable file not found ..."},
-    "codex": {"error": "... executable file not found ..."}
-  },
-  "ok": false
-}
-```
+`scripts/release.sh` performs four static cross-builds and generates source ZIP/TAR.GZ, SHA-256, SPDX 2.3 SBOM, build provenance, and version evidence. `scripts/verify-artifacts.sh` then checks:
 
-完整结果：[`validation/v0.3.0-doctor.json`](validation/v0.3.0-doctor.json)。
+- required artifact set;
+- all checksums;
+- ELF/PE/Mach-O architecture signatures;
+- source archive integrity;
+- embedded version/commit/build date;
+- SBOM/provenance consistency;
+- checksum coverage of every release file.
 
-因此本次实际证明的是：
-
-- PairRoom 房间、媒体、浏览器、路由、持久化、审批投影和 Mock E2E；
-- Claude/Codex 当前结构化输入输出的编码、解析、状态机和 fixture 单测；
-- Claude 图片 block、control response、Reviewer policy 的构造；
-- Codex `localImage`、Turn steer、审批和 read-only policy 的构造。
-
-尚未在本执行环境实际证明：
-
-- 真实账号登录与供应商网络；
-- 当前真实 Claude Code 对 control handshake 的完整 round-trip；
-- 真实 Codex App Server 的图片 Turn、steer 和审批 round-trip；
-- 长会话 compaction/resume、真实 Skills/MCP/Hooks；
-- Windows/macOS 上的真实 sandbox/permission 行为。
-
-这些应在安装最新官方 CLI 的开发机，先用非关键仓库完成 smoke test。PairRoom 不为历史版本维护兼容矩阵。
-
-## 9. 独立性
-
-```bash
-go list -m all
-```
-
-输出只有：
-
-```text
-github.com/sean2077/pairroom
-```
-
-Go 核心没有第三方 module；前端没有 npm dependency、bundler 或 CDN runtime dependency。
-
-## 10. 跨平台构建
-
-发行前构建：
-
-```text
-linux/amd64
-windows/amd64
-macOS arm64
-macOS amd64
-```
-
-统一使用：
-
-```text
-CGO_ENABLED=0
--trimpath
--buildvcs=false
--ldflags=-s -w
-```
-
-Linux 产物执行 `pairroom version` 返回 `pairroom 0.3.0`。本次构建 SHA-256：
-
-```text
-8f7444dfde365ab9bede0bd9461f958250fe79fc31c0a72605c10eddc47fe0f6  pairroom-darwin-amd64
-8adf308b8ec2a19d426d1309841a37d3f11463ce3b8e193b82262003a3fedcbc  pairroom-darwin-arm64
-a2fd124083e4dd3d0cfa59a149f5ea0924f6aaa637a95ae6f14e20df2c77f5ed  pairroom-linux-amd64
-a610130b8b49fae27e15b7ad64295c52aa080abbe6e0a1c81740e3c797511920  pairroom-windows-amd64.exe
-```
-
-## 11. 可信结论
-
-v0.3.0 已达到以下可验证状态：
-
-- 富对话和图片预览不是静态原型，而是通过真实 HTTP/SSE/媒体存储路径运行；
-- 图片会被投影成两套原生 Harness 的结构化输入，而不只是 UI 附件；
-- Reviewer 和 Claude/Codex 审批已经进入 Adapter 层，不再仅依赖 prompt；
-- 文件路径、远程图片、主动内容、内容篡改和 transcript 生命周期有明确安全边界；
-- 真实供应商 CLI E2E 仍必须在装有最新官方 CLI 的机器上完成，当前环境不具备该条件。
+The exact commit and artifact hashes are written into the generated full-package validation report rather than hard-coded in this source document.

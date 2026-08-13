@@ -1,77 +1,89 @@
-# PairRoom 升级与回退
+# PairRoom 1.0 Upgrade and Rollback
 
-## v0.2.0 → v0.3.0
+## Supported upgrade path
 
-v0.3.0 的 Store schema 为 `3`。升级重点是富对话、图片附件、Claude 原生审批和 Reviewer 原生保护。
+PairRoom 1.0 can open room data created by the retained v0.1-v0.9 history. Store migration is replay-based: old events remain append-only, while missing fields receive explicit defaults and the metadata schema advances to the current supported version.
 
-首次打开 v0.2 房间时，PairRoom 会：
+Do not manually edit `metadata.json`, event sequence numbers, attachment manifests, or Turn summaries.
 
-1. 重放原有 `events.jsonl`；
-2. 保留消息、角色、路由、Delivery/Processing、Claude session ID 和 Codex thread ID；
-3. 创建受限权限的 `attachments/` 媒体目录；
-4. 将 metadata schema 升级为 3；
-5. 对上次异常退出遗留的 pending/working/approval 状态执行与 v0.2 相同的明确收口；
-6. 继续以追加事件的方式记录升级结果，不重写历史 JSONL。
+## Before upgrading
 
-旧消息没有附件字段时按空数组处理，不需要手工迁移。
-
-## 状态目录变化
-
-v0.3 房间目录：
-
-```text
-pairroom/rooms/<repo-name>-<path-hash>/
-├── events.jsonl
-├── metadata.json
-├── attachments/
-│   ├── att-<opaque-id>.json
-│   └── att-<opaque-id>.<ext>
-└── runtime/
-    └── claude-pairroom-prompt.md
-```
-
-备份时必须同时复制 `attachments/`。只复制 `events.jsonl` 会留下可见的附件引用，却丢失图片内容。
-
-## 升级前
-
-1. 停止 PairRoom；
-2. 复制完整房间目录；
-3. 记录当前二进制版本；
-4. 确认备份不位于将被 Agent 修改的工作树内。
-
-## 升级后检查
+1. Stop PairRoom.
+2. Record the current binary version.
+3. Verify the room:
 
 ```bash
-pairroom version
-pairroom doctor --repo /path/to/repo
-pairroom serve --repo /path/to/repo --auto-start=false
+pairroom verify --data-dir /path/to/room-data --json
 ```
 
-在网页中检查：
+4. Create a verified backup:
 
-- 历史消息和角色；
-- Claude session / Codex thread ID；
-- 旧在途状态是否已标记 cancelled/skipped；
-- 旧审批是否 expired；
-- 图片上传、粘贴、删除未发送图片和灯箱；
-- Markdown、代码块、表格、引用和线程视图；
-- Runtime 警告与 Reviewer 原生策略。
+```bash
+pairroom backup \
+  --data-dir /path/to/room-data \
+  --output pairroom-before-1.0.tar.gz
+```
 
-确认后再启动真实 Agent。
+5. Keep the backup outside the repository and room data directory.
 
-## v0.1.0 → v0.2.0 → v0.3.0
+## First 1.0 start
 
-可以直接使用 v0.3 打开 v0.1 数据目录。迁移按顺序应用：先补齐 v0.2 的 Delivery/Processing 和 schema 2 语义，再升级到 schema 3。
+```bash
+pairroom version --json
+pairroom doctor --repo /path/to/repository
+pairroom serve \
+  --repo /path/to/repository \
+  --data-dir /path/to/room-data \
+  --auto-start=false
+```
 
-## 回退
+Inspect before starting either Agent:
 
-不建议让旧版与新版交替写同一目录。v0.2 不理解 schema 3 的附件生命周期和 Claude 审批语义，并会拒绝打开未来 schema。
+- complete transcript and pagination boundary;
+- Driver/Reviewer roles;
+- Reviewer workspace kind, source HEAD, dirty flag, snapshot hash, and read-only strength;
+- no stale `working`, `waiting`, or pending approval state from the previous process;
+- uploaded images and Agent-generated image previews;
+- Turn summaries and message correlation;
+- browser authentication behavior when using a non-loopback listener.
 
-需要回退时：
+## Behavior changes since v0.3
 
-1. 停止 v0.3；
-2. 保留当前目录作为取证副本；
-3. 恢复升级前完整备份到新目录；
-4. 让旧版 `--data-dir` 指向该备份。
+- Reviewer no longer defaults to the live Driver tree. PairRoom creates a Git snapshot containing HEAD, dirty tracked changes, and untracked regular files. Unsafe snapshot creation fails instead of silently degrading.
+- User messages can explicitly append, wait for the next Turn, or supersede an earlier instruction. Per-target cancellation and retry remain auditable.
+- Work Inspector summaries persist across restart.
+- `verify`, `backup`, `restore`, and `diagnostics` are available.
+- Long conversations load a bounded newest window and fetch older messages with a cursor.
+- Browser Token query parameters/Web Storage were removed. A fragment bootstrap now exchanges for an HttpOnly session; browser mutations require CSRF.
 
-不要手工降低 `metadata.json` 的 schema 数字。数字变化不会移除新事件，只会让旧版产生不完整投影。
+## Data directory
+
+Persistent content:
+
+```text
+events.jsonl
+metadata.json
+attachments/
+```
+
+Recreatable or excluded from backup:
+
+```text
+runtime/
+reviewer worktree
+browser sessions
+temporary uploads
+lock/cache files
+```
+
+## Rollback
+
+Do not run an older binary against a data directory already written by 1.0.
+
+1. Stop 1.0.
+2. Preserve the 1.0 room directory for diagnostics.
+3. Restore the pre-upgrade backup into a different directory.
+4. Point the old binary at that restored directory.
+5. Verify it before starting Agents.
+
+A future-schema rejection is intentional; lowering the schema number does not remove new events and can create an invalid projection.

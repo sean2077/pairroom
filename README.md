@@ -4,9 +4,9 @@ PairRoom 是一个面向 **Claude Code + Codex** 的本地三方协作房间：�
 
 > PairRoom 是全新的独立项目，不依赖 OMA、CCCC、ccteam、wmux、Cherry Studio、Chatbox 或其他 Agent 编排框架。原生模式只启动用户本机已有的官方 `claude` 与 `codex` 命令；Go 核心没有第三方 module，前端没有 npm 依赖和构建步骤。
 
-当前版本：**v0.9.0**
+当前版本：**v1.0.0**
 
-> v0.9 是正式版前的安全收口：远程绑定使用 URL fragment 中的一次性启动凭据，换取 HttpOnly、SameSite=Strict 的短期浏览器会话；浏览器写操作需要 CSRF，API 具备本地防滥用限流。Token 不再写入查询参数或 Web Storage。
+> **1.0 稳定边界：**一个本地 daemon、一个 Git 仓库、一个用户、一个官方 Claude Code、一个官方 Codex。PairRoom 提供三方 IM、介入、Reviewer 快照、过程审计、备份恢复和浏览器安全，但不重写两套 Agent Harness。
 
 ## 核心目标
 
@@ -39,9 +39,9 @@ PairRoom 不重写这些能力，只增加一层本地协作、介入与可观�
              official `claude`             official `codex`
 ```
 
-![PairRoom v0.3 rich conversation](docs/images/pairroom-v0.3-desktop.png)
+![PairRoom rich conversation](docs/images/pairroom-v0.3-desktop.png)
 
-## v0.3.0 重点能力
+## 1.0 核心能力
 
 ### 1. 完整的富对话体验
 
@@ -94,7 +94,7 @@ Agent 若在仓库内生成截图、图表或架构图，并在最终回答中�
 
 Codex 原有的命令执行、文件修改和额外权限审批继续保留。
 
-v0.3 又接入了 Claude Code 原生双向 control protocol：PairRoom 在会话启动时完成 `initialize` 握手，并将以下请求投影到统一 Approvals 面板：
+PairRoom 接入 Claude Code 原生双向 control protocol：PairRoom 在会话启动时完成 `initialize` 握手，并将以下请求投影到统一 Approvals 面板：
 
 - Claude 工具权限请求
 - `AskUserQuestion` 单选、多选和自由文本问题
@@ -406,7 +406,7 @@ pairroom diagnostics --repo . --output pairroom-diagnostics.tar.gz
 ## 当前边界
 
 - 一个 daemon 当前承载一个房间和一个仓库。
-- 两个 Agent 默认共享一个 working tree；Reviewer 原生策略不是 OS 级隔离。
+- Driver 使用用户的 live working tree；Reviewer 默认使用包含 dirty/untracked 状态的独立 Git 快照。POSIX 还会施加只读位，Windows 明确显示较弱边界；这仍不是容器或 OS mount 级隔离。
 - 网页展示结构化过程，不嵌入供应商完整终端 TUI。
 - 远程 Markdown 图片默认不加载；需要先作为本地附件上传。
 - Claude/Codex 真实登录、网络、账号权限和供应商服务状态不属于 PairRoom 的可控范围。
@@ -429,7 +429,7 @@ node --check internal/server/assets/richtext.js
 git diff --check
 ```
 
-浏览器 E2E 覆盖富 Markdown、双图片上传、原生消息附件、画廊/缩放、回复、线程、搜索、筛选、长消息、Inspector 关联、移动端布局与外部图片不自动请求。详见 [`docs/VALIDATION.md`](docs/VALIDATION.md)。
+`make smoke` 还会串联 Mock 三方对话、图片、Reviewer 快照、Turn 摘要、分页、完整性校验、备份、恢复和脱敏诊断。正式发行同时生成四平台二进制、源码包、SHA-256、SPDX SBOM 与构建溯源。详见 [`docs/VALIDATION.md`](docs/VALIDATION.md)。
 
 ## 文档
 
@@ -438,9 +438,14 @@ git diff --check
 - [富对话与图片设计](docs/RICH_CONVERSATION.md)
 - [最新 Runtime 跟随策略](docs/RUNTIME_COMPATIBILITY.md)
 - [升级说明](docs/UPGRADING.md)
+- [操作手册](docs/OPERATIONS.md)
+- [隐私模型](docs/PRIVACY.md)
 - [验证记录](docs/VALIDATION.md)
+- [发布验收](docs/RELEASE_CHECKLIST.md)
+- [1.0 Release Notes](docs/RELEASE_NOTES_v1.0.0.md)
 - [产品规划](docs/PRODUCT_PLAN.md)
 - [安全说明](SECURITY.md)
+- [支持范围](SUPPORT.md)
 
 ## License
 

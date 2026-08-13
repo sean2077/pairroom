@@ -59,14 +59,35 @@ func run(args []string) error {
 	case "diagnostics":
 		return runDiagnostics(args[1:])
 	case "version", "--version", "-v":
-		fmt.Println("pairroom", version.Current)
-		return nil
+		return runVersion(args[1:])
 	case "help", "--help", "-h":
 		printHelp()
 		return nil
 	default:
 		return fmt.Errorf("unknown command %q (use pairroom help)", args[0])
 	}
+}
+
+func runVersion(args []string) error {
+	flags := flag.NewFlagSet("pairroom version", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	jsonFlag := flags.Bool("json", false, "emit build metadata as JSON")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	if *jsonFlag {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(version.BuildInfo())
+	}
+	fmt.Println("pairroom", version.Current)
+	return nil
 }
 
 func runServe(args []string) error {

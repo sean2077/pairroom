@@ -16,6 +16,12 @@ func TestUnknownCommandReturnsError(t *testing.T) {
 	}
 }
 
+func TestVersionJSON(t *testing.T) {
+	if err := run([]string{"version", "--json"}); err != nil {
+		t.Fatalf("version --json: %v", err)
+	}
+}
+
 func TestBrowserURLUsesFragmentBootstrapToken(t *testing.T) {
 	value := browserURL("0.0.0.0:7332", "top-secret")
 	if value != "http://127.0.0.1:7332/#token=top-secret" {

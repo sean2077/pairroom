@@ -1,0 +1,22 @@
+package version
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestVersionFileMatchesBinaryVersion(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "VERSION"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(data)); got != Current {
+		t.Fatalf("VERSION=%q Current=%q", got, Current)
+	}
+	info := BuildInfo()
+	if info.Version != Current || info.StoreSchema != StoreSchema || info.Commit == "" || info.BuildDate == "" {
+		t.Fatalf("invalid build info: %#v", info)
+	}
+}

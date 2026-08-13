@@ -1,0 +1,12 @@
+{
+  "pairroom_version": "1.0.0",
+  "message_count": 5,
+  "turn_count": 3,
+  "latest_seq": 88,
+  "attachment_messages": 1,
+  "verification_ok": true,
+  "restored_verification_ok": true,
+  "event_count": 96,
+  "attachment_count": 1,
+  "diagnostics_sha256": "d2d98a7c85375f71398b26327c4f65a7ee964b01582f4589405e90ec07dfa1a5"
+}

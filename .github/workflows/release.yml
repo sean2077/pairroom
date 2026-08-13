@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+      - name: Verify tag and source version
+        shell: bash
+        run: |
+          test "${GITHUB_REF_NAME}" = "v$(cat VERSION)"
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n1 "${GITHUB_REF_NAME}")"
+      - name: Build and verify release payload
+        run: make release
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "PairRoom ${GITHUB_REF_NAME}" \
+            --notes-file "docs/RELEASE_NOTES_${GITHUB_REF_NAME}.md"

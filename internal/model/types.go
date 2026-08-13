@@ -124,7 +124,7 @@ func (i MessageIntent) Valid() bool {
 }
 
 // Attachment is durable, presentation-safe metadata for an item attached to a
-// room message. PairRoom v0.3 accepts raster images only. Absolute host paths
+// room message. PairRoom accepts validated raster images only. Absolute host paths
 // never enter the transcript or API response.
 type Attachment struct {
 	ID        string    `json:"id"`

@@ -1,6 +1,6 @@
 # PairRoom 协议设计
 
-本文描述 PairRoom v0.3 的房间、消息、附件、运行时、审批和持久化语义。
+本文描述 PairRoom 1.0 的房间、消息、附件、工作区、运行时、审批、浏览器会话和持久化语义。
 
 ## 1. Actor
 
@@ -28,6 +28,8 @@ system
   "text": "@all review this diagram",
   "reply_to": "msg-...",
   "retry_of": "msg-...",
+  "intent": "append",
+  "supersedes": ["msg-..."],
   "attachments": [],
   "delivery": {},
   "processing": {},
@@ -49,6 +51,18 @@ system
 ### Retry
 
 重试创建新消息并设置 `retry_of`。原消息永不修改，也不会重新执行未被选中的目标。
+
+### Intent and supersede
+
+用户消息可声明：
+
+```text
+append       尽可能补充当前协作过程
+next_turn    不注入 active Turn，在下一个安全边界处理
+supersede    取消/替代目标当前未完成指令
+```
+
+`supersede` 会创建新消息，并在 `supersedes` 中保存受影响消息 ID；旧记录保留但 Processing 进入 `superseded`，其迟到结果不能继续自动唤醒 Peer。
 
 ## 3. Attachment
 
@@ -331,7 +345,48 @@ disallowedTools = Edit, Write, NotebookEdit, ExitPlanMode
 
 使用用户配置的原生 permission/sandbox 策略。
 
-## 12. Routing
+## 12. Workspace boundary
+
+Participant snapshot 公开：
+
+```text
+kind / path
+source_head
+patch_sha256
+dirty / untracked_count
+read_only / read_only_enforced
+refreshed_at / warnings
+```
+
+Driver 使用 live repository。Reviewer 使用 detached Git worktree，再应用 `git diff HEAD` 并复制 untracked regular files。创建失败、unsafe symlink 或 patch 应用失败会阻止 Reviewer 启动，不会静默退回 live writable tree。
+
+## 13. Durable Turn summary
+
+高频 token/command delta 可以只作为 transient SSE，但每个原生 Turn 都维护有界、持久化的摘要：
+
+```text
+agent / turn / correlation message
+started_at / completed_at / duration
+status / final summary / error
+tools / commands / plans / diffs / usage
+```
+
+该摘要支持重启后 Inspector 查看，同时避免把无限命令输出写入内存快照。
+
+## 14. Browser session
+
+非 loopback 模式的浏览器认证流程：
+
+```text
+URL fragment bootstrap token
+        → POST /api/v1/session with Bearer
+        → HttpOnly + SameSite=Strict session cookie
+        → per-session CSRF token for mutations
+```
+
+fragment 在交换后立即从地址栏移除；Token 不进入 URL query 或 Web Storage。命令行 API 客户端可继续使用 Bearer Header。Query token 不授权任何 endpoint。
+
+## 15. Routing
 
 ### Manual
 
@@ -370,7 +425,7 @@ Agent final 包含以下目标才自动路由：
 
 标记从展示文本移除，但路由决策进入事件日志。
 
-## 13. User precedence
+## 16. User precedence
 
 每个自动 thread 记录最新用户序列。若旧 Agent Turn 在更新的用户消息之后才完成：
 
@@ -381,19 +436,21 @@ but automatic peer routing is skipped
 
 这保证审计完整，同时防止过期方案继续扩散。
 
-## 14. Persistence
+## 17. Persistence
 
-Store schema 3 的事件日志包含：
+Store schema 7 的事件日志包含：
 
 ```text
 room.created
 settings.updated
 participant.updated
+participants.batch.updated
 message.created
 message.delivery.updated
 message.processing.updated
 approval.updated
 runtime.event
+turn.summary.updated
 system.notice
 ```
 
@@ -409,7 +466,7 @@ pending approval → expired
 
 原生 Session/Thread ID 保留，下一次输入尝试恢复供应商上下文。
 
-## 15. Export
+## 18. Export
 
 Markdown/普通 JSON：
 

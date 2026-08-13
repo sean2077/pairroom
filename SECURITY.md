@@ -90,13 +90,15 @@ PairRoom 同时保存敏感讨论、运行事件和用户图片，因此威胁�
 
 官方 CLI 仍加载用户/项目配置、Skills、MCP、Hooks 和插件。恶意或过宽配置可能扩大访问范围。PairRoom 不审计这些内容。
 
-### Reviewer is not an OS read-only mount
+### Reviewer snapshot is not a container boundary
 
-Claude plan mode/disallowed tools 与 Codex readOnly sandbox 是供应商原生策略，但不等价于跨平台操作系统级只读文件系统。Runtime bug、外部 MCP 或配置可能影响实际边界。对不可信任务应使用独立 checkout、容器或受控 VM。
+Reviewer 默认运行在 PairRoom 独立生成的 Git snapshot 中，该 snapshot 包含 HEAD、dirty tracked patch 与 untracked regular files。PairRoom 会拒绝不安全 symlink，并在 POSIX 上移除写位；Claude plan/disallowed tools 与 Codex readOnly sandbox 提供第二层约束。
 
-### Shared working tree
+这仍不等价于容器、VM 或只读 mount。外部 MCP、供应商 Runtime bug、Windows 文件权限语义或用户自定义配置可能扩大访问范围。对不可信任务应使用受控容器/VM。
 
-两个 Agent 在权限允许时仍可同时写入同一 tree。默认保持一个 Driver 和一个 Reviewer。若需要并行实现，使用独立 worktree 并由人类明确合并。
+### Single writer
+
+Driver 使用 live working tree；Reviewer snapshot 用于独立读取和审查，不应作为并行实现分支。若确需两个写入者，使用人工管理的独立 Git worktree/branch，并显式合并。
 
 ### Remote links
 

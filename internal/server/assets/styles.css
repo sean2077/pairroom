@@ -395,7 +395,7 @@ button { color: inherit; }
 .system-message.search-hidden { display: none; }
 .activity-card[data-correlation] { scroll-margin-top: 12px; }
 
-/* v0.3 rich conversation and image attachments */
+/* Rich conversation and image attachments */
 .visually-hidden {
   position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important;
   margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important;
@@ -494,7 +494,7 @@ button { color: inherit; }
   .message-content { max-width: 88%; }
 }
 
-/* v0.3 conversation chronology and image gallery controls */
+/* Conversation chronology and image gallery controls */
 .timeline-date {
   display: flex; align-items: center; gap: 12px; margin: 12px 0 8px; color: var(--faint);
   font-size: 9px; letter-spacing: .025em; user-select: none;
@@ -550,7 +550,7 @@ button { color: inherit; }
 .cancel-message-button:hover { background: rgba(234,191,99,.14); }
 
 
-/* v0.8 long-room and image-viewer refinements */
+/* Long-room and image-viewer refinements */
 .load-older-button {
   display: block; margin: 4px auto 14px; padding: 7px 12px; border: 1px solid var(--border);
   border-radius: 999px; background: var(--surface-2); color: var(--muted); cursor: pointer; font-size: 9px;

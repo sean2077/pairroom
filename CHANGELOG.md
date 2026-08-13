@@ -1,3 +1,26 @@
+# Changelog
+
+## [1.0.0] - 2026-08-14
+
+### Added
+
+- Stable single-room product contract for one human, official Claude Code, and official Codex.
+- Release CI, tag-driven GitHub release workflow, reproducible four-platform build scripts, source archives, SHA-256 checksums, SPDX 2.3 SBOM, and build provenance.
+- Operations, privacy, support, upgrade, release acceptance, release notes, Git history provenance, and PR documentation.
+- Version JSON/build metadata and a full Mock collaboration/recovery smoke test used by CI and release acceptance.
+
+### Changed
+
+- Reviewer uses an independently materialized Git snapshot containing HEAD, dirty tracked changes, and untracked regular files; the live writable tree is no longer the default Reviewer workspace.
+- `dist/` binaries are release artifacts rather than source-control contents.
+- The 1.0 support boundary is intentionally one daemon, one repository, one human, one Claude Code participant, and one Codex participant.
+
+### Security
+
+- Browser bootstrap credentials are exchanged from a URL fragment for short-lived HttpOnly sessions and are never stored in Web Storage.
+- Browser mutations require per-session CSRF; query tokens authorize no API; API requests are rate-limited.
+- Backup/restore, attachments, Reviewer isolation, and unknown high-privilege runtime requests continue to fail closed.
+
 ## [0.9.0] - 2026-08-14
 
 ### Added
@@ -83,8 +106,6 @@
 
 - Reviewer sessions now run from an isolated snapshot by default instead of the live driver working tree.
 - POSIX snapshots are made filesystem read-only; Windows reports the weaker boundary explicitly and continues to rely on native reviewer sandboxing.
-
-# Changelog
 
 ## 0.3.0 — 2026-08-13
 

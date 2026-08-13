@@ -110,7 +110,7 @@ metadata.json
 - metadata 记录 Store schema；
 - 高于当前二进制支持的未来 schema 会被拒绝。
 
-v0.3 Store schema 为 `3`。
+1.0 Store schema 为 `7`，覆盖附件、消息控制、Reviewer 工作区和持久化 Turn 摘要。
 
 ### 3.5 Media Store
 
@@ -338,12 +338,12 @@ codex
 ## 11. 当前限制
 
 - 单 daemon / 单 room / 单 repository；
-- Reviewer 使用供应商原生约束，不是 OS 级只读文件系统；
-- 共享 working tree 中仍应维持单写入者；
+- Reviewer 使用独立 Git 快照与供应商原生约束，但不是容器/OS mount 级隔离；
+- Driver 是默认唯一写入者；Reviewer 快照不可作为并行实现分支；
 - UI 不嵌入完整供应商 TUI；
 - 供应商协议变化需要跟随当前公开接口更新；
 - 没有内建 TLS、账号系统或多人权限模型。
 
-## Reviewer workspace boundary (v0.4)
+## 12. Reviewer workspace boundary
 
 PairRoom materializes the reviewer view as a detached Git worktree, applies the complete `git diff HEAD` (including staged and unstaged tracked changes), then copies untracked regular files. Untracked symlinks and symlinks that escape the snapshot are rejected. The snapshot records its source HEAD and a digest over the patch and untracked file hashes. On POSIX systems PairRoom removes write bits after construction; vendor-native plan/read-only policies remain the primary enforcement layer on Windows.
