@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/version"
 )
 
 // JSONLStore is an append-only local event store. It deliberately avoids a
@@ -102,14 +103,31 @@ func repairEventLog(path string) error {
 
 func (s *JSONLStore) ensureMetadata() error {
 	const name = "metadata.json"
-	if _, err := os.Stat(filepath.Join(s.dir, name)); err == nil {
-		return nil
+	path := filepath.Join(s.dir, name)
+	if _, err := os.Stat(path); err == nil {
+		var metadata struct {
+			Format        string `json:"format"`
+			SchemaVersion int    `json:"schema_version"`
+		}
+		if err := s.LoadJSON(name, &metadata); err != nil {
+			return err
+		}
+		if metadata.Format != "" && metadata.Format != "pairroom-jsonl" {
+			return fmt.Errorf("unsupported event metadata format %q", metadata.Format)
+		}
+		if metadata.SchemaVersion > version.StoreSchema {
+			return fmt.Errorf("event store schema %d is newer than supported schema %d", metadata.SchemaVersion, version.StoreSchema)
+		}
+		if metadata.SchemaVersion == version.StoreSchema {
+			return nil
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat event metadata: %w", err)
 	}
 	return s.SaveJSON(name, map[string]any{
 		"format":         "pairroom-jsonl",
-		"schema_version": 1,
+		"schema_version": version.StoreSchema,
+		"app_version":    version.Current,
 	})
 }
 

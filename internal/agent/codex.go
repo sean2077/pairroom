@@ -17,6 +17,7 @@ import (
 
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/prompt"
+	"github.com/sean2077/pairroom/internal/version"
 )
 
 type rpcReply struct {
@@ -35,20 +36,26 @@ type CodexAdapter struct {
 	cfg  Config
 	sink EventSink
 
-	startMu       sync.Mutex
-	submitMu      sync.Mutex
-	mu            sync.Mutex
-	writeMu       sync.Mutex
-	state         model.AgentState
-	cmd           *exec.Cmd
-	stdin         io.WriteCloser
-	threadID      string
-	currentTurn   string
-	protocolSent  bool
-	intentional   bool
-	pending       map[int64]chan rpcReply
-	approvals     map[string]pendingApproval
-	turnInputs    map[string]model.AgentInput
+	startMu      sync.Mutex
+	submitMu     sync.Mutex
+	mu           sync.Mutex
+	writeMu      sync.Mutex
+	state        model.AgentState
+	cmd          *exec.Cmd
+	stdin        io.WriteCloser
+	threadID     string
+	currentTurn  string
+	protocolSent bool
+	intentional  bool
+	pending      map[int64]chan rpcReply
+	approvals    map[string]pendingApproval
+	turnInputs   map[string][]model.AgentInput
+	// wireInputs holds inputs keyed by Codex's documented
+	// clientUserMessageId while a turn/start or turn/steer request is in flight.
+	// The matching userMessage item echoes this value as clientId, allowing
+	// notifications that arrive before the RPC response to retain exact room
+	// message correlation.
+	wireInputs    map[string]model.AgentInput
 	startingInput *model.AgentInput
 	turnBuffers   map[string]*strings.Builder
 	turnFinal     map[string]string
@@ -82,8 +89,10 @@ func NewCodex(cfg Config, sink EventSink) *CodexAdapter {
 	adapter := &CodexAdapter{
 		cfg: cfg, sink: sink, state: model.StateStopped, threadID: cfg.SessionID,
 		pending: make(map[int64]chan rpcReply), approvals: make(map[string]pendingApproval),
-		turnInputs: make(map[string]model.AgentInput), turnBuffers: make(map[string]*strings.Builder),
-		turnFinal: make(map[string]string),
+		turnInputs:  make(map[string][]model.AgentInput),
+		wireInputs:  make(map[string]model.AgentInput),
+		turnBuffers: make(map[string]*strings.Builder),
+		turnFinal:   make(map[string]string),
 	}
 	adapter.nextRequestID.Store(100)
 	return adapter
@@ -129,6 +138,23 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	c.intentional = false
 	c.mu.Unlock()
 
+	probe, probeErr := ProbeRuntime(ctx, Config{
+		Actor: model.ActorCodex, Command: c.cfg.Command, Model: c.cfg.Model,
+		ApprovalPolicy: c.cfg.ApprovalPolicy, Sandbox: c.cfg.Sandbox,
+	})
+	if probeErr != nil {
+		info := model.RuntimeInfo{
+			Available: false, Command: c.cfg.Command, Protocol: "codex-app-server-jsonrpc",
+			Model: c.cfg.Model, ApprovalPolicy: c.cfg.ApprovalPolicy, Sandbox: c.cfg.Sandbox,
+			Warnings: []string{probeErr.Error()}, ProbedAt: time.Now().UTC(),
+		}
+		emitRuntimeInfo(c.sink, model.ActorCodex, info)
+		c.setState(model.StateError, probeErr.Error())
+		return probeErr
+	} else {
+		emitRuntimeInfo(c.sink, model.ActorCodex, probe.RuntimeInfo(c.cfg))
+	}
+
 	cmd := exec.Command(c.cfg.Command, "app-server")
 	cmd.Dir = c.cfg.Repo
 	cmd.Env = envWithout("CODEX_INTERNAL_ORIGINATOR")
@@ -165,14 +191,20 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 
 	handshakeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	if _, err := c.call(handshakeCtx, "initialize", map[string]any{
+	clientVersion := c.cfg.ClientVersion
+	if clientVersion == "" {
+		clientVersion = version.Current
+	}
+	initializeResult, err := c.call(handshakeCtx, "initialize", map[string]any{
 		"clientInfo": map[string]any{
-			"name": "pairroom", "title": "PairRoom", "version": "0.1.0",
+			"name": "pairroom", "title": "PairRoom", "version": clientVersion,
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		_ = c.Stop(context.Background())
 		return fmt.Errorf("initialize codex app-server: %w", err)
 	}
+	c.emitInitializeRuntimeInfo(initializeResult, probe, probeErr)
 	if err := c.notify("initialized", map[string]any{}); err != nil {
 		_ = c.Stop(context.Background())
 		return fmt.Errorf("acknowledge codex initialization: %w", err)
@@ -193,13 +225,19 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 			logEvent.Text = "resume failed; creating a new Codex thread: " + err.Error()
 			c.sink(logEvent)
 			existingThread = ""
+			// The collaboration protocol may already have been sent to the old
+			// thread. A replacement thread has no such context, so make the next
+			// user turn include it again.
+			c.mu.Lock()
+			c.protocolSent = false
+			c.mu.Unlock()
 		}
 	}
 	if existingThread == "" {
 		params := map[string]any{
 			"cwd":            c.cfg.Repo,
 			"approvalPolicy": c.cfg.ApprovalPolicy,
-			"sandbox":        c.cfg.Sandbox,
+			"sandbox":        c.legacySandbox(),
 			"serviceName":    "pairroom",
 		}
 		if c.cfg.Model != "" {
@@ -255,20 +293,23 @@ func (c *CodexAdapter) Submit(ctx context.Context, input model.AgentInput) (mode
 	}
 	threadID := c.threadID
 	turnID := c.currentTurn
-	working := c.state == model.StateWorking && turnID != ""
+	active := turnID != "" && (c.state == model.StateWorking || c.state == model.StateWaiting)
 	c.mu.Unlock()
 
-	if working {
-		result, err := c.call(ctx, "turn/steer", map[string]any{
-			"threadId":       threadID,
-			"expectedTurnId": turnID,
-			"input":          []any{map[string]any{"type": "text", "text": text}},
-		})
+	if active {
+		c.stageWireInput(input)
+		result, err := c.call(ctx, "turn/steer", codexTurnSteerParams(threadID, turnID, text, input.MessageID))
+		c.unstageWireInput(input.MessageID)
 		if err == nil {
 			_ = result
 			c.mu.Lock()
-			c.turnInputs[turnID] = input
+			if includeProtocol {
+				c.protocolSent = true
+			}
 			c.mu.Unlock()
+			if c.bindTurnInput(turnID, input) {
+				c.emitInputProcessing(turnID, input, "injected into active Codex turn")
+			}
 			return model.DeliveryInjected, nil
 		}
 		// Review/compaction turns and a narrow completion race can reject
@@ -282,30 +323,25 @@ func (c *CodexAdapter) Submit(ctx context.Context, input model.AgentInput) (mode
 		logEvent.CorrelationID = input.MessageID
 		logEvent.Text = err.Error()
 		c.sink(logEvent)
+		waiting := runtimeEvent(model.ActorCodex, model.RuntimeInputProcessing)
+		waiting.CorrelationID = input.MessageID
+		waiting.Name = string(model.ProcessingWaiting)
+		waiting.Text = "queued after Codex rejected active-turn steering: " + err.Error()
+		c.sink(waiting)
 		go c.tryStartQueued()
 		return model.DeliveryQueued, nil
 	}
 
-	params := map[string]any{
-		"threadId":       threadID,
-		"input":          []any{map[string]any{"type": "text", "text": text}},
-		"cwd":            c.cfg.Repo,
-		"approvalPolicy": c.cfg.ApprovalPolicy,
-		"sandboxPolicy":  c.sandboxPolicy(input.Role),
-	}
-	if c.cfg.Model != "" {
-		params["model"] = c.cfg.Model
-	}
-	if c.cfg.Effort != "" {
-		params["effort"] = c.cfg.Effort
-	}
+	params := c.turnStartParams(threadID, text, input)
 	// turn/started can arrive before the turn/start response. Keep the input in
 	// a temporary slot so either ordering receives the correct correlation ID.
 	starting := input
 	c.mu.Lock()
 	c.startingInput = &starting
+	c.wireInputs[input.MessageID] = input
 	c.mu.Unlock()
 	result, err := c.call(ctx, "turn/start", params)
+	c.unstageWireInput(input.MessageID)
 	if err != nil {
 		c.mu.Lock()
 		c.startingInput = nil
@@ -331,26 +367,69 @@ func (c *CodexAdapter) Submit(ctx context.Context, input model.AgentInput) (mode
 		c.protocolSent = true
 	}
 	c.currentTurn = turnResult.Turn.ID
-	if _, exists := c.turnInputs[turnResult.Turn.ID]; !exists {
-		c.turnInputs[turnResult.Turn.ID] = input
-	}
 	c.startingInput = nil
 	if c.turnBuffers[turnResult.Turn.ID] == nil {
 		c.turnBuffers[turnResult.Turn.ID] = &strings.Builder{}
 	}
 	c.mu.Unlock()
+	if c.bindTurnInput(turnResult.Turn.ID, input) {
+		c.emitInputProcessing(turnResult.Turn.ID, input, "started Codex turn")
+	}
 	c.setState(model.StateWorking, "")
 	return model.DeliveryStarted, nil
 }
 
+func codexTurnSteerParams(threadID, turnID, text, clientUserMessageID string) map[string]any {
+	params := map[string]any{
+		"threadId":       threadID,
+		"expectedTurnId": turnID,
+		"input":          []any{map[string]any{"type": "text", "text": text}},
+	}
+	if clientUserMessageID != "" {
+		params["clientUserMessageId"] = clientUserMessageID
+	}
+	return params
+}
+
+func (c *CodexAdapter) turnStartParams(threadID, text string, input model.AgentInput) map[string]any {
+	params := map[string]any{
+		"threadId":       threadID,
+		"input":          []any{map[string]any{"type": "text", "text": text}},
+		"cwd":            c.cfg.Repo,
+		"approvalPolicy": c.cfg.ApprovalPolicy,
+		"sandboxPolicy":  c.sandboxPolicy(input.Role),
+	}
+	if input.MessageID != "" {
+		params["clientUserMessageId"] = input.MessageID
+	}
+	if c.cfg.Model != "" {
+		params["model"] = c.cfg.Model
+	}
+	if c.cfg.Effort != "" {
+		params["effort"] = c.cfg.Effort
+	}
+	return params
+}
+
+func (c *CodexAdapter) legacySandbox() string {
+	switch strings.ToLower(c.cfg.Sandbox) {
+	case "readonly", "read_only", "read-only":
+		return "readOnly"
+	case "dangerfullaccess", "danger_full_access", "danger-full-access", "full", "fullaccess", "full_access", "full-access":
+		return "dangerFullAccess"
+	default:
+		return "workspaceWrite"
+	}
+}
+
 func (c *CodexAdapter) sandboxPolicy(role model.ParticipantRole) map[string]any {
 	if role == model.RoleReviewer {
-		return map[string]any{"type": "readOnly", "access": map[string]any{"type": "fullAccess"}}
+		return map[string]any{"type": "readOnly"}
 	}
 	switch strings.ToLower(c.cfg.Sandbox) {
 	case "readonly", "read_only", "read-only":
-		return map[string]any{"type": "readOnly", "access": map[string]any{"type": "fullAccess"}}
-	case "dangerfullaccess", "full", "fullaccess":
+		return map[string]any{"type": "readOnly"}
+	case "dangerfullaccess", "danger_full_access", "danger-full-access", "full", "fullaccess", "full_access", "full-access":
 		return map[string]any{"type": "dangerFullAccess"}
 	default:
 		return map[string]any{
@@ -361,7 +440,115 @@ func (c *CodexAdapter) sandboxPolicy(role model.ParticipantRole) map[string]any 
 	}
 }
 
+func (c *CodexAdapter) stageWireInput(input model.AgentInput) {
+	if input.MessageID == "" {
+		return
+	}
+	c.mu.Lock()
+	c.wireInputs[input.MessageID] = input
+	c.mu.Unlock()
+}
+
+func (c *CodexAdapter) unstageWireInput(messageID string) {
+	if messageID == "" {
+		return
+	}
+	c.mu.Lock()
+	delete(c.wireInputs, messageID)
+	c.mu.Unlock()
+}
+
+func (c *CodexAdapter) bindTurnInput(turnID string, input model.AgentInput) bool {
+	if turnID == "" || input.MessageID == "" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, existing := range c.turnInputs[turnID] {
+		if existing.MessageID == input.MessageID {
+			return false
+		}
+	}
+	c.turnInputs[turnID] = append(c.turnInputs[turnID], input)
+	return true
+}
+
+func (c *CodexAdapter) latestTurnInputLocked(turnID string) model.AgentInput {
+	inputs := c.turnInputs[turnID]
+	if len(inputs) == 0 {
+		return model.AgentInput{}
+	}
+	return inputs[len(inputs)-1]
+}
+
+func (c *CodexAdapter) emitInputProcessing(turnID string, input model.AgentInput, detail string) {
+	e := runtimeEvent(model.ActorCodex, model.RuntimeInputProcessing)
+	e.TurnID = turnID
+	e.CorrelationID = input.MessageID
+	e.Name = string(model.ProcessingWorking)
+	e.Text = detail
+	c.sink(e)
+}
+
+func (c *CodexAdapter) emitInputTerminal(turnID string, input model.AgentInput, kind, detail string) {
+	e := runtimeEvent(model.ActorCodex, kind)
+	e.TurnID = turnID
+	e.CorrelationID = input.MessageID
+	e.Text = detail
+	c.sink(e)
+}
+
+func (c *CodexAdapter) emitInitializeRuntimeInfo(result json.RawMessage, probe ProbeResult, probeErr error) {
+	info := model.RuntimeInfo{
+		Available: true, Command: c.cfg.Command, Protocol: "codex-app-server-jsonrpc",
+		Model: c.cfg.Model, ApprovalPolicy: c.cfg.ApprovalPolicy, Sandbox: c.cfg.Sandbox,
+		ProbedAt: time.Now().UTC(),
+	}
+	if probeErr == nil {
+		info = probe.RuntimeInfo(c.cfg)
+		info.ProbedAt = time.Now().UTC()
+	}
+	var payload struct {
+		UserAgent      string `json:"userAgent"`
+		PlatformFamily string `json:"platformFamily"`
+		PlatformOS     string `json:"platformOs"`
+	}
+	_ = json.Unmarshal(result, &payload)
+	if version := extractSemanticVersion(payload.UserAgent); version != "" {
+		info.Version = version
+	}
+	info.Data, _ = json.Marshal(map[string]any{
+		"user_agent":      payload.UserAgent,
+		"platform_family": payload.PlatformFamily,
+		"platform_os":     payload.PlatformOS,
+		"capabilities":    info.Capabilities,
+	})
+	emitRuntimeInfo(c.sink, model.ActorCodex, info)
+}
+
 func (c *CodexAdapter) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	for attempt := 0; ; attempt++ {
+		result, err := c.callOnce(ctx, method, params)
+		var rpcErr codexRPCError
+		if err == nil || !errors.As(err, &rpcErr) || rpcErr.Code != -32001 || attempt >= 4 {
+			return result, err
+		}
+		delay := time.Duration(100*(1<<attempt))*time.Millisecond + time.Duration(time.Now().UnixNano()%75)*time.Millisecond
+		logEvent := runtimeEvent(model.ActorCodex, model.RuntimeLog)
+		logEvent.Name = "app-server.overloaded.retry"
+		logEvent.Text = fmt.Sprintf("%s rejected as overloaded; retrying in %s (attempt %d/5)", method, delay, attempt+2)
+		c.sink(logEvent)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (c *CodexAdapter) callOnce(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	id := c.nextRequestID.Add(1)
 	ch := make(chan rpcReply, 1)
 	c.mu.Lock()
@@ -486,9 +673,9 @@ func (c *CodexAdapter) handleServerRequest(rawID json.RawMessage, method string,
 	permissionApproval := strings.HasSuffix(method, "permissions/requestApproval")
 	if !commandApproval && !fileApproval && !permissionApproval {
 		// Structured user-input, MCP elicitation, and dynamic tool requests have
-		// distinct response schemas. The MVP fails those
+		// distinct response schemas. The adapter fails those
 		// closed instead of accidentally granting capability with a generic yes.
-		_ = c.sendRawResponse(rawID, nil, &codexRPCError{Code: -32601, Message: "PairRoom 0.1 does not implement " + method})
+		_ = c.sendRawResponse(rawID, nil, &codexRPCError{Code: -32601, Message: "PairRoom " + version.Current + " does not implement " + method})
 		e := runtimeEvent(model.ActorCodex, model.RuntimeLog)
 		e.Name = "server_request.unsupported"
 		e.Text = method
@@ -529,6 +716,7 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 			} `json:"turn"`
 		}
 		_ = json.Unmarshal(params, &p)
+		newlyBound := false
 		c.mu.Lock()
 		if p.Turn.ID != "" {
 			c.currentTurn = p.Turn.ID
@@ -536,13 +724,23 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 				c.turnBuffers[p.Turn.ID] = &strings.Builder{}
 			}
 		}
-		input := c.turnInputs[p.Turn.ID]
+		if len(c.turnInputs[p.Turn.ID]) == 0 && c.startingInput != nil {
+			// App-server may notify turn/started before replying to turn/start.
+			// Bind the in-flight input now so Inspector and final events keep the
+			// same room-message correlation regardless of wire ordering.
+			c.turnInputs[p.Turn.ID] = append(c.turnInputs[p.Turn.ID], *c.startingInput)
+			newlyBound = true
+		}
+		input := c.latestTurnInputLocked(p.Turn.ID)
 		c.mu.Unlock()
 		c.setState(model.StateWorking, "")
 		e := runtimeEvent(model.ActorCodex, model.RuntimeTurnStarted)
 		e.TurnID = p.Turn.ID
 		e.CorrelationID = input.MessageID
 		c.sink(e)
+		if newlyBound {
+			c.emitInputProcessing(p.Turn.ID, input, "started Codex turn")
+		}
 
 	case "item/agentMessage/delta":
 		var p struct {
@@ -559,7 +757,7 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 			c.turnBuffers[p.TurnID] = builder
 		}
 		builder.WriteString(p.Delta)
-		input := c.turnInputs[p.TurnID]
+		input := c.latestTurnInputLocked(p.TurnID)
 		c.mu.Unlock()
 		e := runtimeEvent(model.ActorCodex, model.RuntimeTextDelta)
 		e.TurnID = p.TurnID
@@ -580,6 +778,9 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 		_ = json.Unmarshal(params, &p)
 		e := runtimeEvent(model.ActorCodex, model.RuntimeCommandOutput)
 		e.TurnID, e.ItemID, e.Text = p.TurnID, p.ItemID, p.Delta
+		c.mu.Lock()
+		e.CorrelationID = c.latestTurnInputLocked(p.TurnID).MessageID
+		c.mu.Unlock()
 		c.sink(e)
 
 	case "turn/diff/updated":
@@ -590,10 +791,39 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 		_ = json.Unmarshal(params, &p)
 		e := runtimeEvent(model.ActorCodex, model.RuntimeDiffUpdated)
 		e.TurnID, e.Text = p.TurnID, p.Diff
+		c.mu.Lock()
+		e.CorrelationID = c.latestTurnInputLocked(p.TurnID).MessageID
+		c.mu.Unlock()
+		c.sink(e)
+
+	case "item/plan/delta":
+		var p struct {
+			ThreadID string `json:"threadId"`
+			TurnID   string `json:"turnId"`
+			ItemID   string `json:"itemId"`
+			Delta    string `json:"delta"`
+		}
+		_ = json.Unmarshal(params, &p)
+		e := runtimeEvent(model.ActorCodex, model.RuntimePlanUpdated)
+		e.TurnID, e.ItemID, e.Text = p.TurnID, p.ItemID, p.Delta
+		c.mu.Lock()
+		e.CorrelationID = c.latestTurnInputLocked(p.TurnID).MessageID
+		c.mu.Unlock()
+		e.Data = append(json.RawMessage(nil), params...)
 		c.sink(e)
 
 	case "turn/plan/updated":
+		// Older app-server releases emitted a whole-plan notification. Keep this
+		// compatibility path while preferring the current item/plan/delta stream.
+		var p struct {
+			TurnID string `json:"turnId"`
+		}
+		_ = json.Unmarshal(params, &p)
 		e := runtimeEvent(model.ActorCodex, model.RuntimePlanUpdated)
+		e.TurnID = p.TurnID
+		c.mu.Lock()
+		e.CorrelationID = c.latestTurnInputLocked(p.TurnID).MessageID
+		c.mu.Unlock()
 		e.Data = append(json.RawMessage(nil), params...)
 		c.sink(e)
 
@@ -617,12 +847,17 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 		e.Name = method
 		e.Data = append(json.RawMessage(nil), params...)
 		var p struct {
+			TurnID  string `json:"turnId"`
 			Message string `json:"message"`
 			Error   struct {
 				Message string `json:"message"`
 			} `json:"error"`
 		}
 		_ = json.Unmarshal(params, &p)
+		e.TurnID = p.TurnID
+		c.mu.Lock()
+		e.CorrelationID = c.latestTurnInputLocked(p.TurnID).MessageID
+		c.mu.Unlock()
 		e.Text = p.Message
 		if e.Text == "" {
 			e.Text = p.Error.Message
@@ -669,6 +904,14 @@ func (c *CodexAdapter) handleServerRequestResolved(params json.RawMessage) {
 		e.Approval = cleared
 		e.Data = append(json.RawMessage(nil), params...)
 		c.sink(e)
+		c.mu.Lock()
+		active := c.currentTurn != ""
+		c.mu.Unlock()
+		if active {
+			c.setState(model.StateWorking, "")
+		} else {
+			c.setState(model.StateIdle, "")
+		}
 	}
 }
 
@@ -677,6 +920,7 @@ func (c *CodexAdapter) handleItem(method string, params json.RawMessage) {
 		TurnID string `json:"turnId"`
 		Item   struct {
 			ID               string          `json:"id"`
+			ClientID         string          `json:"clientId"`
 			Type             string          `json:"type"`
 			Phase            string          `json:"phase"`
 			Text             string          `json:"text"`
@@ -688,6 +932,21 @@ func (c *CodexAdapter) handleItem(method string, params json.RawMessage) {
 		} `json:"item"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
+		return
+	}
+	if p.Item.Type == "userMessage" {
+		// App-server echoes turn/start or turn/steer's optional
+		// clientUserMessageId as userMessage.clientId. Use that documented
+		// correlation surface to bind notifications that can race the RPC reply.
+		if p.Item.ClientID != "" {
+			c.mu.Lock()
+			input, ok := c.wireInputs[p.Item.ClientID]
+			c.mu.Unlock()
+			if ok && c.bindTurnInput(p.TurnID, input) {
+				c.emitInputProcessing(p.TurnID, input, "acknowledged by Codex app-server")
+			}
+		}
+		// A userMessage is transport activity, not a tool invocation.
 		return
 	}
 	kind := model.RuntimeToolStarted
@@ -708,6 +967,9 @@ func (c *CodexAdapter) handleItem(method string, params json.RawMessage) {
 	e.TurnID = p.TurnID
 	e.ItemID = p.Item.ID
 	e.Name = p.Item.Type
+	c.mu.Lock()
+	e.CorrelationID = c.latestTurnInputLocked(p.TurnID).MessageID
+	c.mu.Unlock()
 	e.Data = append(json.RawMessage(nil), params...)
 	c.sink(e)
 }
@@ -726,7 +988,11 @@ func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
 		return
 	}
 	c.mu.Lock()
-	input := c.turnInputs[p.Turn.ID]
+	inputs := append([]model.AgentInput(nil), c.turnInputs[p.Turn.ID]...)
+	input := model.AgentInput{}
+	if len(inputs) > 0 {
+		input = inputs[len(inputs)-1]
+	}
 	text := c.turnFinal[p.Turn.ID]
 	if text == "" && c.turnBuffers[p.Turn.ID] != nil {
 		text = c.turnBuffers[p.Turn.ID].String()
@@ -738,7 +1004,21 @@ func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
 		c.currentTurn = ""
 	}
 	c.mu.Unlock()
-	if p.Turn.Status == "completed" && strings.TrimSpace(text) != "" {
+	terminalKind := model.RuntimeInputFailed
+	detail := p.Turn.Status
+	switch strings.ToLower(p.Turn.Status) {
+	case "completed", "success":
+		terminalKind = model.RuntimeInputCompleted
+	case "interrupted", "cancelled", "canceled", "aborted":
+		terminalKind = model.RuntimeInputCancelled
+	}
+	if p.Turn.Error != nil && p.Turn.Error.Message != "" {
+		detail = p.Turn.Error.Message
+	}
+	for _, item := range inputs {
+		c.emitInputTerminal(p.Turn.ID, item, terminalKind, detail)
+	}
+	if terminalKind == model.RuntimeInputCompleted && strings.TrimSpace(text) != "" {
 		e := runtimeEvent(model.ActorCodex, model.RuntimeFinal)
 		e.TurnID = p.Turn.ID
 		e.CorrelationID = input.MessageID
@@ -754,12 +1034,20 @@ func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
 	if p.Turn.Error != nil && p.Turn.Error.Message != "" {
 		e := runtimeEvent(model.ActorCodex, model.RuntimeError)
 		e.TurnID = p.Turn.ID
+		e.CorrelationID = input.MessageID
 		e.Text = p.Turn.Error.Message
 		c.sink(e)
 		c.setState(model.StateError, p.Turn.Error.Message)
+		c.failQueued("previous Codex turn failed: " + p.Turn.Error.Message)
 		return
 	}
-	c.setState(model.StateIdle, "")
+	if terminalKind == model.RuntimeInputFailed {
+		c.setState(model.StateError, detail)
+		c.failQueued("previous Codex turn ended with status " + detail)
+		return
+	} else {
+		c.setState(model.StateIdle, "")
+	}
 	go c.tryStartQueued()
 }
 
@@ -779,10 +1067,12 @@ func (c *CodexAdapter) tryStartQueued() {
 	defer cancel()
 	state, err := c.Submit(ctx, input)
 	if err != nil {
+		c.emitInputTerminal("", input, model.RuntimeInputFailed, "start queued Codex turn: "+err.Error())
 		e := runtimeEvent(model.ActorCodex, model.RuntimeError)
 		e.CorrelationID = input.MessageID
 		e.Text = "start queued Codex turn: " + err.Error()
 		c.sink(e)
+		c.setState(model.StateError, e.Text)
 		return
 	}
 	e := runtimeEvent(model.ActorCodex, model.RuntimeLog)
@@ -790,6 +1080,55 @@ func (c *CodexAdapter) tryStartQueued() {
 	e.CorrelationID = input.MessageID
 	e.Text = string(state)
 	c.sink(e)
+}
+
+func (c *CodexAdapter) failQueued(detail string) {
+	c.mu.Lock()
+	queued := append([]model.AgentInput(nil), c.queued...)
+	c.queued = nil
+	c.mu.Unlock()
+	for _, input := range queued {
+		c.emitInputTerminal("", input, model.RuntimeInputFailed, detail)
+	}
+}
+
+func (c *CodexAdapter) takeOutstandingInputs() []model.AgentInput {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	seen := make(map[string]struct{})
+	var inputs []model.AgentInput
+	add := func(input model.AgentInput) {
+		if input.MessageID == "" {
+			return
+		}
+		if _, exists := seen[input.MessageID]; exists {
+			return
+		}
+		seen[input.MessageID] = struct{}{}
+		inputs = append(inputs, input)
+	}
+	for _, values := range c.turnInputs {
+		for _, input := range values {
+			add(input)
+		}
+	}
+	if c.startingInput != nil {
+		add(*c.startingInput)
+	}
+	for _, input := range c.wireInputs {
+		add(input)
+	}
+	for _, input := range c.queued {
+		add(input)
+	}
+	c.turnInputs = make(map[string][]model.AgentInput)
+	c.wireInputs = make(map[string]model.AgentInput)
+	c.startingInput = nil
+	c.queued = nil
+	c.turnBuffers = make(map[string]*strings.Builder)
+	c.turnFinal = make(map[string]string)
+	c.currentTurn = ""
+	return inputs
 }
 
 func (c *CodexAdapter) sendRawResponse(id json.RawMessage, result any, rpcErr *codexRPCError) error {
@@ -872,6 +1211,22 @@ func (c *CodexAdapter) Interrupt(ctx context.Context) error {
 	return err
 }
 
+func (c *CodexAdapter) failPendingRPCs(detail string) {
+	c.mu.Lock()
+	pending := c.pending
+	c.pending = make(map[int64]chan rpcReply)
+	c.approvals = make(map[string]pendingApproval)
+	c.mu.Unlock()
+
+	err := errors.New(detail)
+	for _, ch := range pending {
+		select {
+		case ch <- rpcReply{err: err}:
+		default:
+		}
+	}
+}
+
 func (c *CodexAdapter) Stop(context.Context) error {
 	c.mu.Lock()
 	cmd := c.cmd
@@ -879,8 +1234,11 @@ func (c *CodexAdapter) Stop(context.Context) error {
 	c.intentional = true
 	c.cmd = nil
 	c.stdin = nil
-	c.currentTurn = ""
 	c.mu.Unlock()
+	c.failPendingRPCs("Codex was stopped")
+	for _, input := range c.takeOutstandingInputs() {
+		c.emitInputTerminal("", input, model.RuntimeInputCancelled, "Codex was stopped")
+	}
 	if stdin != nil {
 		_ = stdin.Close()
 	}
@@ -898,15 +1256,21 @@ func (c *CodexAdapter) waitProcess(cmd *exec.Cmd) {
 	c.mu.Lock()
 	active := c.cmd == cmd
 	intentional := c.intentional
+	var pending map[int64]chan rpcReply
 	if active {
 		c.cmd = nil
 		c.stdin = nil
-		for id, ch := range c.pending {
-			delete(c.pending, id)
-			ch <- rpcReply{err: errors.New("codex app-server exited")}
-		}
+		pending = c.pending
+		c.pending = make(map[int64]chan rpcReply)
+		c.approvals = make(map[string]pendingApproval)
 	}
 	c.mu.Unlock()
+	for _, ch := range pending {
+		select {
+		case ch <- rpcReply{err: errors.New("codex app-server exited")}:
+		default:
+		}
+	}
 	if !active {
 		return
 	}
@@ -914,9 +1278,16 @@ func (c *CodexAdapter) waitProcess(cmd *exec.Cmd) {
 		c.setState(model.StateStopped, "")
 		return
 	}
+	detail := "Codex app-server exited"
+	if err != nil {
+		detail += ": " + err.Error()
+	}
+	for _, input := range c.takeOutstandingInputs() {
+		c.emitInputTerminal("", input, model.RuntimeInputFailed, detail)
+	}
 	if err != nil {
 		e := runtimeEvent(model.ActorCodex, model.RuntimeError)
-		e.Text = "Codex app-server exited: " + err.Error()
+		e.Text = detail
 		c.sink(e)
 		c.setState(model.StateError, err.Error())
 		return

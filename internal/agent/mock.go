@@ -11,13 +11,15 @@ import (
 )
 
 type MockAdapter struct {
-	cfg    Config
-	sink   EventSink
-	mu     sync.Mutex
-	state  model.AgentState
-	queue  chan model.AgentInput
-	cancel context.CancelFunc
-	turn   context.CancelFunc
+	cfg       Config
+	sink      EventSink
+	lifecycle sync.Mutex
+	mu        sync.Mutex
+	state     model.AgentState
+	queue     chan model.AgentInput
+	cancel    context.CancelFunc
+	turn      context.CancelFunc
+	done      chan struct{}
 }
 
 func NewMock(cfg Config, sink EventSink) *MockAdapter {
@@ -46,20 +48,32 @@ func (m *MockAdapter) setState(state model.AgentState) {
 }
 
 func (m *MockAdapter) Start(ctx context.Context) error {
+	m.lifecycle.Lock()
+	defer m.lifecycle.Unlock()
 	m.mu.Lock()
 	if m.state != model.StateStopped && m.state != model.StateError {
 		m.mu.Unlock()
 		return nil
 	}
 	workerCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	m.cancel = cancel
+	m.done = done
 	m.state = model.StateStarting
 	m.mu.Unlock()
 	m.setState(model.StateIdle)
+	info := model.RuntimeInfo{
+		Available: true, Command: "mock", Protocol: "pairroom-mock", Version: "0.2.0",
+		Model: "deterministic-mock", Capabilities: []string{"queued-input", "interrupt", "tool-events"}, ProbedAt: time.Now().UTC(),
+	}
+	emitRuntimeInfo(m.sink, m.cfg.Actor, info)
 	sessionEvent := runtimeEvent(m.cfg.Actor, model.RuntimeSession)
 	sessionEvent.SessionID = m.SessionID()
 	m.sink(sessionEvent)
-	go m.loop(workerCtx)
+	go func() {
+		defer close(done)
+		m.loop(workerCtx)
+	}()
 	return nil
 }
 
@@ -67,9 +81,11 @@ func (m *MockAdapter) Submit(ctx context.Context, input model.AgentInput) (model
 	if err := m.Start(ctx); err != nil {
 		return model.DeliveryFailed, err
 	}
+	m.lifecycle.Lock()
+	defer m.lifecycle.Unlock()
 	state := m.State()
 	status := model.DeliveryStarted
-	if state == model.StateWorking {
+	if state == model.StateWorking || len(m.queue) > 0 {
 		status = model.DeliveryQueued
 	}
 	select {
@@ -99,6 +115,12 @@ next:
 			started.TurnID = turnID
 			started.CorrelationID = input.MessageID
 			m.sink(started)
+			processing := runtimeEvent(m.cfg.Actor, model.RuntimeInputProcessing)
+			processing.TurnID = turnID
+			processing.CorrelationID = input.MessageID
+			processing.Name = string(model.ProcessingWorking)
+			processing.Text = "accepted by mock runtime"
+			m.sink(processing)
 
 			response := m.response(input)
 			for _, chunk := range chunks(response, 18) {
@@ -107,10 +129,11 @@ next:
 					cancelTurn()
 					m.clearTurn()
 					if ctx.Err() != nil {
+						m.emitInterrupted(turnID, input.MessageID, "mock runtime was stopped")
 						m.setState(model.StateStopped)
 						return
 					}
-					m.emitInterrupted(turnID, input.MessageID)
+					m.emitInterrupted(turnID, input.MessageID, "interrupted by user")
 					m.setState(model.StateIdle)
 					continue next
 				case <-time.After(m.cfg.MockDelay / 8):
@@ -126,10 +149,11 @@ next:
 				cancelTurn()
 				m.clearTurn()
 				if ctx.Err() != nil {
+					m.emitInterrupted(turnID, input.MessageID, "mock runtime was stopped")
 					m.setState(model.StateStopped)
 					return
 				}
-				m.emitInterrupted(turnID, input.MessageID)
+				m.emitInterrupted(turnID, input.MessageID, "interrupted by user")
 				m.setState(model.StateIdle)
 				continue next
 			case <-time.After(m.cfg.MockDelay):
@@ -143,6 +167,11 @@ next:
 			completed.TurnID = turnID
 			completed.CorrelationID = input.MessageID
 			m.sink(completed)
+			inputCompleted := runtimeEvent(m.cfg.Actor, model.RuntimeInputCompleted)
+			inputCompleted.TurnID = turnID
+			inputCompleted.CorrelationID = input.MessageID
+			inputCompleted.Name = string(model.ProcessingCompleted)
+			m.sink(inputCompleted)
 			cancelTurn()
 			m.clearTurn()
 			m.setState(model.StateIdle)
@@ -160,7 +189,13 @@ func (m *MockAdapter) clearTurn() {
 	m.mu.Unlock()
 }
 
-func (m *MockAdapter) emitInterrupted(turnID, correlationID string) {
+func (m *MockAdapter) emitInterrupted(turnID, correlationID, detail string) {
+	inputCancelled := runtimeEvent(m.cfg.Actor, model.RuntimeInputCancelled)
+	inputCancelled.TurnID = turnID
+	inputCancelled.CorrelationID = correlationID
+	inputCancelled.Name = string(model.ProcessingCancelled)
+	inputCancelled.Text = detail
+	m.sink(inputCancelled)
 	e := runtimeEvent(m.cfg.Actor, model.RuntimeTurnCompleted)
 	e.TurnID = turnID
 	e.CorrelationID = correlationID
@@ -195,22 +230,43 @@ func (m *MockAdapter) Interrupt(context.Context) error {
 	return nil
 }
 
-func (m *MockAdapter) Stop(context.Context) error {
+func (m *MockAdapter) Stop(ctx context.Context) error {
+	m.lifecycle.Lock()
+	defer m.lifecycle.Unlock()
 	m.mu.Lock()
 	cancel := m.cancel
 	m.cancel = nil
 	turn := m.turn
 	m.turn = nil
+	done := m.done
+	m.done = nil
 	m.mu.Unlock()
 	if turn != nil {
 		turn()
 	}
 	if cancel != nil {
 		cancel()
-	} else {
-		m.setState(model.StateStopped)
 	}
-	return nil
+	if done != nil {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	for {
+		select {
+		case input := <-m.queue:
+			cancelled := runtimeEvent(m.cfg.Actor, model.RuntimeInputCancelled)
+			cancelled.CorrelationID = input.MessageID
+			cancelled.Name = string(model.ProcessingCancelled)
+			cancelled.Text = "mock runtime was stopped before processing began"
+			m.sink(cancelled)
+		default:
+			m.setState(model.StateStopped)
+			return nil
+		}
+	}
 }
 
 func (m *MockAdapter) ResolveApproval(context.Context, string, string) error {

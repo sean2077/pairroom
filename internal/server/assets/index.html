@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="dark light">
   <title>PairRoom</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -23,6 +23,7 @@
       </div>
       <div class="topbar-actions">
         <div id="connection" class="connection disconnected"><span class="status-dot"></span><span>Connecting</span></div>
+        <button id="theme-button" class="icon-button" title="切换主题" aria-label="切换主题">◐</button>
         <button id="refresh-button" class="icon-button" title="刷新房间" aria-label="刷新房间">↻</button>
       </div>
     </header>
@@ -56,6 +57,11 @@
             <input id="max-hops" type="range" min="1" max="20" value="6">
             <output id="max-hops-value">6</output>
           </div>
+          <label class="field-label" for="stall-warning">无事件提醒（秒）</label>
+          <div class="number-row">
+            <input id="stall-warning" type="number" min="30" max="86400" step="30" value="300">
+            <label class="checkbox-label"><input id="stall-disabled" type="checkbox"> 关闭</label>
+          </div>
           <button id="save-settings" class="secondary-button full-width">保存策略</button>
         </section>
 
@@ -73,6 +79,12 @@
             <div class="chat-description">你、Claude Code 与 Codex 的公共时间线</div>
           </div>
           <div class="toolbar-actions">
+            <label class="search-box" title="搜索消息">
+              <span>⌕</span>
+              <input id="message-search" type="search" placeholder="搜索讨论…">
+            </label>
+            <button id="export-markdown" class="ghost-button" title="导出 Markdown">导出 MD</button>
+            <button id="export-json" class="ghost-button" title="导出 JSON">JSON</button>
             <button id="scroll-bottom" class="ghost-button">跳到最新</button>
           </div>
         </div>
@@ -116,6 +128,10 @@
           <button class="tab active" data-tab="activity">Activity</button>
           <button class="tab" data-tab="diff">Diff</button>
           <button class="tab" data-tab="approvals">Approvals <span id="approval-count" class="tab-count">0</span></button>
+        </div>
+        <div id="inspector-scope" class="inspector-scope hidden">
+          <span id="inspector-scope-text"></span>
+          <button id="clear-inspector-scope" class="bare-button" type="button">清除</button>
         </div>
         <div id="activity-tab" class="tab-content active"></div>
         <div id="diff-tab" class="tab-content">

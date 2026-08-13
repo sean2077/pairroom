@@ -20,25 +20,27 @@ type Agent struct {
 }
 
 type File struct {
-	Listen       string            `json:"listen"`
-	RoomName     string            `json:"room_name,omitempty"`
-	RoutingMode  model.RoutingMode `json:"routing_mode"`
-	MaxAgentHops int               `json:"max_agent_hops"`
-	AutoStart    bool              `json:"auto_start"`
-	Token        string            `json:"token,omitempty"`
-	Claude       Agent             `json:"claude"`
-	Codex        Agent             `json:"codex"`
+	Listen              string            `json:"listen"`
+	RoomName            string            `json:"room_name,omitempty"`
+	RoutingMode         model.RoutingMode `json:"routing_mode"`
+	MaxAgentHops        int               `json:"max_agent_hops"`
+	StallWarningSeconds int               `json:"stall_warning_seconds"`
+	AutoStart           bool              `json:"auto_start"`
+	Token               string            `json:"token,omitempty"`
+	Claude              Agent             `json:"claude"`
+	Codex               Agent             `json:"codex"`
 }
 
 func Defaults() File {
 	return File{
-		Listen:       "127.0.0.1:7332",
-		RoomName:     "Claude × Codex",
-		RoutingMode:  model.RoutingMentions,
-		MaxAgentHops: 6,
-		AutoStart:    true,
-		Claude:       Agent{Command: "claude", PermissionMode: "auto"},
-		Codex:        Agent{Command: "codex", Effort: "high", ApprovalPolicy: "unlessTrusted", Sandbox: "workspaceWrite"},
+		Listen:              "127.0.0.1:7332",
+		RoomName:            "Claude × Codex",
+		RoutingMode:         model.RoutingMentions,
+		MaxAgentHops:        6,
+		StallWarningSeconds: 300,
+		AutoStart:           true,
+		Claude:              Agent{Command: "claude", PermissionMode: "auto"},
+		Codex:               Agent{Command: "codex", Effort: "high", ApprovalPolicy: "unlessTrusted", Sandbox: "workspaceWrite"},
 	}
 }
 
@@ -71,6 +73,9 @@ func (c File) Validate() error {
 	}
 	if c.MaxAgentHops < 1 || c.MaxAgentHops > 30 {
 		return errors.New("max_agent_hops must be between 1 and 30")
+	}
+	if c.StallWarningSeconds != -1 && (c.StallWarningSeconds < 30 || c.StallWarningSeconds > 86400) {
+		return errors.New("stall_warning_seconds must be -1 (disabled) or between 30 and 86400")
 	}
 	if c.Claude.Command == "" || c.Codex.Command == "" {
 		return errors.New("both agent commands are required")

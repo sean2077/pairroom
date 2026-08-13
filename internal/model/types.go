@@ -69,6 +69,30 @@ const (
 	DeliverySkipped  DeliveryState = "skipped"
 )
 
+// ProcessingState describes what happened after a message entered a native
+// harness. DeliveryState intentionally remains the transport-level result
+// (started, injected, queued, ...); processing is the durable execution-level
+// projection that lets the room distinguish "accepted" from "actually done".
+type ProcessingState string
+
+const (
+	ProcessingWaiting    ProcessingState = "waiting"
+	ProcessingWorking    ProcessingState = "working"
+	ProcessingCompleted  ProcessingState = "completed"
+	ProcessingCancelled  ProcessingState = "cancelled"
+	ProcessingFailed     ProcessingState = "failed"
+	ProcessingSuperseded ProcessingState = "superseded"
+)
+
+func (s ProcessingState) Terminal() bool {
+	switch s {
+	case ProcessingCompleted, ProcessingCancelled, ProcessingFailed, ProcessingSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
 type RoutingMode string
 
 const (
@@ -88,18 +112,23 @@ func (m RoutingMode) Valid() bool {
 }
 
 type Message struct {
-	ID             string                    `json:"id"`
-	Seq            uint64                    `json:"seq"`
-	From           ActorID                   `json:"from"`
-	To             []ActorID                 `json:"to,omitempty"`
-	Text           string                    `json:"text"`
-	ReplyTo        string                    `json:"reply_to,omitempty"`
-	ThreadID       string                    `json:"thread_id"`
-	Hop            int                       `json:"hop"`
-	TurnID         string                    `json:"turn_id,omitempty"`
-	CreatedAt      time.Time                 `json:"created_at"`
-	Delivery       map[ActorID]DeliveryState `json:"delivery,omitempty"`
-	DeliveryDetail map[ActorID]string        `json:"delivery_detail,omitempty"`
+	ID                      string                      `json:"id"`
+	Seq                     uint64                      `json:"seq"`
+	From                    ActorID                     `json:"from"`
+	To                      []ActorID                   `json:"to,omitempty"`
+	Text                    string                      `json:"text"`
+	ReplyTo                 string                      `json:"reply_to,omitempty"`
+	RetryOf                 string                      `json:"retry_of,omitempty"`
+	ThreadID                string                      `json:"thread_id"`
+	Hop                     int                         `json:"hop"`
+	TurnID                  string                      `json:"turn_id,omitempty"`
+	CreatedAt               time.Time                   `json:"created_at"`
+	Delivery                map[ActorID]DeliveryState   `json:"delivery,omitempty"`
+	DeliveryDetail          map[ActorID]string          `json:"delivery_detail,omitempty"`
+	Processing              map[ActorID]ProcessingState `json:"processing,omitempty"`
+	ProcessingDetail        map[ActorID]string          `json:"processing_detail,omitempty"`
+	ProcessingTurn          map[ActorID]string          `json:"processing_turn,omitempty"`
+	ProcessingLastUpdatedAt map[ActorID]time.Time       `json:"processing_last_updated_at,omitempty"`
 }
 
 type Event struct {
@@ -134,6 +163,31 @@ type DeliveryUpdate struct {
 	Detail    string        `json:"detail,omitempty"`
 }
 
+type ProcessingUpdate struct {
+	MessageID string          `json:"message_id"`
+	Target    ActorID         `json:"target"`
+	State     ProcessingState `json:"state"`
+	Detail    string          `json:"detail,omitempty"`
+	TurnID    string          `json:"turn_id,omitempty"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+type RuntimeInfo struct {
+	Available      bool            `json:"available"`
+	Command        string          `json:"command,omitempty"`
+	Path           string          `json:"path,omitempty"`
+	Protocol       string          `json:"protocol,omitempty"`
+	Version        string          `json:"version,omitempty"`
+	Model          string          `json:"model,omitempty"`
+	PermissionMode string          `json:"permission_mode,omitempty"`
+	ApprovalPolicy string          `json:"approval_policy,omitempty"`
+	Sandbox        string          `json:"sandbox,omitempty"`
+	Capabilities   []string        `json:"capabilities,omitempty"`
+	Warnings       []string        `json:"warnings,omitempty"`
+	ProbedAt       time.Time       `json:"probed_at,omitempty"`
+	Data           json.RawMessage `json:"data,omitempty"`
+}
+
 type ParticipantSnapshot struct {
 	ID           ActorID         `json:"id"`
 	DisplayName  string          `json:"display_name"`
@@ -144,15 +198,17 @@ type ParticipantSnapshot struct {
 	CurrentTurn  string          `json:"current_turn,omitempty"`
 	LastError    string          `json:"last_error,omitempty"`
 	LastActivity time.Time       `json:"last_activity,omitempty"`
+	Runtime      RuntimeInfo     `json:"runtime,omitempty"`
 }
 
 type RoomSettings struct {
-	RoutingMode RoutingMode `json:"routing_mode"`
-	MaxHops     int         `json:"max_agent_hops"`
+	RoutingMode         RoutingMode `json:"routing_mode"`
+	MaxHops             int         `json:"max_agent_hops"`
+	StallWarningSeconds int         `json:"stall_warning_seconds"`
 }
 
 func DefaultRoomSettings() RoomSettings {
-	return RoomSettings{RoutingMode: RoutingMentions, MaxHops: 6}
+	return RoomSettings{RoutingMode: RoutingMentions, MaxHops: 6, StallWarningSeconds: 300}
 }
 
 type RoomMeta struct {
@@ -185,13 +241,19 @@ type RuntimeEvent struct {
 	Name          string          `json:"name,omitempty"`
 	State         AgentState      `json:"state,omitempty"`
 	Approval      *Approval       `json:"approval,omitempty"`
+	Runtime       *RuntimeInfo    `json:"runtime,omitempty"`
 	Data          json.RawMessage `json:"data,omitempty"`
 	CreatedAt     time.Time       `json:"created_at"`
 }
 
 const (
 	RuntimeSession           = "session"
+	RuntimeInfoUpdated       = "runtime.info"
 	RuntimeState             = "state"
+	RuntimeInputProcessing   = "input.processing"
+	RuntimeInputCompleted    = "input.completed"
+	RuntimeInputCancelled    = "input.cancelled"
+	RuntimeInputFailed       = "input.failed"
 	RuntimeTurnStarted       = "turn.started"
 	RuntimeTurnCompleted     = "turn.completed"
 	RuntimeTextDelta         = "text.delta"

@@ -2,7 +2,9 @@ package room
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,12 +16,14 @@ import (
 )
 
 type fakeAdapter struct {
-	actor       model.ActorID
-	sink        agent.EventSink
-	submissions chan model.AgentInput
-	mu          sync.Mutex
-	state       model.AgentState
-	sessionID   string
+	actor        model.ActorID
+	sink         agent.EventSink
+	submissions  chan model.AgentInput
+	mu           sync.Mutex
+	state        model.AgentState
+	sessionID    string
+	beforeReturn func(model.AgentInput)
+	submitErr    error
 }
 
 func (f *fakeAdapter) Actor() model.ActorID { return f.actor }
@@ -46,8 +50,14 @@ func (f *fakeAdapter) Submit(ctx context.Context, input model.AgentInput) (model
 	if err := f.Start(ctx); err != nil {
 		return model.DeliveryFailed, err
 	}
+	if f.submitErr != nil {
+		return model.DeliveryFailed, f.submitErr
+	}
 	select {
 	case f.submissions <- input:
+		if f.beforeReturn != nil {
+			f.beforeReturn(input)
+		}
 		return model.DeliveryStarted, nil
 	case <-ctx.Done():
 		return model.DeliveryFailed, ctx.Err()
@@ -225,5 +235,438 @@ func TestSessionIDsSurviveRoomRestartButRuntimeStateDoesNot(t *testing.T) {
 	}
 	if participant.State != model.StateStopped || participant.CurrentTurn != "" {
 		t.Fatalf("ephemeral runtime state should reset: %#v", participant)
+	}
+}
+
+func waitForDeliveryState(t *testing.T, engine *Engine, messageID string, target model.ActorID, want model.DeliveryState) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snapshot := engine.Snapshot()
+		for _, message := range snapshot.Messages {
+			if message.ID == messageID && message.Delivery[target] == want {
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("delivery %s for %s did not reach %s", messageID, target, want)
+}
+
+func TestDeliveryFailureIsTerminalAndLateStateIsNotPublished(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	message, err := engine.Send(context.Background(), SendRequest{
+		Text: "inspect", To: []model.ActorID{model.ActorClaude},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+	waitForDeliveryState(t, engine, message.ID, model.ActorClaude, model.DeliveryStarted)
+
+	before := len(engine.Snapshot().Events)
+	engine.delivery(message.ID, model.ActorClaude, model.DeliveryFailed, "runtime failed")
+	engine.delivery(message.ID, model.ActorClaude, model.DeliveryStarted, "late submit result")
+
+	snapshot := engine.Snapshot()
+	var got model.DeliveryState
+	for _, item := range snapshot.Messages {
+		if item.ID == message.ID {
+			got = item.Delivery[model.ActorClaude]
+			break
+		}
+	}
+	if got != model.DeliveryFailed {
+		t.Fatalf("terminal failure was overwritten: %q", got)
+	}
+	updates := 0
+	for _, event := range snapshot.Events[before:] {
+		if event.Kind == EventDeliveryUpdated {
+			updates++
+		}
+	}
+	if updates != 1 {
+		t.Fatalf("expected only the valid terminal update to publish, got %d", updates)
+	}
+}
+
+func TestTransientRuntimeEventIsLiveButNotPersisted(t *testing.T) {
+	engine, _ := newTestEngine(t, model.RoutingManual, "")
+	ch, cancel := engine.Subscribe()
+	defer cancel()
+	before := engine.Snapshot().LatestSeq
+
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeTextDelta,
+		TurnID: "turn-live", CorrelationID: "msg-live", Text: "token",
+		CreatedAt: time.Now().UTC(),
+	})
+
+	select {
+	case event := <-ch:
+		if event.Seq != 0 || event.Kind != EventRuntime {
+			t.Fatalf("unexpected transient event envelope: %#v", event)
+		}
+		var runtime model.RuntimeEvent
+		if err := json.Unmarshal(event.Data, &runtime); err != nil {
+			t.Fatal(err)
+		}
+		if runtime.Kind != model.RuntimeTextDelta || runtime.Text != "token" {
+			t.Fatalf("unexpected transient runtime event: %#v", runtime)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("transient runtime event was not published")
+	}
+
+	after := engine.Snapshot()
+	if after.LatestSeq != before {
+		t.Fatalf("transient event advanced durable sequence: before=%d after=%d", before, after.LatestSeq)
+	}
+	for _, event := range after.Events {
+		if event.Seq == 0 {
+			t.Fatalf("transient event leaked into durable snapshot: %#v", event)
+		}
+	}
+	events, err := engine.cfg.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Kind != EventRuntime {
+			continue
+		}
+		var runtime model.RuntimeEvent
+		if err := json.Unmarshal(event.Data, &runtime); err != nil {
+			t.Fatal(err)
+		}
+		if runtime.Kind == model.RuntimeTextDelta && runtime.Text == "token" {
+			t.Fatal("transient text delta was persisted")
+		}
+	}
+}
+
+func TestRestartExpiresPendingDeliveryAndApproval(t *testing.T) {
+	dir := t.TempDir()
+	eventStore, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := New(Config{
+		Name: "restore", Repo: t.TempDir(), Store: eventStore,
+		Settings: model.DefaultRoomSettings(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := model.Message{
+		ID: model.NewID("msg"), From: model.ActorUser, To: []model.ActorID{model.ActorCodex},
+		Text: "pending", ThreadID: model.NewID("thread"), CreatedAt: time.Now().UTC(),
+		Delivery: map[model.ActorID]model.DeliveryState{model.ActorCodex: model.DeliveryPending},
+	}
+	if _, err := engine.record(EventMessageCreated, model.ActorUser, message); err != nil {
+		t.Fatal(err)
+	}
+	approval := model.Approval{
+		ID: model.NewID("approval"), Agent: model.ActorCodex, Kind: "command",
+		Title: "pending", Status: "pending", RequestedAt: time.Now().UTC(),
+	}
+	if _, err := engine.record(EventApprovalUpdated, model.ActorCodex, approval); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopenedStore, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(Config{
+		Name: "ignored", Repo: t.TempDir(), Store: reopenedStore,
+		Settings: model.DefaultRoomSettings(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	snapshot := reopened.Snapshot()
+	if got := snapshot.Messages[len(snapshot.Messages)-1].Delivery[model.ActorCodex]; got != model.DeliverySkipped {
+		t.Fatalf("pending delivery was not expired: %q", got)
+	}
+	var restored *model.Approval
+	for i := range snapshot.Approvals {
+		if snapshot.Approvals[i].ID == approval.ID {
+			restored = &snapshot.Approvals[i]
+			break
+		}
+	}
+	if restored == nil || restored.Status != "expired" || restored.Decision != "runtime_restarted" || restored.ResolvedAt == nil {
+		t.Fatalf("pending approval was not expired safely: %#v", restored)
+	}
+}
+
+func findMessage(t *testing.T, snapshot model.RoomSnapshot, id string) model.Message {
+	t.Helper()
+	for _, message := range snapshot.Messages {
+		if message.ID == id {
+			return message
+		}
+	}
+	t.Fatalf("message %s was not found", id)
+	return model.Message{}
+}
+
+func waitForProcessingState(t *testing.T, engine *Engine, messageID string, target model.ActorID, want model.ProcessingState) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		message := findMessage(t, engine.Snapshot(), messageID)
+		if message.Processing[target] == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	message := findMessage(t, engine.Snapshot(), messageID)
+	t.Fatalf("processing %s for %s = %s, want %s", messageID, target, message.Processing[target], want)
+}
+
+func TestDeliveryFallbackDoesNotOverwriteNativeProcessingCorrelation(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	adapter := adapters[model.ActorCodex]
+	adapter.beforeReturn = func(input model.AgentInput) {
+		adapter.sink(model.RuntimeEvent{
+			Agent: model.ActorCodex, Kind: model.RuntimeInputProcessing,
+			CorrelationID: input.MessageID, TurnID: "turn-native", Text: "native runtime accepted input",
+			CreatedAt: time.Now().UTC(),
+		})
+	}
+
+	message, err := engine.Send(context.Background(), SendRequest{
+		Text: "inspect", To: []model.ActorID{model.ActorCodex},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapter)
+	waitForDeliveryState(t, engine, message.ID, model.ActorCodex, model.DeliveryStarted)
+	waitForProcessingState(t, engine, message.ID, model.ActorCodex, model.ProcessingWorking)
+
+	got := findMessage(t, engine.Snapshot(), message.ID)
+	if got.ProcessingDetail[model.ActorCodex] != "native runtime accepted input" || got.ProcessingTurn[model.ActorCodex] != "turn-native" {
+		t.Fatalf("delivery fallback overwrote native processing metadata: %#v", got)
+	}
+}
+
+func TestRuntimeFailurePreservesAcceptedDeliveryAndMarksProcessingFailed(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	message, err := engine.Send(context.Background(), SendRequest{
+		Text: "inspect", To: []model.ActorID{model.ActorCodex},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorCodex])
+	waitForDeliveryState(t, engine, message.ID, model.ActorCodex, model.DeliveryStarted)
+
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorCodex, Kind: model.RuntimeInputProcessing,
+		CorrelationID: message.ID, TurnID: "turn-1", Text: "working",
+		CreatedAt: time.Now().UTC(),
+	})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorCodex, Kind: model.RuntimeError,
+		CorrelationID: message.ID, TurnID: "turn-1", Text: "native turn failed",
+		CreatedAt: time.Now().UTC(),
+	})
+
+	waitForProcessingState(t, engine, message.ID, model.ActorCodex, model.ProcessingFailed)
+	got := findMessage(t, engine.Snapshot(), message.ID)
+	if got.Delivery[model.ActorCodex] != model.DeliveryStarted {
+		t.Fatalf("accepted delivery was overwritten by runtime failure: %#v", got.Delivery)
+	}
+	if got.ProcessingDetail[model.ActorCodex] != "native turn failed" || got.ProcessingTurn[model.ActorCodex] != "turn-1" {
+		t.Fatalf("failure detail was not projected: %#v", got)
+	}
+}
+
+func TestRetryCreatesNewAuditableMessageForFailedTarget(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	original, err := engine.Send(context.Background(), SendRequest{
+		Text: "review", To: []model.ActorID{model.ActorClaude, model.ActorCodex},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+	_ = receiveInput(t, adapters[model.ActorCodex])
+	waitForDeliveryState(t, engine, original.ID, model.ActorClaude, model.DeliveryStarted)
+	waitForDeliveryState(t, engine, original.ID, model.ActorCodex, model.DeliveryStarted)
+
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorCodex, Kind: model.RuntimeInputFailed,
+		CorrelationID: original.ID, TurnID: "turn-failed", Text: "tool crashed",
+		CreatedAt: time.Now().UTC(),
+	})
+	waitForProcessingState(t, engine, original.ID, model.ActorCodex, model.ProcessingFailed)
+
+	retry, err := engine.Retry(context.Background(), original.ID, RetryRequest{To: []model.ActorID{model.ActorCodex}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID == original.ID || retry.RetryOf != original.ID {
+		t.Fatalf("retry did not create an auditable child message: original=%#v retry=%#v", original, retry)
+	}
+	if retry.ThreadID != original.ThreadID || retry.Text != original.Text || len(retry.To) != 1 || retry.To[0] != model.ActorCodex {
+		t.Fatalf("retry did not preserve conversation identity: %#v", retry)
+	}
+	input := receiveInput(t, adapters[model.ActorCodex])
+	if input.MessageID != retry.ID {
+		t.Fatalf("runtime received original message ID instead of retry ID: %#v", input)
+	}
+	waitForDeliveryState(t, engine, retry.ID, model.ActorCodex, model.DeliveryStarted)
+
+	if _, err := engine.Retry(context.Background(), original.ID, RetryRequest{To: []model.ActorID{model.ActorClaude}}); err == nil {
+		t.Fatal("successful/non-terminal Claude target should not be retryable")
+	}
+}
+
+func TestRestartCancelsInFlightProcessing(t *testing.T) {
+	dir := t.TempDir()
+	engine, adapters := newTestEngine(t, model.RoutingManual, dir)
+	message, err := engine.Send(context.Background(), SendRequest{
+		Text: "long-running", To: []model.ActorID{model.ActorClaude},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+	waitForDeliveryState(t, engine, message.ID, model.ActorClaude, model.DeliveryStarted)
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeInputProcessing,
+		CorrelationID: message.ID, TurnID: "turn-live", Text: "working",
+		CreatedAt: time.Now().UTC(),
+	})
+	waitForProcessingState(t, engine, message.ID, model.ActorClaude, model.ProcessingWorking)
+	if err := engine.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopenedStore, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(Config{
+		Name: "ignored", Repo: t.TempDir(), Store: reopenedStore,
+		Settings: model.DefaultRoomSettings(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	got := findMessage(t, reopened.Snapshot(), message.ID)
+	if got.Delivery[model.ActorClaude] != model.DeliveryStarted {
+		t.Fatalf("restart must retain historical delivery acceptance: %#v", got.Delivery)
+	}
+	if got.Processing[model.ActorClaude] != model.ProcessingCancelled {
+		t.Fatalf("restart left ghost working state: %#v", got.Processing)
+	}
+	if !strings.Contains(got.ProcessingDetail[model.ActorClaude], "restarted") {
+		t.Fatalf("restart cancellation lacks a useful reason: %#v", got.ProcessingDetail)
+	}
+}
+
+func TestRuntimeInfoProjectionIsDeepCloned(t *testing.T) {
+	engine, _ := newTestEngine(t, model.RoutingManual, "")
+	info := model.RuntimeInfo{
+		Available: true, Version: "2.1.231", Protocol: "claude-stream-json",
+		Capabilities: []string{"stream-json"}, Warnings: []string{"test warning"},
+		Data: json.RawMessage(`{"source":"probe"}`), ProbedAt: time.Now().UTC(),
+	}
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeInfoUpdated, Runtime: &info,
+		CreatedAt: time.Now().UTC(),
+	})
+	first := engine.Snapshot()
+	participant := first.Participants[model.ActorClaude]
+	if participant.Runtime.Version != info.Version || len(participant.Runtime.Capabilities) != 1 {
+		t.Fatalf("runtime info was not projected: %#v", participant.Runtime)
+	}
+	participant.Runtime.Capabilities[0] = "mutated"
+	participant.Runtime.Warnings[0] = "mutated"
+	participant.Runtime.Data[0] = '['
+	first.Participants[model.ActorClaude] = participant
+
+	second := engine.Snapshot().Participants[model.ActorClaude].Runtime
+	if second.Capabilities[0] != "stream-json" || second.Warnings[0] != "test warning" || string(second.Data) != `{"source":"probe"}` {
+		t.Fatalf("snapshot leaked mutable runtime info: %#v", second)
+	}
+}
+
+func TestStopAgentCancelsInFlightMessagesAndExpiresApprovals(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	message, err := engine.Send(context.Background(), SendRequest{
+		Text: "keep working", To: []model.ActorID{model.ActorCodex},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorCodex])
+	waitForDeliveryState(t, engine, message.ID, model.ActorCodex, model.DeliveryStarted)
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorCodex, Kind: model.RuntimeInputProcessing,
+		CorrelationID: message.ID, TurnID: "turn-stop", Text: "working",
+		CreatedAt: time.Now().UTC(),
+	})
+	approval := model.Approval{
+		ID: model.NewID("approval"), Agent: model.ActorCodex, Kind: "command",
+		Title: "run command", Status: "pending", RequestedAt: time.Now().UTC(),
+	}
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorCodex, Kind: model.RuntimeApprovalRequested,
+		Approval: &approval, CreatedAt: time.Now().UTC(),
+	})
+
+	if err := engine.StopAgent(context.Background(), model.ActorCodex); err != nil {
+		t.Fatal(err)
+	}
+	got := findMessage(t, engine.Snapshot(), message.ID)
+	if got.Processing[model.ActorCodex] != model.ProcessingCancelled {
+		t.Fatalf("stop left an in-flight message unresolved: %#v", got.Processing)
+	}
+	if got.Delivery[model.ActorCodex] != model.DeliveryStarted {
+		t.Fatalf("stop rewrote historical delivery state: %#v", got.Delivery)
+	}
+	var resolved *model.Approval
+	for i := range engine.Snapshot().Approvals {
+		item := engine.Snapshot().Approvals[i]
+		if item.ID == approval.ID {
+			resolved = &item
+			break
+		}
+	}
+	if resolved == nil || resolved.Status != "expired" || resolved.Decision != "runtime_stopped" || resolved.ResolvedAt == nil {
+		t.Fatalf("stop left an unresolvable approval pending: %#v", resolved)
+	}
+}
+
+func TestSubmitFailureSettlesDeliveryAndProcessing(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	adapters[model.ActorClaude].submitErr = errors.New("native input rejected")
+
+	message, err := engine.Send(context.Background(), SendRequest{
+		Text: "inspect", To: []model.ActorID{model.ActorClaude},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForDeliveryState(t, engine, message.ID, model.ActorClaude, model.DeliveryFailed)
+	waitForProcessingState(t, engine, message.ID, model.ActorClaude, model.ProcessingFailed)
+
+	got := findMessage(t, engine.Snapshot(), message.ID)
+	if !strings.Contains(got.DeliveryDetail[model.ActorClaude], "native input rejected") {
+		t.Fatalf("delivery failure detail was lost: %#v", got.DeliveryDetail)
+	}
+	if !strings.Contains(got.ProcessingDetail[model.ActorClaude], "did not accept") {
+		t.Fatalf("processing failure did not explain pre-execution rejection: %#v", got.ProcessingDetail)
 	}
 }

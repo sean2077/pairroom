@@ -3,9 +3,12 @@ package store
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/version"
 )
 
 func TestAppendLoadAndSequence(t *testing.T) {
@@ -138,7 +141,7 @@ func TestOpenCreatesMetadata(t *testing.T) {
 	if err := store.LoadJSON("metadata.json", &metadata); err != nil {
 		t.Fatal(err)
 	}
-	if metadata.Format != "pairroom-jsonl" || metadata.SchemaVersion != 1 {
+	if metadata.Format != "pairroom-jsonl" || metadata.SchemaVersion != 2 {
 		t.Fatalf("unexpected metadata: %#v", metadata)
 	}
 }
@@ -166,5 +169,36 @@ func TestSaveAndLoadJSON(t *testing.T) {
 	}
 	if err := store.SaveJSON("../escape.json", input); err == nil {
 		t.Fatal("expected traversal metadata name to fail")
+	}
+}
+
+func TestOpenUpgradesOlderMetadataAndRejectsFutureSchema(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(`{"format":"pairroom-jsonl","schema_version":1,"app_version":"0.1.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var upgraded struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if err := store.LoadJSON("metadata.json", &upgraded); err != nil {
+		t.Fatal(err)
+	}
+	if upgraded.SchemaVersion != version.StoreSchema {
+		t.Fatalf("metadata was not upgraded: %#v", upgraded)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	future := t.TempDir()
+	if err := os.WriteFile(filepath.Join(future, "metadata.json"), []byte(`{"format":"pairroom-jsonl","schema_version":999}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(future); err == nil || !strings.Contains(err.Error(), "newer than supported") {
+		t.Fatalf("future schema should fail safely, got %v", err)
 	}
 }

@@ -58,3 +58,20 @@ func TestLoadRejectsUnknownAndInvalid(t *testing.T) {
 		}
 	}
 }
+
+func TestStallWarningConfiguration(t *testing.T) {
+	cfg := Defaults()
+	if cfg.StallWarningSeconds != 300 {
+		t.Fatalf("unexpected default stall warning: %d", cfg.StallWarningSeconds)
+	}
+	cfg.StallWarningSeconds = -1
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("-1 should disable warnings: %v", err)
+	}
+	for _, invalid := range []int{-2, 1, 29, 86401} {
+		cfg.StallWarningSeconds = invalid
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("stall_warning_seconds=%d should be rejected", invalid)
+		}
+	}
+}

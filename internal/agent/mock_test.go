@@ -1,0 +1,58 @@
+package agent
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sean2077/pairroom/internal/model"
+)
+
+func TestMockStopCancelsActiveAndQueuedInputs(t *testing.T) {
+	var mu sync.Mutex
+	var events []model.RuntimeEvent
+	started := make(chan struct{}, 1)
+	adapter := NewMock(Config{Actor: model.ActorClaude, MockDelay: 2 * time.Second}, func(event model.RuntimeEvent) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+		if event.Kind == model.RuntimeTurnStarted {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := adapter.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Submit(ctx, model.AgentInput{MessageID: "msg-active"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Submit(ctx, model.AgentInput{MessageID: "msg-queued"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal("mock turn did not start")
+	}
+	if err := adapter.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	cancelled := map[string]bool{}
+	for _, event := range events {
+		if event.Kind == model.RuntimeInputCancelled {
+			cancelled[event.CorrelationID] = true
+		}
+	}
+	if !cancelled["msg-active"] || !cancelled["msg-queued"] {
+		t.Fatalf("stop did not settle every input: %#v", events)
+	}
+}

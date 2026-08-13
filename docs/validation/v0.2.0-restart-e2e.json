@@ -1,0 +1,13 @@
+{
+  "before": {
+    "delivery": "started",
+    "processing": "working",
+    "participant": "working"
+  },
+  "after": {
+    "delivery": "started",
+    "processing": "cancelled",
+    "detail": "PairRoom restarted before the native runtime reported completion",
+    "participant": "stopped"
+  }
+}

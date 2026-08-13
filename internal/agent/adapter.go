@@ -15,6 +15,7 @@ type Config struct {
 	Repo           string
 	DataDir        string
 	RoomName       string
+	ClientVersion  string
 	Command        string
 	Model          string
 	Effort         string

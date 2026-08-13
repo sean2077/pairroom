@@ -1,61 +1,27 @@
-# Contributing to PairRoom
+# Contributing
 
-## Principles
+PairRoom's priority is reliable use of official Claude Code and Codex Harnesses, not rapid expansion to many model APIs.
 
-- Preserve the official Claude Code and Codex harnesses.
-- Prefer documented structured protocols over terminal scraping.
-- Fail closed for permissions and unknown server requests.
-- Persist before publishing.
-- Keep agent discussion bounded and user-preemptible.
-- Do not add a framework dependency for functionality that can remain a small local abstraction.
-
-## Development setup
+## Development checks
 
 ```bash
-go version   # 1.23+
 make fmt
 make test
-make test-race
+make race
 make vet
-make build
+node --check internal/server/assets/app.js
 ```
 
-Run the deterministic demo:
+Before opening a change:
 
-```bash
-make demo
-```
+- Keep the Go core free of third-party modules unless there is a compelling reviewed reason.
+- Do not parse terminal ANSI output to infer runtime state when a structured vendor protocol exists.
+- Do not add undocumented vendor request fields merely for convenience.
+- Preserve append-only event history; corrections should be new events/messages.
+- Treat unknown approval/server requests as fail-closed.
+- Add tests for lifecycle ordering, restart recovery and concurrent delivery races.
+- Update protocol, architecture, product plan and validation docs when behavior changes.
 
-## Tests
+## Protocol fixtures
 
-A change to routing, persistence or protocol translation should include tests for:
-
-- message targeting and role context
-- user preemption
-- hop limits or stop markers
-- restart replay
-- malformed/unknown protocol input
-- permission responses that grant no more than requested
-
-Native adapter changes should be validated against currently supported official CLI versions on a disposable repository.
-
-## Code layout
-
-```text
-cmd/pairroom          CLI entry point
-internal/agent        vendor adapters and mock runtime
-internal/room         event-sourced collaboration engine
-internal/model        canonical data model
-internal/store        append-only persistence
-internal/server       HTTP/SSE server and embedded UI
-internal/prompt       room envelope and mention parsing
-```
-
-## Pull requests
-
-Keep changes focused. Explain:
-
-1. which invariant or user workflow changes;
-2. whether the vendor protocol shape is documented and where;
-3. how failure and restart behavior were tested;
-4. whether security or permission behavior becomes broader.
+Real vendor fixtures must be scrubbed of repository contents, prompts, credentials, tokens, local user paths and project names before they are committed.

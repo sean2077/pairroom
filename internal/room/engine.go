@@ -23,6 +23,7 @@ const (
 	EventParticipantUpdated = "participant.updated"
 	EventMessageCreated     = "message.created"
 	EventDeliveryUpdated    = "message.delivery.updated"
+	EventProcessingUpdated  = "message.processing.updated"
 	EventRuntime            = "runtime.event"
 	EventApprovalUpdated    = "approval.updated"
 	EventSystemNotice       = "system.notice"
@@ -49,6 +50,10 @@ type SendRequest struct {
 	ReplyTo string          `json:"reply_to,omitempty"`
 }
 
+type RetryRequest struct {
+	To []model.ActorID `json:"to,omitempty"`
+}
+
 type Engine struct {
 	mu sync.RWMutex
 
@@ -59,6 +64,9 @@ type Engine struct {
 	cancel   context.CancelFunc
 	started  bool
 	closed   bool
+
+	lastRuntimeActivity map[model.ActorID]time.Time
+	stallWarnedTurn     map[model.ActorID]string
 }
 
 func New(cfg Config) (*Engine, error) {
@@ -75,7 +83,13 @@ func New(cfg Config) (*Engine, error) {
 		return nil, fmt.Errorf("invalid routing mode %q", cfg.Settings.RoutingMode)
 	}
 	if cfg.Settings.MaxHops < 1 {
-		cfg.Settings.MaxHops = 6
+		cfg.Settings.MaxHops = model.DefaultRoomSettings().MaxHops
+	}
+	if cfg.Settings.StallWarningSeconds == 0 {
+		cfg.Settings.StallWarningSeconds = model.DefaultRoomSettings().StallWarningSeconds
+	}
+	if cfg.Settings.StallWarningSeconds != -1 && (cfg.Settings.StallWarningSeconds < 30 || cfg.Settings.StallWarningSeconds > 86400) {
+		return nil, errors.New("stall_warning_seconds must be -1 (disabled) or between 30 and 86400")
 	}
 	if cfg.ClaudeFactory == nil {
 		cfg.ClaudeFactory = agent.ClaudeFactory
@@ -84,7 +98,12 @@ func New(cfg Config) (*Engine, error) {
 		cfg.CodexFactory = agent.CodexFactory
 	}
 
-	e := &Engine{cfg: cfg, adapters: make(map[model.ActorID]agent.Adapter, 2)}
+	e := &Engine{
+		cfg:                 cfg,
+		adapters:            make(map[model.ActorID]agent.Adapter, 2),
+		lastRuntimeActivity: make(map[model.ActorID]time.Time, 2),
+		stallWarnedTurn:     make(map[model.ActorID]string, 2),
+	}
 	if err := e.restore(); err != nil {
 		return nil, err
 	}
@@ -103,7 +122,7 @@ func (e *Engine) restore() error {
 	}
 	if e.snapshot.Meta.ID != "" {
 		e.ensureSnapshotDefaults()
-		return nil
+		return e.expireRestoredTransientState()
 	}
 
 	name := strings.TrimSpace(e.cfg.Name)
@@ -150,6 +169,14 @@ func (e *Engine) ensureSnapshotDefaults() {
 	if e.snapshot.Settings.RoutingMode == "" {
 		e.snapshot.Settings = model.DefaultRoomSettings()
 	}
+	if e.snapshot.Settings.MaxHops < 1 {
+		e.snapshot.Settings.MaxHops = model.DefaultRoomSettings().MaxHops
+	}
+	// Schema v1 had no stall-warning field. Zero therefore means "use the
+	// current default"; -1 explicitly disables warnings.
+	if e.snapshot.Settings.StallWarningSeconds == 0 {
+		e.snapshot.Settings.StallWarningSeconds = model.DefaultRoomSettings().StallWarningSeconds
+	}
 	if e.snapshot.Participants == nil {
 		e.snapshot.Participants = make(map[model.ActorID]model.ParticipantSnapshot, 2)
 	}
@@ -178,9 +205,83 @@ func (e *Engine) ensureSnapshotDefaults() {
 	if e.snapshot.Messages == nil {
 		e.snapshot.Messages = make([]model.Message, 0)
 	}
+	for i := range e.snapshot.Messages {
+		message := &e.snapshot.Messages[i]
+		ensureMessageLifecycleMaps(message)
+		for target, delivery := range message.Delivery {
+			if _, ok := message.Processing[target]; ok {
+				continue
+			}
+			switch delivery {
+			case model.DeliveryStarted, model.DeliveryInjected:
+				message.Processing[target] = model.ProcessingWorking
+			default:
+				message.Processing[target] = model.ProcessingWaiting
+			}
+		}
+	}
 	if e.snapshot.Approvals == nil {
 		e.snapshot.Approvals = make([]model.Approval, 0)
 	}
+}
+
+// expireRestoredTransientState closes records that were durable but never
+// handed to a runtime before the previous PairRoom process stopped. Vendor
+// server-request IDs are connection-local, so pending approvals cannot safely
+// survive a daemon restart.
+func (e *Engine) expireRestoredTransientState() error {
+	e.mu.RLock()
+	type pendingDelivery struct {
+		messageID string
+		target    model.ActorID
+	}
+	var deliveries []pendingDelivery
+	for _, message := range e.snapshot.Messages {
+		for target, state := range message.Delivery {
+			if state == model.DeliveryPending {
+				deliveries = append(deliveries, pendingDelivery{messageID: message.ID, target: target})
+			}
+		}
+	}
+	var approvals []model.Approval
+	for _, approval := range e.snapshot.Approvals {
+		if approval.Status == "pending" {
+			approvals = append(approvals, approval)
+		}
+	}
+	e.mu.RUnlock()
+
+	for _, pending := range deliveries {
+		e.delivery(pending.messageID, pending.target, model.DeliverySkipped, "PairRoom restarted before runtime submission completed")
+	}
+
+	e.mu.RLock()
+	type transientProcessing struct {
+		messageID string
+		target    model.ActorID
+	}
+	var processing []transientProcessing
+	for _, message := range e.snapshot.Messages {
+		for target, state := range message.Processing {
+			if state == model.ProcessingWaiting || state == model.ProcessingWorking {
+				processing = append(processing, transientProcessing{messageID: message.ID, target: target})
+			}
+		}
+	}
+	e.mu.RUnlock()
+	for _, item := range processing {
+		e.processing(item.messageID, item.target, model.ProcessingCancelled, "PairRoom restarted before the native runtime reported completion", "")
+	}
+	for _, approval := range approvals {
+		now := time.Now().UTC()
+		approval.Status = "expired"
+		approval.Decision = "runtime_restarted"
+		approval.ResolvedAt = &now
+		if _, err := e.record(EventApprovalUpdated, model.ActorSystem, approval); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Start initializes the two runtime adapters. AutoStart controls whether the
@@ -216,7 +317,12 @@ func (e *Engine) Start(parent context.Context) error {
 	e.adapters[model.ActorClaude] = e.cfg.ClaudeFactory(claudeCfg, e.HandleRuntimeEvent)
 	e.adapters[model.ActorCodex] = e.cfg.CodexFactory(codexCfg, e.HandleRuntimeEvent)
 	autoStart := e.cfg.AutoStart
+	now := time.Now().UTC()
+	e.lastRuntimeActivity[model.ActorClaude] = now
+	e.lastRuntimeActivity[model.ActorCodex] = now
 	e.mu.Unlock()
+
+	go e.monitorStalledTurns()
 
 	if autoStart {
 		for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
@@ -252,18 +358,24 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 	}
 	threadID := e.threadForReply(req.ReplyTo)
 	message := model.Message{
-		ID:             model.NewID("msg"),
-		From:           model.ActorUser,
-		To:             targets,
-		Text:           text,
-		ReplyTo:        req.ReplyTo,
-		ThreadID:       threadID,
-		CreatedAt:      time.Now().UTC(),
-		Delivery:       make(map[model.ActorID]model.DeliveryState, len(targets)),
-		DeliveryDetail: make(map[model.ActorID]string, len(targets)),
+		ID:                      model.NewID("msg"),
+		From:                    model.ActorUser,
+		To:                      targets,
+		Text:                    text,
+		ReplyTo:                 req.ReplyTo,
+		ThreadID:                threadID,
+		CreatedAt:               time.Now().UTC(),
+		Delivery:                make(map[model.ActorID]model.DeliveryState, len(targets)),
+		DeliveryDetail:          make(map[model.ActorID]string, len(targets)),
+		Processing:              make(map[model.ActorID]model.ProcessingState, len(targets)),
+		ProcessingDetail:        make(map[model.ActorID]string, len(targets)),
+		ProcessingTurn:          make(map[model.ActorID]string, len(targets)),
+		ProcessingLastUpdatedAt: make(map[model.ActorID]time.Time, len(targets)),
 	}
 	for _, target := range targets {
 		message.Delivery[target] = model.DeliveryPending
+		message.Processing[target] = model.ProcessingWaiting
+		message.ProcessingLastUpdatedAt[target] = message.CreatedAt
 	}
 	event, err := e.record(EventMessageCreated, model.ActorUser, message)
 	if err != nil {
@@ -277,6 +389,75 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 		go e.deliver(e.runtimeContext(ctx), message, target)
 	}
 	return message, nil
+}
+
+// Retry creates a new auditable message rather than mutating a past message.
+// Reusing the original ID would make a late vendor acknowledgment ambiguous
+// and could hide duplicate execution. The caller can retry only targets whose
+// previous delivery or processing state is terminal and unsuccessful.
+func (e *Engine) Retry(ctx context.Context, messageID string, req RetryRequest) (model.Message, error) {
+	e.mu.RLock()
+	original, found := e.findMessageLocked(messageID)
+	e.mu.RUnlock()
+	if !found {
+		return model.Message{}, fmt.Errorf("unknown message %q", messageID)
+	}
+
+	targets := model.NormalizeActors(req.To)
+	if len(targets) == 0 {
+		for _, target := range original.To {
+			if !target.ValidParticipant() || !retryableTarget(original, target) {
+				continue
+			}
+			targets = append(targets, target)
+		}
+		targets = model.NormalizeActors(targets)
+	}
+	if len(targets) == 0 {
+		return model.Message{}, errors.New("message has no failed, cancelled, skipped, or superseded target to retry")
+	}
+	for _, target := range targets {
+		if !retryableTarget(original, target) {
+			return model.Message{}, fmt.Errorf("delivery to %s is not retryable", target.DisplayName())
+		}
+	}
+
+	now := time.Now().UTC()
+	retry := model.Message{
+		ID:                      model.NewID("msg"),
+		From:                    original.From,
+		To:                      targets,
+		Text:                    original.Text,
+		ReplyTo:                 original.ReplyTo,
+		RetryOf:                 original.ID,
+		ThreadID:                original.ThreadID,
+		Hop:                     original.Hop,
+		CreatedAt:               now,
+		Delivery:                make(map[model.ActorID]model.DeliveryState, len(targets)),
+		DeliveryDetail:          make(map[model.ActorID]string, len(targets)),
+		Processing:              make(map[model.ActorID]model.ProcessingState, len(targets)),
+		ProcessingDetail:        make(map[model.ActorID]string, len(targets)),
+		ProcessingTurn:          make(map[model.ActorID]string, len(targets)),
+		ProcessingLastUpdatedAt: make(map[model.ActorID]time.Time, len(targets)),
+	}
+	if retry.ThreadID == "" {
+		retry.ThreadID = model.NewID("thread")
+	}
+	for _, target := range targets {
+		retry.Delivery[target] = model.DeliveryPending
+		retry.Processing[target] = model.ProcessingWaiting
+		retry.ProcessingLastUpdatedAt[target] = now
+	}
+	event, err := e.record(EventMessageCreated, model.ActorUser, retry)
+	if err != nil {
+		return model.Message{}, err
+	}
+	retry.Seq = event.Seq
+	for _, target := range targets {
+		target := target
+		go e.deliver(e.runtimeContext(ctx), retry, target)
+	}
+	return retry, nil
 }
 
 func (e *Engine) StartAgent(ctx context.Context, actor model.ActorID) error {
@@ -308,6 +489,8 @@ func (e *Engine) StopAgent(ctx context.Context, actor model.ActorID) error {
 	if err := adapter.Stop(ctx); err != nil {
 		return err
 	}
+	e.cancelInFlight(actor, "native runtime was stopped")
+	e.expireApprovals(actor, "runtime_stopped")
 	e.updateParticipant(actor, func(p *model.ParticipantSnapshot) {
 		p.State = model.StateStopped
 		p.CurrentTurn = ""
@@ -317,12 +500,48 @@ func (e *Engine) StopAgent(ctx context.Context, actor model.ActorID) error {
 }
 
 func (e *Engine) RestartAgent(ctx context.Context, actor model.ActorID) error {
-	adapter, err := e.adapter(actor)
-	if err != nil {
+	if err := e.StopAgent(ctx, actor); err != nil {
 		return err
 	}
-	_ = adapter.Stop(ctx)
 	return e.StartAgent(ctx, actor)
+}
+
+func (e *Engine) cancelInFlight(actor model.ActorID, detail string) {
+	type item struct {
+		messageID string
+		turnID    string
+	}
+	e.mu.RLock()
+	var items []item
+	for _, message := range e.snapshot.Messages {
+		state := message.Processing[actor]
+		if state != model.ProcessingWaiting && state != model.ProcessingWorking {
+			continue
+		}
+		items = append(items, item{messageID: message.ID, turnID: message.ProcessingTurn[actor]})
+	}
+	e.mu.RUnlock()
+	for _, pending := range items {
+		e.processing(pending.messageID, actor, model.ProcessingCancelled, detail, pending.turnID)
+	}
+}
+
+func (e *Engine) expireApprovals(actor model.ActorID, decision string) {
+	e.mu.RLock()
+	var approvals []model.Approval
+	for _, approval := range e.snapshot.Approvals {
+		if approval.Agent == actor && approval.Status == "pending" {
+			approvals = append(approvals, approval)
+		}
+	}
+	e.mu.RUnlock()
+	for _, approval := range approvals {
+		now := time.Now().UTC()
+		approval.Status = "expired"
+		approval.Decision = decision
+		approval.ResolvedAt = &now
+		_, _ = e.record(EventApprovalUpdated, model.ActorSystem, approval)
+	}
 }
 
 func (e *Engine) Interrupt(ctx context.Context, actor model.ActorID) error {
@@ -371,6 +590,12 @@ func (e *Engine) UpdateSettings(settings model.RoomSettings) error {
 	}
 	if settings.MaxHops < 1 || settings.MaxHops > 30 {
 		return errors.New("max_agent_hops must be between 1 and 30")
+	}
+	if settings.StallWarningSeconds == 0 {
+		settings.StallWarningSeconds = model.DefaultRoomSettings().StallWarningSeconds
+	}
+	if settings.StallWarningSeconds < -1 || settings.StallWarningSeconds > 86400 || (settings.StallWarningSeconds > 0 && settings.StallWarningSeconds < 30) {
+		return errors.New("stall_warning_seconds must be -1 (disabled) or between 30 and 86400")
 	}
 	_, err := e.record(EventSettingsUpdated, model.ActorUser, settings)
 	return err
@@ -454,6 +679,7 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 	adapter, err := e.adapter(target)
 	if err != nil {
 		e.delivery(message.ID, target, model.DeliveryFailed, err.Error())
+		e.processing(message.ID, target, model.ProcessingFailed, "input was not submitted: "+err.Error(), "")
 		return
 	}
 	e.mu.RLock()
@@ -477,6 +703,7 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 	state, err := adapter.Submit(deliveryCtx, input)
 	if err != nil {
 		e.delivery(message.ID, target, model.DeliveryFailed, err.Error())
+		e.processing(message.ID, target, model.ProcessingFailed, "runtime did not accept input: "+err.Error(), "")
 		e.updateParticipant(target, func(p *model.ParticipantSnapshot) {
 			p.State = model.StateError
 			p.LastError = err.Error()
@@ -485,6 +712,20 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 		return
 	}
 	e.delivery(message.ID, target, state, "")
+	// Third-party adapters are only required to return a delivery disposition;
+	// the richer processing events are optional. Project a conservative fallback
+	// so every accepted message has a visible execution lifecycle. Native
+	// adapters may emit the same state earlier; identical transitions are safe.
+	switch state {
+	case model.DeliveryStarted, model.DeliveryInjected:
+		e.processingFallback(message.ID, target, model.ProcessingWorking, "accepted by native runtime")
+	case model.DeliveryQueued:
+		e.processingFallback(message.ID, target, model.ProcessingWaiting, "queued for the next safe turn boundary")
+	case model.DeliveryFailed:
+		e.processing(message.ID, target, model.ProcessingFailed, "runtime rejected the input before execution", "")
+	case model.DeliverySkipped:
+		e.processing(message.ID, target, model.ProcessingCancelled, "runtime skipped the input before execution", "")
+	}
 }
 
 // HandleRuntimeEvent is the single ingress from both vendor adapters. It
@@ -493,7 +734,17 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 	if runtimeEvent.CreatedAt.IsZero() {
 		runtimeEvent.CreatedAt = time.Now().UTC()
 	}
-	_, _ = e.record(EventRuntime, runtimeEvent.Agent, runtimeEvent)
+	if runtimeEvent.Agent.ValidParticipant() {
+		e.mu.Lock()
+		e.lastRuntimeActivity[runtimeEvent.Agent] = runtimeEvent.CreatedAt
+		delete(e.stallWarnedTurn, runtimeEvent.Agent)
+		e.mu.Unlock()
+	}
+	if isTransientRuntimeKind(runtimeEvent.Kind) {
+		e.publishTransientRuntime(runtimeEvent)
+	} else {
+		_, _ = e.record(EventRuntime, runtimeEvent.Agent, runtimeEvent)
+	}
 
 	switch runtimeEvent.Kind {
 	case model.RuntimeSession:
@@ -503,6 +754,40 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 			}
 			p.LastActivity = runtimeEvent.CreatedAt
 		})
+	case model.RuntimeInfoUpdated:
+		var info model.RuntimeInfo
+		if runtimeEvent.Runtime != nil {
+			info = *runtimeEvent.Runtime
+		} else if len(runtimeEvent.Data) > 0 {
+			_ = json.Unmarshal(runtimeEvent.Data, &info)
+		}
+		e.updateParticipant(runtimeEvent.Agent, func(p *model.ParticipantSnapshot) {
+			p.Runtime = info
+			if info.Model != "" {
+				p.Model = info.Model
+			}
+			p.LastActivity = runtimeEvent.CreatedAt
+		})
+	case model.RuntimeInputProcessing:
+		if runtimeEvent.CorrelationID != "" {
+			state := model.ProcessingWorking
+			if runtimeEvent.Name == string(model.ProcessingWaiting) {
+				state = model.ProcessingWaiting
+			}
+			e.processing(runtimeEvent.CorrelationID, runtimeEvent.Agent, state, runtimeEvent.Text, runtimeEvent.TurnID)
+		}
+	case model.RuntimeInputCompleted:
+		if runtimeEvent.CorrelationID != "" {
+			e.processing(runtimeEvent.CorrelationID, runtimeEvent.Agent, model.ProcessingCompleted, runtimeEvent.Text, runtimeEvent.TurnID)
+		}
+	case model.RuntimeInputCancelled:
+		if runtimeEvent.CorrelationID != "" {
+			e.processing(runtimeEvent.CorrelationID, runtimeEvent.Agent, model.ProcessingCancelled, runtimeEvent.Text, runtimeEvent.TurnID)
+		}
+	case model.RuntimeInputFailed:
+		if runtimeEvent.CorrelationID != "" {
+			e.processing(runtimeEvent.CorrelationID, runtimeEvent.Agent, model.ProcessingFailed, runtimeEvent.Text, runtimeEvent.TurnID)
+		}
 	case model.RuntimeState:
 		e.updateParticipant(runtimeEvent.Agent, func(p *model.ParticipantSnapshot) {
 			if runtimeEvent.State != "" {
@@ -516,6 +801,9 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 			p.LastActivity = runtimeEvent.CreatedAt
 		})
 	case model.RuntimeTurnStarted:
+		if runtimeEvent.CorrelationID != "" {
+			e.processing(runtimeEvent.CorrelationID, runtimeEvent.Agent, model.ProcessingWorking, "native turn started", runtimeEvent.TurnID)
+		}
 		e.updateParticipant(runtimeEvent.Agent, func(p *model.ParticipantSnapshot) {
 			p.State = model.StateWorking
 			p.CurrentTurn = runtimeEvent.TurnID
@@ -544,6 +832,12 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 			_, _ = e.record(EventApprovalUpdated, runtimeEvent.Agent, *runtimeEvent.Approval)
 		}
 	case model.RuntimeError:
+		// Runtime errors happen after a harness has accepted the input. Keep the
+		// transport-level delivery result intact and project only execution failure.
+		// Submit() errors are the sole source of DeliveryFailed.
+		if runtimeEvent.CorrelationID != "" {
+			e.processing(runtimeEvent.CorrelationID, runtimeEvent.Agent, model.ProcessingFailed, runtimeEvent.Text, runtimeEvent.TurnID)
+		}
 		e.updateParticipant(runtimeEvent.Agent, func(p *model.ParticipantSnapshot) {
 			p.State = model.StateError
 			p.LastError = runtimeEvent.Text
@@ -551,6 +845,31 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 		})
 	case model.RuntimeFinal:
 		e.onFinal(runtimeEvent)
+	}
+}
+
+// High-volume display telemetry is useful while a turn is running but should
+// never stall a vendor stdout reader on per-token disk sync. Durable state and
+// audit events still go through record() before publication. Sequence zero marks
+// an intentionally ephemeral SSE event; reconnects resume from durable events.
+func (e *Engine) publishTransientRuntime(runtimeEvent model.RuntimeEvent) {
+	e.mu.RLock()
+	roomID := e.snapshot.Meta.ID
+	e.mu.RUnlock()
+	event, err := model.NewEvent(roomID, EventRuntime, runtimeEvent.Agent, runtimeEvent)
+	if err != nil {
+		return
+	}
+	event.Seq = 0
+	e.cfg.Hub.Publish(event)
+}
+
+func isTransientRuntimeKind(kind string) bool {
+	switch kind {
+	case model.RuntimeTextDelta, model.RuntimeCommandOutput, model.RuntimeDiffUpdated, model.RuntimeUsageUpdated:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -574,23 +893,29 @@ func (e *Engine) onFinal(runtimeEvent model.RuntimeEvent) {
 	to := []model.ActorID{model.ActorUser}
 	to = append(to, targets...)
 	message := model.Message{
-		ID:             model.NewID("msg"),
-		From:           runtimeEvent.Agent,
-		To:             to,
-		Text:           cleanText,
-		ReplyTo:        incoming.ID,
-		ThreadID:       incoming.ThreadID,
-		Hop:            hop,
-		TurnID:         runtimeEvent.TurnID,
-		CreatedAt:      time.Now().UTC(),
-		Delivery:       make(map[model.ActorID]model.DeliveryState, len(targets)),
-		DeliveryDetail: make(map[model.ActorID]string, len(targets)),
+		ID:                      model.NewID("msg"),
+		From:                    runtimeEvent.Agent,
+		To:                      to,
+		Text:                    cleanText,
+		ReplyTo:                 incoming.ID,
+		ThreadID:                incoming.ThreadID,
+		Hop:                     hop,
+		TurnID:                  runtimeEvent.TurnID,
+		CreatedAt:               time.Now().UTC(),
+		Delivery:                make(map[model.ActorID]model.DeliveryState, len(targets)),
+		DeliveryDetail:          make(map[model.ActorID]string, len(targets)),
+		Processing:              make(map[model.ActorID]model.ProcessingState, len(targets)),
+		ProcessingDetail:        make(map[model.ActorID]string, len(targets)),
+		ProcessingTurn:          make(map[model.ActorID]string, len(targets)),
+		ProcessingLastUpdatedAt: make(map[model.ActorID]time.Time, len(targets)),
 	}
 	if message.ThreadID == "" {
 		message.ThreadID = model.NewID("thread")
 	}
 	for _, target := range targets {
 		message.Delivery[target] = model.DeliveryPending
+		message.Processing[target] = model.ProcessingWaiting
+		message.ProcessingLastUpdatedAt[target] = message.CreatedAt
 	}
 	if _, err := e.record(EventMessageCreated, runtimeEvent.Agent, message); err != nil {
 		return
@@ -598,6 +923,106 @@ func (e *Engine) onFinal(runtimeEvent model.RuntimeEvent) {
 	for _, target := range targets {
 		target := target
 		go e.deliver(e.runtimeContext(context.Background()), message, target)
+	}
+}
+
+// processingFallback gives adapters that only return a DeliveryState a minimal
+// processing lifecycle without overwriting richer runtime events emitted during
+// Submit. Native adapters can report a turn ID and vendor-specific detail before
+// Submit returns; those events remain authoritative.
+func (e *Engine) processingFallback(messageID string, target model.ActorID, state model.ProcessingState, detail string) {
+	if messageID == "" || !target.ValidParticipant() {
+		return
+	}
+	update := model.ProcessingUpdate{
+		MessageID: messageID, Target: target, State: state, Detail: detail, UpdatedAt: time.Now().UTC(),
+	}
+
+	e.mu.Lock()
+	found := false
+	for i := range e.snapshot.Messages {
+		message := &e.snapshot.Messages[i]
+		if message.ID != messageID {
+			continue
+		}
+		ensureMessageLifecycleMaps(message)
+		current := message.Processing[target]
+		switch state {
+		case model.ProcessingWorking:
+			// A native working/terminal event already carries better correlation.
+			if current != "" && current != model.ProcessingWaiting {
+				e.mu.Unlock()
+				return
+			}
+		case model.ProcessingWaiting:
+			// Preserve native queue diagnostics and any turn correlation.
+			if current != "" && current != model.ProcessingWaiting {
+				e.mu.Unlock()
+				return
+			}
+			if message.ProcessingDetail[target] != "" || message.ProcessingTurn[target] != "" {
+				e.mu.Unlock()
+				return
+			}
+		}
+		found = true
+		break
+	}
+	if !found {
+		e.mu.Unlock()
+		return
+	}
+	event, err := model.NewEvent(e.snapshot.Meta.ID, EventProcessingUpdated, target, update)
+	if err == nil {
+		err = e.cfg.Store.Append(&event)
+	}
+	if err == nil {
+		err = e.applyLocked(event)
+	}
+	e.mu.Unlock()
+	if err == nil {
+		e.cfg.Hub.Publish(event)
+	}
+}
+
+func (e *Engine) processing(messageID string, target model.ActorID, state model.ProcessingState, detail, turnID string) {
+	if messageID == "" || !target.ValidParticipant() {
+		return
+	}
+	update := model.ProcessingUpdate{
+		MessageID: messageID,
+		Target:    target,
+		State:     state,
+		Detail:    detail,
+		TurnID:    turnID,
+		UpdatedAt: time.Now().UTC(),
+	}
+
+	e.mu.Lock()
+	current := model.ProcessingState("")
+	found := false
+	for i := range e.snapshot.Messages {
+		if e.snapshot.Messages[i].ID != messageID {
+			continue
+		}
+		current = e.snapshot.Messages[i].Processing[target]
+		found = true
+		break
+	}
+	if !found || !processingTransitionAllowed(current, state) {
+		e.mu.Unlock()
+		return
+	}
+	event, err := model.NewEvent(e.snapshot.Meta.ID, EventProcessingUpdated, target, update)
+	if err == nil {
+		err = e.cfg.Store.Append(&event)
+	}
+	if err == nil {
+		err = e.applyLocked(event)
+	}
+	e.mu.Unlock()
+	if err == nil {
+		e.cfg.Hub.Publish(event)
 	}
 }
 
@@ -633,12 +1058,42 @@ func (e *Engine) agentTargets(actor model.ActorID, text, control string, hop int
 }
 
 func (e *Engine) delivery(messageID string, target model.ActorID, state model.DeliveryState, detail string) {
-	_, _ = e.record(EventDeliveryUpdated, target, model.DeliveryUpdate{
+	update := model.DeliveryUpdate{
 		MessageID: messageID,
 		Target:    target,
 		State:     state,
 		Detail:    detail,
-	})
+	}
+
+	// Validate and persist a delivery transition under the same room lock. This
+	// prevents a fast runtime error from being followed by a late Submit return
+	// that would otherwise publish a misleading started/injected/queued event.
+	e.mu.Lock()
+	current := model.DeliveryState("")
+	found := false
+	for i := range e.snapshot.Messages {
+		if e.snapshot.Messages[i].ID != messageID {
+			continue
+		}
+		current = e.snapshot.Messages[i].Delivery[target]
+		found = true
+		break
+	}
+	if !found || !deliveryTransitionAllowed(current, state) {
+		e.mu.Unlock()
+		return
+	}
+	event, err := model.NewEvent(e.snapshot.Meta.ID, EventDeliveryUpdated, target, update)
+	if err == nil {
+		err = e.cfg.Store.Append(&event)
+	}
+	if err == nil {
+		err = e.applyLocked(event)
+	}
+	e.mu.Unlock()
+	if err == nil {
+		e.cfg.Hub.Publish(event)
+	}
 }
 
 func (e *Engine) updateParticipant(actor model.ActorID, mutate func(*model.ParticipantSnapshot)) {
@@ -791,8 +1246,32 @@ func (e *Engine) applyLocked(event model.Event) error {
 			if e.snapshot.Messages[i].DeliveryDetail == nil {
 				e.snapshot.Messages[i].DeliveryDetail = make(map[model.ActorID]string)
 			}
+			current := e.snapshot.Messages[i].Delivery[update.Target]
+			if !deliveryTransitionAllowed(current, update.State) {
+				break
+			}
 			e.snapshot.Messages[i].Delivery[update.Target] = update.State
 			e.snapshot.Messages[i].DeliveryDetail[update.Target] = update.Detail
+			break
+		}
+	case EventProcessingUpdated:
+		var update model.ProcessingUpdate
+		if err := json.Unmarshal(event.Data, &update); err != nil {
+			return err
+		}
+		for i := range e.snapshot.Messages {
+			if e.snapshot.Messages[i].ID != update.MessageID {
+				continue
+			}
+			ensureMessageLifecycleMaps(&e.snapshot.Messages[i])
+			current := e.snapshot.Messages[i].Processing[update.Target]
+			if !processingTransitionAllowed(current, update.State) {
+				break
+			}
+			e.snapshot.Messages[i].Processing[update.Target] = update.State
+			e.snapshot.Messages[i].ProcessingDetail[update.Target] = update.Detail
+			e.snapshot.Messages[i].ProcessingTurn[update.Target] = update.TurnID
+			e.snapshot.Messages[i].ProcessingLastUpdatedAt[update.Target] = update.UpdatedAt
 			break
 		}
 	case EventApprovalUpdated:
@@ -820,6 +1299,39 @@ func (e *Engine) applyLocked(event model.Event) error {
 	return nil
 }
 
+func deliveryTransitionAllowed(current, next model.DeliveryState) bool {
+	if current == "" || current == model.DeliveryPending {
+		return true
+	}
+	// Failure and explicit policy skips are terminal. This matters when a very
+	// fast runtime emits an error before Submit returns its initial state.
+	if current == model.DeliveryFailed || current == model.DeliverySkipped {
+		return false
+	}
+	if next == model.DeliveryFailed || next == model.DeliverySkipped {
+		return true
+	}
+	// started/injected/queued describe how the input entered the native harness,
+	// not a processing lifecycle; don't let a late initial update rewrite them.
+	return current == next
+}
+
+func processingTransitionAllowed(current, next model.ProcessingState) bool {
+	if next == "" {
+		return false
+	}
+	if current == "" || current == model.ProcessingWaiting {
+		return true
+	}
+	if current.Terminal() {
+		return current == next
+	}
+	if next.Terminal() {
+		return true
+	}
+	return current == next
+}
+
 func cloneSnapshot(in model.RoomSnapshot) model.RoomSnapshot {
 	out := in
 	out.Messages = make([]model.Message, len(in.Messages))
@@ -828,15 +1340,139 @@ func cloneSnapshot(in model.RoomSnapshot) model.RoomSnapshot {
 		out.Messages[i].To = append([]model.ActorID(nil), message.To...)
 		out.Messages[i].Delivery = cloneDelivery(message.Delivery)
 		out.Messages[i].DeliveryDetail = cloneDetails(message.DeliveryDetail)
+		out.Messages[i].Processing = cloneProcessing(message.Processing)
+		out.Messages[i].ProcessingDetail = cloneDetails(message.ProcessingDetail)
+		out.Messages[i].ProcessingTurn = cloneDetails(message.ProcessingTurn)
+		out.Messages[i].ProcessingLastUpdatedAt = cloneTimes(message.ProcessingLastUpdatedAt)
 	}
-	out.Approvals = append([]model.Approval(nil), in.Approvals...)
+	out.Approvals = make([]model.Approval, len(in.Approvals))
+	for i, approval := range in.Approvals {
+		out.Approvals[i] = approval
+		out.Approvals[i].Detail = append(json.RawMessage(nil), approval.Detail...)
+	}
 	out.Participants = make(map[model.ActorID]model.ParticipantSnapshot, len(in.Participants))
 	for key, value := range in.Participants {
+		value.Runtime = cloneRuntimeInfo(value.Runtime)
 		out.Participants[key] = value
 	}
 	out.Events = make([]model.Event, len(in.Events))
-	copy(out.Events, in.Events)
+	for i, event := range in.Events {
+		out.Events[i] = event
+		out.Events[i].Data = append(json.RawMessage(nil), event.Data...)
+	}
 	return out
+}
+
+func cloneRuntimeInfo(in model.RuntimeInfo) model.RuntimeInfo {
+	out := in
+	out.Capabilities = append([]string(nil), in.Capabilities...)
+	out.Warnings = append([]string(nil), in.Warnings...)
+	out.Data = append(json.RawMessage(nil), in.Data...)
+	return out
+}
+
+func cloneProcessing(in map[model.ActorID]model.ProcessingState) map[model.ActorID]model.ProcessingState {
+	if in == nil {
+		return nil
+	}
+	out := make(map[model.ActorID]model.ProcessingState, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneTimes(in map[model.ActorID]time.Time) map[model.ActorID]time.Time {
+	if in == nil {
+		return nil
+	}
+	out := make(map[model.ActorID]time.Time, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func ensureMessageLifecycleMaps(message *model.Message) {
+	if message.Delivery == nil {
+		message.Delivery = make(map[model.ActorID]model.DeliveryState)
+	}
+	if message.DeliveryDetail == nil {
+		message.DeliveryDetail = make(map[model.ActorID]string)
+	}
+	if message.Processing == nil {
+		message.Processing = make(map[model.ActorID]model.ProcessingState)
+	}
+	if message.ProcessingDetail == nil {
+		message.ProcessingDetail = make(map[model.ActorID]string)
+	}
+	if message.ProcessingTurn == nil {
+		message.ProcessingTurn = make(map[model.ActorID]string)
+	}
+	if message.ProcessingLastUpdatedAt == nil {
+		message.ProcessingLastUpdatedAt = make(map[model.ActorID]time.Time)
+	}
+}
+
+func retryableTarget(message model.Message, target model.ActorID) bool {
+	processing := message.Processing[target]
+	if processing == model.ProcessingFailed || processing == model.ProcessingCancelled || processing == model.ProcessingSuperseded {
+		return true
+	}
+	delivery := message.Delivery[target]
+	return delivery == model.DeliveryFailed || delivery == model.DeliverySkipped
+}
+
+func (e *Engine) monitorStalledTurns() {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-e.ctx.Done():
+			return
+		case now := <-ticker.C:
+			type warning struct {
+				actor model.ActorID
+				turn  string
+				age   time.Duration
+			}
+			var warnings []warning
+			e.mu.Lock()
+			seconds := e.snapshot.Settings.StallWarningSeconds
+			if seconds <= 0 {
+				e.mu.Unlock()
+				continue
+			}
+			threshold := time.Duration(seconds) * time.Second
+			for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+				participant := e.snapshot.Participants[actor]
+				if participant.State != model.StateWorking && participant.State != model.StateWaiting {
+					continue
+				}
+				last := e.lastRuntimeActivity[actor]
+				if last.IsZero() || now.Sub(last) < threshold {
+					continue
+				}
+				key := participant.CurrentTurn
+				if key == "" {
+					key = string(participant.State)
+				}
+				if e.stallWarnedTurn[actor] == key {
+					continue
+				}
+				e.stallWarnedTurn[actor] = key
+				warnings = append(warnings, warning{actor: actor, turn: participant.CurrentTurn, age: now.Sub(last)})
+			}
+			e.mu.Unlock()
+			for _, item := range warnings {
+				detail := fmt.Sprintf("%s has produced no runtime event for %s", item.actor.DisplayName(), item.age.Round(time.Second))
+				if item.turn != "" {
+					detail += " during turn " + item.turn
+				}
+				e.notice("warning", detail+". It may be running a long command, waiting on an unexposed prompt, or stalled.")
+			}
+		}
+	}
 }
 
 func cloneDelivery(in map[model.ActorID]model.DeliveryState) map[model.ActorID]model.DeliveryState {

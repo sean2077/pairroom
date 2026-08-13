@@ -9,6 +9,9 @@
     history.replaceState(null, '', `${cleanURL.pathname}${cleanURL.search}${cleanURL.hash}`);
   }
   const token = tokenQuery || sessionStorage.getItem('pairroom.token') || '';
+  const savedTheme = localStorage.getItem('pairroom.theme');
+  const initialTheme = savedTheme || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  document.documentElement.dataset.theme = initialTheme;
   const state = {
     snapshot: null,
     drafts: { claude: '', codex: '' },
@@ -16,6 +19,9 @@
     replyTo: '',
     inspectorAgent: 'all',
     inspectorTab: 'activity',
+    inspectorCorrelation: '',
+    searchQuery: '',
+    theme: initialTheme,
     source: null,
     renderQueued: false,
   };
@@ -76,8 +82,16 @@
   }
 
   function applyEvent(event) {
-    if (!state.snapshot || event.seq <= (state.snapshot.latest_seq || 0)) return;
-    state.snapshot.latest_seq = event.seq;
+    if (!state.snapshot) return;
+    const durable = Number(event.seq || 0) > 0;
+    const latest = Number(state.snapshot.latest_seq || 0);
+    if (durable && event.seq <= latest) return;
+    if (durable && latest > 0 && event.seq > latest + 1) {
+      toast(`事件序列出现缺口（${latest} → ${event.seq}），正在重新同步`, 'error');
+      loadSnapshot().catch((error) => toast(error.message, 'error'));
+      return;
+    }
+    if (durable) state.snapshot.latest_seq = event.seq;
     state.snapshot.events = state.snapshot.events || [];
     state.snapshot.events.push(event);
     if (state.snapshot.events.length > 600) state.snapshot.events.splice(0, state.snapshot.events.length - 600);
@@ -103,8 +117,25 @@
         if (message) {
           message.delivery = message.delivery || {};
           message.delivery_detail = message.delivery_detail || {};
-          message.delivery[data.target] = data.state;
-          message.delivery_detail[data.target] = data.detail || '';
+          const current = message.delivery[data.target] || '';
+          if (deliveryTransitionAllowed(current, data.state)) {
+            message.delivery[data.target] = data.state;
+            message.delivery_detail[data.target] = data.detail || '';
+          }
+        }
+        break;
+      }
+      case 'message.processing.updated': {
+        const message = state.snapshot.messages.find((item) => item.id === data.message_id);
+        if (message) {
+          message.processing = message.processing || {};
+          message.processing_detail = message.processing_detail || {};
+          message.processing_turn = message.processing_turn || {};
+          message.processing_last_updated_at = message.processing_last_updated_at || {};
+          message.processing[data.target] = data.state;
+          message.processing_detail[data.target] = data.detail || '';
+          message.processing_turn[data.target] = data.turn_id || '';
+          message.processing_last_updated_at[data.target] = data.updated_at || new Date().toISOString();
         }
         break;
       }
@@ -129,9 +160,19 @@
 
   function applyRuntime(runtime) {
     const actor = runtime.agent;
+    if (state.snapshot.participants && state.snapshot.participants[actor]) {
+      state.snapshot.participants[actor].last_activity = runtime.created_at || new Date().toISOString();
+    }
     if (runtime.kind === 'turn.started') state.drafts[actor] = '';
     if (runtime.kind === 'text.delta') state.drafts[actor] = (state.drafts[actor] || '') + (runtime.text || '');
     if (runtime.kind === 'error' && runtime.text) toast(`${displayName(actor)}：${runtime.text}`, 'error');
+  }
+
+  function deliveryTransitionAllowed(current, next) {
+    if (!current || current === 'pending') return true;
+    if (current === 'failed' || current === 'skipped') return false;
+    if (next === 'failed' || next === 'skipped') return true;
+    return current === next;
   }
 
   function render(forceBottom = false) {
@@ -153,7 +194,8 @@
     ['claude', 'codex'].forEach((actor) => {
       const p = state.snapshot.participants[actor] || { id: actor, state: 'stopped', role: 'peer' };
       const card = document.createElement('div');
-      card.className = `participant-card agent-card ${actor}`;
+      const stalled = participantLooksStalled(p);
+      card.className = `participant-card agent-card ${actor}${stalled ? ' stalled' : ''}`;
       card.dataset.actor = actor;
 
       const avatar = document.createElement('div');
@@ -188,6 +230,29 @@
       model.textContent = p.model || 'native default';
       meta.append(status, model);
       main.appendChild(meta);
+
+      const runtime = p.runtime || {};
+      if (runtime.protocol || runtime.version || runtime.path || runtime.command) {
+        const runtimeLine = document.createElement('div');
+        runtimeLine.className = 'runtime-line';
+        const pieces = [runtime.version ? `v${runtime.version}` : '', runtime.protocol, runtime.available === false ? 'unavailable' : ''].filter(Boolean);
+        runtimeLine.textContent = pieces.join(' · ') || runtime.command || 'runtime detected';
+        runtimeLine.title = [runtime.path, ...(runtime.capabilities || [])].filter(Boolean).join('\n');
+        main.appendChild(runtimeLine);
+      }
+      if (stalled) {
+        const warning = document.createElement('div');
+        warning.className = 'runtime-line runtime-warning';
+        warning.textContent = '长时间无运行事件；可能在执行长命令、等待隐藏提示或已停滞';
+        main.appendChild(warning);
+      }
+      if (runtime.warnings && runtime.warnings.length) {
+        const warning = document.createElement('div');
+        warning.className = 'runtime-line runtime-warning';
+        warning.textContent = truncate(runtime.warnings.join(' · '), 160);
+        warning.title = runtime.warnings.join('\n');
+        main.appendChild(warning);
+      }
 
       const roleSelect = document.createElement('select');
       roleSelect.className = 'role-select';
@@ -229,6 +294,10 @@
     $('routing-mode').value = state.snapshot.settings.routing_mode;
     $('max-hops').value = state.snapshot.settings.max_agent_hops;
     $('max-hops-value').value = state.snapshot.settings.max_agent_hops;
+    const stall = Number(state.snapshot.settings.stall_warning_seconds ?? 300);
+    $('stall-disabled').checked = stall < 0;
+    $('stall-warning').disabled = stall < 0;
+    $('stall-warning').value = stall < 0 ? 300 : stall;
   }
 
   function renderTimeline() {
@@ -250,14 +319,33 @@
       return;
     }
 
+    const query = state.searchQuery.trim().toLocaleLowerCase();
+    let visibleCount = 0;
     for (const item of items) {
-      if (item.type === 'notice') timeline.appendChild(noticeNode(item.value));
-      else timeline.appendChild(messageNode(item.value));
+      if (item.type === 'notice') {
+        const visible = !query || String(item.value.text || '').toLocaleLowerCase().includes(query);
+        const node = noticeNode(item.value);
+        if (!visible) node.classList.add('search-hidden');
+        else visibleCount += 1;
+        timeline.appendChild(node);
+      } else {
+        const visible = !query || `${displayName(item.value.from)} ${item.value.text}`.toLocaleLowerCase().includes(query);
+        const node = messageNode(item.value);
+        if (!visible) node.classList.add('search-hidden');
+        else visibleCount += 1;
+        timeline.appendChild(node);
+      }
     }
     ['claude', 'codex'].forEach((actor) => {
       const text = state.drafts[actor];
       if (text) timeline.appendChild(draftNode(actor, text));
     });
+    if (query && visibleCount === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'timeline-empty';
+      empty.innerHTML = '<div><h2>没有匹配消息</h2><p>修改搜索关键词即可恢复完整时间线。</p></div>';
+      timeline.appendChild(empty);
+    }
   }
 
   function messageNode(message) {
@@ -268,7 +356,7 @@
 
     const avatar = document.createElement('div');
     avatar.className = `message-avatar avatar-${actor === 'user' ? 'human' : actor}`;
-    avatar.textContent = actor === 'user' ? 'S' : actor === 'claude' ? 'C' : 'X';
+    avatar.textContent = actor === 'user' ? 'Y' : actor === 'claude' ? 'C' : 'X';
 
     const content = document.createElement('div');
     content.className = 'message-content';
@@ -279,11 +367,26 @@
     author.textContent = displayName(actor);
     const time = document.createElement('time');
     time.textContent = formatTime(message.created_at);
+    const actions = document.createElement('span');
+    actions.className = 'message-actions';
+    const inspect = document.createElement('button');
+    inspect.className = 'reply-action inspect-action';
+    inspect.textContent = '过程';
+    inspect.dataset.inspectId = message.id;
     const reply = document.createElement('button');
     reply.className = 'reply-action';
     reply.textContent = '回复';
     reply.dataset.replyId = message.id;
-    meta.append(author, time, reply);
+    actions.append(inspect, reply);
+    meta.append(author, time);
+    if (message.retry_of) {
+      const retryMarker = document.createElement('span');
+      retryMarker.className = 'retry-marker';
+      retryMarker.textContent = '重试';
+      retryMarker.title = `Retry of ${message.retry_of}`;
+      meta.appendChild(retryMarker);
+    }
+    meta.appendChild(actions);
 
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
@@ -299,17 +402,27 @@
     appendRichText(bubble, message.text);
     content.append(meta, bubble);
 
-    if (actor === 'user' && message.delivery) {
+    if (message.delivery) {
       const delivery = document.createElement('div');
       delivery.className = 'delivery-line';
       for (const target of Object.keys(message.delivery)) {
         const chip = document.createElement('span');
         const status = message.delivery[target];
-        chip.className = `delivery-chip ${status}`;
-        chip.textContent = `${displayName(target)} · ${deliveryText(status)}`;
-        const detail = message.delivery_detail && message.delivery_detail[target];
-        if (detail) chip.title = detail;
+        const processing = message.processing && message.processing[target];
+        chip.className = `delivery-chip ${status} processing-${processing || 'waiting'}`;
+        chip.textContent = `${displayName(target)} · ${deliveryText(status)}${processing ? ` / ${processingText(processing)}` : ''}`;
+        const deliveryDetail = message.delivery_detail && message.delivery_detail[target];
+        const processingDetail = message.processing_detail && message.processing_detail[target];
+        chip.title = [deliveryDetail, processingDetail].filter(Boolean).join('\n');
         delivery.appendChild(chip);
+        if (isRetryable(message, target)) {
+          const retryButton = document.createElement('button');
+          retryButton.className = 'retry-button';
+          retryButton.dataset.retryId = message.id;
+          retryButton.dataset.retryTarget = target;
+          retryButton.textContent = `重试 ${displayName(target)}`;
+          delivery.appendChild(retryButton);
+        }
       }
       content.appendChild(delivery);
     }
@@ -343,7 +456,7 @@
     const row = document.createElement('div');
     row.className = 'system-message';
     const chip = document.createElement('div');
-    chip.className = 'system-chip';
+    chip.className = `system-chip ${notice.level || 'info'}`;
     chip.textContent = notice.text || 'PairRoom event';
     row.appendChild(chip);
     return row;
@@ -370,17 +483,32 @@
   function renderActivity() {
     const container = $('activity-tab');
     container.replaceChildren();
+    const scope = $('inspector-scope');
+    const scopedMessage = state.inspectorCorrelation
+      ? (state.snapshot.messages || []).find((message) => message.id === state.inspectorCorrelation)
+      : null;
+    const turns = new Set(scopedMessage ? Object.values(scopedMessage.processing_turn || {}).filter(Boolean) : []);
+    if (scopedMessage) {
+      scope.classList.remove('hidden');
+      $('inspector-scope-text').textContent = `仅显示 ${displayName(scopedMessage.from)} 消息 ${truncate(scopedMessage.id, 18)} 的工作过程`;
+    } else {
+      scope.classList.add('hidden');
+      $('inspector-scope-text').textContent = '';
+    }
     const events = (state.snapshot.events || [])
       .filter((event) => event.kind === 'runtime.event')
       .map((event) => ({ seq: event.seq, ...event.data }))
       .filter((event) => state.inspectorAgent === 'all' || event.agent === state.inspectorAgent)
       .filter((event) => !['text.delta', 'state', 'session'].includes(event.kind))
-      .slice(-80)
+      .filter((event) => !scopedMessage || event.correlation_id === scopedMessage.id || (event.turn_id && turns.has(event.turn_id)))
+      .slice(-100)
       .reverse();
     if (!events.length) {
       const empty = document.createElement('div');
       empty.className = 'activity-empty';
-      empty.textContent = 'Agent 的工具调用、命令、计划、Diff 和运行日志会显示在这里。';
+      empty.textContent = scopedMessage
+        ? '该消息暂时没有可重放的持久运行事件；高频流式文本和命令增量仅在实时连接期间展示。'
+        : 'Agent 的工具调用、命令、计划、Diff 和运行日志会显示在这里。';
       container.appendChild(empty);
       return;
     }
@@ -502,9 +630,53 @@
         body: JSON.stringify({
           routing_mode: $('routing-mode').value,
           max_agent_hops: Number($('max-hops').value),
+          stall_warning_seconds: $('stall-disabled').checked ? -1 : Number($('stall-warning').value),
         }),
       });
       toast('讨论策略已保存', 'success');
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  }
+
+  async function retryMessage(messageId, target, button) {
+    button.disabled = true;
+    const old = button.textContent;
+    button.textContent = '重试中…';
+    try {
+      await api(`/api/v1/messages/${encodeURIComponent(messageId)}/retry`, {
+        method: 'POST',
+        body: JSON.stringify({ to: [target] }),
+      });
+      toast(`已为 ${displayName(target)} 创建可审计的重试消息`, 'success');
+    } catch (error) {
+      toast(error.message, 'error');
+      button.disabled = false;
+      button.textContent = old;
+    }
+  }
+
+  async function downloadExport(format) {
+    try {
+      const headers = new Headers();
+      if (token) headers.set('Authorization', `Bearer ${token}`);
+      const response = await fetch(`/api/v1/export?format=${encodeURIComponent(format)}`, { headers });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || response.statusText);
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get('content-disposition') || '';
+      const match = disposition.match(/filename="([^"]+)"/i);
+      const filename = match ? match[1] : `pairroom.${format === 'json' ? 'json' : 'md'}`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (error) {
       toast(error.message, 'error');
     }
@@ -566,6 +738,17 @@
     $('reply-preview').textContent = '';
   }
 
+  function inspectMessage(messageId) {
+    state.inspectorCorrelation = messageId;
+    switchTab('activity');
+    renderActivity();
+  }
+
+  function clearInspectorScope() {
+    state.inspectorCorrelation = '';
+    renderActivity();
+  }
+
   function switchTab(tab) {
     state.inspectorTab = tab;
     document.querySelectorAll('.tab').forEach((button) => button.classList.toggle('active', button.dataset.tab === tab));
@@ -603,6 +786,12 @@
     setTimeout(() => node.remove(), 4300);
   }
 
+  function participantLooksStalled(participant) {
+    const seconds = Number(state.snapshot?.settings?.stall_warning_seconds ?? 300);
+    if (seconds <= 0 || !['working', 'waiting'].includes(participant.state) || !participant.last_activity) return false;
+    return Date.now() - new Date(participant.last_activity).getTime() >= seconds * 1000;
+  }
+
   function displayName(actor) {
     return ({ user: 'You', claude: 'Claude Code', codex: 'Codex', system: 'PairRoom' })[actor] || actor;
   }
@@ -614,6 +803,15 @@
   }
   function deliveryText(value) {
     return ({ pending: '发送中', started: '已开始新 Turn', injected: '已注入当前 Turn', queued: '已排队', failed: '失败', skipped: '已跳过' })[value] || value;
+  }
+  function processingText(value) {
+    return ({ waiting: '等待处理', working: '处理中', completed: '已完成', cancelled: '已取消', failed: '处理失败', superseded: '已被新指令取代' })[value] || value;
+  }
+  function isRetryable(message, target) {
+    const processing = message.processing && message.processing[target];
+    if (['failed', 'cancelled', 'superseded'].includes(processing)) return true;
+    const delivery = message.delivery && message.delivery[target];
+    return ['failed', 'skipped'].includes(delivery);
   }
   function actionText(value) {
     return ({ start: '已启动', stop: '已停止', restart: '已重启', interrupt: '已请求打断' })[value] || value;
@@ -651,6 +849,9 @@
   function activityLabel(event) {
     const labels = {
       'turn.started': 'Turn started', 'turn.completed': 'Turn completed',
+      'runtime.info': 'Runtime capabilities',
+      'input.processing': 'Input processing', 'input.completed': 'Input completed',
+      'input.cancelled': 'Input cancelled', 'input.failed': 'Input failed',
       'tool.started': `Tool · ${event.name || 'started'}`, 'tool.completed': `Tool · ${event.name || 'completed'}`,
       'command.output': 'Command output', 'diff.updated': 'Diff updated', 'plan.updated': 'Plan updated',
       'usage.updated': 'Usage updated', 'approval.requested': 'Approval requested',
@@ -671,15 +872,18 @@
     if (action) participantAction(action.dataset.actor, action.dataset.action, action);
     const reply = event.target.closest('[data-reply-id]');
     if (reply) setReply(reply.dataset.replyId);
+    const inspect = event.target.closest('[data-inspect-id]');
+    if (inspect) inspectMessage(inspect.dataset.inspectId);
     const tab = event.target.closest('.tab');
     if (tab) switchTab(tab.dataset.tab);
     const approval = event.target.closest('[data-approval-id][data-decision]');
     if (approval) resolveApproval(approval.dataset.approvalId, approval.dataset.decision, approval);
+    const retry = event.target.closest('[data-retry-id][data-retry-target]');
+    if (retry) retryMessage(retry.dataset.retryId, retry.dataset.retryTarget, retry);
   });
   document.addEventListener('change', (event) => {
     if (event.target.matches('[data-role-actor]')) setRole(event.target.dataset.roleActor, event.target.value);
   });
-  document.querySelectorAll('.target-button').forEach((button) => button.addEventListener('click', () => setTarget(button.dataset.target)));
   $('send-button').addEventListener('click', sendMessage);
   messageInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -691,10 +895,35 @@
   $('cancel-reply').addEventListener('click', clearReply);
   $('save-settings').addEventListener('click', saveSettings);
   $('max-hops').addEventListener('input', () => { $('max-hops-value').value = $('max-hops').value; });
+  $('stall-disabled').addEventListener('change', () => { $('stall-warning').disabled = $('stall-disabled').checked; });
   $('refresh-button').addEventListener('click', loadSnapshot);
+  $('message-search').addEventListener('input', (event) => { state.searchQuery = event.target.value; queueRender(); });
+  $('export-markdown').addEventListener('click', () => downloadExport('markdown'));
+  $('export-json').addEventListener('click', () => downloadExport('json'));
+  $('theme-button').addEventListener('click', () => {
+    state.theme = state.theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = state.theme;
+    localStorage.setItem('pairroom.theme', state.theme);
+  });
   $('scroll-bottom').addEventListener('click', scrollBottom);
   $('refresh-diff').addEventListener('click', refreshDiff);
   $('inspector-agent').addEventListener('change', (event) => { state.inspectorAgent = event.target.value; renderActivity(); });
+  $('clear-inspector-scope').addEventListener('click', clearInspectorScope);
+  document.addEventListener('keydown', (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'k') {
+      event.preventDefault();
+      $('message-search').focus();
+    }
+    if (event.key === 'Escape') {
+      if (state.replyTo) clearReply();
+      else if (state.inspectorCorrelation) clearInspectorScope();
+      else if (state.searchQuery) {
+        state.searchQuery = '';
+        $('message-search').value = '';
+        queueRender();
+      }
+    }
+  });
 
   loadSnapshot().catch((error) => {
     toast(error.message, 'error');

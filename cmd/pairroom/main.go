@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -26,9 +27,8 @@ import (
 	"github.com/sean2077/pairroom/internal/room"
 	"github.com/sean2077/pairroom/internal/server"
 	"github.com/sean2077/pairroom/internal/store"
+	"github.com/sean2077/pairroom/internal/version"
 )
-
-const version = "0.1.0"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -48,7 +48,7 @@ func run(args []string) error {
 	case "doctor":
 		return runDoctor(args[1:])
 	case "version", "--version", "-v":
-		fmt.Println("pairroom", version)
+		fmt.Println("pairroom", version.Current)
 		return nil
 	case "help", "--help", "-h":
 		printHelp()
@@ -78,6 +78,7 @@ func runServe(args []string) error {
 	autoStartFlag := flags.Bool("auto-start", fileCfg.AutoStart, "start both agents when the room opens")
 	routingFlag := flags.String("routing", string(fileCfg.RoutingMode), "manual, mentions, or roundtable")
 	maxHopsFlag := flags.Int("max-hops", fileCfg.MaxAgentHops, "maximum automatic agent hops")
+	stallWarningFlag := flags.Int("stall-warning-seconds", fileCfg.StallWarningSeconds, "warn when a working agent emits no runtime event; -1 disables")
 	claudeCommand := flags.String("claude-command", fileCfg.Claude.Command, "Claude Code executable")
 	claudeModel := flags.String("claude-model", fileCfg.Claude.Model, "Claude model override")
 	claudePermission := flags.String("claude-permission-mode", fileCfg.Claude.PermissionMode, "Claude permission mode")
@@ -117,6 +118,9 @@ func runServe(args []string) error {
 	if *maxHopsFlag < 1 || *maxHopsFlag > 30 {
 		return errors.New("max-hops must be between 1 and 30")
 	}
+	if *stallWarningFlag != -1 && (*stallWarningFlag < 30 || *stallWarningFlag > 86400) {
+		return errors.New("stall-warning-seconds must be -1 or between 30 and 86400")
+	}
 
 	token := *tokenFlag
 	if !isLoopbackListen(*listenFlag) && token == "" {
@@ -138,17 +142,19 @@ func runServe(args []string) error {
 		codexFactory = agent.MockFactory
 	}
 	engine, err := room.New(room.Config{
-		Name:          *nameFlag,
-		Repo:          repo,
-		Settings:      model.RoomSettings{RoutingMode: routing, MaxHops: *maxHopsFlag},
+		Name: *nameFlag,
+		Repo: repo,
+		Settings: model.RoomSettings{
+			RoutingMode: routing, MaxHops: *maxHopsFlag, StallWarningSeconds: *stallWarningFlag,
+		},
 		Store:         eventStore,
 		ClaudeFactory: claudeFactory,
 		CodexFactory:  codexFactory,
 		ClaudeConfig: agent.Config{
-			Command: *claudeCommand, Model: *claudeModel, PermissionMode: *claudePermission,
+			ClientVersion: version.Current, Command: *claudeCommand, Model: *claudeModel, PermissionMode: *claudePermission,
 		},
 		CodexConfig: agent.Config{
-			Command: *codexCommand, Model: *codexModel, Effort: *codexEffort,
+			ClientVersion: version.Current, Command: *codexCommand, Model: *codexModel, Effort: *codexEffort,
 			ApprovalPolicy: *codexApproval, Sandbox: *codexSandbox,
 		},
 		AutoStart: *autoStartFlag,
@@ -170,7 +176,7 @@ func runServe(args []string) error {
 	}
 
 	roomURL := browserURL(*listenFlag, token)
-	fmt.Printf("PairRoom %s\n", version)
+	fmt.Printf("PairRoom %s\n", version.Current)
 	fmt.Printf("  room: %s\n", roomURL)
 	fmt.Printf("  repo: %s\n", repo)
 	fmt.Printf("  data: %s\n", dataDir)
@@ -205,52 +211,148 @@ func runServe(args []string) error {
 	return engine.Close()
 }
 
+type doctorCommandReport struct {
+	Available bool   `json:"available"`
+	Command   string `json:"command"`
+	Path      string `json:"path,omitempty"`
+	Output    string `json:"output,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+type doctorRuntimeReport struct {
+	Probe *agent.ProbeResult `json:"probe,omitempty"`
+	Error string             `json:"error,omitempty"`
+}
+
+type doctorReport struct {
+	PairRoom string                         `json:"pairroom"`
+	OS       string                         `json:"os"`
+	Repo     string                         `json:"repository"`
+	Git      doctorCommandReport            `json:"git"`
+	Runtimes map[string]doctorRuntimeReport `json:"runtimes"`
+	OK       bool                           `json:"ok"`
+}
+
 func runDoctor(args []string) error {
+	configPath := preparseValue(args, "--config")
+	fileCfg, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
 	flags := flag.NewFlagSet("pairroom doctor", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	configFlag := flags.String("config", configPath, "JSON configuration file")
 	repoFlag := flags.String("repo", ".", "repository/workspace directory")
+	claudeCommand := flags.String("claude-command", fileCfg.Claude.Command, "Claude Code executable")
+	codexCommand := flags.String("codex-command", fileCfg.Codex.Command, "Codex executable")
+	jsonFlag := flags.Bool("json", false, "emit a machine-readable report")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	_ = configFlag
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
 	repo, err := canonicalDirectory(*repoFlag)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("PairRoom doctor %s\n", version)
-	fmt.Printf("%-14s %s\n", "OS", runtime.GOOS+"/"+runtime.GOARCH)
-	fmt.Printf("%-14s %s\n", "Repository", repo)
-	checks := []struct {
-		name string
-		cmd  string
-		args []string
-	}{
-		{"git", "git", []string{"--version"}},
-		{"Claude Code", "claude", []string{"--version"}},
-		{"Codex", "codex", []string{"--version"}},
-		{"Codex app-server", "codex", []string{"app-server", "--help"}},
+
+	report := doctorReport{
+		PairRoom: version.Current,
+		OS:       runtime.GOOS + "/" + runtime.GOARCH,
+		Repo:     repo,
+		Git:      probeCommand("git", "--version"),
+		Runtimes: make(map[string]doctorRuntimeReport, 2),
 	}
-	missing := 0
-	for _, check := range checks {
-		path, lookupErr := exec.LookPath(check.cmd)
-		if lookupErr != nil {
-			fmt.Printf("%-14s ✗ not found\n", check.name)
-			missing++
-			continue
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-		output, commandErr := exec.CommandContext(ctx, path, check.args...).CombinedOutput()
+	for _, cfg := range []agent.Config{
+		{Actor: model.ActorClaude, Command: *claudeCommand, Repo: repo, PermissionMode: fileCfg.Claude.PermissionMode},
+		{Actor: model.ActorCodex, Command: *codexCommand, Repo: repo, ApprovalPolicy: fileCfg.Codex.ApprovalPolicy, Sandbox: fileCfg.Codex.Sandbox},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		probe, probeErr := agent.ProbeRuntime(ctx, cfg)
 		cancel()
-		line := firstLine(strings.TrimSpace(string(output)))
-		if commandErr != nil {
-			fmt.Printf("%-14s ! %s (%v)\n", check.name, line, commandErr)
-			missing++
+		entry := doctorRuntimeReport{}
+		if probeErr != nil {
+			entry.Error = probeErr.Error()
 		} else {
-			fmt.Printf("%-14s ✓ %s\n", check.name, line)
+			entry.Probe = &probe
 		}
+		report.Runtimes[string(cfg.Actor)] = entry
 	}
-	if missing > 0 {
-		return fmt.Errorf("%d runtime check(s) failed; pairroom serve --mock remains available", missing)
+	report.OK = report.Git.Available
+	for _, actor := range []string{string(model.ActorClaude), string(model.ActorCodex)} {
+		report.OK = report.OK && report.Runtimes[actor].Error == "" && report.Runtimes[actor].Probe != nil
+	}
+
+	if *jsonFlag {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(report); err != nil {
+			return err
+		}
+	} else {
+		printDoctorReport(report)
+	}
+	if !report.OK {
+		return errors.New("runtime checks failed; pairroom serve --mock remains available")
 	}
 	return nil
+}
+
+func probeCommand(command string, args ...string) doctorCommandReport {
+	report := doctorCommandReport{Command: command}
+	path, err := exec.LookPath(command)
+	if err != nil {
+		report.Error = err.Error()
+		return report
+	}
+	report.Path = path
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, path, args...).CombinedOutput()
+	report.Output = firstLine(strings.TrimSpace(string(output)))
+	if ctx.Err() != nil {
+		report.Error = ctx.Err().Error()
+		return report
+	}
+	if err != nil {
+		report.Error = err.Error()
+		return report
+	}
+	report.Available = true
+	return report
+}
+
+func printDoctorReport(report doctorReport) {
+	fmt.Printf("PairRoom doctor %s\n", report.PairRoom)
+	fmt.Printf("%-16s %s\n", "OS", report.OS)
+	fmt.Printf("%-16s %s\n", "Repository", report.Repo)
+	if report.Git.Available {
+		fmt.Printf("%-16s ✓ %s (%s)\n", "Git", report.Git.Output, report.Git.Path)
+	} else {
+		fmt.Printf("%-16s ✗ %s\n", "Git", report.Git.Error)
+	}
+	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+		entry := report.Runtimes[string(actor)]
+		if entry.Error != "" || entry.Probe == nil {
+			fmt.Printf("%-16s ✗ %s\n", actor.DisplayName(), entry.Error)
+			continue
+		}
+		probe := entry.Probe
+		versionText := probe.Version
+		if versionText == "" {
+			versionText = probe.VersionLine
+		}
+		fmt.Printf("%-16s ✓ %s (%s)\n", actor.DisplayName(), versionText, probe.Path)
+		fmt.Printf("%-16s   protocol: %s\n", "", probe.Protocol)
+		if len(probe.Capabilities) > 0 {
+			fmt.Printf("%-16s   capabilities: %s\n", "", strings.Join(probe.Capabilities, ", "))
+		}
+		for _, warning := range probe.Warnings {
+			fmt.Printf("%-16s   warning: %s\n", "", warning)
+		}
+	}
 }
 
 func canonicalDirectory(path string) (string, error) {
