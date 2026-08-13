@@ -4,7 +4,7 @@ PairRoom 是一个面向 **Claude Code + Codex** 的本地三方协作房间：�
 
 > PairRoom 是全新的独立项目，不依赖 OMA、CCCC、ccteam、wmux、Cherry Studio、Chatbox 或其他 Agent 编排框架。原生模式只启动用户本机已有的官方 `claude` 与 `codex` 命令；Go 核心没有第三方 module，前端没有 npm 依赖和构建步骤。
 
-当前版本：**v0.6.0**
+当前版本：**v0.7.0**
 
 ## 核心目标
 
@@ -266,6 +266,10 @@ pairroom serve --repo . \
 ```bash
 pairroom serve -help
 pairroom doctor -help
+pairroom verify -help
+pairroom backup -help
+pairroom restore -help
+pairroom diagnostics -help
 ```
 
 ## 配置文件
@@ -370,6 +374,22 @@ GET /api/v1/export?format=json&include_events=1
 ```
 
 PairRoom 不保存供应商 API Key；身份和凭据仍由官方 CLI 管理。
+
+状态目录可进行严格校验、可恢复备份和脱敏诊断：
+
+```bash
+# 验证事件序列、元数据和所有附件哈希
+pairroom verify --repo .
+
+# 创建自校验备份；不包含运行时缓存、Reviewer 临时工作区或浏览器会话
+pairroom backup --repo . --output pairroom-backup.tar.gz
+
+# 恢复到指定状态目录；非空目录必须显式 --force
+pairroom restore --input pairroom-backup.tar.gz --data-dir ./restored-room
+
+# 生成不含消息正文、附件内容和运行时 payload 的诊断包
+pairroom diagnostics --repo . --output pairroom-diagnostics.tar.gz
+```
 
 ## 当前边界
 

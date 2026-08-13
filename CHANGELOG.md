@@ -1,3 +1,17 @@
+## [0.7.0] - 2026-08-14
+
+### Added
+
+- `pairroom verify` for strict event-sequence, metadata, room-ID, attachment-manifest, size, and SHA-256 validation.
+- Self-describing `pairroom backup` archives with an internal manifest and full post-write restore validation.
+- Strict `pairroom restore` with traversal, link, duplicate, undeclared-file, size, and hash rejection plus atomic target replacement.
+- Redacted `pairroom diagnostics` bundles containing structural event headers and integrity results without transcript text or image bytes.
+
+### Changed
+
+- Runtime caches, reviewer worktrees, browser sessions, and temporary files are intentionally excluded from backups.
+- Backup replacement and forced restore preserve the previous target until the new artifact has been fully committed.
+
 ## [0.6.0] - 2026-08-14
 
 ### Added

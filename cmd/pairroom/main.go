@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/agent"
+	"github.com/sean2077/pairroom/internal/archive"
 	"github.com/sean2077/pairroom/internal/attachment"
 	"github.com/sean2077/pairroom/internal/config"
 	"github.com/sean2077/pairroom/internal/model"
@@ -49,6 +50,14 @@ func run(args []string) error {
 		return runServe(args[1:])
 	case "doctor":
 		return runDoctor(args[1:])
+	case "verify":
+		return runVerify(args[1:])
+	case "backup":
+		return runBackup(args[1:])
+	case "restore":
+		return runRestore(args[1:])
+	case "diagnostics":
+		return runDiagnostics(args[1:])
 	case "version", "--version", "-v":
 		fmt.Println("pairroom", version.Current)
 		return nil
@@ -320,6 +329,175 @@ func runDoctor(args []string) error {
 	return nil
 }
 
+func runVerify(args []string) error {
+	flags := flag.NewFlagSet("pairroom verify", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	repoFlag := flags.String("repo", ".", "repository used to resolve the default room data directory")
+	dataFlag := flags.String("data-dir", "", "room state directory")
+	jsonFlag := flags.Bool("json", false, "emit a machine-readable report")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	dataDir, err := resolveDataDir(*repoFlag, *dataFlag)
+	if err != nil {
+		return err
+	}
+	report := archive.Verify(dataDir)
+	if *jsonFlag {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(report); err != nil {
+			return err
+		}
+	} else {
+		fmt.Printf("PairRoom data verification\n")
+		fmt.Printf("  data:        %s\n", report.DataDir)
+		fmt.Printf("  schema:      %d\n", report.SchemaVersion)
+		fmt.Printf("  events:      %d (%d..%d)\n", report.EventCount, report.FirstSequence, report.LastSequence)
+		fmt.Printf("  attachments: %d (%d referenced)\n", report.AttachmentCount, report.ReferencedAttachments)
+		for _, warning := range report.Warnings {
+			fmt.Printf("  warning:     %s\n", warning)
+		}
+		for _, value := range report.Errors {
+			fmt.Printf("  error:       %s\n", value)
+		}
+		if report.OK {
+			fmt.Println("  result:      OK")
+		} else {
+			fmt.Println("  result:      FAILED")
+		}
+	}
+	if !report.OK {
+		return errors.New("room data verification failed")
+	}
+	return nil
+}
+
+func runBackup(args []string) error {
+	flags := flag.NewFlagSet("pairroom backup", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	repoFlag := flags.String("repo", ".", "repository used to resolve the default room data directory")
+	dataFlag := flags.String("data-dir", "", "room state directory")
+	outputFlag := flags.String("output", "", "destination .tar.gz path")
+	jsonFlag := flags.Bool("json", false, "emit the backup manifest as JSON")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	if strings.TrimSpace(*outputFlag) == "" {
+		return errors.New("--output is required")
+	}
+	dataDir, err := resolveDataDir(*repoFlag, *dataFlag)
+	if err != nil {
+		return err
+	}
+	manifest, err := archive.Backup(dataDir, *outputFlag)
+	if err != nil {
+		return err
+	}
+	if *jsonFlag {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(manifest)
+	}
+	output, _ := filepath.Abs(*outputFlag)
+	fmt.Printf("PairRoom backup created\n  output: %s\n  files:  %d\n", output, len(manifest.Files))
+	return nil
+}
+
+func runRestore(args []string) error {
+	flags := flag.NewFlagSet("pairroom restore", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	repoFlag := flags.String("repo", ".", "repository used to resolve the default room data directory")
+	dataFlag := flags.String("data-dir", "", "destination room state directory")
+	inputFlag := flags.String("input", "", "source PairRoom backup .tar.gz")
+	forceFlag := flags.Bool("force", false, "replace a non-empty destination after full archive validation")
+	jsonFlag := flags.Bool("json", false, "emit the restored verification report as JSON")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	if strings.TrimSpace(*inputFlag) == "" {
+		return errors.New("--input is required")
+	}
+	dataDir, err := resolveDataDir(*repoFlag, *dataFlag)
+	if err != nil {
+		return err
+	}
+	report, err := archive.Restore(*inputFlag, dataDir, *forceFlag)
+	if err != nil {
+		return err
+	}
+	if *jsonFlag {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(report)
+	}
+	fmt.Printf("PairRoom backup restored\n  data:   %s\n  events: %d\n", report.DataDir, report.EventCount)
+	return nil
+}
+
+func runDiagnostics(args []string) error {
+	flags := flag.NewFlagSet("pairroom diagnostics", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	repoFlag := flags.String("repo", ".", "repository used to resolve the default room data directory")
+	dataFlag := flags.String("data-dir", "", "room state directory")
+	outputFlag := flags.String("output", "", "destination diagnostics .tar.gz path")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	if strings.TrimSpace(*outputFlag) == "" {
+		return errors.New("--output is required")
+	}
+	dataDir, err := resolveDataDir(*repoFlag, *dataFlag)
+	if err != nil {
+		return err
+	}
+	if err := archive.Diagnostics(dataDir, *outputFlag, runtime.GOOS, runtime.GOARCH); err != nil {
+		return err
+	}
+	output, _ := filepath.Abs(*outputFlag)
+	fmt.Printf("PairRoom diagnostics created\n  output: %s\n", output)
+	return nil
+}
+
+func resolveDataDir(repoValue, dataValue string) (string, error) {
+	if strings.TrimSpace(dataValue) != "" {
+		absolute, err := filepath.Abs(dataValue)
+		if err != nil {
+			return "", fmt.Errorf("resolve data directory: %w", err)
+		}
+		return filepath.Clean(absolute), nil
+	}
+	repo, err := canonicalDirectory(repoValue)
+	if err != nil {
+		return "", err
+	}
+	return defaultDataDir(repo)
+}
+
 func probeCommand(command string, args ...string) doctorCommandReport {
 	report := doctorCommandReport{Command: command}
 	path, err := exec.LookPath(command)
@@ -482,8 +660,12 @@ func printHelp() {
 
 Usage:
   pairroom serve [options]   Start the local daemon and IM-style web room
-  pairroom doctor [options]  Verify Git and vendor CLI installations
-  pairroom version           Print version
+  pairroom doctor [options]      Verify Git and vendor CLI installations
+  pairroom verify [options]      Strictly verify room data integrity
+  pairroom backup [options]      Create a verified room-data backup
+  pairroom restore [options]     Restore and verify a room-data backup
+  pairroom diagnostics [options] Create a redacted diagnostics bundle
+  pairroom version               Print version
 
 Quick start:
   pairroom serve --repo /path/to/project
