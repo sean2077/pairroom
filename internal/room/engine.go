@@ -66,14 +66,19 @@ type participantBatch struct {
 }
 
 type SendRequest struct {
-	Text        string             `json:"text"`
-	To          []model.ActorID    `json:"to,omitempty"`
-	ReplyTo     string             `json:"reply_to,omitempty"`
-	Attachments []model.Attachment `json:"attachments,omitempty"`
+	Text        string              `json:"text"`
+	To          []model.ActorID     `json:"to,omitempty"`
+	ReplyTo     string              `json:"reply_to,omitempty"`
+	Attachments []model.Attachment  `json:"attachments,omitempty"`
+	Intent      model.MessageIntent `json:"intent,omitempty"`
 }
 
 type RetryRequest struct {
 	To []model.ActorID `json:"to,omitempty"`
+}
+
+type CancelRequest struct {
+	Target model.ActorID `json:"target"`
 }
 
 type Engine struct {
@@ -469,6 +474,13 @@ func (e *Engine) AttachmentReferenced(id string) bool {
 
 func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, error) {
 	text := strings.TrimSpace(req.Text)
+	intent := req.Intent
+	if intent == "" {
+		intent = model.IntentAppend
+	}
+	if !intent.Valid() {
+		return model.Message{}, fmt.Errorf("invalid message intent %q", intent)
+	}
 	attachments, err := e.canonicalAttachments(req.Attachments)
 	if err != nil {
 		return model.Message{}, err
@@ -480,6 +492,19 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 	if len(targets) == 0 {
 		return model.Message{}, errors.New("message has no target; use @claude, @codex, or @all")
 	}
+	supersedes := make(map[model.ActorID][]string)
+	if intent == model.IntentSupersede {
+		e.mu.RLock()
+		for _, target := range targets {
+			for _, existing := range e.snapshot.Messages {
+				state := existing.Processing[target]
+				if state == model.ProcessingWaiting || state == model.ProcessingWorking {
+					supersedes[target] = append(supersedes[target], existing.ID)
+				}
+			}
+		}
+		e.mu.RUnlock()
+	}
 	threadID := e.threadForReply(req.ReplyTo)
 	message := model.Message{
 		ID:                      model.NewID("msg"),
@@ -487,6 +512,8 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 		To:                      targets,
 		Text:                    text,
 		ReplyTo:                 req.ReplyTo,
+		Intent:                  intent,
+		Supersedes:              supersedes,
 		ThreadID:                threadID,
 		CreatedAt:               time.Now().UTC(),
 		Delivery:                make(map[model.ActorID]model.DeliveryState, len(targets)),
@@ -507,6 +534,11 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 		return model.Message{}, err
 	}
 	message.Seq = event.Seq
+	if intent == model.IntentSupersede {
+		for _, target := range targets {
+			e.supersedeTarget(ctx, message.ID, target, supersedes[target])
+		}
+	}
 	// Return the persisted message immediately; vendor startup and delivery are
 	// intentionally asynchronous so an IM send never blocks on login/network.
 	for _, target := range targets {
@@ -514,6 +546,61 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 		go e.deliver(e.runtimeContext(ctx), message, target)
 	}
 	return message, nil
+}
+
+func (e *Engine) supersedeTarget(ctx context.Context, replacementID string, target model.ActorID, messageIDs []string) {
+	if len(messageIDs) == 0 {
+		return
+	}
+	if adapter, err := e.adapter(target); err == nil {
+		interruptCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		_ = adapter.Interrupt(interruptCtx)
+		cancel()
+	}
+	detail := "superseded by " + replacementID
+	for _, messageID := range messageIDs {
+		e.processing(messageID, target, model.ProcessingSuperseded, detail, "")
+	}
+}
+
+func (e *Engine) CancelMessage(ctx context.Context, messageID string, target model.ActorID) error {
+	if !target.ValidParticipant() {
+		return errors.New("cancel target must be claude or codex")
+	}
+	e.mu.RLock()
+	message, found := e.findMessageLocked(messageID)
+	e.mu.RUnlock()
+	if !found {
+		return fmt.Errorf("unknown message %q", messageID)
+	}
+	state := message.Processing[target]
+	if state != model.ProcessingWaiting && state != model.ProcessingWorking {
+		return fmt.Errorf("message is not in flight for %s", target.DisplayName())
+	}
+	adapter, err := e.adapter(target)
+	if err != nil {
+		return err
+	}
+	if err := adapter.Interrupt(ctx); err != nil {
+		return err
+	}
+	// Native runtimes often cancel an entire active turn or input queue rather
+	// than one logical room message. Mark every affected in-flight message for
+	// the participant so the transcript does not imply a narrower cancellation.
+	e.mu.RLock()
+	var affected []string
+	for _, candidate := range e.snapshot.Messages {
+		candidateState := candidate.Processing[target]
+		if candidateState == model.ProcessingWaiting || candidateState == model.ProcessingWorking {
+			affected = append(affected, candidate.ID)
+		}
+	}
+	e.mu.RUnlock()
+	for _, id := range affected {
+		e.processing(id, target, model.ProcessingCancelled, "cancelled by the PairRoom user; native interruption affects the participant turn/queue", "")
+	}
+	e.expireApprovals(target, "message_cancelled")
+	return nil
 }
 
 // Retry creates a new auditable message rather than mutating a past message.
@@ -555,6 +642,7 @@ func (e *Engine) Retry(ctx context.Context, messageID string, req RetryRequest) 
 		Text:                    original.Text,
 		ReplyTo:                 original.ReplyTo,
 		RetryOf:                 original.ID,
+		Intent:                  original.Intent,
 		ThreadID:                original.ThreadID,
 		Hop:                     original.Hop,
 		CreatedAt:               now,
@@ -1010,6 +1098,7 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 		RoutingMode: settings.RoutingMode,
 		MaxHops:     settings.MaxHops,
 		Attachments: attachments,
+		Intent:      message.Intent,
 	}
 	deliveryCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
@@ -1736,6 +1825,12 @@ func cloneSnapshot(in model.RoomSnapshot) model.RoomSnapshot {
 		out.Messages[i].ProcessingDetail = cloneDetails(message.ProcessingDetail)
 		out.Messages[i].ProcessingTurn = cloneDetails(message.ProcessingTurn)
 		out.Messages[i].ProcessingLastUpdatedAt = cloneTimes(message.ProcessingLastUpdatedAt)
+		if message.Supersedes != nil {
+			out.Messages[i].Supersedes = make(map[model.ActorID][]string, len(message.Supersedes))
+			for actor, ids := range message.Supersedes {
+				out.Messages[i].Supersedes[actor] = append([]string(nil), ids...)
+			}
+		}
 	}
 	out.Approvals = make([]model.Approval, len(in.Approvals))
 	for i, approval := range in.Approvals {

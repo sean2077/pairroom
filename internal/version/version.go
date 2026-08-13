@@ -1,6 +1,6 @@
 package version
 
 const (
-	Current     = "0.4.0"
-	StoreSchema = 4
+	Current     = "0.5.0"
+	StoreSchema = 5
 )

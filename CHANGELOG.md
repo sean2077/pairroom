@@ -1,3 +1,17 @@
+## [0.5.0] - 2026-08-14
+
+### Added
+
+- Explicit message intents: append to the active discussion, queue for the next turn, or supersede in-flight instructions.
+- Per-target cancellation endpoint and UI controls with honest whole-turn/queue cancellation semantics.
+- Durable `supersedes` references and visible intent markers in the shared timeline.
+- Codex next-turn intent that avoids `turn/steer` and waits for a safe turn boundary.
+
+### Changed
+
+- Superseding a target interrupts its native runtime, marks every affected in-flight message, and prevents stale automatic handoff.
+- Retries preserve the original message intent while remaining separate auditable messages.
+
 ## [0.4.0] - 2026-08-14
 
 ### Added

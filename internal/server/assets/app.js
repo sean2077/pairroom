@@ -536,6 +536,16 @@
       retryMarker.title = `Retry of ${message.retry_of}`;
       meta.appendChild(retryMarker);
     }
+	if (message.intent && message.intent !== 'append') {
+	  const intentMarker = document.createElement('span');
+	  intentMarker.className = `intent-marker intent-${message.intent}`;
+	  intentMarker.textContent = message.intent === 'supersede' ? '替代旧指令' : '下一 Turn';
+	  if (message.supersedes) {
+		const count = Object.values(message.supersedes).reduce((sum, ids) => sum + (ids || []).length, 0);
+		intentMarker.title = count ? `取代 ${count} 个在途消息目标` : '';
+	  }
+	  meta.appendChild(intentMarker);
+	}
     meta.appendChild(actions);
 
     const bubble = document.createElement('div');
@@ -596,6 +606,15 @@
           retryButton.textContent = `重试 ${displayName(target)}`;
           delivery.appendChild(retryButton);
         }
+		if (processing === 'waiting' || processing === 'working') {
+		  const cancelButton = document.createElement('button');
+		  cancelButton.className = 'cancel-message-button';
+		  cancelButton.dataset.cancelMessage = message.id;
+		  cancelButton.dataset.cancelTarget = target;
+		  cancelButton.textContent = `取消 ${displayName(target)}`;
+		  cancelButton.title = '原生运行时可能按整个 Turn 或队列取消；受影响的消息会一并标记';
+		  delivery.appendChild(cancelButton);
+		}
       }
       content.appendChild(delivery);
     }
@@ -1259,6 +1278,7 @@
           to: targetMap[state.selectedTarget],
           reply_to: state.replyTo || undefined,
           attachments,
+		  intent: $('message-intent').value,
         }),
       });
       messageInput.value = '';
@@ -1321,6 +1341,20 @@
       button.textContent = old;
     }
   }
+
+	async function cancelMessage(messageId, target, button) {
+	  button.disabled = true;
+	  try {
+		await api(`/api/v1/messages/${encodeURIComponent(messageId)}/cancel`, {
+		  method: 'POST', body: JSON.stringify({ target }),
+		});
+		toast(`已请求取消 ${displayName(target)} 的在途处理`, 'success');
+	  } catch (error) {
+		toast(`取消失败：${error.message}`, 'error');
+	  } finally {
+		button.disabled = false;
+	  }
+	}
 
   async function downloadExport(format) {
     try {
@@ -1675,6 +1709,8 @@
     if (approval) void resolveApproval(approval.dataset.approvalId, approval.dataset.decision, approval);
     const retry = event.target.closest('[data-retry-id][data-retry-target]');
     if (retry) retryMessage(retry.dataset.retryId, retry.dataset.retryTarget, retry);
+	const cancelMessageButton = event.target.closest('[data-cancel-message][data-cancel-target]');
+	if (cancelMessageButton) cancelMessage(cancelMessageButton.dataset.cancelMessage, cancelMessageButton.dataset.cancelTarget, cancelMessageButton);
     const copy = event.target.closest('[data-copy-message]');
     if (copy) {
       const message = (state.snapshot.messages || []).find((item) => item.id === copy.dataset.copyMessage);

@@ -513,3 +513,14 @@ button { color: inherit; }
   overflow-wrap: anywhere;
 }
 .workspace-boundary.protected { border-color: rgba(90,200,142,.28); color: var(--green); background: rgba(90,200,142,.045); }
+
+/* v0.5 explicit message intent and cancellation */
+.intent-picker { display: inline-flex; align-items: center; gap: 6px; color: var(--faint); }
+.intent-picker .mini-select { max-width: 154px; }
+.intent-marker { color: var(--accent); font-size: 9px; }
+.intent-supersede { color: var(--red); }
+.cancel-message-button {
+  border: 1px solid rgba(234,191,99,.30); border-radius: 999px; padding: 2px 7px;
+  background: rgba(234,191,99,.07); color: var(--yellow); cursor: pointer; font-size: 9px;
+}
+.cancel-message-button:hover { background: rgba(234,191,99,.14); }

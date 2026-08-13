@@ -298,6 +298,18 @@ func (c *CodexAdapter) Submit(ctx context.Context, input model.AgentInput) (mode
 	c.mu.Unlock()
 
 	if active {
+		if input.Intent == model.IntentNextTurn || input.Intent == model.IntentSupersede {
+			c.mu.Lock()
+			c.queued = append(c.queued, input)
+			c.mu.Unlock()
+			waiting := runtimeEvent(model.ActorCodex, model.RuntimeInputProcessing)
+			waiting.CorrelationID = input.MessageID
+			waiting.Name = string(model.ProcessingWaiting)
+			waiting.Text = "queued for the next Codex turn by explicit message intent"
+			c.sink(waiting)
+			go c.tryStartQueued()
+			return model.DeliveryQueued, nil
+		}
 		c.stageWireInput(input)
 		result, err := c.call(ctx, "turn/steer", codexTurnSteerParams(threadID, turnID, text, input))
 		c.unstageWireInput(input.MessageID)

@@ -59,6 +59,7 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("GET /api/v1/attachments/{id}", s.serveAttachment)
 	mux.HandleFunc("DELETE /api/v1/attachments/{id}", s.deleteAttachment)
 	mux.HandleFunc("POST /api/v1/messages/{id}/retry", s.retryMessage)
+	mux.HandleFunc("POST /api/v1/messages/{id}/cancel", s.cancelMessage)
 	mux.HandleFunc("GET /api/v1/export", s.exportRoom)
 	mux.HandleFunc("PUT /api/v1/settings", s.updateSettings)
 	mux.HandleFunc("POST /api/v1/participants/{actor}/{action}", s.participantAction)
@@ -372,6 +373,20 @@ func (s *Server) retryMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, message)
+}
+
+func (s *Server) cancelMessage(w http.ResponseWriter, r *http.Request) {
+	var request room.CancelRequest
+	if err := decodeJSON(w, r, &request); err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := s.engine.CancelMessage(ctx, r.PathValue("id"), request.Target); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {

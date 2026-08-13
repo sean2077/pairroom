@@ -119,7 +119,13 @@
             </button>
           </div>
           <div class="composer-footnote">
-            <span>支持拖拽或粘贴图片；用户消息拥有最高优先级</span>
+            <label class="intent-picker">发送方式
+              <select id="message-intent" class="mini-select">
+                <option value="append">补充当前讨论</option>
+                <option value="next_turn">下一 Turn 处理</option>
+                <option value="supersede">替代并取消旧指令</option>
+              </select>
+            </label>
             <span id="delivery-hint">发送给 Claude 与 Codex</span>
           </div>
           <div id="drop-overlay" class="drop-overlay hidden">释放图片以加入消息</div>

@@ -53,6 +53,9 @@ func Envelope(input model.AgentInput) string {
 		fmt.Fprintf(&b, "reply_to: %s\n", input.ReplyTo)
 	}
 	fmt.Fprintf(&b, "current_role: %s\n", input.Role)
+	if input.Intent != "" {
+		fmt.Fprintf(&b, "delivery_intent: %s\n", input.Intent)
+	}
 	fmt.Fprintf(&b, "role_rule: %s\n", roleRule)
 	fmt.Fprintf(&b, "routing_mode: %s\n", input.RoutingMode)
 	fmt.Fprintf(&b, "remaining_agent_hops: %d\n", max(0, input.MaxHops-input.Hop))

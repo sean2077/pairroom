@@ -26,6 +26,7 @@ type fakeAdapter struct {
 	submitErr    error
 	role         model.ParticipantRole
 	workspace    string
+	interrupts   int
 }
 
 func (f *fakeAdapter) Actor() model.ActorID { return f.actor }
@@ -65,7 +66,12 @@ func (f *fakeAdapter) Submit(ctx context.Context, input model.AgentInput) (model
 		return model.DeliveryFailed, ctx.Err()
 	}
 }
-func (f *fakeAdapter) Interrupt(context.Context) error { return nil }
+func (f *fakeAdapter) Interrupt(context.Context) error {
+	f.mu.Lock()
+	f.interrupts++
+	f.mu.Unlock()
+	return nil
+}
 func (f *fakeAdapter) Stop(context.Context) error {
 	f.mu.Lock()
 	f.state = model.StateStopped
@@ -838,4 +844,58 @@ func TestRuntimeErrorExpiresConnectionLocalApproval(t *testing.T) {
 	if got == nil || got.Status != "expired" || got.Decision != "runtime_error" {
 		t.Fatalf("runtime error left stale approval pending: %#v", got)
 	}
+}
+
+func TestSupersedeMarksOldInputAndCarriesIntent(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	first, err := engine.Send(context.Background(), SendRequest{
+		Text: "old instruction", To: []model.ActorID{model.ActorCodex},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorCodex])
+	waitForProcessingState(t, engine, first.ID, model.ActorCodex, model.ProcessingWorking)
+
+	replacement, err := engine.Send(context.Background(), SendRequest{
+		Text: "new instruction", To: []model.ActorID{model.ActorCodex}, Intent: model.IntentSupersede,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := receiveInput(t, adapters[model.ActorCodex])
+	if input.Intent != model.IntentSupersede {
+		t.Fatalf("input intent = %q", input.Intent)
+	}
+	waitForProcessingState(t, engine, first.ID, model.ActorCodex, model.ProcessingSuperseded)
+	if got := replacement.Supersedes[model.ActorCodex]; len(got) != 1 || got[0] != first.ID {
+		t.Fatalf("supersedes = %#v", got)
+	}
+	adapters[model.ActorCodex].mu.Lock()
+	interrupts := adapters[model.ActorCodex].interrupts
+	adapters[model.ActorCodex].mu.Unlock()
+	if interrupts != 1 {
+		t.Fatalf("interrupts = %d, want 1", interrupts)
+	}
+}
+
+func TestCancelMessageMarksParticipantQueue(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	first, err := engine.Send(context.Background(), SendRequest{Text: "one", To: []model.ActorID{model.ActorClaude}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := engine.Send(context.Background(), SendRequest{Text: "two", To: []model.ActorID{model.ActorClaude}, Intent: model.IntentNextTurn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+	_ = receiveInput(t, adapters[model.ActorClaude])
+	waitForProcessingState(t, engine, first.ID, model.ActorClaude, model.ProcessingWorking)
+	waitForProcessingState(t, engine, second.ID, model.ActorClaude, model.ProcessingWorking)
+	if err := engine.CancelMessage(context.Background(), first.ID, model.ActorClaude); err != nil {
+		t.Fatal(err)
+	}
+	waitForProcessingState(t, engine, first.ID, model.ActorClaude, model.ProcessingCancelled)
+	waitForProcessingState(t, engine, second.ID, model.ActorClaude, model.ProcessingCancelled)
 }

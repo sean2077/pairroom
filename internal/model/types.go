@@ -111,6 +111,18 @@ func (m RoutingMode) Valid() bool {
 	return m == RoutingManual || m == RoutingMentions || m == RoutingRoundtable
 }
 
+type MessageIntent string
+
+const (
+	IntentAppend    MessageIntent = "append"
+	IntentNextTurn  MessageIntent = "next_turn"
+	IntentSupersede MessageIntent = "supersede"
+)
+
+func (i MessageIntent) Valid() bool {
+	return i == IntentAppend || i == IntentNextTurn || i == IntentSupersede
+}
+
 // Attachment is durable, presentation-safe metadata for an item attached to a
 // room message. PairRoom v0.3 accepts raster images only. Absolute host paths
 // never enter the transcript or API response.
@@ -142,6 +154,8 @@ type Message struct {
 	Text                    string                      `json:"text"`
 	ReplyTo                 string                      `json:"reply_to,omitempty"`
 	RetryOf                 string                      `json:"retry_of,omitempty"`
+	Intent                  MessageIntent               `json:"intent,omitempty"`
+	Supersedes              map[ActorID][]string        `json:"supersedes,omitempty"`
 	ThreadID                string                      `json:"thread_id"`
 	Hop                     int                         `json:"hop"`
 	TurnID                  string                      `json:"turn_id,omitempty"`
@@ -334,6 +348,7 @@ type AgentInput struct {
 	RoutingMode RoutingMode       `json:"routing_mode"`
 	MaxHops     int               `json:"max_hops"`
 	Attachments []AgentAttachment `json:"attachments,omitempty"`
+	Intent      MessageIntent     `json:"intent,omitempty"`
 }
 
 type SystemNotice struct {
