@@ -1,0 +1,938 @@
+package agent
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/prompt"
+)
+
+type rpcReply struct {
+	result json.RawMessage
+	err    error
+}
+
+type pendingApproval struct {
+	rawID    json.RawMessage
+	method   string
+	params   json.RawMessage
+	approval model.Approval
+}
+
+type CodexAdapter struct {
+	cfg  Config
+	sink EventSink
+
+	startMu       sync.Mutex
+	submitMu      sync.Mutex
+	mu            sync.Mutex
+	writeMu       sync.Mutex
+	state         model.AgentState
+	cmd           *exec.Cmd
+	stdin         io.WriteCloser
+	threadID      string
+	currentTurn   string
+	protocolSent  bool
+	intentional   bool
+	pending       map[int64]chan rpcReply
+	approvals     map[string]pendingApproval
+	turnInputs    map[string]model.AgentInput
+	startingInput *model.AgentInput
+	turnBuffers   map[string]*strings.Builder
+	turnFinal     map[string]string
+	queued        []model.AgentInput
+	nextRequestID atomic.Int64
+}
+
+type codexRPCError struct {
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data,omitempty"`
+}
+
+func (e codexRPCError) Error() string {
+	if e.Code == 0 {
+		return e.Message
+	}
+	return fmt.Sprintf("codex rpc error %d: %s", e.Code, e.Message)
+}
+
+func NewCodex(cfg Config, sink EventSink) *CodexAdapter {
+	if cfg.Command == "" {
+		cfg.Command = "codex"
+	}
+	if cfg.ApprovalPolicy == "" {
+		cfg.ApprovalPolicy = "unlessTrusted"
+	}
+	if cfg.Sandbox == "" {
+		cfg.Sandbox = "workspaceWrite"
+	}
+	adapter := &CodexAdapter{
+		cfg: cfg, sink: sink, state: model.StateStopped, threadID: cfg.SessionID,
+		pending: make(map[int64]chan rpcReply), approvals: make(map[string]pendingApproval),
+		turnInputs: make(map[string]model.AgentInput), turnBuffers: make(map[string]*strings.Builder),
+		turnFinal: make(map[string]string),
+	}
+	adapter.nextRequestID.Store(100)
+	return adapter
+}
+
+func (c *CodexAdapter) Actor() model.ActorID { return model.ActorCodex }
+
+func (c *CodexAdapter) State() model.AgentState {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.state
+}
+
+func (c *CodexAdapter) SessionID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.threadID
+}
+
+func (c *CodexAdapter) setState(state model.AgentState, detail string) {
+	c.mu.Lock()
+	changed := c.state != state
+	c.state = state
+	c.mu.Unlock()
+	if !changed && detail == "" {
+		return
+	}
+	e := runtimeEvent(model.ActorCodex, model.RuntimeState)
+	e.State = state
+	e.Text = detail
+	c.sink(e)
+}
+
+func (c *CodexAdapter) Start(ctx context.Context) error {
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
+	c.mu.Lock()
+	if c.cmd != nil && c.cmd.Process != nil {
+		c.mu.Unlock()
+		return nil
+	}
+	c.state = model.StateStarting
+	c.intentional = false
+	c.mu.Unlock()
+
+	cmd := exec.Command(c.cfg.Command, "app-server")
+	cmd.Dir = c.cfg.Repo
+	cmd.Env = envWithout("CODEX_INTERNAL_ORIGINATOR")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		c.setState(model.StateError, err.Error())
+		return fmt.Errorf("codex stdin: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		_ = stdin.Close()
+		c.setState(model.StateError, err.Error())
+		return fmt.Errorf("codex stdout: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		_ = stdin.Close()
+		c.setState(model.StateError, err.Error())
+		return fmt.Errorf("codex stderr: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		c.setState(model.StateError, err.Error())
+		return fmt.Errorf("start codex app-server: %w", err)
+	}
+
+	c.mu.Lock()
+	c.cmd = cmd
+	c.stdin = stdin
+	c.mu.Unlock()
+	go c.readStdout(stdout)
+	go c.readStderr(stderr)
+	go c.waitProcess(cmd)
+
+	handshakeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if _, err := c.call(handshakeCtx, "initialize", map[string]any{
+		"clientInfo": map[string]any{
+			"name": "pairroom", "title": "PairRoom", "version": "0.1.0",
+		},
+	}); err != nil {
+		_ = c.Stop(context.Background())
+		return fmt.Errorf("initialize codex app-server: %w", err)
+	}
+	if err := c.notify("initialized", map[string]any{}); err != nil {
+		_ = c.Stop(context.Background())
+		return fmt.Errorf("acknowledge codex initialization: %w", err)
+	}
+
+	c.mu.Lock()
+	existingThread := c.threadID
+	c.mu.Unlock()
+	var result json.RawMessage
+	if existingThread != "" {
+		result, err = c.call(handshakeCtx, "thread/resume", map[string]any{
+			"threadId": existingThread,
+			"cwd":      c.cfg.Repo,
+		})
+		if err != nil {
+			logEvent := runtimeEvent(model.ActorCodex, model.RuntimeLog)
+			logEvent.Name = "thread.resume"
+			logEvent.Text = "resume failed; creating a new Codex thread: " + err.Error()
+			c.sink(logEvent)
+			existingThread = ""
+		}
+	}
+	if existingThread == "" {
+		params := map[string]any{
+			"cwd":            c.cfg.Repo,
+			"approvalPolicy": c.cfg.ApprovalPolicy,
+			"sandbox":        c.cfg.Sandbox,
+			"serviceName":    "pairroom",
+		}
+		if c.cfg.Model != "" {
+			params["model"] = c.cfg.Model
+		}
+		result, err = c.call(handshakeCtx, "thread/start", params)
+	}
+	if err != nil {
+		_ = c.Stop(context.Background())
+		return fmt.Errorf("start/resume codex thread: %w", err)
+	}
+	var threadResult struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(result, &threadResult); err != nil || threadResult.Thread.ID == "" {
+		_ = c.Stop(context.Background())
+		if err == nil {
+			err = errors.New("missing thread id")
+		}
+		return fmt.Errorf("decode codex thread: %w", err)
+	}
+	c.mu.Lock()
+	c.threadID = threadResult.Thread.ID
+	c.mu.Unlock()
+	c.setState(model.StateIdle, "")
+	session := runtimeEvent(model.ActorCodex, model.RuntimeSession)
+	session.SessionID = threadResult.Thread.ID
+	c.sink(session)
+	return nil
+}
+
+func (c *CodexAdapter) Submit(ctx context.Context, input model.AgentInput) (model.DeliveryState, error) {
+	// A Codex thread accepts one active turn. Serialize submissions so two room
+	// deliveries cannot both observe an idle thread and race turn/start.
+	c.submitMu.Lock()
+	defer c.submitMu.Unlock()
+
+	if err := c.Start(ctx); err != nil {
+		return model.DeliveryFailed, err
+	}
+
+	text := prompt.Envelope(input)
+	c.mu.Lock()
+	includeProtocol := !c.protocolSent
+	if includeProtocol {
+		protocolText := c.cfg.SystemPrompt
+		if protocolText == "" {
+			protocolText = prompt.SystemPrompt(model.ActorCodex, c.cfg.RoomName, c.cfg.Repo)
+		}
+		text = protocolText + "\n\n" + text
+	}
+	threadID := c.threadID
+	turnID := c.currentTurn
+	working := c.state == model.StateWorking && turnID != ""
+	c.mu.Unlock()
+
+	if working {
+		result, err := c.call(ctx, "turn/steer", map[string]any{
+			"threadId":       threadID,
+			"expectedTurnId": turnID,
+			"input":          []any{map[string]any{"type": "text", "text": text}},
+		})
+		if err == nil {
+			_ = result
+			c.mu.Lock()
+			c.turnInputs[turnID] = input
+			c.mu.Unlock()
+			return model.DeliveryInjected, nil
+		}
+		// Review/compaction turns and a narrow completion race can reject
+		// steering. Preserve the user's intervention and start it at the next
+		// safe turn boundary instead of dropping it.
+		c.mu.Lock()
+		c.queued = append(c.queued, input)
+		c.mu.Unlock()
+		logEvent := runtimeEvent(model.ActorCodex, model.RuntimeLog)
+		logEvent.Name = "turn.steer.queued"
+		logEvent.CorrelationID = input.MessageID
+		logEvent.Text = err.Error()
+		c.sink(logEvent)
+		go c.tryStartQueued()
+		return model.DeliveryQueued, nil
+	}
+
+	params := map[string]any{
+		"threadId":       threadID,
+		"input":          []any{map[string]any{"type": "text", "text": text}},
+		"cwd":            c.cfg.Repo,
+		"approvalPolicy": c.cfg.ApprovalPolicy,
+		"sandboxPolicy":  c.sandboxPolicy(input.Role),
+	}
+	if c.cfg.Model != "" {
+		params["model"] = c.cfg.Model
+	}
+	if c.cfg.Effort != "" {
+		params["effort"] = c.cfg.Effort
+	}
+	// turn/started can arrive before the turn/start response. Keep the input in
+	// a temporary slot so either ordering receives the correct correlation ID.
+	starting := input
+	c.mu.Lock()
+	c.startingInput = &starting
+	c.mu.Unlock()
+	result, err := c.call(ctx, "turn/start", params)
+	if err != nil {
+		c.mu.Lock()
+		c.startingInput = nil
+		c.mu.Unlock()
+		return model.DeliveryFailed, err
+	}
+	var turnResult struct {
+		Turn struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+	}
+	if err := json.Unmarshal(result, &turnResult); err != nil || turnResult.Turn.ID == "" {
+		c.mu.Lock()
+		c.startingInput = nil
+		c.mu.Unlock()
+		if err == nil {
+			err = errors.New("missing turn id")
+		}
+		return model.DeliveryFailed, fmt.Errorf("decode codex turn: %w", err)
+	}
+	c.mu.Lock()
+	if includeProtocol {
+		c.protocolSent = true
+	}
+	c.currentTurn = turnResult.Turn.ID
+	if _, exists := c.turnInputs[turnResult.Turn.ID]; !exists {
+		c.turnInputs[turnResult.Turn.ID] = input
+	}
+	c.startingInput = nil
+	if c.turnBuffers[turnResult.Turn.ID] == nil {
+		c.turnBuffers[turnResult.Turn.ID] = &strings.Builder{}
+	}
+	c.mu.Unlock()
+	c.setState(model.StateWorking, "")
+	return model.DeliveryStarted, nil
+}
+
+func (c *CodexAdapter) sandboxPolicy(role model.ParticipantRole) map[string]any {
+	if role == model.RoleReviewer {
+		return map[string]any{"type": "readOnly", "access": map[string]any{"type": "fullAccess"}}
+	}
+	switch strings.ToLower(c.cfg.Sandbox) {
+	case "readonly", "read_only", "read-only":
+		return map[string]any{"type": "readOnly", "access": map[string]any{"type": "fullAccess"}}
+	case "dangerfullaccess", "full", "fullaccess":
+		return map[string]any{"type": "dangerFullAccess"}
+	default:
+		return map[string]any{
+			"type":          "workspaceWrite",
+			"writableRoots": []string{c.cfg.Repo},
+			"networkAccess": false,
+		}
+	}
+}
+
+func (c *CodexAdapter) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	id := c.nextRequestID.Add(1)
+	ch := make(chan rpcReply, 1)
+	c.mu.Lock()
+	c.pending[id] = ch
+	c.mu.Unlock()
+	if err := c.send(map[string]any{"id": id, "method": method, "params": params}); err != nil {
+		c.mu.Lock()
+		delete(c.pending, id)
+		c.mu.Unlock()
+		return nil, err
+	}
+	select {
+	case reply := <-ch:
+		return reply.result, reply.err
+	case <-ctx.Done():
+		c.mu.Lock()
+		delete(c.pending, id)
+		c.mu.Unlock()
+		return nil, ctx.Err()
+	}
+}
+
+func (c *CodexAdapter) notify(method string, params any) error {
+	return c.send(map[string]any{"method": method, "params": params})
+}
+
+func (c *CodexAdapter) send(value any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("encode codex rpc message: %w", err)
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	c.mu.Lock()
+	stdin := c.stdin
+	c.mu.Unlock()
+	if stdin == nil {
+		return errors.New("codex stdin is not available")
+	}
+	if _, err := stdin.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("write codex rpc message: %w", err)
+	}
+	return nil
+}
+
+func (c *CodexAdapter) readStdout(reader io.Reader) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	for scanner.Scan() {
+		line := append([]byte(nil), scanner.Bytes()...)
+		c.handleRPCLine(line)
+	}
+	if err := scanner.Err(); err != nil {
+		e := runtimeEvent(model.ActorCodex, model.RuntimeError)
+		e.Text = "read Codex stream: " + err.Error()
+		c.sink(e)
+	}
+}
+
+func (c *CodexAdapter) readStderr(reader io.Reader) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 16*1024), 1024*1024)
+	for scanner.Scan() {
+		text := strings.TrimSpace(scanner.Text())
+		if text == "" {
+			continue
+		}
+		e := runtimeEvent(model.ActorCodex, model.RuntimeLog)
+		e.Name = "stderr"
+		e.Text = text
+		c.sink(e)
+	}
+}
+
+func (c *CodexAdapter) handleRPCLine(line []byte) {
+	var envelope struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+		Params json.RawMessage `json:"params"`
+		Result json.RawMessage `json:"result"`
+		Error  *codexRPCError  `json:"error"`
+	}
+	if err := json.Unmarshal(line, &envelope); err != nil {
+		e := runtimeEvent(model.ActorCodex, model.RuntimeLog)
+		e.Name = "stdout"
+		e.Text = string(line)
+		c.sink(e)
+		return
+	}
+	if envelope.Method != "" {
+		if len(envelope.ID) > 0 && string(envelope.ID) != "null" {
+			c.handleServerRequest(envelope.ID, envelope.Method, envelope.Params)
+			return
+		}
+		c.handleNotification(envelope.Method, envelope.Params)
+		return
+	}
+	if len(envelope.ID) == 0 {
+		return
+	}
+	var id int64
+	if err := json.Unmarshal(envelope.ID, &id); err != nil {
+		return
+	}
+	c.mu.Lock()
+	ch := c.pending[id]
+	delete(c.pending, id)
+	c.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	if envelope.Error != nil {
+		ch <- rpcReply{err: *envelope.Error}
+	} else {
+		ch <- rpcReply{result: envelope.Result}
+	}
+}
+
+func (c *CodexAdapter) handleServerRequest(rawID json.RawMessage, method string, params json.RawMessage) {
+	commandApproval := strings.HasSuffix(method, "commandExecution/requestApproval")
+	fileApproval := strings.HasSuffix(method, "fileChange/requestApproval")
+	permissionApproval := strings.HasSuffix(method, "permissions/requestApproval")
+	if !commandApproval && !fileApproval && !permissionApproval {
+		// Structured user-input, MCP elicitation, and dynamic tool requests have
+		// distinct response schemas. The MVP fails those
+		// closed instead of accidentally granting capability with a generic yes.
+		_ = c.sendRawResponse(rawID, nil, &codexRPCError{Code: -32601, Message: "PairRoom 0.1 does not implement " + method})
+		e := runtimeEvent(model.ActorCodex, model.RuntimeLog)
+		e.Name = "server_request.unsupported"
+		e.Text = method
+		e.Data = append(json.RawMessage(nil), params...)
+		c.sink(e)
+		return
+	}
+	displayID := model.NewID("approval")
+	title := "Approve Codex command"
+	if fileApproval {
+		title = "Approve Codex file change"
+	} else if permissionApproval {
+		title = "Grant Codex additional permissions"
+	}
+	approval := model.Approval{
+		ID: displayID, Agent: model.ActorCodex, Kind: method, Title: title,
+		Detail: append(json.RawMessage(nil), params...), Status: "pending", RequestedAt: time.Now().UTC(),
+	}
+	c.mu.Lock()
+	c.approvals[displayID] = pendingApproval{
+		rawID: append(json.RawMessage(nil), rawID...), method: method,
+		params: append(json.RawMessage(nil), params...), approval: approval,
+	}
+	c.mu.Unlock()
+	e := runtimeEvent(model.ActorCodex, model.RuntimeApprovalRequested)
+	e.Approval = &approval
+	e.Data = append(json.RawMessage(nil), params...)
+	c.sink(e)
+	c.setState(model.StateWaiting, "waiting for approval")
+}
+
+func (c *CodexAdapter) handleNotification(method string, params json.RawMessage) {
+	switch method {
+	case "turn/started":
+		var p struct {
+			Turn struct {
+				ID string `json:"id"`
+			} `json:"turn"`
+		}
+		_ = json.Unmarshal(params, &p)
+		c.mu.Lock()
+		if p.Turn.ID != "" {
+			c.currentTurn = p.Turn.ID
+			if c.turnBuffers[p.Turn.ID] == nil {
+				c.turnBuffers[p.Turn.ID] = &strings.Builder{}
+			}
+		}
+		input := c.turnInputs[p.Turn.ID]
+		c.mu.Unlock()
+		c.setState(model.StateWorking, "")
+		e := runtimeEvent(model.ActorCodex, model.RuntimeTurnStarted)
+		e.TurnID = p.Turn.ID
+		e.CorrelationID = input.MessageID
+		c.sink(e)
+
+	case "item/agentMessage/delta":
+		var p struct {
+			ThreadID string `json:"threadId"`
+			TurnID   string `json:"turnId"`
+			ItemID   string `json:"itemId"`
+			Delta    string `json:"delta"`
+		}
+		_ = json.Unmarshal(params, &p)
+		c.mu.Lock()
+		builder := c.turnBuffers[p.TurnID]
+		if builder == nil {
+			builder = &strings.Builder{}
+			c.turnBuffers[p.TurnID] = builder
+		}
+		builder.WriteString(p.Delta)
+		input := c.turnInputs[p.TurnID]
+		c.mu.Unlock()
+		e := runtimeEvent(model.ActorCodex, model.RuntimeTextDelta)
+		e.TurnID = p.TurnID
+		e.ItemID = p.ItemID
+		e.CorrelationID = input.MessageID
+		e.Text = p.Delta
+		c.sink(e)
+
+	case "item/started", "item/completed":
+		c.handleItem(method, params)
+
+	case "item/commandExecution/outputDelta":
+		var p struct {
+			TurnID string `json:"turnId"`
+			ItemID string `json:"itemId"`
+			Delta  string `json:"delta"`
+		}
+		_ = json.Unmarshal(params, &p)
+		e := runtimeEvent(model.ActorCodex, model.RuntimeCommandOutput)
+		e.TurnID, e.ItemID, e.Text = p.TurnID, p.ItemID, p.Delta
+		c.sink(e)
+
+	case "turn/diff/updated":
+		var p struct {
+			TurnID string `json:"turnId"`
+			Diff   string `json:"diff"`
+		}
+		_ = json.Unmarshal(params, &p)
+		e := runtimeEvent(model.ActorCodex, model.RuntimeDiffUpdated)
+		e.TurnID, e.Text = p.TurnID, p.Diff
+		c.sink(e)
+
+	case "turn/plan/updated":
+		e := runtimeEvent(model.ActorCodex, model.RuntimePlanUpdated)
+		e.Data = append(json.RawMessage(nil), params...)
+		c.sink(e)
+
+	case "thread/tokenUsage/updated":
+		e := runtimeEvent(model.ActorCodex, model.RuntimeUsageUpdated)
+		e.Data = append(json.RawMessage(nil), params...)
+		c.sink(e)
+
+	case "turn/completed":
+		c.handleTurnCompleted(params)
+
+	case "serverRequest/resolved":
+		c.handleServerRequestResolved(params)
+
+	case "error", "warning", "configWarning":
+		kind := model.RuntimeLog
+		if method == "error" {
+			kind = model.RuntimeError
+		}
+		e := runtimeEvent(model.ActorCodex, kind)
+		e.Name = method
+		e.Data = append(json.RawMessage(nil), params...)
+		var p struct {
+			Message string `json:"message"`
+			Error   struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(params, &p)
+		e.Text = p.Message
+		if e.Text == "" {
+			e.Text = p.Error.Message
+		}
+		c.sink(e)
+
+	default:
+		if strings.HasPrefix(method, "thread/") || strings.HasPrefix(method, "serverRequest/") {
+			return
+		}
+		e := runtimeEvent(model.ActorCodex, model.RuntimeLog)
+		e.Name = method
+		e.Data = append(json.RawMessage(nil), params...)
+		c.sink(e)
+	}
+}
+
+func (c *CodexAdapter) handleServerRequestResolved(params json.RawMessage) {
+	var payload struct {
+		RequestID json.RawMessage `json:"requestId"`
+	}
+	if err := json.Unmarshal(params, &payload); err != nil || len(payload.RequestID) == 0 {
+		return
+	}
+	canonical := strings.TrimSpace(string(payload.RequestID))
+	var cleared *model.Approval
+	c.mu.Lock()
+	for id, pending := range c.approvals {
+		if strings.TrimSpace(string(pending.rawID)) != canonical {
+			continue
+		}
+		approval := pending.approval
+		now := time.Now().UTC()
+		approval.Status = "cleared"
+		approval.Decision = "cleared"
+		approval.ResolvedAt = &now
+		cleared = &approval
+		delete(c.approvals, id)
+		break
+	}
+	c.mu.Unlock()
+	if cleared != nil {
+		e := runtimeEvent(model.ActorCodex, model.RuntimeApprovalResolved)
+		e.Approval = cleared
+		e.Data = append(json.RawMessage(nil), params...)
+		c.sink(e)
+	}
+}
+
+func (c *CodexAdapter) handleItem(method string, params json.RawMessage) {
+	var p struct {
+		TurnID string `json:"turnId"`
+		Item   struct {
+			ID               string          `json:"id"`
+			Type             string          `json:"type"`
+			Phase            string          `json:"phase"`
+			Text             string          `json:"text"`
+			Command          json.RawMessage `json:"command"`
+			Cwd              string          `json:"cwd"`
+			Status           string          `json:"status"`
+			AggregatedOutput string          `json:"aggregatedOutput"`
+			Changes          json.RawMessage `json:"changes"`
+		} `json:"item"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return
+	}
+	kind := model.RuntimeToolStarted
+	if method == "item/completed" {
+		kind = model.RuntimeToolCompleted
+	}
+	if p.Item.Type == "agentMessage" && method == "item/completed" {
+		c.mu.Lock()
+		// Prefer the authoritative final_answer item. Older app-server versions
+		// may omit phase, in which case the latest completed message is retained.
+		if p.Item.Phase == "final_answer" || p.Item.Phase == "" || c.turnFinal[p.TurnID] == "" {
+			c.turnFinal[p.TurnID] = p.Item.Text
+		}
+		c.mu.Unlock()
+		return
+	}
+	e := runtimeEvent(model.ActorCodex, kind)
+	e.TurnID = p.TurnID
+	e.ItemID = p.Item.ID
+	e.Name = p.Item.Type
+	e.Data = append(json.RawMessage(nil), params...)
+	c.sink(e)
+}
+
+func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
+	var p struct {
+		Turn struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+			Error  *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"turn"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return
+	}
+	c.mu.Lock()
+	input := c.turnInputs[p.Turn.ID]
+	text := c.turnFinal[p.Turn.ID]
+	if text == "" && c.turnBuffers[p.Turn.ID] != nil {
+		text = c.turnBuffers[p.Turn.ID].String()
+	}
+	delete(c.turnInputs, p.Turn.ID)
+	delete(c.turnFinal, p.Turn.ID)
+	delete(c.turnBuffers, p.Turn.ID)
+	if c.currentTurn == p.Turn.ID {
+		c.currentTurn = ""
+	}
+	c.mu.Unlock()
+	if p.Turn.Status == "completed" && strings.TrimSpace(text) != "" {
+		e := runtimeEvent(model.ActorCodex, model.RuntimeFinal)
+		e.TurnID = p.Turn.ID
+		e.CorrelationID = input.MessageID
+		e.Text = text
+		c.sink(e)
+	}
+	completed := runtimeEvent(model.ActorCodex, model.RuntimeTurnCompleted)
+	completed.TurnID = p.Turn.ID
+	completed.CorrelationID = input.MessageID
+	completed.Name = p.Turn.Status
+	completed.Data = append(json.RawMessage(nil), params...)
+	c.sink(completed)
+	if p.Turn.Error != nil && p.Turn.Error.Message != "" {
+		e := runtimeEvent(model.ActorCodex, model.RuntimeError)
+		e.TurnID = p.Turn.ID
+		e.Text = p.Turn.Error.Message
+		c.sink(e)
+		c.setState(model.StateError, p.Turn.Error.Message)
+		return
+	}
+	c.setState(model.StateIdle, "")
+	go c.tryStartQueued()
+}
+
+func (c *CodexAdapter) tryStartQueued() {
+	// Let the terminal turn/completed state settle before attempting a queued
+	// turn. Multiple callers are harmless: the lock pops at most one item.
+	time.Sleep(25 * time.Millisecond)
+	c.mu.Lock()
+	if c.state == model.StateWorking || c.currentTurn != "" || len(c.queued) == 0 {
+		c.mu.Unlock()
+		return
+	}
+	input := c.queued[0]
+	c.queued = c.queued[1:]
+	c.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	state, err := c.Submit(ctx, input)
+	if err != nil {
+		e := runtimeEvent(model.ActorCodex, model.RuntimeError)
+		e.CorrelationID = input.MessageID
+		e.Text = "start queued Codex turn: " + err.Error()
+		c.sink(e)
+		return
+	}
+	e := runtimeEvent(model.ActorCodex, model.RuntimeLog)
+	e.Name = "queued.started"
+	e.CorrelationID = input.MessageID
+	e.Text = string(state)
+	c.sink(e)
+}
+
+func (c *CodexAdapter) sendRawResponse(id json.RawMessage, result any, rpcErr *codexRPCError) error {
+	message := struct {
+		ID     json.RawMessage `json:"id"`
+		Result any             `json:"result,omitempty"`
+		Error  *codexRPCError  `json:"error,omitempty"`
+	}{ID: id, Result: result, Error: rpcErr}
+	return c.send(message)
+}
+
+func (c *CodexAdapter) ResolveApproval(ctx context.Context, approvalID, decision string) error {
+	_ = ctx
+	allowed := map[string]bool{
+		"accept": true, "acceptForSession": true, "decline": true, "cancel": true,
+	}
+	if !allowed[decision] {
+		return fmt.Errorf("unsupported approval decision %q", decision)
+	}
+	c.mu.Lock()
+	pending, ok := c.approvals[approvalID]
+	c.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("unknown approval %q", approvalID)
+	}
+	result, err := codexApprovalResult(pending, decision)
+	if err != nil {
+		return err
+	}
+	if err := c.sendRawResponse(pending.rawID, result, nil); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	delete(c.approvals, approvalID)
+	c.mu.Unlock()
+	// The room engine owns the user-facing approval projection after this call
+	// succeeds. serverRequest/resolved remains available for server-side clears.
+	c.setState(model.StateWorking, "")
+	return nil
+}
+
+func codexApprovalResult(pending pendingApproval, decision string) (map[string]any, error) {
+	if !strings.HasSuffix(pending.method, "permissions/requestApproval") {
+		return map[string]any{"decision": decision}, nil
+	}
+
+	// Permission requests use a different response schema than command/file
+	// approvals. Grant only the exact profile requested by app-server; an empty
+	// object means every requested permission is denied.
+	var request struct {
+		Permissions json.RawMessage `json:"permissions"`
+	}
+	if err := json.Unmarshal(pending.params, &request); err != nil {
+		return nil, fmt.Errorf("decode Codex permission request: %w", err)
+	}
+	permissions := any(map[string]any{})
+	if decision == "accept" || decision == "acceptForSession" {
+		if len(request.Permissions) == 0 || string(request.Permissions) == "null" {
+			return nil, errors.New("Codex permission request omitted permissions")
+		}
+		if err := json.Unmarshal(request.Permissions, &permissions); err != nil {
+			return nil, fmt.Errorf("decode requested Codex permissions: %w", err)
+		}
+	}
+	scope := "turn"
+	if decision == "acceptForSession" {
+		scope = "session"
+	}
+	return map[string]any{"scope": scope, "permissions": permissions}, nil
+}
+
+func (c *CodexAdapter) Interrupt(ctx context.Context) error {
+	c.mu.Lock()
+	threadID, turnID := c.threadID, c.currentTurn
+	c.mu.Unlock()
+	if threadID == "" || turnID == "" {
+		return nil
+	}
+	_, err := c.call(ctx, "turn/interrupt", map[string]any{"threadId": threadID, "turnId": turnID})
+	return err
+}
+
+func (c *CodexAdapter) Stop(context.Context) error {
+	c.mu.Lock()
+	cmd := c.cmd
+	stdin := c.stdin
+	c.intentional = true
+	c.cmd = nil
+	c.stdin = nil
+	c.currentTurn = ""
+	c.mu.Unlock()
+	if stdin != nil {
+		_ = stdin.Close()
+	}
+	if cmd != nil && cmd.Process != nil {
+		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return err
+		}
+	}
+	c.setState(model.StateStopped, "")
+	return nil
+}
+
+func (c *CodexAdapter) waitProcess(cmd *exec.Cmd) {
+	err := cmd.Wait()
+	c.mu.Lock()
+	active := c.cmd == cmd
+	intentional := c.intentional
+	if active {
+		c.cmd = nil
+		c.stdin = nil
+		for id, ch := range c.pending {
+			delete(c.pending, id)
+			ch <- rpcReply{err: errors.New("codex app-server exited")}
+		}
+	}
+	c.mu.Unlock()
+	if !active {
+		return
+	}
+	if intentional {
+		c.setState(model.StateStopped, "")
+		return
+	}
+	if err != nil {
+		e := runtimeEvent(model.ActorCodex, model.RuntimeError)
+		e.Text = "Codex app-server exited: " + err.Error()
+		c.sink(e)
+		c.setState(model.StateError, err.Error())
+		return
+	}
+	c.setState(model.StateStopped, "")
+}
+
+// ParseCodexRequestID is kept small and exported only for protocol tests.
+func ParseCodexRequestID(raw json.RawMessage) (int64, error) {
+	var id int64
+	if err := json.Unmarshal(raw, &id); err == nil {
+		return id, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return 0, err
+	}
+	return strconv.ParseInt(s, 10, 64)
+}

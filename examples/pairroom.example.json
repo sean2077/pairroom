@@ -1,0 +1,19 @@
+{
+  "listen": "127.0.0.1:7332",
+  "room_name": "Claude × Codex",
+  "routing_mode": "mentions",
+  "max_agent_hops": 6,
+  "auto_start": true,
+  "claude": {
+    "command": "claude",
+    "model": "",
+    "permission_mode": "auto"
+  },
+  "codex": {
+    "command": "codex",
+    "model": "",
+    "effort": "high",
+    "approval_policy": "unlessTrusted",
+    "sandbox": "workspaceWrite"
+  }
+}

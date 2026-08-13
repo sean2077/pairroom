@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>PairRoom</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span></div>
+        <div>
+          <div class="brand-name">PairRoom</div>
+          <div class="brand-tagline">Native agent collaboration</div>
+        </div>
+      </div>
+      <div class="room-heading">
+        <h1 id="room-name">Claude × Codex</h1>
+        <div id="repo-path" class="repo-path">Loading workspace…</div>
+      </div>
+      <div class="topbar-actions">
+        <div id="connection" class="connection disconnected"><span class="status-dot"></span><span>Connecting</span></div>
+        <button id="refresh-button" class="icon-button" title="刷新房间" aria-label="刷新房间">↻</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="participants-panel panel">
+        <div class="panel-heading">
+          <span>参与者</span>
+          <span class="panel-count">3</span>
+        </div>
+        <div class="human-card participant-card">
+          <div class="avatar avatar-human">Y</div>
+          <div class="participant-main">
+            <div class="participant-title"><strong>You</strong><span class="authority-badge">Owner</span></div>
+            <div class="participant-subtitle">可随时介入、暂停或改向</div>
+          </div>
+        </div>
+        <div id="participants"></div>
+
+        <div class="divider"></div>
+        <section class="room-controls">
+          <div class="section-title">讨论策略</div>
+          <label class="field-label" for="routing-mode">自动路由</label>
+          <select id="routing-mode" class="select-control">
+            <option value="manual">Manual · 仅用户触发</option>
+            <option value="mentions">Mentions · @ 对方时继续</option>
+            <option value="roundtable">Roundtable · 自动往返</option>
+          </select>
+          <label class="field-label" for="max-hops">最大 Agent 往返</label>
+          <div class="range-row">
+            <input id="max-hops" type="range" min="1" max="20" value="6">
+            <output id="max-hops-value">6</output>
+          </div>
+          <button id="save-settings" class="secondary-button full-width">保存策略</button>
+        </section>
+
+        <div class="divider"></div>
+        <section class="repo-summary">
+          <div class="section-title">工作区</div>
+          <pre id="git-status" class="git-status">读取 Git 状态…</pre>
+        </section>
+      </aside>
+
+      <section class="chat-panel panel">
+        <div class="chat-toolbar">
+          <div>
+            <div class="chat-title">Shared room</div>
+            <div class="chat-description">你、Claude Code 与 Codex 的公共时间线</div>
+          </div>
+          <div class="toolbar-actions">
+            <button id="scroll-bottom" class="ghost-button">跳到最新</button>
+          </div>
+        </div>
+        <div id="timeline" class="timeline" aria-live="polite"></div>
+        <div id="reply-banner" class="reply-banner hidden">
+          <div><span class="reply-label">回复</span><span id="reply-preview"></span></div>
+          <button id="cancel-reply" class="bare-button" aria-label="取消回复">×</button>
+        </div>
+        <div class="composer-wrap">
+          <div class="target-picker" role="group" aria-label="消息接收者">
+            <button class="target-button active" data-target="all">@ All</button>
+            <button class="target-button" data-target="claude">@ Claude</button>
+            <button class="target-button" data-target="codex">@ Codex</button>
+          </div>
+          <div class="composer">
+            <textarea id="message-input" rows="3" placeholder="向两个 Agent 发消息；Enter 发送，Shift+Enter 换行…"></textarea>
+            <button id="send-button" class="send-button" aria-label="发送消息">
+              <span>发送</span><span class="send-arrow">↑</span>
+            </button>
+          </div>
+          <div class="composer-footnote">
+            <span>用户消息拥有最高优先级</span>
+            <span id="delivery-hint">发送给 Claude 与 Codex</span>
+          </div>
+        </div>
+      </section>
+
+      <aside class="inspector-panel panel">
+        <div class="inspector-header">
+          <div>
+            <div class="panel-heading compact">工作检查器</div>
+            <div class="inspector-subtitle">查看工具、命令、Diff 与审批</div>
+          </div>
+          <select id="inspector-agent" class="mini-select">
+            <option value="all">全部 Agent</option>
+            <option value="claude">Claude</option>
+            <option value="codex">Codex</option>
+          </select>
+        </div>
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-tab="activity">Activity</button>
+          <button class="tab" data-tab="diff">Diff</button>
+          <button class="tab" data-tab="approvals">Approvals <span id="approval-count" class="tab-count">0</span></button>
+        </div>
+        <div id="activity-tab" class="tab-content active"></div>
+        <div id="diff-tab" class="tab-content">
+          <div class="diff-toolbar">
+            <button id="refresh-diff" class="secondary-button">刷新 Diff</button>
+            <label class="checkbox-label"><input id="staged-diff" type="checkbox"> Staged</label>
+          </div>
+          <pre id="diff-output" class="diff-output">选择“刷新 Diff”查看工作区改动。</pre>
+        </div>
+        <div id="approvals-tab" class="tab-content"></div>
+      </aside>
+    </main>
+  </div>
+  <div id="toast-stack" class="toast-stack" aria-live="assertive"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

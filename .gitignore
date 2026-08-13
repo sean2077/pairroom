@@ -1,0 +1,6 @@
+/pairroom
+/dist/
+.coverage
+*.log
+.pairroom/
+.DS_Store
