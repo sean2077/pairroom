@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>PairRoom Service</title>
+  <link rel="stylesheet" href="/management.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">PAIRROOM SERVICE</p>
+      <h1>Projects & Rooms</h1>
+      <p id="service-meta" class="muted">正在连接本地服务…</p>
+    </div>
+    <span id="health" class="badge warn">Connecting</span>
+  </header>
+  <main>
+    <aside class="notice"><strong>Transcript Boundary</strong><span>复用已有 Claude Session 或 Codex Thread 只恢复供应商上下文；PairRoom 不导入或展示绑定前 transcript。</span></aside>
+    <section class="controls">
+      <form id="project-form" class="panel compact">
+        <h2>登记 Project</h2>
+        <div class="inline"><input id="project-path" name="path" type="text" required placeholder="/absolute/path/to/git/worktree" autocomplete="off"><button type="submit">登记</button></div>
+        <p class="hint">只接受显式绝对路径。根目录、子目录和符号链接会解析为 canonical Git worktree。</p>
+      </form>
+      <form id="import-form" class="panel compact">
+        <h2>导入 Legacy Room</h2>
+        <div class="inline"><input id="import-path" name="path" type="text" required placeholder="/absolute/path/to/legacy/room-data" autocomplete="off"><button type="submit">导入</button></div>
+        <p class="hint">显式导入自定义 data-dir，不搬移、不复制、不重写 events.jsonl。</p>
+      </form>
+    </section>
+    <div class="section-heading"><div><h2>Projects</h2><p class="muted">Room View 会在独立的本地运行端点打开；切换或关闭页面不会中断活动 Turn。</p></div><label class="toggle"><input id="show-archived" type="checkbox"> 显示已归档</label></div>
+    <div id="projects" class="project-list"></div>
+  </main>
+  <dialog id="room-dialog">
+    <form id="room-form" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">NEW ROOM</p><h2 id="room-dialog-title">创建 Room</h2></div><button id="room-dialog-close" class="ghost" value="cancel" aria-label="关闭">✕</button></div>
+      <input id="room-project-id" type="hidden">
+      <label>Room 名称<input id="room-name" type="text" required maxlength="120" autocomplete="off"></label>
+      <div class="binding-grid">
+        <fieldset><legend>Claude Binding</legend><label><input type="radio" name="claude-mode" value="new" checked> New</label><label><input type="radio" name="claude-mode" value="existing"> Existing</label><input id="claude-session-id" type="text" placeholder="Claude Session ID" autocomplete="off" disabled></fieldset>
+        <fieldset><legend>Codex Binding</legend><label><input type="radio" name="codex-mode" value="new" checked> New</label><label><input type="radio" name="codex-mode" value="existing"> Existing</label><input id="codex-session-id" type="text" placeholder="Codex Thread ID" autocomplete="off" disabled></fieldset>
+      </div>
+      <div class="dialog-actions"><button type="submit">原子创建 Room</button></div>
+    </form>
+  </dialog>
+  <div id="toasts" class="toast-stack" role="status" aria-live="polite"></div>
+  <script src="/management.js" defer></script>
+</body>
+</html>

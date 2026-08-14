@@ -122,6 +122,89 @@ func TestCodexEarlyTurnStartedBindsStartingInput(t *testing.T) {
 	}
 }
 
+func TestCodexApprovalEventsRetainRoomCorrelation(t *testing.T) {
+	var events []model.RuntimeEvent
+	adapter := NewCodex(Config{RequireExactSession: true}, func(event model.RuntimeEvent) {
+		events = append(events, event)
+	})
+	input := model.AgentInput{MessageID: "msg-approval"}
+	adapter.mu.Lock()
+	adapter.currentTurn = "turn-approval"
+	adapter.turnInputs[adapter.currentTurn] = []model.AgentInput{input}
+	adapter.mu.Unlock()
+
+	adapter.handleServerRequest(
+		json.RawMessage(`17`),
+		"item/commandExecution/requestApproval",
+		json.RawMessage(`{"turnId":"turn-approval","command":"go test ./..."}`),
+	)
+	if len(adapter.approvals) != 1 {
+		t.Fatalf("current-turn approval was not retained: %#v", adapter.approvals)
+	}
+	var requested *model.RuntimeEvent
+	for index := range events {
+		if events[index].Kind == model.RuntimeApprovalRequested {
+			requested = &events[index]
+			break
+		}
+	}
+	if requested == nil || requested.TurnID != "turn-approval" || requested.CorrelationID != input.MessageID {
+		t.Fatalf("approval request correlation=%#v", requested)
+	}
+
+	adapter.handleServerRequestResolved(json.RawMessage(`{"requestId":17}`))
+	var resolved *model.RuntimeEvent
+	for index := range events {
+		if events[index].Kind == model.RuntimeApprovalResolved {
+			resolved = &events[index]
+		}
+	}
+	if resolved == nil || resolved.TurnID != "turn-approval" || resolved.CorrelationID != input.MessageID {
+		t.Fatalf("approval resolution correlation=%#v", resolved)
+	}
+}
+
+func TestCodexStrictResumeDeclinesPreBindingApproval(t *testing.T) {
+	var events []model.RuntimeEvent
+	adapter := NewCodex(Config{RequireExactSession: true}, func(event model.RuntimeEvent) {
+		events = append(events, event)
+	})
+	recorder := &codexRPCRecorder{adapter: adapter}
+	adapter.stdin = recorder
+	adapter.handleServerRequest(
+		json.RawMessage(`23`),
+		"item/commandExecution/requestApproval",
+		json.RawMessage(`{"command":"historical-secret"}`),
+	)
+
+	if len(adapter.approvals) != 0 {
+		t.Fatalf("pre-binding Codex approval was retained: %#v", adapter.approvals)
+	}
+	if len(recorder.requests) != 1 {
+		t.Fatalf("expected one fail-closed response, got %d", len(recorder.requests))
+	}
+	var response struct {
+		ID     int64 `json:"id"`
+		Result struct {
+			Decision string `json:"decision"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(recorder.requests[0], &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.ID != 23 || response.Result.Decision != "decline" {
+		t.Fatalf("pre-binding approval response=%s", recorder.requests[0])
+	}
+	for _, event := range events {
+		if event.Kind == model.RuntimeApprovalRequested {
+			t.Fatalf("pre-binding Codex approval was emitted: %#v", event)
+		}
+		if strings.Contains(event.Text, "historical-secret") || strings.Contains(string(event.Data), "historical-secret") {
+			t.Fatalf("pre-binding Codex transcript leaked through diagnostic event: %#v", event)
+		}
+	}
+}
+
 func TestCodexTurnRequestsUseDocumentedCorrelationFields(t *testing.T) {
 	adapter := NewCodex(Config{
 		Repo: "/repo", Model: "gpt-5.3-codex", Effort: "high",

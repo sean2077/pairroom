@@ -141,13 +141,13 @@ func withAuth(r *http.Request, value requestAuth) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), authContextKey{}, value))
 }
 
-func setBrowserSessionCookie(w http.ResponseWriter, r *http.Request, value browserSession) {
+func setBrowserSessionCookie(w http.ResponseWriter, r *http.Request, name string, value browserSession) {
 	maxAge := int(time.Until(value.ExpiresAt).Seconds())
 	if maxAge < 1 {
 		maxAge = 1
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     browserSessionCookie,
+		Name:     name,
 		Value:    value.ID,
 		Path:     "/api/v1/",
 		MaxAge:   maxAge,
@@ -157,9 +157,9 @@ func setBrowserSessionCookie(w http.ResponseWriter, r *http.Request, value brows
 	})
 }
 
-func clearBrowserSessionCookie(w http.ResponseWriter, r *http.Request) {
+func clearBrowserSessionCookie(w http.ResponseWriter, r *http.Request, name string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     browserSessionCookie,
+		Name:     name,
 		Value:    "",
 		Path:     "/api/v1/",
 		MaxAge:   -1,

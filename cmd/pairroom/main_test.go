@@ -3,7 +3,7 @@ package main
 import "testing"
 
 func TestSubcommandHelpReturnsSuccess(t *testing.T) {
-	for _, args := range [][]string{{"serve", "--help"}, {"doctor", "--help"}, {"verify", "--help"}, {"backup", "--help"}, {"restore", "--help"}, {"diagnostics", "--help"}, {"help"}, {"--help"}} {
+	for _, args := range [][]string{{"service", "--help"}, {"serve", "--help"}, {"doctor", "--help"}, {"verify", "--help"}, {"backup", "--help"}, {"restore", "--help"}, {"diagnostics", "--help"}, {"help"}, {"--help"}} {
 		if err := run(args); err != nil {
 			t.Fatalf("run(%q) returned %v", args, err)
 		}
@@ -29,5 +29,17 @@ func TestBrowserURLUsesFragmentBootstrapToken(t *testing.T) {
 	}
 	if got := browserURL("127.0.0.1:7332", ""); got != "http://127.0.0.1:7332/" {
 		t.Fatalf("tokenless browserURL=%q", got)
+	}
+}
+
+func TestServiceRejectsInvalidCapacityBeforeOpeningRegistry(t *testing.T) {
+	for _, args := range [][]string{
+		{"service", "--runtime-limit=0", "--no-browser"},
+		{"service", "--idle-timeout=0s", "--no-browser"},
+		{"service", "--listen=0.0.0.0:7332", "--no-browser"},
+	} {
+		if err := run(args); err == nil {
+			t.Fatalf("run(%q) succeeded", args)
+		}
 	}
 }

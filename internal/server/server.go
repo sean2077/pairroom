@@ -27,20 +27,27 @@ import (
 var embeddedAssets embed.FS
 
 type Config struct {
-	Engine      *room.Engine
-	Repo        string
-	Token       string
-	Attachments *attachment.Store
+	Engine                   *room.Engine
+	Repo                     string
+	Token                    string
+	Attachments              *attachment.Store
+	TranscriptBoundaryNotice string
+	// SessionCookieName isolates browser sessions when multiple Room View
+	// servers share a host on different ports. Browsers do not scope cookies by
+	// port, so Service runtimes must provide a stable per-Room name.
+	SessionCookieName string
 }
 
 type Server struct {
-	engine   *room.Engine
-	repo     string
-	token    string
-	media    *attachment.Store
-	sessions *sessionStore
-	limiter  *rateLimiter
-	http     *http.Server
+	engine     *room.Engine
+	repo       string
+	token      string
+	media      *attachment.Store
+	boundary   string
+	cookieName string
+	sessions   *sessionStore
+	limiter    *rateLimiter
+	http       *http.Server
 }
 
 func New(cfg Config) (*Server, error) {
@@ -51,8 +58,16 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open embedded assets: %w", err)
 	}
+	cookieName := strings.TrimSpace(cfg.SessionCookieName)
+	if cookieName == "" {
+		cookieName = browserSessionCookie
+	}
+	if err := (&http.Cookie{Name: cookieName, Value: "session"}).Valid(); err != nil {
+		return nil, fmt.Errorf("invalid browser session cookie name %q: %w", cookieName, err)
+	}
 	s := &Server{
 		engine: cfg.Engine, repo: cfg.Repo, token: cfg.Token, media: cfg.Attachments,
+		boundary: cfg.TranscriptBoundaryNotice, cookieName: cookieName,
 		sessions: newSessionStore(), limiter: newRateLimiter(),
 	}
 	mux := http.NewServeMux()
@@ -117,7 +132,7 @@ func (s *Server) createBrowserSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "create browser session: "+err.Error())
 		return
 	}
-	setBrowserSessionCookie(w, r, value)
+	setBrowserSessionCookie(w, r, s.cookieName, value)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"required": true, "csrf_token": value.CSRF,
 		"created_at": value.CreatedAt, "expires_at": value.ExpiresAt,
@@ -135,7 +150,7 @@ func (s *Server) readBrowserSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"required": true, "mode": "bearer"})
 		return
 	}
-	setBrowserSessionCookie(w, r, auth.Session)
+	setBrowserSessionCookie(w, r, s.cookieName, auth.Session)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"required": true, "csrf_token": auth.Session.CSRF,
 		"created_at": auth.Session.CreatedAt, "expires_at": auth.Session.ExpiresAt,
@@ -143,10 +158,10 @@ func (s *Server) readBrowserSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteBrowserSession(w http.ResponseWriter, r *http.Request) {
-	if cookie, err := r.Cookie(browserSessionCookie); err == nil {
+	if cookie, err := r.Cookie(s.cookieName); err == nil {
 		s.sessions.delete(cookie.Value)
 	}
-	clearBrowserSessionCookie(w, r)
+	clearBrowserSessionCookie(w, r, s.cookieName)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -162,11 +177,26 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("message_limit"))
+	var snapshot model.RoomSnapshot
 	if limit > 0 {
-		writeJSON(w, http.StatusOK, s.engine.WindowedSnapshot(limit))
-		return
+		snapshot = s.engine.WindowedSnapshot(limit)
+	} else {
+		snapshot = s.engine.Snapshot()
 	}
-	writeJSON(w, http.StatusOK, s.engine.Snapshot())
+	if strings.TrimSpace(s.boundary) != "" {
+		event, err := model.NewEvent(snapshot.Meta.ID, room.EventSystemNotice, model.ActorSystem, model.SystemNotice{
+			Level: "info", Text: s.boundary,
+		})
+		if err == nil {
+			// This presentation-only notice is intentionally outside the durable
+			// Room sequence so Existing bindings and legacy imports remain
+			// non-destructive. The Room Event Log still starts at the binding
+			// boundary and never absorbs earlier vendor transcript content.
+			event.Seq = 0
+			snapshot.Events = append([]model.Event{event}, snapshot.Events...)
+		}
+	}
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
@@ -603,13 +633,13 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 				return
 			}
 		}
-		if cookie, err := r.Cookie(browserSessionCookie); err == nil {
+		if cookie, err := r.Cookie(s.cookieName); err == nil {
 			if value, ok := s.sessions.get(cookie.Value); ok {
 				// Keep the browser cookie and the in-memory sliding expiry aligned.
 				// Without this refresh an actively used room would lose its cookie
 				// at the original creation deadline even though the server session
 				// itself remained alive.
-				setBrowserSessionCookie(w, r, value)
+				setBrowserSessionCookie(w, r, s.cookieName, value)
 				next.ServeHTTP(w, withAuth(r, requestAuth{Mode: authBrowserSession, Session: value}))
 				return
 			}

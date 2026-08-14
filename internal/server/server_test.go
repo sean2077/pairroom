@@ -22,6 +22,16 @@ import (
 
 func newTestServer(t *testing.T, token string) (*Server, *room.Engine) {
 	t.Helper()
+	return newTestServerWithOptions(t, token, "", "")
+}
+
+func newTestServerWithBoundary(t *testing.T, token, boundary string) (*Server, *room.Engine) {
+	t.Helper()
+	return newTestServerWithOptions(t, token, boundary, "")
+}
+
+func newTestServerWithOptions(t *testing.T, token, boundary, cookieName string) (*Server, *room.Engine) {
+	t.Helper()
 	repo := t.TempDir()
 	dataDir := t.TempDir()
 	eventStore, err := store.Open(dataDir)
@@ -47,7 +57,10 @@ func newTestServer(t *testing.T, token string) (*Server, *room.Engine) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = engine.Close() })
-	server, err := New(Config{Engine: engine, Repo: repo, Token: token, Attachments: media})
+	server, err := New(Config{
+		Engine: engine, Repo: repo, Token: token, Attachments: media,
+		TranscriptBoundaryNotice: boundary, SessionCookieName: cookieName,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,6 +119,60 @@ func TestHealthSnapshotAndMessageAPI(t *testing.T) {
 	}
 }
 
+func TestTranscriptBoundaryNoticeIsPresentationOnly(t *testing.T) {
+	t.Parallel()
+	const notice = "Existing vendor context resumes here; earlier vendor transcripts are outside PairRoom."
+	server, engine := newTestServerWithBoundary(t, "", notice)
+
+	before := engine.Snapshot()
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, localRequest(http.MethodGet, "/api/v1/snapshot", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("snapshot status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var snapshot model.RoomSnapshot
+	if err := json.Unmarshal(recorder.Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Events) != len(before.Events)+1 {
+		t.Fatalf("presentation snapshot events=%d, durable=%d", len(snapshot.Events), len(before.Events))
+	}
+	boundary := snapshot.Events[0]
+	if boundary.Seq != 0 || boundary.RoomID != snapshot.Meta.ID || boundary.Kind != room.EventSystemNotice || boundary.Actor != model.ActorSystem {
+		t.Fatalf("unexpected boundary event: %#v", boundary)
+	}
+	var payload model.SystemNotice
+	if err := json.Unmarshal(boundary.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Level != "info" || payload.Text != notice {
+		t.Fatalf("unexpected boundary payload: %#v", payload)
+	}
+
+	after := engine.Snapshot()
+	if len(after.Events) != len(before.Events) {
+		t.Fatalf("boundary notice changed durable event count: before=%d after=%d", len(before.Events), len(after.Events))
+	}
+	for _, event := range after.Events {
+		if event.Seq == 0 || (event.Kind == room.EventSystemNotice && strings.Contains(string(event.Data), notice)) {
+			t.Fatalf("boundary notice leaked into durable projection: %#v", event)
+		}
+	}
+
+	windowed := httptest.NewRecorder()
+	server.Handler().ServeHTTP(windowed, localRequest(http.MethodGet, "/api/v1/snapshot?message_limit=1", nil))
+	if windowed.Code != http.StatusOK {
+		t.Fatalf("windowed snapshot status=%d body=%s", windowed.Code, windowed.Body.String())
+	}
+	var limited model.RoomSnapshot
+	if err := json.Unmarshal(windowed.Body.Bytes(), &limited); err != nil {
+		t.Fatal(err)
+	}
+	if len(limited.Events) == 0 || limited.Events[0].Seq != 0 {
+		t.Fatalf("windowed snapshot omitted presentation boundary: %#v", limited.Events)
+	}
+}
+
 func TestRichConversationAssetsAreEmbedded(t *testing.T) {
 	t.Parallel()
 	server, _ := newTestServer(t, "")
@@ -161,6 +228,63 @@ func TestBearerTokenProtectsOnlyAPI(t *testing.T) {
 	server.Handler().ServeHTTP(authorized, request)
 	if authorized.Code != http.StatusOK {
 		t.Fatalf("valid token status = %d: %s", authorized.Code, authorized.Body.String())
+	}
+}
+
+func TestDistinctCookieNamesAllowConcurrentRoomViewsOnSameHost(t *testing.T) {
+	t.Parallel()
+	serverA, _ := newTestServerWithOptions(t, "secret-a", "", "pairroom_session_room_a")
+	serverB, _ := newTestServerWithOptions(t, "secret-b", "", "pairroom_session_room_b")
+
+	bootstrap := func(server *Server, token string) *http.Cookie {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/v1/session", nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		server.Handler().ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusCreated {
+			t.Fatalf("bootstrap %s status=%d body=%s", token, recorder.Code, recorder.Body.String())
+		}
+		cookies := recorder.Result().Cookies()
+		if len(cookies) != 1 {
+			t.Fatalf("bootstrap %s cookies=%d", token, len(cookies))
+		}
+		return cookies[0]
+	}
+	cookieA := bootstrap(serverA, "secret-a")
+	cookieB := bootstrap(serverB, "secret-b")
+	if cookieA.Name == cookieB.Name {
+		t.Fatalf("Room browser cookies collide: %q", cookieA.Name)
+	}
+
+	for name, server := range map[string]*Server{"A": serverA, "B": serverB} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/v1/snapshot", nil)
+		// Browsers send host cookies to every port. Both Room cookies therefore
+		// appear on either request; each server must select only its own name.
+		request.AddCookie(cookieA)
+		request.AddCookie(cookieB)
+		server.Handler().ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("Room %s session was displaced by another Room cookie: status=%d body=%s", name, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
+func TestServerRejectsInvalidSessionCookieName(t *testing.T) {
+	t.Parallel()
+	repo := t.TempDir()
+	eventStore, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := room.New(room.Config{Name: "cookie validation", Repo: repo, Store: eventStore, Settings: model.DefaultRoomSettings()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+	if _, err := New(Config{Engine: engine, Repo: repo, Token: "secret", SessionCookieName: "invalid cookie"}); err == nil {
+		t.Fatal("invalid cookie name was accepted")
 	}
 }
 
