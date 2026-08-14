@@ -97,6 +97,8 @@ turn/completed
 | 审批 | command/file/permissions request | 支持的请求进入 UI；未知请求 fail closed |
 | Reviewer | `sandboxPolicy: {type: "readOnly"}` | 若运行时拒绝该策略，Turn 直接失败而不是退回写权限 |
 
+`thread/start.sandbox` 与 Turn 级 policy 使用不同的枚举格式：前者发送 `read-only`、`workspace-write` 或 `danger-full-access`，后者的 `sandboxPolicy.type` 发送 `readOnly`、`workspaceWrite` 或 `dangerFullAccess`。PairRoom 接受现有配置中的 camelCase、snake_case 与 kebab-case 别名，但始终按目标字段要求序列化。
+
 一个 active Turn 可以接收多次 steer；PairRoom 仍为每条用户输入分别记录 Delivery/Processing。
 
 ## 4. `pairroom doctor`
