@@ -65,7 +65,7 @@ func TestManagementShellAuthenticationAssetsAndSecurityHeaders(t *testing.T) {
 	if asset.Code != http.StatusOK {
 		t.Fatalf("management asset status=%d body=%s", asset.Code, asset.Body.String())
 	}
-	for _, marker := range []string{"/api/v1/service", "completeBindings", "补全 Binding", "queue_position"} {
+	for _, marker := range []string{"/api/v1/service", "completeBindings", "补全 Binding", "queue_position", "materializes on first turn", "roomHasBlockingPendingBindings"} {
 		if !strings.Contains(asset.Body.String(), marker) {
 			t.Fatalf("management asset omitted %q", marker)
 		}

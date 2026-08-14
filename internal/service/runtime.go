@@ -143,7 +143,7 @@ func (m *RuntimeManager) RequestActivation(roomID string) (RuntimeStatus, error)
 	if room.Archived() {
 		return RuntimeStatus{}, errors.New("archived room must be restored before activation")
 	}
-	if room.HasPendingBindings() {
+	if room.HasBlockingPendingBindings() {
 		return RuntimeStatus{}, fmt.Errorf("%w: complete the legacy Room's Claude/Codex bindings before activation", ErrRoomBindingPending)
 	}
 

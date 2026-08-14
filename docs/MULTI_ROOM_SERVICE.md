@@ -42,9 +42,11 @@ Management Shell 只接受用户显式输入的绝对路径。服务端按以下
 - 一个 Claude 原生 Session Binding；
 - 一个 Codex 原生 Thread Binding。
 
-两侧可独立选择 `new` 或 `existing(session_id)`，因此支持四种组合。Binding Identity `(agent, vendor_session_id)` 在整个 Service 内全局唯一，归档 Room 仍保留所有权。
+两侧可独立选择 `new` 或 `existing(session_id)`，因此支持四种组合。Binding Identity `(agent, vendor_session_id)` 在整个 Service 内全局唯一，归档 Room 仍保留所有权。`existing` 在 Provisioning 时验证并立即拥有指定 Identity；`new` 先记录为 deferred binding，因为 Claude Code 与 Codex 都不会持久化一个尚无用户 Turn 的空会话。
 
-Provisioning 在隐藏暂存目录中完成。服务先验证两侧 Binding，再写入初始 append-only Event Log，随后以原子 rename 发布 Room。任一 Existing ID 无法精确恢复、任一 Binding 已被占用，或任一侧验证失败时，都不会出现可见 Room、Binding 索引或半成品数据目录。
+Provisioning 在隐藏暂存目录中完成。服务会验证两侧所需的官方协议，对 `existing` 精确恢复指定 ID，再写入初始 append-only Event Log，随后以原子 rename 发布 Room。任一 Existing ID 无法精确恢复、任一 Binding 已被占用，或任一侧协议验证失败时，都不会出现可见 Room、Binding 索引或半成品数据目录。
+
+Deferred `new` binding 不阻止 Runtime 激活。Adapter 为首个 PairRoom 输入启动新原生会话；输入被官方 CLI 接受后，Engine 在同一个 Room Event Log 单写者边界内追加 `service.room.binding.materialized`，Registry 同步建立全局所有权，之后才允许该 Turn 继续作为正常执行投影。Event append、所有权 checkpoint 或唯一性检查失败时会中断该执行并 fail closed。Service 如果在首个输入前退出，重启后会重新创建空会话，而不会恢复事件流中可能残留但尚未 materialize 的临时 ID。
 
 Existing Binding 只恢复供应商原生 context。PairRoom 不读取、导入、复制、摘要、搜索或展示绑定前 Vendor Transcript；Room View 显示 transcript boundary 提示，PairRoom Event Log 仅从绑定成功后开始。
 
@@ -64,7 +66,7 @@ Runtime 按 Room ID 惰性激活。全局容量达到 `--runtime-limit` 时：
 3. Management Shell 显示 phase、busy、queue position 和 Room URL；
 4. 活动 Turn 不会为了释放容量而被中断。
 
-Room 空闲超过 `--idle-timeout` 后释放 Agent 进程。再次打开或发送消息时，Runtime 以同一 durable Session/Thread ID 精确恢复，而不是创建新 Binding。切换浏览器中的 Room 不会触发 interrupt 或 stop。
+Room 空闲超过 `--idle-timeout` 后释放 Agent 进程。每侧首个真实输入 materialize 后，再次打开或发送消息时，Runtime 以同一 durable Session/Thread ID 精确恢复，而不是创建新 Binding。切换浏览器中的 Room 不会触发 interrupt 或 stop。
 
 ## 生命周期
 
@@ -105,7 +107,7 @@ pairroom service --recover-stale-lock
 
 首次启动 Service 时只扫描默认 PairRoom Room 数据根，不移动、不复制、不重写旧 `events.jsonl`。可从旧事件恢复出的 Session/Thread ID 会成为 durable Binding。
 
-缺少任一原生 ID 的 Legacy Room 会标记为 pending，并阻止 Runtime 激活。Management Shell 提供一次性的 Binding 补全操作；两侧先原子验证，成功后只追加一个 `service.room.bindings.completed` 事件。已存在的 durable Binding 不能被替换。
+缺少任一原生 ID 的 Legacy Room 会标记为 pending，并阻止 Runtime 激活。Management Shell 提供一次性的 Binding 选择操作；`existing` 会原子验证并补全，`new` 会选择为 deferred binding，成功后只追加一个 `service.room.bindings.completed` 事件。仅有 deferred `new` 的 Room 可以激活，并在首个真实输入后按相同的 materialization 流程获得 durable Identity；已存在的 durable Binding 不能被替换。
 
 自定义旧 `--data-dir` 不会被全盘扫描。用户必须在 Management Shell 中显式输入绝对路径导入；导入只建立可重建索引，不修改旧 Room Event Log。
 

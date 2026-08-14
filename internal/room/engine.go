@@ -30,24 +30,26 @@ const (
 	EventParticipantsBatch  = "participants.batch.updated"
 	EventTurnSummaryUpdated = "turn.summary.updated"
 
-	eventServiceRoomRenamed       = "service.room.renamed"
-	eventServiceBindingsCompleted = "service.room.bindings.completed"
-	recentEventLimit              = 600
+	eventServiceRoomRenamed         = "service.room.renamed"
+	eventServiceBindingsCompleted   = "service.room.bindings.completed"
+	eventServiceBindingMaterialized = "service.room.binding.materialized"
+	recentEventLimit                = 600
 )
 
 type Config struct {
-	Name          string
-	Repo          string
-	Settings      model.RoomSettings
-	Store         *store.JSONLStore
-	Hub           *bus.Hub
-	ClaudeFactory agent.Factory
-	CodexFactory  agent.Factory
-	ClaudeConfig  agent.Config
-	CodexConfig   agent.Config
-	Attachments   AttachmentStore
-	Workspaces    WorkspaceManager
-	AutoStart     bool
+	Name                  string
+	Repo                  string
+	Settings              model.RoomSettings
+	Store                 *store.JSONLStore
+	Hub                   *bus.Hub
+	ClaudeFactory         agent.Factory
+	CodexFactory          agent.Factory
+	ClaudeConfig          agent.Config
+	CodexConfig           agent.Config
+	Attachments           AttachmentStore
+	Workspaces            WorkspaceManager
+	AutoStart             bool
+	OnSessionMaterialized func(context.Context, model.ActorID, string) error
 }
 
 // AttachmentStore keeps presentation metadata durable while resolving an
@@ -80,6 +82,10 @@ type serviceBindingProjection struct {
 
 type serviceBindingsCompletedProjection struct {
 	Bindings map[model.ActorID]serviceBindingProjection `json:"bindings"`
+}
+
+type serviceBindingMaterializedProjection struct {
+	Binding serviceBindingProjection `json:"binding"`
 }
 
 type SendRequest struct {
@@ -366,7 +372,7 @@ func (e *Engine) Start(parent context.Context) error {
 	claudeCfg.Repo = boundaries[model.ActorClaude].Path
 	claudeCfg.DataDir = e.cfg.Store.Dir()
 	claudeCfg.RoomName = roomName
-	if !claudeCfg.RequireExactSession || strings.TrimSpace(claudeCfg.SessionID) == "" {
+	if !claudeCfg.RequireExactSession {
 		claudeCfg.SessionID = claudeParticipant.SessionID
 	}
 	codexCfg := e.cfg.CodexConfig
@@ -374,7 +380,7 @@ func (e *Engine) Start(parent context.Context) error {
 	codexCfg.Repo = boundaries[model.ActorCodex].Path
 	codexCfg.DataDir = e.cfg.Store.Dir()
 	codexCfg.RoomName = roomName
-	if !codexCfg.RequireExactSession || strings.TrimSpace(codexCfg.SessionID) == "" {
+	if !codexCfg.RequireExactSession {
 		codexCfg.SessionID = codexParticipant.SessionID
 	}
 
@@ -1202,6 +1208,22 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 		return
 	}
 	e.delivery(message.ID, target, state, "")
+	if state != model.DeliveryFailed && state != model.DeliverySkipped && e.cfg.OnSessionMaterialized != nil {
+		// Submit's deadline governs native input acceptance. Once accepted, the
+		// binding commit follows the Engine lifetime so a nearly exhausted delivery
+		// deadline cannot discard a vendor identity that already owns real input.
+		if err := e.cfg.OnSessionMaterialized(ctx, target, adapter.SessionID()); err != nil {
+			_ = adapter.Interrupt(context.Background())
+			detail := "native input was accepted but its durable binding could not be materialized: " + err.Error()
+			e.processing(message.ID, target, model.ProcessingFailed, detail, "")
+			e.updateParticipant(target, func(p *model.ParticipantSnapshot) {
+				p.State = model.StateError
+				p.LastError = detail
+				p.LastActivity = time.Now().UTC()
+			})
+			return
+		}
+	}
 	// Third-party adapters are only required to return a delivery disposition;
 	// the richer processing events are optional. Project a conservative fallback
 	// so every accepted message has a visible execution lifecycle. Native
@@ -1936,6 +1958,16 @@ func (e *Engine) record(kind string, actor model.ActorID, payload any) (model.Ev
 	return event, nil
 }
 
+// RecordServiceEvent keeps the active Engine as the only Room Event Log
+// writer while the service control plane commits runtime-discovered facts.
+func (e *Engine) RecordServiceEvent(kind string, payload any) error {
+	if kind != eventServiceBindingMaterialized {
+		return fmt.Errorf("unsupported live service event %q", kind)
+	}
+	_, err := e.record(kind, model.ActorSystem, payload)
+	return err
+}
+
 func (e *Engine) apply(event model.Event) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1980,6 +2012,22 @@ func (e *Engine) applyLocked(event model.Event) error {
 			participant.SessionID = strings.TrimSpace(binding.SessionID)
 			e.snapshot.Participants[actor] = participant
 		}
+	case eventServiceBindingMaterialized:
+		var update serviceBindingMaterializedProjection
+		if err := json.Unmarshal(event.Data, &update); err != nil {
+			return err
+		}
+		binding := update.Binding
+		if !binding.Agent.ValidParticipant() || binding.Pending || strings.TrimSpace(binding.SessionID) == "" {
+			return errors.New("service binding materialization is invalid")
+		}
+		participant := e.snapshot.Participants[binding.Agent]
+		participant.ID = binding.Agent
+		if participant.DisplayName == "" {
+			participant.DisplayName = binding.Agent.DisplayName()
+		}
+		participant.SessionID = strings.TrimSpace(binding.SessionID)
+		e.snapshot.Participants[binding.Agent] = participant
 	case EventSettingsUpdated:
 		if err := json.Unmarshal(event.Data, &e.snapshot.Settings); err != nil {
 			return err

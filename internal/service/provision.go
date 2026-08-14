@@ -14,9 +14,10 @@ import (
 )
 
 type BindingProvisioner interface {
-	// Provision validates or creates exactly one native vendor binding. The
-	// returned cleanup function stops any temporary validation runtime; it must
-	// not delete a durable vendor session that may already have been created.
+	// Provision validates exactly one binding selection. A new native binding may
+	// remain pending until its first accepted input materializes the vendor ID.
+	// The returned cleanup function stops any temporary validation runtime; it
+	// must not delete a durable vendor session that may already exist.
 	Provision(context.Context, Project, model.ActorID, BindingSpec, string) (Binding, func(context.Context) error, error)
 }
 
@@ -106,14 +107,13 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 		}
 		binding.Agent = actor
 		binding.Mode = spec.Mode
-		// A successful provisioning result is always a durable, fully resolved
-		// binding. Pending is reserved for non-destructive legacy discovery and
-		// must never be accepted from a vendor provisioner as a way to publish an
-		// incomplete Room.
-		binding.Pending = false
 		binding.SessionID = strings.TrimSpace(binding.SessionID)
 		if binding.BoundAt.IsZero() {
 			binding.BoundAt = r.now()
+		}
+		if binding.Pending && (spec.Mode != BindingNew || binding.SessionID != "") {
+			_ = cleanupAll()
+			return Room{}, fmt.Errorf("validate %s binding result: only a new binding without a session ID may be deferred", actor)
 		}
 		if err := binding.Validate(); err != nil {
 			_ = cleanupAll()
@@ -140,6 +140,9 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 		return Room{}, err
 	}
 	for _, binding := range bindings {
+		if !binding.OwnsIdentity() {
+			continue
+		}
 		if owner, owned := r.bindingOwners[binding.Key().String()]; owned {
 			r.mu.RUnlock()
 			return Room{}, fmt.Errorf("%w: %s session %q belongs to room %s", ErrBindingOwned, binding.Agent, binding.SessionID, owner)

@@ -442,6 +442,9 @@ Store schema 7 的事件日志包含：
 
 ```text
 room.created
+service.room.provisioned
+service.room.bindings.completed
+service.room.binding.materialized
 settings.updated
 participant.updated
 participants.batch.updated
@@ -465,6 +468,8 @@ pending approval → expired
 ```
 
 原生 Session/Thread ID 保留，下一次输入尝试恢复供应商上下文。
+
+Service 的 `new` binding 在首个原生输入被接受前没有 durable Session/Thread ID。该输入被接受后，`service.room.binding.materialized` 以 System actor 记录唯一的 `(agent, vendor_session_id)`；重放时这个事件覆盖对应的 deferred binding。一个 binding 不得 materialize 两次，也不得替换现有 durable Identity。
 
 ## 18. Export
 

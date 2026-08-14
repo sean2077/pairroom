@@ -173,6 +173,13 @@ Therefore this validation does **not** claim:
 
 The adapter request/response shapes, control state machines, image input encoding, approvals, role policies, process exits, and correlation are covered by fixtures and unit tests. Before using an important repository, run `pairroom doctor` and one full real session on the target machine.
 
+On a machine where both official CLIs are installed and authenticated, the repeatable native acceptance test creates deferred bindings, executes one real Turn through each harness, rebuilds the Registry from disk, and executes a second Turn through the exact same Claude Session and Codex Thread:
+
+```powershell
+$env:PAIRROOM_NATIVE_E2E='1'
+go test ./internal/service -run TestNativeSessionMaterializationAndExactResume -count=1 -v
+```
+
 ## 9. Release artifact gate
 
 `scripts/release.sh` performs four static cross-builds and generates source ZIP/TAR.GZ, SHA-256, SPDX 2.3 SBOM, build provenance, and version evidence. `scripts/verify-artifacts.sh` then checks:

@@ -122,6 +122,15 @@ type recordingProvisioner struct {
 	newSequence atomic.Int64
 }
 
+type deferredNewProvisioner struct{}
+
+func (deferredNewProvisioner) Provision(_ context.Context, _ Project, actor model.ActorID, spec BindingSpec, _ string) (Binding, func(context.Context) error, error) {
+	if spec.Mode == BindingNew {
+		return Binding{Agent: actor, Mode: BindingNew, Pending: true, BoundAt: time.Now().UTC()}, func(context.Context) error { return nil }, nil
+	}
+	return Binding{Agent: actor, Mode: BindingExisting, SessionID: spec.SessionID, BoundAt: time.Now().UTC()}, func(context.Context) error { return nil }, nil
+}
+
 func (p *recordingProvisioner) Provision(ctx context.Context, _ Project, actor model.ActorID, spec BindingSpec, _ string) (Binding, func(context.Context) error, error) {
 	p.mu.Lock()
 	p.calls = append(p.calls, actor)
@@ -179,6 +188,125 @@ func TestProjectResolverCanonicalizesRootSubdirectoryAndSymlink(t *testing.T) {
 		if project.ID != resolved[0].ID || project.Root != resolved[0].Root {
 			t.Fatalf("equivalent path produced a different identity: %#v vs %#v", resolved[0], project)
 		}
+	}
+}
+
+func TestPendingNewBindingMaterializesAfterNativeInputAcceptance(t *testing.T) {
+	repo := testGitRepo(t)
+	registry, project := testRegistry(t, repo)
+	created, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+		ProjectID: project.ID,
+		Name:      "Deferred native binding",
+		Bindings:  specs(BindingNew, BindingNew, "deferred"),
+	}, deferredNewProvisioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+		binding := created.Bindings[actor]
+		if !binding.Pending || binding.Mode != BindingNew || binding.SessionID != "" {
+			t.Fatalf("%s binding was not deferred: %#v", actor, binding)
+		}
+	}
+	if _, err := registry.CompleteBindings(context.Background(), created.ID, map[model.ActorID]BindingSpec{
+		model.ActorClaude: {Mode: BindingExisting, SessionID: "replacement"},
+	}, deferredNewProvisioner{}); err == nil || !strings.Contains(err.Error(), "selected bindings cannot be replaced") {
+		t.Fatalf("deferred new selection was replaceable: %v", err)
+	}
+
+	appendFact := func(kind string, payload any) error {
+		if kind != EventRoomBindingMaterialized {
+			t.Fatalf("materialization kind=%q", kind)
+		}
+		return appendServiceEvent(created, kind, payload)
+	}
+	if _, err := registry.MaterializeBinding(context.Background(), created.ID, model.ActorClaude, "claude-native-session", func(string, any) error {
+		return errors.New("synthetic append failure")
+	}); err == nil || !strings.Contains(err.Error(), "synthetic append failure") {
+		t.Fatalf("materialization append failure=%v", err)
+	}
+	if unchanged, ok := registry.Room(created.ID); !ok || !unchanged.Bindings[model.ActorClaude].Pending {
+		t.Fatalf("failed materialization changed Registry: %#v ok=%v", unchanged, ok)
+	}
+	if _, owned := registry.BindingOwner(BindingKey{Agent: model.ActorClaude, SessionID: "claude-native-session"}); owned {
+		t.Fatal("failed materialization retained native ownership")
+	}
+	materialized, err := registry.MaterializeBinding(context.Background(), created.ID, model.ActorClaude, "claude-native-session", appendFact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := materialized.Bindings[model.ActorClaude]; got.Pending || got.SessionID != "claude-native-session" || got.Mode != BindingNew {
+		t.Fatalf("Claude binding was not materialized: %#v", got)
+	}
+	if got := materialized.Bindings[model.ActorCodex]; !got.Pending || got.SessionID != "" {
+		t.Fatalf("Codex binding changed before its first accepted input: %#v", got)
+	}
+	if owner, ok := registry.BindingOwner(materialized.Bindings[model.ActorClaude].Key()); !ok || owner != created.ID {
+		t.Fatalf("materialized binding owner=%q ok=%v", owner, ok)
+	}
+	if _, err := registry.MaterializeBinding(context.Background(), created.ID, model.ActorClaude, "replacement-session", appendFact); err == nil || !strings.Contains(err.Error(), "cannot be replaced") {
+		t.Fatalf("binding replacement error=%v", err)
+	}
+
+	reopened, err := OpenRegistry(context.Background(), RegistryConfig{Root: registry.Root()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, ok := reopened.Room(created.ID)
+	if !ok {
+		t.Fatal("materialized Room was not rebuilt")
+	}
+	if got := rebuilt.Bindings[model.ActorClaude]; got.Pending || got.SessionID != "claude-native-session" {
+		t.Fatalf("rebuilt Claude binding=%#v", got)
+	}
+	if got := rebuilt.Bindings[model.ActorCodex]; !got.Pending || got.SessionID != "" {
+		t.Fatalf("rebuilt Codex binding=%#v", got)
+	}
+}
+
+func TestLegacyNewBindingChoiceDefersAndRebuildsMaterialization(t *testing.T) {
+	repo := testGitRepo(t)
+	serviceRoot := t.TempDir()
+	legacyDir := filepath.Join(t.TempDir(), "legacy-deferred-new")
+	if err := writeLegacyRoom(legacyDir, repo, "legacy-deferred-new", "Legacy deferred new", "", "codex-kept"); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := OpenRegistry(context.Background(), RegistryConfig{Root: serviceRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := registry.ImportLegacy(context.Background(), legacyDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := registry.CompleteBindings(context.Background(), legacy.ID, map[model.ActorID]BindingSpec{
+		model.ActorClaude: {Mode: BindingNew},
+	}, deferredNewProvisioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding := selected.Bindings[model.ActorClaude]; !binding.Pending || binding.Mode != BindingNew || binding.SessionID != "" {
+		t.Fatalf("legacy new choice was not deferred: %#v", binding)
+	}
+	if selected.HasBlockingPendingBindings() {
+		t.Fatalf("selected deferred-new binding still blocks activation: %#v", selected.Bindings)
+	}
+	appendFact := func(kind string, payload any) error { return appendServiceEvent(selected, kind, payload) }
+	materialized, err := registry.MaterializeBinding(context.Background(), selected.ID, model.ActorClaude, "claude-legacy-native", appendFact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := materialized.Bindings[model.ActorClaude]; got.Pending || got.SessionID != "claude-legacy-native" {
+		t.Fatalf("legacy binding did not materialize: %#v", got)
+	}
+
+	reopened, err := OpenRegistry(context.Background(), RegistryConfig{Root: serviceRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, ok := reopened.Room(selected.ID)
+	if !ok || rebuilt.Bindings[model.ActorClaude].SessionID != "claude-legacy-native" || rebuilt.Bindings[model.ActorCodex].SessionID != "codex-kept" {
+		t.Fatalf("legacy materialization did not rebuild: %#v ok=%v", rebuilt, ok)
 	}
 }
 
@@ -263,7 +391,7 @@ func TestProvisionRoomSupportsAllBindingCombinations(t *testing.T) {
 	}
 }
 
-func TestProvisionRoomCannotPublishProvisionerPendingBindings(t *testing.T) {
+func TestProvisionRoomRejectsInvalidPendingBindingIdentity(t *testing.T) {
 	repo := testGitRepo(t)
 	registry, project := testRegistry(t, repo)
 	provisioner := ProvisionerFunc(func(_ context.Context, _ Project, actor model.ActorID, spec BindingSpec, _ string) (Binding, func(context.Context) error, error) {
@@ -273,19 +401,14 @@ func TestProvisionRoomCannotPublishProvisionerPendingBindings(t *testing.T) {
 		}, func(context.Context) error { return nil }, nil
 	})
 
-	room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+	_, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
 		ProjectID: project.ID, Name: "Resolved bindings", Bindings: specs(BindingNew, BindingNew, "pending"),
 	}, provisioner)
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || !strings.Contains(err.Error(), "only a new binding without a session ID may be deferred") {
+		t.Fatalf("expected invalid deferred identity error, got %v", err)
 	}
-	for actor, binding := range room.Bindings {
-		if binding.Pending {
-			t.Fatalf("published %s binding is still pending: %#v", actor, binding)
-		}
-		if binding.SessionID == "" {
-			t.Fatalf("published %s binding has no vendor identity: %#v", actor, binding)
-		}
+	if got := registry.Snapshot(true); len(got.Rooms) != 0 {
+		t.Fatalf("invalid pending bindings published a room: %#v", got.Rooms)
 	}
 }
 

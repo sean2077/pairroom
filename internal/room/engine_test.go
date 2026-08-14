@@ -1154,6 +1154,95 @@ func TestStrictServiceBindingOverridesLegacyParticipantSessionAtAdapterBoundary(
 	}
 }
 
+func TestStrictEmptyBindingStartsFreshInsteadOfRestoringStaleParticipantSession(t *testing.T) {
+	dir := t.TempDir()
+	eventStore, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, err := New(Config{Name: "pending binding", Repo: t.TempDir(), Store: eventStore, Settings: model.DefaultRoomSettings()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeSession, SessionID: "stale-unmaterialized-claude", CreatedAt: time.Now().UTC()})
+	seed.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorCodex, Kind: model.RuntimeSession, SessionID: "stale-unmaterialized-codex", CreatedAt: time.Now().UTC()})
+	if err := seed.Close(); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+
+	reopenedStore, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configs := make(map[model.ActorID]agent.Config, 2)
+	factory := func(cfg agent.Config, _ agent.EventSink) agent.Adapter {
+		configs[cfg.Actor] = cfg
+		return &fakeAdapter{actor: cfg.Actor, sessionID: cfg.SessionID, submissions: make(chan model.AgentInput, 1)}
+	}
+	engine, err := New(Config{
+		Name: "ignored", Repo: t.TempDir(), Store: reopenedStore, Settings: model.DefaultRoomSettings(),
+		ClaudeFactory: factory, CodexFactory: factory,
+		ClaudeConfig: agent.Config{RequireExactSession: true},
+		CodexConfig:  agent.Config{RequireExactSession: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+		if got := configs[actor].SessionID; got != "" {
+			t.Fatalf("%s restored stale unmaterialized session %q", actor, got)
+		}
+	}
+}
+
+func TestAcceptedInputMaterializesFreshNativeSession(t *testing.T) {
+	eventStore, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	materialized := make(chan struct {
+		actor     model.ActorID
+		sessionID string
+	}, 1)
+	factory := func(cfg agent.Config, sink agent.EventSink) agent.Adapter {
+		return &fakeAdapter{actor: cfg.Actor, sink: sink, sessionID: cfg.SessionID, submissions: make(chan model.AgentInput, 2)}
+	}
+	engine, err := New(Config{
+		Name: "materialize", Repo: t.TempDir(), Store: eventStore,
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 2},
+		ClaudeFactory: factory, CodexFactory: factory,
+		OnSessionMaterialized: func(_ context.Context, actor model.ActorID, sessionID string) error {
+			materialized <- struct {
+				actor     model.ActorID
+				sessionID string
+			}{actor: actor, sessionID: sessionID}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Send(context.Background(), SendRequest{Text: "materialize", To: []model.ActorID{model.ActorClaude}}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-materialized:
+		if got.actor != model.ActorClaude || got.sessionID != "fake-claude" {
+			t.Fatalf("materialized=%#v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("accepted input did not materialize its native session")
+	}
+}
+
 type closeErrorWorkspace struct {
 	err error
 }

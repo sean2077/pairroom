@@ -92,7 +92,7 @@
 
     const actions = el('div', { className: 'actions' });
     if (room.lifecycle !== 'archived') {
-      const pending = roomHasPendingBindings(room);
+      const pending = roomHasBlockingPendingBindings(room);
       const open = el('button', { textContent: pending ? '先补全 Binding' : (runtime.phase === 'queued' ? `排队 #${runtime.queue_position || '?'}` : '打开'), disabled: pending });
       open.addEventListener('click', () => openRoom(room.id));
       if (pending) {
@@ -122,13 +122,17 @@
 
   function bindingText(binding) {
     if (!binding) return 'missing';
+    if (binding.pending && binding.mode === 'new') return 'new · materializes on first turn';
     if (binding.pending) return 'pending legacy binding';
     const id = String(binding.session_id || '');
     return `${binding.mode} · ${id.length > 28 ? `${id.slice(0, 13)}…${id.slice(-10)}` : id}`;
   }
 
-  function roomHasPendingBindings(room) {
-    return ['claude', 'codex'].some((actor) => !room.bindings?.[actor] || room.bindings[actor].pending);
+  function roomHasBlockingPendingBindings(room) {
+    return ['claude', 'codex'].some((actor) => {
+      const binding = room.bindings?.[actor];
+      return !binding || (binding.pending && binding.mode !== 'new');
+    });
   }
 
   async function completeBindings(room) {

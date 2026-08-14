@@ -44,14 +44,14 @@ func (r *Registry) CompleteBindings(ctx context.Context, roomID string, specs ma
 	pending := make([]model.ActorID, 0, 2)
 	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
 		binding, exists := room.Bindings[actor]
-		if !exists || binding.Pending {
+		if !exists || (binding.Pending && binding.Mode != BindingNew) {
 			pending = append(pending, actor)
 		}
 	}
 	if len(pending) == 0 {
 		r.mu.RUnlock()
 		if len(specs) != 0 {
-			return Room{}, errors.New("Room has no pending bindings; existing bindings cannot be replaced")
+			return Room{}, errors.New("Room has no bindings awaiting selection; selected bindings cannot be replaced")
 		}
 		return cloneRoom(room), nil
 	}
@@ -117,9 +117,12 @@ func (r *Registry) CompleteBindings(ctx context.Context, roomID string, specs ma
 		binding.Agent = actor
 		binding.Mode = spec.Mode
 		binding.SessionID = strings.TrimSpace(binding.SessionID)
-		binding.Pending = false
 		if binding.BoundAt.IsZero() {
 			binding.BoundAt = r.now()
+		}
+		if binding.Pending && (spec.Mode != BindingNew || binding.SessionID != "") {
+			_ = cleanupAll()
+			return Room{}, fmt.Errorf("validate %s binding result: only a new binding without a session ID may be deferred", actor)
 		}
 		if err := binding.Validate(); err != nil {
 			_ = cleanupAll()
@@ -146,6 +149,9 @@ func (r *Registry) CompleteBindings(ctx context.Context, roomID string, specs ma
 		return Room{}, err
 	}
 	for _, binding := range validated {
+		if !binding.OwnsIdentity() {
+			continue
+		}
 		if owner, owned := r.bindingOwners[binding.Key().String()]; owned && owner != room.ID {
 			r.mu.RUnlock()
 			return Room{}, fmt.Errorf("%w: %s session %q belongs to room %s", ErrBindingOwned, binding.Agent, binding.SessionID, owner)
@@ -166,7 +172,9 @@ func (r *Registry) CompleteBindings(ctx context.Context, roomID string, specs ma
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, binding := range validated {
-		r.bindingOwners[binding.Key().String()] = room.ID
+		if binding.OwnsIdentity() {
+			r.bindingOwners[binding.Key().String()] = room.ID
+		}
 	}
 	r.rooms[room.ID] = cloneRoom(updated)
 	if _, err := r.writeCheckpointLocked(); err != nil {

@@ -594,7 +594,7 @@ func TestEmbeddedRuntimeCloseTimeoutIsRetryableAndDoesNotInterruptTurn(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := startEmbeddedRuntime(context.Background(), project, durable, EmbeddedRuntimeConfig{
+	value, err := startEmbeddedRuntime(context.Background(), nil, project, durable, EmbeddedRuntimeConfig{
 		Mock:              true,
 		RoutingMode:       model.RoutingManual,
 		Claude:            agent.Config{MockDelay: 250 * time.Millisecond},

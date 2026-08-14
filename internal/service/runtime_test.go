@@ -148,6 +148,28 @@ func shutdownRuntimeManager(t *testing.T, manager *RuntimeManager, factory *fake
 	}
 }
 
+func TestRuntimeManagerActivatesPendingNewBindingsButBlocksLegacyPendingBindings(t *testing.T) {
+	repo := testGitRepo(t)
+	registry, project := testRegistry(t, repo)
+	pendingNew, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+		ProjectID: project.ID,
+		Name:      "Pending new runtime",
+		Bindings:  specs(BindingNew, BindingNew, "pending-new"),
+	}, deferredNewProvisioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory := &fakeRuntimeFactory{}
+	manager, err := NewRuntimeManager(registry, factory.open, RuntimeManagerConfig{Limit: 1, IdleTimeout: time.Hour, PollInterval: 5 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownRuntimeManager(t, manager, factory)
+	if runtime := activateRuntime(t, manager, pendingNew.ID); runtime == nil {
+		t.Fatal("pending new Room did not activate")
+	}
+}
+
 func TestRuntimeManagerQueuesFIFOAndNeverPreemptsBusyTurns(t *testing.T) {
 	registry, rooms := provisionRuntimeRooms(t, 3)
 	factory := &fakeRuntimeFactory{busy: true}
