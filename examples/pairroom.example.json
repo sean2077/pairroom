@@ -14,7 +14,7 @@
     "command": "codex",
     "model": "",
     "effort": "high",
-    "approval_policy": "unlessTrusted",
+    "approval_policy": "untrusted",
     "sandbox": "workspaceWrite"
   }
 }

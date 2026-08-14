@@ -305,7 +305,7 @@ pairroom diagnostics -help
     "command": "codex",
     "model": "",
     "effort": "high",
-    "approval_policy": "unlessTrusted",
+    "approval_policy": "untrusted",
     "sandbox": "workspaceWrite"
   }
 }
@@ -318,6 +318,8 @@ pairroom serve --config ./pairroom.json --repo /path/to/project
 ```
 
 命令行参数覆盖配置文件。
+
+PairRoom 仍接受旧版本配置中的 `unlessTrusted`，并在调用当前 Codex App Server 前将其迁移为等价的 `untrusted`。
 
 ## 推荐使用方式
 

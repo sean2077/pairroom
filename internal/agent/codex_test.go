@@ -125,7 +125,7 @@ func TestCodexEarlyTurnStartedBindsStartingInput(t *testing.T) {
 func TestCodexTurnRequestsUseDocumentedCorrelationFields(t *testing.T) {
 	adapter := NewCodex(Config{
 		Repo: "/repo", Model: "gpt-5.3-codex", Effort: "high",
-		ApprovalPolicy: "unlessTrusted", Sandbox: "workspaceWrite",
+		ApprovalPolicy: "untrusted", Sandbox: "workspaceWrite",
 	}, func(model.RuntimeEvent) {})
 	input := model.AgentInput{MessageID: "msg-correlation", Role: model.RoleDriver}
 
@@ -143,6 +143,29 @@ func TestCodexTurnRequestsUseDocumentedCorrelationFields(t *testing.T) {
 	}
 	if got := steered["expectedTurnId"]; got != "turn-1" {
 		t.Fatalf("turn/steer expectedTurnId = %#v", got)
+	}
+}
+
+func TestCodexApprovalPolicyUsesCurrentAppServerVariant(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "default", want: "untrusted"},
+		{name: "legacy PairRoom config", value: "unlessTrusted", want: "untrusted"},
+		{name: "current explicit policy", value: "on-request", want: "on-request"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := NewCodex(Config{Repo: "/repo", ApprovalPolicy: test.value}, func(model.RuntimeEvent) {})
+			if got := adapter.threadStartParams()["approvalPolicy"]; got != test.want {
+				t.Fatalf("thread/start approvalPolicy = %#v, want %q", got, test.want)
+			}
+			if got := adapter.turnStartParams("thread-1", "hello", model.AgentInput{})["approvalPolicy"]; got != test.want {
+				t.Fatalf("turn/start approvalPolicy = %#v, want %q", got, test.want)
+			}
+		})
 	}
 }
 
