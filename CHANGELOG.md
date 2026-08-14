@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.0.0] - 2026-08-14
+## [v1.0.0] — 2026-08-14
 
 ### Added
 
@@ -21,7 +21,7 @@
 - Browser mutations require per-session CSRF; query tokens authorize no API; API requests are rate-limited.
 - Backup/restore, attachments, Reviewer isolation, and unknown high-privilege runtime requests continue to fail closed.
 
-## [0.9.0] - 2026-08-14
+## [v0.9.0] — 2026-08-14
 
 ### Added
 
@@ -36,7 +36,7 @@
 - Native/API clients may continue using the configured Bearer token directly; browser EventSource now authenticates with its session cookie.
 - Query-string tokens no longer authorize any API endpoint, including SSE.
 
-## [0.8.0] - 2026-08-14
+## [v0.8.0] — 2026-08-14
 
 ### Added
 
@@ -51,7 +51,7 @@
 - Incoming Agent messages update unread state only when the room is hidden or the user has scrolled away from the latest discussion.
 - Public snapshot pagination is transport-only; the event-sourced room retains the complete transcript.
 
-## [0.7.0] - 2026-08-14
+## [v0.7.0] — 2026-08-14
 
 ### Added
 
@@ -65,7 +65,7 @@
 - Runtime caches, reviewer worktrees, browser sessions, and temporary files are intentionally excluded from backups.
 - Backup replacement and forced restore preserve the previous target until the new artifact has been fully committed.
 
-## [0.6.0] - 2026-08-14
+## [v0.6.0] — 2026-08-14
 
 ### Added
 
@@ -78,7 +78,7 @@
 - High-frequency command output updates the live summary without forcing a disk sync for every chunk; terminal Turn events persist the bounded projection.
 - Incomplete work items are settled when their native Turn completes, avoiding permanently working Inspector rows.
 
-## [0.5.0] - 2026-08-14
+## [v0.5.0] — 2026-08-14
 
 ### Added
 
@@ -92,7 +92,7 @@
 - Superseding a target interrupts its native runtime, marks every affected in-flight message, and prevents stale automatic handoff.
 - Retries preserve the original message intent while remaining separate auditable messages.
 
-## [0.4.0] - 2026-08-14
+## [v0.4.0] — 2026-08-14
 
 ### Added
 
@@ -107,7 +107,7 @@
 - Reviewer sessions now run from an isolated snapshot by default instead of the live driver working tree.
 - POSIX snapshots are made filesystem read-only; Windows reports the weaker boundary explicitly and continues to rely on native reviewer sandboxing.
 
-## 0.3.0 — 2026-08-13
+## [v0.3.0] — 2026-08-13
 
 Rich conversation, native approvals and reviewer-policy release.
 
@@ -148,7 +148,7 @@ Rich conversation, native approvals and reviewer-policy release.
 - Long messages, image galleries and the composer remain usable in narrow/mobile layouts
 - Missing favicon no longer creates a browser console error
 
-## 0.2.0 — 2026-08-13
+## [v0.2.0] — 2026-08-13
 
 Reliability and observability release focused on real Claude Code/Codex operation.
 
@@ -184,7 +184,7 @@ Reliability and observability release focused on real Claude Code/Codex operatio
 - URL query tokens are accepted only by the read-only SSE endpoint
 - Stale pending/working state no longer survives a PairRoom restart
 
-## 0.1.0 — 2026-08-13
+## [v0.1.0] — 2026-08-13
 
 Initial standalone MVP.
 

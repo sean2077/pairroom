@@ -4,7 +4,7 @@ A build is publishable only when every applicable item is complete.
 
 ## Source and history
 
-- [ ] `VERSION`, `internal/version.Current`, changelog, release notes, and Git tag agree.
+- [ ] `VERSION`, `internal/version.Current`, the exact `vX.Y.Z` Git tag, and one non-empty canonical `CHANGELOG.md` heading agree.
 - [ ] Working tree is clean.
 - [ ] `git fsck --full` succeeds.
 - [ ] No secrets, browser sessions, room data, private fixtures, or temporary Agent files are tracked.
@@ -13,6 +13,7 @@ A build is publishable only when every applicable item is complete.
 ## Verification
 
 - [ ] `make check` succeeds.
+- [ ] The release-contract tests and real current-version changelog extraction succeed.
 - [ ] `make smoke` succeeds.
 - [ ] Mock E2E covers chat, images, Reviewer snapshot, Turn summaries, pagination, verify, backup, restore, and diagnostics.
 - [ ] Corrupt/traversal/archive rejection tests succeed.
@@ -32,6 +33,7 @@ A build is publishable only when every applicable item is complete.
 
 - [ ] README, security, privacy, operations, support, upgrade, and validation documents match actual behavior.
 - [ ] PR description calls out native-runtime validation boundaries.
-- [ ] `main` base and `release/v1.0.0` head are pushed.
-- [ ] PR checks pass before merge.
-- [ ] Tag and GitHub Release are created from the merged/reviewed source commit.
+- [ ] The reviewed release commit is pushed and reachable from `main` before the tag is pushed.
+- [ ] PR or protected-branch checks pass before the annotated tag is created.
+- [ ] The tag workflow creates a non-draft, non-prerelease GitHub Release from that exact commit.
+- [ ] The workflow downloads every published asset and validates asset-name parity plus `SHA256SUMS`.

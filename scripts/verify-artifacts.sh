@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
+source "$ROOT/scripts/lib/python.sh"
+PYTHON=$(pairroom_resolve_python)
 VERSION=${VERSION:-$(tr -d '\r\n' < VERSION)}
 DIST=${DIST:-dist}
 
@@ -31,7 +33,7 @@ file "$DIST/pairroom-v${VERSION}-darwin-amd64" | grep -q 'Mach-O 64-bit x86_64'
 tar -tzf "$DIST/pairroom-v${VERSION}-source.tar.gz" >/dev/null
 unzip -tq "$DIST/pairroom-v${VERSION}-source.zip" >/dev/null
 
-python3 - "$DIST" "$VERSION" <<'PY'
+"$PYTHON" - "$DIST" "$VERSION" <<'PY'
 import hashlib,json,os,sys
 root,version=sys.argv[1:]
 version_info=json.load(open(os.path.join(root,'version-check.json')))

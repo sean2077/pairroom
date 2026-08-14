@@ -90,6 +90,7 @@ func initRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
 	run(t, repo, "git", "init", "-q")
+	run(t, repo, "git", "config", "core.autocrlf", "false")
 	run(t, repo, "git", "config", "user.name", "PairRoom Test")
 	run(t, repo, "git", "config", "user.email", "pairroom@example.invalid")
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\n"), 0o644); err != nil {

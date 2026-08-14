@@ -44,13 +44,15 @@ Do not claim native-runtime E2E when only Mock or fixture adapters were used.
 
 ## Release work
 
-`docs/RELEASE_CHECKLIST.md` is the release gate. A tagged release is generated with:
+`docs/RELEASE_CHECKLIST.md` is the release gate. `CHANGELOG.md` is the release-note authority; every release needs exactly one non-empty `## [vX.Y.Z] — YYYY-MM-DD` section matching `VERSION` and the tag. Build the clean release payload with:
 
 ```bash
 make release
 ```
 
-This runs unit/race/vet/static checks, the complete Mock collaboration/recovery smoke test, four-platform builds, source archives, SBOM/provenance generation, and artifact verification.
+This validates and extracts the changelog section, runs unit/race/vet/static checks and the complete Mock collaboration/recovery smoke test, then creates four-platform builds, source archives, SBOM/provenance, checksums, and version evidence. It does not create or publish a tag.
+
+Push the reviewed `main` commit before its annotated tag. The tag-triggered workflow revalidates the exact tag/version/changelog identity, publishes the GitHub Release, downloads every published asset, and verifies the downloaded checksum manifest.
 
 ## Git history
 

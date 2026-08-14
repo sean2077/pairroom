@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+source "$ROOT/scripts/lib/python.sh"
+PYTHON=$(pairroom_resolve_python)
 TMP=$(mktemp -d)
 SERVER_PID=""
 cleanup() {
@@ -13,6 +15,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+curl_file_path() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -m "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
 REPO="$TMP/repo"
 DATA="$TMP/data"
 RESTORED="$TMP/restored"
@@ -21,6 +31,7 @@ BIN=${PAIRROOM_BIN:-$TMP/pairroom}
 REPORT=${REPORT:-}
 mkdir -p "$REPO"
 git -C "$REPO" init -q
+git -C "$REPO" config core.autocrlf false
 git -C "$REPO" config user.name PairRoom-CI
 git -C "$REPO" config user.email pairroom-ci@example.invalid
 printf 'seed\n' > "$REPO/README.md"
@@ -30,7 +41,7 @@ git -C "$REPO" commit -qm seed
 if [[ ! -x "$BIN" ]]; then
   (cd "$ROOT" && go build -buildvcs=false -trimpath -o "$BIN" ./cmd/pairroom)
 fi
-PORT=$(python3 - <<'PY'
+PORT=$("$PYTHON" - <<'PY'
 import socket
 s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()
 PY
@@ -58,17 +69,19 @@ printf '%s' "$MESSAGE" >"$TMP/message.json"
 # Exercise the persistent image path and multimodal transcript without relying
 # on a vendor network connection.
 printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=' | base64 -d > "$TMP/pixel.png"
-curl -fsS -X POST "$BASE/api/v1/attachments" -F "file=@$TMP/pixel.png;type=image/png" > "$TMP/attachment.json"
-python3 - "$TMP/attachment.json" "$TMP/image-message.json" <<'PY'
+PIXEL_PATH=$(curl_file_path "$TMP/pixel.png")
+curl -fsS -X POST "$BASE/api/v1/attachments" -F "file=@${PIXEL_PATH};type=image/png" > "$TMP/attachment.json"
+"$PYTHON" - "$TMP/attachment.json" "$TMP/image-message.json" <<'PY'
 import json,sys
 att=json.load(open(sys.argv[1]))
 json.dump({'text':'@claude inspect this image','to':['claude'],'attachments':[att]},open(sys.argv[2],'w'))
 PY
-curl -fsS -X POST "$BASE/api/v1/messages" -H 'Content-Type: application/json' --data-binary "@$TMP/image-message.json" >/dev/null
+IMAGE_MESSAGE_PATH=$(curl_file_path "$TMP/image-message.json")
+curl -fsS -X POST "$BASE/api/v1/messages" -H 'Content-Type: application/json' --data-binary "@${IMAGE_MESSAGE_PATH}" >/dev/null
 
 for _ in $(seq 1 160); do
   curl -fsS "$BASE/api/v1/snapshot?message_limit=250" > "$TMP/snapshot.json"
-  if python3 - "$TMP/snapshot.json" <<'PY'
+  if "$PYTHON" - "$TMP/snapshot.json" <<'PY'
 import json,sys
 s=json.load(open(sys.argv[1]))
 msgs=s.get('messages',[])
@@ -80,7 +93,7 @@ PY
   sleep 0.1
 done
 
-python3 - "$TMP/snapshot.json" <<'PY'
+"$PYTHON" - "$TMP/snapshot.json" <<'PY'
 import json,sys
 s=json.load(open(sys.argv[1]))
 assert len(s.get('messages',[]))>=5, s
@@ -93,7 +106,7 @@ PY
 
 # Cursor API should return a valid page even when the room is still small.
 curl -fsS "$BASE/api/v1/messages?limit=2" > "$TMP/page.json"
-python3 - "$TMP/page.json" <<'PY'
+"$PYTHON" - "$TMP/page.json" <<'PY'
 import json,sys
 p=json.load(open(sys.argv[1]))
 assert 1 <= len(p['messages']) <= 2, p
@@ -101,7 +114,12 @@ assert p['total'] >= len(p['messages']), p
 PY
 
 kill -TERM "$SERVER_PID"
-wait "$SERVER_PID"
+wait_status=0
+wait "$SERVER_PID" || wait_status=$?
+if [[ $wait_status -ne 0 && $wait_status -ne 143 ]]; then
+  echo "PairRoom server exited unexpectedly after termination request: $wait_status" >&2
+  exit "$wait_status"
+fi
 SERVER_PID=""
 
 "$BIN" verify --data-dir "$DATA" --json > "$TMP/verify.json"
@@ -110,7 +128,7 @@ SERVER_PID=""
 "$BIN" verify --data-dir "$RESTORED" --json > "$TMP/verify-restored.json"
 "$BIN" diagnostics --data-dir "$DATA" --output "$TMP/diagnostics.tar.gz" >/dev/null
 
-python3 - "$TMP" "$REPORT" <<'PY'
+"$PYTHON" - "$TMP" "$REPORT" <<'PY'
 import json,os,sys,hashlib
 root,report=sys.argv[1],sys.argv[2]
 def load(name): return json.load(open(os.path.join(root,name)))
