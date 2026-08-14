@@ -330,14 +330,31 @@ func TestCodexUserMessageClientIDBindsEarlyWireInputWithoutToolProjection(t *tes
 }
 
 func TestCodexSandboxNormalization(t *testing.T) {
-	for _, value := range []string{"dangerFullAccess", "danger-full-access", "danger_full_access", "full-access"} {
-		adapter := NewCodex(Config{Sandbox: value, Repo: "/repo"}, func(model.RuntimeEvent) {})
-		if got := adapter.legacySandbox(); got != "dangerFullAccess" {
-			t.Fatalf("legacySandbox(%q) = %q", value, got)
-		}
-		if got := adapter.sandboxPolicy(model.RoleDriver)["type"]; got != "dangerFullAccess" {
-			t.Fatalf("sandboxPolicy(%q) type = %#v", value, got)
-		}
+	tests := []struct {
+		name       string
+		value      string
+		wantThread string
+		wantTurn   string
+	}{
+		{name: "default", wantThread: "workspace-write", wantTurn: "workspaceWrite"},
+		{name: "workspace camel case", value: "workspaceWrite", wantThread: "workspace-write", wantTurn: "workspaceWrite"},
+		{name: "workspace kebab case", value: "workspace-write", wantThread: "workspace-write", wantTurn: "workspaceWrite"},
+		{name: "read only camel case", value: "readOnly", wantThread: "read-only", wantTurn: "readOnly"},
+		{name: "read only kebab case", value: "read-only", wantThread: "read-only", wantTurn: "readOnly"},
+		{name: "danger camel case", value: "dangerFullAccess", wantThread: "danger-full-access", wantTurn: "dangerFullAccess"},
+		{name: "danger kebab case", value: "danger-full-access", wantThread: "danger-full-access", wantTurn: "dangerFullAccess"},
+		{name: "full access alias", value: "full-access", wantThread: "danger-full-access", wantTurn: "dangerFullAccess"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := NewCodex(Config{Sandbox: test.value, Repo: "/repo"}, func(model.RuntimeEvent) {})
+			if got := adapter.threadStartParams()["sandbox"]; got != test.wantThread {
+				t.Fatalf("thread/start sandbox = %#v, want %q", got, test.wantThread)
+			}
+			if got := adapter.turnStartParams("thread-1", "hello", model.AgentInput{Role: model.RoleDriver})["sandboxPolicy"].(map[string]any)["type"]; got != test.wantTurn {
+				t.Fatalf("turn/start sandboxPolicy.type = %#v, want %q", got, test.wantTurn)
+			}
+		})
 	}
 
 	adapter := NewCodex(Config{Sandbox: "dangerFullAccess", Repo: "/repo"}, func(model.RuntimeEvent) {})

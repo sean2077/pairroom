@@ -457,13 +457,15 @@ func codexInputItems(text string, attachments []model.AgentAttachment) []any {
 }
 
 func (c *CodexAdapter) legacySandbox() string {
+	// The legacy thread/start sandbox enum uses CLI-style kebab-case, unlike
+	// the camelCase tagged variants in turn/start sandboxPolicy objects.
 	switch strings.ToLower(c.cfg.Sandbox) {
 	case "readonly", "read_only", "read-only":
-		return "readOnly"
+		return "read-only"
 	case "dangerfullaccess", "danger_full_access", "danger-full-access", "full", "fullaccess", "full_access", "full-access":
-		return "dangerFullAccess"
+		return "danger-full-access"
 	default:
-		return "workspaceWrite"
+		return "workspace-write"
 	}
 }
 

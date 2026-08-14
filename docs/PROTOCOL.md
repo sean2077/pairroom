@@ -343,7 +343,7 @@ disallowedTools = Edit, Write, NotebookEdit, ExitPlanMode
 
 ### Driver/Peer
 
-使用用户配置的原生 permission/sandbox 策略。
+使用用户配置的原生 permission/sandbox 策略。Codex 的 `thread/start.sandbox` 使用 kebab-case 枚举（`read-only`、`workspace-write`、`danger-full-access`），而 `turn/start.sandboxPolicy.type` 使用 App Server policy 对象的 camelCase 类型（`readOnly`、`workspaceWrite`、`dangerFullAccess`）；Adapter 在各自的 wire 边界做规范化。
 
 ## 12. Workspace boundary
 
