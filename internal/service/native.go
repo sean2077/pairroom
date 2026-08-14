@@ -53,6 +53,17 @@ func (p *NativeProvisioner) Provision(ctx context.Context, project Project, acto
 	cfg.SessionID = strings.TrimSpace(spec.SessionID)
 	cfg.RequireExactSession = spec.Mode == BindingExisting
 	cfg.SystemPrompt = prompt.SystemPrompt(actor, cfg.RoomName, project.Root)
+	if spec.Mode == BindingNew {
+		// Neither official harness persists an empty native conversation. Probe the
+		// required protocol now, but defer allocation of the vendor identity until
+		// the Room owns a real input that the live adapter has accepted.
+		if _, err := agent.ProbeRuntime(ctx, cfg); err != nil {
+			return Binding{}, nil, err
+		}
+		return Binding{
+			Agent: actor, Mode: BindingNew, Pending: true, BoundAt: time.Now().UTC(),
+		}, func(context.Context) error { return nil }, nil
+	}
 
 	// Validation output deliberately terminates here. Starting an Existing
 	// binding may cause the official harness to restore vendor context, but no

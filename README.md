@@ -201,7 +201,7 @@ fragment 不会随 HTTP 请求或 Referer 发送，交换成功后立即从地�
 go run ./cmd/pairroom service
 ```
 
-Management Shell 中显式输入 Git worktree 的绝对路径登记 Project，再为 Project 创建 Room。Claude 与 Codex 的 Binding 可分别选择新建或恢复已有 Session/Thread；Room 切换不会中断后台 Turn。默认最多同时激活 2 个 Room Runtime，空闲 15 分钟后挂起：
+Management Shell 中显式输入 Git worktree 的绝对路径登记 Project，再为 Project 创建 Room。Claude 与 Codex 的 Binding 可分别选择新建或恢复已有 Session/Thread；新建 Binding 在首个被官方 CLI 接受的真实 Turn 上持久化 Identity，之后每次激活都精确恢复。Room 切换不会中断后台 Turn。默认最多同时激活 2 个 Room Runtime，空闲 15 分钟后挂起：
 
 ```bash
 pairroom service --runtime-limit 4 --idle-timeout 20m

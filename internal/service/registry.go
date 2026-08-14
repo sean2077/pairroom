@@ -308,6 +308,7 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 
 	var provisioned *roomProvisionedPayload
 	var bindingsCompleted *roomBindingsCompletedPayload
+	materializedBindings := make(map[model.ActorID]Binding, 2)
 	var meta model.RoomMeta
 	participants := make(map[model.ActorID]model.ParticipantSnapshot)
 	var lifecycle RoomLifecycle = RoomActive
@@ -352,7 +353,7 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 			if err := validateProvisionedProject(payload.Project); err != nil {
 				return Room{}, Project{}, false, err
 			}
-			if err := validateCompletedBindings(payload.Bindings); err != nil {
+			if err := validateProvisionedBindings(payload.Bindings); err != nil {
 				return Room{}, Project{}, false, fmt.Errorf("invalid provisioned bindings: %w", err)
 			}
 			if payload.CreatedAt.IsZero() {
@@ -377,13 +378,56 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 			if err := json.Unmarshal(event.Data, &payload); err != nil {
 				return Room{}, Project{}, false, fmt.Errorf("decode %s event %d: %w", event.Kind, event.Seq, err)
 			}
-			if err := validateCompletedBindings(payload.Bindings); err != nil {
+			if err := validateProvisionedBindings(payload.Bindings); err != nil {
 				return Room{}, Project{}, false, fmt.Errorf("invalid %s event %d: %w", event.Kind, event.Seq, err)
 			}
 			if payload.UpdatedAt.IsZero() {
 				return Room{}, Project{}, false, fmt.Errorf("%s event %d has an empty update time", event.Kind, event.Seq)
 			}
 			bindingsCompleted = &payload
+			updatedAt = payload.UpdatedAt
+		case EventRoomBindingMaterialized:
+			if event.Actor != model.ActorSystem {
+				return Room{}, Project{}, false, fmt.Errorf("%s event %d must be authored by system", event.Kind, event.Seq)
+			}
+			if !createdSeen || (provisioned == nil && bindingsCompleted == nil) {
+				return Room{}, Project{}, false, fmt.Errorf("%s event %d requires selected Room bindings", event.Kind, event.Seq)
+			}
+			if lifecycle == RoomArchived {
+				return Room{}, Project{}, false, fmt.Errorf("%s event %d cannot mutate an archived Room", event.Kind, event.Seq)
+			}
+			var payload roomBindingMaterializedPayload
+			if err := json.Unmarshal(event.Data, &payload); err != nil {
+				return Room{}, Project{}, false, fmt.Errorf("decode %s event %d: %w", event.Kind, event.Seq, err)
+			}
+			binding := payload.Binding
+			if !binding.Agent.ValidParticipant() || binding.Pending || binding.Mode != BindingNew {
+				return Room{}, Project{}, false, fmt.Errorf("invalid %s event %d binding", event.Kind, event.Seq)
+			}
+			if err := binding.Validate(); err != nil {
+				return Room{}, Project{}, false, fmt.Errorf("invalid %s event %d binding: %w", event.Kind, event.Seq, err)
+			}
+			var selectedBindings map[model.ActorID]Binding
+			if provisioned != nil {
+				selectedBindings = provisioned.Bindings
+			} else {
+				selectedBindings = bindingsCompleted.Bindings
+			}
+			initial, ok := selectedBindings[binding.Agent]
+			if !ok || !initial.Pending || initial.Mode != BindingNew || initial.SessionID != "" {
+				return Room{}, Project{}, false, fmt.Errorf("%s event %d replaces a non-pending %s binding", event.Kind, event.Seq, binding.Agent)
+			}
+			if _, exists := materializedBindings[binding.Agent]; exists {
+				return Room{}, Project{}, false, fmt.Errorf("%s binding is materialized more than once", binding.Agent)
+			}
+			if payload.UpdatedAt.IsZero() {
+				return Room{}, Project{}, false, fmt.Errorf("%s event %d has an empty update time", event.Kind, event.Seq)
+			}
+			if !binding.BoundAt.Equal(payload.UpdatedAt) {
+				return Room{}, Project{}, false, fmt.Errorf("%s event %d binding time conflicts with update time", event.Kind, event.Seq)
+			}
+			materializedBindings[binding.Agent] = binding
+			serviceMutationSeen = true
 			updatedAt = payload.UpdatedAt
 		case EventRoomRenamed:
 			if event.Actor != model.ActorSystem {
@@ -503,6 +547,9 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 		if bindingsCompleted != nil {
 			room.Bindings = cloneBindings(bindingsCompleted.Bindings)
 		}
+		for actor, binding := range materializedBindings {
+			room.Bindings[actor] = binding
+		}
 		if room.UpdatedAt.IsZero() {
 			room.UpdatedAt = room.CreatedAt
 		}
@@ -549,6 +596,9 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 	if bindingsCompleted != nil {
 		room.Bindings = cloneBindings(bindingsCompleted.Bindings)
 	}
+	for actor, binding := range materializedBindings {
+		room.Bindings[actor] = binding
+	}
 	if room.UpdatedAt.IsZero() {
 		room.UpdatedAt = room.CreatedAt
 	}
@@ -572,14 +622,9 @@ func validateProvisionedProject(project Project) error {
 	return nil
 }
 
-func validateCompletedBindings(bindings map[model.ActorID]Binding) error {
+func validateProvisionedBindings(bindings map[model.ActorID]Binding) error {
 	if len(bindings) != 2 {
 		return fmt.Errorf("exactly two bindings are required; got %d", len(bindings))
-	}
-	for actor := range bindings {
-		if actor != model.ActorClaude && actor != model.ActorCodex {
-			return fmt.Errorf("unexpected binding agent %q", actor)
-		}
 	}
 	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
 		binding, ok := bindings[actor]
@@ -589,11 +634,16 @@ func validateCompletedBindings(bindings map[model.ActorID]Binding) error {
 		if binding.Agent != actor {
 			return fmt.Errorf("%s binding identifies agent %s", actor, binding.Agent)
 		}
-		if binding.Pending {
-			return fmt.Errorf("%s binding remains pending", actor)
+		if binding.Pending && (binding.Mode != BindingNew || binding.SessionID != "") {
+			return fmt.Errorf("%s pending binding is not a deferred new binding", actor)
 		}
 		if err := binding.Validate(); err != nil {
 			return fmt.Errorf("%s binding: %w", actor, err)
+		}
+	}
+	for actor := range bindings {
+		if actor != model.ActorClaude && actor != model.ActorCodex {
+			return fmt.Errorf("unexpected binding agent %q", actor)
 		}
 	}
 	return nil

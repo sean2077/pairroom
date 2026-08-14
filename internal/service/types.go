@@ -11,12 +11,13 @@ import (
 )
 
 const (
-	EventRoomProvisioned       = "service.room.provisioned"
-	EventRoomRenamed           = "service.room.renamed"
-	EventRoomArchived          = "service.room.archived"
-	EventRoomRestored          = "service.room.restored"
-	EventRoomBindingsCompleted = "service.room.bindings.completed"
-	EventLegacyImported        = "service.legacy.imported"
+	EventRoomProvisioned         = "service.room.provisioned"
+	EventRoomRenamed             = "service.room.renamed"
+	EventRoomArchived            = "service.room.archived"
+	EventRoomRestored            = "service.room.restored"
+	EventRoomBindingsCompleted   = "service.room.bindings.completed"
+	EventRoomBindingMaterialized = "service.room.binding.materialized"
+	EventLegacyImported          = "service.legacy.imported"
 )
 
 const TranscriptBoundaryNotice = "This PairRoom timeline starts at the binding boundary. Existing vendor context may be resumed, but earlier Claude/Codex transcripts are not imported, copied, summarized, searched, or displayed."
@@ -157,6 +158,19 @@ func (r Room) HasPendingBindings() bool {
 	return false
 }
 
+// HasBlockingPendingBindings distinguishes legacy bindings that still need an
+// explicit user choice from new native bindings whose vendor identity is
+// materialized automatically after the first accepted PairRoom input.
+func (r Room) HasBlockingPendingBindings() bool {
+	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+		binding, ok := r.Bindings[actor]
+		if !ok || (binding.Pending && binding.Mode != BindingNew) {
+			return true
+		}
+	}
+	return false
+}
+
 func (r Room) Validate() error {
 	if strings.TrimSpace(r.ID) == "" {
 		return errors.New("room ID is required")
@@ -256,6 +270,11 @@ type roomLifecyclePayload struct {
 type roomBindingsCompletedPayload struct {
 	Bindings  map[model.ActorID]Binding `json:"bindings"`
 	UpdatedAt time.Time                 `json:"updated_at"`
+}
+
+type roomBindingMaterializedPayload struct {
+	Binding   Binding   `json:"binding"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type legacyImportedPayload struct {

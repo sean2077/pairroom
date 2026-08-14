@@ -143,7 +143,7 @@ func EmbeddedRuntimeFactory(registry *Registry, cfg EmbeddedRuntimeConfig) Runti
 		if !project.Available {
 			return nil, fmt.Errorf("project is unavailable: %s", project.Diagnostic)
 		}
-		return startEmbeddedRuntime(ctx, project, durableRoom, cfg)
+		return startEmbeddedRuntime(ctx, registry, project, durableRoom, cfg)
 	}
 }
 
@@ -194,15 +194,18 @@ type embeddedRuntime struct {
 	lastActivity atomic.Int64
 }
 
-func startEmbeddedRuntime(startCtx context.Context, project Project, durableRoom Room, cfg EmbeddedRuntimeConfig) (_ RoomRuntime, resultErr error) {
+func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project Project, durableRoom Room, cfg EmbeddedRuntimeConfig) (_ RoomRuntime, resultErr error) {
 	if err := startCtx.Err(); err != nil {
 		return nil, err
 	}
 	if durableRoom.Archived() {
 		return nil, errors.New("archived Room cannot be activated")
 	}
-	if durableRoom.HasPendingBindings() {
+	if durableRoom.HasBlockingPendingBindings() {
 		return nil, ErrRoomBindingPending
+	}
+	if durableRoom.HasPendingBindings() && registry == nil {
+		return nil, errors.New("service registry is required to materialize deferred bindings")
 	}
 	if err := durableRoom.Validate(); err != nil {
 		return nil, fmt.Errorf("validate durable Room projection: %w", err)
@@ -263,16 +266,35 @@ func startEmbeddedRuntime(startCtx context.Context, project Project, durableRoom
 	}
 	claudeFactory = transcriptBoundaryFactory(claudeFactory)
 	codexFactory = transcriptBoundaryFactory(codexFactory)
+	pendingBindings := make(map[model.ActorID]bool, 2)
+	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+		binding := durableRoom.Bindings[actor]
+		pendingBindings[actor] = binding.Pending && binding.Mode == BindingNew
+	}
 	claudeCfg := cfg.Claude
 	claudeCfg.ClientVersion = version.Current
-	claudeCfg.SessionID = durableRoom.Bindings[model.ActorClaude].SessionID
+	if !pendingBindings[model.ActorClaude] {
+		claudeCfg.SessionID = durableRoom.Bindings[model.ActorClaude].SessionID
+	}
 	claudeCfg.RequireExactSession = true
 	codexCfg := cfg.Codex
 	codexCfg.ClientVersion = version.Current
-	codexCfg.SessionID = durableRoom.Bindings[model.ActorCodex].SessionID
+	if !pendingBindings[model.ActorCodex] {
+		codexCfg.SessionID = durableRoom.Bindings[model.ActorCodex].SessionID
+	}
 	codexCfg.RequireExactSession = true
 
-	engine, err := room.New(room.Config{
+	var engine *room.Engine
+	onSessionMaterialized := func(ctx context.Context, actor model.ActorID, sessionID string) error {
+		if !pendingBindings[actor] {
+			return nil
+		}
+		_, err := registry.MaterializeBinding(ctx, durableRoom.ID, actor, sessionID, func(kind string, payload any) error {
+			return engine.RecordServiceEvent(kind, payload)
+		})
+		return err
+	}
+	engine, err = room.New(room.Config{
 		Name: durableRoom.Name,
 		Repo: project.Root,
 		Settings: model.RoomSettings{
@@ -280,14 +302,15 @@ func startEmbeddedRuntime(startCtx context.Context, project Project, durableRoom
 			MaxHops:             cfg.MaxAgentHops,
 			StallWarningSeconds: cfg.StallWarningSeconds,
 		},
-		Store:         eventStore,
-		ClaudeFactory: claudeFactory,
-		CodexFactory:  codexFactory,
-		ClaudeConfig:  claudeCfg,
-		CodexConfig:   codexCfg,
-		Attachments:   attachmentStore,
-		Workspaces:    workspaceManager,
-		AutoStart:     cfg.AutoStart,
+		Store:                 eventStore,
+		ClaudeFactory:         claudeFactory,
+		CodexFactory:          codexFactory,
+		ClaudeConfig:          claudeCfg,
+		CodexConfig:           codexCfg,
+		Attachments:           attachmentStore,
+		Workspaces:            workspaceManager,
+		AutoStart:             cfg.AutoStart,
+		OnSessionMaterialized: onSessionMaterialized,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("restore Room engine: %w", err)
