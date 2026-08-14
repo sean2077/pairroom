@@ -16,6 +16,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.Claude.Command != "claude" || cfg.Codex.Command != "codex" {
 		t.Fatalf("unexpected runtime commands: %#v", cfg)
 	}
+	if cfg.Codex.ApprovalPolicy != "untrusted" {
+		t.Fatalf("unexpected Codex approval policy: %q", cfg.Codex.ApprovalPolicy)
+	}
 }
 
 func TestLoadMergesDefaults(t *testing.T) {
@@ -38,7 +41,7 @@ func TestLoadMergesDefaults(t *testing.T) {
 	if cfg.RoomName != "Test Room" || cfg.RoutingMode != model.RoutingRoundtable || cfg.Claude.Model != "opus" {
 		t.Fatalf("unexpected config: %#v", cfg)
 	}
-	if cfg.Claude.PermissionMode != "auto" || cfg.Codex.ApprovalPolicy != "unlessTrusted" {
+	if cfg.Claude.PermissionMode != "auto" || cfg.Codex.ApprovalPolicy != "untrusted" {
 		t.Fatalf("defaults were not preserved: %#v", cfg)
 	}
 }

@@ -81,9 +81,7 @@ func NewCodex(cfg Config, sink EventSink) *CodexAdapter {
 	if cfg.Command == "" {
 		cfg.Command = "codex"
 	}
-	if cfg.ApprovalPolicy == "" {
-		cfg.ApprovalPolicy = "unlessTrusted"
-	}
+	cfg.ApprovalPolicy = normalizeCodexApprovalPolicy(cfg.ApprovalPolicy)
 	if cfg.Sandbox == "" {
 		cfg.Sandbox = "workspaceWrite"
 	}
@@ -235,16 +233,7 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 		}
 	}
 	if existingThread == "" {
-		params := map[string]any{
-			"cwd":            c.cfg.Repo,
-			"approvalPolicy": c.cfg.ApprovalPolicy,
-			"sandbox":        c.legacySandbox(),
-			"serviceName":    "pairroom",
-		}
-		if c.cfg.Model != "" {
-			params["model"] = c.cfg.Model
-		}
-		result, err = c.call(handshakeCtx, "thread/start", params)
+		result, err = c.call(handshakeCtx, "thread/start", c.threadStartParams())
 	}
 	if err != nil {
 		_ = c.Stop(context.Background())
@@ -400,6 +389,26 @@ func codexTurnSteerParams(threadID, turnID, text string, input model.AgentInput)
 	}
 	if input.MessageID != "" {
 		params["clientUserMessageId"] = input.MessageID
+	}
+	return params
+}
+
+func normalizeCodexApprovalPolicy(value string) string {
+	if value == "" || value == "unlessTrusted" {
+		return "untrusted"
+	}
+	return value
+}
+
+func (c *CodexAdapter) threadStartParams() map[string]any {
+	params := map[string]any{
+		"cwd":            c.cfg.Repo,
+		"approvalPolicy": c.cfg.ApprovalPolicy,
+		"sandbox":        c.legacySandbox(),
+		"serviceName":    "pairroom",
+	}
+	if c.cfg.Model != "" {
+		params["model"] = c.cfg.Model
 	}
 	return params
 }

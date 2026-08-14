@@ -40,7 +40,7 @@ func Defaults() File {
 		StallWarningSeconds: 300,
 		AutoStart:           true,
 		Claude:              Agent{Command: "claude", PermissionMode: "auto"},
-		Codex:               Agent{Command: "codex", Effort: "high", ApprovalPolicy: "unlessTrusted", Sandbox: "workspaceWrite"},
+		Codex:               Agent{Command: "codex", Effort: "high", ApprovalPolicy: "untrusted", Sandbox: "workspaceWrite"},
 	}
 }
 
