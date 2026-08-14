@@ -5,12 +5,26 @@ BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 PYTHON ?= $(shell if command -v python3 >/dev/null 2>&1; then printf python3; elif command -v python >/dev/null 2>&1; then printf python; else printf python3; fi)
 VERSION_PKG := github.com/sean2077/pairroom/internal/version
 LDFLAGS := -s -w -X '$(VERSION_PKG).Commit=$(COMMIT)' -X '$(VERSION_PKG).BuildDate=$(BUILD_DATE)'
+GOEXE ?= $(shell go env GOEXE)
+GOBIN ?= $(shell go env GOBIN)
+ifeq ($(strip $(GOBIN)),)
+GOBIN := $(shell go env GOPATH)/bin
+endif
 
-.PHONY: build test race vet fmt check agent-contract release-contract cover run demo smoke release package clean
+.PHONY: build install test race vet fmt check agent-contract release-contract cover run demo smoke release package clean
 
 build:
 	mkdir -p $(DIST)
 	go build -buildvcs=false -trimpath -ldflags="$(LDFLAGS)" -o $(DIST)/pairroom ./cmd/pairroom
+
+install:
+	GOBIN="$(GOBIN)" go install -buildvcs=false -trimpath -ldflags="$(LDFLAGS)" ./cmd/pairroom
+	@printf 'Installed PairRoom %s to %s\n' "$(VERSION)" "$(GOBIN)/pairroom$(GOEXE)"
+	@if command -v pairroom >/dev/null 2>&1; then \
+		printf 'PATH resolves pairroom to %s\n' "$$(command -v pairroom)"; \
+	else \
+		printf 'Note: %s is not currently discoverable as pairroom on PATH.\n' "$(GOBIN)"; \
+	fi
 
 test:
 	go test -count=1 ./...

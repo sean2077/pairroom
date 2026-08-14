@@ -247,18 +247,50 @@ pairroom doctor --repo /path/to/project --json
 
 `doctor` 不创建供应商会话，也不读取仓库内容。
 
-### 4. 启动真实单 Room Pair
+### 4. 构建与安装
+
+构建仓库内的单文件二进制，不修改系统 PATH：
+
+```bash
+make build
+./dist/pairroom service
+```
+
+安装为可从任意目录调用的 `pairroom` 命令：
+
+```bash
+make install
+pairroom version
+pairroom service
+```
+
+`make install` 使用 Go 的标准安装目录：优先使用显式 `GOBIN`，否则使用 `$(go env GOPATH)/bin`。它不会修改 PATH；安装结束会打印二进制位置和当前 shell 对 `pairroom` 的解析结果。若默认目录不在 PATH，可将该目录加入 PATH，或直接指定一个已在 PATH 中且当前用户可写的目录：
+
+```bash
+make install GOBIN="$HOME/.local/bin"
+```
+
+项目 Makefile 使用 POSIX shell。Windows PowerShell 中应显式通过 Git for Windows 的 Bash 调用；默认通常安装到 `$HOME\go\bin\pairroom.exe`：
+
+```powershell
+& 'C:\Program Files\Git\bin\bash.exe' -lc 'make install'
+Get-Command pairroom
+pairroom service
+```
+
+如果当前 PowerShell 尚未包含 Go bin，可仅为当前窗口添加：
+
+```powershell
+$env:Path += ";$(go env GOPATH)\bin"
+```
+
+### 5. 启动真实单 Room Pair
 
 ```bash
 go run ./cmd/pairroom serve --repo /path/to/project
 ```
 
-或构建单文件二进制：
-
-```bash
-make build
-./dist/pairroom serve --repo /path/to/project
-```
+安装后也可以直接运行 `pairroom serve --repo /path/to/project`。
 
 Windows PowerShell：
 

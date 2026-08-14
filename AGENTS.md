@@ -8,6 +8,7 @@ PairRoom is a local Go coordination layer for the official Claude Code and Codex
 
 - `make check` runs unit, race, vet, format, JavaScript syntax, dependency, Agent-projection, release-contract, and whitespace checks.
 - `make smoke` runs the deterministic Mock collaboration, media, backup, restore, and diagnostics flow.
+- `make install` installs the current source to `GOBIN`, defaulting to `GOPATH/bin`; it reports PATH visibility but never edits PATH.
 - `make cover` records diagnostic package coverage; coverage is not a release percentage gate.
 - `make release` requires a clean tree and builds/verifies the complete local release payload. It does not publish or create a tag.
 - The installed `agent-scaffold` skill's `verify --profile default --json` mode is the authoritative full harness check.
