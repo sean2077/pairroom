@@ -27,10 +27,12 @@ type rpcReply struct {
 }
 
 type pendingApproval struct {
-	rawID    json.RawMessage
-	method   string
-	params   json.RawMessage
-	approval model.Approval
+	rawID         json.RawMessage
+	method        string
+	params        json.RawMessage
+	approval      model.Approval
+	turnID        string
+	correlationID string
 }
 
 type CodexAdapter struct {
@@ -212,6 +214,8 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	c.mu.Lock()
 	existingThread := c.threadID
 	c.mu.Unlock()
+	requiredThread := existingThread
+	strictResume := c.cfg.RequireExactSession && requiredThread != ""
 	var result json.RawMessage
 	if existingThread != "" {
 		result, err = c.call(handshakeCtx, "thread/resume", map[string]any{
@@ -219,14 +223,17 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 			"cwd":      c.cfg.Repo,
 		})
 		if err != nil {
+			if strictResume {
+				_ = c.Stop(context.Background())
+				return fmt.Errorf("resume required Codex thread %q: %w", requiredThread, err)
+			}
 			logEvent := runtimeEvent(model.ActorCodex, model.RuntimeLog)
 			logEvent.Name = "thread.resume"
 			logEvent.Text = "resume failed; creating a new Codex thread: " + err.Error()
 			c.sink(logEvent)
 			existingThread = ""
-			// The collaboration protocol may already have been sent to the old
-			// thread. A replacement thread has no such context, so make the next
-			// user turn include it again.
+			// The legacy single-Room command retains its historical replacement
+			// behavior. Service runtimes fail closed above instead.
 			c.mu.Lock()
 			c.protocolSent = false
 			c.mu.Unlock()
@@ -250,6 +257,10 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 			err = errors.New("missing thread id")
 		}
 		return fmt.Errorf("decode codex thread: %w", err)
+	}
+	if strictResume && threadResult.Thread.ID != requiredThread {
+		_ = c.Stop(context.Background())
+		return fmt.Errorf("Codex resumed thread %q instead of required thread %q", threadResult.Thread.ID, requiredThread)
 	}
 	c.mu.Lock()
 	c.threadID = threadResult.Thread.ID
@@ -728,13 +739,45 @@ func (c *CodexAdapter) handleServerRequest(rawID json.RawMessage, method string,
 		ID: displayID, Agent: model.ActorCodex, Kind: method, Title: title,
 		Detail: append(json.RawMessage(nil), params...), Status: "pending", RequestedAt: time.Now().UTC(),
 	}
+	var requestContext struct {
+		TurnID string `json:"turnId"`
+	}
+	_ = json.Unmarshal(params, &requestContext)
 	c.mu.Lock()
+	turnID := strings.TrimSpace(requestContext.TurnID)
+	if turnID == "" {
+		turnID = c.currentTurn
+	}
+	input := c.latestTurnInputLocked(turnID)
+	if input.MessageID == "" && c.startingInput != nil {
+		input = *c.startingInput
+	}
+	correlationID := input.MessageID
+	if c.cfg.RequireExactSession && correlationID == "" {
+		c.mu.Unlock()
+		// A resumed vendor thread may surface a request from work that predates
+		// the Room binding. Fail it closed instead of presenting historical
+		// transcript state as a new PairRoom approval or leaving the Runtime stuck.
+		declined, resultErr := codexApprovalResult(pendingApproval{method: method, params: params}, "decline")
+		if resultErr != nil {
+			_ = c.sendRawResponse(rawID, nil, &codexRPCError{Code: -32602, Message: "PairRoom rejected an unbound approval request"})
+		} else {
+			_ = c.sendRawResponse(rawID, declined, nil)
+		}
+		e := runtimeEvent(model.ActorCodex, model.RuntimeError)
+		e.Text = "Codex emitted an approval request outside a PairRoom-authored turn"
+		c.sink(e)
+		return
+	}
 	c.approvals[displayID] = pendingApproval{
 		rawID: append(json.RawMessage(nil), rawID...), method: method,
 		params: append(json.RawMessage(nil), params...), approval: approval,
+		turnID: turnID, correlationID: correlationID,
 	}
 	c.mu.Unlock()
 	e := runtimeEvent(model.ActorCodex, model.RuntimeApprovalRequested)
+	e.TurnID = turnID
+	e.CorrelationID = correlationID
 	e.Approval = &approval
 	e.Data = append(json.RawMessage(nil), params...)
 	c.sink(e)
@@ -863,6 +906,13 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 
 	case "thread/tokenUsage/updated":
 		e := runtimeEvent(model.ActorCodex, model.RuntimeUsageUpdated)
+		c.mu.Lock()
+		e.TurnID = c.currentTurn
+		e.CorrelationID = c.latestTurnInputLocked(c.currentTurn).MessageID
+		if e.CorrelationID == "" && c.startingInput != nil {
+			e.CorrelationID = c.startingInput.MessageID
+		}
+		c.mu.Unlock()
 		e.Data = append(json.RawMessage(nil), params...)
 		c.sink(e)
 
@@ -918,6 +968,7 @@ func (c *CodexAdapter) handleServerRequestResolved(params json.RawMessage) {
 	}
 	canonical := strings.TrimSpace(string(payload.RequestID))
 	var cleared *model.Approval
+	var turnID, correlationID string
 	c.mu.Lock()
 	for id, pending := range c.approvals {
 		if strings.TrimSpace(string(pending.rawID)) != canonical {
@@ -929,12 +980,16 @@ func (c *CodexAdapter) handleServerRequestResolved(params json.RawMessage) {
 		approval.Decision = "cleared"
 		approval.ResolvedAt = &now
 		cleared = &approval
+		turnID = pending.turnID
+		correlationID = pending.correlationID
 		delete(c.approvals, id)
 		break
 	}
 	c.mu.Unlock()
 	if cleared != nil {
 		e := runtimeEvent(model.ActorCodex, model.RuntimeApprovalResolved)
+		e.TurnID = turnID
+		e.CorrelationID = correlationID
 		e.Approval = cleared
 		e.Data = append(json.RawMessage(nil), params...)
 		c.sink(e)

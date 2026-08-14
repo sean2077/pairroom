@@ -56,3 +56,11 @@ func TestMockStopCancelsActiveAndQueuedInputs(t *testing.T) {
 		t.Fatalf("stop did not settle every input: %#v", events)
 	}
 }
+
+func TestMockPreservesConfiguredSessionID(t *testing.T) {
+	const sessionID = "durable-room-session"
+	adapter := NewMock(Config{Actor: model.ActorClaude, SessionID: sessionID}, func(model.RuntimeEvent) {})
+	if got := adapter.SessionID(); got != sessionID {
+		t.Fatalf("SessionID()=%q, want %q", got, sessionID)
+	}
+}

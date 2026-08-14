@@ -164,16 +164,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	if flags["--verbose"] {
 		args = append(args, "--verbose")
 	}
-	for _, optional := range []string{
-		"--include-partial-messages",
-		"--replay-user-messages",
-		"--forward-subagent-text",
-		"--include-hook-events",
-	} {
-		if flags[optional] {
-			args = append(args, optional)
-		}
-	}
+	args = appendClaudeStreamFlags(args, flags, c.cfg.RequireExactSession)
 	if flags["--append-system-prompt-file"] {
 		promptPath, err := c.ensurePromptFile(systemPrompt)
 		if err != nil {
@@ -221,13 +212,21 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	}
 
 	c.mu.Lock()
+	expectedSession := c.sessionID
+	strictResume := c.cfg.RequireExactSession && c.resume && expectedSession != ""
 	if c.resume && flags["--resume"] {
 		args = append(args, "--resume="+c.sessionID)
 	} else if !c.resume && flags["--session-id"] {
 		args = append(args, "--session-id="+c.sessionID)
 	} else if c.resume && !flags["--resume"] {
-		// A legacy CLI cannot reopen the previous native session. Start a fresh
-		// session and replace the durable ID when the init event arrives.
+		if strictResume {
+			c.mu.Unlock()
+			err := fmt.Errorf("Claude Code cannot resume required session %q because this CLI does not expose --resume", expectedSession)
+			c.setState(model.StateError, err.Error())
+			return err
+		}
+		// The legacy single-Room command retains its historical fallback. Service
+		// runtimes set RequireExactSession and therefore fail closed above.
 		c.sessionID = newUUID()
 		c.resume = false
 	}
@@ -290,11 +289,41 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 		return errors.New(detail)
 	}
 
+	if strictResume {
+		actualSession := c.SessionID()
+		if actualSession != expectedSession {
+			_ = c.Stop(context.Background())
+			err := fmt.Errorf("Claude Code resumed session %q instead of required session %q", actualSession, expectedSession)
+			c.setState(model.StateError, err.Error())
+			return err
+		}
+	}
 	c.setState(model.StateIdle, "")
 	session := runtimeEvent(model.ActorClaude, model.RuntimeSession)
 	session.SessionID = c.SessionID()
 	c.sink(session)
 	return nil
+}
+
+func appendClaudeStreamFlags(args []string, flags map[string]bool, strictResume bool) []string {
+	for _, optional := range []string{
+		"--include-partial-messages",
+		"--replay-user-messages",
+		"--forward-subagent-text",
+		"--include-hook-events",
+	} {
+		// Service-owned Rooms restore the vendor context but deliberately do not
+		// import or expose messages that predate the PairRoom binding boundary.
+		// Claude's replay flag would stream those prior user messages back into
+		// the adapter, so it is never enabled for an exact durable binding.
+		if optional == "--replay-user-messages" && strictResume {
+			continue
+		}
+		if flags[optional] {
+			args = append(args, optional)
+		}
+	}
+	return args
 }
 
 func (c *ClaudeAdapter) ensurePromptFile(content string) (string, error) {
@@ -894,6 +923,16 @@ func (c *ClaudeAdapter) handleControlRequest(line []byte, pending claudePending,
 		e.Name = "control_request.unsupported"
 		e.Text = envelope.Request.Subtype
 		e.Data = append(json.RawMessage(nil), line...)
+		c.sink(e)
+		return
+	}
+	if c.cfg.RequireExactSession && !hasPending {
+		// Resuming a vendor session may surface a control request created before
+		// the PairRoom binding. It is outside the Room transcript boundary, so it
+		// must neither become a visible approval nor leave this Runtime waiting.
+		_ = c.writeControlError(envelope.RequestID, "PairRoom rejected a control request outside a Room-authored turn")
+		e := runtimeEvent(model.ActorClaude, model.RuntimeError)
+		e.Text = "Claude emitted a control request outside a PairRoom-authored turn"
 		c.sink(e)
 		return
 	}

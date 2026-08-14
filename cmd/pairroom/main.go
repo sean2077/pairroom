@@ -28,6 +28,7 @@ import (
 	"github.com/sean2077/pairroom/internal/openbrowser"
 	"github.com/sean2077/pairroom/internal/room"
 	"github.com/sean2077/pairroom/internal/server"
+	"github.com/sean2077/pairroom/internal/service"
 	"github.com/sean2077/pairroom/internal/store"
 	"github.com/sean2077/pairroom/internal/version"
 	"github.com/sean2077/pairroom/internal/workspace"
@@ -46,6 +47,8 @@ func run(args []string) error {
 		return nil
 	}
 	switch args[0] {
+	case "service":
+		return runService(args[1:])
 	case "serve":
 		return runServe(args[1:])
 	case "doctor":
@@ -88,6 +91,165 @@ func runVersion(args []string) error {
 	}
 	fmt.Println("pairroom", version.Current)
 	return nil
+}
+
+// runService starts the process-wide Management Shell. Room runtimes are
+// activated lazily and remain isolated behind their own loopback listeners.
+// The legacy single-Room `serve` command is deliberately preserved below.
+func runService(args []string) (resultErr error) {
+	configPath := preparseValue(args, "--config")
+	fileCfg, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+	flags := flag.NewFlagSet("pairroom service", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	configFlag := flags.String("config", configPath, "JSON configuration file")
+	listenFlag := flags.String("listen", fileCfg.Listen, "Management Shell listen address (loopback only)")
+	rootFlag := flags.String("data-root", "", "absolute service data root (default: OS user config directory/pairroom)")
+	tokenFlag := flags.String("token", fileCfg.Token, "Management API bearer token (generated when omitted)")
+	limitFlag := flags.Int("runtime-limit", 2, "maximum simultaneously active Room runtimes")
+	idleFlag := flags.Duration("idle-timeout", 15*time.Minute, "suspend an idle Room runtime after this duration")
+	shutdownFlag := flags.Duration("shutdown-timeout", 10*time.Minute, "maximum graceful-shutdown wait for active Turns")
+	recoverLockFlag := flags.Bool("recover-stale-lock", false, "explicitly replace a crash-stale service.lock after verifying no service is running")
+	mockFlag := flags.Bool("mock", false, "run deterministic mock agents instead of vendor CLIs")
+	noBrowserFlag := flags.Bool("no-browser", false, "do not open the Management Shell in a browser")
+	autoStartFlag := flags.Bool("auto-start", fileCfg.AutoStart, "start both agents when a Room runtime activates")
+	routingFlag := flags.String("routing", string(fileCfg.RoutingMode), "manual, mentions, or roundtable")
+	maxHopsFlag := flags.Int("max-hops", fileCfg.MaxAgentHops, "maximum automatic agent hops per Room")
+	stallWarningFlag := flags.Int("stall-warning-seconds", fileCfg.StallWarningSeconds, "warn when a working agent emits no runtime event; -1 disables")
+	claudeCommand := flags.String("claude-command", fileCfg.Claude.Command, "Claude Code executable")
+	claudeModel := flags.String("claude-model", fileCfg.Claude.Model, "Claude model override")
+	claudePermission := flags.String("claude-permission-mode", fileCfg.Claude.PermissionMode, "Claude permission mode")
+	codexCommand := flags.String("codex-command", fileCfg.Codex.Command, "Codex executable")
+	codexModel := flags.String("codex-model", fileCfg.Codex.Model, "Codex model override")
+	codexEffort := flags.String("codex-effort", fileCfg.Codex.Effort, "Codex reasoning effort")
+	codexApproval := flags.String("codex-approval-policy", fileCfg.Codex.ApprovalPolicy, "Codex approval policy")
+	codexSandbox := flags.String("codex-sandbox", fileCfg.Codex.Sandbox, "Codex sandbox mode")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	_ = configFlag
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	if !isLoopbackListen(*listenFlag) {
+		return errors.New("pairroom service must listen on loopback; use the single-Room serve command behind a trusted tunnel for remote access")
+	}
+	if *limitFlag < 1 || *limitFlag > 128 {
+		return errors.New("runtime-limit must be between 1 and 128")
+	}
+	if *idleFlag <= 0 {
+		return errors.New("idle-timeout must be greater than zero")
+	}
+	if *shutdownFlag <= 0 {
+		return errors.New("shutdown-timeout must be greater than zero")
+	}
+	routing := model.RoutingMode(*routingFlag)
+	if !routing.Valid() {
+		return fmt.Errorf("invalid routing mode %q", routing)
+	}
+	if *maxHopsFlag < 1 || *maxHopsFlag > 30 {
+		return errors.New("max-hops must be between 1 and 30")
+	}
+	if *stallWarningFlag != -1 && (*stallWarningFlag < 30 || *stallWarningFlag > 86400) {
+		return errors.New("stall-warning-seconds must be -1 or between 30 and 86400")
+	}
+
+	rootCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	serviceLock, err := service.AcquireServiceLock(*rootFlag, *recoverLockFlag)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, serviceLock.Close())
+	}()
+	registry, err := service.OpenRegistry(rootCtx, service.RegistryConfig{Root: serviceLock.Root()})
+	if err != nil {
+		return err
+	}
+	claudeCfg := agent.Config{
+		ClientVersion: version.Current, Command: *claudeCommand, Model: *claudeModel,
+		PermissionMode: *claudePermission,
+	}
+	codexCfg := agent.Config{
+		ClientVersion: version.Current, Command: *codexCommand, Model: *codexModel,
+		Effort: *codexEffort, ApprovalPolicy: *codexApproval, Sandbox: *codexSandbox,
+	}
+	var provisioner service.BindingProvisioner = service.NewNativeProvisioner(service.NativeProvisionerConfig{
+		Claude: claudeCfg, Codex: codexCfg,
+	})
+	if *mockFlag {
+		provisioner = service.SyntheticProvisioner{}
+	}
+	factory := service.EmbeddedRuntimeFactory(registry, service.EmbeddedRuntimeConfig{
+		ListenHost: "127.0.0.1", Mock: *mockFlag, AutoStart: *autoStartFlag,
+		RoutingMode: routing, MaxAgentHops: *maxHopsFlag, StallWarningSeconds: *stallWarningFlag,
+		Claude: claudeCfg, Codex: codexCfg,
+	})
+	runtimes, err := service.NewRuntimeManager(registry, factory, service.RuntimeManagerConfig{
+		Limit: *limitFlag, IdleTimeout: *idleFlag,
+	})
+	if err != nil {
+		return err
+	}
+	management, err := service.NewManagementServer(service.ManagementServerConfig{
+		Registry: registry, Runtimes: runtimes, Provisioner: provisioner, Token: *tokenFlag,
+	})
+	if err != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = runtimes.Shutdown(shutdownCtx)
+		return err
+	}
+	listener, err := net.Listen("tcp", *listenFlag)
+	if err != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = runtimes.Shutdown(shutdownCtx)
+		return fmt.Errorf("listen for Management Shell: %w", err)
+	}
+	managementURL := management.BrowserURL(listener.Addr())
+	fmt.Printf("PairRoom Service %s\n", version.Current)
+	fmt.Printf("  management: %s\n", managementURL)
+	fmt.Printf("  data root:  %s\n", registry.Root())
+	fmt.Printf("  runtimes:   %d active maximum, idle timeout %s\n", *limitFlag, idleFlag.String())
+	if *mockFlag {
+		fmt.Println("  mode:       mock")
+	} else {
+		fmt.Println("  mode:       native Claude Code + Codex")
+	}
+
+	serverErrors := make(chan error, 1)
+	go func() { serverErrors <- management.Serve(listener) }()
+	if !*noBrowserFlag {
+		go func() {
+			time.Sleep(180 * time.Millisecond)
+			if err := openbrowser.Open(managementURL); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+		}()
+	}
+
+	var serveErr error
+	select {
+	case <-rootCtx.Done():
+	case serveErr = <-serverErrors:
+	}
+	// Shutdown is deliberately ordered: stop accepting management requests and
+	// wait for in-flight provisioning/lifecycle handlers first, then drain Room
+	// runtimes without interrupting active native Turns.
+	managementCtx, cancelManagement := context.WithTimeout(context.Background(), *shutdownFlag)
+	managementErr := management.Shutdown(managementCtx)
+	cancelManagement()
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), *shutdownFlag)
+	shutdownErr := runtimes.Shutdown(shutdownCtx)
+	cancelShutdown()
+	return errors.Join(serveErr, managementErr, shutdownErr)
 }
 
 func runServe(args []string) error {
@@ -677,10 +839,11 @@ func firstLine(value string) string {
 }
 
 func printHelp() {
-	fmt.Print(`PairRoom — native Claude Code + Codex collaboration room
+	fmt.Print(`PairRoom — native Claude Code + Codex collaboration service
 
 Usage:
-  pairroom serve [options]   Start the local daemon and IM-style web room
+  pairroom service [options]     Start the multi-Project, multi-Room Management Shell
+  pairroom serve [options]       Start the legacy single-Room daemon and Room View
   pairroom doctor [options]      Verify Git and vendor CLI installations
   pairroom verify [options]      Strictly verify room data integrity
   pairroom backup [options]      Create a verified room-data backup
@@ -689,9 +852,11 @@ Usage:
   pairroom version               Print version
 
 Quick start:
+  pairroom service
+  pairroom service --mock
   pairroom serve --repo /path/to/project
-  pairroom serve --repo . --mock
 
-Run "pairroom serve -help" for runtime and routing options.
+Run "pairroom service -help" for service-capacity and runtime options.
+Run "pairroom serve -help" for legacy single-Room options.
 `)
 }

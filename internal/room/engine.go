@@ -30,7 +30,9 @@ const (
 	EventParticipantsBatch  = "participants.batch.updated"
 	EventTurnSummaryUpdated = "turn.summary.updated"
 
-	recentEventLimit = 600
+	eventServiceRoomRenamed       = "service.room.renamed"
+	eventServiceBindingsCompleted = "service.room.bindings.completed"
+	recentEventLimit              = 600
 )
 
 type Config struct {
@@ -64,6 +66,20 @@ type WorkspaceManager interface {
 type participantBatch struct {
 	Reason       string                      `json:"reason"`
 	Participants []model.ParticipantSnapshot `json:"participants"`
+}
+
+type serviceRoomRenamedProjection struct {
+	Name string `json:"name"`
+}
+
+type serviceBindingProjection struct {
+	Agent     model.ActorID `json:"agent"`
+	SessionID string        `json:"session_id"`
+	Pending   bool          `json:"pending"`
+}
+
+type serviceBindingsCompletedProjection struct {
+	Bindings map[model.ActorID]serviceBindingProjection `json:"bindings"`
 }
 
 type SendRequest struct {
@@ -350,13 +366,17 @@ func (e *Engine) Start(parent context.Context) error {
 	claudeCfg.Repo = boundaries[model.ActorClaude].Path
 	claudeCfg.DataDir = e.cfg.Store.Dir()
 	claudeCfg.RoomName = roomName
-	claudeCfg.SessionID = claudeParticipant.SessionID
+	if !claudeCfg.RequireExactSession || strings.TrimSpace(claudeCfg.SessionID) == "" {
+		claudeCfg.SessionID = claudeParticipant.SessionID
+	}
 	codexCfg := e.cfg.CodexConfig
 	codexCfg.Actor = model.ActorCodex
 	codexCfg.Repo = boundaries[model.ActorCodex].Path
 	codexCfg.DataDir = e.cfg.Store.Dir()
 	codexCfg.RoomName = roomName
-	codexCfg.SessionID = codexParticipant.SessionID
+	if !codexCfg.RequireExactSession || strings.TrimSpace(codexCfg.SessionID) == "" {
+		codexCfg.SessionID = codexParticipant.SessionID
+	}
 
 	e.mu.Lock()
 	if e.closed {
@@ -1093,13 +1113,21 @@ func (e *Engine) Close() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	var result error
 	for _, adapter := range adapters {
-		_ = adapter.Stop(ctx)
+		if err := adapter.Stop(ctx); err != nil {
+			result = errors.Join(result, fmt.Errorf("stop %s adapter: %w", adapter.Actor(), err))
+		}
 	}
 	if e.cfg.Workspaces != nil {
-		_ = e.cfg.Workspaces.Cleanup(ctx)
+		if err := e.cfg.Workspaces.Cleanup(ctx); err != nil {
+			result = errors.Join(result, fmt.Errorf("clean up Room workspaces: %w", err))
+		}
 	}
-	return e.cfg.Store.Close()
+	if err := e.cfg.Store.Close(); err != nil {
+		result = errors.Join(result, fmt.Errorf("close Room event store: %w", err))
+	}
+	return result
 }
 
 func (e *Engine) adapter(actor model.ActorID) (agent.Adapter, error) {
@@ -1920,6 +1948,37 @@ func (e *Engine) applyLocked(event model.Event) error {
 	case EventRoomCreated:
 		if err := json.Unmarshal(event.Data, &e.snapshot.Meta); err != nil {
 			return err
+		}
+	case eventServiceRoomRenamed:
+		var update serviceRoomRenamedProjection
+		if err := json.Unmarshal(event.Data, &update); err != nil {
+			return err
+		}
+		update.Name = strings.TrimSpace(update.Name)
+		if update.Name == "" {
+			return errors.New("service Room rename has an empty name")
+		}
+		e.snapshot.Meta.Name = update.Name
+	case eventServiceBindingsCompleted:
+		var update serviceBindingsCompletedProjection
+		if err := json.Unmarshal(event.Data, &update); err != nil {
+			return err
+		}
+		if e.snapshot.Participants == nil {
+			e.snapshot.Participants = make(map[model.ActorID]model.ParticipantSnapshot, 2)
+		}
+		for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+			binding, ok := update.Bindings[actor]
+			if !ok || binding.Pending || binding.Agent != actor || strings.TrimSpace(binding.SessionID) == "" {
+				return fmt.Errorf("service binding completion has an invalid %s binding", actor)
+			}
+			participant := e.snapshot.Participants[actor]
+			participant.ID = actor
+			if participant.DisplayName == "" {
+				participant.DisplayName = actor.DisplayName()
+			}
+			participant.SessionID = strings.TrimSpace(binding.SessionID)
+			e.snapshot.Participants[actor] = participant
 		}
 	case EventSettingsUpdated:
 		if err := json.Unmarshal(event.Data, &e.snapshot.Settings); err != nil {

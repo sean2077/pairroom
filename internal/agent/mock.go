@@ -32,7 +32,12 @@ func NewMock(cfg Config, sink EventSink) *MockAdapter {
 }
 
 func (m *MockAdapter) Actor() model.ActorID { return m.cfg.Actor }
-func (m *MockAdapter) SessionID() string    { return "mock-" + string(m.cfg.Actor) }
+func (m *MockAdapter) SessionID() string {
+	if sessionID := strings.TrimSpace(m.cfg.SessionID); sessionID != "" {
+		return sessionID
+	}
+	return "mock-" + string(m.cfg.Actor)
+}
 
 func (m *MockAdapter) State() model.AgentState {
 	m.mu.Lock()

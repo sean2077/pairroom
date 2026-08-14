@@ -28,6 +28,7 @@ type fakeAdapter struct {
 	role         model.ParticipantRole
 	workspace    string
 	interrupts   int
+	stopErr      error
 }
 
 func (f *fakeAdapter) Actor() model.ActorID { return f.actor }
@@ -76,8 +77,9 @@ func (f *fakeAdapter) Interrupt(context.Context) error {
 func (f *fakeAdapter) Stop(context.Context) error {
 	f.mu.Lock()
 	f.state = model.StateStopped
+	err := f.stopErr
 	f.mu.Unlock()
-	return nil
+	return err
 }
 func (f *fakeAdapter) ResolveApproval(context.Context, string, model.ApprovalResolution) error {
 	return agent.ErrApprovalUnsupported
@@ -1022,5 +1024,192 @@ func TestWindowedSnapshotAndMessagesPage(t *testing.T) {
 	}
 	if oldest.Messages[0].Text != "message-00" || oldest.Messages[2].Text != "message-02" {
 		t.Fatalf("unexpected oldest page messages: %#v", oldest.Messages)
+	}
+}
+
+func TestServiceMetadataEventsProjectIntoRestoredRoom(t *testing.T) {
+	dir := t.TempDir()
+	repo := t.TempDir()
+	eventStore, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := New(Config{
+		Name: "Before rename", Repo: repo, Store: eventStore,
+		Settings: model.DefaultRoomSettings(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	roomID := created.Snapshot().Meta.ID
+	if err := created.Close(); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+
+	appendStore, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendEvent := func(kind string, payload any) {
+		t.Helper()
+		event, err := model.NewEvent(roomID, kind, model.ActorSystem, payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := appendStore.Append(&event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendEvent(eventServiceRoomRenamed, serviceRoomRenamedProjection{Name: "After rename"})
+	appendEvent(eventServiceBindingsCompleted, serviceBindingsCompletedProjection{Bindings: map[model.ActorID]serviceBindingProjection{
+		model.ActorClaude: {Agent: model.ActorClaude, SessionID: "claude-service-session"},
+		model.ActorCodex:  {Agent: model.ActorCodex, SessionID: "codex-service-thread"},
+	}})
+	if err := appendStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopenedStore, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(Config{
+		Name: "ignored", Repo: repo, Store: reopenedStore,
+		Settings: model.DefaultRoomSettings(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	snapshot := reopened.Snapshot()
+	if snapshot.Meta.Name != "After rename" {
+		t.Fatalf("restored Room name=%q", snapshot.Meta.Name)
+	}
+	if got := snapshot.Participants[model.ActorClaude].SessionID; got != "claude-service-session" {
+		t.Fatalf("restored Claude session=%q", got)
+	}
+	if got := snapshot.Participants[model.ActorCodex].SessionID; got != "codex-service-thread" {
+		t.Fatalf("restored Codex thread=%q", got)
+	}
+}
+
+func TestStrictServiceBindingOverridesLegacyParticipantSessionAtAdapterBoundary(t *testing.T) {
+	dir := t.TempDir()
+	repo := t.TempDir()
+	eventStore, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, err := New(Config{
+		Name: "strict binding", Repo: repo, Store: eventStore,
+		Settings: model.DefaultRoomSettings(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeSession,
+		SessionID: "stale-legacy-claude", CreatedAt: time.Now().UTC(),
+	})
+	seed.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorCodex, Kind: model.RuntimeSession,
+		SessionID: "stale-legacy-codex", CreatedAt: time.Now().UTC(),
+	})
+	if err := seed.Close(); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+
+	reopenedStore, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapters := make(map[model.ActorID]*fakeAdapter)
+	factory := func(cfg agent.Config, sink agent.EventSink) agent.Adapter {
+		adapter := &fakeAdapter{
+			actor: cfg.Actor, sink: sink, state: model.StateStopped,
+			sessionID: cfg.SessionID, submissions: make(chan model.AgentInput, 16),
+		}
+		adapters[cfg.Actor] = adapter
+		return adapter
+	}
+	engine, err := New(Config{
+		Name: "ignored", Repo: repo, Store: reopenedStore,
+		Settings:      model.DefaultRoomSettings(),
+		ClaudeFactory: factory, CodexFactory: factory,
+		ClaudeConfig: agent.Config{SessionID: "durable-service-claude", RequireExactSession: true},
+		CodexConfig:  agent.Config{SessionID: "durable-service-codex", RequireExactSession: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := adapters[model.ActorClaude].SessionID(); got != "durable-service-claude" {
+		t.Fatalf("Claude adapter session=%q", got)
+	}
+	if got := adapters[model.ActorCodex].SessionID(); got != "durable-service-codex" {
+		t.Fatalf("Codex adapter session=%q", got)
+	}
+}
+
+type closeErrorWorkspace struct {
+	err error
+}
+
+func (w *closeErrorWorkspace) DriverBoundary() model.WorkspaceBoundary {
+	return model.WorkspaceBoundary{}
+}
+
+func (w *closeErrorWorkspace) Refresh(context.Context) (model.WorkspaceBoundary, error) {
+	return model.WorkspaceBoundary{}, nil
+}
+
+func (w *closeErrorWorkspace) Cleanup(context.Context) error { return w.err }
+
+func TestEngineCloseReportsAllResourceErrors(t *testing.T) {
+	eventStore, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopClaude := errors.New("claude stop failed")
+	stopCodex := errors.New("codex stop failed")
+	cleanup := errors.New("workspace cleanup failed")
+	adapters := map[model.ActorID]*fakeAdapter{}
+	factory := func(cfg agent.Config, sink agent.EventSink) agent.Adapter {
+		adapter := &fakeAdapter{
+			actor: cfg.Actor, sink: sink, state: model.StateStopped,
+			sessionID: cfg.SessionID, submissions: make(chan model.AgentInput, 1),
+		}
+		switch cfg.Actor {
+		case model.ActorClaude:
+			adapter.stopErr = stopClaude
+		case model.ActorCodex:
+			adapter.stopErr = stopCodex
+		}
+		adapters[cfg.Actor] = adapter
+		return adapter
+	}
+	engine, err := New(Config{
+		Name: "close-errors", Repo: t.TempDir(), Store: eventStore, Hub: bus.New(8),
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingMentions, MaxHops: 2},
+		ClaudeFactory: factory, CodexFactory: factory,
+		Workspaces: &closeErrorWorkspace{err: cleanup},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	closeErr := engine.Close()
+	for _, expected := range []error{stopClaude, stopCodex, cleanup} {
+		if !errors.Is(closeErr, expected) {
+			t.Fatalf("Close() error %v does not contain %v", closeErr, expected)
+		}
+	}
+	if err := engine.Close(); err != nil {
+		t.Fatalf("second Close() must be idempotent, got %v", err)
 	}
 }

@@ -11,20 +11,21 @@ import (
 type EventSink func(model.RuntimeEvent)
 
 type Config struct {
-	Actor          model.ActorID
-	Repo           string
-	DataDir        string
-	RoomName       string
-	ClientVersion  string
-	Command        string
-	Model          string
-	Effort         string
-	PermissionMode string
-	ApprovalPolicy string
-	Sandbox        string
-	SessionID      string
-	SystemPrompt   string
-	MockDelay      time.Duration
+	Actor               model.ActorID
+	Repo                string
+	DataDir             string
+	RoomName            string
+	ClientVersion       string
+	Command             string
+	Model               string
+	Effort              string
+	PermissionMode      string
+	ApprovalPolicy      string
+	Sandbox             string
+	SessionID           string
+	RequireExactSession bool
+	SystemPrompt        string
+	MockDelay           time.Duration
 }
 
 type Adapter interface {
