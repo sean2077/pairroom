@@ -6,7 +6,7 @@ PairRoom 是一个面向 **Claude Code + Codex** 的本地三方协作房间：�
 
 当前版本：**v1.0.0**
 
-> **1.0 稳定边界：**一个本地 daemon、一个 Git 仓库、一个用户、一个官方 Claude Code、一个官方 Codex。PairRoom 提供三方 IM、介入、Reviewer 快照、过程审计、备份恢复和浏览器安全，但不重写两套 Agent Harness。
+> **服务边界：**推荐入口 `pairroom service` 是与启动目录无关的本地常驻控制面，可登记多个 canonical Git worktree、在每个 Project 下管理多个 Room，并按容量惰性启动 Room Runtime。兼容入口 `pairroom serve --repo ...` 仍保留原有单 Room 使用方式；两种模式都继续使用官方 Claude Code 与 Codex Harness。
 
 ## 核心目标
 
@@ -193,9 +193,31 @@ fragment 不会随 HTTP 请求或 Referer 发送，交换成功后立即从地�
 
 ## 快速开始
 
-### 1. Mock 模式
+### 1. 启动多 Project / 多 Room Service
 
-不需要安装或登录任何 Agent：
+从任意工作目录启动同一个本地控制面：
+
+```bash
+go run ./cmd/pairroom service
+```
+
+Management Shell 中显式输入 Git worktree 的绝对路径登记 Project，再为 Project 创建 Room。Claude 与 Codex 的 Binding 可分别选择新建或恢复已有 Session/Thread；Room 切换不会中断后台 Turn。默认最多同时激活 2 个 Room Runtime，空闲 15 分钟后挂起：
+
+```bash
+pairroom service --runtime-limit 4 --idle-timeout 20m
+```
+
+不安装或登录 Agent 时可先验证完整管理流程：
+
+```bash
+pairroom service --mock
+```
+
+Service 仅监听 loopback，启动 URL 中的 token 位于 fragment，Management Shell 不把 token 写入 Web Storage。详细拓扑、数据恢复与迁移规则见 [`docs/MULTI_ROOM_SERVICE.md`](docs/MULTI_ROOM_SERVICE.md)。
+
+### 2. 单 Room Mock 兼容模式
+
+原有 `serve` 入口继续可用：
 
 ```bash
 go run ./cmd/pairroom serve --repo . --mock
@@ -203,7 +225,7 @@ go run ./cmd/pairroom serve --repo . --mock
 
 浏览器会打开 `http://127.0.0.1:7332`。Mock Agent 会模拟三方讨论、接力、运行过程和完成状态。
 
-### 2. 检查真实环境
+### 3. 检查真实环境
 
 ```bash
 go run ./cmd/pairroom doctor --repo /path/to/project
@@ -225,7 +247,7 @@ pairroom doctor --repo /path/to/project --json
 
 `doctor` 不创建供应商会话，也不读取仓库内容。
 
-### 3. 启动真实 Pair
+### 4. 启动真实单 Room Pair
 
 ```bash
 go run ./cmd/pairroom serve --repo /path/to/project
@@ -368,7 +390,21 @@ Agent 可在最终回复末尾使用：
 
 ## 数据目录与导出
 
-默认状态目录按仓库绝对路径计算，位于用户配置目录：
+Service 模式默认使用操作系统用户配置目录下的 `pairroom` 作为稳定数据根，与进程启动目录无关：
+
+```text
+pairroom/
+├── service.lock
+├── service-registry.json       # 可删除并从 Room Event Logs 重建的索引
+└── rooms/
+    └── <room-id>/
+        ├── events.jsonl         # Room 事实源
+        ├── metadata.json
+        ├── attachments/
+        └── runtime/
+```
+
+旧 `serve` 模式的默认状态目录仍按仓库绝对路径计算：
 
 ```text
 pairroom/rooms/<repo-name>-<path-hash>/
@@ -407,7 +443,7 @@ pairroom diagnostics --repo . --output pairroom-diagnostics.tar.gz
 
 ## 当前边界
 
-- 一个 daemon 当前承载一个房间和一个仓库。
+- `pairroom service` 管理多个 Project/Room；`pairroom serve` 仍是单仓库、单 Room 的兼容快捷入口。
 - Driver 使用用户的 live working tree；Reviewer 默认使用包含 dirty/untracked 状态的独立 Git 快照。POSIX 还会施加只读位，Windows 明确显示较弱边界；这仍不是容器或 OS mount 级隔离。
 - 网页展示结构化过程，不嵌入供应商完整终端 TUI。
 - 远程 Markdown 图片默认不加载；需要先作为本地附件上传。
@@ -435,6 +471,7 @@ git diff --check
 
 ## 文档
 
+- [多 Project / 多 Room Service](docs/MULTI_ROOM_SERVICE.md)
 - [架构设计](docs/ARCHITECTURE.md)
 - [房间与运行时协议](docs/PROTOCOL.md)
 - [富对话与图片设计](docs/RICH_CONVERSATION.md)
