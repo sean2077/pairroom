@@ -996,6 +996,25 @@ func TestServiceLockExcludesConcurrentOwnersAndReleasesSafely(t *testing.T) {
 	}
 }
 
+func TestRecoverServiceLockRemovesOnlyTheSelectedRootLock(t *testing.T) {
+	root := t.TempDir()
+	other := t.TempDir()
+	for _, dir := range []string{root, other} {
+		if err := os.WriteFile(filepath.Join(dir, "service.lock"), []byte("stale\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := RecoverServiceLock(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "service.lock")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("selected lock still exists: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(other, "service.lock")); err != nil {
+		t.Fatalf("unselected lock changed: %v", err)
+	}
+}
+
 func TestFailedLegacyImportLeavesNoPartialProjectOrBindingReservation(t *testing.T) {
 	registry, project := testRegistry(t, testGitRepo(t))
 	owned, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{

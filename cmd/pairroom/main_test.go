@@ -3,7 +3,7 @@ package main
 import "testing"
 
 func TestSubcommandHelpReturnsSuccess(t *testing.T) {
-	for _, args := range [][]string{{"service", "--help"}, {"serve", "--help"}, {"doctor", "--help"}, {"verify", "--help"}, {"backup", "--help"}, {"restore", "--help"}, {"diagnostics", "--help"}, {"help"}, {"--help"}} {
+	for _, args := range [][]string{{"daemon", "--help"}, {"daemon", "install", "--help"}, {"daemon", "logs", "--help"}, {"service", "--help"}, {"serve", "--help"}, {"doctor", "--help"}, {"verify", "--help"}, {"backup", "--help"}, {"restore", "--help"}, {"diagnostics", "--help"}, {"help"}, {"--help"}} {
 		if err := run(args); err != nil {
 			t.Fatalf("run(%q) returned %v", args, err)
 		}
