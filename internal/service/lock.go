@@ -61,10 +61,7 @@ func AcquireServiceLock(input string, recoverStale bool) (*ServiceLock, error) {
 	}
 	path := filepath.Join(root, "service.lock")
 	if recoverStale {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("remove explicitly recovered service lock: %w", err)
-		}
-		if err := syncDir(root); err != nil {
+		if err := RecoverServiceLock(root); err != nil {
 			return nil, err
 		}
 	}
@@ -115,6 +112,27 @@ func AcquireServiceLock(input string, recoverStale bool) (*ServiceLock, error) {
 	}
 	cleanup = false
 	return &ServiceLock{root: root, path: path, nonce: metadata.Nonce}, nil
+}
+
+// RecoverServiceLock removes one explicitly authorized crash-stale lock. The
+// caller is responsible for first verifying that no Service process owns the
+// selected data root; normal startup never invokes this path implicitly.
+func RecoverServiceLock(input string) error {
+	root, err := ResolveRoot(input)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(root, "service.lock")
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("remove explicitly recovered service lock: %w", err)
+	}
+	if err := syncDir(root); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (l *ServiceLock) Root() string {

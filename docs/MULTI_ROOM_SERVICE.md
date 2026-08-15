@@ -23,6 +23,20 @@ Service 只接受 loopback 监听地址。未提供 `--token` 时会生成随机
 
 `--mock` 使用确定性 Mock Agent，可在没有供应商登录的机器上验证 Project、Room、队列、归档和恢复流程。真实模式继续调用用户本机官方 `claude` 与 `codex app-server`，不接管供应商凭据、Session Store 或 Transcript。
 
+### 后台安装
+
+`pairroom daemon` 将同一个 `pairroom service` 控制面安装到操作系统服务管理器：Linux 使用 systemd、macOS 使用 launchd、Windows 使用当前用户的 Task Scheduler。安装命令会固定绝对二进制路径、工作目录、日志位置、当前 PATH、代理环境变量和传给 Service 的参数，并自动禁用浏览器启动。应用内日志默认在 10 MiB 时轮转，保留 `service.log.1` 到 `service.log.3`；可用 `--log-max-size` 和 `--log-max-backups` 调整。
+
+```bash
+pairroom daemon install --runtime-limit 4 --idle-timeout 20m
+pairroom daemon status
+pairroom daemon logs -f
+pairroom daemon restart
+pairroom daemon uninstall
+```
+
+daemon 的正常 stop/restart 继续遵守本页的关闭顺序；Windows 通过用户配置目录中的控制文件请求 Service 自行排空，而不是直接终止进程。异常崩溃留下的 `service.lock` 不会自动删除；确认原进程已经退出后，使用 `pairroom daemon start --recover-stale-lock` 或 `pairroom daemon restart --recover-stale-lock` 明确授权恢复。
+
 ## Project Identity
 
 Management Shell 只接受用户显式输入的绝对路径。服务端按以下顺序处理：

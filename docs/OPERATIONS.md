@@ -1,8 +1,8 @@
-# PairRoom 1.0 Operations Guide
+# PairRoom Operations Guide
 
 ## 1. Stable deployment boundary
 
-PairRoom 1.0 is a single-user local daemon for one Git repository. The recommended deployment is:
+PairRoom is a single-user local coordination service. The recommended deployment uses the multi-Project/multi-Room control plane:
 
 ```text
 Browser on the same machine
@@ -10,6 +10,7 @@ Browser on the same machine
 127.0.0.1:7332
         │
 PairRoom daemon
+        ├── Project / Room runtimes
         ├── official claude CLI
         └── official codex app-server
 ```
@@ -27,17 +28,32 @@ Complete official Claude Code and Codex login in their own CLIs before starting 
 
 ## 3. Start and stop
 
-```bash
-pairroom serve --repo /path/to/repository
-```
-
-For a deterministic local demonstration:
+Run the control plane in the foreground:
 
 ```bash
-pairroom serve --repo /path/to/repository --mock
+pairroom service
 ```
 
-Use SIGINT/SIGTERM or the terminal interrupt command for graceful shutdown. A later start retains the transcript and native session/thread IDs, while unfinished processing and approvals are explicitly settled rather than displayed as permanently active.
+Install the same control plane as an operating-system-managed background service:
+
+```bash
+pairroom daemon install --runtime-limit 4 --idle-timeout 20m
+pairroom daemon status
+pairroom daemon logs -f
+pairroom daemon stop
+pairroom daemon start
+```
+
+Linux uses systemd, macOS uses launchd, and Windows uses the current user's Task Scheduler. `daemon install` forwards Service options, stores absolute paths, captures PATH and proxy variables, disables browser launch, and combines stdout/stderr in the configured log. Logs rotate at 10 MiB with three backups by default; use `--log-max-size` and `--log-max-backups` to change the policy. Use `--force` only to replace an existing service definition.
+
+For a deterministic local demonstration, either run the foreground Service or install it with `--mock`:
+
+```bash
+pairroom service --mock
+pairroom daemon install --mock
+```
+
+Use SIGINT/SIGTERM for a foreground process or `pairroom daemon stop` for an installed service. Both paths stop accepting management work, wait for active Turns, close Room runtimes, and release `service.lock`. If a crash leaves the lock behind, verify that the old process is gone before running `pairroom daemon start --recover-stale-lock`; recovery is never automatic.
 
 ## 4. Remote access
 
@@ -49,16 +65,18 @@ ssh -L 7332:127.0.0.1:7332 host-running-pairroom
 
 Then open `http://127.0.0.1:7332` locally. When binding PairRoom to a non-loopback address, it automatically generates a Bearer bootstrap token when one is not configured. The browser exchanges the URL-fragment bootstrap token for a short-lived HttpOnly session. Network traffic remains plaintext unless protected by the tunnel or a trusted TLS proxy.
 
-## 5. Room data
+## 5. Service and Room data
 
-The default data directory is derived from the canonical repository path under the user configuration directory. It contains:
+The default Service data root is the operating-system user configuration directory under `pairroom`. It contains the rebuildable Service registry plus one durable directory per Room:
 
 ```text
-events.jsonl            append-only room history
-metadata.json           format and schema metadata
-attachments/            immutable message images
-runtime/                prompts and ephemeral runtime state
-reviewer worktree       disposable isolated review snapshot
+service.lock                 exclusive Service owner
+service-registry.json        rebuildable Project/Room index
+daemon.json                 non-secret daemon metadata
+logs/service.log            combined daemon output
+rooms/<room-id>/events.jsonl append-only Room history
+rooms/<room-id>/attachments/ immutable message images
+rooms/<room-id>/runtime/     prompts and ephemeral runtime state
 ```
 
 Treat the whole room directory as sensitive project data.
@@ -102,14 +120,14 @@ Diagnostics contain structure, counts, event headers, build/platform information
 
 ## 8. Upgrade and rollback
 
-1. Stop PairRoom.
+1. Stop PairRoom with `pairroom daemon stop` or the foreground terminal interrupt.
 2. Run `verify`.
 3. Create a backup.
 4. Install the new binary.
 5. Run `version --json` and `doctor`.
 6. Open the room with `--auto-start=false` first.
 7. Inspect history, roles, workspace boundaries, and pending state.
-8. Start the Agents.
+8. Start the Agents, then restart the installed service with `pairroom daemon start` when applicable.
 
 Do not alternate old and new binaries against the same data directory. Restore the pre-upgrade backup into a separate path for rollback.
 

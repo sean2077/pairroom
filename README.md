@@ -284,7 +284,34 @@ pairroom service
 $env:Path += ";$(go env GOPATH)\bin"
 ```
 
-### 5. 启动真实单 Room Pair
+### 5. 安装后台 Service
+
+安装完成后，可将多 Project / 多 Room 控制面注册到操作系统服务管理器并立即启动：
+
+```bash
+pairroom daemon install --runtime-limit 4 --idle-timeout 20m
+pairroom daemon status
+pairroom daemon logs -f
+```
+
+`daemon install` 会把未识别的安装参数转交给 `pairroom service`，并强制加入 `--no-browser`。daemon 自身参数包括 `--binary`、`--work-dir`、`--log-file`、`--log-max-size`、`--log-max-backups` 和 `--force`；日志默认在 10 MiB 时轮转并保留 3 个备份。若需要消除歧义，可在 Service 参数前加 `--`：
+
+```bash
+pairroom daemon install --log-file /var/log/pairroom.log -- --config /absolute/path/pairroom.json --runtime-limit 4
+```
+
+Linux 使用 systemd（非 root 为 user unit，root 为 system unit），macOS 使用 launchd LaunchAgent，Windows 使用当前用户的 Task Scheduler task。安装时会固定当前 `PATH` 和代理环境变量，使后台进程能够找到官方 `claude` 与 `codex` CLI。服务定义可能包含 `--token` 或带认证信息的代理地址，因此以仅安装用户可读的权限写入。
+
+```bash
+pairroom daemon stop
+pairroom daemon start
+pairroom daemon restart
+pairroom daemon uninstall
+```
+
+正常停止会等待活动 Turn 排空。若进程或机器异常退出并遗留 `service.lock`，先确认旧进程已经消失，再显式执行 `pairroom daemon start --recover-stale-lock` 或 `pairroom daemon restart --recover-stale-lock`；普通启动不会猜测锁是否失效。
+
+### 6. 启动真实单 Room Pair
 
 ```bash
 go run ./cmd/pairroom serve --repo /path/to/project
@@ -476,6 +503,7 @@ pairroom diagnostics --repo . --output pairroom-diagnostics.tar.gz
 ## 当前边界
 
 - `pairroom service` 管理多个 Project/Room；`pairroom serve` 仍是单仓库、单 Room 的兼容快捷入口。
+- `pairroom daemon` 仅负责把 `pairroom service` 投射到操作系统服务管理器，不替换 Service、Room Runtime 或供应商 Harness 的生命周期边界。
 - Driver 使用用户的 live working tree；Reviewer 默认使用包含 dirty/untracked 状态的独立 Git 快照。POSIX 还会施加只读位，Windows 明确显示较弱边界；这仍不是容器或 OS mount 级隔离。
 - 网页展示结构化过程，不嵌入供应商完整终端 TUI。
 - 远程 Markdown 图片默认不加载；需要先作为本地附件上传。

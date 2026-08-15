@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Cross-platform `pairroom daemon install|uninstall|start|stop|restart|status|logs` management for the multi-Project/multi-Room Service via systemd, launchd, and Windows Task Scheduler, including bounded log rotation, graceful Windows shutdown control, manager-aligned drain timeouts, and explicit crash-stale lock recovery.
+
 ## [v1.0.0] — 2026-08-14
 
 ### Added

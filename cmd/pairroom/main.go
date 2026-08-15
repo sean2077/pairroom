@@ -24,6 +24,7 @@ import (
 	"github.com/sean2077/pairroom/internal/archive"
 	"github.com/sean2077/pairroom/internal/attachment"
 	"github.com/sean2077/pairroom/internal/config"
+	"github.com/sean2077/pairroom/internal/daemon"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/openbrowser"
 	"github.com/sean2077/pairroom/internal/room"
@@ -35,8 +36,20 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "pairroom:", err)
+	cleanupLogging, err := daemon.ConfigureProcessLoggingFromEnvironment()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "pairroom: configure daemon logging:", err)
+		os.Exit(1)
+	}
+	runErr := run(os.Args[1:])
+	if runErr != nil {
+		fmt.Fprintln(os.Stderr, "pairroom:", runErr)
+	}
+	loggingErr := cleanupLogging()
+	if loggingErr != nil {
+		fmt.Fprintln(os.Stderr, "pairroom: close daemon logging:", loggingErr)
+	}
+	if runErr != nil || loggingErr != nil {
 		os.Exit(1)
 	}
 }
@@ -47,6 +60,8 @@ func run(args []string) error {
 		return nil
 	}
 	switch args[0] {
+	case "daemon":
+		return runDaemon(args[1:])
 	case "service":
 		return runService(args[1:])
 	case "serve":
@@ -112,6 +127,7 @@ func runService(args []string) (resultErr error) {
 	idleFlag := flags.Duration("idle-timeout", 15*time.Minute, "suspend an idle Room runtime after this duration")
 	shutdownFlag := flags.Duration("shutdown-timeout", 10*time.Minute, "maximum graceful-shutdown wait for active Turns")
 	recoverLockFlag := flags.Bool("recover-stale-lock", false, "explicitly replace a crash-stale service.lock after verifying no service is running")
+	daemonControlFlag := flags.String("daemon-control-file", "", "internal daemon graceful-shutdown control file")
 	mockFlag := flags.Bool("mock", false, "run deterministic mock agents instead of vendor CLIs")
 	noBrowserFlag := flags.Bool("no-browser", false, "do not open the Management Shell in a browser")
 	autoStartFlag := flags.Bool("auto-start", fileCfg.AutoStart, "start both agents when a Room runtime activates")
@@ -148,6 +164,9 @@ func runService(args []string) (resultErr error) {
 	if *shutdownFlag <= 0 {
 		return errors.New("shutdown-timeout must be greater than zero")
 	}
+	if *daemonControlFlag != "" && !filepath.IsAbs(*daemonControlFlag) {
+		return errors.New("daemon-control-file must be absolute")
+	}
 	routing := model.RoutingMode(*routingFlag)
 	if !routing.Valid() {
 		return fmt.Errorf("invalid routing mode %q", routing)
@@ -159,8 +178,17 @@ func runService(args []string) (resultErr error) {
 		return errors.New("stall-warning-seconds must be -1 or between 30 and 86400")
 	}
 
-	rootCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
+	rootCtx, stopRoot := context.WithCancel(signalCtx)
+	defer stopRoot()
+	if *daemonControlFlag != "" {
+		controlPath := filepath.Clean(*daemonControlFlag)
+		if err := os.Remove(controlPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("clear daemon control file: %w", err)
+		}
+		go watchDaemonControlFile(rootCtx, controlPath, stopRoot)
+	}
 	serviceLock, err := service.AcquireServiceLock(*rootFlag, *recoverLockFlag)
 	if err != nil {
 		return err
@@ -250,6 +278,22 @@ func runService(args []string) (resultErr error) {
 	shutdownErr := runtimes.Shutdown(shutdownCtx)
 	cancelShutdown()
 	return errors.Join(serveErr, managementErr, shutdownErr)
+}
+
+func watchDaemonControlFile(ctx context.Context, path string, stop context.CancelFunc) {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := os.Stat(path); err == nil {
+				stop()
+				return
+			}
+		}
+	}
 }
 
 func runServe(args []string) error {
@@ -842,6 +886,7 @@ func printHelp() {
 	fmt.Print(`PairRoom — native Claude Code + Codex collaboration service
 
 Usage:
+  pairroom daemon <command>      Install and manage pairroom service in the OS service manager
   pairroom service [options]     Start the multi-Project, multi-Room Management Shell
   pairroom serve [options]       Start the legacy single-Room daemon and Room View
   pairroom doctor [options]      Verify Git and vendor CLI installations
@@ -853,10 +898,12 @@ Usage:
 
 Quick start:
   pairroom service
+  pairroom daemon install
   pairroom service --mock
   pairroom serve --repo /path/to/project
 
 Run "pairroom service -help" for service-capacity and runtime options.
+Run "pairroom daemon -help" for background service management.
 Run "pairroom serve -help" for legacy single-Room options.
 `)
 }
