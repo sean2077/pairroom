@@ -17,6 +17,7 @@ PairRoom is a local Go coordination layer for the official Claude Code and Codex
 
 - Keep the Go module dependency-free beyond the standard library; `go list -m all` must contain only this module.
 - Preserve the append-only event log and fail-closed archive, attachment, authentication, workspace, and high-privilege request boundaries described in `docs/ARCHITECTURE.md` and `docs/PROTOCOL.md`.
+- Keep every built-in Web listener restricted to numeric loopback addresses; reject wildcard, LAN, and hostname binds before opening repository or service state, and use SSH local port forwarding for remote access.
 - `pairroom service` is the current-working-directory-independent multi-Project/multi-Room control plane; `pairroom serve` remains the legacy single-Room compatibility entry point.
 - `pairroom daemon` installs and manages `pairroom service` through systemd, launchd, or Windows Task Scheduler; normal stop/restart must preserve graceful active-Turn draining, and crash-stale `service.lock` recovery remains explicit.
 - Treat each Room Event Log as durable fact and `service-registry.json` as a rebuildable index; a `new` binding acquires global `(agent, vendor_session_id)` ownership only when its first accepted native Turn atomically materializes that identity, while `existing` bindings always resume exactly. Preserve the transcript-boundary and active-Turn non-preemption guarantees described in `docs/MULTI_ROOM_SERVICE.md`.

@@ -20,8 +20,9 @@ PairRoom 同时保存敏感讨论、运行事件和用户图片，因此威胁�
 ### Network
 
 - 默认绑定 `127.0.0.1:7332`；
-- 非 loopback 绑定且未提供 Token 时自动生成 Bearer Token；
-- 非 loopback 启动 URL 只在 fragment 中携带一次性启动凭据，fragment 不随 HTTP 请求或 Referer 发送；
+- `pairroom service`、`pairroom serve` 及其 Room Runtime 只接受数字 loopback 地址，通配地址、局域网地址、主机名和 `localhost` 会在打开 repository 或 service state 前被拒绝；
+- Service Management API 和 Room Runtime 自动生成 Bearer Token；`serve` 可显式配置 Token 作为 loopback 纵深防护；
+- 启动 URL 只在 fragment 中携带一次性启动凭据，fragment 不随 HTTP 请求或 Referer 发送；
 - 浏览器将启动凭据交换成 12 小时滑动过期的 `HttpOnly`、`SameSite=Strict` Session Cookie；
 - 浏览器写操作要求每会话 CSRF Token，Token 不进入 URL 查询、`sessionStorage` 或 `localStorage`；
 - query token 不授权任何 API；命令行 API 客户端继续使用 Authorization Header；
@@ -68,7 +69,7 @@ PairRoom 同时保存敏感讨论、运行事件和用户图片，因此威胁�
 
 ### No built-in TLS
 
-不要直接暴露到公网。远程访问应使用可信 SSH tunnel/VPN，或置于受控 TLS reverse proxy 后。Bearer Token 不能防止明文网络监听。
+PairRoom 没有内置 TLS 或远程 listener，并会拒绝直接绑定局域网或公网地址。远程访问只使用 SSH 本地端口转发到服务端 loopback listener；Bearer Token 不能替代传输加密。
 
 ### Local room data is sensitive
 
@@ -116,7 +117,7 @@ PairRoom 不自动加载远程 Markdown 图片，但普通 `https` 链接可由�
 4. 从保守 vendor permission/sandbox 开始；
 5. 仔细查看审批中的命令、路径和权限范围；
 6. 图片发送前确认不含不应上传给供应商的数据；
-7. 保持 listener 在 loopback；
+7. 保持 listener 使用数字 loopback 地址，远程访问只使用 SSH 本地端口转发；
 8. 升级 Claude/Codex 后运行 `pairroom doctor` 和非关键仓库 smoke test；
 9. 按项目敏感度备份或删除整个 room data directory；
 10. 对强隔离需求使用容器/VM/独立 checkout，而不是只依赖 UI role。

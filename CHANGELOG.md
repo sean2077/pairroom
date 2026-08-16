@@ -21,6 +21,7 @@
 ### Fixed
 
 - Windows Task Scheduler installations now launch the background Service through windowless Windows Script Host, preserve forwarded arguments and graceful shutdown control, and clean up legacy PowerShell launchers during reinstall or uninstall.
+- All built-in Web listeners now reject wildcard, LAN, and hostname binds before opening repository or service state, closing the legacy `pairroom serve` LAN-exposure path.
 
 ### Documentation
 

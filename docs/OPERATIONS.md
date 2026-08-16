@@ -57,13 +57,13 @@ Use SIGINT/SIGTERM for a foreground process or `pairroom daemon stop` for an ins
 
 ## 4. Remote access
 
-Prefer an SSH tunnel or VPN:
+PairRoom rejects wildcard, LAN, public, and hostname listener addresses. Forward a local port over SSH to the server-side loopback listener:
 
 ```bash
 ssh -L 7332:127.0.0.1:7332 host-running-pairroom
 ```
 
-Then open `http://127.0.0.1:7332` locally. When binding PairRoom to a non-loopback address, it automatically generates a Bearer bootstrap token when one is not configured. The browser exchanges the URL-fragment bootstrap token for a short-lived HttpOnly session. Network traffic remains plaintext unless protected by the tunnel or a trusted TLS proxy.
+Then open `http://127.0.0.1:7332` locally. Do not change PairRoom's listener to `0.0.0.0`, a LAN address, or a hostname; both `service` and `serve` reject those values. The browser exchanges any URL-fragment bootstrap token for a short-lived HttpOnly session, while SSH protects the remote transport.
 
 ## 5. Service and Room data
 
