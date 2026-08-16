@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -160,5 +162,66 @@ func TestPrintLastLogLines(t *testing.T) {
 	}
 	if output.String() != "two\nthree\n" {
 		t.Fatalf("unexpected tail: %q", output.String())
+	}
+}
+
+func TestDaemonOpenUsesAuthenticatedLoopbackURLFromRotatedLog(t *testing.T) {
+	root := t.TempDir()
+	setDaemonTestConfigDir(t, filepath.Join(root, "config"))
+	management := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/service" || r.Header.Get("Authorization") != "Bearer live-secret" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"healthy":true}`))
+	}))
+	defer management.Close()
+
+	logFile := filepath.Join(root, "service.log")
+	if err := os.WriteFile(logFile, []byte("management: https://example.com/#token=forged\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	liveURL := management.URL + "/#token=live-secret"
+	rotated := "management: http://127.0.0.1:1/#token=stale\nmanagement: " + liveURL + "\n"
+	if err := os.WriteFile(logFile+".1", []byte(rotated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := daemon.SaveMeta(&daemon.Meta{LogFile: logFile, LogBackups: 2}); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := &fakeDaemonManager{status: daemon.Status{Installed: true, Running: true}}
+	originalManager := newDaemonManager
+	originalOpen := openManagementBrowser
+	t.Cleanup(func() {
+		newDaemonManager = originalManager
+		openManagementBrowser = originalOpen
+	})
+	newDaemonManager = func() (daemon.Manager, error) { return manager, nil }
+	var opened string
+	openManagementBrowser = func(value string) error {
+		opened = value
+		return nil
+	}
+	if err := daemonOpen(nil); err != nil {
+		t.Fatal(err)
+	}
+	if opened != liveURL {
+		t.Fatalf("opened URL=%q, want %q", opened, liveURL)
+	}
+}
+
+func TestParseManagementAccessRejectsUnsafeOrTokenlessURLs(t *testing.T) {
+	for _, value := range []string{
+		"https://127.0.0.1:7332/#token=secret",
+		"http://example.com:7332/#token=secret",
+		"http://127.0.0.1:7332/",
+		"http://127.0.0.1:7332/?token=secret",
+		"http://127.0.0.1:7332/#token=one&token=two",
+	} {
+		if _, err := parseManagementAccess(value); err == nil {
+			t.Fatalf("unsafe Management URL was accepted: %q", value)
+		}
 	}
 }

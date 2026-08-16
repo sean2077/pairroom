@@ -21,6 +21,7 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/room"
 	"github.com/sean2077/pairroom/internal/version"
+	"github.com/sean2077/pairroom/internal/websession"
 )
 
 //go:embed assets/*
@@ -39,15 +40,14 @@ type Config struct {
 }
 
 type Server struct {
-	engine     *room.Engine
-	repo       string
-	token      string
-	media      *attachment.Store
-	boundary   string
-	cookieName string
-	sessions   *sessionStore
-	limiter    *rateLimiter
-	http       *http.Server
+	engine   *room.Engine
+	repo     string
+	token    string
+	media    *attachment.Store
+	boundary string
+	sessions *websession.Store
+	limiter  *rateLimiter
+	http     *http.Server
 }
 
 func New(cfg Config) (*Server, error) {
@@ -62,13 +62,14 @@ func New(cfg Config) (*Server, error) {
 	if cookieName == "" {
 		cookieName = browserSessionCookie
 	}
-	if err := (&http.Cookie{Name: cookieName, Value: "session"}).Valid(); err != nil {
-		return nil, fmt.Errorf("invalid browser session cookie name %q: %w", cookieName, err)
+	sessions, err := websession.New(cookieName)
+	if err != nil {
+		return nil, err
 	}
 	s := &Server{
 		engine: cfg.Engine, repo: cfg.Repo, token: cfg.Token, media: cfg.Attachments,
-		boundary: cfg.TranscriptBoundaryNotice, cookieName: cookieName,
-		sessions: newSessionStore(), limiter: newRateLimiter(),
+		boundary: cfg.TranscriptBoundaryNotice,
+		sessions: sessions, limiter: newRateLimiter(),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/session", s.createBrowserSession)
@@ -127,14 +128,13 @@ func (s *Server) createBrowserSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "a bearer bootstrap token is required")
 		return
 	}
-	value, err := s.sessions.create()
+	value, err := s.sessions.Create(w, r)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "create browser session: "+err.Error())
 		return
 	}
-	setBrowserSessionCookie(w, r, s.cookieName, value)
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"required": true, "csrf_token": value.CSRF,
+		"required": true, "csrf_token": value.CSRFToken,
 		"created_at": value.CreatedAt, "expires_at": value.ExpiresAt,
 	})
 }
@@ -150,18 +150,14 @@ func (s *Server) readBrowserSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"required": true, "mode": "bearer"})
 		return
 	}
-	setBrowserSessionCookie(w, r, s.cookieName, auth.Session)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"required": true, "csrf_token": auth.Session.CSRF,
+		"required": true, "csrf_token": auth.Session.CSRFToken,
 		"created_at": auth.Session.CreatedAt, "expires_at": auth.Session.ExpiresAt,
 	})
 }
 
 func (s *Server) deleteBrowserSession(w http.ResponseWriter, r *http.Request) {
-	if cookie, err := r.Cookie(s.cookieName); err == nil {
-		s.sessions.delete(cookie.Value)
-	}
-	clearBrowserSessionCookie(w, r, s.cookieName)
+	s.sessions.Delete(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -633,16 +629,9 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 				return
 			}
 		}
-		if cookie, err := r.Cookie(s.cookieName); err == nil {
-			if value, ok := s.sessions.get(cookie.Value); ok {
-				// Keep the browser cookie and the in-memory sliding expiry aligned.
-				// Without this refresh an actively used room would lose its cookie
-				// at the original creation deadline even though the server session
-				// itself remained alive.
-				setBrowserSessionCookie(w, r, s.cookieName, value)
-				next.ServeHTTP(w, withAuth(r, requestAuth{Mode: authBrowserSession, Session: value}))
-				return
-			}
+		if value, ok := s.sessions.Get(w, r); ok {
+			next.ServeHTTP(w, withAuth(r, requestAuth{Mode: authBrowserSession, Session: value}))
+			return
 		}
 		writeError(w, http.StatusUnauthorized, "PairRoom authentication is required")
 	})
@@ -659,7 +648,7 @@ func (s *Server) csrf(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !constantTimeEqual(strings.TrimSpace(r.Header.Get(csrfHeaderName)), auth.Session.CSRF) {
+		if !auth.Session.ValidCSRF(r.Header.Get(csrfHeaderName)) {
 			writeError(w, http.StatusForbidden, "missing or invalid CSRF token")
 			return
 		}

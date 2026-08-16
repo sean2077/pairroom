@@ -145,11 +145,15 @@ def fixture_html() -> str:
       location.hash = 'token=visual-secret';
       history.replaceState = () => {{}};
       const __snapshot = JSON.parse({json.dumps(snapshot_json)});
+      window.__managementRequests = [];
       window.fetch = async (input, init = {{}}) => {{
         const path = String(input);
         const method = String(init.method || 'GET').toUpperCase();
+        const headers = new Headers(init.headers || {{}});
+        window.__managementRequests.push({{path, method, authorization: headers.get('Authorization'), csrf: headers.get('X-PairRoom-CSRF')}});
         let payload = __snapshot;
-        if (method !== 'GET') {{
+        if (path === '/api/v1/session') payload = {{csrf_token: 'visual-csrf'}};
+        else if (method !== 'GET') {{
           if (path.endsWith('/activate')) payload = {{room_id: path.split('/').at(-2), phase: 'queued', queue_position: 1, busy: false, occupies_capacity: false}};
           else if (path.endsWith('/suspend')) payload = {{room_id: path.split('/').at(-2), phase: 'suspended', busy: false, occupies_capacity: false}};
           else payload = {{ok: true}};
@@ -179,6 +183,9 @@ def run():
         page.set_content(fixture, wait_until="load")
         page.wait_for_selector("text=Auth 重构审查")
         assert page.locator("#connection-banner").is_hidden()
+        requests = page.evaluate("window.__managementRequests")
+        assert requests[0] == {"path": "/api/v1/session", "method": "POST", "authorization": "Bearer visual-secret", "csrf": None}
+        assert any(item["path"] == "/api/v1/service" and item["authorization"] is None for item in requests)
         assert_no_horizontal_overflow(page, "overview-desktop")
         page.screenshot(path=str(SHOTS / "overview-desktop.png"), full_page=True)
 

@@ -213,7 +213,7 @@ pairroom service --runtime-limit 4 --idle-timeout 20m
 pairroom service --mock
 ```
 
-所有内置 Web listener 仅接受数字 loopback 地址，启动 URL 中的 token 位于 fragment，Management Shell 不把 token 写入 Web Storage。详细拓扑、数据恢复与迁移规则见 [`docs/MULTI_ROOM_SERVICE.md`](docs/MULTI_ROOM_SERVICE.md)。
+所有内置 Web listener 仅接受数字 loopback 地址，启动 URL 中的 token 位于 fragment；Management Shell 会将它一次性交换成 HttpOnly、SameSite=Strict 会话 Cookie，写操作使用仅在标签页内存中的 CSRF token，不把凭证写入 Web Storage。详细拓扑、数据恢复与迁移规则见 [`docs/MULTI_ROOM_SERVICE.md`](docs/MULTI_ROOM_SERVICE.md)。
 
 ### 2. 单 Room Mock 兼容模式
 
@@ -290,11 +290,12 @@ $env:Path += ";$(go env GOPATH)\bin"
 
 ```bash
 pairroom daemon install --runtime-limit 4 --idle-timeout 20m
+pairroom daemon open
 pairroom daemon status
 pairroom daemon logs -f
 ```
 
-`daemon install` 会把未识别的安装参数转交给 `pairroom service`，并强制加入 `--no-browser`。daemon 自身参数包括 `--binary`、`--work-dir`、`--log-file`、`--log-max-size`、`--log-max-backups` 和 `--force`；日志默认在 10 MiB 时轮转并保留 3 个备份。若需要消除歧义，可在 Service 参数前加 `--`：
+`daemon install` 会把未识别的安装参数转交给 `pairroom service`，并强制加入 `--no-browser`。使用 `pairroom daemon open` 时，CLI 会从当前和轮转日志中寻找最新 Management URL，只接受数值 loopback 地址，并先用其中的 Bearer token 验证正在运行的 Service，成功后才交给默认浏览器。daemon 自身参数包括 `--binary`、`--work-dir`、`--log-file`、`--log-max-size`、`--log-max-backups` 和 `--force`；日志默认在 10 MiB 时轮转并保留 3 个备份。若需要消除歧义，可在 Service 参数前加 `--`：
 
 ```bash
 pairroom daemon install --log-file /var/log/pairroom.log -- --config /absolute/path/pairroom.json --runtime-limit 4
@@ -306,6 +307,7 @@ Linux 使用 systemd（非 root 为 user unit，root 为 system unit），macOS 
 pairroom daemon stop
 pairroom daemon start
 pairroom daemon restart
+pairroom daemon open
 pairroom daemon uninstall
 ```
 

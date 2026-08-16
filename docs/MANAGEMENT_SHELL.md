@@ -30,7 +30,7 @@ Management Shell 使用 URL hash 进行无服务端路由：
 - search query；
 - 当前路由。
 
-Management Bearer Token 从 URL fragment 读取后立即从地址栏移除，只保留在当前页面内存。Management Shell 不使用 `localStorage` 或 `sessionStorage`，刷新后需要由完整启动 URL 重新 bootstrap。
+Management Bearer Token 从 URL fragment 读取后立即从地址栏移除，并通过 `POST /api/v1/session` 一次性交换成路径限定为 `/api/v1/` 的 HttpOnly、SameSite=Strict 会话 Cookie。CSRF token 只保存在当前标签页内存，Cookie 认证的 mutation 必须同时提供 `X-PairRoom-CSRF`；Management Shell 不使用 `localStorage` 或 `sessionStorage`，同一浏览器中的刷新可恢复会话，Service 重启或会话过期后需重新 bootstrap。
 
 ## 自动刷新
 
@@ -188,10 +188,13 @@ pairroom service --runtime-limit 2 --idle-timeout 15m
 只读运维指引：
 
 ```bash
+pairroom daemon open
 pairroom daemon status
 pairroom daemon logs -f
 pairroom daemon restart
 ```
+
+`daemon open` 从受保护的当前/轮转日志解析 Management URL，只接受包含 bootstrap token 的数值 loopback HTTP 地址，并通过当前 Service 的 `GET /api/v1/service` 验证后才打开默认浏览器。它不会把 token 复制到 daemon metadata。
 
 修改已安装定义时，必须重新提供完整 Service 参数：
 

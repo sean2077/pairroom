@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/version"
+	"github.com/sean2077/pairroom/internal/websession"
 )
 
 //go:embed assets/*
@@ -34,8 +37,23 @@ type ManagementServer struct {
 	runtimes    *RuntimeManager
 	provisioner BindingProvisioner
 	token       string
+	sessions    *websession.Store
 	http        *http.Server
 	roomLocks   sync.Map // map[roomID]*sync.Mutex; Rooms are never permanently deleted
+}
+
+type managementAuthMode uint8
+
+const (
+	managementAuthBearer managementAuthMode = iota + 1
+	managementAuthBrowserSession
+)
+
+type managementAuthContextKey struct{}
+
+type managementRequestAuth struct {
+	Mode    managementAuthMode
+	Session websession.Session
 }
 
 type ServiceSummary struct {
@@ -100,11 +118,18 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	if err != nil {
 		return nil, fmt.Errorf("open Management Shell assets: %w", err)
 	}
+	sessions, err := websession.New(managementSessionCookieName(cfg.Registry.Root()))
+	if err != nil {
+		return nil, err
+	}
 	server := &ManagementServer{
 		registry: cfg.Registry, runtimes: cfg.Runtimes,
-		provisioner: cfg.Provisioner, token: token,
+		provisioner: cfg.Provisioner, token: token, sessions: sessions,
 	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/session", server.createBrowserSession)
+	mux.HandleFunc("GET /api/v1/session", server.readBrowserSession)
+	mux.HandleFunc("DELETE /api/v1/session", server.deleteBrowserSession)
 	mux.HandleFunc("GET /api/v1/service", server.readService)
 	mux.HandleFunc("POST /api/v1/projects", server.registerProject)
 	mux.HandleFunc("POST /api/v1/projects/{project}/rooms", server.provisionRoom)
@@ -117,7 +142,7 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	mux.HandleFunc("POST /api/v1/import", server.importLegacy)
 	mux.Handle("/", http.FileServer(http.FS(assets)))
 	server.http = &http.Server{
-		Handler:           server.securityHeaders(server.sameOrigin(server.authenticate(mux))),
+		Handler:           server.securityHeaders(server.sameOrigin(server.authenticate(server.csrf(mux)))),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       45 * time.Second,
 		IdleTimeout:       90 * time.Second,
@@ -153,6 +178,38 @@ func (s *ManagementServer) Shutdown(ctx context.Context) error {
 
 func (s *ManagementServer) BrowserURL(address net.Addr) string {
 	return roomViewURL(address, s.token)
+}
+
+func (s *ManagementServer) createBrowserSession(w http.ResponseWriter, r *http.Request) {
+	auth := managementAuthFromContext(r.Context())
+	if auth.Mode != managementAuthBearer {
+		writeManagementError(w, http.StatusForbidden, "a bearer bootstrap token is required")
+		return
+	}
+	value, err := s.sessions.Create(w, r)
+	if err != nil {
+		writeManagementError(w, http.StatusInternalServerError, "create browser session: "+err.Error())
+		return
+	}
+	writeManagementJSON(w, http.StatusCreated, map[string]any{
+		"csrf_token": value.CSRFToken, "created_at": value.CreatedAt, "expires_at": value.ExpiresAt,
+	})
+}
+
+func (s *ManagementServer) readBrowserSession(w http.ResponseWriter, r *http.Request) {
+	auth := managementAuthFromContext(r.Context())
+	if auth.Mode != managementAuthBrowserSession {
+		writeManagementJSON(w, http.StatusOK, map[string]string{"mode": "bearer"})
+		return
+	}
+	writeManagementJSON(w, http.StatusOK, map[string]any{
+		"csrf_token": auth.Session.CSRFToken, "created_at": auth.Session.CreatedAt, "expires_at": auth.Session.ExpiresAt,
+	})
+}
+
+func (s *ManagementServer) deleteBrowserSession(w http.ResponseWriter, r *http.Request) {
+	s.sessions.Delete(w, r)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
@@ -396,15 +453,52 @@ func (s *ManagementServer) authenticate(next http.Handler) http.Handler {
 			writeManagementError(w, http.StatusUnauthorized, "query-string tokens are not accepted")
 			return
 		}
-		authorization := r.Header.Get("Authorization")
+		authorization := strings.TrimSpace(r.Header.Get("Authorization"))
 		const prefix = "Bearer "
-		if !strings.HasPrefix(authorization, prefix) || subtle.ConstantTimeCompare([]byte(strings.TrimSpace(strings.TrimPrefix(authorization, prefix))), []byte(s.token)) != 1 {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="PairRoom Service"`)
-			writeManagementError(w, http.StatusUnauthorized, "a valid service bearer token is required")
+		if strings.HasPrefix(authorization, prefix) && subtle.ConstantTimeCompare([]byte(strings.TrimSpace(strings.TrimPrefix(authorization, prefix))), []byte(s.token)) == 1 {
+			next.ServeHTTP(w, withManagementAuth(r, managementRequestAuth{Mode: managementAuthBearer}))
+			return
+		}
+		if value, ok := s.sessions.Get(w, r); ok {
+			next.ServeHTTP(w, withManagementAuth(r, managementRequestAuth{Mode: managementAuthBrowserSession, Session: value}))
+			return
+		}
+		w.Header().Set("WWW-Authenticate", `Bearer realm="PairRoom Service"`)
+		writeManagementError(w, http.StatusUnauthorized, "a valid service bearer token or browser session is required")
+	})
+}
+
+func (s *ManagementServer) csrf(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/") || r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+			next.ServeHTTP(w, r)
+			return
+		}
+		auth := managementAuthFromContext(r.Context())
+		if auth.Mode != managementAuthBrowserSession {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !auth.Session.ValidCSRF(r.Header.Get(websession.CSRFHeaderName)) {
+			writeManagementError(w, http.StatusForbidden, "missing or invalid CSRF token")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func managementAuthFromContext(ctx context.Context) managementRequestAuth {
+	value, _ := ctx.Value(managementAuthContextKey{}).(managementRequestAuth)
+	return value
+}
+
+func withManagementAuth(r *http.Request, value managementRequestAuth) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), managementAuthContextKey{}, value))
+}
+
+func managementSessionCookieName(root string) string {
+	sum := sha256.Sum256([]byte(root))
+	return "pairroom_management_" + hex.EncodeToString(sum[:8])
 }
 
 func (s *ManagementServer) sameOrigin(next http.Handler) http.Handler {

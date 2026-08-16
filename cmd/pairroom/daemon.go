@@ -6,19 +6,25 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/sean2077/pairroom/internal/config"
 	"github.com/sean2077/pairroom/internal/daemon"
+	"github.com/sean2077/pairroom/internal/openbrowser"
 	"github.com/sean2077/pairroom/internal/service"
 )
 
 var newDaemonManager = daemon.NewManager
+var openManagementBrowser = openbrowser.Open
 
 func runDaemon(args []string) error {
 	if len(args) == 0 {
@@ -40,6 +46,8 @@ func runDaemon(args []string) error {
 		return daemonStatus(args[1:])
 	case "logs":
 		return daemonLogs(args[1:])
+	case "open":
+		return daemonOpen(args[1:])
 	case "help", "--help", "-h":
 		printDaemonHelp()
 		return nil
@@ -90,6 +98,7 @@ func daemonInstall(args []string) error {
 	fmt.Printf("  binary:   %s\n", cfg.BinaryPath)
 	fmt.Printf("  log:      %s\n", cfg.LogFile)
 	fmt.Printf("  rotation: %d bytes, %d backups\n", cfg.LogMaxSize, cfg.LogBackups)
+	fmt.Println("  open:     pairroom daemon open")
 	if strings.Contains(manager.Platform(), "user") {
 		if enabled, user := daemon.CheckLinger(); !enabled {
 			fmt.Fprintf(os.Stderr, "warning: systemd linger is disabled; run 'sudo loginctl enable-linger %s' to keep PairRoom running after logout\n", user)
@@ -333,6 +342,7 @@ func daemonStart(args []string) error {
 		return err
 	}
 	fmt.Println("PairRoom daemon started.")
+	fmt.Println("  open: pairroom daemon open")
 	return nil
 }
 
@@ -380,6 +390,7 @@ func daemonRestart(args []string) error {
 		return err
 	}
 	fmt.Println("PairRoom daemon restarted.")
+	fmt.Println("  open: pairroom daemon open")
 	return nil
 }
 
@@ -444,6 +455,9 @@ func daemonStatus(args []string) error {
 	if status.PID > 0 {
 		fmt.Printf("  pid:      %d\n", status.PID)
 	}
+	if status.Running {
+		fmt.Println("  open:     pairroom daemon open")
+	}
 	if meta, err := daemon.LoadMeta(); err == nil {
 		fmt.Printf("  log:      %s\n", meta.LogFile)
 		if meta.LogMaxSize > 0 && meta.LogBackups > 0 {
@@ -495,6 +509,154 @@ func daemonLogs(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return followLog(ctx, os.Stdout, path)
+}
+
+type managementAccess struct {
+	browserURL string
+	apiURL     string
+	token      string
+}
+
+func daemonOpen(args []string) error {
+	if err := noDaemonArgs("open", args); err != nil {
+		return err
+	}
+	_, status, err := installedDaemonManager()
+	if err != nil {
+		return err
+	}
+	if !status.Running {
+		return errors.New("PairRoom daemon is not running; run pairroom daemon start")
+	}
+	meta, err := daemon.LoadMeta()
+	if err != nil {
+		return fmt.Errorf("load daemon metadata: %w", err)
+	}
+	backups := meta.LogBackups
+	if backups < 1 {
+		backups = daemon.DefaultLogMaxBackups
+	}
+	managementURL, err := waitForManagementURL(meta.LogFile, backups, 5*time.Second)
+	if err != nil {
+		return err
+	}
+	if err := openManagementBrowser(managementURL); err != nil {
+		return fmt.Errorf("open Management Shell: %w", err)
+	}
+	fmt.Println("PairRoom Management Shell opened in the default browser.")
+	return nil
+}
+
+func waitForManagementURL(logFile string, backups int, timeout time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	foundCandidate := false
+	for {
+		candidates, err := managementURLCandidates(logFile, backups)
+		if err != nil {
+			return "", err
+		}
+		for _, candidate := range candidates {
+			access, err := parseManagementAccess(candidate)
+			if err != nil {
+				continue
+			}
+			foundCandidate = true
+			if probeManagementAccess(ctx, access) {
+				return access.browserURL, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			if foundCandidate {
+				return "", errors.New("no logged Management Shell address authenticated the running daemon; run pairroom daemon restart")
+			}
+			return "", errors.New("Management Shell address is not available in the daemon log; run pairroom daemon restart")
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func managementURLCandidates(logFile string, backups int) ([]string, error) {
+	seen := make(map[string]struct{})
+	var candidates []string
+	for index := 0; index <= backups; index++ {
+		path := logFile
+		if index > 0 {
+			path = fmt.Sprintf("%s.%d", logFile, index)
+		}
+		data, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read daemon log %s: %w", path, err)
+		}
+		lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+		for lineIndex := len(lines) - 1; lineIndex >= 0; lineIndex-- {
+			line := strings.TrimSpace(lines[lineIndex])
+			if !strings.HasPrefix(line, "management:") {
+				continue
+			}
+			candidate := strings.TrimSpace(strings.TrimPrefix(line, "management:"))
+			if candidate == "" {
+				continue
+			}
+			if _, ok := seen[candidate]; ok {
+				continue
+			}
+			seen[candidate] = struct{}{}
+			candidates = append(candidates, candidate)
+		}
+	}
+	return candidates, nil
+}
+
+func parseManagementAccess(raw string) (managementAccess, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme != "http" || parsed.User != nil || parsed.RawQuery != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return managementAccess{}, errors.New("invalid Management Shell address")
+	}
+	host, port, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		return managementAccess{}, errors.New("invalid Management Shell listener")
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	portNumber, portErr := strconv.Atoi(port)
+	if ip == nil || !ip.IsLoopback() || portErr != nil || portNumber < 1 || portNumber > 65535 {
+		return managementAccess{}, errors.New("Management Shell listener is not numeric loopback")
+	}
+	fragment, err := url.ParseQuery(parsed.Fragment)
+	tokens := fragment["token"]
+	if err != nil || len(fragment) != 1 || len(tokens) != 1 || strings.TrimSpace(tokens[0]) == "" {
+		return managementAccess{}, errors.New("Management Shell address has no bootstrap token")
+	}
+	token := strings.TrimSpace(tokens[0])
+	browser := url.URL{Scheme: "http", Host: parsed.Host, Path: "/"}
+	values := url.Values{}
+	values.Set("token", token)
+	browser.Fragment = values.Encode()
+	api := url.URL{Scheme: "http", Host: parsed.Host, Path: "/api/v1/service"}
+	return managementAccess{browserURL: browser.String(), apiURL: api.String(), token: token}, nil
+}
+
+func probeManagementAccess(ctx context.Context, access managementAccess) bool {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, access.apiURL, nil)
+	if err != nil {
+		return false
+	}
+	request.Header.Set("Authorization", "Bearer "+access.token)
+	client := &http.Client{
+		Transport:     &http.Transport{Proxy: nil, DisableKeepAlives: true},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return false
+	}
+	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+	return response.StatusCode == http.StatusOK
 }
 
 func printLastLogLines(writer io.Writer, path string, count int) error {
@@ -582,6 +744,7 @@ Commands:
   restart     Gracefully restart the installed service
   status      Show installation and process state
   logs        Show or follow daemon output
+  open        Validate and open the current Management Shell
 
 Install options:
   --binary PATH       PairRoom executable to install (default: current executable)

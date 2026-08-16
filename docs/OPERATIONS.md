@@ -38,13 +38,14 @@ Install the same control plane as an operating-system-managed background service
 
 ```bash
 pairroom daemon install --runtime-limit 4 --idle-timeout 20m
+pairroom daemon open
 pairroom daemon status
 pairroom daemon logs -f
 pairroom daemon stop
 pairroom daemon start
 ```
 
-Linux uses systemd, macOS uses launchd, and Windows uses the current user's Task Scheduler. `daemon install` forwards Service options, stores absolute paths, captures PATH and proxy variables, disables browser launch, and combines stdout/stderr in the configured log. Logs rotate at 10 MiB with three backups by default; use `--log-max-size` and `--log-max-backups` to change the policy. Use `--force` only to replace an existing service definition.
+Linux uses systemd, macOS uses launchd, and Windows uses the current user's Task Scheduler. `daemon install` forwards Service options, stores absolute paths, captures PATH and proxy variables, disables browser launch, and combines stdout/stderr in the configured log. `daemon open` reads the protected current and rotated logs, accepts only numeric-loopback Management URLs, authenticates the live Service, and then opens the system browser. Logs rotate at 10 MiB with three backups by default; use `--log-max-size` and `--log-max-backups` to change the policy. Use `--force` only to replace an existing service definition.
 
 For a deterministic local demonstration, either run the foreground Service or install it with `--mock`:
 
@@ -63,7 +64,7 @@ PairRoom rejects wildcard, LAN, public, and hostname listener addresses. Forward
 ssh -L 7332:127.0.0.1:7332 host-running-pairroom
 ```
 
-Then open `http://127.0.0.1:7332` locally. Do not change PairRoom's listener to `0.0.0.0`, a LAN address, or a hostname; both `service` and `serve` reject those values. The browser exchanges any URL-fragment bootstrap token for a short-lived HttpOnly session, while SSH protects the remote transport.
+Then open the complete startup URL, including its `#token=...` fragment, through the forwarded `http://127.0.0.1:7332` origin. For a daemon on the remote host, obtain the latest `management:` line with `pairroom daemon logs` and retain the fragment while replacing only the origin when the local forwarded port differs. Do not change PairRoom's listener to `0.0.0.0`, a LAN address, or a hostname; both `service` and `serve` reject those values. The browser exchanges the URL-fragment bootstrap token for a short-lived HttpOnly session, while SSH protects the remote transport.
 
 ## 5. Service and Room data
 
@@ -133,7 +134,7 @@ Do not alternate old and new binaries against the same data directory. Restore t
 
 ## 9. Failure response
 
-- **Browser says unauthorized:** reopen the complete startup URL to exchange a fresh browser session.
+- **Browser says unauthorized:** run `pairroom daemon open` for an installed daemon, or reopen the foreground Service's complete startup URL to exchange a fresh browser session.
 - **Agent appears stalled:** inspect Runtime events, then interrupt or restart only that participant.
 - **Reviewer snapshot failed:** fix Git worktree, dirty patch, untracked symlink, or filesystem permission errors; PairRoom does not silently fall back to a live writable reviewer tree.
 - **Integrity verification failed:** stop the daemon, preserve the entire directory, and restore the latest verified backup. Do not edit event sequence numbers by hand.
