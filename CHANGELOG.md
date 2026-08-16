@@ -18,6 +18,10 @@
 - Management UI preferences and bearer bootstrap state remain tab-memory-only; no Web Storage persistence was introduced.
 - Management polling now defaults to 10 seconds with explicit slower/faster choices, and Runtime control conflicts consistently return `409 Conflict`.
 
+### Fixed
+
+- Windows Task Scheduler installations now launch the background Service through windowless Windows Script Host, preserve forwarded arguments and graceful shutdown control, and clean up legacy PowerShell launchers during reinstall or uninstall.
+
 ### Documentation
 
 - Added a current-main cc-connect UX research and adaptation record plus a Management Shell interaction/API contract.

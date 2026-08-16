@@ -300,7 +300,7 @@ pairroom daemon logs -f
 pairroom daemon install --log-file /var/log/pairroom.log -- --config /absolute/path/pairroom.json --runtime-limit 4
 ```
 
-Linux 使用 systemd（非 root 为 user unit，root 为 system unit），macOS 使用 launchd LaunchAgent，Windows 使用当前用户的 Task Scheduler task。安装时会固定当前 `PATH` 和代理环境变量，使后台进程能够找到官方 `claude` 与 `codex` CLI。服务定义可能包含 `--token` 或带认证信息的代理地址，因此以仅安装用户可读的权限写入。
+Linux 使用 systemd（非 root 为 user unit，root 为 system unit），macOS 使用 launchd LaunchAgent，Windows 使用当前用户的 Task Scheduler task。Windows 任务通过无窗口的 Windows Script Host 启动器运行，不会为后台 Service 打开控制台窗口；重新安装会清理旧的 PowerShell 启动器。安装时会固定当前 `PATH` 和代理环境变量，使后台进程能够找到官方 `claude` 与 `codex` CLI。服务定义可能包含 `--token` 或带认证信息的代理地址，因此以仅安装用户可读的权限写入。
 
 ```bash
 pairroom daemon stop

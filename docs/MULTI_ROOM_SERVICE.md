@@ -25,7 +25,7 @@ Service 只接受 loopback 监听地址。未提供 `--token` 时会生成随机
 
 ### 后台安装
 
-`pairroom daemon` 将同一个 `pairroom service` 控制面安装到操作系统服务管理器：Linux 使用 systemd、macOS 使用 launchd、Windows 使用当前用户的 Task Scheduler。安装命令会固定绝对二进制路径、工作目录、日志位置、当前 PATH、代理环境变量和传给 Service 的参数，并自动禁用浏览器启动。应用内日志默认在 10 MiB 时轮转，保留 `service.log.1` 到 `service.log.3`；可用 `--log-max-size` 和 `--log-max-backups` 调整。
+`pairroom daemon` 将同一个 `pairroom service` 控制面安装到操作系统服务管理器：Linux 使用 systemd、macOS 使用 launchd、Windows 使用当前用户的 Task Scheduler。Windows 任务通过无窗口的 Windows Script Host 启动器运行；重新安装会识别并清理旧的 PowerShell 启动器。安装命令会固定绝对二进制路径、工作目录、日志位置、当前 PATH、代理环境变量和传给 Service 的参数，并自动禁用浏览器启动。应用内日志默认在 10 MiB 时轮转，保留 `service.log.1` 到 `service.log.3`；可用 `--log-max-size` 和 `--log-max-backups` 调整。
 
 ```bash
 pairroom daemon install --runtime-limit 4 --idle-timeout 20m
