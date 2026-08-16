@@ -4,16 +4,19 @@ package daemon
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
 const (
-	windowsTaskName   = "PairRoom Service"
-	windowsScriptName = "pairroom-daemon.ps1"
+	windowsTaskName         = "PairRoom Service"
+	windowsScriptName       = "pairroom-daemon.vbs"
+	legacyWindowsScriptName = "pairroom-daemon.ps1"
 )
 
 type taskSchedulerManager struct{}
@@ -34,6 +37,9 @@ func newPlatformManager() (Manager, error) {
 func (*taskSchedulerManager) Platform() string { return "Task Scheduler" }
 
 func (m *taskSchedulerManager) Install(cfg Config) error {
+	if _, err := exec.LookPath("wscript.exe"); err != nil {
+		return fmt.Errorf("wscript.exe not found: Windows daemon launcher requires Windows Script Host")
+	}
 	root, err := DefaultDataDir()
 	if err != nil {
 		return err
@@ -72,7 +78,17 @@ func (m *taskSchedulerManager) Install(cfg Config) error {
 	if err := createWindowsTask(path); err != nil {
 		return err
 	}
-	return m.Start()
+	if err := m.Start(); err != nil {
+		return err
+	}
+	legacyPath, err := legacyWindowsTaskScriptPath()
+	if err != nil {
+		return err
+	}
+	if err := removeWindowsTaskScript(legacyPath); err != nil {
+		slog.Warn("task scheduler: remove legacy PowerShell launcher failed", "error", err)
+	}
+	return nil
 }
 
 func (m *taskSchedulerManager) Uninstall() error {
@@ -80,7 +96,7 @@ func (m *taskSchedulerManager) Uninstall() error {
 	if err != nil {
 		return err
 	}
-	if status != nil && status.Running {
+	if status != nil && status.Installed {
 		if err := m.Stop(); err != nil {
 			return err
 		}
@@ -88,12 +104,18 @@ func (m *taskSchedulerManager) Uninstall() error {
 	if err := deleteWindowsTask(); err != nil {
 		return err
 	}
+	legacyPath, err := legacyWindowsTaskScriptPath()
+	if err != nil {
+		return err
+	}
 	path, err := windowsTaskScriptPath()
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove scheduled-task script: %w", err)
+	for _, path := range []string{path, legacyPath} {
+		if err := removeWindowsTaskScript(path); err != nil {
+			return fmt.Errorf("remove scheduled-task script: %w", err)
+		}
 	}
 	return nil
 }
@@ -119,7 +141,7 @@ func (m *taskSchedulerManager) Stop() error {
 		return err
 	}
 	if status == nil || !status.Installed || !status.Running {
-		return nil
+		return stopWindowsLaunchers()
 	}
 	if err := RequestStop(); err != nil {
 		return err
@@ -132,7 +154,7 @@ func (m *taskSchedulerManager) Stop() error {
 			return err
 		}
 		if status == nil || !status.Running {
-			return nil
+			return stopWindowsLaunchers()
 		}
 	}
 	return fmt.Errorf("PairRoom is still draining active Turns; the scheduled task was left running to preserve graceful shutdown")
@@ -158,17 +180,23 @@ func (*taskSchedulerManager) Status() (*Status, error) {
 	if err != nil {
 		return nil, err
 	}
+	legacyScriptPath, err := legacyWindowsTaskScriptPath()
+	if err != nil {
+		return nil, err
+	}
 	output, err := runPowerShell(fmt.Sprintf(`
 $task = Get-ScheduledTask -TaskName %s -ErrorAction SilentlyContinue
 if ($null -eq $task) { Write-Output 'NOT_FOUND'; exit 0 }
-$expectedArgs = %s
+$expectedArgs = @(%s, %s)
 $owned = $false
 foreach ($action in $task.Actions) {
-	if (([IO.Path]::GetFileName($action.Execute) -ieq 'powershell.exe') -and ($action.Arguments -eq $expectedArgs)) { $owned = $true }
+	$execute = [IO.Path]::GetFileName([string]$action.Execute)
+	if ((($execute -ieq 'wscript.exe') -and ($action.Arguments -eq $expectedArgs[0])) -or
+		(($execute -ieq 'powershell.exe') -and ($action.Arguments -eq $expectedArgs[1]))) { $owned = $true }
 }
 if (-not $owned) { Write-Output 'CONFLICT'; exit 0 }
 Write-Output $task.State
-`, powerShellLiteral(windowsTaskName), powerShellLiteral(windowsTaskActionArguments(scriptPath))))
+`, powerShellLiteral(windowsTaskName), powerShellLiteral(windowsTaskActionArguments(scriptPath)), powerShellLiteral(legacyWindowsTaskActionArguments(legacyScriptPath))))
 	if err != nil {
 		return nil, fmt.Errorf("query scheduled task: %s (%w)", output, err)
 	}
@@ -191,32 +219,101 @@ func windowsTaskScriptPath() (string, error) {
 	return filepath.Join(root, windowsScriptName), nil
 }
 
+func legacyWindowsTaskScriptPath() (string, error) {
+	root, err := DefaultDataDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, legacyWindowsScriptName), nil
+}
+
+func removeWindowsTaskScript(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func stopWindowsLaunchers() error {
+	currentPath, err := windowsTaskScriptPath()
+	if err != nil {
+		return err
+	}
+	legacyPath, err := legacyWindowsTaskScriptPath()
+	if err != nil {
+		return err
+	}
+	output, err := runPowerShell(fmt.Sprintf(`
+$currentScript = %s
+$legacyScript = %s
+$launcherPids = @(
+	Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+		$commandLine = [string]$_.CommandLine
+		$_.ProcessId -ne $PID -and
+		($_.Name -ieq 'wscript.exe' -or $_.Name -ieq 'powershell.exe') -and
+		($commandLine.IndexOf($currentScript, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+		 $commandLine.IndexOf($legacyScript, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+	} | Select-Object -ExpandProperty ProcessId
+)
+foreach ($processId in ($launcherPids | Sort-Object -Unique)) {
+	Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+	Wait-Process -Id $processId -Timeout 5 -ErrorAction SilentlyContinue
+}
+`, powerShellLiteral(currentPath), powerShellLiteral(legacyPath)))
+	if err != nil {
+		return fmt.Errorf("stop orphaned Windows daemon launchers: %s (%w)", output, err)
+	}
+	return nil
+}
+
+func windowsTaskAction(scriptPath string) string {
+	return fmt.Sprintf(`wscript.exe %s`, windowsTaskActionArguments(scriptPath))
+}
+
 func buildWindowsTaskScript(cfg Config) string {
 	var builder strings.Builder
-	builder.WriteString("$ErrorActionPreference = 'Stop'\r\n")
+	builder.WriteString("Option Explicit\r\n")
+	builder.WriteString("Dim shell, processEnv, fileSystem, exitCode, attempt\r\n")
+	builder.WriteString("Set shell = CreateObject(\"WScript.Shell\")\r\n")
+	builder.WriteString("Set processEnv = shell.Environment(\"Process\")\r\n")
+	builder.WriteString("Set fileSystem = CreateObject(\"Scripting.FileSystemObject\")\r\n")
 	for _, pair := range SortedEnvironment(cfg) {
-		fmt.Fprintf(&builder, "$env:%s = %s\r\n", pair[0], powerShellLiteral(pair[1]))
+		fmt.Fprintf(&builder, "processEnv(%s) = %s\r\n", vbScriptLiteral(pair[0]), vbScriptLiteral(pair[1]))
 	}
-	fmt.Fprintf(&builder, "Set-Location -LiteralPath %s\r\n", powerShellLiteral(cfg.WorkDir))
-	builder.WriteString("for ($attempt = 1; $attempt -le 3; $attempt++) {\r\n")
-	fmt.Fprintf(&builder, "  & %s", powerShellLiteral(cfg.BinaryPath))
-	for _, argument := range cfg.Args {
-		fmt.Fprintf(&builder, " %s", powerShellLiteral(argument))
-	}
-	builder.WriteString("\r\n")
-	builder.WriteString("  $exitCode = $LASTEXITCODE\r\n")
-	fmt.Fprintf(&builder, "  if (Test-Path -LiteralPath %s) { Remove-Item -LiteralPath %s -Force; exit $exitCode }\r\n", powerShellLiteral(cfg.ControlFile), powerShellLiteral(cfg.ControlFile))
-	builder.WriteString("  if ($exitCode -eq 0) { exit 0 }\r\n")
-	builder.WriteString("  if ($attempt -lt 3) { Start-Sleep -Seconds 10 }\r\n")
-	builder.WriteString("}\r\n")
-	builder.WriteString("exit $exitCode\r\n")
+	fmt.Fprintf(&builder, "shell.CurrentDirectory = %s\r\n", vbScriptLiteral(cfg.WorkDir))
+	builder.WriteString("For attempt = 1 To 3\r\n")
+	fmt.Fprintf(&builder, "  exitCode = shell.Run(%s, 0, True)\r\n", vbScriptLiteral(windowsCommandLine(cfg.BinaryPath, cfg.Args)))
+	fmt.Fprintf(&builder, "  If fileSystem.FileExists(%s) Then\r\n", vbScriptLiteral(cfg.ControlFile))
+	fmt.Fprintf(&builder, "    fileSystem.DeleteFile %s, True\r\n", vbScriptLiteral(cfg.ControlFile))
+	builder.WriteString("    WScript.Quit exitCode\r\n")
+	builder.WriteString("  End If\r\n")
+	builder.WriteString("  If exitCode = 0 Then WScript.Quit 0\r\n")
+	builder.WriteString("  If attempt < 3 Then WScript.Sleep 10000\r\n")
+	builder.WriteString("Next\r\n")
+	builder.WriteString("WScript.Quit exitCode\r\n")
 	return builder.String()
+}
+
+func windowsCommandLine(binaryPath string, args []string) string {
+	var builder strings.Builder
+	builder.WriteString(syscall.EscapeArg(binaryPath))
+	for _, argument := range args {
+		builder.WriteByte(' ')
+		builder.WriteString(syscall.EscapeArg(argument))
+	}
+	return builder.String()
+}
+
+func vbScriptLiteral(value string) string {
+	value = strings.ReplaceAll(value, "\r", " ")
+	value = strings.ReplaceAll(value, "\n", " ")
+	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
 }
 
 func createWindowsTask(scriptPath string) error {
 	arguments := windowsTaskActionArguments(scriptPath)
 	output, err := runPowerShell(fmt.Sprintf(`
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument %s
+$action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument %s
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -StartWhenAvailable
@@ -240,6 +337,10 @@ if ($null -ne $task) { Unregister-ScheduledTask -TaskName %s -Confirm:$false }
 }
 
 func windowsTaskActionArguments(scriptPath string) string {
+	return fmt.Sprintf(`//B //NoLogo "%s"`, scriptPath)
+}
+
+func legacyWindowsTaskActionArguments(scriptPath string) string {
 	return fmt.Sprintf(`-WindowStyle Hidden -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%s"`, scriptPath)
 }
 
