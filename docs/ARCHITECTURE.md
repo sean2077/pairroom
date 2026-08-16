@@ -1,185 +1,303 @@
 # PairRoom 架构设计
 
-## 1. 设计目标
+> [文档首页](README.md) · [核心概念](CONCEPTS.md) · [Multi-Room Service](MULTI_ROOM_SERVICE.md) · [Room 协议](PROTOCOL.md) · [安全策略](../SECURITY.md)
+
+本文描述当前 `main` 的实现架构。重点不是某个页面长什么样，而是：进程如何组织、状态由谁拥有、数据何时落盘、两个官方 Harness 如何接入，以及系统在失败时选择什么边界。
+
+## 1. 架构目标
 
 PairRoom 的核心约束是：
 
 > 保留官方 Claude Code 和 Codex 的完整 Harness，只实现两者之上的本地三方协作、介入、审批、可观察性与持久化层。
 
-PairRoom 不实现模型调用、Agent loop、工具执行器、上下文压缩、代码补丁算法或供应商账号系统。
+PairRoom 不实现：
 
-## 2. 总体结构
+- 模型调用网关或账号系统；
+- 通用 Agent loop、工具执行器或上下文压缩；
+- 通过 ANSI 终端文本猜测结构化状态；
+- 供应商 Session/Thread 数据库的复制品；
+- 多人身份、团队 RBAC、云同步或公网托管。
 
-```text
-┌────────────────────────── Browser ────────────────────────────┐
-│ Shared timeline                                               │
-│ rich text · image gallery · reply · thread · search           │
-│                                                               │
-│ Work Inspector                                                │
-│ tools · commands · plan · diff · usage · approvals            │
-└──────────────────────── REST / SSE ───────────────────────────┘
-                              │
-┌──────────────────────── PairRoom daemon ──────────────────────┐
-│ HTTP/API        Room engine        Event store                │
-│ Media store     Router             Runtime projection         │
-│ Role policy     Approval bridge    Git inspector              │
-└───────────────┬─────────────────────────────┬─────────────────┘
-                │                             │
-┌───────────────▼──────────────┐  ┌──────────▼──────────────────┐
-│ ClaudeAdapter                │  │ CodexAdapter                │
-│ stream-json                  │  │ app-server JSON-RPC         │
-│ native control protocol      │  │ thread/turn lifecycle       │
-│ image content blocks         │  │ localImage                  │
-└───────────────┬──────────────┘  └──────────┬──────────────────┘
-                │                             │
-          official claude                official codex
-```
+这条边界决定了系统必须同时满足四件事：
 
-## 3. 组件边界
+1. **原生性**：只通过官方 CLI 的结构化接口工作；
+2. **可见性**：把公共结论、过程事件和审批投影到同一房间；
+3. **可恢复性**：PairRoom 自己拥有的事实必须先持久化再发布；
+4. **诚实性**：无法证明安全或一致时 fail closed，而不是伪装成功。
 
-### 3.1 Web UI
+## 2. 三种运行拓扑
 
-职责：
-
-- 展示共享时间线；
-- 安全渲染 Markdown；
-- 上传、预览和浏览图片；
-- 发送 `@mention`、引用回复和线程聚焦；
-- 显示每个目标的 Delivery/Processing 状态；
-- 展示 Runtime 事件、Git Diff 和审批；
-- 执行启停、打断、角色切换和重试；
-- 通过 SSE 接收增量事件，发现序列缺口时重取 snapshot。
-
-前端是内嵌静态资源：
+### 2.1 `pairroom service`：多 Project / 多 Room 控制面
 
 ```text
-index.html
-styles.css
-richtext.js
-app.js
-favicon.svg
+┌────────────────────────────── Browser ──────────────────────────────┐
+│ Management Shell                         Room View                   │
+│ Project · Room · Runtime lifecycle       Timeline · Inspector       │
+└───────────────┬──────────────────────────────┬───────────────────────┘
+                │ Management REST             │ Room REST + SSE
+┌───────────────▼──────────────────────────────▼───────────────────────┐
+│ PairRoom Service process                                             │
+│                                                                      │
+│ Management Server ─ Registry ─ Provisioner ─ Runtime Manager         │
+│                                             │                        │
+│                   ┌─────────────────────────┼────────────────────┐   │
+│                   │ logical Room Runtime A  │ Room Runtime B      │   │
+│                   │ Engine/Store/Web/Hub    │ Engine/Store/Web    │   │
+│                   └──────────┬───────┬──────┴─────────┬───────┬───┘   │
+└──────────────────────────────┼───────┼────────────────┼───────┼───────┘
+                               │       │                │       │
+                         claude child  codex child  claude child codex child
 ```
 
-没有 npm 依赖、打包器或运行时框架。
+Service 是一个本地进程。每个 Room Runtime 是该进程内的独立逻辑运行单元，拥有自己的 Engine、Store、附件库、Room HTTP/SSE listener、认证 Token 和两侧 Adapter；官方 `claude` 与 `codex app-server` 则是各 Runtime 启动的子进程。
 
-### 3.2 HTTP/API 层
+Runtime 按需激活，并受全局容量限制。Management Shell 不承载聊天协议；打开 Room 时浏览器进入该 Room 自己的 listener 和认证域。
 
-职责：
+### 2.2 `pairroom daemon`：操作系统托管的同一 Service
 
-- REST 命令入口；
-- SSE 事件流；
-- 附件上传、读取和未引用附件删除；
-- Git status/diff；
-- 会话导出；
-- Bearer bootstrap、HttpOnly browser session、CSRF、同源、Host、速率限制与安全头检查。
+`pairroom daemon` 不是第二种服务实现。它负责把 `pairroom service` 安装到：
 
-静态页面始终可打开；配置 Token 时，浏览器通过 fragment bootstrap 换取短期 HttpOnly Session，敏感 API 和附件内容必须认证。CLI 客户端可继续使用 Bearer Header。
+- Linux systemd；
+- macOS launchd；
+- Windows 当前用户 Task Scheduler。
 
-### 3.3 Room Engine
+安装定义固定二进制路径、工作目录、日志、环境和完整 Service 参数。生命周期仍由同一个 Service/Runtime Manager 实现，因此容量、数据、认证和关闭顺序不发生分叉。
+
+### 2.3 `pairroom serve`：兼容的单 Room 快捷入口
+
+```text
+Browser ── Room REST/SSE ── Room Engine/Store ── ClaudeAdapter/CodexAdapter
+```
+
+`serve` 跳过 Registry、Provisioner、Management Server 和全局 Runtime Manager，直接为一个仓库与一个 Room 数据目录启动运行时。它适合一次性使用、调试和旧工作流兼容，但不是多 Room 管理入口。
+
+## 3. 控制面与房间面的边界
+
+| 层 | 拥有的职责 | 明确不拥有 |
+|---|---|---|
+| Management Server | Project 登记、Room provisioning/lifecycle、Runtime 激活/挂起、Service snapshot | Room 消息正文、附件读取、Room SSE、供应商 Transcript |
+| Registry | Project/Room/Binding 索引与生命周期 checkpoint | Room Event Log 的替代事实源 |
+| Runtime Manager | Runtime 容量、FIFO 队列、idle 回收、关闭顺序 | 活动 Turn 的强制抢占 |
+| Room Runtime | Engine、Store、附件、工作区、Room HTTP/SSE、Adapter | 其他 Room 的状态或 Token |
+| Vendor Harness | 原生会话、模型上下文、工具、Skills/MCP/Hooks、供应商凭据 | PairRoom 公共时间线与 Event Log |
+
+这层分离带来两个重要结果：
+
+- Management Token 是 Service 范围的高权限控制面凭据；Room Token、Session/CSRF、SSE cursor 和附件 ID 则严格按 Room 隔离，不能跨 Room 复用；
+- Registry 丢失时可以从默认 Room Event Logs 重建索引，但不能反过来用 Registry 还原 Room transcript。
+
+## 4. Service 组件
+
+### 4.1 Management Server
+
+Management Server 提供内嵌静态 Shell 与 `/api/v1` 管理端点，负责：
+
+- 返回 Project、Room、Runtime、policy、summary 和 capabilities；
+- 登记 canonical Git Project；
+- 创建、改名、归档、恢复 Room；
+- 补全 Legacy Binding；
+- 请求 Runtime 激活或安全挂起；
+- 显式导入自定义 Legacy Room；
+- 在 mutation 上使用 per-Room 串行边界，避免 lifecycle 与 suspend 并发写同一控制状态。
+
+它接受直接 Bearer Header，或由 Bearer bootstrap 建立的 Service-scoped browser session；Session mutation 还要求内存 CSRF。它不把 query token 当作凭据，也不提供服务器路径浏览器。
+
+### 4.2 Registry
+
+Registry 管理三类索引：
+
+```text
+canonical Project root  -> Project
+Room ID                 -> Room metadata/lifecycle
+(agent, vendor ID)      -> owning Room
+```
+
+`service-registry.json` 是可替换 checkpoint，而不是最深层事实源。默认 `rooms/` 下的 Event Logs 包含足够的 Service lifecycle 与 Binding 事件，可用于重建索引。自定义路径导入的 Legacy Room 不在默认扫描边界内，checkpoint 丢失后需要再次显式导入。
+
+Registry 的一致性原则是：
+
+1. Room Event 先提交；
+2. 再更新内存索引和 checkpoint；
+3. 如果无法证明内存、Event Log 与 checkpoint 一致，阻止后续 mutation。
+
+### 4.3 Project canonicalization
+
+登记 Project 时，服务端按固定顺序处理：
+
+```text
+absolute input
+  -> directory/access check
+  -> symlink resolution
+  -> git rev-parse --show-toplevel
+  -> canonical worktree root
+  -> stable Project identity + deduplication
+```
+
+因此同一 Git worktree 的根目录、子目录和符号链接只会得到一个 Project。不同 worktree 即使来自同一仓库，也作为不同 Project 管理。
+
+### 4.4 Provisioner
+
+Room provisioning 同时建立：
+
+- 一个 Project 归属；
+- 一个 Claude Session Binding；
+- 一个 Codex Thread Binding；
+- 初始 Room Event Log 与 metadata；
+- 全局 Binding ownership。
+
+创建过程在隐藏暂存目录完成，全部校验成功后原子发布。`existing` Binding 必须能被对应官方协议精确恢复且未被其他 Room 占用；任何一步失败都不应留下可见半成品 Room。
+
+`new` Binding 是 deferred 的：空的原生 Session/Thread 在尚无用户 Turn 时未必具备可持久化身份。首个真实输入被官方 CLI 接受后，Engine 才追加 materialization 事件并建立全局 ownership。提交或唯一性检查失败会中断该执行，而不是让一个身份同时属于多个 Room。
+
+### 4.5 Runtime Manager
+
+Runtime Manager 维护：
+
+- `--runtime-limit` 全局容量；
+- starting/active/stopping/queued/suspended/failed phase；
+- `busy`、`occupies_capacity`、queue position、last-used 和错误；
+- idle Runtime 的 LRU 式回收；
+- 容量不足时的 FIFO 激活队列；
+- Service 关闭时的有界排空。
+
+容量不足时先尝试挂起最久未使用且 idle 的 Runtime。若所有 slot 都在执行 Turn，新 Room 进入 FIFO 队列；活动 Turn 不会仅为腾出容量而被 interrupt。
+
+`occupies_capacity` 是独立事实：
+
+- starting、active、stopping 占用；
+- cleanup 未被证明完成且仍持有实例的 failed 状态占用；
+- queued 与 suspended 不占用。
+
+安全挂起只允许 queued cancel 或 active+idle drain。busy、starting/stopping 冲突以及 cleanup-uncertain failed 会返回冲突，不伪造容量释放。
+
+## 5. Room Runtime 组件
+
+### 5.1 Room Engine
 
 Room Engine 是领域状态机，负责：
 
-- 消息、线程、引用和目标；
+- 消息、线程、引用、目标和重试；
 - Manual/Mentions/Roundtable 路由；
-- 用户新指令抢占旧自动接力；
+- 用户新指令对旧自动接力的优先级；
 - Delivery 与 Processing 双生命周期；
-- Runtime correlation；
-- Agent final response 投影；
-- 角色切换和审批生命周期；
-- 失败重试；
-- 重启时瞬态状态收口；
-- 将领域事件先持久化再发布。
+- Runtime correlation 和 final response 投影；
+- 角色、工作区和审批生命周期；
+- 崩溃恢复时瞬态状态收口；
+- 领域事件先落盘、后广播。
 
-Engine 不解析 ANSI 终端文本，也不执行模型推理。
+Engine 不推理模型内容，也不解析终端绘制结果。它只消费 Adapter 产生的结构化 RuntimeEvent。
 
-### 3.4 Event Store
+### 5.2 Event Store
 
-事件存储采用 append-only JSONL：
+每个 Room 使用 append-only JSONL：
 
 ```text
-events.jsonl
-metadata.json
+<room-data>/
+├── events.jsonl
+└── metadata.json
 ```
 
-重要性质：
+关键性质：
 
 - `seq` 单调递增；
-- 领域变化在发布到 SSE 前先写入并同步；
-- 启动时通过重放恢复 snapshot；
+- durable event 在 SSE 发布前写入并同步；
+- 启动时通过 replay 恢复 snapshot；
 - 只修复损坏的最后半行，不静默跳过中间损坏；
 - metadata 记录 Store schema；
 - 高于当前二进制支持的未来 schema 会被拒绝。
 
-1.0 Store schema 为 `7`，覆盖附件、消息控制、Reviewer 工作区和持久化 Turn 摘要。
+PairRoom 1.0 的 Store schema 为 `7`。schema 描述的是 PairRoom Event 投影，不是 Claude/Codex 原生会话格式。
 
-### 3.5 Media Store
+### 5.3 Event Hub 与 SSE
 
-媒体库位于：
+Hub 把 Engine 事件投影到 Room SSE：
+
+- durable event 带单调 `seq`，可用于 replay/cursor；
+- 瞬态 token delta 或心跳不推进 durable replay cursor；
+- 浏览器发现序列缺口时重新读取 snapshot，而不是猜测缺失状态；
+- 长房间初始只加载最新窗口，历史通过 cursor 分页读取，底层 transcript 仍完整保留。
+
+### 5.4 Attachment Store
 
 ```text
-<data-dir>/attachments/
+<room-data>/attachments/
 ├── att-<opaque-id>.json
 └── att-<opaque-id>.<ext>
 ```
 
-只接受 PNG、JPEG、GIF、WebP。每个附件包含：
+只接受 PNG、JPEG、GIF、WebP。每个附件记录安全文件名、媒体类型、字节数、SHA-256、宽高、来源和创建时间。
+
+边界规则：
+
+- 本机绝对路径不进入 Message/Event/API/export；
+- 不信任扩展名，校验真实内容签名；
+- 每次跨浏览器或 Agent 边界前复核大小、普通文件、非 symlink、维度和哈希；
+- Agent 生成图片只允许从当前仓库 canonical 边界内导入；
+- 远程 Markdown 图片不会自动抓取；
+- 已被 durable message 引用的附件不能通过删除端点移除。
+
+### 5.5 Workspace Manager
+
+Driver 默认使用 live working tree。Reviewer 使用独立 Git snapshot：
+
+1. 以当前 HEAD 创建 detached worktree；
+2. 应用完整 `git diff HEAD`，覆盖 staged 与 unstaged tracked 变化；
+3. 复制 untracked regular files；
+4. 拒绝不安全 symlink 与越界目标；
+5. 记录 source HEAD、patch/untracked digest 和 dirty 状态；
+6. POSIX 上移除写位，并叠加供应商原生只读策略。
+
+Reviewer snapshot 不是容器、VM 或只读 mount。它用于默认的“一个实现者、一个审查者”工作流，不是第二个并行实现分支。
+
+## 6. Adapter 边界
+
+### 6.1 统一 Adapter 契约
+
+Room Engine 只依赖统一概念：
 
 ```text
-opaque id
-safe display name
-media type
-byte size
-SHA-256
-width / height
-source
-created_at
+start / stop / interrupt
+submit / steer
+role policy
+runtime events
+approval requests
+session/thread identity
 ```
 
-关键边界：
+供应商协议差异被限制在 Adapter 内。MockAdapter 也实现同一契约，用于确定性产品和恢复测试，但不能证明真实供应商行为。
 
-- 本机路径只存在于进程内部的 `AgentAttachment.Path`；
-- Message、Event、API 和 transcript 只保存安全元数据；
-- 每次跨浏览器/Agent 边界前重新校验文件类型、大小、维度与 SHA-256；
-- Agent 回答中的图片只允许从当前仓库内部导入；
-- 路径经过 canonicalization 和 symlink 边界检查；
-- 远程 URL 不进入自动导入流程。
+### 6.2 ClaudeAdapter
 
-### 3.6 ClaudeAdapter
-
-ClaudeAdapter 启动官方 `claude`：
+ClaudeAdapter 启动官方 `claude`，使用：
 
 ```text
-claude -p
-  --input-format stream-json
-  --output-format stream-json
-  --permission-prompt-tool stdio
-  ...optional current flags
+-p
+--input-format stream-json
+--output-format stream-json
+--permission-prompt-tool stdio
 ```
 
-职责：
+职责包括：
 
 - 长驻双向 stream-json；
-- 启动后先完成原生 `control_request/initialize` 握手，再接收第一条用户消息；
-- 通过 `--permission-prompt-tool stdio` 接收 `can_use_tool` 与 `AskUserQuestion`；
-- session ID 创建、持久化和 resume；
-- 用户输入队列与每条消息 correlation；
-- 文本、工具、Hook、子 Agent 和结果事件投影；
-- 将图片编码为原生 base64 image content blocks；
-- 将 UI 决策写回 `control_response`；
-- 进程退出时收口输入、审批和 control waiter。
+- 原生 control initialize 握手；
+- Session 创建、持久化与精确 resume；
+- 用户输入队列和 message correlation；
+- 文本、工具、Hook、子 Agent、结果事件投影；
+- base64 image content blocks；
+- `can_use_tool`、`AskUserQuestion` 与 control response；
+- 进程退出时收口 waiter、审批和输入状态。
 
-Control handshake 成功前不会把 Claude 标记为可用。未知 control request 直接返回协议错误，不做通用“允许”。
-
-Reviewer 策略：
+Reviewer 默认策略：
 
 ```text
 permission mode = plan
-disallowed tools = Edit, Write, NotebookEdit, ExitPlanMode
+write-capable tools = denied/disallowed
 ```
 
-控制层仍会对到达的写请求再次 fail closed。
+未知 control request 直接返回协议错误。
 
-### 3.7 CodexAdapter
+### 6.3 CodexAdapter
 
 CodexAdapter 启动：
 
@@ -187,163 +305,210 @@ CodexAdapter 启动：
 codex app-server
 ```
 
-职责：
+职责包括：
 
-- `initialize`；
-- `thread/start` / `thread/resume`；
-- `turn/start` / `turn/steer` / `turn/interrupt`；
+- initialize；
+- thread start/resume；
+- turn start/steer/interrupt；
 - `clientUserMessageId` correlation；
-- 多条用户输入绑定同一 active Turn；
 - `localImage` 输入；
 - item/plan/diff/usage/command 等结构化事件；
-- command/file/additional-permission 审批；
-- app-server overload 有界重试；
+- command/file/additional-permission approval；
+- overload 的有界重试；
 - 未知 server request fail closed。
 
-Reviewer 的每个 Turn 使用：
+Reviewer 每个 Turn 使用原生 read-only sandbox 请求。
 
-```json
-{"type":"readOnly"}
+### 6.4 原生事实不被复制
+
+PairRoom 持久化 Vendor Session/Thread ID 和自己的事件投影，但不导入绑定前供应商 Transcript。Existing Binding 恢复的是原生 context；Room 时间线只从 Binding 成为 PairRoom Room 的一部分后开始。
+
+## 7. 浏览器与认证架构
+
+所有内置 listener 只接受数字 loopback 地址，如 `127.0.0.1` 或 `::1`。Management 与 Room 使用不同浏览器链路。
+
+### 7.1 Management Shell
+
+```text
+launch URL fragment
+  -> JavaScript reads token
+  -> fragment removed from address bar
+  -> POST /api/v1/session with Bearer
+  -> HttpOnly + SameSite=Strict service session cookie
+  -> in-memory CSRF token for mutations
+  -> Management REST uses browser session
 ```
 
-### 3.8 MockAdapter
+- bootstrap Token、Session ID 和 CSRF 不写 `localStorage`/`sessionStorage`；
+- 刷新可通过仍有效的 Cookie 恢复 CSRF；Service 重启、会话过期或显式注销后需要重新打开完整启动 URL；
+- CLI/API 客户端可直接使用 Service Bearer Header；
+- query token 不授权 API。
 
-MockAdapter 使用相同 Adapter 接口和 RuntimeEvent 流，用于：
+### 7.2 Room View
 
-- 无供应商 CLI 的产品体验；
-- 路由、状态和 UI E2E；
-- 崩溃恢复与消息关联测试；
-- 确定性发行验证。
+启用 Token 认证时：
 
-Mock 不用于证明真实模型行为。
+```text
+launch URL fragment
+  -> bootstrap endpoint
+  -> HttpOnly + SameSite=Strict session cookie
+  -> in-memory CSRF token for mutations
+  -> REST/SSE use browser session
+```
 
-## 4. 状态事实源
+长期 Token 不进入 Web Storage。CLI/API 客户端仍可直接使用 Authorization Header。`serve` 未配置 Token 时仍依赖 numeric loopback、Host 和 same-origin 防护。
 
-PairRoom 刻意避免多个相互竞争的状态源。
+### 7.3 Web 安全层
+
+两个 Web 面共同执行 query-token 拒绝、same-origin、CSP、no-referrer、nosniff 和 frame-ancestor 防护。除此之外：
+
+- Management browser session 的 mutation 要求 CSRF，直接 Bearer 客户端仍受 same-origin mutation 检查；
+- Room Server 还执行 Host 检查、Session mutation CSRF、固定窗口限流和认证附件 Blob 响应；
+- Management Session 与每个 Room Session 使用独立 Token、Cookie 作用域/origin 和 CSRF，不能跨面复用。
+
+远程使用只通过 SSH 本地端口转发到服务端 loopback listener；PairRoom 不内建 TLS 或公网监听。
+
+## 8. 状态事实源
 
 | 信息 | 唯一事实源 |
 |---|---|
-| 房间消息、角色、路由、审批投影 | PairRoom event log |
-| 图片元数据引用 | PairRoom event log |
-| 图片二进制 | PairRoom media store |
-| Claude 原生会话上下文 | Claude Code |
-| Codex 原生 thread/turn 上下文 | Codex App Server |
-| Git 工作区内容 | Repository |
-| UI | snapshot + SSE 的派生投影 |
+| Project/Room/Binding 生命周期 | Room Event Logs；Registry 是 checkpoint/index |
+| Room 消息、角色、路由、审批投影 | PairRoom Room Event Log |
+| 附件元数据引用 | PairRoom Room Event Log |
+| 附件二进制 | Room Attachment Store |
+| Runtime phase/capacity | 当前 Service Runtime Manager；快照为派生视图 |
+| Claude 原生上下文 | Claude Code |
+| Codex 原生上下文 | Codex App Server |
+| Git 文件内容 | Project worktree / Reviewer snapshot |
+| Browser UI | snapshot + SSE + 非关键本地界面状态 |
 
-PairRoom 不复制供应商完整会话数据库，也不声称能从自己的日志恢复供应商内部推理状态。
+任何文档或 UI 都不应把派生 snapshot 描述为比上述事实源更权威。
 
-## 5. 一条富媒体消息的数据流
+## 9. 关键数据流
 
-```text
-Browser selects/pastes images
-        │
-        ├─ POST /attachments
-        │      └─ validate → hash → durable media ID
-        │
-        └─ POST /messages {text, attachment IDs}
-                  │
-                  ├─ Engine resolves canonical metadata
-                  ├─ Message event fsync
-                  ├─ Delivery pending
-                  │
-                  ├─ Claude boundary
-                  │      └─ base64 image block + text envelope
-                  │
-                  └─ Codex boundary
-                         └─ localImage + text input
-```
-
-浏览器读取附件时不会直接拿本机文件路径，而是通过认证 API 获取 Blob，再创建页面内 object URL。
-
-## 6. Agent 生成图片的数据流
+### 9.1 创建 Room
 
 ```text
-Agent writes repo/docs/chart.png
-Agent final: ![chart](docs/chart.png)
-        │
-        └─ Media Store discovers candidate
-               ├─ resolve canonical path
-               ├─ confirm inside repo
-               ├─ reject symlink escape/remote URL
-               ├─ import immutable copy
-               └─ attach safe metadata to final room message
+Management form
+  -> canonical Project lookup
+  -> validate requested bindings
+  -> hidden staging directory
+  -> probe/resume existing identities
+  -> write initial Room events
+  -> claim global identities
+  -> atomic publish
+  -> Registry checkpoint
 ```
 
-这使 Agent 生成的截图和图表可以进入聊天预览，同时不允许回答文本任意导入仓库外文件。
-
-## 7. 审批数据流
-
-### Claude
+### 9.2 打开 Room
 
 ```text
-Claude control_request(can_use_tool)
-        │
-        ├─ reviewer deny check
-        ├─ durable ApprovalRequested event
-        ├─ Web Approvals panel
-        └─ control_response allow/deny/updatedInput/updatedPermissions
+POST activate
+  -> existing active URL, or request capacity
+  -> evict idle runtime / enqueue FIFO
+  -> open Room Store and Workspace Manager
+  -> create Engine + Adapters + Room Server
+  -> bind independent loopback listener/token
+  -> return Room URL
 ```
 
-### Codex
+打开页面本身不等于启动真实模型 Turn；是否自动启动 Agent 由 runtime 配置决定。
+
+### 9.3 富媒体消息
 
 ```text
-App Server requestApproval
-        │
-        ├─ durable ApprovalRequested event
-        ├─ Web Approvals panel
-        └─ JSON-RPC result/error
+Browser upload
+  -> validate/hash/durable attachment ID
+  -> POST message with attachment IDs
+  -> Engine resolves canonical metadata
+  -> Message event fsync
+  -> per-target Delivery state
+  -> Claude base64 block / Codex localImage
+  -> Runtime events + final response
+  -> Processing terminal state
 ```
 
-连接中断后旧审批不能安全复用，因此会过期。
+### 9.4 Agent 生成图片
 
-## 8. 角色切换
+```text
+Agent writes repository image
+  -> final Markdown references relative path
+  -> canonical path + symlink boundary check
+  -> raster validation and immutable import
+  -> safe attachment metadata in final message
+```
 
-角色变化遵循：
+### 9.5 审批
 
-1. 校验角色；
-2. 要求 Runtime 处于安全边界；
-3. 先把策略应用到 Adapter；
-4. 必要时重启空闲的 Claude 进程并恢复 session；
-5. Adapter 成功后再持久化房间角色。
+```text
+Vendor request
+  -> Adapter policy guard
+  -> durable ApprovalRequested
+  -> browser decision
+  -> durable decision
+  -> vendor-native response
+```
 
-这样 UI 不会显示“Reviewer”，但底层仍按 Driver 权限运行。
+连接中断、Runtime 停止、角色变化或重启会使无法安全复用的未决审批过期。
 
-## 9. 并发模型
+## 10. 并发与一致性
 
+- Registry/lifecycle mutation 通过控制面锁和 per-Room mutex 串行化；
+- 每个 Room Event Store 只有一个写者；
 - Engine 用互斥锁保护 snapshot 与 Adapter map；
-- 每个 Adapter 负责自己的 stdin/RPC 写锁和 pending correlation；
-- Claude Submit 串行化队列变更与 stdin 写入；
-- Codex RPC request 使用唯一 ID 与 waiter；
-- Store 串行追加并在发布前同步；
-- SSE 使用 durable `seq`，瞬态 Runtime event 不推进 replay cursor；
-- 前端采用批量 render，避免每个 token delta 触发完整重排。
+- Claude stdin 与输入队列串行；
+- Codex RPC 使用唯一 ID 与 waiter map；
+- durable event 先 append+sync，后发布；
+- role 先应用 Adapter policy，成功后再写 Room state；
+- Room rename/archive/binding completion 会等待活动 Turn 自然结束并挂起 Runtime，避免控制面与 Engine 双写；
+- shutdown 先停止 Management mutation，再排空 Runtime，最后释放 Service lock。
 
-## 10. 依赖边界
+## 11. 失败与恢复边界
 
-```bash
-go list -m all
-```
+| 失败 | 设计行为 |
+|---|---|
+| Provisioning 任一步失败 | 暂存目录不发布，不留下可见 Room |
+| Binding 重复或无法精确恢复 | 拒绝创建/补全 |
+| Registry checkpoint 损坏 | 默认 Room 可由 Event Logs 重建；自定义导入需重做索引 |
+| 中间 Event Log 损坏 | 拒绝启动；只允许修复末尾半行 |
+| Runtime cleanup 不确定 | failed 且继续占用 capacity，不假装释放 |
+| 浏览器 SSE 缺序 | 重取 snapshot |
+| Vendor 进程退出 | 收口 waiter、审批与 Processing，不保留“幽灵 working” |
+| Reviewer snapshot 不安全 | 拒绝角色/运行，而不是回退到可写 live tree |
+| 高版本 Store schema | 旧二进制拒绝打开 |
+| 崩溃遗留 service.lock | 仅在人工确认旧进程退出后显式恢复 |
 
-只包含 PairRoom 自身 module。运行时外部程序只有：
+## 12. 依赖与部署边界
+
+Go module 和内嵌 Web UI 不依赖第三方运行时框架。正常运行依赖的外部程序为：
 
 ```text
 git
 claude
 codex
+browser
 ```
 
-浏览器是用户界面，不需要 Node.js server。
+开发验证另需 Go、Node.js、Python、shell 与归档工具。详见 [开发者指南](DEVELOPMENT.md)。
 
-## 11. 当前限制
+## 13. 当前产品边界
 
-- 单 daemon / 单 room / 单 repository；
-- Reviewer 使用独立 Git 快照与供应商原生约束，但不是容器/OS mount 级隔离；
-- Driver 是默认唯一写入者；Reviewer 快照不可作为并行实现分支；
-- UI 不嵌入完整供应商 TUI；
-- 供应商协议变化需要跟随当前公开接口更新；
-- 没有内建 TLS、账号系统或多人权限模型。
+当前架构支持：
 
-## 12. Reviewer workspace boundary
+```text
+one local Service
+multiple canonical Git Projects
+multiple durable Rooms per Project
+bounded concurrently active Room Runtimes
+one human + one Claude + one Codex per Room
+one Driver + one Reviewer by default
+```
 
-PairRoom materializes the reviewer view as a detached Git worktree, applies the complete `git diff HEAD` (including staged and unstaged tracked changes), then copies untracked regular files. Untracked symlinks and symlinks that escape the snapshot are rejected. The snapshot records its source HEAD and a digest over the patch and untracked file hashes. On POSIX systems PairRoom removes write bits after construction; vendor-native plan/read-only policies remain the primary enforcement layer on Windows.
+仍不支持：
+
+- 多用户身份与并发协同编辑；
+- 远程 worker、云同步、托管 TLS 或公网 API；
+- 一个 Room 绑定多个 Claude/Codex participant；
+- Room 永久删除、Project 删除或运行时策略热修改；
+- Reviewer 的容器/VM 级强隔离；
+- 额外 Agent vendor 的稳定公共插件协议。

@@ -1,6 +1,8 @@
-# PairRoom 协议设计
+# PairRoom Room 协议设计
 
-本文描述 PairRoom 1.0 的房间、消息、附件、工作区、运行时、审批、浏览器会话和持久化语义。
+> [文档首页](README.md) · [核心概念](CONCEPTS.md) · [架构](ARCHITECTURE.md) · [Multi-Room Service](MULTI_ROOM_SERVICE.md)
+
+本文描述当前 Room Runtime 的消息、附件、工作区、运行时、审批、Room 浏览器会话和持久化语义。Service Management API、Project/Room lifecycle 与 Management Bearer/browser-session 认证见 [`MULTI_ROOM_SERVICE.md`](MULTI_ROOM_SERVICE.md) 和 [`MANAGEMENT_SHELL.md`](MANAGEMENT_SHELL.md)。
 
 ## 1. Actor
 
@@ -373,7 +375,7 @@ tools / commands / plans / diffs / usage
 
 该摘要支持重启后 Inspector 查看，同时避免把无限命令输出写入内存快照。
 
-## 14. Browser session
+## 14. Room browser session
 
 启用 Token 时的浏览器认证流程：
 

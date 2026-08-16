@@ -1,146 +1,270 @@
 # Multi-Project / Multi-Room Service
 
-`pairroom service` 将 PairRoom 从“启动一个进程服务一个仓库/Room”的快捷模式扩展为与当前工作目录无关的本地常驻控制面。旧的 `pairroom serve --repo ...` 保留，用于兼容现有单 Room 工作流。
+> [文档首页](README.md) · [快速上手](GETTING_STARTED.md) · [核心概念](CONCEPTS.md) · [Management Shell](MANAGEMENT_SHELL.md) · [运维手册](OPERATIONS.md)
 
-## 启动
+`pairroom service` 是当前推荐的日常入口：一个与当前工作目录无关的本地控制面管理多个 canonical Git Project、每个 Project 下的多个 durable Room，以及受容量约束、按需启动的 Room Runtime。
+
+兼容命令 `pairroom serve --repo ...` 仍然存在，但它直接启动一个单 Room Runtime，不提供 Registry、Project/Room 管理或跨 Room 容量调度。
+
+## 1. 最小启动
 
 ```bash
 pairroom service
 ```
 
-常用参数：
+常见配置：
 
 ```bash
 pairroom service \
   --listen 127.0.0.1:7332 \
   --runtime-limit 4 \
   --idle-timeout 20m \
-  --shutdown-timeout 10m
+  --shutdown-timeout 10m \
+  --routing mentions
 ```
 
-PairRoom 的所有内置 Web listener（Service、兼容 `serve` 和 Room Runtime）都只接受数字 loopback 地址；通配地址、局域网地址、主机名和 `localhost` 会被拒绝。未提供 `--token` 时，Service 会生成随机 Management API Bearer Token，并放在浏览器启动 URL 的 fragment 中；Management Shell 将它一次性交换成 HttpOnly、SameSite=Strict 会话 Cookie，Cookie 认证的写操作还要求标签页内存中的 CSRF token，不写入 `localStorage` 或 `sessionStorage`。远程访问使用 SSH 本地端口转发到服务端 loopback listener。
-显式 `--data-root` 必须是绝对路径；未提供时始终使用操作系统用户配置目录下的 PairRoom 根目录，因此从不同 CWD 启动会打开同一份 Registry。
+首次体验建议：
 
-`--mock` 使用确定性 Mock Agent，可在没有供应商登录的机器上验证 Project、Room、队列、归档和恢复流程。真实模式继续调用用户本机官方 `claude` 与 `codex app-server`，不接管供应商凭据、Session Store 或 Transcript。
+```bash
+pairroom service --mock
+```
 
-### 后台安装
+Mock 使用同一 Management/Room/Store/Runtime 流程，但两个 Agent 为确定性实现，不要求 Vendor CLI 登录。
 
-`pairroom daemon` 将同一个 `pairroom service` 控制面安装到操作系统服务管理器：Linux 使用 systemd、macOS 使用 launchd、Windows 使用当前用户的 Task Scheduler。Windows 任务通过无窗口的 Windows Script Host 启动器运行；重新安装会识别并清理旧的 PowerShell 启动器。安装命令会固定绝对二进制路径、工作目录、日志位置、当前 PATH、代理环境变量和传给 Service 的参数，并自动禁用浏览器启动。应用内日志默认在 10 MiB 时轮转，保留 `service.log.1` 到 `service.log.3`；可用 `--log-max-size` 和 `--log-max-backups` 调整。
+### 1.1 Listener
+
+Service、兼容 `serve` 和所有 Room Runtime 只接受数字 loopback 地址。允许 `127.0.0.1`/`::1`，拒绝通配、LAN、公网、主机名和 `localhost`。远程使用通过 SSH 本地端口转发。
+
+### 1.2 Data root
+
+显式 `--data-root` 必须为绝对路径。省略时使用操作系统用户配置目录下的 PairRoom 根目录，因此从不同工作目录启动仍打开同一 Registry。
+
+### 1.3 Management Token
+
+未提供 `--token` 时 Service 生成随机 Bearer Token，并放入 Management 启动 URL fragment。Shell 读取后立即清除 fragment，用 Bearer 调用 `POST /api/v1/session`，然后使用 Service-scoped `HttpOnly`、`SameSite=Strict` Session Cookie；写操作还要求只保存在标签页内存中的 CSRF Token。刷新可从仍有效的 Cookie 恢复会话，Service 重启或会话过期后需要重新打开完整启动 URL。CLI/API 客户端可继续直接使用 Bearer Header。
+
+Management Shell 与 Room View 的认证链路不同，详见 [安全策略](../SECURITY.md)。
+
+## 2. 后台运行
+
+`pairroom daemon` 把同一个 Service 安装到系统服务管理器：
 
 ```bash
 pairroom daemon install --runtime-limit 4 --idle-timeout 20m
 pairroom daemon open
 pairroom daemon status
 pairroom daemon logs -f
-pairroom daemon restart
-pairroom daemon uninstall
 ```
 
 后台 Service 不主动打开浏览器。`pairroom daemon open` 从当前和轮转日志读取候选 Management URL，拒绝非数值 loopback、非 HTTP、缺少 fragment token 或无法认证当前 Service 的地址，然后才调用系统默认浏览器；bootstrap token 不写入可重建的 daemon metadata。
 
-daemon 的正常 stop/restart 继续遵守本页的关闭顺序；Windows 通过用户配置目录中的控制文件请求 Service 自行排空，而不是直接终止进程。异常崩溃留下的 `service.lock` 不会自动删除；确认原进程已经退出后，使用 `pairroom daemon start --recover-stale-lock` 或 `pairroom daemon restart --recover-stale-lock` 明确授权恢复。
+Linux 使用 systemd，macOS 使用 launchd，Windows 使用当前用户 Task Scheduler。安装会固定二进制路径、工作目录、PATH、代理环境、日志位置和完整 Service 参数，并自动加上后台所需的 `--no-browser` 与控制文件。
 
-`daemon restart` 只重启已经安装的服务定义，不接收新的 Runtime 参数。修改 limit、idle timeout、data root、Agent 或路由配置时，必须重新提交完整定义；`--` 可明确分隔 daemon 自身选项和转发给 `pairroom service` 的选项：
+修改配置时必须重装完整定义：
 
 ```bash
-pairroom daemon install --force -- --runtime-limit 4 --idle-timeout 20m
+pairroom daemon install --force -- \
+  --data-root /absolute/path/to/pairroom-data \
+  --runtime-limit 4 \
+  --idle-timeout 20m
 ```
 
-重装时必须保留现有完整参数，不能只复制上面的局部示例覆盖真实定义。
+`daemon restart` 只重启已有定义。完整运维语义见 [运维手册](OPERATIONS.md)。
 
-## Management Shell
+## 3. 管理信息架构
 
-Management Shell 使用渐进式管理信息架构，同时保留现有 Room View 作为实际协作界面：
+Management Shell 保留 Room View 作为实际协作界面，自身只负责控制面：
 
-- **Overview**：Service 健康、Project/Room 数量、Runtime capacity、排队/失败/待补全 Binding 和活动 Runtime；
-- **Projects**：跨 Project/Room 搜索、可用性过滤、登记 Project、显式导入 Legacy Room；
-- **Project detail**：一个 Project 下的 Room 创建、打开、改名、归档、恢复和 Legacy Binding completion；
-- **Runtimes**：phase、busy、是否占用 capacity、FIFO queue position、最近使用、错误和安全挂起；
-- **Settings**：当前标签页的界面偏好、只读 Runtime policy、daemon 运维指引、Service 诊断和能力边界。
+| 页面 | 用途 |
+|---|---|
+| Overview | Service 健康、Project/Room 计数、capacity、活动/排队/失败 Runtime、attention items |
+| Projects | 跨 Project/Room 搜索、可用性筛选、登记 Project、Legacy Import |
+| Project detail | 创建 Room、打开、改名、归档、恢复、补全 Binding |
+| Runtimes | phase、busy、capacity occupation、queue position、last used、错误、安全挂起 |
+| Settings | 当前标签页界面偏好、有效 Runtime policy、daemon 指引、Service diagnostics、capabilities |
 
-浏览器不再依赖 `window.prompt` 或 `window.confirm`，所有有副作用的操作都通过可校验表单和 Dialog 完成，并统一显示 loading、connection、empty、error 和 toast 状态。窄屏下侧栏改为抽屉，Runtime 表格改为带字段标签的卡片，不要求横向滚动。
+所有 mutation 使用带校验的表单/Dialog，不依赖 `window.prompt` 或 `window.confirm`。窄屏使用抽屉导航与卡片式 Runtime 行。
 
-`GET /api/v1/service` 除 Project、Room 和 Runtime 列表外，还返回：
+## 4. Project Identity
 
-- `runtime_policy`：当前进程实际生效的 limit、idle timeout、poll interval 和 close timeout；
-- `summary`：Projects、Rooms、pending bindings、capacity used、busy/queued/failed Runtime 和 attention items 的服务端聚合；
-- `capabilities`：Legacy import、安全挂起、Runtime policy 热修改、Project removal、Room deletion 和服务器路径浏览是否受支持。
+Project 代表一个 canonical Git worktree。登记时服务端执行：
 
-Runtime policy 在本版本中是只读的进程配置。Settings 不会把未实现的热修改伪装成保存成功；前台进程通过重新启动 `pairroom service` 更新，后台定义通过 `pairroom daemon install --force` 更新。
+1. 要求绝对路径；
+2. 验证目录存在且可访问；
+3. 解析符号链接；
+4. 执行 `git rev-parse --show-toplevel`；
+5. 再次 canonicalize；
+6. 生成稳定 Project ID 并去重。
 
-Management Token 继续只从 URL fragment 进入当前页面内存，随后立即从地址栏移除；界面偏好也只保存在当前标签页内存，不使用 Web Storage。
+因此：
 
-## Project Identity
+- 同一 worktree 的根目录、子目录与 symlink 只能登记一次；
+- 两个 Git worktree 即使来自同一仓库，也是两个 Project；
+- Service 不扫描用户目录；
+- Management Shell 不提供服务端文件系统浏览器；
+- Project 路径不可用时保留登记与 Room 历史，但阻止需要工作区的操作。
 
-Management Shell 只接受用户显式输入的绝对路径。服务端按以下顺序处理：
+## 5. Room 与 Binding
 
-1. 要求路径为绝对路径并验证目录存在、可访问；
-2. 解析符号链接；
-3. 执行 `git rev-parse --show-toplevel`；
-4. 再次 canonicalize Git worktree root；
-5. 以 canonical root 生成 Project ID 并去重。
+每个 Room：
 
-同一 worktree 的根目录、任意子目录和符号链接只能登记一次。Service 不提供服务器文件系统浏览器，也不会扫描用户常用开发目录。
+- 永久属于一个 Project；
+- 拥有独立 append-only Event Log 和附件库；
+- 恰好绑定一个 Claude Session 与一个 Codex Thread；
+- 有自己的角色、路由、消息、审批和 Runtime 生命周期。
 
-## Room Provisioning 与 Binding
+### 5.1 四种创建组合
 
-每个 Room 永久属于一个 Project，并恰好拥有：
+Claude 与 Codex 可分别选择：
 
-- 一个 Claude 原生 Session Binding；
-- 一个 Codex 原生 Thread Binding。
+```text
+new
+existing(<vendor-session-or-thread-id>)
+```
 
-两侧可独立选择 `new` 或 `existing(session_id)`，因此支持四种组合。Binding Identity `(agent, vendor_session_id)` 在整个 Service 内全局唯一，归档 Room 仍保留所有权。`existing` 在 Provisioning 时验证并立即拥有指定 Identity；`new` 先记录为 deferred binding，因为 Claude Code 与 Codex 都不会持久化一个尚无用户 Turn 的空会话。
+因此支持 new/new、new/existing、existing/new、existing/existing。
 
-Provisioning 在隐藏暂存目录中完成。服务会验证两侧所需的官方协议，对 `existing` 精确恢复指定 ID，再写入初始 append-only Event Log，随后以原子 rename 发布 Room。任一 Existing ID 无法精确恢复、任一 Binding 已被占用，或任一侧协议验证失败时，都不会出现可见 Room、Binding 索引或半成品数据目录。
+### 5.2 全局唯一 ownership
 
-Deferred `new` binding 不阻止 Runtime 激活。Adapter 为首个 PairRoom 输入启动新原生会话；输入被官方 CLI 接受后，Engine 在同一个 Room Event Log 单写者边界内追加 `service.room.binding.materialized`，Registry 同步建立全局所有权，之后才允许该 Turn 继续作为正常执行投影。Event append、所有权 checkpoint 或唯一性检查失败时会中断该执行并 fail closed。Service 如果在首个输入前退出，重启后会重新创建空会话，而不会恢复事件流中可能残留但尚未 materialize 的临时 ID。
+Binding Identity：
 
-Existing Binding 只恢复供应商原生 context。PairRoom 不读取、导入、复制、摘要、搜索或展示绑定前 Vendor Transcript；Room View 显示 transcript boundary 提示，PairRoom Event Log 仅从绑定成功后开始。
+```text
+(agent, vendor_session_id)
+```
 
-## Runtime Capacity
+在整个 Service 内全局唯一。归档 Room 仍保留 ownership，避免同一 Vendor context 被两个 PairRoom Room 并发解释或写入。
 
-Room Runtime Manager 为每个激活 Room 创建独立的：
+### 5.3 Existing Binding
+
+Existing Binding 在创建过程中必须：
+
+- 通过当前官方协议精确恢复；
+- 属于正确 Agent 类型；
+- 未被其他 Room 占用。
+
+恢复只带回 Vendor 原生 context。PairRoom 不读取、复制、搜索或展示绑定前 Transcript；Room View 会标出 transcript boundary，PairRoom 时间线从成功绑定后开始。
+
+### 5.4 Deferred New Binding
+
+空 Vendor Session/Thread 在没有首个 Turn 时不一定具备可持久化身份，因此 `new` 初始记为 deferred。
+
+首个真实输入流程：
+
+1. Adapter 创建新原生会话；
+2. 官方 CLI 接受 PairRoom 输入；
+3. Engine 追加 `service.room.binding.materialized`；
+4. Registry 建立全局 ownership/checkpoint；
+5. Turn 才继续按正常事件投影。
+
+Event append、唯一性或 checkpoint 失败会中断该执行并 fail closed。若 Service 在首个输入前退出，重启时可以重新创建空会话，不会错误恢复尚未 materialize 的临时 ID。
+
+## 6. 原子 Provisioning
+
+创建 Room 在隐藏暂存目录中完成：
+
+```text
+validate Project
+  -> validate/probe both bindings
+  -> create staged Room store
+  -> append initial lifecycle events
+  -> claim binding ownership
+  -> atomic rename/publish
+  -> checkpoint Registry
+```
+
+任一 Existing ID 无法精确恢复、任一 identity 已占用、协议验证失败或初始 Store 提交失败时：
+
+- 不出现可见 Room；
+- 不写入半成品 Binding 索引；
+- 不留下可激活的数据目录。
+
+## 7. Room Runtime
+
+每个激活 Room 创建独立的：
 
 - Event Store 与 Attachment Store；
 - Workspace Manager；
-- Engine、Hub 与 Room HTTP/SSE 服务；
-- Claude Adapter 与 Codex Adapter。
+- Engine 与 Event Hub；
+- Room HTTP/SSE Server；
+- ClaudeAdapter 与 CodexAdapter；
+- loopback listener 与认证 Token。
 
-Runtime 按 Room ID 惰性激活。全局容量达到 `--runtime-limit` 时：
+这些 Runtime 是 Service 进程内隔离的逻辑单元；官方 `claude`/`codex app-server` 是各自子进程。
 
-1. 优先挂起最久未使用且 idle 的 Runtime；
-2. 若所有 Runtime 都有活动 Turn，新需求进入 FIFO 队列；
-3. Management Shell 显示 phase、busy、queue position 和 Room URL；
-4. 活动 Turn 不会为了释放容量而被中断。
+### 7.1 激活
 
-Room 空闲超过 `--idle-timeout` 后释放 Agent 进程。每侧首个真实输入 materialize 后，再次打开或发送消息时，Runtime 以同一 durable Session/Thread ID 精确恢复，而不是创建新 Binding。切换浏览器中的 Room 不会触发 interrupt 或 stop。
+打开 Room 或调用 activate 时：
 
-Management Shell 支持手动请求安全挂起：
+- 已 active：返回现有 URL；
+- 有空闲 slot：启动 Runtime；
+- 可回收 idle Runtime：先安全挂起最久未使用者；
+- 所有 slot busy：进入 FIFO queue。
 
-- queued Runtime 会从 FIFO 队列取消并回到 suspended；
-- active 但 idle 的 Runtime 会进入 draining/stopping 并正常关闭；
-- busy Runtime 返回冲突，不会 interrupt 活动 Turn；
-- cleanup 状态无法证明完成且仍持有 Runtime 的 failed 状态拒绝挂起，也不会假装释放 capacity。
+切换浏览器标签页不会 stop 或 interrupt Agent。
 
-`occupies_capacity` 明确表示状态是否消耗全局 slot；starting、active、stopping 和保留了实例的 failed Runtime 为 `true`，queued 与 suspended 为 `false`。
+### 7.2 精确恢复
 
-## 生命周期
+Binding materialize 后，Runtime 再次激活会以同一 durable Claude Session/Codex Thread ID 精确 resume，而不是创建新 Binding。
 
-首版生命周期只有：
+### 7.3 Idle suspend
 
-- 创建；
-- 重命名；
-- 归档；
-- 恢复。
+Room 空闲超过 `--idle-timeout` 后释放 Agent 子进程和 Runtime slot。Room Event Log、附件、Binding 与消息历史不被删除。浏览器草稿属于页面状态，不应被当作 Runtime 的 durable 数据。
 
-重命名、Binding 补全和归档会先等待活动 Turn 自然结束并挂起 Runtime，避免同一个 append-only log 同时存在 Engine 与控制面的两个写入投影。归档不删除 Event Log、附件或 Binding Identity。恢复后仍使用原有完整历史与绑定。
+## 8. Runtime Capacity
 
-## 数据布局与恢复
+`--runtime-limit` 范围为 1–128，默认 2。实际合理值取决于机器资源、Vendor 并发限制和仓库规模。
 
-默认数据根由操作系统用户配置目录决定，和启动目录无关：
+容量状态：
+
+| Phase | 通常占用 slot | 说明 |
+|---|---:|---|
+| starting | 是 | 正在构造 Runtime/Listener/Adapters |
+| active | 是 | 可用，可能 idle 或 busy |
+| stopping | 是 | 尚未证明 cleanup 完成 |
+| failed + retained runtime | 是 | cleanup uncertain，不能假装释放 |
+| queued | 否 | 等待 FIFO |
+| suspended | 否 | durable Room 保留，运行资源已释放 |
+
+`occupies_capacity` 是 API 的明确字段，不应仅从 phase 名称猜测。
+
+### 8.1 安全挂起
 
 ```text
-<pairroom-config-root>/pairroom/
+POST /api/v1/rooms/{room-id}/suspend
+```
+
+行为：
+
+- queued：从 FIFO 移除并回到 suspended；
+- active + idle：drain/stop；
+- active + busy：`409 Conflict`，不 interrupt Turn；
+- starting/stopping：根据当前状态冲突；
+- failed + retained runtime：`409 Conflict`，提示 cleanup uncertain；
+- unknown Room：`404 Not Found`。
+
+Suspend 与 rename/archive/binding completion 使用同一 per-Room 控制锁，防止并发修改。
+
+## 9. Room 生命周期
+
+当前 durable 生命周期：
+
+```text
+create -> rename* -> archive <-> restore
+```
+
+- Rename 只改展示名称，不改 Room ID/Binding；
+- Archive 前等待活动 Turn 自然结束并挂起 Runtime；
+- Archive 不删除 Event Log、附件或 Binding ownership；
+- Restore 保留完整历史与原绑定；
+- 当前没有永久 Room deletion；
+- 当前没有 Project removal。
+
+生命周期操作需要避免 Room Engine 与控制面同时成为 Event Log writer，因此会先进入安全 Runtime 边界。
+
+## 10. 数据布局与 Registry 重建
+
+```text
+<pairroom-root>/
 ├── service.lock
 ├── service-registry.json
 └── rooms/
@@ -151,37 +275,112 @@ Management Shell 支持手动请求安全挂起：
         └── runtime/
 ```
 
-`events.jsonl` 是每个 Room 的事实源。`service-registry.json` 只是可替换 checkpoint：删除或损坏后，Service 会扫描默认 `rooms/`，从 Room Event Logs 重建 Project、Room 生命周期和 Binding Identity 索引。显式导入的自定义旧目录不在默认扫描边界内，因此 checkpoint 丢失后需要用户再次显式导入；导入仍只重建索引，不修改该 Room 的 Event Log。Checkpoint 写入失败且无法证明内存索引与已提交 Event Log 一致时，Registry 会 fail closed，阻止后续修改。
+`events.jsonl` 是每个 Room 的事实源；`service-registry.json` 是可替换 checkpoint/index。
 
-一个数据根只允许一个 Service 进程持有 `service.lock`。崩溃残留的 lock 不会被自动猜测为 stale；确认原进程已经退出后，用户可显式使用：
+checkpoint 删除或损坏后，Service 扫描默认 `rooms/`，从 Event Logs 重建：
 
-```bash
-pairroom service --recover-stale-lock
+- Project；
+- Room lifecycle；
+- Binding ownership；
+- archived/pending 状态。
+
+显式导入的自定义 Legacy 路径不在默认扫描边界内，需要再次导入。导入只重建索引，不修改原 Room Event Log。
+
+Registry 无法证明内存索引、已提交 Event 与 checkpoint 一致时，会阻止后续 mutation。
+
+## 11. Legacy Room
+
+### 11.1 默认目录发现
+
+Service 启动时只扫描默认 PairRoom Room 根，不全盘搜索，也不移动、复制或重写旧 Event Log。
+
+Event Log 中已有的 Session/Thread ID 会登记为 durable Binding。缺任一侧 ID 的 Room 标记为 pending，暂不能激活；导入本身不主动证明 Vendor 端当前一定可恢复。
+
+### 11.2 补全 Binding
+
+Management Shell 提供一次性 completion：
+
+- existing：先精确验证，再原子补全；
+- new：记录 deferred，首个真实输入时 materialize；
+- 已存在的 durable Binding 不能被替换。
+
+成功只追加一个 lifecycle 事件，不重写旧历史。
+
+### 11.3 自定义旧目录
+
+旧 `serve --data-dir /custom/path` 不会被自动扫描。用户在 Management Shell 显式输入绝对路径导入；导入建立可重建索引，不搬迁数据。
+
+## 12. Service snapshot
+
+`GET /api/v1/service` 返回：
+
+```json
+{
+  "version": "1.0.0",
+  "commit": "...",
+  "build_date": "...",
+  "data_root": "/absolute/path",
+  "generated_at": "...",
+  "projects": [],
+  "rooms": [],
+  "runtimes": [],
+  "runtime_policy": {},
+  "summary": {},
+  "capabilities": {},
+  "healthy": true,
+  "diagnostic": ""
+}
 ```
 
-## Legacy Room
+### 12.1 Runtime policy
 
-首次启动 Service 时只扫描默认 PairRoom Room 数据根，不移动、不复制、不重写旧 `events.jsonl`。可从旧事件恢复出的 Session/Thread ID 会成为 durable Binding。
+```json
+{
+  "limit": 2,
+  "idle_timeout_seconds": 900,
+  "poll_interval_milliseconds": 500,
+  "close_timeout_seconds": 10
+}
+```
 
-缺少任一原生 ID 的 Legacy Room 会标记为 pending，并阻止 Runtime 激活。Management Shell 提供一次性的 Binding 选择操作；`existing` 会原子验证并补全，`new` 会选择为 deferred binding，成功后只追加一个 `service.room.bindings.completed` 事件。仅有 deferred `new` 的 Room 可以激活，并在首个真实输入后按相同的 materialization 流程获得 durable Identity；已存在的 durable Binding 不能被替换。
+这些是当前进程有效值，不是可热修改设置。修改前台 Service 需重启；修改 daemon 需完整 `install --force`。
 
-自定义旧 `--data-dir` 不会被全盘扫描。用户必须在 Management Shell 中显式输入绝对路径导入；导入只建立可重建索引，不修改旧 Room Event Log。
+### 12.2 Summary
 
-## 关闭顺序
+服务端聚合 Project/Room、pending bindings、capacity used、active/busy/queued/failed Runtime 和 attention items。它是派生观测值，不是新的持久化事实源。
 
-收到 SIGINT/SIGTERM 时，Service：
+### 12.3 Capabilities
 
-1. 停止接受新的 Management 请求和 Provisioning；
-2. 等待正在处理的管理请求退出；
-3. 等待活动 Room Turn 完成，并挂起各 Runtime；
-4. 关闭各 Room Engine/Store；
-5. 释放 Service lock。
+典型字段：
 
-`--shutdown-timeout` 是整个优雅关闭阶段的上限；除显式用户中断外，容量回收、Room 切换、idle timeout 与正常关闭均不调用 Agent interrupt。
+```json
+{
+  "legacy_import": true,
+  "runtime_suspend": true,
+  "runtime_policy_mutation": false,
+  "project_removal": false,
+  "room_deletion": false,
+  "server_path_browser": false
+}
+```
 
-## API 摘要
+`false` 表示当前产品契约不提供该操作，不应伪装成“保存成功”或简单归因于用户权限。
 
-Management API 接受 `Authorization: Bearer <token>`，浏览器也可通过 Bearer bootstrap 建立 HttpOnly 会话；Cookie 认证的 mutation 还必须提供匹配的 `X-PairRoom-CSRF`，query-string token 始终被拒绝。主要端点：
+## 13. Management API 摘要
+
+Management API 接受直接 Bearer 或有效 browser session。直接 API 客户端发送：
+
+```http
+Authorization: Bearer <management-token>
+```
+
+浏览器自动发送 HttpOnly Cookie；Session 认证的 mutation 还必须提供：
+
+```http
+X-PairRoom-CSRF: <session-csrf-token>
+```
+
+主要端点：
 
 ```text
 POST   /api/v1/session
@@ -199,6 +398,43 @@ POST   /api/v1/rooms/{room}/restore
 POST   /api/v1/import
 ```
 
-`POST /api/v1/rooms/{room}/suspend` 只执行 queued cancel 或 idle suspend；忙碌 Runtime 返回 `409 Conflict`。每个激活 Room 使用独立的 loopback HTTP 地址和独立 token，继续暴露现有 Room View、REST 与 SSE 协议；一个 Room 的 token、snapshot、SSE cursor、附件和草稿不能用于另一个 Room。
+- query token 被拒绝；
+- browser session 的 mutation 需要 CSRF，直接 Bearer 客户端不需要该 Header；
+- mutation 使用结构化错误与状态码；
+- busy/unsafe suspend 使用 `409 Conflict`；
+- Room 激活结果包含独立 Room URL；
+- Management API 不提供 Room transcript 或附件内容。
 
-Management Shell 的详细路由、snapshot 字段、可访问性和回归边界见 [`MANAGEMENT_SHELL.md`](MANAGEMENT_SHELL.md)。cc-connect 调研与适配决策见 [`CC_CONNECT_UX_RESEARCH.md`](CC_CONNECT_UX_RESEARCH.md)。
+Room 的消息、附件、SSE 和浏览器 session 契约见 [Room 协议](PROTOCOL.md)。
+
+## 14. 关闭与锁
+
+收到 SIGINT/SIGTERM：
+
+1. Management Server 停止接收新 mutation；
+2. 等待 in-flight provisioning/lifecycle handler；
+3. Runtime Manager 等待活动 Turn 并关闭各 Room；
+4. Engine/Store 关闭；
+5. 释放 `service.lock`。
+
+一个 data root 只能有一个 Service。崩溃残留 lock 不自动判 stale；确认旧进程已退出后才使用：
+
+```bash
+pairroom service --recover-stale-lock
+```
+
+## 15. 当前边界
+
+当前 Service 支持一个本机用户管理多个 Project/Room，但每个 Room 仍固定为：
+
+```text
+one canonical Git worktree
+one human operator
+one Claude participant
+one Codex participant
+one Driver + one Reviewer by default
+```
+
+没有多人身份、远程 worker、云同步、托管 TLS、Project/Room 永久删除、Runtime policy 热修改或额外 Vendor 插件市场。
+
+Management Shell 的页面级行为、可访问性和测试契约见 [MANAGEMENT_SHELL.md](MANAGEMENT_SHELL.md)。cc-connect 的体验调研与取舍记录见 [CC_CONNECT_UX_RESEARCH.md](CC_CONNECT_UX_RESEARCH.md)。
