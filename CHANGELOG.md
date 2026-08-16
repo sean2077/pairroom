@@ -5,6 +5,22 @@
 ### Added
 
 - Cross-platform `pairroom daemon install|uninstall|start|stop|restart|status|logs` management for the multi-Project/multi-Room Service via systemd, launchd, and Windows Task Scheduler, including bounded log rotation, graceful Windows shutdown control, manager-aligned drain timeouts, and explicit crash-stale lock recovery.
+- A routed Management Shell with Overview, Projects, Project detail, Runtimes, and grouped Settings views, plus cross-Project search, responsive navigation, semantic dialogs, connection feedback, empty states, and toast notifications.
+- Service snapshot observability for effective Runtime policy, aggregate Project/Room/Runtime summary, explicit management capabilities, and per-Runtime capacity occupation.
+- Safe `POST /api/v1/rooms/{room}/suspend` control that cancels queued activations or closes idle Runtimes while refusing to interrupt active Turns or discard cleanup-uncertain Runtime state.
+- Interface, Runtime, daemon, Service diagnostics, and safety-boundary Settings sections; daemon guidance distinguishes restart from full service-definition replacement.
+- Chromium visual smoke coverage for desktop and mobile Management Shell routes, dialogs, console errors, and horizontal overflow.
+
+### Changed
+
+- Project and Room lifecycle operations now use validated forms and dialogs instead of native browser `prompt`/`confirm`.
+- Runtime management on narrow viewports renders as labelled cards instead of overflowing tables.
+- Management UI preferences and bearer bootstrap state remain tab-memory-only; no Web Storage persistence was introduced.
+- Management polling now defaults to 10 seconds with explicit slower/faster choices, and Runtime control conflicts consistently return `409 Conflict`.
+
+### Documentation
+
+- Added a current-main cc-connect UX research and adaptation record plus a Management Shell interaction/API contract.
 
 ## [v1.0.0] — 2026-08-14
 

@@ -38,17 +38,44 @@ type ManagementServer struct {
 	roomLocks   sync.Map // map[roomID]*sync.Mutex; Rooms are never permanently deleted
 }
 
+type ServiceSummary struct {
+	Projects            int `json:"projects"`
+	UnavailableProjects int `json:"unavailable_projects"`
+	Rooms               int `json:"rooms"`
+	ActiveRooms         int `json:"active_rooms"`
+	ArchivedRooms       int `json:"archived_rooms"`
+	PendingBindings     int `json:"pending_bindings"`
+	RuntimeCapacityUsed int `json:"runtime_capacity_used"`
+	ActiveRuntimes      int `json:"active_runtimes"`
+	BusyRuntimes        int `json:"busy_runtimes"`
+	QueuedRuntimes      int `json:"queued_runtimes"`
+	FailedRuntimes      int `json:"failed_runtimes"`
+	AttentionItems      int `json:"attention_items"`
+}
+
+type ServiceCapabilities struct {
+	LegacyImport          bool `json:"legacy_import"`
+	RuntimeSuspend        bool `json:"runtime_suspend"`
+	RuntimePolicyMutation bool `json:"runtime_policy_mutation"`
+	ProjectRemoval        bool `json:"project_removal"`
+	RoomDeletion          bool `json:"room_deletion"`
+	ServerPathBrowser     bool `json:"server_path_browser"`
+}
+
 type ServiceSnapshot struct {
-	Version     string          `json:"version"`
-	Commit      string          `json:"commit,omitempty"`
-	BuildDate   string          `json:"build_date,omitempty"`
-	DataRoot    string          `json:"data_root"`
-	GeneratedAt time.Time       `json:"generated_at"`
-	Projects    []Project       `json:"projects"`
-	Rooms       []Room          `json:"rooms"`
-	Runtimes    []RuntimeStatus `json:"runtimes"`
-	Healthy     bool            `json:"healthy"`
-	Diagnostic  string          `json:"diagnostic,omitempty"`
+	Version       string              `json:"version"`
+	Commit        string              `json:"commit,omitempty"`
+	BuildDate     string              `json:"build_date,omitempty"`
+	DataRoot      string              `json:"data_root"`
+	GeneratedAt   time.Time           `json:"generated_at"`
+	Projects      []Project           `json:"projects"`
+	Rooms         []Room              `json:"rooms"`
+	Runtimes      []RuntimeStatus     `json:"runtimes"`
+	RuntimePolicy RuntimePolicy       `json:"runtime_policy"`
+	Summary       ServiceSummary      `json:"summary"`
+	Capabilities  ServiceCapabilities `json:"capabilities"`
+	Healthy       bool                `json:"healthy"`
+	Diagnostic    string              `json:"diagnostic,omitempty"`
 }
 
 func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) {
@@ -82,6 +109,7 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	mux.HandleFunc("POST /api/v1/projects", server.registerProject)
 	mux.HandleFunc("POST /api/v1/projects/{project}/rooms", server.provisionRoom)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/activate", server.activateRoom)
+	mux.HandleFunc("POST /api/v1/rooms/{room}/suspend", server.suspendRoom)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/bindings", server.completeRoomBindings)
 	mux.HandleFunc("PATCH /api/v1/rooms/{room}", server.renameRoom)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/archive", server.archiveRoom)
@@ -146,12 +174,55 @@ func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
 		Version: version.Current, Commit: version.Commit, BuildDate: version.BuildDate,
 		DataRoot: s.registry.Root(), GeneratedAt: time.Now().UTC(),
 		Projects: registry.Projects, Rooms: registry.Rooms, Runtimes: runtimes,
+		RuntimePolicy: s.runtimes.Policy(),
+		Summary:       summarizeService(registry.Projects, registry.Rooms, runtimes),
+		Capabilities: ServiceCapabilities{
+			LegacyImport: true, RuntimeSuspend: true,
+		},
 		Healthy: healthErr == nil,
 	}
 	if healthErr != nil {
 		payload.Diagnostic = healthErr.Error()
 	}
 	writeManagementJSON(w, http.StatusOK, payload)
+}
+
+func summarizeService(projects []Project, rooms []Room, runtimes []RuntimeStatus) ServiceSummary {
+	summary := ServiceSummary{Projects: len(projects), Rooms: len(rooms)}
+	for _, project := range projects {
+		if !project.Available {
+			summary.UnavailableProjects++
+		}
+	}
+	for _, room := range rooms {
+		if room.Archived() {
+			summary.ArchivedRooms++
+		} else {
+			summary.ActiveRooms++
+		}
+		if room.HasBlockingPendingBindings() {
+			summary.PendingBindings++
+		}
+	}
+	for _, runtime := range runtimes {
+		if runtime.OccupiesCapacity {
+			summary.RuntimeCapacityUsed++
+		}
+		if runtime.Phase == RuntimeActive {
+			summary.ActiveRuntimes++
+		}
+		if runtime.Busy {
+			summary.BusyRuntimes++
+		}
+		switch runtime.Phase {
+		case RuntimeQueued:
+			summary.QueuedRuntimes++
+		case RuntimeFailed:
+			summary.FailedRuntimes++
+		}
+	}
+	summary.AttentionItems = summary.UnavailableProjects + summary.PendingBindings + summary.FailedRuntimes
+	return summary
 }
 
 func (s *ManagementServer) registerProject(w http.ResponseWriter, r *http.Request) {
@@ -201,6 +272,21 @@ func (s *ManagementServer) activateRoom(w http.ResponseWriter, r *http.Request) 
 		code = http.StatusOK
 	}
 	writeManagementJSON(w, code, status)
+}
+
+func (s *ManagementServer) suspendRoom(w http.ResponseWriter, r *http.Request) {
+	roomID := r.PathValue("room")
+	unlock := s.lockRoom(roomID)
+	defer unlock()
+	if _, ok := s.registry.Room(roomID); !ok {
+		s.writeError(w, ErrRoomNotFound)
+		return
+	}
+	if err := s.runtimes.Suspend(r.Context(), roomID); err != nil {
+		s.writeError(w, err)
+		return
+	}
+	writeManagementJSON(w, http.StatusOK, s.runtimes.Status(roomID))
 }
 
 func (s *ManagementServer) completeRoomBindings(w http.ResponseWriter, r *http.Request) {
@@ -360,7 +446,7 @@ func (s *ManagementServer) writeError(w http.ResponseWriter, err error) {
 		code = http.StatusNotFound
 	case errors.Is(err, ErrRegistryFailClosed), errors.Is(err, ErrRuntimeManagerClosed):
 		code = http.StatusServiceUnavailable
-	case errors.Is(err, ErrRuntimeBusy):
+	case errors.Is(err, ErrRuntimeBusy), errors.Is(err, ErrRuntimeCloseUncertain), errors.Is(err, ErrRuntimeDrainAborted):
 		code = http.StatusConflict
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		code = http.StatusRequestTimeout

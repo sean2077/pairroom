@@ -573,3 +573,40 @@ func TestRuntimeFactoryCleanupUncertaintyRetainsCapacity(t *testing.T) {
 		t.Fatalf("manager retried an explicitly uncertain factory cleanup: %d", uncertain.closeCount.Load())
 	}
 }
+
+func TestRuntimeManagerPolicyAndCapacityObservability(t *testing.T) {
+	registry, rooms := provisionRuntimeRooms(t, 1)
+	factory := &fakeRuntimeFactory{}
+	manager, err := NewRuntimeManager(registry, factory.open, RuntimeManagerConfig{
+		Limit: 3, IdleTimeout: 27 * time.Minute, PollInterval: 125 * time.Millisecond, CloseTimeout: 7 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownRuntimeManager(t, manager, factory)
+
+	policy := manager.Policy()
+	if policy.Limit != 3 || policy.IdleTimeoutSeconds != int64((27*time.Minute)/time.Second) ||
+		policy.PollIntervalMilliseconds != 125 || policy.CloseTimeoutSeconds != 7 {
+		t.Fatalf("unexpected runtime policy: %#v", policy)
+	}
+	if status := manager.Status(rooms[0].ID); status.OccupiesCapacity {
+		t.Fatalf("suspended runtime unexpectedly occupies capacity: %#v", status)
+	}
+
+	activateRuntime(t, manager, rooms[0].ID)
+	status := manager.Status(rooms[0].ID)
+	if status.Phase != RuntimeActive || !status.OccupiesCapacity {
+		t.Fatalf("active runtime did not report capacity use: %#v", status)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := manager.Suspend(ctx, rooms[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	status = manager.Status(rooms[0].ID)
+	if status.Phase != RuntimeSuspended || status.OccupiesCapacity {
+		t.Fatalf("suspended runtime retained capacity: %#v", status)
+	}
+}

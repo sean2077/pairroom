@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -65,12 +66,12 @@ func TestManagementShellAuthenticationAssetsAndSecurityHeaders(t *testing.T) {
 	if asset.Code != http.StatusOK {
 		t.Fatalf("management asset status=%d body=%s", asset.Code, asset.Body.String())
 	}
-	for _, marker := range []string{"/api/v1/service", "completeBindings", "补全 Binding", "queue_position", "materializes on first turn", "roomHasBlockingPendingBindings"} {
+	for _, marker := range []string{"/api/v1/service", "completeBindings", "补全 Binding", "queue_position", "materializes on first turn", "roomHasBlockingPendingBindings", "renderProjects", "renderRuntimes", "renderSettings", "/suspend", "pairroom daemon status", "--recover-stale-lock"} {
 		if !strings.Contains(asset.Body.String(), marker) {
 			t.Fatalf("management asset omitted %q", marker)
 		}
 	}
-	for _, forbidden := range []string{"localStorage", "sessionStorage"} {
+	for _, forbidden := range []string{"localStorage", "sessionStorage", "window.prompt(", "window.confirm("} {
 		if strings.Contains(asset.Body.String(), forbidden) {
 			t.Fatalf("management asset must not use %s", forbidden)
 		}
@@ -335,5 +336,106 @@ func TestManagementShutdownForceClosesActiveHandlerAfterDeadline(t *testing.T) {
 	defer managerCancel()
 	if err := manager.Shutdown(managerCtx); err != nil {
 		t.Fatalf("shutdown runtime manager: %v", err)
+	}
+}
+
+func TestManagementSnapshotIncludesSummaryPolicyAndCapabilities(t *testing.T) {
+	registry, project := testRegistry(t, testGitRepo(t))
+	room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+		ProjectID: project.ID,
+		Name:      "Dashboard Room",
+		Bindings:  specs(BindingNew, BindingNew, "dashboard"),
+	}, SyntheticProvisioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, manager := newManagementTestServer(t, registry, SyntheticProvisioner{})
+	activateRuntime(t, manager, room.ID)
+
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, managementRequest(http.MethodGet, "/api/v1/service", "", true))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("snapshot status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var snapshot ServiceSnapshot
+	if err := json.Unmarshal(recorder.Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.RuntimePolicy.Limit != 2 || snapshot.RuntimePolicy.IdleTimeoutSeconds != int64(time.Hour/time.Second) {
+		t.Fatalf("unexpected runtime policy: %#v", snapshot.RuntimePolicy)
+	}
+	if snapshot.Summary.Projects != 1 || snapshot.Summary.Rooms != 1 || snapshot.Summary.ActiveRooms != 1 ||
+		snapshot.Summary.ActiveRuntimes != 1 || snapshot.Summary.RuntimeCapacityUsed != 1 {
+		t.Fatalf("unexpected service summary: %#v", snapshot.Summary)
+	}
+	if !snapshot.Capabilities.LegacyImport || !snapshot.Capabilities.RuntimeSuspend || snapshot.Capabilities.RoomDeletion ||
+		snapshot.Capabilities.ProjectRemoval || snapshot.Capabilities.ServerPathBrowser || snapshot.Capabilities.RuntimePolicyMutation {
+		t.Fatalf("unexpected capability surface: %#v", snapshot.Capabilities)
+	}
+}
+
+func TestManagementSuspendEndpointProtectsBusyTurnsAndCancelsQueuedRooms(t *testing.T) {
+	registry, rooms := provisionRuntimeRooms(t, 2)
+	factory := &fakeRuntimeFactory{busy: true}
+	manager, err := NewRuntimeManager(registry, factory.open, RuntimeManagerConfig{
+		Limit: 1, IdleTimeout: time.Hour, PollInterval: 5 * time.Millisecond, CloseTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownRuntimeManager(t, manager, factory)
+	activateRuntime(t, manager, rooms[0].ID)
+	if _, err := manager.RequestActivation(rooms[1].ID); err != nil {
+		t.Fatal(err)
+	}
+	waitRuntimeStatus(t, manager, rooms[1].ID, func(status RuntimeStatus) bool { return status.Phase == RuntimeQueued })
+
+	server, err := NewManagementServer(ManagementServerConfig{
+		Registry: registry, Runtimes: manager, Provisioner: SyntheticProvisioner{}, Token: "management-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	busy := httptest.NewRecorder()
+	server.Handler().ServeHTTP(busy, managementRequest(http.MethodPost, "/api/v1/rooms/"+rooms[0].ID+"/suspend", "", true))
+	if busy.Code != http.StatusConflict || !strings.Contains(strings.ToLower(busy.Body.String()), "active work") {
+		t.Fatalf("busy suspend status=%d body=%s", busy.Code, busy.Body.String())
+	}
+	if runtime := factory.get(rooms[0].ID); runtime == nil || runtime.closeCount.Load() != 0 {
+		t.Fatalf("busy runtime was interrupted: %#v", runtime)
+	}
+
+	queued := httptest.NewRecorder()
+	server.Handler().ServeHTTP(queued, managementRequest(http.MethodPost, "/api/v1/rooms/"+rooms[1].ID+"/suspend", "", true))
+	if queued.Code != http.StatusOK {
+		t.Fatalf("queued suspend status=%d body=%s", queued.Code, queued.Body.String())
+	}
+	var status RuntimeStatus
+	if err := json.Unmarshal(queued.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Phase != RuntimeSuspended || status.QueuePosition != 0 || status.OccupiesCapacity {
+		t.Fatalf("queued room was not safely canceled: %#v", status)
+	}
+}
+
+func TestManagementRuntimeControlErrorsUseConflict(t *testing.T) {
+	server := &ManagementServer{}
+	for _, testCase := range []struct {
+		name string
+		err  error
+	}{
+		{name: "busy", err: ErrRuntimeBusy},
+		{name: "close uncertain", err: fmt.Errorf("%w: cleanup not proven", ErrRuntimeCloseUncertain)},
+		{name: "drain aborted", err: fmt.Errorf("%w: runtime changed", ErrRuntimeDrainAborted)},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			server.writeError(recorder, testCase.err)
+			if recorder.Code != http.StatusConflict {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
 	}
 }

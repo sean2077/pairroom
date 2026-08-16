@@ -37,6 +37,36 @@ pairroom daemon uninstall
 
 daemon 的正常 stop/restart 继续遵守本页的关闭顺序；Windows 通过用户配置目录中的控制文件请求 Service 自行排空，而不是直接终止进程。异常崩溃留下的 `service.lock` 不会自动删除；确认原进程已经退出后，使用 `pairroom daemon start --recover-stale-lock` 或 `pairroom daemon restart --recover-stale-lock` 明确授权恢复。
 
+`daemon restart` 只重启已经安装的服务定义，不接收新的 Runtime 参数。修改 limit、idle timeout、data root、Agent 或路由配置时，必须重新提交完整定义；`--` 可明确分隔 daemon 自身选项和转发给 `pairroom service` 的选项：
+
+```bash
+pairroom daemon install --force -- --runtime-limit 4 --idle-timeout 20m
+```
+
+重装时必须保留现有完整参数，不能只复制上面的局部示例覆盖真实定义。
+
+## Management Shell
+
+Management Shell 使用渐进式管理信息架构，同时保留现有 Room View 作为实际协作界面：
+
+- **Overview**：Service 健康、Project/Room 数量、Runtime capacity、排队/失败/待补全 Binding 和活动 Runtime；
+- **Projects**：跨 Project/Room 搜索、可用性过滤、登记 Project、显式导入 Legacy Room；
+- **Project detail**：一个 Project 下的 Room 创建、打开、改名、归档、恢复和 Legacy Binding completion；
+- **Runtimes**：phase、busy、是否占用 capacity、FIFO queue position、最近使用、错误和安全挂起；
+- **Settings**：当前标签页的界面偏好、只读 Runtime policy、daemon 运维指引、Service 诊断和能力边界。
+
+浏览器不再依赖 `window.prompt` 或 `window.confirm`，所有有副作用的操作都通过可校验表单和 Dialog 完成，并统一显示 loading、connection、empty、error 和 toast 状态。窄屏下侧栏改为抽屉，Runtime 表格改为带字段标签的卡片，不要求横向滚动。
+
+`GET /api/v1/service` 除 Project、Room 和 Runtime 列表外，还返回：
+
+- `runtime_policy`：当前进程实际生效的 limit、idle timeout、poll interval 和 close timeout；
+- `summary`：Projects、Rooms、pending bindings、capacity used、busy/queued/failed Runtime 和 attention items 的服务端聚合；
+- `capabilities`：Legacy import、安全挂起、Runtime policy 热修改、Project removal、Room deletion 和服务器路径浏览是否受支持。
+
+Runtime policy 在本版本中是只读的进程配置。Settings 不会把未实现的热修改伪装成保存成功；前台进程通过重新启动 `pairroom service` 更新，后台定义通过 `pairroom daemon install --force` 更新。
+
+Management Token 继续只从 URL fragment 进入当前页面内存，随后立即从地址栏移除；界面偏好也只保存在当前标签页内存，不使用 Web Storage。
+
 ## Project Identity
 
 Management Shell 只接受用户显式输入的绝对路径。服务端按以下顺序处理：
@@ -81,6 +111,15 @@ Runtime 按 Room ID 惰性激活。全局容量达到 `--runtime-limit` 时：
 4. 活动 Turn 不会为了释放容量而被中断。
 
 Room 空闲超过 `--idle-timeout` 后释放 Agent 进程。每侧首个真实输入 materialize 后，再次打开或发送消息时，Runtime 以同一 durable Session/Thread ID 精确恢复，而不是创建新 Binding。切换浏览器中的 Room 不会触发 interrupt 或 stop。
+
+Management Shell 支持手动请求安全挂起：
+
+- queued Runtime 会从 FIFO 队列取消并回到 suspended；
+- active 但 idle 的 Runtime 会进入 draining/stopping 并正常关闭；
+- busy Runtime 返回冲突，不会 interrupt 活动 Turn；
+- cleanup 状态无法证明完成且仍持有 Runtime 的 failed 状态拒绝挂起，也不会假装释放 capacity。
+
+`occupies_capacity` 明确表示状态是否消耗全局 slot；starting、active、stopping 和保留了实例的 failed Runtime 为 `true`，queued 与 suspended 为 `false`。
 
 ## 生命周期
 
@@ -146,6 +185,7 @@ GET    /api/v1/service
 POST   /api/v1/projects
 POST   /api/v1/projects/{project}/rooms
 POST   /api/v1/rooms/{room}/activate
+POST   /api/v1/rooms/{room}/suspend
 POST   /api/v1/rooms/{room}/bindings
 PATCH  /api/v1/rooms/{room}
 POST   /api/v1/rooms/{room}/archive
@@ -153,4 +193,6 @@ POST   /api/v1/rooms/{room}/restore
 POST   /api/v1/import
 ```
 
-每个激活 Room 使用独立的 loopback HTTP 地址和独立 token，继续暴露现有 Room View、REST 与 SSE 协议；一个 Room 的 token、snapshot、SSE cursor、附件和草稿不能用于另一个 Room。
+`POST /api/v1/rooms/{room}/suspend` 只执行 queued cancel 或 idle suspend；忙碌 Runtime 返回 `409 Conflict`。每个激活 Room 使用独立的 loopback HTTP 地址和独立 token，继续暴露现有 Room View、REST 与 SSE 协议；一个 Room 的 token、snapshot、SSE cursor、附件和草稿不能用于另一个 Room。
+
+Management Shell 的详细路由、snapshot 字段、可访问性和回归边界见 [`MANAGEMENT_SHELL.md`](MANAGEMENT_SHELL.md)。cc-connect 调研与适配决策见 [`CC_CONNECT_UX_RESEARCH.md`](CC_CONNECT_UX_RESEARCH.md)。
