@@ -4,7 +4,7 @@
 
 ### Added
 
-- Cross-platform `pairroom daemon install|uninstall|start|stop|restart|status|logs` management for the multi-Project/multi-Room Service via systemd, launchd, and Windows Task Scheduler, including bounded log rotation, graceful Windows shutdown control, manager-aligned drain timeouts, and explicit crash-stale lock recovery.
+- Cross-platform `pairroom daemon install|uninstall|start|stop|restart|status|logs|open` management for the multi-Project/multi-Room Service via systemd, launchd, and Windows Task Scheduler, including authenticated Management Shell discovery, bounded log rotation, graceful Windows shutdown control, manager-aligned drain timeouts, and explicit crash-stale lock recovery.
 - A routed Management Shell with Overview, Projects, Project detail, Runtimes, and grouped Settings views, plus cross-Project search, responsive navigation, semantic dialogs, connection feedback, empty states, and toast notifications.
 - Service snapshot observability for effective Runtime policy, aggregate Project/Room/Runtime summary, explicit management capabilities, and per-Runtime capacity occupation.
 - Safe `POST /api/v1/rooms/{room}/suspend` control that cancels queued activations or closes idle Runtimes while refusing to interrupt active Turns or discard cleanup-uncertain Runtime state.
@@ -15,13 +15,15 @@
 
 - Project and Room lifecycle operations now use validated forms and dialogs instead of native browser `prompt`/`confirm`.
 - Runtime management on narrow viewports renders as labelled cards instead of overflowing tables.
-- Management UI preferences and bearer bootstrap state remain tab-memory-only; no Web Storage persistence was introduced.
+- Management UI preferences and CSRF state remain tab-memory-only; the one-time bearer bootstrap now establishes an HttpOnly, SameSite=Strict browser session without Web Storage persistence.
 - Management polling now defaults to 10 seconds with explicit slower/faster choices, and Runtime control conflicts consistently return `409 Conflict`.
 
 ### Fixed
 
 - Windows Task Scheduler installations now launch the background Service through windowless Windows Script Host, preserve forwarded arguments and graceful shutdown control, and clean up legacy PowerShell launchers during reinstall or uninstall.
 - All built-in Web listeners now reject wildcard, LAN, and hostname binds before opening repository or service state, closing the legacy `pairroom serve` LAN-exposure path.
+- Management Shell authentication now survives page refresh through a sliding HttpOnly session while retaining CSRF protection for Cookie-authenticated mutations.
+- Daemon users can open the current Management Shell without copying a bootstrap token from logs; `daemon open` accepts only authenticated numeric-loopback URLs from the protected current or rotated daemon logs.
 
 ### Documentation
 

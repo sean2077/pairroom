@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/websession"
 )
 
 func newManagementTestServer(t *testing.T, registry *Registry, provisioner BindingProvisioner) (*ManagementServer, *RuntimeManager) {
@@ -66,7 +67,7 @@ func TestManagementShellAuthenticationAssetsAndSecurityHeaders(t *testing.T) {
 	if asset.Code != http.StatusOK {
 		t.Fatalf("management asset status=%d body=%s", asset.Code, asset.Body.String())
 	}
-	for _, marker := range []string{"/api/v1/service", "completeBindings", "补全 Binding", "queue_position", "materializes on first turn", "roomHasBlockingPendingBindings", "renderProjects", "renderRuntimes", "renderSettings", "/suspend", "pairroom daemon status", "--recover-stale-lock"} {
+	for _, marker := range []string{"/api/v1/session", "/api/v1/service", "X-PairRoom-CSRF", "completeBindings", "补全 Binding", "queue_position", "materializes on first turn", "roomHasBlockingPendingBindings", "renderProjects", "renderRuntimes", "renderSettings", "/suspend", "pairroom daemon open", "pairroom daemon status", "--recover-stale-lock"} {
 		if !strings.Contains(asset.Body.String(), marker) {
 			t.Fatalf("management asset omitted %q", marker)
 		}
@@ -112,6 +113,87 @@ func TestManagementShellAuthenticationAssetsAndSecurityHeaders(t *testing.T) {
 	server.Handler().ServeHTTP(crossSite, crossSiteRequest)
 	if crossSite.Code != http.StatusForbidden {
 		t.Fatalf("cross-site mutation status=%d body=%s", crossSite.Code, crossSite.Body.String())
+	}
+}
+
+func TestManagementBrowserSessionSurvivesBootstrapAndRequiresCSRF(t *testing.T) {
+	registry, _ := testRegistry(t, testGitRepo(t))
+	server, _ := newManagementTestServer(t, registry, SyntheticProvisioner{})
+
+	bootstrap := httptest.NewRecorder()
+	server.Handler().ServeHTTP(bootstrap, managementRequest(http.MethodPost, "/api/v1/session", "", true))
+	if bootstrap.Code != http.StatusCreated {
+		t.Fatalf("bootstrap status=%d body=%s", bootstrap.Code, bootstrap.Body.String())
+	}
+	var session struct {
+		CSRF string `json:"csrf_token"`
+	}
+	if err := json.Unmarshal(bootstrap.Body.Bytes(), &session); err != nil {
+		t.Fatal(err)
+	}
+	cookies := bootstrap.Result().Cookies()
+	if len(cookies) != 1 || session.CSRF == "" {
+		t.Fatalf("bootstrap cookie/session missing: cookies=%#v session=%#v", cookies, session)
+	}
+	cookie := cookies[0]
+	if !strings.HasPrefix(cookie.Name, "pairroom_management_") || cookie.Path != "/api/v1/" || !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode {
+		t.Fatalf("unexpected Management session cookie: %#v", cookie)
+	}
+
+	resumed := httptest.NewRecorder()
+	resumedRequest := managementRequest(http.MethodGet, "/api/v1/service", "", false)
+	resumedRequest.AddCookie(cookie)
+	server.Handler().ServeHTTP(resumed, resumedRequest)
+	if resumed.Code != http.StatusOK || len(resumed.Result().Cookies()) != 1 {
+		t.Fatalf("resumed session status=%d cookies=%#v body=%s", resumed.Code, resumed.Result().Cookies(), resumed.Body.String())
+	}
+
+	projectPath := testGitRepo(t)
+	body, err := json.Marshal(map[string]string{"path": projectPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingCSRF := httptest.NewRecorder()
+	missingRequest := managementRequest(http.MethodPost, "/api/v1/projects", string(body), false)
+	missingRequest.AddCookie(cookie)
+	server.Handler().ServeHTTP(missingCSRF, missingRequest)
+	if missingCSRF.Code != http.StatusForbidden {
+		t.Fatalf("missing CSRF status=%d body=%s", missingCSRF.Code, missingCSRF.Body.String())
+	}
+
+	accepted := httptest.NewRecorder()
+	acceptedRequest := managementRequest(http.MethodPost, "/api/v1/projects", string(body), false)
+	acceptedRequest.AddCookie(cookie)
+	acceptedRequest.Header.Set(websession.CSRFHeaderName, session.CSRF)
+	server.Handler().ServeHTTP(accepted, acceptedRequest)
+	if accepted.Code != http.StatusCreated {
+		t.Fatalf("valid CSRF status=%d body=%s", accepted.Code, accepted.Body.String())
+	}
+
+	logout := httptest.NewRecorder()
+	logoutRequest := managementRequest(http.MethodDelete, "/api/v1/session", "", false)
+	logoutRequest.AddCookie(cookie)
+	logoutRequest.Header.Set(websession.CSRFHeaderName, session.CSRF)
+	server.Handler().ServeHTTP(logout, logoutRequest)
+	if logout.Code != http.StatusNoContent {
+		t.Fatalf("logout status=%d body=%s", logout.Code, logout.Body.String())
+	}
+	after := httptest.NewRecorder()
+	afterRequest := managementRequest(http.MethodGet, "/api/v1/service", "", false)
+	afterRequest.AddCookie(cookie)
+	server.Handler().ServeHTTP(after, afterRequest)
+	if after.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked session status=%d body=%s", after.Code, after.Body.String())
+	}
+}
+
+func TestManagementSessionCookieNameIsStableAndDataRootScoped(t *testing.T) {
+	first := managementSessionCookieName(`C:\pairroom\one`)
+	if first == "" || first != managementSessionCookieName(`C:\pairroom\one`) {
+		t.Fatalf("Management cookie name is not stable: %q", first)
+	}
+	if second := managementSessionCookieName(`C:\pairroom\two`); second == first {
+		t.Fatalf("distinct data roots share Management cookie %q", first)
 	}
 }
 

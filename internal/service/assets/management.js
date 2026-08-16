@@ -4,8 +4,8 @@
   const INITIAL_ROUTE = '#/overview';
   const NEW_BINDING_HINT = 'materializes on first turn';
   const hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
-  let token = hashParams.get('token') || '';
-  if (token) {
+  let bootstrapToken = hashParams.get('token') || '';
+  if (bootstrapToken) {
     history.replaceState(null, '', `${location.pathname}${location.search}${INITIAL_ROUTE}`);
   } else if (!location.hash.startsWith('#/')) {
     history.replaceState(null, '', `${location.pathname}${location.search}${INITIAL_ROUTE}`);
@@ -20,6 +20,7 @@
     refreshPromise: null,
     refreshTimer: null,
     renderPending: false,
+    csrfToken: '',
     opening: new Map(),
     pendingNavigationRoom: '',
     projectMode: 'register',
@@ -44,22 +45,52 @@
   const app = $('app');
   const view = $('view');
 
+  async function initializeSession() {
+    const headers = new Headers();
+    let method = 'GET';
+    if (bootstrapToken) {
+      method = 'POST';
+      headers.set('Authorization', `Bearer ${bootstrapToken}`);
+    }
+    const response = await fetch('/api/v1/session', { method, headers, credentials: 'same-origin' });
+    const payload = await response.json().catch(() => ({}));
+    bootstrapToken = '';
+    if (!response.ok) {
+      const message = response.status === 401
+        ? '浏览器会话无效。Daemon 模式请运行 pairroom daemon open；前台模式请重新打开 Service 输出中的完整地址。'
+        : (payload.error || response.statusText || `HTTP ${response.status}`);
+      throw new Error(message);
+    }
+    state.csrfToken = payload.csrf_token || '';
+    if (!state.csrfToken) throw new Error('Management 会话未返回 CSRF 凭证，请重新打开完整 Service 地址。');
+  }
+
+  async function connect(options = {}) {
+    try {
+      if (!state.csrfToken) await initializeSession();
+      return await refresh(options);
+    } catch (error) {
+      state.connected = false;
+      state.lastError = error.message;
+      setDisconnected(error.message);
+      renderMissingToken();
+      if (options.notify) toast('连接失败', error.message, 'error');
+      return null;
+    }
+  }
+
   async function api(path, options = {}) {
     const headers = new Headers(options.headers || {});
-    headers.set('Authorization', `Bearer ${token}`);
+    const method = String(options.method || 'GET').toUpperCase();
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && state.csrfToken) headers.set('X-PairRoom-CSRF', state.csrfToken);
     if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-    const response = await fetch(path, { ...options, headers, credentials: 'same-origin' });
+    const response = await fetch(path, { ...options, method, headers, credentials: 'same-origin' });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || response.statusText || `HTTP ${response.status}`);
     return payload;
   }
 
   async function refresh({ notify = false, forceRender = false } = {}) {
-    if (!token) {
-      setDisconnected('请使用 PairRoom Service 启动输出中的完整 Management Shell 地址。');
-      renderMissingToken();
-      return null;
-    }
     if (state.refreshPromise) return state.refreshPromise;
     $('refresh-button').classList.add('spinning');
     state.refreshPromise = api('/api/v1/service').then((snapshot) => {
@@ -204,7 +235,7 @@
 
   function renderMissingToken() {
     view.replaceChildren(
-      emptyState('!', '缺少 Management Token', '请从 PairRoom Service 启动输出中打开完整地址。Token 只在初始 URL fragment 中读取并立即从地址栏移除。')
+      emptyState('!', 'Management 会话无效', 'Daemon 模式请在终端运行 pairroom daemon open；前台模式请重新打开 Service 输出中的完整地址。')
     );
   }
 
@@ -566,6 +597,7 @@
       const daemonInstall = daemonInstallCommand(policy);
       return node('div', { className: 'view-stack' },
         settingsPanel('Daemon 快捷命令', 'PairRoom Web Shell 不直接停止或重启承载自身的宿主进程；运维动作在本机终端执行。',
+          settingRow('打开 Management Shell', '解析并验证当前 daemon 的完整认证地址后交给默认浏览器。', inlineCommand('pairroom daemon open', 'Daemon open 命令已复制。')),
           settingRow('检查状态', '显示安装状态、平台、PID、日志与轮转元数据。', inlineCommand('pairroom daemon status', 'Daemon status 命令已复制。')),
           settingRow('跟随日志', '读取 daemon 管理的合并 stdout/stderr 日志。', inlineCommand('pairroom daemon logs -f', 'Daemon logs 命令已复制。')),
           settingRow('受控重启', '沿用已安装的完整 Service 定义，并等待活动 Turn 排空。', inlineCommand('pairroom daemon restart', 'Daemon restart 命令已复制。'))
@@ -620,7 +652,7 @@
         ),
         node('aside', { className: 'callout boundary' }, node('strong', { textContent: 'Transcript Boundary' }), node('span', { textContent: 'Vendor Transcript 与 PairRoom Room Event Log 是不同记录。Existing Binding 只恢复 vendor context，绑定前历史不会进入公共时间线。' })),
         node('aside', { className: 'callout warning' }, node('strong', { textContent: 'Binding Identity' }), node('span', { textContent: '(agent, vendor_session_id) 在整个 Service 内独占，包括已归档 Room。该约束防止同一 vendor transcript 被多个 Runtime 并发写入。' })),
-        node('aside', { className: 'callout neutral' }, node('strong', { textContent: 'Browser token' }), node('span', { textContent: 'Management token 只从启动 URL fragment 读取并立即从地址栏移除；API 请求使用内存中的 Bearer 值。' }))
+        node('aside', { className: 'callout neutral' }, node('strong', { textContent: 'Browser session' }), node('span', { textContent: 'Management token 只用于一次性 bootstrap，随后换成 HttpOnly、SameSite=Strict 会话 Cookie；写操作还需要内存中的 CSRF token。' }))
       );
     }
     return node('div', { className: 'view-stack' },
@@ -1472,7 +1504,7 @@
   $('binding-form').addEventListener('submit', submitBindingCompletion);
   $('confirm-form').addEventListener('submit', submitConfirm);
   $('refresh-button').addEventListener('click', () => refresh({ notify: true, forceRender: true }));
-  $('retry-button').addEventListener('click', () => refresh({ notify: true, forceRender: true }));
+  $('retry-button').addEventListener('click', () => connect({ notify: true, forceRender: true }));
   $('add-project-button').addEventListener('click', () => openProjectDialog('register'));
   $('global-search').addEventListener('input', (event) => {
     state.search = event.target.value;
@@ -1510,5 +1542,5 @@
   applyPreferences();
   scheduleRefresh();
   renderLoading();
-  refresh({ forceRender: true });
+  connect({ forceRender: true });
 })();

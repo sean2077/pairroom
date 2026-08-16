@@ -18,7 +18,7 @@ pairroom service \
   --shutdown-timeout 10m
 ```
 
-PairRoom 的所有内置 Web listener（Service、兼容 `serve` 和 Room Runtime）都只接受数字 loopback 地址；通配地址、局域网地址、主机名和 `localhost` 会被拒绝。未提供 `--token` 时，Service 会生成随机 Management API Bearer Token，并放在浏览器启动 URL 的 fragment 中；Management Shell 只在内存中使用它，不写入 `localStorage` 或 `sessionStorage`。远程访问使用 SSH 本地端口转发到服务端 loopback listener。
+PairRoom 的所有内置 Web listener（Service、兼容 `serve` 和 Room Runtime）都只接受数字 loopback 地址；通配地址、局域网地址、主机名和 `localhost` 会被拒绝。未提供 `--token` 时，Service 会生成随机 Management API Bearer Token，并放在浏览器启动 URL 的 fragment 中；Management Shell 将它一次性交换成 HttpOnly、SameSite=Strict 会话 Cookie，Cookie 认证的写操作还要求标签页内存中的 CSRF token，不写入 `localStorage` 或 `sessionStorage`。远程访问使用 SSH 本地端口转发到服务端 loopback listener。
 显式 `--data-root` 必须是绝对路径；未提供时始终使用操作系统用户配置目录下的 PairRoom 根目录，因此从不同 CWD 启动会打开同一份 Registry。
 
 `--mock` 使用确定性 Mock Agent，可在没有供应商登录的机器上验证 Project、Room、队列、归档和恢复流程。真实模式继续调用用户本机官方 `claude` 与 `codex app-server`，不接管供应商凭据、Session Store 或 Transcript。
@@ -29,11 +29,14 @@ PairRoom 的所有内置 Web listener（Service、兼容 `serve` 和 Room Runtim
 
 ```bash
 pairroom daemon install --runtime-limit 4 --idle-timeout 20m
+pairroom daemon open
 pairroom daemon status
 pairroom daemon logs -f
 pairroom daemon restart
 pairroom daemon uninstall
 ```
+
+后台 Service 不主动打开浏览器。`pairroom daemon open` 从当前和轮转日志读取候选 Management URL，拒绝非数值 loopback、非 HTTP、缺少 fragment token 或无法认证当前 Service 的地址，然后才调用系统默认浏览器；bootstrap token 不写入可重建的 daemon metadata。
 
 daemon 的正常 stop/restart 继续遵守本页的关闭顺序；Windows 通过用户配置目录中的控制文件请求 Service 自行排空，而不是直接终止进程。异常崩溃留下的 `service.lock` 不会自动删除；确认原进程已经退出后，使用 `pairroom daemon start --recover-stale-lock` 或 `pairroom daemon restart --recover-stale-lock` 明确授权恢复。
 
@@ -178,9 +181,12 @@ pairroom service --recover-stale-lock
 
 ## API 摘要
 
-Management API 需要 `Authorization: Bearer <token>`，拒绝 query-string token。主要端点：
+Management API 接受 `Authorization: Bearer <token>`，浏览器也可通过 Bearer bootstrap 建立 HttpOnly 会话；Cookie 认证的 mutation 还必须提供匹配的 `X-PairRoom-CSRF`，query-string token 始终被拒绝。主要端点：
 
 ```text
+POST   /api/v1/session
+GET    /api/v1/session
+DELETE /api/v1/session
 GET    /api/v1/service
 POST   /api/v1/projects
 POST   /api/v1/projects/{project}/rooms
