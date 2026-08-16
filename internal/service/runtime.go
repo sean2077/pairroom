@@ -61,15 +61,23 @@ type RuntimeManagerConfig struct {
 	Now          func() time.Time
 }
 
+type RuntimePolicy struct {
+	Limit                    int   `json:"limit"`
+	IdleTimeoutSeconds       int64 `json:"idle_timeout_seconds"`
+	PollIntervalMilliseconds int64 `json:"poll_interval_milliseconds"`
+	CloseTimeoutSeconds      int64 `json:"close_timeout_seconds"`
+}
+
 type RuntimeStatus struct {
-	RoomID        string       `json:"room_id"`
-	Phase         RuntimePhase `json:"phase"`
-	QueuePosition int          `json:"queue_position,omitempty"`
-	Busy          bool         `json:"busy"`
-	URL           string       `json:"url,omitempty"`
-	LastUsedAt    time.Time    `json:"last_used_at,omitempty"`
-	QueuedAt      time.Time    `json:"queued_at,omitempty"`
-	LastError     string       `json:"last_error,omitempty"`
+	RoomID           string       `json:"room_id"`
+	Phase            RuntimePhase `json:"phase"`
+	QueuePosition    int          `json:"queue_position,omitempty"`
+	Busy             bool         `json:"busy"`
+	OccupiesCapacity bool         `json:"occupies_capacity"`
+	URL              string       `json:"url,omitempty"`
+	LastUsedAt       time.Time    `json:"last_used_at,omitempty"`
+	QueuedAt         time.Time    `json:"queued_at,omitempty"`
+	LastError        string       `json:"last_error,omitempty"`
 }
 
 type runtimeEntry struct {
@@ -226,6 +234,21 @@ func (m *RuntimeManager) Activate(ctx context.Context, roomID string) (RoomRunti
 			return nil, m.Status(roomID), ctx.Err()
 		case <-changed:
 		}
+	}
+}
+
+// Policy returns the effective runtime policy for observability. The values
+// are immutable after manager construction; changing service flags still
+// requires a controlled service restart so active Room turns are never
+// reconfigured underneath a running vendor session.
+func (m *RuntimeManager) Policy() RuntimePolicy {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return RuntimePolicy{
+		Limit:                    m.cfg.Limit,
+		IdleTimeoutSeconds:       int64(m.cfg.IdleTimeout / time.Second),
+		PollIntervalMilliseconds: int64(m.cfg.PollInterval / time.Millisecond),
+		CloseTimeoutSeconds:      int64(m.cfg.CloseTimeout / time.Second),
 	}
 }
 
@@ -662,6 +685,8 @@ func (m *RuntimeManager) statusLocked(roomID string, entry *runtimeEntry) Runtim
 	status := RuntimeStatus{
 		RoomID: roomID, Phase: entry.phase, LastUsedAt: entry.lastUsed,
 		QueuedAt: entry.queuedAt, LastError: entry.lastError,
+		OccupiesCapacity: entry.phase == RuntimeStarting || entry.phase == RuntimeActive ||
+			entry.phase == RuntimeStopping || (entry.phase == RuntimeFailed && entry.runtime != nil),
 	}
 	if entry.runtime != nil && entry.phase != RuntimeFailed {
 		status.Busy = entry.runtime.Busy()

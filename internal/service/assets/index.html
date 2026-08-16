@@ -3,49 +3,153 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#0b1020">
   <title>PairRoom Service</title>
   <link rel="stylesheet" href="/management.css">
 </head>
 <body>
-  <header class="topbar">
-    <div>
-      <p class="eyebrow">PAIRROOM SERVICE</p>
-      <h1>Projects & Rooms</h1>
-      <p id="service-meta" class="muted">正在连接本地服务…</p>
-    </div>
-    <span id="health" class="badge warn">Connecting</span>
-  </header>
-  <main>
-    <aside class="notice"><strong>Transcript Boundary</strong><span>复用已有 Claude Session 或 Codex Thread 只恢复供应商上下文；PairRoom 不导入或展示绑定前 transcript。</span></aside>
-    <section class="controls">
-      <form id="project-form" class="panel compact">
-        <h2>登记 Project</h2>
-        <div class="inline"><input id="project-path" name="path" type="text" required placeholder="/absolute/path/to/git/worktree" autocomplete="off"><button type="submit">登记</button></div>
-        <p class="hint">只接受显式绝对路径。根目录、子目录和符号链接会解析为 canonical Git worktree。</p>
-      </form>
-      <form id="import-form" class="panel compact">
-        <h2>导入 Legacy Room</h2>
-        <div class="inline"><input id="import-path" name="path" type="text" required placeholder="/absolute/path/to/legacy/room-data" autocomplete="off"><button type="submit">导入</button></div>
-        <p class="hint">显式导入自定义 data-dir，不搬移、不复制、不重写 events.jsonl。</p>
-      </form>
-    </section>
-    <div class="section-heading"><div><h2>Projects</h2><p class="muted">Room View 会在独立的本地运行端点打开；切换或关闭页面不会中断活动 Turn。</p></div><label class="toggle"><input id="show-archived" type="checkbox"> 显示已归档</label></div>
-    <div id="projects" class="project-list"></div>
-  </main>
-  <dialog id="room-dialog">
-    <form id="room-form" method="dialog">
-      <div class="dialog-heading"><div><p class="eyebrow">NEW ROOM</p><h2 id="room-dialog-title">创建 Room</h2></div><button id="room-dialog-close" class="ghost" value="cancel" aria-label="关闭">✕</button></div>
-      <input id="room-project-id" type="hidden">
-      <label>Room 名称<input id="room-name" type="text" required maxlength="120" autocomplete="off"></label>
-      <div class="binding-grid">
-        <fieldset><legend>Claude Binding</legend><label><input type="radio" name="claude-mode" value="new" checked> New</label><label><input type="radio" name="claude-mode" value="existing"> Existing</label><input id="claude-session-id" type="text" placeholder="Claude Session ID" autocomplete="off" disabled></fieldset>
-        <fieldset><legend>Codex Binding</legend><label><input type="radio" name="codex-mode" value="new" checked> New</label><label><input type="radio" name="codex-mode" value="existing"> Existing</label><input id="codex-session-id" type="text" placeholder="Codex Thread ID" autocomplete="off" disabled></fieldset>
+  <div id="app" class="app-shell">
+    <aside id="sidebar" class="sidebar" aria-label="主导航">
+      <a class="brand" href="#/overview" aria-label="PairRoom 概览">
+        <span class="brand-mark" aria-hidden="true"><span>P</span><span>R</span></span>
+        <span class="brand-copy"><strong>PairRoom</strong><small>CONTROL PLANE</small></span>
+      </a>
+      <nav class="primary-nav">
+        <a href="#/overview" data-nav="overview"><span class="nav-icon" aria-hidden="true">◫</span><span>概览</span></a>
+        <a href="#/projects" data-nav="projects"><span class="nav-icon" aria-hidden="true">⌂</span><span>Projects</span><span id="nav-project-count" class="nav-count"></span></a>
+        <a href="#/runtimes" data-nav="runtimes"><span class="nav-icon" aria-hidden="true">◎</span><span>Runtimes</span><span id="nav-runtime-count" class="nav-count"></span></a>
+        <a href="#/settings" data-nav="settings"><span class="nav-icon" aria-hidden="true">⚙</span><span>设置</span></a>
+      </nav>
+      <div class="sidebar-spacer"></div>
+      <section class="sidebar-service" aria-label="Service 状态">
+        <div class="service-status-row">
+          <span id="health-dot" class="status-dot connecting" aria-hidden="true"></span>
+          <div><strong id="sidebar-health">正在连接</strong><small id="sidebar-version">PairRoom Service</small></div>
+        </div>
+        <button id="sidebar-collapse" class="icon-button sidebar-collapse" type="button" aria-label="折叠侧边栏" title="折叠侧边栏">‹</button>
+      </section>
+    </aside>
+
+    <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="关闭导航"></button>
+
+    <div class="workspace-shell">
+      <header class="topbar">
+        <button id="mobile-menu" class="icon-button mobile-only" type="button" aria-label="打开导航">☰</button>
+        <div class="page-heading">
+          <p id="page-eyebrow" class="eyebrow">PAIRROOM SERVICE</p>
+          <h1 id="page-title">概览</h1>
+          <p id="page-subtitle" class="page-subtitle">正在连接本地控制面…</p>
+        </div>
+        <div class="topbar-actions">
+          <label class="global-search">
+            <span aria-hidden="true">⌕</span>
+            <input id="global-search" type="search" placeholder="搜索 Project、Room 或 ID" autocomplete="off" aria-label="搜索 Project、Room 或 ID">
+            <kbd>/</kbd>
+          </label>
+          <button id="refresh-button" class="icon-button" type="button" aria-label="刷新" title="刷新">↻</button>
+          <button id="add-project-button" class="primary-button" type="button"><span aria-hidden="true">＋</span> 登记 Project</button>
+        </div>
+      </header>
+
+      <div id="connection-banner" class="connection-banner" role="alert" hidden>
+        <div><strong>Management Shell 已断开</strong><span id="connection-message">正在等待本地 Service 恢复。</span></div>
+        <button id="retry-button" class="secondary-button compact-button" type="button">立即重试</button>
       </div>
-      <div class="dialog-actions"><button type="submit">原子创建 Room</button></div>
+
+      <main id="view" class="view" tabindex="-1" aria-live="polite"></main>
+      <footer class="workspace-footer">
+        <span id="last-updated">尚未同步</span>
+        <span>本地控制面 · Room 切换不会中断活动 Turn</span>
+      </footer>
+    </div>
+  </div>
+
+  <dialog id="project-dialog" class="modal modal-medium">
+    <form id="project-form" method="dialog" novalidate>
+      <header class="modal-header">
+        <div><p class="eyebrow">WORKSPACE</p><h2 id="project-dialog-title">登记 Project</h2><p id="project-dialog-subtitle" class="muted">添加 canonical Git worktree。</p></div>
+        <button class="icon-button modal-close" type="button" data-close-dialog="project-dialog" aria-label="关闭">×</button>
+      </header>
+      <div class="segmented-control" role="tablist" aria-label="添加方式">
+        <button id="project-mode-register" type="button" role="tab" aria-selected="true" data-project-mode="register">登记 Project</button>
+        <button id="project-mode-import" type="button" role="tab" aria-selected="false" data-project-mode="import">导入 Legacy Room</button>
+      </div>
+      <div class="modal-body">
+        <label class="field-label" for="project-path">绝对路径</label>
+        <input id="project-path" name="path" type="text" required placeholder="/absolute/path/to/git/worktree" autocomplete="off" spellcheck="false">
+        <div id="project-mode-help" class="callout neutral">
+          <strong>显式路径边界</strong>
+          <span>只接受绝对路径。根目录、子目录和符号链接会解析为同一个 canonical Git worktree；服务不会扫描开发目录。</span>
+        </div>
+        <p id="project-form-error" class="form-error" role="alert" hidden></p>
+      </div>
+      <footer class="modal-footer">
+        <button class="secondary-button" type="button" data-close-dialog="project-dialog">取消</button>
+        <button id="project-submit" class="primary-button" type="submit">登记 Project</button>
+      </footer>
     </form>
   </dialog>
-  <div id="toasts" class="toast-stack" role="status" aria-live="polite"></div>
+
+  <dialog id="room-dialog" class="modal modal-large">
+    <form id="room-form" method="dialog" novalidate>
+      <header class="modal-header">
+        <div><p class="eyebrow">NEW ROOM</p><h2 id="room-dialog-title">创建 Room</h2><p class="muted">一个 Project 可以拥有多个彼此隔离的协作 Room。</p></div>
+        <button class="icon-button modal-close" type="button" data-close-dialog="room-dialog" aria-label="关闭">×</button>
+      </header>
+      <div class="modal-body room-form-body">
+        <div class="form-grid two-columns">
+          <label><span class="field-label">Project</span><select id="room-project-id" required></select></label>
+          <label><span class="field-label">Room 名称</span><input id="room-name" type="text" required maxlength="120" autocomplete="off" placeholder="例如：Auth 重构审查"></label>
+        </div>
+        <div class="section-label-row"><div><span class="field-label">Agent Session Bindings</span><p class="field-help">两侧会在 Room 内独占绑定；创建过程为原子操作。</p></div><span class="step-chip">1 Room · 2 Agents</span></div>
+        <div class="binding-grid">
+          <fieldset class="binding-card" data-actor="claude">
+            <legend><span class="agent-avatar claude">C</span><span><strong>Claude Code</strong><small>Session Binding</small></span></legend>
+            <label class="choice-card"><input type="radio" name="claude-mode" value="new" checked><span><strong>新建 Session</strong><small>首次真实 Turn 被 CLI 接受后固化 Identity</small></span></label>
+            <label class="choice-card"><input type="radio" name="claude-mode" value="existing"><span><strong>复用 Existing</strong><small>精确恢复已有 vendor context</small></span></label>
+            <label class="session-field" for="claude-session-id"><span>Claude Session ID</span><input id="claude-session-id" type="text" placeholder="粘贴 Session ID" autocomplete="off" spellcheck="false" disabled></label>
+          </fieldset>
+          <fieldset class="binding-card" data-actor="codex">
+            <legend><span class="agent-avatar codex">X</span><span><strong>Codex</strong><small>Thread Binding</small></span></legend>
+            <label class="choice-card"><input type="radio" name="codex-mode" value="new" checked><span><strong>新建 Thread</strong><small>首次真实 Turn 被 CLI 接受后固化 Identity</small></span></label>
+            <label class="choice-card"><input type="radio" name="codex-mode" value="existing"><span><strong>复用 Existing</strong><small>精确恢复已有 vendor context</small></span></label>
+            <label class="session-field" for="codex-session-id"><span>Codex Thread ID</span><input id="codex-session-id" type="text" placeholder="粘贴 Thread ID" autocomplete="off" spellcheck="false" disabled></label>
+          </fieldset>
+        </div>
+        <div class="callout boundary"><strong>Transcript Boundary</strong><span>Existing 只恢复供应商上下文；PairRoom 不导入、复制、摘要或展示绑定前 transcript。</span></div>
+        <p id="room-form-error" class="form-error" role="alert" hidden></p>
+      </div>
+      <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="room-dialog">取消</button><button id="room-submit" class="primary-button" type="submit">原子创建 Room</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="rename-dialog" class="modal modal-small">
+    <form id="rename-form" method="dialog" novalidate>
+      <header class="modal-header"><div><p class="eyebrow">ROOM</p><h2>重命名 Room</h2><p class="muted">操作会等待安全 Turn 边界，不会中断活动工作。</p></div><button class="icon-button modal-close" type="button" data-close-dialog="rename-dialog" aria-label="关闭">×</button></header>
+      <div class="modal-body"><input id="rename-room-id" type="hidden"><label><span class="field-label">新名称</span><input id="rename-room-name" type="text" required maxlength="120" autocomplete="off"></label><p id="rename-form-error" class="form-error" role="alert" hidden></p></div>
+      <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="rename-dialog">取消</button><button class="primary-button" type="submit">保存名称</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="binding-dialog" class="modal modal-medium">
+    <form id="binding-form" method="dialog" novalidate>
+      <header class="modal-header"><div><p class="eyebrow">LEGACY ROOM</p><h2>补全 Binding</h2><p class="muted">只有所有缺失 Binding 都验证成功后才会提交。</p></div><button class="icon-button modal-close" type="button" data-close-dialog="binding-dialog" aria-label="关闭">×</button></header>
+      <div id="binding-fields" class="modal-body stacked-fields"></div>
+      <p id="binding-form-error" class="form-error modal-inline-error" role="alert" hidden></p>
+      <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="binding-dialog">取消</button><button class="primary-button" type="submit">原子补全 Binding</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog" class="modal modal-small">
+    <form id="confirm-form" method="dialog">
+      <header class="modal-header"><div><p id="confirm-eyebrow" class="eyebrow">CONFIRM</p><h2 id="confirm-title">确认操作</h2></div><button class="icon-button modal-close" type="button" data-close-dialog="confirm-dialog" aria-label="关闭">×</button></header>
+      <div class="modal-body"><p id="confirm-message" class="confirm-message"></p><div id="confirm-detail" class="callout neutral" hidden></div></div>
+      <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="confirm-dialog">取消</button><button id="confirm-submit" class="danger-button" type="submit">确认</button></footer>
+    </form>
+  </dialog>
+
+  <div id="toasts" class="toast-stack" role="status" aria-live="polite" aria-atomic="false"></div>
   <script src="/management.js" defer></script>
 </body>
 </html>
