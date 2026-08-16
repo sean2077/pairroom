@@ -18,7 +18,7 @@ pairroom service \
   --shutdown-timeout 10m
 ```
 
-Service 只接受 loopback 监听地址。未提供 `--token` 时会生成随机 Management API Bearer Token，并放在浏览器启动 URL 的 fragment 中；Management Shell 只在内存中使用它，不写入 `localStorage` 或 `sessionStorage`。
+PairRoom 的所有内置 Web listener（Service、兼容 `serve` 和 Room Runtime）都只接受数字 loopback 地址；通配地址、局域网地址、主机名和 `localhost` 会被拒绝。未提供 `--token` 时，Service 会生成随机 Management API Bearer Token，并放在浏览器启动 URL 的 fragment 中；Management Shell 只在内存中使用它，不写入 `localStorage` 或 `sessionStorage`。远程访问使用 SSH 本地端口转发到服务端 loopback listener。
 显式 `--data-root` 必须是绝对路径；未提供时始终使用操作系统用户配置目录下的 PairRoom 根目录，因此从不同 CWD 启动会打开同一份 Registry。
 
 `--mock` 使用确定性 Mock Agent，可在没有供应商登录的机器上验证 Project、Room、队列、归档和恢复流程。真实模式继续调用用户本机官方 `claude` 与 `codex app-server`，不接管供应商凭据、Session Store 或 Transcript。

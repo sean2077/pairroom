@@ -375,7 +375,7 @@ tools / commands / plans / diffs / usage
 
 ## 14. Browser session
 
-非 loopback 模式的浏览器认证流程：
+启用 Token 时的浏览器认证流程：
 
 ```text
 URL fragment bootstrap token
@@ -385,6 +385,8 @@ URL fragment bootstrap token
 ```
 
 fragment 在交换后立即从地址栏移除；Token 不进入 URL query 或 Web Storage。命令行 API 客户端可继续使用 Bearer Header。Query token 不授权任何 endpoint。
+
+所有内置 Web listener 只接受数字 loopback 地址；远程浏览器通过 SSH 本地端口转发连接服务端 loopback listener。
 
 ## 15. Routing
 

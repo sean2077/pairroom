@@ -24,7 +24,7 @@ Review the vendor terms and your organization policy before using private code o
 
 ## Browser data
 
-The browser stores non-secret UI preferences such as theme, composer draft, unread cursor, and selected routing intent in local storage. The long-lived API bootstrap token is not stored in Web Storage. A non-loopback browser uses a short-lived HttpOnly session cookie and an in-memory CSRF token.
+The browser stores non-secret UI preferences such as theme, composer draft, unread cursor, and selected routing intent in local storage. The long-lived API bootstrap token is not stored in Web Storage. When token authentication is enabled, the browser uses a short-lived HttpOnly session cookie and an in-memory CSRF token. PairRoom's built-in Web listeners accept only numeric loopback addresses.
 
 ## Exports and backups
 

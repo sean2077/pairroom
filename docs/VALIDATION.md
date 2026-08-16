@@ -112,6 +112,7 @@ Focused tests cover:
 
 Server and browser-asset tests cover:
 
+- numeric-loopback-only listener validation for both `service` and `serve`, including rejection before repository or service state is opened;
 - URL-fragment bootstrap instead of query Token;
 - HttpOnly, SameSite=Strict browser-session cookie;
 - session sliding expiry and revocation;

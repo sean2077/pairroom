@@ -45,7 +45,7 @@ Inspect before starting either Agent:
 - no stale `working`, `waiting`, or pending approval state from the previous process;
 - uploaded images and Agent-generated image previews;
 - Turn summaries and message correlation;
-- browser authentication behavior when using a non-loopback listener.
+- browser authentication behavior with an explicit Token, plus rejection of wildcard, LAN, hostname, and `localhost` listener values.
 
 ## Behavior changes since v0.3
 
@@ -55,6 +55,7 @@ Inspect before starting either Agent:
 - `verify`, `backup`, `restore`, and `diagnostics` are available.
 - Long conversations load a bounded newest window and fetch older messages with a cursor.
 - Browser Token query parameters/Web Storage were removed. A fragment bootstrap now exchanges for an HttpOnly session; browser mutations require CSRF.
+- Built-in Web listeners accept only numeric loopback addresses. Remote access uses SSH local port forwarding instead of direct LAN binding.
 
 ## Data directory
 

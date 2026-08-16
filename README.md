@@ -183,13 +183,13 @@ PairRoom 不维护历史版本兼容矩阵，也不把长期兼容旧 CLI 当成
 
 ## 浏览器会话安全
 
-默认 loopback 模式不需要 Token。非 loopback 绑定会生成 Bearer Token，但浏览器只在启动 URL 的 fragment 中短暂读取它：
+`pairroom service` 和 `pairroom serve` 的内置 Web listener 都只接受数字 loopback 地址，例如 `127.0.0.1:7332` 或 `[::1]:7332`。通配地址、局域网地址、主机名以及 `localhost` 都会在打开仓库或状态目录前被拒绝。Service 自动生成 Management API Bearer Token；`serve` 可用 `--token` 启用同一套纵深防护。浏览器只在启动 URL 的 fragment 中短暂读取 Token：
 
 ```text
 #token=... → POST /api/v1/session → HttpOnly Session Cookie + CSRF
 ```
 
-fragment 不会随 HTTP 请求或 Referer 发送，交换成功后立即从地址栏移除；Token 不写入 `sessionStorage`/`localStorage`。命令行 API 客户端仍可直接使用 `Authorization: Bearer ...`。PairRoom 不内置 TLS，远程访问仍应经 SSH tunnel、VPN 或受控反向代理。
+fragment 不会随 HTTP 请求或 Referer 发送，交换成功后立即从地址栏移除；Token 不写入 `sessionStorage`/`localStorage`。命令行 API 客户端仍可直接使用 `Authorization: Bearer ...`。PairRoom 不内置远程 listener 或 TLS；远程访问使用 SSH 本地端口转发到服务端 loopback listener。
 
 ## 快速开始
 
@@ -213,7 +213,7 @@ pairroom service --runtime-limit 4 --idle-timeout 20m
 pairroom service --mock
 ```
 
-Service 仅监听 loopback，启动 URL 中的 token 位于 fragment，Management Shell 不把 token 写入 Web Storage。详细拓扑、数据恢复与迁移规则见 [`docs/MULTI_ROOM_SERVICE.md`](docs/MULTI_ROOM_SERVICE.md)。
+所有内置 Web listener 仅接受数字 loopback 地址，启动 URL 中的 token 位于 fragment，Management Shell 不把 token 写入 Web Storage。详细拓扑、数据恢复与迁移规则见 [`docs/MULTI_ROOM_SERVICE.md`](docs/MULTI_ROOM_SERVICE.md)。
 
 ### 2. 单 Room Mock 兼容模式
 

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -120,7 +119,7 @@ func runService(args []string) (resultErr error) {
 	flags := flag.NewFlagSet("pairroom service", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	configFlag := flags.String("config", configPath, "JSON configuration file")
-	listenFlag := flags.String("listen", fileCfg.Listen, "Management Shell listen address (loopback only)")
+	listenFlag := flags.String("listen", fileCfg.Listen, "Management Shell listen address (numeric loopback only)")
 	rootFlag := flags.String("data-root", "", "absolute service data root (default: OS user config directory/pairroom)")
 	tokenFlag := flags.String("token", fileCfg.Token, "Management API bearer token (generated when omitted)")
 	limitFlag := flags.Int("runtime-limit", 2, "maximum simultaneously active Room runtimes")
@@ -153,7 +152,7 @@ func runService(args []string) (resultErr error) {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
 	if !isLoopbackListen(*listenFlag) {
-		return errors.New("pairroom service must listen on loopback; use the single-Room serve command behind a trusted tunnel for remote access")
+		return errors.New("pairroom service must listen on a numeric loopback address; use an SSH tunnel for remote access")
 	}
 	if *limitFlag < 1 || *limitFlag > 128 {
 		return errors.New("runtime-limit must be between 1 and 128")
@@ -308,9 +307,9 @@ func runServe(args []string) error {
 	configFlag := flags.String("config", configPath, "JSON configuration file")
 	repoFlag := flags.String("repo", ".", "repository/workspace directory")
 	nameFlag := flags.String("name", fileCfg.RoomName, "room display name")
-	listenFlag := flags.String("listen", fileCfg.Listen, "HTTP listen address")
+	listenFlag := flags.String("listen", fileCfg.Listen, "HTTP listen address (numeric loopback only)")
 	dataFlag := flags.String("data-dir", "", "room state directory (default: per-repository user config directory)")
-	tokenFlag := flags.String("token", fileCfg.Token, "API bearer token; generated automatically for non-loopback binds")
+	tokenFlag := flags.String("token", fileCfg.Token, "optional API bearer token for loopback defense in depth")
 	mockFlag := flags.Bool("mock", false, "run deterministic mock agents instead of vendor CLIs")
 	noBrowserFlag := flags.Bool("no-browser", false, "do not open the room in a browser")
 	autoStartFlag := flags.Bool("auto-start", fileCfg.AutoStart, "start both agents when the room opens")
@@ -334,6 +333,9 @@ func runServe(args []string) error {
 	_ = configFlag
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	if !isLoopbackListen(*listenFlag) {
+		return errors.New("pairroom serve must listen on a numeric loopback address; use an SSH tunnel for remote access")
 	}
 
 	repo, err := canonicalDirectory(*repoFlag)
@@ -364,13 +366,6 @@ func runServe(args []string) error {
 	}
 
 	token := *tokenFlag
-	if !isLoopbackListen(*listenFlag) && token == "" {
-		token, err = randomToken()
-		if err != nil {
-			return err
-		}
-		fmt.Fprintln(os.Stderr, "warning: non-loopback HTTP has no TLS; use only on a trusted LAN or behind a secure tunnel")
-	}
 
 	eventStore, err := store.Open(dataDir)
 	if err != nil {
@@ -828,19 +823,8 @@ func isLoopbackListen(address string) bool {
 		return false
 	}
 	host = strings.Trim(host, "[]")
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
-}
-
-func randomToken() (string, error) {
-	var bytes [24]byte
-	if _, err := rand.Read(bytes[:]); err != nil {
-		return "", fmt.Errorf("generate access token: %w", err)
-	}
-	return hex.EncodeToString(bytes[:]), nil
 }
 
 func browserURL(address, token string) string {
