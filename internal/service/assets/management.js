@@ -26,6 +26,7 @@
     projectMode: 'register',
     bindingRoomID: '',
     confirmAction: null,
+    confirmRequirement: '',
     settingsSection: 'interface',
     showRawSnapshot: false,
     filters: {
@@ -365,8 +366,12 @@
           node('code', { className: 'project-path', textContent: project.root, title: project.root })
         ),
         node('div', { className: 'project-card-actions' },
+          state.snapshot?.capabilities?.project_refresh && !project.available
+            ? actionButton('重新检查', () => refreshProject(project), 'secondary-button compact-button')
+            : null,
           actionButton('复制路径', () => copyText(project.root, 'Project 路径已复制。'), 'secondary-button compact-button'),
           actionButton('详情', () => navigate(`#/projects/${encodeURIComponent(project.id)}`), 'secondary-button compact-button'),
+          rooms.length === 0 ? projectRemovalButton(project, 0, true) : null,
           actionButton('＋ Room', () => openRoomDialog(project.id), 'primary-button compact-button', !project.available)
         )
       ),
@@ -435,6 +440,19 @@
             project.diagnostic || 'Service 不会从当前工作目录隐式切换 Project。'
           )
         ),
+        state.snapshot?.capabilities?.project_refresh || state.snapshot?.capabilities?.project_removal
+          ? panel('Project Maintenance', '重新检查 canonical path，或安全注销空 Project。',
+            node('div', { className: 'section-actions' },
+              state.snapshot?.capabilities?.project_refresh
+                ? actionButton('重新检查路径', () => refreshProject(project), 'secondary-button')
+                : null,
+              projectRemovalButton(project, rooms.length)
+            ),
+            rooms.length
+              ? `仍包含 ${rooms.length} 个 Room（含已归档）；注销被禁用。`
+              : '注销只移除 Registry 登记，不删除 worktree、Room 数据或 vendor context。'
+          )
+          : null,
         project.diagnostic ? node('aside', { className: 'callout danger' }, node('strong', { textContent: 'Project 不可用' }), node('span', { textContent: project.diagnostic })) : null,
         node('aside', { className: 'callout boundary' }, node('strong', { textContent: 'Workspace Boundary' }), node('span', { textContent: 'Room 永久属于此 Project；Reviewer snapshot 与 Git 状态都以该 canonical worktree 为边界。' }))
       )
@@ -1106,6 +1124,60 @@
     });
   }
 
+  async function refreshProject(project) {
+    try {
+      const refreshed = await api(`/api/v1/projects/${encodeURIComponent(project.id)}/refresh`, { method: 'POST' });
+      if (refreshed.available) {
+        toast('Project 可用', 'Canonical worktree 已重新验证。', 'success');
+      } else {
+        toast('Project 仍不可用', refreshed.diagnostic || 'Canonical worktree 当前无法访问。', 'warning');
+      }
+      await refresh({ forceRender: true });
+    } catch (error) {
+      toast('Project 检查失败', error.message, 'error');
+    }
+  }
+  function projectRemovalButton(project, roomCount, compact = false) {
+    if (!state.snapshot?.capabilities?.project_removal) return null;
+    const disabled = roomCount > 0;
+    const explanation = disabled
+      ? `仍包含 ${roomCount} 个 Room（含已归档），不能注销。`
+      : '只移除 Service Registry 登记，不删除 Git worktree 或外部数据。';
+    return node('button', {
+      type: 'button',
+      className: `danger-button outline${compact ? ' compact-button' : ''}`,
+      textContent: '注销 Project',
+      disabled,
+      title: explanation,
+      'aria-label': `注销 Project ${projectName(project)}。${explanation}`,
+      onClick: () => removeProject(project),
+    });
+  }
+  function removeProject(project) {
+    const roomCount = (state.snapshot?.rooms || []).filter((room) => room.project_id === project.id).length;
+    if (roomCount > 0) {
+      toast('不能注销 Project', `仍包含 ${roomCount} 个 Room（含已归档）。`, 'warning');
+      return;
+    }
+    openConfirm({
+      eyebrow: 'UNREGISTER PROJECT',
+      title: `注销“${projectName(project)}”？`,
+      message: '将此空 Project 从 Service Registry 注销。',
+      detail: '不会删除 Git worktree、Room 数据、附件或 vendor Session/Thread。任何 Room（包括已归档）都会令后端拒绝操作。',
+      label: '注销 Project',
+      tone: 'danger',
+      confirmation: project.id,
+      action: async () => {
+        await api(`/api/v1/projects/${encodeURIComponent(project.id)}`, {
+          method: 'DELETE',
+          body: JSON.stringify({ confirm_project_id: project.id }),
+        });
+        toast('Project 已注销', 'Git worktree 与外部数据未被修改。', 'success');
+        await refresh({ forceRender: true });
+        navigate('#/projects');
+      },
+    });
+  }
   async function restoreRoom(room) {
     try {
       await api(`/api/v1/rooms/${encodeURIComponent(room.id)}/restore`, { method: 'POST' });
@@ -1222,8 +1294,33 @@
     }
   }
 
-  function openConfirm({ eyebrow = 'CONFIRM', title, message, detail = '', label = '确认', tone = 'danger', action }) {
+  function resetConfirmState() {
+    state.confirmAction = null;
+    state.confirmRequirement = '';
+    const wrapper = $('confirm-input-wrap');
+    const expected = $('confirm-expected');
+    const input = $('confirm-input');
+    if (wrapper) wrapper.hidden = true;
+    if (expected) expected.textContent = '';
+    if (input) {
+      input.value = '';
+      input.required = false;
+      input.setCustomValidity('');
+    }
+    if ($('confirm-submit')) $('confirm-submit').disabled = false;
+  }
+  function syncConfirmRequirement() {
+    const input = $('confirm-input');
+    const submit = $('confirm-submit');
+    if (!input || !submit) return;
+    const matches = !state.confirmRequirement || input.value === state.confirmRequirement;
+    input.setCustomValidity(matches ? '' : '请输入完整且逐字匹配的 Project ID。');
+    submit.disabled = !matches;
+  }
+  function openConfirm({ eyebrow = 'CONFIRM', title, message, detail = '', label = '确认', tone = 'danger', confirmation = '', action }) {
+    resetConfirmState();
     state.confirmAction = action;
+    state.confirmRequirement = confirmation;
     $('confirm-eyebrow').textContent = eyebrow;
     $('confirm-title').textContent = title;
     $('confirm-message').textContent = message;
@@ -1231,11 +1328,18 @@
     detailNode.hidden = !detail;
     detailNode.replaceChildren();
     if (detail) detailNode.append(node('strong', { textContent: '安全边界' }), node('span', { textContent: detail }));
+    const requirement = $('confirm-input-wrap');
+    const input = $('confirm-input');
+    requirement.hidden = !confirmation;
+    $('confirm-expected').textContent = confirmation;
+    input.required = Boolean(confirmation);
+    input.value = '';
     $('confirm-submit').textContent = label;
     $('confirm-submit').className = tone === 'danger' ? 'danger-button' : 'primary-button';
+    syncConfirmRequirement();
     showDialog('confirm-dialog');
+    queueMicrotask(() => (confirmation ? input : $('confirm-submit')).focus());
   }
-
   async function submitConfirm(event) {
     event.preventDefault();
     const action = state.confirmAction;
@@ -1243,11 +1347,15 @@
       closeDialog('confirm-dialog');
       return;
     }
+    syncConfirmRequirement();
+    if (state.confirmRequirement && $('confirm-input').value !== state.confirmRequirement) {
+      $('confirm-input').reportValidity();
+      return;
+    }
     await withBusy($('confirm-submit'), async () => {
       try {
         await action();
         closeDialog('confirm-dialog');
-        state.confirmAction = null;
       } catch (error) {
         toast('操作失败', error.message, 'error');
       }
@@ -1265,6 +1373,7 @@
   function closeDialog(id) {
     const dialog = $(id);
     if (dialog?.open) dialog.close();
+    if (id === 'confirm-dialog') resetConfirmState();
     if (state.renderPending && canRenderNow()) {
       render();
       state.renderPending = false;
@@ -1484,8 +1593,9 @@
   document.querySelectorAll('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => closeDialog(button.dataset.closeDialog)));
   document.querySelectorAll('dialog').forEach((dialog) => {
     dialog.addEventListener('click', (event) => { if (event.target === dialog) closeDialog(dialog.id); });
-    dialog.addEventListener('cancel', () => { if (dialog.id === 'confirm-dialog') state.confirmAction = null; });
+    dialog.addEventListener('cancel', () => { if (dialog.id === 'confirm-dialog') resetConfirmState(); });
     dialog.addEventListener('close', () => {
+      if (dialog.id === 'confirm-dialog') resetConfirmState();
       if (state.renderPending && !document.querySelector('dialog[open]')) {
         render();
         state.renderPending = false;
@@ -1503,6 +1613,7 @@
   $('rename-form').addEventListener('submit', submitRename);
   $('binding-form').addEventListener('submit', submitBindingCompletion);
   $('confirm-form').addEventListener('submit', submitConfirm);
+  $('confirm-input').addEventListener('input', syncConfirmRequirement);
   $('refresh-button').addEventListener('click', () => refresh({ notify: true, forceRender: true }));
   $('retry-button').addEventListener('click', () => connect({ notify: true, forceRender: true }));
   $('add-project-button').addEventListener('click', () => openProjectDialog('register'));

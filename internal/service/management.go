@@ -75,6 +75,7 @@ type ServiceCapabilities struct {
 	LegacyImport          bool `json:"legacy_import"`
 	RuntimeSuspend        bool `json:"runtime_suspend"`
 	RuntimePolicyMutation bool `json:"runtime_policy_mutation"`
+	ProjectRefresh        bool `json:"project_refresh"`
 	ProjectRemoval        bool `json:"project_removal"`
 	RoomDeletion          bool `json:"room_deletion"`
 	ServerPathBrowser     bool `json:"server_path_browser"`
@@ -132,6 +133,8 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	mux.HandleFunc("DELETE /api/v1/session", server.deleteBrowserSession)
 	mux.HandleFunc("GET /api/v1/service", server.readService)
 	mux.HandleFunc("POST /api/v1/projects", server.registerProject)
+	mux.HandleFunc("POST /api/v1/projects/{project}/refresh", server.refreshProject)
+	mux.HandleFunc("DELETE /api/v1/projects/{project}", server.removeProject)
 	mux.HandleFunc("POST /api/v1/projects/{project}/rooms", server.provisionRoom)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/activate", server.activateRoom)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/suspend", server.suspendRoom)
@@ -235,6 +238,7 @@ func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
 		Summary:       summarizeService(registry.Projects, registry.Rooms, runtimes),
 		Capabilities: ServiceCapabilities{
 			LegacyImport: true, RuntimeSuspend: true,
+			ProjectRefresh: true, ProjectRemoval: true,
 		},
 		Healthy: healthErr == nil,
 	}
@@ -295,6 +299,34 @@ func (s *ManagementServer) registerProject(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeManagementJSON(w, http.StatusCreated, project)
+}
+
+func (s *ManagementServer) refreshProject(w http.ResponseWriter, r *http.Request) {
+	project, err := s.registry.RefreshProject(r.Context(), r.PathValue("project"))
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	writeManagementJSON(w, http.StatusOK, project)
+}
+
+func (s *ManagementServer) removeProject(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		ConfirmProjectID string `json:"confirm_project_id"`
+	}
+	if err := decodeManagementJSON(w, r, &request); err != nil {
+		return
+	}
+	projectID := r.PathValue("project")
+	if request.ConfirmProjectID != projectID {
+		writeManagementError(w, http.StatusBadRequest, "confirm_project_id must exactly match the Project ID in the request path")
+		return
+	}
+	if _, err := s.registry.RemoveProject(r.Context(), projectID); err != nil {
+		s.writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *ManagementServer) provisionRoom(w http.ResponseWriter, r *http.Request) {
@@ -532,9 +564,31 @@ func (s *ManagementServer) securityHeaders(next http.Handler) http.Handler {
 }
 
 func (s *ManagementServer) writeError(w http.ResponseWriter, err error) {
+	var projectRooms *ProjectHasRoomsError
+	if errors.As(err, &projectRooms) {
+		const detailLimit = 20
+		roomIDs := append([]string(nil), projectRooms.RoomIDs...)
+		truncated := len(roomIDs) > detailLimit
+		if truncated {
+			roomIDs = roomIDs[:detailLimit]
+		}
+		writeManagementJSON(w, http.StatusConflict, map[string]any{
+			"error": err.Error(),
+			"code":  "project_has_rooms",
+			"details": map[string]any{
+				"project_id": projectRooms.ProjectID,
+				"room_count": len(projectRooms.RoomIDs),
+				"room_ids":   roomIDs,
+				"truncated":  truncated,
+			},
+		})
+		return
+	}
+
 	code := http.StatusInternalServerError
 	switch {
-	case errors.Is(err, ErrProjectAlreadyRegistered), errors.Is(err, ErrBindingOwned), errors.Is(err, ErrRoomBindingPending):
+	case errors.Is(err, ErrProjectAlreadyRegistered), errors.Is(err, ErrProjectHasRooms),
+		errors.Is(err, ErrBindingOwned), errors.Is(err, ErrRoomBindingPending):
 		code = http.StatusConflict
 	case errors.Is(err, ErrProjectNotFound), errors.Is(err, ErrRoomNotFound):
 		code = http.StatusNotFound

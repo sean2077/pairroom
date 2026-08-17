@@ -79,7 +79,7 @@ Management Shell 保留 Room View 作为实际协作界面，自身只负责控�
 |---|---|
 | Overview | Service 健康、Project/Room 计数、capacity、活动/排队/失败 Runtime、attention items |
 | Projects | 跨 Project/Room 搜索、可用性筛选、登记 Project、Legacy Import |
-| Project detail | 创建 Room、打开、改名、归档、恢复、补全 Binding |
+| Project detail | 路径复检、空 Project 安全注销、创建 Room、打开、改名、归档、恢复、补全 Binding |
 | Runtimes | phase、busy、capacity occupation、queue position、last used、错误、安全挂起 |
 | Settings | 当前标签页界面偏好、有效 Runtime policy、daemon 指引、Service diagnostics、capabilities |
 
@@ -102,7 +102,9 @@ Project 代表一个 canonical Git worktree。登记时服务端执行：
 - 两个 Git worktree 即使来自同一仓库，也是两个 Project；
 - Service 不扫描用户目录；
 - Management Shell 不提供服务端文件系统浏览器；
-- Project 路径不可用时保留登记与 Room 历史，但阻止需要工作区的操作。
+- Project 路径不可用时保留登记与 Room 历史，但阻止需要工作区的操作；
+- 路径复检只更新 available/diagnostic，不静默迁移 stable Project identity；
+- 只有没有 active 或 archived Room 的 Project 才能从 Registry 注销，且注销不删除 Git worktree。
 
 ## 5. Room 与 Binding
 
@@ -257,7 +259,7 @@ create -> rename* -> archive <-> restore
 - Archive 不删除 Event Log、附件或 Binding ownership；
 - Restore 保留完整历史与原绑定；
 - 当前没有永久 Room deletion；
-- 当前没有 Project removal。
+- 空 Project 可以安全从 Registry 注销；任何 active 或 archived Room 都会阻止该操作。
 
 生命周期操作需要避免 Room Engine 与控制面同时成为 Event Log writer，因此会先进入安全 Runtime 边界。
 
@@ -287,6 +289,8 @@ checkpoint 删除或损坏后，Service 扫描默认 `rooms/`，从 Event Logs �
 显式导入的自定义 Legacy 路径不在默认扫描边界内，需要再次导入。导入只重建索引，不修改原 Room Event Log。
 
 Registry 无法证明内存索引、已提交 Event 与 checkpoint 一致时，会阻止后续 mutation。
+
+Project 注销与 Room provisioning 使用同一全局 mutation 串行化边界。若 provisioning 先提交，注销返回 `409 project_has_rooms`；若注销先提交，后续 provisioning 看到 Project 不存在。这样不会产生孤儿 Room，也不会出现重启后被 Event Log 意外“复活”的已注销 Project。
 
 ## 11. Legacy Room
 
@@ -358,7 +362,8 @@ Management Shell 提供一次性 completion：
   "legacy_import": true,
   "runtime_suspend": true,
   "runtime_policy_mutation": false,
-  "project_removal": false,
+  "project_refresh": true,
+  "project_removal": true,
   "room_deletion": false,
   "server_path_browser": false
 }
@@ -388,6 +393,8 @@ GET    /api/v1/session
 DELETE /api/v1/session
 GET    /api/v1/service
 POST   /api/v1/projects
+POST   /api/v1/projects/{project}/refresh
+DELETE /api/v1/projects/{project}
 POST   /api/v1/projects/{project}/rooms
 POST   /api/v1/rooms/{room}/activate
 POST   /api/v1/rooms/{room}/suspend
@@ -401,6 +408,9 @@ POST   /api/v1/import
 - query token 被拒绝；
 - browser session 的 mutation 需要 CSRF，直接 Bearer 客户端不需要该 Header；
 - mutation 使用结构化错误与状态码；
+- Project refresh 原子持久化当前可用性，不改变 canonical identity；
+- Project DELETE 必须提交精确匹配 path ID 的 `confirm_project_id`，且只允许没有任何 Room 的 Project；
+- 有 active/archived Room 时返回 `409 Conflict`、`code: project_has_rooms` 和有界 Room ID 诊断；
 - busy/unsafe suspend 使用 `409 Conflict`；
 - Room 激活结果包含独立 Room URL；
 - Management API 不提供 Room transcript 或附件内容。
@@ -435,6 +445,6 @@ one Codex participant
 one Driver + one Reviewer by default
 ```
 
-没有多人身份、远程 worker、云同步、托管 TLS、Project/Room 永久删除、Runtime policy 热修改或额外 Vendor 插件市场。
+没有多人身份、远程 worker、云同步、托管 TLS、Project worktree/Room 永久删除、Runtime policy 热修改或额外 Vendor 插件市场。空 Project 的 Registry 注销不属于数据删除。
 
 Management Shell 的页面级行为、可访问性和测试契约见 [MANAGEMENT_SHELL.md](MANAGEMENT_SHELL.md)。cc-connect 的体验调研与取舍记录见 [CC_CONNECT_UX_RESEARCH.md](CC_CONNECT_UX_RESEARCH.md)。

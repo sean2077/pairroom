@@ -614,6 +614,10 @@ select { appearance: auto; }
 .session-field input { min-height: 35px; font-size: 10px; }
 .stacked-fields { display: grid; gap: 12px; }
 .confirm-message { margin-bottom: 12px; color: var(--text); line-height: 1.65; }
+.confirm-input { display: grid; gap: 7px; margin-top: 14px; }
+.confirm-input .field-label { margin: 0; }
+.confirm-input code { display: block; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-soft); color: var(--muted); overflow-wrap: anywhere; user-select: all; }
+.confirm-input input { font-family: var(--font-mono); font-size: 10px; }
 
 .toast-stack { position: fixed; z-index: 100; right: 18px; bottom: 18px; width: min(390px, calc(100vw - 36px)); display: grid; gap: 8px; pointer-events: none; }
 .toast { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 11px 12px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--bg-raised); box-shadow: var(--shadow-md); pointer-events: auto; animation: toast-in .18s ease both; }

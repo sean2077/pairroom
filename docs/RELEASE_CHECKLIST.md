@@ -18,6 +18,11 @@ A build is publishable only when every applicable item is complete.
 - [ ] Mock E2E covers chat, images, Reviewer snapshot, Turn summaries, pagination, verify, backup, restore, and diagnostics.
 - [ ] Corrupt/traversal/archive rejection tests succeed.
 - [ ] Browser session, CSRF, query-token rejection, and rate limiter tests succeed.
+- [ ] Empty-Project unregister persists across Registry restart and leaves the Git worktree byte-for-byte untouched.
+- [ ] Active and archived Rooms both block Project unregister with a structured `project_has_rooms` conflict.
+- [ ] Project unregister racing Room provisioning has one atomic winner and never creates an orphaned Room.
+- [ ] Project path refresh persists unavailable diagnostics and recovers after the canonical path returns.
+- [ ] Management Shell typed confirmation rejects any Project ID mismatch and remains free of native prompt/confirm or Web Storage credentials.
 - [ ] Current real Claude Code and Codex smoke test is performed on the release machine or explicitly recorded as not available.
 
 ## Build artifacts
