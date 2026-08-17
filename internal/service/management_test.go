@@ -67,7 +67,7 @@ func TestManagementShellAuthenticationAssetsAndSecurityHeaders(t *testing.T) {
 	if asset.Code != http.StatusOK {
 		t.Fatalf("management asset status=%d body=%s", asset.Code, asset.Body.String())
 	}
-	for _, marker := range []string{"/api/v1/session", "/api/v1/service", "X-PairRoom-CSRF", "completeBindings", "补全 Binding", "queue_position", "materializes on first turn", "roomHasBlockingPendingBindings", "renderProjects", "renderRuntimes", "renderSettings", "/suspend", "pairroom daemon open", "pairroom daemon status", "--recover-stale-lock"} {
+	for _, marker := range []string{"/api/v1/session", "/api/v1/service", "X-PairRoom-CSRF", "completeBindings", "补全 Binding", "queue_position", "materializes on first turn", "roomHasBlockingPendingBindings", "renderProjects", "renderRuntimes", "renderSettings", "/suspend", "pairroom daemon open", "pairroom daemon status", "--recover-stale-lock", "/api/v1/projects/", "/refresh", "confirm_project_id", "confirm-input", "project_refresh", "project_removal"} {
 		if !strings.Contains(asset.Body.String(), marker) {
 			t.Fatalf("management asset omitted %q", marker)
 		}
@@ -76,6 +76,13 @@ func TestManagementShellAuthenticationAssetsAndSecurityHeaders(t *testing.T) {
 		if strings.Contains(asset.Body.String(), forbidden) {
 			t.Fatalf("management asset must not use %s", forbidden)
 		}
+	}
+
+	shell := httptest.NewRecorder()
+	server.Handler().ServeHTTP(shell, managementRequest(http.MethodGet, "/", "", false))
+	if shell.Code != http.StatusOK || !strings.Contains(shell.Body.String(), `id="confirm-input"`) ||
+		!strings.Contains(shell.Body.String(), `id="confirm-expected"`) {
+		t.Fatalf("Management Shell omitted typed Project confirmation controls: status=%d body=%s", shell.Code, shell.Body.String())
 	}
 
 	unauthorized := httptest.NewRecorder()
@@ -450,8 +457,8 @@ func TestManagementSnapshotIncludesSummaryPolicyAndCapabilities(t *testing.T) {
 		snapshot.Summary.ActiveRuntimes != 1 || snapshot.Summary.RuntimeCapacityUsed != 1 {
 		t.Fatalf("unexpected service summary: %#v", snapshot.Summary)
 	}
-	if !snapshot.Capabilities.LegacyImport || !snapshot.Capabilities.RuntimeSuspend || snapshot.Capabilities.RoomDeletion ||
-		snapshot.Capabilities.ProjectRemoval || snapshot.Capabilities.ServerPathBrowser || snapshot.Capabilities.RuntimePolicyMutation {
+	if !snapshot.Capabilities.LegacyImport || !snapshot.Capabilities.RuntimeSuspend || !snapshot.Capabilities.ProjectRefresh ||
+		!snapshot.Capabilities.ProjectRemoval || snapshot.Capabilities.RoomDeletion || snapshot.Capabilities.ServerPathBrowser || snapshot.Capabilities.RuntimePolicyMutation {
 		t.Fatalf("unexpected capability surface: %#v", snapshot.Capabilities)
 	}
 }

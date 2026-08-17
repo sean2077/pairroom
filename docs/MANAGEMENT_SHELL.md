@@ -34,7 +34,7 @@ Shell 使用 hash 路由，不要求服务端 route fallback：
 |---|---|
 | `#/overview` | 健康、容量、attention、活动 Runtime、Project 摘要 |
 | `#/projects` | 搜索/过滤 Project 与 Room、登记 Project、导入 Legacy Room |
-| `#/projects/<project-id>` | Project 详情、创建/打开/改名/归档/恢复 Room、补全 Binding |
+| `#/projects/<project-id>` | Project 详情、路径复检、安全注销、创建/打开/改名/归档/恢复 Room、补全 Binding |
 | `#/runtimes` | phase、busy、capacity、queue、last used、错误、安全挂起 |
 | `#/settings/interface` | 当前标签页 theme、density、refresh、打开 Room 行为 |
 | `#/settings/runtime` | 有效 Runtime policy 和等价命令 |
@@ -118,7 +118,8 @@ Overview 用于回答四个问题：
 - 按 available/unavailable 与 archived 状态筛选；
 - 登记 Project；
 - 显式导入 Legacy Room；
-- 导航到 Project detail。
+- 重新检查 canonical path 的当前可用性；
+- 导航到 Project detail，并在 Project 无任何 Room 时安全注销登记。
 
 Project unavailable 不会删除其 Room 或 Binding。页面应解释不可用路径，并允许用户修复文件系统后刷新，而不是提供危险的自动迁移。
 
@@ -144,6 +145,28 @@ Restore 恢复可见和可激活状态，并沿用原历史与 Binding。
 ### 6.3 Binding completion
 
 Legacy Room 缺少一侧身份时显示 pending。Completion Dialog 只允许为缺失侧选择 existing 或 deferred new；已经 durable 的 Binding 不可替换。
+
+### 6.4 Project refresh / unregister
+
+`POST /api/v1/projects/{project-id}/refresh` 重新解析已登记 canonical root，并把 available/diagnostic 投影原子写回 Registry checkpoint。路径恢复后可重新变为 available；路径现在指向不同 canonical identity 时只标记 unavailable，不会静默迁移 Project 或改写 Room ownership。
+
+`DELETE /api/v1/projects/{project-id}` 只注销**没有任何 Room**的 Project。请求体必须逐字确认完整 Project ID：
+
+```json
+{
+  "confirm_project_id": "project-..."
+}
+```
+
+安全边界：
+
+- active 与 archived Room 都会阻止注销并返回 `409 project_has_rooms`；
+- UI 在已知有 Room 时禁用按钮，后端仍在事务边界重新检查，覆盖并发创建 Room 的竞争；
+- 成功只从 Service Registry 移除登记，不删除 Git worktree、Room 目录、Event Log、附件或 Vendor Session/Thread；
+- 删除 checkpoint 持久化失败时回滚内存索引；若 checkpoint 已替换但目录同步失败，Registry fail closed；
+- 注销后可再次登记同一 worktree。
+
+注销 Dialog 要求输入完整 Project ID，不能用名称、路径尾段或原生 `window.confirm` 代替。
 
 ## 7. Runtimes 页面
 
@@ -271,7 +294,8 @@ Shell 不提供 stop/restart 自身按钮，避免控制面在回答前终止自
   "legacy_import": true,
   "runtime_suspend": true,
   "runtime_policy_mutation": false,
-  "project_removal": false,
+  "project_refresh": true,
+  "project_removal": true,
   "room_deletion": false,
   "server_path_browser": false
 }
@@ -324,6 +348,7 @@ Shell 应把缺失/新增字段当作版本化 API contract 处理，不能通�
 - 提交期间禁用重复提交；
 - 服务端错误保留用户输入；
 - destructive/lifecycle 操作明确说明“不删除什么”；
+- 高风险注销要求输入完整 durable ID，并在输入精确匹配前禁用提交；
 - 不使用 native prompt/confirm；
 - 成功通过页面状态与 toast 双重反馈。
 
@@ -351,7 +376,7 @@ Shell 禁止：
 - 自动扫描服务端路径；
 - 浏览器端捏造 Runtime policy；
 - 为不支持的 capability 展示可执行按钮；
-- 在页面内直接永久删除 Room/Project。
+- 在页面内永久删除 Room、Project worktree、Event Log、附件或 Vendor context；空 Project 的 Registry 注销是单独、受限且显式确认的操作。
 
 ## 14. 回归验证
 
@@ -362,7 +387,11 @@ Go tests 覆盖：
 - busy/cleanup-uncertain suspend 冲突；
 - queued cancel；
 - lifecycle 控制并发；
-- assets 包含路由/daemon 边界；
+- 空 Project 注销跨重启持久化且不触碰 worktree；
+- active/archived Room 阻止注销，并返回结构化冲突；
+- Project 注销与 Room provisioning 串行化；
+- path refresh 的 unavailable/recovery 持久化；
+- assets 包含路由/daemon/Project 管理边界；
 - 禁止 Web Storage、`window.prompt`、`window.confirm`。
 
 `tools/visual_smoke.py` 使用 Chromium、真实静态 assets 和模拟 Management API 数据验证 desktop/mobile 路由、Dialog、console/page error 与横向溢出。它不启动真实 Claude/Codex，不能当作 Vendor E2E。
@@ -379,10 +408,10 @@ Management Session 只在当前 Service 进程内有效，并按请求滑动续�
 
 ### Project 显示 unavailable
 
-检查 canonical worktree 是否移动、卸载或权限变化。恢复原路径或登记新的 worktree；当前没有 Project path mutation/removal。
+检查 canonical worktree 是否移动、卸载或权限变化。恢复原路径后选择“重新检查”；该操作只更新可用性诊断，不迁移 Project identity。若 worktree 已永久迁移，需要登记新的 canonical worktree，现有 Room 不会自动改属。
 
-### 看不到删除按钮
+### 看不到注销按钮，或按钮不可用
 
-当前 capability 明确不支持永久 Room deletion/Project removal。Archive 是可逆生命周期，不是删除。
+Project 注销只在 `project_removal` capability 为 true 且 Project 不含任何 Room 时可执行。active 和 archived Room 都属于 durable 数据，会阻止注销；Archive 是可逆生命周期，不是删除。当前仍不支持永久 Room deletion，也不删除 Project worktree。
 
 更多症状见 [排障手册](TROUBLESHOOTING.md)。

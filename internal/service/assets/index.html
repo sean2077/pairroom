@@ -144,7 +144,15 @@
   <dialog id="confirm-dialog" class="modal modal-small">
     <form id="confirm-form" method="dialog">
       <header class="modal-header"><div><p id="confirm-eyebrow" class="eyebrow">CONFIRM</p><h2 id="confirm-title">确认操作</h2></div><button class="icon-button modal-close" type="button" data-close-dialog="confirm-dialog" aria-label="关闭">×</button></header>
-      <div class="modal-body"><p id="confirm-message" class="confirm-message"></p><div id="confirm-detail" class="callout neutral" hidden></div></div>
+      <div class="modal-body">
+        <p id="confirm-message" class="confirm-message"></p>
+        <div id="confirm-detail" class="callout neutral" hidden></div>
+        <label id="confirm-input-wrap" class="confirm-input" for="confirm-input" hidden>
+          <span class="field-label">输入完整 Project ID 以确认</span>
+          <code id="confirm-expected"></code>
+          <input id="confirm-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="confirm-expected">
+        </label>
+      </div>
       <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="confirm-dialog">取消</button><button id="confirm-submit" class="danger-button" type="submit">确认</button></footer>
     </form>
   </dialog>

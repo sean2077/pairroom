@@ -4,6 +4,8 @@
 
 ### Added
 
+- Safe Project maintenance in the Management Shell and API: explicit path revalidation plus typed-confirmation unregister for empty Projects, with no Git worktree, Room data, attachment, or vendor Session/Thread deletion.
+- Durable Registry removal with atomic checkpoint publication, restart persistence, remove-vs-provision serialization, and structured `project_has_rooms` conflicts that count active and archived Rooms.
 - Cross-platform `pairroom daemon install|uninstall|start|stop|restart|status|logs|open` management for the multi-Project/multi-Room Service via systemd, launchd, and Windows Task Scheduler, including bounded log rotation, graceful Windows shutdown control, verified Management Shell opening, manager-aligned drain timeouts, and explicit crash-stale lock recovery.
 - A routed Management Shell with Overview, Projects, Project detail, Runtimes, and grouped Settings views, plus cross-Project search, responsive navigation, semantic dialogs, connection feedback, empty states, and toast notifications.
 - Service snapshot observability for effective Runtime policy, aggregate Project/Room/Runtime summary, explicit management capabilities, and per-Runtime capacity occupation.
