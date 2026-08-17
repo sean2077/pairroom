@@ -25,6 +25,7 @@ PROJECTS = [
     {"id": "project-pairroom", "root": "/Users/sean/src/pairroom", "available": True, "created_at": iso(timedelta(days=-30))},
     {"id": "project-tooling", "root": "/Users/sean/src/agent-tooling", "available": True, "created_at": iso(timedelta(days=-14))},
     {"id": "project-missing", "root": "/Volumes/archive/legacy-app", "available": False, "diagnostic": "Git worktree path is currently unavailable", "created_at": iso(timedelta(days=-90))},
+    {"id": "project-empty", "root": "/Users/sean/src/empty-project", "available": True, "created_at": iso(timedelta(days=-3))},
 ]
 
 
@@ -60,8 +61,8 @@ SNAPSHOT = {
     "rooms": ROOMS,
     "runtimes": RUNTIMES,
     "runtime_policy": {"limit": 2, "idle_timeout_seconds": 900, "poll_interval_milliseconds": 500, "close_timeout_seconds": 10},
-    "summary": {"projects": 3, "unavailable_projects": 1, "rooms": 6, "active_rooms": 5, "archived_rooms": 1, "pending_bindings": 1, "runtime_capacity_used": 2, "active_runtimes": 1, "busy_runtimes": 1, "queued_runtimes": 1, "failed_runtimes": 1, "attention_items": 3},
-    "capabilities": {"legacy_import": True, "runtime_suspend": True, "runtime_policy_mutation": False, "project_removal": False, "room_deletion": False, "server_path_browser": False},
+    "summary": {"projects": 4, "unavailable_projects": 1, "rooms": 6, "active_rooms": 5, "archived_rooms": 1, "pending_bindings": 1, "runtime_capacity_used": 2, "active_runtimes": 1, "busy_runtimes": 1, "queued_runtimes": 1, "failed_runtimes": 1, "attention_items": 3},
+    "capabilities": {"legacy_import": True, "runtime_suspend": True, "runtime_policy_mutation": False, "project_refresh": True, "project_removal": True, "room_deletion": False, "server_path_browser": False},
     "healthy": True,
 }
 
@@ -150,12 +151,28 @@ def fixture_html() -> str:
         const path = String(input);
         const method = String(init.method || 'GET').toUpperCase();
         const headers = new Headers(init.headers || {{}});
-        window.__managementRequests.push({{path, method, authorization: headers.get('Authorization'), csrf: headers.get('X-PairRoom-CSRF')}});
+        window.__managementRequests.push({{path, method, authorization: headers.get('Authorization'), csrf: headers.get('X-PairRoom-CSRF'), ...(init.body ? {{body: init.body}} : {{}})}});
         let payload = __snapshot;
         if (path === '/api/v1/session') payload = {{csrf_token: 'visual-csrf'}};
         else if (method !== 'GET') {{
           if (path.endsWith('/activate')) payload = {{room_id: path.split('/').at(-2), phase: 'queued', queue_position: 1, busy: false, occupies_capacity: false}};
           else if (path.endsWith('/suspend')) payload = {{room_id: path.split('/').at(-2), phase: 'suspended', busy: false, occupies_capacity: false}};
+          else if (path.endsWith('/refresh')) {{
+            const projectID = decodeURIComponent(path.split('/').at(-2));
+            const project = __snapshot.projects.find((item) => item.id === projectID);
+            if (project) {{
+              if (!project.available) __snapshot.summary.unavailable_projects -= 1;
+              project.available = true;
+              delete project.diagnostic;
+              payload = project;
+            }}
+          }}
+          else if (method === 'DELETE' && path.startsWith('/api/v1/projects/')) {{
+            const projectID = decodeURIComponent(path.split('/').at(-1));
+            __snapshot.projects = __snapshot.projects.filter((item) => item.id !== projectID);
+            __snapshot.summary.projects -= 1;
+            payload = {{ok: true}};
+          }}
           else payload = {{ok: true}};
         }}
         return new Response(JSON.stringify(payload), {{status: 200, headers: {{'Content-Type': 'application/json'}}}});
@@ -210,6 +227,46 @@ def run():
         assert page.get_by_text("--recover-stale-lock", exact=False).count() >= 1
         assert_no_horizontal_overflow(page, "settings-daemon")
         page.screenshot(path=str(SHOTS / "settings-daemon-desktop.png"), full_page=True)
+
+        # Project maintenance smoke: refresh an unavailable path, then require
+        # an exact Project ID before unregistering an empty Project.
+        page.evaluate("location.hash = '#/projects/project-missing'")
+        page.wait_for_selector("text=Project Maintenance")
+        page.get_by_role("button", name="重新检查路径").click()
+        page.wait_for_timeout(150)
+        assert page.get_by_text("Project 可用", exact=True).count() >= 1
+        requests = page.evaluate("window.__managementRequests")
+        assert any(item["path"] == "/api/v1/projects/project-missing/refresh" and item["method"] == "POST" and item["csrf"] == "visual-csrf" for item in requests)
+        assert page.get_by_text("available", exact=True).count() >= 1
+
+        page.evaluate("location.hash = '#/projects/project-pairroom'")
+        page.wait_for_selector("text=Project Maintenance")
+        blocked_removal = page.locator('button[aria-label^="注销 Project"]')
+        assert blocked_removal.count() == 1
+        assert blocked_removal.is_disabled()
+
+        page.evaluate("location.hash = '#/projects/project-empty'")
+        page.wait_for_selector("text=Project Maintenance")
+        page.locator('button[aria-label^="注销 Project"]').click()
+        page.wait_for_selector("#confirm-dialog[open]")
+        assert page.locator("#confirm-expected").inner_text() == "project-empty"
+        assert page.locator("#confirm-submit").is_disabled()
+        page.locator("#confirm-input").fill("project-wrong")
+        assert page.locator("#confirm-submit").is_disabled()
+        requests_before_delete = page.evaluate("window.__managementRequests.length")
+        assert not page.locator("#confirm-input").evaluate("input => input.checkValidity()")
+        page.locator("#confirm-input").fill("project-empty")
+        assert not page.locator("#confirm-submit").is_disabled()
+        page.locator("#confirm-submit").click()
+        page.wait_for_timeout(150)
+        assert page.locator("#confirm-dialog").get_attribute("open") is None
+        requests = page.evaluate("window.__managementRequests")
+        assert page.evaluate("window.__managementRequests.length") > requests_before_delete
+        delete_requests = [item for item in requests if item["method"] == "DELETE" and item["path"] == "/api/v1/projects/project-empty"]
+        assert len(delete_requests) == 1
+        assert json.loads(delete_requests[0]["body"]) == {"confirm_project_id": "project-empty"}
+        assert delete_requests[0]["csrf"] == "visual-csrf"
+        assert page.get_by_text("Project 已注销", exact=True).count() >= 1
 
         # Search + modal wiring smoke.
         page.evaluate("location.hash = '#/projects'")
