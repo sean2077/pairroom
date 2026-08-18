@@ -79,7 +79,7 @@ Management Shell 保留 Room View 作为实际协作界面，自身只负责控�
 |---|---|
 | Overview | Service 健康、Project/Room 计数、capacity、活动/排队/失败 Runtime、attention items |
 | Projects | 跨 Project/Room 搜索、可用性筛选、登记 Project、Legacy Import |
-| Project detail | 路径复检、空 Project 安全注销、创建 Room、打开、改名、归档、恢复、补全 Binding |
+| Project detail | 路径复检、创建 Room、打开、改名、归档、恢复、永久清除、空 Project 安全注销、补全 Binding |
 | Runtimes | phase、busy、capacity occupation、queue position、last used、错误、安全挂起 |
 | Settings | 当前标签页界面偏好、有效 Runtime policy、daemon 指引、Service diagnostics、capabilities |
 
@@ -252,14 +252,17 @@ Suspend 与 rename/archive/binding completion 使用同一 per-Room 控制锁，
 
 ```text
 create -> rename* -> archive <-> restore
+                         └-> permanent remove
 ```
 
 - Rename 只改展示名称，不改 Room ID/Binding；
-- Archive 前等待活动 Turn 自然结束并挂起 Runtime；
+- 单项 Archive 等待活动 Turn 自然结束并挂起 Runtime；批量 Archive 对 busy 项返回逐项 `runtime_busy` 并继续后续 Room，不 interrupt Turn；
 - Archive 不删除 Event Log、附件或 Binding ownership；
 - Restore 保留完整历史与原绑定；
-- 当前没有永久 Room deletion；
-- 空 Project 可以安全从 Registry 注销；任何 active 或 archived Room 都会阻止该操作。
+- Permanent remove 仅接受 archived Room、显式不可恢复确认和可证明已停止的 Runtime，不要求用户逐字输入 Room ID；
+- 受管 Room 删除 Event Log、附件和运行数据；显式外部导入 Room 只注销、保留目录；
+- 删除释放 Binding ownership，但不删除 Git worktree 或 Vendor Session/Thread；
+- 空 Project 可以安全从 Registry 注销；任何尚未永久清除的 active 或 archived Room 都会阻止该操作。
 
 生命周期操作需要避免 Room Engine 与控制面同时成为 Event Log writer，因此会先进入安全 Runtime 边界。
 
@@ -270,6 +273,7 @@ create -> rename* -> archive <-> restore
 ├── service.lock
 ├── service-registry.json
 └── rooms/
+    ├── .deleted-rooms/        # 不参与 Room discovery 的删除恢复日志
     └── <room-id>/
         ├── events.jsonl
         ├── metadata.json
@@ -291,6 +295,17 @@ checkpoint 删除或损坏后，Service 扫描默认 `rooms/`，从 Event Logs �
 Registry 无法证明内存索引、已提交 Event 与 checkpoint 一致时，会阻止后续 mutation。
 
 Project 注销与 Room provisioning 使用同一全局 mutation 串行化边界。若 provisioning 先提交，注销返回 `409 project_has_rooms`；若注销先提交，后续 provisioning 看到 Project 不存在。这样不会产生孤儿 Room，也不会出现重启后被 Event Log 意外“复活”的已注销 Project。
+
+### 10.1 Crash-consistent permanent removal
+
+受管 Room 的删除顺序为：写入 durable intent、把 Room 目录原子移动到 `.deleted-rooms`、重新物化并校验 Room/Project identity 与 archived lifecycle、提交 Registry checkpoint、写 committed marker、最后递归清理隔离目录。
+
+- checkpoint 发布前失败：恢复目录、Room projection 与 Binding ownership；
+- checkpoint 已替换但目录同步不确定：Registry fail closed，保留 prepared intent；
+- 启动时 checkpoint 仍引用 Room 或 checkpoint 不可信：恢复 Room；
+- committed marker 存在，或可信 checkpoint 已省略 Room：继续清理；
+- identity 冲突、未知隔离项或 symlink/non-directory entry：拒绝启动并保留证据；
+- 已提交物理清理失败：Room 不复活，`maintenance.pending_cleanup` 可观测并可通过 maintenance API 重试。
 
 ## 11. Legacy Room
 
@@ -364,7 +379,7 @@ Management Shell 提供一次性 completion：
   "runtime_policy_mutation": false,
   "project_refresh": true,
   "project_removal": true,
-  "room_deletion": false,
+  "room_deletion": true,
   "server_path_browser": false
 }
 ```
@@ -401,7 +416,11 @@ POST   /api/v1/rooms/{room}/suspend
 POST   /api/v1/rooms/{room}/bindings
 PATCH  /api/v1/rooms/{room}
 POST   /api/v1/rooms/{room}/archive
+POST   /api/v1/rooms/batch-archive
 POST   /api/v1/rooms/{room}/restore
+DELETE /api/v1/rooms/{room}
+POST   /api/v1/rooms/batch-delete
+POST   /api/v1/maintenance/room-deletions/retry
 POST   /api/v1/import
 ```
 
@@ -409,6 +428,9 @@ POST   /api/v1/import
 - browser session 的 mutation 需要 CSRF，直接 Bearer 客户端不需要该 Header；
 - mutation 使用结构化错误与状态码；
 - Project refresh 原子持久化当前可用性，不改变 canonical identity；
+- batch-archive 提交 1–100 个 `room_ids`，完整校验并按首次出现顺序去重，返回逐项 `archived` / `already_archived` / `failed`；busy 项不阻塞后续项；
+- 单 Room DELETE 提交 `acknowledge_data_loss: true`；batch-delete 提交 1–100 个 `room_ids` 与同一确认，只允许 archived 且 Runtime 可证明停止的 Room；
+- 两个批量入口都返回顺序稳定的逐项结果；单项失败不回滚已经成功归档或删除的 Room；
 - Project DELETE 必须提交精确匹配 path ID 的 `confirm_project_id`，且只允许没有任何 Room 的 Project；
 - 有 active/archived Room 时返回 `409 Conflict`、`code: project_has_rooms` 和有界 Room ID 诊断；
 - busy/unsafe suspend 使用 `409 Conflict`；
@@ -445,6 +467,6 @@ one Codex participant
 one Driver + one Reviewer by default
 ```
 
-没有多人身份、远程 worker、云同步、托管 TLS、Project worktree/Room 永久删除、Runtime policy 热修改或额外 Vendor 插件市场。空 Project 的 Registry 注销不属于数据删除。
+没有多人身份、远程 worker、云同步、托管 TLS、Project worktree 删除、Vendor Session/Thread 删除、Runtime policy 热修改或额外 Vendor 插件市场。已归档 Room 的永久清除只覆盖 PairRoom 受管数据；显式外部导入目录保持原位。
 
 Management Shell 的页面级行为、可访问性和测试契约见 [MANAGEMENT_SHELL.md](MANAGEMENT_SHELL.md)。cc-connect 的体验调研与取舍记录见 [CC_CONNECT_UX_RESEARCH.md](CC_CONNECT_UX_RESEARCH.md)。

@@ -14,7 +14,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
@@ -39,7 +38,7 @@ type ManagementServer struct {
 	token       string
 	sessions    *websession.Store
 	http        *http.Server
-	roomLocks   sync.Map // map[roomID]*sync.Mutex; Rooms are never permanently deleted
+	roomLocks   roomLockSet
 }
 
 type managementAuthMode uint8
@@ -69,6 +68,7 @@ type ServiceSummary struct {
 	QueuedRuntimes      int `json:"queued_runtimes"`
 	FailedRuntimes      int `json:"failed_runtimes"`
 	AttentionItems      int `json:"attention_items"`
+	PendingRoomCleanup  int `json:"pending_room_cleanup"`
 }
 
 type ServiceCapabilities struct {
@@ -82,19 +82,20 @@ type ServiceCapabilities struct {
 }
 
 type ServiceSnapshot struct {
-	Version       string              `json:"version"`
-	Commit        string              `json:"commit,omitempty"`
-	BuildDate     string              `json:"build_date,omitempty"`
-	DataRoot      string              `json:"data_root"`
-	GeneratedAt   time.Time           `json:"generated_at"`
-	Projects      []Project           `json:"projects"`
-	Rooms         []Room              `json:"rooms"`
-	Runtimes      []RuntimeStatus     `json:"runtimes"`
-	RuntimePolicy RuntimePolicy       `json:"runtime_policy"`
-	Summary       ServiceSummary      `json:"summary"`
-	Capabilities  ServiceCapabilities `json:"capabilities"`
-	Healthy       bool                `json:"healthy"`
-	Diagnostic    string              `json:"diagnostic,omitempty"`
+	Version       string                  `json:"version"`
+	Commit        string                  `json:"commit,omitempty"`
+	BuildDate     string                  `json:"build_date,omitempty"`
+	DataRoot      string                  `json:"data_root"`
+	GeneratedAt   time.Time               `json:"generated_at"`
+	Projects      []Project               `json:"projects"`
+	Rooms         []Room                  `json:"rooms"`
+	Runtimes      []RuntimeStatus         `json:"runtimes"`
+	RuntimePolicy RuntimePolicy           `json:"runtime_policy"`
+	Summary       ServiceSummary          `json:"summary"`
+	Capabilities  ServiceCapabilities     `json:"capabilities"`
+	Healthy       bool                    `json:"healthy"`
+	Diagnostic    string                  `json:"diagnostic,omitempty"`
+	Maintenance   RoomDeletionMaintenance `json:"maintenance"`
 }
 
 func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) {
@@ -141,7 +142,11 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	mux.HandleFunc("POST /api/v1/rooms/{room}/bindings", server.completeRoomBindings)
 	mux.HandleFunc("PATCH /api/v1/rooms/{room}", server.renameRoom)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/archive", server.archiveRoom)
+	mux.HandleFunc("POST /api/v1/rooms/batch-archive", server.archiveRoomsBatch)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/restore", server.restoreRoom)
+	mux.HandleFunc("DELETE /api/v1/rooms/{room}", server.removeRoom)
+	mux.HandleFunc("POST /api/v1/rooms/batch-delete", server.removeRoomsBatch)
+	mux.HandleFunc("POST /api/v1/maintenance/room-deletions/retry", server.retryRoomDeletionCleanup)
 	mux.HandleFunc("POST /api/v1/import", server.importLegacy)
 	mux.Handle("/", http.FileServer(http.FS(assets)))
 	server.http = &http.Server{
@@ -238,10 +243,17 @@ func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
 		Summary:       summarizeService(registry.Projects, registry.Rooms, runtimes),
 		Capabilities: ServiceCapabilities{
 			LegacyImport: true, RuntimeSuspend: true,
-			ProjectRefresh: true, ProjectRemoval: true,
+			ProjectRefresh: true, ProjectRemoval: true, RoomDeletion: true,
 		},
-		Healthy: healthErr == nil,
+		Maintenance: s.registry.RoomDeletionMaintenance(),
+		Healthy:     healthErr == nil,
 	}
+	payload.Summary.PendingRoomCleanup = payload.Maintenance.PendingCleanup
+	maintenanceAttention := payload.Summary.PendingRoomCleanup
+	if maintenanceAttention == 0 && payload.Maintenance.Diagnostic != "" {
+		maintenanceAttention = 1
+	}
+	payload.Summary.AttentionItems = payload.Summary.UnavailableProjects + payload.Summary.PendingBindings + payload.Summary.FailedRuntimes + maintenanceAttention
 	if healthErr != nil {
 		payload.Diagnostic = healthErr.Error()
 	}
@@ -426,14 +438,7 @@ func (s *ManagementServer) renameRoom(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *ManagementServer) archiveRoom(w http.ResponseWriter, r *http.Request) {
-	roomID := r.PathValue("room")
-	unlock := s.lockRoom(roomID)
-	defer unlock()
-	if err := s.runtimes.WaitAndSuspend(r.Context(), roomID); err != nil {
-		s.writeError(w, err)
-		return
-	}
-	room, err := s.registry.ArchiveRoom(r.Context(), roomID)
+	room, _, err := s.archiveRoomByID(r.Context(), r.PathValue("room"), true)
 	if err != nil {
 		s.writeError(w, err)
 		return
@@ -453,6 +458,263 @@ func (s *ManagementServer) restoreRoom(w http.ResponseWriter, r *http.Request) {
 	writeManagementJSON(w, http.StatusOK, room)
 }
 
+const maxRoomBatchSize = 100
+
+type roomRemovalRequest struct {
+	AcknowledgeDataLoss bool `json:"acknowledge_data_loss"`
+}
+
+type roomBatchRequest struct {
+	RoomIDs []string `json:"room_ids"`
+}
+
+type roomBatchRemovalRequest struct {
+	RoomIDs             []string `json:"room_ids"`
+	AcknowledgeDataLoss bool     `json:"acknowledge_data_loss"`
+}
+
+type RoomBatchArchiveItem struct {
+	RoomID string `json:"room_id"`
+	Status string `json:"status"`
+	Room   *Room  `json:"room,omitempty"`
+	Error  string `json:"error,omitempty"`
+	Code   string `json:"code,omitempty"`
+}
+
+type RoomBatchArchiveResult struct {
+	Submitted         int                    `json:"submitted"`
+	Processed         int                    `json:"processed"`
+	Succeeded         int                    `json:"succeeded"`
+	Failed            int                    `json:"failed"`
+	AlreadyArchived   int                    `json:"already_archived,omitempty"`
+	DuplicatesIgnored int                    `json:"duplicates_ignored,omitempty"`
+	Results           []RoomBatchArchiveItem `json:"results"`
+}
+
+type RoomBatchRemovalItem struct {
+	RoomID  string             `json:"room_id"`
+	Status  string             `json:"status"`
+	Removal *RoomRemovalResult `json:"removal,omitempty"`
+	Error   string             `json:"error,omitempty"`
+	Code    string             `json:"code,omitempty"`
+}
+
+type RoomBatchRemovalResult struct {
+	Submitted         int                    `json:"submitted"`
+	Processed         int                    `json:"processed"`
+	Succeeded         int                    `json:"succeeded"`
+	Failed            int                    `json:"failed"`
+	DuplicatesIgnored int                    `json:"duplicates_ignored,omitempty"`
+	Results           []RoomBatchRemovalItem `json:"results"`
+}
+
+func (s *ManagementServer) archiveRoomsBatch(w http.ResponseWriter, r *http.Request) {
+	var request roomBatchRequest
+	if err := decodeManagementJSON(w, r, &request); err != nil {
+		return
+	}
+	roomIDs, duplicates, err := normalizeRoomBatch(request.RoomIDs)
+	if err != nil {
+		writeManagementError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	result := RoomBatchArchiveResult{
+		Submitted:         len(request.RoomIDs),
+		Processed:         len(roomIDs),
+		DuplicatesIgnored: duplicates,
+		Results:           make([]RoomBatchArchiveItem, 0, len(roomIDs)),
+	}
+	for index, roomID := range roomIDs {
+		if contextErr := r.Context().Err(); contextErr != nil {
+			for _, pendingRoomID := range roomIDs[index:] {
+				result.Results = append(result.Results, RoomBatchArchiveItem{
+					RoomID: pendingRoomID, Status: "failed",
+					Error: contextErr.Error(), Code: managementErrorCode(contextErr, "room_archive_failed"),
+				})
+				result.Failed++
+			}
+			break
+		}
+
+		room, alreadyArchived, archiveErr := s.archiveRoomByID(r.Context(), roomID, false)
+		if archiveErr != nil {
+			result.Results = append(result.Results, RoomBatchArchiveItem{
+				RoomID: roomID, Status: "failed",
+				Error: archiveErr.Error(), Code: managementErrorCode(archiveErr, "room_archive_failed"),
+			})
+			result.Failed++
+			continue
+		}
+		roomCopy := room
+		status := "archived"
+		if alreadyArchived {
+			status = "already_archived"
+			result.AlreadyArchived++
+		}
+		result.Results = append(result.Results, RoomBatchArchiveItem{
+			RoomID: roomID, Status: status, Room: &roomCopy,
+		})
+		result.Succeeded++
+	}
+	writeManagementJSON(w, http.StatusOK, result)
+}
+
+func (s *ManagementServer) archiveRoomByID(ctx context.Context, roomID string, waitForActiveTurn bool) (Room, bool, error) {
+	unlock := s.lockRoom(roomID)
+	defer unlock()
+	room, ok := s.registry.Room(roomID)
+	if !ok {
+		return Room{}, false, ErrRoomNotFound
+	}
+	if room.Archived() {
+		return room, true, nil
+	}
+	var err error
+	if waitForActiveTurn {
+		err = s.runtimes.WaitAndSuspend(ctx, roomID)
+	} else {
+		// A batch must not stall behind one active Turn. Busy Rooms fail this item
+		// without interruption and remain selected for a later retry.
+		err = s.runtimes.Suspend(ctx, roomID)
+	}
+	if err != nil {
+		return Room{}, false, err
+	}
+	archived, err := s.registry.ArchiveRoom(ctx, roomID)
+	if err != nil {
+		return Room{}, false, err
+	}
+	return archived, false, nil
+}
+
+func (s *ManagementServer) removeRoom(w http.ResponseWriter, r *http.Request) {
+	var request roomRemovalRequest
+	if err := decodeManagementJSON(w, r, &request); err != nil {
+		return
+	}
+	if !request.AcknowledgeDataLoss {
+		writeManagementError(w, http.StatusBadRequest, "acknowledge_data_loss must be true")
+		return
+	}
+	roomID := r.PathValue("room")
+	result, err := s.removeRoomByID(r.Context(), roomID)
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	writeManagementJSON(w, http.StatusOK, result)
+}
+
+func (s *ManagementServer) removeRoomsBatch(w http.ResponseWriter, r *http.Request) {
+	var request roomBatchRemovalRequest
+	if err := decodeManagementJSON(w, r, &request); err != nil {
+		return
+	}
+	if !request.AcknowledgeDataLoss {
+		writeManagementError(w, http.StatusBadRequest, "acknowledge_data_loss must be true")
+		return
+	}
+	roomIDs, duplicates, err := normalizeRoomBatch(request.RoomIDs)
+	if err != nil {
+		writeManagementError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	result := RoomBatchRemovalResult{
+		Submitted:         len(request.RoomIDs),
+		Processed:         len(roomIDs),
+		DuplicatesIgnored: duplicates,
+		Results:           make([]RoomBatchRemovalItem, 0, len(roomIDs)),
+	}
+	for index, roomID := range roomIDs {
+		if contextErr := r.Context().Err(); contextErr != nil {
+			for _, pendingRoomID := range roomIDs[index:] {
+				result.Results = append(result.Results, RoomBatchRemovalItem{
+					RoomID: pendingRoomID, Status: "failed",
+					Error: contextErr.Error(), Code: managementErrorCode(contextErr, "room_deletion_failed"),
+				})
+				result.Failed++
+			}
+			break
+		}
+
+		removal, removalErr := s.removeRoomByID(r.Context(), roomID)
+		if removalErr != nil {
+			result.Results = append(result.Results, RoomBatchRemovalItem{
+				RoomID: roomID, Status: "failed",
+				Error: removalErr.Error(), Code: managementErrorCode(removalErr, "room_deletion_failed"),
+			})
+			result.Failed++
+			continue
+		}
+		removalCopy := removal
+		result.Results = append(result.Results, RoomBatchRemovalItem{
+			RoomID: roomID, Status: "deleted", Removal: &removalCopy,
+		})
+		result.Succeeded++
+	}
+	writeManagementJSON(w, http.StatusOK, result)
+}
+
+func normalizeRoomBatch(submitted []string) ([]string, int, error) {
+	if len(submitted) == 0 {
+		return nil, 0, errors.New("room_ids must contain at least one Room ID")
+	}
+	if len(submitted) > maxRoomBatchSize {
+		return nil, 0, fmt.Errorf("room_ids may contain at most %d entries", maxRoomBatchSize)
+	}
+	roomIDs := make([]string, 0, len(submitted))
+	seen := make(map[string]struct{}, len(submitted))
+	duplicates := 0
+	for index, roomID := range submitted {
+		if strings.TrimSpace(roomID) == "" {
+			return nil, 0, fmt.Errorf("room_ids[%d] must not be empty", index)
+		}
+		if strings.TrimSpace(roomID) != roomID {
+			return nil, 0, fmt.Errorf("room_ids[%d] must not contain surrounding whitespace", index)
+		}
+		if _, ok := seen[roomID]; ok {
+			duplicates++
+			continue
+		}
+		seen[roomID] = struct{}{}
+		roomIDs = append(roomIDs, roomID)
+	}
+	return roomIDs, duplicates, nil
+}
+
+func (s *ManagementServer) removeRoomByID(ctx context.Context, roomID string) (RoomRemovalResult, error) {
+	unlock := s.lockRoom(roomID)
+	defer unlock()
+	room, ok := s.registry.Room(roomID)
+	if !ok {
+		return RoomRemovalResult{}, ErrRoomNotFound
+	}
+	if !room.Archived() {
+		return RoomRemovalResult{}, &RoomNotArchivedError{RoomID: room.ID, Lifecycle: room.Lifecycle}
+	}
+	if err := s.runtimes.PrepareRoomDeletion(ctx, roomID); err != nil {
+		return RoomRemovalResult{}, err
+	}
+	result, err := s.registry.RemoveRoom(ctx, roomID)
+	if err != nil {
+		s.runtimes.AbortRoomDeletion(roomID)
+		return RoomRemovalResult{}, err
+	}
+	s.runtimes.CommitRoomDeletion(roomID)
+	return result, nil
+}
+
+func (s *ManagementServer) retryRoomDeletionCleanup(w http.ResponseWriter, r *http.Request) {
+	maintenance, err := s.registry.RetryRoomDeletionCleanup(r.Context())
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	writeManagementJSON(w, http.StatusOK, maintenance)
+}
+
 func (s *ManagementServer) importLegacy(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Path string `json:"path"`
@@ -469,10 +731,7 @@ func (s *ManagementServer) importLegacy(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *ManagementServer) lockRoom(roomID string) func() {
-	value, _ := s.roomLocks.LoadOrStore(roomID, &sync.Mutex{})
-	lock := value.(*sync.Mutex)
-	lock.Lock()
-	return lock.Unlock
+	return s.roomLocks.Lock(roomID)
 }
 
 func (s *ManagementServer) authenticate(next http.Handler) http.Handler {
@@ -564,6 +823,19 @@ func (s *ManagementServer) securityHeaders(next http.Handler) http.Handler {
 }
 
 func (s *ManagementServer) writeError(w http.ResponseWriter, err error) {
+	var roomLifecycle *RoomNotArchivedError
+	if errors.As(err, &roomLifecycle) {
+		writeManagementJSON(w, http.StatusConflict, map[string]any{
+			"error": err.Error(),
+			"code":  "room_not_archived",
+			"details": map[string]any{
+				"room_id":   roomLifecycle.RoomID,
+				"lifecycle": roomLifecycle.Lifecycle,
+			},
+		})
+		return
+	}
+
 	var projectRooms *ProjectHasRoomsError
 	if errors.As(err, &projectRooms) {
 		const detailLimit = 20
@@ -594,7 +866,8 @@ func (s *ManagementServer) writeError(w http.ResponseWriter, err error) {
 		code = http.StatusNotFound
 	case errors.Is(err, ErrRegistryFailClosed), errors.Is(err, ErrRuntimeManagerClosed):
 		code = http.StatusServiceUnavailable
-	case errors.Is(err, ErrRuntimeBusy), errors.Is(err, ErrRuntimeCloseUncertain), errors.Is(err, ErrRuntimeDrainAborted):
+	case errors.Is(err, ErrRuntimeBusy), errors.Is(err, ErrRuntimeCloseUncertain), errors.Is(err, ErrRuntimeDrainAborted),
+		errors.Is(err, ErrRuntimeRoomDeleting), errors.Is(err, ErrRoomNotArchived):
 		code = http.StatusConflict
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		code = http.StatusRequestTimeout
@@ -609,6 +882,37 @@ func (s *ManagementServer) writeError(w http.ResponseWriter, err error) {
 		}
 	}
 	writeManagementError(w, code, err.Error())
+}
+
+func managementErrorCode(err error, fallback string) string {
+	var roomLifecycle *RoomNotArchivedError
+	if errors.As(err, &roomLifecycle) {
+		return "room_not_archived"
+	}
+	switch {
+	case errors.Is(err, ErrRoomNotFound):
+		return "room_not_found"
+	case errors.Is(err, ErrRegistryFailClosed):
+		return "registry_unavailable"
+	case errors.Is(err, ErrRuntimeManagerClosed):
+		return "runtime_manager_closed"
+	case errors.Is(err, ErrRuntimeBusy):
+		return "runtime_busy"
+	case errors.Is(err, ErrRuntimeCloseUncertain):
+		return "runtime_close_uncertain"
+	case errors.Is(err, ErrRuntimeDrainAborted):
+		return "runtime_drain_aborted"
+	case errors.Is(err, ErrRuntimeRoomDeleting):
+		return "room_deletion_in_progress"
+	case errors.Is(err, ErrRoomNotArchived):
+		return "room_not_archived"
+	case errors.Is(err, context.Canceled):
+		return "request_cancelled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "request_deadline_exceeded"
+	default:
+		return fallback
+	}
 }
 
 func decodeManagementJSON(w http.ResponseWriter, r *http.Request, target any) error {

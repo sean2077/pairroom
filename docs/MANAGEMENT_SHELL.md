@@ -34,7 +34,7 @@ Shell 使用 hash 路由，不要求服务端 route fallback：
 |---|---|
 | `#/overview` | 健康、容量、attention、活动 Runtime、Project 摘要 |
 | `#/projects` | 搜索/过滤 Project 与 Room、登记 Project、导入 Legacy Room |
-| `#/projects/<project-id>` | Project 详情、路径复检、安全注销、创建/打开/改名/归档/恢复 Room、补全 Binding |
+| `#/projects/<project-id>` | Project 详情、路径复检、创建/打开/改名/归档/恢复/永久清除 Room、空 Project 安全注销、补全 Binding |
 | `#/runtimes` | phase、busy、capacity、queue、last used、错误、安全挂起 |
 | `#/settings/interface` | 当前标签页 theme、density、refresh、打开 Room 行为 |
 | `#/settings/runtime` | 有效 Runtime policy 和等价命令 |
@@ -119,7 +119,7 @@ Overview 用于回答四个问题：
 - 登记 Project；
 - 显式导入 Legacy Room；
 - 重新检查 canonical path 的当前可用性；
-- 导航到 Project detail，并在 Project 无任何 Room 时安全注销登记。
+- 导航到 Project detail，归档后永久清除不再需要的 Room，并在 Project 为空时安全注销登记。
 
 Project unavailable 不会删除其 Room 或 Binding。页面应解释不可用路径，并允许用户修复文件系统后刷新，而不是提供危险的自动迁移。
 
@@ -133,20 +133,68 @@ Project unavailable 不会删除其 Room 或 Binding。页面应解释不可用�
 
 ### 6.2 Archive / Restore
 
-Archive Dialog 必须明确：
+Archive is reversible: it preserves Event Log, attachments and Binding ownership, waits for a safe Runtime boundary for a single-Room operation, and can be undone with Restore.
 
-- 不删除 Event Log；
-- 不删除附件；
-- 不释放 Binding ownership；
-- 会先等待 Turn 并挂起 Runtime。
+The Shell selection model also supports batch archive:
 
-Restore 恢复可见和可激活状态，并沿用原历史与 Binding。
+```http
+POST /api/v1/rooms/batch-archive
+Content-Type: application/json
 
-### 6.3 Binding completion
+{
+  "room_ids": ["room-a", "room-b"]
+}
+```
+
+A batch accepts 1–100 submitted IDs, validates the entire array, removes exact duplicates in first-seen order and returns one ordered result per unique ID. It reports `archived`, idempotent `already_archived`, or `failed`. To prevent one active Turn from stalling the whole request, batch archive never interrupts work and reports a busy Room as `runtime_busy` while continuing later items. Successful items remain selected and the Shell reveals archived Rooms so the operator can proceed directly to batch cleanup.
+
+Restore keeps the full history and original bindings. A restored selected Room remains selected as an active candidate, making its state explicit rather than silently losing the operator's selection.
+
+### 6.3 Permanent Room removal
+
+Archive 仍是可逆的保留状态；永久清除是独立且不可撤销的操作，只允许 lifecycle 为 `archived` 的 Room。Shell 支持从当前 Project 或筛选结果中勾选一个或多个已归档 Room，在确认 Dialog 中核对数量和名称，并勾选“我理解这些 Room 将不可恢复”。不再要求逐字输入 Room ID。
+
+单个 API 客户端可调用兼容入口：
+
+```http
+DELETE /api/v1/rooms/{room-id}
+Content-Type: application/json
+
+{
+  "acknowledge_data_loss": true
+}
+```
+
+Shell 统一调用批量入口，即使只选择一个 Room：
+
+```http
+POST /api/v1/rooms/batch-delete
+Content-Type: application/json
+
+{
+  "room_ids": ["room-a", "room-b"],
+  "acknowledge_data_loss": true
+}
+```
+
+每次最多提交 100 个 Room ID。服务端先验证完整请求并按首次出现顺序去重，再顺序执行每个 Room 的 Runtime/Registry 安全边界。一个 Room 删除失败不会回滚已经成功删除的其他 Room；响应以逐项 `deleted` / `failed` 结果、错误码和 disposition 明确报告部分成功。前端会取消选择成功项，并保留失败项以便修复 busy/uncertain 状态后重试。
+
+安全语义：
+
+- active Room 返回 `409 room_not_archived`，数据与 Runtime 不变；
+- queued activation 会取消，idle Runtime 会安全关闭，busy 或 cleanup-uncertain Runtime 返回 `409`，不会 interrupt 活动 Turn；
+- PairRoom 默认根下的受管 Room 会删除 Event Log、附件与 Room 运行数据，并释放 Claude/Codex Binding ownership；
+- 显式导入的外部 Room 只从 Registry 注销并释放 Binding ownership，外部目录原位保留；
+- Git worktree 与 Vendor Claude Session/Codex Thread 永不由该操作删除；
+- 成功删除最后一个 Room 后，Project unregister 立即可用。
+
+若逻辑删除已经提交、但隔离数据的物理擦除失败，响应使用 `data_disposition: cleanup_pending`，Service snapshot 的 `maintenance.pending_cleanup` 与 diagnostic 会显示该状态。Settings 可调用 `POST /api/v1/maintenance/room-deletions/retry` 安全重试；未提交且 Registry fail-closed 的隔离项不会被重试擦除，而是留给下次启动依据 checkpoint 恢复或完成。
+
+### 6.4 Binding completion
 
 Legacy Room 缺少一侧身份时显示 pending。Completion Dialog 只允许为缺失侧选择 existing 或 deferred new；已经 durable 的 Binding 不可替换。
 
-### 6.4 Project refresh / unregister
+### 6.5 Project refresh / unregister
 
 `POST /api/v1/projects/{project-id}/refresh` 重新解析已登记 canonical root，并把 available/diagnostic 投影原子写回 Registry checkpoint。路径恢复后可重新变为 available；路径现在指向不同 canonical identity 时只标记 unavailable，不会静默迁移 Project 或改写 Room ownership。
 
@@ -162,7 +210,7 @@ Legacy Room 缺少一侧身份时显示 pending。Completion Dialog 只允许为
 
 - active 与 archived Room 都会阻止注销并返回 `409 project_has_rooms`；
 - UI 在已知有 Room 时禁用按钮，后端仍在事务边界重新检查，覆盖并发创建 Room 的竞争；
-- 成功只从 Service Registry 移除登记，不删除 Git worktree、Room 目录、Event Log、附件或 Vendor Session/Thread；
+- 成功只从 Service Registry 移除空 Project 登记，不删除 Git worktree 或 Vendor Session/Thread；Room 必须事先归档并永久清除；同一勾选集支持批量归档和批量清理；
 - 删除 checkpoint 持久化失败时回滚内存索引；若 checkpoint 已替换但目录同步失败，Registry fail closed；
 - 注销后可再次登记同一 worktree。
 
@@ -296,7 +344,7 @@ Shell 不提供 stop/restart 自身按钮，避免控制面在回答前终止自
   "runtime_policy_mutation": false,
   "project_refresh": true,
   "project_removal": true,
-  "room_deletion": false,
+  "room_deletion": true,
   "server_path_browser": false
 }
 ```
@@ -348,7 +396,7 @@ Shell 应把缺失/新增字段当作版本化 API contract 处理，不能通�
 - 提交期间禁用重复提交；
 - 服务端错误保留用户输入；
 - destructive/lifecycle 操作明确说明“不删除什么”；
-- 高风险注销要求输入完整 durable ID，并在输入精确匹配前禁用提交；
+- Project 注销仍要求输入完整 durable Project ID；Room 生命周期操作改为勾选目标并支持批量归档/清理，永久清理只需一次不可恢复确认，不要求输入 Room ID；
 - 不使用 native prompt/confirm；
 - 成功通过页面状态与 toast 双重反馈。
 
@@ -376,7 +424,7 @@ Shell 禁止：
 - 自动扫描服务端路径；
 - 浏览器端捏造 Runtime policy；
 - 为不支持的 capability 展示可执行按钮；
-- 在页面内永久删除 Room、Project worktree、Event Log、附件或 Vendor context；空 Project 的 Registry 注销是单独、受限且显式确认的操作。
+- 删除 Project worktree 或 Vendor context；Room 永久清除只允许已归档对象，并严格区分受管数据删除与外部导入目录保留。
 
 ## 14. 回归验证
 
@@ -387,6 +435,8 @@ Go tests 覆盖：
 - busy/cleanup-uncertain suspend 冲突；
 - queued cancel；
 - lifecycle 控制并发；
+- 批量归档的去重/上限/幂等/忙碌部分失败，以及已归档 Room 的显式不可恢复确认、单个/批量清除、binding 释放、受管/外部数据 disposition 与 Project 清理闭环；
+- 删除隔离区在 checkpoint 前失败回滚、崩溃恢复、fail-closed 保留和 committed cleanup 重试；
 - 空 Project 注销跨重启持久化且不触碰 worktree；
 - active/archived Room 阻止注销，并返回结构化冲突；
 - Project 注销与 Room provisioning 串行化；
@@ -412,6 +462,6 @@ Management Session 只在当前 Service 进程内有效，并按请求滑动续�
 
 ### 看不到注销按钮，或按钮不可用
 
-Project 注销只在 `project_removal` capability 为 true 且 Project 不含任何 Room 时可执行。active 和 archived Room 都属于 durable 数据，会阻止注销；Archive 是可逆生命周期，不是删除。当前仍不支持永久 Room deletion，也不删除 Project worktree。
+Project 注销只在 `project_removal` capability 为 true 且 Project 不含任何 Room 时可执行。选择一个或多个 Room，先对 active 项执行“批量归档”；成功项保持选中并自动显示为 archived，可直接执行“批量清理”。核对清单并勾选一次不可恢复确认后，最后注销空 Project。失败项会保留选择，便于 Runtime 空闲后重试。永久清除不会删除 Project worktree 或 Vendor Session/Thread；外部导入目录只解绑保留。
 
 更多症状见 [排障手册](TROUBLESHOOTING.md)。

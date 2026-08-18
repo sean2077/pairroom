@@ -27,6 +27,8 @@ var (
 	ErrRegistryFailClosed       = errors.New("service registry is fail-closed")
 )
 
+const roomDeletionQuarantineName = ".deleted-rooms"
+
 type RegistryConfig struct {
 	Root     string
 	Resolver *ProjectResolver
@@ -37,11 +39,12 @@ type Registry struct {
 	mu          sync.RWMutex
 	provisionMu sync.Mutex
 
-	root       string
-	roomsRoot  string
-	checkpoint string
-	resolver   *ProjectResolver
-	now        func() time.Time
+	root             string
+	roomsRoot        string
+	deletedRoomsRoot string
+	checkpoint       string
+	resolver         *ProjectResolver
+	now              func() time.Time
 
 	projects      map[string]Project
 	projectByRoot map[string]string
@@ -49,6 +52,26 @@ type Registry struct {
 	bindingOwners map[string]string
 	importedDirs  map[string]struct{}
 	poisoned      error
+
+	roomDeletionFS                roomDeletionFS
+	roomDeletionCleanupDiagnostic string
+}
+
+func ensureRealDirectory(path string, mode os.FileMode) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.Mkdir(path, mode); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("%s is not a real directory", path)
+	}
+	return nil
 }
 
 func DefaultRoot() (string, error) {
@@ -71,6 +94,11 @@ func OpenRegistry(ctx context.Context, cfg RegistryConfig) (*Registry, error) {
 	if err := os.MkdirAll(roomsRoot, 0o700); err != nil {
 		return nil, fmt.Errorf("create room data root: %w", err)
 	}
+	// Keep the deletion quarantine lazy. A fresh Registry should not gain an
+	// otherwise unexplained data directory until the first permanent Room
+	// removal. Startup recovery validates and scans it only when it already
+	// exists.
+	deletedRoomsRoot := filepath.Join(roomsRoot, roomDeletionQuarantineName)
 	resolver := cfg.Resolver
 	if resolver == nil {
 		resolver = NewProjectResolver()
@@ -80,16 +108,25 @@ func OpenRegistry(ctx context.Context, cfg RegistryConfig) (*Registry, error) {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	registry := &Registry{
-		root:          root,
-		roomsRoot:     roomsRoot,
-		checkpoint:    filepath.Join(root, "service-registry.json"),
-		resolver:      resolver,
-		now:           now,
-		projects:      make(map[string]Project),
-		projectByRoot: make(map[string]string),
-		rooms:         make(map[string]Room),
-		bindingOwners: make(map[string]string),
-		importedDirs:  make(map[string]struct{}),
+		root:             root,
+		roomsRoot:        roomsRoot,
+		deletedRoomsRoot: deletedRoomsRoot,
+		checkpoint:       filepath.Join(root, "service-registry.json"),
+		resolver:         resolver,
+		now:              now,
+		projects:         make(map[string]Project),
+		projectByRoot:    make(map[string]string),
+		rooms:            make(map[string]Room),
+		bindingOwners:    make(map[string]string),
+		importedDirs:     make(map[string]struct{}),
+		roomDeletionFS:   defaultRoomDeletionFS(),
+	}
+	// Resolve crash-interrupted Room deletions before the normal discovery scan.
+	// Recovery restores prepared data when the durable checkpoint still owns the
+	// Room (or cannot be trusted), and completes cleanup only after a committed
+	// marker or a valid checkpoint proves that logical deletion won.
+	if err := registry.recoverRoomDeletionQuarantine(ctx); err != nil {
+		return nil, fmt.Errorf("recover Room deletion quarantine: %w", err)
 	}
 	// A valid checkpoint preserves explicitly registered projects that do not yet
 	// have a Room. Room facts and binding ownership are always rebuilt from Room
@@ -254,6 +291,9 @@ func (r *Registry) scanRooms(ctx context.Context) error {
 	dirs := make([]string, 0, len(entries)+len(r.importedDirs))
 	for _, entry := range entries {
 		if !entry.IsDir() {
+			continue
+		}
+		if entry.Name() == roomDeletionQuarantineName {
 			continue
 		}
 		if strings.HasPrefix(entry.Name(), ".provision-") {
