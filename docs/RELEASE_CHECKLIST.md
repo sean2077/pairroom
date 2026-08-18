@@ -22,7 +22,16 @@ A build is publishable only when every applicable item is complete.
 - [ ] Active and archived Rooms both block Project unregister with a structured `project_has_rooms` conflict.
 - [ ] Project unregister racing Room provisioning has one atomic winner and never creates an orphaned Room.
 - [ ] Project path refresh persists unavailable diagnostics and recovers after the canonical path returns.
-- [ ] Management Shell typed confirmation rejects any Project ID mismatch and remains free of native prompt/confirm or Web Storage credentials.
+- [ ] Batch Room archive validates before mutation, de-duplicates in first-seen order, treats already-archived items idempotently, and lets busy/missing failures coexist with successful later items without interrupting active Turns.
+- [ ] Active Room permanent removal is rejected with `room_not_archived`; archived removal requires explicit irreversible acknowledgement, releases binding ownership, and unblocks final Project unregister without typed Room-ID confirmation.
+- [ ] Batch Room removal validates the full request before mutation, rejects empty/oversized input, de-duplicates in first-seen order, supports 1–100 submitted IDs, and returns explicit per-Room success/failure results.
+- [ ] A busy/invalid Room in a valid batch does not roll back successfully deleted Rooms; failed archived Rooms remain selectable for a later retry.
+- [ ] Managed Room removal deletes Event Log/attachments without touching the Git worktree or Vendor Session/Thread; explicitly imported external Room directories remain byte-for-byte present.
+- [ ] Busy, starting/stopping-uncertain, and failed-retained Runtimes prevent Room removal without interrupting work or changing durable data.
+- [ ] Room deletion checkpoint failure restores Room data/indexes; crash recovery restores prepared deletion when the checkpoint owns it and completes deletion when the checkpoint omits it.
+- [ ] Unknown/symlink/non-directory quarantine entries fail closed and are preserved; fail-closed cleanup retry cannot erase an uncommitted prepared Room.
+- [ ] `cleanup_pending` is surfaced in Service summary/maintenance, and the maintenance retry endpoint clears committed quarantine without resurrecting Rooms.
+- [ ] Management Shell rejects any typed Project-ID mismatch; Room lifecycle uses one selection for batch archive and cleanup; permanent cleanup uses an explicit irreversible acknowledgement checkbox, and remains free of native prompt/confirm or Web Storage credentials.
 - [ ] Current real Claude Code and Codex smoke test is performed on the release machine or explicitly recorded as not available.
 
 ## Build artifacts

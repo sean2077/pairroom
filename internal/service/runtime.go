@@ -14,6 +14,7 @@ var (
 	ErrRuntimeBusy           = errors.New("room runtime has active work")
 	ErrRuntimeDrainAborted   = errors.New("room runtime drain ended before shutdown")
 	ErrRuntimeCloseUncertain = errors.New("room runtime close state is uncertain")
+	ErrRuntimeRoomDeleting   = errors.New("room is being permanently removed")
 )
 
 type RuntimePhase string
@@ -98,6 +99,7 @@ type RuntimeManager struct {
 	factory     RuntimeFactory
 	cfg         RuntimeManagerConfig
 	entries     map[string]*runtimeEntry
+	deleting    map[string]struct{}
 	queue       []string
 	changed     chan struct{}
 	closed      bool
@@ -132,7 +134,7 @@ func NewRuntimeManager(registry *Registry, factory RuntimeFactory, cfg RuntimeMa
 	ctx, cancel := context.WithCancel(context.Background())
 	manager := &RuntimeManager{
 		registry: registry, factory: factory, cfg: cfg,
-		entries: make(map[string]*runtimeEntry), changed: make(chan struct{}),
+		entries: make(map[string]*runtimeEntry), deleting: make(map[string]struct{}), changed: make(chan struct{}),
 		ctx: ctx, cancel: cancel,
 	}
 	manager.wg.Add(1)
@@ -141,6 +143,17 @@ func NewRuntimeManager(registry *Registry, factory RuntimeFactory, cfg RuntimeMa
 }
 
 func (m *RuntimeManager) RequestActivation(roomID string) (RuntimeStatus, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return RuntimeStatus{}, ErrRuntimeManagerClosed
+	}
+	if _, deleting := m.deleting[roomID]; deleting {
+		return RuntimeStatus{}, ErrRuntimeRoomDeleting
+	}
+	// Keep the manager lock through the Registry read. dispatchLocked follows
+	// the same lock order, and permanent deletion uses this boundary to ensure
+	// an activation can be either cancelled before removal or rejected after it.
 	if err := m.registry.Healthy(); err != nil {
 		return RuntimeStatus{}, err
 	}
@@ -155,11 +168,6 @@ func (m *RuntimeManager) RequestActivation(roomID string) (RuntimeStatus, error)
 		return RuntimeStatus{}, fmt.Errorf("%w: complete the legacy Room's Claude/Codex bindings before activation", ErrRoomBindingPending)
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return RuntimeStatus{}, ErrRuntimeManagerClosed
-	}
 	entry := m.entries[roomID]
 	if entry == nil {
 		entry = &runtimeEntry{phase: RuntimeSuspended}
@@ -370,6 +378,87 @@ func (m *RuntimeManager) WaitAndSuspend(ctx context.Context, roomID string) erro
 	}
 }
 
+// PrepareRoomDeletion creates a Runtime admission barrier, cancels queued
+// activation, and closes an idle Runtime. It never interrupts active work: a
+// busy Runtime returns ErrRuntimeBusy and the barrier is rolled back.
+func (m *RuntimeManager) PrepareRoomDeletion(ctx context.Context, roomID string) error {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return ErrRuntimeManagerClosed
+	}
+	if _, exists := m.deleting[roomID]; exists {
+		m.mu.Unlock()
+		return ErrRuntimeRoomDeleting
+	}
+	m.deleting[roomID] = struct{}{}
+	if entry := m.entries[roomID]; entry != nil {
+		entry.requested = false
+		entry.drainRequested = true
+		if control, ok := entry.runtime.(RuntimeDrainControl); ok {
+			control.SetDraining(true)
+		}
+	}
+	m.signalLocked()
+	m.mu.Unlock()
+
+	if err := m.Suspend(ctx, roomID); err != nil {
+		m.AbortRoomDeletion(roomID)
+		return err
+	}
+	m.mu.Lock()
+	if _, exists := m.deleting[roomID]; !exists {
+		m.mu.Unlock()
+		return ErrRuntimeRoomDeleting
+	}
+	entry := m.entries[roomID]
+	if entry != nil && (entry.phase != RuntimeSuspended || entry.runtime != nil) {
+		// Defensive consistency failure: never leave a permanent admission gate
+		// behind when the Runtime cannot be proven removable.
+		delete(m.deleting, roomID)
+		entry.drainRequested = false
+		if control, ok := entry.runtime.(RuntimeDrainControl); ok {
+			control.SetDraining(false)
+		}
+		m.dispatchLocked()
+		m.signalLocked()
+		m.mu.Unlock()
+		return fmt.Errorf("%w: Room %s runtime did not reach a removable state", ErrRuntimeCloseUncertain, roomID)
+	}
+	m.mu.Unlock()
+	return nil
+}
+
+// AbortRoomDeletion reopens Runtime admission after Registry removal fails.
+func (m *RuntimeManager) AbortRoomDeletion(roomID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.deleting[roomID]; !exists {
+		return
+	}
+	delete(m.deleting, roomID)
+	if entry := m.entries[roomID]; entry != nil {
+		entry.drainRequested = false
+		if control, ok := entry.runtime.(RuntimeDrainControl); ok {
+			control.SetDraining(false)
+		}
+	}
+	m.dispatchLocked()
+	m.signalLocked()
+}
+
+// CommitRoomDeletion discards the now-suspended Runtime bookkeeping only after
+// the Registry has durably forgotten the Room.
+func (m *RuntimeManager) CommitRoomDeletion(roomID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.removeQueuedLocked(roomID)
+	delete(m.entries, roomID)
+	delete(m.deleting, roomID)
+	m.dispatchLocked()
+	m.signalLocked()
+}
+
 func (m *RuntimeManager) Shutdown(ctx context.Context) error {
 	m.mu.Lock()
 	if !m.closed {
@@ -502,6 +591,12 @@ func (m *RuntimeManager) dispatchLocked() {
 		entry := m.entries[roomID]
 		if entry == nil || entry.phase != RuntimeQueued {
 			m.queue = m.queue[1:]
+			continue
+		}
+		if _, deleting := m.deleting[roomID]; deleting {
+			m.queue = m.queue[1:]
+			entry.phase = RuntimeSuspended
+			entry.requested = false
 			continue
 		}
 		if m.capacityLocked() < m.cfg.Limit {

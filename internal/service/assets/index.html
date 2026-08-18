@@ -148,9 +148,13 @@
         <p id="confirm-message" class="confirm-message"></p>
         <div id="confirm-detail" class="callout neutral" hidden></div>
         <label id="confirm-input-wrap" class="confirm-input" for="confirm-input" hidden>
-          <span class="field-label">输入完整 Project ID 以确认</span>
+          <span id="confirm-input-label" class="field-label">输入完整 ID 以确认</span>
           <code id="confirm-expected"></code>
           <input id="confirm-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="confirm-expected">
+        </label>
+        <label id="confirm-ack-wrap" class="choice-card" hidden>
+          <input id="confirm-ack" type="checkbox">
+          <span><strong id="confirm-ack-label">我理解此操作不可恢复。</strong><small>只有勾选后才能执行永久清理。</small></span>
         </label>
       </div>
       <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="confirm-dialog">取消</button><button id="confirm-submit" class="danger-button" type="submit">确认</button></footer>

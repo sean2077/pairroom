@@ -4,6 +4,12 @@
 
 ### Added
 
+- Permanent archived-Room removal in the Management API and Shell, with selection-based single/batch cleanup, explicit irreversible acknowledgement instead of typed Room-ID confirmation, Runtime admission gating, binding-ownership release, and a complete path to empty-Project unregister.
+- Crash-consistent managed-data deletion through a hidden quarantine journal, durable intent/commit markers, checkpoint-aware startup recovery, fail-closed ambiguity handling, and observable/retryable physical cleanup.
+- Non-destructive removal for explicitly imported external Rooms: PairRoom unregisters the Room and releases bindings while retaining the external directory.
+- `POST /api/v1/maintenance/room-deletions/retry` plus Service snapshot maintenance diagnostics for committed cleanup that could not be physically completed immediately.
+- `POST /api/v1/rooms/batch-archive` for 1–100 submitted Room IDs, idempotent already-archived results, non-interrupting busy-item failures, and ordered partial-success processing that continues later Rooms.
+- `POST /api/v1/rooms/batch-delete` for 1–100 submitted Room IDs, first-seen de-duplication, sequential safety gating, and explicit per-Room partial-success results without rolling back completed deletion.
 - Safe Project maintenance in the Management Shell and API: explicit path revalidation plus typed-confirmation unregister for empty Projects, with no Git worktree, Room data, attachment, or vendor Session/Thread deletion.
 - Durable Registry removal with atomic checkpoint publication, restart persistence, remove-vs-provision serialization, and structured `project_has_rooms` conflicts that count active and archived Rooms.
 - Cross-platform `pairroom daemon install|uninstall|start|stop|restart|status|logs|open` management for the multi-Project/multi-Room Service via systemd, launchd, and Windows Task Scheduler, including bounded log rotation, graceful Windows shutdown control, verified Management Shell opening, manager-aligned drain timeouts, and explicit crash-stale lock recovery.
@@ -15,7 +21,7 @@
 
 ### Changed
 
-- Project and Room lifecycle operations now use validated forms and dialogs instead of native browser `prompt`/`confirm`.
+- Project and Room lifecycle operations now use validated forms and dialogs instead of native browser `prompt`/`confirm`; one persistent Room selection supports batch archive followed directly by batch cleanup.
 - Runtime management on narrow viewports renders as labelled cards instead of overflowing tables.
 - Management UI preferences and the Bearer bootstrap secret remain tab-memory-only; the browser exchanges the secret for an HttpOnly session and keeps its CSRF token in memory, with no Web Storage persistence.
 - Management polling now defaults to 10 seconds with explicit slower/faster choices, and Runtime control conflicts consistently return `409 Conflict`.

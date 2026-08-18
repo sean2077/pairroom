@@ -3,6 +3,7 @@
 
   const INITIAL_ROUTE = '#/overview';
   const NEW_BINDING_HINT = 'materializes on first turn';
+  const MAX_ROOM_BATCH_SIZE = 100;
   const hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
   let bootstrapToken = hashParams.get('token') || '';
   if (bootstrapToken) {
@@ -27,6 +28,8 @@
     bindingRoomID: '',
     confirmAction: null,
     confirmRequirement: '',
+    confirmAcknowledgementRequired: false,
+    selectedRoomIDs: new Set(),
     settingsSection: 'interface',
     showRawSnapshot: false,
     filters: {
@@ -96,6 +99,7 @@
     $('refresh-button').classList.add('spinning');
     state.refreshPromise = api('/api/v1/service').then((snapshot) => {
       state.snapshot = snapshot;
+      pruneRoomSelection(snapshot);
       state.connected = true;
       state.lastError = '';
       updateChrome();
@@ -280,12 +284,12 @@
           statCard('Projects', summary.projects, `${summary.unavailable_projects} 个不可用`, '⌂', 'accent', () => navigate('#/projects')),
           statCard('活动 Room', summary.active_rooms, `${summary.archived_rooms} 个已归档`, '◇', 'good', () => navigate('#/projects')),
           statCard('正在工作', summary.busy_runtimes, `${summary.queued_runtimes} 个排队`, '◎', summary.queued_runtimes ? 'warn' : '', () => navigate('#/runtimes')),
-          statCard('需要关注', summary.attention_items, summary.attention_items ? 'Binding、Runtime 或路径诊断' : '当前无阻断项', '!', summary.attention_items ? 'danger' : 'good')
+          statCard('需要关注', summary.attention_items, summary.attention_items ? 'Binding、Runtime、路径或清理诊断' : '当前无阻断项', '!', summary.attention_items ? 'danger' : 'good')
         ),
         node('section', { className: 'two-panel-grid' },
           panel('需要关注', '阻断激活或需要人工处理的项目',
             attention.length ? node('div', { className: 'list' }, ...attention.slice(0, 8).map(renderAttentionItem))
-              : emptyState('✓', '一切正常', '当前没有不可用 Project、失败 Runtime 或待补全 Binding。', true),
+              : emptyState('✓', '一切正常', '当前没有不可用 Project、失败 Runtime、待补全 Binding 或 Room 清理项。', true),
             attention.length > 8 ? `${attention.length - 8} 个项目未显示` : ''
           ),
           panel('实时运行', '活跃、工作中与排队的 Room',
@@ -340,6 +344,18 @@
             state.filters.showArchived = !state.filters.showArchived;
             renderProjects();
           }, `filter-chip ${state.filters.showArchived ? 'active' : ''}`),
+          state.snapshot?.capabilities?.room_deletion
+            ? roomSelectionToggleButton(visibleRoomsForBatch(projectModels.flatMap((model) => model.rooms)), '当前可见结果')
+            : null,
+          state.snapshot?.capabilities?.room_deletion
+            ? roomClearSelectionButton()
+            : null,
+          state.snapshot?.capabilities?.room_deletion
+            ? roomBatchArchiveButton(selectedActiveRooms(visibleRoomsForBatch(projectModels.flatMap((model) => model.rooms))))
+            : null,
+          state.snapshot?.capabilities?.room_deletion
+            ? roomBatchRemovalButton(selectedArchivedRooms(visibleRoomsForBatch(projectModels.flatMap((model) => model.rooms))))
+            : null,
           node('span', { className: 'muted', textContent: `${projectModels.length} / ${(snapshot.projects || []).length} Projects` })
         ),
         projectModels.length
@@ -427,6 +443,10 @@
             '',
             node('div', { className: 'section-actions' },
               actionButton(state.filters.showArchived ? '隐藏已归档' : '显示已归档', () => { state.filters.showArchived = !state.filters.showArchived; renderProjectDetail(projectID); }, 'secondary-button compact-button'),
+              state.snapshot?.capabilities?.room_deletion ? roomSelectionToggleButton(visibleRooms, '本项目当前可见范围') : null,
+              state.snapshot?.capabilities?.room_deletion ? roomClearSelectionButton() : null,
+              state.snapshot?.capabilities?.room_deletion ? roomBatchArchiveButton(selectedActiveRooms(visibleRooms)) : null,
+              state.snapshot?.capabilities?.room_deletion ? roomBatchRemovalButton(selectedArchivedRooms(visibleRooms)) : null,
               actionButton('＋ Room', () => openRoomDialog(project.id), 'primary-button compact-button', !project.available)
             )
           ),
@@ -449,8 +469,8 @@
               projectRemovalButton(project, rooms.length)
             ),
             rooms.length
-              ? `仍包含 ${rooms.length} 个 Room（含已归档）；注销被禁用。`
-              : '注销只移除 Registry 登记，不删除 worktree、Room 数据或 vendor context。'
+              ? `仍包含 ${rooms.length} 个 Room（含已归档）；请先归档并永久清除全部 Room，再注销 Project。`
+              : '注销只移除 Registry 登记，不删除 Git worktree 或 vendor context。'
           )
           : null,
         project.diagnostic ? node('aside', { className: 'callout danger' }, node('strong', { textContent: 'Project 不可用' }), node('span', { textContent: project.diagnostic })) : null,
@@ -476,8 +496,28 @@
     if (runtime.last_error) meta.append(node('span', { className: 'badge danger plain', textContent: truncate(runtime.last_error, 90), title: runtime.last_error }));
 
     const actions = node('div', { className: 'room-actions' });
+    if (state.snapshot?.capabilities?.room_deletion) {
+      actions.append(
+        node('label', {
+          className: 'secondary-button compact-button',
+          style: 'display:inline-flex;align-items:center;gap:6px;cursor:pointer',
+          title: archived ? '选择此 Room 进行批量清理' : '选择此 Room 进行批量归档',
+        },
+          node('input', {
+            type: 'checkbox',
+            checked: state.selectedRoomIDs.has(room.id),
+            'aria-label': `选择 Room ${room.name}`,
+            onChange: (event) => toggleRoomSelection(room.id, event.target.checked),
+          }),
+          node('span', { textContent: '选择' })
+        )
+      );
+    }
     if (archived) {
       actions.append(actionButton('恢复', () => restoreRoom(room), 'secondary-button'));
+      if (state.snapshot?.capabilities?.room_deletion) {
+        actions.append(actionButton('永久清除', () => confirmRoomRemoval([room]), 'danger-button outline'));
+      }
     } else {
       if (pending) actions.append(actionButton('补全 Binding', () => completeBindings(room), 'primary-button'));
       actions.append(actionButton(runtime.phase === 'queued' ? `排队 #${runtime.queue_position || '?'}` : '打开', () => openRoom(room.id), 'primary-button', pending));
@@ -654,6 +694,15 @@
           settingRow('查看原始结构', '在页面中展开脱敏后的 Service snapshot。', toggleButton(state.showRawSnapshot, (value) => { state.showRawSnapshot = value; renderSettings(); }, '切换 snapshot 显示'))
         ),
         state.showRawSnapshot ? node('pre', { className: 'raw-snapshot', textContent: JSON.stringify(safe, null, 2) }) : null,
+        snapshot.maintenance?.pending_cleanup || snapshot.maintenance?.diagnostic
+          ? settingsPanel('Room 删除清理', '逻辑删除已提交；隔离区中的受管数据仍需完成物理清理。',
+            settingRow(
+              `${snapshot.maintenance?.pending_cleanup || 0} 个待清理项`,
+              snapshot.maintenance?.diagnostic || '可安全重试，不会恢复已删除 Room。',
+              actionButton('重试清理', retryRoomDeletionCleanup, 'secondary-button')
+            )
+          )
+          : null,
         snapshot.diagnostic ? node('aside', { className: 'callout danger' }, node('strong', { textContent: 'Registry diagnostic' }), node('span', { textContent: snapshot.diagnostic })) : null
       );
     }
@@ -665,7 +714,7 @@
           capabilityRow('导入 Legacy Room', caps.legacy_import !== false, '非破坏性登记，不搬移或重写 events.jsonl。'),
           capabilityRow('手动挂起 idle Runtime', caps.runtime_suspend === true, 'Busy Runtime 会拒绝操作。'),
           capabilityRow('热更新 Runtime policy', caps.runtime_policy_mutation === true, '当前需受控重启。'),
-          capabilityRow('永久删除 Room', caps.room_deletion === true, '归档是唯一隐藏操作，历史与 Binding Identity 保留。'),
+          capabilityRow('Room 生命周期管理', caps.room_deletion === true, '支持最多 100 个 Room 的批量归档与批量永久清理；永久清理仅接受已归档 Room，并要求一次不可恢复确认。显式外部导入目录只解绑并保留。'),
           capabilityRow('服务端路径浏览器', caps.server_path_browser === true, '避免扩大本机文件系统暴露面。')
         ),
         node('aside', { className: 'callout boundary' }, node('strong', { textContent: 'Transcript Boundary' }), node('span', { textContent: 'Vendor Transcript 与 PairRoom Room Event Log 是不同记录。Existing Binding 只恢复 vendor context，绑定前历史不会进入公共时间线。' })),
@@ -731,6 +780,18 @@
     runtimeModels(snapshot).forEach(({ room, runtime }) => {
       if (runtime.phase === 'failed') items.push({ kind: 'runtime', title: room.name, detail: runtime.last_error || 'Runtime 启动或关闭失败。', symbol: 'R', tone: 'danger', action: () => navigate('#/runtimes') });
     });
+    const maintenance = snapshot.maintenance || {};
+    if (maintenance.pending_cleanup || maintenance.diagnostic) {
+      const count = Number(maintenance.pending_cleanup || 0);
+      items.push({
+        kind: 'maintenance',
+        title: 'Room 数据清理待完成',
+        detail: maintenance.diagnostic || `${count} 个隔离清理项可安全重试。`,
+        symbol: 'D',
+        tone: 'warn',
+        action: () => { state.settingsSection = 'service'; navigate('#/settings'); },
+      });
+    }
     return items;
   }
 
@@ -821,6 +882,7 @@
     summary.active_rooms = (snapshot.rooms || []).filter((room) => room.lifecycle !== 'archived').length;
     summary.archived_rooms = summary.rooms - summary.active_rooms;
     summary.pending_bindings = (snapshot.rooms || []).filter(roomHasBlockingPendingBindings).length;
+    summary.pending_room_cleanup = Number(snapshot.maintenance?.pending_cleanup || 0);
     (snapshot.runtimes || []).forEach((runtime) => {
       if (runtime.occupies_capacity || ['active', 'starting', 'stopping'].includes(runtime.phase)) summary.runtime_capacity_used++;
       if (runtime.phase === 'active') summary.active_runtimes++;
@@ -828,12 +890,12 @@
       if (runtime.phase === 'queued') summary.queued_runtimes++;
       if (runtime.phase === 'failed') summary.failed_runtimes++;
     });
-    summary.attention_items = summary.unavailable_projects + summary.pending_bindings + summary.failed_runtimes;
+    const diagnosticOnlyCleanup = summary.pending_room_cleanup === 0 && Boolean(snapshot.maintenance?.diagnostic) ? 1 : 0;
+    summary.attention_items = summary.unavailable_projects + summary.pending_bindings + summary.failed_runtimes + summary.pending_room_cleanup + diagnosticOnlyCleanup;
     return summary;
   }
-
   function emptySummary() {
-    return { projects: 0, unavailable_projects: 0, rooms: 0, active_rooms: 0, archived_rooms: 0, pending_bindings: 0, runtime_capacity_used: 0, active_runtimes: 0, busy_runtimes: 0, queued_runtimes: 0, failed_runtimes: 0, attention_items: 0 };
+    return { projects: 0, unavailable_projects: 0, rooms: 0, active_rooms: 0, archived_rooms: 0, pending_bindings: 0, pending_room_cleanup: 0, runtime_capacity_used: 0, active_runtimes: 0, busy_runtimes: 0, queued_runtimes: 0, failed_runtimes: 0, attention_items: 0 };
   }
 
   function runtimePolicy(snapshot) {
@@ -1137,11 +1199,95 @@
       toast('Project 检查失败', error.message, 'error');
     }
   }
+  function uniqueRooms(candidates = state.snapshot?.rooms || []) {
+    const seen = new Set();
+    return (candidates || []).filter((room) => {
+      if (!room || !room.id || seen.has(room.id)) return false;
+      seen.add(room.id);
+      return true;
+    });
+  }
+  function eligibleActiveRooms(candidates = state.snapshot?.rooms || []) {
+    return uniqueRooms(candidates).filter((room) => room.lifecycle !== 'archived');
+  }
+  function eligibleArchivedRooms(candidates = state.snapshot?.rooms || []) {
+    return uniqueRooms(candidates).filter((room) => room.lifecycle === 'archived');
+  }
+  function visibleRoomsForBatch(candidates = state.snapshot?.rooms || []) {
+    return uniqueRooms(candidates).filter((room) => state.filters.showArchived || room.lifecycle !== 'archived');
+  }
+  function pruneRoomSelection(snapshot = state.snapshot) {
+    const roomIDs = new Set(uniqueRooms(snapshot?.rooms || []).map((room) => room.id));
+    for (const roomID of state.selectedRoomIDs) {
+      if (!roomIDs.has(roomID)) state.selectedRoomIDs.delete(roomID);
+    }
+  }
+  function selectedActiveRooms(candidates = state.snapshot?.rooms || []) {
+    return eligibleActiveRooms(candidates).filter((room) => state.selectedRoomIDs.has(room.id));
+  }
+  function selectedArchivedRooms(candidates = state.snapshot?.rooms || []) {
+    return eligibleArchivedRooms(candidates).filter((room) => state.selectedRoomIDs.has(room.id));
+  }
+  function toggleRoomSelection(roomID, selected) {
+    if (selected && !state.selectedRoomIDs.has(roomID) && state.selectedRoomIDs.size >= MAX_ROOM_BATCH_SIZE) {
+      toast('已达到批量上限', `每次最多选择 ${MAX_ROOM_BATCH_SIZE} 个 Room。`, 'warning');
+      render();
+      return;
+    }
+    if (selected) state.selectedRoomIDs.add(roomID);
+    else state.selectedRoomIDs.delete(roomID);
+    render();
+  }
+  function toggleRoomSelectionGroup(candidates) {
+    const eligible = uniqueRooms(candidates);
+    const allSelected = eligible.length > 0 && eligible.every((room) => state.selectedRoomIDs.has(room.id));
+    if (allSelected) {
+      eligible.forEach((room) => state.selectedRoomIDs.delete(room.id));
+      render();
+      return;
+    }
+    let skipped = 0;
+    for (const room of eligible) {
+      if (state.selectedRoomIDs.has(room.id)) continue;
+      if (state.selectedRoomIDs.size >= MAX_ROOM_BATCH_SIZE) {
+        skipped++;
+        continue;
+      }
+      state.selectedRoomIDs.add(room.id);
+    }
+    if (skipped) toast('部分 Room 未选择', `每次最多处理 ${MAX_ROOM_BATCH_SIZE} 个；还有 ${skipped} 个可在下一批处理。`, 'warning');
+    render();
+  }
+  function roomSelectionToggleButton(candidates, scopeLabel) {
+    const eligible = uniqueRooms(candidates);
+    const selected = eligible.filter((room) => state.selectedRoomIDs.has(room.id));
+    const allSelected = eligible.length > 0 && selected.length === eligible.length;
+    const label = allSelected
+      ? `取消选择${scopeLabel}中的 Room (${selected.length})`
+      : `选择${scopeLabel}中的 Room (${eligible.length})`;
+    return actionButton(label, () => toggleRoomSelectionGroup(eligible), `filter-chip ${selected.length ? 'active' : ''}`, eligible.length === 0);
+  }
+  function roomClearSelectionButton() {
+    const count = state.selectedRoomIDs.size;
+    if (!count) return null;
+    return actionButton(`清除选择 (${count})`, () => {
+      state.selectedRoomIDs.clear();
+      render();
+    }, 'secondary-button outline');
+  }
+  function roomBatchArchiveButton(rooms) {
+    const count = rooms.length;
+    return actionButton(`批量归档 (${count})`, () => confirmRoomArchive(rooms), 'secondary-button outline', count === 0);
+  }
+  function roomBatchRemovalButton(rooms) {
+    const count = rooms.length;
+    return actionButton(`批量清理 (${count})`, () => confirmRoomRemoval(rooms), 'danger-button outline', count === 0);
+  }
   function projectRemovalButton(project, roomCount, compact = false) {
     if (!state.snapshot?.capabilities?.project_removal) return null;
     const disabled = roomCount > 0;
     const explanation = disabled
-      ? `仍包含 ${roomCount} 个 Room（含已归档），不能注销。`
+      ? `仍包含 ${roomCount} 个 Room（含已归档）；请先归档并永久清除。`
       : '只移除 Service Registry 登记，不删除 Git worktree 或外部数据。';
     return node('button', {
       type: 'button',
@@ -1156,17 +1302,18 @@
   function removeProject(project) {
     const roomCount = (state.snapshot?.rooms || []).filter((room) => room.project_id === project.id).length;
     if (roomCount > 0) {
-      toast('不能注销 Project', `仍包含 ${roomCount} 个 Room（含已归档）。`, 'warning');
+      toast('不能注销 Project', `仍包含 ${roomCount} 个 Room（含已归档）；请先归档并永久清除。`, 'warning');
       return;
     }
     openConfirm({
       eyebrow: 'UNREGISTER PROJECT',
       title: `注销“${projectName(project)}”？`,
       message: '将此空 Project 从 Service Registry 注销。',
-      detail: '不会删除 Git worktree、Room 数据、附件或 vendor Session/Thread。任何 Room（包括已归档）都会令后端拒绝操作。',
+      detail: '不会删除 Git worktree 或 vendor Session/Thread。后端仍会最终复检 Project 确实不含任何 Room。',
       label: '注销 Project',
       tone: 'danger',
       confirmation: project.id,
+      confirmationLabel: '输入完整 Project ID 以确认',
       action: async () => {
         await api(`/api/v1/projects/${encodeURIComponent(project.id)}`, {
           method: 'DELETE',
@@ -1177,6 +1324,129 @@
         navigate('#/projects');
       },
     });
+  }
+  function confirmRoomArchive(candidates) {
+    const rooms = eligibleActiveRooms(candidates);
+    if (!rooms.length) {
+      toast('没有可归档的 Room', '请选择至少一个活跃 Room。', 'warning');
+      return;
+    }
+    if (rooms.length > MAX_ROOM_BATCH_SIZE) {
+      toast('超过批量上限', `每次最多处理 ${MAX_ROOM_BATCH_SIZE} 个 Room。`, 'warning');
+      return;
+    }
+    const preview = rooms.slice(0, 6).map((room) => room.name).join('、');
+    const remaining = rooms.length > 6 ? `，另有 ${rooms.length - 6} 个` : '';
+    openConfirm({
+      eyebrow: rooms.length === 1 ? 'ARCHIVE ROOM' : 'BATCH ARCHIVE ROOMS',
+      title: rooms.length === 1 ? `归档“${rooms[0].name}”？` : `归档 ${rooms.length} 个 Room？`,
+      message: `${preview}${remaining}。归档后仍可恢复，也可继续批量永久清理。`,
+      detail: '归档保留 Event Log、附件和 Agent Binding。批量请求逐项执行；忙碌 Room 不会被中断，失败项保持选中，可稍后重试。',
+      label: rooms.length === 1 ? '归档 Room' : `归档 ${rooms.length} 个 Room`,
+      tone: 'primary',
+      action: async () => {
+        const response = await api('/api/v1/rooms/batch-archive', {
+          method: 'POST',
+          body: JSON.stringify({ room_ids: rooms.map((room) => room.id) }),
+        });
+        if (!Array.isArray(response.results)) throw new Error('批量归档响应缺少 results。');
+        const results = response.results;
+        const succeeded = results.filter((item) => item.status === 'archived' || item.status === 'already_archived');
+        const failed = results.filter((item) => item.status !== 'archived' && item.status !== 'already_archived');
+        succeeded.forEach((item) => state.selectedRoomIDs.add(item.room_id));
+        if (succeeded.length) state.filters.showArchived = true;
+        if (failed.length) {
+          const detail = failed.slice(0, 2).map((item) => {
+            const room = rooms.find((candidate) => candidate.id === item.room_id);
+            return `${room?.name || item.room_id}: ${item.error || item.code || '归档失败'}`;
+          }).join('；');
+          const more = failed.length > 2 ? `；另有 ${failed.length - 2} 个失败` : '';
+          toast(
+            succeeded.length ? '批量归档部分完成' : '批量归档未完成',
+            `成功 ${succeeded.length} 个，失败 ${failed.length} 个。${detail}${more}`,
+            succeeded.length ? 'warning' : 'error'
+          );
+        } else {
+          toast('Room 已归档', `已归档 ${succeeded.length} 个 Room；所选项保持选中，可直接继续批量清理。`, 'success');
+        }
+        await refresh({ forceRender: true });
+      },
+    });
+  }
+  function confirmRoomRemoval(candidates) {
+    const rooms = eligibleArchivedRooms(candidates);
+    if (!rooms.length) {
+      toast('没有可清理的 Room', '请选择至少一个已归档 Room。', 'warning');
+      return;
+    }
+    if (rooms.length > MAX_ROOM_BATCH_SIZE) {
+      toast('超过批量上限', `每次最多处理 ${MAX_ROOM_BATCH_SIZE} 个 Room。`, 'warning');
+      return;
+    }
+    const preview = rooms.slice(0, 6).map((room) => room.name).join('、');
+    const remaining = rooms.length > 6 ? `，另有 ${rooms.length - 6} 个` : '';
+    openConfirm({
+      eyebrow: rooms.length === 1 ? 'PERMANENTLY REMOVE ROOM' : 'BATCH REMOVE ROOMS',
+      title: rooms.length === 1 ? `永久清除“${rooms[0].name}”？` : `永久清除 ${rooms.length} 个 Room？`,
+      message: `${preview}${remaining}。此操作不可撤销。`,
+      detail: 'PairRoom 管理的 Event Log、附件和 Room 数据会被删除；Git worktree 与 vendor Claude Session/Codex Thread 不会被删除。显式导入的外部目录只解绑并保留。批量请求逐项执行，失败项不会回滚已完成项。',
+      label: rooms.length === 1 ? '永久清除 Room' : `永久清除 ${rooms.length} 个 Room`,
+      tone: 'danger',
+      acknowledgement: `我理解所选 ${rooms.length} 个 Room 的 PairRoom 管理数据将永久删除且无法恢复。`,
+      action: async () => {
+        const response = await api('/api/v1/rooms/batch-delete', {
+          method: 'POST',
+          body: JSON.stringify({
+            room_ids: rooms.map((room) => room.id),
+            acknowledge_data_loss: true,
+          }),
+        });
+        if (!Array.isArray(response.results)) throw new Error('批量清理响应缺少 results。');
+        const results = response.results;
+        const succeeded = results.filter((item) => item.status === 'deleted');
+        const failed = results.filter((item) => item.status !== 'deleted');
+        succeeded.forEach((item) => state.selectedRoomIDs.delete(item.room_id));
+        failed.forEach((item) => {
+          if (state.selectedRoomIDs.has(item.room_id) || state.selectedRoomIDs.size < MAX_ROOM_BATCH_SIZE) {
+            state.selectedRoomIDs.add(item.room_id);
+          }
+        });
+        const cleanupPending = succeeded.filter((item) => item.removal?.data_disposition === 'cleanup_pending').length;
+        const retainedExternal = succeeded.filter((item) => item.removal?.data_disposition === 'retained_external').length;
+        if (failed.length) {
+          const detail = failed.slice(0, 2).map((item) => {
+            const room = rooms.find((candidate) => candidate.id === item.room_id);
+            return `${room?.name || item.room_id}: ${item.error || item.code || '删除失败'}`;
+          }).join('；');
+          const more = failed.length > 2 ? `；另有 ${failed.length - 2} 个失败` : '';
+          toast(
+            succeeded.length ? '批量清理部分完成' : '批量清理未完成',
+            `成功 ${succeeded.length} 个，失败 ${failed.length} 个。${detail}${more}`,
+            succeeded.length ? 'warning' : 'error'
+          );
+        } else if (cleanupPending) {
+          toast('Room 已移除，物理清理待重试', `已处理 ${succeeded.length} 个；其中 ${cleanupPending} 个隔离清理项可在设置中重试。`, 'warning');
+        } else if (retainedExternal) {
+          toast('Room 清理完成', `已处理 ${succeeded.length} 个；其中 ${retainedExternal} 个外部导入目录保持原位。`, 'success');
+        } else {
+          toast('Room 已永久清除', `已成功清理 ${succeeded.length} 个已归档 Room。`, 'success');
+        }
+        await refresh({ forceRender: true });
+      },
+    });
+  }
+  async function retryRoomDeletionCleanup() {
+    try {
+      const maintenance = await api('/api/v1/maintenance/room-deletions/retry', { method: 'POST' });
+      if (maintenance.pending_cleanup) {
+        toast('仍有清理项', maintenance.diagnostic || `${maintenance.pending_cleanup} 个隔离项仍待处理。`, 'warning');
+      } else {
+        toast('Room 清理已完成', '删除隔离区已清空。', 'success');
+      }
+      await refresh({ forceRender: true });
+    } catch (error) {
+      toast('Room 清理重试失败', error.message, 'error');
+    }
   }
   async function restoreRoom(room) {
     try {
@@ -1297,30 +1567,47 @@
   function resetConfirmState() {
     state.confirmAction = null;
     state.confirmRequirement = '';
+    state.confirmAcknowledgementRequired = false;
     const wrapper = $('confirm-input-wrap');
     const expected = $('confirm-expected');
     const input = $('confirm-input');
+    const inputLabel = $('confirm-input-label');
+    const acknowledgementWrapper = $('confirm-ack-wrap');
+    const acknowledgement = $('confirm-ack');
+    const acknowledgementLabel = $('confirm-ack-label');
     if (wrapper) wrapper.hidden = true;
     if (expected) expected.textContent = '';
+    if (inputLabel) inputLabel.textContent = '输入完整 ID 以确认';
     if (input) {
       input.value = '';
       input.required = false;
       input.setCustomValidity('');
     }
+    if (acknowledgementWrapper) acknowledgementWrapper.hidden = true;
+    if (acknowledgementLabel) acknowledgementLabel.textContent = '我理解此操作不可恢复。';
+    if (acknowledgement) {
+      acknowledgement.checked = false;
+      acknowledgement.required = false;
+      acknowledgement.setCustomValidity('');
+    }
     if ($('confirm-submit')) $('confirm-submit').disabled = false;
   }
   function syncConfirmRequirement() {
     const input = $('confirm-input');
+    const acknowledgement = $('confirm-ack');
     const submit = $('confirm-submit');
-    if (!input || !submit) return;
+    if (!input || !acknowledgement || !submit) return;
     const matches = !state.confirmRequirement || input.value === state.confirmRequirement;
-    input.setCustomValidity(matches ? '' : '请输入完整且逐字匹配的 Project ID。');
-    submit.disabled = !matches;
+    const acknowledged = !state.confirmAcknowledgementRequired || acknowledgement.checked;
+    input.setCustomValidity(matches ? '' : '请输入完整且逐字匹配的 ID。');
+    acknowledgement.setCustomValidity(acknowledged ? '' : '请先确认你理解此操作不可恢复。');
+    submit.disabled = !matches || !acknowledged;
   }
-  function openConfirm({ eyebrow = 'CONFIRM', title, message, detail = '', label = '确认', tone = 'danger', confirmation = '', action }) {
+  function openConfirm({ eyebrow = 'CONFIRM', title, message, detail = '', label = '确认', tone = 'danger', confirmation = '', confirmationLabel = '输入完整 ID 以确认', acknowledgement = '', action }) {
     resetConfirmState();
     state.confirmAction = action;
     state.confirmRequirement = confirmation;
+    state.confirmAcknowledgementRequired = Boolean(acknowledgement);
     $('confirm-eyebrow').textContent = eyebrow;
     $('confirm-title').textContent = title;
     $('confirm-message').textContent = message;
@@ -1330,15 +1617,22 @@
     if (detail) detailNode.append(node('strong', { textContent: '安全边界' }), node('span', { textContent: detail }));
     const requirement = $('confirm-input-wrap');
     const input = $('confirm-input');
+    const acknowledgementWrapper = $('confirm-ack-wrap');
+    const acknowledgementInput = $('confirm-ack');
     requirement.hidden = !confirmation;
+    $('confirm-input-label').textContent = confirmationLabel;
     $('confirm-expected').textContent = confirmation;
     input.required = Boolean(confirmation);
     input.value = '';
+    acknowledgementWrapper.hidden = !acknowledgement;
+    $('confirm-ack-label').textContent = acknowledgement || '我理解此操作不可恢复。';
+    acknowledgementInput.required = Boolean(acknowledgement);
+    acknowledgementInput.checked = false;
     $('confirm-submit').textContent = label;
     $('confirm-submit').className = tone === 'danger' ? 'danger-button' : 'primary-button';
     syncConfirmRequirement();
     showDialog('confirm-dialog');
-    queueMicrotask(() => (confirmation ? input : $('confirm-submit')).focus());
+    queueMicrotask(() => (confirmation ? input : (acknowledgement ? acknowledgementInput : $('confirm-submit'))).focus());
   }
   async function submitConfirm(event) {
     event.preventDefault();
@@ -1350,6 +1644,10 @@
     syncConfirmRequirement();
     if (state.confirmRequirement && $('confirm-input').value !== state.confirmRequirement) {
       $('confirm-input').reportValidity();
+      return;
+    }
+    if (state.confirmAcknowledgementRequired && !$('confirm-ack').checked) {
+      $('confirm-ack').reportValidity();
       return;
     }
     await withBusy($('confirm-submit'), async () => {
@@ -1614,6 +1912,7 @@
   $('binding-form').addEventListener('submit', submitBindingCompletion);
   $('confirm-form').addEventListener('submit', submitConfirm);
   $('confirm-input').addEventListener('input', syncConfirmRequirement);
+  $('confirm-ack').addEventListener('change', syncConfirmRequirement);
   $('refresh-button').addEventListener('click', () => refresh({ notify: true, forceRender: true }));
   $('retry-button').addEventListener('click', () => connect({ notify: true, forceRender: true }));
   $('add-project-button').addEventListener('click', () => openProjectDialog('register'));
