@@ -23,6 +23,7 @@ PairRoom is a local Go coordination layer for the official Claude Code and Codex
 - Treat each Room Event Log as durable fact and `service-registry.json` as a rebuildable index; a `new` binding acquires global `(agent, vendor_session_id)` ownership only when its first accepted native Turn atomically materializes that identity, while `existing` bindings always resume exactly. Preserve the transcript-boundary and active-Turn non-preemption guarantees described in `docs/MULTI_ROOM_SERVICE.md`.
 - Do not claim real Claude Code/Codex runtime E2E unless both official CLIs were installed, authenticated, and actually exercised; Mock verification is reported separately.
 - `VERSION`, `internal/version.Current`, the exact `vX.Y.Z` tag, and the canonical `CHANGELOG.md` heading `## [vX.Y.Z] — YYYY-MM-DD` must agree.
+- `.github/workflows/ci.yml` must retain the supported Linux amd64, Windows amd64, macOS arm64, and macOS amd64 binaries as uniquely named checksummed workflow artifacts, then re-download and verify the complete set before CI is green.
 - `.github/workflows/release.yml` owns publication: it validates/extracts changelog notes, builds and verifies artifacts, creates the GitHub Release, then downloads and rechecks the published payload.
 
 ## Navigation

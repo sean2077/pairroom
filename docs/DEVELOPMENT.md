@@ -65,6 +65,21 @@ make cover
 
 提交前至少执行 `make check`；改动用户流程、浏览器或恢复路径时再执行 `make smoke`。
 
+## CI 多平台产物
+
+普通 CI 在验证任务通过后，为当前触发 commit 构建以下四个 `CGO_ENABLED=0`、`-trimpath` 二进制：
+
+| Workflow artifact | 内容 |
+|---|---|
+| `pairroom-linux-amd64` | `pairroom-v<VERSION>-linux-amd64` 与对应 `.sha256` |
+| `pairroom-windows-amd64` | `pairroom-v<VERSION>-windows-amd64.exe` 与对应 `.sha256` |
+| `pairroom-darwin-arm64` | `pairroom-v<VERSION>-darwin-arm64` 与对应 `.sha256` |
+| `pairroom-darwin-amd64` | `pairroom-v<VERSION>-darwin-amd64` 与对应 `.sha256` |
+
+构建元数据使用触发 commit 的完整 SHA 和 commit timestamp；每个矩阵任务先验证目标文件格式与 checksum，随后汇总任务重新下载全部产物，拒绝缺失或额外文件，并执行 Linux binary 的 `version --json` 校验。产物保留 14 天，也可通过 `workflow_dispatch` 手工生成。
+
+Workflow artifact 是 CI 证据，不替代 tag 对应的 GitHub Release；正式发布仍由 `.github/workflows/release.yml` 和 `make release` 管理。GitHub artifact 传输会丢失 Unix executable bit，下载 Linux/macOS binary 后可能需要执行 `chmod +x`。
+
 ## 包结构
 
 ```text

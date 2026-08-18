@@ -4,6 +4,7 @@
 
 ### Added
 
+- Downloadable checksummed Linux amd64, Windows amd64, macOS arm64, and macOS amd64 binaries on every successful CI run, with aggregate artifact-name, target-format, checksum, and embedded build-metadata verification.
 - Permanent archived-Room removal in the Management API and Shell, with selection-based single/batch cleanup, explicit irreversible acknowledgement instead of typed Room-ID confirmation, Runtime admission gating, binding-ownership release, and a complete path to empty-Project unregister.
 - Crash-consistent managed-data deletion through a hidden quarantine journal, durable intent/commit markers, checkpoint-aware startup recovery, fail-closed ambiguity handling, and observable/retryable physical cleanup.
 - Non-destructive removal for explicitly imported external Rooms: PairRoom unregisters the Room and releases bindings while retaining the external directory.

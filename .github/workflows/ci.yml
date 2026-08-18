@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, 'release/**']
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -11,15 +12,16 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: '1.23.x'
+          go-version-file: go.mod
           cache: true
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.x'
       - name: Static, unit, race, and dependency checks
@@ -30,29 +32,133 @@ jobs:
         run: make cover
 
   cross-build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }} artifact
     runs-on: ubuntu-latest
     needs: verify
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         include:
           - goos: linux
             goarch: amd64
+            extension: ''
+            file_signature: 'ELF 64-bit'
           - goos: windows
             goarch: amd64
+            extension: '.exe'
+            file_signature: 'PE32+'
           - goos: darwin
             goarch: arm64
+            extension: ''
+            file_signature: 'Mach-O 64-bit arm64'
           - goos: darwin
             goarch: amd64
+            extension: ''
+            file_signature: 'Mach-O 64-bit x86_64'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          go-version: '1.23.x'
+          go-version-file: go.mod
           cache: true
-      - name: Cross-build
+      - name: Build checksummed binary
+        id: artifact
+        shell: bash
         env:
-          CGO_ENABLED: '0'
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: go build -buildvcs=false -trimpath ./cmd/pairroom
+          TARGET_GOOS: ${{ matrix.goos }}
+          TARGET_GOARCH: ${{ matrix.goarch }}
+          TARGET_EXTENSION: ${{ matrix.extension }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          version="$(tr -d '\r\n' < VERSION)"
+          build_date="$(git show -s --format=%cI "${COMMIT}")"
+          filename="pairroom-v${version}-${TARGET_GOOS}-${TARGET_GOARCH}${TARGET_EXTENSION}"
+          mkdir -p dist/ci
+          CGO_ENABLED=0 GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" \
+            go build -buildvcs=false -trimpath \
+              -ldflags="-s -w -X github.com/sean2077/pairroom/internal/version.Commit=${COMMIT} -X github.com/sean2077/pairroom/internal/version.BuildDate=${build_date}" \
+              -o "dist/ci/${filename}" ./cmd/pairroom
+          (cd dist/ci && sha256sum "${filename}" > "${filename}.sha256")
+          printf 'filename=%s\n' "${filename}" >> "${GITHUB_OUTPUT}"
+      - name: Verify target format and checksum
+        shell: bash
+        env:
+          FILENAME: ${{ steps.artifact.outputs.filename }}
+          FILE_SIGNATURE: ${{ matrix.file_signature }}
+        run: |
+          set -euo pipefail
+          test -s "dist/ci/${FILENAME}"
+          file "dist/ci/${FILENAME}" | tee "${RUNNER_TEMP}/file-type.txt"
+          grep -Fq "${FILE_SIGNATURE}" "${RUNNER_TEMP}/file-type.txt"
+          (cd dist/ci && sha256sum -c "${FILENAME}.sha256")
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: pairroom-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/ci/${{ steps.artifact.outputs.filename }}
+            dist/ci/${{ steps.artifact.outputs.filename }}.sha256
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  artifact-contract:
+    name: Verify downloadable artifact set
+    runs-on: ubuntu-latest
+    needs: cross-build
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: pairroom-*
+          path: dist/ci
+          merge-multiple: true
+      - name: Verify names, checksums, formats, and build metadata
+        shell: bash
+        env:
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          version="$(tr -d '\r\n' < VERSION)"
+          build_date="$(git show -s --format=%cI "${COMMIT}")"
+          expected="${RUNNER_TEMP}/expected-artifacts.txt"
+          actual="${RUNNER_TEMP}/actual-artifacts.txt"
+          : > "${expected}"
+          for target in \
+            "linux-amd64" \
+            "windows-amd64.exe" \
+            "darwin-arm64" \
+            "darwin-amd64"
+          do
+            filename="pairroom-v${version}-${target}"
+            printf '%s\n%s\n' "${filename}" "${filename}.sha256" >> "${expected}"
+          done
+          LC_ALL=C sort -o "${expected}" "${expected}"
+          find dist/ci -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "${actual}"
+          diff -u "${expected}" "${actual}"
+
+          for checksum in dist/ci/*.sha256; do
+            (cd dist/ci && sha256sum -c "$(basename "${checksum}")")
+          done
+          file "dist/ci/pairroom-v${version}-linux-amd64" | grep -Fq 'ELF 64-bit'
+          file "dist/ci/pairroom-v${version}-windows-amd64.exe" | grep -Fq 'PE32+'
+          file "dist/ci/pairroom-v${version}-darwin-arm64" | grep -Fq 'Mach-O 64-bit arm64'
+          file "dist/ci/pairroom-v${version}-darwin-amd64" | grep -Fq 'Mach-O 64-bit x86_64'
+
+          chmod +x "dist/ci/pairroom-v${version}-linux-amd64"
+          "dist/ci/pairroom-v${version}-linux-amd64" version --json > "${RUNNER_TEMP}/version-check.json"
+          python3 - "${RUNNER_TEMP}/version-check.json" "${version}" "${COMMIT}" "${build_date}" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          path, version, commit, build_date = sys.argv[1:]
+          payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+          assert payload["version"] == version, payload
+          assert payload["commit"] == commit, payload
+          assert payload["build_date"] == build_date, payload
+          PY

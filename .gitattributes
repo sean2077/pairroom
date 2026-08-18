@@ -9,3 +9,4 @@ scripts/*.sh text eol=lf
 scripts/**/*.sh text eol=lf
 scripts/*.py text eol=lf
 .github/workflows/*.yml text eol=lf
+*.md whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

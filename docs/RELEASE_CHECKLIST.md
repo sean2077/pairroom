@@ -37,6 +37,7 @@ A build is publishable only when every applicable item is complete.
 ## Build artifacts
 
 - [ ] Linux amd64, Windows amd64, macOS arm64, and macOS amd64 binaries build with `CGO_ENABLED=0` and `-trimpath`.
+- [ ] Normal CI uploads one checksummed workflow artifact per supported target, then re-downloads and verifies the exact aggregate set before succeeding.
 - [ ] Linux binary reports the expected version, commit, and build date.
 - [ ] Source ZIP and TAR.GZ are generated from the tagged Git object.
 - [ ] SHA-256 file, SPDX SBOM, and release provenance are generated and internally consistent.
