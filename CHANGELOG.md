@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v1.0.0] — 2026-08-18
+
 ### Added
 
 - Downloadable checksummed Linux amd64, Windows amd64, macOS arm64, and macOS amd64 binaries on every successful CI run, with aggregate artifact-name, target-format, checksum, and embedded build-metadata verification.
@@ -19,6 +21,10 @@
 - Safe `POST /api/v1/rooms/{room}/suspend` control that cancels queued activations or closes idle Runtimes while refusing to interrupt active Turns or discard cleanup-uncertain Runtime state.
 - Interface, Runtime, daemon, Service diagnostics, and safety-boundary Settings sections; daemon guidance distinguishes restart from full service-definition replacement.
 - Chromium visual smoke coverage for desktop and mobile Management Shell routes, dialogs, console errors, and horizontal overflow.
+- Stable single-room product contract for one human, official Claude Code, and official Codex.
+- Release CI, tag-driven GitHub release workflow, reproducible four-platform build scripts, source archives, SHA-256 checksums, SPDX 2.3 SBOM, and build provenance.
+- Operations, privacy, support, upgrade, release acceptance, release notes, Git history provenance, and PR documentation.
+- Version JSON/build metadata and a full Mock collaboration/recovery smoke test used by CI and release acceptance.
 
 ### Changed
 
@@ -26,6 +32,9 @@
 - Runtime management on narrow viewports renders as labelled cards instead of overflowing tables.
 - Management UI preferences and the Bearer bootstrap secret remain tab-memory-only; the browser exchanges the secret for an HttpOnly session and keeps its CSRF token in memory, with no Web Storage persistence.
 - Management polling now defaults to 10 seconds with explicit slower/faster choices, and Runtime control conflicts consistently return `409 Conflict`.
+- Reviewer uses an independently materialized Git snapshot containing HEAD, dirty tracked changes, and untracked regular files; the live writable tree is no longer the default Reviewer workspace.
+- `dist/` binaries are release artifacts rather than source-control contents.
+- The 1.0 support boundary is intentionally one daemon, one repository, one human, one Claude Code participant, and one Codex participant.
 
 ### Fixed
 
@@ -39,21 +48,6 @@
 - Reworked architecture, operations, security, privacy, support, upgrade, Runtime compatibility, Management Shell, Service, contribution, and product-plan documentation into explicit sources of truth.
 - Documented the separately scoped Management and Room fragment-to-HttpOnly-session/CSRF flows, direct Bearer compatibility for API clients, loopback-only listeners, and exact durable Runtime resume semantics.
 - Added a current-main cc-connect UX research and adaptation record plus a Management Shell interaction/API contract.
-
-## [v1.0.0] — 2026-08-14
-
-### Added
-
-- Stable single-room product contract for one human, official Claude Code, and official Codex.
-- Release CI, tag-driven GitHub release workflow, reproducible four-platform build scripts, source archives, SHA-256 checksums, SPDX 2.3 SBOM, and build provenance.
-- Operations, privacy, support, upgrade, release acceptance, release notes, Git history provenance, and PR documentation.
-- Version JSON/build metadata and a full Mock collaboration/recovery smoke test used by CI and release acceptance.
-
-### Changed
-
-- Reviewer uses an independently materialized Git snapshot containing HEAD, dirty tracked changes, and untracked regular files; the live writable tree is no longer the default Reviewer workspace.
-- `dist/` binaries are release artifacts rather than source-control contents.
-- The 1.0 support boundary is intentionally one daemon, one repository, one human, one Claude Code participant, and one Codex participant.
 
 ### Security
 
