@@ -38,15 +38,16 @@ Bearer Token 是纵深防护，不是传输加密的替代品。
 
 Service 未显式提供 Token 时生成随机 Management Bearer Token，并把它放在启动 URL fragment 中。
 
-浏览器流程：
+浏览器流程支持两种入口：
 
-1. JavaScript 从 fragment 读取 Token；
-2. 立即用 `history.replaceState` 从地址栏移除 fragment；
-3. 使用 `Authorization: Bearer <token>` 调用 `POST /api/v1/session`；
+1. 完整 Management URL：JavaScript 从 fragment 读取 Token，并立即用 `history.replaceState` 从地址栏移除 fragment；
+2. 直接打开 Management origin：没有可恢复 Session 时显示凭证登录页，可输入配置的 Service Token，或粘贴包含 `#token=...` 的完整 Management URL；
+3. 两种入口都只使用一次 `Authorization: Bearer <token>` 调用 `POST /api/v1/session`；
 4. Service 返回路径限定为 `/api/v1/` 的 12 小时滑动过期 `HttpOnly`、`SameSite=Strict` Session Cookie，以及只保存在页面内存的 CSRF Token；
-5. bootstrap Token 随即从页面内存清除，后续浏览器请求使用 Session Cookie，mutation 还必须提供 `X-PairRoom-CSRF`。
+5. bootstrap/登录 Token 随即从页面内存和输入框清除，后续浏览器请求使用 Session Cookie，mutation 还必须提供 `X-PairRoom-CSRF`；
+6. 显式退出调用 `DELETE /api/v1/session`；Session 失效时页面回到登录入口。
 
-Management Token、Session ID 和 CSRF 都不写入 `localStorage`/`sessionStorage`。刷新时页面可通过 `GET /api/v1/session` 从仍有效的 Cookie 恢复 CSRF；Service 重启、会话过期、显式注销或新浏览器上下文需要重新打开完整启动 URL。命令行/API 客户端可继续直接发送 Bearer Header，query-string token 不授权 Management API。
+Management Token、Session ID 和 CSRF 都不写入 `localStorage`/`sessionStorage`。刷新时页面可通过 `GET /api/v1/session` 从仍有效的 Cookie 恢复 CSRF；Service 重启、会话过期、显式注销或新浏览器上下文需要重新提供 Service Token。命令行/API 客户端可继续直接发送 Bearer Header，query-string token 不授权 Management API。
 
 ### 2.3 Room View 认证
 

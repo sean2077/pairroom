@@ -213,13 +213,14 @@ pairroom service --recover-stale-lock
 
 ### 5.1 Management Shell
 
-Management URL 的 fragment 含启动 Token。页面读取后立即移除 fragment，用 Bearer 调用 `/api/v1/session`，再把 Token 换成 Service-scoped `HttpOnly`、`SameSite=Strict` Session Cookie；后续浏览器请求使用 Cookie，mutation 还需要内存 CSRF Token。CLI/API 客户端可继续直接使用 Bearer Header。
+Management Shell 支持两个等价入口：完整 Management URL 的 fragment 会被页面读取并立即移除；直接打开 Management origin 且没有可恢复 Session 时，则显示凭证登录页，可输入配置的 Service Token，或粘贴包含 `#token=...` 的完整 URL。两种入口都只用 Bearer 调用一次 `/api/v1/session`，再把长期凭证换成 Service-scoped `HttpOnly`、`SameSite=Strict` Session Cookie；后续浏览器请求使用 Cookie，mutation 还需要内存 CSRF Token。CLI/API 客户端可继续直接使用 Bearer Header。
 
 运维含义：
 
-- 刷新页面可恢复仍有效的 browser session；Service 重启、会话过期、注销或 Cookie 被清理后重新取得完整 URL；
-- 已安装 daemon 优先运行 `pairroom daemon open`，前台模式从安全启动输出取得完整 URL；
-- 不要把完整 URL、Authorization Header 或 Service diagnostics 原始文件公开；
+- 刷新页面可恢复仍有效的 browser session；Service 重启、会话过期、注销或 Cookie 被清理后，页面会回到登录入口；
+- 登录输入只用于本次 Session 交换，成功后立即清空，且不会写入 `localStorage` 或 `sessionStorage`；
+- 已安装 daemon 仍优先运行 `pairroom daemon open`；前台模式可从安全启动输出取得完整 URL，也可输入显式配置的 `--token` 值；
+- 不要把完整 URL、Authorization Header、Service Token 或 Service diagnostics 原始文件公开；
 - Management UI preference 也不跨刷新持久化。
 
 ### 5.2 Room View

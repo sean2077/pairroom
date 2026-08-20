@@ -16,15 +16,16 @@ PairRoom Service <version>
   data root:  ...
 ```
 
-Shell 的认证流程：
+Shell 支持两种认证入口：
 
-1. 从 URL fragment 读取 Management Token；
-2. 立即从地址栏移除 fragment；
-3. 用 `Authorization: Bearer ...` 调用 `POST /api/v1/session`；
+1. 打开完整 Management URL 时，从 fragment 读取 Management Token，并立即从地址栏移除 fragment；
+2. 直接打开 Management origin 且当前 Cookie 无法恢复 Session 时，显示凭证登录页，可输入 Service Token，或粘贴包含 `#token=...` 的完整 Management URL；
+3. 两种入口都只用一次 `Authorization: Bearer ...` 调用 `POST /api/v1/session`；
 4. 浏览器收到 Service-scoped `HttpOnly`、`SameSite=Strict` Session Cookie 和内存中的 CSRF Token；
-5. 后续管理请求使用 Cookie，mutation 额外发送 `X-PairRoom-CSRF`。
+5. 后续管理请求使用 Cookie，mutation 额外发送 `X-PairRoom-CSRF`；
+6. 显式退出调用 `DELETE /api/v1/session`，Session 失效时页面自动回到登录入口。
 
-bootstrap Token、Session ID 和 CSRF 不写入 `localStorage` 或 `sessionStorage`。刷新时页面会用 Cookie 调用 `GET /api/v1/session` 恢复 CSRF；Service 重启、会话过期、注销或新浏览器上下文需要重新打开完整启动 URL。CLI/API 客户端仍可直接使用 Bearer Header。这与 Room View 使用不同 listener、Token 和 Cookie 作用域的 browser session 链路不同。
+bootstrap/登录 Token、Session ID 和 CSRF 不写入 `localStorage` 或 `sessionStorage`。输入框在交换成功后清空；刷新时页面会用 Cookie 调用 `GET /api/v1/session` 恢复 CSRF。Service 重启、会话过期、注销或新浏览器上下文需要重新提供 Service Token。CLI/API 客户端仍可直接使用 Bearer Header。这与 Room View 使用不同 listener、Token 和 Cookie 作用域的 browser session 链路不同。
 
 ## 2. 页面路由
 
@@ -362,7 +363,7 @@ Shell 不提供 stop/restart 自身按钮，避免控制面在回答前终止自
 - Retry 由用户显式触发；
 - 恢复连接后不能把旧错误状态悄悄当作最新事实。
 
-如果刷新导致 401，通常是 Service 重启、Session 过期、注销或浏览器已丢失 Cookie；运行 `pairroom daemon open`（已安装 daemon）或重新打开 Service 打印的完整 URL，而不是把 Token 放到 query string。
+如果刷新导致 401，Shell 会清除内存中的管理状态并回到凭证登录页。可输入配置的 Service Token、粘贴完整 Management URL，或运行 `pairroom daemon open`（已安装 daemon）；不要把 Token 放到 query string。
 
 ## 10. Service snapshot contract
 

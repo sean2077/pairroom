@@ -74,7 +74,7 @@ Management Shell 与 Room View 的浏览器状态不同。
 - theme、density、refresh interval；
 - include archived 与打开 Room 行为。
 
-启动 Token 从 URL fragment 读取后立即移除，不写 `localStorage` 或 `sessionStorage`。Management bootstrap 后由当前 Service 签发 `HttpOnly`、`SameSite=Strict` Cookie，刷新可恢复仍有效的会话；Service 重启、会话过期或注销后需要重新打开完整启动 URL。页面偏好仍在刷新后重置。
+启动 Token 可从 URL fragment 自动读取，或在直接打开 Management origin 后由用户输入；登录页也接受包含 `#token=...` 的完整 Management URL。凭证只用于一次 Session 交换，成功后从内存和输入框清除，不写 `localStorage` 或 `sessionStorage`。当前 Service 随后签发 `HttpOnly`、`SameSite=Strict` Cookie，刷新可恢复仍有效的会话；Service 重启、会话过期或注销后页面回到登录入口。页面偏好仍在刷新后重置。
 
 ### 5.2 Room View
 

@@ -16,6 +16,7 @@
     snapshot: null,
     route: parseRoute(),
     connected: false,
+    authenticated: false,
     lastError: '',
     search: '',
     refreshPromise: null,
@@ -49,36 +50,149 @@
   const app = $('app');
   const view = $('view');
 
-  async function initializeSession() {
+  async function createBrowserSession(credential = '') {
+    const token = String(credential || '').trim();
     const headers = new Headers();
-    let method = 'GET';
-    if (bootstrapToken) {
-      method = 'POST';
-      headers.set('Authorization', `Bearer ${bootstrapToken}`);
-    }
+    const method = token ? 'POST' : 'GET';
+    if (token) headers.set('Authorization', `Bearer ${token}`);
     const response = await fetch('/api/v1/session', { method, headers, credentials: 'same-origin' });
     const payload = await response.json().catch(() => ({}));
-    bootstrapToken = '';
     if (!response.ok) {
       const message = response.status === 401
-        ? '浏览器会话无效。Daemon 模式请运行 pairroom daemon open；前台模式请重新打开 Service 输出中的完整地址。'
+        ? (token
+          ? 'Service Token 无效，请检查后重试。'
+          : '尚未登录。请输入 Service Token，或运行 pairroom daemon open。')
         : (payload.error || response.statusText || `HTTP ${response.status}`);
-      throw new Error(message);
+      const error = new Error(message);
+      error.status = response.status;
+      if (response.status === 401) error.code = token ? 'invalid_credential' : 'login_required';
+      throw error;
     }
     state.csrfToken = payload.csrf_token || '';
-    if (!state.csrfToken) throw new Error('Management 会话未返回 CSRF 凭证，请重新打开完整 Service 地址。');
+    if (!state.csrfToken) throw new Error('Management 会话未返回 CSRF 凭证，请重新登录。');
+  }
+
+  async function initializeSession() {
+    const credential = bootstrapToken;
+    bootstrapToken = '';
+    await createBrowserSession(credential);
+  }
+
+  function credentialFromInput(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    if (raw.startsWith('#')) {
+      return new URLSearchParams(raw.replace(/^#/, '')).get('token')?.trim() || '';
+    }
+    if (!/^https?:\/\//i.test(raw)) return raw;
+    try {
+      const url = new URL(raw);
+      return new URLSearchParams(url.hash.replace(/^#/, '')).get('token')?.trim() || '';
+    } catch {
+      return '';
+    }
+  }
+
+  function setCredentialVisibility(visible) {
+    const input = $('login-token');
+    const button = $('login-token-toggle');
+    input.type = visible ? 'text' : 'password';
+    button.textContent = visible ? '隐藏' : '显示';
+    button.setAttribute('aria-pressed', String(visible));
+    button.setAttribute('aria-label', visible ? '隐藏 Service Token' : '显示 Service Token');
+  }
+
+  function toggleCredentialVisibility() {
+    setCredentialVisibility($('login-token').type === 'password');
+    $('login-token').focus({ preventScroll: true });
+  }
+
+  function showCredentialLogin(message = '') {
+    state.authenticated = false;
+    state.connected = false;
+    state.snapshot = null;
+    state.csrfToken = '';
+    state.lastError = message;
+    state.renderPending = false;
+    state.search = '';
+    state.selectedRoomIDs.clear();
+    state.opening.forEach((popup) => { if (popup && !popup.closed) popup.close(); });
+    state.opening.clear();
+    state.pendingNavigationRoom = '';
+    $('global-search').value = '';
+    view.replaceChildren();
+    $('toasts').replaceChildren();
+    document.querySelectorAll('dialog[open]').forEach((dialog) => dialog.close());
+    document.querySelectorAll('dialog form').forEach((form) => form.reset());
+    app.classList.remove('sidebar-open');
+    app.hidden = true;
+    $('login-screen').hidden = false;
+    $('login-pending').hidden = true;
+    $('login-form').hidden = false;
+    setCredentialVisibility(false);
+    if (message) showFormError('login-error', message);
+    else hideFormError('login-error');
+    document.title = '登录 · PairRoom';
+    requestAnimationFrame(() => $('login-token').focus({ preventScroll: true }));
+  }
+
+  function showManagementShell() {
+    state.authenticated = true;
+    $('login-screen').hidden = true;
+    app.hidden = false;
+    hideFormError('login-error');
+  }
+
+  async function submitCredentialLogin(event) {
+    event.preventDefault();
+    const raw = $('login-token').value;
+    const credential = credentialFromInput(raw);
+    if (!credential) {
+      showFormError('login-error', raw.trim()
+        ? '完整 Management URL 中未找到 #token=…。'
+        : '请输入 Service Token 或完整 Management URL。');
+      $('login-token').focus();
+      return;
+    }
+    hideFormError('login-error');
+    await withBusy($('login-submit'), async () => {
+      try {
+        await createBrowserSession(credential);
+        $('login-token').value = '';
+        showManagementShell();
+        renderLoading();
+        await refresh({ forceRender: true });
+      } catch (error) {
+        showCredentialLogin(error.message);
+      }
+    });
+  }
+
+  async function logoutBrowserSession() {
+    await withBusy($('logout-button'), async () => {
+      try {
+        await api('/api/v1/session', { method: 'DELETE' });
+        $('login-token').value = '';
+        showCredentialLogin();
+      } catch (error) {
+        if (error.status === 401) {
+          showCredentialLogin();
+          return;
+        }
+        toast('退出失败', error.message, 'error');
+      }
+    });
   }
 
   async function connect(options = {}) {
     try {
       if (!state.csrfToken) await initializeSession();
+      showManagementShell();
       return await refresh(options);
     } catch (error) {
-      state.connected = false;
-      state.lastError = error.message;
-      setDisconnected(error.message);
-      renderMissingToken();
-      if (options.notify) toast('连接失败', error.message, 'error');
+      const message = error.code === 'login_required' ? '' : error.message;
+      showCredentialLogin(message);
+      if (options.notify && message) toast('连接失败', message, 'error');
       return null;
     }
   }
@@ -90,7 +204,15 @@
     if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
     const response = await fetch(path, { ...options, method, headers, credentials: 'same-origin' });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || response.statusText || `HTTP ${response.status}`);
+    if (!response.ok) {
+      const error = new Error(payload.error || response.statusText || `HTTP ${response.status}`);
+      error.status = response.status;
+      if (response.status === 401 && path !== '/api/v1/session') {
+        error.code = 'login_required';
+        showCredentialLogin('浏览器会话已过期，请重新输入 Service Token。');
+      }
+      throw error;
+    }
     return payload;
   }
 
@@ -98,6 +220,7 @@
     if (state.refreshPromise) return state.refreshPromise;
     $('refresh-button').classList.add('spinning');
     state.refreshPromise = api('/api/v1/service').then((snapshot) => {
+      if (!state.authenticated) return null;
       state.snapshot = snapshot;
       pruneRoomSelection(snapshot);
       state.connected = true;
@@ -113,6 +236,7 @@
       if (notify) toast('已同步', 'Management Shell 状态已刷新。', 'success');
       return snapshot;
     }).catch((error) => {
+      if (error.status === 401) return null;
       const changed = state.connected || state.lastError !== error.message;
       state.connected = false;
       state.lastError = error.message;
@@ -138,7 +262,7 @@
     state.refreshTimer = null;
     if (state.preferences.refreshMs > 0) {
       state.refreshTimer = setInterval(() => {
-        if (!document.hidden) refresh();
+        if (state.authenticated && !document.hidden) refresh();
       }, state.preferences.refreshMs);
     }
   }
@@ -235,12 +359,6 @@
         ),
         node('div', { className: 'panel skeleton', style: 'height: 300px' })
       )
-    );
-  }
-
-  function renderMissingToken() {
-    view.replaceChildren(
-      emptyState('!', 'Management 会话无效', 'Daemon 模式请在终端运行 pairroom daemon open；前台模式请重新打开 Service 输出中的完整地址。')
     );
   }
 
@@ -1888,6 +2006,8 @@
     item.addEventListener('mouseenter', () => clearTimeout(timeout), { once: true });
   }
 
+  $('login-form').addEventListener('submit', submitCredentialLogin);
+  $('login-token-toggle').addEventListener('click', toggleCredentialVisibility);
   document.querySelectorAll('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => closeDialog(button.dataset.closeDialog)));
   document.querySelectorAll('dialog').forEach((dialog) => {
     dialog.addEventListener('click', (event) => { if (event.target === dialog) closeDialog(dialog.id); });
@@ -1914,6 +2034,7 @@
   $('confirm-input').addEventListener('input', syncConfirmRequirement);
   $('confirm-ack').addEventListener('change', syncConfirmRequirement);
   $('refresh-button').addEventListener('click', () => refresh({ notify: true, forceRender: true }));
+  $('logout-button').addEventListener('click', logoutBrowserSession);
   $('retry-button').addEventListener('click', () => connect({ notify: true, forceRender: true }));
   $('add-project-button').addEventListener('click', () => openProjectDialog('register'));
   $('global-search').addEventListener('input', (event) => {
@@ -1933,8 +2054,13 @@
   $('sidebar-backdrop').addEventListener('click', () => app.classList.remove('sidebar-open'));
   $('sidebar-collapse').addEventListener('click', () => app.classList.toggle('sidebar-collapsed'));
   window.addEventListener('hashchange', () => {
+    if (new URLSearchParams(location.hash.replace(/^#/, '')).has('token')) {
+      location.reload();
+      return;
+    }
     state.route = parseRoute();
     app.classList.remove('sidebar-open');
+    if (!state.authenticated) return;
     render();
     view.focus({ preventScroll: true });
     window.scrollTo({ top: 0, behavior: 'instant' });
@@ -1946,7 +2072,7 @@
     }
   });
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) refresh({ forceRender: state.renderPending });
+    if (state.authenticated && !document.hidden) refresh({ forceRender: state.renderPending });
   });
 
   applyPreferences();
