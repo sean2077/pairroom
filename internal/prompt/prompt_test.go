@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/protocol"
 )
 
 func TestMentions(t *testing.T) {
@@ -43,21 +44,53 @@ func TestMentionsHuman(t *testing.T) {
 	}
 }
 
-func TestEnvelopePreservesRuntimeAndRoutingContext(t *testing.T) {
+func TestBootstrapPromptUsesVersionedContractAndStaysCompact(t *testing.T) {
+	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+		got := SystemPrompt(actor, "room-identity-must-not-leak", "/repo/identity/must/not/leak")
+		if len([]byte(got)) > MaxBootstrapBytes {
+			t.Fatalf("%s bootstrap = %d bytes, budget = %d:\n%s", actor, len([]byte(got)), MaxBootstrapBytes, got)
+		}
+		for _, fragment := range []string{protocol.Version, "pairroom protocol --actor " + string(actor), "current_role", "routing_mode", "manual never auto-hands off", "mentions routes only", "roundtable auto-hands off"} {
+			if !strings.Contains(got, fragment) {
+				t.Fatalf("%s bootstrap missing %q:\n%s", actor, fragment, got)
+			}
+		}
+		for _, fragment := range []string{"PairRoom rules:", "room-identity-must-not-leak", "/repo/identity/must/not/leak"} {
+			if strings.Contains(got, fragment) {
+				t.Fatalf("%s bootstrap contains unstable or legacy prose %q:\n%s", actor, fragment, got)
+			}
+		}
+	}
+}
+
+func TestEnvelopeCarriesOnlyRuntimeAndRoutingContext(t *testing.T) {
 	input := model.AgentInput{
-		MessageID: "m1", ThreadID: "t1", Hop: 2,
+		// PairRoom generates 24-hex-digit IDs with msg- and thread- prefixes.
+		// Exercise the production-sized optional scalar fields in the fixed
+		// envelope budget; attachment metadata remains dynamic content.
+		MessageID: "msg-0123456789abcdef01234567", ThreadID: "thread-0123456789abcdef01234567", Hop: 2,
 		From: model.ActorClaude, To: model.ActorCodex,
-		Text: "Inspect the race", ReplyTo: "m0",
-		Role: model.RoleReviewer, RoutingMode: model.RoutingRoundtable, MaxHops: 6,
+		Text: "Inspect the race", ReplyTo: "msg-0123456789abcdef01234567",
+		Role: model.RoleReviewer, RoutingMode: model.RoutingRoundtable, MaxHops: 6, Intent: model.IntentSupersede,
 	}
 	got := Envelope(input)
 	for _, fragment := range []string{
-		"message_id: m1", "thread_id: t1", "from: Claude Code", "to: Codex",
-		"reply_to: m0", "current_role: reviewer", "remaining_agent_hops: 4",
-		"Do not modify files", "[PAIRROOM:CONSENSUS]", "Inspect the race",
+		"protocol: " + protocol.Version,
+		"message_id: msg-0123456789abcdef01234567", "thread_id: thread-0123456789abcdef01234567", "from: Claude Code", "to: Codex",
+		"reply_to: msg-0123456789abcdef01234567", "current_role: reviewer", "delivery_intent: supersede", "routing_mode: roundtable",
+		"remaining_agent_hops: 4", "Inspect the race",
 	} {
 		if !strings.Contains(got, fragment) {
 			t.Fatalf("Envelope() missing %q:\n%s", fragment, got)
 		}
+	}
+	for _, fragment := range []string{"role_rule:", "Do not modify files", "[PAIRROOM:CONSENSUS]", "Keep the shared-room answer"} {
+		if strings.Contains(got, fragment) {
+			t.Fatalf("Envelope() repeated stable contract prose %q:\n%s", fragment, got)
+		}
+	}
+	overhead := len([]byte(got)) - len([]byte(input.Text))
+	if overhead > MaxEnvelopeOverheadBytes {
+		t.Fatalf("Envelope() overhead = %d bytes, budget = %d:\n%s", overhead, MaxEnvelopeOverheadBytes, got)
 	}
 }

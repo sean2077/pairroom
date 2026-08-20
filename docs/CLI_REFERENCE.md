@@ -2,7 +2,7 @@
 
 > [文档首页](README.md) · [快速上手](GETTING_STARTED.md) · [运维](OPERATIONS.md) · [排障](TROUBLESHOOTING.md)
 
-本页最后按 `main` 提交 `a14d6705fdcd057a74fa3275437aca205dab06d9` 的 `cmd/pairroom/main.go` 与 `cmd/pairroom/daemon.go` 核对。命令行为变更时，应在同一 PR 更新本页和 `CHANGELOG.md`。
+本页最后按 `main` 提交 `71c4d007892d60f0299735a5647c4ea8afca4974` 的 `cmd/pairroom/main.go` 与 `cmd/pairroom/daemon.go` 核对。命令行为变更时，应在同一 PR 更新本页和 `CHANGELOG.md`。
 
 ## 顶层命令
 
@@ -15,6 +15,7 @@ pairroom verify [options]       严格验证 Room 数据
 pairroom backup [options]       创建自校验 Room 备份
 pairroom restore [options]      恢复并验证 Room 备份
 pairroom diagnostics [options]  创建脱敏诊断包
+pairroom protocol [options]     输出版本化 Agent 协作契约
 pairroom version [--json]       输出版本/构建信息
 ```
 
@@ -264,6 +265,25 @@ pairroom diagnostics \
 ```
 
 `--output` 必填。诊断包包含结构、计数、Event header、构建/平台和完整性结果；省略消息正文、附件 bytes 与完整 Runtime payload。分享前仍应人工检查路径和环境元数据。
+
+## `pairroom protocol`
+
+输出 PairRoom 的版本化 Agent 协作契约。该命令不打开 Room、仓库或 Service 状态；它把固定规则作为确定性的 CLI 数据提供给 Agent、文档和诊断工具，避免把完整规则重复拼接到每个原生 Turn。当前契约版本为 `pairroom-protocol/v1`。
+
+```bash
+pairroom protocol
+pairroom protocol --actor codex --role reviewer --routing roundtable
+pairroom protocol --actor claude --json
+```
+
+| 选项 | 约束 | 作用 |
+|---|---|---|
+| `--actor ACTOR` | `claude` / `codex` | 只输出目标 Agent 相关的 mention 规则 |
+| `--role ROLE` | `driver` / `reviewer` / `peer` | 只输出当前角色规则 |
+| `--routing MODE` | `manual` / `mentions` / `roundtable` | 只输出当前路由规则 |
+| `--json` | false | 输出稳定的 `version`、筛选条件和规则数组 |
+
+不提供筛选条件时会输出完整契约。筛选只缩小角色和路由分支；Human authority、原生 Harness authority、输入/输出、媒体、可观察性和收敛规则始终保留。Room Engine 与 Adapter 继续机械执行路由、角色沙箱、投递和生命周期；Agent prompt 只保留需要模型判断的紧凑 bootstrap，并通过版本号引用本命令。
 
 ## `pairroom version`
 

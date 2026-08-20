@@ -39,20 +39,19 @@ type CodexAdapter struct {
 	cfg  Config
 	sink EventSink
 
-	startMu      sync.Mutex
-	submitMu     sync.Mutex
-	mu           sync.Mutex
-	writeMu      sync.Mutex
-	state        model.AgentState
-	cmd          *exec.Cmd
-	stdin        io.WriteCloser
-	threadID     string
-	currentTurn  string
-	protocolSent bool
-	intentional  bool
-	pending      map[int64]chan rpcReply
-	approvals    map[string]pendingApproval
-	turnInputs   map[string][]model.AgentInput
+	startMu     sync.Mutex
+	submitMu    sync.Mutex
+	mu          sync.Mutex
+	writeMu     sync.Mutex
+	state       model.AgentState
+	cmd         *exec.Cmd
+	stdin       io.WriteCloser
+	threadID    string
+	currentTurn string
+	intentional bool
+	pending     map[int64]chan rpcReply
+	approvals   map[string]pendingApproval
+	turnInputs  map[string][]model.AgentInput
 	// wireInputs holds inputs keyed by Codex's documented
 	// clientUserMessageId while a turn/start or turn/steer request is in flight.
 	// The matching userMessage item echoes this value as clientId, allowing
@@ -218,10 +217,7 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	strictResume := c.cfg.RequireExactSession && requiredThread != ""
 	var result json.RawMessage
 	if existingThread != "" {
-		result, err = c.call(handshakeCtx, "thread/resume", map[string]any{
-			"threadId": existingThread,
-			"cwd":      c.cfg.Repo,
-		})
+		result, err = c.call(handshakeCtx, "thread/resume", c.threadResumeParams(existingThread))
 		if err != nil {
 			if strictResume {
 				_ = c.Stop(context.Background())
@@ -232,11 +228,6 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 			logEvent.Text = "resume failed; creating a new Codex thread: " + err.Error()
 			c.sink(logEvent)
 			existingThread = ""
-			// The legacy single-Room command retains its historical replacement
-			// behavior. Service runtimes fail closed above instead.
-			c.mu.Lock()
-			c.protocolSent = false
-			c.mu.Unlock()
 		}
 	}
 	if existingThread == "" {
@@ -284,14 +275,6 @@ func (c *CodexAdapter) Submit(ctx context.Context, input model.AgentInput) (mode
 
 	text := prompt.Envelope(input)
 	c.mu.Lock()
-	includeProtocol := !c.protocolSent
-	if includeProtocol {
-		protocolText := c.cfg.SystemPrompt
-		if protocolText == "" {
-			protocolText = prompt.SystemPrompt(model.ActorCodex, c.cfg.RoomName, c.cfg.Repo)
-		}
-		text = protocolText + "\n\n" + text
-	}
 	threadID := c.threadID
 	turnID := c.currentTurn
 	active := turnID != "" && (c.state == model.StateWorking || c.state == model.StateWaiting)
@@ -315,11 +298,6 @@ func (c *CodexAdapter) Submit(ctx context.Context, input model.AgentInput) (mode
 		c.unstageWireInput(input.MessageID)
 		if err == nil {
 			_ = result
-			c.mu.Lock()
-			if includeProtocol {
-				c.protocolSent = true
-			}
-			c.mu.Unlock()
 			if c.bindTurnInput(turnID, input) {
 				c.emitInputProcessing(turnID, input, "injected into active Codex turn")
 			}
@@ -376,9 +354,6 @@ func (c *CodexAdapter) Submit(ctx context.Context, input model.AgentInput) (mode
 		return model.DeliveryFailed, fmt.Errorf("decode codex turn: %w", err)
 	}
 	c.mu.Lock()
-	if includeProtocol {
-		c.protocolSent = true
-	}
 	c.currentTurn = turnResult.Turn.ID
 	c.startingInput = nil
 	if c.turnBuffers[turnResult.Turn.ID] == nil {
@@ -411,12 +386,28 @@ func normalizeCodexApprovalPolicy(value string) string {
 	return value
 }
 
+func (c *CodexAdapter) developerInstructions() string {
+	if c.cfg.SystemPrompt != "" {
+		return c.cfg.SystemPrompt
+	}
+	return prompt.BootstrapPrompt(model.ActorCodex)
+}
+
+func (c *CodexAdapter) threadResumeParams(threadID string) map[string]any {
+	return map[string]any{
+		"threadId":              threadID,
+		"cwd":                   c.cfg.Repo,
+		"developerInstructions": c.developerInstructions(),
+	}
+}
+
 func (c *CodexAdapter) threadStartParams() map[string]any {
 	params := map[string]any{
-		"cwd":            c.cfg.Repo,
-		"approvalPolicy": c.cfg.ApprovalPolicy,
-		"sandbox":        c.legacySandbox(),
-		"serviceName":    "pairroom",
+		"cwd":                   c.cfg.Repo,
+		"approvalPolicy":        c.cfg.ApprovalPolicy,
+		"sandbox":               c.legacySandbox(),
+		"serviceName":           "pairroom",
+		"developerInstructions": c.developerInstructions(),
 	}
 	if c.cfg.Model != "" {
 		params["model"] = c.cfg.Model
@@ -1308,7 +1299,6 @@ func (c *CodexAdapter) SetWorkspace(ctx context.Context, workspace string) error
 	wasRunning := c.cmd != nil && c.cmd.Process != nil
 	old := c.cfg.Repo
 	c.cfg.Repo = workspace
-	c.protocolSent = false
 	c.mu.Unlock()
 
 	if !wasRunning {

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `pairroom protocol` as the deterministic, versioned source of truth for collaboration rules, with actor/role/routing filters and machine-readable JSON output.
+
+### Changed
+
+- Native-agent instruction projection now keeps the compact PairRoom bootstrap at the vendor instruction layer, projects Codex through thread `developerInstructions`, and sends dynamic-only per-turn envelopes guarded by byte-budget tests.
+
 ## [v1.0.0] — 2026-08-18
 
 ### Added
