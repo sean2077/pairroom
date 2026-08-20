@@ -193,7 +193,7 @@ PairRoom 分开记录：
 
 PairRoom 是单用户、本地优先软件，没有 PairRoom 云服务、遥测、账号系统或模型代理。需要区分两条浏览器认证链路：
 
-- **Management Shell**：Service Token 从启动 URL fragment 读入内存，并通过 `POST /api/v1/session` 交换为 `HttpOnly`、`SameSite=Strict` Session Cookie；写操作另带内存中的 CSRF Token。刷新可恢复仍有效的会话，Service 重启、会话过期或新浏览器上下文则需重新打开完整 Management URL。
+- **Management Shell**：既可从启动 URL fragment 自动读取 Service Token，也可直接打开 Management origin 后在登录页输入 Token，或粘贴完整 Management URL。两种入口都只通过 `POST /api/v1/session` 把长期凭证交换为 `HttpOnly`、`SameSite=Strict` Session Cookie；写操作另带内存中的 CSRF Token。登录页不写 Web Storage；刷新可恢复仍有效的会话，Service 重启、会话过期或新浏览器上下文则需重新提供凭证。
 - **Room View**：启动凭据从 fragment 交换为 `HttpOnly`、`SameSite=Strict` Session Cookie，写操作另带内存中的 CSRF Token；长期 Token 不进入 Web Storage。
 
 消息、附件、事件、路径和 Session/Thread ID 保存在本机；实际发送给模型供应商的数据由官方 Claude Code/Codex Harness、用户配置和供应商政策决定。详见 [`SECURITY.md`](SECURITY.md) 与 [`docs/PRIVACY.md`](docs/PRIVACY.md)。

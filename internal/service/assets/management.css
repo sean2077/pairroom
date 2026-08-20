@@ -136,6 +136,63 @@ code, pre, kbd { font-family: var(--font-mono); }
 :focus-visible { outline: none; box-shadow: var(--focus); }
 ::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
 
+.login-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: clamp(18px, 5vw, 44px);
+}
+.login-card {
+  width: min(460px, 100%);
+  padding: clamp(24px, 6vw, 34px);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--bg-raised) 94%, transparent);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(22px) saturate(130%);
+}
+.login-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 30px; }
+.login-brand > span:last-child { display: grid; }
+.login-brand strong { color: var(--text-strong); font-size: 17px; letter-spacing: -.02em; }
+.login-brand small { color: var(--subtle); font-size: 9px; font-weight: 750; letter-spacing: .16em; }
+.login-copy h1 { margin-bottom: 0; font-size: clamp(27px, 7vw, 34px); }
+.login-copy > p:last-child { margin: 10px 0 0; color: var(--muted); }
+.login-pending {
+  min-height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 24px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg-soft);
+  color: var(--muted);
+}
+.login-spinner { width: 18px; height: 18px; border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+.login-form { display: grid; gap: 14px; margin-top: 24px; }
+.login-form .field-label { margin: 0 0 -7px; }
+.credential-field { position: relative; display: block; }
+.credential-field input { padding-right: 72px; font-family: var(--font-mono); }
+.credential-toggle {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  min-height: 30px;
+  padding: 4px 9px;
+  border-color: var(--line);
+  background: var(--bg-soft);
+  color: var(--muted);
+  font-size: 11px;
+}
+.credential-toggle:hover:not(:disabled) { border-color: var(--line-strong); background: var(--bg-muted); color: var(--text); }
+.login-help { margin: -4px 0 0; color: var(--muted); font-size: 11px; }
+.login-error { margin: 0; }
+.login-submit { width: 100%; min-height: 44px; }
+.login-meta { display: grid; gap: 5px; margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--subtle); font-size: 11px; }
+.login-meta code { color: var(--muted); }
+.logout-button { min-width: 56px; }
+
 .app-shell { min-height: 100vh; }
 .sidebar {
   position: fixed;

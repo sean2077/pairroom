@@ -4,6 +4,7 @@
 
 ### Added
 
+- Management Shell credential login for direct-origin access, accepting either the configured Service Token or a complete Management URL and exchanging it for the existing HttpOnly browser session without Web Storage persistence.
 - `pairroom protocol` as the deterministic, versioned source of truth for collaboration rules, with actor/role/routing filters and machine-readable JSON output.
 
 ### Changed
