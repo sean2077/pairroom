@@ -6,7 +6,7 @@ PairRoom is a local Go coordination layer for the official Claude Code and Codex
 
 ## Development and verification
 
-- `make check` runs unit, race, vet, format, JavaScript syntax, dependency, Agent-projection, release-contract, and whitespace checks.
+- `make check` runs unit, race, vet, format, JavaScript syntax, dependency, Agent-projection, release-contract, and whitespace checks. Its race stage requires `CGO_ENABLED=1` and a Go-supported C compiler on `PATH`; on Windows, use an MSYS2 MinGW toolchain or an equivalent supported compiler.
 - `make smoke` runs the deterministic Mock collaboration, media, backup, restore, and diagnostics flow.
 - `make install` installs the current source to `GOBIN`, defaulting to `GOPATH/bin`; it reports PATH visibility but never edits PATH.
 - `make cover` records diagnostic package coverage; coverage is not a release percentage gate.

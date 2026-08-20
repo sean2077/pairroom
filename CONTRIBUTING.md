@@ -11,6 +11,7 @@ PairRoom 的边界有意保持狭窄：协调官方 Claude Code 与 Codex，而�
 - Go 1.23+；
 - Git；
 - Bash、curl、Python 3 与标准 archive 工具（smoke/release）；
+- `make check` 的 race gate 需要 `CGO_ENABLED=1`，并且 Go 支持的 C 编译器位于 `PATH`；Windows 可使用 MSYS2 UCRT64/MinGW64 的 GCC；
 - Node.js（存在时执行内嵌 JavaScript syntax check）。
 
 可选：

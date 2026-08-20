@@ -30,6 +30,7 @@ test:
 	go test -count=1 ./...
 
 race:
+	@test "$$(go env CGO_ENABLED)" = 1 || { printf '%s\n' 'make race requires CGO_ENABLED=1 and a Go-supported C compiler on PATH; see docs/DEVELOPMENT.md' >&2; exit 1; }
 	go test -race -count=1 ./...
 
 vet:

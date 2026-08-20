@@ -12,6 +12,7 @@
 - Git；
 - POSIX Make/Bash；
 - Python 3（Agent/release contract）；
+- `make check` 的 race gate 需要 `CGO_ENABLED=1`，并且 Go 支持的 C 编译器位于 `PATH`；Windows 可使用 MSYS2 UCRT64/MinGW64 的 GCC；
 - Node.js（存在时执行内嵌 JavaScript 语法检查）。
 
 完整 release/smoke 还需要 `curl`、标准 archive/checksum 工具和支持的目标平台工具链。真实 Claude/Codex 只用于可选 native smoke；普通测试不得要求供应商登录。
@@ -64,6 +65,14 @@ make cover
 | `make clean` | 删除构建产物 |
 
 提交前至少执行 `make check`；改动用户流程、浏览器或恢复路径时再执行 `make smoke`。
+
+Windows 上若用户级 Go 配置固定了 `CGO_ENABLED=0`，可只为当前验证进程启用 CGO 并加入现有 MSYS2 编译器路径，避免改写用于静态发布构建的全局偏好：
+
+```powershell
+$env:CGO_ENABLED='1'
+$env:Path='C:\msys64\ucrt64\bin;' + $env:Path
+& 'C:\Program Files\Git\bin\bash.exe' -lc 'make check'
+```
 
 ## CI 多平台产物
 
