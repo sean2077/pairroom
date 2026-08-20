@@ -75,6 +75,8 @@ func run(args []string) error {
 		return runRestore(args[1:])
 	case "diagnostics":
 		return runDiagnostics(args[1:])
+	case "protocol":
+		return runProtocol(args[1:])
 	case "version", "--version", "-v":
 		return runVersion(args[1:])
 	case "help", "--help", "-h":
@@ -878,6 +880,7 @@ Usage:
   pairroom backup [options]      Create a verified room-data backup
   pairroom restore [options]     Restore and verify a room-data backup
   pairroom diagnostics [options] Create a redacted diagnostics bundle
+  pairroom protocol [options]    Print the versioned agent collaboration contract
   pairroom version               Print version
 
 Quick start:

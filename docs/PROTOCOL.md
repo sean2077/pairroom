@@ -243,6 +243,31 @@ log
 
 公共最终回答进入 Message；token delta、命令和工具细节留在 Inspector event tail。
 
+### Agent instruction projection
+
+固定协作规则由 `internal/protocol` 定义，并通过以下命令按需读取：
+
+```bash
+pairroom protocol
+pairroom protocol --actor codex --role reviewer --routing roundtable
+pairroom protocol --json
+```
+
+每条 Agent 输入只重复契约版本和动态事实：
+
+```text
+[PairRoom message]
+protocol: pairroom-protocol/v1
+message_id / thread_id / hop
+from / to / reply_to
+current_role / delivery_intent
+routing_mode / remaining_agent_hops
+attachments
+message body
+```
+
+角色定义、路由解释、媒体规范和控制 marker 不再展开到每个 envelope。Claude 在原生 system-prompt 追加层接收紧凑 bootstrap；Codex 在 thread `developerInstructions` 接收同一语义。Room Engine 和 Adapter 仍是路由、投递、角色工作区、审批与 lifecycle 的机械权威，prompt 不复制这些状态机。
+
 ## 9. Claude control protocol
 
 Claude 进程使用 `--permission-prompt-tool stdio` 启动。随后 PairRoom 在发送第一条用户输入前写入：

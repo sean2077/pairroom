@@ -266,7 +266,20 @@ session/thread identity
 
 供应商协议差异被限制在 Adapter 内。MockAdapter 也实现同一契约，用于确定性产品和恢复测试，但不能证明真实供应商行为。
 
-### 6.2 ClaudeAdapter
+### 6.2 Agent 协作契约投影
+
+`internal/protocol` 是固定协作规则的单一来源，`pairroom protocol` 将同一份版本化契约投射为文本或 JSON。可计数、可校验、可持久化的机械行为继续由 Room Engine、Adapter、角色沙箱和路由器执行，而不是依赖长 prompt 反复提醒。
+
+原生 Harness 只接收一个紧凑 bootstrap：
+
+- ClaudeAdapter 优先使用 Claude Code 的原生 append-system-prompt 能力；兼容路径最多在首个输入前投射一次；
+- CodexAdapter 在 `thread/start` 和 `thread/resume` 的 `developerInstructions` 中投射 bootstrap；`turn/start` 与 `turn/steer` 不再内联完整规则；
+- bootstrap 不包含 Room 名称或 repository 绝对路径，只声明 Human/Harness authority、角色与路由判断入口、控制 marker 和 `pairroom-protocol/v1` 查询命令；
+- 每轮 `[PairRoom message]` envelope 只携带 message/thread/hop、from/to、role、routing、intent、附件元数据和正文等动态事实。
+
+`internal/prompt` 的 byte-budget 测试是发布门：固定 bootstrap 或逐轮 envelope overhead 超预算会直接使测试失败，防止规则再次无界增长。
+
+### 6.3 ClaudeAdapter
 
 ClaudeAdapter 启动官方 `claude`，使用：
 
@@ -297,7 +310,7 @@ write-capable tools = denied/disallowed
 
 未知 control request 直接返回协议错误。
 
-### 6.3 CodexAdapter
+### 6.4 CodexAdapter
 
 CodexAdapter 启动：
 
@@ -319,7 +332,7 @@ codex app-server
 
 Reviewer 每个 Turn 使用原生 read-only sandbox 请求。
 
-### 6.4 原生事实不被复制
+### 6.5 原生事实不被复制
 
 PairRoom 持久化 Vendor Session/Thread ID 和自己的事件投影，但不导入绑定前供应商 Transcript。Existing Binding 恢复的是原生 context；Room 时间线只从 Binding 成为 PairRoom Room 的一部分后开始。
 

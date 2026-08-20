@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/prompt"
 )
 
 type codexRPCRecorder struct {
@@ -266,8 +267,42 @@ func TestCodexInputItemsIncludeLocalImages(t *testing.T) {
 	}
 }
 
-func TestCodexFirstActiveSteerSendsProtocolOnlyOnce(t *testing.T) {
-	adapter := NewCodex(Config{SystemPrompt: "PAIRROOM-COLLABORATION-PROTOCOL"}, func(model.RuntimeEvent) {})
+func TestCodexThreadRequestsUseDeveloperInstructions(t *testing.T) {
+	const instructions = "PAIRROOM-COLLABORATION-PROTOCOL"
+	adapter := NewCodex(Config{Repo: "/repo", SystemPrompt: instructions}, func(model.RuntimeEvent) {})
+
+	for name, params := range map[string]map[string]any{
+		"start":  adapter.threadStartParams(),
+		"resume": adapter.threadResumeParams("thread-existing"),
+	} {
+		if got := params["developerInstructions"]; got != instructions {
+			t.Fatalf("thread/%s developerInstructions = %#v, want %q", name, got, instructions)
+		}
+		if got := params["cwd"]; got != "/repo" {
+			t.Fatalf("thread/%s cwd = %#v", name, got)
+		}
+	}
+	if got := adapter.threadResumeParams("thread-existing")["threadId"]; got != "thread-existing" {
+		t.Fatalf("thread/resume threadId = %#v", got)
+	}
+	defaultAdapter := NewCodex(Config{}, func(model.RuntimeEvent) {})
+	if got := defaultAdapter.threadStartParams()["developerInstructions"]; got != prompt.BootstrapPrompt(model.ActorCodex) {
+		t.Fatalf("default developerInstructions = %#v", got)
+	}
+}
+
+func TestCodexTurnRequestsDoNotInlineDeveloperInstructions(t *testing.T) {
+	const instructions = "PAIRROOM-COLLABORATION-PROTOCOL"
+	adapter := NewCodex(Config{SystemPrompt: instructions}, func(model.RuntimeEvent) {})
+	input := model.AgentInput{MessageID: "msg-first", Text: "first intervention"}
+	started, err := json.Marshal(adapter.turnStartParams("thread-id", prompt.Envelope(input), input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(started), instructions) {
+		t.Fatalf("turn/start repeated developer instructions: %s", started)
+	}
+
 	recorder := &codexRPCRecorder{adapter: adapter}
 	adapter.cmd = &exec.Cmd{Process: &os.Process{Pid: os.Getpid()}}
 	adapter.stdin = recorder
@@ -275,26 +310,22 @@ func TestCodexFirstActiveSteerSendsProtocolOnlyOnce(t *testing.T) {
 	adapter.threadID = "thread-active"
 	adapter.currentTurn = "turn-active"
 
-	state, err := adapter.Submit(context.Background(), model.AgentInput{MessageID: "msg-first", Text: "first intervention"})
-	if err != nil || state != model.DeliveryInjected {
-		t.Fatalf("first steer = %q, %v", state, err)
-	}
-	if !adapter.protocolSent {
-		t.Fatal("successful first steer must mark the collaboration protocol as sent")
-	}
-
-	state, err = adapter.Submit(context.Background(), model.AgentInput{MessageID: "msg-second", Text: "second intervention"})
-	if err != nil || state != model.DeliveryInjected {
-		t.Fatalf("second steer = %q, %v", state, err)
+	for _, input := range []model.AgentInput{
+		input,
+		{MessageID: "msg-second", Text: "second intervention"},
+	} {
+		state, err := adapter.Submit(context.Background(), input)
+		if err != nil || state != model.DeliveryInjected {
+			t.Fatalf("steer %s = %q, %v", input.MessageID, state, err)
+		}
 	}
 	if len(recorder.requests) != 2 {
 		t.Fatalf("request count = %d", len(recorder.requests))
 	}
-	if !strings.Contains(string(recorder.requests[0]), "PAIRROOM-COLLABORATION-PROTOCOL") {
-		t.Fatalf("first steer omitted protocol: %s", recorder.requests[0])
-	}
-	if strings.Contains(string(recorder.requests[1]), "PAIRROOM-COLLABORATION-PROTOCOL") {
-		t.Fatalf("second steer repeated protocol: %s", recorder.requests[1])
+	for _, request := range recorder.requests {
+		if strings.Contains(string(request), instructions) {
+			t.Fatalf("turn/steer repeated developer instructions: %s", request)
+		}
 	}
 }
 
