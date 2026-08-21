@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v1.1.0] — 2026-08-21
+
 ### Added
 
 - Management Shell credential login for direct-origin access, accepting either the configured Service Token or a complete Management URL and exchanging it for the existing HttpOnly browser session without Web Storage persistence.

@@ -4,7 +4,7 @@ PairRoom 是一个面向 **Claude Code + Codex** 的本地三方协作房间：�
 
 > PairRoom 不代理模型 API，也不重写 Agent loop。原生模式只启动本机已有的官方 `claude` 与 `codex` 命令；Claude Code/Codex 继续拥有各自的会话、上下文、工具、Skills、MCP、Hooks、沙箱和账号凭据。
 
-当前仓库版本基线为 **v1.0.0**。`main` 上尚未发布的多 Project / 多 Room、Management Shell 与后台 Service 增强，以 [`CHANGELOG.md`](CHANGELOG.md) 的 `Unreleased` 章节为准。
+当前仓库版本基线为 **v1.1.0**。后续尚未发布的变化以 [`CHANGELOG.md`](CHANGELOG.md) 的 `Unreleased` 章节为准。
 
 [快速上手](docs/GETTING_STARTED.md) · [核心概念](docs/CONCEPTS.md) · [命令参考](docs/CLI_REFERENCE.md) · [排障](docs/TROUBLESHOOTING.md) · [完整文档](docs/README.md)
 
