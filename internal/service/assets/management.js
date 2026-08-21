@@ -22,6 +22,7 @@
     refreshPromise: null,
     refreshTimer: null,
     renderPending: false,
+    renderedSnapshotKey: '',
     csrfToken: '',
     opening: new Map(),
     pendingNavigationRoom: '',
@@ -114,6 +115,7 @@
     state.csrfToken = '';
     state.lastError = message;
     state.renderPending = false;
+    state.renderedSnapshotKey = '';
     state.search = '';
     state.selectedRoomIDs.clear();
     state.opening.forEach((popup) => { if (popup && !popup.closed) popup.close(); });
@@ -216,21 +218,44 @@
     return payload;
   }
 
+  function snapshotRenderKey(snapshot) {
+    if (!snapshot) return '';
+    // generated_at is request metadata. A busy Runtime advances last_used_at
+    // on every status read, while an idle Runtime's activity timestamp is
+    // meaningful to the Runtimes table and must still trigger a refresh.
+    const renderableSnapshot = { ...snapshot };
+    delete renderableSnapshot.generated_at;
+    if (Array.isArray(renderableSnapshot.runtimes)) {
+      renderableSnapshot.runtimes = renderableSnapshot.runtimes.map((runtime) => {
+        const renderableRuntime = { ...runtime };
+        if (renderableRuntime.busy) delete renderableRuntime.last_used_at;
+        return renderableRuntime;
+      });
+    }
+    return JSON.stringify(renderableSnapshot);
+  }
   async function refresh({ notify = false, forceRender = false } = {}) {
     if (state.refreshPromise) return state.refreshPromise;
-    $('refresh-button').classList.add('spinning');
+    const showProgress = notify || forceRender;
+    if (showProgress) $('refresh-button').classList.add('spinning');
     state.refreshPromise = api('/api/v1/service').then((snapshot) => {
       if (!state.authenticated) return null;
+      const nextRenderKey = snapshotRenderKey(snapshot);
+      const snapshotChanged = nextRenderKey !== state.renderedSnapshotKey;
       state.snapshot = snapshot;
       pruneRoomSelection(snapshot);
       state.connected = true;
       state.lastError = '';
       updateChrome();
-      if (forceRender || canRenderNow()) {
-        render();
-        state.renderPending = false;
+      if (forceRender || snapshotChanged) {
+        if (forceRender || canRenderNow()) {
+          render();
+        } else {
+          state.renderPending = true;
+          window.dispatchEvent(new Event('pairroom:management-render-pending'));
+        }
       } else {
-        state.renderPending = true;
+        state.renderPending = false;
       }
       resolveOpeningRooms();
       if (notify) toast('已同步', 'Management Shell 状态已刷新。', 'success');
@@ -245,7 +270,7 @@
       return null;
     }).finally(() => {
       state.refreshPromise = null;
-      $('refresh-button').classList.remove('spinning');
+      if (showProgress) $('refresh-button').classList.remove('spinning');
     });
     return state.refreshPromise;
   }
@@ -339,6 +364,8 @@
     state.route = parseRoute();
     updateChrome();
     if (!state.snapshot) {
+      state.renderedSnapshotKey = '';
+      state.renderPending = false;
       renderLoading();
       return;
     }
@@ -349,6 +376,8 @@
       case 'settings': renderSettings(); break;
       default: renderOverview(); break;
     }
+    state.renderedSnapshotKey = snapshotRenderKey(state.snapshot);
+    state.renderPending = false;
   }
 
   function renderLoading() {

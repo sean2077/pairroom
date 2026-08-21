@@ -407,6 +407,9 @@
     if (refreshButton) connectionObserver.observe(refreshButton, { attributes: true, attributeFilter: ['class'] });
     if (connectionBanner) connectionObserver.observe(connectionBanner, { attributes: true, attributeFilter: ['hidden'] });
 
+    window.addEventListener('pairroom:management-render-pending', () => {
+      if (paletteOpen) refreshDeferredWhilePaletteOpen = true;
+    });
     window.addEventListener('hashchange', syncRouteState);
   }
 
