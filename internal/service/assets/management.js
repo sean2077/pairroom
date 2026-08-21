@@ -492,6 +492,21 @@
   function renderProjectCard(model) {
     const { project, rooms, activeRooms, runtimeCounts } = model;
     const visibleRooms = rooms.filter((room) => state.filters.showArchived || room.lifecycle !== 'archived');
+    const archivedRoomsHidden = !state.filters.showArchived && rooms.length > 0 && visibleRooms.length === 0;
+    const emptyRoomTitle = archivedRoomsHidden ? '此 Project 只剩已归档 Room' : '此 Project 尚无 Room';
+    const emptyRoomDescription = archivedRoomsHidden
+      ? '显示并永久清除已归档 Room 后即可注销 Project。'
+      : project.available
+        ? '创建一个 Room，绑定 Claude 与 Codex。'
+        : '本地路径不可用不影响注销此空 Project。';
+    const emptyRoomAction = archivedRoomsHidden
+      ? actionButton('显示已归档 Room', () => {
+          state.filters.showArchived = true;
+          renderProjects();
+        }, 'secondary-button compact-button')
+      : project.available
+        ? actionButton('创建 Room', () => openRoomDialog(project.id), 'secondary-button compact-button')
+        : null;
     return node('article', { className: 'panel project-card' },
       node('header', { className: 'project-card-header' },
         node('div', { className: 'project-avatar', textContent: projectInitials(project) }),
@@ -505,7 +520,7 @@
             : null,
           actionButton('复制路径', () => copyText(project.root, 'Project 路径已复制。'), 'secondary-button compact-button'),
           actionButton('详情', () => navigate(`#/projects/${encodeURIComponent(project.id)}`), 'secondary-button compact-button'),
-          rooms.length === 0 ? projectRemovalButton(project, 0, true) : null,
+          projectRemovalButton(project, rooms.length, true),
           actionButton('＋ Room', () => openRoomDialog(project.id), 'primary-button compact-button', !project.available)
         )
       ),
@@ -518,8 +533,7 @@
       project.diagnostic ? node('div', { className: 'callout danger', style: 'margin: 12px 14px 0' }, node('strong', { textContent: '路径诊断' }), node('span', { textContent: project.diagnostic })) : null,
       visibleRooms.length
         ? node('div', { className: 'room-list' }, ...visibleRooms.map((room) => renderRoomRow(room, model.runtimeByRoom.get(room.id))))
-        : emptyState('◇', state.filters.showArchived ? '此 Project 尚无 Room' : '此 Project 尚无活动 Room', project.available ? '创建一个 Room，绑定 Claude 与 Codex。' : '修复 Project 路径后才能创建 Room。', true,
-          project.available ? actionButton('创建 Room', () => openRoomDialog(project.id), 'secondary-button compact-button') : null)
+        : emptyState('◇', emptyRoomTitle, emptyRoomDescription, true, emptyRoomAction)
     );
   }
 
