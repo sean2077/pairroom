@@ -161,6 +161,48 @@ func TestManagementShellAuthenticationAssetsAndSecurityHeaders(t *testing.T) {
 	}
 }
 
+func TestManagementPollingSkipsUnchangedSnapshotRenders(t *testing.T) {
+	registry, _ := testRegistry(t, testGitRepo(t))
+	server, _ := newManagementTestServer(t, registry, SyntheticProvisioner{})
+
+	asset := httptest.NewRecorder()
+	server.Handler().ServeHTTP(asset, managementRequest(http.MethodGet, "/management.js", "", false))
+	if asset.Code != http.StatusOK {
+		t.Fatalf("management asset status=%d body=%s", asset.Code, asset.Body.String())
+	}
+	for _, marker := range []string{
+		"renderedSnapshotKey: ''",
+		"delete renderableSnapshot.generated_at;",
+		"if (renderableRuntime.busy) delete renderableRuntime.last_used_at;",
+		"const snapshotChanged = nextRenderKey !== state.renderedSnapshotKey;",
+		"const showProgress = notify || forceRender;",
+		"if (forceRender || snapshotChanged) {",
+		"window.dispatchEvent(new Event('pairroom:management-render-pending'));",
+		"state.renderedSnapshotKey = snapshotRenderKey(state.snapshot);",
+	} {
+		if !strings.Contains(asset.Body.String(), marker) {
+			t.Fatalf("management polling regression guard omitted %q", marker)
+		}
+	}
+	for _, forbidden := range []string{
+		"updateChrome();\n      if (forceRender || canRenderNow()) {",
+		"if (state.refreshPromise) return state.refreshPromise;\n    $('refresh-button').classList.add('spinning');",
+	} {
+		if strings.Contains(asset.Body.String(), forbidden) {
+			t.Fatalf("management polling retained unconditional refresh behavior %q", forbidden)
+		}
+	}
+
+	uxAsset := httptest.NewRecorder()
+	server.Handler().ServeHTTP(uxAsset, managementRequest(http.MethodGet, "/management-ux.js", "", false))
+	if uxAsset.Code != http.StatusOK {
+		t.Fatalf("management UX asset status=%d body=%s", uxAsset.Code, uxAsset.Body.String())
+	}
+	if marker := "window.addEventListener('pairroom:management-render-pending'"; !strings.Contains(uxAsset.Body.String(), marker) {
+		t.Fatalf("management UX deferred-refresh guard omitted %q", marker)
+	}
+}
+
 func TestManagementProjectCardsKeepUnavailableRemovalReachable(t *testing.T) {
 	registry, _ := testRegistry(t, testGitRepo(t))
 	server, _ := newManagementTestServer(t, registry, SyntheticProvisioner{})
