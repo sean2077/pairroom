@@ -14,6 +14,7 @@
 ### Fixed
 
 - Management Shell Project cards now keep maintenance actions visible for unavailable worktrees, expose retained and archived Room blockers, and let empty Projects whose local path was deleted use the existing Registry-only unregister flow.
+- Missing Room data directories are no longer recreated as partial Event Logs during archive; the Management archive/delete flow now archives only the Registry projection when the whole data directory is already absent, recognizes and removes narrowly validated archive stubs left by affected versions, and completes cleanup as `already_missing`.
 
 ## [v1.0.0] — 2026-08-18
 

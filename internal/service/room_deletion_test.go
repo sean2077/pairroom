@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/store"
 )
 
 type roomDeletionTestProvisioner struct{ suffix string }
@@ -76,6 +77,49 @@ func roomDeletionTestRegistry(t *testing.T, suffix string) (*Registry, Project, 
 	return registry, project, room
 }
 
+// roomDeletionTestInstallArchiveStub reproduces the on-disk artifact created by
+// PairRoom versions that opened a missing lifecycle store in create mode. The
+// Registry checkpoint recorded the archive, but the replacement Event Log had
+// no room.created or service.room.provisioned identity facts.
+func roomDeletionTestInstallArchiveStub(t *testing.T, registry *Registry, room Room) Room {
+	t.Helper()
+	if err := os.RemoveAll(room.DataDir); err != nil {
+		t.Fatal(err)
+	}
+	eventStore, err := store.Open(room.DataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedAt := registry.now()
+	event, err := model.NewEvent(room.ID, EventRoomArchived, model.ActorSystem, roomLifecyclePayload{
+		Lifecycle: RoomArchived,
+		UpdatedAt: updatedAt,
+	})
+	if err != nil {
+		_ = eventStore.Close()
+		t.Fatal(err)
+	}
+	if err := eventStore.Append(&event); err != nil {
+		_ = eventStore.Close()
+		t.Fatal(err)
+	}
+	if err := eventStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	registry.mu.Lock()
+	archived := cloneRoom(registry.rooms[room.ID])
+	archived.Lifecycle = RoomArchived
+	archived.UpdatedAt = updatedAt
+	registry.rooms[room.ID] = cloneRoom(archived)
+	_, checkpointErr := registry.writeCheckpointLocked()
+	registry.mu.Unlock()
+	if checkpointErr != nil {
+		t.Fatal(checkpointErr)
+	}
+	return archived
+}
+
 func TestRoomDeletionQuarantineIsCreatedLazily(t *testing.T) {
 	ctx := context.Background()
 	registry, _, room := roomDeletionTestRegistry(t, "lazy-quarantine")
@@ -109,6 +153,258 @@ func TestRemoveRoomRequiresArchivedLifecycle(t *testing.T) {
 	}
 	if _, err := os.Stat(room.DataDir); err != nil {
 		t.Fatalf("active Room data changed: %v", err)
+	}
+}
+
+func TestArchiveMissingRoomDataDoesNotRecreateGhostAndAllowsRemoval(t *testing.T) {
+	ctx := context.Background()
+	registry, project, room := roomDeletionTestRegistry(t, "already-missing")
+	if err := os.RemoveAll(room.DataDir); err != nil {
+		t.Fatal(err)
+	}
+
+	archived, err := registry.ArchiveRoom(ctx, room.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !archived.Archived() {
+		t.Fatalf("missing-data Room was not archived: %#v", archived)
+	}
+	if _, err := os.Lstat(room.DataDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("archive recreated missing Room data: %v", err)
+	}
+
+	result, err := registry.RemoveRoom(ctx, room.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RoomID != room.ID || result.ProjectID != project.ID || result.DataDisposition != RoomDataAlreadyMissing || result.CleanupDiagnostic != "" {
+		t.Fatalf("unexpected missing-data removal result: %#v", result)
+	}
+	if _, ok := registry.Room(room.ID); ok {
+		t.Fatal("missing-data Room remained indexed")
+	}
+	for _, binding := range room.Bindings {
+		if owner, ok := registry.BindingOwner(binding.Key()); ok {
+			t.Fatalf("binding %s remained owned by %s", binding.Agent, owner)
+		}
+	}
+	if _, err := os.Lstat(registry.deletedRoomsRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("already-missing cleanup created a quarantine directory: %v", err)
+	}
+	if _, err := registry.RemoveProject(ctx, project.ID); err != nil {
+		t.Fatalf("missing-data Room did not unblock Project removal: %v", err)
+	}
+
+	reopened, err := OpenRegistry(ctx, RegistryConfig{Root: registry.Root()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reopened.Room(room.ID); ok {
+		t.Fatal("missing-data Room returned after restart")
+	}
+	if _, ok := reopened.Project(project.ID); ok {
+		t.Fatal("Project returned after missing-data cleanup")
+	}
+}
+
+func TestOpenRegistryRecoversArchivedRoomWhoseDataDirectoryIsMissing(t *testing.T) {
+	ctx := context.Background()
+	registry, project, room := roomDeletionTestRegistry(t, "missing-data-restart")
+	if err := os.RemoveAll(room.DataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.ArchiveRoom(ctx, room.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := OpenRegistry(ctx, RegistryConfig{Root: registry.Root()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, ok := reopened.Room(room.ID)
+	if !ok || !recovered.Archived() || recovered.DataDir != room.DataDir {
+		t.Fatalf("missing-data archive was not recovered for explicit cleanup: %#v ok=%v", recovered, ok)
+	}
+	for _, binding := range recovered.Bindings {
+		if owner, ok := reopened.BindingOwner(binding.Key()); !ok || owner != room.ID {
+			t.Fatalf("recovered binding %s is owned by %q ok=%v", binding.Agent, owner, ok)
+		}
+	}
+	result, err := reopened.RemoveRoom(ctx, room.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DataDisposition != RoomDataAlreadyMissing {
+		t.Fatalf("unexpected restarted missing-data removal: %#v", result)
+	}
+	if _, err := reopened.RemoveProject(ctx, project.ID); err != nil {
+		t.Fatalf("restarted missing-data cleanup did not unblock Project removal: %v", err)
+	}
+}
+
+func TestArchiveRoomFailsClosedWhenOnlyEventLogIsMissing(t *testing.T) {
+	registry, _, room := roomDeletionTestRegistry(t, "missing-event-log")
+	if err := os.Remove(filepath.Join(room.DataDir, "events.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := registry.ArchiveRoom(context.Background(), room.ID)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ArchiveRoom error=%v want os.ErrNotExist", err)
+	}
+	projected, ok := registry.Room(room.ID)
+	if !ok || projected.Archived() {
+		t.Fatalf("partial data loss changed Room lifecycle: %#v ok=%v", projected, ok)
+	}
+	if info, statErr := os.Stat(room.DataDir); statErr != nil || !info.IsDir() {
+		t.Fatalf("partial data loss changed Room directory: info=%v err=%v", info, statErr)
+	}
+	if err := registry.Healthy(); err != nil {
+		t.Fatalf("partial data loss poisoned Registry: %v", err)
+	}
+}
+
+func TestArchiveMissingRoomDataRollsBackBeforeCheckpointPublication(t *testing.T) {
+	ctx := context.Background()
+	registry, _, room := roomDeletionTestRegistry(t, "missing-checkpoint-rollback")
+	if err := os.RemoveAll(room.DataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(registry.checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(registry.checkpoint, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := registry.ArchiveRoom(ctx, room.ID)
+	if err == nil || !strings.Contains(err.Error(), "persist Room archive for missing data directory") {
+		t.Fatalf("ArchiveRoom error=%v want checkpoint publication failure", err)
+	}
+	projected, ok := registry.Room(room.ID)
+	if !ok || projected.Archived() {
+		t.Fatalf("pre-publication failure did not roll back lifecycle: %#v ok=%v", projected, ok)
+	}
+	if _, err := os.Lstat(room.DataDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed archive recreated missing Room data: %v", err)
+	}
+	if err := registry.Healthy(); err != nil {
+		t.Fatalf("pre-publication failure poisoned Registry: %v", err)
+	}
+
+	if err := os.RemoveAll(registry.checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.ArchiveRoom(ctx, room.ID); err != nil {
+		t.Fatalf("archive did not recover after checkpoint repair: %v", err)
+	}
+	result, err := registry.RemoveRoom(ctx, room.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DataDisposition != RoomDataAlreadyMissing {
+		t.Fatalf("unexpected recovered removal result: %#v", result)
+	}
+}
+
+func TestRemoveRoomCleansArchiveStubCreatedByPreviousVersion(t *testing.T) {
+	ctx := context.Background()
+	registry, project, room := roomDeletionTestRegistry(t, "archive-stub")
+	archived := roomDeletionTestInstallArchiveStub(t, registry, room)
+	if !archived.Archived() {
+		t.Fatalf("test archive stub did not archive Registry projection: %#v", archived)
+	}
+	entries, err := os.ReadDir(room.DataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("archive stub contains unexpected entries: %#v", entries)
+	}
+
+	result, err := registry.RemoveRoom(ctx, room.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DataDisposition != RoomDataAlreadyMissing || result.CleanupDiagnostic != "" {
+		t.Fatalf("unexpected archive-stub removal result: %#v", result)
+	}
+	if _, err := os.Lstat(room.DataDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("archive stub remained after cleanup: %v", err)
+	}
+	if _, ok := registry.Room(room.ID); ok {
+		t.Fatal("archive-stub Room remained indexed")
+	}
+	quarantineEntries, err := os.ReadDir(registry.deletedRoomsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(quarantineEntries) != 0 {
+		t.Fatalf("archive-stub cleanup left quarantine entries: %#v", quarantineEntries)
+	}
+	if _, err := registry.RemoveProject(ctx, project.ID); err != nil {
+		t.Fatalf("archive-stub cleanup did not unblock Project removal: %v", err)
+	}
+}
+
+func TestOpenRegistryRecoversArchiveStubCreatedByPreviousVersion(t *testing.T) {
+	ctx := context.Background()
+	registry, project, room := roomDeletionTestRegistry(t, "archive-stub-restart")
+	roomDeletionTestInstallArchiveStub(t, registry, room)
+
+	reopened, err := OpenRegistry(ctx, RegistryConfig{Root: registry.Root()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, ok := reopened.Room(room.ID)
+	if !ok || !recovered.Archived() || recovered.DataDir != room.DataDir {
+		t.Fatalf("archive stub was not recovered for explicit cleanup: %#v ok=%v", recovered, ok)
+	}
+	result, err := reopened.RemoveRoom(ctx, room.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DataDisposition != RoomDataAlreadyMissing {
+		t.Fatalf("unexpected recovered archive-stub removal: %#v", result)
+	}
+	if _, err := reopened.RemoveProject(ctx, project.ID); err != nil {
+		t.Fatalf("recovered archive-stub cleanup did not unblock Project removal: %v", err)
+	}
+
+	clean, err := OpenRegistry(ctx, RegistryConfig{Root: registry.Root()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := clean.Room(room.ID); ok {
+		t.Fatal("cleaned archive-stub Room returned after restart")
+	}
+	if _, ok := clean.Project(project.ID); ok {
+		t.Fatal("cleaned archive-stub Project returned after restart")
+	}
+}
+
+func TestRemoveRoomRejectsArchiveStubWithUnexpectedData(t *testing.T) {
+	registry, _, room := roomDeletionTestRegistry(t, "archive-stub-extra-data")
+	roomDeletionTestInstallArchiveStub(t, registry, room)
+	extra := filepath.Join(room.DataDir, "do-not-delete.txt")
+	if err := os.WriteFile(extra, []byte("unrecognized data\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := registry.RemoveRoom(context.Background(), room.ID)
+	if err == nil || !strings.Contains(err.Error(), "unexpected entry") {
+		t.Fatalf("RemoveRoom error=%v want guarded archive-stub rejection", err)
+	}
+	projected, ok := registry.Room(room.ID)
+	if !ok || !projected.Archived() {
+		t.Fatalf("rejected archive stub changed Registry projection: %#v ok=%v", projected, ok)
+	}
+	if data, readErr := os.ReadFile(extra); readErr != nil || string(data) != "unrecognized data\n" {
+		t.Fatalf("rejected archive stub did not restore extra data: data=%q err=%v", data, readErr)
+	}
+	if err := registry.Healthy(); err != nil {
+		t.Fatalf("guarded archive-stub rejection poisoned Registry: %v", err)
 	}
 }
 
@@ -853,6 +1149,107 @@ func TestManagementRoomRemovalUsesExplicitAcknowledgementAndCompletesProjectClea
 	})
 	if projectRemoved.Code != http.StatusNoContent {
 		t.Fatalf("Project cleanup status=%d body=%s", projectRemoved.Code, projectRemoved.Body.String())
+	}
+}
+
+func TestManagementCleansRoomWhoseDataDirectoryIsAlreadyMissing(t *testing.T) {
+	ctx := context.Background()
+	registry, project, room := roomDeletionTestRegistry(t, "api-already-missing")
+	if err := os.RemoveAll(room.DataDir); err != nil {
+		t.Fatal(err)
+	}
+	const token = "room-deletion-already-missing-secret"
+	server, _ := newRoomDeletionManagementServer(t, registry, "api-already-missing", token)
+
+	archive := roomDeletionManagementRequest(t, server.Handler(), http.MethodPost, "/api/v1/rooms/"+room.ID+"/archive", token, nil)
+	if archive.Code != http.StatusOK {
+		t.Fatalf("missing-data archive status=%d body=%s", archive.Code, archive.Body.String())
+	}
+	var archived Room
+	if err := json.Unmarshal(archive.Body.Bytes(), &archived); err != nil {
+		t.Fatal(err)
+	}
+	if !archived.Archived() {
+		t.Fatalf("missing-data API archive returned %#v", archived)
+	}
+	if _, err := os.Lstat(room.DataDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Management archive recreated missing Room data: %v", err)
+	}
+
+	removed := roomDeletionManagementRequest(t, server.Handler(), http.MethodPost, "/api/v1/rooms/batch-delete", token, map[string]any{
+		"room_ids":              []string{room.ID},
+		"acknowledge_data_loss": true,
+	})
+	if removed.Code != http.StatusOK {
+		t.Fatalf("missing-data batch deletion status=%d body=%s", removed.Code, removed.Body.String())
+	}
+	var result RoomBatchRemovalResult
+	if err := json.Unmarshal(removed.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Succeeded != 1 || result.Failed != 0 || len(result.Results) != 1 {
+		t.Fatalf("unexpected missing-data batch result: %#v", result)
+	}
+	item := result.Results[0]
+	if item.Status != "deleted" || item.Removal == nil || item.Removal.DataDisposition != RoomDataAlreadyMissing {
+		t.Fatalf("unexpected missing-data batch item: %#v", item)
+	}
+
+	projectRemoved := roomDeletionManagementRequest(t, server.Handler(), http.MethodDelete, "/api/v1/projects/"+project.ID, token, map[string]string{
+		"confirm_project_id": project.ID,
+	})
+	if projectRemoved.Code != http.StatusNoContent {
+		t.Fatalf("Project cleanup status=%d body=%s", projectRemoved.Code, projectRemoved.Body.String())
+	}
+	if _, err := os.Lstat(room.DataDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cleanup recreated missing Room data: %v", err)
+	}
+
+	reopened, err := OpenRegistry(ctx, RegistryConfig{Root: registry.Root()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reopened.Room(room.ID); ok {
+		t.Fatal("Management-cleaned Room returned after restart")
+	}
+	if _, ok := reopened.Project(project.ID); ok {
+		t.Fatal("Management-cleaned Project returned after restart")
+	}
+}
+
+func TestManagementCleansArchiveStubCreatedByPreviousVersion(t *testing.T) {
+	registry, project, room := roomDeletionTestRegistry(t, "api-archive-stub")
+	roomDeletionTestInstallArchiveStub(t, registry, room)
+	const token = "room-deletion-archive-stub-secret"
+	server, _ := newRoomDeletionManagementServer(t, registry, "api-archive-stub", token)
+
+	removed := roomDeletionManagementRequest(t, server.Handler(), http.MethodPost, "/api/v1/rooms/batch-delete", token, map[string]any{
+		"room_ids":              []string{room.ID},
+		"acknowledge_data_loss": true,
+	})
+	if removed.Code != http.StatusOK {
+		t.Fatalf("archive-stub batch deletion status=%d body=%s", removed.Code, removed.Body.String())
+	}
+	var result RoomBatchRemovalResult
+	if err := json.Unmarshal(removed.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Succeeded != 1 || result.Failed != 0 || len(result.Results) != 1 {
+		t.Fatalf("unexpected archive-stub batch result: %#v", result)
+	}
+	item := result.Results[0]
+	if item.Status != "deleted" || item.Removal == nil || item.Removal.DataDisposition != RoomDataAlreadyMissing {
+		t.Fatalf("unexpected archive-stub batch item: %#v", item)
+	}
+	if _, err := os.Lstat(room.DataDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Management archive-stub cleanup left Room data: %v", err)
+	}
+
+	projectRemoved := roomDeletionManagementRequest(t, server.Handler(), http.MethodDelete, "/api/v1/projects/"+project.ID, token, map[string]string{
+		"confirm_project_id": project.ID,
+	})
+	if projectRemoved.Code != http.StatusNoContent {
+		t.Fatalf("Project cleanup after archive stub status=%d body=%s", projectRemoved.Code, projectRemoved.Body.String())
 	}
 }
 

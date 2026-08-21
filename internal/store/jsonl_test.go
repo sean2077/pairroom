@@ -2,8 +2,10 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -43,6 +45,99 @@ func TestAppendLoadAndSequence(t *testing.T) {
 	}
 	if len(events) != 2 || events[0].Kind != "one" || events[1].Kind != "two" {
 		t.Fatalf("unexpected replay: %#v", events)
+	}
+}
+
+func TestOpenExistingDoesNotCreateMissingStore(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	missing := filepath.Join(root, "missing")
+	if _, err := OpenExisting(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("OpenExisting missing directory error=%v want os.ErrNotExist", err)
+	}
+	if _, err := os.Lstat(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("OpenExisting recreated missing directory: %v", err)
+	}
+
+	empty := filepath.Join(root, "empty")
+	if err := os.Mkdir(empty, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenExisting(empty); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("OpenExisting missing event log error=%v want os.ErrNotExist", err)
+	}
+	for _, name := range []string{"events.jsonl", "metadata.json"} {
+		if _, err := os.Lstat(filepath.Join(empty, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("OpenExisting created %s in an unpublished store: %v", name, err)
+		}
+	}
+}
+
+func TestOpenExistingReopensPublishedStore(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	created, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := model.NewEvent("room-1", "first", model.ActorUser, map[string]string{"ok": "yes"})
+	if err := created.Append(&first); err != nil {
+		t.Fatal(err)
+	}
+	if err := created.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := OpenExisting(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	second, _ := model.NewEvent("room-1", "second", model.ActorCodex, map[string]string{"ok": "yes"})
+	if err := reopened.Append(&second); err != nil {
+		t.Fatal(err)
+	}
+	events, err := reopened.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Kind != "first" || events[1].Kind != "second" || events[1].Seq != 2 {
+		t.Fatalf("unexpected OpenExisting replay: %#v", events)
+	}
+}
+
+func TestOpenExistingRejectsSymlinkedStorePaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation commonly requires elevated Windows privileges")
+	}
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	created, err := Open(targetDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := created.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dirLink := filepath.Join(t.TempDir(), "store-link")
+	if err := os.Symlink(targetDir, dirLink); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenExisting(dirLink); err == nil || !strings.Contains(err.Error(), "not a real directory") {
+		t.Fatalf("OpenExisting symlinked directory error=%v want real-directory rejection", err)
+	}
+
+	eventDir := t.TempDir()
+	eventTarget := filepath.Join(t.TempDir(), "events-target.jsonl")
+	if err := os.WriteFile(eventTarget, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(eventTarget, filepath.Join(eventDir, "events.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenExisting(eventDir); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("OpenExisting symlinked event log error=%v want regular-file rejection", err)
 	}
 }
 

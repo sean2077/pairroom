@@ -26,17 +26,51 @@ type JSONLStore struct {
 }
 
 func Open(dir string) (*JSONLStore, error) {
+	return open(dir, true)
+}
+
+// OpenExisting opens an already-published event store without creating a
+// missing data directory or events.jsonl. Lifecycle mutations use this stricter
+// boundary so external data loss cannot be mistaken for a new empty Room.
+func OpenExisting(dir string) (*JSONLStore, error) {
+	return open(dir, false)
+}
+
+func open(dir string, create bool) (*JSONLStore, error) {
 	if dir == "" {
 		return nil, errors.New("data directory is required")
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("create data directory: %w", err)
+	if create {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("create data directory: %w", err)
+		}
+	} else {
+		info, err := os.Lstat(dir)
+		if err != nil {
+			return nil, fmt.Errorf("stat data directory: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return nil, fmt.Errorf("data path is not a real directory: %s", dir)
+		}
 	}
 	path := filepath.Join(dir, "events.jsonl")
-	if err := repairEventLog(path); err != nil {
+	if !create {
+		info, err := os.Lstat(path)
+		if err != nil {
+			return nil, fmt.Errorf("stat event log: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("event log is not a regular file: %s", path)
+		}
+	}
+	if err := repairEventLog(path, create); err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	flags := os.O_RDWR | os.O_APPEND
+	if create {
+		flags |= os.O_CREATE
+	}
+	file, err := os.OpenFile(path, flags, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open event log: %w", err)
 	}
@@ -62,8 +96,12 @@ func Open(dir string) (*JSONLStore, error) {
 // valid event onto the broken object. We truncate only an invalid unterminated
 // final line. A valid final object without a newline is normalized by adding
 // one. Corruption before the final line remains a hard error.
-func repairEventLog(path string) error {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+func repairEventLog(path string, create bool) error {
+	flags := os.O_RDWR
+	if create {
+		flags |= os.O_CREATE
+	}
+	file, err := os.OpenFile(path, flags, 0o600)
 	if err != nil {
 		return fmt.Errorf("open event log for repair: %w", err)
 	}

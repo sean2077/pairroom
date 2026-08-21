@@ -132,6 +132,15 @@ func OpenRegistry(ctx context.Context, cfg RegistryConfig) (*Registry, error) {
 	// have a Room. Room facts and binding ownership are always rebuilt from Room
 	// Event Logs below; a missing or corrupt checkpoint is therefore recoverable.
 	registry.loadCheckpointProjects()
+	// PairRoom versions before the missing-data archive fix could replace an
+	// externally deleted managed Room with a tiny lifecycle-only Event Log. The
+	// fixed archive path can also hold an archived projection while the whole
+	// directory remains absent. Neither state has independently materializable
+	// facts, so recover only from a fully validated checkpoint and keep the Room
+	// visible until the user explicitly completes permanent cleanup.
+	if err := registry.recoverArchivedRoomsWithoutFactsFromCheckpoint(); err != nil {
+		return nil, fmt.Errorf("recover archived Rooms without Event Log facts: %w", err)
+	}
 	if err := registry.scanRooms(ctx); err != nil {
 		return nil, err
 	}
@@ -317,6 +326,22 @@ func (r *Registry) scanRooms(ctx context.Context) error {
 			continue
 		}
 		seen[dir] = struct{}{}
+		if existing, ok := r.rooms[filepath.Base(dir)]; ok && filepath.Clean(existing.DataDir) == dir {
+			// A lifecycle-only archive stub can be recovered from the trusted
+			// checkpoint immediately before this normal Event Log scan. It has no
+			// room.created/provisioned fact to replay. Revalidate it after recovery
+			// so a path replacement race fails closed rather than being skipped.
+			state := inspectedDeletionEntry{
+				data: dir,
+				intent: roomDeletionIntent{
+					RoomID: existing.ID, ProjectID: existing.ProjectID,
+				},
+			}
+			if err := r.verifyMissingRoomArchiveStub(state); err != nil {
+				return fmt.Errorf("revalidate recovered archive stub %s: %w", dir, err)
+			}
+			continue
+		}
 		room, project, found, err := r.readRoomFacts(ctx, dir)
 		if err != nil {
 			return fmt.Errorf("rebuild room %s: %w", dir, err)
