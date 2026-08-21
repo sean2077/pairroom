@@ -2133,7 +2133,8 @@
     void addImageFiles(files);
   });
   document.addEventListener('keydown', (event) => {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'k') {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'k' &&
+      !$('image-lightbox').open && !document.querySelector('dialog[open]')) {
       event.preventDefault();
       $('message-search').focus();
     }

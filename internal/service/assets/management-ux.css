@@ -1,0 +1,409 @@
+/* Management Shell interaction layer: command navigation, mobile primary
+   navigation, stronger focus treatment, and low-noise state feedback. */
+:root {
+  --management-ux-ease: cubic-bezier(.2, .75, .2, 1);
+  --management-mobile-nav-height: 68px;
+}
+
+/* Shared accessibility utility used by injected labels and status text. */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.management-skip-link {
+  position: fixed;
+  z-index: 120;
+  top: 8px;
+  left: 12px;
+  translate: 0 -160%;
+  padding: 9px 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--bg-raised);
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  box-shadow: var(--shadow-md);
+  transition: translate .16s var(--management-ux-ease);
+}
+.management-skip-link:focus { translate: 0; }
+
+body.management-ux-enhanced :where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 0;
+  box-shadow: var(--focus);
+}
+body.management-ux-enhanced :where(button, a) { -webkit-tap-highlight-color: transparent; }
+body.management-ux-enhanced :where(input, select, textarea) { scroll-margin-block: 110px 90px; }
+
+.management-sync-line {
+  position: fixed;
+  z-index: 80;
+  top: 0;
+  right: 0;
+  left: var(--sidebar-width);
+  height: 2px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: left .22s ease, opacity .16s ease;
+}
+.app-shell.sidebar-collapsed .management-sync-line { left: var(--sidebar-collapsed); }
+.management-sync-line::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 36%;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  translate: -120% 0;
+}
+body.management-is-syncing .management-sync-line { opacity: 1; }
+body.management-is-syncing .management-sync-line::after { animation: management-sync 1.05s ease-in-out infinite; }
+body.management-is-disconnected .management-sync-line { opacity: 1; background: var(--danger); }
+body.management-is-disconnected .management-sync-line::after { display: none; }
+
+body.management-ux-enhanced .topbar {
+  transition: min-height .18s var(--management-ux-ease), box-shadow .18s var(--management-ux-ease), border-color .18s var(--management-ux-ease);
+}
+body.management-ux-enhanced .topbar.management-topbar-scrolled {
+  border-bottom-color: var(--line-strong);
+  box-shadow: 0 10px 28px rgba(15, 22, 36, .09);
+}
+body.management-ux-enhanced .management-command-button {
+  position: relative;
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 760;
+}
+body.management-ux-enhanced .management-command-button::after {
+  content: "K";
+  position: absolute;
+  right: 4px;
+  bottom: 2px;
+  color: var(--subtle);
+  font-size: 7px;
+  font-weight: 800;
+}
+
+body.management-ux-enhanced .primary-nav a {
+  position: relative;
+  transition: border-color .15s var(--management-ux-ease), background .15s var(--management-ux-ease), color .15s var(--management-ux-ease), translate .15s var(--management-ux-ease);
+}
+body.management-ux-enhanced .primary-nav a:hover { translate: 2px 0; }
+body.management-ux-enhanced .primary-nav a[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  top: 11px;
+  bottom: 11px;
+  left: -5px;
+  width: 3px;
+  border-radius: 99px;
+  background: var(--accent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 42%, transparent);
+}
+.app-shell.sidebar-collapsed .primary-nav a[aria-current="page"]::before { left: -2px; }
+
+body.management-ux-enhanced .panel {
+  transition: border-color .18s var(--management-ux-ease), box-shadow .18s var(--management-ux-ease), transform .18s var(--management-ux-ease);
+}
+body.management-ux-enhanced .project-card:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+body.management-ux-enhanced button.stat-card:hover {
+  border-color: color-mix(in srgb, var(--accent-line) 72%, var(--line-strong));
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+body.management-ux-enhanced .room-row {
+  transition: background .14s var(--management-ux-ease), box-shadow .14s var(--management-ux-ease);
+}
+body.management-ux-enhanced .room-row:focus-within {
+  position: relative;
+  z-index: 1;
+  background: color-mix(in srgb, var(--accent-soft) 48%, transparent);
+  box-shadow: inset 3px 0 var(--accent);
+}
+body.management-ux-enhanced .project-path,
+body.management-ux-enhanced .room-meta code,
+body.management-ux-enhanced .detail-path { user-select: all; }
+body.management-ux-enhanced .global-search:focus-within {
+  border-color: var(--accent-line);
+  box-shadow: var(--focus), var(--shadow-sm);
+}
+body.management-ux-enhanced .connection-banner:not([hidden]) { animation: management-banner-in .2s var(--management-ux-ease) both; }
+
+.management-command-dialog {
+  width: min(650px, calc(100vw - 28px));
+  max-width: none;
+  max-height: min(76vh, 680px);
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 18px;
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+}
+.management-command-dialog::backdrop {
+  background: rgba(4, 8, 17, .54);
+  backdrop-filter: blur(7px) saturate(90%);
+}
+.management-command-dialog[open] { animation: management-command-in .18s var(--management-ux-ease) both; }
+.management-command-shell {
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--bg-raised) 97%, transparent);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(28px) saturate(135%);
+}
+.management-command-header {
+  min-height: 64px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+.management-command-symbol { color: var(--accent); font-size: 21px; }
+.management-command-header input {
+  width: 100%;
+  height: 62px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-strong);
+  font-size: 17px;
+  font-weight: 620;
+  letter-spacing: -.01em;
+}
+.management-command-header input::placeholder { color: var(--subtle); font-weight: 520; }
+.management-command-header > kbd,
+.management-command-footer kbd,
+.management-command-item > kbd {
+  padding: 3px 7px;
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--bg-soft);
+  color: var(--muted);
+  font: 9px/1.2 var(--font-mono);
+  white-space: nowrap;
+}
+.management-command-list {
+  max-height: min(55vh, 470px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 7px;
+  scrollbar-gutter: stable;
+}
+.management-command-group {
+  padding: 9px 10px 5px;
+  color: var(--subtle);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.management-command-item {
+  width: 100%;
+  min-height: 55px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.management-command-item[aria-selected="true"] {
+  border-color: color-mix(in srgb, var(--accent-line) 75%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 72%, transparent);
+}
+.management-command-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg-soft);
+  color: var(--accent);
+  font-size: 15px;
+}
+.management-command-item[aria-selected="true"] .management-command-icon {
+  border-color: var(--accent-line);
+  background: var(--bg-raised);
+}
+.management-command-copy { min-width: 0; display: grid; gap: 2px; }
+.management-command-copy strong { overflow: hidden; color: var(--text-strong); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.management-command-copy small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.management-command-empty { min-height: 190px; display: grid; place-content: center; gap: 5px; padding: 20px; text-align: center; }
+.management-command-empty strong { color: var(--text-strong); }
+.management-command-empty span { color: var(--muted); font-size: 11px; }
+.management-command-footer {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 7px 14px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg-soft) 55%, transparent);
+  color: var(--subtle);
+  font-size: 9px;
+}
+.management-command-footer span { display: inline-flex; align-items: center; gap: 4px; }
+
+.management-mobile-nav { display: none; }
+.management-chord-hint {
+  position: fixed;
+  z-index: 95;
+  right: 22px;
+  bottom: 22px;
+  max-width: calc(100vw - 44px);
+  padding: 9px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-raised) 95%, transparent);
+  color: var(--muted);
+  font: 10px/1.4 var(--font-mono);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(18px);
+  animation: management-chord-in .14s var(--management-ux-ease) both;
+}
+.management-chord-hint[hidden] { display: none; }
+
+body.management-ux-enhanced ::-webkit-scrollbar { width: 10px; height: 10px; }
+body.management-ux-enhanced ::-webkit-scrollbar-track { background: transparent; }
+body.management-ux-enhanced ::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--subtle) 48%, transparent);
+  background-clip: padding-box;
+}
+body.management-ux-enhanced ::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--muted) 68%, transparent); }
+
+@keyframes management-sync {
+  0% { translate: -130% 0; }
+  100% { translate: 390% 0; }
+}
+@keyframes management-command-in {
+  from { opacity: 0; transform: translateY(-10px) scale(.985); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes management-banner-in {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes management-chord-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (max-width: 1120px) {
+  body.management-ux-enhanced .topbar-actions { gap: 7px; }
+  body.management-ux-enhanced .logout-button { display: none; }
+}
+
+@media (max-width: 900px) {
+  .management-sync-line,
+  .app-shell.sidebar-collapsed .management-sync-line { left: 0; }
+  body.management-ux-enhanced .workspace-shell { padding-bottom: var(--management-mobile-nav-height); }
+  body.management-ux-enhanced .workspace-footer { margin-bottom: 0; }
+  .management-mobile-nav {
+    position: fixed;
+    z-index: 24;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    min-height: var(--management-mobile-nav-height);
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    padding: 6px max(8px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+    border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--surface-glass) 96%, transparent);
+    box-shadow: 0 -12px 32px rgba(16, 22, 36, .10);
+    backdrop-filter: blur(22px) saturate(135%);
+  }
+  .management-mobile-nav a {
+    position: relative;
+    min-width: 0;
+    min-height: 50px;
+    display: grid;
+    place-items: center;
+    align-content: center;
+    gap: 2px;
+    border-radius: 11px;
+    color: var(--subtle);
+  }
+  .management-mobile-nav a > span { font-size: 18px; line-height: 1; }
+  .management-mobile-nav a > small { max-width: 100%; overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+  .management-mobile-nav a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); }
+  .management-mobile-nav a[aria-current="page"]::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    width: 18px;
+    height: 2px;
+    border-radius: 99px;
+    background: var(--accent);
+  }
+  .management-chord-hint { right: 12px; bottom: calc(var(--management-mobile-nav-height) + 10px); }
+  body.management-ux-enhanced .primary-nav a:hover { translate: none; }
+}
+
+@media (max-width: 680px) {
+  body.management-ux-enhanced .topbar { padding-inline: 12px; }
+  body.management-ux-enhanced .topbar-actions { gap: 5px; }
+  body.management-ux-enhanced .topbar-actions .icon-button { width: 38px; height: 38px; }
+  body.management-ux-enhanced .page-subtitle { display: none; }
+  .management-command-dialog { width: calc(100vw - 16px); max-height: 84vh; }
+  .management-command-shell { border-radius: 15px; }
+  .management-command-header { min-height: 58px; padding-inline: 12px; }
+  .management-command-header input { height: 56px; font-size: 15px; }
+  .management-command-list { max-height: 58vh; padding: 5px; }
+  .management-command-item { min-height: 52px; padding-inline: 8px; }
+  .management-command-footer { gap: 10px; overflow-x: auto; }
+  body.management-ux-enhanced .project-card:hover,
+  body.management-ux-enhanced button.stat-card:hover { transform: none; box-shadow: var(--shadow-sm); }
+}
+
+@media (max-width: 430px) {
+  body.management-ux-enhanced #refresh-button { display: none; }
+  .management-command-footer span:last-child { display: none; }
+  .management-command-item > kbd { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .management-command-dialog[open],
+  .management-chord-hint,
+  body.management-ux-enhanced .connection-banner:not([hidden]) { animation: none; }
+  body.management-ux-enhanced .panel,
+  body.management-ux-enhanced .primary-nav a,
+  body.management-ux-enhanced .topbar,
+  .management-skip-link { transition: none !important; }
+}
+
+@media (forced-colors: active) {
+  .management-command-shell,
+  .management-mobile-nav,
+  .management-command-item[aria-selected="true"] { border: 1px solid CanvasText; }
+  .management-mobile-nav a[aria-current="page"] { outline: 2px solid Highlight; }
+}
