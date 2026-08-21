@@ -326,11 +326,20 @@ func (r *Registry) scanRooms(ctx context.Context) error {
 			continue
 		}
 		seen[dir] = struct{}{}
-		if existing, ok := r.rooms[filepath.Base(dir)]; ok && filepath.Clean(existing.DataDir) == dir {
-			// A lifecycle-only archive stub can be recovered from the trusted
-			// checkpoint immediately before this normal Event Log scan. It has no
-			// room.created/provisioned fact to replay. Revalidate it after recovery
-			// so a path replacement race fails closed rather than being skipped.
+		var recoveredWithoutFacts *Room
+		for _, existing := range r.rooms {
+			if filepath.Clean(existing.DataDir) != dir {
+				continue
+			}
+			room := cloneRoom(existing)
+			recoveredWithoutFacts = &room
+			break
+		}
+		if existing := recoveredWithoutFacts; existing != nil {
+			// Match checkpoint-only archive stubs by their persisted DataDir because
+			// older managed Rooms can predate the durable-ID directory convention.
+			// The stub has no room.created/provisioned fact to replay, so revalidate
+			// it after recovery and fail closed on a path replacement race.
 			state := inspectedDeletionEntry{
 				data: dir,
 				intent: roomDeletionIntent{

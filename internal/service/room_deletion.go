@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/version"
@@ -363,9 +364,6 @@ func (r *Registry) stageManagedRoom(ctx context.Context, room Room) (*stagedMana
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return nil, "", fmt.Errorf("managed Room %s data path is not a real directory: %s", room.ID, source)
 	}
-	if filepath.Base(source) != room.ID {
-		return nil, "", fmt.Errorf("managed Room %s data directory basename does not match its durable ID: %s", room.ID, source)
-	}
 	if _, err := r.roomDeletionQuarantine(true); err != nil {
 		return nil, "", err
 	}
@@ -560,11 +558,18 @@ func validateDeletionIntent(intent roomDeletionIntent) error {
 	if strings.TrimSpace(intent.ProjectID) == "" {
 		return errors.New("Project ID is required")
 	}
-	if intent.SourceBase != intent.RoomID || filepath.Base(intent.SourceBase) != intent.SourceBase || intent.SourceBase == roomDeletionQuarantineName {
-		return errors.New("source basename must exactly match the Room ID")
+	if err := validateManagedRoomSourceBase(intent.SourceBase); err != nil {
+		return err
 	}
 	if intent.CreatedAt.IsZero() {
 		return errors.New("creation time is required")
+	}
+	return nil
+}
+
+func validateManagedRoomSourceBase(sourceBase string) error {
+	if sourceBase == "" || sourceBase != strings.TrimSpace(sourceBase) || sourceBase == "." || sourceBase == ".." || filepath.Base(sourceBase) != sourceBase || sourceBase == roomDeletionQuarantineName || strings.ContainsAny(sourceBase, "/\\") || strings.IndexFunc(sourceBase, unicode.IsControl) >= 0 {
+		return errors.New("source basename is not a safe managed Room directory name")
 	}
 	return nil
 }
@@ -976,7 +981,7 @@ func (r *Registry) trustedCheckpointRooms() (map[string]Room, bool, string) {
 		}
 		if pathWithin(r.roomsRoot, dir) {
 			relative, relErr := filepath.Rel(r.roomsRoot, dir)
-			if relErr != nil || filepath.Dir(relative) != "." || relative != room.ID || relative == roomDeletionQuarantineName {
+			if relErr != nil || filepath.Dir(relative) != "." || validateManagedRoomSourceBase(relative) != nil {
 				return nil, false, fmt.Sprintf("checkpoint Room %s has an invalid managed data directory %s", room.ID, dir)
 			}
 		}
