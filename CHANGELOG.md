@@ -11,6 +11,10 @@
 
 - Native-agent instruction projection now keeps the compact PairRoom bootstrap at the vendor instruction layer, projects Codex through thread `developerInstructions`, and sends dynamic-only per-turn envelopes guarded by byte-budget tests.
 
+### Fixed
+
+- Management Shell Project cards now keep maintenance actions visible for unavailable worktrees, expose retained and archived Room blockers, and let empty Projects whose local path was deleted use the existing Registry-only unregister flow.
+
 ## [v1.0.0] — 2026-08-18
 
 ### Added

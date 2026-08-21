@@ -132,6 +132,44 @@ func TestManagementShellAuthenticationAssetsAndSecurityHeaders(t *testing.T) {
 	}
 }
 
+func TestManagementProjectCardsKeepUnavailableRemovalReachable(t *testing.T) {
+	registry, _ := testRegistry(t, testGitRepo(t))
+	server, _ := newManagementTestServer(t, registry, SyntheticProvisioner{})
+
+	asset := httptest.NewRecorder()
+	server.Handler().ServeHTTP(asset, managementRequest(http.MethodGet, "/management.js", "", false))
+	if asset.Code != http.StatusOK {
+		t.Fatalf("management asset status=%d body=%s", asset.Code, asset.Body.String())
+	}
+	for _, marker := range []string{
+		"projectRemovalButton(project, rooms.length, true)",
+		"本地路径不可用不影响注销此空 Project。",
+		"显示并永久清除已归档 Room 后即可注销 Project。",
+		"显示已归档 Room",
+	} {
+		if !strings.Contains(asset.Body.String(), marker) {
+			t.Fatalf("management asset omitted %q", marker)
+		}
+	}
+	if forbidden := "rooms.length === 0 ? projectRemovalButton"; strings.Contains(asset.Body.String(), forbidden) {
+		t.Fatalf("management asset must not hide Project removal behind %q", forbidden)
+	}
+
+	style := httptest.NewRecorder()
+	server.Handler().ServeHTTP(style, managementRequest(http.MethodGet, "/management.css", "", false))
+	if style.Code != http.StatusOK {
+		t.Fatalf("management stylesheet status=%d body=%s", style.Code, style.Body.String())
+	}
+	for _, marker := range []string{
+		".project-card-header { display: grid; grid-template-columns: auto minmax(0, 1fr);",
+		".project-card-actions { grid-column: 1 / -1; min-width: 0; display: flex; flex-wrap: wrap; justify-content: flex-end;",
+	} {
+		if !strings.Contains(style.Body.String(), marker) {
+			t.Fatalf("management stylesheet omitted %q", marker)
+		}
+	}
+}
+
 func TestManagementBrowserSessionSurvivesBootstrapAndRequiresCSRF(t *testing.T) {
 	registry, _ := testRegistry(t, testGitRepo(t))
 	server, _ := newManagementTestServer(t, registry, SyntheticProvisioner{})

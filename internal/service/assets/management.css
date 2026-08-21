@@ -520,13 +520,13 @@ select { appearance: auto; }
 
 .project-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; }
 .project-card { min-width: 0; overflow: hidden; }
-.project-card-header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 17px; border-bottom: 1px solid var(--line); }
+.project-card-header { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px; padding: 17px; border-bottom: 1px solid var(--line); }
 .project-avatar { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 13px; background: linear-gradient(145deg, var(--accent-soft), var(--bg-soft)); color: var(--accent); font-size: 14px; font-weight: 800; }
 .project-card-title { min-width: 0; }
 .project-card-title > div { display: flex; align-items: center; gap: 7px; }
 .project-card-title h2 { margin: 0; overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
 .project-path { display: block; margin-top: 3px; overflow: hidden; color: var(--muted); font-family: var(--font-mono); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.project-card-actions { display: flex; gap: 7px; }
+.project-card-actions { grid-column: 1 / -1; min-width: 0; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 .project-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; border-bottom: 1px solid var(--line); }
 .project-summary-item { padding: 11px 13px; border-right: 1px solid var(--line); }
 .project-summary-item:last-child { border-right: 0; }
@@ -760,7 +760,7 @@ body[data-density="compact"] .stat-card { min-height: 98px; }
   .stat-value { font-size: 23px; }
   .three-panel-grid { grid-template-columns: 1fr; }
   .project-card-header { grid-template-columns: auto minmax(0, 1fr); }
-  .project-card-actions { grid-column: 1 / -1; }
+  .project-card-actions { justify-content: flex-start; }
   .project-summary { grid-template-columns: repeat(2, 1fr); }
   .project-summary-item:nth-child(2) { border-right: 0; }
   .project-summary-item:nth-child(-n+2) { border-bottom: 1px solid var(--line); }

@@ -333,6 +333,61 @@ func TestManagementProjectRefreshAndRemovalEndpoints(t *testing.T) {
 		}
 	})
 
+	t.Run("missing worktree remains removable", func(t *testing.T) {
+		ctx := context.Background()
+		dataRoot := t.TempDir()
+		repo := testGitRepo(t)
+		registry, err := OpenRegistry(ctx, RegistryConfig{Root: dataRoot})
+		if err != nil {
+			t.Fatal(err)
+		}
+		project, err := registry.RegisterProject(ctx, repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		server, _ := newManagementTestServer(t, registry, SyntheticProvisioner{})
+
+		if err := os.RemoveAll(repo); err != nil {
+			t.Fatal(err)
+		}
+		refresh := httptest.NewRecorder()
+		server.Handler().ServeHTTP(refresh, managementRequest(http.MethodPost, "/api/v1/projects/"+project.ID+"/refresh", "", true))
+		if refresh.Code != http.StatusOK {
+			t.Fatalf("refresh missing worktree status=%d body=%s", refresh.Code, refresh.Body.String())
+		}
+		var unavailable Project
+		if err := json.Unmarshal(refresh.Body.Bytes(), &unavailable); err != nil {
+			t.Fatal(err)
+		}
+		if unavailable.Available || unavailable.Diagnostic == "" {
+			t.Fatalf("missing worktree was not reported unavailable: %#v", unavailable)
+		}
+		if _, err := os.Stat(repo); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("refresh recreated or changed missing worktree: %v", err)
+		}
+
+		removed := httptest.NewRecorder()
+		body := `{"confirm_project_id":"` + project.ID + `"}`
+		server.Handler().ServeHTTP(removed, managementRequest(http.MethodDelete, "/api/v1/projects/"+project.ID, body, true))
+		if removed.Code != http.StatusNoContent || removed.Body.Len() != 0 {
+			t.Fatalf("remove missing-worktree Project status=%d body=%s", removed.Code, removed.Body.String())
+		}
+		if _, ok := registry.Project(project.ID); ok {
+			t.Fatal("missing-worktree Project remained registered")
+		}
+		if _, err := os.Stat(repo); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("removal recreated or changed missing worktree: %v", err)
+		}
+
+		reopened, err := OpenRegistry(ctx, RegistryConfig{Root: dataRoot})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := reopened.Project(project.ID); ok {
+			t.Fatal("missing-worktree Project returned after Registry restart")
+		}
+	})
+
 	t.Run("retained Room conflict is structured", func(t *testing.T) {
 		registry, project := testRegistry(t, testGitRepo(t))
 		room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{

@@ -81,6 +81,9 @@ func (r *Registry) RemoveProject(ctx context.Context, projectID string) (Project
 		return Project{}, &ProjectHasRoomsError{ProjectID: projectID, RoomIDs: roomIDs}
 	}
 
+	// Removal is keyed only by the persisted Registry identity. Deliberately do
+	// not resolve or stat project.Root here: unavailable or deleted worktrees
+	// must remain removable from the control plane.
 	indexedID, indexed := r.projectByRoot[project.Root]
 	if !indexed || indexedID != project.ID {
 		return Project{}, r.poisonLocked(fmt.Errorf("project root index is inconsistent for %s at %s", project.ID, project.Root))
