@@ -77,6 +77,23 @@ func roomDeletionTestRegistry(t *testing.T, suffix string) (*Registry, Project, 
 	return registry, project, room
 }
 
+func roomDeletionTestMoveToLegacyManagedDir(t *testing.T, registry *Registry, room Room, name string) Room {
+	t.Helper()
+	legacyDir := filepath.Join(registry.roomsRoot, name)
+	if err := os.Rename(room.DataDir, legacyDir); err != nil {
+		t.Fatal(err)
+	}
+	room.DataDir = legacyDir
+	registry.mu.Lock()
+	registry.rooms[room.ID] = cloneRoom(room)
+	published, checkpointErr := registry.writeCheckpointLocked()
+	registry.mu.Unlock()
+	if checkpointErr != nil || !published {
+		t.Fatalf("persist legacy managed Room projection: published=%v err=%v", published, checkpointErr)
+	}
+	return room
+}
+
 // roomDeletionTestInstallArchiveStub reproduces the on-disk artifact created by
 // PairRoom versions that opened a missing lifecycle store in create mode. The
 // Registry checkpoint recorded the archive, but the replacement Event Log had
@@ -243,6 +260,35 @@ func TestOpenRegistryRecoversArchivedRoomWhoseDataDirectoryIsMissing(t *testing.
 	}
 }
 
+func TestOpenRegistryRecoversArchivedLegacyManagedRoomWhoseDataDirectoryIsMissing(t *testing.T) {
+	ctx := context.Background()
+	registry, _, room := roomDeletionTestRegistry(t, "legacy-managed-missing-restart")
+	archived, err := registry.ArchiveRoom(ctx, room.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archived = roomDeletionTestMoveToLegacyManagedDir(t, registry, archived, "readable-type-missing")
+	if err := os.RemoveAll(archived.DataDir); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := OpenRegistry(ctx, RegistryConfig{Root: registry.Root()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, ok := reopened.Room(room.ID)
+	if !ok || !recovered.Archived() || recovered.DataDir != archived.DataDir {
+		t.Fatalf("legacy managed missing-data Room was not recovered: %#v ok=%v", recovered, ok)
+	}
+	result, err := reopened.RemoveRoom(ctx, room.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DataDisposition != RoomDataAlreadyMissing {
+		t.Fatalf("data disposition=%q want %q", result.DataDisposition, RoomDataAlreadyMissing)
+	}
+}
+
 func TestArchiveRoomFailsClosedWhenOnlyEventLogIsMissing(t *testing.T) {
 	registry, _, room := roomDeletionTestRegistry(t, "missing-event-log")
 	if err := os.Remove(filepath.Join(room.DataDir, "events.jsonl")); err != nil {
@@ -384,6 +430,29 @@ func TestOpenRegistryRecoversArchiveStubCreatedByPreviousVersion(t *testing.T) {
 	}
 }
 
+func TestOpenRegistryRecoversLegacyManagedArchiveStub(t *testing.T) {
+	ctx := context.Background()
+	registry, _, room := roomDeletionTestRegistry(t, "legacy-managed-stub-restart")
+	room = roomDeletionTestMoveToLegacyManagedDir(t, registry, room, "readable-type-stub")
+	roomDeletionTestInstallArchiveStub(t, registry, room)
+
+	reopened, err := OpenRegistry(ctx, RegistryConfig{Root: registry.Root()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, ok := reopened.Room(room.ID)
+	if !ok || !recovered.Archived() || recovered.DataDir != room.DataDir {
+		t.Fatalf("legacy managed archive stub was not recovered: %#v ok=%v", recovered, ok)
+	}
+	result, err := reopened.RemoveRoom(ctx, room.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DataDisposition != RoomDataAlreadyMissing {
+		t.Fatalf("data disposition=%q want %q", result.DataDisposition, RoomDataAlreadyMissing)
+	}
+}
+
 func TestRemoveRoomRejectsArchiveStubWithUnexpectedData(t *testing.T) {
 	registry, _, room := roomDeletionTestRegistry(t, "archive-stub-extra-data")
 	roomDeletionTestInstallArchiveStub(t, registry, room)
@@ -465,6 +534,55 @@ func TestRemoveManagedRoomDeletesDataReleasesBindingsAndUnblocksProject(t *testi
 	}
 	if _, ok := reopened.Project(project.ID); ok {
 		t.Fatal("removed Project returned after restart")
+	}
+}
+
+func TestRemoveManagedLegacyRoomWhoseDirectoryNameDiffersFromRoomID(t *testing.T) {
+	ctx := context.Background()
+	registry, project, room := roomDeletionTestRegistry(t, "legacy-managed-name")
+	archived, err := registry.ArchiveRoom(ctx, room.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	archived = roomDeletionTestMoveToLegacyManagedDir(t, registry, archived, "readable-type-"+project.ID[len(project.ID)-12:])
+	legacyDir := archived.DataDir
+
+	result, err := registry.RemoveRoom(ctx, room.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DataDisposition != RoomDataDeleted {
+		t.Fatalf("data disposition=%q want %q", result.DataDisposition, RoomDataDeleted)
+	}
+	if _, err := os.Lstat(legacyDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy managed Room data remained after cleanup: %v", err)
+	}
+	for _, binding := range archived.Bindings {
+		if owner, ok := registry.BindingOwner(binding.Key()); ok {
+			t.Fatalf("binding %s remained owned by %s", binding.Agent, owner)
+		}
+	}
+	if _, err := registry.RemoveProject(ctx, project.ID); err != nil {
+		t.Fatalf("legacy managed Room did not unblock Project removal: %v", err)
+	}
+}
+
+func TestValidateDeletionIntentAcceptsLegacyManagedBasenameAndRejectsUnsafeNames(t *testing.T) {
+	valid := roomDeletionIntent{
+		Schema: roomDeletionManifestSchema, RoomID: "room-valid", ProjectID: "project-valid",
+		SourceBase: "readable-type-project123", CreatedAt: time.Now().UTC(),
+	}
+	if err := validateDeletionIntent(valid); err != nil {
+		t.Fatalf("legacy managed basename was rejected: %v", err)
+	}
+
+	for _, sourceBase := range []string{"", ".", "..", roomDeletionQuarantineName, "nested/room", `nested\room`, " leading", "trailing ", "line\nbreak", "tab\tname"} {
+		intent := valid
+		intent.SourceBase = sourceBase
+		if err := validateDeletionIntent(intent); err == nil {
+			t.Errorf("unsafe source basename %q was accepted", sourceBase)
+		}
 	}
 }
 
