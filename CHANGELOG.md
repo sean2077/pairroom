@@ -6,6 +6,7 @@
 
 - Management Shell credential login for direct-origin access, accepting either the configured Service Token or a complete Management URL and exchanging it for the existing HttpOnly browser session without Web Storage persistence.
 - `pairroom protocol` as the deterministic, versioned source of truth for collaboration rules, with actor/role/routing filters and machine-readable JSON output.
+- Responsive Room and Management interaction layers with adjustable Room panels, focus and density controls, mobile drawers and bottom navigation, a Management command palette, keyboard workflows, stronger accessibility semantics, and reduced-motion/high-contrast fallbacks; Management enhancements remain tab-memory-only with no Web Storage writes.
 
 ### Changed
 

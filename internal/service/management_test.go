@@ -78,9 +78,38 @@ func TestManagementShellAuthenticationAssetsAndSecurityHeaders(t *testing.T) {
 		}
 	}
 
+	uxAsset := httptest.NewRecorder()
+	server.Handler().ServeHTTP(uxAsset, managementRequest(http.MethodGet, "/management-ux.js", "", false))
+	if uxAsset.Code != http.StatusOK {
+		t.Fatalf("management UX asset status=%d body=%s", uxAsset.Code, uxAsset.Body.String())
+	}
+	for _, marker := range []string{"management-command-dialog", "management-mobile-nav", "Control+K Meta+K", "flushDeferredRefresh", "installKeyboardNavigation"} {
+		if !strings.Contains(uxAsset.Body.String(), marker) {
+			t.Fatalf("management UX asset omitted %q", marker)
+		}
+	}
+	for _, forbidden := range []string{"localStorage", "sessionStorage"} {
+		if strings.Contains(uxAsset.Body.String(), forbidden) {
+			t.Fatalf("management UX asset must not use %s", forbidden)
+		}
+	}
+
+	uxStyles := httptest.NewRecorder()
+	server.Handler().ServeHTTP(uxStyles, managementRequest(http.MethodGet, "/management-ux.css", "", false))
+	if uxStyles.Code != http.StatusOK {
+		t.Fatalf("management UX styles status=%d body=%s", uxStyles.Code, uxStyles.Body.String())
+	}
+	for _, marker := range []string{".management-command-dialog", ".management-mobile-nav", "@media (max-width: 900px)", "prefers-reduced-motion"} {
+		if !strings.Contains(uxStyles.Body.String(), marker) {
+			t.Fatalf("management UX styles omitted %q", marker)
+		}
+	}
+
 	shell := httptest.NewRecorder()
 	server.Handler().ServeHTTP(shell, managementRequest(http.MethodGet, "/", "", false))
-	if shell.Code != http.StatusOK || !strings.Contains(shell.Body.String(), `id="login-screen"`) ||
+	if shell.Code != http.StatusOK || !strings.Contains(shell.Body.String(), `/management-ux.css`) ||
+		!strings.Contains(shell.Body.String(), `/management-ux.js`) ||
+		!strings.Contains(shell.Body.String(), `id="login-screen"`) ||
 		!strings.Contains(shell.Body.String(), `id="login-form"`) ||
 		!strings.Contains(shell.Body.String(), `id="login-token"`) ||
 		!strings.Contains(shell.Body.String(), `id="login-submit"`) ||

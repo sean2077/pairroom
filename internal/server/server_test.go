@@ -182,7 +182,7 @@ func TestRichConversationAssetsAreEmbedded(t *testing.T) {
 	if index.Code != http.StatusOK {
 		t.Fatalf("index status = %d", index.Code)
 	}
-	for _, marker := range []string{"timeline-scope", "attachment-input", "image-lightbox", "/richtext.js"} {
+	for _, marker := range []string{"timeline-scope", "attachment-input", "image-lightbox", "/richtext.js", "/ux.css", "/ux.js"} {
 		if !strings.Contains(index.Body.String(), marker) {
 			t.Fatalf("index omitted rich-conversation marker %q", marker)
 		}
@@ -203,6 +203,28 @@ func TestRichConversationAssetsAreEmbedded(t *testing.T) {
 	}
 	if strings.Contains(app.Body.String(), "pairroom.token") || strings.Contains(app.Body.String(), "sessionStorage.setItem") {
 		t.Fatal("browser asset must not persist the bootstrap token in Web Storage")
+	}
+
+	ux := httptest.NewRecorder()
+	server.Handler().ServeHTTP(ux, localRequest(http.MethodGet, "/ux.js", nil))
+	if ux.Code != http.StatusOK {
+		t.Fatalf("room UX asset status=%d body=%s", ux.Code, ux.Body.String())
+	}
+	for _, marker := range []string{"pairroom.room.ux.v1", "ux-layout-button", "ux-resizer", "trapDrawerFocus", "Control+K Meta+K"} {
+		if !strings.Contains(ux.Body.String(), marker) {
+			t.Fatalf("room UX asset omitted %q", marker)
+		}
+	}
+
+	uxStyles := httptest.NewRecorder()
+	server.Handler().ServeHTTP(uxStyles, localRequest(http.MethodGet, "/ux.css", nil))
+	if uxStyles.Code != http.StatusOK {
+		t.Fatalf("room UX styles status=%d body=%s", uxStyles.Code, uxStyles.Body.String())
+	}
+	for _, marker := range []string{".ux-layout-menu", ".ux-resizer", "@media (max-width: 1120px)", "prefers-reduced-motion"} {
+		if !strings.Contains(uxStyles.Body.String(), marker) {
+			t.Fatalf("room UX styles omitted %q", marker)
+		}
 	}
 }
 
