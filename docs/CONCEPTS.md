@@ -154,7 +154,7 @@ Management Token 是整个 Service 的高权限控制面凭据，不是某个 Ro
 
 ### Message
 
-用户或 Agent 在 PairRoom 公共时间线中的持久记录。用户消息可以有多个目标，例如同时发给 Claude 和 Codex。未显式选择目标且没有 mention 时，正常 Driver/Reviewer 配置只投递给唯一的当前 Driver；`@all` 仍用于确实需要双侧独立工作的任务。
+用户或 Agent 在 PairRoom 公共时间线中的持久记录。用户消息可以有多个目标，例如同时发给 Claude 和 Codex。显式接收者、角色目标和正文 mention 都优先于回复推断；仅提供 `reply_to` 时，回复 Agent 消息会由 Service 投递回该 Agent。没有这些目标事实时，正常 Driver/Reviewer 配置只投递给唯一的当前 Driver；`@all` 仍用于确实需要双侧独立工作的任务。
 
 Agent 消息还可持久化一个有界 `handoff`：完整 `text` 服务于人类时间线，`handoff` 只携带 Peer 完成下一阶段所需的目标、改动范围、证据、风险和明确问题，避免把长报告重复注入另一侧原生上下文。
 
@@ -191,8 +191,8 @@ Inspector 的工具、命令、计划、Diff、用量和最终结果按 Turn 投
 
 对正在工作的目标，新输入可表达：
 
-- **append/steer**：追加到当前讨论；
-- **next turn**：等待下一个安全 Turn；
+- **append/steer**：追加到当前讨论；发给同一 Agent 时，即使没有 `reply_to`，也会阻止该 Agent 的较旧结果继续自动接力；
+- **next turn**：作为独立任务等待下一个安全 Turn；未显式回复旧消息时，不会使其他讨论的 Agent 结果过期；
 - **supersede**：明确取代旧指令，并收口受影响状态。
 
 取消和重试按目标执行。重试创建新消息并引用原消息，不改写历史。
@@ -218,7 +218,7 @@ Roundtable 受到 `--max-hops`、用户新消息和停止标记限制。Driver/R
 [PAIRROOM:DONE]
 ```
 
-`IMPLEMENTED` 与 `REVIEW_CHANGES` 阶段交接必须同时提供可用的 `[PAIRROOM:HANDOFF]...[/PAIRROOM:HANDOFF]`；缺少证据包、角色不匹配或控制标记冲突时都停止自动转发。这些控制块不显示在公共时间线，`manual` 始终不自动转发。
+`IMPLEMENTED` 与 `REVIEW_CHANGES` 阶段交接必须同时提供可用的 `[PAIRROOM:HANDOFF]...[/PAIRROOM:HANDOFF]`；缺少证据包、角色不匹配或控制标记冲突时都停止自动转发。普通 `mentions` 路由会同时检查可见正文与 handoff 内的明确目标。这些控制块不显示在公共时间线，`manual` 始终不自动转发。
 
 ## 角色与 Workspace
 

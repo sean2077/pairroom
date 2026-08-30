@@ -277,7 +277,7 @@ Goal / Scope / Evidence / Risks / Exact ask
 [/PAIRROOM:HANDOFF]
 ```
 
-Engine 从可见正文中移除该块，将其以有界 `Message.handoff` 持久化，并在普通 Agent→Peer 投递时优先发送 handoff 而不是完整最终报告；没有 handoff 时才使用有界正文回退。Driver 的 `[PAIRROOM:IMPLEMENTED]` 与 Reviewer 的 `[PAIRROOM:REVIEW_CHANGES]` 只有在 handoff 可用、角色匹配、非 `manual`、同线程未过期且未超过 hop budget 时才形成阶段交接；缺失 handoff 或存在冲突控制标记会 fail closed，`[PAIRROOM:REVIEW_APPROVED]` 停止。
+Engine 从可见正文中移除该块，将其以有界 `Message.handoff` 持久化，并在普通 Agent→Peer 投递时优先发送 handoff 而不是完整最终报告；没有 handoff 时才使用有界正文回退。`mentions` 路由同时检查可见正文与 handoff。Driver 的 `[PAIRROOM:IMPLEMENTED]` 与 Reviewer 的 `[PAIRROOM:REVIEW_CHANGES]` 只有在 handoff 可用、角色匹配、非 `manual`、没有相关的新用户输入且未超过 hop budget 时才形成阶段交接；同线程输入以及未关联线程但发给同一 Agent 的 `append`/`supersede` 都属于相关输入，显式 `next_turn` 才是默认不使其他线程过期的独立任务。缺失 handoff 或存在冲突控制标记会 fail closed，`[PAIRROOM:REVIEW_APPROVED]` 停止。
 
 ## 9. Claude control protocol
 
@@ -396,7 +396,7 @@ read_only / read_only_enforced
 refreshed_at / warnings
 ```
 
-Driver 使用 live repository。Reviewer 使用 detached Git worktree，再应用 `git diff HEAD` 并复制 untracked regular files。创建失败、unsafe symlink 或 patch 应用失败会阻止 Reviewer 启动，不会静默退回 live writable tree。
+Driver 使用 live repository。Reviewer 使用 detached Git worktree，再应用 `git diff HEAD` 并复制 untracked regular files。Reviewer 的启动、停止、重启与投递共享参与者同步边界；新审查不会在启动中的旧快照上绕过刷新。创建失败、unsafe symlink 或 patch 应用失败会阻止 Reviewer 启动，不会静默退回 live writable tree。
 
 ## 13. Durable Turn summary
 
