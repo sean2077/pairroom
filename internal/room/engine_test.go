@@ -17,18 +17,23 @@ import (
 )
 
 type fakeAdapter struct {
-	actor        model.ActorID
-	sink         agent.EventSink
-	submissions  chan model.AgentInput
-	mu           sync.Mutex
-	state        model.AgentState
-	sessionID    string
-	beforeReturn func(model.AgentInput)
-	submitErr    error
-	role         model.ParticipantRole
-	workspace    string
-	interrupts   int
-	stopErr      error
+	actor         model.ActorID
+	sink          agent.EventSink
+	submissions   chan model.AgentInput
+	mu            sync.Mutex
+	startOnce     sync.Once
+	startStarted  chan struct{}
+	startRelease  chan struct{}
+	submitOnce    sync.Once
+	submitStarted chan struct{}
+	state         model.AgentState
+	sessionID     string
+	beforeReturn  func(model.AgentInput)
+	submitErr     error
+	role          model.ParticipantRole
+	workspace     string
+	interrupts    int
+	stopErr       error
 }
 
 func (f *fakeAdapter) Actor() model.ActorID { return f.actor }
@@ -42,8 +47,25 @@ func (f *fakeAdapter) State() model.AgentState {
 	defer f.mu.Unlock()
 	return f.state
 }
-func (f *fakeAdapter) Start(context.Context) error {
+func (f *fakeAdapter) Start(ctx context.Context) error {
 	f.mu.Lock()
+	started := f.startStarted
+	release := f.startRelease
+	if release != nil {
+		f.state = model.StateStarting
+		f.mu.Unlock()
+		if started != nil {
+			f.startOnce.Do(func() { close(started) })
+		}
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		f.mu.Lock()
+		f.startStarted = nil
+		f.startRelease = nil
+	}
 	f.state = model.StateIdle
 	if f.sessionID == "" {
 		f.sessionID = "fake-" + string(f.actor)
@@ -52,6 +74,9 @@ func (f *fakeAdapter) Start(context.Context) error {
 	return nil
 }
 func (f *fakeAdapter) Submit(ctx context.Context, input model.AgentInput) (model.DeliveryState, error) {
+	if f.submitStarted != nil {
+		f.submitOnce.Do(func() { close(f.submitStarted) })
+	}
 	if err := f.Start(ctx); err != nil {
 		return model.DeliveryFailed, err
 	}
@@ -287,6 +312,113 @@ func TestReviewerRefreshSerializesConcurrentDriverSubmission(t *testing.T) {
 	_ = receiveInput(t, adapters[model.ActorClaude])
 }
 
+func TestReviewerRefreshWaitsForConcurrentStartup(t *testing.T) {
+	eventStore, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	workspaces := &countingWorkspace{repo: repo, reviewer: t.TempDir()}
+	adapters := map[model.ActorID]*fakeAdapter{}
+	startStarted := make(chan struct{})
+	startRelease := make(chan struct{})
+	submitStarted := make(chan struct{})
+	factory := func(cfg agent.Config, sink agent.EventSink) agent.Adapter {
+		adapter := &fakeAdapter{
+			actor: cfg.Actor, sink: sink, state: model.StateStopped,
+			sessionID: cfg.SessionID, submissions: make(chan model.AgentInput, 4),
+		}
+		if cfg.Actor == model.ActorCodex {
+			adapter.startStarted = startStarted
+			adapter.startRelease = startRelease
+			adapter.submitStarted = submitStarted
+		}
+		adapters[cfg.Actor] = adapter
+		return adapter
+	}
+	engine, err := New(Config{
+		Name: "review-start-lock", Repo: repo, Store: eventStore, Hub: bus.New(32),
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 4, StallWarningSeconds: 300},
+		ClaudeFactory: factory, CodexFactory: factory, Workspaces: workspaces,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	startupRefreshes := workspaces.Count()
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- engine.StartAgent(context.Background(), model.ActorCodex) }()
+	select {
+	case <-startStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Reviewer startup did not begin")
+	}
+	message, err := engine.Send(context.Background(), SendRequest{Text: "Review the latest change", To: []model.ActorID{model.ActorCodex}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-submitStarted:
+		close(startRelease)
+		t.Fatal("Reviewer submission entered while startup still held the old snapshot")
+	case <-time.After(150 * time.Millisecond):
+		close(startRelease)
+	}
+	if err := <-startErr; err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorCodex])
+	waitForDeliveryState(t, engine, message.ID, model.ActorCodex, model.DeliveryStarted)
+	if got := workspaces.Count(); got <= startupRefreshes {
+		t.Fatalf("Reviewer delivery used the activation-time snapshot after concurrent startup: startup=%d after=%d", startupRefreshes, got)
+	}
+}
+
+func TestLifecycleLockAcquisitionHonorsContext(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	adapters[model.ActorCodex].beforeReturn = func(model.AgentInput) {
+		close(blocked)
+		<-release
+	}
+
+	message, err := engine.Send(context.Background(), SendRequest{Text: "Block in submit", To: []model.ActorID{model.ActorCodex}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-blocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("delivery did not enter the blocking submission")
+	}
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	started := time.Now()
+	err = engine.StopAgent(stopCtx, model.ActorCodex)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		close(release)
+		t.Fatalf("StopAgent error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		close(release)
+		t.Fatalf("StopAgent ignored its context while waiting for delivery serialization: %s", elapsed)
+	}
+
+	close(release)
+	waitForDeliveryState(t, engine, message.ID, model.ActorCodex, model.DeliveryStarted)
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cleanupCancel()
+	if err := engine.StopAgent(cleanupCtx, model.ActorCodex); err != nil {
+		t.Fatalf("StopAgent after delivery release: %v", err)
+	}
+}
+
 func TestSetRoleDoesNotRefreshUnchangedReviewerWorkspace(t *testing.T) {
 	eventStore, err := store.Open(t.TempDir())
 	if err != nil {
@@ -363,6 +495,29 @@ func TestAgentMentionCreatesReplyAndRoutesPeer(t *testing.T) {
 	}
 }
 
+func TestAgentMentionInsideHandoffRoutesPeer(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	incoming, err := engine.Send(context.Background(), SendRequest{
+		Text: "Investigate the change", To: []model.ActorID{model.ActorClaude},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+
+	handoff := "Goal: validate routing. Evidence: focused test added. Ask: @codex independently inspect the peer handoff path."
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
+		TurnID: "turn-handoff-mention", CorrelationID: incoming.ID,
+		Text:      "Human-facing analysis is complete.\n[PAIRROOM:HANDOFF]\n" + handoff + "\n[/PAIRROOM:HANDOFF]",
+		CreatedAt: time.Now().UTC(),
+	})
+	peerInput := receiveInput(t, adapters[model.ActorCodex])
+	if !strings.Contains(peerInput.Text, handoff) || strings.Contains(peerInput.Text, "Human-facing analysis") {
+		t.Fatalf("handoff mention did not produce compact peer delivery: %#v", peerInput)
+	}
+}
+
 func TestSendWithoutTargetUsesSingleDriver(t *testing.T) {
 	engine, adapters := newTestEngine(t, model.RoutingManual, "")
 	message, err := engine.Send(context.Background(), SendRequest{Text: "Inspect the current change"})
@@ -415,6 +570,35 @@ func TestSendRoleTargetFollowsCompletedDriverSwitch(t *testing.T) {
 	}
 	if input := receiveInput(t, adapters[model.ActorClaude]); input.Role != model.RoleReviewer {
 		t.Fatalf("role target used stale role context: %#v", input)
+	}
+}
+
+func TestReplyWithoutExplicitTargetUsesAgentBeingRepliedTo(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	incoming, err := engine.Send(context.Background(), SendRequest{Text: "Review this", To: []model.ActorID{model.ActorCodex}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorCodex])
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorCodex, Kind: model.RuntimeFinal,
+		TurnID: "turn-review-reply", CorrelationID: incoming.ID,
+		Text: "Review result.\n[PAIRROOM:DONE]", CreatedAt: time.Now().UTC(),
+	})
+	snapshot := engine.Snapshot()
+	review := snapshot.Messages[len(snapshot.Messages)-1]
+	if review.From != model.ActorCodex {
+		t.Fatalf("expected Codex review message, got %#v", review)
+	}
+	reply, err := engine.Send(context.Background(), SendRequest{Text: "Please clarify", ReplyTo: review.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reply.To) != 1 || reply.To[0] != model.ActorCodex {
+		t.Fatalf("reply target = %v, want replied-to Agent Codex", reply.To)
+	}
+	if input := receiveInput(t, adapters[model.ActorCodex]); input.MessageID != reply.ID {
+		t.Fatalf("reply reached the wrong Agent: %#v", input)
 	}
 }
 
@@ -575,14 +759,40 @@ func TestNewHumanMessageInSameThreadSuppressesStaleRoundtableHandoff(t *testing.
 	}
 }
 
-func TestNewHumanMessageInOtherThreadDoesNotSuppressHandoff(t *testing.T) {
+func TestNewUnthreadedAppendToSameAgentSuppressesStaleHandoff(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingRoundtable, "")
+	first, err := engine.Send(context.Background(), SendRequest{Text: "First direction", To: []model.ActorID{model.ActorClaude}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+	if _, err := engine.Send(context.Background(), SendRequest{Text: "Correct that direction", To: []model.ActorID{model.ActorClaude}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
+		CorrelationID: first.ID, TurnID: "old-unthreaded", Text: "Old answer without a stop marker",
+		CreatedAt: time.Now().UTC(),
+	})
+	select {
+	case got := <-adapters[model.ActorCodex].submissions:
+		t.Fatalf("newer unthreaded append did not suppress stale handoff: %#v", got)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestExplicitNextTurnInOtherThreadDoesNotSuppressHandoff(t *testing.T) {
 	engine, adapters := newTestEngine(t, model.RoutingRoundtable, "")
 	first, err := engine.Send(context.Background(), SendRequest{Text: "First task", To: []model.ActorID{model.ActorClaude}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = receiveInput(t, adapters[model.ActorClaude])
-	if _, err := engine.Send(context.Background(), SendRequest{Text: "Independent task", To: []model.ActorID{model.ActorClaude}}); err != nil {
+	if _, err := engine.Send(context.Background(), SendRequest{
+		Text: "Independent task", To: []model.ActorID{model.ActorClaude}, Intent: model.IntentNextTurn,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	_ = receiveInput(t, adapters[model.ActorClaude])
