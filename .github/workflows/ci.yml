@@ -58,6 +58,8 @@ jobs:
             file_signature: 'Mach-O 64-bit x86_64'
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -74,11 +76,13 @@ jobs:
           set -euo pipefail
           version="$(tr -d '\r\n' < VERSION)"
           build_date="$(git show -s --format=%cI "${COMMIT}")"
+          last_tag="$(git describe --tags --abbrev=0 2>/dev/null || printf unknown)"
+          commits_since_tag="$(git rev-list "${last_tag}..HEAD" --count 2>/dev/null || printf unknown)"
           filename="pairroom-v${version}-${TARGET_GOOS}-${TARGET_GOARCH}${TARGET_EXTENSION}"
           mkdir -p dist/ci
           CGO_ENABLED=0 GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" \
             go build -buildvcs=false -trimpath \
-              -ldflags="-s -w -X github.com/sean2077/pairroom/internal/version.Commit=${COMMIT} -X github.com/sean2077/pairroom/internal/version.BuildDate=${build_date}" \
+              -ldflags="-s -w -X github.com/sean2077/pairroom/internal/version.Commit=${COMMIT} -X github.com/sean2077/pairroom/internal/version.BuildDate=${build_date} -X github.com/sean2077/pairroom/internal/version.LastTag=${last_tag} -X github.com/sean2077/pairroom/internal/version.CommitsSinceTag=${commits_since_tag}" \
               -o "dist/ci/${filename}" ./cmd/pairroom
           (cd dist/ci && sha256sum "${filename}" > "${filename}.sha256")
           printf 'filename=%s\n' "${filename}" >> "${GITHUB_OUTPUT}"

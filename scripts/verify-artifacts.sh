@@ -40,6 +40,8 @@ version_info=json.load(open(os.path.join(root,'version-check.json')))
 assert version_info['version']==version, version_info
 assert version_info['commit'] not in ('','dev'), version_info
 assert version_info['build_date'] not in ('','unknown'), version_info
+assert version_info['last_tag'] not in ('','unknown'), version_info
+assert version_info['commits_since_tag'] not in ('','unknown'), version_info
 sbom=json.load(open(os.path.join(root,f'pairroom-v{version}-SBOM.spdx.json')))
 assert sbom['spdxVersion']=='SPDX-2.3'
 assert sbom['packages'][0]['versionInfo']==version

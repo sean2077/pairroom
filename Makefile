@@ -1,10 +1,12 @@
 VERSION ?= $(shell tr -d '\r\n' < VERSION)
 DIST ?= dist
 COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || printf dev)
+LAST_TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null || printf unknown)
+COMMITS_SINCE_TAG ?= $(shell git rev-list "$(LAST_TAG)..HEAD" --count 2>/dev/null || printf unknown)
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 PYTHON ?= $(shell if command -v python3 >/dev/null 2>&1; then printf python3; elif command -v python >/dev/null 2>&1; then printf python; else printf python3; fi)
 VERSION_PKG := github.com/sean2077/pairroom/internal/version
-LDFLAGS := -s -w -X '$(VERSION_PKG).Commit=$(COMMIT)' -X '$(VERSION_PKG).BuildDate=$(BUILD_DATE)'
+LDFLAGS := -s -w -X '$(VERSION_PKG).Commit=$(COMMIT)' -X '$(VERSION_PKG).BuildDate=$(BUILD_DATE)' -X '$(VERSION_PKG).LastTag=$(LAST_TAG)' -X '$(VERSION_PKG).CommitsSinceTag=$(COMMITS_SINCE_TAG)'
 GOEXE ?= $(shell go env GOEXE)
 GOBIN ?= $(shell go env GOBIN)
 ifeq ($(strip $(GOBIN)),)
@@ -75,7 +77,7 @@ smoke:
 	bash scripts/mock-e2e.sh
 
 release:
-	VERSION=$(VERSION) COMMIT=$(COMMIT) BUILD_DATE=$(BUILD_DATE) DIST=$(DIST) bash scripts/release.sh
+	VERSION=$(VERSION) COMMIT=$(COMMIT) BUILD_DATE=$(BUILD_DATE) LAST_TAG=$(LAST_TAG) COMMITS_SINCE_TAG=$(COMMITS_SINCE_TAG) DIST=$(DIST) bash scripts/release.sh
 
 package: release
 
