@@ -39,16 +39,20 @@ common="$hook_dir/hook-common.sh"
 source "$common"
 proj="$(hook_project_root 2>/dev/null || true)"
 [[ -n "$proj" ]] || exit 0
-input="$(cat || true)"
 
 # Pull every file path the tool call touched out of the hook JSON on stdin.
 # Handles Edit/Write (file_path/path) and apply_patch payloads through the shared
 # parser + Git Bash path normalizer. Missing prerequisites stay fail-open.
 extract_paths() {
-    hook_extract_paths "$input"
+    hook_extract_paths
 }
 
 warnings=()
+paths=""
+if ! paths="$(extract_paths)"; then
+    echo "authority_doc_budget: could not parse hook input; advisory skipped" >&2
+    exit 0
+fi
 while IFS= read -r file_path; do
     [[ -n "${file_path:-}" && "$file_path" == /* && -e "$file_path" ]] || continue
     case "$(basename -- "$file_path")" in
@@ -112,7 +116,7 @@ PY
         detail="${detail}${chars} characters (budget $char_budget, +$((chars - char_budget)) over)"
     fi
     [[ -z "$detail" ]] || warnings+=("$rel — $detail")
-done < <(extract_paths)
+done <<<"$paths"
 
 ((${#warnings[@]} > 0)) || exit 0
 

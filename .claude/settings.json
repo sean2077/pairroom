@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -lc 'root=\"${CLAUDE_PROJECT_DIR:-}\"; [ -n \"$root\" ] || root=\"$(git rev-parse --show-toplevel 2>/dev/null)\" || exit 0; command -v cygpath >/dev/null 2>&1 && root=\"$(cygpath -u \"$root\")\"; bash \"$root/.agents/tools/hooks/trunk_edit_guard.sh\"'"
+            "command": "git -c \"alias.agent-scaffold-hook=!sh .agents/tools/hooks/hook-launcher.sh .agents/tools/hooks/trunk_edit_guard.sh\" agent-scaffold-hook"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -lc 'root=\"${CLAUDE_PROJECT_DIR:-}\"; [ -n \"$root\" ] || root=\"$(git rev-parse --show-toplevel 2>/dev/null)\" || exit 0; command -v cygpath >/dev/null 2>&1 && root=\"$(cygpath -u \"$root\")\"; bash \"$root/.agents/tools/hooks/authority_doc_budget.sh\"'"
+            "command": "git -c \"alias.agent-scaffold-hook=!sh .agents/tools/hooks/hook-launcher.sh .agents/tools/hooks/authority_doc_budget.sh\" agent-scaffold-hook"
           }
         ]
       }

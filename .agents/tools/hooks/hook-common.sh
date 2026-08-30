@@ -58,28 +58,37 @@ hook_project_root() {
     hook_posix_path "$raw"
 }
 
-hook_extract_paths() { # <hook-json>
-    local input="$1" cwd raw path
-    if hook_resolve_python; then
-        cwd="$(HOOK_INPUT="$input" hook_python "$hook_dir/hook-paths.py" --cwd 2>/dev/null || true)"
-        [[ -n "$cwd" ]] || cwd="${PWD:-.}"
-        cwd="$(hook_posix_path "$cwd" 2>/dev/null || true)"
-        while IFS= read -r raw; do
-            [[ -n "$raw" ]] || continue
-            path="$(hook_posix_path "$raw" 2>/dev/null || true)"
-            [[ -n "$path" ]] || continue
-            case "$path" in
-                /*) printf '%s\n' "$path" ;;
-                *)  printf '%s/%s\n' "${cwd%/}" "$path" ;;
-            esac
-        done < <(HOOK_INPUT="$input" hook_python "$hook_dir/hook-paths.py" 2>/dev/null || true)
-    elif command -v jq >/dev/null 2>&1; then
-        jq -r '.tool_input.file_path // .tool_input.notebook_path // .tool_input.path // empty' \
-            <<<"$input" 2>/dev/null | while IFS= read -r raw; do
+hook_extract_paths() { # hook JSON on stdin
+    local records line kind raw cwd="" path
+    hook_resolve_python || {
+        echo "hook-common: Python 3.8+ is required to parse the hook payload" >&2
+        return 1
+    }
+    records="$(hook_python "$hook_dir/hook-paths.py" --records)" || return $?
+    while IFS= read -r line; do
+        kind="${line%%$'\t'*}"
+        [[ "$line" == *$'\t'* ]] || continue
+        raw="${line#*$'\t'}"
+        case "$kind" in
+            cwd)
+                cwd="$(hook_posix_path "$raw" 2>/dev/null || true)"
+                ;;
+            path)
+                [[ -n "$cwd" ]] || {
+                    echo "hook-common: hook payload did not provide a usable cwd record" >&2
+                    return 1
+                }
                 path="$(hook_posix_path "$raw" 2>/dev/null || true)"
-                [[ -n "$path" ]] && printf '%s\n' "$path"
-            done
-    else
-        return 0
-    fi
+                [[ -n "$path" ]] || continue
+                case "$path" in
+                    /*) printf '%s\n' "$path" ;;
+                    *)  printf '%s/%s\n' "${cwd%/}" "$path" ;;
+                esac
+                ;;
+        esac
+    done <<<"$records"
+    [[ -n "$cwd" ]] || {
+        echo "hook-common: hook payload did not provide a usable cwd record" >&2
+        return 1
+    }
 }
