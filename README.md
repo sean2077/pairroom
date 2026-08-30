@@ -147,7 +147,7 @@ pairroom daemon install --force -- \
 | `mentions` | 显式 `@peer`，或有效的 Driver/Reviewer 阶段标记才继续；默认推荐 |
 | `roundtable` | 双方自动往返，但受 hop budget、阶段/停止标记和用户新指令约束 |
 
-未显式指定接收者时，消息只发送给唯一的当前 Driver；需要直接审查时可选随角色切换的 `@Reviewer`，需要真正独立并行分析时再选 `@all`。Agent 交接给 Peer 时可附带隐藏的紧凑 `PAIRROOM:HANDOFF`，避免把整段实施报告重复注入另一侧上下文。
+未显式指定接收者时，消息只发送给唯一的当前 Driver；需要直接审查时可选随角色切换的 `@Reviewer`，需要真正独立并行分析时再选 `@all`。`@Driver` 与 `@Reviewer` 由 Service 在持久化消息时按当前角色解析，不依赖浏览器里的旧快照。Agent 的阶段交接必须附带隐藏的紧凑 `PAIRROOM:HANDOFF`，避免把整段实施报告重复注入另一侧上下文。
 
 用户新消息优先于旧的自动接力。旧 Turn 的结果仍保留用于审计，但不会继续触发过期讨论。
 
@@ -160,7 +160,7 @@ Claude Code  Driver
 Codex        Reviewer
 ```
 
-Reviewer 使用包含 HEAD、dirty tracked 变更和 untracked regular files 的独立 Git snapshot，并叠加供应商原生策略：Claude 使用 `plan` permission mode 与写工具 deny，Codex 每个 Turn 使用 `readOnly` sandbox。PairRoom 会在 Reviewer 空闲且即将开始一个新审查 Turn 时重新生成快照，确保它看到 Driver 最新完成的改动，而不是 Room 启动时的旧状态。该边界不是容器、VM 或只读 mount；强隔离任务仍应在受控环境中运行。
+Reviewer 使用包含 HEAD、dirty tracked 变更和 untracked regular files 的独立 Git snapshot，并叠加供应商原生策略：Claude 使用 `plan` permission mode 与写工具 deny，Codex 每个 Turn 使用 `readOnly` sandbox。PairRoom 会在 Reviewer 空闲且即将开始一个新审查 Turn 时重新生成快照，并在捕获期间阻止新的 Driver 提交，确保它看到一致的最新改动，而不是 Room 启动时的旧状态。该边界不是容器、VM 或只读 mount；强隔离任务仍应在受控环境中运行。
 
 ### 审批与过程可见性
 

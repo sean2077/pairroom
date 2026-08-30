@@ -218,7 +218,7 @@ Roundtable 受到 `--max-hops`、用户新消息和停止标记限制。Driver/R
 [PAIRROOM:DONE]
 ```
 
-阶段交接最好同时提供 `[PAIRROOM:HANDOFF]...[/PAIRROOM:HANDOFF]`。这些控制块不显示在公共时间线；`manual` 始终不自动转发，角色不匹配的阶段标记也不会绕过角色边界。
+`IMPLEMENTED` 与 `REVIEW_CHANGES` 阶段交接必须同时提供可用的 `[PAIRROOM:HANDOFF]...[/PAIRROOM:HANDOFF]`；缺少证据包、角色不匹配或控制标记冲突时都停止自动转发。这些控制块不显示在公共时间线，`manual` 始终不自动转发。
 
 ## 角色与 Workspace
 
@@ -239,7 +239,7 @@ Roundtable 受到 `--max-hops`、用户新消息和停止标记限制。Driver/R
 - Codex 使用 readOnly sandbox；
 - POSIX 上额外移除写位，Windows 明确报告较弱文件权限边界。
 
-Reviewer snapshot 用于读取和审查，不是并行实现分支，也不是容器级隔离。Room 激活时会建立初始边界；当 Reviewer 处于安全空闲状态并即将开始新的审查 Turn 时，PairRoom 会重新生成快照，因此 Driver 刚完成的 dirty/untracked 变化会进入本轮审查。正在执行或被 steer 的同一个 Reviewer Turn 不会中途更换文件系统视图。
+Reviewer snapshot 用于读取和审查，不是并行实现分支，也不是容器级隔离。Room 激活时会建立初始边界；当 Reviewer 处于安全空闲状态并即将开始新的审查 Turn 时，PairRoom 会重新生成快照，并在捕获期间序列化两侧的新提交，因此 Driver 刚完成的 dirty/untracked 变化会以一致视图进入本轮审查。正在执行或被 steer 的同一个 Reviewer Turn 不会中途更换文件系统视图。
 
 ## Event Log 与 Registry
 

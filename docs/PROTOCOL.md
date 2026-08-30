@@ -277,7 +277,7 @@ Goal / Scope / Evidence / Risks / Exact ask
 [/PAIRROOM:HANDOFF]
 ```
 
-Engine 从可见正文中移除该块，将其以有界 `Message.handoff` 持久化，并在 Agent→Peer 投递时优先发送 handoff 而不是完整最终报告；没有 handoff 时才使用有界正文回退。Driver 的 `[PAIRROOM:IMPLEMENTED]` 与 Reviewer 的 `[PAIRROOM:REVIEW_CHANGES]` 在角色匹配、非 `manual`、未过期且未超过 hop budget 时形成阶段交接；`[PAIRROOM:REVIEW_APPROVED]` 停止。
+Engine 从可见正文中移除该块，将其以有界 `Message.handoff` 持久化，并在普通 Agent→Peer 投递时优先发送 handoff 而不是完整最终报告；没有 handoff 时才使用有界正文回退。Driver 的 `[PAIRROOM:IMPLEMENTED]` 与 Reviewer 的 `[PAIRROOM:REVIEW_CHANGES]` 只有在 handoff 可用、角色匹配、非 `manual`、同线程未过期且未超过 hop budget 时才形成阶段交接；缺失 handoff 或存在冲突控制标记会 fail closed，`[PAIRROOM:REVIEW_APPROVED]` 停止。
 
 ## 9. Claude control protocol
 

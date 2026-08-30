@@ -89,11 +89,12 @@ type serviceBindingMaterializedProjection struct {
 }
 
 type SendRequest struct {
-	Text        string              `json:"text"`
-	To          []model.ActorID     `json:"to,omitempty"`
-	ReplyTo     string              `json:"reply_to,omitempty"`
-	Attachments []model.Attachment  `json:"attachments,omitempty"`
-	Intent      model.MessageIntent `json:"intent,omitempty"`
+	Text        string                `json:"text"`
+	To          []model.ActorID       `json:"to,omitempty"`
+	TargetRole  model.ParticipantRole `json:"target_role,omitempty"`
+	ReplyTo     string                `json:"reply_to,omitempty"`
+	Attachments []model.Attachment    `json:"attachments,omitempty"`
+	Intent      model.MessageIntent   `json:"intent,omitempty"`
 }
 
 type RetryRequest struct {
@@ -105,7 +106,8 @@ type CancelRequest struct {
 }
 
 type Engine struct {
-	mu sync.RWMutex
+	mu        sync.RWMutex
+	routingMu sync.Mutex
 
 	cfg      Config
 	snapshot model.RoomSnapshot
@@ -579,7 +581,15 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 	if text == "" && len(attachments) == 0 {
 		return model.Message{}, errors.New("message text or image is required")
 	}
-	targets := e.resolveUserTargets(text, req.To)
+	// Keep target resolution, thread assignment, and durable sequence creation in
+	// one routing order with Agent finals. Otherwise a human message can land
+	// between a stale-result check and the Agent result it was meant to supersede.
+	e.routingMu.Lock()
+	defer e.routingMu.Unlock()
+	targets, err := e.resolveUserTargets(text, req.To, req.TargetRole)
+	if err != nil {
+		return model.Message{}, err
+	}
 	if len(targets) == 0 {
 		return model.Message{}, errors.New("message has no target; use @claude, @codex, or @all")
 	}
@@ -918,6 +928,13 @@ func (e *Engine) SetRole(ctx context.Context, actor model.ActorID, role model.Pa
 	if !role.Valid() {
 		return fmt.Errorf("invalid role %q", role)
 	}
+	// The reviewer snapshot manager is shared by both participants. Serialize a
+	// role transition with both submission paths so a concurrent delivery cannot
+	// mutate the live tree while a new reviewer snapshot is captured.
+	unlock := e.lockAllDeliveries()
+	defer unlock()
+	e.routingMu.Lock()
+	defer e.routingMu.Unlock()
 	other := model.OtherParticipant(actor)
 	e.mu.RLock()
 	actorSnapshot := e.snapshot.Participants[actor]
@@ -926,13 +943,31 @@ func (e *Engine) SetRole(ctx context.Context, actor model.ActorID, role model.Pa
 	if err := roleChangeSafe(actorSnapshot); err != nil {
 		return err
 	}
+	if actorSnapshot.Role == role {
+		return nil
+	}
 
-	boundaries, err := e.prepareWorkspaceBoundaries(ctx,
-		roleFor(actor, model.ActorClaude, role, otherSnapshot.Role),
-		roleFor(actor, model.ActorCodex, role, otherSnapshot.Role),
-	)
-	if err != nil {
-		return err
+	boundary := model.WorkspaceBoundary{Kind: "driver-live", Path: e.snapshot.Meta.Repo}
+	if e.cfg.Workspaces != nil {
+		boundary = e.cfg.Workspaces.DriverBoundary()
+	}
+	if role == model.RoleReviewer {
+		if e.cfg.Workspaces != nil {
+			if otherSnapshot.Role == model.RoleReviewer {
+				return errors.New("reviewer snapshot requires a single Reviewer; assign the other participant as Driver or Peer first")
+			}
+			if err := roleChangeSafe(otherSnapshot); err != nil {
+				return fmt.Errorf("cannot capture reviewer snapshot while the peer may be changing the live workspace: %w", err)
+			}
+		}
+		boundaries, err := e.prepareWorkspaceBoundaries(ctx,
+			roleFor(actor, model.ActorClaude, role, otherSnapshot.Role),
+			roleFor(actor, model.ActorCodex, role, otherSnapshot.Role),
+		)
+		if err != nil {
+			return err
+		}
+		boundary = boundaries[actor]
 	}
 	adapter, err := e.adapter(actor)
 	if err != nil {
@@ -955,7 +990,7 @@ func (e *Engine) SetRole(ctx context.Context, actor model.ActorID, role model.Pa
 			_ = adapter.Start(context.Background())
 		}
 	}
-	if err := adapter.SetWorkspace(ctx, boundaries[actor].Path); err != nil {
+	if err := adapter.SetWorkspace(ctx, boundary.Path); err != nil {
 		rollback()
 		return err
 	}
@@ -971,7 +1006,7 @@ func (e *Engine) SetRole(ctx context.Context, actor model.ActorID, role model.Pa
 	}
 	return e.mutateParticipant(model.ActorUser, actor, func(participant *model.ParticipantSnapshot) {
 		participant.Role = role
-		participant.Workspace = boundaries[actor]
+		participant.Workspace = boundary
 		applyRoleRuntimeProjection(participant, actor, role, e.cfg)
 	})
 }
@@ -980,6 +1015,10 @@ func (e *Engine) SwitchDriver(ctx context.Context, driver model.ActorID) error {
 	if !driver.ValidParticipant() {
 		return errors.New("driver must be claude or codex")
 	}
+	unlock := e.lockAllDeliveries()
+	defer unlock()
+	e.routingMu.Lock()
+	defer e.routingMu.Unlock()
 	reviewer := model.OtherParticipant(driver)
 	e.mu.RLock()
 	old := map[model.ActorID]model.ParticipantSnapshot{
@@ -1169,6 +1208,49 @@ func (e *Engine) runtimeContext(requestCtx context.Context) context.Context {
 	return engineCtx
 }
 
+func (e *Engine) lockDelivery(actor model.ActorID) func() {
+	lock := e.deliveryMu[actor]
+	if lock == nil {
+		return func() {}
+	}
+	lock.Lock()
+	return lock.Unlock
+}
+
+func (e *Engine) lockAllDeliveries() func() {
+	claudeUnlock := e.lockDelivery(model.ActorClaude)
+	codexUnlock := e.lockDelivery(model.ActorCodex)
+	return func() {
+		codexUnlock()
+		claudeUnlock()
+	}
+}
+
+func (e *Engine) targetUsesReviewerSnapshot(target model.ActorID) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.cfg.Workspaces != nil && e.snapshot.Participants[target].Role == model.RoleReviewer
+}
+
+// lockDeliveryScope keeps ordinary peer/Driver submissions independent while
+// serializing a Reviewer refresh with both submissions. Role transitions take
+// the same pair of locks, and the role is rechecked after lock acquisition.
+func (e *Engine) lockDeliveryScope(target model.ActorID) func() {
+	for {
+		reviewer := e.targetUsesReviewerSnapshot(target)
+		var unlock func()
+		if reviewer {
+			unlock = e.lockAllDeliveries()
+		} else {
+			unlock = e.lockDelivery(target)
+		}
+		if reviewer == e.targetUsesReviewerSnapshot(target) {
+			return unlock
+		}
+		unlock()
+	}
+}
+
 // refreshReviewerWorkspace recreates the reviewer snapshot immediately before
 // a safe new reviewer turn. The startup snapshot is only an initial boundary;
 // without this refresh a reviewer could inspect files from before the Driver's
@@ -1177,9 +1259,13 @@ func (e *Engine) runtimeContext(requestCtx context.Context) context.Context {
 func (e *Engine) refreshReviewerWorkspace(ctx context.Context, target model.ActorID, adapter agent.Adapter) error {
 	e.mu.RLock()
 	participant := e.snapshot.Participants[target]
+	peer := e.snapshot.Participants[model.OtherParticipant(target)]
 	e.mu.RUnlock()
 	if participant.Role != model.RoleReviewer || e.cfg.Workspaces == nil {
 		return nil
+	}
+	if peer.Role == model.RoleReviewer {
+		return errors.New("reviewer snapshot refresh requires a single Reviewer; assign a Driver or Peer before review")
 	}
 	state := adapter.State()
 	switch state {
@@ -1223,10 +1309,8 @@ func peerInputText(message model.Message, target model.ActorID) string {
 }
 
 func (e *Engine) deliver(ctx context.Context, message model.Message, target model.ActorID) {
-	if deliveryLock := e.deliveryMu[target]; deliveryLock != nil {
-		deliveryLock.Lock()
-		defer deliveryLock.Unlock()
-	}
+	unlock := e.lockDeliveryScope(target)
+	defer unlock()
 	adapter, err := e.adapter(target)
 	if err != nil {
 		e.delivery(message.ID, target, model.DeliveryFailed, err.Error())
@@ -1647,8 +1731,18 @@ func (e *Engine) onFinal(runtimeEvent model.RuntimeEvent) {
 	visibleText, handoff := stripHandoff(runtimeEvent.Text)
 	cleanText, control := stripControl(visibleText)
 	if strings.TrimSpace(cleanText) == "" {
-		return
+		// A compact handoff can be the entire final response. Persist it visibly
+		// instead of dropping both the audit record and the peer transfer.
+		cleanText = strings.TrimSpace(handoff)
+		if cleanText == "" && control != "" {
+			cleanText = "PairRoom collaboration signal: " + strings.ToLower(control)
+		}
+		if cleanText == "" {
+			return
+		}
 	}
+	e.routingMu.Lock()
+	defer e.routingMu.Unlock()
 
 	e.mu.RLock()
 	incoming, found := e.findMessageLocked(runtimeEvent.CorrelationID)
@@ -1663,7 +1757,7 @@ func (e *Engine) onFinal(runtimeEvent model.RuntimeEvent) {
 	}
 
 	hop := incoming.Hop + 1
-	targets := e.agentTargets(runtimeEvent.Agent, cleanText, control, hop, incoming.Seq, latestHumanSeq, settings)
+	targets := e.agentTargets(runtimeEvent.Agent, cleanText, handoff, control, hop, incoming.Seq, latestHumanSeq, settings)
 	to := []model.ActorID{model.ActorUser}
 	to = append(to, targets...)
 	message := model.Message{
@@ -1802,7 +1896,7 @@ func (e *Engine) processing(messageID string, target model.ActorID, state model.
 	}
 }
 
-func (e *Engine) agentTargets(actor model.ActorID, text, control string, hop int, sourceSeq, latestHumanSeq uint64, settings model.RoomSettings) []model.ActorID {
+func (e *Engine) agentTargets(actor model.ActorID, text, handoff, control string, hop int, sourceSeq, latestHumanSeq uint64, settings model.RoomSettings) []model.ActorID {
 	if settings.RoutingMode == model.RoutingManual {
 		return nil
 	}
@@ -1814,11 +1908,23 @@ func (e *Engine) agentTargets(actor model.ActorID, text, control string, hop int
 		e.notice("info", "Automatic agent handoff paused at the configured hop limit.")
 		return nil
 	}
+	if control == "AMBIGUOUS" {
+		e.notice("warning", fmt.Sprintf("%s emitted conflicting PairRoom control signals; automatic handoff was stopped.", actor.DisplayName()))
+		return nil
+	}
 	if prompt.MentionsHuman(text) {
 		return nil
 	}
-	if target := e.stagedHandoffTarget(actor, control); target.ValidParticipant() {
-		return []model.ActorID{target}
+	if control == "IMPLEMENTED" || control == "REVIEW_CHANGES" {
+		if !validHandoff(handoff) {
+			e.notice("warning", fmt.Sprintf("%s emitted %s without a usable HANDOFF; automatic transfer was stopped.", actor.DisplayName(), control))
+			return nil
+		}
+		if target := e.stagedHandoffTarget(actor, control); target.ValidParticipant() {
+			return []model.ActorID{target}
+		}
+		e.notice("warning", fmt.Sprintf("%s emitted %s but current roles do not form a Driver/Reviewer pair; automatic transfer was stopped.", actor.DisplayName(), control))
+		return nil
 	}
 	if stopsConversation(control) {
 		return nil
@@ -1937,12 +2043,32 @@ func (e *Engine) notice(level, text string) {
 	_, _ = e.record(EventSystemNotice, model.ActorSystem, model.SystemNotice{Level: level, Text: text})
 }
 
-func (e *Engine) resolveUserTargets(text string, explicit []model.ActorID) []model.ActorID {
-	if targets := model.NormalizeActors(explicit); len(targets) > 0 {
-		return targets
+func (e *Engine) resolveUserTargets(text string, explicit []model.ActorID, targetRole model.ParticipantRole) ([]model.ActorID, error) {
+	targets := model.NormalizeActors(explicit)
+	if targetRole != "" {
+		if len(targets) > 0 {
+			return nil, errors.New("choose either explicit recipients or target_role, not both")
+		}
+		if targetRole != model.RoleDriver && targetRole != model.RoleReviewer {
+			return nil, errors.New("target_role must be driver or reviewer")
+		}
+		e.mu.RLock()
+		for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+			if e.snapshot.Participants[actor].Role == targetRole {
+				targets = append(targets, actor)
+			}
+		}
+		e.mu.RUnlock()
+		if len(targets) != 1 {
+			return nil, fmt.Errorf("target_role %q requires exactly one participant, found %d", targetRole, len(targets))
+		}
+		return targets, nil
+	}
+	if len(targets) > 0 {
+		return targets, nil
 	}
 	if targets := prompt.Mentions(text, model.ActorUser); len(targets) > 0 {
-		return targets
+		return targets, nil
 	}
 	e.mu.RLock()
 	drivers := make([]model.ActorID, 0, 2)
@@ -1953,11 +2079,11 @@ func (e *Engine) resolveUserTargets(text string, explicit []model.ActorID) []mod
 	}
 	e.mu.RUnlock()
 	if len(drivers) == 1 {
-		return drivers
+		return drivers, nil
 	}
 	// Preserve the old safe fallback when roles are ambiguous. The normal
 	// Driver/Reviewer configuration sends an unaddressed message only once.
-	return []model.ActorID{model.ActorClaude, model.ActorCodex}
+	return []model.ActorID{model.ActorClaude, model.ActorCodex}, nil
 }
 
 func (e *Engine) canonicalAttachments(values []model.Attachment) ([]model.Attachment, error) {
@@ -2514,8 +2640,15 @@ func compactHandoff(value string) string {
 		return value
 	}
 	const tailRunes = 800
-	headRunes := maxHandoffRunes - tailRunes
-	return string(runes[:headRunes]) + "\n… [PairRoom handoff truncated] …\n" + string(runes[len(runes)-tailRunes:])
+	const marker = "\n… [PairRoom handoff truncated] …\n"
+	headRunes := maxHandoffRunes - tailRunes - len([]rune(marker))
+	return string(runes[:headRunes]) + marker + string(runes[len(runes)-tailRunes:])
+}
+
+const minHandoffRunes = 24
+
+func validHandoff(value string) bool {
+	return len([]rune(strings.TrimSpace(value))) >= minHandoffRunes
 }
 
 var controlPattern = regexp.MustCompile(`(?mi)^\s*\[PAIRROOM:(CONTINUE|CONSENSUS|WAIT|BLOCKED|DONE|IMPLEMENTED|REVIEW_APPROVED|REVIEW_CHANGES)\]\s*$`)
@@ -2523,15 +2656,20 @@ var controlPattern = regexp.MustCompile(`(?mi)^\s*\[PAIRROOM:(CONTINUE|CONSENSUS
 func stripControl(text string) (string, string) {
 	matches := controlPattern.FindAllStringSubmatch(text, -1)
 	control := ""
-	if len(matches) > 0 {
-		control = strings.ToUpper(matches[len(matches)-1][1])
+	for _, match := range matches {
+		next := strings.ToUpper(match[1])
+		if control != "" && control != next {
+			control = "AMBIGUOUS"
+			break
+		}
+		control = next
 	}
 	return strings.TrimSpace(controlPattern.ReplaceAllString(text, "")), control
 }
 
 func stopsConversation(control string) bool {
 	switch control {
-	case "CONSENSUS", "WAIT", "BLOCKED", "DONE", "IMPLEMENTED", "REVIEW_APPROVED", "REVIEW_CHANGES":
+	case "AMBIGUOUS", "CONSENSUS", "WAIT", "BLOCKED", "DONE", "IMPLEMENTED", "REVIEW_APPROVED", "REVIEW_CHANGES":
 		return true
 	default:
 		return false

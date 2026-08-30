@@ -1475,6 +1475,7 @@
         body: JSON.stringify({
           text,
           to: recipientsForTarget(state.selectedTarget),
+          target_role: ['driver', 'reviewer'].includes(state.selectedTarget) ? state.selectedTarget : undefined,
           reply_to: state.replyTo || undefined,
           attachments,
 		  intent: $('message-intent').value,
@@ -1683,14 +1684,10 @@
   }
 
   function recipientsForTarget(target) {
-    if (target === 'driver') {
-      const driver = currentDriver();
-      return driver ? [driver] : ['claude', 'codex'];
-    }
-    if (target === 'reviewer') {
-      const reviewer = currentReviewer();
-      return reviewer ? [reviewer] : ['claude', 'codex'];
-    }
+    // Role targets are resolved atomically by the server. A role switch from
+    // another browser cannot turn @Driver or @Reviewer into an explicit send to
+    // the participant that used to hold that role.
+    if (target === 'driver' || target === 'reviewer') return [];
     if (target === 'claude') return ['claude'];
     if (target === 'codex') return ['codex'];
     return ['claude', 'codex'];
