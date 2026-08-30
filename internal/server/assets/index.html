@@ -107,7 +107,9 @@
         </div>
         <div class="composer-wrap">
           <div class="target-picker" role="group" aria-label="消息接收者">
-            <button class="target-button active" data-target="all">@ All</button>
+            <button class="target-button active" data-target="driver">@ Driver</button>
+            <button class="target-button" data-target="reviewer">@ Reviewer</button>
+            <button class="target-button" data-target="all">@ All</button>
             <button class="target-button" data-target="claude">@ Claude</button>
             <button class="target-button" data-target="codex">@ Codex</button>
           </div>
@@ -115,7 +117,7 @@
           <div class="composer">
             <input id="attachment-input" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple>
             <button id="attach-button" class="attach-button" type="button" title="添加图片；也可粘贴或拖入">＋</button>
-            <textarea id="message-input" rows="3" placeholder="向两个 Agent 发消息；Enter 发送，Shift+Enter 换行…"></textarea>
+            <textarea id="message-input" rows="3" placeholder="向 Agent 发消息；Enter 发送，Shift+Enter 换行…"></textarea>
             <button id="send-button" class="send-button" aria-label="发送消息">
               <span>发送</span><span class="send-arrow">↑</span>
             </button>
@@ -128,7 +130,7 @@
                 <option value="supersede">替代并取消旧指令</option>
               </select>
             </label>
-            <span id="delivery-hint">发送给 Claude 与 Codex</span>
+            <span id="delivery-hint">发送给当前 Driver</span>
           </div>
           <div id="drop-overlay" class="drop-overlay hidden">释放图片以加入消息</div>
         </div>

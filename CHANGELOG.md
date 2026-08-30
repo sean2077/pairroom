@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Added
+
+- `pairroom-protocol/v2` with compact, durable `PAIRROOM:HANDOFF` packets for peer turns and staged `IMPLEMENTED → REVIEW_CHANGES/REVIEW_APPROVED` Driver/Reviewer handoffs.
+
+### Changed
+
+- Unaddressed messages and the Room composer now target the single current Driver instead of invoking both Agents by default; explicit `@all` remains available.
+- Reviewer snapshots are refreshed immediately before each safe new reviewer turn, preventing review of the pre-implementation startup snapshot.
+- Agent-to-peer delivery uses the compact handoff packet, or a bounded fallback, instead of replaying an arbitrarily long final response.
+- The native collaboration contract now asks for a second Agent only when independent work can materially change the outcome and keeps tool chatter in Inspector.
+- The composer exposes server-resolved, role-stable `@Driver` and `@Reviewer` targets; replying to an Agent automatically targets that participant.
+
+### Fixed
+
+- Compact peer handoffs survive auditable retry instead of falling back to the full human-facing response.
+- A newer human message suppresses automatic handoff only in the same discussion thread, so independent tasks can progress concurrently.
+- Handoff-only Agent finals are retained, oversized handoffs stay within the durable limit, and staged transfer fails closed when the evidence packet is missing or control markers conflict.
+- Reviewer snapshot refresh and role changes serialize with both participant submission paths, preventing a live Driver write from racing snapshot capture.
+
 ## [v1.1.0] — 2026-08-21
 
 ### Added

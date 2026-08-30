@@ -28,6 +28,7 @@ system
   "from": "user",
   "to": ["claude", "codex"],
   "text": "@all review this diagram",
+  "handoff": "optional bounded peer context packet",
   "reply_to": "msg-...",
   "retry_of": "msg-...",
   "intent": "append",
@@ -257,7 +258,7 @@ pairroom protocol --json
 
 ```text
 [PairRoom message]
-protocol: pairroom-protocol/v1
+protocol: pairroom-protocol/v2
 message_id / thread_id / hop
 from / to / reply_to
 current_role / delivery_intent
@@ -267,6 +268,16 @@ message body
 ```
 
 角色定义、路由解释、媒体规范和控制 marker 不再展开到每个 envelope。Claude 在原生 system-prompt 追加层接收紧凑 bootstrap；Codex 在 thread `developerInstructions` 接收同一语义。Room Engine 和 Adapter 仍是路由、投递、角色工作区、审批与 lifecycle 的机械权威，prompt 不复制这些状态机。
+
+Agent 需要 Peer 时可在最终输出中附加：
+
+```text
+[PAIRROOM:HANDOFF]
+Goal / Scope / Evidence / Risks / Exact ask
+[/PAIRROOM:HANDOFF]
+```
+
+Engine 从可见正文中移除该块，将其以有界 `Message.handoff` 持久化，并在普通 Agent→Peer 投递时优先发送 handoff 而不是完整最终报告；没有 handoff 时才使用有界正文回退。Driver 的 `[PAIRROOM:IMPLEMENTED]` 与 Reviewer 的 `[PAIRROOM:REVIEW_CHANGES]` 只有在 handoff 可用、角色匹配、非 `manual`、同线程未过期且未超过 hop budget 时才形成阶段交接；缺失 handoff 或存在冲突控制标记会 fail closed，`[PAIRROOM:REVIEW_APPROVED]` 停止。
 
 ## 9. Claude control protocol
 

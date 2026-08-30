@@ -274,7 +274,7 @@ session/thread identity
 
 - ClaudeAdapter 优先使用 Claude Code 的原生 append-system-prompt 能力；兼容路径最多在首个输入前投射一次；
 - CodexAdapter 在 `thread/start` 和 `thread/resume` 的 `developerInstructions` 中投射 bootstrap；`turn/start` 与 `turn/steer` 不再内联完整规则；
-- bootstrap 不包含 Room 名称或 repository 绝对路径，只声明 Human/Harness authority、角色与路由判断入口、控制 marker 和 `pairroom-protocol/v1` 查询命令；
+- bootstrap 不包含 Room 名称或 repository 绝对路径，只声明 Human/Harness authority、角色与路由判断入口、控制 marker 和 `pairroom-protocol/v2` 查询命令；
 - 每轮 `[PairRoom message]` envelope 只携带 message/thread/hop、from/to、role、routing、intent、附件元数据和正文等动态事实。
 
 `internal/prompt` 的 byte-budget 测试是发布门：固定 bootstrap 或逐轮 envelope overhead 超预算会直接使测试失败，防止规则再次无界增长。

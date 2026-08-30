@@ -141,6 +141,183 @@ func receiveInput(t *testing.T, adapter *fakeAdapter) model.AgentInput {
 	}
 }
 
+type countingWorkspace struct {
+	mu             sync.Mutex
+	repo           string
+	reviewer       string
+	refreshes      int
+	refreshStarted chan struct{}
+	refreshRelease chan struct{}
+}
+
+func (w *countingWorkspace) DriverBoundary() model.WorkspaceBoundary {
+	return model.WorkspaceBoundary{Kind: "driver-live", Path: w.repo}
+}
+
+func (w *countingWorkspace) Refresh(context.Context) (model.WorkspaceBoundary, error) {
+	w.mu.Lock()
+	w.refreshes++
+	started := w.refreshStarted
+	release := w.refreshRelease
+	w.refreshStarted = nil
+	w.refreshRelease = nil
+	w.mu.Unlock()
+	if started != nil {
+		close(started)
+		<-release
+	}
+	return model.WorkspaceBoundary{
+		Kind: "reviewer-snapshot", Path: w.reviewer, ReadOnly: true, RefreshedAt: time.Now().UTC(),
+	}, nil
+}
+
+func (w *countingWorkspace) Cleanup(context.Context) error { return nil }
+
+func (w *countingWorkspace) Count() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.refreshes
+}
+
+func (w *countingWorkspace) BlockNextRefresh() (<-chan struct{}, func()) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	w.refreshStarted = started
+	w.refreshRelease = release
+	return started, func() { close(release) }
+}
+
+func TestReviewerSnapshotRefreshesBeforeSafeDelivery(t *testing.T) {
+	eventStore, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	workspaces := &countingWorkspace{repo: repo, reviewer: t.TempDir()}
+	adapters := map[model.ActorID]*fakeAdapter{}
+	factory := func(cfg agent.Config, sink agent.EventSink) agent.Adapter {
+		adapter := &fakeAdapter{
+			actor: cfg.Actor, sink: sink, state: model.StateStopped,
+			sessionID: cfg.SessionID, submissions: make(chan model.AgentInput, 4),
+		}
+		adapters[cfg.Actor] = adapter
+		return adapter
+	}
+	engine, err := New(Config{
+		Name: "review-refresh", Repo: repo, Store: eventStore, Hub: bus.New(32),
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 4, StallWarningSeconds: 300},
+		ClaudeFactory: factory, CodexFactory: factory, Workspaces: workspaces,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	startupRefreshes := workspaces.Count()
+
+	message, err := engine.Send(context.Background(), SendRequest{
+		Text: "Review the latest Driver changes", To: []model.ActorID{model.ActorCodex},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorCodex])
+	waitForDeliveryState(t, engine, message.ID, model.ActorCodex, model.DeliveryStarted)
+	if got := workspaces.Count(); got <= startupRefreshes {
+		t.Fatalf("reviewer snapshot was not refreshed before delivery: startup=%d after=%d", startupRefreshes, got)
+	}
+	boundary := engine.Snapshot().Participants[model.ActorCodex].Workspace
+	if boundary.Path != workspaces.reviewer || !boundary.ReadOnly {
+		t.Fatalf("refreshed reviewer boundary was not projected: %#v", boundary)
+	}
+}
+
+func TestReviewerRefreshSerializesConcurrentDriverSubmission(t *testing.T) {
+	eventStore, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	workspaces := &countingWorkspace{repo: repo, reviewer: t.TempDir()}
+	adapters := map[model.ActorID]*fakeAdapter{}
+	factory := func(cfg agent.Config, sink agent.EventSink) agent.Adapter {
+		adapter := &fakeAdapter{
+			actor: cfg.Actor, sink: sink, state: model.StateStopped,
+			sessionID: cfg.SessionID, submissions: make(chan model.AgentInput, 4),
+		}
+		adapters[cfg.Actor] = adapter
+		return adapter
+	}
+	engine, err := New(Config{
+		Name: "review-refresh-lock", Repo: repo, Store: eventStore, Hub: bus.New(32),
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 4, StallWarningSeconds: 300},
+		ClaudeFactory: factory, CodexFactory: factory, Workspaces: workspaces,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+
+	started, release := workspaces.BlockNextRefresh()
+	if _, err := engine.Send(context.Background(), SendRequest{Text: "Review", To: []model.ActorID{model.ActorCodex}}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reviewer refresh did not start")
+	}
+	if _, err := engine.Send(context.Background(), SendRequest{Text: "Continue implementation", To: []model.ActorID{model.ActorClaude}}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case input := <-adapters[model.ActorClaude].submissions:
+		t.Fatalf("Driver submission raced reviewer snapshot capture: %#v", input)
+	case <-time.After(150 * time.Millisecond):
+	}
+	release()
+	_ = receiveInput(t, adapters[model.ActorCodex])
+	_ = receiveInput(t, adapters[model.ActorClaude])
+}
+
+func TestSetRoleDoesNotRefreshUnchangedReviewerWorkspace(t *testing.T) {
+	eventStore, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	workspaces := &countingWorkspace{repo: repo, reviewer: t.TempDir()}
+	factory := func(cfg agent.Config, sink agent.EventSink) agent.Adapter {
+		return &fakeAdapter{actor: cfg.Actor, sink: sink, state: model.StateStopped, submissions: make(chan model.AgentInput, 2)}
+	}
+	engine, err := New(Config{
+		Name: "role-with-reviewer", Repo: repo, Store: eventStore, Hub: bus.New(32),
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 4, StallWarningSeconds: 300},
+		ClaudeFactory: factory, CodexFactory: factory, Workspaces: workspaces,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	before := workspaces.Count()
+	if err := engine.SetRole(context.Background(), model.ActorClaude, model.RolePeer); err != nil {
+		t.Fatal(err)
+	}
+	if after := workspaces.Count(); after != before {
+		t.Fatalf("changing the Driver role recreated the unchanged Reviewer workspace: before=%d after=%d", before, after)
+	}
+}
+
 func TestSendPassesRoleAndRoutingContext(t *testing.T) {
 	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
 	message, err := engine.Send(context.Background(), SendRequest{
@@ -186,14 +363,202 @@ func TestAgentMentionCreatesReplyAndRoutesPeer(t *testing.T) {
 	}
 }
 
-func TestNewHumanMessageSuppressesStaleRoundtableHandoff(t *testing.T) {
+func TestSendWithoutTargetUsesSingleDriver(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	message, err := engine.Send(context.Background(), SendRequest{Text: "Inspect the current change"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(message.To) != 1 || message.To[0] != model.ActorClaude {
+		t.Fatalf("unaddressed message targets = %v, want current Driver only", message.To)
+	}
+	if input := receiveInput(t, adapters[model.ActorClaude]); input.MessageID != message.ID {
+		t.Fatalf("Driver received unexpected input: %#v", input)
+	}
+	select {
+	case input := <-adapters[model.ActorCodex].submissions:
+		t.Fatalf("Reviewer received redundant default delivery: %#v", input)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestSendRoleTargetIsResolvedAtomicallyByServer(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	message, err := engine.Send(context.Background(), SendRequest{Text: "Review this", TargetRole: model.RoleReviewer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(message.To) != 1 || message.To[0] != model.ActorCodex {
+		t.Fatalf("reviewer target = %v, want current Reviewer only", message.To)
+	}
+	if input := receiveInput(t, adapters[model.ActorCodex]); input.MessageID != message.ID || input.Role != model.RoleReviewer {
+		t.Fatalf("Reviewer received unexpected input: %#v", input)
+	}
+	if _, err := engine.Send(context.Background(), SendRequest{
+		Text: "Ambiguous", To: []model.ActorID{model.ActorClaude}, TargetRole: model.RoleReviewer,
+	}); err == nil {
+		t.Fatal("explicit recipient plus target_role succeeded")
+	}
+}
+
+func TestSendRoleTargetFollowsCompletedDriverSwitch(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	if err := engine.SwitchDriver(context.Background(), model.ActorCodex); err != nil {
+		t.Fatal(err)
+	}
+	message, err := engine.Send(context.Background(), SendRequest{Text: "Review after switch", TargetRole: model.RoleReviewer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(message.To) != 1 || message.To[0] != model.ActorClaude {
+		t.Fatalf("reviewer target after switch = %v, want Claude", message.To)
+	}
+	if input := receiveInput(t, adapters[model.ActorClaude]); input.Role != model.RoleReviewer {
+		t.Fatalf("role target used stale role context: %#v", input)
+	}
+}
+
+func TestStagedHandoffUsesCompactPeerContext(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	incoming, err := engine.Send(context.Background(), SendRequest{
+		Text: "Implement the fix", To: []model.ActorID{model.ActorClaude},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+
+	handoff := "Goal: verify the new cancellation boundary.\nScope: internal/room.\nEvidence: go test ./internal/room passed.\nRisk: completion race.\nAsk: challenge correlation and retry behavior."
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
+		TurnID: "turn-implemented", CorrelationID: incoming.ID,
+		Text: "Implementation complete. Verbose human report stays in the room.\n\n" +
+			"[PAIRROOM:HANDOFF]\n" + handoff + "\n[/PAIRROOM:HANDOFF]\n" +
+			"[PAIRROOM:IMPLEMENTED]",
+		CreatedAt: time.Now().UTC(),
+	})
+	peerInput := receiveInput(t, adapters[model.ActorCodex])
+	if !strings.Contains(peerInput.Text, handoff) {
+		t.Fatalf("peer input omitted compact handoff: %q", peerInput.Text)
+	}
+	if strings.Contains(peerInput.Text, "Verbose human report") {
+		t.Fatalf("peer input replayed the full room response: %q", peerInput.Text)
+	}
+
+	snapshot := engine.Snapshot()
+	last := snapshot.Messages[len(snapshot.Messages)-1]
+	if last.Text != "Implementation complete. Verbose human report stays in the room." {
+		t.Fatalf("visible response was not cleaned: %q", last.Text)
+	}
+	if last.Handoff != handoff {
+		t.Fatalf("durable handoff = %q, want %q", last.Handoff, handoff)
+	}
+}
+
+func TestStagedHandoffWithoutVisibleProseIsPersistedAndDelivered(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	incoming, err := engine.Send(context.Background(), SendRequest{
+		Text: "Implement the fix", To: []model.ActorID{model.ActorClaude},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+
+	handoff := "Goal: verify the final patch. Scope: room routing. Evidence: focused tests pass. Risks: native E2E pending. Ask: review the exact diff."
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
+		TurnID: "turn-handoff-only", CorrelationID: incoming.ID,
+		Text:      "[PAIRROOM:HANDOFF]\n" + handoff + "\n[/PAIRROOM:HANDOFF]\n[PAIRROOM:IMPLEMENTED]",
+		CreatedAt: time.Now().UTC(),
+	})
+	input := receiveInput(t, adapters[model.ActorCodex])
+	if !strings.Contains(input.Text, handoff) {
+		t.Fatalf("handoff-only final was not delivered: %#v", input)
+	}
+	last := engine.Snapshot().Messages[len(engine.Snapshot().Messages)-1]
+	if last.Text != handoff || last.Handoff != handoff {
+		t.Fatalf("handoff-only final was not persisted visibly: %#v", last)
+	}
+}
+
+func TestReviewChangesMarkerReturnsToDriver(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	incoming, err := engine.Send(context.Background(), SendRequest{
+		Text: "Review the implementation", To: []model.ActorID{model.ActorCodex},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorCodex])
+
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorCodex, Kind: model.RuntimeFinal,
+		TurnID: "turn-review", CorrelationID: incoming.ID,
+		Text:      "One blocking issue remains.\n[PAIRROOM:HANDOFF]\nFix the stale completion race and rerun the room tests.\n[/PAIRROOM:HANDOFF]\n[PAIRROOM:REVIEW_CHANGES]",
+		CreatedAt: time.Now().UTC(),
+	})
+	input := receiveInput(t, adapters[model.ActorClaude])
+	if !strings.Contains(input.Text, "stale completion race") {
+		t.Fatalf("Driver did not receive reviewer change request: %q", input.Text)
+	}
+}
+
+func TestHumanDecisionSuppressesStagedHandoff(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	incoming, err := engine.Send(context.Background(), SendRequest{
+		Text: "Implement the ambiguous change", To: []model.ActorID{model.ActorClaude},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
+		TurnID: "turn-needs-human", CorrelationID: incoming.ID,
+		Text:      "@human choose the compatibility policy before review.\n[PAIRROOM:IMPLEMENTED]",
+		CreatedAt: time.Now().UTC(),
+	})
+	select {
+	case input := <-adapters[model.ActorCodex].submissions:
+		t.Fatalf("human decision request incorrectly routed to Reviewer: %#v", input)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestStagedHandoffRequiresUsablePacket(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	incoming, err := engine.Send(context.Background(), SendRequest{
+		Text: "Implement the fix", To: []model.ActorID{model.ActorClaude},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
+		TurnID: "turn-no-evidence", CorrelationID: incoming.ID,
+		Text: "Implemented.\n[PAIRROOM:IMPLEMENTED]", CreatedAt: time.Now().UTC(),
+	})
+	select {
+	case input := <-adapters[model.ActorCodex].submissions:
+		t.Fatalf("staged marker without handoff routed to Reviewer: %#v", input)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestNewHumanMessageInSameThreadSuppressesStaleRoundtableHandoff(t *testing.T) {
 	engine, adapters := newTestEngine(t, model.RoutingRoundtable, "")
 	first, err := engine.Send(context.Background(), SendRequest{Text: "First direction", To: []model.ActorID{model.ActorClaude}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = receiveInput(t, adapters[model.ActorClaude])
-	if _, err := engine.Send(context.Background(), SendRequest{Text: "New direction", To: []model.ActorID{model.ActorClaude}}); err != nil {
+	if _, err := engine.Send(context.Background(), SendRequest{
+		Text: "New direction", To: []model.ActorID{model.ActorClaude}, ReplyTo: first.ID,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	_ = receiveInput(t, adapters[model.ActorClaude])
@@ -210,6 +575,29 @@ func TestNewHumanMessageSuppressesStaleRoundtableHandoff(t *testing.T) {
 	}
 }
 
+func TestNewHumanMessageInOtherThreadDoesNotSuppressHandoff(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingRoundtable, "")
+	first, err := engine.Send(context.Background(), SendRequest{Text: "First task", To: []model.ActorID{model.ActorClaude}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+	if _, err := engine.Send(context.Background(), SendRequest{Text: "Independent task", To: []model.ActorID{model.ActorClaude}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
+		CorrelationID: first.ID, TurnID: "first-task", Text: "First task result",
+		CreatedAt: time.Now().UTC(),
+	})
+	got := receiveInput(t, adapters[model.ActorCodex])
+	if got.ReplyTo != first.ID || got.ThreadID != first.ThreadID {
+		t.Fatalf("independent thread incorrectly invalidated handoff: %#v", got)
+	}
+}
+
 func TestControlMarkersAndHopLimitStopRoundtable(t *testing.T) {
 	clean, control := stripControl("Done with evidence.\n[PAIRROOM:CONSENSUS]")
 	if clean != "Done with evidence." || control != "CONSENSUS" || !stopsConversation(control) {
@@ -218,14 +606,29 @@ func TestControlMarkersAndHopLimitStopRoundtable(t *testing.T) {
 	if stopsConversation("CONTINUE") {
 		t.Fatal("CONTINUE must not stop a roundtable")
 	}
+	_, ambiguous := stripControl("done\n[PAIRROOM:IMPLEMENTED]\n[PAIRROOM:REVIEW_APPROVED]")
+	if ambiguous != "AMBIGUOUS" || !stopsConversation(ambiguous) {
+		t.Fatalf("conflicting controls must fail closed, got %q", ambiguous)
+	}
 
 	engine, _ := newTestEngine(t, model.RoutingRoundtable, "")
 	settings := model.RoomSettings{RoutingMode: model.RoutingRoundtable, MaxHops: 3}
-	if targets := engine.agentTargets(model.ActorClaude, "continue", "", 3, 1, 1, settings); len(targets) != 0 {
+	if targets := engine.agentTargets(model.ActorClaude, "continue", "", "", 3, 1, 1, settings); len(targets) != 0 {
 		t.Fatalf("hop limit must stop routing: %v", targets)
 	}
-	if targets := engine.agentTargets(model.ActorClaude, "continue", "", 2, 1, 1, settings); len(targets) != 1 || targets[0] != model.ActorCodex {
+	if targets := engine.agentTargets(model.ActorClaude, "continue", "", "", 2, 1, 1, settings); len(targets) != 1 || targets[0] != model.ActorCodex {
 		t.Fatalf("roundtable should route to peer before limit: %v", targets)
+	}
+}
+
+func TestCompactHandoffRespectsDurableLimit(t *testing.T) {
+	value := strings.Repeat("证", maxHandoffRunes+500)
+	got := compactHandoff(value)
+	if runes := len([]rune(got)); runes != maxHandoffRunes {
+		t.Fatalf("compacted handoff length = %d, want %d", runes, maxHandoffRunes)
+	}
+	if !strings.Contains(got, "[PairRoom handoff truncated]") {
+		t.Fatalf("compacted handoff omitted truncation marker: %q", got)
 	}
 }
 
@@ -550,6 +953,35 @@ func TestRetryCreatesNewAuditableMessageForFailedTarget(t *testing.T) {
 
 	if _, err := engine.Retry(context.Background(), original.ID, RetryRequest{To: []model.ActorID{model.ActorClaude}}); err == nil {
 		t.Fatal("successful/non-terminal Claude target should not be retryable")
+	}
+}
+
+func TestRetryPreservesCompactPeerHandoff(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	now := time.Now().UTC()
+	original := model.Message{
+		ID: model.NewID("msg"), From: model.ActorClaude, To: []model.ActorID{model.ActorCodex},
+		Text: "Long human-facing implementation report", Handoff: "Goal: verify the race fix\nEvidence: go test ./...\nExact ask: challenge concurrency",
+		ThreadID: model.NewID("thread"), Hop: 1, CreatedAt: now,
+		Delivery:   map[model.ActorID]model.DeliveryState{model.ActorCodex: model.DeliveryStarted},
+		Processing: map[model.ActorID]model.ProcessingState{model.ActorCodex: model.ProcessingFailed},
+	}
+	event, err := engine.record(EventMessageCreated, model.ActorClaude, original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original.Seq = event.Seq
+
+	retry, err := engine.Retry(context.Background(), original.ID, RetryRequest{To: []model.ActorID{model.ActorCodex}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.Handoff != original.Handoff {
+		t.Fatalf("retry lost compact handoff: %#v", retry)
+	}
+	input := receiveInput(t, adapters[model.ActorCodex])
+	if !strings.Contains(input.Text, original.Handoff) || strings.Contains(input.Text, original.Text) {
+		t.Fatalf("retry did not preserve compact peer delivery: %#v", input)
 	}
 }
 
