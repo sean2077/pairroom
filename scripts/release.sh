@@ -7,10 +7,12 @@ source "$ROOT/scripts/lib/python.sh"
 VERSION=${VERSION:-$(tr -d '\r\n' < VERSION)}
 COMMIT=${COMMIT:-$(git rev-parse HEAD)}
 BUILD_DATE=${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+LAST_TAG=${LAST_TAG:-$(git describe --tags --abbrev=0 2>/dev/null || printf unknown)}
+COMMITS_SINCE_TAG=${COMMITS_SINCE_TAG:-$(git rev-list "${LAST_TAG}..HEAD" --count 2>/dev/null || printf unknown)}
 DIST=${DIST:-dist}
 PYTHON=$(pairroom_resolve_python)
 VERSION_PKG=github.com/sean2077/pairroom/internal/version
-LDFLAGS="-s -w -X ${VERSION_PKG}.Commit=${COMMIT} -X ${VERSION_PKG}.BuildDate=${BUILD_DATE}"
+LDFLAGS="-s -w -X ${VERSION_PKG}.Commit=${COMMIT} -X ${VERSION_PKG}.BuildDate=${BUILD_DATE} -X ${VERSION_PKG}.LastTag=${LAST_TAG} -X ${VERSION_PKG}.CommitsSinceTag=${COMMITS_SINCE_TAG}"
 
 DIST_NATIVE=$("$PYTHON" - "$ROOT" "$DIST" <<'PY'
 import pathlib,sys

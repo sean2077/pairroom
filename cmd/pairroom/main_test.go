@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/sean2077/pairroom/internal/version"
 )
 
 func TestSubcommandHelpReturnsSuccess(t *testing.T) {
@@ -22,6 +24,39 @@ func TestUnknownCommandReturnsError(t *testing.T) {
 func TestVersionJSON(t *testing.T) {
 	if err := run([]string{"version", "--json"}); err != nil {
 		t.Fatalf("version --json: %v", err)
+	}
+}
+
+func TestVersionSummaryIncludesGitMetadata(t *testing.T) {
+	originalCommit, originalLastTag, originalCommits := version.Commit, version.LastTag, version.CommitsSinceTag
+	t.Cleanup(func() {
+		version.Commit, version.LastTag, version.CommitsSinceTag = originalCommit, originalLastTag, originalCommits
+	})
+	version.Commit = "44b6a7a1234567890abcdef1234567890abcdef12"
+	version.LastTag = "v1.1.0"
+	version.CommitsSinceTag = "8"
+	want := "pairroom " + version.Current + " (commit 44b6a7a12345, 8 commits since v1.1.0)"
+	if got := versionSummary(); got != want {
+		t.Fatalf("versionSummary()=%q want %q", got, want)
+	}
+	version.CommitsSinceTag = "1"
+	want = "pairroom " + version.Current + " (commit 44b6a7a12345, 1 commit since v1.1.0)"
+	if got := versionSummary(); got != want {
+		t.Fatalf("versionSummary()=%q want %q", got, want)
+	}
+}
+
+func TestVersionSummaryFallsBackToBareVersion(t *testing.T) {
+	originalCommit, originalLastTag, originalCommits := version.Commit, version.LastTag, version.CommitsSinceTag
+	t.Cleanup(func() {
+		version.Commit, version.LastTag, version.CommitsSinceTag = originalCommit, originalLastTag, originalCommits
+	})
+	version.Commit = "dev"
+	version.LastTag = "unknown"
+	version.CommitsSinceTag = "unknown"
+	want := "pairroom " + version.Current
+	if got := versionSummary(); got != want {
+		t.Fatalf("versionSummary()=%q want %q", got, want)
 	}
 }
 

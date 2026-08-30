@@ -4,6 +4,7 @@
 
 ### Added
 
+- `pairroom version` now reports the built git commit and the commit count since the nearest tag in its text output, with `last_tag` and `commits_since_tag` added to the JSON build metadata; `make build`, `make install`, `make release`, and the CI/release workflows inject the values through ldflags.
 - `pairroom-protocol/v2` with compact, durable `PAIRROOM:HANDOFF` packets for peer turns and staged `IMPLEMENTED → REVIEW_CHANGES/REVIEW_APPROVED` Driver/Reviewer handoffs.
 
 ### Changed

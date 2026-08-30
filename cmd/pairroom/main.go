@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -105,8 +106,36 @@ func runVersion(args []string) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(version.BuildInfo())
 	}
-	fmt.Println("pairroom", version.Current)
+	fmt.Println(versionSummary())
 	return nil
+}
+
+// versionSummary renders the human-readable version line. Git metadata is
+// injected at build time; binaries built without it fall back to the bare
+// version instead of advertising placeholder values.
+func versionSummary() string {
+	var parts []string
+	if commit := version.Commit; commit != "" && commit != "dev" {
+		parts = append(parts, "commit "+shortCommit(commit))
+	}
+	if count, err := strconv.Atoi(version.CommitsSinceTag); err == nil && version.LastTag != "" && version.LastTag != "unknown" {
+		noun := "commits"
+		if count == 1 {
+			noun = "commit"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s since %s", count, noun, version.LastTag))
+	}
+	if len(parts) == 0 {
+		return "pairroom " + version.Current
+	}
+	return fmt.Sprintf("pairroom %s (%s)", version.Current, strings.Join(parts, ", "))
+}
+
+func shortCommit(commit string) string {
+	if len(commit) > 12 {
+		return commit[:12]
+	}
+	return commit
 }
 
 // runService starts the process-wide Management Shell. Room runtimes are

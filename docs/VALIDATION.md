@@ -189,7 +189,7 @@ go test ./internal/service -run TestNativeSessionMaterializationAndExactResume -
 - all checksums;
 - ELF/PE/Mach-O architecture signatures;
 - source archive integrity;
-- embedded version/commit/build date;
+- embedded version/commit/build date/tag distance;
 - SBOM/provenance consistency;
 - checksum coverage of every release file.
 

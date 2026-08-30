@@ -292,7 +292,9 @@ pairroom version
 pairroom version --json
 ```
 
-文本输出版本号；JSON 输出 `version`、`commit`、`build_date` 与 `store_schema`。当前源码常量为版本 `1.0.0`、Store schema `7`。
+文本输出 `pairroom <版本>`；构建管线注入 git 元数据时追加构建提交与距最近 tag 的提交数，例如 `pairroom 1.1.0 (commit 44b6a7a12345, 8 commits since v1.1.0)`。JSON 输出 `version`、`commit`、`build_date`、`last_tag`、`commits_since_tag` 与 `store_schema`。当前源码常量为版本 `1.1.0`、Store schema `7`。
+
+git 元数据由 `make build`、`make install`、`make release` 与 CI/release 工作流通过 `-ldflags` 注入：`commit` 为完整 SHA，`last_tag` 为构建提交可达的最近 tag，`commits_since_tag` 为二者之间的提交数。未经注入的本地 `go build` 保留开发默认值（`dev`/`unknown`），文本输出退化为仅版本号。
 
 ## 配置文件与优先级
 

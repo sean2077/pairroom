@@ -16,7 +16,7 @@ func TestVersionFileMatchesBinaryVersion(t *testing.T) {
 		t.Fatalf("VERSION=%q Current=%q", got, Current)
 	}
 	info := BuildInfo()
-	if info.Version != Current || info.StoreSchema != StoreSchema || info.Commit == "" || info.BuildDate == "" {
+	if info.Version != Current || info.StoreSchema != StoreSchema || info.Commit == "" || info.BuildDate == "" || info.LastTag == "" || info.CommitsSinceTag == "" {
 		t.Fatalf("invalid build info: %#v", info)
 	}
 }
