@@ -17,7 +17,7 @@
 ### Fixed
 
 - New unthreaded `append`/`supersede` input to the same Agent now suppresses an older automatic handoff, while explicit `next_turn` remains the independent-task path.
-- Mentions inside compact handoffs participate in routing, API replies inherit the replied-to Agent when no stronger target is supplied, and Reviewer startup serializes with snapshot refresh and delivery.
+- Mentions inside compact handoffs participate in routing, API replies inherit the replied-to Agent when no stronger target is supplied, and context-aware lifecycle serialization keeps Reviewer startup, snapshot refresh, and delivery ordered without ignoring cancelled callers.
 - Compact peer handoffs survive auditable retry instead of falling back to the full human-facing response.
 - A newer human message suppresses automatic handoff only in the same discussion thread, so independent tasks can progress concurrently.
 - Handoff-only Agent finals are retained, oversized handoffs stay within the durable limit, and staged transfer fails closed when the evidence packet is missing or control markers conflict.

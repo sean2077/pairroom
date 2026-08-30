@@ -49,7 +49,7 @@ system
 
 ### Reply
 
-`reply_to` 是展示与上下文引用，不意味着只有被回复者收到。实际目标由 `to` 决定。
+`reply_to` 用于展示、上下文引用和 thread 继承。显式 `to`、`target_role` 或正文 mention 存在时，它们决定实际目标，回复不意味着只有被回复者收到；这些目标都省略且被回复消息来自 Agent 时，Service 将消息投递回该 Agent；否则回退到唯一的当前 Driver。
 
 ### Retry
 

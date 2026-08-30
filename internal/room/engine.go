@@ -119,7 +119,7 @@ type Engine struct {
 
 	lastRuntimeActivity map[model.ActorID]time.Time
 	stallWarnedTurn     map[model.ActorID]string
-	deliveryMu          map[model.ActorID]*sync.Mutex
+	deliveryMu          map[model.ActorID]chan struct{}
 }
 
 func New(cfg Config) (*Engine, error) {
@@ -156,9 +156,9 @@ func New(cfg Config) (*Engine, error) {
 		adapters:            make(map[model.ActorID]agent.Adapter, 2),
 		lastRuntimeActivity: make(map[model.ActorID]time.Time, 2),
 		stallWarnedTurn:     make(map[model.ActorID]string, 2),
-		deliveryMu: map[model.ActorID]*sync.Mutex{
-			model.ActorClaude: &sync.Mutex{},
-			model.ActorCodex:  &sync.Mutex{},
+		deliveryMu: map[model.ActorID]chan struct{}{
+			model.ActorClaude: make(chan struct{}, 1),
+			model.ActorCodex:  make(chan struct{}, 1),
 		},
 	}
 	if err := e.restore(); err != nil {
@@ -777,7 +777,10 @@ func (e *Engine) Retry(ctx context.Context, messageID string, req RetryRequest) 
 }
 
 func (e *Engine) StartAgent(ctx context.Context, actor model.ActorID) error {
-	unlock := e.lockDelivery(actor)
+	unlock, err := e.lockDelivery(ctx, actor)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	return e.startAgentLocked(ctx, actor)
 }
@@ -804,7 +807,10 @@ func (e *Engine) startAgentLocked(ctx context.Context, actor model.ActorID) erro
 }
 
 func (e *Engine) StopAgent(ctx context.Context, actor model.ActorID) error {
-	unlock := e.lockDelivery(actor)
+	unlock, err := e.lockDelivery(ctx, actor)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	return e.stopAgentLocked(ctx, actor)
 }
@@ -828,7 +834,10 @@ func (e *Engine) stopAgentLocked(ctx context.Context, actor model.ActorID) error
 }
 
 func (e *Engine) RestartAgent(ctx context.Context, actor model.ActorID) error {
-	unlock := e.lockDelivery(actor)
+	unlock, err := e.lockDelivery(ctx, actor)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	if err := e.stopAgentLocked(ctx, actor); err != nil {
 		return err
@@ -945,7 +954,10 @@ func (e *Engine) SetRole(ctx context.Context, actor model.ActorID, role model.Pa
 	// The reviewer snapshot manager is shared by both participants. Serialize a
 	// role transition with both submission paths so a concurrent delivery cannot
 	// mutate the live tree while a new reviewer snapshot is captured.
-	unlock := e.lockAllDeliveries()
+	unlock, err := e.lockAllDeliveries(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	e.routingMu.Lock()
 	defer e.routingMu.Unlock()
@@ -1029,7 +1041,10 @@ func (e *Engine) SwitchDriver(ctx context.Context, driver model.ActorID) error {
 	if !driver.ValidParticipant() {
 		return errors.New("driver must be claude or codex")
 	}
-	unlock := e.lockAllDeliveries()
+	unlock, err := e.lockAllDeliveries(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	e.routingMu.Lock()
 	defer e.routingMu.Unlock()
@@ -1222,22 +1237,40 @@ func (e *Engine) runtimeContext(requestCtx context.Context) context.Context {
 	return engineCtx
 }
 
-func (e *Engine) lockDelivery(actor model.ActorID) func() {
+func (e *Engine) lockDelivery(ctx context.Context, actor model.ActorID) (func(), error) {
 	lock := e.deliveryMu[actor]
 	if lock == nil {
-		return func() {}
+		return func() {}, nil
 	}
-	lock.Lock()
-	return lock.Unlock
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case lock <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-lock
+			return nil, err
+		}
+		return func() { <-lock }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
-func (e *Engine) lockAllDeliveries() func() {
-	claudeUnlock := e.lockDelivery(model.ActorClaude)
-	codexUnlock := e.lockDelivery(model.ActorCodex)
+func (e *Engine) lockAllDeliveries(ctx context.Context) (func(), error) {
+	claudeUnlock, err := e.lockDelivery(ctx, model.ActorClaude)
+	if err != nil {
+		return nil, err
+	}
+	codexUnlock, err := e.lockDelivery(ctx, model.ActorCodex)
+	if err != nil {
+		claudeUnlock()
+		return nil, err
+	}
 	return func() {
 		codexUnlock()
 		claudeUnlock()
-	}
+	}, nil
 }
 
 func (e *Engine) targetUsesReviewerSnapshot(target model.ActorID) bool {
@@ -1249,17 +1282,23 @@ func (e *Engine) targetUsesReviewerSnapshot(target model.ActorID) bool {
 // lockDeliveryScope keeps ordinary peer/Driver submissions independent while
 // serializing a Reviewer refresh with both submissions. Role transitions take
 // the same pair of locks, and the role is rechecked after lock acquisition.
-func (e *Engine) lockDeliveryScope(target model.ActorID) func() {
+func (e *Engine) lockDeliveryScope(ctx context.Context, target model.ActorID) (func(), error) {
 	for {
 		reviewer := e.targetUsesReviewerSnapshot(target)
-		var unlock func()
+		var (
+			unlock func()
+			err    error
+		)
 		if reviewer {
-			unlock = e.lockAllDeliveries()
+			unlock, err = e.lockAllDeliveries(ctx)
 		} else {
-			unlock = e.lockDelivery(target)
+			unlock, err = e.lockDelivery(ctx, target)
+		}
+		if err != nil {
+			return nil, err
 		}
 		if reviewer == e.targetUsesReviewerSnapshot(target) {
-			return unlock
+			return unlock, nil
 		}
 		unlock()
 	}
@@ -1323,7 +1362,13 @@ func peerInputText(message model.Message, target model.ActorID) string {
 }
 
 func (e *Engine) deliver(ctx context.Context, message model.Message, target model.ActorID) {
-	unlock := e.lockDeliveryScope(target)
+	unlock, err := e.lockDeliveryScope(ctx, target)
+	if err != nil {
+		detail := "wait for participant delivery serialization: " + err.Error()
+		e.delivery(message.ID, target, model.DeliveryFailed, detail)
+		e.processing(message.ID, target, model.ProcessingFailed, detail, "")
+		return
+	}
 	defer unlock()
 	adapter, err := e.adapter(target)
 	if err != nil {

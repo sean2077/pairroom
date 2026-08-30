@@ -378,6 +378,47 @@ func TestReviewerRefreshWaitsForConcurrentStartup(t *testing.T) {
 	}
 }
 
+func TestLifecycleLockAcquisitionHonorsContext(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	adapters[model.ActorCodex].beforeReturn = func(model.AgentInput) {
+		close(blocked)
+		<-release
+	}
+
+	message, err := engine.Send(context.Background(), SendRequest{Text: "Block in submit", To: []model.ActorID{model.ActorCodex}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-blocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("delivery did not enter the blocking submission")
+	}
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	started := time.Now()
+	err = engine.StopAgent(stopCtx, model.ActorCodex)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		close(release)
+		t.Fatalf("StopAgent error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		close(release)
+		t.Fatalf("StopAgent ignored its context while waiting for delivery serialization: %s", elapsed)
+	}
+
+	close(release)
+	waitForDeliveryState(t, engine, message.ID, model.ActorCodex, model.DeliveryStarted)
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cleanupCancel()
+	if err := engine.StopAgent(cleanupCtx, model.ActorCodex); err != nil {
+		t.Fatalf("StopAgent after delivery release: %v", err)
+	}
+}
+
 func TestSetRoleDoesNotRefreshUnchangedReviewerWorkspace(t *testing.T) {
 	eventStore, err := store.Open(t.TempDir())
 	if err != nil {
