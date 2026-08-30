@@ -147,11 +147,14 @@ type AgentAttachment struct {
 }
 
 type Message struct {
-	ID                      string                      `json:"id"`
-	Seq                     uint64                      `json:"seq"`
-	From                    ActorID                     `json:"from"`
-	To                      []ActorID                   `json:"to,omitempty"`
-	Text                    string                      `json:"text"`
+	ID   string    `json:"id"`
+	Seq  uint64    `json:"seq"`
+	From ActorID   `json:"from"`
+	To   []ActorID `json:"to,omitempty"`
+	Text string    `json:"text"`
+	// Handoff is a bounded, agent-authored context packet used for peer
+	// delivery. The full response stays in Text for the human transcript.
+	Handoff                 string                      `json:"handoff,omitempty"`
 	ReplyTo                 string                      `json:"reply_to,omitempty"`
 	RetryOf                 string                      `json:"retry_of,omitempty"`
 	Intent                  MessageIntent               `json:"intent,omitempty"`

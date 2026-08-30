@@ -144,8 +144,10 @@ pairroom daemon install --force -- \
 | 模式 | 行为 |
 |---|---|
 | `manual` | Agent 回答不自动转发 |
-| `mentions` | 只有显式提到 Peer 才继续；默认推荐 |
-| `roundtable` | 双方自动往返，但受 hop budget、停止标记和用户新指令约束 |
+| `mentions` | 显式 `@peer`，或有效的 Driver/Reviewer 阶段标记才继续；默认推荐 |
+| `roundtable` | 双方自动往返，但受 hop budget、阶段/停止标记和用户新指令约束 |
+
+未显式指定接收者时，消息只发送给唯一的当前 Driver；需要直接审查时可选随角色切换的 `@Reviewer`，需要真正独立并行分析时再选 `@all`。Agent 交接给 Peer 时可附带隐藏的紧凑 `PAIRROOM:HANDOFF`，避免把整段实施报告重复注入另一侧上下文。
 
 用户新消息优先于旧的自动接力。旧 Turn 的结果仍保留用于审计，但不会继续触发过期讨论。
 
@@ -158,7 +160,7 @@ Claude Code  Driver
 Codex        Reviewer
 ```
 
-Reviewer 使用包含 HEAD、dirty tracked 变更和 untracked regular files 的独立 Git snapshot，并叠加供应商原生策略：Claude 使用 `plan` permission mode 与写工具 deny，Codex 每个 Turn 使用 `readOnly` sandbox。该边界不是容器、VM 或只读 mount；强隔离任务仍应在受控环境中运行。
+Reviewer 使用包含 HEAD、dirty tracked 变更和 untracked regular files 的独立 Git snapshot，并叠加供应商原生策略：Claude 使用 `plan` permission mode 与写工具 deny，Codex 每个 Turn 使用 `readOnly` sandbox。PairRoom 会在 Reviewer 空闲且即将开始一个新审查 Turn 时重新生成快照，确保它看到 Driver 最新完成的改动，而不是 Room 启动时的旧状态。该边界不是容器、VM 或只读 mount；强隔离任务仍应在受控环境中运行。
 
 ### 审批与过程可见性
 
@@ -175,19 +177,20 @@ PairRoom 分开记录：
 
 ## 建议的协作方式
 
-先让双方独立分析并约定职责：
+日常任务先发给当前 Driver；只有方案确实存在高价值分歧时才用 `@all` 做独立分析。Driver 完成实现和验证后，以紧凑证据包交给 Reviewer：
 
 ```text
-@all 请分别独立理解仓库和任务。Claude 给出实现方案，Codex 检查并发、兼容性和测试遗漏；未达成共识前不要修改代码。
+[PAIRROOM:HANDOFF]
+Goal: 本轮验收目标
+Scope: 实际修改范围
+Evidence: 已运行的测试、关键输出和 diff 事实
+Risks: 尚未排除的边界
+Ask: Reviewer 需要独立验证的具体问题
+[/PAIRROOM:HANDOFF]
+[PAIRROOM:IMPLEMENTED]
 ```
 
-确认后让 Driver 实现、Reviewer 审查：
-
-```text
-@claude 按确认方案实现并运行测试。完成后 @codex 审查完整 diff，重点检查错误处理、边界和缺失测试。
-```
-
-随时用新消息打断错误方向。概念、角色、Binding、Runtime 和消息状态的完整解释见 [`docs/CONCEPTS.md`](docs/CONCEPTS.md)。
+Reviewer 独立读取刷新后的仓库快照，批准时结束为 `[PAIRROOM:REVIEW_APPROVED]`；发现阻塞问题时用紧凑 handoff 加 `[PAIRROOM:REVIEW_CHANGES]` 返回 Driver。这样公共时间线保留完整人类报告，而 Peer 只接收改变决策所需的上下文。随时用新消息打断错误方向。概念、角色、Binding、Runtime 和消息状态的完整解释见 [`docs/CONCEPTS.md`](docs/CONCEPTS.md)。
 
 ## 安全与隐私边界
 

@@ -7,6 +7,12 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 )
 
+func TestProtocolVersionMatchesStagedHandoffContract(t *testing.T) {
+	if Version != "pairroom-protocol/v2" {
+		t.Fatalf("protocol version = %q, want pairroom-protocol/v2", Version)
+	}
+}
+
 func TestResolveFiltersRoleAndRoutingRules(t *testing.T) {
 	contract, err := Resolve(Selection{
 		Actor:       model.ActorCodex,
@@ -23,11 +29,14 @@ func TestResolveFiltersRoleAndRoutingRules(t *testing.T) {
 		"role: reviewer",
 		"routing_mode: roundtable",
 		"[authority.human]",
+		"[collaboration.selective]",
+		"[context.handoff]",
 		"Use @claude only",
 		"[role.reviewer]",
 		"[routing.roundtable]",
-		"optional standalone final marker",
-		"[PAIRROOM:CONSENSUS]",
+		"[PAIRROOM:IMPLEMENTED]",
+		"[PAIRROOM:REVIEW_CHANGES]",
+		"[PAIRROOM:REVIEW_APPROVED]",
 	} {
 		if !strings.Contains(got, fragment) {
 			t.Fatalf("contract missing %q:\n%s", fragment, got)

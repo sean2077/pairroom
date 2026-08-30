@@ -11,8 +11,8 @@ import (
 // These budgets keep stable collaboration prose out of every native turn.
 // Tests intentionally fail when either projection grows past its release gate.
 const (
-	MaxBootstrapBytes        = 1024
-	MaxEnvelopeOverheadBytes = 420
+	MaxBootstrapBytes        = 1100
+	MaxEnvelopeOverheadBytes = 380
 )
 
 // BootstrapPrompt is projected once at the native harness's instruction layer.
@@ -36,8 +36,8 @@ func Envelope(input model.AgentInput) string {
 	fmt.Fprintf(&b, "message_id: %s\n", input.MessageID)
 	fmt.Fprintf(&b, "thread_id: %s\n", input.ThreadID)
 	fmt.Fprintf(&b, "hop: %d\n", input.Hop)
-	fmt.Fprintf(&b, "from: %s\n", input.From.DisplayName())
-	fmt.Fprintf(&b, "to: %s\n", input.To.DisplayName())
+	fmt.Fprintf(&b, "from: %s\n", input.From)
+	fmt.Fprintf(&b, "to: %s\n", input.To)
 	if input.ReplyTo != "" {
 		fmt.Fprintf(&b, "reply_to: %s\n", input.ReplyTo)
 	}

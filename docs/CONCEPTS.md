@@ -154,7 +154,9 @@ Management Token 是整个 Service 的高权限控制面凭据，不是某个 Ro
 
 ### Message
 
-用户或 Agent 在 PairRoom 公共时间线中的持久记录。用户消息可以有多个目标，例如同时发给 Claude 和 Codex。
+用户或 Agent 在 PairRoom 公共时间线中的持久记录。用户消息可以有多个目标，例如同时发给 Claude 和 Codex。未显式选择目标且没有 mention 时，正常 Driver/Reviewer 配置只投递给唯一的当前 Driver；`@all` 仍用于确实需要双侧独立工作的任务。
+
+Agent 消息还可持久化一个有界 `handoff`：完整 `text` 服务于人类时间线，`handoff` 只携带 Peer 完成下一阶段所需的目标、改动范围、证据、风险和明确问题，避免把长报告重复注入另一侧原生上下文。
 
 ### Delivery
 
@@ -203,9 +205,12 @@ Inspector 的工具、命令、计划、Diff、用量和最终结果按 Turn 投
 | `mentions` | Agent 明确 `@Peer` 才继续 | 默认日常协作 |
 | `roundtable` | 双方自动往返 | 有界方案讨论 |
 
-Roundtable 受到 `--max-hops`、用户新消息和停止标记限制。Agent 可在最终回复末尾使用：
+Roundtable 受到 `--max-hops`、用户新消息和停止标记限制。Driver/Reviewer 在 `mentions` 与 `roundtable` 中还可使用阶段标记：
 
 ```text
+[PAIRROOM:IMPLEMENTED]       # Driver → Reviewer
+[PAIRROOM:REVIEW_CHANGES]   # Reviewer → Driver
+[PAIRROOM:REVIEW_APPROVED]  # 审查完成并停止
 [PAIRROOM:CONTINUE]
 [PAIRROOM:CONSENSUS]
 [PAIRROOM:WAIT]
@@ -213,7 +218,7 @@ Roundtable 受到 `--max-hops`、用户新消息和停止标记限制。Agent �
 [PAIRROOM:DONE]
 ```
 
-除 `CONTINUE` 外都停止自动接力；标记不显示在公共时间线。
+阶段交接最好同时提供 `[PAIRROOM:HANDOFF]...[/PAIRROOM:HANDOFF]`。这些控制块不显示在公共时间线；`manual` 始终不自动转发，角色不匹配的阶段标记也不会绕过角色边界。
 
 ## 角色与 Workspace
 
@@ -234,7 +239,7 @@ Roundtable 受到 `--max-hops`、用户新消息和停止标记限制。Agent �
 - Codex 使用 readOnly sandbox；
 - POSIX 上额外移除写位，Windows 明确报告较弱文件权限边界。
 
-Reviewer snapshot 用于读取和审查，不是并行实现分支，也不是容器级隔离。
+Reviewer snapshot 用于读取和审查，不是并行实现分支，也不是容器级隔离。Room 激活时会建立初始边界；当 Reviewer 处于安全空闲状态并即将开始新的审查 Turn 时，PairRoom 会重新生成快照，因此 Driver 刚完成的 dirty/untracked 变化会进入本轮审查。正在执行或被 steer 的同一个 Reviewer Turn 不会中途更换文件系统视图。
 
 ## Event Log 与 Registry
 

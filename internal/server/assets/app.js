@@ -16,7 +16,7 @@
     snapshot: null,
     drafts: { claude: '', codex: '' },
     draftCorrelation: { claude: '', codex: '' },
-    selectedTarget: 'all',
+    selectedTarget: 'driver',
     replyTo: '',
     pendingAttachments: [],
     attachmentObjectURLs: new Set(),
@@ -254,6 +254,7 @@
     $('room-name').textContent = state.snapshot.meta.name;
     $('repo-path').textContent = state.snapshot.meta.repo;
     renderParticipants();
+    updateDeliveryHint();
     renderSettings();
     renderAttachmentStrip();
     updateComposerAvailability();
@@ -597,6 +598,13 @@
 	  }
 	  meta.appendChild(intentMarker);
 	}
+    if (message.handoff) {
+      const handoffMarker = document.createElement('span');
+      handoffMarker.className = 'intent-marker';
+      handoffMarker.textContent = '紧凑交接';
+      handoffMarker.title = truncate(message.handoff, 320);
+      meta.appendChild(handoffMarker);
+    }
     meta.appendChild(actions);
 
     const bubble = document.createElement('div');
@@ -1460,14 +1468,13 @@
       return;
     }
     if (!text && attachments.length === 0) return;
-    const targetMap = { all: ['claude', 'codex'], claude: ['claude'], codex: ['codex'] };
     $('send-button').disabled = true;
     try {
       await api('/api/v1/messages', {
         method: 'POST',
         body: JSON.stringify({
           text,
-          to: targetMap[state.selectedTarget],
+          to: recipientsForTarget(state.selectedTarget),
           reply_to: state.replyTo || undefined,
           attachments,
 		  intent: $('message-intent').value,
@@ -1633,6 +1640,7 @@
     const message = state.snapshot.messages.find((item) => item.id === messageId);
     if (!message) return;
     state.replyTo = messageId;
+    if (['claude', 'codex'].includes(message.from)) setTarget(message.from);
     $('reply-preview').textContent = `${displayName(message.from)}：${truncate(message.text || attachmentSummary(message), 120)}`;
     $('reply-banner').classList.remove('hidden');
     messageInput.focus();
@@ -1662,11 +1670,50 @@
     if (tab === 'diff') refreshDiff();
   }
 
+  function currentDriver() {
+    const participants = state.snapshot?.participants || {};
+    const drivers = ['claude', 'codex'].filter((actor) => participants[actor]?.role === 'driver');
+    return drivers.length === 1 ? drivers[0] : '';
+  }
+
+  function currentReviewer() {
+    const participants = state.snapshot?.participants || {};
+    const reviewers = ['claude', 'codex'].filter((actor) => participants[actor]?.role === 'reviewer');
+    return reviewers.length === 1 ? reviewers[0] : '';
+  }
+
+  function recipientsForTarget(target) {
+    if (target === 'driver') {
+      const driver = currentDriver();
+      return driver ? [driver] : ['claude', 'codex'];
+    }
+    if (target === 'reviewer') {
+      const reviewer = currentReviewer();
+      return reviewer ? [reviewer] : ['claude', 'codex'];
+    }
+    if (target === 'claude') return ['claude'];
+    if (target === 'codex') return ['codex'];
+    return ['claude', 'codex'];
+  }
+
+  function updateDeliveryHint() {
+    const driver = currentDriver();
+    const reviewer = currentReviewer();
+    const labels = {
+      driver: driver ? `发送给当前 Driver · ${displayName(driver)}` : 'Driver 角色不唯一；发送给两个 Agent',
+      reviewer: reviewer ? `发送给当前 Reviewer · ${displayName(reviewer)}` : 'Reviewer 角色不唯一；发送给两个 Agent',
+      all: '发送给 Claude 与 Codex',
+      claude: '仅发送给 Claude',
+      codex: '仅发送给 Codex',
+    };
+    $('delivery-hint').textContent = labels[state.selectedTarget] || labels.driver;
+  }
+
   function setTarget(target) {
+    if (!['driver', 'reviewer', 'all', 'claude', 'codex'].includes(target)) target = 'driver';
     state.selectedTarget = target;
     document.querySelectorAll('.target-button').forEach((button) => button.classList.toggle('active', button.dataset.target === target));
-    const labels = { all: '发送给 Claude 与 Codex', claude: '仅发送给 Claude', codex: '仅发送给 Codex' };
-    $('delivery-hint').textContent = labels[target];
+    updateDeliveryHint();
     persistComposerDraft();
     messageInput.focus();
   }
@@ -1685,7 +1732,7 @@
       const draft = JSON.parse(localStorage.getItem(state.draftKey) || 'null');
       if (draft && typeof draft === 'object') {
         messageInput.value = String(draft.text || '');
-        if (['all', 'claude', 'codex'].includes(draft.target)) state.selectedTarget = draft.target;
+        if (['driver', 'reviewer', 'all', 'claude', 'codex'].includes(draft.target)) state.selectedTarget = draft.target;
         if (['append', 'next_turn', 'supersede'].includes(draft.intent)) $('message-intent').value = draft.intent;
       }
     } catch { localStorage.removeItem(state.draftKey); }

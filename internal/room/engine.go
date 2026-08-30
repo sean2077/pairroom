@@ -117,6 +117,7 @@ type Engine struct {
 
 	lastRuntimeActivity map[model.ActorID]time.Time
 	stallWarnedTurn     map[model.ActorID]string
+	deliveryMu          map[model.ActorID]*sync.Mutex
 }
 
 func New(cfg Config) (*Engine, error) {
@@ -153,6 +154,10 @@ func New(cfg Config) (*Engine, error) {
 		adapters:            make(map[model.ActorID]agent.Adapter, 2),
 		lastRuntimeActivity: make(map[model.ActorID]time.Time, 2),
 		stallWarnedTurn:     make(map[model.ActorID]string, 2),
+		deliveryMu: map[model.ActorID]*sync.Mutex{
+			model.ActorClaude: &sync.Mutex{},
+			model.ActorCodex:  &sync.Mutex{},
+		},
 	}
 	if err := e.restore(); err != nil {
 		return nil, err
@@ -726,6 +731,7 @@ func (e *Engine) Retry(ctx context.Context, messageID string, req RetryRequest) 
 		From:                    original.From,
 		To:                      targets,
 		Text:                    original.Text,
+		Handoff:                 original.Handoff,
 		ReplyTo:                 original.ReplyTo,
 		RetryOf:                 original.ID,
 		Intent:                  original.Intent,
@@ -1163,11 +1169,79 @@ func (e *Engine) runtimeContext(requestCtx context.Context) context.Context {
 	return engineCtx
 }
 
+// refreshReviewerWorkspace recreates the reviewer snapshot immediately before
+// a safe new reviewer turn. The startup snapshot is only an initial boundary;
+// without this refresh a reviewer could inspect files from before the Driver's
+// latest implementation. Active reviewer turns keep their existing snapshot so
+// steering remains correlated to one stable filesystem view.
+func (e *Engine) refreshReviewerWorkspace(ctx context.Context, target model.ActorID, adapter agent.Adapter) error {
+	e.mu.RLock()
+	participant := e.snapshot.Participants[target]
+	e.mu.RUnlock()
+	if participant.Role != model.RoleReviewer || e.cfg.Workspaces == nil {
+		return nil
+	}
+	state := adapter.State()
+	switch state {
+	case model.StateStopped, model.StateIdle, model.StateError:
+	default:
+		return nil
+	}
+	if state != model.StateStopped {
+		if err := adapter.Stop(ctx); err != nil {
+			return fmt.Errorf("stop idle reviewer before snapshot refresh: %w", err)
+		}
+	}
+	boundary, err := e.cfg.Workspaces.Refresh(ctx)
+	if err != nil {
+		return fmt.Errorf("refresh reviewer snapshot: %w", err)
+	}
+	if err := adapter.SetWorkspace(ctx, boundary.Path); err != nil {
+		return fmt.Errorf("apply refreshed reviewer workspace: %w", err)
+	}
+	if err := adapter.SetRole(ctx, model.RoleReviewer); err != nil {
+		return fmt.Errorf("restore reviewer policy after refresh: %w", err)
+	}
+	return e.mutateParticipant(model.ActorSystem, target, func(p *model.ParticipantSnapshot) {
+		p.Workspace = boundary
+		p.LastError = ""
+	})
+}
+
+func peerInputText(message model.Message, target model.ActorID) string {
+	if !message.From.ValidParticipant() || target != model.OtherParticipant(message.From) {
+		return message.Text
+	}
+	handoff := strings.TrimSpace(message.Handoff)
+	if handoff == "" {
+		handoff = compactHandoff(message.Text)
+	}
+	if handoff == "" {
+		return message.Text
+	}
+	return fmt.Sprintf("Peer handoff from %s. Verify repository state and claims independently.\n\n%s", message.From.DisplayName(), handoff)
+}
+
 func (e *Engine) deliver(ctx context.Context, message model.Message, target model.ActorID) {
+	if deliveryLock := e.deliveryMu[target]; deliveryLock != nil {
+		deliveryLock.Lock()
+		defer deliveryLock.Unlock()
+	}
 	adapter, err := e.adapter(target)
 	if err != nil {
 		e.delivery(message.ID, target, model.DeliveryFailed, err.Error())
 		e.processing(message.ID, target, model.ProcessingFailed, "input was not submitted: "+err.Error(), "")
+		return
+	}
+	if err := e.refreshReviewerWorkspace(ctx, target, adapter); err != nil {
+		detail := "prepare reviewer workspace: " + err.Error()
+		e.delivery(message.ID, target, model.DeliveryFailed, detail)
+		e.processing(message.ID, target, model.ProcessingFailed, detail, "")
+		e.updateParticipant(target, func(p *model.ParticipantSnapshot) {
+			p.State = model.StateError
+			p.LastError = detail
+			p.LastActivity = time.Now().UTC()
+		})
 		return
 	}
 	e.mu.RLock()
@@ -1186,7 +1260,7 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 		Hop:         message.Hop,
 		From:        message.From,
 		To:          target,
-		Text:        message.Text,
+		Text:        peerInputText(message, target),
 		ReplyTo:     message.ReplyTo,
 		Role:        participant.Role,
 		RoutingMode: settings.RoutingMode,
@@ -1570,7 +1644,8 @@ func isTransientRuntimeKind(kind string) bool {
 }
 
 func (e *Engine) onFinal(runtimeEvent model.RuntimeEvent) {
-	cleanText, control := stripControl(runtimeEvent.Text)
+	visibleText, handoff := stripHandoff(runtimeEvent.Text)
+	cleanText, control := stripControl(visibleText)
 	if strings.TrimSpace(cleanText) == "" {
 		return
 	}
@@ -1578,7 +1653,10 @@ func (e *Engine) onFinal(runtimeEvent model.RuntimeEvent) {
 	e.mu.RLock()
 	incoming, found := e.findMessageLocked(runtimeEvent.CorrelationID)
 	settings := e.snapshot.Settings
-	latestHumanSeq := e.latestHumanSeqLocked()
+	latestHumanSeq := uint64(0)
+	if found {
+		latestHumanSeq = e.latestHumanSeqInThreadLocked(incoming.ThreadID)
+	}
 	e.mu.RUnlock()
 	if !found {
 		incoming = model.Message{ID: runtimeEvent.CorrelationID, ThreadID: model.NewID("thread"), Hop: 0}
@@ -1593,6 +1671,7 @@ func (e *Engine) onFinal(runtimeEvent model.RuntimeEvent) {
 		From:                    runtimeEvent.Agent,
 		To:                      to,
 		Text:                    cleanText,
+		Handoff:                 handoff,
 		ReplyTo:                 incoming.ID,
 		ThreadID:                incoming.ThreadID,
 		Hop:                     hop,
@@ -1735,7 +1814,13 @@ func (e *Engine) agentTargets(actor model.ActorID, text, control string, hop int
 		e.notice("info", "Automatic agent handoff paused at the configured hop limit.")
 		return nil
 	}
-	if stopsConversation(control) || prompt.MentionsHuman(text) {
+	if prompt.MentionsHuman(text) {
+		return nil
+	}
+	if target := e.stagedHandoffTarget(actor, control); target.ValidParticipant() {
+		return []model.ActorID{target}
+	}
+	if stopsConversation(control) {
 		return nil
 	}
 	explicit := prompt.Mentions(text, actor)
@@ -1752,6 +1837,28 @@ func (e *Engine) agentTargets(actor model.ActorID, text, control string, hop int
 		return []model.ActorID{model.OtherParticipant(actor)}
 	}
 	return nil
+}
+
+func (e *Engine) stagedHandoffTarget(actor model.ActorID, control string) model.ActorID {
+	peer := model.OtherParticipant(actor)
+	if !peer.ValidParticipant() {
+		return ""
+	}
+	e.mu.RLock()
+	actorRole := e.snapshot.Participants[actor].Role
+	peerRole := e.snapshot.Participants[peer].Role
+	e.mu.RUnlock()
+	switch control {
+	case "IMPLEMENTED":
+		if actorRole == model.RoleDriver && peerRole == model.RoleReviewer {
+			return peer
+		}
+	case "REVIEW_CHANGES":
+		if actorRole == model.RoleReviewer && peerRole == model.RoleDriver {
+			return peer
+		}
+	}
+	return ""
 }
 
 func (e *Engine) delivery(messageID string, target model.ActorID, state model.DeliveryState, detail string) {
@@ -1837,6 +1944,19 @@ func (e *Engine) resolveUserTargets(text string, explicit []model.ActorID) []mod
 	if targets := prompt.Mentions(text, model.ActorUser); len(targets) > 0 {
 		return targets
 	}
+	e.mu.RLock()
+	drivers := make([]model.ActorID, 0, 2)
+	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+		if e.snapshot.Participants[actor].Role == model.RoleDriver {
+			drivers = append(drivers, actor)
+		}
+	}
+	e.mu.RUnlock()
+	if len(drivers) == 1 {
+		return drivers
+	}
+	// Preserve the old safe fallback when roles are ambiguous. The normal
+	// Driver/Reviewer configuration sends an unaddressed message only once.
 	return []model.ActorID{model.ActorClaude, model.ActorCodex}
 }
 
@@ -1927,10 +2047,14 @@ func (e *Engine) findMessageLocked(id string) (model.Message, bool) {
 	return model.Message{}, false
 }
 
-func (e *Engine) latestHumanSeqLocked() uint64 {
+func (e *Engine) latestHumanSeqInThreadLocked(threadID string) uint64 {
+	if threadID == "" {
+		return 0
+	}
 	for i := len(e.snapshot.Messages) - 1; i >= 0; i-- {
-		if e.snapshot.Messages[i].From == model.ActorUser {
-			return e.snapshot.Messages[i].Seq
+		message := e.snapshot.Messages[i]
+		if message.From == model.ActorUser && message.ThreadID == threadID {
+			return message.Seq
 		}
 	}
 	return 0
@@ -2370,6 +2494,30 @@ func cloneDetails(in map[model.ActorID]string) map[model.ActorID]string {
 	return out
 }
 
+const maxHandoffRunes = 4000
+
+var handoffPattern = regexp.MustCompile(`(?ms)\s*\[PAIRROOM:HANDOFF\]\s*(.*?)\s*\[/PAIRROOM:HANDOFF\]\s*`)
+
+func stripHandoff(text string) (string, string) {
+	matches := handoffPattern.FindAllStringSubmatch(text, -1)
+	handoff := ""
+	if len(matches) > 0 {
+		handoff = compactHandoff(matches[len(matches)-1][1])
+	}
+	return strings.TrimSpace(handoffPattern.ReplaceAllString(text, "\n")), handoff
+}
+
+func compactHandoff(value string) string {
+	value = strings.TrimSpace(value)
+	runes := []rune(value)
+	if len(runes) <= maxHandoffRunes {
+		return value
+	}
+	const tailRunes = 800
+	headRunes := maxHandoffRunes - tailRunes
+	return string(runes[:headRunes]) + "\n… [PairRoom handoff truncated] …\n" + string(runes[len(runes)-tailRunes:])
+}
+
 var controlPattern = regexp.MustCompile(`(?mi)^\s*\[PAIRROOM:(CONTINUE|CONSENSUS|WAIT|BLOCKED|DONE|IMPLEMENTED|REVIEW_APPROVED|REVIEW_CHANGES)\]\s*$`)
 
 func stripControl(text string) (string, string) {
@@ -2383,7 +2531,7 @@ func stripControl(text string) (string, string) {
 
 func stopsConversation(control string) bool {
 	switch control {
-	case "CONSENSUS", "WAIT", "BLOCKED", "DONE", "IMPLEMENTED", "REVIEW_APPROVED":
+	case "CONSENSUS", "WAIT", "BLOCKED", "DONE", "IMPLEMENTED", "REVIEW_APPROVED", "REVIEW_CHANGES":
 		return true
 	default:
 		return false
