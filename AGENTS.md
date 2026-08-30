@@ -35,50 +35,55 @@ PairRoom is a local Go coordination layer for the official Claude Code and Codex
 - Release acceptance: `docs/RELEASE_CHECKLIST.md`
 - Verified commands and native-runtime limits: `docs/VALIDATION.md`
 
-<!-- agent-scaffold:start — managed by the agent-scaffold skill. Edit project prose OUTSIDE these markers; `agent-scaffold upgrade` refreshes this block. -->
+<!-- agent-scaffold:start — managed; keep project prose outside; upgrade refreshes this block. -->
 ## Agent Harness (Claude Code + Codex)
 
-This repo carries a vendored, dual-host agent harness. `.agents/` is the single source of truth (SSOT); `.claude/` and `.codex/` are wired to the **same** implementations under `.agents/tools/`.
+`.agents/` is the SSOT for harness-owned skills, subagents, and runtime; `.claude/` and `.codex/` contain host projections.
 
 ### Worktree-per-change (hard rule)
 
-**Never edit trunk (`main`) directly** — every change, however small ("just docs" is NOT an exception), starts in its own worktree cut from the trunk tip:
+The primary worktree's checked-out branch is the active trunk (`--trunk` overrides); `new` records it and `done` merges back. Never edit the primary worktree directly, including docs:
 
 ```bash
-bash .agents/tools/worktree.sh new <name>   # edit inside .worktrees/<name>/  (branch feat|fix|docs|chore/<name>)
-bash .agents/tools/worktree.sh done         # merge back to local trunk (--no-ff) + clean up + ff-only push
+bash .agents/tools/worktree.sh new <name>  # work in .worktrees/<name>/
+bash .agents/tools/worktree.sh done        # merge, clean up, and ff-only push
 ```
 
-`.agents/tools/hooks/trunk_edit_guard.sh` (PreToolUse) mechanically blocks edits to tracked files while on trunk. Escape hatch — only when the user explicitly authorizes a trunk edit: `touch .claude/allow-trunk-edit` (auto-expires in 2 h) or `WORKTREE_ALLOW_TRUNK_EDIT=1`.
+On Windows, leave the target worktree and run `done --dir <absolute-wt>` from the primary worktree; `new` prints the exact command.
+
+The trunk guard blocks non-ignored project-file edits in the primary worktree, regardless of branch name. Bypass it only with explicit user approval: `WORKTREE_ALLOW_TRUNK_EDIT=1`, or `touch .claude/allow-trunk-edit` for a 2 h flag.
 
 ### Authority documents (hard rules)
 
-`AGENTS.md` is the canonical repository-level contract for Agent work. Read and follow the root contract and its applicable nested contract chain before acting; higher-priority instructions still govern.
+`AGENTS.md` is the canonical repository-level contract for Agent work. Read the root contract and applicable nested chain before acting.
 
-- **Keep it current.** When a durable change affects an Agent-relevant command, invariant, ownership boundary, risk boundary, or navigation path, update or remove the affected contract guidance in the same change. If the detail lives in linked project docs, update it there and keep the contract summary and link accurate.
-- **Keep it lean.** Keep only concise, actionable guidance that changes Agent behavior and is frequently needed or costly to miss. Move explanations, rationale, history, long procedures, examples, and low-frequency detail to project docs and link to it.
-- **Keep scopes honest.** Root rules are project-wide. Create a nested `AGENTS.md` only for a concrete local difference from the nearest ancestor; directory structure alone never justifies one.
-- **Resolve conflicts explicitly.** If applicable instructions conflict, or contract guidance disagrees with verified repository facts, do not guess or silently ignore either. Surface the conflict, follow higher-priority instructions, request owner direction when authority is unclear, and repair stale guidance in the same change when authorized.
+- **Keep it current.** When a durable Agent-relevant change makes guidance stale, update it in the same change.
+- **Keep it lean.** Keep only frequent or costly-to-miss behavior; route depth to project docs.
+- **Keep scopes honest.** Add nested `AGENTS.md` only for a concrete local difference; directory structure alone never justifies one.
+- **Resolve conflicts explicitly.** Surface conflicts, follow higher-priority instructions, ask the owner when authority is unclear, and repair stale guidance when authorized.
 
-The authority-document budget hook remains advisory; projects may override its default line and character limits when justified.
+The authority-document budget hook remains advisory; projects may override its default line and character limits.
 
-### SSOT layout
+### Project terminology (hard rule)
 
-| Path | Role | Commit? |
-|---|---|---|
-| `.agents/skills/<name>/SKILL.md` | project skill source | ✅ |
-| `.agents/subagents/<name>/{metadata.json,instructions.md}` | subagent source | ✅ |
-| `.claude/skills/<name>` | symlink → `.agents/skills/<name>` (CC discovery; Codex reads `.agents/` directly) | ✅ |
-| `.claude/agents/*.md`, `.codex/agents/*.toml` | **generated** subagent projections — do NOT hand-edit | ✅ |
-| `.agents/tools/hooks/` | scaffold-managed hook runtime (doc budget + optional trunk guard) — **managed copies, do NOT hand-edit** | ✅ |
-| `.agents/tools/worktree.sh` | worktree lifecycle — **managed copy, do NOT hand-edit** | ✅ |
-| `.claude/allow-trunk-edit` | worktree escape hatch | ❌ ignored |
-| `.claude/settings.local.json` | personal overrides | ❌ ignored |
+Every Agent, project skill, and subagent uses the canonical terminology source declared in project-owned `AGENTS.md` prose. If none is declared, read root `CONTEXT-MAP.md` when present; otherwise use root `CONTEXT.md`. The map routes multi-context repositories to context-local `CONTEXT.md` files.
 
-- **Change managed runtime**: everything under `.agents/tools/` is a copy the skill owns. Edit the skill's bundled source and run `agent-scaffold upgrade` to refresh — a hand-edit here is drift, and `agent-scaffold verify` reports it.
-- **Add a skill**: edit `.agents/skills/` → run `bash .agents/relink-skills.sh` → commit source + symlink.
-- **Add a subagent** (needs python): edit `.agents/subagents/` → run `python .agents/tools/generate-subagents.py` → commit source + generated. Wire `--check` into the project's own CI or hook manager when desired.
-- **Third-party skills** follow project-owned placement and installation policy. The relinker manages only names sourced from `.agents/skills/`, preserves unrelated entries, and fails on same-name ownership conflicts.
+- **Load only what applies.** Before naming or interpreting project concepts, read the declared glossary or map and only the relevant context file.
+- **Use canonical equivalents.** A glossary entry term and each `_Equivalent (<language-tag>)_` value are equally valid names for the same concept. Use whichever form is clearest in the current conversation or document; do not force one language. Keep at most one canonical name per language.
+- **Recognize but do not propagate avoided names.** Record historical, ambiguous, mistranslated, or retired names under `_Avoid (<language-tag>)_`. Use them only for quotation, history search, migration, or an externally fixed compatibility boundary.
+- **Close vocabulary drift.** When a durable concept, translation, ambiguity, or synonym appears, resolve it against repository evidence and project-owner intent, then update the applicable glossary in the same change. Do not silently introduce a competing name.
+- **Keep glossaries focused.** Define project-specific concepts briefly and without behavior, architecture, or decision detail.
+- **Evolve topology proportionally.** Keep one glossary while subject headings are sufficient; use `CONTEXT-MAP.md` and context-local glossaries only for durable semantic or ownership boundaries. Honor an explicit up-front or incremental modeling choice. If early evidence is insufficient, get project-owner input instead of inventing domains.
 
-**Codex trust**: project-level `.codex/` (config + hooks + agents) only loads for a **trusted** project; until trusted it is silently skipped. Trust once: run `codex` here and accept, or add `[projects."<repo abs path>"] trust_level = "trusted"` to `~/.codex/config.toml`.
+A multilingual glossary may list its `Canonical term languages` once. That list declares maintained coverage, not a preferred or mandatory discussion language. If no source is declared, adopt an existing project glossary rather than duplicating it; if none exists, create root `CONTEXT.md` only when the first durable project term is resolved. Never seed an empty glossary.
+
+### Sources and projections
+
+- Edit project skills in `.agents/skills/<name>/`, then run `bash .agents/relink-skills.sh`; commit source and symlink.
+- Edit project subagents in `.agents/subagents/<name>/`, then run `python .agents/tools/generate-subagents.py`; commit source and projections.
+- Do not hand-edit harness projections: `CLAUDE.md`, `.claude/skills/<name>` entries owned by `.agents/skills/`, `.claude/agents/*.md`, or `.codex/agents/*.toml`.
+- Do not hand-edit scaffold runtime: `.agents/tools/**`, `.agents/relink-skills.sh`, or `.agents/symlink-manager.py`. Refresh it with `agent-scaffold upgrade`, then run `agent-scaffold verify`.
+- **Third-party skills** follow project-owned placement and installation policy. The relinker preserves unrelated names and rejects same-name conflicts.
+
+For Codex, trust the project, confirm generated agents are discoverable, and review each exact hook definition in `/hooks`; re-review changed definitions. Claude checkpoints do not rewind symlinked or hard-linked targets (`CLAUDE.md`, `.claude/skills/*`); inspect and restore the real target with Git.
 <!-- agent-scaffold:end -->
