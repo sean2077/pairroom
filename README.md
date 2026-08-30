@@ -265,3 +265,10 @@ make smoke
 ## License
 
 MIT
+
+
+## Natural workflows and provider profiles
+
+PairRoom can compile an explicit sequence such as `Claude 规划，Codex review，Codex 执行，Claude audit` directly from the Room message. Planning/review/audit remain read-only, execution waits for approval of the current plan revision, and user decisions are surfaced in the shared timeline instead of a hidden terminal prompt.
+
+Claude and Codex can select independent provider profiles. PairRoom also supports a reference import from cc-connect's existing `[[providers]]` tables without copying credentials. See [Flexible workflows and provider profiles](docs/FLEXIBLE_WORKFLOWS_AND_PROVIDERS.md) and inspect the redacted result with `pairroom providers --config <path>`.

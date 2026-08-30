@@ -160,7 +160,8 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 		systemPrompt = prompt.SystemPrompt(model.ActorClaude, c.cfg.RoomName, c.cfg.Repo)
 	}
 
-	args := []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json"}
+	args := append([]string(nil), c.cfg.CommandArgs...)
+	args = append(args, "-p", "--input-format", "stream-json", "--output-format", "stream-json")
 	if flags["--verbose"] {
 		args = append(args, "--verbose")
 	}
@@ -234,7 +235,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 
 	cmd := exec.Command(c.cfg.Command, args...)
 	cmd.Dir = c.cfg.Repo
-	cmd.Env = envWithout("CLAUDECODE")
+	cmd.Env = mergeRuntimeEnv(envWithout("CLAUDECODE"), c.cfg.Env)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		c.setState(model.StateError, err.Error())

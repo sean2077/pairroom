@@ -527,3 +527,13 @@ Markdown/普通 JSON：
 ```
 
 额外包含 bounded/runtime event 数据，敏感度更高。
+
+
+## Natural workflow extension (pairroom-protocol/v3)
+
+When a message carries `workflow_id`, `workflow_stage`, and `workflow_mode`, the
+human explicitly supplied an actor/action sequence. PairRoom owns deterministic
+stage advancement and the plan-revision approval gate. Native agents own the
+work inside each stage. Plan, review, and audit are read-only; execute is the
+only write stage. Human questions must be visible in the shared Room with
+`@human` and `[PAIRROOM:WAIT]`.

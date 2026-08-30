@@ -162,6 +162,9 @@ type Message struct {
 	ThreadID                string                      `json:"thread_id"`
 	Hop                     int                         `json:"hop"`
 	TurnID                  string                      `json:"turn_id,omitempty"`
+	WorkflowID              string                      `json:"workflow_id,omitempty"`
+	WorkflowStage           int                         `json:"workflow_stage,omitempty"`
+	WorkflowMode            WorkflowMode                `json:"workflow_mode,omitempty"`
 	CreatedAt               time.Time                   `json:"created_at"`
 	Delivery                map[ActorID]DeliveryState   `json:"delivery,omitempty"`
 	DeliveryDetail          map[ActorID]string          `json:"delivery_detail,omitempty"`
@@ -219,6 +222,7 @@ type RuntimeInfo struct {
 	Path           string          `json:"path,omitempty"`
 	Protocol       string          `json:"protocol,omitempty"`
 	Version        string          `json:"version,omitempty"`
+	Provider       string          `json:"provider,omitempty"`
 	Model          string          `json:"model,omitempty"`
 	PermissionMode string          `json:"permission_mode,omitempty"`
 	ApprovalPolicy string          `json:"approval_policy,omitempty"`
@@ -269,6 +273,75 @@ type RoomSettings struct {
 
 func DefaultRoomSettings() RoomSettings {
 	return RoomSettings{RoutingMode: RoutingMentions, MaxHops: 6, StallWarningSeconds: 300}
+}
+
+type WorkflowMode string
+
+const (
+	WorkflowPlan    WorkflowMode = "plan"
+	WorkflowReview  WorkflowMode = "review"
+	WorkflowExecute WorkflowMode = "execute"
+	WorkflowAudit   WorkflowMode = "audit"
+	WorkflowDiscuss WorkflowMode = "discuss"
+)
+
+func (m WorkflowMode) Valid() bool {
+	switch m {
+	case WorkflowPlan, WorkflowReview, WorkflowExecute, WorkflowAudit, WorkflowDiscuss:
+		return true
+	default:
+		return false
+	}
+}
+
+const (
+	WorkflowStatusRunning          = "running"
+	WorkflowStatusWaitingHuman     = "waiting_human"
+	WorkflowStatusAwaitingApproval = "awaiting_approval"
+	WorkflowStatusCompleted        = "completed"
+	WorkflowStatusCancelled        = "cancelled"
+	WorkflowStatusFailed           = "failed"
+	WorkflowStatusSuperseded       = "superseded"
+
+	WorkflowStagePending      = "pending"
+	WorkflowStageRunning      = "running"
+	WorkflowStageWaitingHuman = "waiting_human"
+	WorkflowStageCompleted    = "completed"
+	WorkflowStageCancelled    = "cancelled"
+	WorkflowStageFailed       = "failed"
+)
+
+type WorkflowStage struct {
+	ID          string       `json:"id"`
+	Index       int          `json:"index"`
+	Actor       ActorID      `json:"actor"`
+	Mode        WorkflowMode `json:"mode"`
+	Label       string       `json:"label"`
+	Status      string       `json:"status"`
+	StartedAt   *time.Time   `json:"started_at,omitempty"`
+	CompletedAt *time.Time   `json:"completed_at,omitempty"`
+}
+
+// WorkflowState is the compiled, durable representation of a human's natural
+// language collaboration sequence. It is intentionally small: native harnesses
+// still own reasoning and tools, while PairRoom owns sequencing and approval.
+type WorkflowState struct {
+	ID               string          `json:"id"`
+	Goal             string          `json:"goal"`
+	SourceMessageID  string          `json:"source_message_id,omitempty"`
+	Stages           []WorkflowStage `json:"stages"`
+	CurrentStage     int             `json:"current_stage"`
+	Status           string          `json:"status"`
+	RequiresApproval bool            `json:"requires_approval"`
+	Revision         int             `json:"revision"`
+	ApprovedRevision int             `json:"approved_revision,omitempty"`
+	LastMessageID    string          `json:"last_message_id,omitempty"`
+	LastTurnID       string          `json:"last_turn_id,omitempty"`
+	LastResult       string          `json:"last_result,omitempty"`
+	LastSignal       string          `json:"last_signal,omitempty"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
+	CompletedAt      *time.Time      `json:"completed_at,omitempty"`
 }
 
 type RoomMeta struct {
@@ -373,18 +446,21 @@ const (
 )
 
 type AgentInput struct {
-	MessageID   string            `json:"message_id"`
-	ThreadID    string            `json:"thread_id"`
-	Hop         int               `json:"hop"`
-	From        ActorID           `json:"from"`
-	To          ActorID           `json:"to"`
-	Text        string            `json:"text"`
-	ReplyTo     string            `json:"reply_to,omitempty"`
-	Role        ParticipantRole   `json:"role"`
-	RoutingMode RoutingMode       `json:"routing_mode"`
-	MaxHops     int               `json:"max_hops"`
-	Attachments []AgentAttachment `json:"attachments,omitempty"`
-	Intent      MessageIntent     `json:"intent,omitempty"`
+	MessageID     string            `json:"message_id"`
+	ThreadID      string            `json:"thread_id"`
+	Hop           int               `json:"hop"`
+	From          ActorID           `json:"from"`
+	To            ActorID           `json:"to"`
+	Text          string            `json:"text"`
+	ReplyTo       string            `json:"reply_to,omitempty"`
+	Role          ParticipantRole   `json:"role"`
+	RoutingMode   RoutingMode       `json:"routing_mode"`
+	MaxHops       int               `json:"max_hops"`
+	Attachments   []AgentAttachment `json:"attachments,omitempty"`
+	Intent        MessageIntent     `json:"intent,omitempty"`
+	WorkflowID    string            `json:"workflow_id,omitempty"`
+	WorkflowStage int               `json:"workflow_stage,omitempty"`
+	WorkflowMode  WorkflowMode      `json:"workflow_mode,omitempty"`
 }
 
 type SystemNotice struct {
@@ -412,6 +488,7 @@ type RoomSnapshot struct {
 	Participants  map[ActorID]ParticipantSnapshot `json:"participants"`
 	Messages      []Message                       `json:"messages"`
 	Approvals     []Approval                      `json:"approvals"`
+	Workflow      *WorkflowState                  `json:"workflow,omitempty"`
 	Turns         []TurnSummary                   `json:"turns,omitempty"`
 	MessageWindow *MessageWindow                  `json:"message_window,omitempty"`
 	LatestSeq     uint64                          `json:"latest_seq"`

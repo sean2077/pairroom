@@ -9,10 +9,7 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 )
 
-// Version changes only when the collaboration contract's observable semantics
-// change. Per-turn envelopes carry this identifier instead of repeating the
-// complete contract.
-const Version = "pairroom-protocol/v2"
+const Version = "pairroom-protocol/v3"
 
 type Selection struct {
 	Actor       model.ActorID
@@ -33,20 +30,18 @@ type Contract struct {
 	Rules       []Rule                `json:"rules"`
 }
 
-// Bootstrap returns the compact, thread-scoped projection used by native
-// harness instruction layers. The full contract remains available through
-// Resolve and the `pairroom protocol` command.
 func Bootstrap(actor model.ActorID) string {
 	peer := model.OtherParticipant(actor)
 	return fmt.Sprintf(`You are %s in PairRoom with a human and %s. Native harness, project, permission, sandbox, and safety rules remain authoritative.
 
 PairRoom:
-- [PairRoom message] is current input. Human instructions win; PairRoom owns routing, lifecycle, transcript.
-- current_role: driver implements/tests; reviewer independently checks current repo and never edits without human approval; peer investigates requested scope.
-- Chat: conclusions, evidence, disagreements, blockers, next action. Inspector: tool detail.
-- Ask the peer only when it can change the outcome. For peer turns add [PAIRROOM:HANDOFF]...[/PAIRROOM:HANDOFF] with goal, scope, evidence, risks, exact ask; PairRoom sends it instead of the full reply.
+- [PairRoom message] is current input. Human instructions win; PairRoom owns routing, lifecycle, transcript, and any compiled workflow sequence.
+- current_role: driver may implement; reviewer is independent/read-only; peer investigates. workflow_mode plan/review/audit is read-only; execute is allowed only after PairRoom's human-approval gate.
+- Follow the human's natural sequence exactly (for example Claude plan → Codex review → Codex execute → Claude audit). Complete only the current workflow stage.
+- Ask the peer only when it can change the outcome. For peer turns add [PAIRROOM:HANDOFF]...[/PAIRROOM:HANDOFF] with goal, evidence, risks, exact ask.
+- Ask humans visibly with @human and [PAIRROOM:WAIT]; never wait on a hidden request_user_input or terminal prompt.
 - manual never auto-routes; mentions requires @%s. Driver may end [PAIRROOM:IMPLEMENTED]; reviewer [PAIRROOM:REVIEW_CHANGES] or [PAIRROOM:REVIEW_APPROVED]. CONTINUE continues roundtable; CONSENSUS/WAIT/BLOCKED/DONE stop.
-- Use @human only for a decision. Avoid agreement loops.
+- Avoid agreement loops; keep conclusions and evidence in chat, tool detail in Inspector.
 
 %s: pairroom protocol --actor %s`, actor.DisplayName(), peer.DisplayName(), peer, Version, actor)
 }
@@ -54,12 +49,15 @@ PairRoom:
 var baseRules = []Rule{
 	{ID: "authority.human", Text: "The human has final authority; newer human instructions supersede agent discussion."},
 	{ID: "authority.harness", Text: "The native coding harness, project instructions, skills, tools, sandbox, permission rules, and safety policy remain authoritative."},
-	{ID: "input.envelope", Text: "Treat each [PairRoom message] envelope as the current conversation input; envelope fields describe room state and the delimited body is the sender's message."},
-	{ID: "output.verbatim", Text: "The final natural-language response is posted verbatim to the shared room; make it useful to the human without replaying tool chatter."},
-	{ID: "delivery.pairroom", Text: "PairRoom owns routing, delivery, processing state, and transcript projection; do not invent private messages, delivery state, or read state."},
-	{ID: "observability.inspector", Text: "Keep the shared-room response focused on conclusions, evidence, disagreements, blockers, and next actions; detailed tool activity is projected separately."},
-	{ID: "collaboration.selective", Text: "Request a peer turn only when independent analysis or review can materially change the outcome; routine progress does not need a second agent."},
-	{ID: "context.handoff", Text: "When a peer turn is needed, add a concise [PAIRROOM:HANDOFF] block containing goal, changed scope, evidence, open risks, and the exact ask; PairRoom delivers it instead of replaying the full response."},
+	{ID: "input.envelope", Text: "Treat each [PairRoom message] envelope as current input; fields describe Room state and the delimited body is the sender's message."},
+	{ID: "output.verbatim", Text: "The final natural-language response is posted verbatim to the shared Room; make it useful without replaying tool chatter."},
+	{ID: "delivery.pairroom", Text: "PairRoom owns routing, delivery, processing state, workflow sequencing, and transcript projection."},
+	{ID: "workflow.natural", Text: "When workflow_id and workflow_mode are present, PairRoom compiled the human's natural-language stage sequence; complete only the current stage and preserve its order."},
+	{ID: "workflow.gate", Text: "Planning, review, and audit stages are read-only. An execute stage following planning/review starts only after the human approves the current plan revision."},
+	{ID: "workflow.questions", Text: "Ask for human choices visibly with @human and [PAIRROOM:WAIT]; never block on a hidden request_user_input, elicitation, or terminal prompt."},
+	{ID: "observability.inspector", Text: "Keep shared-room responses focused on conclusions, evidence, disagreements, blockers, and next actions; detailed tool activity is projected separately."},
+	{ID: "collaboration.selective", Text: "Request a peer turn only when independent analysis or review can materially change the outcome."},
+	{ID: "context.handoff", Text: "When a peer turn is needed, add a concise [PAIRROOM:HANDOFF] block with goal, changed scope, evidence, risks, and exact ask."},
 	{ID: "media.attachments", Text: "Inspect every attached image relevant to the request and refer to it by filename when useful."},
 	{ID: "media.generated", Text: "Save user-facing generated images inside the repository and reference them with repository-relative Markdown image links."},
 	{ID: "convergence.bounded", Text: "Avoid unbounded agreement loops; state disagreements, converge on evidence, and stop requesting peer turns when none are needed."},
@@ -75,14 +73,7 @@ func Resolve(selection Selection) (Contract, error) {
 	if selection.RoutingMode != "" && !selection.RoutingMode.Valid() {
 		return Contract{}, fmt.Errorf("invalid routing mode %q: use manual, mentions, or roundtable", selection.RoutingMode)
 	}
-
-	contract := Contract{
-		Version:     Version,
-		Actor:       selection.Actor,
-		Role:        selection.Role,
-		RoutingMode: selection.RoutingMode,
-		Rules:       append([]Rule(nil), baseRules...),
-	}
+	contract := Contract{Version: Version, Actor: selection.Actor, Role: selection.Role, RoutingMode: selection.RoutingMode, Rules: append([]Rule(nil), baseRules...)}
 	contract.Rules = append(contract.Rules, mentionRules(selection.Actor)...)
 	contract.Rules = append(contract.Rules, roleRules(selection.Role)...)
 	contract.Rules = append(contract.Rules, routingRules(selection.RoutingMode)...)
@@ -90,34 +81,19 @@ func Resolve(selection Selection) (Contract, error) {
 }
 
 func mentionRules(actor model.ActorID) []Rule {
-	peerRule := Rule{
-		ID:   "routing.peer-mention",
-		Text: "Claude Code uses @codex and Codex uses @claude only when that peer must receive and answer the response.",
-	}
+	peerRule := Rule{ID: "routing.peer-mention", Text: "Claude Code uses @codex and Codex uses @claude only when that peer must receive and answer the response."}
 	if actor.ValidParticipant() {
 		peer := model.OtherParticipant(actor)
 		peerRule.Text = fmt.Sprintf("Use @%s only when %s must receive and answer the response.", peer, peer.DisplayName())
 	}
-	return []Rule{
-		peerRule,
-		{ID: "routing.human-mention", Text: "Use @human when blocked on a user decision."},
-	}
+	return []Rule{peerRule, {ID: "routing.human-mention", Text: "Use @human when blocked on a user decision."}}
 }
 
 func roleRules(role model.ParticipantRole) []Rule {
 	rules := map[model.ParticipantRole]Rule{
-		model.RoleDriver: {
-			ID:   "role.driver",
-			Text: "As driver, implement and verify the requested change. When independent review is useful, provide a compact handoff and end with [PAIRROOM:IMPLEMENTED].",
-		},
-		model.RoleReviewer: {
-			ID:   "role.reviewer",
-			Text: "As reviewer, inspect the current repository snapshot independently, verify claims and tests, and do not modify files unless the human explicitly authorizes it. End with [PAIRROOM:REVIEW_APPROVED] or a compact [PAIRROOM:REVIEW_CHANGES] handoff.",
-		},
-		model.RolePeer: {
-			ID:   "role.peer",
-			Text: "As peer, discuss and investigate as an equal technical partner; edit only when the human explicitly asks you to implement.",
-		},
+		model.RoleDriver:   {ID: "role.driver", Text: "As driver, implement and verify requested work only when the current stage permits execution. For independent review, provide a compact handoff and end [PAIRROOM:IMPLEMENTED]."},
+		model.RoleReviewer: {ID: "role.reviewer", Text: "As reviewer, inspect independently and read-only. End with [PAIRROOM:REVIEW_APPROVED], or [PAIRROOM:REVIEW_CHANGES] plus a compact handoff."},
+		model.RolePeer:     {ID: "role.peer", Text: "As peer, discuss and investigate as an equal technical partner; edit only in an explicit execute stage or when the human directly authorizes it."},
 	}
 	if role != "" {
 		return []Rule{rules[role]}
@@ -127,18 +103,9 @@ func roleRules(role model.ParticipantRole) []Rule {
 
 func routingRules(mode model.RoutingMode) []Rule {
 	rules := map[model.RoutingMode]Rule{
-		model.RoutingManual: {
-			ID:   "routing.manual",
-			Text: "Manual mode never starts a peer turn automatically; peer mentions are conversational only.",
-		},
-		model.RoutingMentions: {
-			ID:   "routing.mentions",
-			Text: "Mentions mode routes an explicit @claude, @codex, or @peer. A valid [PAIRROOM:IMPLEMENTED] or [PAIRROOM:REVIEW_CHANGES] marker also hands work between the current Driver and Reviewer.",
-		},
-		model.RoutingRoundtable: {
-			ID:   "routing.roundtable",
-			Text: "Roundtable alternates peers within the hop budget. [PAIRROOM:IMPLEMENTED] hands Driver work to Reviewer; [PAIRROOM:REVIEW_CHANGES] returns it to Driver; [PAIRROOM:REVIEW_APPROVED], [PAIRROOM:CONSENSUS], [PAIRROOM:WAIT], [PAIRROOM:BLOCKED], and [PAIRROOM:DONE] stop. Markers are hidden from the transcript.",
-		},
+		model.RoutingManual:     {ID: "routing.manual", Text: "Manual mode never starts an ordinary peer turn automatically; compiled workflow stages remain explicit human routing and still advance."},
+		model.RoutingMentions:   {ID: "routing.mentions", Text: "Mentions mode routes explicit @claude, @codex, or @peer. Valid implementation/review markers hand work between the current Driver and Reviewer outside compiled workflows."},
+		model.RoutingRoundtable: {ID: "routing.roundtable", Text: "Roundtable alternates peers within the hop budget. [PAIRROOM:IMPLEMENTED] hands Driver work to Reviewer; [PAIRROOM:REVIEW_CHANGES] returns it; [PAIRROOM:REVIEW_APPROVED], [PAIRROOM:CONSENSUS], [PAIRROOM:WAIT], [PAIRROOM:BLOCKED], and [PAIRROOM:DONE] stop."},
 	}
 	if mode != "" {
 		return []Rule{rules[mode]}

@@ -17,6 +17,9 @@ type Config struct {
 	RoomName            string
 	ClientVersion       string
 	Command             string
+	CommandArgs         []string
+	Env                 map[string]string
+	Provider            string
 	Model               string
 	Effort              string
 	PermissionMode      string
@@ -43,9 +46,15 @@ type Adapter interface {
 
 type Factory func(Config, EventSink) Adapter
 
-func ClaudeFactory(cfg Config, sink EventSink) Adapter { return NewClaude(cfg, sink) }
-func CodexFactory(cfg Config, sink EventSink) Adapter  { return NewCodex(cfg, sink) }
-func MockFactory(cfg Config, sink EventSink) Adapter   { return NewMock(cfg, sink) }
+func ClaudeFactory(cfg Config, sink EventSink) Adapter {
+	return newWorkflowAdapter(cfg, model.ActorClaude, sink, func(innerSink EventSink) Adapter { return NewClaude(cfg, innerSink) })
+}
+func CodexFactory(cfg Config, sink EventSink) Adapter {
+	return newWorkflowAdapter(cfg, model.ActorCodex, sink, func(innerSink EventSink) Adapter { return NewCodex(cfg, innerSink) })
+}
+func MockFactory(cfg Config, sink EventSink) Adapter {
+	return newWorkflowAdapter(cfg, cfg.Actor, sink, func(innerSink EventSink) Adapter { return NewMock(cfg, innerSink) })
+}
 
 var ErrApprovalUnsupported = errors.New("runtime does not expose interactive approvals through this adapter")
 

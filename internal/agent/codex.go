@@ -155,9 +155,11 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 		emitRuntimeInfo(c.sink, model.ActorCodex, probe.RuntimeInfo(c.cfg))
 	}
 
-	cmd := exec.Command(c.cfg.Command, "app-server")
+	args := append([]string(nil), c.cfg.CommandArgs...)
+	args = append(args, "app-server")
+	cmd := exec.Command(c.cfg.Command, args...)
 	cmd.Dir = c.cfg.Repo
-	cmd.Env = envWithout("CODEX_INTERNAL_ORIGINATOR")
+	cmd.Env = mergeRuntimeEnv(envWithout("CODEX_INTERNAL_ORIGINATOR"), c.cfg.Env)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		c.setState(model.StateError, err.Error())

@@ -72,12 +72,14 @@ func TestEnvelopeCarriesOnlyRuntimeAndRoutingContext(t *testing.T) {
 		From: model.ActorClaude, To: model.ActorCodex,
 		Text: "Inspect the race", ReplyTo: "msg-0123456789abcdef01234567",
 		Role: model.RoleReviewer, RoutingMode: model.RoutingRoundtable, MaxHops: 6, Intent: model.IntentSupersede,
+		WorkflowID: "workflow-0123456789abcdef01234567", WorkflowStage: 2, WorkflowMode: model.WorkflowAudit,
 	}
 	got := Envelope(input)
 	for _, fragment := range []string{
 		"protocol: " + protocol.Version,
 		"message_id: msg-0123456789abcdef01234567", "thread_id: thread-0123456789abcdef01234567", "from: claude", "to: codex",
 		"reply_to: msg-0123456789abcdef01234567", "current_role: reviewer", "delivery_intent: supersede", "routing_mode: roundtable",
+		"workflow_id: workflow-0123456789abcdef01234567", "workflow_stage: 3", "workflow_mode: audit",
 		"remaining_agent_hops: 4", "Inspect the race",
 	} {
 		if !strings.Contains(got, fragment) {
