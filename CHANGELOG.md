@@ -38,6 +38,7 @@
 - Natural workflow state advances the Store schema to `8`, so older binaries reject event logs containing the new durable `workflow.updated` projection.
 - Redacted provider inspection no longer returns raw custom arguments or URL credentials, and Codex provider header values are projected through environment variables instead of command arguments.
 - Room View composer target picker (`@Driver`/`@Reviewer`/`@All`/`@Claude`/`@Codex`) now exposes `aria-pressed` on each toggle, and the toast live region uses `polite` instead of `assertive` so success notices stop interrupting screen readers.
+- Management Shell static dialogs (Project, Room, Rename, Binding, Confirm) now carry `aria-labelledby` pointing at their heading so screen readers announce each dialog's purpose when it opens, matching the command palette and Room image viewer.
 
 ## [v1.1.0] — 2026-08-21
 

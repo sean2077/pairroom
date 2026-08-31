@@ -98,7 +98,7 @@
     </div>
   </div>
 
-  <dialog id="project-dialog" class="modal modal-medium">
+  <dialog id="project-dialog" class="modal modal-medium" aria-labelledby="project-dialog-title">
     <form id="project-form" method="dialog" novalidate>
       <header class="modal-header">
         <div><p class="eyebrow">WORKSPACE</p><h2 id="project-dialog-title">登记 Project</h2><p id="project-dialog-subtitle" class="muted">添加 canonical Git worktree。</p></div>
@@ -124,7 +124,7 @@
     </form>
   </dialog>
 
-  <dialog id="room-dialog" class="modal modal-large">
+  <dialog id="room-dialog" class="modal modal-large" aria-labelledby="room-dialog-title">
     <form id="room-form" method="dialog" novalidate>
       <header class="modal-header">
         <div><p class="eyebrow">NEW ROOM</p><h2 id="room-dialog-title">创建 Room</h2><p class="muted">一个 Project 可以拥有多个彼此隔离的协作 Room。</p></div>
@@ -157,24 +157,24 @@
     </form>
   </dialog>
 
-  <dialog id="rename-dialog" class="modal modal-small">
+  <dialog id="rename-dialog" class="modal modal-small" aria-labelledby="rename-dialog-title">
     <form id="rename-form" method="dialog" novalidate>
-      <header class="modal-header"><div><p class="eyebrow">ROOM</p><h2>重命名 Room</h2><p class="muted">操作会等待安全 Turn 边界，不会中断活动工作。</p></div><button class="icon-button modal-close" type="button" data-close-dialog="rename-dialog" aria-label="关闭">×</button></header>
+      <header class="modal-header"><div><p class="eyebrow">ROOM</p><h2 id="rename-dialog-title">重命名 Room</h2><p class="muted">操作会等待安全 Turn 边界，不会中断活动工作。</p></div><button class="icon-button modal-close" type="button" data-close-dialog="rename-dialog" aria-label="关闭">×</button></header>
       <div class="modal-body"><input id="rename-room-id" type="hidden"><label><span class="field-label">新名称</span><input id="rename-room-name" type="text" required maxlength="120" autocomplete="off"></label><p id="rename-form-error" class="form-error" role="alert" hidden></p></div>
       <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="rename-dialog">取消</button><button class="primary-button" type="submit">保存名称</button></footer>
     </form>
   </dialog>
 
-  <dialog id="binding-dialog" class="modal modal-medium">
+  <dialog id="binding-dialog" class="modal modal-medium" aria-labelledby="binding-dialog-title">
     <form id="binding-form" method="dialog" novalidate>
-      <header class="modal-header"><div><p class="eyebrow">LEGACY ROOM</p><h2>补全 Binding</h2><p class="muted">只有所有缺失 Binding 都验证成功后才会提交。</p></div><button class="icon-button modal-close" type="button" data-close-dialog="binding-dialog" aria-label="关闭">×</button></header>
+      <header class="modal-header"><div><p class="eyebrow">LEGACY ROOM</p><h2 id="binding-dialog-title">补全 Binding</h2><p class="muted">只有所有缺失 Binding 都验证成功后才会提交。</p></div><button class="icon-button modal-close" type="button" data-close-dialog="binding-dialog" aria-label="关闭">×</button></header>
       <div id="binding-fields" class="modal-body stacked-fields"></div>
       <p id="binding-form-error" class="form-error modal-inline-error" role="alert" hidden></p>
       <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="binding-dialog">取消</button><button class="primary-button" type="submit">原子补全 Binding</button></footer>
     </form>
   </dialog>
 
-  <dialog id="confirm-dialog" class="modal modal-small">
+  <dialog id="confirm-dialog" class="modal modal-small" aria-labelledby="confirm-title">
     <form id="confirm-form" method="dialog">
       <header class="modal-header"><div><p id="confirm-eyebrow" class="eyebrow">CONFIRM</p><h2 id="confirm-title">确认操作</h2></div><button class="icon-button modal-close" type="button" data-close-dialog="confirm-dialog" aria-label="关闭">×</button></header>
       <div class="modal-body">
