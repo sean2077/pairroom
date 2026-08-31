@@ -175,6 +175,16 @@ function runAnimationFrames() {
 {
   const source = new windowObject.EventSource('/events');
   const seen = [];
+  source.addEventListener('pairroom', (event) => seen.push(JSON.parse(event.data).data.kind));
+  source.emit('pairroom', envelope(0, 'runtime.event', { kind: 'log', text: 'last progress' }));
+  source.emit('pairroom', envelope(0, 'runtime.event', { kind: 'turn.completed' }));
+  runAnimationFrames();
+  assert.deepEqual(seen, ['log', 'turn.completed'], 'non-text Runtime boundaries must not overtake queued telemetry');
+}
+
+{
+  const source = new windowObject.EventSource('/events');
+  const seen = [];
   const listener = (event) => seen.push(event.data);
   source.addEventListener('pairroom', listener);
   source.emit('pairroom', envelope(0, 'runtime.event', { kind: 'command.output' }));
