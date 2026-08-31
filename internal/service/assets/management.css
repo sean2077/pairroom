@@ -542,6 +542,35 @@ select { appearance: auto; }
 .room-meta { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 5px 12px; color: var(--muted); font-size: 10px; }
 .room-meta code { color: var(--subtle); }
 .room-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 6px; }
+.room-actions > .room-action-control {
+  min-width: 64px;
+  height: 32px;
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  font-size: 10px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.room-select-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.room-select-control input {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.room-select-control:focus-within {
+  border-color: var(--accent-line);
+  box-shadow: var(--focus);
+}
 .room-actions button { min-height: 31px; padding: 4px 9px; border-radius: 8px; font-size: 10px; }
 .binding-line { display: inline-flex; align-items: center; gap: 4px; }
 .agent-dot { width: 17px; height: 17px; display: inline-grid; place-items: center; border-radius: 5px; color: white; font-size: 8px; font-weight: 800; }

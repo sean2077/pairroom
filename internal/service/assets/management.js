@@ -660,8 +660,7 @@
     if (state.snapshot?.capabilities?.room_deletion) {
       actions.append(
         node('label', {
-          className: 'secondary-button compact-button',
-          style: 'display:inline-flex;align-items:center;gap:6px;cursor:pointer',
+          className: 'button secondary-button compact-button room-action-control room-select-control',
           title: archived ? '选择此 Room 进行批量清理' : '选择此 Room 进行批量归档',
         },
           node('input', {
@@ -675,15 +674,15 @@
       );
     }
     if (archived) {
-      actions.append(actionButton('恢复', () => restoreRoom(room), 'secondary-button'));
+      actions.append(actionButton('恢复', () => restoreRoom(room), 'secondary-button compact-button room-action-control'));
       if (state.snapshot?.capabilities?.room_deletion) {
-        actions.append(actionButton('永久清除', () => confirmRoomRemoval([room]), 'danger-button outline'));
+        actions.append(actionButton('永久清除', () => confirmRoomRemoval([room]), 'danger-button outline compact-button room-action-control'));
       }
     } else {
-      if (pending) actions.append(actionButton('补全 Binding', () => completeBindings(room), 'primary-button'));
-      actions.append(actionButton(runtime.phase === 'queued' ? `排队 #${runtime.queue_position || '?'}` : '打开', () => openRoom(room.id), 'primary-button', pending));
-      actions.append(actionButton('重命名', () => openRenameDialog(room), 'secondary-button'));
-      actions.append(actionButton('归档', () => archiveRoom(room), 'danger-button outline'));
+      if (pending) actions.append(actionButton('补全 Binding', () => completeBindings(room), 'primary-button compact-button room-action-control'));
+      actions.append(actionButton(runtime.phase === 'queued' ? `排队 #${runtime.queue_position || '?'}` : '打开', () => openRoom(room.id), 'primary-button compact-button room-action-control', pending));
+      actions.append(actionButton('重命名', () => openRenameDialog(room), 'secondary-button compact-button room-action-control'));
+      actions.append(actionButton('归档', () => archiveRoom(room), 'danger-button outline compact-button room-action-control'));
     }
     return node('article', { className: 'room-row' }, node('div', { className: 'room-row-main' }, title, meta), actions);
   }

@@ -196,7 +196,7 @@ func TestRichConversationAssetsAreEmbedded(t *testing.T) {
 
 	app := httptest.NewRecorder()
 	server.Handler().ServeHTTP(app, localRequest(http.MethodGet, "/app.js", nil))
-	for _, marker := range []string{"threadFilter", "uploadPendingAttachment", "openLightbox", "renderClaudeQuestions", "initializeSession", "X-PairRoom-CSRF"} {
+	for _, marker := range []string{"threadFilter", "uploadPendingAttachment", "openLightbox", "renderClaudeQuestions", "initializeSession", "X-PairRoom-CSRF", "queueStreamingRender", "queueRuntimeRender", "renderStreamingDrafts", "data-streaming-actor"} {
 		if app.Code != http.StatusOK || !strings.Contains(app.Body.String(), marker) {
 			t.Fatalf("app asset omitted %q: status=%d", marker, app.Code)
 		}

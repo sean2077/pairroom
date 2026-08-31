@@ -12,6 +12,7 @@
   const savedTheme = localStorage.getItem('pairroom.theme');
   const initialTheme = savedTheme || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
   document.documentElement.dataset.theme = initialTheme;
+  const STREAM_RENDER_INTERVAL_MS = 50;
   const state = {
     snapshot: null,
     drafts: { claude: '', codex: '' },
@@ -41,6 +42,8 @@
     theme: initialTheme,
     source: null,
     renderQueued: false,
+    streamRenderTimer: null,
+    runtimeRenderQueued: false,
     csrfToken: '',
   };
 
@@ -100,6 +103,26 @@
     });
   }
 
+  function queueStreamingRender() {
+    if (state.streamRenderTimer) return;
+    state.streamRenderTimer = setTimeout(() => {
+      state.streamRenderTimer = null;
+      requestAnimationFrame(renderStreamingDrafts);
+    }, STREAM_RENDER_INTERVAL_MS);
+  }
+
+  function queueRuntimeRender() {
+    if (state.runtimeRenderQueued) return;
+    state.runtimeRenderQueued = true;
+    requestAnimationFrame(() => {
+      if (!state.runtimeRenderQueued) return;
+      state.runtimeRenderQueued = false;
+      renderParticipants();
+      renderStreamingDrafts();
+      renderActivity();
+    });
+  }
+
   async function loadSnapshot() {
     state.snapshot = await api('/api/v1/snapshot?message_limit=250');
     state.drafts = { claude: '', codex: '' };
@@ -144,6 +167,7 @@
     state.snapshot.events.push(event);
     if (state.snapshot.events.length > 600) state.snapshot.events.splice(0, state.snapshot.events.length - 600);
     const data = event.data || {};
+    let renderScope = 'full';
 
     switch (event.kind) {
       case 'room.settings.updated':
@@ -215,6 +239,7 @@
       }
       case 'runtime.event':
         applyRuntime(data);
+        renderScope = data.kind === 'text.delta' ? 'stream' : 'runtime';
         break;
       case 'system.notice':
         if (data.level === 'error') toast(data.text, 'error');
@@ -222,7 +247,9 @@
       default:
         break;
     }
-    queueRender();
+    if (renderScope === 'stream') queueStreamingRender();
+    else if (renderScope === 'runtime') queueRuntimeRender();
+    else queueRender();
   }
 
   function applyRuntime(runtime) {
@@ -253,6 +280,11 @@
 
   function render(forceBottom = false) {
     if (!state.snapshot) return;
+    if (state.streamRenderTimer) {
+      clearTimeout(state.streamRenderTimer);
+      state.streamRenderTimer = null;
+    }
+    state.runtimeRenderQueued = false;
     const nearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 140;
     $('room-name').textContent = state.snapshot.meta.name;
     $('repo-path').textContent = state.snapshot.meta.repo;
@@ -498,6 +530,37 @@
     $('stall-disabled').checked = stall < 0;
     $('stall-warning').disabled = stall < 0;
     $('stall-warning').value = stall < 0 ? 300 : stall;
+  }
+
+  function renderStreamingDrafts() {
+    if (!state.snapshot || !timeline.isConnected) return;
+    const nearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 140;
+    let hasVisibleDraft = false;
+    ['claude', 'codex'].forEach((actor) => {
+      const selector = `.message-row.streaming[data-streaming-actor="${actor}"]`;
+      const existing = timeline.querySelector(selector);
+      const text = state.drafts[actor] || '';
+      const correlated = (state.snapshot.messages || []).find((message) => message.id === state.draftCorrelation[actor]);
+      const threadVisible = !state.threadFilter || correlated?.thread_id === state.threadFilter;
+      const visible = Boolean(text) && threadVisible && state.conversationFilter !== 'human';
+      if (!visible) {
+        if (existing) existing.remove();
+        return;
+      }
+      const replacement = draftNode(actor, text, state.draftCorrelation[actor]);
+      if (existing) existing.replaceWith(replacement);
+      else timeline.appendChild(replacement);
+      hasVisibleDraft = true;
+    });
+    if (hasVisibleDraft) {
+      const empty = timeline.querySelector('.timeline-empty');
+      if (empty) empty.remove();
+    }
+    ['claude', 'codex'].forEach((actor) => {
+      const row = timeline.querySelector(`.message-row.streaming[data-streaming-actor="${actor}"]`);
+      if (row) timeline.appendChild(row);
+    });
+    if (nearBottom) requestAnimationFrame(scrollBottom);
   }
 
   function renderTimeline() {
@@ -784,6 +847,7 @@
   function draftNode(actor, text, correlation) {
     const row = document.createElement('article');
     row.className = `message-row ${actor} streaming`;
+    row.dataset.streamingActor = actor;
     const avatar = document.createElement('div');
     avatar.className = `message-avatar avatar-${actor}`;
     avatar.textContent = actor === 'claude' ? 'C' : 'X';
