@@ -10,6 +10,7 @@
 - Independent Claude and Codex provider profiles, including redacted inspection and reference imports from cc-connect provider tables without copying credentials.
 - Room View exposes an explicit **退出 Room** control that leaves the browser view without stopping either Agent.
 - Room View shows a skeleton timeline during the initial snapshot fetch and a recoverable error state with a retry control when the session or snapshot load fails, instead of leaving the timeline blank.
+- Room View `c` keyboard shortcut focuses the message composer, joining the existing `[`/`]`/`?`/`/` single-key bindings.
 
 ### Changed
 
@@ -21,6 +22,7 @@
 - The native collaboration contract now asks for a second Agent only when independent work can materially change the outcome and keeps tool chatter in Inspector.
 - The composer exposes server-resolved, role-stable `@Driver` and `@Reviewer` targets; replying to an Agent automatically targets that participant.
 - Room View toasts now show a dismiss control, pause auto-dismiss on hover, and keep error toasts visible for 8 s (4.5 s otherwise), matching the Management Shell.
+- Room View per-message actions (inspect, copy, thread, reply) stay visible on touch devices that cannot hover, instead of being unreachable on the mobile layout.
 
 ### Fixed
 

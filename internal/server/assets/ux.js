@@ -168,6 +168,7 @@
       </div>
       <div class="ux-shortcuts" aria-label="快捷键">
         <span><kbd>Ctrl/⌘ K</kbd> 搜索讨论</span>
+        <span><kbd>c</kbd> 聚焦输入框</span>
         <span><kbd>[</kbd> 参与者</span>
         <span><kbd>]</kbd> 检查器</span>
         <span><kbd>?</kbd> 此菜单</span>
@@ -569,6 +570,9 @@
       } else if (event.key === '?') {
         event.preventDefault();
         setMenuOpen(true);
+      } else if (event.key === 'c' && messageInput) {
+        event.preventDefault();
+        messageInput.focus();
       } else if (event.key === '/' && messageSearch) {
         event.preventDefault();
         messageSearch.focus();

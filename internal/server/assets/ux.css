@@ -187,6 +187,10 @@ body.ux-enhanced .message-row.user:hover .message-bubble {
 }
 body.ux-enhanced .reply-action:focus-visible,
 body.ux-enhanced .message-row:focus-within .reply-action { opacity: 1; }
+/* Touch devices have no hover to reveal per-message actions; keep them visible. */
+@media (hover: none) {
+  body.ux-enhanced .reply-action { opacity: 1; }
+}
 body.ux-enhanced .composer-wrap {
   position: relative;
   z-index: 4;
