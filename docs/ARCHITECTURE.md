@@ -473,7 +473,7 @@ Vendor request
 - Codex RPC 使用唯一 ID 与 waiter map；
 - durable event 先 append+sync，后发布；
 - role 先应用 Adapter policy，成功后再写 Room state；
-- Room rename/archive/binding completion 会等待活动 Turn 自然结束并挂起 Runtime，避免控制面与 Engine 双写；
+- Room rename/binding completion 会等待活动 Turn 自然结束并挂起 Runtime，避免控制面与 Engine 双写；Room archive 会先 interrupt 活动 Turn 再挂起 Runtime，因此归档无需先在 Room 内手动停止 Agent；
 - shutdown 先停止 Management mutation，再排空 Runtime，最后释放 Service lock。
 
 ## 11. 失败与恢复边界

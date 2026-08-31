@@ -392,7 +392,7 @@ func TestManagementBindingCompletionEndpointIsAtomicAndDurable(t *testing.T) {
 	}
 }
 
-func TestArchiveWaitsForActiveTurnThenSuspendsBeforeLifecycleAppend(t *testing.T) {
+func TestArchiveInterruptsActiveTurnThenSuspendsBeforeLifecycleAppend(t *testing.T) {
 	registry, rooms := provisionRuntimeRooms(t, 1)
 	factory := &fakeRuntimeFactory{busy: true}
 	manager, err := NewRuntimeManager(registry, factory.open, RuntimeManagerConfig{
@@ -428,34 +428,16 @@ func TestArchiveWaitsForActiveTurnThenSuspendsBeforeLifecycleAppend(t *testing.T
 
 	select {
 	case <-completed:
-		t.Fatalf("archive returned while the Room still had active work: status=%d body=%s", recorder.Code, recorder.Body.String())
-	case <-time.After(50 * time.Millisecond):
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("archive did not interrupt and complete: status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("archive did not interrupt the active Turn promptly")
+	}
+	if runtime.interruptCount.Load() < 1 {
+		t.Fatalf("archive never interrupted the active Turn: interrupts=%d", runtime.interruptCount.Load())
 	}
 	projected, ok := registry.Room(rooms[0].ID)
-	if !ok || projected.Archived() {
-		t.Fatalf("Room lifecycle changed before active work completed: %#v", projected)
-	}
-	during, err := readEventsReadOnly(filepath.Join(rooms[0].DataDir, "events.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(during) != len(before) {
-		t.Fatalf("archive appended before runtime became idle: before=%d during=%d", len(before), len(during))
-	}
-	if runtime.closeCount.Load() != 0 {
-		t.Fatal("busy runtime was closed or interrupted")
-	}
-
-	runtime.busy.Store(false)
-	select {
-	case <-completed:
-	case <-time.After(3 * time.Second):
-		t.Fatal("archive did not complete after the active turn became idle")
-	}
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("archive status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-	projected, ok = registry.Room(rooms[0].ID)
 	if !ok || !projected.Archived() {
 		t.Fatalf("Room was not archived: %#v", projected)
 	}
@@ -473,7 +455,7 @@ func TestArchiveWaitsForActiveTurnThenSuspendsBeforeLifecycleAppend(t *testing.T
 
 func TestManagementShutdownForceClosesActiveHandlerAfterDeadline(t *testing.T) {
 	registry, rooms := provisionRuntimeRooms(t, 1)
-	factory := &fakeRuntimeFactory{busy: true}
+	factory := &fakeRuntimeFactory{busy: true, stayBusyOnInterrupt: true}
 	manager, err := NewRuntimeManager(registry, factory.open, RuntimeManagerConfig{
 		Limit: 1, IdleTimeout: time.Hour, PollInterval: 5 * time.Millisecond, CloseTimeout: time.Second,
 	})
@@ -513,8 +495,8 @@ func TestManagementShutdownForceClosesActiveHandlerAfterDeadline(t *testing.T) {
 		requestDone <- requestErr
 	}()
 
-	// The busy Runtime keeps archive inside WaitAndSuspend, proving Shutdown has
-	// an active mutating handler to drain.
+	// The busy Runtime keeps archive inside InterruptAndSuspend, proving
+	// Shutdown has an active mutating handler to drain.
 	time.Sleep(40 * time.Millisecond)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	shutdownErr := server.Shutdown(shutdownCtx)

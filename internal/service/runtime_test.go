@@ -12,20 +12,25 @@ import (
 )
 
 type fakeRuntime struct {
-	id            string
-	busy          atomic.Bool
-	activity      atomic.Int64
-	closeCount    atomic.Int64
-	draining      atomic.Bool
-	drainOnCount  atomic.Int64
-	drainOffCount atomic.Int64
-	closeOnce     sync.Once
-	closed        chan struct{}
-	closeErr      error
+	id             string
+	busy           atomic.Bool
+	activity       atomic.Int64
+	closeCount     atomic.Int64
+	draining       atomic.Bool
+	drainOnCount   atomic.Int64
+	drainOffCount  atomic.Int64
+	interruptCount atomic.Int64
+	// interruptSettles controls whether InterruptActive clears busy. Real
+	// runtimes settle asynchronously; tests that need archive to keep waiting
+	// for the Turn (for example shutdown deadline coverage) leave it false.
+	interruptSettles bool
+	closeOnce        sync.Once
+	closed           chan struct{}
+	closeErr         error
 }
 
 func newFakeRuntime(id string, busy bool, activity time.Time) *fakeRuntime {
-	runtime := &fakeRuntime{id: id, closed: make(chan struct{})}
+	runtime := &fakeRuntime{id: id, closed: make(chan struct{}), interruptSettles: true}
 	runtime.busy.Store(busy)
 	if !activity.IsZero() {
 		runtime.activity.Store(activity.UnixNano())
@@ -50,6 +55,13 @@ func (r *fakeRuntime) LastActivity() time.Time {
 	}
 	return time.Unix(0, value).UTC()
 }
+func (r *fakeRuntime) InterruptActive(context.Context) error {
+	r.interruptCount.Add(1)
+	if r.interruptSettles {
+		r.busy.Store(false)
+	}
+	return nil
+}
 func (r *fakeRuntime) Close(context.Context) error {
 	r.closeCount.Add(1)
 	r.closeOnce.Do(func() { close(r.closed) })
@@ -57,11 +69,12 @@ func (r *fakeRuntime) Close(context.Context) error {
 }
 
 type fakeRuntimeFactory struct {
-	mu         sync.Mutex
-	busy       bool
-	activity   time.Time
-	runtimes   map[string]*fakeRuntime
-	startOrder []string
+	mu                  sync.Mutex
+	busy                bool
+	activity            time.Time
+	stayBusyOnInterrupt bool
+	runtimes            map[string]*fakeRuntime
+	startOrder          []string
 }
 
 func (f *fakeRuntimeFactory) open(_ context.Context, room Room) (RoomRuntime, error) {
@@ -71,6 +84,7 @@ func (f *fakeRuntimeFactory) open(_ context.Context, room Room) (RoomRuntime, er
 		f.runtimes = make(map[string]*fakeRuntime)
 	}
 	runtime := newFakeRuntime(room.ID, f.busy, f.activity)
+	runtime.interruptSettles = !f.stayBusyOnInterrupt
 	f.runtimes[room.ID] = runtime
 	f.startOrder = append(f.startOrder, room.ID)
 	return runtime, nil

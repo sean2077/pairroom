@@ -11,6 +11,7 @@
 
 ### Changed
 
+- Single and batch Room archive now stop the active Agent Turn by default before suspending the Runtime, so the operator no longer has to open the Room and stop the Agent first; rename, binding completion, suspend, capacity eviction, and service shutdown still never interrupt a Turn.
 - Unaddressed messages and the Room composer now target the single current Driver instead of invoking both Agents by default; explicit `@all` remains available.
 - Reviewer snapshots are refreshed immediately before each safe new reviewer turn, preventing review of the pre-implementation startup snapshot.
 - Agent-to-peer delivery uses the compact handoff packet, or a bounded fallback, instead of replaying an arbitrarily long final response.

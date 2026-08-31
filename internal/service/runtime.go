@@ -49,6 +49,14 @@ type RuntimeDrainControl interface {
 	SetDraining(bool)
 }
 
+// RuntimeInterruptControl is an optional capability. The manager uses it when
+// an explicit operator action (Room archive) must stop active work instead of
+// waiting for the Turn to end naturally. Capacity eviction, idle suspend,
+// safe suspend, binding completion, rename, and service shutdown never use it.
+type RuntimeInterruptControl interface {
+	InterruptActive(ctx context.Context) error
+}
+
 // RuntimeFactory returns a running Room runtime. On failure it normally returns
 // nil. A non-nil runtime together with an error means cleanup could not be
 // proven complete; the manager retains that runtime and its capacity slot.
@@ -351,11 +359,32 @@ func (m *RuntimeManager) Suspend(ctx context.Context, roomID string) error {
 	return err
 }
 
-// WaitAndSuspend is used by archive and control-plane mutations. It closes the
-// Room mutation gate first, waits for active turns to settle, and then closes
-// the runtime; it never calls Interrupt. A canceled operation reopens the gate
-// unless service shutdown has taken ownership of the drain.
+// WaitAndSuspend is used by control-plane mutations (rename, binding
+// completion). It closes the Room mutation gate first, waits for active turns
+// to settle, and then closes the runtime; it never calls Interrupt. A
+// canceled operation reopens the gate unless service shutdown has taken
+// ownership of the drain.
 func (m *RuntimeManager) WaitAndSuspend(ctx context.Context, roomID string) error {
+	return m.drainAndSuspend(ctx, roomID, false)
+}
+
+// InterruptAndSuspend is used by Room archive. It closes the Room mutation
+// gate, asks the runtime to interrupt active work so the operator does not
+// have to stop the Agent from inside the Room first, waits for the runtime to
+// settle, and then closes it. Runtimes without interrupt support, or work
+// that survives an interrupt, still settle through the same wait boundary as
+// WaitAndSuspend. A canceled operation reopens the gate unless service
+// shutdown has taken ownership of the drain.
+func (m *RuntimeManager) InterruptAndSuspend(ctx context.Context, roomID string) error {
+	return m.drainAndSuspend(ctx, roomID, true)
+}
+
+// drainAndSuspend closes the Room mutation gate, polls Suspend until the
+// runtime settles, and then closes it. When interruptActive is set it asks the
+// runtime to stop in-flight work on each attempt instead of waiting for the
+// Turn to end naturally; capturing the wait signal before the interrupt lets
+// the loop re-check Suspend as soon as the runtime reports one.
+func (m *RuntimeManager) drainAndSuspend(ctx context.Context, roomID string, interruptActive bool) error {
 	m.setDrainRequested(roomID, true)
 	defer m.releaseDrainRequested(roomID)
 
@@ -369,13 +398,43 @@ func (m *RuntimeManager) WaitAndSuspend(ctx context.Context, roomID string) erro
 		if !errors.Is(err, ErrRuntimeBusy) && !errors.Is(err, ErrRuntimeDrainAborted) {
 			return err
 		}
+		changed := m.changedChannel()
+		if interruptActive {
+			m.interruptActiveWork(ctx, roomID)
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-		case <-m.changedChannel():
+		case <-changed:
 		}
 	}
+}
+
+// interruptActiveWork asks the active runtime to stop in-flight work. It is
+// best-effort: a failed or unsupported interrupt leaves the caller inside the
+// ordinary wait boundary, where work can still end naturally. Signalling the
+// wait loop lets it re-check Suspend as soon as the runtime reports an
+// interrupt, rather than waiting for the next poll tick.
+func (m *RuntimeManager) interruptActiveWork(ctx context.Context, roomID string) {
+	if ctx.Err() != nil {
+		return
+	}
+	m.mu.Lock()
+	entry := m.entries[roomID]
+	var runtime RoomRuntime
+	if entry != nil && entry.phase == RuntimeActive {
+		runtime = entry.runtime
+	}
+	m.mu.Unlock()
+	control, ok := runtime.(RuntimeInterruptControl)
+	if !ok {
+		return
+	}
+	_ = control.InterruptActive(ctx)
+	m.mu.Lock()
+	m.signalLocked()
+	m.mu.Unlock()
 }
 
 // PrepareRoomDeletion creates a Runtime admission barrier, cancels queued

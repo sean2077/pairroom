@@ -1065,9 +1065,10 @@ func TestOpenRegistryRefusesUnknownQuarantinedRoomData(t *testing.T) {
 }
 
 type roomDeletionTestRuntime struct {
-	busy     atomic.Bool
-	closed   atomic.Int32
-	draining atomic.Bool
+	busy           atomic.Bool
+	closed         atomic.Int32
+	draining       atomic.Bool
+	interruptCount atomic.Int64
 }
 
 func (*roomDeletionTestRuntime) URL() string  { return "http://127.0.0.1:1/" }
@@ -1077,6 +1078,11 @@ func (r *roomDeletionTestRuntime) Close(context.Context) error {
 	return nil
 }
 func (r *roomDeletionTestRuntime) SetDraining(value bool) { r.draining.Store(value) }
+func (r *roomDeletionTestRuntime) InterruptActive(context.Context) error {
+	r.interruptCount.Add(1)
+	r.busy.Store(false)
+	return nil
+}
 
 func TestRuntimeDeletionGateClosesIdleRuntimeAndRejectsActivation(t *testing.T) {
 	registry, _, room := roomDeletionTestRegistry(t, "runtime-idle")
@@ -1666,7 +1672,7 @@ func TestManagementBatchRoomArchiveDeduplicatesAndTreatsArchivedAsSuccess(t *tes
 	}
 }
 
-func TestManagementBatchRoomArchiveReportsBusyAndMissingWithoutBlockingOtherRooms(t *testing.T) {
+func TestManagementBatchRoomArchiveInterruptsBusyAndReportsMissingWithoutBlockingOtherRooms(t *testing.T) {
 	registry, project, busyRoom := roomDeletionTestRegistry(t, "batch-archive-busy")
 	archiveable := provisionRoomDeletionTestRoom(t, registry, project, "Archiveable Room", "batch-archive-safe")
 	const token = "room-batch-archive-partial-secret"
@@ -1689,11 +1695,11 @@ func TestManagementBatchRoomArchiveReportsBusyAndMissingWithoutBlockingOtherRoom
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Succeeded != 1 || result.Failed != 2 || len(result.Results) != 3 {
+	if result.Succeeded != 2 || result.Failed != 1 || len(result.Results) != 3 {
 		t.Fatalf("unexpected partial batch archive result: %#v", result)
 	}
-	if result.Results[0].RoomID != busyRoom.ID || result.Results[0].Status != "failed" || result.Results[0].Code != "runtime_busy" {
-		t.Fatalf("busy failure was not structured: %#v", result.Results[0])
+	if result.Results[0].RoomID != busyRoom.ID || result.Results[0].Status != "archived" {
+		t.Fatalf("busy Room was not archived after interrupt: %#v", result.Results[0])
 	}
 	if result.Results[1].RoomID != archiveable.ID || result.Results[1].Status != "archived" {
 		t.Fatalf("safe Room was not archived: %#v", result.Results[1])
@@ -1701,14 +1707,17 @@ func TestManagementBatchRoomArchiveReportsBusyAndMissingWithoutBlockingOtherRoom
 	if result.Results[2].RoomID != missingID || result.Results[2].Status != "failed" || result.Results[2].Code != "room_not_found" {
 		t.Fatalf("missing failure was not structured: %#v", result.Results[2])
 	}
-	if projected, ok := registry.Room(busyRoom.ID); !ok || projected.Archived() {
-		t.Fatalf("busy Room changed: %#v ok=%v", projected, ok)
+	if projected, ok := registry.Room(busyRoom.ID); !ok || !projected.Archived() {
+		t.Fatalf("busy Room was not archived: %#v ok=%v", projected, ok)
 	}
 	if projected, ok := registry.Room(archiveable.ID); !ok || !projected.Archived() {
-		t.Fatalf("archiveable Room did not change: %#v ok=%v", projected, ok)
+		t.Fatalf("archiveable Room was not archived: %#v ok=%v", projected, ok)
 	}
-	if runtime.closed.Load() != 0 {
-		t.Fatalf("busy Runtime was interrupted: closes=%d", runtime.closed.Load())
+	if runtime.interruptCount.Load() < 1 {
+		t.Fatalf("busy Runtime was not interrupted: interrupts=%d", runtime.interruptCount.Load())
+	}
+	if runtime.closed.Load() != 1 {
+		t.Fatalf("busy Runtime was not suspended: closes=%d", runtime.closed.Load())
 	}
 }
 

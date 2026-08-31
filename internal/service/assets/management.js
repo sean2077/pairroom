@@ -1334,7 +1334,7 @@
     openConfirm({
       eyebrow: 'ARCHIVE ROOM',
       title: `归档“${room.name}”？`,
-      message: '活动 Turn 会先自然完成，Runtime 随后挂起；Room 将从默认列表隐藏。',
+      message: '活动 Turn 会先被停止，Runtime 随后挂起；Room 将从默认列表隐藏。',
       detail: 'Event Log、附件、角色、草稿、未读状态和两侧 Binding Identity 都会完整保留。',
       label: '归档 Room',
       tone: 'danger',
@@ -1501,7 +1501,7 @@
       eyebrow: rooms.length === 1 ? 'ARCHIVE ROOM' : 'BATCH ARCHIVE ROOMS',
       title: rooms.length === 1 ? `归档“${rooms[0].name}”？` : `归档 ${rooms.length} 个 Room？`,
       message: `${preview}${remaining}。归档后仍可恢复，也可继续批量永久清理。`,
-      detail: '归档保留 Event Log、附件和 Agent Binding。批量请求逐项执行；忙碌 Room 不会被中断，失败项保持选中，可稍后重试。',
+      detail: '归档保留 Event Log、附件和 Agent Binding。批量请求逐项执行；忙碌 Room 的活动 Turn 会先被停止，失败项保持选中，可稍后重试。',
       label: rooms.length === 1 ? '归档 Room' : `归档 ${rooms.length} 个 Room`,
       tone: 'primary',
       action: async () => {

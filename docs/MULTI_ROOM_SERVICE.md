@@ -256,7 +256,7 @@ create -> rename* -> archive <-> restore
 ```
 
 - Rename 只改展示名称，不改 Room ID/Binding；
-- 单项 Archive 等待活动 Turn 自然结束并挂起 Runtime；批量 Archive 对 busy 项返回逐项 `runtime_busy` 并继续后续 Room，不 interrupt Turn；
+- 单项 Archive 先 interrupt 活动 Turn 再挂起 Runtime；批量 Archive 对 busy 项同样先 interrupt 活动 Turn 并继续后续 Room；archive 之外（rename、binding completion、suspend、service shutdown）仍不 interrupt Turn；
 - Archive 不删除 Event Log、附件或 Binding ownership；
 - Restore 保留完整历史与原绑定；
 - Permanent remove 仅接受 archived Room、显式不可恢复确认和可证明已停止的 Runtime，不要求用户逐字输入 Room ID；
@@ -428,7 +428,7 @@ POST   /api/v1/import
 - browser session 的 mutation 需要 CSRF，直接 Bearer 客户端不需要该 Header；
 - mutation 使用结构化错误与状态码；
 - Project refresh 原子持久化当前可用性，不改变 canonical identity；
-- batch-archive 提交 1–100 个 `room_ids`，完整校验并按首次出现顺序去重，返回逐项 `archived` / `already_archived` / `failed`；busy 项不阻塞后续项；
+- batch-archive 提交 1–100 个 `room_ids`，完整校验并按首次出现顺序去重，返回逐项 `archived` / `already_archived` / `failed`；单项与批量 archive 都先 interrupt 活动 Turn 再挂起 Runtime，busy 项不阻塞后续项；
 - 单 Room DELETE 提交 `acknowledge_data_loss: true`；batch-delete 提交 1–100 个 `room_ids` 与同一确认，只允许 archived 且 Runtime 可证明停止的 Room；
 - 两个批量入口都返回顺序稳定的逐项结果；单项失败不回滚已经成功归档或删除的 Room；
 - Project DELETE 必须提交精确匹配 path ID 的 `confirm_project_id`，且只允许没有任何 Room 的 Project；

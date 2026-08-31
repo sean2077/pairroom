@@ -438,7 +438,7 @@ func (s *ManagementServer) renameRoom(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *ManagementServer) archiveRoom(w http.ResponseWriter, r *http.Request) {
-	room, _, err := s.archiveRoomByID(r.Context(), r.PathValue("room"), true)
+	room, _, err := s.archiveRoomByID(r.Context(), r.PathValue("room"))
 	if err != nil {
 		s.writeError(w, err)
 		return
@@ -537,7 +537,7 @@ func (s *ManagementServer) archiveRoomsBatch(w http.ResponseWriter, r *http.Requ
 			break
 		}
 
-		room, alreadyArchived, archiveErr := s.archiveRoomByID(r.Context(), roomID, false)
+		room, alreadyArchived, archiveErr := s.archiveRoomByID(r.Context(), roomID)
 		if archiveErr != nil {
 			result.Results = append(result.Results, RoomBatchArchiveItem{
 				RoomID: roomID, Status: "failed",
@@ -560,7 +560,7 @@ func (s *ManagementServer) archiveRoomsBatch(w http.ResponseWriter, r *http.Requ
 	writeManagementJSON(w, http.StatusOK, result)
 }
 
-func (s *ManagementServer) archiveRoomByID(ctx context.Context, roomID string, waitForActiveTurn bool) (Room, bool, error) {
+func (s *ManagementServer) archiveRoomByID(ctx context.Context, roomID string) (Room, bool, error) {
 	unlock := s.lockRoom(roomID)
 	defer unlock()
 	room, ok := s.registry.Room(roomID)
@@ -570,15 +570,11 @@ func (s *ManagementServer) archiveRoomByID(ctx context.Context, roomID string, w
 	if room.Archived() {
 		return room, true, nil
 	}
-	var err error
-	if waitForActiveTurn {
-		err = s.runtimes.WaitAndSuspend(ctx, roomID)
-	} else {
-		// A batch must not stall behind one active Turn. Busy Rooms fail this item
-		// without interruption and remain selected for a later retry.
-		err = s.runtimes.Suspend(ctx, roomID)
-	}
-	if err != nil {
+	// Archive stops active work by default: it closes the Room mutation gate,
+	// interrupts the current Agent Turn so the operator does not have to stop
+	// it from inside the Room first, waits for the runtime to settle, and only
+	// then suspends it before the lifecycle event is appended.
+	if err := s.runtimes.InterruptAndSuspend(ctx, roomID); err != nil {
 		return Room{}, false, err
 	}
 	archived, err := s.registry.ArchiveRoom(ctx, roomID)
