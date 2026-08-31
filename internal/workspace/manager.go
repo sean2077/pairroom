@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
@@ -200,15 +201,46 @@ func (m *Manager) removeLocked(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if _, err := os.Stat(m.root); err == nil {
+	// Archive interrupts the active Agent Turn and then closes the Runtime,
+	// which removes the reviewer worktree. On Windows a just-killed Agent
+	// process can briefly still hold the working-directory handle inside that
+	// worktree, so the removal can transiently fail with "in use". Retry for a
+	// short grace window so the interrupt path does not fail closed on
+	// asynchronous handle release; non-transient errors still fail immediately.
+	var lastErr error
+	for attempt := 0; attempt <= workspaceRemoveAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			if lastErr != nil {
+				return errors.Join(lastErr, err)
+			}
+			return err
+		}
+		if _, err := os.Stat(m.root); errors.Is(err, os.ErrNotExist) {
+			lastErr = nil
+			break
+		}
 		_ = makeTreeWritable(m.root)
-	}
-	_, worktreeErr := runGit(ctx, m.repo, nil, "worktree", "remove", "--force", m.root)
-	if worktreeErr != nil && !errors.Is(worktreeErr, os.ErrNotExist) {
-		// A stale registration or interrupted creation may leave a directory that
-		// Git no longer recognizes. Remove it directly, then prune metadata.
-		if err := os.RemoveAll(m.root); err != nil {
-			return fmt.Errorf("remove stale reviewer worktree: %w", err)
+		_, worktreeErr := runGit(ctx, m.repo, nil, "worktree", "remove", "--force", m.root)
+		removeErr := os.RemoveAll(m.root)
+		if removeErr == nil {
+			lastErr = nil
+			break
+		}
+		if worktreeErr != nil {
+			// A stale registration or interrupted creation may leave a directory
+			// that Git no longer recognizes; the direct removal error is the one
+			// to surface or retry.
+			lastErr = fmt.Errorf("remove stale reviewer worktree: %w", removeErr)
+		} else {
+			lastErr = fmt.Errorf("remove reviewer worktree directory: %w", removeErr)
+		}
+		if attempt == workspaceRemoveAttempts || !isTransientRemoveError(removeErr) {
+			return lastErr
+		}
+		select {
+		case <-time.After(workspaceRemoveBackoff):
+		case <-ctx.Done():
+			return errors.Join(lastErr, ctx.Err())
 		}
 	}
 	_, _ = runGit(ctx, m.repo, nil, "worktree", "prune")
@@ -216,6 +248,32 @@ func (m *Manager) removeLocked(ctx context.Context) error {
 		return fmt.Errorf("remove reviewer worktree directory: %w", err)
 	}
 	return nil
+}
+
+const (
+	// workspaceRemoveAttempts bounds how many times reviewer worktree removal
+	// is retried while the native Agent process releases its handles.
+	workspaceRemoveAttempts = 30
+	workspaceRemoveBackoff  = 100 * time.Millisecond
+)
+
+// isTransientRemoveError reports whether a reviewer worktree removal failure is
+// likely to clear on its own. On Windows, a just-killed Agent process can
+// briefly hold the directory while the OS releases its handles; other platforms
+// never see this because unlink does not require exclusive access.
+func isTransientRemoveError(err error) bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	var errno syscall.Errno
+	if !errors.As(err, &errno) {
+		return false
+	}
+	switch errno {
+	case 5, 32: // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION
+		return true
+	}
+	return false
 }
 
 func (m *Manager) snapshotPathspec() []string {
