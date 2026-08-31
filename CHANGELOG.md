@@ -8,9 +8,11 @@
 - `pairroom-protocol/v2` with compact, durable `PAIRROOM:HANDOFF` packets for peer turns and staged `IMPLEMENTED → REVIEW_CHANGES/REVIEW_APPROVED` Driver/Reviewer handoffs.
 - `pairroom-protocol/v3` natural-language actor/action workflows with durable stages, plan-revision approval gates, visible human waits, and native read-only/write policy projection.
 - Independent Claude and Codex provider profiles, including redacted inspection and reference imports from cc-connect provider tables without copying credentials.
+- Room View exposes an explicit **退出 Room** control that leaves the browser view without stopping either Agent.
 
 ### Changed
 
+- Room View batches high-volume transient Runtime telemetry (command output, logs, tool/plan/diff/usage updates) into bounded 500 ms render passes while keeping `text.delta` low-latency, and preserves Activity scroll position plus Turn-card and nested disclosure state across live re-renders.
 - Single and batch Room archive now stop the active Agent Turn by default before suspending the Runtime, so the operator no longer has to open the Room and stop the Agent first; rename, binding completion, suspend, capacity eviction, and service shutdown still never interrupt a Turn.
 - Unaddressed messages and the Room composer now target the single current Driver instead of invoking both Agents by default; explicit `@all` remains available.
 - Reviewer snapshots are refreshed immediately before each safe new reviewer turn, preventing review of the pre-implementation startup snapshot.
