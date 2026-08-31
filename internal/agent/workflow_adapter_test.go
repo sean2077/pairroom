@@ -44,6 +44,13 @@ func TestWorkflowAdapterProjectsReadOnlyAndExecuteModes(t *testing.T) {
 	if fake.role != model.RoleReviewer || fake.input.Role != model.RoleReviewer || !strings.Contains(fake.input.Text, "Plan only") {
 		t.Fatalf("plan projection: role=%s input=%#v", fake.role, fake.input)
 	}
+	ordinary := model.AgentInput{MessageID: "m2", Role: model.RoleDriver, Text: "ordinary turn"}
+	if _, err := wrapper.Submit(context.Background(), ordinary); err != nil {
+		t.Fatal(err)
+	}
+	if fake.role != model.RoleDriver || fake.input.Role != model.RoleDriver || fake.input.Text != ordinary.Text {
+		t.Fatalf("ordinary role restoration: role=%s input=%#v", fake.role, fake.input)
+	}
 	input.WorkflowMode = model.WorkflowExecute
 	input.Text = "execute"
 	if _, err := wrapper.Submit(context.Background(), input); err != nil {

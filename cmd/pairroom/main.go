@@ -93,10 +93,29 @@ func run(args []string) error {
 type providerInspection struct {
 	Providers []config.ProviderSummary `json:"providers"`
 	Agents    map[string]struct {
-		Provider string   `json:"provider,omitempty"`
-		Model    string   `json:"model,omitempty"`
-		Args     []string `json:"args,omitempty"`
+		Provider      string `json:"provider,omitempty"`
+		Model         string `json:"model,omitempty"`
+		ArgumentCount int    `json:"argument_count,omitempty"`
 	} `json:"agents"`
+}
+
+func buildProviderInspection(cfg config.File) providerInspection {
+	report := providerInspection{Providers: cfg.ProviderSummaries(), Agents: make(map[string]struct {
+		Provider      string `json:"provider,omitempty"`
+		Model         string `json:"model,omitempty"`
+		ArgumentCount int    `json:"argument_count,omitempty"`
+	}, 2)}
+	report.Agents["claude"] = struct {
+		Provider      string `json:"provider,omitempty"`
+		Model         string `json:"model,omitempty"`
+		ArgumentCount int    `json:"argument_count,omitempty"`
+	}{Provider: cfg.Claude.Provider, Model: cfg.Claude.Model, ArgumentCount: len(cfg.Claude.Args)}
+	report.Agents["codex"] = struct {
+		Provider      string `json:"provider,omitempty"`
+		Model         string `json:"model,omitempty"`
+		ArgumentCount int    `json:"argument_count,omitempty"`
+	}{Provider: cfg.Codex.Provider, Model: cfg.Codex.Model, ArgumentCount: len(cfg.Codex.Args)}
+	return report
 }
 
 func runProviders(args []string) error {
@@ -118,21 +137,7 @@ func runProviders(args []string) error {
 	if err != nil {
 		return err
 	}
-	report := providerInspection{Providers: cfg.ProviderSummaries(), Agents: make(map[string]struct {
-		Provider string   `json:"provider,omitempty"`
-		Model    string   `json:"model,omitempty"`
-		Args     []string `json:"args,omitempty"`
-	}, 2)}
-	report.Agents["claude"] = struct {
-		Provider string   `json:"provider,omitempty"`
-		Model    string   `json:"model,omitempty"`
-		Args     []string `json:"args,omitempty"`
-	}{Provider: cfg.Claude.Provider, Model: cfg.Claude.Model, Args: append([]string(nil), cfg.Claude.Args...)}
-	report.Agents["codex"] = struct {
-		Provider string   `json:"provider,omitempty"`
-		Model    string   `json:"model,omitempty"`
-		Args     []string `json:"args,omitempty"`
-	}{Provider: cfg.Codex.Provider, Model: cfg.Codex.Model, Args: append([]string(nil), cfg.Codex.Args...)}
+	report := buildProviderInspection(cfg)
 	if *jsonFlag {
 		encoder := json.NewEncoder(os.Stdout)
 		encoder.SetIndent("", "  ")

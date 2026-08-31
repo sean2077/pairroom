@@ -721,6 +721,9 @@ func (e *Engine) CancelMessage(ctx context.Context, messageID string, target mod
 // and could hide duplicate execution. The caller can retry only targets whose
 // previous delivery or processing state is terminal and unsuccessful.
 func (e *Engine) Retry(ctx context.Context, messageID string, req RetryRequest) (model.Message, error) {
+	e.routingMu.Lock()
+	defer e.routingMu.Unlock()
+
 	e.mu.RLock()
 	original, found := e.findMessageLocked(messageID)
 	e.mu.RUnlock()
@@ -748,6 +751,9 @@ func (e *Engine) Retry(ctx context.Context, messageID string, req RetryRequest) 
 	}
 
 	now := time.Now().UTC()
+	if err := e.prepareWorkflowRetry(original, targets, now); err != nil {
+		return model.Message{}, err
+	}
 	retry := model.Message{
 		ID:                      model.NewID("msg"),
 		From:                    original.From,

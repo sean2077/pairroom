@@ -21,11 +21,12 @@ type workflowDispatch struct {
 	StageIndex int
 }
 
-var workflowPairPattern = regexp.MustCompile(`(?i)(claude(?:\s+code)?|cc|codex)\s*(?:来|负责|进行|先|再|然后|[,，:：;；\s\-–—>→])*\s*(planning|plan|规划|计划|方案|review|审查|评审|audit|复核|验收|execute|implement|执行|实现|开发)`)
+var workflowPairPattern = regexp.MustCompile(`(?i)(claude(?:\s+code)?|cc|codex)\s*(?:来|负责|进行|先|再|然后|[,，:：;；\s\-–—>→])*\s*(planning|plan|规划|计划|方案|review|审查|评审|audit|复核|验收|execute|implement|执行|实现|开发|discussion|discuss|讨论|探讨|协商)`)
 
-var workflowApprovalPattern = regexp.MustCompile(`(?i)(^|[\s,，。；;:：])(approve|approved|go\s+ahead|proceed|批准执行当前计划|批准|同意执行|开始执行|按计划执行)([\s,，。；;:：]|$)`)
-var workflowRejectPattern = regexp.MustCompile(`(?i)(reject|cancel|do\s+not\s+execute|拒绝|取消流程|不要执行|停止执行)`)
+var workflowApprovalPattern = regexp.MustCompile(`(?i)^\s*(?:please\s+|请)?(?:approve|approved|go\s+ahead|proceed|批准执行当前计划|批准|同意执行|开始执行|按计划执行)\s*[.!。！]?\s*$`)
+var workflowRejectPattern = regexp.MustCompile(`(?i)^\s*(?:please\s+|请)?(?:(?:reject|cancel)(?:\s+(?:it|this|workflow|execution|plan))?|do\s+not\s+(?:execute|proceed)|don'?t\s+(?:execute|proceed)|not\s+approved|(?:拒绝|不批准|取消流程|不要执行|停止执行)(?:[，,；;\s]+(?:拒绝|不批准|取消流程|不要执行|停止执行))*)\s*[.!。！]?\s*$`)
 var workflowNoGatePattern = regexp.MustCompile(`(?i)(without\s+approval|no\s+approval|直接执行|无需审批|不需批准|自动执行)`)
+var workflowRequireGatePattern = regexp.MustCompile(`(?i)((?:do\s+not|don'?t|never)\s+(?:execute|proceed|run)\s+without\s+(?:approval|permission)|(?:must|requires?|needs?)\s+(?:approval|permission)|(?:批准|审批)后(?:再)?执行|不要直接执行|不得直接执行|禁止直接执行|执行(?:前|之前|需|需要|必须).{0,8}(?:审批|批准))`)
 
 func compileWorkflow(text string) (*model.WorkflowState, bool) {
 	matches := workflowPairPattern.FindAllStringSubmatch(text, -1)
@@ -71,13 +72,14 @@ func compileWorkflow(text string) (*model.WorkflowState, bool) {
 	}
 	workflow.Stages[0].Status = model.WorkflowStageRunning
 	workflow.Stages[0].StartedAt = &now
-	if workflow.RequiresApproval {
-		workflow.Revision = 1
-	}
-	if workflowNoGatePattern.MatchString(text) {
+	if workflowExplicitNoGate(text) {
 		workflow.RequiresApproval = false
 	}
 	return workflow, true
+}
+
+func workflowExplicitNoGate(text string) bool {
+	return workflowNoGatePattern.MatchString(text) && !workflowRequireGatePattern.MatchString(text)
 }
 
 func workflowActor(value string) model.ActorID {
@@ -103,6 +105,8 @@ func workflowMode(value string) model.WorkflowMode {
 		return model.WorkflowAudit
 	case "execute", "implement", "执行", "实现", "开发":
 		return model.WorkflowExecute
+	case "discussion", "discuss", "讨论", "探讨", "协商":
+		return model.WorkflowDiscuss
 	default:
 		return ""
 	}
@@ -200,13 +204,47 @@ func (e *Engine) workflowDispatchForUser(text string, req SendRequest) (workflow
 		return workflowDispatch{Active: true, Actor: stage.Actor, Mode: stage.Mode, WorkflowID: workflow.ID, StageIndex: workflow.CurrentStage}, nil
 
 	case model.WorkflowStatusRunning:
-		explicit := model.NormalizeActors(req.To)
-		if len(explicit) > 0 && (len(explicit) != 1 || explicit[0] != stage.Actor) {
+		if !e.workflowRequestTargetsStage(text, req, stage.Actor) {
 			return workflowDispatch{}, nil
 		}
 		return workflowDispatch{Active: true, Actor: stage.Actor, Mode: stage.Mode, WorkflowID: workflow.ID, StageIndex: workflow.CurrentStage}, nil
 	}
 	return workflowDispatch{}, nil
+}
+
+// workflowRequestTargetsStage reports whether a message without a newly
+// compiled workflow belongs to the active stage. Explicit recipient, role,
+// mention, and reply targets retain ordinary routing semantics.
+func (e *Engine) workflowRequestTargetsStage(text string, req SendRequest, stageActor model.ActorID) bool {
+	targets := model.NormalizeActors(req.To)
+	if req.TargetRole != "" {
+		if len(targets) > 0 || (req.TargetRole != model.RoleDriver && req.TargetRole != model.RoleReviewer) {
+			return false
+		}
+		e.mu.RLock()
+		for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+			if e.snapshot.Participants[actor].Role == req.TargetRole {
+				targets = append(targets, actor)
+			}
+		}
+		e.mu.RUnlock()
+		return len(targets) == 1 && targets[0] == stageActor
+	}
+	if len(targets) > 0 {
+		return len(targets) == 1 && targets[0] == stageActor
+	}
+	if targets = prompt.Mentions(text, model.ActorUser); len(targets) > 0 {
+		return len(targets) == 1 && targets[0] == stageActor
+	}
+	if req.ReplyTo != "" {
+		e.mu.RLock()
+		replied, found := e.findMessageLocked(req.ReplyTo)
+		e.mu.RUnlock()
+		if found && replied.From.ValidParticipant() {
+			return replied.From == stageActor
+		}
+	}
+	return true
 }
 
 func (e *Engine) workflowAttachMessage(dispatch workflowDispatch, messageID string) {
@@ -282,7 +320,7 @@ func (e *Engine) workflowOnFinal(incoming, output model.Message, control string)
 	e.mu.RLock()
 	workflow := cloneWorkflow(e.snapshot.Workflow)
 	e.mu.RUnlock()
-	if workflow == nil || incoming.WorkflowID == "" || workflow.ID != incoming.WorkflowID ||
+	if workflow == nil || workflow.Status != model.WorkflowStatusRunning || incoming.WorkflowID == "" || workflow.ID != incoming.WorkflowID ||
 		workflow.CurrentStage != incoming.WorkflowStage || workflow.CurrentStage < 0 || workflow.CurrentStage >= len(workflow.Stages) {
 		return
 	}
@@ -298,11 +336,6 @@ func (e *Engine) workflowOnFinal(incoming, output model.Message, control string)
 	if wait {
 		workflow.Status = model.WorkflowStatusWaitingHuman
 		stage.Status = model.WorkflowStageWaitingHuman
-	} else if control == "DONE" {
-		stage.Status = model.WorkflowStageCompleted
-		stage.CompletedAt = &now
-		workflow.Status = model.WorkflowStatusCompleted
-		workflow.CompletedAt = &now
 	}
 	_, _ = e.record(EventWorkflowUpdated, output.From, *workflow)
 }
@@ -353,13 +386,18 @@ func (e *Engine) advanceWorkflow(runtimeEvent model.RuntimeEvent) {
 	workflow.CurrentStage = next
 	workflow.UpdatedAt = now
 	nextStage := &workflow.Stages[next]
-	if nextStage.Mode == model.WorkflowExecute && workflow.RequiresApproval && workflow.ApprovedRevision < workflow.Revision {
-		workflow.Status = model.WorkflowStatusAwaitingApproval
-		nextStage.Status = model.WorkflowStagePending
-		if _, err := e.record(EventWorkflowUpdated, model.ActorSystem, *workflow); err == nil {
-			e.notice("warning", fmt.Sprintf("Workflow plan revision %d is ready. Send “批准执行当前计划” / “approve” to start %s's execution stage.", workflow.Revision, nextStage.Actor.DisplayName()))
+	if nextStage.Mode == model.WorkflowExecute && workflow.RequiresApproval {
+		if workflow.Revision == 0 {
+			workflow.Revision = 1
 		}
-		return
+		if workflow.ApprovedRevision < workflow.Revision {
+			workflow.Status = model.WorkflowStatusAwaitingApproval
+			nextStage.Status = model.WorkflowStagePending
+			if _, err := e.record(EventWorkflowUpdated, model.ActorSystem, *workflow); err == nil {
+				e.notice("warning", fmt.Sprintf("Workflow plan revision %d is ready. Send “批准执行当前计划” / “approve” to start %s's execution stage.", workflow.Revision, nextStage.Actor.DisplayName()))
+			}
+			return
+		}
 	}
 
 	workflow.Status = model.WorkflowStatusRunning
@@ -374,6 +412,58 @@ func (e *Engine) advanceWorkflow(runtimeEvent model.RuntimeEvent) {
 		return
 	}
 	go e.deliverRouted(e.runtimeContext(context.Background()), message, nextStage.Actor)
+}
+
+// prepareWorkflowRetry validates that a failed delivery still belongs to the
+// current stage and reopens a failed workflow before the auditable retry is
+// recorded. Caller holds routingMu.
+func (e *Engine) prepareWorkflowRetry(original model.Message, targets []model.ActorID, now time.Time) error {
+	if original.WorkflowID == "" {
+		return nil
+	}
+	e.mu.RLock()
+	workflow := cloneWorkflow(e.snapshot.Workflow)
+	inFlight := false
+	for _, candidate := range e.snapshot.Messages {
+		if candidate.ID == original.ID || candidate.WorkflowID != original.WorkflowID || candidate.WorkflowStage != original.WorkflowStage {
+			continue
+		}
+		for _, target := range targets {
+			state := candidate.Processing[target]
+			if state == model.ProcessingWaiting || state == model.ProcessingWorking {
+				inFlight = true
+			}
+		}
+	}
+	e.mu.RUnlock()
+	if workflow == nil || workflow.ID != original.WorkflowID || workflow.CurrentStage != original.WorkflowStage || workflow.CurrentStage < 0 || workflow.CurrentStage >= len(workflow.Stages) {
+		return errors.New("workflow stage is no longer current")
+	}
+	stage := &workflow.Stages[workflow.CurrentStage]
+	if len(targets) != 1 || targets[0] != stage.Actor {
+		return errors.New("workflow retry must target the current stage actor")
+	}
+	if inFlight {
+		return errors.New("workflow stage already has an in-flight retry")
+	}
+	switch workflow.Status {
+	case model.WorkflowStatusRunning:
+		return nil
+	case model.WorkflowStatusFailed:
+		workflow.Status = model.WorkflowStatusRunning
+		workflow.CompletedAt = nil
+		workflow.LastTurnID = ""
+		workflow.LastResult = ""
+		workflow.LastSignal = ""
+		workflow.UpdatedAt = now
+		stage.Status = model.WorkflowStageRunning
+		stage.StartedAt = &now
+		stage.CompletedAt = nil
+		_, err := e.record(EventWorkflowUpdated, model.ActorUser, *workflow)
+		return err
+	default:
+		return fmt.Errorf("workflow status %q cannot be retried; reply to or restart the workflow instead", workflow.Status)
+	}
 }
 
 func workflowTurnSucceeded(value string) bool {

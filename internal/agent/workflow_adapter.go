@@ -56,10 +56,13 @@ func (a *workflowAdapter) Submit(ctx context.Context, input model.AgentInput) (m
 	if input.WorkflowMode.Valid() {
 		input.Role = workflowNativeRole(input.WorkflowMode, input.Role)
 		input.Text = workflowRuntimeInstruction(input) + "\n\n" + input.Text
-		if a.actor == model.ActorClaude {
-			if err := a.inner.SetRole(ctx, input.Role); err != nil {
-				return model.DeliveryFailed, fmt.Errorf("apply Claude workflow mode %s: %w", input.WorkflowMode, err)
-			}
+	}
+	// Claude's plan mode is process-wide, unlike Codex's per-turn sandbox.
+	// Reapply the requested role on every submission so a plan-only workflow
+	// cannot leak read-only mode into the next ordinary turn.
+	if a.actor == model.ActorClaude {
+		if err := a.inner.SetRole(ctx, input.Role); err != nil {
+			return model.DeliveryFailed, fmt.Errorf("apply Claude input role %s: %w", input.Role, err)
 		}
 	}
 	a.mu.Lock()

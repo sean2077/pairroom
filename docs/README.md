@@ -24,6 +24,7 @@
 - [Multi-Project / Multi-Room Service](MULTI_ROOM_SERVICE.md)：Service 拓扑、Provisioning、容量、生命周期和恢复；
 - [Management Shell](MANAGEMENT_SHELL.md)：页面路由、操作、状态、能力和浏览器 Session/内存边界；
 - [富对话与图片](RICH_CONVERSATION.md)：Markdown、附件、原生多模态投递和安全限制。
+- [Flexible workflows and provider profiles](FLEXIBLE_WORKFLOWS_AND_PROVIDERS.md)：自然语言阶段编排、审批门与独立供应商配置。
 
 ### 操作与恢复
 
