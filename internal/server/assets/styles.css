@@ -20,6 +20,8 @@
   --red: #ee7182;
   --shadow: 0 18px 60px rgba(0, 0, 0, .32);
   --radius: 14px;
+  --control-h: 32px;
+  --control-radius: 8px;
   --text-xs: 10px;
   --text-sm: 11px;
   --text-control: 12px;
@@ -114,10 +116,10 @@ button { color: inherit; }
 @keyframes pulse { 50% { opacity: .4; } }
 .participant-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 7px; gap: 8px; }
 .agent-actions { display: flex; gap: 5px; margin-top: 9px; }
-.mini-button { padding: 6px 8px; border: 1px solid var(--border); background: var(--surface); border-radius: 7px; color: var(--muted); font-size: var(--text-control); cursor: pointer; }
+.mini-button { padding: 6px 8px; border: 1px solid var(--border); background: var(--surface); border-radius: var(--control-radius); color: var(--muted); font-size: var(--text-control); min-height: var(--control-h); cursor: pointer; }
 .mini-button:hover { color: var(--text); border-color: var(--border-strong); }
 .mini-button.danger:hover { color: var(--red); }
-.role-select { width: 100%; margin-top: 8px; padding: 7px 8px; font-size: var(--text-control); }
+.role-select { width: 100%; margin-top: 8px; padding: 6px 8px; font-size: var(--text-control); }
 .native-policy {
   margin-top: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px;
   background: rgba(255,255,255,.018); color: var(--faint); font-size: var(--text-sm); line-height: 1.4;
@@ -130,15 +132,15 @@ button { color: inherit; }
 .section-title { color: var(--muted); font-weight: 650; font-size: var(--text-control); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 12px; }
 .field-label { display: block; color: var(--faint); font-size: var(--text-sm); margin: 10px 0 5px; }
 .select-control, .mini-select, .role-select {
-  appearance: none; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); outline: none;
+  appearance: none; border: 1px solid var(--border); border-radius: var(--control-radius); background: var(--surface-2); color: var(--text); min-height: var(--control-h); outline: none;
 }
-.select-control { width: 100%; padding: 8px 10px; font-size: var(--text-control); }
+.select-control { width: 100%; padding: 6px 10px; font-size: var(--text-control); }
 .mini-select { padding: 6px 25px 6px 8px; font-size: var(--text-control); }
 .range-row { display: flex; align-items: center; gap: 10px; }
 .range-row input { width: 100%; accent-color: var(--accent); }
 .range-row output { width: 28px; text-align: center; padding: 3px 0; border-radius: 6px; background: var(--surface-3); color: var(--muted); font-size: var(--text-control); }
 .secondary-button, .ghost-button {
-  border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); border-radius: 8px; cursor: pointer; font-size: var(--text-control); padding: 7px 10px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); border-radius: var(--control-radius); cursor: pointer; font-size: var(--text-control); min-height: var(--control-h); padding: 6px 10px; white-space: nowrap;
 }
 .secondary-button:hover, .ghost-button:hover { color: var(--text); border-color: var(--border-strong); }
 .full-width { width: 100%; margin-top: 12px; }
@@ -197,14 +199,14 @@ button { color: inherit; }
 .reply-label { color: var(--accent); font-weight: 650; margin-right: 7px; }
 .composer-wrap { padding: 10px 18px 16px; border-top: 1px solid var(--border); background: rgba(11,13,18,.78); }
 .target-picker { display: flex; gap: 5px; margin-bottom: 8px; }
-.target-button { border: 1px solid transparent; background: transparent; color: var(--faint); border-radius: 7px; padding: 4px 8px; cursor: pointer; font-size: var(--text-control); }
+.target-button { border: 1px solid transparent; background: transparent; color: var(--faint); border-radius: var(--control-radius); min-height: var(--control-h); padding: 6px 8px; cursor: pointer; font-size: var(--text-control); }
 .target-button:hover { color: var(--muted); background: var(--surface-2); }
 .target-button.active { color: #c7c0ff; border-color: rgba(139,124,246,.25); background: var(--accent-soft); }
 .composer { display: flex; align-items: flex-end; gap: 10px; padding: 9px; border: 1px solid var(--border-strong); background: var(--surface-2); border-radius: 12px; box-shadow: var(--shadow); }
 .composer:focus-within { border-color: rgba(139,124,246,.65); box-shadow: 0 0 0 3px rgba(139,124,246,.07), var(--shadow); }
 .composer textarea { flex: 1; resize: none; border: 0; outline: 0; color: var(--text); background: transparent; min-height: 56px; max-height: 150px; font-size: var(--text-body); line-height: 1.55; }
 .composer textarea::placeholder { color: #596275; }
-.send-button { height: 38px; border: 0; border-radius: 9px; padding: 0 12px; display: flex; align-items: center; gap: 7px; background: linear-gradient(135deg, #8575eb, #6b61c8); color: white; font-size: var(--text-control); font-weight: 650; cursor: pointer; box-shadow: 0 6px 18px rgba(105,91,205,.27); }
+.send-button { height: 38px; border: 0; border-radius: var(--control-radius); padding: 0 12px; display: flex; align-items: center; gap: 7px; background: linear-gradient(135deg, #8575eb, #6b61c8); color: white; font-size: var(--text-control); font-weight: 650; cursor: pointer; box-shadow: 0 6px 18px rgba(105,91,205,.27); }
 .send-button:hover { filter: brightness(1.08); }
 .send-button:disabled { opacity: .45; cursor: not-allowed; }
 .send-arrow { font-size: 15px; }
@@ -357,16 +359,16 @@ button { color: inherit; }
 
 .number-row { display: flex; align-items: center; gap: 9px; }
 .number-row > input[type="number"] {
-  width: 104px; padding: 7px 8px; border: 1px solid var(--border); border-radius: 8px;
-  background: var(--surface-2); color: var(--text); outline: none;
+  width: 104px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--control-radius); min-height: var(--control-h);
+  background: var(--surface-2); color: var(--text); font-size: var(--text-control); outline: none;
 }
 .toolbar-actions { display: flex; align-items: center; gap: 6px; }
 .search-box {
-  min-width: 120px; max-width: 190px; height: 31px; display: flex; align-items: center; gap: 6px;
-  padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; color: var(--faint); background: var(--surface-2);
+  min-width: 120px; max-width: 190px; height: var(--control-h); display: flex; align-items: center; gap: 6px;
+  padding: 0 8px; border: 1px solid var(--border); border-radius: var(--control-radius); color: var(--faint); background: var(--surface-2);
 }
 .search-box:focus-within { border-color: var(--accent); }
-.search-box input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: var(--text-sm); }
+.search-box input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: var(--text-control); }
 .search-box input::placeholder { color: var(--faint); }
 .runtime-line { margin-top: 5px; color: var(--faint); font-size: var(--text-xs); line-height: 1.4; overflow-wrap: anywhere; }
 .runtime-warning { color: var(--yellow); }
@@ -469,7 +471,7 @@ button { color: inherit; }
 .pending-attachment img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .pending-attachment-meta { position: absolute; left: 0; right: 0; bottom: 0; padding: 15px 6px 5px; background: linear-gradient(transparent, rgba(0,0,0,.82)); color: white; font-size: var(--text-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .remove-attachment { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border: 0; border-radius: 50%; background: rgba(0,0,0,.66); color: white; cursor: pointer; }
-.attach-button { flex: 0 0 auto; width: 34px; height: 34px; margin-bottom: 1px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-3); color: var(--muted); cursor: pointer; font-size: 18px; }
+.attach-button { flex: 0 0 auto; width: 38px; height: 38px; margin-bottom: 0; border: 1px solid var(--border); border-radius: var(--control-radius); background: var(--surface-3); color: var(--muted); cursor: pointer; font-size: 18px; }
 .attach-button:hover { color: var(--text); border-color: var(--border-strong); }
 .composer-wrap { position: relative; }
 .drop-overlay { position: absolute; inset: 8px 12px; z-index: 8; display: grid; place-items: center; border: 2px dashed var(--accent); border-radius: 12px; background: rgba(20,19,32,.94); color: #c8c0ff; font-size: var(--text-body); font-weight: 650; pointer-events: none; }
