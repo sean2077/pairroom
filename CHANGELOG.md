@@ -24,6 +24,8 @@
 - Room View toasts now show a dismiss control, pause auto-dismiss on hover, and keep error toasts visible for 8 s (4.5 s otherwise), matching the Management Shell.
 - Room View per-message actions (inspect, copy, thread, reply) stay visible on touch devices that cannot hover, instead of being unreachable on the mobile layout.
 - Room View image viewer footer uses localized button labels ("复制"/"适应") instead of the English "Copy"/"Fit", matching the rest of the Chinese interface; "1:1" stays as a universal ratio.
+- Room View control sizing is unified through `--control-h` (32 px) and `--control-radius` (8 px) tokens: the **退出 Room** header button no longer wraps to two lines (52 px→32 px), and all selects, target toggles, search box, numeric input, and secondary/ghost buttons now share one height and corner radius.
+- Management Shell control sizing is unified through `--control-h` (38 px standard) and `--control-h-sm` (32 px compact) tokens: segmented controls, filter chips, compact buttons, settings nav, selects, icon buttons, and the global search now align to a consistent two-tier height and corner-radius system.
 
 ### Fixed
 
