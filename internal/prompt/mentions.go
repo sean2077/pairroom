@@ -9,8 +9,10 @@ import (
 
 var mentionPattern = regexp.MustCompile(`(?i)(?:^|[^[:alnum:]_])@(claude|codex|all|peer|human|user)\b`)
 
-// Mentions returns agent targets explicitly requested by text. @peer is
-// resolved relative to the sender. @human deliberately returns no agent target.
+// Mentions returns user-addressable agent targets found in text. @peer is
+// resolved relative to the sender and @human deliberately returns no agent
+// target. Agent-authored finals do not use this function for turn transfer;
+// the Room Engine requires HANDOFF + NEXT instead.
 func Mentions(text string, sender model.ActorID) []model.ActorID {
 	matches := mentionPattern.FindAllStringSubmatch(text, -1)
 	var targets []model.ActorID

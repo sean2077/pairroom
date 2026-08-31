@@ -217,12 +217,11 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 	if cfg.ListenHost != "127.0.0.1" && cfg.ListenHost != "::1" && !strings.EqualFold(cfg.ListenHost, "localhost") {
 		return nil, errors.New("Room runtimes must listen on loopback")
 	}
-	if cfg.RoutingMode == "" {
-		cfg.RoutingMode = model.DefaultRoomSettings().RoutingMode
-	}
-	if !cfg.RoutingMode.Valid() {
+	mode, ok := cfg.RoutingMode.Canonical()
+	if !ok {
 		return nil, fmt.Errorf("invalid routing mode %q", cfg.RoutingMode)
 	}
+	cfg.RoutingMode = mode
 	if cfg.MaxAgentHops == 0 {
 		cfg.MaxAgentHops = model.DefaultRoomSettings().MaxHops
 	}

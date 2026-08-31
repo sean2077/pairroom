@@ -92,7 +92,7 @@ pairroom service \
 - 小型本机：`--runtime-limit 1` 或 `2`；
 - 同时维护多个活跃 Room：按内存、子进程和供应商并发限制逐步提高；
 - 不希望页面打开即启动 Agent：`--auto-start=false`；
-- 首选显式提及接力：`--routing mentions`；
+- 使用确定性的单轮次接力：`--routing turns`；
 - 禁止长时间无事件告警：`--stall-warning-seconds -1`，否则使用 30–86400 秒。
 
 Runtime limit 允许 1–128，但这只是输入范围，不代表机器或供应商适合运行 128 个 Room。
@@ -130,7 +130,7 @@ pairroom daemon install \
   --data-root /absolute/path/to/pairroom-data \
   --runtime-limit 4 \
   --idle-timeout 20m \
-  --routing mentions
+  --routing turns
 ```
 
 安装时会固定：
@@ -164,7 +164,7 @@ pairroom daemon logs -n 300
 pairroom daemon restart
 ```
 
-修改 Runtime limit、data root、listener、Token、代理、Agent command/model、routing 或日志策略时，必须重装完整定义：
+修改 Runtime limit、data root、listener、Token、代理、Agent command/model、turn policy 或日志策略时，必须重装完整定义：
 
 ```bash
 pairroom daemon install --force -- \
@@ -173,7 +173,7 @@ pairroom daemon install --force -- \
   --runtime-limit 4 \
   --idle-timeout 20m \
   --shutdown-timeout 10m \
-  --routing mentions
+  --routing turns
 ```
 
 先记录现有定义，再重装。只复制一段局部示例可能意外丢失原有 Token、代理或 Agent 参数。

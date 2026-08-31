@@ -96,19 +96,31 @@ func (s ProcessingState) Terminal() bool {
 type RoutingMode string
 
 const (
-	// RoutingManual posts every message to the shared room but never starts a
-	// peer turn automatically from an agent response.
-	RoutingManual RoutingMode = "manual"
-	// RoutingMentions routes an agent response only when it explicitly mentions
-	// @claude, @codex, or @peer.
-	RoutingMentions RoutingMode = "mentions"
-	// RoutingRoundtable keeps alternating peers until a stop marker, a newer
-	// human message, or the hop budget ends the exchange.
+	// RoutingTurns is PairRoom's single collaboration policy. One participant
+	// owns the active native turn; a peer starts only after an explicit NEXT
+	// handoff and the current native turn has completed.
+	RoutingTurns RoutingMode = "turns"
+
+	// Legacy values are accepted at configuration and event-log boundaries and
+	// canonicalized to RoutingTurns. They are intentionally not separate runtime
+	// policies anymore.
+	RoutingManual     RoutingMode = "manual"
+	RoutingMentions   RoutingMode = "mentions"
 	RoutingRoundtable RoutingMode = "roundtable"
 )
 
 func (m RoutingMode) Valid() bool {
-	return m == RoutingManual || m == RoutingMentions || m == RoutingRoundtable
+	_, ok := m.Canonical()
+	return ok
+}
+
+func (m RoutingMode) Canonical() (RoutingMode, bool) {
+	switch m {
+	case "", RoutingTurns, RoutingManual, RoutingMentions, RoutingRoundtable:
+		return RoutingTurns, true
+	default:
+		return "", false
+	}
 }
 
 type MessageIntent string
@@ -272,7 +284,7 @@ type RoomSettings struct {
 }
 
 func DefaultRoomSettings() RoomSettings {
-	return RoomSettings{RoutingMode: RoutingMentions, MaxHops: 6, StallWarningSeconds: 300}
+	return RoomSettings{RoutingMode: RoutingTurns, MaxHops: 6, StallWarningSeconds: 300}
 }
 
 type WorkflowMode string

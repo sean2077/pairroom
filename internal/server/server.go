@@ -405,7 +405,7 @@ func renderMarkdownTranscript(snapshot model.RoomSnapshot) string {
 	fmt.Fprintf(&out, "- Room ID: `%s`\n", snapshot.Meta.ID)
 	fmt.Fprintf(&out, "- Created: %s\n", snapshot.Meta.CreatedAt.Format(time.RFC3339))
 	fmt.Fprintf(&out, "- Exported: %s\n", time.Now().UTC().Format(time.RFC3339))
-	fmt.Fprintf(&out, "- Routing: `%s`, max hops: %d\n\n", snapshot.Settings.RoutingMode, snapshot.Settings.MaxHops)
+	fmt.Fprintf(&out, "- Turn policy: `%s`, max turns: %d\n\n", snapshot.Settings.RoutingMode, snapshot.Settings.MaxHops)
 
 	out.WriteString("## Participants\n\n")
 	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {

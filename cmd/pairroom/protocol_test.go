@@ -20,7 +20,8 @@ func TestWriteProtocolText(t *testing.T) {
 		protocol.Version,
 		"actor: codex",
 		"[role.reviewer]",
-		"[routing.roundtable]",
+		"[delivery.single-turn]",
+		"[delivery.next]",
 		"[PAIRROOM:DONE]",
 	} {
 		if !strings.Contains(stdout.String(), fragment) {

@@ -22,10 +22,10 @@ func writeProtocol(args []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	actorFlag := flags.String("actor", "", "limit actor-specific rules to claude or codex")
 	roleFlag := flags.String("role", "", "limit role rules to driver, reviewer, or peer")
-	routingFlag := flags.String("routing", "", "limit routing rules to manual, mentions, or roundtable")
+	routingFlag := flags.String("routing", "", "turns (legacy values are accepted as aliases)")
 	jsonFlag := flags.Bool("json", false, "emit the contract as JSON")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "usage: pairroom protocol [--actor claude|codex] [--role driver|reviewer|peer] [--routing manual|mentions|roundtable] [--json]")
+		fmt.Fprintln(stderr, "usage: pairroom protocol [--actor claude|codex] [--role driver|reviewer|peer] [--routing turns] [--json]")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {

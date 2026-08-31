@@ -10,7 +10,7 @@ import (
 
 func TestDefaults(t *testing.T) {
 	cfg := Defaults()
-	if cfg.Listen != "127.0.0.1:7332" || cfg.RoutingMode != model.RoutingMentions || cfg.MaxAgentHops != 6 {
+	if cfg.Listen != "127.0.0.1:7332" || cfg.RoutingMode != model.RoutingTurns || cfg.MaxAgentHops != 6 {
 		t.Fatalf("unexpected defaults: %#v", cfg)
 	}
 	if cfg.Claude.Command != "claude" || cfg.Codex.Command != "codex" {
@@ -38,7 +38,7 @@ func TestLoadMergesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.RoomName != "Test Room" || cfg.RoutingMode != model.RoutingRoundtable || cfg.Claude.Model != "opus" {
+	if cfg.RoomName != "Test Room" || cfg.RoutingMode != model.RoutingTurns || cfg.Claude.Model != "opus" {
 		t.Fatalf("unexpected config: %#v", cfg)
 	}
 	if cfg.Claude.PermissionMode != "auto" || cfg.Codex.ApprovalPolicy != "untrusted" {

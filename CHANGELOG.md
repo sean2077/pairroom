@@ -14,6 +14,8 @@
 
 ### Changed
 
+- PairRoom now uses one deterministic `turns` collaboration policy: a Room has one active Agent Turn owner, cross-Agent and `next_turn` inputs wait in a Room-level queue, and only a compact `HANDOFF` followed by `NEXT` transfers control after the current native Turn completes. Legacy `manual`/`mentions`/`roundtable` configuration values are migrated to the unified policy.
+- The Room composer no longer offers `@All` or routing-mode controls; users choose one Agent or role, while explicit natural-language actor/action sequences remain available for plan/review/execute/audit workflows.
 - Room View batches high-volume transient Runtime telemetry (command output, logs, tool/plan/diff/usage updates) into bounded 500 ms render passes while keeping `text.delta` low-latency, and preserves Activity scroll position plus Turn-card and nested disclosure state across live re-renders.
 - Single and batch Room archive now stop the active Agent Turn by default before suspending the Runtime, so the operator no longer has to open the Room and stop the Agent first; rename, binding completion, suspend, capacity eviction, and service shutdown still never interrupt a Turn.
 - Unaddressed messages and the Room composer now target the single current Driver instead of invoking both Agents by default; explicit `@all` remains available.

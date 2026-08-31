@@ -429,7 +429,7 @@ func (e *Engine) advanceWorkflow(runtimeEvent model.RuntimeEvent) {
 		e.notice("error", "Create workflow handoff: "+err.Error())
 		return
 	}
-	go e.deliverRouted(e.runtimeContext(context.Background()), message, nextStage.Actor)
+	e.scheduleDelivery(e.runtimeContext(context.Background()), message, nextStage.Actor)
 }
 
 func (e *Engine) workflowStageHasInFlightInput(workflowID string, stageIndex int, actor model.ActorID, completedMessageID string) bool {

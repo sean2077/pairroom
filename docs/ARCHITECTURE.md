@@ -177,7 +177,7 @@ Runtime Manager 维护：
 Room Engine 是领域状态机，负责：
 
 - 消息、线程、引用、目标和重试；
-- Manual/Mentions/Roundtable 路由；
+- 单 active owner 的 Turn scheduler、Room FIFO 队列与显式 `HANDOFF + NEXT` 交棒；
 - 用户新指令对旧自动接力的优先级；
 - Delivery 与 Processing 双生命周期；
 - Runtime correlation 和 final response 投影；
@@ -268,14 +268,14 @@ session/thread identity
 
 ### 6.2 Agent 协作契约投影
 
-`internal/protocol` 是固定协作规则的单一来源，`pairroom protocol` 将同一份版本化契约投射为文本或 JSON。可计数、可校验、可持久化的机械行为继续由 Room Engine、Adapter、角色沙箱和路由器执行，而不是依赖长 prompt 反复提醒。
+`internal/protocol` 是固定协作规则的单一来源，`pairroom protocol` 将同一份版本化契约投射为文本或 JSON。可计数、可校验、可持久化的机械行为继续由 Room Engine、Turn scheduler、Adapter 和角色沙箱执行，而不是依赖长 prompt 反复提醒。
 
 原生 Harness 只接收一个紧凑 bootstrap：
 
 - ClaudeAdapter 优先使用 Claude Code 的原生 append-system-prompt 能力；兼容路径最多在首个输入前投射一次；
 - CodexAdapter 在 `thread/start` 和 `thread/resume` 的 `developerInstructions` 中投射 bootstrap；`turn/start` 与 `turn/steer` 不再内联完整规则；
-- bootstrap 不包含 Room 名称或 repository 绝对路径，只声明 Human/Harness authority、角色与路由判断入口、控制 marker 和 `pairroom-protocol/v3` 查询命令；
-- 每轮 `[PairRoom message]` envelope 只携带 message/thread/hop、from/to、role、routing、intent、附件元数据和正文等动态事实。
+- bootstrap 不包含 Room 名称或 repository 绝对路径，只声明 Human/Harness authority、角色、单 owner 接力规则、控制 marker 和 `pairroom-protocol/v4` 查询命令；
+- 每轮 `[PairRoom message]` envelope 只携带 message/thread/hop、from/to、role、turn policy、intent、附件元数据和正文等动态事实。
 
 `internal/prompt` 的 byte-budget 测试是发布门：固定 bootstrap 或逐轮 envelope overhead 超预算会直接使测试失败，防止规则再次无界增长。
 

@@ -22,7 +22,7 @@ Stage policy is derived from the action:
 
 A stage that needs a decision ends with `@human` and `[PAIRROOM:WAIT]`. The reply is associated with the same stage. Codex `request_user_input` and MCP elicitation requests that cannot be represented by the headless app-server client are converted into a visible Room question and the native turn is interrupted safely; PairRoom no longer leaves a five-minute silent wait with no exposed prompt.
 
-Ordinary messages remain ordinary. PairRoom compiles a workflow only when it sees at least two explicit actor/action pairs, so `@claude review this` and `Codex execute this fix` keep their existing routing behavior. During an active workflow, an explicit recipient, role target, mention, or reply to another Agent also retains ordinary routing.
+Ordinary messages remain ordinary. PairRoom compiles a workflow only when it sees at least two explicit actor/action pairs, so `@claude review this` and `Codex execute this fix` remain single-target turns. During an active workflow, an explicit recipient, role target, mention, or reply to another Agent is still handled as a user-directed turn, but the Room scheduler never runs both participants at once.
 
 ## Provider profiles
 

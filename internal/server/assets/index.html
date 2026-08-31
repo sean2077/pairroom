@@ -49,14 +49,9 @@
 
         <div class="divider"></div>
         <section class="room-controls">
-          <div class="section-title">讨论策略</div>
-          <label class="field-label" for="routing-mode">自动路由</label>
-          <select id="routing-mode" class="select-control">
-            <option value="manual">Manual · 仅用户触发</option>
-            <option value="mentions">Mentions · @ 对方时继续</option>
-            <option value="roundtable">Roundtable · 自动往返</option>
-          </select>
-          <label class="field-label" for="max-hops">最大 Agent 往返</label>
+          <div class="section-title">轮次策略</div>
+          <div class="strategy-note">单一轮次接力：同一时刻仅一个 Agent 工作；只有明确的 NEXT handoff 才把下一轮交给对方。</div>
+          <label class="field-label" for="max-hops">单次接力最大轮数</label>
           <div class="range-row">
             <input id="max-hops" type="range" min="1" max="20" value="6">
             <output id="max-hops-value">6</output>
@@ -66,7 +61,7 @@
             <input id="stall-warning" type="number" min="30" max="86400" step="30" value="300">
             <label class="checkbox-label"><input id="stall-disabled" type="checkbox"> 关闭</label>
           </div>
-          <button id="save-settings" class="secondary-button full-width">保存策略</button>
+          <button id="save-settings" class="secondary-button full-width">保存轮次限制</button>
         </section>
 
         <div class="divider"></div>
@@ -111,7 +106,6 @@
           <div class="target-picker" role="group" aria-label="消息接收者">
             <button class="target-button active" data-target="driver" aria-pressed="true">@ Driver</button>
             <button class="target-button" data-target="reviewer" aria-pressed="false">@ Reviewer</button>
-            <button class="target-button" data-target="all" aria-pressed="false">@ All</button>
             <button class="target-button" data-target="claude" aria-pressed="false">@ Claude</button>
             <button class="target-button" data-target="codex" aria-pressed="false">@ Codex</button>
           </div>

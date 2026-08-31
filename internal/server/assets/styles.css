@@ -130,6 +130,10 @@ button { color: inherit; }
 
 .divider { height: 1px; background: var(--border); margin: 17px 4px; }
 .section-title { color: var(--muted); font-weight: 650; font-size: var(--text-control); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 12px; }
+.strategy-note {
+  padding: 8px 9px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface-2); color: var(--faint); font-size: var(--text-sm); line-height: 1.45;
+}
 .field-label { display: block; color: var(--faint); font-size: var(--text-sm); margin: 10px 0 5px; }
 .select-control, .mini-select, .role-select {
   appearance: none; border: 1px solid var(--border); border-radius: var(--control-radius); background: var(--surface-2); color: var(--text); min-height: var(--control-h); outline: none;

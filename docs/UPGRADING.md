@@ -34,7 +34,7 @@ pairroom daemon status
 - daemon 完整安装参数、二进制路径与日志路径；
 - Vendor CLI version；
 - 关键 Project/Room/Binding；
-- 当前 Runtime policy 与 routing。
+- 当前 Runtime policy 与 turn policy。
 
 ## 3. 升级前备份
 
@@ -73,7 +73,7 @@ pairroom backup \
 
 - `--data-root`、`--listen`、`--token`；
 - `--runtime-limit`、`--idle-timeout`、`--shutdown-timeout`；
-- routing、hop、stall warning；
+- turn policy、hop、stall warning；
 - Claude/Codex command/model/permission/sandbox；
 - proxy/PATH/work-dir；
 - log path、size、backup count。
@@ -138,7 +138,7 @@ pairroom daemon install --force -- \
   --runtime-limit 4 \
   --idle-timeout 20m \
   --shutdown-timeout 10m \
-  --routing mentions
+  --routing turns
 ```
 
 随后：

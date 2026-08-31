@@ -106,9 +106,15 @@ type CancelRequest struct {
 	Target model.ActorID `json:"target"`
 }
 
+type scheduledDelivery struct {
+	message model.Message
+	target  model.ActorID
+}
+
 type Engine struct {
 	mu        sync.RWMutex
 	routingMu sync.Mutex
+	turnMu    sync.Mutex
 
 	cfg      Config
 	snapshot model.RoomSnapshot
@@ -121,6 +127,10 @@ type Engine struct {
 	lastRuntimeActivity map[model.ActorID]time.Time
 	stallWarnedTurn     map[model.ActorID]string
 	deliveryMu          map[model.ActorID]chan struct{}
+	turnOwner           model.ActorID
+	turnQueue           []scheduledDelivery
+	turnSubmitting      int
+	turnBoundarySeen    bool
 }
 
 func New(cfg Config) (*Engine, error) {
@@ -131,11 +141,20 @@ func New(cfg Config) (*Engine, error) {
 		cfg.Hub = bus.New(256)
 	}
 	if cfg.Settings.RoutingMode == "" {
-		cfg.Settings = model.DefaultRoomSettings()
+		defaults := model.DefaultRoomSettings()
+		cfg.Settings.RoutingMode = defaults.RoutingMode
+		if cfg.Settings.MaxHops == 0 {
+			cfg.Settings.MaxHops = defaults.MaxHops
+		}
+		if cfg.Settings.StallWarningSeconds == 0 {
+			cfg.Settings.StallWarningSeconds = defaults.StallWarningSeconds
+		}
 	}
-	if !cfg.Settings.RoutingMode.Valid() {
+	mode, ok := cfg.Settings.RoutingMode.Canonical()
+	if !ok {
 		return nil, fmt.Errorf("invalid routing mode %q", cfg.Settings.RoutingMode)
 	}
+	cfg.Settings.RoutingMode = mode
 	if cfg.Settings.MaxHops < 1 {
 		cfg.Settings.MaxHops = model.DefaultRoomSettings().MaxHops
 	}
@@ -226,6 +245,10 @@ func (e *Engine) ensureSnapshotDefaults() {
 	defer e.mu.Unlock()
 	if e.snapshot.Settings.RoutingMode == "" {
 		e.snapshot.Settings = model.DefaultRoomSettings()
+	} else if mode, ok := e.snapshot.Settings.RoutingMode.Canonical(); ok {
+		e.snapshot.Settings.RoutingMode = mode
+	} else {
+		e.snapshot.Settings.RoutingMode = model.RoutingTurns
 	}
 	if e.snapshot.Settings.MaxHops < 1 {
 		e.snapshot.Settings.MaxHops = model.DefaultRoomSettings().MaxHops
@@ -605,7 +628,10 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 		}
 	}
 	if len(targets) == 0 {
-		return model.Message{}, errors.New("message has no target; use @claude, @codex, or @all")
+		return model.Message{}, errors.New("message has no target; use @claude, @codex, Driver, or Reviewer")
+	}
+	if len(targets) != 1 {
+		return model.Message{}, errors.New("turn-by-turn rooms accept one Agent recipient; choose @claude or @codex, or describe an explicit multi-stage workflow")
 	}
 	supersedes := make(map[model.ActorID][]string)
 	if intent == model.IntentSupersede {
@@ -655,8 +681,7 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 		}
 	}
 	for _, target := range targets {
-		target := target
-		go e.deliverRouted(e.runtimeContext(ctx), message, target)
+		e.scheduleDelivery(e.runtimeContext(ctx), message, target)
 	}
 	return message, nil
 }
@@ -713,6 +738,7 @@ func (e *Engine) CancelMessage(ctx context.Context, messageID string, target mod
 		e.processing(id, target, model.ProcessingCancelled, "cancelled by the PairRoom user; native interruption affects the participant turn/queue", "")
 	}
 	e.expireApprovals(target, "message_cancelled")
+	e.finishTurnIfIdle(target, false)
 	return nil
 }
 
@@ -743,6 +769,9 @@ func (e *Engine) Retry(ctx context.Context, messageID string, req RetryRequest) 
 	}
 	if len(targets) == 0 {
 		return model.Message{}, errors.New("message has no failed, cancelled, skipped, or superseded target to retry")
+	}
+	if len(targets) != 1 {
+		return model.Message{}, errors.New("turn-by-turn retry accepts exactly one Agent target")
 	}
 	for _, target := range targets {
 		if !retryableTarget(original, target) {
@@ -791,8 +820,7 @@ func (e *Engine) Retry(ctx context.Context, messageID string, req RetryRequest) 
 	}
 	retry.Seq = event.Seq
 	for _, target := range targets {
-		target := target
-		go e.deliverRouted(e.runtimeContext(ctx), retry, target)
+		e.scheduleDelivery(e.runtimeContext(ctx), retry, target)
 	}
 	return retry, nil
 }
@@ -833,7 +861,11 @@ func (e *Engine) StopAgent(ctx context.Context, actor model.ActorID) error {
 		return err
 	}
 	defer unlock()
-	return e.stopAgentLocked(ctx, actor)
+	if err := e.stopAgentLocked(ctx, actor); err != nil {
+		return err
+	}
+	e.finishTurn(actor)
+	return nil
 }
 
 func (e *Engine) stopAgentLocked(ctx context.Context, actor model.ActorID) error {
@@ -863,7 +895,9 @@ func (e *Engine) RestartAgent(ctx context.Context, actor model.ActorID) error {
 	if err := e.stopAgentLocked(ctx, actor); err != nil {
 		return err
 	}
-	return e.startAgentLocked(ctx, actor)
+	err = e.startAgentLocked(ctx, actor)
+	e.finishTurn(actor)
+	return err
 }
 
 func (e *Engine) cancelInFlight(actor model.ActorID, detail string) {
@@ -949,9 +983,11 @@ func (e *Engine) ResolveApproval(ctx context.Context, approvalID string, resolut
 }
 
 func (e *Engine) UpdateSettings(settings model.RoomSettings) error {
-	if !settings.RoutingMode.Valid() {
+	mode, ok := settings.RoutingMode.Canonical()
+	if !ok {
 		return fmt.Errorf("invalid routing mode %q", settings.RoutingMode)
 	}
+	settings.RoutingMode = mode
 	if settings.MaxHops < 1 || settings.MaxHops > 30 {
 		return errors.New("max_agent_hops must be between 1 and 30")
 	}
@@ -1258,6 +1294,129 @@ func (e *Engine) runtimeContext(requestCtx context.Context) context.Context {
 	return engineCtx
 }
 
+// scheduleDelivery enforces PairRoom's turn-by-turn invariant. The active
+// participant may receive steering messages, but the peer is queued until the
+// current native turn reports completion. Reserving the owner before starting
+// the goroutine closes the race where two user messages could start both
+// runtimes before either adapter emitted a working state.
+func (e *Engine) scheduleDelivery(ctx context.Context, message model.Message, target model.ActorID) {
+	if !target.ValidParticipant() {
+		return
+	}
+	e.turnMu.Lock()
+	owner := e.turnOwner
+	switch {
+	case owner == "":
+		e.turnOwner = target
+		e.turnSubmitting++
+		e.turnBoundarySeen = false
+	case owner != target || message.Intent == model.IntentNextTurn:
+		e.turnQueue = append(e.turnQueue, scheduledDelivery{message: message, target: target})
+		e.turnMu.Unlock()
+		e.processing(message.ID, target, model.ProcessingWaiting, fmt.Sprintf("queued until %s completes the active turn", owner.DisplayName()), "")
+		return
+	default:
+		e.turnSubmitting++
+	}
+	e.turnMu.Unlock()
+	go e.runScheduledDelivery(ctx, message, target)
+}
+
+func (e *Engine) runScheduledDelivery(ctx context.Context, message model.Message, target model.ActorID) {
+	e.deliverRouted(ctx, message, target)
+	e.turnMu.Lock()
+	if e.turnOwner == target && e.turnSubmitting > 0 {
+		e.turnSubmitting--
+	}
+	e.turnMu.Unlock()
+	e.finishTurnIfIdle(target, true)
+}
+
+// finishTurn releases the current owner and starts exactly one queued
+// delivery. The next delivery reserves ownership before its goroutine begins,
+// preserving serialization even when runtime callbacks arrive concurrently.
+func (e *Engine) finishTurn(actor model.ActorID) {
+	e.turnMu.Lock()
+	next := e.finishTurnLocked(actor)
+	e.turnMu.Unlock()
+	e.startScheduledDelivery(next)
+}
+
+// finishTurnLocked transitions ownership while turnMu is held.
+func (e *Engine) finishTurnLocked(actor model.ActorID) *scheduledDelivery {
+	if e.turnOwner != actor {
+		return nil
+	}
+	e.turnOwner = ""
+	e.turnSubmitting = 0
+	e.turnBoundarySeen = false
+	for len(e.turnQueue) > 0 {
+		candidate := e.turnQueue[0]
+		e.turnQueue = e.turnQueue[1:]
+		if !e.deliveryStillPending(candidate.message.ID, candidate.target) {
+			continue
+		}
+		e.turnOwner = candidate.target
+		e.turnSubmitting = 1
+		e.turnBoundarySeen = false
+		return &candidate
+	}
+	return nil
+}
+
+func (e *Engine) startScheduledDelivery(next *scheduledDelivery) {
+	if next == nil {
+		return
+	}
+	go e.runScheduledDelivery(e.runtimeContext(context.Background()), next.message, next.target)
+}
+
+// finishTurnIfIdle releases ownership only when no immediate submission is in
+// flight and no input already accepted by the owner's native runtime remains
+// unfinished. Room-queued deliveries still have DeliveryPending and therefore
+// do not block the release that will start them.
+func (e *Engine) finishTurnIfIdle(actor model.ActorID, allowWithoutBoundary bool) {
+	e.turnMu.Lock()
+	if e.turnOwner != actor || e.turnSubmitting > 0 || (!allowWithoutBoundary && !e.turnBoundarySeen) {
+		e.turnMu.Unlock()
+		return
+	}
+	e.mu.RLock()
+	busy := false
+	for _, message := range e.snapshot.Messages {
+		state := message.Processing[actor]
+		if state != model.ProcessingWaiting && state != model.ProcessingWorking {
+			continue
+		}
+		switch message.Delivery[actor] {
+		case model.DeliveryStarted, model.DeliveryInjected, model.DeliveryQueued:
+			busy = true
+		}
+		if busy {
+			break
+		}
+	}
+	e.mu.RUnlock()
+	if busy {
+		e.turnMu.Unlock()
+		return
+	}
+	next := e.finishTurnLocked(actor)
+	e.turnMu.Unlock()
+	e.startScheduledDelivery(next)
+}
+
+func (e *Engine) deliveryStillPending(messageID string, target model.ActorID) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	message, ok := e.findMessageLocked(messageID)
+	if !ok {
+		return false
+	}
+	processing := message.Processing[target]
+	return !processing.Terminal() && message.Delivery[target] == model.DeliveryPending
+}
+
 func (e *Engine) lockDelivery(ctx context.Context, actor model.ActorID) (func(), error) {
 	lock := e.deliveryMu[actor]
 	if lock == nil {
@@ -1534,14 +1693,17 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 		if runtimeEvent.CorrelationID != "" {
 			e.processing(runtimeEvent.CorrelationID, runtimeEvent.Agent, model.ProcessingCompleted, runtimeEvent.Text, runtimeEvent.TurnID)
 		}
+		e.finishTurnIfIdle(runtimeEvent.Agent, false)
 	case model.RuntimeInputCancelled:
 		if runtimeEvent.CorrelationID != "" {
 			e.processing(runtimeEvent.CorrelationID, runtimeEvent.Agent, model.ProcessingCancelled, runtimeEvent.Text, runtimeEvent.TurnID)
 		}
+		e.finishTurnIfIdle(runtimeEvent.Agent, false)
 	case model.RuntimeInputFailed:
 		if runtimeEvent.CorrelationID != "" {
 			e.processing(runtimeEvent.CorrelationID, runtimeEvent.Agent, model.ProcessingFailed, runtimeEvent.Text, runtimeEvent.TurnID)
 		}
+		e.finishTurnIfIdle(runtimeEvent.Agent, false)
 	case model.RuntimeState:
 		e.updateParticipant(runtimeEvent.Agent, func(p *model.ParticipantSnapshot) {
 			if runtimeEvent.State != "" {
@@ -1555,6 +1717,11 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 			p.LastActivity = runtimeEvent.CreatedAt
 		})
 	case model.RuntimeTurnStarted:
+		e.turnMu.Lock()
+		if e.turnOwner == runtimeEvent.Agent {
+			e.turnBoundarySeen = false
+		}
+		e.turnMu.Unlock()
 		if runtimeEvent.CorrelationID != "" {
 			e.processing(runtimeEvent.CorrelationID, runtimeEvent.Agent, model.ProcessingWorking, "native turn started", runtimeEvent.TurnID)
 		}
@@ -1573,9 +1740,16 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 			}
 			p.LastActivity = runtimeEvent.CreatedAt
 		})
+		e.settleTurnInputs(runtimeEvent)
+		e.turnMu.Lock()
+		if e.turnOwner == runtimeEvent.Agent {
+			e.turnBoundarySeen = true
+		}
+		e.turnMu.Unlock()
 		// Preserve runtime callback order. An untracked goroutine allowed a
 		// queued human append to overtake workflow handoff materialization.
 		e.advanceWorkflow(runtimeEvent)
+		e.finishTurnIfIdle(runtimeEvent.Agent, false)
 	case model.RuntimeApprovalRequested:
 		if runtimeEvent.Approval != nil {
 			_, _ = e.record(EventApprovalUpdated, runtimeEvent.Agent, *runtimeEvent.Approval)
@@ -1595,12 +1769,14 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 		if runtimeEvent.CorrelationID != "" {
 			e.processing(runtimeEvent.CorrelationID, runtimeEvent.Agent, model.ProcessingFailed, runtimeEvent.Text, runtimeEvent.TurnID)
 		}
+		e.cancelInFlight(runtimeEvent.Agent, "native runtime failed before pending inputs completed")
 		e.expireApprovals(runtimeEvent.Agent, "runtime_error")
 		e.updateParticipant(runtimeEvent.Agent, func(p *model.ParticipantSnapshot) {
 			p.State = model.StateError
 			p.LastError = runtimeEvent.Text
 			p.LastActivity = runtimeEvent.CreatedAt
 		})
+		e.finishTurnIfIdle(runtimeEvent.Agent, true)
 	case model.RuntimeFinal:
 		e.onFinal(runtimeEvent)
 	}
@@ -1709,6 +1885,56 @@ func (e *Engine) projectTurnSummary(runtimeEvent model.RuntimeEvent) {
 	e.mu.Lock()
 	replaceTurnSummaryLocked(&e.snapshot, summary)
 	e.mu.Unlock()
+}
+
+// settleTurnInputs supplies a conservative terminal fallback for adapters that
+// report a native Turn boundary but omit per-input terminal events. Inputs
+// explicitly queued for a later native Turn are left waiting until that Turn
+// starts and completes.
+func (e *Engine) settleTurnInputs(runtimeEvent model.RuntimeEvent) {
+	if !runtimeEvent.Agent.ValidParticipant() {
+		return
+	}
+	state := model.ProcessingCompleted
+	detail := "native turn completed"
+	status := strings.ToLower(strings.TrimSpace(runtimeEvent.Name))
+	switch {
+	case strings.Contains(status, "cancel"), strings.Contains(status, "interrupt"):
+		state = model.ProcessingCancelled
+		detail = "native turn was cancelled"
+	case strings.Contains(status, "fail"), strings.Contains(status, "error"):
+		state = model.ProcessingFailed
+		detail = "native turn failed"
+	}
+
+	e.mu.RLock()
+	messageIDs := make([]string, 0, 2)
+	fallbackIDs := make([]string, 0, 2)
+	for _, message := range e.snapshot.Messages {
+		current := message.Processing[runtimeEvent.Agent]
+		if current != model.ProcessingWaiting && current != model.ProcessingWorking {
+			continue
+		}
+		turnID := message.ProcessingTurn[runtimeEvent.Agent]
+		if message.ID == runtimeEvent.CorrelationID ||
+			(runtimeEvent.TurnID != "" && turnID == runtimeEvent.TurnID) {
+			messageIDs = append(messageIDs, message.ID)
+			continue
+		}
+		if runtimeEvent.CorrelationID == "" {
+			switch message.Delivery[runtimeEvent.Agent] {
+			case model.DeliveryStarted, model.DeliveryInjected:
+				fallbackIDs = append(fallbackIDs, message.ID)
+			}
+		}
+	}
+	e.mu.RUnlock()
+	if len(messageIDs) == 0 && len(fallbackIDs) == 1 {
+		messageIDs = fallbackIDs
+	}
+	for _, messageID := range messageIDs {
+		e.processing(messageID, runtimeEvent.Agent, state, detail, runtimeEvent.TurnID)
+	}
 }
 
 func upsertTurnItem(summary *model.TurnSummary, event model.RuntimeEvent, kind, status string) {
@@ -1885,8 +2111,7 @@ func (e *Engine) onFinal(runtimeEvent model.RuntimeEvent) {
 		return
 	}
 	for _, target := range targets {
-		target := target
-		go e.deliverRouted(e.runtimeContext(context.Background()), message, target)
+		e.scheduleDelivery(e.runtimeContext(context.Background()), message, target)
 	}
 }
 
@@ -1991,68 +2216,42 @@ func (e *Engine) processing(messageID string, target model.ActorID, state model.
 }
 
 func (e *Engine) agentTargets(actor model.ActorID, text, handoff, control string, hop int, sourceSeq, latestHumanSeq uint64, settings model.RoomSettings) []model.ActorID {
-	if settings.RoutingMode == model.RoutingManual {
-		return nil
-	}
 	if hop >= settings.MaxHops {
-		e.notice("info", "Automatic agent handoff paused at the configured hop limit.")
+		e.notice("info", "Agent handoff paused at the configured turn limit.")
 		return nil
 	}
 	if control == "AMBIGUOUS" {
-		e.notice("warning", fmt.Sprintf("%s emitted conflicting PairRoom control signals; automatic handoff was stopped.", actor.DisplayName()))
+		e.notice("warning", fmt.Sprintf("%s emitted conflicting PairRoom control signals; the turn returned to the human.", actor.DisplayName()))
 		return nil
 	}
-	routingText := strings.TrimSpace(text + "\n" + handoff)
-	if prompt.MentionsHuman(routingText) {
+	if prompt.MentionsHuman(strings.TrimSpace(text + "\n" + handoff)) {
 		return nil
 	}
-	stale := sourceSeq > 0 && latestHumanSeq > sourceSeq
-	if control == "IMPLEMENTED" || control == "REVIEW_CHANGES" {
-		if stale {
-			e.notice("info", fmt.Sprintf("A newer user message superseded %s's staged handoff; the response remains visible in the room.", actor.DisplayName()))
-			return nil
-		}
-		if !validHandoff(handoff) {
-			e.notice("warning", fmt.Sprintf("%s emitted %s without a usable HANDOFF; automatic transfer was stopped.", actor.DisplayName(), control))
-			return nil
-		}
-		if target := e.stagedHandoffTarget(actor, control); target.ValidParticipant() {
-			return []model.ActorID{target}
-		}
-		e.notice("warning", fmt.Sprintf("%s emitted %s but current roles do not form a Driver/Reviewer pair; automatic transfer was stopped.", actor.DisplayName(), control))
+
+	var target model.ActorID
+	switch control {
+	case "NEXT", "CONTINUE": // CONTINUE is a v3 compatibility alias.
+		target = model.OtherParticipant(actor)
+	case "IMPLEMENTED", "REVIEW_CHANGES": // v3 staged handoff aliases.
+		target = e.stagedHandoffTarget(actor, control)
+	case "", "CONSENSUS", "WAIT", "BLOCKED", "DONE", "REVIEW_APPROVED":
+		return nil
+	default:
 		return nil
 	}
-	// Review approval is a terminal staged-protocol decision, not a generic
-	// conversation hint. A peer mention must not restart the completed review.
-	if control == "REVIEW_APPROVED" {
+	if !target.ValidParticipant() {
+		e.notice("warning", fmt.Sprintf("%s requested a peer turn but current roles do not provide a valid target.", actor.DisplayName()))
 		return nil
 	}
-	explicit := prompt.Mentions(routingText, actor)
-	out := explicit[:0]
-	for _, target := range explicit {
-		if target != actor {
-			out = append(out, target)
-		}
-	}
-	if len(out) > 0 {
-		if stopsConversation(control) {
-			e.notice("warning", fmt.Sprintf("%s addressed a peer while also emitting %s; the explicit recipient won.", actor.DisplayName(), control))
-		}
-		// A direct address is an explicit delivery instruction. Newer appends and
-		// generic stop markers suppress only implicit continuation, not @peer.
-		return model.NormalizeActors(out)
-	}
-	if stopsConversation(control) {
+	if sourceSeq > 0 && latestHumanSeq > sourceSeq {
+		e.notice("info", fmt.Sprintf("A newer user message superseded %s's pending handoff; the response remains visible in the room.", actor.DisplayName()))
 		return nil
 	}
-	if stale {
-		e.notice("info", fmt.Sprintf("A newer user message superseded %s's automatic handoff; the response remains visible in the room.", actor.DisplayName()))
+	if !validHandoff(handoff) {
+		e.notice("warning", fmt.Sprintf("%s requested the next turn without a usable HANDOFF; the turn returned to the human.", actor.DisplayName()))
 		return nil
 	}
-	if settings.RoutingMode == model.RoutingRoundtable {
-		return []model.ActorID{model.OtherParticipant(actor)}
-	}
-	return nil
+	return []model.ActorID{target}
 }
 
 func (e *Engine) stagedHandoffTarget(actor model.ActorID, control string) model.ActorID {
@@ -2796,7 +2995,7 @@ func validHandoff(value string) bool {
 	return len([]rune(strings.TrimSpace(value))) >= minHandoffRunes
 }
 
-var controlPattern = regexp.MustCompile(`(?mi)^\s*\[PAIRROOM:(CONTINUE|CONSENSUS|WAIT|BLOCKED|DONE|IMPLEMENTED|REVIEW_APPROVED|REVIEW_CHANGES)\]\s*$`)
+var controlPattern = regexp.MustCompile(`(?mi)^\s*\[PAIRROOM:(NEXT|CONTINUE|CONSENSUS|WAIT|BLOCKED|DONE|IMPLEMENTED|REVIEW_APPROVED|REVIEW_CHANGES)\]\s*$`)
 
 func stripControl(text string) (string, string) {
 	matches := controlPattern.FindAllStringSubmatch(text, -1)
@@ -2814,7 +3013,7 @@ func stripControl(text string) (string, string) {
 
 func stopsConversation(control string) bool {
 	switch control {
-	case "AMBIGUOUS", "CONSENSUS", "WAIT", "BLOCKED", "DONE", "IMPLEMENTED", "REVIEW_APPROVED", "REVIEW_CHANGES":
+	case "AMBIGUOUS", "CONSENSUS", "WAIT", "BLOCKED", "DONE", "REVIEW_APPROVED":
 		return true
 	default:
 		return false

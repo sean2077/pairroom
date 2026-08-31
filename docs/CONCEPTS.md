@@ -154,9 +154,9 @@ Management Token 是整个 Service 的高权限控制面凭据，不是某个 Ro
 
 ### Message
 
-用户或 Agent 在 PairRoom 公共时间线中的持久记录。用户消息可以有多个目标，例如同时发给 Claude 和 Codex。显式接收者、角色目标和正文 mention 都优先于回复推断；仅提供 `reply_to` 时，回复 Agent 消息会由 Service 投递回该 Agent。没有这些目标事实时，正常 Driver/Reviewer 配置只投递给唯一的当前 Driver；`@all` 仍用于确实需要双侧独立工作的任务。
+用户或 Agent 在 PairRoom 公共时间线中的持久记录。用户消息只选择一个 Agent 或一个可解析为单一 Agent 的角色目标；正文 mention、显式接收者和 `target_role` 优先于回复推断。仅提供 `reply_to` 时，回复 Agent 消息会投递回该 Agent；没有目标事实时，正常 Driver/Reviewer 配置只投递给唯一的当前 Driver。需要两侧参与时，应使用自然语言阶段序列或在当前 Agent 的结果中显式交棒，而不是同时启动两个 Runtime。
 
-Agent 消息还可持久化一个有界 `handoff`：完整 `text` 服务于人类时间线，`handoff` 只携带 Peer 完成下一阶段所需的目标、改动范围、证据、风险和明确问题，避免把长报告重复注入另一侧原生上下文。
+Agent 消息还可持久化一个有界 `handoff`：完整 `text` 服务于人类时间线，`handoff` 只携带下一 Agent 完成其轮次所需的目标、改动范围、证据、风险和明确问题，避免把长报告重复注入另一侧原生上下文。
 
 ### Delivery
 
@@ -183,7 +183,7 @@ waiting → working → completed
 
 ### Turn
 
-Turn 是供应商 Runtime 的一次工作单元。多个 PairRoom 输入可能被关联到同一个原生 Turn；一个 PairRoom 消息也可能同时产生 Claude Turn 与 Codex Turn。
+Turn 是供应商 Runtime 的一次工作单元。多个发给同一 Agent 的 PairRoom 输入可能被关联到同一个原生 Turn；同一 Room 任意时刻只允许一个 Agent 拥有 active Turn。跨 Agent 输入与 `next_turn` 输入进入 Room 级 FIFO 队列，只有当前 owner 完成、失败、取消或停止后才会启动下一项。
 
 Inspector 的工具、命令、计划、Diff、用量和最终结果按 Turn 投影。PairRoom 保存有界摘要，不复制供应商完整内部 Transcript 或推理状态。
 
@@ -197,28 +197,24 @@ Inspector 的工具、命令、计划、Diff、用量和最终结果按 Turn 投
 
 取消和重试按目标执行。重试创建新消息并引用原消息，不改写历史。
 
-## 路由模式
+## 单轮次接力
 
-| 模式 | 自动转发规则 | 适合 |
-|---|---|---|
-| `manual` | 不自动转发 | 用户逐步控制 |
-| `mentions` | Agent 明确 `@Peer` 才继续 | 默认日常协作 |
-| `roundtable` | 双方自动往返 | 有界方案讨论 |
-
-Roundtable 受到 `--max-hops`、用户新消息和停止标记限制。Driver/Reviewer 在 `mentions` 与 `roundtable` 中还可使用阶段标记：
+PairRoom 只有一个运行策略：`turns`。
 
 ```text
-[PAIRROOM:IMPLEMENTED]       # Driver → Reviewer
-[PAIRROOM:REVIEW_CHANGES]   # Reviewer → Driver
-[PAIRROOM:REVIEW_APPROVED]  # 审查完成并停止
-[PAIRROOM:CONTINUE]
-[PAIRROOM:CONSENSUS]
-[PAIRROOM:WAIT]
-[PAIRROOM:BLOCKED]
-[PAIRROOM:DONE]
+user → active Agent → optional HANDOFF + NEXT → peer → … → DONE/user
 ```
 
-`IMPLEMENTED` 与 `REVIEW_CHANGES` 阶段交接必须同时提供可用的 `[PAIRROOM:HANDOFF]...[/PAIRROOM:HANDOFF]`；缺少证据包、角色不匹配或控制标记冲突时都停止自动转发。普通 `mentions` 路由会同时检查可见正文与 handoff 内的明确目标。这些控制块不显示在公共时间线，`manual` 始终不自动转发。
+规则：
+
+- 同一时刻只有一个 Agent Turn owner；另一 Agent 的输入在 Room 队列等待；
+- 发给当前 owner 的 `append`/`supersede` 可作为 steering，`next_turn` 即使目标相同也等待下一安全边界；
+- 普通 `@peer`、`@claude`、`@codex` 文本不会从 Agent 输出中启动新 Turn；
+- 交棒必须同时包含可用的 `[PAIRROOM:HANDOFF]...[/PAIRROOM:HANDOFF]` 与 `[PAIRROOM:NEXT]`；
+- `[PAIRROOM:DONE]` 返回用户，`[PAIRROOM:WAIT]` 等待用户决定，`[PAIRROOM:BLOCKED]` 表示未解决阻塞；
+- 新用户输入、冲突控制标记、缺失 handoff 或 `--max-hops` 上限都会 fail closed，不继续旧接力。
+
+旧配置值 `manual`、`mentions`、`roundtable` 只作为迁移别名读取并规范化为 `turns`。旧协议的 `CONTINUE`、`IMPLEMENTED`、`REVIEW_CHANGES` 与 `REVIEW_APPROVED` 仍可被已有 Room 识别，但新 Agent 契约只生成 `NEXT`、`DONE`、`WAIT` 和 `BLOCKED`。
 
 ## 角色与 Workspace
 

@@ -50,7 +50,7 @@ func TestBootstrapPromptUsesVersionedContractAndStaysCompact(t *testing.T) {
 		if len([]byte(got)) > MaxBootstrapBytes {
 			t.Fatalf("%s bootstrap = %d bytes, budget = %d:\n%s", actor, len([]byte(got)), MaxBootstrapBytes, got)
 		}
-		for _, fragment := range []string{protocol.Version, "pairroom protocol --actor " + string(actor), "current_role", "Ask the peer only", "[PAIRROOM:HANDOFF]", "[PAIRROOM:IMPLEMENTED]", "[PAIRROOM:REVIEW_CHANGES]"} {
+		for _, fragment := range []string{protocol.Version, "pairroom protocol --actor " + string(actor), "current_role", "single active turn", "[PAIRROOM:HANDOFF]", "[PAIRROOM:NEXT]", "[PAIRROOM:DONE]"} {
 			if !strings.Contains(got, fragment) {
 				t.Fatalf("%s bootstrap missing %q:\n%s", actor, fragment, got)
 			}
@@ -78,7 +78,7 @@ func TestEnvelopeCarriesOnlyRuntimeAndRoutingContext(t *testing.T) {
 	for _, fragment := range []string{
 		"protocol: " + protocol.Version,
 		"message_id: msg-0123456789abcdef01234567", "thread_id: thread-0123456789abcdef01234567", "from: claude", "to: codex",
-		"reply_to: msg-0123456789abcdef01234567", "current_role: reviewer", "delivery_intent: supersede", "routing_mode: roundtable",
+		"reply_to: msg-0123456789abcdef01234567", "current_role: reviewer", "delivery_intent: supersede", "turn_policy: turns",
 		"workflow_id: workflow-0123456789abcdef01234567", "workflow_stage: 3", "workflow_mode: audit",
 		"remaining_agent_hops: 4", "Inspect the race",
 	} {

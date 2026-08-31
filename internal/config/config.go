@@ -88,7 +88,7 @@ func Defaults() File {
 	return File{
 		Listen:              "127.0.0.1:7332",
 		RoomName:            "Claude × Codex",
-		RoutingMode:         model.RoutingMentions,
+		RoutingMode:         model.RoutingTurns,
 		MaxAgentHops:        6,
 		StallWarningSeconds: 300,
 		AutoStart:           true,
@@ -114,6 +114,9 @@ func Load(path string) (File, error) {
 	if err := decoder.Decode(&cfg); err != nil {
 		return File{}, fmt.Errorf("decode config: %w", err)
 	}
+	if mode, ok := cfg.RoutingMode.Canonical(); ok {
+		cfg.RoutingMode = mode
+	}
 	if err := cfg.resolveProviderProfiles(path); err != nil {
 		return File{}, err
 	}
@@ -127,7 +130,7 @@ func (c File) Validate() error {
 	if c.Listen == "" {
 		return errors.New("listen address is required")
 	}
-	if !c.RoutingMode.Valid() {
+	if mode, ok := c.RoutingMode.Canonical(); !ok || mode != model.RoutingTurns {
 		return fmt.Errorf("invalid routing mode %q", c.RoutingMode)
 	}
 	if c.MaxAgentHops < 1 || c.MaxAgentHops > 30 {

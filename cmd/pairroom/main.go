@@ -249,8 +249,8 @@ func runService(args []string) (resultErr error) {
 	mockFlag := flags.Bool("mock", false, "run deterministic mock agents instead of vendor CLIs")
 	noBrowserFlag := flags.Bool("no-browser", false, "do not open the Management Shell in a browser")
 	autoStartFlag := flags.Bool("auto-start", fileCfg.AutoStart, "start both agents when a Room runtime activates")
-	routingFlag := flags.String("routing", string(fileCfg.RoutingMode), "manual, mentions, or roundtable")
-	maxHopsFlag := flags.Int("max-hops", fileCfg.MaxAgentHops, "maximum automatic agent hops per Room")
+	routingFlag := flags.String("routing", string(fileCfg.RoutingMode), "turns (legacy manual/mentions/roundtable values are migrated)")
+	maxHopsFlag := flags.Int("max-hops", fileCfg.MaxAgentHops, "maximum Agent turns per Room chain")
 	stallWarningFlag := flags.Int("stall-warning-seconds", fileCfg.StallWarningSeconds, "warn when a working agent emits no runtime event; -1 disables")
 	claudeCommand := flags.String("claude-command", fileCfg.Claude.Command, "Claude Code executable")
 	claudeModel := flags.String("claude-model", fileCfg.Claude.Model, "Claude model override")
@@ -285,9 +285,9 @@ func runService(args []string) (resultErr error) {
 	if *daemonControlFlag != "" && !filepath.IsAbs(*daemonControlFlag) {
 		return errors.New("daemon-control-file must be absolute")
 	}
-	routing := model.RoutingMode(*routingFlag)
-	if !routing.Valid() {
-		return fmt.Errorf("invalid routing mode %q", routing)
+	routing, ok := model.RoutingMode(*routingFlag).Canonical()
+	if !ok {
+		return fmt.Errorf("invalid routing mode %q", *routingFlag)
 	}
 	if *maxHopsFlag < 1 || *maxHopsFlag > 30 {
 		return errors.New("max-hops must be between 1 and 30")
@@ -434,8 +434,8 @@ func runServe(args []string) error {
 	mockFlag := flags.Bool("mock", false, "run deterministic mock agents instead of vendor CLIs")
 	noBrowserFlag := flags.Bool("no-browser", false, "do not open the room in a browser")
 	autoStartFlag := flags.Bool("auto-start", fileCfg.AutoStart, "start both agents when the room opens")
-	routingFlag := flags.String("routing", string(fileCfg.RoutingMode), "manual, mentions, or roundtable")
-	maxHopsFlag := flags.Int("max-hops", fileCfg.MaxAgentHops, "maximum automatic agent hops")
+	routingFlag := flags.String("routing", string(fileCfg.RoutingMode), "turns (legacy manual/mentions/roundtable values are migrated)")
+	maxHopsFlag := flags.Int("max-hops", fileCfg.MaxAgentHops, "maximum Agent turns per chain")
 	stallWarningFlag := flags.Int("stall-warning-seconds", fileCfg.StallWarningSeconds, "warn when a working agent emits no runtime event; -1 disables")
 	claudeCommand := flags.String("claude-command", fileCfg.Claude.Command, "Claude Code executable")
 	claudeModel := flags.String("claude-model", fileCfg.Claude.Model, "Claude model override")
@@ -475,9 +475,9 @@ func runServe(args []string) error {
 			return fmt.Errorf("resolve data directory: %w", err)
 		}
 	}
-	routing := model.RoutingMode(*routingFlag)
-	if !routing.Valid() {
-		return fmt.Errorf("invalid routing mode %q", routing)
+	routing, ok := model.RoutingMode(*routingFlag).Canonical()
+	if !ok {
+		return fmt.Errorf("invalid routing mode %q", *routingFlag)
 	}
 	if *maxHopsFlag < 1 || *maxHopsFlag > 30 {
 		return errors.New("max-hops must be between 1 and 30")

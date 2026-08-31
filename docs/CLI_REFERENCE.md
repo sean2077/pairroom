@@ -70,8 +70,8 @@ pairroom service [options]
 | 选项 | 约束 | 作用 |
 |---|---|---|
 | `--auto-start BOOL` | 配置值 | Runtime 激活时是否启动双方 Agent |
-| `--routing MODE` | `manual` / `mentions` / `roundtable` | 自动路由策略 |
-| `--max-hops N` | 1–30 | 每个 Room 的自动 Agent 接力上限 |
+| `--routing MODE` | `turns`；旧值会迁移 | 单轮次接力策略 |
+| `--max-hops N` | 1–30 | 每条 Agent 接力链的最大 Turn 数 |
 | `--stall-warning-seconds N` | `-1` 或 30–86400 | 无 Runtime event 提醒；`-1` 关闭 |
 | `--claude-command CMD` | 通常 `claude` | Claude Code 可执行文件 |
 | `--claude-model MODEL` | 可选 | Claude 模型覆盖 |
@@ -88,7 +88,7 @@ pairroom service [options]
 pairroom service \
   --runtime-limit 4 \
   --idle-timeout 20m \
-  --routing mentions \
+  --routing turns \
   --stall-warning-seconds 300
 ```
 
@@ -111,8 +111,8 @@ pairroom serve [options]
 | `--mock` | false | 使用 Mock Agent |
 | `--no-browser` | false | 不自动打开 Room View |
 | `--auto-start BOOL` | 配置值 | Room 启动时是否启动 Agent |
-| `--routing MODE` | 三种合法模式 | 路由策略 |
-| `--max-hops N` | 1–30 | 自动接力上限 |
+| `--routing MODE` | `turns`；旧值会迁移 | 单轮次接力策略 |
+| `--max-hops N` | 1–30 | 接力链最大 Turn 数 |
 | `--stall-warning-seconds N` | `-1` 或 30–86400 | stall 提醒 |
 | `--claude-command CMD` | 通常 `claude` | Claude Code 可执行文件 |
 | `--claude-model MODEL` | 可选 | Claude 模型覆盖 |
@@ -128,7 +128,7 @@ pairroom serve [options]
 ```bash
 pairroom serve \
   --repo /absolute/path/to/project \
-  --routing roundtable \
+  --routing turns \
   --max-hops 8
 ```
 
@@ -283,22 +283,22 @@ pairroom diagnostics \
 
 ## `pairroom protocol`
 
-输出 PairRoom 的版本化 Agent 协作契约。该命令不打开 Room、仓库或 Service 状态；它把固定规则作为确定性的 CLI 数据提供给 Agent、文档和诊断工具，避免把完整规则重复拼接到每个原生 Turn。当前契约版本为 `pairroom-protocol/v3`。
+输出 PairRoom 的版本化 Agent 协作契约。该命令不打开 Room、仓库或 Service 状态；它把固定规则作为确定性的 CLI 数据提供给 Agent、文档和诊断工具，避免把完整规则重复拼接到每个原生 Turn。当前契约版本为 `pairroom-protocol/v4`。
 
 ```bash
 pairroom protocol
-pairroom protocol --actor codex --role reviewer --routing roundtable
+pairroom protocol --actor codex --role reviewer --routing turns
 pairroom protocol --actor claude --json
 ```
 
 | 选项 | 约束 | 作用 |
 |---|---|---|
-| `--actor ACTOR` | `claude` / `codex` | 只输出目标 Agent 相关的 mention 规则 |
+| `--actor ACTOR` | `claude` / `codex` | 记录目标 Agent，并输出同一固定接力契约 |
 | `--role ROLE` | `driver` / `reviewer` / `peer` | 只输出当前角色规则 |
-| `--routing MODE` | `manual` / `mentions` / `roundtable` | 只输出当前路由规则 |
+| `--routing MODE` | `turns`；旧值会规范化 | 输出固定单轮次接力契约 |
 | `--json` | false | 输出稳定的 `version`、筛选条件和规则数组 |
 
-不提供筛选条件时会输出完整契约。筛选只缩小角色和路由分支；Human authority、原生 Harness authority、输入/输出、媒体、可观察性和收敛规则始终保留。Room Engine 与 Adapter 继续机械执行路由、角色沙箱、投递和生命周期；Agent prompt 只保留需要模型判断的紧凑 bootstrap，并通过版本号引用本命令。
+不提供筛选条件时会输出完整契约。角色筛选只追加对应角色规则；`--routing` 仅为配置兼容，所有合法旧值都会规范化为 `turns`。Human authority、原生 Harness authority、单 owner 调度、输入/输出、媒体、可观察性和收敛规则始终保留。Room Engine 与 Adapter 继续机械执行接力、角色沙箱、投递和生命周期；Agent prompt 只保留需要模型判断的紧凑 bootstrap，并通过版本号引用本命令。
 
 ## `pairroom version`
 
@@ -319,7 +319,7 @@ git 元数据由 `make build`、`make install`、`make release` 与 CI/release �
 {
   "listen": "127.0.0.1:7332",
   "room_name": "Claude × Codex",
-  "routing_mode": "mentions",
+  "routing_mode": "turns",
   "max_agent_hops": 6,
   "stall_warning_seconds": 300,
   "auto_start": true,

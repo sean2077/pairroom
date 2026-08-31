@@ -48,7 +48,7 @@ PY
 )
 BASE="http://127.0.0.1:$PORT"
 "$BIN" serve --repo "$REPO" --data-dir "$DATA" --mock --no-browser \
-  --listen "127.0.0.1:$PORT" --routing manual >"$TMP/server.log" 2>&1 &
+  --listen "127.0.0.1:$PORT" --routing turns >"$TMP/server.log" 2>&1 &
 SERVER_PID=$!
 
 for _ in $(seq 1 100); do
@@ -63,8 +63,14 @@ curl -fsS "$BASE/api/v1/health" >/dev/null
 
 MESSAGE=$(curl -fsS -X POST "$BASE/api/v1/messages" \
   -H 'Content-Type: application/json' \
-  --data '{"text":"@all independently review the release boundary and report risks","to":["claude","codex"],"intent":"append"}')
+  --data '{"text":"@claude inspect the release boundary and report risks","to":["claude"],"intent":"append"}')
 printf '%s' "$MESSAGE" >"$TMP/message.json"
+
+# A cross-agent input is accepted immediately but must wait until the active
+# Claude native turn completes before Codex starts.
+curl -fsS -X POST "$BASE/api/v1/messages" \
+  -H 'Content-Type: application/json' \
+  --data '{"text":"@codex independently review the release boundary after Claude finishes","to":["codex"],"intent":"append"}' >/dev/null
 
 # Exercise the persistent image path and multimodal transcript without relying
 # on a vendor network connection.
@@ -86,7 +92,7 @@ import json,sys
 s=json.load(open(sys.argv[1]))
 msgs=s.get('messages',[])
 participants=s.get('participants',{})
-ok=len(msgs)>=5 and all(participants.get(a,{}).get('state') in ('idle','stopped') for a in ('claude','codex'))
+ok=len(msgs)>=6 and all(participants.get(a,{}).get('state') in ('idle','stopped') for a in ('claude','codex'))
 raise SystemExit(0 if ok else 1)
 PY
   then break; fi
@@ -96,7 +102,7 @@ done
 "$PYTHON" - "$TMP/snapshot.json" <<'PY'
 import json,sys
 s=json.load(open(sys.argv[1]))
-assert len(s.get('messages',[]))>=5, s
+assert len(s.get('messages',[]))>=6, s
 assert len(s.get('turns',[]))>=3, s.get('turns')
 assert any(m.get('attachments') for m in s['messages']), 'attachment missing from transcript'
 for actor in ('claude','codex'):

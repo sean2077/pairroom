@@ -89,7 +89,7 @@ func TestHealthSnapshotAndMessageAPI(t *testing.T) {
 		t.Fatalf("health status = %d: %s", health.Code, health.Body.String())
 	}
 
-	body := bytes.NewBufferString(`{"text":"Review the design","to":["claude","codex"]}`)
+	body := bytes.NewBufferString(`{"text":"Review the design","to":["claude"]}`)
 	send := httptest.NewRecorder()
 	request := localRequest(http.MethodPost, "/api/v1/messages", body)
 	request.Header.Set("Content-Type", "application/json")

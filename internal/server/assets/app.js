@@ -559,7 +559,6 @@
   }
 
   function renderSettings() {
-    $('routing-mode').value = state.snapshot.settings.routing_mode;
     $('max-hops').value = state.snapshot.settings.max_agent_hops;
     $('max-hops-value').value = state.snapshot.settings.max_agent_hops;
     const stall = Number(state.snapshot.settings.stall_warning_seconds ?? 300);
@@ -1787,12 +1786,12 @@
       await api('/api/v1/settings', {
         method: 'PUT',
         body: JSON.stringify({
-          routing_mode: $('routing-mode').value,
+          routing_mode: 'turns',
           max_agent_hops: Number($('max-hops').value),
           stall_warning_seconds: $('stall-disabled').checked ? -1 : Number($('stall-warning').value),
         }),
       });
-      toast('讨论策略已保存', 'success');
+      toast('轮次限制已保存', 'success');
     } catch (error) {
       toast(error.message, 'error');
     }
@@ -1962,16 +1961,15 @@
     if (target === 'driver' || target === 'reviewer') return [];
     if (target === 'claude') return ['claude'];
     if (target === 'codex') return ['codex'];
-    return ['claude', 'codex'];
+    return [];
   }
 
   function updateDeliveryHint() {
     const driver = currentDriver();
     const reviewer = currentReviewer();
     const labels = {
-      driver: driver ? `发送给当前 Driver · ${displayName(driver)}` : 'Driver 角色不唯一；发送给两个 Agent',
-      reviewer: reviewer ? `发送给当前 Reviewer · ${displayName(reviewer)}` : 'Reviewer 角色不唯一；发送给两个 Agent',
-      all: '发送给 Claude 与 Codex',
+      driver: driver ? `发送给当前 Driver · ${displayName(driver)}` : 'Driver 角色不唯一；请选择明确 Agent',
+      reviewer: reviewer ? `发送给当前 Reviewer · ${displayName(reviewer)}` : 'Reviewer 角色不唯一；请选择明确 Agent',
       claude: '仅发送给 Claude',
       codex: '仅发送给 Codex',
     };
@@ -1979,7 +1977,7 @@
   }
 
   function setTarget(target) {
-    if (!['driver', 'reviewer', 'all', 'claude', 'codex'].includes(target)) target = 'driver';
+    if (!['driver', 'reviewer', 'claude', 'codex'].includes(target)) target = 'driver';
     state.selectedTarget = target;
     document.querySelectorAll('.target-button').forEach((button) => {
       const active = button.dataset.target === target;
@@ -2005,7 +2003,7 @@
       const draft = JSON.parse(localStorage.getItem(state.draftKey) || 'null');
       if (draft && typeof draft === 'object') {
         messageInput.value = String(draft.text || '');
-        if (['driver', 'reviewer', 'all', 'claude', 'codex'].includes(draft.target)) state.selectedTarget = draft.target;
+        if (['driver', 'reviewer', 'claude', 'codex'].includes(draft.target)) state.selectedTarget = draft.target;
         if (['append', 'next_turn', 'supersede'].includes(draft.intent)) $('message-intent').value = draft.intent;
       }
     } catch { localStorage.removeItem(state.draftKey); }
