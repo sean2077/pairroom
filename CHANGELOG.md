@@ -42,6 +42,7 @@
 - Room View composer target picker (`@Driver`/`@Reviewer`/`@All`/`@Claude`/`@Codex`) now exposes `aria-pressed` on each toggle, and the toast live region uses `polite` instead of `assertive` so success notices stop interrupting screen readers.
 - Management Shell static dialogs (Project, Room, Rename, Binding, Confirm) now carry `aria-labelledby` pointing at their heading so screen readers announce each dialog's purpose when it opens, matching the command palette and Room image viewer.
 - Management Shell segmented controls (theme, density, Room open behavior) and the settings section nav now expose `aria-pressed` and a group `aria-label`, so the active option is announced instead of relying on the `active` class alone.
+- Management Shell Runtimes "最后活动" column no longer renders the Go zero timestamp (`0001-01-01`) as a nonsensical "1年1月1日" date; a never-active Runtime now shows "—" like other empty timestamps.
 
 ## [v1.1.0] — 2026-08-21
 

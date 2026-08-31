@@ -2018,14 +2018,17 @@
   function formatDateTime(value) {
     if (!value) return '—';
     const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return String(value);
+    const time = date.getTime();
+    if (Number.isNaN(time) || time <= 0) return '—';
     return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' }).format(date);
   }
 
   function formatRelativeTime(value) {
     if (!value) return '—';
     const date = new Date(value);
-    const delta = Date.now() - date.getTime();
+    const time = date.getTime();
+    if (Number.isNaN(time) || time <= 0) return '—';
+    const delta = Date.now() - time;
     if (!Number.isFinite(delta)) return String(value);
     const abs = Math.abs(delta);
     if (abs < 5000) return '刚刚';
