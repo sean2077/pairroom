@@ -313,6 +313,20 @@ func (e *Engine) deliverRouted(ctx context.Context, message model.Message, targe
 	e.deliver(ctx, message, target)
 }
 
+func (e *Engine) workflowOwnsFinal(incoming model.Message, actor model.ActorID) bool {
+	if incoming.WorkflowID == "" || !actor.ValidParticipant() {
+		return false
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	workflow := e.snapshot.Workflow
+	if workflow == nil || workflow.Status != model.WorkflowStatusRunning || workflow.ID != incoming.WorkflowID ||
+		workflow.CurrentStage != incoming.WorkflowStage || workflow.CurrentStage < 0 || workflow.CurrentStage >= len(workflow.Stages) {
+		return false
+	}
+	return workflow.Stages[workflow.CurrentStage].Actor == actor
+}
+
 // workflowOnFinal captures a stage result. The actual transition waits for
 // turn.completed so changing Driver/workspace can never race an active turn.
 // Caller holds routingMu.
@@ -356,6 +370,10 @@ func (e *Engine) advanceWorkflow(runtimeEvent model.RuntimeEvent) {
 	}
 	stage := &workflow.Stages[workflow.CurrentStage]
 	if stage.Actor != runtimeEvent.Agent {
+		return
+	}
+	if e.workflowStageHasInFlightInput(workflow.ID, workflow.CurrentStage, stage.Actor, runtimeEvent.CorrelationID) {
+		e.notice("info", fmt.Sprintf("Workflow stage %d remains active while queued guidance for %s is processed.", workflow.CurrentStage+1, stage.Actor.DisplayName()))
 		return
 	}
 	now := time.Now().UTC()
@@ -412,6 +430,31 @@ func (e *Engine) advanceWorkflow(runtimeEvent model.RuntimeEvent) {
 		return
 	}
 	go e.deliverRouted(e.runtimeContext(context.Background()), message, nextStage.Actor)
+}
+
+func (e *Engine) workflowStageHasInFlightInput(workflowID string, stageIndex int, actor model.ActorID, completedMessageID string) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for _, message := range e.snapshot.Messages {
+		if message.ID == completedMessageID || message.WorkflowID != workflowID || message.WorkflowStage != stageIndex {
+			continue
+		}
+		targeted := false
+		for _, target := range message.To {
+			if target == actor {
+				targeted = true
+				break
+			}
+		}
+		if !targeted {
+			continue
+		}
+		state := message.Processing[actor]
+		if state == model.ProcessingWaiting || state == model.ProcessingWorking {
+			return true
+		}
+	}
+	return false
 }
 
 // prepareWorkflowRetry validates that a failed delivery still belongs to the
@@ -473,13 +516,30 @@ func workflowTurnSucceeded(value string) bool {
 
 func (e *Engine) workflowHandoffMessage(workflow model.WorkflowState, previous, next model.WorkflowStage) (model.Message, error) {
 	e.mu.RLock()
-	prior, found := e.findMessageLocked(workflow.LastMessageID)
+	prior, found := model.Message{}, false
+	if workflow.LastTurnID != "" {
+		for index := len(e.snapshot.Messages) - 1; index >= 0; index-- {
+			candidate := e.snapshot.Messages[index]
+			if candidate.WorkflowID == workflow.ID && candidate.WorkflowStage == previous.Index &&
+				candidate.TurnID == workflow.LastTurnID && candidate.From == previous.Actor {
+				prior, found = candidate, true
+				break
+			}
+		}
+	}
+	if !found {
+		prior, found = e.findMessageLocked(workflow.LastMessageID)
+	}
 	e.mu.RUnlock()
 	if !found {
 		return model.Message{}, errors.New("previous workflow result is missing")
 	}
+	result := strings.TrimSpace(workflow.LastResult)
+	if result == "" {
+		result = prior.Text
+	}
 	now := time.Now().UTC()
-	handoff := compactHandoff(workflowStagePrompt(workflow, previous, next, prior.Text))
+	handoff := compactHandoff(workflowStagePrompt(workflow, previous, next, result))
 	message := model.Message{
 		ID: model.NewID("msg"), From: previous.Actor,
 		To:      []model.ActorID{model.ActorUser, next.Actor},

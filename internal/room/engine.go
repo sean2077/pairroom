@@ -1573,7 +1573,9 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 			}
 			p.LastActivity = runtimeEvent.CreatedAt
 		})
-		go e.advanceWorkflow(runtimeEvent)
+		// Preserve runtime callback order. An untracked goroutine allowed a
+		// queued human append to overtake workflow handoff materialization.
+		e.advanceWorkflow(runtimeEvent)
 	case model.RuntimeApprovalRequested:
 		if runtimeEvent.Approval != nil {
 			_, _ = e.record(EventApprovalUpdated, runtimeEvent.Agent, *runtimeEvent.Approval)
@@ -1839,7 +1841,7 @@ func (e *Engine) onFinal(runtimeEvent model.RuntimeEvent) {
 	}
 
 	hop := incoming.Hop + 1
-	workflowOwned := incoming.WorkflowID != ""
+	workflowOwned := e.workflowOwnsFinal(incoming, runtimeEvent.Agent)
 	var targets []model.ActorID
 	if !workflowOwned {
 		targets = e.agentTargets(runtimeEvent.Agent, cleanText, handoff, control, hop, incoming.Seq, latestHumanSeq, settings)
@@ -1859,6 +1861,13 @@ func (e *Engine) onFinal(runtimeEvent model.RuntimeEvent) {
 		ProcessingTurn:          make(map[model.ActorID]string, len(targets)),
 		ProcessingLastUpdatedAt: make(map[model.ActorID]time.Time, len(targets)),
 		Attachments:             e.discoverAgentImages(runtimeEvent.Agent, cleanText),
+	}
+	if !workflowOwned {
+		// Inactive/superseded workflow metadata is historical context, not a
+		// reason to suppress an explicit peer delivery forever.
+		message.WorkflowID = ""
+		message.WorkflowStage = 0
+		message.WorkflowMode = ""
 	}
 	if message.ThreadID == "" {
 		message.ThreadID = model.NewID("thread")
@@ -1985,10 +1994,6 @@ func (e *Engine) agentTargets(actor model.ActorID, text, handoff, control string
 	if settings.RoutingMode == model.RoutingManual {
 		return nil
 	}
-	if sourceSeq > 0 && latestHumanSeq > sourceSeq {
-		e.notice("info", fmt.Sprintf("A newer user message superseded %s's automatic handoff; the response remains visible in the room.", actor.DisplayName()))
-		return nil
-	}
 	if hop >= settings.MaxHops {
 		e.notice("info", "Automatic agent handoff paused at the configured hop limit.")
 		return nil
@@ -2001,7 +2006,12 @@ func (e *Engine) agentTargets(actor model.ActorID, text, handoff, control string
 	if prompt.MentionsHuman(routingText) {
 		return nil
 	}
+	stale := sourceSeq > 0 && latestHumanSeq > sourceSeq
 	if control == "IMPLEMENTED" || control == "REVIEW_CHANGES" {
+		if stale {
+			e.notice("info", fmt.Sprintf("A newer user message superseded %s's staged handoff; the response remains visible in the room.", actor.DisplayName()))
+			return nil
+		}
 		if !validHandoff(handoff) {
 			e.notice("warning", fmt.Sprintf("%s emitted %s without a usable HANDOFF; automatic transfer was stopped.", actor.DisplayName(), control))
 			return nil
@@ -2012,9 +2022,6 @@ func (e *Engine) agentTargets(actor model.ActorID, text, handoff, control string
 		e.notice("warning", fmt.Sprintf("%s emitted %s but current roles do not form a Driver/Reviewer pair; automatic transfer was stopped.", actor.DisplayName(), control))
 		return nil
 	}
-	if stopsConversation(control) {
-		return nil
-	}
 	explicit := prompt.Mentions(routingText, actor)
 	out := explicit[:0]
 	for _, target := range explicit {
@@ -2023,7 +2030,19 @@ func (e *Engine) agentTargets(actor model.ActorID, text, handoff, control string
 		}
 	}
 	if len(out) > 0 {
+		if stopsConversation(control) {
+			e.notice("warning", fmt.Sprintf("%s addressed a peer while also emitting %s; the explicit recipient won.", actor.DisplayName(), control))
+		}
+		// A direct address is an explicit delivery instruction. Newer appends and
+		// generic stop markers suppress only implicit continuation, not @peer.
 		return model.NormalizeActors(out)
+	}
+	if stopsConversation(control) {
+		return nil
+	}
+	if stale {
+		e.notice("info", fmt.Sprintf("A newer user message superseded %s's automatic handoff; the response remains visible in the room.", actor.DisplayName()))
+		return nil
 	}
 	if settings.RoutingMode == model.RoutingRoundtable {
 		return []model.ActorID{model.OtherParticipant(actor)}
