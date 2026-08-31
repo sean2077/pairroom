@@ -44,6 +44,12 @@
       && BATCHED_RUNTIME_KINDS.has(envelope.data?.kind || '');
   }
 
+  function isImmediateTextDelta(envelope) {
+    return envelope
+      && envelope.kind === 'runtime.event'
+      && envelope.data?.kind === 'text.delta';
+  }
+
   function mayRenderActivity(envelope) {
     if (!envelope) return false;
     if (envelope.kind === 'turn.summary.updated') return true;
@@ -170,9 +176,10 @@
             queueTransientEvent(this, listener, event);
             return;
           }
-          // A durable event is an ordering boundary. Flush earlier transient
-          // telemetry before applying it, while text deltas remain low-latency.
-          if (!envelope || Number(envelope.seq || 0) > 0) flushTransientEvents(this);
+          // Every non-text event is an ordering boundary. Flush earlier queued
+          // telemetry before delivering it; text deltas stay on their existing
+          // low-latency draft path.
+          if (!isImmediateTextDelta(envelope)) flushTransientEvents(this);
           const activity = mayRenderActivity(envelope) ? captureActivityState() : null;
           invokeListener(listener, this, event);
           scheduleActivityRestore(activity);
