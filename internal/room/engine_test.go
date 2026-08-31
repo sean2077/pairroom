@@ -806,6 +806,26 @@ func TestExplicitMentionSurvivesNewerAppendAndGenericStop(t *testing.T) {
 	}
 }
 
+func TestExplicitMentionCannotOverrideReviewApproval(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	incoming, err := engine.Send(context.Background(), SendRequest{Text: "Review boundary", To: []model.ActorID{model.ActorCodex}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorCodex])
+
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorCodex, Kind: model.RuntimeFinal, CorrelationID: incoming.ID,
+		TurnID: "review-approved", Text: "Approved. @claude no further changes are needed.\n[PAIRROOM:REVIEW_APPROVED]",
+		CreatedAt: time.Now().UTC(),
+	})
+	select {
+	case got := <-adapters[model.ActorClaude].submissions:
+		t.Fatalf("review approval routed back to Driver: %#v", got)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
 func TestInactiveWorkflowMetadataDoesNotSwallowExplicitMention(t *testing.T) {
 	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
 	workflow, ok := compileWorkflow("Claude plan, Codex review")

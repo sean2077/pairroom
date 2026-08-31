@@ -2022,6 +2022,11 @@ func (e *Engine) agentTargets(actor model.ActorID, text, handoff, control string
 		e.notice("warning", fmt.Sprintf("%s emitted %s but current roles do not form a Driver/Reviewer pair; automatic transfer was stopped.", actor.DisplayName(), control))
 		return nil
 	}
+	// Review approval is a terminal staged-protocol decision, not a generic
+	// conversation hint. A peer mention must not restart the completed review.
+	if control == "REVIEW_APPROVED" {
+		return nil
+	}
 	explicit := prompt.Mentions(routingText, actor)
 	out := explicit[:0]
 	for _, target := range explicit {
