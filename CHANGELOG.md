@@ -22,6 +22,7 @@
 
 ### Fixed
 
+- Room View accessibility and undefined-variable fixes: replaced the undefined `--surface-1` token with defined surfaces, lightened dark-theme `--faint` and darkened light-theme `--faint` so small secondary text clears WCAG AA contrast on both themes, added `aria-label`/`aria-pressed` to lightbox and notification/theme controls, and gated `scrollIntoView` smooth scroll and the message flash animation behind `prefers-reduced-motion`.
 - Room archive no longer fails with `room runtime close state is uncertain` on Windows when the just-interrupted Agent process briefly still holds the reviewer worktree handle; reviewer worktree removal now retries for a short grace window while the OS releases the handle.
 - Stable Room projections now preserve streaming and durable message DOM identity, while explicit peer mentions no longer get lost behind generic stop markers or bypass terminal review controls and compiled-workflow sequencing.
 - Management Room action controls now share consistent dimensions, and live Agent output updates only the affected streaming or message rows instead of repeatedly rebuilding the full chat timeline.

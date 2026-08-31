@@ -1184,8 +1184,12 @@
   function updateLightboxMode() {
     const image = $('lightbox-image');
     image.classList.toggle('actual-size', state.lightboxMode === 'actual');
-    $('lightbox-fit').classList.toggle('active', state.lightboxMode === 'fit');
-    $('lightbox-actual').classList.toggle('active', state.lightboxMode === 'actual');
+    const fit = $('lightbox-fit');
+    const actual = $('lightbox-actual');
+    fit.classList.toggle('active', state.lightboxMode === 'fit');
+    actual.classList.toggle('active', state.lightboxMode === 'actual');
+    fit.setAttribute('aria-pressed', String(state.lightboxMode === 'fit'));
+    actual.setAttribute('aria-pressed', String(state.lightboxMode === 'actual'));
   }
 
   function applyLightboxTransform() {
@@ -2061,8 +2065,11 @@
   function updateNotificationButton() {
     const button = $('notification-button');
     if (!('Notification' in window)) { button.disabled = true; button.textContent = '×'; return; }
-    button.textContent = Notification.permission === 'granted' ? '◆' : '♢';
-    button.title = Notification.permission === 'granted' ? '桌面通知已启用' : '启用桌面通知';
+    const granted = Notification.permission === 'granted';
+    button.textContent = granted ? '◆' : '♢';
+    button.title = granted ? '桌面通知已启用' : '启用桌面通知';
+    button.setAttribute('aria-pressed', String(granted));
+    button.setAttribute('aria-label', granted ? '桌面通知已启用，再次点击管理' : '启用桌面通知');
   }
 
   async function loadOlderMessages(button) {
@@ -2249,7 +2256,8 @@
       toast('引用的消息当前被筛选隐藏', 'error');
       return;
     }
-    node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    node.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center' });
     node.classList.remove('flash');
     requestAnimationFrame(() => node.classList.add('flash'));
     setTimeout(() => node.classList.remove('flash'), 1300);
@@ -2400,7 +2408,9 @@
     state.theme = state.theme === 'dark' ? 'light' : 'dark';
     document.documentElement.dataset.theme = state.theme;
     localStorage.setItem('pairroom.theme', state.theme);
+    $('theme-button').setAttribute('aria-pressed', String(state.theme === 'light'));
   });
+  $('theme-button').setAttribute('aria-pressed', String(initialTheme === 'light'));
   $('scroll-bottom').addEventListener('click', () => { scrollBottom(); markConversationRead(true); });
   timeline.addEventListener('scroll', () => markConversationRead(false), { passive: true });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) markConversationRead(false); });

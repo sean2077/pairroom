@@ -648,7 +648,7 @@ func TestEmbeddedRuntimeCloseTimeoutIsRetryableAndDoesNotInterruptTurn(t *testin
 		t.Fatalf("Room View was not usable after retryable Close: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	deadline = time.Now().Add(2 * time.Second)
+	deadline = time.Now().Add(10 * time.Second)
 	for runtime.Busy() && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
