@@ -23,6 +23,7 @@
 - The composer exposes server-resolved, role-stable `@Driver` and `@Reviewer` targets; replying to an Agent automatically targets that participant.
 - Room View toasts now show a dismiss control, pause auto-dismiss on hover, and keep error toasts visible for 8 s (4.5 s otherwise), matching the Management Shell.
 - Room View per-message actions (inspect, copy, thread, reply) stay visible on touch devices that cannot hover, instead of being unreachable on the mobile layout.
+- Room View image viewer footer uses localized button labels ("复制"/"适应") instead of the English "Copy"/"Fit", matching the rest of the Chinese interface; "1:1" stays as a universal ratio.
 
 ### Fixed
 
