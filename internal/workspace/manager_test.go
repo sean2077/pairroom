@@ -2,11 +2,13 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -118,5 +120,29 @@ func assertFile(t *testing.T, path, want string) {
 	}
 	if string(data) != want {
 		t.Fatalf("%s = %q, want %q", path, data, want)
+	}
+}
+
+func TestIsTransientRemoveErrorOnlyMatchesWindowsHandleLocks(t *testing.T) {
+	plain := errors.New("disk full")
+	if isTransientRemoveError(plain) {
+		t.Fatalf("plain error was transient: %v", plain)
+	}
+	if isTransientRemoveError(&os.PathError{Op: "unlink", Path: "x", Err: syscall.Errno(2)}) {
+		t.Fatal("errno 2 (no such file) was transient")
+	}
+	if runtime.GOOS != "windows" {
+		// Non-Windows never retries: unlink never needs exclusive access, so the
+		// "in use" condition cannot occur even if the errno happens to match.
+		if isTransientRemoveError(&os.PathError{Op: "unlink", Path: "x", Err: syscall.Errno(32)}) {
+			t.Fatal("non-Windows short-circuit was bypassed")
+		}
+		return
+	}
+	for _, errno := range []syscall.Errno{5, 32} { // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION
+		err := &os.PathError{Op: "unlink", Path: "x", Err: errno}
+		if !isTransientRemoveError(err) {
+			t.Fatalf("Windows errno %d was not transient: %v", errno, err)
+		}
 	}
 }
