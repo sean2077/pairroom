@@ -7,7 +7,7 @@
   --border-strong: #343c4e;
   --text: #eef1f7;
   --muted: #8e98aa;
-  --faint: #778298;
+  --faint: #8794a8;
   --accent: #8b7cf6;
   --accent-soft: rgba(139, 124, 246, .14);
   --claude: #e08b5b;
@@ -150,7 +150,7 @@ button { color: inherit; }
 .timeline { overflow-y: auto; padding: 22px clamp(18px, 4vw, 52px) 28px; scroll-behavior: smooth; }
 .timeline-scope {
   display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 18px;
-  border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--accent) 8%, var(--surface-1));
+  border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--accent) 8%, var(--surface));
   color: var(--muted); font-size: var(--text-sm);
 }
 .timeline-scope > div { min-width: 0; display: flex; align-items: center; gap: 8px; }
@@ -333,7 +333,7 @@ button { color: inherit; }
   --border-strong: #cbd2dc;
   --text: #18202c;
   --muted: #596579;
-  --faint: #707b8d;
+  --faint: #646e80;
   --accent: #6758d9;
   --accent-soft: rgba(103, 88, 217, .10);
   --claude-soft: rgba(201, 105, 56, .10);
@@ -508,7 +508,7 @@ button { color: inherit; }
   font-size: var(--text-xs); letter-spacing: .025em; user-select: none;
 }
 .timeline-date::before, .timeline-date::after { content: ""; height: 1px; flex: 1; background: var(--border); }
-.timeline-date span { flex: 0 0 auto; padding: 3px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-1); }
+.timeline-date span { flex: 0 0 auto; padding: 3px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-3); }
 .lightbox-stage.loading::after {
   content: "加载图片…"; position: absolute; color: var(--faint); font-size: var(--text-control);
 }

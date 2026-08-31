@@ -510,6 +510,8 @@ body.ux-density-compact .tab-content { padding: 9px; }
 
 @media (prefers-reduced-motion: reduce) {
   .ux-layout-menu { animation: none; }
+  .timeline { scroll-behavior: auto !important; }
+  .message-row.flash .message-bubble { animation: none; }
   .ux-skip-link,
   .ux-resizer::before,
   .ux-switch,
