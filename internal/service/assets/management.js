@@ -776,7 +776,12 @@
     const sections = [
       ['interface', '界面体验'], ['runtime', 'Runtime 策略'], ['operations', 'Daemon 运维'], ['service', 'Service 与诊断'], ['boundaries', '安全边界'],
     ];
-    const nav = node('nav', { className: 'panel settings-nav', 'aria-label': '设置分区' }, ...sections.map(([key, label]) => actionButton(label, () => { state.settingsSection = key; renderSettings(); }, state.settingsSection === key ? 'active' : '')));
+    const nav = node('nav', { className: 'panel settings-nav', 'aria-label': '设置分区' }, ...sections.map(([key, label]) => {
+      const active = state.settingsSection === key;
+      const button = actionButton(label, () => { state.settingsSection = key; renderSettings(); }, active ? 'active' : '');
+      button.setAttribute('aria-pressed', String(active));
+      return button;
+    }));
     const content = node('section', { className: 'settings-content' }, renderSettingsSection());
     view.replaceChildren(
       node('div', { className: 'view-stack' },
@@ -886,10 +891,10 @@
       settingsPanel('外观', '偏好只在当前 Management Shell 标签页生效。',
         settingRow('主题', '跟随系统，或临时固定浅色/深色。', segmented([
           ['system', '跟随系统'], ['light', '浅色'], ['dark', '深色'],
-        ], state.preferences.theme, (value) => { state.preferences.theme = value; applyPreferences(); renderSettings(); })),
+        ], state.preferences.theme, (value) => { state.preferences.theme = value; applyPreferences(); renderSettings(); }, '主题')),
         settingRow('信息密度', 'Compact 会缩小列表、表格和面板间距。', segmented([
           ['comfortable', '舒适'], ['compact', '紧凑'],
-        ], state.preferences.density, (value) => { state.preferences.density = value; applyPreferences(); renderSettings(); }))
+        ], state.preferences.density, (value) => { state.preferences.density = value; applyPreferences(); renderSettings(); }, '信息密度'))
       ),
       settingsPanel('刷新与导航', '控制当前页面如何轮询 Service 与打开 Room。',
         settingRow('自动刷新', '页面隐藏时自动暂停，重新可见后立即同步。', selectControl([
@@ -897,7 +902,7 @@
         ], String(state.preferences.refreshMs), (value) => { state.preferences.refreshMs = Number(value); scheduleRefresh(); }, '自动刷新间隔')),
         settingRow('Room 打开方式', '新标签页可以保留 Management Shell；同标签页仅在 Runtime 已可用后跳转。', segmented([
           ['new', '新标签页'], ['same', '当前标签页'],
-        ], state.preferences.openBehavior, (value) => { state.preferences.openBehavior = value; renderSettings(); })),
+        ], state.preferences.openBehavior, (value) => { state.preferences.openBehavior = value; renderSettings(); }, 'Room 打开方式')),
         settingRow('默认显示已归档', '影响 Projects 与 Project 详情列表。', toggleButton(state.filters.showArchived, (value) => { state.filters.showArchived = value; }, '切换归档可见性'))
       ),
       node('aside', { className: 'callout neutral' }, node('strong', { textContent: '无隐式持久化' }), node('span', { textContent: '这些界面选项不会写入 Service Registry，也不会改变 Room Event Log 或 Agent Session Binding。刷新标签页后恢复默认值。' }))
@@ -1995,8 +2000,15 @@
     return select;
   }
 
-  function segmented(options, value, onChange) {
-    return node('div', { className: 'segmented-control', role: 'group' }, ...options.map(([optionValue, label]) => actionButton(label, () => onChange(optionValue), value === optionValue ? 'active' : '')));
+  function segmented(options, value, onChange, ariaLabel = '') {
+    const group = node('div', { className: 'segmented-control', role: 'group' }, ...options.map(([optionValue, label]) => {
+      const active = value === optionValue;
+      const button = actionButton(label, () => onChange(optionValue), active ? 'active' : '');
+      button.setAttribute('aria-pressed', String(active));
+      return button;
+    }));
+    if (ariaLabel) group.setAttribute('aria-label', ariaLabel);
+    return group;
   }
 
   function toggleButton(value, onChange, label) {
@@ -2006,14 +2018,17 @@
   function formatDateTime(value) {
     if (!value) return '—';
     const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return String(value);
+    const time = date.getTime();
+    if (Number.isNaN(time) || time <= 0) return '—';
     return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' }).format(date);
   }
 
   function formatRelativeTime(value) {
     if (!value) return '—';
     const date = new Date(value);
-    const delta = Date.now() - date.getTime();
+    const time = date.getTime();
+    if (Number.isNaN(time) || time <= 0) return '—';
+    const delta = Date.now() - time;
     if (!Number.isFinite(delta)) return String(value);
     const abs = Math.abs(delta);
     if (abs < 5000) return '刚刚';

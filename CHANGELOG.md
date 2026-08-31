@@ -9,6 +9,8 @@
 - `pairroom-protocol/v3` natural-language actor/action workflows with durable stages, plan-revision approval gates, visible human waits, and native read-only/write policy projection.
 - Independent Claude and Codex provider profiles, including redacted inspection and reference imports from cc-connect provider tables without copying credentials.
 - Room View exposes an explicit **退出 Room** control that leaves the browser view without stopping either Agent.
+- Room View shows a skeleton timeline during the initial snapshot fetch and a recoverable error state with a retry control when the session or snapshot load fails, instead of leaving the timeline blank.
+- Room View `c` keyboard shortcut focuses the message composer, joining the existing `[`/`]`/`?`/`/` single-key bindings.
 
 ### Changed
 
@@ -19,6 +21,9 @@
 - Agent-to-peer delivery uses the compact handoff packet, or a bounded fallback, instead of replaying an arbitrarily long final response.
 - The native collaboration contract now asks for a second Agent only when independent work can materially change the outcome and keeps tool chatter in Inspector.
 - The composer exposes server-resolved, role-stable `@Driver` and `@Reviewer` targets; replying to an Agent automatically targets that participant.
+- Room View toasts now show a dismiss control, pause auto-dismiss on hover, and keep error toasts visible for 8 s (4.5 s otherwise), matching the Management Shell.
+- Room View per-message actions (inspect, copy, thread, reply) stay visible on touch devices that cannot hover, instead of being unreachable on the mobile layout.
+- Room View image viewer footer uses localized button labels ("复制"/"适应") instead of the English "Copy"/"Fit", matching the rest of the Chinese interface; "1:1" stays as a universal ratio.
 
 ### Fixed
 
@@ -35,6 +40,10 @@
 - Workflow approval parsing distinguishes approval from negation, the first completed plan is revision `1`, intermediate `DONE` signals advance instead of terminating the sequence, failed current stages reopen safely on retry, Claude restores its configured role after plan-only stages, `discuss` compiles consistently with the public model, and explicitly addressed messages retain ordinary routing during an active workflow.
 - Natural workflow state advances the Store schema to `8`, so older binaries reject event logs containing the new durable `workflow.updated` projection.
 - Redacted provider inspection no longer returns raw custom arguments or URL credentials, and Codex provider header values are projected through environment variables instead of command arguments.
+- Room View composer target picker (`@Driver`/`@Reviewer`/`@All`/`@Claude`/`@Codex`) now exposes `aria-pressed` on each toggle, and the toast live region uses `polite` instead of `assertive` so success notices stop interrupting screen readers.
+- Management Shell static dialogs (Project, Room, Rename, Binding, Confirm) now carry `aria-labelledby` pointing at their heading so screen readers announce each dialog's purpose when it opens, matching the command palette and Room image viewer.
+- Management Shell segmented controls (theme, density, Room open behavior) and the settings section nav now expose `aria-pressed` and a group `aria-label`, so the active option is announced instead of relying on the `active` class alone.
+- Management Shell Runtimes "最后活动" column no longer renders the Go zero timestamp (`0001-01-01`) as a nonsensical "1年1月1日" date; a never-active Runtime now shows "—" like other empty timestamps.
 
 ## [v1.1.0] — 2026-08-21
 
