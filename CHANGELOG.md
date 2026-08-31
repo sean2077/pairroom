@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- Management Room action controls now share consistent dimensions, and live Agent output updates only the affected streaming or message rows instead of repeatedly rebuilding the full chat timeline.
 - New unthreaded `append`/`supersede` input to the same Agent now suppresses an older automatic handoff, while explicit `next_turn` remains the independent-task path.
 - Mentions inside compact handoffs participate in routing, API replies inherit the replied-to Agent when no stronger target is supplied, and context-aware lifecycle serialization keeps Reviewer startup, snapshot refresh, and delivery ordered without ignoring cancelled callers.
 - Compact peer handoffs survive auditable retry instead of falling back to the full human-facing response.

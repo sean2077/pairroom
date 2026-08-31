@@ -44,6 +44,8 @@
     renderQueued: false,
     streamRenderTimer: null,
     runtimeRenderQueued: false,
+    runtimeRenderScopes: new Set(),
+    runtimeMessageRenderIDs: new Set(),
     csrfToken: '',
   };
 
@@ -111,15 +113,27 @@
     }, STREAM_RENDER_INTERVAL_MS);
   }
 
-  function queueRuntimeRender() {
+  function queueRuntimeRender(scopes = ['participants', 'drafts', 'activity'], messageID = '') {
+    scopes.forEach((scope) => state.runtimeRenderScopes.add(scope));
+    if (messageID) state.runtimeMessageRenderIDs.add(messageID);
     if (state.runtimeRenderQueued) return;
     state.runtimeRenderQueued = true;
     requestAnimationFrame(() => {
       if (!state.runtimeRenderQueued) return;
       state.runtimeRenderQueued = false;
-      renderParticipants();
-      renderStreamingDrafts();
-      renderActivity();
+      const pending = new Set(state.runtimeRenderScopes);
+      const messageIDs = Array.from(state.runtimeMessageRenderIDs);
+      state.runtimeRenderScopes.clear();
+      state.runtimeMessageRenderIDs.clear();
+      if (pending.has('participants')) renderParticipants();
+      if (pending.has('workflow')) renderWorkflow();
+      if (pending.has('settings')) renderSettings();
+      if (pending.has('drafts')) renderStreamingDrafts();
+      if (pending.has('activity')) renderActivity();
+      if (pending.has('approvals')) renderApprovals();
+      if (pending.has('messages')) messageIDs.forEach(renderMessage);
+      if (pending.has('delivery')) updateDeliveryHint();
+      if (pending.has('composer')) updateComposerAvailability();
     });
   }
 
@@ -168,16 +182,20 @@
     if (state.snapshot.events.length > 600) state.snapshot.events.splice(0, state.snapshot.events.length - 600);
     const data = event.data || {};
     let renderScope = 'full';
+    let renderMessageID = '';
 
     switch (event.kind) {
       case 'room.settings.updated':
         state.snapshot.settings = data;
+        renderScope = 'settings';
         break;
       case 'participant.updated':
         state.snapshot.participants[data.id] = data;
+        renderScope = 'participants';
         break;
       case 'workflow.updated':
         state.snapshot.workflow = data;
+        renderScope = 'workflow';
         break;
       case 'message.created': {
         if (!state.snapshot.messages.some((item) => item.id === data.id)) {
@@ -207,6 +225,8 @@
             message.delivery_detail[data.target] = data.detail || '';
           }
         }
+        renderScope = 'message';
+        renderMessageID = data.message_id || '';
         break;
       }
       case 'message.processing.updated': {
@@ -221,6 +241,8 @@
           message.processing_turn[data.target] = data.turn_id || '';
           message.processing_last_updated_at[data.target] = data.updated_at || new Date().toISOString();
         }
+        renderScope = 'message';
+        renderMessageID = data.message_id || '';
         break;
       }
       case 'turn.summary.updated': {
@@ -228,6 +250,7 @@
         const index = state.snapshot.turns.findIndex((item) => item.id === data.id);
         if (index >= 0) state.snapshot.turns[index] = data;
         else state.snapshot.turns.push(data);
+        renderScope = 'activity';
         break;
       }
       case 'approval.updated': {
@@ -235,6 +258,7 @@
         const index = state.snapshot.approvals.findIndex((item) => item.id === data.id);
         if (index >= 0) state.snapshot.approvals[index] = data;
         else state.snapshot.approvals.push(data);
+        renderScope = 'approvals';
         break;
       }
       case 'runtime.event':
@@ -249,6 +273,12 @@
     }
     if (renderScope === 'stream') queueStreamingRender();
     else if (renderScope === 'runtime') queueRuntimeRender();
+    else if (renderScope === 'settings') queueRuntimeRender(['settings']);
+    else if (renderScope === 'participants') queueRuntimeRender(['participants', 'composer']);
+    else if (renderScope === 'workflow') queueRuntimeRender(['workflow', 'composer']);
+    else if (renderScope === 'message') queueRuntimeRender(['messages', 'delivery'], renderMessageID);
+    else if (renderScope === 'activity') queueRuntimeRender(['activity']);
+    else if (renderScope === 'approvals') queueRuntimeRender(['approvals', 'composer']);
     else queueRender();
   }
 
@@ -285,6 +315,8 @@
       state.streamRenderTimer = null;
     }
     state.runtimeRenderQueued = false;
+    state.runtimeRenderScopes.clear();
+    state.runtimeMessageRenderIDs.clear();
     const nearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 140;
     $('room-name').textContent = state.snapshot.meta.name;
     $('repo-path').textContent = state.snapshot.meta.repo;
@@ -561,6 +593,19 @@
       if (row) timeline.appendChild(row);
     });
     if (nearBottom) requestAnimationFrame(scrollBottom);
+  }
+
+  function renderMessage(messageID) {
+    if (!messageID || !state.snapshot || !timeline.isConnected) return;
+    const existing = Array.from(timeline.querySelectorAll('.message-row[data-message-id]'))
+      .find((row) => row.dataset.messageId === messageID);
+    if (!existing) return;
+    const message = (state.snapshot.messages || []).find((item) => item.id === messageID);
+    if (!message) {
+      existing.remove();
+      return;
+    }
+    existing.replaceWith(messageNode(message));
   }
 
   function renderTimeline() {
