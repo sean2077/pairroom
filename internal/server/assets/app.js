@@ -12,6 +12,7 @@
   const savedTheme = localStorage.getItem('pairroom.theme');
   const initialTheme = savedTheme || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
   document.documentElement.dataset.theme = initialTheme;
+  const STREAM_RENDER_INTERVAL_MS = 50;
   const state = {
     snapshot: null,
     drafts: { claude: '', codex: '' },
@@ -41,6 +42,10 @@
     theme: initialTheme,
     source: null,
     renderQueued: false,
+    streamRenderTimer: null,
+    runtimeRenderQueued: false,
+    runtimeRenderScopes: new Set(),
+    runtimeMessageRenderIDs: new Set(),
     csrfToken: '',
   };
 
@@ -100,6 +105,38 @@
     });
   }
 
+  function queueStreamingRender() {
+    if (state.streamRenderTimer) return;
+    state.streamRenderTimer = setTimeout(() => {
+      state.streamRenderTimer = null;
+      requestAnimationFrame(renderStreamingDrafts);
+    }, STREAM_RENDER_INTERVAL_MS);
+  }
+
+  function queueRuntimeRender(scopes = ['participants', 'drafts', 'activity'], messageID = '') {
+    scopes.forEach((scope) => state.runtimeRenderScopes.add(scope));
+    if (messageID) state.runtimeMessageRenderIDs.add(messageID);
+    if (state.runtimeRenderQueued) return;
+    state.runtimeRenderQueued = true;
+    requestAnimationFrame(() => {
+      if (!state.runtimeRenderQueued) return;
+      state.runtimeRenderQueued = false;
+      const pending = new Set(state.runtimeRenderScopes);
+      const messageIDs = Array.from(state.runtimeMessageRenderIDs);
+      state.runtimeRenderScopes.clear();
+      state.runtimeMessageRenderIDs.clear();
+      if (pending.has('participants')) renderParticipants();
+      if (pending.has('workflow')) renderWorkflow();
+      if (pending.has('settings')) renderSettings();
+      if (pending.has('drafts')) renderStreamingDrafts();
+      if (pending.has('activity')) renderActivity();
+      if (pending.has('approvals')) renderApprovals();
+      if (pending.has('messages')) messageIDs.forEach(renderMessage);
+      if (pending.has('delivery')) updateDeliveryHint();
+      if (pending.has('composer')) updateComposerAvailability();
+    });
+  }
+
   async function loadSnapshot() {
     state.snapshot = await api('/api/v1/snapshot?message_limit=250');
     state.drafts = { claude: '', codex: '' };
@@ -144,16 +181,21 @@
     state.snapshot.events.push(event);
     if (state.snapshot.events.length > 600) state.snapshot.events.splice(0, state.snapshot.events.length - 600);
     const data = event.data || {};
+    let renderScope = 'full';
+    let renderMessageID = '';
 
     switch (event.kind) {
       case 'room.settings.updated':
         state.snapshot.settings = data;
+        renderScope = 'settings';
         break;
       case 'participant.updated':
         state.snapshot.participants[data.id] = data;
+        renderScope = 'participants';
         break;
       case 'workflow.updated':
         state.snapshot.workflow = data;
+        renderScope = 'workflow';
         break;
       case 'message.created': {
         if (!state.snapshot.messages.some((item) => item.id === data.id)) {
@@ -183,6 +225,8 @@
             message.delivery_detail[data.target] = data.detail || '';
           }
         }
+        renderScope = 'message';
+        renderMessageID = data.message_id || '';
         break;
       }
       case 'message.processing.updated': {
@@ -197,6 +241,8 @@
           message.processing_turn[data.target] = data.turn_id || '';
           message.processing_last_updated_at[data.target] = data.updated_at || new Date().toISOString();
         }
+        renderScope = 'message';
+        renderMessageID = data.message_id || '';
         break;
       }
       case 'turn.summary.updated': {
@@ -204,6 +250,7 @@
         const index = state.snapshot.turns.findIndex((item) => item.id === data.id);
         if (index >= 0) state.snapshot.turns[index] = data;
         else state.snapshot.turns.push(data);
+        renderScope = 'activity';
         break;
       }
       case 'approval.updated': {
@@ -211,10 +258,12 @@
         const index = state.snapshot.approvals.findIndex((item) => item.id === data.id);
         if (index >= 0) state.snapshot.approvals[index] = data;
         else state.snapshot.approvals.push(data);
+        renderScope = 'approvals';
         break;
       }
       case 'runtime.event':
         applyRuntime(data);
+        renderScope = data.kind === 'text.delta' ? 'stream' : 'runtime';
         break;
       case 'system.notice':
         if (data.level === 'error') toast(data.text, 'error');
@@ -222,7 +271,15 @@
       default:
         break;
     }
-    queueRender();
+    if (renderScope === 'stream') queueStreamingRender();
+    else if (renderScope === 'runtime') queueRuntimeRender();
+    else if (renderScope === 'settings') queueRuntimeRender(['settings']);
+    else if (renderScope === 'participants') queueRuntimeRender(['participants', 'composer']);
+    else if (renderScope === 'workflow') queueRuntimeRender(['workflow', 'composer']);
+    else if (renderScope === 'message') queueRuntimeRender(['messages', 'delivery'], renderMessageID);
+    else if (renderScope === 'activity') queueRuntimeRender(['activity']);
+    else if (renderScope === 'approvals') queueRuntimeRender(['approvals', 'composer']);
+    else queueRender();
   }
 
   function applyRuntime(runtime) {
@@ -253,6 +310,13 @@
 
   function render(forceBottom = false) {
     if (!state.snapshot) return;
+    if (state.streamRenderTimer) {
+      clearTimeout(state.streamRenderTimer);
+      state.streamRenderTimer = null;
+    }
+    state.runtimeRenderQueued = false;
+    state.runtimeRenderScopes.clear();
+    state.runtimeMessageRenderIDs.clear();
     const nearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 140;
     $('room-name').textContent = state.snapshot.meta.name;
     $('repo-path').textContent = state.snapshot.meta.repo;
@@ -498,6 +562,50 @@
     $('stall-disabled').checked = stall < 0;
     $('stall-warning').disabled = stall < 0;
     $('stall-warning').value = stall < 0 ? 300 : stall;
+  }
+
+  function renderStreamingDrafts() {
+    if (!state.snapshot || !timeline.isConnected) return;
+    const nearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 140;
+    let hasVisibleDraft = false;
+    ['claude', 'codex'].forEach((actor) => {
+      const selector = `.message-row.streaming[data-streaming-actor="${actor}"]`;
+      const existing = timeline.querySelector(selector);
+      const text = state.drafts[actor] || '';
+      const correlated = (state.snapshot.messages || []).find((message) => message.id === state.draftCorrelation[actor]);
+      const threadVisible = !state.threadFilter || correlated?.thread_id === state.threadFilter;
+      const visible = Boolean(text) && threadVisible && state.conversationFilter !== 'human';
+      if (!visible) {
+        if (existing) existing.remove();
+        return;
+      }
+      const replacement = draftNode(actor, text, state.draftCorrelation[actor]);
+      if (existing) existing.replaceWith(replacement);
+      else timeline.appendChild(replacement);
+      hasVisibleDraft = true;
+    });
+    if (hasVisibleDraft) {
+      const empty = timeline.querySelector('.timeline-empty');
+      if (empty) empty.remove();
+    }
+    ['claude', 'codex'].forEach((actor) => {
+      const row = timeline.querySelector(`.message-row.streaming[data-streaming-actor="${actor}"]`);
+      if (row) timeline.appendChild(row);
+    });
+    if (nearBottom) requestAnimationFrame(scrollBottom);
+  }
+
+  function renderMessage(messageID) {
+    if (!messageID || !state.snapshot || !timeline.isConnected) return;
+    const existing = Array.from(timeline.querySelectorAll('.message-row[data-message-id]'))
+      .find((row) => row.dataset.messageId === messageID);
+    if (!existing) return;
+    const message = (state.snapshot.messages || []).find((item) => item.id === messageID);
+    if (!message) {
+      existing.remove();
+      return;
+    }
+    existing.replaceWith(messageNode(message));
   }
 
   function renderTimeline() {
@@ -784,6 +892,7 @@
   function draftNode(actor, text, correlation) {
     const row = document.createElement('article');
     row.className = `message-row ${actor} streaming`;
+    row.dataset.streamingActor = actor;
     const avatar = document.createElement('div');
     avatar.className = `message-avatar avatar-${actor}`;
     avatar.textContent = actor === 'claude' ? 'C' : 'X';
