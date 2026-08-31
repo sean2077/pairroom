@@ -258,7 +258,7 @@ pairroom protocol --json
 
 ```text
 [PairRoom message]
-protocol: pairroom-protocol/v2
+protocol: pairroom-protocol/v3
 message_id / thread_id / hop
 from / to / reply_to
 current_role / delivery_intent
@@ -478,7 +478,7 @@ but automatic peer routing is skipped
 
 ## 17. Persistence
 
-Store schema 7 的事件日志包含：
+Store schema 8 的事件日志包含：
 
 ```text
 room.created
@@ -494,6 +494,7 @@ message.processing.updated
 approval.updated
 runtime.event
 turn.summary.updated
+workflow.updated
 system.notice
 ```
 
@@ -527,3 +528,8 @@ Markdown/普通 JSON：
 ```
 
 额外包含 bounded/runtime event 数据，敏感度更高。
+
+
+## Natural workflow extension (pairroom-protocol/v3)
+
+When a message carries `workflow_id`, `workflow_stage`, and `workflow_mode`, the human explicitly supplied an actor/action sequence. PairRoom owns deterministic stage advancement and the plan-revision approval gate. Native agents own the work inside each stage. Plan, review, and audit are read-only; execute is the only write stage. Human questions must be visible in the shared Room with `@human` and `[PAIRROOM:WAIT]`.

@@ -6,6 +6,8 @@
 
 - `pairroom version` now reports the built git commit and the commit count since the nearest tag in its text output, with `last_tag` and `commits_since_tag` added to the JSON build metadata; `make build`, `make install`, `make release`, and the CI/release workflows inject the values through ldflags.
 - `pairroom-protocol/v2` with compact, durable `PAIRROOM:HANDOFF` packets for peer turns and staged `IMPLEMENTED → REVIEW_CHANGES/REVIEW_APPROVED` Driver/Reviewer handoffs.
+- `pairroom-protocol/v3` natural-language actor/action workflows with durable stages, plan-revision approval gates, visible human waits, and native read-only/write policy projection.
+- Independent Claude and Codex provider profiles, including redacted inspection and reference imports from cc-connect provider tables without copying credentials.
 
 ### Changed
 
@@ -23,6 +25,9 @@
 - A newer human message suppresses automatic handoff only in the same discussion thread, so independent tasks can progress concurrently.
 - Handoff-only Agent finals are retained, oversized handoffs stay within the durable limit, and staged transfer fails closed when the evidence packet is missing or control markers conflict.
 - Reviewer snapshot refresh and role changes serialize with both participant submission paths, preventing a live Driver write from racing snapshot capture.
+- Workflow approval parsing distinguishes approval from negation, the first completed plan is revision `1`, intermediate `DONE` signals advance instead of terminating the sequence, failed current stages reopen safely on retry, Claude restores its configured role after plan-only stages, `discuss` compiles consistently with the public model, and explicitly addressed messages retain ordinary routing during an active workflow.
+- Natural workflow state advances the Store schema to `8`, so older binaries reject event logs containing the new durable `workflow.updated` projection.
+- Redacted provider inspection no longer returns raw custom arguments or URL credentials, and Codex provider header values are projected through environment variables instead of command arguments.
 
 ## [v1.1.0] — 2026-08-21
 

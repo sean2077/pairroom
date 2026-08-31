@@ -181,7 +181,7 @@ func (p ProbeResult) RuntimeInfo(cfg Config) model.RuntimeInfo {
 	})
 	return model.RuntimeInfo{
 		Available: true, Command: p.Command, Path: p.Path,
-		Protocol: p.Protocol, Version: p.Version, Model: cfg.Model,
+		Protocol: p.Protocol, Version: p.Version, Provider: cfg.Provider, Model: cfg.Model,
 		PermissionMode: cfg.PermissionMode, ApprovalPolicy: cfg.ApprovalPolicy, Sandbox: cfg.Sandbox,
 		Capabilities: append([]string(nil), p.Capabilities...), Warnings: append([]string(nil), p.Warnings...),
 		ProbedAt: time.Now().UTC(), Data: data,

@@ -7,9 +7,9 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 )
 
-func TestProtocolVersionMatchesStagedHandoffContract(t *testing.T) {
-	if Version != "pairroom-protocol/v2" {
-		t.Fatalf("protocol version = %q, want pairroom-protocol/v2", Version)
+func TestProtocolVersionMatchesNaturalWorkflowContract(t *testing.T) {
+	if Version != "pairroom-protocol/v3" {
+		t.Fatalf("protocol version = %q, want pairroom-protocol/v3", Version)
 	}
 }
 
@@ -31,6 +31,8 @@ func TestResolveFiltersRoleAndRoutingRules(t *testing.T) {
 		"[authority.human]",
 		"[collaboration.selective]",
 		"[context.handoff]",
+		"[workflow.natural]",
+		"[workflow.gate]",
 		"Use @claude only",
 		"[role.reviewer]",
 		"[routing.roundtable]",

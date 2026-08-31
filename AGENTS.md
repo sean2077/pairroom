@@ -17,6 +17,8 @@ PairRoom is a local Go coordination layer for the official Claude Code and Codex
 
 - Keep the Go module dependency-free beyond the standard library; `go list -m all` must contain only this module.
 - Keep collaboration mechanics in `internal/protocol` and expose them through `pairroom protocol`; project only a compact versioned bootstrap at each vendor's native instruction layer, keep per-turn envelopes dynamic-only, and preserve the prompt byte-budget tests.
+- Natural workflows compile only explicit actor/action sequences. Keep plan/review/audit read-only, bind execution approval to the current plan revision, and surface human questions in the Room rather than leaving a native process on an unexposed prompt.
+- Provider profiles and cc-connect reference imports must remain standard-library-only and secret-safe: credentials travel only in child-process environments and never in argv, RuntimeInfo, diagnostics, browser snapshots, or redacted provider reports.
 - Preserve the append-only event log and fail-closed archive, attachment, authentication, workspace, and high-privilege request boundaries described in `docs/ARCHITECTURE.md` and `docs/PROTOCOL.md`.
 - Keep every built-in Web listener restricted to numeric loopback addresses; reject wildcard, LAN, and hostname binds before opening repository or service state, and use SSH local port forwarding for remote access.
 - `pairroom service` is the current-working-directory-independent multi-Project/multi-Room control plane; `pairroom serve` remains the legacy single-Room compatibility entry point.

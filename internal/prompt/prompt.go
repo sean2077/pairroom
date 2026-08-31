@@ -11,8 +11,8 @@ import (
 // These budgets keep stable collaboration prose out of every native turn.
 // Tests intentionally fail when either projection grows past its release gate.
 const (
-	MaxBootstrapBytes        = 1100
-	MaxEnvelopeOverheadBytes = 380
+	MaxBootstrapBytes        = 1800
+	MaxEnvelopeOverheadBytes = 560
 )
 
 // BootstrapPrompt is projected once at the native harness's instruction layer.
@@ -46,6 +46,11 @@ func Envelope(input model.AgentInput) string {
 		fmt.Fprintf(&b, "delivery_intent: %s\n", input.Intent)
 	}
 	fmt.Fprintf(&b, "routing_mode: %s\n", input.RoutingMode)
+	if input.WorkflowID != "" {
+		fmt.Fprintf(&b, "workflow_id: %s\n", input.WorkflowID)
+		fmt.Fprintf(&b, "workflow_stage: %d\n", input.WorkflowStage+1)
+		fmt.Fprintf(&b, "workflow_mode: %s\n", input.WorkflowMode)
+	}
 	fmt.Fprintf(&b, "remaining_agent_hops: %d\n", max(0, input.MaxHops-input.Hop))
 	if len(input.Attachments) > 0 {
 		fmt.Fprintln(&b, "attachments:")

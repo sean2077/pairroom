@@ -68,6 +68,8 @@ func run(args []string) error {
 		return runServe(args[1:])
 	case "doctor":
 		return runDoctor(args[1:])
+	case "providers":
+		return runProviders(args[1:])
 	case "verify":
 		return runVerify(args[1:])
 	case "backup":
@@ -86,6 +88,81 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q (use pairroom help)", args[0])
 	}
+}
+
+type providerInspection struct {
+	Providers []config.ProviderSummary `json:"providers"`
+	Agents    map[string]struct {
+		Provider      string `json:"provider,omitempty"`
+		Model         string `json:"model,omitempty"`
+		ArgumentCount int    `json:"argument_count,omitempty"`
+	} `json:"agents"`
+}
+
+func buildProviderInspection(cfg config.File) providerInspection {
+	report := providerInspection{Providers: cfg.ProviderSummaries(), Agents: make(map[string]struct {
+		Provider      string `json:"provider,omitempty"`
+		Model         string `json:"model,omitempty"`
+		ArgumentCount int    `json:"argument_count,omitempty"`
+	}, 2)}
+	report.Agents["claude"] = struct {
+		Provider      string `json:"provider,omitempty"`
+		Model         string `json:"model,omitempty"`
+		ArgumentCount int    `json:"argument_count,omitempty"`
+	}{Provider: cfg.Claude.Provider, Model: cfg.Claude.Model, ArgumentCount: len(cfg.Claude.Args)}
+	report.Agents["codex"] = struct {
+		Provider      string `json:"provider,omitempty"`
+		Model         string `json:"model,omitempty"`
+		ArgumentCount int    `json:"argument_count,omitempty"`
+	}{Provider: cfg.Codex.Provider, Model: cfg.Codex.Model, ArgumentCount: len(cfg.Codex.Args)}
+	return report
+}
+
+func runProviders(args []string) error {
+	configPath := preparseValue(args, "--config")
+	flags := flag.NewFlagSet("pairroom providers", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	configFlag := flags.String("config", configPath, "PairRoom JSON configuration file")
+	jsonFlag := flags.Bool("json", false, "emit a redacted machine-readable report")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	cfg, err := config.Load(*configFlag)
+	if err != nil {
+		return err
+	}
+	report := buildProviderInspection(cfg)
+	if *jsonFlag {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(report)
+	}
+	fmt.Println("PairRoom provider profiles")
+	if len(report.Providers) == 0 {
+		fmt.Println("  no profiles configured")
+	}
+	for _, provider := range report.Providers {
+		source := "local"
+		if provider.ImportedFrom != "" {
+			source = "cc-connect reference: " + provider.ImportedFrom
+		}
+		fmt.Printf("  %-20s model=%-24s source=%s\n", provider.Name, provider.Model, source)
+	}
+	for _, actor := range []string{"claude", "codex"} {
+		assignment := report.Agents[actor]
+		provider := assignment.Provider
+		if provider == "" {
+			provider = "native/default"
+		}
+		fmt.Printf("  %-20s provider=%s model=%s\n", actor, provider, assignment.Model)
+	}
+	return nil
 }
 
 func runVersion(args []string) error {
@@ -136,6 +213,17 @@ func shortCommit(commit string) string {
 		return commit[:12]
 	}
 	return commit
+}
+
+func copyRuntimeEnv(source map[string]string) map[string]string {
+	if len(source) == 0 {
+		return nil
+	}
+	output := make(map[string]string, len(source))
+	for key, value := range source {
+		output[key] = value
+	}
+	return output
 }
 
 // runService starts the process-wide Management Shell. Room runtimes are
@@ -231,12 +319,14 @@ func runService(args []string) (resultErr error) {
 		return err
 	}
 	claudeCfg := agent.Config{
-		ClientVersion: version.Current, Command: *claudeCommand, Model: *claudeModel,
-		PermissionMode: *claudePermission,
+		ClientVersion: version.Current, Command: *claudeCommand,
+		CommandArgs: append([]string(nil), fileCfg.Claude.Args...), Env: copyRuntimeEnv(fileCfg.Claude.RuntimeEnv), Provider: fileCfg.Claude.Provider,
+		Model: *claudeModel, PermissionMode: *claudePermission,
 	}
 	codexCfg := agent.Config{
-		ClientVersion: version.Current, Command: *codexCommand, Model: *codexModel,
-		Effort: *codexEffort, ApprovalPolicy: *codexApproval, Sandbox: *codexSandbox,
+		ClientVersion: version.Current, Command: *codexCommand,
+		CommandArgs: append([]string(nil), fileCfg.Codex.Args...), Env: copyRuntimeEnv(fileCfg.Codex.RuntimeEnv), Provider: fileCfg.Codex.Provider,
+		Model: *codexModel, Effort: *codexEffort, ApprovalPolicy: *codexApproval, Sandbox: *codexSandbox,
 	}
 	var provisioner service.BindingProvisioner = service.NewNativeProvisioner(service.NativeProvisionerConfig{
 		Claude: claudeCfg, Codex: codexCfg,
@@ -428,11 +518,14 @@ func runServe(args []string) error {
 		ClaudeFactory: claudeFactory,
 		CodexFactory:  codexFactory,
 		ClaudeConfig: agent.Config{
-			ClientVersion: version.Current, Command: *claudeCommand, Model: *claudeModel, PermissionMode: *claudePermission,
+			ClientVersion: version.Current, Command: *claudeCommand,
+			CommandArgs: append([]string(nil), fileCfg.Claude.Args...), Env: copyRuntimeEnv(fileCfg.Claude.RuntimeEnv), Provider: fileCfg.Claude.Provider,
+			Model: *claudeModel, PermissionMode: *claudePermission,
 		},
 		CodexConfig: agent.Config{
-			ClientVersion: version.Current, Command: *codexCommand, Model: *codexModel, Effort: *codexEffort,
-			ApprovalPolicy: *codexApproval, Sandbox: *codexSandbox,
+			ClientVersion: version.Current, Command: *codexCommand,
+			CommandArgs: append([]string(nil), fileCfg.Codex.Args...), Env: copyRuntimeEnv(fileCfg.Codex.RuntimeEnv), Provider: fileCfg.Codex.Provider,
+			Model: *codexModel, Effort: *codexEffort, ApprovalPolicy: *codexApproval, Sandbox: *codexSandbox,
 		},
 		Attachments: attachmentStore,
 		Workspaces:  workspaceManager,
@@ -905,6 +998,7 @@ Usage:
   pairroom service [options]     Start the multi-Project, multi-Room Management Shell
   pairroom serve [options]       Start the legacy single-Room daemon and Room View
   pairroom doctor [options]      Verify Git and vendor CLI installations
+  pairroom providers [options]   Inspect redacted provider profiles and assignments
   pairroom verify [options]      Strictly verify room data integrity
   pairroom backup [options]      Create a verified room-data backup
   pairroom restore [options]     Restore and verify a room-data backup

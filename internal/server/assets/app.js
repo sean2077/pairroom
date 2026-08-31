@@ -152,6 +152,9 @@
       case 'participant.updated':
         state.snapshot.participants[data.id] = data;
         break;
+      case 'workflow.updated':
+        state.snapshot.workflow = data;
+        break;
       case 'message.created': {
         if (!state.snapshot.messages.some((item) => item.id === data.id)) {
           data.seq = event.seq;
@@ -254,6 +257,7 @@
     $('room-name').textContent = state.snapshot.meta.name;
     $('repo-path').textContent = state.snapshot.meta.repo;
     renderParticipants();
+    renderWorkflow();
     updateDeliveryHint();
     renderSettings();
     renderAttachmentStrip();
@@ -262,6 +266,102 @@
     renderActivity();
     renderApprovals();
     if (forceBottom || nearBottom) requestAnimationFrame(scrollBottom);
+  }
+
+  function renderWorkflow() {
+    const bar = $('workflow-bar');
+    const workflow = state.snapshot.workflow;
+    if (!workflow || !Array.isArray(workflow.stages) || !workflow.stages.length) {
+      bar.classList.add('hidden');
+      bar.replaceChildren();
+      return;
+    }
+    bar.classList.remove('hidden');
+    bar.replaceChildren();
+
+    const header = document.createElement('div');
+    header.className = 'workflow-header';
+    const heading = document.createElement('div');
+    const title = document.createElement('strong');
+    title.textContent = 'Natural workflow';
+    const status = document.createElement('span');
+    status.className = `workflow-status status-${workflow.status || 'unknown'}`;
+    status.textContent = workflowStatusText(workflow.status);
+    heading.append(title, status);
+    const goal = document.createElement('div');
+    goal.className = 'workflow-goal';
+    goal.textContent = truncate(workflow.goal || '', 180);
+    goal.title = workflow.goal || '';
+    heading.appendChild(goal);
+    header.appendChild(heading);
+
+    if (workflow.status === 'awaiting_approval') {
+      const approve = document.createElement('button');
+      approve.type = 'button';
+      approve.className = 'workflow-approve';
+      approve.textContent = `批准计划 v${workflow.revision || 1}`;
+      approve.addEventListener('click', () => {
+        messageInput.value = '批准执行当前计划';
+        persistComposerDraft();
+        autoSizeComposer();
+        void sendMessage();
+      });
+      header.appendChild(approve);
+    }
+    bar.appendChild(header);
+
+    const stages = document.createElement('div');
+    stages.className = 'workflow-stages';
+    workflow.stages.forEach((stage, index) => {
+      const chip = document.createElement('div');
+      const current = index === Number(workflow.current_stage || 0);
+      chip.className = `workflow-stage stage-${stage.status || 'pending'}${current ? ' current' : ''}`;
+      const number = document.createElement('span');
+      number.className = 'workflow-stage-number';
+      number.textContent = String(index + 1);
+      const copy = document.createElement('span');
+      const name = document.createElement('strong');
+      name.textContent = `${displayName(stage.actor)} · ${workflowModeText(stage.mode)}`;
+      const stateLabel = document.createElement('small');
+      stateLabel.textContent = workflowStageStatusText(stage.status);
+      copy.append(name, stateLabel);
+      chip.append(number, copy);
+      stages.appendChild(chip);
+      if (index < workflow.stages.length - 1) {
+        const arrow = document.createElement('span');
+        arrow.className = 'workflow-arrow';
+        arrow.textContent = '→';
+        stages.appendChild(arrow);
+      }
+    });
+    bar.appendChild(stages);
+
+    if (workflow.status === 'waiting_human') {
+      const hint = document.createElement('div');
+      hint.className = 'workflow-hint';
+      hint.textContent = '当前阶段正在等待你的选择；直接回复房间即可继续同一阶段。';
+      bar.appendChild(hint);
+    } else if (workflow.status === 'awaiting_approval') {
+      const hint = document.createElement('div');
+      hint.className = 'workflow-hint approval';
+      hint.textContent = `执行阶段尚未启动。批准只绑定当前计划修订 v${workflow.revision || 1}；计划变化后需要重新批准。`;
+      bar.appendChild(hint);
+    }
+  }
+
+  function workflowStatusText(value) {
+    return ({
+      running: 'Running', waiting_human: 'Needs your input', awaiting_approval: 'Approval gate',
+      completed: 'Completed', cancelled: 'Cancelled', failed: 'Failed', superseded: 'Superseded',
+    })[value] || value || 'Unknown';
+  }
+
+  function workflowModeText(value) {
+    return ({ plan: 'Plan', review: 'Review', execute: 'Execute', audit: 'Audit', discuss: 'Discuss' })[value] || value || 'Stage';
+  }
+
+  function workflowStageStatusText(value) {
+    return ({ pending: 'Pending', running: 'Running', waiting_human: 'Needs input', completed: 'Done', cancelled: 'Cancelled', failed: 'Failed' })[value] || value || '';
   }
 
   function renderParticipants() {
@@ -303,7 +403,7 @@
       status.textContent = stateText(p.state);
       const model = document.createElement('span');
       model.className = 'participant-subtitle';
-      model.textContent = p.model || 'native default';
+      model.textContent = [p.runtime?.provider, p.model || 'native default'].filter(Boolean).join(' · ');
       meta.append(status, model);
       main.appendChild(meta);
 
@@ -319,7 +419,7 @@
       if (stalled) {
         const warning = document.createElement('div');
         warning.className = 'runtime-line runtime-warning';
-        warning.textContent = '长时间无运行事件；可能在执行长命令、等待隐藏提示或已停滞';
+        warning.textContent = '长时间无可观察事件；静默本身不等于停滞，请在 Inspector 判断后再打断或重试';
         main.appendChild(warning);
       }
       if (runtime.warnings && runtime.warnings.length) {

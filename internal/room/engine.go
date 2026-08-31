@@ -29,6 +29,7 @@ const (
 	EventSystemNotice       = "system.notice"
 	EventParticipantsBatch  = "participants.batch.updated"
 	EventTurnSummaryUpdated = "turn.summary.updated"
+	EventWorkflowUpdated    = "workflow.updated"
 
 	eventServiceRoomRenamed         = "service.room.renamed"
 	eventServiceBindingsCompleted   = "service.room.bindings.completed"
@@ -282,6 +283,12 @@ func (e *Engine) ensureSnapshotDefaults() {
 	}
 	if e.snapshot.Approvals == nil {
 		e.snapshot.Approvals = make([]model.Approval, 0)
+	}
+	if e.snapshot.Workflow != nil && e.snapshot.Workflow.Status == model.WorkflowStatusRunning {
+		e.snapshot.Workflow.Status = model.WorkflowStatusWaitingHuman
+		if index := e.snapshot.Workflow.CurrentStage; index >= 0 && index < len(e.snapshot.Workflow.Stages) {
+			e.snapshot.Workflow.Stages[index].Status = model.WorkflowStageWaitingHuman
+		}
 	}
 }
 
@@ -581,14 +588,21 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 	if text == "" && len(attachments) == 0 {
 		return model.Message{}, errors.New("message text or image is required")
 	}
-	// Keep target resolution, thread assignment, and durable sequence creation in
-	// one routing order with Agent finals. Otherwise a human message can land
-	// between a stale-result check and the Agent result it was meant to supersede.
+
 	e.routingMu.Lock()
 	defer e.routingMu.Unlock()
-	targets, err := e.resolveUserTargets(text, req.To, req.TargetRole, req.ReplyTo)
+	dispatch, err := e.workflowDispatchForUser(text, req)
 	if err != nil {
 		return model.Message{}, err
+	}
+	var targets []model.ActorID
+	if dispatch.Active {
+		targets = []model.ActorID{dispatch.Actor}
+	} else {
+		targets, err = e.resolveUserTargets(text, req.To, req.TargetRole, req.ReplyTo)
+		if err != nil {
+			return model.Message{}, err
+		}
 	}
 	if len(targets) == 0 {
 		return model.Message{}, errors.New("message has no target; use @claude, @codex, or @all")
@@ -608,15 +622,9 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 	}
 	threadID := e.threadForReply(req.ReplyTo)
 	message := model.Message{
-		ID:                      model.NewID("msg"),
-		From:                    model.ActorUser,
-		To:                      targets,
-		Text:                    text,
-		ReplyTo:                 req.ReplyTo,
-		Intent:                  intent,
-		Supersedes:              supersedes,
-		ThreadID:                threadID,
-		CreatedAt:               time.Now().UTC(),
+		ID: model.NewID("msg"), From: model.ActorUser, To: targets, Text: text,
+		ReplyTo: req.ReplyTo, Intent: intent, Supersedes: supersedes,
+		ThreadID: threadID, CreatedAt: time.Now().UTC(),
 		Delivery:                make(map[model.ActorID]model.DeliveryState, len(targets)),
 		DeliveryDetail:          make(map[model.ActorID]string, len(targets)),
 		Processing:              make(map[model.ActorID]model.ProcessingState, len(targets)),
@@ -624,6 +632,11 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 		ProcessingTurn:          make(map[model.ActorID]string, len(targets)),
 		ProcessingLastUpdatedAt: make(map[model.ActorID]time.Time, len(targets)),
 		Attachments:             attachments,
+	}
+	if dispatch.Active {
+		message.WorkflowID = dispatch.WorkflowID
+		message.WorkflowStage = dispatch.StageIndex
+		message.WorkflowMode = dispatch.Mode
 	}
 	for _, target := range targets {
 		message.Delivery[target] = model.DeliveryPending
@@ -635,16 +648,15 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 		return model.Message{}, err
 	}
 	message.Seq = event.Seq
+	e.workflowAttachMessage(dispatch, message.ID)
 	if intent == model.IntentSupersede {
 		for _, target := range targets {
 			e.supersedeTarget(ctx, message.ID, target, supersedes[target])
 		}
 	}
-	// Return the persisted message immediately; vendor startup and delivery are
-	// intentionally asynchronous so an IM send never blocks on login/network.
 	for _, target := range targets {
 		target := target
-		go e.deliver(e.runtimeContext(ctx), message, target)
+		go e.deliverRouted(e.runtimeContext(ctx), message, target)
 	}
 	return message, nil
 }
@@ -709,6 +721,9 @@ func (e *Engine) CancelMessage(ctx context.Context, messageID string, target mod
 // and could hide duplicate execution. The caller can retry only targets whose
 // previous delivery or processing state is terminal and unsuccessful.
 func (e *Engine) Retry(ctx context.Context, messageID string, req RetryRequest) (model.Message, error) {
+	e.routingMu.Lock()
+	defer e.routingMu.Unlock()
+
 	e.mu.RLock()
 	original, found := e.findMessageLocked(messageID)
 	e.mu.RUnlock()
@@ -736,6 +751,9 @@ func (e *Engine) Retry(ctx context.Context, messageID string, req RetryRequest) 
 	}
 
 	now := time.Now().UTC()
+	if err := e.prepareWorkflowRetry(original, targets, now); err != nil {
+		return model.Message{}, err
+	}
 	retry := model.Message{
 		ID:                      model.NewID("msg"),
 		From:                    original.From,
@@ -747,6 +765,9 @@ func (e *Engine) Retry(ctx context.Context, messageID string, req RetryRequest) 
 		Intent:                  original.Intent,
 		ThreadID:                original.ThreadID,
 		Hop:                     original.Hop,
+		WorkflowID:              original.WorkflowID,
+		WorkflowStage:           original.WorkflowStage,
+		WorkflowMode:            original.WorkflowMode,
 		CreatedAt:               now,
 		Delivery:                make(map[model.ActorID]model.DeliveryState, len(targets)),
 		DeliveryDetail:          make(map[model.ActorID]string, len(targets)),
@@ -771,7 +792,7 @@ func (e *Engine) Retry(ctx context.Context, messageID string, req RetryRequest) 
 	retry.Seq = event.Seq
 	for _, target := range targets {
 		target := target
-		go e.deliver(e.runtimeContext(ctx), retry, target)
+		go e.deliverRouted(e.runtimeContext(ctx), retry, target)
 	}
 	return retry, nil
 }
@@ -1398,18 +1419,21 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 		return
 	}
 	input := model.AgentInput{
-		MessageID:   message.ID,
-		ThreadID:    message.ThreadID,
-		Hop:         message.Hop,
-		From:        message.From,
-		To:          target,
-		Text:        peerInputText(message, target),
-		ReplyTo:     message.ReplyTo,
-		Role:        participant.Role,
-		RoutingMode: settings.RoutingMode,
-		MaxHops:     settings.MaxHops,
-		Attachments: attachments,
-		Intent:      message.Intent,
+		MessageID:     message.ID,
+		ThreadID:      message.ThreadID,
+		Hop:           message.Hop,
+		From:          message.From,
+		To:            target,
+		Text:          peerInputText(message, target),
+		ReplyTo:       message.ReplyTo,
+		Role:          participant.Role,
+		RoutingMode:   settings.RoutingMode,
+		MaxHops:       settings.MaxHops,
+		Attachments:   attachments,
+		Intent:        message.Intent,
+		WorkflowID:    message.WorkflowID,
+		WorkflowStage: message.WorkflowStage,
+		WorkflowMode:  message.WorkflowMode,
 	}
 	deliveryCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
@@ -1549,6 +1573,7 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 			}
 			p.LastActivity = runtimeEvent.CreatedAt
 		})
+		go e.advanceWorkflow(runtimeEvent)
 	case model.RuntimeApprovalRequested:
 		if runtimeEvent.Approval != nil {
 			_, _ = e.record(EventApprovalUpdated, runtimeEvent.Agent, *runtimeEvent.Approval)
@@ -1790,8 +1815,6 @@ func (e *Engine) onFinal(runtimeEvent model.RuntimeEvent) {
 	visibleText, handoff := stripHandoff(runtimeEvent.Text)
 	cleanText, control := stripControl(visibleText)
 	if strings.TrimSpace(cleanText) == "" {
-		// A compact handoff can be the entire final response. Persist it visibly
-		// instead of dropping both the audit record and the peer transfer.
 		cleanText = strings.TrimSpace(handoff)
 		if cleanText == "" && control != "" {
 			cleanText = "PairRoom collaboration signal: " + strings.ToLower(control)
@@ -1816,19 +1839,18 @@ func (e *Engine) onFinal(runtimeEvent model.RuntimeEvent) {
 	}
 
 	hop := incoming.Hop + 1
-	targets := e.agentTargets(runtimeEvent.Agent, cleanText, handoff, control, hop, incoming.Seq, latestHumanSeq, settings)
+	workflowOwned := incoming.WorkflowID != ""
+	var targets []model.ActorID
+	if !workflowOwned {
+		targets = e.agentTargets(runtimeEvent.Agent, cleanText, handoff, control, hop, incoming.Seq, latestHumanSeq, settings)
+	}
 	to := []model.ActorID{model.ActorUser}
 	to = append(to, targets...)
 	message := model.Message{
-		ID:                      model.NewID("msg"),
-		From:                    runtimeEvent.Agent,
-		To:                      to,
-		Text:                    cleanText,
-		Handoff:                 handoff,
-		ReplyTo:                 incoming.ID,
-		ThreadID:                incoming.ThreadID,
-		Hop:                     hop,
-		TurnID:                  runtimeEvent.TurnID,
+		ID: model.NewID("msg"), From: runtimeEvent.Agent, To: to,
+		Text: cleanText, Handoff: handoff, ReplyTo: incoming.ID,
+		ThreadID: incoming.ThreadID, Hop: hop, TurnID: runtimeEvent.TurnID,
+		WorkflowID: incoming.WorkflowID, WorkflowStage: incoming.WorkflowStage, WorkflowMode: incoming.WorkflowMode,
 		CreatedAt:               time.Now().UTC(),
 		Delivery:                make(map[model.ActorID]model.DeliveryState, len(targets)),
 		DeliveryDetail:          make(map[model.ActorID]string, len(targets)),
@@ -1849,9 +1871,13 @@ func (e *Engine) onFinal(runtimeEvent model.RuntimeEvent) {
 	if _, err := e.record(EventMessageCreated, runtimeEvent.Agent, message); err != nil {
 		return
 	}
+	if workflowOwned {
+		e.workflowOnFinal(incoming, message, control)
+		return
+	}
 	for _, target := range targets {
 		target := target
-		go e.deliver(e.runtimeContext(context.Background()), message, target)
+		go e.deliverRouted(e.runtimeContext(context.Background()), message, target)
 	}
 }
 
@@ -2453,6 +2479,15 @@ func (e *Engine) applyLocked(event model.Event) error {
 		if !replaced {
 			e.snapshot.Approvals = append(e.snapshot.Approvals, approval)
 		}
+	case EventWorkflowUpdated:
+		var workflow model.WorkflowState
+		if err := json.Unmarshal(event.Data, &workflow); err != nil {
+			return err
+		}
+		if workflow.ID == "" || len(workflow.Stages) == 0 || workflow.CurrentStage < 0 || workflow.CurrentStage >= len(workflow.Stages) {
+			return errors.New("invalid workflow event")
+		}
+		e.snapshot.Workflow = cloneWorkflow(&workflow)
 	case EventTurnSummaryUpdated:
 		var summary model.TurnSummary
 		if err := json.Unmarshal(event.Data, &summary); err != nil {
@@ -2514,6 +2549,7 @@ func cloneSnapshot(in model.RoomSnapshot) model.RoomSnapshot {
 		window := *in.MessageWindow
 		out.MessageWindow = &window
 	}
+	out.Workflow = cloneWorkflow(in.Workflow)
 	out.Approvals = make([]model.Approval, len(in.Approvals))
 	for i, approval := range in.Approvals {
 		out.Approvals[i] = approval
@@ -2654,6 +2690,9 @@ func (e *Engine) monitorStalledTurns() {
 				if participant.State != model.StateWorking && participant.State != model.StateWaiting {
 					continue
 				}
+				if participant.State == model.StateWaiting && (e.actorHasPendingApprovalLocked(actor) || e.workflowExpectedWaitLocked(actor)) {
+					continue
+				}
 				last := e.lastRuntimeActivity[actor]
 				if last.IsZero() || now.Sub(last) < threshold {
 					continue
@@ -2674,7 +2713,7 @@ func (e *Engine) monitorStalledTurns() {
 				if item.turn != "" {
 					detail += " during turn " + item.turn
 				}
-				e.notice("warning", detail+". It may be running a long command, waiting on an unexposed prompt, or stalled.")
+				e.notice("warning", detail+". Silence alone is not treated as a stall. Check Inspector for a long command; if there is no visible work or approval, steer, interrupt, or retry the turn.")
 			}
 		}
 	}

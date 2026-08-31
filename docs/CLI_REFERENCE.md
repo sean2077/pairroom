@@ -221,6 +221,21 @@ pairroom doctor [options]
 
 它不创建真实模型 Turn，也不证明账号、网络、MCP 或供应商服务在所有仓库中都可用。Probe 会以 `--repo` 指定目录启动 Vendor CLI，可能加载用户/项目配置或 wrapper。
 
+## `pairroom providers`
+
+```bash
+pairroom providers [--config PATH] [--json]
+```
+
+加载并校验 PairRoom provider profiles 与可选 cc-connect provider 引用，然后输出 Claude/Codex 的独立 provider 和 model 分配。文本与 JSON 都不会启动 Vendor Runtime；JSON 仅返回 provider 摘要、经过凭据清理的 Base URL、agent 分配和参数数量，不回显 API key、provider header 值、环境变量值或原始自定义参数。
+
+| 选项 | 作用 |
+|---|---|
+| `--config PATH` | PairRoom JSON 配置；相对 cc-connect 路径以该文件所在目录解析 |
+| `--json` | 输出机器可读的脱敏报告 |
+
+完整配置格式、`env:NAME` 引用与 cc-connect 导入边界见 [Flexible workflows and provider profiles](FLEXIBLE_WORKFLOWS_AND_PROVIDERS.md)。
+
 ## Room 数据命令
 
 以下命令操作 **一个 Room 数据目录**。提供 `--data-dir` 时它优先；否则根据 `--repo` 解析单 Room 默认数据目录。
@@ -268,7 +283,7 @@ pairroom diagnostics \
 
 ## `pairroom protocol`
 
-输出 PairRoom 的版本化 Agent 协作契约。该命令不打开 Room、仓库或 Service 状态；它把固定规则作为确定性的 CLI 数据提供给 Agent、文档和诊断工具，避免把完整规则重复拼接到每个原生 Turn。当前契约版本为 `pairroom-protocol/v1`。
+输出 PairRoom 的版本化 Agent 协作契约。该命令不打开 Room、仓库或 Service 状态；它把固定规则作为确定性的 CLI 数据提供给 Agent、文档和诊断工具，避免把完整规则重复拼接到每个原生 Turn。当前契约版本为 `pairroom-protocol/v3`。
 
 ```bash
 pairroom protocol
@@ -292,7 +307,7 @@ pairroom version
 pairroom version --json
 ```
 
-文本输出 `pairroom <版本>`；构建管线注入 git 元数据时追加构建提交与距最近 tag 的提交数，例如 `pairroom 1.1.0 (commit 44b6a7a12345, 8 commits since v1.1.0)`。JSON 输出 `version`、`commit`、`build_date`、`last_tag`、`commits_since_tag` 与 `store_schema`。当前源码常量为版本 `1.1.0`、Store schema `7`。
+文本输出 `pairroom <版本>`；构建管线注入 git 元数据时追加构建提交与距最近 tag 的提交数，例如 `pairroom 1.1.0 (commit 44b6a7a12345, 8 commits since v1.1.0)`。JSON 输出 `version`、`commit`、`build_date`、`last_tag`、`commits_since_tag` 与 `store_schema`。当前源码常量为版本 `1.1.0`、Store schema `8`。
 
 git 元数据由 `make build`、`make install`、`make release` 与 CI/release 工作流通过 `-ldflags` 注入：`commit` 为完整 SHA，`last_tag` 为构建提交可达的最近 tag，`commits_since_tag` 为二者之间的提交数。未经注入的本地 `go build` 保留开发默认值（`dev`/`unknown`），文本输出退化为仅版本号。
 
