@@ -1981,7 +1981,11 @@
   function setTarget(target) {
     if (!['driver', 'reviewer', 'all', 'claude', 'codex'].includes(target)) target = 'driver';
     state.selectedTarget = target;
-    document.querySelectorAll('.target-button').forEach((button) => button.classList.toggle('active', button.dataset.target === target));
+    document.querySelectorAll('.target-button').forEach((button) => {
+      const active = button.dataset.target === target;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
     updateDeliveryHint();
     persistComposerDraft();
     messageInput.focus();
@@ -2124,10 +2128,24 @@
 
   function toast(message, type = '') {
     const node = document.createElement('div');
-    node.className = `toast ${type}`;
-    node.textContent = message;
+    node.className = `toast ${type}`.trim();
+    const text = document.createElement('span');
+    text.className = 'toast-text';
+    text.textContent = message;
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'toast-close';
+    close.setAttribute('aria-label', '关闭通知');
+    close.textContent = '×';
     $('toast-stack').appendChild(node);
-    setTimeout(() => node.remove(), 4300);
+    const duration = type === 'error' ? 8000 : 4500;
+    let timer = window.setTimeout(() => node.remove(), duration);
+    const dismiss = () => { window.clearTimeout(timer); node.remove(); };
+    close.addEventListener('click', dismiss);
+    // Pause auto-dismiss while the user reads the toast, then resume the window.
+    node.addEventListener('mouseenter', () => window.clearTimeout(timer));
+    node.addEventListener('mouseleave', () => { timer = window.setTimeout(() => node.remove(), duration); });
+    node.append(text, close);
   }
 
   function participantPolicy(actor, participant) {
@@ -2487,8 +2505,65 @@
     state.mediaObjectURLs.forEach((value) => { if (typeof value === 'string') URL.revokeObjectURL(value); });
   });
 
-  initializeSession().then(loadSnapshot).catch((error) => {
-    toast(error.message, 'error');
-    setConnection(false, 'Offline');
-  });
+  function showTimelineLoading() {
+    if (!timeline.isConnected) return;
+    timeline.replaceChildren();
+    const shell = document.createElement('div');
+    shell.className = 'timeline-loading';
+    shell.setAttribute('role', 'status');
+    shell.setAttribute('aria-label', '正在加载协作时间线');
+    for (let i = 0; i < 4; i += 1) {
+      const row = document.createElement('div');
+      row.className = 'skeleton-row';
+      const avatar = document.createElement('div');
+      avatar.className = 'skeleton-avatar';
+      avatar.setAttribute('aria-hidden', 'true');
+      const lines = document.createElement('div');
+      lines.className = 'skeleton-lines';
+      const lineA = document.createElement('div');
+      lineA.className = 'skeleton-line';
+      lineA.style.width = `${42 + (i % 3) * 20}%`;
+      const lineB = document.createElement('div');
+      lineB.className = 'skeleton-line skeleton-line-short';
+      lines.append(lineA, lineB);
+      row.append(avatar, lines);
+      shell.appendChild(row);
+    }
+    timeline.appendChild(shell);
+  }
+
+  function showTimelineError(message) {
+    if (!timeline.isConnected) return;
+    timeline.replaceChildren();
+    const shell = document.createElement('div');
+    shell.className = 'timeline-error';
+    shell.setAttribute('role', 'alert');
+    const symbol = document.createElement('div');
+    symbol.className = 'error-orbit';
+    symbol.setAttribute('aria-hidden', 'true');
+    symbol.textContent = '!';
+    const heading = document.createElement('h2');
+    heading.textContent = '无法加载房间';
+    const text = document.createElement('p');
+    text.textContent = message || '浏览器会话或本地 Service 连接失败。从 PairRoom 启动输出中的完整地址重新打开，或重试。';
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'secondary-button';
+    retry.textContent = '重新加载房间';
+    retry.addEventListener('click', () => { bootRoom(); });
+    shell.append(symbol, heading, text, retry);
+    timeline.appendChild(shell);
+  }
+
+  function bootRoom() {
+    showTimelineLoading();
+    setConnection(false, 'Connecting');
+    initializeSession().then(loadSnapshot).catch((error) => {
+      toast(error.message, 'error');
+      showTimelineError(error.message);
+      setConnection(false, 'Offline');
+    });
+  }
+
+  bootRoom();
 })();

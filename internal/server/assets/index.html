@@ -109,11 +109,11 @@
         </div>
         <div class="composer-wrap">
           <div class="target-picker" role="group" aria-label="消息接收者">
-            <button class="target-button active" data-target="driver">@ Driver</button>
-            <button class="target-button" data-target="reviewer">@ Reviewer</button>
-            <button class="target-button" data-target="all">@ All</button>
-            <button class="target-button" data-target="claude">@ Claude</button>
-            <button class="target-button" data-target="codex">@ Codex</button>
+            <button class="target-button active" data-target="driver" aria-pressed="true">@ Driver</button>
+            <button class="target-button" data-target="reviewer" aria-pressed="false">@ Reviewer</button>
+            <button class="target-button" data-target="all" aria-pressed="false">@ All</button>
+            <button class="target-button" data-target="claude" aria-pressed="false">@ Claude</button>
+            <button class="target-button" data-target="codex" aria-pressed="false">@ Codex</button>
           </div>
           <div id="attachment-strip" class="attachment-strip hidden" aria-live="polite"></div>
           <div class="composer">
@@ -199,7 +199,7 @@
       </div>
     </div>
   </dialog>
-  <div id="toast-stack" class="toast-stack" aria-live="assertive"></div>
+  <div id="toast-stack" class="toast-stack" role="status" aria-live="polite" aria-atomic="false"></div>
   <script src="/room-shell.js" defer></script>
   <script src="/richtext.js" defer></script>
   <script src="/app.js" defer></script>
