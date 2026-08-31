@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,7 +14,9 @@ import (
 )
 
 func TestEmbeddedRuntimeArchiveInterruptsActiveTurnAndClosesRuntime(t *testing.T) {
-	registry, project := testRegistry(t, testGitRepo(t))
+	repoPath := testGitRepo(t)
+	commitArchiveTestRepository(t, repoPath)
+	registry, project := testRegistry(t, repoPath)
 	durable, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
 		ProjectID: project.ID,
 		Name:      "Active archive Room",
@@ -87,5 +92,23 @@ func TestEmbeddedRuntimeArchiveInterruptsActiveTurnAndClosesRuntime(t *testing.T
 	claude := snapshot.Participants[model.ActorClaude]
 	if claude.CurrentTurn != "" || claude.State == model.StateStarting || claude.State == model.StateWorking || claude.State == model.StateWaiting {
 		t.Fatalf("active Claude turn did not settle before archive: %#v", claude)
+	}
+}
+
+func commitArchiveTestRepository(t *testing.T, repoPath string) {
+	t.Helper()
+	fixture := filepath.Join(repoPath, "archive-fixture.txt")
+	if err := os.WriteFile(fixture, []byte("archive fixture\n"), 0o600); err != nil {
+		t.Fatalf("write archive fixture: %v", err)
+	}
+	commands := [][]string{
+		{"-C", repoPath, "add", filepath.Base(fixture)},
+		{"-C", repoPath, "-c", "user.name=PairRoom Test", "-c", "user.email=pairroom@example.invalid", "commit", "-m", "test fixture"},
+	}
+	for _, args := range commands {
+		command := exec.Command("git", args...)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, output)
+		}
 	}
 }
