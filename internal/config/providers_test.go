@@ -72,7 +72,7 @@ env_key = "PAIRROOM_IMPORTED_KEY"
 wire_api = "responses"
 
 [providers.codex.http_headers]
-X-Provider = "pairroom"
+X-Provider = "header-secret"
 `
 	if err := os.WriteFile(source, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
@@ -104,12 +104,40 @@ X-Provider = "pairroom"
 	if cfg.Codex.RuntimeEnv["PAIRROOM_IMPORTED_KEY"] != "secret-from-source" {
 		t.Fatal("imported Codex key was not projected through the environment")
 	}
-	if strings.Contains(strings.Join(cfg.Codex.Args, " "), "secret-from-source") {
+	joinedArgs := strings.Join(cfg.Codex.Args, " ")
+	if strings.Contains(joinedArgs, "secret-from-source") || strings.Contains(joinedArgs, "header-secret") {
 		t.Fatal("imported secret leaked into command arguments")
+	}
+	if !strings.Contains(joinedArgs, "env_http_headers") {
+		t.Fatalf("Codex header environment projection is missing: %s", joinedArgs)
+	}
+	foundHeader := false
+	for _, value := range cfg.Codex.RuntimeEnv {
+		if value == "header-secret" {
+			foundHeader = true
+		}
+	}
+	if !foundHeader {
+		t.Fatal("imported Codex header was not projected through the environment")
 	}
 	summaries := cfg.ProviderSummaries()
 	if len(summaries) != 1 || summaries[0].Name != "cc-proxy" || summaries[0].ImportedFrom != source {
 		t.Fatalf("unexpected safe summary: %#v", summaries)
+	}
+}
+
+func TestProviderSummaryRedactsURLCredentials(t *testing.T) {
+	cfg := Defaults()
+	cfg.Providers = []Provider{{Name: "private", BaseURL: "https://user:password@example.invalid/v1?token=query-secret#fragment-secret"}}
+	summary := cfg.ProviderSummaries()
+	if len(summary) != 1 {
+		t.Fatalf("summaries = %#v", summary)
+	}
+	got := summary[0].BaseURL
+	for _, secret := range []string{"user", "password", "query-secret", "fragment-secret"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("redacted URL %q contains %q", got, secret)
+		}
 	}
 }
 

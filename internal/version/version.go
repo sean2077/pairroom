@@ -2,7 +2,7 @@ package version
 
 const (
 	Current     = "1.1.0"
-	StoreSchema = 7
+	StoreSchema = 8
 )
 
 // Commit, BuildDate, LastTag, and CommitsSinceTag are populated by the make

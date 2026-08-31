@@ -1,14 +1,16 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
+	"github.com/sean2077/pairroom/internal/config"
 	"github.com/sean2077/pairroom/internal/version"
 )
 
 func TestSubcommandHelpReturnsSuccess(t *testing.T) {
-	for _, args := range [][]string{{"daemon", "--help"}, {"daemon", "install", "--help"}, {"daemon", "logs", "--help"}, {"service", "--help"}, {"serve", "--help"}, {"doctor", "--help"}, {"verify", "--help"}, {"backup", "--help"}, {"restore", "--help"}, {"diagnostics", "--help"}, {"protocol", "--help"}, {"help"}, {"--help"}} {
+	for _, args := range [][]string{{"daemon", "--help"}, {"daemon", "install", "--help"}, {"daemon", "logs", "--help"}, {"service", "--help"}, {"serve", "--help"}, {"doctor", "--help"}, {"providers", "--help"}, {"verify", "--help"}, {"backup", "--help"}, {"restore", "--help"}, {"diagnostics", "--help"}, {"protocol", "--help"}, {"help"}, {"--help"}} {
 		if err := run(args); err != nil {
 			t.Fatalf("run(%q) returned %v", args, err)
 		}
@@ -24,6 +26,23 @@ func TestUnknownCommandReturnsError(t *testing.T) {
 func TestVersionJSON(t *testing.T) {
 	if err := run([]string{"version", "--json"}); err != nil {
 		t.Fatalf("version --json: %v", err)
+	}
+}
+
+func TestProviderInspectionOmitsRawArguments(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Claude.Args = []string{"--token", "argument-secret"}
+	cfg.Codex.Args = []string{"-c", `model_provider="private"`}
+	report := buildProviderInspection(cfg)
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "argument-secret") {
+		t.Fatalf("provider inspection leaked raw arguments: %s", encoded)
+	}
+	if report.Agents["claude"].ArgumentCount != len(cfg.Claude.Args) {
+		t.Fatalf("argument count = %d", report.Agents["claude"].ArgumentCount)
 	}
 }
 

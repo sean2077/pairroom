@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 
 	"github.com/sean2077/pairroom/internal/model"
@@ -146,8 +147,28 @@ func (c File) ProviderSummaries() []ProviderSummary {
 	for _, provider := range c.Providers {
 		summaries = append(summaries, ProviderSummary{
 			Name: provider.Name, AgentTypes: append([]string(nil), provider.AgentTypes...),
-			BaseURL: provider.BaseURL, Model: provider.Model, ImportedFrom: provider.ImportedFrom,
+			BaseURL: redactedProviderURL(provider.BaseURL), Model: provider.Model, ImportedFrom: provider.ImportedFrom,
 		})
 	}
 	return summaries
+}
+
+func redactedProviderURL(value string) string {
+	if value == "" {
+		return ""
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "redacted-invalid-url"
+	}
+	if parsed.User != nil {
+		parsed.User = url.User("redacted")
+	}
+	if parsed.RawQuery != "" {
+		parsed.RawQuery = "redacted"
+	}
+	if parsed.Fragment != "" {
+		parsed.Fragment = "redacted"
+	}
+	return parsed.String()
 }

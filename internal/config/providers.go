@@ -144,7 +144,18 @@ func resolveAgentProvider(agentType string, agent *Agent, providers map[string]P
 			args = append(args, "-c", "model_providers."+id+".base_url="+tomlString(endpoint))
 		}
 		if len(headers) > 0 {
-			args = append(args, "-c", "model_providers."+id+".http_headers="+tomlInlineTable(headers))
+			envHeaders := make(map[string]string, len(headers))
+			keys := make([]string, 0, len(headers))
+			for header := range headers {
+				keys = append(keys, header)
+			}
+			sort.Strings(keys)
+			for index, header := range keys {
+				headerEnv := fmt.Sprintf("PAIRROOM_PROVIDER_%s_HTTP_HEADER_%d", strings.ToUpper(providerIdentifier(provider.Name)), index+1)
+				agent.RuntimeEnv[headerEnv] = headers[header]
+				envHeaders[header] = headerEnv
+			}
+			args = append(args, "-c", "model_providers."+id+".env_http_headers="+tomlInlineTable(envHeaders))
 		}
 		agent.Args = append(append([]string(nil), agent.Args...), args...)
 	default:
