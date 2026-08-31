@@ -783,6 +783,79 @@ func TestNewUnthreadedAppendToSameAgentSuppressesStaleHandoff(t *testing.T) {
 	}
 }
 
+func TestExplicitMentionSurvivesNewerAppendAndGenericStop(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	first, err := engine.Send(context.Background(), SendRequest{Text: "First direction", To: []model.ActorID{model.ActorClaude}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+	if _, err := engine.Send(context.Background(), SendRequest{Text: "Additional guidance", To: []model.ActorID{model.ActorClaude}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
+		CorrelationID: first.ID, TurnID: "explicit-peer", Text: "Plan is ready. @codex review the evidence.\n[PAIRROOM:DONE]",
+		CreatedAt: time.Now().UTC(),
+	})
+	got := receiveInput(t, adapters[model.ActorCodex])
+	if got.From != model.ActorClaude || !strings.Contains(got.Text, "review the evidence") {
+		t.Fatalf("explicit peer mention was swallowed: %#v", got)
+	}
+}
+
+func TestExplicitMentionCannotOverrideReviewApproval(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	incoming, err := engine.Send(context.Background(), SendRequest{Text: "Review boundary", To: []model.ActorID{model.ActorCodex}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorCodex])
+
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorCodex, Kind: model.RuntimeFinal, CorrelationID: incoming.ID,
+		TurnID: "review-approved", Text: "Approved. @claude no further changes are needed.\n[PAIRROOM:REVIEW_APPROVED]",
+		CreatedAt: time.Now().UTC(),
+	})
+	select {
+	case got := <-adapters[model.ActorClaude].submissions:
+		t.Fatalf("review approval routed back to Driver: %#v", got)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestInactiveWorkflowMetadataDoesNotSwallowExplicitMention(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	workflow, ok := compileWorkflow("Claude plan, Codex review")
+	if !ok {
+		t.Fatal("expected workflow to compile")
+	}
+	workflow.Status = model.WorkflowStatusSuperseded
+	if _, err := engine.record(EventWorkflowUpdated, model.ActorSystem, *workflow); err != nil {
+		t.Fatal(err)
+	}
+	incoming := model.Message{
+		ID: "stale-workflow-input", From: model.ActorUser, To: []model.ActorID{model.ActorClaude}, Text: workflow.Goal,
+		ThreadID: "stale-workflow-thread", WorkflowID: workflow.ID, WorkflowStage: 0, WorkflowMode: model.WorkflowPlan,
+		CreatedAt: time.Now().UTC(), Delivery: map[model.ActorID]model.DeliveryState{}, Processing: map[model.ActorID]model.ProcessingState{},
+	}
+	if _, err := engine.record(EventMessageCreated, model.ActorUser, incoming); err != nil {
+		t.Fatal(err)
+	}
+
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
+		CorrelationID: incoming.ID, TurnID: "stale-workflow-final", Text: "The old workflow is gone. @codex inspect this independently.",
+		CreatedAt: time.Now().UTC(),
+	})
+	got := receiveInput(t, adapters[model.ActorCodex])
+	if got.WorkflowID != "" || got.From != model.ActorClaude {
+		t.Fatalf("inactive workflow poisoned ordinary mention routing: %#v", got)
+	}
+}
+
 func TestExplicitNextTurnInOtherThreadDoesNotSuppressHandoff(t *testing.T) {
 	engine, adapters := newTestEngine(t, model.RoutingRoundtable, "")
 	first, err := engine.Send(context.Background(), SendRequest{Text: "First task", To: []model.ActorID{model.ActorClaude}})

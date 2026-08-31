@@ -131,6 +131,7 @@
       if (pending.has('drafts')) renderStreamingDrafts();
       if (pending.has('activity')) renderActivity();
       if (pending.has('approvals')) renderApprovals();
+      if (pending.has('created')) messageIDs.forEach(renderCreatedMessage);
       if (pending.has('messages')) messageIDs.forEach(renderMessage);
       if (pending.has('delivery')) updateDeliveryHint();
       if (pending.has('composer')) updateComposerAvailability();
@@ -212,6 +213,8 @@
           state.drafts[data.from] = '';
           state.draftCorrelation[data.from] = '';
         }
+        renderScope = 'message-created';
+        renderMessageID = data.id || '';
         break;
       }
       case 'message.delivery.updated': {
@@ -276,6 +279,7 @@
     else if (renderScope === 'settings') queueRuntimeRender(['settings']);
     else if (renderScope === 'participants') queueRuntimeRender(['participants', 'composer']);
     else if (renderScope === 'workflow') queueRuntimeRender(['workflow', 'composer']);
+    else if (renderScope === 'message-created') queueRuntimeRender(['created', 'delivery'], renderMessageID);
     else if (renderScope === 'message') queueRuntimeRender(['messages', 'delivery'], renderMessageID);
     else if (renderScope === 'activity') queueRuntimeRender(['activity']);
     else if (renderScope === 'approvals') queueRuntimeRender(['approvals', 'composer']);
@@ -572,26 +576,29 @@
       const selector = `.message-row.streaming[data-streaming-actor="${actor}"]`;
       const existing = timeline.querySelector(selector);
       const text = state.drafts[actor] || '';
-      const correlated = (state.snapshot.messages || []).find((message) => message.id === state.draftCorrelation[actor]);
+      const correlation = state.draftCorrelation[actor] || '';
+      const correlated = (state.snapshot.messages || []).find((message) => message.id === correlation);
       const threadVisible = !state.threadFilter || correlated?.thread_id === state.threadFilter;
       const visible = Boolean(text) && threadVisible && state.conversationFilter !== 'human';
       if (!visible) {
         if (existing) existing.remove();
         return;
       }
-      const replacement = draftNode(actor, text, state.draftCorrelation[actor]);
-      if (existing) existing.replaceWith(replacement);
-      else timeline.appendChild(replacement);
+      let row = existing;
+      if (!row) {
+        row = draftNode(actor, text, correlation);
+        timeline.appendChild(row);
+      } else {
+        row.dataset.streamingCorrelation = correlation;
+        const streamingText = row.querySelector('[data-streaming-text]');
+        if (streamingText && streamingText.textContent !== text) streamingText.textContent = text;
+      }
       hasVisibleDraft = true;
     });
     if (hasVisibleDraft) {
       const empty = timeline.querySelector('.timeline-empty');
       if (empty) empty.remove();
     }
-    ['claude', 'codex'].forEach((actor) => {
-      const row = timeline.querySelector(`.message-row.streaming[data-streaming-actor="${actor}"]`);
-      if (row) timeline.appendChild(row);
-    });
     if (nearBottom) requestAnimationFrame(scrollBottom);
   }
 
@@ -605,7 +612,50 @@
       existing.remove();
       return;
     }
-    existing.replaceWith(messageNode(message));
+    const currentDelivery = existing.querySelector('.delivery-line');
+    const nextDelivery = deliveryNode(message);
+    if (currentDelivery && nextDelivery) currentDelivery.replaceWith(nextDelivery);
+    else if (currentDelivery) currentDelivery.remove();
+    else if (nextDelivery) existing.querySelector('.message-content')?.appendChild(nextDelivery);
+  }
+
+  function renderCreatedMessage(messageID) {
+    if (!messageID || !state.snapshot || !timeline.isConnected) return;
+    const message = (state.snapshot.messages || []).find((item) => item.id === messageID);
+    if (!message) return;
+    const existing = Array.from(timeline.querySelectorAll('.message-row[data-message-id]'))
+      .find((row) => row.dataset.messageId === messageID);
+    if (existing) {
+      renderMessage(messageID);
+      return;
+    }
+    const streaming = Array.from(timeline.querySelectorAll('.message-row.streaming'))
+      .find((row) => row.dataset.streamingActor === message.from
+        && (!message.reply_to || row.dataset.streamingCorrelation === message.reply_to));
+    if (state.searchQuery.trim() || state.threadFilter || state.conversationFilter !== 'all') {
+      if (streaming) streaming.remove();
+      queueRender();
+      return;
+    }
+
+    const nearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 140;
+    const empty = timeline.querySelector('.timeline-empty');
+    if (empty) empty.remove();
+    const firstStreaming = timeline.querySelector('.message-row.streaming');
+    const separators = timeline.querySelectorAll('.timeline-date');
+    const lastDateKey = separators.length ? separators[separators.length - 1].dataset.dateKey || '' : '';
+    const dateKey = localDateKey(message.created_at);
+    if (dateKey && dateKey !== lastDateKey) {
+      const separator = dateSeparatorNode(message.created_at);
+      if (firstStreaming) timeline.insertBefore(separator, firstStreaming);
+      else timeline.appendChild(separator);
+    }
+    const node = messageNode(message);
+    if (firstStreaming) timeline.insertBefore(node, firstStreaming);
+    else timeline.appendChild(node);
+    if (streaming) streaming.remove();
+    renderTimelineScope();
+    if (nearBottom) requestAnimationFrame(scrollBottom);
   }
 
   function renderTimeline() {
@@ -728,6 +778,7 @@
   function dateSeparatorNode(value) {
     const separator = document.createElement('div');
     separator.className = 'timeline-date';
+    separator.dataset.dateKey = localDateKey(value);
     const date = new Date(value || '');
     const today = new Date();
     const yesterday = new Date(today);
@@ -851,48 +902,53 @@
     }
     content.append(meta, bubble);
 
-    if (message.delivery) {
-      const delivery = document.createElement('div');
-      delivery.className = 'delivery-line';
-      for (const target of Object.keys(message.delivery)) {
-        const chip = document.createElement('span');
-        const status = message.delivery[target];
-        const processing = message.processing && message.processing[target];
-        chip.className = `delivery-chip ${status} processing-${processing || 'waiting'}`;
-        chip.textContent = `${displayName(target)} · ${deliveryText(status)}${processing ? ` / ${processingText(processing)}` : ''}`;
-        const deliveryDetail = message.delivery_detail && message.delivery_detail[target];
-        const processingDetail = message.processing_detail && message.processing_detail[target];
-        const turn = message.processing_turn && message.processing_turn[target];
-        chip.title = [deliveryDetail, processingDetail, turn ? `Turn: ${turn}` : ''].filter(Boolean).join('\n');
-        delivery.appendChild(chip);
-        if (isRetryable(message, target)) {
-          const retryButton = document.createElement('button');
-          retryButton.className = 'retry-button';
-          retryButton.dataset.retryId = message.id;
-          retryButton.dataset.retryTarget = target;
-          retryButton.textContent = `重试 ${displayName(target)}`;
-          delivery.appendChild(retryButton);
-        }
-		if (processing === 'waiting' || processing === 'working') {
-		  const cancelButton = document.createElement('button');
-		  cancelButton.className = 'cancel-message-button';
-		  cancelButton.dataset.cancelMessage = message.id;
-		  cancelButton.dataset.cancelTarget = target;
-		  cancelButton.textContent = `取消 ${displayName(target)}`;
-		  cancelButton.title = '原生运行时可能按整个 Turn 或队列取消；受影响的消息会一并标记';
-		  delivery.appendChild(cancelButton);
-		}
-      }
-      content.appendChild(delivery);
-    }
+    const delivery = deliveryNode(message);
+    if (delivery) content.appendChild(delivery);
     row.append(avatar, content);
     return row;
+  }
+
+  function deliveryNode(message) {
+    if (!message.delivery || Object.keys(message.delivery).length === 0) return null;
+    const delivery = document.createElement('div');
+    delivery.className = 'delivery-line';
+    for (const target of Object.keys(message.delivery)) {
+      const chip = document.createElement('span');
+      const status = message.delivery[target];
+      const processing = message.processing && message.processing[target];
+      chip.className = `delivery-chip ${status} processing-${processing || 'waiting'}`;
+      chip.textContent = `${displayName(target)} · ${deliveryText(status)}${processing ? ` / ${processingText(processing)}` : ''}`;
+      const deliveryDetail = message.delivery_detail && message.delivery_detail[target];
+      const processingDetail = message.processing_detail && message.processing_detail[target];
+      const turn = message.processing_turn && message.processing_turn[target];
+      chip.title = [deliveryDetail, processingDetail, turn ? `Turn: ${turn}` : ''].filter(Boolean).join('\n');
+      delivery.appendChild(chip);
+      if (isRetryable(message, target)) {
+        const retryButton = document.createElement('button');
+        retryButton.className = 'retry-button';
+        retryButton.dataset.retryId = message.id;
+        retryButton.dataset.retryTarget = target;
+        retryButton.textContent = `重试 ${displayName(target)}`;
+        delivery.appendChild(retryButton);
+      }
+      if (processing === 'waiting' || processing === 'working') {
+        const cancelButton = document.createElement('button');
+        cancelButton.className = 'cancel-message-button';
+        cancelButton.dataset.cancelMessage = message.id;
+        cancelButton.dataset.cancelTarget = target;
+        cancelButton.textContent = `取消 ${displayName(target)}`;
+        cancelButton.title = '原生运行时可能按整个 Turn 或队列取消；受影响的消息会一并标记';
+        delivery.appendChild(cancelButton);
+      }
+    }
+    return delivery;
   }
 
   function draftNode(actor, text, correlation) {
     const row = document.createElement('article');
     row.className = `message-row ${actor} streaming`;
     row.dataset.streamingActor = actor;
+    row.dataset.streamingCorrelation = correlation || '';
     const avatar = document.createElement('div');
     avatar.className = `message-avatar avatar-${actor}`;
     avatar.textContent = actor === 'claude' ? 'C' : 'X';
@@ -908,7 +964,10 @@
     meta.append(author, typing);
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
-    appendRichContent(bubble, text, { draft: true, correlation });
+    const streamingText = document.createElement('span');
+    streamingText.dataset.streamingText = 'true';
+    streamingText.textContent = text;
+    bubble.appendChild(streamingText);
     const caret = document.createElement('span');
     caret.className = 'typing-caret';
     bubble.appendChild(caret);

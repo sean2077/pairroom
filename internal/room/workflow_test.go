@@ -2,6 +2,7 @@ package room
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,6 +167,66 @@ func TestWorkflowDoneSignalAdvancesExplicitSequence(t *testing.T) {
 	got := engine.Snapshot().Workflow
 	if got.Status != model.WorkflowStatusAwaitingApproval || got.CurrentStage != 1 || got.Revision != 1 {
 		t.Fatalf("advanced workflow = %#v", got)
+	}
+}
+
+func TestWorkflowWaitsForQueuedStageGuidanceAndHandsOffFinalResult(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	initial, err := engine.Send(context.Background(), SendRequest{Text: "请 Claude 规划修复计划，Codex review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInput := receiveInput(t, adapters[model.ActorClaude])
+	if firstInput.WorkflowID == "" || firstInput.WorkflowStage != 0 {
+		t.Fatalf("initial workflow input = %#v", firstInput)
+	}
+
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeFinal, CorrelationID: initial.ID,
+		TurnID: "plan-first", Text: "Initial plan result.", CreatedAt: time.Now().UTC(),
+	})
+	late, err := engine.Send(context.Background(), SendRequest{
+		Text: "补充：把滚动稳定性也纳入计划", To: []model.ActorID{model.ActorClaude},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeInputCompleted, CorrelationID: initial.ID,
+		TurnID: "plan-first", CreatedAt: time.Now().UTC(),
+	})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, CorrelationID: initial.ID,
+		TurnID: "plan-first", Name: "success", CreatedAt: time.Now().UTC(),
+	})
+	select {
+	case got := <-adapters[model.ActorCodex].submissions:
+		t.Fatalf("workflow advanced before queued stage guidance completed: %#v", got)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if got := engine.Snapshot().Workflow.CurrentStage; got != 0 {
+		t.Fatalf("workflow stage advanced early: %d", got)
+	}
+
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeFinal, CorrelationID: late.ID,
+		TurnID: "plan-revised", Text: "Revised plan result with stable scrolling evidence.", CreatedAt: time.Now().UTC(),
+	})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeInputCompleted, CorrelationID: late.ID,
+		TurnID: "plan-revised", CreatedAt: time.Now().UTC(),
+	})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, CorrelationID: late.ID,
+		TurnID: "plan-revised", Name: "success", CreatedAt: time.Now().UTC(),
+	})
+	next := receiveInput(t, adapters[model.ActorCodex])
+	if next.WorkflowID != firstInput.WorkflowID || next.WorkflowStage != 1 {
+		t.Fatalf("review stage input = %#v", next)
+	}
+	if !strings.Contains(next.Text, "Revised plan result with stable scrolling evidence") || strings.Contains(next.Text, "补充：把滚动稳定性也纳入计划") {
+		t.Fatalf("workflow handoff used mutable latest message instead of completed result: %q", next.Text)
 	}
 }
 

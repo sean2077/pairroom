@@ -196,9 +196,14 @@ func TestRichConversationAssetsAreEmbedded(t *testing.T) {
 
 	app := httptest.NewRecorder()
 	server.Handler().ServeHTTP(app, localRequest(http.MethodGet, "/app.js", nil))
-	for _, marker := range []string{"threadFilter", "uploadPendingAttachment", "openLightbox", "renderClaudeQuestions", "initializeSession", "X-PairRoom-CSRF", "queueStreamingRender", "queueRuntimeRender", "runtimeRenderScopes", "runtimeMessageRenderIDs", "renderStreamingDrafts", "renderMessage", "data-streaming-actor", "renderScope = 'message'", "renderScope = 'activity'"} {
+	for _, marker := range []string{"threadFilter", "uploadPendingAttachment", "openLightbox", "renderClaudeQuestions", "initializeSession", "X-PairRoom-CSRF", "queueStreamingRender", "queueRuntimeRender", "runtimeRenderScopes", "runtimeMessageRenderIDs", "renderStreamingDrafts", "renderCreatedMessage", "renderMessage", "deliveryNode", "data-streaming-actor", "data-streaming-text", "streamingCorrelation", "renderScope = 'message-created'", "renderScope = 'message'", "renderScope = 'activity'"} {
 		if app.Code != http.StatusOK || !strings.Contains(app.Body.String(), marker) {
 			t.Fatalf("app asset omitted %q: status=%d", marker, app.Code)
+		}
+	}
+	for _, forbidden := range []string{"existing.replaceWith(replacement)", "existing.replaceWith(messageNode(message))", "appendRichContent(bubble, text, { draft: true"} {
+		if strings.Contains(app.Body.String(), forbidden) {
+			t.Fatalf("app asset retained unstable streaming projection %q", forbidden)
 		}
 	}
 	if strings.Contains(app.Body.String(), "pairroom.token") || strings.Contains(app.Body.String(), "sessionStorage.setItem") {

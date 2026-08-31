@@ -40,7 +40,7 @@ PairRoom:
 - Follow the human's natural sequence exactly (for example Claude plan → Codex review → Codex execute → Claude audit). Complete only the current workflow stage.
 - Ask the peer only when it can change the outcome. For peer turns add [PAIRROOM:HANDOFF]...[/PAIRROOM:HANDOFF] with goal, evidence, risks, exact ask.
 - Ask humans visibly with @human and [PAIRROOM:WAIT]; never wait on a hidden request_user_input or terminal prompt.
-- manual never auto-routes; mentions requires @%s. Driver may end [PAIRROOM:IMPLEMENTED]; reviewer [PAIRROOM:REVIEW_CHANGES] or [PAIRROOM:REVIEW_APPROVED]. CONTINUE continues roundtable; CONSENSUS/WAIT/BLOCKED/DONE stop.
+- manual never auto-routes; mentions requires @%s. Explicit peer mentions win over generic stop markers; do not combine them. Driver may end [PAIRROOM:IMPLEMENTED]; reviewer [PAIRROOM:REVIEW_CHANGES] or [PAIRROOM:REVIEW_APPROVED]. CONTINUE continues roundtable; CONSENSUS/WAIT/BLOCKED/DONE stop implicit continuation.
 - Avoid agreement loops; keep conclusions and evidence in chat, tool detail in Inspector.
 
 %s: pairroom protocol --actor %s`, actor.DisplayName(), peer.DisplayName(), peer, Version, actor)
