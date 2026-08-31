@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -436,6 +437,52 @@ func (r *embeddedRuntime) SetDraining(value bool) {
 		r.managerDraining = value
 	}
 	r.requestMu.Unlock()
+}
+
+// InterruptActive stops active Room work so archive does not have to wait for
+// the current Turn to end naturally. It interrupts every participant that owns
+// a Turn, is still starting/working/waiting, or has a pending approval. The
+// Room mutation gate is already draining when this is called, so no new work
+// can be admitted through the HTTP boundary.
+func (r *embeddedRuntime) InterruptActive(ctx context.Context) error {
+	if r == nil || r.engine == nil {
+		return nil
+	}
+	snapshot := r.engine.Snapshot()
+	targets := make(map[model.ActorID]struct{})
+	for actor, participant := range snapshot.Participants {
+		if participant.CurrentTurn != "" {
+			targets[actor] = struct{}{}
+			continue
+		}
+		switch participant.State {
+		case model.StateStarting, model.StateWorking, model.StateWaiting:
+			targets[actor] = struct{}{}
+		}
+	}
+	for _, approval := range snapshot.Approvals {
+		if approval.Status == "pending" {
+			targets[approval.Agent] = struct{}{}
+		}
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	actors := make([]model.ActorID, 0, len(targets))
+	for actor := range targets {
+		actors = append(actors, actor)
+	}
+	sort.Slice(actors, func(i, j int) bool { return actors[i] < actors[j] })
+	var result error
+	for _, actor := range actors {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(result, err)
+		}
+		if err := r.engine.Interrupt(ctx, actor); err != nil {
+			result = errors.Join(result, fmt.Errorf("interrupt %s: %w", actor.DisplayName(), err))
+		}
+	}
+	return result
 }
 
 func (r *embeddedRuntime) Close(ctx context.Context) error {

@@ -134,7 +134,7 @@ Project unavailable 不会删除其 Room 或 Binding。页面应解释不可用�
 
 ### 6.2 Archive / Restore
 
-Archive is reversible: it preserves Event Log, attachments and Binding ownership, waits for a safe Runtime boundary for a single-Room operation, and can be undone with Restore.
+Archive is reversible: it preserves Event Log, attachments and Binding ownership, stops the active Agent Turn first so the operator does not have to stop it from inside the Room, then suspends the Runtime at a safe boundary, and can be undone with Restore.
 
 The Shell selection model also supports batch archive:
 
@@ -147,7 +147,7 @@ Content-Type: application/json
 }
 ```
 
-A batch accepts 1–100 submitted IDs, validates the entire array, removes exact duplicates in first-seen order and returns one ordered result per unique ID. It reports `archived`, idempotent `already_archived`, or `failed`. To prevent one active Turn from stalling the whole request, batch archive never interrupts work and reports a busy Room as `runtime_busy` while continuing later items. Successful items remain selected and the Shell reveals archived Rooms so the operator can proceed directly to batch cleanup.
+A batch accepts 1–100 submitted IDs, validates the entire array, removes exact duplicates in first-seen order and returns one ordered result per unique ID. It reports `archived`, idempotent `already_archived`, or `failed`. Batch archive stops each busy Room's active Agent Turn before suspending its Runtime, so one active Turn cannot stall the whole request; items that still cannot settle continue to be reported per-item while later items proceed. Successful items remain selected and the Shell reveals archived Rooms so the operator can proceed directly to batch cleanup.
 
 Restore keeps the full history and original bindings. A restored selected Room remains selected as an active candidate, making its state explicit rather than silently losing the operator's selection.
 
