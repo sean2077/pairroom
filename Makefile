@@ -49,10 +49,13 @@ check: test race vet agent-contract release-contract
 	@test -z "$$(gofmt -l $$(find . -name '*.go' -type f -not -path './.git/*'))" || { echo 'Go files are not gofmt-clean'; gofmt -l $$(find . -name '*.go' -type f -not -path './.git/*'); exit 1; }
 	@if command -v node >/dev/null 2>&1; then \
 		node --check internal/server/assets/app.js && \
+		node --check internal/server/assets/room-shell.js && \
 		node --check internal/server/assets/richtext.js && \
 		node --check internal/server/assets/ux.js && \
 		node --check internal/service/assets/management.js && \
-		node --check internal/service/assets/management-ux.js; \
+		node --check internal/service/assets/management-ux.js && \
+		node --check scripts/test_room_shell.js && \
+		node scripts/test_room_shell.js; \
 	fi
 	@go list -m all | grep -qx 'github.com/sean2077/pairroom'
 	@git diff --check
