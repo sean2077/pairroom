@@ -2311,12 +2311,8 @@ func (e *Engine) agentTargets(actor model.ActorID, text, handoff, control string
 
 	var target model.ActorID
 	switch control {
-	case "NEXT", "CONTINUE": // CONTINUE is a v3 compatibility alias.
+	case "NEXT":
 		target = model.OtherParticipant(actor)
-	case "IMPLEMENTED", "REVIEW_CHANGES": // v3 staged handoff aliases.
-		target = e.stagedHandoffTarget(actor, control)
-	case "", "CONSENSUS", "WAIT", "BLOCKED", "DONE", "REVIEW_APPROVED":
-		return nil
 	default:
 		return nil
 	}
@@ -2333,28 +2329,6 @@ func (e *Engine) agentTargets(actor model.ActorID, text, handoff, control string
 		return nil
 	}
 	return []model.ActorID{target}
-}
-
-func (e *Engine) stagedHandoffTarget(actor model.ActorID, control string) model.ActorID {
-	peer := model.OtherParticipant(actor)
-	if !peer.ValidParticipant() {
-		return ""
-	}
-	e.mu.RLock()
-	actorRole := e.snapshot.Participants[actor].Role
-	peerRole := e.snapshot.Participants[peer].Role
-	e.mu.RUnlock()
-	switch control {
-	case "IMPLEMENTED":
-		if actorRole == model.RoleDriver && peerRole == model.RoleReviewer {
-			return peer
-		}
-	case "REVIEW_CHANGES":
-		if actorRole == model.RoleReviewer && peerRole == model.RoleDriver {
-			return peer
-		}
-	}
-	return ""
 }
 
 func (e *Engine) delivery(messageID string, target model.ActorID, state model.DeliveryState, detail string) {
@@ -3081,7 +3055,7 @@ func validHandoff(value string) bool {
 	return len([]rune(strings.TrimSpace(value))) >= minHandoffRunes
 }
 
-var controlPattern = regexp.MustCompile(`(?mi)^\s*\[PAIRROOM:(NEXT|CONTINUE|CONSENSUS|WAIT|BLOCKED|DONE|IMPLEMENTED|REVIEW_APPROVED|REVIEW_CHANGES)\]\s*$`)
+var controlPattern = regexp.MustCompile(`(?mi)^\s*\[PAIRROOM:(NEXT|WAIT|BLOCKED|DONE)\]\s*$`)
 
 func stripControl(text string) (string, string) {
 	matches := controlPattern.FindAllStringSubmatch(text, -1)
@@ -3099,7 +3073,7 @@ func stripControl(text string) (string, string) {
 
 func stopsConversation(control string) bool {
 	switch control {
-	case "AMBIGUOUS", "CONSENSUS", "WAIT", "BLOCKED", "DONE", "REVIEW_APPROVED":
+	case "AMBIGUOUS", "WAIT", "BLOCKED", "DONE":
 		return true
 	default:
 		return false

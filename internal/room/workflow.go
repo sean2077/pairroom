@@ -346,7 +346,7 @@ func (e *Engine) workflowOnFinal(incoming, output model.Message, control string)
 	workflow.UpdatedAt = now
 	stage := &workflow.Stages[workflow.CurrentStage]
 
-	wait := control == "WAIT" || control == "BLOCKED" || control == "REVIEW_CHANGES" || prompt.MentionsHuman(output.Text)
+	wait := control == "WAIT" || control == "BLOCKED" || prompt.MentionsHuman(output.Text)
 	if wait {
 		workflow.Status = model.WorkflowStatusWaitingHuman
 		stage.Status = model.WorkflowStageWaitingHuman

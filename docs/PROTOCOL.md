@@ -277,7 +277,7 @@ Goal / Scope / Evidence / Risks / Exact ask
 [/PAIRROOM:HANDOFF]
 ```
 
-Engine 从可见正文中移除该块，将其以有界 `Message.handoff` 持久化，并在 Agent→Peer 投递时发送 handoff，而不是重复完整最终报告。只有 handoff 可用、控制标记为 `[PAIRROOM:NEXT]`、没有相关的新用户输入且未超过 Turn budget 时才创建下一条 peer 消息；普通 mention 不触发交棒。跨 Agent 输入与 `next_turn` 输入进入 Room 级队列，当前 native Turn 完成后才提交。缺失 handoff、冲突控制标记或 `[PAIRROOM:DONE|WAIT|BLOCKED]` 都会 fail closed。旧 v3 标记仍作为迁移兼容输入识别，但不会出现在 v4 Agent 契约中。
+Engine 从可见正文中移除该块，将其以有界 `Message.handoff` 持久化，并在 Agent→Peer 投递时发送 handoff，而不是重复完整最终报告。只有 handoff 可用、控制标记为 `[PAIRROOM:NEXT]`、没有相关的新用户输入且未超过 Turn budget 时才创建下一条 peer 消息；普通 mention 不触发交棒。跨 Agent 输入与 `next_turn` 输入进入 Room 级队列，当前 native Turn 完成后才提交。缺失 handoff、冲突控制标记或 `[PAIRROOM:DONE|WAIT|BLOCKED]` 都会 fail closed。Agent 契约只识别 `NEXT`、`DONE`、`WAIT` 和 `BLOCKED`；旧 v3 标记不再被识别。
 
 ## 9. Claude control protocol
 

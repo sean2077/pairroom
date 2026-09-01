@@ -783,7 +783,7 @@ func TestStagedHandoffUsesCompactPeerContext(t *testing.T) {
 	}
 }
 
-func TestStagedHandoffWithoutVisibleProseIsPersistedAndDelivered(t *testing.T) {
+func TestNextHandoffWithoutVisibleProseIsPersistedAndDelivered(t *testing.T) {
 	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Implement the fix", To: []model.ActorID{model.ActorClaude},
@@ -797,7 +797,7 @@ func TestStagedHandoffWithoutVisibleProseIsPersistedAndDelivered(t *testing.T) {
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
 		TurnID: "turn-handoff-only", CorrelationID: incoming.ID,
-		Text:      "[PAIRROOM:HANDOFF]\n" + handoff + "\n[/PAIRROOM:HANDOFF]\n[PAIRROOM:IMPLEMENTED]",
+		Text:      "[PAIRROOM:HANDOFF]\n" + handoff + "\n[/PAIRROOM:HANDOFF]\n[PAIRROOM:NEXT]",
 		CreatedAt: time.Now().UTC(),
 	})
 	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "turn-handoff-only", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC()})
@@ -811,7 +811,7 @@ func TestStagedHandoffWithoutVisibleProseIsPersistedAndDelivered(t *testing.T) {
 	}
 }
 
-func TestReviewChangesMarkerReturnsToDriver(t *testing.T) {
+func TestNextMarkerReturnsToDriver(t *testing.T) {
 	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Review the implementation", To: []model.ActorID{model.ActorCodex},
@@ -824,7 +824,7 @@ func TestReviewChangesMarkerReturnsToDriver(t *testing.T) {
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorCodex, Kind: model.RuntimeFinal,
 		TurnID: "turn-review", CorrelationID: incoming.ID,
-		Text:      "One blocking issue remains.\n[PAIRROOM:HANDOFF]\nFix the stale completion race and rerun the room tests.\n[/PAIRROOM:HANDOFF]\n[PAIRROOM:REVIEW_CHANGES]",
+		Text:      "One blocking issue remains.\n[PAIRROOM:HANDOFF]\nFix the stale completion race and rerun the room tests.\n[/PAIRROOM:HANDOFF]\n[PAIRROOM:NEXT]",
 		CreatedAt: time.Now().UTC(),
 	})
 	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorCodex, Kind: model.RuntimeTurnCompleted, TurnID: "turn-review", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC()})
@@ -834,7 +834,7 @@ func TestReviewChangesMarkerReturnsToDriver(t *testing.T) {
 	}
 }
 
-func TestHumanDecisionSuppressesStagedHandoff(t *testing.T) {
+func TestHumanDecisionSuppressesNextHandoff(t *testing.T) {
 	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Implement the ambiguous change", To: []model.ActorID{model.ActorClaude},
@@ -847,7 +847,7 @@ func TestHumanDecisionSuppressesStagedHandoff(t *testing.T) {
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
 		TurnID: "turn-needs-human", CorrelationID: incoming.ID,
-		Text:      "@human choose the compatibility policy before review.\n[PAIRROOM:IMPLEMENTED]",
+		Text:      "@human choose the compatibility policy before review.\n[PAIRROOM:NEXT]",
 		CreatedAt: time.Now().UTC(),
 	})
 	select {
@@ -857,7 +857,7 @@ func TestHumanDecisionSuppressesStagedHandoff(t *testing.T) {
 	}
 }
 
-func TestStagedHandoffRequiresUsablePacket(t *testing.T) {
+func TestNextHandoffRequiresUsablePacket(t *testing.T) {
 	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Implement the fix", To: []model.ActorID{model.ActorClaude},
@@ -870,7 +870,7 @@ func TestStagedHandoffRequiresUsablePacket(t *testing.T) {
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
 		TurnID: "turn-no-evidence", CorrelationID: incoming.ID,
-		Text: "Implemented.\n[PAIRROOM:IMPLEMENTED]", CreatedAt: time.Now().UTC(),
+		Text: "Implemented.\n[PAIRROOM:NEXT]", CreatedAt: time.Now().UTC(),
 	})
 	select {
 	case input := <-adapters[model.ActorCodex].submissions:
@@ -879,7 +879,7 @@ func TestStagedHandoffRequiresUsablePacket(t *testing.T) {
 	}
 }
 
-func TestNewHumanMessageInSameThreadSuppressesStaleRoundtableHandoff(t *testing.T) {
+func TestNewHumanMessageInSameThreadSuppressesStaleHandoff(t *testing.T) {
 	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	first, err := engine.Send(context.Background(), SendRequest{Text: "First direction", To: []model.ActorID{model.ActorClaude}})
 	if err != nil {
@@ -954,7 +954,7 @@ func TestExplicitMentionDoesNotOverrideTurnControl(t *testing.T) {
 	}
 }
 
-func TestExplicitMentionCannotOverrideReviewApproval(t *testing.T) {
+func TestExplicitMentionCannotOverrideDone(t *testing.T) {
 	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{Text: "Review boundary", To: []model.ActorID{model.ActorCodex}})
 	if err != nil {
@@ -964,7 +964,7 @@ func TestExplicitMentionCannotOverrideReviewApproval(t *testing.T) {
 
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorCodex, Kind: model.RuntimeFinal, CorrelationID: incoming.ID,
-		TurnID: "review-approved", Text: "Approved. @claude no further changes are needed.\n[PAIRROOM:REVIEW_APPROVED]",
+		TurnID: "review-approved", Text: "Approved. @claude no further changes are needed.\n[PAIRROOM:DONE]",
 		CreatedAt: time.Now().UTC(),
 	})
 	select {
@@ -1043,14 +1043,14 @@ func TestExplicitNextTurnInOtherThreadDoesNotSuppressHandoff(t *testing.T) {
 }
 
 func TestControlMarkersAndTurnLimitGateNextHandoff(t *testing.T) {
-	clean, control := stripControl("Done with evidence.\n[PAIRROOM:CONSENSUS]")
-	if clean != "Done with evidence." || control != "CONSENSUS" || !stopsConversation(control) {
+	clean, control := stripControl("Done with evidence.\n[PAIRROOM:DONE]")
+	if clean != "Done with evidence." || control != "DONE" || !stopsConversation(control) {
 		t.Fatalf("unexpected control parsing: clean=%q control=%q", clean, control)
 	}
-	if stopsConversation("NEXT") || stopsConversation("CONTINUE") {
-		t.Fatal("NEXT aliases must request another turn")
+	if stopsConversation("NEXT") {
+		t.Fatal("NEXT must request another turn")
 	}
-	_, ambiguous := stripControl("done\n[PAIRROOM:IMPLEMENTED]\n[PAIRROOM:REVIEW_APPROVED]")
+	_, ambiguous := stripControl("done\n[PAIRROOM:NEXT]\n[PAIRROOM:DONE]")
 	if ambiguous != "AMBIGUOUS" || !stopsConversation(ambiguous) {
 		t.Fatalf("conflicting controls must fail closed, got %q", ambiguous)
 	}

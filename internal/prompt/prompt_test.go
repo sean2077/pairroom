@@ -86,7 +86,7 @@ func TestEnvelopeCarriesOnlyRuntimeAndRoutingContext(t *testing.T) {
 			t.Fatalf("Envelope() missing %q:\n%s", fragment, got)
 		}
 	}
-	for _, fragment := range []string{"role_rule:", "Do not modify files", "[PAIRROOM:CONSENSUS]", "Keep the shared-room answer"} {
+	for _, fragment := range []string{"role_rule:", "Do not modify files", "[PAIRROOM:NEXT]", "Keep the shared-room answer"} {
 		if strings.Contains(got, fragment) {
 			t.Fatalf("Envelope() repeated stable contract prose %q:\n%s", fragment, got)
 		}
