@@ -1,80 +1,51 @@
-# PairRoom 文档
+# Documentation map
 
-> [项目首页](../README.md) · [快速上手](GETTING_STARTED.md) · [核心概念](CONCEPTS.md) · [CLI 参考](CLI_REFERENCE.md) · [排障](TROUBLESHOOTING.md)
+本目录只保留当前需要维护的文档。历史方案、一次性 review、发布快照和旧截图由 Git 历史保存，不在现行文档树中继续复制。
 
-这里是 PairRoom 文档的统一入口。README 负责说明产品价值和最短路径；本目录按“教程、操作指南、概念解释、参考资料”拆分，避免同一行为在多个文件中重复且互相漂移。
+## 按任务阅读
 
-## 从这里开始
-
-| 你现在要做什么 | 首选文档 |
-|---|---|
-| 第一次运行，先验证 UI 与流程 | [快速上手](GETTING_STARTED.md) |
-| 不理解 Project、Room、Binding 或 Runtime | [核心概念](CONCEPTS.md) |
-| 查命令、参数、默认值和限制 | [CLI 参考](CLI_REFERENCE.md) |
-| 浏览器、Agent、容量、锁或数据出问题 | [排障手册](TROUBLESHOOTING.md) |
-| 长期后台运行、远程访问、备份和升级 | [运维手册](OPERATIONS.md) |
-| 修改代码或提交 PR | [开发者指南](DEVELOPMENT.md) 与 [贡献指南](../CONTRIBUTING.md) |
-
-## 使用者文档
-
-### 入门与日常使用
-
-- [快速上手](GETTING_STARTED.md)：从构建、Mock 到真实 Runtime 和后台 Service；
-- [核心概念](CONCEPTS.md)：Project、Room、Binding、Runtime、Turn、Delivery/Processing、角色与轮次接力；
-- [Multi-Project / Multi-Room Service](MULTI_ROOM_SERVICE.md)：Service 拓扑、Provisioning、容量、生命周期和恢复；
-- [Management Shell](MANAGEMENT_SHELL.md)：页面路由、操作、状态、能力和浏览器 Session/内存边界；
-- [富对话与图片](RICH_CONVERSATION.md)：Markdown、附件、原生多模态投递和安全限制。
-- [Flexible workflows and provider profiles](FLEXIBLE_WORKFLOWS_AND_PROVIDERS.md)：自然语言阶段编排、审批门与独立供应商配置。
-
-### 操作与恢复
-
-- [CLI 参考](CLI_REFERENCE.md)：所有顶层命令和 daemon 子命令；
-- [运维手册](OPERATIONS.md)：前台/后台部署、SSH 转发、数据、备份、升级和事故响应；
-- [排障手册](TROUBLESHOOTING.md)：按症状定位问题；
-- [升级与回滚](UPGRADING.md)：Store 迁移、备份、首次启动和回滚边界；
-- [隐私模型](PRIVACY.md)：本地数据、浏览器状态、供应商数据路径和删除；
-- [安全策略](../SECURITY.md)：威胁模型、安全默认值和漏洞报告；
-- [支持范围](../SUPPORT.md)：Issue 前置检查与可分享信息。
-
-## 实现与协议参考
-
-- [架构设计](ARCHITECTURE.md)：进程拓扑、组件、事实源、并发、认证和故障边界；
-- [Room 协议](PROTOCOL.md)：Event、snapshot、REST/SSE、消息和运行时投影；
-- [Runtime 跟随策略](RUNTIME_COMPATIBILITY.md)：当前官方 Claude Code/Codex 协议基线和降级原则；
-- [产品计划](PRODUCT_PLAN.md)：稳定边界、已交付能力、非目标和后续决策原则；
-- [开发者指南](DEVELOPMENT.md)：包结构、测试层次、不可破坏的系统不变量和文档维护规则。
-
-## 验证与发布
-
-- [验证说明](VALIDATION.md)：PairRoom 可控验证与真实供应商 E2E 的区别；
-- [发布检查清单](RELEASE_CHECKLIST.md)：发布门禁；
-- [v1.0.0 Release Notes](RELEASE_NOTES_v1.0.0.md)：已发布基线的历史说明；
-- [PR 记录](PULL_REQUEST.md)：实现阶段的 PR 说明；
-- [cc-connect UX 调研](CC_CONNECT_UX_RESEARCH.md)：管理体验参考与适配决策。
-
-历史 Release Notes 和 Validation Record 是当时版本的证据，不应被修改成当前 `main` 的功能说明。当前未发布变化以根目录 [`CHANGELOG.md`](../CHANGELOG.md) 的 `Unreleased` 为准。
-
-## 文档事实源
-
-出现冲突时按下列顺序核对：
-
-| 主题 | 首要事实源 | 文档同步位置 |
+| 目标 | 文档 | 唯一职责 |
 |---|---|---|
-| CLI 命令与参数 | `cmd/pairroom/main.go`、`cmd/pairroom/daemon.go` | [CLI_REFERENCE.md](CLI_REFERENCE.md) |
-| Service/Room 行为 | `internal/service/`、`internal/room/` | [MULTI_ROOM_SERVICE.md](MULTI_ROOM_SERVICE.md)、[ARCHITECTURE.md](ARCHITECTURE.md) |
-| HTTP、SSE 与浏览器认证 | `internal/service/management.go`、`internal/server/`、内嵌 assets | [MANAGEMENT_SHELL.md](MANAGEMENT_SHELL.md)、[PROTOCOL.md](PROTOCOL.md)、[SECURITY.md](../SECURITY.md) |
-| Event 与 Store schema | `internal/model/`、`internal/store/` | [PROTOCOL.md](PROTOCOL.md)、[UPGRADING.md](UPGRADING.md) |
-| 构建和测试命令 | `Makefile`、`scripts/`、CI workflow | [DEVELOPMENT.md](DEVELOPMENT.md)、[VALIDATION.md](VALIDATION.md) |
-| 已发布事实 | Tag、`VERSION`、Release asset、对应 Changelog | Release Notes 与 Release Checklist |
+| 第一次运行 | [GETTING_STARTED](GETTING_STARTED.md) | 从安装到完成第一个 Room |
+| 理解行为 | [CONCEPTS](CONCEPTS.md) | Project、Room、Turn、FIFO、角色、Workflow 与审批语义 |
+| 修改配置 | [CONFIGURATION](CONFIGURATION.md) | JSON 配置、Provider、runtime policy 与安全边界 |
+| 查询命令 | [CLI_REFERENCE](CLI_REFERENCE.md) | 命令入口、参数发现方式与自动核验清单 |
+| 调用 HTTP | [API_REFERENCE](API_REFERENCE.md) | Management / Room HTTP 与 SSE 契约 |
+| 修改实现 | [ARCHITECTURE](ARCHITECTURE.md) | 组件、状态所有权、不变量与代码导航 |
+| 理解持久化 | [STORAGE](STORAGE.md) | Event Log、Binding、附件、备份和重启恢复 |
+| 部署与维护 | [OPERATIONS](OPERATIONS.md) | Service、Daemon、归档、删除、诊断和恢复 |
+| 排查问题 | [TROUBLESHOOTING](TROUBLESHOOTING.md) | 按症状定位常见故障 |
+| 跨版本升级 | [UPGRADING](UPGRADING.md) | Breaking change、备份、验证和回滚 |
+| 修改 Agent 合同 | [PROTOCOL](PROTOCOL.md) | 输入封装、控制标记、handoff 与收敛规则 |
 
-“源码优先”不代表文档可以落后。行为变更的 PR 必须同时更新最接近用户入口的文档，并在 `CHANGELOG.md` 的 `Unreleased` 中说明。
+顶层 [README](../README.md) 只负责产品定位与最短上手路径；[CONTRIBUTING](../CONTRIBUTING.md) 只负责开发流程；[CHANGELOG](../CHANGELOG.md) 只记录版本历史。
 
-## 文档维护约定
+## 内容边界
 
-1. README 只保留最短可执行路径，不复制完整参数表；
-2. 命令默认值、范围和必填项只在 CLI 参考中集中维护；
-3. 概念解释不绑定具体 UI 文案；UI 操作细节放在 Management Shell/Room 文档；
-4. 安全、隐私、恢复行为必须描述失败路径，不能只写成功路径；
-5. Mock、单元测试、浏览器 smoke 与真实 Vendor E2E 必须明确区分；
-6. 历史验证记录保持历史真实性，当前变化另写 `Unreleased`；
-7. 相对链接、代码围栏、标题锚点和命令示例应在提交前检查。
+同一个事实只应有一个详细解释位置：
+
+- 协作语义属于 `CONCEPTS.md`；
+- 代码结构与并发不变量属于 `ARCHITECTURE.md`；
+- 精确命令和接口名称属于 Reference 文档；
+- 故障处置属于 `TROUBLESHOOTING.md`；
+- 版本迁移属于 `UPGRADING.md`。
+
+其他文档引用它，不复制整段说明。无法由测试或源码核验的短期计划应放在 Issue / PR，而不是长期 Reference。
+
+## 维护规则
+
+变更以下代码时必须同步对应文档：
+
+| 代码区域 | 文档 |
+|---|---|
+| `internal/room/`、`internal/agent/` | `CONCEPTS.md`、`ARCHITECTURE.md`、`PROTOCOL.md` |
+| `internal/config/`、Provider 解析 | `CONFIGURATION.md` |
+| `cmd/pairroom/` | `CLI_REFERENCE.md` |
+| `internal/server/`、`internal/service/` HTTP handler | `API_REFERENCE.md` |
+| `internal/store/`、archive / backup | `STORAGE.md`、`OPERATIONS.md`、`UPGRADING.md` |
+
+提交前运行：
+
+```bash
+make docs-check
+```

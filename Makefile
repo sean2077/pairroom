@@ -13,7 +13,7 @@ ifeq ($(strip $(GOBIN)),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: build install test race vet fmt check agent-contract release-contract cover run demo smoke release package clean
+.PHONY: build install test race vet fmt check agent-contract release-contract cover run demo smoke release package clean docs-check
 
 build:
 	mkdir -p $(DIST)
@@ -45,7 +45,7 @@ cover:
 	go test -count=1 -coverprofile=.coverage ./...
 	go tool cover -func=.coverage
 
-check: test race vet agent-contract release-contract
+check: test race vet agent-contract release-contract docs-check
 	@test -z "$$(gofmt -l $$(find . -name '*.go' -type f -not -path './.git/*'))" || { echo 'Go files are not gofmt-clean'; gofmt -l $$(find . -name '*.go' -type f -not -path './.git/*'); exit 1; }
 	@if command -v node >/dev/null 2>&1; then \
 		node --check internal/server/assets/app.js && \
@@ -87,3 +87,6 @@ package: release
 clean:
 	@test "$(DIST)" = dist || { echo 'clean only accepts the default DIST=dist' >&2; exit 1; }
 	rm -rf -- "$(CURDIR)/dist" "$(CURDIR)/.coverage"
+
+docs-check:
+	python3 scripts/docs-check.py
