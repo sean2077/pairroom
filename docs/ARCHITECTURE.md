@@ -5,20 +5,22 @@
 PairRoom 是 native Agent harness 之上的本地控制面。它解决会话绑定、顺序调度、角色隔离、审批、持久化、观察和恢复，不重新实现 Claude Code / Codex 的工具循环。
 
 ```text
-Browser / CLI
-      |
-HTTP + SSE control plane
-      |
+Browser / Wails Desktop / CLI
+              |
+      HTTP + SSE control plane
+              |
 Service registry ---- Project / Room / Binding metadata
-      |
+              |
 Room Engine --------- append-only Event Log + projections
-      |
-deterministic FIFO scheduler
-      |
+              |
+      deterministic FIFO scheduler
+              |
 Claude adapter       Codex adapter
       |                  |
 official native CLI / session / tools / approvals
 ```
+
+Wails Desktop 只是原生 Window / Tray / single-instance host。它加载同一个 Management Shell，并直接复用 Go Service；它不是新的状态所有者。
 
 ## 状态所有权
 
@@ -29,9 +31,10 @@ official native CLI / session / tools / approvals
 | 当前 native process / stdout / request ID | Agent adapter |
 | live source tree | Driver workspace |
 | review filesystem view | Reviewer snapshot |
-| 页面显示 | 服务端 projection；浏览器不是 SSOT |
+| 页面显示 | 服务端 projection；browser / desktop webview 都不是 SSOT |
+| native window、tray 与 second-launch focus | Wails Desktop host |
 
-不允许 UI、prompt 或内存 cache 覆盖 durable authority。
+不允许 UI、prompt、desktop shell 或内存 cache 覆盖 durable authority。
 
 ## 关键不变量
 
@@ -53,9 +56,14 @@ Codex 的 generic `error` notification 可以发生在 `turn/completed` 之前�
 
 对用户可见且需要审计的控制面事实应先写 Event Log，再驱动外部副作用。供应商临时 request ID 不能作为跨重启 durable key。
 
+### Desktop ownership is explicit
+
+桌面启动遵循三段式决策：validated explicit Management URL → validated installed daemon → embedded in-process Service。复用外部 Service 不转移 ownership；桌面退出不得停止外部 daemon。内嵌 Service 则由桌面进程拥有，并沿 Management shutdown、Runtime drain、Registry / lock release 的顺序关闭。任何路径都不隐式恢复 stale `service.lock`。
+
 ## 主要模块
 
 - `cmd/pairroom/`：CLI 与启动装配；
+- `desktop/`：独立 Go 1.25 / Wails v3 模块，只负责原生 Host 与平台打包；
 - `internal/service/`：Project / Room lifecycle、Binding 和 runtime capacity；
 - `internal/room/`：Event Log projection、scheduler、Workflow 与审批；
 - `internal/agent/`：Claude / Codex native protocol adapter；
@@ -64,15 +72,19 @@ Codex 的 generic `error` notification 可以发生在 `turn/completed` 之前�
 - `internal/archive/`：archive / backup 相关实现；
 - `internal/model/types.go`：跨层 durable model。
 
+`desktop/go.mod` 隔离 Wails 及 GUI 依赖；根模块继续使用 Go 1.23，并保持标准库零外部依赖。桌面端不得复制 Management / Room 前端，也不得在 JavaScript 中重做 Service lifecycle 或认证。
+
 ## Runtime lifecycle
 
 Service 可以按 capacity 和 idle policy 激活或回收 Room runtime。回收 native process 不删除 Room；重新激活会恢复 durable projection 和 session binding，但不会自动重放进程内 FIFO。
 
 Role / workspace 切换必须与 delivery serialization 使用同一安全边界，避免 reviewer snapshot 捕获时 Driver 仍在修改 live tree。
 
-## 浏览器更新模型
+## Web 更新与原生窗口
 
-SSE 传输 durable state event 与 transient telemetry。页面应增量更新或批量合并高频活动，不因每个 token 重建全部聊天树；重连时以 snapshot 为准，不能依赖浏览器中遗留的临时状态。
+SSE 传输 durable state event 与 transient telemetry。页面应增量更新或批量合并高频活动，不因每个 token 重建全部聊天树；重连时以 snapshot 为准，不能依赖 browser 或 desktop webview 中遗留的临时状态。
+
+Management Shell 中的 Room 激活仍由现有 HTTP API 决定。桌面 Host 仅把已验证的 numeric-loopback Room URL 映射为原生子窗口，并拒绝非 PairRoom 导航。
 
 ## 非目标
 
@@ -80,4 +92,5 @@ SSE 传输 durable state event 与 transient telemetry。页面应增量更新�
 - 不承诺任意旧 Event Log 自动迁移；
 - 不把两个 Agent 变成无边界群聊；
 - 不隐藏 native CLI 的权限、审批和失败；
-- 不以 Mock E2E 代替真实 vendor E2E。
+- 不以 Mock E2E 代替真实 vendor E2E；
+- 不为桌面端维护第二套业务 UI、Service 或存储格式。
