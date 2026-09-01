@@ -14,7 +14,8 @@ This contract applies under `desktop/`. Read it together with the repository roo
 ## Wails and generated files
 
 - Wails is pinned in `go.mod`; treat v3 API changes as explicit dependency upgrades requiring Windows, macOS, and Linux validation.
-- `python scripts/prepare-build.py` generates `build/darwin/`, `build/linux/`, and `build/windows/` from the pinned Wails CLI. These directories, `bin/`, and `dist/` are generated and must remain untracked.
+- Platform Taskfiles and non-templated packaging files under `build/darwin/`, `build/linux/`, and `build/windows/` are maintained source synchronized with the pinned Wails release. Update them deliberately when the Wails version changes.
+- `python scripts/prepare-build.py` refreshes templated metadata and icon assets from the pinned Wails CLI. Generated plist, desktop, nfpm, icon, NSIS helper, `bin/`, and `dist/` outputs remain untracked through `.gitignore`.
 - `build/config.yml`, `build/Taskfile.yml`, `Taskfile.yml`, and the scripts under `scripts/` are maintained source.
 - Keep the startup page minimal. Product UI changes belong to the existing embedded PairRoom Web assets, not `desktop/frontend/`.
 
