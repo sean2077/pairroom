@@ -20,40 +20,55 @@ def digest(path: pathlib.Path) -> str:
     return value.hexdigest()
 
 
+def require_packages(paths: list[pathlib.Path], description: str) -> list[pathlib.Path]:
+    result = sorted({path.resolve() for path in paths if path.is_file()})
+    if not result:
+        raise SystemExit(f"expected {description}, but none were produced")
+    return result
+
+
 def collect(platform: str) -> list[pathlib.Path]:
     binary_dir = ROOT / "bin"
     if platform == "linux":
-        candidates = [*binary_dir.glob("*.AppImage"), *binary_dir.glob("*.deb")]
-    elif platform == "windows":
-        candidates = [
-            path
-            for path in binary_dir.glob("*.exe")
-            if path.name.lower() != "pairroom.exe"
-        ]
+        appimages = require_packages(
+            list(binary_dir.glob("*.AppImage")), "a Linux AppImage"
+        )
+        debs = require_packages(list(binary_dir.glob("*.deb")), "a Debian package")
+        return sorted({*appimages, *debs})
+    if platform == "windows":
+        installers = require_packages(
+            list(binary_dir.glob("*-installer.exe")), "a Windows NSIS installer"
+        )
         portable = binary_dir / "PairRoom.exe"
-        if portable.exists():
-            candidates.append(portable)
-    elif platform == "darwin":
+        if not portable.is_file():
+            raise SystemExit(f"expected Windows portable executable: {portable}")
+        return sorted({*installers, portable.resolve()})
+    if platform == "darwin":
         app = binary_dir / "PairRoom.app"
         if not app.is_dir():
             raise SystemExit(f"expected macOS bundle: {app}")
         archive = binary_dir / "PairRoom.app.zip"
         subprocess.run(
-            ["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(app), str(archive)],
+            [
+                "ditto",
+                "-c",
+                "-k",
+                "--sequesterRsrc",
+                "--keepParent",
+                str(app),
+                str(archive),
+            ],
             check=True,
         )
-        candidates = [archive]
-    else:
-        raise SystemExit(f"unsupported platform {platform!r}")
-    result = sorted({path.resolve() for path in candidates if path.is_file()})
-    if not result:
-        raise SystemExit(f"no final {platform} desktop packages found in {binary_dir}")
-    return result
+        return [archive.resolve()]
+    raise SystemExit(f"unsupported platform {platform!r}")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--platform", required=True, choices=["linux", "windows", "darwin"])
+    parser.add_argument(
+        "--platform", required=True, choices=["linux", "windows", "darwin"]
+    )
     parser.add_argument("--arch", required=True)
     parser.add_argument("--label", required=True)
     args = parser.parse_args()
@@ -91,7 +106,10 @@ def main() -> int:
         encoding="utf-8",
         newline="\n",
     )
-    print(f"collected {len(packages)} package(s) in {destination.relative_to(REPOSITORY)}")
+    print(
+        f"collected {len(packages)} package(s) in "
+        f"{destination.relative_to(REPOSITORY)}"
+    )
     return 0
 
 
