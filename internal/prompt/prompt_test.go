@@ -71,7 +71,7 @@ func TestEnvelopeCarriesOnlyRuntimeAndRoutingContext(t *testing.T) {
 		MessageID: "msg-0123456789abcdef01234567", ThreadID: "thread-0123456789abcdef01234567", Hop: 2,
 		From: model.ActorClaude, To: model.ActorCodex,
 		Text: "Inspect the race", ReplyTo: "msg-0123456789abcdef01234567",
-		Role: model.RoleReviewer, RoutingMode: model.RoutingTurns, MaxHops: 6, Intent: model.IntentSupersede,
+		Role: model.RoleReviewer, MaxHops: 6, Intent: model.IntentSupersede,
 		WorkflowID: "workflow-0123456789abcdef01234567", WorkflowStage: 2, WorkflowMode: model.WorkflowAudit,
 	}
 	got := Envelope(input)

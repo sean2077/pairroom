@@ -447,7 +447,6 @@ type AgentInput struct {
 	Text          string            `json:"text"`
 	ReplyTo       string            `json:"reply_to,omitempty"`
 	Role          ParticipantRole   `json:"role"`
-	RoutingMode   RoutingMode       `json:"routing_mode"`
 	MaxHops       int               `json:"max_hops"`
 	Attachments   []AgentAttachment `json:"attachments,omitempty"`
 	Intent        MessageIntent     `json:"intent,omitempty"`
