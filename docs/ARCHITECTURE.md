@@ -84,7 +84,7 @@ Role / workspace 切换必须与 delivery serialization 使用同一安全边界
 
 SSE 传输 durable state event 与 transient telemetry。页面应增量更新或批量合并高频活动，不因每个 token 重建全部聊天树；重连时以 snapshot 为准，不能依赖 browser 或 desktop webview 中遗留的临时状态。
 
-Management Shell 中的 Room 激活仍由现有 HTTP API 决定。桌面 Host 仅把已验证的 numeric-loopback Room URL 映射为原生子窗口，并拒绝非 PairRoom 导航。
+Management Shell 中的 Room 激活仍由现有 HTTP API 决定。当前 Wails Host 维持一个主 webview，并以受限的 `window.open` bridge 将 Room 激活转换为同窗口 numeric-loopback 导航；非 PairRoom 目标不会通过该 bridge。多窗口并不是本版本的 durable contract。
 
 ## 非目标
 
