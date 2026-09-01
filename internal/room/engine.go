@@ -1662,7 +1662,6 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 		Text:          peerInputText(message, target),
 		ReplyTo:       message.ReplyTo,
 		Role:          participant.Role,
-		RoutingMode:   settings.RoutingMode,
 		MaxHops:       settings.MaxHops,
 		Attachments:   attachments,
 		Intent:        message.Intent,

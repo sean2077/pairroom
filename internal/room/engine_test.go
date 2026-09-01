@@ -544,7 +544,7 @@ func TestSendPassesRoleAndRoutingContext(t *testing.T) {
 	if input.MessageID != message.ID || input.From != model.ActorUser || input.To != model.ActorClaude {
 		t.Fatalf("unexpected delivery envelope: %#v", input)
 	}
-	if input.Role != model.RoleDriver || input.RoutingMode != model.RoutingTurns || input.MaxHops != 6 {
+	if input.Role != model.RoleDriver || input.MaxHops != 6 {
 		t.Fatalf("missing room context: %#v", input)
 	}
 }
