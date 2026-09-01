@@ -42,6 +42,18 @@ Management Shell 打开后：
 
 使用真实 runtime 前，先分别确认 `claude` 与 `codex` CLI 已安装、已登录，并能在目标仓库独立工作。完整步骤见 [Getting Started](docs/GETTING_STARTED.md)。
 
+## 桌面端
+
+`desktop/` 提供基于 **Wails v3** 的 Windows、macOS 与 Linux 原生入口。它不是第二套 PairRoom 后端或前端：桌面 Host 直接复用现有 Management Shell、Room View、Service Registry、Runtime Manager、配置、锁和 native Agent adapters。
+
+启动时，桌面端会按顺序：
+
+1. 验证并复用显式提供的 authenticated numeric-loopback Management URL；
+2. 验证并复用已安装的 `pairroom daemon`；
+3. 否则在当前桌面进程中启动 PairRoom Service。
+
+关闭主窗口只会隐藏到系统托盘，不会中断活动 Agent。显式退出只关闭桌面端拥有的内嵌 Service，并沿现有 native-Turn drain 边界优雅退出；外部 daemon 不受影响。构建、依赖和安装包说明见 [PairRoom Desktop](desktop/README.md)。浏览器和 CLI 入口保持完整可用。
+
 ### 运行时预览
 
 下面是 PairRoom Management Shell 的实际运行时界面：可以集中查看 Project、Room、Runtime 容量与健康状态，并从同一控制面进入协作 Room。
@@ -61,17 +73,29 @@ Management Shell 打开后：
 
 ## 开发验证
 
+根模块：
+
 ```bash
 make docs-check
 make check
 make smoke
 ```
 
-`docs-check` 会校验文档链接、源码路径、CLI 参数、HTTP 路由和 JSON 配置字段，防止文档在代码继续演进后静默漂移。
+桌面模块：
+
+```bash
+cd desktop
+go mod tidy
+go test -count=1 ./...
+python scripts/prepare-build.py
+wails3 task build
+```
+
+`docs-check` 会校验文档链接、源码路径、CLI 参数、HTTP 路由和 JSON 配置字段，防止文档在代码继续演进后静默漂移。桌面模块使用独立的 Go toolchain 和依赖锁，不改变根模块的标准库依赖边界。
 
 ## 状态与边界
 
-PairRoom 仍在快速演进。CLI、HTTP API、Event Log 和 Agent 协议的 breaking change 会记录在 [CHANGELOG](CHANGELOG.md) 与 [Upgrading](docs/UPGRADING.md)。当前 Mock E2E 可以验证调度、持久化和恢复链路，但不能替代真实 Claude Code / Codex native E2E。
+PairRoom 仍在快速演进。CLI、HTTP API、Event Log 和 Agent 协议的 breaking change 会记录在 [CHANGELOG](CHANGELOG.md) 与 [Upgrading](docs/UPGRADING.md)。当前 Mock E2E 可以验证调度、持久化和恢复链路，但不能替代真实 Claude Code / Codex native E2E；桌面 CI 的 unsigned packages 也不能替代生产签名与 macOS notarization。
 
 ## License
 
