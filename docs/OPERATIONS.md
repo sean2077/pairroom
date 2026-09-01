@@ -2,12 +2,31 @@
 
 ## 运行形态
 
+- PairRoom Desktop：Wails v3 原生 Window / Tray host，复用 daemon 或在进程内启动 Service；
 - `pairroom service`：正常的多 Project / 多 Room 管理入口；
 - `pairroom serve`：单仓库兼容入口；
 - `pairroom daemon`：把 Service 作为本机后台进程管理；
 - `--mock`：不启动供应商 CLI 的确定性验证模式。
 
-默认使用 loopback。暴露到其他接口前必须配置 token，并评估本机仓库、Agent 凭据和附件所带来的风险。
+所有内置入口默认使用 numeric loopback。暴露到其他接口前必须配置 token，并评估本机仓库、Agent 凭据和附件所带来的风险。
+
+## Desktop lifecycle
+
+桌面端启动时按以下顺序选择 Service：
+
+1. 验证 `PAIRROOM_DESKTOP_URL` 指向 authenticated numeric-loopback PairRoom Service；
+2. 验证已安装 daemon 的当前 Management URL；
+3. 否则在桌面进程中启动内嵌 Service。
+
+行为边界：
+
+- 关闭主窗口：隐藏到 tray，不停止 Runtime 或 Agent；
+- 再次启动应用：single-instance handler 聚焦已有窗口；
+- 退出且使用外部 daemon：只退出 GUI，daemon 与活动 Turn 保持运行；
+- 退出且使用内嵌 Service：先停止接受 Management 请求，再等待 Runtime 通过 native-Turn boundary drain，最后释放 Registry 与 `service.lock`；
+- stale lock：桌面端保持 fail closed，不做隐式 recovery。
+
+工作流产物是 unsigned CI builds。Windows code signing、Apple Developer ID signing 与 notarization 必须在生产 release 环境中真实执行后才能宣称已签名。
 
 ## 日常检查
 
@@ -49,12 +68,14 @@ Service 可以限制同时 active Room 数，并按 idle policy 回收 Runtime�
 
 正常退出应停止 active adapter、结算在途 projection、关闭 store，并清理 reviewer workspace。强制杀进程后，下一次启动会 fail closed；它不会推测上一次 native operation 是否执行完成。
 
+桌面端使用的内嵌 Service 遵循同一 shutdown contract；Wails Window lifecycle 不能绕开 Room Runtime drain。
+
 ## 日志与诊断
 
 日志不得包含 API key、Authorization header 或附件绝对路径。报告问题时提供：
 
 - PairRoom 构建版本；
-- OS 与两个 CLI 版本；
+- OS、入口类型（Desktop / daemon / foreground）与两个 CLI 版本；
 - Room / message / Turn ID；
 - 相关 system notice 和 terminal event；
 - 已脱敏的配置；
