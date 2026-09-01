@@ -37,7 +37,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: '1.25.x'
-          cache-dependency-path: desktop/go.sum
+          cache-dependency-path: desktop/go.mod
       - name: Install Linux webview dependencies
         run: |
           sudo apt-get update
@@ -102,7 +102,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: '1.25.x'
-          cache-dependency-path: desktop/go.sum
+          cache-dependency-path: desktop/go.mod
       - name: Install Linux packaging dependencies
         if: matrix.platform == 'linux'
         run: |
