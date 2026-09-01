@@ -1608,7 +1608,7 @@ func peerInputText(message model.Message, target model.ActorID) string {
 	if handoff == "" {
 		return message.Text
 	}
-	return fmt.Sprintf("Peer handoff from %s. Verify repository state and claims independently.\n\n%s", message.From.DisplayName(), handoff)
+	return fmt.Sprintf("Peer handoff from %s.\n\n%s", message.From.DisplayName(), handoff)
 }
 
 func (e *Engine) deliver(ctx context.Context, message model.Message, target model.ActorID) {
