@@ -1,6 +1,6 @@
 # PairRoom
 
-PairRoom 是一个面向 **Claude Code + Codex** 的本地三方协作房间：你、Claude Code 和 Codex 共享同一条 IM 式时间线，两个 Agent 保留各自官方 Harness，并在你可见、可介入、可审计的房间里讨论、实现与审查。
+PairRoom 是一个面向 **Claude Code + Codex** 的本地三方协作房间：你、Claude Code 和 Codex 共享一条可见时间线，两个 Agent 保留各自官方 Harness，并通过确定性的单轮次接力完成讨论、实现与审查。
 
 > PairRoom 不代理模型 API，也不重写 Agent loop。原生模式只启动本机已有的官方 `claude` 与 `codex` 命令；Claude Code/Codex 继续拥有各自的会话、上下文、工具、Skills、MCP、Hooks、沙箱和账号凭据。
 
@@ -16,7 +16,7 @@ PairRoom 是一个面向 **Claude Code + Codex** 的本地三方协作房间：�
 
 - **一条公共时间线**：你能看到双方结论、引用、线程、图片和消息状态；
 - **一个过程检查器**：工具、命令、计划、Diff、用量、审批和错误不再散落在两个终端；
-- **明确的协作策略**：`manual`、`mentions`、`roundtable` 三种路由，以及 Driver / Reviewer 角色；
+- **确定性的协作策略**：同一时刻只有一个 Agent Turn；显式 `HANDOFF + NEXT` 才把下一轮交给对方；
 - **原生会话连续性**：Room 分别绑定一个 Claude Session 与一个 Codex Thread；
 - **诚实的生命周期**：投递成功与处理完成分开记录，失败、取消、跳过和重试可审计；
 - **本地持久化与恢复**：append-only Event Log、附件校验、备份、恢复和脱敏诊断。
@@ -65,7 +65,7 @@ pairroom version
 1. 登记一个 **Git worktree 的绝对路径**；
 2. 在 Project 下创建 Room；
 3. Claude 与 Codex Binding 均选择 `new`；
-4. 打开 Room，发送 `@all 请分别分析这个仓库，并相互检查结论。`；
+4. 打开 Room，发给当前 Driver：`先分析仓库；需要独立检查时用 HANDOFF + NEXT 把下一轮交给 Reviewer。`；
 5. 在时间线观察结论，在 Inspector 查看 Turn、工具、计划和状态。
 
 更细的逐步说明见 [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md)。
@@ -137,19 +137,13 @@ pairroom daemon install --force -- \
 
 ![PairRoom image lightbox](docs/images/pairroom-v0.3-lightbox.png)
 
-### 三方路由
+### 单轮次接力
 
-支持 `@claude`、`@codex`、`@all`、`@peer` 和 `@human`：
+用户可把消息发给 `@Driver`、`@Reviewer`、`@claude` 或 `@codex`。未显式指定接收者时，只发送给唯一的当前 Driver；角色目标由 Service 在持久化消息时解析，不依赖浏览器旧快照。
 
-| 模式 | 行为 |
-|---|---|
-| `manual` | Agent 回答不自动转发 |
-| `mentions` | 显式 `@peer`，或有效的 Driver/Reviewer 阶段标记才继续；默认推荐 |
-| `roundtable` | 双方自动往返，但受 hop budget、阶段/停止标记和用户新指令约束 |
+Room 始终只有一个 Turn owner。发给当前 owner 的 `append`/`supersede` 可以继续 steering；发给另一 Agent，或使用 `next_turn` 的输入，会排到当前 native Turn 完成后。Agent 之间不会因普通 `@peer` 文本互相唤醒；只有同时提供紧凑 `[PAIRROOM:HANDOFF]...[/PAIRROOM:HANDOFF]` 和 `[PAIRROOM:NEXT]` 才交棒。`DONE`、`WAIT`、`BLOCKED` 明确停止接力。
 
-未显式指定接收者时，消息只发送给唯一的当前 Driver；需要直接审查时可选随角色切换的 `@Reviewer`，需要真正独立并行分析时再选 `@all`。`@Driver` 与 `@Reviewer` 由 Service 在持久化消息时按当前角色解析，不依赖浏览器里的旧快照。Agent 的阶段交接必须附带隐藏的紧凑 `PAIRROOM:HANDOFF`，避免把整段实施报告重复注入另一侧上下文。
-
-用户发给同一 Agent 的普通补充或替代消息优先于旧的自动接力，即使没有先点击 Reply；旧 Turn 的结果仍保留用于审计，但不会继续触发过期讨论。确实独立、允许与旧任务并行推进的新工作使用“下一 Turn（独立任务）”。
+路由模式只接受 `turns`。`manual`、`mentions`、`roundtable` 不再识别，配置文件、CLI 参数或持久化 Room 事件中出现这些值都会启动失败；升级前必须显式改为 `turns`，旧 Room 则需要重建。`--max-hops` 仍作为一次接力链的最大 Agent Turn 数，防止无界往返。
 
 ### Driver / Reviewer
 
@@ -177,7 +171,7 @@ PairRoom 分开记录：
 
 ## 建议的协作方式
 
-日常任务先发给当前 Driver；只有方案确实存在高价值分歧时才用 `@all` 做独立分析。Driver 完成实现和验证后，以紧凑证据包交给 Reviewer：
+日常任务先发给当前 Driver。只有独立审查能实质改变结果时，Driver 才以紧凑证据包请求 Reviewer 的下一轮：
 
 ```text
 [PAIRROOM:HANDOFF]
@@ -187,10 +181,10 @@ Evidence: 已运行的测试、关键输出和 diff 事实
 Risks: 尚未排除的边界
 Ask: Reviewer 需要独立验证的具体问题
 [/PAIRROOM:HANDOFF]
-[PAIRROOM:IMPLEMENTED]
+[PAIRROOM:NEXT]
 ```
 
-Reviewer 独立读取刷新后的仓库快照，批准时结束为 `[PAIRROOM:REVIEW_APPROVED]`；发现阻塞问题时用紧凑 handoff 加 `[PAIRROOM:REVIEW_CHANGES]` 返回 Driver。这样公共时间线保留完整人类报告，而 Peer 只接收改变决策所需的上下文。随时用新消息打断错误方向。概念、角色、Binding、Runtime 和消息状态的完整解释见 [`docs/CONCEPTS.md`](docs/CONCEPTS.md)。
+Reviewer 独立读取刷新后的仓库快照：批准时以 `[PAIRROOM:DONE]` 把结果交还用户；存在需要 Driver 修复的问题时，再用新的紧凑 handoff 加 `[PAIRROOM:NEXT]` 交棒。这样公共时间线保留完整人类报告，而下一 Agent 只接收改变决策所需的上下文。用户可随时插话、取消或改写后续轮次。概念、角色、Binding、Runtime 和消息状态的完整解释见 [`docs/CONCEPTS.md`](docs/CONCEPTS.md)。
 
 ## 安全与隐私边界
 

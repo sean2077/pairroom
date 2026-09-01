@@ -14,9 +14,11 @@
 
 ### Changed
 
+- PairRoom now uses one deterministic `turns` collaboration policy: a Room has one active Agent Turn owner, cross-Agent and `next_turn` inputs wait in a Room-level queue, and only a compact `HANDOFF` followed by `NEXT` transfers control after the current native Turn completes. Legacy `manual`/`mentions`/`roundtable` configuration values are removed and rejected; configuration and persisted Room state must use `turns`.
+- The Room composer no longer offers `@All` or routing-mode controls; users choose one Agent or role, while explicit natural-language actor/action sequences remain available for plan/review/execute/audit workflows.
 - Room View batches high-volume transient Runtime telemetry (command output, logs, tool/plan/diff/usage updates) into bounded 500 ms render passes while keeping `text.delta` low-latency, and preserves Activity scroll position plus Turn-card and nested disclosure state across live re-renders.
 - Single and batch Room archive now stop the active Agent Turn by default before suspending the Runtime, so the operator no longer has to open the Room and stop the Agent first; rename, binding completion, suspend, capacity eviction, and service shutdown still never interrupt a Turn.
-- Unaddressed messages and the Room composer now target the single current Driver instead of invoking both Agents by default; explicit `@all` remains available.
+- Unaddressed messages and the Room composer now target the single current Driver instead of invoking both Agents by default; explicit `@all` is recognized only to return the one-recipient error and never starts both runtimes.
 - Reviewer snapshots are refreshed immediately before each safe new reviewer turn, preventing review of the pre-implementation startup snapshot.
 - Agent-to-peer delivery uses the compact handoff packet, or a bounded fallback, instead of replaying an arbitrarily long final response.
 - The native collaboration contract now asks for a second Agent only when independent work can materially change the outcome and keeps tool chatter in Inspector.
@@ -29,6 +31,8 @@
 
 ### Fixed
 
+- Codex App Server `error` notifications are now non-terminal diagnostics: they no longer fail the current input, release the Room Turn owner, or start a queued peer before the authoritative `turn/completed`; confirmed process exit emits an explicit terminal Turn boundary.
+- Cancelling a message still waiting in the Room FIFO now removes only that item without interrupting a runtime. Cancelling an input already accepted by a native runtime retains the broader native-Turn cancellation semantics while preserving later Room-queued work.
 - Room View accessibility and undefined-variable fixes: replaced the undefined `--surface-1` token with defined surfaces, lightened dark-theme `--faint` and darkened light-theme `--faint` so small secondary text clears WCAG AA contrast on both themes, added `aria-label`/`aria-pressed` to lightbox and notification/theme controls, and gated `scrollIntoView` smooth scroll and the message flash animation behind `prefers-reduced-motion`.
 - Room archive no longer fails with `room runtime close state is uncertain` on Windows when the just-interrupted Agent process briefly still holds the reviewer worktree handle; reviewer worktree removal now retries for a short grace window while the OS releases the handle.
 - Stable Room projections now preserve streaming and durable message DOM identity, while explicit peer mentions no longer get lost behind generic stop markers or bypass terminal review controls and compiled-workflow sequencing.
@@ -42,7 +46,7 @@
 - Workflow approval parsing distinguishes approval from negation, the first completed plan is revision `1`, intermediate `DONE` signals advance instead of terminating the sequence, failed current stages reopen safely on retry, Claude restores its configured role after plan-only stages, `discuss` compiles consistently with the public model, and explicitly addressed messages retain ordinary routing during an active workflow.
 - Natural workflow state advances the Store schema to `8`, so older binaries reject event logs containing the new durable `workflow.updated` projection.
 - Redacted provider inspection no longer returns raw custom arguments or URL credentials, and Codex provider header values are projected through environment variables instead of command arguments.
-- Room View composer target picker (`@Driver`/`@Reviewer`/`@All`/`@Claude`/`@Codex`) now exposes `aria-pressed` on each toggle, and the toast live region uses `polite` instead of `assertive` so success notices stop interrupting screen readers.
+- Room View composer target picker (`@Driver`/`@Reviewer`/`@Claude`/`@Codex`) now exposes `aria-pressed` on each toggle, and the toast live region uses `polite` instead of `assertive` so success notices stop interrupting screen readers.
 - Management Shell static dialogs (Project, Room, Rename, Binding, Confirm) now carry `aria-labelledby` pointing at their heading so screen readers announce each dialog's purpose when it opens, matching the command palette and Room image viewer.
 - Management Shell segmented controls (theme, density, Room open behavior) and the settings section nav now expose `aria-pressed` and a group `aria-label`, so the active option is announced instead of relying on the `active` class alone.
 - Management Shell Runtimes "最后活动" column no longer renders the Go zero timestamp (`0001-01-01`) as a nonsensical "1年1月1日" date; a never-active Runtime now shows "—" like other empty timestamps.

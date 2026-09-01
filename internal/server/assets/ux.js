@@ -469,7 +469,7 @@
 
   function improveSemantics() {
     participantsPanel.tabIndex = -1;
-    participantsPanel.setAttribute('aria-label', '参与者、讨论策略与工作区状态');
+    participantsPanel.setAttribute('aria-label', '参与者、轮次策略与工作区状态');
     inspectorPanel.tabIndex = -1;
     inspectorPanel.setAttribute('aria-label', '工作检查器');
     chatPanel.setAttribute('aria-label', '共享讨论房间');

@@ -1,7 +1,7 @@
 {
   "listen": "127.0.0.1:7332",
   "room_name": "Claude × Codex",
-  "routing_mode": "mentions",
+  "routing_mode": "turns",
   "max_agent_hops": 6,
   "stall_warning_seconds": 300,
   "auto_start": true,

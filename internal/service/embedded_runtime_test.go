@@ -50,7 +50,7 @@ func TestEmbeddedRuntimesIsolateRoomStateBindingsAndHTTPAuth(t *testing.T) {
 
 	factory := EmbeddedRuntimeFactory(registry, EmbeddedRuntimeConfig{
 		Mock:        true,
-		RoutingMode: model.RoutingManual,
+		RoutingMode: model.RoutingTurns,
 		Claude:      agent.Config{MockDelay: 10 * time.Millisecond},
 		Codex:       agent.Config{MockDelay: 10 * time.Millisecond},
 	})
@@ -250,7 +250,7 @@ func TestEmbeddedRuntimesIsolateRoomStateBindingsAndHTTPAuth(t *testing.T) {
 	eventsA, streamErrA := subscribeRuntimeEvents(t, streamCtx, runtimeA.URL(), tokenA, cursorA)
 	eventsB, streamErrB := subscribeRuntimeEvents(t, streamCtx, runtimeB.URL(), tokenB, cursorB)
 	const sseMarker = "sse-visible-only-in-room-a"
-	if _, err := runtimeA.engine.Send(ctx, room.SendRequest{Text: sseMarker}); err != nil {
+	if _, err := runtimeA.engine.Send(ctx, room.SendRequest{Text: sseMarker, To: []model.ActorID{model.ActorClaude}}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.NewTimer(2 * time.Second)
@@ -596,7 +596,7 @@ func TestEmbeddedRuntimeCloseTimeoutIsRetryableAndDoesNotInterruptTurn(t *testin
 	}
 	value, err := startEmbeddedRuntime(context.Background(), nil, project, durable, EmbeddedRuntimeConfig{
 		Mock:              true,
-		RoutingMode:       model.RoutingManual,
+		RoutingMode:       model.RoutingTurns,
 		Claude:            agent.Config{MockDelay: 250 * time.Millisecond},
 		Codex:             agent.Config{MockDelay: 250 * time.Millisecond},
 		DrainPollInterval: 2 * time.Millisecond,

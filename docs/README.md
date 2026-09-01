@@ -20,7 +20,7 @@
 ### 入门与日常使用
 
 - [快速上手](GETTING_STARTED.md)：从构建、Mock 到真实 Runtime 和后台 Service；
-- [核心概念](CONCEPTS.md)：Project、Room、Binding、Runtime、Turn、Delivery/Processing、角色与路由；
+- [核心概念](CONCEPTS.md)：Project、Room、Binding、Runtime、Turn、Delivery/Processing、角色与轮次接力；
 - [Multi-Project / Multi-Room Service](MULTI_ROOM_SERVICE.md)：Service 拓扑、Provisioning、容量、生命周期和恢复；
 - [Management Shell](MANAGEMENT_SHELL.md)：页面路由、操作、状态、能力和浏览器 Session/内存边界；
 - [富对话与图片](RICH_CONVERSATION.md)：Markdown、附件、原生多模态投递和安全限制。

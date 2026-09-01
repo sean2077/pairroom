@@ -278,6 +278,18 @@ PairRoom 不会静默退回 live writable tree。修复仓库状态或使用受�
 
 不要只看聊天气泡是否出现最终回复。
 
+### PairRoom 重启后，Room FIFO 中的消息没有自动继续
+
+这是预期的 fail-closed 行为。Room 级 Turn FIFO 不做跨进程命令重放；重启时尚未进入原生 Runtime 的消息会显示 `Delivery=skipped`、`Processing=cancelled`，详情包含 restart 原因。这样可以避免在提交边界不确定时重复执行写操作。
+
+处理方式：
+
+1. 检查消息是否确实未完成，以及仓库中是否已有部分副作用；
+2. 查看 Inspector、Git diff 和 vendor 原生记录；
+3. 使用该消息上的 **重试** 创建新的可审计消息，不要手工把旧状态改回 queued。
+
+取消同样区分边界：`Delivery=pending` 的 Room FIFO 项只取消自身；已经 `started`/`injected`/Adapter `queued` 的输入可能按整个 native Turn 取消，但不会删除尚未提交的 Room FIFO 后续项。
+
 ## `verify` 失败
 
 立即：

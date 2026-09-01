@@ -133,7 +133,7 @@
       if (pending.has('approvals')) renderApprovals();
       if (pending.has('created')) messageIDs.forEach(renderCreatedMessage);
       if (pending.has('messages')) messageIDs.forEach(renderMessage);
-      if (pending.has('delivery')) updateDeliveryHint();
+      if (pending.has('delivery')) { updateDeliveryHint(); renderTurnOwnerBar(); }
       if (pending.has('composer')) updateComposerAvailability();
     });
   }
@@ -327,6 +327,7 @@
     renderParticipants();
     renderWorkflow();
     updateDeliveryHint();
+    renderTurnOwnerBar();
     renderSettings();
     renderAttachmentStrip();
     updateComposerAvailability();
@@ -334,6 +335,49 @@
     renderActivity();
     renderApprovals();
     if (forceBottom || nearBottom) requestAnimationFrame(scrollBottom);
+  }
+
+  function renderTurnOwnerBar() {
+    const bar = $('turn-owner-bar');
+    if (!bar || !state.snapshot) return;
+    const messages = state.snapshot.messages || [];
+    const live = ['started', 'injected', 'queued'];
+    let owner = '';
+    for (const message of messages) {
+      const delivery = message.delivery || {};
+      const processing = message.processing || {};
+      for (const target of Object.keys(delivery)) {
+        if (live.includes(delivery[target]) && (processing[target] === 'working' || processing[target] === 'waiting')) {
+          owner = target;
+        }
+      }
+    }
+    let queued = 0;
+    for (const message of messages) {
+      const delivery = message.delivery || {};
+      const processing = message.processing || {};
+      for (const target of Object.keys(delivery)) {
+        if (delivery[target] === 'pending' && processing[target] === 'waiting' && target !== owner) {
+          queued += 1;
+        }
+      }
+    }
+    if (!owner && queued === 0) {
+      bar.classList.add('hidden');
+      bar.replaceChildren();
+      return;
+    }
+    bar.classList.remove('hidden');
+    const label = document.createElement('span');
+    label.className = 'turn-owner-label';
+    label.textContent = owner ? `当前轮次 · ${displayName(owner)}` : '空闲';
+    bar.replaceChildren(label);
+    if (queued > 0) {
+      const badge = document.createElement('span');
+      badge.className = 'turn-queue-count';
+      badge.textContent = `队列 ${queued}`;
+      bar.appendChild(badge);
+    }
   }
 
   function renderWorkflow() {
@@ -559,7 +603,6 @@
   }
 
   function renderSettings() {
-    $('routing-mode').value = state.snapshot.settings.routing_mode;
     $('max-hops').value = state.snapshot.settings.max_agent_hops;
     $('max-hops-value').value = state.snapshot.settings.max_agent_hops;
     const stall = Number(state.snapshot.settings.stall_warning_seconds ?? 300);
@@ -937,7 +980,9 @@
         cancelButton.dataset.cancelMessage = message.id;
         cancelButton.dataset.cancelTarget = target;
         cancelButton.textContent = `取消 ${displayName(target)}`;
-        cancelButton.title = '原生运行时可能按整个 Turn 或队列取消；受影响的消息会一并标记';
+        cancelButton.title = status === 'pending'
+          ? '该消息仍在 Room FIFO 中；只移除这一项，不会打断任何原生 Turn'
+          : '该输入已进入原生 Runtime；取消可能中断该参与者当前整个 Turn，但不会删除 Room FIFO 中尚未提交的后续消息';
         delivery.appendChild(cancelButton);
       }
     }
@@ -1787,12 +1832,12 @@
       await api('/api/v1/settings', {
         method: 'PUT',
         body: JSON.stringify({
-          routing_mode: $('routing-mode').value,
+          routing_mode: 'turns',
           max_agent_hops: Number($('max-hops').value),
           stall_warning_seconds: $('stall-disabled').checked ? -1 : Number($('stall-warning').value),
         }),
       });
-      toast('讨论策略已保存', 'success');
+      toast('轮次限制已保存', 'success');
     } catch (error) {
       toast(error.message, 'error');
     }
@@ -1962,16 +2007,15 @@
     if (target === 'driver' || target === 'reviewer') return [];
     if (target === 'claude') return ['claude'];
     if (target === 'codex') return ['codex'];
-    return ['claude', 'codex'];
+    return [];
   }
 
   function updateDeliveryHint() {
     const driver = currentDriver();
     const reviewer = currentReviewer();
     const labels = {
-      driver: driver ? `发送给当前 Driver · ${displayName(driver)}` : 'Driver 角色不唯一；发送给两个 Agent',
-      reviewer: reviewer ? `发送给当前 Reviewer · ${displayName(reviewer)}` : 'Reviewer 角色不唯一；发送给两个 Agent',
-      all: '发送给 Claude 与 Codex',
+      driver: driver ? `发送给当前 Driver · ${displayName(driver)}` : 'Driver 角色不唯一；请选择明确 Agent',
+      reviewer: reviewer ? `发送给当前 Reviewer · ${displayName(reviewer)}` : 'Reviewer 角色不唯一；请选择明确 Agent',
       claude: '仅发送给 Claude',
       codex: '仅发送给 Codex',
     };
@@ -1979,7 +2023,7 @@
   }
 
   function setTarget(target) {
-    if (!['driver', 'reviewer', 'all', 'claude', 'codex'].includes(target)) target = 'driver';
+    if (!['driver', 'reviewer', 'claude', 'codex'].includes(target)) target = 'driver';
     state.selectedTarget = target;
     document.querySelectorAll('.target-button').forEach((button) => {
       const active = button.dataset.target === target;
@@ -2005,7 +2049,7 @@
       const draft = JSON.parse(localStorage.getItem(state.draftKey) || 'null');
       if (draft && typeof draft === 'object') {
         messageInput.value = String(draft.text || '');
-        if (['driver', 'reviewer', 'all', 'claude', 'codex'].includes(draft.target)) state.selectedTarget = draft.target;
+        if (['driver', 'reviewer', 'claude', 'codex'].includes(draft.target)) state.selectedTarget = draft.target;
         if (['append', 'next_turn', 'supersede'].includes(draft.intent)) $('message-intent').value = draft.intent;
       }
     } catch { localStorage.removeItem(state.draftKey); }

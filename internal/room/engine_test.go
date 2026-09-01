@@ -33,6 +33,7 @@ type fakeAdapter struct {
 	role          model.ParticipantRole
 	workspace     string
 	interrupts    int
+	onInterrupt   func()
 	stopErr       error
 }
 
@@ -96,7 +97,11 @@ func (f *fakeAdapter) Submit(ctx context.Context, input model.AgentInput) (model
 func (f *fakeAdapter) Interrupt(context.Context) error {
 	f.mu.Lock()
 	f.interrupts++
+	onInterrupt := f.onInterrupt
 	f.mu.Unlock()
+	if onInterrupt != nil {
+		onInterrupt()
+	}
 	return nil
 }
 func (f *fakeAdapter) Stop(context.Context) error {
@@ -153,6 +158,75 @@ func newTestEngine(t *testing.T, mode model.RoutingMode, dir string) (*Engine, m
 	}
 	t.Cleanup(func() { _ = engine.Close() })
 	return engine, adapters
+}
+
+func TestNewRejectsLegacyRoutingModes(t *testing.T) {
+	for _, mode := range []model.RoutingMode{"manual", "mentions", "roundtable"} {
+		t.Run(string(mode), func(t *testing.T) {
+			eventStore, err := store.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer eventStore.Close()
+
+			_, err = New(Config{
+				Name: "legacy-routing", Repo: t.TempDir(), Store: eventStore,
+				Settings: model.RoomSettings{RoutingMode: mode, MaxHops: 6, StallWarningSeconds: 300},
+			})
+			if err == nil {
+				t.Fatalf("legacy routing mode %q was accepted", mode)
+			}
+		})
+	}
+}
+
+func TestRestoreRejectsLegacyRoutingMode(t *testing.T) {
+	dir := t.TempDir()
+	eventStore, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := New(Config{
+		Name: "strict-routing", Repo: t.TempDir(), Store: eventStore,
+		Settings: model.DefaultRoomSettings(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	roomID := engine.Snapshot().Meta.ID
+	if err := engine.Close(); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+
+	appendStore, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := model.NewEvent(roomID, EventSettingsUpdated, model.ActorSystem, model.RoomSettings{
+		RoutingMode: model.RoutingMode("manual"), MaxHops: 6, StallWarningSeconds: 300,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := appendStore.Append(&event); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopenedStore, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopenedStore.Close()
+	_, err = New(Config{
+		Name: "strict-routing", Repo: t.TempDir(), Store: reopenedStore,
+		Settings: model.DefaultRoomSettings(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported routing mode") {
+		t.Fatalf("restore error = %v, want unsupported routing mode", err)
+	}
 }
 
 func receiveInput(t *testing.T, adapter *fakeAdapter) model.AgentInput {
@@ -232,7 +306,7 @@ func TestReviewerSnapshotRefreshesBeforeSafeDelivery(t *testing.T) {
 	}
 	engine, err := New(Config{
 		Name: "review-refresh", Repo: repo, Store: eventStore, Hub: bus.New(32),
-		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 4, StallWarningSeconds: 300},
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 4, StallWarningSeconds: 300},
 		ClaudeFactory: factory, CodexFactory: factory, Workspaces: workspaces,
 	})
 	if err != nil {
@@ -279,7 +353,7 @@ func TestReviewerRefreshSerializesConcurrentDriverSubmission(t *testing.T) {
 	}
 	engine, err := New(Config{
 		Name: "review-refresh-lock", Repo: repo, Store: eventStore, Hub: bus.New(32),
-		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 4, StallWarningSeconds: 300},
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 4, StallWarningSeconds: 300},
 		ClaudeFactory: factory, CodexFactory: factory, Workspaces: workspaces,
 	})
 	if err != nil {
@@ -309,6 +383,14 @@ func TestReviewerRefreshSerializesConcurrentDriverSubmission(t *testing.T) {
 	}
 	release()
 	_ = receiveInput(t, adapters[model.ActorCodex])
+	select {
+	case input := <-adapters[model.ActorClaude].submissions:
+		t.Fatalf("Driver started before Reviewer completed its turn: %#v", input)
+	case <-time.After(150 * time.Millisecond):
+	}
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorCodex, Kind: model.RuntimeTurnCompleted, TurnID: "review-turn", Name: "completed", CreatedAt: time.Now().UTC(),
+	})
 	_ = receiveInput(t, adapters[model.ActorClaude])
 }
 
@@ -338,7 +420,7 @@ func TestReviewerRefreshWaitsForConcurrentStartup(t *testing.T) {
 	}
 	engine, err := New(Config{
 		Name: "review-start-lock", Repo: repo, Store: eventStore, Hub: bus.New(32),
-		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 4, StallWarningSeconds: 300},
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 4, StallWarningSeconds: 300},
 		ClaudeFactory: factory, CodexFactory: factory, Workspaces: workspaces,
 	})
 	if err != nil {
@@ -379,7 +461,7 @@ func TestReviewerRefreshWaitsForConcurrentStartup(t *testing.T) {
 }
 
 func TestLifecycleLockAcquisitionHonorsContext(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	blocked := make(chan struct{})
 	release := make(chan struct{})
 	adapters[model.ActorCodex].beforeReturn = func(model.AgentInput) {
@@ -431,7 +513,7 @@ func TestSetRoleDoesNotRefreshUnchangedReviewerWorkspace(t *testing.T) {
 	}
 	engine, err := New(Config{
 		Name: "role-with-reviewer", Repo: repo, Store: eventStore, Hub: bus.New(32),
-		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 4, StallWarningSeconds: 300},
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 4, StallWarningSeconds: 300},
 		ClaudeFactory: factory, CodexFactory: factory, Workspaces: workspaces,
 	})
 	if err != nil {
@@ -451,7 +533,7 @@ func TestSetRoleDoesNotRefreshUnchangedReviewerWorkspace(t *testing.T) {
 }
 
 func TestSendPassesRoleAndRoutingContext(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	message, err := engine.Send(context.Background(), SendRequest{
 		Text: "@claude inspect this", To: []model.ActorID{model.ActorClaude},
 	})
@@ -462,13 +544,13 @@ func TestSendPassesRoleAndRoutingContext(t *testing.T) {
 	if input.MessageID != message.ID || input.From != model.ActorUser || input.To != model.ActorClaude {
 		t.Fatalf("unexpected delivery envelope: %#v", input)
 	}
-	if input.Role != model.RoleDriver || input.RoutingMode != model.RoutingMentions || input.MaxHops != 6 {
+	if input.Role != model.RoleDriver || input.RoutingMode != model.RoutingTurns || input.MaxHops != 6 {
 		t.Fatalf("missing room context: %#v", input)
 	}
 }
 
-func TestAgentMentionCreatesReplyAndRoutesPeer(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+func TestNextHandoffCreatesReplyAndWaitsForTurnCompletion(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Design the change", To: []model.ActorID{model.ActorClaude},
 	})
@@ -480,8 +562,16 @@ func TestAgentMentionCreatesReplyAndRoutesPeer(t *testing.T) {
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
 		TurnID: "turn-1", CorrelationID: incoming.ID,
-		Text:      "I propose an event log. @codex please challenge the failure modes.",
+		Text:      "I propose an event log.\n[PAIRROOM:HANDOFF]\nGoal: challenge the event-log design. Evidence: initial proposal complete. Risk: missed failure modes. Ask: inspect independently.\n[/PAIRROOM:HANDOFF]\n[PAIRROOM:NEXT]",
 		CreatedAt: time.Now().UTC(),
+	})
+	select {
+	case got := <-adapters[model.ActorCodex].submissions:
+		t.Fatalf("peer started before the active native turn completed: %#v", got)
+	case <-time.After(150 * time.Millisecond):
+	}
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "turn-1", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC(),
 	})
 	peerInput := receiveInput(t, adapters[model.ActorCodex])
 	if peerInput.From != model.ActorClaude || peerInput.ReplyTo != incoming.ID || peerInput.Hop != 1 {
@@ -495,8 +585,8 @@ func TestAgentMentionCreatesReplyAndRoutesPeer(t *testing.T) {
 	}
 }
 
-func TestAgentMentionInsideHandoffRoutesPeer(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+func TestPeerMentionInsideHandoffDoesNotRouteWithoutNext(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Investigate the change", To: []model.ActorID{model.ActorClaude},
 	})
@@ -512,14 +602,18 @@ func TestAgentMentionInsideHandoffRoutesPeer(t *testing.T) {
 		Text:      "Human-facing analysis is complete.\n[PAIRROOM:HANDOFF]\n" + handoff + "\n[/PAIRROOM:HANDOFF]",
 		CreatedAt: time.Now().UTC(),
 	})
-	peerInput := receiveInput(t, adapters[model.ActorCodex])
-	if !strings.Contains(peerInput.Text, handoff) || strings.Contains(peerInput.Text, "Human-facing analysis") {
-		t.Fatalf("handoff mention did not produce compact peer delivery: %#v", peerInput)
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "turn-handoff-mention", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC(),
+	})
+	select {
+	case peerInput := <-adapters[model.ActorCodex].submissions:
+		t.Fatalf("plain mention started a peer turn without NEXT: %#v", peerInput)
+	case <-time.After(150 * time.Millisecond):
 	}
 }
 
 func TestSendWithoutTargetUsesSingleDriver(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	message, err := engine.Send(context.Background(), SendRequest{Text: "Inspect the current change"})
 	if err != nil {
 		t.Fatal(err)
@@ -537,8 +631,57 @@ func TestSendWithoutTargetUsesSingleDriver(t *testing.T) {
 	}
 }
 
+func TestSendRejectsMultipleAgentRecipients(t *testing.T) {
+	engine, _ := newTestEngine(t, model.RoutingTurns, "")
+	_, err := engine.Send(context.Background(), SendRequest{
+		Text: "Run in parallel", To: []model.ActorID{model.ActorClaude, model.ActorCodex},
+	})
+	if err == nil || !strings.Contains(err.Error(), "one Agent recipient") {
+		t.Fatalf("multi-recipient send error = %v, want turn-by-turn rejection", err)
+	}
+}
+
+func TestRuntimeErrorWaitsForReliableTurnBoundary(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
+	first, err := engine.Send(context.Background(), SendRequest{Text: "Start", To: []model.ActorID{model.ActorCodex}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorCodex])
+	waitForProcessingState(t, engine, first.ID, model.ActorCodex, model.ProcessingWorking)
+	second, err := engine.Send(context.Background(), SendRequest{Text: "Follow up", To: []model.ActorID{model.ActorClaude}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-adapters[model.ActorClaude].submissions:
+		t.Fatalf("queued peer started before current turn ended: %#v", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorCodex, Kind: model.RuntimeError, CorrelationID: first.ID,
+		TurnID: "turn-with-diagnostic", Text: "recoverable mid-turn error", CreatedAt: time.Now().UTC(),
+	})
+	select {
+	case got := <-adapters[model.ActorClaude].submissions:
+		t.Fatalf("diagnostic error released the active owner: %#v", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if got := findMessage(t, engine.Snapshot(), first.ID).Processing[model.ActorCodex]; got != model.ProcessingWorking {
+		t.Fatalf("diagnostic error settled active input as %q", got)
+	}
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorCodex, Kind: model.RuntimeTurnCompleted, CorrelationID: first.ID,
+		TurnID: "turn-with-diagnostic", Name: "failed", CreatedAt: time.Now().UTC(),
+	})
+	if got := receiveInput(t, adapters[model.ActorClaude]); got.MessageID != second.ID {
+		t.Fatalf("wrong queued message started after terminal boundary: %#v", got)
+	}
+	waitForProcessingState(t, engine, first.ID, model.ActorCodex, model.ProcessingFailed)
+}
+
 func TestSendRoleTargetIsResolvedAtomicallyByServer(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	message, err := engine.Send(context.Background(), SendRequest{Text: "Review this", TargetRole: model.RoleReviewer})
 	if err != nil {
 		t.Fatal(err)
@@ -557,7 +700,7 @@ func TestSendRoleTargetIsResolvedAtomicallyByServer(t *testing.T) {
 }
 
 func TestSendRoleTargetFollowsCompletedDriverSwitch(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	if err := engine.SwitchDriver(context.Background(), model.ActorCodex); err != nil {
 		t.Fatal(err)
 	}
@@ -574,7 +717,7 @@ func TestSendRoleTargetFollowsCompletedDriverSwitch(t *testing.T) {
 }
 
 func TestReplyWithoutExplicitTargetUsesAgentBeingRepliedTo(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{Text: "Review this", To: []model.ActorID{model.ActorCodex}})
 	if err != nil {
 		t.Fatal(err)
@@ -603,7 +746,7 @@ func TestReplyWithoutExplicitTargetUsesAgentBeingRepliedTo(t *testing.T) {
 }
 
 func TestStagedHandoffUsesCompactPeerContext(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Implement the fix", To: []model.ActorID{model.ActorClaude},
 	})
@@ -618,9 +761,10 @@ func TestStagedHandoffUsesCompactPeerContext(t *testing.T) {
 		TurnID: "turn-implemented", CorrelationID: incoming.ID,
 		Text: "Implementation complete. Verbose human report stays in the room.\n\n" +
 			"[PAIRROOM:HANDOFF]\n" + handoff + "\n[/PAIRROOM:HANDOFF]\n" +
-			"[PAIRROOM:IMPLEMENTED]",
+			"[PAIRROOM:NEXT]",
 		CreatedAt: time.Now().UTC(),
 	})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "turn-implemented", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC()})
 	peerInput := receiveInput(t, adapters[model.ActorCodex])
 	if !strings.Contains(peerInput.Text, handoff) {
 		t.Fatalf("peer input omitted compact handoff: %q", peerInput.Text)
@@ -639,8 +783,8 @@ func TestStagedHandoffUsesCompactPeerContext(t *testing.T) {
 	}
 }
 
-func TestStagedHandoffWithoutVisibleProseIsPersistedAndDelivered(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+func TestNextHandoffWithoutVisibleProseIsPersistedAndDelivered(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Implement the fix", To: []model.ActorID{model.ActorClaude},
 	})
@@ -653,9 +797,10 @@ func TestStagedHandoffWithoutVisibleProseIsPersistedAndDelivered(t *testing.T) {
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
 		TurnID: "turn-handoff-only", CorrelationID: incoming.ID,
-		Text:      "[PAIRROOM:HANDOFF]\n" + handoff + "\n[/PAIRROOM:HANDOFF]\n[PAIRROOM:IMPLEMENTED]",
+		Text:      "[PAIRROOM:HANDOFF]\n" + handoff + "\n[/PAIRROOM:HANDOFF]\n[PAIRROOM:NEXT]",
 		CreatedAt: time.Now().UTC(),
 	})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "turn-handoff-only", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC()})
 	input := receiveInput(t, adapters[model.ActorCodex])
 	if !strings.Contains(input.Text, handoff) {
 		t.Fatalf("handoff-only final was not delivered: %#v", input)
@@ -666,8 +811,8 @@ func TestStagedHandoffWithoutVisibleProseIsPersistedAndDelivered(t *testing.T) {
 	}
 }
 
-func TestReviewChangesMarkerReturnsToDriver(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+func TestNextMarkerReturnsToDriver(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Review the implementation", To: []model.ActorID{model.ActorCodex},
 	})
@@ -679,17 +824,18 @@ func TestReviewChangesMarkerReturnsToDriver(t *testing.T) {
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorCodex, Kind: model.RuntimeFinal,
 		TurnID: "turn-review", CorrelationID: incoming.ID,
-		Text:      "One blocking issue remains.\n[PAIRROOM:HANDOFF]\nFix the stale completion race and rerun the room tests.\n[/PAIRROOM:HANDOFF]\n[PAIRROOM:REVIEW_CHANGES]",
+		Text:      "One blocking issue remains.\n[PAIRROOM:HANDOFF]\nFix the stale completion race and rerun the room tests.\n[/PAIRROOM:HANDOFF]\n[PAIRROOM:NEXT]",
 		CreatedAt: time.Now().UTC(),
 	})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorCodex, Kind: model.RuntimeTurnCompleted, TurnID: "turn-review", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC()})
 	input := receiveInput(t, adapters[model.ActorClaude])
 	if !strings.Contains(input.Text, "stale completion race") {
 		t.Fatalf("Driver did not receive reviewer change request: %q", input.Text)
 	}
 }
 
-func TestHumanDecisionSuppressesStagedHandoff(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+func TestHumanDecisionSuppressesNextHandoff(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Implement the ambiguous change", To: []model.ActorID{model.ActorClaude},
 	})
@@ -701,7 +847,7 @@ func TestHumanDecisionSuppressesStagedHandoff(t *testing.T) {
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
 		TurnID: "turn-needs-human", CorrelationID: incoming.ID,
-		Text:      "@human choose the compatibility policy before review.\n[PAIRROOM:IMPLEMENTED]",
+		Text:      "@human choose the compatibility policy before review.\n[PAIRROOM:NEXT]",
 		CreatedAt: time.Now().UTC(),
 	})
 	select {
@@ -711,8 +857,8 @@ func TestHumanDecisionSuppressesStagedHandoff(t *testing.T) {
 	}
 }
 
-func TestStagedHandoffRequiresUsablePacket(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+func TestNextHandoffRequiresUsablePacket(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Implement the fix", To: []model.ActorID{model.ActorClaude},
 	})
@@ -724,7 +870,7 @@ func TestStagedHandoffRequiresUsablePacket(t *testing.T) {
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
 		TurnID: "turn-no-evidence", CorrelationID: incoming.ID,
-		Text: "Implemented.\n[PAIRROOM:IMPLEMENTED]", CreatedAt: time.Now().UTC(),
+		Text: "Implemented.\n[PAIRROOM:NEXT]", CreatedAt: time.Now().UTC(),
 	})
 	select {
 	case input := <-adapters[model.ActorCodex].submissions:
@@ -733,8 +879,8 @@ func TestStagedHandoffRequiresUsablePacket(t *testing.T) {
 	}
 }
 
-func TestNewHumanMessageInSameThreadSuppressesStaleRoundtableHandoff(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingRoundtable, "")
+func TestNewHumanMessageInSameThreadSuppressesStaleHandoff(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	first, err := engine.Send(context.Background(), SendRequest{Text: "First direction", To: []model.ActorID{model.ActorClaude}})
 	if err != nil {
 		t.Fatal(err)
@@ -760,7 +906,7 @@ func TestNewHumanMessageInSameThreadSuppressesStaleRoundtableHandoff(t *testing.
 }
 
 func TestNewUnthreadedAppendToSameAgentSuppressesStaleHandoff(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingRoundtable, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	first, err := engine.Send(context.Background(), SendRequest{Text: "First direction", To: []model.ActorID{model.ActorClaude}})
 	if err != nil {
 		t.Fatal(err)
@@ -783,8 +929,8 @@ func TestNewUnthreadedAppendToSameAgentSuppressesStaleHandoff(t *testing.T) {
 	}
 }
 
-func TestExplicitMentionSurvivesNewerAppendAndGenericStop(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+func TestExplicitMentionDoesNotOverrideTurnControl(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	first, err := engine.Send(context.Background(), SendRequest{Text: "First direction", To: []model.ActorID{model.ActorClaude}})
 	if err != nil {
 		t.Fatal(err)
@@ -800,14 +946,16 @@ func TestExplicitMentionSurvivesNewerAppendAndGenericStop(t *testing.T) {
 		CorrelationID: first.ID, TurnID: "explicit-peer", Text: "Plan is ready. @codex review the evidence.\n[PAIRROOM:DONE]",
 		CreatedAt: time.Now().UTC(),
 	})
-	got := receiveInput(t, adapters[model.ActorCodex])
-	if got.From != model.ActorClaude || !strings.Contains(got.Text, "review the evidence") {
-		t.Fatalf("explicit peer mention was swallowed: %#v", got)
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "explicit-peer", CorrelationID: first.ID, Name: "completed", CreatedAt: time.Now().UTC()})
+	select {
+	case got := <-adapters[model.ActorCodex].submissions:
+		t.Fatalf("plain peer mention overrode DONE: %#v", got)
+	case <-time.After(150 * time.Millisecond):
 	}
 }
 
-func TestExplicitMentionCannotOverrideReviewApproval(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+func TestExplicitMentionCannotOverrideDone(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{Text: "Review boundary", To: []model.ActorID{model.ActorCodex}})
 	if err != nil {
 		t.Fatal(err)
@@ -816,7 +964,7 @@ func TestExplicitMentionCannotOverrideReviewApproval(t *testing.T) {
 
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorCodex, Kind: model.RuntimeFinal, CorrelationID: incoming.ID,
-		TurnID: "review-approved", Text: "Approved. @claude no further changes are needed.\n[PAIRROOM:REVIEW_APPROVED]",
+		TurnID: "review-approved", Text: "Approved. @claude no further changes are needed.\n[PAIRROOM:DONE]",
 		CreatedAt: time.Now().UTC(),
 	})
 	select {
@@ -826,8 +974,8 @@ func TestExplicitMentionCannotOverrideReviewApproval(t *testing.T) {
 	}
 }
 
-func TestInactiveWorkflowMetadataDoesNotSwallowExplicitMention(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+func TestInactiveWorkflowMetadataDoesNotRestoreMentionRouting(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	workflow, ok := compileWorkflow("Claude plan, Codex review")
 	if !ok {
 		t.Fatal("expected workflow to compile")
@@ -850,57 +998,74 @@ func TestInactiveWorkflowMetadataDoesNotSwallowExplicitMention(t *testing.T) {
 		CorrelationID: incoming.ID, TurnID: "stale-workflow-final", Text: "The old workflow is gone. @codex inspect this independently.",
 		CreatedAt: time.Now().UTC(),
 	})
-	got := receiveInput(t, adapters[model.ActorCodex])
-	if got.WorkflowID != "" || got.From != model.ActorClaude {
-		t.Fatalf("inactive workflow poisoned ordinary mention routing: %#v", got)
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "stale-workflow-final", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC()})
+	select {
+	case got := <-adapters[model.ActorCodex].submissions:
+		t.Fatalf("inactive workflow restored free-chat mention routing: %#v", got)
+	case <-time.After(150 * time.Millisecond):
 	}
 }
 
 func TestExplicitNextTurnInOtherThreadDoesNotSuppressHandoff(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingRoundtable, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	first, err := engine.Send(context.Background(), SendRequest{Text: "First task", To: []model.ActorID{model.ActorClaude}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = receiveInput(t, adapters[model.ActorClaude])
-	if _, err := engine.Send(context.Background(), SendRequest{
+	second, err := engine.Send(context.Background(), SendRequest{
 		Text: "Independent task", To: []model.ActorID{model.ActorClaude}, Intent: model.IntentNextTurn,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
+	select {
+	case got := <-adapters[model.ActorClaude].submissions:
+		t.Fatalf("next_turn started before the active turn completed: %#v", got)
+	case <-time.After(100 * time.Millisecond):
+	}
 
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
-		CorrelationID: first.ID, TurnID: "first-task", Text: "First task result",
+		CorrelationID: first.ID, TurnID: "first-task", Text: "First task result\n[PAIRROOM:HANDOFF]\nGoal: continue the first task. Evidence: first result complete. Risk: independent task must remain separate. Ask: verify the result.\n[/PAIRROOM:HANDOFF]\n[PAIRROOM:NEXT]",
 		CreatedAt: time.Now().UTC(),
 	})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "first-task", CorrelationID: first.ID, Name: "completed", CreatedAt: time.Now().UTC()})
+	queued := receiveInput(t, adapters[model.ActorClaude])
+	if queued.MessageID != second.ID {
+		t.Fatalf("first queued next turn = %#v, want %s", queued, second.ID)
+	}
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "independent-task", CorrelationID: second.ID, Name: "completed", CreatedAt: time.Now().UTC()})
 	got := receiveInput(t, adapters[model.ActorCodex])
 	if got.ReplyTo != first.ID || got.ThreadID != first.ThreadID {
 		t.Fatalf("independent thread incorrectly invalidated handoff: %#v", got)
 	}
 }
 
-func TestControlMarkersAndHopLimitStopRoundtable(t *testing.T) {
-	clean, control := stripControl("Done with evidence.\n[PAIRROOM:CONSENSUS]")
-	if clean != "Done with evidence." || control != "CONSENSUS" || !stopsConversation(control) {
+func TestControlMarkersAndTurnLimitGateNextHandoff(t *testing.T) {
+	clean, control := stripControl("Done with evidence.\n[PAIRROOM:DONE]")
+	if clean != "Done with evidence." || control != "DONE" || !stopsConversation(control) {
 		t.Fatalf("unexpected control parsing: clean=%q control=%q", clean, control)
 	}
-	if stopsConversation("CONTINUE") {
-		t.Fatal("CONTINUE must not stop a roundtable")
+	if stopsConversation("NEXT") {
+		t.Fatal("NEXT must request another turn")
 	}
-	_, ambiguous := stripControl("done\n[PAIRROOM:IMPLEMENTED]\n[PAIRROOM:REVIEW_APPROVED]")
+	_, ambiguous := stripControl("done\n[PAIRROOM:NEXT]\n[PAIRROOM:DONE]")
 	if ambiguous != "AMBIGUOUS" || !stopsConversation(ambiguous) {
 		t.Fatalf("conflicting controls must fail closed, got %q", ambiguous)
 	}
 
-	engine, _ := newTestEngine(t, model.RoutingRoundtable, "")
-	settings := model.RoomSettings{RoutingMode: model.RoutingRoundtable, MaxHops: 3}
-	if targets := engine.agentTargets(model.ActorClaude, "continue", "", "", 3, 1, 1, settings); len(targets) != 0 {
+	engine, _ := newTestEngine(t, model.RoutingTurns, "")
+	settings := model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 3}
+	handoff := "Goal: verify the next turn. Evidence: current analysis complete. Risk: one open edge case. Ask: inspect independently."
+	if targets := engine.agentTargets(model.ActorClaude, "continue", handoff, "NEXT", 3, 1, 1, settings); len(targets) != 0 {
 		t.Fatalf("hop limit must stop routing: %v", targets)
 	}
-	if targets := engine.agentTargets(model.ActorClaude, "continue", "", "", 2, 1, 1, settings); len(targets) != 1 || targets[0] != model.ActorCodex {
-		t.Fatalf("roundtable should route to peer before limit: %v", targets)
+	if targets := engine.agentTargets(model.ActorClaude, "continue", handoff, "NEXT", 2, 1, 1, settings); len(targets) != 1 || targets[0] != model.ActorCodex {
+		t.Fatalf("NEXT should route to peer before the turn limit: %v", targets)
+	}
+	if targets := engine.agentTargets(model.ActorClaude, "@codex continue", handoff, "", 2, 1, 1, settings); len(targets) != 0 {
+		t.Fatalf("plain mention must not route a peer turn: %v", targets)
 	}
 }
 
@@ -917,7 +1082,7 @@ func TestCompactHandoffRespectsDurableLimit(t *testing.T) {
 
 func TestSessionIDsSurviveRoomRestartButRuntimeStateDoesNot(t *testing.T) {
 	dir := t.TempDir()
-	engine, _ := newTestEngine(t, model.RoutingMentions, dir)
+	engine, _ := newTestEngine(t, model.RoutingTurns, dir)
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorClaude, Kind: model.RuntimeSession,
 		SessionID: "claude-session-123", CreatedAt: time.Now().UTC(),
@@ -963,7 +1128,7 @@ func waitForDeliveryState(t *testing.T, engine *Engine, messageID string, target
 }
 
 func TestDeliveryFailureIsTerminalAndLateStateIsNotPublished(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	message, err := engine.Send(context.Background(), SendRequest{
 		Text: "inspect", To: []model.ActorID{model.ActorClaude},
 	})
@@ -1000,7 +1165,7 @@ func TestDeliveryFailureIsTerminalAndLateStateIsNotPublished(t *testing.T) {
 }
 
 func TestTransientRuntimeEventIsLiveButNotPersisted(t *testing.T) {
-	engine, _ := newTestEngine(t, model.RoutingManual, "")
+	engine, _ := newTestEngine(t, model.RoutingTurns, "")
 	ch, cancel := engine.Subscribe()
 	defer cancel()
 	before := engine.Snapshot().LatestSeq
@@ -1140,7 +1305,7 @@ func waitForProcessingState(t *testing.T, engine *Engine, messageID string, targ
 }
 
 func TestDeliveryFallbackDoesNotOverwriteNativeProcessingCorrelation(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	adapter := adapters[model.ActorCodex]
 	adapter.beforeReturn = func(input model.AgentInput) {
 		adapter.sink(model.RuntimeEvent{
@@ -1167,7 +1332,7 @@ func TestDeliveryFallbackDoesNotOverwriteNativeProcessingCorrelation(t *testing.
 }
 
 func TestRuntimeFailurePreservesAcceptedDeliveryAndMarksProcessingFailed(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	message, err := engine.Send(context.Background(), SendRequest{
 		Text: "inspect", To: []model.ActorID{model.ActorCodex},
 	})
@@ -1183,7 +1348,7 @@ func TestRuntimeFailurePreservesAcceptedDeliveryAndMarksProcessingFailed(t *test
 		CreatedAt: time.Now().UTC(),
 	})
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorCodex, Kind: model.RuntimeError,
+		Agent: model.ActorCodex, Kind: model.RuntimeInputFailed,
 		CorrelationID: message.ID, TurnID: "turn-1", Text: "native turn failed",
 		CreatedAt: time.Now().UTC(),
 	})
@@ -1199,16 +1364,14 @@ func TestRuntimeFailurePreservesAcceptedDeliveryAndMarksProcessingFailed(t *test
 }
 
 func TestRetryCreatesNewAuditableMessageForFailedTarget(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	original, err := engine.Send(context.Background(), SendRequest{
-		Text: "review", To: []model.ActorID{model.ActorClaude, model.ActorCodex},
+		Text: "review", To: []model.ActorID{model.ActorCodex},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
 	_ = receiveInput(t, adapters[model.ActorCodex])
-	waitForDeliveryState(t, engine, original.ID, model.ActorClaude, model.DeliveryStarted)
 	waitForDeliveryState(t, engine, original.ID, model.ActorCodex, model.DeliveryStarted)
 
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
@@ -1240,7 +1403,7 @@ func TestRetryCreatesNewAuditableMessageForFailedTarget(t *testing.T) {
 }
 
 func TestRetryPreservesCompactPeerHandoff(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	now := time.Now().UTC()
 	original := model.Message{
 		ID: model.NewID("msg"), From: model.ActorClaude, To: []model.ActorID{model.ActorCodex},
@@ -1270,7 +1433,7 @@ func TestRetryPreservesCompactPeerHandoff(t *testing.T) {
 
 func TestRestartCancelsInFlightProcessing(t *testing.T) {
 	dir := t.TempDir()
-	engine, adapters := newTestEngine(t, model.RoutingManual, dir)
+	engine, adapters := newTestEngine(t, model.RoutingTurns, dir)
 	message, err := engine.Send(context.Background(), SendRequest{
 		Text: "long-running", To: []model.ActorID{model.ActorClaude},
 	})
@@ -1314,7 +1477,7 @@ func TestRestartCancelsInFlightProcessing(t *testing.T) {
 }
 
 func TestRuntimeInfoProjectionIsDeepCloned(t *testing.T) {
-	engine, _ := newTestEngine(t, model.RoutingManual, "")
+	engine, _ := newTestEngine(t, model.RoutingTurns, "")
 	info := model.RuntimeInfo{
 		Available: true, Version: "2.1.231", Protocol: "claude-stream-json",
 		Capabilities: []string{"stream-json"}, Warnings: []string{"test warning"},
@@ -1341,7 +1504,7 @@ func TestRuntimeInfoProjectionIsDeepCloned(t *testing.T) {
 }
 
 func TestStopAgentCancelsInFlightMessagesAndExpiresApprovals(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	message, err := engine.Send(context.Background(), SendRequest{
 		Text: "keep working", To: []model.ActorID{model.ActorCodex},
 	})
@@ -1388,7 +1551,7 @@ func TestStopAgentCancelsInFlightMessagesAndExpiresApprovals(t *testing.T) {
 }
 
 func TestSubmitFailureSettlesDeliveryAndProcessing(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	adapters[model.ActorClaude].submitErr = errors.New("native input rejected")
 
 	message, err := engine.Send(context.Background(), SendRequest{
@@ -1441,7 +1604,7 @@ func newAttachmentEngine(t *testing.T, media AttachmentStore) (*Engine, map[mode
 	}
 	engine, err := New(Config{
 		Name: "media", Repo: t.TempDir(), Store: eventStore, Hub: bus.New(64),
-		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 4, StallWarningSeconds: 300},
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 4, StallWarningSeconds: 300},
 		ClaudeFactory: factory, CodexFactory: factory, Attachments: media,
 	})
 	if err != nil {
@@ -1514,7 +1677,7 @@ func TestAgentFinalImportsSafeImagePreviewIntoSharedRoom(t *testing.T) {
 }
 
 func TestSwitchDriverAppliesNativeRoleBeforeFutureTurns(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	if err := engine.SwitchDriver(context.Background(), model.ActorCodex); err != nil {
 		t.Fatal(err)
 	}
@@ -1532,26 +1695,31 @@ func TestSwitchDriverAppliesNativeRoleBeforeFutureTurns(t *testing.T) {
 		t.Fatalf("native role policies were not applied: claude=%q codex=%q", claudeRole, codexRole)
 	}
 
-	_, err := engine.Send(context.Background(), SendRequest{Text: "Compare", To: []model.ActorID{model.ActorClaude, model.ActorCodex}})
+	claudeMessage, err := engine.Send(context.Background(), SendRequest{Text: "Compare as reviewer", To: []model.ActorID{model.ActorClaude}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := receiveInput(t, adapters[model.ActorClaude]).Role; got != model.RoleReviewer {
 		t.Fatalf("Claude turn role = %q", got)
 	}
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "role-claude", CorrelationID: claudeMessage.ID, Name: "completed", CreatedAt: time.Now().UTC()})
+	_, err = engine.Send(context.Background(), SendRequest{Text: "Compare as driver", To: []model.ActorID{model.ActorCodex}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := receiveInput(t, adapters[model.ActorCodex]).Role; got != model.RoleDriver {
 		t.Fatalf("Codex turn role = %q", got)
 	}
 }
 
-func TestRuntimeErrorExpiresConnectionLocalApproval(t *testing.T) {
-	engine, _ := newTestEngine(t, model.RoutingManual, "")
+func TestRuntimeErrorDoesNotExpireConnectionLocalApprovalBeforeBoundary(t *testing.T) {
+	engine, _ := newTestEngine(t, model.RoutingTurns, "")
 	approval := model.Approval{
 		ID: model.NewID("approval"), Agent: model.ActorClaude, Kind: "claude.toolApproval",
 		Title: "Use Bash", Status: "pending", RequestedAt: time.Now().UTC(),
 	}
 	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeApprovalRequested, Approval: &approval, CreatedAt: time.Now().UTC()})
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeError, Text: "native process exited", CreatedAt: time.Now().UTC()})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeError, Text: "recoverable diagnostic", CreatedAt: time.Now().UTC()})
 	var got *model.Approval
 	for _, value := range engine.Snapshot().Approvals {
 		if value.ID == approval.ID {
@@ -1559,13 +1727,28 @@ func TestRuntimeErrorExpiresConnectionLocalApproval(t *testing.T) {
 			got = &copy
 		}
 	}
-	if got == nil || got.Status != "expired" || got.Decision != "runtime_error" {
-		t.Fatalf("runtime error left stale approval pending: %#v", got)
+	if got == nil || got.Status != "pending" {
+		t.Fatalf("diagnostic runtime error expired an active approval: %#v", got)
+	}
+
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted,
+		TurnID: "turn-with-approval", Name: "process_exited", CreatedAt: time.Now().UTC(),
+	})
+	got = nil
+	for _, value := range engine.Snapshot().Approvals {
+		if value.ID == approval.ID {
+			copy := value
+			got = &copy
+		}
+	}
+	if got == nil || got.Status != "expired" || got.Decision != "turn_completed" {
+		t.Fatalf("terminal boundary left stale approval pending: %#v", got)
 	}
 }
 
 func TestSupersedeMarksOldInputAndCarriesIntent(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	first, err := engine.Send(context.Background(), SendRequest{
 		Text: "old instruction", To: []model.ActorID{model.ActorCodex},
 	})
@@ -1597,8 +1780,8 @@ func TestSupersedeMarksOldInputAndCarriesIntent(t *testing.T) {
 	}
 }
 
-func TestCancelMessageMarksParticipantQueue(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+func TestCancelActiveMessagePreservesRoomQueuedNextTurn(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	first, err := engine.Send(context.Background(), SendRequest{Text: "one", To: []model.ActorID{model.ActorClaude}})
 	if err != nil {
 		t.Fatal(err)
@@ -1608,19 +1791,121 @@ func TestCancelMessageMarksParticipantQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = receiveInput(t, adapters[model.ActorClaude])
-	_ = receiveInput(t, adapters[model.ActorClaude])
 	waitForProcessingState(t, engine, first.ID, model.ActorClaude, model.ProcessingWorking)
-	waitForProcessingState(t, engine, second.ID, model.ActorClaude, model.ProcessingWorking)
+	waitForProcessingState(t, engine, second.ID, model.ActorClaude, model.ProcessingWaiting)
+	adapters[model.ActorClaude].mu.Lock()
+	adapters[model.ActorClaude].onInterrupt = func() {
+		engine.HandleRuntimeEvent(model.RuntimeEvent{
+			Agent: model.ActorClaude, Kind: model.RuntimeInputCancelled,
+			TurnID: "cancelled-turn", CorrelationID: first.ID, Text: "interrupted by user", CreatedAt: time.Now().UTC(),
+		})
+		engine.HandleRuntimeEvent(model.RuntimeEvent{
+			Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted,
+			TurnID: "cancelled-turn", CorrelationID: first.ID, Name: "cancelled", CreatedAt: time.Now().UTC(),
+		})
+		// Give an incorrectly unlocked scheduler enough time to submit the next
+		// FIFO item before Interrupt returns and exposes the cancellation race.
+		time.Sleep(50 * time.Millisecond)
+	}
+	adapters[model.ActorClaude].mu.Unlock()
 	if err := engine.CancelMessage(context.Background(), first.ID, model.ActorClaude); err != nil {
 		t.Fatal(err)
 	}
 	waitForProcessingState(t, engine, first.ID, model.ActorClaude, model.ProcessingCancelled)
-	waitForProcessingState(t, engine, second.ID, model.ActorClaude, model.ProcessingCancelled)
+	if got := receiveInput(t, adapters[model.ActorClaude]); got.MessageID != second.ID {
+		t.Fatalf("preserved next turn did not start after cancellation boundary: %#v", got)
+	}
+	waitForProcessingState(t, engine, second.ID, model.ActorClaude, model.ProcessingWorking)
+	adapters[model.ActorClaude].mu.Lock()
+	interrupts := adapters[model.ActorClaude].interrupts
+	adapters[model.ActorClaude].mu.Unlock()
+	if interrupts != 1 {
+		t.Fatalf("active native turn interrupts = %d, want 1", interrupts)
+	}
+}
+
+func TestCancelReservedPendingDeliveryPreventsNativeSubmission(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
+	now := time.Now().UTC()
+	message := model.Message{
+		ID: model.NewID("msg"), From: model.ActorUser, To: []model.ActorID{model.ActorClaude},
+		Text: "reserved but not submitted", ThreadID: model.NewID("thread"), CreatedAt: now,
+		Delivery:                map[model.ActorID]model.DeliveryState{model.ActorClaude: model.DeliveryPending},
+		Processing:              map[model.ActorID]model.ProcessingState{model.ActorClaude: model.ProcessingWaiting},
+		ProcessingLastUpdatedAt: map[model.ActorID]time.Time{model.ActorClaude: now},
+	}
+	if _, err := engine.record(EventMessageCreated, model.ActorUser, message); err != nil {
+		t.Fatal(err)
+	}
+	engine.turnMu.Lock()
+	engine.turnOwner = model.ActorClaude
+	engine.turnSubmitting = 1
+	engine.turnBoundarySeen = false
+	engine.turnMu.Unlock()
+
+	if err := engine.CancelMessage(context.Background(), message.ID, model.ActorClaude); err != nil {
+		t.Fatal(err)
+	}
+	got := findMessage(t, engine.Snapshot(), message.ID)
+	if got.Delivery[model.ActorClaude] != model.DeliverySkipped || got.Processing[model.ActorClaude] != model.ProcessingCancelled {
+		t.Fatalf("reserved pending cancellation = delivery %q processing %q", got.Delivery[model.ActorClaude], got.Processing[model.ActorClaude])
+	}
+	engine.runScheduledDelivery(context.Background(), message, model.ActorClaude)
+	select {
+	case submitted := <-adapters[model.ActorClaude].submissions:
+		t.Fatalf("cancelled reserved delivery reached native adapter: %#v", submitted)
+	case <-time.After(100 * time.Millisecond):
+	}
+	adapters[model.ActorClaude].mu.Lock()
+	interrupts := adapters[model.ActorClaude].interrupts
+	adapters[model.ActorClaude].mu.Unlock()
+	if interrupts != 0 {
+		t.Fatalf("reserved pending cancellation interrupted runtime %d times", interrupts)
+	}
+}
+
+func TestCancelRoomQueuedPeerMessageDoesNotInterruptRuntime(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
+	first, err := engine.Send(context.Background(), SendRequest{Text: "one", To: []model.ActorID{model.ActorClaude}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+	queued, err := engine.Send(context.Background(), SendRequest{Text: "peer follow-up", To: []model.ActorID{model.ActorCodex}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForProcessingState(t, engine, queued.ID, model.ActorCodex, model.ProcessingWaiting)
+
+	if err := engine.CancelMessage(context.Background(), queued.ID, model.ActorCodex); err != nil {
+		t.Fatal(err)
+	}
+	waitForProcessingState(t, engine, queued.ID, model.ActorCodex, model.ProcessingCancelled)
+	got := findMessage(t, engine.Snapshot(), queued.ID)
+	if got.Delivery[model.ActorCodex] != model.DeliverySkipped {
+		t.Fatalf("Room-queued cancellation delivery = %q, want skipped", got.Delivery[model.ActorCodex])
+	}
+	adapters[model.ActorCodex].mu.Lock()
+	interrupts := adapters[model.ActorCodex].interrupts
+	adapters[model.ActorCodex].mu.Unlock()
+	if interrupts != 0 {
+		t.Fatalf("cancelling Room queue interrupted Codex %d times", interrupts)
+	}
+
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted,
+		TurnID: "first-turn", CorrelationID: first.ID, Name: "completed", CreatedAt: time.Now().UTC(),
+	})
+	select {
+	case submitted := <-adapters[model.ActorCodex].submissions:
+		t.Fatalf("cancelled Room-queued peer message was submitted: %#v", submitted)
+	case <-time.After(100 * time.Millisecond):
+	}
 }
 
 func TestTurnSummaryPersistsAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
-	engine, adapters := newTestEngine(t, model.RoutingManual, dir)
+	engine, adapters := newTestEngine(t, model.RoutingTurns, dir)
 	message, err := engine.Send(context.Background(), SendRequest{
 		Text: "inspect and verify", To: []model.ActorID{model.ActorClaude},
 	})
@@ -1687,7 +1972,7 @@ func TestTurnSummaryPersistsAcrossRestart(t *testing.T) {
 }
 
 func TestTurnSummaryBoundsHighVolumeDetail(t *testing.T) {
-	engine, _ := newTestEngine(t, model.RoutingManual, "")
+	engine, _ := newTestEngine(t, model.RoutingTurns, "")
 	started := time.Now().UTC()
 	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorCodex, Kind: model.RuntimeTurnStarted, TurnID: "bounded", CreatedAt: started})
 	payload := strings.Repeat("x", 20<<10)
@@ -1700,7 +1985,7 @@ func TestTurnSummaryBoundsHighVolumeDetail(t *testing.T) {
 }
 
 func TestWindowedSnapshotAndMessagesPage(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	for i := 0; i < 12; i++ {
 		message, err := engine.Send(context.Background(), SendRequest{
 			Text: fmt.Sprintf("message-%02d", i), To: []model.ActorID{model.ActorClaude},
@@ -1928,7 +2213,7 @@ func TestAcceptedInputMaterializesFreshNativeSession(t *testing.T) {
 	}
 	engine, err := New(Config{
 		Name: "materialize", Repo: t.TempDir(), Store: eventStore,
-		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 2},
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 2},
 		ClaudeFactory: factory, CodexFactory: factory,
 		OnSessionMaterialized: func(_ context.Context, actor model.ActorID, sessionID string) error {
 			materialized <- struct {
@@ -1997,7 +2282,7 @@ func TestEngineCloseReportsAllResourceErrors(t *testing.T) {
 	}
 	engine, err := New(Config{
 		Name: "close-errors", Repo: t.TempDir(), Store: eventStore, Hub: bus.New(8),
-		Settings:      model.RoomSettings{RoutingMode: model.RoutingMentions, MaxHops: 2},
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 2},
 		ClaudeFactory: factory, CodexFactory: factory,
 		Workspaces: &closeErrorWorkspace{err: cleanup},
 	})

@@ -7,17 +7,17 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 )
 
-func TestProtocolVersionMatchesNaturalWorkflowContract(t *testing.T) {
-	if Version != "pairroom-protocol/v3" {
-		t.Fatalf("protocol version = %q, want pairroom-protocol/v3", Version)
+func TestProtocolVersionMatchesTurnRelayContract(t *testing.T) {
+	if Version != "pairroom-protocol/v4" {
+		t.Fatalf("protocol version = %q, want pairroom-protocol/v4", Version)
 	}
 }
 
-func TestResolveFiltersRoleAndRoutingRules(t *testing.T) {
+func TestResolveFiltersRoleWithTurnRouting(t *testing.T) {
 	contract, err := Resolve(Selection{
 		Actor:       model.ActorCodex,
 		Role:        model.RoleReviewer,
-		RoutingMode: model.RoutingRoundtable,
+		RoutingMode: model.RoutingTurns,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -27,24 +27,21 @@ func TestResolveFiltersRoleAndRoutingRules(t *testing.T) {
 		Version,
 		"actor: codex",
 		"role: reviewer",
-		"routing_mode: roundtable",
+		"routing_mode: turns",
 		"[authority.human]",
-		"[collaboration.selective]",
-		"[context.handoff]",
+		"[delivery.single-turn]",
+		"[delivery.next]",
+		"[delivery.stop]",
 		"[workflow.natural]",
 		"[workflow.gate]",
-		"Use @claude only",
 		"[role.reviewer]",
-		"[routing.roundtable]",
-		"[PAIRROOM:IMPLEMENTED]",
-		"[PAIRROOM:REVIEW_CHANGES]",
-		"[PAIRROOM:REVIEW_APPROVED]",
+		"HANDOFF + NEXT",
 	} {
 		if !strings.Contains(got, fragment) {
 			t.Fatalf("contract missing %q:\n%s", fragment, got)
 		}
 	}
-	for _, fragment := range []string{"[role.driver]", "[role.peer]", "[routing.manual]", "[routing.mentions]"} {
+	for _, fragment := range []string{"[role.driver]", "[role.peer]"} {
 		if strings.Contains(got, fragment) {
 			t.Fatalf("filtered contract unexpectedly contains %q:\n%s", fragment, got)
 		}
@@ -65,7 +62,7 @@ func TestResolveWithoutFiltersIsCompleteAndDeterministic(t *testing.T) {
 	}
 	for _, fragment := range []string{
 		"[role.driver]", "[role.reviewer]", "[role.peer]",
-		"[routing.manual]", "[routing.mentions]", "[routing.roundtable]",
+		"[delivery.single-turn]", "[delivery.next]", "[delivery.stop]",
 	} {
 		if !strings.Contains(first.Text(), fragment) {
 			t.Fatalf("complete contract missing %q", fragment)
@@ -78,6 +75,9 @@ func TestResolveRejectsInvalidSelection(t *testing.T) {
 		{Actor: model.ActorID("other")},
 		{Role: model.ParticipantRole("observer")},
 		{RoutingMode: model.RoutingMode("automatic")},
+		{RoutingMode: model.RoutingMode("manual")},
+		{RoutingMode: model.RoutingMode("mentions")},
+		{RoutingMode: model.RoutingMode("roundtable")},
 	} {
 		if _, err := Resolve(selection); err == nil {
 			t.Fatalf("Resolve(%+v) succeeded", selection)

@@ -50,7 +50,7 @@ func TestBootstrapPromptUsesVersionedContractAndStaysCompact(t *testing.T) {
 		if len([]byte(got)) > MaxBootstrapBytes {
 			t.Fatalf("%s bootstrap = %d bytes, budget = %d:\n%s", actor, len([]byte(got)), MaxBootstrapBytes, got)
 		}
-		for _, fragment := range []string{protocol.Version, "pairroom protocol --actor " + string(actor), "current_role", "Ask the peer only", "[PAIRROOM:HANDOFF]", "[PAIRROOM:IMPLEMENTED]", "[PAIRROOM:REVIEW_CHANGES]"} {
+		for _, fragment := range []string{protocol.Version, "pairroom protocol --actor " + string(actor), "current_role", "single active turn", "[PAIRROOM:HANDOFF]", "[PAIRROOM:NEXT]", "[PAIRROOM:DONE]"} {
 			if !strings.Contains(got, fragment) {
 				t.Fatalf("%s bootstrap missing %q:\n%s", actor, fragment, got)
 			}
@@ -71,14 +71,14 @@ func TestEnvelopeCarriesOnlyRuntimeAndRoutingContext(t *testing.T) {
 		MessageID: "msg-0123456789abcdef01234567", ThreadID: "thread-0123456789abcdef01234567", Hop: 2,
 		From: model.ActorClaude, To: model.ActorCodex,
 		Text: "Inspect the race", ReplyTo: "msg-0123456789abcdef01234567",
-		Role: model.RoleReviewer, RoutingMode: model.RoutingRoundtable, MaxHops: 6, Intent: model.IntentSupersede,
+		Role: model.RoleReviewer, RoutingMode: model.RoutingTurns, MaxHops: 6, Intent: model.IntentSupersede,
 		WorkflowID: "workflow-0123456789abcdef01234567", WorkflowStage: 2, WorkflowMode: model.WorkflowAudit,
 	}
 	got := Envelope(input)
 	for _, fragment := range []string{
 		"protocol: " + protocol.Version,
 		"message_id: msg-0123456789abcdef01234567", "thread_id: thread-0123456789abcdef01234567", "from: claude", "to: codex",
-		"reply_to: msg-0123456789abcdef01234567", "current_role: reviewer", "delivery_intent: supersede", "routing_mode: roundtable",
+		"reply_to: msg-0123456789abcdef01234567", "current_role: reviewer", "delivery_intent: supersede", "turn_policy: turns",
 		"workflow_id: workflow-0123456789abcdef01234567", "workflow_stage: 3", "workflow_mode: audit",
 		"remaining_agent_hops: 4", "Inspect the race",
 	} {
@@ -86,7 +86,7 @@ func TestEnvelopeCarriesOnlyRuntimeAndRoutingContext(t *testing.T) {
 			t.Fatalf("Envelope() missing %q:\n%s", fragment, got)
 		}
 	}
-	for _, fragment := range []string{"role_rule:", "Do not modify files", "[PAIRROOM:CONSENSUS]", "Keep the shared-room answer"} {
+	for _, fragment := range []string{"role_rule:", "Do not modify files", "[PAIRROOM:NEXT]", "Keep the shared-room answer"} {
 		if strings.Contains(got, fragment) {
 			t.Fatalf("Envelope() repeated stable contract prose %q:\n%s", fragment, got)
 		}

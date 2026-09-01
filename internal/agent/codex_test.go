@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -421,6 +422,31 @@ func TestCodexPlanDeltaUsesCurrentNotificationAndMessageCorrelation(t *testing.T
 	}
 }
 
+func TestCodexErrorNotificationIsNonTerminalDiagnostic(t *testing.T) {
+	var events []model.RuntimeEvent
+	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) {
+		events = append(events, event)
+	})
+	adapter.state = model.StateWorking
+	adapter.currentTurn = "turn-active"
+	adapter.turnInputs["turn-active"] = []model.AgentInput{{MessageID: "msg-active"}}
+
+	adapter.handleNotification("error", json.RawMessage(`{
+		"message":"tool stream temporarily unavailable"
+	}`))
+
+	if len(events) != 1 {
+		t.Fatalf("error notification events = %#v", events)
+	}
+	event := events[0]
+	if event.Kind != model.RuntimeError || event.Name != "error" || event.TurnID != "turn-active" || event.CorrelationID != "msg-active" || event.Text != "tool stream temporarily unavailable" {
+		t.Fatalf("error notification became terminal: %#v", event)
+	}
+	if adapter.state != model.StateWorking || adapter.currentTurn != "turn-active" {
+		t.Fatalf("diagnostic error mutated active turn: state=%q turn=%q", adapter.state, adapter.currentTurn)
+	}
+}
+
 func TestCodexCompletedTurnSettlesEverySteeredInput(t *testing.T) {
 	var events []model.RuntimeEvent
 	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) {
@@ -482,6 +508,74 @@ func TestCodexFailedTurnFailsQueuedInputs(t *testing.T) {
 	}
 	if len(adapter.queued) != 0 {
 		t.Fatalf("queued bookkeeping was not drained: %#v", adapter.queued)
+	}
+}
+
+func TestCodexProcessExitEmitsBoundaryAfterOutstandingInputsFail(t *testing.T) {
+	var events []model.RuntimeEvent
+	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) {
+		events = append(events, event)
+	})
+	adapter.state = model.StateWorking
+	adapter.currentTurn = "turn-active"
+	adapter.turnInputs["turn-active"] = []model.AgentInput{{MessageID: "msg-active"}}
+	adapter.queued = []model.AgentInput{{MessageID: "msg-queued"}}
+
+	adapter.handleUnexpectedProcessExit(errors.New("exit status 1"))
+
+	failed := map[string]bool{}
+	lastFailure := -1
+	boundary := -1
+	for i, event := range events {
+		switch event.Kind {
+		case model.RuntimeInputFailed:
+			failed[event.CorrelationID] = true
+			lastFailure = i
+			if event.CorrelationID == "msg-active" && event.TurnID != "turn-active" {
+				t.Fatalf("active process-exit failure lost turn correlation: %#v", event)
+			}
+		case model.RuntimeTurnCompleted:
+			if boundary >= 0 {
+				t.Fatalf("multiple process-exit boundaries: %#v", events)
+			}
+			boundary = i
+			if event.TurnID != "turn-active" || event.CorrelationID != "msg-active" || event.Name != "process_exited" {
+				t.Fatalf("unexpected process-exit boundary: %#v", event)
+			}
+		}
+	}
+	if !failed["msg-active"] || !failed["msg-queued"] {
+		t.Fatalf("process exit did not settle every outstanding input: %#v", events)
+	}
+	if boundary <= lastFailure {
+		t.Fatalf("process-exit boundary must follow input settlement: failures=%d boundary=%d events=%#v", lastFailure, boundary, events)
+	}
+	if adapter.state != model.StateError || adapter.currentTurn != "" || len(adapter.turnInputs) != 0 || len(adapter.queued) != 0 {
+		t.Fatalf("process exit left stale adapter state: state=%q turn=%q inputs=%#v queued=%#v", adapter.state, adapter.currentTurn, adapter.turnInputs, adapter.queued)
+	}
+}
+
+func TestCodexProcessExitClosesUntrackedActiveTurn(t *testing.T) {
+	var events []model.RuntimeEvent
+	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) {
+		events = append(events, event)
+	})
+	adapter.state = model.StateWorking
+	adapter.currentTurn = "turn-untracked"
+
+	adapter.handleUnexpectedProcessExit(nil)
+
+	var boundaries []model.RuntimeEvent
+	for _, event := range events {
+		if event.Kind == model.RuntimeTurnCompleted {
+			boundaries = append(boundaries, event)
+		}
+	}
+	if len(boundaries) != 1 || boundaries[0].TurnID != "turn-untracked" || boundaries[0].Name != "process_exited" {
+		t.Fatalf("untracked active turn did not receive process-exit boundary: %#v", events)
+	}
+	if adapter.state != model.StateError || adapter.currentTurn != "" {
+		t.Fatalf("active process exit left stale adapter state: state=%q turn=%q", adapter.state, adapter.currentTurn)
 	}
 }
 

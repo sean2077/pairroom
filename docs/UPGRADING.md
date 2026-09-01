@@ -34,11 +34,21 @@ pairroom daemon status
 - daemon 完整安装参数、二进制路径与日志路径；
 - Vendor CLI version；
 - 关键 Project/Room/Binding；
-- 当前 Runtime policy 与 routing。
+- 当前 Runtime policy 与 turn policy。
 
-## 3. 升级前备份
+## 3. 先移除旧路由配置
 
-### 3.1 停止写入
+本版本不提供 `manual`、`mentions`、`roundtable` 到 `turns` 的兼容或自动迁移。升级前必须：
+
+1. 把 JSON 配置、daemon 安装参数和启动脚本中的路由值显式改为 `turns`；
+2. 对仍包含旧 `room.settings.updated` 路由值的 Room 完成备份后重建；新版本会拒绝恢复这类 Event Store，不会静默改写历史事件；
+3. 使用 `pairroom service --mock --routing turns` 验证新配置后，再切换真实 Runtime。
+
+这是有意的 fail-fast 边界：旧配置不会被猜测、归一化或隐式延续。
+
+## 4. 升级前备份
+
+### 4.1 停止写入
 
 优先正常停止 Service/daemon，让 Management mutation 与活动 Turn 排空：
 
@@ -49,7 +59,7 @@ pairroom daemon stop
 
 不要在 Runtime 仍 active 时复制 `events.jsonl`。
 
-### 3.2 校验每个关键 Room
+### 4.2 校验每个关键 Room
 
 ```bash
 pairroom verify --data-dir /absolute/path/to/room --json
@@ -57,7 +67,7 @@ pairroom verify --data-dir /absolute/path/to/room --json
 
 如果 verify 失败，先保留原始副本和 diagnostics，不要用升级来“修复”未知损坏。
 
-### 3.3 创建自验证备份
+### 4.3 创建自验证备份
 
 ```bash
 pairroom backup \
@@ -67,20 +77,20 @@ pairroom backup \
 
 每个关键 Room 单独备份。把归档放到 data root、仓库和自动清理目录之外。
 
-### 3.4 保存 Service/daemon 配置
+### 4.4 保存 Service/daemon 配置
 
 `daemon install --force` 需要完整定义。记录：
 
 - `--data-root`、`--listen`、`--token`；
 - `--runtime-limit`、`--idle-timeout`、`--shutdown-timeout`；
-- routing、hop、stall warning；
+- turn policy、hop、stall warning；
 - Claude/Codex command/model/permission/sandbox；
 - proxy/PATH/work-dir；
 - log path、size、backup count。
 
 不要只保存一段局部命令。
 
-## 4. 升级二进制
+## 5. 升级二进制
 
 从源码：
 
@@ -98,7 +108,7 @@ pairroom version --json
 
 确认 shell 实际解析到的新路径。若 daemon 固定的是旧 binary path，即使 shell 中版本已更新，后台仍可能运行旧版本。
 
-## 5. 前台 Service 首次启动
+## 6. 前台 Service 首次启动
 
 建议先禁用自动启动 Agent：
 
@@ -127,7 +137,7 @@ pairroom doctor --repo /absolute/path/to/safe-test-repo --json
 
 最后在非关键 Room 做一次真实 Claude/Codex Turn。
 
-## 6. daemon 升级
+## 7. daemon 升级
 
 如果二进制内容或路径变化，停服后完整替换定义：
 
@@ -138,7 +148,7 @@ pairroom daemon install --force -- \
   --runtime-limit 4 \
   --idle-timeout 20m \
   --shutdown-timeout 10m \
-  --routing mentions
+  --routing turns
 ```
 
 随后：
@@ -153,7 +163,7 @@ pairroom daemon logs -n 200
 
 Linux user service 还应确认 linger 策略符合“退出登录后继续运行”的预期。
 
-## 7. Room Store 首次打开检查
+## 8. Room Store 首次打开检查
 
 对升级后第一个 Room，建议用兼容入口在不自动启动 Agent 的情况下检查：
 
@@ -177,13 +187,13 @@ pairroom serve \
 
 这一步不适合在同一时间让 Service 也打开该 Room；必须保持单写者。
 
-## 8. 从旧单 Room 迁移到 Service
+## 9. 从旧单 Room 迁移到 Service
 
-### 8.1 默认 Room 根
+### 9.1 默认 Room 根
 
 Service 首次启动会扫描默认 PairRoom Room 根，从 Event Logs 重建可识别的 Project/Room/Binding 索引；它不移动、复制或重写 Room 数据。
 
-### 8.2 自定义 `--data-dir`
+### 9.2 自定义 `--data-dir`
 
 自定义旧目录不会被全盘扫描。在 Management Shell 选择 Legacy Import，输入绝对路径。导入：
 
@@ -192,7 +202,7 @@ Service 首次启动会扫描默认 PairRoom Room 根，从 Event Logs 重建可
 - 从 Event Log 读取并登记已有 Session/Thread ID；缺失任一 ID 时保留为 pending；
 - 保留原 Room ID 与历史。
 
-### 8.3 Pending Binding
+### 9.3 Pending Binding
 
 旧 Room 缺少任一 Vendor ID 时标记 pending，无法激活。通过 Project detail 的 Binding completion：
 
@@ -201,11 +211,11 @@ Service 首次启动会扫描默认 PairRoom Room 根，从 Event Logs 重建可
 
 已存在 durable Binding 不可替换。不要为了消除 pending 手工修改 Event Log。
 
-### 8.4 Transcript boundary
+### 9.4 Transcript boundary
 
 Existing Binding 只恢复 Vendor 原生 context。绑定前 Vendor Transcript 不会导入 PairRoom 时间线，这是数据边界，不是迁移失败。
 
-## 9. 重要行为变化
+## 10. 重要行为变化
 
 从早期单 Room 版本到当前主线，关键变化包括：
 
@@ -220,7 +230,7 @@ Existing Binding 只恢复 Vendor 原生 context。绑定前 Vendor Transcript �
 - Service 支持多 Project/Room、Binding ownership、Runtime capacity 和 daemon；
 - Registry 是可重建 checkpoint，Room Event Log 是事实源。
 
-## 10. 数据目录中的持久与可重建内容
+## 11. 数据目录中的持久与可重建内容
 
 持久：
 
@@ -246,7 +256,7 @@ temporary uploads
 lock/cache/control files
 ```
 
-## 11. 回滚
+## 12. 回滚
 
 不要让旧二进制直接打开已被新版本写入的 data root/Room。
 
@@ -268,7 +278,7 @@ pairroom restore \
 
 未来 schema rejection 是有意保护。降低 metadata 中的 schema 数字不会删除新事件，只会制造无效投影。
 
-## 12. Registry 回滚
+## 13. Registry 回滚
 
 若问题只在 Registry checkpoint：
 
@@ -281,7 +291,7 @@ pairroom restore \
 
 不要从旧 checkpoint 覆盖已经提交的新 Room lifecycle/Binding 事件。
 
-## 13. 升级验收
+## 14. 升级验收
 
 - `version --json` 与预期 commit 一致；
 - daemon 实际运行同一 binary path；

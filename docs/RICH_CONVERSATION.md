@@ -15,7 +15,7 @@
 - 行内代码、粗体、斜体、删除线；
 - fenced code block、语言标签和复制按钮；
 - `http(s)` / `mailto` 链接；
-- `@claude`、`@codex`、`@all` 等 mention。
+- `@Driver`、`@Reviewer`、`@claude`、`@codex` 等单目标 mention。
 
 ### 会话操作
 

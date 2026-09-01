@@ -20,7 +20,7 @@ pairroom service \
   --runtime-limit 4 \
   --idle-timeout 20m \
   --shutdown-timeout 10m \
-  --routing mentions
+  --routing turns
 ```
 
 首次体验建议：

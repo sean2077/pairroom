@@ -113,7 +113,7 @@ Management Shell 不扫描磁盘，也不提供服务器路径浏览器；Projec
 ### 4.4 发送第一条消息
 
 ```text
-@all 请分别独立分析这个仓库的结构、风险和可改进点。先讨论，不修改文件。
+请先分析这个仓库的结构、风险和可改进点。先讨论，不修改文件；只有独立审查能改变结论时，才用 HANDOFF + NEXT 把下一轮交给 Reviewer。
 ```
 
 观察三个区域：
@@ -124,16 +124,15 @@ Management Shell 不扫描磁盘，也不提供服务器路径浏览器；Projec
 
 尝试引用回复、线程聚焦、图片上传和 `@claude` / `@codex` 单独指令。
 
-### 4.5 验证路由
+### 4.5 验证轮次接力
 
-默认 `mentions` 模式下，只有 Agent 最终回复显式提到 Peer 才自动继续。可以在 Room 设置或启动参数中尝试：
+Room 使用固定的 `turns` 策略：同一时刻只有一个 Agent 工作。发给另一 Agent 的消息会显示为 waiting，并在当前 native Turn 完成后启动；Agent 只有输出有效的 `HANDOFF + NEXT` 才能自主交棒。普通 `@peer` 文本不会继续会话。
 
 ```bash
-pairroom service --mock --routing manual
-pairroom service --mock --routing roundtable --max-hops 6
+pairroom service --mock --routing turns --max-hops 6
 ```
 
-用户新消息总是比旧自动接力优先。
+路由模式只接受 `turns`；`manual`、`mentions`、`roundtable` 会直接报错，不会迁移。升级旧配置时先显式改为 `turns`；包含旧路由事件的 Room 不会自动恢复，需要重建。用户新消息总是比旧自动接力优先。
 
 ## 5. 切换到真实 Runtime
 
@@ -162,13 +161,13 @@ pairroom service
 让 Reviewer 保持只读，先独立分析：
 
 ```text
-@all 请独立阅读任务和相关代码。Claude 负责提出最小实现方案；Codex 负责查找并发、恢复、安全和测试遗漏。没有共识前不要修改代码。
+Claude 先提出最小实现方案；Codex 下一轮独立检查并发、恢复、安全和测试遗漏。两轮都只读，遇到需要我决定的地方停下来询问。
 ```
 
-确认后：
+PairRoom 会把这类明确的 actor/action 序列编译为阶段，而不是同时启动两侧。确认方案后：
 
 ```text
-@claude 作为 Driver 实现已确认方案并运行测试。完成后 @codex 只读审查完整 diff，并列出必须修复项和建议项。
+Claude 执行已批准方案并运行测试；完成后 Codex 只读审查完整 diff；如有必须修复项，再把下一轮交回 Claude。
 ```
 
 真实模式首次使用应选择非关键仓库，并人工检查审批、命令、文件范围和 Diff。

@@ -12,7 +12,7 @@ import (
 
 func TestWriteProtocolText(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	err := writeProtocol([]string{"--actor", "codex", "--role", "reviewer", "--routing", "roundtable"}, &stdout, &stderr)
+	err := writeProtocol([]string{"--actor", "codex", "--role", "reviewer", "--routing", "turns"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,7 +20,8 @@ func TestWriteProtocolText(t *testing.T) {
 		protocol.Version,
 		"actor: codex",
 		"[role.reviewer]",
-		"[routing.roundtable]",
+		"[delivery.single-turn]",
+		"[delivery.next]",
 		"[PAIRROOM:DONE]",
 	} {
 		if !strings.Contains(stdout.String(), fragment) {
@@ -60,5 +61,12 @@ func TestWriteProtocolHelpAndValidation(t *testing.T) {
 	stderr.Reset()
 	if err := writeProtocol([]string{"--actor", "other"}, &stdout, &stderr); err == nil {
 		t.Fatal("invalid actor succeeded")
+	}
+	for _, mode := range []string{"manual", "mentions", "roundtable"} {
+		stdout.Reset()
+		stderr.Reset()
+		if err := writeProtocol([]string{"--routing", mode}, &stdout, &stderr); err == nil {
+			t.Fatalf("legacy routing mode %q succeeded", mode)
+		}
 	}
 }

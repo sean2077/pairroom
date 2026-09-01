@@ -26,8 +26,8 @@ system
   "thread_id": "thread-...",
   "hop": 0,
   "from": "user",
-  "to": ["claude", "codex"],
-  "text": "@all review this diagram",
+  "to": ["claude"],
+  "text": "Review this diagram; hand off only when independent peer work is needed",
   "handoff": "optional bounded peer context packet",
   "reply_to": "msg-...",
   "retry_of": "msg-...",
@@ -126,7 +126,7 @@ pending → skipped
 
 - `started`：新原生 Turn；
 - `injected`：Codex `turn/steer` 成功；
-- `queued`：Claude 或内部安全队列等待下一个 Turn；
+- `queued`：输入已经被原生 Adapter 接受，但在该 Adapter 的安全队列中等待下一个 Turn；Room 级 FIFO 尚未提交给 Adapter，因此仍保持 `Delivery=pending`；
 - `failed`：没有提交给 Harness；
 - `skipped`：重启或策略在提交前使消息作废。
 
@@ -250,7 +250,7 @@ log
 
 ```bash
 pairroom protocol
-pairroom protocol --actor codex --role reviewer --routing roundtable
+pairroom protocol --actor codex --role reviewer --routing turns
 pairroom protocol --json
 ```
 
@@ -258,11 +258,11 @@ pairroom protocol --json
 
 ```text
 [PairRoom message]
-protocol: pairroom-protocol/v3
+protocol: pairroom-protocol/v4
 message_id / thread_id / hop
 from / to / reply_to
 current_role / delivery_intent
-routing_mode / remaining_agent_hops
+turn_policy / remaining_agent_hops
 attachments
 message body
 ```
@@ -277,7 +277,7 @@ Goal / Scope / Evidence / Risks / Exact ask
 [/PAIRROOM:HANDOFF]
 ```
 
-Engine 从可见正文中移除该块，将其以有界 `Message.handoff` 持久化，并在普通 Agent→Peer 投递时优先发送 handoff 而不是完整最终报告；没有 handoff 时才使用有界正文回退。`mentions` 路由同时检查可见正文与 handoff。Driver 的 `[PAIRROOM:IMPLEMENTED]` 与 Reviewer 的 `[PAIRROOM:REVIEW_CHANGES]` 只有在 handoff 可用、角色匹配、非 `manual`、没有相关的新用户输入且未超过 hop budget 时才形成阶段交接；同线程输入以及未关联线程但发给同一 Agent 的 `append`/`supersede` 都属于相关输入，显式 `next_turn` 才是默认不使其他线程过期的独立任务。缺失 handoff 或存在冲突控制标记会 fail closed，`[PAIRROOM:REVIEW_APPROVED]` 停止。
+Engine 从可见正文中移除该块，将其以有界 `Message.handoff` 持久化，并在 Agent→Peer 投递时发送 handoff，而不是重复完整最终报告。只有 handoff 可用、控制标记为 `[PAIRROOM:NEXT]`、没有相关的新用户输入且未超过 Turn budget 时才创建下一条 peer 消息；普通 mention 不触发交棒。跨 Agent 输入与 `next_turn` 输入进入 Room 级队列，当前 native Turn 完成后才提交。缺失 handoff、冲突控制标记或 `[PAIRROOM:DONE|WAIT|BLOCKED]` 都会 fail closed。Agent 契约只识别 `NEXT`、`DONE`、`WAIT` 和 `BLOCKED`；旧 v3 标记不再被识别。
 
 ## 9. Claude control protocol
 
@@ -426,44 +426,48 @@ fragment 在交换后立即从地址栏移除；Token 不进入 URL query 或 We
 
 所有内置 Web listener 只接受数字 loopback 地址；远程浏览器通过 SSH 本地端口转发连接服务端 loopback listener。
 
-## 15. Routing
+## 15. Turn relay
 
-### Manual
-
-Agent final 只展示，不自动发送给 Peer。
-
-### Mentions
-
-Agent final 包含以下目标才自动路由：
+PairRoom 只使用 `turns` 策略。Room scheduler 在提交输入前同步保留 owner，因此两个并发用户请求也不能同时启动 Claude 与 Codex。
 
 ```text
-@claude
-@codex
-@peer
-@all
+no owner
+  → first single target owns the Room
+same target + append/supersede
+  → steer/inject/queue inside that Agent runtime
+other target OR next_turn
+  → Room FIFO queue
+authoritative turn.completed / confirmed process exit / explicit cancel-or-stop boundary
+  → release owner and start exactly one queued item
 ```
 
-### Roundtable
+`RuntimeError` 是诊断事件，不是 Turn terminal boundary。尤其是 Codex App Server 的通用 `error` notification 可能在 Turn 中途出现；PairRoom 只记录错误文本，保持当前 input 与 owner 不变，直到收到可靠的 `turn/completed`。若 vendor 进程退出，Adapter 必须先结算所有已知 input，再发出 `turn.completed(name=process_exited)`，随后才可报告 Runtime 错误状态。
 
-默认将 Agent final 发送给另一 Agent，除非：
+Room `turnQueue` 是有界于当前进程生命周期的调度状态，不是可重放命令日志。PairRoom 重启时，尚未进入原生 Runtime 的 `Delivery=pending` 项会被标为 `skipped`，对应 Processing 标为 `cancelled`；不会自动重放，避免无法判定是否已执行时造成重复副作用。用户检查原因后使用可审计的 Retry 创建新消息。
 
-- 达到 `max_agent_hops`；
-- 出现更晚的用户消息；
-- Agent 使用停止标记；
-- 目标不可用；
-- 输入提交失败。
+取消语义按边界区分：
 
-停止标记：
+- `Delivery=pending` 且仍在 Room FIFO：只移除该消息，不调用任何 Adapter Interrupt；
+- `started` / `injected` / Adapter `queued`：调用该参与者的原生 Interrupt。若供应商只能按整个 native Turn 取消，所有已经进入该 Turn/Adapter 队列的输入会一并结算；仍在 Room FIFO 的后续项保留。
+
+Agent 自主交棒需要：
 
 ```text
-[PAIRROOM:CONTINUE]
-[PAIRROOM:CONSENSUS]
+[PAIRROOM:HANDOFF]
+Goal / Scope / Evidence / Risks / Exact ask
+[/PAIRROOM:HANDOFF]
+[PAIRROOM:NEXT]
+```
+
+以下标记终止自动接力：
+
+```text
+[PAIRROOM:DONE]
 [PAIRROOM:WAIT]
 [PAIRROOM:BLOCKED]
-[PAIRROOM:DONE]
 ```
 
-标记从展示文本移除，但路由决策进入事件日志。
+普通 `@peer`/`@claude`/`@codex` 文本只保留在人类可见回答中，不构成机械投递指令。路由模式只接受 `turns`；旧 `manual`、`mentions`、`roundtable` 值会被拒绝，不做迁移。旧 v3 控制标记只为现有 Room 的平滑升级保留。
 
 ## 16. User precedence
 
@@ -530,6 +534,6 @@ Markdown/普通 JSON：
 额外包含 bounded/runtime event 数据，敏感度更高。
 
 
-## Natural workflow extension (pairroom-protocol/v3)
+## Natural workflow extension (introduced in pairroom-protocol/v3)
 
 When a message carries `workflow_id`, `workflow_stage`, and `workflow_mode`, the human explicitly supplied an actor/action sequence. PairRoom owns deterministic stage advancement and the plan-revision approval gate. Native agents own the work inside each stage. Plan, review, and audit are read-only; execute is the only write stage. Human questions must be visible in the shared Room with `@human` and `[PAIRROOM:WAIT]`.

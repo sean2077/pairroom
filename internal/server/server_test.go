@@ -44,7 +44,7 @@ func newTestServerWithOptions(t *testing.T, token, boundary, cookieName string) 
 	}
 	engine, err := room.New(room.Config{
 		Name: "test room", Repo: repo, Store: eventStore,
-		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 3},
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 3},
 		ClaudeFactory: agent.MockFactory, CodexFactory: agent.MockFactory,
 		ClaudeConfig: agent.Config{MockDelay: 5 * time.Millisecond},
 		CodexConfig:  agent.Config{MockDelay: 5 * time.Millisecond},
@@ -89,7 +89,7 @@ func TestHealthSnapshotAndMessageAPI(t *testing.T) {
 		t.Fatalf("health status = %d: %s", health.Code, health.Body.String())
 	}
 
-	body := bytes.NewBufferString(`{"text":"Review the design","to":["claude","codex"]}`)
+	body := bytes.NewBufferString(`{"text":"Review the design","to":["claude"]}`)
 	send := httptest.NewRecorder()
 	request := localRequest(http.MethodPost, "/api/v1/messages", body)
 	request.Header.Set("Content-Type", "application/json")

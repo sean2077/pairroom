@@ -221,7 +221,7 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 		cfg.RoutingMode = model.DefaultRoomSettings().RoutingMode
 	}
 	if !cfg.RoutingMode.Valid() {
-		return nil, fmt.Errorf("invalid routing mode %q", cfg.RoutingMode)
+		return nil, fmt.Errorf("invalid routing mode %q: only %q is supported", cfg.RoutingMode, model.RoutingTurns)
 	}
 	if cfg.MaxAgentHops == 0 {
 		cfg.MaxAgentHops = model.DefaultRoomSettings().MaxHops
