@@ -1055,6 +1055,23 @@ func TestControlMarkersAndTurnLimitGateNextHandoff(t *testing.T) {
 		t.Fatalf("conflicting controls must fail closed, got %q", ambiguous)
 	}
 
+	// A trailing marker without its own line — the form a native runtime emits
+	// when it appends the control signal to the final prose — must still be
+	// stripped, whether or not a space separates it from the preceding text.
+	clean, control = stripControl("Done with evidence. [PAIRROOM:DONE]")
+	if clean != "Done with evidence." || control != "DONE" {
+		t.Fatalf("trailing spaced marker must be stripped: clean=%q control=%q", clean, control)
+	}
+	clean, control = stripControl("Done with evidence.[PAIRROOM:DONE]")
+	if clean != "Done with evidence." || control != "DONE" {
+		t.Fatalf("trailing tight marker must be stripped: clean=%q control=%q", clean, control)
+	}
+	// A marker quoted mid-line as prose must be preserved.
+	clean, _ = stripControl("Use [PAIRROOM:DONE] to stop the turn")
+	if !strings.Contains(clean, "[PAIRROOM:DONE]") {
+		t.Fatalf("mid-line quoted marker must be preserved: clean=%q", clean)
+	}
+
 	engine, _ := newTestEngine(t, model.RoutingTurns, "")
 	settings := model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 3}
 	handoff := "Goal: verify the next turn. Evidence: current analysis complete. Risk: one open edge case. Ask: inspect independently."
