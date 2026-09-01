@@ -1,0 +1,27 @@
+version: '3'
+
+includes:
+  common: ./build/Taskfile.yml
+  windows: ./build/windows/Taskfile.yml
+  darwin: ./build/darwin/Taskfile.yml
+  linux: ./build/linux/Taskfile.yml
+
+vars:
+  APP_NAME: "PairRoom"
+  BIN_DIR: "bin"
+
+tasks:
+  build:
+    summary: Builds PairRoom Desktop for the host platform
+    cmds:
+      - task: "{{OS}}:build"
+
+  package:
+    summary: Packages PairRoom Desktop for the host platform
+    cmds:
+      - task: "{{OS}}:package"
+
+  run:
+    summary: Runs PairRoom Desktop
+    cmds:
+      - task: "{{OS}}:run"

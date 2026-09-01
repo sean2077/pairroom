@@ -1,0 +1,5 @@
+/bin/
+/dist/
+/build/darwin/
+/build/linux/
+/build/windows/

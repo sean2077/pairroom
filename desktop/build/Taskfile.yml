@@ -1,0 +1,35 @@
+version: '3'
+
+tasks:
+  go:mod:tidy:
+    summary: Resolves the isolated Wails module
+    internal: true
+    cmds:
+      - go mod tidy
+
+  build:frontend:
+    summary: Verifies the embedded startup shell
+    deps:
+      - task: go:mod:tidy
+    sources:
+      - frontend/**/*
+      - scripts/verify-assets.go
+    cmds:
+      - go run ./scripts/verify-assets.go
+
+  generate:icons:
+    summary: Generates native Windows and macOS icon files
+    dir: build
+    sources:
+      - appicon.png
+    generates:
+      - darwin/icons.icns
+      - windows/icon.ico
+    cmds:
+      - wails3 generate icons -input appicon.png -macfilename darwin/icons.icns -windowsfilename windows/icon.ico
+
+  update:build-assets:
+    summary: Refreshes Wails v3 platform packaging assets
+    dir: build
+    cmds:
+      - wails3 update build-assets -name "PairRoom" -binaryname "PairRoom" -config config.yml -dir .
