@@ -24,7 +24,7 @@ PairRoom is a local Go coordination layer for the official Claude Code and Codex
 - Keep every built-in Web listener restricted to numeric loopback addresses; reject wildcard, LAN, and hostname binds before opening repository or service state, and use SSH local port forwarding for remote access.
 - `pairroom service` is the current-working-directory-independent multi-Project/multi-Room control plane; `pairroom serve` remains the legacy single-Room compatibility entry point.
 - `pairroom daemon` installs and manages `pairroom service` through systemd, launchd, or Windows Task Scheduler; `daemon open` must validate the current authenticated numeric-loopback Management URL before opening it, normal stop/restart must preserve graceful active-Turn draining, and crash-stale `service.lock` recovery remains explicit.
-- Treat each Room Event Log as durable fact and `service-registry.json` as a rebuildable index; a `new` binding acquires global `(agent, vendor_session_id)` ownership only when its first accepted native Turn atomically materializes that identity, while `existing` bindings always resume exactly. Preserve the transcript-boundary and active-Turn non-preemption guarantees described in `docs/MULTI_ROOM_SERVICE.md`.
+- Treat each Room Event Log as durable fact and `service-registry.json` as a rebuildable index; a `new` binding acquires global `(agent, vendor_session_id)` ownership only when its first accepted native Turn atomically materializes that identity, while `existing` bindings always resume exactly. Preserve the transcript-boundary and active-Turn non-preemption guarantees described in `docs/ARCHITECTURE.md`.
 - Do not claim real Claude Code/Codex runtime E2E unless both official CLIs were installed, authenticated, and actually exercised; Mock verification is reported separately.
 - `VERSION`, `internal/version.Current`, the exact `vX.Y.Z` tag, and the canonical `CHANGELOG.md` heading `## [vX.Y.Z] — YYYY-MM-DD` must agree.
 - `.github/workflows/ci.yml` must retain the supported Linux amd64, Windows amd64, macOS arm64, and macOS amd64 binaries as uniquely named checksummed workflow artifacts, then re-download and verify the complete set before CI is green.
@@ -34,9 +34,9 @@ PairRoom is a local Go coordination layer for the official Claude Code and Codex
 
 - Architecture and source-of-truth boundaries: `docs/ARCHITECTURE.md`
 - Protocol and durable schema: `docs/PROTOCOL.md`
-- Multi-Project/multi-Room service boundaries: `docs/MULTI_ROOM_SERVICE.md`
-- Release acceptance: `docs/RELEASE_CHECKLIST.md`
-- Verified commands and native-runtime limits: `docs/VALIDATION.md`
+- Multi-Project/multi-Room service boundaries: `docs/ARCHITECTURE.md`
+- Release acceptance: Durable invariants below (`make release`, `VERSION`/`CHANGELOG`, `release.yml`)
+- Verified commands: `docs/CLI_REFERENCE.md`; native-runtime E2E limits: Durable invariants below
 
 <!-- agent-scaffold:start — managed; keep project prose outside; upgrade refreshes this block. -->
 ## Agent Harness (Claude Code + Codex)

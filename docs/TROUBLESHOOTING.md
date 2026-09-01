@@ -1,356 +1,56 @@
-# PairRoom 排障手册
+# Troubleshooting
 
-> [文档首页](README.md) · [CLI 参考](CLI_REFERENCE.md) · [运维](OPERATIONS.md) · [支持范围](../SUPPORT.md)
+## Agent 无法启动
 
-排障原则是先区分 PairRoom 控制面、Room 数据、Vendor Runtime、浏览器认证和仓库 Workspace。不要一开始就删除状态目录或重建 Binding。
+1. 在同一用户和仓库目录直接运行 `claude --version` / `codex --version`；
+2. 检查 executable、Provider、cwd、权限与 sandbox；
+3. 查看 participant `LastError` 和 Runtime info；
+4. 若配置了严格 session resume，确认 Binding 指向的原生 session 仍存在。
 
-## 先执行这组最小诊断
+PairRoom 不代替供应商 CLI 登录。
 
-```bash
-pairroom version --json
-pairroom doctor --repo /absolute/path/to/project --json
-pairroom daemon status
-pairroom daemon logs -n 200
-```
+## Turn 长时间没有输出
 
-已知 Room 数据目录时再执行：
+先看 Inspector / Turn card 是否存在长命令、审批或持续 tool activity。stall notice 只表示一段时间没有新 event，不会自动中断 Turn。
 
-```bash
-pairroom verify --data-dir /absolute/path/to/room --json
-pairroom diagnostics \
-  --data-dir /absolute/path/to/room \
-  --output pairroom-diagnostics.tar.gz
-```
+若确认卡死，按风险顺序选择 steering、interrupt、cancel 或 restart；不要同时向另一 Agent 强制提交，以免破坏 single-owner 边界。
 
-`doctor` 失败不影响 `--mock`。先用 Mock 判断问题属于 PairRoom 控制面/UI，还是 Vendor CLI/账号/网络。
+## Codex 出现 error，但仍显示工作中
 
-## `pairroom: command not found`
+generic Codex `error` 可能是 Turn 中途诊断。PairRoom 会记录它，但只有 `turn/completed`、明确 abort / cancellation 或确认 process exit 才释放 owner。若之后一直没有 terminal event，再按卡死流程处理。
 
-确认安装位置：
+## 发给 peer 的消息一直 Waiting
 
-```bash
-go env GOBIN
-go env GOPATH
-find "$(go env GOPATH)/bin" -maxdepth 1 -name 'pairroom*' -print
-```
+这是当前 Agent 仍持有 native Turn 时的预期行为。跨 Agent message 位于 Room FIFO，必须等待可靠 terminal boundary。普通 `@peer` 不会自动交棒；Agent 自动接力还需要有效 `HANDOFF` 与 `NEXT`。时间线上方的「当前轮次」条会显示持有 Turn 的 Agent 与队列深度，用于一眼判断是否在排队。
 
-重新安装到已在 `PATH` 的目录：
+## 重启后排队消息没有继续
 
-```bash
-make install GOBIN="$HOME/.local/bin"
-command -v pairroom
-```
+Room FIFO 是进程内状态，重启不会自动重放。检查目标仓库是否已发生副作用，然后对明确安全的失败 / 取消消息使用 Retry。不要手工把旧 message ID 改回 pending。
 
-Windows PowerShell：
+## 取消一条消息影响了整个 Turn
 
-```powershell
-Get-Command pairroom -ErrorAction SilentlyContinue
-$env:Path += ";$(go env GOPATH)\bin"
-```
+FIFO 中的消息可以精确取消；native runtime 已接受输入后，供应商的 interrupt 往往以整个 active Turn 为粒度。PairRoom 会保留无关 Room FIFO，但当前 Agent 同一 native Turn 内的多个输入可能一起终止。
 
-## `doctor` 找不到 Claude 或 Codex
+## Reviewer 看不到 Driver 最新文件
 
-1. 在同一个 shell 运行 `claude --version`、`codex --version`；
-2. 确认官方 CLI 已登录；
-3. daemon 场景检查安装时捕获的 PATH 是否包含两者；
-4. 使用绝对命令路径验证：
+Reviewer 使用隔离 snapshot。确认 review 是在 Driver Turn 完成后的新边界启动；角色切换或 snapshot refresh 失败时查看 system notice。不要让 Reviewer 与 Driver 同时写 live workspace。
 
-```bash
-pairroom doctor \
-  --repo /absolute/path/to/project \
-  --claude-command /absolute/path/to/claude \
-  --codex-command /absolute/path/to/codex
-```
+## UI 频繁刷新或滚动位置跳动
 
-前台可用而 daemon 不可用，通常是服务定义的 PATH/代理环境过期。用 `daemon install --force` 重新提交完整定义，而不是只 `restart`。
+确认使用当前构建，查看浏览器控制台与 SSE 重连。页面应批量合并高频 telemetry，而不是逐 token 重建全部 DOM；若 snapshot sequence 反复倒退，保存 Room ID 和 event sequence 报告问题。
 
-## Vendor CLI 存在，但协议检查失败
-
-PairRoom 跟随当前官方结构化接口，不解析终端 TUI。按顺序处理：
-
-1. 升级官方 Claude Code/Codex；
-2. 直接运行各 CLI，确认登录和基本命令可用；
-3. 再运行 `doctor --json`；
-4. 在非关键仓库复现一个最小真实 Turn；
-5. 同时用 `service --mock` 验证 PairRoom UI/状态机没有同样失败。
-
-不要通过修改 PairRoom 数据或跳过握手来“修复”协议问题。未知高权限请求必须继续 fail closed。
-
-## 浏览器没有自动打开
-
-使用 `--no-browser` 时这是预期行为。后台 daemon 应运行 `pairroom daemon open`；前台模式从终端复制完整 URL：
-
-```bash
-pairroom service --no-browser
-```
-
-确认本机有可用默认浏览器，并检查 terminal 输出中的 Management URL。不要只复制去掉 fragment 的 URL。
-
-## Management Shell 显示“缺少 Token”或 401
-
-Management Shell 的 bootstrap Token 只在启动 URL fragment 中出现一次，读入后立即换成当前 Service 的 HttpOnly Session Cookie；CSRF Token 只在页面内存中。刷新可恢复仍有效的会话，但 Service 重启、会话过期、注销、Cookie 被清理或新浏览器上下文会导致 401。
-
-处理方式：
-
-1. 已安装 daemon 先运行 `pairroom daemon open`，前台模式回到 `pairroom service` 启动输出或 daemon 日志；
-2. 重新打开完整 Management URL；
-3. 不要把 URL 发到 Issue 或聊天；
-4. 若自定义 `--token`，确认打开的是该进程打印的 URL，而不是旧书签。
-
-Management API 接受 `Authorization: Bearer ...` 或有效 browser session；Session 认证的 mutation 还需要 `X-PairRoom-CSRF`，query-string `?token=` 始终会被拒绝。
-
-## Room View 显示 unauthorized / CSRF 错误
-
-Room View 使用 fragment bootstrap 交换 HttpOnly Session Cookie，写操作需要 CSRF Token。
-
-1. 从 Management Shell 重新点击“打开”获取当前 Room URL；
-2. 不要复用另一个 Room 的 URL、Cookie、附件 ID 或 SSE cursor；
-3. 清理该 origin 的站点数据后重新打开完整 URL；
-4. 确认浏览器没有阻止同站 Cookie；
-5. 检查系统时间是否严重错误。
-
-若只读请求成功而写操作 403，优先检查页面是否来自当前进程、CSRF 会话是否过期、Origin/Host 是否被代理改写。
-
-## listener 被拒绝
-
-以下值会被拒绝：
-
-```text
-0.0.0.0:7332
-192.168.1.20:7332
-localhost:7332
-my-hostname:7332
-```
-
-使用：
-
-```bash
-pairroom service --listen 127.0.0.1:7332
-pairroom service --listen '[::1]:7332'
-```
-
-远程机器通过 SSH：
-
-```bash
-ssh -L 7332:127.0.0.1:7332 host-running-pairroom
-```
-
-不要为了“方便”把 listener 改成公网或 LAN 地址。
-
-## `address already in use`
-
-查找占用端口的进程：
-
-```bash
-lsof -nP -iTCP:7332 -sTCP:LISTEN
-# 或
-ss -ltnp | grep ':7332'
-```
-
-可能原因：
-
-- 已有前台 Service；
-- 已安装 daemon 正在运行；
-- 另一个应用占用端口；
-- 崩溃进程尚未真正退出。
-
-先执行 `pairroom daemon status`。确认不是同一数据根的旧 Service 后，可以选择其他 loopback 端口：
-
-```bash
-pairroom service --listen 127.0.0.1:7333
-```
-
-## Project 登记失败
-
-Management Shell 只接受绝对 Git worktree 路径。检查：
-
-```bash
-cd /absolute/path/to/project
-git rev-parse --show-toplevel
-git status --short
-```
+## Room 无法恢复
 
 常见原因：
 
-- 使用了相对路径；
-- 目录不是 Git worktree；
-- symlink 目标不可访问；
-- worktree 已经通过等价路径登记；
-- daemon 用户/当前用户对路径权限不同；
-- 可移动盘或网络盘已离线。
+- Event Log 损坏；
+- Room 含当前版本拒绝的旧 routing event；
+- Project path 已移动；
+- strict Binding session 不存在；
+- 备份不完整。
 
-Service 不会自动扫描或替你创建 Git 仓库。
+保留原始数据目录，先验证备份和首个 replay error。旧 routing Room 不自动迁移，应重建。
 
-## Room 无法激活，显示 pending Binding
+## 端口或 token 问题
 
-Legacy Room 缺少 Claude Session ID 或 Codex Thread ID 时会阻止激活。打开 Project 详情，使用专门的 Binding completion 操作：
-
-- 选择 `existing`：必须提供可精确恢复且未被其他 Room 占用的 ID；
-- 选择 `new`：记录 deferred Binding，在首个真实输入后 materialize。
-
-已持久化的 Binding 不能被替换。不要手工编辑 Event Log 或 Registry 伪造 ID。
-
-## Room 长时间 queued
-
-在 Management Shell 的 Runtimes 页面查看：
-
-- `runtime_limit`；
-- `runtime_capacity_used`；
-- 哪些 Runtime `busy`；
-- queue position；
-- 是否有 `failed` 且仍 `occupies_capacity` 的 Runtime。
-
-所有 slot 都有活动 Turn 时，排队是预期行为；PairRoom 不会为释放容量中断 Turn。可以：
-
-1. 等待活动 Turn 完成；
-2. 安全挂起 idle Runtime；
-3. 停止并以更高 `--runtime-limit` 重启 Service；
-4. 后台定义用 `daemon install --force` 重新提交完整参数。
-
-## 手动挂起返回 `409 Conflict`
-
-以下状态不能安全挂起：
-
-- Runtime 正在执行 Turn；
-- 正在 starting/stopping；
-- failed 但清理结果不确定、实例仍占用容量。
-
-409 是保护行为，不应通过强删目录或 Registry 绕过。先处理活动 Turn 或查看日志中的 cleanup diagnostic。
-
-## `service.lock` 已存在
-
-一个数据根只允许一个 Service owner。普通启动不会猜测 lock 是否 stale。
-
-1. 检查 daemon 和进程；
-2. 确认没有旧 Service 仍在运行；
-3. 确认使用的是预期 `--data-root`；
-4. 只有在旧进程确实消失后执行：
-
-```bash
-pairroom service --recover-stale-lock
-# 或后台定义
-pairroom daemon start --recover-stale-lock
-```
-
-在不确定时保留 lock 并先收集日志；错误删除可能让两个进程同时写同一 Registry/Room。
-
-## Reviewer snapshot 创建失败
-
-检查目标仓库：
-
-```bash
-git rev-parse HEAD
-git diff --binary HEAD
-git status --short
-```
-
-常见原因：
-
-- 没有可解析 HEAD；
-- dirty patch 无法应用到 detached snapshot；
-- untracked symlink；
-- symlink 逃逸；
-- 文件权限或磁盘空间问题；
-- 安全边界无法被证明。
-
-PairRoom 不会静默退回 live writable tree。修复仓库状态或使用受控的独立 worktree，不要关闭失败保护。
-
-## Agent 显示 working，但没有新事件
-
-1. 查看 Inspector 的最后 Runtime event；
-2. 查看是否有待审批；
-3. 检查 daemon 日志；
-4. 直接确认供应商 CLI/网络/账号；
-5. 只中断有问题的 participant；
-6. 必要时在安全边界重启该 Runtime。
-
-`--stall-warning-seconds` 只产生提醒，不会自动判断模型失败或终止 Turn。长命令、网络等待和供应商端延迟都可能暂时没有事件。
-
-## 消息状态看起来矛盾
-
-先区分 Delivery 与 Processing：
-
-- Delivery `started` + Processing `working`：输入已进入新 Turn，仍在处理；
-- Delivery `queued` + Processing `waiting`：等待安全边界；
-- Delivery 成功 + Processing `failed`：Harness 接受过输入，但执行失败；
-- 一个目标 completed、另一个 failed：只重试失败目标；
-- `superseded`：被明确新指令取代，不是数据丢失。
-
-不要只看聊天气泡是否出现最终回复。
-
-### PairRoom 重启后，Room FIFO 中的消息没有自动继续
-
-这是预期的 fail-closed 行为。Room 级 Turn FIFO 不做跨进程命令重放；重启时尚未进入原生 Runtime 的消息会显示 `Delivery=skipped`、`Processing=cancelled`，详情包含 restart 原因。这样可以避免在提交边界不确定时重复执行写操作。
-
-处理方式：
-
-1. 检查消息是否确实未完成，以及仓库中是否已有部分副作用；
-2. 查看 Inspector、Git diff 和 vendor 原生记录；
-3. 使用该消息上的 **重试** 创建新的可审计消息，不要手工把旧状态改回 queued。
-
-取消同样区分边界：`Delivery=pending` 的 Room FIFO 项只取消自身；已经 `started`/`injected`/Adapter `queued` 的输入可能按整个 native Turn 取消，但不会删除尚未提交的 Room FIFO 后续项。
-
-## `verify` 失败
-
-立即：
-
-1. 停止对该 Room 的写入；
-2. 保留完整 Room 目录；
-3. 复制到只读证据位置；
-4. 记录 `version --json`；
-5. 生成脱敏 diagnostics（若命令仍能安全完成）；
-6. 找到最近一次 verified backup。
-
-不要手工修改 sequence、schema、manifest 或 hash。中间 Event Log 损坏不会被自动跳过；只有损坏的最后半行有受控恢复路径。
-
-## `restore` 拒绝归档或目标
-
-常见拒绝：
-
-- 目标非空且没有 `--force`；
-- archive traversal/absolute path/link；
-- 重复或未在 manifest 声明的文件；
-- 文件数量/大小超限；
-- SHA-256 不匹配；
-- Room metadata/Event Log 验证失败。
-
-优先恢复到一个全新目录：
-
-```bash
-pairroom restore \
-  --input room-backup.tar.gz \
-  --data-dir /new/empty/path
-pairroom verify --data-dir /new/empty/path
-```
-
-不要对验证失败的归档使用外部解压后手工拼接数据。
-
-## daemon 配置修改没有生效
-
-`pairroom daemon restart` 只重启现有服务定义。更改 Runtime limit、idle timeout、data root、token、代理、Agent 命令或日志设置时：
-
-```bash
-pairroom daemon install --force -- \
-  --data-root /absolute/path/to/pairroom-data \
-  --runtime-limit 4 \
-  --idle-timeout 20m
-```
-
-先从已有服务定义/运维记录恢复全部参数。只复制局部示例可能意外切换数据根或丢失 Token、代理和 Agent 配置。
-
-## 收集可分享的 Issue 信息
-
-建议包含：
-
-```text
-OS / architecture
-pairroom version --json
-当前官方 Claude Code/Codex 版本
-service 还是 serve；foreground 还是 daemon
-是否在 --mock 复现
-精确动作与 Delivery/Processing/Runtime phase
-最小公开仓库或合成复现
-已脱敏日志片段
-```
-
-不要公开：启动 URL、Bearer Token、Cookie、CSRF、私有 prompt、源代码、真实附件、完整 Event Log、审批 payload 或含凭据的代理 URL。诊断包默认脱敏，但分享前仍要人工检查。
+使用当前命令的 `--help` 检查 listen / token 参数，确认没有另一进程占用端口。非 loopback 监听没有 token 应视为配置错误，而不是绕过检查。
