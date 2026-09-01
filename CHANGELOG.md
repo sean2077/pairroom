@@ -31,6 +31,7 @@
 
 ### Fixed
 
+- A pending-new Codex binding no longer hard-fails forever with `no rollout found for thread id` when the app-server process exits between `thread/start` and the first accepted turn. Codex only persists a rollout once a turn is accepted, so the in-memory thread ID is now dropped on unexpected process exit; the next activation starts a fresh thread and materializes the binding on the first accepted turn. Existing/materialized bindings still resume exactly.
 - Codex App Server `error` notifications are now non-terminal diagnostics: they no longer fail the current input, release the Room Turn owner, or start a queued peer before the authoritative `turn/completed`; confirmed process exit emits an explicit terminal Turn boundary.
 - Cancelling a message still waiting in the Room FIFO now removes only that item without interrupting a runtime. Cancelling an input already accepted by a native runtime retains the broader native-Turn cancellation semantics while preserving later Room-queued work.
 - Room View accessibility and undefined-variable fixes: replaced the undefined `--surface-1` token with defined surfaces, lightened dark-theme `--faint` and darkened light-theme `--faint` so small secondary text clears WCAG AA contrast on both themes, added `aria-label`/`aria-pressed` to lightbox and notification/theme controls, and gated `scrollIntoView` smooth scroll and the message flash animation behind `prefers-reduced-motion`.

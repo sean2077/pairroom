@@ -579,6 +579,60 @@ func TestCodexProcessExitClosesUntrackedActiveTurn(t *testing.T) {
 	}
 }
 
+// TestCodexProcessExitDropsEphemeralThreadID covers the orphaned-thread bug:
+// thread/start creates an in-memory Codex thread, but Codex only persists a
+// rollout once a turn is accepted. If the app-server exits before the first
+// turn starts on a pending (new) binding, the in-memory thread ID has no
+// durable rollout. Strict-resuming that ID across a restart hard-fails
+// forever with "no rollout found"; the ID must be dropped so the next Start
+// creates a fresh thread.
+func TestCodexProcessExitDropsEphemeralThreadID(t *testing.T) {
+	tests := []struct {
+		name          string
+		cfg           Config
+		threadID      string
+		threadEngaged bool
+		wantKept      bool
+	}{
+		{
+			name:     "pending new binding, thread/start only",
+			cfg:      Config{RequireExactSession: true},
+			threadID: "orphan-thread",
+			wantKept: false,
+		},
+		{
+			name:          "pending new binding, turn already started",
+			cfg:           Config{RequireExactSession: true},
+			threadID:      "engaged-thread",
+			threadEngaged: true,
+			wantKept:      true,
+		},
+		{
+			name:     "existing durable binding resumes exactly",
+			cfg:      Config{SessionID: "durable-thread", RequireExactSession: true},
+			threadID: "durable-thread",
+			wantKept: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := NewCodex(test.cfg, func(model.RuntimeEvent) {})
+			adapter.threadID = test.threadID
+			adapter.threadEngaged = test.threadEngaged
+
+			adapter.handleUnexpectedProcessExit(nil)
+
+			kept := adapter.threadID == test.threadID
+			if kept != test.wantKept {
+				t.Fatalf("threadID kept=%v want=%v (got %q)", kept, test.wantKept, adapter.threadID)
+			}
+			if !test.wantKept && adapter.threadID != "" {
+				t.Fatalf("ephemeral thread ID was not dropped: %q", adapter.threadID)
+			}
+		})
+	}
+}
+
 func TestCodexFailPendingRPCsClearsConnectionState(t *testing.T) {
 	adapter := NewCodex(Config{}, func(model.RuntimeEvent) {})
 	ch := make(chan rpcReply, 1)
