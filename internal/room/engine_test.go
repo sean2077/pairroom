@@ -155,6 +155,75 @@ func newTestEngine(t *testing.T, mode model.RoutingMode, dir string) (*Engine, m
 	return engine, adapters
 }
 
+func TestNewRejectsLegacyRoutingModes(t *testing.T) {
+	for _, mode := range []model.RoutingMode{"manual", "mentions", "roundtable"} {
+		t.Run(string(mode), func(t *testing.T) {
+			eventStore, err := store.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer eventStore.Close()
+
+			_, err = New(Config{
+				Name: "legacy-routing", Repo: t.TempDir(), Store: eventStore,
+				Settings: model.RoomSettings{RoutingMode: mode, MaxHops: 6, StallWarningSeconds: 300},
+			})
+			if err == nil {
+				t.Fatalf("legacy routing mode %q was accepted", mode)
+			}
+		})
+	}
+}
+
+func TestRestoreRejectsLegacyRoutingMode(t *testing.T) {
+	dir := t.TempDir()
+	eventStore, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := New(Config{
+		Name: "strict-routing", Repo: t.TempDir(), Store: eventStore,
+		Settings: model.DefaultRoomSettings(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	roomID := engine.Snapshot().Meta.ID
+	if err := engine.Close(); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+
+	appendStore, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := model.NewEvent(roomID, EventSettingsUpdated, model.ActorSystem, model.RoomSettings{
+		RoutingMode: model.RoutingMode("manual"), MaxHops: 6, StallWarningSeconds: 300,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := appendStore.Append(&event); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopenedStore, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopenedStore.Close()
+	_, err = New(Config{
+		Name: "strict-routing", Repo: t.TempDir(), Store: reopenedStore,
+		Settings: model.DefaultRoomSettings(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported routing mode") {
+		t.Fatalf("restore error = %v, want unsupported routing mode", err)
+	}
+}
+
 func receiveInput(t *testing.T, adapter *fakeAdapter) model.AgentInput {
 	t.Helper()
 	select {
@@ -232,7 +301,7 @@ func TestReviewerSnapshotRefreshesBeforeSafeDelivery(t *testing.T) {
 	}
 	engine, err := New(Config{
 		Name: "review-refresh", Repo: repo, Store: eventStore, Hub: bus.New(32),
-		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 4, StallWarningSeconds: 300},
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 4, StallWarningSeconds: 300},
 		ClaudeFactory: factory, CodexFactory: factory, Workspaces: workspaces,
 	})
 	if err != nil {
@@ -279,7 +348,7 @@ func TestReviewerRefreshSerializesConcurrentDriverSubmission(t *testing.T) {
 	}
 	engine, err := New(Config{
 		Name: "review-refresh-lock", Repo: repo, Store: eventStore, Hub: bus.New(32),
-		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 4, StallWarningSeconds: 300},
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 4, StallWarningSeconds: 300},
 		ClaudeFactory: factory, CodexFactory: factory, Workspaces: workspaces,
 	})
 	if err != nil {
@@ -346,7 +415,7 @@ func TestReviewerRefreshWaitsForConcurrentStartup(t *testing.T) {
 	}
 	engine, err := New(Config{
 		Name: "review-start-lock", Repo: repo, Store: eventStore, Hub: bus.New(32),
-		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 4, StallWarningSeconds: 300},
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 4, StallWarningSeconds: 300},
 		ClaudeFactory: factory, CodexFactory: factory, Workspaces: workspaces,
 	})
 	if err != nil {
@@ -387,7 +456,7 @@ func TestReviewerRefreshWaitsForConcurrentStartup(t *testing.T) {
 }
 
 func TestLifecycleLockAcquisitionHonorsContext(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	blocked := make(chan struct{})
 	release := make(chan struct{})
 	adapters[model.ActorCodex].beforeReturn = func(model.AgentInput) {
@@ -439,7 +508,7 @@ func TestSetRoleDoesNotRefreshUnchangedReviewerWorkspace(t *testing.T) {
 	}
 	engine, err := New(Config{
 		Name: "role-with-reviewer", Repo: repo, Store: eventStore, Hub: bus.New(32),
-		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 4, StallWarningSeconds: 300},
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 4, StallWarningSeconds: 300},
 		ClaudeFactory: factory, CodexFactory: factory, Workspaces: workspaces,
 	})
 	if err != nil {
@@ -459,7 +528,7 @@ func TestSetRoleDoesNotRefreshUnchangedReviewerWorkspace(t *testing.T) {
 }
 
 func TestSendPassesRoleAndRoutingContext(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	message, err := engine.Send(context.Background(), SendRequest{
 		Text: "@claude inspect this", To: []model.ActorID{model.ActorClaude},
 	})
@@ -476,7 +545,7 @@ func TestSendPassesRoleAndRoutingContext(t *testing.T) {
 }
 
 func TestNextHandoffCreatesReplyAndWaitsForTurnCompletion(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Design the change", To: []model.ActorID{model.ActorClaude},
 	})
@@ -512,7 +581,7 @@ func TestNextHandoffCreatesReplyAndWaitsForTurnCompletion(t *testing.T) {
 }
 
 func TestPeerMentionInsideHandoffDoesNotRouteWithoutNext(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Investigate the change", To: []model.ActorID{model.ActorClaude},
 	})
@@ -539,7 +608,7 @@ func TestPeerMentionInsideHandoffDoesNotRouteWithoutNext(t *testing.T) {
 }
 
 func TestSendWithoutTargetUsesSingleDriver(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	message, err := engine.Send(context.Background(), SendRequest{Text: "Inspect the current change"})
 	if err != nil {
 		t.Fatal(err)
@@ -593,7 +662,7 @@ func TestRuntimeErrorReleasesQueuedPeerTurn(t *testing.T) {
 }
 
 func TestSendRoleTargetIsResolvedAtomicallyByServer(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	message, err := engine.Send(context.Background(), SendRequest{Text: "Review this", TargetRole: model.RoleReviewer})
 	if err != nil {
 		t.Fatal(err)
@@ -612,7 +681,7 @@ func TestSendRoleTargetIsResolvedAtomicallyByServer(t *testing.T) {
 }
 
 func TestSendRoleTargetFollowsCompletedDriverSwitch(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	if err := engine.SwitchDriver(context.Background(), model.ActorCodex); err != nil {
 		t.Fatal(err)
 	}
@@ -629,7 +698,7 @@ func TestSendRoleTargetFollowsCompletedDriverSwitch(t *testing.T) {
 }
 
 func TestReplyWithoutExplicitTargetUsesAgentBeingRepliedTo(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{Text: "Review this", To: []model.ActorID{model.ActorCodex}})
 	if err != nil {
 		t.Fatal(err)
@@ -658,7 +727,7 @@ func TestReplyWithoutExplicitTargetUsesAgentBeingRepliedTo(t *testing.T) {
 }
 
 func TestStagedHandoffUsesCompactPeerContext(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Implement the fix", To: []model.ActorID{model.ActorClaude},
 	})
@@ -696,7 +765,7 @@ func TestStagedHandoffUsesCompactPeerContext(t *testing.T) {
 }
 
 func TestStagedHandoffWithoutVisibleProseIsPersistedAndDelivered(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Implement the fix", To: []model.ActorID{model.ActorClaude},
 	})
@@ -724,7 +793,7 @@ func TestStagedHandoffWithoutVisibleProseIsPersistedAndDelivered(t *testing.T) {
 }
 
 func TestReviewChangesMarkerReturnsToDriver(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Review the implementation", To: []model.ActorID{model.ActorCodex},
 	})
@@ -747,7 +816,7 @@ func TestReviewChangesMarkerReturnsToDriver(t *testing.T) {
 }
 
 func TestHumanDecisionSuppressesStagedHandoff(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Implement the ambiguous change", To: []model.ActorID{model.ActorClaude},
 	})
@@ -770,7 +839,7 @@ func TestHumanDecisionSuppressesStagedHandoff(t *testing.T) {
 }
 
 func TestStagedHandoffRequiresUsablePacket(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Implement the fix", To: []model.ActorID{model.ActorClaude},
 	})
@@ -792,7 +861,7 @@ func TestStagedHandoffRequiresUsablePacket(t *testing.T) {
 }
 
 func TestNewHumanMessageInSameThreadSuppressesStaleRoundtableHandoff(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingRoundtable, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	first, err := engine.Send(context.Background(), SendRequest{Text: "First direction", To: []model.ActorID{model.ActorClaude}})
 	if err != nil {
 		t.Fatal(err)
@@ -818,7 +887,7 @@ func TestNewHumanMessageInSameThreadSuppressesStaleRoundtableHandoff(t *testing.
 }
 
 func TestNewUnthreadedAppendToSameAgentSuppressesStaleHandoff(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingRoundtable, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	first, err := engine.Send(context.Background(), SendRequest{Text: "First direction", To: []model.ActorID{model.ActorClaude}})
 	if err != nil {
 		t.Fatal(err)
@@ -842,7 +911,7 @@ func TestNewUnthreadedAppendToSameAgentSuppressesStaleHandoff(t *testing.T) {
 }
 
 func TestExplicitMentionDoesNotOverrideTurnControl(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	first, err := engine.Send(context.Background(), SendRequest{Text: "First direction", To: []model.ActorID{model.ActorClaude}})
 	if err != nil {
 		t.Fatal(err)
@@ -867,7 +936,7 @@ func TestExplicitMentionDoesNotOverrideTurnControl(t *testing.T) {
 }
 
 func TestExplicitMentionCannotOverrideReviewApproval(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{Text: "Review boundary", To: []model.ActorID{model.ActorCodex}})
 	if err != nil {
 		t.Fatal(err)
@@ -887,7 +956,7 @@ func TestExplicitMentionCannotOverrideReviewApproval(t *testing.T) {
 }
 
 func TestInactiveWorkflowMetadataDoesNotRestoreMentionRouting(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	workflow, ok := compileWorkflow("Claude plan, Codex review")
 	if !ok {
 		t.Fatal("expected workflow to compile")
@@ -919,7 +988,7 @@ func TestInactiveWorkflowMetadataDoesNotRestoreMentionRouting(t *testing.T) {
 }
 
 func TestExplicitNextTurnInOtherThreadDoesNotSuppressHandoff(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingRoundtable, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	first, err := engine.Send(context.Background(), SendRequest{Text: "First task", To: []model.ActorID{model.ActorClaude}})
 	if err != nil {
 		t.Fatal(err)
@@ -994,7 +1063,7 @@ func TestCompactHandoffRespectsDurableLimit(t *testing.T) {
 
 func TestSessionIDsSurviveRoomRestartButRuntimeStateDoesNot(t *testing.T) {
 	dir := t.TempDir()
-	engine, _ := newTestEngine(t, model.RoutingMentions, dir)
+	engine, _ := newTestEngine(t, model.RoutingTurns, dir)
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorClaude, Kind: model.RuntimeSession,
 		SessionID: "claude-session-123", CreatedAt: time.Now().UTC(),
@@ -1040,7 +1109,7 @@ func waitForDeliveryState(t *testing.T, engine *Engine, messageID string, target
 }
 
 func TestDeliveryFailureIsTerminalAndLateStateIsNotPublished(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	message, err := engine.Send(context.Background(), SendRequest{
 		Text: "inspect", To: []model.ActorID{model.ActorClaude},
 	})
@@ -1077,7 +1146,7 @@ func TestDeliveryFailureIsTerminalAndLateStateIsNotPublished(t *testing.T) {
 }
 
 func TestTransientRuntimeEventIsLiveButNotPersisted(t *testing.T) {
-	engine, _ := newTestEngine(t, model.RoutingManual, "")
+	engine, _ := newTestEngine(t, model.RoutingTurns, "")
 	ch, cancel := engine.Subscribe()
 	defer cancel()
 	before := engine.Snapshot().LatestSeq
@@ -1217,7 +1286,7 @@ func waitForProcessingState(t *testing.T, engine *Engine, messageID string, targ
 }
 
 func TestDeliveryFallbackDoesNotOverwriteNativeProcessingCorrelation(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	adapter := adapters[model.ActorCodex]
 	adapter.beforeReturn = func(input model.AgentInput) {
 		adapter.sink(model.RuntimeEvent{
@@ -1244,7 +1313,7 @@ func TestDeliveryFallbackDoesNotOverwriteNativeProcessingCorrelation(t *testing.
 }
 
 func TestRuntimeFailurePreservesAcceptedDeliveryAndMarksProcessingFailed(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	message, err := engine.Send(context.Background(), SendRequest{
 		Text: "inspect", To: []model.ActorID{model.ActorCodex},
 	})
@@ -1276,7 +1345,7 @@ func TestRuntimeFailurePreservesAcceptedDeliveryAndMarksProcessingFailed(t *test
 }
 
 func TestRetryCreatesNewAuditableMessageForFailedTarget(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	original, err := engine.Send(context.Background(), SendRequest{
 		Text: "review", To: []model.ActorID{model.ActorCodex},
 	})
@@ -1315,7 +1384,7 @@ func TestRetryCreatesNewAuditableMessageForFailedTarget(t *testing.T) {
 }
 
 func TestRetryPreservesCompactPeerHandoff(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	now := time.Now().UTC()
 	original := model.Message{
 		ID: model.NewID("msg"), From: model.ActorClaude, To: []model.ActorID{model.ActorCodex},
@@ -1345,7 +1414,7 @@ func TestRetryPreservesCompactPeerHandoff(t *testing.T) {
 
 func TestRestartCancelsInFlightProcessing(t *testing.T) {
 	dir := t.TempDir()
-	engine, adapters := newTestEngine(t, model.RoutingManual, dir)
+	engine, adapters := newTestEngine(t, model.RoutingTurns, dir)
 	message, err := engine.Send(context.Background(), SendRequest{
 		Text: "long-running", To: []model.ActorID{model.ActorClaude},
 	})
@@ -1389,7 +1458,7 @@ func TestRestartCancelsInFlightProcessing(t *testing.T) {
 }
 
 func TestRuntimeInfoProjectionIsDeepCloned(t *testing.T) {
-	engine, _ := newTestEngine(t, model.RoutingManual, "")
+	engine, _ := newTestEngine(t, model.RoutingTurns, "")
 	info := model.RuntimeInfo{
 		Available: true, Version: "2.1.231", Protocol: "claude-stream-json",
 		Capabilities: []string{"stream-json"}, Warnings: []string{"test warning"},
@@ -1416,7 +1485,7 @@ func TestRuntimeInfoProjectionIsDeepCloned(t *testing.T) {
 }
 
 func TestStopAgentCancelsInFlightMessagesAndExpiresApprovals(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	message, err := engine.Send(context.Background(), SendRequest{
 		Text: "keep working", To: []model.ActorID{model.ActorCodex},
 	})
@@ -1463,7 +1532,7 @@ func TestStopAgentCancelsInFlightMessagesAndExpiresApprovals(t *testing.T) {
 }
 
 func TestSubmitFailureSettlesDeliveryAndProcessing(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	adapters[model.ActorClaude].submitErr = errors.New("native input rejected")
 
 	message, err := engine.Send(context.Background(), SendRequest{
@@ -1516,7 +1585,7 @@ func newAttachmentEngine(t *testing.T, media AttachmentStore) (*Engine, map[mode
 	}
 	engine, err := New(Config{
 		Name: "media", Repo: t.TempDir(), Store: eventStore, Hub: bus.New(64),
-		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 4, StallWarningSeconds: 300},
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 4, StallWarningSeconds: 300},
 		ClaudeFactory: factory, CodexFactory: factory, Attachments: media,
 	})
 	if err != nil {
@@ -1589,7 +1658,7 @@ func TestAgentFinalImportsSafeImagePreviewIntoSharedRoom(t *testing.T) {
 }
 
 func TestSwitchDriverAppliesNativeRoleBeforeFutureTurns(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	if err := engine.SwitchDriver(context.Background(), model.ActorCodex); err != nil {
 		t.Fatal(err)
 	}
@@ -1625,7 +1694,7 @@ func TestSwitchDriverAppliesNativeRoleBeforeFutureTurns(t *testing.T) {
 }
 
 func TestRuntimeErrorExpiresConnectionLocalApproval(t *testing.T) {
-	engine, _ := newTestEngine(t, model.RoutingManual, "")
+	engine, _ := newTestEngine(t, model.RoutingTurns, "")
 	approval := model.Approval{
 		ID: model.NewID("approval"), Agent: model.ActorClaude, Kind: "claude.toolApproval",
 		Title: "Use Bash", Status: "pending", RequestedAt: time.Now().UTC(),
@@ -1645,7 +1714,7 @@ func TestRuntimeErrorExpiresConnectionLocalApproval(t *testing.T) {
 }
 
 func TestSupersedeMarksOldInputAndCarriesIntent(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	first, err := engine.Send(context.Background(), SendRequest{
 		Text: "old instruction", To: []model.ActorID{model.ActorCodex},
 	})
@@ -1678,7 +1747,7 @@ func TestSupersedeMarksOldInputAndCarriesIntent(t *testing.T) {
 }
 
 func TestCancelMessageMarksParticipantQueue(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	first, err := engine.Send(context.Background(), SendRequest{Text: "one", To: []model.ActorID{model.ActorClaude}})
 	if err != nil {
 		t.Fatal(err)
@@ -1704,7 +1773,7 @@ func TestCancelMessageMarksParticipantQueue(t *testing.T) {
 
 func TestTurnSummaryPersistsAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
-	engine, adapters := newTestEngine(t, model.RoutingManual, dir)
+	engine, adapters := newTestEngine(t, model.RoutingTurns, dir)
 	message, err := engine.Send(context.Background(), SendRequest{
 		Text: "inspect and verify", To: []model.ActorID{model.ActorClaude},
 	})
@@ -1771,7 +1840,7 @@ func TestTurnSummaryPersistsAcrossRestart(t *testing.T) {
 }
 
 func TestTurnSummaryBoundsHighVolumeDetail(t *testing.T) {
-	engine, _ := newTestEngine(t, model.RoutingManual, "")
+	engine, _ := newTestEngine(t, model.RoutingTurns, "")
 	started := time.Now().UTC()
 	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorCodex, Kind: model.RuntimeTurnStarted, TurnID: "bounded", CreatedAt: started})
 	payload := strings.Repeat("x", 20<<10)
@@ -1784,7 +1853,7 @@ func TestTurnSummaryBoundsHighVolumeDetail(t *testing.T) {
 }
 
 func TestWindowedSnapshotAndMessagesPage(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingManual, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	for i := 0; i < 12; i++ {
 		message, err := engine.Send(context.Background(), SendRequest{
 			Text: fmt.Sprintf("message-%02d", i), To: []model.ActorID{model.ActorClaude},
@@ -2012,7 +2081,7 @@ func TestAcceptedInputMaterializesFreshNativeSession(t *testing.T) {
 	}
 	engine, err := New(Config{
 		Name: "materialize", Repo: t.TempDir(), Store: eventStore,
-		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 2},
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 2},
 		ClaudeFactory: factory, CodexFactory: factory,
 		OnSessionMaterialized: func(_ context.Context, actor model.ActorID, sessionID string) error {
 			materialized <- struct {
@@ -2081,7 +2150,7 @@ func TestEngineCloseReportsAllResourceErrors(t *testing.T) {
 	}
 	engine, err := New(Config{
 		Name: "close-errors", Repo: t.TempDir(), Store: eventStore, Hub: bus.New(8),
-		Settings:      model.RoomSettings{RoutingMode: model.RoutingMentions, MaxHops: 2},
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 2},
 		ClaudeFactory: factory, CodexFactory: factory,
 		Workspaces: &closeErrorWorkspace{err: cleanup},
 	})

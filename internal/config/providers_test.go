@@ -80,7 +80,7 @@ X-Provider = "header-secret"
 	cfgPath := filepath.Join(dir, "pairroom.json")
 	configJSON := `{
   "listen": "127.0.0.1:7332",
-  "routing_mode": "mentions",
+  "routing_mode": "turns",
   "max_agent_hops": 6,
   "stall_warning_seconds": 300,
   "auto_start": false,

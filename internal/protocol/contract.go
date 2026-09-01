@@ -69,9 +69,12 @@ func Resolve(selection Selection) (Contract, error) {
 	if selection.Role != "" && !selection.Role.Valid() {
 		return Contract{}, fmt.Errorf("invalid role %q: use driver, reviewer, or peer", selection.Role)
 	}
-	mode, ok := selection.RoutingMode.Canonical()
-	if !ok {
-		return Contract{}, fmt.Errorf("invalid routing mode %q: PairRoom uses turns", selection.RoutingMode)
+	mode := selection.RoutingMode
+	if mode == "" {
+		mode = model.RoutingTurns
+	}
+	if !mode.Valid() {
+		return Contract{}, fmt.Errorf("invalid routing mode %q: only %q is supported", selection.RoutingMode, model.RoutingTurns)
 	}
 	contract := Contract{Version: Version, Actor: selection.Actor, Role: selection.Role, RoutingMode: mode, Rules: append([]Rule(nil), baseRules...)}
 	contract.Rules = append(contract.Rules, roleRules(selection.Role)...)

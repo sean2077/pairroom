@@ -150,11 +150,9 @@ func New(cfg Config) (*Engine, error) {
 			cfg.Settings.StallWarningSeconds = defaults.StallWarningSeconds
 		}
 	}
-	mode, ok := cfg.Settings.RoutingMode.Canonical()
-	if !ok {
-		return nil, fmt.Errorf("invalid routing mode %q", cfg.Settings.RoutingMode)
+	if !cfg.Settings.RoutingMode.Valid() {
+		return nil, fmt.Errorf("invalid routing mode %q: only %q is supported", cfg.Settings.RoutingMode, model.RoutingTurns)
 	}
-	cfg.Settings.RoutingMode = mode
 	if cfg.Settings.MaxHops < 1 {
 		cfg.Settings.MaxHops = model.DefaultRoomSettings().MaxHops
 	}
@@ -198,7 +196,9 @@ func (e *Engine) restore() error {
 		}
 	}
 	if e.snapshot.Meta.ID != "" {
-		e.ensureSnapshotDefaults()
+		if err := e.ensureSnapshotDefaults(); err != nil {
+			return err
+		}
 		return e.expireRestoredTransientState()
 	}
 
@@ -240,15 +240,11 @@ func (e *Engine) restore() error {
 	return nil
 }
 
-func (e *Engine) ensureSnapshotDefaults() {
+func (e *Engine) ensureSnapshotDefaults() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.snapshot.Settings.RoutingMode == "" {
-		e.snapshot.Settings = model.DefaultRoomSettings()
-	} else if mode, ok := e.snapshot.Settings.RoutingMode.Canonical(); ok {
-		e.snapshot.Settings.RoutingMode = mode
-	} else {
-		e.snapshot.Settings.RoutingMode = model.RoutingTurns
+	if !e.snapshot.Settings.RoutingMode.Valid() {
+		return fmt.Errorf("stored Room uses unsupported routing mode %q: only %q is supported", e.snapshot.Settings.RoutingMode, model.RoutingTurns)
 	}
 	if e.snapshot.Settings.MaxHops < 1 {
 		e.snapshot.Settings.MaxHops = model.DefaultRoomSettings().MaxHops
@@ -313,6 +309,7 @@ func (e *Engine) ensureSnapshotDefaults() {
 			e.snapshot.Workflow.Stages[index].Status = model.WorkflowStageWaitingHuman
 		}
 	}
+	return nil
 }
 
 // expireRestoredTransientState closes records that were durable but never
@@ -983,11 +980,9 @@ func (e *Engine) ResolveApproval(ctx context.Context, approvalID string, resolut
 }
 
 func (e *Engine) UpdateSettings(settings model.RoomSettings) error {
-	mode, ok := settings.RoutingMode.Canonical()
-	if !ok {
-		return fmt.Errorf("invalid routing mode %q", settings.RoutingMode)
+	if !settings.RoutingMode.Valid() {
+		return fmt.Errorf("invalid routing mode %q: only %q is supported", settings.RoutingMode, model.RoutingTurns)
 	}
-	settings.RoutingMode = mode
 	if settings.MaxHops < 1 || settings.MaxHops > 30 {
 		return errors.New("max_agent_hops must be between 1 and 30")
 	}
@@ -2610,9 +2605,14 @@ func (e *Engine) applyLocked(event model.Event) error {
 		participant.SessionID = strings.TrimSpace(binding.SessionID)
 		e.snapshot.Participants[binding.Agent] = participant
 	case EventSettingsUpdated:
-		if err := json.Unmarshal(event.Data, &e.snapshot.Settings); err != nil {
+		var settings model.RoomSettings
+		if err := json.Unmarshal(event.Data, &settings); err != nil {
 			return err
 		}
+		if !settings.RoutingMode.Valid() {
+			return fmt.Errorf("stored Room uses unsupported routing mode %q: only %q is supported", settings.RoutingMode, model.RoutingTurns)
+		}
+		e.snapshot.Settings = settings
 	case EventParticipantUpdated:
 		var participant model.ParticipantSnapshot
 		if err := json.Unmarshal(event.Data, &participant); err != nil {

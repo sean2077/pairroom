@@ -82,7 +82,7 @@ func TestWorkflowApprovalAndRejectDetection(t *testing.T) {
 }
 
 func TestActiveWorkflowPreservesExplicitRouting(t *testing.T) {
-	engine, _ := newTestEngine(t, model.RoutingMentions, "")
+	engine, _ := newTestEngine(t, model.RoutingTurns, "")
 	workflow, ok := compileWorkflow("Claude plan, Codex execute")
 	if !ok {
 		t.Fatal("expected workflow to compile")
@@ -126,7 +126,7 @@ func TestWorkflowStateReplaysUnderCurrentStoreSchema(t *testing.T) {
 		t.Fatalf("Store schema = %d, workflow events require at least 8", version.StoreSchema)
 	}
 	dir := t.TempDir()
-	engine, _ := newTestEngine(t, model.RoutingMentions, dir)
+	engine, _ := newTestEngine(t, model.RoutingTurns, dir)
 	workflow, ok := compileWorkflow("Claude plan, Codex execute")
 	if !ok {
 		t.Fatal("expected workflow to compile")
@@ -138,7 +138,7 @@ func TestWorkflowStateReplaysUnderCurrentStoreSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, _ := newTestEngine(t, model.RoutingMentions, dir)
+	reopened, _ := newTestEngine(t, model.RoutingTurns, dir)
 	got := reopened.Snapshot().Workflow
 	if got == nil || got.ID != workflow.ID || len(got.Stages) != len(workflow.Stages) {
 		t.Fatalf("replayed workflow = %#v, want %#v", got, workflow)
@@ -146,7 +146,7 @@ func TestWorkflowStateReplaysUnderCurrentStoreSchema(t *testing.T) {
 }
 
 func TestWorkflowDoneSignalAdvancesExplicitSequence(t *testing.T) {
-	engine, _ := newTestEngine(t, model.RoutingMentions, "")
+	engine, _ := newTestEngine(t, model.RoutingTurns, "")
 	workflow, ok := compileWorkflow("Claude plan, Codex execute")
 	if !ok {
 		t.Fatal("expected workflow to compile")
@@ -171,7 +171,7 @@ func TestWorkflowDoneSignalAdvancesExplicitSequence(t *testing.T) {
 }
 
 func TestWorkflowWaitsForQueuedStageGuidanceAndHandsOffFinalResult(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	initial, err := engine.Send(context.Background(), SendRequest{Text: "请 Claude 规划修复计划，Codex review"})
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +231,7 @@ func TestWorkflowWaitsForQueuedStageGuidanceAndHandsOffFinalResult(t *testing.T)
 }
 
 func TestRetryReopensFailedCurrentWorkflowStage(t *testing.T) {
-	engine, adapters := newTestEngine(t, model.RoutingMentions, "")
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	workflow, ok := compileWorkflow("Claude plan, Codex execute")
 	if !ok {
 		t.Fatal("expected workflow to compile")

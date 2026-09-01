@@ -26,7 +26,7 @@ func TestLoadMergesDefaults(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{
   "listen": "127.0.0.1:8000",
   "room_name": "Test Room",
-  "routing_mode": "roundtable",
+  "routing_mode": "turns",
   "max_agent_hops": 4,
   "auto_start": false,
   "claude": {"command": "claude", "model": "opus"},
@@ -48,7 +48,7 @@ func TestLoadMergesDefaults(t *testing.T) {
 
 func TestLoadRejectsUnknownAndInvalid(t *testing.T) {
 	tests := []string{
-		`{"listen":"127.0.0.1:1","routing_mode":"mentions","max_agent_hops":4,"auto_start":true,"claude":{"command":"claude"},"codex":{"command":"codex"},"surprise":true}`,
+		`{"listen":"127.0.0.1:1","routing_mode":"turns","max_agent_hops":4,"auto_start":true,"claude":{"command":"claude"},"codex":{"command":"codex"},"surprise":true}`,
 		`{"listen":"127.0.0.1:1","routing_mode":"forever","max_agent_hops":4,"auto_start":true,"claude":{"command":"claude"},"codex":{"command":"codex"}}`,
 	}
 	for i, data := range tests {
@@ -59,6 +59,21 @@ func TestLoadRejectsUnknownAndInvalid(t *testing.T) {
 		if _, err := Load(path); err == nil {
 			t.Fatalf("case %d: expected error", i)
 		}
+	}
+}
+
+func TestLoadRejectsLegacyRoutingModes(t *testing.T) {
+	for _, mode := range []string{"manual", "mentions", "roundtable"} {
+		t.Run(mode, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "pairroom.json")
+			data := `{"listen":"127.0.0.1:1","routing_mode":"` + mode + `","max_agent_hops":4,"stall_warning_seconds":300,"auto_start":true,"claude":{"command":"claude"},"codex":{"command":"codex"}}`
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatalf("legacy routing mode %q was accepted", mode)
+			}
+		})
 	}
 }
 

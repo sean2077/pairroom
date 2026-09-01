@@ -458,7 +458,7 @@ Goal / Scope / Evidence / Risks / Exact ask
 [PAIRROOM:BLOCKED]
 ```
 
-普通 `@peer`/`@claude`/`@codex` 文本只保留在人类可见回答中，不构成机械投递指令。旧 `manual`、`mentions`、`roundtable` 配置在加载时迁移为 `turns`；旧 v3 控制标记只为现有 Room 的平滑升级保留。
+普通 `@peer`/`@claude`/`@codex` 文本只保留在人类可见回答中，不构成机械投递指令。路由模式只接受 `turns`；旧 `manual`、`mentions`、`roundtable` 值会被拒绝，不做迁移。旧 v3 控制标记只为现有 Room 的平滑升级保留。
 
 ## 16. User precedence
 

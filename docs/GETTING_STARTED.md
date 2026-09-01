@@ -132,7 +132,7 @@ Room 使用固定的 `turns` 策略：同一时刻只有一个 Agent 工作。�
 pairroom service --mock --routing turns --max-hops 6
 ```
 
-旧的 `manual`、`mentions`、`roundtable` 参数仍可启动，但都会迁移为 `turns`。用户新消息总是比旧自动接力优先。
+路由模式只接受 `turns`；`manual`、`mentions`、`roundtable` 会直接报错，不会迁移。升级旧配置时先显式改为 `turns`；包含旧路由事件的 Room 不会自动恢复，需要重建。用户新消息总是比旧自动接力优先。
 
 ## 5. 切换到真实 Runtime
 

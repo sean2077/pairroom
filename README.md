@@ -143,7 +143,7 @@ pairroom daemon install --force -- \
 
 Room 始终只有一个 Turn owner。发给当前 owner 的 `append`/`supersede` 可以继续 steering；发给另一 Agent，或使用 `next_turn` 的输入，会排到当前 native Turn 完成后。Agent 之间不会因普通 `@peer` 文本互相唤醒；只有同时提供紧凑 `[PAIRROOM:HANDOFF]...[/PAIRROOM:HANDOFF]` 和 `[PAIRROOM:NEXT]` 才交棒。`DONE`、`WAIT`、`BLOCKED` 明确停止接力。
 
-旧配置中的 `manual`、`mentions`、`roundtable` 会在读取时迁移为统一的 `turns` 策略；它们不再形成三套运行时分支。`--max-hops` 仍作为一次接力链的最大 Agent Turn 数，防止无界往返。
+路由模式只接受 `turns`。`manual`、`mentions`、`roundtable` 不再识别，配置文件、CLI 参数或持久化 Room 事件中出现这些值都会启动失败；升级前必须显式改为 `turns`，旧 Room 则需要重建。`--max-hops` 仍作为一次接力链的最大 Agent Turn 数，防止无界往返。
 
 ### Driver / Reviewer
 

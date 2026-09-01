@@ -114,9 +114,6 @@ func Load(path string) (File, error) {
 	if err := decoder.Decode(&cfg); err != nil {
 		return File{}, fmt.Errorf("decode config: %w", err)
 	}
-	if mode, ok := cfg.RoutingMode.Canonical(); ok {
-		cfg.RoutingMode = mode
-	}
 	if err := cfg.resolveProviderProfiles(path); err != nil {
 		return File{}, err
 	}
@@ -130,8 +127,8 @@ func (c File) Validate() error {
 	if c.Listen == "" {
 		return errors.New("listen address is required")
 	}
-	if mode, ok := c.RoutingMode.Canonical(); !ok || mode != model.RoutingTurns {
-		return fmt.Errorf("invalid routing mode %q", c.RoutingMode)
+	if !c.RoutingMode.Valid() {
+		return fmt.Errorf("invalid routing mode %q: only %q is supported", c.RoutingMode, model.RoutingTurns)
 	}
 	if c.MaxAgentHops < 1 || c.MaxAgentHops > 30 {
 		return errors.New("max_agent_hops must be between 1 and 30")

@@ -44,7 +44,7 @@ func newTestServerWithOptions(t *testing.T, token, boundary, cookieName string) 
 	}
 	engine, err := room.New(room.Config{
 		Name: "test room", Repo: repo, Store: eventStore,
-		Settings:      model.RoomSettings{RoutingMode: model.RoutingManual, MaxHops: 3},
+		Settings:      model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 3},
 		ClaudeFactory: agent.MockFactory, CodexFactory: agent.MockFactory,
 		ClaudeConfig: agent.Config{MockDelay: 5 * time.Millisecond},
 		CodexConfig:  agent.Config{MockDelay: 5 * time.Millisecond},

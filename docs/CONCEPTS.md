@@ -214,7 +214,7 @@ user → active Agent → optional HANDOFF + NEXT → peer → … → DONE/user
 - `[PAIRROOM:DONE]` 返回用户，`[PAIRROOM:WAIT]` 等待用户决定，`[PAIRROOM:BLOCKED]` 表示未解决阻塞；
 - 新用户输入、冲突控制标记、缺失 handoff 或 `--max-hops` 上限都会 fail closed，不继续旧接力。
 
-旧配置值 `manual`、`mentions`、`roundtable` 只作为迁移别名读取并规范化为 `turns`。旧协议的 `CONTINUE`、`IMPLEMENTED`、`REVIEW_CHANGES` 与 `REVIEW_APPROVED` 仍可被已有 Room 识别，但新 Agent 契约只生成 `NEXT`、`DONE`、`WAIT` 和 `BLOCKED`。
+路由模式只接受 `turns`；`manual`、`mentions`、`roundtable` 属于无效值，不会迁移或规范化。旧协议的 `CONTINUE`、`IMPLEMENTED`、`REVIEW_CHANGES` 与 `REVIEW_APPROVED` 仍可被已有 Room 识别，但新 Agent 契约只生成 `NEXT`、`DONE`、`WAIT` 和 `BLOCKED`。
 
 ## 角色与 Workspace
 
