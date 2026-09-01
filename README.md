@@ -42,6 +42,12 @@ Management Shell 打开后：
 
 使用真实 runtime 前，先分别确认 `claude` 与 `codex` CLI 已安装、已登录，并能在目标仓库独立工作。完整步骤见 [Getting Started](docs/GETTING_STARTED.md)。
 
+### 运行时预览
+
+下面是 PairRoom Management Shell 的实际运行时界面：可以集中查看 Project、Room、Runtime 容量与健康状态，并从同一控制面进入协作 Room。
+
+![PairRoom Management Shell 运行时概览](docs/images/pairroom-runtime-overview.png)
+
 ## 文档入口
 
 - [文档地图](docs/README.md)
