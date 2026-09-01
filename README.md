@@ -1,87 +1,71 @@
 # PairRoom
 
-PairRoom 是一个面向 **Claude Code + Codex** 的本地三方协作房间：你、Claude Code 和 Codex 共享一条可见时间线，两个 Agent 保留各自官方 Harness，并通过确定性的单轮次接力完成讨论、实现与审查。
+PairRoom 是一个面向 **Claude Code + Codex** 的本地协作控制面。它保留两个官方 CLI 的原生会话、工具、Skills、MCP、Hooks、审批与沙箱，只负责把用户、两个 Agent 和 Git 工作区组织成可观察、可中断、可审计的协作过程。
 
-> PairRoom 不代理模型 API，也不重写 Agent loop。原生模式只启动本机已有的官方 `claude` 与 `codex` 命令；Claude Code/Codex 继续拥有各自的会话、上下文、工具、Skills、MCP、Hooks、沙箱和账号凭据。
+> PairRoom 不代理模型 API，也不重写 Agent loop。真实模式只启动本机已有的 `claude` 与 `codex` 命令；账号、凭据、模型能力和供应商上下文仍由各自官方 Harness 管理。
 
-当前仓库版本基线为 **v1.1.0**。后续尚未发布的变化以 [`CHANGELOG.md`](CHANGELOG.md) 的 `Unreleased` 章节为准。
+[快速上手](docs/GETTING_STARTED.md) · [日常使用](docs/USER_GUIDE.md) · [核心概念](docs/CONCEPTS.md) · [CLI](docs/CLI_REFERENCE.md) · [排障](docs/TROUBLESHOOTING.md) · [完整文档](docs/README.md)
 
-[快速上手](docs/GETTING_STARTED.md) · [核心概念](docs/CONCEPTS.md) · [命令参考](docs/CLI_REFERENCE.md) · [排障](docs/TROUBLESHOOTING.md) · [完整文档](docs/README.md)
+## 协作模型
 
-![PairRoom rich conversation](docs/images/pairroom-v0.3-desktop.png)
+PairRoom 使用确定性的 native Turn 接力，而不是让两个 Agent 像 IM 群聊一样并发互相唤醒：
 
-## PairRoom 解决什么问题
+```text
+human input
+  -> current Agent completes one native Turn
+  -> reliable terminal boundary
+  -> optional HANDOFF + NEXT
+  -> next Room FIFO item
+```
 
-同时打开两个 Coding Agent 并不等于协作。PairRoom 补上的是两套官方 Harness 之间的本地协作控制面：
+这不是机械的逐条消息 A/B/A/B。当前 Agent 可以在一个 native Turn 内调用工具并接受 steering；只有在可靠结束边界后，另一个 Agent 才能开始。
 
-- **一条公共时间线**：你能看到双方结论、引用、线程、图片和消息状态；
-- **一个过程检查器**：工具、命令、计划、Diff、用量、审批和错误不再散落在两个终端；
-- **确定性的协作策略**：同一时刻只有一个 Agent Turn；显式 `HANDOFF + NEXT` 才把下一轮交给对方；
-- **原生会话连续性**：Room 分别绑定一个 Claude Session 与一个 Codex Thread；
-- **诚实的生命周期**：投递成功与处理完成分开记录，失败、取消、跳过和重试可审计；
-- **本地持久化与恢复**：append-only Event Log、附件校验、备份、恢复和脱敏诊断。
+核心性质：
 
-PairRoom 刻意不做模型网关、通用 Agent 框架、终端 ANSI 解析器、云端凭据服务或多人托管平台。
+- **Human authority**：用户决定目标、审批、取消、停止和后续流程；
+- **Single owner**：一个 Room 同时最多一个 active native Turn owner；
+- **Explicit handoff**：普通 `@peer` 文本不触发投递，自动交棒需要有效 `HANDOFF` 与 `NEXT`；
+- **FIFO and fail closed**：跨 Agent / `next_turn` 输入排队；重启不会自动重放进程内队列；
+- **Auditable lifecycle**：Delivery 与 Processing 分开记录，重试创建新消息，不改写历史；
+- **Native harness first**：PairRoom 不复制供应商内部 Transcript 或推理状态。
 
-## 两种运行入口
+详细语义见 [Core Concepts](docs/CONCEPTS.md) 与 [Protocol](docs/PROTOCOL.md)。
 
-| 入口 | 适用场景 | 说明 |
-|---|---|---|
-| `pairroom service` | 日常使用，推荐 | 与当前目录无关的多 Project / 多 Room 控制面；Room Runtime 按容量惰性启动 |
-| `pairroom daemon install` | 长期后台运行 | 把同一个 `pairroom service` 安装到 systemd、launchd 或 Windows Task Scheduler |
-| `pairroom serve --repo ...` | 单仓库快捷模式 | 兼容原有单 Room 工作流，直接打开 Room View |
-| 任一入口加 `--mock` | 首次体验、回归验证 | 不要求 Claude/Codex 登录，使用确定性 Mock Agent |
+## 运行入口
 
-`service` 与 `serve` 的所有内置 Web listener 都只接受数字 loopback 地址，例如 `127.0.0.1:7332` 或 `[::1]:7332`。远程访问应使用 SSH 本地端口转发，而不是绑定 `0.0.0.0`、局域网地址、主机名或 `localhost`。
+| 命令 | 用途 |
+|---|---|
+| `pairroom service` | 推荐入口；管理多个 Project、Room 和受容量约束的 Room Runtime |
+| `pairroom daemon install` | 将同一个 Service 安装为 systemd、launchd 或 Windows Task Scheduler 后台任务 |
+| `pairroom serve --repo ...` | 单仓库、单 Room 快捷入口 |
+| 任一入口加 `--mock` | 不启动真实 Agent 的确定性体验与回归验证 |
 
-## 十分钟开始
+所有内置 listener 只接受数字 loopback 地址。远程使用应通过 SSH 本地端口转发，而不是绑定 LAN 或公网地址。
 
-### 1. 构建
-
-从源码构建需要 Go 1.23+：
+## 最短成功路径
 
 ```bash
 make build
-./dist/pairroom version
-```
-
-也可以安装到 Go 的标准二进制目录：
-
-```bash
-make install
-pairroom version
-```
-
-`make install` 不会修改 `PATH`。安装完成后会打印目标位置和当前 shell 实际解析到的 `pairroom`。
-
-### 2. 先用 Mock 跑通完整流程
-
-```bash
 ./dist/pairroom service --mock
 ```
 
-浏览器打开 Management Shell 后：
+Management Shell 打开后：
 
-1. 登记一个 **Git worktree 的绝对路径**；
-2. 在 Project 下创建 Room；
-3. Claude 与 Codex Binding 均选择 `new`；
-4. 打开 Room，发给当前 Driver：`先分析仓库；需要独立检查时用 HANDOFF + NEXT 把下一轮交给 Reviewer。`；
-5. 在时间线观察结论，在 Inspector 查看 Turn、工具、计划和状态。
+1. 登记一个本地 Git worktree 的绝对路径；
+2. 在 Project 下创建 Room，Claude/Codex Binding 先选 `new`；
+3. 打开 Room，给当前 Driver 发送一个小型只读任务；
+4. 在 Timeline 查看结论，在 Inspector 查看 Delivery、Processing、Turn、工具与审批。
 
-更细的逐步说明见 [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md)。
-
-### 3. 切换到真实 Claude Code 与 Codex
-
-先分别在官方 CLI 中完成安装与登录，再检查当前仓库：
+切换到真实 Runtime 前：
 
 ```bash
 pairroom doctor --repo /absolute/path/to/project
-pairroom service
+pairroom service --config /absolute/path/to/pairroom.json
 ```
 
-`doctor` 检查 Git、可执行文件和所需协议面，但不会创建真实模型 Turn。检查会以目标仓库为工作目录启动 Vendor CLI，因而可能加载用户/项目配置或可信 wrapper；真实账号、网络和供应商服务是否可用，仍需在非关键仓库完成一次实际 smoke test。
+`doctor` 只检查 executable 与必要协议面，不创建模型 Turn，也不能证明账号、网络或供应商服务当前可用。首次真实测试应使用非关键仓库和只读任务。
 
-### 4. 安装为后台 Service
+后台运行：
 
 ```bash
 pairroom daemon install --runtime-limit 4 --idle-timeout 20m
@@ -90,178 +74,65 @@ pairroom daemon status
 pairroom daemon logs -f
 ```
 
-后台 Service 不会自行打开浏览器。`pairroom daemon open` 会从当前及轮转日志中查找 Management URL，只接受带 bootstrap token 的数字 loopback HTTP 地址，并在用 Bearer Token 验证当前 Service 后才交给默认浏览器。
+完整步骤见 [Getting Started](docs/GETTING_STARTED.md)。
 
-修改已安装定义时需要重新提交完整参数：
+## 典型工作流
 
-```bash
-pairroom daemon install --force -- \
-  --runtime-limit 4 \
-  --idle-timeout 20m \
-  --data-root /absolute/path/to/pairroom-data
-```
-
-`daemon restart` 只重启已有定义，不接受新的 Service 配置。完整说明见 [`docs/OPERATIONS.md`](docs/OPERATIONS.md)。
-
-## 运行结构
+用户可以直接描述阶段顺序：
 
 ```text
-┌──────────────────────────── Browser ────────────────────────────┐
-│ Management Shell                  Room View                      │
-│ Projects · Rooms · Runtimes       Timeline · Inspector          │
-└───────────────┬───────────────────────────┬──────────────────────┘
-                │ Management API            │ Room REST + SSE
-┌───────────────▼───────────────────────────▼──────────────────────┐
-│ PairRoom Service                                                  │
-│ Registry · Provisioner · Runtime capacity · lifecycle             │
-│                                                                    │
-│ Room A Runtime        Room B Runtime        ...                     │
-│ Engine/Store/Web      Engine/Store/Web                              │
-└───────────┬───────────────┬────────────────────────────────────────┘
-            │               │
-      ClaudeAdapter     CodexAdapter
-      stream-json       app-server JSON-RPC
-            │               │
-      official claude   official codex
+Claude 规划；Codex 独立审查；等我批准后由 Codex 执行；最后 Claude 验收。
 ```
 
-`pairroom serve` 省略上层 Registry/Runtime Manager，直接创建一个 Room Runtime。完整边界见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
+PairRoom 将阶段编译为串行 Turn，不会让两个 Runtime 自由并发聊天。计划、审查和验收使用只读边界；执行阶段使用 live Driver workspace。计划修改会使旧批准失效。
 
-## 核心能力
-
-### 富对话与图片
-
-公共时间线支持安全 Markdown、代码块、表格、任务列表、全文搜索、引用回复、线程聚焦和长消息折叠。PNG、JPEG、GIF、WebP 可通过选择、拖拽或粘贴上传，并以原生多模态输入交给两个 Agent；Agent 在仓库内生成并在最终 Markdown 中引用的图片也可安全导入预览。
-
-图片限制为每条消息最多 8 张、单张最大 5 MiB、总计最大 20 MiB。附件通过不透明 ID、内容签名、尺寸限制和 SHA-256 校验保护，不向公共 API 暴露本机绝对路径。
-
-![PairRoom image lightbox](docs/images/pairroom-v0.3-lightbox.png)
-
-### 单轮次接力
-
-用户可把消息发给 `@Driver`、`@Reviewer`、`@claude` 或 `@codex`。未显式指定接收者时，只发送给唯一的当前 Driver；角色目标由 Service 在持久化消息时解析，不依赖浏览器旧快照。
-
-Room 始终只有一个 Turn owner。发给当前 owner 的 `append`/`supersede` 可以继续 steering；发给另一 Agent，或使用 `next_turn` 的输入，会排到当前 native Turn 完成后。Agent 之间不会因普通 `@peer` 文本互相唤醒；只有同时提供紧凑 `[PAIRROOM:HANDOFF]...[/PAIRROOM:HANDOFF]` 和 `[PAIRROOM:NEXT]` 才交棒。`DONE`、`WAIT`、`BLOCKED` 明确停止接力。
-
-路由模式只接受 `turns`。`manual`、`mentions`、`roundtable` 不再识别，配置文件、CLI 参数或持久化 Room 事件中出现这些值都会启动失败；升级前必须显式改为 `turns`，旧 Room 则需要重建。`--max-hops` 仍作为一次接力链的最大 Agent Turn 数，防止无界往返。
-
-### Driver / Reviewer
-
-默认建议一个写入者、一个审查者：
-
-```text
-Claude Code  Driver
-Codex        Reviewer
-```
-
-Reviewer 使用包含 HEAD、dirty tracked 变更和 untracked regular files 的独立 Git snapshot，并叠加供应商原生策略：Claude 使用 `plan` permission mode 与写工具 deny，Codex 每个 Turn 使用 `readOnly` sandbox。PairRoom 会在 Reviewer 空闲且即将开始一个新审查 Turn 时重新生成快照，并把 Reviewer 启停、快照捕获和两侧提交放在同一同步边界内，确保它看到一致的最新改动，而不是 Room 启动时的旧状态。该边界不是容器、VM 或只读 mount；强隔离任务仍应在受控环境中运行。
-
-### 审批与过程可见性
-
-PairRoom 把 Claude 工具权限/`AskUserQuestion` 与 Codex 命令、文件修改、额外权限请求投影到统一 Approvals 面板。未知高权限请求 fail closed。Inspector 持续展示 Agent 状态、Session/Thread、Turn、工具、命令、计划、Diff、用量、错误和日志。
-
-### 可审计消息状态
-
-PairRoom 分开记录：
-
-- **Delivery**：`pending`、`started`、`injected`、`queued`、`failed`、`skipped`；
-- **Processing**：`waiting`、`working`、`completed`、`cancelled`、`failed`、`superseded`。
-
-重试会创建带 `retry_of` 的新消息，不修改原历史，也不会重复执行已经成功的另一个 Agent。
-
-## 建议的协作方式
-
-日常任务先发给当前 Driver。只有独立审查能实质改变结果时，Driver 才以紧凑证据包请求 Reviewer 的下一轮：
+Agent 要把下一轮交给 peer 时，需提供有界证据包：
 
 ```text
 [PAIRROOM:HANDOFF]
-Goal: 本轮验收目标
-Scope: 实际修改范围
-Evidence: 已运行的测试、关键输出和 diff 事实
-Risks: 尚未排除的边界
-Ask: Reviewer 需要独立验证的具体问题
+Goal: ...
+Scope: ...
+Evidence: ...
+Risks: ...
+Exact ask: ...
 [/PAIRROOM:HANDOFF]
 [PAIRROOM:NEXT]
 ```
 
-Reviewer 独立读取刷新后的仓库快照：批准时以 `[PAIRROOM:DONE]` 把结果交还用户；存在需要 Driver 修复的问题时，再用新的紧凑 handoff 加 `[PAIRROOM:NEXT]` 交棒。这样公共时间线保留完整人类报告，而下一 Agent 只接收改变决策所需的上下文。用户可随时插话、取消或改写后续轮次。概念、角色、Binding、Runtime 和消息状态的完整解释见 [`docs/CONCEPTS.md`](docs/CONCEPTS.md)。
+## 数据与边界
 
-## 安全与隐私边界
+- 每个 Room 有 append-only Event Log、附件库和 Claude/Codex Binding；
+- Room 是 durable state，native process、active owner 与 Room FIFO 是 process state；
+- Existing Binding 只恢复供应商 context，不导入绑定前 Transcript；
+- Management Shell 与每个 Room View 使用独立的本地认证作用域；
+- Project 注销、Room 归档、永久删除 PairRoom 数据和删除 Git worktree 是不同操作；
+- Mock E2E 证明 PairRoom 控制面，不等同于真实 Claude Code/Codex native E2E。
 
-PairRoom 是单用户、本地优先软件，没有 PairRoom 云服务、遥测、账号系统或模型代理。需要区分两条浏览器认证链路：
-
-- **Management Shell**：既可从启动 URL fragment 自动读取 Service Token，也可直接打开 Management origin 后在登录页输入 Token，或粘贴完整 Management URL。两种入口都只通过 `POST /api/v1/session` 把长期凭证交换为 `HttpOnly`、`SameSite=Strict` Session Cookie；写操作另带内存中的 CSRF Token。登录页不写 Web Storage；刷新可恢复仍有效的会话，Service 重启、会话过期或新浏览器上下文则需重新提供凭证。
-- **Room View**：启动凭据从 fragment 交换为 `HttpOnly`、`SameSite=Strict` Session Cookie，写操作另带内存中的 CSRF Token；长期 Token 不进入 Web Storage。
-
-消息、附件、事件、路径和 Session/Thread ID 保存在本机；实际发送给模型供应商的数据由官方 Claude Code/Codex Harness、用户配置和供应商政策决定。详见 [`SECURITY.md`](SECURITY.md) 与 [`docs/PRIVACY.md`](docs/PRIVACY.md)。
-
-## 数据、校验与恢复
-
-Service 默认数据根位于操作系统用户配置目录的 `pairroom` 下：
-
-```text
-pairroom/
-├── service.lock
-├── service-registry.json          # 可从默认 Room Event Logs 重建的索引
-└── rooms/
-    └── <room-id>/
-        ├── events.jsonl            # Room 事实源
-        ├── metadata.json
-        ├── attachments/
-        └── runtime/
-```
-
-内置完整性工具针对 **单个 Room 数据目录**：
-
-```bash
-pairroom verify --data-dir /path/to/room --json
-pairroom backup --data-dir /path/to/room --output room-backup.tar.gz
-pairroom restore --input room-backup.tar.gz --data-dir /path/to/restored-room
-pairroom diagnostics --data-dir /path/to/room --output diagnostics.tar.gz
-```
-
-不要手工修改 Event sequence、Store schema、附件 manifest 或 Binding Identity。多 Room 运维、升级和故障恢复见 [`docs/OPERATIONS.md`](docs/OPERATIONS.md) 与 [`docs/UPGRADING.md`](docs/UPGRADING.md)。
+阅读 [Storage](docs/STORAGE.md)、[Security](SECURITY.md)、[Privacy](docs/PRIVACY.md) 与 [Upgrading](docs/UPGRADING.md)。
 
 ## 文档导航
 
 | 目标 | 文档 |
 |---|---|
-| 第一次运行 | [快速上手](docs/GETTING_STARTED.md) |
-| 理解 Project、Room、Binding、Runtime、Turn | [核心概念](docs/CONCEPTS.md) |
-| 查全部命令和参数 | [CLI 参考](docs/CLI_REFERENCE.md) |
-| 解决启动、认证、容量、锁和数据问题 | [排障手册](docs/TROUBLESHOOTING.md) |
-| 了解多 Project / 多 Room 行为 | [Multi-Room Service](docs/MULTI_ROOM_SERVICE.md) |
-| 使用管理页面 | [Management Shell](docs/MANAGEMENT_SHELL.md) |
-| 理解进程、数据与 Adapter 边界 | [架构设计](docs/ARCHITECTURE.md) |
-| 部署、后台运行、备份与事故处理 | [运维手册](docs/OPERATIONS.md) |
-| Room REST/SSE/Event 协议 | [协议参考](docs/PROTOCOL.md) |
-| 运行时兼容策略 | [Runtime 跟随策略](docs/RUNTIME_COMPATIBILITY.md) |
-| 参与开发 | [开发者指南](docs/DEVELOPMENT.md) 与 [贡献指南](CONTRIBUTING.md) |
-| 查看全部文档与事实源 | [文档首页](docs/README.md) |
+| 第一次运行 | [GETTING_STARTED](docs/GETTING_STARTED.md) |
+| 页面操作、消息、Workflow 和 Room 生命周期 | [USER_GUIDE](docs/USER_GUIDE.md) |
+| 理解 Project、Room、Binding、Runtime、Turn | [CONCEPTS](docs/CONCEPTS.md) |
+| 配置 Agent、Provider 与 cc-connect | [CONFIGURATION](docs/CONFIGURATION.md) |
+| 查询命令或 HTTP API | [CLI_REFERENCE](docs/CLI_REFERENCE.md) / [API_REFERENCE](docs/API_REFERENCE.md) |
+| 理解代码与状态权威 | [ARCHITECTURE](docs/ARCHITECTURE.md) / [STORAGE](docs/STORAGE.md) |
+| 部署、后台运行、备份和恢复 | [OPERATIONS](docs/OPERATIONS.md) |
+| 参与开发或发布 | [CONTRIBUTING](CONTRIBUTING.md) / [RELEASING](docs/RELEASING.md) |
 
-## 开发与验证
+## 开发验证
 
 ```bash
+make docs-check
 make check
 make smoke
 ```
 
-`make check` 运行单元测试、race、vet、Agent contract、release contract、格式、JavaScript 语法、依赖和 Git whitespace 检查；`make smoke` 运行确定性 Mock 协作与恢复流程。Mock 验证不能冒充真实 Claude Code/Codex E2E。
-
-## 当前边界
-
-- 一个本地 Service 可管理多个 Project 与 Room；每个 Room 永久属于一个 canonical Git worktree，并绑定一个 Claude participant 与一个 Codex participant。
-- 当前没有多人身份、团队 RBAC、云同步、托管 TLS、远程管理或额外 Agent vendor。
-- Room Runtime 的供应商 Transcript 仍由官方 Harness 管理；恢复 Existing Binding 不会把绑定前 Transcript 导入 PairRoom 时间线。
-- UI 展示结构化过程，不嵌入完整供应商终端 TUI。
-- PairRoom 内建 HTTP 不应直接暴露公网。
-
-## Natural workflows and provider profiles
-
-PairRoom can compile an explicit sequence such as `Claude 规划，Codex review，Codex 执行，Claude audit` directly from the Room message. Planning/review/audit remain read-only, execution waits for approval of the current plan revision, and user decisions are surfaced in the shared timeline instead of a hidden terminal prompt.
-
-Claude and Codex can select independent provider profiles. PairRoom also supports a reference import from cc-connect's existing `[[providers]]` tables without copying credentials. See [Flexible workflows and provider profiles](docs/FLEXIBLE_WORKFLOWS_AND_PROVIDERS.md) and inspect the redacted result with `pairroom providers --config <path>`.
+`docs-check` 校验文档清单、链接、CLI、API、配置字段和已废弃文档引用，避免代码演进后静默漂移。
 
 ## License
 
-MIT
+[MIT](LICENSE)

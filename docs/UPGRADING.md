@@ -1,306 +1,151 @@
 # PairRoom 升级、迁移与回滚
 
-> [文档首页](README.md) · [CLI 参考](CLI_REFERENCE.md) · [运维手册](OPERATIONS.md) · [排障](TROUBLESHOOTING.md) · [Changelog](../CHANGELOG.md)
+升级的核心目标不是“新 binary 能启动”，而是 Room Event Log、Binding ownership、Vendor resume、Runtime policy 和回滚边界仍可证明。
 
-本文覆盖三类变化：Room Store schema 升级、前台/后台 Service 二进制升级，以及旧单 Room 数据迁移到多 Project / 多 Room Service。
+## 1. 阅读变化
 
-## 1. 基本原则
+- 阅读 `CHANGELOG.md` 的 `Unreleased` 与目标版本章节；
+- 检查 routing、store schema、Binding、Provider、daemon 和删除语义；
+- 查看 [Runtime Compatibility](RUNTIME_COMPATIBILITY.md) 对当前 Claude/Codex 的要求。
 
-- Event Store 迁移通过 replay 与显式默认值完成，不重写历史事件；
-- 不手工编辑 `metadata.json`、Event sequence、attachment manifest、Turn summary 或 Binding Identity；
-- 新二进制写入后，不让旧二进制直接打开同一数据目录；
-- 回滚使用升级前备份恢复到新目录；
-- Service 数据工具以单个 Room 为单位，关键 Room 必须逐一校验/备份；
-- daemon `restart` 不更新二进制路径或 Service 参数，变化时重装完整定义。
+当前 routing 只接受 `turns`。配置或持久化 Room 中出现 `manual`、`mentions`、`roundtable` 会失败；没有静默迁移。
 
-## 2. 确认当前运行形态
+## 2. 保存运行信息
 
 ```bash
 pairroom version --json
 pairroom daemon status
+pairroom doctor --repo /absolute/path/to/project --json
 ```
 
-判断你在使用：
+保存脱敏配置、daemon install 参数、data root、关键 Project root 和 Vendor CLI 版本。不要保存 Token 到公开工单。
 
-- 前台 `pairroom service`；
-- 系统托管 `pairroom daemon`；
-- 兼容 `pairroom serve --repo ...`；
-- 旧自定义 `--data-dir`。
+## 3. 停止写入
 
-同时记录：
-
-- PairRoom version/commit/build date；
-- data root 或 Room data-dir；
-- daemon 完整安装参数、二进制路径与日志路径；
-- Vendor CLI version；
-- 关键 Project/Room/Binding；
-- 当前 Runtime policy 与 turn policy。
-
-## 3. 先移除旧路由配置
-
-本版本不提供 `manual`、`mentions`、`roundtable` 到 `turns` 的兼容或自动迁移。升级前必须：
-
-1. 把 JSON 配置、daemon 安装参数和启动脚本中的路由值显式改为 `turns`；
-2. 对仍包含旧 `room.settings.updated` 路由值的 Room 完成备份后重建；新版本会拒绝恢复这类 Event Store，不会静默改写历史事件；
-3. 使用 `pairroom service --mock --routing turns` 验证新配置后，再切换真实 Runtime。
-
-这是有意的 fail-fast 边界：旧配置不会被猜测、归一化或隐式延续。
-
-## 4. 升级前备份
-
-### 4.1 停止写入
-
-优先正常停止 Service/daemon，让 Management mutation 与活动 Turn 排空：
+对关键 Room 先完成/取消当前 Turn并 Archive，或停止 Service：
 
 ```bash
 pairroom daemon stop
-# 或前台 Ctrl-C / SIGTERM
+# 前台 Service 使用 Ctrl-C / SIGTERM
 ```
 
-不要在 Runtime 仍 active 时复制 `events.jsonl`。
+确认旧进程已退出、`service.lock` 正常释放。不要在 active writer 存在时复制 data root。
 
-### 4.2 校验每个关键 Room
+## 4. 校验与备份
+
+对每个关键 Room：
 
 ```bash
 pairroom verify --data-dir /absolute/path/to/room --json
+pairroom backup --data-dir /absolute/path/to/room --output /safe/path/room.tar.gz
 ```
 
-如果 verify 失败，先保留原始副本和 diagnostics，不要用升级来“修复”未知损坏。
+此外复制 Service 配置与 `service-registry.json` 作为操作证据。Registry checkpoint 不替代 Room 备份。
 
-### 4.3 创建自验证备份
+至少对一个备份做恢复演练：
 
 ```bash
-pairroom backup \
-  --data-dir /absolute/path/to/room \
-  --output /safe/location/room-before-upgrade.tar.gz
+pairroom restore --input /safe/path/room.tar.gz --data-dir /tmp/room-restore-test
+pairroom verify --data-dir /tmp/room-restore-test --json
 ```
 
-每个关键 Room 单独备份。把归档放到 data root、仓库和自动清理目录之外。
-
-### 4.4 保存 Service/daemon 配置
-
-`daemon install --force` 需要完整定义。记录：
-
-- `--data-root`、`--listen`、`--token`；
-- `--runtime-limit`、`--idle-timeout`、`--shutdown-timeout`；
-- turn policy、hop、stall warning；
-- Claude/Codex command/model/permission/sandbox；
-- proxy/PATH/work-dir；
-- log path、size、backup count。
-
-不要只保存一段局部命令。
-
-## 5. 升级二进制
+## 5. 替换 binary
 
 从源码：
 
 ```bash
+git switch <target>
+make check
 make build
 ./dist/pairroom version --json
 ```
 
-安装到 Go bin：
+或使用对应平台 release artifact，验证 checksum 和 `version --json`。GitHub workflow artifact 下载后可能需要给 Linux/macOS binary 补 executable bit。
 
-```bash
-make install
-pairroom version --json
-```
+## 6. 前台首次启动
 
-确认 shell 实际解析到的新路径。若 daemon 固定的是旧 binary path，即使 shell 中版本已更新，后台仍可能运行旧版本。
-
-## 6. 前台 Service 首次启动
-
-建议先禁用自动启动 Agent：
+先不要直接恢复 daemon：
 
 ```bash
 pairroom service \
-  --data-root /absolute/path/to/pairroom-data \
-  --auto-start=false \
+  --config /absolute/path/to/pairroom.json \
+  --data-root /absolute/path/to/data \
   --no-browser
-```
-
-检查启动输出后手动打开 Management URL。验证：
-
-- Project/Room 数量与 archived/pending 状态；
-- Binding ownership 无冲突；
-- Runtime policy 与预期一致；
-- Registry healthy/diagnostic；
-- Management Session 刷新/重启/过期语义；
-- numeric loopback listener；
-- 一个非关键 Room 能激活、打开和安全挂起。
-
-再运行：
-
-```bash
-pairroom doctor --repo /absolute/path/to/safe-test-repo --json
-```
-
-最后在非关键 Room 做一次真实 Claude/Codex Turn。
-
-## 7. daemon 升级
-
-如果二进制内容或路径变化，停服后完整替换定义：
-
-```bash
-pairroom daemon install --force -- \
-  --data-root /absolute/path/to/pairroom-data \
-  --listen 127.0.0.1:7332 \
-  --runtime-limit 4 \
-  --idle-timeout 20m \
-  --shutdown-timeout 10m \
-  --routing turns
-```
-
-随后：
-
-```bash
-pairroom daemon open
-pairroom daemon status
-pairroom daemon logs -n 200
-```
-
-不要把 `daemon restart` 当作配置迁移。它只重启已安装定义。
-
-Linux user service 还应确认 linger 策略符合“退出登录后继续运行”的预期。
-
-## 8. Room Store 首次打开检查
-
-对升级后第一个 Room，建议用兼容入口在不自动启动 Agent 的情况下检查：
-
-```bash
-pairroom serve \
-  --repo /absolute/path/to/repository \
-  --data-dir /absolute/path/to/room-data \
-  --auto-start=false
 ```
 
 检查：
 
-- transcript 最新窗口与历史分页；
-- Driver/Reviewer role；
-- Reviewer workspace kind、source HEAD、dirty、snapshot digest、read-only strength；
-- 没有遗留 `working`、`waiting` 或 pending approval；
-- 上传与 Agent 生成图片；
-- Turn summary 与 message correlation；
-- browser session/CSRF；
-- wildcard/LAN/hostname/`localhost` listener 被拒绝。
+- Registry rebuild / checkpoint 无错误；
+- Project availability 与 Room lifecycle 正确；
+- Binding ownership 无冲突；
+- 关键 Room snapshot / verify 正常；
+- archived Room 未被意外激活；
+- pending deletion cleanup 没有新增异常。
 
-这一步不适合在同一时间让 Service 也打开该 Room；必须保持单写者。
+再运行 Mock Service 或单 Room smoke，确认当前 binary 的控制面。
 
-## 9. 从旧单 Room 迁移到 Service
+## 7. Native smoke
 
-### 9.1 默认 Room 根
+在非关键仓库完成：
 
-Service 首次启动会扫描默认 PairRoom Room 根，从 Event Logs 重建可识别的 Project/Room/Binding 索引；它不移动、复制或重写 Room 数据。
+- Claude 新 Session 的只读 Turn；
+- Codex 新 Thread 的只读 Turn；
+- Existing Binding 精确 resume；
+- `error -> completed` 等 terminal boundary；
+- interrupt / approval / reviewer policy；
+- 必要时 Provider endpoint/model。
 
-### 9.2 自定义 `--data-dir`
+Doctor、Mock 和 cross-build 不能替代这一步。
 
-自定义旧目录不会被全盘扫描。在 Management Shell 选择 Legacy Import，输入绝对路径。导入：
-
-- 只建立 Registry/index；
-- 不搬迁或重写 Event Log；
-- 从 Event Log 读取并登记已有 Session/Thread ID；缺失任一 ID 时保留为 pending；
-- 保留原 Room ID 与历史。
-
-### 9.3 Pending Binding
-
-旧 Room 缺少任一 Vendor ID 时标记 pending，无法激活。通过 Project detail 的 Binding completion：
-
-- 选择 existing 并精确验证；或
-- 选择 new，作为 deferred Binding，在首个真实输入后 materialize。
-
-已存在 durable Binding 不可替换。不要为了消除 pending 手工修改 Event Log。
-
-### 9.4 Transcript boundary
-
-Existing Binding 只恢复 Vendor 原生 context。绑定前 Vendor Transcript 不会导入 PairRoom 时间线，这是数据边界，不是迁移失败。
-
-## 10. 重要行为变化
-
-从早期单 Room 版本到当前主线，关键变化包括：
-
-- Reviewer 从 live Driver tree 改为包含 HEAD、dirty tracked 和 untracked regular files 的独立 snapshot；
-- 用户消息支持 append、next-turn、supersede/cancel，迟到结果不继续唤醒 stale handoff；
-- Inspector summary 可跨重启持久化；
-- 提供 `verify`、`backup`、`restore`、`diagnostics`；
-- 长对话使用最新窗口 + cursor pagination；
-- Room query token/Web Storage credential 被移除，改为 fragment bootstrap + HttpOnly session + CSRF；
-- Service Management Shell 使用 Service-scoped HttpOnly Session + CSRF，不使用 Room session；API 客户端仍可直接使用 Bearer；
-- 所有内置 listener 仅接受 numeric loopback；
-- Service 支持多 Project/Room、Binding ownership、Runtime capacity 和 daemon；
-- Registry 是可重建 checkpoint，Room Event Log 是事实源。
-
-## 11. 数据目录中的持久与可重建内容
-
-持久：
-
-```text
-events.jsonl
-metadata.json
-attachments/
-```
-
-Service 索引：
-
-```text
-service-registry.json   # 默认 Room 可从 Event Logs 重建
-```
-
-可重建/不作为主要备份：
-
-```text
-runtime/
-reviewer worktree
-browser sessions
-temporary uploads
-lock/cache/control files
-```
-
-## 12. 回滚
-
-不要让旧二进制直接打开已被新版本写入的 data root/Room。
-
-安全回滚：
-
-1. 停止新版本；
-2. 保留新版本 data root 的只读副本用于诊断；
-3. 把升级前 Room backup 恢复到新的目录；
-4. 使用旧二进制指向恢复目录；
-5. 运行旧版本可用的完整性检查；
-6. 先禁用 auto-start 检查状态；
-7. 再做非关键 Vendor smoke。
+## 8. 恢复 daemon
 
 ```bash
-pairroom restore \
-  --input /safe/location/room-before-upgrade.tar.gz \
-  --data-dir /absolute/path/to/rollback-room
+pairroom daemon install --force -- <saved service args>
+pairroom daemon start
+pairroom daemon status
+pairroom daemon open
 ```
 
-未来 schema rejection 是有意保护。降低 metadata 中的 schema 数字不会删除新事件，只会制造无效投影。
+确认实际 binary、参数、log path 与 data root。`restart` 不更新安装定义。
 
-## 13. Registry 回滚
+## 9. 单 Room 到 Service
 
-若问题只在 Registry checkpoint：
+旧 `serve` Room 可以通过 Management import 登记：
 
-- 停止 Service；
-- 备份整个 data root；
-- 保留 Room Event Logs；
-- 移走损坏 checkpoint；
-- 用同一版本重建默认 Room 索引；
-- 重新导入自定义 Legacy 路径。
+- import 不搬移或改写 `events.jsonl`；
+- 路径必须绝对且可验证；
+- Room ID、Project canonical root 和 Binding ownership 仍去重；
+- Existing Binding 只保留 PairRoom 绑定边界后的 Timeline。
 
-不要从旧 checkpoint 覆盖已经提交的新 Room lifecycle/Binding 事件。
+不要同时让旧 `serve` 与新 Service 写同一个 Room 目录。
 
-## 14. 升级验收
+## 10. Breaking data change
 
-- `version --json` 与预期 commit 一致；
-- daemon 实际运行同一 binary path；
-- `doctor` 通过；
-- 关键 Room upgrade 前后 verify 通过；
-- Management Project/Room/Binding 数量正确；
-- capacity/queue/suspend 正常；
-- Management 与 Room 认证链路分别正确；
-- 一个 Mock collaboration/recovery smoke 通过；
-- 一个非关键真实 Vendor smoke 通过；
-- daemon stop/restart 能优雅排空；
-- 回滚归档与完整配置记录仍可访问。
+若新版本写入旧版本不理解的 schema/event：
+
+- 新版本必须明确拒绝不支持的旧状态或提供受测试迁移；
+- 旧版本必须拒绝 future schema，而不是跳过；
+- Changelog 与 PR 必须标出不可逆点；
+- 回滚前从升级前备份恢复，不要用旧 binary 打开已被新版本写入的目录。
+
+## 11. 回滚
+
+1. 停止新版本；
+2. 保存新版本 data root 的 forensic 副本；
+3. 确认旧 binary 版本；
+4. 恢复升级前 Room 备份和必要配置；
+5. 恢复 daemon 定义；
+6. 前台启动并 `verify`；
+7. 再做 Mock / native smoke。
+
+不要只替换 binary 而继续使用已发生不兼容写入的数据。
+
+## 12. 验收清单
+
+- [ ] 版本、commit、tag / Changelog 身份一致；
+- [ ] 关键 Room verify 与备份恢复通过；
+- [ ] Registry / Project / Binding ownership 正常；
+- [ ] Mock smoke 通过；
+- [ ] 当前 Vendor CLI native smoke 有真实证据或明确标记未运行；
+- [ ] listener、Session、CSRF 与 Provider secret 边界未回退；
+- [ ] 回滚步骤和备份位置已记录。

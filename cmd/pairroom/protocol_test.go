@@ -58,6 +58,9 @@ func TestWriteProtocolHelpAndValidation(t *testing.T) {
 	if !strings.Contains(stderr.String(), "usage: pairroom protocol") {
 		t.Fatalf("help omitted usage: %s", stderr.String())
 	}
+	if strings.Contains(stderr.String(), "legacy values are accepted as aliases") || !strings.Contains(stderr.String(), "only supported routing mode") {
+		t.Fatalf("help advertises stale routing compatibility: %s", stderr.String())
+	}
 	stderr.Reset()
 	if err := writeProtocol([]string{"--actor", "other"}, &stdout, &stderr); err == nil {
 		t.Fatal("invalid actor succeeded")

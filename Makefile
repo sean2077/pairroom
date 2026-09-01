@@ -13,7 +13,7 @@ ifeq ($(strip $(GOBIN)),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: build install test race vet fmt check agent-contract release-contract cover run demo smoke release package clean
+.PHONY: build install test race vet fmt check docs-check agent-contract release-contract cover run demo smoke release package clean
 
 build:
 	mkdir -p $(DIST)
@@ -32,7 +32,7 @@ test:
 	go test -count=1 ./...
 
 race:
-	@test "$$(go env CGO_ENABLED)" = 1 || { printf '%s\n' 'make race requires CGO_ENABLED=1 and a Go-supported C compiler on PATH; see docs/DEVELOPMENT.md' >&2; exit 1; }
+	@test "$$(go env CGO_ENABLED)" = 1 || { printf '%s\n' 'make race requires CGO_ENABLED=1 and a Go-supported C compiler on PATH; see CONTRIBUTING.md' >&2; exit 1; }
 	go test -race -count=1 ./...
 
 vet:
@@ -45,7 +45,7 @@ cover:
 	go test -count=1 -coverprofile=.coverage ./...
 	go tool cover -func=.coverage
 
-check: test race vet agent-contract release-contract
+check: test race vet docs-check agent-contract release-contract
 	@test -z "$$(gofmt -l $$(find . -name '*.go' -type f -not -path './.git/*'))" || { echo 'Go files are not gofmt-clean'; gofmt -l $$(find . -name '*.go' -type f -not -path './.git/*'); exit 1; }
 	@if command -v node >/dev/null 2>&1; then \
 		node --check internal/server/assets/app.js && \
@@ -59,6 +59,9 @@ check: test race vet agent-contract release-contract
 	fi
 	@go list -m all | grep -qx 'github.com/sean2077/pairroom'
 	@git diff --check
+
+docs-check:
+	"$(PYTHON)" scripts/docs-check.py
 
 agent-contract:
 	"$(PYTHON)" .agents/tools/generate-subagents.py --check

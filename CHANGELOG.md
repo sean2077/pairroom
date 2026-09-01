@@ -14,11 +14,12 @@
 
 ### Changed
 
+- Documentation is reorganized around explicit ownership: onboarding, user operations, concepts, configuration, CLI/API reference, architecture, storage, protocol, runtime compatibility, operations, troubleshooting, upgrading, privacy, security, and releasing. One-off research, review snapshots, obsolete screenshots, and frozen validation reports are removed from the maintained tree; Git history remains the archive.
 - PairRoom now uses one deterministic `turns` collaboration policy: a Room has one active Agent Turn owner, cross-Agent and `next_turn` inputs wait in a Room-level queue, and only a compact `HANDOFF` followed by `NEXT` transfers control after the current native Turn completes. Legacy `manual`/`mentions`/`roundtable` configuration values are removed and rejected; configuration and persisted Room state must use `turns`.
 - The Room composer no longer offers `@All` or routing-mode controls; users choose one Agent or role, while explicit natural-language actor/action sequences remain available for plan/review/execute/audit workflows.
 - Room View batches high-volume transient Runtime telemetry (command output, logs, tool/plan/diff/usage updates) into bounded 500 ms render passes while keeping `text.delta` low-latency, and preserves Activity scroll position plus Turn-card and nested disclosure state across live re-renders.
 - Single and batch Room archive now stop the active Agent Turn by default before suspending the Runtime, so the operator no longer has to open the Room and stop the Agent first; rename, binding completion, suspend, capacity eviction, and service shutdown still never interrupt a Turn.
-- Unaddressed messages and the Room composer now target the single current Driver instead of invoking both Agents by default; explicit `@all` is recognized only to return the one-recipient error and never starts both runtimes.
+- Unaddressed messages and the Room composer now target the single current Driver instead of invoking both Agents by default; `@all` and other multi-recipient delivery are rejected and never start both runtimes.
 - Reviewer snapshots are refreshed immediately before each safe new reviewer turn, preventing review of the pre-implementation startup snapshot.
 - Agent-to-peer delivery uses the compact handoff packet, or a bounded fallback, instead of replaying an arbitrarily long final response.
 - The native collaboration contract now asks for a second Agent only when independent work can materially change the outcome and keeps tool chatter in Inspector.

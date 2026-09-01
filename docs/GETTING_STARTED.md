@@ -1,242 +1,133 @@
 # PairRoom 快速上手
 
-> [文档首页](README.md) · [核心概念](CONCEPTS.md) · [CLI 参考](CLI_REFERENCE.md) · [排障](TROUBLESHOOTING.md)
+本指南只覆盖“从零到完成第一个协作流程”。日常操作、全部配置和运维分别见 [User Guide](USER_GUIDE.md)、[Configuration](CONFIGURATION.md) 与 [Operations](OPERATIONS.md)。
 
-本教程先用 Mock Agent 跑通完整产品路径，再切换到真实 Claude Code 与 Codex。完成后你会拥有一个可重复打开的 Project、一个持久化 Room，以及清晰的 Driver/Reviewer 协作方式。
+## 1. 前置条件
 
-## 1. 选择运行方式
+- 一个本地 Git worktree；
+- 与 `go.mod` 匹配的 Go toolchain；
+- 浏览器可访问本机 loopback；
+- 真实模式下可独立运行并已登录的 `claude` 与 `codex` CLI。
 
-| 目标 | 命令 |
-|---|---|
-| 体验多 Project / 多 Room | `pairroom service --mock` |
-| 日常真实协作 | `pairroom service` |
-| 后台常驻 | `pairroom daemon install ...` |
-| 只为一个仓库快速开房间 | `pairroom serve --repo ...` |
+首次使用建议先跑 Mock。它使用同一套 Management、Room、Event Log、调度和恢复路径，但不会调用模型。
 
-新用户优先使用 `service`。`serve` 是兼容快捷入口，不提供 Project Registry、多个 Room、Runtime 容量和 Management Shell。
-
-## 2. 前置条件
-
-### 仅使用 Mock
-
-- Git；
-- 一个可访问的 Git worktree；
-- 从源码构建时需要 Go 1.23+；
-- 源码构建需要 `make`；Windows 请使用已安装 `make` 的 POSIX shell（例如 MSYS2），或直接执行下文的 `go build` 命令。
-
-### 使用真实 Agent
-
-除上述条件外，还需要：
-
-- 官方 Claude Code CLI，可执行命令默认是 `claude`；
-- 官方 Codex CLI，可执行命令默认是 `codex`，并提供 `codex app-server`；
-- 两个 CLI 已分别按供应商官方流程完成登录；
-- 当前网络和账号可以完成真实 Turn。
-
-PairRoom 不保存供应商 API Key，也不替代官方登录流程。
-
-## 3. 构建与安装
-
-### 构建仓库内二进制
+## 2. 构建或安装
 
 ```bash
-git clone https://github.com/sean2077/pairroom.git
-cd pairroom
 make build
-./dist/pairroom version --json
+./dist/pairroom version
 ```
 
-### 安装为全局命令
+安装到 Go binary 目录：
 
 ```bash
 make install
 pairroom version
 ```
 
-安装目录优先使用显式 `GOBIN`，否则使用 Go 默认的 `$(go env GOPATH)/bin`。目标目录不在 `PATH` 时，可以直接指定：
+`make install` 不修改 `PATH`；输出会显示实际安装位置。
 
-```bash
-make install GOBIN="$HOME/.local/bin"
-```
-
-Windows PowerShell 可通过 Git Bash 调用 Makefile：
-
-```powershell
-& 'C:\Program Files\Git\bin\bash.exe' -lc 'make build'
-.\dist\pairroom.exe version --json
-```
-
-## 4. 第一次 Mock Service
-
-从任意目录启动：
-
-```bash
-pairroom service --mock
-```
-
-没有安装全局命令时使用：
+## 3. 启动 Mock Service
 
 ```bash
 ./dist/pairroom service --mock
 ```
 
-终端会打印 Management Shell URL、数据根、Runtime 容量和运行模式，并尝试打开浏览器。使用 `--no-browser` 可只打印 URL。
+未自动打开浏览器时，使用终端打印的 Management URL。Service 默认监听 `127.0.0.1:7332`，数据根位于 `os.UserConfigDir()/pairroom`；可用 `--listen` 与绝对 `--data-root` 覆盖。
 
-### 4.1 登记 Project
+## 4. 登记 Project
 
-在 Management Shell 选择“登记 Project”，输入 Git worktree 的绝对路径。
+在 Management Shell 的 Projects 页面输入 Git worktree 的绝对路径。Service 会解析 symlink、定位 Git worktree root、canonicalize 并去重。
 
-Service 会解析符号链接、定位 Git worktree root、canonicalize 并去重。以下输入最终指向同一个 worktree 时只会登记一次：
+Project 是注册记录，不是仓库副本。注销空 Project 不会删除 Git worktree。
 
-```text
-/path/to/repo
-/path/to/repo/subdirectory
-/symlink/to/repo
-```
+## 5. 创建 Room
 
-Management Shell 不扫描磁盘，也不提供服务器路径浏览器；Project 必须由用户显式登记。
+在 Project detail 中创建 Room。Claude 与 Codex 可分别选择：
 
-### 4.2 创建 Room
+- `new`：首次 native input 被接受后 materialize Session/Thread ID；
+- `existing`：创建时提供并精确验证现有 Session/Thread ID。
 
-在 Project 详情页创建 Room：
+首次体验使用 `new/new`。Room 默认 Claude 为 Driver、Codex 为 Reviewer；角色可以在安全 Turn 边界调整。
 
-- Room name：例如 `auth-refactor`；
-- Claude Binding：选择 `new`；
-- Codex Binding：选择 `new`。
+## 6. 完成第一个 Turn
 
-`new` Binding 在第一个被对应官方 Runtime 接受的真实输入上 materialize。Mock 模式会模拟同一生命周期，因此适合验证页面、队列和状态，而不是证明 Vendor 协议可用。
-
-### 4.3 打开 Room
-
-点击“打开”。Service 会按 Runtime 容量惰性启动 Room，并返回一个独立的 loopback Room URL。浏览器切换页面或关闭 Management Shell 不会中断正在运行的 Turn。
-
-### 4.4 发送第一条消息
+打开 Room，给当前 Driver 一个小型只读任务：
 
 ```text
-请先分析这个仓库的结构、风险和可改进点。先讨论，不修改文件；只有独立审查能改变结论时，才用 HANDOFF + NEXT 把下一轮交给 Reviewer。
+阅读当前仓库，说明构建与测试入口，不要修改文件。
 ```
 
-观察三个区域：
+Timeline 显示输入和最终回答；Inspector 显示 Delivery、Processing、native Turn、工具和审批。不要把 `HTTP 202` 或 Delivery `started` 当作任务完成，以 Processing / Turn terminal 状态为准。
 
-1. **公共时间线**：你和两个 Agent 的公开结论；
-2. **参与者状态**：Runtime、Session/Thread、角色与当前 Turn；
-3. **Work Inspector**：工具、命令、计划、Diff、审批、错误和消息关联。
+## 7. 验证确定性接力
 
-尝试引用回复、线程聚焦、图片上传和 `@claude` / `@codex` 单独指令。
+发送：
 
-### 4.5 验证轮次接力
-
-Room 使用固定的 `turns` 策略：同一时刻只有一个 Agent 工作。发给另一 Agent 的消息会显示为 waiting，并在当前 native Turn 完成后启动；Agent 只有输出有效的 `HANDOFF + NEXT` 才能自主交棒。普通 `@peer` 文本不会继续会话。
-
-```bash
-pairroom service --mock --routing turns --max-hops 6
+```text
+Claude 先规划；Codex 独立审查；等我批准后再执行。
 ```
 
-路由模式只接受 `turns`；`manual`、`mentions`、`roundtable` 会直接报错，不会迁移。升级旧配置时先显式改为 `turns`；包含旧路由事件的 Room 不会自动恢复，需要重建。用户新消息总是比旧自动接力优先。
+预期：
 
-## 5. 切换到真实 Runtime
+```text
+Claude native Turn
+  -> reliable terminal boundary
+  -> Codex native Turn
+  -> WAIT / human decision
+```
 
-先在目标仓库执行：
+两个 Runtime 不会同时拥有 active Turn。普通 `@peer` 文本不会自动投递；Agent 自动交棒需要有效 `HANDOFF` 与 `NEXT`。
+
+## 8. 批准或改变计划
+
+计划审查后可以发送明确批准，例如：
+
+```text
+批准，按当前计划执行。
+```
+
+若计划内容发生变化，旧批准自动失效，需要重新批准。也可以拒绝、补充约束或用新的多阶段描述替换当前 Workflow。
+
+## 9. Steering、下一 Turn 与取消
+
+- 发给当前 owner 的 `append` 通常进入当前 native Turn；
+- 发给另一 Agent或使用 `next_turn` 的输入进入 Room FIFO；
+- FIFO 中未提交的消息可精确取消；
+- native Runtime 已接受输入后，中断粒度可能扩大到当前 Agent Turn；
+- Retry 创建新消息并引用旧消息，不修改历史。
+
+Service 重启不会自动重放 Room FIFO。重启后先检查工作区副作用，再显式 Retry。
+
+## 10. 切换到真实 Runtime
+
+先运行：
 
 ```bash
 pairroom doctor --repo /absolute/path/to/project
+pairroom providers --config /absolute/path/to/pairroom.json
 ```
 
-机器可读输出：
+然后去掉 `--mock`：
 
 ```bash
-pairroom doctor --repo /absolute/path/to/project --json
+pairroom service --config /absolute/path/to/pairroom.json
 ```
 
-检查通过后停止 Mock Service，再启动真实模式：
+`doctor` 不创建模型 Turn，也不能证明账号、网络或供应商服务当前可用。第一次真实协作使用非关键仓库、只读任务和最小权限。
 
-```bash
-pairroom service
-```
-
-创建新的真实 Room，或为 Claude/Codex 分别选择已有 Session/Thread ID。`existing` 只恢复供应商原生上下文；PairRoom 不读取或导入绑定前 Transcript，公共时间线从绑定成功后开始。
-
-### 建议的首次真实协作
-
-让 Reviewer 保持只读，先独立分析：
-
-```text
-Claude 先提出最小实现方案；Codex 下一轮独立检查并发、恢复、安全和测试遗漏。两轮都只读，遇到需要我决定的地方停下来询问。
-```
-
-PairRoom 会把这类明确的 actor/action 序列编译为阶段，而不是同时启动两侧。确认方案后：
-
-```text
-Claude 执行已批准方案并运行测试；完成后 Codex 只读审查完整 diff；如有必须修复项，再把下一轮交回 Claude。
-```
-
-真实模式首次使用应选择非关键仓库，并人工检查审批、命令、文件范围和 Diff。
-
-## 6. 后台常驻
-
-安装并启动同一个多 Room Service：
+## 11. 后台运行与收尾
 
 ```bash
 pairroom daemon install --runtime-limit 4 --idle-timeout 20m
 pairroom daemon open
-pairroom daemon status
-pairroom daemon logs -f
 ```
 
-常用生命周期：
+暂时不用 Room 时可让 idle policy 回收 Runtime；阶段完成后归档 Room。永久删除只处理已归档且 Runtime 可证明停止的 PairRoom 数据，不删除 Git worktree 或 Vendor Session/Thread。
 
-```bash
-pairroom daemon stop
-pairroom daemon start
-pairroom daemon restart
-pairroom daemon uninstall
-```
+下一步：
 
-`daemon install` 将未知安装参数转发给 `pairroom service`，自动加入 `--no-browser`，并固定二进制路径、工作目录、PATH、代理环境和日志路径。`daemon open` 会从当前/轮转日志验证 Management URL 后打开默认浏览器。使用 `--` 可显式分隔 daemon 与 Service 参数：
-
-```bash
-pairroom daemon install \
-  --log-max-size 20M \
-  --log-max-backups 5 \
-  -- \
-  --runtime-limit 4 \
-  --data-root /absolute/path/to/pairroom-data
-```
-
-修改定义要使用 `--force` 并重新提供完整参数；`daemon restart` 不修改定义。
-
-## 7. 单 Room 快捷模式
-
-不需要 Registry 和 Management Shell 时：
-
-```bash
-pairroom serve --repo /absolute/path/to/project --mock
-```
-
-真实模式：
-
-```bash
-pairroom doctor --repo /absolute/path/to/project
-pairroom serve --repo /absolute/path/to/project
-```
-
-单 Room 默认数据目录由清理后的仓库绝对路径计算。可用 `--data-dir` 显式指定。
-
-## 8. 安全检查
-
-首次使用至少确认：
-
-- URL 监听地址是 `127.0.0.1` 或 `[::1]`；
-- 没有把启动 URL、Bearer Token、Cookie 或 CSRF Token 发到 Issue/聊天；
-- Reviewer 的 Workspace Boundary 显示 snapshot，而不是 live writable tree；
-- 真实 Agent 的命令、写入和额外权限审批符合预期；
-- 私有截图和代码可以按供应商政策发送；
-- 远程访问通过 SSH tunnel，不直接暴露 PairRoom HTTP。
-
-## 9. 下一步
-
-- [核心概念](CONCEPTS.md)：先建立正确心智模型；
-- [Multi-Room Service](MULTI_ROOM_SERVICE.md)：理解 Binding、容量、归档和恢复；
-- [CLI 参考](CLI_REFERENCE.md)：查看全部选项；
-- [运维手册](OPERATIONS.md)：后台服务、备份与升级；
-- [排障手册](TROUBLESHOOTING.md)：解决启动、认证、Runtime 和数据问题。
+- [日常使用](USER_GUIDE.md)
+- [核心概念](CONCEPTS.md)
+- [配置](CONFIGURATION.md)
+- [运维](OPERATIONS.md)
