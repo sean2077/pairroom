@@ -936,7 +936,9 @@
         cancelButton.dataset.cancelMessage = message.id;
         cancelButton.dataset.cancelTarget = target;
         cancelButton.textContent = `取消 ${displayName(target)}`;
-        cancelButton.title = '原生运行时可能按整个 Turn 或队列取消；受影响的消息会一并标记';
+        cancelButton.title = status === 'pending'
+          ? '该消息仍在 Room FIFO 中；只移除这一项，不会打断任何原生 Turn'
+          : '该输入已进入原生 Runtime；取消可能中断该参与者当前整个 Turn，但不会删除 Room FIFO 中尚未提交的后续消息';
         delivery.appendChild(cancelButton);
       }
     }

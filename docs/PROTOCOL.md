@@ -126,7 +126,7 @@ pending → skipped
 
 - `started`：新原生 Turn；
 - `injected`：Codex `turn/steer` 成功；
-- `queued`：Claude 或内部安全队列等待下一个 Turn；
+- `queued`：输入已经被原生 Adapter 接受，但在该 Adapter 的安全队列中等待下一个 Turn；Room 级 FIFO 尚未提交给 Adapter，因此仍保持 `Delivery=pending`；
 - `failed`：没有提交给 Harness；
 - `skipped`：重启或策略在提交前使消息作废。
 
@@ -437,9 +437,18 @@ same target + append/supersede
   → steer/inject/queue inside that Agent runtime
 other target OR next_turn
   → Room FIFO queue
-owner turn.completed / error / cancel / stop
+authoritative turn.completed / confirmed process exit / explicit cancel-or-stop boundary
   → release owner and start exactly one queued item
 ```
+
+`RuntimeError` 是诊断事件，不是 Turn terminal boundary。尤其是 Codex App Server 的通用 `error` notification 可能在 Turn 中途出现；PairRoom 只记录错误文本，保持当前 input 与 owner 不变，直到收到可靠的 `turn/completed`。若 vendor 进程退出，Adapter 必须先结算所有已知 input，再发出 `turn.completed(name=process_exited)`，随后才可报告 Runtime 错误状态。
+
+Room `turnQueue` 是有界于当前进程生命周期的调度状态，不是可重放命令日志。PairRoom 重启时，尚未进入原生 Runtime 的 `Delivery=pending` 项会被标为 `skipped`，对应 Processing 标为 `cancelled`；不会自动重放，避免无法判定是否已执行时造成重复副作用。用户检查原因后使用可审计的 Retry 创建新消息。
+
+取消语义按边界区分：
+
+- `Delivery=pending` 且仍在 Room FIFO：只移除该消息，不调用任何 Adapter Interrupt；
+- `started` / `injected` / Adapter `queued`：调用该参与者的原生 Interrupt。若供应商只能按整个 native Turn 取消，所有已经进入该 Turn/Adapter 队列的输入会一并结算；仍在 Room FIFO 的后续项保留。
 
 Agent 自主交棒需要：
 

@@ -712,6 +712,78 @@ func (e *Engine) CancelMessage(ctx context.Context, messageID string, target mod
 	if state != model.ProcessingWaiting && state != model.ProcessingWorking {
 		return fmt.Errorf("message is not in flight for %s", target.DisplayName())
 	}
+	// A Room-level queued delivery has not entered either native harness. Remove
+	// only that FIFO item; interrupting the target here would cancel unrelated
+	// work in its active native Turn and would make a single-message action lie.
+	if e.cancelRoomQueuedDelivery(messageID, target) {
+		e.delivery(messageID, target, model.DeliverySkipped, "cancelled before native runtime submission")
+		e.processing(messageID, target, model.ProcessingCancelled, "cancelled while waiting in the Room turn queue; no native Turn was interrupted", "")
+		return nil
+	}
+
+	// Serialize with Submit and reviewer snapshot refresh. Some adapters emit the
+	// terminal callback synchronously from Interrupt; holding the delivery scope
+	// prevents the next Room FIFO item from entering the Runtime before we have
+	// captured the exact set of inputs affected by this native interruption.
+	unlock, err := e.lockDeliveryScope(ctx, target)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	// Recheck after waiting for a submission boundary. A delivery can become
+	// Room-queued or terminal while this cancellation waits for the lock.
+	if e.cancelRoomQueuedDelivery(messageID, target) {
+		e.delivery(messageID, target, model.DeliverySkipped, "cancelled before native runtime submission")
+		e.processing(messageID, target, model.ProcessingCancelled, "cancelled while waiting in the Room turn queue; no native Turn was interrupted", "")
+		return nil
+	}
+
+	e.mu.RLock()
+	message, found = e.findMessageLocked(messageID)
+	if !found {
+		e.mu.RUnlock()
+		return fmt.Errorf("unknown message %q", messageID)
+	}
+	state = message.Processing[target]
+	if state != model.ProcessingWaiting && state != model.ProcessingWorking {
+		e.mu.RUnlock()
+		return fmt.Errorf("message is no longer in flight for %s", target.DisplayName())
+	}
+	if message.Delivery[target] == model.DeliveryPending {
+		e.mu.RUnlock()
+		// The scheduler may already have reserved this item as the next owner, but
+		// the delivery lock proves it has not crossed the native boundary. Mark it
+		// skipped; deliver() rechecks this state after acquiring the same lock.
+		e.delivery(messageID, target, model.DeliverySkipped, "cancelled before native runtime submission")
+		e.processing(messageID, target, model.ProcessingCancelled, "cancelled before native runtime submission; no native Turn was interrupted", "")
+		return nil
+	}
+	// Native runtimes often cancel an entire active turn or their own accepted
+	// input queue rather than one logical room message. Snapshot every input that
+	// has already crossed the native boundary before Interrupt; a synchronous
+	// completion callback may release the owner, but later Room FIFO items must
+	// never be swept into this cancellation.
+	var affected []string
+	for _, candidate := range e.snapshot.Messages {
+		candidateState := candidate.Processing[target]
+		if candidateState != model.ProcessingWaiting && candidateState != model.ProcessingWorking {
+			continue
+		}
+		delivery := candidate.Delivery[target]
+		switch delivery {
+		case model.DeliveryStarted, model.DeliveryInjected, model.DeliveryQueued:
+			affected = append(affected, candidate.ID)
+		case model.DeliveryPending:
+			// The requested message may be inside Submit's acceptance window. Its
+			// cancellation remains explicit even though no narrower native API is
+			// available at this boundary. Other pending messages remain in Room FIFO.
+			if candidate.ID == messageID {
+				affected = append(affected, candidate.ID)
+			}
+		}
+	}
+	e.mu.RUnlock()
+
 	adapter, err := e.adapter(target)
 	if err != nil {
 		return err
@@ -719,24 +791,27 @@ func (e *Engine) CancelMessage(ctx context.Context, messageID string, target mod
 	if err := adapter.Interrupt(ctx); err != nil {
 		return err
 	}
-	// Native runtimes often cancel an entire active turn or input queue rather
-	// than one logical room message. Mark every affected in-flight message for
-	// the participant so the transcript does not imply a narrower cancellation.
-	e.mu.RLock()
-	var affected []string
-	for _, candidate := range e.snapshot.Messages {
-		candidateState := candidate.Processing[target]
-		if candidateState == model.ProcessingWaiting || candidateState == model.ProcessingWorking {
-			affected = append(affected, candidate.ID)
-		}
-	}
-	e.mu.RUnlock()
 	for _, id := range affected {
-		e.processing(id, target, model.ProcessingCancelled, "cancelled by the PairRoom user; native interruption affects the participant turn/queue", "")
+		e.processing(id, target, model.ProcessingCancelled, "cancelled by the PairRoom user; native interruption affects inputs already accepted by this participant, while Room-level queued turns are preserved", "")
 	}
 	e.expireApprovals(target, "message_cancelled")
 	e.finishTurnIfIdle(target, false)
 	return nil
+}
+
+func (e *Engine) cancelRoomQueuedDelivery(messageID string, target model.ActorID) bool {
+	e.turnMu.Lock()
+	defer e.turnMu.Unlock()
+	for i, scheduled := range e.turnQueue {
+		if scheduled.message.ID != messageID || scheduled.target != target {
+			continue
+		}
+		copy(e.turnQueue[i:], e.turnQueue[i+1:])
+		e.turnQueue[len(e.turnQueue)-1] = scheduledDelivery{}
+		e.turnQueue = e.turnQueue[:len(e.turnQueue)-1]
+		return true
+	}
+	return false
 }
 
 // Retry creates a new auditable message rather than mutating a past message.
@@ -1545,6 +1620,12 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 		return
 	}
 	defer unlock()
+	// A queued item can be cancelled after the scheduler reserves ownership but
+	// before this goroutine acquires the delivery lock. Recheck durable lifecycle
+	// state at the actual native submission boundary to prevent ghost execution.
+	if !e.deliveryStillPending(message.ID, target) {
+		return
+	}
 	adapter, err := e.adapter(target)
 	if err != nil {
 		e.delivery(message.ID, target, model.DeliveryFailed, err.Error())
@@ -1727,15 +1808,17 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 		})
 	case model.RuntimeTurnCompleted:
 		e.updateParticipant(runtimeEvent.Agent, func(p *model.ParticipantSnapshot) {
-			if p.State != model.StateWaiting {
-				p.State = model.StateIdle
-			}
+			// A native Turn boundary ends any connection-local wait owned by that
+			// Turn. Failed runtimes may immediately project StateError afterwards,
+			// but a completed Turn must never leave the participant stuck Waiting.
+			p.State = model.StateIdle
 			if p.CurrentTurn == runtimeEvent.TurnID || runtimeEvent.TurnID == "" {
 				p.CurrentTurn = ""
 			}
 			p.LastActivity = runtimeEvent.CreatedAt
 		})
 		e.settleTurnInputs(runtimeEvent)
+		e.expireApprovals(runtimeEvent.Agent, "turn_completed")
 		e.turnMu.Lock()
 		if e.turnOwner == runtimeEvent.Agent {
 			e.turnBoundarySeen = true
@@ -1758,20 +1841,19 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 			_, _ = e.record(EventApprovalUpdated, runtimeEvent.Agent, *runtimeEvent.Approval)
 		}
 	case model.RuntimeError:
-		// Runtime errors happen after a harness has accepted the input. Keep the
-		// transport-level delivery result intact and project only execution failure.
-		// Submit() errors are the sole source of DeliveryFailed.
-		if runtimeEvent.CorrelationID != "" {
-			e.processing(runtimeEvent.CorrelationID, runtimeEvent.Agent, model.ProcessingFailed, runtimeEvent.Text, runtimeEvent.TurnID)
-		}
-		e.cancelInFlight(runtimeEvent.Agent, "native runtime failed before pending inputs completed")
-		e.expireApprovals(runtimeEvent.Agent, "runtime_error")
+		// RuntimeError is diagnostic, not a native Turn boundary. Codex may emit
+		// an `error` notification while the Turn continues, and stream/protocol
+		// diagnostics can also precede a later authoritative turn.completed. Only
+		// RuntimeInputFailed/Cancelled settle individual inputs; only a reliable
+		// RuntimeTurnCompleted (including confirmed process exit), explicit stop,
+		// or failed submission releases the Room owner.
 		e.updateParticipant(runtimeEvent.Agent, func(p *model.ParticipantSnapshot) {
-			p.State = model.StateError
 			p.LastError = runtimeEvent.Text
+			if p.CurrentTurn == "" && p.State != model.StateStarting && p.State != model.StateWorking && p.State != model.StateWaiting {
+				p.State = model.StateError
+			}
 			p.LastActivity = runtimeEvent.CreatedAt
 		})
-		e.finishTurnIfIdle(runtimeEvent.Agent, true)
 	case model.RuntimeFinal:
 		e.onFinal(runtimeEvent)
 	}
@@ -1840,8 +1922,12 @@ func (e *Engine) projectTurnSummary(runtimeEvent model.RuntimeEvent) {
 	case model.RuntimeInputCancelled:
 		summary.Status = "cancelled"
 		summary.Error = boundedTail(runtimeEvent.Text, 8<<10)
-	case model.RuntimeInputFailed, model.RuntimeError:
+	case model.RuntimeInputFailed:
 		summary.Status = "failed"
+		summary.Error = boundedTail(runtimeEvent.Text, 8<<10)
+	case model.RuntimeError:
+		// Keep diagnostic errors visible without declaring the native Turn
+		// terminal. A later input.failed or turn.completed owns final status.
 		summary.Error = boundedTail(runtimeEvent.Text, 8<<10)
 	case model.RuntimeTurnCompleted:
 		for i := range summary.Items {
@@ -1897,7 +1983,7 @@ func (e *Engine) settleTurnInputs(runtimeEvent model.RuntimeEvent) {
 	case strings.Contains(status, "cancel"), strings.Contains(status, "interrupt"):
 		state = model.ProcessingCancelled
 		detail = "native turn was cancelled"
-	case strings.Contains(status, "fail"), strings.Contains(status, "error"):
+	case strings.Contains(status, "fail"), strings.Contains(status, "error"), strings.Contains(status, "exit"):
 		state = model.ProcessingFailed
 		detail = "native turn failed"
 	}

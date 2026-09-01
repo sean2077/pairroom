@@ -178,6 +178,7 @@ Room Engine 是领域状态机，负责：
 
 - 消息、线程、引用、目标和重试；
 - 单 active owner 的 Turn scheduler、Room FIFO 队列与显式 `HANDOFF + NEXT` 交棒；
+- 可靠 terminal boundary 判定：普通 Runtime error 只做诊断，只有 `turn.completed`、确认进程退出或显式 cancel/stop 才释放 owner；
 - 用户新指令对旧自动接力的优先级；
 - Delivery 与 Processing 双生命周期；
 - Runtime correlation 和 final response 投影；
@@ -186,6 +187,8 @@ Room Engine 是领域状态机，负责：
 - 领域事件先落盘、后广播。
 
 Engine 不推理模型内容，也不解析终端绘制结果。它只消费 Adapter 产生的结构化 RuntimeEvent。
+
+Room FIFO 是进程内调度状态而非 durable command queue。Event Log 持久化消息及其生命周期，但重启时未提交的 FIFO 项会 fail-closed 地结算为 skipped/cancelled，必须由用户检查后显式 Retry，不能自动重放潜在写操作。
 
 ### 5.2 Event Store
 

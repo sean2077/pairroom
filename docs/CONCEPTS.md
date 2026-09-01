@@ -183,7 +183,9 @@ waiting → working → completed
 
 ### Turn
 
-Turn 是供应商 Runtime 的一次工作单元。多个发给同一 Agent 的 PairRoom 输入可能被关联到同一个原生 Turn；同一 Room 任意时刻只允许一个 Agent 拥有 active Turn。跨 Agent 输入与 `next_turn` 输入进入 Room 级 FIFO 队列，只有当前 owner 完成、失败、取消或停止后才会启动下一项。
+Turn 是供应商 Runtime 的一次工作单元。多个发给同一 Agent 的 PairRoom 输入可能被关联到同一个原生 Turn；同一 Room 任意时刻只允许一个 Agent 拥有 active Turn。跨 Agent 输入与 `next_turn` 输入进入 Room 级 FIFO 队列，只有可靠的 `turn.completed`、已确认的进程退出，或显式 cancel/stop 边界才会释放 owner。普通 Runtime `error` 只是诊断，不能启动下一位 Agent。
+
+Room FIFO 是进程内调度状态。服务重启不会自动重放排队消息；未提交项会 fail-closed 地结算为 skipped/cancelled，用户确认后通过 Retry 创建新的可审计尝试。
 
 Inspector 的工具、命令、计划、Diff、用量和最终结果按 Turn 投影。PairRoom 保存有界摘要，不复制供应商完整内部 Transcript 或推理状态。
 
@@ -195,7 +197,7 @@ Inspector 的工具、命令、计划、Diff、用量和最终结果按 Turn 投
 - **next turn**：作为独立任务等待下一个安全 Turn；未显式回复旧消息时，不会使其他讨论的 Agent 结果过期；
 - **supersede**：明确取代旧指令，并收口受影响状态。
 
-取消和重试按目标执行。重试创建新消息并引用原消息，不改写历史。
+取消和重试按目标执行。仍在 Room FIFO 的消息可单独取消且不会 Interrupt Runtime；已经进入原生 Turn 的输入受供应商取消粒度限制，可能连同该 Turn 内其他已接受输入一起取消，但不会删除 Room FIFO 中尚未提交的后续项。重试创建新消息并引用原消息，不改写历史。
 
 ## 单轮次接力
 

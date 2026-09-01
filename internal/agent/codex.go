@@ -918,6 +918,11 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 		c.handleServerRequestResolved(params)
 
 	case "error", "warning", "configWarning":
+		// App Server `error` notifications are diagnostics and may arrive while
+		// the native Turn continues. Preserve their error classification for the
+		// inspector, but Room scheduling must not treat RuntimeError as a terminal
+		// boundary; only turn/completed, confirmed process exit, or explicit abort
+		// and stop signals may release ownership.
 		kind := model.RuntimeLog
 		if method == "error" {
 			kind = model.RuntimeError
@@ -933,9 +938,13 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 			} `json:"error"`
 		}
 		_ = json.Unmarshal(params, &p)
-		e.TurnID = p.TurnID
 		c.mu.Lock()
-		e.CorrelationID = c.latestTurnInputLocked(p.TurnID).MessageID
+		turnID := p.TurnID
+		if turnID == "" && method == "error" {
+			turnID = c.currentTurn
+		}
+		e.TurnID = turnID
+		e.CorrelationID = c.latestTurnInputLocked(turnID).MessageID
 		c.mu.Unlock()
 		e.Text = p.Message
 		if e.Text == "" {
@@ -1176,34 +1185,53 @@ func (c *CodexAdapter) failQueued(detail string) {
 	}
 }
 
-func (c *CodexAdapter) takeOutstandingInputs() []model.AgentInput {
+type codexOutstanding struct {
+	inputs        []model.AgentInput
+	inputTurns    map[string]string
+	turnID        string
+	correlationID string
+}
+
+func (c *CodexAdapter) takeOutstanding() codexOutstanding {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	result := codexOutstanding{turnID: c.currentTurn, inputTurns: make(map[string]string)}
+	if input := c.latestTurnInputLocked(c.currentTurn); input.MessageID != "" {
+		result.correlationID = input.MessageID
+	} else if c.startingInput != nil {
+		result.correlationID = c.startingInput.MessageID
+	}
 	seen := make(map[string]struct{})
-	var inputs []model.AgentInput
-	add := func(input model.AgentInput) {
+	add := func(input model.AgentInput, turnID string) {
 		if input.MessageID == "" {
 			return
 		}
 		if _, exists := seen[input.MessageID]; exists {
+			if result.inputTurns[input.MessageID] == "" && turnID != "" {
+				result.inputTurns[input.MessageID] = turnID
+			}
 			return
 		}
 		seen[input.MessageID] = struct{}{}
-		inputs = append(inputs, input)
+		result.inputs = append(result.inputs, input)
+		result.inputTurns[input.MessageID] = turnID
+		if result.correlationID == "" {
+			result.correlationID = input.MessageID
+		}
 	}
-	for _, values := range c.turnInputs {
+	for turnID, values := range c.turnInputs {
 		for _, input := range values {
-			add(input)
+			add(input, turnID)
 		}
 	}
 	if c.startingInput != nil {
-		add(*c.startingInput)
+		add(*c.startingInput, c.currentTurn)
 	}
 	for _, input := range c.wireInputs {
-		add(input)
+		add(input, c.currentTurn)
 	}
 	for _, input := range c.queued {
-		add(input)
+		add(input, "")
 	}
 	c.turnInputs = make(map[string][]model.AgentInput)
 	c.wireInputs = make(map[string]model.AgentInput)
@@ -1212,7 +1240,11 @@ func (c *CodexAdapter) takeOutstandingInputs() []model.AgentInput {
 	c.turnBuffers = make(map[string]*strings.Builder)
 	c.turnFinal = make(map[string]string)
 	c.currentTurn = ""
-	return inputs
+	return result
+}
+
+func (c *CodexAdapter) takeOutstandingInputs() []model.AgentInput {
+	return c.takeOutstanding().inputs
 }
 
 func (c *CodexAdapter) sendRawResponse(id json.RawMessage, result any, rpcErr *codexRPCError) error {
@@ -1429,18 +1461,30 @@ func (c *CodexAdapter) waitProcess(cmd *exec.Cmd) {
 		c.setState(model.StateStopped, "")
 		return
 	}
+	c.handleUnexpectedProcessExit(err)
+}
+
+func (c *CodexAdapter) handleUnexpectedProcessExit(err error) {
 	detail := "Codex app-server exited"
 	if err != nil {
 		detail += ": " + err.Error()
 	}
-	for _, input := range c.takeOutstandingInputs() {
-		c.emitInputTerminal("", input, model.RuntimeInputFailed, detail)
+	outstanding := c.takeOutstanding()
+	for _, input := range outstanding.inputs {
+		c.emitInputTerminal(outstanding.inputTurns[input.MessageID], input, model.RuntimeInputFailed, detail)
 	}
-	if err != nil {
+	if outstanding.turnID != "" || len(outstanding.inputs) > 0 {
+		completed := runtimeEvent(model.ActorCodex, model.RuntimeTurnCompleted)
+		completed.TurnID = outstanding.turnID
+		completed.CorrelationID = outstanding.correlationID
+		completed.Name = "process_exited"
+		c.sink(completed)
+	}
+	if err != nil || outstanding.turnID != "" || len(outstanding.inputs) > 0 {
 		e := runtimeEvent(model.ActorCodex, model.RuntimeError)
 		e.Text = detail
 		c.sink(e)
-		c.setState(model.StateError, err.Error())
+		c.setState(model.StateError, detail)
 		return
 	}
 	c.setState(model.StateStopped, "")
