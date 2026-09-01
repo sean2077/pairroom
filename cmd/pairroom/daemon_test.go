@@ -212,6 +212,85 @@ func TestDaemonOpenUsesAuthenticatedLoopbackURLFromRotatedLog(t *testing.T) {
 	}
 }
 
+func TestDaemonStartAndRestartAutomaticallyOpenManagementShell(t *testing.T) {
+	root := t.TempDir()
+	setDaemonTestConfigDir(t, filepath.Join(root, "config"))
+	management := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/service" || r.Header.Get("Authorization") != "Bearer lifecycle-secret" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer management.Close()
+
+	logFile := filepath.Join(root, "service.log")
+	liveURL := management.URL + "/#token=lifecycle-secret"
+	if err := os.WriteFile(logFile, []byte("management: "+liveURL+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := daemon.SaveMeta(&daemon.Meta{LogFile: logFile, LogBackups: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := &fakeDaemonManager{status: daemon.Status{Installed: true}}
+	originalManager := newDaemonManager
+	originalOpen := openManagementBrowser
+	t.Cleanup(func() {
+		newDaemonManager = originalManager
+		openManagementBrowser = originalOpen
+	})
+	newDaemonManager = func() (daemon.Manager, error) { return manager, nil }
+	var opened []string
+	openManagementBrowser = func(value string) error {
+		opened = append(opened, value)
+		return nil
+	}
+
+	if err := daemonStart(nil); err != nil {
+		t.Fatalf("daemon start: %v", err)
+	}
+	if manager.started != 1 {
+		t.Fatalf("start calls = %d, want 1", manager.started)
+	}
+	if len(opened) != 1 || opened[0] != liveURL {
+		t.Fatalf("start opened URLs = %#v, want [%q]", opened, liveURL)
+	}
+
+	if err := daemonRestart(nil); err != nil {
+		t.Fatalf("daemon restart: %v", err)
+	}
+	if manager.restarted != 1 {
+		t.Fatalf("restart calls = %d, want 1", manager.restarted)
+	}
+	if len(opened) != 2 || opened[1] != liveURL {
+		t.Fatalf("restart opened URLs = %#v, want second %q", opened, liveURL)
+	}
+}
+
+func TestDaemonStartKeepsLifecycleSuccessWhenAutomaticOpenFails(t *testing.T) {
+	root := t.TempDir()
+	setDaemonTestConfigDir(t, filepath.Join(root, "config"))
+	manager := &fakeDaemonManager{status: daemon.Status{Installed: true}}
+	originalManager := newDaemonManager
+	originalOpen := openManagementBrowser
+	t.Cleanup(func() {
+		newDaemonManager = originalManager
+		openManagementBrowser = originalOpen
+	})
+	newDaemonManager = func() (daemon.Manager, error) { return manager, nil }
+	openManagementBrowser = func(string) error {
+		return nil
+	}
+
+	if err := daemonStart(nil); err != nil {
+		t.Fatalf("daemon start should remain successful without daemon metadata: %v", err)
+	}
+	if manager.started != 1 {
+		t.Fatalf("start calls = %d, want 1", manager.started)
+	}
+}
+
 func TestParseManagementAccessRejectsUnsafeOrTokenlessURLs(t *testing.T) {
 	for _, value := range []string{
 		"https://127.0.0.1:7332/#token=secret",

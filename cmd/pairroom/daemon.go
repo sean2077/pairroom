@@ -342,7 +342,7 @@ func daemonStart(args []string) error {
 		return err
 	}
 	fmt.Println("PairRoom daemon started.")
-	fmt.Println("  open: pairroom daemon open")
+	autoOpenDaemonManagementShell()
 	return nil
 }
 
@@ -390,7 +390,7 @@ func daemonRestart(args []string) error {
 		return err
 	}
 	fmt.Println("PairRoom daemon restarted.")
-	fmt.Println("  open: pairroom daemon open")
+	autoOpenDaemonManagementShell()
 	return nil
 }
 
@@ -528,6 +528,14 @@ func daemonOpen(args []string) error {
 	if !status.Running {
 		return errors.New("PairRoom daemon is not running; run pairroom daemon start")
 	}
+	return openDaemonManagementShell()
+}
+
+// openDaemonManagementShell waits for the Management Shell started by the
+// daemon and opens only the currently authenticated loopback URL. Lifecycle
+// commands call this directly after starting the service so they do not race
+// the service manager's status update.
+func openDaemonManagementShell() error {
 	meta, err := daemon.LoadMeta()
 	if err != nil {
 		return fmt.Errorf("load daemon metadata: %w", err)
@@ -545,6 +553,16 @@ func daemonOpen(args []string) error {
 	}
 	fmt.Println("PairRoom Management Shell opened in the default browser.")
 	return nil
+}
+
+// autoOpenDaemonManagementShell keeps a successful lifecycle operation
+// successful even when the optional browser handoff is unavailable. The
+// explicit `daemon open` command remains strict and can be used to retry.
+func autoOpenDaemonManagementShell() {
+	if err := openDaemonManagementShell(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not automatically open Management Shell: %v\n", err)
+		fmt.Println("  open:     pairroom daemon open")
+	}
 }
 
 func waitForManagementURL(logFile string, backups int, timeout time.Duration) (string, error) {
@@ -739,9 +757,9 @@ func printDaemonHelp() {
 Commands:
   install     Install and start pairroom service with the OS service manager
   uninstall   Stop and remove the installed service
-  start       Start the installed service
+  start       Start the installed service and open the Management Shell
   stop        Gracefully drain and stop the installed service
-  restart     Gracefully restart the installed service
+  restart     Gracefully restart the installed service and open the Management Shell
   status      Show installation and process state
   logs        Show or follow daemon output
   open        Validate and open the current Management Shell
