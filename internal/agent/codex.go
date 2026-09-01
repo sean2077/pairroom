@@ -48,10 +48,15 @@ type CodexAdapter struct {
 	stdin       io.WriteCloser
 	threadID    string
 	currentTurn string
-	intentional bool
-	pending     map[int64]chan rpcReply
-	approvals   map[string]pendingApproval
-	turnInputs  map[string][]model.AgentInput
+	// threadEngaged records whether any turn has started on threadID. Codex
+	// only persists a rollout once a turn is accepted, so a thread/start that
+	// never starts a turn has no durable rollout. It is consulted on process
+	// exit to decide whether the in-memory thread ID is safe to drop.
+	threadEngaged bool
+	intentional   bool
+	pending       map[int64]chan rpcReply
+	approvals     map[string]pendingApproval
+	turnInputs    map[string][]model.AgentInput
 	// wireInputs holds inputs keyed by Codex's documented
 	// clientUserMessageId while a turn/start or turn/steer request is in flight.
 	// The matching userMessage item echoes this value as clientId, allowing
@@ -357,6 +362,7 @@ func (c *CodexAdapter) Submit(ctx context.Context, input model.AgentInput) (mode
 	}
 	c.mu.Lock()
 	c.currentTurn = turnResult.Turn.ID
+	c.threadEngaged = true
 	c.startingInput = nil
 	if c.turnBuffers[turnResult.Turn.ID] == nil {
 		c.turnBuffers[turnResult.Turn.ID] = &strings.Builder{}
@@ -792,6 +798,7 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 		c.mu.Lock()
 		if p.Turn.ID != "" {
 			c.currentTurn = p.Turn.ID
+			c.threadEngaged = true
 			if c.turnBuffers[p.Turn.ID] == nil {
 				c.turnBuffers[p.Turn.ID] = &strings.Builder{}
 			}
@@ -1240,6 +1247,19 @@ func (c *CodexAdapter) takeOutstanding() codexOutstanding {
 	c.turnBuffers = make(map[string]*strings.Builder)
 	c.turnFinal = make(map[string]string)
 	c.currentTurn = ""
+	// thread/start creates a Codex thread in memory, but Codex only persists a
+	// rollout once a turn is accepted. If the app-server process exits before
+	// the first turn starts on a thread/start-only ID, that ID has no durable
+	// rollout; strict-resuming it across a process restart hard-fails forever
+	// ("no rollout found"). A pending new binding (no durable cfg.SessionID)
+	// whose thread was never engaged has no identity to honor, so drop the
+	// ephemeral ID and let the next Start create a fresh thread that the first
+	// accepted turn atomically materializes. An existing/materialized binding
+	// keeps its ID so the next Start resumes exactly; a missing rollout there
+	// is a real binding inconsistency that must surface, not be replaced.
+	if c.cfg.SessionID == "" && !c.threadEngaged {
+		c.threadID = ""
+	}
 	return result
 }
 

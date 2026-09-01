@@ -170,6 +170,8 @@ thread/resume exact ID
 
 旧文档中“resume 失败后建立新 Thread”的做法不符合当前 Binding 一致性模型，不应用于受 Service 管理的 durable Room。
 
+> 与之不冲突的一点：`thread/start` 只在 Codex 内存里建 thread，rollout 要等首个被接受的 turn 才落盘。若 app-server 进程在首个 turn 被接受前意外退出，这条**尚未 materialize 的内存 thread ID 没有持久 rollout**，会在 `takeOutstanding` 时被丢弃（pending new binding、`threadEngaged=false`），下次激活重新 `thread/start`。这属于“未持久化的临时身份被丢弃”，不是“durable resume 失败后新建替代身份”。已 materialize 的 existing binding 仍按上述规则精确 resume，resume 失败即显式报错。
+
 ## 5. New 与 Existing Binding 的兼容要求
 
 ### Existing
