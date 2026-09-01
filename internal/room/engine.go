@@ -3054,7 +3054,11 @@ func validHandoff(value string) bool {
 	return len([]rune(strings.TrimSpace(value))) >= minHandoffRunes
 }
 
-var controlPattern = regexp.MustCompile(`(?mi)^\s*\[PAIRROOM:(NEXT|WAIT|BLOCKED|DONE)\]\s*$`)
+// controlPattern strips a trailing PairRoom control marker. The marker may
+// sit on its own line or at the end of the final prose line (Codex often emits
+// "...answer.[PAIRROOM:DONE]" without a newline). Anchoring only the trailing
+// boundary keeps markers that appear mid-line as quoted prose intact.
+var controlPattern = regexp.MustCompile(`(?mi)\s*\[PAIRROOM:(NEXT|WAIT|BLOCKED|DONE)\]\s*$`)
 
 func stripControl(text string) (string, string) {
 	matches := controlPattern.FindAllStringSubmatch(text, -1)
