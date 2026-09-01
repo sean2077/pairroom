@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#0b1020">
+  <title>PairRoom</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <section class="card" aria-labelledby="title">
+      <div class="brand" aria-hidden="true">
+        <span class="mark"><span></span><span></span><i></i></span>
+        <span><strong>PairRoom</strong><small>DESKTOP</small></span>
+      </div>
+      <div class="spinner" aria-hidden="true"></div>
+      <p class="eyebrow">LOCAL COLLABORATION CONTROL PLANE</p>
+      <h1 id="title">正在启动 PairRoom Service</h1>
+      <p id="message">正在检查已安装的 daemon；若不存在，将启动安装包内置的本地 sidecar。</p>
+      <pre id="error" hidden></pre>
+      <button id="retry" type="button" hidden>重新连接</button>
+      <p class="boundary">只接受经过认证的 numeric-loopback Management URL。桌面壳不会将 Service Token 写入 Web Storage。</p>
+    </section>
+  </main>
+</body>
+</html>

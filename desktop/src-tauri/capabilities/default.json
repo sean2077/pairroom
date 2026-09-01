@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop",
+  "description": "Local bootstrap capability for PairRoom desktop windows.",
+  "windows": ["*"],
+  "permissions": ["core:default"]
+}

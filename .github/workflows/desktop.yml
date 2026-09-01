@@ -1,0 +1,128 @@
+name: Desktop
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build desktop ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-amd64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+          - label: windows-amd64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+            bundles: msi,nsis
+          - label: macos-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+            bundles: dmg
+          - label: macos-amd64
+            os: macos-14
+            target: x86_64-apple-darwin
+            bundles: dmg
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+
+      - name: Install Rust target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+          key: ${{ matrix.target }}
+
+      - name: Install Linux webview dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf \
+            wget \
+            xdg-utils
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm install
+
+      - name: Generate platform icon set
+        working-directory: desktop
+        run: npm run icons
+
+      - name: Verify desktop version contract
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import pathlib
+          version = pathlib.Path("VERSION").read_text(encoding="utf-8").strip()
+          package = json.loads(pathlib.Path("desktop/package.json").read_text(encoding="utf-8"))
+          config = json.loads(pathlib.Path("desktop/src-tauri/tauri.conf.json").read_text(encoding="utf-8"))
+          cargo = pathlib.Path("desktop/src-tauri/Cargo.toml").read_text(encoding="utf-8")
+          assert package["version"] == version
+          assert config["version"] == version
+          assert f'version = "{version}"' in cargo
+          PY
+
+      - name: Build target-specific PairRoom sidecar
+        run: python desktop/scripts/prepare-sidecar.py --target ${{ matrix.target }}
+
+      - name: Check desktop Rust
+        run: cargo check --manifest-path desktop/src-tauri/Cargo.toml --target ${{ matrix.target }}
+
+      - name: Build native installers
+        working-directory: desktop
+        run: npm run build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      - name: Collect final installers and checksums
+        run: python desktop/scripts/collect-bundles.py --target ${{ matrix.target }} --label ${{ matrix.label }}
+
+      - name: Upload desktop bundles
+        uses: actions/upload-artifact@v7
+        with:
+          name: pairroom-desktop-${{ matrix.label }}
+          path: desktop/dist/${{ matrix.label }}/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

@@ -1,0 +1,29 @@
+[package]
+name = "pairroom-desktop"
+version = "1.1.0"
+description = "Native desktop shell for PairRoom"
+authors = ["PairRoom contributors"]
+license = "MIT"
+repository = "https://github.com/sean2077/pairroom"
+edition = "2021"
+rust-version = "1.85.0"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+dirs = "6"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2.11.5", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-single-instance = "2"
+tokio = { version = "1", features = ["fs", "sync", "time"] }
+url = "2"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = "s"
+strip = "symbols"
