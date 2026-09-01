@@ -45,7 +45,6 @@ func Envelope(input model.AgentInput) string {
 	if input.Intent != "" {
 		fmt.Fprintf(&b, "delivery_intent: %s\n", input.Intent)
 	}
-	fmt.Fprintf(&b, "turn_policy: %s\n", model.RoutingTurns)
 	if input.WorkflowID != "" {
 		fmt.Fprintf(&b, "workflow_id: %s\n", input.WorkflowID)
 		fmt.Fprintf(&b, "workflow_stage: %d\n", input.WorkflowStage+1)
