@@ -133,7 +133,7 @@
       if (pending.has('approvals')) renderApprovals();
       if (pending.has('created')) messageIDs.forEach(renderCreatedMessage);
       if (pending.has('messages')) messageIDs.forEach(renderMessage);
-      if (pending.has('delivery')) updateDeliveryHint();
+      if (pending.has('delivery')) { updateDeliveryHint(); renderTurnOwnerBar(); }
       if (pending.has('composer')) updateComposerAvailability();
     });
   }
@@ -327,6 +327,7 @@
     renderParticipants();
     renderWorkflow();
     updateDeliveryHint();
+    renderTurnOwnerBar();
     renderSettings();
     renderAttachmentStrip();
     updateComposerAvailability();
@@ -334,6 +335,49 @@
     renderActivity();
     renderApprovals();
     if (forceBottom || nearBottom) requestAnimationFrame(scrollBottom);
+  }
+
+  function renderTurnOwnerBar() {
+    const bar = $('turn-owner-bar');
+    if (!bar || !state.snapshot) return;
+    const messages = state.snapshot.messages || [];
+    const live = ['started', 'injected', 'queued'];
+    let owner = '';
+    for (const message of messages) {
+      const delivery = message.delivery || {};
+      const processing = message.processing || {};
+      for (const target of Object.keys(delivery)) {
+        if (live.includes(delivery[target]) && (processing[target] === 'working' || processing[target] === 'waiting')) {
+          owner = target;
+        }
+      }
+    }
+    let queued = 0;
+    for (const message of messages) {
+      const delivery = message.delivery || {};
+      const processing = message.processing || {};
+      for (const target of Object.keys(delivery)) {
+        if (delivery[target] === 'pending' && processing[target] === 'waiting' && target !== owner) {
+          queued += 1;
+        }
+      }
+    }
+    if (!owner && queued === 0) {
+      bar.classList.add('hidden');
+      bar.replaceChildren();
+      return;
+    }
+    bar.classList.remove('hidden');
+    const label = document.createElement('span');
+    label.className = 'turn-owner-label';
+    label.textContent = owner ? `当前轮次 · ${displayName(owner)}` : '空闲';
+    bar.replaceChildren(label);
+    if (queued > 0) {
+      const badge = document.createElement('span');
+      badge.className = 'turn-queue-count';
+      badge.textContent = `队列 ${queued}`;
+      bar.appendChild(badge);
+    }
   }
 
   function renderWorkflow() {
