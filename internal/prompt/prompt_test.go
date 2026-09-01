@@ -78,7 +78,7 @@ func TestEnvelopeCarriesOnlyRuntimeAndRoutingContext(t *testing.T) {
 	for _, fragment := range []string{
 		"protocol: " + protocol.Version,
 		"message_id: msg-0123456789abcdef01234567", "thread_id: thread-0123456789abcdef01234567", "from: claude", "to: codex",
-		"reply_to: msg-0123456789abcdef01234567", "current_role: reviewer", "delivery_intent: supersede", "turn_policy: turns",
+		"reply_to: msg-0123456789abcdef01234567", "current_role: reviewer", "delivery_intent: supersede",
 		"workflow_id: workflow-0123456789abcdef01234567", "workflow_stage: 3", "workflow_mode: audit",
 		"remaining_agent_hops: 4", "Inspect the race",
 	} {
@@ -86,7 +86,7 @@ func TestEnvelopeCarriesOnlyRuntimeAndRoutingContext(t *testing.T) {
 			t.Fatalf("Envelope() missing %q:\n%s", fragment, got)
 		}
 	}
-	for _, fragment := range []string{"role_rule:", "Do not modify files", "[PAIRROOM:NEXT]", "Keep the shared-room answer"} {
+	for _, fragment := range []string{"role_rule:", "Do not modify files", "[PAIRROOM:NEXT]", "Keep the shared-room answer", "turn_policy:"} {
 		if strings.Contains(got, fragment) {
 			t.Fatalf("Envelope() repeated stable contract prose %q:\n%s", fragment, got)
 		}

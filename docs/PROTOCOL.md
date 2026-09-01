@@ -262,7 +262,7 @@ protocol: pairroom-protocol/v4
 message_id / thread_id / hop
 from / to / reply_to
 current_role / delivery_intent
-turn_policy / remaining_agent_hops
+remaining_agent_hops
 attachments
 message body
 ```
