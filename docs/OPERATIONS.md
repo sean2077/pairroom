@@ -23,6 +23,7 @@
 - 关闭主窗口：隐藏到 tray，不停止 Runtime 或 Agent；
 - 再次启动应用：single-instance handler 聚焦已有窗口；
 - 退出且使用外部 daemon：只退出 GUI，daemon 与活动 Turn 保持运行；
+- Windows daemon：Service 日志写入旋转日志文件，不在任务栏保留控制台窗口；查看输出使用 `pairroom daemon logs`；
 - 退出且使用内嵌 Service：先停止接受 Management 请求，再等待 Runtime 通过 native-Turn boundary drain，最后释放 Registry 与 `service.lock`；
 - stale lock：桌面端保持 fail closed，不做隐式 recovery。
 
