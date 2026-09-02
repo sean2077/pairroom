@@ -61,6 +61,24 @@ func assertFileText(t *testing.T, path, expected string) {
 	}
 }
 
+func TestDaemonConsoleDetachRequested(t *testing.T) {
+	t.Setenv(ConsoleDetachEnvironment, "")
+	if daemonConsoleDetachRequested([]string{"service", "--no-browser"}) {
+		t.Fatal("interactive service requested console detach")
+	}
+	t.Setenv(ConsoleDetachEnvironment, "1")
+	if !daemonConsoleDetachRequested(nil) {
+		t.Fatal("PAIRROOM_DETACH_CONSOLE=1 should detach")
+	}
+	t.Setenv(ConsoleDetachEnvironment, "")
+	if !daemonConsoleDetachRequested([]string{"service", "--daemon-control-file", `C:\daemon.stop`}) {
+		t.Fatal("daemon control file should detach")
+	}
+	if !daemonConsoleDetachRequested([]string{"service", `--daemon-control-file=C:\daemon.stop`}) {
+		t.Fatal("daemon control file assignment should detach")
+	}
+}
+
 func TestConfigureProcessLoggingFromEnvironment(t *testing.T) {
 	if os.Getenv("PAIRROOM_LOG_HELPER") == "1" {
 		cleanup, err := ConfigureProcessLoggingFromEnvironment()
@@ -82,6 +100,7 @@ func TestConfigureProcessLoggingFromEnvironment(t *testing.T) {
 		LogFileEnvironment+"="+path,
 		LogSizeEnvironment+"=1MB",
 		LogBackupEnvironment+"=2",
+		ConsoleDetachEnvironment+"=1",
 	)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("helper failed: %v\n%s", err, output)

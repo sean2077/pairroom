@@ -28,6 +28,7 @@ func TestBuildWindowsTaskScriptQuotesArgumentsAndRedirectsOutput(t *testing.T) {
 		`Set processEnv = shell.Environment("Process")`,
 		`processEnv("PATH") = "C:\Tools;C:\Program Files\Git\cmd"`,
 		`processEnv("PAIRROOM_LOG_FILE") = "C:\Users\me\Pair Room\service.log"`,
+		`processEnv("PAIRROOM_DETACH_CONSOLE") = "1"`,
 		`processEnv("HTTPS_PROXY") = "http://127.0.0.1:7890"`,
 		`shell.CurrentDirectory = "C:\Users\me\Pair Room"`,
 		`exitCode = shell.Run("""C:\Program Files\PairRoom\pairroom.exe"" service --config C:\Users\me\pair'room.json --no-browser", 0, True)`,

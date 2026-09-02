@@ -13,11 +13,12 @@ import (
 )
 
 const (
-	DefaultLogMaxSize    = 10 * 1024 * 1024
-	DefaultLogMaxBackups = 3
-	LogFileEnvironment   = "PAIRROOM_LOG_FILE"
-	LogSizeEnvironment   = "PAIRROOM_LOG_MAX_SIZE"
-	LogBackupEnvironment = "PAIRROOM_LOG_MAX_BACKUPS"
+	DefaultLogMaxSize        = 10 * 1024 * 1024
+	DefaultLogMaxBackups     = 3
+	LogFileEnvironment       = "PAIRROOM_LOG_FILE"
+	LogSizeEnvironment       = "PAIRROOM_LOG_MAX_SIZE"
+	LogBackupEnvironment     = "PAIRROOM_LOG_MAX_BACKUPS"
+	ConsoleDetachEnvironment = "PAIRROOM_DETACH_CONSOLE"
 )
 
 type RotatingWriter struct {
@@ -170,6 +171,9 @@ func ParseLogBackups(value string) (int, error) {
 }
 
 func ConfigureProcessLoggingFromEnvironment() (func() error, error) {
+	if daemonConsoleDetachRequested(os.Args) {
+		detachOwnedWindowsConsole()
+	}
 	path := strings.TrimSpace(os.Getenv(LogFileEnvironment))
 	if path == "" {
 		return func() error { return nil }, nil
@@ -219,4 +223,17 @@ func ConfigureProcessLoggingFromEnvironment() (func() error, error) {
 		return closeErr
 	}
 	return cleanup, nil
+}
+
+func daemonConsoleDetachRequested(args []string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(ConsoleDetachEnvironment))) {
+	case "1", "true", "yes":
+		return true
+	}
+	for _, argument := range args {
+		if argument == "--daemon-control-file" || strings.HasPrefix(argument, "--daemon-control-file=") {
+			return true
+		}
+	}
+	return false
 }

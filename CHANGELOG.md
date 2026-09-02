@@ -16,6 +16,8 @@
 
 - Desktop startup now treats an installed daemon as the single Service owner: it starts and connects to a stopped daemon, reports actionable lock diagnostics when that daemon is unavailable, and only creates an embedded Service when no daemon installation exists. Daemon install publishes metadata before the platform task starts; `daemon status` reports lock-owner liveness; `--recover-stale-lock` refuses a live PID and moves the stale lock aside before deleting it so a replacement owner is not removed.
 
+- Windows daemon no longer leaves a taskbar console for Service logs. The scheduled-task launcher requests console detach, and `pairroom service --daemon-control-file` hides and releases any allocated conhost so output stays in the rotating log file.
+
 - Root `Makefile` now exposes `desktop-build` and `desktop-package` for preparing and building the current-platform Wails desktop application from the repository root; the existing `package` target continues to build the CLI release payload.
 
 - PairRoom now uses one deterministic `turns` collaboration policy: a Room has one active Agent Turn owner, cross-Agent and `next_turn` inputs wait in a Room-level queue, and an explicit peer mention or a compact `HANDOFF` followed by `NEXT` transfers control after the current native Turn completes. Legacy `manual`/`mentions`/`roundtable` configuration values are removed and rejected; configuration and persisted Room state must use `turns`.

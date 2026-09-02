@@ -280,6 +280,7 @@ func buildWindowsTaskScript(cfg Config) string {
 	for _, pair := range SortedEnvironment(cfg) {
 		fmt.Fprintf(&builder, "processEnv(%s) = %s\r\n", vbScriptLiteral(pair[0]), vbScriptLiteral(pair[1]))
 	}
+	fmt.Fprintf(&builder, "processEnv(%s) = %s\r\n", vbScriptLiteral(ConsoleDetachEnvironment), vbScriptLiteral("1"))
 	fmt.Fprintf(&builder, "shell.CurrentDirectory = %s\r\n", vbScriptLiteral(cfg.WorkDir))
 	builder.WriteString("For attempt = 1 To 3\r\n")
 	fmt.Fprintf(&builder, "  exitCode = shell.Run(%s, 0, True)\r\n", vbScriptLiteral(windowsCommandLine(cfg.BinaryPath, cfg.Args)))
