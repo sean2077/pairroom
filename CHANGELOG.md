@@ -27,7 +27,7 @@
 - Unaddressed messages and the Room composer now target the single current Driver instead of invoking both Agents by default; explicit `@all` is recognized only to return the one-recipient error and never starts both runtimes.
 - Reviewer snapshots are refreshed immediately before each safe new reviewer turn, preventing review of the pre-implementation startup snapshot.
 - Agent-to-peer delivery uses the compact handoff packet, or a bounded fallback, instead of replaying an arbitrarily long final response.
-- The native collaboration contract now asks for a second Agent only when independent work can materially change the outcome and keeps tool chatter in Inspector.
+- The native collaboration contract names the other Agent as envelope `peer`, tells the active Agent to address that peer when the human asks both to interact, otherwise requests a second Agent only when independent work can change the outcome, and keeps tool chatter in Inspector.
 - The composer exposes server-resolved, role-stable `@Driver` and `@Reviewer` targets; replying to an Agent automatically targets that participant.
 - Room View toasts now show a dismiss control, pause auto-dismiss on hover, and keep error toasts visible for 8 s (4.5 s otherwise), matching the Management Shell.
 - Room View per-message actions (inspect, copy, thread, reply) stay visible on touch devices that cannot hover, instead of being unreachable on the mobile layout.
@@ -37,6 +37,7 @@
 
 ### Fixed
 
+- Per-turn envelopes now name the other Agent as `peer`, and the native bootstrap tells the active Agent to address that peer when the human asks both participants to greet, introduce themselves, or work together, instead of answering as a 1:1 chat with the human.
 - Explicit `@claude`, `@codex`, and `@peer` addresses in Agent responses now reliably hand the response to that peer after the native Turn boundary; `@human` and `@user` take precedence and leave the decision with the human. Responses without a direct address continue to require a valid `HANDOFF` with `NEXT`, and peer delivery uses the bounded response fallback when a structured packet is omitted.
 
 - A pending-new Codex binding no longer hard-fails forever with `no rollout found for thread id` when the app-server process exits between `thread/start` and the first accepted turn. Codex only persists a rollout once a turn is accepted, so the in-memory thread ID is now dropped on unexpected process exit; the next activation starts a fresh thread and materializes the binding on the first accepted turn. Existing/materialized bindings still resume exactly.

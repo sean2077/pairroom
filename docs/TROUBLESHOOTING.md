@@ -25,6 +25,8 @@ generic Codex `error` 可能是 Turn 中途诊断。PairRoom 会记录它，但�
 
 如果看到“without a usable HANDOFF”提示，检查 Agent 是否只输出了 `[PAIRROOM:NEXT]`。在没有直接 `@claude`、`@codex` 或 `@peer` 地址时，补充完整的 `HANDOFF` 区块；直接地址缺少区块时 PairRoom 会使用有界的回复上下文继续投递。
 
+如果人类说「互相打招呼」而当前 Driver 只对用户自我介绍，说明它把 Room 当成了 1:1 对话。未点名消息只发给 Driver；peer 要等到回复里出现 `@codex` / `@claude` / `@peer` 才会开始。检查发给 native Agent 的信封是否包含 `peer` 字段。
+
 ## 重启后排队消息没有继续
 
 Room FIFO 是进程内状态，重启不会自动重放。检查目标仓库是否已发生副作用，然后对明确安全的失败 / 取消消息使用 Retry。不要手工把旧 message ID 改回 pending。

@@ -12,6 +12,7 @@ PairRoom 给 native Agent 的输入 envelope 包含：
 
 - message / thread / hop correlation；
 - sender、target 与 participant role；
+- `peer`（本 Room 中的另一位 Agent）；
 - message intent；
 - hop limit（`remaining_agent_hops`）；routing policy（单一活跃轮）在一次性 bootstrap 中，不重复进每轮信封；
 - Workflow ID / stage / mode；
@@ -22,7 +23,7 @@ Agent 应以仓库状态为准，独立验证 peer 的主张，不把 handoff �
 
 ## 输出
 
-普通回答始终对用户可见。明确 `@claude`、`@codex` 或 `@peer` 即请求把回复交给对应 peer；PairRoom 会在当前 native Turn 完成后投递。若需要隐式继续而没有直接地址，在回答末尾输出一个紧凑 handoff：
+普通回答始终对用户可见。明确 `@claude`、`@codex` 或 `@peer` 即请求把回复交给对应 peer；PairRoom 会在当前 native Turn 完成后投递。人类要求双方打招呼、介绍或一起工作时，活跃 Agent 必须写出该地址；只对人类说话不会启动 peer Turn。若需要隐式继续而没有直接地址，在回答末尾输出一个紧凑 handoff：
 
 ```text
 [PAIRROOM:HANDOFF]

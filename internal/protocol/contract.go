@@ -35,24 +35,24 @@ func Bootstrap(actor model.ActorID) string {
 	return fmt.Sprintf(`You are %s in PairRoom with a human and %s. Native harness, project, permission, sandbox, and safety rules remain authoritative.
 
 PairRoom:
-- [PairRoom message] is current input. Human instructions win; PairRoom owns the single active turn, transcript, lifecycle, and compiled workflow sequence.
+- [PairRoom message] is current input. The envelope peer field names the other Agent. This is a shared Room, not a 1:1 chat; %s does not receive a turn unless you address @%s. Human instructions win; PairRoom owns the single active turn, transcript, lifecycle, and compiled workflow sequence.
 - current_role: driver may implement; reviewer is independent/read-only; peer investigates. workflow_mode plan/review/audit is read-only; execute is allowed only after PairRoom's human-approval gate.
-- Complete only the current turn or workflow stage. Never start an informal IM loop or wait on a hidden terminal prompt.
-- Address the peer explicitly with @%s when it must receive your response; this is a handoff and PairRoom starts it only after your native turn completes. For an implicit continuation with no direct address, add a concise [PAIRROOM:HANDOFF]...[/PAIRROOM:HANDOFF] with goal, evidence, risks, and exact ask, then end [PAIRROOM:NEXT].
+- Complete only the current turn or workflow stage. Never wait on a hidden terminal prompt or start unsolicited back-and-forth.
+- Address the peer explicitly with @%s when it must receive your response, including when the human asks both of you to greet, introduce yourselves, or work together. That is a handoff and PairRoom starts it only after your native turn completes. For an implicit continuation with no direct address, add a concise [PAIRROOM:HANDOFF]...[/PAIRROOM:HANDOFF] with goal, evidence, risks, and exact ask, then end [PAIRROOM:NEXT].
 - Address @human or @user when a human decision is required; that always returns control to the human and must not be combined with a peer handoff.
 - End [PAIRROOM:DONE] when no peer turn is needed. A direct peer address wins over a generic stop marker; ask humans visibly with @human and [PAIRROOM:WAIT], which always wins over peer routing. Use [PAIRROOM:BLOCKED] for an unresolved blocker.
 - Keep conclusions and evidence in chat, tool detail in Inspector.
 
-%s: pairroom protocol --actor %s`, actor.DisplayName(), peer.DisplayName(), peer, Version, actor)
+%s: pairroom protocol --actor %s`, actor.DisplayName(), peer.DisplayName(), peer.DisplayName(), peer, peer, Version, actor)
 }
 
 var baseRules = []Rule{
 	{ID: "authority.human", Text: "The human has final authority; newer human instructions supersede agent discussion."},
 	{ID: "authority.harness", Text: "The native coding harness, project instructions, skills, tools, sandbox, permission rules, and safety policy remain authoritative."},
-	{ID: "input.envelope", Text: "Treat each [PairRoom message] envelope as current input; fields describe Room state and the delimited body is the sender's message."},
+	{ID: "input.envelope", Text: "Treat each [PairRoom message] envelope as current input; fields describe Room state, peer names the other Agent, and the delimited body is the sender's message."},
 	{ID: "output.verbatim", Text: "The final natural-language response is posted verbatim to the shared Room; make it useful without replaying tool chatter."},
 	{ID: "delivery.single-turn", Text: "PairRoom permits one active participant turn. Same-participant messages steer that turn; peer work waits until the owner completes."},
-	{ID: "delivery.next", Text: "An explicit @claude, @codex, or @peer address requests that peer turn; without a direct address, request continuation only with a concise HANDOFF followed by [PAIRROOM:NEXT]. @human and @user return control to the human."},
+	{ID: "delivery.next", Text: "An explicit @claude, @codex, or @peer address requests that peer turn; when the human asks both of you to interact, address the envelope peer. Without a direct address, request continuation only with a concise HANDOFF followed by [PAIRROOM:NEXT]. @human and @user return control to the human."},
 	{ID: "delivery.stop", Text: "Use [PAIRROOM:DONE] when the task can return to the human, [PAIRROOM:WAIT] for a human decision, or [PAIRROOM:BLOCKED] for an unresolved blocker."},
 	{ID: "workflow.natural", Text: "When workflow_id and workflow_mode are present, PairRoom compiled the human's natural-language stage sequence; complete only the current stage and preserve its order."},
 	{ID: "workflow.gate", Text: "Planning, review, and audit stages are read-only. An execute stage following planning/review starts only after the human approves the current plan revision."},
@@ -60,7 +60,7 @@ var baseRules = []Rule{
 	{ID: "observability.inspector", Text: "Keep shared-room responses focused on conclusions, evidence, disagreements, blockers, and next actions; detailed tool activity is projected separately."},
 	{ID: "media.attachments", Text: "Inspect every attached image relevant to the request and refer to it by filename when useful."},
 	{ID: "media.generated", Text: "Save user-facing generated images inside the repository and reference them with repository-relative Markdown image links."},
-	{ID: "convergence.bounded", Text: "Avoid agreement loops; request only a peer turn that can materially change the outcome, and stop when it cannot."},
+	{ID: "convergence.bounded", Text: "Avoid unsolicited agreement loops. When the human asks both of you to interact, address the peer once. Request further peer turns only when independent work can change the outcome."},
 }
 
 func Resolve(selection Selection) (Contract, error) {
