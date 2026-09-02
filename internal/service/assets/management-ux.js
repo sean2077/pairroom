@@ -27,6 +27,7 @@
   let chordTimer = 0;
   let enhancementFrame = 0;
   let roomChromeFrame = 0;
+  let pendingRoomTabFocusID = '';
   let refreshDeferredWhilePaletteOpen = false;
 
   document.body.classList.add('management-ux-enhanced');
@@ -502,6 +503,13 @@
     return currentRoomTabTargets().find((target) => target.closest('.room-tab')?.dataset.roomId === roomID) || null;
   }
 
+  function rememberAdjacentRoomTabFocus(tab) {
+    const tabs = Array.from(roomTablist?.querySelectorAll('.room-tab') || []);
+    const index = tabs.indexOf(tab);
+    const adjacent = index >= 0 ? (tabs[index + 1] || tabs[index - 1]) : null;
+    pendingRoomTabFocusID = adjacent?.dataset.roomId || '';
+  }
+
   function enhanceRoomTabs() {
     if (!roomTablist) return;
     const tabs = Array.from(roomTablist.children).filter((child) => child.classList?.contains('room-tab'));
@@ -533,6 +541,7 @@
         target.addEventListener('dragstart', () => tab.classList.add('dragging'));
         target.addEventListener('dragend', () => tab.classList.remove('dragging'));
         close?.addEventListener('pointerdown', (event) => event.stopPropagation());
+        close?.addEventListener('click', () => rememberAdjacentRoomTabFocus(tab), { capture: true });
         close?.addEventListener('dragstart', (event) => event.preventDefault());
       }
 
@@ -560,9 +569,15 @@
     });
 
     const active = tabs.find((tab) => tab.classList.contains('active'));
-    if (active) {
+    const focusRoomID = pendingRoomTabFocusID;
+    if (active || focusRoomID) {
       requestAnimationFrame(() => {
-        active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        active?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        const focusTarget = focusRoomID ? findRoomTabTarget(focusRoomID) : null;
+        if (focusTarget) {
+          focusTarget.focus({ preventScroll: true });
+          if (pendingRoomTabFocusID === focusRoomID) pendingRoomTabFocusID = '';
+        }
         syncRoomTabOverflow();
       });
     }
@@ -590,8 +605,8 @@
     event.preventDefault();
     const next = targets[nextIndex];
     const roomID = next.closest('.room-tab')?.dataset.roomId || '';
+    pendingRoomTabFocusID = roomID;
     next.click();
-    requestAnimationFrame(() => findRoomTabTarget(roomID)?.focus({ preventScroll: true }));
   }
 
   function syncRoomTabOverflow() {
