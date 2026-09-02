@@ -182,7 +182,7 @@ func TestRichConversationAssetsAreEmbedded(t *testing.T) {
 	if index.Code != http.StatusOK {
 		t.Fatalf("index status = %d", index.Code)
 	}
-	for _, marker := range []string{"timeline-scope", "attachment-input", "image-lightbox", "/richtext.js", "/ux.css", "/ux.js"} {
+	for _, marker := range []string{"timeline-scope", "attachment-input", "image-lightbox", "richtext.js", "ux.css", "ux.js"} {
 		if !strings.Contains(index.Body.String(), marker) {
 			t.Fatalf("index omitted rich-conversation marker %q", marker)
 		}
@@ -196,7 +196,7 @@ func TestRichConversationAssetsAreEmbedded(t *testing.T) {
 
 	app := httptest.NewRecorder()
 	server.Handler().ServeHTTP(app, localRequest(http.MethodGet, "/app.js", nil))
-	for _, marker := range []string{"threadFilter", "uploadPendingAttachment", "openLightbox", "renderClaudeQuestions", "initializeSession", "X-PairRoom-CSRF", "queueStreamingRender", "queueRuntimeRender", "runtimeRenderScopes", "runtimeMessageRenderIDs", "renderStreamingDrafts", "renderCreatedMessage", "renderMessage", "deliveryNode", "data-streaming-actor", "data-streaming-text", "streamingCorrelation", "renderScope = 'message-created'", "renderScope = 'message'", "renderScope = 'activity'"} {
+	for _, marker := range []string{"threadFilter", "uploadPendingAttachment", "openLightbox", "renderClaudeQuestions", "initializeSession", "X-PairRoom-CSRF", "queueStreamingRender", "queueRuntimeRender", "runtimeRenderScopes", "runtimeMessageRenderIDs", "renderStreamingDrafts", "renderCreatedMessage", "renderMessage", "deliveryNode", "data-streaming-actor", "data-streaming-text", "streamingCorrelation", "renderScope = 'message-created'", "renderScope = 'message'", "renderScope = 'activity'", "roomURL", "pairroom-surface", "尚未生成", "复制 Session ID", "复制 Thread ID"} {
 		if app.Code != http.StatusOK || !strings.Contains(app.Body.String(), marker) {
 			t.Fatalf("app asset omitted %q: status=%d", marker, app.Code)
 		}

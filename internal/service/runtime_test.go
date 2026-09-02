@@ -184,6 +184,45 @@ func TestRuntimeManagerActivatesPendingNewBindingsButBlocksLegacyPendingBindings
 	}
 }
 
+func TestRuntimeManagerSetLimitDispatchesQueueWithoutPreemptingBusyTurns(t *testing.T) {
+	registry, rooms := provisionRuntimeRooms(t, 2)
+	factory := &fakeRuntimeFactory{busy: true}
+	manager, err := NewRuntimeManager(registry, factory.open, RuntimeManagerConfig{
+		Limit: 1, IdleTimeout: time.Hour, PollInterval: 5 * time.Millisecond, CloseTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownRuntimeManager(t, manager, factory)
+
+	activateRuntime(t, manager, rooms[0].ID)
+	if _, err := manager.RequestActivation(rooms[1].ID); err != nil {
+		t.Fatal(err)
+	}
+	waitRuntimeStatus(t, manager, rooms[1].ID, func(status RuntimeStatus) bool { return status.Phase == RuntimeQueued })
+	if _, err := manager.SetLimit(0); err == nil {
+		t.Fatal("expected invalid limit to fail")
+	}
+	policy, err := manager.SetLimit(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.Limit != 2 {
+		t.Fatalf("policy limit=%d", policy.Limit)
+	}
+	waitRuntimeStatus(t, manager, rooms[1].ID, func(status RuntimeStatus) bool { return status.Phase == RuntimeActive })
+	if factory.get(rooms[0].ID).closeCount.Load() != 0 {
+		t.Fatal("raising the limit closed a busy runtime")
+	}
+	if _, err := manager.SetLimit(1); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if factory.get(rooms[0].ID).closeCount.Load() != 0 || factory.get(rooms[1].ID).closeCount.Load() != 0 {
+		t.Fatal("lowering the limit preempted a busy runtime")
+	}
+}
+
 func TestRuntimeManagerQueuesFIFOAndNeverPreemptsBusyTurns(t *testing.T) {
 	registry, rooms := provisionRuntimeRooms(t, 3)
 	factory := &fakeRuntimeFactory{busy: true}

@@ -161,6 +161,10 @@
         keywords: 'new add register project 新建 添加 登记', action: () => addProjectButton?.click(),
       },
       {
+        id: 'open-room', group: '操作', icon: '◇', label: '打开 Room 标签', detail: '在应用内标签中打开一个活动 Room', keys: 'Alt+N',
+        keywords: 'open room tab 打开 标签', action: () => document.getElementById('room-picker-button')?.click(),
+      },
+      {
         id: 'search', group: '操作', icon: '⌕', label: '搜索 Project 或 Room', detail: '进入全局搜索', keys: '/',
         keywords: 'search find project room 搜索 查找', action: () => globalSearch?.focus({ preventScroll: true }),
       },

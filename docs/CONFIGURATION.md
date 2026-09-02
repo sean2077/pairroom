@@ -35,7 +35,7 @@
 
     ## Service runtime policy
 
-    Service 级字段控制同时活跃 Room 数、idle 回收、reconcile、关闭超时、监听地址和 token。它们影响进程生命周期，不改变 Event Log 中已经提交的事实。
+    Service 级字段控制同时活跃 Room 数、idle 回收、reconcile、关闭超时、监听地址和 token。它们影响进程生命周期，不改变 Event Log 中已经提交的事实。`--runtime-limit` 默认 8，合法范围 1–128；Management Settings 可以在运行中调整该上限（提高立即启动排队项，降低不打断正在跑的 Turn）。Idle timeout 仍由启动参数决定。
 
     ## 源码字段清单
 

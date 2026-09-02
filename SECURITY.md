@@ -67,7 +67,7 @@ Room A 的 Token、Session、CSRF、SSE cursor 与附件授权不能用于 Room 
 - Management API 接受直接 Bearer 或有效 browser session；Session 认证的 mutation 要求 CSRF，所有 mutation 另检查 `Sec-Fetch-Site`/Origin；
 - Room API 执行 Host 与 same-origin 检查；启用 browser session 时 mutation 还执行 CSRF 检查；
 - Room API 按客户端固定窗口限流，降低本地滥用和意外循环；
-- 两个 Web 面都开启 CSP、`frame-ancestors 'none'`、no-referrer 与 no-sniff 等安全响应头；
+- 两个 Web 面都开启 CSP、`frame-ancestors 'none'`、no-referrer 与 no-sniff 等安全响应头；Management 同源 Room surface 仅将自己的响应改为 `frame-ancestors 'self'`，直接 Runtime URL 继续禁止 framing；
 - Room 附件响应要求认证，并使用 `nosniff`、ETag 和 inline disposition；
 - 启动 fragment 不随 HTTP 请求或 Referer 发送，但仍可能经屏幕共享、日志复制或浏览器扩展泄漏。
 

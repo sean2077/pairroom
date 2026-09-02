@@ -294,7 +294,7 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 	})
 	limit := options.RuntimeLimit
 	if limit < 1 {
-		limit = 2
+		limit = service.DefaultRuntimeLimit
 	}
 	idleTimeout := options.IdleTimeout
 	if idleTimeout <= 0 {

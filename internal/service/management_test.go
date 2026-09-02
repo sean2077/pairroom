@@ -67,7 +67,7 @@ func TestManagementShellAuthenticationAssetsAndSecurityHeaders(t *testing.T) {
 	if asset.Code != http.StatusOK {
 		t.Fatalf("management asset status=%d body=%s", asset.Code, asset.Body.String())
 	}
-	for _, marker := range []string{"/api/v1/session", "/api/v1/service", "X-PairRoom-CSRF", "createBrowserSession", "credentialFromInput", "submitCredentialLogin", "logoutBrowserSession", "login-form", "login-token", "logout-button", "浏览器会话已过期", "completeBindings", "补全 Binding", "queue_position", "materializes on first turn", "roomHasBlockingPendingBindings", "renderProjects", "renderRuntimes", "renderSettings", "/suspend", "pairroom daemon open", "pairroom daemon status", "--recover-stale-lock", "/api/v1/projects/", "/refresh", "confirm_project_id", "/api/v1/rooms/batch-archive", "/api/v1/rooms/batch-delete", "acknowledge_data_loss", "selectedRoomIDs", "confirm-input", "confirm-input-label", "confirm-ack", "project_refresh", "project_removal", "room_deletion", "pending_room_cleanup", "批量归档", "批量清理", "永久清除", "room-action-control", "room-select-control", "button secondary-button compact-button room-action-control room-select-control"} {
+	for _, marker := range []string{"/api/v1/session", "/api/v1/service", "X-PairRoom-CSRF", "createBrowserSession", "credentialFromInput", "submitCredentialLogin", "logoutBrowserSession", "login-form", "login-token", "logout-button", "浏览器会话已过期", "completeBindings", "补全 Binding", "queue_position", "materializes on first turn", "roomHasBlockingPendingBindings", "renderProjects", "renderRuntimes", "renderSettings", "/suspend", "pairroom daemon open", "pairroom daemon status", "--recover-stale-lock", "/api/v1/projects/", "/refresh", "confirm_project_id", "/api/v1/rooms/batch-archive", "/api/v1/rooms/batch-delete", "acknowledge_data_loss", "selectedRoomIDs", "confirm-input", "confirm-input-label", "confirm-ack", "project_refresh", "project_removal", "room_deletion", "pending_room_cleanup", "批量归档", "批量清理", "永久清除", "room-action-control", "room-select-control", "button secondary-button compact-button room-action-control room-select-control", "#/rooms/", "openRoomInBrowserAction", "/api/v1/runtime-policy", "/surface/", "恢复后才能打开"} {
 		if !strings.Contains(asset.Body.String(), marker) {
 			t.Fatalf("management asset omitted %q", marker)
 		}
@@ -119,7 +119,10 @@ func TestManagementShellAuthenticationAssetsAndSecurityHeaders(t *testing.T) {
 		!strings.Contains(shell.Body.String(), `id="confirm-expected"`) ||
 		!strings.Contains(shell.Body.String(), `id="confirm-input-label"`) ||
 		!strings.Contains(shell.Body.String(), `id="confirm-ack"`) ||
-		!strings.Contains(shell.Body.String(), `id="confirm-ack-label"`) {
+		!strings.Contains(shell.Body.String(), `id="confirm-ack-label"`) ||
+		!strings.Contains(shell.Body.String(), `id="room-tree"`) ||
+		!strings.Contains(shell.Body.String(), `id="room-tabstrip"`) ||
+		!strings.Contains(shell.Body.String(), `id="room-stage"`) {
 		t.Fatalf("Management Shell omitted authentication or irreversible-operation controls: status=%d body=%s", shell.Code, shell.Body.String())
 	}
 
@@ -568,7 +571,8 @@ func TestManagementSnapshotIncludesSummaryPolicyAndCapabilities(t *testing.T) {
 		t.Fatalf("unexpected service summary: %#v", snapshot.Summary)
 	}
 	if !snapshot.Capabilities.LegacyImport || !snapshot.Capabilities.RuntimeSuspend || !snapshot.Capabilities.ProjectRefresh ||
-		!snapshot.Capabilities.ProjectRemoval || !snapshot.Capabilities.RoomDeletion || snapshot.Capabilities.ServerPathBrowser || snapshot.Capabilities.RuntimePolicyMutation {
+		!snapshot.Capabilities.ProjectRemoval || !snapshot.Capabilities.RoomDeletion || snapshot.Capabilities.ServerPathBrowser ||
+		!snapshot.Capabilities.RuntimePolicyMutation || !snapshot.Capabilities.RoomSurface {
 		t.Fatalf("unexpected capability surface: %#v", snapshot.Capabilities)
 	}
 }

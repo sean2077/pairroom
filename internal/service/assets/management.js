@@ -24,8 +24,12 @@
     renderPending: false,
     renderedSnapshotKey: '',
     csrfToken: '',
-    opening: new Map(),
-    pendingNavigationRoom: '',
+    tabs: [],
+    tabMeta: {},
+    activating: new Set(),
+    expandedProjects: new Set(),
+    archivedOpen: new Set(),
+    dragTabID: '',
     projectMode: 'register',
     bindingRoomID: '',
     confirmAction: null,
@@ -43,7 +47,6 @@
       theme: 'system',
       density: 'comfortable',
       refreshMs: 10000,
-      openBehavior: 'new',
     },
   };
 
@@ -118,11 +121,17 @@
     state.renderedSnapshotKey = '';
     state.search = '';
     state.selectedRoomIDs.clear();
-    state.opening.forEach((popup) => { if (popup && !popup.closed) popup.close(); });
-    state.opening.clear();
-    state.pendingNavigationRoom = '';
+    state.tabs = [];
+    state.tabMeta = {};
+    state.activating.clear();
     $('global-search').value = '';
     view.replaceChildren();
+    $('room-tree')?.replaceChildren();
+    $('room-tablist')?.replaceChildren();
+    $('room-stage')?.replaceChildren();
+    if ($('room-tabstrip')) $('room-tabstrip').hidden = true;
+    if ($('room-stage')) $('room-stage').hidden = true;
+    if ($('view')) $('view').hidden = false;
     $('toasts').replaceChildren();
     document.querySelectorAll('dialog[open]').forEach((dialog) => dialog.close());
     document.querySelectorAll('dialog form').forEach((form) => form.reset());
@@ -257,7 +266,6 @@
       } else {
         state.renderPending = false;
       }
-      resolveOpeningRooms();
       if (notify) toast('已同步', 'Management Shell 状态已刷新。', 'success');
       return snapshot;
     }).catch((error) => {
@@ -298,6 +306,7 @@
       try { return decodeURIComponent(part); } catch { return part; }
     });
     if (parts[0] === 'projects' && parts[1]) return { name: 'project', projectID: parts[1] };
+    if (parts[0] === 'rooms' && parts[1]) return { name: 'room', roomID: parts[1] };
     if (['overview', 'projects', 'runtimes', 'settings'].includes(parts[0])) return { name: parts[0] };
     return { name: 'overview' };
   }
@@ -327,12 +336,14 @@
     $('page-subtitle').textContent = routeInfo.subtitle;
     document.title = `${routeInfo.title} · PairRoom`;
     document.querySelectorAll('[data-nav]').forEach((node) => {
-      const current = state.route.name === 'project' ? 'projects' : state.route.name;
+      const current = state.route.name === 'project' ? 'projects' : (state.route.name === 'room' ? '' : state.route.name);
       node.classList.toggle('active', node.dataset.nav === current);
       if (node.dataset.nav === current) node.setAttribute('aria-current', 'page');
       else node.removeAttribute('aria-current');
     });
     if (snapshot?.generated_at) $('last-updated').textContent = `最近同步 ${formatRelativeTime(snapshot.generated_at)}`;
+    syncRoomTree();
+    syncRoomTabs();
   }
 
   function setDisconnected(message) {
@@ -355,6 +366,15 @@
         return { eyebrow: 'ORCHESTRATION', title: 'Room Runtimes', subtitle: '查看容量、队列、活动 Turn 与空闲挂起状态。' };
       case 'settings':
         return { eyebrow: 'CONTROL PLANE', title: '设置', subtitle: '调整当前管理页体验，并检查 Service 启动策略与安全边界。' };
+      case 'room': {
+        const room = roomByID(state.route.roomID);
+        const runtime = getRuntime(state.route.roomID);
+        return {
+          eyebrow: 'ROOM',
+          title: room?.name || 'Room',
+          subtitle: runtimeLabel(runtime),
+        };
+      }
       default:
         return { eyebrow: 'PAIRROOM SERVICE', title: '概览', subtitle: 'Claude Code 与 Codex 的多 Project、本地协作控制面。' };
     }
@@ -362,22 +382,293 @@
 
   function render() {
     state.route = parseRoute();
+    if (state.route.name === 'room' && state.route.roomID && !state.tabs.includes(state.route.roomID)) {
+      state.tabs.push(state.route.roomID);
+    }
     updateChrome();
+    const roomMode = state.route.name === 'room';
+    $('view').hidden = roomMode;
+    $('room-stage').hidden = !roomMode;
+    $('room-tabstrip').hidden = state.tabs.length === 0;
     if (!state.snapshot) {
       state.renderedSnapshotKey = '';
       state.renderPending = false;
-      renderLoading();
+      if (!roomMode) renderLoading();
       return;
     }
-    switch (state.route.name) {
-      case 'projects': renderProjects(); break;
-      case 'project': renderProjectDetail(state.route.projectID); break;
-      case 'runtimes': renderRuntimes(); break;
-      case 'settings': renderSettings(); break;
-      default: renderOverview(); break;
+    if (roomMode) {
+      const room = roomByID(state.route.roomID);
+      if (room?.lifecycle === 'archived') {
+        toast('Room 已归档', '恢复后才能打开。', 'warning');
+        closeTab(state.route.roomID);
+        return;
+      }
+      const runtime = getRuntime(state.route.roomID);
+      if (room && !roomHasBlockingPendingBindings(room) && !['active', 'starting', 'queued'].includes(runtime.phase)) {
+        activateRoomRuntime(state.route.roomID);
+      } else {
+        syncRoomStage();
+      }
+    } else {
+      switch (state.route.name) {
+        case 'projects': renderProjects(); break;
+        case 'project': renderProjectDetail(state.route.projectID); break;
+        case 'runtimes': renderRuntimes(); break;
+        case 'settings': renderSettings(); break;
+        default: renderOverview(); break;
+      }
     }
     state.renderedSnapshotKey = snapshotRenderKey(state.snapshot);
     state.renderPending = false;
+  }
+
+  function syncRoomTree() {
+    const tree = $('room-tree');
+    if (!tree) return;
+    const snapshot = state.snapshot;
+    if (!snapshot) {
+      tree.replaceChildren();
+      return;
+    }
+    const models = buildProjectModels(snapshot);
+    const activeRoomID = state.route.name === 'room' ? state.route.roomID : '';
+    tree.replaceChildren(...models.map((model) => {
+      const { project, rooms } = model;
+      const expanded = state.expandedProjects.has(project.id) || rooms.some((room) => room.id === activeRoomID) || state.expandedProjects.size === 0;
+      if (expanded) state.expandedProjects.add(project.id);
+      const activeRooms = rooms.filter((room) => room.lifecycle !== 'archived');
+      const archivedRooms = rooms.filter((room) => room.lifecycle === 'archived');
+      const showArchived = state.archivedOpen.has(project.id);
+      const children = [];
+      if (expanded) {
+        activeRooms.forEach((room) => children.push(renderTreeRoom(room, room.id === activeRoomID)));
+        if (archivedRooms.length) {
+          children.push(node('button', {
+            type: 'button',
+            className: 'tree-archived-toggle',
+            textContent: showArchived ? `隐藏已归档 (${archivedRooms.length})` : `已归档 (${archivedRooms.length})`,
+            onClick: () => {
+              if (showArchived) state.archivedOpen.delete(project.id);
+              else state.archivedOpen.add(project.id);
+              syncRoomTree();
+            },
+          }));
+          if (showArchived) archivedRooms.forEach((room) => children.push(renderTreeRoom(room, false)));
+        }
+      }
+      return node('section', { className: `tree-project ${expanded ? 'open' : ''}` },
+        node('button', {
+          type: 'button',
+          className: 'tree-project-toggle',
+          title: project.root,
+          onClick: () => {
+            if (state.expandedProjects.has(project.id)) state.expandedProjects.delete(project.id);
+            else state.expandedProjects.add(project.id);
+            syncRoomTree();
+          },
+        }, node('span', { className: 'tree-caret', textContent: expanded ? '▾' : '▸' }), node('strong', { textContent: projectName(project) }), node('span', { className: 'nav-count', textContent: String(activeRooms.length) })),
+        children.length ? node('div', { className: 'tree-rooms' }, ...children) : null
+      );
+    }));
+  }
+
+  function renderTreeRoom(room, current) {
+    const runtime = getRuntime(room.id);
+    const archived = room.lifecycle === 'archived';
+    const meta = state.tabMeta[room.id] || {};
+    const badges = [];
+    if (meta.unread) badges.push(node('span', { className: 'tab-badge', textContent: String(meta.unread) }));
+    if (meta.pendingApprovals) badges.push(node('span', { className: 'tab-badge warn', textContent: '!' }));
+    if (meta.error) badges.push(node('span', { className: 'tab-badge danger', textContent: '×' }));
+    return node('button', {
+      type: 'button',
+      className: `tree-room ${current ? 'active' : ''} ${archived ? 'archived' : ''}`,
+      title: archived ? '已归档，恢复后才能打开' : room.name,
+      onClick: () => {
+        if (archived) {
+          toast('Room 已归档', '恢复后才能打开。', 'warning');
+          return;
+        }
+        openRoom(room.id);
+      },
+    }, node('span', { className: `tree-room-dot ${runtimeTone(runtime)}`, 'aria-hidden': 'true' }), node('span', { className: 'tree-room-name', textContent: room.name }), ...badges);
+  }
+
+  function syncRoomTabs() {
+    const list = $('room-tablist');
+    if (!list) return;
+    list.replaceChildren(...state.tabs.map((roomID, index) => {
+      const room = roomByID(roomID);
+      const runtime = getRuntime(roomID);
+      const meta = state.tabMeta[roomID] || {};
+      const selected = state.route.name === 'room' && state.route.roomID === roomID;
+      const tab = node('div', {
+        className: `room-tab ${selected ? 'active' : ''}`,
+        role: 'tab',
+        draggable: 'true',
+        'aria-selected': String(selected),
+        'data-room-id': roomID,
+        tabindex: selected ? '0' : '-1',
+        onClick: () => openRoom(roomID),
+        onDragStart: (event) => { state.dragTabID = roomID; event.dataTransfer.setData('text/plain', roomID); },
+        onDragOver: (event) => { event.preventDefault(); },
+        onDrop: (event) => {
+          event.preventDefault();
+          reorderTab(state.dragTabID || event.dataTransfer.getData('text/plain'), index);
+        },
+      }, node('span', { className: `tree-room-dot ${runtimeTone(runtime)}`, 'aria-hidden': 'true' }), node('span', { className: 'room-tab-label', textContent: room?.name || roomID }), meta.unread ? node('span', { className: 'tab-badge', textContent: String(meta.unread) }) : null, node('button', {
+        type: 'button',
+        className: 'room-tab-close',
+        'aria-label': `关闭 ${room?.name || roomID}`,
+        textContent: '×',
+        onClick: (event) => { event.stopPropagation(); closeTab(roomID); },
+      }));
+      return tab;
+    }));
+    syncRoomStage();
+  }
+
+  function reorderTab(roomID, toIndex) {
+    const from = state.tabs.indexOf(roomID);
+    if (from < 0 || from === toIndex) return;
+    state.tabs.splice(from, 1);
+    state.tabs.splice(toIndex, 0, roomID);
+    syncRoomTabs();
+  }
+
+  function syncRoomStage() {
+    const stage = $('room-stage');
+    if (!stage) return;
+    const activeID = state.route.name === 'room' ? state.route.roomID : '';
+    const keep = new Set(state.tabs);
+    Array.from(stage.children).forEach((panel) => {
+      if (!keep.has(panel.dataset.roomId)) panel.remove();
+    });
+    state.tabs.forEach((roomID) => {
+      let panel = stage.querySelector(`[data-room-id="${CSS.escape(roomID)}"]`);
+      if (!panel) {
+        panel = node('div', { className: 'room-panel', 'data-room-id': roomID, role: 'tabpanel' });
+        stage.append(panel);
+      }
+      const selected = roomID === activeID;
+      panel.hidden = !selected;
+      const runtime = getRuntime(roomID);
+      const room = roomByID(roomID);
+      const ready = runtime.phase === 'active';
+      let frame = panel.querySelector('iframe');
+      if (ready) {
+        const surface = `/api/v1/rooms/${encodeURIComponent(roomID)}/surface/`;
+        if (!frame) {
+          frame = node('iframe', { className: 'room-frame', title: room?.name || roomID, src: surface });
+          panel.replaceChildren(frame);
+        } else if (!frame.src.endsWith('/surface/') && !frame.src.includes(`/surface/`)) {
+          frame.src = surface;
+        }
+      } else {
+        if (frame) frame.remove();
+        panel.replaceChildren(roomPlaceholder(room, runtime));
+      }
+      if (frame && selected) notifySurface(frame, 'active');
+      else if (frame) notifySurface(frame, 'inactive');
+    });
+  }
+
+  function roomPlaceholder(room, runtime) {
+    const phase = runtime.phase || 'suspended';
+    const title = phase === 'queued' ? `排队 #${runtime.queue_position || '?'}` : (phase === 'starting' ? '正在启动 Runtime' : (phase === 'failed' ? 'Runtime 失败' : 'Runtime 已挂起'));
+    const detail = runtime.last_error || '切回此标签会自动重新请求激活。后台标签不保证一直在线。';
+    return node('div', { className: 'room-placeholder' },
+      node('p', { className: 'eyebrow', textContent: 'ROOM SURFACE' }),
+      node('h2', { textContent: room?.name || 'Room' }),
+      node('p', { textContent: `${title} · ${detail}` }),
+      actionButton('重新激活', () => activateRoomRuntime(room.id), 'primary-button')
+    );
+  }
+
+  function notifySurface(frame, action) {
+    try {
+      const target = frame.contentWindow;
+      if (!target) return;
+      target.postMessage({ type: 'pairroom-shell', action, roomId: frame.parentElement?.dataset.roomId || '' }, window.location.origin);
+    } catch {
+      // Cross-document messaging is best-effort until the iframe finishes loading.
+    }
+  }
+
+  function closeTab(roomID) {
+    const index = state.tabs.indexOf(roomID);
+    if (index < 0) return;
+    state.tabs.splice(index, 1);
+    delete state.tabMeta[roomID];
+    const stage = $('room-stage');
+    stage?.querySelector(`[data-room-id="${CSS.escape(roomID)}"]`)?.remove();
+    if (state.route.name === 'room' && state.route.roomID === roomID) {
+      const next = state.tabs[index] || state.tabs[index - 1];
+      if (next) navigate(`#/rooms/${encodeURIComponent(next)}`);
+      else navigate('#/overview');
+      return;
+    }
+    syncRoomTabs();
+  }
+
+  async function activateRoomRuntime(roomID) {
+    if (!roomID || state.activating.has(roomID)) return null;
+    const runtime = getRuntime(roomID);
+    if (['active', 'starting', 'queued'].includes(runtime.phase)) {
+      syncRoomStage();
+      return runtime;
+    }
+    state.activating.add(roomID);
+    try {
+      const status = await api(`/api/v1/rooms/${encodeURIComponent(roomID)}/activate`, { method: 'POST' });
+      await refresh({ forceRender: true });
+      return status;
+    } catch (error) {
+      toast('Room 激活失败', error.message, 'error');
+      return null;
+    } finally {
+      state.activating.delete(roomID);
+    }
+  }
+
+  function shiftTab(delta) {
+    if (!state.tabs.length) return;
+    const current = state.route.name === 'room' ? state.tabs.indexOf(state.route.roomID) : 0;
+    const next = (Math.max(current, 0) + delta + state.tabs.length) % state.tabs.length;
+    openRoom(state.tabs[next]);
+  }
+
+  function moveActiveTab(delta) {
+    if (state.route.name !== 'room') return;
+    const from = state.tabs.indexOf(state.route.roomID);
+    if (from < 0) return;
+    const to = Math.max(0, Math.min(state.tabs.length - 1, from + delta));
+    reorderTab(state.route.roomID, to);
+  }
+
+  function openRoomPicker() {
+    renderRoomPicker();
+    showDialog('room-picker-dialog');
+    queueMicrotask(() => $('room-picker-search').focus());
+  }
+
+  function renderRoomPicker() {
+    const query = ($('room-picker-search')?.value || '').trim().toLocaleLowerCase();
+    const rooms = (state.snapshot?.rooms || []).filter((room) => room.lifecycle !== 'archived');
+    const matches = rooms.filter((room) => {
+      if (!query) return true;
+      const project = projectForRoom(state.snapshot, room);
+      return [room.name, room.id, projectName(project)].join('\n').toLocaleLowerCase().includes(query);
+    });
+    const list = $('room-picker-list');
+    list.replaceChildren(...(matches.length ? matches.map((room) => {
+      const project = projectForRoom(state.snapshot, room);
+      return node('button', {
+        type: 'button',
+        className: 'list-item room-picker-item',
+        onClick: () => { closeDialog('room-picker-dialog'); openRoom(room.id); },
+      }, node('div', { className: 'list-copy' }, node('strong', { textContent: room.name }), node('p', { textContent: projectName(project) })));
+    }) : [node('p', { className: 'muted', textContent: '没有匹配的活动 Room。' })]));
   }
 
   function renderLoading() {
@@ -681,6 +972,7 @@
     } else {
       if (pending) actions.append(actionButton('补全 Binding', () => completeBindings(room), 'primary-button compact-button room-action-control'));
       actions.append(actionButton(runtime.phase === 'queued' ? `排队 #${runtime.queue_position || '?'}` : '打开', () => openRoom(room.id), 'primary-button compact-button room-action-control', pending));
+      actions.append(actionButton('浏览器打开', () => openRoomInBrowserAction(room.id), 'secondary-button compact-button room-action-control', pending));
       actions.append(actionButton('重命名', () => openRenameDialog(room), 'secondary-button compact-button room-action-control'));
       actions.append(actionButton('归档', () => archiveRoom(room), 'danger-button outline compact-button room-action-control'));
     }
@@ -801,7 +1093,7 @@
       const command = runtimeCommand(policy);
       return node('div', { className: 'view-stack' },
         settingsPanel('有效 Runtime 策略', '当前进程实际采用的不可抢占调度参数。',
-          settingRow('最大活动 Runtime', 'Starting、Active、Stopping，以及清理不确定的 Failed Runtime 都占用容量。', node('strong', { textContent: policy.limit ? String(policy.limit) : '未暴露' })),
+          settingRow('最大活动 Runtime', 'Starting、Active、Stopping，以及清理不确定的 Failed Runtime 都占用容量。降低上限不会打断正在跑的 Turn。', runtimeLimitControl(policy)),
           settingRow('Idle timeout', '只在 Runtime 没有活动 Turn 时开始计算。', node('strong', { textContent: policy.idle_timeout_seconds ? formatDuration(policy.idle_timeout_seconds) : '未暴露' })),
           settingRow('Reconcile interval', 'Runtime Manager 检查空闲、队列和容量的频率。', node('strong', { textContent: policy.poll_interval_milliseconds ? `${policy.poll_interval_milliseconds} ms` : '未暴露' })),
           settingRow('Close timeout', '安全关闭 Room Runtime 的单次截止时间。', node('strong', { textContent: policy.close_timeout_seconds ? formatDuration(policy.close_timeout_seconds) : '未暴露' }))
@@ -813,7 +1105,7 @@
           ),
           node('footer', { className: 'panel-footer', textContent: '该前台示例只覆盖 Runtime 参数；请保留当前进程使用的 --config、--data-root、listen、token 等其他启动参数。' })
         ),
-        node('aside', { className: 'callout warning' }, node('strong', { textContent: '为何只读' }), node('span', { textContent: '降低容量不会中断 Busy Runtime；PairRoom 选择显式重启边界，而不是提供看似即时、实则可能破坏 Session 唯一性的热更新。' }))
+        node('aside', { className: 'callout warning' }, node('strong', { textContent: '容量与 idle' }), node('span', { textContent: '容量可在此页立即调整；降低上限不会打断正在跑的 Turn。Idle timeout 仍由启动参数决定，后台标签不保证一直占有 Runtime。' }))
       );
     }
     if (state.settingsSection === 'operations') {
@@ -878,7 +1170,8 @@
           capabilityRow('登记 canonical Project', true, '显式绝对路径；不提供服务端目录浏览。'),
           capabilityRow('导入 Legacy Room', caps.legacy_import !== false, '非破坏性登记，不搬移或重写 events.jsonl。'),
           capabilityRow('手动挂起 idle Runtime', caps.runtime_suspend === true, 'Busy Runtime 会拒绝操作。'),
-          capabilityRow('热更新 Runtime policy', caps.runtime_policy_mutation === true, '当前需受控重启。'),
+          capabilityRow('热更新 Runtime 容量', caps.runtime_policy_mutation === true, 'Settings 中可调整最多同时活动的 Room Runtime。降低容量不会打断正在跑的 Turn。'),
+          capabilityRow('应用内 Room surface', caps.room_surface === true, 'Management 同源网关承载应用内标签，不把 Runtime token 送到浏览器。'),
           capabilityRow('Room 生命周期管理', caps.room_deletion === true, '支持最多 100 个 Room 的批量归档与批量永久清理；永久清理仅接受已归档 Room，并要求一次不可恢复确认。显式外部导入目录只解绑并保留。'),
           capabilityRow('服务端路径浏览器', caps.server_path_browser === true, '避免扩大本机文件系统暴露面。')
         ),
@@ -896,13 +1189,10 @@
           ['comfortable', '舒适'], ['compact', '紧凑'],
         ], state.preferences.density, (value) => { state.preferences.density = value; applyPreferences(); renderSettings(); }, '信息密度'))
       ),
-      settingsPanel('刷新与导航', '控制当前页面如何轮询 Service 与打开 Room。',
+      settingsPanel('刷新与导航', '控制当前页面如何轮询 Service。侧栏点击始终在应用内标签打开 Room。',
         settingRow('自动刷新', '页面隐藏时自动暂停，重新可见后立即同步。', selectControl([
           ['0', '关闭'], ['5000', '5 秒'], ['10000', '10 秒'], ['30000', '30 秒'], ['60000', '60 秒'],
         ], String(state.preferences.refreshMs), (value) => { state.preferences.refreshMs = Number(value); scheduleRefresh(); }, '自动刷新间隔')),
-        settingRow('Room 打开方式', '新标签页可以保留 Management Shell；同标签页仅在 Runtime 已可用后跳转。', segmented([
-          ['new', '新标签页'], ['same', '当前标签页'],
-        ], state.preferences.openBehavior, (value) => { state.preferences.openBehavior = value; renderSettings(); }, 'Room 打开方式')),
         settingRow('默认显示已归档', '影响 Projects 与 Project 详情列表。', toggleButton(state.filters.showArchived, (value) => { state.filters.showArchived = value; }, '切换归档可见性'))
       ),
       node('aside', { className: 'callout neutral' }, node('strong', { textContent: '无隐式持久化' }), node('span', { textContent: '这些界面选项不会写入 Service Registry，也不会改变 Room Event Log 或 Agent Session Binding。刷新标签页后恢复默认值。' }))
@@ -914,6 +1204,27 @@
       node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: title }), node('p', { textContent: subtitle }))),
       node('div', { className: 'setting-list' }, ...rows)
     );
+  }
+
+  function runtimeLimitControl(policy) {
+    const mutable = state.snapshot?.capabilities?.runtime_policy_mutation === true;
+    if (!mutable) return node('strong', { textContent: policy.limit ? String(policy.limit) : '未暴露' });
+    const input = node('input', {
+      type: 'number', min: '1', max: '128', value: String(policy.limit || 8),
+      'aria-label': '最大同时活动 Room Runtime',
+      onChange: async (event) => {
+        const limit = Number(event.target.value);
+        try {
+          await api('/api/v1/runtime-policy', { method: 'PATCH', body: JSON.stringify({ limit }) });
+          toast('Runtime 容量已更新', `最多同时 ${limit} 个活动 Runtime。`, 'success');
+          await refresh({ forceRender: true });
+        } catch (error) {
+          toast('无法更新容量', error.message, 'error');
+          event.target.value = String(policy.limit || 8);
+        }
+      },
+    });
+    return input;
   }
 
   function settingRow(title, description, control) {
@@ -1642,90 +1953,53 @@
 
   async function openRoom(roomID) {
     const room = roomByID(roomID);
-    if (!room || room.lifecycle === 'archived') return;
+    if (!room) return;
+    if (room.lifecycle === 'archived') {
+      toast('Room 已归档', '恢复后才能打开。', 'warning');
+      return;
+    }
     if (roomHasBlockingPendingBindings(room)) {
       completeBindings(room);
       return;
     }
-    let popup = null;
-    const newWindow = state.preferences.openBehavior === 'new';
-    if (newWindow) {
-      popup = state.opening.get(roomID);
-      if (!popup || popup.closed) popup = window.open('about:blank', '_blank');
-      if (!popup) {
-        toast('弹窗被阻止', '允许此站点打开新标签页后重试，或在设置中改为当前标签页。', 'error');
-        return;
-      }
-      renderActivationPlaceholder(popup, room.name);
-      state.opening.set(roomID, popup);
-    } else {
-      state.pendingNavigationRoom = roomID;
+    if (!state.tabs.includes(roomID)) state.tabs.push(roomID);
+    if (location.hash !== `#/rooms/${encodeURIComponent(roomID)}`) navigate(`#/rooms/${encodeURIComponent(roomID)}`);
+    else {
+      state.route = parseRoute();
+      syncRoomTabs();
     }
+    await activateRoomRuntime(roomID);
+  }
+
+  async function openRoomInBrowserAction(roomID) {
+    const room = roomByID(roomID);
+    if (!room || room.lifecycle === 'archived') {
+      toast('无法在浏览器中打开', '归档 Room 没有独立 Runtime URL，请先恢复。', 'warning');
+      return;
+    }
+    if (roomHasBlockingPendingBindings(room)) {
+      completeBindings(room);
+      return;
+    }
+    const deadline = Date.now() + 60000;
+    toast('正在准备系统浏览器', '等待 Runtime 就绪后再打开。', 'success');
     try {
-      const status = await api(`/api/v1/rooms/${encodeURIComponent(roomID)}/activate`, { method: 'POST' });
-      if (status.url) {
-        if (popup) popup.location.replace(status.url);
-        else location.assign(status.url);
-        state.opening.delete(roomID);
-        state.pendingNavigationRoom = '';
-      } else {
-        toast(status.queue_position ? `Room 已进入队列 #${status.queue_position}` : 'Runtime 正在启动', '关闭 Management Shell 或激活占位页都不会取消 durable activation demand。', 'success');
+      while (Date.now() < deadline) {
+        const status = await api(`/api/v1/rooms/${encodeURIComponent(roomID)}/activate`, { method: 'POST' });
+        if (status.phase === 'active' && status.url) break;
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        await refresh();
       }
-      await refresh({ forceRender: true });
+      const runtime = getRuntime(roomID);
+      if (runtime.phase !== 'active' || !runtime.url) {
+        throw new Error('等待 Runtime 超时');
+      }
+      await api(`/api/v1/rooms/${encodeURIComponent(roomID)}/open-browser`, { method: 'POST' });
+      toast('已在系统浏览器中打开', '不会离开当前工作台。', 'success');
     } catch (error) {
-      if (popup && !popup.closed) popup.close();
-      state.opening.delete(roomID);
-      if (state.pendingNavigationRoom === roomID) state.pendingNavigationRoom = '';
-      toast('Room 激活失败', error.message, 'error');
-    }
-  }
-
-  function renderActivationPlaceholder(popup, roomName) {
-    try {
-      popup.document.title = `${roomName} · PairRoom activating`;
-      popup.document.body.replaceChildren();
-      popup.document.body.style.cssText = 'margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1020;color:#e8eefb;font:14px system-ui,sans-serif';
-      const box = popup.document.createElement('div');
-      box.style.cssText = 'max-width:520px;padding:28px;text-align:center';
-      const title = popup.document.createElement('h1');
-      title.textContent = `正在激活 ${roomName}`;
-      title.style.cssText = 'font-size:22px;margin:0 0 10px';
-      const copy = popup.document.createElement('p');
-      copy.textContent = 'Runtime 正在启动或等待全局容量。关闭此页不会中断其他 Room 的活动 Turn。';
-      copy.style.cssText = 'color:#9eabc1;line-height:1.6';
-      box.append(title, copy);
-      popup.document.body.append(box);
-    } catch {
-      // The placeholder is best-effort; activation itself remains authoritative.
-    }
-  }
-
-  function resolveOpeningRooms() {
-    const runtimeByRoom = new Map((state.snapshot?.runtimes || []).map((runtime) => [runtime.room_id, runtime]));
-    for (const [roomID, popup] of state.opening) {
-      const runtime = runtimeByRoom.get(roomID);
-      if (!popup || popup.closed) {
-        state.opening.delete(roomID);
-        continue;
-      }
-      if (runtime?.phase === 'active' && runtime.url) {
-        popup.location.replace(runtime.url);
-        state.opening.delete(roomID);
-      } else if (runtime?.phase === 'failed') {
-        popup.close();
-        state.opening.delete(roomID);
-        toast('Runtime 启动失败', runtime.last_error || '请查看 Runtimes 页面诊断。', 'error');
-      }
-    }
-    if (state.pendingNavigationRoom) {
-      const runtime = runtimeByRoom.get(state.pendingNavigationRoom);
-      if (runtime?.phase === 'active' && runtime.url) {
-        state.pendingNavigationRoom = '';
-        location.assign(runtime.url);
-      } else if (runtime?.phase === 'failed') {
-        state.pendingNavigationRoom = '';
-        toast('Runtime 启动失败', runtime.last_error || '请查看 Runtimes 页面诊断。', 'error');
-      }
+      const runtime = getRuntime(roomID);
+      if (runtime.url) await copyText(runtime.url, '已复制一次性 Room URL，可粘贴到系统浏览器。');
+      toast('无法打开系统浏览器', error.message, 'error');
     }
   }
 
@@ -2119,13 +2393,48 @@
     app.classList.remove('sidebar-open');
     if (!state.authenticated) return;
     render();
-    view.focus({ preventScroll: true });
+    if (!view.hidden) view.focus({ preventScroll: true });
     window.scrollTo({ top: 0, behavior: 'instant' });
+  });
+  $('room-picker-button')?.addEventListener('click', openRoomPicker);
+  $('room-picker-search')?.addEventListener('input', renderRoomPicker);
+  window.addEventListener('message', (event) => {
+    if (event.origin !== location.origin) return;
+    const data = event.data;
+    if (!data || data.type !== 'pairroom-surface') return;
+    const frames = Array.from(document.querySelectorAll('#room-stage iframe'));
+    if (!frames.some((frame) => frame.contentWindow === event.source)) return;
+    if (data.action === 'close-tab') {
+      closeTab(data.roomId || state.route.roomID);
+      return;
+    }
+    if (!data.roomId) return;
+    state.tabMeta[data.roomId] = {
+      unread: Number(data.unread || 0),
+      pendingApprovals: Number(data.pendingApprovals || 0),
+      error: data.error || '',
+    };
+    syncRoomTree();
+    syncRoomTabs();
   });
   document.addEventListener('keydown', (event) => {
     if (event.key === '/' && !event.metaKey && !event.ctrlKey && !event.altKey && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) {
       event.preventDefault();
       $('global-search').focus();
+    }
+    if (!state.authenticated || event.ctrlKey || event.metaKey || !event.altKey) return;
+    if (document.querySelector('dialog[open]')) return;
+    const key = event.key;
+    if (key === '[' && !event.shiftKey) { event.preventDefault(); shiftTab(-1); }
+    else if (key === ']' && !event.shiftKey) { event.preventDefault(); shiftTab(1); }
+    else if (key === '{' || (key === '[' && event.shiftKey)) { event.preventDefault(); moveActiveTab(-1); }
+    else if (key === '}' || (key === ']' && event.shiftKey)) { event.preventDefault(); moveActiveTab(1); }
+    else if (key.toLocaleLowerCase() === 'w') {
+      event.preventDefault();
+      if (state.route.name === 'room') closeTab(state.route.roomID);
+    } else if (key.toLocaleLowerCase() === 'n') {
+      event.preventDefault();
+      openRoomPicker();
     }
   });
   document.addEventListener('visibilitychange', () => {

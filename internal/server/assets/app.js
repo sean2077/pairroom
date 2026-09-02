@@ -13,6 +13,15 @@
   const initialTheme = savedTheme || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
   document.documentElement.dataset.theme = initialTheme;
   const STREAM_RENDER_INTERVAL_MS = 50;
+  const SURFACE_PREFIX = (() => {
+    const match = window.location.pathname.match(/^(.*\/api\/v1\/rooms\/[^/]+\/surface)(?:\/|$)/);
+    return match ? match[1].replace(/\/$/, '') : '';
+  })();
+  const EMBEDDED = Boolean(SURFACE_PREFIX);
+  if (EMBEDDED) {
+    document.documentElement.dataset.embed = '1';
+    if (document.body) document.body.dataset.embed = '1';
+  }
   const state = {
     snapshot: null,
     drafts: { claude: '', codex: '' },
@@ -40,6 +49,7 @@
     inspectorCorrelation: '',
     searchQuery: '',
     theme: initialTheme,
+    shellActive: true,
     source: null,
     renderQueued: false,
     streamRenderTimer: null,
@@ -60,7 +70,7 @@
       method = 'POST';
       headers.set('Authorization', `Bearer ${bootstrapToken}`);
     }
-    const response = await fetch('/api/v1/session', { method, headers, credentials: 'same-origin' });
+    const response = await fetch(roomURL('/api/v1/session'), { method, headers, credentials: 'same-origin' });
     const payload = await response.json().catch(() => ({}));
     bootstrapToken = '';
     if (!response.ok) {
@@ -72,12 +82,18 @@
     state.csrfToken = payload.csrf_token || '';
   }
 
+  function roomURL(path) {
+    const value = String(path || '');
+    if (!value.startsWith('/')) return SURFACE_PREFIX + '/' + value;
+    return SURFACE_PREFIX + value;
+  }
+
   async function api(path, options = {}) {
     const headers = new Headers(options.headers || {});
     const method = String(options.method || 'GET').toUpperCase();
     if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && state.csrfToken) headers.set('X-PairRoom-CSRF', state.csrfToken);
     if (options.body && !(options.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-    const response = await fetch(path, { ...options, method, headers, credentials: 'same-origin' });
+    const response = await fetch(roomURL(path), { ...options, method, headers, credentials: 'same-origin' });
     const type = response.headers.get('content-type') || '';
     const payload = type.includes('application/json') ? await response.json() : await response.text();
     if (!response.ok) {
@@ -88,7 +104,7 @@
   }
 
   async function apiBlob(path) {
-    const response = await fetch(path, { credentials: 'same-origin' });
+    const response = await fetch(roomURL(path), { credentials: 'same-origin' });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error || response.statusText);
@@ -143,16 +159,18 @@
     state.drafts = { claude: '', codex: '' };
     state.draftCorrelation = { claude: '', codex: '' };
     initializeRoomLocalState();
+    if (state.snapshot?.meta?.id) document.body.dataset.roomId = state.snapshot.meta.id;
     render(true);
     connectEvents();
     refreshGitStatus();
+    postSurfaceState();
   }
 
   function connectEvents() {
     if (state.source) state.source.close();
     const since = state.snapshot ? state.snapshot.latest_seq || 0 : 0;
     const query = new URLSearchParams({ since: String(since) });
-    const source = new EventSource(`/api/v1/events?${query}`);
+    const source = new EventSource(roomURL(`/api/v1/events?${query}`));
     state.source = source;
     setConnection(false, 'Connecting');
     source.addEventListener('open', () => setConnection(true, 'Live'));
@@ -507,6 +525,28 @@
       subtitle.className = 'participant-subtitle';
       subtitle.textContent = p.last_error || sessionSummary(p);
       main.appendChild(subtitle);
+
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'ghost-button compact-button session-copy';
+      const vendorID = String(p.session_id || '').trim();
+      if (!vendorID) {
+        copy.disabled = true;
+        copy.textContent = '尚未生成';
+        copy.title = '原生 Session/Thread ID 将在首次被接受的 Turn 后生成';
+      } else {
+        copy.textContent = actor === 'codex' ? '复制 Thread ID' : '复制 Session ID';
+        copy.title = '复制完整 ID，用于 resume 原生会话';
+        copy.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(vendorID);
+            toast('已复制完整 ID', 'success');
+          } catch {
+            toast('复制失败', 'error');
+          }
+        });
+      }
+      main.appendChild(copy);
 
       const meta = document.createElement('div');
       meta.className = 'participant-meta';
@@ -1876,7 +1916,7 @@
 
   async function downloadExport(format) {
     try {
-      const response = await fetch(`/api/v1/export?format=${encodeURIComponent(format)}`, { credentials: 'same-origin' });
+      const response = await fetch(roomURL(`/api/v1/export?format=${encodeURIComponent(format)}`), { credentials: 'same-origin' });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.error || response.statusText);
@@ -2089,7 +2129,7 @@
   }
 
   function markConversationRead(force = false) {
-    if (!state.snapshot || document.hidden) return;
+    if (!state.snapshot || document.hidden || state.shellActive === false) return;
     const nearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 160;
     if (!force && !nearBottom) return;
     state.lastSeenSeq = Number(state.snapshot.latest_seq || state.lastSeenSeq);
@@ -2101,6 +2141,26 @@
   function updateUnreadUI() {
     document.title = state.unreadCount > 0 ? `(${state.unreadCount}) PairRoom` : 'PairRoom';
     $('scroll-bottom').textContent = state.unreadCount > 0 ? `跳到最新 (${state.unreadCount})` : '跳到最新';
+    postSurfaceState();
+  }
+
+  function pendingApprovalCount() {
+    const approvals = state.snapshot?.approvals || [];
+    return approvals.filter((item) => item.status === 'pending').length;
+  }
+
+  function postSurfaceState() {
+    if (!EMBEDDED || window.parent === window) return;
+    const roomId = state.snapshot?.meta?.id || '';
+    window.parent.postMessage({
+      type: 'pairroom-surface',
+      roomId,
+      name: state.snapshot?.meta?.name || '',
+      unread: state.unreadCount || 0,
+      pendingApprovals: pendingApprovalCount(),
+      error: state.snapshot?.diagnostic || '',
+      connected: Boolean(state.source && state.source.readyState === 1),
+    }, window.location.origin);
   }
 
   async function requestNotifications() {
@@ -2154,6 +2214,7 @@
     node.classList.toggle('connected', connected);
     node.classList.toggle('disconnected', !connected);
     node.lastElementChild.textContent = label;
+    postSurfaceState();
   }
 
   function insertComposerText(text) {
@@ -2598,6 +2659,17 @@
     shell.append(symbol, heading, text, retry);
     timeline.appendChild(shell);
   }
+
+  window.addEventListener('message', (event) => {
+    if (!EMBEDDED || event.origin !== window.location.origin || event.source !== window.parent) return;
+    const data = event.data;
+    if (!data || data.type !== 'pairroom-shell') return;
+    if (data.action === 'inactive') state.shellActive = false;
+    if (data.action === 'active') {
+      state.shellActive = true;
+      markConversationRead(true);
+    }
+  });
 
   function bootRoom() {
     showTimelineLoading();

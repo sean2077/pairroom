@@ -9,12 +9,19 @@ import (
 	"time"
 )
 
+const (
+	DefaultRuntimeLimit = 8
+	MinRuntimeLimit     = 1
+	MaxRuntimeLimit     = 128
+)
+
 var (
 	ErrRuntimeManagerClosed  = errors.New("room runtime manager is closed")
 	ErrRuntimeBusy           = errors.New("room runtime has active work")
 	ErrRuntimeDrainAborted   = errors.New("room runtime drain ended before shutdown")
 	ErrRuntimeCloseUncertain = errors.New("room runtime close state is uncertain")
 	ErrRuntimeRoomDeleting   = errors.New("room is being permanently removed")
+	ErrRuntimeNotReady       = errors.New("room runtime is not active")
 )
 
 type RuntimePhase string
@@ -61,6 +68,14 @@ type RuntimeInterruptControl interface {
 // nil. A non-nil runtime together with an error means cleanup could not be
 // proven complete; the manager retains that runtime and its capacity slot.
 type RuntimeFactory func(context.Context, Room) (RoomRuntime, error)
+
+// RuntimeProxyAccess is an optional capability. The Management surface gateway
+// uses it to reach a verified loopback Room HTTP endpoint and inject the
+// runtime bearer without exposing that token to the browser.
+type RuntimeProxyAccess interface {
+	ProxyBaseURL() string
+	ProxyToken() string
+}
 
 type RuntimeManagerConfig struct {
 	Limit        int
@@ -124,8 +139,11 @@ func NewRuntimeManager(registry *Registry, factory RuntimeFactory, cfg RuntimeMa
 	if factory == nil {
 		return nil, errors.New("runtime factory is required")
 	}
-	if cfg.Limit < 1 {
-		cfg.Limit = 2
+	if cfg.Limit < MinRuntimeLimit {
+		cfg.Limit = DefaultRuntimeLimit
+	}
+	if cfg.Limit > MaxRuntimeLimit {
+		return nil, fmt.Errorf("runtime-limit must be between %d and %d", MinRuntimeLimit, MaxRuntimeLimit)
 	}
 	if cfg.IdleTimeout <= 0 {
 		cfg.IdleTimeout = 15 * time.Minute
@@ -253,19 +271,39 @@ func (m *RuntimeManager) Activate(ctx context.Context, roomID string) (RoomRunti
 	}
 }
 
-// Policy returns the effective runtime policy for observability. The values
-// are immutable after manager construction; changing service flags still
-// requires a controlled service restart so active Room turns are never
-// reconfigured underneath a running vendor session.
+// Policy returns the effective runtime policy for observability.
 func (m *RuntimeManager) Policy() RuntimePolicy {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.policyLocked()
+}
+
+func (m *RuntimeManager) policyLocked() RuntimePolicy {
 	return RuntimePolicy{
 		Limit:                    m.cfg.Limit,
 		IdleTimeoutSeconds:       int64(m.cfg.IdleTimeout / time.Second),
 		PollIntervalMilliseconds: int64(m.cfg.PollInterval / time.Millisecond),
 		CloseTimeoutSeconds:      int64(m.cfg.CloseTimeout / time.Second),
 	}
+}
+
+// SetLimit updates the concurrent Room Runtime capacity without restarting the
+// Service. Raising the limit immediately dispatches queued activations.
+// Lowering it never interrupts a busy Turn; occupancy may temporarily exceed
+// the new limit until idle or explicit suspend frees slots.
+func (m *RuntimeManager) SetLimit(limit int) (RuntimePolicy, error) {
+	if limit < MinRuntimeLimit || limit > MaxRuntimeLimit {
+		return RuntimePolicy{}, fmt.Errorf("runtime-limit must be between %d and %d", MinRuntimeLimit, MaxRuntimeLimit)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return RuntimePolicy{}, ErrRuntimeManagerClosed
+	}
+	m.cfg.Limit = limit
+	m.dispatchLocked()
+	m.signalLocked()
+	return m.policyLocked(), nil
 }
 
 func (m *RuntimeManager) Touch(roomID string) {

@@ -212,6 +212,14 @@
   }
 
   function leaveRoom() {
+    if (document.body?.dataset.embed === '1' && window.parent !== window) {
+      window.parent.postMessage({
+        type: 'pairroom-surface',
+        action: 'close-tab',
+        roomId: document.body.dataset.roomId || '',
+      }, window.location.origin);
+      return;
+    }
     if (window.opener && !window.opener.closed) {
       try {
         window.opener.focus();

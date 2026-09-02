@@ -84,7 +84,9 @@ Role / workspace 切换必须与 delivery serialization 使用同一安全边界
 
 SSE 传输 durable state event 与 transient telemetry。页面应增量更新或批量合并高频活动，不因每个 token 重建全部聊天树；重连时以 snapshot 为准，不能依赖 browser 或 desktop webview 中遗留的临时状态。
 
-Management Shell 中的 Room 激活仍由现有 HTTP API 决定。当前 Wails Host 维持一个主 webview，并以受限的 `window.open` bridge 将 Room 激活转换为同窗口 numeric-loopback 导航；非 PairRoom 目标不会通过该 bridge。多窗口并不是本版本的 durable contract。
+Management Shell 以 Room 为中心：侧栏按 Project 分组，应用内标签通过 Management 同源 surface 网关（`/api/v1/rooms/{room}/surface/…`）嵌入活跃 Room View。iframe 使用 Management Session Cookie；网关在服务端注入 Runtime bearer，Runtime token 不进入 DOM。应用内标签不是 Runtime lease，后台标签仍受现有 idle / 容量 / LRU / 显式挂起约束；切回已挂起标签会重新请求激活。归档 Room 不能作为标签打开，需先恢复。
+
+「在浏览器中打开」等待 Runtime 就绪后由 Service 调用系统浏览器打开一次性 Room Runtime URL，不使用 `window.open`。Wails Host 仍维持一个主 webview，并把非 PairRoom 的 `window.open` 目标拦在 numeric-loopback 之外；多窗口并不是 durable contract。
 
 ## 非目标
 
