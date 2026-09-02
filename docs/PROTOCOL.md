@@ -22,7 +22,7 @@ Agent 应以仓库状态为准，独立验证 peer 的主张，不把 handoff �
 
 ## 输出
 
-普通回答始终对用户可见。需要交给 peer 时，在回答末尾输出一个紧凑 handoff：
+普通回答始终对用户可见。明确 `@claude`、`@codex` 或 `@peer` 即请求把回复交给对应 peer；PairRoom 会在当前 native Turn 完成后投递。若需要隐式继续而没有直接地址，在回答末尾输出一个紧凑 handoff：
 
 ```text
 [PAIRROOM:HANDOFF]
@@ -35,7 +35,7 @@ Exact ask: ...
 [PAIRROOM:NEXT]
 ```
 
-缺少 handoff、handoff 过短、控制标记冲突、hop 超限或存在更新的用户指令时，scheduler fail closed，不继续自动接力。
+没有直接 peer 地址且缺少 handoff、handoff 过短、控制标记冲突、hop 超限或存在更新的用户指令时，scheduler fail closed，不继续自动接力。直接 peer 地址优先于普通 `DONE`/`WAIT`/`BLOCKED` 停止标记；`@human`/`@user` 优先于 peer 地址并回到用户。
 
 ## 收敛
 
@@ -49,7 +49,7 @@ Exact ask: ...
 - `WAIT`：需要用户选择或批准；
 - `BLOCKED`：外部条件未满足，并给出最小解除阻塞信息。
 
-普通 `@claude`、`@codex`、`@peer` 不是机械路由信号。
+明确的 `@claude`、`@codex`、`@peer` 是机械路由信号；普通文本中的未指向性 Agent 名称仍不是路由信号。
 
 ## Role contract
 

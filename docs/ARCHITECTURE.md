@@ -40,7 +40,7 @@ Wails Desktop 只是原生 Window / Tray / single-instance host。它加载同�
 
 ### Single owner
 
-一个 Room 最多一个 active native Turn owner。跨 Agent message 和 `next_turn` 进入 Room FIFO；scheduler 只有在可靠 terminal boundary 后才提交下一项。
+一个 Room 最多一个 active native Turn owner。跨 Agent message、明确的 Agent peer mention 和 `next_turn` 进入 Room FIFO；scheduler 只有在可靠 terminal boundary 后才提交下一项。没有直接 peer mention 的隐式 Agent 接力仍须通过有效 `HANDOFF` 与 `NEXT`。
 
 ### Diagnostic is not terminal
 

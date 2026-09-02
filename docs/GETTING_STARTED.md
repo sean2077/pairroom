@@ -85,6 +85,7 @@ PairRoom 会把阶段编译为顺序执行的 Workflow，而不是让两个 runt
 
 - 发给当前 owner 的普通输入可进入当前 Turn 的 steering 路径；
 - 显式 `next_turn` 或发给另一 Agent 的输入进入 Room FIFO；
+- Agent 回复中明确 `@claude`、`@codex` 或 `@peer` 会在当前 Turn 结束后交给对应 peer；`@human`/`@user` 会把决定留给用户；
 - 取消仍在 FIFO 的消息只移除该消息；
 - 已提交给 native runtime 的输入可能需要中断整个当前 native Turn。
 

@@ -36,6 +36,8 @@ func TestResolveFiltersRoleWithTurnRouting(t *testing.T) {
 		"[workflow.gate]",
 		"[role.reviewer]",
 		"HANDOFF + NEXT",
+		"explicit @claude, @codex, or @peer",
+		"@human and @user",
 	} {
 		if !strings.Contains(got, fragment) {
 			t.Fatalf("contract missing %q:\n%s", fragment, got)

@@ -21,7 +21,9 @@ generic Codex `error` 可能是 Turn 中途诊断。PairRoom 会记录它，但�
 
 ## 发给 peer 的消息一直 Waiting
 
-这是当前 Agent 仍持有 native Turn 时的预期行为。跨 Agent message 位于 Room FIFO，必须等待可靠 terminal boundary。普通 `@peer` 不会自动交棒；Agent 自动接力还需要有效 `HANDOFF` 与 `NEXT`。时间线上方的「当前轮次」条会显示持有 Turn 的 Agent 与队列深度，用于一眼判断是否在排队。
+这是当前 Agent 仍持有 native Turn 时的预期行为。跨 Agent message 位于 Room FIFO，必须等待可靠 terminal boundary。明确 `@peer` 会请求交棒；没有直接地址时才需要有效 `HANDOFF` 与 `NEXT`。`@human`/`@user` 会把流程留给用户决策。时间线上方的「当前轮次」条会显示持有 Turn 的 Agent 与队列深度，用于一眼判断是否在排队。
+
+如果看到“without a usable HANDOFF”提示，检查 Agent 是否只输出了 `[PAIRROOM:NEXT]`。在没有直接 `@claude`、`@codex` 或 `@peer` 地址时，补充完整的 `HANDOFF` 区块；直接地址缺少区块时 PairRoom 会使用有界的回复上下文继续投递。
 
 ## 重启后排队消息没有继续
 

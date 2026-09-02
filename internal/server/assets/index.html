@@ -50,7 +50,7 @@
         <div class="divider"></div>
         <section class="room-controls">
           <div class="section-title">轮次策略</div>
-          <div class="strategy-note">单一轮次接力：同一时刻仅一个 Agent 工作；只有明确的 NEXT handoff 才把下一轮交给对方。</div>
+          <div class="strategy-note">单一轮次接力：同一时刻仅一个 Agent 工作；明确 @peer 或 HANDOFF + NEXT 才把下一轮交给对方。</div>
           <label class="field-label" for="max-hops">单次接力最大轮数</label>
           <div class="range-row">
             <input id="max-hops" type="range" min="1" max="20" value="6">
