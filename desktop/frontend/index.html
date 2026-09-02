@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>PairRoom</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="startup-shell">
+    <section class="startup-card" aria-labelledby="startup-title">
+      <div class="brand" aria-hidden="true">
+        <span class="brand-dot claude"></span>
+        <span class="brand-dot bridge"></span>
+        <span class="brand-dot codex"></span>
+      </div>
+      <p class="eyebrow">PAIRROOM DESKTOP</p>
+      <h1 id="startup-title">正在启动本地协作控制面</h1>
+      <p id="startup-message">正在复用已安装的 PairRoom daemon，或启动进程内 Service。</p>
+      <div id="spinner" class="spinner" aria-hidden="true"></div>
+      <pre id="startup-error" hidden></pre>
+    </section>
+  </main>
+  <script>
+    window.pairroomDesktopError = (message) => {
+      document.getElementById('startup-title').textContent = 'PairRoom Desktop 启动失败';
+      document.getElementById('startup-message').textContent =
+        '未修改任何 service.lock。请根据下面的诊断处理后重新启动。';
+      document.getElementById('spinner').hidden = true;
+      const error = document.getElementById('startup-error');
+      error.textContent = String(message || 'Unknown startup error');
+      error.hidden = false;
+    };
+  </script>
+</body>
+</html>

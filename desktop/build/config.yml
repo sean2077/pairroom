@@ -1,0 +1,42 @@
+version: '3'
+
+info:
+  companyName: "PairRoom contributors"
+  productName: "PairRoom"
+  productIdentifier: "com.sean2077.pairroom.desktop"
+  description: "Claude Code and Codex local collaboration control plane"
+  copyright: "(c) 2026 PairRoom contributors"
+  comments: "Wails v3 desktop host for PairRoom"
+  version: "1.1.0"
+
+dev_mode:
+  root_path: .
+  log_level: warn
+  debounce: 1000
+  ignore:
+    dir:
+      - .git
+      - bin
+      - dist
+      - build
+    file:
+      - .DS_Store
+      - .gitignore
+    watched_extension:
+      - "*.go"
+      - "*.html"
+      - "*.css"
+    git_ignore: true
+  executes:
+    - cmd: go mod tidy
+      type: blocking
+    - cmd: wails3 task build
+      type: blocking
+    - cmd: wails3 task run
+      type: primary
+
+fileAssociations:
+
+other:
+  - name: framework
+    value: "Wails v3"

@@ -5,13 +5,31 @@
 ## 1. 前置条件
 
 - 一个本地 Git 仓库；
-- 与 `go.mod` 匹配的 Go toolchain；
+- CLI / browser 模式下，与根 `go.mod` 匹配的 Go toolchain；
+- 从源码构建桌面端时，满足 `desktop/README.md` 所列的 Wails v3 toolchain 与平台依赖；
 - 真实模式下可独立运行并已登录的 `claude` 与 `codex` CLI；
-- 浏览器可以访问 PairRoom 监听地址。
+- 浏览器或 PairRoom Desktop 可以访问本机 loopback Service。
 
 初次使用建议先跑 Mock 模式，它能验证 PairRoom 的调度、UI、Event Log 和恢复行为，而不消耗模型额度。
 
-## 2. 启动 Management Service
+## 2. 选择启动入口
+
+### PairRoom Desktop
+
+安装对应平台的桌面 package 后直接启动 PairRoom。桌面 Host 会先验证并尝试复用显式 Management URL 或已安装 daemon；没有可复用 Service 时，它会在桌面进程中启动一个内嵌 Service。
+
+从源码构建：
+
+```bash
+cd desktop
+go mod tidy
+python scripts/prepare-build.py
+wails3 task build
+```
+
+桌面主窗口加载的仍是现有 Management Shell，不存在独立的桌面业务状态。关闭窗口只会隐藏到托盘；使用托盘的 **Quit PairRoom** 才会退出应用。
+
+### CLI + browser
 
 ```bash
 go run ./cmd/pairroom service --mock
@@ -22,6 +40,8 @@ PairRoom 默认只监听 loopback。若没有自动打开浏览器，终端会�
 ```bash
 go run ./cmd/pairroom service --help
 ```
+
+两种入口共享同一套 Project、Room、Binding、Event Log、Runtime 和认证语义。
 
 ## 3. 创建 Project 与 Room
 
@@ -84,6 +104,8 @@ codex --version
 ## 7. 正确结束
 
 - 暂时不用：退出 Room，Runtime 可按 idle policy 回收；
+- 关闭桌面主窗口：仅隐藏到托盘，活动 Turn 继续运行；
+- 退出桌面应用：内嵌 Service 会按 Management → Runtime drain → lock release 的顺序关闭；外部 daemon 保持运行；
 - 阶段完成：归档 Room；归档会先停止当前 Agent Turn；
 - 确定不再需要：按 UI / API 的永久删除流程处理，并先保留备份。
 
