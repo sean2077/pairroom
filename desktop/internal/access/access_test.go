@@ -2,10 +2,15 @@ package access
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sean2077/pairroom/internal/daemon"
 )
 
 func TestParseProbeAndDesktopURL(t *testing.T) {
@@ -48,5 +53,63 @@ func TestParseRejectsUnsafeManagementURLs(t *testing.T) {
 		if _, err := Parse(value); err == nil {
 			t.Fatalf("unsafe Management URL was accepted: %q", value)
 		}
+	}
+}
+
+func TestProbeDataRootRequiresTheExpectedOwner(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "pairroom")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer root-secret" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"data_root":%q}`, root)
+	}))
+	defer server.Close()
+
+	value, err := Parse(server.URL + "/#token=root-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ProbeDataRoot(context.Background(), value, filepath.Join(root, ".")) {
+		t.Fatal("matching data root was rejected")
+	}
+	if ProbeDataRoot(context.Background(), value, filepath.Join(t.TempDir(), "other")) {
+		t.Fatal("different data root was accepted")
+	}
+}
+
+func TestProbeDataRootStreamsLargeServiceSnapshots(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "pairroom")
+	largeProjects := strings.Repeat(`{"id":"project","name":"padding"},`, 4000)
+	body := `{"projects":[` + strings.TrimSuffix(largeProjects, ",") + `],"data_root":` + fmt.Sprintf("%q", root) + `}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+	value, err := Parse(server.URL + "/#token=unused")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ProbeDataRoot(context.Background(), value, root) {
+		t.Fatal("data root was not found in a large service snapshot")
+	}
+}
+
+func TestResolveDaemonLogFileUsesPersistedWorkDirForLegacyRelativeMetadata(t *testing.T) {
+	workDir := t.TempDir()
+	meta := &daemon.Meta{WorkDir: workDir, LogFile: filepath.Join("logs", "service.log")}
+	path, err := resolveDaemonLogFile(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(workDir, "logs", "service.log")
+	if path != want {
+		t.Fatalf("resolved log path = %q, want %q", path, want)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("test log unexpectedly exists: %v", err)
 	}
 }

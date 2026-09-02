@@ -71,6 +71,10 @@ func daemonInstall(args []string) error {
 	if err := normalizeDaemonServiceArgs(&cfg); err != nil {
 		return err
 	}
+	dataRoot, err := service.ResolveRoot(flagValue(cfg.Args, "--data-root"))
+	if err != nil {
+		return fmt.Errorf("resolve daemon data root: %w", err)
+	}
 	manager, err := newDaemonManager()
 	if err != nil {
 		return err
@@ -82,16 +86,21 @@ func daemonInstall(args []string) error {
 	if status != nil && status.Installed && !force {
 		return errors.New("PairRoom daemon is already installed; use --force to replace its service definition")
 	}
-	if err := manager.Install(cfg); err != nil {
-		return err
-	}
 	meta := &daemon.Meta{
 		LogFile: cfg.LogFile, LogMaxSize: cfg.LogMaxSize, LogBackups: cfg.LogBackups, ControlFile: cfg.ControlFile, WorkDir: cfg.WorkDir,
-		DataRoot: flagValue(cfg.Args, "--data-root"), StopTimeoutSeconds: int64(cfg.StopTimeout / time.Second), BinaryPath: cfg.BinaryPath,
+		DataRoot: dataRoot, StopTimeoutSeconds: int64(cfg.StopTimeout / time.Second), BinaryPath: cfg.BinaryPath,
 		Platform: manager.Platform(), InstalledAt: time.Now().UTC().Format(time.RFC3339),
 	}
+	// Publish ownership before the platform manager starts or restarts the
+	// task. Desktop startup uses this file to decide whether an embedded
+	// Service is allowed; writing it first closes the install/start race. The
+	// daemon control path is always managed by PairRoom and remains stable
+	// across a replacement.
 	if err := daemon.SaveMeta(meta); err != nil {
-		fmt.Fprintln(os.Stderr, "warning: daemon installed but metadata could not be saved:", err)
+		return fmt.Errorf("save daemon metadata before install: %w", err)
+	}
+	if err := manager.Install(cfg); err != nil {
+		return err
 	}
 	fmt.Println("PairRoom daemon installed and started.")
 	fmt.Printf("  platform: %s\n", manager.Platform())
@@ -207,6 +216,9 @@ func normalizeDaemonServiceArgs(cfg *daemon.Config) error {
 		}
 		if argument == "--daemon-control-file" || strings.HasPrefix(argument, "--daemon-control-file=") {
 			return errors.New("daemon-control-file is managed internally")
+		}
+		if argument == "--recover-stale-lock" || strings.HasPrefix(argument, "--recover-stale-lock=") {
+			return errors.New("recover-stale-lock is a one-shot daemon start option and cannot be persisted in the installed service")
 		}
 	}
 	var err error
@@ -444,6 +456,12 @@ func daemonStatus(args []string) error {
 	if status == nil || !status.Installed {
 		fmt.Println("  status:   not installed")
 		fmt.Printf("  platform: %s\n", manager.Platform())
+		if meta, metaErr := daemon.LoadMeta(); metaErr == nil {
+			fmt.Println("  metadata: present but the platform service is missing; run `pairroom daemon install --force` to repair it")
+			printDaemonMetadata(meta)
+		} else if !errors.Is(metaErr, os.ErrNotExist) {
+			fmt.Printf("  metadata: unreadable (%v)\n", metaErr)
+		}
 		return nil
 	}
 	state := "stopped"
@@ -459,15 +477,42 @@ func daemonStatus(args []string) error {
 		fmt.Println("  open:     pairroom daemon open")
 	}
 	if meta, err := daemon.LoadMeta(); err == nil {
-		fmt.Printf("  log:      %s\n", meta.LogFile)
-		if meta.LogMaxSize > 0 && meta.LogBackups > 0 {
-			fmt.Printf("  rotation: %d bytes, %d backups\n", meta.LogMaxSize, meta.LogBackups)
-		}
-		if installed, err := time.Parse(time.RFC3339, meta.InstalledAt); err == nil {
-			fmt.Printf("  installed:%s\n", installed.Local().Format(" 2006-01-02 15:04:05"))
-		}
+		printDaemonMetadata(meta)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		fmt.Printf("  metadata: unreadable (%v)\n", err)
 	}
 	return nil
+}
+
+func printDaemonMetadata(meta *daemon.Meta) {
+	if meta == nil {
+		return
+	}
+	if root, rootErr := service.ResolveRoot(meta.DataRoot); rootErr == nil {
+		fmt.Printf("  data root: %s\n", root)
+		if info, found, inspectErr := service.InspectServiceLock(root); inspectErr != nil {
+			fmt.Printf("  lock:      unreadable (%v)\n", inspectErr)
+		} else if !found {
+			fmt.Println("  lock:      absent")
+		} else if info.PID <= 0 {
+			fmt.Println("  lock:      owner metadata incomplete")
+		} else if running, probeErr := service.ServiceLockOwnerRunning(info); probeErr != nil {
+			fmt.Printf("  lock:      pid %d, owner state unknown (%v)\n", info.PID, probeErr)
+		} else if running {
+			fmt.Printf("  lock:      pid %d running (started %s)\n", info.PID, info.StartedAt.Format(time.RFC3339))
+		} else {
+			fmt.Printf("  lock:      pid %d not running; `pairroom daemon start --recover-stale-lock` can recover it\n", info.PID)
+		}
+	} else {
+		fmt.Printf("  data root: unresolved (%v)\n", rootErr)
+	}
+	fmt.Printf("  log:      %s\n", meta.LogFile)
+	if meta.LogMaxSize > 0 && meta.LogBackups > 0 {
+		fmt.Printf("  rotation: %d bytes, %d backups\n", meta.LogMaxSize, meta.LogBackups)
+	}
+	if installed, err := time.Parse(time.RFC3339, meta.InstalledAt); err == nil {
+		fmt.Printf("  installed:%s\n", installed.Local().Format(" 2006-01-02 15:04:05"))
+	}
 }
 
 func daemonLogs(args []string) error {
@@ -777,7 +822,7 @@ Unrecognized install options are forwarded to pairroom service. The daemon
 always adds --no-browser and an internal graceful-shutdown control file.
 
 Start/restart options:
-  --recover-stale-lock  Explicitly remove a verified crash-stale service.lock
+  --recover-stale-lock  Recover a crash-stale service.lock after verifying the recorded PID is gone
 
 Logs options:
   -n N                Show the last N lines (default: 100)

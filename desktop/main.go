@@ -145,8 +145,30 @@ func (c *desktopController) start(
 	onReady func(*host.Host),
 	onError func(error),
 ) {
+	c.hostMu.Lock()
+	hasHost := c.host != nil
+	c.hostMu.Unlock()
+	if hasHost {
+		if cancel != nil {
+			cancel()
+		}
+		return
+	}
 	c.startupMu.Lock()
 	if c.startupStarted || c.quitting.Load() {
+		c.startupMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		return
+	}
+	// Recheck under the startup gate. A prior bootstrap can publish its host
+	// between the fast host check above and this lock acquisition; starting a
+	// second bootstrap in that window would defeat the single-UI lifecycle.
+	c.hostMu.Lock()
+	hasHost = c.host != nil
+	c.hostMu.Unlock()
+	if hasHost {
 		c.startupMu.Unlock()
 		if cancel != nil {
 			cancel()
@@ -167,6 +189,7 @@ func (c *desktopController) start(
 			c.startupMu.Lock()
 			c.startupDone = nil
 			c.startupCancel = nil
+			c.startupStarted = false
 			close(done)
 			c.startupMu.Unlock()
 		}()
@@ -266,6 +289,7 @@ func main() {
 	controller := &desktopController{}
 	var window *application.WebviewWindow
 	windowGate := &desktopWindowGate{}
+	var startDesktop func()
 
 	app := application.New(application.Options{
 		Name:        "PairRoom",
@@ -285,6 +309,12 @@ func main() {
 					window.Restore()
 					window.Show()
 					window.Focus()
+				}
+				// A first instance may have shown a startup diagnostic while the
+				// daemon was still recovering. Reopening the app is also an explicit
+				// retry, while the single-instance guard keeps one UI process.
+				if startDesktop != nil {
+					startDesktop()
 				}
 			},
 		},
@@ -336,6 +366,9 @@ func main() {
 		window.Restore()
 		window.Show()
 		window.Focus()
+		if startDesktop != nil {
+			startDesktop()
+		}
 	})
 	menu.Add("Quit PairRoom").OnClick(func(*application.Context) {
 		requestQuit(app, controller)
@@ -345,14 +378,20 @@ func main() {
 		window.Restore()
 		window.Show()
 		window.Focus()
+		if startDesktop != nil {
+			startDesktop()
+		}
 	})
 
 	app.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(*application.ApplicationEvent) {
 		window.Restore()
 		window.Show()
 		window.Focus()
+		if startDesktop != nil {
+			startDesktop()
+		}
 	})
-	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+	startDesktop = func() {
 		startCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		controller.start(
 			startCtx,
@@ -367,6 +406,9 @@ func main() {
 				windowGate.submit(func() { showStartupError(window, err) })
 			},
 		)
+	}
+	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+		startDesktop()
 	})
 
 	runErr := app.Run()
@@ -400,7 +442,8 @@ func navigateWindow(window *application.WebviewWindow, value string) {
 }
 
 func showStartupError(window *application.WebviewWindow, err error) {
-	encoded, _ := json.Marshal(err.Error())
+	message := "桌面端没有启动第二个 Service。修复后台 Service 后，再次启动或重新打开 PairRoom 以重试。\n\n" + err.Error()
+	encoded, _ := json.Marshal(message)
 	window.ExecJS("window.pairroomDesktopError(" + string(encoded) + ");")
 }
 

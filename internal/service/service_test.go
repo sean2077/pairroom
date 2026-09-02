@@ -996,11 +996,180 @@ func TestServiceLockExcludesConcurrentOwnersAndReleasesSafely(t *testing.T) {
 	}
 }
 
+func TestRecoverServiceLockRefusesLiveOwner(t *testing.T) {
+	root := t.TempDir()
+	data, err := json.Marshal(map[string]any{
+		"pid": os.Getpid(), "started_at": time.Now().UTC(), "nonce": "private",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "service.lock"), append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecoverServiceLock(root); !errors.Is(err, ErrServiceLockOwnerRunning) {
+		t.Fatalf("RecoverServiceLock error = %v, want live-owner error", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "service.lock")); err != nil {
+		t.Fatalf("live owner lock was removed: %v", err)
+	}
+}
+
+func TestRecoverServiceLockRemovesExitedOwner(t *testing.T) {
+	root := t.TempDir()
+	data, err := json.Marshal(map[string]any{
+		"pid": 99999999, "started_at": time.Now().UTC(), "nonce": "private",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "service.lock")
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecoverServiceLock(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("exited owner lock remains: %v", err)
+	}
+	assertNoRecoveringServiceLock(t, root)
+}
+
+func TestRecoverServiceLockLeavesReplacementCreatedAfterMove(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "service.lock")
+	data, err := json.Marshal(map[string]any{
+		"pid": 99999999, "started_at": time.Now().UTC(), "nonce": "old",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := json.Marshal(map[string]any{
+		"pid": os.Getpid(), "started_at": time.Now().UTC(), "nonce": "new",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceLockRecoveryHook = func(_, livePath string) {
+		if err := os.WriteFile(livePath, append(replacement, '\n'), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { serviceLockRecoveryHook = nil })
+	if err := RecoverServiceLock(root); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("replacement lock missing: %v", err)
+	}
+	if !strings.Contains(string(got), `"nonce":"new"`) {
+		t.Fatalf("replacement lock was overwritten: %s", got)
+	}
+	assertNoRecoveringServiceLock(t, root)
+}
+
+func TestAcquireServiceLockReportsExitedOwnerWithoutRecovering(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "service.lock")
+	data, err := json.Marshal(map[string]any{
+		"pid": 99999999, "started_at": time.Date(2026, 9, 2, 3, 55, 24, 0, time.UTC), "nonce": "stale",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = AcquireServiceLock(root, false)
+	if !errors.Is(err, ErrServiceAlreadyRunning) || !strings.Contains(err.Error(), "process is not running") {
+		t.Fatalf("stale owner acquire error = %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("stale lock was removed without recovery: %v", err)
+	}
+}
+
+func TestServiceLockOwnerRunningReportsCurrentAndMissingPIDs(t *testing.T) {
+	alive, err := ServiceLockOwnerRunning(ServiceLockInfo{PID: os.Getpid(), StartedAt: time.Now().UTC()})
+	if err != nil || !alive {
+		t.Fatalf("current pid alive=%v err=%v", alive, err)
+	}
+	alive, err = ServiceLockOwnerRunning(ServiceLockInfo{PID: 99999999, StartedAt: time.Now().UTC()})
+	if err != nil || alive {
+		t.Fatalf("missing pid alive=%v err=%v", alive, err)
+	}
+	alive, err = ServiceLockOwnerRunning(ServiceLockInfo{PID: 0, StartedAt: time.Now().UTC()})
+	if err != nil || alive {
+		t.Fatalf("zero pid alive=%v err=%v", alive, err)
+	}
+}
+
+func assertNoRecoveringServiceLock(t *testing.T, root string) {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "service.lock.recovering-") {
+			t.Fatalf("left recovery residue %s", entry.Name())
+		}
+	}
+}
+
+func TestInspectServiceLockReportsSafeOwnerMetadata(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "service.lock"), []byte(`{"pid":12345,"started_at":"2026-09-02T03:55:24Z","nonce":"private"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, found, err := InspectServiceLock(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || info.PID != 12345 || !info.StartedAt.Equal(time.Date(2026, 9, 2, 3, 55, 24, 0, time.UTC)) {
+		t.Fatalf("lock info = %#v, found=%v", info, found)
+	}
+}
+
+func TestInspectServiceLockReportsMissingLockWithoutMutation(t *testing.T) {
+	root := t.TempDir()
+	info, found, err := InspectServiceLock(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found || info != (ServiceLockInfo{}) {
+		t.Fatalf("missing lock info = %#v, found=%v", info, found)
+	}
+}
+
+func TestRecoverServiceLockRefusesIncompleteMetadata(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "service.lock")
+	if err := os.WriteFile(path, []byte(`{"pid":12345}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecoverServiceLock(root); err == nil || !strings.Contains(err.Error(), "cannot verify service lock owner") {
+		t.Fatalf("incomplete lock recovery error = %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("incomplete lock was removed: %v", err)
+	}
+}
+
 func TestRecoverServiceLockRemovesOnlyTheSelectedRootLock(t *testing.T) {
 	root := t.TempDir()
 	other := t.TempDir()
 	for _, dir := range []string{root, other} {
-		if err := os.WriteFile(filepath.Join(dir, "service.lock"), []byte("stale\n"), 0o600); err != nil {
+		data, err := json.Marshal(map[string]any{"pid": 99999999, "started_at": time.Now().UTC(), "nonce": "stale"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "service.lock"), append(data, '\n'), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1013,6 +1182,7 @@ func TestRecoverServiceLockRemovesOnlyTheSelectedRootLock(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(other, "service.lock")); err != nil {
 		t.Fatalf("unselected lock changed: %v", err)
 	}
+	assertNoRecoveringServiceLock(t, root)
 }
 
 func TestFailedLegacyImportLeavesNoPartialProjectOrBindingReservation(t *testing.T) {

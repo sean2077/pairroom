@@ -16,7 +16,7 @@
 
 ### PairRoom Desktop
 
-安装对应平台的桌面 package 后直接启动 PairRoom。桌面 Host 会先验证并尝试复用显式 Management URL 或已安装 daemon；没有可复用 Service 时，它会在桌面进程中启动一个内嵌 Service。
+安装对应平台的桌面 package 后直接启动 PairRoom。桌面 Host 会先验证并复用显式 Management URL；发现已安装 daemon 时会启动或连接它，只有没有 daemon 安装时才在桌面进程中启动内嵌 Service。已安装 daemon 但不可达时，桌面端会停止并显示修复信息，不会启动第二个 Service。
 
 从源码构建：
 

@@ -19,6 +19,7 @@ import (
 type fakeDaemonManager struct {
 	status      daemon.Status
 	installed   *daemon.Config
+	install     func(daemon.Config) error
 	started     int
 	stopped     int
 	restarted   int
@@ -28,6 +29,9 @@ type fakeDaemonManager struct {
 func (m *fakeDaemonManager) Install(cfg daemon.Config) error {
 	copy := cfg
 	m.installed = &copy
+	if m.install != nil {
+		return m.install(cfg)
+	}
 	return nil
 }
 
@@ -90,6 +94,13 @@ func TestFlagValueMatchesServiceLastValueWinsSemantics(t *testing.T) {
 	}
 }
 
+func TestNormalizeDaemonServiceArgsRejectsPersistedStaleLockRecovery(t *testing.T) {
+	cfg := daemon.Config{WorkDir: t.TempDir(), ControlFile: filepath.Join(t.TempDir(), "daemon.stop"), Args: []string{"service", "--recover-stale-lock"}}
+	if err := normalizeDaemonServiceArgs(&cfg); err == nil || !strings.Contains(err.Error(), "one-shot daemon start option") {
+		t.Fatalf("persisted stale-lock recovery error = %v", err)
+	}
+}
+
 func TestDaemonInstallForwardsServiceOptionsWithoutPersistingToken(t *testing.T) {
 	root := t.TempDir()
 	setDaemonTestConfigDir(t, filepath.Join(root, "config"))
@@ -130,6 +141,37 @@ func TestDaemonInstallForwardsServiceOptionsWithoutPersistingToken(t *testing.T)
 	}
 	if meta.LogMaxSize != 2*1024*1024 || meta.LogBackups != 2 {
 		t.Fatalf("log rotation metadata was not saved: %#v", meta)
+	}
+}
+
+func TestDaemonInstallPublishesMetadataBeforeStartingPlatformService(t *testing.T) {
+	root := t.TempDir()
+	setDaemonTestConfigDir(t, filepath.Join(root, "config"))
+	binary := filepath.Join(root, "pairroom")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	if err := os.WriteFile(binary, []byte("test"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manager := &fakeDaemonManager{}
+	manager.install = func(daemon.Config) error {
+		meta, err := daemon.LoadMeta()
+		if err != nil {
+			return err
+		}
+		if meta.DataRoot != filepath.Join(root, "state") {
+			t.Fatalf("metadata data root during install = %q", meta.DataRoot)
+		}
+		return nil
+	}
+	original := newDaemonManager
+	t.Cleanup(func() { newDaemonManager = original })
+	newDaemonManager = func() (daemon.Manager, error) { return manager, nil }
+	if err := daemonInstall([]string{
+		"--binary", binary, "--work-dir", root, "--data-root", filepath.Join(root, "state"),
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

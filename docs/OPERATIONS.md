@@ -12,11 +12,11 @@
 
 ## Desktop lifecycle
 
-桌面端启动时按以下顺序选择 Service：
+桌面端启动时按以下顺序选择唯一 Service owner：
 
 1. 验证 `PAIRROOM_DESKTOP_URL` 指向 authenticated numeric-loopback PairRoom Service；
-2. 验证已安装 daemon 的当前 Management URL；
-3. 否则在桌面进程中启动内嵌 Service。
+2. 发现已安装 daemon；如果它已停止，桌面端启动它并等待当前 authenticated Management URL；
+3. 只有没有安装 daemon 时，才在桌面进程中启动内嵌 Service；已安装但不可达时保持 fail closed。
 
 行为边界：
 
@@ -25,6 +25,8 @@
 - 退出且使用外部 daemon：只退出 GUI，daemon 与活动 Turn 保持运行；
 - 退出且使用内嵌 Service：先停止接受 Management 请求，再等待 Runtime 通过 native-Turn boundary drain，最后释放 Registry 与 `service.lock`；
 - stale lock：桌面端保持 fail closed，不做隐式 recovery。
+
+如果桌面启动提示 `service.lock` 冲突，先执行 `pairroom daemon status`。确认状态为 stopped 且锁中记录的 PID 已经不存在后，再执行 `pairroom daemon start --recover-stale-lock`；桌面端不会替用户删除锁或强行抢占数据根。
 
 工作流产物是 unsigned CI builds。Windows code signing、Apple Developer ID signing 与 notarization 必须在生产 release 环境中真实执行后才能宣称已签名。
 
