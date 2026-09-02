@@ -53,6 +53,7 @@
         <a href="#/runtimes" data-nav="runtimes"><span class="nav-icon" aria-hidden="true">◎</span><span>Runtimes</span><span id="nav-runtime-count" class="nav-count"></span></a>
         <a href="#/settings" data-nav="settings"><span class="nav-icon" aria-hidden="true">⚙</span><span>设置</span></a>
       </nav>
+      <div id="room-tree" class="room-tree" aria-label="Projects 与 Rooms"></div>
       <div class="sidebar-spacer"></div>
       <section class="sidebar-service" aria-label="Service 状态">
         <div class="service-status-row">
@@ -85,12 +86,20 @@
         </div>
       </header>
 
+      <div id="room-tabstrip" class="room-tabstrip" hidden>
+        <div id="room-tablist" class="room-tablist" role="tablist" aria-label="已打开的 Room"></div>
+        <button id="room-picker-button" class="icon-button" type="button" title="打开 Room（Alt+N）" aria-label="打开 Room 选择器">＋</button>
+      </div>
+
       <div id="connection-banner" class="connection-banner" role="alert" hidden>
         <div><strong>Management Shell 已断开</strong><span id="connection-message">正在等待本地 Service 恢复。</span></div>
         <button id="retry-button" class="secondary-button compact-button" type="button">立即重试</button>
       </div>
 
-      <main id="view" class="view" tabindex="-1" aria-live="polite"></main>
+      <div class="workspace-main">
+        <main id="view" class="view" tabindex="-1" aria-live="polite"></main>
+        <div id="room-stage" class="room-stage" hidden></div>
+      </div>
       <footer class="workspace-footer">
         <span id="last-updated">尚未同步</span>
         <span>本地控制面 · Room 切换不会中断活动 Turn</span>
@@ -191,6 +200,21 @@
         </label>
       </div>
       <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="confirm-dialog">取消</button><button id="confirm-submit" class="danger-button" type="submit">确认</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="room-picker-dialog" class="modal modal-medium" aria-labelledby="room-picker-title">
+    <form id="room-picker-form" method="dialog">
+      <header class="modal-header">
+        <div><p class="eyebrow">ROOMS</p><h2 id="room-picker-title">打开 Room</h2><p class="muted">选择一个活动 Room，在应用内标签中打开。</p></div>
+        <button class="icon-button modal-close" type="button" data-close-dialog="room-picker-dialog" aria-label="关闭">×</button>
+      </header>
+      <div class="modal-body">
+        <label class="field-label" for="room-picker-search">筛选</label>
+        <input id="room-picker-search" type="search" placeholder="按名称、Project 或 ID 筛选" autocomplete="off">
+        <div id="room-picker-list" class="room-picker-list"></div>
+      </div>
+      <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="room-picker-dialog">取消</button></footer>
     </form>
   </dialog>
 

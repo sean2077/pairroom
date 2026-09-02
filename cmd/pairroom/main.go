@@ -241,7 +241,7 @@ func runService(args []string) (resultErr error) {
 	listenFlag := flags.String("listen", fileCfg.Listen, "Management Shell listen address (numeric loopback only)")
 	rootFlag := flags.String("data-root", "", "absolute service data root (default: OS user config directory/pairroom)")
 	tokenFlag := flags.String("token", fileCfg.Token, "Management API bearer token (generated when omitted)")
-	limitFlag := flags.Int("runtime-limit", 2, "maximum simultaneously active Room runtimes")
+	limitFlag := flags.Int("runtime-limit", service.DefaultRuntimeLimit, "maximum simultaneously active Room runtimes")
 	idleFlag := flags.Duration("idle-timeout", 15*time.Minute, "suspend an idle Room runtime after this duration")
 	shutdownFlag := flags.Duration("shutdown-timeout", 10*time.Minute, "maximum graceful-shutdown wait for active Turns")
 	recoverLockFlag := flags.Bool("recover-stale-lock", false, "explicitly replace a crash-stale service.lock after verifying the recorded owner PID is gone")
@@ -273,8 +273,8 @@ func runService(args []string) (resultErr error) {
 	if !isLoopbackListen(*listenFlag) {
 		return errors.New("pairroom service must listen on a numeric loopback address; use an SSH tunnel for remote access")
 	}
-	if *limitFlag < 1 || *limitFlag > 128 {
-		return errors.New("runtime-limit must be between 1 and 128")
+	if *limitFlag < service.MinRuntimeLimit || *limitFlag > service.MaxRuntimeLimit {
+		return fmt.Errorf("runtime-limit must be between %d and %d", service.MinRuntimeLimit, service.MaxRuntimeLimit)
 	}
 	if *idleFlag <= 0 {
 		return errors.New("idle-timeout must be greater than zero")

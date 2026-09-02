@@ -51,7 +51,7 @@ go run ./cmd/pairroom service --help
 2. 创建 Room；
 3. 确认 Claude 与 Codex 的 Binding；
 4. 指定 Driver / Reviewer，或保持 Peer；
-5. 打开 Room View。
+5. 从侧栏打开 Room，它会进入应用内标签。需要独立浏览器窗口时使用「浏览器打开」。
 
 Project 是仓库级管理记录；Room 是一次长期协作上下文。注销 Project 不等于删除仓库，归档 Room 也不等于永久删除 Room 数据。
 

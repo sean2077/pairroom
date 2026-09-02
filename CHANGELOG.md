@@ -4,6 +4,8 @@
 
 ### Added
 
+- Management Shell is now a Room workbench: Project → Room sidebar tree, in-app Room tabs, a same-origin Room surface gateway, Settings-adjustable Runtime capacity (default 8), system-browser open, and copy of materialized Claude Session / Codex Thread IDs.
+
 - `pairroom version` now reports the built git commit and the commit count since the nearest tag in its text output, with `last_tag` and `commits_since_tag` added to the JSON build metadata; `make build`, `make install`, `make release`, and the CI/release workflows inject the values through ldflags.
 - `pairroom-protocol/v2` with compact, durable `PAIRROOM:HANDOFF` packets for peer turns and staged `IMPLEMENTED → REVIEW_CHANGES/REVIEW_APPROVED` Driver/Reviewer handoffs.
 - `pairroom-protocol/v3` natural-language actor/action workflows with durable stages, plan-revision approval gates, visible human waits, and native read-only/write policy projection.
@@ -14,6 +16,7 @@
 
 ### Changed
 
+- Default `--runtime-limit` is 8 (was 2). Management Settings can change the live capacity without restart; lowering it still never interrupts a busy Turn.
 - Desktop startup now treats an installed daemon as the single Service owner: it starts and connects to a stopped daemon, reports actionable lock diagnostics when that daemon is unavailable, and only creates an embedded Service when no daemon installation exists. Daemon install publishes metadata before the platform task starts; `daemon status` reports lock-owner liveness; `--recover-stale-lock` refuses a live PID and moves the stale lock aside before deleting it so a replacement owner is not removed.
 
 - Windows daemon no longer leaves a taskbar console for Service logs. The scheduled-task launcher requests console detach, and `pairroom service --daemon-control-file` hides and releases any allocated conhost so output stays in the rotating log file.

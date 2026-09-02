@@ -11,7 +11,7 @@
 
     ## 资源族
 
-    Management API 负责 Project、Room 注册、Binding、archive、backup 和 Service diagnostics。Room API 负责 message、Turn、participant、role、approval、retry、cancel、attachment 和 event stream。
+    Management API 负责 Project、Room 注册、Binding、archive、backup 和 Service diagnostics。Room API 负责 message、Turn、participant、role、approval、retry、cancel、attachment 和 event stream。应用内 Room 标签走 Management 同源 surface：`/api/v1/rooms/{room}/surface/…` 使用 Management Session，由服务端注入 Runtime bearer；`PATCH /api/v1/runtime-policy` 只调整并发 Runtime 上限；`POST /api/v1/rooms/{room}/open-browser` 在 Runtime 就绪后打开系统浏览器。归档 Room 没有 surface，也不能外开。
 
     状态类请求返回当前 projection；命令类请求先记录可审计事件，再异步驱动 native runtime。HTTP 成功只表示控制面接受了命令，最终执行结果应从 message processing、Turn summary 或 SSE event 判断。
 
@@ -37,9 +37,12 @@
 - `/api/v1/attachments/../../etc/passwd`
 - `/api/v1/events`
 - `/api/v1/events?token=secret`
+- `/api/v1/export`
 - `/api/v1/export?format=json`
 - `/api/v1/export?format=json&include_events=1`
 - `/api/v1/export?format=markdown`
+- `/api/v1/git/diff`
+- `/api/v1/git/status`
 - `/api/v1/health`
 - `/api/v1/import`
 - `/api/v1/maintenance/room-deletions/retry`
@@ -58,6 +61,9 @@
 - `/api/v1/rooms/`
 - `/api/v1/rooms/batch-archive`
 - `/api/v1/rooms/batch-delete`
+- `/api/v1/rooms/{room}/surface`
+- `/api/v1/rooms/{room}/surface/{path...}`
+- `/api/v1/runtime-policy`
 - `/api/v1/service`
 - `/api/v1/service?token=management-secret`
 - `/api/v1/session`

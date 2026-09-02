@@ -13,13 +13,17 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/openbrowser"
 	"github.com/sean2077/pairroom/internal/version"
 	"github.com/sean2077/pairroom/internal/websession"
 )
+
+var openRoomInBrowser = openbrowser.Open
 
 //go:embed assets/*
 var managementAssets embed.FS
@@ -79,6 +83,7 @@ type ServiceCapabilities struct {
 	ProjectRemoval        bool `json:"project_removal"`
 	RoomDeletion          bool `json:"room_deletion"`
 	ServerPathBrowser     bool `json:"server_path_browser"`
+	RoomSurface           bool `json:"room_surface"`
 }
 
 type ServiceSnapshot struct {
@@ -138,6 +143,10 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	mux.HandleFunc("DELETE /api/v1/projects/{project}", server.removeProject)
 	mux.HandleFunc("POST /api/v1/projects/{project}/rooms", server.provisionRoom)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/activate", server.activateRoom)
+	mux.HandleFunc("POST /api/v1/rooms/{room}/open-browser", server.openRoomBrowser)
+	mux.HandleFunc("/api/v1/rooms/{room}/surface", server.roomSurface)
+	mux.HandleFunc("/api/v1/rooms/{room}/surface/{path...}", server.roomSurface)
+	mux.HandleFunc("PATCH /api/v1/runtime-policy", server.updateRuntimePolicy)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/suspend", server.suspendRoom)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/bindings", server.completeRoomBindings)
 	mux.HandleFunc("PATCH /api/v1/rooms/{room}", server.renameRoom)
@@ -242,8 +251,8 @@ func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
 		RuntimePolicy: s.runtimes.Policy(),
 		Summary:       summarizeService(registry.Projects, registry.Rooms, runtimes),
 		Capabilities: ServiceCapabilities{
-			LegacyImport: true, RuntimeSuspend: true,
-			ProjectRefresh: true, ProjectRemoval: true, RoomDeletion: true,
+			LegacyImport: true, RuntimeSuspend: true, RuntimePolicyMutation: true,
+			ProjectRefresh: true, ProjectRemoval: true, RoomDeletion: true, RoomSurface: true,
 		},
 		Maintenance: s.registry.RoomDeletionMaintenance(),
 		Healthy:     healthErr == nil,
@@ -373,6 +382,64 @@ func (s *ManagementServer) activateRoom(w http.ResponseWriter, r *http.Request) 
 		code = http.StatusOK
 	}
 	writeManagementJSON(w, code, status)
+}
+
+func (s *ManagementServer) updateRuntimePolicy(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Limit *int `json:"limit"`
+	}
+	if err := decodeManagementJSON(w, r, &request); err != nil {
+		return
+	}
+	if request.Limit == nil {
+		writeManagementError(w, http.StatusBadRequest, "runtime-limit is required")
+		return
+	}
+	policy, err := s.runtimes.SetLimit(*request.Limit)
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	writeManagementJSON(w, http.StatusOK, policy)
+}
+
+func (s *ManagementServer) openRoomBrowser(w http.ResponseWriter, r *http.Request) {
+	roomID := r.PathValue("room")
+	room, ok := s.registry.Room(roomID)
+	if !ok {
+		s.writeError(w, ErrRoomNotFound)
+		return
+	}
+	if room.Archived() {
+		writeManagementJSON(w, http.StatusConflict, map[string]any{
+			"error": "archived rooms cannot be opened in an external browser",
+			"code":  "room_archived",
+		})
+		return
+	}
+	status := s.runtimes.Status(roomID)
+	if status.Phase != RuntimeActive || strings.TrimSpace(status.URL) == "" {
+		writeManagementJSON(w, http.StatusConflict, map[string]any{
+			"error": "room runtime is not ready",
+			"code":  "runtime_not_ready",
+			"phase": status.Phase,
+		})
+		return
+	}
+	parsed, err := url.Parse(status.URL)
+	if err != nil || parsed.User != nil {
+		writeManagementError(w, http.StatusBadGateway, "room runtime URL is invalid")
+		return
+	}
+	if _, err := parseLoopbackHTTPBase((&url.URL{Scheme: parsed.Scheme, Host: parsed.Host, Path: "/"}).String()); err != nil {
+		writeManagementError(w, http.StatusBadGateway, "room runtime URL is not a numeric loopback endpoint")
+		return
+	}
+	if err := openRoomInBrowser(status.URL); err != nil {
+		writeManagementError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeManagementJSON(w, http.StatusOK, map[string]any{"opened": true})
 }
 
 func (s *ManagementServer) suspendRoom(w http.ResponseWriter, r *http.Request) {
@@ -807,10 +874,14 @@ func (s *ManagementServer) sameOrigin(next http.Handler) http.Handler {
 func (s *ManagementServer) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+		if isRoomSurfacePath(r.URL.Path) {
+			applySurfaceFrameHeaders(w.Header())
+		} else {
+			w.Header().Set("X-Frame-Options", "DENY")
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/" || r.URL.Path == "/index.html" {
 			w.Header().Set("Cache-Control", "no-store")
 		}
@@ -863,7 +934,7 @@ func (s *ManagementServer) writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrRegistryFailClosed), errors.Is(err, ErrRuntimeManagerClosed):
 		code = http.StatusServiceUnavailable
 	case errors.Is(err, ErrRuntimeBusy), errors.Is(err, ErrRuntimeCloseUncertain), errors.Is(err, ErrRuntimeDrainAborted),
-		errors.Is(err, ErrRuntimeRoomDeleting), errors.Is(err, ErrRoomNotArchived):
+		errors.Is(err, ErrRuntimeRoomDeleting), errors.Is(err, ErrRoomNotArchived), errors.Is(err, ErrRuntimeNotReady):
 		code = http.StatusConflict
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		code = http.StatusRequestTimeout
@@ -900,6 +971,8 @@ func managementErrorCode(err error, fallback string) string {
 		return "runtime_drain_aborted"
 	case errors.Is(err, ErrRuntimeRoomDeleting):
 		return "room_deletion_in_progress"
+	case errors.Is(err, ErrRuntimeNotReady):
+		return "runtime_not_ready"
 	case errors.Is(err, ErrRoomNotArchived):
 		return "room_not_archived"
 	case errors.Is(err, context.Canceled):

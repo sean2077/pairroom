@@ -143,6 +143,7 @@ button { color: inherit; }
 .range-row { display: flex; align-items: center; gap: 10px; }
 .range-row input { width: 100%; accent-color: var(--accent); }
 .range-row output { width: 28px; text-align: center; padding: 3px 0; border-radius: 6px; background: var(--surface-3); color: var(--muted); font-size: var(--text-control); }
+.ghost-button.compact-button { min-height: var(--control-h); padding: 0 10px; font-size: 12px; }
 .secondary-button, .ghost-button {
   border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); border-radius: var(--control-radius); cursor: pointer; font-size: var(--text-control); min-height: var(--control-h); padding: 6px 10px; white-space: nowrap;
 }
@@ -615,4 +616,16 @@ button { color: inherit; }
 @media (prefers-reduced-motion: reduce) {
   .timeline-loading .skeleton-avatar::after,
   .timeline-loading .skeleton-line::after { animation: none; }
+}
+
+html[data-embed="1"] .brand { display: none; }
+html[data-embed="1"] .topbar {
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 48px;
+  padding: 8px 12px;
+}
+html[data-embed="1"] .room-heading h1 { font-size: 16px; }
+html[data-embed="1"] .session-copy {
+  margin-top: 8px;
+  width: fit-content;
 }

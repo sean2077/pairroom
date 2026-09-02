@@ -172,10 +172,12 @@ func failedEmbeddedStart(roomID string, engine *room.Engine, cancel context.Canc
 }
 
 type embeddedRuntime struct {
-	roomID string
-	url    string
-	engine *room.Engine
-	cancel context.CancelFunc
+	roomID  string
+	url     string
+	baseURL string
+	token   string
+	engine  *room.Engine
+	cancel  context.CancelFunc
 
 	http      *http.Server
 	listener  net.Listener
@@ -355,6 +357,8 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 		poll:      cfg.DrainPollInterval,
 	}
 	runtime.lastActivity.Store(time.Now().UTC().UnixNano())
+	runtime.token = token
+	runtime.baseURL = roomViewBaseURL(listener.Addr())
 	runtime.url = roomViewURL(listener.Addr(), token)
 	runtime.http = &http.Server{
 		Handler:           runtime.drainHandler(roomServer.Handler()),
@@ -384,6 +388,10 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 }
 
 func (r *embeddedRuntime) URL() string { return r.url }
+
+func (r *embeddedRuntime) ProxyBaseURL() string { return r.baseURL }
+
+func (r *embeddedRuntime) ProxyToken() string { return r.token }
 
 func (r *embeddedRuntime) LastActivity() time.Time {
 	if r == nil {
@@ -663,12 +671,19 @@ func roomSessionCookieName(roomID string) string {
 	return "pairroom_session_" + hex.EncodeToString(sum[:8])
 }
 
-func roomViewURL(address net.Addr, token string) string {
+func roomViewBaseURL(address net.Addr) string {
 	host := address.String()
 	if tcp, ok := address.(*net.TCPAddr); ok {
 		host = net.JoinHostPort(tcp.IP.String(), fmt.Sprint(tcp.Port))
 	}
-	value := url.URL{Scheme: "http", Host: host, Path: "/"}
+	return (&url.URL{Scheme: "http", Host: host, Path: "/"}).String()
+}
+
+func roomViewURL(address net.Addr, token string) string {
+	value, err := url.Parse(roomViewBaseURL(address))
+	if err != nil {
+		return ""
+	}
 	value.Fragment = "token=" + url.QueryEscape(token)
 	return value.String()
 }
