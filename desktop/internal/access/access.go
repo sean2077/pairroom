@@ -3,6 +3,7 @@ package access
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +23,7 @@ import (
 const (
 	desktopURLVariable = "PAIRROOM_DESKTOP_URL"
 	maximumLogBackups  = 32
+	maximumProbeBody   = 32 << 20
 )
 
 // Access is the authenticated local Management Shell endpoint exposed to the
@@ -132,14 +135,15 @@ func DiscoverDaemon(ctx context.Context) (Access, bool, error) {
 	if err != nil {
 		return Access{}, false, err
 	}
-	if strings.TrimSpace(meta.LogFile) == "" {
-		return Access{}, false, errors.New("PairRoom daemon metadata has no log file")
+	logFile, err := resolveDaemonLogFile(meta)
+	if err != nil {
+		return Access{}, false, err
 	}
 	backups := meta.LogBackups
 	if backups < 1 {
 		backups = daemon.DefaultLogMaxBackups
 	}
-	candidates, err := managementCandidates(meta.LogFile, backups)
+	candidates, err := managementCandidates(logFile, backups)
 	if err != nil {
 		return Access{}, false, err
 	}
@@ -150,6 +154,179 @@ func DiscoverDaemon(ctx context.Context) (Access, bool, error) {
 		}
 	}
 	return Access{}, false, nil
+}
+
+// DiscoverDaemonForRoot is the ownership-aware variant used by Desktop. A
+// live authenticated endpoint is accepted only when its Service snapshot
+// reports the same data root as the installed daemon metadata.
+func DiscoverDaemonForRoot(ctx context.Context, expectedRoot string) (Access, bool, error) {
+	meta, err := daemon.LoadMeta()
+	if err != nil {
+		return Access{}, false, err
+	}
+	logFile, err := resolveDaemonLogFile(meta)
+	if err != nil {
+		return Access{}, false, err
+	}
+	expectedRoot, err = resolveExpectedRoot(expectedRoot)
+	if err != nil {
+		return Access{}, false, err
+	}
+	backups := meta.LogBackups
+	if backups < 1 {
+		backups = daemon.DefaultLogMaxBackups
+	}
+	candidates, err := managementCandidates(logFile, backups)
+	if err != nil {
+		return Access{}, false, err
+	}
+	for _, candidate := range candidates {
+		value, err := Parse(candidate)
+		if err != nil || !ProbeDataRoot(ctx, value, expectedRoot) {
+			continue
+		}
+		return value, true, nil
+	}
+	return Access{}, false, nil
+}
+
+func resolveDaemonLogFile(meta *daemon.Meta) (string, error) {
+	if meta == nil || strings.TrimSpace(meta.LogFile) == "" {
+		return "", errors.New("PairRoom daemon metadata has no log file")
+	}
+	path := strings.TrimSpace(meta.LogFile)
+	if !filepath.IsAbs(path) {
+		base := strings.TrimSpace(meta.WorkDir)
+		if base == "" {
+			return "", errors.New("PairRoom daemon metadata has a relative log file but no work directory")
+		}
+		if !filepath.IsAbs(base) {
+			var err error
+			base, err = filepath.Abs(base)
+			if err != nil {
+				return "", fmt.Errorf("resolve daemon work directory: %w", err)
+			}
+		}
+		path = filepath.Join(base, path)
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve daemon log file: %w", err)
+	}
+	return filepath.Clean(absolute), nil
+}
+
+func resolveExpectedRoot(input string) (string, error) {
+	value := strings.TrimSpace(input)
+	if value == "" || !filepath.IsAbs(value) {
+		return "", errors.New("expected PairRoom service data root must be absolute")
+	}
+	return filepath.Clean(value), nil
+}
+
+// ProbeDataRoot authenticates a Management endpoint and verifies that it
+// serves the expected Service data root. This prevents a stale log entry for
+// another local Service from being mistaken for the installed daemon.
+func ProbeDataRoot(ctx context.Context, access Access, expectedRoot string) bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, access.APIURL, nil)
+	if err != nil {
+		return false
+	}
+	request.Header.Set("Authorization", "Bearer "+access.Token)
+	client := &http.Client{
+		Timeout:   2 * time.Second,
+		Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return false
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return false
+	}
+	dataRoot, ok := decodeDataRoot(response.Body)
+	if !ok {
+		return false
+	}
+	return sameDataRoot(dataRoot, expectedRoot)
+}
+
+func decodeDataRoot(body io.Reader) (string, bool) {
+	decoder := json.NewDecoder(io.LimitReader(body, maximumProbeBody))
+	first, err := decoder.Token()
+	if err != nil {
+		return "", false
+	}
+	delimiter, ok := first.(json.Delim)
+	if !ok || delimiter != '{' {
+		return "", false
+	}
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return "", false
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return "", false
+		}
+		if key == "data_root" {
+			var value string
+			if err := decoder.Decode(&value); err != nil {
+				return "", false
+			}
+			return value, true
+		}
+		if err := skipJSONValue(decoder); err != nil {
+			return "", false
+		}
+	}
+	return "", false
+}
+
+func skipJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	if delimiter != '{' && delimiter != '[' {
+		return nil
+	}
+	for decoder.More() {
+		if delimiter == '{' {
+			if _, err := decoder.Token(); err != nil {
+				return err
+			}
+		}
+		if err := skipJSONValue(decoder); err != nil {
+			return err
+		}
+	}
+	_, err = decoder.Token()
+	return err
+}
+
+func sameDataRoot(left, right string) bool {
+	left = filepath.Clean(strings.TrimSpace(left))
+	right = filepath.Clean(strings.TrimSpace(right))
+	if left == "." || right == "." || left == "" || right == "" || !filepath.IsAbs(left) || !filepath.IsAbs(right) {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
 }
 
 func managementCandidates(logFile string, backups int) ([]string, error) {

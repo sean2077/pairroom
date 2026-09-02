@@ -244,7 +244,7 @@ func runService(args []string) (resultErr error) {
 	limitFlag := flags.Int("runtime-limit", 2, "maximum simultaneously active Room runtimes")
 	idleFlag := flags.Duration("idle-timeout", 15*time.Minute, "suspend an idle Room runtime after this duration")
 	shutdownFlag := flags.Duration("shutdown-timeout", 10*time.Minute, "maximum graceful-shutdown wait for active Turns")
-	recoverLockFlag := flags.Bool("recover-stale-lock", false, "explicitly replace a crash-stale service.lock after verifying no service is running")
+	recoverLockFlag := flags.Bool("recover-stale-lock", false, "explicitly replace a crash-stale service.lock after verifying the recorded owner PID is gone")
 	daemonControlFlag := flags.String("daemon-control-file", "", "internal daemon graceful-shutdown control file")
 	mockFlag := flags.Bool("mock", false, "run deterministic mock agents instead of vendor CLIs")
 	noBrowserFlag := flags.Bool("no-browser", false, "do not open the Management Shell in a browser")

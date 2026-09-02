@@ -13,14 +13,18 @@ import (
 	"github.com/sean2077/pairroom/desktop/internal/access"
 	"github.com/sean2077/pairroom/internal/agent"
 	"github.com/sean2077/pairroom/internal/config"
+	"github.com/sean2077/pairroom/internal/daemon"
 	"github.com/sean2077/pairroom/internal/service"
 	"github.com/sean2077/pairroom/internal/version"
 )
 
 const (
-	configPathVariable = "PAIRROOM_DESKTOP_CONFIG"
-	dataRootVariable   = "PAIRROOM_DESKTOP_DATA_ROOT"
+	configPathVariable  = "PAIRROOM_DESKTOP_CONFIG"
+	dataRootVariable    = "PAIRROOM_DESKTOP_DATA_ROOT"
+	daemonProbeInterval = 100 * time.Millisecond
 )
+
+var newDaemonManager = daemon.NewManager
 
 type Mode string
 
@@ -59,21 +63,160 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// A caller that selected an explicit data root/configuration is asking for
+	// an embedded Service for that root. Keep an explicitly supplied Management
+	// URL as the strongest override, but never attach to an unrelated default
+	// daemon in this case; a root has one owner.
+	explicitEmbedded := options.Mock || options.DisableExternalDiscovery ||
+		strings.TrimSpace(options.ConfigPath) != "" || strings.TrimSpace(os.Getenv(configPathVariable)) != "" ||
+		strings.TrimSpace(options.DataRoot) != "" || strings.TrimSpace(os.Getenv(dataRootVariable)) != ""
 	if !options.DisableExternalDiscovery {
 		if value, ok, err := access.FromEnvironment(ctx); err != nil {
 			return nil, err
 		} else if ok {
 			return &Host{mode: ModeExternal, access: value}, nil
 		}
-		value, ok, err := access.DiscoverDaemon(ctx)
-		if err == nil && ok {
-			return &Host{mode: ModeExternal, access: value}, nil
-		}
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("discover installed PairRoom daemon: %w", err)
+		if !explicitEmbedded {
+			value, installed, err := connectInstalledDaemon(ctx)
+			if err == nil && installed {
+				return &Host{mode: ModeExternal, access: value}, nil
+			}
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	return startEmbedded(ctx, options)
+}
+
+// connectInstalledDaemon makes the installed daemon the sole owner for the
+// default data root. A desktop launch may start a stopped daemon and wait for
+// its authenticated endpoint, but it never starts an embedded competitor when
+// daemon metadata says an installation exists.
+func connectInstalledDaemon(ctx context.Context) (access.Access, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	meta, err := daemon.LoadMeta()
+	if errors.Is(err, os.ErrNotExist) {
+		// A platform task can outlive or lose its metadata (for example after a
+		// manual cleanup). Inspect the manager before deciding that an embedded
+		// owner is safe; otherwise the task could race this desktop process.
+		manager, managerErr := newDaemonManager()
+		if managerErr != nil {
+			return access.Access{}, true, fmt.Errorf("inspect installed PairRoom daemon without metadata: %w", managerErr)
+		}
+		status, statusErr := manager.Status()
+		if statusErr != nil {
+			return access.Access{}, true, fmt.Errorf("inspect installed PairRoom daemon without metadata: %w", statusErr)
+		}
+		if status != nil && status.Installed {
+			return access.Access{}, true, errors.New("PairRoom daemon service is installed but daemon metadata is missing; run `pairroom daemon install --force` to repair it")
+		}
+		return access.Access{}, false, nil
+	}
+	if err != nil {
+		return access.Access{}, true, fmt.Errorf("read installed PairRoom daemon metadata: %w", err)
+	}
+	manager, err := newDaemonManager()
+	if err != nil {
+		return access.Access{}, true, fmt.Errorf("inspect installed PairRoom daemon: %w", err)
+	}
+	status, err := manager.Status()
+	if err != nil {
+		return access.Access{}, true, fmt.Errorf("read installed PairRoom daemon status: %w", err)
+	}
+	if status == nil || !status.Installed {
+		return access.Access{}, true, errors.New("PairRoom daemon metadata exists but its service is not installed; run `pairroom daemon install --force` or remove the stale metadata")
+	}
+	if err := ctx.Err(); err != nil {
+		return access.Access{}, true, err
+	}
+	root := daemonDataRoot(meta)
+	liveOwner := false
+	if info, found, err := service.InspectServiceLock(root); err != nil {
+		return access.Access{}, true, fmt.Errorf("inspect installed PairRoom service lock: %w", err)
+	} else if found && info.PID > 0 {
+		running, probeErr := service.ServiceLockOwnerRunning(info)
+		if probeErr != nil {
+			return access.Access{}, true, fmt.Errorf("verify installed PairRoom service lock owner pid %d: %w", info.PID, probeErr)
+		}
+		if running {
+			// The process may be the daemon in its brief Task Scheduler startup
+			// window. Wait for its authenticated endpoint instead of starting a
+			// second owner or rejecting a legitimate launch race.
+			liveOwner = true
+		} else if !status.Running {
+			return access.Access{}, true, fmt.Errorf("PairRoom daemon is stopped but data root %s has a crash-stale service.lock (pid %d, started %s); verify the process is gone, then run `pairroom daemon start --recover-stale-lock`", root, info.PID, info.StartedAt.Format(time.RFC3339))
+		}
+	}
+	if value, ok, err := access.DiscoverDaemonForRoot(ctx, root); err != nil {
+		return access.Access{}, true, fmt.Errorf("discover installed PairRoom daemon: %w", err)
+	} else if ok {
+		return value, true, nil
+	}
+
+	started := false
+	if !status.Running && !liveOwner {
+		if err := manager.Start(); err != nil {
+			return access.Access{}, true, fmt.Errorf("start installed PairRoom daemon: %w", err)
+		}
+		started = true
+	}
+	for {
+		value, ok, err := access.DiscoverDaemonForRoot(ctx, root)
+		if err != nil {
+			return access.Access{}, true, fmt.Errorf("discover installed PairRoom daemon after startup: %w", err)
+		}
+		if ok {
+			return value, true, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return access.Access{}, true, daemonUnavailableError(meta, status, started, err)
+		}
+		timer := time.NewTimer(daemonProbeInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
+		}
+	}
+}
+
+func daemonUnavailableError(meta *daemon.Meta, status *daemon.Status, started bool, cause error) error {
+	state := "running"
+	if started {
+		state = "starting"
+	} else if status == nil || !status.Running {
+		state = "stopped"
+	}
+	root := daemonDataRoot(meta)
+	lockDetail := ""
+	if info, found, err := service.InspectServiceLock(root); found && err == nil && info.PID > 0 {
+		lockDetail = fmt.Sprintf("; service.lock reports pid %d started %s", info.PID, info.StartedAt.Format(time.RFC3339))
+	}
+	binary := ""
+	if meta != nil {
+		binary = meta.BinaryPath
+	}
+	hint := "run `pairroom daemon restart`"
+	if started {
+		hint = "run `pairroom daemon status`; if service.lock is stale, verify its recorded PID is gone and then run `pairroom daemon start --recover-stale-lock`"
+	}
+	return fmt.Errorf("installed PairRoom daemon is %s but its authenticated Management Shell did not become available (data root %s, binary %s%s); %s: %w", state, root, binary, lockDetail, hint, cause)
+}
+
+func daemonDataRoot(meta *daemon.Meta) string {
+	if meta == nil {
+		return ""
+	}
+	root := strings.TrimSpace(meta.DataRoot)
+	if resolved, err := service.ResolveRoot(root); err == nil {
+		return resolved
+	}
+	return root
 }
 
 func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr error) {

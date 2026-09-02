@@ -49,8 +49,8 @@ Management Shell 打开后：
 启动时，桌面端会按顺序：
 
 1. 验证并复用显式提供的 authenticated numeric-loopback Management URL；
-2. 验证并复用已安装的 `pairroom daemon`；
-3. 否则在当前桌面进程中启动 PairRoom Service。
+2. 发现已安装的 `pairroom daemon`，停止状态会先由桌面端启动并等待 authenticated Management URL；
+3. 只有没有安装 daemon 时，才在当前桌面进程中启动 PairRoom Service；已安装但不可达时 fail closed，不启动第二个 Service。
 
 关闭主窗口只会隐藏到系统托盘，不会中断活动 Agent。显式退出只关闭桌面端拥有的内嵌 Service，并沿现有 native-Turn drain 边界优雅退出；外部 daemon 不受影响。构建、依赖和安装包说明见 [PairRoom Desktop](desktop/README.md)。浏览器和 CLI 入口保持完整可用。
 

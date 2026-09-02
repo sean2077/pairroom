@@ -56,3 +56,9 @@ Reviewer 使用隔离 snapshot。确认 review 是在 Driver Turn 完成后的�
 ## 端口或 token 问题
 
 使用当前命令的 `--help` 检查 listen / token 参数，确认没有另一进程占用端口。非 loopback 监听没有 token 应视为配置错误，而不是绕过检查。
+
+## Desktop、daemon 和 service.lock 冲突
+
+PairRoom 的默认数据根只允许一个 Service owner。桌面端发现已安装 daemon 后会先连接它，必要时启动它；如果 daemon 安装存在但无法提供 authenticated Management Shell，桌面端会停止启动并显示数据根、二进制和锁 owner 信息，不会再启动第二个内嵌 Service。
+
+处理残留锁时先执行 `pairroom daemon status`。只有确认任务已停止、锁中记录的 PID 已不存在，才执行 `pairroom daemon start --recover-stale-lock`；若 PID 仍在运行，先使用 `pairroom daemon stop` 等待 graceful drain。桌面端退出只关闭它自己拥有的内嵌 Service，不会停止外部 daemon。

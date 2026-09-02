@@ -58,7 +58,7 @@ Codex 的 generic `error` notification 可以发生在 `turn/completed` 之前�
 
 ### Desktop ownership is explicit
 
-桌面启动遵循三段式决策：validated explicit Management URL → validated installed daemon → embedded in-process Service。复用外部 Service 不转移 ownership；桌面退出不得停止外部 daemon。内嵌 Service 则由桌面进程拥有，并沿 Management shutdown、Runtime drain、Registry / lock release 的顺序关闭。任何路径都不隐式恢复 stale `service.lock`。
+桌面启动遵循单 owner 决策：validated explicit Management URL → installed daemon（必要时由桌面启动并等待）→ 仅在没有 daemon 安装时 embedded in-process Service。已安装 daemon 但不可达时 fail closed，不启动竞争实例；复用外部 Service 不转移 ownership，桌面退出不得停止外部 daemon。内嵌 Service 则由桌面进程拥有，并沿 Management shutdown、Runtime drain、Registry / lock release 的顺序关闭。任何路径都不隐式恢复 stale `service.lock`。
 
 ## 主要模块
 
