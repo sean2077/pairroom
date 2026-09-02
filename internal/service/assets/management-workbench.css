@@ -1,0 +1,318 @@
+/* Room workbench refinements. This layer intentionally stays separate from the
+   Management Shell design system so the embedded Room workspace can evolve
+   without leaking layout assumptions into overview, project, or settings pages. */
+:root {
+  --room-workbench-tabbar-height: 46px;
+  --room-workbench-tab-height: 36px;
+}
+
+/* Keep Project and Room labels on one predictable text column. The base button
+   rule centers content, so every tree control must explicitly opt back into a
+   navigation layout. */
+body.management-ux-enhanced .room-tree {
+  padding: 6px 10px 14px;
+  scrollbar-gutter: stable;
+}
+body.management-ux-enhanced :is(.tree-project-toggle, .tree-room, .tree-archived-toggle) {
+  justify-content: flex-start;
+  text-align: left;
+  transform: none;
+}
+body.management-ux-enhanced :is(.tree-project-toggle, .tree-room) {
+  min-height: 34px;
+  padding-inline: 10px;
+  border-radius: 9px;
+}
+body.management-ux-enhanced .tree-project-toggle > strong {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.management-ux-enhanced .tree-rooms {
+  gap: 2px;
+  padding-left: 0;
+}
+body.management-ux-enhanced .tree-room > .tree-room-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  margin-inline: 2px;
+}
+body.management-ux-enhanced .tree-room-name {
+  min-width: 0;
+  flex: 1 1 auto;
+  text-align: left;
+}
+body.management-ux-enhanced .tree-room.active {
+  position: relative;
+  background: color-mix(in srgb, var(--accent-soft) 88%, var(--bg-raised));
+  box-shadow: inset 3px 0 var(--accent);
+  color: var(--accent);
+}
+body.management-ux-enhanced .tree-room.active .tree-room-name { font-weight: 700; }
+body.management-ux-enhanced .tree-room:focus-visible,
+body.management-ux-enhanced .tree-project-toggle:focus-visible {
+  position: relative;
+  z-index: 1;
+}
+body.management-ux-enhanced .tree-archived-toggle {
+  min-height: 30px;
+  padding: 4px 10px 4px 30px;
+}
+
+/* The tab strip is a compact application surface, not another document header. */
+body.management-ux-enhanced .room-tabstrip {
+  min-height: var(--room-workbench-tabbar-height);
+  height: var(--room-workbench-tabbar-height);
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-bottom-color: var(--line-strong);
+  background: color-mix(in srgb, var(--bg-raised) 96%, var(--bg-soft));
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--line) 72%, transparent);
+}
+body.management-ux-enhanced .room-tablist {
+  min-height: 0;
+  height: 100%;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scroll-snap-type: inline proximity;
+  scrollbar-width: none;
+}
+body.management-ux-enhanced .room-tablist::-webkit-scrollbar { display: none; }
+body.management-ux-enhanced .room-tabstrip.room-tabs-overflowing .room-tablist {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 18px, #000 calc(100% - 18px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 18px, #000 calc(100% - 18px), transparent);
+}
+body.management-ux-enhanced .room-tabstrip.room-tabs-overflowing.room-tabs-at-start:not(.room-tabs-at-end) .room-tablist {
+  -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 18px), transparent);
+  mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 18px), transparent);
+}
+body.management-ux-enhanced .room-tabstrip.room-tabs-overflowing.room-tabs-at-end:not(.room-tabs-at-start) .room-tablist {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 18px, #000 100%);
+  mask-image: linear-gradient(to right, transparent, #000 18px, #000 100%);
+}
+body.management-ux-enhanced .room-tabstrip.room-tabs-at-start.room-tabs-at-end .room-tablist {
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+body.management-ux-enhanced .room-tab {
+  position: relative;
+  min-width: 108px;
+  max-width: 260px;
+  min-height: var(--room-workbench-tab-height);
+  height: var(--room-workbench-tab-height);
+  flex: 0 0 auto;
+  gap: 2px;
+  margin: 0;
+  padding: 2px;
+  border-color: transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  scroll-snap-align: start;
+  transition: border-color .14s var(--management-ux-ease), background .14s var(--management-ux-ease), color .14s var(--management-ux-ease), opacity .14s var(--management-ux-ease), box-shadow .14s var(--management-ux-ease);
+}
+body.management-ux-enhanced .room-tab:hover {
+  border-color: color-mix(in srgb, var(--line-strong) 78%, transparent);
+  background: color-mix(in srgb, var(--bg-soft) 76%, transparent);
+  color: var(--text);
+}
+body.management-ux-enhanced .room-tab.active {
+  border-color: var(--line-strong);
+  background: var(--bg-raised);
+  color: var(--text-strong);
+  box-shadow: inset 0 -2px var(--accent), var(--shadow-sm);
+}
+body.management-ux-enhanced .room-tab.dragging { opacity: .52; }
+body.management-ux-enhanced .room-tab:focus-within {
+  border-color: var(--accent-line);
+}
+
+body.management-ux-enhanced .room-tab-target {
+  min-width: 0;
+  min-height: 30px;
+  height: 30px;
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  gap: 7px;
+  padding: 0 5px 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  box-shadow: none;
+  cursor: pointer;
+  font-weight: 650;
+  text-align: left;
+  transform: none;
+}
+body.management-ux-enhanced .room-tab-target:hover,
+body.management-ux-enhanced .room-tab-target:active {
+  background: transparent;
+  transform: none;
+}
+body.management-ux-enhanced .room-tab-target[draggable="true"] { cursor: grab; }
+body.management-ux-enhanced .room-tab-target[draggable="true"]:active { cursor: grabbing; }
+body.management-ux-enhanced .room-tab-target > .tree-room-dot { flex: 0 0 7px; width: 7px; height: 7px; }
+body.management-ux-enhanced .room-tab-target > .room-tab-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.management-ux-enhanced .room-tab-target > .tab-badge {
+  margin-left: 0;
+  flex: 0 0 auto;
+}
+
+/* Override the global 38px button minimum: the old rule made this nominally
+   18px close affordance fill the strip and collide with drag/click handling. */
+body.management-ux-enhanced .room-tab-close {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  flex: 0 0 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--subtle);
+  box-shadow: none;
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1;
+  opacity: .66;
+  transform: none;
+}
+body.management-ux-enhanced .room-tab-close:hover:not(:disabled) {
+  background: var(--bg-muted);
+  color: var(--text-strong);
+  opacity: 1;
+  transform: none;
+}
+body.management-ux-enhanced .room-tab.active .room-tab-close { color: var(--muted); opacity: .88; }
+
+.room-workspace-leading,
+.room-workspace-tools {
+  min-width: 0;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.room-workspace-leading { display: none; }
+body.management-ux-enhanced .room-workspace-tool,
+body.management-ux-enhanced .room-workspace-picker {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  flex: 0 0 32px;
+  padding: 0;
+  border-radius: 8px;
+  transform: none;
+}
+body.management-ux-enhanced .room-workspace-tool { display: none; }
+body.management-ux-enhanced .app-shell.room-workspace .room-workspace-tool { display: inline-flex; }
+body.management-ux-enhanced .room-workspace-tools > button:hover:not(:disabled) { transform: none; }
+
+/* A Room is an application workbench. Remove the generic page header/footer and
+   let the tab strip plus resilient connection banner define the only chrome. */
+body.management-room-workspace { overflow: hidden; }
+body.management-ux-enhanced .app-shell.room-workspace .workspace-shell {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+body.management-ux-enhanced .app-shell.room-workspace .topbar,
+body.management-ux-enhanced .app-shell.room-workspace .workspace-footer {
+  display: none;
+}
+body.management-ux-enhanced .app-shell.room-workspace .room-tabstrip {
+  position: relative;
+  top: auto;
+  z-index: 22;
+  flex: 0 0 var(--room-workbench-tabbar-height);
+}
+body.management-ux-enhanced .app-shell.room-workspace .connection-banner:not([hidden]) {
+  flex: 0 0 auto;
+  margin: 8px 10px 0;
+}
+body.management-ux-enhanced .app-shell.room-workspace .workspace-main {
+  min-height: 0;
+  height: auto;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+body.management-ux-enhanced .app-shell.room-workspace .room-stage {
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+}
+body.management-ux-enhanced .app-shell.room-workspace .room-panel {
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+body.management-ux-enhanced .app-shell.room-workspace .room-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+body.management-ux-enhanced .app-shell.room-workspace .room-placeholder { min-height: 100%; }
+
+@media (max-width: 900px) {
+  body.management-ux-enhanced .app-shell.room-workspace .workspace-shell { padding-bottom: 0; }
+  body.management-ux-enhanced .app-shell.room-workspace .management-mobile-nav { display: none; }
+  body.management-ux-enhanced .app-shell.room-workspace .room-workspace-leading { display: flex; }
+  body.management-ux-enhanced .room-tabstrip {
+    padding-right: max(6px, env(safe-area-inset-right));
+    padding-left: max(6px, env(safe-area-inset-left));
+  }
+  body.management-ux-enhanced .room-tab { max-width: 220px; }
+}
+
+@media (max-width: 600px) {
+  body.management-ux-enhanced .room-tabstrip { gap: 4px; }
+  body.management-ux-enhanced .room-tab { min-width: 96px; max-width: 180px; }
+  body.management-ux-enhanced .room-tab-target { padding-left: 6px; }
+  body.management-ux-enhanced .room-workspace-refresh { display: none !important; }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  body.management-ux-enhanced .room-tab-close {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
+    flex-basis: 32px;
+    opacity: .9;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.management-ux-enhanced .room-tab { transition: none; }
+  body.management-ux-enhanced .room-tablist { scroll-behavior: auto; }
+}
+
+@media (forced-colors: active) {
+  body.management-ux-enhanced .room-tab.active,
+  body.management-ux-enhanced .tree-room.active { outline: 2px solid Highlight; }
+  body.management-ux-enhanced .room-tab-close { border: 1px solid ButtonText; }
+}

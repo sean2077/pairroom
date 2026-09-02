@@ -12,6 +12,11 @@
   const refreshButton = document.getElementById('refresh-button');
   const connectionBanner = document.getElementById('connection-banner');
   const addProjectButton = document.getElementById('add-project-button');
+  const roomTree = document.getElementById('room-tree');
+  const roomTabstrip = document.getElementById('room-tabstrip');
+  const roomTablist = document.getElementById('room-tablist');
+  const roomStage = document.getElementById('room-stage');
+  const roomPickerButton = document.getElementById('room-picker-button');
 
   if (!app || !sidebar || !workspaceShell || !topbar || !topbarActions || !view) return;
 
@@ -21,31 +26,37 @@
   let chord = '';
   let chordTimer = 0;
   let enhancementFrame = 0;
+  let roomChromeFrame = 0;
   let refreshDeferredWhilePaletteOpen = false;
 
   document.body.classList.add('management-ux-enhanced');
-  installSkipLink();
+  const skipLink = installSkipLink();
   const syncLine = installSyncLine();
   const commandUI = installCommandPalette();
   const mobileNav = installMobileNavigation();
   const chordHint = installChordHint();
+  const roomWorkspaceUI = installRoomWorkspaceTools();
 
   improveStaticSemantics();
   enhanceDynamicContent();
+  enhanceRoomChrome();
   syncRouteState();
   syncSidebarState();
   syncConnectionState();
   installObservers();
   installKeyboardNavigation();
+  installRoomTabNavigation();
   installScrollFeedback();
 
   function installSkipLink() {
-    if (document.querySelector('.management-skip-link')) return;
+    const existing = document.querySelector('.management-skip-link');
+    if (existing) return existing;
     const link = document.createElement('a');
     link.className = 'management-skip-link';
     link.href = '#view';
     link.textContent = '跳到页面内容';
     document.body.prepend(link);
+    return link;
   }
 
   function installSyncLine() {
@@ -139,7 +150,7 @@
   }
 
   function commands() {
-    return [
+    const items = [
       {
         id: 'overview', group: '导航', icon: '◫', label: '打开概览', detail: 'Service、Project 与 Room 总览', keys: 'G O',
         keywords: 'overview home service 概览 首页', action: () => navigate('#/overview'),
@@ -162,7 +173,7 @@
       },
       {
         id: 'open-room', group: '操作', icon: '◇', label: '打开 Room 标签', detail: '在应用内标签中打开一个活动 Room', keys: 'Alt+N',
-        keywords: 'open room tab 打开 标签', action: () => document.getElementById('room-picker-button')?.click(),
+        keywords: 'open room tab 打开 标签', action: () => roomPickerButton?.click(),
       },
       {
         id: 'search', group: '操作', icon: '⌕', label: '搜索 Project 或 Room', detail: '进入全局搜索', keys: '/',
@@ -177,6 +188,14 @@
         detail: '切换 Management 导航宽度', keys: '', keywords: 'sidebar collapse expand 侧边栏 折叠 展开', action: toggleSidebar,
       },
     ];
+    const currentTab = currentRoomTab();
+    if (currentTab) {
+      items.splice(6, 0, {
+        id: 'close-room', group: '标签', icon: '×', label: '关闭当前 Room 标签', detail: '仅关闭工作台标签，不停止 Agent', keys: 'Alt+W',
+        keywords: 'close room tab 关闭 标签', action: () => currentTab.querySelector('.room-tab-close')?.click(),
+      });
+    }
+    return items;
   }
 
   function openPalette(initialQuery = '') {
@@ -294,8 +313,11 @@
 
   function navigate(hash) {
     if (location.hash === hash) {
-      view.focus({ preventScroll: true });
-      window.scrollTo({ top: 0, behavior: reducedMotion() ? 'auto' : 'smooth' });
+      const target = app.classList.contains('room-workspace') ? roomStage : view;
+      target?.focus({ preventScroll: true });
+      if (!app.classList.contains('room-workspace')) {
+        window.scrollTo({ top: 0, behavior: reducedMotion() ? 'auto' : 'smooth' });
+      }
       return;
     }
     location.hash = hash;
@@ -324,6 +346,59 @@
     return hint;
   }
 
+  function makeRoomTool({ className = '', label, title, text, onClick }) {
+    const button = document.createElement('button');
+    button.className = `icon-button room-workspace-tool ${className}`.trim();
+    button.type = 'button';
+    button.textContent = text;
+    button.title = title || label;
+    button.setAttribute('aria-label', label);
+    button.addEventListener('click', onClick);
+    return button;
+  }
+
+  function installRoomWorkspaceTools() {
+    if (!roomTabstrip || !roomTablist) return {};
+
+    const leading = document.createElement('div');
+    leading.className = 'room-workspace-leading';
+    const menu = makeRoomTool({
+      className: 'room-workspace-menu',
+      label: '打开导航',
+      title: '打开 Projects 与 Rooms 导航',
+      text: '☰',
+      onClick: () => document.getElementById('mobile-menu')?.click(),
+    });
+    leading.append(menu);
+    roomTabstrip.insertBefore(leading, roomTablist);
+
+    const tools = document.createElement('div');
+    tools.className = 'room-workspace-tools';
+    const refresh = makeRoomTool({
+      className: 'room-workspace-refresh',
+      label: '刷新 Management Shell',
+      title: '同步 Service 与 Runtime 状态',
+      text: '↻',
+      onClick: () => refreshButton?.click(),
+    });
+    const command = makeRoomTool({
+      className: 'room-workspace-command',
+      label: '打开快速操作',
+      title: '快速操作（Ctrl/⌘ K）',
+      text: '⌘',
+      onClick: () => openPalette(),
+    });
+    command.setAttribute('aria-keyshortcuts', 'Control+K Meta+K');
+    if (roomPickerButton) {
+      roomPickerButton.classList.add('room-workspace-picker');
+      roomPickerButton.title = '打开 Room 标签（Alt+N）';
+      roomPickerButton.setAttribute('aria-label', '打开 Room 标签');
+    }
+    tools.append(refresh, command);
+    roomTabstrip.append(tools);
+    return { leading, menu, tools, refresh, command };
+  }
+
   function toggleSidebar() {
     if (window.matchMedia('(max-width: 900px)').matches) {
       document.getElementById('mobile-menu')?.click();
@@ -347,6 +422,10 @@
     view.setAttribute('aria-busy', 'true');
     document.querySelector('.primary-nav')?.setAttribute('aria-label', 'Management 主导航');
     document.querySelector('.workspace-footer')?.setAttribute('role', 'contentinfo');
+    roomTablist?.setAttribute('aria-orientation', 'horizontal');
+    roomTabstrip?.setAttribute('aria-label', 'Room 工作区标签');
+    roomStage?.setAttribute('tabindex', '-1');
+    roomStage?.setAttribute('aria-label', '当前 Room 工作区');
   }
 
   function enhanceDynamicContent() {
@@ -372,10 +451,169 @@
     });
   }
 
+  function scheduleRoomChromeEnhancement() {
+    if (roomChromeFrame) return;
+    roomChromeFrame = requestAnimationFrame(() => {
+      roomChromeFrame = 0;
+      enhanceRoomChrome();
+    });
+  }
+
+  function enhanceRoomChrome() {
+    enhanceRoomTree();
+    enhanceRoomTabs();
+    syncRoomTabOverflow();
+  }
+
+  function enhanceRoomTree() {
+    if (!roomTree) return;
+    roomTree.querySelectorAll('.tree-project').forEach((section) => {
+      const toggle = section.querySelector('.tree-project-toggle');
+      if (!toggle) return;
+      toggle.setAttribute('aria-expanded', String(section.classList.contains('open')));
+    });
+    roomTree.querySelectorAll('.tree-room').forEach((button) => {
+      if (button.classList.contains('active')) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
+    });
+  }
+
+  function directChildByClass(parent, className) {
+    return Array.from(parent?.children || []).find((child) => child.classList?.contains(className)) || null;
+  }
+
+  function roomDOMToken(roomID) {
+    return encodeURIComponent(String(roomID || 'room')).replace(/%/g, '_');
+  }
+
+  function findRoomPanel(roomID) {
+    return Array.from(roomStage?.children || []).find((panel) => panel.dataset?.roomId === roomID) || null;
+  }
+
+  function currentRoomTab() {
+    return roomTablist?.querySelector('.room-tab.active') || null;
+  }
+
+  function currentRoomTabTargets() {
+    return Array.from(roomTablist?.querySelectorAll('.room-tab-target') || []);
+  }
+
+  function findRoomTabTarget(roomID) {
+    return currentRoomTabTargets().find((target) => target.closest('.room-tab')?.dataset.roomId === roomID) || null;
+  }
+
+  function enhanceRoomTabs() {
+    if (!roomTablist) return;
+    const tabs = Array.from(roomTablist.children).filter((child) => child.classList?.contains('room-tab'));
+    tabs.forEach((tab) => {
+      const roomID = tab.dataset.roomId || '';
+      const selected = tab.classList.contains('active') || tab.getAttribute('aria-selected') === 'true';
+      const close = directChildByClass(tab, 'room-tab-close') || tab.querySelector('.room-tab-close');
+      let target = directChildByClass(tab, 'room-tab-target');
+
+      if (!target) {
+        target = document.createElement('button');
+        target.type = 'button';
+        target.className = 'room-tab-target';
+        target.setAttribute('role', 'tab');
+        target.draggable = true;
+        const content = Array.from(tab.childNodes).filter((child) => child !== close);
+        content.forEach((child) => target.append(child));
+        tab.insertBefore(target, close || null);
+        tab.setAttribute('role', 'presentation');
+        tab.removeAttribute('aria-selected');
+        tab.removeAttribute('tabindex');
+        tab.draggable = false;
+        target.addEventListener('keydown', handleRoomTabKeydown);
+        target.addEventListener('auxclick', (event) => {
+          if (event.button !== 1) return;
+          event.preventDefault();
+          close?.click();
+        });
+        target.addEventListener('dragstart', () => tab.classList.add('dragging'));
+        target.addEventListener('dragend', () => tab.classList.remove('dragging'));
+        close?.addEventListener('pointerdown', (event) => event.stopPropagation());
+        close?.addEventListener('dragstart', (event) => event.preventDefault());
+      }
+
+      const label = target.querySelector('.room-tab-label')?.textContent?.trim() || roomID || 'Room';
+      const token = roomDOMToken(roomID);
+      const panel = findRoomPanel(roomID);
+      target.id = `room-tab-${token}`;
+      target.setAttribute('aria-selected', String(selected));
+      target.setAttribute('aria-label', `${label}${selected ? '，当前标签' : ''}`);
+      target.setAttribute('aria-keyshortcuts', 'Delete');
+      target.tabIndex = selected ? 0 : -1;
+      target.title = label;
+      if (panel) {
+        panel.id = `room-panel-${token}`;
+        panel.setAttribute('aria-labelledby', target.id);
+        target.setAttribute('aria-controls', panel.id);
+      }
+      if (close) {
+        close.draggable = false;
+        close.tabIndex = selected ? 0 : -1;
+        close.title = `关闭 ${label}（不停止 Agent）`;
+        close.setAttribute('aria-label', `关闭 ${label}；不停止 Agent`);
+        close.setAttribute('aria-keyshortcuts', 'Alt+W');
+      }
+    });
+
+    const active = tabs.find((tab) => tab.classList.contains('active'));
+    if (active) {
+      requestAnimationFrame(() => {
+        active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        syncRoomTabOverflow();
+      });
+    }
+  }
+
+  function handleRoomTabKeydown(event) {
+    const targets = currentRoomTabTargets();
+    const current = event.currentTarget;
+    const index = targets.indexOf(current);
+    if (index < 0) return;
+
+    if (event.key === 'Delete') {
+      event.preventDefault();
+      current.closest('.room-tab')?.querySelector('.room-tab-close')?.click();
+      return;
+    }
+
+    let nextIndex = -1;
+    if (event.key === 'ArrowLeft') nextIndex = (index - 1 + targets.length) % targets.length;
+    else if (event.key === 'ArrowRight') nextIndex = (index + 1) % targets.length;
+    else if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = targets.length - 1;
+    if (nextIndex < 0) return;
+
+    event.preventDefault();
+    const next = targets[nextIndex];
+    const roomID = next.closest('.room-tab')?.dataset.roomId || '';
+    next.click();
+    requestAnimationFrame(() => findRoomTabTarget(roomID)?.focus({ preventScroll: true }));
+  }
+
+  function syncRoomTabOverflow() {
+    if (!roomTabstrip || !roomTablist) return;
+    const max = Math.max(0, roomTablist.scrollWidth - roomTablist.clientWidth);
+    const overflowing = max > 2;
+    roomTabstrip.classList.toggle('room-tabs-overflowing', overflowing);
+    roomTabstrip.classList.toggle('room-tabs-at-start', !overflowing || roomTablist.scrollLeft <= 2);
+    roomTabstrip.classList.toggle('room-tabs-at-end', !overflowing || roomTablist.scrollLeft >= max - 2);
+  }
+
   function syncRouteState() {
     const raw = location.hash.startsWith('#/') ? location.hash.slice(2) : 'overview';
     const route = raw.split('/')[0] || 'overview';
     const activeRoute = raw.startsWith('projects/') ? 'projects' : route;
+    const roomWorkspace = raw.startsWith('rooms/');
+    app.classList.toggle('room-workspace', roomWorkspace);
+    document.body.classList.toggle('management-room-workspace', roomWorkspace);
+    if (skipLink) {
+      skipLink.href = roomWorkspace ? '#room-stage' : '#view';
+      skipLink.textContent = roomWorkspace ? '跳到当前 Room' : '跳到页面内容';
+    }
     document.querySelectorAll('.primary-nav [data-nav]').forEach((link) => {
       const current = link.dataset.nav === activeRoute;
       if (current) link.setAttribute('aria-current', 'page');
@@ -386,6 +624,7 @@
       if (current) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
     });
+    scheduleRoomChromeEnhancement();
   }
 
   function syncConnectionState() {
@@ -395,6 +634,10 @@
     document.body.classList.toggle('management-is-syncing', syncing);
     document.body.classList.toggle('management-is-disconnected', disconnected);
     syncLine.setAttribute('aria-hidden', String(!syncing));
+    if (roomWorkspaceUI.refresh) {
+      roomWorkspaceUI.refresh.classList.toggle('spinning', syncing);
+      roomWorkspaceUI.refresh.disabled = Boolean(refreshButton?.disabled);
+    }
   }
 
   function installObservers() {
@@ -407,14 +650,37 @@
     const viewObserver = new MutationObserver(scheduleDynamicEnhancement);
     viewObserver.observe(view, { childList: true, subtree: true });
 
+    const roomChromeObserver = new MutationObserver(scheduleRoomChromeEnhancement);
+    if (roomTree) roomChromeObserver.observe(roomTree, { childList: true });
+    if (roomTablist) roomChromeObserver.observe(roomTablist, { childList: true });
+    if (roomStage) roomChromeObserver.observe(roomStage, { childList: true });
+
     const connectionObserver = new MutationObserver(syncConnectionState);
-    if (refreshButton) connectionObserver.observe(refreshButton, { attributes: true, attributeFilter: ['class'] });
+    if (refreshButton) connectionObserver.observe(refreshButton, { attributes: true, attributeFilter: ['class', 'disabled'] });
     if (connectionBanner) connectionObserver.observe(connectionBanner, { attributes: true, attributeFilter: ['hidden'] });
+
+    if (typeof ResizeObserver === 'function' && roomTablist) {
+      const resizeObserver = new ResizeObserver(syncRoomTabOverflow);
+      resizeObserver.observe(roomTablist);
+    } else {
+      window.addEventListener('resize', syncRoomTabOverflow, { passive: true });
+    }
 
     window.addEventListener('pairroom:management-render-pending', () => {
       if (paletteOpen) refreshDeferredWhilePaletteOpen = true;
     });
     window.addEventListener('hashchange', syncRouteState);
+  }
+
+  function installRoomTabNavigation() {
+    if (!roomTablist) return;
+    roomTablist.addEventListener('scroll', syncRoomTabOverflow, { passive: true });
+    roomTablist.addEventListener('wheel', (event) => {
+      const max = roomTablist.scrollWidth - roomTablist.clientWidth;
+      if (max <= 2 || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      event.preventDefault();
+      roomTablist.scrollLeft += event.deltaY;
+    }, { passive: false });
   }
 
   function installKeyboardNavigation() {
