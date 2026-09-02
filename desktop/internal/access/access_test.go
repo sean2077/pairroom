@@ -40,6 +40,7 @@ func TestParseRejectsUnsafeManagementURLs(t *testing.T) {
 		"http://example.com:7332/#token=secret",
 		"http://localhost:7332/#token=secret",
 		"http://127.0.0.1:7332/",
+		"http://127.0.0.1:7332/?#token=secret",
 		"http://127.0.0.1:7332/?token=secret",
 		"http://127.0.0.1:7332/#token=one&token=two",
 		"http://user:pass@127.0.0.1:7332/#token=secret",

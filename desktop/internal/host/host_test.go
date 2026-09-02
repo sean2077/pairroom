@@ -70,3 +70,38 @@ func TestEnvironmentPathsAreAccepted(t *testing.T) {
 		t.Fatalf("desktop data root was not used: %v", err)
 	}
 }
+
+func TestShutdownRetriesAfterTimeoutAndKeepsServiceLockUntilComplete(t *testing.T) {
+	root := t.TempDir()
+	lock, err := service.AcquireServiceLock(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveDone := make(chan error, 1)
+	value := &Host{
+		mode:      ModeEmbedded,
+		lock:      lock,
+		serveDone: serveDone,
+	}
+
+	expiredCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := value.Shutdown(expiredCtx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("first shutdown error = %v, want context cancellation", err)
+	}
+	if _, err := service.AcquireServiceLock(root, false); !errors.Is(err, service.ErrServiceAlreadyRunning) {
+		t.Fatalf("lock acquisition after incomplete shutdown = %v, want ErrServiceAlreadyRunning", err)
+	}
+
+	serveDone <- nil
+	if err := value.Shutdown(context.Background()); err != nil {
+		t.Fatalf("retry shutdown: %v", err)
+	}
+	replacement, err := service.AcquireServiceLock(root, false)
+	if err != nil {
+		t.Fatalf("acquire lock after completed shutdown: %v", err)
+	}
+	if err := replacement.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

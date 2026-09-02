@@ -1,6 +1,9 @@
 /bin/
 /dist/
+/.task/
 /bindings/
+/build/ios/
+/build/linux/desktop
 /build/darwin/Info.dev.plist
 /build/darwin/Info.plist
 /build/darwin/icons.icns

@@ -2,11 +2,25 @@
 from __future__ import annotations
 
 import pathlib
+import plistlib
 import re
 import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 REPOSITORY = ROOT.parent
+
+
+def allow_macos_local_networking() -> None:
+    """Keep the production WKWebView allowed to reach PairRoom's loopback HTTP service."""
+    plist_path = ROOT / "build" / "darwin" / "Info.plist"
+    if not plist_path.is_file():
+        raise SystemExit(f"Wails did not generate the macOS plist: {plist_path}")
+    with plist_path.open("rb") as source:
+        payload = plistlib.load(source)
+    transport = payload.setdefault("NSAppTransportSecurity", {})
+    transport["NSAllowsLocalNetworking"] = True
+    with plist_path.open("wb") as target:
+        plistlib.dump(payload, target, fmt=plistlib.FMT_XML, sort_keys=False)
 
 
 def main() -> int:
@@ -35,6 +49,7 @@ def main() -> int:
         cwd=ROOT / "build",
         check=True,
     )
+    allow_macos_local_networking()
     print(f"prepared Wails v3 build assets for PairRoom {version}")
     return 0
 

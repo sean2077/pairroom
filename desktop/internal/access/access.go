@@ -38,7 +38,7 @@ func Parse(raw string) (Access, error) {
 	if err != nil {
 		return Access{}, errors.New("Management URL could not be parsed")
 	}
-	if parsed.Scheme != "http" || parsed.User != nil || parsed.RawQuery != "" ||
+	if parsed.Scheme != "http" || parsed.User != nil || parsed.ForceQuery || parsed.RawQuery != "" ||
 		(parsed.Path != "" && parsed.Path != "/") {
 		return Access{}, errors.New("Management URL must be plain HTTP at the root path with no userinfo or query")
 	}
@@ -81,6 +81,9 @@ func (a Access) DesktopURL() string {
 
 // Probe confirms that Access authenticates the running PairRoom Service.
 func Probe(ctx context.Context, access Access) bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, access.APIURL, nil)
 	if err != nil {
 		return false
@@ -132,7 +135,11 @@ func DiscoverDaemon(ctx context.Context) (Access, bool, error) {
 	if strings.TrimSpace(meta.LogFile) == "" {
 		return Access{}, false, errors.New("PairRoom daemon metadata has no log file")
 	}
-	candidates, err := managementCandidates(meta.LogFile, meta.LogBackups)
+	backups := meta.LogBackups
+	if backups < 1 {
+		backups = daemon.DefaultLogMaxBackups
+	}
+	candidates, err := managementCandidates(meta.LogFile, backups)
 	if err != nil {
 		return Access{}, false, err
 	}

@@ -48,11 +48,17 @@ type Host struct {
 	cancel     context.CancelFunc
 	serveDone  chan error
 
-	closeOnce sync.Once
-	closeErr  error
+	closeMu     sync.Mutex
+	closed      bool
+	closeErr    error
+	serveWaited bool
+	serveErr    error
 }
 
 func Start(ctx context.Context, options Options) (*Host, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if !options.DisableExternalDiscovery {
 		if value, ok, err := access.FromEnvironment(ctx); err != nil {
 			return nil, err
@@ -71,6 +77,9 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 }
 
 func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	configPath := strings.TrimSpace(options.ConfigPath)
 	if configPath == "" {
 		configPath = strings.TrimSpace(os.Getenv(configPathVariable))
@@ -94,7 +103,6 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 			resultErr = errors.Join(resultErr, lock.Close())
 		}
 	}()
-
 	rootCtx, cancel := context.WithCancel(context.Background())
 	registry, err := service.OpenRegistry(rootCtx, service.RegistryConfig{Root: lock.Root()})
 	if err != nil {
@@ -157,6 +165,18 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 		cancel()
 		return nil, err
 	}
+	cleanupRuntimes := func() error {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := runtimes.Shutdown(shutdownCtx)
+		shutdownCancel()
+		if err != nil {
+			// Keep the lock when the Runtime drain is uncertain. There is no
+			// safe way for another Service to share this data root until an
+			// operator explicitly verifies the process and recovers the lock.
+			cleanupLock = false
+		}
+		return err
+	}
 	management, err := service.NewManagementServer(service.ManagementServerConfig{
 		Registry:    registry,
 		Runtimes:    runtimes,
@@ -164,29 +184,23 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 		Token:       fileConfig.Token,
 	})
 	if err != nil {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = runtimes.Shutdown(shutdownCtx)
-		shutdownCancel()
+		cleanupErr := cleanupRuntimes()
 		cancel()
-		return nil, err
+		return nil, errors.Join(err, cleanupErr)
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = runtimes.Shutdown(shutdownCtx)
-		shutdownCancel()
+		cleanupErr := cleanupRuntimes()
 		cancel()
-		return nil, fmt.Errorf("listen for desktop Management Shell: %w", err)
+		return nil, errors.Join(fmt.Errorf("listen for desktop Management Shell: %w", err), cleanupErr)
 	}
 
 	managementAccess, err := access.Parse(management.BrowserURL(listener.Addr()))
 	if err != nil {
 		_ = listener.Close()
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = runtimes.Shutdown(shutdownCtx)
-		shutdownCancel()
+		cleanupErr := cleanupRuntimes()
 		cancel()
-		return nil, fmt.Errorf("validate desktop Management URL: %w", err)
+		return nil, errors.Join(fmt.Errorf("validate desktop Management URL: %w", err), cleanupErr)
 	}
 	host := &Host{
 		mode:       ModeEmbedded,
@@ -205,8 +219,12 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 	defer probeCancel()
 	for !access.Probe(probeCtx, managementAccess) {
 		if err := probeCtx.Err(); err != nil {
-			_ = host.Shutdown(context.Background())
-			return nil, fmt.Errorf("desktop Management Shell did not become ready: %w", err)
+			// Host now owns the lock. Do not let the deferred partial-start
+			// cleanup release it if shutdown cannot prove that all runtimes
+			// have drained.
+			cleanupLock = false
+			shutdownErr := host.Shutdown(context.Background())
+			return nil, errors.Join(fmt.Errorf("desktop Management Shell did not become ready: %w", err), shutdownErr)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -243,29 +261,51 @@ func (h *Host) Shutdown(ctx context.Context) error {
 	if h == nil || h.mode == ModeExternal {
 		return nil
 	}
-	h.closeOnce.Do(func() {
-		var result error
-		if h.management != nil {
-			result = errors.Join(result, h.management.Shutdown(ctx))
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Serialize shutdown attempts, but do not make a timed-out attempt
+	// terminal. RuntimeManager deliberately supports retrying a drain with a
+	// fresh context; the Host must retain the same property so a short caller
+	// deadline cannot strand an embedded Service behind an unreleasable lock.
+	h.closeMu.Lock()
+	defer h.closeMu.Unlock()
+	if h.closed {
+		return h.closeErr
+	}
+
+	var result error
+	if h.management != nil {
+		result = errors.Join(result, h.management.Shutdown(ctx))
+	}
+	if h.runtimes != nil {
+		result = errors.Join(result, h.runtimes.Shutdown(ctx))
+	}
+	if h.cancel != nil {
+		h.cancel()
+	}
+	if h.serveDone != nil && !h.serveWaited {
+		select {
+		case err := <-h.serveDone:
+			h.serveWaited = true
+			h.serveErr = err
+		case <-ctx.Done():
+			result = errors.Join(result, ctx.Err())
 		}
-		if h.runtimes != nil {
-			result = errors.Join(result, h.runtimes.Shutdown(ctx))
-		}
-		if h.cancel != nil {
-			h.cancel()
-		}
-		if h.serveDone != nil {
-			select {
-			case err := <-h.serveDone:
-				result = errors.Join(result, err)
-			case <-ctx.Done():
-				result = errors.Join(result, ctx.Err())
-			}
-		}
-		if h.lock != nil {
-			result = errors.Join(result, h.lock.Close())
-		}
-		h.closeErr = result
-	})
-	return h.closeErr
+	}
+	if h.serveWaited {
+		result = errors.Join(result, h.serveErr)
+	}
+	// Keep the lock on any incomplete or uncertain drain. The process may
+	// still have a live Runtime, and removing the lock would permit another
+	// Service to race it. A subsequent explicit stale-lock recovery is the
+	// safe escape hatch after the process is confirmed gone.
+	if h.lock != nil && result == nil {
+		result = errors.Join(result, h.lock.Close())
+	}
+	h.closeErr = result
+	if result == nil {
+		h.closed = true
+	}
+	return result
 }
