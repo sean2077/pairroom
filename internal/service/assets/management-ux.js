@@ -28,6 +28,8 @@
   let enhancementFrame = 0;
   let roomChromeFrame = 0;
   let pendingRoomTabFocusID = '';
+  let pendingGlobalSearchFocus = false;
+  let paletteReturnFocus = null;
   let refreshDeferredWhilePaletteOpen = false;
 
   document.body.classList.add('management-ux-enhanced');
@@ -45,6 +47,7 @@
   syncSidebarState();
   syncConnectionState();
   installObservers();
+  installRoomWorkspaceShortcuts();
   installKeyboardNavigation();
   installRoomTabNavigation();
   installScrollFeedback();
@@ -178,7 +181,7 @@
       },
       {
         id: 'search', group: '操作', icon: '⌕', label: '搜索 Project 或 Room', detail: '进入全局搜索', keys: '/',
-        keywords: 'search find project room 搜索 查找', action: () => globalSearch?.focus({ preventScroll: true }),
+        keywords: 'search find project room 搜索 查找', action: focusGlobalSearch,
       },
       {
         id: 'refresh', group: '操作', icon: '↻', label: '立即刷新', detail: '同步最新 Service snapshot', keys: '',
@@ -201,6 +204,8 @@
 
   function openPalette(initialQuery = '') {
     if (app.hidden || document.querySelector('dialog[open]:not(#management-command-dialog)')) return;
+    const activeElement = document.activeElement;
+    paletteReturnFocus = activeElement instanceof HTMLElement && activeElement !== document.body ? activeElement : null;
     paletteOpen = true;
     activePaletteIndex = 0;
     if (refreshButton?.classList.contains('spinning')) refreshDeferredWhilePaletteOpen = true;
@@ -222,8 +227,13 @@
     paletteOpen = false;
     commandUI.button.setAttribute('aria-expanded', 'false');
     if (refreshButton?.classList.contains('spinning')) refreshDeferredWhilePaletteOpen = true;
+    const returnFocus = paletteReturnFocus;
+    paletteReturnFocus = null;
     requestAnimationFrame(() => {
-      if (!app.hidden) commandUI.button.focus({ preventScroll: true });
+      if (app.hidden) return;
+      const fallback = app.classList.contains('room-workspace') ? roomWorkspaceUI.command : commandUI.button;
+      const target = returnFocus?.isConnected ? returnFocus : fallback;
+      target?.focus({ preventScroll: true });
     });
     flushDeferredRefresh();
   }
@@ -310,6 +320,15 @@
     if (!command) return;
     closePalette();
     requestAnimationFrame(() => command.action());
+  }
+
+  function focusGlobalSearch() {
+    if (app.classList.contains('room-workspace')) {
+      pendingGlobalSearchFocus = true;
+      navigate('#/projects');
+      return;
+    }
+    globalSearch?.focus({ preventScroll: true });
   }
 
   function navigate(hash) {
@@ -569,13 +588,13 @@
     });
 
     const active = tabs.find((tab) => tab.classList.contains('active'));
-    const focusRoomID = pendingRoomTabFocusID;
-    if (active || focusRoomID) {
+    if (active || pendingRoomTabFocusID) {
       requestAnimationFrame(() => {
         active?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-        const focusTarget = focusRoomID ? findRoomTabTarget(focusRoomID) : null;
-        if (focusTarget) {
-          focusTarget.focus({ preventScroll: true });
+        const focusRoomID = pendingRoomTabFocusID;
+        if (focusRoomID) {
+          const focusTarget = findRoomTabTarget(focusRoomID) || active?.querySelector('.room-tab-target');
+          focusTarget?.focus({ preventScroll: true });
           if (pendingRoomTabFocusID === focusRoomID) pendingRoomTabFocusID = '';
         }
         syncRoomTabOverflow();
@@ -622,10 +641,11 @@
     const raw = location.hash.startsWith('#/') ? location.hash.slice(2) : 'overview';
     const route = raw.split('/')[0] || 'overview';
     const activeRoute = raw.startsWith('projects/') ? 'projects' : route;
-    const roomWorkspace = raw.startsWith('rooms/');
+    const roomWorkspace = raw.startsWith('rooms/') && !app.hidden;
     app.classList.toggle('room-workspace', roomWorkspace);
     document.body.classList.toggle('management-room-workspace', roomWorkspace);
     if (skipLink) {
+      skipLink.hidden = app.hidden;
       skipLink.href = roomWorkspace ? '#room-stage' : '#view';
       skipLink.textContent = roomWorkspace ? '跳到当前 Room' : '跳到页面内容';
     }
@@ -639,6 +659,10 @@
       if (current) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
     });
+    if (pendingGlobalSearchFocus && !roomWorkspace && !app.hidden) {
+      pendingGlobalSearchFocus = false;
+      requestAnimationFrame(() => globalSearch?.focus({ preventScroll: true }));
+    }
     scheduleRoomChromeEnhancement();
   }
 
@@ -658,6 +682,7 @@
   function installObservers() {
     const appObserver = new MutationObserver(() => {
       syncSidebarState();
+      syncRouteState();
       if (app.hidden && paletteOpen) closePalette();
     });
     appObserver.observe(app, { attributes: true, attributeFilter: ['class', 'hidden'] });
@@ -696,6 +721,39 @@
       event.preventDefault();
       roomTablist.scrollLeft += event.deltaY;
     }, { passive: false });
+  }
+
+  function installRoomWorkspaceShortcuts() {
+    document.addEventListener('keydown', (event) => {
+      if (app.hidden || document.querySelector('dialog[open]')) return;
+      const key = event.key.toLocaleLowerCase();
+      const modifier = event.metaKey || event.ctrlKey;
+      if (!modifier && !event.altKey && key === '/' && app.classList.contains('room-workspace') && !isEditableTarget(event.target)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        focusGlobalSearch();
+        return;
+      }
+      if (modifier || !event.altKey) return;
+      const active = currentRoomTab();
+      if (!active) return;
+      const tabs = Array.from(roomTablist?.querySelectorAll('.room-tab') || []);
+      const index = tabs.indexOf(active);
+      if (index < 0) return;
+      if (key === 'w') {
+        rememberAdjacentRoomTabFocus(active);
+        return;
+      }
+      if (!event.shiftKey && (event.key === '[' || event.key === ']')) {
+        const delta = event.key === '[' ? -1 : 1;
+        const next = tabs[(index + delta + tabs.length) % tabs.length];
+        pendingRoomTabFocusID = next?.dataset.roomId || '';
+        return;
+      }
+      if (event.key === '{' || event.key === '}' || (event.shiftKey && (event.key === '[' || event.key === ']'))) {
+        pendingRoomTabFocusID = active.dataset.roomId || '';
+      }
+    }, { capture: true });
   }
 
   function installKeyboardNavigation() {
