@@ -73,7 +73,15 @@ message accepted
   -> Room owner released
 ```
 
-若要顺序协作，可以直接描述角色和阶段：
+未点名的消息只发给当前 Driver。验证两位 Agent 能顺序协作时，可以说：
+
+```text
+互相打个招呼，介绍下自己
+```
+
+Driver 必须在回复里 `@codex` 或 `@claude`；只对人类自我介绍不会启动另一位。PairRoom 在当前 Turn 结束后才会把回复交给 peer。
+
+若要按阶段顺序协作，可以直接描述角色和动作：
 
 ```text
 Claude 先规划；Codex 审查方案；等我批准后由 Codex 执行；最后 Claude 验收。

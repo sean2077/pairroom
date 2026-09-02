@@ -20,7 +20,7 @@ user
 
 - **Human authority**：用户可以指定目标 Agent、覆盖后续流程、审批、取消或停止；
 - **Single owner**：两个 native runtime 不会同时拥有执行权；
-- **Explicit handoff**：Agent 明确 `@claude`、`@codex` 或 `@peer` 即表示把回复交给该 peer；没有明确地址时，必须同时给出 `HANDOFF` 与 `NEXT`；`@human`/`@user` 则回到用户决策；
+- **Explicit handoff**：Agent 明确 `@claude`、`@codex` 或 `@peer` 即表示把回复交给该 peer；人类要求双方互动时必须写出该地址，只对人类说话不会启动另一位；没有明确地址时，必须同时给出 `HANDOFF` 与 `NEXT`；`@human`/`@user` 则回到用户决策；
 - **Fail closed**：进程重启不自动重放内存 FIFO，避免重复执行有副作用的操作；
 - **Native harness first**：PairRoom 不重写 Claude Code 或 Codex 的工具循环与权限模型。
 

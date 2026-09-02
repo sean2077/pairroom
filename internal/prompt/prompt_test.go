@@ -50,12 +50,12 @@ func TestBootstrapPromptUsesVersionedContractAndStaysCompact(t *testing.T) {
 		if len([]byte(got)) > MaxBootstrapBytes {
 			t.Fatalf("%s bootstrap = %d bytes, budget = %d:\n%s", actor, len([]byte(got)), MaxBootstrapBytes, got)
 		}
-		for _, fragment := range []string{protocol.Version, "pairroom protocol --actor " + string(actor), "current_role", "single active turn", "@" + string(model.OtherParticipant(actor)), "@human", "@user", "[PAIRROOM:HANDOFF]", "[PAIRROOM:NEXT]", "[PAIRROOM:DONE]"} {
+		for _, fragment := range []string{protocol.Version, "pairroom protocol --actor " + string(actor), "current_role", "single active turn", "shared Room", "envelope peer", "both of you", "@" + string(model.OtherParticipant(actor)), "@human", "@user", "[PAIRROOM:HANDOFF]", "[PAIRROOM:NEXT]", "[PAIRROOM:DONE]"} {
 			if !strings.Contains(got, fragment) {
 				t.Fatalf("%s bootstrap missing %q:\n%s", actor, fragment, got)
 			}
 		}
-		for _, fragment := range []string{"PairRoom rules:", "room-identity-must-not-leak", "/repo/identity/must/not/leak"} {
+		for _, fragment := range []string{"PairRoom rules:", "informal IM loop", "room-identity-must-not-leak", "/repo/identity/must/not/leak"} {
 			if strings.Contains(got, fragment) {
 				t.Fatalf("%s bootstrap contains unstable or legacy prose %q:\n%s", actor, fragment, got)
 			}
@@ -78,7 +78,7 @@ func TestEnvelopeCarriesOnlyRuntimeAndRoutingContext(t *testing.T) {
 	for _, fragment := range []string{
 		"protocol: " + protocol.Version,
 		"message_id: msg-0123456789abcdef01234567", "thread_id: thread-0123456789abcdef01234567", "from: claude", "to: codex",
-		"reply_to: msg-0123456789abcdef01234567", "current_role: reviewer", "delivery_intent: supersede",
+		"peer: claude", "reply_to: msg-0123456789abcdef01234567", "current_role: reviewer", "delivery_intent: supersede",
 		"workflow_id: workflow-0123456789abcdef01234567", "workflow_stage: 3", "workflow_mode: audit",
 		"remaining_agent_hops: 4", "Inspect the race",
 	} {
@@ -94,5 +94,20 @@ func TestEnvelopeCarriesOnlyRuntimeAndRoutingContext(t *testing.T) {
 	overhead := len([]byte(got)) - len([]byte(input.Text))
 	if overhead > MaxEnvelopeOverheadBytes {
 		t.Fatalf("Envelope() overhead = %d bytes, budget = %d:\n%s", overhead, MaxEnvelopeOverheadBytes, got)
+	}
+}
+
+func TestEnvelopeNamesPeerForHumanDriverTurn(t *testing.T) {
+	got := Envelope(model.AgentInput{
+		MessageID: "msg-1", ThreadID: "thread-1", From: model.ActorUser, To: model.ActorClaude,
+		Text: "互相打个招呼，介绍下自己", Role: model.RoleDriver, MaxHops: 6,
+	})
+	for _, fragment := range []string{"from: user", "to: claude", "peer: codex", "current_role: driver"} {
+		if !strings.Contains(got, fragment) {
+			t.Fatalf("Envelope() missing %q:\n%s", fragment, got)
+		}
+	}
+	if strings.Contains(got, "peer: claude") {
+		t.Fatalf("human-to-driver envelope must name Codex as peer:\n%s", got)
 	}
 }

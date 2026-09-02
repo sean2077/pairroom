@@ -38,6 +38,9 @@ func Envelope(input model.AgentInput) string {
 	fmt.Fprintf(&b, "hop: %d\n", input.Hop)
 	fmt.Fprintf(&b, "from: %s\n", input.From)
 	fmt.Fprintf(&b, "to: %s\n", input.To)
+	if peer := model.OtherParticipant(input.To); peer.ValidParticipant() {
+		fmt.Fprintf(&b, "peer: %s\n", peer)
+	}
 	if input.ReplyTo != "" {
 		fmt.Fprintf(&b, "reply_to: %s\n", input.ReplyTo)
 	}

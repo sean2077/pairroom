@@ -37,6 +37,8 @@ func TestResolveFiltersRoleWithTurnRouting(t *testing.T) {
 		"[role.reviewer]",
 		"HANDOFF + NEXT",
 		"explicit @claude, @codex, or @peer",
+		"both of you",
+		"envelope peer",
 		"@human and @user",
 	} {
 		if !strings.Contains(got, fragment) {

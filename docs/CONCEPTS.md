@@ -49,7 +49,7 @@ idle
 
 ## Handoff 与控制标记
 
-Agent 输出中明确的 `@claude`、`@codex` 或 `@peer` 是交给对应 peer 的路由指令；`@human` 或 `@user` 表示需要用户决策并停止自动接力。没有明确 peer 地址时，隐式自动交棒需要：
+Agent 输出中明确的 `@claude`、`@codex` 或 `@peer` 是交给对应 peer 的路由指令；`@human` 或 `@user` 表示需要用户决策并停止自动接力。人类要求双方互动时，活跃 Agent 必须给出该地址；只对人类说话不会启动另一位。没有明确 peer 地址时，隐式自动交棒需要：
 
 ```text
 [PAIRROOM:HANDOFF]
