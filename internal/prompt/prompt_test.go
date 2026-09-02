@@ -50,7 +50,7 @@ func TestBootstrapPromptUsesVersionedContractAndStaysCompact(t *testing.T) {
 		if len([]byte(got)) > MaxBootstrapBytes {
 			t.Fatalf("%s bootstrap = %d bytes, budget = %d:\n%s", actor, len([]byte(got)), MaxBootstrapBytes, got)
 		}
-		for _, fragment := range []string{protocol.Version, "pairroom protocol --actor " + string(actor), "current_role", "single active turn", "[PAIRROOM:HANDOFF]", "[PAIRROOM:NEXT]", "[PAIRROOM:DONE]"} {
+		for _, fragment := range []string{protocol.Version, "pairroom protocol --actor " + string(actor), "current_role", "single active turn", "@" + string(model.OtherParticipant(actor)), "@human", "@user", "[PAIRROOM:HANDOFF]", "[PAIRROOM:NEXT]", "[PAIRROOM:DONE]"} {
 			if !strings.Contains(got, fragment) {
 				t.Fatalf("%s bootstrap missing %q:\n%s", actor, fragment, got)
 			}

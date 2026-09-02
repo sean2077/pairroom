@@ -97,8 +97,9 @@ type RoutingMode string
 
 const (
 	// RoutingTurns is PairRoom's single collaboration policy. One participant
-	// owns the active native turn; a peer starts only after an explicit NEXT
-	// handoff and the current native turn has completed.
+	// owns the active native turn; a peer starts only after an explicit peer
+	// address or a structured NEXT handoff, and the current native turn has
+	// completed.
 	RoutingTurns RoutingMode = "turns"
 )
 

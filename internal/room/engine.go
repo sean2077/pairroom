@@ -2304,8 +2304,35 @@ func (e *Engine) agentTargets(actor model.ActorID, text, handoff, control string
 		e.notice("warning", fmt.Sprintf("%s emitted conflicting PairRoom control signals; the turn returned to the human.", actor.DisplayName()))
 		return nil
 	}
-	if prompt.MentionsHuman(strings.TrimSpace(text + "\n" + handoff)) {
+	routingText := strings.TrimSpace(text + "\n" + handoff)
+	// A human-directed response always wins. This also prevents an accidental
+	// peer mention in a response that is explicitly waiting for a user choice
+	// from starting another native turn.
+	if prompt.MentionsHuman(routingText) {
 		return nil
+	}
+	// A newer human instruction supersedes an older Agent result, including an
+	// explicit peer address in that stale result.
+	if sourceSeq > 0 && latestHumanSeq > sourceSeq {
+		e.notice("info", fmt.Sprintf("A newer user message superseded %s's pending handoff; the response remains visible in the room.", actor.DisplayName()))
+		return nil
+	}
+	// An explicit address is itself a handoff request. When the Agent omitted a
+	// structured HANDOFF packet, peerInputText supplies a bounded fallback from
+	// the visible response before delivery. Keep this check ahead of control
+	// markers so an incidental DONE/WAIT marker cannot swallow a direct request.
+	explicit := prompt.Mentions(routingText, actor)
+	peerTargets := explicit[:0]
+	for _, target := range explicit {
+		if target != actor {
+			peerTargets = append(peerTargets, target)
+		}
+	}
+	if len(peerTargets) > 0 {
+		if stopsConversation(control) {
+			e.notice("warning", fmt.Sprintf("%s addressed a peer while also emitting %s; the explicit recipient won.", actor.DisplayName(), control))
+		}
+		return model.NormalizeActors(peerTargets)
 	}
 
 	var target model.ActorID
@@ -2319,12 +2346,8 @@ func (e *Engine) agentTargets(actor model.ActorID, text, handoff, control string
 		e.notice("warning", fmt.Sprintf("%s requested a peer turn but current roles do not provide a valid target.", actor.DisplayName()))
 		return nil
 	}
-	if sourceSeq > 0 && latestHumanSeq > sourceSeq {
-		e.notice("info", fmt.Sprintf("A newer user message superseded %s's pending handoff; the response remains visible in the room.", actor.DisplayName()))
-		return nil
-	}
 	if !validHandoff(handoff) {
-		e.notice("warning", fmt.Sprintf("%s requested the next turn without a usable HANDOFF; the turn returned to the human.", actor.DisplayName()))
+		e.notice("warning", fmt.Sprintf("%s requested the next turn without a usable HANDOFF or explicit peer address; the turn returned to the human.", actor.DisplayName()))
 		return nil
 	}
 	return []model.ActorID{target}

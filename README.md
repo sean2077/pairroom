@@ -10,7 +10,7 @@ PairRoom 不让两个 Agent 像 IM 群聊一样并发互相唤醒。每个 Room 
 user
   -> current Agent completes one native Turn
   -> reliable terminal boundary
-  -> optional HANDOFF + NEXT
+  -> explicit @peer or HANDOFF + NEXT
   -> next Room FIFO item
 ```
 
@@ -20,7 +20,7 @@ user
 
 - **Human authority**：用户可以指定目标 Agent、覆盖后续流程、审批、取消或停止；
 - **Single owner**：两个 native runtime 不会同时拥有执行权；
-- **Explicit handoff**：普通 `@peer` 文本不会投递，Agent 交棒必须同时给出 `HANDOFF` 与 `NEXT`；
+- **Explicit handoff**：Agent 明确 `@claude`、`@codex` 或 `@peer` 即表示把回复交给该 peer；没有明确地址时，必须同时给出 `HANDOFF` 与 `NEXT`；`@human`/`@user` 则回到用户决策；
 - **Fail closed**：进程重启不自动重放内存 FIFO，避免重复执行有副作用的操作；
 - **Native harness first**：PairRoom 不重写 Claude Code 或 Codex 的工具循环与权限模型。
 

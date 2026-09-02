@@ -585,7 +585,7 @@ func TestNextHandoffCreatesReplyAndWaitsForTurnCompletion(t *testing.T) {
 	}
 }
 
-func TestPeerMentionInsideHandoffDoesNotRouteWithoutNext(t *testing.T) {
+func TestPeerMentionRoutesWithoutNext(t *testing.T) {
 	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Investigate the change", To: []model.ActorID{model.ActorClaude},
@@ -602,13 +602,64 @@ func TestPeerMentionInsideHandoffDoesNotRouteWithoutNext(t *testing.T) {
 		Text:      "Human-facing analysis is complete.\n[PAIRROOM:HANDOFF]\n" + handoff + "\n[/PAIRROOM:HANDOFF]",
 		CreatedAt: time.Now().UTC(),
 	})
+	select {
+	case got := <-adapters[model.ActorCodex].submissions:
+		t.Fatalf("peer started before the active native turn completed: %#v", got)
+	case <-time.After(100 * time.Millisecond):
+	}
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "turn-handoff-mention", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC(),
 	})
-	select {
-	case peerInput := <-adapters[model.ActorCodex].submissions:
-		t.Fatalf("plain mention started a peer turn without NEXT: %#v", peerInput)
-	case <-time.After(150 * time.Millisecond):
+	peerInput := receiveInput(t, adapters[model.ActorCodex])
+	if peerInput.From != model.ActorClaude || peerInput.ReplyTo != incoming.ID || !strings.Contains(peerInput.Text, handoff) {
+		t.Fatalf("explicit peer mention did not route with compact context: %#v", peerInput)
+	}
+}
+
+func TestPeerMentionAndNextWithoutPacketRoutes(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
+	incoming, err := engine.Send(context.Background(), SendRequest{
+		Text: "Introduce yourself to the other Agent", To: []model.ActorID{model.ActorClaude},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeFinal, TurnID: "turn-explicit-next", CorrelationID: incoming.ID,
+		Text: "I have answered. @Codex please continue.\n[PAIRROOM:NEXT]", CreatedAt: time.Now().UTC(),
+	})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "turn-explicit-next", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC()})
+	peerInput := receiveInput(t, adapters[model.ActorCodex])
+	if peerInput.To != model.ActorCodex || !strings.Contains(peerInput.Text, "please continue") {
+		t.Fatalf("explicit mention plus NEXT did not route: %#v", peerInput)
+	}
+}
+
+func TestPeerMentionWithoutPacketUsesBoundedFallback(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
+	incoming, err := engine.Send(context.Background(), SendRequest{
+		Text: "Continue the discussion", To: []model.ActorID{model.ActorClaude},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+	visible := strings.Repeat("context ", maxHandoffRunes/8+200) + "@codex please continue"
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeFinal, TurnID: "turn-fallback", CorrelationID: incoming.ID,
+		Text: visible, CreatedAt: time.Now().UTC(),
+	})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "turn-fallback", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC(),
+	})
+	peerInput := receiveInput(t, adapters[model.ActorCodex])
+	if !strings.HasPrefix(peerInput.Text, "Peer handoff from Claude Code.\n\n") {
+		t.Fatalf("missing bounded fallback prefix: %q", peerInput.Text[:min(len(peerInput.Text), 80)])
+	}
+	fallback := strings.TrimPrefix(peerInput.Text, "Peer handoff from Claude Code.\n\n")
+	if len([]rune(fallback)) != maxHandoffRunes {
+		t.Fatalf("fallback context runes = %d, want %d", len([]rune(fallback)), maxHandoffRunes)
 	}
 }
 
@@ -929,14 +980,10 @@ func TestNewUnthreadedAppendToSameAgentSuppressesStaleHandoff(t *testing.T) {
 	}
 }
 
-func TestExplicitMentionDoesNotOverrideTurnControl(t *testing.T) {
+func TestExplicitMentionRoutesBeforeGenericStop(t *testing.T) {
 	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	first, err := engine.Send(context.Background(), SendRequest{Text: "First direction", To: []model.ActorID{model.ActorClaude}})
 	if err != nil {
-		t.Fatal(err)
-	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
-	if _, err := engine.Send(context.Background(), SendRequest{Text: "Additional guidance", To: []model.ActorID{model.ActorClaude}}); err != nil {
 		t.Fatal(err)
 	}
 	_ = receiveInput(t, adapters[model.ActorClaude])
@@ -947,14 +994,13 @@ func TestExplicitMentionDoesNotOverrideTurnControl(t *testing.T) {
 		CreatedAt: time.Now().UTC(),
 	})
 	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "explicit-peer", CorrelationID: first.ID, Name: "completed", CreatedAt: time.Now().UTC()})
-	select {
-	case got := <-adapters[model.ActorCodex].submissions:
-		t.Fatalf("plain peer mention overrode DONE: %#v", got)
-	case <-time.After(150 * time.Millisecond):
+	got := receiveInput(t, adapters[model.ActorCodex])
+	if got.From != model.ActorClaude || !strings.Contains(got.Text, "review the evidence") {
+		t.Fatalf("explicit peer mention did not override generic stop marker: %#v", got)
 	}
 }
 
-func TestExplicitMentionCannotOverrideDone(t *testing.T) {
+func TestHumanMentionOverridesPeerMentionAndDone(t *testing.T) {
 	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{Text: "Review boundary", To: []model.ActorID{model.ActorCodex}})
 	if err != nil {
@@ -964,17 +1010,37 @@ func TestExplicitMentionCannotOverrideDone(t *testing.T) {
 
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorCodex, Kind: model.RuntimeFinal, CorrelationID: incoming.ID,
-		TurnID: "review-approved", Text: "Approved. @claude no further changes are needed.\n[PAIRROOM:DONE]",
+		TurnID: "review-approved", Text: "I need @human to decide; @claude should wait.\n[PAIRROOM:DONE]",
 		CreatedAt: time.Now().UTC(),
 	})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorCodex, Kind: model.RuntimeTurnCompleted, TurnID: "review-approved", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC()})
 	select {
 	case got := <-adapters[model.ActorClaude].submissions:
-		t.Fatalf("review approval routed back to Driver: %#v", got)
+		t.Fatalf("human decision request routed back to Driver: %#v", got)
 	case <-time.After(150 * time.Millisecond):
 	}
 }
 
-func TestInactiveWorkflowMetadataDoesNotRestoreMentionRouting(t *testing.T) {
+func TestUserMentionOverridesPeerMention(t *testing.T) {
+	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
+	incoming, err := engine.Send(context.Background(), SendRequest{Text: "Review boundary", To: []model.ActorID{model.ActorClaude}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeFinal, CorrelationID: incoming.ID, TurnID: "user-decision",
+		Text: "I need @user to choose between these options; @codex should wait.", CreatedAt: time.Now().UTC(),
+	})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, CorrelationID: incoming.ID, TurnID: "user-decision", Name: "completed", CreatedAt: time.Now().UTC()})
+	select {
+	case got := <-adapters[model.ActorCodex].submissions:
+		t.Fatalf("@user decision was routed to peer: %#v", got)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestInactiveWorkflowMetadataDoesNotSwallowExplicitMention(t *testing.T) {
 	engine, adapters := newTestEngine(t, model.RoutingTurns, "")
 	workflow, ok := compileWorkflow("Claude plan, Codex review")
 	if !ok {
@@ -999,10 +1065,9 @@ func TestInactiveWorkflowMetadataDoesNotRestoreMentionRouting(t *testing.T) {
 		CreatedAt: time.Now().UTC(),
 	})
 	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "stale-workflow-final", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC()})
-	select {
-	case got := <-adapters[model.ActorCodex].submissions:
-		t.Fatalf("inactive workflow restored free-chat mention routing: %#v", got)
-	case <-time.After(150 * time.Millisecond):
+	got := receiveInput(t, adapters[model.ActorCodex])
+	if got.WorkflowID != "" || got.From != model.ActorClaude {
+		t.Fatalf("inactive workflow metadata poisoned explicit mention routing: %#v", got)
 	}
 }
 
@@ -1081,8 +1146,11 @@ func TestControlMarkersAndTurnLimitGateNextHandoff(t *testing.T) {
 	if targets := engine.agentTargets(model.ActorClaude, "continue", handoff, "NEXT", 2, 1, 1, settings); len(targets) != 1 || targets[0] != model.ActorCodex {
 		t.Fatalf("NEXT should route to peer before the turn limit: %v", targets)
 	}
-	if targets := engine.agentTargets(model.ActorClaude, "@codex continue", handoff, "", 2, 1, 1, settings); len(targets) != 0 {
-		t.Fatalf("plain mention must not route a peer turn: %v", targets)
+	if targets := engine.agentTargets(model.ActorClaude, "@codex continue", handoff, "", 2, 1, 1, settings); len(targets) != 1 || targets[0] != model.ActorCodex {
+		t.Fatalf("explicit mention should route a peer turn: %v", targets)
+	}
+	if targets := engine.agentTargets(model.ActorClaude, "continue", "too short", "NEXT", 2, 1, 1, settings); len(targets) != 0 {
+		t.Fatalf("implicit NEXT without a usable handoff must remain blocked: %v", targets)
 	}
 }
 

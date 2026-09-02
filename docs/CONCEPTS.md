@@ -49,7 +49,7 @@ idle
 
 ## Handoff 与控制标记
 
-Agent 输出中的普通 `@claude`、`@codex` 或 `@peer` 只作为人类可读文本，不是路由指令。自动交棒需要：
+Agent 输出中明确的 `@claude`、`@codex` 或 `@peer` 是交给对应 peer 的路由指令；`@human` 或 `@user` 表示需要用户决策并停止自动接力。没有明确 peer 地址时，隐式自动交棒需要：
 
 ```text
 [PAIRROOM:HANDOFF]
@@ -60,8 +60,8 @@ Goal / Scope / Evidence / Risks / Exact ask
 
 收敛标记：
 
-- `NEXT`：携带有效 handoff 后交给 peer；
-- `DONE`：当前链完成，返回用户；
+- `NEXT`：在没有明确 peer 地址时，携带有效 handoff 后交给 peer；明确 `@peer` 地址本身即可请求 peer Turn；
+- `DONE`：没有直接 peer 地址时当前链完成并返回用户；直接 peer 地址仍表示交棒；
 - `WAIT`：需要用户决定；
 - `BLOCKED`：存在尚未解决的外部阻塞。
 

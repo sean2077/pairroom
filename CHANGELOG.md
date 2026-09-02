@@ -14,7 +14,7 @@
 
 ### Changed
 
-- PairRoom now uses one deterministic `turns` collaboration policy: a Room has one active Agent Turn owner, cross-Agent and `next_turn` inputs wait in a Room-level queue, and only a compact `HANDOFF` followed by `NEXT` transfers control after the current native Turn completes. Legacy `manual`/`mentions`/`roundtable` configuration values are removed and rejected; configuration and persisted Room state must use `turns`.
+- PairRoom now uses one deterministic `turns` collaboration policy: a Room has one active Agent Turn owner, cross-Agent and `next_turn` inputs wait in a Room-level queue, and an explicit peer mention or a compact `HANDOFF` followed by `NEXT` transfers control after the current native Turn completes. Legacy `manual`/`mentions`/`roundtable` configuration values are removed and rejected; configuration and persisted Room state must use `turns`.
 - The Room composer no longer offers `@All` or routing-mode controls; users choose one Agent or role, while explicit natural-language actor/action sequences remain available for plan/review/execute/audit workflows.
 - Room View batches high-volume transient Runtime telemetry (command output, logs, tool/plan/diff/usage updates) into bounded 500 ms render passes while keeping `text.delta` low-latency, and preserves Activity scroll position plus Turn-card and nested disclosure state across live re-renders.
 - Single and batch Room archive now stop the active Agent Turn by default before suspending the Runtime, so the operator no longer has to open the Room and stop the Agent first; rename, binding completion, suspend, capacity eviction, and service shutdown still never interrupt a Turn.
@@ -31,6 +31,8 @@
 
 ### Fixed
 
+- Explicit `@claude`, `@codex`, and `@peer` addresses in Agent responses now reliably hand the response to that peer after the native Turn boundary; `@human` and `@user` take precedence and leave the decision with the human. Responses without a direct address continue to require a valid `HANDOFF` with `NEXT`, and peer delivery uses the bounded response fallback when a structured packet is omitted.
+
 - A pending-new Codex binding no longer hard-fails forever with `no rollout found for thread id` when the app-server process exits between `thread/start` and the first accepted turn. Codex only persists a rollout once a turn is accepted, so the in-memory thread ID is now dropped on unexpected process exit; the next activation starts a fresh thread and materializes the binding on the first accepted turn. Existing/materialized bindings still resume exactly.
 - Codex App Server `error` notifications are now non-terminal diagnostics: they no longer fail the current input, release the Room Turn owner, or start a queued peer before the authoritative `turn/completed`; confirmed process exit emits an explicit terminal Turn boundary.
 - Cancelling a message still waiting in the Room FIFO now removes only that item without interrupting a runtime. Cancelling an input already accepted by a native runtime retains the broader native-Turn cancellation semantics while preserving later Room-queued work.
@@ -42,7 +44,7 @@
 - Mentions inside compact handoffs participate in routing, API replies inherit the replied-to Agent when no stronger target is supplied, and context-aware lifecycle serialization keeps Reviewer startup, snapshot refresh, and delivery ordered without ignoring cancelled callers.
 - Compact peer handoffs survive auditable retry instead of falling back to the full human-facing response.
 - A newer human message suppresses automatic handoff only in the same discussion thread, so independent tasks can progress concurrently.
-- Handoff-only Agent finals are retained, oversized handoffs stay within the durable limit, and staged transfer fails closed when the evidence packet is missing or control markers conflict.
+- Handoff-only Agent finals are retained, oversized handoffs stay within the durable limit, and implicit staged transfer fails closed when the evidence packet is missing or control markers conflict.
 - Reviewer snapshot refresh and role changes serialize with both participant submission paths, preventing a live Driver write from racing snapshot capture.
 - Workflow approval parsing distinguishes approval from negation, the first completed plan is revision `1`, intermediate `DONE` signals advance instead of terminating the sequence, failed current stages reopen safely on retry, Claude restores its configured role after plan-only stages, `discuss` compiles consistently with the public model, and explicitly addressed messages retain ordinary routing during an active workflow.
 - Natural workflow state advances the Store schema to `8`, so older binaries reject event logs containing the new durable `workflow.updated` projection.
