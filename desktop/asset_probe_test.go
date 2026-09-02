@@ -63,6 +63,19 @@ func TestDesktopWindowGateReplaysActionsAfterRuntimeReady(t *testing.T) {
 	}
 }
 
+func TestDesktopWindowGateDoesNotStrandSubmissionAtDrainBoundary(t *testing.T) {
+	gate := &desktopWindowGate{ready: true, draining: true}
+	if _, ok := gate.nextAction(); ok {
+		t.Fatal("empty gate returned an action")
+	}
+
+	called := false
+	gate.submit(func() { called = true })
+	if !called {
+		t.Fatal("submission after drain boundary was not dispatched")
+	}
+}
+
 func TestDesktopControllerCancelsStartupBeforeItPublishesAHost(t *testing.T) {
 	controller := &desktopController{}
 	started := make(chan struct{})

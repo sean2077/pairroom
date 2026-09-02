@@ -96,22 +96,41 @@ func (g *desktopWindowGate) markReady() {
 }
 
 func (g *desktopWindowGate) drain() {
+	completed := false
 	defer func() {
+		if completed {
+			return
+		}
+		// An action should not panic, but if it does, release ownership of the
+		// drain loop so a later submission is not permanently blocked.
 		g.mu.Lock()
 		g.draining = false
 		g.mu.Unlock()
 	}()
 	for {
-		g.mu.Lock()
-		if !g.ready || len(g.pending) == 0 {
-			g.mu.Unlock()
+		action, ok := g.nextAction()
+		if !ok {
+			completed = true
 			return
 		}
-		action := g.pending[0]
-		g.pending = g.pending[1:]
-		g.mu.Unlock()
 		action()
 	}
+}
+
+func (g *desktopWindowGate) nextAction() (func(), bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.ready || len(g.pending) == 0 {
+		// Clear the draining marker while still holding the mutex. A submit
+		// racing with the end of the queue must either be observed by this
+		// check or see draining=false and become the next drainer; clearing
+		// after unlocking can strand an action indefinitely.
+		g.draining = false
+		return nil, false
+	}
+	action := g.pending[0]
+	g.pending = g.pending[1:]
+	return action, true
 }
 
 // start launches the asynchronous host bootstrap while retaining enough
