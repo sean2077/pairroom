@@ -163,6 +163,7 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	args := append([]string(nil), c.cfg.CommandArgs...)
 	args = append(args, "app-server")
 	cmd := exec.Command(c.cfg.Command, args...)
+	configureChildProcess(cmd)
 	cmd.Dir = c.cfg.Repo
 	cmd.Env = mergeRuntimeEnv(envWithout("CODEX_INTERNAL_ORIGINATOR"), c.cfg.Env)
 	stdin, err := cmd.StdinPipe()

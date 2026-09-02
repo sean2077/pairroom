@@ -152,6 +152,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 
 func runProbeCommand(ctx context.Context, path string, args []string, actor model.ActorID) (string, error) {
 	cmd := exec.CommandContext(ctx, path, args...)
+	configureChildProcess(cmd)
 	switch actor {
 	case model.ActorClaude:
 		cmd.Env = envWithout("CLAUDECODE")

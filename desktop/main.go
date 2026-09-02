@@ -49,6 +49,71 @@ type desktopController struct {
 	shutdownStarted bool
 }
 
+// desktopWindowGate prevents the asynchronous Service bootstrap from trying
+// to execute JavaScript before Wails has created the native window. Wails'
+// WebviewWindow.ExecJS silently returns when its implementation is not ready;
+// without this gate a fast startup can leave the splash page visible forever.
+// Actions submitted before the first WindowRuntimeReady event are replayed in
+// submission order once the WebView can accept them.
+type desktopWindowGate struct {
+	mu       sync.Mutex
+	ready    bool
+	draining bool
+	pending  []func()
+}
+
+func (g *desktopWindowGate) submit(action func()) {
+	if action == nil {
+		return
+	}
+	g.mu.Lock()
+	g.pending = append(g.pending, action)
+	startDrain := g.ready && !g.draining
+	if startDrain {
+		g.draining = true
+	}
+	g.mu.Unlock()
+	if startDrain {
+		g.drain()
+	}
+}
+
+func (g *desktopWindowGate) markReady() {
+	g.mu.Lock()
+	if g.ready {
+		g.mu.Unlock()
+		return
+	}
+	g.ready = true
+	startDrain := len(g.pending) > 0 && !g.draining
+	if startDrain {
+		g.draining = true
+	}
+	g.mu.Unlock()
+	if startDrain {
+		g.drain()
+	}
+}
+
+func (g *desktopWindowGate) drain() {
+	defer func() {
+		g.mu.Lock()
+		g.draining = false
+		g.mu.Unlock()
+	}()
+	for {
+		g.mu.Lock()
+		if !g.ready || len(g.pending) == 0 {
+			g.mu.Unlock()
+			return
+		}
+		action := g.pending[0]
+		g.pending = g.pending[1:]
+		g.mu.Unlock()
+		action()
+	}
+}
+
 // start launches the asynchronous host bootstrap while retaining enough
 // lifecycle state for an early Quit to cancel and join it. A desktop user can
 // close the application while daemon discovery or Registry startup is still in
@@ -181,12 +246,17 @@ func (c *desktopController) performShutdown(done chan struct{}) {
 func main() {
 	controller := &desktopController{}
 	var window *application.WebviewWindow
+	windowGate := &desktopWindowGate{}
 
 	app := application.New(application.Options{
 		Name:        "PairRoom",
 		Description: "Claude Code and Codex local collaboration control plane",
 		Assets: application.AssetOptions{
-			Handler: application.AssetFileServerFS(frontend),
+			// BundledAssetFileServer provides the Wails runtime at
+			// /wails/runtime.js as well as the embedded startup assets. The
+			// runtime-ready event is required to safely deliver the asynchronous
+			// bootstrap result to the WebView.
+			Handler: application.BundledAssetFileServer(frontend),
 		},
 		SingleInstance: &application.SingleInstanceOptions{
 			UniqueID:      "com.sean2077.pairroom.desktop",
@@ -211,13 +281,16 @@ func main() {
 		Height:    760,
 		MinWidth:  900,
 		MinHeight: 600,
-		// AssetFileServerFS strips the single embedded frontend directory and
-		// serves its contents from the webview root.
+		// The bundled asset server strips the single embedded frontend directory
+		// and serves its contents from the webview root.
 		URL:                        "/",
 		BackgroundColour:           application.NewRGB(11, 16, 32),
 		DefaultContextMenuDisabled: true,
 		DevToolsEnabled:            false,
 		JS:                         desktopWindowBridge,
+	})
+	window.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) {
+		windowGate.markReady()
 	})
 	if runtime.GOOS == "windows" {
 		// Wails v3's Windows backend only turns WebviewWindowOptions.JS into a
@@ -268,8 +341,12 @@ func main() {
 			func(ctx context.Context) (*host.Host, error) {
 				return host.Start(ctx, host.Options{})
 			},
-			func(value *host.Host) { navigateWindow(window, value.URL()) },
-			func(err error) { showStartupError(window, err) },
+			func(value *host.Host) {
+				windowGate.submit(func() { navigateWindow(window, value.URL()) })
+			},
+			func(err error) {
+				windowGate.submit(func() { showStartupError(window, err) })
+			},
 		)
 	})
 

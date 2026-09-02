@@ -234,6 +234,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	c.mu.Unlock()
 
 	cmd := exec.Command(c.cfg.Command, args...)
+	configureChildProcess(cmd)
 	cmd.Dir = c.cfg.Repo
 	cmd.Env = mergeRuntimeEnv(envWithout("CLAUDECODE"), c.cfg.Env)
 	stdin, err := cmd.StdinPipe()
