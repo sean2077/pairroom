@@ -84,12 +84,11 @@ make smoke
 桌面模块：
 
 ```bash
-cd desktop
-go mod tidy
-go test -count=1 ./...
-python scripts/prepare-build.py
-wails3 task build
+make desktop-build
+make desktop-package
 ```
+
+`make desktop-build` 构建当前平台的桌面可执行文件，`make desktop-package` 构建当前平台的生产安装包或应用包，产物位于 `desktop/bin/`。桌面模块测试仍从 `desktop/` 目录运行：`cd desktop && go test -count=1 ./...`。
 
 `docs-check` 会校验文档链接、源码路径、CLI 参数、HTTP 路由和 JSON 配置字段，防止文档在代码继续演进后静默漂移。桌面模块使用独立的 Go toolchain 和依赖锁，不改变根模块的标准库依赖边界。
 

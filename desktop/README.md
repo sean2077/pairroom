@@ -39,6 +39,8 @@ python scripts/prepare-build.py
 wails3 task build
 ```
 
+From the repository root, the same workflows are available as `make desktop-build` and `make desktop-package`. `desktop-package` creates the production package for the current host platform under `desktop/bin/`; it requires the pinned Wails CLI and the platform packaging tools listed by the Wails toolchain. Set `DESKTOP_PYTHON` or `DESKTOP_WAILS` when those executables are not on the default command path.
+
 Run tests:
 
 ```bash

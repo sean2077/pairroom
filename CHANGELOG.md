@@ -14,6 +14,8 @@
 
 ### Changed
 
+- Root `Makefile` now exposes `desktop-build` and `desktop-package` for preparing and building the current-platform Wails desktop application from the repository root; the existing `package` target continues to build the CLI release payload.
+
 - PairRoom now uses one deterministic `turns` collaboration policy: a Room has one active Agent Turn owner, cross-Agent and `next_turn` inputs wait in a Room-level queue, and an explicit peer mention or a compact `HANDOFF` followed by `NEXT` transfers control after the current native Turn completes. Legacy `manual`/`mentions`/`roundtable` configuration values are removed and rejected; configuration and persisted Room state must use `turns`.
 - The Room composer no longer offers `@All` or routing-mode controls; users choose one Agent or role, while explicit natural-language actor/action sequences remain available for plan/review/execute/audit workflows.
 - Room View batches high-volume transient Runtime telemetry (command output, logs, tool/plan/diff/usage updates) into bounded 500 ms render passes while keeping `text.delta` low-latency, and preserves Activity scroll position plus Turn-card and nested disclosure state across live re-renders.
