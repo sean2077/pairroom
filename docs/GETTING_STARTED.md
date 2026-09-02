@@ -21,11 +21,11 @@
 从源码构建：
 
 ```bash
-cd desktop
-go mod tidy
-python scripts/prepare-build.py
-wails3 task build
+make desktop-build
+make desktop-package
 ```
+
+两个目标都针对当前主机平台运行；打包产物写入 `desktop/bin/`。如果需要单独运行桌面模块测试，可执行 `cd desktop && go test -count=1 ./...`。
 
 桌面主窗口加载的仍是现有 Management Shell，不存在独立的桌面业务状态。关闭窗口只会隐藏到托盘；使用托盘的 **Quit PairRoom** 才会退出应用。
 
