@@ -14,6 +14,9 @@ DESKTOP_PYTHON ?= $(PYTHON)
 endif
 VERSION_PKG := github.com/sean2077/pairroom/internal/version
 LDFLAGS := -s -w -X '$(VERSION_PKG).Commit=$(COMMIT)' -X '$(VERSION_PKG).BuildDate=$(BUILD_DATE)' -X '$(VERSION_PKG).LastTag=$(LAST_TAG)' -X '$(VERSION_PKG).CommitsSinceTag=$(COMMITS_SINCE_TAG)'
+# Tracked sources in this worktree only. `find .` would also scan sibling
+# `.worktrees/*` checkouts and fail `make check` on unrelated dirty files.
+GO_FILES := $(shell git ls-files -- '*.go')
 GOEXE ?= $(shell go env GOEXE)
 GOBIN ?= $(shell go env GOBIN)
 ifeq ($(strip $(GOBIN)),)
@@ -46,14 +49,14 @@ vet:
 	go vet ./...
 
 fmt:
-	gofmt -w $$(find . -name '*.go' -type f -not -path './.git/*')
+	gofmt -w $(GO_FILES)
 
 cover:
 	go test -count=1 -coverprofile=.coverage ./...
 	go tool cover -func=.coverage
 
 check: test race vet agent-contract release-contract docs-check
-	@test -z "$$(gofmt -l $$(find . -name '*.go' -type f -not -path './.git/*'))" || { echo 'Go files are not gofmt-clean'; gofmt -l $$(find . -name '*.go' -type f -not -path './.git/*'); exit 1; }
+	@test -z "$$(gofmt -l $(GO_FILES))" || { echo 'Go files are not gofmt-clean'; gofmt -l $(GO_FILES); exit 1; }
 	@if command -v node >/dev/null 2>&1; then \
 		node --check internal/server/assets/app.js && \
 		node --check internal/server/assets/room-shell.js && \
