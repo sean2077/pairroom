@@ -15,8 +15,14 @@ def allow_macos_local_networking() -> None:
     plist_path = ROOT / "build" / "darwin" / "Info.plist"
     if not plist_path.is_file():
         raise SystemExit(f"Wails did not generate the macOS plist: {plist_path}")
-    with plist_path.open("rb") as source:
-        payload = plistlib.load(source)
+    contents = plist_path.read_bytes()
+    # Wails beta.16 emits a DOCTYPE-first XML plist on a clean checkout.
+    # Apple's tools accept it, but Python's plistlib requires the XML
+    # declaration before the DOCTYPE. Add it only for that generated form;
+    # plistlib can already read declaration-first XML and binary plists.
+    if contents.lstrip().startswith(b"<!DOCTYPE plist"):
+        contents = b'<?xml version="1.0" encoding="UTF-8"?>\n' + contents.lstrip()
+    payload = plistlib.loads(contents)
     transport = payload.setdefault("NSAppTransportSecurity", {})
     transport["NSAllowsLocalNetworking"] = True
     with plist_path.open("wb") as target:
