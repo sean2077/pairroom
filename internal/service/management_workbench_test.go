@@ -30,7 +30,7 @@ func TestManagementRoomWorkbenchAssets(t *testing.T) {
 		"close?.addEventListener('pointerdown'",
 		"rememberAdjacentRoomTabFocus(tab)",
 		"pendingRoomTabFocusID = roomID",
-		"focusTarget.focus({ preventScroll: true })",
+		"focusTarget?.focus({ preventScroll: true })",
 		"event.key === 'Delete'",
 		"event.button !== 1",
 		"active.scrollIntoView",
