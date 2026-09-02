@@ -18,6 +18,12 @@ func TestManagementRoomWorkbenchAssets(t *testing.T) {
 	}
 	for _, marker := range []string{
 		"roomPickerButton.classList.add('room-workspace-picker')",
+		"action: focusGlobalSearch",
+		"paletteReturnFocus = activeElement",
+		"installRoomWorkspaceShortcuts()",
+		"event.stopImmediatePropagation()",
+		"const roomWorkspace = raw.startsWith('rooms/') && !app.hidden",
+		"skipLink.hidden = app.hidden",
 		"app.classList.toggle('room-workspace', roomWorkspace)",
 		"tab.draggable = false",
 		"target.draggable = true",
