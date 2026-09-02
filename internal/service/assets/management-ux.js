@@ -525,8 +525,9 @@
   function rememberAdjacentRoomTabFocus(tab) {
     const tabs = Array.from(roomTablist?.querySelectorAll('.room-tab') || []);
     const index = tabs.indexOf(tab);
-    const adjacent = index >= 0 ? (tabs[index + 1] || tabs[index - 1]) : null;
-    pendingRoomTabFocusID = adjacent?.dataset.roomId || '';
+    const active = tabs.find((candidate) => candidate !== tab && candidate.classList.contains('active'));
+    const target = tab.classList.contains('active') && index >= 0 ? (tabs[index + 1] || tabs[index - 1]) : active;
+    pendingRoomTabFocusID = target?.dataset.roomId || '';
   }
 
   function enhanceRoomTabs() {
