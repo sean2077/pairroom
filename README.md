@@ -1,5 +1,9 @@
 # PairRoom
 
+<p align="center">
+  <img src="docs/images/pairroom-runtime-overview.png" alt="PairRoom Room View：Claude Code 与 Codex 在同一 Room 中按 Turn 协作">
+</p>
+
 PairRoom 是一个运行在本机的 Claude Code × Codex 协作控制面。它保留两个官方 CLI 的会话、工具、审批与沙箱能力，只负责把用户、两个 Agent 和项目工作区组织成可观察、可中断、可审计的协作过程。
 
 ## 核心模型
@@ -53,12 +57,6 @@ Management Shell 打开后：
 3. 只有没有安装 daemon 时，才在当前桌面进程中启动 PairRoom Service；已安装但不可达时 fail closed，不启动第二个 Service。
 
 关闭主窗口只会隐藏到系统托盘，不会中断活动 Agent。显式退出只关闭桌面端拥有的内嵌 Service，并沿现有 native-Turn drain 边界优雅退出；外部 daemon 不受影响。构建、依赖和安装包说明见 [PairRoom Desktop](desktop/README.md)。浏览器和 CLI 入口保持完整可用。
-
-### 运行时预览
-
-下面是 PairRoom Management Shell 的实际运行时界面：可以集中查看 Project、Room、Runtime 容量与健康状态，并从同一控制面进入协作 Room。
-
-![PairRoom Management Shell 运行时概览](docs/images/pairroom-runtime-overview.png)
 
 ## 文档入口
 
