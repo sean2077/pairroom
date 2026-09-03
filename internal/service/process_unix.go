@@ -17,7 +17,7 @@ func serviceLockProcessAlive(pid int) (bool, error) {
 		return false, nil
 	}
 	if err := process.Signal(syscall.Signal(0)); err != nil {
-		if errors.Is(err, syscall.ESRCH) {
+		if errors.Is(err, syscall.ESRCH) || errors.Is(err, os.ErrProcessDone) {
 			return false, nil
 		}
 		if errors.Is(err, syscall.EPERM) {
