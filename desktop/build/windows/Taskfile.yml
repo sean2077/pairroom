@@ -24,12 +24,17 @@ tasks:
       - cmd: rm -f *.syso
         platforms: [linux, darwin]
     vars:
-      BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags production -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui"{{else}}-buildvcs=false -gcflags=all="-l"{{end}}'
+      # Default and production Windows builds are GUI-subsystem so launching
+      # bin/PairRoom.exe does not allocate a log console. CONSOLE=true keeps
+      # the console-subsystem binary for developer stdout.
+      GUI_LDFLAG: '{{if eq .CONSOLE "true"}}{{else}} -H windowsgui{{end}}'
+      BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags production -trimpath -buildvcs=false -ldflags="-w -s{{.GUI_LDFLAG}}"{{else}}-buildvcs=false -gcflags=all="-l" -ldflags="{{.GUI_LDFLAG}}"{{end}}'
     env:
       GOOS: windows
       CGO_ENABLED: 0
       GOARCH: '{{.ARCH | default ARCH}}'
       PRODUCTION: '{{.PRODUCTION | default "false"}}'
+      CONSOLE: '{{.CONSOLE | default "false"}}'
 
   package:
     summary: Packages a production build of the application into a `.exe` bundle

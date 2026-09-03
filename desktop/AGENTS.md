@@ -19,6 +19,7 @@ This contract applies under `desktop/`. Read it together with the repository roo
 - `python scripts/prepare-build.py` refreshes templated metadata and icon assets from the pinned Wails CLI. Generated plist, desktop, nfpm, icon, NSIS helper, `bin/`, and `dist/` outputs remain untracked through `.gitignore`.
 - `build/config.yml`, `build/Taskfile.yml`, `Taskfile.yml`, and the scripts under `scripts/` are maintained source.
 - Keep the startup page minimal. Product UI changes belong to the existing embedded PairRoom Web assets, not `desktop/frontend/`.
+- Windows `wails3 task build` must stay GUI-subsystem (`-H windowsgui`) so `bin/PairRoom.exe` does not allocate a log console. `CONSOLE=true` is the explicit diagnostic exception.
 
 ## Verification
 
