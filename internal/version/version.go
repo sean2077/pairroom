@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	Current     = "1.1.0"
+	Current     = "1.2.0"
 	StoreSchema = 8
 )
 

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v1.2.0] — 2026-09-03
+
 ### Added
 
 - Management Shell is now a Room workbench: Project → Room sidebar tree, in-app Room tabs, a same-origin Room surface gateway, Settings-adjustable Runtime capacity (default 8), system-browser open, and copy of materialized Claude Session / Codex Thread IDs.
