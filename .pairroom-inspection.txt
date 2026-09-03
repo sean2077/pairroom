@@ -16,11 +16,12 @@
 .claude/settings.json	758
 .codex/hooks.json	864
 .gitattributes	402
-.github/workflows/_agent-inspect.yml	3223
+.github/workflows/_agent-inspect.yml	3588
 .github/workflows/ci.yml	6274
 .github/workflows/desktop-wails.yml	5526
 .github/workflows/release.yml	2187
 .gitignore	138
+.pairroom-inspection.txt	319299
 AGENTS.md	10347
 CHANGELOG.md	29710
 CLAUDE.md	10347
