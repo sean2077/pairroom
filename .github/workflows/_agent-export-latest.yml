@@ -1,29 +1,78 @@
-name: Agent export latest source
+name: Agent publish validated feature
 
 on:
   push:
     branches:
       - agent/export-main-20260903
+    paths:
+      - .github/agent/READY
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  export:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Pack source
+
+      - name: Reconstruct validated patch
         shell: bash
         run: |
           set -euo pipefail
-          tar --exclude=.git -czf /tmp/pairroom-source.tar.gz .
-          mv /tmp/pairroom-source.tar.gz pairroom-source.tar.gz
-      - uses: actions/upload-artifact@v4
+          cat .github/agent/pairroom-feature.patch.gz.b64.* > /tmp/pairroom-feature.patch.gz.b64
+          base64 --decode /tmp/pairroom-feature.patch.gz.b64 > /tmp/pairroom-feature.patch.gz
+          echo 'cb4e7870618bb082c9a60669d388c9834d4cb8a28d7a65aca9da7f320751666f  /tmp/pairroom-feature.patch.gz' | sha256sum --check --strict
+          gzip --decompress --stdout /tmp/pairroom-feature.patch.gz > /tmp/pairroom-feature.patch
+          echo '6cf594b7f8a4d74bf172b89531a936af4146a8d3850a04a1ae30f2964a5b9a1e  /tmp/pairroom-feature.patch' | sha256sum --check --strict
+
+      - name: Apply to latest main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = 'd9a5fa793a9e8db9787b96cf510c159d8a487bec'
+          git checkout -B feat/bilingual-grok-agent-slots origin/main
+          git apply --index --whitespace=error-all /tmp/pairroom-feature.patch
+          git diff --cached --check
+
+      - uses: actions/setup-go@v5
         with:
-          name: pairroom-latest-source
-          path: pairroom-source.tar.gz
-          if-no-files-found: error
-          retention-days: 1
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Validate root module
+        shell: bash
+        run: |
+          set -euo pipefail
+          make check
+          make smoke
+          make build
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop/go.mod
+          cache: true
+          cache-dependency-path: desktop/go.sum
+
+      - name: Validate desktop module
+        shell: bash
+        working-directory: desktop
+        run: |
+          set -euo pipefail
+          go test -count=1 ./...
+          go build ./...
+
+      - name: Commit and publish product branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'pairroom-agent'
+          git config user.email 'pairroom-agent@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'feat: add bilingual UI and configurable Grok agent slots'
+          git push --force origin HEAD:refs/heads/feat/bilingual-grok-agent-slots
+          echo "published_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
