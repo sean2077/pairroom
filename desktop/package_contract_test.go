@@ -45,4 +45,7 @@ func TestWindowsInstallerShipsPairroomCLI(t *testing.T) {
 	if strings.Contains(string(workflow), "wails3 task windows:build") {
 		t.Fatal("desktop CI must not build a standalone Windows PairRoom.exe artifact")
 	}
+	if !strings.Contains(string(workflow), `startsWith(github.ref, 'refs/tags/v')`) {
+		t.Fatal("desktop packaging must run only on version tags or workflow_dispatch")
+	}
 }

@@ -30,7 +30,7 @@
 
 如果桌面启动提示 `service.lock` 冲突，先执行 `pairroom daemon status`。确认状态为 stopped 且锁中记录的 PID 已经不存在后，再执行 `pairroom daemon start --recover-stale-lock`；桌面端不会替用户删除锁或强行抢占数据根。
 
-工作流产物是 unsigned CI builds。Windows code signing、Apple Developer ID signing 与 notarization 必须在生产 release 环境中真实执行后才能宣称已签名。
+桌面安装包只在 `v*` 发版标签（或手动 `workflow_dispatch`）构建；pull request 与 `main` 只跑 desktop 模块校验。这些包默认仍是 unsigned；Windows code signing、Apple Developer ID signing 与 notarization 必须在生产 release 环境中真实执行后才能宣称已签名。
 
 ## 日常检查
 

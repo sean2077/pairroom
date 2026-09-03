@@ -16,6 +16,7 @@
 
 ### Changed
 
+- Desktop installer and app-bundle CI runs only for `v*` version tags (and manual `workflow_dispatch`). Pull requests and `main` still verify the desktop module without producing packages.
 - Default `--runtime-limit` is 8 (was 2). Management Settings can change the live capacity without restart; lowering it still never interrupts a busy Turn.
 - Desktop startup now treats an installed daemon as the single Service owner: it starts and connects to a stopped daemon, reports actionable lock diagnostics when that daemon is unavailable, and only creates an embedded Service when no daemon installation exists. Daemon install publishes metadata before the platform task starts; `daemon status` reports lock-owner liveness; `--recover-stale-lock` refuses a live PID and moves the stale lock aside before deleting it so a replacement owner is not removed.
 

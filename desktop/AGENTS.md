@@ -33,4 +33,4 @@ python scripts/prepare-build.py
 wails3 task build
 ```
 
-The dedicated GitHub workflow is authoritative for Linux, Windows, macOS arm64, and macOS amd64 packaging. Do not claim signed or notarized production installers unless the corresponding platform signing steps actually ran.
+The dedicated GitHub workflow verifies the desktop module on pull requests and `main`. Linux, Windows, macOS arm64, and macOS amd64 packaging runs only for `v*` tags (or manual `workflow_dispatch`). Do not claim signed or notarized production installers unless the corresponding platform signing steps actually ran.

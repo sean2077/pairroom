@@ -18,6 +18,7 @@ on:
       - 'go.mod'
       - 'go.sum'
       - 'internal/**'
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -71,6 +72,8 @@ jobs:
 
   package:
     name: Package ${{ matrix.label }}
+    # Installers and app bundles are release artifacts, not PR/main CI output.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
     needs: verify
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
