@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "git -c \"alias.agent-scaffold-hook=!sh .agents/tools/hooks/hook-launcher.sh .agents/tools/hooks/trunk_edit_guard.sh\" agent-scaffold-hook"
+            "command": "git -c \"alias.agent-scaffold-hook=!sh .agents/tools/hooks/hook-launcher.sh .agents/tools/hooks/trunk_edit_guard.sh\" agent-scaffold-hook",
+            "timeout": 30
           }
         ]
       }
@@ -17,7 +18,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "git -c \"alias.agent-scaffold-hook=!sh .agents/tools/hooks/hook-launcher.sh .agents/tools/hooks/authority_doc_budget.sh\" agent-scaffold-hook"
+            "command": "git -c \"alias.agent-scaffold-hook=!sh .agents/tools/hooks/hook-launcher.sh .agents/tools/hooks/authority_doc_budget.sh\" agent-scaffold-hook",
+            "timeout": 30
           }
         ]
       }
