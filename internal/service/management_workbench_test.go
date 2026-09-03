@@ -24,6 +24,7 @@ func TestManagementRoomWorkbenchAssets(t *testing.T) {
 		"event.stopImmediatePropagation()",
 		"const roomWorkspace = raw.startsWith('rooms/') && !app.hidden",
 		"skipLink.hidden = app.hidden",
+		"function activateSkipLink(event)",
 		"app.classList.toggle('room-workspace', roomWorkspace)",
 		"tab.draggable = false",
 		"target.draggable = true",

@@ -59,8 +59,20 @@
     link.className = 'management-skip-link';
     link.href = '#view';
     link.textContent = '跳到页面内容';
+    link.addEventListener('click', activateSkipLink);
     document.body.prepend(link);
     return link;
+  }
+
+  function activateSkipLink(event) {
+    // The shell routes on location.hash. Native anchor navigation would rewrite the
+    // hash (e.g. to #room-stage) and the router would interpret that as a route
+    // change, dropping the user out of the Room. Move focus to the target directly.
+    event.preventDefault();
+    const target = document.querySelector(skipLink.getAttribute('href'));
+    if (!(target instanceof HTMLElement)) return;
+    target.focus({ preventScroll: true });
+    target.scrollIntoView({ block: 'start', behavior: reducedMotion() ? 'auto' : 'smooth' });
   }
 
   function installSyncLine() {
