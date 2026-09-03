@@ -165,7 +165,7 @@ func (s *Server) deleteBrowserSession(w http.ResponseWriter, r *http.Request) {
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":         true,
-		"version":    version.Current,
+		"version":    version.Describe(),
 		"commit":     version.Commit,
 		"build_date": version.BuildDate,
 		"time":       time.Now().UTC(),

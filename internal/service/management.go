@@ -245,7 +245,7 @@ func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
 	}
 	healthErr := s.registry.Healthy()
 	payload := ServiceSnapshot{
-		Version: version.Current, Commit: version.Commit, BuildDate: version.BuildDate,
+		Version: version.Describe(), Commit: version.Commit, BuildDate: version.BuildDate,
 		DataRoot: s.registry.Root(), GeneratedAt: time.Now().UTC(),
 		Projects: registry.Projects, Rooms: registry.Rooms, Runtimes: runtimes,
 		RuntimePolicy: s.runtimes.Policy(),

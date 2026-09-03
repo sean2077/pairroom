@@ -15,7 +15,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -187,32 +186,10 @@ func runVersion(args []string) error {
 	return nil
 }
 
-// versionSummary renders the human-readable version line. Git metadata is
-// injected at build time; binaries built without it fall back to the bare
-// version instead of advertising placeholder values.
+// versionSummary renders the human-readable version line as the most recent
+// tag plus commit count and short SHA (e.g. "pairroom v1.1.0+116.21517d1").
 func versionSummary() string {
-	var parts []string
-	if commit := version.Commit; commit != "" && commit != "dev" {
-		parts = append(parts, "commit "+shortCommit(commit))
-	}
-	if count, err := strconv.Atoi(version.CommitsSinceTag); err == nil && version.LastTag != "" && version.LastTag != "unknown" {
-		noun := "commits"
-		if count == 1 {
-			noun = "commit"
-		}
-		parts = append(parts, fmt.Sprintf("%d %s since %s", count, noun, version.LastTag))
-	}
-	if len(parts) == 0 {
-		return "pairroom " + version.Current
-	}
-	return fmt.Sprintf("pairroom %s (%s)", version.Current, strings.Join(parts, ", "))
-}
-
-func shortCommit(commit string) string {
-	if len(commit) > 12 {
-		return commit[:12]
-	}
-	return commit
+	return "pairroom " + version.Describe()
 }
 
 func copyRuntimeEnv(source map[string]string) map[string]string {
@@ -362,7 +339,7 @@ func runService(args []string) (resultErr error) {
 		return fmt.Errorf("listen for Management Shell: %w", err)
 	}
 	managementURL := management.BrowserURL(listener.Addr())
-	fmt.Printf("PairRoom Service %s\n", version.Current)
+	fmt.Printf("PairRoom Service %s\n", version.Describe())
 	fmt.Printf("  management: %s\n", managementURL)
 	fmt.Printf("  data root:  %s\n", registry.Root())
 	fmt.Printf("  runtimes:   %d active maximum, idle timeout %s\n", *limitFlag, idleFlag.String())
@@ -548,7 +525,7 @@ func runServe(args []string) error {
 	}
 
 	roomURL := browserURL(*listenFlag, token)
-	fmt.Printf("PairRoom %s\n", version.Current)
+	fmt.Printf("PairRoom %s\n", version.Describe())
 	fmt.Printf("  room: %s\n", roomURL)
 	fmt.Printf("  repo: %s\n", repo)
 	fmt.Printf("  data: %s\n", dataDir)
@@ -634,7 +611,7 @@ func runDoctor(args []string) error {
 	}
 
 	report := doctorReport{
-		PairRoom: version.Current,
+		PairRoom: version.Describe(),
 		OS:       runtime.GOOS + "/" + runtime.GOARCH,
 		Repo:     repo,
 		Git:      probeCommand("git", "--version"),
