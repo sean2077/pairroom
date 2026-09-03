@@ -48,4 +48,13 @@ func TestWindowsInstallerShipsPairroomCLI(t *testing.T) {
 	if !strings.Contains(string(workflow), `startsWith(github.ref, 'refs/tags/v')`) {
 		t.Fatal("desktop packaging must run only on version tags or workflow_dispatch")
 	}
+	if !strings.Contains(string(workflow), "gh release upload") {
+		t.Fatal("desktop packages must be attached to the GitHub Release")
+	}
+	if !strings.Contains(script, "pairroom-desktop-v") {
+		t.Fatal("published desktop files must use the pairroom-desktop- prefix")
+	}
+	if !strings.Contains(script, "-setup.exe") {
+		t.Fatal("Windows desktop release files must use -setup.exe so they are not confused with the CLI .exe")
+	}
 }

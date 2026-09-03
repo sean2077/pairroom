@@ -76,6 +76,7 @@ agent-contract:
 
 release-contract:
 	"$(PYTHON)" scripts/test_extract_changelog.py
+	bash scripts/test_install.sh
 	@notes="$$(mktemp)"; trap 'rm -f "$$notes"' 0 1 2 3 15; \
 		"$(PYTHON)" scripts/extract-changelog.py --changelog CHANGELOG.md --tag "v$(VERSION)" --output "$$notes"; \
 		test -s "$$notes"

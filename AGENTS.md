@@ -28,7 +28,7 @@ PairRoom is a local Go coordination layer for the official Claude Code and Codex
 - Do not claim real Claude Code/Codex runtime E2E unless both official CLIs were installed, authenticated, and actually exercised; Mock verification is reported separately.
 - `VERSION`, `internal/version.Current`, the exact `vX.Y.Z` tag, and the canonical `CHANGELOG.md` heading `## [vX.Y.Z] — YYYY-MM-DD` must agree.
 - `.github/workflows/ci.yml` must retain the supported Linux amd64, Windows amd64, macOS arm64, and macOS amd64 binaries as uniquely named checksummed workflow artifacts, then re-download and verify the complete set before CI is green.
-- `.github/workflows/release.yml` owns publication: it validates/extracts changelog notes, builds and verifies artifacts, creates the GitHub Release, then downloads and rechecks the published payload.
+- `.github/workflows/release.yml` owns publication: it validates/extracts changelog notes, builds and verifies CLI artifacts, creates the GitHub Release, then downloads and rechecks the published CLI payload. The desktop workflow attaches `pairroom-desktop-*` setup/app packages to that same Release on `v*` tags.
 
 ## Navigation
 

@@ -14,6 +14,15 @@
 
 ## 2. 选择启动入口
 
+### CLI 安装
+
+```bash
+curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh | sh
+pairroom service --mock
+```
+
+Windows 下载 `pairroom-cli-vX.Y.Z-windows-amd64.exe`；桌面安装包是 `pairroom-desktop-vX.Y.Z-windows-amd64-setup.exe`。
+
 ### PairRoom Desktop
 
 安装对应平台的桌面 package 后直接启动 PairRoom。桌面 Host 会先验证并复用显式 Management URL；发现已安装 daemon 时会启动或连接它。安装包内含 `pairroom` CLI：如果还没有 daemon，桌面端会用这份 CLI 安装并连接，而不是只留下一个没有 `pairroom` 的 `PairRoom.exe`。已安装 daemon 但不可达时，桌面端会停止并显示修复信息，不会启动第二个 Service。无捆绑 CLI 的源码/测试入口仍可在没有 daemon 时启动内嵌 Service。

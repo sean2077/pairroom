@@ -67,24 +67,25 @@ build() {
   CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -buildvcs=false -trimpath -ldflags="$LDFLAGS" -o "$DIST/$output" ./cmd/pairroom
 }
 
-build linux amd64 "pairroom-v${VERSION}-linux-amd64"
-build windows amd64 "pairroom-v${VERSION}-windows-amd64.exe"
-build darwin arm64 "pairroom-v${VERSION}-darwin-arm64"
-build darwin amd64 "pairroom-v${VERSION}-darwin-amd64"
+build linux amd64 "pairroom-cli-v${VERSION}-linux-amd64"
+build windows amd64 "pairroom-cli-v${VERSION}-windows-amd64.exe"
+build darwin arm64 "pairroom-cli-v${VERSION}-darwin-arm64"
+build darwin amd64 "pairroom-cli-v${VERSION}-darwin-amd64"
 
 git archive --format=tar.gz --prefix="pairroom-v${VERSION}/" -o "$DIST/pairroom-v${VERSION}-source.tar.gz" "$COMMIT"
 git archive --format=zip --prefix="pairroom-v${VERSION}/" -o "$DIST/pairroom-v${VERSION}-source.zip" "$COMMIT"
 cp "$NOTES_TMP" "$DIST/RELEASE_NOTES.md"
+cp "$ROOT/scripts/install.sh" "$DIST/install.sh"
 
 go run ./scripts/releasemeta.go --dist "$DIST" --version "$VERSION" --commit "$COMMIT" --build-date "$BUILD_DATE"
 
 HOST_GOOS=$(go env GOOS)
 HOST_GOARCH=$(go env GOARCH)
 case "${HOST_GOOS}/${HOST_GOARCH}" in
-  linux/amd64) HOST_BINARY="$DIST/pairroom-v${VERSION}-linux-amd64" ;;
-  windows/amd64) HOST_BINARY="$DIST/pairroom-v${VERSION}-windows-amd64.exe" ;;
-  darwin/arm64) HOST_BINARY="$DIST/pairroom-v${VERSION}-darwin-arm64" ;;
-  darwin/amd64) HOST_BINARY="$DIST/pairroom-v${VERSION}-darwin-amd64" ;;
+  linux/amd64) HOST_BINARY="$DIST/pairroom-cli-v${VERSION}-linux-amd64" ;;
+  windows/amd64) HOST_BINARY="$DIST/pairroom-cli-v${VERSION}-windows-amd64.exe" ;;
+  darwin/arm64) HOST_BINARY="$DIST/pairroom-cli-v${VERSION}-darwin-arm64" ;;
+  darwin/amd64) HOST_BINARY="$DIST/pairroom-cli-v${VERSION}-darwin-amd64" ;;
   *)
     echo "release verification does not build a host binary for ${HOST_GOOS}/${HOST_GOARCH}" >&2
     exit 1

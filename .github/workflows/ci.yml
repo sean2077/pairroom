@@ -78,7 +78,7 @@ jobs:
           build_date="$(git show -s --format=%cI "${COMMIT}")"
           last_tag="$(git describe --tags --abbrev=0 2>/dev/null || printf unknown)"
           commits_since_tag="$(git rev-list "${last_tag}..HEAD" --count 2>/dev/null || printf unknown)"
-          filename="pairroom-v${version}-${TARGET_GOOS}-${TARGET_GOARCH}${TARGET_EXTENSION}"
+          filename="pairroom-cli-v${version}-${TARGET_GOOS}-${TARGET_GOARCH}${TARGET_EXTENSION}"
           mkdir -p dist/ci
           CGO_ENABLED=0 GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" \
             go build -buildvcs=false -trimpath \
@@ -100,7 +100,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
-          name: pairroom-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: pairroom-cli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
             dist/ci/${{ steps.artifact.outputs.filename }}
             dist/ci/${{ steps.artifact.outputs.filename }}.sha256
@@ -118,7 +118,7 @@ jobs:
       - name: Download all platform artifacts
         uses: actions/download-artifact@v8
         with:
-          pattern: pairroom-*
+          pattern: pairroom-cli-*
           path: dist/ci
           merge-multiple: true
       - name: Verify names, checksums, formats, and build metadata
@@ -138,7 +138,7 @@ jobs:
             "darwin-arm64" \
             "darwin-amd64"
           do
-            filename="pairroom-v${version}-${target}"
+            filename="pairroom-cli-v${version}-${target}"
             printf '%s\n%s\n' "${filename}" "${filename}.sha256" >> "${expected}"
           done
           LC_ALL=C sort -o "${expected}" "${expected}"
@@ -148,13 +148,13 @@ jobs:
           for checksum in dist/ci/*.sha256; do
             (cd dist/ci && sha256sum -c "$(basename "${checksum}")")
           done
-          file "dist/ci/pairroom-v${version}-linux-amd64" | grep -Fq 'ELF 64-bit'
-          file "dist/ci/pairroom-v${version}-windows-amd64.exe" | grep -Fq 'PE32+'
-          file "dist/ci/pairroom-v${version}-darwin-arm64" | grep -Fq 'Mach-O 64-bit arm64'
-          file "dist/ci/pairroom-v${version}-darwin-amd64" | grep -Fq 'Mach-O 64-bit x86_64'
+          file "dist/ci/pairroom-cli-v${version}-linux-amd64" | grep -Fq 'ELF 64-bit'
+          file "dist/ci/pairroom-cli-v${version}-windows-amd64.exe" | grep -Fq 'PE32+'
+          file "dist/ci/pairroom-cli-v${version}-darwin-arm64" | grep -Fq 'Mach-O 64-bit arm64'
+          file "dist/ci/pairroom-cli-v${version}-darwin-amd64" | grep -Fq 'Mach-O 64-bit x86_64'
 
-          chmod +x "dist/ci/pairroom-v${version}-linux-amd64"
-          "dist/ci/pairroom-v${version}-linux-amd64" version --json > "${RUNNER_TEMP}/version-check.json"
+          chmod +x "dist/ci/pairroom-cli-v${version}-linux-amd64"
+          "dist/ci/pairroom-cli-v${version}-linux-amd64" version --json > "${RUNNER_TEMP}/version-check.json"
           python3 - "${RUNNER_TEMP}/version-check.json" "${version}" "${COMMIT}" "${build_date}" <<'PY'
           import json
           import pathlib

@@ -168,3 +168,48 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+
+  publish:
+    name: Attach desktop packages to GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: pairroom-desktop-*
+          path: desktop-dist
+      - name: Wait for GitHub Release and upload desktop packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          for i in $(seq 1 90); do
+            if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              break
+            fi
+            if [ "${i}" -eq 90 ]; then
+              echo "GitHub Release ${tag} was not created in time" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          mapfile -t files < <(find desktop-dist -type f -name 'pairroom-desktop-*')
+          test "${#files[@]}" -gt 0
+          gh release upload "${tag}" "${files[@]}" --repo "${GITHUB_REPOSITORY}" --clobber
+          published="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
+          for required in \
+            "pairroom-desktop-v${version}-windows-amd64-setup.exe" \
+            "pairroom-desktop-v${version}-linux-amd64.AppImage" \
+            "pairroom-desktop-v${version}-linux-amd64.deb" \
+            "pairroom-desktop-v${version}-darwin-arm64.app.zip" \
+            "pairroom-desktop-v${version}-darwin-amd64.app.zip"
+          do
+            printf '%s\n' "${published}" | grep -Fxq "${required}"
+          done
+          echo "attached ${#files[@]} desktop package(s) to ${tag}"
