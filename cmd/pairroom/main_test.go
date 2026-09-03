@@ -54,12 +54,12 @@ func TestVersionSummaryIncludesGitMetadata(t *testing.T) {
 	version.Commit = "44b6a7a1234567890abcdef1234567890abcdef12"
 	version.LastTag = "v1.1.0"
 	version.CommitsSinceTag = "8"
-	want := "pairroom " + version.Current + " (commit 44b6a7a12345, 8 commits since v1.1.0)"
+	want := "pairroom v1.1.0+8.44b6a7a"
 	if got := versionSummary(); got != want {
 		t.Fatalf("versionSummary()=%q want %q", got, want)
 	}
 	version.CommitsSinceTag = "1"
-	want = "pairroom " + version.Current + " (commit 44b6a7a12345, 1 commit since v1.1.0)"
+	want = "pairroom v1.1.0+1.44b6a7a"
 	if got := versionSummary(); got != want {
 		t.Fatalf("versionSummary()=%q want %q", got, want)
 	}
@@ -73,7 +73,7 @@ func TestVersionSummaryFallsBackToBareVersion(t *testing.T) {
 	version.Commit = "dev"
 	version.LastTag = "unknown"
 	version.CommitsSinceTag = "unknown"
-	want := "pairroom " + version.Current
+	want := "pairroom v" + version.Current
 	if got := versionSummary(); got != want {
 		t.Fatalf("versionSummary()=%q want %q", got, want)
 	}

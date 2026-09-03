@@ -1,5 +1,10 @@
 package version
 
+import (
+	"fmt"
+	"strconv"
+)
+
 const (
 	Current     = "1.1.0"
 	StoreSchema = 8
@@ -29,4 +34,26 @@ func BuildInfo() Info {
 		Version: Current, Commit: Commit, BuildDate: BuildDate,
 		LastTag: LastTag, CommitsSinceTag: CommitsSinceTag, StoreSchema: StoreSchema,
 	}
+}
+
+// Describe renders the display version as the most recent tag combined with
+// the commit count since that tag and the short commit SHA, e.g.
+// "v1.1.0+116.21517d1". Binaries built without git metadata fall back to the
+// bare tag. Current remains the canonical semver for protocol/compat use.
+func Describe() string {
+	tag := LastTag
+	if tag == "" || tag == "unknown" {
+		tag = "v" + Current
+	}
+	if Commit == "" || Commit == "dev" {
+		return tag
+	}
+	sha := Commit
+	if len(sha) > 7 {
+		sha = sha[:7]
+	}
+	if n, err := strconv.Atoi(CommitsSinceTag); err == nil && n > 0 {
+		return fmt.Sprintf("%s+%d.%s", tag, n, sha)
+	}
+	return tag + "+" + sha
 }
