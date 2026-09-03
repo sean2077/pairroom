@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/sean2077/pairroom/internal/execx"
 )
 
 const (
@@ -23,6 +25,7 @@ type taskSchedulerManager struct{}
 
 var runPowerShell = func(script string) (string, error) {
 	command := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference = 'Stop'\n"+script)
+	execx.NoConsole(command)
 	output, err := command.CombinedOutput()
 	return strings.TrimSpace(string(output)), err
 }

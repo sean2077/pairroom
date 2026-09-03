@@ -1,22 +1,22 @@
 //go:build windows
 
-package agent
+package execx
 
 import (
 	"os/exec"
 	"syscall"
 )
 
-// CREATE_NO_WINDOW prevents Windows from allocating a console for a
+// createNoWindow prevents Windows from allocating a console for a
 // console-subsystem child. HideWindow alone only requests SW_HIDE and still
 // permits a console/pseudo-console host to be created by command wrappers.
 const createNoWindow = 0x08000000
 
-// configureChildProcess keeps native Agent CLIs out of the taskbar while
-// retaining their redirected standard streams for the JSON protocols. The
-// desktop host is a GUI process, so Windows otherwise creates a visible
-// console/pseudo-console window for console-subsystem children.
-func configureChildProcess(cmd *exec.Cmd) {
+// NoConsole keeps captured console-subsystem children (native Agent CLIs, git,
+// PowerShell scripts) from flashing a console window when the service itself
+// runs without one (e.g. under Task Scheduler). Redirected standard streams are
+// retained, so JSON protocols and captured output keep working.
+func NoConsole(cmd *exec.Cmd) {
 	if cmd == nil {
 		return
 	}
