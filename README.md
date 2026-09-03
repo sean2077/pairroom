@@ -28,6 +28,23 @@ user
 - **Fail closed**：进程重启不自动重放内存 FIFO，避免重复执行有副作用的操作；
 - **Native harness first**：PairRoom 不重写 Claude Code 或 Codex 的工具循环与权限模型。
 
+## 安装
+
+CLI（Linux / macOS / Git Bash）：
+
+```bash
+curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh | sh
+```
+
+Windows PowerShell：
+
+```powershell
+$tag = (Invoke-RestMethod https://api.github.com/repos/sean2077/pairroom/releases/latest).tag_name
+curl.exe -fsSL -o pairroom.exe "https://github.com/sean2077/pairroom/releases/download/$tag/pairroom-cli-$tag-windows-amd64.exe"
+```
+
+Release 资产按前缀区分：`pairroom-cli-vX.Y.Z-…` 是命令行，`pairroom-desktop-vX.Y.Z-…` 是桌面包。Windows 桌面是 `-setup.exe`（与 CLI 的 `.exe` 区分）；Linux 用 `.deb` / `.AppImage`，macOS 用 `.app.zip`。
+
 ## 快速体验
 
 只验证 PairRoom 本身，不启动真实 Agent：

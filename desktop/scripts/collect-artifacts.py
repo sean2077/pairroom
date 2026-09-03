@@ -27,6 +27,23 @@ def require_packages(paths: list[pathlib.Path], description: str) -> list[pathli
     return result
 
 
+def release_filename(version: str, platform: str, arch: str, source: pathlib.Path) -> str:
+    version = version.lstrip("v")
+    name = source.name
+    if platform == "windows":
+        # Windows CLI is also .exe, so the setup marker is required.
+        return f"pairroom-desktop-v{version}-windows-{arch}-setup.exe"
+    if platform == "linux":
+        if name.endswith(".AppImage"):
+            return f"pairroom-desktop-v{version}-linux-{arch}.AppImage"
+        if name.endswith(".deb"):
+            return f"pairroom-desktop-v{version}-linux-{arch}.deb"
+        raise SystemExit(f"unrecognized Linux package name: {name}")
+    if platform == "darwin":
+        return f"pairroom-desktop-v{version}-darwin-{arch}.app.zip"
+    raise SystemExit(f"unsupported platform {platform!r}")
+
+
 def collect(platform: str) -> list[pathlib.Path]:
     binary_dir = ROOT / "bin"
     if platform == "linux":
@@ -98,10 +115,11 @@ def main() -> int:
         shutil.rmtree(destination)
     destination.mkdir(parents=True)
 
+    version = (REPOSITORY / "VERSION").read_text(encoding="utf-8").strip()
     packages = []
     checksum_lines = []
     for source in collect(args.platform):
-        target = destination / source.name
+        target = destination / release_filename(version, args.platform, args.arch, source)
         shutil.copy2(source, target)
         sha256 = digest(target)
         checksum_lines.append(f"{sha256}  {target.name}")
@@ -115,7 +133,7 @@ def main() -> int:
     manifest = {
         "product": "PairRoom",
         "framework": "Wails v3",
-        "version": (REPOSITORY / "VERSION").read_text(encoding="utf-8").strip(),
+        "version": version,
         "platform": args.platform,
         "arch": args.arch,
         "artifact": args.label,

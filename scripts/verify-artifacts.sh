@@ -9,14 +9,15 @@ VERSION=${VERSION:-$(tr -d '\r\n' < VERSION)}
 DIST=${DIST:-dist}
 
 required=(
-  "pairroom-v${VERSION}-linux-amd64"
-  "pairroom-v${VERSION}-windows-amd64.exe"
-  "pairroom-v${VERSION}-darwin-arm64"
-  "pairroom-v${VERSION}-darwin-amd64"
+  "pairroom-cli-v${VERSION}-linux-amd64"
+  "pairroom-cli-v${VERSION}-windows-amd64.exe"
+  "pairroom-cli-v${VERSION}-darwin-arm64"
+  "pairroom-cli-v${VERSION}-darwin-amd64"
   "pairroom-v${VERSION}-source.tar.gz"
   "pairroom-v${VERSION}-source.zip"
   "pairroom-v${VERSION}-SBOM.spdx.json"
   "pairroom-v${VERSION}-provenance.json"
+  "install.sh"
   "RELEASE_NOTES.md"
   "version-check.json"
   "SHA256SUMS"
@@ -26,10 +27,10 @@ for name in "${required[@]}"; do
 done
 
 (cd "$DIST" && sha256sum -c SHA256SUMS)
-file "$DIST/pairroom-v${VERSION}-linux-amd64" | grep -q 'ELF 64-bit'
-file "$DIST/pairroom-v${VERSION}-windows-amd64.exe" | grep -q 'PE32+'
-file "$DIST/pairroom-v${VERSION}-darwin-arm64" | grep -q 'Mach-O 64-bit arm64'
-file "$DIST/pairroom-v${VERSION}-darwin-amd64" | grep -q 'Mach-O 64-bit x86_64'
+file "$DIST/pairroom-cli-v${VERSION}-linux-amd64" | grep -q 'ELF 64-bit'
+file "$DIST/pairroom-cli-v${VERSION}-windows-amd64.exe" | grep -q 'PE32+'
+file "$DIST/pairroom-cli-v${VERSION}-darwin-arm64" | grep -q 'Mach-O 64-bit arm64'
+file "$DIST/pairroom-cli-v${VERSION}-darwin-amd64" | grep -q 'Mach-O 64-bit x86_64'
 tar -tzf "$DIST/pairroom-v${VERSION}-source.tar.gz" >/dev/null
 unzip -tq "$DIST/pairroom-v${VERSION}-source.zip" >/dev/null
 

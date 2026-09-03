@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- GitHub Releases now attach desktop packages (`pairroom-desktop-vX.Y.Z-…`) alongside CLI binaries (`pairroom-cli-vX.Y.Z-…`). Windows desktop uses `-setup.exe` because `.exe` alone collides with the CLI; Linux `.deb`/`.AppImage` and macOS `.app.zip` rely on the suffix.
+- `curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh | sh` installs the CLI for the current OS/arch.
+
 ## [v1.2.0] — 2026-09-03
 
 ### Added
