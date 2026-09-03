@@ -2,8 +2,8 @@
   color-scheme: light dark;
   --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  --sidebar-width: 248px;
-  --sidebar-collapsed: 76px;
+  --sidebar-width: 216px;
+  --sidebar-collapsed: 64px;
   --bg: #f5f7fb;
   --bg-raised: #ffffff;
   --bg-soft: #f0f3f8;
@@ -209,13 +209,39 @@ code, pre, kbd { font-family: var(--font-mono); }
   backdrop-filter: blur(22px) saturate(130%);
   transition: width .22s ease, transform .22s ease;
 }
-.brand {
-  min-height: 76px;
+.sidebar-top {
+  min-height: 64px;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 16px 20px;
+  gap: 8px;
+  padding: 12px 12px 12px 10px;
   border-bottom: 1px solid var(--line);
+}
+.sidebar-collapse {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.sidebar-collapse:hover { background: var(--bg-soft); color: var(--text-strong); }
+.sidebar-collapse svg { transition: transform .22s ease; }
+.brand {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 4px 0 2px;
 }
 .brand-mark {
   position: relative;
@@ -402,12 +428,15 @@ code, pre, kbd { font-family: var(--font-mono); }
 .status-dot.good { background: var(--good); box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 14%, transparent); }
 .status-dot.danger { background: var(--danger); box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 15%, transparent); }
 .status-dot.connecting { animation: pulse 1.25s ease-in-out infinite; }
-.sidebar-collapse { flex: 0 0 auto; width: 32px !important; height: 32px !important; font-size: 20px; }
 .sidebar-backdrop { display: none; }
 
 .app-shell.sidebar-collapsed .sidebar { width: var(--sidebar-collapsed); }
 .app-shell.sidebar-collapsed .workspace-shell { margin-left: var(--sidebar-collapsed); }
-.app-shell.sidebar-collapsed .brand { justify-content: center; padding-inline: 0; }
+.app-shell.sidebar-collapsed .sidebar-top { justify-content: center; gap: 0; padding-inline: 0; }
+.app-shell.sidebar-collapsed .sidebar-collapse svg { transform: scaleX(-1); }
+@media (min-width: 901px) {
+  .app-shell.sidebar-collapsed .brand { display: none; }
+}
 .app-shell.sidebar-collapsed .brand-copy,
 .app-shell.sidebar-collapsed .primary-nav a > span:not(.nav-icon),
 .app-shell.sidebar-collapsed .service-status-row > div,
@@ -415,7 +444,6 @@ code, pre, kbd { font-family: var(--font-mono); }
 .app-shell.sidebar-collapsed .primary-nav a { justify-content: center; padding-inline: 0; }
 .app-shell.sidebar-collapsed .sidebar-service { justify-content: center; padding-inline: 0; }
 .app-shell.sidebar-collapsed .service-status-row { flex: 0 0 auto; }
-.app-shell.sidebar-collapsed .sidebar-collapse { position: absolute; right: -16px; background: var(--bg-raised); transform: rotate(180deg); box-shadow: var(--shadow-sm); }
 
 .workspace-shell { min-height: 100vh; margin-left: var(--sidebar-width); transition: margin-left .22s ease; }
 .topbar {
@@ -878,7 +906,8 @@ body[data-density="compact"] .stat-card { min-height: 98px; }
   .app-shell.sidebar-open .sidebar { transform: translateX(0); }
   .app-shell.sidebar-open .sidebar-backdrop { position: fixed; inset: 0; z-index: 25; display: block; width: 100%; height: 100%; border: 0; border-radius: 0; background: rgba(2, 5, 12, .48); }
   .app-shell.sidebar-collapsed .sidebar { width: min(280px, calc(100vw - 52px)); }
-  .app-shell.sidebar-collapsed .brand { justify-content: start; padding-inline: 20px; }
+  .app-shell.sidebar-collapsed .sidebar-top { justify-content: flex-start; padding: 12px 12px 12px 10px; }
+  .app-shell.sidebar-collapsed .brand { display: flex; justify-content: start; }
   .app-shell.sidebar-collapsed .brand-copy,
   .app-shell.sidebar-collapsed .primary-nav a > span:not(.nav-icon),
   .app-shell.sidebar-collapsed .service-status-row > div,
