@@ -30,6 +30,32 @@ hook_python() {
     PYTHONUTF8=1 "${HOOK_PYTHON[@]}" "$@"
 }
 
+# Hot-path runner: execute the real script without a separate version probe.
+# Exit 3 means this interpreter is older than 3.8; 126/127 mean it cannot start.
+# 70/71 are the catalog's Python-resolver test shims for an unusable candidate.
+hook_python_run() {
+    local rc=127
+    local candidate
+    for candidate in ${PYTHON_BIN:+PYTHON_BIN} python python3 py; do
+        if [[ "$candidate" == PYTHON_BIN ]]; then
+            PYTHONUTF8=1 "$PYTHON_BIN" "$@"
+            rc=$?
+        elif [[ "$candidate" == py ]]; then
+            PYTHONUTF8=1 py -3 "$@"
+            rc=$?
+        else
+            PYTHONUTF8=1 "$candidate" "$@"
+            rc=$?
+        fi
+        case "$rc" in
+            0|2) return "$rc" ;;
+            3|70|71|126|127) ;;
+            *) return "$rc" ;;
+        esac
+    done
+    return "$rc"
+}
+
 hook_posix_path() {
     local path="${1%$'\r'}"
     [[ -n "$path" ]] || return 1
@@ -39,8 +65,19 @@ hook_posix_path() {
             printf '//%s\n' "${path//\\//}"
             return 0
             ;;
+        /*)
+            printf '%s\n' "$path"
+            return 0
+            ;;
     esac
-    if command -v cygpath >/dev/null 2>&1; then
+    if [[ -z "${HOOK_HAS_CYGPATH:-}" ]]; then
+        if command -v cygpath >/dev/null 2>&1; then
+            HOOK_HAS_CYGPATH=1
+        else
+            HOOK_HAS_CYGPATH=0
+        fi
+    fi
+    if [[ "$HOOK_HAS_CYGPATH" == 1 ]]; then
         cygpath -u -- "$path" 2>/dev/null || return 1
     else
         printf '%s\n' "$path"
@@ -50,11 +87,12 @@ hook_posix_path() {
 hook_project_root() {
     local raw="${CLAUDE_PROJECT_DIR:-}"
     if [[ -z "$raw" ]]; then
-        raw="$(git -C "$hook_dir" rev-parse --show-toplevel 2>/dev/null || true)"
+        raw="$(cd "$hook_dir/../../.." 2>/dev/null && pwd)" || raw=""
+        if [[ -z "$raw" || ! -e "$raw/.git" ]]; then
+            raw="$(git -C "$hook_dir" rev-parse --show-toplevel 2>/dev/null || true)"
+        fi
     fi
-    if [[ -z "$raw" ]]; then
-        raw="$(cd "$hook_dir/../../.." 2>/dev/null && pwd)" || return 1
-    fi
+    [[ -n "$raw" ]] || return 1
     hook_posix_path "$raw"
 }
 

@@ -7,7 +7,8 @@
           {
             "type": "command",
             "command": "git -c \"alias.agent-scaffold-hook=!sh .agents/tools/hooks/hook-launcher.sh .agents/tools/hooks/trunk_edit_guard.sh\" agent-scaffold-hook",
-            "statusMessage": "Checking worktree policy"
+            "statusMessage": "Checking worktree policy",
+            "timeout": 30
           }
         ]
       }
@@ -19,7 +20,8 @@
           {
             "type": "command",
             "command": "git -c \"alias.agent-scaffold-hook=!sh .agents/tools/hooks/hook-launcher.sh .agents/tools/hooks/authority_doc_budget.sh\" agent-scaffold-hook",
-            "statusMessage": "Checking AGENTS.md budget"
+            "statusMessage": "Checking AGENTS.md budget",
+            "timeout": 30
           }
         ]
       }
