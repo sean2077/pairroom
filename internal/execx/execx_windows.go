@@ -7,15 +7,16 @@ import (
 	"syscall"
 )
 
-// createNoWindow prevents Windows from allocating a console for a
-// console-subsystem child. HideWindow alone only requests SW_HIDE and still
-// permits a console/pseudo-console host to be created by command wrappers.
-const createNoWindow = 0x08000000
-
 // NoConsole keeps captured console-subsystem children (native Agent CLIs, git,
 // PowerShell scripts) from flashing a console window when the service itself
-// runs without one (e.g. under Task Scheduler). Redirected standard streams are
-// retained, so JSON protocols and captured output keep working.
+// runs without one (e.g. under Task Scheduler), while still giving the child a
+// hidden console that its own console-subsystem descendants inherit.
+//
+// Deliberately uses STARTF_USESHOWWINDOW + SW_HIDE instead of CREATE_NO_WINDOW:
+// with CREATE_NO_WINDOW the child has no console at all, so every console
+// descendant (vendor CLI MCP servers, npx shims, git helpers) allocates its
+// own visible console window. A hidden-but-present console is inherited down
+// the whole process tree, keeping every descendant windowless on the desktop.
 func NoConsole(cmd *exec.Cmd) {
 	if cmd == nil {
 		return
@@ -24,5 +25,4 @@ func NoConsole(cmd *exec.Cmd) {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	cmd.SysProcAttr.HideWindow = true
-	cmd.SysProcAttr.CreationFlags |= createNoWindow
 }
