@@ -37,6 +37,7 @@ func TestManagementRoomWorkbenchAssets(t *testing.T) {
 		"active.scrollIntoView",
 		"roomTablist.scrollLeft += event.deltaY",
 		"close.tabIndex = selected ? 0 : -1",
+		"app.classList.toggle('room-maximized')",
 	} {
 		if !strings.Contains(ux.Body.String(), marker) {
 			t.Fatalf("management UX asset omitted Room workbench contract %q", marker)
@@ -68,6 +69,7 @@ func TestManagementRoomWorkbenchAssets(t *testing.T) {
 		".app-shell.room-workspace .topbar",
 		"height: 100dvh",
 		".app-shell.room-workspace .management-mobile-nav",
+		".app-shell.room-workspace.room-maximized .sidebar",
 		"@media (hover: none)",
 		"prefers-reduced-motion",
 	} {

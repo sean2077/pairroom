@@ -277,6 +277,22 @@ body.management-ux-enhanced .app-shell.room-workspace .room-frame {
 }
 body.management-ux-enhanced .app-shell.room-workspace .room-placeholder { min-height: 100%; }
 
+/* Maximized Room: slide the sidebar away so the Room surface uses the full
+   window width. The tab strip stays so the toggle and tab switching remain
+   reachable. */
+body.management-ux-enhanced .app-shell.room-workspace.room-maximized .sidebar {
+  transform: translateX(-100%);
+}
+body.management-ux-enhanced .app-shell.room-workspace.room-maximized .workspace-shell,
+body.management-ux-enhanced .app-shell.room-workspace.room-maximized.sidebar-collapsed .workspace-shell {
+  margin-left: 0;
+}
+body.management-ux-enhanced .app-shell.room-workspace.room-maximized .management-sync-line { left: 0; }
+body.management-ux-enhanced .room-workspace-maximize[aria-pressed="true"] {
+  background: var(--bg-muted);
+  color: var(--text-strong);
+}
+
 @media (max-width: 900px) {
   body.management-ux-enhanced .app-shell.room-workspace .workspace-shell { padding-bottom: 0; }
   body.management-ux-enhanced .app-shell.room-workspace .management-mobile-nav { display: none; }
