@@ -50,7 +50,14 @@ def collect(platform: str) -> list[pathlib.Path]:
                 "expected Windows PairRoom CLI next to the installer: "
                 f"{cli} (a PairRoom.exe host without pairroom is not a complete package)"
             )
-        return sorted({path.resolve() for path in installers})
+        packages = sorted({path.resolve() for path in installers})
+        for path in packages:
+            if path.name.lower() == "pairroom.exe":
+                raise SystemExit(
+                    "Windows CI must not publish a standalone PairRoom.exe; "
+                    "ship the NSIS installer that contains PairRoom.exe and pairroom.exe"
+                )
+        return packages
     if platform == "darwin":
         app = binary_dir / "PairRoom.app"
         if not app.is_dir():

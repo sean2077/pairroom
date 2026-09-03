@@ -150,8 +150,6 @@ jobs:
           $ErrorActionPreference = 'Stop'
           wails3 task windows:package ARCH=${{ matrix.arch }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          wails3 task windows:build ARCH=${{ matrix.arch }} PRODUCTION=true
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build macOS application bundle
         if: matrix.platform == 'darwin'
         working-directory: desktop

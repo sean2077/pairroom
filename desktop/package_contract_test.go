@@ -31,4 +31,15 @@ func TestWindowsInstallerShipsPairroomCLI(t *testing.T) {
 	if !strings.Contains(script, `binary_dir / "pairroom.exe"`) {
 		t.Fatal("Windows CI collection must require the bundled pairroom CLI")
 	}
+	if !strings.Contains(script, "must not publish a standalone PairRoom.exe") {
+		t.Fatal("Windows CI collection must refuse to upload PairRoom.exe")
+	}
+
+	workflow, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "desktop-wails.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(workflow), "wails3 task windows:build") {
+		t.Fatal("desktop CI must not build a standalone Windows PairRoom.exe artifact")
+	}
 }
