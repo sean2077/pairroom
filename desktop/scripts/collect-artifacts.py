@@ -34,19 +34,39 @@ def collect(platform: str) -> list[pathlib.Path]:
             list(binary_dir.glob("*.AppImage")), "a Linux AppImage"
         )
         debs = require_packages(list(binary_dir.glob("*.deb")), "a Debian package")
+        cli = binary_dir / "pairroom"
+        if not cli.is_file():
+            raise SystemExit(
+                f"expected Linux PairRoom CLI next to the packages: {cli}"
+            )
         return sorted({*appimages, *debs})
     if platform == "windows":
         installers = require_packages(
             list(binary_dir.glob("*-installer.exe")), "a Windows NSIS installer"
         )
-        portable = binary_dir / "PairRoom.exe"
-        if not portable.is_file():
-            raise SystemExit(f"expected Windows portable executable: {portable}")
-        return sorted({*installers, portable.resolve()})
+        cli = binary_dir / "pairroom.exe"
+        if not cli.is_file():
+            raise SystemExit(
+                "expected Windows PairRoom CLI next to the installer: "
+                f"{cli} (a PairRoom.exe host without pairroom is not a complete package)"
+            )
+        packages = sorted({path.resolve() for path in installers})
+        for path in packages:
+            if path.name.lower() == "pairroom.exe":
+                raise SystemExit(
+                    "Windows CI must not publish a standalone PairRoom.exe; "
+                    "ship the NSIS installer that contains PairRoom.exe and pairroom.exe"
+                )
+        return packages
     if platform == "darwin":
         app = binary_dir / "PairRoom.app"
         if not app.is_dir():
             raise SystemExit(f"expected macOS bundle: {app}")
+        cli = app / "Contents" / "MacOS" / "pairroom"
+        if not cli.is_file():
+            raise SystemExit(
+                f"expected PairRoom CLI inside the macOS bundle: {cli}"
+            )
         archive = binary_dir / "PairRoom.app.zip"
         subprocess.run(
             [

@@ -29,6 +29,27 @@ def allow_macos_local_networking() -> None:
         plistlib.dump(payload, target, fmt=plistlib.FMT_XML, sort_keys=False)
 
 
+def include_pairroom_in_linux_package() -> None:
+    """Keep the generated nfpm package shipping the PairRoom CLI next to the host."""
+    path = ROOT / "build" / "linux" / "nfpm" / "nfpm.yaml"
+    if not path.is_file():
+        return
+    text = path.read_text(encoding="utf-8")
+    if 'dst: "/usr/local/bin/pairroom"' in text:
+        return
+    needle = '  - src: "./bin/PairRoom"\n    dst: "/usr/local/bin/PairRoom"\n'
+    if needle not in text:
+        raise SystemExit(f"{path} does not contain the PairRoom host binary entry")
+    path.write_text(
+        text.replace(
+            needle,
+            needle + '  - src: "./bin/pairroom"\n    dst: "/usr/local/bin/pairroom"\n',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+
 def main() -> int:
     version = (REPOSITORY / "VERSION").read_text(encoding="utf-8").strip()
     config = (ROOT / "build" / "config.yml").read_text(encoding="utf-8")
@@ -56,6 +77,7 @@ def main() -> int:
         check=True,
     )
     allow_macos_local_networking()
+    include_pairroom_in_linux_package()
     print(f"prepared Wails v3 build assets for PairRoom {version}")
     return 0
 
