@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/attachment"
+	"github.com/sean2077/pairroom/internal/execx"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/room"
 	"github.com/sean2077/pairroom/internal/version"
@@ -599,6 +600,7 @@ func (s *Server) runGit(parent context.Context, args ...string) (string, error) 
 	ctx, cancel := context.WithTimeout(parent, 12*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)
+	execx.NoConsole(cmd)
 	cmd.Dir = s.repo
 	output, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {

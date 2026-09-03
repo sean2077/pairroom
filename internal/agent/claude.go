@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sean2077/pairroom/internal/execx"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/prompt"
 )
@@ -234,7 +235,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	c.mu.Unlock()
 
 	cmd := exec.Command(c.cfg.Command, args...)
-	configureChildProcess(cmd)
+	execx.NoConsole(cmd)
 	cmd.Dir = c.cfg.Repo
 	cmd.Env = mergeRuntimeEnv(envWithout("CLAUDECODE"), c.cfg.Env)
 	stdin, err := cmd.StdinPipe()

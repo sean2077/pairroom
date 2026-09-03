@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sean2077/pairroom/internal/execx"
 	"github.com/sean2077/pairroom/internal/model"
 )
 
@@ -286,6 +287,7 @@ func (m *Manager) snapshotPathspec() []string {
 
 func runGit(ctx context.Context, dir string, stdin []byte, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
+	execx.NoConsole(cmd)
 	cmd.Dir = dir
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)

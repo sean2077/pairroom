@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/sean2077/pairroom/internal/execx"
 )
 
 type gitRunner interface {
@@ -20,6 +22,7 @@ type execGitRunner struct{}
 
 func (execGitRunner) Run(ctx context.Context, directory string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, "git", args...)
+	execx.NoConsole(command)
 	command.Dir = directory
 	output, err := command.Output()
 	if err == nil {

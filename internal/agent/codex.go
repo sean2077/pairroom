@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sean2077/pairroom/internal/execx"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/prompt"
 	"github.com/sean2077/pairroom/internal/version"
@@ -163,7 +164,7 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	args := append([]string(nil), c.cfg.CommandArgs...)
 	args = append(args, "app-server")
 	cmd := exec.Command(c.cfg.Command, args...)
-	configureChildProcess(cmd)
+	execx.NoConsole(cmd)
 	cmd.Dir = c.cfg.Repo
 	cmd.Env = mergeRuntimeEnv(envWithout("CODEX_INTERNAL_ORIGINATOR"), c.cfg.Env)
 	stdin, err := cmd.StdinPipe()
