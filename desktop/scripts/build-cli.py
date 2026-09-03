@@ -30,17 +30,19 @@ def git_output(*args: str) -> str:
     return result.stdout.strip()
 
 
-def cli_name() -> str:
+def cli_destination() -> pathlib.Path:
     goos = os.environ.get("GOOS") or subprocess.check_output(
         ["go", "env", "GOOS"], cwd=REPOSITORY, text=True
     ).strip()
     if goos == "windows":
-        return "pairroom.exe"
-    return "pairroom"
+        # NTFS is case-insensitive: desktop/bin/pairroom.exe would overwrite
+        # PairRoom.exe. Keep the Windows CLI in a subdirectory.
+        return ROOT / "bin" / "cli" / "pairroom.exe"
+    return ROOT / "bin" / "pairroom"
 
 
 def main() -> int:
-    destination = ROOT / "bin" / cli_name()
+    destination = cli_destination()
     destination.parent.mkdir(parents=True, exist_ok=True)
     commit = os.environ.get("COMMIT") or git_output("rev-parse", "HEAD") or "dev"
     last_tag = git_output("describe", "--tags", "--abbrev=0") or "unknown"

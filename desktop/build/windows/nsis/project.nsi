@@ -50,7 +50,8 @@ Section
     !insertmacro wails.webview2runtime
     SetOutPath $INSTDIR
     !insertmacro wails.files
-    File "/oname=pairroom.exe" "..\..\..\bin\pairroom.exe"
+    SetOutPath "$INSTDIR\bin"
+    File "/oname=pairroom.exe" "..\..\..\bin\cli\pairroom.exe"
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     !insertmacro wails.associateFiles
@@ -59,8 +60,8 @@ SectionEnd
 
 Section "uninstall"
     !insertmacro wails.setShellContext
-    IfFileExists "$INSTDIR\pairroom.exe" 0 skip_daemon_uninstall
-    nsExec::ExecToLog '"$INSTDIR\pairroom.exe" daemon uninstall'
+    IfFileExists "$INSTDIR\bin\pairroom.exe" 0 skip_daemon_uninstall
+    nsExec::ExecToLog '"$INSTDIR\bin\pairroom.exe" daemon uninstall'
     skip_daemon_uninstall:
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}"
     RMDir /r $INSTDIR
