@@ -1,0 +1,28 @@
+name: Agent export latest source
+
+on:
+  push:
+    branches:
+      - agent/export-main-20260903
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Pack source
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --exclude=.git --exclude=pairroom-source.tar.gz -czf pairroom-source.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pairroom-latest-source
+          path: pairroom-source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
