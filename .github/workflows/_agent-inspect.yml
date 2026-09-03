@@ -1,0 +1,80 @@
+name: Agent inspection
+
+on:
+  push:
+    branches:
+      - feat/bilingual-grok-build
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build inspection report
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('.')
+          out = []
+          def section(title):
+              out.append(f"\n===== {title} =====\n")
+
+          section('TREE')
+          for path in sorted(root.rglob('*')):
+              if '.git' in path.parts or not path.is_file():
+                  continue
+              out.append(f"{path.as_posix()}\t{path.stat().st_size}\n")
+
+          han = re.compile(r'[\u3400-\u4dbf\u4e00-\u9fff]')
+          section('CJK MARKDOWN')
+          for path in sorted(root.rglob('*.md')):
+              if '.git' in path.parts:
+                  continue
+              for no, line in enumerate(path.read_text(encoding='utf-8', errors='replace').splitlines(), 1):
+                  if han.search(line):
+                      out.append(f"{path}:{no}:{line}\n")
+
+          section('CJK UI AND CONFIG')
+          for pattern in ('*.html', '*.js', '*.css', '*.go', '*.json', '*.yaml', '*.yml', '*.toml'):
+              for path in sorted(root.rglob(pattern)):
+                  if '.git' in path.parts or path.as_posix() == '.github/workflows/_agent-inspect.yml':
+                      continue
+                  for no, line in enumerate(path.read_text(encoding='utf-8', errors='replace').splitlines(), 1):
+                      if han.search(line):
+                          out.append(f"{path}:{no}:{line}\n")
+
+          section('RUNTIME SYMBOLS')
+          needles = re.compile(r'ClaudeConfig|CodexConfig|ClaudeFactory|CodexFactory|ActorClaude|ActorCodex|ProbeRuntime|Provider|agent[_ -]?type|DisplayName|participant', re.I)
+          for path in sorted(root.rglob('*.go')):
+              if '.git' in path.parts:
+                  continue
+              for no, line in enumerate(path.read_text(encoding='utf-8', errors='replace').splitlines(), 1):
+                  if needles.search(line):
+                      out.append(f"{path}:{no}:{line}\n")
+
+          section('CONFIG EXAMPLES')
+          for path in sorted(root.rglob('*')):
+              if '.git' in path.parts or not path.is_file():
+                  continue
+              if path.name in {'pairroom.json', 'config.example.json', 'pairroom.example.json'} or 'config' in path.name.lower() and path.suffix in {'.json','.toml','.yaml','.yml'}:
+                  out.append(f"--- {path} ---\n")
+                  out.append(path.read_text(encoding='utf-8', errors='replace') + '\n')
+
+          Path('.pairroom-inspection.txt').write_text(''.join(out), encoding='utf-8')
+          PY
+      - name: Commit report
+        shell: bash
+        run: |
+          git config user.name "pairroom-agent"
+          git config user.email "pairroom-agent@users.noreply.github.com"
+          git add .pairroom-inspection.txt
+          git commit -m "chore: record integration inspection" || exit 0
+          git push origin HEAD:feat/bilingual-grok-build
