@@ -117,16 +117,47 @@ func bundledCLIPath() (string, bool) {
 	if resolved, err := filepath.EvalSymlinks(executable); err == nil {
 		executable = resolved
 	}
-	name := "pairroom"
+	dir := filepath.Dir(executable)
+	for _, path := range bundledCLICandidates(dir) {
+		if samePath(path, executable) {
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		return path, true
+	}
+	return "", false
+}
+
+func bundledCLICandidates(dir string) []string {
 	if runtime.GOOS == "windows" {
-		name = "pairroom.exe"
+		// NTFS treats PairRoom.exe and pairroom.exe as the same name.
+		return []string{
+			filepath.Join(dir, "bin", "pairroom.exe"),
+			filepath.Join(dir, "cli", "pairroom.exe"),
+		}
 	}
-	path := filepath.Join(filepath.Dir(executable), name)
-	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
-		return "", false
+	return []string{filepath.Join(dir, "pairroom")}
+}
+
+func samePath(left, right string) bool {
+	left, right = filepath.Clean(left), filepath.Clean(right)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
 	}
-	return path, true
+	return left == right
+}
+
+func daemonWorkDir(cliPath string) string {
+	dir := filepath.Dir(cliPath)
+	switch strings.ToLower(filepath.Base(dir)) {
+	case "bin", "cli":
+		return filepath.Dir(dir)
+	default:
+		return dir
+	}
 }
 
 func installDaemonFromCLI(ctx context.Context, path string) error {
@@ -136,7 +167,7 @@ func installDaemonFromCLI(ctx context.Context, path string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	command := exec.CommandContext(ctx, path, "daemon", "install", "--binary", path, "--work-dir", filepath.Dir(path))
+	command := exec.CommandContext(ctx, path, "daemon", "install", "--binary", path, "--work-dir", daemonWorkDir(path))
 	execx.NoConsole(command)
 	output, err := command.CombinedOutput()
 	if err == nil {

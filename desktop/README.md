@@ -65,7 +65,7 @@ An installed daemon is never stopped by the desktop process. An embedded Service
 `.github/workflows/desktop-wails.yml` validates and packages:
 
 - Linux amd64: AppImage and Debian package (the `.deb` includes `/usr/local/bin/pairroom`);
-- Windows amd64: NSIS installer that installs `PairRoom.exe` and `pairroom.exe`;
+- Windows amd64: NSIS installer that installs `PairRoom.exe` and `bin\pairroom.exe` (separate directory because Windows filenames are case-insensitive);
 - macOS arm64: `.app.zip` with `pairroom` next to the host inside `Contents/MacOS`;
 - macOS amd64: `.app.zip` with `pairroom` next to the host inside `Contents/MacOS`.
 

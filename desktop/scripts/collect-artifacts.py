@@ -44,18 +44,18 @@ def collect(platform: str) -> list[pathlib.Path]:
         installers = require_packages(
             list(binary_dir.glob("*-installer.exe")), "a Windows NSIS installer"
         )
-        cli = binary_dir / "pairroom.exe"
+        cli = binary_dir / "cli" / "pairroom.exe"
         if not cli.is_file():
             raise SystemExit(
-                "expected Windows PairRoom CLI next to the installer: "
-                f"{cli} (a PairRoom.exe host without pairroom is not a complete package)"
+                "expected Windows PairRoom CLI at desktop/bin/cli/pairroom.exe "
+                "(PairRoom.exe and pairroom.exe cannot share one directory on NTFS)"
             )
         packages = sorted({path.resolve() for path in installers})
         for path in packages:
-            if path.name.lower() == "pairroom.exe":
+            if path.name.lower() in {"pairroom.exe"}:
                 raise SystemExit(
                     "Windows CI must not publish a standalone PairRoom.exe; "
-                    "ship the NSIS installer that contains PairRoom.exe and pairroom.exe"
+                    "ship the NSIS installer that contains the host and CLI"
                 )
         return packages
     if platform == "darwin":

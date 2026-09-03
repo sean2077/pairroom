@@ -13,8 +13,11 @@ func TestWindowsInstallerShipsPairroomCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(nsi)
-	if !strings.Contains(text, `File "/oname=pairroom.exe" "..\..\..\bin\pairroom.exe"`) {
-		t.Fatal("Windows NSIS installer must ship pairroom.exe next to PairRoom.exe")
+	if !strings.Contains(text, `File "/oname=pairroom.exe" "..\..\..\bin\cli\pairroom.exe"`) {
+		t.Fatal("Windows NSIS installer must ship pairroom.exe from bin/cli, not beside PairRoom.exe")
+	}
+	if !strings.Contains(text, `SetOutPath "$INSTDIR\bin"`) {
+		t.Fatal("Windows installer must place the CLI in $INSTDIR\\bin so it does not collide with PairRoom.exe")
 	}
 	if !strings.Contains(text, `daemon uninstall`) {
 		t.Fatal("Windows uninstaller must stop the bundled pairroom daemon")
@@ -28,8 +31,8 @@ func TestWindowsInstallerShipsPairroomCLI(t *testing.T) {
 	if strings.Contains(script, `portable = binary_dir / "PairRoom.exe"`) {
 		t.Fatal("Windows CI artifacts must not treat PairRoom.exe as a complete package")
 	}
-	if !strings.Contains(script, `binary_dir / "pairroom.exe"`) {
-		t.Fatal("Windows CI collection must require the bundled pairroom CLI")
+	if !strings.Contains(script, `binary_dir / "cli" / "pairroom.exe"`) {
+		t.Fatal("Windows CI collection must require the bundled pairroom CLI under bin/cli")
 	}
 	if !strings.Contains(script, "must not publish a standalone PairRoom.exe") {
 		t.Fatal("Windows CI collection must refuse to upload PairRoom.exe")

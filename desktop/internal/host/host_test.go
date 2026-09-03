@@ -198,6 +198,30 @@ func TestStartRefusesInstalledDaemonWithoutMetadata(t *testing.T) {
 	}
 }
 
+func TestBundledCLICandidatesDoNotAliasWindowsHost(t *testing.T) {
+	dir := filepath.Join("C:", "Program Files", "PairRoom")
+	got := bundledCLICandidates(dir)
+	for _, path := range got {
+		if samePath(path, filepath.Join(dir, "PairRoom.exe")) {
+			t.Fatalf("Windows CLI candidate %q collides with the desktop host name", path)
+		}
+	}
+	if runtime.GOOS == "windows" {
+		if len(got) == 0 || !strings.Contains(got[0], filepath.Join("bin", "pairroom.exe")) {
+			t.Fatalf("Windows candidates = %v", got)
+		}
+	}
+}
+
+func TestDaemonWorkDirUsesHostDirectory(t *testing.T) {
+	if got := daemonWorkDir(filepath.Join("C:", "app", "bin", "pairroom.exe")); !strings.EqualFold(got, filepath.Join("C:", "app")) {
+		t.Fatalf("install layout work dir = %q", got)
+	}
+	if got := daemonWorkDir(filepath.Join("C:", "app", "cli", "pairroom.exe")); !strings.EqualFold(got, filepath.Join("C:", "app")) {
+		t.Fatalf("build layout work dir = %q", got)
+	}
+}
+
 func TestStartInstallsBundledCLIWhenDaemonIsMissing(t *testing.T) {
 	configRoot := t.TempDir()
 	setHostUserConfigDir(t, configRoot)

@@ -20,7 +20,7 @@ This contract applies under `desktop/`. Read it together with the repository roo
 - `build/config.yml`, `build/Taskfile.yml`, `Taskfile.yml`, and the scripts under `scripts/` are maintained source.
 - Keep the startup page minimal. Product UI changes belong to the existing embedded PairRoom Web assets, not `desktop/frontend/`.
 - Windows `wails3 task build` must stay GUI-subsystem (`-H windowsgui`) so `bin/PairRoom.exe` does not allocate a log console. `CONSOLE=true` is the explicit diagnostic exception.
-- Packaged desktop builds must ship the PairRoom CLI (`pairroom` / `pairroom.exe`) next to the host. CI collects the installer/app bundle, not a host binary without the CLI. If no daemon is installed, the host installs one from that bundled CLI instead of embedding a competing Service.
+- Packaged desktop builds must ship the PairRoom CLI with the host. On Windows the CLI cannot share a directory with `PairRoom.exe` (NTFS is case-insensitive); keep it at `desktop/bin/cli/pairroom.exe` in the build tree and `$INSTDIR\bin\pairroom.exe` in the installer. Unix packages may keep a `pairroom` sibling. CI collects the installer/app bundle, not a host binary without the CLI. If no daemon is installed, the host installs one from that bundled CLI instead of embedding a competing Service.
 
 ## Verification
 
