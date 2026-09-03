@@ -2539,6 +2539,15 @@
     $('theme-button').setAttribute('aria-pressed', String(state.theme === 'light'));
   });
   $('theme-button').setAttribute('aria-pressed', String(initialTheme === 'light'));
+  window.addEventListener('storage', (event) => {
+    if (event.key !== 'pairroom.theme') return;
+    const next = event.newValue === 'light' || event.newValue === 'dark'
+      ? event.newValue
+      : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    state.theme = next;
+    document.documentElement.dataset.theme = next;
+    $('theme-button').setAttribute('aria-pressed', String(next === 'light'));
+  });
   $('scroll-bottom').addEventListener('click', () => { scrollBottom(); markConversationRead(true); });
   timeline.addEventListener('scroll', () => markConversationRead(false), { passive: true });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) markConversationRead(false); });

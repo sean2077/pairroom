@@ -1181,10 +1181,10 @@
       );
     }
     return node('div', { className: 'view-stack' },
-      settingsPanel('外观', '偏好只在当前 Management Shell 标签页生效。',
+      settingsPanel('外观', '主题与内嵌 Room 共享并持久化；其余偏好只在当前标签页生效。',
         settingRow('主题', '跟随系统，或临时固定浅色/深色。', segmented([
           ['system', '跟随系统'], ['light', '浅色'], ['dark', '深色'],
-        ], state.preferences.theme, (value) => { state.preferences.theme = value; applyPreferences(); renderSettings(); }, '主题')),
+        ], state.preferences.theme, (value) => { state.preferences.theme = value; persistTheme(value); applyPreferences(); renderSettings(); }, '主题')),
         settingRow('信息密度', 'Compact 会缩小列表、表格和面板间距。', segmented([
           ['comfortable', '舒适'], ['compact', '紧凑'],
         ], state.preferences.density, (value) => { state.preferences.density = value; applyPreferences(); renderSettings(); }, '信息密度'))
@@ -2443,6 +2443,26 @@
   });
   document.addEventListener('visibilitychange', () => {
     if (state.authenticated && !document.hidden) refresh({ forceRender: state.renderPending });
+  });
+
+  function loadStoredTheme() {
+    let theme = '';
+    try { theme = String(window.localStorage.getItem('pairroom.theme') || ''); } catch { theme = ''; }
+    if (theme === 'light' || theme === 'dark') state.preferences.theme = theme;
+  }
+
+  function persistTheme(value) {
+    try {
+      if (value === 'light' || value === 'dark') window.localStorage.setItem('pairroom.theme', value);
+      else window.localStorage.removeItem('pairroom.theme');
+    } catch { /* theme persistence is best-effort */ }
+  }
+
+  loadStoredTheme();
+  window.addEventListener('storage', (event) => {
+    if (event.key !== 'pairroom.theme') return;
+    loadStoredTheme();
+    applyPreferences();
   });
 
   applyPreferences();
