@@ -2132,7 +2132,12 @@
     if (!state.snapshot || document.hidden || state.shellActive === false) return;
     const nearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 160;
     if (!force && !nearBottom) return;
-    state.lastSeenSeq = Number(state.snapshot.latest_seq || state.lastSeenSeq);
+    const lastSeen = Number(state.snapshot.latest_seq || state.lastSeenSeq);
+    // The shell re-asserts "active" after every surface report. Posting again when
+    // nothing changed would ping-pong these messages forever and re-render the
+    // Management tab strip (and rewrite localStorage) under the user's pointer.
+    if (state.unreadCount === 0 && state.lastSeenSeq === lastSeen) return;
+    state.lastSeenSeq = lastSeen;
     state.unreadCount = 0;
     localStorage.setItem(`pairroom.lastSeen.${state.snapshot.meta.id}`, String(state.lastSeenSeq));
     updateUnreadUI();

@@ -2409,11 +2409,15 @@
       return;
     }
     if (!data.roomId) return;
-    state.tabMeta[data.roomId] = {
+    const meta = {
       unread: Number(data.unread || 0),
       pendingApprovals: Number(data.pendingApprovals || 0),
       error: data.error || '',
     };
+    const previous = state.tabMeta[data.roomId];
+    if (previous && previous.unread === meta.unread &&
+        previous.pendingApprovals === meta.pendingApprovals && previous.error === meta.error) return;
+    state.tabMeta[data.roomId] = meta;
     syncRoomTree();
     syncRoomTabs();
   });
