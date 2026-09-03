@@ -70,6 +70,17 @@ jobs:
 
           Path('.pairroom-inspection.txt').write_text(''.join(out), encoding='utf-8')
           PY
+      - name: Pack source snapshot
+        shell: bash
+        run: |
+          tar --exclude=.git -czf /tmp/pairroom-source.tar.gz .
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: pairroom-source
+          path: /tmp/pairroom-source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
       - name: Commit report
         shell: bash
         run: |
