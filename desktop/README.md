@@ -64,9 +64,9 @@ An installed daemon is never stopped by the desktop process. An embedded Service
 
 `.github/workflows/desktop-wails.yml` validates and packages:
 
-- Linux amd64: AppImage and Debian package;
-- Windows amd64: NSIS installer and portable executable;
-- macOS arm64: `.app.zip`;
-- macOS amd64: `.app.zip`.
+- Linux amd64: AppImage and Debian package (the `.deb` includes `/usr/local/bin/pairroom`);
+- Windows amd64: NSIS installer that installs `PairRoom.exe` and `pairroom.exe`;
+- macOS arm64: `.app.zip` with `pairroom` next to the host inside `Contents/MacOS`;
+- macOS amd64: `.app.zip` with `pairroom` next to the host inside `Contents/MacOS`.
 
 CI packages are unsigned development artifacts. Production Windows signing and Apple Developer ID signing/notarization remain release-credential concerns.

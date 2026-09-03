@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +17,7 @@ import (
 	"github.com/sean2077/pairroom/internal/agent"
 	"github.com/sean2077/pairroom/internal/config"
 	"github.com/sean2077/pairroom/internal/daemon"
+	"github.com/sean2077/pairroom/internal/execx"
 	"github.com/sean2077/pairroom/internal/service"
 	"github.com/sean2077/pairroom/internal/version"
 )
@@ -84,9 +88,68 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 			if err != nil {
 				return nil, err
 			}
+			if path, ok := lookupBundledCLI(); ok {
+				if err := installFromBundledCLI(ctx, path); err != nil {
+					return nil, err
+				}
+				value, installed, err := connectInstalledDaemon(ctx)
+				if err != nil {
+					return nil, err
+				}
+				if !installed {
+					return nil, errors.New("bundled PairRoom CLI did not install a daemon")
+				}
+				return &Host{mode: ModeExternal, access: value}, nil
+			}
 		}
 	}
 	return startEmbedded(ctx, options)
+}
+
+var lookupBundledCLI = bundledCLIPath
+var installFromBundledCLI = installDaemonFromCLI
+
+func bundledCLIPath() (string, bool) {
+	executable, err := os.Executable()
+	if err != nil {
+		return "", false
+	}
+	if resolved, err := filepath.EvalSymlinks(executable); err == nil {
+		executable = resolved
+	}
+	name := "pairroom"
+	if runtime.GOOS == "windows" {
+		name = "pairroom.exe"
+	}
+	path := filepath.Join(filepath.Dir(executable), name)
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	return path, true
+}
+
+func installDaemonFromCLI(ctx context.Context, path string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	command := exec.CommandContext(ctx, path, "daemon", "install", "--binary", path, "--work-dir", filepath.Dir(path))
+	execx.NoConsole(command)
+	output, err := command.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	text := strings.TrimSpace(string(output))
+	if strings.Contains(text, "already installed") {
+		return nil
+	}
+	if text == "" {
+		return fmt.Errorf("install bundled PairRoom daemon: %w", err)
+	}
+	return fmt.Errorf("install bundled PairRoom daemon: %s (%w)", text, err)
 }
 
 // connectInstalledDaemon makes the installed daemon the sole owner for the

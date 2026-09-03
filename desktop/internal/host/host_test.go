@@ -198,6 +198,52 @@ func TestStartRefusesInstalledDaemonWithoutMetadata(t *testing.T) {
 	}
 }
 
+func TestStartInstallsBundledCLIWhenDaemonIsMissing(t *testing.T) {
+	configRoot := t.TempDir()
+	setHostUserConfigDir(t, configRoot)
+	t.Setenv("PAIRROOM_DESKTOP_URL", "")
+	t.Setenv(dataRootVariable, "")
+
+	managementSecret := "desktop-bundled-secret"
+	managementURL := ""
+	logFile := filepath.Join(configRoot, "service.log")
+	dataRoot := filepath.Join(configRoot, "data")
+	server := newTestManagementServer(t, managementSecret, &managementURL, dataRoot)
+	defer server.Close()
+
+	manager := &fakeDaemonManager{status: daemon.Status{Installed: false, Running: false}}
+	manager.start = func() error {
+		return os.WriteFile(logFile, []byte("management: "+managementURL+"\n"), 0o600)
+	}
+	originalManager := newDaemonManager
+	t.Cleanup(func() { newDaemonManager = originalManager })
+	newDaemonManager = func() (daemon.Manager, error) { return manager, nil }
+
+	installed := 0
+	originalLookup := lookupBundledCLI
+	originalInstall := installFromBundledCLI
+	t.Cleanup(func() {
+		lookupBundledCLI = originalLookup
+		installFromBundledCLI = originalInstall
+	})
+	lookupBundledCLI = func() (string, bool) { return filepath.Join(configRoot, "pairroom.exe"), true }
+	installFromBundledCLI = func(context.Context, string) error {
+		installed++
+		manager.status = daemon.Status{Installed: true, Running: false}
+		return daemon.SaveMeta(&daemon.Meta{LogFile: logFile, LogBackups: 1, DataRoot: dataRoot, BinaryPath: "pairroom.exe"})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	host, err := Start(ctx, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host.Mode() != ModeExternal || installed != 1 || manager.started != 1 {
+		t.Fatalf("host mode=%q installs=%d daemon starts=%d", host.Mode(), installed, manager.started)
+	}
+}
+
 func TestStartExplicitEmbeddedSelectionDoesNotInspectInstalledDaemon(t *testing.T) {
 	configRoot := t.TempDir()
 	setHostUserConfigDir(t, configRoot)

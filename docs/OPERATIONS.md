@@ -16,7 +16,8 @@
 
 1. 验证 `PAIRROOM_DESKTOP_URL` 指向 authenticated numeric-loopback PairRoom Service；
 2. 发现已安装 daemon；如果它已停止，桌面端启动它并等待当前 authenticated Management URL；
-3. 只有没有安装 daemon 时，才在桌面进程中启动内嵌 Service；已安装但不可达时保持 fail closed。
+3. 若没有 daemon，但桌面 Host 旁边有捆绑的 `pairroom` CLI，则用它执行 `pairroom daemon install` 再连接；
+4. 只有没有 daemon、也没有捆绑 CLI 时，才在桌面进程中启动内嵌 Service；已安装但不可达时保持 fail closed。
 
 行为边界：
 
