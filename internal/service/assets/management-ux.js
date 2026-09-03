@@ -421,14 +421,30 @@
       onClick: () => openPalette(),
     });
     command.setAttribute('aria-keyshortcuts', 'Control+K Meta+K');
+    const maximize = makeRoomTool({
+      className: 'room-workspace-maximize',
+      label: '最大化房间',
+      title: '最大化房间（隐藏侧栏）',
+      text: '⛶',
+      onClick: () => toggleRoomMaximize(maximize),
+    });
+    maximize.setAttribute('aria-pressed', 'false');
     if (roomPickerButton) {
       roomPickerButton.classList.add('room-workspace-picker');
       roomPickerButton.title = '打开 Room 标签（Alt+N）';
       roomPickerButton.setAttribute('aria-label', '打开 Room 标签');
     }
-    tools.append(refresh, command);
+    tools.append(maximize, refresh, command);
     roomTabstrip.append(tools);
-    return { leading, menu, tools, refresh, command };
+    return { leading, menu, tools, refresh, command, maximize };
+  }
+
+  function toggleRoomMaximize(button) {
+    const maximized = app.classList.toggle('room-maximized');
+    button.setAttribute('aria-pressed', String(maximized));
+    const label = maximized ? '还原房间（显示侧栏）' : '最大化房间（隐藏侧栏）';
+    button.title = label;
+    button.setAttribute('aria-label', label);
   }
 
   function toggleSidebar() {
