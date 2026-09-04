@@ -1,6 +1,8 @@
 (() => {
   'use strict';
 
+  const t = (zh, en) => (window.PairRoomI18n && window.PairRoomI18n.t) ? window.PairRoomI18n.t(zh, en) : zh;
+
   const INITIAL_ROUTE = '#/overview';
   const NEW_BINDING_HINT = 'materializes on first turn';
   const MAX_ROOM_BATCH_SIZE = 100;
@@ -64,8 +66,8 @@
     if (!response.ok) {
       const message = response.status === 401
         ? (token
-          ? 'Service Token 无效，请检查后重试。'
-          : '尚未登录。请输入 Service Token，或运行 pairroom daemon open。')
+          ? t('Service Token 无效，请检查后重试。')
+          : t('尚未登录。请输入 Service Token，或运行 pairroom daemon open。'))
         : (payload.error || response.statusText || `HTTP ${response.status}`);
       const error = new Error(message);
       error.status = response.status;
@@ -73,7 +75,7 @@
       throw error;
     }
     state.csrfToken = payload.csrf_token || '';
-    if (!state.csrfToken) throw new Error('Management 会话未返回 CSRF 凭证，请重新登录。');
+    if (!state.csrfToken) throw new Error(t('Management 会话未返回 CSRF 凭证，请重新登录。'));
   }
 
   async function initializeSession() {
@@ -101,9 +103,9 @@
     const input = $('login-token');
     const button = $('login-token-toggle');
     input.type = visible ? 'text' : 'password';
-    button.textContent = visible ? '隐藏' : '显示';
+    button.textContent = visible ? t('隐藏') : t('显示');
     button.setAttribute('aria-pressed', String(visible));
-    button.setAttribute('aria-label', visible ? '隐藏 Service Token' : '显示 Service Token');
+    button.setAttribute('aria-label', visible ? t('隐藏 Service Token') : t('显示 Service Token'));
   }
 
   function toggleCredentialVisibility() {
@@ -143,7 +145,7 @@
     setCredentialVisibility(false);
     if (message) showFormError('login-error', message);
     else hideFormError('login-error');
-    document.title = '登录 · PairRoom';
+    document.title = t('登录 · PairRoom');
     requestAnimationFrame(() => $('login-token').focus({ preventScroll: true }));
   }
 
@@ -160,8 +162,8 @@
     const credential = credentialFromInput(raw);
     if (!credential) {
       showFormError('login-error', raw.trim()
-        ? '完整 Management URL 中未找到 #token=…。'
-        : '请输入 Service Token 或完整 Management URL。');
+        ? t('完整 Management URL 中未找到 #token=…。')
+        : t('请输入 Service Token 或完整 Management URL。'));
       $('login-token').focus();
       return;
     }
@@ -220,7 +222,7 @@
       error.status = response.status;
       if (response.status === 401 && path !== '/api/v1/session') {
         error.code = 'login_required';
-        showCredentialLogin('浏览器会话已过期，请重新输入 Service Token。');
+        showCredentialLogin(t('浏览器会话已过期，请重新输入 Service Token。'));
       }
       throw error;
     }
@@ -266,7 +268,7 @@
       } else {
         state.renderPending = false;
       }
-      if (notify) toast('已同步', 'Management Shell 状态已刷新。', 'success');
+      if (notify) toast('已同步', t('Management Shell 状态已刷新。'), 'success');
       return snapshot;
     }).catch((error) => {
       if (error.status === 401) return null;
@@ -348,7 +350,7 @@
 
   function setDisconnected(message) {
     $('connection-banner').hidden = false;
-    $('connection-message').textContent = message || '正在等待本地 Service 恢复。';
+    $('connection-message').textContent = message || t('正在等待本地 Service 恢复。');
     $('sidebar-health').textContent = 'Service Disconnected';
     $('health-dot').className = 'status-dot danger';
   }
@@ -357,15 +359,15 @@
     const snapshot = state.snapshot;
     switch (state.route.name) {
       case 'projects':
-        return { eyebrow: 'WORKSPACES', title: 'Projects & Rooms', subtitle: '管理 canonical Git worktree 与彼此隔离的协作 Room。' };
+        return { eyebrow: 'WORKSPACES', title: 'Projects & Rooms', subtitle: t('管理 canonical Git worktree 与彼此隔离的协作 Room。') };
       case 'project': {
         const project = snapshot?.projects?.find((item) => item.id === state.route.projectID);
-        return { eyebrow: 'PROJECT', title: projectName(project) || 'Project', subtitle: project?.root || '查看 Project 身份、Room 与运行状态。' };
+        return { eyebrow: 'PROJECT', title: projectName(project) || 'Project', subtitle: project?.root || t('查看 Project 身份、Room 与运行状态。') };
       }
       case 'runtimes':
-        return { eyebrow: 'ORCHESTRATION', title: 'Room Runtimes', subtitle: '查看容量、队列、活动 Turn 与空闲挂起状态。' };
+        return { eyebrow: 'ORCHESTRATION', title: 'Room Runtimes', subtitle: t('查看容量、队列、活动 Turn 与空闲挂起状态。') };
       case 'settings':
-        return { eyebrow: 'CONTROL PLANE', title: '设置', subtitle: '调整当前管理页体验，并检查 Service 启动策略与安全边界。' };
+        return { eyebrow: 'CONTROL PLANE', title: t('设置'), subtitle: t('调整当前管理页体验，并检查 Service 启动策略与安全边界。') };
       case 'room': {
         const room = roomByID(state.route.roomID);
         const runtime = getRuntime(state.route.roomID);
@@ -376,7 +378,7 @@
         };
       }
       default:
-        return { eyebrow: 'PAIRROOM SERVICE', title: '概览', subtitle: 'Claude Code 与 Codex 的多 Project、本地协作控制面。' };
+        return { eyebrow: 'PAIRROOM SERVICE', title: t('概览'), subtitle: t('Claude Code 与 Codex 的多 Project、本地协作控制面。') };
     }
   }
 
@@ -399,7 +401,7 @@
     if (roomMode) {
       const room = roomByID(state.route.roomID);
       if (room?.lifecycle === 'archived') {
-        toast('Room 已归档', '恢复后才能打开。', 'warning');
+        toast('Room 已归档', t('恢复后才能打开。'), 'warning');
         closeTab(state.route.roomID);
         return;
       }
@@ -483,10 +485,10 @@
     return node('button', {
       type: 'button',
       className: `tree-room ${current ? 'active' : ''} ${archived ? 'archived' : ''}`,
-      title: archived ? '已归档，恢复后才能打开' : room.name,
+      title: archived ? t('已归档，恢复后才能打开') : room.name,
       onClick: () => {
         if (archived) {
-          toast('Room 已归档', '恢复后才能打开。', 'warning');
+          toast('Room 已归档', t('恢复后才能打开。'), 'warning');
           return;
         }
         openRoom(room.id);
@@ -575,13 +577,13 @@
 
   function roomPlaceholder(room, runtime) {
     const phase = runtime.phase || 'suspended';
-    const title = phase === 'queued' ? `排队 #${runtime.queue_position || '?'}` : (phase === 'starting' ? '正在启动 Runtime' : (phase === 'failed' ? 'Runtime 失败' : 'Runtime 已挂起'));
-    const detail = runtime.last_error || '切回此标签会自动重新请求激活。后台标签不保证一直在线。';
+    const title = phase === 'queued' ? `排队 #${runtime.queue_position || '?'}` : (phase === 'starting' ? t('正在启动 Runtime') : (phase === 'failed' ? t('Runtime 失败') : t('Runtime 已挂起')));
+    const detail = runtime.last_error || t('切回此标签会自动重新请求激活。后台标签不保证一直在线。');
     return node('div', { className: 'room-placeholder' },
       node('p', { className: 'eyebrow', textContent: 'ROOM SURFACE' }),
       node('h2', { textContent: room?.name || 'Room' }),
       node('p', { textContent: `${title} · ${detail}` }),
-      actionButton('重新激活', () => activateRoomRuntime(room.id), 'primary-button')
+      actionButton(t('重新激活'), () => activateRoomRuntime(room.id), 'primary-button')
     );
   }
 
@@ -668,7 +670,7 @@
         className: 'list-item room-picker-item',
         onClick: () => { closeDialog('room-picker-dialog'); openRoom(room.id); },
       }, node('div', { className: 'list-copy' }, node('strong', { textContent: room.name }), node('p', { textContent: projectName(project) })));
-    }) : [node('p', { className: 'muted', textContent: '没有匹配的活动 Room。' })]));
+    }) : [node('p', { className: 'muted', textContent: t('没有匹配的活动 Room。') })]));
   }
 
   function renderLoading() {
@@ -694,13 +696,13 @@
       ? `${summary.active_rooms} 个活动 Room，跨 ${summary.projects} 个 Project 协作`
       : '从第一个 Git Project 开始建立协作控制面';
     const heroText = projects.length
-      ? '每个 Room 独占 Claude Session 与 Codex Thread；切换管理视图不会中断后台 Turn。'
-      : '显式登记 canonical Git worktree，再为不同任务创建彼此隔离的 Claude × Codex Room。';
+      ? t('每个 Room 独占 Claude Session 与 Codex Thread；切换管理视图不会中断后台 Turn。')
+      : t('显式登记 canonical Git worktree，再为不同任务创建彼此隔离的 Claude × Codex Room。');
 
     const heroActions = [
-      actionButton('＋ 登记 Project', () => openProjectDialog('register'), 'primary-button'),
+      actionButton(t('＋ 登记 Project'), () => openProjectDialog('register'), 'primary-button'),
     ];
-    if (activeProjects.length) heroActions.push(actionButton('＋ 创建 Room', () => openRoomDialog(activeProjects[0].id), 'secondary-button'));
+    if (activeProjects.length) heroActions.push(actionButton(t('＋ 创建 Room'), () => openRoomDialog(activeProjects[0].id), 'secondary-button'));
 
     view.replaceChildren(
       node('div', { className: 'view-stack' },
@@ -712,38 +714,38 @@
             node('div', { className: 'hero-actions' }, ...heroActions)
           ),
           node('div', { className: 'hero-meta' },
-            heroMeta('Runtime 容量', policy.limit ? `${summary.runtime_capacity_used} / ${policy.limit}` : `${summary.runtime_capacity_used}`),
-            heroMeta('空闲挂起', policy.idle_timeout_seconds ? formatDuration(policy.idle_timeout_seconds) : '由启动参数决定'),
-            heroMeta('运行模式', snapshot.healthy ? 'Fail-safe' : 'Fail-closed'),
-            heroMeta('版本', snapshot.version || 'development')
+            heroMeta(t('Runtime 容量'), policy.limit ? `${summary.runtime_capacity_used} / ${policy.limit}` : `${summary.runtime_capacity_used}`),
+            heroMeta(t('空闲挂起'), policy.idle_timeout_seconds ? formatDuration(policy.idle_timeout_seconds) : t('由启动参数决定')),
+            heroMeta(t('运行模式'), snapshot.healthy ? 'Fail-safe' : 'Fail-closed'),
+            heroMeta(t('版本'), snapshot.version || 'development')
           )
         ),
-        node('section', { className: 'stats-grid', 'aria-label': 'Service 统计' },
+        node('section', { className: 'stats-grid', 'aria-label': t('Service 统计') },
           statCard('Projects', summary.projects, `${summary.unavailable_projects} 个不可用`, '⌂', 'accent', () => navigate('#/projects')),
-          statCard('活动 Room', summary.active_rooms, `${summary.archived_rooms} 个已归档`, '◇', 'good', () => navigate('#/projects')),
-          statCard('正在工作', summary.busy_runtimes, `${summary.queued_runtimes} 个排队`, '◎', summary.queued_runtimes ? 'warn' : '', () => navigate('#/runtimes')),
-          statCard('需要关注', summary.attention_items, summary.attention_items ? 'Binding、Runtime、路径或清理诊断' : '当前无阻断项', '!', summary.attention_items ? 'danger' : 'good')
+          statCard(t('活动 Room'), summary.active_rooms, `${summary.archived_rooms} 个已归档`, '◇', 'good', () => navigate('#/projects')),
+          statCard(t('正在工作'), summary.busy_runtimes, `${summary.queued_runtimes} 个排队`, '◎', summary.queued_runtimes ? 'warn' : '', () => navigate('#/runtimes')),
+          statCard(t('需要关注'), summary.attention_items, summary.attention_items ? t('Binding、Runtime、路径或清理诊断') : t('当前无阻断项'), '!', summary.attention_items ? 'danger' : 'good')
         ),
         node('section', { className: 'two-panel-grid' },
-          panel('需要关注', '阻断激活或需要人工处理的项目',
+          panel(t('需要关注'), t('阻断激活或需要人工处理的项目'),
             attention.length ? node('div', { className: 'list' }, ...attention.slice(0, 8).map(renderAttentionItem))
-              : emptyState('✓', '一切正常', '当前没有不可用 Project、失败 Runtime、待补全 Binding 或 Room 清理项。', true),
+              : emptyState('✓', t('一切正常'), t('当前没有不可用 Project、失败 Runtime、待补全 Binding 或 Room 清理项。'), true),
             attention.length > 8 ? `${attention.length - 8} 个项目未显示` : ''
           ),
-          panel('实时运行', '活跃、工作中与排队的 Room',
+          panel(t('实时运行'), t('活跃、工作中与排队的 Room'),
             live.length ? node('div', { className: 'list' }, ...live.slice(0, 8).map(renderLiveItem))
-              : emptyState('◎', '当前没有活动 Runtime', '打开一个 Room 后，Runtime 会按容量惰性启动。', true)
+              : emptyState('◎', t('当前没有活动 Runtime'), t('打开一个 Room 后，Runtime 会按容量惰性启动。'), true)
           )
         ),
-        panel('Projects', '最近登记的工作区与 Room 概况',
+        panel('Projects', t('最近登记的工作区与 Room 概况'),
           projects.length ? node('div', { className: 'list' }, ...projects.slice(0, 6).map(renderProjectOverviewItem))
-            : emptyState('⌂', '尚未登记 Project', '只接受用户显式输入的绝对路径，不扫描开发目录。', true, actionButton('登记第一个 Project', () => openProjectDialog('register'), 'primary-button compact-button')),
-          projects.length > 6 ? '在 Projects 页面查看全部工作区' : '',
-          projects.length > 6 ? actionButton('查看全部', () => navigate('#/projects'), 'text-button') : null
+            : emptyState('⌂', t('尚未登记 Project'), t('只接受用户显式输入的绝对路径，不扫描开发目录。'), true, actionButton(t('登记第一个 Project'), () => openProjectDialog('register'), 'primary-button compact-button')),
+          projects.length > 6 ? t('在 Projects 页面查看全部工作区') : '',
+          projects.length > 6 ? actionButton(t('查看全部'), () => navigate('#/projects'), 'text-button') : null
         ),
         node('aside', { className: 'callout boundary' },
           node('strong', { textContent: 'Transcript Boundary' }),
-          node('span', { textContent: '复用 Existing Session/Thread 只恢复 vendor context；PairRoom 的公共时间线从绑定成功后开始，不导入绑定前 transcript。' })
+          node('span', { textContent: t('复用 Existing Session/Thread 只恢复 vendor context；PairRoom 的公共时间线从绑定成功后开始，不导入绑定前 transcript。') })
         )
       )
     );
@@ -756,34 +758,34 @@
       .sort((a, b) => Number(b.project.available) - Number(a.project.available) || Number(b.runtimeCounts.busy) - Number(a.runtimeCounts.busy) || projectName(a.project).localeCompare(projectName(b.project)));
 
     const availability = selectControl([
-      ['all', '全部状态'], ['available', 'Available'], ['unavailable', 'Unavailable'],
-    ], state.filters.projectAvailability, (value) => { state.filters.projectAvailability = value; renderProjects(); }, 'Project 状态');
+      ['all', t('全部状态')], ['available', 'Available'], ['unavailable', 'Unavailable'],
+    ], state.filters.projectAvailability, (value) => { state.filters.projectAvailability = value; renderProjects(); }, t('Project 状态'));
 
     view.replaceChildren(
       node('div', { className: 'view-stack' },
         node('section', { className: 'section-header' },
-          node('div', {}, node('h2', { textContent: 'Workspace 管理' }), node('p', { textContent: '一个 Project 对应一个 canonical Git worktree；每个 Project 可以拥有多个 Room。' })),
+          node('div', {}, node('h2', { textContent: t('Workspace 管理') }), node('p', { textContent: t('一个 Project 对应一个 canonical Git worktree；每个 Project 可以拥有多个 Room。') })),
           node('div', { className: 'section-actions' },
-            actionButton('导入 Legacy Room', () => openProjectDialog('import'), 'secondary-button'),
-            actionButton('＋ 登记 Project', () => openProjectDialog('register'), 'primary-button')
+            actionButton(t('导入 Legacy Room'), () => openProjectDialog('import'), 'secondary-button'),
+            actionButton(t('＋ 登记 Project'), () => openProjectDialog('register'), 'primary-button')
           )
         ),
         node('section', { className: 'panel panel-body toolbar' },
           node('label', { className: 'search-field' },
             node('span', { textContent: '⌕', 'aria-hidden': 'true' }),
             node('input', {
-              type: 'search', value: state.search, placeholder: '筛选路径、Project、Room 或 ID',
-              'aria-label': '筛选 Project 和 Room',
+              type: 'search', value: state.search, placeholder: t('筛选路径、Project、Room 或 ID'),
+              'aria-label': t('筛选 Project 和 Room'),
               onInput: (event) => { state.search = event.target.value; $('global-search').value = state.search; renderProjects(); },
             })
           ),
           availability,
-          actionButton(state.filters.showArchived ? '✓ 显示已归档' : '显示已归档', () => {
+          actionButton(state.filters.showArchived ? t('✓ 显示已归档') : t('显示已归档'), () => {
             state.filters.showArchived = !state.filters.showArchived;
             renderProjects();
           }, `filter-chip ${state.filters.showArchived ? 'active' : ''}`),
           state.snapshot?.capabilities?.room_deletion
-            ? roomSelectionToggleButton(visibleRoomsForBatch(projectModels.flatMap((model) => model.rooms)), '当前可见结果')
+            ? roomSelectionToggleButton(visibleRoomsForBatch(projectModels.flatMap((model) => model.rooms)), t('当前可见结果'))
             : null,
           state.snapshot?.capabilities?.room_deletion
             ? roomClearSelectionButton()
@@ -798,12 +800,12 @@
         ),
         projectModels.length
           ? node('section', { className: 'project-grid' }, ...projectModels.map(renderProjectCard))
-          : emptyState('⌕', '没有匹配的 Project', state.search ? '调整搜索词或筛选条件。' : '登记一个 Git worktree 开始使用。', false,
-            state.search ? actionButton('清除筛选', () => { state.search = ''; $('global-search').value = ''; state.filters.projectAvailability = 'all'; renderProjects(); }, 'secondary-button')
-              : actionButton('登记 Project', () => openProjectDialog('register'), 'primary-button')),
+          : emptyState('⌕', t('没有匹配的 Project'), state.search ? t('调整搜索词或筛选条件。') : t('登记一个 Git worktree 开始使用。'), false,
+            state.search ? actionButton(t('清除筛选'), () => { state.search = ''; $('global-search').value = ''; state.filters.projectAvailability = 'all'; renderProjects(); }, 'secondary-button')
+              : actionButton(t('登记 Project'), () => openProjectDialog('register'), 'primary-button')),
         node('aside', { className: 'callout neutral' },
           node('strong', { textContent: 'Project Identity' }),
-          node('span', { textContent: '服务会解析符号链接并执行 Git worktree 根目录归一化；等价路径不会创建重复 Project。' })
+          node('span', { textContent: t('服务会解析符号链接并执行 Git worktree 根目录归一化；等价路径不会创建重复 Project。') })
         )
       )
     );
@@ -813,19 +815,19 @@
     const { project, rooms, activeRooms, runtimeCounts } = model;
     const visibleRooms = rooms.filter((room) => state.filters.showArchived || room.lifecycle !== 'archived');
     const archivedRoomsHidden = !state.filters.showArchived && rooms.length > 0 && visibleRooms.length === 0;
-    const emptyRoomTitle = archivedRoomsHidden ? '此 Project 只剩已归档 Room' : '此 Project 尚无 Room';
+    const emptyRoomTitle = archivedRoomsHidden ? t('此 Project 只剩已归档 Room') : t('此 Project 尚无 Room');
     const emptyRoomDescription = archivedRoomsHidden
-      ? '显示并永久清除已归档 Room 后即可注销 Project。'
+      ? t('显示并永久清除已归档 Room 后即可注销 Project。')
       : project.available
-        ? '创建一个 Room，绑定 Claude 与 Codex。'
-        : '本地路径不可用不影响注销此空 Project。';
+        ? t('创建一个 Room，绑定 Claude 与 Codex。')
+        : t('本地路径不可用不影响注销此空 Project。');
     const emptyRoomAction = archivedRoomsHidden
-      ? actionButton('显示已归档 Room', () => {
+      ? actionButton(t('显示已归档 Room'), () => {
           state.filters.showArchived = true;
           renderProjects();
         }, 'secondary-button compact-button')
       : project.available
-        ? actionButton('创建 Room', () => openRoomDialog(project.id), 'secondary-button compact-button')
+        ? actionButton(t('创建 Room'), () => openRoomDialog(project.id), 'secondary-button compact-button')
         : null;
     return node('article', { className: 'panel project-card' },
       node('header', { className: 'project-card-header' },
@@ -836,21 +838,21 @@
         ),
         node('div', { className: 'project-card-actions' },
           state.snapshot?.capabilities?.project_refresh && !project.available
-            ? actionButton('重新检查', () => refreshProject(project), 'secondary-button compact-button')
+            ? actionButton(t('重新检查'), () => refreshProject(project), 'secondary-button compact-button')
             : null,
-          actionButton('复制路径', () => copyText(project.root, 'Project 路径已复制。'), 'secondary-button compact-button'),
-          actionButton('详情', () => navigate(`#/projects/${encodeURIComponent(project.id)}`), 'secondary-button compact-button'),
+          actionButton(t('复制路径'), () => copyText(project.root, t('Project 路径已复制。')), 'secondary-button compact-button'),
+          actionButton(t('详情'), () => navigate(`#/projects/${encodeURIComponent(project.id)}`), 'secondary-button compact-button'),
           projectRemovalButton(project, rooms.length, true),
           actionButton('＋ Room', () => openRoomDialog(project.id), 'primary-button compact-button', !project.available)
         )
       ),
       node('div', { className: 'project-summary' },
-        summaryCell(activeRooms, '活动 Room'),
-        summaryCell(rooms.length - activeRooms, '已归档'),
-        summaryCell(runtimeCounts.busy, '工作中'),
-        summaryCell(runtimeCounts.queued, '排队')
+        summaryCell(activeRooms, t('活动 Room')),
+        summaryCell(rooms.length - activeRooms, t('已归档')),
+        summaryCell(runtimeCounts.busy, t('工作中')),
+        summaryCell(runtimeCounts.queued, t('排队'))
       ),
-      project.diagnostic ? node('div', { className: 'callout danger', style: 'margin: 12px 14px 0' }, node('strong', { textContent: '路径诊断' }), node('span', { textContent: project.diagnostic })) : null,
+      project.diagnostic ? node('div', { className: 'callout danger', style: 'margin: 12px 14px 0' }, node('strong', { textContent: t('路径诊断') }), node('span', { textContent: project.diagnostic })) : null,
       visibleRooms.length
         ? node('div', { className: 'room-list' }, ...visibleRooms.map((room) => renderRoomRow(room, model.runtimeByRoom.get(room.id))))
         : emptyState('◇', emptyRoomTitle, emptyRoomDescription, true, emptyRoomAction)
@@ -861,14 +863,14 @@
     const snapshot = state.snapshot;
     const model = buildProjectModels(snapshot).find((item) => item.project.id === projectID);
     if (!model) {
-      view.replaceChildren(emptyState('?', 'Project 不存在', '它可能尚未登记，或 Service Registry 已重新构建。', false, actionButton('返回 Projects', () => navigate('#/projects'), 'secondary-button')));
+      view.replaceChildren(emptyState('?', t('Project 不存在'), t('它可能尚未登记，或 Service Registry 已重新构建。'), false, actionButton(t('返回 Projects'), () => navigate('#/projects'), 'secondary-button')));
       return;
     }
     const { project, rooms, activeRooms, runtimeCounts, runtimeByRoom } = model;
     const visibleRooms = rooms.filter((room) => state.filters.showArchived || room.lifecycle !== 'archived');
     view.replaceChildren(
       node('div', { className: 'view-stack' },
-        actionButton('← 返回 Projects', () => navigate('#/projects'), 'text-button'),
+        actionButton(t('← 返回 Projects'), () => navigate('#/projects'), 'text-button'),
         node('section', { className: 'panel detail-hero' },
           node('div', { className: 'detail-title' },
             node('div', { className: 'project-avatar', textContent: projectInitials(project) }),
@@ -878,45 +880,45 @@
             )
           ),
           node('div', { className: 'detail-actions' },
-            actionButton('复制路径', () => copyText(project.root, 'Project 路径已复制。'), 'secondary-button'),
-            actionButton('＋ 创建 Room', () => openRoomDialog(project.id), 'primary-button', !project.available)
+            actionButton(t('复制路径'), () => copyText(project.root, t('Project 路径已复制。')), 'secondary-button'),
+            actionButton(t('＋ 创建 Room'), () => openRoomDialog(project.id), 'primary-button', !project.available)
           )
         ),
         node('section', { className: 'stats-grid' },
-          statCard('活动 Room', activeRooms, `${rooms.length - activeRooms} 已归档`, '◇', 'accent'),
-          statCard('工作中', runtimeCounts.busy, `${runtimeCounts.active} active`, '◎', runtimeCounts.busy ? 'warn' : ''),
-          statCard('排队', runtimeCounts.queued, runtimeCounts.queued ? '等待全局容量' : '当前无等待', '↥', runtimeCounts.queued ? 'warn' : 'good'),
-          statCard('失败', runtimeCounts.failed, runtimeCounts.failed ? '查看 Runtime 诊断' : '无失败 Runtime', '!', runtimeCounts.failed ? 'danger' : 'good')
+          statCard(t('活动 Room'), activeRooms, `${rooms.length - activeRooms} 已归档`, '◇', 'accent'),
+          statCard(t('工作中'), runtimeCounts.busy, `${runtimeCounts.active} active`, '◎', runtimeCounts.busy ? 'warn' : ''),
+          statCard(t('排队'), runtimeCounts.queued, runtimeCounts.queued ? t('等待全局容量') : t('当前无等待'), '↥', runtimeCounts.queued ? 'warn' : 'good'),
+          statCard(t('失败'), runtimeCounts.failed, runtimeCounts.failed ? t('查看 Runtime 诊断') : t('无失败 Runtime'), '!', runtimeCounts.failed ? 'danger' : 'good')
         ),
         node('section', { className: 'two-panel-grid' },
-          panel('Rooms', '公共时间线、附件、审批与 Agent Bindings 均按 Room 隔离',
+          panel('Rooms', t('公共时间线、附件、审批与 Agent Bindings 均按 Room 隔离'),
             visibleRooms.length ? node('div', { className: 'room-list' }, ...visibleRooms.map((room) => renderRoomRow(room, runtimeByRoom.get(room.id))))
-              : emptyState('◇', '没有可见 Room', '创建新 Room，或显示已归档 Room。', true),
+              : emptyState('◇', t('没有可见 Room'), t('创建新 Room，或显示已归档 Room。'), true),
             '',
             node('div', { className: 'section-actions' },
-              actionButton(state.filters.showArchived ? '隐藏已归档' : '显示已归档', () => { state.filters.showArchived = !state.filters.showArchived; renderProjectDetail(projectID); }, 'secondary-button compact-button'),
-              state.snapshot?.capabilities?.room_deletion ? roomSelectionToggleButton(visibleRooms, '本项目当前可见范围') : null,
+              actionButton(state.filters.showArchived ? t('隐藏已归档') : t('显示已归档'), () => { state.filters.showArchived = !state.filters.showArchived; renderProjectDetail(projectID); }, 'secondary-button compact-button'),
+              state.snapshot?.capabilities?.room_deletion ? roomSelectionToggleButton(visibleRooms, t('本项目当前可见范围')) : null,
               state.snapshot?.capabilities?.room_deletion ? roomClearSelectionButton() : null,
               state.snapshot?.capabilities?.room_deletion ? roomBatchArchiveButton(selectedActiveRooms(visibleRooms)) : null,
               state.snapshot?.capabilities?.room_deletion ? roomBatchRemovalButton(selectedArchivedRooms(visibleRooms)) : null,
               actionButton('＋ Room', () => openRoomDialog(project.id), 'primary-button compact-button', !project.available)
             )
           ),
-          panel('Project Identity', 'Registry 中的 canonical worktree 记录',
+          panel('Project Identity', t('Registry 中的 canonical worktree 记录'),
             node('div', { className: 'key-value-grid' },
               keyValue('Project ID', project.id, true),
-              keyValue('创建时间', formatDateTime(project.created_at)),
+              keyValue(t('创建时间'), formatDateTime(project.created_at)),
               keyValue('Canonical Root', project.root, true),
-              keyValue('可用性', project.available ? 'Available' : 'Unavailable')
+              keyValue(t('可用性'), project.available ? 'Available' : 'Unavailable')
             ),
-            project.diagnostic || 'Service 不会从当前工作目录隐式切换 Project。'
+            project.diagnostic || t('Service 不会从当前工作目录隐式切换 Project。')
           )
         ),
         state.snapshot?.capabilities?.project_refresh || state.snapshot?.capabilities?.project_removal
-          ? panel('Project Maintenance', '重新检查 canonical path，或安全注销空 Project。',
+          ? panel('Project Maintenance', t('重新检查 canonical path，或安全注销空 Project。'),
             node('div', { className: 'section-actions' },
               state.snapshot?.capabilities?.project_refresh
-                ? actionButton('重新检查路径', () => refreshProject(project), 'secondary-button')
+                ? actionButton(t('重新检查路径'), () => refreshProject(project), 'secondary-button')
                 : null,
               projectRemovalButton(project, rooms.length)
             ),
@@ -925,8 +927,8 @@
               : '注销只移除 Registry 登记，不删除 Git worktree 或 vendor context。'
           )
           : null,
-        project.diagnostic ? node('aside', { className: 'callout danger' }, node('strong', { textContent: 'Project 不可用' }), node('span', { textContent: project.diagnostic })) : null,
-        node('aside', { className: 'callout boundary' }, node('strong', { textContent: 'Workspace Boundary' }), node('span', { textContent: 'Room 永久属于此 Project；Reviewer snapshot 与 Git 状态都以该 canonical worktree 为边界。' }))
+        project.diagnostic ? node('aside', { className: 'callout danger' }, node('strong', { textContent: t('Project 不可用') }), node('span', { textContent: project.diagnostic })) : null,
+        node('aside', { className: 'callout boundary' }, node('strong', { textContent: 'Workspace Boundary' }), node('span', { textContent: t('Room 永久属于此 Project；Reviewer snapshot 与 Git 状态都以该 canonical worktree 为边界。') }))
       )
     );
   }
@@ -952,7 +954,7 @@
       actions.append(
         node('label', {
           className: 'button secondary-button compact-button room-action-control room-select-control',
-          title: archived ? '选择此 Room 进行批量清理' : '选择此 Room 进行批量归档',
+          title: archived ? t('选择此 Room 进行批量清理') : t('选择此 Room 进行批量归档'),
         },
           node('input', {
             type: 'checkbox',
@@ -960,21 +962,21 @@
             'aria-label': `选择 Room ${room.name}`,
             onChange: (event) => toggleRoomSelection(room.id, event.target.checked),
           }),
-          node('span', { textContent: '选择' })
+          node('span', { textContent: t('选择') })
         )
       );
     }
     if (archived) {
-      actions.append(actionButton('恢复', () => restoreRoom(room), 'secondary-button compact-button room-action-control'));
+      actions.append(actionButton(t('恢复'), () => restoreRoom(room), 'secondary-button compact-button room-action-control'));
       if (state.snapshot?.capabilities?.room_deletion) {
-        actions.append(actionButton('永久清除', () => confirmRoomRemoval([room]), 'danger-button outline compact-button room-action-control'));
+        actions.append(actionButton(t('永久清除'), () => confirmRoomRemoval([room]), 'danger-button outline compact-button room-action-control'));
       }
     } else {
-      if (pending) actions.append(actionButton('补全 Binding', () => completeBindings(room), 'primary-button compact-button room-action-control'));
-      actions.append(actionButton(runtime.phase === 'queued' ? `排队 #${runtime.queue_position || '?'}` : '打开', () => openRoom(room.id), 'primary-button compact-button room-action-control', pending));
-      actions.append(actionButton('浏览器打开', () => openRoomInBrowserAction(room.id), 'secondary-button compact-button room-action-control', pending));
-      actions.append(actionButton('重命名', () => openRenameDialog(room), 'secondary-button compact-button room-action-control'));
-      actions.append(actionButton('归档', () => archiveRoom(room), 'danger-button outline compact-button room-action-control'));
+      if (pending) actions.append(actionButton(t('补全 Binding'), () => completeBindings(room), 'primary-button compact-button room-action-control'));
+      actions.append(actionButton(runtime.phase === 'queued' ? `排队 #${runtime.queue_position || '?'}` : t('打开'), () => openRoom(room.id), 'primary-button compact-button room-action-control', pending));
+      actions.append(actionButton(t('浏览器打开'), () => openRoomInBrowserAction(room.id), 'secondary-button compact-button room-action-control', pending));
+      actions.append(actionButton(t('重命名'), () => openRenameDialog(room), 'secondary-button compact-button room-action-control'));
+      actions.append(actionButton(t('归档'), () => archiveRoom(room), 'danger-button outline compact-button room-action-control'));
     }
     return node('article', { className: 'room-row' }, node('div', { className: 'room-row-main' }, title, meta), actions);
   }
@@ -990,34 +992,34 @@
     const limit = policy.limit || Math.max(summary.runtime_capacity_used, 1);
     const percent = Math.min(100, Math.round((summary.runtime_capacity_used / limit) * 100));
     const phaseSelect = selectControl([
-      ['all', '全部 Runtime'], ['active', 'Active'], ['queued', 'Queued'], ['starting', 'Starting'], ['stopping', 'Stopping'], ['suspended', 'Suspended'], ['failed', 'Failed'],
-    ], state.filters.runtimePhase, (value) => { state.filters.runtimePhase = value; renderRuntimes(); }, 'Runtime 阶段');
+      ['all', t('全部 Runtime')], ['active', 'Active'], ['queued', 'Queued'], ['starting', 'Starting'], ['stopping', 'Stopping'], ['suspended', 'Suspended'], ['failed', 'Failed'],
+    ], state.filters.runtimePhase, (value) => { state.filters.runtimePhase = value; renderRuntimes(); }, t('Runtime 阶段'));
 
     view.replaceChildren(
       node('div', { className: 'view-stack' },
         node('section', { className: 'section-header' },
-          node('div', {}, node('h2', { textContent: 'Runtime Orchestration' }), node('p', { textContent: '只回收 idle Runtime；活动 Turn 永不因容量、切换页面或 Service 设置而被抢占。' })),
-          node('div', { className: 'section-actions' }, phaseSelect, actionButton('刷新状态', () => refresh({ notify: true, forceRender: true }), 'secondary-button'))
+          node('div', {}, node('h2', { textContent: 'Runtime Orchestration' }), node('p', { textContent: t('只回收 idle Runtime；活动 Turn 永不因容量、切换页面或 Service 设置而被抢占。') })),
+          node('div', { className: 'section-actions' }, phaseSelect, actionButton(t('刷新状态'), () => refresh({ notify: true, forceRender: true }), 'secondary-button'))
         ),
         node('section', { className: 'three-panel-grid' },
           node('article', { className: 'panel capacity-card' },
-            node('div', { className: 'capacity-heading' }, node('div', {}, node('div', { className: 'stat-label', textContent: '全局 Runtime 容量' }), node('div', { className: 'capacity-value' }, String(summary.runtime_capacity_used), node('small', { textContent: ` / ${policy.limit || '—'}` }))), statusBadge(percent >= 100 ? 'full' : 'available', percent >= 100 ? 'warn' : 'good')),
+            node('div', { className: 'capacity-heading' }, node('div', {}, node('div', { className: 'stat-label', textContent: t('全局 Runtime 容量') }), node('div', { className: 'capacity-value' }, String(summary.runtime_capacity_used), node('small', { textContent: ` / ${policy.limit || '—'}` }))), statusBadge(percent >= 100 ? 'full' : 'available', percent >= 100 ? 'warn' : 'good')),
             node('div', { className: 'progress-track', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(limit), 'aria-valuenow': String(summary.runtime_capacity_used) }, node('div', { className: 'progress-bar', style: `width:${percent}%` })),
             node('div', { className: 'capacity-legend' }, node('span', {}, node('i'), `${summary.active_runtimes} active`), node('span', {}, node('i', { className: 'busy' }), `${summary.busy_runtimes} working`), node('span', {}, node('i', { className: 'queued' }), `${summary.queued_runtimes} queued`))
           ),
-          statCard('Idle timeout', policy.idle_timeout_seconds ? formatDuration(policy.idle_timeout_seconds) : '—', '从最后活动开始计算', '◷', 'accent'),
-          statCard('Queue', summary.queued_runtimes, summary.queued_runtimes ? 'FIFO，断开浏览器不会取消需求' : '当前无等待', '↥', summary.queued_runtimes ? 'warn' : 'good')
+          statCard('Idle timeout', policy.idle_timeout_seconds ? formatDuration(policy.idle_timeout_seconds) : '—', t('从最后活动开始计算'), '◷', 'accent'),
+          statCard('Queue', summary.queued_runtimes, summary.queued_runtimes ? t('FIFO，断开浏览器不会取消需求') : t('当前无等待'), '↥', summary.queued_runtimes ? 'warn' : 'good')
         ),
-        queued.length ? panel('Activation Queue', '所有容量都被工作中 Runtime 占用时，新 Room 进入可见 FIFO 队列',
+        queued.length ? panel('Activation Queue', t('所有容量都被工作中 Runtime 占用时，新 Room 进入可见 FIFO 队列'),
           node('div', { className: 'list' }, ...queued.map((item) => renderQueueItem(item)))
         ) : null,
-        panel('所有 Room Runtime', `${models.length} 个 Room · 状态按工作优先级排序`,
-          models.length ? runtimeTable(models) : emptyState('◎', '没有匹配的 Runtime', '调整状态筛选。', true),
-          'Failed 且仍占用容量表示清理状态不确定；Service 会 fail closed，避免同一 Binding 启动第二个 Runtime。'
+        panel(t('所有 Room Runtime'), `${models.length} 个 Room · 状态按工作优先级排序`,
+          models.length ? runtimeTable(models) : emptyState('◎', t('没有匹配的 Runtime'), t('调整状态筛选。'), true),
+          t('Failed 且仍占用容量表示清理状态不确定；Service 会 fail closed，避免同一 Binding 启动第二个 Runtime。')
         ),
         node('aside', { className: 'callout warning' },
           node('strong', { textContent: 'Non-preemptive policy' }),
-          node('span', { textContent: '“挂起”只对 idle、queued 或可安全关闭的 Runtime 生效。Busy Runtime 会返回冲突，必须等待 Turn 完成或在 Room View 中由用户显式中断。' })
+          node('span', { textContent: t('“挂起”只对 idle、queued 或可安全关闭的 Runtime 生效。Busy Runtime 会返回冲突，必须等待 Turn 完成或在 Room View 中由用户显式中断。') })
         )
       )
     );
@@ -1025,29 +1027,29 @@
 
   function runtimeTable(models) {
     const table = node('table', { className: 'runtime-table' });
-    table.append(node('thead', {}, node('tr', {}, ...['Room', 'Project', '阶段', '容量', '最后活动', '操作'].map((label) => node('th', { textContent: label })))));
+    table.append(node('thead', {}, node('tr', {}, ...['Room', 'Project', t('阶段'), t('容量'), t('最后活动'), t('操作')].map((label) => node('th', { textContent: label })))));
     const body = node('tbody');
     models.forEach(({ room, project, runtime }) => {
       const actionCell = node('div', { className: 'runtime-actions' });
       const cleanupUncertain = runtime.phase === 'failed' && runtime.occupies_capacity;
       if (room.lifecycle !== 'archived') {
         actionCell.append(actionButton(
-          cleanupUncertain ? '需受控重启' : (runtime.phase === 'active' ? '打开' : '激活'),
+          cleanupUncertain ? t('需受控重启') : (runtime.phase === 'active' ? t('打开') : t('激活')),
           () => openRoom(room.id),
           'secondary-button compact-button',
           roomHasBlockingPendingBindings(room) || cleanupUncertain,
         ));
       }
       if (['active', 'queued', 'starting'].includes(runtime.phase)) {
-        actionCell.append(actionButton(runtime.phase === 'queued' ? '取消排队' : '挂起', () => suspendRoom(room, runtime), 'danger-button outline compact-button', runtime.busy || runtime.phase === 'starting'));
+        actionCell.append(actionButton(runtime.phase === 'queued' ? t('取消排队') : t('挂起'), () => suspendRoom(room, runtime), 'danger-button outline compact-button', runtime.busy || runtime.phase === 'starting'));
       }
       body.append(node('tr', { className: 'runtime-record' },
         node('td', { 'data-label': 'Room' }, node('div', { className: 'runtime-room' }, node('strong', { textContent: room.name }), node('small', { textContent: room.id }))),
         node('td', { 'data-label': 'Project', textContent: projectName(project) || 'Unknown' }),
-        node('td', { 'data-label': '阶段' }, statusBadge(runtimeLabel(runtime), runtimeTone(runtime), runtime.busy ? 'busy' : '')),
-        node('td', { 'data-label': '容量', textContent: runtime.occupies_capacity ? '占用' : '—' }),
-        node('td', { 'data-label': '最后活动', textContent: runtime.last_used_at ? formatRelativeTime(runtime.last_used_at) : '—', title: runtime.last_used_at ? formatDateTime(runtime.last_used_at) : '' }),
-        node('td', { 'data-label': '操作' }, actionCell)
+        node('td', { 'data-label': t('阶段') }, statusBadge(runtimeLabel(runtime), runtimeTone(runtime), runtime.busy ? 'busy' : '')),
+        node('td', { 'data-label': t('容量'), textContent: runtime.occupies_capacity ? t('占用') : '—' }),
+        node('td', { 'data-label': t('最后活动'), textContent: runtime.last_used_at ? formatRelativeTime(runtime.last_used_at) : '—', title: runtime.last_used_at ? formatDateTime(runtime.last_used_at) : '' }),
+        node('td', { 'data-label': t('操作') }, actionCell)
       ));
       if (runtime.last_error) {
         body.append(node('tr', { className: 'runtime-error-row' }, node('td', { colspan: '6', className: 'runtime-error-cell' }, node('div', { className: 'callout danger' }, node('strong', { textContent: 'Runtime error' }), node('span', { textContent: runtime.last_error })))));
@@ -1060,15 +1062,15 @@
   function renderQueueItem({ room, project, runtime }) {
     return node('article', { className: 'list-item' },
       node('div', { className: 'list-main' }, node('div', { className: 'item-symbol accent', textContent: `#${runtime.queue_position || '?'}` }), node('div', { className: 'list-copy' }, node('strong', { textContent: room.name }), node('p', { textContent: `${projectName(project)} · queued ${runtime.queued_at ? formatRelativeTime(runtime.queued_at) : ''}`.trim() }))),
-      node('div', { className: 'list-meta' }, actionButton('取消排队', () => suspendRoom(room, runtime), 'secondary-button compact-button'))
+      node('div', { className: 'list-meta' }, actionButton(t('取消排队'), () => suspendRoom(room, runtime), 'secondary-button compact-button'))
     );
   }
 
   function renderSettings() {
     const sections = [
-      ['interface', '界面体验'], ['runtime', 'Runtime 策略'], ['operations', 'Daemon 运维'], ['service', 'Service 与诊断'], ['boundaries', '安全边界'],
+      ['interface', t('界面体验')], ['runtime', t('Runtime 策略')], ['operations', t('Daemon 运维')], ['service', t('Service 与诊断')], ['boundaries', t('安全边界')],
     ];
-    const nav = node('nav', { className: 'panel settings-nav', 'aria-label': '设置分区' }, ...sections.map(([key, label]) => {
+    const nav = node('nav', { className: 'panel settings-nav', 'aria-label': t('设置分区') }, ...sections.map(([key, label]) => {
       const active = state.settingsSection === key;
       const button = actionButton(label, () => { state.settingsSection = key; renderSettings(); }, active ? 'active' : '');
       button.setAttribute('aria-pressed', String(active));
@@ -1078,8 +1080,8 @@
     view.replaceChildren(
       node('div', { className: 'view-stack' },
         node('section', { className: 'section-header' },
-          node('div', {}, node('h2', { textContent: 'Management Settings' }), node('p', { textContent: '界面偏好只作用于当前标签页；Service 策略由显式启动参数决定。' })),
-          actionButton('导出脱敏诊断', downloadDiagnosticSnapshot, 'secondary-button')
+          node('div', {}, node('h2', { textContent: 'Management Settings' }), node('p', { textContent: t('界面偏好只作用于当前标签页；Service 策略由显式启动参数决定。') })),
+          actionButton(t('导出脱敏诊断'), downloadDiagnosticSnapshot, 'secondary-button')
         ),
         node('div', { className: 'settings-grid' }, nav, content)
       )
@@ -1092,50 +1094,50 @@
     if (state.settingsSection === 'runtime') {
       const command = runtimeCommand(policy);
       return node('div', { className: 'view-stack' },
-        settingsPanel('有效 Runtime 策略', '当前进程实际采用的不可抢占调度参数。',
-          settingRow('最大活动 Runtime', 'Starting、Active、Stopping，以及清理不确定的 Failed Runtime 都占用容量。降低上限不会打断正在跑的 Turn。', runtimeLimitControl(policy)),
-          settingRow('Idle timeout', '只在 Runtime 没有活动 Turn 时开始计算。', node('strong', { textContent: policy.idle_timeout_seconds ? formatDuration(policy.idle_timeout_seconds) : '未暴露' })),
-          settingRow('Reconcile interval', 'Runtime Manager 检查空闲、队列和容量的频率。', node('strong', { textContent: policy.poll_interval_milliseconds ? `${policy.poll_interval_milliseconds} ms` : '未暴露' })),
-          settingRow('Close timeout', '安全关闭 Room Runtime 的单次截止时间。', node('strong', { textContent: policy.close_timeout_seconds ? formatDuration(policy.close_timeout_seconds) : '未暴露' }))
+        settingsPanel(t('有效 Runtime 策略'), t('当前进程实际采用的不可抢占调度参数。'),
+          settingRow(t('最大活动 Runtime'), t('Starting、Active、Stopping，以及清理不确定的 Failed Runtime 都占用容量。降低上限不会打断正在跑的 Turn。'), runtimeLimitControl(policy)),
+          settingRow('Idle timeout', t('只在 Runtime 没有活动 Turn 时开始计算。'), node('strong', { textContent: policy.idle_timeout_seconds ? formatDuration(policy.idle_timeout_seconds) : t('未暴露') })),
+          settingRow('Reconcile interval', t('Runtime Manager 检查空闲、队列和容量的频率。'), node('strong', { textContent: policy.poll_interval_milliseconds ? `${policy.poll_interval_milliseconds} ms` : t('未暴露') })),
+          settingRow('Close timeout', t('安全关闭 Room Runtime 的单次截止时间。'), node('strong', { textContent: policy.close_timeout_seconds ? formatDuration(policy.close_timeout_seconds) : t('未暴露') }))
         ),
         node('section', { className: 'panel' },
-          node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: '调整启动参数' }), node('p', { textContent: '策略变更需要受控重启，避免运行中的 vendor session 被动态重配。' }))),
+          node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: t('调整启动参数') }), node('p', { textContent: t('策略变更需要受控重启，避免运行中的 vendor session 被动态重配。') }))),
           node('div', { className: 'panel-body' },
-            node('div', { className: 'command-box' }, node('code', { textContent: command }), actionButton('复制', () => copyText(command, '启动命令已复制。'), 'secondary-button compact-button'))
+            node('div', { className: 'command-box' }, node('code', { textContent: command }), actionButton(t('复制'), () => copyText(command, t('启动命令已复制。')), 'secondary-button compact-button'))
           ),
-          node('footer', { className: 'panel-footer', textContent: '该前台示例只覆盖 Runtime 参数；请保留当前进程使用的 --config、--data-root、listen、token 等其他启动参数。' })
+          node('footer', { className: 'panel-footer', textContent: t('该前台示例只覆盖 Runtime 参数；请保留当前进程使用的 --config、--data-root、listen、token 等其他启动参数。') })
         ),
-        node('aside', { className: 'callout warning' }, node('strong', { textContent: '容量与 idle' }), node('span', { textContent: '容量可在此页立即调整；降低上限不会打断正在跑的 Turn。Idle timeout 仍由启动参数决定，后台标签不保证一直占有 Runtime。' }))
+        node('aside', { className: 'callout warning' }, node('strong', { textContent: t('容量与 idle') }), node('span', { textContent: t('容量可在此页立即调整；降低上限不会打断正在跑的 Turn。Idle timeout 仍由启动参数决定，后台标签不保证一直占有 Runtime。') }))
       );
     }
     if (state.settingsSection === 'operations') {
       const daemonInstall = daemonInstallCommand(policy);
       return node('div', { className: 'view-stack' },
-        settingsPanel('Daemon 快捷命令', 'PairRoom Web Shell 不直接停止或重启承载自身的宿主进程；运维动作在本机终端执行。',
-          settingRow('打开 Management Shell', '解析并验证当前 daemon 的完整认证地址后交给默认浏览器。', inlineCommand('pairroom daemon open', 'Daemon open 命令已复制。')),
-          settingRow('检查状态', '显示安装状态、平台、PID、日志与轮转元数据。', inlineCommand('pairroom daemon status', 'Daemon status 命令已复制。')),
-          settingRow('跟随日志', '读取 daemon 管理的合并 stdout/stderr 日志。', inlineCommand('pairroom daemon logs -f', 'Daemon logs 命令已复制。')),
-          settingRow('受控重启', '沿用已安装的完整 Service 定义，并等待活动 Turn 排空。', inlineCommand('pairroom daemon restart', 'Daemon restart 命令已复制。'))
+        settingsPanel(t('Daemon 快捷命令'), t('PairRoom Web Shell 不直接停止或重启承载自身的宿主进程；运维动作在本机终端执行。'),
+          settingRow(t('打开 Management Shell'), t('解析并验证当前 daemon 的完整认证地址后交给默认浏览器。'), inlineCommand('pairroom daemon open', t('Daemon open 命令已复制。'))),
+          settingRow(t('检查状态'), t('显示安装状态、平台、PID、日志与轮转元数据。'), inlineCommand('pairroom daemon status', t('Daemon status 命令已复制。'))),
+          settingRow(t('跟随日志'), t('读取 daemon 管理的合并 stdout/stderr 日志。'), inlineCommand('pairroom daemon logs -f', t('Daemon logs 命令已复制。'))),
+          settingRow(t('受控重启'), t('沿用已安装的完整 Service 定义，并等待活动 Turn 排空。'), inlineCommand('pairroom daemon restart', t('Daemon restart 命令已复制。')))
         ),
         node('section', { className: 'panel' },
-          node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: '更新已安装的 Runtime 参数' }), node('p', { textContent: 'daemon restart 不接受新的 Service 参数；需要重新写入完整安装定义。' }))),
+          node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: t('更新已安装的 Runtime 参数') }), node('p', { textContent: t('daemon restart 不接受新的 Service 参数；需要重新写入完整安装定义。') }))),
           node('div', { className: 'panel-body command-stack' },
             node('div', { className: 'command-example' },
-              node('div', { className: 'command-example-heading' }, node('strong', { textContent: '默认参数示例' }), node('span', { textContent: '复制前核对现有 daemon 定义' })),
-              node('div', { className: 'command-box' }, node('code', { textContent: daemonInstall }), actionButton('复制示例', () => copyText(daemonInstall, 'Daemon install 示例已复制。'), 'secondary-button compact-button'))
+              node('div', { className: 'command-example-heading' }, node('strong', { textContent: t('默认参数示例') }), node('span', { textContent: t('复制前核对现有 daemon 定义') })),
+              node('div', { className: 'command-box' }, node('code', { textContent: daemonInstall }), actionButton(t('复制示例'), () => copyText(daemonInstall, t('Daemon install 示例已复制。')), 'secondary-button compact-button'))
             )
           ),
-          node('footer', { className: 'panel-footer', textContent: '--force 会替换服务定义。若当前使用自定义 --config、--data-root、listen、token、proxy 或日志参数，必须在命令中完整保留。' })
+          node('footer', { className: 'panel-footer', textContent: t('--force 会替换服务定义。若当前使用自定义 --config、--data-root、listen、token、proxy 或日志参数，必须在命令中完整保留。') })
         ),
-        node('aside', { className: 'callout boundary' }, node('strong', { textContent: 'Daemon boundary' }), node('span', { textContent: 'daemon 只把 pairroom service 投射到 systemd、launchd 或 Windows Task Scheduler；Room Runtime、审批与 Agent Harness 生命周期仍由 PairRoom Service 管理。' })),
-        node('aside', { className: 'callout warning' }, node('strong', { textContent: 'Crash-stale service.lock' }), node('span', { textContent: '只有确认旧进程已经消失后，才可显式执行 pairroom daemon start 或 restart --recover-stale-lock；正常启动不会自动猜测锁已失效。' }))
+        node('aside', { className: 'callout boundary' }, node('strong', { textContent: 'Daemon boundary' }), node('span', { textContent: t('daemon 只把 pairroom service 投射到 systemd、launchd 或 Windows Task Scheduler；Room Runtime、审批与 Agent Harness 生命周期仍由 PairRoom Service 管理。') })),
+        node('aside', { className: 'callout warning' }, node('strong', { textContent: 'Crash-stale service.lock' }), node('span', { textContent: t('只有确认旧进程已经消失后，才可显式执行 pairroom daemon start 或 restart --recover-stale-lock；正常启动不会自动猜测锁已失效。') }))
       );
     }
     if (state.settingsSection === 'service') {
       const safe = diagnosticSnapshot();
       return node('div', { className: 'view-stack' },
         node('section', { className: 'panel' },
-          node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: 'Service Identity' }), node('p', { textContent: '构建信息与稳定数据根。' }))),
+          node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: 'Service Identity' }), node('p', { textContent: t('构建信息与稳定数据根。') }))),
           node('div', { className: 'key-value-grid' },
             keyValue('Version', snapshot.version || 'development'),
             keyValue('Commit', snapshot.commit || 'not embedded', true),
@@ -1145,18 +1147,18 @@
             keyValue('Registry health', snapshot.healthy ? 'Healthy' : 'Fail-closed')
           )
         ),
-        settingsPanel('诊断工具', '导出内容会移除 Room Runtime URL；本机路径和业务元数据仍可能敏感。',
-          settingRow('复制 Service 摘要', '适合粘贴到本地 Issue 或调试会话。', actionButton('复制 JSON', () => copyText(JSON.stringify(safe, null, 2), '脱敏诊断已复制。'), 'secondary-button')),
-          settingRow('下载诊断文件', '文件只在浏览器本地生成，不上传到外部服务。', actionButton('下载 JSON', downloadDiagnosticSnapshot, 'secondary-button')),
-          settingRow('查看原始结构', '在页面中展开脱敏后的 Service snapshot。', toggleButton(state.showRawSnapshot, (value) => { state.showRawSnapshot = value; renderSettings(); }, '切换 snapshot 显示'))
+        settingsPanel(t('诊断工具'), t('导出内容会移除 Room Runtime URL；本机路径和业务元数据仍可能敏感。'),
+          settingRow(t('复制 Service 摘要'), t('适合粘贴到本地 Issue 或调试会话。'), actionButton(t('复制 JSON'), () => copyText(JSON.stringify(safe, null, 2), t('脱敏诊断已复制。')), 'secondary-button')),
+          settingRow(t('下载诊断文件'), t('文件只在浏览器本地生成，不上传到外部服务。'), actionButton(t('下载 JSON'), downloadDiagnosticSnapshot, 'secondary-button')),
+          settingRow(t('查看原始结构'), t('在页面中展开脱敏后的 Service snapshot。'), toggleButton(state.showRawSnapshot, (value) => { state.showRawSnapshot = value; renderSettings(); }, t('切换 snapshot 显示')))
         ),
         state.showRawSnapshot ? node('pre', { className: 'raw-snapshot', textContent: JSON.stringify(safe, null, 2) }) : null,
         snapshot.maintenance?.pending_cleanup || snapshot.maintenance?.diagnostic
-          ? settingsPanel('Room 删除清理', '逻辑删除已提交；隔离区中的受管数据仍需完成物理清理。',
+          ? settingsPanel(t('Room 删除清理'), t('逻辑删除已提交；隔离区中的受管数据仍需完成物理清理。'),
             settingRow(
               `${snapshot.maintenance?.pending_cleanup || 0} 个待清理项`,
-              snapshot.maintenance?.diagnostic || '可安全重试，不会恢复已删除 Room。',
-              actionButton('重试清理', retryRoomDeletionCleanup, 'secondary-button')
+              snapshot.maintenance?.diagnostic || t('可安全重试，不会恢复已删除 Room。'),
+              actionButton(t('重试清理'), retryRoomDeletionCleanup, 'secondary-button')
             )
           )
           : null,
@@ -1166,36 +1168,36 @@
     if (state.settingsSection === 'boundaries') {
       const caps = snapshot.capabilities || {};
       return node('div', { className: 'view-stack' },
-        settingsPanel('Control-plane capabilities', '界面只呈现后端明确支持的控制能力。',
-          capabilityRow('登记 canonical Project', true, '显式绝对路径；不提供服务端目录浏览。'),
-          capabilityRow('导入 Legacy Room', caps.legacy_import !== false, '非破坏性登记，不搬移或重写 events.jsonl。'),
-          capabilityRow('手动挂起 idle Runtime', caps.runtime_suspend === true, 'Busy Runtime 会拒绝操作。'),
-          capabilityRow('热更新 Runtime 容量', caps.runtime_policy_mutation === true, 'Settings 中可调整最多同时活动的 Room Runtime。降低容量不会打断正在跑的 Turn。'),
-          capabilityRow('应用内 Room surface', caps.room_surface === true, 'Management 同源网关承载应用内标签，不把 Runtime token 送到浏览器。'),
-          capabilityRow('Room 生命周期管理', caps.room_deletion === true, '支持最多 100 个 Room 的批量归档与批量永久清理；永久清理仅接受已归档 Room，并要求一次不可恢复确认。显式外部导入目录只解绑并保留。'),
-          capabilityRow('服务端路径浏览器', caps.server_path_browser === true, '避免扩大本机文件系统暴露面。')
+        settingsPanel('Control-plane capabilities', t('界面只呈现后端明确支持的控制能力。'),
+          capabilityRow(t('登记 canonical Project'), true, t('显式绝对路径；不提供服务端目录浏览。')),
+          capabilityRow(t('导入 Legacy Room'), caps.legacy_import !== false, t('非破坏性登记，不搬移或重写 events.jsonl。')),
+          capabilityRow(t('手动挂起 idle Runtime'), caps.runtime_suspend === true, t('Busy Runtime 会拒绝操作。')),
+          capabilityRow(t('热更新 Runtime 容量'), caps.runtime_policy_mutation === true, t('Settings 中可调整最多同时活动的 Room Runtime。降低容量不会打断正在跑的 Turn。')),
+          capabilityRow(t('应用内 Room surface'), caps.room_surface === true, t('Management 同源网关承载应用内标签，不把 Runtime token 送到浏览器。')),
+          capabilityRow(t('Room 生命周期管理'), caps.room_deletion === true, t('支持最多 100 个 Room 的批量归档与批量永久清理；永久清理仅接受已归档 Room，并要求一次不可恢复确认。显式外部导入目录只解绑并保留。')),
+          capabilityRow(t('服务端路径浏览器'), caps.server_path_browser === true, t('避免扩大本机文件系统暴露面。'))
         ),
-        node('aside', { className: 'callout boundary' }, node('strong', { textContent: 'Transcript Boundary' }), node('span', { textContent: 'Vendor Transcript 与 PairRoom Room Event Log 是不同记录。Existing Binding 只恢复 vendor context，绑定前历史不会进入公共时间线。' })),
-        node('aside', { className: 'callout warning' }, node('strong', { textContent: 'Binding Identity' }), node('span', { textContent: '(agent, vendor_session_id) 在整个 Service 内独占，包括已归档 Room。该约束防止同一 vendor transcript 被多个 Runtime 并发写入。' })),
-        node('aside', { className: 'callout neutral' }, node('strong', { textContent: 'Browser session' }), node('span', { textContent: 'Management token 只用于一次性 bootstrap，随后换成 HttpOnly、SameSite=Strict 会话 Cookie；写操作还需要内存中的 CSRF token。' }))
+        node('aside', { className: 'callout boundary' }, node('strong', { textContent: 'Transcript Boundary' }), node('span', { textContent: t('Vendor Transcript 与 PairRoom Room Event Log 是不同记录。Existing Binding 只恢复 vendor context，绑定前历史不会进入公共时间线。') })),
+        node('aside', { className: 'callout warning' }, node('strong', { textContent: 'Binding Identity' }), node('span', { textContent: t('(agent, vendor_session_id) 在整个 Service 内独占，包括已归档 Room。该约束防止同一 vendor transcript 被多个 Runtime 并发写入。') })),
+        node('aside', { className: 'callout neutral' }, node('strong', { textContent: 'Browser session' }), node('span', { textContent: t('Management token 只用于一次性 bootstrap，随后换成 HttpOnly、SameSite=Strict 会话 Cookie；写操作还需要内存中的 CSRF token。') }))
       );
     }
     return node('div', { className: 'view-stack' },
-      settingsPanel('外观', '主题与内嵌 Room 共享并持久化；其余偏好只在当前标签页生效。',
-        settingRow('主题', '跟随系统，或临时固定浅色/深色。', segmented([
-          ['system', '跟随系统'], ['light', '浅色'], ['dark', '深色'],
-        ], state.preferences.theme, (value) => { state.preferences.theme = value; persistTheme(value); applyPreferences(); renderSettings(); }, '主题')),
-        settingRow('信息密度', 'Compact 会缩小列表、表格和面板间距。', segmented([
-          ['comfortable', '舒适'], ['compact', '紧凑'],
-        ], state.preferences.density, (value) => { state.preferences.density = value; applyPreferences(); renderSettings(); }, '信息密度'))
+      settingsPanel(t('外观'), t('主题与内嵌 Room 共享并持久化；其余偏好只在当前标签页生效。'),
+        settingRow(t('主题'), t('跟随系统，或临时固定浅色/深色。'), segmented([
+          ['system', t('跟随系统')], ['light', t('浅色')], ['dark', t('深色')],
+        ], state.preferences.theme, (value) => { state.preferences.theme = value; persistTheme(value); applyPreferences(); renderSettings(); }, t('主题'))),
+        settingRow(t('信息密度'), t('Compact 会缩小列表、表格和面板间距。'), segmented([
+          ['comfortable', t('舒适')], ['compact', t('紧凑')],
+        ], state.preferences.density, (value) => { state.preferences.density = value; applyPreferences(); renderSettings(); }, t('信息密度')))
       ),
-      settingsPanel('刷新与导航', '控制当前页面如何轮询 Service。侧栏点击始终在应用内标签打开 Room。',
-        settingRow('自动刷新', '页面隐藏时自动暂停，重新可见后立即同步。', selectControl([
-          ['0', '关闭'], ['5000', '5 秒'], ['10000', '10 秒'], ['30000', '30 秒'], ['60000', '60 秒'],
-        ], String(state.preferences.refreshMs), (value) => { state.preferences.refreshMs = Number(value); scheduleRefresh(); }, '自动刷新间隔')),
-        settingRow('默认显示已归档', '影响 Projects 与 Project 详情列表。', toggleButton(state.filters.showArchived, (value) => { state.filters.showArchived = value; }, '切换归档可见性'))
+      settingsPanel(t('刷新与导航'), t('控制当前页面如何轮询 Service。侧栏点击始终在应用内标签打开 Room。'),
+        settingRow(t('自动刷新'), t('页面隐藏时自动暂停，重新可见后立即同步。'), selectControl([
+          ['0', t('关闭')], ['5000', t('5 秒')], ['10000', t('10 秒')], ['30000', t('30 秒')], ['60000', t('60 秒')],
+        ], String(state.preferences.refreshMs), (value) => { state.preferences.refreshMs = Number(value); scheduleRefresh(); }, t('自动刷新间隔'))),
+        settingRow(t('默认显示已归档'), t('影响 Projects 与 Project 详情列表。'), toggleButton(state.filters.showArchived, (value) => { state.filters.showArchived = value; }, t('切换归档可见性')))
       ),
-      node('aside', { className: 'callout neutral' }, node('strong', { textContent: '无隐式持久化' }), node('span', { textContent: '这些界面选项不会写入 Service Registry，也不会改变 Room Event Log 或 Agent Session Binding。刷新标签页后恢复默认值。' }))
+      node('aside', { className: 'callout neutral' }, node('strong', { textContent: t('无隐式持久化') }), node('span', { textContent: t('这些界面选项不会写入 Service Registry，也不会改变 Room Event Log 或 Agent Session Binding。刷新标签页后恢复默认值。') }))
     );
   }
 
@@ -1208,10 +1210,10 @@
 
   function runtimeLimitControl(policy) {
     const mutable = state.snapshot?.capabilities?.runtime_policy_mutation === true;
-    if (!mutable) return node('strong', { textContent: policy.limit ? String(policy.limit) : '未暴露' });
+    if (!mutable) return node('strong', { textContent: policy.limit ? String(policy.limit) : t('未暴露') });
     const input = node('input', {
       type: 'number', min: '1', max: '128', value: String(policy.limit || 8),
-      'aria-label': '最大同时活动 Room Runtime',
+      'aria-label': t('最大同时活动 Room Runtime'),
       onChange: async (event) => {
         const limit = Number(event.target.value);
         try {
@@ -1238,14 +1240,14 @@
   function inlineCommand(command, successMessage) {
     return node('div', { className: 'inline-command' },
       node('code', { textContent: command }),
-      actionButton('复制', () => copyText(command, successMessage), 'secondary-button compact-button')
+      actionButton(t('复制'), () => copyText(command, successMessage), 'secondary-button compact-button')
     );
   }
 
   function attentionItems(snapshot) {
     const items = [];
     (snapshot.projects || []).forEach((project) => {
-      if (!project.available) items.push({ kind: 'project', title: projectName(project), detail: project.diagnostic || 'Project root 不可访问。', symbol: '!', tone: 'danger', action: () => navigate(`#/projects/${encodeURIComponent(project.id)}`) });
+      if (!project.available) items.push({ kind: 'project', title: projectName(project), detail: project.diagnostic || t('Project root 不可访问。'), symbol: '!', tone: 'danger', action: () => navigate(`#/projects/${encodeURIComponent(project.id)}`) });
     });
     (snapshot.rooms || []).forEach((room) => {
       if (roomHasBlockingPendingBindings(room)) {
@@ -1254,14 +1256,14 @@
       }
     });
     runtimeModels(snapshot).forEach(({ room, runtime }) => {
-      if (runtime.phase === 'failed') items.push({ kind: 'runtime', title: room.name, detail: runtime.last_error || 'Runtime 启动或关闭失败。', symbol: 'R', tone: 'danger', action: () => navigate('#/runtimes') });
+      if (runtime.phase === 'failed') items.push({ kind: 'runtime', title: room.name, detail: runtime.last_error || t('Runtime 启动或关闭失败。'), symbol: 'R', tone: 'danger', action: () => navigate('#/runtimes') });
     });
     const maintenance = snapshot.maintenance || {};
     if (maintenance.pending_cleanup || maintenance.diagnostic) {
       const count = Number(maintenance.pending_cleanup || 0);
       items.push({
         kind: 'maintenance',
-        title: 'Room 数据清理待完成',
+        title: t('Room 数据清理待完成'),
         detail: maintenance.diagnostic || `${count} 个隔离清理项可安全重试。`,
         symbol: 'D',
         tone: 'warn',
@@ -1274,7 +1276,7 @@
   function renderAttentionItem(item) {
     return node('article', { className: 'list-item' },
       node('div', { className: 'list-main' }, node('div', { className: `item-symbol ${item.tone}`, textContent: item.symbol }), node('div', { className: 'list-copy' }, node('strong', { textContent: item.title }), node('p', { textContent: item.detail, title: item.detail }))),
-      actionButton('处理', item.action, 'secondary-button compact-button')
+      actionButton(t('处理'), item.action, 'secondary-button compact-button')
     );
   }
 
@@ -1285,7 +1287,7 @@
   function renderLiveItem({ room, project, runtime }) {
     return node('article', { className: 'list-item' },
       node('div', { className: 'list-main' }, node('div', { className: `item-symbol ${runtime.busy ? 'warn' : 'accent'}`, textContent: runtime.busy ? '●' : '◎' }), node('div', { className: 'list-copy' }, node('strong', { textContent: room.name }), node('p', { textContent: `${projectName(project)} · ${runtimeLabel(runtime)}` }))),
-      node('div', { className: 'list-meta' }, statusBadge(runtimeLabel(runtime), runtimeTone(runtime), runtime.busy ? 'busy' : ''), actionButton('打开', () => openRoom(room.id), 'secondary-button compact-button', roomHasBlockingPendingBindings(room)))
+      node('div', { className: 'list-meta' }, statusBadge(runtimeLabel(runtime), runtimeTone(runtime), runtime.busy ? 'busy' : ''), actionButton(t('打开'), () => openRoom(room.id), 'secondary-button compact-button', roomHasBlockingPendingBindings(room)))
     );
   }
 
@@ -1295,7 +1297,7 @@
     const busy = rooms.filter((room) => getRuntime(room.id).busy).length;
     return node('article', { className: 'list-item' },
       node('div', { className: 'list-main' }, node('div', { className: 'item-symbol accent', textContent: projectInitials(project) }), node('div', { className: 'list-copy' }, node('strong', { textContent: projectName(project) }), node('p', { textContent: project.root, title: project.root }))),
-      node('div', { className: 'list-meta' }, statusBadge(project.available ? 'available' : 'unavailable', project.available ? 'good' : 'danger'), node('span', { className: 'muted', textContent: `${active} rooms · ${busy} working` }), actionButton('查看', () => navigate(`#/projects/${encodeURIComponent(project.id)}`), 'secondary-button compact-button'))
+      node('div', { className: 'list-meta' }, statusBadge(project.available ? 'available' : 'unavailable', project.available ? 'good' : 'danger'), node('span', { className: 'muted', textContent: `${active} rooms · ${busy} working` }), actionButton(t('查看'), () => navigate(`#/projects/${encodeURIComponent(project.id)}`), 'secondary-button compact-button'))
     );
   }
 
@@ -1455,16 +1457,16 @@
     const importing = mode === 'import';
     $('project-mode-register').setAttribute('aria-selected', String(!importing));
     $('project-mode-import').setAttribute('aria-selected', String(importing));
-    $('project-dialog-title').textContent = importing ? '导入 Legacy Room' : '登记 Project';
-    $('project-dialog-subtitle').textContent = importing ? '显式登记自定义旧 data-dir。' : '添加 canonical Git worktree。';
+    $('project-dialog-title').textContent = importing ? t('导入 Legacy Room') : t('登记 Project');
+    $('project-dialog-subtitle').textContent = importing ? t('显式登记自定义旧 data-dir。') : t('添加 canonical Git worktree。');
     $('project-path').placeholder = importing ? '/absolute/path/to/legacy/room-data' : '/absolute/path/to/git/worktree';
-    $('project-submit').textContent = importing ? '导入 Legacy Room' : '登记 Project';
+    $('project-submit').textContent = importing ? t('导入 Legacy Room') : t('登记 Project');
     const help = $('project-mode-help');
     help.replaceChildren(
-      node('strong', { textContent: importing ? '非破坏性导入' : '显式路径边界' }),
+      node('strong', { textContent: importing ? t('非破坏性导入') : t('显式路径边界') }),
       node('span', { textContent: importing
-        ? '不会搬移、复制或重写 events.jsonl；成功后同样参与 Project 与 Binding Identity 去重。'
-        : '只接受绝对路径。根目录、子目录和符号链接会解析为同一个 canonical Git worktree；服务不会扫描开发目录。' })
+        ? t('不会搬移、复制或重写 events.jsonl；成功后同样参与 Project 与 Binding Identity 去重。')
+        : t('只接受绝对路径。根目录、子目录和符号链接会解析为同一个 canonical Git worktree；服务不会扫描开发目录。') })
     );
   }
 
@@ -1472,7 +1474,7 @@
     event.preventDefault();
     const path = $('project-path').value.trim();
     if (!looksAbsolutePath(path)) {
-      showFormError('project-form-error', '请输入绝对路径；Service 不接受相对路径。');
+      showFormError('project-form-error', t('请输入绝对路径；Service 不接受相对路径。'));
       return;
     }
     const button = $('project-submit');
@@ -1483,7 +1485,7 @@
           ? await api('/api/v1/import', { method: 'POST', body: JSON.stringify({ path }) })
           : await api('/api/v1/projects', { method: 'POST', body: JSON.stringify({ path }) });
         closeDialog('project-dialog');
-        toast(state.projectMode === 'import' ? 'Legacy Room 已导入' : 'Project 已登记', state.projectMode === 'import' ? '旧数据保持原位且未被重写。' : 'Canonical worktree 已加入 Service Registry。', 'success');
+        toast(state.projectMode === 'import' ? t('Legacy Room 已导入') : t('Project 已登记'), state.projectMode === 'import' ? t('旧数据保持原位且未被重写。') : t('Canonical worktree 已加入 Service Registry。'), 'success');
         await refresh({ forceRender: true });
         const projectID = state.projectMode === 'import' ? result.project_id : result.id;
         if (projectID) navigate(`#/projects/${encodeURIComponent(projectID)}`);
@@ -1496,7 +1498,7 @@
   function openRoomDialog(projectID = '') {
     const projects = (state.snapshot?.projects || []).filter((project) => project.available);
     if (!projects.length) {
-      toast('没有可用 Project', '请先登记或修复一个 Git worktree。', 'warning');
+      toast('没有可用 Project', t('请先登记或修复一个 Git worktree。'), 'warning');
       return;
     }
     const select = $('room-project-id');
@@ -1529,7 +1531,7 @@
     const projectID = $('room-project-id').value;
     const name = $('room-name').value.trim();
     if (!name) {
-      showFormError('room-form-error', 'Room 名称不能为空。');
+      showFormError('room-form-error', t('Room 名称不能为空。'));
       return;
     }
     const bindings = {};
@@ -1537,17 +1539,17 @@
       const mode = document.querySelector(`input[name="${actor}-mode"]:checked`)?.value || 'new';
       const sessionID = $(`${actor}-session-id`).value.trim();
       if (mode === 'existing' && !sessionID) {
-        showFormError('room-form-error', `${actor === 'claude' ? 'Claude Session' : 'Codex Thread'} ID 不能为空。`);
+        showFormError('room-form-error', `${actor === 'claude' ? 'Claude Session' : 'Codex Threadt('} ID 不能为空。`);
         return;
       }
-      bindings[actor] = mode === 'existing' ? { mode, session_id: sessionID } : { mode };
+      bindings[actor] = mode === ')existing' ? { mode, session_id: sessionID } : { mode };
     }
     await withBusy($('room-submit'), async () => {
       try {
         hideFormError('room-form-error');
         await api(`/api/v1/projects/${encodeURIComponent(projectID)}/rooms`, { method: 'POST', body: JSON.stringify({ name, bindings }) });
         closeDialog('room-dialog');
-        toast('Room 已创建', 'Claude 与 Codex Binding 已完成原子验证。', 'success');
+        toast('Room 已创建', t('Claude 与 Codex Binding 已完成原子验证。'), 'success');
         await refresh({ forceRender: true });
         navigate(`#/projects/${encodeURIComponent(projectID)}`);
       } catch (error) {
@@ -1570,7 +1572,7 @@
     const name = $('rename-room-name').value.trim();
     const room = roomByID(roomID);
     if (!name) {
-      showFormError('rename-form-error', 'Room 名称不能为空。');
+      showFormError('rename-form-error', t('Room 名称不能为空。'));
       return;
     }
     if (room && name === room.name) {
@@ -1582,7 +1584,7 @@
       try {
         await api(`/api/v1/rooms/${encodeURIComponent(roomID)}`, { method: 'PATCH', body: JSON.stringify({ name }) });
         closeDialog('rename-dialog');
-        toast('Room 已重命名', '变更在安全 Turn 边界提交。', 'success');
+        toast('Room 已重命名', t('变更在安全 Turn 边界提交。'), 'success');
         await refresh({ forceRender: true });
       } catch (error) {
         showFormError('rename-form-error', error.message);
@@ -1600,8 +1602,8 @@
       const label = actor === 'claude' ? 'Claude Session' : 'Codex Thread';
       const field = node('fieldset', { className: 'binding-card', 'data-complete-actor': actor },
         node('legend', {}, node('span', { className: `agent-avatar ${actor}`, textContent: actor === 'claude' ? 'C' : 'X' }), node('span', {}, node('strong', { textContent: label }), node('small', { textContent: 'Missing Binding' }))),
-        node('label', { className: 'choice-card' }, node('input', { type: 'radio', name: `complete-${actor}-mode`, value: 'new', checked: true }), node('span', {}, node('strong', { textContent: `新建 ${label}` }), node('small', { textContent: 'Identity 在首次真实 Turn 上固化' }))),
-        node('label', { className: 'choice-card' }, node('input', { type: 'radio', name: `complete-${actor}-mode`, value: 'existing' }), node('span', {}, node('strong', { textContent: '复用 Existing' }), node('small', { textContent: '必须未被其他 Room 占用' }))),
+        node('label', { className: 'choice-card' }, node('input', { type: 'radio', name: `complete-${actor}-mode`, value: 'new', checked: true }), node('span', {}, node('strong', { textContent: `新建 ${label}` }), node('small', { textContent: t('Identity 在首次真实 Turn 上固化') }))),
+        node('label', { className: 'choice-card' }, node('input', { type: 'radio', name: `complete-${actor}-mode`, value: 'existing' }), node('span', {}, node('strong', { textContent: t('复用 Existing') }), node('small', { textContent: t('必须未被其他 Room 占用') }))),
         node('label', { className: 'session-field' }, node('span', { textContent: `${label} ID` }), node('input', { id: `complete-${actor}-session`, type: 'text', placeholder: `粘贴 ${label} ID`, autocomplete: 'off', disabled: true }))
       );
       field.querySelectorAll('input[type="radio"]').forEach((radio) => radio.addEventListener('change', () => {
@@ -1613,7 +1615,7 @@
       }));
       container.append(field);
     }
-    container.append(node('div', { className: 'callout boundary' }, node('strong', { textContent: 'Atomic completion' }), node('span', { textContent: '任一 Existing ID 无效、不可恢复或已被占用时，整个补全过程失败且不留下部分占用。' })));
+    container.append(node('div', { className: 'callout boundary' }, node('strong', { textContent: 'Atomic completion' }), node('span', { textContent: t('任一 Existing ID 无效、不可恢复或已被占用时，整个补全过程失败且不留下部分占用。') })));
     hideFormError('binding-form-error');
     showDialog('binding-dialog');
   }
@@ -1628,17 +1630,17 @@
       const input = $(`complete-${actor}-session`);
       const sessionID = input?.value.trim() || '';
       if (mode === 'existing' && !sessionID) {
-        showFormError('binding-form-error', `${actor === 'claude' ? 'Claude Session' : 'Codex Thread'} ID 不能为空。`);
+        showFormError('binding-form-error', `${actor === 'claude' ? 'Claude Session' : 'Codex Threadt('} ID 不能为空。`);
         return;
       }
-      bindings[actor] = mode === 'existing' ? { mode, session_id: sessionID } : { mode };
+      bindings[actor] = mode === ')existing' ? { mode, session_id: sessionID } : { mode };
     }
     const button = event.submitter || event.currentTarget.querySelector('[type="submit"]');
     await withBusy(button, async () => {
       try {
         await api(`/api/v1/rooms/${encodeURIComponent(state.bindingRoomID)}/bindings`, { method: 'POST', body: JSON.stringify({ bindings }) });
         closeDialog('binding-dialog');
-        toast('Binding 已补全', 'Legacy Room 现在可以安全激活。', 'success');
+        toast('Binding 已补全', t('Legacy Room 现在可以安全激活。'), 'success');
         await refresh({ forceRender: true });
       } catch (error) {
         showFormError('binding-form-error', error.message);
@@ -1651,12 +1653,12 @@
       eyebrow: 'ARCHIVE ROOM',
       title: `归档“${room.name}”？`,
       message: '活动 Turn 会先被停止，Runtime 随后挂起；Room 将从默认列表隐藏。',
-      detail: 'Event Log、附件、角色、草稿、未读状态和两侧 Binding Identity 都会完整保留。',
-      label: '归档 Room',
+      detail: t('Event Log、附件、角色、草稿、未读状态和两侧 Binding Identity 都会完整保留。'),
+      label: t('归档 Room'),
       tone: 'danger',
       action: async () => {
         await api(`/api/v1/rooms/${encodeURIComponent(room.id)}/archive`, { method: 'POST' });
-        toast('Room 已归档', '历史与 Binding Identity 已保留。', 'success');
+        toast('Room 已归档', t('历史与 Binding Identity 已保留。'), 'success');
         await refresh({ forceRender: true });
       },
     });
@@ -1666,9 +1668,9 @@
     try {
       const refreshed = await api(`/api/v1/projects/${encodeURIComponent(project.id)}/refresh`, { method: 'POST' });
       if (refreshed.available) {
-        toast('Project 可用', 'Canonical worktree 已重新验证。', 'success');
+        toast('Project 可用', t('Canonical worktree 已重新验证。'), 'success');
       } else {
-        toast('Project 仍不可用', refreshed.diagnostic || 'Canonical worktree 当前无法访问。', 'warning');
+        toast('Project 仍不可用', refreshed.diagnostic || t('Canonical worktree 当前无法访问。'), 'warning');
       }
       await refresh({ forceRender: true });
     } catch (error) {
@@ -1768,7 +1770,7 @@
     return node('button', {
       type: 'button',
       className: `danger-button outline${compact ? ' compact-button' : ''}`,
-      textContent: '注销 Project',
+      textContent: t('注销 Project'),
       disabled,
       title: explanation,
       'aria-label': `注销 Project ${projectName(project)}。${explanation}`,
@@ -1785,17 +1787,17 @@
       eyebrow: 'UNREGISTER PROJECT',
       title: `注销“${projectName(project)}”？`,
       message: '将此空 Project 从 Service Registry 注销。',
-      detail: '不会删除 Git worktree 或 vendor Session/Thread。后端仍会最终复检 Project 确实不含任何 Room。',
-      label: '注销 Project',
+      detail: t('不会删除 Git worktree 或 vendor Session/Thread。后端仍会最终复检 Project 确实不含任何 Room。'),
+      label: t('注销 Project'),
       tone: 'danger',
       confirmation: project.id,
-      confirmationLabel: '输入完整 Project ID 以确认',
+      confirmationLabel: t('输入完整 Project ID 以确认'),
       action: async () => {
         await api(`/api/v1/projects/${encodeURIComponent(project.id)}`, {
           method: 'DELETE',
           body: JSON.stringify({ confirm_project_id: project.id }),
         });
-        toast('Project 已注销', 'Git worktree 与外部数据未被修改。', 'success');
+        toast('Project 已注销', t('Git worktree 与外部数据未被修改。'), 'success');
         await refresh({ forceRender: true });
         navigate('#/projects');
       },
@@ -1804,7 +1806,7 @@
   function confirmRoomArchive(candidates) {
     const rooms = eligibleActiveRooms(candidates);
     if (!rooms.length) {
-      toast('没有可归档的 Room', '请选择至少一个活跃 Room。', 'warning');
+      toast('没有可归档的 Room', t('请选择至少一个活跃 Room。'), 'warning');
       return;
     }
     if (rooms.length > MAX_ROOM_BATCH_SIZE) {
@@ -1818,14 +1820,14 @@
       title: rooms.length === 1 ? `归档“${rooms[0].name}”？` : `归档 ${rooms.length} 个 Room？`,
       message: `${preview}${remaining}。归档后仍可恢复，也可继续批量永久清理。`,
       detail: '归档保留 Event Log、附件和 Agent Binding。批量请求逐项执行；忙碌 Room 的活动 Turn 会先被停止，失败项保持选中，可稍后重试。',
-      label: rooms.length === 1 ? '归档 Room' : `归档 ${rooms.length} 个 Room`,
+      label: rooms.length === 1 ? t('归档 Room') : `归档 ${rooms.length} 个 Room`,
       tone: 'primary',
       action: async () => {
         const response = await api('/api/v1/rooms/batch-archive', {
           method: 'POST',
           body: JSON.stringify({ room_ids: rooms.map((room) => room.id) }),
         });
-        if (!Array.isArray(response.results)) throw new Error('批量归档响应缺少 results。');
+        if (!Array.isArray(response.results)) throw new Error(t('批量归档响应缺少 results。'));
         const results = response.results;
         const succeeded = results.filter((item) => item.status === 'archived' || item.status === 'already_archived');
         const failed = results.filter((item) => item.status !== 'archived' && item.status !== 'already_archived');
@@ -1834,11 +1836,11 @@
         if (failed.length) {
           const detail = failed.slice(0, 2).map((item) => {
             const room = rooms.find((candidate) => candidate.id === item.room_id);
-            return `${room?.name || item.room_id}: ${item.error || item.code || '归档失败'}`;
+            return `${room?.name || item.room_id}: ${item.error || item.code || t('归档失败')}`;
           }).join('；');
           const more = failed.length > 2 ? `；另有 ${failed.length - 2} 个失败` : '';
           toast(
-            succeeded.length ? '批量归档部分完成' : '批量归档未完成',
+            succeeded.length ? t('批量归档部分完成') : t('批量归档未完成'),
             `成功 ${succeeded.length} 个，失败 ${failed.length} 个。${detail}${more}`,
             succeeded.length ? 'warning' : 'error'
           );
@@ -1852,7 +1854,7 @@
   function confirmRoomRemoval(candidates) {
     const rooms = eligibleArchivedRooms(candidates);
     if (!rooms.length) {
-      toast('没有可清理的 Room', '请选择至少一个已归档 Room。', 'warning');
+      toast('没有可清理的 Room', t('请选择至少一个已归档 Room。'), 'warning');
       return;
     }
     if (rooms.length > MAX_ROOM_BATCH_SIZE) {
@@ -1866,7 +1868,7 @@
       title: rooms.length === 1 ? `永久清除“${rooms[0].name}”？` : `永久清除 ${rooms.length} 个 Room？`,
       message: `${preview}${remaining}。此操作不可撤销。`,
       detail: 'PairRoom 管理的 Event Log、附件和 Room 数据会被删除；Git worktree 与 vendor Claude Session/Codex Thread 不会被删除。显式导入的外部目录只解绑并保留。批量请求逐项执行，失败项不会回滚已完成项。',
-      label: rooms.length === 1 ? '永久清除 Room' : `永久清除 ${rooms.length} 个 Room`,
+      label: rooms.length === 1 ? t('永久清除 Room') : `永久清除 ${rooms.length} 个 Room`,
       tone: 'danger',
       acknowledgement: `我理解所选 ${rooms.length} 个 Room 的 PairRoom 管理数据将永久删除且无法恢复。`,
       action: async () => {
@@ -1877,7 +1879,7 @@
             acknowledge_data_loss: true,
           }),
         });
-        if (!Array.isArray(response.results)) throw new Error('批量清理响应缺少 results。');
+        if (!Array.isArray(response.results)) throw new Error(t('批量清理响应缺少 results。'));
         const results = response.results;
         const succeeded = results.filter((item) => item.status === 'deleted');
         const failed = results.filter((item) => item.status !== 'deleted');
@@ -1892,11 +1894,11 @@
         if (failed.length) {
           const detail = failed.slice(0, 2).map((item) => {
             const room = rooms.find((candidate) => candidate.id === item.room_id);
-            return `${room?.name || item.room_id}: ${item.error || item.code || '删除失败'}`;
+            return `${room?.name || item.room_id}: ${item.error || item.code || t('删除失败')}`;
           }).join('；');
           const more = failed.length > 2 ? `；另有 ${failed.length - 2} 个失败` : '';
           toast(
-            succeeded.length ? '批量清理部分完成' : '批量清理未完成',
+            succeeded.length ? t('批量清理部分完成') : t('批量清理未完成'),
             `成功 ${succeeded.length} 个，失败 ${failed.length} 个。${detail}${more}`,
             succeeded.length ? 'warning' : 'error'
           );
@@ -1917,7 +1919,7 @@
       if (maintenance.pending_cleanup) {
         toast('仍有清理项', maintenance.diagnostic || `${maintenance.pending_cleanup} 个隔离项仍待处理。`, 'warning');
       } else {
-        toast('Room 清理已完成', '删除隔离区已清空。', 'success');
+        toast('Room 清理已完成', t('删除隔离区已清空。'), 'success');
       }
       await refresh({ forceRender: true });
     } catch (error) {
@@ -1927,7 +1929,7 @@
   async function restoreRoom(room) {
     try {
       await api(`/api/v1/rooms/${encodeURIComponent(room.id)}/restore`, { method: 'POST' });
-      toast('Room 已恢复', '完整历史与 Binding Identity 可再次使用。', 'success');
+      toast('Room 已恢复', t('完整历史与 Binding Identity 可再次使用。'), 'success');
       await refresh({ forceRender: true });
     } catch (error) {
       toast('恢复失败', error.message, 'error');
@@ -1939,13 +1941,13 @@
     openConfirm({
       eyebrow: queued ? 'CANCEL ACTIVATION' : 'SUSPEND RUNTIME',
       title: queued ? `取消“${room.name}”的激活排队？` : `挂起“${room.name}”的 Runtime？`,
-      message: queued ? 'Room 会回到 Suspended；下次打开时可重新进入队列。' : '只有没有活动 Turn 的 Runtime 才会关闭 vendor 进程并释放容量。',
-      detail: queued ? '' : '若 Room 正在工作，后端会返回冲突且不会发送 Interrupt。Room 历史和 Session/Thread Binding 不受影响。',
-      label: queued ? '取消排队' : '挂起 Runtime',
+      message: queued ? 'Room 会回到 Suspended；下次打开时可重新进入队列。' : t('只有没有活动 Turn 的 Runtime 才会关闭 vendor 进程并释放容量。'),
+      detail: queued ? '' : t('若 Room 正在工作，后端会返回冲突且不会发送 Interrupt。Room 历史和 Session/Thread Binding 不受影响。'),
+      label: queued ? t('取消排队') : t('挂起 Runtime'),
       tone: 'danger',
       action: async () => {
         await api(`/api/v1/rooms/${encodeURIComponent(room.id)}/suspend`, { method: 'POST' });
-        toast(queued ? '已取消排队' : 'Runtime 已挂起', queued ? 'Room 仍保持可恢复。' : '容量已安全释放。', 'success');
+        toast(queued ? t('已取消排队') : t('Runtime 已挂起'), queued ? t('Room 仍保持可恢复。') : t('容量已安全释放。'), 'success');
         await refresh({ forceRender: true });
       },
     });
@@ -1955,7 +1957,7 @@
     const room = roomByID(roomID);
     if (!room) return;
     if (room.lifecycle === 'archived') {
-      toast('Room 已归档', '恢复后才能打开。', 'warning');
+      toast('Room 已归档', t('恢复后才能打开。'), 'warning');
       return;
     }
     if (roomHasBlockingPendingBindings(room)) {
@@ -1974,7 +1976,7 @@
   async function openRoomInBrowserAction(roomID) {
     const room = roomByID(roomID);
     if (!room || room.lifecycle === 'archived') {
-      toast('无法在浏览器中打开', '归档 Room 没有独立 Runtime URL，请先恢复。', 'warning');
+      toast('无法在浏览器中打开', t('归档 Room 没有独立 Runtime URL，请先恢复。'), 'warning');
       return;
     }
     if (roomHasBlockingPendingBindings(room)) {
@@ -1982,7 +1984,7 @@
       return;
     }
     const deadline = Date.now() + 60000;
-    toast('正在准备系统浏览器', '等待 Runtime 就绪后再打开。', 'success');
+    toast('正在准备系统浏览器', t('等待 Runtime 就绪后再打开。'), 'success');
     try {
       while (Date.now() < deadline) {
         const status = await api(`/api/v1/rooms/${encodeURIComponent(roomID)}/activate`, { method: 'POST' });
@@ -1992,13 +1994,13 @@
       }
       const runtime = getRuntime(roomID);
       if (runtime.phase !== 'active' || !runtime.url) {
-        throw new Error('等待 Runtime 超时');
+        throw new Error(t('等待 Runtime 超时'));
       }
       await api(`/api/v1/rooms/${encodeURIComponent(roomID)}/open-browser`, { method: 'POST' });
-      toast('已在系统浏览器中打开', '不会离开当前工作台。', 'success');
+      toast('已在系统浏览器中打开', t('不会离开当前工作台。'), 'success');
     } catch (error) {
       const runtime = getRuntime(roomID);
-      if (runtime.url) await copyText(runtime.url, '已复制一次性 Room URL，可粘贴到系统浏览器。');
+      if (runtime.url) await copyText(runtime.url, t('已复制一次性 Room URL，可粘贴到系统浏览器。'));
       toast('无法打开系统浏览器', error.message, 'error');
     }
   }
@@ -2016,14 +2018,14 @@
     const acknowledgementLabel = $('confirm-ack-label');
     if (wrapper) wrapper.hidden = true;
     if (expected) expected.textContent = '';
-    if (inputLabel) inputLabel.textContent = '输入完整 ID 以确认';
+    if (inputLabel) inputLabel.textContent = t('输入完整 ID 以确认');
     if (input) {
       input.value = '';
       input.required = false;
       input.setCustomValidity('');
     }
     if (acknowledgementWrapper) acknowledgementWrapper.hidden = true;
-    if (acknowledgementLabel) acknowledgementLabel.textContent = '我理解此操作不可恢复。';
+    if (acknowledgementLabel) acknowledgementLabel.textContent = t('我理解此操作不可恢复。');
     if (acknowledgement) {
       acknowledgement.checked = false;
       acknowledgement.required = false;
@@ -2038,11 +2040,11 @@
     if (!input || !acknowledgement || !submit) return;
     const matches = !state.confirmRequirement || input.value === state.confirmRequirement;
     const acknowledged = !state.confirmAcknowledgementRequired || acknowledgement.checked;
-    input.setCustomValidity(matches ? '' : '请输入完整且逐字匹配的 ID。');
-    acknowledgement.setCustomValidity(acknowledged ? '' : '请先确认你理解此操作不可恢复。');
+    input.setCustomValidity(matches ? '' : t('请输入完整且逐字匹配的 ID。'));
+    acknowledgement.setCustomValidity(acknowledged ? '' : t('请先确认你理解此操作不可恢复。'));
     submit.disabled = !matches || !acknowledged;
   }
-  function openConfirm({ eyebrow = 'CONFIRM', title, message, detail = '', label = '确认', tone = 'danger', confirmation = '', confirmationLabel = '输入完整 ID 以确认', acknowledgement = '', action }) {
+  function openConfirm({ eyebrow = 'CONFIRM', title, message, detail = '', label = t('确认'), tone = 'danger', confirmation = '', confirmationLabel = t('输入完整 ID 以确认'), acknowledgement = '', action }) {
     resetConfirmState();
     state.confirmAction = action;
     state.confirmRequirement = confirmation;
@@ -2053,7 +2055,7 @@
     const detailNode = $('confirm-detail');
     detailNode.hidden = !detail;
     detailNode.replaceChildren();
-    if (detail) detailNode.append(node('strong', { textContent: '安全边界' }), node('span', { textContent: detail }));
+    if (detail) detailNode.append(node('strong', { textContent: t('安全边界') }), node('span', { textContent: detail }));
     const requirement = $('confirm-input-wrap');
     const input = $('confirm-input');
     const acknowledgementWrapper = $('confirm-ack-wrap');
@@ -2064,7 +2066,7 @@
     input.required = Boolean(confirmation);
     input.value = '';
     acknowledgementWrapper.hidden = !acknowledgement;
-    $('confirm-ack-label').textContent = acknowledgement || '我理解此操作不可恢复。';
+    $('confirm-ack-label').textContent = acknowledgement || t('我理解此操作不可恢复。');
     acknowledgementInput.required = Boolean(acknowledgement);
     acknowledgementInput.checked = false;
     $('confirm-submit').textContent = label;
@@ -2163,10 +2165,10 @@
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 0);
-    toast('诊断已导出', 'Runtime URL 已脱敏；本机路径仍可能敏感。', 'success');
+    toast('诊断已导出', t('Runtime URL 已脱敏；本机路径仍可能敏感。'), 'success');
   }
 
-  async function copyText(value, successMessage = '已复制。') {
+  async function copyText(value, successMessage = t('已复制。')) {
     try {
       await navigator.clipboard.writeText(String(value));
       toast('复制成功', successMessage, 'success');
@@ -2179,7 +2181,7 @@
       input.select();
       const copied = document.execCommand('copy');
       input.remove();
-      toast(copied ? '复制成功' : '复制失败', copied ? successMessage : '浏览器拒绝了剪贴板操作。', copied ? 'success' : 'error');
+      toast(copied ? t('复制成功') : t('复制失败'), copied ? successMessage : t('浏览器拒绝了剪贴板操作。'), copied ? 'success' : 'error');
     }
   }
 
@@ -2191,7 +2193,7 @@
     if (!button || button.disabled) return;
     const original = button.textContent;
     button.disabled = true;
-    button.textContent = '处理中…';
+    button.textContent = t('处理中…');
     try { await work(); } finally { button.disabled = false; button.textContent = original; }
   }
 
@@ -2305,7 +2307,7 @@
     const delta = Date.now() - time;
     if (!Number.isFinite(delta)) return String(value);
     const abs = Math.abs(delta);
-    if (abs < 5000) return '刚刚';
+    if (abs < 5000) return t('刚刚');
     if (abs < 60000) return `${Math.round(abs / 1000)} 秒前`;
     if (abs < 3600000) return `${Math.round(abs / 60000)} 分钟前`;
     if (abs < 86400000) return `${Math.round(abs / 3600000)} 小时前`;
@@ -2466,6 +2468,10 @@
   });
 
   applyPreferences();
+  document.addEventListener('pairroom:lang', () => {
+    if (window.PairRoomI18n) window.PairRoomI18n.apply(document);
+    render();
+  });
   scheduleRefresh();
   renderLoading();
   connect({ forceRender: true });

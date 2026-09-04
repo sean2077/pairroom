@@ -34,25 +34,29 @@ func (p *NativeProvisioner) Provision(ctx context.Context, project Project, acto
 		return Binding{}, nil, err
 	}
 	var cfg agent.Config
-	var factory agent.Factory
 	switch actor {
 	case model.ActorClaude:
 		cfg = p.cfg.Claude
-		factory = agent.ClaudeFactory
 	case model.ActorCodex:
 		cfg = p.cfg.Codex
-		factory = agent.CodexFactory
 	default:
 		return Binding{}, nil, fmt.Errorf("unsupported binding agent %q", actor)
 	}
 	cfg.Actor = actor
+	cfg.Runtime = cfg.Runtime.CanonicalForSlot(actor)
+	if actor == model.ActorClaude {
+		cfg.PeerRuntime = p.cfg.Codex.Runtime.CanonicalForSlot(model.ActorCodex)
+	} else {
+		cfg.PeerRuntime = p.cfg.Claude.Runtime.CanonicalForSlot(model.ActorClaude)
+	}
+	factory := agent.FactoryFor(cfg.Runtime)
 	cfg.Repo = project.Root
 	cfg.DataDir = dataDir
 	cfg.RoomName = "PairRoom binding validation"
 	cfg.ClientVersion = version.Current
 	cfg.SessionID = strings.TrimSpace(spec.SessionID)
 	cfg.RequireExactSession = spec.Mode == BindingExisting
-	cfg.SystemPrompt = prompt.SystemPrompt(actor, cfg.RoomName, project.Root)
+	cfg.SystemPrompt = prompt.BootstrapPromptWithRuntime(actor, cfg.Runtime, cfg.PeerRuntime)
 	if spec.Mode == BindingNew {
 		// Neither official harness persists an empty native conversation. Probe the
 		// required protocol now, but defer allocation of the vendor identity until

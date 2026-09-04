@@ -36,7 +36,7 @@ func TestResolveFiltersRoleWithTurnRouting(t *testing.T) {
 		"[workflow.gate]",
 		"[role.reviewer]",
 		"HANDOFF + NEXT",
-		"explicit @claude, @codex, or @peer",
+		"explicit @agent1, @agent2, @claude, @codex, @grok, or @peer",
 		"both of you",
 		"envelope peer",
 		"@human and @user",

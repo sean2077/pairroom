@@ -216,8 +216,10 @@ type RuntimeInfo struct {
 	Path           string          `json:"path,omitempty"`
 	Protocol       string          `json:"protocol,omitempty"`
 	Version        string          `json:"version,omitempty"`
+	RuntimeKind    RuntimeKind     `json:"runtime_kind,omitempty"`
 	Provider       string          `json:"provider,omitempty"`
 	Model          string          `json:"model,omitempty"`
+	Effort         string          `json:"effort,omitempty"`
 	PermissionMode string          `json:"permission_mode,omitempty"`
 	ApprovalPolicy string          `json:"approval_policy,omitempty"`
 	Sandbox        string          `json:"sandbox,omitempty"`
@@ -252,6 +254,7 @@ type ParticipantSnapshot struct {
 	State        AgentState        `json:"state"`
 	SessionID    string            `json:"session_id,omitempty"`
 	Model        string            `json:"model,omitempty"`
+	RuntimeKind  RuntimeKind       `json:"runtime_kind,omitempty"`
 	CurrentTurn  string            `json:"current_turn,omitempty"`
 	LastError    string            `json:"last_error,omitempty"`
 	LastActivity time.Time         `json:"last_activity,omitempty"`

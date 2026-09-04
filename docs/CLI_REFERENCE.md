@@ -1,82 +1,89 @@
 # CLI reference
 
-    CLI Reference 只说明命令职责和发现方式，不复制每个子命令的完整 `--help` 输出。精确默认值、可选值和平台差异始终由当前 binary 给出。
+CLI Reference describes command responsibilities and how to discover flags. It does not copy the full `--help` output of every subcommand. Exact defaults, allowed values, and platform differences always come from the current binary.
 
-    ## 顶层命令
+## Top-level commands
 
-    | 命令 | 职责 |
-    |---|---|
-    | `pairroom daemon` | 在 OS 服务管理器中安装与管理 pairroom service |
-    | `pairroom service` | 启动多 Project / 多 Room Management Shell |
-    | `pairroom serve` | 启动单仓库兼容入口（legacy single-Room） |
-    | `pairroom doctor` | 校验 Git 与 vendor CLI 安装 |
-    | `pairroom providers` | 检视已脱敏的 provider profile 与分配 |
-    | `pairroom verify` | 严格校验 room 数据完整性 |
-    | `pairroom backup` | 创建经校验的 room-data 备份 |
-    | `pairroom restore` | 恢复并校验 room-data 备份 |
-    | `pairroom diagnostics` | 生成脱敏诊断包 |
-    | `pairroom protocol` | 输出版本化 Agent 协作合同 |
-    | `pairroom version` | 输出构建版本 |
+| Command | Responsibility |
+|---|---|
+| `pairroom daemon` | Install and manage pairroom service in the OS service manager |
+| `pairroom service` | Start the multi-Project / multi-Room Management Shell |
+| `pairroom serve` | Start the single-repository compatibility entry (legacy single-Room) |
+| `pairroom doctor` | Validate Git and vendor CLI installation |
+| `pairroom providers` | Inspect redacted provider profiles and assignments |
+| `pairroom verify` | Strictly validate room data integrity |
+| `pairroom backup` | Create a verified room-data backup |
+| `pairroom restore` | Restore and verify a room-data backup |
+| `pairroom diagnostics` | Generate a redacted diagnostics bundle |
+| `pairroom protocol` | Print the versioned Agent collaboration contract |
+| `pairroom version` | Print the build version |
 
-    所有命令先使用：
+Start every command with:
 
-    ```bash
-    pairroom --help
-    pairroom <command> --help
-    ```
+```bash
+pairroom --help
+pairroom <command> --help
+```
 
-    ## 常用入口
+## Common entry points
 
-    Mock Management Service：
+Mock Management Service:
 
-    ```bash
-    pairroom service --mock
-    ```
+```bash
+pairroom service --mock
+```
 
-    不自动打开浏览器：
+Do not open a browser automatically:
 
-    ```bash
-    pairroom service --no-browser
-    ```
+```bash
+pairroom service --no-browser
+```
 
-    输出机器可读 Agent 协议：
+Print a machine-readable Agent protocol:
 
-    ```bash
-    pairroom protocol --json
-    ```
+```bash
+pairroom protocol --json
+```
 
-    查看版本：
+Show version:
 
-    ```bash
-    pairroom version
-    ```
+```bash
+pairroom version
+```
 
-    Project、Room 的生命周期由 `pairroom service` 的 Management Shell 与 REST API 管理，不在本 CLI；Daemon、Backup、Restore 等命令有子命令或专属 flag。不要根据旧文档猜测参数，直接查看对应层级的 `--help`。
+Project and Room lifecycle is managed by the `pairroom service` Management Shell and REST API, not by this CLI. Daemon, Backup, Restore, and similar commands have subcommands or dedicated flags. Do not guess flags from older docs; read `--help` at the matching command level.
 
-    ## 退出与错误
+## Exit and errors
 
-    - 参数、配置和安全前置条件错误返回非零退出码；
-    - CLI 接受请求不代表 native Turn 已成功完成；
-    - destructive command 应先显示目标和前置条件，脚本必须检查退出码及输出；
-    - `protocol --routing` 只接受 `turns`，旧 routing 值直接失败。
+- Argument, configuration, and security-precondition errors return a non-zero exit code;
+- CLI acceptance of a request does not mean a native Turn completed successfully;
+- A destructive command should first show the target and preconditions; scripts must check the exit code and output;
+- `protocol --routing` accepts only `turns`; legacy routing values fail immediately.
 
-    ## 源码参数清单
+## Source flag inventory
 
-    下列名称从 `cmd/pairroom/*.go` 自动提取。它用于发现遗漏，不表示每个参数适用于所有命令。
+The following names are extracted from `cmd/pairroom/*.go`. Use them to find omissions; they do not mean every flag applies to every command.
 
-    <!-- generated:flags -->
-    <details>
-    <summary>展开当前参数名</summary>
+<!-- generated:flags -->
+<details>
+<summary>Show current flag names</summary>
 
-    - `--actor`
+- `--actor`
 - `--auto-start`
 - `--claude-command`
+- `--claude-effort`
+- `--claude-instructions`
 - `--claude-model`
 - `--claude-permission-mode`
+- `--claude-provider`
+- `--claude-runtime`
 - `--codex-approval-policy`
 - `--codex-command`
 - `--codex-effort`
+- `--codex-instructions`
 - `--codex-model`
+- `--codex-provider`
+- `--codex-runtime`
 - `--codex-sandbox`
 - `--config`
 - `--daemon-control-file`
@@ -103,5 +110,5 @@
 - `--shutdown-timeout`
 - `--stall-warning-seconds`
 - `--token`
-    </details>
-    <!-- /generated:flags -->
+</details>
+<!-- /generated:flags -->

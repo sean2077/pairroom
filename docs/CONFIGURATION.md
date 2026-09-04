@@ -1,51 +1,54 @@
 # Configuration
 
-    PairRoom 的配置目标是描述本机监听、Runtime policy、两个 native Agent 以及可选 Provider。完整可运行样例见 [`examples/pairroom.example.json`](../examples/pairroom.example.json)。命令行参数的最终解释以 `pairroom <command> --help` 为准。
+PairRoom configuration describes the local listener, Runtime policy, two native Agent slots, and optional Providers. A complete runnable sample is [`examples/pairroom.example.json`](../examples/pairroom.example.json). The final interpretation of command-line flags is always `pairroom <command> --help`.
 
-    ## 加载与覆盖
+## Load and override
 
-    启动时先建立内置默认值，再读取 JSON 配置，最后应用当前命令的显式 CLI 参数。Room 内可修改的设置只作用于该 Room，不应被当成全局配置文件回写。
+Startup applies built-in defaults first, then the JSON configuration, then explicit CLI flags for the current command. Settings that can be changed inside a Room apply only to that Room and must not be treated as a write-back of the global configuration file.
 
-    JSON decoder 拒绝未知字段。这样拼写错误不会被静默忽略，但跨 breaking release 升级前必须阅读 [Upgrading](UPGRADING.md)。
+The JSON decoder rejects unknown fields. Spelling mistakes are therefore not silently ignored, but you must read [Upgrading](UPGRADING.md) before a breaking release.
 
-    ## Collaboration policy
+## Collaboration policy
 
-    `routing_mode` 只接受：
+`routing_mode` accepts only:
 
-    ```json
-    {"routing_mode": "turns"}
-    ```
+```json
+{"routing_mode": "turns"}
+```
 
-    `manual`、`mentions`、`roundtable` 已删除且不会迁移。`max_agent_hops` 限制一次自动接力链的 Agent Turn 数；`stall_warning_seconds` 只控制“长时间无 Runtime event”的提醒，不会仅因静默就判定 Turn 已终止。
+`manual`, `mentions`, and `roundtable` are removed and are not migrated. `max_agent_hops` limits the number of Agent Turns in one automatic relay chain. `stall_warning_seconds` only controls the “no Runtime event for a long time” reminder; silence alone does not mean the Turn has terminated.
 
-    ## Native Agent
+## Agent slots and runtimes
 
-    Claude 与 Codex 分别配置 executable、模型、effort / thinking、permission / approval policy、sandbox 和 Provider。PairRoom 将这些设置映射到官方 CLI，但供应商支持范围仍以本机安装版本为准。
+The JSON keys `claude` and `codex` are durable Agent 1 and Agent 2 slots, not vendor identities. Each slot has a `runtime` of `claude`, `codex`, or `grok`. Both slots may select the same runtime.
 
-    建议：
+`provider`, `model`, `effort`, and `instructions` are explicit overrides. Empty values inherit the selected native CLI's user/global configuration. Permission, approval, and sandbox fields work the same way when left empty: PairRoom does not synthesize a vendor default. PairRoom maps explicit settings onto the official CLI, but vendor support still depends on the locally installed version.
 
-    - 凭据放在供应商 CLI、环境变量或受控 Provider 配置中；
-    - 不把 API key 写进命令参数、日志、Room message 或仓库；
-    - Reviewer 使用只读 / plan 边界，Driver 才使用写权限；
-    - 更新 executable 或 Provider 后先运行 Mock，再做一个真实只读 Turn。
+Recommendations:
 
-    ## Provider 与 cc-connect
+- Keep credentials in the vendor CLI, environment variables, or a controlled Provider profile;
+- Do not put API keys in command arguments, logs, Room messages, or the repository;
+- Give the Reviewer read-only / plan boundaries; only the Driver uses write permission;
+- After changing an executable or Provider, run Mock first, then a real read-only Turn;
+- Keep Grok Build prompt and instruction text out of process argv (PairRoom writes them to a prompt file).
 
-    Provider profile 可以描述 endpoint、model alias、环境变量映射和 Codex wire API。`cc_connect` 只引用现有 provider source，不应复制长期凭据到 Room Event Log。导入冲突需要显式 prefix 或重命名，不能依赖后加载覆盖。
+## Provider and cc-connect
 
-    ## Service runtime policy
+A Provider profile can describe an endpoint, model alias, environment-variable mapping, and Codex wire API. `cc_connect` only references an existing provider source; it must not copy long-lived credentials into the Room Event Log. Import collisions need an explicit prefix or rename; later-loaded values must not silently overwrite earlier ones.
 
-    Service 级字段控制同时活跃 Room 数、idle 回收、reconcile、关闭超时、监听地址和 token。它们影响进程生命周期，不改变 Event Log 中已经提交的事实。`--runtime-limit` 默认 8，合法范围 1–128；Management Settings 可以在运行中调整该上限（提高立即启动排队项，降低不打断正在跑的 Turn）。Idle timeout 仍由启动参数决定。
+## Service runtime policy
 
-    ## 源码字段清单
+Service-level fields control the number of concurrently active Rooms, idle reclaim, reconcile, shutdown timeout, listen address, and token. They affect process lifecycle and do not change facts already committed to the Event Log. `--runtime-limit` defaults to 8, with a legal range of 1–128. Management Settings can adjust that cap while running (raising it starts queued items immediately; lowering it does not interrupt a running Turn). Idle timeout is still set by the startup flag.
 
-    下列 JSON 名称从 `internal/config/` 的 struct tag 自动提取；它是查漏清单，不代替字段语义和样例。
+## Source field inventory
 
-    <!-- generated:config-fields -->
-    <details>
-    <summary>展开当前 JSON 字段</summary>
+The following JSON names are extracted from struct tags in `internal/config/`. This is a gap-finding list, not a substitute for field semantics and samples.
 
-    - `agent_model_lists`
+<!-- generated:config-fields -->
+<details>
+<summary>Show current JSON fields</summary>
+
+- `agent_model_lists`
 - `agent_models`
 - `agent_types`
 - `alias`
@@ -64,6 +67,7 @@
 - `env_key`
 - `http_headers`
 - `imported_from`
+- `instructions`
 - `listen`
 - `max_agent_hops`
 - `model`
@@ -76,19 +80,20 @@
 - `providers`
 - `room_name`
 - `routing_mode`
+- `runtime`
 - `sandbox`
 - `stall_warning_seconds`
 - `thinking`
 - `token`
 - `wire_api`
-    </details>
-    <!-- /generated:config-fields -->
+</details>
+<!-- /generated:config-fields -->
 
-    ## 变更检查
+## Change checklist
 
-    配置字段变化时同时更新：
+When configuration fields change, update all of:
 
-    1. `examples/pairroom.example.json`；
-    2. 本文的字段语义；
-    3. `docs/UPGRADING.md`（若为 breaking change）；
-    4. 配置解析测试。
+1. `examples/pairroom.example.json`;
+2. the field semantics in this document;
+3. `docs/UPGRADING.md` (if the change is breaking);
+4. configuration parsing tests.

@@ -163,10 +163,10 @@ func New(cfg Config) (*Engine, error) {
 		return nil, errors.New("stall_warning_seconds must be -1 (disabled) or between 30 and 86400")
 	}
 	if cfg.ClaudeFactory == nil {
-		cfg.ClaudeFactory = agent.ClaudeFactory
+		cfg.ClaudeFactory = agent.FactoryFor(cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorClaude))
 	}
 	if cfg.CodexFactory == nil {
-		cfg.CodexFactory = agent.CodexFactory
+		cfg.CodexFactory = agent.FactoryFor(cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorCodex))
 	}
 
 	e := &Engine{
@@ -229,8 +229,16 @@ func (e *Engine) restore() error {
 		return err
 	}
 	participants := []model.ParticipantSnapshot{
-		{ID: model.ActorClaude, DisplayName: model.ActorClaude.DisplayName(), Role: model.RoleDriver, State: model.StateStopped, Model: e.cfg.ClaudeConfig.Model},
-		{ID: model.ActorCodex, DisplayName: model.ActorCodex.DisplayName(), Role: model.RoleReviewer, State: model.StateStopped, Model: e.cfg.CodexConfig.Model},
+		{
+			ID: model.ActorClaude, DisplayName: model.ParticipantDisplayName(model.ActorClaude, e.cfg.ClaudeConfig.Runtime),
+			Role: model.RoleDriver, State: model.StateStopped, Model: e.cfg.ClaudeConfig.Model,
+			RuntimeKind: e.cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorClaude),
+		},
+		{
+			ID: model.ActorCodex, DisplayName: model.ParticipantDisplayName(model.ActorCodex, e.cfg.CodexConfig.Runtime),
+			Role: model.RoleReviewer, State: model.StateStopped, Model: e.cfg.CodexConfig.Model,
+			RuntimeKind: e.cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorCodex),
+		},
 	}
 	for _, participant := range participants {
 		if _, err := e.record(EventParticipantUpdated, participant.ID, participant); err != nil {
@@ -403,6 +411,8 @@ func (e *Engine) Start(parent context.Context) error {
 
 	claudeCfg := e.cfg.ClaudeConfig
 	claudeCfg.Actor = model.ActorClaude
+	claudeCfg.Runtime = claudeCfg.Runtime.CanonicalForSlot(model.ActorClaude)
+	claudeCfg.PeerRuntime = e.cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorCodex)
 	claudeCfg.Repo = boundaries[model.ActorClaude].Path
 	claudeCfg.DataDir = e.cfg.Store.Dir()
 	claudeCfg.RoomName = roomName
@@ -411,6 +421,8 @@ func (e *Engine) Start(parent context.Context) error {
 	}
 	codexCfg := e.cfg.CodexConfig
 	codexCfg.Actor = model.ActorCodex
+	codexCfg.Runtime = codexCfg.Runtime.CanonicalForSlot(model.ActorCodex)
+	codexCfg.PeerRuntime = e.cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorClaude)
 	codexCfg.Repo = boundaries[model.ActorCodex].Path
 	codexCfg.DataDir = e.cfg.Store.Dir()
 	codexCfg.RoomName = roomName
@@ -1285,19 +1297,37 @@ func roleChangeSafe(participant model.ParticipantSnapshot) error {
 	}
 }
 
+func (e *Engine) runtimeKinds() map[model.ActorID]model.RuntimeKind {
+	return map[model.ActorID]model.RuntimeKind{
+		model.ActorClaude: e.cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorClaude),
+		model.ActorCodex:  e.cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorCodex),
+	}
+}
+
+func slotAgentConfig(cfg Config, actor model.ActorID) agent.Config {
+	if actor == model.ActorCodex {
+		return cfg.CodexConfig
+	}
+	return cfg.ClaudeConfig
+}
+
 func applyRoleRuntimeProjection(participant *model.ParticipantSnapshot, actor model.ActorID, role model.ParticipantRole, cfg Config) {
-	if actor == model.ActorClaude {
+	slot := slotAgentConfig(cfg, actor)
+	kind := slot.Runtime.CanonicalForSlot(actor)
+	participant.RuntimeKind = kind
+	participant.DisplayName = model.ParticipantDisplayName(actor, kind)
+	switch kind {
+	case model.RuntimeClaude:
 		if role == model.RoleReviewer {
 			participant.Runtime.PermissionMode = "plan"
-		} else if cfg.ClaudeConfig.PermissionMode != "" {
-			participant.Runtime.PermissionMode = cfg.ClaudeConfig.PermissionMode
+		} else if slot.PermissionMode != "" {
+			participant.Runtime.PermissionMode = slot.PermissionMode
 		}
-	}
-	if actor == model.ActorCodex {
+	case model.RuntimeCodex:
 		if role == model.RoleReviewer {
 			participant.Runtime.Sandbox = "readOnly"
-		} else if cfg.CodexConfig.Sandbox != "" {
-			participant.Runtime.Sandbox = cfg.CodexConfig.Sandbox
+		} else if slot.Sandbox != "" {
+			participant.Runtime.Sandbox = slot.Sandbox
 		}
 	}
 }
@@ -2321,7 +2351,7 @@ func (e *Engine) agentTargets(actor model.ActorID, text, handoff, control string
 	// structured HANDOFF packet, peerInputText supplies a bounded fallback from
 	// the visible response before delivery. Keep this check ahead of control
 	// markers so an incidental DONE/WAIT marker cannot swallow a direct request.
-	explicit := prompt.Mentions(routingText, actor)
+	explicit := prompt.MentionsWithRuntimes(routingText, actor, e.runtimeKinds())
 	peerTargets := explicit[:0]
 	for _, target := range explicit {
 		if target != actor {
@@ -2453,7 +2483,7 @@ func (e *Engine) resolveUserTargets(text string, explicit []model.ActorID, targe
 	if len(targets) > 0 {
 		return targets, nil
 	}
-	if targets := prompt.Mentions(text, model.ActorUser); len(targets) > 0 {
+	if targets := prompt.MentionsWithRuntimes(text, model.ActorUser, e.runtimeKinds()); len(targets) > 0 {
 		return targets, nil
 	}
 	if replyTo != "" {

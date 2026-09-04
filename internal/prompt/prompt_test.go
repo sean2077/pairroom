@@ -19,6 +19,7 @@ func TestMentions(t *testing.T) {
 		{name: "peer", text: "@peer please verify", sender: model.ActorClaude, want: []model.ActorID{model.ActorCodex}},
 		{name: "all deduplicates", text: "@all and @claude", sender: model.ActorUser, want: []model.ActorID{model.ActorClaude, model.ActorCodex}},
 		{name: "email is not mention", text: "mail a@claude.dev", sender: model.ActorUser, want: nil},
+		{name: "slot aliases", text: "@agent1 and @agent2", sender: model.ActorUser, want: []model.ActorID{model.ActorClaude, model.ActorCodex}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -32,6 +33,24 @@ func TestMentions(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMentionsResolveUniqueGrokRuntime(t *testing.T) {
+	runtimes := map[model.ActorID]model.RuntimeKind{
+		model.ActorClaude: model.RuntimeGrok,
+		model.ActorCodex:  model.RuntimeCodex,
+	}
+	got := MentionsWithRuntimes("ask @grok to inspect", model.ActorUser, runtimes)
+	if len(got) != 1 || got[0] != model.ActorClaude {
+		t.Fatalf("unique grok mention = %v", got)
+	}
+	both := MentionsWithRuntimes("@grok check this", model.ActorUser, map[model.ActorID]model.RuntimeKind{
+		model.ActorClaude: model.RuntimeGrok,
+		model.ActorCodex:  model.RuntimeGrok,
+	})
+	if len(both) != 2 {
+		t.Fatalf("ambiguous grok mention = %v", both)
 	}
 }
 

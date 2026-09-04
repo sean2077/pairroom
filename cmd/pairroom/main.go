@@ -203,6 +203,48 @@ func copyRuntimeEnv(source map[string]string) map[string]string {
 	return output
 }
 
+func slotAgentConfig(actor model.ActorID, slot config.Agent) agent.Config {
+	return agent.Config{
+		Actor:                  actor,
+		ClientVersion:          version.Current,
+		Command:                slot.Command,
+		CommandArgs:            append([]string(nil), slot.Args...),
+		Env:                    copyRuntimeEnv(slot.RuntimeEnv),
+		Runtime:                slot.RuntimeKind(actor),
+		Provider:               slot.Provider,
+		Model:                  slot.Model,
+		Effort:                 slot.Effort,
+		PermissionMode:         slot.PermissionMode,
+		ApprovalPolicy:         slot.ApprovalPolicy,
+		Sandbox:                slot.Sandbox,
+		AdditionalInstructions: strings.TrimSpace(slot.Instructions),
+	}
+}
+
+func pairSlotConfigs(claudeSlot, codexSlot config.Agent) (agent.Config, agent.Config) {
+	claude := slotAgentConfig(model.ActorClaude, claudeSlot)
+	codex := slotAgentConfig(model.ActorCodex, codexSlot)
+	claude.PeerRuntime = codex.Runtime
+	codex.PeerRuntime = claude.Runtime
+	return claude, codex
+}
+
+func applySlotCLI(cfg *agent.Config, runtime, command, provider, modelName, effort, permission, approval, sandbox, instructions string) {
+	if runtime != "" {
+		cfg.Runtime = model.ParseRuntimeKind(runtime).CanonicalForSlot(cfg.Actor)
+	}
+	if command != "" {
+		cfg.Command = command
+	}
+	cfg.Provider = provider
+	cfg.Model = modelName
+	cfg.Effort = effort
+	cfg.PermissionMode = permission
+	cfg.ApprovalPolicy = approval
+	cfg.Sandbox = sandbox
+	cfg.AdditionalInstructions = strings.TrimSpace(instructions)
+}
+
 // runService starts the process-wide Management Shell. Room runtimes are
 // activated lazily and remain isolated behind their own loopback listeners.
 // The legacy single-Room `serve` command is deliberately preserved below.
@@ -229,14 +271,21 @@ func runService(args []string) (resultErr error) {
 	routingFlag := flags.String("routing", string(fileCfg.RoutingMode), "turns (the only supported routing mode)")
 	maxHopsFlag := flags.Int("max-hops", fileCfg.MaxAgentHops, "maximum Agent turns per Room chain")
 	stallWarningFlag := flags.Int("stall-warning-seconds", fileCfg.StallWarningSeconds, "warn when a working agent emits no runtime event; -1 disables")
-	claudeCommand := flags.String("claude-command", fileCfg.Claude.Command, "Claude Code executable")
-	claudeModel := flags.String("claude-model", fileCfg.Claude.Model, "Claude model override")
-	claudePermission := flags.String("claude-permission-mode", fileCfg.Claude.PermissionMode, "Claude permission mode")
-	codexCommand := flags.String("codex-command", fileCfg.Codex.Command, "Codex executable")
-	codexModel := flags.String("codex-model", fileCfg.Codex.Model, "Codex model override")
-	codexEffort := flags.String("codex-effort", fileCfg.Codex.Effort, "Codex reasoning effort")
-	codexApproval := flags.String("codex-approval-policy", fileCfg.Codex.ApprovalPolicy, "Codex approval policy")
-	codexSandbox := flags.String("codex-sandbox", fileCfg.Codex.Sandbox, "Codex sandbox mode")
+	claudeRuntime := flags.String("claude-runtime", fileCfg.Claude.Runtime, "Agent 1 runtime: claude, codex, or grok")
+	claudeCommand := flags.String("claude-command", fileCfg.Claude.Command, "Agent 1 executable")
+	claudeProvider := flags.String("claude-provider", fileCfg.Claude.Provider, "Agent 1 provider override")
+	claudeModel := flags.String("claude-model", fileCfg.Claude.Model, "Agent 1 model override")
+	claudeEffort := flags.String("claude-effort", fileCfg.Claude.Effort, "Agent 1 reasoning-effort override")
+	claudePermission := flags.String("claude-permission-mode", fileCfg.Claude.PermissionMode, "Agent 1 permission mode")
+	claudeInstructions := flags.String("claude-instructions", fileCfg.Claude.Instructions, "Agent 1 additional instructions")
+	codexRuntime := flags.String("codex-runtime", fileCfg.Codex.Runtime, "Agent 2 runtime: claude, codex, or grok")
+	codexCommand := flags.String("codex-command", fileCfg.Codex.Command, "Agent 2 executable")
+	codexProvider := flags.String("codex-provider", fileCfg.Codex.Provider, "Agent 2 provider override")
+	codexModel := flags.String("codex-model", fileCfg.Codex.Model, "Agent 2 model override")
+	codexEffort := flags.String("codex-effort", fileCfg.Codex.Effort, "Agent 2 reasoning-effort override")
+	codexApproval := flags.String("codex-approval-policy", fileCfg.Codex.ApprovalPolicy, "Agent 2 approval policy")
+	codexSandbox := flags.String("codex-sandbox", fileCfg.Codex.Sandbox, "Agent 2 sandbox mode")
+	codexInstructions := flags.String("codex-instructions", fileCfg.Codex.Instructions, "Agent 2 additional instructions")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -295,16 +344,11 @@ func runService(args []string) (resultErr error) {
 	if err != nil {
 		return err
 	}
-	claudeCfg := agent.Config{
-		ClientVersion: version.Current, Command: *claudeCommand,
-		CommandArgs: append([]string(nil), fileCfg.Claude.Args...), Env: copyRuntimeEnv(fileCfg.Claude.RuntimeEnv), Provider: fileCfg.Claude.Provider,
-		Model: *claudeModel, PermissionMode: *claudePermission,
-	}
-	codexCfg := agent.Config{
-		ClientVersion: version.Current, Command: *codexCommand,
-		CommandArgs: append([]string(nil), fileCfg.Codex.Args...), Env: copyRuntimeEnv(fileCfg.Codex.RuntimeEnv), Provider: fileCfg.Codex.Provider,
-		Model: *codexModel, Effort: *codexEffort, ApprovalPolicy: *codexApproval, Sandbox: *codexSandbox,
-	}
+	claudeCfg, codexCfg := pairSlotConfigs(fileCfg.Claude, fileCfg.Codex)
+	applySlotCLI(&claudeCfg, *claudeRuntime, *claudeCommand, *claudeProvider, *claudeModel, *claudeEffort, *claudePermission, fileCfg.Claude.ApprovalPolicy, fileCfg.Claude.Sandbox, *claudeInstructions)
+	applySlotCLI(&codexCfg, *codexRuntime, *codexCommand, *codexProvider, *codexModel, *codexEffort, fileCfg.Codex.PermissionMode, *codexApproval, *codexSandbox, *codexInstructions)
+	claudeCfg.PeerRuntime = codexCfg.Runtime
+	codexCfg.PeerRuntime = claudeCfg.Runtime
 	var provisioner service.BindingProvisioner = service.NewNativeProvisioner(service.NativeProvisionerConfig{
 		Claude: claudeCfg, Codex: codexCfg,
 	})
@@ -346,7 +390,7 @@ func runService(args []string) (resultErr error) {
 	if *mockFlag {
 		fmt.Println("  mode:       mock")
 	} else {
-		fmt.Println("  mode:       native Claude Code + Codex")
+		fmt.Println("  mode:       native Claude Code / Codex / Grok Build slots")
 	}
 
 	serverErrors := make(chan error, 1)
@@ -414,14 +458,21 @@ func runServe(args []string) error {
 	routingFlag := flags.String("routing", string(fileCfg.RoutingMode), "turns (the only supported routing mode)")
 	maxHopsFlag := flags.Int("max-hops", fileCfg.MaxAgentHops, "maximum Agent turns per chain")
 	stallWarningFlag := flags.Int("stall-warning-seconds", fileCfg.StallWarningSeconds, "warn when a working agent emits no runtime event; -1 disables")
-	claudeCommand := flags.String("claude-command", fileCfg.Claude.Command, "Claude Code executable")
-	claudeModel := flags.String("claude-model", fileCfg.Claude.Model, "Claude model override")
-	claudePermission := flags.String("claude-permission-mode", fileCfg.Claude.PermissionMode, "Claude permission mode")
-	codexCommand := flags.String("codex-command", fileCfg.Codex.Command, "Codex executable")
-	codexModel := flags.String("codex-model", fileCfg.Codex.Model, "Codex model override")
-	codexEffort := flags.String("codex-effort", fileCfg.Codex.Effort, "Codex reasoning effort")
-	codexApproval := flags.String("codex-approval-policy", fileCfg.Codex.ApprovalPolicy, "Codex approval policy")
-	codexSandbox := flags.String("codex-sandbox", fileCfg.Codex.Sandbox, "Codex sandbox mode")
+	claudeRuntime := flags.String("claude-runtime", fileCfg.Claude.Runtime, "Agent 1 runtime: claude, codex, or grok")
+	claudeCommand := flags.String("claude-command", fileCfg.Claude.Command, "Agent 1 executable")
+	claudeProvider := flags.String("claude-provider", fileCfg.Claude.Provider, "Agent 1 provider override")
+	claudeModel := flags.String("claude-model", fileCfg.Claude.Model, "Agent 1 model override")
+	claudeEffort := flags.String("claude-effort", fileCfg.Claude.Effort, "Agent 1 reasoning-effort override")
+	claudePermission := flags.String("claude-permission-mode", fileCfg.Claude.PermissionMode, "Agent 1 permission mode")
+	claudeInstructions := flags.String("claude-instructions", fileCfg.Claude.Instructions, "Agent 1 additional instructions")
+	codexRuntime := flags.String("codex-runtime", fileCfg.Codex.Runtime, "Agent 2 runtime: claude, codex, or grok")
+	codexCommand := flags.String("codex-command", fileCfg.Codex.Command, "Agent 2 executable")
+	codexProvider := flags.String("codex-provider", fileCfg.Codex.Provider, "Agent 2 provider override")
+	codexModel := flags.String("codex-model", fileCfg.Codex.Model, "Agent 2 model override")
+	codexEffort := flags.String("codex-effort", fileCfg.Codex.Effort, "Agent 2 reasoning-effort override")
+	codexApproval := flags.String("codex-approval-policy", fileCfg.Codex.ApprovalPolicy, "Agent 2 approval policy")
+	codexSandbox := flags.String("codex-sandbox", fileCfg.Codex.Sandbox, "Agent 2 sandbox mode")
+	codexInstructions := flags.String("codex-instructions", fileCfg.Codex.Instructions, "Agent 2 additional instructions")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -479,12 +530,11 @@ func runServe(args []string) error {
 		_ = eventStore.Close()
 		return err
 	}
-	claudeFactory := agent.ClaudeFactory
-	codexFactory := agent.CodexFactory
-	if *mockFlag {
-		claudeFactory = agent.MockFactory
-		codexFactory = agent.MockFactory
-	}
+	claudeCfg, codexCfg := pairSlotConfigs(fileCfg.Claude, fileCfg.Codex)
+	applySlotCLI(&claudeCfg, *claudeRuntime, *claudeCommand, *claudeProvider, *claudeModel, *claudeEffort, *claudePermission, fileCfg.Claude.ApprovalPolicy, fileCfg.Claude.Sandbox, *claudeInstructions)
+	applySlotCLI(&codexCfg, *codexRuntime, *codexCommand, *codexProvider, *codexModel, *codexEffort, fileCfg.Codex.PermissionMode, *codexApproval, *codexSandbox, *codexInstructions)
+	claudeCfg.PeerRuntime = codexCfg.Runtime
+	codexCfg.PeerRuntime = claudeCfg.Runtime
 	engine, err := room.New(room.Config{
 		Name: *nameFlag,
 		Repo: repo,
@@ -492,21 +542,13 @@ func runServe(args []string) error {
 			RoutingMode: routing, MaxHops: *maxHopsFlag, StallWarningSeconds: *stallWarningFlag,
 		},
 		Store:         eventStore,
-		ClaudeFactory: claudeFactory,
-		CodexFactory:  codexFactory,
-		ClaudeConfig: agent.Config{
-			ClientVersion: version.Current, Command: *claudeCommand,
-			CommandArgs: append([]string(nil), fileCfg.Claude.Args...), Env: copyRuntimeEnv(fileCfg.Claude.RuntimeEnv), Provider: fileCfg.Claude.Provider,
-			Model: *claudeModel, PermissionMode: *claudePermission,
-		},
-		CodexConfig: agent.Config{
-			ClientVersion: version.Current, Command: *codexCommand,
-			CommandArgs: append([]string(nil), fileCfg.Codex.Args...), Env: copyRuntimeEnv(fileCfg.Codex.RuntimeEnv), Provider: fileCfg.Codex.Provider,
-			Model: *codexModel, Effort: *codexEffort, ApprovalPolicy: *codexApproval, Sandbox: *codexSandbox,
-		},
-		Attachments: attachmentStore,
-		Workspaces:  workspaceManager,
-		AutoStart:   *autoStartFlag,
+		ClaudeFactory: agent.SlotFactory(*mockFlag, claudeCfg.Runtime),
+		CodexFactory:  agent.SlotFactory(*mockFlag, codexCfg.Runtime),
+		ClaudeConfig:  claudeCfg,
+		CodexConfig:   codexCfg,
+		Attachments:   attachmentStore,
+		Workspaces:    workspaceManager,
+		AutoStart:     *autoStartFlag,
 	})
 	if err != nil {
 		_ = eventStore.Close()
@@ -532,7 +574,7 @@ func runServe(args []string) error {
 	if *mockFlag {
 		fmt.Println("  mode: mock")
 	} else {
-		fmt.Println("  mode: native Claude Code + Codex")
+		fmt.Println("  mode: native Claude Code / Codex / Grok Build slots")
 	}
 
 	serverErrors := make(chan error, 1)
@@ -617,10 +659,12 @@ func runDoctor(args []string) error {
 		Git:      probeCommand("git", "--version"),
 		Runtimes: make(map[string]doctorRuntimeReport, 2),
 	}
-	for _, cfg := range []agent.Config{
-		{Actor: model.ActorClaude, Command: *claudeCommand, Repo: repo, PermissionMode: fileCfg.Claude.PermissionMode},
-		{Actor: model.ActorCodex, Command: *codexCommand, Repo: repo, ApprovalPolicy: fileCfg.Codex.ApprovalPolicy, Sandbox: fileCfg.Codex.Sandbox},
-	} {
+	claudeCfg, codexCfg := pairSlotConfigs(fileCfg.Claude, fileCfg.Codex)
+	claudeCfg.Command = *claudeCommand
+	codexCfg.Command = *codexCommand
+	claudeCfg.Repo = repo
+	codexCfg.Repo = repo
+	for _, cfg := range []agent.Config{claudeCfg, codexCfg} {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		probe, probeErr := agent.ProbeRuntime(ctx, cfg)
 		cancel()
@@ -856,16 +900,20 @@ func printDoctorReport(report doctorReport) {
 	}
 	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
 		entry := report.Runtimes[string(actor)]
+		label := model.SlotLabel(actor)
 		if entry.Error != "" || entry.Probe == nil {
-			fmt.Printf("%-16s ✗ %s\n", actor.DisplayName(), entry.Error)
+			fmt.Printf("%-16s ✗ %s\n", label, entry.Error)
 			continue
 		}
 		probe := entry.Probe
+		if probe.Runtime != "" {
+			label = model.ParticipantDisplayName(actor, probe.Runtime)
+		}
 		versionText := probe.Version
 		if versionText == "" {
 			versionText = probe.VersionLine
 		}
-		fmt.Printf("%-16s ✓ %s (%s)\n", actor.DisplayName(), versionText, probe.Path)
+		fmt.Printf("%-16s ✓ %s (%s)\n", label, versionText, probe.Path)
 		fmt.Printf("%-16s   protocol: %s\n", "", probe.Protocol)
 		if len(probe.Capabilities) > 0 {
 			fmt.Printf("%-16s   capabilities: %s\n", "", strings.Join(probe.Capabilities, ", "))
@@ -968,7 +1016,7 @@ func firstLine(value string) string {
 }
 
 func printHelp() {
-	fmt.Print(`PairRoom — native Claude Code + Codex collaboration service
+	fmt.Print(`PairRoom — native Claude Code, Codex, and Grok Build collaboration service
 
 Usage:
   pairroom daemon <command>      Install and manage pairroom service in the OS service manager

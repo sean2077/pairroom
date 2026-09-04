@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/sean2077/pairroom/internal/model"
 )
 
 const defaultCCConnectConfig = "~/.cc-connect/config.toml"
@@ -53,11 +55,11 @@ func (c *File) resolveProviderProfiles(configPath string) error {
 	for _, provider := range providers {
 		byName[strings.ToLower(provider.Name)] = provider
 	}
-	if err := resolveAgentProvider("claudecode", &c.Claude, byName); err != nil {
-		return fmt.Errorf("claude provider: %w", err)
+	if err := resolveAgentProvider(c.Claude.RuntimeKind(model.ActorClaude).ProviderAgentType(), &c.Claude, byName); err != nil {
+		return fmt.Errorf("agent 1 provider: %w", err)
 	}
-	if err := resolveAgentProvider("codex", &c.Codex, byName); err != nil {
-		return fmt.Errorf("codex provider: %w", err)
+	if err := resolveAgentProvider(c.Codex.RuntimeKind(model.ActorCodex).ProviderAgentType(), &c.Codex, byName); err != nil {
+		return fmt.Errorf("agent 2 provider: %w", err)
 	}
 	return nil
 }
@@ -116,6 +118,13 @@ func resolveAgentProvider(agentType string, agent *Agent, providers map[string]P
 		}
 		if secret != "" {
 			agent.RuntimeEnv["ANTHROPIC_AUTH_TOKEN"] = secret
+		}
+	case "grok":
+		if endpoint != "" {
+			agent.RuntimeEnv["GROK_XAI_API_BASE_URL"] = endpoint
+		}
+		if secret != "" {
+			agent.RuntimeEnv["XAI_API_KEY"] = secret
 		}
 	case "codex":
 		id := "pairroom_" + providerIdentifier(provider.Name)
@@ -219,6 +228,8 @@ func normalizeAgentType(value string) string {
 		return "claudecode"
 	case "codex":
 		return "codex"
+	case "grok", "grok-build", "grok_build", "grokbuild":
+		return "grok"
 	default:
 		return value
 	}

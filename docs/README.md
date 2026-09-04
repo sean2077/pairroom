@@ -1,51 +1,51 @@
 # Documentation map
 
-本目录只保留当前需要维护的文档。历史方案、一次性 review、发布快照和旧截图由 Git 历史保存，不在现行文档树中继续复制。
+This directory keeps only documentation that still needs maintenance. Historical designs, one-off reviews, release snapshots, and old screenshots stay in Git history and are not copied forward in the current tree.
 
-## 按任务阅读
+## Read by task
 
-| 目标 | 文档 | 唯一职责 |
+| Goal | Document | Unique responsibility |
 |---|---|---|
-| 第一次运行 | [GETTING_STARTED](GETTING_STARTED.md) | 从安装或桌面启动到完成第一个 Room |
-| 理解行为 | [CONCEPTS](CONCEPTS.md) | Project、Room、Turn、FIFO、角色、Workflow 与审批语义 |
-| 修改配置 | [CONFIGURATION](CONFIGURATION.md) | JSON 配置、Provider、runtime policy 与安全边界 |
-| 查询命令 | [CLI_REFERENCE](CLI_REFERENCE.md) | 命令入口、参数发现方式与自动核验清单 |
-| 调用 HTTP | [API_REFERENCE](API_REFERENCE.md) | Management / Room HTTP 与 SSE 契约 |
-| 修改实现 | [ARCHITECTURE](ARCHITECTURE.md) | 组件、状态所有权、不变量与代码导航 |
-| 理解持久化 | [STORAGE](STORAGE.md) | Event Log、Binding、附件、备份和重启恢复 |
-| 部署与维护 | [OPERATIONS](OPERATIONS.md) | Desktop、Service、Daemon、归档、删除、诊断和恢复 |
-| 排查问题 | [TROUBLESHOOTING](TROUBLESHOOTING.md) | 按症状定位常见故障 |
-| 跨版本升级 | [UPGRADING](UPGRADING.md) | Breaking change、备份、验证和回滚 |
-| 修改 Agent 合同 | [PROTOCOL](PROTOCOL.md) | 输入封装、控制标记、handoff 与收敛规则 |
+| First run | [GETTING_STARTED](GETTING_STARTED.md) | From install or desktop launch through the first Room |
+| Understand behavior | [CONCEPTS](CONCEPTS.md) | Project, Room, Turn, FIFO, roles, Workflow, and approval semantics |
+| Change configuration | [CONFIGURATION](CONFIGURATION.md) | JSON configuration, Providers, runtime policy, and safety boundaries |
+| Look up commands | [CLI_REFERENCE](CLI_REFERENCE.md) | Command entry points, how to discover flags, and the auto-checked inventory |
+| Call HTTP | [API_REFERENCE](API_REFERENCE.md) | Management / Room HTTP and SSE contract |
+| Change the implementation | [ARCHITECTURE](ARCHITECTURE.md) | Components, state ownership, invariants, and code navigation |
+| Understand persistence | [STORAGE](STORAGE.md) | Event Log, Binding, attachments, backup, and restart recovery |
+| Deploy and maintain | [OPERATIONS](OPERATIONS.md) | Desktop, Service, Daemon, archive, delete, diagnostics, and recovery |
+| Diagnose problems | [TROUBLESHOOTING](TROUBLESHOOTING.md) | Symptom-oriented common failures |
+| Upgrade across versions | [UPGRADING](UPGRADING.md) | Breaking changes, backup, verification, and rollback |
+| Change the Agent contract | [PROTOCOL](PROTOCOL.md) | Input envelopes, control markers, handoff, and convergence rules |
 
-顶层 [README](../README.md) 只负责产品定位与最短上手路径；[CONTRIBUTING](../CONTRIBUTING.md) 只负责开发流程；[CHANGELOG](../CHANGELOG.md) 只记录版本历史。桌面模块的 toolchain 和打包命令由 [desktop/README](../desktop/README.md) 维护。
+The top-level [README](../README.md) owns product positioning and the shortest path to a first run. [CONTRIBUTING](../CONTRIBUTING.md) owns the development process. [CHANGELOG](../CHANGELOG.md) owns version history. Desktop toolchain and packaging commands live in [desktop/README](../desktop/README.md).
 
-## 内容边界
+## Content boundaries
 
-同一个事实只应有一个详细解释位置：
+Each fact should have one detailed explanation:
 
-- 协作语义属于 `CONCEPTS.md`；
-- 代码结构、桌面 Host 边界与并发不变量属于 `ARCHITECTURE.md`；
-- 精确命令和接口名称属于 Reference 文档；
-- 故障处置属于 `TROUBLESHOOTING.md`；
-- 版本迁移属于 `UPGRADING.md`。
+- Collaboration semantics belong in `CONCEPTS.md`;
+- Code structure, desktop-host boundaries, and concurrency invariants belong in `ARCHITECTURE.md`;
+- Exact command and interface names belong in Reference documents;
+- Failure handling belongs in `TROUBLESHOOTING.md`;
+- Version migration belongs in `UPGRADING.md`.
 
-其他文档引用它，不复制整段说明。无法由测试或源码核验的短期计划应放在 Issue / PR，而不是长期 Reference。
+Other documents link to that explanation instead of copying it. Short-lived plans that tests or source cannot verify belong in an Issue / PR, not in long-lived Reference.
 
-## 维护规则
+## Maintenance rules
 
-变更以下代码时必须同步对应文档：
+When the following code changes, update the matching documents:
 
-| 代码区域 | 文档 |
+| Code area | Documents |
 |---|---|
-| `desktop/` | `GETTING_STARTED.md`、`ARCHITECTURE.md`、`OPERATIONS.md` 与 `desktop/README.md` |
-| `internal/room/`、`internal/agent/` | `CONCEPTS.md`、`ARCHITECTURE.md`、`PROTOCOL.md` |
-| `internal/config/`、Provider 解析 | `CONFIGURATION.md` |
+| `desktop/` | `GETTING_STARTED.md`, `ARCHITECTURE.md`, `OPERATIONS.md`, and `desktop/README.md` |
+| `internal/room/`, `internal/agent/` | `CONCEPTS.md`, `ARCHITECTURE.md`, `PROTOCOL.md` |
+| `internal/config/`, Provider parsing | `CONFIGURATION.md` |
 | `cmd/pairroom/` | `CLI_REFERENCE.md` |
-| `internal/server/`、`internal/service/` HTTP handler | `API_REFERENCE.md` |
-| `internal/store/`、archive / backup | `STORAGE.md`、`OPERATIONS.md`、`UPGRADING.md` |
+| `internal/server/`, `internal/service/` HTTP handlers | `API_REFERENCE.md` |
+| `internal/store/`, archive / backup | `STORAGE.md`, `OPERATIONS.md`, `UPGRADING.md` |
 
-提交前运行：
+Before committing, run:
 
 ```bash
 make docs-check

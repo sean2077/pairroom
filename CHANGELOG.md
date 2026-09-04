@@ -4,8 +4,16 @@
 
 ### Added
 
+- Room View and Management Shell support English and Simplified Chinese, with a language toggle and a persistent `pairroom.lang` preference.
+- Each Room slot can run Claude Code, Codex, or Grok Build, including two instances of the same runtime. Per-slot `provider`, `model`, `effort`, and `instructions` are explicit overrides.
+- Grok Build headless streaming integration uses `--prompt-file` and `--resume`, keeps prompt/instruction text out of process argv, and emits the configured slot actor.
 - GitHub Releases now attach desktop packages (`pairroom-desktop-vX.Y.Z-…`) alongside CLI binaries (`pairroom-cli-vX.Y.Z-…`). Windows desktop uses `-setup.exe` because `.exe` alone collides with the CLI; Linux `.deb`/`.AppImage` and macOS `.app.zip` rely on the suffix.
 - `curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh | sh` installs the CLI for the current OS/arch.
+
+### Changed
+
+- Empty `provider`, `model`, `effort`, `instructions`, and runtime-policy overrides inherit the selected native CLI's user/global configuration instead of synthesizing PairRoom defaults.
+- Maintained documentation is English. The root README is bilingual (English first, then Simplified Chinese). Slot identity (`claude`/`codex` ActorIDs) stays separate from runtime identity (`claude`/`codex`/`grok`).
 
 ## [v1.2.0] — 2026-09-03
 

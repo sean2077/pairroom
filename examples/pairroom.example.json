@@ -1,20 +1,25 @@
 {
   "listen": "127.0.0.1:7332",
-  "room_name": "Claude × Codex",
+  "room_name": "PairRoom",
   "routing_mode": "turns",
   "max_agent_hops": 6,
   "stall_warning_seconds": 300,
   "auto_start": true,
   "claude": {
+    "runtime": "claude",
     "command": "claude",
+    "provider": "",
     "model": "",
+    "effort": "",
+    "instructions": "",
     "permission_mode": "auto"
   },
   "codex": {
+    "runtime": "codex",
     "command": "codex",
+    "provider": "",
     "model": "",
-    "effort": "high",
-    "approval_policy": "untrusted",
-    "sandbox": "workspaceWrite"
+    "effort": "",
+    "instructions": ""
   }
 }

@@ -1,33 +1,33 @@
 # HTTP and event API reference
 
-    PairRoom 的浏览器 UI 使用本地 HTTP API 与 SSE。CLI / UI 是优先入口；直接调用 API 的客户端应把它视为随 PairRoom release 演进的本地控制面，而不是永久稳定的公网 SaaS API。
+PairRoom's browser UI uses a local HTTP API and SSE. CLI / UI is the preferred entry. Clients that call the API directly should treat it as a local control plane that evolves with PairRoom releases, not as a permanently stable public SaaS API.
 
-    ## 安全边界
+## Safety boundary
 
-    - 默认绑定 loopback；
-    - 非 loopback 部署必须配置 token，并自行提供可信网络边界；
-    - API 不应返回 Provider secret 或附件的绝对宿主路径；
-    - destructive request 必须明确 Project / Room identity，并遵守 archive、active Turn 和 Binding 前置条件。
+- Bind to loopback by default;
+- Non-loopback deployments must configure a token and supply their own trusted network boundary;
+- The API must not return Provider secrets or absolute host paths of attachments;
+- A destructive request must name the Project / Room identity and obey archive, active Turn, and Binding preconditions.
 
-    ## 资源族
+## Resource families
 
-    Management API 负责 Project、Room 注册、Binding、archive、backup 和 Service diagnostics。Room API 负责 message、Turn、participant、role、approval、retry、cancel、attachment 和 event stream。应用内 Room 标签走 Management 同源 surface：`/api/v1/rooms/{room}/surface/…` 使用 Management Session，由服务端注入 Runtime bearer；`PATCH /api/v1/runtime-policy` 只调整并发 Runtime 上限；`POST /api/v1/rooms/{room}/open-browser` 在 Runtime 就绪后打开系统浏览器。归档 Room 没有 surface，也不能外开。
+The Management API owns Project and Room registration, Binding, archive, backup, and Service diagnostics. The Room API owns message, Turn, participant, role, approval, retry, cancel, attachment, and the event stream. In-app Room tabs use the Management same-origin surface: `/api/v1/rooms/{room}/surface/…` uses the Management Session, and the server injects the Runtime bearer. `PATCH /api/v1/runtime-policy` only adjusts the concurrent Runtime cap. `POST /api/v1/rooms/{room}/open-browser` opens the system browser after the Runtime is ready. An archived Room has no surface and cannot be opened externally.
 
-    状态类请求返回当前 projection；命令类请求先记录可审计事件，再异步驱动 native runtime。HTTP 成功只表示控制面接受了命令，最终执行结果应从 message processing、Turn summary 或 SSE event 判断。
+Status requests return the current projection. Command requests first record an auditable event, then drive the native runtime asynchronously. HTTP success means only that the control plane accepted the command. Judge final execution from message processing, Turn summary, or SSE events.
 
-    ## SSE 与重连
+## SSE and reconnect
 
-    durable event 带单调序号，可用于断线后续传；高频 text delta / command output 等 transient telemetry 可以是非持久事件，断线后不保证逐 token 重放。客户端重连后应重新获取 snapshot，再从 durable sequence 继续。
+Durable events carry a monotonic sequence and can be resumed after disconnect. High-frequency text delta / command output and other transient telemetry may be non-persistent; token-by-token replay is not guaranteed after disconnect. After reconnect, clients should fetch a snapshot again, then continue from the durable sequence.
 
-    ## 当前源码路由清单
+## Current source route inventory
 
-    下列 path / prefix 从 `internal/server/` 和 `internal/service/` 自动提取。动态 ID 和方法约束以 handler 实现与测试为准。
+The following paths / prefixes are extracted from `internal/server/` and `internal/service/`. Dynamic IDs and method constraints follow the handler implementation and tests.
 
-    <!-- generated:routes -->
-    <details>
-    <summary>展开当前路由与前缀</summary>
+<!-- generated:routes -->
+<details>
+<summary>Show current routes and prefixes</summary>
 
-    - `/api/`
+- `/api/`
 - `/api/v1/`
 - `/api/v1/approvals/`
 - `/api/v1/approvals/approval-1`
@@ -72,13 +72,13 @@
 - `/api/v1/snapshot?message_limit=1`
 - `/api/v1/snapshot?message_limit=3`
 - `/api/v1/snapshot?token=secret`
-    </details>
-    <!-- /generated:routes -->
+</details>
+<!-- /generated:routes -->
 
-    ## 客户端兼容原则
+## Client compatibility principles
 
-    1. 忽略未知 JSON 字段；
-    2. 不根据 UI 文案推导状态机；
-    3. destructive operation 后重新读取 projection；
-    4. 不把 transient event 当作 durable receipt；
-    5. release 升级前阅读 [Upgrading](UPGRADING.md)。
+1. Ignore unknown JSON fields;
+2. Do not derive the state machine from UI copy;
+3. Re-read the projection after a destructive operation;
+4. Do not treat a transient event as a durable receipt;
+5. Read [Upgrading](UPGRADING.md) before a release upgrade.

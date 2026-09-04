@@ -1,66 +1,66 @@
 # Troubleshooting
 
-## Agent 无法启动
+## Agent will not start
 
-1. 在同一用户和仓库目录直接运行 `claude --version` / `codex --version`；
-2. 检查 executable、Provider、cwd、权限与 sandbox；
-3. 查看 participant `LastError` 和 Runtime info；
-4. 若配置了严格 session resume，确认 Binding 指向的原生 session 仍存在。
+1. Run `claude --version` / `codex --version` / `grok --version` directly as the same user in the same repository directory, for the runtime selected by that slot;
+2. Check executable, Provider, cwd, permission, and sandbox;
+3. Inspect the participant `LastError` and Runtime info;
+4. If strict session resume is configured, confirm the native session pointed to by the Binding still exists.
 
-PairRoom 不代替供应商 CLI 登录。
+Empty `provider`, `model`, `effort`, and `instructions` inherit the selected native CLI's user/global configuration. PairRoom does not replace vendor CLI login.
 
-## Turn 长时间没有输出
+## Turn has no output for a long time
 
-先看 Inspector / Turn card 是否存在长命令、审批或持续 tool activity。stall notice 只表示一段时间没有新 event，不会自动中断 Turn。
+First check Inspector / the Turn card for a long command, an approval, or ongoing tool activity. A stall notice only means there has been no new event for a while; it does not interrupt the Turn.
 
-若确认卡死，按风险顺序选择 steering、interrupt、cancel 或 restart；不要同时向另一 Agent 强制提交，以免破坏 single-owner 边界。
+If it is truly stuck, choose steering, interrupt, cancel, or restart in risk order. Do not force-submit to the other Agent at the same time; that would break the single-owner boundary.
 
-## Codex 出现 error，但仍显示工作中
+## Codex shows an error but is still working
 
-generic Codex `error` 可能是 Turn 中途诊断。PairRoom 会记录它，但只有 `turn/completed`、明确 abort / cancellation 或确认 process exit 才释放 owner。若之后一直没有 terminal event，再按卡死流程处理。
+A generic Codex `error` can be a mid-Turn diagnostic. PairRoom records it, but only `turn/completed`, an explicit abort / cancellation, or a confirmed process exit releases the owner. If no terminal event follows, treat it as stuck.
 
-## 发给 peer 的消息一直 Waiting
+## Messages to the peer stay Waiting
 
-这是当前 Agent 仍持有 native Turn 时的预期行为。跨 Agent message 位于 Room FIFO，必须等待可靠 terminal boundary。明确 `@peer` 会请求交棒；没有直接地址时才需要有效 `HANDOFF` 与 `NEXT`。`@human`/`@user` 会把流程留给用户决策。时间线上方的「当前轮次」条会显示持有 Turn 的 Agent 与队列深度，用于一眼判断是否在排队。
+This is expected while the current Agent still holds the native Turn. Cross-Agent messages sit in the Room FIFO and must wait for a reliable terminal boundary. An explicit `@peer` requests handoff. A valid `HANDOFF` and `NEXT` are required only when there is no direct address. `@human`/`@user` leaves the flow for the user to decide. The “current turn” bar above the timeline shows which Agent holds the Turn and the queue depth, so you can see whether work is queued.
 
-如果看到“without a usable HANDOFF”提示，检查 Agent 是否只输出了 `[PAIRROOM:NEXT]`。在没有直接 `@claude`、`@codex` 或 `@peer` 地址时，补充完整的 `HANDOFF` 区块；直接地址缺少区块时 PairRoom 会使用有界的回复上下文继续投递。
+If you see a “without a usable HANDOFF” notice, check whether the Agent emitted only `[PAIRROOM:NEXT]`. Without a direct `@claude`, `@codex`, or `@peer` address, add a complete `HANDOFF` block. When a direct address is present but the block is missing, PairRoom continues delivery with bounded reply context.
 
-如果人类说「互相打招呼」而当前 Driver 只对用户自我介绍，说明它把 Room 当成了 1:1 对话。未点名消息只发给 Driver；peer 要等到回复里出现 `@codex` / `@claude` / `@peer` 才会开始。检查发给 native Agent 的信封是否包含 `peer` 字段。
+If a human said “greet each other” and the current Driver only introduced itself to the user, it treated the Room as a 1:1 chat. Unaddressed messages go only to the Driver; the peer starts only when the reply contains `@codex` / `@claude` / `@peer`. Check that the envelope sent to the native Agent includes the `peer` field.
 
-## 重启后排队消息没有继续
+## Queued messages did not continue after restart
 
-Room FIFO 是进程内状态，重启不会自动重放。检查目标仓库是否已发生副作用，然后对明确安全的失败 / 取消消息使用 Retry。不要手工把旧 message ID 改回 pending。
+The Room FIFO is in-process state and is not replayed automatically after restart. Check whether the target repository already has side effects, then Retry failed / cancelled messages that are clearly safe. Do not hand-edit an old message ID back to pending.
 
-## 取消一条消息影响了整个 Turn
+## Cancelling one message affected the whole Turn
 
-FIFO 中的消息可以精确取消；native runtime 已接受输入后，供应商的 interrupt 往往以整个 active Turn 为粒度。PairRoom 会保留无关 Room FIFO，但当前 Agent 同一 native Turn 内的多个输入可能一起终止。
+Messages in the FIFO can be cancelled precisely. After a native runtime has accepted input, vendor interrupt is often at the whole active Turn. PairRoom keeps unrelated Room FIFO items, but multiple inputs in the same native Turn for the current Agent may terminate together.
 
-## Reviewer 看不到 Driver 最新文件
+## Reviewer does not see the Driver's latest files
 
-Reviewer 使用隔离 snapshot。确认 review 是在 Driver Turn 完成后的新边界启动；角色切换或 snapshot refresh 失败时查看 system notice。不要让 Reviewer 与 Driver 同时写 live workspace。
+The Reviewer uses an isolated snapshot. Confirm that review started at a new boundary after the Driver Turn completed. If a role switch or snapshot refresh failed, inspect the system notice. Do not let Reviewer and Driver write the live workspace at the same time.
 
-## UI 频繁刷新或滚动位置跳动
+## UI refreshes often or the scroll position jumps
 
-确认使用当前构建，查看浏览器控制台与 SSE 重连。页面应批量合并高频 telemetry，而不是逐 token 重建全部 DOM；若 snapshot sequence 反复倒退，保存 Room ID 和 event sequence 报告问题。
+Confirm you are on the current build, then check the browser console and SSE reconnects. The page should batch high-frequency telemetry instead of rebuilding the whole DOM per token. If the snapshot sequence repeatedly goes backwards, report the Room ID and event sequence.
 
-## Room 无法恢复
+## Room cannot be restored
 
-常见原因：
+Common causes:
 
-- Event Log 损坏；
-- Room 含当前版本拒绝的旧 routing event；
-- Project path 已移动；
-- strict Binding session 不存在；
-- 备份不完整。
+- Event Log corruption;
+- the Room contains old routing events rejected by the current version;
+- the Project path has moved;
+- a strict Binding session does not exist;
+- the backup is incomplete.
 
-保留原始数据目录，先验证备份和首个 replay error。旧 routing Room 不自动迁移，应重建。
+Keep the original data directory. Verify the backup and the first replay error first. Old-routing Rooms are not migrated automatically; rebuild them.
 
-## 端口或 token 问题
+## Port or token problems
 
-使用当前命令的 `--help` 检查 listen / token 参数，确认没有另一进程占用端口。非 loopback 监听没有 token 应视为配置错误，而不是绕过检查。
+Use `--help` on the current command to check listen / token flags, and confirm another process is not using the port. A non-loopback listener without a token is a configuration error, not something to bypass.
 
-## Desktop、daemon 和 service.lock 冲突
+## Desktop, daemon, and service.lock conflicts
 
-PairRoom 的默认数据根只允许一个 Service owner。桌面端发现已安装 daemon 后会先连接它，必要时启动它；如果 daemon 安装存在但无法提供 authenticated Management Shell，桌面端会停止启动并显示数据根、二进制和锁 owner 信息，不会再启动第二个内嵌 Service。
+The default PairRoom data root allows only one Service owner. After discovering an installed daemon, the desktop host connects to it, starting it if needed. If a daemon installation exists but cannot provide an authenticated Management Shell, the desktop host stops startup and shows the data root, binary, and lock-owner information; it does not start a second embedded Service.
 
-处理残留锁时先执行 `pairroom daemon status`。只有确认任务已停止、锁中记录的 PID 已不存在，才执行 `pairroom daemon start --recover-stale-lock`；若 PID 仍在运行，先使用 `pairroom daemon stop` 等待 graceful drain。桌面端退出只关闭它自己拥有的内嵌 Service，不会停止外部 daemon。
+When handling a leftover lock, run `pairroom daemon status` first. Only after confirming the task is stopped and the PID in the lock no longer exists, run `pairroom daemon start --recover-stale-lock`. If the PID is still running, use `pairroom daemon stop` and wait for graceful drain. Desktop quit shuts down only an embedded Service it owns; it does not stop an external daemon.

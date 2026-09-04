@@ -36,6 +36,30 @@ func TestProviderProfilesResolveIndependently(t *testing.T) {
 	}
 }
 
+func TestGrokProviderUsesEnvironmentNotArgv(t *testing.T) {
+	cfg := Defaults()
+	cfg.Providers = []Provider{{
+		Name: "xai", APIKey: "secret-key", BaseURL: "https://api.x.ai/v1",
+		AgentTypes: []string{"grok"}, Model: "grok-4.6",
+	}}
+	cfg.Claude.Runtime = "grok"
+	cfg.Claude.Command = "grok"
+	cfg.Claude.Provider = "xai"
+	if err := cfg.resolveProviderProfiles(""); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Claude.RuntimeEnv["XAI_API_KEY"] != "secret-key" || cfg.Claude.RuntimeEnv["GROK_XAI_API_BASE_URL"] != "https://api.x.ai/v1" {
+		t.Fatalf("unexpected Grok provider env: %#v", cfg.Claude.RuntimeEnv)
+	}
+	if cfg.Claude.Model != "grok-4.6" {
+		t.Fatalf("provider model was not applied: %#v", cfg.Claude)
+	}
+	joined := strings.Join(cfg.Claude.Args, " ")
+	if strings.Contains(joined, "secret-key") {
+		t.Fatalf("Grok provider leaked secret into argv: %s", joined)
+	}
+}
+
 func TestProviderProfileEnvironmentReference(t *testing.T) {
 	t.Setenv("PAIRROOM_PROVIDER_TEST", "from-env")
 	cfg := Defaults()

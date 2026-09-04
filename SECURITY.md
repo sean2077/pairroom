@@ -1,209 +1,219 @@
-# PairRoom 安全策略
+# PairRoom security policy
 
-> [架构](docs/ARCHITECTURE.md) · [隐私模型](docs/PRIVACY.md) · [运维手册](docs/OPERATIONS.md) · [支持范围](SUPPORT.md)
+> [Architecture](docs/ARCHITECTURE.md) · [Privacy model](docs/PRIVACY.md) · [Operations](docs/OPERATIONS.md) · [Support scope](SUPPORT.md)
 
-## 1. 威胁模型
+## 1. Threat model
 
-PairRoom 启动具有高权限的本地 Coding Agent。Agent 可能读取文件、修改仓库、执行命令、访问网络并调用用户配置的 Skills、MCP、Hooks 和插件。PairRoom Web UI 是控制与观察面，不替代 Claude Code/Codex 自身的权限、sandbox 或组织策略。
+PairRoom starts high-privilege local coding Agents. An Agent may read files, modify a repository, run commands, access the network, and invoke user-configured Skills, MCP, Hooks, and plugins. The PairRoom Web UI is a control and observation surface. It does not replace Claude Code, Codex, or Grok Build permissions, sandbox, or organization policy.
 
-PairRoom 还保存敏感讨论、运行事件和图片，因此重点防范：
+PairRoom also stores sensitive discussion, runtime events, and images, so the focus is:
 
-- 非授权浏览器访问 Management/Room API；
-- DNS rebinding、cross-origin command 与 CSRF；
-- Token 经 URL、历史、Web Storage、日志或截图泄漏；
-- 恶意图片、伪造媒体类型和资源耗尽；
-- 路径穿越、symlink escape 和仓库外文件导入；
-- 远程 Markdown 图片造成隐式访问泄漏；
-- 未知高权限 Vendor request 被错误允许；
-- UI role 与实际 Runtime 权限不一致；
-- 崩溃后遗留审批、锁或“幽灵 working”；
-- Registry、Event Log 与 Binding ownership 分叉；
-- Reviewer 被误认为容器级隔离。
+- unauthorized browser access to the Management/Room API;
+- DNS rebinding, cross-origin commands, and CSRF;
+- Token leakage through URL, history, Web Storage, logs, or screenshots;
+- malicious images, forged media types, and resource exhaustion;
+- path traversal, symlink escape, and importing files outside the repository;
+- implicit access leakage from remote Markdown images;
+- unknown high-privilege vendor requests being allowed by mistake;
+- UI role disagreeing with actual Runtime permission;
+- leftover approvals, locks, or “ghost working” after a crash;
+- Registry, Event Log, and Binding ownership divergence;
+- treating Reviewer as container-grade isolation.
 
-PairRoom 主要面向单用户、受信本机和受信仓库。对恶意本地同用户进程、内核攻陷或不可信 OS 不提供安全边界。
+PairRoom primarily targets a single user, a trusted local machine, and a trusted repository. It does not provide a security boundary against a malicious local same-user process, a compromised kernel, or an untrusted OS.
 
-## 2. 网络安全默认值
+## 2. Network security defaults
 
-### 2.1 仅数字 loopback
+### 2.1 Numeric loopback only
 
-- `pairroom service`、`pairroom serve` 和每个 Room Runtime 只接受数字 loopback 地址；
-- 通配地址、LAN/公网地址、主机名和 `localhost` 在打开 repository 或 Service state 前被拒绝；
-- tokenless `serve` 仍执行 loopback Host 与 same-origin 检查；
-- PairRoom 没有内建 TLS 或远程 listener；
-- 远程访问只使用 SSH 本地端口转发。
+- `pairroom service`, `pairroom serve`, and each Room Runtime accept only numeric loopback addresses;
+- Wildcard addresses, LAN/public addresses, hostnames, and `localhost` are rejected before opening repository or Service state;
+- Tokenless `serve` still performs loopback Host and same-origin checks;
+- PairRoom has no built-in TLS or remote listener;
+- Remote access uses only SSH local port forwarding.
 
-Bearer Token 是纵深防护，不是传输加密的替代品。
+A Bearer Token is defense in depth, not a substitute for transport encryption.
 
-### 2.2 Management Shell 认证
+### 2.2 Management Shell authentication
 
-Service 未显式提供 Token 时生成随机 Management Bearer Token，并把它放在启动 URL fragment 中。
+When the Service is not given an explicit Token, it generates a random Management Bearer Token and places it in the startup URL fragment.
 
-浏览器流程支持两种入口：
+The browser flow supports two entries:
 
-1. 完整 Management URL：JavaScript 从 fragment 读取 Token，并立即用 `history.replaceState` 从地址栏移除 fragment；
-2. 直接打开 Management origin：没有可恢复 Session 时显示凭证登录页，可输入配置的 Service Token，或粘贴包含 `#token=...` 的完整 Management URL；
-3. 两种入口都只使用一次 `Authorization: Bearer <token>` 调用 `POST /api/v1/session`；
-4. Service 返回路径限定为 `/api/v1/` 的 12 小时滑动过期 `HttpOnly`、`SameSite=Strict` Session Cookie，以及只保存在页面内存的 CSRF Token；
-5. bootstrap/登录 Token 随即从页面内存和输入框清除，后续浏览器请求使用 Session Cookie，mutation 还必须提供 `X-PairRoom-CSRF`；
-6. 显式退出调用 `DELETE /api/v1/session`；Session 失效时页面回到登录入口。
+1. Full Management URL: JavaScript reads the Token from the fragment and immediately removes the fragment from the address bar with `history.replaceState`;
+2. Opening the Management origin directly: if there is no recoverable Session, a credential login page accepts the configured Service Token or a complete Management URL containing `#token=...`;
+3. Both entries use `Authorization: Bearer <token>` once to call `POST /api/v1/session`;
+4. The Service returns a 12-hour sliding-expiry `HttpOnly`, `SameSite=Strict` Session Cookie path-limited to `/api/v1/`, plus a CSRF Token kept only in page memory;
+5. The bootstrap/login Token is then cleared from page memory and the input box. Later browser requests use the Session Cookie, and mutations must also provide `X-PairRoom-CSRF`;
+6. Explicit logout calls `DELETE /api/v1/session`. When the Session is invalid, the page returns to the login entry.
 
-Management Token、Session ID 和 CSRF 都不写入 `localStorage`/`sessionStorage`。刷新时页面可通过 `GET /api/v1/session` 从仍有效的 Cookie 恢复 CSRF；Service 重启、会话过期、显式注销或新浏览器上下文需要重新提供 Service Token。命令行/API 客户端可继续直接发送 Bearer Header，query-string token 不授权 Management API。
+Management Token, Session ID, and CSRF are not written to `localStorage`/`sessionStorage`. On refresh, the page can recover CSRF from a still-valid Cookie via `GET /api/v1/session`. Service restart, session expiry, explicit logout, or a new browser context requires the Service Token again. CLI/API clients may keep sending a Bearer Header. A query-string token does not authorize the Management API.
 
-### 2.3 Room View 认证
+### 2.3 Room View authentication
 
-Service Room Runtime 自动使用独立 Token；兼容 `serve` 可显式设置 Token。启用 Token 时：
+A Service Room Runtime automatically uses an independent Token; compatibility `serve` may set a Token explicitly. When a Token is enabled:
 
-1. 启动凭据只出现在 URL fragment；
-2. 浏览器通过 bootstrap endpoint 交换为 12 小时滑动过期的 `HttpOnly`、`SameSite=Strict` Session Cookie；
-3. 写操作要求每会话 CSRF Token；
-4. 长期 Token 和 CSRF 不进入 URL query 或 Web Storage；
-5. CLI/API 客户端可继续使用 Authorization Header；
-6. query token 不授权 REST、SSE 或附件 API。
+1. Startup credentials appear only in the URL fragment;
+2. The browser exchanges them through the bootstrap endpoint for a 12-hour sliding-expiry `HttpOnly`, `SameSite=Strict` Session Cookie;
+3. Writes require a per-session CSRF Token;
+4. Long-lived Tokens and CSRF do not enter URL query or Web Storage;
+5. CLI/API clients may keep using the Authorization Header;
+6. A query token does not authorize REST, SSE, or attachment APIs.
 
-Room A 的 Token、Session、CSRF、SSE cursor 与附件授权不能用于 Room B。
+Room A's Token, Session, CSRF, SSE cursor, and attachment authorization cannot be used for Room B.
 
-### 2.4 HTTP 防护
+### 2.4 HTTP protections
 
-- Management API 接受直接 Bearer 或有效 browser session；Session 认证的 mutation 要求 CSRF，所有 mutation 另检查 `Sec-Fetch-Site`/Origin；
-- Room API 执行 Host 与 same-origin 检查；启用 browser session 时 mutation 还执行 CSRF 检查；
-- Room API 按客户端固定窗口限流，降低本地滥用和意外循环；
-- 两个 Web 面都开启 CSP、`frame-ancestors 'none'`、no-referrer 与 no-sniff 等安全响应头；Management 同源 Room surface 仅将自己的响应改为 `frame-ancestors 'self'`，直接 Runtime URL 继续禁止 framing；
-- Room 附件响应要求认证，并使用 `nosniff`、ETag 和 inline disposition；
-- 启动 fragment 不随 HTTP 请求或 Referer 发送，但仍可能经屏幕共享、日志复制或浏览器扩展泄漏。
+- The Management API accepts a direct Bearer or a valid browser session. Session-authenticated mutations require CSRF, and all mutations also check `Sec-Fetch-Site`/Origin;
+- The Room API performs Host and same-origin checks; when a browser session is enabled, mutations also perform CSRF checks;
+- The Room API rate-limits by client with a fixed window to reduce local abuse and accidental loops;
+- Both Web surfaces enable CSP, `frame-ancestors 'none'`, no-referrer, and no-sniff response headers. The Management same-origin Room surface changes only its own responses to `frame-ancestors 'self'`; a direct Runtime URL still forbids framing;
+- Room attachment responses require authentication and use `nosniff`, ETag, and inline disposition;
+- The startup fragment is not sent with HTTP requests or Referer, but it can still leak through screen sharing, log copy, or browser extensions.
 
-## 3. Project、Room 与 Binding
+## 3. Project, Room, and Binding
 
-- Project 只接受用户显式输入的绝对路径；
-- 服务端解析 symlink、Git worktree root 并 canonicalize；
-- 不扫描常用开发目录，也不提供服务器文件系统浏览器；
-- Room provisioning 在隐藏目录完成，全部成功后原子发布；
-- `(agent, vendor_session_id)` 在 Service 内全局唯一，归档不释放 ownership；
-- Existing Binding 必须精确恢复；
-- deferred New Binding 只在首个真实输入被接受后 materialize；
-- Event append、ownership checkpoint 或唯一性失败时中断执行并 fail closed；
-- PairRoom 不导入绑定前 Vendor Transcript。
+- A Project accepts only an absolute path the user entered explicitly;
+- The server resolves symlinks, the Git worktree root, and canonicalizes;
+- It does not scan common development directories and does not provide a server filesystem browser;
+- Room provisioning completes in a hidden directory and is published atomically after full success;
+- `(agent, vendor_session_id)` is globally unique inside the Service; archive does not release ownership;
+- An Existing Binding must resume exactly;
+- A deferred New Binding materializes only after the first real input is accepted;
+- Event append, ownership checkpoint, or uniqueness failure interrupts execution and fails closed;
+- PairRoom does not import the vendor transcript from before the binding.
 
-## 4. 附件安全
+`agent` in Binding identity is the durable slot (`claude` / `codex`), not the selected runtime.
 
-- 只接受 PNG、JPEG、GIF、WebP；
-- 拒绝 SVG、HTML、脚本和任意二进制；
-- 检查真实内容签名，不信任文件扩展名或客户端 MIME；
-- 限制单张大小、单消息总大小、张数、边长和总像素；
-- 文件和 manifest 使用随机不透明 ID 与保守权限；
-- 每次 Resolve 都复核大小、普通文件、非 symlink、维度和 SHA-256；
-- Message/API/export 不包含附件本机绝对路径；
-- 仓库图片导入经过 canonical path 与 symlink 边界检查；
-- 远程 URL 不进入自动导入流程；
-- 已进入 durable transcript 的附件不可通过 DELETE API 移除；
-- object URL 只存在于当前页面，不作为持久公开链接。
+## 4. Attachment safety
 
-图片仍可能包含肉眼可见的 secrets、客户信息或其他窗口内容；格式校验不能替代发送前人工检查。
+- Only PNG, JPEG, GIF, and WebP are accepted;
+- SVG, HTML, scripts, and arbitrary binaries are rejected;
+- Real content signatures are checked; file extension and client MIME are not trusted;
+- Single-image size, per-message total size, count, edge length, and total pixels are limited;
+- Files and manifests use random opaque IDs and conservative permissions;
+- Every Resolve rechecks size, regular file, non-symlink, dimensions, and SHA-256;
+- Message/API/export do not include the attachment's local absolute path;
+- Repository image import goes through canonical path and symlink boundary checks;
+- Remote URLs do not enter the automatic import flow;
+- Attachments already in the durable transcript cannot be removed through a DELETE API;
+- Object URLs exist only in the current page and are not persistent public links.
 
-## 5. Runtime 与审批
+Images can still contain secrets, customer information, or other window contents that are visible to the eye. Format validation does not replace a human check before sending.
+
+## 5. Runtime and approvals
 
 ### 5.1 Claude
 
-- 启动必须完成 native control initialize；
-- 未知 control request 返回 error；
-- `can_use_tool`/`AskUserQuestion` 进入 durable approval lifecycle；
-- Reviewer 使用 plan permission mode，并阻止写工具；
-- 控制层对到达的写请求再次 fail closed。
+- Startup must complete native control initialize;
+- Unknown control requests return error;
+- `can_use_tool`/`AskUserQuestion` enter the durable approval lifecycle;
+- Reviewer uses plan permission mode and blocks write tools;
+- The control layer fail-closes again on write requests that still arrive.
 
 ### 5.2 Codex
 
-- 未知 app-server request fail closed；
-- Reviewer Turn 使用 read-only sandbox；
-- 追加权限只能授予原 request 的子集；
-- command/file/additional-permission request 进入统一审批生命周期。
+- Unknown app-server requests fail closed;
+- Reviewer Turns use a read-only sandbox;
+- Additional permissions can be granted only as a subset of the original request;
+- command/file/additional-permission requests enter the unified approval lifecycle.
 
-### 5.3 审批生命周期
+### 5.3 Grok Build
 
-中断、停止、重启、Runtime error/exit、角色切换和 PairRoom restart 会使无法安全复用的 pending approval 过期。UI 不应重放旧决定到新的 Vendor request。
+- Empty `provider`, `model`, `effort`, permission, and sandbox overrides are omitted so the native CLI user/global configuration is inherited;
+- Prompt and instruction text are written to a prompt file and must not appear in process argv;
+- Unknown high-privilege requests still fail closed; native approvals that the adapter cannot represent are rejected rather than auto-allowed.
 
-角色变化遵循“先应用 Adapter policy、后持久化 Room role”，避免界面显示 Reviewer 而底层仍按 Driver 权限运行。
+### 5.4 Approval lifecycle
 
-## 6. Reviewer 工作区边界
+Interrupt, stop, restart, Runtime error/exit, role switch, and PairRoom restart expire pending approvals that cannot be reused safely. The UI must not replay an old decision onto a new vendor request.
 
-Reviewer 默认在独立 Git snapshot 中运行：
+Role changes follow “apply Adapter policy first, then persist the Room role”, so the UI cannot show Reviewer while the underlying process still runs with Driver permission.
 
-- 包含 HEAD；
-- 应用 staged + unstaged tracked diff；
-- 复制 untracked regular files；
-- 拒绝不安全 symlink 与越界引用；
-- 记录 source HEAD、dirty 与 snapshot digest；
-- POSIX 上移除写位；
-- 再叠加 Claude plan/disallowed tools 或 Codex read-only sandbox。
+## 6. Reviewer workspace boundary
 
-这不是容器、VM、只读 mount 或恶意代码沙箱。外部 MCP、Vendor Runtime bug、Windows 权限语义或用户自定义配置可能扩大访问范围。对不可信任务使用受控容器/VM/独立 checkout。
+The Reviewer runs in an independent Git snapshot by default:
 
-Driver 默认是唯一写入者。Reviewer snapshot 不应作为并行实现分支；确需两个写入者时，使用人工管理的独立 Git worktree/branch 和显式合并。
+- includes HEAD;
+- applies staged + unstaged tracked diff;
+- copies untracked regular files;
+- rejects unsafe symlinks and out-of-bound references;
+- records source HEAD, dirty, and snapshot digest;
+- removes the write bit on POSIX;
+- then layers Claude plan/disallowed tools or Codex read-only sandbox.
 
-## 7. 持久化与恢复
+This is not a container, VM, read-only mount, or malware sandbox. External MCP, a vendor Runtime bug, Windows permission semantics, or user-custom configuration can widen access. For untrusted tasks, use a controlled container/VM/independent checkout.
 
-- data root 使用私有目录权限，Event、prompt、图片和 manifest 使用保守文件权限（平台支持时）；
-- append-only event 先同步再发布；
-- 只修复损坏的最后半行；
-- 中间损坏、sequence 分叉或未来 schema 被拒绝；
-- Registry checkpoint 可从默认 Room Event Logs 重建；
-- checkpoint 写入失败且无法证明一致时，阻止后续 mutation；
-- 一个 data root 只允许一个 Service writer；
-- stale lock 不自动猜测，必须人工确认旧进程退出后显式恢复；
-- backup/restore 拒绝 traversal、link、duplicate、未声明文件、大小和哈希异常；
-- 普通 transcript export 不包含 verbose Inspector event tail；
-- diagnostics 设计为省略 transcript 正文和附件 bytes，但仍需人工检查。
+The Driver is the only writer by default. A Reviewer snapshot should not be a parallel implementation branch. If two writers are required, use a human-managed independent Git worktree/branch and an explicit merge.
 
-不要手工编辑 Event sequence、Store schema、attachment manifest 或 Binding Identity。
+## 7. Persistence and recovery
 
-## 8. Runtime 容量与关闭
+- The data root uses private directory permissions. Events, prompts, images, and manifests use conservative file permissions when the platform supports it;
+- Append-only events are synced before publish;
+- Only a damaged final half-line is repaired;
+- Mid-file corruption, sequence forks, or a future schema are rejected;
+- A Registry checkpoint can be rebuilt from default Room Event Logs;
+- If checkpoint write fails and consistency cannot be proven, later mutations are blocked;
+- One data root allows only one Service writer;
+- A stale lock is not guessed automatically; recover explicitly after confirming the old process has exited;
+- Backup/restore rejects traversal, links, duplicates, undeclared files, size, and hash anomalies;
+- Ordinary transcript export does not include the verbose Inspector event tail;
+- Diagnostics are designed to omit transcript body and attachment bytes, but still need a human check.
 
-- 活动 Turn 不为容量回收而被中断；
-- queued Runtime 可取消；
-- active+idle Runtime 可安全 drain；
-- busy、starting/stopping 冲突或 cleanup-uncertain failed 不会被假装挂起；
-- cleanup uncertain 的 Runtime 继续占用 capacity；
-- shutdown 先停止 Management mutation，再等待在途管理请求和 Room Turn，最后释放 lock。
+Do not hand-edit Event sequence, Store schema, attachment manifest, or Binding Identity.
 
-强杀进程可能留下 stale lock、未决审批或需要 replay 收口的 Processing 状态。优先使用正常 daemon/Service 生命周期。
+## 8. Runtime capacity and shutdown
 
-## 9. 敏感本地数据
+- An active Turn is not interrupted for capacity reclaim;
+- A queued Runtime can be cancelled;
+- active+idle Runtimes can drain safely;
+- busy, starting/stopping conflict, or cleanup-uncertain failed is not pretended to be suspended;
+- A Runtime whose cleanup is uncertain continues to occupy capacity;
+- Shutdown first stops Management mutation, then waits for in-flight management requests and Room Turns, then releases the lock.
 
-`events.jsonl` 可能包含：
+Force-killing the process can leave a stale lock, pending approvals, or Processing state that needs replay to close. Prefer the normal daemon/Service lifecycle.
 
-- 用户提示与 Agent 回答；
-- 文件名、Diff、工具参数；
-- 命令输出、错误与本机路径；
-- 模型/runtime 诊断；
-- 审批详情和 Session/Thread ID。
+## 9. Sensitive local data
 
-`attachments/` 可能包含错误截图、产品 UI、架构图、数据图和客户材料。整个 Room data、日志、备份和导出都应按私有代码资产处理。
+`events.jsonl` may contain:
 
-## 10. Vendor 数据路径与自定义配置
+- user prompts and Agent answers;
+- filenames, diffs, tool arguments;
+- command output, errors, and local paths;
+- model/runtime diagnostics;
+- approval details and Session/Thread IDs.
 
-使用云模型时，代码、图片和工具结果可能发送给对应供应商。PairRoom 不代理、加密或改变这条路径。
+`attachments/` may contain error screenshots, product UI, architecture diagrams, data charts, and customer material. Treat the entire Room data, logs, backups, and exports as private code assets.
 
-官方 CLI 仍会加载用户/项目配置、Skills、MCP、Hooks 和插件。恶意或过宽配置可能扩大读写、网络和外部服务访问范围；PairRoom 不审计这些配置。
+## 10. Vendor data path and custom configuration
 
-## 11. 远程资源
+When using a cloud model, code, images, and tool results may be sent to the corresponding vendor. PairRoom does not proxy, encrypt, or change that path.
 
-PairRoom 不自动加载远程 Markdown 图片。普通 `https` 链接由用户主动打开后，浏览器直接访问目标站点；目标站点将看到常规网络请求信息。
+Official CLIs still load user/project configuration, Skills, MCP, Hooks, and plugins. Malicious or overly broad configuration can widen read/write, network, and external-service access. PairRoom does not audit those configurations.
 
-## 12. 推荐操作
+Empty PairRoom `provider`/`model`/`effort`/`instructions` inherit that native CLI global configuration. Add only explicit overrides.
 
-1. 只对可信仓库运行；
-2. 将 secrets 放在 Agent 无需读取的位置；
-3. 默认使用一个 Driver、一个 Reviewer；
-4. 从保守 Vendor permission/sandbox 开始；
-5. 仔细审查命令、路径和权限范围；
-6. 图片发送前检查可见敏感信息；
-7. listener 保持 numeric loopback，远程只用 SSH 转发；
-8. Vendor CLI 升级后运行 `pairroom doctor` 和非关键仓库真实 smoke；
-9. 定期 verify/backup，按敏感度保护 Room data；
-10. 对强隔离需求使用容器/VM/独立 checkout；
-11. Management/Room 完整启动 URL 不进入公开日志或 Issue；
-12. diagnostics 分享前人工检查。
+## 11. Remote resources
 
-## 13. 漏洞报告
+PairRoom does not automatically load remote Markdown images. After the user actively opens an ordinary `https` link, the browser visits the target site directly; the target site sees a normal network request.
 
-不要在公开 Issue 中附带 secrets、私有仓库内容、真实附件、认证 Token、Cookie、完整启动 URL 或可直接利用的敏感 payload。
+## 12. Recommended practice
 
-优先使用仓库的私有安全报告渠道；只提供最小复现、受影响版本、平台、威胁前提和预期边界。若私有渠道不可用，先提交不含利用细节的公开 Issue 请求维护者建立安全沟通渠道。
+1. Run only on trusted repositories;
+2. Keep secrets where the Agent does not need to read them;
+3. Default to one Driver and one Reviewer;
+4. Start from conservative vendor permission/sandbox;
+5. Review commands, paths, and permission scope carefully;
+6. Check visible sensitive information before sending images;
+7. Keep the listener on numeric loopback; use only SSH forwarding remotely;
+8. After upgrading a vendor CLI, run `pairroom doctor` and a real smoke on a non-critical repository;
+9. Verify/backup regularly and protect Room data according to sensitivity;
+10. Use a container/VM/independent checkout when strong isolation is required;
+11. Do not put complete Management/Room startup URLs in public logs or Issues;
+12. Inspect diagnostics by hand before sharing.
+
+## 13. Vulnerability reports
+
+Do not attach secrets, private repository contents, real attachments, authentication Tokens, Cookies, complete startup URLs, or directly exploitable sensitive payloads to a public Issue.
+
+Prefer the repository's private security reporting channel. Provide only a minimal reproduction, affected versions, platform, threat assumptions, and expected boundary. If a private channel is unavailable, first file a public Issue without exploit details asking maintainers to establish a security communication channel.

@@ -19,7 +19,11 @@ const (
 // The canonical contract and its deterministic mechanics live in
 // internal/protocol and the `pairroom protocol` command.
 func BootstrapPrompt(actor model.ActorID) string {
-	return protocol.Bootstrap(actor)
+	return protocol.Bootstrap(actor, "", "")
+}
+
+func BootstrapPromptWithRuntime(actor model.ActorID, self, peer model.RuntimeKind) string {
+	return protocol.Bootstrap(actor, self, peer)
 }
 
 // SystemPrompt remains the adapter-facing compatibility entry point. Room and
