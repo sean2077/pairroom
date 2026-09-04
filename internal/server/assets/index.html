@@ -49,18 +49,13 @@
         <div class="divider"></div>
         <section class="room-controls">
           <div class="section-title" data-i18n="ui.turnPolicy">Turn policy</div>
-          <div class="strategy-note" data-i18n="ui.singleOwnerTurnsOnlyOneAgentWorksAtATimeAnExplicit">Single-owner turns: only one Agent works at a time; an explicit @peer or HANDOFF + NEXT transfers the next turn.</div>
-          <label class="field-label" for="max-hops" data-i18n="ui.maximumTurnsPerChain">Maximum turns per chain</label>
-          <div class="range-row">
-            <input id="max-hops" type="range" min="1" max="20" value="6">
-            <output id="max-hops-value">6</output>
-          </div>
+          <div class="strategy-note" data-i18n="room.exactMentionRelayRule">Only the exact current Agent handle requests another Turn; without a handle the Agent response ends the relay.</div>
           <label class="field-label" for="stall-warning" data-i18n="ui.stallWarningSeconds">Stall warning (seconds)</label>
           <div class="number-row">
             <input id="stall-warning" type="number" min="30" max="86400" step="30" value="300">
             <label class="checkbox-label"><input id="stall-disabled" type="checkbox"> <span data-i18n="ui.off">Off</span></label>
           </div>
-          <button id="save-settings" class="secondary-button full-width" data-i18n="ui.saveTurnLimits">Save turn limits</button>
+          <button id="save-settings" class="secondary-button full-width" data-i18n="ui.saveSettings">Save settings</button>
         </section>
 
         <div class="divider"></div>
@@ -74,7 +69,7 @@
         <div class="chat-toolbar">
           <div>
             <div class="chat-title" data-i18n="room.sharedRoom">Shared Room</div>
-            <div class="chat-description" data-i18n="ui.sharedTimelineForYouAndBothAgents">Shared timeline for you and both agents</div>
+            <div id="chat-description" class="chat-description" data-i18n="ui.sharedTimelineForYouAndBothAgents">Shared timeline for you and both agents</div>
           </div>
           <div class="toolbar-actions">
             <select id="conversation-filter" class="mini-select" title="Filter timeline" data-i18n-title="ui.filterTimeline">
@@ -91,7 +86,6 @@
             <button id="scroll-bottom" class="ghost-button" data-i18n="ui.jumpToLatest">Jump to latest</button>
           </div>
         </div>
-        <div id="workflow-bar" class="workflow-bar hidden" aria-live="polite"></div>
         <div id="turn-owner-bar" class="turn-owner-bar hidden" aria-live="polite"></div>
         <div id="timeline-scope" class="timeline-scope hidden">
           <div><span class="scope-label" data-i18n="ui.threadView">Thread view</span><span id="timeline-scope-text"></span></div>
@@ -121,9 +115,8 @@
           <div class="composer-footnote">
             <label class="intent-picker"><span data-i18n="ui.sendMode">Send mode
               </span><select id="message-intent" class="mini-select">
-                <option value="append" data-i18n="ui.appendToTheCurrentDiscussion">Append to the current discussion</option>
-                <option value="next_turn" data-i18n="ui.nextTurnIndependentTask">Next turn (independent task)</option>
-                <option value="supersede" data-i18n="ui.supersedeAndCancelTheOldInstruction">Supersede and cancel the old instruction</option>
+                <option value="steer" data-i18n="ui.trySteeringTheCurrentTurn">Try steering the current Turn</option>
+                <option value="queue" data-i18n="ui.queueForTheNextTurn">Queue for the next Turn</option>
               </select>
             </label>
             <span id="delivery-hint" data-i18n="ui.sendToTheCurrentDriver">Send to the current Driver</span>

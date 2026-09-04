@@ -383,8 +383,7 @@ button { color: inherit; }
 .delivery-chip.processing-working { color: var(--yellow); }
 .delivery-chip.processing-completed { color: var(--green); }
 .delivery-chip.processing-failed,
-.delivery-chip.processing-cancelled,
-.delivery-chip.processing-superseded { color: var(--red); }
+.delivery-chip.processing-cancelled { color: var(--red); }
 .retry-button {
   border: 1px solid rgba(238,113,130,.28); border-radius: 999px; padding: 2px 7px;
   background: rgba(238,113,130,.07); color: var(--red); cursor: pointer; font-size: var(--text-xs);
@@ -563,7 +562,6 @@ button { color: inherit; }
 .intent-picker { display: inline-flex; align-items: center; gap: 6px; color: var(--faint); }
 .intent-picker .mini-select { max-width: 154px; }
 .intent-marker { color: var(--accent); font-size: var(--text-xs); }
-.intent-supersede { color: var(--red); }
 .cancel-message-button {
   border: 1px solid rgba(234,191,99,.30); border-radius: 999px; padding: 2px 7px;
   background: rgba(234,191,99,.07); color: var(--yellow); cursor: pointer; font-size: var(--text-xs);

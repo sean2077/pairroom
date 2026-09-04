@@ -34,8 +34,6 @@ type EmbeddedRuntimeConfig struct {
 	ListenHost          string
 	Mock                bool
 	AutoStart           bool
-	RoutingMode         model.RoutingMode
-	MaxAgentHops        int
 	StallWarningSeconds int
 	Claude              agent.Config
 	Codex               agent.Config
@@ -220,18 +218,6 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 	if cfg.ListenHost != "127.0.0.1" && cfg.ListenHost != "::1" && !strings.EqualFold(cfg.ListenHost, "localhost") {
 		return nil, errors.New("Room runtimes must listen on loopback")
 	}
-	if cfg.RoutingMode == "" {
-		cfg.RoutingMode = model.DefaultRoomSettings().RoutingMode
-	}
-	if !cfg.RoutingMode.Valid() {
-		return nil, fmt.Errorf("invalid routing mode %q: only %q is supported", cfg.RoutingMode, model.RoutingTurns)
-	}
-	if cfg.MaxAgentHops == 0 {
-		cfg.MaxAgentHops = model.DefaultRoomSettings().MaxHops
-	}
-	if cfg.MaxAgentHops < 1 || cfg.MaxAgentHops > 30 {
-		return nil, errors.New("max agent hops must be between 1 and 30")
-	}
 	if cfg.StallWarningSeconds == 0 {
 		cfg.StallWarningSeconds = model.DefaultRoomSettings().StallWarningSeconds
 	}
@@ -323,8 +309,6 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 		Name: durableRoom.Name,
 		Repo: project.Root,
 		Settings: model.RoomSettings{
-			RoutingMode:         cfg.RoutingMode,
-			MaxHops:             cfg.MaxAgentHops,
 			StallWarningSeconds: cfg.StallWarningSeconds,
 		},
 		Store:                 eventStore,
@@ -509,7 +493,11 @@ func (r *embeddedRuntime) InterruptActive(ctx context.Context) error {
 			return errors.Join(result, err)
 		}
 		if err := r.engine.Interrupt(ctx, actor); err != nil {
-			result = errors.Join(result, fmt.Errorf("interrupt %s: %w", actor.DisplayName(), err))
+			name := snapshot.Participants[actor].DisplayName
+			if name == "" {
+				name = actor.DisplayName()
+			}
+			result = errors.Join(result, fmt.Errorf("interrupt %s: %w", name, err))
 		}
 	}
 	return result

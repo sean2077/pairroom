@@ -56,7 +56,7 @@ func TestNativeSessionMaterializationAndExactResume(t *testing.T) {
 	}
 
 	runtimeConfig := EmbeddedRuntimeConfig{
-		AutoStart: true, RoutingMode: model.RoutingTurns, MaxAgentHops: 2, StallWarningSeconds: -1,
+		AutoStart: true, StallWarningSeconds: -1,
 		Claude: agent.Config{Command: "claude", PermissionMode: "auto"},
 		Codex:  agent.Config{Command: "codex", ApprovalPolicy: "untrusted", Sandbox: "readOnly"},
 	}

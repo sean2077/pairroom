@@ -44,7 +44,7 @@ func newTestServerWithOptions(t *testing.T, token, boundary, cookieName string) 
 	}
 	engine, err := room.New(room.Config{
 		Name: "test room", Repo: repo, Store: eventStore,
-		Settings:      model.RoomSettings{RoutingMode: model.RoutingTurns, MaxHops: 3},
+		Settings:      model.RoomSettings{StallWarningSeconds: 300},
 		ClaudeFactory: agent.MockFactory, CodexFactory: agent.MockFactory,
 		ClaudeConfig: agent.Config{MockDelay: 5 * time.Millisecond},
 		CodexConfig:  agent.Config{MockDelay: 5 * time.Millisecond},
@@ -504,9 +504,16 @@ func TestRetryAndExportAPI(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+	currentTurn := ""
+	for _, value := range engine.Snapshot().Messages {
+		if value.ID == original.ID {
+			currentTurn = value.ProcessingTurn[model.ActorCodex]
+			break
+		}
+	}
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorCodex, Kind: model.RuntimeInputFailed,
-		CorrelationID: original.ID, TurnID: "turn-test", Text: "synthetic failure",
+		CorrelationID: original.ID, TurnID: currentTurn, Text: "synthetic failure",
 		CreatedAt: time.Now().UTC(),
 	})
 

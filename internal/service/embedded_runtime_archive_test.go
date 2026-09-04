@@ -27,10 +27,9 @@ func TestEmbeddedRuntimeArchiveInterruptsActiveTurnAndClosesRuntime(t *testing.T
 	}
 
 	factory := EmbeddedRuntimeFactory(registry, EmbeddedRuntimeConfig{
-		Mock:        true,
-		RoutingMode: model.RoutingTurns,
-		Claude:      agent.Config{MockDelay: 5 * time.Second},
-		Codex:       agent.Config{MockDelay: 5 * time.Second},
+		Mock:   true,
+		Claude: agent.Config{MockDelay: 5 * time.Second},
+		Codex:  agent.Config{MockDelay: 5 * time.Second},
 	})
 	manager, err := NewRuntimeManager(registry, factory, RuntimeManagerConfig{
 		Limit: 1, IdleTimeout: time.Hour, PollInterval: 5 * time.Millisecond, CloseTimeout: 3 * time.Second,

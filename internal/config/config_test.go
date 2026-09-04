@@ -12,7 +12,7 @@ import (
 
 func TestDefaults(t *testing.T) {
 	cfg := Defaults()
-	if cfg.Listen != "127.0.0.1:7332" || cfg.RoutingMode != model.RoutingTurns || cfg.MaxAgentHops != 6 {
+	if cfg.Listen != "127.0.0.1:7332" || cfg.StallWarningSeconds != 300 || !cfg.AutoStart {
 		t.Fatalf("unexpected defaults: %#v", cfg)
 	}
 	if cfg.Runtimes.Claude.Command != "claude" || cfg.Runtimes.Codex.Command != "codex" || cfg.Runtimes.Grok.Command != "grok" {
@@ -21,8 +21,8 @@ func TestDefaults(t *testing.T) {
 	if cfg.Claude.Runtime != "claude" || cfg.Codex.Runtime != "codex" {
 		t.Fatalf("unexpected default runtimes: %#v", cfg)
 	}
-	if cfg.Codex.Effort != "" || cfg.Codex.ApprovalPolicy != "" || cfg.Codex.Sandbox != "" {
-		t.Fatalf("Codex defaults must inherit the native CLI: %#v", cfg.Codex)
+	if cfg.Claude.PermissionMode != "" || cfg.Codex.Effort != "" || cfg.Codex.ApprovalPolicy != "" || cfg.Codex.Sandbox != "" {
+		t.Fatalf("runtime-policy defaults must inherit the native CLIs: %#v %#v", cfg.Claude, cfg.Codex)
 	}
 }
 
@@ -31,8 +31,6 @@ func TestLoadMergesDefaults(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{
   "listen": "127.0.0.1:8000",
   "room_name": "Test Room",
-  "routing_mode": "turns",
-  "max_agent_hops": 4,
   "auto_start": false,
   "claude": {"model": "opus"},
   "codex": {"model": "gpt", "effort": "medium"}
@@ -43,18 +41,18 @@ func TestLoadMergesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.RoomName != "Test Room" || cfg.RoutingMode != model.RoutingTurns || cfg.Claude.Model != "opus" {
+	if cfg.RoomName != "Test Room" || cfg.Claude.Model != "opus" {
 		t.Fatalf("unexpected config: %#v", cfg)
 	}
 	if cfg.Claude.PermissionMode != "" || cfg.Codex.ApprovalPolicy != "" {
-		t.Fatalf("defaults were not preserved: %#v", cfg)
+		t.Fatalf("empty native policy overrides were not preserved: %#v", cfg)
 	}
 }
 
 func TestLoadRejectsUnknownAndInvalid(t *testing.T) {
 	tests := []string{
-		`{"listen":"127.0.0.1:1","routing_mode":"turns","max_agent_hops":4,"auto_start":true,"claude":{},"codex":{},"surprise":true}`,
-		`{"listen":"127.0.0.1:1","routing_mode":"forever","max_agent_hops":4,"auto_start":true,"claude":{},"codex":{}}`,
+		`{"listen":"127.0.0.1:1","auto_start":true,"claude":{},"codex":{},"surprise":true}`,
+		`{"listen":"127.0.0.1:1","stall_warning_seconds":1,"auto_start":true,"claude":{},"codex":{}}`,
 	}
 	for i, data := range tests {
 		path := filepath.Join(t.TempDir(), "bad.json")
@@ -67,16 +65,16 @@ func TestLoadRejectsUnknownAndInvalid(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsLegacyRoutingModes(t *testing.T) {
-	for _, mode := range []string{"manual", "mentions", "roundtable"} {
-		t.Run(mode, func(t *testing.T) {
+func TestLoadRejectsRemovedRoutingSettings(t *testing.T) {
+	for _, field := range []string{`"routing_mode":"turns"`, `"max_agent_hops":4`} {
+		t.Run(field, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "pairroom.json")
-			data := `{"listen":"127.0.0.1:1","routing_mode":"` + mode + `","max_agent_hops":4,"stall_warning_seconds":300,"auto_start":true,"claude":{},"codex":{}}`
+			data := `{"listen":"127.0.0.1:1",` + field + `,"stall_warning_seconds":300,"auto_start":true,"claude":{"command":"claude"},"codex":{"command":"codex"}}`
 			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := Load(path); err == nil {
-				t.Fatalf("legacy routing mode %q was accepted", mode)
+				t.Fatalf("removed setting %s was accepted", field)
 			}
 		})
 	}
@@ -86,8 +84,6 @@ func TestLoadAcceptsGrokRuntimeAndIdenticalSlots(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pairroom.json")
 	if err := os.WriteFile(path, []byte(`{
   "listen": "127.0.0.1:8000",
-  "routing_mode": "turns",
-  "max_agent_hops": 4,
   "auto_start": true,
   "claude": {"runtime": "grok", "model": "", "effort": "", "instructions": "Be terse"},
   "codex": {"runtime": "grok"}
@@ -113,8 +109,6 @@ func TestLoadRejectsUnknownRuntime(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pairroom.json")
 	if err := os.WriteFile(path, []byte(`{
   "listen": "127.0.0.1:1",
-  "routing_mode": "turns",
-  "max_agent_hops": 4,
   "auto_start": true,
   "claude": {"runtime": "cursor"},
   "codex": {}

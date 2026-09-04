@@ -9,7 +9,7 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 )
 
-func TestMockStopCancelsActiveAndQueuedInputs(t *testing.T) {
+func TestMockStopCancelsActiveAndRejectsAdapterQueue(t *testing.T) {
 	var mu sync.Mutex
 	var events []model.RuntimeEvent
 	started := make(chan struct{}, 1)
@@ -29,11 +29,11 @@ func TestMockStopCancelsActiveAndQueuedInputs(t *testing.T) {
 	if err := adapter.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := adapter.Submit(ctx, model.AgentInput{MessageID: "msg-active"}); err != nil {
+	if err := adapter.StartTurn(ctx, model.AgentInput{MessageID: "msg-active"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := adapter.Submit(ctx, model.AgentInput{MessageID: "msg-queued"}); err != nil {
-		t.Fatal(err)
+	if err := adapter.StartTurn(ctx, model.AgentInput{MessageID: "msg-queued"}); err == nil {
+		t.Fatal("mock adapter accepted a second queued turn")
 	}
 	select {
 	case <-started:
@@ -52,8 +52,8 @@ func TestMockStopCancelsActiveAndQueuedInputs(t *testing.T) {
 			cancelled[event.CorrelationID] = true
 		}
 	}
-	if !cancelled["msg-active"] || !cancelled["msg-queued"] {
-		t.Fatalf("stop did not settle every input: %#v", events)
+	if !cancelled["msg-active"] || cancelled["msg-queued"] {
+		t.Fatalf("stop did not settle only the active input: %#v", events)
 	}
 }
 

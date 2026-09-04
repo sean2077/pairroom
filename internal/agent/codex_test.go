@@ -20,16 +20,71 @@ type codexRPCRecorder struct {
 	requests []json.RawMessage
 }
 
+type codexCompletionRaceRecorder struct {
+	adapter *CodexAdapter
+}
+
+type codexTurnStartRecorder struct {
+	adapter *CodexAdapter
+}
+
+func (r *codexTurnStartRecorder) Write(data []byte) (int, error) {
+	var request struct {
+		ID     int64  `json:"id"`
+		Method string `json:"method"`
+	}
+	if err := json.Unmarshal(data, &request); err != nil {
+		return 0, err
+	}
+	if request.Method == "turn/start" {
+		r.adapter.handleRPCLine([]byte(fmt.Sprintf(`{"id":%d,"result":{"turn":{"id":"turn-synthetic"}}}`, request.ID)))
+	}
+	return len(data), nil
+}
+
+func (*codexTurnStartRecorder) Close() error { return nil }
+
+func (r *codexCompletionRaceRecorder) Write(data []byte) (int, error) {
+	var request struct {
+		ID     int64  `json:"id"`
+		Method string `json:"method"`
+		Params struct {
+			ExpectedTurnID string `json:"expectedTurnId"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(data, &request); err != nil {
+		return 0, err
+	}
+	if request.Method == "turn/steer" {
+		// Exercise the legal JSON-RPC ordering where the terminal notification
+		// overtakes the request response.
+		r.adapter.handleTurnCompleted(json.RawMessage(`{"turn":{"id":"turn-race","status":"completed"}}`))
+	}
+	result := fmt.Sprintf(`{"turnId":%q}`, request.Params.ExpectedTurnID)
+	r.adapter.handleRPCLine([]byte(fmt.Sprintf(`{"id":%d,"result":%s}`, request.ID, result)))
+	return len(data), nil
+}
+
+func (*codexCompletionRaceRecorder) Close() error { return nil }
+
 func (r *codexRPCRecorder) Write(data []byte) (int, error) {
 	line := append([]byte(nil), data...)
 	r.requests = append(r.requests, line)
 	var request struct {
-		ID int64 `json:"id"`
+		ID     int64  `json:"id"`
+		Method string `json:"method"`
+		Params struct {
+			ExpectedTurnID string `json:"expectedTurnId"`
+		} `json:"params"`
 	}
 	if err := json.Unmarshal(line, &request); err != nil {
 		return 0, err
 	}
-	r.adapter.handleRPCLine([]byte(fmt.Sprintf(`{"id":%d,"result":{}}`, request.ID)))
+	result := `{}`
+	if request.Method == "turn/steer" {
+		result = fmt.Sprintf(`{"turnId":%q}`, request.Params.ExpectedTurnID)
+	}
+	r.adapter.handleRPCLine([]byte(fmt.Sprintf(`{"id":%d,"result":%s}`, request.ID, result)))
 	return len(data), nil
 }
 
@@ -121,6 +176,109 @@ func TestCodexEarlyTurnStartedBindsStartingInput(t *testing.T) {
 	}
 	if started == nil || started.TurnID != "turn-early" || started.CorrelationID != input.MessageID {
 		t.Fatalf("unexpected early turn event: %#v", started)
+	}
+}
+
+func TestCodexUnknownTurnStartedNotificationDoesNotTakeOwnership(t *testing.T) {
+	adapter := NewCodex(Config{}, func(model.RuntimeEvent) {})
+	adapter.state = model.StateIdle
+	adapter.handleNotification("turn/started", json.RawMessage(`{"turn":{"id":"unrelated-turn"}}`))
+	if adapter.currentTurn != "" || len(adapter.turnInputs) != 0 {
+		t.Fatalf("unknown turn/started notification was adopted: current=%q inputs=%#v", adapter.currentTurn, adapter.turnInputs)
+	}
+}
+
+func TestCodexTurnStartResponseSynthesizesStartedNotificationWhenMissing(t *testing.T) {
+	var events []model.RuntimeEvent
+	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) {
+		events = append(events, event)
+	})
+	adapter.cmd = &exec.Cmd{Process: &os.Process{Pid: os.Getpid()}}
+	adapter.stdin = &codexTurnStartRecorder{adapter: adapter}
+	adapter.threadID = "thread-synthetic"
+	adapter.state = model.StateIdle
+	if err := adapter.StartTurn(context.Background(), model.AgentInput{MessageID: "msg-synthetic"}); err != nil {
+		t.Fatal(err)
+	}
+	started := 0
+	for _, event := range events {
+		if event.Kind == model.RuntimeTurnStarted {
+			started++
+			if event.TurnID != "turn-synthetic" || event.CorrelationID != "msg-synthetic" {
+				t.Fatalf("synthetic started event = %#v", event)
+			}
+		}
+	}
+	if started != 1 {
+		t.Fatalf("started event count=%d events=%#v", started, events)
+	}
+	adapter.cmd = nil
+	adapter.stdin = nil
+}
+
+func TestCodexCompletionSettlesInputStagedBeforeStartResponse(t *testing.T) {
+	var events []model.RuntimeEvent
+	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) { events = append(events, event) })
+	input := model.AgentInput{MessageID: "msg-race-start"}
+	adapter.currentTurn = "turn-race"
+	adapter.state = model.StateWorking
+	adapter.startingInput = &input
+	adapter.stageWireInput(input)
+	adapter.handleTurnCompleted(json.RawMessage(`{"turn":{"id":"turn-race","status":"completed"}}`))
+
+	completed := 0
+	for _, event := range events {
+		if event.Kind == model.RuntimeInputCompleted && event.CorrelationID == input.MessageID {
+			completed++
+		}
+	}
+	if completed != 1 || adapter.currentTurn != "" {
+		t.Fatalf("staged start input was not settled exactly once: events=%#v current=%q", events, adapter.currentTurn)
+	}
+	if _, ok := adapter.terminalTurns["turn-race"]; !ok {
+		t.Fatalf("completion tombstone missing for late turn/start response")
+	}
+}
+
+func TestCodexCompletionUsesFinalAgentMessageFallback(t *testing.T) {
+	var events []model.RuntimeEvent
+	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) { events = append(events, event) })
+	adapter.currentTurn = "turn-fallback"
+	adapter.turnInputs["turn-fallback"] = []model.AgentInput{{MessageID: "msg-fallback"}}
+	adapter.handleTurnCompleted(json.RawMessage(`{"turn":{"id":"turn-fallback","status":"completed","items":[{"type":"agentMessage","phase":"final_answer","text":"complete visible answer"}]}}`))
+	for _, event := range events {
+		if event.Kind == model.RuntimeFinal {
+			if event.Text != "complete visible answer" || event.CorrelationID != "msg-fallback" {
+				t.Fatalf("unexpected fallback final event: %#v", event)
+			}
+			return
+		}
+	}
+	t.Fatalf("completion did not emit final fallback: %#v", events)
+}
+
+func TestCodexLateSteerResponseDoesNotResurrectCompletedTurn(t *testing.T) {
+	var events []model.RuntimeEvent
+	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) { events = append(events, event) })
+	adapter.stdin = &codexCompletionRaceRecorder{adapter: adapter}
+	adapter.threadID = "thread-race"
+	adapter.currentTurn = "turn-race"
+	adapter.state = model.StateWorking
+	outcome := adapter.Steer(context.Background(), model.AgentInput{MessageID: "msg-race-steer", Text: "late"})
+	if outcome.State != SteerAccepted {
+		t.Fatalf("late steer outcome=%+v", outcome)
+	}
+	if adapter.currentTurn != "" || len(adapter.turnInputs) != 0 {
+		t.Fatalf("late steer resurrected completed turn: current=%q inputs=%#v", adapter.currentTurn, adapter.turnInputs)
+	}
+	completed := 0
+	for _, event := range events {
+		if event.Kind == model.RuntimeInputCompleted && event.CorrelationID == "msg-race-steer" {
+			completed++
+		}
+	}
+	if completed != 1 {
+		t.Fatalf("late steer input completion count=%d events=%#v", completed, events)
 	}
 }
 
@@ -229,6 +387,14 @@ func TestCodexTurnRequestsUseDocumentedCorrelationFields(t *testing.T) {
 	if got := steered["expectedTurnId"]; got != "turn-1" {
 		t.Fatalf("turn/steer expectedTurnId = %#v", got)
 	}
+	if len(steered) != 4 || steered["threadId"] != "thread-1" || steered["input"] == nil {
+		t.Fatalf("turn/steer wire shape drifted from the generated v2 schema: %#v", steered)
+	}
+	for _, forbidden := range []string{"cwd", "model", "effort", "sandboxPolicy", "approvalPolicy"} {
+		if _, ok := steered[forbidden]; ok {
+			t.Fatalf("turn/steer includes forbidden turn override %q: %#v", forbidden, steered)
+		}
+	}
 }
 
 func TestCodexApprovalPolicyUsesCurrentAppServerVariant(t *testing.T) {
@@ -325,9 +491,9 @@ func TestCodexTurnRequestsDoNotInlineDeveloperInstructions(t *testing.T) {
 		input,
 		{MessageID: "msg-second", Text: "second intervention"},
 	} {
-		state, err := adapter.Submit(context.Background(), input)
-		if err != nil || state != model.DeliveryInjected {
-			t.Fatalf("steer %s = %q, %v", input.MessageID, state, err)
+		outcome := adapter.Steer(context.Background(), input)
+		if outcome.State != SteerAccepted {
+			t.Fatalf("steer %s = %+v", input.MessageID, outcome)
 		}
 	}
 	if len(recorder.requests) != 2 {
@@ -417,6 +583,16 @@ func TestCodexSandboxNormalization(t *testing.T) {
 	if len(reviewerPolicy) != 1 {
 		t.Fatalf("readOnly policy must not include workspace-write fields: %#v", reviewerPolicy)
 	}
+
+	explicit := NewCodex(Config{
+		Sandbox:                "dangerFullAccess",
+		OrdinaryReviewerPolicy: model.ReviewerExplicit,
+		Repo:                   "/repo",
+	}, func(model.RuntimeEvent) {})
+	explicitPolicy := explicit.turnStartParams("thread-1", "review", model.AgentInput{Role: model.RoleReviewer})["sandboxPolicy"].(map[string]any)
+	if got := explicitPolicy["type"]; got != "dangerFullAccess" {
+		t.Fatalf("explicit reviewer policy should reach native sandbox, got %#v", explicitPolicy)
+	}
 }
 
 func TestCodexPlanDeltaUsesCurrentNotificationAndMessageCorrelation(t *testing.T) {
@@ -503,13 +679,12 @@ func TestCodexCompletedTurnSettlesEverySteeredInput(t *testing.T) {
 	}
 }
 
-func TestCodexFailedTurnFailsQueuedInputs(t *testing.T) {
+func TestCodexFailedTurnFailsActiveInputs(t *testing.T) {
 	var events []model.RuntimeEvent
 	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) {
 		events = append(events, event)
 	})
 	adapter.turnInputs["turn-1"] = []model.AgentInput{{MessageID: "msg-active"}}
-	adapter.queued = []model.AgentInput{{MessageID: "msg-queued"}}
 	adapter.currentTurn = "turn-1"
 
 	adapter.handleTurnCompleted(json.RawMessage(`{"turn":{"id":"turn-1","status":"failed","error":{"message":"sandbox failed"}}}`))
@@ -523,12 +698,6 @@ func TestCodexFailedTurnFailsQueuedInputs(t *testing.T) {
 	if failed["msg-active"] != "sandbox failed" {
 		t.Fatalf("active input did not receive native failure: %#v", failed)
 	}
-	if failed["msg-queued"] == "" {
-		t.Fatalf("queued input was left unresolved: %#v", failed)
-	}
-	if len(adapter.queued) != 0 {
-		t.Fatalf("queued bookkeeping was not drained: %#v", adapter.queued)
-	}
 }
 
 func TestCodexProcessExitEmitsBoundaryAfterOutstandingInputsFail(t *testing.T) {
@@ -539,7 +708,6 @@ func TestCodexProcessExitEmitsBoundaryAfterOutstandingInputsFail(t *testing.T) {
 	adapter.state = model.StateWorking
 	adapter.currentTurn = "turn-active"
 	adapter.turnInputs["turn-active"] = []model.AgentInput{{MessageID: "msg-active"}}
-	adapter.queued = []model.AgentInput{{MessageID: "msg-queued"}}
 
 	adapter.handleUnexpectedProcessExit(errors.New("exit status 1"))
 
@@ -564,14 +732,14 @@ func TestCodexProcessExitEmitsBoundaryAfterOutstandingInputsFail(t *testing.T) {
 			}
 		}
 	}
-	if !failed["msg-active"] || !failed["msg-queued"] {
-		t.Fatalf("process exit did not settle every outstanding input: %#v", events)
+	if !failed["msg-active"] || len(failed) != 1 {
+		t.Fatalf("process exit did not settle the active input exactly once: %#v", events)
 	}
 	if boundary <= lastFailure {
 		t.Fatalf("process-exit boundary must follow input settlement: failures=%d boundary=%d events=%#v", lastFailure, boundary, events)
 	}
-	if adapter.state != model.StateError || adapter.currentTurn != "" || len(adapter.turnInputs) != 0 || len(adapter.queued) != 0 {
-		t.Fatalf("process exit left stale adapter state: state=%q turn=%q inputs=%#v queued=%#v", adapter.state, adapter.currentTurn, adapter.turnInputs, adapter.queued)
+	if adapter.state != model.StateError || adapter.currentTurn != "" || len(adapter.turnInputs) != 0 {
+		t.Fatalf("process exit left stale adapter state: state=%q turn=%q inputs=%#v", adapter.state, adapter.currentTurn, adapter.turnInputs)
 	}
 }
 
@@ -691,12 +859,4 @@ func TestCodexRoleChangeRequiresSafeTurnBoundary(t *testing.T) {
 		t.Fatalf("expected active-turn rejection, got %v", err)
 	}
 
-	adapter.mu.Lock()
-	adapter.state = model.StateIdle
-	adapter.currentTurn = ""
-	adapter.queued = []model.AgentInput{{MessageID: "queued"}}
-	adapter.mu.Unlock()
-	if err := adapter.SetRole(context.Background(), model.RoleReviewer); err == nil {
-		t.Fatal("expected queued-input role rejection")
-	}
 }

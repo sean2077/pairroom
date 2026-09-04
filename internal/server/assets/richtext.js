@@ -250,7 +250,11 @@
       { type: 'strong', regex: /(?:\*\*|__)(.+?)(?:\*\*|__)/g },
       { type: 'strike', regex: /~~(.+?)~~/g },
       { type: 'em', regex: /(?<![\w*])\*([^*\n]+)\*(?!\*)|(?<![\w_])_([^_\n]+)_(?!_)/g },
-      { type: 'mention', regex: /@(?:claude|codex|all|peer|human|user)\b/gi },
+      // Keep visual highlighting aligned with the Go router's exact-token
+      // boundary. The backend remains authoritative for routing, but a
+      // suffix such as `@codex-build` or a Unicode continuation must not look
+      // like a routable handle in the transcript.
+      { type: 'mention', regex: /@(?:(?:claude|codex|grok)(?:0|1)?|user)(?![\p{L}\p{N}\p{M}._-])/giu },
     ];
     let cursor = 0;
     while (cursor < source.length) {

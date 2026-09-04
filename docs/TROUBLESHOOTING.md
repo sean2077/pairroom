@@ -21,15 +21,15 @@ A generic Codex `error` can be a mid-Turn diagnostic. PairRoom records it, but o
 
 ## Messages to the peer stay Waiting
 
-This is expected while the current Agent still holds the native Turn. Cross-Agent messages sit in the Room FIFO and must wait for a reliable terminal boundary. An explicit `@peer` requests handoff. A valid `HANDOFF` and `NEXT` are required only when there is no direct address. `@human`/`@user` leaves the flow for the user to decide. The “current turn” bar above the timeline shows which Agent holds the Turn and the queue depth, so you can see whether work is queued.
+This is expected while the current Agent still holds the native Turn. Cross-Agent messages sit in the Room FIFO and wait for a reliable terminal boundary. The “current turn” bar above the timeline shows the owner and queue depth.
 
-If you see a “without a usable HANDOFF” notice, check whether the Agent emitted only `[PAIRROOM:NEXT]`. Without a direct `@claude`, `@codex`, or `@peer` address, add a complete `HANDOFF` block. When a direct address is present but the block is missing, PairRoom continues delivery with bounded reply context.
+Agent relay accepts only the other participant's exact current handle. For a unique runtime that is `@claude`, `@codex`, or `@grok`; when both slots use the same runtime, use the displayed `0/1` handles. An unsuffixed duplicate handle is ambiguous and PairRoom reports both valid choices. `@peer`, `@human`, slot aliases, and old control markers do not route. Use `@user` for a human decision.
 
-If a human said “greet each other” and the current Driver only introduced itself to the user, it treated the Room as a 1:1 chat. Unaddressed messages go only to the Driver; the peer starts only when the reply contains `@codex` / `@claude` / `@peer`. Check that the envelope sent to the native Agent includes the `peer` field.
+If a human said “greet each other” and the current Driver only introduced itself to the user, its response correctly ended the relay because it did not name the peer. Unaddressed human messages start only the Driver. Check the participant card for the exact peer handle and the Inspector envelope for `peer_handle`.
 
-## Queued messages did not continue after restart
+## A message did not continue after restart
 
-The Room FIFO is in-process state and is not replayed automatically after restart. Check whether the target repository already has side effects, then Retry failed / cancelled messages that are clearly safe. Do not hand-edit an old message ID back to pending.
+Room-owned FIFO entries that never crossed the native submission boundary resume automatically in Event Log order. Input already accepted by a native runtime is not replayed. A message caught inside the native acceptance window is marked failed with explicit Retry guidance because its ownership is unknown and automatic replay could duplicate side effects. Inspect the repository before retrying, and never hand-edit an old Message ID back to pending.
 
 ## Cancelling one message affected the whole Turn
 
@@ -48,12 +48,12 @@ Confirm you are on the current build, then check the browser console and SSE rec
 Common causes:
 
 - Event Log corruption;
-- the Room contains old routing events rejected by the current version;
+- the Room uses a Store schema other than `9`;
 - the Project path has moved;
 - a strict Binding session does not exist;
 - the backup is incomplete.
 
-Keep the original data directory. Verify the backup and the first replay error first. Old-routing Rooms are not migrated automatically; rebuild them.
+Keep the original data directory. Verify the backup and the first replay error first. Store schema `9` has no migration path from older Rooms; rebuild them or restore a matching old binary with its complete backup.
 
 ## Port or token problems
 

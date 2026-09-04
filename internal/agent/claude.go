@@ -341,19 +341,23 @@ func (c *ClaudeAdapter) ensurePromptFile(content string) (string, error) {
 	return path, nil
 }
 
-func (c *ClaudeAdapter) Submit(ctx context.Context, input model.AgentInput) (model.DeliveryState, error) {
-	// Claude processes streamed user messages in arrival order. Serialize queue
-	// mutation with the stdin write so result events retain exact correlations.
+func (c *ClaudeAdapter) StartTurn(ctx context.Context, input model.AgentInput) error {
+	// PairRoom owns queued input. Serialize the native write so the accepted
+	// turn retains exact correlation without creating a second adapter queue.
 	c.submitMu.Lock()
 	defer c.submitMu.Unlock()
 
 	if err := c.Start(ctx); err != nil {
-		return model.DeliveryFailed, err
+		return err
 	}
 
 	c.mu.Lock()
 	protocolSent := c.protocolSent
+	busy := c.state == model.StateWorking || c.state == model.StateWaiting || len(c.pending) > 0
 	c.mu.Unlock()
+	if busy {
+		return errors.New("Claude Code already has an active turn")
+	}
 
 	text := prompt.Envelope(input)
 	if !protocolSent {
@@ -361,7 +365,7 @@ func (c *ClaudeAdapter) Submit(ctx context.Context, input model.AgentInput) (mod
 	}
 	content, err := claudeInputContent(text, input.Attachments)
 	if err != nil {
-		return model.DeliveryFailed, err
+		return err
 	}
 	payload := map[string]any{
 		"type": "user",
@@ -378,15 +382,11 @@ func (c *ClaudeAdapter) Submit(ctx context.Context, input model.AgentInput) (mod
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
-		return model.DeliveryFailed, fmt.Errorf("encode claude input: %w", err)
+		return fmt.Errorf("encode claude input: %w", err)
 	}
 
 	entry := claudePending{input: input, turnID: model.NewID("claude-turn")}
 	c.mu.Lock()
-	status := model.DeliveryStarted
-	if c.state == model.StateWorking || len(c.pending) > 0 {
-		status = model.DeliveryQueued
-	}
 	c.pending = append(c.pending, entry)
 	c.mu.Unlock()
 
@@ -397,14 +397,14 @@ func (c *ClaudeAdapter) Submit(ctx context.Context, input model.AgentInput) (mod
 	if stdin == nil {
 		c.writeMu.Unlock()
 		c.removePending(input.MessageID)
-		return model.DeliveryFailed, errors.New("claude stdin is not available")
+		return errors.New("claude stdin is not available")
 	}
 	_, err = stdin.Write(append(data, '\n'))
 	c.writeMu.Unlock()
 	if err != nil {
 		c.removePending(input.MessageID)
 		c.setState(model.StateError, err.Error())
-		return model.DeliveryFailed, fmt.Errorf("send claude input: %w", err)
+		return fmt.Errorf("send claude input: %w", err)
 	}
 	if !protocolSent {
 		c.mu.Lock()
@@ -412,14 +412,14 @@ func (c *ClaudeAdapter) Submit(ctx context.Context, input model.AgentInput) (mod
 		c.mu.Unlock()
 	}
 
-	if status == model.DeliveryStarted {
-		c.emitTurnStarted(entry)
-		c.emitInputState(entry, model.RuntimeInputProcessing, model.ProcessingWorking, "accepted by Claude Code")
-		c.setState(model.StateWorking, "")
-	} else {
-		c.emitInputState(entry, model.RuntimeInputProcessing, model.ProcessingWaiting, "queued by Claude Code")
-	}
-	return status, nil
+	c.emitTurnStarted(entry)
+	c.emitInputState(entry, model.RuntimeInputProcessing, model.ProcessingWorking, "accepted by Claude Code")
+	c.setState(model.StateWorking, "")
+	return nil
+}
+
+func (c *ClaudeAdapter) Steer(context.Context, model.AgentInput) SteerOutcome {
+	return SteerOutcome{State: SteerUnavailable, Detail: "Claude Code streaming input does not expose a verified same-turn steer contract"}
 }
 
 const (
@@ -684,6 +684,17 @@ func (c *ClaudeAdapter) handleLine(line []byte) {
 		c.output.Reset()
 		c.fallback = ""
 		c.mu.Unlock()
+		if !ok {
+			// A resumed Claude process may emit a late result for native work that
+			// PairRoom did not submit. It is diagnostic-only: publishing a terminal
+			// event without a correlated pending input could release the Room owner
+			// or relay stale transcript text.
+			e := runtimeEvent(c.cfg.Actor, model.RuntimeLog)
+			e.Name = "result.unmatched"
+			e.Data = append(json.RawMessage(nil), line...)
+			c.sink(e)
+			return
+		}
 		if strings.TrimSpace(result.Result) == "" {
 			result.Result = streamedText
 		}
@@ -977,12 +988,12 @@ func (c *ClaudeAdapter) handleControlRequest(line []byte, pending claudePending,
 		title = strings.TrimSpace(envelope.Request.DisplayName)
 	}
 	if title == "" {
-		title = "Approve Claude " + envelope.Request.ToolName
+		title = "Approve " + configuredParticipantName(c.cfg) + " " + envelope.Request.ToolName
 	}
 	kind := "claude.toolApproval"
 	if envelope.Request.ToolName == "AskUserQuestion" {
 		kind = "claude.userQuestion"
-		title = "Claude asks for input"
+		title = configuredParticipantName(c.cfg) + " asks for input"
 	}
 	approval := model.Approval{
 		ID: model.NewID("approval"), Agent: c.cfg.Actor, Kind: kind,

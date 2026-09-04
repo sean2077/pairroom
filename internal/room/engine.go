@@ -1,11 +1,13 @@
 package room
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
+	"io"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -29,7 +31,6 @@ const (
 	EventSystemNotice       = "system.notice"
 	EventParticipantsBatch  = "participants.batch.updated"
 	EventTurnSummaryUpdated = "turn.summary.updated"
-	EventWorkflowUpdated    = "workflow.updated"
 
 	eventServiceRoomRenamed         = "service.room.renamed"
 	eventServiceBindingsCompleted   = "service.room.bindings.completed"
@@ -109,6 +110,11 @@ type CancelRequest struct {
 type scheduledDelivery struct {
 	message model.Message
 	target  model.ActorID
+	steer   bool
+	// forceQueue is used while restoring Room-owned FIFO entries. Their
+	// original intent may be `steer`, but after restart there is no live native
+	// Turn to steer, so recovery must preserve Event Log order.
+	forceQueue bool
 }
 
 type Engine struct {
@@ -131,6 +137,7 @@ type Engine struct {
 	turnQueue           []scheduledDelivery
 	turnSubmitting      int
 	turnBoundarySeen    bool
+	restoredDeliveries  []scheduledDelivery
 }
 
 func New(cfg Config) (*Engine, error) {
@@ -140,22 +147,6 @@ func New(cfg Config) (*Engine, error) {
 	if cfg.Hub == nil {
 		cfg.Hub = bus.New(256)
 	}
-	if cfg.Settings.RoutingMode == "" {
-		defaults := model.DefaultRoomSettings()
-		cfg.Settings.RoutingMode = defaults.RoutingMode
-		if cfg.Settings.MaxHops == 0 {
-			cfg.Settings.MaxHops = defaults.MaxHops
-		}
-		if cfg.Settings.StallWarningSeconds == 0 {
-			cfg.Settings.StallWarningSeconds = defaults.StallWarningSeconds
-		}
-	}
-	if !cfg.Settings.RoutingMode.Valid() {
-		return nil, fmt.Errorf("invalid routing mode %q: only %q is supported", cfg.Settings.RoutingMode, model.RoutingTurns)
-	}
-	if cfg.Settings.MaxHops < 1 {
-		cfg.Settings.MaxHops = model.DefaultRoomSettings().MaxHops
-	}
 	if cfg.Settings.StallWarningSeconds == 0 {
 		cfg.Settings.StallWarningSeconds = model.DefaultRoomSettings().StallWarningSeconds
 	}
@@ -163,10 +154,10 @@ func New(cfg Config) (*Engine, error) {
 		return nil, errors.New("stall_warning_seconds must be -1 (disabled) or between 30 and 86400")
 	}
 	if cfg.ClaudeFactory == nil {
-		cfg.ClaudeFactory = agent.FactoryFor(cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorClaude))
+		cfg.ClaudeFactory = agent.SlotFactory(false, cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorClaude))
 	}
 	if cfg.CodexFactory == nil {
-		cfg.CodexFactory = agent.FactoryFor(cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorCodex))
+		cfg.CodexFactory = agent.SlotFactory(false, cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorCodex))
 	}
 
 	e := &Engine{
@@ -228,14 +219,16 @@ func (e *Engine) restore() error {
 	if _, err := e.record(EventSettingsUpdated, model.ActorSystem, e.cfg.Settings); err != nil {
 		return err
 	}
+	runtimes := e.runtimeKinds()
+	identities := model.ParticipantIdentities(runtimes)
 	participants := []model.ParticipantSnapshot{
 		{
-			ID: model.ActorClaude, DisplayName: model.ParticipantDisplayName(model.ActorClaude, e.cfg.ClaudeConfig.Runtime),
+			ID: model.ActorClaude, DisplayName: identities[model.ActorClaude].DisplayName, MentionHandle: identities[model.ActorClaude].MentionHandle,
 			Role: model.RoleDriver, State: model.StateStopped, Model: e.cfg.ClaudeConfig.Model,
 			RuntimeKind: e.cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorClaude),
 		},
 		{
-			ID: model.ActorCodex, DisplayName: model.ParticipantDisplayName(model.ActorCodex, e.cfg.CodexConfig.Runtime),
+			ID: model.ActorCodex, DisplayName: identities[model.ActorCodex].DisplayName, MentionHandle: identities[model.ActorCodex].MentionHandle,
 			Role: model.RoleReviewer, State: model.StateStopped, Model: e.cfg.CodexConfig.Model,
 			RuntimeKind: e.cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorCodex),
 		},
@@ -251,20 +244,13 @@ func (e *Engine) restore() error {
 func (e *Engine) ensureSnapshotDefaults() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if !e.snapshot.Settings.RoutingMode.Valid() {
-		return fmt.Errorf("stored Room uses unsupported routing mode %q: only %q is supported", e.snapshot.Settings.RoutingMode, model.RoutingTurns)
-	}
-	if e.snapshot.Settings.MaxHops < 1 {
-		e.snapshot.Settings.MaxHops = model.DefaultRoomSettings().MaxHops
-	}
-	// Schema v1 had no stall-warning field. Zero therefore means "use the
-	// current default"; -1 explicitly disables warnings.
 	if e.snapshot.Settings.StallWarningSeconds == 0 {
 		e.snapshot.Settings.StallWarningSeconds = model.DefaultRoomSettings().StallWarningSeconds
 	}
 	if e.snapshot.Participants == nil {
 		e.snapshot.Participants = make(map[model.ActorID]model.ParticipantSnapshot, 2)
 	}
+	identities := model.ParticipantIdentities(e.runtimeKinds())
 	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
 		participant, ok := e.snapshot.Participants[actor]
 		if !ok {
@@ -274,11 +260,10 @@ func (e *Engine) ensureSnapshotDefaults() error {
 			} else {
 				role = model.RoleReviewer
 			}
-			participant = model.ParticipantSnapshot{ID: actor, DisplayName: actor.DisplayName(), Role: role, State: model.StateStopped}
+			participant = model.ParticipantSnapshot{ID: actor, Role: role, State: model.StateStopped}
 		}
-		if participant.DisplayName == "" {
-			participant.DisplayName = actor.DisplayName()
-		}
+		participant.DisplayName = identities[actor].DisplayName
+		participant.MentionHandle = identities[actor].MentionHandle
 		if !participant.Role.Valid() {
 			participant.Role = model.RolePeer
 		}
@@ -311,30 +296,32 @@ func (e *Engine) ensureSnapshotDefaults() error {
 	if e.snapshot.Approvals == nil {
 		e.snapshot.Approvals = make([]model.Approval, 0)
 	}
-	if e.snapshot.Workflow != nil && e.snapshot.Workflow.Status == model.WorkflowStatusRunning {
-		e.snapshot.Workflow.Status = model.WorkflowStatusWaitingHuman
-		if index := e.snapshot.Workflow.CurrentStage; index >= 0 && index < len(e.snapshot.Workflow.Stages) {
-			e.snapshot.Workflow.Stages[index].Status = model.WorkflowStageWaitingHuman
-		}
-	}
 	return nil
 }
 
-// expireRestoredTransientState closes records that were durable but never
-// handed to a runtime before the previous PairRoom process stopped. Vendor
-// server-request IDs are connection-local, so pending approvals cannot safely
-// survive a daemon restart.
+// expireRestoredTransientState preserves Room-owned FIFO entries that never
+// crossed a native boundary. A submission already in its acceptance window has
+// unknown ownership after a crash and therefore fails for explicit retry.
+// Vendor server-request IDs are connection-local, so pending approvals cannot
+// safely survive a daemon restart.
 func (e *Engine) expireRestoredTransientState() error {
 	e.mu.RLock()
-	type pendingDelivery struct {
+	type transientDelivery struct {
 		messageID string
 		target    model.ActorID
+		state     model.DeliveryState
 	}
-	var deliveries []pendingDelivery
+	var deliveries []transientDelivery
+	var recoverable []scheduledDelivery
 	for _, message := range e.snapshot.Messages {
 		for target, state := range message.Delivery {
-			if state == model.DeliveryPending {
-				deliveries = append(deliveries, pendingDelivery{messageID: message.ID, target: target})
+			switch state {
+			case model.DeliveryPending, model.DeliveryQueued:
+				if !message.Processing[target].Terminal() {
+					recoverable = append(recoverable, scheduledDelivery{message: cloneMessage(message), target: target, forceQueue: true})
+				}
+			case model.DeliverySubmitting:
+				deliveries = append(deliveries, transientDelivery{messageID: message.ID, target: target, state: state})
 			}
 		}
 	}
@@ -347,7 +334,8 @@ func (e *Engine) expireRestoredTransientState() error {
 	e.mu.RUnlock()
 
 	for _, pending := range deliveries {
-		e.delivery(pending.messageID, pending.target, model.DeliverySkipped, "PairRoom restarted before runtime submission completed")
+		e.delivery(pending.messageID, pending.target, model.DeliveryFailed, "PairRoom restarted while native submission ownership was unknown; explicit retry is required")
+		e.processing(pending.messageID, pending.target, model.ProcessingFailed, "PairRoom restarted while native submission ownership was unknown; explicit retry is required to avoid duplicate execution", "")
 	}
 
 	e.mu.RLock()
@@ -358,7 +346,8 @@ func (e *Engine) expireRestoredTransientState() error {
 	var processing []transientProcessing
 	for _, message := range e.snapshot.Messages {
 		for target, state := range message.Processing {
-			if state == model.ProcessingWaiting || state == model.ProcessingWorking {
+			delivery := message.Delivery[target]
+			if (state == model.ProcessingWaiting || state == model.ProcessingWorking) && (delivery == model.DeliveryStarted || delivery == model.DeliveryInjected) {
 				processing = append(processing, transientProcessing{messageID: message.ID, target: target})
 			}
 		}
@@ -376,11 +365,25 @@ func (e *Engine) expireRestoredTransientState() error {
 			return err
 		}
 	}
+	e.turnMu.Lock()
+	e.restoredDeliveries = recoverable
+	// Event Log order is the FIFO contract. Map iteration above is deliberately
+	// avoided here: a restored message may contain more than one target in an
+	// older/corrupt projection, and a deterministic tie-break keeps recovery
+	// reproducible instead of letting Go's map order choose the next native turn.
+	sort.SliceStable(e.restoredDeliveries, func(i, j int) bool {
+		left, right := e.restoredDeliveries[i], e.restoredDeliveries[j]
+		if left.message.Seq != right.message.Seq {
+			return left.message.Seq < right.message.Seq
+		}
+		return left.target < right.target
+	})
+	e.turnMu.Unlock()
 	return nil
 }
 
 // Start initializes the two runtime adapters. AutoStart controls whether the
-// vendor processes are launched immediately; Submit always lazy-starts them.
+// vendor processes are launched immediately; StartTurn always lazy-starts them.
 func (e *Engine) Start(parent context.Context) error {
 	e.mu.Lock()
 	if e.closed {
@@ -455,7 +458,6 @@ func (e *Engine) Start(parent context.Context) error {
 			}
 		})
 	}
-
 	// Apply the restored room roles before either native process starts. Codex
 	// enforces reviewer policy per turn; Claude maps reviewer to native plan mode.
 	if err := claudeAdapter.SetRole(parent, claudeParticipant.Role); err != nil {
@@ -464,6 +466,7 @@ func (e *Engine) Start(parent context.Context) error {
 	if err := codexAdapter.SetRole(parent, codexParticipant.Role); err != nil {
 		return fmt.Errorf("apply Codex role: %w", err)
 	}
+	e.resumeRestoredDeliveries(parent)
 
 	go e.monitorStalledTurns()
 
@@ -474,7 +477,7 @@ func (e *Engine) Start(parent context.Context) error {
 				ctx, cancel := context.WithTimeout(e.ctx, 30*time.Second)
 				defer cancel()
 				if err := e.StartAgent(ctx, actor); err != nil {
-					e.notice("error", fmt.Sprintf("%s failed to start: %v", actor.DisplayName(), err))
+					e.notice("error", fmt.Sprintf("%s failed to start: %v", e.participantName(actor), err))
 				}
 			}()
 		}
@@ -608,7 +611,7 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 	text := strings.TrimSpace(req.Text)
 	intent := req.Intent
 	if intent == "" {
-		intent = model.IntentAppend
+		intent = model.IntentSteer
 	}
 	if !intent.Valid() {
 		return model.Message{}, fmt.Errorf("invalid message intent %q", intent)
@@ -623,42 +626,20 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 
 	e.routingMu.Lock()
 	defer e.routingMu.Unlock()
-	dispatch, err := e.workflowDispatchForUser(text, req)
+	targets, err := e.resolveUserTargets(text, req.To, req.TargetRole, req.ReplyTo)
 	if err != nil {
 		return model.Message{}, err
 	}
-	var targets []model.ActorID
-	if dispatch.Active {
-		targets = []model.ActorID{dispatch.Actor}
-	} else {
-		targets, err = e.resolveUserTargets(text, req.To, req.TargetRole, req.ReplyTo)
-		if err != nil {
-			return model.Message{}, err
-		}
-	}
 	if len(targets) == 0 {
-		return model.Message{}, errors.New("message has no target; use @claude, @codex, Driver, or Reviewer")
+		return model.Message{}, errors.New("message has no target; use an exact Agent handle, Driver, or Reviewer")
 	}
 	if len(targets) != 1 {
-		return model.Message{}, errors.New("turn-by-turn rooms accept one Agent recipient; choose @claude or @codex, or describe an explicit multi-stage workflow")
-	}
-	supersedes := make(map[model.ActorID][]string)
-	if intent == model.IntentSupersede {
-		e.mu.RLock()
-		for _, target := range targets {
-			for _, existing := range e.snapshot.Messages {
-				state := existing.Processing[target]
-				if state == model.ProcessingWaiting || state == model.ProcessingWorking {
-					supersedes[target] = append(supersedes[target], existing.ID)
-				}
-			}
-		}
-		e.mu.RUnlock()
+		return model.Message{}, errors.New("a Room message accepts exactly one starting Agent")
 	}
 	threadID := e.threadForReply(req.ReplyTo)
 	message := model.Message{
 		ID: model.NewID("msg"), From: model.ActorUser, To: targets, Text: text,
-		ReplyTo: req.ReplyTo, Intent: intent, Supersedes: supersedes,
+		ReplyTo: req.ReplyTo, Intent: intent,
 		ThreadID: threadID, CreatedAt: time.Now().UTC(),
 		Delivery:                make(map[model.ActorID]model.DeliveryState, len(targets)),
 		DeliveryDetail:          make(map[model.ActorID]string, len(targets)),
@@ -667,11 +648,6 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 		ProcessingTurn:          make(map[model.ActorID]string, len(targets)),
 		ProcessingLastUpdatedAt: make(map[model.ActorID]time.Time, len(targets)),
 		Attachments:             attachments,
-	}
-	if dispatch.Active {
-		message.WorkflowID = dispatch.WorkflowID
-		message.WorkflowStage = dispatch.StageIndex
-		message.WorkflowMode = dispatch.Mode
 	}
 	for _, target := range targets {
 		message.Delivery[target] = model.DeliveryPending
@@ -683,30 +659,64 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 		return model.Message{}, err
 	}
 	message.Seq = event.Seq
-	e.workflowAttachMessage(dispatch, message.ID)
-	if intent == model.IntentSupersede {
-		for _, target := range targets {
-			e.supersedeTarget(ctx, message.ID, target, supersedes[target])
-		}
-	}
+	e.cancelQueuedAgentRelaysBefore(message.Seq)
 	for _, target := range targets {
 		e.scheduleDelivery(e.runtimeContext(ctx), message, target)
 	}
 	return message, nil
 }
 
-func (e *Engine) supersedeTarget(ctx context.Context, replacementID string, target model.ActorID, messageIDs []string) {
-	if len(messageIDs) == 0 {
+func (e *Engine) cancelQueuedAgentRelaysBefore(humanSeq uint64) {
+	if humanSeq == 0 {
 		return
 	}
-	if adapter, err := e.adapter(target); err == nil {
-		interruptCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		_ = adapter.Interrupt(interruptCtx)
-		cancel()
+	type deliveryKey struct {
+		messageID string
+		target    model.ActorID
 	}
-	detail := "superseded by " + replacementID
-	for _, messageID := range messageIDs {
-		e.processing(messageID, target, model.ProcessingSuperseded, detail, "")
+	e.turnMu.Lock()
+	e.mu.RLock()
+	candidates := make([]deliveryKey, 0)
+	for _, message := range e.snapshot.Messages {
+		if !message.From.ValidParticipant() || message.Seq >= humanSeq {
+			continue
+		}
+		for target, state := range message.Delivery {
+			if !target.ValidParticipant() || message.Processing[target].Terminal() {
+				continue
+			}
+			if state == model.DeliveryPending || state == model.DeliveryQueued {
+				candidates = append(candidates, deliveryKey{messageID: message.ID, target: target})
+			}
+		}
+	}
+	e.mu.RUnlock()
+
+	cancelled := make(map[deliveryKey]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if e.deliveryIf(candidate.messageID, candidate.target, model.DeliverySkipped, "cancelled by a newer user instruction before native submission", func(current model.DeliveryState) bool {
+			return current == model.DeliveryPending || current == model.DeliveryQueued
+		}) {
+			cancelled[candidate] = struct{}{}
+		}
+	}
+	kept := e.turnQueue[:0]
+	for _, delivery := range e.turnQueue {
+		if _, ok := cancelled[deliveryKey{messageID: delivery.message.ID, target: delivery.target}]; ok {
+			continue
+		}
+		kept = append(kept, delivery)
+	}
+	for index := len(kept); index < len(e.turnQueue); index++ {
+		e.turnQueue[index] = scheduledDelivery{}
+	}
+	e.turnQueue = kept
+	e.turnMu.Unlock()
+	for delivery := range cancelled {
+		e.processing(delivery.messageID, delivery.target, model.ProcessingCancelled, "newer user instruction cancelled the pending Agent relay", "")
+	}
+	if len(cancelled) > 0 {
+		e.notice("info", fmt.Sprintf("A newer user instruction cancelled %d pending Agent relay message(s).", len(cancelled)))
 	}
 }
 
@@ -722,7 +732,7 @@ func (e *Engine) CancelMessage(ctx context.Context, messageID string, target mod
 	}
 	state := message.Processing[target]
 	if state != model.ProcessingWaiting && state != model.ProcessingWorking {
-		return fmt.Errorf("message is not in flight for %s", target.DisplayName())
+		return fmt.Errorf("message is not in flight for %s", e.participantName(target))
 	}
 	// A Room-level queued delivery has not entered either native harness. Remove
 	// only that FIFO item; interrupting the target here would cancel unrelated
@@ -733,7 +743,7 @@ func (e *Engine) CancelMessage(ctx context.Context, messageID string, target mod
 		return nil
 	}
 
-	// Serialize with Submit and reviewer snapshot refresh. Some adapters emit the
+	// Serialize with native submission and reviewer snapshot refresh. Some adapters emit the
 	// terminal callback synchronously from Interrupt; holding the delivery scope
 	// prevents the next Room FIFO item from entering the Runtime before we have
 	// captured the exact set of inputs affected by this native interruption.
@@ -759,9 +769,9 @@ func (e *Engine) CancelMessage(ctx context.Context, messageID string, target mod
 	state = message.Processing[target]
 	if state != model.ProcessingWaiting && state != model.ProcessingWorking {
 		e.mu.RUnlock()
-		return fmt.Errorf("message is no longer in flight for %s", target.DisplayName())
+		return fmt.Errorf("message is no longer in flight for %s", e.participantName(target))
 	}
-	if message.Delivery[target] == model.DeliveryPending {
+	if message.Delivery[target] == model.DeliveryPending || message.Delivery[target] == model.DeliveryQueued {
 		e.mu.RUnlock()
 		// The scheduler may already have reserved this item as the next owner, but
 		// the delivery lock proves it has not crossed the native boundary. Mark it
@@ -783,10 +793,10 @@ func (e *Engine) CancelMessage(ctx context.Context, messageID string, target mod
 		}
 		delivery := candidate.Delivery[target]
 		switch delivery {
-		case model.DeliveryStarted, model.DeliveryInjected, model.DeliveryQueued:
+		case model.DeliverySubmitting, model.DeliveryStarted, model.DeliveryInjected:
 			affected = append(affected, candidate.ID)
 		case model.DeliveryPending:
-			// The requested message may be inside Submit's acceptance window. Its
+			// The requested message may be inside StartTurn's acceptance window. Its
 			// cancellation remains explicit even though no narrower native API is
 			// available at this boundary. Other pending messages remain in Room FIFO.
 			if candidate.ID == messageID {
@@ -841,7 +851,10 @@ func (e *Engine) Retry(ctx context.Context, messageID string, req RetryRequest) 
 		return model.Message{}, fmt.Errorf("unknown message %q", messageID)
 	}
 
-	targets := model.NormalizeActors(req.To)
+	targets, err := normalizeExplicitActors(req.To)
+	if err != nil {
+		return model.Message{}, err
+	}
 	if len(targets) == 0 {
 		for _, target := range original.To {
 			if !target.ValidParticipant() || !retryableTarget(original, target) {
@@ -852,35 +865,34 @@ func (e *Engine) Retry(ctx context.Context, messageID string, req RetryRequest) 
 		targets = model.NormalizeActors(targets)
 	}
 	if len(targets) == 0 {
-		return model.Message{}, errors.New("message has no failed, cancelled, skipped, or superseded target to retry")
+		return model.Message{}, errors.New("message has no failed, cancelled, or skipped target to retry")
 	}
 	if len(targets) != 1 {
 		return model.Message{}, errors.New("turn-by-turn retry accepts exactly one Agent target")
 	}
 	for _, target := range targets {
 		if !retryableTarget(original, target) {
-			return model.Message{}, fmt.Errorf("delivery to %s is not retryable", target.DisplayName())
+			return model.Message{}, fmt.Errorf("delivery to %s is not retryable", e.participantName(target))
 		}
 	}
 
-	now := time.Now().UTC()
-	if err := e.prepareWorkflowRetry(original, targets, now); err != nil {
-		return model.Message{}, err
+	intent := original.Intent
+	if intent == "" {
+		intent = model.IntentSteer
 	}
+	if !intent.Valid() {
+		return model.Message{}, fmt.Errorf("cannot retry message with invalid intent %q", intent)
+	}
+	now := time.Now().UTC()
 	retry := model.Message{
 		ID:                      model.NewID("msg"),
 		From:                    original.From,
 		To:                      targets,
 		Text:                    original.Text,
-		Handoff:                 original.Handoff,
 		ReplyTo:                 original.ReplyTo,
 		RetryOf:                 original.ID,
-		Intent:                  original.Intent,
+		Intent:                  intent,
 		ThreadID:                original.ThreadID,
-		Hop:                     original.Hop,
-		WorkflowID:              original.WorkflowID,
-		WorkflowStage:           original.WorkflowStage,
-		WorkflowMode:            original.WorkflowMode,
 		CreatedAt:               now,
 		Delivery:                make(map[model.ActorID]model.DeliveryState, len(targets)),
 		DeliveryDetail:          make(map[model.ActorID]string, len(targets)),
@@ -1067,12 +1079,6 @@ func (e *Engine) ResolveApproval(ctx context.Context, approvalID string, resolut
 }
 
 func (e *Engine) UpdateSettings(settings model.RoomSettings) error {
-	if !settings.RoutingMode.Valid() {
-		return fmt.Errorf("invalid routing mode %q: only %q is supported", settings.RoutingMode, model.RoutingTurns)
-	}
-	if settings.MaxHops < 1 || settings.MaxHops > 30 {
-		return errors.New("max_agent_hops must be between 1 and 30")
-	}
 	if settings.StallWarningSeconds == 0 {
 		settings.StallWarningSeconds = model.DefaultRoomSettings().StallWarningSeconds
 	}
@@ -1145,7 +1151,7 @@ func (e *Engine) SetRole(ctx context.Context, actor model.ActorID, role model.Pa
 	}
 	if wasRunning {
 		if err := adapter.Stop(ctx); err != nil {
-			return fmt.Errorf("stop %s before role change: %w", actor.DisplayName(), err)
+			return fmt.Errorf("stop %s before role change: %w", e.participantName(actor), err)
 		}
 	}
 	rollback := func() {
@@ -1166,7 +1172,7 @@ func (e *Engine) SetRole(ctx context.Context, actor model.ActorID, role model.Pa
 	if wasRunning {
 		if err := adapter.Start(ctx); err != nil {
 			rollback()
-			return fmt.Errorf("restart %s after role change: %w", actor.DisplayName(), err)
+			return fmt.Errorf("restart %s after role change: %w", e.participantName(actor), err)
 		}
 	}
 	return e.mutateParticipant(model.ActorUser, actor, func(participant *model.ParticipantSnapshot) {
@@ -1229,7 +1235,7 @@ func (e *Engine) SwitchDriver(ctx context.Context, driver model.ActorID) error {
 						_ = adapters[stopped].Start(context.Background())
 					}
 				}
-				return fmt.Errorf("stop %s before driver switch: %w", actor.DisplayName(), err)
+				return fmt.Errorf("stop %s before driver switch: %w", e.participantName(actor), err)
 			}
 		}
 	}
@@ -1252,18 +1258,18 @@ func (e *Engine) SwitchDriver(ctx context.Context, driver model.ActorID) error {
 	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
 		if err := adapters[actor].SetWorkspace(ctx, boundaries[actor].Path); err != nil {
 			rollback()
-			return fmt.Errorf("set %s workspace: %w", actor.DisplayName(), err)
+			return fmt.Errorf("set %s workspace: %w", e.participantName(actor), err)
 		}
 		if err := adapters[actor].SetRole(ctx, roles[actor]); err != nil {
 			rollback()
-			return fmt.Errorf("set %s role: %w", actor.DisplayName(), err)
+			return fmt.Errorf("set %s role: %w", e.participantName(actor), err)
 		}
 	}
 	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
 		if running[actor] {
 			if err := adapters[actor].Start(ctx); err != nil {
 				rollback()
-				return fmt.Errorf("restart %s after driver switch: %w", actor.DisplayName(), err)
+				return fmt.Errorf("restart %s after driver switch: %w", e.participantName(actor), err)
 			}
 		}
 	}
@@ -1298,10 +1304,18 @@ func roleChangeSafe(participant model.ParticipantSnapshot) error {
 }
 
 func (e *Engine) runtimeKinds() map[model.ActorID]model.RuntimeKind {
+	return runtimeKindsForConfig(e.cfg)
+}
+
+func runtimeKindsForConfig(cfg Config) map[model.ActorID]model.RuntimeKind {
 	return map[model.ActorID]model.RuntimeKind{
-		model.ActorClaude: e.cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorClaude),
-		model.ActorCodex:  e.cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorCodex),
+		model.ActorClaude: cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorClaude),
+		model.ActorCodex:  cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorCodex),
 	}
+}
+
+func (e *Engine) participantName(actor model.ActorID) string {
+	return model.ParticipantIdentityFor(actor, e.runtimeKinds()).DisplayName
 }
 
 func slotAgentConfig(cfg Config, actor model.ActorID) agent.Config {
@@ -1314,8 +1328,10 @@ func slotAgentConfig(cfg Config, actor model.ActorID) agent.Config {
 func applyRoleRuntimeProjection(participant *model.ParticipantSnapshot, actor model.ActorID, role model.ParticipantRole, cfg Config) {
 	slot := slotAgentConfig(cfg, actor)
 	kind := slot.Runtime.CanonicalForSlot(actor)
+	identity := model.ParticipantIdentityFor(actor, runtimeKindsForConfig(cfg))
 	participant.RuntimeKind = kind
-	participant.DisplayName = model.ParticipantDisplayName(actor, kind)
+	participant.DisplayName = identity.DisplayName
+	participant.MentionHandle = identity.MentionHandle
 	// Rebuild the policy projection from the immutable slot selection on every
 	// role transition. A process can move from a read-only Reviewer stage back
 	// to a Driver turn; leaving fields from the previous role in the snapshot
@@ -1323,22 +1339,28 @@ func applyRoleRuntimeProjection(participant *model.ParticipantSnapshot, actor mo
 	participant.Runtime.PermissionMode = ""
 	participant.Runtime.ApprovalPolicy = ""
 	participant.Runtime.Sandbox = ""
+	nativeRole := role
+	if role == model.RoleReviewer && slot.OrdinaryReviewerPolicy == model.ReviewerExplicit {
+		// The Reviewer workspace boundary remains owned by the Room, but the
+		// explicit policy opts the native harness into the selected slot policy.
+		nativeRole = model.RoleDriver
+	}
 	switch kind {
 	case model.RuntimeClaude:
-		if role == model.RoleReviewer {
+		if nativeRole == model.RoleReviewer {
 			participant.Runtime.PermissionMode = "plan"
 		} else {
 			participant.Runtime.PermissionMode = slot.PermissionMode
 		}
 	case model.RuntimeCodex:
-		if role == model.RoleReviewer {
+		if nativeRole == model.RoleReviewer {
 			participant.Runtime.Sandbox = "readOnly"
 		} else {
 			participant.Runtime.ApprovalPolicy = slot.ApprovalPolicy
 			participant.Runtime.Sandbox = slot.Sandbox
 		}
 	case model.RuntimeGrok:
-		if role == model.RoleReviewer {
+		if nativeRole == model.RoleReviewer {
 			participant.Runtime.PermissionMode = "plan"
 			participant.Runtime.Sandbox = "read-only"
 		} else {
@@ -1416,36 +1438,138 @@ func (e *Engine) runtimeContext(requestCtx context.Context) context.Context {
 // the goroutine closes the race where two user messages could start both
 // runtimes before either adapter emitted a working state.
 func (e *Engine) scheduleDelivery(ctx context.Context, message model.Message, target model.ActorID) {
+	e.scheduleDeliveryMode(ctx, message, target, false)
+}
+
+func (e *Engine) scheduleDeliveryMode(ctx context.Context, message model.Message, target model.ActorID, forceQueue bool) {
 	if !target.ValidParticipant() {
 		return
 	}
 	e.turnMu.Lock()
 	owner := e.turnOwner
+	steer := false
 	switch {
-	case owner == "":
+	case owner == "" && len(e.turnQueue) == 0:
 		e.turnOwner = target
 		e.turnSubmitting++
 		e.turnBoundarySeen = false
-	case owner != target || message.Intent == model.IntentNextTurn:
-		e.turnQueue = append(e.turnQueue, scheduledDelivery{message: message, target: target})
+	case owner == "":
+		// A queue can outlive its owner during a cancellation or recovery race.
+		// Keep the Event Log order authoritative: put the new item behind any
+		// existing FIFO work, then reserve the oldest still-awaiting item.
+		detail := "queued behind earlier Room FIFO work"
+		if !e.delivery(message.ID, target, model.DeliveryQueued, detail) {
+			e.turnMu.Unlock()
+			return
+		}
+		e.enqueueDeliveryLocked(scheduledDelivery{message: message, target: target, forceQueue: forceQueue})
+		next := e.reserveNextLocked()
 		e.turnMu.Unlock()
-		e.processing(message.ID, target, model.ProcessingWaiting, fmt.Sprintf("queued until %s completes the active turn", owner.DisplayName()), "")
+		e.processing(message.ID, target, model.ProcessingWaiting, detail, "")
+		e.startScheduledDelivery(next)
+		return
+	case forceQueue || owner != target || message.Intent == model.IntentQueue:
+		detail := fmt.Sprintf("queued until %s completes the active turn", e.participantName(owner))
+		if !e.delivery(message.ID, target, model.DeliveryQueued, detail) {
+			e.turnMu.Unlock()
+			return
+		}
+		e.enqueueDeliveryLocked(scheduledDelivery{message: message, target: target, forceQueue: forceQueue})
+		e.turnMu.Unlock()
+		e.processing(message.ID, target, model.ProcessingWaiting, detail, "")
 		return
 	default:
+		steer = true
 		e.turnSubmitting++
 	}
 	e.turnMu.Unlock()
-	go e.runScheduledDelivery(ctx, message, target)
+	go e.runScheduledDelivery(ctx, message, target, steer)
 }
 
-func (e *Engine) runScheduledDelivery(ctx context.Context, message model.Message, target model.ActorID) {
-	e.deliverRouted(ctx, message, target)
+func (e *Engine) resumeRestoredDeliveries(ctx context.Context) {
+	e.turnMu.Lock()
+	restored := append([]scheduledDelivery(nil), e.restoredDeliveries...)
+	e.restoredDeliveries = nil
+	e.turnMu.Unlock()
+	for _, delivery := range restored {
+		e.scheduleDeliveryMode(e.runtimeContext(ctx), delivery.message, delivery.target, delivery.forceQueue)
+	}
+}
+
+func (e *Engine) runScheduledDelivery(ctx context.Context, message model.Message, target model.ActorID, steer bool) {
+	fallback := e.deliver(ctx, message, target, steer)
+	var next *scheduledDelivery
 	e.turnMu.Lock()
 	if e.turnOwner == target && e.turnSubmitting > 0 {
 		e.turnSubmitting--
 	}
+	if fallback != "" && e.deliveryAwaitingNative(message.ID, target) {
+		queued := scheduledDelivery{message: message, target: target}
+		if e.queuedDeliveryExistsLocked(message.ID, target) {
+			// A duplicate fallback callback must not enqueue the same Room message
+			// twice. The durable Delivery state remains the single source of truth;
+			// this in-memory check only closes the scheduling duplication window.
+		} else {
+			e.enqueueDeliveryLocked(queued)
+		}
+		if e.turnOwner == "" {
+			next = e.reserveNextLocked()
+		}
+	}
 	e.turnMu.Unlock()
+	if fallback != "" {
+		e.processingFallback(message.ID, target, model.ProcessingWaiting, fallback)
+	}
+	e.startScheduledDelivery(next)
 	e.finishTurnIfIdle(target, true)
+}
+
+func (e *Engine) queuedDeliveryExistsLocked(messageID string, target model.ActorID) bool {
+	for _, queued := range e.turnQueue {
+		if queued.message.ID == messageID && queued.target == target {
+			return true
+		}
+	}
+	return false
+}
+
+// enqueueDeliveryLocked keeps the Room FIFO ordered by durable Message Seq.
+// Delivery goroutines can report a steer fallback after a later message has
+// already been queued; appending in callback order would let that older
+// message overtake the Event Log order. Zero-sequence test/recovery fixtures
+// retain insertion order because they have no durable ordering key.
+func (e *Engine) enqueueDeliveryLocked(delivery scheduledDelivery) {
+	insertAt := len(e.turnQueue)
+	if delivery.message.Seq > 0 {
+		for index, existing := range e.turnQueue {
+			if existing.message.Seq == 0 || delivery.message.Seq < existing.message.Seq ||
+				(delivery.message.Seq == existing.message.Seq && delivery.target < existing.target) {
+				insertAt = index
+				break
+			}
+		}
+	}
+	e.turnQueue = append(e.turnQueue, scheduledDelivery{})
+	copy(e.turnQueue[insertAt+1:], e.turnQueue[insertAt:])
+	e.turnQueue[insertAt] = delivery
+}
+
+// reserveNextLocked removes the oldest still-awaiting FIFO item and reserves
+// its native owner before the submission goroutine starts. turnMu must be held.
+func (e *Engine) reserveNextLocked() *scheduledDelivery {
+	for len(e.turnQueue) > 0 {
+		candidate := e.turnQueue[0]
+		e.turnQueue[0] = scheduledDelivery{}
+		e.turnQueue = e.turnQueue[1:]
+		if !e.deliveryAwaitingNative(candidate.message.ID, candidate.target) {
+			continue
+		}
+		e.turnOwner = candidate.target
+		e.turnSubmitting = 1
+		e.turnBoundarySeen = false
+		return &candidate
+	}
+	return nil
 }
 
 // finishTurn releases the current owner and starts exactly one queued
@@ -1466,31 +1590,19 @@ func (e *Engine) finishTurnLocked(actor model.ActorID) *scheduledDelivery {
 	e.turnOwner = ""
 	e.turnSubmitting = 0
 	e.turnBoundarySeen = false
-	for len(e.turnQueue) > 0 {
-		candidate := e.turnQueue[0]
-		e.turnQueue = e.turnQueue[1:]
-		if !e.deliveryStillPending(candidate.message.ID, candidate.target) {
-			continue
-		}
-		e.turnOwner = candidate.target
-		e.turnSubmitting = 1
-		e.turnBoundarySeen = false
-		return &candidate
-	}
-	return nil
+	return e.reserveNextLocked()
 }
 
 func (e *Engine) startScheduledDelivery(next *scheduledDelivery) {
 	if next == nil {
 		return
 	}
-	go e.runScheduledDelivery(e.runtimeContext(context.Background()), next.message, next.target)
+	go e.runScheduledDelivery(e.runtimeContext(context.Background()), next.message, next.target, next.steer)
 }
 
 // finishTurnIfIdle releases ownership only when no immediate submission is in
 // flight and no input already accepted by the owner's native runtime remains
-// unfinished. Room-queued deliveries still have DeliveryPending and therefore
-// do not block the release that will start them.
+// unfinished. Room-queued deliveries do not block the release that starts them.
 func (e *Engine) finishTurnIfIdle(actor model.ActorID, allowWithoutBoundary bool) {
 	e.turnMu.Lock()
 	if e.turnOwner != actor || e.turnSubmitting > 0 || (!allowWithoutBoundary && !e.turnBoundarySeen) {
@@ -1505,7 +1617,7 @@ func (e *Engine) finishTurnIfIdle(actor model.ActorID, allowWithoutBoundary bool
 			continue
 		}
 		switch message.Delivery[actor] {
-		case model.DeliveryStarted, model.DeliveryInjected, model.DeliveryQueued:
+		case model.DeliverySubmitting, model.DeliveryStarted, model.DeliveryInjected:
 			busy = true
 		}
 		if busy {
@@ -1522,7 +1634,7 @@ func (e *Engine) finishTurnIfIdle(actor model.ActorID, allowWithoutBoundary bool
 	e.startScheduledDelivery(next)
 }
 
-func (e *Engine) deliveryStillPending(messageID string, target model.ActorID) bool {
+func (e *Engine) deliveryAwaitingNative(messageID string, target model.ActorID) bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	message, ok := e.findMessageLocked(messageID)
@@ -1530,7 +1642,27 @@ func (e *Engine) deliveryStillPending(messageID string, target model.ActorID) bo
 		return false
 	}
 	processing := message.Processing[target]
-	return !processing.Terminal() && message.Delivery[target] == model.DeliveryPending
+	delivery := message.Delivery[target]
+	return !processing.Terminal() && (delivery == model.DeliveryPending || delivery == model.DeliveryQueued)
+}
+
+// deliveryCanFallback is the narrow acceptance-window check used after a
+// native steer reports unavailable/rejected. The message is still in
+// `submitting` at that point, so it cannot use deliveryAwaitingNative (which is
+// intentionally limited to Room-owned FIFO states).
+func (e *Engine) deliveryCanFallback(messageID string, target model.ActorID) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	message, ok := e.findMessageLocked(messageID)
+	if !ok || message.Processing[target].Terminal() {
+		return false
+	}
+	switch message.Delivery[target] {
+	case model.DeliverySubmitting, model.DeliveryPending, model.DeliveryQueued:
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *Engine) lockDelivery(ctx context.Context, actor model.ActorID) (func(), error) {
@@ -1643,82 +1775,106 @@ func (e *Engine) refreshReviewerWorkspace(ctx context.Context, target model.Acto
 	})
 }
 
-func peerInputText(message model.Message, target model.ActorID) string {
-	if !message.From.ValidParticipant() || target != model.OtherParticipant(message.From) {
-		return message.Text
-	}
-	handoff := strings.TrimSpace(message.Handoff)
-	if handoff == "" {
-		handoff = compactHandoff(message.Text)
-	}
-	if handoff == "" {
-		return message.Text
-	}
-	return fmt.Sprintf("Peer handoff from %s.\n\n%s", message.From.DisplayName(), handoff)
-}
-
-func (e *Engine) deliver(ctx context.Context, message model.Message, target model.ActorID) {
+func (e *Engine) deliver(ctx context.Context, message model.Message, target model.ActorID, steer bool) string {
 	unlock, err := e.lockDeliveryScope(ctx, target)
 	if err != nil {
 		detail := "wait for participant delivery serialization: " + err.Error()
 		e.delivery(message.ID, target, model.DeliveryFailed, detail)
 		e.processing(message.ID, target, model.ProcessingFailed, detail, "")
-		return
+		return ""
 	}
 	defer unlock()
 	// A queued item can be cancelled after the scheduler reserves ownership but
 	// before this goroutine acquires the delivery lock. Recheck durable lifecycle
 	// state at the actual native submission boundary to prevent ghost execution.
-	if !e.deliveryStillPending(message.ID, target) {
-		return
+	if !e.deliveryAwaitingNative(message.ID, target) {
+		return ""
 	}
 	adapter, err := e.adapter(target)
 	if err != nil {
 		e.delivery(message.ID, target, model.DeliveryFailed, err.Error())
 		e.processing(message.ID, target, model.ProcessingFailed, "input was not submitted: "+err.Error(), "")
-		return
+		return ""
 	}
-	if err := e.refreshReviewerWorkspace(ctx, target, adapter); err != nil {
-		detail := "prepare reviewer workspace: " + err.Error()
-		e.delivery(message.ID, target, model.DeliveryFailed, detail)
-		e.processing(message.ID, target, model.ProcessingFailed, detail, "")
-		e.updateParticipant(target, func(p *model.ParticipantSnapshot) {
-			p.State = model.StateError
-			p.LastError = detail
-			p.LastActivity = time.Now().UTC()
-		})
-		return
+	if !steer {
+		if err := e.refreshReviewerWorkspace(ctx, target, adapter); err != nil {
+			detail := "prepare reviewer workspace: " + err.Error()
+			e.delivery(message.ID, target, model.DeliveryFailed, detail)
+			e.processing(message.ID, target, model.ProcessingFailed, detail, "")
+			e.updateParticipant(target, func(p *model.ParticipantSnapshot) {
+				p.State = model.StateError
+				p.LastError = detail
+				p.LastActivity = time.Now().UTC()
+			})
+			return ""
+		}
 	}
 	e.mu.RLock()
 	participant := e.snapshot.Participants[target]
-	settings := e.snapshot.Settings
 	e.mu.RUnlock()
 	attachments, err := e.agentAttachments(message.Attachments)
 	if err != nil {
 		e.delivery(message.ID, target, model.DeliveryFailed, err.Error())
 		e.processing(message.ID, target, model.ProcessingFailed, "image resolution failed: "+err.Error(), "")
-		return
+		return ""
+	}
+	runtimes := e.runtimeKinds()
+	identities := model.ParticipantIdentities(runtimes)
+	fromHandle := "@user"
+	if message.From.ValidParticipant() {
+		fromHandle = identities[message.From].MentionHandle
 	}
 	input := model.AgentInput{
-		MessageID:     message.ID,
-		ThreadID:      message.ThreadID,
-		Hop:           message.Hop,
-		From:          message.From,
-		To:            target,
-		Text:          peerInputText(message, target),
-		ReplyTo:       message.ReplyTo,
-		Role:          participant.Role,
-		MaxHops:       settings.MaxHops,
-		Attachments:   attachments,
-		Intent:        message.Intent,
-		WorkflowID:    message.WorkflowID,
-		WorkflowStage: message.WorkflowStage,
-		WorkflowMode:  message.WorkflowMode,
+		MessageID:   message.ID,
+		ThreadID:    message.ThreadID,
+		From:        message.From,
+		To:          target,
+		FromHandle:  fromHandle,
+		SelfHandle:  identities[target].MentionHandle,
+		PeerHandle:  identities[model.OtherParticipant(target)].MentionHandle,
+		Text:        message.Text,
+		ReplyTo:     message.ReplyTo,
+		Role:        participant.Role,
+		Attachments: attachments,
+		Intent:      message.Intent,
 	}
 	deliveryCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	state, err := adapter.Submit(deliveryCtx, input)
-	if err != nil {
+	if !e.delivery(message.ID, target, model.DeliverySubmitting, "crossing the native submission boundary") {
+		return ""
+	}
+	state := model.DeliveryStarted
+	if steer {
+		outcome := adapter.Steer(deliveryCtx, input)
+		switch outcome.State {
+		case agent.SteerAccepted:
+			state = model.DeliveryInjected
+		case agent.SteerUnavailable, agent.SteerRejected:
+			detail := strings.TrimSpace(outcome.Detail)
+			if detail == "" {
+				detail = "native runtime did not accept same-turn steering"
+			}
+			// Cancellation can race the native outcome while the delivery is still
+			// in `submitting`. Never turn a terminally cancelled input back into a
+			// FIFO item; only an actually waiting message gets the one fallback
+			// transition.
+			if !e.deliveryCanFallback(message.ID, target) {
+				return ""
+			}
+			if !e.delivery(message.ID, target, model.DeliveryQueued, "queued after steer fallback: "+detail) {
+				return ""
+			}
+			return "queued after steer fallback: " + detail
+		default:
+			detail := strings.TrimSpace(outcome.Detail)
+			if detail == "" {
+				detail = "native steer ownership is unknown"
+			}
+			e.delivery(message.ID, target, model.DeliveryFailed, detail)
+			e.processing(message.ID, target, model.ProcessingFailed, "steer outcome unknown; explicit retry required: "+detail, "")
+			return ""
+		}
+	} else if err := adapter.StartTurn(deliveryCtx, input); err != nil {
 		e.delivery(message.ID, target, model.DeliveryFailed, err.Error())
 		e.processing(message.ID, target, model.ProcessingFailed, "runtime did not accept input: "+err.Error(), "")
 		e.updateParticipant(target, func(p *model.ParticipantSnapshot) {
@@ -1726,11 +1882,11 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 			p.LastError = err.Error()
 			p.LastActivity = time.Now().UTC()
 		})
-		return
+		return ""
 	}
 	e.delivery(message.ID, target, state, "")
-	if state != model.DeliveryFailed && state != model.DeliverySkipped && e.cfg.OnSessionMaterialized != nil {
-		// Submit's deadline governs native input acceptance. Once accepted, the
+	if state == model.DeliveryStarted && e.cfg.OnSessionMaterialized != nil {
+		// StartTurn's deadline governs native input acceptance. Once accepted, the
 		// binding commit follows the Engine lifetime so a nearly exhausted delivery
 		// deadline cannot discard a vendor identity that already owns real input.
 		if err := e.cfg.OnSessionMaterialized(ctx, target, adapter.SessionID()); err != nil {
@@ -1742,7 +1898,7 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 				p.LastError = detail
 				p.LastActivity = time.Now().UTC()
 			})
-			return
+			return ""
 		}
 	}
 	// Third-party adapters are only required to return a delivery disposition;
@@ -1759,6 +1915,7 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 	case model.DeliverySkipped:
 		e.processing(message.ID, target, model.ProcessingCancelled, "runtime skipped the input before execution", "")
 	}
+	return ""
 }
 
 // HandleRuntimeEvent is the single ingress from both vendor adapters. It
@@ -1800,10 +1957,11 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 			if info.Model != "" {
 				p.Model = info.Model
 			}
+			applyRoleRuntimeProjection(p, runtimeEvent.Agent, p.Role, e.cfg)
 			p.LastActivity = runtimeEvent.CreatedAt
 		})
 	case model.RuntimeInputProcessing:
-		if runtimeEvent.CorrelationID != "" {
+		if runtimeEvent.CorrelationID != "" && e.runtimeTurnMatches(runtimeEvent) {
 			state := model.ProcessingWorking
 			if runtimeEvent.Name == string(model.ProcessingWaiting) {
 				state = model.ProcessingWaiting
@@ -1811,20 +1969,29 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 			e.processing(runtimeEvent.CorrelationID, runtimeEvent.Agent, state, runtimeEvent.Text, runtimeEvent.TurnID)
 		}
 	case model.RuntimeInputCompleted:
-		if runtimeEvent.CorrelationID != "" {
+		matches := e.runtimeTurnMatches(runtimeEvent)
+		if runtimeEvent.CorrelationID != "" && matches {
 			e.processing(runtimeEvent.CorrelationID, runtimeEvent.Agent, model.ProcessingCompleted, runtimeEvent.Text, runtimeEvent.TurnID)
 		}
-		e.finishTurnIfIdle(runtimeEvent.Agent, false)
+		if matches {
+			e.finishTurnIfIdle(runtimeEvent.Agent, false)
+		}
 	case model.RuntimeInputCancelled:
-		if runtimeEvent.CorrelationID != "" {
+		matches := e.runtimeTurnMatches(runtimeEvent)
+		if runtimeEvent.CorrelationID != "" && matches {
 			e.processing(runtimeEvent.CorrelationID, runtimeEvent.Agent, model.ProcessingCancelled, runtimeEvent.Text, runtimeEvent.TurnID)
 		}
-		e.finishTurnIfIdle(runtimeEvent.Agent, false)
+		if matches {
+			e.finishTurnIfIdle(runtimeEvent.Agent, false)
+		}
 	case model.RuntimeInputFailed:
-		if runtimeEvent.CorrelationID != "" {
+		matches := e.runtimeTurnMatches(runtimeEvent)
+		if runtimeEvent.CorrelationID != "" && matches {
 			e.processing(runtimeEvent.CorrelationID, runtimeEvent.Agent, model.ProcessingFailed, runtimeEvent.Text, runtimeEvent.TurnID)
 		}
-		e.finishTurnIfIdle(runtimeEvent.Agent, false)
+		if matches {
+			e.finishTurnIfIdle(runtimeEvent.Agent, false)
+		}
 	case model.RuntimeState:
 		e.updateParticipant(runtimeEvent.Agent, func(p *model.ParticipantSnapshot) {
 			if runtimeEvent.State != "" {
@@ -1838,6 +2005,9 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 			p.LastActivity = runtimeEvent.CreatedAt
 		})
 	case model.RuntimeTurnStarted:
+		if !e.runtimeTurnMatches(runtimeEvent) {
+			return
+		}
 		e.turnMu.Lock()
 		if e.turnOwner == runtimeEvent.Agent {
 			e.turnBoundarySeen = false
@@ -1852,27 +2022,30 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 			p.LastActivity = runtimeEvent.CreatedAt
 		})
 	case model.RuntimeTurnCompleted:
-		e.updateParticipant(runtimeEvent.Agent, func(p *model.ParticipantSnapshot) {
-			// A native Turn boundary ends any connection-local wait owned by that
-			// Turn. Failed runtimes may immediately project StateError afterwards,
-			// but a completed Turn must never leave the participant stuck Waiting.
-			p.State = model.StateIdle
-			if p.CurrentTurn == runtimeEvent.TurnID || runtimeEvent.TurnID == "" {
-				p.CurrentTurn = ""
-			}
-			p.LastActivity = runtimeEvent.CreatedAt
-		})
-		e.settleTurnInputs(runtimeEvent)
-		e.expireApprovals(runtimeEvent.Agent, "turn_completed")
-		e.turnMu.Lock()
-		if e.turnOwner == runtimeEvent.Agent {
-			e.turnBoundarySeen = true
+		boundary := e.runtimeTurnMatches(runtimeEvent)
+		if !boundary {
+			return
 		}
-		e.turnMu.Unlock()
-		// Preserve runtime callback order. An untracked goroutine allowed a
-		// queued human append to overtake workflow handoff materialization.
-		e.advanceWorkflow(runtimeEvent)
-		e.finishTurnIfIdle(runtimeEvent.Agent, false)
+		e.settleTurnInputs(runtimeEvent)
+		if boundary {
+			e.updateParticipant(runtimeEvent.Agent, func(p *model.ParticipantSnapshot) {
+				// A native Turn boundary ends any connection-local wait owned by that
+				// Turn. Failed runtimes may immediately project StateError afterwards,
+				// but a completed Turn must never leave the participant stuck Waiting.
+				p.State = model.StateIdle
+				if p.CurrentTurn == runtimeEvent.TurnID || runtimeEvent.TurnID == "" {
+					p.CurrentTurn = ""
+				}
+				p.LastActivity = runtimeEvent.CreatedAt
+			})
+			e.expireApprovals(runtimeEvent.Agent, "turn_completed")
+			e.turnMu.Lock()
+			if e.turnOwner == runtimeEvent.Agent {
+				e.turnBoundarySeen = true
+			}
+			e.turnMu.Unlock()
+			e.finishTurnIfIdle(runtimeEvent.Agent, false)
+		}
 	case model.RuntimeApprovalRequested:
 		if runtimeEvent.Approval != nil {
 			_, _ = e.record(EventApprovalUpdated, runtimeEvent.Agent, *runtimeEvent.Approval)
@@ -1900,6 +2073,9 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 			p.LastActivity = runtimeEvent.CreatedAt
 		})
 	case model.RuntimeFinal:
+		if !e.runtimeTurnMatches(runtimeEvent) {
+			return
+		}
 		e.onFinal(runtimeEvent)
 	}
 }
@@ -2013,6 +2189,53 @@ func (e *Engine) projectTurnSummary(runtimeEvent model.RuntimeEvent) {
 	e.mu.Unlock()
 }
 
+// runtimeTurnMatches rejects a late completion from an older native turn.
+// Vendor streams can deliver notifications after a replacement turn has
+// already started; treating that stale notification as the current boundary
+// would release the Room owner and let FIFO work overtake the active turn.
+// Test/fallback adapters may omit turn correlation entirely, so an event with
+// no TurnID remains accepted and a correlated message without a recorded turn
+// remains permissive.
+func (e *Engine) runtimeTurnMatches(runtimeEvent model.RuntimeEvent) bool {
+	if !runtimeEvent.Agent.ValidParticipant() || strings.TrimSpace(runtimeEvent.TurnID) == "" {
+		return true
+	}
+	e.mu.RLock()
+	participant := e.snapshot.Participants[runtimeEvent.Agent]
+	if participant.CurrentTurn != "" && participant.CurrentTurn != runtimeEvent.TurnID {
+		e.mu.RUnlock()
+		return false
+	}
+	if runtimeEvent.CorrelationID != "" {
+		if message, found := e.findMessageLocked(runtimeEvent.CorrelationID); found {
+			if recorded := strings.TrimSpace(message.ProcessingTurn[runtimeEvent.Agent]); recorded != "" {
+				match := recorded == runtimeEvent.TurnID
+				e.mu.RUnlock()
+				return match
+			}
+		}
+	}
+	turns := make(map[string]struct{})
+	for _, message := range e.snapshot.Messages {
+		state := message.Processing[runtimeEvent.Agent]
+		if state != model.ProcessingWaiting && state != model.ProcessingWorking {
+			continue
+		}
+		if turnID := strings.TrimSpace(message.ProcessingTurn[runtimeEvent.Agent]); turnID != "" {
+			turns[turnID] = struct{}{}
+		}
+	}
+	e.mu.RUnlock()
+	if len(turns) == 0 {
+		return true
+	}
+	if len(turns) != 1 {
+		return false
+	}
+	_, ok := turns[runtimeEvent.TurnID]
+	return ok
+}
+
 // settleTurnInputs supplies a conservative terminal fallback for adapters that
 // report a native Turn boundary but omit per-input terminal events. Inputs
 // explicitly queued for a later native Turn are left waiting until that Turn
@@ -2036,18 +2259,29 @@ func (e *Engine) settleTurnInputs(runtimeEvent model.RuntimeEvent) {
 	e.mu.RLock()
 	messageIDs := make([]string, 0, 2)
 	fallbackIDs := make([]string, 0, 2)
+	activeTurnIDs := make(map[string]struct{})
 	for _, message := range e.snapshot.Messages {
 		current := message.Processing[runtimeEvent.Agent]
 		if current != model.ProcessingWaiting && current != model.ProcessingWorking {
 			continue
 		}
 		turnID := message.ProcessingTurn[runtimeEvent.Agent]
+		if turnID != "" {
+			activeTurnIDs[turnID] = struct{}{}
+		}
 		if message.ID == runtimeEvent.CorrelationID ||
 			(runtimeEvent.TurnID != "" && turnID == runtimeEvent.TurnID) {
 			messageIDs = append(messageIDs, message.ID)
 			continue
 		}
-		if runtimeEvent.CorrelationID == "" {
+		// Some lightweight adapters provide a turn ID on the boundary but do not
+		// put that ID in their earlier processing projection. Preserve the
+		// conservative one-message fallback for that case. If another recorded
+		// turn exists, however, a mismatching completion is stale and must not
+		// settle the current input.
+		fallbackAllowed := runtimeEvent.CorrelationID == "" &&
+			(runtimeEvent.TurnID == "" || len(activeTurnIDs) == 0)
+		if fallbackAllowed {
 			switch message.Delivery[runtimeEvent.Agent] {
 			case model.DeliveryStarted, model.DeliveryInjected:
 				fallbackIDs = append(fallbackIDs, message.ID)
@@ -2166,45 +2400,35 @@ func isTransientRuntimeKind(kind string) bool {
 }
 
 func (e *Engine) onFinal(runtimeEvent model.RuntimeEvent) {
-	visibleText, handoff := stripHandoff(runtimeEvent.Text)
-	cleanText, control := stripControl(visibleText)
-	if strings.TrimSpace(cleanText) == "" {
-		cleanText = strings.TrimSpace(handoff)
-		if cleanText == "" && control != "" {
-			cleanText = "PairRoom collaboration signal: " + strings.ToLower(control)
-		}
-		if cleanText == "" {
-			return
-		}
+	text := runtimeEvent.Text
+	if strings.TrimSpace(text) == "" {
+		return
 	}
 	e.routingMu.Lock()
 	defer e.routingMu.Unlock()
 
 	e.mu.RLock()
+	if runtimeEvent.CorrelationID != "" && runtimeEvent.TurnID != "" && e.finalAlreadyProjectedLocked(runtimeEvent) {
+		e.mu.RUnlock()
+		return
+	}
 	incoming, found := e.findMessageLocked(runtimeEvent.CorrelationID)
-	settings := e.snapshot.Settings
 	latestHumanSeq := uint64(0)
 	if found {
-		latestHumanSeq = e.latestHumanSeqForHandoffLocked(incoming, runtimeEvent.Agent)
+		latestHumanSeq = e.latestHumanSeqForRelayLocked(incoming)
 	}
 	e.mu.RUnlock()
 	if !found {
-		incoming = model.Message{ID: runtimeEvent.CorrelationID, ThreadID: model.NewID("thread"), Hop: 0}
+		incoming = model.Message{ID: runtimeEvent.CorrelationID, ThreadID: model.NewID("thread")}
 	}
 
-	hop := incoming.Hop + 1
-	workflowOwned := e.workflowOwnsFinal(incoming, runtimeEvent.Agent)
-	var targets []model.ActorID
-	if !workflowOwned {
-		targets = e.agentTargets(runtimeEvent.Agent, cleanText, handoff, control, hop, incoming.Seq, latestHumanSeq, settings)
-	}
+	targets := e.agentTargets(runtimeEvent.Agent, text, incoming.Seq, latestHumanSeq)
 	to := []model.ActorID{model.ActorUser}
 	to = append(to, targets...)
 	message := model.Message{
 		ID: model.NewID("msg"), From: runtimeEvent.Agent, To: to,
-		Text: cleanText, Handoff: handoff, ReplyTo: incoming.ID,
-		ThreadID: incoming.ThreadID, Hop: hop, TurnID: runtimeEvent.TurnID,
-		WorkflowID: incoming.WorkflowID, WorkflowStage: incoming.WorkflowStage, WorkflowMode: incoming.WorkflowMode,
+		Text: text, ReplyTo: incoming.ID, Intent: model.IntentQueue,
+		ThreadID: incoming.ThreadID, TurnID: runtimeEvent.TurnID,
 		CreatedAt:               time.Now().UTC(),
 		Delivery:                make(map[model.ActorID]model.DeliveryState, len(targets)),
 		DeliveryDetail:          make(map[model.ActorID]string, len(targets)),
@@ -2212,14 +2436,7 @@ func (e *Engine) onFinal(runtimeEvent model.RuntimeEvent) {
 		ProcessingDetail:        make(map[model.ActorID]string, len(targets)),
 		ProcessingTurn:          make(map[model.ActorID]string, len(targets)),
 		ProcessingLastUpdatedAt: make(map[model.ActorID]time.Time, len(targets)),
-		Attachments:             e.discoverAgentImages(runtimeEvent.Agent, cleanText),
-	}
-	if !workflowOwned {
-		// Inactive/superseded workflow metadata is historical context, not a
-		// reason to suppress an explicit peer delivery forever.
-		message.WorkflowID = ""
-		message.WorkflowStage = 0
-		message.WorkflowMode = ""
+		Attachments:             mergeAttachments(incoming.Attachments, e.discoverAgentImages(runtimeEvent.Agent, text)),
 	}
 	if message.ThreadID == "" {
 		message.ThreadID = model.NewID("thread")
@@ -2229,22 +2446,29 @@ func (e *Engine) onFinal(runtimeEvent model.RuntimeEvent) {
 		message.Processing[target] = model.ProcessingWaiting
 		message.ProcessingLastUpdatedAt[target] = message.CreatedAt
 	}
-	if _, err := e.record(EventMessageCreated, runtimeEvent.Agent, message); err != nil {
+	event, err := e.record(EventMessageCreated, runtimeEvent.Agent, message)
+	if err != nil {
 		return
 	}
-	if workflowOwned {
-		e.workflowOnFinal(incoming, message, control)
-		return
-	}
+	message.Seq = event.Seq
 	for _, target := range targets {
 		e.scheduleDelivery(e.runtimeContext(context.Background()), message, target)
 	}
 }
 
+func (e *Engine) finalAlreadyProjectedLocked(runtimeEvent model.RuntimeEvent) bool {
+	for _, message := range e.snapshot.Messages {
+		if message.From == runtimeEvent.Agent && message.ReplyTo == runtimeEvent.CorrelationID && message.TurnID == runtimeEvent.TurnID {
+			return true
+		}
+	}
+	return false
+}
+
 // processingFallback gives adapters that only return a DeliveryState a minimal
 // processing lifecycle without overwriting richer runtime events emitted during
-// Submit. Native adapters can report a turn ID and vendor-specific detail before
-// Submit returns; those events remain authoritative.
+// native submission. Native adapters can report a turn ID and vendor-specific
+// detail before StartTurn returns; those events remain authoritative.
 func (e *Engine) processingFallback(messageID string, target model.ActorID, state model.ProcessingState, detail string) {
 	if messageID == "" || !target.ValidParticipant() {
 		return
@@ -2341,65 +2565,32 @@ func (e *Engine) processing(messageID string, target model.ActorID, state model.
 	}
 }
 
-func (e *Engine) agentTargets(actor model.ActorID, text, handoff, control string, hop int, sourceSeq, latestHumanSeq uint64, settings model.RoomSettings) []model.ActorID {
-	if hop >= settings.MaxHops {
-		e.notice("info", "Agent handoff paused at the configured turn limit.")
+func (e *Engine) agentTargets(actor model.ActorID, text string, sourceSeq, latestHumanSeq uint64) []model.ActorID {
+	mentions := prompt.ParseMentions(text, actor, e.runtimeKinds())
+	if mentions.Human {
 		return nil
 	}
-	if control == "AMBIGUOUS" {
-		e.notice("warning", fmt.Sprintf("%s emitted conflicting PairRoom control signals; the turn returned to the human.", actor.DisplayName()))
-		return nil
-	}
-	routingText := strings.TrimSpace(text + "\n" + handoff)
-	// A human-directed response always wins. This also prevents an accidental
-	// peer mention in a response that is explicitly waiting for a user choice
-	// from starting another native turn.
-	if prompt.MentionsHuman(routingText) {
-		return nil
-	}
-	// A newer human instruction supersedes an older Agent result, including an
+	// A newer human instruction takes precedence over an older Agent result, including an
 	// explicit peer address in that stale result.
 	if sourceSeq > 0 && latestHumanSeq > sourceSeq {
-		e.notice("info", fmt.Sprintf("A newer user message superseded %s's pending handoff; the response remains visible in the room.", actor.DisplayName()))
+		e.notice("info", fmt.Sprintf("A newer user message cancelled %s's pending Agent relay; the response remains visible in the Room.", e.participantName(actor)))
 		return nil
 	}
-	// An explicit address is itself a handoff request. When the Agent omitted a
-	// structured HANDOFF packet, peerInputText supplies a bounded fallback from
-	// the visible response before delivery. Keep this check ahead of control
-	// markers so an incidental DONE/WAIT marker cannot swallow a direct request.
-	explicit := prompt.MentionsWithRuntimes(routingText, actor, e.runtimeKinds())
-	peerTargets := explicit[:0]
-	for _, target := range explicit {
-		if target != actor {
-			peerTargets = append(peerTargets, target)
-		}
-	}
-	if len(peerTargets) > 0 {
-		if stopsConversation(control) {
-			e.notice("warning", fmt.Sprintf("%s addressed a peer while also emitting %s; the explicit recipient won.", actor.DisplayName(), control))
-		}
-		return model.NormalizeActors(peerTargets)
-	}
-
-	var target model.ActorID
-	switch control {
-	case "NEXT":
-		target = model.OtherParticipant(actor)
-	default:
+	if len(mentions.Ambiguous) > 0 {
+		identities := model.ParticipantIdentities(e.runtimeKinds())
+		e.notice("warning", fmt.Sprintf("%s used ambiguous handle %s; use %s or %s. No Agent relay was started.", e.participantName(actor), strings.Join(mentions.Ambiguous, ", "), identities[model.ActorClaude].MentionHandle, identities[model.ActorCodex].MentionHandle))
 		return nil
 	}
-	if !target.ValidParticipant() {
-		e.notice("warning", fmt.Sprintf("%s requested a peer turn but current roles do not provide a valid target.", actor.DisplayName()))
-		return nil
-	}
-	if !validHandoff(handoff) {
-		e.notice("warning", fmt.Sprintf("%s requested the next turn without a usable HANDOFF or explicit peer address; the turn returned to the human.", actor.DisplayName()))
-		return nil
-	}
-	return []model.ActorID{target}
+	return mentions.Targets
 }
 
-func (e *Engine) delivery(messageID string, target model.ActorID, state model.DeliveryState, detail string) {
+func (e *Engine) delivery(messageID string, target model.ActorID, state model.DeliveryState, detail string) bool {
+	return e.deliveryIf(messageID, target, state, detail, func(current model.DeliveryState) bool {
+		return deliveryTransitionAllowed(current, state)
+	})
+}
+
+func (e *Engine) deliveryIf(messageID string, target model.ActorID, state model.DeliveryState, detail string, allowed func(model.DeliveryState) bool) bool {
 	update := model.DeliveryUpdate{
 		MessageID: messageID,
 		Target:    target,
@@ -2408,7 +2599,7 @@ func (e *Engine) delivery(messageID string, target model.ActorID, state model.De
 	}
 
 	// Validate and persist a delivery transition under the same room lock. This
-	// prevents a fast runtime error from being followed by a late Submit return
+	// prevents a fast runtime error from being followed by a late StartTurn return
 	// that would otherwise publish a misleading started/injected/queued event.
 	e.mu.Lock()
 	current := model.DeliveryState("")
@@ -2421,9 +2612,9 @@ func (e *Engine) delivery(messageID string, target model.ActorID, state model.De
 		found = true
 		break
 	}
-	if !found || !deliveryTransitionAllowed(current, state) {
+	if !found || allowed == nil || !allowed(current) {
 		e.mu.Unlock()
-		return
+		return false
 	}
 	event, err := model.NewEvent(e.snapshot.Meta.ID, EventDeliveryUpdated, target, update)
 	if err == nil {
@@ -2436,6 +2627,7 @@ func (e *Engine) delivery(messageID string, target model.ActorID, state model.De
 	if err == nil {
 		e.cfg.Hub.Publish(event)
 	}
+	return err == nil
 }
 
 func (e *Engine) updateParticipant(actor model.ActorID, mutate func(*model.ParticipantSnapshot)) {
@@ -2452,7 +2644,9 @@ func (e *Engine) mutateParticipant(eventActor, participantID model.ActorID, muta
 	participant := e.snapshot.Participants[participantID]
 	if participant.ID == "" {
 		participant.ID = participantID
-		participant.DisplayName = participantID.DisplayName()
+		identity := model.ParticipantIdentityFor(participantID, e.runtimeKinds())
+		participant.DisplayName = identity.DisplayName
+		participant.MentionHandle = identity.MentionHandle
 		participant.Role = model.RolePeer
 	}
 	mutate(&participant)
@@ -2476,7 +2670,10 @@ func (e *Engine) notice(level, text string) {
 }
 
 func (e *Engine) resolveUserTargets(text string, explicit []model.ActorID, targetRole model.ParticipantRole, replyTo string) ([]model.ActorID, error) {
-	targets := model.NormalizeActors(explicit)
+	targets, err := normalizeExplicitActors(explicit)
+	if err != nil {
+		return nil, err
+	}
 	if targetRole != "" {
 		if len(targets) > 0 {
 			return nil, errors.New("choose either explicit recipients or target_role, not both")
@@ -2499,8 +2696,19 @@ func (e *Engine) resolveUserTargets(text string, explicit []model.ActorID, targe
 	if len(targets) > 0 {
 		return targets, nil
 	}
-	if targets := prompt.MentionsWithRuntimes(text, model.ActorUser, e.runtimeKinds()); len(targets) > 0 {
-		return targets, nil
+	mentions := prompt.ParseMentions(text, model.ActorUser, e.runtimeKinds())
+	if len(mentions.Ambiguous) > 0 {
+		identities := model.ParticipantIdentities(e.runtimeKinds())
+		return nil, fmt.Errorf("ambiguous Agent handle %s; use %s or %s", strings.Join(mentions.Ambiguous, ", "), identities[model.ActorClaude].MentionHandle, identities[model.ActorCodex].MentionHandle)
+	}
+	// Removed aliases are ordinary prose once a valid current handle is also
+	// present. Reject only an otherwise unaddressed message that still relies on
+	// a retired alias, so legacy text cannot silently fall back to the Driver.
+	if len(mentions.RemovedAliases) > 0 && len(mentions.Targets) == 0 {
+		return nil, fmt.Errorf("removed Agent handle %s is not routable; use the participant's displayed mention handle", strings.Join(mentions.RemovedAliases, ", "))
+	}
+	if len(mentions.Targets) > 0 {
+		return mentions.Targets, nil
 	}
 	if replyTo != "" {
 		e.mu.RLock()
@@ -2521,9 +2729,22 @@ func (e *Engine) resolveUserTargets(text string, explicit []model.ActorID, targe
 	if len(drivers) == 1 {
 		return drivers, nil
 	}
-	// Preserve the old safe fallback when roles are ambiguous. The normal
-	// Driver/Reviewer configuration sends an unaddressed message only once.
-	return []model.ActorID{model.ActorClaude, model.ActorCodex}, nil
+	if len(drivers) == 0 {
+		return nil, errors.New("message has no current Driver; choose an exact Agent handle or assign a Driver")
+	}
+	return nil, errors.New("message has multiple Drivers; choose an exact Agent handle or assign one Driver")
+}
+
+func normalizeExplicitActors(values []model.ActorID) ([]model.ActorID, error) {
+	canonical := make([]model.ActorID, 0, len(values))
+	for _, value := range values {
+		actor := model.ActorID(strings.ToLower(strings.TrimSpace(string(value))))
+		if !actor.ValidParticipant() {
+			return nil, fmt.Errorf("invalid Agent recipient %q; use claude or codex", value)
+		}
+		canonical = append(canonical, actor)
+	}
+	return model.NormalizeActors(canonical), nil
 }
 
 func (e *Engine) canonicalAttachments(values []model.Attachment) ([]model.Attachment, error) {
@@ -2562,6 +2783,24 @@ func (e *Engine) canonicalAttachments(values []model.Attachment) ([]model.Attach
 		out = append(out, resolved)
 	}
 	return out, nil
+}
+
+func mergeAttachments(groups ...[]model.Attachment) []model.Attachment {
+	seen := make(map[string]struct{})
+	var merged []model.Attachment
+	for _, group := range groups {
+		for _, attachment := range group {
+			if attachment.ID == "" {
+				continue
+			}
+			if _, ok := seen[attachment.ID]; ok {
+				continue
+			}
+			seen[attachment.ID] = struct{}{}
+			merged = append(merged, attachment)
+		}
+	}
+	return merged
 }
 
 func (e *Engine) agentAttachments(values []model.Attachment) ([]model.AgentAttachment, error) {
@@ -2613,29 +2852,16 @@ func (e *Engine) findMessageLocked(id string) (model.Message, bool) {
 	return model.Message{}, false
 }
 
-func (e *Engine) latestHumanSeqForHandoffLocked(incoming model.Message, actor model.ActorID) uint64 {
-	if incoming.ThreadID == "" {
-		return 0
-	}
+func (e *Engine) latestHumanSeqForRelayLocked(incoming model.Message) uint64 {
 	for i := len(e.snapshot.Messages) - 1; i >= 0; i-- {
 		message := e.snapshot.Messages[i]
 		if message.From != model.ActorUser {
 			continue
 		}
-		if message.ThreadID == incoming.ThreadID {
-			return message.Seq
+		if message.Seq <= incoming.Seq {
+			return 0
 		}
-		if message.Seq <= incoming.Seq || message.Intent == model.IntentNextTurn {
-			continue
-		}
-		if message.ReplyTo != "" && message.Intent != model.IntentSupersede {
-			continue
-		}
-		for _, target := range message.To {
-			if target == actor {
-				return message.Seq
-			}
-		}
+		return message.Seq
 	}
 	return 0
 }
@@ -2678,6 +2904,26 @@ func (e *Engine) apply(event model.Event) error {
 	return e.applyLocked(event)
 }
 
+// decodeCurrentEventData is deliberately stricter than ordinary projection
+// decoding. Store schema 9 has no migration or legacy-field compatibility;
+// accepting a v4/v8 payload with ignored Handoff, Hop, Workflow, or routing
+// fields would silently create a mixed-version Room that cannot be audited.
+func decodeCurrentEventData(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("event payload contains multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
 func (e *Engine) applyLocked(event model.Event) error {
 	e.snapshot.LatestSeq = event.Seq
 	switch event.Kind {
@@ -2710,9 +2956,9 @@ func (e *Engine) applyLocked(event model.Event) error {
 			}
 			participant := e.snapshot.Participants[actor]
 			participant.ID = actor
-			if participant.DisplayName == "" {
-				participant.DisplayName = actor.DisplayName()
-			}
+			identity := model.ParticipantIdentityFor(actor, e.runtimeKinds())
+			participant.DisplayName = identity.DisplayName
+			participant.MentionHandle = identity.MentionHandle
 			participant.SessionID = strings.TrimSpace(binding.SessionID)
 			e.snapshot.Participants[actor] = participant
 		}
@@ -2727,24 +2973,24 @@ func (e *Engine) applyLocked(event model.Event) error {
 		}
 		participant := e.snapshot.Participants[binding.Agent]
 		participant.ID = binding.Agent
-		if participant.DisplayName == "" {
-			participant.DisplayName = binding.Agent.DisplayName()
-		}
+		identity := model.ParticipantIdentityFor(binding.Agent, e.runtimeKinds())
+		participant.DisplayName = identity.DisplayName
+		participant.MentionHandle = identity.MentionHandle
 		participant.SessionID = strings.TrimSpace(binding.SessionID)
 		e.snapshot.Participants[binding.Agent] = participant
 	case EventSettingsUpdated:
 		var settings model.RoomSettings
-		if err := json.Unmarshal(event.Data, &settings); err != nil {
+		if err := decodeCurrentEventData(event.Data, &settings); err != nil {
 			return err
-		}
-		if !settings.RoutingMode.Valid() {
-			return fmt.Errorf("stored Room uses unsupported routing mode %q: only %q is supported", settings.RoutingMode, model.RoutingTurns)
 		}
 		e.snapshot.Settings = settings
 	case EventParticipantUpdated:
 		var participant model.ParticipantSnapshot
-		if err := json.Unmarshal(event.Data, &participant); err != nil {
+		if err := decodeCurrentEventData(event.Data, &participant); err != nil {
 			return err
+		}
+		if !participant.ID.ValidParticipant() || strings.TrimSpace(participant.MentionHandle) == "" {
+			return errors.New("participant update is missing a valid slot or mention handle")
 		}
 		if e.snapshot.Participants == nil {
 			e.snapshot.Participants = make(map[model.ActorID]model.ParticipantSnapshot)
@@ -2752,29 +2998,37 @@ func (e *Engine) applyLocked(event model.Event) error {
 		e.snapshot.Participants[participant.ID] = participant
 	case EventParticipantsBatch:
 		var update participantBatch
-		if err := json.Unmarshal(event.Data, &update); err != nil {
+		if err := decodeCurrentEventData(event.Data, &update); err != nil {
 			return err
 		}
 		if e.snapshot.Participants == nil {
 			e.snapshot.Participants = make(map[model.ActorID]model.ParticipantSnapshot)
 		}
 		for _, participant := range update.Participants {
-			if !participant.ID.ValidParticipant() {
+			if !participant.ID.ValidParticipant() || strings.TrimSpace(participant.MentionHandle) == "" {
 				return fmt.Errorf("invalid participant in batch update: %q", participant.ID)
 			}
 			e.snapshot.Participants[participant.ID] = participant
 		}
 	case EventMessageCreated:
 		var message model.Message
-		if err := json.Unmarshal(event.Data, &message); err != nil {
+		if err := decodeCurrentEventData(event.Data, &message); err != nil {
 			return err
+		}
+		if message.Intent == "" {
+			message.Intent = model.IntentSteer
+		} else if !message.Intent.Valid() {
+			return fmt.Errorf("message %q uses unsupported intent %q", message.ID, message.Intent)
 		}
 		message.Seq = event.Seq
 		e.snapshot.Messages = append(e.snapshot.Messages, message)
 	case EventDeliveryUpdated:
 		var update model.DeliveryUpdate
-		if err := json.Unmarshal(event.Data, &update); err != nil {
+		if err := decodeCurrentEventData(event.Data, &update); err != nil {
 			return err
+		}
+		if !update.Target.ValidParticipant() || !update.State.Valid() {
+			return fmt.Errorf("invalid delivery update for %s: %q", update.Target, update.State)
 		}
 		for i := range e.snapshot.Messages {
 			if e.snapshot.Messages[i].ID != update.MessageID {
@@ -2796,8 +3050,11 @@ func (e *Engine) applyLocked(event model.Event) error {
 		}
 	case EventProcessingUpdated:
 		var update model.ProcessingUpdate
-		if err := json.Unmarshal(event.Data, &update); err != nil {
+		if err := decodeCurrentEventData(event.Data, &update); err != nil {
 			return err
+		}
+		if !update.Target.ValidParticipant() || !update.State.Valid() {
+			return fmt.Errorf("invalid processing update for %s: %q", update.Target, update.State)
 		}
 		for i := range e.snapshot.Messages {
 			if e.snapshot.Messages[i].ID != update.MessageID {
@@ -2830,15 +3087,6 @@ func (e *Engine) applyLocked(event model.Event) error {
 		if !replaced {
 			e.snapshot.Approvals = append(e.snapshot.Approvals, approval)
 		}
-	case EventWorkflowUpdated:
-		var workflow model.WorkflowState
-		if err := json.Unmarshal(event.Data, &workflow); err != nil {
-			return err
-		}
-		if workflow.ID == "" || len(workflow.Stages) == 0 || workflow.CurrentStage < 0 || workflow.CurrentStage >= len(workflow.Stages) {
-			return errors.New("invalid workflow event")
-		}
-		e.snapshot.Workflow = cloneWorkflow(&workflow)
 	case EventTurnSummaryUpdated:
 		var summary model.TurnSummary
 		if err := json.Unmarshal(event.Data, &summary); err != nil {
@@ -2848,6 +3096,12 @@ func (e *Engine) applyLocked(event model.Event) error {
 			return errors.New("invalid turn summary event")
 		}
 		replaceTurnSummaryLocked(&e.snapshot, summary)
+	case "workflow.updated":
+		// Workflow orchestration and its durable event kind were removed in
+		// protocol v5. Rejecting the old kind explicitly prevents a mixed
+		// schema-9 log from appearing valid merely because its payload is
+		// otherwise well-formed.
+		return errors.New("workflow events are unsupported in protocol v5")
 	}
 
 	e.snapshot.Events = append(e.snapshot.Events, event)
@@ -2858,20 +3112,32 @@ func (e *Engine) applyLocked(event model.Event) error {
 }
 
 func deliveryTransitionAllowed(current, next model.DeliveryState) bool {
-	if current == "" || current == model.DeliveryPending {
+	if next == "" {
+		return false
+	}
+	if current == "" {
 		return true
 	}
 	// Failure and explicit policy skips are terminal. This matters when a very
-	// fast runtime emits an error before Submit returns its initial state.
+	// fast runtime emits an error before StartTurn returns its initial state.
 	if current == model.DeliveryFailed || current == model.DeliverySkipped {
 		return false
 	}
 	if next == model.DeliveryFailed || next == model.DeliverySkipped {
 		return true
 	}
-	// started/injected/queued describe how the input entered the native harness,
-	// not a processing lifecycle; don't let a late initial update rewrite them.
-	return current == next
+	switch current {
+	case model.DeliveryPending:
+		return next == model.DeliveryQueued || next == model.DeliverySubmitting
+	case model.DeliveryQueued:
+		return next == model.DeliveryQueued || next == model.DeliverySubmitting
+	case model.DeliverySubmitting:
+		return next == model.DeliverySubmitting || next == model.DeliveryQueued || next == model.DeliveryStarted || next == model.DeliveryInjected
+	default:
+		// started/injected describe how the input entered the native harness;
+		// don't let a late initial update rewrite that accepted boundary.
+		return current == next
+	}
 }
 
 func processingTransitionAllowed(current, next model.ProcessingState) bool {
@@ -2900,7 +3166,6 @@ func cloneSnapshot(in model.RoomSnapshot) model.RoomSnapshot {
 		window := *in.MessageWindow
 		out.MessageWindow = &window
 	}
-	out.Workflow = cloneWorkflow(in.Workflow)
 	out.Approvals = make([]model.Approval, len(in.Approvals))
 	for i, approval := range in.Approvals {
 		out.Approvals[i] = approval
@@ -2934,12 +3199,6 @@ func cloneMessage(message model.Message) model.Message {
 	out.ProcessingDetail = cloneDetails(message.ProcessingDetail)
 	out.ProcessingTurn = cloneDetails(message.ProcessingTurn)
 	out.ProcessingLastUpdatedAt = cloneTimes(message.ProcessingLastUpdatedAt)
-	if message.Supersedes != nil {
-		out.Supersedes = make(map[model.ActorID][]string, len(message.Supersedes))
-		for actor, ids := range message.Supersedes {
-			out.Supersedes[actor] = append([]string(nil), ids...)
-		}
-	}
 	return out
 }
 
@@ -3008,7 +3267,7 @@ func ensureMessageLifecycleMaps(message *model.Message) {
 
 func retryableTarget(message model.Message, target model.ActorID) bool {
 	processing := message.Processing[target]
-	if processing == model.ProcessingFailed || processing == model.ProcessingCancelled || processing == model.ProcessingSuperseded {
+	if processing == model.ProcessingFailed || processing == model.ProcessingCancelled {
 		return true
 	}
 	delivery := message.Delivery[target]
@@ -3041,7 +3300,7 @@ func (e *Engine) monitorStalledTurns() {
 				if participant.State != model.StateWorking && participant.State != model.StateWaiting {
 					continue
 				}
-				if participant.State == model.StateWaiting && (e.actorHasPendingApprovalLocked(actor) || e.workflowExpectedWaitLocked(actor)) {
+				if participant.State == model.StateWaiting && e.actorHasPendingApprovalLocked(actor) {
 					continue
 				}
 				last := e.lastRuntimeActivity[actor]
@@ -3060,7 +3319,7 @@ func (e *Engine) monitorStalledTurns() {
 			}
 			e.mu.Unlock()
 			for _, item := range warnings {
-				detail := fmt.Sprintf("%s has produced no runtime event for %s", item.actor.DisplayName(), item.age.Round(time.Second))
+				detail := fmt.Sprintf("%s has produced no runtime event for %s", e.participantName(item.actor), item.age.Round(time.Second))
 				if item.turn != "" {
 					detail += " during turn " + item.turn
 				}
@@ -3068,6 +3327,15 @@ func (e *Engine) monitorStalledTurns() {
 			}
 		}
 	}
+}
+
+func (e *Engine) actorHasPendingApprovalLocked(actor model.ActorID) bool {
+	for _, approval := range e.snapshot.Approvals {
+		if approval.Agent == actor && approval.Status == "pending" {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneDelivery(in map[model.ActorID]model.DeliveryState) map[model.ActorID]model.DeliveryState {
@@ -3090,64 +3358,4 @@ func cloneDetails(in map[model.ActorID]string) map[model.ActorID]string {
 		out[key] = value
 	}
 	return out
-}
-
-const maxHandoffRunes = 4000
-
-var handoffPattern = regexp.MustCompile(`(?ms)\s*\[PAIRROOM:HANDOFF\]\s*(.*?)\s*\[/PAIRROOM:HANDOFF\]\s*`)
-
-func stripHandoff(text string) (string, string) {
-	matches := handoffPattern.FindAllStringSubmatch(text, -1)
-	handoff := ""
-	if len(matches) > 0 {
-		handoff = compactHandoff(matches[len(matches)-1][1])
-	}
-	return strings.TrimSpace(handoffPattern.ReplaceAllString(text, "\n")), handoff
-}
-
-func compactHandoff(value string) string {
-	value = strings.TrimSpace(value)
-	runes := []rune(value)
-	if len(runes) <= maxHandoffRunes {
-		return value
-	}
-	const tailRunes = 800
-	const marker = "\n… [PairRoom handoff truncated] …\n"
-	headRunes := maxHandoffRunes - tailRunes - len([]rune(marker))
-	return string(runes[:headRunes]) + marker + string(runes[len(runes)-tailRunes:])
-}
-
-const minHandoffRunes = 24
-
-func validHandoff(value string) bool {
-	return len([]rune(strings.TrimSpace(value))) >= minHandoffRunes
-}
-
-// controlPattern strips a trailing PairRoom control marker. The marker may
-// sit on its own line or at the end of the final prose line (Codex often emits
-// "...answer.[PAIRROOM:DONE]" without a newline). Anchoring only the trailing
-// boundary keeps markers that appear mid-line as quoted prose intact.
-var controlPattern = regexp.MustCompile(`(?mi)\s*\[PAIRROOM:(NEXT|WAIT|BLOCKED|DONE)\]\s*$`)
-
-func stripControl(text string) (string, string) {
-	matches := controlPattern.FindAllStringSubmatch(text, -1)
-	control := ""
-	for _, match := range matches {
-		next := strings.ToUpper(match[1])
-		if control != "" && control != next {
-			control = "AMBIGUOUS"
-			break
-		}
-		control = next
-	}
-	return strings.TrimSpace(controlPattern.ReplaceAllString(text, "")), control
-}
-
-func stopsConversation(control string) bool {
-	switch control {
-	case "AMBIGUOUS", "WAIT", "BLOCKED", "DONE":
-		return true
-	default:
-		return false
-	}
 }

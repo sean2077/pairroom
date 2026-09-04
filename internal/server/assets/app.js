@@ -140,7 +140,6 @@
       state.runtimeRenderScopes.clear();
       state.runtimeMessageRenderIDs.clear();
       if (pending.has('participants')) renderParticipants();
-      if (pending.has('workflow')) renderWorkflow();
       if (pending.has('settings')) renderSettings();
       if (pending.has('drafts')) renderStreamingDrafts();
       if (pending.has('activity')) renderActivity();
@@ -209,10 +208,6 @@
       case 'participant.updated':
         state.snapshot.participants[data.id] = data;
         renderScope = 'participants';
-        break;
-      case 'workflow.updated':
-        state.snapshot.workflow = data;
-        renderScope = 'workflow';
         break;
       case 'message.created': {
         if (!state.snapshot.messages.some((item) => item.id === data.id)) {
@@ -294,7 +289,6 @@
     else if (renderScope === 'runtime') queueRuntimeRender();
     else if (renderScope === 'settings') queueRuntimeRender(['settings']);
     else if (renderScope === 'participants') queueRuntimeRender(['participants', 'composer']);
-    else if (renderScope === 'workflow') queueRuntimeRender(['workflow', 'composer']);
     else if (renderScope === 'message-created') queueRuntimeRender(['created', 'delivery'], renderMessageID);
     else if (renderScope === 'message') queueRuntimeRender(['messages', 'delivery'], renderMessageID);
     else if (renderScope === 'activity') queueRuntimeRender(['activity']);
@@ -327,10 +321,19 @@
   }
 
   function deliveryTransitionAllowed(current, next) {
-    if (!current || current === 'pending') return true;
+    if (!current) return true;
     if (current === 'failed' || current === 'skipped') return false;
     if (next === 'failed' || next === 'skipped') return true;
-    return current === next;
+    switch (current) {
+      case 'pending':
+        return next === 'pending' || next === 'queued' || next === 'submitting';
+      case 'queued':
+        return next === 'queued' || next === 'submitting';
+      case 'submitting':
+        return ['submitting', 'queued', 'started', 'injected'].includes(next);
+      default:
+        return current === next;
+    }
   }
 
   function render(forceBottom = false) {
@@ -345,8 +348,9 @@
     const nearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 140;
     $('room-name').textContent = state.snapshot.meta.name;
     $('repo-path').textContent = state.snapshot.meta.repo;
+	const chatDescription = $('chat-description');
+	if (chatDescription) chatDescription.textContent = ['You', displayName('claude'), displayName('codex')].join(' · ');
     renderParticipants();
-    renderWorkflow();
     updateDeliveryHint();
     renderTurnOwnerBar();
     renderSettings();
@@ -362,7 +366,7 @@
     const bar = $('turn-owner-bar');
     if (!bar || !state.snapshot) return;
     const messages = state.snapshot.messages || [];
-    const live = ['started', 'injected', 'queued'];
+    const live = ['submitting', 'started', 'injected'];
     let owner = '';
     for (const message of messages) {
       const delivery = message.delivery || {};
@@ -378,7 +382,7 @@
       const delivery = message.delivery || {};
       const processing = message.processing || {};
       for (const target of Object.keys(delivery)) {
-        if (delivery[target] === 'pending' && processing[target] === 'waiting' && target !== owner) {
+        if (delivery[target] === 'queued' && processing[target] === 'waiting') {
           queued += 1;
         }
       }
@@ -401,102 +405,6 @@
     }
   }
 
-  function renderWorkflow() {
-    const bar = $('workflow-bar');
-    const workflow = state.snapshot.workflow;
-    if (!workflow || !Array.isArray(workflow.stages) || !workflow.stages.length) {
-      bar.classList.add('hidden');
-      bar.replaceChildren();
-      return;
-    }
-    bar.classList.remove('hidden');
-    bar.replaceChildren();
-
-    const header = document.createElement('div');
-    header.className = 'workflow-header';
-    const heading = document.createElement('div');
-    const title = document.createElement('strong');
-    title.textContent = t('room.naturalWorkflow');
-    const status = document.createElement('span');
-    status.className = `workflow-status status-${workflow.status || 'unknown'}`;
-    status.textContent = workflowStatusText(workflow.status);
-    heading.append(title, status);
-    const goal = document.createElement('div');
-    goal.className = 'workflow-goal';
-    goal.textContent = truncate(workflow.goal || '', 180);
-    goal.title = workflow.goal || '';
-    heading.appendChild(goal);
-    header.appendChild(heading);
-
-    if (workflow.status === 'awaiting_approval') {
-      const approve = document.createElement('button');
-      approve.type = 'button';
-      approve.className = 'workflow-approve';
-      approve.textContent = t("ui.approvePlanVValue", { value0: (workflow.revision || 1) });
-      approve.addEventListener('click', () => {
-        messageInput.value = t("ui.approveExecutingTheCurrentPlan");
-        persistComposerDraft();
-        autoSizeComposer();
-        void sendMessage();
-      });
-      header.appendChild(approve);
-    }
-    bar.appendChild(header);
-
-    const stages = document.createElement('div');
-    stages.className = 'workflow-stages';
-    workflow.stages.forEach((stage, index) => {
-      const chip = document.createElement('div');
-      const current = index === Number(workflow.current_stage || 0);
-      chip.className = `workflow-stage stage-${stage.status || 'pending'}${current ? ' current' : ''}`;
-      const number = document.createElement('span');
-      number.className = 'workflow-stage-number';
-      number.textContent = String(index + 1);
-      const copy = document.createElement('span');
-      const name = document.createElement('strong');
-      name.textContent = `${displayName(stage.actor)} · ${workflowModeText(stage.mode)}`;
-      const stateLabel = document.createElement('small');
-      stateLabel.textContent = workflowStageStatusText(stage.status);
-      copy.append(name, stateLabel);
-      chip.append(number, copy);
-      stages.appendChild(chip);
-      if (index < workflow.stages.length - 1) {
-        const arrow = document.createElement('span');
-        arrow.className = 'workflow-arrow';
-        arrow.textContent = '→';
-        stages.appendChild(arrow);
-      }
-    });
-    bar.appendChild(stages);
-
-    if (workflow.status === 'waiting_human') {
-      const hint = document.createElement('div');
-      hint.className = 'workflow-hint';
-      hint.textContent = t("ui.theCurrentStageIsWaitingForYourChoiceReplyInTheRoom");
-      bar.appendChild(hint);
-    } else if (workflow.status === 'awaiting_approval') {
-      const hint = document.createElement('div');
-      hint.className = 'workflow-hint approval';
-      hint.textContent = t("ui.theExecutionStageHasNotStartedApprovalAppliesOnlyToPlanRevision", { value0: (workflow.revision || 1) });
-      bar.appendChild(hint);
-    }
-  }
-
-  function workflowStatusText(value) {
-    return ({
-      running: t('common.running'), waiting_human: t('room.needsYourInput'), awaiting_approval: t('room.approvalGate'),
-      completed: t('ui.completed'), cancelled: t('ui.cancelled'), failed: t('ui.failed'), superseded: t('room.superseded'),
-    })[value] || value || t('common.unknown');
-  }
-
-  function workflowModeText(value) {
-    return ({ plan: t('common.plan'), review: t('common.review'), execute: t('common.execute'), audit: t('common.audit'), discuss: t('common.discuss') })[value] || value || t('ui.stage');
-  }
-
-  function workflowStageStatusText(value) {
-    return ({ pending: t('common.pending'), running: t('common.running'), waiting_human: t('room.needsInput'), completed: t('common.done'), cancelled: t('ui.cancelled'), failed: t('ui.failed') })[value] || value || '';
-  }
-
   function renderParticipants() {
     const container = $('participants');
     container.replaceChildren();
@@ -509,7 +417,7 @@
 
       const avatar = document.createElement('div');
       avatar.className = `avatar avatar-${actor}`;
-      avatar.textContent = actor === 'claude' ? '1' : '2';
+      avatar.textContent = (p.display_name || displayName(actor)).slice(0, 1).toUpperCase();
       card.appendChild(avatar);
 
       const main = document.createElement('div');
@@ -526,8 +434,12 @@
 
       const subtitle = document.createElement('div');
       subtitle.className = 'participant-subtitle';
-      subtitle.textContent = p.last_error || sessionSummary(p);
+      subtitle.textContent = p.last_error || [p.mention_handle, sessionSummary(p)].filter(Boolean).join(' · ');
       main.appendChild(subtitle);
+	  const mentionButton = document.querySelector(`.target-button[data-target="${actor}"]`);
+	  if (mentionButton) mentionButton.textContent = p.mention_handle || `@${actor}`;
+	  const inspectorOption = document.querySelector(`#inspector-agent option[value="${actor}"]`);
+	  if (inspectorOption) inspectorOption.textContent = p.display_name || displayName(actor);
 
       const copy = document.createElement('button');
       copy.type = 'button';
@@ -647,8 +559,6 @@
   }
 
   function renderSettings() {
-    $('max-hops').value = state.snapshot.settings.max_agent_hops;
-    $('max-hops-value').value = state.snapshot.settings.max_agent_hops;
     const stall = Number(state.snapshot.settings.stall_warning_seconds ?? 300);
     $('stall-disabled').checked = stall < 0;
     $('stall-warning').disabled = stall < 0;
@@ -938,23 +848,12 @@
       retryMarker.title = t('room.retryOfValue', { value: message.retry_of });
       meta.appendChild(retryMarker);
     }
-	if (message.intent && message.intent !== 'append') {
+	if (message.intent && message.intent !== 'steer') {
 	  const intentMarker = document.createElement('span');
 	  intentMarker.className = `intent-marker intent-${message.intent}`;
-	  intentMarker.textContent = message.intent === 'supersede' ? t("ui.supersede") : t("ui.nextTurn");
-	  if (message.supersedes) {
-		const count = Object.values(message.supersedes).reduce((sum, ids) => sum + (ids || []).length, 0);
-		intentMarker.title = count ? t("ui.supersedeValueInFlightMessageTargets", { value0: (count) }) : '';
-	  }
+	  intentMarker.textContent = t("ui.queued");
 	  meta.appendChild(intentMarker);
 	}
-    if (message.handoff) {
-      const handoffMarker = document.createElement('span');
-      handoffMarker.className = 'intent-marker';
-      handoffMarker.textContent = t("ui.compactHandoff");
-      handoffMarker.title = truncate(message.handoff, 320);
-      meta.appendChild(handoffMarker);
-    }
     meta.appendChild(actions);
 
     const bubble = document.createElement('div');
@@ -1481,7 +1380,7 @@
     if (!pending.length) {
       const empty = document.createElement('div');
       empty.className = 'approvals-empty';
-      empty.textContent = t("ui.noPendingApprovalsClaudeToolPermissionPromptsAndCodexCommandFileAnd");
+      empty.textContent = t("ui.noPendingNativeApprovals");
       container.appendChild(empty);
       return;
     }
@@ -1881,12 +1780,10 @@
       await api('/api/v1/settings', {
         method: 'PUT',
         body: JSON.stringify({
-          routing_mode: 'turns',
-          max_agent_hops: Number($('max-hops').value),
           stall_warning_seconds: $('stall-disabled').checked ? -1 : Number($('stall-warning').value),
         }),
       });
-      toast(t("ui.turnLimitsSaved"), 'success');
+      toast(t("ui.settingsSaved"), 'success');
     } catch (error) {
       toast(error.message, 'error');
     }
@@ -2065,8 +1962,8 @@
     const labels = {
       driver: driver ? t("ui.sendToCurrentDriverValue", { value0: (displayName(driver)) }) : t("ui.theDriverRoleIsAmbiguousChooseASpecificAgent"),
       reviewer: reviewer ? t("ui.sendToCurrentReviewerValue", { value0: (displayName(reviewer)) }) : t("ui.theReviewerRoleIsAmbiguousChooseASpecificAgent"),
-      claude: t("ui.sendOnlyToClaude"),
-      codex: t("ui.sendOnlyToCodex"),
+      claude: t("ui.sendOnlyToValue", { value0: displayName('claude') }),
+      codex: t("ui.sendOnlyToValue", { value0: displayName('codex') }),
     };
     $('delivery-hint').textContent = labels[state.selectedTarget] || labels.driver;
   }
@@ -2099,7 +1996,7 @@
       if (draft && typeof draft === 'object') {
         messageInput.value = String(draft.text || '');
         if (['driver', 'reviewer', 'claude', 'codex'].includes(draft.target)) state.selectedTarget = draft.target;
-        if (['append', 'next_turn', 'supersede'].includes(draft.intent)) $('message-intent').value = draft.intent;
+        if (['steer', 'queue'].includes(draft.intent)) $('message-intent').value = draft.intent;
       }
     } catch { localStorage.removeItem(state.draftKey); }
     setTarget(state.selectedTarget);
@@ -2331,14 +2228,14 @@
     return ({ driver: t('common.driver'), reviewer: t('common.reviewer'), peer: t('common.peer') })[value] || value;
   }
   function deliveryText(value) {
-    return ({ pending: t("ui.sending"), started: t("ui.startedANewTurn"), injected: t("ui.injectedIntoTheCurrentTurn"), queued: t("ui.queued"), failed: t("ui.failed"), skipped: t("ui.skipped") })[value] || value;
+    return ({ pending: t("ui.sending"), submitting: t("ui.submitting"), started: t("ui.startedANewTurn"), injected: t("ui.injectedIntoTheCurrentTurn"), queued: t("ui.queued"), failed: t("ui.failed"), skipped: t("ui.skipped") })[value] || value;
   }
   function processingText(value) {
-    return ({ waiting: t("ui.waiting"), working: t("ui.working694b71b"), completed: t("ui.completed"), cancelled: t("ui.cancelled"), failed: t("ui.processingFailed"), superseded: t("ui.supersededByANewerInstruction") })[value] || value;
+    return ({ waiting: t("ui.waiting"), working: t("ui.working694b71b"), completed: t("ui.completed"), cancelled: t("ui.cancelled"), failed: t("ui.processingFailed") })[value] || value;
   }
   function isRetryable(message, target) {
     const processing = message.processing && message.processing[target];
-    if (['failed', 'cancelled', 'superseded'].includes(processing)) return true;
+    if (['failed', 'cancelled'].includes(processing)) return true;
     const delivery = message.delivery && message.delivery[target];
     return ['failed', 'skipped'].includes(delivery);
   }
@@ -2542,7 +2439,6 @@
   $('cancel-reply').addEventListener('click', clearReply);
   $('clear-timeline-scope').addEventListener('click', clearThreadFilter);
   $('save-settings').addEventListener('click', saveSettings);
-  $('max-hops').addEventListener('input', () => { $('max-hops-value').value = $('max-hops').value; });
   $('stall-disabled').addEventListener('change', () => { $('stall-warning').disabled = $('stall-disabled').checked; });
   $('refresh-button').addEventListener('click', loadSnapshot);
   $('message-search').addEventListener('input', (event) => {

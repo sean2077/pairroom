@@ -408,12 +408,13 @@ func renderMarkdownTranscript(snapshot model.RoomSnapshot) string {
 	fmt.Fprintf(&out, "- Room ID: `%s`\n", snapshot.Meta.ID)
 	fmt.Fprintf(&out, "- Created: %s\n", snapshot.Meta.CreatedAt.Format(time.RFC3339))
 	fmt.Fprintf(&out, "- Exported: %s\n", time.Now().UTC().Format(time.RFC3339))
-	fmt.Fprintf(&out, "- Turn policy: `%s`, max turns: %d\n\n", snapshot.Settings.RoutingMode, snapshot.Settings.MaxHops)
+	fmt.Fprintln(&out, "- Agent relay: exact runtime mention only; no PairRoom turn limit")
+	fmt.Fprintln(&out)
 
 	out.WriteString("## Participants\n\n")
 	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
 		p := snapshot.Participants[actor]
-		fmt.Fprintf(&out, "- **%s** — role `%s`, state `%s`", p.DisplayName, p.Role, p.State)
+		fmt.Fprintf(&out, "- **%s** (`%s`) — role `%s`, state `%s`", p.DisplayName, p.MentionHandle, p.Role, p.State)
 		if p.Runtime.Version != "" {
 			fmt.Fprintf(&out, ", runtime `%s`", p.Runtime.Version)
 		}
@@ -425,7 +426,11 @@ func renderMarkdownTranscript(snapshot model.RoomSnapshot) string {
 
 	out.WriteString("\n## Conversation\n\n")
 	for _, message := range snapshot.Messages {
-		fmt.Fprintf(&out, "### %s · %s\n\n", message.From.DisplayName(), message.CreatedAt.Format(time.RFC3339))
+		author := message.From.DisplayName()
+		if participant, ok := snapshot.Participants[message.From]; ok && participant.DisplayName != "" {
+			author = participant.DisplayName
+		}
+		fmt.Fprintf(&out, "### %s · %s\n\n", author, message.CreatedAt.Format(time.RFC3339))
 		if message.RetryOf != "" {
 			fmt.Fprintf(&out, "_Retry of `%s`_\n\n", message.RetryOf)
 		}
@@ -443,7 +448,11 @@ func renderMarkdownTranscript(snapshot model.RoomSnapshot) string {
 			if !target.ValidParticipant() {
 				continue
 			}
-			fmt.Fprintf(&out, "- %s: delivery `%s`, processing `%s`", target.DisplayName(), message.Delivery[target], message.Processing[target])
+			targetName := target.DisplayName()
+			if participant, ok := snapshot.Participants[target]; ok && participant.DisplayName != "" {
+				targetName = participant.DisplayName
+			}
+			fmt.Fprintf(&out, "- %s: delivery `%s`, processing `%s`", targetName, message.Delivery[target], message.Processing[target])
 			if detail := message.ProcessingDetail[target]; detail != "" {
 				fmt.Fprintf(&out, " — %s", strings.ReplaceAll(detail, "\n", " "))
 			}

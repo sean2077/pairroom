@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/version"
 )
 
 var (
@@ -369,6 +370,13 @@ func (r *Registry) scanRooms(ctx context.Context) error {
 }
 
 func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project, bool, error) {
+	// A Room's metadata is the compatibility boundary. Check it before reading
+	// Event Log bytes so registry discovery cannot index an old/new schema and
+	// defer the failure until activation. Missing metadata remains accepted only
+	// for explicitly supported legacy imports; current stores always create it.
+	if err := validateRoomStoreMetadata(dir); err != nil {
+		return Room{}, Project{}, false, err
+	}
 	events, err := readEventsReadOnly(filepath.Join(dir, "events.jsonl"))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -690,6 +698,31 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 		return Room{}, Project{}, false, err
 	}
 	return room, project, true, nil
+}
+
+func validateRoomStoreMetadata(dir string) error {
+	path := filepath.Join(dir, "metadata.json")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read event metadata: %w", err)
+	}
+	var metadata struct {
+		Format        string `json:"format"`
+		SchemaVersion int    `json:"schema_version"`
+	}
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return fmt.Errorf("decode event metadata: %w", err)
+	}
+	if metadata.Format != "" && metadata.Format != "pairroom-jsonl" {
+		return fmt.Errorf("unsupported event metadata format %q", metadata.Format)
+	}
+	if metadata.SchemaVersion != version.StoreSchema {
+		return fmt.Errorf("event store schema %d is unsupported; this build requires schema %d and provides no migration", metadata.SchemaVersion, version.StoreSchema)
+	}
+	return nil
 }
 
 func validateProvisionedProject(project Project) error {

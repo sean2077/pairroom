@@ -20,8 +20,9 @@ PairRoom 不让两个 Agent 像 IM 群聊一样并发互相唤醒。每个 Room 
 user
   -> current Agent completes one native Turn
   -> reliable terminal boundary
-  -> explicit @peer or HANDOFF + NEXT
-  -> next Room FIFO item
+  -> 仅在确实需要另一轮时写出对方当前精确句柄
+  -> 完整回复进入 Room FIFO
+  -> 不点名即结束接力
 ```
 
 这不是机械的 A/B/A/B 消息轮换。当前 Agent 可以在一个 native Turn 内执行工具、更新计划并接受 steering；只有在可靠的 Turn 结束边界之后，另一个 Agent 才能开始。
@@ -30,8 +31,9 @@ user
 
 - **Human authority**：用户可以指定目标 Agent、覆盖后续流程、审批、取消或停止；
 - **Single owner**：两个 native runtime 不会同时拥有执行权，即使两个槽位选择了相同 runtime；
-- **Explicit handoff**：Agent 明确 `@agent1`、`@agent2`、`@claude`、`@codex`、`@grok` 或 `@peer` 即表示把回复交给该 peer。`@claude`/`@codex` 仍是 Agent 1/Agent 2 槽位别名，并在 runtime 唯一时按 runtime 解析。人类要求双方互动时必须写出该地址，只对人类说话不会启动另一位；没有明确地址时，必须同时给出 `HANDOFF` 与 `NEXT`；`@human`/`@user` 则回到用户决策；
-- **Fail closed**：进程重启不自动重放内存 FIFO，避免重复执行有副作用的操作；
+- **精确动态点名**：唯一 runtime 使用 `@claude`、`@codex` 或 `@grok`；同类双开使用稳定槽位后缀，例如 `@codex0` 与 `@codex1`。只有对方当前精确句柄会在 native Turn 边界后接力完整回复；无点名即结束，`@user` 始终把决定交还用户；
+- **持久 FIFO 与 fail closed 提交**：尚未跨过原生边界的排队工作会在重启后恢复；原生提交结果不确定时绝不自动重放；
+- **无接力上限**：PairRoom 不计算 Agent hop。Agent 会被要求在不再需要独立响应时停止点名，用户也可以显式取消、打断或改向；
 - **Native harness first**：PairRoom 不重写 Claude Code、Codex 或 Grok Build 的工具循环与权限模型。
 
 ## 安装
@@ -64,7 +66,7 @@ Management Shell 打开后：
 1. 注册一个本地 Git Project；
 2. 创建 Room；
 3. 选择 Driver / Reviewer；
-4. 发送一个单 Agent 任务，或描述一个顺序工作流；
+4. 向一个 Agent 发送任务，并让它只在确实需要另一轮时点名对方；
 5. 在 Room View 中观察 Turn、工具活动、审批、投递与错误状态。
 
 使用真实 Runtime 前，先分别确认所选 CLI（`claude`、`codex` 和/或 `grok`）已安装、已针对所选 Provider 完成认证，并能在目标仓库独立工作。创建 Room 的 catalog 会显示不可用 Runtime 与不受支持的 CC Switch Profile，但不会通过网络枚举模型。完整步骤见 [Getting Started](docs/GETTING_STARTED.md)。

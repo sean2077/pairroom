@@ -7,45 +7,31 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 )
 
-func TestProtocolVersionMatchesTurnRelayContract(t *testing.T) {
-	if Version != "pairroom-protocol/v4" {
-		t.Fatalf("protocol version = %q, want pairroom-protocol/v4", Version)
+func TestProtocolVersionMatchesMentionRelayContract(t *testing.T) {
+	if Version != "pairroom-protocol/v5" {
+		t.Fatalf("protocol version = %q, want pairroom-protocol/v5", Version)
 	}
 }
 
-func TestResolveFiltersRoleWithTurnRouting(t *testing.T) {
-	contract, err := Resolve(Selection{
-		Actor:       model.ActorCodex,
-		Role:        model.RoleReviewer,
-		RoutingMode: model.RoutingTurns,
-	})
+func TestResolveFiltersRoleAndContainsMentionRules(t *testing.T) {
+	contract, err := Resolve(Selection{Actor: model.ActorCodex, Role: model.RoleReviewer})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := contract.Text()
 	for _, fragment := range []string{
-		Version,
-		"actor: codex",
-		"role: reviewer",
-		"routing_mode: turns",
-		"[authority.human]",
-		"[delivery.single-turn]",
-		"[delivery.next]",
-		"[delivery.stop]",
-		"[workflow.natural]",
-		"[workflow.gate]",
-		"[role.reviewer]",
-		"HANDOFF + NEXT",
-		"explicit @agent1, @agent2, @claude, @codex, @grok, or @peer",
-		"both of you",
-		"envelope peer",
-		"@human and @user",
+		Version, "actor: codex", "role: reviewer", "[authority.human]",
+		"[delivery.single-turn]", "[delivery.peer]", "[delivery.stop]",
+		"[delivery.human]", "[role.reviewer]", "exact peer_handle", "@user overrides",
 	} {
 		if !strings.Contains(got, fragment) {
 			t.Fatalf("contract missing %q:\n%s", fragment, got)
 		}
 	}
-	for _, fragment := range []string{"[role.driver]", "[role.peer]"} {
+	for _, fragment := range []string{
+		"routing_mode", "HANDOFF", "PAIRROOM:", "workflow", "@peer", "@human",
+		"[role.driver]", "[role.peer]",
+	} {
 		if strings.Contains(got, fragment) {
 			t.Fatalf("filtered contract unexpectedly contains %q:\n%s", fragment, got)
 		}
@@ -64,10 +50,7 @@ func TestResolveWithoutFiltersIsCompleteAndDeterministic(t *testing.T) {
 	if first.Text() != second.Text() {
 		t.Fatal("contract output must be deterministic")
 	}
-	for _, fragment := range []string{
-		"[role.driver]", "[role.reviewer]", "[role.peer]",
-		"[delivery.single-turn]", "[delivery.next]", "[delivery.stop]",
-	} {
+	for _, fragment := range []string{"[role.driver]", "[role.reviewer]", "[role.peer]", "[convergence.intentional]"} {
 		if !strings.Contains(first.Text(), fragment) {
 			t.Fatalf("complete contract missing %q", fragment)
 		}
@@ -78,13 +61,18 @@ func TestResolveRejectsInvalidSelection(t *testing.T) {
 	for _, selection := range []Selection{
 		{Actor: model.ActorID("other")},
 		{Role: model.ParticipantRole("observer")},
-		{RoutingMode: model.RoutingMode("automatic")},
-		{RoutingMode: model.RoutingMode("manual")},
-		{RoutingMode: model.RoutingMode("mentions")},
-		{RoutingMode: model.RoutingMode("roundtable")},
 	} {
 		if _, err := Resolve(selection); err == nil {
 			t.Fatalf("Resolve(%+v) succeeded", selection)
+		}
+	}
+}
+
+func TestBootstrapUsesDynamicDuplicateHandles(t *testing.T) {
+	got := Bootstrap(model.ActorClaude, model.RuntimeCodex, model.RuntimeCodex)
+	for _, fragment := range []string{"Codex 0 (@codex0)", "Codex 1 (@codex1)", "Include @codex1", "without @codex1"} {
+		if !strings.Contains(got, fragment) {
+			t.Fatalf("bootstrap missing %q:\n%s", fragment, got)
 		}
 	}
 }

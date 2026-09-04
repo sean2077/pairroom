@@ -371,8 +371,6 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 		ListenHost:          "127.0.0.1",
 		Mock:                options.Mock,
 		AutoStart:           fileConfig.AutoStart,
-		RoutingMode:         fileConfig.RoutingMode,
-		MaxAgentHops:        fileConfig.MaxAgentHops,
 		StallWarningSeconds: fileConfig.StallWarningSeconds,
 		Resolver:            agentResolver,
 	})

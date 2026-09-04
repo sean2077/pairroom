@@ -19,9 +19,11 @@ PairRoom is a local Go coordination layer for official Claude Code, Codex, and G
 - Keep collaboration mechanics in `internal/protocol` and expose them through `pairroom protocol`; project only a compact versioned bootstrap at each vendor's native instruction layer, keep per-turn envelopes dynamic-only, and preserve the prompt byte-budget tests.
 - Keep slot identity separate from runtime identity: durable `ActorID` values identify Agent 1/Agent 2 (legacy `claude`/`codex` slot IDs), while `RuntimeKind` selects Claude Code, Codex, or Grok Build. Every adapter must emit the configured slot actor; never hard-code a vendor as the event actor.
 - New Rooms persist an immutable, secret-free `AgentSelection` for both historical ActorID slots. A native ProviderRef inherits the selected CLI's user/global configuration; a CC Switch ProviderRef is re-read at creation validation and each activation. Keep Grok Build prompt/instruction text out of process argv.
-- Keep Room delivery single-owner: only the active participant may run, `next_turn` and cross-Agent inputs wait for its native Turn boundary, and an explicit Agent `@peer` address requests transfer; an implicit continuation still requires a compact `HANDOFF` plus `NEXT`, while `@human`/`@user` returns control to the human. A human request that both Agents interact still starts with the current Driver, who must address the peer rather than answering as a 1:1 chat.
-- Natural workflows compile only explicit actor/action sequences. Keep plan/review/audit read-only, bind execution approval to the current plan revision, and surface human questions in the Room rather than leaving a native process on an unexposed prompt.
 - CC Switch v3.20.1/schema 18 access is read-only and fail-closed. PairRoom never manages Providers, changes CC Switch current state, or persists credentials; secrets travel only in the selected child-process environment and never in argv, Room/Event Log, Registry, RuntimeInfo, API, browser, diagnostics, or logs.
+- Empty Provider/model/effort/instructions and runtime-policy overrides inherit the selected native CLI's user/global configuration. Add only explicit PairRoom overrides, and keep Grok Build prompt/instruction text out of process argv.
+- Keep Room delivery single-owner: only the active participant may run; cross-Agent and explicit `queue` inputs wait for its native Turn boundary, while same-target `steer` uses the adapter's typed accepted/unavailable/rejected/unknown result. The Room FIFO is the sole queue, safe queued work survives restart, and unknown native ownership fails for explicit retry instead of automatic replay.
+- Treat the current runtime-derived `mention_handle` as the sole Agent-relay signal: unique runtimes use `@claude` / `@codex` / `@grok`, duplicate runtimes use stable slot suffixes `0/1`, `@user` wins, self-mentions do not route, and a response without the exact peer handle ends relay. Never reintroduce hop limits, implicit relay, legacy aliases, control markers, compact handoffs, or Workflow orchestration.
+- Keep native permissions and human questions visible in the Room. The general adapter bridge may surface an unsupported interactive question with `@user`, but must not replace vendor approval semantics or leave an unexposed native prompt.
 - Preserve the append-only event log and fail-closed archive, attachment, authentication, workspace, and high-privilege request boundaries described in `docs/ARCHITECTURE.md` and `docs/PROTOCOL.md`.
 - Keep every built-in Web listener restricted to numeric loopback addresses; reject wildcard, LAN, and hostname binds before opening repository or service state, and use SSH local port forwarding for remote access.
 - `pairroom service` is the current-working-directory-independent multi-Project/multi-Room control plane; `pairroom serve` remains the legacy single-Room compatibility entry point.
@@ -34,6 +36,7 @@ PairRoom is a local Go coordination layer for official Claude Code, Codex, and G
 
 ## Navigation
 
+- Project terminology: `CONTEXT.md`
 - Architecture and source-of-truth boundaries: `docs/ARCHITECTURE.md`
 - Protocol and durable schema: `docs/PROTOCOL.md`
 - Multi-Project/multi-Room service boundaries: `docs/ARCHITECTURE.md`

@@ -945,8 +945,8 @@ func writeLegacyRoom(dir, repo, roomID, name, claudeID, codexID string) error {
 		value any
 	}{
 		{"room.created", model.ActorSystem, model.RoomMeta{ID: roomID, Name: name, Repo: repo, CreatedAt: created}},
-		{"participant.updated", model.ActorClaude, model.ParticipantSnapshot{ID: model.ActorClaude, DisplayName: model.ActorClaude.DisplayName(), Role: model.RoleDriver, State: model.StateStopped, SessionID: claudeID}},
-		{"participant.updated", model.ActorCodex, model.ParticipantSnapshot{ID: model.ActorCodex, DisplayName: model.ActorCodex.DisplayName(), Role: model.RoleReviewer, State: model.StateStopped, SessionID: codexID}},
+		{"participant.updated", model.ActorClaude, model.ParticipantSnapshot{ID: model.ActorClaude, DisplayName: "Claude Code", MentionHandle: "@claude", Role: model.RoleDriver, State: model.StateStopped, SessionID: claudeID, RuntimeKind: model.RuntimeClaude}},
+		{"participant.updated", model.ActorCodex, model.ParticipantSnapshot{ID: model.ActorCodex, DisplayName: "Codex", MentionHandle: "@codex", Role: model.RoleReviewer, State: model.StateStopped, SessionID: codexID, RuntimeKind: model.RuntimeCodex}},
 	}
 	for _, value := range values {
 		event, err := model.NewEvent(roomID, value.kind, value.actor, value.value)

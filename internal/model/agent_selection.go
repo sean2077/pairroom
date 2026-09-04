@@ -71,8 +71,8 @@ const (
 	// native projection, irrespective of the selected runtime policy.
 	ReviewerEnforced OrdinaryReviewerPolicy = "enforced"
 	// ReviewerExplicit applies the explicitly selected native permission,
-	// approval, and sandbox policy to ordinary Reviewer turns. Compiled
-	// plan/review/audit Workflow stages remain read-only.
+	// approval, and sandbox policy to ordinary Reviewer turns. The Room still
+	// owns the Reviewer workspace boundary.
 	ReviewerExplicit OrdinaryReviewerPolicy = "explicit"
 )
 

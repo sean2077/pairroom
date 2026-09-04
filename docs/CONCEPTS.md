@@ -4,90 +4,85 @@
 
 **Project** is the registration record of a local Git repository in the Management Service. It stores the repository location and the Rooms that can be created there. It is not a copy of the repository and does not own user source.
 
-**Room** is the persistence boundary for collaboration. It holds participant roles, messages, Turn summaries, approvals, Workflow, Binding, and the Event Log. A Room can continue across process starts, but the native process itself is not restored with the Event Log.
+**Room** is the persistence boundary for collaboration. It holds participant roles, messages, Turn summaries, approvals, Bindings, attachments, and the Event Log. A Room can continue across process starts, but the native process itself is not restored with the Event Log.
 
-**Binding** binds a Room slot participant to a vendor-native session/thread for the selected runtime. Durable ActorIDs `claude` and `codex` identify Agent 1 and Agent 2; `RuntimeKind` selects Claude Code, Codex, or Grok Build. Binding is managed by the Service and cannot be reused freely by another active Room.
+**Binding** binds a stable Room participant slot to a vendor-native session or thread. Durable ActorIDs `claude` and `codex` still identify Agent 1 and Agent 2 internally; `RuntimeKind` independently selects Claude Code, Codex, or Grok Build. A Binding is managed by the Service and cannot be reused freely by another active Room.
+
+## Public identity and mention handles
+
+Public identity follows the runtime currently assigned to each slot. When a runtime occurs once, its display name and handle are `Claude Code` / `@claude`, `Codex` / `@codex`, or `Grok Build` / `@grok`. When both slots use the same runtime, stable slot order adds zero-based suffixes everywhere: for example `Codex 0` / `@codex0` for Agent 1 and `Codex 1` / `@codex1` for Agent 2. Changing a runtime may therefore change public identity without changing the durable ActorID or Binding owner.
+
+An unsuffixed handle for a duplicated runtime is ambiguous and does not route. PairRoom reports the two exact handles to use. Handle matching is case-insensitive. Mentions inside fenced code, inline code, URLs, and email addresses are ignored.
 
 ## Message and native Turn
 
 A Message is PairRoom's auditable input or output. A native Turn is one complete round actually executed by Claude Code, Codex, or Grok Build. They are not one-to-one:
 
-- one Turn can receive multiple steering messages;
+- one Turn can receive multiple accepted steering messages;
 - a queued message may start a new Turn later;
 - successful transport delivery does not mean the Turn completed;
 - an ordinary diagnostic error does not necessarily mean the Turn terminated.
 
-PairRoom releases the owner only at a reliable boundary, such as native `turn/completed`, a confirmed process exit, or an explicit cancel / abort termination event.
+PairRoom releases the owner only at a reliable boundary, such as native `turn/completed`, a confirmed process exit, or an explicit cancel or abort termination event.
 
-## Deterministic relay
-
-A Room uses the single `turns` policy:
+## FIFO and single ownership
 
 ```text
 idle
-  -> reserve FIFO item
-  -> submit to Agent A
-  -> Agent A owns the native Turn
+  -> reserve one FIFO item
+  -> start one native Turn
+  -> optionally accept same-Turn steer for that same Agent
   -> reliable terminal boundary
   -> release owner
-  -> reserve next FIFO item
+  -> reserve the next FIFO item
 ```
 
 Invariants:
 
-1. A Room has at most one active native Turn owner at a time;
-2. Cross-Agent input can be submitted only after the current Turn ends;
-3. A FIFO item is checked for cancellation again before submit, avoiding a ghost Turn;
-4. A generic runtime error only updates diagnostics and does not hand off by itself;
-5. A newer user instruction takes priority over an older automatic relay.
+1. A Room has at most one active native Turn owner;
+2. Cross-Agent input starts only after the current Turn ends;
+3. A queued item is checked for cancellation again before the native submission boundary;
+4. an adapter never owns a hidden second queue; the Room FIFO is the sole queue;
+5. a generic runtime error updates diagnostics but does not release ownership by itself;
+6. a newer user instruction cancels an older not-yet-started Agent relay without implicitly interrupting the active native Turn.
 
 ## Message intent
 
-- `append`: prefer steering the target Agent's active Turn; enter a later boundary when that is unsafe;
-- `next_turn`: explicitly request a new native Turn, even if the target is still the current Agent;
-- `supersede`: interrupt or replace in-flight input for the target Agent; the actual scope is constrained by the native harness interrupt semantics.
+- `steer` is the default. When the target already owns the active Turn, PairRoom asks its adapter to steer that Turn. `accepted` enters the Turn; `unavailable` or `rejected` moves the same Message into the Room FIFO exactly once; `unknown` fails visibly and requires an explicit Retry so PairRoom cannot duplicate uncertain work.
+- `queue` always enters the Room FIFO when another Turn is active. When the Room is idle, it starts immediately.
 
-## Handoff and control markers
+Input to the other Agent is always queued until the active Turn ends, regardless of intent. A user who wants to stop current work uses Cancel or Interrupt explicitly.
 
-An explicit `@claude`, `@codex`, or `@peer` in Agent output is a routing instruction to that peer slot (`claude` is Agent 1, `codex` is Agent 2). `@human` or `@user` means the user must decide and automatic relay stops. When a human asks both Agents to interact, the active Agent must write that address; speaking only to the human does not start the other Agent. Implicit automatic handoff without an explicit peer address requires:
+## Agent relay and convergence
 
-```text
-[PAIRROOM:HANDOFF]
-Goal / Scope / Evidence / Risks / Exact ask
-[/PAIRROOM:HANDOFF]
-[PAIRROOM:NEXT]
-```
+Only the exact current handle of the other Agent in visible Agent output requests a relay. PairRoom stores and forwards that complete visible response and its attachments after the current native Turn completes. It does not truncate the response, append Room history, or require a structured handoff packet.
 
-Convergence markers:
+A response without the peer's exact handle ends Agent relay. Either Agent may deliver the final result. `@user` takes priority over every Agent handle and leaves the Room waiting for the user; a self-mention never routes. Former aliases such as `@peer`, `@human`, `@all`, `@agent1`, and `@agent2` do not route; an otherwise unaddressed user send that relies on one is rejected. Former `PAIRROOM` control markers are ordinary text.
 
-- `NEXT`: without an explicit peer address, hand to the peer after a valid handoff; an explicit `@peer` address itself requests a peer Turn;
-- `DONE`: without a direct peer address, the current chain is complete and returns to the user; a direct peer address still hands off;
-- `WAIT`: a user decision is required;
-- `BLOCKED`: there is an unresolved external block.
-
-The maximum hop count limits unbounded round-trips. It is not a mechanical A/B rotation count.
+PairRoom applies no hop or Turn ceiling to explicit relays. The bootstrap tells each Agent to mention the peer only when another independent response can materially complete the user's request, not to acknowledge, agree, thank, or ceremonially return a Turn. If Agents deliberately keep naming one another, the user can Cancel, Interrupt, or send a newer instruction.
 
 ## Role and Workspace
 
-- **Driver**: implements in the live workspace;
-- **Reviewer**: inspects in an isolated reviewer snapshot and does not modify the Driver's live tree by default;
-- **Peer**: an ordinary participant without Driver / Reviewer privilege.
+- **Driver** implements in the live workspace;
+- **Reviewer** inspects in an isolated reviewer snapshot and does not modify the Driver's live tree by default;
+- **Peer** is an equal collaborator operating within its native permissions and current workspace boundary.
 
 Roles are runtime permission and workspace boundaries, not just prompt labels. Switching roles must happen at a safe Turn boundary.
 
-## Workflow and Approval
+## Approval and human questions
 
-A natural-language actor/action sequence can compile into Workflow stages such as plan, review, execute, and audit. Workflow still reuses the same FIFO and single-owner scheduler.
+Native permission requests remain visible Room approvals and retain the vendor's available decisions. A request ID belongs to one live native connection, so unresolved approvals expire across process restart.
 
-Approval binds to an explicit Agent, native request, and plan revision. After a process restart, the vendor request ID is no longer reliable, so a pending approval expires instead of replaying automatically.
+When a headless runtime cannot continue an interactive question in place, the generic human-input bridge emits the question visibly with `@user`, interrupts that native Turn, and lets the user's reply start a new Turn. PairRoom does not hide a native prompt or reintroduce a workflow layer.
 
-## Restart and fail-closed
+## Restart and recovery
 
-The Event Log, Binding, and historical messages are durable state. The native process, current owner, and Room FIFO are process state. On restart:
+The Event Log, Binding, Messages, and Room-owned FIFO states are durable. On restart:
 
-- in-flight / queued input is marked skipped, cancelled, or failed;
+- FIFO entries that never crossed the native submission boundary are restored in original order;
+- an entry caught in the native submission acceptance window is marked failed with explicit Retry guidance, because automatic replay could duplicate execution;
+- input already accepted by a native runtime is not replayed and its unfinished processing is cancelled;
 - pending approvals expire;
-- input that may already have had side effects is not replayed automatically;
-- the user inspects repository state and then retries explicitly.
+- the user inspects repository state before retrying any uncertain or accepted work.
 
-This is a safety choice against duplicate execution, not a persistent-queue promise.
+This distinction preserves queued work while failing closed wherever native ownership cannot be proven.

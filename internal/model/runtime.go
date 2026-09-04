@@ -1,6 +1,9 @@
 package model
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // RuntimeKind selects the native coding-agent CLI bound to a Room slot.
 // ActorID remains the durable slot identity (claude = Agent 1, codex = Agent 2)
@@ -101,12 +104,42 @@ func SlotActors() []ActorID {
 	return []ActorID{ActorClaude, ActorCodex}
 }
 
-// ParticipantDisplayName keeps the historical vendor names for the default
-// Claude/Codex pairing and otherwise labels the durable slot plus runtime.
-func ParticipantDisplayName(actor ActorID, runtime RuntimeKind) string {
-	runtime = runtime.CanonicalForSlot(actor)
-	if (actor == ActorClaude && runtime == RuntimeClaude) || (actor == ActorCodex && runtime == RuntimeCodex) {
-		return runtime.DisplayName()
+type ParticipantIdentity struct {
+	DisplayName   string
+	MentionHandle string
+}
+
+// ParticipantIdentities separates durable slot IDs from user-facing runtime
+// names. A runtime used by both slots receives the stable zero-based slot
+// suffix requested by the Room protocol.
+func ParticipantIdentities(runtimes map[ActorID]RuntimeKind) map[ActorID]ParticipantIdentity {
+	resolved := make(map[ActorID]RuntimeKind, len(SlotActors()))
+	counts := make(map[RuntimeKind]int, len(SlotActors()))
+	for _, actor := range SlotActors() {
+		kind := runtimes[actor].CanonicalForSlot(actor)
+		resolved[actor] = kind
+		counts[kind]++
 	}
-	return SlotLabel(actor) + " · " + runtime.DisplayName()
+	identities := make(map[ActorID]ParticipantIdentity, len(SlotActors()))
+	for index, actor := range SlotActors() {
+		kind := resolved[actor]
+		suffix := ""
+		displayName := kind.DisplayName()
+		if counts[kind] > 1 {
+			suffix = fmt.Sprintf("%d", index)
+			displayName += " " + suffix
+		}
+		identities[actor] = ParticipantIdentity{
+			DisplayName:   displayName,
+			MentionHandle: "@" + string(kind) + suffix,
+		}
+	}
+	return identities
+}
+
+func ParticipantIdentityFor(actor ActorID, runtimes map[ActorID]RuntimeKind) ParticipantIdentity {
+	if identity, ok := ParticipantIdentities(runtimes)[actor]; ok {
+		return identity
+	}
+	return ParticipantIdentity{DisplayName: actor.DisplayName(), MentionHandle: "@" + string(actor)}
 }

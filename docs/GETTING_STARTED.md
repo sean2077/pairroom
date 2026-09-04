@@ -103,21 +103,22 @@ An unaddressed message goes only to the current Driver. To verify that both Agen
 Greet each other and introduce yourselves.
 ```
 
-The Driver must `@codex` or `@claude` in the reply; introducing itself only to the human does not start the other Agent. PairRoom hands the reply to the peer only after the current Turn ends.
+The Driver must include the other participant's exact displayed handle in its reply; introducing itself only to the human does not start the other Agent. With unique Claude and Codex runtimes those handles are `@claude` and `@codex`. PairRoom hands the complete reply and attachments to the peer only after the current Turn ends. If the peer then answers without naming the Driver, the greeting ends naturally after two Turns.
 
-For staged collaboration, describe roles and actions directly:
+For a review, assign Driver and Reviewer directly, then ask the Driver to request independent review only when it has something concrete to inspect:
 
 ```text
-Claude plans first; Codex reviews the plan; after I approve, Codex implements; then Claude audits.
+Implement and verify the change. When the patch is ready, ask the displayed Reviewer handle for an independent review.
 ```
 
-PairRoom compiles the stages into a sequential Workflow instead of letting two runtimes free-chat.
+PairRoom does not compile or approve actor/action stage sequences. Each Agent may finish the user's request; another Turn exists only after an exact Agent handle or a new user Message.
 
-## 5. Steering, next Turn, and cancel
+## 5. Steering, queue, and cancel
 
-- Ordinary input to the current owner can take the current Turn's steering path;
-- Explicit `next_turn` or input to the other Agent enters the Room FIFO;
-- An explicit `@claude`, `@codex`, or `@peer` in an Agent reply is delivered to that peer after the current Turn ends; `@human`/`@user` leaves the decision with the user;
+- `steer` is the default. Same-target input attempts native same-Turn steering; unavailable or rejected steering falls back to the Room FIFO exactly once, while an unknown result requires explicit Retry;
+- `queue` always waits in the Room FIFO while a Turn is active and starts immediately when the Room is idle;
+- input to the other Agent always waits for the active Turn boundary;
+- only the other participant's exact current `mention_handle` in an Agent reply starts another Agent Turn; no mention ends relay and `@user` overrides Agent handles;
 - Cancelling a message still in the FIFO removes only that message;
 - Input already submitted to a native runtime may require interrupting the whole current native Turn.
 

@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -103,6 +104,20 @@ func TestOpenExistingReopensPublishedStore(t *testing.T) {
 	}
 	if len(events) != 2 || events[0].Kind != "first" || events[1].Kind != "second" || events[1].Seq != 2 {
 		t.Fatalf("unexpected OpenExisting replay: %#v", events)
+	}
+}
+
+func TestOpenExistingRejectsMissingMetadataEvenForEmptyEventLog(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenExisting(dir); err == nil || !strings.Contains(err.Error(), "metadata is missing") {
+		t.Fatalf("OpenExisting accepted an unmarked empty store: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "metadata.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("OpenExisting created metadata while rejecting the store: %v", err)
 	}
 }
 
@@ -267,33 +282,40 @@ func TestSaveAndLoadJSON(t *testing.T) {
 	}
 }
 
-func TestOpenUpgradesOlderMetadataAndRejectsFutureSchema(t *testing.T) {
+func TestOpenRejectsEveryNonCurrentSchemaWithoutMigration(t *testing.T) {
+	for _, schema := range []int{1, version.StoreSchema - 1, version.StoreSchema + 1, 999} {
+		t.Run(fmt.Sprintf("schema-%d", schema), func(t *testing.T) {
+			dir := t.TempDir()
+			metadata := fmt.Sprintf(`{"format":"pairroom-jsonl","schema_version":%d,"app_version":"0.1.0"}`, schema)
+			if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(metadata), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Open(dir); err == nil || !strings.Contains(err.Error(), "provides no migration") {
+				t.Fatalf("non-current schema should be rejected without migration, got %v", err)
+			}
+		})
+	}
+}
+
+func TestOpenRejectsOldSchemaBeforeRepairOrReplay(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(`{"format":"pairroom-jsonl","schema_version":1,"app_version":"0.1.0"}`), 0o600); err != nil {
+	metadata := fmt.Sprintf(`{"format":"pairroom-jsonl","schema_version":%d}`, version.StoreSchema-1)
+	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(metadata), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store, err := Open(dir)
+	const brokenTail = `{"old":"event"`
+	eventPath := filepath.Join(dir, "events.jsonl")
+	if err := os.WriteFile(eventPath, []byte(brokenTail), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err == nil || !strings.Contains(err.Error(), "provides no migration") {
+		t.Fatalf("old schema was not rejected before replay: %v", err)
+	}
+	data, err := os.ReadFile(eventPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var upgraded struct {
-		SchemaVersion int `json:"schema_version"`
-	}
-	if err := store.LoadJSON("metadata.json", &upgraded); err != nil {
-		t.Fatal(err)
-	}
-	if upgraded.SchemaVersion != version.StoreSchema {
-		t.Fatalf("metadata was not upgraded: %#v", upgraded)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	future := t.TempDir()
-	if err := os.WriteFile(filepath.Join(future, "metadata.json"), []byte(`{"format":"pairroom-jsonl","schema_version":999}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Open(future); err == nil || !strings.Contains(err.Error(), "newer than supported") {
-		t.Fatalf("future schema should fail safely, got %v", err)
+	if string(data) != brokenTail {
+		t.Fatalf("old event log was repaired before schema rejection: %q", data)
 	}
 }

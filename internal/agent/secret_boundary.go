@@ -48,12 +48,14 @@ func newSecretRedactor(env map[string]string) *secretRedactor {
 
 func credentialEnvKey(value string) bool {
 	name := strings.ToUpper(strings.TrimSpace(value))
-	if name == "ANTHROPIC_AUTH_TOKEN" || name == "ANTHROPIC_API_KEY" || name == "OPENAI_API_KEY" {
+	if name == "TOKEN" || name == "SECRET" || name == "PASSWORD" || name == "PASSWD" || name == "API_KEY" || name == "AUTH" ||
+		name == "ANTHROPIC_AUTH_TOKEN" || name == "ANTHROPIC_API_KEY" || name == "OPENAI_API_KEY" {
 		return true
 	}
 	return strings.HasSuffix(name, "_API_KEY") || strings.HasSuffix(name, "_AUTH_TOKEN") ||
 		strings.HasSuffix(name, "_ACCESS_TOKEN") || strings.HasSuffix(name, "_SECRET") ||
-		strings.Contains(name, "_PASSWORD") || (strings.HasPrefix(name, "PAIRROOM_CC_SWITCH_") && strings.Contains(name, "KEY"))
+		strings.HasSuffix(name, "_TOKEN") || strings.Contains(name, "_PASSWORD") ||
+		strings.Contains(name, "_PASSWD") || (strings.HasPrefix(name, "PAIRROOM_CC_SWITCH_") && strings.Contains(name, "KEY"))
 }
 
 func (r *secretRedactor) text(value string) string {
@@ -144,6 +146,14 @@ func (a *redactingAdapter) SessionID() string       { return a.redactor.text(a.i
 func (a *redactingAdapter) Start(ctx context.Context) error {
 	return a.redactor.err(a.inner.Start(ctx))
 }
+func (a *redactingAdapter) StartTurn(ctx context.Context, input model.AgentInput) error {
+	return a.redactor.err(a.inner.StartTurn(ctx, input))
+}
+func (a *redactingAdapter) Steer(ctx context.Context, input model.AgentInput) SteerOutcome {
+	outcome := a.inner.Steer(ctx, input)
+	outcome.Detail = a.redactor.text(outcome.Detail)
+	return outcome
+}
 func (a *redactingAdapter) Interrupt(ctx context.Context) error {
 	return a.redactor.err(a.inner.Interrupt(ctx))
 }
@@ -156,10 +166,6 @@ func (a *redactingAdapter) SetRole(ctx context.Context, role model.ParticipantRo
 }
 func (a *redactingAdapter) SetWorkspace(ctx context.Context, workspace string) error {
 	return a.redactor.err(a.inner.SetWorkspace(ctx, workspace))
-}
-func (a *redactingAdapter) Submit(ctx context.Context, input model.AgentInput) (model.DeliveryState, error) {
-	state, err := a.inner.Submit(ctx, input)
-	return state, a.redactor.err(err)
 }
 
 // Keep the compiler honest if Adapter grows a method without this boundary

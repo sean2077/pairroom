@@ -12,7 +12,7 @@ import (
 
 func TestWriteProtocolText(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	err := writeProtocol([]string{"--actor", "codex", "--role", "reviewer", "--routing", "turns"}, &stdout, &stderr)
+	err := writeProtocol([]string{"--actor", "codex", "--role", "reviewer"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,8 +21,8 @@ func TestWriteProtocolText(t *testing.T) {
 		"actor: codex",
 		"[role.reviewer]",
 		"[delivery.single-turn]",
-		"[delivery.next]",
-		"[PAIRROOM:DONE]",
+		"[delivery.peer]",
+		"exact peer_handle",
 	} {
 		if !strings.Contains(stdout.String(), fragment) {
 			t.Fatalf("protocol output missing %q:\n%s", fragment, stdout.String())
@@ -62,11 +62,9 @@ func TestWriteProtocolHelpAndValidation(t *testing.T) {
 	if err := writeProtocol([]string{"--actor", "other"}, &stdout, &stderr); err == nil {
 		t.Fatal("invalid actor succeeded")
 	}
-	for _, mode := range []string{"manual", "mentions", "roundtable"} {
-		stdout.Reset()
-		stderr.Reset()
-		if err := writeProtocol([]string{"--routing", mode}, &stdout, &stderr); err == nil {
-			t.Fatalf("legacy routing mode %q succeeded", mode)
-		}
+	stdout.Reset()
+	stderr.Reset()
+	if err := writeProtocol([]string{"--routing", "turns"}, &stdout, &stderr); err == nil {
+		t.Fatal("removed routing flag succeeded")
 	}
 }

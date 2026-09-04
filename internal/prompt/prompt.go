@@ -39,25 +39,15 @@ func Envelope(input model.AgentInput) string {
 	fmt.Fprintf(&b, "protocol: %s\n", protocol.Version)
 	fmt.Fprintf(&b, "message_id: %s\n", input.MessageID)
 	fmt.Fprintf(&b, "thread_id: %s\n", input.ThreadID)
-	fmt.Fprintf(&b, "hop: %d\n", input.Hop)
-	fmt.Fprintf(&b, "from: %s\n", input.From)
-	fmt.Fprintf(&b, "to: %s\n", input.To)
-	if peer := model.OtherParticipant(input.To); peer.ValidParticipant() {
-		fmt.Fprintf(&b, "peer: %s\n", peer)
+	fmt.Fprintf(&b, "from_handle: %s\n", input.FromHandle)
+	fmt.Fprintf(&b, "self_handle: %s\n", input.SelfHandle)
+	if input.PeerHandle != "" {
+		fmt.Fprintf(&b, "peer_handle: %s\n", input.PeerHandle)
 	}
 	if input.ReplyTo != "" {
 		fmt.Fprintf(&b, "reply_to: %s\n", input.ReplyTo)
 	}
 	fmt.Fprintf(&b, "current_role: %s\n", input.Role)
-	if input.Intent != "" {
-		fmt.Fprintf(&b, "delivery_intent: %s\n", input.Intent)
-	}
-	if input.WorkflowID != "" {
-		fmt.Fprintf(&b, "workflow_id: %s\n", input.WorkflowID)
-		fmt.Fprintf(&b, "workflow_stage: %d\n", input.WorkflowStage+1)
-		fmt.Fprintf(&b, "workflow_mode: %s\n", input.WorkflowMode)
-	}
-	fmt.Fprintf(&b, "remaining_agent_hops: %d\n", max(0, input.MaxHops-input.Hop))
 	if len(input.Attachments) > 0 {
 		fmt.Fprintln(&b, "attachments:")
 		for _, value := range input.Attachments {

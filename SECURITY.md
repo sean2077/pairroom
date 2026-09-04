@@ -121,8 +121,9 @@ Images can still contain secrets, customer information, or other window contents
 ### 5.3 Grok Build
 
 - Empty `provider`, `model`, `effort`, permission, and sandbox overrides are omitted so the native CLI user/global configuration is inherited;
-- Prompt and instruction text are written to a prompt file and must not appear in process argv;
-- Unknown high-privilege requests still fail closed; native approvals that the adapter cannot represent are rejected rather than auto-allowed.
+- Prompt and instruction text travel through the long-lived ACP stdio connection rather than process argv. Configured credentials travel only in the child environment, and known credential values are redacted from Grok runtime logs and diagnostics;
+- PairRoom advertises `terminal=false`, so Grok Build retains native tool execution instead of delegating a terminal to PairRoom;
+- Standard permission requests enter the Room approval lifecycle, cancellation resolves pending requests as cancelled, and unknown high-privilege reverse requests fail closed rather than auto-allowing.
 
 ### 5.4 Approval lifecycle
 
