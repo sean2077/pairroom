@@ -32,7 +32,7 @@ Durable `ActorID` values identify the two Room slots: `claude` is Agent 1 and `c
 
 `RuntimeKind` selects the native harness bound to a slot: Claude Code, Codex, or Grok Build. Either slot may select any supported runtime, including the same runtime twice.
 
-Every adapter must emit the configured slot actor on events. Never hard-code a vendor as the event actor. Display names may show the selected runtime, but persistence, routing mentions (`@claude` / `@codex` / `@peer`), and Binding ownership stay on the slot.
+Every adapter must emit the configured slot actor on events. Never hard-code a vendor as the event actor. Persistence and Binding ownership stay on the slot, while public display names and `mention_handle` values derive from the current runtime assignment. Duplicate runtimes use stable slot-order suffixes `0/1`.
 
 ## State ownership
 
@@ -41,7 +41,7 @@ Every adapter must emit the configured slot actor on events. Never hard-code a v
 | Project / Room registration and Binding | Service registry and Room service events |
 | Per-Room Runtime/Provider/model/policy selection | schema-v2 `service.room.provisioned` event (`Room.agents`) |
 | CC Switch Profile contents and credentials | CC Switch schema-18 database; read afresh for creation validation and activation |
-| Messages, approvals, roles, Workflow, Turn summary | Room Event Log |
+| Messages, approvals, roles, FIFO delivery state, Turn summary | Room Event Log |
 | Current native process / stdout / request ID | Agent adapter |
 | live source tree | Driver workspace |
 | review filesystem view | Reviewer snapshot |
@@ -54,7 +54,7 @@ UI, prompt, desktop shell, or in-memory cache must not override durable authorit
 
 ### Single owner
 
-A Room has at most one active native Turn owner. Cross-Agent messages, explicit Agent peer mentions, and `next_turn` enter the Room FIFO. The scheduler submits the next item only after a reliable terminal boundary. When a human asks both Agents to interact, work still starts with the current Driver, who must give an explicit peer address. Implicit Agent relay without a direct peer mention still requires a valid `HANDOFF` and `NEXT`.
+A Room has at most one active native Turn owner. Cross-Agent messages and explicit `queue` intent enter the Room FIFO. Same-target `steer` asks the adapter to inject into the active native Turn; unavailable or rejected steering queues the same Message exactly once, while an unknown result fails for explicit Retry. An Agent reply creates another FIFO item only when its visible text contains the other participant's exact current handle. No mention ends relay.
 
 ### Diagnostic is not terminal
 
@@ -81,7 +81,7 @@ Desktop startup follows a single-owner decision: validated explicit Management U
 - `internal/service/`: Project / Room lifecycle, Binding, and runtime capacity;
 - `internal/ccswitch/`: pinned, query-only CC Switch schema adapter and secret-safe process materialization;
 - `internal/webui/`: shared embedded i18next, bilingual catalogs, locale formatting, and theme runtime;
-- `internal/room/`: Event Log projection, scheduler, Workflow, and approvals;
+- `internal/room/`: Event Log projection, single-owner scheduler, mention routing, and approvals;
 - `internal/agent/`: Claude Code / Codex / Grok Build native protocol adapters; each adapter emits the configured slot actor;
 - `internal/server/`: Management Shell, Room View, HTTP, and SSE;
 - `internal/store/`: JSONL persistence;
@@ -92,7 +92,7 @@ Desktop startup follows a single-owner decision: validated explicit Management U
 
 ## Runtime lifecycle
 
-The Service can activate or reclaim a Room runtime according to capacity and idle policy. Reclaiming a native process does not delete the Room. Reactivation restores the durable projection and session binding, but does not automatically replay the in-process FIFO.
+The Service can activate or reclaim a Room runtime according to capacity and idle policy. Reclaiming a native process does not delete the Room. Reactivation restores the durable projection, session Binding, and Room-owned FIFO entries that never crossed a native boundary. A delivery persisted as `submitting` has unknown native ownership after a crash and fails for explicit Retry instead of being replayed.
 
 Role / workspace switches must share the same safety boundary as delivery serialization, so a reviewer snapshot is not captured while the Driver is still mutating the live tree.
 
@@ -107,6 +107,7 @@ PairRoom reads only CC Switch v3.20.1/schema 18. The database connection uses `m
 ## Shared presentation preferences
 
 Management, Room View, and Desktop startup load one embedded i18next 26.4.2 runtime and the same `en`/`zh-CN` semantic-key catalogs. Browser language chooses the first locale, `pairroom.lang` persists later choices, and English is the fallback. User content, host paths, and raw native Runtime output bypass translation. Theme selection uses the shared `pairroom.theme` `system|light|dark` value. Management broadcasts changes to embedded Room surfaces; a standalone Room retains its own control while an embedded Room hides it.
+Empty Provider/model/effort/instructions and runtime-policy overrides inherit the selected native CLI's user/global configuration. Codex uses one long-lived App Server with `turn/start`, `turn/steer`, and `turn/interrupt`. Claude Code uses its long-lived streaming session but reports same-Turn steering unavailable. Grok Build uses one long-lived `grok --no-auto-update agent stdio` ACP process with exact session loading, native permission requests, cancellation, and the `x.ai/interject` extension (with a legacy `_x.ai/interject` fallback); PairRoom advertises `terminal=false` so it does not take over Grok's tool execution. Prompt and instruction text never enters Grok process argv.
 
 ## Web updates and native windows
 
@@ -120,7 +121,7 @@ The Management Shell is Room-centric: the sidebar groups by Project, and in-app 
 
 - No distributed multi-node queue;
 - No promise of automatic migration for arbitrary old Event Logs;
-- Do not turn the two Agents into an unbounded group chat;
+- No implicit broadcast, automatic A/B rotation, or hidden adapter queue;
 - Do not hide native CLI permissions, approvals, or failures;
 - Do not treat Mock E2E as a substitute for real vendor E2E;
 - Do not maintain a second business UI, Service, or storage format for the desktop host.

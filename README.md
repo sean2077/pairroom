@@ -20,8 +20,9 @@ PairRoom does not let two Agents wake each other concurrently like an IM group c
 user
   -> current Agent completes one native Turn
   -> reliable terminal boundary
-  -> explicit @peer or HANDOFF + NEXT
-  -> next Room FIFO item
+  -> exact current peer handle, only when another response is needed
+  -> full response enters the Room FIFO
+  -> no peer handle ends the relay
 ```
 
 This is not a mechanical A/B/A/B message rotation. The current Agent can run tools, update a plan, and accept steering inside one native Turn. The other Agent can start only after a reliable Turn-complete boundary.
@@ -30,8 +31,9 @@ Key properties:
 
 - **Human authority**: the user can choose the target Agent, override later flow, approve, cancel, or stop;
 - **Single owner**: two native runtimes never own execution at the same time, even when both slots use the same runtime;
-- **Explicit handoff**: an Agent that addresses `@agent1`, `@agent2`, `@claude`, `@codex`, `@grok`, or `@peer` hands the reply to that peer. `@claude`/`@codex` remain Agent 1/Agent 2 slot aliases and also resolve to a unique matching runtime. When a human asks both Agents to interact, that address must be written; speaking only to the human does not start the other Agent. Without an explicit address, the reply must include both `HANDOFF` and `NEXT`. `@human`/`@user` returns the decision to the user;
-- **Fail closed**: a process restart does not replay the in-memory FIFO, avoiding duplicate side effects;
+- **Exact dynamic mentions**: a unique runtime uses `@claude`, `@codex`, or `@grok`; duplicate runtimes use stable slot suffixes such as `@codex0` and `@codex1`. Only the other Agent's exact current handle relays a complete response after the native Turn boundary. No mention ends the relay, while `@user` always returns the decision to the user;
+- **Durable FIFO, fail-closed submission**: queued work that never crossed the native boundary resumes after restart; an uncertain native submission is never replayed automatically;
+- **No relay ceiling**: PairRoom does not count Agent hops. Agents are instructed to omit the peer handle once another independent response is no longer necessary, and the user can cancel, interrupt, or redirect explicitly;
 - **Native harness first**: PairRoom does not rewrite the Claude Code, Codex, or Grok Build tool loops or permission models.
 
 ## Install
@@ -64,7 +66,7 @@ After the Management Shell opens:
 1. Register a local Git Project;
 2. Create a Room;
 3. Choose Driver / Reviewer;
-4. Send a single-Agent task, or describe a sequential workflow;
+4. Send a task to one Agent and let it name the other only when another response is necessary;
 5. Watch Turn, tool activity, approvals, delivery, and error state in Room View.
 
 Before using a real Runtime, confirm that each selected CLI (`claude`, `codex`, and/or `grok`) is installed, authenticated for its selected Provider, and can work independently in the target repository. The create-Room catalog shows unavailable Runtimes and unsupported CC Switch Profiles without making network model-discovery requests. Full steps are in [Getting Started](docs/GETTING_STARTED.md).

@@ -63,6 +63,23 @@ func open(dir string, create bool) (*JSONLStore, error) {
 			return nil, fmt.Errorf("event log is not a regular file: %s", path)
 		}
 	}
+	// Only a caller creating a genuinely new empty event log may create the
+	// schema marker. An existing directory opened through OpenExisting is an
+	// already-published Room; a missing marker there is legacy/ambiguous state
+	// and must fail closed rather than being silently upgraded.
+	allowMetadataCreate := create
+	if info, err := os.Stat(path); err == nil {
+		allowMetadataCreate = create && info.Size() == 0
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("stat event log: %w", err)
+	}
+	store := &JSONLStore{dir: dir, path: path}
+	// Schema is the compatibility boundary. Check it before repairing or
+	// decoding Event Log bytes so an old Room cannot be partially interpreted
+	// or mutated by a build that explicitly provides no migration.
+	if err := store.ensureMetadata(allowMetadataCreate); err != nil {
+		return nil, err
+	}
 	if err := repairEventLog(path, create); err != nil {
 		return nil, err
 	}
@@ -74,7 +91,7 @@ func open(dir string, create bool) (*JSONLStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open event log: %w", err)
 	}
-	store := &JSONLStore{dir: dir, path: path, file: file}
+	store.file = file
 	events, err := store.Load()
 	if err != nil {
 		_ = file.Close()
@@ -82,10 +99,6 @@ func open(dir string, create bool) (*JSONLStore, error) {
 	}
 	if len(events) > 0 {
 		store.lastSeq = events[len(events)-1].Seq
-	}
-	if err := store.ensureMetadata(); err != nil {
-		_ = file.Close()
-		return nil, err
 	}
 	return store, nil
 }
@@ -139,7 +152,7 @@ func repairEventLog(path string, create bool) error {
 	}
 }
 
-func (s *JSONLStore) ensureMetadata() error {
+func (s *JSONLStore) ensureMetadata(allowCreate bool) error {
 	const name = "metadata.json"
 	path := filepath.Join(s.dir, name)
 	if _, err := os.Stat(path); err == nil {
@@ -153,14 +166,15 @@ func (s *JSONLStore) ensureMetadata() error {
 		if metadata.Format != "" && metadata.Format != "pairroom-jsonl" {
 			return fmt.Errorf("unsupported event metadata format %q", metadata.Format)
 		}
-		if metadata.SchemaVersion > version.StoreSchema {
-			return fmt.Errorf("event store schema %d is newer than supported schema %d", metadata.SchemaVersion, version.StoreSchema)
+		if metadata.SchemaVersion != version.StoreSchema {
+			return fmt.Errorf("event store schema %d is unsupported; this build requires schema %d and provides no migration", metadata.SchemaVersion, version.StoreSchema)
 		}
-		if metadata.SchemaVersion == version.StoreSchema {
-			return nil
-		}
+		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat event metadata: %w", err)
+	}
+	if !allowCreate {
+		return errors.New("event store metadata is missing; legacy stores are not migrated")
 	}
 	return s.SaveJSON(name, map[string]any{
 		"format":         "pairroom-jsonl",

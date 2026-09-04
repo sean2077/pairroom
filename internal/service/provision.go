@@ -272,9 +272,13 @@ func writeInitialRoomLog(dir string, project Project, room Room, payload roomPro
 	if err := appendEvent("room.settings.updated", model.ActorSystem, model.DefaultRoomSettings()); err != nil {
 		return err
 	}
+	identities := model.ParticipantIdentities(map[model.ActorID]model.RuntimeKind{
+		model.ActorClaude: room.Agents[model.ActorClaude].Runtime,
+		model.ActorCodex:  room.Agents[model.ActorCodex].Runtime,
+	})
 	participants := []model.ParticipantSnapshot{
-		{ID: model.ActorClaude, DisplayName: model.ParticipantDisplayName(model.ActorClaude, room.Agents[model.ActorClaude].Runtime), Role: model.RoleDriver, State: model.StateStopped, Model: room.Agents[model.ActorClaude].Model, RuntimeKind: room.Agents[model.ActorClaude].Runtime, SessionID: room.Bindings[model.ActorClaude].SessionID},
-		{ID: model.ActorCodex, DisplayName: model.ParticipantDisplayName(model.ActorCodex, room.Agents[model.ActorCodex].Runtime), Role: model.RoleReviewer, State: model.StateStopped, Model: room.Agents[model.ActorCodex].Model, RuntimeKind: room.Agents[model.ActorCodex].Runtime, SessionID: room.Bindings[model.ActorCodex].SessionID},
+		{ID: model.ActorClaude, DisplayName: identities[model.ActorClaude].DisplayName, MentionHandle: identities[model.ActorClaude].MentionHandle, Role: model.RoleDriver, State: model.StateStopped, Model: room.Agents[model.ActorClaude].Model, RuntimeKind: room.Agents[model.ActorClaude].Runtime, SessionID: room.Bindings[model.ActorClaude].SessionID},
+		{ID: model.ActorCodex, DisplayName: identities[model.ActorCodex].DisplayName, MentionHandle: identities[model.ActorCodex].MentionHandle, Role: model.RoleReviewer, State: model.StateStopped, Model: room.Agents[model.ActorCodex].Model, RuntimeKind: room.Agents[model.ActorCodex].Runtime, SessionID: room.Bindings[model.ActorCodex].SessionID},
 	}
 	for _, participant := range participants {
 		if err := appendEvent("participant.updated", participant.ID, participant); err != nil {

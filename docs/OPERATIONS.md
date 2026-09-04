@@ -56,7 +56,7 @@ Available actions are decided by the preconditions returned by the current UI / 
 
 ## Capacity and idle reclaim
 
-The Service can limit the number of concurrently active Rooms and reclaim Runtimes by idle policy. Reclaim only stops processes and frees resources; it does not delete a durable Room. The next activation rebuilds the adapter, but the Room FIFO does not survive across processes.
+The Service can limit the number of concurrently active Rooms and reclaim Runtimes by idle policy. Reclaim only stops processes and frees resources; it does not delete a durable Room. The next activation rebuilds the adapter and restores Room-owned FIFO entries that never crossed native submission; accepted or uncertain native work is left for explicit inspection and Retry.
 
 ## Backup
 
@@ -72,7 +72,7 @@ Backup success is defined by manifest / checksum verification, not by a compress
 
 ## Graceful shutdown
 
-A normal exit should stop active adapters, settle in-flight projections, close the store, and clean reviewer workspaces. After a forced kill, the next start fails closed; it does not guess whether the previous native operation completed.
+A normal exit should stop active adapters, settle in-flight projections, close the store, and clean reviewer workspaces. After a forced kill, the next start restores only Room-owned FIFO entries that were still before native submission and fails uncertain submission windows closed; it never guesses whether an accepted native operation completed.
 
 An embedded Service used by the desktop host follows the same shutdown contract. The Wails window lifecycle cannot bypass Room Runtime drain.
 

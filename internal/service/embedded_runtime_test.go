@@ -49,10 +49,9 @@ func TestEmbeddedRuntimesIsolateRoomStateBindingsAndHTTPAuth(t *testing.T) {
 	}
 
 	factory := EmbeddedRuntimeFactory(registry, EmbeddedRuntimeConfig{
-		Mock:        true,
-		RoutingMode: model.RoutingTurns,
-		Claude:      agent.Config{MockDelay: 10 * time.Millisecond},
-		Codex:       agent.Config{MockDelay: 10 * time.Millisecond},
+		Mock:   true,
+		Claude: agent.Config{MockDelay: 10 * time.Millisecond},
+		Codex:  agent.Config{MockDelay: 10 * time.Millisecond},
 	})
 	manager, err := NewRuntimeManager(registry, factory, RuntimeManagerConfig{
 		Limit: 2, IdleTimeout: time.Hour, PollInterval: 5 * time.Millisecond, CloseTimeout: 3 * time.Second,
@@ -596,7 +595,6 @@ func TestEmbeddedRuntimeCloseTimeoutIsRetryableAndDoesNotInterruptTurn(t *testin
 	}
 	value, err := startEmbeddedRuntime(context.Background(), nil, project, durable, EmbeddedRuntimeConfig{
 		Mock:              true,
-		RoutingMode:       model.RoutingTurns,
 		Claude:            agent.Config{MockDelay: 250 * time.Millisecond},
 		Codex:             agent.Config{MockDelay: 250 * time.Millisecond},
 		DrainPollInterval: 2 * time.Millisecond,

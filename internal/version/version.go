@@ -7,7 +7,7 @@ import (
 
 const (
 	Current     = "1.2.0"
-	StoreSchema = 8
+	StoreSchema = 9
 )
 
 // Commit, BuildDate, LastTag, and CommitsSinceTag are populated by the make

@@ -85,6 +85,20 @@ func TestClaudeInterruptedResultIsCancelledWithoutFinalMessage(t *testing.T) {
 	}
 }
 
+func TestClaudeUnmatchedResultIsDiagnosticOnly(t *testing.T) {
+	var events []model.RuntimeEvent
+	adapter := NewClaude(Config{}, func(event model.RuntimeEvent) { events = append(events, event) })
+	adapter.handleLine([]byte(`{"type":"result","subtype":"success","result":"stale native answer"}`))
+	for _, event := range events {
+		if event.Kind == model.RuntimeTurnCompleted || event.Kind == model.RuntimeFinal {
+			t.Fatalf("unmatched Claude result created a Room boundary: %#v", events)
+		}
+	}
+	if len(events) != 1 || events[0].Kind != model.RuntimeLog || events[0].Name != "result.unmatched" {
+		t.Fatalf("unexpected unmatched result projection: %#v", events)
+	}
+}
+
 func TestClaudeInitUpdatesSessionAndRuntimeInfo(t *testing.T) {
 	var events []model.RuntimeEvent
 	adapter := NewClaude(Config{Model: "configured"}, func(event model.RuntimeEvent) {
@@ -200,7 +214,7 @@ func TestClaudeUnsupportedControlRequestReturnsProtocolError(t *testing.T) {
 	}
 }
 
-func TestClaudeSubmitQueuesInputExactlyOnce(t *testing.T) {
+func TestClaudeStartTurnWritesInputExactlyOnce(t *testing.T) {
 	var events []model.RuntimeEvent
 	adapter := NewClaude(Config{}, func(event model.RuntimeEvent) {
 		events = append(events, event)
@@ -215,15 +229,11 @@ func TestClaudeSubmitQueuesInputExactlyOnce(t *testing.T) {
 	adapter.state = model.StateIdle
 	adapter.protocolSent = true
 
-	state, err := adapter.Submit(context.Background(), model.AgentInput{MessageID: "msg-once", ThreadID: "thread-1"})
-	if err != nil {
+	if err := adapter.StartTurn(context.Background(), model.AgentInput{MessageID: "msg-once", ThreadID: "thread-1"}); err != nil {
 		t.Fatal(err)
 	}
-	if state != model.DeliveryStarted {
-		t.Fatalf("unexpected delivery state: %q", state)
-	}
 	if len(adapter.pending) != 1 || adapter.pending[0].input.MessageID != "msg-once" {
-		t.Fatalf("input was not queued exactly once: %#v", adapter.pending)
+		t.Fatalf("input was not tracked exactly once: %#v", adapter.pending)
 	}
 	if got := bytes.Count(writer.Bytes(), []byte{'\n'}); got != 1 {
 		t.Fatalf("expected one stream-json input line, got %d: %q", got, writer.String())
@@ -334,6 +344,25 @@ func TestClaudeRoleMapsReviewerToPlanModeWhileStopped(t *testing.T) {
 	}
 	if adapter.role != model.RoleDriver || adapter.cfg.PermissionMode != "auto" {
 		t.Fatalf("driver policy was not restored: role=%q mode=%q", adapter.role, adapter.cfg.PermissionMode)
+	}
+}
+
+func TestClaudeEmptyPermissionModeReturnsToNativeInheritance(t *testing.T) {
+	adapter := NewClaude(Config{}, func(model.RuntimeEvent) {})
+	if adapter.baseMode != "" || adapter.cfg.PermissionMode != "" {
+		t.Fatalf("empty permission override was synthesized: base=%q current=%q", adapter.baseMode, adapter.cfg.PermissionMode)
+	}
+	if err := adapter.SetRole(context.Background(), model.RoleReviewer); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.cfg.PermissionMode != "plan" {
+		t.Fatalf("reviewer mode = %q, want plan", adapter.cfg.PermissionMode)
+	}
+	if err := adapter.SetRole(context.Background(), model.RoleDriver); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.cfg.PermissionMode != "" {
+		t.Fatalf("driver retained a synthesized permission override: %q", adapter.cfg.PermissionMode)
 	}
 }
 

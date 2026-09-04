@@ -41,6 +41,8 @@ Error responses retain the English `error` field and add a stable `code`. Errors
 
 Status requests return the current projection. Command requests first record an auditable event, then drive the native runtime asynchronously. HTTP success means only that the control plane accepted the command. Judge final execution from message processing, Turn summary, or SSE events.
 
+`POST /api/v1/messages` accepts one starting Agent and an optional `intent` of `steer` or `queue`; omission defaults to `steer`. Removed intent values and removed Room settings are rejected by the strict request decoder. Participant snapshots expose the stable slot `id`, runtime-derived `display_name`, and exact `mention_handle`. `PUT /api/v1/settings` currently accepts only `stall_warning_seconds`.
+
 ## SSE and reconnect
 
 Durable events carry a monotonic sequence and can be resumed after disconnect. High-frequency text delta / command output and other transient telemetry may be non-persistent; token-by-token replay is not guaranteed after disconnect. After reconnect, clients should fetch a snapshot again, then continue from the durable sequence.

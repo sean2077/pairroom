@@ -169,7 +169,7 @@
                 <label><span class="field-label" data-i18n="agent.reviewerPolicy">Ordinary Reviewer policy</span><select id="claude-reviewer-policy"><option value="enforced" data-i18n="agent.reviewerEnforced">Enforce read-only Reviewer protection</option><option value="explicit" data-i18n="agent.reviewerExplicit">Danger: apply the explicit Runtime policy</option></select></label>
                 <label class="agent-instructions"><span class="field-label" data-i18n="agent.instructions">Additional instructions</span><textarea id="claude-instructions" rows="3" maxlength="65536"></textarea></label>
               </div>
-              <p id="claude-reviewer-warning" class="callout warning compact-callout" hidden data-i18n="agent.reviewerExplicitWarning">Ordinary Reviewer turns may modify the workspace. Plan, review, and audit Workflow stages remain read-only.</p>
+              <p id="claude-reviewer-warning" class="callout warning compact-callout" hidden data-i18n="agent.reviewerExplicitWarning">Ordinary Reviewer turns may modify the workspace when explicit Runtime policy is selected.</p>
             </details>
             <label class="choice-card"><input type="radio" name="claude-mode" value="new" checked=""><span><strong data-i18n="ui.createSession">Create Session</strong><small data-i18n="ui.theIdentityIsMaterializedAfterTheCliAcceptsTheFirstRealTurn">The Identity is materialized after the CLI accepts the first real Turn</small></span></label>
             <label class="choice-card"><input type="radio" name="claude-mode" value="existing"><span><strong data-i18n="ui.reuseExisting">Reuse Existing</strong><small data-i18n="ui.resumeTheExactExistingVendorContext">Resume the exact existing vendor context</small></span></label>
@@ -191,7 +191,7 @@
                 <label><span class="field-label" data-i18n="agent.reviewerPolicy">Ordinary Reviewer policy</span><select id="codex-reviewer-policy"><option value="enforced" data-i18n="agent.reviewerEnforced">Enforce read-only Reviewer protection</option><option value="explicit" data-i18n="agent.reviewerExplicit">Danger: apply the explicit Runtime policy</option></select></label>
                 <label class="agent-instructions"><span class="field-label" data-i18n="agent.instructions">Additional instructions</span><textarea id="codex-instructions" rows="3" maxlength="65536"></textarea></label>
               </div>
-              <p id="codex-reviewer-warning" class="callout warning compact-callout" hidden data-i18n="agent.reviewerExplicitWarning">Ordinary Reviewer turns may modify the workspace. Plan, review, and audit Workflow stages remain read-only.</p>
+              <p id="codex-reviewer-warning" class="callout warning compact-callout" hidden data-i18n="agent.reviewerExplicitWarning">Ordinary Reviewer turns may modify the workspace when explicit Runtime policy is selected.</p>
             </details>
             <label class="choice-card"><input type="radio" name="codex-mode" value="new" checked=""><span><strong data-i18n="ui.createThread">Create Thread</strong><small data-i18n="ui.theIdentityIsMaterializedAfterTheCliAcceptsTheFirstRealTurn">The Identity is materialized after the CLI accepts the first real Turn</small></span></label>
             <label class="choice-card"><input type="radio" name="codex-mode" value="existing"><span><strong data-i18n="ui.reuseExisting">Reuse Existing</strong><small data-i18n="ui.resumeTheExactExistingVendorContext">Resume the exact existing vendor context</small></span></label>

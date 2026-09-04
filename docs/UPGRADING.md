@@ -30,18 +30,11 @@ Existing schema-v1 Rooms are read without modification and shown as `Legacy defa
 
 ### Routing migration
 
-The routing policy supports only:
+The current Store schema is `9`. PairRoom rejects every older or newer Room before Event Log replay and provides no migration. Back up old Room data, keep the matching old binary if you need to inspect it, and create a new Room for the current release. Do not rewrite JSONL or metadata to fake a migration.
 
-```json
-{"routing_mode": "turns"}
-```
+Remove `routing_mode` and `max_agent_hops` from JSON configuration and remove `--routing` / `--max-hops` from automation. The strict decoder and CLI reject those removed interfaces. HTTP clients must send only `steer` or `queue` Message intents; `steer` is the default. Old `append`, `next_turn`, and `supersede` values are invalid.
 
-`manual`, `mentions`, and `roundtable` are incompatible and are not silently normalized. When upgrading an old install:
-
-- change the configuration file to `turns` explicitly;
-- remove old `--routing` values from CLI automation;
-- back up persisted Rooms that contain old routing events, then rebuild them;
-- do not rewrite JSONL to fake a migration.
+Workflow state, compilation, events, approval gates, and UI have been removed. Express the current task to one Agent, select Driver / Reviewer / Peer roles directly, and use native approvals. Agent relay now recognizes only runtime-derived exact handles: unique runtimes use `@claude`, `@codex`, or `@grok`; duplicate runtimes use stable `0/1` suffixes. Old aliases no longer route, and an unaddressed user send that relies on one is rejected; old control markers are ordinary text.
 
 JSON keys `claude` and `codex` remain durable Agent 1 / Agent 2 slots. Add `runtime` (`claude` | `codex` | `grok`) per slot when selecting a non-default harness. Empty `provider`, `model`, `effort`, and `instructions` now inherit the selected native CLI's user/global configuration.
 
@@ -58,9 +51,9 @@ Then verify:
 
 - configuration parses strictly;
 - the Project registry can be read;
-- a new Mock Room can complete a multi-Turn FIFO;
+- a new Mock Room can complete exact-handle relay and a multi-Turn FIFO;
 - backup verification succeeds;
-- real mode first completes a read-only single-Agent Turn, then reviewer / handoff.
+- real mode first completes a read-only single-Agent Turn, then an explicitly addressed Reviewer Turn.
 
 ## Rollback
 

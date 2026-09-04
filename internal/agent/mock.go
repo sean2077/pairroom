@@ -84,23 +84,25 @@ func (m *MockAdapter) Start(ctx context.Context) error {
 	return nil
 }
 
-func (m *MockAdapter) Submit(ctx context.Context, input model.AgentInput) (model.DeliveryState, error) {
+func (m *MockAdapter) StartTurn(ctx context.Context, input model.AgentInput) error {
 	if err := m.Start(ctx); err != nil {
-		return model.DeliveryFailed, err
+		return err
 	}
 	m.lifecycle.Lock()
 	defer m.lifecycle.Unlock()
-	state := m.State()
-	status := model.DeliveryStarted
-	if state == model.StateWorking || len(m.queue) > 0 {
-		status = model.DeliveryQueued
+	if state := m.State(); state == model.StateWorking || state == model.StateWaiting || len(m.queue) > 0 {
+		return errors.New("mock runtime already has an active turn")
 	}
 	select {
 	case m.queue <- input:
-		return status, nil
+		return nil
 	case <-ctx.Done():
-		return model.DeliveryFailed, ctx.Err()
+		return ctx.Err()
 	}
+}
+
+func (m *MockAdapter) Steer(context.Context, model.AgentInput) SteerOutcome {
+	return SteerOutcome{State: SteerUnavailable, Detail: "mock runtime does not inject into an active turn"}
 }
 
 func (m *MockAdapter) loop(ctx context.Context) {
@@ -216,15 +218,37 @@ func (m *MockAdapter) response(input model.AgentInput) string {
 		body = body[:140] + "…"
 	}
 	if m.cfg.Actor == model.ActorClaude {
-		if input.From == model.ActorUser && input.Hop == 0 {
-			return fmt.Sprintf("我先从架构边界和风险入手。对“%s”，建议保持一个写入者、一个独立审查者，并把讨论消息与执行事件分层。@codex 请重点检查并发控制、故障恢复和是否存在更简单的实现。", body)
+		if input.From == model.ActorUser && mockShouldRelay(input.Text) {
+			return fmt.Sprintf("我先从架构边界和风险入手。对“%s”，建议保持一个写入者、一个独立审查者，并把讨论消息与执行事件分层。%s 请重点检查并发控制、故障恢复和是否存在更简单的实现。", body, input.PeerHandle)
+		}
+		if input.From == model.ActorUser {
+			return fmt.Sprintf("我先从架构边界和风险入手。对“%s”，建议保持一个写入者、一个独立审查者，并把讨论消息与执行事件分层。", body)
 		}
 		return "我接受其中关于状态竞态的提醒，但建议保留事件溯源，因为它能支撑断线重放和审计。下一步我会按用户指定的角色执行；当前没有必须继续追问对方的问题。"
 	}
-	if input.From == model.ActorUser && input.Hop == 0 {
-		return fmt.Sprintf("我会从可执行性和失败模式审查“%s”。初步意见：应优先实现稳定的消息投递、turn 关联和取消语义，再扩展自动编排。@claude 请说明你准备如何避免双写和无限互相唤醒。", body)
+	if input.From == model.ActorUser && mockShouldRelay(input.Text) {
+		return fmt.Sprintf("我会从可执行性和失败模式审查“%s”。初步意见：应优先实现稳定的消息投递、turn 关联和取消语义。%s 请说明你准备如何避免双写和无意义的互相唤醒。", body, input.PeerHandle)
 	}
-	return "审查结论：采用单一房间事件日志、显式 hop budget 和每个 runtime 独立 session 是合理的。还需确保用户插话优先于自动路由，并在进程重启后恢复 session ID。"
+	if input.From == model.ActorUser {
+		return fmt.Sprintf("我会从可执行性和失败模式审查“%s”。初步意见：应优先实现稳定的消息投递、turn 关联和取消语义。", body)
+	}
+	return "审查结论：采用单一房间事件日志、精确点名和每个 runtime 独立 session 是合理的。还需确保用户插话优先于待发送的 Agent 路由，并在进程重启后恢复 session ID。"
+}
+
+// mockShouldRelay keeps the deterministic fixture aligned with the v5
+// convergence rule: a mock Agent only addresses its peer when the input is
+// visibly collaborative (an explicit handle or a direct greeting request),
+// rather than manufacturing an acknowledgement loop for every user message.
+func mockShouldRelay(text string) bool {
+	lower := strings.ToLower(text)
+	for _, cue := range []string{
+		"@", "introduce", "greet", "each other", "collaborat", "互相", "打个招呼", "介绍自己",
+	} {
+		if strings.Contains(lower, cue) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *MockAdapter) Interrupt(context.Context) error {

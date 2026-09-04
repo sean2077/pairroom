@@ -7,10 +7,11 @@
 - `make dev` stops an installed PairRoom daemon, recovers a crash-stale `service.lock` only after the recorded PID is gone, starts the current-tree Management Service, and opens the Management Shell. `make stop` is the stop-only helper. Legacy `make run` / `make demo` still call `pairroom serve`.
 
 - Management, Room View, and Desktop startup share an embedded i18next 26.4.2 runtime, semantic `en`/`zh-CN` catalogs, locale-aware formatting, stable error-code localization, and the persistent `pairroom.lang` preference.
-- New Rooms snapshot immutable Runtime, CC Switch ProviderRef, editable Model, effort, instructions, and Runtime-specific policy for both Agent slots. Both slots may use the same Runtime/Profile; ordinary Reviewer danger overrides never weaken read-only plan/review/audit Workflow stages.
+- New Rooms snapshot immutable Runtime, CC Switch ProviderRef, editable Model, effort, instructions, and Runtime-specific policy for both Agent slots. Both slots may use the same Runtime/Profile; ordinary Reviewer danger overrides never weaken the Reviewer workspace boundary.
 - A query-only CC Switch v3.20.1/schema 18 catalog supports directly materializable Claude, Codex Responses, and Grok Build API-key Profiles, while OAuth/proxy/failover entries remain visible but disabled. Profile secrets are isolated to the selected child-process environment.
 - Management topbar and Room tabstrip expose the shared `system | light | dark` theme; embedded Rooms follow Management and standalone Rooms retain their own control.
-- Grok Build headless streaming integration uses `--prompt-file` and `--resume`, keeps prompt/instruction text out of process argv, and emits the configured slot actor.
+- Each Room slot can run Claude Code, Codex, or Grok Build, including two instances of the same runtime. Per-slot ProviderRef, model, effort, instructions, and native policy are immutable Room selections.
+- Grok Build uses a long-lived `grok --no-auto-update agent stdio` ACP connection with initialization and authentication, lazy `session/new`, exact `session/load`, native permission and cancellation handling, session close, attachment-aware prompts, and `x.ai/interject` steering with a legacy `_x.ai/interject` fallback. New sessions receive collaboration rules through `_meta.rules`; resumed sessions receive one current bootstrap in their first PairRoom prompt. Prompt, instruction, and secret text stays out of process argv.
 - GitHub Releases now attach desktop packages (`pairroom-desktop-vX.Y.Z-…`) alongside CLI binaries (`pairroom-cli-vX.Y.Z-…`). Windows desktop uses `-setup.exe` because `.exe` alone collides with the CLI; Linux `.deb`/`.AppImage` and macOS `.app.zip` rely on the suffix.
 - `curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh | sh` installs the CLI for the current OS/arch.
 
@@ -18,8 +19,18 @@
 
 - The root module now requires Go 1.25 and pins CGo-free `modernc.org/sqlite` 1.58.0. Dependency checks use a strict reviewed allowlist, release SBOMs enumerate the selected module graph, and release payloads include third-party notices.
 - PairRoom-owned `providers`, `cc_connect`, string Provider assignments, and per-slot command/args are removed. Runtime command templates now live under `runtimes.claude|codex|grok`; migration errors point to the backup-first upgrade guide.
-- Provisioning events and Registry checkpoints advance to schema 2 for immutable Agent selections. Readers retain schema-1 Rooms as `Legacy defaults` without rewriting them; older binaries fail closed on new provisioning facts.
+- Provisioning events and Registry checkpoints use schema 2 for immutable Agent selections. Store schema is 9; older and newer Rooms are rejected without migration.
 - Maintained documentation is English. The root README is English, with Simplified Chinese in `README.zh-CN.md`. Slot identity (`claude`/`codex` ActorIDs) stays separate from runtime identity (`claude`/`codex`/`grok`).
+- `pairroom-protocol/v5` makes the other participant's exact runtime-derived `mention_handle` the sole Agent-relay signal. Unique runtimes use `@claude`, `@codex`, or `@grok`; duplicate runtimes use stable slot-order `0/1` suffixes in handles and display names. Matching is case-insensitive and ignores code, URLs, and email; `@user` wins and self-mentions do not route. No peer mention ends relay, and either Agent may deliver the final result.
+- Agent relay now forwards the complete visible response and attachments without truncation, accumulated history, or a fixed handoff packet. Newer human instructions cancel stale not-yet-started relays without implicitly interrupting the active native Turn.
+- Adapter delivery is split into `StartTurn` and typed `Steer` outcomes. `steer` is the default Message intent; unavailable or rejected same-Turn steering queues the same Message exactly once, unknown ownership fails for explicit Retry, and `queue` uses the Room FIFO. Claude reports steering unavailable, while Codex uses App Server `turn/steer`.
+- Store schema is `9`. Older and newer Rooms are rejected without migration. Room-owned FIFO entries that never crossed the native submission boundary resume after restart; an entry persisted in the submission window fails for explicit Retry to prevent duplicate execution.
+
+### Removed
+
+- Removed routing-mode and Agent-hop settings, flags, API fields, snapshots, exports, and Room controls. PairRoom applies no relay ceiling to consecutive explicit Agent mentions.
+- Removed Workflow compilation, stages, events, plan-revision approval gates, UI, protocol fields, and documentation, along with `append`, `next_turn`, and `supersede` Message intents and superseded processing state.
+- Removed routing aliases `@peer`, `@human`, `@all`, `@agent1`, and `@agent2`, plus all `PAIRROOM` control-marker behavior. Former aliases do not route (and an unaddressed user send that relies on one is rejected); former markers are ordinary visible text.
 
 ## [v1.2.0] — 2026-09-03
 

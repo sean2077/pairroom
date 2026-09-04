@@ -64,7 +64,7 @@ Project and Room lifecycle is managed by the `pairroom service` Management Shell
 - Argument, configuration, and security-precondition errors return a non-zero exit code;
 - CLI acceptance of a request does not mean a native Turn completed successfully;
 - A destructive command should first show the target and preconditions; scripts must check the exit code and output;
-- `protocol --routing` accepts only `turns`; legacy routing values fail immediately.
+- Removed routing and hop-limit flags are rejected; use the current command's `--help` instead of old automation examples.
 
 ## Source flag inventory
 
@@ -103,7 +103,6 @@ The following names are extracted from `cmd/pairroom/*.go`. Use them to find omi
 - `--json`
 - `--listen`
 - `--log-file`
-- `--max-hops`
 - `--mock`
 - `--n`
 - `--name`
@@ -112,7 +111,6 @@ The following names are extracted from `cmd/pairroom/*.go`. Use them to find omi
 - `--recover-stale-lock`
 - `--repo`
 - `--role`
-- `--routing`
 - `--runtime-limit`
 - `--shutdown-timeout`
 - `--stall-warning-seconds`

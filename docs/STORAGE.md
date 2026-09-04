@@ -4,14 +4,14 @@
 
 | Kind | Examples | After restart |
 |---|---|---|
-| Durable | Room metadata, message, delivery / processing projection, role, Workflow, Turn summary, resolved approval, Binding, attachment metadata | Replayed from the Event Log / registry |
-| Ephemeral | native process, current stdout connection, vendor request ID, active owner, Room FIFO, transient text delta | Not restored |
+| Durable | Room metadata, Message, FIFO delivery / processing projection, role, Turn summary, resolved approval, Binding, attachment metadata | Replayed from the Event Log / registry |
+| Ephemeral | native process, current stdout connection, vendor request ID, active owner, transient text delta | Not restored |
 
-PairRoom's durable transcript is not a persistent task queue. Any input that may already have produced side effects without a confirmed terminal is not executed again automatically after restart.
+Room-owned FIFO entries are persistent only while PairRoom can prove they did not cross the native submission boundary. Any input that may already have produced side effects without a confirmed ownership result is not executed again automatically.
 
 ## Event Log
 
-A Room uses an append-only JSONL store. On startup, events are replayed in order to rebuild the projection. Illegal events or unsupported routing state should fail explicitly instead of guessing a repair.
+A Room uses an append-only JSONL store. Metadata schema is checked before Event Log replay, then current-schema events are replayed in order to rebuild the projection. Schema `9` deliberately has no migration from older Rooms; illegal events fail explicitly instead of guessing a repair.
 
 The schema source of truth is `internal/model/types.go`, the event write / apply code, and `internal/store/`, not a hand-written fictional schema file in the docs.
 
@@ -22,10 +22,11 @@ High-frequency transient telemetry may stay off disk so token-by-token fsync doe
 After unexpected process exit or restart:
 
 1. native process state is reset;
-2. pending delivery / processing is settled into a fail-closed state;
-3. connection-local pending approvals expire;
-4. the Room FIFO is not rebuilt automatically;
-5. the user inspects the workspace and Event Log, then creates a new Retry message.
+2. `pending` / `queued` delivery is rebuilt into the Room FIFO in Event Log order;
+3. `submitting` delivery fails with explicit Retry guidance because native ownership is unknown;
+4. unfinished input already marked `started` / `injected` is cancelled without replay;
+5. connection-local pending approvals expire;
+6. the user inspects the workspace and Event Log before retrying uncertain or accepted work.
 
 Retry must generate a new auditable message ID. Reusing an old ID makes late vendor events ambiguous.
 
@@ -41,9 +42,9 @@ Stop or archive the related Room before backup, so “the files were copied” i
 - that the Project path still exists;
 - that the Binding's native session can be resumed;
 - that the Event Log can replay completely;
-- that old routing / schema is supported by the current release.
+- that the Room schema is exactly supported by the current release.
 
-Restoring a backup does not start unfinished old FIFO items.
+Restoring a current-schema backup may restart Room-owned FIFO entries that never crossed the native submission boundary. Accepted or uncertain native work is never replayed automatically.
 
 ## Corruption handling
 

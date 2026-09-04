@@ -74,25 +74,21 @@ type CCSwitch struct {
 }
 
 type File struct {
-	Listen              string            `json:"listen"`
-	RoomName            string            `json:"room_name,omitempty"`
-	RoutingMode         model.RoutingMode `json:"routing_mode"`
-	MaxAgentHops        int               `json:"max_agent_hops"`
-	StallWarningSeconds int               `json:"stall_warning_seconds"`
-	AutoStart           bool              `json:"auto_start"`
-	Token               string            `json:"token,omitempty"`
-	CCSwitch            CCSwitch          `json:"cc_switch,omitempty"`
-	Runtimes            RuntimeTemplates  `json:"runtimes"`
-	Claude              Agent             `json:"claude"`
-	Codex               Agent             `json:"codex"`
+	Listen              string           `json:"listen"`
+	RoomName            string           `json:"room_name,omitempty"`
+	StallWarningSeconds int              `json:"stall_warning_seconds"`
+	AutoStart           bool             `json:"auto_start"`
+	Token               string           `json:"token,omitempty"`
+	CCSwitch            CCSwitch         `json:"cc_switch,omitempty"`
+	Runtimes            RuntimeTemplates `json:"runtimes"`
+	Claude              Agent            `json:"claude"`
+	Codex               Agent            `json:"codex"`
 }
 
 func Defaults() File {
 	return File{
 		Listen:              "127.0.0.1:7332",
 		RoomName:            "Claude × Codex",
-		RoutingMode:         model.RoutingTurns,
-		MaxAgentHops:        6,
 		StallWarningSeconds: 300,
 		AutoStart:           true,
 		Runtimes: RuntimeTemplates{
@@ -202,12 +198,6 @@ func (c File) DefaultSelections() map[model.ActorID]model.AgentSelection {
 func (c File) Validate() error {
 	if c.Listen == "" {
 		return errors.New("listen address is required")
-	}
-	if !c.RoutingMode.Valid() {
-		return fmt.Errorf("invalid routing mode %q: only %q is supported", c.RoutingMode, model.RoutingTurns)
-	}
-	if c.MaxAgentHops < 1 || c.MaxAgentHops > 30 {
-		return errors.New("max_agent_hops must be between 1 and 30")
 	}
 	if c.StallWarningSeconds != -1 && (c.StallWarningSeconds < 30 || c.StallWarningSeconds > 86400) {
 		return errors.New("stall_warning_seconds must be -1 (disabled) or between 30 and 86400")

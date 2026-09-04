@@ -248,8 +248,6 @@ func runService(args []string) (resultErr error) {
 	mockFlag := flags.Bool("mock", false, "run deterministic mock agents instead of vendor CLIs")
 	noBrowserFlag := flags.Bool("no-browser", false, "do not open the Management Shell in a browser")
 	autoStartFlag := flags.Bool("auto-start", fileCfg.AutoStart, "start both agents when a Room runtime activates")
-	routingFlag := flags.String("routing", string(fileCfg.RoutingMode), "turns (the only supported routing mode)")
-	maxHopsFlag := flags.Int("max-hops", fileCfg.MaxAgentHops, "maximum Agent turns per Room chain")
 	stallWarningFlag := flags.Int("stall-warning-seconds", fileCfg.StallWarningSeconds, "warn when a working agent emits no runtime event; -1 disables")
 	claudeRuntime := flags.String("claude-runtime", fileCfg.Claude.Runtime, "Agent 1 runtime: claude, codex, or grok")
 	claudeCommand := flags.String("claude-command", fileCfg.Runtimes.Claude.Command, "Claude Code executable template")
@@ -290,13 +288,6 @@ func runService(args []string) (resultErr error) {
 	}
 	if *daemonControlFlag != "" && !filepath.IsAbs(*daemonControlFlag) {
 		return errors.New("daemon-control-file must be absolute")
-	}
-	routing := model.RoutingMode(*routingFlag)
-	if !routing.Valid() {
-		return fmt.Errorf("invalid routing mode %q: only %q is supported", *routingFlag, model.RoutingTurns)
-	}
-	if *maxHopsFlag < 1 || *maxHopsFlag > 30 {
-		return errors.New("max-hops must be between 1 and 30")
 	}
 	if *stallWarningFlag != -1 && (*stallWarningFlag < 30 || *stallWarningFlag > 86400) {
 		return errors.New("stall-warning-seconds must be -1 or between 30 and 86400")
@@ -345,8 +336,8 @@ func runService(args []string) (resultErr error) {
 	}
 	factory := service.EmbeddedRuntimeFactory(registry, service.EmbeddedRuntimeConfig{
 		ListenHost: "127.0.0.1", Mock: *mockFlag, AutoStart: *autoStartFlag,
-		RoutingMode: routing, MaxAgentHops: *maxHopsFlag, StallWarningSeconds: *stallWarningFlag,
-		Resolver: agentResolver,
+		StallWarningSeconds: *stallWarningFlag,
+		Resolver:            agentResolver,
 	})
 	runtimes, err := service.NewRuntimeManager(registry, factory, service.RuntimeManagerConfig{
 		Limit: *limitFlag, IdleTimeout: *idleFlag,
@@ -443,8 +434,6 @@ func runServe(args []string) error {
 	mockFlag := flags.Bool("mock", false, "run deterministic mock agents instead of vendor CLIs")
 	noBrowserFlag := flags.Bool("no-browser", false, "do not open the room in a browser")
 	autoStartFlag := flags.Bool("auto-start", fileCfg.AutoStart, "start both agents when the room opens")
-	routingFlag := flags.String("routing", string(fileCfg.RoutingMode), "turns (the only supported routing mode)")
-	maxHopsFlag := flags.Int("max-hops", fileCfg.MaxAgentHops, "maximum Agent turns per chain")
 	stallWarningFlag := flags.Int("stall-warning-seconds", fileCfg.StallWarningSeconds, "warn when a working agent emits no runtime event; -1 disables")
 	claudeRuntime := flags.String("claude-runtime", fileCfg.Claude.Runtime, "Agent 1 runtime: claude, codex, or grok")
 	claudeCommand := flags.String("claude-command", fileCfg.Runtimes.Claude.Command, "Claude Code executable template")
@@ -490,13 +479,6 @@ func runServe(args []string) error {
 		if err != nil {
 			return fmt.Errorf("resolve data directory: %w", err)
 		}
-	}
-	routing := model.RoutingMode(*routingFlag)
-	if !routing.Valid() {
-		return fmt.Errorf("invalid routing mode %q: only %q is supported", *routingFlag, model.RoutingTurns)
-	}
-	if *maxHopsFlag < 1 || *maxHopsFlag > 30 {
-		return errors.New("max-hops must be between 1 and 30")
 	}
 	if *stallWarningFlag != -1 && (*stallWarningFlag < 30 || *stallWarningFlag > 86400) {
 		return errors.New("stall-warning-seconds must be -1 or between 30 and 86400")
@@ -548,7 +530,7 @@ func runServe(args []string) error {
 		Name: *nameFlag,
 		Repo: repo,
 		Settings: model.RoomSettings{
-			RoutingMode: routing, MaxHops: *maxHopsFlag, StallWarningSeconds: *stallWarningFlag,
+			StallWarningSeconds: *stallWarningFlag,
 		},
 		Store:         eventStore,
 		ClaudeFactory: agent.SlotFactory(*mockFlag, claudeCfg.Runtime),
@@ -909,7 +891,14 @@ func printDoctorReport(report doctorReport) {
 	} else {
 		fmt.Printf("%-16s ✗ %s\n", "Git", report.Git.Error)
 	}
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+	runtimes := make(map[model.ActorID]model.RuntimeKind, 2)
+	for _, actor := range model.SlotActors() {
+		if probe := report.Runtimes[string(actor)].Probe; probe != nil {
+			runtimes[actor] = probe.Runtime
+		}
+	}
+	identities := model.ParticipantIdentities(runtimes)
+	for _, actor := range model.SlotActors() {
 		entry := report.Runtimes[string(actor)]
 		label := model.SlotLabel(actor)
 		if entry.Error != "" || entry.Probe == nil {
@@ -918,7 +907,7 @@ func printDoctorReport(report doctorReport) {
 		}
 		probe := entry.Probe
 		if probe.Runtime != "" {
-			label = model.ParticipantDisplayName(actor, probe.Runtime)
+			label = identities[actor].DisplayName
 		}
 		versionText := probe.Version
 		if versionText == "" {

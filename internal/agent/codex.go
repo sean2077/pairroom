@@ -36,6 +36,16 @@ type pendingApproval struct {
 	correlationID string
 }
 
+// codexTurnTerminal remembers a completion that raced the turn/start or
+// turn/steer response. App Server notifications and RPC responses are
+// independent JSON-RPC messages, so the completion can legitimately arrive
+// first. Keeping the accepted input IDs lets the late response acknowledge
+// the already-settled message without resurrecting the native turn.
+type codexTurnTerminal struct {
+	status   string
+	inputIDs map[string]struct{}
+}
+
 type CodexAdapter struct {
 	cfg  Config
 	sink EventSink
@@ -63,12 +73,20 @@ type CodexAdapter struct {
 	// The matching userMessage item echoes this value as clientId, allowing
 	// notifications that arrive before the RPC response to retain exact room
 	// message correlation.
-	wireInputs    map[string]model.AgentInput
-	startingInput *model.AgentInput
-	turnBuffers   map[string]*strings.Builder
-	turnFinal     map[string]string
-	queued        []model.AgentInput
-	nextRequestID atomic.Int64
+	wireInputs     map[string]model.AgentInput
+	wireInputOrder []string
+	startingInput  *model.AgentInput
+	startingTurnID string
+	turnBuffers    map[string]*strings.Builder
+	turnFinal      map[string]string
+	terminalTurns  map[string]codexTurnTerminal
+	startedTurns   map[string]struct{}
+	// pendingCompletions holds a terminal notification that arrived before the
+	// turn/start response exposed its ID. It is keyed by the opaque native turn
+	// ID and consumed only when that exact response arrives; unrelated stale
+	// completions never manufacture a Room boundary.
+	pendingCompletions map[string]json.RawMessage
+	nextRequestID      atomic.Int64
 }
 
 type codexRPCError struct {
@@ -95,8 +113,9 @@ func NewCodex(cfg Config, sink EventSink) *CodexAdapter {
 	adapter := &CodexAdapter{
 		cfg: cfg, sink: sink, state: model.StateStopped, threadID: cfg.SessionID,
 		pending: make(map[int64]chan rpcReply), approvals: make(map[string]pendingApproval),
-		turnInputs:  make(map[string][]model.AgentInput),
-		wireInputs:  make(map[string]model.AgentInput),
+		turnInputs:    make(map[string][]model.AgentInput),
+		wireInputs:    make(map[string]model.AgentInput),
+		terminalTurns: make(map[string]codexTurnTerminal), startedTurns: make(map[string]struct{}), pendingCompletions: make(map[string]json.RawMessage),
 		turnBuffers: make(map[string]*strings.Builder),
 		turnFinal:   make(map[string]string),
 	}
@@ -272,14 +291,14 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	return nil
 }
 
-func (c *CodexAdapter) Submit(ctx context.Context, input model.AgentInput) (model.DeliveryState, error) {
-	// A Codex thread accepts one active turn. Serialize submissions so two room
-	// deliveries cannot both observe an idle thread and race turn/start.
+func (c *CodexAdapter) StartTurn(ctx context.Context, input model.AgentInput) error {
+	// A Codex thread accepts one active turn. PairRoom reserves the Room owner;
+	// this lock closes the smaller native start/steer observation race.
 	c.submitMu.Lock()
 	defer c.submitMu.Unlock()
 
 	if err := c.Start(ctx); err != nil {
-		return model.DeliveryFailed, err
+		return err
 	}
 
 	text := prompt.Envelope(input)
@@ -290,46 +309,7 @@ func (c *CodexAdapter) Submit(ctx context.Context, input model.AgentInput) (mode
 	c.mu.Unlock()
 
 	if active {
-		if input.Intent == model.IntentNextTurn || input.Intent == model.IntentSupersede {
-			c.mu.Lock()
-			c.queued = append(c.queued, input)
-			c.mu.Unlock()
-			waiting := runtimeEvent(c.cfg.Actor, model.RuntimeInputProcessing)
-			waiting.CorrelationID = input.MessageID
-			waiting.Name = string(model.ProcessingWaiting)
-			waiting.Text = "queued for the next Codex turn by explicit message intent"
-			c.sink(waiting)
-			go c.tryStartQueued()
-			return model.DeliveryQueued, nil
-		}
-		c.stageWireInput(input)
-		result, err := c.call(ctx, "turn/steer", codexTurnSteerParams(threadID, turnID, text, input))
-		c.unstageWireInput(input.MessageID)
-		if err == nil {
-			_ = result
-			if c.bindTurnInput(turnID, input) {
-				c.emitInputProcessing(turnID, input, "injected into active Codex turn")
-			}
-			return model.DeliveryInjected, nil
-		}
-		// Review/compaction turns and a narrow completion race can reject
-		// steering. Preserve the user's intervention and start it at the next
-		// safe turn boundary instead of dropping it.
-		c.mu.Lock()
-		c.queued = append(c.queued, input)
-		c.mu.Unlock()
-		logEvent := runtimeEvent(c.cfg.Actor, model.RuntimeLog)
-		logEvent.Name = "turn.steer.queued"
-		logEvent.CorrelationID = input.MessageID
-		logEvent.Text = err.Error()
-		c.sink(logEvent)
-		waiting := runtimeEvent(c.cfg.Actor, model.RuntimeInputProcessing)
-		waiting.CorrelationID = input.MessageID
-		waiting.Name = string(model.ProcessingWaiting)
-		waiting.Text = "queued after Codex rejected active-turn steering: " + err.Error()
-		c.sink(waiting)
-		go c.tryStartQueued()
-		return model.DeliveryQueued, nil
+		return errors.New("Codex already has an active turn")
 	}
 
 	params := c.turnStartParams(threadID, text, input)
@@ -338,15 +318,18 @@ func (c *CodexAdapter) Submit(ctx context.Context, input model.AgentInput) (mode
 	starting := input
 	c.mu.Lock()
 	c.startingInput = &starting
-	c.wireInputs[input.MessageID] = input
+	c.startingTurnID = ""
 	c.mu.Unlock()
+	c.stageWireInput(input)
 	result, err := c.call(ctx, "turn/start", params)
 	c.unstageWireInput(input.MessageID)
 	if err != nil {
 		c.mu.Lock()
 		c.startingInput = nil
+		c.startingTurnID = ""
+		c.pendingCompletions = make(map[string]json.RawMessage)
 		c.mu.Unlock()
-		return model.DeliveryFailed, err
+		return err
 	}
 	var turnResult struct {
 		Turn struct {
@@ -356,25 +339,133 @@ func (c *CodexAdapter) Submit(ctx context.Context, input model.AgentInput) (mode
 	if err := json.Unmarshal(result, &turnResult); err != nil || turnResult.Turn.ID == "" {
 		c.mu.Lock()
 		c.startingInput = nil
+		c.startingTurnID = ""
+		c.pendingCompletions = make(map[string]json.RawMessage)
 		c.mu.Unlock()
 		if err == nil {
 			err = errors.New("missing turn id")
 		}
-		return model.DeliveryFailed, fmt.Errorf("decode codex turn: %w", err)
+		return fmt.Errorf("decode codex turn: %w", err)
 	}
 	c.mu.Lock()
+	if _, completed := c.terminalTurns[turnResult.Turn.ID]; completed {
+		c.startingInput = nil
+		c.startingTurnID = ""
+		c.mu.Unlock()
+		// The native completion already emitted input terminal events and the
+		// Room boundary. Do not recreate currentTurn or emit a second start.
+		return nil
+	}
+	pendingCompletion := append(json.RawMessage(nil), c.pendingCompletions[turnResult.Turn.ID]...)
+	// There is only one turn/start request in flight under submitMu. Any other
+	// completion held while its opaque ID was unknown is therefore stale (or
+	// belongs to a native turn PairRoom never owned); discard it at this exact
+	// response boundary instead of retaining unbounded connection-local state.
+	c.pendingCompletions = make(map[string]json.RawMessage)
 	c.currentTurn = turnResult.Turn.ID
 	c.threadEngaged = true
-	c.startingInput = nil
+	_, startedNotificationSeen := c.startedTurns[turnResult.Turn.ID]
+	if !startedNotificationSeen {
+		c.startedTurns[turnResult.Turn.ID] = struct{}{}
+	}
 	if c.turnBuffers[turnResult.Turn.ID] == nil {
 		c.turnBuffers[turnResult.Turn.ID] = &strings.Builder{}
 	}
 	c.mu.Unlock()
+	if len(pendingCompletion) > 0 {
+		// The terminal notification won the wire race. Let the normal completion
+		// path settle the staged input and emit exactly one boundary. If no native
+		// turn/started notification arrived, synthesize the lifecycle start before
+		// the terminal event so observers never see a completion without a start.
+		if !startedNotificationSeen {
+			c.setState(model.StateWorking, "")
+			started := runtimeEvent(c.cfg.Actor, model.RuntimeTurnStarted)
+			started.TurnID = turnResult.Turn.ID
+			started.CorrelationID = input.MessageID
+			c.sink(started)
+		}
+		c.mu.Lock()
+		// Preserve the staged input for handleTurnCompleted; call() already
+		// removed its wire correlation before decoding the turn/start response.
+		c.startingInput = &starting
+		c.startingTurnID = turnResult.Turn.ID
+		c.mu.Unlock()
+		c.handleTurnCompleted(pendingCompletion)
+		return nil
+	}
+	c.mu.Lock()
+	c.startingInput = nil
+	c.startingTurnID = ""
+	c.mu.Unlock()
+	if !startedNotificationSeen {
+		started := runtimeEvent(c.cfg.Actor, model.RuntimeTurnStarted)
+		started.TurnID = turnResult.Turn.ID
+		started.CorrelationID = input.MessageID
+		c.sink(started)
+	}
 	if c.bindTurnInput(turnResult.Turn.ID, input) {
 		c.emitInputProcessing(turnResult.Turn.ID, input, "started Codex turn")
 	}
 	c.setState(model.StateWorking, "")
-	return model.DeliveryStarted, nil
+	return nil
+}
+
+func (c *CodexAdapter) Steer(ctx context.Context, input model.AgentInput) SteerOutcome {
+	c.submitMu.Lock()
+	defer c.submitMu.Unlock()
+
+	c.mu.Lock()
+	threadID := c.threadID
+	turnID := c.currentTurn
+	active := turnID != "" && (c.state == model.StateWorking || c.state == model.StateWaiting)
+	c.mu.Unlock()
+	if !active {
+		return SteerOutcome{State: SteerUnavailable, Detail: "Codex has no active turn"}
+	}
+
+	text := prompt.Envelope(input)
+	c.stageWireInput(input)
+	defer c.unstageWireInput(input.MessageID)
+	result, err := c.call(ctx, "turn/steer", codexTurnSteerParams(threadID, turnID, text, input))
+	if err != nil {
+		var rpcErr codexRPCError
+		if errors.As(err, &rpcErr) {
+			if rpcErr.Code == -32601 {
+				return SteerOutcome{State: SteerUnavailable, Detail: err.Error()}
+			}
+			return SteerOutcome{State: SteerRejected, Detail: err.Error()}
+		}
+		return SteerOutcome{State: SteerUnknown, Detail: err.Error()}
+	}
+	var response struct {
+		TurnID string `json:"turnId"`
+	}
+	if err := json.Unmarshal(result, &response); err != nil || response.TurnID != turnID {
+		if err == nil {
+			err = fmt.Errorf("returned turn %q instead of %q", response.TurnID, turnID)
+		}
+		return SteerOutcome{State: SteerUnknown, Detail: "decode Codex turn/steer acknowledgement: " + err.Error()}
+	}
+	c.mu.Lock()
+	terminal, completed := c.terminalTurns[turnID]
+	current := c.currentTurn
+	c.mu.Unlock()
+	if completed {
+		if _, accepted := terminal.inputIDs[input.MessageID]; accepted {
+			// The completion path included this staged input and already emitted
+			// its terminal event. The RPC response arrived late; report accepted
+			// without resurrecting the turn or duplicating lifecycle events.
+			return SteerOutcome{State: SteerAccepted, Detail: "accepted by Codex turn/steer (turn completed before acknowledgement)"}
+		}
+		return SteerOutcome{State: SteerUnknown, Detail: "Codex turn completed before the steered input was correlated; explicit retry required"}
+	}
+	if current != turnID {
+		return SteerOutcome{State: SteerUnknown, Detail: "Codex active turn ended before steer acknowledgement; explicit retry required"}
+	}
+	if c.bindTurnInput(turnID, input) {
+		c.emitInputProcessing(turnID, input, "injected into active Codex turn")
+	}
+	return SteerOutcome{State: SteerAccepted, Detail: "accepted by Codex turn/steer"}
 }
 
 func codexTurnSteerParams(threadID, turnID, text string, input model.AgentInput) map[string]any {
@@ -435,10 +526,17 @@ func (c *CodexAdapter) turnStartParams(threadID, text string, input model.AgentI
 	if c.cfg.ApprovalPolicy != "" {
 		params["approvalPolicy"] = c.cfg.ApprovalPolicy
 	}
-	if input.Role == model.RoleReviewer {
+	effectiveRole := input.Role
+	if input.Role == model.RoleReviewer && c.cfg.OrdinaryReviewerPolicy == model.ReviewerExplicit {
+		// The Room keeps Reviewer as the durable role and workspace boundary,
+		// while the explicit policy opts this ordinary Reviewer turn into the
+		// selected native permission/sandbox profile.
+		effectiveRole = model.RoleDriver
+	}
+	if input.Role == model.RoleReviewer && c.cfg.OrdinaryReviewerPolicy != model.ReviewerExplicit {
 		params["sandboxPolicy"] = map[string]any{"type": "readOnly"}
 	} else if c.cfg.Sandbox != "" {
-		params["sandboxPolicy"] = c.sandboxPolicy(input.Role)
+		params["sandboxPolicy"] = c.sandboxPolicy(effectiveRole)
 	}
 	if input.MessageID != "" {
 		params["clientUserMessageId"] = input.MessageID
@@ -500,6 +598,9 @@ func (c *CodexAdapter) stageWireInput(input model.AgentInput) {
 		return
 	}
 	c.mu.Lock()
+	if _, exists := c.wireInputs[input.MessageID]; !exists {
+		c.wireInputOrder = append(c.wireInputOrder, input.MessageID)
+	}
 	c.wireInputs[input.MessageID] = input
 	c.mu.Unlock()
 }
@@ -510,6 +611,14 @@ func (c *CodexAdapter) unstageWireInput(messageID string) {
 	}
 	c.mu.Lock()
 	delete(c.wireInputs, messageID)
+	for index, value := range c.wireInputOrder {
+		if value != messageID {
+			continue
+		}
+		copy(c.wireInputOrder[index:], c.wireInputOrder[index+1:])
+		c.wireInputOrder = c.wireInputOrder[:len(c.wireInputOrder)-1]
+		break
+	}
 	c.mu.Unlock()
 }
 
@@ -534,6 +643,28 @@ func (c *CodexAdapter) latestTurnInputLocked(turnID string) model.AgentInput {
 		return model.AgentInput{}
 	}
 	return inputs[len(inputs)-1]
+}
+
+// knownTurnLocked is the transcript boundary for turn-scoped App Server
+// notifications. A resumed Codex thread can replay events for native work
+// that PairRoom did not submit; those events must remain diagnostics and must
+// never become the current Room turn or acquire a message correlation.
+// c.mu must be held by the caller.
+func (c *CodexAdapter) knownTurnLocked(turnID string) bool {
+	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		return false
+	}
+	if c.currentTurn == turnID || c.startingTurnID == turnID {
+		return true
+	}
+	if _, ok := c.turnInputs[turnID]; ok {
+		return true
+	}
+	if _, ok := c.startedTurns[turnID]; ok {
+		return true
+	}
+	return false
 }
 
 func (c *CodexAdapter) emitInputProcessing(turnID string, input model.AgentInput, detail string) {
@@ -739,11 +870,12 @@ func (c *CodexAdapter) handleServerRequest(rawID json.RawMessage, method string,
 		return
 	}
 	displayID := model.NewID("approval")
-	title := "Approve Codex command"
+	name := configuredParticipantName(c.cfg)
+	title := "Approve " + name + " command"
 	if fileApproval {
-		title = "Approve Codex file change"
+		title = "Approve " + name + " file change"
 	} else if permissionApproval {
-		title = "Grant Codex additional permissions"
+		title = "Grant " + name + " additional permissions"
 	}
 	approval := model.Approval{
 		ID: displayID, Agent: c.cfg.Actor, Kind: method, Title: title,
@@ -803,14 +935,44 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 			} `json:"turn"`
 		}
 		_ = json.Unmarshal(params, &p)
+		if strings.TrimSpace(p.Turn.ID) == "" {
+			return
+		}
 		newlyBound := false
+		emitStarted := false
 		c.mu.Lock()
-		if p.Turn.ID != "" {
-			c.currentTurn = p.Turn.ID
-			c.threadEngaged = true
-			if c.turnBuffers[p.Turn.ID] == nil {
-				c.turnBuffers[p.Turn.ID] = &strings.Builder{}
-			}
+		if _, completed := c.terminalTurns[p.Turn.ID]; completed {
+			// A late notification for a turn whose completion already won the
+			// race must not resurrect currentTurn or reopen its input lifecycle.
+			c.mu.Unlock()
+			return
+		}
+		// A notification for an unrelated/resumed native turn must never take
+		// ownership of the Room. Only the turn/start request currently staged by
+		// PairRoom, or the already-recorded current turn, is admissible.
+		if c.currentTurn != "" && c.currentTurn != p.Turn.ID {
+			c.mu.Unlock()
+			return
+		}
+		if c.startingTurnID != "" && c.startingTurnID != p.Turn.ID {
+			c.mu.Unlock()
+			return
+		}
+		if c.currentTurn == "" && c.startingInput == nil {
+			c.mu.Unlock()
+			return
+		}
+		if _, already := c.startedTurns[p.Turn.ID]; !already {
+			c.startedTurns[p.Turn.ID] = struct{}{}
+			emitStarted = true
+		}
+		c.currentTurn = p.Turn.ID
+		c.threadEngaged = true
+		if c.startingInput != nil && c.startingTurnID == "" {
+			c.startingTurnID = p.Turn.ID
+		}
+		if c.turnBuffers[p.Turn.ID] == nil {
+			c.turnBuffers[p.Turn.ID] = &strings.Builder{}
 		}
 		if len(c.turnInputs[p.Turn.ID]) == 0 && c.startingInput != nil {
 			// App-server may notify turn/started before replying to turn/start.
@@ -822,10 +984,12 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 		input := c.latestTurnInputLocked(p.Turn.ID)
 		c.mu.Unlock()
 		c.setState(model.StateWorking, "")
-		e := runtimeEvent(c.cfg.Actor, model.RuntimeTurnStarted)
-		e.TurnID = p.Turn.ID
-		e.CorrelationID = input.MessageID
-		c.sink(e)
+		if emitStarted {
+			e := runtimeEvent(c.cfg.Actor, model.RuntimeTurnStarted)
+			e.TurnID = p.Turn.ID
+			e.CorrelationID = input.MessageID
+			c.sink(e)
+		}
 		if newlyBound {
 			c.emitInputProcessing(p.Turn.ID, input, "started Codex turn")
 		}
@@ -838,7 +1002,14 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 			Delta    string `json:"delta"`
 		}
 		_ = json.Unmarshal(params, &p)
+		if strings.TrimSpace(p.TurnID) == "" {
+			return
+		}
 		c.mu.Lock()
+		if !c.knownTurnLocked(p.TurnID) {
+			c.mu.Unlock()
+			return
+		}
 		builder := c.turnBuffers[p.TurnID]
 		if builder == nil {
 			builder = &strings.Builder{}
@@ -864,11 +1035,19 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 			Delta  string `json:"delta"`
 		}
 		_ = json.Unmarshal(params, &p)
+		if strings.TrimSpace(p.TurnID) == "" {
+			return
+		}
+		c.mu.Lock()
+		known := c.knownTurnLocked(p.TurnID)
+		correlationID := c.latestTurnInputLocked(p.TurnID).MessageID
+		c.mu.Unlock()
+		if !known {
+			return
+		}
 		e := runtimeEvent(c.cfg.Actor, model.RuntimeCommandOutput)
 		e.TurnID, e.ItemID, e.Text = p.TurnID, p.ItemID, p.Delta
-		c.mu.Lock()
-		e.CorrelationID = c.latestTurnInputLocked(p.TurnID).MessageID
-		c.mu.Unlock()
+		e.CorrelationID = correlationID
 		c.sink(e)
 
 	case "turn/diff/updated":
@@ -877,11 +1056,19 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 			Diff   string `json:"diff"`
 		}
 		_ = json.Unmarshal(params, &p)
+		if strings.TrimSpace(p.TurnID) == "" {
+			return
+		}
+		c.mu.Lock()
+		known := c.knownTurnLocked(p.TurnID)
+		correlationID := c.latestTurnInputLocked(p.TurnID).MessageID
+		c.mu.Unlock()
+		if !known {
+			return
+		}
 		e := runtimeEvent(c.cfg.Actor, model.RuntimeDiffUpdated)
 		e.TurnID, e.Text = p.TurnID, p.Diff
-		c.mu.Lock()
-		e.CorrelationID = c.latestTurnInputLocked(p.TurnID).MessageID
-		c.mu.Unlock()
+		e.CorrelationID = correlationID
 		c.sink(e)
 
 	case "item/plan/delta":
@@ -892,11 +1079,19 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 			Delta    string `json:"delta"`
 		}
 		_ = json.Unmarshal(params, &p)
+		if strings.TrimSpace(p.TurnID) == "" {
+			return
+		}
+		c.mu.Lock()
+		known := c.knownTurnLocked(p.TurnID)
+		correlationID := c.latestTurnInputLocked(p.TurnID).MessageID
+		c.mu.Unlock()
+		if !known {
+			return
+		}
 		e := runtimeEvent(c.cfg.Actor, model.RuntimePlanUpdated)
 		e.TurnID, e.ItemID, e.Text = p.TurnID, p.ItemID, p.Delta
-		c.mu.Lock()
-		e.CorrelationID = c.latestTurnInputLocked(p.TurnID).MessageID
-		c.mu.Unlock()
+		e.CorrelationID = correlationID
 		e.Data = append(json.RawMessage(nil), params...)
 		c.sink(e)
 
@@ -907,11 +1102,19 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 			TurnID string `json:"turnId"`
 		}
 		_ = json.Unmarshal(params, &p)
+		if strings.TrimSpace(p.TurnID) == "" {
+			return
+		}
+		c.mu.Lock()
+		known := c.knownTurnLocked(p.TurnID)
+		correlationID := c.latestTurnInputLocked(p.TurnID).MessageID
+		c.mu.Unlock()
+		if !known {
+			return
+		}
 		e := runtimeEvent(c.cfg.Actor, model.RuntimePlanUpdated)
 		e.TurnID = p.TurnID
-		c.mu.Lock()
-		e.CorrelationID = c.latestTurnInputLocked(p.TurnID).MessageID
-		c.mu.Unlock()
+		e.CorrelationID = correlationID
 		e.Data = append(json.RawMessage(nil), params...)
 		c.sink(e)
 
@@ -956,6 +1159,10 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 		_ = json.Unmarshal(params, &p)
 		c.mu.Lock()
 		turnID := p.TurnID
+		if strings.TrimSpace(turnID) != "" && !c.knownTurnLocked(turnID) {
+			c.mu.Unlock()
+			return
+		}
 		if turnID == "" && method == "error" {
 			turnID = c.currentTurn
 		}
@@ -1043,12 +1250,19 @@ func (c *CodexAdapter) handleItem(method string, params json.RawMessage) {
 	if err := json.Unmarshal(params, &p); err != nil {
 		return
 	}
+	if strings.TrimSpace(p.TurnID) == "" {
+		return
+	}
 	if p.Item.Type == "userMessage" {
 		// App-server echoes turn/start or turn/steer's optional
 		// clientUserMessageId as userMessage.clientId. Use that documented
 		// correlation surface to bind notifications that can race the RPC reply.
 		if p.Item.ClientID != "" {
 			c.mu.Lock()
+			if _, completed := c.terminalTurns[p.TurnID]; completed {
+				c.mu.Unlock()
+				return
+			}
 			input, ok := c.wireInputs[p.Item.ClientID]
 			c.mu.Unlock()
 			if ok && c.bindTurnInput(p.TurnID, input) {
@@ -1056,6 +1270,13 @@ func (c *CodexAdapter) handleItem(method string, params json.RawMessage) {
 			}
 		}
 		// A userMessage is transport activity, not a tool invocation.
+		return
+	}
+	c.mu.Lock()
+	known := c.knownTurnLocked(p.TurnID)
+	correlationID := c.latestTurnInputLocked(p.TurnID).MessageID
+	c.mu.Unlock()
+	if !known {
 		return
 	}
 	kind := model.RuntimeToolStarted
@@ -1076,9 +1297,7 @@ func (c *CodexAdapter) handleItem(method string, params json.RawMessage) {
 	e.TurnID = p.TurnID
 	e.ItemID = p.Item.ID
 	e.Name = p.Item.Type
-	c.mu.Lock()
-	e.CorrelationID = c.latestTurnInputLocked(p.TurnID).MessageID
-	c.mu.Unlock()
+	e.CorrelationID = correlationID
 	e.Data = append(json.RawMessage(nil), params...)
 	c.sink(e)
 }
@@ -1091,28 +1310,20 @@ func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
 			Error  *struct {
 				Message string `json:"message"`
 			} `json:"error"`
+			Items []struct {
+				Type   string `json:"type"`
+				Phase  string `json:"phase"`
+				Text   string `json:"text"`
+				Review string `json:"review"`
+			} `json:"items"`
 		} `json:"turn"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return
 	}
-	c.mu.Lock()
-	inputs := append([]model.AgentInput(nil), c.turnInputs[p.Turn.ID]...)
-	input := model.AgentInput{}
-	if len(inputs) > 0 {
-		input = inputs[len(inputs)-1]
+	if strings.TrimSpace(p.Turn.ID) == "" {
+		return
 	}
-	text := c.turnFinal[p.Turn.ID]
-	if text == "" && c.turnBuffers[p.Turn.ID] != nil {
-		text = c.turnBuffers[p.Turn.ID].String()
-	}
-	delete(c.turnInputs, p.Turn.ID)
-	delete(c.turnFinal, p.Turn.ID)
-	delete(c.turnBuffers, p.Turn.ID)
-	if c.currentTurn == p.Turn.ID {
-		c.currentTurn = ""
-	}
-	c.mu.Unlock()
 	terminalKind := model.RuntimeInputFailed
 	detail := p.Turn.Status
 	switch strings.ToLower(p.Turn.Status) {
@@ -1124,6 +1335,124 @@ func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
 	if p.Turn.Error != nil && p.Turn.Error.Message != "" {
 		detail = p.Turn.Error.Message
 	}
+	c.mu.Lock()
+	wasCurrent := c.currentTurn == p.Turn.ID
+	inputs := append([]model.AgentInput(nil), c.turnInputs[p.Turn.ID]...)
+	if _, completed := c.terminalTurns[p.Turn.ID]; completed {
+		c.mu.Unlock()
+		return
+	}
+	knownTurn := wasCurrent || len(inputs) > 0
+	if !knownTurn && c.startingInput != nil {
+		knownTurn = c.startingTurnID == "" || c.startingTurnID == p.Turn.ID
+	}
+	if !knownTurn {
+		if c.startingInput != nil && c.startingTurnID == "" {
+			// We cannot correlate an arbitrary completion to the in-flight
+			// turn/start until its response reveals the ID. Hold it briefly and let
+			// StartTurn consume only an exact ID match.
+			if c.pendingCompletions == nil {
+				c.pendingCompletions = make(map[string]json.RawMessage)
+			}
+			c.pendingCompletions[p.Turn.ID] = append(json.RawMessage(nil), params...)
+		}
+		// A connection can receive a late notification for a turn that this
+		// adapter never owned (for example, a stale subscription event). Do not
+		// manufacture a Room boundary or release another active owner for it.
+		c.mu.Unlock()
+		return
+	}
+	seenInputs := make(map[string]struct{}, len(inputs))
+	for _, value := range inputs {
+		if value.MessageID != "" {
+			seenInputs[value.MessageID] = struct{}{}
+		}
+	}
+	addInput := func(value model.AgentInput) {
+		if value.MessageID == "" {
+			return
+		}
+		if _, exists := seenInputs[value.MessageID]; exists {
+			return
+		}
+		seenInputs[value.MessageID] = struct{}{}
+		inputs = append(inputs, value)
+	}
+	// A completion can overtake the turn/start response. Include the input that
+	// is still staged for that request, plus any turn/steer input whose
+	// userMessage echo has not arrived yet, so every accepted message is
+	// settled exactly once.
+	if c.currentTurn == p.Turn.ID || (c.currentTurn == "" && c.startingInput != nil && (c.startingTurnID == "" || c.startingTurnID == p.Turn.ID)) {
+		if c.startingInput != nil {
+			addInput(*c.startingInput)
+		}
+		for _, messageID := range c.wireInputOrder {
+			if value, ok := c.wireInputs[messageID]; ok {
+				addInput(value)
+			}
+		}
+	}
+	input := model.AgentInput{}
+	if len(inputs) > 0 {
+		input = inputs[len(inputs)-1]
+	}
+	text := c.turnFinal[p.Turn.ID]
+	if text == "" {
+		// Current App Server v2 includes the final agentMessage in the completed
+		// turn as a summary fallback when item notifications were suppressed or
+		// raced the terminal event. Prefer that authoritative item over a partial
+		// delta buffer; exitedReviewMode is the equivalent final text for an
+		// inline review turn.
+		for _, item := range p.Turn.Items {
+			if item.Type == "agentMessage" && strings.TrimSpace(item.Text) != "" {
+				if item.Phase == "final_answer" || text == "" {
+					text = item.Text
+				}
+			}
+			if item.Type == "exitedReviewMode" && strings.TrimSpace(item.Review) != "" {
+				text = item.Review
+			}
+		}
+	}
+	if text == "" && c.turnBuffers[p.Turn.ID] != nil {
+		text = c.turnBuffers[p.Turn.ID].String()
+	}
+	delete(c.turnInputs, p.Turn.ID)
+	delete(c.turnFinal, p.Turn.ID)
+	delete(c.turnBuffers, p.Turn.ID)
+	delete(c.startedTurns, p.Turn.ID)
+	if wasCurrent {
+		c.currentTurn = ""
+	}
+	if _, duplicate := c.terminalTurns[p.Turn.ID]; duplicate {
+		c.mu.Unlock()
+		return
+	}
+	inputIDs := make(map[string]struct{}, len(inputs))
+	for _, value := range inputs {
+		if value.MessageID != "" {
+			inputIDs[value.MessageID] = struct{}{}
+		}
+	}
+	c.terminalTurns[p.Turn.ID] = codexTurnTerminal{status: p.Turn.Status, inputIDs: inputIDs}
+	if len(c.terminalTurns) > 256 {
+		// Turn IDs are opaque and unique. Evicting an arbitrary old tombstone
+		// only bounds memory; late responses are expected within the current
+		// request lifetime and are consumed before this limit is reached.
+		for turnID := range c.terminalTurns {
+			if turnID != p.Turn.ID {
+				delete(c.terminalTurns, turnID)
+				break
+			}
+		}
+	}
+	if wasCurrent {
+		c.startingInput = nil
+		c.startingTurnID = ""
+		c.wireInputs = make(map[string]model.AgentInput)
+		c.wireInputOrder = nil
+	}
+	c.mu.Unlock()
 	for _, item := range inputs {
 		c.emitInputTerminal(p.Turn.ID, item, terminalKind, detail)
 	}
@@ -1147,57 +1476,13 @@ func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
 		e.Text = p.Turn.Error.Message
 		c.sink(e)
 		c.setState(model.StateError, p.Turn.Error.Message)
-		c.failQueued("previous Codex turn failed: " + p.Turn.Error.Message)
 		return
 	}
 	if terminalKind == model.RuntimeInputFailed {
 		c.setState(model.StateError, detail)
-		c.failQueued("previous Codex turn ended with status " + detail)
 		return
 	} else {
 		c.setState(model.StateIdle, "")
-	}
-	go c.tryStartQueued()
-}
-
-func (c *CodexAdapter) tryStartQueued() {
-	// Let the terminal turn/completed state settle before attempting a queued
-	// turn. Multiple callers are harmless: the lock pops at most one item.
-	time.Sleep(25 * time.Millisecond)
-	c.mu.Lock()
-	if c.state == model.StateWorking || c.currentTurn != "" || len(c.queued) == 0 {
-		c.mu.Unlock()
-		return
-	}
-	input := c.queued[0]
-	c.queued = c.queued[1:]
-	c.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
-	state, err := c.Submit(ctx, input)
-	if err != nil {
-		c.emitInputTerminal("", input, model.RuntimeInputFailed, "start queued Codex turn: "+err.Error())
-		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
-		e.CorrelationID = input.MessageID
-		e.Text = "start queued Codex turn: " + err.Error()
-		c.sink(e)
-		c.setState(model.StateError, e.Text)
-		return
-	}
-	e := runtimeEvent(c.cfg.Actor, model.RuntimeLog)
-	e.Name = "queued.started"
-	e.CorrelationID = input.MessageID
-	e.Text = string(state)
-	c.sink(e)
-}
-
-func (c *CodexAdapter) failQueued(detail string) {
-	c.mu.Lock()
-	queued := append([]model.AgentInput(nil), c.queued...)
-	c.queued = nil
-	c.mu.Unlock()
-	for _, input := range queued {
-		c.emitInputTerminal("", input, model.RuntimeInputFailed, detail)
 	}
 }
 
@@ -1243,16 +1528,19 @@ func (c *CodexAdapter) takeOutstanding() codexOutstanding {
 	if c.startingInput != nil {
 		add(*c.startingInput, c.currentTurn)
 	}
-	for _, input := range c.wireInputs {
-		add(input, c.currentTurn)
-	}
-	for _, input := range c.queued {
-		add(input, "")
+	for _, messageID := range c.wireInputOrder {
+		if input, ok := c.wireInputs[messageID]; ok {
+			add(input, c.currentTurn)
+		}
 	}
 	c.turnInputs = make(map[string][]model.AgentInput)
 	c.wireInputs = make(map[string]model.AgentInput)
+	c.wireInputOrder = nil
+	c.terminalTurns = make(map[string]codexTurnTerminal)
+	c.startedTurns = make(map[string]struct{})
+	c.pendingCompletions = make(map[string]json.RawMessage)
 	c.startingInput = nil
-	c.queued = nil
+	c.startingTurnID = ""
 	c.turnBuffers = make(map[string]*strings.Builder)
 	c.turnFinal = make(map[string]string)
 	c.currentTurn = ""
@@ -1327,7 +1615,7 @@ func (c *CodexAdapter) SetRole(_ context.Context, role model.ParticipantRole) er
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.state == model.StateStarting || c.state == model.StateWorking || c.state == model.StateWaiting ||
-		c.currentTurn != "" || c.startingInput != nil || len(c.wireInputs) > 0 || len(c.queued) > 0 || len(c.approvals) > 0 {
+		c.currentTurn != "" || c.startingInput != nil || len(c.wireInputs) > 0 || len(c.approvals) > 0 {
 		return errors.New("interrupt or stop Codex before changing its role")
 	}
 	return nil
@@ -1355,7 +1643,7 @@ func (c *CodexAdapter) SetWorkspace(ctx context.Context, workspace string) error
 		return nil
 	}
 	if c.state == model.StateStarting || c.state == model.StateWorking || c.state == model.StateWaiting ||
-		c.currentTurn != "" || c.startingInput != nil || len(c.wireInputs) > 0 || len(c.queued) > 0 || len(c.approvals) > 0 {
+		c.currentTurn != "" || c.startingInput != nil || len(c.wireInputs) > 0 || len(c.approvals) > 0 {
 		c.mu.Unlock()
 		return errors.New("interrupt or stop Codex before changing its workspace")
 	}

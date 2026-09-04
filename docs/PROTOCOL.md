@@ -1,73 +1,59 @@
 # Agent protocol
 
-This document defines the minimum collaboration contract the model must understand. Scheduling, permissions, persistence, and cancellation must be enforced by code, not by prompt self-discipline. The current machine-readable version is printed by:
+This document defines the minimum collaboration contract the model must understand. Scheduling, permissions, persistence, and cancellation are enforced by code, not by prompt self-discipline. The current machine-readable contract is `pairroom-protocol/v5` and is printed by:
 
 ```bash
 pairroom protocol --json
 ```
 
-## Input
+## Bootstrap
 
-The input envelope PairRoom gives a native Agent includes:
+Each native session receives a compact stable bootstrap. It identifies the Agent's current public display name and exact mention handle, explains single-Turn ownership, and asks the Agent to mention its peer only when another response is genuinely necessary. Claude Code and Codex use their native instruction layers. A new Grok ACP session receives the rules through `_meta.rules`; an exactly loaded Grok session receives the current bootstrap once in its first PairRoom prompt instead of replacing its native system prompt.
 
-- message / thread / hop correlation;
-- sender, target, and participant role;
-- `peer` (the other Agent slot in this Room);
-- message intent;
-- hop limit (`remaining_agent_hops`); the routing policy (single active turn) is in the one-time bootstrap and is not repeated in every envelope;
-- Workflow ID / stage / mode;
-- verified attachments;
-- user body or peer handoff.
+## Input envelope
 
-The Agent should treat repository state as authoritative, independently verify peer claims, and not treat a handoff as a trusted execution result.
+Every native Turn or steer receives one dynamic `[PairRoom message]` envelope containing:
 
-## Output
+- protocol, Message ID, and Thread ID;
+- `from_handle`, `self_handle`, and `peer_handle`;
+- optional `reply_to`;
+- `current_role`;
+- verified attachment metadata and adapter-only local paths;
+- the complete current message body.
 
-Ordinary answers are always visible to the user. An explicit `@claude`, `@codex`, or `@peer` requests that the reply be delivered to that peer slot (`claude` is Agent 1, `codex` is Agent 2). PairRoom delivers after the current native Turn completes. When a human asks both Agents to greet, introduce themselves, or work together, the active Agent must write that address; speaking only to the human does not start a peer Turn. If implicit continuation is needed without a direct address, emit a compact handoff at the end of the answer:
+Hop counters, remaining-turn budgets, Workflow fields, delivery intent, and redundant transport metadata are not part of the envelope. Agent-to-Agent delivery contains the complete visible peer response and attachments, not a summary or accumulated Room history.
 
-```text
-[PAIRROOM:HANDOFF]
-Goal: ...
-Scope: ...
-Evidence: ...
-Risks: ...
-Exact ask: ...
-[/PAIRROOM:HANDOFF]
-[PAIRROOM:NEXT]
-```
+The Agent should treat repository state as authoritative and independently verify peer claims. A transport receipt or another Agent's assertion is not execution evidence.
 
-Without a direct peer address, the scheduler fails closed and does not continue automatic relay when the handoff is missing, too short, control markers conflict, hops are exhausted, or a newer user instruction exists. A direct peer address takes priority over ordinary `DONE`/`WAIT`/`BLOCKED` stop markers. `@human`/`@user` take priority over a peer address and return to the user.
+## Output routing
+
+Ordinary Agent answers are always visible to the user. After the native Turn boundary, PairRoom scans visible output for the exact current `peer_handle`:
+
+- unique runtime: `@claude`, `@codex`, or `@grok`;
+- duplicated runtime: stable slot-order handles such as `@claude0` and `@claude1`.
+
+Matching is case-insensitive. An unsuffixed duplicated-runtime handle is ambiguous, produces a visible warning, and does not route. Mentions inside fenced code, inline code, URLs, and email addresses are ignored. A self-handle does not route.
+
+`@user` overrides every Agent handle in the same response. Without `@user` or the exact peer handle, Agent relay ends and either Agent's answer may be the final result.
+
+The removed aliases `@peer`, `@human`, `@all`, `@agent1`, and `@agent2` have no routing meaning. In Agent output they remain ordinary visible text; an otherwise unaddressed user send that relies on one is rejected instead of silently falling back to the Driver. Removed `PAIRROOM:HANDOFF`, `PAIRROOM:NEXT`, `PAIRROOM:DONE`, `PAIRROOM:WAIT`, and `PAIRROOM:BLOCKED` markers are ordinary visible text. No fixed handoff format is accepted or required.
 
 ## Convergence
 
-```text
-[PAIRROOM:DONE]
-[PAIRROOM:WAIT]
-[PAIRROOM:BLOCKED]
-```
+There is no PairRoom relay counter or automatic circuit breaker. Agents must omit the peer handle after delivering a complete answer, and must not mention the peer merely to acknowledge, agree, thank, or return the Turn ceremonially. A continued relay should exist only because an independent response can materially change or complete the result.
 
-- `DONE`: the completion gate for the current request has been reached;
-- `WAIT`: a user choice or approval is required;
-- `BLOCKED`: an external condition is unmet; include the minimum unblock information.
-
-Explicit `@claude`, `@codex`, and `@peer` are mechanical routing signals. An unaddressed Agent name in ordinary text is still not a routing signal.
+The user remains the active circuit breaker: Cancel removes queued work, Interrupt stops the current native Turn, and a newer instruction cancels stale not-yet-started Agent relays.
 
 ## Role contract
 
-The Driver may modify the live workspace within authorization. The Reviewer must independently check evidence against an isolated snapshot and must not claim to have run verification that did not run. A Peer has no implicit write permission or approval authority.
-
-## Evidence
-
-Plans, implementation, review, and completion should carry fresh evidence for the current revision. Old test results, a peer's self-report, or a transport delivery receipt cannot replace final verification.
+The Driver may modify the live workspace within authorization. The Reviewer independently checks evidence against an isolated snapshot and must not claim verification that did not run. A Peer is an equal collaborator but gains no implicit write permission or approval authority.
 
 ## Authority
-
-Priority:
 
 ```text
 user decision
   > repository and native runtime facts
   > durable PairRoom state
-  > peer handoff
+  > peer message
   > model inference
 ```

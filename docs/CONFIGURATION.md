@@ -10,13 +10,9 @@ The JSON decoder rejects unknown fields. Spelling mistakes are therefore not sil
 
 ## Collaboration policy
 
-`routing_mode` accepts only:
+Collaboration routing has no configurable mode or hop limit. PairRoom always enforces one native Turn owner and one Room FIFO. An Agent response relays only when it contains the other participant's exact current runtime-derived handle; without that handle the relay ends. See [Core concepts](CONCEPTS.md) for duplicate-runtime suffixes and steer fallback semantics.
 
-```json
-{"routing_mode": "turns"}
-```
-
-`manual`, `mentions`, and `roundtable` are removed and are not migrated. `max_agent_hops` limits the number of Agent Turns in one automatic relay chain. `stall_warning_seconds` only controls the “no Runtime event for a long time” reminder; silence alone does not mean the Turn has terminated.
+`stall_warning_seconds` only controls the “no Runtime event for a long time” reminder; silence alone does not mean the Turn has terminated.
 
 ## Agent slots and runtimes
 
@@ -24,11 +20,11 @@ The JSON keys `claude` and `codex` are durable Agent 1 and Agent 2 slots, not ve
 
 Each slot supplies a default `AgentSelection`: `runtime`, a structured `provider`, optional `model`, `effort`, `instructions`, Runtime-specific permission/approval/sandbox values, and `ordinary_reviewer_policy`. A new Room snapshots both selections; changing Service configuration later does not rewrite it. Existing schema-v1 Rooms have no selection snapshot, are shown as `Legacy defaults`, and continue to resolve the current Service defaults at activation.
 
-`provider: {"source":"native"}` delegates Provider and credentials to the selected CLI's user/global configuration. Empty model, effort, instructions, permission, approval, and sandbox fields inherit native configuration. `ordinary_reviewer_policy` defaults to `enforced`; `explicit` is the dangerous opt-in that applies the selected Runtime policy to ordinary Reviewer Turns. Compiled plan, review, and audit Workflow stages remain read-only regardless of this option.
+`provider: {"source":"native"}` delegates Provider and credentials to the selected CLI's user/global configuration. Empty model, effort, instructions, permission, approval, and sandbox fields inherit native configuration. `ordinary_reviewer_policy` defaults to `enforced`; `explicit` is the dangerous opt-in that applies the selected Runtime policy to ordinary Reviewer Turns. The Reviewer workspace snapshot remains isolated in either mode; `enforced` additionally projects the native read-only / plan policy.
 
 Commands are not part of a Room selection. `runtimes.claude`, `runtimes.codex`, and `runtimes.grok` each own one Service-level `command`/`args` template, preventing a Room request from selecting an executable.
 
-Runtime policy fields are validated per Runtime: Claude Code accepts `permission_mode`; Codex accepts `approval_policy` (`untrusted`, `unless-trusted`, `unlessTrusted`, `on-failure`, `on-request`, or `never`) and `sandbox` (`read-only`, `workspace-write`, or `danger-full-access`); Grok Build accepts `permission_mode` and `sandbox` (`read-only`, `workspace`, `strict`, or `off`). Empty values inherit native configuration. Service runtime `args` templates must not preselect model, effort, permission, approval, sandbox, or bypass flags, because those values belong to the immutable Room selection and Workflow safety projection.
+Runtime policy fields are validated per Runtime: Claude Code accepts `permission_mode`; Codex accepts `approval_policy` (`untrusted`, `unless-trusted`, `unlessTrusted`, `on-failure`, `on-request`, or `never`) and `sandbox` (`read-only`, `workspace-write`, or `danger-full-access`); Grok Build accepts `permission_mode` and `sandbox` (`read-only`, `workspace`, `strict`, or `off`). Empty values inherit native configuration. Service runtime `args` templates must not preselect model, effort, permission, approval, sandbox, or bypass flags, because those values belong to the immutable Room selection and native role-policy projection.
 
 Recommendations:
 
@@ -36,7 +32,7 @@ Recommendations:
 - Do not put API keys in command arguments, logs, Room messages, or the repository;
 - Give the Reviewer read-only / plan boundaries; only the Driver uses write permission;
 - After changing an executable or Provider, run Mock first, then a real read-only Turn;
-- Keep Grok Build prompt and instruction text out of process argv (PairRoom writes them to a prompt file).
+- Keep Grok Build prompt and instruction text out of process argv. PairRoom uses the long-lived ACP stdio protocol, projects new-session collaboration rules through `_meta.rules`, and injects a bootstrap once when exactly loading an existing session.
 
 ## CC Switch Provider references
 
@@ -73,14 +69,12 @@ The following JSON names are extracted from struct tags in `internal/config/`. T
 - `grok`
 - `instructions`
 - `listen`
-- `max_agent_hops`
 - `model`
 - `ordinary_reviewer_policy`
 - `permission_mode`
 - `profile_id`
 - `provider`
 - `room_name`
-- `routing_mode`
 - `runtime`
 - `runtimes`
 - `sandbox`

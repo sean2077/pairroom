@@ -7,7 +7,7 @@ This directory keeps only documentation that still needs maintenance. Historical
 | Goal | Document | Unique responsibility |
 |---|---|---|
 | First run | [GETTING_STARTED](GETTING_STARTED.md) | From install or desktop launch through the first Room |
-| Understand behavior | [CONCEPTS](CONCEPTS.md) | Project, Room, Turn, FIFO, roles, Workflow, and approval semantics |
+| Understand behavior | [CONCEPTS](CONCEPTS.md) | Project, Room, Turn, FIFO, dynamic handles, roles, and approval semantics |
 | Change configuration | [CONFIGURATION](CONFIGURATION.md) | JSON configuration, Providers, runtime policy, and safety boundaries |
 | Look up commands | [CLI_REFERENCE](CLI_REFERENCE.md) | Command entry points, how to discover flags, and the auto-checked inventory |
 | Call HTTP | [API_REFERENCE](API_REFERENCE.md) | Management / Room HTTP and SSE contract |
@@ -16,7 +16,7 @@ This directory keeps only documentation that still needs maintenance. Historical
 | Deploy and maintain | [OPERATIONS](OPERATIONS.md) | Desktop, Service, Daemon, archive, delete, diagnostics, and recovery |
 | Diagnose problems | [TROUBLESHOOTING](TROUBLESHOOTING.md) | Symptom-oriented common failures |
 | Upgrade across versions | [UPGRADING](UPGRADING.md) | Breaking changes, backup, verification, and rollback |
-| Change the Agent contract | [PROTOCOL](PROTOCOL.md) | Input envelopes, control markers, handoff, and convergence rules |
+| Change the Agent contract | [PROTOCOL](PROTOCOL.md) | Input envelopes, exact mention routing, and convergence rules |
 
 The top-level [README](../README.md) owns English product positioning and the shortest path to a first run. The Simplified Chinese equivalent is [README.zh-CN.md](../README.zh-CN.md). [CONTRIBUTING](../CONTRIBUTING.md) owns the development process. [CHANGELOG](../CHANGELOG.md) owns version history. Desktop toolchain and packaging commands live in [desktop/README](../desktop/README.md).
 

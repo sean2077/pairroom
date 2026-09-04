@@ -139,18 +139,18 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 			"command-approval", "file-approval", "permission-approval", "plan-events", "diff-events", "usage-events",
 		}
 	case model.RuntimeGrok:
-		result.Protocol = "grok-streaming-json"
+		result.Protocol = "grok-acp-v1"
 		helpCtx, helpCancel := context.WithTimeout(parent, 6*time.Second)
 		help, helpErr := runProbeCommand(helpCtx, path, []string{"--help"}, actor, kind)
 		helpCancel()
 		result.SupportedFlags = map[string]bool{
-			"--prompt-file":     true,
-			"--output-format":   true,
-			"--resume":          true,
-			"--model":           true,
-			"--effort":          true,
-			"--yolo":            true,
-			"--permission-mode": true,
+			"agent":              true,
+			"--no-auto-update":   true,
+			"--model":            true,
+			"--reasoning-effort": true,
+			"--always-approve":   true,
+			"--permission-mode":  true,
+			"--sandbox":          true,
 		}
 		if helpErr != nil {
 			result.Warnings = append(result.Warnings, "could not inspect Grok Build flags: "+helpErr.Error())
@@ -161,10 +161,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 				}
 			}
 		}
-		result.Capabilities = []string{"streaming-json", "session-resume", "headless"}
-		if result.SupportedFlags["--prompt-file"] {
-			result.Capabilities = append(result.Capabilities, "prompt-file")
-		}
+		result.Capabilities = []string{"acp-stdio", "session-new", "session-load", "session-prompt", "session-cancel", "session-close", "permission-approval", "_x.ai/interject", "headless"}
 	default:
 		return ProbeResult{}, fmt.Errorf("unsupported runtime %q", kind)
 	}
