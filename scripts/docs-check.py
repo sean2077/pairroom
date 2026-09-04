@@ -72,7 +72,7 @@ actual_docs = {p.name for p in (ROOT / "docs").glob("*.md")}
 if actual_docs != CURATED:
     error(f"docs inventory differs: missing={sorted(CURATED-actual_docs)} unexpected={sorted(actual_docs-CURATED)}")
 
-managed = [ROOT / "README.md", ROOT / "CONTRIBUTING.md", *(ROOT / "docs").glob("*.md")]
+managed = [ROOT / "README.md", ROOT / "README.zh-CN.md", ROOT / "CONTRIBUTING.md", *(ROOT / "docs").glob("*.md")]
 link_pattern = re.compile(r'(?<!!)\[[^\]]*\]\(([^)]+)\)')
 for path in managed:
     text = path.read_text(encoding="utf-8")
@@ -121,7 +121,7 @@ protocol_source = (ROOT / "cmd" / "pairroom" / "protocol.go").read_text(encoding
 if re.search(r'legacy[^\n]*(?:manual|mentions|roundtable)', protocol_source, re.I):
     error("protocol help still advertises removed routing compatibility")
 
-for path in (ROOT / "README.md", ROOT / "docs" / "README.md"):
+for path in (ROOT / "README.md", ROOT / "README.zh-CN.md", ROOT / "docs" / "README.md"):
     if re.search(r'\bv\d+\.\d+(?:\.\d+)?\b', path.read_text(encoding="utf-8")):
         error(f"{path.relative_to(ROOT)}: hard-coded current release")
 
