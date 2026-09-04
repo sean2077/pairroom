@@ -273,6 +273,15 @@ def allow_trunk_edit(worktree_root: str) -> tuple[bool, str]:
     return False, flag
 
 
+def path_is_under(root: str, path: str) -> bool:
+    try:
+        rel = os.path.relpath(canonical(path), canonical(root))
+    except ValueError:
+        return False
+    normalized = rel.replace("\\", "/")
+    return normalized != ".." and not normalized.startswith("../")
+
+
 def run_guard(data: dict[object, object]) -> int:
     if os.environ.get("WORKTREE_ALLOW_TRUNK_EDIT") == "1":
         return 0
@@ -285,9 +294,12 @@ def run_guard(data: dict[object, object]) -> int:
         sys.stderr.write("trunk_edit_guard: cannot resolve project root, allowing\n")
         return 0
     proj_common = proj_ident[2]
+    proj_linked = not is_primary(proj_ident[1], proj_ident[2])
     wt_cmd = os.environ.get("WORKTREE_GUARD_CMD") or "bash .agents/tools/worktree.sh"
     blocked = 0
     for file_path in edited_paths(data):
+        if proj_linked and path_is_under(proj, file_path):
+            continue
         ident = git_identity(file_path)
         if ident is None:
             continue
@@ -358,6 +370,8 @@ def relative_from(root: str, path: str) -> str:
 
 
 def run_budget(data: dict[object, object]) -> int:
+    if not any(is_authority_doc(path) for path in paths(data)):
+        return 0
     max_root_lines = env_int("AUTHORITY_DOC_MAX_ROOT", 320)
     max_nested_lines = env_int("AUTHORITY_DOC_MAX_NESTED", 120)
     max_root_chars = env_int("AUTHORITY_DOC_MAX_ROOT_CHARS", 25600)
