@@ -1,42 +1,42 @@
 # Getting started
 
-本指南只覆盖“从零到完成第一个协作 Turn”。概念、全部配置和运维细节分别放在其他文档中。
+This guide covers only “from zero to the first collaboration Turn”. Concepts, full configuration, and operations live in other documents.
 
-## 1. 前置条件
+## 1. Prerequisites
 
-- 一个本地 Git 仓库；
-- CLI / browser 模式下，与根 `go.mod` 匹配的 Go toolchain；
-- 从源码构建桌面端时，满足 `desktop/README.md` 所列的 Wails v3 toolchain 与平台依赖；
-- 真实模式下可独立运行并已登录的 `claude` 与 `codex` CLI；
-- 浏览器或 PairRoom Desktop 可以访问本机 loopback Service。
+- a local Git repository;
+- for CLI / browser mode, a Go toolchain matching the root `go.mod`;
+- when building the desktop host from source, the Wails v3 toolchain and platform dependencies listed in `desktop/README.md`;
+- for real mode, independently runnable and signed-in native CLIs for the runtimes you select (`claude`, `codex`, and/or `grok`);
+- a browser or PairRoom Desktop that can reach the local loopback Service.
 
-初次使用建议先跑 Mock 模式，它能验证 PairRoom 的调度、UI、Event Log 和恢复行为，而不消耗模型额度。
+First-time use should start in Mock mode. It verifies PairRoom scheduling, UI, Event Log, and recovery without consuming model quota.
 
-## 2. 选择启动入口
+## 2. Choose a launch entry
 
-### CLI 安装
+### CLI install
 
 ```bash
 curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh | sh
 pairroom service --mock
 ```
 
-Windows 下载 `pairroom-cli-vX.Y.Z-windows-amd64.exe`；桌面安装包是 `pairroom-desktop-vX.Y.Z-windows-amd64-setup.exe`。
+On Windows, download `pairroom-cli-vX.Y.Z-windows-amd64.exe`. The desktop installer is `pairroom-desktop-vX.Y.Z-windows-amd64-setup.exe`.
 
 ### PairRoom Desktop
 
-安装对应平台的桌面 package 后直接启动 PairRoom。桌面 Host 会先验证并复用显式 Management URL；发现已安装 daemon 时会启动或连接它。安装包内含 `pairroom` CLI：如果还没有 daemon，桌面端会用这份 CLI 安装并连接，而不是只留下一个没有 `pairroom` 的 `PairRoom.exe`。已安装 daemon 但不可达时，桌面端会停止并显示修复信息，不会启动第二个 Service。无捆绑 CLI 的源码/测试入口仍可在没有 daemon 时启动内嵌 Service。
+Install the desktop package for your platform and start PairRoom. The desktop host first validates and reuses an explicit Management URL. If it finds an installed daemon, it starts or connects to it. The package includes the `pairroom` CLI: if no daemon exists, the desktop host installs and connects with that CLI instead of leaving a `PairRoom.exe` with no `pairroom`. If a daemon is installed but unreachable, the desktop host stops and shows repair guidance; it does not start a second Service. Source/test entry points without a bundled CLI can still start an embedded Service when no daemon is installed.
 
-从源码构建：
+Build from source:
 
 ```bash
 make desktop-build
 make desktop-package
 ```
 
-两个目标都针对当前主机平台运行；打包产物写入 `desktop/bin/`。如果需要单独运行桌面模块测试，可执行 `cd desktop && go test -count=1 ./...`。
+Both targets run for the current host platform. Packaged artifacts write to `desktop/bin/`. To run desktop module tests alone: `cd desktop && go test -count=1 ./...`.
 
-桌面主窗口加载的仍是现有 Management Shell，不存在独立的桌面业务状态。关闭窗口只会隐藏到托盘；使用托盘的 **Quit PairRoom** 才会退出应用。
+The desktop main window still loads the existing Management Shell. There is no separate desktop business state. Closing the window only hides to the tray; **Quit PairRoom** from the tray exits the application.
 
 ### CLI + browser
 
@@ -44,35 +44,35 @@ make desktop-package
 go run ./cmd/pairroom service --mock
 ```
 
-PairRoom 默认只监听 loopback。若没有自动打开浏览器，终端会显示 Management Shell 地址。精确选项以命令自身为准：
+PairRoom listens on loopback by default. If a browser does not open automatically, the terminal prints the Management Shell address. Exact options come from the command itself:
 
 ```bash
 go run ./cmd/pairroom service --help
 ```
 
-两种入口共享同一套 Project、Room、Binding、Event Log、Runtime 和认证语义。
+Both entries share the same Project, Room, Binding, Event Log, Runtime, and authentication semantics.
 
-## 3. 创建 Project 与 Room
+## 3. Create a Project and Room
 
-在 Management Shell 中：
+In the Management Shell:
 
-1. 注册目标仓库为 Project；
-2. 创建 Room；
-3. 确认 Claude 与 Codex 的 Binding；
-4. 指定 Driver / Reviewer，或保持 Peer；
-5. 从侧栏打开 Room，它会进入应用内标签。需要独立浏览器窗口时使用「浏览器打开」。
+1. Register the target repository as a Project;
+2. Create a Room;
+3. Confirm Agent 1 and Agent 2 Bindings (JSON keys `claude` / `codex`; each slot may run Claude Code, Codex, or Grok Build);
+4. Assign Driver / Reviewer, or leave both as Peer;
+5. Open the Room from the sidebar; it becomes an in-app tab. Use **Open in browser** for a separate browser window.
 
-Project 是仓库级管理记录；Room 是一次长期协作上下文。注销 Project 不等于删除仓库，归档 Room 也不等于永久删除 Room 数据。
+A Project is a repository-level management record. A Room is a long-lived collaboration context. Unregistering a Project does not delete the repository, and archiving a Room does not permanently delete Room data.
 
-## 4. 完成第一个 Turn
+## 4. Complete the first Turn
 
-先只选择一个 Agent，发送一个可验证的小任务，例如：
+Start with one Agent and a small verifiable task, for example:
 
 ```text
-阅读当前仓库并说明测试入口，不要修改文件。
+Read the current repository and describe the test entry points. Do not modify files.
 ```
 
-Room 中应依次出现：
+The Room should show, in order:
 
 ```text
 message accepted
@@ -82,49 +82,50 @@ message accepted
   -> Room owner released
 ```
 
-未点名的消息只发给当前 Driver。验证两位 Agent 能顺序协作时，可以说：
+An unaddressed message goes only to the current Driver. To verify that both Agents can collaborate in sequence, you can say:
 
 ```text
-互相打个招呼，介绍下自己
+Greet each other and introduce yourselves.
 ```
 
-Driver 必须在回复里 `@codex` 或 `@claude`；只对人类自我介绍不会启动另一位。PairRoom 在当前 Turn 结束后才会把回复交给 peer。
+The Driver must `@codex` or `@claude` in the reply; introducing itself only to the human does not start the other Agent. PairRoom hands the reply to the peer only after the current Turn ends.
 
-若要按阶段顺序协作，可以直接描述角色和动作：
+For staged collaboration, describe roles and actions directly:
 
 ```text
-Claude 先规划；Codex 审查方案；等我批准后由 Codex 执行；最后 Claude 验收。
+Claude plans first; Codex reviews the plan; after I approve, Codex implements; then Claude audits.
 ```
 
-PairRoom 会把阶段编译为顺序执行的 Workflow，而不是让两个 runtime 自由群聊。
+PairRoom compiles the stages into a sequential Workflow instead of letting two runtimes free-chat.
 
-## 5. Steering、下一 Turn 与取消
+## 5. Steering, next Turn, and cancel
 
-- 发给当前 owner 的普通输入可进入当前 Turn 的 steering 路径；
-- 显式 `next_turn` 或发给另一 Agent 的输入进入 Room FIFO；
-- Agent 回复中明确 `@claude`、`@codex` 或 `@peer` 会在当前 Turn 结束后交给对应 peer；`@human`/`@user` 会把决定留给用户；
-- 取消仍在 FIFO 的消息只移除该消息；
-- 已提交给 native runtime 的输入可能需要中断整个当前 native Turn。
+- Ordinary input to the current owner can take the current Turn's steering path;
+- Explicit `next_turn` or input to the other Agent enters the Room FIFO;
+- An explicit `@claude`, `@codex`, or `@peer` in an Agent reply is delivered to that peer after the current Turn ends; `@human`/`@user` leaves the decision with the user;
+- Cancelling a message still in the FIFO removes only that message;
+- Input already submitted to a native runtime may require interrupting the whole current native Turn.
 
-详细语义见 [Concepts](CONCEPTS.md)。
+See [Concepts](CONCEPTS.md) for the full semantics.
 
-## 6. 切换到真实 Agent
+## 6. Switch to real Agents
 
-先在目标仓库中分别验证：
+First verify the selected native CLIs in the target repository:
 
 ```bash
 claude --version
 codex --version
+grok --version
 ```
 
-然后去掉 `--mock`，在配置或 UI 中选择所需模型、Provider、权限与 sandbox。PairRoom 不代替两个 CLI 的登录和凭据管理。
+Then drop `--mock` and, if needed, set model, Provider, permission, and sandbox in configuration or the UI. Empty `provider`, `model`, `effort`, and `instructions` inherit each selected native CLI's user/global configuration. PairRoom does not replace CLI login or credential management.
 
-## 7. 正确结束
+## 7. End correctly
 
-- 暂时不用：退出 Room，Runtime 可按 idle policy 回收；
-- 关闭桌面主窗口：仅隐藏到托盘，活动 Turn 继续运行；
-- 退出桌面应用：内嵌 Service 会按 Management → Runtime drain → lock release 的顺序关闭；外部 daemon 保持运行；
-- 阶段完成：归档 Room；归档会先停止当前 Agent Turn；
-- 确定不再需要：按 UI / API 的永久删除流程处理，并先保留备份。
+- Pause for now: leave the Room; the Runtime may be reclaimed by idle policy;
+- Close the desktop main window: hide to tray; active Turns keep running;
+- Quit the desktop app: an embedded Service shuts down in Management → Runtime drain → lock release order; an external daemon keeps running;
+- Stage complete: archive the Room; archive stops the current Agent Turn first;
+- No longer needed: follow the UI / API permanent-delete flow, and keep a backup first.
 
-下一步阅读 [Configuration](CONFIGURATION.md) 和 [Operations](OPERATIONS.md)。
+Next, read [Configuration](CONFIGURATION.md) and [Operations](OPERATIONS.md).

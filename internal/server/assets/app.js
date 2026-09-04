@@ -1,6 +1,8 @@
 (() => {
   'use strict';
 
+  const t = (zh, en) => (window.PairRoomI18n && window.PairRoomI18n.t) ? window.PairRoomI18n.t(zh, en) : zh;
+
   const bootstrapParameters = new URLSearchParams(window.location.hash.replace(/^#/, ''));
   let bootstrapToken = bootstrapParameters.get('token') || '';
   if (bootstrapToken) {
@@ -75,7 +77,7 @@
     bootstrapToken = '';
     if (!response.ok) {
       const message = payload.error || (response.status === 401
-        ? '浏览器会话无效；请从 PairRoom 启动输出中的完整地址重新打开。'
+        ? t('浏览器会话无效；请从 PairRoom 启动输出中的完整地址重新打开。')
         : response.statusText);
       throw new Error(message);
     }
@@ -431,7 +433,7 @@
       approve.className = 'workflow-approve';
       approve.textContent = `批准计划 v${workflow.revision || 1}`;
       approve.addEventListener('click', () => {
-        messageInput.value = '批准执行当前计划';
+        messageInput.value = t('批准执行当前计划');
         persistComposerDraft();
         autoSizeComposer();
         void sendMessage();
@@ -469,7 +471,7 @@
     if (workflow.status === 'waiting_human') {
       const hint = document.createElement('div');
       hint.className = 'workflow-hint';
-      hint.textContent = '当前阶段正在等待你的选择；直接回复房间即可继续同一阶段。';
+      hint.textContent = t('当前阶段正在等待你的选择；直接回复房间即可继续同一阶段。');
       bar.appendChild(hint);
     } else if (workflow.status === 'awaiting_approval') {
       const hint = document.createElement('div');
@@ -532,11 +534,11 @@
       const vendorID = String(p.session_id || '').trim();
       if (!vendorID) {
         copy.disabled = true;
-        copy.textContent = '尚未生成';
-        copy.title = '原生 Session/Thread ID 将在首次被接受的 Turn 后生成';
+        copy.textContent = t('尚未生成');
+        copy.title = t('原生 Session/Thread ID 将在首次被接受的 Turn 后生成');
       } else {
-        copy.textContent = actor === 'codex' ? '复制 Thread ID' : '复制 Session ID';
-        copy.title = '复制完整 ID，用于 resume 原生会话';
+        copy.textContent = actor === 'codex' ? t('复制 Thread ID') : t('复制 Session ID');
+        copy.title = t('复制完整 ID，用于 resume 原生会话');
         copy.addEventListener('click', async () => {
           try {
             await navigator.clipboard.writeText(vendorID);
@@ -571,7 +573,7 @@
       if (stalled) {
         const warning = document.createElement('div');
         warning.className = 'runtime-line runtime-warning';
-        warning.textContent = '长时间无可观察事件；静默本身不等于停滞，请在 Inspector 判断后再打断或重试';
+        warning.textContent = t('长时间无可观察事件；静默本身不等于停滞，请在 Inspector 判断后再打断或重试');
         main.appendChild(warning);
       }
       if (runtime.warnings && runtime.warnings.length) {
@@ -593,8 +595,8 @@
 	  if (workspace.kind) {
 		const workspaceLine = document.createElement('div');
 		workspaceLine.className = `workspace-boundary ${workspace.read_only ? 'protected' : ''}`;
-		const parts = [workspace.kind === 'reviewer-snapshot' ? '独立审查快照' : '实时工作区'];
-		if (workspace.dirty) parts.push('含未提交改动');
+		const parts = [workspace.kind === 'reviewer-snapshot' ? t('独立审查快照') : t('实时工作区')];
+		if (workspace.dirty) parts.push(t('含未提交改动'));
 		if (workspace.untracked_count) parts.push(`${workspace.untracked_count} 个未跟踪文件`);
 		workspaceLine.textContent = parts.join(' · ');
 		workspaceLine.title = [
@@ -609,7 +611,7 @@
       const roleSelect = document.createElement('select');
       roleSelect.className = 'role-select';
       roleSelect.dataset.roleActor = actor;
-      [['driver', 'Driver · 实现'], ['reviewer', 'Reviewer · 独立审查'], ['peer', 'Peer · 平级讨论']].forEach(([value, label]) => {
+      [['driver', t('Driver · 实现')], ['reviewer', t('Reviewer · 独立审查')], ['peer', t('Peer · 平级讨论')]].forEach(([value, label]) => {
         const option = document.createElement('option');
         option.value = value;
         option.textContent = label;
@@ -621,11 +623,11 @@
       const actions = document.createElement('div');
       actions.className = 'agent-actions';
       if (p.state === 'stopped' || p.state === 'error') {
-        actions.appendChild(actionButton(actor, 'start', '启动'));
+        actions.appendChild(actionButton(actor, 'start', t('启动')));
       } else {
-        actions.appendChild(actionButton(actor, 'interrupt', '打断'));
-        actions.appendChild(actionButton(actor, 'restart', '重启'));
-        actions.appendChild(actionButton(actor, 'stop', '停止', true));
+        actions.appendChild(actionButton(actor, 'interrupt', t('打断')));
+        actions.appendChild(actionButton(actor, 'restart', t('重启')));
+        actions.appendChild(actionButton(actor, 'stop', t('停止'), true));
       }
       main.appendChild(actions);
       card.appendChild(main);
@@ -763,7 +765,7 @@
       older.dataset.loadOlder = 'true';
       older.disabled = state.loadingOlder;
       older.textContent = state.loadingOlder
-        ? '正在加载更早消息…'
+        ? t('正在加载更早消息…')
         : `加载更早消息 · 已显示 ${windowInfo.loaded || state.snapshot.messages.length} / ${windowInfo.total}`;
       timeline.appendChild(older);
     }
@@ -817,7 +819,7 @@
     if ((query || state.conversationFilter !== 'all' || state.threadFilter) && visibleCount === 0) {
       const empty = document.createElement('div');
       empty.className = 'timeline-empty';
-      empty.innerHTML = '<div><h2>没有匹配消息</h2><p>修改搜索、消息筛选或退出线程视图即可恢复完整时间线。</p></div>';
+      empty.innerHTML = t('<div><h2>没有匹配消息</h2><p>修改搜索、消息筛选或退出线程视图即可恢复完整时间线。</p></div>');
       timeline.appendChild(empty);
     }
   }
@@ -868,8 +870,8 @@
     yesterday.setDate(today.getDate() - 1);
     const key = localDateKey(date);
     let label = '';
-    if (key === localDateKey(today)) label = '今天';
-    else if (key === localDateKey(yesterday)) label = '昨天';
+    if (key === localDateKey(today)) label = t('今天');
+    else if (key === localDateKey(yesterday)) label = t('昨天');
     else {
       label = new Intl.DateTimeFormat('zh-CN', {
         year: date.getFullYear() === today.getFullYear() ? undefined : 'numeric',
@@ -906,34 +908,34 @@
     actions.className = 'message-actions';
     const inspect = document.createElement('button');
     inspect.className = 'reply-action inspect-action';
-    inspect.textContent = '过程';
+    inspect.textContent = t('过程');
     inspect.dataset.inspectId = message.id;
     const copy = document.createElement('button');
     copy.className = 'reply-action';
-    copy.textContent = '复制';
+    copy.textContent = t('复制');
     copy.dataset.copyMessage = message.id;
     const thread = document.createElement('button');
     thread.className = 'reply-action';
-    thread.textContent = '线程';
+    thread.textContent = t('线程');
     thread.dataset.threadId = message.thread_id || '';
-    thread.title = '仅查看这条讨论线程';
+    thread.title = t('仅查看这条讨论线程');
     const reply = document.createElement('button');
     reply.className = 'reply-action';
-    reply.textContent = '回复';
+    reply.textContent = t('回复');
     reply.dataset.replyId = message.id;
     actions.append(inspect, copy, thread, reply);
     meta.append(author, time);
     if (message.retry_of) {
       const retryMarker = document.createElement('span');
       retryMarker.className = 'retry-marker';
-      retryMarker.textContent = '重试';
+      retryMarker.textContent = t('重试');
       retryMarker.title = `Retry of ${message.retry_of}`;
       meta.appendChild(retryMarker);
     }
 	if (message.intent && message.intent !== 'append') {
 	  const intentMarker = document.createElement('span');
 	  intentMarker.className = `intent-marker intent-${message.intent}`;
-	  intentMarker.textContent = message.intent === 'supersede' ? '替代旧指令' : '下一 Turn';
+	  intentMarker.textContent = message.intent === 'supersede' ? t('替代旧指令') : t('下一 Turn');
 	  if (message.supersedes) {
 		const count = Object.values(message.supersedes).reduce((sum, ids) => sum + (ids || []).length, 0);
 		intentMarker.title = count ? `取代 ${count} 个在途消息目标` : '';
@@ -943,7 +945,7 @@
     if (message.handoff) {
       const handoffMarker = document.createElement('span');
       handoffMarker.className = 'intent-marker';
-      handoffMarker.textContent = '紧凑交接';
+      handoffMarker.textContent = t('紧凑交接');
       handoffMarker.title = truncate(message.handoff, 320);
       meta.appendChild(handoffMarker);
     }
@@ -960,7 +962,7 @@
         quote.type = 'button';
         quote.className = 'reply-quote';
         quote.dataset.scrollMessage = parent.id;
-        const parentSummary = parent.text || (parent.attachments || []).map((item) => item.name).join('、') || '图片消息';
+        const parentSummary = parent.text || (parent.attachments || []).map((item) => item.name).join('、') || t('图片消息');
         quote.textContent = `${displayName(parent.from)}：${truncate(parentSummary, 110)}`;
         body.appendChild(quote);
       }
@@ -979,7 +981,7 @@
       expand.type = 'button';
       expand.className = 'expand-message';
       expand.dataset.expandMessage = message.id;
-      expand.textContent = isExpanded ? '收起消息' : '展开完整消息';
+      expand.textContent = isExpanded ? t('收起消息') : t('展开完整消息');
       expand.setAttribute('aria-expanded', String(isExpanded));
       bubble.appendChild(expand);
     }
@@ -1021,8 +1023,8 @@
         cancelButton.dataset.cancelTarget = target;
         cancelButton.textContent = `取消 ${displayName(target)}`;
         cancelButton.title = status === 'pending'
-          ? '该消息仍在 Room FIFO 中；只移除这一项，不会打断任何原生 Turn'
-          : '该输入已进入原生 Runtime；取消可能中断该参与者当前整个 Turn，但不会删除 Room FIFO 中尚未提交的后续消息';
+          ? t('该消息仍在 Room FIFO 中；只移除这一项，不会打断任何原生 Turn')
+          : t('该输入已进入原生 Runtime；取消可能中断该参与者当前整个 Turn，但不会删除 Room FIFO 中尚未提交的后续消息');
         delivery.appendChild(cancelButton);
       }
     }
@@ -1045,7 +1047,7 @@
     author.className = 'message-author';
     author.textContent = displayName(actor);
     const typing = document.createElement('span');
-    typing.textContent = '正在输入';
+    typing.textContent = t('正在输入');
     meta.append(author, typing);
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
@@ -1109,7 +1111,7 @@
       link.href = value;
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
-      link.textContent = '打开链接';
+      link.textContent = t('打开链接');
       placeholder.appendChild(link);
     }
     return placeholder;
@@ -1144,7 +1146,7 @@
     stage.dataset.openAttachment = attachment.id;
     const loading = document.createElement('span');
     loading.className = 'image-loading';
-    loading.textContent = '加载图片…';
+    loading.textContent = t('加载图片…');
     stage.appendChild(loading);
     const caption = document.createElement(inline ? 'figcaption' : 'div');
     caption.className = inline ? 'inline-image-caption' : 'message-image-caption';
@@ -1378,8 +1380,8 @@
       const empty = document.createElement('div');
       empty.className = 'activity-empty';
       empty.textContent = scopedMessage
-        ? '该消息暂时没有持久化工作摘要。'
-        : 'Agent 的 Turn、工具调用、命令、计划、Diff 和运行日志会显示在这里。';
+        ? t('该消息暂时没有持久化工作摘要。')
+        : t('Agent 的 Turn、工具调用、命令、计划、Diff 和运行日志会显示在这里。');
       container.appendChild(empty);
     }
   }
@@ -1472,7 +1474,7 @@
     if (!pending.length) {
       const empty = document.createElement('div');
       empty.className = 'approvals-empty';
-      empty.textContent = '当前没有待处理审批。Claude 的工具权限/交互问题与 Codex 的命令、文件和权限请求都会显示在这里。';
+      empty.textContent = t('当前没有待处理审批。Claude 的工具权限/交互问题与 Codex 的命令、文件和权限请求都会显示在这里。');
       container.appendChild(empty);
       return;
     }
@@ -1501,7 +1503,7 @@
         const raw = document.createElement('details');
         raw.className = 'approval-raw';
         const rawTitle = document.createElement('summary');
-        rawTitle.textContent = '查看完整原生请求';
+        rawTitle.textContent = t('查看完整原生请求');
         const rawBody = document.createElement('pre');
         rawBody.className = 'approval-detail';
         rawBody.textContent = prettyJSON(approval.detail);
@@ -1510,11 +1512,11 @@
 
         const actions = document.createElement('div');
         actions.className = 'approval-actions';
-        actions.appendChild(approvalButton(approval.id, 'accept', '允许一次', 'approve-button'));
+        actions.appendChild(approvalButton(approval.id, 'accept', t('允许一次'), 'approve-button'));
         if (approval.agent === 'codex' || detail.permission_suggestions) {
-          actions.appendChild(approvalButton(approval.id, 'acceptForSession', '本会话允许', 'approve-button secondary-approve'));
+          actions.appendChild(approvalButton(approval.id, 'acceptForSession', t('本会话允许'), 'approve-button secondary-approve'));
         }
-        actions.appendChild(approvalButton(approval.id, 'decline', '拒绝', 'decline-button'));
+        actions.appendChild(approvalButton(approval.id, 'decline', t('拒绝'), 'decline-button'));
         card.appendChild(actions);
       }
       container.appendChild(card);
@@ -1542,11 +1544,11 @@
     if (!questions.length) {
       const warning = document.createElement('div');
       warning.className = 'approval-summary approval-warning';
-      warning.textContent = 'Claude 发出了交互问题，但请求中没有可解析的问题列表。为安全起见只能拒绝。';
+      warning.textContent = t('Claude 发出了交互问题，但请求中没有可解析的问题列表。为安全起见只能拒绝。');
       card.appendChild(warning);
       const actions = document.createElement('div');
       actions.className = 'approval-actions';
-      actions.appendChild(approvalButton(approval.id, 'decline', '拒绝', 'decline-button'));
+      actions.appendChild(approvalButton(approval.id, 'decline', t('拒绝'), 'decline-button'));
       card.appendChild(actions);
       return;
     }
@@ -1596,7 +1598,7 @@
       const other = document.createElement('input');
       other.type = 'text';
       other.className = 'question-other';
-      other.placeholder = options.length ? '其他回答（可选）' : '请输入回答';
+      other.placeholder = options.length ? t('其他回答（可选）') : t('请输入回答');
       other.dataset.questionOther = 'true';
       block.appendChild(other);
       form.appendChild(block);
@@ -1608,8 +1610,8 @@
     submit.type = 'button';
     submit.className = 'approve-button';
     submit.dataset.questionSubmit = approval.id;
-    submit.textContent = '提交回答';
-    actions.append(submit, approvalButton(approval.id, 'decline', '拒绝', 'decline-button'));
+    submit.textContent = t('提交回答');
+    actions.append(submit, approvalButton(approval.id, 'decline', t('拒绝'), 'decline-button'));
     form.appendChild(actions);
     card.appendChild(form);
   }
@@ -1666,7 +1668,7 @@
       }
       const extensionLooksValid = /\.(png|jpe?g|gif|webp)$/i.test(file.name || '');
       if (!ACCEPTED_IMAGE_TYPES.has(String(file.type || '').toLowerCase()) && !extensionLooksValid) {
-        toast(`${file.name || '文件'}：仅支持 PNG、JPEG、GIF 和 WebP`, 'error');
+        toast(`${file.name || t('文件')}：仅支持 PNG、JPEG、GIF 和 WebP`, 'error');
         continue;
       }
       if (file.size > MAX_IMAGE_BYTES) {
@@ -1720,7 +1722,7 @@
       if (error.name === 'AbortError' || item.removed) return;
       item.status = 'error';
       item.error = error.message;
-      toast(`${item.file.name || '图片'} 上传失败：${error.message}`, 'error');
+      toast(`${item.file.name || t('图片')} 上传失败：${error.message}`, 'error');
     } finally {
       item.controller = null;
       renderAttachmentStrip();
@@ -1738,10 +1740,10 @@
       card.dataset.pendingAttachment = item.key;
       const image = document.createElement('img');
       image.src = item.previewURL;
-      image.alt = item.file.name || '待发送图片';
+      image.alt = item.file.name || t('待发送图片');
       const meta = document.createElement('div');
       meta.className = 'pending-attachment-meta';
-      const status = item.status === 'uploading' ? '上传中…'
+      const status = item.status === 'uploading' ? t('上传中…')
         : item.status === 'error' ? `失败 · ${truncate(item.error, 48)}`
           : `${item.attachment?.width && item.attachment?.height ? `${item.attachment.width}×${item.attachment.height} · ` : ''}${formatBytes(item.attachment?.size || item.file.size)}`;
       meta.textContent = `${item.file.name || 'image'} · ${status}`;
@@ -1758,7 +1760,7 @@
         retry.type = 'button';
         retry.className = 'retry-upload';
         retry.dataset.retryUpload = item.key;
-        retry.textContent = '重试';
+        retry.textContent = t('重试');
         card.appendChild(retry);
       }
       strip.appendChild(card);
@@ -1808,7 +1810,7 @@
   function updateComposerAvailability() {
     const uploading = state.pendingAttachments.some((item) => item.status === 'uploading');
     $('send-button').disabled = uploading;
-    $('send-button').title = uploading ? '图片上传完成后才能发送' : '';
+    $('send-button').title = uploading ? t('图片上传完成后才能发送') : '';
   }
 
   async function sendMessage() {
@@ -1886,7 +1888,7 @@
   async function retryMessage(messageId, target, button) {
     button.disabled = true;
     const old = button.textContent;
-    button.textContent = '重试中…';
+    button.textContent = t('重试中…');
     try {
       await api(`/api/v1/messages/${encodeURIComponent(messageId)}/retry`, {
         method: 'POST',
@@ -1957,7 +1959,7 @@
         method: 'POST',
         body: JSON.stringify({ decision, ...extra }),
       });
-      toast(decision === 'decline' || decision === 'cancel' ? '已拒绝原生请求' : '审批决定已提交', 'success');
+      toast(decision === 'decline' || decision === 'cancel' ? t('已拒绝原生请求') : t('审批决定已提交'), 'success');
     } catch (error) {
       toast(error.message, 'error');
       button.disabled = false;
@@ -1984,7 +1986,7 @@
   }
 
   async function refreshDiff() {
-    $('diff-output').textContent = '读取 Diff…';
+    $('diff-output').textContent = t('读取 Diff…');
     try {
       const staged = $('staged-diff').checked ? '?staged=1' : '';
       const result = await api(`/api/v1/git/diff${staged}`);
@@ -2056,8 +2058,8 @@
     const labels = {
       driver: driver ? `发送给当前 Driver · ${displayName(driver)}` : 'Driver 角色不唯一；请选择明确 Agent',
       reviewer: reviewer ? `发送给当前 Reviewer · ${displayName(reviewer)}` : 'Reviewer 角色不唯一；请选择明确 Agent',
-      claude: '仅发送给 Claude',
-      codex: '仅发送给 Codex',
+      claude: t('仅发送给 Claude'),
+      codex: t('仅发送给 Codex'),
     };
     $('delivery-hint').textContent = labels[state.selectedTarget] || labels.driver;
   }
@@ -2172,7 +2174,7 @@
     if (!('Notification' in window)) { toast('当前浏览器不支持桌面通知', 'error'); return; }
     const permission = await Notification.requestPermission();
     updateNotificationButton();
-    toast(permission === 'granted' ? '桌面通知已启用' : '桌面通知未启用', permission === 'granted' ? 'success' : 'error');
+    toast(permission === 'granted' ? t('桌面通知已启用') : t('桌面通知未启用'), permission === 'granted' ? 'success' : 'error');
   }
 
   function updateNotificationButton() {
@@ -2180,9 +2182,9 @@
     if (!('Notification' in window)) { button.disabled = true; button.textContent = '×'; return; }
     const granted = Notification.permission === 'granted';
     button.textContent = granted ? '◆' : '♢';
-    button.title = granted ? '桌面通知已启用' : '启用桌面通知';
+    button.title = granted ? t('桌面通知已启用') : t('启用桌面通知');
     button.setAttribute('aria-pressed', String(granted));
-    button.setAttribute('aria-label', granted ? '桌面通知已启用，再次点击管理' : '启用桌面通知');
+    button.setAttribute('aria-label', granted ? t('桌面通知已启用，再次点击管理') : t('启用桌面通知'));
   }
 
   async function loadOlderMessages(button) {
@@ -2245,7 +2247,7 @@
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'toast-close';
-    close.setAttribute('aria-label', '关闭通知');
+    close.setAttribute('aria-label', t('关闭通知'));
     close.textContent = '×';
     $('toast-stack').appendChild(node);
     const duration = type === 'error' ? 8000 : 4500;
@@ -2265,29 +2267,29 @@
       if (actor === 'claude') {
         return {
           protected: true,
-          text: '原生保护 · Plan mode',
-          title: 'Reviewer 使用 Claude Code 原生 plan permission mode；避免执行修改，但不是操作系统级文件隔离。',
+          text: t('原生保护 · Plan mode'),
+          title: t('Reviewer 使用 Claude Code 原生 plan permission mode；避免执行修改，但不是操作系统级文件隔离。'),
         };
       }
       return {
         protected: true,
-        text: '原生保护 · Read-only sandbox',
-        title: 'Reviewer 的每个 Codex turn 使用 App Server 原生 readOnly sandbox policy。',
+        text: t('原生保护 · Read-only sandbox'),
+        title: t('Reviewer 的每个 Codex turn 使用 App Server 原生 readOnly sandbox policy。'),
       };
     }
     if (actor === 'claude') {
       const mode = runtime.permission_mode || 'configured permission mode';
       return {
         protected: false,
-        text: `${role === 'driver' ? '写入者' : '平级协作'} · ${mode}`,
-        title: '该角色按 Claude Code 当前 permission mode 工作，可能修改工作区。',
+        text: `${role === 'driver' ? t('写入者') : t('平级协作')} · ${mode}`,
+        title: t('该角色按 Claude Code 当前 permission mode 工作，可能修改工作区。'),
       };
     }
     const sandbox = runtime.sandbox || 'workspaceWrite';
     return {
       protected: false,
-      text: `${role === 'driver' ? '写入者' : '平级协作'} · ${sandbox}`,
-      title: '该角色按 Codex 当前 sandbox policy 工作，可能修改工作区。',
+      text: `${role === 'driver' ? t('写入者') : t('平级协作')} · ${sandbox}`,
+      title: t('该角色按 Codex 当前 sandbox policy 工作，可能修改工作区。'),
     };
   }
 
@@ -2307,10 +2309,10 @@
     return ({ driver: 'Driver', reviewer: 'Reviewer', peer: 'Peer' })[value] || value;
   }
   function deliveryText(value) {
-    return ({ pending: '发送中', started: '已开始新 Turn', injected: '已注入当前 Turn', queued: '已排队', failed: '失败', skipped: '已跳过' })[value] || value;
+    return ({ pending: t('发送中'), started: t('已开始新 Turn'), injected: t('已注入当前 Turn'), queued: t('已排队'), failed: t('失败'), skipped: t('已跳过') })[value] || value;
   }
   function processingText(value) {
-    return ({ waiting: '等待处理', working: '处理中', completed: '已完成', cancelled: '已取消', failed: '处理失败', superseded: '已被新指令取代' })[value] || value;
+    return ({ waiting: t('等待处理'), working: t('处理中'), completed: t('已完成'), cancelled: t('已取消'), failed: t('处理失败'), superseded: t('已被新指令取代') })[value] || value;
   }
   function isRetryable(message, target) {
     const processing = message.processing && message.processing[target];
@@ -2319,12 +2321,12 @@
     return ['failed', 'skipped'].includes(delivery);
   }
   function actionText(value) {
-    return ({ start: '已启动', stop: '已停止', restart: '已重启', interrupt: '已请求打断' })[value] || value;
+    return ({ start: t('已启动'), stop: t('已停止'), restart: t('已重启'), interrupt: t('已请求打断') })[value] || value;
   }
   function sessionSummary(p) {
     if (p.current_turn) return `Turn ${truncate(p.current_turn, 18)}`;
     if (p.session_id) return `Session ${truncate(p.session_id, 18)}`;
-    return '等待启动原生 Agent';
+    return t('等待启动原生 Agent');
   }
   function formatTime(value) {
     try { return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(value)); }
@@ -2344,7 +2346,7 @@
   }
   function attachmentSummary(message) {
     const attachments = (message?.attachments || []).map((item) => `[图片] ${item.name}`).join('、');
-    return attachments || '图片消息';
+    return attachments || t('图片消息');
   }
   async function openAttachment(attachment) {
     try {
@@ -2630,7 +2632,7 @@
     const shell = document.createElement('div');
     shell.className = 'timeline-loading';
     shell.setAttribute('role', 'status');
-    shell.setAttribute('aria-label', '正在加载协作时间线');
+    shell.setAttribute('aria-label', t('正在加载协作时间线'));
     for (let i = 0; i < 4; i += 1) {
       const row = document.createElement('div');
       row.className = 'skeleton-row';
@@ -2662,13 +2664,13 @@
     symbol.setAttribute('aria-hidden', 'true');
     symbol.textContent = '!';
     const heading = document.createElement('h2');
-    heading.textContent = '无法加载房间';
+    heading.textContent = t('无法加载房间');
     const text = document.createElement('p');
-    text.textContent = message || '浏览器会话或本地 Service 连接失败。从 PairRoom 启动输出中的完整地址重新打开，或重试。';
+    text.textContent = message || t('浏览器会话或本地 Service 连接失败。从 PairRoom 启动输出中的完整地址重新打开，或重试。');
     const retry = document.createElement('button');
     retry.type = 'button';
     retry.className = 'secondary-button';
-    retry.textContent = '重新加载房间';
+    retry.textContent = t('重新加载房间');
     retry.addEventListener('click', () => { bootRoom(); });
     shell.append(symbol, heading, text, retry);
     timeline.appendChild(shell);
@@ -2694,6 +2696,11 @@
       setConnection(false, 'Offline');
     });
   }
+
+  document.addEventListener('pairroom:lang', () => {
+    if (window.PairRoomI18n) window.PairRoomI18n.apply(document);
+    if (state.snapshot) render(true);
+  });
 
   bootRoom();
 })();

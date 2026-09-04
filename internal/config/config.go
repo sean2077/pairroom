@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/sean2077/pairroom/internal/model"
 )
 
 type Agent struct {
+	Runtime        string            `json:"runtime,omitempty"`
 	Command        string            `json:"command"`
 	Args           []string          `json:"args,omitempty"`
 	Model          string            `json:"model"`
@@ -20,7 +22,12 @@ type Agent struct {
 	ApprovalPolicy string            `json:"approval_policy,omitempty"`
 	Sandbox        string            `json:"sandbox,omitempty"`
 	Provider       string            `json:"provider,omitempty"`
+	Instructions   string            `json:"instructions,omitempty"`
 	RuntimeEnv     map[string]string `json:"-"`
+}
+
+func (a Agent) RuntimeKind(slot model.ActorID) model.RuntimeKind {
+	return model.ParseRuntimeKind(a.Runtime).CanonicalForSlot(slot)
 }
 
 // CCConnectImport references cc-connect's existing provider source instead
@@ -92,14 +99,15 @@ func Defaults() File {
 		MaxAgentHops:        6,
 		StallWarningSeconds: 300,
 		AutoStart:           true,
-		Claude:              Agent{Command: "claude", PermissionMode: "auto"},
-		Codex:               Agent{Command: "codex", Effort: "high", ApprovalPolicy: "untrusted", Sandbox: "workspaceWrite"},
+		Claude:              Agent{Runtime: string(model.RuntimeClaude), Command: "claude", PermissionMode: "auto"},
+		Codex:               Agent{Runtime: string(model.RuntimeCodex), Command: "codex"},
 	}
 }
 
 func Load(path string) (File, error) {
 	cfg := Defaults()
 	if path == "" {
+		cfg.applyRuntimeDefaults()
 		if err := cfg.resolveProviderProfiles(""); err != nil {
 			return File{}, err
 		}
@@ -114,6 +122,7 @@ func Load(path string) (File, error) {
 	if err := decoder.Decode(&cfg); err != nil {
 		return File{}, fmt.Errorf("decode config: %w", err)
 	}
+	cfg.applyRuntimeDefaults()
 	if err := cfg.resolveProviderProfiles(path); err != nil {
 		return File{}, err
 	}
@@ -121,6 +130,24 @@ func Load(path string) (File, error) {
 		return File{}, err
 	}
 	return cfg, nil
+}
+
+func (c *File) applyRuntimeDefaults() {
+	if c == nil {
+		return
+	}
+	c.Claude.applyRuntimeDefault(model.ActorClaude)
+	c.Codex.applyRuntimeDefault(model.ActorCodex)
+}
+
+func (a *Agent) applyRuntimeDefault(slot model.ActorID) {
+	kind := a.RuntimeKind(slot)
+	if strings.TrimSpace(a.Runtime) == "" {
+		a.Runtime = string(kind)
+	}
+	if strings.TrimSpace(a.Command) == "" {
+		a.Command = kind.DefaultCommand()
+	}
 }
 
 func (c File) Validate() error {
@@ -138,6 +165,12 @@ func (c File) Validate() error {
 	}
 	if c.Claude.Command == "" || c.Codex.Command == "" {
 		return errors.New("both agent commands are required")
+	}
+	if !c.Claude.RuntimeKind(model.ActorClaude).Valid() {
+		return fmt.Errorf("invalid Agent 1 runtime %q: use claude, codex, or grok", c.Claude.Runtime)
+	}
+	if !c.Codex.RuntimeKind(model.ActorCodex).Valid() {
+		return fmt.Errorf("invalid Agent 2 runtime %q: use claude, codex, or grok", c.Codex.Runtime)
 	}
 	return validateProviderNames(c.Providers)
 }

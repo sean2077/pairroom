@@ -30,8 +30,10 @@ type Contract struct {
 	Rules       []Rule                `json:"rules"`
 }
 
-func Bootstrap(actor model.ActorID) string {
+func Bootstrap(actor model.ActorID, selfRuntime, peerRuntime model.RuntimeKind) string {
 	peer := model.OtherParticipant(actor)
+	selfName := model.ParticipantDisplayName(actor, selfRuntime)
+	peerName := model.ParticipantDisplayName(peer, peerRuntime)
 	return fmt.Sprintf(`You are %s in PairRoom with a human and %s. Native harness, project, permission, sandbox, and safety rules remain authoritative.
 
 PairRoom:
@@ -43,7 +45,7 @@ PairRoom:
 - End [PAIRROOM:DONE] when no peer turn is needed. A direct peer address wins over a generic stop marker; ask humans visibly with @human and [PAIRROOM:WAIT], which always wins over peer routing. Use [PAIRROOM:BLOCKED] for an unresolved blocker.
 - Keep conclusions and evidence in chat, tool detail in Inspector.
 
-%s: pairroom protocol --actor %s`, actor.DisplayName(), peer.DisplayName(), peer.DisplayName(), peer, peer, Version, actor)
+%s: pairroom protocol --actor %s`, selfName, peerName, peerName, peer, peer, Version, actor)
 }
 
 var baseRules = []Rule{
@@ -52,7 +54,7 @@ var baseRules = []Rule{
 	{ID: "input.envelope", Text: "Treat each [PairRoom message] envelope as current input; fields describe Room state, peer names the other Agent, and the delimited body is the sender's message."},
 	{ID: "output.verbatim", Text: "The final natural-language response is posted verbatim to the shared Room; make it useful without replaying tool chatter."},
 	{ID: "delivery.single-turn", Text: "PairRoom permits one active participant turn. Same-participant messages steer that turn; peer work waits until the owner completes."},
-	{ID: "delivery.next", Text: "An explicit @claude, @codex, or @peer address requests that peer turn; when the human asks both of you to interact, address the envelope peer. Without a direct address, request continuation only with a concise HANDOFF followed by [PAIRROOM:NEXT]. @human and @user return control to the human."},
+	{ID: "delivery.next", Text: "An explicit @agent1, @agent2, @claude, @codex, @grok, or @peer address requests that peer turn; when the human asks both of you to interact, address the envelope peer. Without a direct address, request continuation only with a concise HANDOFF followed by [PAIRROOM:NEXT]. @human and @user return control to the human."},
 	{ID: "delivery.stop", Text: "Use [PAIRROOM:DONE] when the task can return to the human, [PAIRROOM:WAIT] for a human decision, or [PAIRROOM:BLOCKED] for an unresolved blocker."},
 	{ID: "workflow.natural", Text: "When workflow_id and workflow_mode are present, PairRoom compiled the human's natural-language stage sequence; complete only the current stage and preserve its order."},
 	{ID: "workflow.gate", Text: "Planning, review, and audit stages are read-only. An execute stage following planning/review starts only after the human approves the current plan revision."},

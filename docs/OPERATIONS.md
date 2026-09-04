@@ -1,88 +1,88 @@
 # Operations
 
-## 运行形态
+## Runtime shapes
 
-- PairRoom Desktop：Wails v3 原生 Window / Tray host，复用 daemon 或在进程内启动 Service；
-- `pairroom service`：正常的多 Project / 多 Room 管理入口；
-- `pairroom serve`：单仓库兼容入口；
-- `pairroom daemon`：把 Service 作为本机后台进程管理；
-- `--mock`：不启动供应商 CLI 的确定性验证模式。
+- PairRoom Desktop: Wails v3 native Window / Tray host; reuses a daemon or starts the Service in-process;
+- `pairroom service`: the normal multi-Project / multi-Room management entry;
+- `pairroom serve`: single-repository compatibility entry;
+- `pairroom daemon`: manage the Service as a local background process;
+- `--mock`: deterministic verification mode that does not start vendor CLIs.
 
-所有内置入口默认使用 numeric loopback。暴露到其他接口前必须配置 token，并评估本机仓库、Agent 凭据和附件所带来的风险。
+All built-in entries default to numeric loopback. Before exposing any other interface, configure a token and assess the risk of local repositories, Agent credentials, and attachments.
 
 ## Desktop lifecycle
 
-桌面端启动时按以下顺序选择唯一 Service owner：
+On startup the desktop host chooses a single Service owner in this order:
 
-1. 验证 `PAIRROOM_DESKTOP_URL` 指向 authenticated numeric-loopback PairRoom Service；
-2. 发现已安装 daemon；如果它已停止，桌面端启动它并等待当前 authenticated Management URL；
-3. 若没有 daemon，但桌面 Host 旁边有捆绑的 `pairroom` CLI，则用它执行 `pairroom daemon install` 再连接；
-4. 只有没有 daemon、也没有捆绑 CLI 时，才在桌面进程中启动内嵌 Service；已安装但不可达时保持 fail closed。
+1. Validate that `PAIRROOM_DESKTOP_URL` points at an authenticated numeric-loopback PairRoom Service;
+2. Discover an installed daemon; if it is stopped, the desktop host starts it and waits for the current authenticated Management URL;
+3. If there is no daemon, but a bundled `pairroom` CLI sits next to the desktop host, run `pairroom daemon install` with it and then connect;
+4. Start an embedded Service in the desktop process only when there is neither a daemon nor a bundled CLI. If a daemon is installed but unreachable, stay fail closed.
 
-行为边界：
+Behavior boundaries:
 
-- 关闭主窗口：隐藏到 tray，不停止 Runtime 或 Agent；
-- 再次启动应用：single-instance handler 聚焦已有窗口；
-- 退出且使用外部 daemon：只退出 GUI，daemon 与活动 Turn 保持运行；
-- Windows daemon：Service 日志写入旋转日志文件，不在任务栏保留控制台窗口；查看输出使用 `pairroom daemon logs`；
-- 退出且使用内嵌 Service：先停止接受 Management 请求，再等待 Runtime 通过 native-Turn boundary drain，最后释放 Registry 与 `service.lock`；
-- stale lock：桌面端保持 fail closed，不做隐式 recovery。
+- Close the main window: hide to the tray; do not stop Runtime or Agents;
+- Launch the app again: the single-instance handler focuses the existing window;
+- Quit while using an external daemon: exit only the GUI; the daemon and active Turns keep running;
+- Windows daemon: Service logs go to the rotating log file and do not keep a taskbar console; use `pairroom daemon logs` to inspect output;
+- Quit while using an embedded Service: stop accepting Management requests, wait for Runtimes to drain at a native-Turn boundary, then release the Registry and `service.lock`;
+- stale lock: the desktop host stays fail closed and does not recover implicitly.
 
-如果桌面启动提示 `service.lock` 冲突，先执行 `pairroom daemon status`。确认状态为 stopped 且锁中记录的 PID 已经不存在后，再执行 `pairroom daemon start --recover-stale-lock`；桌面端不会替用户删除锁或强行抢占数据根。
+If desktop startup reports a `service.lock` conflict, run `pairroom daemon status` first. Only after status is stopped and the PID recorded in the lock no longer exists, run `pairroom daemon start --recover-stale-lock`. The desktop host will not delete the lock or seize the data root for the user.
 
-桌面安装包只在 `v*` 发版标签（或手动 `workflow_dispatch`）构建，并挂到同一 GitHub Release：CLI 资产为 `pairroom-cli-vX.Y.Z-…`，桌面为 `pairroom-desktop-vX.Y.Z-…`（Windows `-setup.exe`，Linux `.deb`/`.AppImage`，macOS `.app.zip`）。pull request 与 `main` 只跑 desktop 模块校验。这些包默认仍是 unsigned；Windows code signing、Apple Developer ID signing 与 notarization 必须在生产 release 环境中真实执行后才能宣称已签名。
+Desktop packages are built only for `v*` release tags (or manual `workflow_dispatch`) and attached to the same GitHub Release: CLI assets are `pairroom-cli-vX.Y.Z-…`, desktop assets are `pairroom-desktop-vX.Y.Z-…` (Windows `-setup.exe`, Linux `.deb`/`.AppImage`, macOS `.app.zip`). Pull requests and `main` only run desktop module verification. These packages remain unsigned by default. Windows code signing and Apple Developer ID signing / notarization can be claimed only after they actually run in the production release environment.
 
-## 日常检查
+## Daily checks
 
-观察四层状态，不要只看聊天文本：
+Observe four layers of state, not only chat text:
 
-1. Service / Room runtime 是否激活；
-2. participant state 与 native session binding；
-3. message delivery / processing；
-4. Turn summary、tool activity、approval 和 system notice。
+1. whether the Service / Room runtime is active;
+2. participant state and native session binding;
+3. message delivery / processing;
+4. Turn summary, tool activity, approval, and system notice.
 
-“一段时间没有 Runtime event”只是提醒。长命令、压缩上下文或未暴露的供应商步骤都可能暂时静默；普通 diagnostic error 也不一定是 terminal boundary。
+“No Runtime event for a while” is only a reminder. Long commands, compacted context, or unexposed vendor steps can be silent temporarily. An ordinary diagnostic error is not necessarily a terminal boundary.
 
-## Project、Archive、Delete
+## Project, Archive, Delete
 
-- **Unregister Project**：移除 Management Service 的注册记录，不删除用户 Git 仓库；执行前处理仍归属该 Project 的 Room；
-- **Archive Room**：停止当前 Agent Turn并挂起 Runtime，保留 Room 数据以供审计或恢复；
-- **Permanent delete**：删除 PairRoom 管理的数据，应先确认归档、备份、Binding 和 active runtime 前置条件；
-- **删除仓库**：永远不是 PairRoom Project unregister / Room delete 的隐含副作用。
+- **Unregister Project**: remove the Management Service registration; do not delete the user's Git repository. Handle Rooms that still belong to the Project first;
+- **Archive Room**: stop the current Agent Turn and suspend the Runtime, keeping Room data for audit or restore;
+- **Permanent delete**: delete PairRoom-managed data; confirm archive, backup, Binding, and active-runtime preconditions first;
+- **Deleting the repository** is never an implied side effect of PairRoom Project unregister / Room delete.
 
-具体可用动作由当前 UI / CLI / API 返回的 precondition 决定，自动化脚本不得忽略冲突响应。
+Available actions are decided by the preconditions returned by the current UI / CLI / API. Automation must not ignore conflict responses.
 
-## Capacity 与 idle 回收
+## Capacity and idle reclaim
 
-Service 可以限制同时 active Room 数，并按 idle policy 回收 Runtime。回收只停止进程和释放资源，不删除 durable Room。下次激活会重新建立 adapter，但 Room FIFO 不跨进程恢复。
+The Service can limit the number of concurrently active Rooms and reclaim Runtimes by idle policy. Reclaim only stops processes and frees resources; it does not delete a durable Room. The next activation rebuilds the adapter, but the Room FIFO does not survive across processes.
 
 ## Backup
 
-建议在以下操作前创建并验证备份：
+Create and verify a backup before:
 
-- 升级跨 breaking release；
-- 永久删除 Room；
-- 移动 PairRoom data root；
-- 手工修复 Event Log；
-- 更换 session / Binding 策略。
+- upgrading across a breaking release;
+- permanently deleting a Room;
+- moving the PairRoom data root;
+- manually repairing an Event Log;
+- changing session / Binding policy.
 
-备份成功必须以 manifest / checksum 验证为准，而不是仅看压缩命令退出。
+Backup success is defined by manifest / checksum verification, not by a compression command's exit code alone.
 
 ## Graceful shutdown
 
-正常退出应停止 active adapter、结算在途 projection、关闭 store，并清理 reviewer workspace。强制杀进程后，下一次启动会 fail closed；它不会推测上一次 native operation 是否执行完成。
+A normal exit should stop active adapters, settle in-flight projections, close the store, and clean reviewer workspaces. After a forced kill, the next start fails closed; it does not guess whether the previous native operation completed.
 
-桌面端使用的内嵌 Service 遵循同一 shutdown contract；Wails Window lifecycle 不能绕开 Room Runtime drain。
+An embedded Service used by the desktop host follows the same shutdown contract. The Wails window lifecycle cannot bypass Room Runtime drain.
 
-## 日志与诊断
+## Logs and diagnostics
 
-日志不得包含 API key、Authorization header 或附件绝对路径。报告问题时提供：
+Logs must not contain API keys, Authorization headers, or absolute attachment paths. When reporting a problem, include:
 
-- PairRoom 构建版本；
-- OS、入口类型（Desktop / daemon / foreground）与两个 CLI 版本；
-- Room / message / Turn ID；
-- 相关 system notice 和 terminal event；
-- 已脱敏的配置；
-- 最小 Mock 或只读复现步骤。
+- PairRoom build version;
+- OS, entry type (Desktop / daemon / foreground), and versions of the selected native CLIs;
+- Room / message / Turn ID;
+- related system notices and terminal events;
+- redacted configuration;
+- a minimal Mock or read-only reproduction.
 
-常见处置见 [Troubleshooting](TROUBLESHOOTING.md)。
+Common handling is in [Troubleshooting](TROUBLESHOOTING.md).

@@ -237,17 +237,27 @@ func TestCodexApprovalPolicyUsesCurrentAppServerVariant(t *testing.T) {
 		value string
 		want  string
 	}{
-		{name: "default", want: "untrusted"},
+		{name: "default inherits Codex", want: ""},
 		{name: "legacy PairRoom config", value: "unlessTrusted", want: "untrusted"},
 		{name: "current explicit policy", value: "on-request", want: "on-request"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			adapter := NewCodex(Config{Repo: "/repo", ApprovalPolicy: test.value}, func(model.RuntimeEvent) {})
-			if got := adapter.threadStartParams()["approvalPolicy"]; got != test.want {
+			got := adapter.threadStartParams()["approvalPolicy"]
+			if test.want == "" {
+				if got != nil {
+					t.Fatalf("thread/start approvalPolicy = %#v, want omitted", got)
+				}
+			} else if got != test.want {
 				t.Fatalf("thread/start approvalPolicy = %#v, want %q", got, test.want)
 			}
-			if got := adapter.turnStartParams("thread-1", "hello", model.AgentInput{})["approvalPolicy"]; got != test.want {
+			got = adapter.turnStartParams("thread-1", "hello", model.AgentInput{})["approvalPolicy"]
+			if test.want == "" {
+				if got != nil {
+					t.Fatalf("turn/start approvalPolicy = %#v, want omitted", got)
+				}
+			} else if got != test.want {
 				t.Fatalf("turn/start approvalPolicy = %#v, want %q", got, test.want)
 			}
 		})
@@ -368,7 +378,7 @@ func TestCodexSandboxNormalization(t *testing.T) {
 		wantThread string
 		wantTurn   string
 	}{
-		{name: "default", wantThread: "workspace-write", wantTurn: "workspaceWrite"},
+		{name: "default inherits Codex", wantThread: "", wantTurn: ""},
 		{name: "workspace camel case", value: "workspaceWrite", wantThread: "workspace-write", wantTurn: "workspaceWrite"},
 		{name: "workspace kebab case", value: "workspace-write", wantThread: "workspace-write", wantTurn: "workspaceWrite"},
 		{name: "read only camel case", value: "readOnly", wantThread: "read-only", wantTurn: "readOnly"},
@@ -380,11 +390,21 @@ func TestCodexSandboxNormalization(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			adapter := NewCodex(Config{Sandbox: test.value, Repo: "/repo"}, func(model.RuntimeEvent) {})
-			if got := adapter.threadStartParams()["sandbox"]; got != test.wantThread {
-				t.Fatalf("thread/start sandbox = %#v, want %q", got, test.wantThread)
+			gotThread := adapter.threadStartParams()["sandbox"]
+			if test.wantThread == "" {
+				if gotThread != nil {
+					t.Fatalf("thread/start sandbox = %#v, want omitted", gotThread)
+				}
+			} else if gotThread != test.wantThread {
+				t.Fatalf("thread/start sandbox = %#v, want %q", gotThread, test.wantThread)
 			}
-			if got := adapter.turnStartParams("thread-1", "hello", model.AgentInput{Role: model.RoleDriver})["sandboxPolicy"].(map[string]any)["type"]; got != test.wantTurn {
-				t.Fatalf("turn/start sandboxPolicy.type = %#v, want %q", got, test.wantTurn)
+			gotTurn := adapter.turnStartParams("thread-1", "hello", model.AgentInput{Role: model.RoleDriver})["sandboxPolicy"]
+			if test.wantTurn == "" {
+				if gotTurn != nil {
+					t.Fatalf("turn/start sandboxPolicy = %#v, want omitted", gotTurn)
+				}
+			} else if gotTurn.(map[string]any)["type"] != test.wantTurn {
+				t.Fatalf("turn/start sandboxPolicy.type = %#v, want %q", gotTurn, test.wantTurn)
 			}
 		})
 	}

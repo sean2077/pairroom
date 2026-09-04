@@ -261,12 +261,8 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 		return nil, fmt.Errorf("open Room workspace manager: %w", err)
 	}
 
-	claudeFactory := agent.ClaudeFactory
-	codexFactory := agent.CodexFactory
-	if cfg.Mock {
-		claudeFactory = agent.MockFactory
-		codexFactory = agent.MockFactory
-	}
+	claudeFactory := agent.SlotFactory(cfg.Mock, cfg.Claude.Runtime.CanonicalForSlot(model.ActorClaude))
+	codexFactory := agent.SlotFactory(cfg.Mock, cfg.Codex.Runtime.CanonicalForSlot(model.ActorCodex))
 	claudeFactory = transcriptBoundaryFactory(claudeFactory)
 	codexFactory = transcriptBoundaryFactory(codexFactory)
 	pendingBindings := make(map[model.ActorID]bool, 2)
@@ -276,16 +272,22 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 	}
 	claudeCfg := cfg.Claude
 	claudeCfg.ClientVersion = version.Current
+	claudeCfg.Actor = model.ActorClaude
+	claudeCfg.Runtime = claudeCfg.Runtime.CanonicalForSlot(model.ActorClaude)
 	if !pendingBindings[model.ActorClaude] {
 		claudeCfg.SessionID = durableRoom.Bindings[model.ActorClaude].SessionID
 	}
 	claudeCfg.RequireExactSession = true
 	codexCfg := cfg.Codex
 	codexCfg.ClientVersion = version.Current
+	codexCfg.Actor = model.ActorCodex
+	codexCfg.Runtime = codexCfg.Runtime.CanonicalForSlot(model.ActorCodex)
 	if !pendingBindings[model.ActorCodex] {
 		codexCfg.SessionID = durableRoom.Bindings[model.ActorCodex].SessionID
 	}
 	codexCfg.RequireExactSession = true
+	claudeCfg.PeerRuntime = codexCfg.Runtime
+	codexCfg.PeerRuntime = claudeCfg.Runtime
 
 	var engine *room.Engine
 	onSessionMaterialized := func(ctx context.Context, actor model.ActorID, sessionID string) error {

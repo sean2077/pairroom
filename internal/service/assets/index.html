@@ -32,7 +32,7 @@
           <input id="login-token" name="credential" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" required aria-describedby="login-help login-error">
           <button id="login-token-toggle" class="credential-toggle" type="button" aria-pressed="false" aria-label="显示 Service Token">显示</button>
         </span>
-        <p id="login-help" class="login-help">凭证只用于换取当前浏览器的 HttpOnly Session Cookie，不会写入 Web Storage。</p>
+        <p id="login-help" class="login-help" data-i18n="凭证只用于换取当前浏览器的 HttpOnly Session Cookie，不会写入 Web Storage。">凭证只用于换取当前浏览器的 HttpOnly Session Cookie，不会写入 Web Storage。</p>
         <p id="login-error" class="form-error login-error" role="alert" hidden></p>
         <button id="login-submit" class="primary-button login-submit" type="submit">登录 Management Shell</button>
       </form>
@@ -85,8 +85,9 @@
             <input id="global-search" type="search" placeholder="搜索 Project、Room 或 ID" autocomplete="off" aria-label="搜索 Project、Room 或 ID">
             <kbd>/</kbd>
           </label>
+          <button id="language-button" class="icon-button" type="button" title="切换到英文" aria-label="切换到英文">EN</button>
           <button id="refresh-button" class="icon-button" type="button" aria-label="刷新" title="刷新">↻</button>
-          <button id="logout-button" class="secondary-button compact-button logout-button" type="button">退出</button>
+          <button id="logout-button" class="secondary-button compact-button logout-button" type="button" data-i18n="退出">退出</button>
           <button id="add-project-button" class="primary-button" type="button"><span aria-hidden="true">＋</span> 登记 Project</button>
         </div>
       </header>
@@ -224,6 +225,7 @@
   </dialog>
 
   <div id="toasts" class="toast-stack" role="status" aria-live="polite" aria-atomic="false"></div>
+  <script src="/i18n.js" defer></script>
   <script src="/management.js" defer></script>
   <script src="/management-ux.js" defer></script>
 </body>

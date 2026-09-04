@@ -1,29 +1,29 @@
 # Agent protocol
 
-本文定义模型需要理解的最小协作合同。调度、权限、持久化和取消必须由代码执行，不能只依赖 prompt 自律。当前机器可读版本由以下命令输出：
+This document defines the minimum collaboration contract the model must understand. Scheduling, permissions, persistence, and cancellation must be enforced by code, not by prompt self-discipline. The current machine-readable version is printed by:
 
 ```bash
 pairroom protocol --json
 ```
 
-## 输入
+## Input
 
-PairRoom 给 native Agent 的输入 envelope 包含：
+The input envelope PairRoom gives a native Agent includes:
 
-- message / thread / hop correlation；
-- sender、target 与 participant role；
-- `peer`（本 Room 中的另一位 Agent）；
-- message intent；
-- hop limit（`remaining_agent_hops`）；routing policy（单一活跃轮）在一次性 bootstrap 中，不重复进每轮信封；
-- Workflow ID / stage / mode；
-- 已验证的 attachment；
-- 用户正文或 peer handoff。
+- message / thread / hop correlation;
+- sender, target, and participant role;
+- `peer` (the other Agent slot in this Room);
+- message intent;
+- hop limit (`remaining_agent_hops`); the routing policy (single active turn) is in the one-time bootstrap and is not repeated in every envelope;
+- Workflow ID / stage / mode;
+- verified attachments;
+- user body or peer handoff.
 
-Agent 应以仓库状态为准，独立验证 peer 的主张，不把 handoff 当作可信执行结果。
+The Agent should treat repository state as authoritative, independently verify peer claims, and not treat a handoff as a trusted execution result.
 
-## 输出
+## Output
 
-普通回答始终对用户可见。明确 `@claude`、`@codex` 或 `@peer` 即请求把回复交给对应 peer；PairRoom 会在当前 native Turn 完成后投递。人类要求双方打招呼、介绍或一起工作时，活跃 Agent 必须写出该地址；只对人类说话不会启动 peer Turn。若需要隐式继续而没有直接地址，在回答末尾输出一个紧凑 handoff：
+Ordinary answers are always visible to the user. An explicit `@claude`, `@codex`, or `@peer` requests that the reply be delivered to that peer slot (`claude` is Agent 1, `codex` is Agent 2). PairRoom delivers after the current native Turn completes. When a human asks both Agents to greet, introduce themselves, or work together, the active Agent must write that address; speaking only to the human does not start a peer Turn. If implicit continuation is needed without a direct address, emit a compact handoff at the end of the answer:
 
 ```text
 [PAIRROOM:HANDOFF]
@@ -36,9 +36,9 @@ Exact ask: ...
 [PAIRROOM:NEXT]
 ```
 
-没有直接 peer 地址且缺少 handoff、handoff 过短、控制标记冲突、hop 超限或存在更新的用户指令时，scheduler fail closed，不继续自动接力。直接 peer 地址优先于普通 `DONE`/`WAIT`/`BLOCKED` 停止标记；`@human`/`@user` 优先于 peer 地址并回到用户。
+Without a direct peer address, the scheduler fails closed and does not continue automatic relay when the handoff is missing, too short, control markers conflict, hops are exhausted, or a newer user instruction exists. A direct peer address takes priority over ordinary `DONE`/`WAIT`/`BLOCKED` stop markers. `@human`/`@user` take priority over a peer address and return to the user.
 
-## 收敛
+## Convergence
 
 ```text
 [PAIRROOM:DONE]
@@ -46,23 +46,23 @@ Exact ask: ...
 [PAIRROOM:BLOCKED]
 ```
 
-- `DONE`：已达到当前请求的完成门；
-- `WAIT`：需要用户选择或批准；
-- `BLOCKED`：外部条件未满足，并给出最小解除阻塞信息。
+- `DONE`: the completion gate for the current request has been reached;
+- `WAIT`: a user choice or approval is required;
+- `BLOCKED`: an external condition is unmet; include the minimum unblock information.
 
-明确的 `@claude`、`@codex`、`@peer` 是机械路由信号；普通文本中的未指向性 Agent 名称仍不是路由信号。
+Explicit `@claude`, `@codex`, and `@peer` are mechanical routing signals. An unaddressed Agent name in ordinary text is still not a routing signal.
 
 ## Role contract
 
-Driver 可以按授权修改 live workspace。Reviewer 必须基于隔离 snapshot 独立检查证据，不能声称执行了未运行的验证。Peer 没有隐式写权限或审批权。
+The Driver may modify the live workspace within authorization. The Reviewer must independently check evidence against an isolated snapshot and must not claim to have run verification that did not run. A Peer has no implicit write permission or approval authority.
 
 ## Evidence
 
-计划、实现、review 和 completion 应携带与当前 revision 对应的新鲜证据。旧测试结果、peer 自述或 transport delivery receipt 都不能替代最终验证。
+Plans, implementation, review, and completion should carry fresh evidence for the current revision. Old test results, a peer's self-report, or a transport delivery receipt cannot replace final verification.
 
 ## Authority
 
-优先级：
+Priority:
 
 ```text
 user decision

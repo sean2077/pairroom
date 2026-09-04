@@ -1,8 +1,8 @@
 # Architecture
 
-## 目标
+## Goal
 
-PairRoom 是 native Agent harness 之上的本地控制面。它解决会话绑定、顺序调度、角色隔离、审批、持久化、观察和恢复，不重新实现 Claude Code / Codex 的工具循环。
+PairRoom is a local control plane above native Agent harnesses. It solves session binding, sequential scheduling, role isolation, approvals, persistence, observation, and recovery. It does not reimplement the Claude Code, Codex, or Grok Build tool loops.
 
 ```text
 Browser / Wails Desktop / CLI
@@ -15,84 +15,98 @@ Room Engine --------- append-only Event Log + projections
               |
       deterministic FIFO scheduler
               |
-Claude adapter       Codex adapter
+Agent 1 adapter      Agent 2 adapter
+(slot `claude`)      (slot `codex`)
+      |                  |
+runtime claude,      runtime claude,
+codex, or grok       codex, or grok
       |                  |
 official native CLI / session / tools / approvals
 ```
 
-Wails Desktop 只是原生 Window / Tray / single-instance host。它加载同一个 Management Shell，并直接复用 Go Service；它不是新的状态所有者。
+Wails Desktop is only a native Window / Tray / single-instance host. It loads the same Management Shell and reuses the Go Service directly. It is not a new state owner.
 
-## 状态所有权
+## Slot identity vs runtime identity
 
-| 状态 | 权威来源 |
+Durable `ActorID` values identify the two Room slots: `claude` is Agent 1 and `codex` is Agent 2. Those IDs stay stable so existing Event Logs and Bindings remain valid when a slot switches runtime.
+
+`RuntimeKind` selects the native harness bound to a slot: Claude Code, Codex, or Grok Build. Either slot may select any supported runtime, including the same runtime twice.
+
+Every adapter must emit the configured slot actor on events. Never hard-code a vendor as the event actor. Display names may show the selected runtime, but persistence, routing mentions (`@claude` / `@codex` / `@peer`), and Binding ownership stay on the slot.
+
+## State ownership
+
+| State | Authority |
 |---|---|
-| Project / Room 注册与 Binding | Service registry 与 Room service events |
-| 消息、审批、角色、Workflow、Turn summary | Room Event Log |
-| 当前 native process / stdout / request ID | Agent adapter |
+| Project / Room registration and Binding | Service registry and Room service events |
+| Messages, approvals, roles, Workflow, Turn summary | Room Event Log |
+| Current native process / stdout / request ID | Agent adapter |
 | live source tree | Driver workspace |
 | review filesystem view | Reviewer snapshot |
-| 页面显示 | 服务端 projection；browser / desktop webview 都不是 SSOT |
-| native window、tray 与 second-launch focus | Wails Desktop host |
+| Page display | Server projection; neither the browser nor the desktop webview is SSOT |
+| native window, tray, and second-launch focus | Wails Desktop host |
 
-不允许 UI、prompt、desktop shell 或内存 cache 覆盖 durable authority。
+UI, prompt, desktop shell, or in-memory cache must not override durable authority.
 
-## 关键不变量
+## Key invariants
 
 ### Single owner
 
-一个 Room 最多一个 active native Turn owner。跨 Agent message、明确的 Agent peer mention 和 `next_turn` 进入 Room FIFO；scheduler 只有在可靠 terminal boundary 后才提交下一项。人类要求双方互动时仍从当前 Driver 开始，该 Driver 必须给出明确 peer 地址；没有直接 peer mention 的隐式 Agent 接力仍须通过有效 `HANDOFF` 与 `NEXT`。
+A Room has at most one active native Turn owner. Cross-Agent messages, explicit Agent peer mentions, and `next_turn` enter the Room FIFO. The scheduler submits the next item only after a reliable terminal boundary. When a human asks both Agents to interact, work still starts with the current Driver, who must give an explicit peer address. Implicit Agent relay without a direct peer mention still requires a valid `HANDOFF` and `NEXT`.
 
 ### Diagnostic is not terminal
 
-Codex 的 generic `error` notification 可以发生在 `turn/completed` 之前。因此 `RuntimeError` 是诊断，不是自动释放 owner 的依据。进程异常退出时，adapter 先结算 outstanding input，再发出明确 process-exit boundary。
+A Codex generic `error` notification can arrive before `turn/completed`. `RuntimeError` is therefore diagnostic, not a reason to release the owner automatically. On unexpected process exit, the adapter settles outstanding input first, then emits an explicit process-exit boundary.
 
 ### Cancellation is stage-aware
 
-- FIFO 中：只取消目标 item；
-- scheduler 已 reserve、尚未 submit：submission boundary 再次检查取消；
-- native runtime 已接受：中断范围可能扩大到当前 Agent Turn，但不得清空无关 Room FIFO。
+- In the FIFO: cancel only the target item;
+- Scheduler has reserved, not yet submitted: the submission boundary checks cancellation again;
+- Native runtime has accepted: the interrupt scope may widen to the current Agent Turn, but must not clear unrelated Room FIFO items.
 
 ### Event-before-effect
 
-对用户可见且需要审计的控制面事实应先写 Event Log，再驱动外部副作用。供应商临时 request ID 不能作为跨重启 durable key。
+Control-plane facts that are user-visible and need audit should be written to the Event Log before driving external side effects. A vendor's temporary request ID is not a durable key across restarts.
 
 ### Desktop ownership is explicit
 
-桌面启动遵循单 owner 决策：validated explicit Management URL → installed daemon（必要时由桌面启动并等待）→ 仅在没有 daemon 安装时 embedded in-process Service。已安装 daemon 但不可达时 fail closed，不启动竞争实例；复用外部 Service 不转移 ownership，桌面退出不得停止外部 daemon。内嵌 Service 则由桌面进程拥有，并沿 Management shutdown、Runtime drain、Registry / lock release 的顺序关闭。任何路径都不隐式恢复 stale `service.lock`。
+Desktop startup follows a single-owner decision: validated explicit Management URL → installed daemon (started and waited for by the desktop host when needed) → embedded in-process Service only when no daemon is installed. If a daemon is installed but unreachable, fail closed and do not start a competing instance. Reusing an external Service does not transfer ownership; desktop quit must not stop an external daemon. An embedded Service is owned by the desktop process and shuts down in Management shutdown → Runtime drain → Registry / lock release order. No path implicitly recovers a stale `service.lock`.
 
-## 主要模块
+## Main modules
 
-- `cmd/pairroom/`：CLI 与启动装配；
-- `desktop/`：独立 Go 1.25 / Wails v3 模块，只负责原生 Host 与平台打包；
-- `internal/service/`：Project / Room lifecycle、Binding 和 runtime capacity；
-- `internal/room/`：Event Log projection、scheduler、Workflow 与审批；
-- `internal/agent/`：Claude / Codex native protocol adapter；
-- `internal/server/`：Management Shell、Room View、HTTP 与 SSE；
-- `internal/store/`：JSONL persistence；
-- `internal/archive/`：archive / backup 相关实现；
-- `internal/model/types.go`：跨层 durable model。
+- `cmd/pairroom/`: CLI and startup assembly;
+- `desktop/`: isolated Go 1.25 / Wails v3 module, native host and platform packaging only;
+- `internal/service/`: Project / Room lifecycle, Binding, and runtime capacity;
+- `internal/room/`: Event Log projection, scheduler, Workflow, and approvals;
+- `internal/agent/`: Claude Code / Codex / Grok Build native protocol adapters; each adapter emits the configured slot actor;
+- `internal/server/`: Management Shell, Room View, HTTP, and SSE;
+- `internal/store/`: JSONL persistence;
+- `internal/archive/`: archive / backup implementation;
+- `internal/model/types.go`: cross-layer durable model.
 
-`desktop/go.mod` 隔离 Wails 及 GUI 依赖；根模块继续使用 Go 1.23，并保持标准库零外部依赖。桌面端不得复制 Management / Room 前端，也不得在 JavaScript 中重做 Service lifecycle 或认证。
+`desktop/go.mod` isolates Wails and GUI dependencies. The root module stays on Go 1.23 with zero external standard-library dependencies. The desktop host must not copy the Management / Room frontend, and must not redo Service lifecycle or authentication in JavaScript.
 
 ## Runtime lifecycle
 
-Service 可以按 capacity 和 idle policy 激活或回收 Room runtime。回收 native process 不删除 Room；重新激活会恢复 durable projection 和 session binding，但不会自动重放进程内 FIFO。
+The Service can activate or reclaim a Room runtime according to capacity and idle policy. Reclaiming a native process does not delete the Room. Reactivation restores the durable projection and session binding, but does not automatically replay the in-process FIFO.
 
-Role / workspace 切换必须与 delivery serialization 使用同一安全边界，避免 reviewer snapshot 捕获时 Driver 仍在修改 live tree。
+Role / workspace switches must share the same safety boundary as delivery serialization, so a reviewer snapshot is not captured while the Driver is still mutating the live tree.
 
-## Web 更新与原生窗口
+Empty Provider/model/effort/instructions and runtime-policy overrides inherit the selected native CLI's user/global configuration. Grok Build prompt and instruction text stay in a prompt file, never in process argv.
 
-SSE 传输 durable state event 与 transient telemetry。页面应增量更新或批量合并高频活动，不因每个 token 重建全部聊天树；重连时以 snapshot 为准，不能依赖 browser 或 desktop webview 中遗留的临时状态。
+## Web updates and native windows
 
-Management Shell 以 Room 为中心：侧栏按 Project 分组，应用内标签通过 Management 同源 surface 网关（`/api/v1/rooms/{room}/surface/…`）嵌入活跃 Room View。iframe 使用 Management Session Cookie；网关在服务端注入 Runtime bearer，Runtime token 不进入 DOM。应用内标签不是 Runtime lease，后台标签仍受现有 idle / 容量 / LRU / 显式挂起约束；切回已挂起标签会重新请求激活。归档 Room 不能作为标签打开，需先恢复。
+SSE carries durable state events and transient telemetry. Pages should update incrementally or batch high-frequency activity, and must not rebuild the entire chat tree on every token. On reconnect, the snapshot is authoritative; leftover transient state in the browser or desktop webview must not be trusted.
 
-「在浏览器中打开」等待 Runtime 就绪后由 Service 调用系统浏览器打开一次性 Room Runtime URL，不使用 `window.open`。Wails Host 仍维持一个主 webview，并把非 PairRoom 的 `window.open` 目标拦在 numeric-loopback 之外；多窗口并不是 durable contract。
+The Management Shell is Room-centric: the sidebar groups by Project, and in-app tabs embed an active Room View through the Management same-origin surface gateway (`/api/v1/rooms/{room}/surface/…`). The iframe uses the Management Session Cookie. The gateway injects the Runtime bearer on the server; the Runtime token never enters the DOM. An in-app tab is not a Runtime lease. Background tabs still obey existing idle / capacity / LRU / explicit-suspend constraints; switching back to a suspended tab requests activation again. An archived Room cannot open as a tab; restore it first.
 
-## 非目标
+**Open in browser** waits until the Runtime is ready, then the Service opens a one-time Room Runtime URL with the system browser. It does not use `window.open`. The Wails host still keeps one main webview and blocks non-PairRoom `window.open` targets outside numeric loopback. Multiple windows are not a durable contract.
 
-- 不提供分布式多节点队列；
-- 不承诺任意旧 Event Log 自动迁移；
-- 不把两个 Agent 变成无边界群聊；
-- 不隐藏 native CLI 的权限、审批和失败；
-- 不以 Mock E2E 代替真实 vendor E2E；
-- 不为桌面端维护第二套业务 UI、Service 或存储格式。
+## Non-goals
+
+- No distributed multi-node queue;
+- No promise of automatic migration for arbitrary old Event Logs;
+- Do not turn the two Agents into an unbounded group chat;
+- Do not hide native CLI permissions, approvals, or failures;
+- Do not treat Mock E2E as a substitute for real vendor E2E;
+- Do not maintain a second business UI, Service, or storage format for the desktop host.

@@ -25,49 +25,50 @@
       </div>
       <div class="topbar-actions">
         <div id="connection" class="connection disconnected"><span class="status-dot"></span><span>Connecting</span></div>
-        <button id="notification-button" class="icon-button" title="启用桌面通知" aria-label="启用桌面通知">♢</button>
-        <button id="theme-button" class="icon-button" title="切换主题" aria-label="切换主题">◐</button>
-        <button id="refresh-button" class="icon-button" title="刷新房间" aria-label="刷新房间">↻</button>
-        <button id="leave-room" class="ghost-button" type="button" title="退出 Room；不会停止 Agent">退出 Room</button>
+        <button id="notification-button" class="icon-button" title="启用桌面通知" aria-label="启用桌面通知" data-i18n="启用桌面通知" data-i18n-title>♢</button>
+        <button id="language-button" class="icon-button" type="button" title="切换到英文" aria-label="切换到英文">EN</button>
+        <button id="theme-button" class="icon-button" title="切换主题" aria-label="切换主题" data-i18n="切换主题" data-i18n-title>◐</button>
+        <button id="refresh-button" class="icon-button" title="刷新房间" aria-label="刷新房间" data-i18n="刷新房间" data-i18n-title>↻</button>
+        <button id="leave-room" class="ghost-button" type="button" title="退出 Room；不会停止 Agent" data-i18n="退出 Room">退出 Room</button>
       </div>
     </header>
 
     <main class="workspace">
       <aside class="participants-panel panel">
         <div class="panel-heading">
-          <span>参与者</span>
+          <span data-i18n="参与者">参与者</span>
           <span class="panel-count">3</span>
         </div>
         <div class="human-card participant-card">
           <div class="avatar avatar-human">Y</div>
           <div class="participant-main">
             <div class="participant-title"><strong>You</strong><span class="authority-badge">Owner</span></div>
-            <div class="participant-subtitle">可随时介入、暂停或改向</div>
+            <div class="participant-subtitle" data-i18n="可随时介入、暂停或改向">可随时介入、暂停或改向</div>
           </div>
         </div>
         <div id="participants"></div>
 
         <div class="divider"></div>
         <section class="room-controls">
-          <div class="section-title">轮次策略</div>
-          <div class="strategy-note">单一轮次接力：同一时刻仅一个 Agent 工作；明确 @peer 或 HANDOFF + NEXT 才把下一轮交给对方。</div>
-          <label class="field-label" for="max-hops">单次接力最大轮数</label>
+          <div class="section-title" data-i18n="轮次策略">轮次策略</div>
+          <div class="strategy-note" data-i18n="单一轮次接力：同一时刻仅一个 Agent 工作；明确 @peer 或 HANDOFF + NEXT 才把下一轮交给对方。">单一轮次接力：同一时刻仅一个 Agent 工作；明确 @peer 或 HANDOFF + NEXT 才把下一轮交给对方。</div>
+          <label class="field-label" for="max-hops" data-i18n="单次接力最大轮数">单次接力最大轮数</label>
           <div class="range-row">
             <input id="max-hops" type="range" min="1" max="20" value="6">
             <output id="max-hops-value">6</output>
           </div>
-          <label class="field-label" for="stall-warning">无事件提醒（秒）</label>
+          <label class="field-label" for="stall-warning" data-i18n="无事件提醒（秒）">无事件提醒（秒）</label>
           <div class="number-row">
             <input id="stall-warning" type="number" min="30" max="86400" step="30" value="300">
-            <label class="checkbox-label"><input id="stall-disabled" type="checkbox"> 关闭</label>
+            <label class="checkbox-label"><input id="stall-disabled" type="checkbox"> <span data-i18n="关闭">关闭</span></label>
           </div>
-          <button id="save-settings" class="secondary-button full-width">保存轮次限制</button>
+          <button id="save-settings" class="secondary-button full-width" data-i18n="保存轮次限制">保存轮次限制</button>
         </section>
 
         <div class="divider"></div>
         <section class="repo-summary">
-          <div class="section-title">工作区</div>
-          <pre id="git-status" class="git-status">读取 Git 状态…</pre>
+          <div class="section-title" data-i18n="工作区">工作区</div>
+          <pre id="git-status" class="git-status" data-i18n="读取 Git 状态…">读取 Git 状态…</pre>
         </section>
       </aside>
 
@@ -75,7 +76,7 @@
         <div class="chat-toolbar">
           <div>
             <div class="chat-title">Shared room</div>
-            <div class="chat-description">你、Claude Code 与 Codex 的公共时间线</div>
+            <div class="chat-description" data-i18n="你、Claude Code 与 Codex 的公共时间线">你、Claude Code 与 Codex 的公共时间线</div>
           </div>
           <div class="toolbar-actions">
             <select id="conversation-filter" class="mini-select" title="筛选时间线">
@@ -195,6 +196,7 @@
     </div>
   </dialog>
   <div id="toast-stack" class="toast-stack" role="status" aria-live="polite" aria-atomic="false"></div>
+  <script src="i18n.js" defer></script>
   <script src="room-shell.js" defer></script>
   <script src="richtext.js" defer></script>
   <script src="app.js" defer></script>

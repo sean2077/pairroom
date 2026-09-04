@@ -19,15 +19,16 @@ import (
 // runtime adapters and by `pairroom doctor`, so the UI reports what was actually
 // found on the machine instead of only echoing configured values.
 type ProbeResult struct {
-	Actor          model.ActorID   `json:"actor"`
-	Command        string          `json:"command"`
-	Path           string          `json:"path"`
-	Version        string          `json:"version,omitempty"`
-	VersionLine    string          `json:"version_line,omitempty"`
-	Protocol       string          `json:"protocol"`
-	Capabilities   []string        `json:"capabilities,omitempty"`
-	Warnings       []string        `json:"warnings,omitempty"`
-	SupportedFlags map[string]bool `json:"-"`
+	Actor          model.ActorID     `json:"actor"`
+	Runtime        model.RuntimeKind `json:"runtime,omitempty"`
+	Command        string            `json:"command"`
+	Path           string            `json:"path"`
+	Version        string            `json:"version,omitempty"`
+	VersionLine    string            `json:"version_line,omitempty"`
+	Protocol       string            `json:"protocol"`
+	Capabilities   []string          `json:"capabilities,omitempty"`
+	Warnings       []string          `json:"warnings,omitempty"`
+	SupportedFlags map[string]bool   `json:"-"`
 }
 
 var semanticVersionPattern = regexp.MustCompile(`\bv?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?\b`)
@@ -38,39 +39,33 @@ var semanticVersionPattern = regexp.MustCompile(`\bv?(\d+)\.(\d+)\.(\d+)(?:[-+][
 // is broken.
 func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 	actor := cfg.Actor
+	kind := cfg.Runtime.CanonicalForSlot(actor)
 	command := strings.TrimSpace(cfg.Command)
 	if command == "" {
-		switch actor {
-		case model.ActorClaude:
-			command = "claude"
-		case model.ActorCodex:
-			command = "codex"
-		default:
-			return ProbeResult{}, fmt.Errorf("unsupported runtime actor %q", actor)
-		}
+		command = kind.DefaultCommand()
 	}
 	path, err := exec.LookPath(command)
 	if err != nil {
-		return ProbeResult{}, fmt.Errorf("locate %s runtime %q: %w", actor.DisplayName(), command, err)
+		return ProbeResult{}, fmt.Errorf("locate %s runtime %q: %w", kind.DisplayName(), command, err)
 	}
 
 	ctx, cancel := context.WithTimeout(parent, 6*time.Second)
 	defer cancel()
-	versionLine, err := runProbeCommand(ctx, path, []string{"--version"}, actor)
+	versionLine, err := runProbeCommand(ctx, path, []string{"--version"}, actor, kind)
 	if err != nil {
 		return ProbeResult{}, err
 	}
 	result := ProbeResult{
-		Actor: actor, Command: command, Path: path,
+		Actor: actor, Runtime: kind, Command: command, Path: path,
 		Version: extractSemanticVersion(versionLine), VersionLine: firstNonEmptyLine(versionLine),
 	}
 
-	switch actor {
-	case model.ActorClaude:
+	switch kind {
+	case model.RuntimeClaude:
 		result.Protocol = "claude-stream-json"
 		result.SupportedFlags = make(map[string]bool)
 		helpCtx, helpCancel := context.WithTimeout(parent, 6*time.Second)
-		help, helpErr := runProbeCommand(helpCtx, path, []string{"--help"}, actor)
+		help, helpErr := runProbeCommand(helpCtx, path, []string{"--help"}, actor, kind)
 		helpCancel()
 
 		// input/output stream-json are the protocol's hard requirements, but the
@@ -132,33 +127,62 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 		if result.SupportedFlags["--include-hook-events"] {
 			result.Capabilities = append(result.Capabilities, "hook-events")
 		}
-	case model.ActorCodex:
+	case model.RuntimeCodex:
 		result.Protocol = "codex-app-server-jsonrpc"
 		helpCtx, helpCancel := context.WithTimeout(parent, 6*time.Second)
 		defer helpCancel()
-		if _, err := runProbeCommand(helpCtx, path, []string{"app-server", "--help"}, actor); err != nil {
+		if _, err := runProbeCommand(helpCtx, path, []string{"app-server", "--help"}, actor, kind); err != nil {
 			return ProbeResult{}, fmt.Errorf("verify Codex app-server: %w", err)
 		}
 		result.Capabilities = []string{
 			"app-server", "thread-resume", "turn-start", "turn-steer", "turn-interrupt",
 			"command-approval", "file-approval", "permission-approval", "plan-events", "diff-events", "usage-events",
 		}
+	case model.RuntimeGrok:
+		result.Protocol = "grok-streaming-json"
+		helpCtx, helpCancel := context.WithTimeout(parent, 6*time.Second)
+		help, helpErr := runProbeCommand(helpCtx, path, []string{"--help"}, actor, kind)
+		helpCancel()
+		result.SupportedFlags = map[string]bool{
+			"--prompt-file":     true,
+			"--output-format":   true,
+			"--resume":          true,
+			"--model":           true,
+			"--effort":          true,
+			"--yolo":            true,
+			"--permission-mode": true,
+		}
+		if helpErr != nil {
+			result.Warnings = append(result.Warnings, "could not inspect Grok Build flags: "+helpErr.Error())
+		} else {
+			for flag := range result.SupportedFlags {
+				if !strings.Contains(help, flag) {
+					result.SupportedFlags[flag] = strings.Contains(help, strings.TrimPrefix(flag, "--"))
+				}
+			}
+		}
+		result.Capabilities = []string{"streaming-json", "session-resume", "headless"}
+		if result.SupportedFlags["--prompt-file"] {
+			result.Capabilities = append(result.Capabilities, "prompt-file")
+		}
 	default:
-		return ProbeResult{}, fmt.Errorf("unsupported runtime actor %q", actor)
+		return ProbeResult{}, fmt.Errorf("unsupported runtime %q", kind)
 	}
 	result.Capabilities = mergeUniqueStrings(result.Capabilities)
 	result.Warnings = mergeUniqueStrings(result.Warnings)
 	return result, nil
 }
 
-func runProbeCommand(ctx context.Context, path string, args []string, actor model.ActorID) (string, error) {
+func runProbeCommand(ctx context.Context, path string, args []string, actor model.ActorID, kind model.RuntimeKind) (string, error) {
 	cmd := exec.CommandContext(ctx, path, args...)
 	execx.NoConsole(cmd)
-	switch actor {
-	case model.ActorClaude:
-		cmd.Env = envWithout("CLAUDECODE")
-	case model.ActorCodex:
+	switch kind.CanonicalForSlot(actor) {
+	case model.RuntimeCodex:
 		cmd.Env = envWithout("CODEX_INTERNAL_ORIGINATOR")
+	case model.RuntimeGrok:
+		cmd.Env = mergeRuntimeEnv(envWithout(), map[string]string{"GROK_DISABLE_AUTOUPDATER": "1"})
+	default:
+		cmd.Env = envWithout("CLAUDECODE")
 	}
 	output, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(output))
@@ -183,7 +207,8 @@ func (p ProbeResult) RuntimeInfo(cfg Config) model.RuntimeInfo {
 	})
 	return model.RuntimeInfo{
 		Available: true, Command: p.Command, Path: p.Path,
-		Protocol: p.Protocol, Version: p.Version, Provider: cfg.Provider, Model: cfg.Model,
+		Protocol: p.Protocol, Version: p.Version, RuntimeKind: cfg.Runtime.CanonicalForSlot(cfg.Actor),
+		Provider: cfg.Provider, Model: cfg.Model, Effort: cfg.Effort,
 		PermissionMode: cfg.PermissionMode, ApprovalPolicy: cfg.ApprovalPolicy, Sandbox: cfg.Sandbox,
 		Capabilities: append([]string(nil), p.Capabilities...), Warnings: append([]string(nil), p.Warnings...),
 		ProbedAt: time.Now().UTC(), Data: data,

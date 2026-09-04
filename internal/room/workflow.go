@@ -85,10 +85,12 @@ func workflowExplicitNoGate(text string) bool {
 func workflowActor(value string) model.ActorID {
 	value = strings.ToLower(strings.TrimSpace(value))
 	switch value {
-	case "claude", "claude code", "cc":
+	case "claude", "claude code", "cc", "agent1", "agent 1":
 		return model.ActorClaude
-	case "codex":
+	case "codex", "agent2", "agent 2":
 		return model.ActorCodex
+	case "grok", "grok build":
+		return ""
 	default:
 		return ""
 	}
@@ -233,7 +235,7 @@ func (e *Engine) workflowRequestTargetsStage(text string, req SendRequest, stage
 	if len(targets) > 0 {
 		return len(targets) == 1 && targets[0] == stageActor
 	}
-	if targets = prompt.Mentions(text, model.ActorUser); len(targets) > 0 {
+	if targets = prompt.MentionsWithRuntimes(text, model.ActorUser, e.runtimeKinds()); len(targets) > 0 {
 		return len(targets) == 1 && targets[0] == stageActor
 	}
 	if req.ReplyTo != "" {

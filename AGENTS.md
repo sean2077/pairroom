@@ -2,7 +2,7 @@
 
 ## Project boundary
 
-PairRoom is a local Go coordination layer for the official Claude Code and Codex harnesses. It owns the room, browser/API, persistence, workspace policy, archives, and adapter projections; it does not replace either vendor's model loop, tool runner, credentials, or session store.
+PairRoom is a local Go coordination layer for official Claude Code, Codex, and Grok Build harnesses. Each durable Room has two stable Agent slots; either slot may select any supported runtime, including the same runtime twice. It owns the room, browser/API, persistence, workspace policy, archives, and adapter projections; it does not replace any vendor's model loop, tool runner, credentials, or session store.
 
 ## Development and verification
 
@@ -17,6 +17,8 @@ PairRoom is a local Go coordination layer for the official Claude Code and Codex
 
 - Keep the Go module dependency-free beyond the standard library; `go list -m all` must contain only this module.
 - Keep collaboration mechanics in `internal/protocol` and expose them through `pairroom protocol`; project only a compact versioned bootstrap at each vendor's native instruction layer, keep per-turn envelopes dynamic-only, and preserve the prompt byte-budget tests.
+- Keep slot identity separate from runtime identity: durable `ActorID` values identify Agent 1/Agent 2 (legacy `claude`/`codex` slot IDs), while `RuntimeKind` selects Claude Code, Codex, or Grok Build. Every adapter must emit the configured slot actor; never hard-code a vendor as the event actor.
+- Empty Provider/model/effort/instructions and runtime-policy overrides inherit the selected native CLI's user/global configuration. Add only explicit PairRoom overrides, and keep Grok Build prompt/instruction text out of process argv.
 - Keep Room delivery single-owner: only the active participant may run, `next_turn` and cross-Agent inputs wait for its native Turn boundary, and an explicit Agent `@peer` address requests transfer; an implicit continuation still requires a compact `HANDOFF` plus `NEXT`, while `@human`/`@user` returns control to the human. A human request that both Agents interact still starts with the current Driver, who must address the peer rather than answering as a 1:1 chat.
 - Natural workflows compile only explicit actor/action sequences. Keep plan/review/audit read-only, bind execution approval to the current plan revision, and surface human questions in the Room rather than leaving a native process on an unexposed prompt.
 - Provider profiles and cc-connect reference imports must remain standard-library-only and secret-safe: credentials travel only in child-process environments and never in argv, RuntimeInfo, diagnostics, browser snapshots, or redacted provider reports.
@@ -25,7 +27,7 @@ PairRoom is a local Go coordination layer for the official Claude Code and Codex
 - `pairroom service` is the current-working-directory-independent multi-Project/multi-Room control plane; `pairroom serve` remains the legacy single-Room compatibility entry point.
 - `pairroom daemon` installs and manages `pairroom service` through systemd, launchd, or Windows Task Scheduler; `daemon open` must validate the current authenticated numeric-loopback Management URL before opening it, normal stop/restart must preserve graceful active-Turn draining, crash-stale `service.lock` recovery remains explicit, and the Desktop host must reuse or start an installed daemon instead of silently creating a competing embedded Service.
 - Treat each Room Event Log as durable fact and `service-registry.json` as a rebuildable index; a `new` binding acquires global `(agent, vendor_session_id)` ownership only when its first accepted native Turn atomically materializes that identity, while `existing` bindings always resume exactly. Preserve the transcript-boundary and active-Turn non-preemption guarantees described in `docs/ARCHITECTURE.md`.
-- Do not claim real Claude Code/Codex runtime E2E unless both official CLIs were installed, authenticated, and actually exercised; Mock verification is reported separately.
+- Do not claim real Claude Code/Codex/Grok Build runtime E2E unless the official CLIs were installed, authenticated, and actually exercised; Mock verification is reported separately.
 - `VERSION`, `internal/version.Current`, the exact `vX.Y.Z` tag, and the canonical `CHANGELOG.md` heading `## [vX.Y.Z] — YYYY-MM-DD` must agree.
 - `.github/workflows/ci.yml` must retain the supported Linux amd64, Windows amd64, macOS arm64, and macOS amd64 binaries as uniquely named checksummed workflow artifacts, then re-download and verify the complete set before CI is green.
 - `.github/workflows/release.yml` owns publication: it validates/extracts changelog notes, builds and verifies CLI artifacts, creates the GitHub Release, then downloads and rechecks the published CLI payload. The desktop workflow attaches `pairroom-desktop-*` setup/app packages to that same Release on `v*` tags.

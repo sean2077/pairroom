@@ -1,59 +1,61 @@
 # Upgrading
 
-PairRoom 的 CLI、Event Log、HTTP API 和 native adapter 会随官方 CLI 演进。升级应当被视为一次受控变更，而不是直接覆盖 binary。
+PairRoom's CLI, Event Log, HTTP API, and native adapters evolve with the official CLIs. Treat an upgrade as a controlled change, not as overwriting a binary in place.
 
-## 升级前
+## Before upgrading
 
-1. 阅读 [CHANGELOG](../CHANGELOG.md)；
-2. 停止或归档 active Room；
-3. 创建并验证 PairRoom data backup；
-4. 记录当前 binary、Claude Code、Codex 与配置版本；
-5. 确保工作仓库没有未识别的 native side effect。
+1. Read [CHANGELOG](../CHANGELOG.md);
+2. Stop or archive active Rooms;
+3. Create and verify a PairRoom data backup;
+4. Record the current binary, Claude Code / Codex / Grok Build, and configuration versions;
+5. Make sure the working repository has no unrecognized native side effects.
 
-## 当前 breaking boundary
+## Current breaking boundary
 
-routing policy 只支持：
+The routing policy supports only:
 
 ```json
 {"routing_mode": "turns"}
 ```
 
-`manual`、`mentions`、`roundtable` 不兼容、不会静默规范化。升级旧安装时：
+`manual`, `mentions`, and `roundtable` are incompatible and are not silently normalized. When upgrading an old install:
 
-- 配置文件显式改为 `turns`；
-- CLI 自动化移除旧 `--routing` 值；
-- 含旧 routing event 的持久化 Room 先备份，再重建；
-- 不直接改写 JSONL 伪造迁移。
+- change the configuration file to `turns` explicitly;
+- remove old `--routing` values from CLI automation;
+- back up persisted Rooms that contain old routing events, then rebuild them;
+- do not rewrite JSONL to fake a migration.
 
-## 执行升级
+JSON keys `claude` and `codex` remain durable Agent 1 / Agent 2 slots. Add `runtime` (`claude` | `codex` | `grok`) per slot when selecting a non-default harness. Empty `provider`, `model`, `effort`, and `instructions` now inherit the selected native CLI's user/global configuration.
 
-替换 binary 后先运行：
+## Perform the upgrade
+
+After replacing the binary, run:
 
 ```bash
 pairroom version
 pairroom service --mock
 ```
 
-再验证：
+Then verify:
 
-- 配置可以严格解析；
-- Project registry 可读取；
-- 一个新 Mock Room 可以完成多 Turn FIFO；
-- 备份验证通过；
-- 真实模式先完成只读单 Agent Turn，再测试 reviewer / handoff。
+- configuration parses strictly;
+- the Project registry can be read;
+- a new Mock Room can complete a multi-Turn FIFO;
+- backup verification succeeds;
+- real mode first completes a read-only single-Agent Turn, then reviewer / handoff.
 
-## 回滚
+## Rollback
 
-回滚 binary 不等于回滚 Event Log。若新版本已写入旧版本不理解的 event：
+Rolling back the binary is not the same as rolling back the Event Log. If the new version has already written events the old version does not understand:
 
-1. 停止 Service；
-2. 保存当前 data root；
-3. 恢复升级前经过验证的完整备份；
-4. 恢复匹配的 binary 与配置；
-5. 重新验证 Binding 和仓库副作用。
+1. Stop the Service;
+2. Save the current data root;
+3. Restore the complete, verified pre-upgrade backup;
+4. Restore the matching binary and configuration;
+5. Re-verify Bindings and repository side effects.
 
-不要混用新旧 data files。
+Do not mix old and new data files.
 
-## 文档和客户端
+## Documentation and clients
 
-直接调用 HTTP API、解析 Event Log 或依赖 CLI 文案的外部工具，必须在升级时重新运行契约测试。`docs/API_REFERENCE.md` 中的 route inventory 和 `docs/CLI_REFERENCE.md` 中的 flag inventory由 `make docs-check` 对照当前源码。
+External tools that call the HTTP API, parse the Event Log, or depend on CLI copy must re-run contract tests at upgrade time. The route inventory in `docs/API_REFERENCE.md` and the flag inventory in `docs/CLI_REFERENCE.md` are checked against current source by `make docs-check`.

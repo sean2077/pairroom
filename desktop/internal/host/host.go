@@ -18,6 +18,7 @@ import (
 	"github.com/sean2077/pairroom/internal/config"
 	"github.com/sean2077/pairroom/internal/daemon"
 	"github.com/sean2077/pairroom/internal/execx"
+	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/service"
 	"github.com/sean2077/pairroom/internal/version"
 )
@@ -348,25 +349,37 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 	}
 
 	claude := agent.Config{
-		ClientVersion:  version.Current,
-		Command:        fileConfig.Claude.Command,
-		CommandArgs:    append([]string(nil), fileConfig.Claude.Args...),
-		Env:            copyEnvironment(fileConfig.Claude.RuntimeEnv),
-		Provider:       fileConfig.Claude.Provider,
-		Model:          fileConfig.Claude.Model,
-		PermissionMode: fileConfig.Claude.PermissionMode,
+		Actor:                  model.ActorClaude,
+		ClientVersion:          version.Current,
+		Command:                fileConfig.Claude.Command,
+		CommandArgs:            append([]string(nil), fileConfig.Claude.Args...),
+		Env:                    copyEnvironment(fileConfig.Claude.RuntimeEnv),
+		Runtime:                fileConfig.Claude.RuntimeKind(model.ActorClaude),
+		Provider:               fileConfig.Claude.Provider,
+		Model:                  fileConfig.Claude.Model,
+		Effort:                 fileConfig.Claude.Effort,
+		PermissionMode:         fileConfig.Claude.PermissionMode,
+		ApprovalPolicy:         fileConfig.Claude.ApprovalPolicy,
+		Sandbox:                fileConfig.Claude.Sandbox,
+		AdditionalInstructions: strings.TrimSpace(fileConfig.Claude.Instructions),
 	}
 	codex := agent.Config{
-		ClientVersion:  version.Current,
-		Command:        fileConfig.Codex.Command,
-		CommandArgs:    append([]string(nil), fileConfig.Codex.Args...),
-		Env:            copyEnvironment(fileConfig.Codex.RuntimeEnv),
-		Provider:       fileConfig.Codex.Provider,
-		Model:          fileConfig.Codex.Model,
-		Effort:         fileConfig.Codex.Effort,
-		ApprovalPolicy: fileConfig.Codex.ApprovalPolicy,
-		Sandbox:        fileConfig.Codex.Sandbox,
+		Actor:                  model.ActorCodex,
+		ClientVersion:          version.Current,
+		Command:                fileConfig.Codex.Command,
+		CommandArgs:            append([]string(nil), fileConfig.Codex.Args...),
+		Env:                    copyEnvironment(fileConfig.Codex.RuntimeEnv),
+		Runtime:                fileConfig.Codex.RuntimeKind(model.ActorCodex),
+		Provider:               fileConfig.Codex.Provider,
+		Model:                  fileConfig.Codex.Model,
+		Effort:                 fileConfig.Codex.Effort,
+		PermissionMode:         fileConfig.Codex.PermissionMode,
+		ApprovalPolicy:         fileConfig.Codex.ApprovalPolicy,
+		Sandbox:                fileConfig.Codex.Sandbox,
+		AdditionalInstructions: strings.TrimSpace(fileConfig.Codex.Instructions),
 	}
+	claude.PeerRuntime = codex.Runtime
+	codex.PeerRuntime = claude.Runtime
 
 	var provisioner service.BindingProvisioner = service.NewNativeProvisioner(service.NativeProvisionerConfig{
 		Claude: claude,

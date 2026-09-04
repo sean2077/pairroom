@@ -16,8 +16,11 @@ func TestDefaults(t *testing.T) {
 	if cfg.Claude.Command != "claude" || cfg.Codex.Command != "codex" {
 		t.Fatalf("unexpected runtime commands: %#v", cfg)
 	}
-	if cfg.Codex.ApprovalPolicy != "untrusted" {
-		t.Fatalf("unexpected Codex approval policy: %q", cfg.Codex.ApprovalPolicy)
+	if cfg.Claude.Runtime != "claude" || cfg.Codex.Runtime != "codex" {
+		t.Fatalf("unexpected default runtimes: %#v", cfg)
+	}
+	if cfg.Codex.Effort != "" || cfg.Codex.ApprovalPolicy != "" || cfg.Codex.Sandbox != "" {
+		t.Fatalf("Codex defaults must inherit the native CLI: %#v", cfg.Codex)
 	}
 }
 
@@ -41,7 +44,7 @@ func TestLoadMergesDefaults(t *testing.T) {
 	if cfg.RoomName != "Test Room" || cfg.RoutingMode != model.RoutingTurns || cfg.Claude.Model != "opus" {
 		t.Fatalf("unexpected config: %#v", cfg)
 	}
-	if cfg.Claude.PermissionMode != "auto" || cfg.Codex.ApprovalPolicy != "untrusted" {
+	if cfg.Claude.PermissionMode != "auto" || cfg.Codex.ApprovalPolicy != "" {
 		t.Fatalf("defaults were not preserved: %#v", cfg)
 	}
 }
@@ -74,6 +77,50 @@ func TestLoadRejectsLegacyRoutingModes(t *testing.T) {
 				t.Fatalf("legacy routing mode %q was accepted", mode)
 			}
 		})
+	}
+}
+
+func TestLoadAcceptsGrokRuntimeAndIdenticalSlots(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pairroom.json")
+	if err := os.WriteFile(path, []byte(`{
+  "listen": "127.0.0.1:8000",
+  "routing_mode": "turns",
+  "max_agent_hops": 4,
+  "auto_start": true,
+  "claude": {"runtime": "grok", "command": "grok", "model": "", "effort": "", "instructions": "Be terse"},
+  "codex": {"runtime": "grok", "command": "grok"}
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Claude.RuntimeKind(model.ActorClaude) != model.RuntimeGrok || cfg.Codex.RuntimeKind(model.ActorCodex) != model.RuntimeGrok {
+		t.Fatalf("expected two Grok slots: %#v", cfg)
+	}
+	if cfg.Claude.Model != "" || cfg.Claude.Effort != "" || cfg.Codex.Effort != "" {
+		t.Fatalf("empty overrides must stay empty: %#v %#v", cfg.Claude, cfg.Codex)
+	}
+	if cfg.Claude.Instructions != "Be terse" {
+		t.Fatalf("instructions dropped: %#v", cfg.Claude)
+	}
+}
+
+func TestLoadRejectsUnknownRuntime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pairroom.json")
+	if err := os.WriteFile(path, []byte(`{
+  "listen": "127.0.0.1:1",
+  "routing_mode": "turns",
+  "max_agent_hops": 4,
+  "auto_start": true,
+  "claude": {"runtime": "cursor", "command": "cursor"},
+  "codex": {"command": "codex"}
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("unknown runtime was accepted")
 	}
 }
 

@@ -67,6 +67,9 @@ type ClaudeAdapter struct {
 }
 
 func NewClaude(cfg Config, sink EventSink) *ClaudeAdapter {
+	if !cfg.Actor.ValidParticipant() {
+		cfg.Actor = model.ActorClaude
+	}
 	if cfg.Command == "" {
 		cfg.Command = "claude"
 	}
@@ -86,7 +89,7 @@ func NewClaude(cfg Config, sink EventSink) *ClaudeAdapter {
 	}
 }
 
-func (c *ClaudeAdapter) Actor() model.ActorID { return model.ActorClaude }
+func (c *ClaudeAdapter) Actor() model.ActorID { return c.cfg.Actor }
 
 func (c *ClaudeAdapter) State() model.AgentState {
 	c.mu.Lock()
@@ -108,7 +111,7 @@ func (c *ClaudeAdapter) setState(state model.AgentState, detail string) {
 	if !changed && detail == "" {
 		return
 	}
-	e := runtimeEvent(model.ActorClaude, model.RuntimeState)
+	e := runtimeEvent(c.cfg.Actor, model.RuntimeState)
 	e.State = state
 	e.Text = detail
 	c.sink(e)
@@ -132,8 +135,8 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	c.controlMu.Unlock()
 
 	probe, probeErr := ProbeRuntime(ctx, Config{
-		Actor: model.ActorClaude, Command: c.cfg.Command, Model: c.cfg.Model,
-		PermissionMode: c.cfg.PermissionMode,
+		Actor: c.cfg.Actor, Command: c.cfg.Command, Model: c.cfg.Model,
+		Runtime: c.cfg.Runtime, PermissionMode: c.cfg.PermissionMode,
 	})
 	info := model.RuntimeInfo{
 		Available: false, Command: c.cfg.Command, Protocol: "claude-stream-json",
@@ -150,16 +153,13 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	c.flags = flags
 	c.runtimeInfo = info
 	c.mu.Unlock()
-	emitRuntimeInfo(c.sink, model.ActorClaude, info)
+	emitRuntimeInfo(c.sink, c.cfg.Actor, info)
 	if probeErr != nil {
 		c.setState(model.StateError, probeErr.Error())
 		return probeErr
 	}
 
-	systemPrompt := c.cfg.SystemPrompt
-	if systemPrompt == "" {
-		systemPrompt = prompt.SystemPrompt(model.ActorClaude, c.cfg.RoomName, c.cfg.Repo)
-	}
+	systemPrompt := collaborationPrompt(c.cfg)
 
 	args := append([]string(nil), c.cfg.CommandArgs...)
 	args = append(args, "-p", "--input-format", "stream-json", "--output-format", "stream-json")
@@ -302,7 +302,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 		}
 	}
 	c.setState(model.StateIdle, "")
-	session := runtimeEvent(model.ActorClaude, model.RuntimeSession)
+	session := runtimeEvent(c.cfg.Actor, model.RuntimeSession)
 	session.SessionID = c.SessionID()
 	c.sink(session)
 	return nil
@@ -357,11 +357,7 @@ func (c *ClaudeAdapter) Submit(ctx context.Context, input model.AgentInput) (mod
 
 	text := prompt.Envelope(input)
 	if !protocolSent {
-		systemPrompt := c.cfg.SystemPrompt
-		if systemPrompt == "" {
-			systemPrompt = prompt.SystemPrompt(model.ActorClaude, c.cfg.RoomName, c.cfg.Repo)
-		}
-		text = systemPrompt + "\n\n" + text
+		text = collaborationPrompt(c.cfg) + "\n\n" + text
 	}
 	content, err := claudeInputContent(text, input.Attachments)
 	if err != nil {
@@ -507,14 +503,14 @@ func claudeInputContent(text string, attachments []model.AgentAttachment) (any, 
 }
 
 func (c *ClaudeAdapter) emitTurnStarted(item claudePending) {
-	e := runtimeEvent(model.ActorClaude, model.RuntimeTurnStarted)
+	e := runtimeEvent(c.cfg.Actor, model.RuntimeTurnStarted)
 	e.TurnID = item.turnID
 	e.CorrelationID = item.input.MessageID
 	c.sink(e)
 }
 
 func (c *ClaudeAdapter) emitInputState(item claudePending, kind string, state model.ProcessingState, detail string) {
-	e := runtimeEvent(model.ActorClaude, kind)
+	e := runtimeEvent(c.cfg.Actor, kind)
 	e.TurnID = item.turnID
 	e.CorrelationID = item.input.MessageID
 	e.Name = string(state)
@@ -581,7 +577,7 @@ func (c *ClaudeAdapter) readStdout(reader io.Reader) {
 		c.handleLine(line)
 	}
 	if err := scanner.Err(); err != nil {
-		e := runtimeEvent(model.ActorClaude, model.RuntimeError)
+		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
 		e.Text = "read Claude stream: " + err.Error()
 		c.sink(e)
 	}
@@ -595,7 +591,7 @@ func (c *ClaudeAdapter) readStderr(reader io.Reader) {
 		if text == "" {
 			continue
 		}
-		e := runtimeEvent(model.ActorClaude, model.RuntimeLog)
+		e := runtimeEvent(c.cfg.Actor, model.RuntimeLog)
 		e.Name = "stderr"
 		e.Text = text
 		c.sink(e)
@@ -605,7 +601,7 @@ func (c *ClaudeAdapter) readStderr(reader io.Reader) {
 func (c *ClaudeAdapter) handleLine(line []byte) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(line, &raw); err != nil {
-		e := runtimeEvent(model.ActorClaude, model.RuntimeLog)
+		e := runtimeEvent(c.cfg.Actor, model.RuntimeLog)
 		e.Name = "stdout"
 		e.Text = string(line)
 		c.sink(e)
@@ -629,14 +625,14 @@ func (c *ClaudeAdapter) handleLine(line []byte) {
 			c.mu.Lock()
 			c.sessionID = sessionID
 			c.mu.Unlock()
-			e := runtimeEvent(model.ActorClaude, model.RuntimeSession)
+			e := runtimeEvent(c.cfg.Actor, model.RuntimeSession)
 			e.SessionID = sessionID
 			e.Data = append(json.RawMessage(nil), line...)
 			c.sink(e)
 			c.updateRuntimeInfoFromInit(line)
 			return
 		}
-		e := runtimeEvent(model.ActorClaude, model.RuntimeLog)
+		e := runtimeEvent(c.cfg.Actor, model.RuntimeLog)
 		e.Name = "system." + subtype
 		e.Data = append(json.RawMessage(nil), line...)
 		c.sink(e)
@@ -654,7 +650,7 @@ func (c *ClaudeAdapter) handleLine(line []byte) {
 			c.mu.Lock()
 			c.output.WriteString(envelope.Event.Delta.Text)
 			c.mu.Unlock()
-			e := runtimeEvent(model.ActorClaude, model.RuntimeTextDelta)
+			e := runtimeEvent(c.cfg.Actor, model.RuntimeTextDelta)
 			if hasPending {
 				e.TurnID = pending.turnID
 				e.CorrelationID = pending.input.MessageID
@@ -701,7 +697,7 @@ func (c *ClaudeAdapter) handleLine(line []byte) {
 		}
 		success := result.Subtype == "success" || (result.Subtype == "" && !result.IsError && result.Error == "")
 		if ok && success && strings.TrimSpace(result.Result) != "" {
-			e := runtimeEvent(model.ActorClaude, model.RuntimeFinal)
+			e := runtimeEvent(c.cfg.Actor, model.RuntimeFinal)
 			e.TurnID = item.turnID
 			e.CorrelationID = item.input.MessageID
 			e.Text = result.Result
@@ -716,7 +712,7 @@ func (c *ClaudeAdapter) handleLine(line []byte) {
 			}
 			c.emitInputState(item, kind, state, detail)
 		}
-		completed := runtimeEvent(model.ActorClaude, model.RuntimeTurnCompleted)
+		completed := runtimeEvent(c.cfg.Actor, model.RuntimeTurnCompleted)
 		if ok {
 			completed.TurnID = item.turnID
 			completed.CorrelationID = item.input.MessageID
@@ -725,7 +721,7 @@ func (c *ClaudeAdapter) handleLine(line []byte) {
 		completed.Data = append(json.RawMessage(nil), line...)
 		c.sink(completed)
 		if result.CostUSD != 0 || result.Duration != 0 || len(result.Usage) > 0 {
-			usage := runtimeEvent(model.ActorClaude, model.RuntimeUsageUpdated)
+			usage := runtimeEvent(c.cfg.Actor, model.RuntimeUsageUpdated)
 			if ok {
 				usage.TurnID = item.turnID
 				usage.CorrelationID = item.input.MessageID
@@ -734,7 +730,7 @@ func (c *ClaudeAdapter) handleLine(line []byte) {
 			c.sink(usage)
 		}
 		if !success {
-			e := runtimeEvent(model.ActorClaude, model.RuntimeError)
+			e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
 			if ok {
 				e.TurnID = item.turnID
 				e.CorrelationID = item.input.MessageID
@@ -756,7 +752,7 @@ func (c *ClaudeAdapter) handleLine(line []byte) {
 		}
 
 	case "tool_progress", "hook_started", "hook_progress", "hook_response", "status", "rate_limit_event":
-		e := runtimeEvent(model.ActorClaude, model.RuntimeLog)
+		e := runtimeEvent(c.cfg.Actor, model.RuntimeLog)
 		e.Name = typ
 		if hasPending {
 			e.TurnID = pending.turnID
@@ -800,9 +796,9 @@ func (c *ClaudeAdapter) initializeControl(ctx context.Context) error {
 		"control-protocol", "interactive-approvals", "user-questions"))
 	c.runtimeInfo = runtimeInfo
 	c.mu.Unlock()
-	emitRuntimeInfo(c.sink, model.ActorClaude, runtimeInfo)
+	emitRuntimeInfo(c.sink, c.cfg.Actor, runtimeInfo)
 
-	e := runtimeEvent(model.ActorClaude, model.RuntimeLog)
+	e := runtimeEvent(c.cfg.Actor, model.RuntimeLog)
 	e.Name = "control.initialized"
 	e.Text = fmt.Sprintf("commands=%d models=%d agents=%d", len(info.Commands), len(info.Models), len(info.Agents))
 	e.Data = append(json.RawMessage(nil), response...)
@@ -853,7 +849,7 @@ func (c *ClaudeAdapter) handleControlResponse(line []byte) {
 		} `json:"response"`
 	}
 	if err := json.Unmarshal(line, &envelope); err != nil || envelope.Response.RequestID == "" {
-		e := runtimeEvent(model.ActorClaude, model.RuntimeLog)
+		e := runtimeEvent(c.cfg.Actor, model.RuntimeLog)
 		e.Name = "control_response.invalid"
 		e.Data = append(json.RawMessage(nil), line...)
 		c.sink(e)
@@ -866,7 +862,7 @@ func (c *ClaudeAdapter) handleControlResponse(line []byte) {
 	}
 	c.controlMu.Unlock()
 	if !ok {
-		e := runtimeEvent(model.ActorClaude, model.RuntimeLog)
+		e := runtimeEvent(c.cfg.Actor, model.RuntimeLog)
 		e.Name = "control_response.unmatched"
 		e.Text = envelope.Response.RequestID
 		e.Data = append(json.RawMessage(nil), line...)
@@ -914,7 +910,7 @@ func (c *ClaudeAdapter) handleControlRequest(line []byte, pending claudePending,
 		} `json:"request"`
 	}
 	if err := json.Unmarshal(line, &envelope); err != nil || envelope.RequestID == "" {
-		e := runtimeEvent(model.ActorClaude, model.RuntimeLog)
+		e := runtimeEvent(c.cfg.Actor, model.RuntimeLog)
 		e.Name = "control_request.invalid"
 		e.Data = append(json.RawMessage(nil), line...)
 		c.sink(e)
@@ -922,7 +918,7 @@ func (c *ClaudeAdapter) handleControlRequest(line []byte, pending claudePending,
 	}
 	if envelope.Request.Subtype != "can_use_tool" {
 		_ = c.writeControlError(envelope.RequestID, "PairRoom does not implement Claude control request subtype "+envelope.Request.Subtype)
-		e := runtimeEvent(model.ActorClaude, model.RuntimeLog)
+		e := runtimeEvent(c.cfg.Actor, model.RuntimeLog)
 		e.Name = "control_request.unsupported"
 		e.Text = envelope.Request.Subtype
 		e.Data = append(json.RawMessage(nil), line...)
@@ -934,7 +930,7 @@ func (c *ClaudeAdapter) handleControlRequest(line []byte, pending claudePending,
 		// the PairRoom binding. It is outside the Room transcript boundary, so it
 		// must neither become a visible approval nor leave this Runtime waiting.
 		_ = c.writeControlError(envelope.RequestID, "PairRoom rejected a control request outside a Room-authored turn")
-		e := runtimeEvent(model.ActorClaude, model.RuntimeError)
+		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
 		e.Text = "Claude emitted a control request outside a PairRoom-authored turn"
 		c.sink(e)
 		return
@@ -950,7 +946,7 @@ func (c *ClaudeAdapter) handleControlRequest(line []byte, pending claudePending,
 				"behavior": "deny",
 				"message":  "PairRoom reviewer role cannot use " + envelope.Request.ToolName + "; change the participant role first",
 			})
-			e := runtimeEvent(model.ActorClaude, model.RuntimeLog)
+			e := runtimeEvent(c.cfg.Actor, model.RuntimeLog)
 			e.Name = "reviewer.tool.denied"
 			e.Text = envelope.Request.ToolName
 			e.Data = append(json.RawMessage(nil), line...)
@@ -989,7 +985,7 @@ func (c *ClaudeAdapter) handleControlRequest(line []byte, pending claudePending,
 		title = "Claude asks for input"
 	}
 	approval := model.Approval{
-		ID: model.NewID("approval"), Agent: model.ActorClaude, Kind: kind,
+		ID: model.NewID("approval"), Agent: c.cfg.Actor, Kind: kind,
 		Title: title, Detail: detailJSON, Status: "pending", RequestedAt: time.Now().UTC(),
 	}
 	c.mu.Lock()
@@ -1000,7 +996,7 @@ func (c *ClaudeAdapter) handleControlRequest(line []byte, pending claudePending,
 		approval:    approval,
 	}
 	c.mu.Unlock()
-	e := runtimeEvent(model.ActorClaude, model.RuntimeApprovalRequested)
+	e := runtimeEvent(c.cfg.Actor, model.RuntimeApprovalRequested)
 	if hasPending {
 		e.TurnID = pending.turnID
 		e.CorrelationID = pending.input.MessageID
@@ -1090,7 +1086,7 @@ func (c *ClaudeAdapter) updateRuntimeInfoFromInit(line []byte) {
 	info.ProbedAt = time.Now().UTC()
 	c.runtimeInfo = info
 	c.mu.Unlock()
-	emitRuntimeInfo(c.sink, model.ActorClaude, info)
+	emitRuntimeInfo(c.sink, c.cfg.Actor, info)
 }
 
 func claudeResultState(subtype string, success bool) (string, model.ProcessingState) {
@@ -1125,7 +1121,7 @@ func (c *ClaudeAdapter) emitClaudeAssistantItems(line []byte, pending claudePend
 		case "text":
 			text.WriteString(block.Text)
 		case "tool_use":
-			e := runtimeEvent(model.ActorClaude, model.RuntimeToolStarted)
+			e := runtimeEvent(c.cfg.Actor, model.RuntimeToolStarted)
 			if hasPending {
 				e.TurnID = pending.turnID
 				e.CorrelationID = pending.input.MessageID
@@ -1161,7 +1157,7 @@ func (c *ClaudeAdapter) emitClaudeToolResults(line []byte, pending claudePending
 		if block.Type != "tool_result" {
 			continue
 		}
-		e := runtimeEvent(model.ActorClaude, model.RuntimeToolCompleted)
+		e := runtimeEvent(c.cfg.Actor, model.RuntimeToolCompleted)
 		if hasPending {
 			e.TurnID = pending.turnID
 			e.CorrelationID = pending.input.MessageID
@@ -1203,14 +1199,14 @@ func (c *ClaudeAdapter) waitProcess(cmd *exec.Cmd) {
 	}
 	for _, item := range pending {
 		c.emitInputState(item, model.RuntimeInputFailed, model.ProcessingFailed, detail)
-		completed := runtimeEvent(model.ActorClaude, model.RuntimeTurnCompleted)
+		completed := runtimeEvent(c.cfg.Actor, model.RuntimeTurnCompleted)
 		completed.TurnID = item.turnID
 		completed.CorrelationID = item.input.MessageID
 		completed.Name = "process_exited"
 		c.sink(completed)
 	}
 	if err != nil || len(pending) > 0 {
-		e := runtimeEvent(model.ActorClaude, model.RuntimeError)
+		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
 		e.Text = detail
 		c.sink(e)
 		c.setState(model.StateError, detail)
@@ -1222,7 +1218,7 @@ func (c *ClaudeAdapter) waitProcess(cmd *exec.Cmd) {
 func (c *ClaudeAdapter) cancelPending(kind, detail string) {
 	for _, item := range c.takePending() {
 		c.emitInputState(item, model.RuntimeInputCancelled, model.ProcessingCancelled, detail)
-		completed := runtimeEvent(model.ActorClaude, model.RuntimeTurnCompleted)
+		completed := runtimeEvent(c.cfg.Actor, model.RuntimeTurnCompleted)
 		completed.TurnID = item.turnID
 		completed.CorrelationID = item.input.MessageID
 		completed.Name = kind
