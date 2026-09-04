@@ -1316,17 +1316,33 @@ func applyRoleRuntimeProjection(participant *model.ParticipantSnapshot, actor mo
 	kind := slot.Runtime.CanonicalForSlot(actor)
 	participant.RuntimeKind = kind
 	participant.DisplayName = model.ParticipantDisplayName(actor, kind)
+	// Rebuild the policy projection from the immutable slot selection on every
+	// role transition. A process can move from a read-only Reviewer stage back
+	// to a Driver turn; leaving fields from the previous role in the snapshot
+	// would make the UI/API claim a policy that is no longer active.
+	participant.Runtime.PermissionMode = ""
+	participant.Runtime.ApprovalPolicy = ""
+	participant.Runtime.Sandbox = ""
 	switch kind {
 	case model.RuntimeClaude:
 		if role == model.RoleReviewer {
 			participant.Runtime.PermissionMode = "plan"
-		} else if slot.PermissionMode != "" {
+		} else {
 			participant.Runtime.PermissionMode = slot.PermissionMode
 		}
 	case model.RuntimeCodex:
 		if role == model.RoleReviewer {
 			participant.Runtime.Sandbox = "readOnly"
-		} else if slot.Sandbox != "" {
+		} else {
+			participant.Runtime.ApprovalPolicy = slot.ApprovalPolicy
+			participant.Runtime.Sandbox = slot.Sandbox
+		}
+	case model.RuntimeGrok:
+		if role == model.RoleReviewer {
+			participant.Runtime.PermissionMode = "plan"
+			participant.Runtime.Sandbox = "read-only"
+		} else {
+			participant.Runtime.PermissionMode = slot.PermissionMode
 			participant.Runtime.Sandbox = slot.Sandbox
 		}
 	}

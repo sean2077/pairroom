@@ -23,6 +23,7 @@ import (
 	"github.com/sean2077/pairroom/internal/room"
 	"github.com/sean2077/pairroom/internal/version"
 	"github.com/sean2077/pairroom/internal/websession"
+	"github.com/sean2077/pairroom/internal/webui"
 )
 
 //go:embed assets/*
@@ -73,6 +74,7 @@ func New(cfg Config) (*Server, error) {
 		sessions: sessions, limiter: newRateLimiter(),
 	}
 	mux := http.NewServeMux()
+	webui.Mount(mux)
 	mux.HandleFunc("POST /api/v1/session", s.createBrowserSession)
 	mux.HandleFunc("GET /api/v1/session", s.readBrowserSession)
 	mux.HandleFunc("DELETE /api/v1/session", s.deleteBrowserSession)
@@ -751,7 +753,26 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]any{"error": message})
+	code := "request_failed"
+	switch status {
+	case http.StatusBadRequest:
+		code = "invalid_request"
+	case http.StatusUnauthorized:
+		code = "authentication_required"
+	case http.StatusForbidden:
+		code = "request_forbidden"
+	case http.StatusNotFound:
+		code = "not_found"
+	case http.StatusConflict:
+		code = "request_conflict"
+	case http.StatusRequestEntityTooLarge:
+		code = "request_too_large"
+	case http.StatusTooManyRequests:
+		code = "rate_limited"
+	case http.StatusInternalServerError:
+		code = "internal_error"
+	}
+	writeJSON(w, status, map[string]any{"error": message, "code": code})
 }
 
 func writeSSE(w io.Writer, event model.Event) error {

@@ -11,7 +11,33 @@ PairRoom's browser UI uses a local HTTP API and SSE. CLI / UI is the preferred e
 
 ## Resource families
 
-The Management API owns Project and Room registration, Binding, archive, backup, and Service diagnostics. The Room API owns message, Turn, participant, role, approval, retry, cancel, attachment, and the event stream. In-app Room tabs use the Management same-origin surface: `/api/v1/rooms/{room}/surface/…` uses the Management Session, and the server injects the Runtime bearer. `PATCH /api/v1/runtime-policy` only adjusts the concurrent Runtime cap. `POST /api/v1/rooms/{room}/open-browser` opens the system browser after the Runtime is ready. An archived Room has no surface and cannot be opened externally.
+The Management API owns Project and Room registration, immutable per-Room Agent selection, Binding, archive, backup, and Service diagnostics. The Room API owns message, Turn, participant, role, approval, retry, cancel, attachment, and the event stream. In-app Room tabs use the Management same-origin surface: `/api/v1/rooms/{room}/surface/…` uses the Management Session, and the server injects the Runtime bearer. `PATCH /api/v1/runtime-policy` only adjusts the concurrent Runtime cap. `POST /api/v1/rooms/{room}/open-browser` opens the system browser after the Runtime is ready. An archived Room has no surface and cannot be opened externally.
+
+## Agent catalog and Room creation
+
+`GET /api/v1/agent-catalog` and `POST /api/v1/agent-catalog/refresh` return all three Runtime entries with availability diagnostics, sanitized CC Switch Profile summaries, local model suggestions, disabled reasons, and the current two Service defaults. The response never contains raw Profile configuration, endpoints, headers, tokens, API keys, or Runtime arguments. Refresh is explicit, and Room creation still re-resolves the selected Profile server-side instead of trusting the catalog returned to the browser.
+
+`POST /api/v1/projects/{project}/rooms` accepts the existing `name` and complete two-slot `bindings` map plus an optional complete `agents` map keyed by historical ActorIDs `claude` and `codex`. Omitting `agents` snapshots both current Service defaults. Sending only one slot is rejected. A selection has this shape:
+
+```json
+{
+  "runtime": "codex",
+  "provider": {"source": "cc-switch", "app_type": "codex", "profile_id": "profile-id"},
+  "model": "custom-model-id",
+  "effort": "high",
+  "instructions": "Review compatibility boundaries.",
+  "permission_mode": "",
+  "approval_policy": "on-request",
+  "sandbox": "workspace-write",
+  "ordinary_reviewer_policy": "enforced"
+}
+```
+
+The created Room returns the immutable `agents` map. There is no Agent-reconfiguration endpoint. Schema-v1 Rooms instead return `legacy_defaults: true` and no `agents` map.
+
+## Errors
+
+Error responses retain the English `error` field and add a stable `code`. Errors that can be safely localized may include `params` or `details`; these never contain Profile secrets. Clients localize recognized codes and display the original `error` for unknown or native diagnostics.
 
 Status requests return the current projection. Command requests first record an auditable event, then drive the native runtime asynchronously. HTTP success means only that the control plane accepted the command. Judge final execution from message processing, Turn summary, or SSE events.
 
@@ -29,6 +55,8 @@ The following paths / prefixes are extracted from `internal/server/` and `intern
 
 - `/api/`
 - `/api/v1/`
+- `/api/v1/agent-catalog`
+- `/api/v1/agent-catalog/refresh`
 - `/api/v1/approvals/`
 - `/api/v1/approvals/approval-1`
 - `/api/v1/approvals/approval-1/extra`

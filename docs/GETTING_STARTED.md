@@ -73,8 +73,8 @@ In the Management Shell:
 
 1. Register the target repository as a Project;
 2. Create a Room;
-3. Confirm Agent 1 and Agent 2 Bindings (JSON keys `claude` / `codex`; each slot may run Claude Code, Codex, or Grok Build);
-4. Assign Driver / Reviewer, or leave both as Peer;
+3. For Agent 1 and Agent 2, select a Runtime, native or supported CC Switch Profile, and optionally edit the Model and advanced Runtime policy. Unavailable Runtimes and Profiles that require OAuth, proxy conversion, or failover remain visible but disabled;
+4. Confirm both Bindings (JSON keys `claude` / `codex`). Agent 1 starts as Driver and Agent 2 as Reviewer; both slots may use the same Runtime/Profile;
 5. Open the Room from the sidebar; it becomes an in-app tab. Use **Open in browser** for a separate browser window.
 
 A Project is a repository-level management record. A Room is a long-lived collaboration context. Unregistering a Project does not delete the repository, and archiving a Room does not permanently delete Room data.
@@ -133,7 +133,7 @@ codex --version
 grok --version
 ```
 
-Then start the real Management Service with `make dev` (not `--mock`) and, if needed, set model, Provider, permission, and sandbox in configuration or the UI. Empty `provider`, `model`, `effort`, and `instructions` inherit each selected native CLI's user/global configuration. PairRoom does not replace CLI login or credential management.
+Then start the real Management Service with `make dev` (not `--mock`) and select the Runtime, ProviderRef, Model, effort, instructions, and permission policy while creating the Room. The complete two-slot selection is immutable after creation. `source: native` and empty overrides inherit each selected CLI's user/global configuration. A CC Switch Profile is re-read at validation and activation; PairRoom never changes CC Switch current state or replaces CLI/Provider credential management. Run `pairroom providers` to inspect the sanitized local catalog.
 
 ## 7. End correctly
 

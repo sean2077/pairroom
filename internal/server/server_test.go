@@ -196,7 +196,7 @@ func TestRichConversationAssetsAreEmbedded(t *testing.T) {
 
 	app := httptest.NewRecorder()
 	server.Handler().ServeHTTP(app, localRequest(http.MethodGet, "/app.js", nil))
-	for _, marker := range []string{"threadFilter", "uploadPendingAttachment", "openLightbox", "renderClaudeQuestions", "initializeSession", "X-PairRoom-CSRF", "queueStreamingRender", "queueRuntimeRender", "runtimeRenderScopes", "runtimeMessageRenderIDs", "renderStreamingDrafts", "renderCreatedMessage", "renderMessage", "deliveryNode", "data-streaming-actor", "data-streaming-text", "streamingCorrelation", "renderScope = 'message-created'", "renderScope = 'message'", "renderScope = 'activity'", "roomURL", "pairroom-surface", "尚未生成", "复制 Session ID", "复制 Thread ID", "if (state.unreadCount === 0 && state.lastSeenSeq === lastSeen) return;"} {
+	for _, marker := range []string{"threadFilter", "uploadPendingAttachment", "openLightbox", "renderClaudeQuestions", "initializeSession", "X-PairRoom-CSRF", "queueStreamingRender", "queueRuntimeRender", "runtimeRenderScopes", "runtimeMessageRenderIDs", "renderStreamingDrafts", "renderCreatedMessage", "renderMessage", "deliveryNode", "data-streaming-actor", "data-streaming-text", "streamingCorrelation", "renderScope = 'message-created'", "renderScope = 'message'", "renderScope = 'activity'", "roomURL", "pairroom-surface", "ui.notYetCreated", "ui.copySessionId", "ui.copyThreadId", "if (state.unreadCount === 0 && state.lastSeenSeq === lastSeen) return;"} {
 		if app.Code != http.StatusOK || !strings.Contains(app.Body.String(), marker) {
 			t.Fatalf("app asset omitted %q: status=%d", marker, app.Code)
 		}

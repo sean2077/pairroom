@@ -1,6 +1,6 @@
 # Configuration
 
-PairRoom configuration describes the local listener, Runtime policy, two native Agent slots, and optional Providers. A complete runnable sample is [`examples/pairroom.example.json`](../examples/pairroom.example.json). The final interpretation of command-line flags is always `pairroom <command> --help`.
+PairRoom configuration describes the local listener, Runtime policy, Runtime command templates, two default Agent slots, and optional read-only CC Switch database location. A complete runnable sample is [`examples/pairroom.example.json`](../examples/pairroom.example.json). The final interpretation of command-line flags is always `pairroom <command> --help`.
 
 ## Load and override
 
@@ -22,7 +22,13 @@ The JSON decoder rejects unknown fields. Spelling mistakes are therefore not sil
 
 The JSON keys `claude` and `codex` are durable Agent 1 and Agent 2 slots, not vendor identities. Each slot has a `runtime` of `claude`, `codex`, or `grok`. Both slots may select the same runtime.
 
-`provider`, `model`, `effort`, and `instructions` are explicit overrides. Empty values inherit the selected native CLI's user/global configuration. Permission, approval, and sandbox fields work the same way when left empty: PairRoom does not synthesize a vendor default. PairRoom maps explicit settings onto the official CLI, but vendor support still depends on the locally installed version.
+Each slot supplies a default `AgentSelection`: `runtime`, a structured `provider`, optional `model`, `effort`, `instructions`, Runtime-specific permission/approval/sandbox values, and `ordinary_reviewer_policy`. A new Room snapshots both selections; changing Service configuration later does not rewrite it. Existing schema-v1 Rooms have no selection snapshot, are shown as `Legacy defaults`, and continue to resolve the current Service defaults at activation.
+
+`provider: {"source":"native"}` delegates Provider and credentials to the selected CLI's user/global configuration. Empty model, effort, instructions, permission, approval, and sandbox fields inherit native configuration. `ordinary_reviewer_policy` defaults to `enforced`; `explicit` is the dangerous opt-in that applies the selected Runtime policy to ordinary Reviewer Turns. Compiled plan, review, and audit Workflow stages remain read-only regardless of this option.
+
+Commands are not part of a Room selection. `runtimes.claude`, `runtimes.codex`, and `runtimes.grok` each own one Service-level `command`/`args` template, preventing a Room request from selecting an executable.
+
+Runtime policy fields are validated per Runtime: Claude Code accepts `permission_mode`; Codex accepts `approval_policy` (`untrusted`, `unless-trusted`, `unlessTrusted`, `on-failure`, `on-request`, or `never`) and `sandbox` (`read-only`, `workspace-write`, or `danger-full-access`); Grok Build accepts `permission_mode` and `sandbox` (`read-only`, `workspace`, `strict`, or `off`). Empty values inherit native configuration. Service runtime `args` templates must not preselect model, effort, permission, approval, sandbox, or bypass flags, because those values belong to the immutable Room selection and Workflow safety projection.
 
 Recommendations:
 
@@ -32,9 +38,15 @@ Recommendations:
 - After changing an executable or Provider, run Mock first, then a real read-only Turn;
 - Keep Grok Build prompt and instruction text out of process argv (PairRoom writes them to a prompt file).
 
-## Provider and cc-connect
+## CC Switch Provider references
 
-A Provider profile can describe an endpoint, model alias, environment-variable mapping, and Codex wire API. `cc_connect` only references an existing provider source; it must not copy long-lived credentials into the Room Event Log. Import collisions need an explicit prefix or rename; later-loaded values must not silently overwrite earlier ones.
+PairRoom supports CC Switch v3.20.1/schema 18 through the CGo-free `modernc.org/sqlite` driver. It opens `~/.cc-switch/cc-switch.db` in SQLite read-only/query-only mode; `cc_switch.database` may override it only with an absolute path. PairRoom does not create or update this database, change `is_current`, manage Providers, or write live CLI configuration.
+
+A CC Switch selection has the stable form `{"source":"cc-switch","app_type":"codex","profile_id":"…"}`. PairRoom re-reads the composite `(app_type, profile_id)` at creation validation and every Runtime activation. Supported profiles are directly materializable Claude Anthropic-compatible API-key profiles, Codex API-key custom Providers using the Responses wire API, and Grok Build direct custom-model profiles. Managed OAuth, proxy/protocol conversion, failover, unsupported applications, missing credentials, and malformed profiles remain visible in the Agent catalog but are disabled with a reason. A missing/deleted Profile, locked/unreadable database, or schema mismatch fails closed without fallback to cached or current Provider state.
+
+Profile secrets exist only in the target child-process environment. Safe non-secret CLI overrides may select a Provider/model. For Grok Build, PairRoom creates a permission-restricted, secret-free Runtime overlay and points only the target process at it with `GROK_CONFIG_PATH`; the API key remains in that process environment. Secrets never enter argv, temporary configuration, Room data, Event Logs, the Registry checkpoint, RuntimeInfo, HTTP responses, browser state, diagnostics, or logs. Model suggestions come only from the selected Profile and Service defaults; PairRoom performs no network model discovery.
+
+The former PairRoom `providers`, `cc_connect`, and string-valued Agent `provider` fields are removed. Configuration loading returns a migration error with a link to [Upgrading](UPGRADING.md).
 
 ## Service runtime policy
 
@@ -48,44 +60,33 @@ The following JSON names are extracted from struct tags in `internal/config/`. T
 <details>
 <summary>Show current JSON fields</summary>
 
-- `agent_model_lists`
-- `agent_models`
-- `agent_types`
-- `alias`
-- `api_key`
 - `approval_policy`
+- `app_type`
 - `args`
 - `auto_start`
-- `base_url`
-- `cc_connect`
+- `cc_switch`
 - `claude`
 - `codex`
 - `command`
+- `database`
 - `effort`
-- `endpoints`
-- `env`
-- `env_key`
-- `http_headers`
-- `imported_from`
+- `grok`
 - `instructions`
 - `listen`
 - `max_agent_hops`
 - `model`
-- `models`
-- `name`
-- `path`
+- `ordinary_reviewer_policy`
 - `permission_mode`
-- `prefix`
+- `profile_id`
 - `provider`
-- `providers`
 - `room_name`
 - `routing_mode`
 - `runtime`
+- `runtimes`
 - `sandbox`
+- `source`
 - `stall_warning_seconds`
-- `thinking`
 - `token`
-- `wire_api`
 </details>
 <!-- /generated:config-fields -->
 

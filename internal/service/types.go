@@ -20,7 +20,10 @@ const (
 	EventLegacyImported          = "service.legacy.imported"
 )
 
-const TranscriptBoundaryNotice = "This PairRoom timeline starts at the binding boundary. Existing vendor context may be resumed, but earlier Claude/Codex transcripts are not imported, copied, summarized, searched, or displayed."
+const (
+	LegacyTranscriptBoundaryNotice = "This PairRoom timeline starts at the binding boundary. Existing vendor context may be resumed, but earlier Claude/Codex transcripts are not imported, copied, summarized, searched, or displayed."
+	TranscriptBoundaryNotice       = "This PairRoom timeline starts at the binding boundary. Existing native Runtime context may be resumed, but earlier native conversation history is not imported, copied, summarized, searched, or displayed."
+)
 
 type BindingMode string
 
@@ -135,16 +138,18 @@ type Project struct {
 }
 
 type Room struct {
-	ID                       string                    `json:"id"`
-	ProjectID                string                    `json:"project_id"`
-	Name                     string                    `json:"name"`
-	DataDir                  string                    `json:"data_dir"`
-	Lifecycle                RoomLifecycle             `json:"lifecycle"`
-	Bindings                 map[model.ActorID]Binding `json:"bindings"`
-	TranscriptBoundaryNotice string                    `json:"transcript_boundary_notice"`
-	Legacy                   bool                      `json:"legacy,omitempty"`
-	CreatedAt                time.Time                 `json:"created_at"`
-	UpdatedAt                time.Time                 `json:"updated_at"`
+	ID                       string                                 `json:"id"`
+	ProjectID                string                                 `json:"project_id"`
+	Name                     string                                 `json:"name"`
+	DataDir                  string                                 `json:"data_dir"`
+	Lifecycle                RoomLifecycle                          `json:"lifecycle"`
+	Bindings                 map[model.ActorID]Binding              `json:"bindings"`
+	Agents                   map[model.ActorID]model.AgentSelection `json:"agents,omitempty"`
+	TranscriptBoundaryNotice string                                 `json:"transcript_boundary_notice"`
+	Legacy                   bool                                   `json:"legacy,omitempty"`
+	LegacyDefaults           bool                                   `json:"legacy_defaults,omitempty"`
+	CreatedAt                time.Time                              `json:"created_at"`
+	UpdatedAt                time.Time                              `json:"updated_at"`
 }
 
 func (r Room) Archived() bool { return r.Lifecycle == RoomArchived }
@@ -187,7 +192,11 @@ func (r Room) Validate() error {
 	if !r.Lifecycle.Valid() {
 		return fmt.Errorf("invalid room lifecycle %q", r.Lifecycle)
 	}
-	if r.TranscriptBoundaryNotice != TranscriptBoundaryNotice {
+	validBoundary := r.TranscriptBoundaryNotice == TranscriptBoundaryNotice
+	if r.LegacyDefaults {
+		validBoundary = validBoundary || r.TranscriptBoundaryNotice == LegacyTranscriptBoundaryNotice
+	}
+	if !validBoundary {
 		return errors.New("room transcript boundary policy is missing or invalid")
 	}
 	if len(r.Bindings) != 2 {
@@ -210,13 +219,23 @@ func (r Room) Validate() error {
 			return fmt.Errorf("%s binding: %w", actor, err)
 		}
 	}
+	if r.LegacyDefaults {
+		if len(r.Agents) != 0 {
+			return errors.New("Legacy-defaults Room must not contain immutable Agent selections")
+		}
+	} else {
+		if _, err := validateAgentSelections(r.Agents); err != nil {
+			return fmt.Errorf("Room Agent selections: %w", err)
+		}
+	}
 	return nil
 }
 
 type ProvisionRequest struct {
-	ProjectID string                        `json:"project_id"`
-	Name      string                        `json:"name"`
-	Bindings  map[model.ActorID]BindingSpec `json:"bindings"`
+	ProjectID string                                 `json:"project_id"`
+	Name      string                                 `json:"name"`
+	Bindings  map[model.ActorID]BindingSpec          `json:"bindings"`
+	Agents    map[model.ActorID]model.AgentSelection `json:"agents,omitempty"`
 }
 
 func (r ProvisionRequest) Validate() error {
@@ -243,18 +262,24 @@ func (r ProvisionRequest) Validate() error {
 			return fmt.Errorf("%s binding: %w", actor, err)
 		}
 	}
+	if r.Agents != nil {
+		if _, err := validateAgentSelections(r.Agents); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 type roomProvisionedPayload struct {
-	Schema                   int                       `json:"schema"`
-	Project                  Project                   `json:"project"`
-	RoomID                   string                    `json:"room_id"`
-	Name                     string                    `json:"name"`
-	Lifecycle                RoomLifecycle             `json:"lifecycle"`
-	Bindings                 map[model.ActorID]Binding `json:"bindings"`
-	TranscriptBoundaryNotice string                    `json:"transcript_boundary_notice"`
-	CreatedAt                time.Time                 `json:"created_at"`
+	Schema                   int                                    `json:"schema"`
+	Project                  Project                                `json:"project"`
+	RoomID                   string                                 `json:"room_id"`
+	Name                     string                                 `json:"name"`
+	Lifecycle                RoomLifecycle                          `json:"lifecycle"`
+	Bindings                 map[model.ActorID]Binding              `json:"bindings"`
+	Agents                   map[model.ActorID]model.AgentSelection `json:"agents,omitempty"`
+	TranscriptBoundaryNotice string                                 `json:"transcript_boundary_notice"`
+	CreatedAt                time.Time                              `json:"created_at"`
 }
 
 type roomRenamedPayload struct {

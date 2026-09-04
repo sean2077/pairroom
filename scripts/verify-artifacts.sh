@@ -19,6 +19,7 @@ required=(
   "pairroom-v${VERSION}-provenance.json"
   "install.sh"
   "RELEASE_NOTES.md"
+  "THIRD_PARTY_NOTICES.md"
   "version-check.json"
   "SHA256SUMS"
 )

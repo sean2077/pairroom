@@ -21,6 +21,14 @@ type BindingProvisioner interface {
 	Provision(context.Context, Project, model.ActorID, BindingSpec, string) (Binding, func(context.Context) error, error)
 }
 
+type selectionBindingProvisioner interface {
+	ProvisionSelection(context.Context, Project, model.ActorID, BindingSpec, model.AgentSelection, model.RuntimeKind, string) (Binding, func(context.Context) error, error)
+}
+
+type defaultAgentSelectionProvider interface {
+	DefaultSelections() map[model.ActorID]model.AgentSelection
+}
+
 type ProvisionerFunc func(context.Context, Project, model.ActorID, BindingSpec, string) (Binding, func(context.Context) error, error)
 
 func (f ProvisionerFunc) Provision(ctx context.Context, project Project, actor model.ActorID, spec BindingSpec, dataDir string) (Binding, func(context.Context) error, error) {
@@ -31,6 +39,21 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 	if provisioner == nil {
 		return Room{}, errors.New("binding provisioner is required")
 	}
+	// A nil map represents the omitted JSON field and snapshots the current
+	// Service defaults. A non-nil empty/partial map is an explicit submission
+	// and must fail closed rather than silently filling one missing slot.
+	if request.Agents == nil {
+		if defaults, ok := provisioner.(defaultAgentSelectionProvider); ok {
+			request.Agents = defaults.DefaultSelections()
+		} else {
+			request.Agents = defaultAgentSelections()
+		}
+	}
+	selections, err := validateAgentSelections(request.Agents)
+	if err != nil {
+		return Room{}, err
+	}
+	request.Agents = selections
 	if err := request.Validate(); err != nil {
 		return Room{}, err
 	}
@@ -97,7 +120,16 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 
 	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
 		spec := request.Bindings[actor]
-		binding, cleanup, err := provisioner.Provision(ctx, project, actor, spec, stageDir)
+		selection := request.Agents[actor]
+		peerRuntime := request.Agents[model.OtherParticipant(actor)].Runtime
+		var binding Binding
+		var cleanup func(context.Context) error
+		var err error
+		if selected, ok := provisioner.(selectionBindingProvisioner); ok {
+			binding, cleanup, err = selected.ProvisionSelection(ctx, project, actor, spec, selection, peerRuntime, stageDir)
+		} else {
+			binding, cleanup, err = provisioner.Provision(ctx, project, actor, spec, stageDir)
+		}
 		if cleanup != nil {
 			cleanups = append(cleanups, cleanup)
 		}
@@ -153,13 +185,14 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 	now := r.now()
 	room := Room{
 		ID: roomID, ProjectID: project.ID, Name: strings.TrimSpace(request.Name),
-		Lifecycle: RoomActive, Bindings: bindings,
+		Lifecycle: RoomActive, Bindings: bindings, Agents: cloneAgentSelections(request.Agents),
 		TranscriptBoundaryNotice: TranscriptBoundaryNotice,
 		CreatedAt:                now, UpdatedAt: now,
 	}
 	payload := roomProvisionedPayload{
-		Schema: 1, Project: project, RoomID: room.ID, Name: room.Name,
+		Schema: 2, Project: project, RoomID: room.ID, Name: room.Name,
 		Lifecycle: room.Lifecycle, Bindings: cloneBindings(room.Bindings),
+		Agents:                   cloneAgentSelections(room.Agents),
 		TranscriptBoundaryNotice: room.TranscriptBoundaryNotice, CreatedAt: room.CreatedAt,
 	}
 	if err := writeInitialRoomLog(stageDir, project, room, payload); err != nil {
@@ -201,6 +234,13 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 	return cloneRoom(room), nil
 }
 
+func defaultAgentSelections() map[model.ActorID]model.AgentSelection {
+	return map[model.ActorID]model.AgentSelection{
+		model.ActorClaude: {Runtime: model.RuntimeClaude, Provider: model.NativeProviderRef(), OrdinaryReviewerPolicy: model.ReviewerEnforced},
+		model.ActorCodex:  {Runtime: model.RuntimeCodex, Provider: model.NativeProviderRef(), OrdinaryReviewerPolicy: model.ReviewerEnforced},
+	}
+}
+
 func writeInitialRoomLog(dir string, project Project, room Room, payload roomProvisionedPayload) error {
 	eventStore, err := store.Open(dir)
 	if err != nil {
@@ -233,8 +273,8 @@ func writeInitialRoomLog(dir string, project Project, room Room, payload roomPro
 		return err
 	}
 	participants := []model.ParticipantSnapshot{
-		{ID: model.ActorClaude, DisplayName: model.ActorClaude.DisplayName(), Role: model.RoleDriver, State: model.StateStopped, SessionID: room.Bindings[model.ActorClaude].SessionID},
-		{ID: model.ActorCodex, DisplayName: model.ActorCodex.DisplayName(), Role: model.RoleReviewer, State: model.StateStopped, SessionID: room.Bindings[model.ActorCodex].SessionID},
+		{ID: model.ActorClaude, DisplayName: model.ParticipantDisplayName(model.ActorClaude, room.Agents[model.ActorClaude].Runtime), Role: model.RoleDriver, State: model.StateStopped, Model: room.Agents[model.ActorClaude].Model, RuntimeKind: room.Agents[model.ActorClaude].Runtime, SessionID: room.Bindings[model.ActorClaude].SessionID},
+		{ID: model.ActorCodex, DisplayName: model.ParticipantDisplayName(model.ActorCodex, room.Agents[model.ActorCodex].Runtime), Role: model.RoleReviewer, State: model.StateStopped, Model: room.Agents[model.ActorCodex].Model, RuntimeKind: room.Agents[model.ActorCodex].Runtime, SessionID: room.Bindings[model.ActorCodex].SessionID},
 	}
 	for _, participant := range participants {
 		if err := appendEvent("participant.updated", participant.ID, participant); err != nil {

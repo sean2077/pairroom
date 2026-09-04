@@ -67,7 +67,7 @@ func TestManagementShellAuthenticationAssetsAndSecurityHeaders(t *testing.T) {
 	if asset.Code != http.StatusOK {
 		t.Fatalf("management asset status=%d body=%s", asset.Code, asset.Body.String())
 	}
-	for _, marker := range []string{"/api/v1/session", "/api/v1/service", "X-PairRoom-CSRF", "createBrowserSession", "credentialFromInput", "submitCredentialLogin", "logoutBrowserSession", "login-form", "login-token", "logout-button", "浏览器会话已过期", "completeBindings", "补全 Binding", "queue_position", "materializes on first turn", "roomHasBlockingPendingBindings", "renderProjects", "renderRuntimes", "renderSettings", "/suspend", "pairroom daemon open", "pairroom daemon status", "--recover-stale-lock", "/api/v1/projects/", "/refresh", "confirm_project_id", "/api/v1/rooms/batch-archive", "/api/v1/rooms/batch-delete", "acknowledge_data_loss", "selectedRoomIDs", "confirm-input", "confirm-input-label", "confirm-ack", "project_refresh", "project_removal", "room_deletion", "pending_room_cleanup", "批量归档", "批量清理", "永久清除", "room-action-control", "room-select-control", "button secondary-button compact-button room-action-control room-select-control", "#/rooms/", "openRoomInBrowserAction", "/api/v1/runtime-policy", "/surface/", "恢复后才能打开", "const previous = state.tabMeta[data.roomId];", "pairroom.theme", "localStorage.getItem('pairroom.theme'", "localStorage.setItem('pairroom.theme'", "localStorage.removeItem('pairroom.theme'"} {
+	for _, marker := range []string{"/api/v1/session", "/api/v1/service", "X-PairRoom-CSRF", "createBrowserSession", "credentialFromInput", "submitCredentialLogin", "logoutBrowserSession", "login-form", "login-token", "logout-button", "ui.theBrowserSessionHasExpiredPleaseReEnterTheServiceToken", "completeBindings", "ui.completeBindings", "queue_position", "room.materializesOnFirstTurn", "roomHasBlockingPendingBindings", "renderProjects", "renderRuntimes", "renderSettings", "/suspend", "pairroom daemon open", "pairroom daemon status", "ui.onlyAfterConfirmingThatTheOldProcessHasDisappearedCanYouExplicitly", "/api/v1/projects/", "/refresh", "confirm_project_id", "/api/v1/rooms/batch-archive", "/api/v1/rooms/batch-delete", "acknowledge_data_loss", "selectedRoomIDs", "confirm-input", "confirm-input-label", "confirm-ack", "project_refresh", "project_removal", "room_deletion", "pending_room_cleanup", "ui.batchArchiveValue", "ui.batchDeleteValue", "ui.permanentlyDelete", "room-action-control", "room-select-control", "button secondary-button compact-button room-action-control room-select-control", "#/rooms/", "openRoomInBrowserAction", "/api/v1/runtime-policy", "/surface/", "ui.canOnlyBeOpenedAfterRecovery", "const previous = state.tabMeta[data.roomId];", "pairroom.theme", "localStorage.getItem('pairroom.theme'", "PairRoomTheme.setTheme", "pairroom:theme"} {
 		if !strings.Contains(asset.Body.String(), marker) {
 			t.Fatalf("management asset omitted %q", marker)
 		}
@@ -114,7 +114,7 @@ func TestManagementShellAuthenticationAssetsAndSecurityHeaders(t *testing.T) {
 		!strings.Contains(shell.Body.String(), `id="login-token"`) ||
 		!strings.Contains(shell.Body.String(), `id="login-submit"`) ||
 		!strings.Contains(shell.Body.String(), `id="logout-button"`) ||
-		!strings.Contains(shell.Body.String(), "不会写入 Web Storage") ||
+		!strings.Contains(shell.Body.String(), `data-i18n="ui.theCredentialIsUsedOnlyToCreateThisBrowserSHttponlySession"`) ||
 		!strings.Contains(shell.Body.String(), `id="confirm-input"`) ||
 		!strings.Contains(shell.Body.String(), `id="confirm-expected"`) ||
 		!strings.Contains(shell.Body.String(), `id="confirm-input-label"`) ||
@@ -219,9 +219,9 @@ func TestManagementProjectCardsKeepUnavailableRemovalReachable(t *testing.T) {
 	}
 	for _, marker := range []string{
 		"projectRemovalButton(project, rooms.length, true)",
-		"本地路径不可用不影响注销此空 Project。",
-		"显示并永久清除已归档 Room 后即可注销 Project。",
-		"显示已归档 Room",
+		"ui.unavailabilityOfTheLocalPathDoesNotAffectLoggingOutOfThis",
+		"ui.onceArchivedRoomsAreDisplayedAndPermanentlyClearedYouCanLogOut",
+		"ui.showArchivedRooms",
 	} {
 		if !strings.Contains(asset.Body.String(), marker) {
 			t.Fatalf("management asset omitted %q", marker)

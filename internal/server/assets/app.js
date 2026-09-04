@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const t = (zh, en) => (window.PairRoomI18n && window.PairRoomI18n.t) ? window.PairRoomI18n.t(zh, en) : zh;
+  const t = (key, options) => window.PairRoomI18n ? window.PairRoomI18n.t(key, options) : key;
 
   const bootstrapParameters = new URLSearchParams(window.location.hash.replace(/^#/, ''));
   let bootstrapToken = bootstrapParameters.get('token') || '';
@@ -11,9 +11,6 @@
     // only in memory until it is exchanged for an HttpOnly browser session.
     history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
   }
-  const savedTheme = localStorage.getItem('pairroom.theme');
-  const initialTheme = savedTheme || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-  document.documentElement.dataset.theme = initialTheme;
   const STREAM_RENDER_INTERVAL_MS = 50;
   const SURFACE_PREFIX = (() => {
     const match = window.location.pathname.match(/^(.*\/api\/v1\/rooms\/[^/]+\/surface)(?:\/|$)/);
@@ -50,7 +47,6 @@
     inspectorTab: 'activity',
     inspectorCorrelation: '',
     searchQuery: '',
-    theme: initialTheme,
     shellActive: true,
     source: null,
     renderQueued: false,
@@ -76,8 +72,8 @@
     const payload = await response.json().catch(() => ({}));
     bootstrapToken = '';
     if (!response.ok) {
-      const message = payload.error || (response.status === 401
-        ? t('浏览器会话无效；请从 PairRoom 启动输出中的完整地址重新打开。')
+	  const message = window.PairRoomI18n?.errorMessage(payload) || payload.error || (response.status === 401
+        ? t("ui.theBrowserSessionIsInvalidReopenTheFullUrlFromPairroomStartup")
         : response.statusText);
       throw new Error(message);
     }
@@ -99,7 +95,7 @@
     const type = response.headers.get('content-type') || '';
     const payload = type.includes('application/json') ? await response.json() : await response.text();
     if (!response.ok) {
-      const message = payload && payload.error ? payload.error : String(payload || response.statusText);
+	  const message = window.PairRoomI18n?.errorMessage(payload) || (payload && payload.error ? payload.error : String(payload || response.statusText));
       throw new Error(message);
     }
     return payload;
@@ -109,7 +105,7 @@
     const response = await fetch(roomURL(path), { credentials: 'same-origin' });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
-      throw new Error(payload.error || response.statusText);
+	  throw new Error(window.PairRoomI18n?.errorMessage(payload) || payload.error || response.statusText);
     }
     return response.blob();
   }
@@ -174,15 +170,15 @@
     const query = new URLSearchParams({ since: String(since) });
     const source = new EventSource(roomURL(`/api/v1/events?${query}`));
     state.source = source;
-    setConnection(false, 'Connecting');
-    source.addEventListener('open', () => setConnection(true, 'Live'));
-    source.addEventListener('error', () => setConnection(false, 'Reconnecting'));
+    setConnection(false, t('ui.connecting'));
+    source.addEventListener('open', () => setConnection(true, t('room.live')));
+    source.addEventListener('error', () => setConnection(false, t('room.reconnecting')));
     source.addEventListener('pairroom', (raw) => {
       try {
         const event = JSON.parse(raw.data);
         applyEvent(event);
       } catch (error) {
-        toast(`事件解析失败：${error.message}`, 'error');
+        toast(t("ui.couldNotParseEventValue", { value0: (error.message) }), 'error');
       }
     });
   }
@@ -193,7 +189,7 @@
     const latest = Number(state.snapshot.latest_seq || 0);
     if (durable && event.seq <= latest) return;
     if (durable && latest > 0 && event.seq > latest + 1) {
-      toast(`事件序列出现缺口（${latest} → ${event.seq}），正在重新同步`, 'error');
+      toast(t("ui.eventSequenceGapValueValueResynchronizing", { value0: (latest), value1: (event.seq) }), 'error');
       loadSnapshot().catch((error) => toast(error.message, 'error'));
       return;
     }
@@ -310,6 +306,11 @@
     const actor = runtime.agent;
     if (state.snapshot.participants && state.snapshot.participants[actor]) {
       state.snapshot.participants[actor].last_activity = runtime.created_at || new Date().toISOString();
+	  if (runtime.kind === 'runtime.info' && runtime.runtime) {
+		state.snapshot.participants[actor].runtime = runtime.runtime;
+		state.snapshot.participants[actor].runtime_kind = runtime.runtime.runtime_kind || state.snapshot.participants[actor].runtime_kind;
+		state.snapshot.participants[actor].model = runtime.runtime.model || state.snapshot.participants[actor].model;
+	  }
     }
     if (runtime.kind === 'turn.started') {
       state.drafts[actor] = '';
@@ -390,12 +391,12 @@
     bar.classList.remove('hidden');
     const label = document.createElement('span');
     label.className = 'turn-owner-label';
-    label.textContent = owner ? `当前轮次 · ${displayName(owner)}` : '空闲';
+    label.textContent = owner ? t("ui.currentTurnValue", { value0: (displayName(owner)) }) : t("ui.idle");
     bar.replaceChildren(label);
     if (queued > 0) {
       const badge = document.createElement('span');
       badge.className = 'turn-queue-count';
-      badge.textContent = `队列 ${queued}`;
+      badge.textContent = t("ui.queueValue", { value0: (queued) });
       bar.appendChild(badge);
     }
   }
@@ -415,7 +416,7 @@
     header.className = 'workflow-header';
     const heading = document.createElement('div');
     const title = document.createElement('strong');
-    title.textContent = 'Natural workflow';
+    title.textContent = t('room.naturalWorkflow');
     const status = document.createElement('span');
     status.className = `workflow-status status-${workflow.status || 'unknown'}`;
     status.textContent = workflowStatusText(workflow.status);
@@ -431,9 +432,9 @@
       const approve = document.createElement('button');
       approve.type = 'button';
       approve.className = 'workflow-approve';
-      approve.textContent = `批准计划 v${workflow.revision || 1}`;
+      approve.textContent = t("ui.approvePlanVValue", { value0: (workflow.revision || 1) });
       approve.addEventListener('click', () => {
-        messageInput.value = t('批准执行当前计划');
+        messageInput.value = t("ui.approveExecutingTheCurrentPlan");
         persistComposerDraft();
         autoSizeComposer();
         void sendMessage();
@@ -471,29 +472,29 @@
     if (workflow.status === 'waiting_human') {
       const hint = document.createElement('div');
       hint.className = 'workflow-hint';
-      hint.textContent = t('当前阶段正在等待你的选择；直接回复房间即可继续同一阶段。');
+      hint.textContent = t("ui.theCurrentStageIsWaitingForYourChoiceReplyInTheRoom");
       bar.appendChild(hint);
     } else if (workflow.status === 'awaiting_approval') {
       const hint = document.createElement('div');
       hint.className = 'workflow-hint approval';
-      hint.textContent = `执行阶段尚未启动。批准只绑定当前计划修订 v${workflow.revision || 1}；计划变化后需要重新批准。`;
+      hint.textContent = t("ui.theExecutionStageHasNotStartedApprovalAppliesOnlyToPlanRevision", { value0: (workflow.revision || 1) });
       bar.appendChild(hint);
     }
   }
 
   function workflowStatusText(value) {
     return ({
-      running: 'Running', waiting_human: 'Needs your input', awaiting_approval: 'Approval gate',
-      completed: 'Completed', cancelled: 'Cancelled', failed: 'Failed', superseded: 'Superseded',
-    })[value] || value || 'Unknown';
+      running: t('common.running'), waiting_human: t('room.needsYourInput'), awaiting_approval: t('room.approvalGate'),
+      completed: t('ui.completed'), cancelled: t('ui.cancelled'), failed: t('ui.failed'), superseded: t('room.superseded'),
+    })[value] || value || t('common.unknown');
   }
 
   function workflowModeText(value) {
-    return ({ plan: 'Plan', review: 'Review', execute: 'Execute', audit: 'Audit', discuss: 'Discuss' })[value] || value || 'Stage';
+    return ({ plan: t('common.plan'), review: t('common.review'), execute: t('common.execute'), audit: t('common.audit'), discuss: t('common.discuss') })[value] || value || t('ui.stage');
   }
 
   function workflowStageStatusText(value) {
-    return ({ pending: 'Pending', running: 'Running', waiting_human: 'Needs input', completed: 'Done', cancelled: 'Cancelled', failed: 'Failed' })[value] || value || '';
+    return ({ pending: t('common.pending'), running: t('common.running'), waiting_human: t('room.needsInput'), completed: t('common.done'), cancelled: t('ui.cancelled'), failed: t('ui.failed') })[value] || value || '';
   }
 
   function renderParticipants() {
@@ -508,7 +509,7 @@
 
       const avatar = document.createElement('div');
       avatar.className = `avatar avatar-${actor}`;
-      avatar.textContent = actor === 'claude' ? 'C' : 'X';
+      avatar.textContent = actor === 'claude' ? '1' : '2';
       card.appendChild(avatar);
 
       const main = document.createElement('div');
@@ -532,19 +533,20 @@
       copy.type = 'button';
       copy.className = 'ghost-button compact-button session-copy';
       const vendorID = String(p.session_id || '').trim();
+	  const runtimeKind = p.runtime_kind || p.runtime?.runtime_kind || (actor === 'claude' ? 'claude' : 'codex');
       if (!vendorID) {
         copy.disabled = true;
-        copy.textContent = t('尚未生成');
-        copy.title = t('原生 Session/Thread ID 将在首次被接受的 Turn 后生成');
+        copy.textContent = t("ui.notYetCreated");
+        copy.title = t("ui.theNativeSessionThreadIdIsCreatedAfterTheFirstAcceptedTurn");
       } else {
-        copy.textContent = actor === 'codex' ? t('复制 Thread ID') : t('复制 Session ID');
-        copy.title = t('复制完整 ID，用于 resume 原生会话');
+        copy.textContent = runtimeKind === 'codex' ? t("ui.copyThreadId") : t("ui.copySessionId");
+        copy.title = t("ui.copyTheFullIdToResumeTheNativeSession");
         copy.addEventListener('click', async () => {
           try {
             await navigator.clipboard.writeText(vendorID);
-            toast('已复制完整 ID', 'success');
+            toast(t("ui.copiedFullId"), 'success');
           } catch {
-            toast('复制失败', 'error');
+            toast(t("ui.copyFailed"), 'error');
           }
         });
       }
@@ -557,7 +559,7 @@
       status.textContent = stateText(p.state);
       const model = document.createElement('span');
       model.className = 'participant-subtitle';
-      model.textContent = [p.runtime?.provider, p.model || 'native default'].filter(Boolean).join(' · ');
+      model.textContent = [p.runtime?.provider, p.model || t('room.nativeDefault')].filter(Boolean).join(' · ');
       meta.append(status, model);
       main.appendChild(meta);
 
@@ -565,15 +567,15 @@
       if (runtime.protocol || runtime.version || runtime.path || runtime.command) {
         const runtimeLine = document.createElement('div');
         runtimeLine.className = 'runtime-line';
-        const pieces = [runtime.version ? `v${runtime.version}` : '', runtime.protocol, runtime.available === false ? 'unavailable' : ''].filter(Boolean);
-        runtimeLine.textContent = pieces.join(' · ') || runtime.command || 'runtime detected';
+        const pieces = [runtime.version ? `v${runtime.version}` : '', runtime.protocol, runtime.available === false ? t('agent.unavailable') : ''].filter(Boolean);
+        runtimeLine.textContent = pieces.join(' · ') || runtime.command || t('room.runtimeDetected');
         runtimeLine.title = [runtime.path, ...(runtime.capabilities || [])].filter(Boolean).join('\n');
         main.appendChild(runtimeLine);
       }
       if (stalled) {
         const warning = document.createElement('div');
         warning.className = 'runtime-line runtime-warning';
-        warning.textContent = t('长时间无可观察事件；静默本身不等于停滞，请在 Inspector 判断后再打断或重试');
+        warning.textContent = t("ui.noObservableEventsForAWhileSilenceIsNotAStallBy");
         main.appendChild(warning);
       }
       if (runtime.warnings && runtime.warnings.length) {
@@ -584,7 +586,7 @@
         main.appendChild(warning);
       }
 
-      const policy = participantPolicy(actor, p);
+      const policy = participantPolicy(p);
       const policyLine = document.createElement('div');
       policyLine.className = `native-policy ${policy.protected ? 'protected' : ''}`;
       policyLine.textContent = policy.text;
@@ -595,9 +597,9 @@
 	  if (workspace.kind) {
 		const workspaceLine = document.createElement('div');
 		workspaceLine.className = `workspace-boundary ${workspace.read_only ? 'protected' : ''}`;
-		const parts = [workspace.kind === 'reviewer-snapshot' ? t('独立审查快照') : t('实时工作区')];
-		if (workspace.dirty) parts.push(t('含未提交改动'));
-		if (workspace.untracked_count) parts.push(`${workspace.untracked_count} 个未跟踪文件`);
+		const parts = [workspace.kind === 'reviewer-snapshot' ? t("ui.independentReviewSnapshot") : t("ui.liveWorkspace")];
+		if (workspace.dirty) parts.push(t("ui.hasUncommittedChanges"));
+		if (workspace.untracked_count) parts.push(t("ui.valueUntrackedFiles", { value0: (workspace.untracked_count) }));
 		workspaceLine.textContent = parts.join(' · ');
 		workspaceLine.title = [
 		  workspace.path,
@@ -611,7 +613,7 @@
       const roleSelect = document.createElement('select');
       roleSelect.className = 'role-select';
       roleSelect.dataset.roleActor = actor;
-      [['driver', t('Driver · 实现')], ['reviewer', t('Reviewer · 独立审查')], ['peer', t('Peer · 平级讨论')]].forEach(([value, label]) => {
+      [['driver', t("ui.driverImplement")], ['reviewer', t("ui.reviewerIndependentReview")], ['peer', t("ui.peerEqualDiscussion")]].forEach(([value, label]) => {
         const option = document.createElement('option');
         option.value = value;
         option.textContent = label;
@@ -623,11 +625,11 @@
       const actions = document.createElement('div');
       actions.className = 'agent-actions';
       if (p.state === 'stopped' || p.state === 'error') {
-        actions.appendChild(actionButton(actor, 'start', t('启动')));
+        actions.appendChild(actionButton(actor, 'start', t("ui.start")));
       } else {
-        actions.appendChild(actionButton(actor, 'interrupt', t('打断')));
-        actions.appendChild(actionButton(actor, 'restart', t('重启')));
-        actions.appendChild(actionButton(actor, 'stop', t('停止'), true));
+        actions.appendChild(actionButton(actor, 'interrupt', t("ui.interrupt")));
+        actions.appendChild(actionButton(actor, 'restart', t("ui.restart")));
+        actions.appendChild(actionButton(actor, 'stop', t("ui.stop"), true));
       }
       main.appendChild(actions);
       card.appendChild(main);
@@ -765,8 +767,8 @@
       older.dataset.loadOlder = 'true';
       older.disabled = state.loadingOlder;
       older.textContent = state.loadingOlder
-        ? t('正在加载更早消息…')
-        : `加载更早消息 · 已显示 ${windowInfo.loaded || state.snapshot.messages.length} / ${windowInfo.total}`;
+        ? t("ui.loadingEarlierMessages")
+        : t("ui.loadEarlierMessagesShowingValueValue", { value0: (windowInfo.loaded || state.snapshot.messages.length), value1: (windowInfo.total) });
       timeline.appendChild(older);
     }
 
@@ -774,7 +776,7 @@
       const empty = document.createElement('div');
       empty.className = 'timeline-empty';
       const inner = document.createElement('div');
-      inner.innerHTML = '<div class="empty-orbit"></div><h2>开始一次三方协作</h2><p>向 Claude Code 与 Codex 同时提出任务。它们保留各自原生 Harness，并在这个公共房间讨论；你可以随时插话或改变方向。</p>';
+      inner.innerHTML = "<div class=\"empty-orbit\"></div><h2 data-i18n=\"ui.startAThreePartyCollaboration\">Start a three-party collaboration</h2><p data-i18n=\"ui.giveBothAgentsATaskTheyKeepTheirNativeHarnessesAndDiscuss\">Give both agents a task. They keep their native harnesses and discuss in this shared room; you can interrupt or redirect at any time.</p>";
       empty.appendChild(inner);
       timeline.appendChild(empty);
       return;
@@ -819,7 +821,11 @@
     if ((query || state.conversationFilter !== 'all' || state.threadFilter) && visibleCount === 0) {
       const empty = document.createElement('div');
       empty.className = 'timeline-empty';
-      empty.innerHTML = t('<div><h2>没有匹配消息</h2><p>修改搜索、消息筛选或退出线程视图即可恢复完整时间线。</p></div>');
+	  const title = document.createElement('h2');
+	  title.textContent = t('room.noMatchingMessages');
+	  const detail = document.createElement('p');
+	  detail.textContent = t('room.restoreTimelineFilter');
+	  empty.append(title, detail);
       timeline.appendChild(empty);
     }
   }
@@ -834,7 +840,7 @@
     const messages = (state.snapshot?.messages || []).filter((message) => message.thread_id === state.threadFilter);
     const root = messages[0];
     const summary = root ? truncate(root.text || attachmentSummary(root), 100) : state.threadFilter;
-    $('timeline-scope-text').textContent = `${messages.length} 条消息 · ${summary}`;
+    $('timeline-scope-text').textContent = t("ui.valueMessagesValue", { value0: (messages.length), value1: (summary) });
     banner.classList.remove('hidden');
   }
 
@@ -870,10 +876,10 @@
     yesterday.setDate(today.getDate() - 1);
     const key = localDateKey(date);
     let label = '';
-    if (key === localDateKey(today)) label = t('今天');
-    else if (key === localDateKey(yesterday)) label = t('昨天');
+    if (key === localDateKey(today)) label = t("ui.today");
+    else if (key === localDateKey(yesterday)) label = t("ui.yesterday");
     else {
-      label = new Intl.DateTimeFormat('zh-CN', {
+      label = window.PairRoomI18n.formatDate(date, {
         year: date.getFullYear() === today.getFullYear() ? undefined : 'numeric',
         month: 'long', day: 'numeric', weekday: 'short',
       }).format(date);
@@ -892,7 +898,7 @@
 
     const avatar = document.createElement('div');
     avatar.className = `message-avatar avatar-${actor === 'user' ? 'human' : actor}`;
-    avatar.textContent = actor === 'user' ? 'Y' : actor === 'claude' ? 'C' : 'X';
+    avatar.textContent = actor === 'user' ? 'Y' : actor === 'claude' ? '1' : '2';
 
     const content = document.createElement('div');
     content.className = 'message-content';
@@ -908,44 +914,44 @@
     actions.className = 'message-actions';
     const inspect = document.createElement('button');
     inspect.className = 'reply-action inspect-action';
-    inspect.textContent = t('过程');
+    inspect.textContent = t("ui.activity");
     inspect.dataset.inspectId = message.id;
     const copy = document.createElement('button');
     copy.className = 'reply-action';
-    copy.textContent = t('复制');
+    copy.textContent = t("ui.copy");
     copy.dataset.copyMessage = message.id;
     const thread = document.createElement('button');
     thread.className = 'reply-action';
-    thread.textContent = t('线程');
+    thread.textContent = t("ui.thread");
     thread.dataset.threadId = message.thread_id || '';
-    thread.title = t('仅查看这条讨论线程');
+    thread.title = t("ui.viewOnlyThisThread");
     const reply = document.createElement('button');
     reply.className = 'reply-action';
-    reply.textContent = t('回复');
+    reply.textContent = t("ui.reply");
     reply.dataset.replyId = message.id;
     actions.append(inspect, copy, thread, reply);
     meta.append(author, time);
     if (message.retry_of) {
       const retryMarker = document.createElement('span');
       retryMarker.className = 'retry-marker';
-      retryMarker.textContent = t('重试');
-      retryMarker.title = `Retry of ${message.retry_of}`;
+      retryMarker.textContent = t("ui.retry");
+      retryMarker.title = t('room.retryOfValue', { value: message.retry_of });
       meta.appendChild(retryMarker);
     }
 	if (message.intent && message.intent !== 'append') {
 	  const intentMarker = document.createElement('span');
 	  intentMarker.className = `intent-marker intent-${message.intent}`;
-	  intentMarker.textContent = message.intent === 'supersede' ? t('替代旧指令') : t('下一 Turn');
+	  intentMarker.textContent = message.intent === 'supersede' ? t("ui.supersede") : t("ui.nextTurn");
 	  if (message.supersedes) {
 		const count = Object.values(message.supersedes).reduce((sum, ids) => sum + (ids || []).length, 0);
-		intentMarker.title = count ? `取代 ${count} 个在途消息目标` : '';
+		intentMarker.title = count ? t("ui.supersedeValueInFlightMessageTargets", { value0: (count) }) : '';
 	  }
 	  meta.appendChild(intentMarker);
 	}
     if (message.handoff) {
       const handoffMarker = document.createElement('span');
       handoffMarker.className = 'intent-marker';
-      handoffMarker.textContent = t('紧凑交接');
+      handoffMarker.textContent = t("ui.compactHandoff");
       handoffMarker.title = truncate(message.handoff, 320);
       meta.appendChild(handoffMarker);
     }
@@ -962,7 +968,7 @@
         quote.type = 'button';
         quote.className = 'reply-quote';
         quote.dataset.scrollMessage = parent.id;
-        const parentSummary = parent.text || (parent.attachments || []).map((item) => item.name).join('、') || t('图片消息');
+        const parentSummary = parent.text || window.PairRoomI18n.formatList((parent.attachments || []).map((item) => item.name)) || t("ui.imageMessage");
         quote.textContent = `${displayName(parent.from)}：${truncate(parentSummary, 110)}`;
         body.appendChild(quote);
       }
@@ -981,7 +987,7 @@
       expand.type = 'button';
       expand.className = 'expand-message';
       expand.dataset.expandMessage = message.id;
-      expand.textContent = isExpanded ? t('收起消息') : t('展开完整消息');
+      expand.textContent = isExpanded ? t("ui.collapse") : t("ui.expandMessage");
       expand.setAttribute('aria-expanded', String(isExpanded));
       bubble.appendChild(expand);
     }
@@ -1006,14 +1012,14 @@
       const deliveryDetail = message.delivery_detail && message.delivery_detail[target];
       const processingDetail = message.processing_detail && message.processing_detail[target];
       const turn = message.processing_turn && message.processing_turn[target];
-      chip.title = [deliveryDetail, processingDetail, turn ? `Turn: ${turn}` : ''].filter(Boolean).join('\n');
+      chip.title = [deliveryDetail, processingDetail, turn ? t('room.turnValue', { value: turn }) : ''].filter(Boolean).join('\n');
       delivery.appendChild(chip);
       if (isRetryable(message, target)) {
         const retryButton = document.createElement('button');
         retryButton.className = 'retry-button';
         retryButton.dataset.retryId = message.id;
         retryButton.dataset.retryTarget = target;
-        retryButton.textContent = `重试 ${displayName(target)}`;
+        retryButton.textContent = t("ui.retryValue", { value0: (displayName(target)) });
         delivery.appendChild(retryButton);
       }
       if (processing === 'waiting' || processing === 'working') {
@@ -1021,10 +1027,10 @@
         cancelButton.className = 'cancel-message-button';
         cancelButton.dataset.cancelMessage = message.id;
         cancelButton.dataset.cancelTarget = target;
-        cancelButton.textContent = `取消 ${displayName(target)}`;
+        cancelButton.textContent = t("ui.cancelValue", { value0: (displayName(target)) });
         cancelButton.title = status === 'pending'
-          ? t('该消息仍在 Room FIFO 中；只移除这一项，不会打断任何原生 Turn')
-          : t('该输入已进入原生 Runtime；取消可能中断该参与者当前整个 Turn，但不会删除 Room FIFO 中尚未提交的后续消息');
+          ? t("ui.thisMessageIsStillInTheRoomFifoRemovingItWillNot")
+          : t("ui.thisInputIsAlreadyInTheNativeRuntimeCancellingMayInterruptThis");
         delivery.appendChild(cancelButton);
       }
     }
@@ -1038,7 +1044,7 @@
     row.dataset.streamingCorrelation = correlation || '';
     const avatar = document.createElement('div');
     avatar.className = `message-avatar avatar-${actor}`;
-    avatar.textContent = actor === 'claude' ? 'C' : 'X';
+    avatar.textContent = actor === 'claude' ? '1' : '2';
     const content = document.createElement('div');
     content.className = 'message-content';
     const meta = document.createElement('div');
@@ -1047,7 +1053,7 @@
     author.className = 'message-author';
     author.textContent = displayName(actor);
     const typing = document.createElement('span');
-    typing.textContent = t('正在输入');
+    typing.textContent = t("ui.typing");
     meta.append(author, typing);
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
@@ -1068,7 +1074,7 @@
     row.className = 'system-message';
     const chip = document.createElement('div');
     chip.className = `system-chip ${notice.level || 'info'}`;
-    chip.textContent = notice.text || 'PairRoom event';
+    chip.textContent = notice.text || t('room.pairroomEvent');
     row.appendChild(chip);
     return row;
   }
@@ -1086,7 +1092,7 @@
       return used;
     }
     renderer.render(parent, text, {
-      onCopyError: () => toast('浏览器不允许写入剪贴板', 'error'),
+      onCopyError: () => toast(t("ui.theBrowserBlockedClipboardWrites"), 'error'),
       createImage: (reference, alt, title) => createMarkdownImage(reference, alt, title, attachments, used),
     });
     return used;
@@ -1103,15 +1109,15 @@
     placeholder.className = /^https?:\/\//i.test(value) ? 'external-image-placeholder' : 'external-image-placeholder missing-local-image';
     const label = document.createElement('span');
     label.textContent = /^https?:\/\//i.test(value)
-      ? `外部图片未自动加载：${alt || value}`
-      : `未找到可安全预览的本地图片：${alt || value}`;
+      ? t("ui.externalImageWasNotLoadedAutomaticallyValue", { value0: (alt || value) })
+      : t("ui.noSafelyPreviewableLocalImageWasFoundValue", { value0: (alt || value) });
     placeholder.appendChild(label);
     if (/^https?:\/\//i.test(value)) {
       const link = document.createElement('a');
       link.href = value;
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
-      link.textContent = t('打开链接');
+      link.textContent = t("ui.openLink");
       placeholder.appendChild(link);
     }
     return placeholder;
@@ -1142,11 +1148,11 @@
     const stage = document.createElement('button');
     stage.type = 'button';
     stage.className = inline ? 'message-image-stage inline-image-stage' : 'message-image-stage';
-    stage.title = `预览 ${attachment.name}`;
+    stage.title = t("ui.previewValue", { value0: (attachment.name) });
     stage.dataset.openAttachment = attachment.id;
     const loading = document.createElement('span');
     loading.className = 'image-loading';
-    loading.textContent = t('加载图片…');
+    loading.textContent = t("ui.loadingImage");
     stage.appendChild(loading);
     const caption = document.createElement(inline ? 'figcaption' : 'div');
     caption.className = inline ? 'inline-image-caption' : 'message-image-caption';
@@ -1171,7 +1177,7 @@
       stage.replaceChildren();
       const failed = document.createElement('span');
       failed.className = 'image-loading image-error';
-      failed.textContent = `图片加载失败：${error.message}`;
+      failed.textContent = t("ui.imageFailedToLoadValue", { value0: (error.message) });
       stage.appendChild(failed);
     });
     return card;
@@ -1237,7 +1243,7 @@
       $('lightbox-open').download = attachment.name || 'pairroom-image';
     } catch (error) {
       if (request !== state.lightboxRequest) return;
-      $('lightbox-title').textContent = `图片加载失败：${attachment.name}`;
+      $('lightbox-title').textContent = t("ui.imageFailedToLoadValue", { value0: (attachment.name) });
       $('lightbox-meta').textContent = error.message;
       $('lightbox-open').href = '#';
     } finally {
@@ -1288,16 +1294,16 @@
   async function copyLightboxImage() {
     const attachment = state.lightboxItems[state.lightboxIndex];
     if (!attachment || !navigator.clipboard || typeof ClipboardItem === 'undefined') {
-      toast('当前浏览器不支持复制图片', 'error');
+      toast(t("ui.thisBrowserCannotCopyImages"), 'error');
       return;
     }
     try {
       const blob = await apiBlob(`/api/v1/attachments/${encodeURIComponent(attachment.id)}`);
       const type = blob.type || attachment.media_type || 'image/png';
       await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
-      toast('图片已复制到剪贴板', 'success');
+      toast(t("ui.imageCopiedToClipboard"), 'success');
     } catch (error) {
-      toast(`复制图片失败：${error.message}`, 'error');
+      toast(t("ui.couldNotCopyImageValue", { value0: (error.message) }), 'error');
     }
   }
 
@@ -1316,7 +1322,7 @@
     const turnIDs = new Set(scopedMessage ? Object.values(scopedMessage.processing_turn || {}).filter(Boolean) : []);
     if (scopedMessage) {
       scope.classList.remove('hidden');
-      $('inspector-scope-text').textContent = `仅显示 ${displayName(scopedMessage.from)} 消息 ${truncate(scopedMessage.id, 18)} 的工作过程`;
+      $('inspector-scope-text').textContent = t("ui.showOnlyWorkForValueMessageValue", { value0: (displayName(scopedMessage.from)), value1: (truncate(scopedMessage.id, 18)) });
     } else {
       scope.classList.add('hidden');
       $('inspector-scope-text').textContent = '';
@@ -1330,7 +1336,7 @@
     if (summaries.length) {
       const title = document.createElement('div');
       title.className = 'activity-section-title';
-      title.textContent = 'Turn summaries';
+      title.textContent = t('room.turnSummaries');
       container.appendChild(title);
       summaries.forEach((summary) => container.appendChild(renderTurnSummary(summary)));
     }
@@ -1346,7 +1352,7 @@
     if (events.length) {
       const title = document.createElement('div');
       title.className = 'activity-section-title';
-      title.textContent = 'Recent native events';
+      title.textContent = t('room.recentNativeEvents');
       container.appendChild(title);
     }
     for (const event of events) {
@@ -1380,8 +1386,8 @@
       const empty = document.createElement('div');
       empty.className = 'activity-empty';
       empty.textContent = scopedMessage
-        ? t('该消息暂时没有持久化工作摘要。')
-        : t('Agent 的 Turn、工具调用、命令、计划、Diff 和运行日志会显示在这里。');
+        ? t("ui.thisMessageDoesNotYetHaveADurableWorkSummary")
+        : t("ui.agentTurnsToolCallsCommandsPlansDiffsAndLogsAppearHere");
       container.appendChild(empty);
     }
   }
@@ -1404,7 +1410,7 @@
     meta.className = 'turn-card-meta';
     meta.textContent = [
       summary.duration_millis ? formatDuration(summary.duration_millis) : '',
-      `${(summary.items || []).length} items`,
+      t('room.itemCount', { count: (summary.items || []).length }),
       formatTime(summary.updated_at || summary.started_at),
     ].filter(Boolean).join(' · ');
     head.append(title, meta);
@@ -1412,10 +1418,10 @@
 
     const body = document.createElement('div');
     body.className = 'turn-card-body';
-    if (summary.error) body.appendChild(turnSection('Error', summary.error, 'error'));
-    if (summary.plan) body.appendChild(turnSection('Plan', summary.plan));
-    if (summary.diff) body.appendChild(turnSection('Diff', summary.diff));
-    if (summary.final_text) body.appendChild(turnSection('Final', summary.final_text));
+    if (summary.error) body.appendChild(turnSection(t('common.error'), summary.error, 'error'));
+    if (summary.plan) body.appendChild(turnSection(t('common.plan'), summary.plan));
+    if (summary.diff) body.appendChild(turnSection(t('common.diff'), summary.diff));
+    if (summary.final_text) body.appendChild(turnSection(t('common.final'), summary.final_text));
     const items = summary.items || [];
     if (items.length) {
       const list = document.createElement('div');
@@ -1437,7 +1443,7 @@
       });
       body.appendChild(list);
     }
-    if (summary.usage) body.appendChild(turnSection('Usage', prettyJSON(summary.usage)));
+    if (summary.usage) body.appendChild(turnSection(t('common.usage'), prettyJSON(summary.usage)));
     card.appendChild(body);
     return card;
   }
@@ -1454,16 +1460,17 @@
   }
 
   function turnStatusText(status) {
-    return ({ working: 'Working', waiting: 'Waiting', completed: 'Done', cancelled: 'Cancelled', failed: 'Failed' })[status] || (status || 'Unknown');
+    return ({ working: t('ui.working694b71b'), waiting: t('ui.waiting'), completed: t('common.done'), cancelled: t('ui.cancelled'), failed: t('ui.failed') })[status] || (status || t('common.unknown'));
   }
 
   function formatDuration(milliseconds) {
     const value = Math.max(0, Number(milliseconds) || 0);
-    if (value < 1000) return `${Math.round(value)} ms`;
-    if (value < 60_000) return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)} s`;
+	const format = (number, maximumFractionDigits = 0) => window.PairRoomI18n.formatNumber(number, { maximumFractionDigits });
+    if (value < 1000) return `${format(Math.round(value))} ms`;
+    if (value < 60_000) return `${format(value / 1000, value < 10_000 ? 1 : 0)} s`;
     const minutes = Math.floor(value / 60_000);
     const seconds = Math.round((value % 60_000) / 1000);
-    return `${minutes}m ${seconds}s`;
+	return `${format(minutes)}m ${format(seconds)}s`;
   }
 
   function renderApprovals() {
@@ -1474,7 +1481,7 @@
     if (!pending.length) {
       const empty = document.createElement('div');
       empty.className = 'approvals-empty';
-      empty.textContent = t('当前没有待处理审批。Claude 的工具权限/交互问题与 Codex 的命令、文件和权限请求都会显示在这里。');
+      empty.textContent = t("ui.noPendingApprovalsClaudeToolPermissionPromptsAndCodexCommandFileAnd");
       container.appendChild(empty);
       return;
     }
@@ -1486,7 +1493,7 @@
 
       const title = document.createElement('div');
       title.className = 'approval-title';
-      title.textContent = approval.title || 'Native agent request';
+      title.textContent = approval.title || t('room.nativeAgentRequest');
       const meta = document.createElement('div');
       meta.className = 'approval-meta';
       meta.textContent = `${displayName(approval.agent)} · ${approval.kind} · ${formatTime(approval.requested_at)}`;
@@ -1503,7 +1510,7 @@
         const raw = document.createElement('details');
         raw.className = 'approval-raw';
         const rawTitle = document.createElement('summary');
-        rawTitle.textContent = t('查看完整原生请求');
+        rawTitle.textContent = t("ui.viewFullNativeRequest");
         const rawBody = document.createElement('pre');
         rawBody.className = 'approval-detail';
         rawBody.textContent = prettyJSON(approval.detail);
@@ -1512,11 +1519,11 @@
 
         const actions = document.createElement('div');
         actions.className = 'approval-actions';
-        actions.appendChild(approvalButton(approval.id, 'accept', t('允许一次'), 'approve-button'));
+        actions.appendChild(approvalButton(approval.id, 'accept', t("ui.allowOnce"), 'approve-button'));
         if (approval.agent === 'codex' || detail.permission_suggestions) {
-          actions.appendChild(approvalButton(approval.id, 'acceptForSession', t('本会话允许'), 'approve-button secondary-approve'));
+          actions.appendChild(approvalButton(approval.id, 'acceptForSession', t("ui.allowForThisSession"), 'approve-button secondary-approve'));
         }
-        actions.appendChild(approvalButton(approval.id, 'decline', t('拒绝'), 'decline-button'));
+        actions.appendChild(approvalButton(approval.id, 'decline', t("ui.reject"), 'decline-button'));
         card.appendChild(actions);
       }
       container.appendChild(card);
@@ -1536,7 +1543,7 @@
     const path = input.file_path || input.path || input.cwd || detail.path || '';
     const description = detail.description || input.description || '';
     const tool = detail.tool_name || detail.method || approval.kind;
-    return [tool, command ? `命令：${truncate(command, 260)}` : '', path ? `路径：${path}` : '', description].filter(Boolean).join('\n');
+    return [tool, command ? t("ui.commandValue", { value0: (truncate(command, 260)) }) : '', path ? t("ui.pathValue", { value0: (path) }) : '', description].filter(Boolean).join('\n');
   }
 
   function renderClaudeQuestions(card, approval, detail) {
@@ -1544,11 +1551,11 @@
     if (!questions.length) {
       const warning = document.createElement('div');
       warning.className = 'approval-summary approval-warning';
-      warning.textContent = t('Claude 发出了交互问题，但请求中没有可解析的问题列表。为安全起见只能拒绝。');
+      warning.textContent = t("ui.claudeAskedAnInteractiveQuestionWithoutAParseableListItCanOnly");
       card.appendChild(warning);
       const actions = document.createElement('div');
       actions.className = 'approval-actions';
-      actions.appendChild(approvalButton(approval.id, 'decline', t('拒绝'), 'decline-button'));
+      actions.appendChild(approvalButton(approval.id, 'decline', t("ui.reject"), 'decline-button'));
       card.appendChild(actions);
       return;
     }
@@ -1557,7 +1564,7 @@
     form.className = 'question-form';
     form.dataset.questionForm = approval.id;
     questions.forEach((question, index) => {
-      const text = String(question.question || question.header || `Question ${index + 1}`);
+      const text = String(question.question || question.header || t('room.questionNumber', { value: index + 1 }));
       const block = document.createElement('fieldset');
       block.className = 'question-block';
       block.dataset.questionText = text;
@@ -1581,7 +1588,7 @@
         const input = document.createElement('input');
         input.type = inputType;
         input.name = `question-${approval.id}-${index}`;
-        input.value = String(option.label || option.value || `Option ${optionIndex + 1}`);
+        input.value = String(option.label || option.value || t('room.optionNumber', { value: optionIndex + 1 }));
         const copy = document.createElement('span');
         const strong = document.createElement('strong');
         strong.textContent = input.value;
@@ -1598,7 +1605,7 @@
       const other = document.createElement('input');
       other.type = 'text';
       other.className = 'question-other';
-      other.placeholder = options.length ? t('其他回答（可选）') : t('请输入回答');
+      other.placeholder = options.length ? t("ui.otherAnswerOptional") : t("ui.enterAnAnswer");
       other.dataset.questionOther = 'true';
       block.appendChild(other);
       form.appendChild(block);
@@ -1610,8 +1617,8 @@
     submit.type = 'button';
     submit.className = 'approve-button';
     submit.dataset.questionSubmit = approval.id;
-    submit.textContent = t('提交回答');
-    actions.append(submit, approvalButton(approval.id, 'decline', t('拒绝'), 'decline-button'));
+    submit.textContent = t("ui.submitAnswers");
+    actions.append(submit, approvalButton(approval.id, 'decline', t("ui.reject"), 'decline-button'));
     form.appendChild(actions);
     card.appendChild(form);
   }
@@ -1663,20 +1670,20 @@
         && item.file.lastModified === file.lastModified);
       if (duplicate) continue;
       if (currentCount >= MAX_IMAGES_PER_MESSAGE) {
-        toast(`每条消息最多添加 ${MAX_IMAGES_PER_MESSAGE} 张图片`, 'error');
+        toast(t("ui.attachAtMostValueImagesToEachMessage", { value0: (MAX_IMAGES_PER_MESSAGE) }), 'error');
         break;
       }
       const extensionLooksValid = /\.(png|jpe?g|gif|webp)$/i.test(file.name || '');
       if (!ACCEPTED_IMAGE_TYPES.has(String(file.type || '').toLowerCase()) && !extensionLooksValid) {
-        toast(`${file.name || t('文件')}：仅支持 PNG、JPEG、GIF 和 WebP`, 'error');
+        toast(t("ui.valueOnlyPngJpegGifAndWebpAreSupported", { value0: (file.name || t('ui.file')) }), 'error');
         continue;
       }
       if (file.size > MAX_IMAGE_BYTES) {
-        toast(`${file.name}：超过 5 MiB 单图限制`, 'error');
+        toast(t("ui.valueExceedsThe5MibPerImageLimit", { value0: (file.name) }), 'error');
         continue;
       }
       if (currentBytes + file.size > MAX_MESSAGE_IMAGE_BYTES) {
-        toast('本条消息的图片总大小不能超过 20 MiB', 'error');
+        toast(t("ui.imagesOnThisMessageCannotExceed20MibTotal"), 'error');
         break;
       }
       const previewURL = URL.createObjectURL(file);
@@ -1722,7 +1729,7 @@
       if (error.name === 'AbortError' || item.removed) return;
       item.status = 'error';
       item.error = error.message;
-      toast(`${item.file.name || t('图片')} 上传失败：${error.message}`, 'error');
+      toast(t("ui.valueUploadFailedValue", { value0: (item.file.name || t('ui.image')), value1: (error.message) }), 'error');
     } finally {
       item.controller = null;
       renderAttachmentStrip();
@@ -1740,11 +1747,11 @@
       card.dataset.pendingAttachment = item.key;
       const image = document.createElement('img');
       image.src = item.previewURL;
-      image.alt = item.file.name || t('待发送图片');
+      image.alt = item.file.name || t("ui.pendingImages");
       const meta = document.createElement('div');
       meta.className = 'pending-attachment-meta';
-      const status = item.status === 'uploading' ? t('上传中…')
-        : item.status === 'error' ? `失败 · ${truncate(item.error, 48)}`
+      const status = item.status === 'uploading' ? t("ui.uploading")
+        : item.status === 'error' ? t("ui.failedValue", { value0: (truncate(item.error, 48)) })
           : `${item.attachment?.width && item.attachment?.height ? `${item.attachment.width}×${item.attachment.height} · ` : ''}${formatBytes(item.attachment?.size || item.file.size)}`;
       meta.textContent = `${item.file.name || 'image'} · ${status}`;
       meta.title = item.error || item.file.name || '';
@@ -1752,7 +1759,7 @@
       remove.type = 'button';
       remove.className = 'remove-attachment';
       remove.dataset.removeAttachment = item.key;
-      remove.setAttribute('aria-label', `移除 ${item.file.name || '图片'}`);
+      remove.setAttribute('aria-label', t("ui.removeValue", { value0: (item.file.name || t('ui.image')) }));
       remove.textContent = '×';
       card.append(image, meta, remove);
       if (item.status === 'error') {
@@ -1760,7 +1767,7 @@
         retry.type = 'button';
         retry.className = 'retry-upload';
         retry.dataset.retryUpload = item.key;
-        retry.textContent = t('重试');
+        retry.textContent = t("ui.retry");
         card.appendChild(retry);
       }
       strip.appendChild(card);
@@ -1810,7 +1817,7 @@
   function updateComposerAvailability() {
     const uploading = state.pendingAttachments.some((item) => item.status === 'uploading');
     $('send-button').disabled = uploading;
-    $('send-button').title = uploading ? t('图片上传完成后才能发送') : '';
+    $('send-button').title = uploading ? t("ui.sendAfterImageUploadsFinish") : '';
   }
 
   async function sendMessage() {
@@ -1819,11 +1826,11 @@
     const failed = state.pendingAttachments.some((item) => item.status === 'error');
     const attachments = state.pendingAttachments.filter((item) => item.status === 'ready' && item.attachment).map((item) => ({ id: item.attachment.id }));
     if (uploading) {
-      toast('请等待图片上传完成', 'error');
+      toast(t("ui.waitForImageUploadsToFinish"), 'error');
       return;
     }
     if (failed) {
-      toast('请重试或移除上传失败的图片', 'error');
+      toast(t("ui.retryOrRemoveImagesThatFailedToUpload"), 'error');
       return;
     }
     if (!text && attachments.length === 0) return;
@@ -1879,7 +1886,7 @@
           stall_warning_seconds: $('stall-disabled').checked ? -1 : Number($('stall-warning').value),
         }),
       });
-      toast('轮次限制已保存', 'success');
+      toast(t("ui.turnLimitsSaved"), 'success');
     } catch (error) {
       toast(error.message, 'error');
     }
@@ -1888,13 +1895,13 @@
   async function retryMessage(messageId, target, button) {
     button.disabled = true;
     const old = button.textContent;
-    button.textContent = t('重试中…');
+    button.textContent = t("ui.retrying");
     try {
       await api(`/api/v1/messages/${encodeURIComponent(messageId)}/retry`, {
         method: 'POST',
         body: JSON.stringify({ to: [target] }),
       });
-      toast(`已为 ${displayName(target)} 创建可审计的重试消息`, 'success');
+      toast(t("ui.createdAnAuditableRetryMessageForValue", { value0: (displayName(target)) }), 'success');
     } catch (error) {
       toast(error.message, 'error');
       button.disabled = false;
@@ -1908,9 +1915,9 @@
 		await api(`/api/v1/messages/${encodeURIComponent(messageId)}/cancel`, {
 		  method: 'POST', body: JSON.stringify({ target }),
 		});
-		toast(`已请求取消 ${displayName(target)} 的在途处理`, 'success');
+		toast(t("ui.requestedCancellationOfInFlightWorkForValue", { value0: (displayName(target)) }), 'success');
 	  } catch (error) {
-		toast(`取消失败：${error.message}`, 'error');
+		toast(t("ui.cancellationFailedValue", { value0: (error.message) }), 'error');
 	  } finally {
 		button.disabled = false;
 	  }
@@ -1921,7 +1928,7 @@
       const response = await fetch(roomURL(`/api/v1/export?format=${encodeURIComponent(format)}`), { credentials: 'same-origin' });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.error || response.statusText);
+		throw new Error(window.PairRoomI18n?.errorMessage(payload) || payload.error || response.statusText);
       }
       const blob = await response.blob();
       const disposition = response.headers.get('content-disposition') || '';
@@ -1943,7 +1950,7 @@
   async function setRole(actor, role) {
     try {
       await api(`/api/v1/participants/${actor}/role`, { method: 'PUT', body: JSON.stringify({ role }) });
-      toast(`${displayName(actor)} 已切换为 ${roleText(role)}`, 'success');
+      toast(t("ui.valueChangedToValue", { value0: (displayName(actor)), value1: (roleText(role)) }), 'success');
     } catch (error) {
       toast(error.message, 'error');
       await loadSnapshot();
@@ -1959,7 +1966,7 @@
         method: 'POST',
         body: JSON.stringify({ decision, ...extra }),
       });
-      toast(decision === 'decline' || decision === 'cancel' ? t('已拒绝原生请求') : t('审批决定已提交'), 'success');
+      toast(decision === 'decline' || decision === 'cancel' ? t("ui.nativeRequestRejected") : t("ui.approvalSubmitted"), 'success');
     } catch (error) {
       toast(error.message, 'error');
       button.disabled = false;
@@ -1970,7 +1977,7 @@
   function submitQuestionApproval(id, button) {
     const answers = collectQuestionAnswers(id);
     if (!answers) {
-      toast('请回答所有问题后再提交', 'error');
+      toast(t("ui.answerEveryQuestionBeforeSubmitting"), 'error');
       return;
     }
     void resolveApproval(id, 'accept', button, { answers });
@@ -1979,18 +1986,18 @@
   async function refreshGitStatus() {
     try {
       const result = await api('/api/v1/git/status');
-      $('git-status').textContent = result.text || 'Working tree clean';
+      $('git-status').textContent = result.text || t('room.workingTreeClean');
     } catch (error) {
       $('git-status').textContent = error.message;
     }
   }
 
   async function refreshDiff() {
-    $('diff-output').textContent = t('读取 Diff…');
+    $('diff-output').textContent = t("ui.readingDiff");
     try {
       const staged = $('staged-diff').checked ? '?staged=1' : '';
       const result = await api(`/api/v1/git/diff${staged}`);
-      $('diff-output').textContent = result.text || 'No changes.';
+      $('diff-output').textContent = result.text || t('room.noChanges');
     } catch (error) {
       $('diff-output').textContent = error.message;
     }
@@ -2056,10 +2063,10 @@
     const driver = currentDriver();
     const reviewer = currentReviewer();
     const labels = {
-      driver: driver ? `发送给当前 Driver · ${displayName(driver)}` : 'Driver 角色不唯一；请选择明确 Agent',
-      reviewer: reviewer ? `发送给当前 Reviewer · ${displayName(reviewer)}` : 'Reviewer 角色不唯一；请选择明确 Agent',
-      claude: t('仅发送给 Claude'),
-      codex: t('仅发送给 Codex'),
+      driver: driver ? t("ui.sendToCurrentDriverValue", { value0: (displayName(driver)) }) : t("ui.theDriverRoleIsAmbiguousChooseASpecificAgent"),
+      reviewer: reviewer ? t("ui.sendToCurrentReviewerValue", { value0: (displayName(reviewer)) }) : t("ui.theReviewerRoleIsAmbiguousChooseASpecificAgent"),
+      claude: t("ui.sendOnlyToClaude"),
+      codex: t("ui.sendOnlyToCodex"),
     };
     $('delivery-hint').textContent = labels[state.selectedTarget] || labels.driver;
   }
@@ -2123,7 +2130,7 @@
     }
     state.unreadCount += 1;
     updateUnreadUI();
-    if (document.hidden && Notification.permission === 'granted') {
+    if ('Notification' in window && document.hidden && Notification.permission === 'granted') {
       const body = truncate(message.text || attachmentSummary(message), 180);
       const notification = new Notification(`${displayName(message.from)} · PairRoom`, { body, tag: `pairroom-${message.id}` });
       notification.onclick = () => { window.focus(); scrollToMessage(message.id); notification.close(); };
@@ -2147,7 +2154,7 @@
 
   function updateUnreadUI() {
     document.title = state.unreadCount > 0 ? `(${state.unreadCount}) PairRoom` : 'PairRoom';
-    $('scroll-bottom').textContent = state.unreadCount > 0 ? `跳到最新 (${state.unreadCount})` : '跳到最新';
+    $('scroll-bottom').textContent = state.unreadCount > 0 ? t("ui.jumpToLatestValue", { value0: (state.unreadCount) }) : t("ui.jumpToLatest");
     postSurfaceState();
   }
 
@@ -2171,10 +2178,10 @@
   }
 
   async function requestNotifications() {
-    if (!('Notification' in window)) { toast('当前浏览器不支持桌面通知', 'error'); return; }
+    if (!('Notification' in window)) { toast(t("ui.thisBrowserDoesNotSupportDesktopNotifications"), 'error'); return; }
     const permission = await Notification.requestPermission();
     updateNotificationButton();
-    toast(permission === 'granted' ? t('桌面通知已启用') : t('桌面通知未启用'), permission === 'granted' ? 'success' : 'error');
+    toast(permission === 'granted' ? t("ui.desktopNotificationsEnabled") : t("ui.desktopNotificationsAreOff"), permission === 'granted' ? 'success' : 'error');
   }
 
   function updateNotificationButton() {
@@ -2182,9 +2189,9 @@
     if (!('Notification' in window)) { button.disabled = true; button.textContent = '×'; return; }
     const granted = Notification.permission === 'granted';
     button.textContent = granted ? '◆' : '♢';
-    button.title = granted ? t('桌面通知已启用') : t('启用桌面通知');
+    button.title = granted ? t("ui.desktopNotificationsEnabled") : t("ui.enableDesktopNotifications");
     button.setAttribute('aria-pressed', String(granted));
-    button.setAttribute('aria-label', granted ? t('桌面通知已启用，再次点击管理') : t('启用桌面通知'));
+    button.setAttribute('aria-label', granted ? t("ui.desktopNotificationsEnabledClickAgainToManageThem") : t("ui.enableDesktopNotifications"));
   }
 
   async function loadOlderMessages(button) {
@@ -2209,7 +2216,7 @@
       renderTimeline();
       requestAnimationFrame(() => { timeline.scrollTop = oldTop + Math.max(0, timeline.scrollHeight - oldHeight); });
     } catch (error) {
-      toast(`加载历史消息失败：${error.message}`, 'error');
+      toast(t("ui.couldNotLoadMessageHistoryValue", { value0: (error.message) }), 'error');
     } finally {
       state.loadingOlder = false;
       queueRender();
@@ -2247,7 +2254,7 @@
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'toast-close';
-    close.setAttribute('aria-label', t('关闭通知'));
+    close.setAttribute('aria-label', t("ui.disableNotifications"));
     close.textContent = '×';
     $('toast-stack').appendChild(node);
     const duration = type === 'error' ? 8000 : 4500;
@@ -2260,36 +2267,50 @@
     node.append(text, close);
   }
 
-  function participantPolicy(actor, participant) {
+  function participantPolicy(participant) {
     const role = participant.role || 'peer';
     const runtime = participant.runtime || {};
+	const runtimeKind = participant.runtime_kind || runtime.runtime_kind || (participant.id === 'claude' ? 'claude' : 'codex');
     if (role === 'reviewer') {
-      if (actor === 'claude') {
+      if (runtimeKind === 'claude') {
         return {
           protected: true,
-          text: t('原生保护 · Plan mode'),
-          title: t('Reviewer 使用 Claude Code 原生 plan permission mode；避免执行修改，但不是操作系统级文件隔离。'),
+          text: t("ui.nativeProtectionPlanMode"),
+          title: t("ui.reviewerUsesClaudeCodeSNativePlanPermissionModeAvoidsModificationsBut"),
         };
       }
+      if (runtimeKind === 'grok') return {
+		protected: true,
+		text: t('room.nativeProtectionGrokReadOnly'),
+		title: t('room.grokReviewerUsesPlanAndReadOnlySandbox'),
+	  };
       return {
         protected: true,
-        text: t('原生保护 · Read-only sandbox'),
-        title: t('Reviewer 的每个 Codex turn 使用 App Server 原生 readOnly sandbox policy。'),
+        text: t("ui.nativeProtectionReadOnlySandbox"),
+        title: t("ui.eachCodexTurnOfReviewerUsesAppServerSNativeReadonlySandbox"),
       };
     }
-    if (actor === 'claude') {
-      const mode = runtime.permission_mode || 'configured permission mode';
+    if (runtimeKind === 'claude') {
+      const mode = runtime.permission_mode || t('common.inheritedPolicy');
       return {
         protected: false,
-        text: `${role === 'driver' ? t('写入者') : t('平级协作')} · ${mode}`,
-        title: t('该角色按 Claude Code 当前 permission mode 工作，可能修改工作区。'),
+        text: `${role === 'driver' ? t("ui.writer") : t("ui.peerCollaboration")} · ${mode}`,
+        title: t("ui.thisRoleUsesTheCurrentClaudeCodePermissionModeAndMayModify"),
       };
     }
-    const sandbox = runtime.sandbox || 'workspaceWrite';
+	if (runtimeKind === 'grok') {
+	  const policy = [runtime.permission_mode, runtime.sandbox].filter(Boolean).join(' · ') || t('common.inheritedPolicy');
+	  return {
+		protected: false,
+		text: `${role === 'driver' ? t("ui.writer") : t("ui.peerCollaboration")} · ${policy}`,
+		title: t('room.thisRoleUsesTheCurrentGrokPolicy'),
+	  };
+	}
+    const sandbox = runtime.sandbox || t('common.inheritedPolicy');
     return {
       protected: false,
-      text: `${role === 'driver' ? t('写入者') : t('平级协作')} · ${sandbox}`,
-      title: t('该角色按 Codex 当前 sandbox policy 工作，可能修改工作区。'),
+      text: `${role === 'driver' ? t("ui.writer") : t("ui.peerCollaboration")} · ${sandbox}`,
+      title: t("ui.thisRoleUsesTheCurrentCodexSandboxPolicyAndMayModifyThe"),
     };
   }
 
@@ -2300,19 +2321,20 @@
   }
 
   function displayName(actor) {
-    return ({ user: 'You', claude: 'Claude Code', codex: 'Codex', system: 'PairRoom' })[actor] || actor;
+	if (actor === 'claude' || actor === 'codex') return state.snapshot?.participants?.[actor]?.display_name || (actor === 'claude' ? t('agent.agent1') : t('agent.agent2'));
+    return ({ user: t('common.you'), system: 'PairRoom' })[actor] || actor;
   }
   function stateText(value) {
-    return ({ stopped: 'Stopped', starting: 'Starting', idle: 'Ready', working: 'Working', waiting: 'Waiting', error: 'Error' })[value] || value;
+    return ({ stopped: t('common.stopped'), starting: t('common.starting'), idle: t('common.ready'), working: t('ui.working694b71b'), waiting: t('ui.waiting'), error: t('common.error') })[value] || value;
   }
   function roleText(value) {
-    return ({ driver: 'Driver', reviewer: 'Reviewer', peer: 'Peer' })[value] || value;
+    return ({ driver: t('common.driver'), reviewer: t('common.reviewer'), peer: t('common.peer') })[value] || value;
   }
   function deliveryText(value) {
-    return ({ pending: t('发送中'), started: t('已开始新 Turn'), injected: t('已注入当前 Turn'), queued: t('已排队'), failed: t('失败'), skipped: t('已跳过') })[value] || value;
+    return ({ pending: t("ui.sending"), started: t("ui.startedANewTurn"), injected: t("ui.injectedIntoTheCurrentTurn"), queued: t("ui.queued"), failed: t("ui.failed"), skipped: t("ui.skipped") })[value] || value;
   }
   function processingText(value) {
-    return ({ waiting: t('等待处理'), working: t('处理中'), completed: t('已完成'), cancelled: t('已取消'), failed: t('处理失败'), superseded: t('已被新指令取代') })[value] || value;
+    return ({ waiting: t("ui.waiting"), working: t("ui.working694b71b"), completed: t("ui.completed"), cancelled: t("ui.cancelled"), failed: t("ui.processingFailed"), superseded: t("ui.supersededByANewerInstruction") })[value] || value;
   }
   function isRetryable(message, target) {
     const processing = message.processing && message.processing[target];
@@ -2321,15 +2343,18 @@
     return ['failed', 'skipped'].includes(delivery);
   }
   function actionText(value) {
-    return ({ start: t('已启动'), stop: t('已停止'), restart: t('已重启'), interrupt: t('已请求打断') })[value] || value;
+    return ({ start: t("ui.started"), stop: t("ui.stopped"), restart: t("ui.restarted"), interrupt: t("ui.interruptRequested") })[value] || value;
   }
   function sessionSummary(p) {
-    if (p.current_turn) return `Turn ${truncate(p.current_turn, 18)}`;
-    if (p.session_id) return `Session ${truncate(p.session_id, 18)}`;
-    return t('等待启动原生 Agent');
+    if (p.current_turn) return t('room.turnValue', { value: truncate(p.current_turn, 18) });
+	const runtimeKind = p.runtime_kind || p.runtime?.runtime_kind || '';
+    if (p.session_id) return runtimeKind === 'codex'
+	  ? t('room.threadValue', { value: truncate(p.session_id, 18) })
+	  : t('room.sessionValue', { value: truncate(p.session_id, 18) });
+    return t("ui.waitingToStartTheNativeAgent");
   }
   function formatTime(value) {
-    try { return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(value)); }
+	try { return window.PairRoomI18n.formatDate(value, { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
     catch { return ''; }
   }
   function truncate(value, length) {
@@ -2342,18 +2367,18 @@
     const units = ['B', 'KiB', 'MiB', 'GiB'];
     const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
     const amount = bytes / (1024 ** index);
-    return `${amount >= 10 || index === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[index]}`;
+    return `${window.PairRoomI18n.formatNumber(amount, { maximumFractionDigits: amount >= 10 || index === 0 ? 0 : 1 })} ${units[index]}`;
   }
   function attachmentSummary(message) {
-    const attachments = (message?.attachments || []).map((item) => `[图片] ${item.name}`).join('、');
-    return attachments || t('图片消息');
+    const attachments = window.PairRoomI18n.formatList((message?.attachments || []).map((item) => t("ui.imageValue", { value0: (item.name) })));
+    return attachments || t("ui.imageMessage");
   }
   async function openAttachment(attachment) {
     try {
       const url = await loadAttachmentURL(attachment);
       openLightbox(attachment, url);
     } catch (error) {
-      toast(`图片加载失败：${error.message}`, 'error');
+      toast(t("ui.imageFailedToLoadValue", { value0: (error.message) }), 'error');
     }
   }
   function closeLightbox() {
@@ -2383,7 +2408,7 @@
   function scrollToMessage(id) {
     const node = timeline.querySelector(`[data-message-id="${CSS.escape(id)}"]`);
     if (!node) {
-      toast('引用的消息当前被筛选隐藏', 'error');
+      toast(t("ui.theQuotedMessageIsHiddenByTheCurrentFilter"), 'error');
       return;
     }
     const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -2407,7 +2432,7 @@
     temporary.select();
     const copied = document.execCommand('copy');
     temporary.remove();
-    if (!copied) throw new Error('browser copy command failed');
+    if (!copied) throw new Error(t('room.browserCopyCommandFailed'));
   }
 
   function prettyJSON(value) {
@@ -2429,14 +2454,14 @@
   }
   function activityLabel(event) {
     const labels = {
-      'turn.started': 'Turn started', 'turn.completed': 'Turn completed',
-      'runtime.info': 'Runtime capabilities',
-      'input.processing': 'Input processing', 'input.completed': 'Input completed',
-      'input.cancelled': 'Input cancelled', 'input.failed': 'Input failed',
-      'tool.started': `Tool · ${event.name || 'started'}`, 'tool.completed': `Tool · ${event.name || 'completed'}`,
-      'command.output': 'Command output', 'diff.updated': 'Diff updated', 'plan.updated': 'Plan updated',
-      'usage.updated': 'Usage updated', 'approval.requested': 'Approval requested',
-      final: 'Final response', log: event.name || 'Runtime log', error: 'Runtime error',
+      'turn.started': t('room.turnStarted'), 'turn.completed': t('room.turnCompleted'),
+      'runtime.info': t('room.runtimeCapabilities'),
+      'input.processing': t('room.inputProcessing'), 'input.completed': t('room.inputCompleted'),
+      'input.cancelled': t('room.inputCancelled'), 'input.failed': t('room.inputFailed'),
+      'tool.started': t('room.toolState', { value: event.name || t('ui.started') }), 'tool.completed': t('room.toolState', { value: event.name || t('ui.completed') }),
+      'command.output': t('room.commandOutput'), 'diff.updated': t('room.diffUpdated'), 'plan.updated': t('room.planUpdated'),
+      'usage.updated': t('room.usageUpdated'), 'approval.requested': t('room.approvalRequested'),
+      final: t('room.finalResponse'), log: event.name || t('room.runtimeLog'), error: t('room.runtimeError'),
     };
     return labels[event.kind] || event.kind;
   }
@@ -2472,7 +2497,7 @@
     const copy = event.target.closest('[data-copy-message]');
     if (copy) {
       const message = (state.snapshot.messages || []).find((item) => item.id === copy.dataset.copyMessage);
-      if (message) copyText(message.text || attachmentSummary(message)).then(() => toast('消息已复制', 'success')).catch(() => toast('无法访问剪贴板', 'error'));
+      if (message) copyText(message.text || attachmentSummary(message)).then(() => toast(t("ui.messageCopied"), 'success')).catch(() => toast(t("ui.clipboardIsUnavailable"), 'error'));
     }
     const expand = event.target.closest('[data-expand-message]');
     if (expand) {
@@ -2534,22 +2559,6 @@
   $('export-json').addEventListener('click', () => downloadExport('json'));
   $('notification-button').addEventListener('click', requestNotifications);
   $('message-intent').addEventListener('change', persistComposerDraft);
-  $('theme-button').addEventListener('click', () => {
-    state.theme = state.theme === 'dark' ? 'light' : 'dark';
-    document.documentElement.dataset.theme = state.theme;
-    localStorage.setItem('pairroom.theme', state.theme);
-    $('theme-button').setAttribute('aria-pressed', String(state.theme === 'light'));
-  });
-  $('theme-button').setAttribute('aria-pressed', String(initialTheme === 'light'));
-  window.addEventListener('storage', (event) => {
-    if (event.key !== 'pairroom.theme') return;
-    const next = event.newValue === 'light' || event.newValue === 'dark'
-      ? event.newValue
-      : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-    state.theme = next;
-    document.documentElement.dataset.theme = next;
-    $('theme-button').setAttribute('aria-pressed', String(next === 'light'));
-  });
   $('scroll-bottom').addEventListener('click', () => { scrollBottom(); markConversationRead(true); });
   timeline.addEventListener('scroll', () => markConversationRead(false), { passive: true });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) markConversationRead(false); });
@@ -2632,7 +2641,7 @@
     const shell = document.createElement('div');
     shell.className = 'timeline-loading';
     shell.setAttribute('role', 'status');
-    shell.setAttribute('aria-label', t('正在加载协作时间线'));
+    shell.setAttribute('aria-label', t("ui.loadingTheCollaborationTimeline"));
     for (let i = 0; i < 4; i += 1) {
       const row = document.createElement('div');
       row.className = 'skeleton-row';
@@ -2664,13 +2673,13 @@
     symbol.setAttribute('aria-hidden', 'true');
     symbol.textContent = '!';
     const heading = document.createElement('h2');
-    heading.textContent = t('无法加载房间');
+    heading.textContent = t("ui.unableToLoadRoom");
     const text = document.createElement('p');
-    text.textContent = message || t('浏览器会话或本地 Service 连接失败。从 PairRoom 启动输出中的完整地址重新打开，或重试。');
+    text.textContent = message || t("ui.theBrowserSessionOrLocalServiceConnectionFailedReopenTheFullUrl");
     const retry = document.createElement('button');
     retry.type = 'button';
     retry.className = 'secondary-button';
-    retry.textContent = t('重新加载房间');
+    retry.textContent = t("ui.reloadRoom");
     retry.addEventListener('click', () => { bootRoom(); });
     shell.append(symbol, heading, text, retry);
     timeline.appendChild(shell);
@@ -2689,11 +2698,11 @@
 
   function bootRoom() {
     showTimelineLoading();
-    setConnection(false, 'Connecting');
+    setConnection(false, t('ui.connecting'));
     initializeSession().then(loadSnapshot).catch((error) => {
       toast(error.message, 'error');
       showTimelineError(error.message);
-      setConnection(false, 'Offline');
+      setConnection(false, t('room.offline'));
     });
   }
 

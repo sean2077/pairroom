@@ -230,18 +230,41 @@ func (g *GrokAdapter) ResolveApproval(context.Context, string, model.ApprovalRes
 }
 
 func (g *GrokAdapter) SetRole(_ context.Context, role model.ParticipantRole) error {
+	if !role.Valid() {
+		return fmt.Errorf("invalid Grok Build role %q", role)
+	}
 	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.state == model.StateStarting || g.state == model.StateWorking || g.state == model.StateWaiting ||
+		(g.cmd != nil && g.cmd.Process != nil) {
+		return errors.New("interrupt or stop Grok Build before changing its role")
+	}
 	g.role = role
-	g.mu.Unlock()
 	return nil
 }
 
 func (g *GrokAdapter) SetWorkspace(_ context.Context, path string) error {
-	if strings.TrimSpace(path) != "" {
-		g.mu.Lock()
-		g.cfg.Repo = path
-		g.mu.Unlock()
+	path = filepath.Clean(strings.TrimSpace(path))
+	if path == "." || path == "" {
+		return errors.New("Grok Build workspace is required")
 	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat Grok Build workspace: %w", err)
+	}
+	if !info.IsDir() {
+		return errors.New("Grok Build workspace is not a directory")
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if filepath.Clean(g.cfg.Repo) == path {
+		return nil
+	}
+	if g.state == model.StateStarting || g.state == model.StateWorking || g.state == model.StateWaiting ||
+		(g.cmd != nil && g.cmd.Process != nil) {
+		return errors.New("interrupt or stop Grok Build before changing its workspace")
+	}
+	g.cfg.Repo = path
 	return nil
 }
 
@@ -257,9 +280,20 @@ func (g *GrokAdapter) buildArgs(promptPath, resumeID string) []string {
 	if effort := strings.TrimSpace(g.cfg.Effort); effort != "" {
 		args = append(args, "--effort", effort)
 	}
-	args = append(args, grokPermissionArgs(g.cfg.PermissionMode)...)
-	if sandbox := strings.TrimSpace(g.cfg.Sandbox); sandbox != "" {
-		args = append(args, "--sandbox", sandbox)
+	g.mu.Lock()
+	role := g.role
+	g.mu.Unlock()
+	if role == model.RoleReviewer {
+		// Compiled plan/review/audit stages and enforced ordinary Reviewer
+		// turns must override any broader Service default. Appending last keeps
+		// the fail-closed policy authoritative even when a command template
+		// contains an earlier permission flag.
+		args = append(args, "--permission-mode", "plan", "--sandbox", "read-only")
+	} else {
+		args = append(args, grokPermissionArgs(g.cfg.PermissionMode)...)
+		if sandbox := strings.TrimSpace(g.cfg.Sandbox); sandbox != "" {
+			args = append(args, "--sandbox", grokSandbox(sandbox))
+		}
 	}
 	if strings.TrimSpace(resumeID) != "" {
 		args = append(args, "--resume", resumeID)
@@ -267,9 +301,20 @@ func (g *GrokAdapter) buildArgs(promptPath, resumeID string) []string {
 	return args
 }
 
+func grokSandbox(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "workspace-write", "workspacewrite", "workspace_write":
+		return "workspace"
+	case "danger-full-access", "dangerfullaccess", "danger_full_access":
+		return "off"
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
 func grokPermissionArgs(mode string) []string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "auto", "yolo", "bypass", "bypasspermissions", "always-approve", "always_approve":
+	case "yolo", "bypass", "bypasspermissions", "always-approve", "always_approve":
 		return []string{"--yolo"}
 	case "":
 		return nil

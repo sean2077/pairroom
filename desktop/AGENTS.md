@@ -6,7 +6,7 @@ This contract applies under `desktop/`. Read it together with the repository roo
 
 ## Module boundary
 
-- `desktop/` is an isolated Go 1.25 module pinned to Wails v3. The root PairRoom module remains Go 1.23 and standard-library-only; never move Wails or GUI dependencies into the root `go.mod`.
+- `desktop/` is an isolated Go 1.25 module pinned to Wails v3. The root PairRoom module is also Go 1.25 and permits only the pinned CGo-free SQLite dependency closure; never move Wails or other GUI dependencies into the root `go.mod`.
 - The desktop application is a native host, not a second PairRoom backend or frontend. Reuse the existing Management Shell, Room View, `internal/service`, Registry, Runtime Manager, provider configuration, locking, and native Agent adapters.
 - Keep PairRoom lifecycle, authentication, numeric-loopback validation, `service.lock`, and graceful native-Turn draining in Go. Do not duplicate those contracts in JavaScript or platform-specific packaging scripts.
 - Treat an installed PairRoom daemon as the sole owner of the default data root: desktop startup may start and connect to it, but must fail closed when it is unavailable instead of starting a competing embedded Service. Explicit `PAIRROOM_DESKTOP_URL`, `PAIRROOM_DESKTOP_CONFIG`, or `PAIRROOM_DESKTOP_DATA_ROOT` selections remain caller-owned overrides.

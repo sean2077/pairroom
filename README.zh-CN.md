@@ -8,7 +8,9 @@
 
 PairRoom 是一个运行在本机的协作控制面，协调官方 Claude Code、Codex 与 Grok Build。每个持久 Room 有两个独立的 Agent 槽位；任一槽位都可以选择 Claude Code、Codex 或 Grok Build，两个槽位也可以使用相同 runtime。它保留各官方 CLI 的会话、工具、审批与沙箱能力，只负责把用户、两个 Agent 和项目工作区组织成可观察、可中断、可审计的协作过程。
 
-空的 `provider`、`model`、`effort` 和 `instructions` 会继承所选原生 CLI 的用户/全局配置。只在 PairRoom 中填写需要覆盖的值。
+创建 Room 时，可以分别配置两个 Agent 槽位的 Runtime、native 或 CC Switch Provider 引用、可编辑 Model、Effort、附加指令与 Runtime 专属安全策略。配置会随 Room 固化并保持只读。Native Provider 引用继承原生 CLI 的用户/全局配置；PairRoom 只读使用 CC Switch 3.20.1/schema 18 中受支持的 API-key Profile，不改变 CC Switch 当前项，也不保存凭证。
+
+Management、Room View 与 Desktop 启动页共享内嵌的 i18next 26.4.2 `en`/`zh-CN` 词典和持久化语言选择。Management 顶栏、Room tabstrip、Settings 与独立 Room 共用 `system | light | dark` 主题；内嵌 Room 跟随 Management。
 
 ## 核心模型
 
@@ -65,7 +67,7 @@ Management Shell 打开后：
 4. 发送一个单 Agent 任务，或描述一个顺序工作流；
 5. 在 Room View 中观察 Turn、工具活动、审批、投递与错误状态。
 
-使用真实 runtime 前，先分别确认所选 CLI（`claude`、`codex` 和/或 `grok`）已安装、已登录，并能在目标仓库独立工作。空的 provider/model/effort/instructions 会继承该 CLI 的全局配置。完整步骤见 [Getting Started](docs/GETTING_STARTED.md)。
+使用真实 Runtime 前，先分别确认所选 CLI（`claude`、`codex` 和/或 `grok`）已安装、已针对所选 Provider 完成认证，并能在目标仓库独立工作。创建 Room 的 catalog 会显示不可用 Runtime 与不受支持的 CC Switch Profile，但不会通过网络枚举模型。完整步骤见 [Getting Started](docs/GETTING_STARTED.md)。
 
 ## 桌面端
 
@@ -109,7 +111,7 @@ make desktop-package
 
 `make desktop-build` 构建当前平台的桌面 Host 和捆绑的 `pairroom` CLI，`make desktop-package` 构建当前平台的生产安装包或应用包（Windows 为 NSIS 安装包，内含 `PairRoom.exe` 与 `bin\pairroom.exe`），产物位于 `desktop/bin/`。桌面模块测试仍从 `desktop/` 目录运行：`cd desktop && go test -count=1 ./...`。
 
-`docs-check` 会校验文档链接、源码路径、CLI 参数、HTTP 路由和 JSON 配置字段，防止文档在代码继续演进后静默漂移。桌面模块使用独立的 Go toolchain 和依赖锁，不改变根模块的标准库依赖边界。
+`docs-check` 会校验文档链接、源码路径、CLI 参数、HTTP 路由和 JSON 配置字段，防止文档在代码继续演进后静默漂移。根模块与桌面模块均使用 Go 1.25；根模块只允许固定的 CGo-free SQLite 依赖闭包，Wails 仍隔离在桌面模块。第三方许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 状态与边界
 

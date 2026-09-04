@@ -14,9 +14,10 @@ DESKTOP_PYTHON ?= $(PYTHON)
 endif
 VERSION_PKG := github.com/sean2077/pairroom/internal/version
 LDFLAGS := -s -w -X '$(VERSION_PKG).Commit=$(COMMIT)' -X '$(VERSION_PKG).BuildDate=$(BUILD_DATE)' -X '$(VERSION_PKG).LastTag=$(LAST_TAG)' -X '$(VERSION_PKG).CommitsSinceTag=$(COMMITS_SINCE_TAG)'
-# Tracked sources in this worktree only. `find .` would also scan sibling
-# `.worktrees/*` checkouts and fail `make check` on unrelated dirty files.
-GO_FILES := $(shell git ls-files -- '*.go')
+# Sources in this worktree only. `find .` would also scan sibling
+# `.worktrees/*` checkouts and fail `make check` on unrelated dirty files;
+# filter deleted index entries so format checks remain valid during migrations.
+GO_FILES := $(shell git ls-files --cached --others --exclude-standard -- '*.go' | while read f; do test -f "$$f" && printf '%s\n' "$$f"; done)
 GOEXE ?= $(shell go env GOEXE)
 GOBIN ?= $(shell go env GOBIN)
 ifeq ($(strip $(GOBIN)),)
@@ -58,21 +59,27 @@ cover:
 check: test race vet agent-contract release-contract docs-check
 	@test -z "$$(gofmt -l $(GO_FILES))" || { echo 'Go files are not gofmt-clean'; gofmt -l $(GO_FILES); exit 1; }
 	@if command -v node >/dev/null 2>&1; then \
-		node --check internal/server/assets/i18n.js && \
+		node --check internal/webui/assets/i18n.js && \
 		node --check internal/server/assets/app.js && \
 		node --check internal/server/assets/room-shell.js && \
 		node --check internal/server/assets/richtext.js && \
 		node --check internal/server/assets/ux.js && \
-		node --check internal/service/assets/i18n.js && \
+		node --check internal/webui/assets/i18next.min.js && \
+		node --check internal/webui/assets/catalogs.js && \
+		node --check internal/webui/assets/theme.js && \
 		node --check internal/service/assets/management.js && \
 		node --check internal/service/assets/management-ux.js && \
 		node --check scripts/test_room_shell.js && \
 		node --check scripts/test_i18n.js && \
+		node --check scripts/test_theme.js && \
 		node scripts/test_room_shell.js && \
-		node scripts/test_i18n.js; \
+		node scripts/test_i18n.js && \
+		node scripts/test_theme.js; \
 	fi
-	@go list -m all | grep -qx 'github.com/sean2077/pairroom'
-	@git diff --check
+	@go run scripts/check_dependencies.go
+	# The vendored upstream UMD intentionally retains its published trailing
+	# blank line; whitespace diagnostics apply to project-authored text only.
+	@git diff --check -- . ':(exclude)internal/webui/assets/i18next.min.js'
 
 agent-contract:
 	"$(PYTHON)" .agents/tools/generate-subagents.py --check

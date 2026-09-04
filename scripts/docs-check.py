@@ -50,7 +50,8 @@ def extract_routes() -> list[str]:
 def extract_config_fields() -> list[str]:
     pattern = re.compile(r'json:"([a-zA-Z0-9_]+)(?:,[^"]*)?"')
     values: set[str] = set()
-    for source in (ROOT / "internal" / "config").glob("*.go"):
+    sources = list((ROOT / "internal" / "config").glob("*.go")) + [ROOT / "internal" / "model" / "agent_selection.go"]
+    for source in sources:
         values.update(v for v in pattern.findall(source.read_text(encoding="utf-8")) if v != "-")
     return sorted(values)
 

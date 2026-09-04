@@ -76,6 +76,7 @@ git archive --format=tar.gz --prefix="pairroom-v${VERSION}/" -o "$DIST/pairroom-
 git archive --format=zip --prefix="pairroom-v${VERSION}/" -o "$DIST/pairroom-v${VERSION}-source.zip" "$COMMIT"
 cp "$NOTES_TMP" "$DIST/RELEASE_NOTES.md"
 cp "$ROOT/scripts/install.sh" "$DIST/install.sh"
+cp "$ROOT/THIRD_PARTY_NOTICES.md" "$DIST/THIRD_PARTY_NOTICES.md"
 
 go run ./scripts/releasemeta.go --dist "$DIST" --version "$VERSION" --commit "$COMMIT" --build-date "$BUILD_DATE"
 

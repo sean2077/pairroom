@@ -12,12 +12,12 @@ func TestRoomShellBatchesTransientRuntimeRenderingAndExposesExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(index)
-	shellPosition := strings.Index(html, `<script src="room-shell.js" defer></script>`)
-	appPosition := strings.Index(html, `<script src="app.js" defer></script>`)
+	shellPosition := strings.Index(html, `src="room-shell.js"`)
+	appPosition := strings.Index(html, `src="app.js"`)
 	if shellPosition < 0 || appPosition < 0 || shellPosition > appPosition {
 		t.Fatalf("Room shell must load before app.js: shell=%d app=%d", shellPosition, appPosition)
 	}
-	if !strings.Contains(html, `id="leave-room"`) || !strings.Contains(html, `退出 Room`) {
+	if !strings.Contains(html, `id="leave-room"`) || !strings.Contains(html, `data-i18n="ui.leaveRoom"`) {
 		t.Fatal("Room header does not expose an explicit exit control")
 	}
 

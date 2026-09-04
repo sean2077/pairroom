@@ -14,8 +14,9 @@ import (
 )
 
 type NativeProvisionerConfig struct {
-	Claude agent.Config
-	Codex  agent.Config
+	Claude   agent.Config
+	Codex    agent.Config
+	Resolver *AgentResolver
 }
 
 type NativeProvisioner struct {
@@ -33,6 +34,18 @@ func (p *NativeProvisioner) Provision(ctx context.Context, project Project, acto
 	if err := spec.Validate(); err != nil {
 		return Binding{}, nil, err
 	}
+	if p.cfg.Resolver != nil {
+		defaults := p.cfg.Resolver.DefaultSelections()
+		selection, ok := defaults[actor]
+		if !ok {
+			return Binding{}, nil, fmt.Errorf("default Agent selection is missing for %q", actor)
+		}
+		peerSelection, ok := defaults[model.OtherParticipant(actor)]
+		if !ok {
+			return Binding{}, nil, fmt.Errorf("default peer Agent selection is missing for %q", actor)
+		}
+		return p.ProvisionSelection(ctx, project, actor, spec, selection, peerSelection.Runtime, dataDir)
+	}
 	var cfg agent.Config
 	switch actor {
 	case model.ActorClaude:
@@ -42,14 +55,42 @@ func (p *NativeProvisioner) Provision(ctx context.Context, project Project, acto
 	default:
 		return Binding{}, nil, fmt.Errorf("unsupported binding agent %q", actor)
 	}
+	return p.provisionWithConfig(ctx, project, actor, spec, dataDir, cfg)
+}
+
+func (p *NativeProvisioner) DefaultSelections() map[model.ActorID]model.AgentSelection {
+	if p != nil && p.cfg.Resolver != nil {
+		return p.cfg.Resolver.DefaultSelections()
+	}
+	return defaultAgentSelections()
+}
+
+func (p *NativeProvisioner) ProvisionSelection(ctx context.Context, project Project, actor model.ActorID, spec BindingSpec, selection model.AgentSelection, peerRuntime model.RuntimeKind, dataDir string) (Binding, func(context.Context) error, error) {
+	if p == nil {
+		return Binding{}, nil, errors.New("native binding provisioner is nil")
+	}
+	if p.cfg.Resolver == nil {
+		return p.Provision(ctx, project, actor, spec, dataDir)
+	}
+	if err := spec.Validate(); err != nil {
+		return Binding{}, nil, err
+	}
+	cfg, err := p.cfg.Resolver.Resolve(ctx, actor, selection, peerRuntime, project.Root, dataDir)
+	if err != nil {
+		return Binding{}, nil, err
+	}
+	return p.provisionWithConfig(ctx, project, actor, spec, dataDir, cfg)
+}
+
+func (p *NativeProvisioner) provisionWithConfig(ctx context.Context, project Project, actor model.ActorID, spec BindingSpec, dataDir string, cfg agent.Config) (Binding, func(context.Context) error, error) {
 	cfg.Actor = actor
 	cfg.Runtime = cfg.Runtime.CanonicalForSlot(actor)
-	if actor == model.ActorClaude {
+	if cfg.PeerRuntime == "" && actor == model.ActorClaude {
 		cfg.PeerRuntime = p.cfg.Codex.Runtime.CanonicalForSlot(model.ActorCodex)
-	} else {
+	} else if cfg.PeerRuntime == "" {
 		cfg.PeerRuntime = p.cfg.Claude.Runtime.CanonicalForSlot(model.ActorClaude)
 	}
-	factory := agent.FactoryFor(cfg.Runtime)
+	factory := agent.RedactingFactory(agent.FactoryFor(cfg.Runtime))
 	cfg.Repo = project.Root
 	cfg.DataDir = dataDir
 	cfg.RoomName = "PairRoom binding validation"

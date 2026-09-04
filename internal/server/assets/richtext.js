@@ -1,6 +1,8 @@
 (() => {
   'use strict';
 
+  const t = (key, options) => window.PairRoomI18n ? window.PairRoomI18n.t(key, options) : key;
+
   function render(parent, source, options = {}) {
     const root = document.createElement('div');
     root.className = 'rich-content';
@@ -83,7 +85,7 @@
             checkbox.type = 'checkbox';
             checkbox.checked = task[1].toLowerCase() === 'x';
             checkbox.disabled = true;
-            checkbox.setAttribute('aria-label', checkbox.checked ? '已完成' : '未完成');
+            checkbox.setAttribute('aria-label', checkbox.checked ? t("ui.completed") : t("ui.notCompleted"));
             li.appendChild(checkbox);
             const label = document.createElement('span');
             parseInline(label, task[2], options);
@@ -218,12 +220,12 @@
     const copy = document.createElement('button');
     copy.type = 'button';
     copy.className = 'code-copy';
-    copy.textContent = '复制';
+    copy.textContent = t("ui.copy");
     copy.addEventListener('click', async () => {
       try {
         await navigator.clipboard.writeText(value);
-        copy.textContent = '已复制';
-        setTimeout(() => { copy.textContent = '复制'; }, 1200);
+        copy.textContent = t("ui.copied8f6f8d9");
+        setTimeout(() => { copy.textContent = t("ui.copy"); }, 1200);
       } catch {
         if (typeof options.onCopyError === 'function') options.onCopyError(value);
       }

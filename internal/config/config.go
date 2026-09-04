@@ -5,76 +5,72 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/sean2077/pairroom/internal/model"
 )
 
+// Agent defines one Service default slot. It is snapshotted into every newly
+// created Room; subsequent Service configuration changes never rewrite it.
+// Executables and process arguments come from RuntimeTemplates, never a Room.
 type Agent struct {
-	Runtime        string            `json:"runtime,omitempty"`
-	Command        string            `json:"command"`
-	Args           []string          `json:"args,omitempty"`
-	Model          string            `json:"model"`
-	Effort         string            `json:"effort,omitempty"`
-	PermissionMode string            `json:"permission_mode,omitempty"`
-	ApprovalPolicy string            `json:"approval_policy,omitempty"`
-	Sandbox        string            `json:"sandbox,omitempty"`
-	Provider       string            `json:"provider,omitempty"`
-	Instructions   string            `json:"instructions,omitempty"`
-	RuntimeEnv     map[string]string `json:"-"`
+	Runtime                string                       `json:"runtime,omitempty"`
+	Provider               model.ProviderRef            `json:"provider,omitempty"`
+	Model                  string                       `json:"model,omitempty"`
+	Effort                 string                       `json:"effort,omitempty"`
+	PermissionMode         string                       `json:"permission_mode,omitempty"`
+	ApprovalPolicy         string                       `json:"approval_policy,omitempty"`
+	Sandbox                string                       `json:"sandbox,omitempty"`
+	Instructions           string                       `json:"instructions,omitempty"`
+	OrdinaryReviewerPolicy model.OrdinaryReviewerPolicy `json:"ordinary_reviewer_policy,omitempty"`
 }
 
 func (a Agent) RuntimeKind(slot model.ActorID) model.RuntimeKind {
 	return model.ParseRuntimeKind(a.Runtime).CanonicalForSlot(slot)
 }
 
-// CCConnectImport references cc-connect's existing provider source instead
-// of copying credentials into PairRoom configuration. Providers can be
-// filtered by name and optionally prefixed to avoid local-name collisions.
-type CCConnectImport struct {
-	Path      string   `json:"path,omitempty"`
-	Providers []string `json:"providers,omitempty"`
-	Prefix    string   `json:"prefix,omitempty"`
+func (a Agent) Selection(slot model.ActorID) model.AgentSelection {
+	return model.AgentSelection{
+		Runtime: a.RuntimeKind(slot), Provider: a.Provider, Model: a.Model,
+		Effort: a.Effort, Instructions: a.Instructions,
+		PermissionMode: a.PermissionMode, ApprovalPolicy: a.ApprovalPolicy, Sandbox: a.Sandbox,
+		OrdinaryReviewerPolicy: a.OrdinaryReviewerPolicy,
+	}.Normalized(slot)
 }
 
-type ProviderModel struct {
-	Model string `json:"model"`
-	Alias string `json:"alias,omitempty"`
+type RuntimeTemplate struct {
+	Command string   `json:"command"`
+	Args    []string `json:"args,omitempty"`
 }
 
-type CodexProvider struct {
-	EnvKey      string            `json:"env_key,omitempty"`
-	WireAPI     string            `json:"wire_api,omitempty"`
-	HTTPHeaders map[string]string `json:"http_headers,omitempty"`
+type RuntimeTemplates struct {
+	Claude RuntimeTemplate `json:"claude"`
+	Codex  RuntimeTemplate `json:"codex"`
+	Grok   RuntimeTemplate `json:"grok"`
 }
 
-// Provider mirrors the useful, vendor-neutral subset of cc-connect's
-// provider schema. APIKey is retained only in memory and is passed to the
-// native process through its environment, never through command arguments.
-type Provider struct {
-	Name            string                     `json:"name"`
-	APIKey          string                     `json:"api_key,omitempty"`
-	BaseURL         string                     `json:"base_url,omitempty"`
-	Model           string                     `json:"model,omitempty"`
-	Models          []ProviderModel            `json:"models,omitempty"`
-	Thinking        string                     `json:"thinking,omitempty"`
-	Env             map[string]string          `json:"env,omitempty"`
-	AgentTypes      []string                   `json:"agent_types,omitempty"`
-	Endpoints       map[string]string          `json:"endpoints,omitempty"`
-	AgentModels     map[string]string          `json:"agent_models,omitempty"`
-	AgentModelLists map[string][]ProviderModel `json:"agent_model_lists,omitempty"`
-	Codex           *CodexProvider             `json:"codex,omitempty"`
-	ImportedFrom    string                     `json:"-"`
+func (r RuntimeTemplates) For(kind model.RuntimeKind) RuntimeTemplate {
+	switch kind.Canonical() {
+	case model.RuntimeCodex:
+		return cloneRuntimeTemplate(r.Codex)
+	case model.RuntimeGrok:
+		return cloneRuntimeTemplate(r.Grok)
+	default:
+		return cloneRuntimeTemplate(r.Claude)
+	}
 }
 
-type ProviderSummary struct {
-	Name         string   `json:"name"`
-	AgentTypes   []string `json:"agent_types,omitempty"`
-	BaseURL      string   `json:"base_url,omitempty"`
-	Model        string   `json:"model,omitempty"`
-	ImportedFrom string   `json:"imported_from,omitempty"`
+func cloneRuntimeTemplate(in RuntimeTemplate) RuntimeTemplate {
+	in.Args = append([]string(nil), in.Args...)
+	return in
+}
+
+type CCSwitch struct {
+	// Database is empty for ~/.cc-switch/cc-switch.db. Any override must be
+	// absolute so a daemon working-directory change cannot retarget it.
+	Database string `json:"database,omitempty"`
 }
 
 type File struct {
@@ -85,8 +81,8 @@ type File struct {
 	StallWarningSeconds int               `json:"stall_warning_seconds"`
 	AutoStart           bool              `json:"auto_start"`
 	Token               string            `json:"token,omitempty"`
-	Providers           []Provider        `json:"providers,omitempty"`
-	CCConnect           *CCConnectImport  `json:"cc_connect,omitempty"`
+	CCSwitch            CCSwitch          `json:"cc_switch,omitempty"`
+	Runtimes            RuntimeTemplates  `json:"runtimes"`
 	Claude              Agent             `json:"claude"`
 	Codex               Agent             `json:"codex"`
 }
@@ -99,54 +95,107 @@ func Defaults() File {
 		MaxAgentHops:        6,
 		StallWarningSeconds: 300,
 		AutoStart:           true,
-		Claude:              Agent{Runtime: string(model.RuntimeClaude), Command: "claude", PermissionMode: "auto"},
-		Codex:               Agent{Runtime: string(model.RuntimeCodex), Command: "codex"},
+		Runtimes: RuntimeTemplates{
+			Claude: RuntimeTemplate{Command: "claude"},
+			Codex:  RuntimeTemplate{Command: "codex"},
+			Grok:   RuntimeTemplate{Command: "grok"},
+		},
+		Claude: Agent{Runtime: string(model.RuntimeClaude), Provider: model.NativeProviderRef(), OrdinaryReviewerPolicy: model.ReviewerEnforced},
+		Codex:  Agent{Runtime: string(model.RuntimeCodex), Provider: model.NativeProviderRef(), OrdinaryReviewerPolicy: model.ReviewerEnforced},
 	}
 }
+
+type MigrationError struct{ Detail string }
+
+func (e *MigrationError) Error() string { return e.Detail }
 
 func Load(path string) (File, error) {
 	cfg := Defaults()
 	if path == "" {
-		cfg.applyRuntimeDefaults()
-		if err := cfg.resolveProviderProfiles(""); err != nil {
-			return File{}, err
-		}
-		return cfg, nil
+		return cfg, cfg.Validate()
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return File{}, fmt.Errorf("read config: %w", err)
+	}
+	if err := rejectRemovedProviderConfig(data); err != nil {
+		return File{}, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&cfg); err != nil {
 		return File{}, fmt.Errorf("decode config: %w", err)
 	}
-	cfg.applyRuntimeDefaults()
-	if err := cfg.resolveProviderProfiles(path); err != nil {
-		return File{}, err
-	}
+	cfg.applyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return File{}, err
 	}
 	return cfg, nil
 }
 
-func (c *File) applyRuntimeDefaults() {
-	if c == nil {
-		return
+func rejectRemovedProviderConfig(data []byte) error {
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(data, &raw) != nil {
+		return nil
 	}
-	c.Claude.applyRuntimeDefault(model.ActorClaude)
-	c.Codex.applyRuntimeDefault(model.ActorCodex)
+	if _, ok := raw["providers"]; ok {
+		return &MigrationError{Detail: "legacy PairRoom providers configuration was removed; back up the PairRoom data root, migrate Service defaults to a CC Switch profile reference, and remove the top-level providers field (see docs/UPGRADING.md)"}
+	}
+	if _, ok := raw["cc_connect"]; ok {
+		return &MigrationError{Detail: "legacy cc_connect imports were removed; back up the PairRoom data root, migrate Service defaults to a CC Switch profile reference, and remove cc_connect (see docs/UPGRADING.md)"}
+	}
+	for _, key := range []string{"claude", "codex"} {
+		var slot map[string]json.RawMessage
+		if json.Unmarshal(raw[key], &slot) != nil {
+			continue
+		}
+		if value, ok := slot["provider"]; ok && len(value) > 0 && value[0] == '"' {
+			return &MigrationError{Detail: fmt.Sprintf("legacy %s.provider names were removed; replace the string with {\"source\":\"native\"} or a CC Switch ProviderRef (see docs/UPGRADING.md)", key)}
+		}
+		for _, removed := range []string{"command", "args"} {
+			if _, ok := slot[removed]; ok {
+				return &MigrationError{Detail: fmt.Sprintf("per-slot %s.%s was removed; configure runtimes.%s.%s instead (see docs/UPGRADING.md)", key, removed, key, removed)}
+			}
+		}
+	}
+	return nil
 }
 
-func (a *Agent) applyRuntimeDefault(slot model.ActorID) {
-	kind := a.RuntimeKind(slot)
-	if strings.TrimSpace(a.Runtime) == "" {
-		a.Runtime = string(kind)
+func (c *File) applyDefaults() {
+	defaults := Defaults()
+	if strings.TrimSpace(c.Claude.Runtime) == "" {
+		c.Claude.Runtime = defaults.Claude.Runtime
 	}
-	if strings.TrimSpace(a.Command) == "" {
-		a.Command = kind.DefaultCommand()
+	if strings.TrimSpace(c.Codex.Runtime) == "" {
+		c.Codex.Runtime = defaults.Codex.Runtime
+	}
+	if c.Claude.Provider.Source == "" {
+		c.Claude.Provider = model.NativeProviderRef()
+	}
+	if c.Codex.Provider.Source == "" {
+		c.Codex.Provider = model.NativeProviderRef()
+	}
+	if c.Claude.OrdinaryReviewerPolicy == "" {
+		c.Claude.OrdinaryReviewerPolicy = model.ReviewerEnforced
+	}
+	if c.Codex.OrdinaryReviewerPolicy == "" {
+		c.Codex.OrdinaryReviewerPolicy = model.ReviewerEnforced
+	}
+	if strings.TrimSpace(c.Runtimes.Claude.Command) == "" {
+		c.Runtimes.Claude.Command = defaults.Runtimes.Claude.Command
+	}
+	if strings.TrimSpace(c.Runtimes.Codex.Command) == "" {
+		c.Runtimes.Codex.Command = defaults.Runtimes.Codex.Command
+	}
+	if strings.TrimSpace(c.Runtimes.Grok.Command) == "" {
+		c.Runtimes.Grok.Command = defaults.Runtimes.Grok.Command
+	}
+}
+
+func (c File) DefaultSelections() map[model.ActorID]model.AgentSelection {
+	return map[model.ActorID]model.AgentSelection{
+		model.ActorClaude: c.Claude.Selection(model.ActorClaude),
+		model.ActorCodex:  c.Codex.Selection(model.ActorCodex),
 	}
 }
 
@@ -163,45 +212,65 @@ func (c File) Validate() error {
 	if c.StallWarningSeconds != -1 && (c.StallWarningSeconds < 30 || c.StallWarningSeconds > 86400) {
 		return errors.New("stall_warning_seconds must be -1 (disabled) or between 30 and 86400")
 	}
-	if c.Claude.Command == "" || c.Codex.Command == "" {
-		return errors.New("both agent commands are required")
+	for _, kind := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok} {
+		template := c.Runtimes.For(kind)
+		if strings.TrimSpace(template.Command) == "" {
+			return fmt.Errorf("runtimes.%s.command is required", kind)
+		}
+		for _, arg := range template.Args {
+			if strings.ContainsRune(arg, '\x00') {
+				return fmt.Errorf("runtimes.%s.args contains a NUL byte", kind)
+			}
+		}
+		if err := validateRuntimeTemplateArgs(kind, template.Args); err != nil {
+			return fmt.Errorf("runtimes.%s.args: %w", kind, err)
+		}
 	}
-	if !c.Claude.RuntimeKind(model.ActorClaude).Valid() {
-		return fmt.Errorf("invalid Agent 1 runtime %q: use claude, codex, or grok", c.Claude.Runtime)
+	for _, entry := range []struct {
+		actor     model.ActorID
+		selection model.AgentSelection
+	}{
+		{model.ActorClaude, c.Claude.Selection(model.ActorClaude)},
+		{model.ActorCodex, c.Codex.Selection(model.ActorCodex)},
+	} {
+		if err := entry.selection.Validate(entry.actor); err != nil {
+			return fmt.Errorf("%s default: %w", model.SlotLabel(entry.actor), err)
+		}
 	}
-	if !c.Codex.RuntimeKind(model.ActorCodex).Valid() {
-		return fmt.Errorf("invalid Agent 2 runtime %q: use claude, codex, or grok", c.Codex.Runtime)
+	if strings.TrimSpace(c.CCSwitch.Database) != "" && !filepath.IsAbs(c.CCSwitch.Database) {
+		return errors.New("cc_switch.database must be an absolute path")
 	}
-	return validateProviderNames(c.Providers)
+	return nil
 }
 
-func (c File) ProviderSummaries() []ProviderSummary {
-	summaries := make([]ProviderSummary, 0, len(c.Providers))
-	for _, provider := range c.Providers {
-		summaries = append(summaries, ProviderSummary{
-			Name: provider.Name, AgentTypes: append([]string(nil), provider.AgentTypes...),
-			BaseURL: redactedProviderURL(provider.BaseURL), Model: provider.Model, ImportedFrom: provider.ImportedFrom,
-		})
+func validateRuntimeTemplateArgs(kind model.RuntimeKind, args []string) error {
+	for index := 0; index < len(args); index++ {
+		arg := strings.ToLower(strings.TrimSpace(args[index]))
+		forbidden := false
+		switch kind.Canonical() {
+		case model.RuntimeClaude:
+			forbidden = matchesOption(arg, "--model", "--effort", "--permission-mode", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions")
+		case model.RuntimeCodex:
+			forbidden = matchesOption(arg, "--model", "-m", "--ask-for-approval", "-a", "--sandbox", "-s", "--dangerously-bypass-approvals-and-sandbox")
+			if !forbidden && (arg == "-c" || arg == "--config") && index+1 < len(args) {
+				key := strings.ToLower(strings.TrimSpace(strings.SplitN(args[index+1], "=", 2)[0]))
+				forbidden = key == "model" || key == "model_provider" || strings.HasPrefix(key, "model_providers.") || key == "approval_policy" || key == "sandbox_mode"
+			}
+		case model.RuntimeGrok:
+			forbidden = matchesOption(arg, "--model", "-m", "--effort", "--permission-mode", "--always-approve", "--yolo", "--sandbox")
+		}
+		if forbidden {
+			return fmt.Errorf("%q is a per-Room model or policy override; put it in AgentSelection instead", args[index])
+		}
 	}
-	return summaries
+	return nil
 }
 
-func redactedProviderURL(value string) string {
-	if value == "" {
-		return ""
+func matchesOption(value string, names ...string) bool {
+	for _, name := range names {
+		if value == name || strings.HasPrefix(value, name+"=") {
+			return true
+		}
 	}
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return "redacted-invalid-url"
-	}
-	if parsed.User != nil {
-		parsed.User = url.User("redacted")
-	}
-	if parsed.RawQuery != "" {
-		parsed.RawQuery = "redacted"
-	}
-	if parsed.Fragment != "" {
-		parsed.Fragment = "redacted"
-	}
-	return parsed.String()
+	return false
 }

@@ -1,6 +1,4 @@
-<!doctype html>
-<html lang="zh-CN">
-<head>
+<!DOCTYPE html><html lang="en"><head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
@@ -16,23 +14,28 @@
         <span class="brand-dot bridge"></span>
         <span class="brand-dot codex"></span>
       </div>
-      <p class="eyebrow">PAIRROOM DESKTOP</p>
-      <h1 id="startup-title">正在启动本地协作控制面</h1>
-      <p id="startup-message">正在连接唯一 PairRoom Service；已安装 daemon 会被复用，只有未安装时才启动内嵌 Service。</p>
+      <p class="eyebrow" data-i18n="desktop.pairroomDesktopUpper">PAIRROOM DESKTOP</p>
+      <h1 id="startup-title" data-i18n="ui.startingTheLocalCollaborationControlPlane">Starting the local collaboration control plane</h1>
+      <p id="startup-message" data-i18n="ui.connectingToTheSinglePairroomServiceAnInstalledDaemonIsReusedAn">Connecting to the single PairRoom Service. An installed daemon is reused; an embedded Service starts only when no daemon is installed.</p>
       <div id="spinner" class="spinner" aria-hidden="true"></div>
-      <pre id="startup-error" hidden></pre>
+      <pre id="startup-error" hidden=""></pre>
     </section>
   </main>
+  <script src="/_pairroom/i18next.min.js" defer=""></script>
+  <script src="/_pairroom/catalogs.js" defer=""></script>
+  <script src="/_pairroom/i18n.js" defer=""></script>
+  <script src="/_pairroom/theme.js" defer=""></script>
   <script>
     window.pairroomDesktopError = (message) => {
-      document.getElementById('startup-title').textContent = 'PairRoom Desktop 启动失败';
+      document.getElementById('startup-title').textContent = window.PairRoomI18n?.t('desktop.startupFailed') || 'PairRoom Desktop failed to start';
       document.getElementById('startup-message').textContent =
-        '未启动第二个 Service，也未修改现有 service.lock。请根据下面的诊断处理后重新启动。';
+        window.PairRoomI18n?.t('desktop.noSecondService') || 'No second Service was started and the existing service.lock was not changed. Resolve the diagnostic below, then restart.';
       document.getElementById('spinner').hidden = true;
       const error = document.getElementById('startup-error');
-      error.textContent = String(message || 'Unknown startup error');
+      error.textContent = String(message || window.PairRoomI18n?.t('desktop.unknownStartupError') || 'Unknown startup error');
       error.hidden = false;
     };
   </script>
-</body>
-</html>
+
+
+</body></html>

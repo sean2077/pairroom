@@ -1,6 +1,8 @@
 (() => {
   'use strict';
 
+  const t = (key, options) => window.PairRoomI18n ? window.PairRoomI18n.t(key, options) : key;
+
   const app = document.getElementById('app');
   const sidebar = document.getElementById('sidebar');
   const sidebarToggle = document.getElementById('sidebar-collapse');
@@ -51,6 +53,7 @@
   installKeyboardNavigation();
   installRoomTabNavigation();
   installScrollFeedback();
+  document.addEventListener('pairroom:lang', localizeEnhancements);
 
   function installSkipLink() {
     const existing = document.querySelector('.management-skip-link');
@@ -58,7 +61,7 @@
     const link = document.createElement('a');
     link.className = 'management-skip-link';
     link.href = '#view';
-    link.textContent = '跳到页面内容';
+    link.textContent = t("ui.jumpToPageContent");
     link.addEventListener('click', activateSkipLink);
     document.body.prepend(link);
     return link;
@@ -79,7 +82,7 @@
     const line = document.createElement('div');
     line.className = 'management-sync-line';
     line.setAttribute('role', 'progressbar');
-    line.setAttribute('aria-label', '正在同步 Management Shell');
+    line.setAttribute('aria-label', t("ui.synchronizingManagementShell"));
     line.setAttribute('aria-hidden', 'true');
     workspaceShell.prepend(line);
     return line;
@@ -91,8 +94,8 @@
     button.className = 'icon-button management-command-button';
     button.type = 'button';
     button.textContent = '⌘';
-    button.title = '快速操作（Ctrl/⌘ K）';
-    button.setAttribute('aria-label', '打开快速操作');
+    button.title = t("ui.quickActionsCtrlK");
+    button.setAttribute('aria-label', t("ui.openQuickActions"));
     button.setAttribute('aria-keyshortcuts', 'Control+K Meta+K');
     button.setAttribute('aria-expanded', 'false');
     button.setAttribute('aria-controls', 'management-command-dialog');
@@ -102,21 +105,7 @@
     dialog.id = 'management-command-dialog';
     dialog.className = 'management-command-dialog';
     dialog.setAttribute('aria-labelledby', 'management-command-title');
-    dialog.innerHTML = `
-      <div class="management-command-shell">
-        <header class="management-command-header">
-          <span class="management-command-symbol" aria-hidden="true">⌕</span>
-          <label class="visually-hidden" for="management-command-input" id="management-command-title">快速操作</label>
-          <input id="management-command-input" type="search" autocomplete="off" placeholder="跳转、创建或执行操作…" role="combobox" aria-autocomplete="list" aria-controls="management-command-list" aria-expanded="true">
-          <kbd>Esc</kbd>
-        </header>
-        <div id="management-command-list" class="management-command-list" role="listbox" aria-label="可用操作"></div>
-        <footer class="management-command-footer">
-          <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
-          <span><kbd>Enter</kbd> 执行</span>
-          <span><kbd>G</kbd> + 键 导航</span>
-        </footer>
-      </div>`;
+    dialog.innerHTML = "\n      <div class=\"management-command-shell\">\n        <header class=\"management-command-header\">\n          <span class=\"management-command-symbol\" aria-hidden=\"true\">⌕</span>\n          <label class=\"visually-hidden\" for=\"management-command-input\" id=\"management-command-title\" data-i18n=\"ui.quickOperation\">Quick operation</label>\n          <input id=\"management-command-input\" type=\"search\" autocomplete=\"off\" placeholder=\"Jump, create or perform an action…\" role=\"combobox\" aria-autocomplete=\"list\" aria-controls=\"management-command-list\" aria-expanded=\"true\" data-i18n-placeholder=\"ui.jumpCreateOrPerformAnAction\">\n          <kbd>Esc</kbd>\n        </header>\n        <div id=\"management-command-list\" class=\"management-command-list\" role=\"listbox\" aria-label=\"Available operations\" data-i18n-aria-label=\"ui.availableOperations\"></div>\n        <footer class=\"management-command-footer\">\n          <span><kbd>↑</kbd><kbd>↓</kbd><span data-i18n=\"ui.choose\"> choose</span></span>\n          <span><kbd>Enter</kbd><span data-i18n=\"ui.implement\"> implement</span></span>\n          <span><kbd>G</kbd><span data-i18n=\"ui.keyNavigation\"> + key navigation</span></span>\n        </footer>\n      </div>";
     document.body.append(dialog);
 
     const input = dialog.querySelector('#management-command-input');
@@ -168,47 +157,47 @@
   function commands() {
     const items = [
       {
-        id: 'overview', group: '导航', icon: '◫', label: '打开概览', detail: 'Service、Project 与 Room 总览', keys: 'G O',
-        keywords: 'overview home service 概览 首页', action: () => navigate('#/overview'),
+        id: 'overview', group: t("ui.navigation"), icon: '◫', label: t("ui.openOverview"), detail: t("ui.serviceProjectAndRoomOverview"), keys: 'G O',
+        keywords: t("ui.overviewHomeService"), action: () => navigate('#/overview'),
       },
       {
-        id: 'projects', group: '导航', icon: '⌂', label: '打开 Projects', detail: '管理 Project、Room 与 Bindings', keys: 'G P',
-        keywords: 'project projects room workspace 项目 房间', action: () => navigate('#/projects'),
+        id: 'projects', group: t("ui.navigation"), icon: '⌂', label: t("ui.openProjects"), detail: t("ui.manageProjectsRoomsAndBindings"), keys: 'G P',
+        keywords: t("ui.projectProjectsRoomWorkspace"), action: () => navigate('#/projects'),
       },
       {
-        id: 'runtimes', group: '导航', icon: '◎', label: '打开 Runtimes', detail: '容量、队列与活动 Turn', keys: 'G R',
-        keywords: 'runtime runtimes queue capacity turn 运行时 队列', action: () => navigate('#/runtimes'),
+        id: 'runtimes', group: t("ui.navigation"), icon: '◎', label: t("ui.openRuntimes"), detail: t("ui.capacityQueueAndActiveTurns"), keys: 'G R',
+        keywords: t("ui.runtimeRuntimesQueueCapacityTurn"), action: () => navigate('#/runtimes'),
       },
       {
-        id: 'settings', group: '导航', icon: '⚙', label: '打开设置', detail: '界面、Runtime 与诊断', keys: 'G S',
-        keywords: 'settings preferences diagnostics 设置 偏好 诊断', action: () => navigate('#/settings'),
+        id: 'settings', group: t("ui.navigation"), icon: '⚙', label: t("ui.openSettings"), detail: t("ui.interfaceRuntimeAndDiagnostics"), keys: 'G S',
+        keywords: t("ui.settingsPreferencesDiagnostics"), action: () => navigate('#/settings'),
       },
       {
-        id: 'new-project', group: '操作', icon: '＋', label: '登记 Project', detail: '添加 canonical Git worktree', keys: 'N P',
-        keywords: 'new add register project 新建 添加 登记', action: () => addProjectButton?.click(),
+        id: 'new-project', group: t("ui.actions"), icon: '＋', label: t("ui.registerProject9c99cf3"), detail: t("ui.addACanonicalGitWorktreee76c231"), keys: 'N P',
+        keywords: t("ui.newAddRegisterProject"), action: () => addProjectButton?.click(),
       },
       {
-        id: 'open-room', group: '操作', icon: '◇', label: '打开 Room 标签', detail: '在应用内标签中打开一个活动 Room', keys: 'Alt+N',
-        keywords: 'open room tab 打开 标签', action: () => roomPickerButton?.click(),
+        id: 'open-room', group: t("ui.actions"), icon: '◇', label: t("ui.openRoomTabs"), detail: t("ui.openAnActiveRoomInAnApplicationTab"), keys: 'Alt+N',
+        keywords: t("ui.openRoomTab"), action: () => roomPickerButton?.click(),
       },
       {
-        id: 'search', group: '操作', icon: '⌕', label: '搜索 Project 或 Room', detail: '进入全局搜索', keys: '/',
-        keywords: 'search find project room 搜索 查找', action: focusGlobalSearch,
+        id: 'search', group: t("ui.actions"), icon: '⌕', label: t("ui.searchProjectsOrRooms"), detail: t("ui.focusGlobalSearch"), keys: '/',
+        keywords: t("ui.searchFindProjectRoom"), action: focusGlobalSearch,
       },
       {
-        id: 'refresh', group: '操作', icon: '↻', label: '立即刷新', detail: '同步最新 Service snapshot', keys: '',
-        keywords: 'refresh sync reload 刷新 同步', action: () => refreshButton?.click(),
+        id: 'refresh', group: t("ui.actions"), icon: '↻', label: t("ui.refreshNow"), detail: t("ui.synchronizeTheLatestServiceSnapshot"), keys: '',
+        keywords: t("ui.refreshSyncReload"), action: () => refreshButton?.click(),
       },
       {
-        id: 'sidebar', group: '视图', icon: '◧', label: app.classList.contains('sidebar-collapsed') ? '展开侧边栏' : '折叠侧边栏',
-        detail: '切换 Management 导航宽度', keys: '', keywords: 'sidebar collapse expand 侧边栏 折叠 展开', action: toggleSidebar,
+        id: 'sidebar', group: t("ui.view"), icon: '◧', label: app.classList.contains('sidebar-collapsed') ? t("ui.expandSidebar") : t("ui.collapseSidebar"),
+        detail: t("ui.toggleManagementNavigationWidth"), keys: '', keywords: t("ui.sidebarCollapseExpand"), action: toggleSidebar,
       },
     ];
     const currentTab = currentRoomTab();
     if (currentTab) {
       items.splice(6, 0, {
-        id: 'close-room', group: '标签', icon: '×', label: '关闭当前 Room 标签', detail: '仅关闭工作台标签，不停止 Agent', keys: 'Alt+W',
-        keywords: 'close room tab 关闭 标签', action: () => currentTab.querySelector('.room-tab-close')?.click(),
+        id: 'close-room', group: t("ui.tab"), icon: '×', label: t("ui.closeCurrentRoomTab"), detail: t("ui.closeOnlyTheWorkbenchTabDoNotStopAgents"), keys: 'Alt+W',
+        keywords: t("ui.closeRoomTab"), action: () => currentTab.querySelector('.room-tab-close')?.click(),
       });
     }
     return items;
@@ -268,7 +257,7 @@
     if (!paletteItems.length) {
       const empty = document.createElement('div');
       empty.className = 'management-command-empty';
-      empty.innerHTML = '<strong>没有匹配的操作</strong><span>尝试“Project”“刷新”或“设置”。</span>';
+      empty.innerHTML = "<strong data-i18n=\"ui.noMatchingOperation\">No matching operation</strong><span data-i18n=\"ui.tryProjectRefreshOrSettings\">Try \"Project\" \"Refresh\" or \"Settings\".</span>";
       commandUI.list.append(empty);
       commandUI.input.removeAttribute('aria-activedescendant');
       return;
@@ -358,12 +347,8 @@
   function installMobileNavigation() {
     const nav = document.createElement('nav');
     nav.className = 'management-mobile-nav';
-    nav.setAttribute('aria-label', '移动端主导航');
-    nav.innerHTML = `
-      <a href="#/overview" data-mobile-nav="overview"><span aria-hidden="true">◫</span><small>概览</small></a>
-      <a href="#/projects" data-mobile-nav="projects"><span aria-hidden="true">⌂</span><small>Projects</small></a>
-      <a href="#/runtimes" data-mobile-nav="runtimes"><span aria-hidden="true">◎</span><small>Runtimes</small></a>
-      <a href="#/settings" data-mobile-nav="settings"><span aria-hidden="true">⚙</span><small>设置</small></a>`;
+    nav.setAttribute('aria-label', t("ui.mobilePrimaryNavigation"));
+    nav.innerHTML = "\n      <a href=\"#/overview\" data-mobile-nav=\"overview\"><span aria-hidden=\"true\">◫</span><small data-i18n=\"ui.overview\">Overview</small></a>\n      <a href=\"#/projects\" data-mobile-nav=\"projects\"><span aria-hidden=\"true\">⌂</span><small data-i18n=\"common.projects\">Projects</small></a>\n      <a href=\"#/runtimes\" data-mobile-nav=\"runtimes\"><span aria-hidden=\"true\">◎</span><small data-i18n=\"common.runtimes\">Runtimes</small></a>\n      <a href=\"#/settings\" data-mobile-nav=\"settings\"><span aria-hidden=\"true\">⚙</span><small data-i18n=\"ui.settings\">Settings</small></a>";
     app.append(nav);
     return nav;
   }
@@ -396,8 +381,8 @@
     leading.className = 'room-workspace-leading';
     const menu = makeRoomTool({
       className: 'room-workspace-menu',
-      label: '打开导航',
-      title: '打开 Projects 与 Rooms 导航',
+      label: t("ui.openNavigation"),
+      title: t("ui.openProjectsAndRoomsNavigation"),
       text: '☰',
       onClick: () => document.getElementById('mobile-menu')?.click(),
     });
@@ -408,31 +393,31 @@
     tools.className = 'room-workspace-tools';
     const refresh = makeRoomTool({
       className: 'room-workspace-refresh',
-      label: '刷新 Management Shell',
-      title: '同步 Service 与 Runtime 状态',
+      label: t("ui.refreshManagementShell"),
+      title: t("ui.synchronizeServiceAndRuntimeStatus"),
       text: '↻',
       onClick: () => refreshButton?.click(),
     });
     const command = makeRoomTool({
       className: 'room-workspace-command',
-      label: '打开快速操作',
-      title: '快速操作（Ctrl/⌘ K）',
+      label: t("ui.openQuickActions"),
+      title: t("ui.quickActionsCtrlK"),
       text: '⌘',
       onClick: () => openPalette(),
     });
     command.setAttribute('aria-keyshortcuts', 'Control+K Meta+K');
     const maximize = makeRoomTool({
       className: 'room-workspace-maximize',
-      label: '最大化房间',
-      title: '最大化房间（隐藏侧栏）',
+      label: t("ui.maximizeRoom"),
+      title: t("ui.maximizeRoomHideSidebar"),
       text: '⛶',
       onClick: () => toggleRoomMaximize(maximize),
     });
     maximize.setAttribute('aria-pressed', 'false');
     if (roomPickerButton) {
       roomPickerButton.classList.add('room-workspace-picker');
-      roomPickerButton.title = '打开 Room 标签（Alt+N）';
-      roomPickerButton.setAttribute('aria-label', '打开 Room 标签');
+      roomPickerButton.title = t("ui.openRoomTabsAltN");
+      roomPickerButton.setAttribute('aria-label', t("ui.openRoomTabs"));
     }
     tools.append(maximize, refresh, command);
     roomTabstrip.append(tools);
@@ -442,7 +427,7 @@
   function toggleRoomMaximize(button) {
     const maximized = app.classList.toggle('room-maximized');
     button.setAttribute('aria-pressed', String(maximized));
-    const label = maximized ? '还原房间（显示侧栏）' : '最大化房间（隐藏侧栏）';
+    const label = maximized ? t("ui.restoreRoomLayoutShowSidebar") : t("ui.maximizeRoomHideSidebar");
     button.title = label;
     button.setAttribute('aria-label', label);
   }
@@ -459,32 +444,68 @@
     const collapsed = app.classList.contains('sidebar-collapsed');
     if (sidebarToggle) {
       sidebarToggle.setAttribute('aria-expanded', String(!collapsed));
-      sidebarToggle.setAttribute('aria-label', collapsed ? '展开侧边栏' : '折叠侧边栏');
-      sidebarToggle.title = collapsed ? '展开侧边栏' : '折叠侧边栏';
+      sidebarToggle.setAttribute('aria-label', collapsed ? t("ui.expandSidebar") : t("ui.collapseSidebar"));
+      sidebarToggle.title = collapsed ? t("ui.expandSidebar") : t("ui.collapseSidebar");
     }
   }
 
   function improveStaticSemantics() {
     globalSearch?.setAttribute('aria-keyshortcuts', '/');
-    refreshButton?.setAttribute('aria-label', '刷新 Management Shell');
+    refreshButton?.setAttribute('aria-label', t("ui.refreshManagementShell"));
     view.setAttribute('aria-busy', 'true');
-    document.querySelector('.primary-nav')?.setAttribute('aria-label', 'Management 主导航');
+    document.querySelector('.primary-nav')?.setAttribute('aria-label', t("ui.managementPrimaryNavigation"));
     document.querySelector('.workspace-footer')?.setAttribute('role', 'contentinfo');
     roomTablist?.setAttribute('aria-orientation', 'horizontal');
-    roomTabstrip?.setAttribute('aria-label', 'Room 工作区标签');
+    roomTabstrip?.setAttribute('aria-label', t("ui.roomWorkspaceTabs"));
     roomStage?.setAttribute('tabindex', '-1');
-    roomStage?.setAttribute('aria-label', '当前 Room 工作区');
+    roomStage?.setAttribute('aria-label', t("ui.currentRoomWorkspace"));
+  }
+
+  function localizeEnhancements() {
+    if (window.PairRoomI18n) window.PairRoomI18n.apply(document);
+    syncLine.setAttribute('aria-label', t("ui.synchronizingManagementShell"));
+    commandUI.button.title = t("ui.quickActionsCtrlK");
+    commandUI.button.setAttribute('aria-label', t("ui.openQuickActions"));
+    mobileNav.setAttribute('aria-label', t("ui.mobilePrimaryNavigation"));
+    if (roomWorkspaceUI.menu) {
+      roomWorkspaceUI.menu.title = t("ui.openProjectsAndRoomsNavigation");
+      roomWorkspaceUI.menu.setAttribute('aria-label', t("ui.openNavigation"));
+    }
+    if (roomWorkspaceUI.refresh) {
+      roomWorkspaceUI.refresh.title = t("ui.synchronizeServiceAndRuntimeStatus");
+      roomWorkspaceUI.refresh.setAttribute('aria-label', t("ui.refreshManagementShell"));
+    }
+    if (roomWorkspaceUI.command) {
+      roomWorkspaceUI.command.title = t("ui.quickActionsCtrlK");
+      roomWorkspaceUI.command.setAttribute('aria-label', t("ui.openQuickActions"));
+    }
+    if (roomWorkspaceUI.maximize) {
+      const maximized = app.classList.contains('room-maximized');
+      const label = maximized ? t("ui.restoreRoomLayoutShowSidebar") : t("ui.maximizeRoomHideSidebar");
+      roomWorkspaceUI.maximize.title = label;
+      roomWorkspaceUI.maximize.setAttribute('aria-label', label);
+    }
+    if (roomPickerButton) {
+      roomPickerButton.title = t("ui.openRoomTabsAltN");
+      roomPickerButton.setAttribute('aria-label', t("ui.openRoomTabs"));
+    }
+    improveStaticSemantics();
+    syncSidebarState();
+    syncRouteState();
+    enhanceDynamicContent();
+    enhanceRoomChrome();
+    if (paletteOpen) renderPalette(commandUI.input.value);
   }
 
   function enhanceDynamicContent() {
     view.querySelectorAll('.project-card').forEach((card, index) => {
-      const title = card.querySelector('h2')?.textContent?.trim() || `Project ${index + 1}`;
-      card.setAttribute('aria-label', `Project：${title}`);
+      const title = card.querySelector('h2')?.textContent?.trim() || `${t("common.project")} ${index + 1}`;
+      card.setAttribute('aria-label', `${t("common.project")}: ${title}`);
     });
     view.querySelectorAll('.room-row').forEach((row, index) => {
-      const title = row.querySelector('.room-title-line strong')?.textContent?.trim() || `Room ${index + 1}`;
+      const title = row.querySelector('.room-title-line strong')?.textContent?.trim() || `${t("common.room")} ${index + 1}`;
       row.setAttribute('role', 'group');
-      row.setAttribute('aria-label', `Room：${title}`);
+      row.setAttribute('aria-label', `${t("common.room")}: ${title}`);
     });
     view.querySelectorAll('.skeleton').forEach((element) => element.setAttribute('aria-hidden', 'true'));
     view.setAttribute('aria-busy', String(Boolean(view.querySelector('.skeleton'))));
@@ -598,7 +619,7 @@
       const panel = findRoomPanel(roomID);
       target.id = `room-tab-${token}`;
       target.setAttribute('aria-selected', String(selected));
-      target.setAttribute('aria-label', `${label}${selected ? '，当前标签' : ''}`);
+      target.setAttribute('aria-label', `${label}${selected ? t("ui.currentTab") : ''}`);
       target.setAttribute('aria-keyshortcuts', 'Delete');
       target.tabIndex = selected ? 0 : -1;
       target.title = label;
@@ -610,8 +631,8 @@
       if (close) {
         close.draggable = false;
         close.tabIndex = selected ? 0 : -1;
-        close.title = `关闭 ${label}（不停止 Agent）`;
-        close.setAttribute('aria-label', `关闭 ${label}；不停止 Agent`);
+        close.title = t("ui.closeValueAgentsKeepRunning", { value0: (label) });
+        close.setAttribute('aria-label', t("ui.closeValueWithoutStoppingItsAgents", { value0: (label) }));
         close.setAttribute('aria-keyshortcuts', 'Alt+W');
       }
     });
@@ -676,7 +697,7 @@
     if (skipLink) {
       skipLink.hidden = app.hidden;
       skipLink.href = roomWorkspace ? '#room-stage' : '#view';
-      skipLink.textContent = roomWorkspace ? '跳到当前 Room' : '跳到页面内容';
+      skipLink.textContent = roomWorkspace ? t("ui.jumpToCurrentRoom") : t("ui.jumpToPageContent");
     }
     document.querySelectorAll('.primary-nav [data-nav]').forEach((link) => {
       const current = link.dataset.nav === activeRoute;
@@ -827,7 +848,7 @@
 
   function beginChord(key) {
     chord = key;
-    const options = key === 'g' ? 'O 概览 · P Projects · R Runtimes · S 设置' : 'P 登记 Project';
+    const options = key === 'g' ? t("ui.oOverviewPProjectsRRuntimesSSettings") : t("ui.pRegisterProject");
     chordHint.textContent = `${key.toUpperCase()} → ${options}`;
     chordHint.hidden = false;
     window.clearTimeout(chordTimer);

@@ -46,7 +46,7 @@ func (a *workflowAdapter) ResolveApproval(ctx context.Context, id string, resolu
 	return a.inner.ResolveApproval(ctx, id, resolution)
 }
 func (a *workflowAdapter) SetRole(ctx context.Context, role model.ParticipantRole) error {
-	return a.inner.SetRole(ctx, role)
+	return a.inner.SetRole(ctx, a.ordinaryNativeRole(role))
 }
 func (a *workflowAdapter) SetWorkspace(ctx context.Context, workspace string) error {
 	return a.inner.SetWorkspace(ctx, workspace)
@@ -56,19 +56,32 @@ func (a *workflowAdapter) Submit(ctx context.Context, input model.AgentInput) (m
 	if input.WorkflowMode.Valid() {
 		input.Role = workflowNativeRole(input.WorkflowMode, input.Role)
 		input.Text = workflowRuntimeInstruction(input) + "\n\n" + input.Text
+	} else {
+		input.Role = a.ordinaryNativeRole(input.Role)
 	}
 	// Claude's plan mode is process-wide, unlike Codex's per-turn sandbox.
 	// Reapply the requested role on every submission so a plan-only workflow
 	// cannot leak read-only mode into the next ordinary turn.
-	if a.actor == model.ActorClaude {
+	if runtime := a.cfg.Runtime.CanonicalForSlot(a.actor); runtime == model.RuntimeClaude || runtime == model.RuntimeGrok {
 		if err := a.inner.SetRole(ctx, input.Role); err != nil {
-			return model.DeliveryFailed, fmt.Errorf("apply Claude input role %s: %w", input.Role, err)
+			return model.DeliveryFailed, fmt.Errorf("apply native input role %s: %w", input.Role, err)
 		}
 	}
 	a.mu.Lock()
 	a.latestInput = input
 	a.mu.Unlock()
 	return a.inner.Submit(ctx, input)
+}
+
+func (a *workflowAdapter) ordinaryNativeRole(role model.ParticipantRole) model.ParticipantRole {
+	if role == model.RoleReviewer && a.cfg.OrdinaryReviewerPolicy == model.ReviewerExplicit {
+		// The Room keeps its durable Reviewer role and isolated workspace, while
+		// the native process applies exactly the explicit permission/approval/
+		// sandbox policy selected for ordinary turns. Workflow read-only stages
+		// bypass this helper and always project RoleReviewer above.
+		return model.RoleDriver
+	}
+	return role
 }
 
 func workflowNativeRole(mode model.WorkflowMode, fallback model.ParticipantRole) model.ParticipantRole {
@@ -134,7 +147,7 @@ func (a *workflowAdapter) handleEvent(event model.RuntimeEvent) {
 	a.mu.Unlock()
 
 	a.sink(event)
-	if a.actor != model.ActorCodex || event.Kind != model.RuntimeLog || event.Name != "server_request.unsupported" || !visibleCodexRequest(event.Text) {
+	if a.cfg.Runtime.CanonicalForSlot(a.actor) != model.RuntimeCodex || event.Kind != model.RuntimeLog || event.Name != "server_request.unsupported" || !visibleCodexRequest(event.Text) {
 		return
 	}
 	a.surfaceCodexQuestion(event)
@@ -160,7 +173,7 @@ func (a *workflowAdapter) surfaceCodexQuestion(event model.RuntimeEvent) {
 	a.mu.Unlock()
 
 	question := codexVisibleQuestion(event.Text, event.Data)
-	final := runtimeEvent(model.ActorCodex, model.RuntimeFinal)
+	final := runtimeEvent(a.actor, model.RuntimeFinal)
 	final.TurnID = turnID
 	final.CorrelationID = input.MessageID
 	final.Text = question + "\n\nReply in the shared room; PairRoom will resume this workflow stage as a new native turn.\n\n@human\n[PAIRROOM:WAIT]"
