@@ -14,6 +14,21 @@ First-time use should start in Mock mode. It verifies PairRoom scheduling, UI, E
 
 ## 2. Choose a launch entry
 
+### From source (full Service)
+
+```bash
+make dev
+```
+
+This stops any leftover daemon, recovers a crash-stale `service.lock` only after the recorded PID is gone, starts the current-tree Management Service, and opens the Management Shell in a browser. Equivalent commands:
+
+```bash
+go run ./cmd/pairroom daemon stop
+go run ./cmd/pairroom service --recover-stale-lock
+```
+
+`make stop` is the stop-only helper (`daemon stop` fails if nothing is installed; `make stop` treats that as clean). Legacy single-Room `make run` / `make demo` still call `pairroom serve`.
+
 ### CLI install
 
 ```bash
@@ -38,7 +53,7 @@ Both targets run for the current host platform. Packaged artifacts write to `des
 
 The desktop main window still loads the existing Management Shell. There is no separate desktop business state. Closing the window only hides to the tray; **Quit PairRoom** from the tray exits the application.
 
-### CLI + browser
+### CLI + browser (Mock)
 
 ```bash
 go run ./cmd/pairroom service --mock
@@ -118,7 +133,7 @@ codex --version
 grok --version
 ```
 
-Then drop `--mock` and, if needed, set model, Provider, permission, and sandbox in configuration or the UI. Empty `provider`, `model`, `effort`, and `instructions` inherit each selected native CLI's user/global configuration. PairRoom does not replace CLI login or credential management.
+Then start the real Management Service with `make dev` (not `--mock`) and, if needed, set model, Provider, permission, and sandbox in configuration or the UI. Empty `provider`, `model`, `effort`, and `instructions` inherit each selected native CLI's user/global configuration. PairRoom does not replace CLI login or credential management.
 
 ## 7. End correctly
 

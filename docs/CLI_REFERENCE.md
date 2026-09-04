@@ -27,7 +27,13 @@ pairroom <command> --help
 
 ## Common entry points
 
-Mock Management Service:
+From a source checkout, stop leftover daemon ownership and open the current Management Shell:
+
+```bash
+make dev
+```
+
+That is `go run ./cmd/pairroom service --recover-stale-lock` after `make stop`. Mock Management Service with an installed binary:
 
 ```bash
 pairroom service --mock

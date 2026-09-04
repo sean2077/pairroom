@@ -23,7 +23,7 @@ ifeq ($(strip $(GOBIN)),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: build install test race vet fmt check agent-contract release-contract cover run demo smoke release package desktop-build desktop-package clean docs-check
+.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package clean docs-check
 
 build:
 	mkdir -p $(DIST)
@@ -84,6 +84,12 @@ release-contract:
 	@notes="$$(mktemp)"; trap 'rm -f "$$notes"' 0 1 2 3 15; \
 		"$(PYTHON)" scripts/extract-changelog.py --changelog CHANGELOG.md --tag "v$(VERSION)" --output "$$notes"; \
 		test -s "$$notes"
+
+stop:
+	"$(PYTHON)" scripts/stop-background.py
+
+dev: stop
+	go run ./cmd/pairroom service --recover-stale-lock
 
 run:
 	go run ./cmd/pairroom serve --repo .

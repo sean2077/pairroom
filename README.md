@@ -51,10 +51,10 @@ Release assets are named by prefix: `pairroom-cli-vX.Y.Z-…` is the command lin
 
 ## Quick start
 
-Verify PairRoom itself without starting real Agents:
+Stop leftover daemon ownership and open the current-tree Management Shell:
 
 ```bash
-go run ./cmd/pairroom service --mock
+make dev
 ```
 
 After the Management Shell opens:

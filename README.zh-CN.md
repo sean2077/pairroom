@@ -51,10 +51,10 @@ Release 资产按前缀区分：`pairroom-cli-vX.Y.Z-…` 是命令行，`pairro
 
 ## 快速体验
 
-只验证 PairRoom 本身，不启动真实 Agent：
+关掉遗留 daemon，并打开当前源码的 Management Shell：
 
 ```bash
-go run ./cmd/pairroom service --mock
+make dev
 ```
 
 Management Shell 打开后：

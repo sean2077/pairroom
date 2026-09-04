@@ -8,6 +8,8 @@
 - `pairroom daemon`: manage the Service as a local background process;
 - `--mock`: deterministic verification mode that does not start vendor CLIs.
 
+From a source checkout, `make dev` stops an installed daemon, recovers a crash-stale lock only after the recorded PID is gone, starts the current-tree Management Service, and opens the Management Shell. `make stop` is the stop-only helper. Do not leave `make dev` running at the same time as a started daemon.
+
 All built-in entries default to numeric loopback. Before exposing any other interface, configure a token and assess the risk of local repositories, Agent credentials, and attachments.
 
 ## Desktop lifecycle
