@@ -693,6 +693,7 @@ select { appearance: auto; }
 .room-row-main { min-width: 0; }
 .room-title-line { min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .room-title-line strong { overflow: hidden; color: var(--text-strong); text-overflow: ellipsis; white-space: nowrap; }
+.flush-heading { margin: 0; }
 .room-meta { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 5px 12px; color: var(--muted); font-size: 10px; }
 .room-meta code { color: var(--subtle); }
 .room-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 6px; }
@@ -746,8 +747,10 @@ select { appearance: auto; }
 .capacity-heading { display: flex; align-items: end; justify-content: space-between; gap: 10px; }
 .capacity-value { color: var(--text-strong); font-size: 26px; font-weight: 760; letter-spacing: -.04em; }
 .capacity-value small { color: var(--muted); font-size: 12px; font-weight: 600; }
-.progress-track { height: 9px; overflow: hidden; border-radius: 99px; background: var(--bg-muted); }
-.progress-bar { height: 100%; min-width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--accent), #6f9fe9); transition: width .25s ease; }
+.progress-track { width: 100%; height: 9px; overflow: hidden; border: 0; border-radius: 99px; appearance: none; background: var(--bg-muted); }
+.progress-track::-webkit-progress-bar { border-radius: inherit; background: var(--bg-muted); }
+.progress-track::-webkit-progress-value { border-radius: inherit; background: linear-gradient(90deg, var(--accent), #6f9fe9); transition: inline-size .25s ease; }
+.progress-track::-moz-progress-bar { border-radius: inherit; background: linear-gradient(90deg, var(--accent), #6f9fe9); transition: inline-size .25s ease; }
 .capacity-legend { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 10px; }
 .capacity-legend span { display: inline-flex; align-items: center; gap: 5px; }
 .capacity-legend i { width: 7px; height: 7px; border-radius: 50%; background: var(--subtle); }
@@ -776,6 +779,7 @@ select { appearance: auto; }
 .callout.danger { border-color: var(--danger-line); background: var(--danger-soft); }
 .callout.danger strong { color: var(--danger); }
 .callout.neutral { background: var(--bg-soft); }
+.project-diagnostic-callout { margin: 12px 14px 0; }
 
 .settings-grid { display: grid; grid-template-columns: minmax(210px, .3fr) minmax(0, 1fr); gap: 20px; }
 .settings-nav { align-self: start; position: sticky; top: 118px; display: grid; gap: 4px; padding: 8px; }
@@ -821,7 +825,7 @@ select { appearance: auto; }
 }
 .modal-small { width: min(480px, calc(100vw - 28px)); }
 .modal-medium { width: min(650px, calc(100vw - 28px)); }
-.modal-large { width: min(860px, calc(100vw - 28px)); }
+.modal-large { width: min(1120px, calc(100vw - 28px)); }
 .modal::backdrop { background: rgba(3, 6, 13, .62); backdrop-filter: blur(5px); }
 .modal[open] { animation: modal-in .17s ease both; }
 .modal > form { display: contents; }
@@ -842,6 +846,15 @@ select { appearance: auto; }
 .binding-card legend > span:last-child { display: grid; }
 .binding-card legend strong { color: var(--text); font-size: 11px; }
 .binding-card legend small { color: var(--subtle); font-size: 8px; }
+.agent-selection-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.agent-selection-grid > label { min-width: 0; display: grid; gap: 5px; }
+.agent-selection-grid select, .agent-selection-grid input, .agent-selection-grid textarea { width: 100%; }
+.agent-selection-grid .agent-model-field, .agent-selection-grid .agent-instructions { grid-column: 1 / -1; }
+.agent-advanced { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--surface-soft); }
+.agent-advanced summary { cursor: pointer; color: var(--muted); font-size: 10px; font-weight: 700; }
+.agent-advanced[open] summary { margin-bottom: 10px; }
+.compact-callout { margin: 9px 0 0; padding: 8px 10px; font-size: 9px; }
+.runtime-unavailable { color: var(--danger); }
 .agent-avatar { width: 27px; height: 27px; display: inline-grid; place-items: center; border-radius: 8px; color: white; font-size: 10px; font-weight: 800; }
 .choice-card { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: start; padding: 9px; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; }
 .choice-card:hover { border-color: var(--line-strong); background: var(--bg-soft); }
@@ -874,6 +887,8 @@ select { appearance: auto; }
 
 .skeleton { position: relative; overflow: hidden; min-height: 14px; border-radius: 7px; background: var(--bg-muted); }
 .skeleton::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--bg-raised) 55%, transparent), transparent); animation: shimmer 1.25s infinite; }
+.skeleton-tall { height: 300px; }
+.clipboard-copy-source { position: fixed; opacity: 0; pointer-events: none; }
 .loading-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .loading-card { height: 118px; }
 .muted { color: var(--muted); }
@@ -952,7 +967,7 @@ body[data-density="compact"] .stat-card { min-height: 98px; }
   .room-actions { justify-content: start; }
   .detail-hero { grid-template-columns: 1fr; }
   .detail-actions { justify-content: start; }
-  .form-grid.two-columns, .binding-grid { grid-template-columns: 1fr; }
+  .form-grid.two-columns, .binding-grid, .agent-selection-grid { grid-template-columns: 1fr; }
   .callout { display: grid; }
   .setting-row { grid-template-columns: 1fr; gap: 9px; }
   .setting-control { min-width: 0; justify-content: start; }
@@ -1028,8 +1043,8 @@ body[data-density="compact"] .stat-card { min-height: 98px; }
     padding-bottom: 9px;
   }
   .runtime-table tr.runtime-record td[data-label="Room"]::before,
-  .runtime-table tr.runtime-record td[data-label="操作"]::before { display: none; }
-  .runtime-table tr.runtime-record td[data-label="操作"] {
+  .runtime-table tr.runtime-record td.runtime-action-cell::before { display: none; }
+  .runtime-table tr.runtime-record td.runtime-action-cell {
     grid-template-columns: minmax(0, 1fr);
     padding-top: 10px;
   }

@@ -938,7 +938,7 @@ func (r *Registry) trustedCheckpointRooms() (map[string]Room, bool, string) {
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return nil, false, "service registry checkpoint contains trailing JSON"
 	}
-	if snapshot.Schema != 1 {
+	if snapshot.Schema != 1 && snapshot.Schema != 2 {
 		return nil, false, fmt.Sprintf("unsupported service registry checkpoint schema %d", snapshot.Schema)
 	}
 

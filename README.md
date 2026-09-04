@@ -8,7 +8,9 @@
 
 PairRoom is a local collaboration control plane for official Claude Code, Codex, and Grok Build harnesses. Each durable Room has two independent Agent slots. Either slot may select Claude Code, Codex, or Grok Build, and both slots may use the same runtime. PairRoom keeps each native CLI's sessions, tools, approvals, and sandbox; it only organizes the user, two Agents, and the project workspace into an observable, interruptible, and auditable collaboration.
 
-Empty `provider`, `model`, `effort`, and `instructions` inherit the selected native CLI's user/global configuration. Add only explicit PairRoom overrides.
+When creating a Room, configure each Agent slot's Runtime, native or CC Switch Provider reference, editable model, effort, instructions, and Runtime-specific safety policy. The selection is immutable for that Room. Native Provider references inherit the selected CLI's user/global configuration; PairRoom reads supported CC Switch 3.20.1/schema 18 API-key Profiles without changing CC Switch current state or storing credentials.
+
+Management, Room View, and Desktop startup share embedded i18next 26.4.2 `en`/`zh-CN` catalogs and a persisted language choice. The Management topbar, Room tabstrip, Settings, and standalone Room expose the same `system | light | dark` theme preference; embedded Rooms follow Management.
 
 ## Core model
 
@@ -65,7 +67,7 @@ After the Management Shell opens:
 4. Send a single-Agent task, or describe a sequential workflow;
 5. Watch Turn, tool activity, approvals, delivery, and error state in Room View.
 
-Before using a real runtime, confirm that each selected CLI (`claude`, `codex`, and/or `grok`) is installed, signed in, and can work independently in the target repository. Empty provider/model/effort/instructions inherit that CLI's global config. Full steps are in [Getting Started](docs/GETTING_STARTED.md).
+Before using a real Runtime, confirm that each selected CLI (`claude`, `codex`, and/or `grok`) is installed, authenticated for its selected Provider, and can work independently in the target repository. The create-Room catalog shows unavailable Runtimes and unsupported CC Switch Profiles without making network model-discovery requests. Full steps are in [Getting Started](docs/GETTING_STARTED.md).
 
 ## Desktop
 
@@ -109,7 +111,7 @@ make desktop-package
 
 `make desktop-build` builds the current-platform desktop host and bundled `pairroom` CLI. `make desktop-package` builds the current-platform production installer or app bundle (Windows NSIS, including `PairRoom.exe` and `bin\pairroom.exe`). Artifacts land in `desktop/bin/`. Desktop module tests still run from `desktop/`: `cd desktop && go test -count=1 ./...`.
 
-`docs-check` verifies documentation links, source paths, CLI flags, HTTP routes, and JSON configuration fields so docs cannot silently drift as the code evolves. The desktop module uses a separate Go toolchain and dependency lock and does not change the root module's standard-library-only boundary.
+`docs-check` verifies documentation links, source paths, CLI flags, HTTP routes, and JSON configuration fields so docs cannot silently drift as the code evolves. The root and desktop modules use Go 1.25. The root dependency gate permits only the pinned CGo-free SQLite closure; Wails remains isolated to the desktop module. Third-party notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Status and boundaries
 

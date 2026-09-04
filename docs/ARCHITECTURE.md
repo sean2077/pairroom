@@ -39,6 +39,8 @@ Every adapter must emit the configured slot actor on events. Never hard-code a v
 | State | Authority |
 |---|---|
 | Project / Room registration and Binding | Service registry and Room service events |
+| Per-Room Runtime/Provider/model/policy selection | schema-v2 `service.room.provisioned` event (`Room.agents`) |
+| CC Switch Profile contents and credentials | CC Switch schema-18 database; read afresh for creation validation and activation |
 | Messages, approvals, roles, Workflow, Turn summary | Room Event Log |
 | Current native process / stdout / request ID | Agent adapter |
 | live source tree | Driver workspace |
@@ -77,6 +79,8 @@ Desktop startup follows a single-owner decision: validated explicit Management U
 - `cmd/pairroom/`: CLI and startup assembly;
 - `desktop/`: isolated Go 1.25 / Wails v3 module, native host and platform packaging only;
 - `internal/service/`: Project / Room lifecycle, Binding, and runtime capacity;
+- `internal/ccswitch/`: pinned, query-only CC Switch schema adapter and secret-safe process materialization;
+- `internal/webui/`: shared embedded i18next, bilingual catalogs, locale formatting, and theme runtime;
 - `internal/room/`: Event Log projection, scheduler, Workflow, and approvals;
 - `internal/agent/`: Claude Code / Codex / Grok Build native protocol adapters; each adapter emits the configured slot actor;
 - `internal/server/`: Management Shell, Room View, HTTP, and SSE;
@@ -84,7 +88,7 @@ Desktop startup follows a single-owner decision: validated explicit Management U
 - `internal/archive/`: archive / backup implementation;
 - `internal/model/types.go`: cross-layer durable model.
 
-`desktop/go.mod` isolates Wails and GUI dependencies. The root module stays on Go 1.23 with zero external standard-library dependencies. The desktop host must not copy the Management / Room frontend, and must not redo Service lifecycle or authentication in JavaScript.
+`desktop/go.mod` isolates Wails and GUI dependencies. Both modules require Go 1.25. The root module admits only the pinned CGo-free `modernc.org/sqlite` dependency closure, enforced by a strict module allowlist; this keeps four-platform `CGO_ENABLED=0` CLI releases while enabling read-only CC Switch access. The desktop host must not copy the Management / Room frontend, and must not redo Service lifecycle or authentication in JavaScript.
 
 ## Runtime lifecycle
 
@@ -92,7 +96,17 @@ The Service can activate or reclaim a Room runtime according to capacity and idl
 
 Role / workspace switches must share the same safety boundary as delivery serialization, so a reviewer snapshot is not captured while the Driver is still mutating the live tree.
 
-Empty Provider/model/effort/instructions and runtime-policy overrides inherit the selected native CLI's user/global configuration. Grok Build prompt and instruction text stay in a prompt file, never in process argv.
+New Rooms snapshot two secret-free `AgentSelection` values. Native ProviderRefs inherit CLI user/global configuration; CC Switch ProviderRefs are resolved into an ephemeral child-process configuration at activation. Already active processes are not mutated when a Profile changes. Grok Build prompt and instruction text stay in a prompt file, never in process argv.
+
+The provisioning event schema is version 2. Its reader accepts schema 1 as `Legacy defaults` without rewriting the Event Log. Unknown newer provisioning schemas fail closed, so downgrade requires restoring the pre-upgrade data-root backup rather than allowing an old binary to reinterpret new Room facts. `service-registry.json` uses checkpoint schema 2 and remains a rebuildable index.
+
+## CC Switch boundary
+
+PairRoom reads only CC Switch v3.20.1/schema 18. The database connection uses `mode=ro` and `PRAGMA query_only=1`; PairRoom never changes the current Profile or invokes CC Switch mutation paths. The safe public catalog contains Profile identity, display name, Runtime, local model suggestions, support state, and disabled reason. Raw `settings_config` and `meta` remain inside the mapper. Only directly materializable API-key configurations cross the boundary: secrets become environment entries for one target child, while safe Provider/model parameters may become CLI overrides. Missing, locked, malformed, deleted, unsupported, or version-mismatched state fails activation without fallback.
+
+## Shared presentation preferences
+
+Management, Room View, and Desktop startup load one embedded i18next 26.4.2 runtime and the same `en`/`zh-CN` semantic-key catalogs. Browser language chooses the first locale, `pairroom.lang` persists later choices, and English is the fallback. User content, host paths, and raw native Runtime output bypass translation. Theme selection uses the shared `pairroom.theme` `system|light|dark` value. Management broadcasts changes to embedded Room surfaces; a standalone Room retains its own control while an embedded Room hides it.
 
 ## Web updates and native windows
 

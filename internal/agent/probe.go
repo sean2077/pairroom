@@ -80,7 +80,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 			"--append-system-prompt", "--append-system-prompt-file",
 			"--include-partial-messages", "--replay-user-messages",
 			"--forward-subagent-text", "--include-hook-events",
-			"--model", "--permission-mode", "--disallowedTools",
+			"--model", "--effort", "--permission-mode", "--disallowedTools",
 			"--resume", "--session-id", "--verbose", "--add-dir",
 		}
 		if helpErr != nil {
@@ -89,7 +89,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 			// wrapper suppresses help output. Newer telemetry flags stay disabled.
 			for _, flag := range []string{
 				"--append-system-prompt", "--include-partial-messages", "--replay-user-messages",
-				"--model", "--permission-mode", "--disallowedTools",
+				"--model", "--effort", "--permission-mode", "--disallowedTools",
 				"--resume", "--session-id", "--verbose", "--add-dir",
 			} {
 				result.SupportedFlags[flag] = true

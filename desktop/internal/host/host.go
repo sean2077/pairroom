@@ -14,13 +14,11 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/desktop/internal/access"
-	"github.com/sean2077/pairroom/internal/agent"
+	"github.com/sean2077/pairroom/internal/ccswitch"
 	"github.com/sean2077/pairroom/internal/config"
 	"github.com/sean2077/pairroom/internal/daemon"
 	"github.com/sean2077/pairroom/internal/execx"
-	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/service"
-	"github.com/sean2077/pairroom/internal/version"
 )
 
 const (
@@ -348,42 +346,22 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 		return nil, err
 	}
 
-	claude := agent.Config{
-		Actor:                  model.ActorClaude,
-		ClientVersion:          version.Current,
-		Command:                fileConfig.Claude.Command,
-		CommandArgs:            append([]string(nil), fileConfig.Claude.Args...),
-		Env:                    copyEnvironment(fileConfig.Claude.RuntimeEnv),
-		Runtime:                fileConfig.Claude.RuntimeKind(model.ActorClaude),
-		Provider:               fileConfig.Claude.Provider,
-		Model:                  fileConfig.Claude.Model,
-		Effort:                 fileConfig.Claude.Effort,
-		PermissionMode:         fileConfig.Claude.PermissionMode,
-		ApprovalPolicy:         fileConfig.Claude.ApprovalPolicy,
-		Sandbox:                fileConfig.Claude.Sandbox,
-		AdditionalInstructions: strings.TrimSpace(fileConfig.Claude.Instructions),
+	ccSwitchReader, err := ccswitch.NewReader(fileConfig.CCSwitch.Database)
+	if err != nil {
+		cancel()
+		return nil, err
 	}
-	codex := agent.Config{
-		Actor:                  model.ActorCodex,
-		ClientVersion:          version.Current,
-		Command:                fileConfig.Codex.Command,
-		CommandArgs:            append([]string(nil), fileConfig.Codex.Args...),
-		Env:                    copyEnvironment(fileConfig.Codex.RuntimeEnv),
-		Runtime:                fileConfig.Codex.RuntimeKind(model.ActorCodex),
-		Provider:               fileConfig.Codex.Provider,
-		Model:                  fileConfig.Codex.Model,
-		Effort:                 fileConfig.Codex.Effort,
-		PermissionMode:         fileConfig.Codex.PermissionMode,
-		ApprovalPolicy:         fileConfig.Codex.ApprovalPolicy,
-		Sandbox:                fileConfig.Codex.Sandbox,
-		AdditionalInstructions: strings.TrimSpace(fileConfig.Codex.Instructions),
+	agentResolver, err := service.NewAgentResolver(service.AgentResolverConfig{
+		Defaults: fileConfig.DefaultSelections(), Runtimes: fileConfig.Runtimes,
+		CCSwitch: ccSwitchReader, Mock: options.Mock,
+	})
+	if err != nil {
+		cancel()
+		return nil, err
 	}
-	claude.PeerRuntime = codex.Runtime
-	codex.PeerRuntime = claude.Runtime
 
 	var provisioner service.BindingProvisioner = service.NewNativeProvisioner(service.NativeProvisionerConfig{
-		Claude: claude,
-		Codex:  codex,
+		Resolver: agentResolver,
 	})
 	if options.Mock {
 		provisioner = service.SyntheticProvisioner{}
@@ -396,8 +374,7 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 		RoutingMode:         fileConfig.RoutingMode,
 		MaxAgentHops:        fileConfig.MaxAgentHops,
 		StallWarningSeconds: fileConfig.StallWarningSeconds,
-		Claude:              claude,
-		Codex:               codex,
+		Resolver:            agentResolver,
 	})
 	limit := options.RuntimeLimit
 	if limit < 1 {
@@ -428,10 +405,11 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 		return err
 	}
 	management, err := service.NewManagementServer(service.ManagementServerConfig{
-		Registry:    registry,
-		Runtimes:    runtimes,
-		Provisioner: provisioner,
-		Token:       fileConfig.Token,
+		Registry:      registry,
+		Runtimes:      runtimes,
+		Provisioner:   provisioner,
+		Token:         fileConfig.Token,
+		AgentResolver: agentResolver,
 	})
 	if err != nil {
 		cleanupErr := cleanupRuntimes()
@@ -480,17 +458,6 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 	}
 	cleanupLock = false
 	return host, nil
-}
-
-func copyEnvironment(source map[string]string) map[string]string {
-	if len(source) == 0 {
-		return nil
-	}
-	result := make(map[string]string, len(source))
-	for name, value := range source {
-		result[name] = value
-	}
-	return result
 }
 
 func (h *Host) Mode() Mode {

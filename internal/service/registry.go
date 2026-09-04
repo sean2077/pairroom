@@ -228,7 +228,7 @@ func (r *Registry) Snapshot(includeArchived bool) RegistrySnapshot {
 		}
 		rooms = append(rooms, cloneRoom(room))
 	}
-	return RegistrySnapshot{Schema: 1, GeneratedAt: r.now(), Projects: projects, Rooms: rooms}.Sorted()
+	return RegistrySnapshot{Schema: 2, GeneratedAt: r.now(), Projects: projects, Rooms: rooms}.Sorted()
 }
 
 func (r *Registry) BindingOwner(key BindingKey) (string, bool) {
@@ -261,7 +261,7 @@ func (r *Registry) loadCheckpointProjects() {
 		return
 	}
 	var snapshot RegistrySnapshot
-	if json.Unmarshal(data, &snapshot) != nil || snapshot.Schema != 1 {
+	if json.Unmarshal(data, &snapshot) != nil || (snapshot.Schema != 1 && snapshot.Schema != 2) {
 		return
 	}
 	for _, project := range snapshot.Projects {
@@ -412,8 +412,16 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 			if err := json.Unmarshal(event.Data, &payload); err != nil {
 				return Room{}, Project{}, false, fmt.Errorf("decode %s event %d: %w", event.Kind, event.Seq, err)
 			}
-			if payload.Schema != 1 {
+			if payload.Schema != 1 && payload.Schema != 2 {
 				return Room{}, Project{}, false, fmt.Errorf("unsupported room service schema %d", payload.Schema)
+			}
+			if payload.Schema == 1 && len(payload.Agents) != 0 {
+				return Room{}, Project{}, false, errors.New("room service schema 1 must not contain Agent selections")
+			}
+			if payload.Schema == 2 {
+				if _, err := validateAgentSelections(payload.Agents); err != nil {
+					return Room{}, Project{}, false, fmt.Errorf("invalid provisioned Agent selections: %w", err)
+				}
 			}
 			if payload.RoomID != event.RoomID {
 				return Room{}, Project{}, false, fmt.Errorf("provisioned room ID %q conflicts with event room ID %q", payload.RoomID, event.RoomID)
@@ -605,7 +613,9 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 			DataDir:                  dir,
 			Lifecycle:                payload.Lifecycle,
 			Bindings:                 cloneBindings(payload.Bindings),
+			Agents:                   cloneAgentSelections(payload.Agents),
 			TranscriptBoundaryNotice: payload.TranscriptBoundaryNotice,
+			LegacyDefaults:           payload.Schema == 1,
 			CreatedAt:                payload.CreatedAt,
 			UpdatedAt:                updatedAt,
 		}
@@ -664,8 +674,8 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 	room := Room{
 		ID: meta.ID, ProjectID: project.ID, Name: name, DataDir: dir,
 		Lifecycle: lifecycle, Bindings: bindings,
-		TranscriptBoundaryNotice: TranscriptBoundaryNotice,
-		Legacy:                   true, CreatedAt: meta.CreatedAt, UpdatedAt: updatedAt,
+		TranscriptBoundaryNotice: LegacyTranscriptBoundaryNotice,
+		Legacy:                   true, LegacyDefaults: true, CreatedAt: meta.CreatedAt, UpdatedAt: updatedAt,
 	}
 	if bindingsCompleted != nil {
 		room.Bindings = cloneBindings(bindingsCompleted.Bindings)
@@ -815,7 +825,7 @@ func (r *Registry) indexRoomLocked(project Project, room Room) error {
 }
 
 func (r *Registry) writeCheckpointLocked() (bool, error) {
-	snapshot := RegistrySnapshot{Schema: 1, GeneratedAt: r.now()}
+	snapshot := RegistrySnapshot{Schema: 2, GeneratedAt: r.now()}
 	for _, project := range r.projects {
 		snapshot.Projects = append(snapshot.Projects, project)
 	}
@@ -904,6 +914,7 @@ func readEventsReadOnly(path string) ([]model.Event, error) {
 
 func cloneRoom(room Room) Room {
 	room.Bindings = cloneBindings(room.Bindings)
+	room.Agents = cloneAgentSelections(room.Agents)
 	return room
 }
 

@@ -46,7 +46,7 @@ func TestGrokCommandPassesExplicitOverrides(t *testing.T) {
 	}, func(model.RuntimeEvent) {})
 	args := adapter.buildArgs("/tmp/prompt.txt", "session-1")
 	joined := strings.Join(args, " ")
-	for _, want := range []string{"--model grok-4.6", "--effort high", "--yolo", "--sandbox workspace-write", "--resume session-1"} {
+	for _, want := range []string{"--model grok-4.6", "--effort high", "--permission-mode auto", "--sandbox workspace", "--resume session-1"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing %q in %s", want, joined)
 		}

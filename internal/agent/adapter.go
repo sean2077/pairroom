@@ -20,7 +20,7 @@ type Config struct {
 	ClientVersion          string
 	Command                string
 	CommandArgs            []string
-	Env                    map[string]string
+	Env                    map[string]string `json:"-"`
 	Runtime                model.RuntimeKind
 	PeerRuntime            model.RuntimeKind
 	Provider               string
@@ -33,6 +33,7 @@ type Config struct {
 	SessionID              string
 	RequireExactSession    bool
 	SystemPrompt           string
+	OrdinaryReviewerPolicy model.OrdinaryReviewerPolicy
 	MockDelay              time.Duration
 }
 

@@ -21,7 +21,7 @@ The Wails layer owns only native desktop concerns:
 - explicit native quit;
 - platform packaging.
 
-The root module remains Go 1.23 and standard-library-only. Wails and its dependencies are confined to the nested `desktop/go.mod`, which uses Go 1.25 as required by Wails v3 beta.16.
+The root and desktop modules use Go 1.25. The root permits only the pinned CGo-free SQLite dependency closure used for read-only CC Switch access; Wails and its GUI dependencies remain confined to `desktop/go.mod`.
 
 ## Development
 

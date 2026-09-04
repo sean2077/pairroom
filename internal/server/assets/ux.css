@@ -503,7 +503,7 @@ body.ux-density-compact .tab-content { padding: 9px; }
 
 @media (max-width: 430px) {
   body.ux-enhanced .brand-name { font-size: 13px; }
-  body.ux-enhanced #theme-button { display: none; }
+  html[data-embed="1"] body.ux-enhanced #theme-button { display: none; }
   body.ux-enhanced .toolbar-actions .mini-select,
   body.ux-enhanced #export-markdown { display: none; }
   body.ux-enhanced .toolbar-actions { max-width: 72%; }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -49,7 +50,11 @@ func main() {
 		fatal("invalid build date: %v", err)
 	}
 
-	if err := writeSBOM(*dist, *version, *commit, *buildDate); err != nil {
+	dependencies, err := moduleDependencies()
+	if err != nil {
+		fatal("resolve module dependencies: %v", err)
+	}
+	if err := writeSBOM(*dist, *version, *commit, *buildDate, dependencies); err != nil {
 		fatal("write SBOM: %v", err)
 	}
 	artifacts, err := scanArtifacts(*dist, map[string]bool{"SHA256SUMS": true, "pairroom-v" + *version + "-provenance.json": true})
@@ -59,7 +64,7 @@ func main() {
 	value := provenance{
 		Schema:  "https://github.com/sean2077/pairroom/schemas/release-provenance-v1",
 		Project: "PairRoom", Version: *version, SourceCommit: *commit, BuildDate: *buildDate,
-		GoVersion: runtime.Version(), Module: "github.com/sean2077/pairroom", Dependencies: []string{}, Artifacts: artifacts,
+		GoVersion: runtime.Version(), Module: "github.com/sean2077/pairroom", Dependencies: dependencies, Artifacts: artifacts,
 	}
 	if err := writeJSON(filepath.Join(*dist, "pairroom-v"+*version+"-provenance.json"), value); err != nil {
 		fatal("write provenance: %v", err)
@@ -77,8 +82,32 @@ func main() {
 	}
 }
 
-func writeSBOM(dist, version, commit, buildDate string) error {
+func writeSBOM(dist, version, commit, buildDate string, dependencies []string) error {
 	namespace := "https://github.com/sean2077/pairroom/releases/tag/v" + version + "#" + commit
+	packages := []any{map[string]any{
+		"name": "PairRoom", "SPDXID": "SPDXRef-Package-PairRoom", "versionInfo": version,
+		"downloadLocation": "https://github.com/sean2077/pairroom",
+		"filesAnalyzed":    false, "licenseConcluded": "MIT", "licenseDeclared": "MIT",
+		"copyrightText": "Copyright (c) 2026 Sean",
+		"externalRefs": []any{map[string]any{
+			"referenceCategory": "PACKAGE-MANAGER", "referenceType": "purl",
+			"referenceLocator": "pkg:golang/github.com/sean2077/pairroom@v" + version,
+		}},
+	}}
+	relationships := []any{map[string]any{
+		"spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES", "relatedSpdxElement": "SPDXRef-Package-PairRoom",
+	}}
+	for index, dependency := range dependencies {
+		path, dependencyVersion, _ := strings.Cut(dependency, "@")
+		id := fmt.Sprintf("SPDXRef-Package-Dependency-%d", index+1)
+		packages = append(packages, map[string]any{
+			"name": path, "SPDXID": id, "versionInfo": dependencyVersion,
+			"downloadLocation": "NOASSERTION", "filesAnalyzed": false,
+			"licenseConcluded": "NOASSERTION", "licenseDeclared": "NOASSERTION", "copyrightText": "NOASSERTION",
+			"externalRefs": []any{map[string]any{"referenceCategory": "PACKAGE-MANAGER", "referenceType": "purl", "referenceLocator": "pkg:golang/" + path + "@" + dependencyVersion}},
+		})
+		relationships = append(relationships, map[string]any{"spdxElementId": "SPDXRef-Package-PairRoom", "relationshipType": "DEPENDS_ON", "relatedSpdxElement": id})
+	}
 	doc := map[string]any{
 		"spdxVersion":       "SPDX-2.3",
 		"dataLicense":       "CC0-1.0",
@@ -89,21 +118,26 @@ func writeSBOM(dist, version, commit, buildDate string) error {
 			"created":  buildDate,
 			"creators": []string{"Tool: PairRoom-releasemeta", "Organization: PairRoom contributors"},
 		},
-		"packages": []any{map[string]any{
-			"name": "PairRoom", "SPDXID": "SPDXRef-Package-PairRoom", "versionInfo": version,
-			"downloadLocation": "https://github.com/sean2077/pairroom",
-			"filesAnalyzed":    false, "licenseConcluded": "MIT", "licenseDeclared": "MIT",
-			"copyrightText": "Copyright (c) 2026 Sean",
-			"externalRefs": []any{map[string]any{
-				"referenceCategory": "PACKAGE-MANAGER", "referenceType": "purl",
-				"referenceLocator": "pkg:golang/github.com/sean2077/pairroom@v" + version,
-			}},
-		}},
-		"relationships": []any{map[string]any{
-			"spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES", "relatedSpdxElement": "SPDXRef-Package-PairRoom",
-		}},
+		"packages":      packages,
+		"relationships": relationships,
 	}
 	return writeJSON(filepath.Join(dist, "pairroom-v"+version+"-SBOM.spdx.json"), doc)
+}
+
+func moduleDependencies() ([]string, error) {
+	command := exec.Command("go", "list", "-m", "-f", "{{if not .Main}}{{.Path}}@{{.Version}}{{end}}", "all")
+	output, err := command.Output()
+	if err != nil {
+		return nil, err
+	}
+	var result []string
+	for _, line := range strings.Split(string(output), "\n") {
+		if value := strings.TrimSpace(line); value != "" {
+			result = append(result, value)
+		}
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 func scanArtifacts(dir string, skip map[string]bool) ([]artifact, error) {

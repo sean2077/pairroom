@@ -39,6 +39,7 @@ type EmbeddedRuntimeConfig struct {
 	StallWarningSeconds int
 	Claude              agent.Config
 	Codex               agent.Config
+	Resolver            *AgentResolver
 	DrainPollInterval   time.Duration
 }
 
@@ -261,16 +262,36 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 		return nil, fmt.Errorf("open Room workspace manager: %w", err)
 	}
 
-	claudeFactory := agent.SlotFactory(cfg.Mock, cfg.Claude.Runtime.CanonicalForSlot(model.ActorClaude))
-	codexFactory := agent.SlotFactory(cfg.Mock, cfg.Codex.Runtime.CanonicalForSlot(model.ActorCodex))
-	claudeFactory = transcriptBoundaryFactory(claudeFactory)
-	codexFactory = transcriptBoundaryFactory(codexFactory)
+	claudeCfg := cfg.Claude
+	codexCfg := cfg.Codex
+	if cfg.Resolver != nil {
+		selections := durableRoom.Agents
+		if durableRoom.LegacyDefaults {
+			selections = cfg.Resolver.DefaultSelections()
+		}
+		claudeSelection := selections[model.ActorClaude]
+		codexSelection := selections[model.ActorCodex]
+		claudeCfg, err = cfg.Resolver.Resolve(startCtx, model.ActorClaude, claudeSelection, codexSelection.Runtime, project.Root, durableRoom.DataDir)
+		if err != nil {
+			return nil, fmt.Errorf("resolve Agent 1 activation: %w", err)
+		}
+		codexCfg, err = cfg.Resolver.Resolve(startCtx, model.ActorCodex, codexSelection, claudeSelection.Runtime, project.Root, durableRoom.DataDir)
+		if err != nil {
+			return nil, fmt.Errorf("resolve Agent 2 activation: %w", err)
+		}
+	}
+	claudeFactory := agent.SlotFactory(cfg.Mock, claudeCfg.Runtime.CanonicalForSlot(model.ActorClaude))
+	codexFactory := agent.SlotFactory(cfg.Mock, codexCfg.Runtime.CanonicalForSlot(model.ActorCodex))
+	// Credentials are present only in Config.Env for the child process. Redact
+	// any accidental echo from native stderr/telemetry before the transcript
+	// boundary or Room projection can persist/publish it.
+	claudeFactory = agent.RedactingFactory(transcriptBoundaryFactory(claudeFactory))
+	codexFactory = agent.RedactingFactory(transcriptBoundaryFactory(codexFactory))
 	pendingBindings := make(map[model.ActorID]bool, 2)
 	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
 		binding := durableRoom.Bindings[actor]
 		pendingBindings[actor] = binding.Pending && binding.Mode == BindingNew
 	}
-	claudeCfg := cfg.Claude
 	claudeCfg.ClientVersion = version.Current
 	claudeCfg.Actor = model.ActorClaude
 	claudeCfg.Runtime = claudeCfg.Runtime.CanonicalForSlot(model.ActorClaude)
@@ -278,7 +299,6 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 		claudeCfg.SessionID = durableRoom.Bindings[model.ActorClaude].SessionID
 	}
 	claudeCfg.RequireExactSession = true
-	codexCfg := cfg.Codex
 	codexCfg.ClientVersion = version.Current
 	codexCfg.Actor = model.ActorCodex
 	codexCfg.Runtime = codexCfg.Runtime.CanonicalForSlot(model.ActorCodex)

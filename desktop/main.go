@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/sean2077/pairroom/desktop/internal/host"
+	"github.com/sean2077/pairroom/internal/webui"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 )
@@ -299,7 +301,7 @@ func main() {
 			// /wails/runtime.js as well as the embedded startup assets. The
 			// runtime-ready event is required to safely deliver the asynchronous
 			// bootstrap result to the WebView.
-			Handler: application.BundledAssetFileServer(frontend),
+			Handler: desktopAssetHandler(),
 		},
 		SingleInstance: &application.SingleInstanceOptions{
 			UniqueID:      "com.sean2077.pairroom.desktop",
@@ -421,6 +423,13 @@ func main() {
 	}
 }
 
+func desktopAssetHandler() http.Handler {
+	mux := http.NewServeMux()
+	webui.Mount(mux)
+	mux.Handle("/", application.BundledAssetFileServer(frontend))
+	return mux
+}
+
 func requestQuit(app *application.App, controller *desktopController) {
 	if !controller.quitting.CompareAndSwap(false, true) {
 		return
@@ -442,7 +451,12 @@ func navigateWindow(window *application.WebviewWindow, value string) {
 }
 
 func showStartupError(window *application.WebviewWindow, err error) {
-	message := "桌面端没有启动第二个 Service。修复后台 Service 后，再次启动或重新打开 PairRoom 以重试。\n\n" + err.Error()
+	// Keep the native bridge locale-neutral. The startup page owns the bilingual
+	// explanatory copy; only the diagnostic detail crosses the bridge verbatim.
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
 	encoded, _ := json.Marshal(message)
 	window.ExecJS("window.pairroomDesktopError(" + string(encoded) + ");")
 }

@@ -12,6 +12,24 @@ PairRoom's CLI, Event Log, HTTP API, and native adapters evolve with the officia
 
 ## Current breaking boundary
 
+### Provider and Room provisioning migration
+
+This release moves the root module to Go 1.25, replaces PairRoom-owned Provider configuration with read-only CC Switch v3.20.1/schema 18 references, and writes new Rooms with provisioning schema 2.
+
+Before installing the new binary:
+
+1. Stop the Service after active Turns drain, then run `pairroom backup` for the complete data root and verify the archive;
+2. Preserve that backup unchanged as the downgrade point;
+3. Remove top-level `providers` and `cc_connect` configuration. Move per-slot `command`/`args` into `runtimes.claude`, `runtimes.codex`, or `runtimes.grok`;
+4. Replace a string-valued slot `provider` with `{"source":"native"}` or `{"source":"cc-switch","app_type":"…","profile_id":"…"}`. Use `pairroom providers --json` to inspect the sanitized CC Switch catalog and disabled reasons;
+5. If an existing schema-v1 Room depends on a former PairRoom Provider default, point the corresponding Service default slot at the equivalent CC Switch Profile before activating that Room.
+
+Configuration containing removed Provider fields fails startup with migration guidance; it is never silently ignored. PairRoom does not copy old secrets into CC Switch and does not change the CC Switch current Profile.
+
+Existing schema-v1 Rooms are read without modification and shown as `Legacy defaults`. New schema-v2 Rooms retain their immutable two-slot Agent selections. An older PairRoom binary fails closed on schema-v2 provisioning facts. To downgrade, stop the newer Service and restore the complete pre-upgrade data-root backup; do not copy individual Event Logs or edit schema numbers.
+
+### Routing migration
+
 The routing policy supports only:
 
 ```json

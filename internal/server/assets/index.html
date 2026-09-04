@@ -1,6 +1,4 @@
-<!doctype html>
-<html lang="zh-CN">
-<head>
+<!DOCTYPE html><html lang="en"><head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark light">
@@ -16,161 +14,161 @@
         <div class="brand-mark" aria-hidden="true"><span></span><span></span></div>
         <div>
           <div class="brand-name">PairRoom</div>
-          <div class="brand-tagline">Native agent collaboration</div>
+          <div class="brand-tagline" data-i18n="room.nativeAgentCollaboration">Native Agent collaboration</div>
         </div>
       </div>
       <div class="room-heading">
         <h1 id="room-name">Claude × Codex</h1>
-        <div id="repo-path" class="repo-path">Loading workspace…</div>
+        <div id="repo-path" class="repo-path" data-i18n="room.loadingWorkspace">Loading workspace…</div>
       </div>
       <div class="topbar-actions">
-        <div id="connection" class="connection disconnected"><span class="status-dot"></span><span>Connecting</span></div>
-        <button id="notification-button" class="icon-button" title="启用桌面通知" aria-label="启用桌面通知" data-i18n="启用桌面通知" data-i18n-title>♢</button>
-        <button id="language-button" class="icon-button" type="button" title="切换到英文" aria-label="切换到英文">EN</button>
-        <button id="theme-button" class="icon-button" title="切换主题" aria-label="切换主题" data-i18n="切换主题" data-i18n-title>◐</button>
-        <button id="refresh-button" class="icon-button" title="刷新房间" aria-label="刷新房间" data-i18n="刷新房间" data-i18n-title>↻</button>
-        <button id="leave-room" class="ghost-button" type="button" title="退出 Room；不会停止 Agent" data-i18n="退出 Room">退出 Room</button>
+        <div id="connection" class="connection disconnected"><span class="status-dot"></span><span data-i18n="ui.connecting">Connecting</span></div>
+        <button id="notification-button" class="icon-button" title="Enable desktop notifications" aria-label="Enable desktop notifications" data-i18n-title="ui.enableDesktopNotifications" data-i18n-aria-label="ui.enableDesktopNotifications">♢</button>
+        <button id="language-button" class="icon-button" type="button" title="Switch to English" aria-label="Switch to English" data-i18n-title="ui.switchToEnglish" data-i18n-aria-label="ui.switchToEnglish">EN</button>
+        <button id="theme-button" class="icon-button" title="Toggle theme" aria-label="Toggle theme" data-i18n-title="ui.toggleTheme" data-i18n-aria-label="ui.toggleTheme">◐</button>
+        <button id="refresh-button" class="icon-button" title="Refresh room" aria-label="Refresh room" data-i18n="ui.refreshRoom" data-i18n-title="ui.refreshRoom" data-i18n-aria-label="ui.refreshRoom">↻</button>
+        <button id="leave-room" class="ghost-button" type="button" title="Leave the Room; this does not stop either Agent" data-i18n="ui.leaveRoom" data-i18n-title="ui.leaveTheRoomThisDoesNotStopEitherAgent">Leave Room</button>
       </div>
     </header>
 
     <main class="workspace">
       <aside class="participants-panel panel">
         <div class="panel-heading">
-          <span data-i18n="参与者">参与者</span>
+          <span data-i18n="ui.participants">Participants</span>
           <span class="panel-count">3</span>
         </div>
         <div class="human-card participant-card">
           <div class="avatar avatar-human">Y</div>
           <div class="participant-main">
-            <div class="participant-title"><strong>You</strong><span class="authority-badge">Owner</span></div>
-            <div class="participant-subtitle" data-i18n="可随时介入、暂停或改向">可随时介入、暂停或改向</div>
+            <div class="participant-title"><strong data-i18n="common.you">You</strong><span class="authority-badge" data-i18n="common.owner">Owner</span></div>
+            <div class="participant-subtitle" data-i18n="ui.intervenePauseOrRedirectAtAnyTime">Intervene, pause, or redirect at any time</div>
           </div>
         </div>
         <div id="participants"></div>
 
         <div class="divider"></div>
         <section class="room-controls">
-          <div class="section-title" data-i18n="轮次策略">轮次策略</div>
-          <div class="strategy-note" data-i18n="单一轮次接力：同一时刻仅一个 Agent 工作；明确 @peer 或 HANDOFF + NEXT 才把下一轮交给对方。">单一轮次接力：同一时刻仅一个 Agent 工作；明确 @peer 或 HANDOFF + NEXT 才把下一轮交给对方。</div>
-          <label class="field-label" for="max-hops" data-i18n="单次接力最大轮数">单次接力最大轮数</label>
+          <div class="section-title" data-i18n="ui.turnPolicy">Turn policy</div>
+          <div class="strategy-note" data-i18n="ui.singleOwnerTurnsOnlyOneAgentWorksAtATimeAnExplicit">Single-owner turns: only one Agent works at a time; an explicit @peer or HANDOFF + NEXT transfers the next turn.</div>
+          <label class="field-label" for="max-hops" data-i18n="ui.maximumTurnsPerChain">Maximum turns per chain</label>
           <div class="range-row">
             <input id="max-hops" type="range" min="1" max="20" value="6">
             <output id="max-hops-value">6</output>
           </div>
-          <label class="field-label" for="stall-warning" data-i18n="无事件提醒（秒）">无事件提醒（秒）</label>
+          <label class="field-label" for="stall-warning" data-i18n="ui.stallWarningSeconds">Stall warning (seconds)</label>
           <div class="number-row">
             <input id="stall-warning" type="number" min="30" max="86400" step="30" value="300">
-            <label class="checkbox-label"><input id="stall-disabled" type="checkbox"> <span data-i18n="关闭">关闭</span></label>
+            <label class="checkbox-label"><input id="stall-disabled" type="checkbox"> <span data-i18n="ui.off">Off</span></label>
           </div>
-          <button id="save-settings" class="secondary-button full-width" data-i18n="保存轮次限制">保存轮次限制</button>
+          <button id="save-settings" class="secondary-button full-width" data-i18n="ui.saveTurnLimits">Save turn limits</button>
         </section>
 
         <div class="divider"></div>
         <section class="repo-summary">
-          <div class="section-title" data-i18n="工作区">工作区</div>
-          <pre id="git-status" class="git-status" data-i18n="读取 Git 状态…">读取 Git 状态…</pre>
+          <div class="section-title" data-i18n="ui.workspace">Workspace</div>
+          <pre id="git-status" class="git-status" data-i18n="ui.readingGitStatus">Reading Git status…</pre>
         </section>
       </aside>
 
       <section class="chat-panel panel">
         <div class="chat-toolbar">
           <div>
-            <div class="chat-title">Shared room</div>
-            <div class="chat-description" data-i18n="你、Claude Code 与 Codex 的公共时间线">你、Claude Code 与 Codex 的公共时间线</div>
+            <div class="chat-title" data-i18n="room.sharedRoom">Shared Room</div>
+            <div class="chat-description" data-i18n="ui.sharedTimelineForYouAndBothAgents">Shared timeline for you and both agents</div>
           </div>
           <div class="toolbar-actions">
-            <select id="conversation-filter" class="mini-select" title="筛选时间线">
-              <option value="all">全部消息</option>
-              <option value="agents">仅 Agent 对话</option>
-              <option value="human">仅我的消息</option>
+            <select id="conversation-filter" class="mini-select" title="Filter timeline" data-i18n-title="ui.filterTimeline">
+              <option value="all" data-i18n="ui.allMessages">All messages</option>
+              <option value="agents" data-i18n="ui.agentConversationOnly">Agent conversation only</option>
+              <option value="human" data-i18n="ui.myMessagesOnly">My messages only</option>
             </select>
-            <label class="search-box" title="搜索消息">
+            <label class="search-box" title="Search messages" data-i18n-title="ui.searchMessages">
               <span>⌕</span>
-              <input id="message-search" type="search" placeholder="搜索讨论…">
+              <input id="message-search" type="search" placeholder="Search the discussion…" data-i18n-placeholder="ui.searchTheDiscussion">
             </label>
-            <button id="export-markdown" class="ghost-button" title="导出 Markdown">导出 MD</button>
-            <button id="export-json" class="ghost-button" title="导出 JSON">JSON</button>
-            <button id="scroll-bottom" class="ghost-button">跳到最新</button>
+            <button id="export-markdown" class="ghost-button" title="Export Markdown" data-i18n-title="ui.exportMarkdown" data-i18n="ui.exportMd">Export MD</button>
+            <button id="export-json" class="ghost-button" title="Export JSON" data-i18n-title="ui.exportJson">JSON</button>
+            <button id="scroll-bottom" class="ghost-button" data-i18n="ui.jumpToLatest">Jump to latest</button>
           </div>
         </div>
         <div id="workflow-bar" class="workflow-bar hidden" aria-live="polite"></div>
         <div id="turn-owner-bar" class="turn-owner-bar hidden" aria-live="polite"></div>
         <div id="timeline-scope" class="timeline-scope hidden">
-          <div><span class="scope-label">线程视图</span><span id="timeline-scope-text"></span></div>
-          <button id="clear-timeline-scope" class="bare-button" type="button">返回全部讨论</button>
+          <div><span class="scope-label" data-i18n="ui.threadView">Thread view</span><span id="timeline-scope-text"></span></div>
+          <button id="clear-timeline-scope" class="bare-button" type="button" data-i18n="ui.backToAllDiscussion">Back to all discussion</button>
         </div>
         <div id="timeline" class="timeline" aria-live="polite"></div>
         <div id="reply-banner" class="reply-banner hidden">
-          <div><span class="reply-label">回复</span><span id="reply-preview"></span></div>
-          <button id="cancel-reply" class="bare-button" aria-label="取消回复">×</button>
+          <div><span class="reply-label" data-i18n="ui.reply">Reply</span><span id="reply-preview"></span></div>
+          <button id="cancel-reply" class="bare-button" aria-label="Cancel reply" data-i18n-aria-label="ui.cancelReply">×</button>
         </div>
         <div class="composer-wrap">
-          <div class="target-picker" role="group" aria-label="消息接收者">
-            <button class="target-button active" data-target="driver" aria-pressed="true">@ Driver</button>
-            <button class="target-button" data-target="reviewer" aria-pressed="false">@ Reviewer</button>
-            <button class="target-button" data-target="claude" aria-pressed="false">@ Claude</button>
-            <button class="target-button" data-target="codex" aria-pressed="false">@ Codex</button>
+          <div class="target-picker" role="group" aria-label="Message recipients" data-i18n-aria-label="ui.messageRecipients">
+            <button class="target-button active" data-target="driver" aria-pressed="true" data-i18n="room.targetDriver">@ Driver</button>
+            <button class="target-button" data-target="reviewer" aria-pressed="false" data-i18n="room.targetReviewer">@ Reviewer</button>
+            <button class="target-button" data-target="claude" aria-pressed="false" data-i18n="room.targetAgent1">@ Agent 1</button>
+            <button class="target-button" data-target="codex" aria-pressed="false" data-i18n="room.targetAgent2">@ Agent 2</button>
           </div>
           <div id="attachment-strip" class="attachment-strip hidden" aria-live="polite"></div>
           <div class="composer">
-            <input id="attachment-input" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple>
-            <button id="attach-button" class="attach-button" type="button" title="添加图片；也可粘贴或拖入">＋</button>
-            <textarea id="message-input" rows="3" placeholder="向 Agent 发消息；Enter 发送，Shift+Enter 换行…"></textarea>
-            <button id="send-button" class="send-button" aria-label="发送消息">
-              <span>发送</span><span class="send-arrow">↑</span>
+            <input id="attachment-input" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple="">
+            <button id="attach-button" class="attach-button" type="button" title="Add images; paste or drop also works" data-i18n-title="ui.addImagesPasteOrDropAlsoWorks">＋</button>
+            <textarea id="message-input" rows="3" placeholder="Message an Agent; Enter sends, Shift+Enter inserts a newline…" data-i18n-placeholder="ui.messageAnAgentEnterSendsShiftEnterInsertsANewline"></textarea>
+            <button id="send-button" class="send-button" aria-label="Send message" data-i18n-aria-label="ui.sendMessage">
+              <span data-i18n="ui.send">Send</span><span class="send-arrow">↑</span>
             </button>
           </div>
           <div class="composer-footnote">
-            <label class="intent-picker">发送方式
-              <select id="message-intent" class="mini-select">
-                <option value="append">补充当前讨论</option>
-                <option value="next_turn">下一 Turn（独立任务）</option>
-                <option value="supersede">替代并取消旧指令</option>
+            <label class="intent-picker"><span data-i18n="ui.sendMode">Send mode
+              </span><select id="message-intent" class="mini-select">
+                <option value="append" data-i18n="ui.appendToTheCurrentDiscussion">Append to the current discussion</option>
+                <option value="next_turn" data-i18n="ui.nextTurnIndependentTask">Next turn (independent task)</option>
+                <option value="supersede" data-i18n="ui.supersedeAndCancelTheOldInstruction">Supersede and cancel the old instruction</option>
               </select>
             </label>
-            <span id="delivery-hint">发送给当前 Driver</span>
+            <span id="delivery-hint" data-i18n="ui.sendToTheCurrentDriver">Send to the current Driver</span>
           </div>
-          <div id="drop-overlay" class="drop-overlay hidden">释放图片以加入消息</div>
+          <div id="drop-overlay" class="drop-overlay hidden" data-i18n="ui.dropImagesToAttachThem">Drop images to attach them</div>
         </div>
       </section>
 
       <aside class="inspector-panel panel">
         <div class="inspector-header">
           <div>
-            <div class="panel-heading compact">工作检查器</div>
-            <div class="inspector-subtitle">查看工具、命令、Diff 与审批</div>
+            <div class="panel-heading compact" data-i18n="ui.workInspector">Work inspector</div>
+            <div class="inspector-subtitle" data-i18n="ui.inspectToolsCommandsDiffsAndApprovals">Inspect tools, commands, diffs, and approvals</div>
           </div>
           <select id="inspector-agent" class="mini-select">
-            <option value="all">全部 Agent</option>
-            <option value="claude">Claude</option>
-            <option value="codex">Codex</option>
+            <option value="all" data-i18n="ui.allAgents">All agents</option>
+            <option value="claude" data-i18n="agent.agent1">Agent 1</option>
+            <option value="codex" data-i18n="agent.agent2">Agent 2</option>
           </select>
         </div>
         <div class="tabs" role="tablist">
-          <button class="tab active" data-tab="activity">Activity</button>
-          <button class="tab" data-tab="diff">Diff</button>
-          <button class="tab" data-tab="approvals">Approvals <span id="approval-count" class="tab-count">0</span></button>
+          <button class="tab active" data-tab="activity" data-i18n="ui.activity">Activity</button>
+          <button class="tab" data-tab="diff" data-i18n="common.diff">Diff</button>
+          <button class="tab" data-tab="approvals"><span data-i18n="common.approvals">Approvals</span> <span id="approval-count" class="tab-count">0</span></button>
         </div>
         <div id="inspector-scope" class="inspector-scope hidden">
           <span id="inspector-scope-text"></span>
-          <button id="clear-inspector-scope" class="bare-button" type="button">清除</button>
+          <button id="clear-inspector-scope" class="bare-button" type="button" data-i18n="ui.clear">Clear</button>
         </div>
         <div id="activity-tab" class="tab-content active"></div>
         <div id="diff-tab" class="tab-content">
           <div class="diff-toolbar">
-            <button id="refresh-diff" class="secondary-button">刷新 Diff</button>
-            <label class="checkbox-label"><input id="staged-diff" type="checkbox"> Staged</label>
+            <button id="refresh-diff" class="secondary-button" data-i18n="ui.refreshDiff">Refresh diff</button>
+            <label class="checkbox-label"><input id="staged-diff" type="checkbox"> <span data-i18n="common.staged">Staged</span></label>
           </div>
-          <pre id="diff-output" class="diff-output">选择“刷新 Diff”查看工作区改动。</pre>
+          <pre id="diff-output" class="diff-output" data-i18n="ui.chooseRefreshDiffToInspectWorkspaceChanges">Choose Refresh diff to inspect workspace changes.</pre>
         </div>
         <div id="approvals-tab" class="tab-content"></div>
       </aside>
     </main>
   </div>
-  <dialog id="image-lightbox" class="image-lightbox" aria-label="图片预览">
-    <button id="lightbox-close" class="lightbox-close" type="button" aria-label="关闭图片预览">×</button>
-    <button id="lightbox-prev" class="lightbox-nav lightbox-prev" type="button" aria-label="上一张图片">‹</button>
-    <button id="lightbox-next" class="lightbox-nav lightbox-next" type="button" aria-label="下一张图片">›</button>
+  <dialog id="image-lightbox" class="image-lightbox" aria-label="Image preview" data-i18n-aria-label="ui.imagePreview">
+    <button id="lightbox-close" class="lightbox-close" type="button" aria-label="Close image preview" data-i18n-aria-label="ui.closeImagePreview">×</button>
+    <button id="lightbox-prev" class="lightbox-nav lightbox-prev" type="button" aria-label="Previous image" data-i18n-aria-label="ui.previousImage">‹</button>
+    <button id="lightbox-next" class="lightbox-nav lightbox-next" type="button" aria-label="Next image" data-i18n-aria-label="ui.nextImage">›</button>
     <div id="lightbox-stage" class="lightbox-stage"><img id="lightbox-image" alt=""></div>
     <div class="lightbox-footer">
       <div class="lightbox-info">
@@ -179,27 +177,31 @@
         <span id="lightbox-counter" class="lightbox-counter"></span>
       </div>
       <div class="lightbox-actions">
-        <div class="lightbox-zoom" aria-label="图片缩放">
-          <button id="lightbox-zoom-out" type="button" aria-label="缩小">−</button>
+        <div class="lightbox-zoom" aria-label="Image zoom" data-i18n-aria-label="ui.imageZoom">
+          <button id="lightbox-zoom-out" type="button" aria-label="Zoom out" data-i18n-aria-label="ui.zoomOut">−</button>
           <button id="lightbox-zoom-reset" type="button"><span id="lightbox-zoom-value">100%</span></button>
-          <button id="lightbox-zoom-in" type="button" aria-label="放大">＋</button>
+          <button id="lightbox-zoom-in" type="button" aria-label="Zoom in" data-i18n-aria-label="ui.zoomIn">＋</button>
         </div>
-        <div class="lightbox-tools" aria-label="图片查看工具">
-          <button id="lightbox-rotate-left" type="button" title="向左旋转" aria-label="向左旋转">↶</button>
-          <button id="lightbox-rotate-right" type="button" title="向右旋转" aria-label="向右旋转">↷</button>
-          <button id="lightbox-fit" type="button" title="适应窗口" aria-label="适应窗口" aria-pressed="true">适应</button>
-          <button id="lightbox-actual" type="button" title="原始像素" aria-label="原始像素" aria-pressed="false">1:1</button>
-          <button id="lightbox-copy" type="button" title="复制图片" aria-label="复制图片">复制</button>
+        <div class="lightbox-tools" aria-label="Image viewer tools" data-i18n-aria-label="ui.imageViewerTools">
+          <button id="lightbox-rotate-left" type="button" title="Rotate left" aria-label="Rotate left" data-i18n-title="ui.rotateLeft" data-i18n-aria-label="ui.rotateLeft">↶</button>
+          <button id="lightbox-rotate-right" type="button" title="Rotate right" aria-label="Rotate right" data-i18n-title="ui.rotateRight" data-i18n-aria-label="ui.rotateRight">↷</button>
+          <button id="lightbox-fit" type="button" title="Fit to window" aria-label="Fit to window" aria-pressed="true" data-i18n-title="ui.fitToWindow" data-i18n-aria-label="ui.fitToWindow" data-i18n="ui.fit">Fit</button>
+          <button id="lightbox-actual" type="button" title="Actual pixels" aria-label="Actual pixels" aria-pressed="false" data-i18n-title="ui.actualPixels" data-i18n-aria-label="ui.actualPixels">1:1</button>
+          <button id="lightbox-copy" type="button" title="Copy image" aria-label="Copy image" data-i18n-title="ui.copyImage" data-i18n-aria-label="ui.copyImage" data-i18n="ui.copy">Copy</button>
         </div>
-        <a id="lightbox-open" class="secondary-button" href="#" target="_blank" rel="noopener">打开原图</a>
+        <a id="lightbox-open" class="secondary-button" href="#" target="_blank" rel="noopener" data-i18n="ui.openOriginalImage">Open original image</a>
       </div>
     </div>
   </dialog>
   <div id="toast-stack" class="toast-stack" role="status" aria-live="polite" aria-atomic="false"></div>
-  <script src="i18n.js" defer></script>
-  <script src="room-shell.js" defer></script>
-  <script src="richtext.js" defer></script>
-  <script src="app.js" defer></script>
-  <script src="ux.js" defer></script>
-</body>
-</html>
+  <script src="/_pairroom/i18next.min.js" defer=""></script>
+  <script src="/_pairroom/catalogs.js" defer=""></script>
+  <script src="/_pairroom/i18n.js" defer=""></script>
+  <script src="/_pairroom/theme.js" defer=""></script>
+  <script src="room-shell.js" defer=""></script>
+  <script src="richtext.js" defer=""></script>
+  <script src="app.js" defer=""></script>
+  <script src="ux.js" defer=""></script>
+
+
+</body></html>

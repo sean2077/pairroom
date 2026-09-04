@@ -1,6 +1,8 @@
 (() => {
   'use strict';
 
+  const t = (key, options) => window.PairRoomI18n ? window.PairRoomI18n.t(key, options) : key;
+
   const STORAGE_KEY = 'pairroom.room.ux.v1';
   const MOBILE_QUERY = window.matchMedia('(max-width: 1120px)');
   const DEFAULTS = Object.freeze({
@@ -42,8 +44,8 @@
   const announcer = installAnnouncer();
   const layoutUI = installLayoutMenu();
   const backdrop = installDrawerBackdrop();
-  const leftRail = installPanelRail('participants', '显示参与者面板', '›');
-  const rightRail = installPanelRail('inspector', '显示工作检查器', '‹');
+  const leftRail = installPanelRail('participants', t("ui.showParticipantsPanel"), '›');
+  const rightRail = installPanelRail('inspector', t("ui.showWorkInspector"), '‹');
   const leftResizer = installResizer('participants');
   const rightResizer = installResizer('inspector');
 
@@ -94,7 +96,7 @@
     const link = document.createElement('a');
     link.className = 'ux-skip-link';
     link.href = '#timeline';
-    link.textContent = '跳到讨论时间线';
+    link.textContent = t("ui.jumpToDiscussionTimeline");
     body.prepend(link);
   }
 
@@ -122,8 +124,8 @@
     button.className = 'icon-button ux-layout-button';
     button.type = 'button';
     button.textContent = '☷';
-    button.title = '布局、密度与快捷键';
-    button.setAttribute('aria-label', '打开布局、密度与快捷键菜单');
+    button.title = t("ui.layoutDensityAndShortcuts");
+    button.setAttribute('aria-label', t("ui.openLayoutDensityAndShortcutsMenu"));
     button.setAttribute('aria-haspopup', 'dialog');
     button.setAttribute('aria-expanded', 'false');
     button.setAttribute('aria-controls', 'ux-layout-menu');
@@ -136,46 +138,8 @@
     menu.className = 'ux-layout-menu';
     menu.hidden = true;
     menu.setAttribute('role', 'dialog');
-    menu.setAttribute('aria-label', '房间布局设置');
-    menu.innerHTML = `
-      <header class="ux-menu-header">
-        <div>
-          <strong>房间布局</strong>
-          <span>只保存在当前浏览器</span>
-        </div>
-        <button class="ux-menu-close" type="button" aria-label="关闭布局菜单">×</button>
-      </header>
-      <div class="ux-menu-section" aria-label="面板显示">
-        <button class="ux-menu-row" type="button" data-ux-action="participants" aria-pressed="true">
-          <span class="ux-menu-copy"><strong>参与者与策略</strong><small>Agent 状态、路由与 Git 摘要</small></span>
-          <span class="ux-switch" aria-hidden="true"></span>
-        </button>
-        <button class="ux-menu-row" type="button" data-ux-action="inspector" aria-pressed="true">
-          <span class="ux-menu-copy"><strong>工作检查器</strong><small>Activity、Diff 与 Approvals</small></span>
-          <span class="ux-switch" aria-hidden="true"></span>
-        </button>
-        <button class="ux-menu-row" type="button" data-ux-action="focus" aria-pressed="false">
-          <span class="ux-menu-copy"><strong>专注讨论</strong><small>临时隐藏两侧面板</small></span>
-          <kbd>Ctrl/⌘ ⇧ F</kbd>
-        </button>
-      </div>
-      <div class="ux-menu-section">
-        <div class="ux-menu-label">信息密度</div>
-        <div class="ux-segmented" role="group" aria-label="信息密度">
-          <button type="button" data-ux-density="comfortable">舒适</button>
-          <button type="button" data-ux-density="compact">紧凑</button>
-        </div>
-      </div>
-      <div class="ux-shortcuts" aria-label="快捷键">
-        <span><kbd>Ctrl/⌘ K</kbd> 搜索讨论</span>
-        <span><kbd>c</kbd> 聚焦输入框</span>
-        <span><kbd>[</kbd> 参与者</span>
-        <span><kbd>]</kbd> 检查器</span>
-        <span><kbd>?</kbd> 此菜单</span>
-      </div>
-      <footer class="ux-menu-footer">
-        <button class="ux-reset-layout" type="button" data-ux-action="reset">恢复默认布局</button>
-      </footer>`;
+    menu.setAttribute('aria-label', t("ui.roomLayoutSettings"));
+    menu.innerHTML = "\n      <header class=\"ux-menu-header\">\n        <div>\n          <strong data-i18n=\"ui.roomLayout\">room layout</strong>\n          <span data-i18n=\"ui.onlySaveInCurrentBrowser\">Only save in current browser</span>\n        </div>\n        <button class=\"ux-menu-close\" type=\"button\" aria-label=\"Close layout menu\" data-i18n-aria-label=\"ui.closeLayoutMenu\">×</button>\n      </header>\n      <div class=\"ux-menu-section\" aria-label=\"Panel display\" data-i18n-aria-label=\"ui.panelDisplay\">\n        <button class=\"ux-menu-row\" type=\"button\" data-ux-action=\"participants\" aria-pressed=\"true\">\n          <span class=\"ux-menu-copy\"><strong data-i18n=\"ui.playersAndStrategies\">Players and Strategies</strong><small data-i18n=\"ui.agentStatusRoutingAndGitSummary\">Agent status, routing and Git summary</small></span>\n          <span class=\"ux-switch\" aria-hidden=\"true\"></span>\n        </button>\n        <button class=\"ux-menu-row\" type=\"button\" data-ux-action=\"inspector\" aria-pressed=\"true\">\n          <span class=\"ux-menu-copy\"><strong data-i18n=\"ui.workInspector\">Work inspector</strong><small data-i18n=\"ui.activitiesDiffsAndApprovals\">Activities, Diffs and Approvals</small></span>\n          <span class=\"ux-switch\" aria-hidden=\"true\"></span>\n        </button>\n        <button class=\"ux-menu-row\" type=\"button\" data-ux-action=\"focus\" aria-pressed=\"false\">\n          <span class=\"ux-menu-copy\"><strong data-i18n=\"ui.focusOnDiscussion\">focus on discussion</strong><small data-i18n=\"ui.temporarilyHideSidePanels\">Temporarily hide side panels</small></span>\n          <kbd>Ctrl/⌘ ⇧ F</kbd>\n        </button>\n      </div>\n      <div class=\"ux-menu-section\">\n        <div class=\"ux-menu-label\" data-i18n=\"ui.informationDensity\">information density</div>\n        <div class=\"ux-segmented\" role=\"group\" aria-label=\"information density\" data-i18n-aria-label=\"ui.informationDensity\">\n          <button type=\"button\" data-ux-density=\"comfortable\" data-i18n=\"ui.comfortable\">Comfortable</button>\n          <button type=\"button\" data-ux-density=\"compact\" data-i18n=\"ui.compact\">Compact</button>\n        </div>\n      </div>\n      <div class=\"ux-shortcuts\" aria-label=\"shortcut key\" data-i18n-aria-label=\"ui.shortcutKey\">\n        <span><kbd>Ctrl/⌘ K</kbd><span data-i18n=\"ui.searchDiscussion\"> Search discussion</span></span>\n        <span><kbd>c</kbd><span data-i18n=\"ui.focusInputBox\"> Focus input box</span></span>\n        <span><kbd>[</kbd><span data-i18n=\"ui.participants\"> Participants</span></span>\n        <span><kbd>]</kbd><span data-i18n=\"ui.inspector\"> inspector</span></span>\n        <span><kbd>?</kbd><span data-i18n=\"ui.thisMenu\"> this menu</span></span>\n      </div>\n      <footer class=\"ux-menu-footer\">\n        <button class=\"ux-reset-layout\" type=\"button\" data-ux-action=\"reset\" data-i18n=\"ui.restoreDefaultLayout\">Restore default layout</button>\n      </footer>";
     topbarActions.append(menu);
 
     button.addEventListener('click', () => setMenuOpen(!menuOpen));
@@ -219,7 +183,7 @@
         break;
       case 'reset':
         Object.assign(state, DEFAULTS, { mobilePanel: '' });
-        applyLayout({ announcement: '已恢复默认房间布局。' });
+        applyLayout({ announcement: t("ui.defaultRoomLayoutRestored") });
         break;
       default:
         break;
@@ -230,7 +194,7 @@
     const element = document.createElement('button');
     element.className = 'ux-drawer-backdrop';
     element.type = 'button';
-    element.setAttribute('aria-label', '关闭侧面板');
+    element.setAttribute('aria-label', t("ui.closeSidePanel"));
     element.addEventListener('click', closeMobilePanel);
     workspace.append(element);
     return element;
@@ -254,7 +218,7 @@
     element.tabIndex = 0;
     element.setAttribute('role', 'separator');
     element.setAttribute('aria-orientation', 'vertical');
-    element.setAttribute('aria-label', panel === 'participants' ? '调整参与者面板宽度' : '调整工作检查器宽度');
+    element.setAttribute('aria-label', panel === 'participants' ? t("ui.resizeParticipantsPanel") : t("ui.resizeWorkInspector"));
     element.setAttribute('aria-valuemin', String(LIMITS[panel][0]));
     element.setAttribute('aria-valuemax', String(LIMITS[panel][1]));
 
@@ -266,7 +230,7 @@
       state[widthKey(panel)] = DEFAULTS[widthKey(panel)];
       applyWidths();
       storeState();
-      announce(`${panel === 'participants' ? '参与者面板' : '工作检查器'}宽度已恢复默认。`);
+      announce(t("ui.valueWidthWasReset", { value0: (panel === 'participants' ? t('ui.participantsPanel') : t('ui.workInspector')) }));
     });
     element.addEventListener('keydown', (event) => resizeWithKeyboard(panel, event));
     return element;
@@ -304,7 +268,7 @@
       handle.removeEventListener('pointerup', stop);
       handle.removeEventListener('pointercancel', stop);
       storeState();
-      announce(`${panel === 'participants' ? '参与者面板' : '工作检查器'}宽度 ${renderedPanelWidth(panel)} 像素。`);
+      announce(t("ui.valueWidthValuePixels", { value0: (panel === 'participants' ? t('ui.participantsPanel') : t('ui.workInspector')), value1: (renderedPanelWidth(panel)) }));
     };
     handle.addEventListener('pointermove', move);
     handle.addEventListener('pointerup', stop);
@@ -323,7 +287,7 @@
     }
     applyWidths();
     storeState();
-    announce(`${panel === 'participants' ? '参与者面板' : '工作检查器'}宽度 ${renderedPanelWidth(panel)} 像素。`);
+    announce(t("ui.valueWidthValuePixels", { value0: (panel === 'participants' ? t('ui.participantsPanel') : t('ui.workInspector')), value1: (renderedPanelWidth(panel)) }));
   }
 
   function renderedPanelWidth(panel) {
@@ -349,7 +313,7 @@
     else state.inspectorVisible = Boolean(visible);
     if (visible && state.focusMode) state.focusMode = false;
     state.mobilePanel = '';
-    applyLayout({ announcement: announcement ? `${panel === 'participants' ? '参与者面板' : '工作检查器'}已${visible ? '显示' : '隐藏'}。` : '' });
+    applyLayout({ announcement: announcement ? t("ui.valueIsNowValue", { value0: (panel === 'participants' ? t('ui.participantsPanel') : t('ui.workInspector')), value1: (visible ? t('ui.show') : t('ui.hide')) }) : '' });
   }
 
   function togglePanel(panel) {
@@ -362,7 +326,7 @@
     state.focusMode = false;
     state.mobilePanel = opening ? panel : '';
     if (menuOpen) setMenuOpen(false);
-    applyLayout({ persist: false, announcement: state.mobilePanel ? `已打开${panel === 'participants' ? '参与者面板' : '工作检查器'}。` : '已关闭侧面板。' });
+    applyLayout({ persist: false, announcement: state.mobilePanel ? t("ui.openedValue", { value0: (panel === 'participants' ? t('ui.participantsPanel') : t('ui.workInspector')) }) : t("ui.sidePanelClosed") });
     if (state.mobilePanel) {
       const target = panel === 'participants' ? participantsPanel : inspectorPanel;
       const focusPanel = () => {
@@ -378,7 +342,7 @@
   function closeMobilePanel() {
     if (!state.mobilePanel) return;
     state.mobilePanel = '';
-    applyLayout({ persist: false, announcement: '已关闭侧面板。' });
+    applyLayout({ persist: false, announcement: t("ui.sidePanelClosed") });
     restoreDrawerFocus();
   }
 
@@ -400,12 +364,12 @@
     if (state.focusMode && (participantsPanel.contains(document.activeElement) || inspectorPanel.contains(document.activeElement))) {
       (timeline || messageInput)?.focus({ preventScroll: true });
     }
-    applyLayout({ announcement: state.focusMode ? '已进入专注讨论模式。' : '已退出专注讨论模式。' });
+    applyLayout({ announcement: state.focusMode ? t("ui.focusModeEnabled") : t("ui.focusModeDisabled") });
   }
 
   function setDensity(value) {
     state.density = value === 'compact' ? 'compact' : 'comfortable';
-    applyLayout({ announcement: `已切换为${state.density === 'compact' ? '紧凑' : '舒适'}密度。` });
+    applyLayout({ announcement: t("ui.densityChangedToValue", { value0: (state.density === 'compact' ? t('ui.compact') : t('ui.comfortable')) }) });
   }
 
   function applyLayout({ persist = true, announcement = '' } = {}) {
@@ -469,24 +433,24 @@
 
   function improveSemantics() {
     participantsPanel.tabIndex = -1;
-    participantsPanel.setAttribute('aria-label', '参与者、轮次策略与工作区状态');
+    participantsPanel.setAttribute('aria-label', t("ui.participantsTurnPolicyAndWorkspaceStatus"));
     inspectorPanel.tabIndex = -1;
-    inspectorPanel.setAttribute('aria-label', '工作检查器');
-    chatPanel.setAttribute('aria-label', '共享讨论房间');
+    inspectorPanel.setAttribute('aria-label', t("ui.workInspector"));
+    chatPanel.setAttribute('aria-label', t("ui.sharedDiscussionRoom"));
 
     if (timeline) {
       timeline.tabIndex = 0;
-      timeline.setAttribute('aria-label', '讨论时间线');
+      timeline.setAttribute('aria-label', t("ui.discussionTimeline"));
       timeline.setAttribute('role', 'log');
       timeline.setAttribute('aria-relevant', 'additions text');
     }
-    if (messageInput) messageInput.setAttribute('aria-label', '发送给房间的消息');
+    if (messageInput) messageInput.setAttribute('aria-label', t("ui.messageToTheRoom"));
     if (messageSearch) {
-      messageSearch.setAttribute('aria-label', '搜索讨论');
+      messageSearch.setAttribute('aria-label', t("ui.searchDiscussion"));
       messageSearch.setAttribute('aria-keyshortcuts', 'Control+K Meta+K');
     }
     const attachmentButton = document.getElementById('attach-button');
-    if (attachmentButton) attachmentButton.setAttribute('aria-label', '添加图片附件');
+    if (attachmentButton) attachmentButton.setAttribute('aria-label', t("ui.addImageAttachment"));
     const connection = document.getElementById('connection');
     if (connection) {
       connection.setAttribute('role', 'status');
@@ -624,7 +588,7 @@
     const syncAttention = () => {
       const hasUnread = /\(\d+\)/.test(scrollBottom.textContent || '');
       scrollBottom.classList.toggle('ux-attention', !atBottom && hasUnread);
-      if (!atBottom && hasUnread) scrollBottom.setAttribute('aria-label', '有新消息，跳到最新');
+      if (!atBottom && hasUnread) scrollBottom.setAttribute('aria-label', t("ui.newMessagesJumpToLatest"));
       else scrollBottom.removeAttribute('aria-label');
     };
     const update = () => {

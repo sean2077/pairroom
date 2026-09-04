@@ -1,8 +1,10 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sean2077/pairroom/internal/model"
@@ -13,7 +15,7 @@ func TestDefaults(t *testing.T) {
 	if cfg.Listen != "127.0.0.1:7332" || cfg.RoutingMode != model.RoutingTurns || cfg.MaxAgentHops != 6 {
 		t.Fatalf("unexpected defaults: %#v", cfg)
 	}
-	if cfg.Claude.Command != "claude" || cfg.Codex.Command != "codex" {
+	if cfg.Runtimes.Claude.Command != "claude" || cfg.Runtimes.Codex.Command != "codex" || cfg.Runtimes.Grok.Command != "grok" {
 		t.Fatalf("unexpected runtime commands: %#v", cfg)
 	}
 	if cfg.Claude.Runtime != "claude" || cfg.Codex.Runtime != "codex" {
@@ -32,8 +34,8 @@ func TestLoadMergesDefaults(t *testing.T) {
   "routing_mode": "turns",
   "max_agent_hops": 4,
   "auto_start": false,
-  "claude": {"command": "claude", "model": "opus"},
-  "codex": {"command": "codex", "model": "gpt", "effort": "medium"}
+  "claude": {"model": "opus"},
+  "codex": {"model": "gpt", "effort": "medium"}
 }`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -44,15 +46,15 @@ func TestLoadMergesDefaults(t *testing.T) {
 	if cfg.RoomName != "Test Room" || cfg.RoutingMode != model.RoutingTurns || cfg.Claude.Model != "opus" {
 		t.Fatalf("unexpected config: %#v", cfg)
 	}
-	if cfg.Claude.PermissionMode != "auto" || cfg.Codex.ApprovalPolicy != "" {
+	if cfg.Claude.PermissionMode != "" || cfg.Codex.ApprovalPolicy != "" {
 		t.Fatalf("defaults were not preserved: %#v", cfg)
 	}
 }
 
 func TestLoadRejectsUnknownAndInvalid(t *testing.T) {
 	tests := []string{
-		`{"listen":"127.0.0.1:1","routing_mode":"turns","max_agent_hops":4,"auto_start":true,"claude":{"command":"claude"},"codex":{"command":"codex"},"surprise":true}`,
-		`{"listen":"127.0.0.1:1","routing_mode":"forever","max_agent_hops":4,"auto_start":true,"claude":{"command":"claude"},"codex":{"command":"codex"}}`,
+		`{"listen":"127.0.0.1:1","routing_mode":"turns","max_agent_hops":4,"auto_start":true,"claude":{},"codex":{},"surprise":true}`,
+		`{"listen":"127.0.0.1:1","routing_mode":"forever","max_agent_hops":4,"auto_start":true,"claude":{},"codex":{}}`,
 	}
 	for i, data := range tests {
 		path := filepath.Join(t.TempDir(), "bad.json")
@@ -69,7 +71,7 @@ func TestLoadRejectsLegacyRoutingModes(t *testing.T) {
 	for _, mode := range []string{"manual", "mentions", "roundtable"} {
 		t.Run(mode, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "pairroom.json")
-			data := `{"listen":"127.0.0.1:1","routing_mode":"` + mode + `","max_agent_hops":4,"stall_warning_seconds":300,"auto_start":true,"claude":{"command":"claude"},"codex":{"command":"codex"}}`
+			data := `{"listen":"127.0.0.1:1","routing_mode":"` + mode + `","max_agent_hops":4,"stall_warning_seconds":300,"auto_start":true,"claude":{},"codex":{}}`
 			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -87,8 +89,8 @@ func TestLoadAcceptsGrokRuntimeAndIdenticalSlots(t *testing.T) {
   "routing_mode": "turns",
   "max_agent_hops": 4,
   "auto_start": true,
-  "claude": {"runtime": "grok", "command": "grok", "model": "", "effort": "", "instructions": "Be terse"},
-  "codex": {"runtime": "grok", "command": "grok"}
+  "claude": {"runtime": "grok", "model": "", "effort": "", "instructions": "Be terse"},
+  "codex": {"runtime": "grok"}
 }`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -114,13 +116,60 @@ func TestLoadRejectsUnknownRuntime(t *testing.T) {
   "routing_mode": "turns",
   "max_agent_hops": 4,
   "auto_start": true,
-  "claude": {"runtime": "cursor", "command": "cursor"},
-  "codex": {"command": "codex"}
+  "claude": {"runtime": "cursor"},
+  "codex": {}
 }`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(path); err == nil {
 		t.Fatal("unknown runtime was accepted")
+	}
+}
+
+func TestLoadRejectsRemovedProviderAndPerSlotCommandConfiguration(t *testing.T) {
+	for _, data := range []string{
+		`{"providers":[],"listen":"127.0.0.1:1"}`,
+		`{"cc_connect":{},"listen":"127.0.0.1:1"}`,
+		`{"claude":{"provider":"old-name"},"listen":"127.0.0.1:1"}`,
+		`{"claude":{"command":"claude"},"listen":"127.0.0.1:1"}`,
+	} {
+		path := filepath.Join(t.TempDir(), "legacy.json")
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Fatalf("removed configuration was accepted: %s", data)
+		} else {
+			var migration *MigrationError
+			if !errors.As(err, &migration) {
+				t.Fatalf("error = %T %v, want MigrationError", err, err)
+			}
+		}
+	}
+}
+
+func TestRuntimeTemplatesRejectPerRoomModelAndPolicyOverrides(t *testing.T) {
+	tests := []struct {
+		kind model.RuntimeKind
+		args []string
+	}{
+		{model.RuntimeClaude, []string{"--dangerously-skip-permissions"}},
+		{model.RuntimeCodex, []string{"-c", `sandbox_mode="danger-full-access"`}},
+		{model.RuntimeGrok, []string{"--yolo"}},
+	}
+	for _, test := range tests {
+		cfg := Defaults()
+		switch test.kind {
+		case model.RuntimeClaude:
+			cfg.Runtimes.Claude.Args = test.args
+		case model.RuntimeCodex:
+			cfg.Runtimes.Codex.Args = test.args
+		case model.RuntimeGrok:
+			cfg.Runtimes.Grok.Args = test.args
+		}
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "AgentSelection") {
+			t.Fatalf("%s args %v error = %v", test.kind, test.args, err)
+		}
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/sean2077/pairroom/internal/agent"
 	"github.com/sean2077/pairroom/internal/archive"
 	"github.com/sean2077/pairroom/internal/attachment"
+	"github.com/sean2077/pairroom/internal/ccswitch"
 	"github.com/sean2077/pairroom/internal/config"
 	"github.com/sean2077/pairroom/internal/daemon"
 	"github.com/sean2077/pairroom/internal/model"
@@ -89,39 +90,12 @@ func run(args []string) error {
 	}
 }
 
-type providerInspection struct {
-	Providers []config.ProviderSummary `json:"providers"`
-	Agents    map[string]struct {
-		Provider      string `json:"provider,omitempty"`
-		Model         string `json:"model,omitempty"`
-		ArgumentCount int    `json:"argument_count,omitempty"`
-	} `json:"agents"`
-}
-
-func buildProviderInspection(cfg config.File) providerInspection {
-	report := providerInspection{Providers: cfg.ProviderSummaries(), Agents: make(map[string]struct {
-		Provider      string `json:"provider,omitempty"`
-		Model         string `json:"model,omitempty"`
-		ArgumentCount int    `json:"argument_count,omitempty"`
-	}, 2)}
-	report.Agents["claude"] = struct {
-		Provider      string `json:"provider,omitempty"`
-		Model         string `json:"model,omitempty"`
-		ArgumentCount int    `json:"argument_count,omitempty"`
-	}{Provider: cfg.Claude.Provider, Model: cfg.Claude.Model, ArgumentCount: len(cfg.Claude.Args)}
-	report.Agents["codex"] = struct {
-		Provider      string `json:"provider,omitempty"`
-		Model         string `json:"model,omitempty"`
-		ArgumentCount int    `json:"argument_count,omitempty"`
-	}{Provider: cfg.Codex.Provider, Model: cfg.Codex.Model, ArgumentCount: len(cfg.Codex.Args)}
-	return report
-}
-
 func runProviders(args []string) error {
 	configPath := preparseValue(args, "--config")
 	flags := flag.NewFlagSet("pairroom providers", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	configFlag := flags.String("config", configPath, "PairRoom JSON configuration file")
+	databaseFlag := flags.String("database", "", "absolute CC Switch database path (default: ~/.cc-switch/cc-switch.db)")
 	jsonFlag := flags.Bool("json", false, "emit a redacted machine-readable report")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -136,30 +110,33 @@ func runProviders(args []string) error {
 	if err != nil {
 		return err
 	}
-	report := buildProviderInspection(cfg)
+	database := cfg.CCSwitch.Database
+	if strings.TrimSpace(*databaseFlag) != "" {
+		database = *databaseFlag
+	}
+	reader, err := ccswitch.NewReader(database)
+	if err != nil {
+		return err
+	}
+	report, err := reader.Catalog(context.Background())
+	if err != nil {
+		return err
+	}
 	if *jsonFlag {
 		encoder := json.NewEncoder(os.Stdout)
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(report)
 	}
-	fmt.Println("PairRoom provider profiles")
-	if len(report.Providers) == 0 {
-		fmt.Println("  no profiles configured")
+	fmt.Printf("PairRoom CC Switch profiles (%s, schema %d)\n", report.CCSwitchVersion, report.Schema)
+	if len(report.Profiles) == 0 {
+		fmt.Println("  no profiles found")
 	}
-	for _, provider := range report.Providers {
-		source := "local"
-		if provider.ImportedFrom != "" {
-			source = "cc-connect reference: " + provider.ImportedFrom
+	for _, profile := range report.Profiles {
+		status := "selectable"
+		if !profile.Supported {
+			status = "disabled: " + profile.DisabledReason
 		}
-		fmt.Printf("  %-20s model=%-24s source=%s\n", provider.Name, provider.Model, source)
-	}
-	for _, actor := range []string{"claude", "codex"} {
-		assignment := report.Agents[actor]
-		provider := assignment.Provider
-		if provider == "" {
-			provider = "native/default"
-		}
-		fmt.Printf("  %-20s provider=%s model=%s\n", actor, provider, assignment.Model)
+		fmt.Printf("  %-12s %-24s models=%-24s %s\n", profile.Runtime, profile.Name, strings.Join(profile.Models, ","), status)
 	}
 	return nil
 }
@@ -192,57 +169,60 @@ func versionSummary() string {
 	return "pairroom " + version.Describe()
 }
 
-func copyRuntimeEnv(source map[string]string) map[string]string {
-	if len(source) == 0 {
-		return nil
-	}
-	output := make(map[string]string, len(source))
-	for key, value := range source {
-		output[key] = value
-	}
-	return output
-}
-
-func slotAgentConfig(actor model.ActorID, slot config.Agent) agent.Config {
+func slotAgentConfig(actor model.ActorID, slot config.Agent, runtimes config.RuntimeTemplates) agent.Config {
+	selection := slot.Selection(actor)
+	template := runtimes.For(selection.Runtime)
 	return agent.Config{
 		Actor:                  actor,
 		ClientVersion:          version.Current,
-		Command:                slot.Command,
-		CommandArgs:            append([]string(nil), slot.Args...),
-		Env:                    copyRuntimeEnv(slot.RuntimeEnv),
-		Runtime:                slot.RuntimeKind(actor),
-		Provider:               slot.Provider,
-		Model:                  slot.Model,
-		Effort:                 slot.Effort,
-		PermissionMode:         slot.PermissionMode,
-		ApprovalPolicy:         slot.ApprovalPolicy,
-		Sandbox:                slot.Sandbox,
-		AdditionalInstructions: strings.TrimSpace(slot.Instructions),
+		Command:                template.Command,
+		CommandArgs:            append([]string(nil), template.Args...),
+		Runtime:                selection.Runtime,
+		Provider:               string(selection.Provider.Source),
+		Model:                  selection.Model,
+		Effort:                 selection.Effort,
+		PermissionMode:         selection.PermissionMode,
+		ApprovalPolicy:         selection.ApprovalPolicy,
+		Sandbox:                selection.Sandbox,
+		AdditionalInstructions: selection.Instructions,
+		OrdinaryReviewerPolicy: selection.OrdinaryReviewerPolicy,
 	}
 }
 
-func pairSlotConfigs(claudeSlot, codexSlot config.Agent) (agent.Config, agent.Config) {
-	claude := slotAgentConfig(model.ActorClaude, claudeSlot)
-	codex := slotAgentConfig(model.ActorCodex, codexSlot)
+func pairSlotConfigs(fileCfg config.File) (agent.Config, agent.Config) {
+	claude := slotAgentConfig(model.ActorClaude, fileCfg.Claude, fileCfg.Runtimes)
+	codex := slotAgentConfig(model.ActorCodex, fileCfg.Codex, fileCfg.Runtimes)
 	claude.PeerRuntime = codex.Runtime
 	codex.PeerRuntime = claude.Runtime
 	return claude, codex
 }
 
-func applySlotCLI(cfg *agent.Config, runtime, command, provider, modelName, effort, permission, approval, sandbox, instructions string) {
+func applySlotCLI(cfg *config.Agent, runtime, modelName, effort, permission, approval, sandbox, instructions string) {
 	if runtime != "" {
-		cfg.Runtime = model.ParseRuntimeKind(runtime).CanonicalForSlot(cfg.Actor)
+		cfg.Runtime = string(model.ParseRuntimeKind(runtime))
 	}
-	if command != "" {
-		cfg.Command = command
-	}
-	cfg.Provider = provider
 	cfg.Model = modelName
 	cfg.Effort = effort
 	cfg.PermissionMode = permission
 	cfg.ApprovalPolicy = approval
 	cfg.Sandbox = sandbox
-	cfg.AdditionalInstructions = strings.TrimSpace(instructions)
+	cfg.Instructions = strings.TrimSpace(instructions)
+	switch model.ParseRuntimeKind(cfg.Runtime).Canonical() {
+	case model.RuntimeClaude:
+		cfg.ApprovalPolicy, cfg.Sandbox = "", ""
+	case model.RuntimeCodex:
+		cfg.PermissionMode = ""
+	case model.RuntimeGrok:
+		cfg.ApprovalPolicy = ""
+	}
+}
+
+func configuredAgentResolver(fileCfg config.File, mock bool) (*service.AgentResolver, error) {
+	reader, err := ccswitch.NewReader(fileCfg.CCSwitch.Database)
+	if err != nil {
+		return nil, err
+	}
+	return service.NewAgentResolver(service.AgentResolverConfig{Defaults: fileCfg.DefaultSelections(), Runtimes: fileCfg.Runtimes, CCSwitch: reader, Mock: mock})
 }
 
 // runService starts the process-wide Management Shell. Room runtimes are
@@ -272,20 +252,20 @@ func runService(args []string) (resultErr error) {
 	maxHopsFlag := flags.Int("max-hops", fileCfg.MaxAgentHops, "maximum Agent turns per Room chain")
 	stallWarningFlag := flags.Int("stall-warning-seconds", fileCfg.StallWarningSeconds, "warn when a working agent emits no runtime event; -1 disables")
 	claudeRuntime := flags.String("claude-runtime", fileCfg.Claude.Runtime, "Agent 1 runtime: claude, codex, or grok")
-	claudeCommand := flags.String("claude-command", fileCfg.Claude.Command, "Agent 1 executable")
-	claudeProvider := flags.String("claude-provider", fileCfg.Claude.Provider, "Agent 1 provider override")
+	claudeCommand := flags.String("claude-command", fileCfg.Runtimes.Claude.Command, "Claude Code executable template")
 	claudeModel := flags.String("claude-model", fileCfg.Claude.Model, "Agent 1 model override")
 	claudeEffort := flags.String("claude-effort", fileCfg.Claude.Effort, "Agent 1 reasoning-effort override")
 	claudePermission := flags.String("claude-permission-mode", fileCfg.Claude.PermissionMode, "Agent 1 permission mode")
 	claudeInstructions := flags.String("claude-instructions", fileCfg.Claude.Instructions, "Agent 1 additional instructions")
 	codexRuntime := flags.String("codex-runtime", fileCfg.Codex.Runtime, "Agent 2 runtime: claude, codex, or grok")
-	codexCommand := flags.String("codex-command", fileCfg.Codex.Command, "Agent 2 executable")
-	codexProvider := flags.String("codex-provider", fileCfg.Codex.Provider, "Agent 2 provider override")
+	codexCommand := flags.String("codex-command", fileCfg.Runtimes.Codex.Command, "Codex executable template")
+	grokCommand := flags.String("grok-command", fileCfg.Runtimes.Grok.Command, "Grok Build executable template")
 	codexModel := flags.String("codex-model", fileCfg.Codex.Model, "Agent 2 model override")
 	codexEffort := flags.String("codex-effort", fileCfg.Codex.Effort, "Agent 2 reasoning-effort override")
 	codexApproval := flags.String("codex-approval-policy", fileCfg.Codex.ApprovalPolicy, "Agent 2 approval policy")
 	codexSandbox := flags.String("codex-sandbox", fileCfg.Codex.Sandbox, "Agent 2 sandbox mode")
 	codexInstructions := flags.String("codex-instructions", fileCfg.Codex.Instructions, "Agent 2 additional instructions")
+	ccSwitchDatabase := flags.String("cc-switch-db", fileCfg.CCSwitch.Database, "absolute CC Switch database path")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -344,13 +324,21 @@ func runService(args []string) (resultErr error) {
 	if err != nil {
 		return err
 	}
-	claudeCfg, codexCfg := pairSlotConfigs(fileCfg.Claude, fileCfg.Codex)
-	applySlotCLI(&claudeCfg, *claudeRuntime, *claudeCommand, *claudeProvider, *claudeModel, *claudeEffort, *claudePermission, fileCfg.Claude.ApprovalPolicy, fileCfg.Claude.Sandbox, *claudeInstructions)
-	applySlotCLI(&codexCfg, *codexRuntime, *codexCommand, *codexProvider, *codexModel, *codexEffort, fileCfg.Codex.PermissionMode, *codexApproval, *codexSandbox, *codexInstructions)
-	claudeCfg.PeerRuntime = codexCfg.Runtime
-	codexCfg.PeerRuntime = claudeCfg.Runtime
+	fileCfg.Runtimes.Claude.Command = *claudeCommand
+	fileCfg.Runtimes.Codex.Command = *codexCommand
+	fileCfg.Runtimes.Grok.Command = *grokCommand
+	fileCfg.CCSwitch.Database = *ccSwitchDatabase
+	applySlotCLI(&fileCfg.Claude, *claudeRuntime, *claudeModel, *claudeEffort, *claudePermission, fileCfg.Claude.ApprovalPolicy, fileCfg.Claude.Sandbox, *claudeInstructions)
+	applySlotCLI(&fileCfg.Codex, *codexRuntime, *codexModel, *codexEffort, fileCfg.Codex.PermissionMode, *codexApproval, *codexSandbox, *codexInstructions)
+	if err := fileCfg.Validate(); err != nil {
+		return err
+	}
+	agentResolver, err := configuredAgentResolver(fileCfg, *mockFlag)
+	if err != nil {
+		return err
+	}
 	var provisioner service.BindingProvisioner = service.NewNativeProvisioner(service.NativeProvisionerConfig{
-		Claude: claudeCfg, Codex: codexCfg,
+		Resolver: agentResolver,
 	})
 	if *mockFlag {
 		provisioner = service.SyntheticProvisioner{}
@@ -358,7 +346,7 @@ func runService(args []string) (resultErr error) {
 	factory := service.EmbeddedRuntimeFactory(registry, service.EmbeddedRuntimeConfig{
 		ListenHost: "127.0.0.1", Mock: *mockFlag, AutoStart: *autoStartFlag,
 		RoutingMode: routing, MaxAgentHops: *maxHopsFlag, StallWarningSeconds: *stallWarningFlag,
-		Claude: claudeCfg, Codex: codexCfg,
+		Resolver: agentResolver,
 	})
 	runtimes, err := service.NewRuntimeManager(registry, factory, service.RuntimeManagerConfig{
 		Limit: *limitFlag, IdleTimeout: *idleFlag,
@@ -367,7 +355,7 @@ func runService(args []string) (resultErr error) {
 		return err
 	}
 	management, err := service.NewManagementServer(service.ManagementServerConfig{
-		Registry: registry, Runtimes: runtimes, Provisioner: provisioner, Token: *tokenFlag,
+		Registry: registry, Runtimes: runtimes, Provisioner: provisioner, Token: *tokenFlag, AgentResolver: agentResolver,
 	})
 	if err != nil {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -459,20 +447,20 @@ func runServe(args []string) error {
 	maxHopsFlag := flags.Int("max-hops", fileCfg.MaxAgentHops, "maximum Agent turns per chain")
 	stallWarningFlag := flags.Int("stall-warning-seconds", fileCfg.StallWarningSeconds, "warn when a working agent emits no runtime event; -1 disables")
 	claudeRuntime := flags.String("claude-runtime", fileCfg.Claude.Runtime, "Agent 1 runtime: claude, codex, or grok")
-	claudeCommand := flags.String("claude-command", fileCfg.Claude.Command, "Agent 1 executable")
-	claudeProvider := flags.String("claude-provider", fileCfg.Claude.Provider, "Agent 1 provider override")
+	claudeCommand := flags.String("claude-command", fileCfg.Runtimes.Claude.Command, "Claude Code executable template")
 	claudeModel := flags.String("claude-model", fileCfg.Claude.Model, "Agent 1 model override")
 	claudeEffort := flags.String("claude-effort", fileCfg.Claude.Effort, "Agent 1 reasoning-effort override")
 	claudePermission := flags.String("claude-permission-mode", fileCfg.Claude.PermissionMode, "Agent 1 permission mode")
 	claudeInstructions := flags.String("claude-instructions", fileCfg.Claude.Instructions, "Agent 1 additional instructions")
 	codexRuntime := flags.String("codex-runtime", fileCfg.Codex.Runtime, "Agent 2 runtime: claude, codex, or grok")
-	codexCommand := flags.String("codex-command", fileCfg.Codex.Command, "Agent 2 executable")
-	codexProvider := flags.String("codex-provider", fileCfg.Codex.Provider, "Agent 2 provider override")
+	codexCommand := flags.String("codex-command", fileCfg.Runtimes.Codex.Command, "Codex executable template")
+	grokCommand := flags.String("grok-command", fileCfg.Runtimes.Grok.Command, "Grok Build executable template")
 	codexModel := flags.String("codex-model", fileCfg.Codex.Model, "Agent 2 model override")
 	codexEffort := flags.String("codex-effort", fileCfg.Codex.Effort, "Agent 2 reasoning-effort override")
 	codexApproval := flags.String("codex-approval-policy", fileCfg.Codex.ApprovalPolicy, "Agent 2 approval policy")
 	codexSandbox := flags.String("codex-sandbox", fileCfg.Codex.Sandbox, "Agent 2 sandbox mode")
 	codexInstructions := flags.String("codex-instructions", fileCfg.Codex.Instructions, "Agent 2 additional instructions")
+	ccSwitchDatabase := flags.String("cc-switch-db", fileCfg.CCSwitch.Database, "absolute CC Switch database path")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -530,11 +518,32 @@ func runServe(args []string) error {
 		_ = eventStore.Close()
 		return err
 	}
-	claudeCfg, codexCfg := pairSlotConfigs(fileCfg.Claude, fileCfg.Codex)
-	applySlotCLI(&claudeCfg, *claudeRuntime, *claudeCommand, *claudeProvider, *claudeModel, *claudeEffort, *claudePermission, fileCfg.Claude.ApprovalPolicy, fileCfg.Claude.Sandbox, *claudeInstructions)
-	applySlotCLI(&codexCfg, *codexRuntime, *codexCommand, *codexProvider, *codexModel, *codexEffort, fileCfg.Codex.PermissionMode, *codexApproval, *codexSandbox, *codexInstructions)
-	claudeCfg.PeerRuntime = codexCfg.Runtime
-	codexCfg.PeerRuntime = claudeCfg.Runtime
+	fileCfg.Runtimes.Claude.Command = *claudeCommand
+	fileCfg.Runtimes.Codex.Command = *codexCommand
+	fileCfg.Runtimes.Grok.Command = *grokCommand
+	fileCfg.CCSwitch.Database = *ccSwitchDatabase
+	applySlotCLI(&fileCfg.Claude, *claudeRuntime, *claudeModel, *claudeEffort, *claudePermission, fileCfg.Claude.ApprovalPolicy, fileCfg.Claude.Sandbox, *claudeInstructions)
+	applySlotCLI(&fileCfg.Codex, *codexRuntime, *codexModel, *codexEffort, fileCfg.Codex.PermissionMode, *codexApproval, *codexSandbox, *codexInstructions)
+	if err := fileCfg.Validate(); err != nil {
+		_ = eventStore.Close()
+		return err
+	}
+	agentResolver, err := configuredAgentResolver(fileCfg, *mockFlag)
+	if err != nil {
+		_ = eventStore.Close()
+		return err
+	}
+	defaults := agentResolver.DefaultSelections()
+	claudeCfg, err := agentResolver.Resolve(context.Background(), model.ActorClaude, defaults[model.ActorClaude], defaults[model.ActorCodex].Runtime, repo, dataDir)
+	if err != nil {
+		_ = eventStore.Close()
+		return fmt.Errorf("resolve Agent 1: %w", err)
+	}
+	codexCfg, err := agentResolver.Resolve(context.Background(), model.ActorCodex, defaults[model.ActorCodex], defaults[model.ActorClaude].Runtime, repo, dataDir)
+	if err != nil {
+		_ = eventStore.Close()
+		return fmt.Errorf("resolve Agent 2: %w", err)
+	}
 	engine, err := room.New(room.Config{
 		Name: *nameFlag,
 		Repo: repo,
@@ -634,8 +643,8 @@ func runDoctor(args []string) error {
 	flags.SetOutput(os.Stderr)
 	configFlag := flags.String("config", configPath, "JSON configuration file")
 	repoFlag := flags.String("repo", ".", "repository/workspace directory")
-	claudeCommand := flags.String("claude-command", fileCfg.Claude.Command, "Claude Code executable")
-	codexCommand := flags.String("codex-command", fileCfg.Codex.Command, "Codex executable")
+	claudeCommand := flags.String("claude-command", fileCfg.Runtimes.Claude.Command, "Claude Code executable")
+	codexCommand := flags.String("codex-command", fileCfg.Runtimes.Codex.Command, "Codex executable")
 	jsonFlag := flags.Bool("json", false, "emit a machine-readable report")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -659,7 +668,9 @@ func runDoctor(args []string) error {
 		Git:      probeCommand("git", "--version"),
 		Runtimes: make(map[string]doctorRuntimeReport, 2),
 	}
-	claudeCfg, codexCfg := pairSlotConfigs(fileCfg.Claude, fileCfg.Codex)
+	fileCfg.Runtimes.Claude.Command = *claudeCommand
+	fileCfg.Runtimes.Codex.Command = *codexCommand
+	claudeCfg, codexCfg := pairSlotConfigs(fileCfg)
 	claudeCfg.Command = *claudeCommand
 	codexCfg.Command = *codexCommand
 	claudeCfg.Repo = repo
@@ -1023,7 +1034,7 @@ Usage:
   pairroom service [options]     Start the multi-Project, multi-Room Management Shell
   pairroom serve [options]       Start the legacy single-Room daemon and Room View
   pairroom doctor [options]      Verify Git and vendor CLI installations
-  pairroom providers [options]   Inspect redacted provider profiles and assignments
+  pairroom providers [options]   Inspect the read-only sanitized CC Switch Profile catalog
   pairroom verify [options]      Strictly verify room data integrity
   pairroom backup [options]      Create a verified room-data backup
   pairroom restore [options]     Restore and verify a room-data backup

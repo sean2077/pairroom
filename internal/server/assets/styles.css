@@ -523,7 +523,7 @@ button { color: inherit; }
 .timeline-date::before, .timeline-date::after { content: ""; height: 1px; flex: 1; background: var(--border); }
 .timeline-date span { flex: 0 0 auto; padding: 3px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-3); }
 .lightbox-stage.loading::after {
-  content: "加载图片…"; position: absolute; color: var(--faint); font-size: var(--text-control);
+  content: "Loading image…"; position: absolute; color: var(--faint); font-size: var(--text-control);
 }
 .lightbox-stage.zoomed { cursor: grab; }
 .lightbox-stage img { transition: transform .12s ease; transform-origin: center center; }
@@ -619,6 +619,7 @@ button { color: inherit; }
 }
 
 html[data-embed="1"] .brand { display: none; }
+html[data-embed="1"] #theme-button { display: none; }
 html[data-embed="1"] .topbar {
   grid-template-columns: minmax(0, 1fr) auto;
   min-height: 48px;

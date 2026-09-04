@@ -1,10 +1,10 @@
 (() => {
   'use strict';
 
-  const t = (zh, en) => (window.PairRoomI18n && window.PairRoomI18n.t) ? window.PairRoomI18n.t(zh, en) : zh;
+  const t = (key, options) => window.PairRoomI18n ? window.PairRoomI18n.t(key, options) : key;
 
   const INITIAL_ROUTE = '#/overview';
-  const NEW_BINDING_HINT = 'materializes on first turn';
+  const NEW_BINDING_HINT_KEY = 'room.materializesOnFirstTurn';
   const MAX_ROOM_BATCH_SIZE = 100;
   const hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
   let bootstrapToken = hashParams.get('token') || '';
@@ -38,7 +38,9 @@
     confirmRequirement: '',
     confirmAcknowledgementRequired: false,
     selectedRoomIDs: new Set(),
-    settingsSection: 'interface',
+	settingsSection: 'interface',
+	agentCatalog: null,
+	agentCatalogPromise: null,
     showRawSnapshot: false,
     filters: {
       projectAvailability: 'all',
@@ -66,16 +68,16 @@
     if (!response.ok) {
       const message = response.status === 401
         ? (token
-          ? t('Service Token 无效，请检查后重试。')
-          : t('尚未登录。请输入 Service Token，或运行 pairroom daemon open。'))
-        : (payload.error || response.statusText || `HTTP ${response.status}`);
+          ? t("ui.theServiceTokenIsInvalidCheckItAndRetry")
+          : t("ui.youAreNotSignedInEnterTheServiceTokenOrRunPairroom"))
+		: (window.PairRoomI18n?.errorMessage(payload) || payload.error || response.statusText || `HTTP ${response.status}`);
       const error = new Error(message);
       error.status = response.status;
       if (response.status === 401) error.code = token ? 'invalid_credential' : 'login_required';
       throw error;
     }
     state.csrfToken = payload.csrf_token || '';
-    if (!state.csrfToken) throw new Error(t('Management 会话未返回 CSRF 凭证，请重新登录。'));
+    if (!state.csrfToken) throw new Error(t("ui.theManagementSessionDidNotReturnACsrfTokenSignInAgain"));
   }
 
   async function initializeSession() {
@@ -103,9 +105,9 @@
     const input = $('login-token');
     const button = $('login-token-toggle');
     input.type = visible ? 'text' : 'password';
-    button.textContent = visible ? t('隐藏') : t('显示');
+    button.textContent = visible ? t("ui.hide") : t("ui.show");
     button.setAttribute('aria-pressed', String(visible));
-    button.setAttribute('aria-label', visible ? t('隐藏 Service Token') : t('显示 Service Token'));
+    button.setAttribute('aria-label', visible ? t("ui.hideServiceToken") : t("ui.showServiceToken"));
   }
 
   function toggleCredentialVisibility() {
@@ -145,7 +147,7 @@
     setCredentialVisibility(false);
     if (message) showFormError('login-error', message);
     else hideFormError('login-error');
-    document.title = t('登录 · PairRoom');
+    document.title = t("ui.signInPairroom");
     requestAnimationFrame(() => $('login-token').focus({ preventScroll: true }));
   }
 
@@ -162,8 +164,8 @@
     const credential = credentialFromInput(raw);
     if (!credential) {
       showFormError('login-error', raw.trim()
-        ? t('完整 Management URL 中未找到 #token=…。')
-        : t('请输入 Service Token 或完整 Management URL。'));
+        ? t("ui.theFullManagementUrlDoesNotContainToken")
+        : t("ui.pleaseEnterAServiceTokenOrFullManagementUrl"));
       $('login-token').focus();
       return;
     }
@@ -192,7 +194,7 @@
           showCredentialLogin();
           return;
         }
-        toast('退出失败', error.message, 'error');
+        toast(t("ui.signOutFailed"), error.message, 'error');
       }
     });
   }
@@ -205,7 +207,7 @@
     } catch (error) {
       const message = error.code === 'login_required' ? '' : error.message;
       showCredentialLogin(message);
-      if (options.notify && message) toast('连接失败', message, 'error');
+      if (options.notify && message) toast(t("ui.connectionFailed"), message, 'error');
       return null;
     }
   }
@@ -218,11 +220,11 @@
     const response = await fetch(path, { ...options, method, headers, credentials: 'same-origin' });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const error = new Error(payload.error || response.statusText || `HTTP ${response.status}`);
+	  const error = new Error(window.PairRoomI18n?.errorMessage(payload) || payload.error || response.statusText || `HTTP ${response.status}`);
       error.status = response.status;
       if (response.status === 401 && path !== '/api/v1/session') {
         error.code = 'login_required';
-        showCredentialLogin(t('浏览器会话已过期，请重新输入 Service Token。'));
+        showCredentialLogin(t("ui.theBrowserSessionHasExpiredPleaseReEnterTheServiceToken"));
       }
       throw error;
     }
@@ -268,7 +270,7 @@
       } else {
         state.renderPending = false;
       }
-      if (notify) toast('已同步', t('Management Shell 状态已刷新。'), 'success');
+      if (notify) toast(t("ui.synchronized"), t("ui.managementShellStatusRefreshed"), 'success');
       return snapshot;
     }).catch((error) => {
       if (error.status === 401) return null;
@@ -276,7 +278,7 @@
       state.connected = false;
       state.lastError = error.message;
       setDisconnected(error.message);
-      if (notify || changed) toast('连接失败', error.message, 'error');
+      if (notify || changed) toast(t("ui.connectionFailed"), error.message, 'error');
       return null;
     }).finally(() => {
       state.refreshPromise = null;
@@ -327,11 +329,11 @@
     const summary = serviceSummary(snapshot);
     const healthy = Boolean(snapshot?.healthy);
     $('connection-banner').hidden = state.connected;
-    $('sidebar-health').textContent = state.connected ? (healthy ? 'Service Healthy' : 'Service Fail-closed') : 'Service Disconnected';
+    $('sidebar-health').textContent = state.connected ? (healthy ? t('common.serviceHealthy') : t('common.serviceFailClosed')) : t('common.serviceDisconnected');
     $('sidebar-version').textContent = snapshot ? `PairRoom ${snapshot.version || ''}`.trim() : 'PairRoom Service';
     $('health-dot').className = `status-dot ${state.connected ? (healthy ? 'good' : 'danger') : 'danger'}`;
-    $('nav-project-count').textContent = snapshot ? String(summary.projects) : '';
-    $('nav-runtime-count').textContent = snapshot && summary.runtime_capacity_used ? String(summary.runtime_capacity_used) : '';
+    $('nav-project-count').textContent = snapshot ? formatNumber(summary.projects) : '';
+    $('nav-runtime-count').textContent = snapshot && summary.runtime_capacity_used ? formatNumber(summary.runtime_capacity_used) : '';
     const routeInfo = routeMetadata();
     $('page-eyebrow').textContent = routeInfo.eyebrow;
     $('page-title').textContent = routeInfo.title;
@@ -343,15 +345,15 @@
       if (node.dataset.nav === current) node.setAttribute('aria-current', 'page');
       else node.removeAttribute('aria-current');
     });
-    if (snapshot?.generated_at) $('last-updated').textContent = `最近同步 ${formatRelativeTime(snapshot.generated_at)}`;
+    if (snapshot?.generated_at) $('last-updated').textContent = t("ui.lastSynchronizedValue", { value0: (formatRelativeTime(snapshot.generated_at)) });
     syncRoomTree();
     syncRoomTabs();
   }
 
   function setDisconnected(message) {
     $('connection-banner').hidden = false;
-    $('connection-message').textContent = message || t('正在等待本地 Service 恢复。');
-    $('sidebar-health').textContent = 'Service Disconnected';
+    $('connection-message').textContent = message || t("ui.waitingForTheLocalServiceToRecover");
+    $('sidebar-health').textContent = t('common.serviceDisconnected');
     $('health-dot').className = 'status-dot danger';
   }
 
@@ -359,26 +361,26 @@
     const snapshot = state.snapshot;
     switch (state.route.name) {
       case 'projects':
-        return { eyebrow: 'WORKSPACES', title: 'Projects & Rooms', subtitle: t('管理 canonical Git worktree 与彼此隔离的协作 Room。') };
+        return { eyebrow: t('common.workspacesUpper'), title: t('ui.projectsAndRooms'), subtitle: t("ui.manageCanonicalGitWorktreesAndCollaborationRoomsThatAreIsolatedFromEach") };
       case 'project': {
         const project = snapshot?.projects?.find((item) => item.id === state.route.projectID);
-        return { eyebrow: 'PROJECT', title: projectName(project) || 'Project', subtitle: project?.root || t('查看 Project 身份、Room 与运行状态。') };
+        return { eyebrow: t('common.projectUpper'), title: projectName(project) || t('common.project'), subtitle: project?.root || t("ui.checkTheProjectIdentityRoomAndRunningStatus") };
       }
       case 'runtimes':
-        return { eyebrow: 'ORCHESTRATION', title: 'Room Runtimes', subtitle: t('查看容量、队列、活动 Turn 与空闲挂起状态。') };
+        return { eyebrow: t('common.orchestrationUpper'), title: t('room.roomRuntimes'), subtitle: t("ui.viewCapacityQueuesActiveTurnAndIdlePendingStatus") };
       case 'settings':
-        return { eyebrow: 'CONTROL PLANE', title: t('设置'), subtitle: t('调整当前管理页体验，并检查 Service 启动策略与安全边界。') };
+        return { eyebrow: t('common.controlPlaneUpper'), title: t("ui.settings"), subtitle: t("ui.adjustTheCurrentAdminPageExperienceAndCheckServiceStartupPoliciesAnd") };
       case 'room': {
         const room = roomByID(state.route.roomID);
         const runtime = getRuntime(state.route.roomID);
         return {
-          eyebrow: 'ROOM',
-          title: room?.name || 'Room',
+          eyebrow: t('common.roomUpper'),
+          title: room?.name || t('common.room'),
           subtitle: runtimeLabel(runtime),
         };
       }
       default:
-        return { eyebrow: 'PAIRROOM SERVICE', title: t('概览'), subtitle: t('Claude Code 与 Codex 的多 Project、本地协作控制面。') };
+        return { eyebrow: t('common.pairroomServiceUpper'), title: t("ui.overview"), subtitle: t("ui.multiProjectLocalCollaborationControlSurfaceForSupportedRuntimes") };
     }
   }
 
@@ -401,7 +403,7 @@
     if (roomMode) {
       const room = roomByID(state.route.roomID);
       if (room?.lifecycle === 'archived') {
-        toast('Room 已归档', t('恢复后才能打开。'), 'warning');
+        toast(t("ui.roomArchived"), t("ui.canOnlyBeOpenedAfterRecovery"), 'warning');
         closeTab(state.route.roomID);
         return;
       }
@@ -448,7 +450,7 @@
           children.push(node('button', {
             type: 'button',
             className: 'tree-archived-toggle',
-            textContent: showArchived ? `隐藏已归档 (${archivedRooms.length})` : `已归档 (${archivedRooms.length})`,
+            textContent: showArchived ? t("ui.hideArchivedValue", { value0: (archivedRooms.length) }) : t("ui.archivedValue", { value0: (archivedRooms.length) }),
             onClick: () => {
               if (showArchived) state.archivedOpen.delete(project.id);
               else state.archivedOpen.add(project.id);
@@ -468,7 +470,7 @@
             else state.expandedProjects.add(project.id);
             syncRoomTree();
           },
-        }, node('span', { className: 'tree-caret', textContent: expanded ? '▾' : '▸' }), node('strong', { textContent: projectName(project) }), node('span', { className: 'nav-count', textContent: String(activeRooms.length) })),
+        }, node('span', { className: 'tree-caret', textContent: expanded ? '▾' : '▸' }), node('strong', { textContent: projectName(project) }), node('span', { className: 'nav-count', textContent: formatNumber(activeRooms.length) })),
         children.length ? node('div', { className: 'tree-rooms' }, ...children) : null
       );
     }));
@@ -479,16 +481,16 @@
     const archived = room.lifecycle === 'archived';
     const meta = state.tabMeta[room.id] || {};
     const badges = [];
-    if (meta.unread) badges.push(node('span', { className: 'tab-badge', textContent: String(meta.unread) }));
+    if (meta.unread) badges.push(node('span', { className: 'tab-badge', textContent: formatNumber(meta.unread) }));
     if (meta.pendingApprovals) badges.push(node('span', { className: 'tab-badge warn', textContent: '!' }));
     if (meta.error) badges.push(node('span', { className: 'tab-badge danger', textContent: '×' }));
     return node('button', {
       type: 'button',
       className: `tree-room ${current ? 'active' : ''} ${archived ? 'archived' : ''}`,
-      title: archived ? t('已归档，恢复后才能打开') : room.name,
+      title: archived ? t("ui.archivedCanOnlyBeOpenedAfterRestoration") : room.name,
       onClick: () => {
         if (archived) {
-          toast('Room 已归档', t('恢复后才能打开。'), 'warning');
+          toast(t("ui.roomArchived"), t("ui.canOnlyBeOpenedAfterRecovery"), 'warning');
           return;
         }
         openRoom(room.id);
@@ -518,10 +520,10 @@
           event.preventDefault();
           reorderTab(state.dragTabID || event.dataTransfer.getData('text/plain'), index);
         },
-      }, node('span', { className: `tree-room-dot ${runtimeTone(runtime)}`, 'aria-hidden': 'true' }), node('span', { className: 'room-tab-label', textContent: room?.name || roomID }), meta.unread ? node('span', { className: 'tab-badge', textContent: String(meta.unread) }) : null, node('button', {
+    }, node('span', { className: `tree-room-dot ${runtimeTone(runtime)}`, 'aria-hidden': 'true' }), node('span', { className: 'room-tab-label', textContent: room?.name || roomID }), meta.unread ? node('span', { className: 'tab-badge', textContent: formatNumber(meta.unread) }) : null, node('button', {
         type: 'button',
         className: 'room-tab-close',
-        'aria-label': `关闭 ${room?.name || roomID}`,
+        'aria-label': t("ui.closeValue", { value0: (room?.name || roomID) }),
         textContent: '×',
         onClick: (event) => { event.stopPropagation(); closeTab(roomID); },
       }));
@@ -577,13 +579,13 @@
 
   function roomPlaceholder(room, runtime) {
     const phase = runtime.phase || 'suspended';
-    const title = phase === 'queued' ? `排队 #${runtime.queue_position || '?'}` : (phase === 'starting' ? t('正在启动 Runtime') : (phase === 'failed' ? t('Runtime 失败') : t('Runtime 已挂起')));
-    const detail = runtime.last_error || t('切回此标签会自动重新请求激活。后台标签不保证一直在线。');
+    const title = phase === 'queued' ? t("ui.queuedValue", { value0: (runtime.queue_position || '?') }) : (phase === 'starting' ? t("ui.startingRuntime") : (phase === 'failed' ? t("ui.runtimeFailed") : t("ui.runtimeHasHung")));
+    const detail = runtime.last_error || t("ui.switchingBackToThisTabWillAutomaticallyReRequestActivationTheBackground");
     return node('div', { className: 'room-placeholder' },
-      node('p', { className: 'eyebrow', textContent: 'ROOM SURFACE' }),
-      node('h2', { textContent: room?.name || 'Room' }),
+      node('p', { className: 'eyebrow', textContent: t('common.roomSurfaceUpper') }),
+      node('h2', { textContent: room?.name || t('common.room') }),
       node('p', { textContent: `${title} · ${detail}` }),
-      actionButton(t('重新激活'), () => activateRoomRuntime(room.id), 'primary-button')
+      actionButton(t("ui.reactivate"), () => activateRoomRuntime(room.id), 'primary-button')
     );
   }
 
@@ -626,7 +628,7 @@
       await refresh({ forceRender: true });
       return status;
     } catch (error) {
-      toast('Room 激活失败', error.message, 'error');
+      toast(t("ui.roomActivationFailed"), error.message, 'error');
       return null;
     } finally {
       state.activating.delete(roomID);
@@ -670,7 +672,7 @@
         className: 'list-item room-picker-item',
         onClick: () => { closeDialog('room-picker-dialog'); openRoom(room.id); },
       }, node('div', { className: 'list-copy' }, node('strong', { textContent: room.name }), node('p', { textContent: projectName(project) })));
-    }) : [node('p', { className: 'muted', textContent: t('没有匹配的活动 Room。') })]));
+    }) : [node('p', { className: 'muted', textContent: t("ui.thereIsNoMatchingActiveRoom") })]));
   }
 
   function renderLoading() {
@@ -679,7 +681,7 @@
         node('div', { className: 'loading-grid' },
           ...Array.from({ length: 4 }, () => node('div', { className: 'panel skeleton loading-card' }))
         ),
-        node('div', { className: 'panel skeleton', style: 'height: 300px' })
+        node('div', { className: 'panel skeleton skeleton-tall' })
       )
     );
   }
@@ -693,59 +695,59 @@
     const attention = attentionItems(snapshot);
     const live = liveRuntimeItems(snapshot);
     const heroTitle = projects.length
-      ? `${summary.active_rooms} 个活动 Room，跨 ${summary.projects} 个 Project 协作`
-      : '从第一个 Git Project 开始建立协作控制面';
+      ? t("ui.valueActiveRoomsAcrossValueProjects", { value0: (summary.active_rooms), value1: (summary.projects) })
+      : t("ui.startTheControlPlaneWithYourFirstGitProject");
     const heroText = projects.length
-      ? t('每个 Room 独占 Claude Session 与 Codex Thread；切换管理视图不会中断后台 Turn。')
-      : t('显式登记 canonical Git worktree，再为不同任务创建彼此隔离的 Claude × Codex Room。');
+      ? t("ui.eachRoomHasExclusiveNativeSessionsSwitchingManagementViews")
+      : t("ui.explicitlyRegisterTheCanonicalGitWorktreeAndThenCreateIsolatedAgentRooms");
 
     const heroActions = [
-      actionButton(t('＋ 登记 Project'), () => openProjectDialog('register'), 'primary-button'),
+      actionButton(t("ui.registerProject"), () => openProjectDialog('register'), 'primary-button'),
     ];
-    if (activeProjects.length) heroActions.push(actionButton(t('＋ 创建 Room'), () => openRoomDialog(activeProjects[0].id), 'secondary-button'));
+    if (activeProjects.length) heroActions.push(actionButton(t("ui.createRoom"), () => openRoomDialog(activeProjects[0].id), 'secondary-button'));
 
     view.replaceChildren(
       node('div', { className: 'view-stack' },
         node('section', { className: 'panel hero-panel' },
           node('div', { className: 'hero-copy' },
-            node('p', { className: 'eyebrow', textContent: 'LOCAL PAIRING CONTROL PLANE' }),
+            node('p', { className: 'eyebrow', textContent: t('common.localPairingControlPlaneUpper') }),
             node('h2', { textContent: heroTitle }),
             node('p', { textContent: heroText }),
             node('div', { className: 'hero-actions' }, ...heroActions)
           ),
           node('div', { className: 'hero-meta' },
-            heroMeta(t('Runtime 容量'), policy.limit ? `${summary.runtime_capacity_used} / ${policy.limit}` : `${summary.runtime_capacity_used}`),
-            heroMeta(t('空闲挂起'), policy.idle_timeout_seconds ? formatDuration(policy.idle_timeout_seconds) : t('由启动参数决定')),
-            heroMeta(t('运行模式'), snapshot.healthy ? 'Fail-safe' : 'Fail-closed'),
-            heroMeta(t('版本'), snapshot.version || 'development')
+            heroMeta(t("ui.runtimeCapacity"), policy.limit ? `${formatNumber(summary.runtime_capacity_used)} / ${formatNumber(policy.limit)}` : formatNumber(summary.runtime_capacity_used)),
+            heroMeta(t("ui.idleSuspend"), policy.idle_timeout_seconds ? formatDuration(policy.idle_timeout_seconds) : t("ui.determinedByStartupParameters")),
+            heroMeta(t("ui.operatingMode"), snapshot.healthy ? t('common.failSafe') : t('common.failClosed')),
+            heroMeta(t("ui.version"), snapshot.version || t('common.development'))
           )
         ),
-        node('section', { className: 'stats-grid', 'aria-label': t('Service 统计') },
-          statCard('Projects', summary.projects, `${summary.unavailable_projects} 个不可用`, '⌂', 'accent', () => navigate('#/projects')),
-          statCard(t('活动 Room'), summary.active_rooms, `${summary.archived_rooms} 个已归档`, '◇', 'good', () => navigate('#/projects')),
-          statCard(t('正在工作'), summary.busy_runtimes, `${summary.queued_runtimes} 个排队`, '◎', summary.queued_runtimes ? 'warn' : '', () => navigate('#/runtimes')),
-          statCard(t('需要关注'), summary.attention_items, summary.attention_items ? t('Binding、Runtime、路径或清理诊断') : t('当前无阻断项'), '!', summary.attention_items ? 'danger' : 'good')
+        node('section', { className: 'stats-grid', 'aria-label': t("ui.serviceStatistics") },
+          statCard(t('common.projects'), summary.projects, t("ui.valueUnavailable", { value0: (summary.unavailable_projects) }), '⌂', 'accent', () => navigate('#/projects')),
+          statCard(t("ui.activityRoom"), summary.active_rooms, t("ui.valueArchived", { value0: (summary.archived_rooms) }), '◇', 'good', () => navigate('#/projects')),
+          statCard(t("ui.working"), summary.busy_runtimes, t("ui.valueQueued", { value0: (summary.queued_runtimes) }), '◎', summary.queued_runtimes ? 'warn' : '', () => navigate('#/runtimes')),
+          statCard(t("ui.needAttention"), summary.attention_items, summary.attention_items ? t("ui.bindingRuntimePathOrCleanupDiagnostics") : t("ui.thereAreCurrentlyNoBlocks"), '!', summary.attention_items ? 'danger' : 'good')
         ),
         node('section', { className: 'two-panel-grid' },
-          panel(t('需要关注'), t('阻断激活或需要人工处理的项目'),
+          panel(t("ui.needAttention"), t("ui.blockActivationOrProjectsThatRequireManualProcessing"),
             attention.length ? node('div', { className: 'list' }, ...attention.slice(0, 8).map(renderAttentionItem))
-              : emptyState('✓', t('一切正常'), t('当前没有不可用 Project、失败 Runtime、待补全 Binding 或 Room 清理项。'), true),
-            attention.length > 8 ? `${attention.length - 8} 个项目未显示` : ''
+              : emptyState('✓', t("ui.everythingIsFine"), t("ui.thereAreCurrentlyNoUnavailableProjectsFailedRuntimesBindingsToBeCompleted"), true),
+            attention.length > 8 ? t("ui.valueItemsHidden", { value0: (attention.length - 8) }) : ''
           ),
-          panel(t('实时运行'), t('活跃、工作中与排队的 Room'),
+          panel(t("ui.runInRealTime"), t("ui.activeWorkingAndQueuedRooms"),
             live.length ? node('div', { className: 'list' }, ...live.slice(0, 8).map(renderLiveItem))
-              : emptyState('◎', t('当前没有活动 Runtime'), t('打开一个 Room 后，Runtime 会按容量惰性启动。'), true)
+              : emptyState('◎', t("ui.thereIsCurrentlyNoActiveRuntime"), t("ui.afterOpeningARoomTheRuntimeWillStartLazilyBasedOnCapacity"), true)
           )
         ),
-        panel('Projects', t('最近登记的工作区与 Room 概况'),
+        panel(t('common.projects'), t("ui.overviewOfRecentlyRegisteredWorkspacesAndRooms"),
           projects.length ? node('div', { className: 'list' }, ...projects.slice(0, 6).map(renderProjectOverviewItem))
-            : emptyState('⌂', t('尚未登记 Project'), t('只接受用户显式输入的绝对路径，不扫描开发目录。'), true, actionButton(t('登记第一个 Project'), () => openProjectDialog('register'), 'primary-button compact-button')),
-          projects.length > 6 ? t('在 Projects 页面查看全部工作区') : '',
-          projects.length > 6 ? actionButton(t('查看全部'), () => navigate('#/projects'), 'text-button') : null
+            : emptyState('⌂', t("ui.notYetRegisteredProject"), t("ui.onlyAbsolutePathsEnteredExplicitlyByTheUserAreAcceptedAndDevelopment"), true, actionButton(t("ui.registerYourFirstProject"), () => openProjectDialog('register'), 'primary-button compact-button')),
+          projects.length > 6 ? t("ui.viewAllWorkspacesOnTheProjectsPage") : '',
+          projects.length > 6 ? actionButton(t("ui.viewAll"), () => navigate('#/projects'), 'text-button') : null
         ),
         node('aside', { className: 'callout boundary' },
-          node('strong', { textContent: 'Transcript Boundary' }),
-          node('span', { textContent: t('复用 Existing Session/Thread 只恢复 vendor context；PairRoom 的公共时间线从绑定成功后开始，不导入绑定前 transcript。') })
+          node('strong', { textContent: t('common.transcriptBoundary') }),
+          node('span', { textContent: t("ui.reusingExistingSessionThreadOnlyRestoresTheVendorContextThePublicTimeline") })
         )
       )
     );
@@ -758,34 +760,34 @@
       .sort((a, b) => Number(b.project.available) - Number(a.project.available) || Number(b.runtimeCounts.busy) - Number(a.runtimeCounts.busy) || projectName(a.project).localeCompare(projectName(b.project)));
 
     const availability = selectControl([
-      ['all', t('全部状态')], ['available', 'Available'], ['unavailable', 'Unavailable'],
-    ], state.filters.projectAvailability, (value) => { state.filters.projectAvailability = value; renderProjects(); }, t('Project 状态'));
+      ['all', t("ui.allStatus")], ['available', t('common.available')], ['unavailable', t('common.unavailable')],
+    ], state.filters.projectAvailability, (value) => { state.filters.projectAvailability = value; renderProjects(); }, t("ui.projectStatus"));
 
     view.replaceChildren(
       node('div', { className: 'view-stack' },
         node('section', { className: 'section-header' },
-          node('div', {}, node('h2', { textContent: t('Workspace 管理') }), node('p', { textContent: t('一个 Project 对应一个 canonical Git worktree；每个 Project 可以拥有多个 Room。') })),
+          node('div', {}, node('h2', { textContent: t("ui.workspaceManagement") }), node('p', { textContent: t("ui.aProjectCorrespondsToACanonicalGitWorktreeEachProjectCanHave") })),
           node('div', { className: 'section-actions' },
-            actionButton(t('导入 Legacy Room'), () => openProjectDialog('import'), 'secondary-button'),
-            actionButton(t('＋ 登记 Project'), () => openProjectDialog('register'), 'primary-button')
+            actionButton(t("ui.importLegacyRoom"), () => openProjectDialog('import'), 'secondary-button'),
+            actionButton(t("ui.registerProject"), () => openProjectDialog('register'), 'primary-button')
           )
         ),
         node('section', { className: 'panel panel-body toolbar' },
           node('label', { className: 'search-field' },
             node('span', { textContent: '⌕', 'aria-hidden': 'true' }),
             node('input', {
-              type: 'search', value: state.search, placeholder: t('筛选路径、Project、Room 或 ID'),
-              'aria-label': t('筛选 Project 和 Room'),
+              type: 'search', value: state.search, placeholder: t("ui.filterByPathProjectRoomOrId"),
+              'aria-label': t("ui.filterProjectAndRoom"),
               onInput: (event) => { state.search = event.target.value; $('global-search').value = state.search; renderProjects(); },
             })
           ),
           availability,
-          actionButton(state.filters.showArchived ? t('✓ 显示已归档') : t('显示已归档'), () => {
+          actionButton(state.filters.showArchived ? t("ui.showArchived") : t("ui.showArchived9738720"), () => {
             state.filters.showArchived = !state.filters.showArchived;
             renderProjects();
           }, `filter-chip ${state.filters.showArchived ? 'active' : ''}`),
           state.snapshot?.capabilities?.room_deletion
-            ? roomSelectionToggleButton(visibleRoomsForBatch(projectModels.flatMap((model) => model.rooms)), t('当前可见结果'))
+            ? roomSelectionToggleButton(visibleRoomsForBatch(projectModels.flatMap((model) => model.rooms)), t("ui.currentlyVisibleResults"))
             : null,
           state.snapshot?.capabilities?.room_deletion
             ? roomClearSelectionButton()
@@ -796,16 +798,16 @@
           state.snapshot?.capabilities?.room_deletion
             ? roomBatchRemovalButton(selectedArchivedRooms(visibleRoomsForBatch(projectModels.flatMap((model) => model.rooms))))
             : null,
-          node('span', { className: 'muted', textContent: `${projectModels.length} / ${(snapshot.projects || []).length} Projects` })
+          node('span', { className: 'muted', textContent: t('room.projectFilterCount', { visible: projectModels.length, total: (snapshot.projects || []).length }) })
         ),
         projectModels.length
           ? node('section', { className: 'project-grid' }, ...projectModels.map(renderProjectCard))
-          : emptyState('⌕', t('没有匹配的 Project'), state.search ? t('调整搜索词或筛选条件。') : t('登记一个 Git worktree 开始使用。'), false,
-            state.search ? actionButton(t('清除筛选'), () => { state.search = ''; $('global-search').value = ''; state.filters.projectAvailability = 'all'; renderProjects(); }, 'secondary-button')
-              : actionButton(t('登记 Project'), () => openProjectDialog('register'), 'primary-button')),
+          : emptyState('⌕', t("ui.noMatchingProject"), state.search ? t("ui.adjustYourSearchTermsOrFilters") : t("ui.registerAGitWorktreeToGetStarted"), false,
+            state.search ? actionButton(t("ui.clearFilters"), () => { state.search = ''; $('global-search').value = ''; state.filters.projectAvailability = 'all'; renderProjects(); }, 'secondary-button')
+              : actionButton(t("ui.registerProject9c99cf3"), () => openProjectDialog('register'), 'primary-button')),
         node('aside', { className: 'callout neutral' },
-          node('strong', { textContent: 'Project Identity' }),
-          node('span', { textContent: t('服务会解析符号链接并执行 Git worktree 根目录归一化；等价路径不会创建重复 Project。') })
+          node('strong', { textContent: t('room.projectIdentity') }),
+          node('span', { textContent: t("ui.theServiceResolvesSymbolicLinksAndPerformsGitWorktreeRootNormalizationEquivalent") })
         )
       )
     );
@@ -815,19 +817,19 @@
     const { project, rooms, activeRooms, runtimeCounts } = model;
     const visibleRooms = rooms.filter((room) => state.filters.showArchived || room.lifecycle !== 'archived');
     const archivedRoomsHidden = !state.filters.showArchived && rooms.length > 0 && visibleRooms.length === 0;
-    const emptyRoomTitle = archivedRoomsHidden ? t('此 Project 只剩已归档 Room') : t('此 Project 尚无 Room');
+    const emptyRoomTitle = archivedRoomsHidden ? t("ui.thisProjectOnlyHasArchivedRoomsLeft") : t("ui.thereIsNoRoomYetForThisProject");
     const emptyRoomDescription = archivedRoomsHidden
-      ? t('显示并永久清除已归档 Room 后即可注销 Project。')
+      ? t("ui.onceArchivedRoomsAreDisplayedAndPermanentlyClearedYouCanLogOut")
       : project.available
-        ? t('创建一个 Room，绑定 Claude 与 Codex。')
-        : t('本地路径不可用不影响注销此空 Project。');
+        ? t("ui.createARoomAndConfigureBothAgents")
+        : t("ui.unavailabilityOfTheLocalPathDoesNotAffectLoggingOutOfThis");
     const emptyRoomAction = archivedRoomsHidden
-      ? actionButton(t('显示已归档 Room'), () => {
+      ? actionButton(t("ui.showArchivedRooms"), () => {
           state.filters.showArchived = true;
           renderProjects();
         }, 'secondary-button compact-button')
       : project.available
-        ? actionButton(t('创建 Room'), () => openRoomDialog(project.id), 'secondary-button compact-button')
+        ? actionButton(t("ui.createRooma1cda23"), () => openRoomDialog(project.id), 'secondary-button compact-button')
         : null;
     return node('article', { className: 'panel project-card' },
       node('header', { className: 'project-card-header' },
@@ -838,21 +840,21 @@
         ),
         node('div', { className: 'project-card-actions' },
           state.snapshot?.capabilities?.project_refresh && !project.available
-            ? actionButton(t('重新检查'), () => refreshProject(project), 'secondary-button compact-button')
+            ? actionButton(t("ui.recheck"), () => refreshProject(project), 'secondary-button compact-button')
             : null,
-          actionButton(t('复制路径'), () => copyText(project.root, t('Project 路径已复制。')), 'secondary-button compact-button'),
-          actionButton(t('详情'), () => navigate(`#/projects/${encodeURIComponent(project.id)}`), 'secondary-button compact-button'),
+          actionButton(t("ui.copyPath"), () => copyText(project.root, t("ui.projectPathCopied")), 'secondary-button compact-button'),
+          actionButton(t("ui.details"), () => navigate(`#/projects/${encodeURIComponent(project.id)}`), 'secondary-button compact-button'),
           projectRemovalButton(project, rooms.length, true),
-          actionButton('＋ Room', () => openRoomDialog(project.id), 'primary-button compact-button', !project.available)
+          actionButton(t('room.addRoom'), () => openRoomDialog(project.id), 'primary-button compact-button', !project.available)
         )
       ),
       node('div', { className: 'project-summary' },
-        summaryCell(activeRooms, t('活动 Room')),
-        summaryCell(rooms.length - activeRooms, t('已归档')),
-        summaryCell(runtimeCounts.busy, t('工作中')),
-        summaryCell(runtimeCounts.queued, t('排队'))
+        summaryCell(activeRooms, t("ui.activityRoom")),
+        summaryCell(rooms.length - activeRooms, t("ui.archived")),
+        summaryCell(runtimeCounts.busy, t("ui.atWork")),
+        summaryCell(runtimeCounts.queued, t("ui.queue"))
       ),
-      project.diagnostic ? node('div', { className: 'callout danger', style: 'margin: 12px 14px 0' }, node('strong', { textContent: t('路径诊断') }), node('span', { textContent: project.diagnostic })) : null,
+      project.diagnostic ? node('div', { className: 'callout danger project-diagnostic-callout' }, node('strong', { textContent: t("ui.pathDiagnostics") }), node('span', { textContent: project.diagnostic })) : null,
       visibleRooms.length
         ? node('div', { className: 'room-list' }, ...visibleRooms.map((room) => renderRoomRow(room, model.runtimeByRoom.get(room.id))))
         : emptyState('◇', emptyRoomTitle, emptyRoomDescription, true, emptyRoomAction)
@@ -863,72 +865,72 @@
     const snapshot = state.snapshot;
     const model = buildProjectModels(snapshot).find((item) => item.project.id === projectID);
     if (!model) {
-      view.replaceChildren(emptyState('?', t('Project 不存在'), t('它可能尚未登记，或 Service Registry 已重新构建。'), false, actionButton(t('返回 Projects'), () => navigate('#/projects'), 'secondary-button')));
+      view.replaceChildren(emptyState('?', t("ui.projectDoesNotExist"), t("ui.itMayNotBeRegisteredYetOrTheServiceRegistryMayHave"), false, actionButton(t("ui.returnToProjects"), () => navigate('#/projects'), 'secondary-button')));
       return;
     }
     const { project, rooms, activeRooms, runtimeCounts, runtimeByRoom } = model;
     const visibleRooms = rooms.filter((room) => state.filters.showArchived || room.lifecycle !== 'archived');
     view.replaceChildren(
       node('div', { className: 'view-stack' },
-        actionButton(t('← 返回 Projects'), () => navigate('#/projects'), 'text-button'),
+        actionButton(t("ui.backToProjects"), () => navigate('#/projects'), 'text-button'),
         node('section', { className: 'panel detail-hero' },
           node('div', { className: 'detail-title' },
             node('div', { className: 'project-avatar', textContent: projectInitials(project) }),
             node('div', {},
-              node('div', { className: 'room-title-line' }, node('h2', { textContent: projectName(project), style: 'margin:0' }), statusBadge(project.available ? 'available' : 'unavailable', project.available ? 'good' : 'danger')),
+              node('div', { className: 'room-title-line' }, node('h2', { className: 'flush-heading', textContent: projectName(project) }), statusBadge(project.available ? 'available' : 'unavailable', project.available ? 'good' : 'danger')),
               node('p', { className: 'detail-path', textContent: project.root })
             )
           ),
           node('div', { className: 'detail-actions' },
-            actionButton(t('复制路径'), () => copyText(project.root, t('Project 路径已复制。')), 'secondary-button'),
-            actionButton(t('＋ 创建 Room'), () => openRoomDialog(project.id), 'primary-button', !project.available)
+            actionButton(t("ui.copyPath"), () => copyText(project.root, t("ui.projectPathCopied")), 'secondary-button'),
+            actionButton(t("ui.createRoom"), () => openRoomDialog(project.id), 'primary-button', !project.available)
           )
         ),
         node('section', { className: 'stats-grid' },
-          statCard(t('活动 Room'), activeRooms, `${rooms.length - activeRooms} 已归档`, '◇', 'accent'),
-          statCard(t('工作中'), runtimeCounts.busy, `${runtimeCounts.active} active`, '◎', runtimeCounts.busy ? 'warn' : ''),
-          statCard(t('排队'), runtimeCounts.queued, runtimeCounts.queued ? t('等待全局容量') : t('当前无等待'), '↥', runtimeCounts.queued ? 'warn' : 'good'),
-          statCard(t('失败'), runtimeCounts.failed, runtimeCounts.failed ? t('查看 Runtime 诊断') : t('无失败 Runtime'), '!', runtimeCounts.failed ? 'danger' : 'good')
+          statCard(t("ui.activityRoom"), activeRooms, t("ui.valueArchivedc521841", { value0: (rooms.length - activeRooms) }), '◇', 'accent'),
+          statCard(t("ui.atWork"), runtimeCounts.busy, t('room.activeCount', { count: runtimeCounts.active }), '◎', runtimeCounts.busy ? 'warn' : ''),
+          statCard(t("ui.queue"), runtimeCounts.queued, runtimeCounts.queued ? t("ui.waitingForGlobalCapacity") : t("ui.thereIsCurrentlyNoWaiting"), '↥', runtimeCounts.queued ? 'warn' : 'good'),
+          statCard(t("ui.failed"), runtimeCounts.failed, runtimeCounts.failed ? t("ui.viewRuntimeDiagnostics") : t("ui.noFailureRuntime"), '!', runtimeCounts.failed ? 'danger' : 'good')
         ),
         node('section', { className: 'two-panel-grid' },
-          panel('Rooms', t('公共时间线、附件、审批与 Agent Bindings 均按 Room 隔离'),
+          panel(t('common.rooms'), t("ui.publicTimelinesAttachmentsApprovalsAndAgentBindingsAreAllIsolatedByRoom"),
             visibleRooms.length ? node('div', { className: 'room-list' }, ...visibleRooms.map((room) => renderRoomRow(room, runtimeByRoom.get(room.id))))
-              : emptyState('◇', t('没有可见 Room'), t('创建新 Room，或显示已归档 Room。'), true),
+              : emptyState('◇', t("ui.noVisibleRoom"), t("ui.createANewRoomOrDisplayArchivedRooms"), true),
             '',
             node('div', { className: 'section-actions' },
-              actionButton(state.filters.showArchived ? t('隐藏已归档') : t('显示已归档'), () => { state.filters.showArchived = !state.filters.showArchived; renderProjectDetail(projectID); }, 'secondary-button compact-button'),
-              state.snapshot?.capabilities?.room_deletion ? roomSelectionToggleButton(visibleRooms, t('本项目当前可见范围')) : null,
+              actionButton(state.filters.showArchived ? t("ui.hideArchived") : t("ui.showArchived9738720"), () => { state.filters.showArchived = !state.filters.showArchived; renderProjectDetail(projectID); }, 'secondary-button compact-button'),
+              state.snapshot?.capabilities?.room_deletion ? roomSelectionToggleButton(visibleRooms, t("ui.theCurrentVisibleRangeOfThisProject")) : null,
               state.snapshot?.capabilities?.room_deletion ? roomClearSelectionButton() : null,
               state.snapshot?.capabilities?.room_deletion ? roomBatchArchiveButton(selectedActiveRooms(visibleRooms)) : null,
               state.snapshot?.capabilities?.room_deletion ? roomBatchRemovalButton(selectedArchivedRooms(visibleRooms)) : null,
-              actionButton('＋ Room', () => openRoomDialog(project.id), 'primary-button compact-button', !project.available)
+              actionButton(t('room.addRoom'), () => openRoomDialog(project.id), 'primary-button compact-button', !project.available)
             )
           ),
-          panel('Project Identity', t('Registry 中的 canonical worktree 记录'),
+          panel(t('room.projectIdentity'), t("ui.canonicalWorktreeRecordsInTheRegistry"),
             node('div', { className: 'key-value-grid' },
-              keyValue('Project ID', project.id, true),
-              keyValue(t('创建时间'), formatDateTime(project.created_at)),
-              keyValue('Canonical Root', project.root, true),
-              keyValue(t('可用性'), project.available ? 'Available' : 'Unavailable')
+              keyValue(t('room.projectId'), project.id, true),
+              keyValue(t("ui.creationTime"), formatDateTime(project.created_at)),
+              keyValue(t('room.canonicalRoot'), project.root, true),
+              keyValue(t("ui.availability"), project.available ? t('common.available') : t('common.unavailable'))
             ),
-            project.diagnostic || t('Service 不会从当前工作目录隐式切换 Project。')
+            project.diagnostic || t("ui.serviceDoesNotImplicitlySwitchProjectFromTheCurrentWorkingDirectory")
           )
         ),
         state.snapshot?.capabilities?.project_refresh || state.snapshot?.capabilities?.project_removal
-          ? panel('Project Maintenance', t('重新检查 canonical path，或安全注销空 Project。'),
+          ? panel(t('room.projectMaintenance'), t("ui.recheckTheCanonicalPathOrSafelyLogOutOfTheEmptyProject"),
             node('div', { className: 'section-actions' },
               state.snapshot?.capabilities?.project_refresh
-                ? actionButton(t('重新检查路径'), () => refreshProject(project), 'secondary-button')
+                ? actionButton(t("ui.recheckPath"), () => refreshProject(project), 'secondary-button')
                 : null,
               projectRemovalButton(project, rooms.length)
             ),
             rooms.length
-              ? `仍包含 ${rooms.length} 个 Room（含已归档）；请先归档并永久清除全部 Room，再注销 Project。`
-              : '注销只移除 Registry 登记，不删除 Git worktree 或 vendor context。'
+              ? t("ui.stillContainsValueRoomsIncludingArchivedRoomsArchiveAndPermanentlyDeleteEvery", { value0: (rooms.length) })
+              : t("ui.unregisteringRemovesOnlyTheRegistryEntryItDoesNotDeleteTheGit")
           )
           : null,
-        project.diagnostic ? node('aside', { className: 'callout danger' }, node('strong', { textContent: t('Project 不可用') }), node('span', { textContent: project.diagnostic })) : null,
-        node('aside', { className: 'callout boundary' }, node('strong', { textContent: 'Workspace Boundary' }), node('span', { textContent: t('Room 永久属于此 Project；Reviewer snapshot 与 Git 状态都以该 canonical worktree 为边界。') }))
+        project.diagnostic ? node('aside', { className: 'callout danger' }, node('strong', { textContent: t("ui.projectIsNotAvailable") }), node('span', { textContent: project.diagnostic })) : null,
+        node('aside', { className: 'callout boundary' }, node('strong', { textContent: t('room.workspaceBoundary') }), node('span', { textContent: t("ui.roomPermanentlyBelongsToThisProjectReviewerSnapshotAndGitStatusAre") }))
       )
     );
   }
@@ -939,13 +941,16 @@
     const title = node('div', { className: 'room-title-line' },
       node('strong', { textContent: room.name }),
       statusBadge(room.lifecycle || 'active', archived ? 'warn' : 'good'),
-      statusBadge(runtimeLabel(runtime), runtimeTone(runtime), runtime.busy ? 'busy' : ''),
-      room.legacy ? statusBadge('legacy', 'info') : null
-    );
-    const meta = node('div', { className: 'room-meta' },
-      bindingMeta('claude', room.bindings?.claude),
-      bindingMeta('codex', room.bindings?.codex),
-      node('code', { textContent: room.id, title: room.id })
+	  statusBadge(runtimeLabel(runtime), runtimeTone(runtime), runtime.busy ? 'busy' : ''),
+	  room.legacy ? statusBadge('legacy', 'info') : null,
+	  room.legacy_defaults ? statusBadge(t('room.legacyDefaults'), 'info') : null
+	);
+	const meta = node('div', { className: 'room-meta' },
+	  bindingMeta('claude', room.bindings?.claude),
+	  bindingMeta('codex', room.bindings?.codex),
+	  room.agents?.claude ? agentSelectionMeta(t('agent.agent1'), room.agents.claude) : null,
+	  room.agents?.codex ? agentSelectionMeta(t('agent.agent2'), room.agents.codex) : null,
+	  node('code', { textContent: room.id, title: room.id })
     );
     if (runtime.last_error) meta.append(node('span', { className: 'badge danger plain', textContent: truncate(runtime.last_error, 90), title: runtime.last_error }));
 
@@ -954,31 +959,42 @@
       actions.append(
         node('label', {
           className: 'button secondary-button compact-button room-action-control room-select-control',
-          title: archived ? t('选择此 Room 进行批量清理') : t('选择此 Room 进行批量归档'),
+          title: archived ? t("ui.selectThisRoomForBatchCleaning") : t("ui.selectThisRoomForBatchArchiving"),
         },
           node('input', {
             type: 'checkbox',
             checked: state.selectedRoomIDs.has(room.id),
-            'aria-label': `选择 Room ${room.name}`,
+            'aria-label': t("ui.selectRoomValue", { value0: (room.name) }),
             onChange: (event) => toggleRoomSelection(room.id, event.target.checked),
           }),
-          node('span', { textContent: t('选择') })
+          node('span', { textContent: t("ui.choose") })
         )
       );
     }
     if (archived) {
-      actions.append(actionButton(t('恢复'), () => restoreRoom(room), 'secondary-button compact-button room-action-control'));
+      actions.append(actionButton(t("ui.restore"), () => restoreRoom(room), 'secondary-button compact-button room-action-control'));
       if (state.snapshot?.capabilities?.room_deletion) {
-        actions.append(actionButton(t('永久清除'), () => confirmRoomRemoval([room]), 'danger-button outline compact-button room-action-control'));
+        actions.append(actionButton(t("ui.permanentlyDelete"), () => confirmRoomRemoval([room]), 'danger-button outline compact-button room-action-control'));
       }
     } else {
-      if (pending) actions.append(actionButton(t('补全 Binding'), () => completeBindings(room), 'primary-button compact-button room-action-control'));
-      actions.append(actionButton(runtime.phase === 'queued' ? `排队 #${runtime.queue_position || '?'}` : t('打开'), () => openRoom(room.id), 'primary-button compact-button room-action-control', pending));
-      actions.append(actionButton(t('浏览器打开'), () => openRoomInBrowserAction(room.id), 'secondary-button compact-button room-action-control', pending));
-      actions.append(actionButton(t('重命名'), () => openRenameDialog(room), 'secondary-button compact-button room-action-control'));
-      actions.append(actionButton(t('归档'), () => archiveRoom(room), 'danger-button outline compact-button room-action-control'));
+      if (pending) actions.append(actionButton(t("ui.completeBindings"), () => completeBindings(room), 'primary-button compact-button room-action-control'));
+      actions.append(actionButton(runtime.phase === 'queued' ? t("ui.queuedValue", { value0: (runtime.queue_position || '?') }) : t("ui.open"), () => openRoom(room.id), 'primary-button compact-button room-action-control', pending));
+      actions.append(actionButton(t("ui.browserOpens"), () => openRoomInBrowserAction(room.id), 'secondary-button compact-button room-action-control', pending));
+      actions.append(actionButton(t("ui.rename"), () => openRenameDialog(room), 'secondary-button compact-button room-action-control'));
+      actions.append(actionButton(t("ui.archive"), () => archiveRoom(room), 'danger-button outline compact-button room-action-control'));
     }
     return node('article', { className: 'room-row' }, node('div', { className: 'room-row-main' }, title, meta), actions);
+  }
+
+  function agentSelectionMeta(label, selection) {
+	const provider = selection.provider?.source === 'cc-switch'
+	  ? `CC Switch · ${selection.provider.app_type}/${selection.provider.profile_id}`
+	  : t('agent.nativeProvider');
+	return node('span', {
+	  className: 'badge plain',
+	  textContent: `${label}: ${selection.runtime}${selection.model ? ` · ${selection.model}` : ''}`,
+	  title: `${t('agent.provider')}: ${provider}. ${t('room.agentConfigurationImmutable')}`,
+	});
   }
 
   function renderRuntimes() {
@@ -992,34 +1008,34 @@
     const limit = policy.limit || Math.max(summary.runtime_capacity_used, 1);
     const percent = Math.min(100, Math.round((summary.runtime_capacity_used / limit) * 100));
     const phaseSelect = selectControl([
-      ['all', t('全部 Runtime')], ['active', 'Active'], ['queued', 'Queued'], ['starting', 'Starting'], ['stopping', 'Stopping'], ['suspended', 'Suspended'], ['failed', 'Failed'],
-    ], state.filters.runtimePhase, (value) => { state.filters.runtimePhase = value; renderRuntimes(); }, t('Runtime 阶段'));
+      ['all', t("ui.allRuntime")], ['active', t('common.active')], ['queued', t('ui.queued')], ['starting', t('common.starting')], ['stopping', t('common.stopping')], ['suspended', t('common.suspended')], ['failed', t('ui.failed')],
+    ], state.filters.runtimePhase, (value) => { state.filters.runtimePhase = value; renderRuntimes(); }, t("ui.runtimePhase"));
 
     view.replaceChildren(
       node('div', { className: 'view-stack' },
         node('section', { className: 'section-header' },
-          node('div', {}, node('h2', { textContent: 'Runtime Orchestration' }), node('p', { textContent: t('只回收 idle Runtime；活动 Turn 永不因容量、切换页面或 Service 设置而被抢占。') })),
-          node('div', { className: 'section-actions' }, phaseSelect, actionButton(t('刷新状态'), () => refresh({ notify: true, forceRender: true }), 'secondary-button'))
+          node('div', {}, node('h2', { textContent: t('room.runtimeOrchestration') }), node('p', { textContent: t("ui.onlyIdleRuntimeIsRecycledActiveTurnsAreNeverPreemptedDueTo") })),
+          node('div', { className: 'section-actions' }, phaseSelect, actionButton(t("ui.refreshStatus"), () => refresh({ notify: true, forceRender: true }), 'secondary-button'))
         ),
         node('section', { className: 'three-panel-grid' },
           node('article', { className: 'panel capacity-card' },
-            node('div', { className: 'capacity-heading' }, node('div', {}, node('div', { className: 'stat-label', textContent: t('全局 Runtime 容量') }), node('div', { className: 'capacity-value' }, String(summary.runtime_capacity_used), node('small', { textContent: ` / ${policy.limit || '—'}` }))), statusBadge(percent >= 100 ? 'full' : 'available', percent >= 100 ? 'warn' : 'good')),
-            node('div', { className: 'progress-track', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(limit), 'aria-valuenow': String(summary.runtime_capacity_used) }, node('div', { className: 'progress-bar', style: `width:${percent}%` })),
-            node('div', { className: 'capacity-legend' }, node('span', {}, node('i'), `${summary.active_runtimes} active`), node('span', {}, node('i', { className: 'busy' }), `${summary.busy_runtimes} working`), node('span', {}, node('i', { className: 'queued' }), `${summary.queued_runtimes} queued`))
+            node('div', { className: 'capacity-heading' }, node('div', {}, node('div', { className: 'stat-label', textContent: t("ui.globalRuntimeCapacity") }), node('div', { className: 'capacity-value' }, formatNumber(summary.runtime_capacity_used), node('small', { textContent: ` / ${policy.limit ? formatNumber(policy.limit) : '—'}` }))), statusBadge(percent >= 100 ? 'full' : 'available', percent >= 100 ? 'warn' : 'good')),
+            node('progress', { className: 'progress-track', max: String(limit), value: String(summary.runtime_capacity_used), 'aria-label': t("ui.globalRuntimeCapacity") }),
+            node('div', { className: 'capacity-legend' }, node('span', {}, node('i'), t('room.activeCount', { count: summary.active_runtimes })), node('span', {}, node('i', { className: 'busy' }), t('room.workingCount', { count: summary.busy_runtimes })), node('span', {}, node('i', { className: 'queued' }), t('room.queuedCount', { count: summary.queued_runtimes })))
           ),
-          statCard('Idle timeout', policy.idle_timeout_seconds ? formatDuration(policy.idle_timeout_seconds) : '—', t('从最后活动开始计算'), '◷', 'accent'),
-          statCard('Queue', summary.queued_runtimes, summary.queued_runtimes ? t('FIFO，断开浏览器不会取消需求') : t('当前无等待'), '↥', summary.queued_runtimes ? 'warn' : 'good')
+          statCard(t('room.idleTimeout'), policy.idle_timeout_seconds ? formatDuration(policy.idle_timeout_seconds) : '—', t("ui.countingFromLastActivity"), '◷', 'accent'),
+          statCard(t('ui.queue'), summary.queued_runtimes, summary.queued_runtimes ? t("ui.fifoDisconnectingTheBrowserDoesNotCancelTheDemand") : t("ui.thereIsCurrentlyNoWaiting"), '↥', summary.queued_runtimes ? 'warn' : 'good')
         ),
-        queued.length ? panel('Activation Queue', t('所有容量都被工作中 Runtime 占用时，新 Room 进入可见 FIFO 队列'),
+        queued.length ? panel(t('room.activationQueue'), t("ui.whenAllCapacityIsOccupiedByTheWorkingRuntimeTheNewRoom"),
           node('div', { className: 'list' }, ...queued.map((item) => renderQueueItem(item)))
         ) : null,
-        panel(t('所有 Room Runtime'), `${models.length} 个 Room · 状态按工作优先级排序`,
-          models.length ? runtimeTable(models) : emptyState('◎', t('没有匹配的 Runtime'), t('调整状态筛选。'), true),
-          t('Failed 且仍占用容量表示清理状态不确定；Service 会 fail closed，避免同一 Binding 启动第二个 Runtime。')
+        panel(t("ui.allRoomRuntime"), t("ui.valueRoomsSortedByWorkPriority", { value0: (models.length) }),
+          models.length ? runtimeTable(models) : emptyState('◎', t("ui.noMatchingRuntime"), t("ui.adjustStatusFilter"), true),
+          t("ui.failedAndStillOccupyingCapacityMeansThatTheCleanupStatusIsUncertain")
         ),
         node('aside', { className: 'callout warning' },
-          node('strong', { textContent: 'Non-preemptive policy' }),
-          node('span', { textContent: t('“挂起”只对 idle、queued 或可安全关闭的 Runtime 生效。Busy Runtime 会返回冲突，必须等待 Turn 完成或在 Room View 中由用户显式中断。') })
+          node('strong', { textContent: t('room.nonPreemptivePolicy') }),
+          node('span', { textContent: t("ui.suspendOnlyTakesEffectForIdleQueuedOrRuntimesThatCanBe") })
         )
       )
     );
@@ -1027,32 +1043,32 @@
 
   function runtimeTable(models) {
     const table = node('table', { className: 'runtime-table' });
-    table.append(node('thead', {}, node('tr', {}, ...['Room', 'Project', t('阶段'), t('容量'), t('最后活动'), t('操作')].map((label) => node('th', { textContent: label })))));
+    table.append(node('thead', {}, node('tr', {}, ...[t('common.room'), t('common.project'), t("ui.stage"), t("ui.capacity"), t("ui.lastActivity"), t("ui.actions")].map((label) => node('th', { textContent: label })))));
     const body = node('tbody');
     models.forEach(({ room, project, runtime }) => {
       const actionCell = node('div', { className: 'runtime-actions' });
       const cleanupUncertain = runtime.phase === 'failed' && runtime.occupies_capacity;
       if (room.lifecycle !== 'archived') {
         actionCell.append(actionButton(
-          cleanupUncertain ? t('需受控重启') : (runtime.phase === 'active' ? t('打开') : t('激活')),
+          cleanupUncertain ? t("ui.requiresControlledRestart") : (runtime.phase === 'active' ? t("ui.open") : t("ui.activate")),
           () => openRoom(room.id),
           'secondary-button compact-button',
           roomHasBlockingPendingBindings(room) || cleanupUncertain,
         ));
       }
       if (['active', 'queued', 'starting'].includes(runtime.phase)) {
-        actionCell.append(actionButton(runtime.phase === 'queued' ? t('取消排队') : t('挂起'), () => suspendRoom(room, runtime), 'danger-button outline compact-button', runtime.busy || runtime.phase === 'starting'));
+        actionCell.append(actionButton(runtime.phase === 'queued' ? t("ui.cancelQueue") : t("ui.suspend"), () => suspendRoom(room, runtime), 'danger-button outline compact-button', runtime.busy || runtime.phase === 'starting'));
       }
       body.append(node('tr', { className: 'runtime-record' },
-        node('td', { 'data-label': 'Room' }, node('div', { className: 'runtime-room' }, node('strong', { textContent: room.name }), node('small', { textContent: room.id }))),
-        node('td', { 'data-label': 'Project', textContent: projectName(project) || 'Unknown' }),
-        node('td', { 'data-label': t('阶段') }, statusBadge(runtimeLabel(runtime), runtimeTone(runtime), runtime.busy ? 'busy' : '')),
-        node('td', { 'data-label': t('容量'), textContent: runtime.occupies_capacity ? t('占用') : '—' }),
-        node('td', { 'data-label': t('最后活动'), textContent: runtime.last_used_at ? formatRelativeTime(runtime.last_used_at) : '—', title: runtime.last_used_at ? formatDateTime(runtime.last_used_at) : '' }),
-        node('td', { 'data-label': t('操作') }, actionCell)
+        node('td', { 'data-label': t('common.room') }, node('div', { className: 'runtime-room' }, node('strong', { textContent: room.name }), node('small', { textContent: room.id }))),
+        node('td', { 'data-label': t('common.project'), textContent: projectName(project) || t('common.unknown') }),
+        node('td', { 'data-label': t("ui.stage") }, statusBadge(runtimeLabel(runtime), runtimeTone(runtime), runtime.busy ? 'busy' : '')),
+        node('td', { 'data-label': t("ui.capacity"), textContent: runtime.occupies_capacity ? t("ui.occupy") : '—' }),
+        node('td', { 'data-label': t("ui.lastActivity"), textContent: runtime.last_used_at ? formatRelativeTime(runtime.last_used_at) : '—', title: runtime.last_used_at ? formatDateTime(runtime.last_used_at) : '' }),
+		node('td', { 'data-label': t("ui.actions"), className: 'runtime-action-cell' }, actionCell)
       ));
       if (runtime.last_error) {
-        body.append(node('tr', { className: 'runtime-error-row' }, node('td', { colspan: '6', className: 'runtime-error-cell' }, node('div', { className: 'callout danger' }, node('strong', { textContent: 'Runtime error' }), node('span', { textContent: runtime.last_error })))));
+        body.append(node('tr', { className: 'runtime-error-row' }, node('td', { colspan: '6', className: 'runtime-error-cell' }, node('div', { className: 'callout danger' }, node('strong', { textContent: t('room.runtimeError') }), node('span', { textContent: runtime.last_error })))));
       }
     });
     table.append(body);
@@ -1061,16 +1077,16 @@
 
   function renderQueueItem({ room, project, runtime }) {
     return node('article', { className: 'list-item' },
-      node('div', { className: 'list-main' }, node('div', { className: 'item-symbol accent', textContent: `#${runtime.queue_position || '?'}` }), node('div', { className: 'list-copy' }, node('strong', { textContent: room.name }), node('p', { textContent: `${projectName(project)} · queued ${runtime.queued_at ? formatRelativeTime(runtime.queued_at) : ''}`.trim() }))),
-      node('div', { className: 'list-meta' }, actionButton(t('取消排队'), () => suspendRoom(room, runtime), 'secondary-button compact-button'))
+      node('div', { className: 'list-main' }, node('div', { className: 'item-symbol accent', textContent: `#${runtime.queue_position || '?'}` }), node('div', { className: 'list-copy' }, node('strong', { textContent: room.name }), node('p', { textContent: `${projectName(project)} · ${t('room.queuedAtValue', { value: runtime.queued_at ? formatRelativeTime(runtime.queued_at) : '—' })}` }))),
+      node('div', { className: 'list-meta' }, actionButton(t("ui.cancelQueue"), () => suspendRoom(room, runtime), 'secondary-button compact-button'))
     );
   }
 
   function renderSettings() {
     const sections = [
-      ['interface', t('界面体验')], ['runtime', t('Runtime 策略')], ['operations', t('Daemon 运维')], ['service', t('Service 与诊断')], ['boundaries', t('安全边界')],
+      ['interface', t("ui.interfaceExperience")], ['runtime', t("ui.runtimeStrategy")], ['operations', t("ui.daemonOperationAndMaintenance")], ['service', t("ui.serviceAndDiagnosis")], ['boundaries', t("ui.securityBoundary")],
     ];
-    const nav = node('nav', { className: 'panel settings-nav', 'aria-label': t('设置分区') }, ...sections.map(([key, label]) => {
+    const nav = node('nav', { className: 'panel settings-nav', 'aria-label': t("ui.setUpPartitions") }, ...sections.map(([key, label]) => {
       const active = state.settingsSection === key;
       const button = actionButton(label, () => { state.settingsSection = key; renderSettings(); }, active ? 'active' : '');
       button.setAttribute('aria-pressed', String(active));
@@ -1080,8 +1096,8 @@
     view.replaceChildren(
       node('div', { className: 'view-stack' },
         node('section', { className: 'section-header' },
-          node('div', {}, node('h2', { textContent: 'Management Settings' }), node('p', { textContent: t('界面偏好只作用于当前标签页；Service 策略由显式启动参数决定。') })),
-          actionButton(t('导出脱敏诊断'), downloadDiagnosticSnapshot, 'secondary-button')
+          node('div', {}, node('h2', { textContent: t('room.managementSettings') }), node('p', { textContent: t("ui.interfacePreferencesOnlyApplyToTheCurrentTabServicePoliciesAreDetermined") })),
+          actionButton(t("ui.exportDesensitizationDiagnosis"), downloadDiagnosticSnapshot, 'secondary-button')
         ),
         node('div', { className: 'settings-grid' }, nav, content)
       )
@@ -1094,110 +1110,110 @@
     if (state.settingsSection === 'runtime') {
       const command = runtimeCommand(policy);
       return node('div', { className: 'view-stack' },
-        settingsPanel(t('有效 Runtime 策略'), t('当前进程实际采用的不可抢占调度参数。'),
-          settingRow(t('最大活动 Runtime'), t('Starting、Active、Stopping，以及清理不确定的 Failed Runtime 都占用容量。降低上限不会打断正在跑的 Turn。'), runtimeLimitControl(policy)),
-          settingRow('Idle timeout', t('只在 Runtime 没有活动 Turn 时开始计算。'), node('strong', { textContent: policy.idle_timeout_seconds ? formatDuration(policy.idle_timeout_seconds) : t('未暴露') })),
-          settingRow('Reconcile interval', t('Runtime Manager 检查空闲、队列和容量的频率。'), node('strong', { textContent: policy.poll_interval_milliseconds ? `${policy.poll_interval_milliseconds} ms` : t('未暴露') })),
-          settingRow('Close timeout', t('安全关闭 Room Runtime 的单次截止时间。'), node('strong', { textContent: policy.close_timeout_seconds ? formatDuration(policy.close_timeout_seconds) : t('未暴露') }))
+        settingsPanel(t("ui.effectiveRuntimePolicies"), t("ui.theNonPreemptibleSchedulingParametersActuallyUsedByTheCurrentProcess"),
+          settingRow(t("ui.maxActivityRuntime"), t("ui.startingActiveStoppingAndCleaningUpUncertainFailedRuntimeAllOccupyCapacity"), runtimeLimitControl(policy)),
+          settingRow(t('room.idleTimeout'), t("ui.theCalculationOnlyStartsWhenThereIsNoActiveTurnInThe"), node('strong', { textContent: policy.idle_timeout_seconds ? formatDuration(policy.idle_timeout_seconds) : t("ui.notExposed") })),
+          settingRow(t('room.reconcileInterval'), t("ui.howOftenTheRuntimeManagerChecksIdleQueueAndCapacity"), node('strong', { textContent: policy.poll_interval_milliseconds ? `${window.PairRoomI18n.formatNumber(policy.poll_interval_milliseconds)} ms` : t("ui.notExposed") })),
+          settingRow(t('room.closeTimeout'), t("ui.theSingleDeadlineForSafelyShuttingDownTheRoomRuntime"), node('strong', { textContent: policy.close_timeout_seconds ? formatDuration(policy.close_timeout_seconds) : t("ui.notExposed") }))
         ),
         node('section', { className: 'panel' },
-          node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: t('调整启动参数') }), node('p', { textContent: t('策略变更需要受控重启，避免运行中的 vendor session 被动态重配。') }))),
+          node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: t("ui.adjustStartupParameters") }), node('p', { textContent: t("ui.policyChangesRequireAControlledRestartToAvoidDynamicReconfigurationOfRunning") }))),
           node('div', { className: 'panel-body' },
-            node('div', { className: 'command-box' }, node('code', { textContent: command }), actionButton(t('复制'), () => copyText(command, t('启动命令已复制。')), 'secondary-button compact-button'))
+            node('div', { className: 'command-box' }, node('code', { textContent: command }), actionButton(t("ui.copy"), () => copyText(command, t("ui.theStartupCommandHasBeenCopied")), 'secondary-button compact-button'))
           ),
-          node('footer', { className: 'panel-footer', textContent: t('该前台示例只覆盖 Runtime 参数；请保留当前进程使用的 --config、--data-root、listen、token 等其他启动参数。') })
+          node('footer', { className: 'panel-footer', textContent: t("ui.thisFrontEndExampleOnlyCoversTheRuntimeParametersPleaseRetainOther") })
         ),
-        node('aside', { className: 'callout warning' }, node('strong', { textContent: t('容量与 idle') }), node('span', { textContent: t('容量可在此页立即调整；降低上限不会打断正在跑的 Turn。Idle timeout 仍由启动参数决定，后台标签不保证一直占有 Runtime。') }))
+        node('aside', { className: 'callout warning' }, node('strong', { textContent: t("ui.capacityAndIdle") }), node('span', { textContent: t("ui.capacityCanBeAdjustedImmediatelyOnThisPageLoweringTheLimitWill") }))
       );
     }
     if (state.settingsSection === 'operations') {
       const daemonInstall = daemonInstallCommand(policy);
       return node('div', { className: 'view-stack' },
-        settingsPanel(t('Daemon 快捷命令'), t('PairRoom Web Shell 不直接停止或重启承载自身的宿主进程；运维动作在本机终端执行。'),
-          settingRow(t('打开 Management Shell'), t('解析并验证当前 daemon 的完整认证地址后交给默认浏览器。'), inlineCommand('pairroom daemon open', t('Daemon open 命令已复制。'))),
-          settingRow(t('检查状态'), t('显示安装状态、平台、PID、日志与轮转元数据。'), inlineCommand('pairroom daemon status', t('Daemon status 命令已复制。'))),
-          settingRow(t('跟随日志'), t('读取 daemon 管理的合并 stdout/stderr 日志。'), inlineCommand('pairroom daemon logs -f', t('Daemon logs 命令已复制。'))),
-          settingRow(t('受控重启'), t('沿用已安装的完整 Service 定义，并等待活动 Turn 排空。'), inlineCommand('pairroom daemon restart', t('Daemon restart 命令已复制。')))
+        settingsPanel(t("ui.daemonShortcutCommand"), t("ui.pairroomWebShellDoesNotDirectlyStopOrRestartTheHostProcess"),
+          settingRow(t("ui.openManagementShell"), t("ui.parseAndVerifyTheCompleteAuthenticationAddressOfTheCurrentDaemonAnd"), inlineCommand('pairroom daemon open', t("ui.daemonOpenCommandCopied"))),
+          settingRow(t("ui.checkStatus"), t("ui.displaysInstallationStatusPlatformPidLogsAndRotationMetadata"), inlineCommand('pairroom daemon status', t("ui.daemonStatusCommandHasBeenCopied"))),
+          settingRow(t("ui.followTheLog"), t("ui.readTheMergedStdoutStderrLogManagedByTheDaemon"), inlineCommand('pairroom daemon logs -f', t("ui.daemonLogsCommandHasBeenCopied"))),
+          settingRow(t("ui.controlledRestart"), t("ui.inheritTheCompleteInstalledServiceDefinitionAndWaitForTheActiveTurn"), inlineCommand('pairroom daemon restart', t("ui.theDaemonRestartCommandHasBeenCopied")))
         ),
         node('section', { className: 'panel' },
-          node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: t('更新已安装的 Runtime 参数') }), node('p', { textContent: t('daemon restart 不接受新的 Service 参数；需要重新写入完整安装定义。') }))),
+          node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: t("ui.updateInstalledRuntimeParameters") }), node('p', { textContent: t("ui.daemonRestartDoesNotAcceptNewServiceParametersTheCompleteInstallationDefinition") }))),
           node('div', { className: 'panel-body command-stack' },
             node('div', { className: 'command-example' },
-              node('div', { className: 'command-example-heading' }, node('strong', { textContent: t('默认参数示例') }), node('span', { textContent: t('复制前核对现有 daemon 定义') })),
-              node('div', { className: 'command-box' }, node('code', { textContent: daemonInstall }), actionButton(t('复制示例'), () => copyText(daemonInstall, t('Daemon install 示例已复制。')), 'secondary-button compact-button'))
+              node('div', { className: 'command-example-heading' }, node('strong', { textContent: t("ui.defaultParameterExample") }), node('span', { textContent: t("ui.verifyExistingDaemonDefinitionsBeforeCopying") })),
+              node('div', { className: 'command-box' }, node('code', { textContent: daemonInstall }), actionButton(t("ui.copyExample"), () => copyText(daemonInstall, t("ui.daemonInstallExampleCopied")), 'secondary-button compact-button'))
             )
           ),
-          node('footer', { className: 'panel-footer', textContent: t('--force 会替换服务定义。若当前使用自定义 --config、--data-root、listen、token、proxy 或日志参数，必须在命令中完整保留。') })
+          node('footer', { className: 'panel-footer', textContent: t("ui.forceReplacesTheServiceDefinitionIfYouAreCurrentlyUsingCustomConfig") })
         ),
-        node('aside', { className: 'callout boundary' }, node('strong', { textContent: 'Daemon boundary' }), node('span', { textContent: t('daemon 只把 pairroom service 投射到 systemd、launchd 或 Windows Task Scheduler；Room Runtime、审批与 Agent Harness 生命周期仍由 PairRoom Service 管理。') })),
-        node('aside', { className: 'callout warning' }, node('strong', { textContent: 'Crash-stale service.lock' }), node('span', { textContent: t('只有确认旧进程已经消失后，才可显式执行 pairroom daemon start 或 restart --recover-stale-lock；正常启动不会自动猜测锁已失效。') }))
+        node('aside', { className: 'callout boundary' }, node('strong', { textContent: t('room.daemonBoundary') }), node('span', { textContent: t("ui.theDaemonOnlyProjectsThePairroomServiceToSystemdLaunchdOrWindows") })),
+        node('aside', { className: 'callout warning' }, node('strong', { textContent: t('room.crashStaleServiceLock') }), node('span', { textContent: t("ui.onlyAfterConfirmingThatTheOldProcessHasDisappearedCanYouExplicitly") }))
       );
     }
     if (state.settingsSection === 'service') {
       const safe = diagnosticSnapshot();
       return node('div', { className: 'view-stack' },
         node('section', { className: 'panel' },
-          node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: 'Service Identity' }), node('p', { textContent: t('构建信息与稳定数据根。') }))),
+          node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: t('room.serviceIdentity') }), node('p', { textContent: t("ui.buildInformationAndStableDataRoots") }))),
           node('div', { className: 'key-value-grid' },
-            keyValue('Version', snapshot.version || 'development'),
-            keyValue('Commit', snapshot.commit || 'not embedded', true),
-            keyValue('Build date', snapshot.build_date || 'not embedded'),
-            keyValue('Generated at', formatDateTime(snapshot.generated_at)),
-            keyValue('Data root', snapshot.data_root, true),
-            keyValue('Registry health', snapshot.healthy ? 'Healthy' : 'Fail-closed')
+            keyValue(t('ui.version'), snapshot.version || t('common.development')),
+            keyValue(t('room.commit'), snapshot.commit || t('room.notEmbedded'), true),
+            keyValue(t('room.buildDate'), snapshot.build_date || t('room.notEmbedded')),
+            keyValue(t('room.generatedAt'), formatDateTime(snapshot.generated_at)),
+            keyValue(t('room.dataRoot'), snapshot.data_root, true),
+            keyValue(t('room.registryHealth'), snapshot.healthy ? t('common.healthy') : t('common.failClosed'))
           )
         ),
-        settingsPanel(t('诊断工具'), t('导出内容会移除 Room Runtime URL；本机路径和业务元数据仍可能敏感。'),
-          settingRow(t('复制 Service 摘要'), t('适合粘贴到本地 Issue 或调试会话。'), actionButton(t('复制 JSON'), () => copyText(JSON.stringify(safe, null, 2), t('脱敏诊断已复制。')), 'secondary-button')),
-          settingRow(t('下载诊断文件'), t('文件只在浏览器本地生成，不上传到外部服务。'), actionButton(t('下载 JSON'), downloadDiagnosticSnapshot, 'secondary-button')),
-          settingRow(t('查看原始结构'), t('在页面中展开脱敏后的 Service snapshot。'), toggleButton(state.showRawSnapshot, (value) => { state.showRawSnapshot = value; renderSettings(); }, t('切换 snapshot 显示')))
+        settingsPanel(t("ui.diagnosticTools"), t("ui.exportingContentRemovesTheRoomRuntimeUrlLocalPathsAndBusinessMetadata"),
+          settingRow(t("ui.copyServiceSummary"), t("ui.suitableForPastingIntoALocalIssueOrDebuggingSession"), actionButton(t("ui.copyJson"), () => copyText(JSON.stringify(safe, null, 2), t("ui.desensitizationDiagnosticsHaveBeenReproduced")), 'secondary-button')),
+          settingRow(t("ui.downloadDiagnosticFiles"), t("ui.filesAreOnlyGeneratedLocallyInTheBrowserAndAreNotUploaded"), actionButton(t("ui.downloadJson"), downloadDiagnosticSnapshot, 'secondary-button')),
+          settingRow(t("ui.viewOriginalStructure"), t("ui.expandTheDesensitizedServiceSnapshotOnThePage"), toggleButton(state.showRawSnapshot, (value) => { state.showRawSnapshot = value; renderSettings(); }, t("ui.switchSnapshotDisplay")))
         ),
         state.showRawSnapshot ? node('pre', { className: 'raw-snapshot', textContent: JSON.stringify(safe, null, 2) }) : null,
         snapshot.maintenance?.pending_cleanup || snapshot.maintenance?.diagnostic
-          ? settingsPanel(t('Room 删除清理'), t('逻辑删除已提交；隔离区中的受管数据仍需完成物理清理。'),
+          ? settingsPanel(t("ui.roomDeleteCleanup"), t("ui.tombstoneCommittedManagedDataInQuarantineStillNeedsToBePhysicallyCleaned"),
             settingRow(
-              `${snapshot.maintenance?.pending_cleanup || 0} 个待清理项`,
-              snapshot.maintenance?.diagnostic || t('可安全重试，不会恢复已删除 Room。'),
-              actionButton(t('重试清理'), retryRoomDeletionCleanup, 'secondary-button')
+              t("ui.valueCleanupItems", { value0: (snapshot.maintenance?.pending_cleanup || 0) }),
+              snapshot.maintenance?.diagnostic || t("ui.itSSafeToTryAgainDeletedRoomsWillNotBeRestored"),
+              actionButton(t("ui.retryCleanup"), retryRoomDeletionCleanup, 'secondary-button')
             )
           )
           : null,
-        snapshot.diagnostic ? node('aside', { className: 'callout danger' }, node('strong', { textContent: 'Registry diagnostic' }), node('span', { textContent: snapshot.diagnostic })) : null
+        snapshot.diagnostic ? node('aside', { className: 'callout danger' }, node('strong', { textContent: t('room.registryDiagnostic') }), node('span', { textContent: snapshot.diagnostic })) : null
       );
     }
     if (state.settingsSection === 'boundaries') {
       const caps = snapshot.capabilities || {};
       return node('div', { className: 'view-stack' },
-        settingsPanel('Control-plane capabilities', t('界面只呈现后端明确支持的控制能力。'),
-          capabilityRow(t('登记 canonical Project'), true, t('显式绝对路径；不提供服务端目录浏览。')),
-          capabilityRow(t('导入 Legacy Room'), caps.legacy_import !== false, t('非破坏性登记，不搬移或重写 events.jsonl。')),
-          capabilityRow(t('手动挂起 idle Runtime'), caps.runtime_suspend === true, t('Busy Runtime 会拒绝操作。')),
-          capabilityRow(t('热更新 Runtime 容量'), caps.runtime_policy_mutation === true, t('Settings 中可调整最多同时活动的 Room Runtime。降低容量不会打断正在跑的 Turn。')),
-          capabilityRow(t('应用内 Room surface'), caps.room_surface === true, t('Management 同源网关承载应用内标签，不把 Runtime token 送到浏览器。')),
-          capabilityRow(t('Room 生命周期管理'), caps.room_deletion === true, t('支持最多 100 个 Room 的批量归档与批量永久清理；永久清理仅接受已归档 Room，并要求一次不可恢复确认。显式外部导入目录只解绑并保留。')),
-          capabilityRow(t('服务端路径浏览器'), caps.server_path_browser === true, t('避免扩大本机文件系统暴露面。'))
+        settingsPanel(t('room.controlPlaneCapabilities'), t("ui.theInterfaceOnlyPresentsControlCapabilitiesThatAreExplicitlySupportedByThe"),
+          capabilityRow(t("ui.registerCanonicalProject"), true, t("ui.explicitAbsolutePathServerSideDirectoryBrowsingIsNotProvided")),
+          capabilityRow(t("ui.importLegacyRoom"), caps.legacy_import !== false, t("ui.nonDestructiveRegistrationDoesNotMoveOrRewriteEventsJsonl")),
+          capabilityRow(t("ui.manuallySuspendIdleRuntime"), caps.runtime_suspend === true, t("ui.busyRuntimeWillRejectTheOperation")),
+          capabilityRow(t("ui.hotUpdateRuntimeCapacity"), caps.runtime_policy_mutation === true, t("ui.theMaximumNumberOfSimultaneousActiveRoomRuntimesCanBeAdjustedIn")),
+          capabilityRow(t("ui.inAppRoomSurface"), caps.room_surface === true, t("ui.theManagementSameOriginGatewayCarriesInApplicationTagsAndDoesNot")),
+          capabilityRow(t("ui.roomLifeCycleManagement"), caps.room_deletion === true, t("ui.supportsBatchArchivingAndBatchPermanentCleaningOfUpTo100Rooms")),
+          capabilityRow(t("ui.serverPathBrowser"), caps.server_path_browser === true, t("ui.avoidExpandingNativeFileSystemExposure"))
         ),
-        node('aside', { className: 'callout boundary' }, node('strong', { textContent: 'Transcript Boundary' }), node('span', { textContent: t('Vendor Transcript 与 PairRoom Room Event Log 是不同记录。Existing Binding 只恢复 vendor context，绑定前历史不会进入公共时间线。') })),
-        node('aside', { className: 'callout warning' }, node('strong', { textContent: 'Binding Identity' }), node('span', { textContent: t('(agent, vendor_session_id) 在整个 Service 内独占，包括已归档 Room。该约束防止同一 vendor transcript 被多个 Runtime 并发写入。') })),
-        node('aside', { className: 'callout neutral' }, node('strong', { textContent: 'Browser session' }), node('span', { textContent: t('Management token 只用于一次性 bootstrap，随后换成 HttpOnly、SameSite=Strict 会话 Cookie；写操作还需要内存中的 CSRF token。') }))
+        node('aside', { className: 'callout boundary' }, node('strong', { textContent: t('common.transcriptBoundary') }), node('span', { textContent: t("ui.vendorTranscriptAndPairroomRoomEventLogAreDifferentRecordsExistingBinding") })),
+        node('aside', { className: 'callout warning' }, node('strong', { textContent: t('room.bindingIdentity') }), node('span', { textContent: t("ui.agentVendorSessionIdExclusiveWithinTheEntireServiceIncludingArchivedRooms") })),
+        node('aside', { className: 'callout neutral' }, node('strong', { textContent: t('room.browserSession') }), node('span', { textContent: t("ui.theManagementTokenIsOnlyUsedForOneTimeBootstrapAndIs") }))
       );
     }
     return node('div', { className: 'view-stack' },
-      settingsPanel(t('外观'), t('主题与内嵌 Room 共享并持久化；其余偏好只在当前标签页生效。'),
-        settingRow(t('主题'), t('跟随系统，或临时固定浅色/深色。'), segmented([
-          ['system', t('跟随系统')], ['light', t('浅色')], ['dark', t('深色')],
-        ], state.preferences.theme, (value) => { state.preferences.theme = value; persistTheme(value); applyPreferences(); renderSettings(); }, t('主题'))),
-        settingRow(t('信息密度'), t('Compact 会缩小列表、表格和面板间距。'), segmented([
-          ['comfortable', t('舒适')], ['compact', t('紧凑')],
-        ], state.preferences.density, (value) => { state.preferences.density = value; applyPreferences(); renderSettings(); }, t('信息密度')))
+      settingsPanel(t("ui.appearance"), t("ui.themeIsSharedAndPersistedWithTheEmbeddedRoomOtherPreferencesOnly"),
+        settingRow(t("ui.theme"), t("ui.followTheSystemOrTemporarilyFixLightDarkColors"), segmented([
+          ['system', t("ui.followTheSystem")], ['light', t("ui.lightColor")], ['dark', t("ui.dark")],
+        ], state.preferences.theme, (value) => { state.preferences.theme = value; persistTheme(value); applyPreferences(); renderSettings(); }, t("ui.theme"))),
+        settingRow(t("ui.informationDensity"), t("ui.compactShrinksListTableAndPanelSpacing"), segmented([
+          ['comfortable', t("ui.comfortable")], ['compact', t("ui.compact")],
+        ], state.preferences.density, (value) => { state.preferences.density = value; applyPreferences(); renderSettings(); }, t("ui.informationDensity")))
       ),
-      settingsPanel(t('刷新与导航'), t('控制当前页面如何轮询 Service。侧栏点击始终在应用内标签打开 Room。'),
-        settingRow(t('自动刷新'), t('页面隐藏时自动暂停，重新可见后立即同步。'), selectControl([
-          ['0', t('关闭')], ['5000', t('5 秒')], ['10000', t('10 秒')], ['30000', t('30 秒')], ['60000', t('60 秒')],
-        ], String(state.preferences.refreshMs), (value) => { state.preferences.refreshMs = Number(value); scheduleRefresh(); }, t('自动刷新间隔'))),
-        settingRow(t('默认显示已归档'), t('影响 Projects 与 Project 详情列表。'), toggleButton(state.filters.showArchived, (value) => { state.filters.showArchived = value; }, t('切换归档可见性')))
+      settingsPanel(t("ui.refreshAndNavigation"), t("ui.controlsHowTheCurrentPagePollsTheServiceSidebarClickToAlways"),
+        settingRow(t("ui.autoRefresh"), t("ui.automaticallyPausesWhenThePageIsHiddenAndSyncsImmediatelyWhenIt"), selectControl([
+          ['0', t("ui.off")], ['5000', t("ui.5Seconds")], ['10000', t("ui.10Seconds")], ['30000', t("ui.30Seconds")], ['60000', t("ui.60Seconds")],
+        ], String(state.preferences.refreshMs), (value) => { state.preferences.refreshMs = Number(value); scheduleRefresh(); }, t("ui.autoRefreshInterval"))),
+        settingRow(t("ui.archivedByDefault"), t("ui.affectsProjectsAndProjectDetailsLists"), toggleButton(state.filters.showArchived, (value) => { state.filters.showArchived = value; }, t("ui.toggleArchiveVisibility")))
       ),
-      node('aside', { className: 'callout neutral' }, node('strong', { textContent: t('无隐式持久化') }), node('span', { textContent: t('这些界面选项不会写入 Service Registry，也不会改变 Room Event Log 或 Agent Session Binding。刷新标签页后恢复默认值。') }))
+      node('aside', { className: 'callout neutral' }, node('strong', { textContent: t("ui.noImplicitPersistence") }), node('span', { textContent: t("ui.theseInterfaceOptionsDoNotWriteToTheServiceRegistryAndDo") }))
     );
   }
 
@@ -1210,18 +1226,18 @@
 
   function runtimeLimitControl(policy) {
     const mutable = state.snapshot?.capabilities?.runtime_policy_mutation === true;
-    if (!mutable) return node('strong', { textContent: policy.limit ? String(policy.limit) : t('未暴露') });
+    if (!mutable) return node('strong', { textContent: policy.limit ? String(policy.limit) : t("ui.notExposed") });
     const input = node('input', {
       type: 'number', min: '1', max: '128', value: String(policy.limit || 8),
-      'aria-label': t('最大同时活动 Room Runtime'),
+      'aria-label': t("ui.maximumSimultaneousActivityRoomRuntime"),
       onChange: async (event) => {
         const limit = Number(event.target.value);
         try {
           await api('/api/v1/runtime-policy', { method: 'PATCH', body: JSON.stringify({ limit }) });
-          toast('Runtime 容量已更新', `最多同时 ${limit} 个活动 Runtime。`, 'success');
+          toast(t("ui.runtimeCapacityUpdated"), t("ui.atMostValueRuntimesCanBeActiveSimultaneously", { value0: (limit) }), 'success');
           await refresh({ forceRender: true });
         } catch (error) {
-          toast('无法更新容量', error.message, 'error');
+          toast(t("ui.couldNotUpdateCapacity"), error.message, 'error');
           event.target.value = String(policy.limit || 8);
         }
       },
@@ -1240,31 +1256,31 @@
   function inlineCommand(command, successMessage) {
     return node('div', { className: 'inline-command' },
       node('code', { textContent: command }),
-      actionButton(t('复制'), () => copyText(command, successMessage), 'secondary-button compact-button')
+      actionButton(t("ui.copy"), () => copyText(command, successMessage), 'secondary-button compact-button')
     );
   }
 
   function attentionItems(snapshot) {
     const items = [];
     (snapshot.projects || []).forEach((project) => {
-      if (!project.available) items.push({ kind: 'project', title: projectName(project), detail: project.diagnostic || t('Project root 不可访问。'), symbol: '!', tone: 'danger', action: () => navigate(`#/projects/${encodeURIComponent(project.id)}`) });
+      if (!project.available) items.push({ kind: 'project', title: projectName(project), detail: project.diagnostic || t("ui.projectRootIsInaccessible"), symbol: '!', tone: 'danger', action: () => navigate(`#/projects/${encodeURIComponent(project.id)}`) });
     });
     (snapshot.rooms || []).forEach((room) => {
       if (roomHasBlockingPendingBindings(room)) {
         const project = projectForRoom(snapshot, room);
-        items.push({ kind: 'binding', title: room.name, detail: `${projectName(project)} · Legacy Binding 待补全`, symbol: 'B', tone: 'warn', action: () => completeBindings(room) });
+        items.push({ kind: 'binding', title: room.name, detail: t("ui.valueLegacyBindingIncomplete", { value0: (projectName(project)) }), symbol: 'B', tone: 'warn', action: () => completeBindings(room) });
       }
     });
     runtimeModels(snapshot).forEach(({ room, runtime }) => {
-      if (runtime.phase === 'failed') items.push({ kind: 'runtime', title: room.name, detail: runtime.last_error || t('Runtime 启动或关闭失败。'), symbol: 'R', tone: 'danger', action: () => navigate('#/runtimes') });
+      if (runtime.phase === 'failed') items.push({ kind: 'runtime', title: room.name, detail: runtime.last_error || t("ui.runtimeFailedToStartOrShutDown"), symbol: 'R', tone: 'danger', action: () => navigate('#/runtimes') });
     });
     const maintenance = snapshot.maintenance || {};
     if (maintenance.pending_cleanup || maintenance.diagnostic) {
       const count = Number(maintenance.pending_cleanup || 0);
       items.push({
         kind: 'maintenance',
-        title: t('Room 数据清理待完成'),
-        detail: maintenance.diagnostic || `${count} 个隔离清理项可安全重试。`,
+        title: t("ui.roomDataCleaningToBeCompleted"),
+        detail: maintenance.diagnostic || t("ui.valueQuarantinedCleanupItemsCanBeRetriedSafely", { value0: (count) }),
         symbol: 'D',
         tone: 'warn',
         action: () => { state.settingsSection = 'service'; navigate('#/settings'); },
@@ -1276,7 +1292,7 @@
   function renderAttentionItem(item) {
     return node('article', { className: 'list-item' },
       node('div', { className: 'list-main' }, node('div', { className: `item-symbol ${item.tone}`, textContent: item.symbol }), node('div', { className: 'list-copy' }, node('strong', { textContent: item.title }), node('p', { textContent: item.detail, title: item.detail }))),
-      actionButton(t('处理'), item.action, 'secondary-button compact-button')
+      actionButton(t("ui.dealWith"), item.action, 'secondary-button compact-button')
     );
   }
 
@@ -1287,7 +1303,7 @@
   function renderLiveItem({ room, project, runtime }) {
     return node('article', { className: 'list-item' },
       node('div', { className: 'list-main' }, node('div', { className: `item-symbol ${runtime.busy ? 'warn' : 'accent'}`, textContent: runtime.busy ? '●' : '◎' }), node('div', { className: 'list-copy' }, node('strong', { textContent: room.name }), node('p', { textContent: `${projectName(project)} · ${runtimeLabel(runtime)}` }))),
-      node('div', { className: 'list-meta' }, statusBadge(runtimeLabel(runtime), runtimeTone(runtime), runtime.busy ? 'busy' : ''), actionButton(t('打开'), () => openRoom(room.id), 'secondary-button compact-button', roomHasBlockingPendingBindings(room)))
+      node('div', { className: 'list-meta' }, statusBadge(runtimeLabel(runtime), runtimeTone(runtime), runtime.busy ? 'busy' : ''), actionButton(t("ui.open"), () => openRoom(room.id), 'secondary-button compact-button', roomHasBlockingPendingBindings(room)))
     );
   }
 
@@ -1297,7 +1313,7 @@
     const busy = rooms.filter((room) => getRuntime(room.id).busy).length;
     return node('article', { className: 'list-item' },
       node('div', { className: 'list-main' }, node('div', { className: 'item-symbol accent', textContent: projectInitials(project) }), node('div', { className: 'list-copy' }, node('strong', { textContent: projectName(project) }), node('p', { textContent: project.root, title: project.root }))),
-      node('div', { className: 'list-meta' }, statusBadge(project.available ? 'available' : 'unavailable', project.available ? 'good' : 'danger'), node('span', { className: 'muted', textContent: `${active} rooms · ${busy} working` }), actionButton(t('查看'), () => navigate(`#/projects/${encodeURIComponent(project.id)}`), 'secondary-button compact-button'))
+      node('div', { className: 'list-meta' }, statusBadge(project.available ? 'available' : 'unavailable', project.available ? 'good' : 'danger'), node('span', { className: 'muted', textContent: t('room.projectWorkingSummary', { rooms: active, working: busy }) }), actionButton(t("ui.check"), () => navigate(`#/projects/${encodeURIComponent(project.id)}`), 'secondary-button compact-button'))
     );
   }
 
@@ -1417,23 +1433,24 @@
   }
 
   function bindingText(binding) {
-    if (!binding) return 'missing';
-    if (binding.pending && binding.mode === 'new') return `new · ${NEW_BINDING_HINT}`;
-    if (binding.pending) return 'pending legacy binding';
+    if (!binding) return t('common.missing');
+    if (binding.pending && binding.mode === 'new') return `${t('common.new')} · ${t(NEW_BINDING_HINT_KEY)}`;
+    if (binding.pending) return t('room.pendingLegacyBinding');
     const id = String(binding.session_id || '');
     const compact = id.length > 24 ? `${id.slice(0, 10)}…${id.slice(-8)}` : id;
-    return `${binding.mode || 'existing'}${compact ? ` · ${compact}` : ''}`;
+	const mode = binding.mode === 'new' ? t('common.new') : binding.mode === 'existing' ? t('common.existing') : (binding.mode || t('common.existing'));
+    return `${mode}${compact ? ` · ${compact}` : ''}`;
   }
 
   function bindingMeta(actor, binding) {
     const title = bindingText(binding);
-    return node('span', { className: 'binding-line', title }, node('span', { className: `agent-dot ${actor}`, textContent: actor === 'claude' ? 'C' : 'X' }), node('span', { textContent: title }));
+    return node('span', { className: 'binding-line', title }, node('span', { className: `agent-dot ${actor}`, textContent: actor === 'claude' ? '1' : '2' }), node('span', { textContent: title }));
   }
 
   function runtimeLabel(runtime) {
-    if (runtime.phase === 'queued') return `queued #${runtime.queue_position || '?'}`;
-    if (runtime.phase === 'active' && runtime.busy) return 'active · working';
-    return runtime.phase || 'suspended';
+    if (runtime.phase === 'queued') return t('room.queuedPosition', { value: runtime.queue_position || '?' });
+    if (runtime.phase === 'active' && runtime.busy) return `${t('common.active')} · ${t('ui.working694b71b')}`;
+    return localizedStatus(runtime.phase || 'suspended');
   }
 
   function runtimeTone(runtime) {
@@ -1457,16 +1474,16 @@
     const importing = mode === 'import';
     $('project-mode-register').setAttribute('aria-selected', String(!importing));
     $('project-mode-import').setAttribute('aria-selected', String(importing));
-    $('project-dialog-title').textContent = importing ? t('导入 Legacy Room') : t('登记 Project');
-    $('project-dialog-subtitle').textContent = importing ? t('显式登记自定义旧 data-dir。') : t('添加 canonical Git worktree。');
+    $('project-dialog-title').textContent = importing ? t("ui.importLegacyRoom") : t("ui.registerProject9c99cf3");
+    $('project-dialog-subtitle').textContent = importing ? t("ui.explicitlyRegisterCustomOldDataDir") : t("ui.addACanonicalGitWorktree");
     $('project-path').placeholder = importing ? '/absolute/path/to/legacy/room-data' : '/absolute/path/to/git/worktree';
-    $('project-submit').textContent = importing ? t('导入 Legacy Room') : t('登记 Project');
+    $('project-submit').textContent = importing ? t("ui.importLegacyRoom") : t("ui.registerProject9c99cf3");
     const help = $('project-mode-help');
     help.replaceChildren(
-      node('strong', { textContent: importing ? t('非破坏性导入') : t('显式路径边界') }),
+      node('strong', { textContent: importing ? t("ui.nonDestructiveImport") : t("ui.explicitPathBoundary") }),
       node('span', { textContent: importing
-        ? t('不会搬移、复制或重写 events.jsonl；成功后同样参与 Project 与 Binding Identity 去重。')
-        : t('只接受绝对路径。根目录、子目录和符号链接会解析为同一个 canonical Git worktree；服务不会扫描开发目录。') })
+        ? t("ui.eventsJsonlWillNotBeMovedCopiedOrRewrittenItWillAlso")
+        : t("ui.onlyAbsolutePathsAreAcceptedRootPathsSubdirectoriesAndSymlinksResolveTo") })
     );
   }
 
@@ -1474,7 +1491,7 @@
     event.preventDefault();
     const path = $('project-path').value.trim();
     if (!looksAbsolutePath(path)) {
-      showFormError('project-form-error', t('请输入绝对路径；Service 不接受相对路径。'));
+      showFormError('project-form-error', t("ui.pleaseEnterAnAbsolutePathServiceDoesNotAcceptRelativePaths"));
       return;
     }
     const button = $('project-submit');
@@ -1485,7 +1502,7 @@
           ? await api('/api/v1/import', { method: 'POST', body: JSON.stringify({ path }) })
           : await api('/api/v1/projects', { method: 'POST', body: JSON.stringify({ path }) });
         closeDialog('project-dialog');
-        toast(state.projectMode === 'import' ? t('Legacy Room 已导入') : t('Project 已登记'), state.projectMode === 'import' ? t('旧数据保持原位且未被重写。') : t('Canonical worktree 已加入 Service Registry。'), 'success');
+        toast(state.projectMode === 'import' ? t("ui.legacyRoomHasBeenImported") : t("ui.projectRegistered"), state.projectMode === 'import' ? t("ui.theOldDataRemainsInPlaceAndHasNotBeenOverwritten") : t("ui.canonicalWorktreeHasJoinedTheServiceRegistry"), 'success');
         await refresh({ forceRender: true });
         const projectID = state.projectMode === 'import' ? result.project_id : result.id;
         if (projectID) navigate(`#/projects/${encodeURIComponent(projectID)}`);
@@ -1495,25 +1512,149 @@
     });
   }
 
-  function openRoomDialog(projectID = '') {
+  async function loadAgentCatalog(force = false) {
+	if (!force && state.agentCatalog) return state.agentCatalog;
+	if (!force && state.agentCatalogPromise) return state.agentCatalogPromise;
+	const path = force ? '/api/v1/agent-catalog/refresh' : '/api/v1/agent-catalog';
+	state.agentCatalogPromise = api(path, force ? { method: 'POST' } : {}).then((catalog) => {
+	  state.agentCatalog = catalog;
+	  return catalog;
+	}).finally(() => { state.agentCatalogPromise = null; });
+	return state.agentCatalogPromise;
+  }
+
+  function providerOptionValue(ref) {
+	return JSON.stringify(ref || { source: 'native' });
+  }
+
+  function selectedProviderRef(actor) {
+	try { return JSON.parse($(`${actor}-provider`).value); }
+	catch { return { source: 'native' }; }
+  }
+
+  function runtimeCatalogEntry(runtime) {
+	return (state.agentCatalog?.runtimes || []).find((entry) => entry.runtime === runtime);
+  }
+
+  function syncAgentProviderAndModels(actor, resetDependent = false) {
+	const runtime = $(`${actor}-runtime`).value;
+	const provider = $(`${actor}-provider`);
+	const previous = resetDependent ? providerOptionValue({ source: 'native' }) : provider.value;
+	const options = [node('option', { value: providerOptionValue({ source: 'native' }), textContent: t('agent.nativeProvider') })];
+	for (const profile of state.agentCatalog?.profiles || []) {
+	  if (profile.runtime !== runtime) continue;
+	  const label = `${profile.name}${profile.supported ? '' : ` — ${profileDisabledReason(profile)}`}`;
+	  options.push(node('option', { value: providerOptionValue(profile.provider), textContent: label, disabled: !profile.supported }));
+	}
+	provider.replaceChildren(...options);
+	provider.value = [...provider.options].some((option) => option.value === previous && !option.disabled) ? previous : providerOptionValue({ source: 'native' });
+	const selected = selectedProviderRef(actor);
+	const profile = (state.agentCatalog?.profiles || []).find((entry) => providerOptionValue(entry.provider) === providerOptionValue(selected));
+	const runtimeEntry = runtimeCatalogEntry(runtime);
+	const models = new Set([...(runtimeEntry?.default_models || []), ...(profile?.models || [])]);
+	$(`${actor}-model-options`).replaceChildren(...[...models].filter(Boolean).sort().map((modelName) => node('option', { value: modelName })));
+	if (resetDependent) $(`${actor}-model`).value = '';
+	const providerDiagnostic = $(`${actor}-provider-diagnostic`);
+	providerDiagnostic.textContent = state.agentCatalog?.provider_error
+	  ? (window.PairRoomI18n?.errorMessage(state.agentCatalog.provider_error) || state.agentCatalog.provider_error.error || '')
+	  : '';
+	providerDiagnostic.classList.toggle('runtime-unavailable', Boolean(state.agentCatalog?.provider_error));
+	syncAgentPolicy(actor);
+  }
+
+  function syncAgentPolicy(actor) {
+	const runtime = $(`${actor}-runtime`).value;
+	document.querySelectorAll(`[data-actor="${actor}"] [data-policy-for]`).forEach((field) => {
+	  field.hidden = !field.dataset.policyFor.split(',').includes(runtime);
+	});
+	const sandbox = $(`${actor}-sandbox`);
+	const previousSandbox = sandbox.value;
+	const sandboxValues = runtime === 'codex'
+	  ? ['read-only', 'workspace-write', 'danger-full-access']
+	  : runtime === 'grok' ? ['read-only', 'workspace', 'strict', 'off'] : [];
+	sandbox.replaceChildren(
+	  node('option', { value: '', textContent: t('common.inherit') }),
+	  ...sandboxValues.map((value) => node('option', { value, textContent: value })),
+	);
+	sandbox.value = sandboxValues.includes(previousSandbox) ? previousSandbox : '';
+	const bindingKind = runtime === 'codex' ? t('room.thread') : t('room.session');
+	$(`${actor}-binding-label`).textContent = t('agent.bindingId', { runtime: runtimeCatalogEntry(runtime)?.display_name || runtime, binding: bindingKind });
+	$(`${actor}-reviewer-warning`).hidden = $(`${actor}-reviewer-policy`).value !== 'explicit';
+  }
+
+  function profileDisabledReason(profile) {
+	const key = profile?.reason_code ? `agent.reason.${profile.reason_code}` : '';
+	return key && window.i18next?.exists(key) ? t(key) : (profile?.disabled_reason || t('agent.unavailable'));
+  }
+
+  function populateAgentControls(actor, selection) {
+	const runtime = $(`${actor}-runtime`);
+	runtime.replaceChildren(...(state.agentCatalog?.runtimes || []).map((entry) => node('option', {
+	  value: entry.runtime,
+	  textContent: `${entry.display_name}${entry.available ? '' : ` — ${t('agent.unavailable')}`}`,
+	  disabled: !entry.available,
+	})));
+	runtime.value = selection?.runtime || (actor === 'claude' ? 'claude' : 'codex');
+	if (!runtime.value) runtime.selectedIndex = [...runtime.options].findIndex((option) => !option.disabled);
+	const runtimeEntry = runtimeCatalogEntry(runtime.value);
+	const diagnostic = $(`${actor}-runtime-diagnostic`);
+	diagnostic.textContent = runtimeEntry?.diagnostic || (runtimeEntry?.version ? `v${runtimeEntry.version}` : '');
+	diagnostic.classList.toggle('runtime-unavailable', !runtimeEntry?.available);
+	syncAgentProviderAndModels(actor, false);
+	const wantedProvider = providerOptionValue(selection?.provider || { source: 'native' });
+	if ([...$(`${actor}-provider`).options].some((option) => option.value === wantedProvider && !option.disabled)) $(`${actor}-provider`).value = wantedProvider;
+	$(`${actor}-model`).value = selection?.model || '';
+	$(`${actor}-effort`).value = selection?.effort || '';
+	$(`${actor}-permission-mode`).value = selection?.permission_mode || '';
+	$(`${actor}-approval-policy`).value = selection?.approval_policy || '';
+	$(`${actor}-sandbox`).value = selection?.sandbox || '';
+	$(`${actor}-instructions`).value = selection?.instructions || '';
+	$(`${actor}-reviewer-policy`).value = selection?.ordinary_reviewer_policy || 'enforced';
+	syncAgentProviderAndModels(actor, false);
+  }
+
+  function readAgentSelection(actor) {
+	const runtime = $(`${actor}-runtime`).value;
+	return {
+	  runtime,
+	  provider: selectedProviderRef(actor),
+	  model: $(`${actor}-model`).value.trim(),
+	  effort: $(`${actor}-effort`).value,
+	  instructions: $(`${actor}-instructions`).value.trim(),
+	  permission_mode: runtime === 'codex' ? '' : $(`${actor}-permission-mode`).value.trim(),
+	  approval_policy: runtime === 'codex' ? $(`${actor}-approval-policy`).value : '',
+	  sandbox: runtime === 'claude' ? '' : $(`${actor}-sandbox`).value,
+	  ordinary_reviewer_policy: $(`${actor}-reviewer-policy`).value,
+	};
+  }
+
+  async function openRoomDialog(projectID = '') {
     const projects = (state.snapshot?.projects || []).filter((project) => project.available);
     if (!projects.length) {
-      toast('没有可用 Project', t('请先登记或修复一个 Git worktree。'), 'warning');
+      toast(t("ui.noAvailableProject"), t("ui.pleaseRegisterOrRepairAGitWorktreeFirst"), 'warning');
       return;
     }
     const select = $('room-project-id');
     select.replaceChildren(...projects.map((project) => node('option', { value: project.id, textContent: `${projectName(project)} — ${project.root}` })));
     select.value = projects.some((project) => project.id === projectID) ? projectID : projects[0].id;
-    $('room-name').value = '';
+	$('room-name').value = '';
     document.querySelector('input[name="claude-mode"][value="new"]').checked = true;
     document.querySelector('input[name="codex-mode"][value="new"]').checked = true;
     $('claude-session-id').value = '';
     $('codex-session-id').value = '';
-    syncBindingInputs();
-    hideFormError('room-form-error');
-    $('room-dialog-title').textContent = `在 ${projectName(projects.find((project) => project.id === select.value))} 中创建 Room`;
-    showDialog('room-dialog');
-    queueMicrotask(() => $('room-name').focus());
+	syncBindingInputs();
+	hideFormError('room-form-error');
+    $('room-dialog-title').textContent = t("ui.createRoomInValue", { value0: (projectName(projects.find((project) => project.id === select.value))) });
+	showDialog('room-dialog');
+	$('room-submit').disabled = true;
+	try {
+	  const catalog = await loadAgentCatalog();
+	  for (const actor of ['claude', 'codex']) populateAgentControls(actor, catalog.defaults?.[actor]);
+	  $('room-submit').disabled = false;
+	  queueMicrotask(() => $('room-name').focus());
+	} catch (error) {
+	  showFormError('room-form-error', error.message);
+	}
   }
 
   function syncBindingInputs() {
@@ -1531,7 +1672,7 @@
     const projectID = $('room-project-id').value;
     const name = $('room-name').value.trim();
     if (!name) {
-      showFormError('room-form-error', t('Room 名称不能为空。'));
+      showFormError('room-form-error', t("ui.roomNameCannotBeEmpty"));
       return;
     }
     const bindings = {};
@@ -1539,17 +1680,18 @@
       const mode = document.querySelector(`input[name="${actor}-mode"]:checked`)?.value || 'new';
       const sessionID = $(`${actor}-session-id`).value.trim();
       if (mode === 'existing' && !sessionID) {
-        showFormError('room-form-error', `${actor === 'claude' ? 'Claude Session' : 'Codex Threadt('} ID 不能为空。`);
+		showFormError('room-form-error', t("ui.valueIdIsRequired", { value0: $(`${actor}-binding-label`).textContent.replace(/ ID$/, '') }));
         return;
       }
-      bindings[actor] = mode === ')existing' ? { mode, session_id: sessionID } : { mode };
-    }
+	  bindings[actor] = mode === 'existing' ? { mode, session_id: sessionID } : { mode };
+	}
+	const agents = { claude: readAgentSelection('claude'), codex: readAgentSelection('codex') };
     await withBusy($('room-submit'), async () => {
       try {
         hideFormError('room-form-error');
-        await api(`/api/v1/projects/${encodeURIComponent(projectID)}/rooms`, { method: 'POST', body: JSON.stringify({ name, bindings }) });
+		await api(`/api/v1/projects/${encodeURIComponent(projectID)}/rooms`, { method: 'POST', body: JSON.stringify({ name, bindings, agents }) });
         closeDialog('room-dialog');
-        toast('Room 已创建', t('Claude 与 Codex Binding 已完成原子验证。'), 'success');
+        toast(t("ui.roomCreated"), t("ui.agentBindingsCompletedAtomicVerification"), 'success');
         await refresh({ forceRender: true });
         navigate(`#/projects/${encodeURIComponent(projectID)}`);
       } catch (error) {
@@ -1572,7 +1714,7 @@
     const name = $('rename-room-name').value.trim();
     const room = roomByID(roomID);
     if (!name) {
-      showFormError('rename-form-error', t('Room 名称不能为空。'));
+      showFormError('rename-form-error', t("ui.roomNameCannotBeEmpty"));
       return;
     }
     if (room && name === room.name) {
@@ -1584,7 +1726,7 @@
       try {
         await api(`/api/v1/rooms/${encodeURIComponent(roomID)}`, { method: 'PATCH', body: JSON.stringify({ name }) });
         closeDialog('rename-dialog');
-        toast('Room 已重命名', t('变更在安全 Turn 边界提交。'), 'success');
+        toast(t("ui.roomRenamed"), t("ui.changesAreCommittedAtTheSafeTurnBoundary"), 'success');
         await refresh({ forceRender: true });
       } catch (error) {
         showFormError('rename-form-error', error.message);
@@ -1599,12 +1741,12 @@
     for (const actor of ['claude', 'codex']) {
       const binding = room.bindings?.[actor];
       if (binding && (!binding.pending || binding.mode === 'new')) continue;
-      const label = actor === 'claude' ? 'Claude Session' : 'Codex Thread';
+	  const label = actor === 'claude' ? t('room.claudeSession') : t('room.codexThread');
       const field = node('fieldset', { className: 'binding-card', 'data-complete-actor': actor },
-        node('legend', {}, node('span', { className: `agent-avatar ${actor}`, textContent: actor === 'claude' ? 'C' : 'X' }), node('span', {}, node('strong', { textContent: label }), node('small', { textContent: 'Missing Binding' }))),
-        node('label', { className: 'choice-card' }, node('input', { type: 'radio', name: `complete-${actor}-mode`, value: 'new', checked: true }), node('span', {}, node('strong', { textContent: `新建 ${label}` }), node('small', { textContent: t('Identity 在首次真实 Turn 上固化') }))),
-        node('label', { className: 'choice-card' }, node('input', { type: 'radio', name: `complete-${actor}-mode`, value: 'existing' }), node('span', {}, node('strong', { textContent: t('复用 Existing') }), node('small', { textContent: t('必须未被其他 Room 占用') }))),
-        node('label', { className: 'session-field' }, node('span', { textContent: `${label} ID` }), node('input', { id: `complete-${actor}-session`, type: 'text', placeholder: `粘贴 ${label} ID`, autocomplete: 'off', disabled: true }))
+        node('legend', {}, node('span', { className: `agent-avatar ${actor}`, textContent: actor === 'claude' ? '1' : '2' }), node('span', {}, node('strong', { textContent: label }), node('small', { textContent: t('room.missingBinding') }))),
+        node('label', { className: 'choice-card' }, node('input', { type: 'radio', name: `complete-${actor}-mode`, value: 'new', checked: true }), node('span', {}, node('strong', { textContent: t("ui.createValue", { value0: (label) }) }), node('small', { textContent: t("ui.identityIsSolidifiedOnTheFirstRealTurn") }))),
+        node('label', { className: 'choice-card' }, node('input', { type: 'radio', name: `complete-${actor}-mode`, value: 'existing' }), node('span', {}, node('strong', { textContent: t("ui.reuseExisting") }), node('small', { textContent: t("ui.mustNotBeOccupiedByOtherRooms") }))),
+        node('label', { className: 'session-field' }, node('span', { textContent: `${label} ID` }), node('input', { id: `complete-${actor}-session`, type: 'text', placeholder: t("ui.pasteValueId", { value0: (label) }), autocomplete: 'off', disabled: true }))
       );
       field.querySelectorAll('input[type="radio"]').forEach((radio) => radio.addEventListener('change', () => {
         const existing = field.querySelector('input[type="radio"][value="existing"]').checked;
@@ -1615,7 +1757,7 @@
       }));
       container.append(field);
     }
-    container.append(node('div', { className: 'callout boundary' }, node('strong', { textContent: 'Atomic completion' }), node('span', { textContent: t('任一 Existing ID 无效、不可恢复或已被占用时，整个补全过程失败且不留下部分占用。') })));
+    container.append(node('div', { className: 'callout boundary' }, node('strong', { textContent: t('room.atomicCompletion') }), node('span', { textContent: t("ui.whenAnyExistingIdIsInvalidUnrecoverableOrAlreadyOccupiedTheEntire") })));
     hideFormError('binding-form-error');
     showDialog('binding-dialog');
   }
@@ -1630,17 +1772,17 @@
       const input = $(`complete-${actor}-session`);
       const sessionID = input?.value.trim() || '';
       if (mode === 'existing' && !sessionID) {
-        showFormError('binding-form-error', `${actor === 'claude' ? 'Claude Session' : 'Codex Threadt('} ID 不能为空。`);
+        showFormError('binding-form-error', t("ui.valueIdIsRequired", { value0: (actor === 'claude' ? t('room.claudeSession') : t('room.codexThread')) }));
         return;
       }
-      bindings[actor] = mode === ')existing' ? { mode, session_id: sessionID } : { mode };
+      bindings[actor] = mode === 'existing' ? { mode, session_id: sessionID } : { mode };
     }
     const button = event.submitter || event.currentTarget.querySelector('[type="submit"]');
     await withBusy(button, async () => {
       try {
         await api(`/api/v1/rooms/${encodeURIComponent(state.bindingRoomID)}/bindings`, { method: 'POST', body: JSON.stringify({ bindings }) });
         closeDialog('binding-dialog');
-        toast('Binding 已补全', t('Legacy Room 现在可以安全激活。'), 'success');
+        toast(t("ui.bindingsCompleted"), t("ui.legacyRoomIsNowSafeToActivate"), 'success');
         await refresh({ forceRender: true });
       } catch (error) {
         showFormError('binding-form-error', error.message);
@@ -1650,15 +1792,15 @@
 
   function archiveRoom(room) {
     openConfirm({
-      eyebrow: 'ARCHIVE ROOM',
-      title: `归档“${room.name}”？`,
-      message: '活动 Turn 会先被停止，Runtime 随后挂起；Room 将从默认列表隐藏。',
-      detail: t('Event Log、附件、角色、草稿、未读状态和两侧 Binding Identity 都会完整保留。'),
-      label: t('归档 Room'),
+      eyebrow: t('room.archiveRoomUpper'),
+      title: t("ui.archiveValue", { value0: (room.name) }),
+      message: t("ui.theActiveTurnStopsFirstThenTheRuntimeIsSuspendedAndThe"),
+      detail: t("ui.eventLogAttachmentsRolesDraftsUnreadStatusAndBindingIdentityOnBoth"),
+      label: t("ui.archiveRoom"),
       tone: 'danger',
       action: async () => {
         await api(`/api/v1/rooms/${encodeURIComponent(room.id)}/archive`, { method: 'POST' });
-        toast('Room 已归档', t('历史与 Binding Identity 已保留。'), 'success');
+        toast(t("ui.roomArchived"), t("ui.historyAndBindingIdentityHaveBeenPreserved"), 'success');
         await refresh({ forceRender: true });
       },
     });
@@ -1668,13 +1810,13 @@
     try {
       const refreshed = await api(`/api/v1/projects/${encodeURIComponent(project.id)}/refresh`, { method: 'POST' });
       if (refreshed.available) {
-        toast('Project 可用', t('Canonical worktree 已重新验证。'), 'success');
+        toast(t("ui.projectAvailable"), t("ui.canonicalWorktreeHasBeenRevalidated"), 'success');
       } else {
-        toast('Project 仍不可用', refreshed.diagnostic || t('Canonical worktree 当前无法访问。'), 'warning');
+        toast(t("ui.projectRemainsUnavailable"), refreshed.diagnostic || t("ui.canonicalWorktreeIsCurrentlyInaccessible"), 'warning');
       }
       await refresh({ forceRender: true });
     } catch (error) {
-      toast('Project 检查失败', error.message, 'error');
+      toast(t("ui.projectCheckFailed"), error.message, 'error');
     }
   }
   function uniqueRooms(candidates = state.snapshot?.rooms || []) {
@@ -1708,7 +1850,7 @@
   }
   function toggleRoomSelection(roomID, selected) {
     if (selected && !state.selectedRoomIDs.has(roomID) && state.selectedRoomIDs.size >= MAX_ROOM_BATCH_SIZE) {
-      toast('已达到批量上限', `每次最多选择 ${MAX_ROOM_BATCH_SIZE} 个 Room。`, 'warning');
+      toast(t("ui.batchLimitReached"), t("ui.selectAtMostValueRooms", { value0: (MAX_ROOM_BATCH_SIZE) }), 'warning');
       render();
       return;
     }
@@ -1733,7 +1875,7 @@
       }
       state.selectedRoomIDs.add(room.id);
     }
-    if (skipped) toast('部分 Room 未选择', `每次最多处理 ${MAX_ROOM_BATCH_SIZE} 个；还有 ${skipped} 个可在下一批处理。`, 'warning');
+    if (skipped) toast(t("ui.someRoomsWereNotSelected"), t("ui.processAtMostValuePerRequestValueMoreCanBeHandledIn", { value0: (MAX_ROOM_BATCH_SIZE), value1: (skipped) }), 'warning');
     render();
   }
   function roomSelectionToggleButton(candidates, scopeLabel) {
@@ -1741,63 +1883,63 @@
     const selected = eligible.filter((room) => state.selectedRoomIDs.has(room.id));
     const allSelected = eligible.length > 0 && selected.length === eligible.length;
     const label = allSelected
-      ? `取消选择${scopeLabel}中的 Room (${selected.length})`
-      : `选择${scopeLabel}中的 Room (${eligible.length})`;
+      ? t("ui.deselectRoomInValueValue", { value0: (scopeLabel), value1: (selected.length) })
+      : t("ui.selectRoomInValueValue", { value0: (scopeLabel), value1: (eligible.length) });
     return actionButton(label, () => toggleRoomSelectionGroup(eligible), `filter-chip ${selected.length ? 'active' : ''}`, eligible.length === 0);
   }
   function roomClearSelectionButton() {
     const count = state.selectedRoomIDs.size;
     if (!count) return null;
-    return actionButton(`清除选择 (${count})`, () => {
+    return actionButton(t("ui.clearSelectionValue", { value0: (count) }), () => {
       state.selectedRoomIDs.clear();
       render();
     }, 'secondary-button outline');
   }
   function roomBatchArchiveButton(rooms) {
     const count = rooms.length;
-    return actionButton(`批量归档 (${count})`, () => confirmRoomArchive(rooms), 'secondary-button outline', count === 0);
+    return actionButton(t("ui.batchArchiveValue", { value0: (count) }), () => confirmRoomArchive(rooms), 'secondary-button outline', count === 0);
   }
   function roomBatchRemovalButton(rooms) {
     const count = rooms.length;
-    return actionButton(`批量清理 (${count})`, () => confirmRoomRemoval(rooms), 'danger-button outline', count === 0);
+    return actionButton(t("ui.batchDeleteValue", { value0: (count) }), () => confirmRoomRemoval(rooms), 'danger-button outline', count === 0);
   }
   function projectRemovalButton(project, roomCount, compact = false) {
     if (!state.snapshot?.capabilities?.project_removal) return null;
     const disabled = roomCount > 0;
     const explanation = disabled
-      ? `仍包含 ${roomCount} 个 Room（含已归档）；请先归档并永久清除。`
-      : '只移除 Service Registry 登记，不删除 Git worktree 或外部数据。';
+      ? t("ui.stillContainsValueRoomsIncludingArchivedRoomsArchiveAndPermanentlyDeleteThem", { value0: (roomCount) })
+      : t("ui.removeOnlyTheServiceRegistryEntryDoNotDeleteTheGitWorktree");
     return node('button', {
       type: 'button',
       className: `danger-button outline${compact ? ' compact-button' : ''}`,
-      textContent: t('注销 Project'),
+      textContent: t("ui.logOutProject"),
       disabled,
       title: explanation,
-      'aria-label': `注销 Project ${projectName(project)}。${explanation}`,
+      'aria-label': t("ui.unregisterProjectValueValue", { value0: (projectName(project)), value1: (explanation) }),
       onClick: () => removeProject(project),
     });
   }
   function removeProject(project) {
     const roomCount = (state.snapshot?.rooms || []).filter((room) => room.project_id === project.id).length;
     if (roomCount > 0) {
-      toast('不能注销 Project', `仍包含 ${roomCount} 个 Room（含已归档）；请先归档并永久清除。`, 'warning');
+      toast(t("ui.cannotUnregisterProject"), t("ui.stillContainsValueRoomsIncludingArchivedRoomsArchiveAndPermanentlyDeleteThem", { value0: (roomCount) }), 'warning');
       return;
     }
     openConfirm({
-      eyebrow: 'UNREGISTER PROJECT',
-      title: `注销“${projectName(project)}”？`,
-      message: '将此空 Project 从 Service Registry 注销。',
-      detail: t('不会删除 Git worktree 或 vendor Session/Thread。后端仍会最终复检 Project 确实不含任何 Room。'),
-      label: t('注销 Project'),
+      eyebrow: t('room.unregisterProjectUpper'),
+      title: t("ui.unregisterValue", { value0: (projectName(project)) }),
+      message: t("ui.unregisterThisEmptyProjectFromTheServiceRegistry"),
+      detail: t("ui.gitWorktreeOrVendorSessionThreadWillNotBeDeletedTheBackend"),
+      label: t("ui.logOutProject"),
       tone: 'danger',
       confirmation: project.id,
-      confirmationLabel: t('输入完整 Project ID 以确认'),
+      confirmationLabel: t("ui.enterFullProjectIdToConfirm"),
       action: async () => {
         await api(`/api/v1/projects/${encodeURIComponent(project.id)}`, {
           method: 'DELETE',
           body: JSON.stringify({ confirm_project_id: project.id }),
         });
-        toast('Project 已注销', t('Git worktree 与外部数据未被修改。'), 'success');
+        toast(t("ui.projectUnregistered"), t("ui.gitWorktreeAndExternalDataAreNotModified"), 'success');
         await refresh({ forceRender: true });
         navigate('#/projects');
       },
@@ -1806,28 +1948,28 @@
   function confirmRoomArchive(candidates) {
     const rooms = eligibleActiveRooms(candidates);
     if (!rooms.length) {
-      toast('没有可归档的 Room', t('请选择至少一个活跃 Room。'), 'warning');
+      toast(t("ui.noRoomsCanBeArchived"), t("ui.pleaseSelectAtLeastOneActiveRoom"), 'warning');
       return;
     }
     if (rooms.length > MAX_ROOM_BATCH_SIZE) {
-      toast('超过批量上限', `每次最多处理 ${MAX_ROOM_BATCH_SIZE} 个 Room。`, 'warning');
+      toast(t("ui.batchLimitExceeded"), t("ui.processAtMostValueRoomsPerRequest", { value0: (MAX_ROOM_BATCH_SIZE) }), 'warning');
       return;
     }
-    const preview = rooms.slice(0, 6).map((room) => room.name).join('、');
-    const remaining = rooms.length > 6 ? `，另有 ${rooms.length - 6} 个` : '';
+    const preview = window.PairRoomI18n.formatList(rooms.slice(0, 6).map((room) => room.name));
+    const remaining = rooms.length > 6 ? t("ui.plusValueMore", { value0: (rooms.length - 6) }) : '';
     openConfirm({
-      eyebrow: rooms.length === 1 ? 'ARCHIVE ROOM' : 'BATCH ARCHIVE ROOMS',
-      title: rooms.length === 1 ? `归档“${rooms[0].name}”？` : `归档 ${rooms.length} 个 Room？`,
-      message: `${preview}${remaining}。归档后仍可恢复，也可继续批量永久清理。`,
-      detail: '归档保留 Event Log、附件和 Agent Binding。批量请求逐项执行；忙碌 Room 的活动 Turn 会先被停止，失败项保持选中，可稍后重试。',
-      label: rooms.length === 1 ? t('归档 Room') : `归档 ${rooms.length} 个 Room`,
+      eyebrow: rooms.length === 1 ? t('room.archiveRoomUpper') : t('room.batchArchiveRoomsUpper'),
+      title: rooms.length === 1 ? t("ui.archiveValue", { value0: (rooms[0].name) }) : t("ui.archiveValueRooms", { value0: (rooms.length) }),
+      message: t("ui.valueValueArchivedRoomsCanBeRestoredOrPermanentlyDeletedInA", { value0: (preview), value1: (remaining) }),
+      detail: t("ui.archivingPreservesTheEventLogAttachmentsAndAgentBindingsBatchRequestsRun"),
+      label: rooms.length === 1 ? t("ui.archiveRoom") : t("ui.archiveValueRoomse83d2c9", { value0: (rooms.length) }),
       tone: 'primary',
       action: async () => {
         const response = await api('/api/v1/rooms/batch-archive', {
           method: 'POST',
           body: JSON.stringify({ room_ids: rooms.map((room) => room.id) }),
         });
-        if (!Array.isArray(response.results)) throw new Error(t('批量归档响应缺少 results。'));
+        if (!Array.isArray(response.results)) throw new Error(t("ui.batchArchiveResponseIsMissingResults"));
         const results = response.results;
         const succeeded = results.filter((item) => item.status === 'archived' || item.status === 'already_archived');
         const failed = results.filter((item) => item.status !== 'archived' && item.status !== 'already_archived');
@@ -1836,16 +1978,16 @@
         if (failed.length) {
           const detail = failed.slice(0, 2).map((item) => {
             const room = rooms.find((candidate) => candidate.id === item.room_id);
-            return `${room?.name || item.room_id}: ${item.error || item.code || t('归档失败')}`;
+            return `${room?.name || item.room_id}: ${item.error || item.code || t("ui.archivingFailed")}`;
           }).join('；');
-          const more = failed.length > 2 ? `；另有 ${failed.length - 2} 个失败` : '';
+          const more = failed.length > 2 ? t("ui.valueMoreFailed", { value0: (failed.length - 2) }) : '';
           toast(
-            succeeded.length ? t('批量归档部分完成') : t('批量归档未完成'),
-            `成功 ${succeeded.length} 个，失败 ${failed.length} 个。${detail}${more}`,
+            succeeded.length ? t("ui.batchArchivingPartiallyCompleted") : t("ui.batchArchivingNotCompleted"),
+            t("ui.valueSucceededAndValueFailedValueValue", { value0: (succeeded.length), value1: (failed.length), value2: (detail), value3: (more) }),
             succeeded.length ? 'warning' : 'error'
           );
         } else {
-          toast('Room 已归档', `已归档 ${succeeded.length} 个 Room；所选项保持选中，可直接继续批量清理。`, 'success');
+          toast(t("ui.roomArchived"), t("ui.archivedValueRoomsTheyRemainSelectedSoYouCanContinueWithBatch", { value0: (succeeded.length) }), 'success');
         }
         await refresh({ forceRender: true });
       },
@@ -1854,23 +1996,23 @@
   function confirmRoomRemoval(candidates) {
     const rooms = eligibleArchivedRooms(candidates);
     if (!rooms.length) {
-      toast('没有可清理的 Room', t('请选择至少一个已归档 Room。'), 'warning');
+      toast(t("ui.noRoomsCanBeDeleted"), t("ui.pleaseSelectAtLeastOneArchivedRoom"), 'warning');
       return;
     }
     if (rooms.length > MAX_ROOM_BATCH_SIZE) {
-      toast('超过批量上限', `每次最多处理 ${MAX_ROOM_BATCH_SIZE} 个 Room。`, 'warning');
+      toast(t("ui.batchLimitExceeded"), t("ui.processAtMostValueRoomsPerRequest", { value0: (MAX_ROOM_BATCH_SIZE) }), 'warning');
       return;
     }
-    const preview = rooms.slice(0, 6).map((room) => room.name).join('、');
-    const remaining = rooms.length > 6 ? `，另有 ${rooms.length - 6} 个` : '';
+    const preview = window.PairRoomI18n.formatList(rooms.slice(0, 6).map((room) => room.name));
+    const remaining = rooms.length > 6 ? t("ui.plusValueMore", { value0: (rooms.length - 6) }) : '';
     openConfirm({
-      eyebrow: rooms.length === 1 ? 'PERMANENTLY REMOVE ROOM' : 'BATCH REMOVE ROOMS',
-      title: rooms.length === 1 ? `永久清除“${rooms[0].name}”？` : `永久清除 ${rooms.length} 个 Room？`,
-      message: `${preview}${remaining}。此操作不可撤销。`,
-      detail: 'PairRoom 管理的 Event Log、附件和 Room 数据会被删除；Git worktree 与 vendor Claude Session/Codex Thread 不会被删除。显式导入的外部目录只解绑并保留。批量请求逐项执行，失败项不会回滚已完成项。',
-      label: rooms.length === 1 ? t('永久清除 Room') : `永久清除 ${rooms.length} 个 Room`,
+      eyebrow: rooms.length === 1 ? t('room.permanentlyRemoveRoomUpper') : t('room.batchRemoveRoomsUpper'),
+      title: rooms.length === 1 ? t("ui.permanentlyDeleteValue", { value0: (rooms[0].name) }) : t("ui.permanentlyDeleteValueRooms", { value0: (rooms.length) }),
+      message: t("ui.valueValueThisActionCannotBeUndone", { value0: (preview), value1: (remaining) }),
+      detail: t("ui.pairroomManagedEventLogsAttachmentsAndRoomDataAreDeletedGitWorktrees"),
+      label: rooms.length === 1 ? t("ui.clearRoomPermanently") : t("ui.permanentlyDeleteValueRooms891a8ae", { value0: (rooms.length) }),
       tone: 'danger',
-      acknowledgement: `我理解所选 ${rooms.length} 个 Room 的 PairRoom 管理数据将永久删除且无法恢复。`,
+      acknowledgement: t("ui.iUnderstandThatPairroomManagementDataForTheSelectedValueRoomsWill", { value0: (rooms.length) }),
       action: async () => {
         const response = await api('/api/v1/rooms/batch-delete', {
           method: 'POST',
@@ -1879,7 +2021,7 @@
             acknowledge_data_loss: true,
           }),
         });
-        if (!Array.isArray(response.results)) throw new Error(t('批量清理响应缺少 results。'));
+        if (!Array.isArray(response.results)) throw new Error(t("ui.batchCleanupResponseIsMissingResults"));
         const results = response.results;
         const succeeded = results.filter((item) => item.status === 'deleted');
         const failed = results.filter((item) => item.status !== 'deleted');
@@ -1894,20 +2036,20 @@
         if (failed.length) {
           const detail = failed.slice(0, 2).map((item) => {
             const room = rooms.find((candidate) => candidate.id === item.room_id);
-            return `${room?.name || item.room_id}: ${item.error || item.code || t('删除失败')}`;
+            return `${room?.name || item.room_id}: ${item.error || item.code || t("ui.deleteFailed")}`;
           }).join('；');
-          const more = failed.length > 2 ? `；另有 ${failed.length - 2} 个失败` : '';
+          const more = failed.length > 2 ? t("ui.valueMoreFailed", { value0: (failed.length - 2) }) : '';
           toast(
-            succeeded.length ? t('批量清理部分完成') : t('批量清理未完成'),
-            `成功 ${succeeded.length} 个，失败 ${failed.length} 个。${detail}${more}`,
+            succeeded.length ? t("ui.batchCleanupPartiallyCompleted") : t("ui.batchCleanupNotCompleted"),
+            t("ui.valueSucceededAndValueFailedValueValue", { value0: (succeeded.length), value1: (failed.length), value2: (detail), value3: (more) }),
             succeeded.length ? 'warning' : 'error'
           );
         } else if (cleanupPending) {
-          toast('Room 已移除，物理清理待重试', `已处理 ${succeeded.length} 个；其中 ${cleanupPending} 个隔离清理项可在设置中重试。`, 'warning');
+          toast(t("ui.roomRemovedPhysicalCleanupNeedsRetry"), t("ui.processedValueValueQuarantinedCleanupItemsCanBeRetriedInSettings", { value0: (succeeded.length), value1: (cleanupPending) }), 'warning');
         } else if (retainedExternal) {
-          toast('Room 清理完成', `已处理 ${succeeded.length} 个；其中 ${retainedExternal} 个外部导入目录保持原位。`, 'success');
+          toast(t("ui.roomCleanupComplete"), t("ui.processedValueValueImportedExternalDirectoriesRemainInPlace", { value0: (succeeded.length), value1: (retainedExternal) }), 'success');
         } else {
-          toast('Room 已永久清除', `已成功清理 ${succeeded.length} 个已归档 Room。`, 'success');
+          toast(t("ui.roomPermanentlyDeleted"), t("ui.permanentlyDeletedValueArchivedRooms", { value0: (succeeded.length) }), 'success');
         }
         await refresh({ forceRender: true });
       },
@@ -1917,37 +2059,37 @@
     try {
       const maintenance = await api('/api/v1/maintenance/room-deletions/retry', { method: 'POST' });
       if (maintenance.pending_cleanup) {
-        toast('仍有清理项', maintenance.diagnostic || `${maintenance.pending_cleanup} 个隔离项仍待处理。`, 'warning');
+        toast(t("ui.cleanupItemsRemain"), maintenance.diagnostic || t("ui.valueQuarantinedItemsStillNeedAttention", { value0: (maintenance.pending_cleanup) }), 'warning');
       } else {
-        toast('Room 清理已完成', t('删除隔离区已清空。'), 'success');
+        toast(t("ui.roomCleanupCompleted"), t("ui.theDeletionQuarantineHasBeenCleared"), 'success');
       }
       await refresh({ forceRender: true });
     } catch (error) {
-      toast('Room 清理重试失败', error.message, 'error');
+      toast(t("ui.roomCleanupRetryFailed"), error.message, 'error');
     }
   }
   async function restoreRoom(room) {
     try {
       await api(`/api/v1/rooms/${encodeURIComponent(room.id)}/restore`, { method: 'POST' });
-      toast('Room 已恢复', t('完整历史与 Binding Identity 可再次使用。'), 'success');
+      toast(t("ui.roomRestored"), t("ui.theFullHistoryAndBindingIdentityAreAvailableAgain"), 'success');
       await refresh({ forceRender: true });
     } catch (error) {
-      toast('恢复失败', error.message, 'error');
+      toast(t("ui.restoreFailed"), error.message, 'error');
     }
   }
 
   function suspendRoom(room, runtime) {
     const queued = runtime.phase === 'queued';
     openConfirm({
-      eyebrow: queued ? 'CANCEL ACTIVATION' : 'SUSPEND RUNTIME',
-      title: queued ? `取消“${room.name}”的激活排队？` : `挂起“${room.name}”的 Runtime？`,
-      message: queued ? 'Room 会回到 Suspended；下次打开时可重新进入队列。' : t('只有没有活动 Turn 的 Runtime 才会关闭 vendor 进程并释放容量。'),
-      detail: queued ? '' : t('若 Room 正在工作，后端会返回冲突且不会发送 Interrupt。Room 历史和 Session/Thread Binding 不受影响。'),
-      label: queued ? t('取消排队') : t('挂起 Runtime'),
+      eyebrow: queued ? t('room.cancelActivationUpper') : t('room.suspendRuntimeUpper'),
+      title: queued ? t("ui.cancelActivationQueueForValue", { value0: (room.name) }) : t("ui.suspendTheRuntimeForValue", { value0: (room.name) }),
+      message: queued ? t("ui.theRoomReturnsToSuspendedAndCanReEnterTheQueueThe") : t("ui.onlyRuntimesWithNoActiveTurnWillShutDownTheVendorProcess"),
+      detail: queued ? '' : t("ui.ifRoomIsWorkingTheBackendWillReturnAConflictAndWill"),
+      label: queued ? t("ui.cancelQueue") : t("ui.hangRuntime"),
       tone: 'danger',
       action: async () => {
         await api(`/api/v1/rooms/${encodeURIComponent(room.id)}/suspend`, { method: 'POST' });
-        toast(queued ? t('已取消排队') : t('Runtime 已挂起'), queued ? t('Room 仍保持可恢复。') : t('容量已安全释放。'), 'success');
+        toast(queued ? t("ui.queueCanceled") : t("ui.runtimeHasHung"), queued ? t("ui.roomRemainsRecoverable") : t("ui.capacityHasBeenSafelyReleased"), 'success');
         await refresh({ forceRender: true });
       },
     });
@@ -1957,7 +2099,7 @@
     const room = roomByID(roomID);
     if (!room) return;
     if (room.lifecycle === 'archived') {
-      toast('Room 已归档', t('恢复后才能打开。'), 'warning');
+      toast(t("ui.roomArchived"), t("ui.canOnlyBeOpenedAfterRecovery"), 'warning');
       return;
     }
     if (roomHasBlockingPendingBindings(room)) {
@@ -1976,7 +2118,7 @@
   async function openRoomInBrowserAction(roomID) {
     const room = roomByID(roomID);
     if (!room || room.lifecycle === 'archived') {
-      toast('无法在浏览器中打开', t('归档 Room 没有独立 Runtime URL，请先恢复。'), 'warning');
+      toast(t("ui.couldNotOpenInBrowser"), t("ui.theArchiveRoomDoesNotHaveAnIndependentRuntimeUrlPleaseRestore"), 'warning');
       return;
     }
     if (roomHasBlockingPendingBindings(room)) {
@@ -1984,7 +2126,7 @@
       return;
     }
     const deadline = Date.now() + 60000;
-    toast('正在准备系统浏览器', t('等待 Runtime 就绪后再打开。'), 'success');
+    toast(t("ui.preparingTheSystemBrowser"), t("ui.waitForTheRuntimeToBeReadyBeforeOpeningIt"), 'success');
     try {
       while (Date.now() < deadline) {
         const status = await api(`/api/v1/rooms/${encodeURIComponent(roomID)}/activate`, { method: 'POST' });
@@ -1994,14 +2136,14 @@
       }
       const runtime = getRuntime(roomID);
       if (runtime.phase !== 'active' || !runtime.url) {
-        throw new Error(t('等待 Runtime 超时'));
+        throw new Error(t("ui.waitForRuntimeToTimeout"));
       }
       await api(`/api/v1/rooms/${encodeURIComponent(roomID)}/open-browser`, { method: 'POST' });
-      toast('已在系统浏览器中打开', t('不会离开当前工作台。'), 'success');
+      toast(t("ui.openedInTheSystemBrowser"), t("ui.willNotLeaveTheCurrentWorkbench"), 'success');
     } catch (error) {
       const runtime = getRuntime(roomID);
-      if (runtime.url) await copyText(runtime.url, t('已复制一次性 Room URL，可粘贴到系统浏览器。'));
-      toast('无法打开系统浏览器', error.message, 'error');
+      if (runtime.url) await copyText(runtime.url, t("ui.theOneTimeRoomUrlHasBeenCopiedAndCanBePasted"));
+      toast(t("ui.couldNotOpenTheSystemBrowser"), error.message, 'error');
     }
   }
 
@@ -2018,14 +2160,14 @@
     const acknowledgementLabel = $('confirm-ack-label');
     if (wrapper) wrapper.hidden = true;
     if (expected) expected.textContent = '';
-    if (inputLabel) inputLabel.textContent = t('输入完整 ID 以确认');
+    if (inputLabel) inputLabel.textContent = t("ui.enterTheFullIdToConfirm");
     if (input) {
       input.value = '';
       input.required = false;
       input.setCustomValidity('');
     }
     if (acknowledgementWrapper) acknowledgementWrapper.hidden = true;
-    if (acknowledgementLabel) acknowledgementLabel.textContent = t('我理解此操作不可恢复。');
+    if (acknowledgementLabel) acknowledgementLabel.textContent = t("ui.iUnderstandThisActionCannotBeUndone");
     if (acknowledgement) {
       acknowledgement.checked = false;
       acknowledgement.required = false;
@@ -2040,11 +2182,11 @@
     if (!input || !acknowledgement || !submit) return;
     const matches = !state.confirmRequirement || input.value === state.confirmRequirement;
     const acknowledged = !state.confirmAcknowledgementRequired || acknowledgement.checked;
-    input.setCustomValidity(matches ? '' : t('请输入完整且逐字匹配的 ID。'));
-    acknowledgement.setCustomValidity(acknowledged ? '' : t('请先确认你理解此操作不可恢复。'));
+    input.setCustomValidity(matches ? '' : t("ui.pleaseEnterACompleteWordForWordMatchingId"));
+    acknowledgement.setCustomValidity(acknowledged ? '' : t("ui.pleaseMakeSureYouUnderstandThatThisOperationIsNotReversible"));
     submit.disabled = !matches || !acknowledged;
   }
-  function openConfirm({ eyebrow = 'CONFIRM', title, message, detail = '', label = t('确认'), tone = 'danger', confirmation = '', confirmationLabel = t('输入完整 ID 以确认'), acknowledgement = '', action }) {
+  function openConfirm({ eyebrow = t('common.confirmUpper'), title, message, detail = '', label = t("ui.confirm"), tone = 'danger', confirmation = '', confirmationLabel = t("ui.enterTheFullIdToConfirm"), acknowledgement = '', action }) {
     resetConfirmState();
     state.confirmAction = action;
     state.confirmRequirement = confirmation;
@@ -2055,7 +2197,7 @@
     const detailNode = $('confirm-detail');
     detailNode.hidden = !detail;
     detailNode.replaceChildren();
-    if (detail) detailNode.append(node('strong', { textContent: t('安全边界') }), node('span', { textContent: detail }));
+    if (detail) detailNode.append(node('strong', { textContent: t("ui.securityBoundary") }), node('span', { textContent: detail }));
     const requirement = $('confirm-input-wrap');
     const input = $('confirm-input');
     const acknowledgementWrapper = $('confirm-ack-wrap');
@@ -2066,7 +2208,7 @@
     input.required = Boolean(confirmation);
     input.value = '';
     acknowledgementWrapper.hidden = !acknowledgement;
-    $('confirm-ack-label').textContent = acknowledgement || t('我理解此操作不可恢复。');
+    $('confirm-ack-label').textContent = acknowledgement || t("ui.iUnderstandThisActionCannotBeUndone");
     acknowledgementInput.required = Boolean(acknowledgement);
     acknowledgementInput.checked = false;
     $('confirm-submit').textContent = label;
@@ -2096,7 +2238,7 @@
         await action();
         closeDialog('confirm-dialog');
       } catch (error) {
-        toast('操作失败', error.message, 'error');
+        toast(t("ui.actionFailed"), error.message, 'error');
       }
     });
   }
@@ -2120,9 +2262,8 @@
   }
 
   function applyPreferences() {
-    if (state.preferences.theme === 'system') delete document.documentElement.dataset.theme;
-    else document.documentElement.dataset.theme = state.preferences.theme;
-    document.body.dataset.density = state.preferences.density;
+	if (window.PairRoomTheme && window.PairRoomTheme.mode !== state.preferences.theme) window.PairRoomTheme.setTheme(state.preferences.theme);
+	document.body.dataset.density = state.preferences.density;
   }
 
   function runtimeFlags(policy) {
@@ -2165,23 +2306,23 @@
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 0);
-    toast('诊断已导出', t('Runtime URL 已脱敏；本机路径仍可能敏感。'), 'success');
+    toast(t("ui.diagnosticsExported"), t("ui.runtimeUrlsAreDesensitizedLocalPathsMayStillBeSensitive"), 'success');
   }
 
-  async function copyText(value, successMessage = t('已复制。')) {
+  async function copyText(value, successMessage = t("ui.copied")) {
     try {
       await navigator.clipboard.writeText(String(value));
-      toast('复制成功', successMessage, 'success');
+      toast(t("ui.copied324408e"), successMessage, 'success');
     } catch {
       const input = document.createElement('textarea');
       input.value = String(value);
       input.setAttribute('readonly', '');
-      input.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+      input.className = 'clipboard-copy-source';
       document.body.append(input);
       input.select();
       const copied = document.execCommand('copy');
       input.remove();
-      toast(copied ? t('复制成功') : t('复制失败'), copied ? successMessage : t('浏览器拒绝了剪贴板操作。'), copied ? 'success' : 'error');
+      toast(copied ? t("ui.copied324408e") : t("ui.copyFailed"), copied ? successMessage : t("ui.theBrowserRejectedTheClipboardOperation"), copied ? 'success' : 'error');
     }
   }
 
@@ -2193,7 +2334,7 @@
     if (!button || button.disabled) return;
     const original = button.textContent;
     button.disabled = true;
-    button.textContent = t('处理中…');
+    button.textContent = t("ui.processing");
     try { await work(); } finally { button.disabled = false; button.textContent = original; }
   }
 
@@ -2215,7 +2356,6 @@
       if (value === undefined || value === null || value === false) continue;
       if (key === 'className') element.className = value;
       else if (key === 'textContent') element.textContent = value;
-      else if (key === 'style') element.setAttribute('style', value);
       else if (key.startsWith('on') && typeof value === 'function') element.addEventListener(key.slice(2).toLowerCase(), value);
       else if (key === 'checked') element.checked = Boolean(value);
       else if (key === 'disabled') element.disabled = Boolean(value);
@@ -2234,15 +2374,25 @@
   }
 
   function statusBadge(label, tone = '', extra = '') {
-    return node('span', { className: `badge ${tone} ${extra}`.trim(), textContent: label });
+    return node('span', { className: `badge ${tone} ${extra}`.trim(), textContent: localizedStatus(label) });
+  }
+
+  function localizedStatus(value) {
+	const labels = {
+	  active: t('common.active'), available: t('common.available'), unavailable: t('common.unavailable'), archived: t('ui.archived'), legacy: t('common.legacy'),
+	  queued: t('ui.queued'), starting: t('common.starting'), stopping: t('common.stopping'), suspended: t('common.suspended'), failed: t('ui.failed'),
+	  full: t('common.full'), supported: t('common.supported'), 'not supported': t('common.notSupported'), healthy: t('common.healthy'), 'fail-closed': t('common.failClosed'),
+	};
+	return labels[value] || value;
   }
 
   function statCard(label, value, hint, symbol, tone = '', onClick = null) {
+	const displayedValue = typeof value === 'number' ? formatNumber(value) : String(value);
     const card = node(onClick ? 'button' : 'article', { className: `panel stat-card ${tone}`.trim(), ...(onClick ? { type: 'button', onClick } : {}) },
       node('div', { className: 'stat-top' }, node('span', { className: 'stat-label', textContent: label }), node('span', { className: 'stat-icon', textContent: symbol, 'aria-hidden': 'true' })),
-      node('div', {}, node('div', { className: 'stat-value', textContent: String(value) }), node('div', { className: 'stat-hint', textContent: hint }))
+	  node('div', {}, node('div', { className: 'stat-value', textContent: displayedValue }), node('div', { className: 'stat-hint', textContent: hint }))
     );
-    if (onClick) card.setAttribute('aria-label', `${label}: ${value}. ${hint}`);
+	if (onClick) card.setAttribute('aria-label', `${label}: ${displayedValue}. ${hint}`);
     return card;
   }
 
@@ -2263,7 +2413,7 @@
   }
 
   function summaryCell(value, label) {
-    return node('div', { className: 'project-summary-item' }, node('strong', { textContent: String(value) }), node('span', { textContent: label }));
+	return node('div', { className: 'project-summary-item' }, node('strong', { textContent: typeof value === 'number' ? formatNumber(value) : String(value) }), node('span', { textContent: label }));
   }
 
   function keyValue(label, value, mono = false) {
@@ -2296,7 +2446,7 @@
     const date = new Date(value);
     const time = date.getTime();
     if (Number.isNaN(time) || time <= 0) return '—';
-    return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' }).format(date);
+	return window.PairRoomI18n.formatDate(date, { dateStyle: 'medium', timeStyle: 'medium' });
   }
 
   function formatRelativeTime(value) {
@@ -2304,22 +2454,26 @@
     const date = new Date(value);
     const time = date.getTime();
     if (Number.isNaN(time) || time <= 0) return '—';
-    const delta = Date.now() - time;
+    const delta = time - Date.now();
     if (!Number.isFinite(delta)) return String(value);
     const abs = Math.abs(delta);
-    if (abs < 5000) return t('刚刚');
-    if (abs < 60000) return `${Math.round(abs / 1000)} 秒前`;
-    if (abs < 3600000) return `${Math.round(abs / 60000)} 分钟前`;
-    if (abs < 86400000) return `${Math.round(abs / 3600000)} 小时前`;
+    if (abs < 5000) return t("ui.just");
+	if (abs < 60000) return window.PairRoomI18n.formatRelative(Math.round(delta / 1000), 'second');
+	if (abs < 3600000) return window.PairRoomI18n.formatRelative(Math.round(delta / 60000), 'minute');
+	if (abs < 86400000) return window.PairRoomI18n.formatRelative(Math.round(delta / 3600000), 'hour');
     return formatDateTime(value);
   }
 
   function formatDuration(seconds) {
     const value = Number(seconds);
     if (!Number.isFinite(value) || value <= 0) return '—';
-    if (value % 3600 === 0) return `${value / 3600} 小时`;
-    if (value % 60 === 0) return `${value / 60} 分钟`;
-    return `${value} 秒`;
+	if (value % 3600 === 0) return t("ui.valueHours", { value0: formatNumber(value / 3600) });
+	if (value % 60 === 0) return t("ui.valueMinutes", { value0: formatNumber(value / 60) });
+	return t("ui.valueSeconds", { value0: formatNumber(value) });
+  }
+
+  function formatNumber(value, options) {
+	return window.PairRoomI18n.formatNumber(Number(value || 0), options);
   }
 
   function truncate(value, max) {
@@ -2355,9 +2509,33 @@
   });
   document.querySelectorAll('[data-project-mode]').forEach((button) => button.addEventListener('click', () => setProjectMode(button.dataset.projectMode)));
   document.querySelectorAll('input[name$="-mode"]').forEach((input) => input.addEventListener('change', syncBindingInputs));
+  for (const actor of ['claude', 'codex']) {
+    $(`${actor}-runtime`).addEventListener('change', () => {
+      const entry = runtimeCatalogEntry($(`${actor}-runtime`).value);
+      const diagnostic = $(`${actor}-runtime-diagnostic`);
+      diagnostic.textContent = entry?.diagnostic || (entry?.version ? `v${entry.version}` : '');
+      diagnostic.classList.toggle('runtime-unavailable', !entry?.available);
+      syncAgentProviderAndModels(actor, true);
+    });
+    $(`${actor}-provider`).addEventListener('change', () => syncAgentProviderAndModels(actor, true));
+    $(`${actor}-reviewer-policy`).addEventListener('change', () => syncAgentPolicy(actor));
+  }
+  $('agent-catalog-refresh').addEventListener('click', async () => {
+    const current = state.agentCatalog ? { claude: readAgentSelection('claude'), codex: readAgentSelection('codex') } : null;
+    await withBusy($('agent-catalog-refresh'), async () => {
+      try {
+        const catalog = await loadAgentCatalog(true);
+        for (const actor of ['claude', 'codex']) populateAgentControls(actor, current?.[actor] || catalog.defaults?.[actor]);
+        hideFormError('room-form-error');
+        toast(t('agent.catalogRefreshed'), '', 'success');
+      } catch (error) {
+        showFormError('room-form-error', error.message);
+      }
+    });
+  });
   $('room-project-id').addEventListener('change', () => {
     const project = state.snapshot?.projects?.find((item) => item.id === $('room-project-id').value);
-    $('room-dialog-title').textContent = `在 ${projectName(project)} 中创建 Room`;
+    $('room-dialog-title').textContent = t("ui.createRoomInValue", { value0: (projectName(project)) });
   });
   $('project-form').addEventListener('submit', submitProject);
   $('room-form').addEventListener('submit', createRoom);
@@ -2450,14 +2628,11 @@
   function loadStoredTheme() {
     let theme = '';
     try { theme = String(window.localStorage.getItem('pairroom.theme') || ''); } catch { theme = ''; }
-    if (theme === 'light' || theme === 'dark') state.preferences.theme = theme;
+	if (theme === 'system' || theme === 'light' || theme === 'dark') state.preferences.theme = theme;
   }
 
   function persistTheme(value) {
-    try {
-      if (value === 'light' || value === 'dark') window.localStorage.setItem('pairroom.theme', value);
-      else window.localStorage.removeItem('pairroom.theme');
-    } catch { /* theme persistence is best-effort */ }
+	if (window.PairRoomTheme) window.PairRoomTheme.setTheme(value);
   }
 
   loadStoredTheme();
@@ -2466,6 +2641,12 @@
     loadStoredTheme();
     applyPreferences();
   });
+	document.addEventListener('pairroom:theme', (event) => {
+	  const next = event.detail?.mode;
+	  if (!['system', 'light', 'dark'].includes(next) || state.preferences.theme === next) return;
+	  state.preferences.theme = next;
+	  if (state.route.name === 'settings') renderSettings();
+	});
 
   applyPreferences();
   document.addEventListener('pairroom:lang', () => {

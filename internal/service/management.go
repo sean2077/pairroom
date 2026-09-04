@@ -17,32 +17,41 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sean2077/pairroom/internal/ccswitch"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/openbrowser"
 	"github.com/sean2077/pairroom/internal/version"
 	"github.com/sean2077/pairroom/internal/websession"
+	"github.com/sean2077/pairroom/internal/webui"
 )
 
 var openRoomInBrowser = openbrowser.Open
+
+const (
+	agentCatalogPath        = "/api/v1/agent-catalog"
+	agentCatalogRefreshPath = "/api/v1/agent-catalog/refresh"
+)
 
 //go:embed assets/*
 var managementAssets embed.FS
 
 type ManagementServerConfig struct {
-	Registry    *Registry
-	Runtimes    *RuntimeManager
-	Provisioner BindingProvisioner
-	Token       string
+	Registry      *Registry
+	Runtimes      *RuntimeManager
+	Provisioner   BindingProvisioner
+	Token         string
+	AgentResolver *AgentResolver
 }
 
 type ManagementServer struct {
-	registry    *Registry
-	runtimes    *RuntimeManager
-	provisioner BindingProvisioner
-	token       string
-	sessions    *websession.Store
-	http        *http.Server
-	roomLocks   roomLockSet
+	registry      *Registry
+	runtimes      *RuntimeManager
+	provisioner   BindingProvisioner
+	token         string
+	agentResolver *AgentResolver
+	sessions      *websession.Store
+	http          *http.Server
+	roomLocks     roomLockSet
 }
 
 type managementAuthMode uint8
@@ -131,13 +140,21 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	}
 	server := &ManagementServer{
 		registry: cfg.Registry, runtimes: cfg.Runtimes,
-		provisioner: cfg.Provisioner, token: token, sessions: sessions,
+		provisioner: cfg.Provisioner, token: token, sessions: sessions, agentResolver: cfg.AgentResolver,
+	}
+	if server.agentResolver == nil {
+		if native, ok := cfg.Provisioner.(*NativeProvisioner); ok {
+			server.agentResolver = native.cfg.Resolver
+		}
 	}
 	mux := http.NewServeMux()
+	webui.Mount(mux)
 	mux.HandleFunc("POST /api/v1/session", server.createBrowserSession)
 	mux.HandleFunc("GET /api/v1/session", server.readBrowserSession)
 	mux.HandleFunc("DELETE /api/v1/session", server.deleteBrowserSession)
 	mux.HandleFunc("GET /api/v1/service", server.readService)
+	mux.HandleFunc("GET "+agentCatalogPath, server.readAgentCatalog)
+	mux.HandleFunc("POST "+agentCatalogRefreshPath, server.readAgentCatalog)
 	mux.HandleFunc("POST /api/v1/projects", server.registerProject)
 	mux.HandleFunc("POST /api/v1/projects/{project}/refresh", server.refreshProject)
 	mux.HandleFunc("DELETE /api/v1/projects/{project}", server.removeProject)
@@ -269,6 +286,14 @@ func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
 	writeManagementJSON(w, http.StatusOK, payload)
 }
 
+func (s *ManagementServer) readAgentCatalog(w http.ResponseWriter, r *http.Request) {
+	if s.agentResolver == nil {
+		writeManagementJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "Agent catalog is unavailable", "code": "agent_catalog_unavailable"})
+		return
+	}
+	writeManagementJSON(w, http.StatusOK, s.agentResolver.Catalog(r.Context()))
+}
+
 func summarizeService(projects []Project, rooms []Room, runtimes []RuntimeStatus) ServiceSummary {
 	summary := ServiceSummary{Projects: len(projects), Rooms: len(rooms)}
 	for _, project := range projects {
@@ -354,12 +379,36 @@ func (s *ManagementServer) provisionRoom(w http.ResponseWriter, r *http.Request)
 	var request struct {
 		Name     string                        `json:"name"`
 		Bindings map[model.ActorID]BindingSpec `json:"bindings"`
+		Agents   json.RawMessage               `json:"agents"`
 	}
 	if err := decodeManagementJSON(w, r, &request); err != nil {
 		return
 	}
+	var agents map[model.ActorID]model.AgentSelection
+	if request.Agents == nil {
+		if s.agentResolver != nil {
+			agents = s.agentResolver.DefaultSelections()
+		}
+	} else {
+		if value := strings.TrimSpace(string(request.Agents)); value == "" || value == "null" {
+			writeManagementError(w, http.StatusBadRequest, "agents must contain both Agent selections when provided")
+			return
+		}
+		if err := json.Unmarshal(request.Agents, &agents); err != nil {
+			writeManagementError(w, http.StatusBadRequest, "agents must be an object containing both Agent selections: "+err.Error())
+			return
+		}
+	}
+	if s.agentResolver != nil {
+		validated, err := s.agentResolver.ValidateSelections(r.Context(), agents)
+		if err != nil {
+			s.writeError(w, err)
+			return
+		}
+		agents = validated
+	}
 	room, err := s.registry.ProvisionRoom(r.Context(), ProvisionRequest{
-		ProjectID: r.PathValue("project"), Name: request.Name, Bindings: request.Bindings,
+		ProjectID: r.PathValue("project"), Name: request.Name, Bindings: request.Bindings, Agents: agents,
 	}, s.provisioner)
 	if err != nil {
 		s.writeError(w, err)
@@ -890,6 +939,15 @@ func (s *ManagementServer) securityHeaders(next http.Handler) http.Handler {
 }
 
 func (s *ManagementServer) writeError(w http.ResponseWriter, err error) {
+	var providerErr *ccswitch.Error
+	if errors.As(err, &providerErr) {
+		status := http.StatusBadRequest
+		if providerErr.Code == ccswitch.CodeDatabaseUnreadable || providerErr.Code == ccswitch.CodeDatabaseMissing {
+			status = http.StatusServiceUnavailable
+		}
+		writeManagementJSON(w, status, map[string]any{"error": providerErr.Error(), "code": providerErr.Code, "params": providerErr.Params})
+		return
+	}
 	var roomLifecycle *RoomNotArchivedError
 	if errors.As(err, &roomLifecycle) {
 		writeManagementJSON(w, http.StatusConflict, map[string]any{
@@ -948,7 +1006,7 @@ func (s *ManagementServer) writeError(w http.ResponseWriter, err error) {
 			code = http.StatusBadRequest
 		}
 	}
-	writeManagementError(w, code, err.Error())
+	writeManagementJSON(w, code, map[string]any{"error": err.Error(), "code": managementErrorCode(err, managementHTTPErrorCode(code))})
 }
 
 func managementErrorCode(err error, fallback string) string {
@@ -957,8 +1015,18 @@ func managementErrorCode(err error, fallback string) string {
 		return "room_not_archived"
 	}
 	switch {
+	case errors.Is(err, ErrProjectAlreadyRegistered):
+		return "project_already_registered"
+	case errors.Is(err, ErrProjectNotFound):
+		return "project_not_found"
 	case errors.Is(err, ErrRoomNotFound):
 		return "room_not_found"
+	case errors.Is(err, ErrProjectHasRooms):
+		return "project_has_rooms"
+	case errors.Is(err, ErrBindingOwned):
+		return "binding_owned"
+	case errors.Is(err, ErrRoomBindingPending):
+		return "room_binding_pending"
 	case errors.Is(err, ErrRegistryFailClosed):
 		return "registry_unavailable"
 	case errors.Is(err, ErrRuntimeManagerClosed):
@@ -1009,5 +1077,34 @@ func writeManagementJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func writeManagementError(w http.ResponseWriter, status int, message string) {
-	writeManagementJSON(w, status, map[string]string{"error": message})
+	writeManagementJSON(w, status, map[string]string{"error": message, "code": managementHTTPErrorCode(status)})
+}
+
+func managementHTTPErrorCode(status int) string {
+	switch status {
+	case http.StatusBadRequest:
+		return "invalid_request"
+	case http.StatusUnauthorized:
+		return "authentication_required"
+	case http.StatusForbidden:
+		return "request_forbidden"
+	case http.StatusNotFound:
+		return "not_found"
+	case http.StatusConflict:
+		return "request_conflict"
+	case http.StatusRequestEntityTooLarge:
+		return "request_too_large"
+	case http.StatusTooManyRequests:
+		return "rate_limited"
+	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
+		return "request_deadline_exceeded"
+	case http.StatusBadGateway:
+		return "native_runtime_error"
+	case http.StatusServiceUnavailable:
+		return "service_unavailable"
+	case http.StatusInternalServerError:
+		return "internal_error"
+	default:
+		return "request_failed"
+	}
 }

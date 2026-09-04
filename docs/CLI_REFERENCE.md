@@ -10,7 +10,7 @@ CLI Reference describes command responsibilities and how to discover flags. It d
 | `pairroom service` | Start the multi-Project / multi-Room Management Shell |
 | `pairroom serve` | Start the single-repository compatibility entry (legacy single-Room) |
 | `pairroom doctor` | Validate Git and vendor CLI installation |
-| `pairroom providers` | Inspect redacted provider profiles and assignments |
+| `pairroom providers` | Read and validate the sanitized CC Switch Profile catalog without changing current state |
 | `pairroom verify` | Strictly validate room data integrity |
 | `pairroom backup` | Create a verified room-data backup |
 | `pairroom restore` | Restore and verify a room-data backup |
@@ -76,27 +76,28 @@ The following names are extracted from `cmd/pairroom/*.go`. Use them to find omi
 
 - `--actor`
 - `--auto-start`
+- `--cc-switch-db`
 - `--claude-command`
 - `--claude-effort`
 - `--claude-instructions`
 - `--claude-model`
 - `--claude-permission-mode`
-- `--claude-provider`
 - `--claude-runtime`
 - `--codex-approval-policy`
 - `--codex-command`
 - `--codex-effort`
 - `--codex-instructions`
 - `--codex-model`
-- `--codex-provider`
 - `--codex-runtime`
 - `--codex-sandbox`
 - `--config`
 - `--daemon-control-file`
 - `--data-dir`
 - `--data-root`
+- `--database`
 - `--follow`
 - `--force`
+- `--grok-command`
 - `--idle-timeout`
 - `--input`
 - `--json`

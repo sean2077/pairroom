@@ -6,15 +6,19 @@
 
 - `make dev` stops an installed PairRoom daemon, recovers a crash-stale `service.lock` only after the recorded PID is gone, starts the current-tree Management Service, and opens the Management Shell. `make stop` is the stop-only helper. Legacy `make run` / `make demo` still call `pairroom serve`.
 
-- Room View and Management Shell support English and Simplified Chinese, with a language toggle and a persistent `pairroom.lang` preference.
-- Each Room slot can run Claude Code, Codex, or Grok Build, including two instances of the same runtime. Per-slot `provider`, `model`, `effort`, and `instructions` are explicit overrides.
+- Management, Room View, and Desktop startup share an embedded i18next 26.4.2 runtime, semantic `en`/`zh-CN` catalogs, locale-aware formatting, stable error-code localization, and the persistent `pairroom.lang` preference.
+- New Rooms snapshot immutable Runtime, CC Switch ProviderRef, editable Model, effort, instructions, and Runtime-specific policy for both Agent slots. Both slots may use the same Runtime/Profile; ordinary Reviewer danger overrides never weaken read-only plan/review/audit Workflow stages.
+- A query-only CC Switch v3.20.1/schema 18 catalog supports directly materializable Claude, Codex Responses, and Grok Build API-key Profiles, while OAuth/proxy/failover entries remain visible but disabled. Profile secrets are isolated to the selected child-process environment.
+- Management topbar and Room tabstrip expose the shared `system | light | dark` theme; embedded Rooms follow Management and standalone Rooms retain their own control.
 - Grok Build headless streaming integration uses `--prompt-file` and `--resume`, keeps prompt/instruction text out of process argv, and emits the configured slot actor.
 - GitHub Releases now attach desktop packages (`pairroom-desktop-vX.Y.Z-…`) alongside CLI binaries (`pairroom-cli-vX.Y.Z-…`). Windows desktop uses `-setup.exe` because `.exe` alone collides with the CLI; Linux `.deb`/`.AppImage` and macOS `.app.zip` rely on the suffix.
 - `curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh | sh` installs the CLI for the current OS/arch.
 
 ### Changed
 
-- Empty `provider`, `model`, `effort`, `instructions`, and runtime-policy overrides inherit the selected native CLI's user/global configuration instead of synthesizing PairRoom defaults.
+- The root module now requires Go 1.25 and pins CGo-free `modernc.org/sqlite` 1.58.0. Dependency checks use a strict reviewed allowlist, release SBOMs enumerate the selected module graph, and release payloads include third-party notices.
+- PairRoom-owned `providers`, `cc_connect`, string Provider assignments, and per-slot command/args are removed. Runtime command templates now live under `runtimes.claude|codex|grok`; migration errors point to the backup-first upgrade guide.
+- Provisioning events and Registry checkpoints advance to schema 2 for immutable Agent selections. Readers retain schema-1 Rooms as `Legacy defaults` without rewriting them; older binaries fail closed on new provisioning facts.
 - Maintained documentation is English. The root README is English, with Simplified Chinese in `README.zh-CN.md`. Slot identity (`claude`/`codex` ActorIDs) stays separate from runtime identity (`claude`/`codex`/`grok`).
 
 ## [v1.2.0] — 2026-09-03

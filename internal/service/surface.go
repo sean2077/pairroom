@@ -19,13 +19,17 @@ const (
 )
 
 var surfaceStaticFiles = map[string]struct{}{
-	"/favicon.svg":   {},
-	"/styles.css":    {},
-	"/ux.css":        {},
-	"/app.js":        {},
-	"/ux.js":         {},
-	"/room-shell.js": {},
-	"/richtext.js":   {},
+	"/favicon.svg":              {},
+	"/styles.css":               {},
+	"/ux.css":                   {},
+	"/app.js":                   {},
+	"/ux.js":                    {},
+	"/room-shell.js":            {},
+	"/richtext.js":              {},
+	"/_pairroom/i18next.min.js": {},
+	"/_pairroom/catalogs.js":    {},
+	"/_pairroom/i18n.js":        {},
+	"/_pairroom/theme.js":       {},
 }
 
 func isRoomSurfacePath(p string) bool {

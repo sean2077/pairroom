@@ -61,6 +61,35 @@ func TestWorkflowAdapterProjectsReadOnlyAndExecuteModes(t *testing.T) {
 	}
 }
 
+func TestExplicitOrdinaryReviewerPolicyNeverWeakensReadOnlyWorkflowStages(t *testing.T) {
+	fake := &workflowFakeAdapter{actor: model.ActorClaude}
+	wrapper := &workflowAdapter{
+		cfg:   Config{OrdinaryReviewerPolicy: model.ReviewerExplicit},
+		actor: model.ActorClaude, inner: fake, sink: func(model.RuntimeEvent) {},
+		turnInput: map[string]model.AgentInput{}, pausedTurns: map[string]struct{}{},
+	}
+	if err := wrapper.SetRole(context.Background(), model.RoleReviewer); err != nil {
+		t.Fatal(err)
+	}
+	if fake.role != model.RoleDriver {
+		t.Fatalf("ordinary Reviewer native role = %s, want explicit Driver policy projection", fake.role)
+	}
+	ordinary := model.AgentInput{MessageID: "ordinary", Role: model.RoleReviewer, Text: "inspect with explicit policy"}
+	if _, err := wrapper.Submit(context.Background(), ordinary); err != nil {
+		t.Fatal(err)
+	}
+	if fake.input.Role != model.RoleDriver {
+		t.Fatalf("ordinary input role = %s", fake.input.Role)
+	}
+	workflow := model.AgentInput{MessageID: "workflow", Role: model.RoleDriver, WorkflowID: "w", WorkflowMode: model.WorkflowAudit, Text: "audit"}
+	if _, err := wrapper.Submit(context.Background(), workflow); err != nil {
+		t.Fatal(err)
+	}
+	if fake.role != model.RoleReviewer || fake.input.Role != model.RoleReviewer || !strings.Contains(fake.input.Text, "read-only") {
+		t.Fatalf("audit stage was not forced read-only: role=%s input=%#v", fake.role, fake.input)
+	}
+}
+
 func TestCodexHiddenQuestionBecomesVisibleWait(t *testing.T) {
 	fake := &workflowFakeAdapter{actor: model.ActorCodex}
 	var events []model.RuntimeEvent

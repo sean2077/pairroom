@@ -49,7 +49,7 @@ func TestProbeClaudeNegotiatesOptionalFlags(t *testing.T) {
 	path := writeProbeFixture(t, `#!/bin/sh
 case "$1" in
   --version) echo "2.1.210 (Claude Code)" ;;
-  --help) echo "--input-format --output-format --resume --session-id --model --permission-mode --verbose" ;;
+  --help) echo "--input-format --output-format --resume --session-id --model --effort --permission-mode --verbose" ;;
   *) exit 2 ;;
 esac
 `)
@@ -57,7 +57,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !probe.SupportedFlags["--resume"] || !probe.SupportedFlags["--permission-prompt-tool"] || probe.SupportedFlags["--include-partial-messages"] {
+	if !probe.SupportedFlags["--resume"] || !probe.SupportedFlags["--effort"] || !probe.SupportedFlags["--permission-prompt-tool"] || probe.SupportedFlags["--include-partial-messages"] {
 		t.Fatalf("unexpected negotiated flags: %#v", probe.SupportedFlags)
 	}
 	if containsString(probe.Capabilities, "partial-messages") {
@@ -95,7 +95,7 @@ func TestProbeClaudeDefersApprovalCapabilityToNativeHandshake(t *testing.T) {
 	path := writeProbeFixture(t, `#!/bin/sh
 case "$1" in
   --version) echo "2.1.231 (Claude Code)" ;;
-  --help) echo "--input-format --output-format --resume --session-id --model --permission-mode --disallowedTools --include-partial-messages --forward-subagent-text --verbose" ;;
+  --help) echo "--input-format --output-format --resume --session-id --model --effort --permission-mode --disallowedTools --include-partial-messages --forward-subagent-text --verbose" ;;
   *) exit 2 ;;
 esac
 `)

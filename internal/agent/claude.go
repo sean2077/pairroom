@@ -73,9 +73,6 @@ func NewClaude(cfg Config, sink EventSink) *ClaudeAdapter {
 	if cfg.Command == "" {
 		cfg.Command = "claude"
 	}
-	if cfg.PermissionMode == "" {
-		cfg.PermissionMode = "auto"
-	}
 	resume := cfg.SessionID != ""
 	sessionID := cfg.SessionID
 	if sessionID == "" {
@@ -211,6 +208,9 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	}
 	if flags["--model"] && c.cfg.Model != "" {
 		args = append(args, "--model", c.cfg.Model)
+	}
+	if flags["--effort"] && c.cfg.Effort != "" {
+		args = append(args, "--effort", c.cfg.Effort)
 	}
 
 	c.mu.Lock()
@@ -1355,9 +1355,6 @@ func (c *ClaudeAdapter) SetRole(ctx context.Context, role model.ParticipantRole)
 		return fmt.Errorf("invalid Claude role %q", role)
 	}
 	desiredMode := c.baseMode
-	if desiredMode == "" {
-		desiredMode = "auto"
-	}
 	if role == model.RoleReviewer {
 		desiredMode = "plan"
 	}
