@@ -18,7 +18,7 @@ This directory keeps only documentation that still needs maintenance. Historical
 | Upgrade across versions | [UPGRADING](UPGRADING.md) | Breaking changes, backup, verification, and rollback |
 | Change the Agent contract | [PROTOCOL](PROTOCOL.md) | Input envelopes, control markers, handoff, and convergence rules |
 
-The top-level [README](../README.md) owns product positioning and the shortest path to a first run. [CONTRIBUTING](../CONTRIBUTING.md) owns the development process. [CHANGELOG](../CHANGELOG.md) owns version history. Desktop toolchain and packaging commands live in [desktop/README](../desktop/README.md).
+The top-level [README](../README.md) owns English product positioning and the shortest path to a first run. The Simplified Chinese equivalent is [README.zh-CN.md](../README.zh-CN.md). [CONTRIBUTING](../CONTRIBUTING.md) owns the development process. [CHANGELOG](../CHANGELOG.md) owns version history. Desktop toolchain and packaging commands live in [desktop/README](../desktop/README.md).
 
 ## Content boundaries
 

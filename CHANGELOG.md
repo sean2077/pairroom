@@ -13,7 +13,7 @@
 ### Changed
 
 - Empty `provider`, `model`, `effort`, `instructions`, and runtime-policy overrides inherit the selected native CLI's user/global configuration instead of synthesizing PairRoom defaults.
-- Maintained documentation is English. The root README is bilingual (English first, then Simplified Chinese). Slot identity (`claude`/`codex` ActorIDs) stays separate from runtime identity (`claude`/`codex`/`grok`).
+- Maintained documentation is English. The root README is English, with Simplified Chinese in `README.zh-CN.md`. Slot identity (`claude`/`codex` ActorIDs) stays separate from runtime identity (`claude`/`codex`/`grok`).
 
 ## [v1.2.0] — 2026-09-03
 
