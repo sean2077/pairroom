@@ -4,6 +4,8 @@
 
 ### Added
 
+- `make dev` stops an installed PairRoom daemon, recovers a crash-stale `service.lock` only after the recorded PID is gone, starts the current-tree Management Service, and opens the Management Shell. `make stop` is the stop-only helper. Legacy `make run` / `make demo` still call `pairroom serve`.
+
 - Room View and Management Shell support English and Simplified Chinese, with a language toggle and a persistent `pairroom.lang` preference.
 - Each Room slot can run Claude Code, Codex, or Grok Build, including two instances of the same runtime. Per-slot `provider`, `model`, `effort`, and `instructions` are explicit overrides.
 - Grok Build headless streaming integration uses `--prompt-file` and `--resume`, keeps prompt/instruction text out of process argv, and emits the configured slot actor.
