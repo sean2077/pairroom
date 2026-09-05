@@ -186,6 +186,27 @@ func (c *File) applyDefaults() {
 	if strings.TrimSpace(c.Runtimes.Grok.Command) == "" {
 		c.Runtimes.Grok.Command = defaults.Runtimes.Grok.Command
 	}
+	c.Claude.reconcileDefaultYolo(model.ActorClaude)
+	c.Codex.reconcileDefaultYolo(model.ActorCodex)
+}
+
+func (a *Agent) reconcileDefaultYolo(actor model.ActorID) {
+	switch a.RuntimeKind(actor) {
+	case model.RuntimeClaude, model.RuntimeGrok:
+		if a.ApprovalPolicy == "yolo" && a.Sandbox == "" {
+			a.ApprovalPolicy = ""
+			if strings.TrimSpace(a.PermissionMode) == "" {
+				a.PermissionMode = "yolo"
+			}
+		}
+	case model.RuntimeCodex:
+		if a.PermissionMode == "yolo" && a.Sandbox == "" {
+			a.PermissionMode = ""
+			if strings.TrimSpace(a.ApprovalPolicy) == "" {
+				a.ApprovalPolicy = "yolo"
+			}
+		}
+	}
 }
 
 func (c File) DefaultSelections() map[model.ActorID]model.AgentSelection {

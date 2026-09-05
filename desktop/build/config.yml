@@ -7,7 +7,7 @@ info:
   description: "Claude Code and Codex local collaboration control plane"
   copyright: "(c) 2026 PairRoom contributors"
   comments: "Wails v3 desktop host for PairRoom"
-  version: "1.2.0"
+  version: "2.0.0"
 
 dev_mode:
   root_path: .
