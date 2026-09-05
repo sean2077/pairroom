@@ -9,7 +9,22 @@ make check
 make smoke
 ```
 
-`make check` runs format, static checks, unit tests, race / dependency checks, and the documentation contract. `make smoke` runs the full Mock collaboration / recovery scenario.
+`make check` runs format, static checks, unit tests, race / dependency checks, and the documentation contract. `make smoke` runs the full Mock collaboration / recovery scenario. `make race` (included in `make check`) requires `CGO_ENABLED=1` and a Go-supported C compiler on `PATH`; on Windows, use an MSYS2 MinGW toolchain or an equivalent supported compiler.
+
+UI changes also run the isolated browser contract in CI. To reproduce it locally:
+
+```bash
+python3 -m venv .browser-venv
+.browser-venv/bin/python -m pip install -r scripts/requirements-browser.txt
+.browser-venv/bin/python -m playwright install chromium
+make browser-check PYTHON=.browser-venv/bin/python
+```
+
+On Windows, the environment's interpreter is `.browser-venv/Scripts/python.exe`. A managed Linux machine may need Playwright's `install --with-deps chromium` command. To use an already installed Chromium, set `PAIRROOM_BROWSER_EXECUTABLE` to its executable path.
+
+Browser verification loads the real embedded assets with deterministic in-page HTTP/SSE fixtures and writes screenshots plus assertions to `.browser-results/`. It covers IME input, duplicate submissions, draft retention, reconnect bursts, scroll anchors, older date separators, optional status/reply rows, and English/Chinese light/dark responsive views. It does not verify real browser authentication, vendor processes, or model behavior; those boundaries require the Go/Mock and native tests described below.
+
+For message-window allocation regressions, use `go test ./internal/room -run '^$' -bench BenchmarkWindowedSnapshot -benchmem`. Compare allocations at a fixed window size rather than imposing a machine-dependent timing threshold.
 
 ## Change workflow
 

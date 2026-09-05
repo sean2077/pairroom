@@ -4,8 +4,8 @@ PairRoom's browser UI uses a local HTTP API and SSE. CLI / UI is the preferred e
 
 ## Safety boundary
 
-- Bind to loopback by default;
-- Non-loopback deployments must configure a token and supply their own trusted network boundary;
+- Every built-in listener accepts numeric loopback addresses only. Wildcard, LAN, and hostname binds are rejected, not enabled by setting a token;
+- For remote access, use SSH local port forwarding to the loopback listener and retain the normal browser-session or bearer authentication;
 - The API must not return Provider secrets or absolute host paths of attachments;
 - A destructive request must name the Project / Room identity and obey archive, active Turn, and Binding preconditions.
 
@@ -45,69 +45,68 @@ Status requests return the current projection. Command requests first record an 
 
 ## SSE and reconnect
 
-Durable events carry a monotonic sequence and can be resumed after disconnect. High-frequency text delta / command output and other transient telemetry may be non-persistent; token-by-token replay is not guaranteed after disconnect. After reconnect, clients should fetch a snapshot again, then continue from the durable sequence.
+Durable events carry a monotonic sequence and can be resumed after disconnect. High-frequency text delta / command output and other transient telemetry may be non-persistent; token-by-token replay is not guaranteed after disconnect. After reconnect, clients should fetch a snapshot again, then continue from the durable sequence. The Room browser closes its obsolete stream and coalesces concurrent snapshot requests; failed reads use bounded backoff. It does not automatically retry message submissions.
+
+`GET /api/v1/snapshot?message_limit=250` returns the newest messages and `message_window` pagination metadata while retaining current Room/runtime state. `message_limit` accepts integers from 0 to 1000; zero or omission retains the legacy full-transcript response. Invalid values return HTTP 400. Older messages are available through `GET /api/v1/messages?before_seq={oldest_seq}&limit=100`, in chronological order and strictly before the cursor.
+
+`GET /api/v1/events?since={latest_seq}` resumes after that durable sequence. A non-empty `Last-Event-ID` header takes precedence over `since` on native EventSource reconnects; malformed cursors return HTTP 400. If the cursor is ahead of the Room or older than its retained event tail, the server emits `event: reset` with `{"reason":"snapshot_required","latest_seq":...}` and closes the stream. Fetch a fresh snapshot before reconnecting; do not interpret this as a Turn completion. Transient events and reset notifications never advance the durable SSE ID.
 
 ## Current source route inventory
 
-The following paths / prefixes are extracted from `internal/server/` and `internal/service/`. Dynamic IDs and method constraints follow the handler implementation and tests.
+The following method/path patterns are extracted from production HTTP registrations in `internal/server/` and `internal/service/`, including named constants. Test URLs, query examples, and rejected path-traversal inputs are not API routes. Patterns without a method are the same-origin surface gateway; their allowed operations are enforced by its handler.
 
 <!-- generated:routes -->
 <details>
-<summary>Show current routes and prefixes</summary>
+<summary>Show current registered methods and routes</summary>
 
-- `/api/`
-- `/api/v1/`
-- `/api/v1/agent-catalog`
-- `/api/v1/agent-catalog/refresh`
-- `/api/v1/approvals/`
-- `/api/v1/approvals/approval-1`
-- `/api/v1/approvals/approval-1/extra`
-- `/api/v1/attachments`
-- `/api/v1/attachments/`
-- `/api/v1/attachments/../../etc/passwd`
-- `/api/v1/events`
-- `/api/v1/events?token=secret`
-- `/api/v1/export`
-- `/api/v1/export?format=json`
-- `/api/v1/export?format=json&include_events=1`
-- `/api/v1/export?format=markdown`
-- `/api/v1/git/diff`
-- `/api/v1/git/status`
-- `/api/v1/health`
-- `/api/v1/import`
-- `/api/v1/maintenance/room-deletions/retry`
-- `/api/v1/messages`
-- `/api/v1/messages/`
-- `/api/v1/messages/message-1/cancel`
-- `/api/v1/messages/message-1/retry`
-- `/api/v1/messages?before_seq=%d&limit=4`
-- `/api/v1/messages?before_seq=nope`
-- `/api/v1/participants/`
-- `/api/v1/participants/claude/interrupt`
-- `/api/v1/participants/claude/role`
-- `/api/v1/participants/claude/stop`
-- `/api/v1/projects`
-- `/api/v1/projects/`
-- `/api/v1/rooms/`
-- `/api/v1/rooms/batch-archive`
-- `/api/v1/rooms/batch-delete`
 - `/api/v1/rooms/{room}/surface`
 - `/api/v1/rooms/{room}/surface/{path...}`
-- `/api/v1/runtime-policy`
-- `/api/v1/service`
-- `/api/v1/service?token=management-secret`
-- `/api/v1/session`
-- `/api/v1/settings`
-- `/api/v1/snapshot`
-- `/api/v1/snapshot?message_limit=1`
-- `/api/v1/snapshot?message_limit=3`
-- `/api/v1/snapshot?token=secret`
+- `DELETE /api/v1/attachments/{id}`
+- `DELETE /api/v1/projects/{project}`
+- `DELETE /api/v1/rooms/{room}`
+- `DELETE /api/v1/session`
+- `GET /api/v1/agent-catalog`
+- `GET /api/v1/attachments/{id}`
+- `GET /api/v1/events`
+- `GET /api/v1/export`
+- `GET /api/v1/git/diff`
+- `GET /api/v1/git/status`
+- `GET /api/v1/health`
+- `GET /api/v1/messages`
+- `GET /api/v1/service`
+- `GET /api/v1/session`
+- `GET /api/v1/snapshot`
+- `PATCH /api/v1/rooms/{room}`
+- `PATCH /api/v1/runtime-policy`
+- `POST /api/v1/agent-catalog/refresh`
+- `POST /api/v1/approvals/{id}`
+- `POST /api/v1/attachments`
+- `POST /api/v1/import`
+- `POST /api/v1/maintenance/room-deletions/retry`
+- `POST /api/v1/messages`
+- `POST /api/v1/messages/{id}/cancel`
+- `POST /api/v1/messages/{id}/retry`
+- `POST /api/v1/participants/{actor}/{action}`
+- `POST /api/v1/projects`
+- `POST /api/v1/projects/{project}/refresh`
+- `POST /api/v1/projects/{project}/rooms`
+- `POST /api/v1/rooms/batch-archive`
+- `POST /api/v1/rooms/batch-delete`
+- `POST /api/v1/rooms/{room}/activate`
+- `POST /api/v1/rooms/{room}/archive`
+- `POST /api/v1/rooms/{room}/bindings`
+- `POST /api/v1/rooms/{room}/open-browser`
+- `POST /api/v1/rooms/{room}/restore`
+- `POST /api/v1/rooms/{room}/suspend`
+- `POST /api/v1/session`
+- `PUT /api/v1/participants/{actor}/role`
+- `PUT /api/v1/settings`
 </details>
 <!-- /generated:routes -->
 
 ## Client compatibility principles
 
-1. Ignore unknown JSON fields;
+1. Tolerate added fields in JSON responses; send only documented request fields, because request decoding rejects unknown fields;
 2. Do not derive the state machine from UI copy;
 3. Re-read the projection after a destructive operation;
 4. Do not treat a transient event as a durable receipt;

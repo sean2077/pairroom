@@ -33,6 +33,8 @@ body.ux-enhanced :where(button, [role="button"], [role="tab"], [role="separator"
   outline: 0;
   box-shadow: var(--ux-focus-ring);
 }
+/* The composer owns the input focus ring; avoid a second square ring inside it. */
+body.ux-enhanced .composer textarea:focus-visible { box-shadow: none; }
 body.ux-enhanced :where(button, [role="button"], a) { -webkit-tap-highlight-color: transparent; }
 body.ux-enhanced :where(button, select, input[type="checkbox"], input[type="range"]) { accent-color: var(--accent); }
 
@@ -190,6 +192,7 @@ body.ux-enhanced .message-row:focus-within .reply-action { opacity: 1; }
 /* Touch devices have no hover to reveal per-message actions; keep them visible. */
 @media (hover: none) {
   body.ux-enhanced .reply-action { opacity: 1; }
+  body.ux-enhanced :is(.target-button, .attach-button, .mini-button, .role-select) { min-height: 44px; }
 }
 body.ux-enhanced .composer-wrap {
   position: relative;
@@ -470,6 +473,7 @@ body.ux-density-compact .tab-content { padding: 9px; }
   }
   body.ux-enhanced .chat-description { display: none; }
   body.ux-enhanced .toolbar-actions {
+    flex-wrap: nowrap;
     max-width: 66%;
     overflow-x: auto;
     scrollbar-width: none;
@@ -485,11 +489,11 @@ body.ux-density-compact .tab-content { padding: 9px; }
   body.ux-enhanced .composer-wrap { padding: 8px 9px 10px; }
   body.ux-enhanced .composer { gap: 7px; padding: 7px; }
   body.ux-enhanced .composer textarea { min-height: 44px; }
-  body.ux-enhanced .send-button { width: 38px; padding: 0; justify-content: center; }
+  body.ux-enhanced .send-button { width: 44px; min-width: 44px; height: 44px; padding: 0; justify-content: center; }
   body.ux-enhanced .send-button > span:first-child { display: none; }
   body.ux-enhanced .composer-footnote { gap: 8px; }
   body.ux-enhanced .intent-picker { min-width: 0; }
-  body.ux-enhanced #message-intent { max-width: 154px; }
+  body.ux-enhanced #message-intent { max-width: min(240px, 62vw); }
   body.ux-enhanced .participants-panel,
   body.ux-enhanced .inspector-panel {
     top: calc(var(--ux-topbar-height) + 5px);
@@ -499,6 +503,12 @@ body.ux-density-compact .tab-content { padding: 9px; }
   body.ux-enhanced .participants-panel { left: 5px; }
   body.ux-enhanced .inspector-panel { right: 5px; }
   .ux-layout-menu { right: -2px; width: min(350px, calc(100vw - 16px)); }
+}
+
+/* Recoverable errors must not cover the composer on narrow screens. */
+@media (max-width: 600px) {
+  .toast-stack { top: calc(var(--ux-topbar-height) + 12px); bottom: auto; left: 12px; right: 12px; max-height: 35dvh; overflow-y: auto; pointer-events: none; }
+  .toast-stack .toast { width: 100%; pointer-events: auto; }
 }
 
 @media (max-width: 430px) {

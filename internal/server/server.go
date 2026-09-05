@@ -175,7 +175,12 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
-	limit, _ := strconv.Atoi(r.URL.Query().Get("message_limit"))
+	value := r.URL.Query().Get("message_limit")
+	limit, err := strconv.Atoi(value)
+	if value != "" && (err != nil || limit < 0 || limit > 1000) {
+		writeError(w, http.StatusBadRequest, "message_limit must be an integer between 0 and 1000")
+		return
+	}
 	var snapshot model.RoomSnapshot
 	if limit > 0 {
 		snapshot = s.engine.WindowedSnapshot(limit)
@@ -218,20 +223,31 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "streaming is unsupported")
 		return
 	}
+	since, err := eventCursor(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid event cursor")
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	since, _ := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)
 	ch, cancel := s.engine.Subscribe()
 	defer cancel()
 	// Subscribe before snapshotting so events emitted during handoff are either
 	// replayed from the snapshot tail or still buffered in ch. Sequence numbers
 	// remove duplicates.
-	snapshot := s.engine.Snapshot()
+	events, latest := s.engine.ReplayEvents()
+	if replayNeedsReset(events, since, latest) {
+		// The bounded tail cannot fill this gap. Do not silently skip facts or
+		// acknowledge a future cursor. Clients must acquire a fresh snapshot.
+		_, _ = fmt.Fprintf(w, "event: reset\ndata: {\"reason\":\"snapshot_required\",\"latest_seq\":%d}\n\n", latest)
+		flusher.Flush()
+		return
+	}
 	last := since
-	for _, event := range snapshot.Events {
+	for _, event := range events {
 		write, next := advanceSSECursor(event, last)
 		if !write {
 			continue
@@ -250,7 +266,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-heartbeat.C:
-			_, _ = io.WriteString(w, ": heartbeat\n\n")
+			if _, err := io.WriteString(w, ": heartbeat\n\n"); err != nil {
+				return
+			}
 			flusher.Flush()
 		case event, ok := <-ch:
 			if !ok {
@@ -267,6 +285,31 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// Native EventSource reconnects keep the original URL and send the newer ID
+// in this header. Prefer it to ?since so reconnects do not replay stale history.
+func eventCursor(r *http.Request) (uint64, error) {
+	value := r.Header.Get("Last-Event-ID")
+	if value == "" {
+		value = r.URL.Query().Get("since")
+	}
+	if value == "" {
+		return 0, nil
+	}
+	return strconv.ParseUint(value, 10, 64)
+}
+
+func replayNeedsReset(events []model.Event, since, latest uint64) bool {
+	if since > latest {
+		return true
+	}
+	for _, event := range events {
+		if event.Seq > 0 {
+			return since < event.Seq-1
+		}
+	}
+	return since < latest
 }
 
 // advanceSSECursor keeps transient sequence-zero events live without letting

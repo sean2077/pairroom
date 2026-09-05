@@ -31,6 +31,28 @@ jobs:
       - name: Coverage report
         run: make cover
 
+  browser:
+    name: Room browser behavior and layout
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install isolated browser test tools
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/browser-venv"
+          "${RUNNER_TEMP}/browser-venv/bin/python" -m pip install --disable-pip-version-check -r scripts/requirements-browser.txt
+          "${RUNNER_TEMP}/browser-venv/bin/python" -m playwright install --with-deps chromium
+      - name: Verify Room composer, reconnect, history, and responsive layout
+        run: '"${RUNNER_TEMP}/browser-venv/bin/python" scripts/test_room_browser.py --artifacts "${RUNNER_TEMP}/browser-results"'
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pairroom-browser-evidence
+          path: ${{ runner.temp }}/browser-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
   cross-build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }} artifact
     runs-on: ubuntu-latest
