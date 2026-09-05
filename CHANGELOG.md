@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v2.0.0] — 2026-09-05
+
 ### Added
 
 - Room Agent policy accepts `yolo` as the native bypass alias: Claude Code projects `bypassPermissions` with `--dangerously-skip-permissions`, Codex projects approval `never`, and Grok Build projects `--always-approve`. Management exposes the values in the permission/approval selectors. New Rooms default to `yolo` for Claude Code and Codex; ordinary Reviewer protection stays enforced.

@@ -103,6 +103,9 @@ func TestLoadAcceptsGrokRuntimeAndIdenticalSlots(t *testing.T) {
 	if cfg.Claude.Instructions != "Be terse" {
 		t.Fatalf("instructions dropped: %#v", cfg.Claude)
 	}
+	if cfg.Claude.PermissionMode != "yolo" || cfg.Codex.PermissionMode != "yolo" || cfg.Codex.ApprovalPolicy != "" {
+		t.Fatalf("identical Grok slots should keep yolo as permission_mode: %#v %#v", cfg.Claude, cfg.Codex)
+	}
 }
 
 func TestLoadRejectsUnknownRuntime(t *testing.T) {
