@@ -132,14 +132,14 @@ func (s AgentSelection) Validate(actor ActorID) error {
 		if s.ApprovalPolicy != "" || s.Sandbox != "" {
 			return errors.New("Claude Code selections support permission_mode but not approval_policy or sandbox")
 		}
-		if s.PermissionMode != "" && !oneOf(s.PermissionMode, "default", "manual", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions") {
+		if s.PermissionMode != "" && !oneOf(s.PermissionMode, "default", "manual", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions", "bypass", "yolo", "always-approve") {
 			return fmt.Errorf("invalid Claude Code permission_mode %q", s.PermissionMode)
 		}
 	case RuntimeCodex:
 		if s.PermissionMode != "" {
 			return errors.New("Codex selections support approval_policy and sandbox but not permission_mode")
 		}
-		if s.ApprovalPolicy != "" && !oneOf(s.ApprovalPolicy, "untrusted", "unless-trusted", "unlessTrusted", "on-failure", "on-request", "never") {
+		if s.ApprovalPolicy != "" && !oneOf(s.ApprovalPolicy, "untrusted", "unless-trusted", "unlessTrusted", "on-failure", "on-request", "never", "yolo") {
 			return fmt.Errorf("invalid Codex approval_policy %q", s.ApprovalPolicy)
 		}
 		if s.Sandbox != "" && !oneOf(s.Sandbox, "read-only", "workspace-write", "danger-full-access") {

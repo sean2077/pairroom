@@ -481,10 +481,14 @@ func codexTurnSteerParams(threadID, turnID, text string, input model.AgentInput)
 }
 
 func normalizeCodexApprovalPolicy(value string) string {
-	if value == "unlessTrusted" {
+	switch value {
+	case "unlessTrusted":
 		return "untrusted"
+	case "yolo":
+		return "never"
+	default:
+		return value
 	}
-	return value
 }
 
 func (c *CodexAdapter) developerInstructions() string {

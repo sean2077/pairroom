@@ -82,6 +82,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 			"--forward-subagent-text", "--include-hook-events",
 			"--model", "--effort", "--permission-mode", "--disallowedTools",
 			"--resume", "--session-id", "--verbose", "--add-dir",
+			"--dangerously-skip-permissions", "--allow-dangerously-skip-permissions",
 		}
 		if helpErr != nil {
 			result.Warnings = append(result.Warnings, "could not inspect optional Claude Code flags: "+helpErr.Error())

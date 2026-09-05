@@ -406,6 +406,7 @@ func TestCodexApprovalPolicyUsesCurrentAppServerVariant(t *testing.T) {
 		{name: "default inherits Codex", want: ""},
 		{name: "legacy PairRoom config", value: "unlessTrusted", want: "untrusted"},
 		{name: "current explicit policy", value: "on-request", want: "on-request"},
+		{name: "yolo bypass", value: "yolo", want: "never"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

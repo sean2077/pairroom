@@ -208,6 +208,31 @@ func TestManagementPollingSkipsUnchangedSnapshotRenders(t *testing.T) {
 	}
 }
 
+func TestManagementPermissionModeExposesYolo(t *testing.T) {
+	registry, _ := testRegistry(t, testGitRepo(t))
+	server, _ := newManagementTestServer(t, registry, SyntheticProvisioner{})
+
+	asset := httptest.NewRecorder()
+	server.Handler().ServeHTTP(asset, managementRequest(http.MethodGet, "/management.js", "", false))
+	if asset.Code != http.StatusOK {
+		t.Fatalf("management asset status=%d body=%s", asset.Code, asset.Body.String())
+	}
+	body := asset.Body.String()
+	for _, marker := range []string{
+		"['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions', 'yolo']",
+		"'always-approve', 'yolo'",
+	} {
+		if !strings.Contains(body, marker) {
+			t.Fatalf("management permission-mode selector omitted %q", marker)
+		}
+	}
+	shell := httptest.NewRecorder()
+	server.Handler().ServeHTTP(shell, managementRequest(http.MethodGet, "/", "", false))
+	if shell.Code != http.StatusOK || !strings.Contains(shell.Body.String(), `id="claude-permission-mode"`) || strings.Contains(shell.Body.String(), `<input id="claude-permission-mode"`) {
+		t.Fatalf("permission mode must be a selectable list, not a free-text input")
+	}
+}
+
 func TestManagementProviderChangeKeepsSelectedProfile(t *testing.T) {
 	registry, _ := testRegistry(t, testGitRepo(t))
 	server, _ := newManagementTestServer(t, registry, SyntheticProvisioner{})

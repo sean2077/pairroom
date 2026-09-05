@@ -366,6 +366,33 @@ func TestClaudeEmptyPermissionModeReturnsToNativeInheritance(t *testing.T) {
 	}
 }
 
+func TestClaudeYoloPermissionArgsEmitNativeBypassFlags(t *testing.T) {
+	flags := map[string]bool{
+		"--permission-mode":                    true,
+		"--allow-dangerously-skip-permissions": true,
+		"--dangerously-skip-permissions":       true,
+	}
+	for _, mode := range []string{"yolo", "bypassPermissions", "always-approve"} {
+		got := strings.Join(appendClaudePermissionArgs(nil, flags, mode), " ")
+		for _, want := range []string{
+			"--allow-dangerously-skip-permissions",
+			"--dangerously-skip-permissions",
+			"--permission-mode bypassPermissions",
+		} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("mode %q missing %q in %s", mode, want, got)
+			}
+		}
+	}
+	auto := strings.Join(appendClaudePermissionArgs(nil, flags, "auto"), " ")
+	if auto != "--permission-mode auto" {
+		t.Fatalf("auto mode = %q", auto)
+	}
+	if got := appendClaudePermissionArgs(nil, flags, ""); len(got) != 0 {
+		t.Fatalf("empty mode emitted %v", got)
+	}
+}
+
 func TestClaudeStopClearsPendingApprovals(t *testing.T) {
 	adapter := NewClaude(Config{}, func(model.RuntimeEvent) {})
 	adapter.approvals["approval-1"] = claudeApprovalRequest{requestID: "native"}
