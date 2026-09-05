@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Management Settings adds an About section with version, commit, build date, store schema, data root, the public GitHub repository URL, and the MIT license. Service diagnostics keep snapshot export and cleanup.
+
 ## [v2.0.0] — 2026-09-05
 
 ### Added

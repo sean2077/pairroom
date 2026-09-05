@@ -6,6 +6,7 @@
   const INITIAL_ROUTE = '#/overview';
   const NEW_BINDING_HINT_KEY = 'room.materializesOnFirstTurn';
   const MAX_ROOM_BATCH_SIZE = 100;
+  const GITHUB_REPOSITORY_URL = 'https://github.com/sean2077/pairroom';
   const hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
   let bootstrapToken = hashParams.get('token') || '';
   if (bootstrapToken) {
@@ -1084,7 +1085,7 @@
 
   function renderSettings() {
     const sections = [
-      ['interface', t("ui.interfaceExperience")], ['runtime', t("ui.runtimeStrategy")], ['operations', t("ui.daemonOperationAndMaintenance")], ['service', t("ui.serviceAndDiagnosis")], ['boundaries', t("ui.securityBoundary")],
+      ['interface', t("ui.interfaceExperience")], ['runtime', t("ui.runtimeStrategy")], ['operations', t("ui.daemonOperationAndMaintenance")], ['service', t("ui.serviceAndDiagnosis")], ['boundaries', t("ui.securityBoundary")], ['about', t("ui.about")],
     ];
     const nav = node('nav', { className: 'panel settings-nav', 'aria-label': t("ui.setUpPartitions") }, ...sections.map(([key, label]) => {
       const active = state.settingsSection === key;
@@ -1149,17 +1150,29 @@
         node('aside', { className: 'callout warning' }, node('strong', { textContent: t('room.crashStaleServiceLock') }), node('span', { textContent: t("ui.onlyAfterConfirmingThatTheOldProcessHasDisappearedCanYouExplicitly") }))
       );
     }
+    if (state.settingsSection === 'about') {
+      return node('div', { className: 'view-stack' },
+        node('section', { className: 'panel' },
+          node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: t('ui.about') }), node('p', { textContent: t('ui.buildAndRepositoryIdentity') }))),
+          node('div', { className: 'key-value-grid' },
+            keyValue(t('ui.version'), snapshot.version || t('common.development')),
+            keyValue(t('room.commit'), snapshot.commit || t('room.notEmbedded'), true),
+            keyValue(t('room.buildDate'), snapshot.build_date || t('room.notEmbedded')),
+            keyValue(t('ui.storeSchema'), snapshot.store_schema ? String(snapshot.store_schema) : t('room.notEmbedded')),
+            keyValue(t('room.dataRoot'), snapshot.data_root, true),
+            keyValue(t('ui.githubRepository'), githubRepositoryLink(snapshot.repository_url)),
+            keyValue(t('ui.license'), t('ui.mitLicense'))
+          )
+        )
+      );
+    }
     if (state.settingsSection === 'service') {
       const safe = diagnosticSnapshot();
       return node('div', { className: 'view-stack' },
         node('section', { className: 'panel' },
           node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: t('room.serviceIdentity') }), node('p', { textContent: t("ui.buildInformationAndStableDataRoots") }))),
           node('div', { className: 'key-value-grid' },
-            keyValue(t('ui.version'), snapshot.version || t('common.development')),
-            keyValue(t('room.commit'), snapshot.commit || t('room.notEmbedded'), true),
-            keyValue(t('room.buildDate'), snapshot.build_date || t('room.notEmbedded')),
             keyValue(t('room.generatedAt'), formatDateTime(snapshot.generated_at)),
-            keyValue(t('room.dataRoot'), snapshot.data_root, true),
             keyValue(t('room.registryHealth'), snapshot.healthy ? t('common.healthy') : t('common.failClosed'))
           )
         ),
@@ -2429,7 +2442,14 @@
   }
 
   function keyValue(label, value, mono = false) {
-    return node('div', { className: 'key-value' }, node('span', { textContent: label }), node(mono ? 'code' : 'strong', { textContent: value || '—' }));
+    const content = value instanceof Node ? value : node(mono ? 'code' : 'strong', { textContent: value || '—' });
+    return node('div', { className: 'key-value' }, node('span', { textContent: label }), content);
+  }
+
+  function githubRepositoryLink(url) {
+    const href = String(url || GITHUB_REPOSITORY_URL).trim();
+    if (href !== GITHUB_REPOSITORY_URL) return node('code', { textContent: href || '—' });
+    return node('a', { href, target: '_blank', rel: 'noopener noreferrer', className: 'external-link', textContent: href, title: t('ui.openLink'), 'aria-label': t('ui.openLink') });
   }
 
   function selectControl(options, value, onChange, ariaLabel) {

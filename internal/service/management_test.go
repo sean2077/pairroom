@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/version"
 	"github.com/sean2077/pairroom/internal/websession"
 )
 
@@ -67,7 +68,7 @@ func TestManagementShellAuthenticationAssetsAndSecurityHeaders(t *testing.T) {
 	if asset.Code != http.StatusOK {
 		t.Fatalf("management asset status=%d body=%s", asset.Code, asset.Body.String())
 	}
-	for _, marker := range []string{"/api/v1/session", "/api/v1/service", "X-PairRoom-CSRF", "createBrowserSession", "credentialFromInput", "submitCredentialLogin", "logoutBrowserSession", "login-form", "login-token", "logout-button", "ui.theBrowserSessionHasExpiredPleaseReEnterTheServiceToken", "completeBindings", "ui.completeBindings", "queue_position", "room.materializesOnFirstTurn", "roomHasBlockingPendingBindings", "renderProjects", "renderRuntimes", "renderSettings", "/suspend", "pairroom daemon open", "pairroom daemon status", "ui.onlyAfterConfirmingThatTheOldProcessHasDisappearedCanYouExplicitly", "/api/v1/projects/", "/refresh", "confirm_project_id", "/api/v1/rooms/batch-archive", "/api/v1/rooms/batch-delete", "acknowledge_data_loss", "selectedRoomIDs", "confirm-input", "confirm-input-label", "confirm-ack", "project_refresh", "project_removal", "room_deletion", "pending_room_cleanup", "ui.batchArchiveValue", "ui.batchDeleteValue", "ui.permanentlyDelete", "room-action-control", "room-select-control", "button secondary-button compact-button room-action-control room-select-control", "#/rooms/", "openRoomInBrowserAction", "/api/v1/runtime-policy", "/surface/", "ui.canOnlyBeOpenedAfterRecovery", "const previous = state.tabMeta[data.roomId];", "pairroom.theme", "localStorage.getItem('pairroom.theme'", "PairRoomTheme.setTheme", "pairroom:theme"} {
+	for _, marker := range []string{"/api/v1/session", "/api/v1/service", "X-PairRoom-CSRF", "createBrowserSession", "credentialFromInput", "submitCredentialLogin", "logoutBrowserSession", "login-form", "login-token", "logout-button", "ui.theBrowserSessionHasExpiredPleaseReEnterTheServiceToken", "completeBindings", "ui.completeBindings", "queue_position", "room.materializesOnFirstTurn", "roomHasBlockingPendingBindings", "renderProjects", "renderRuntimes", "renderSettings", "/suspend", "pairroom daemon open", "pairroom daemon status", "ui.onlyAfterConfirmingThatTheOldProcessHasDisappearedCanYouExplicitly", "/api/v1/projects/", "/refresh", "confirm_project_id", "/api/v1/rooms/batch-archive", "/api/v1/rooms/batch-delete", "acknowledge_data_loss", "selectedRoomIDs", "confirm-input", "confirm-input-label", "confirm-ack", "project_refresh", "project_removal", "room_deletion", "pending_room_cleanup", "ui.batchArchiveValue", "ui.batchDeleteValue", "ui.permanentlyDelete", "room-action-control", "room-select-control", "button secondary-button compact-button room-action-control room-select-control", "#/rooms/", "openRoomInBrowserAction", "/api/v1/runtime-policy", "/surface/", "ui.canOnlyBeOpenedAfterRecovery", "const previous = state.tabMeta[data.roomId];", "pairroom.theme", "localStorage.getItem('pairroom.theme'", "PairRoomTheme.setTheme", "pairroom:theme", "ui.about", "ui.githubRepository", "https://github.com/sean2077/pairroom"} {
 		if !strings.Contains(asset.Body.String(), marker) {
 			t.Fatalf("management asset omitted %q", marker)
 		}
@@ -629,6 +630,9 @@ func TestManagementSnapshotIncludesSummaryPolicyAndCapabilities(t *testing.T) {
 		!snapshot.Capabilities.ProjectRemoval || !snapshot.Capabilities.RoomDeletion || snapshot.Capabilities.ServerPathBrowser ||
 		!snapshot.Capabilities.RuntimePolicyMutation || !snapshot.Capabilities.RoomSurface {
 		t.Fatalf("unexpected capability surface: %#v", snapshot.Capabilities)
+	}
+	if snapshot.StoreSchema != version.StoreSchema || snapshot.RepositoryURL != version.RepositoryURL || snapshot.Version == "" {
+		t.Fatalf("unexpected about identity: version=%q schema=%d repository=%q", snapshot.Version, snapshot.StoreSchema, snapshot.RepositoryURL)
 	}
 }
 

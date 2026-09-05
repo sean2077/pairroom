@@ -16,7 +16,10 @@ func TestVersionFileMatchesBinaryVersion(t *testing.T) {
 		t.Fatalf("VERSION=%q Current=%q", got, Current)
 	}
 	info := BuildInfo()
-	if info.Version != Current || info.StoreSchema != StoreSchema || info.Commit == "" || info.BuildDate == "" || info.LastTag == "" || info.CommitsSinceTag == "" {
+	if info.Version != Current || info.StoreSchema != StoreSchema || info.RepositoryURL != RepositoryURL || info.Commit == "" || info.BuildDate == "" || info.LastTag == "" || info.CommitsSinceTag == "" {
 		t.Fatalf("invalid build info: %#v", info)
+	}
+	if RepositoryURL != "https://github.com/sean2077/pairroom" {
+		t.Fatalf("unexpected repository URL: %q", RepositoryURL)
 	}
 }
