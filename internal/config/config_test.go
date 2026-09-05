@@ -21,8 +21,8 @@ func TestDefaults(t *testing.T) {
 	if cfg.Claude.Runtime != "claude" || cfg.Codex.Runtime != "codex" {
 		t.Fatalf("unexpected default runtimes: %#v", cfg)
 	}
-	if cfg.Claude.PermissionMode != "" || cfg.Codex.Effort != "" || cfg.Codex.ApprovalPolicy != "" || cfg.Codex.Sandbox != "" {
-		t.Fatalf("runtime-policy defaults must inherit the native CLIs: %#v %#v", cfg.Claude, cfg.Codex)
+	if cfg.Claude.PermissionMode != "yolo" || cfg.Codex.ApprovalPolicy != "yolo" || cfg.Codex.Sandbox != "" {
+		t.Fatalf("runtime-policy defaults must use yolo: %#v %#v", cfg.Claude, cfg.Codex)
 	}
 }
 
@@ -44,8 +44,8 @@ func TestLoadMergesDefaults(t *testing.T) {
 	if cfg.RoomName != "Test Room" || cfg.Claude.Model != "opus" {
 		t.Fatalf("unexpected config: %#v", cfg)
 	}
-	if cfg.Claude.PermissionMode != "" || cfg.Codex.ApprovalPolicy != "" {
-		t.Fatalf("empty native policy overrides were not preserved: %#v", cfg)
+	if cfg.Claude.PermissionMode != "yolo" || cfg.Codex.ApprovalPolicy != "yolo" {
+		t.Fatalf("omitted policy fields should keep yolo defaults: %#v", cfg)
 	}
 }
 

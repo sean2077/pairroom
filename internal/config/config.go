@@ -96,8 +96,8 @@ func Defaults() File {
 			Codex:  RuntimeTemplate{Command: "codex"},
 			Grok:   RuntimeTemplate{Command: "grok"},
 		},
-		Claude: Agent{Runtime: string(model.RuntimeClaude), Provider: model.NativeProviderRef(), OrdinaryReviewerPolicy: model.ReviewerEnforced},
-		Codex:  Agent{Runtime: string(model.RuntimeCodex), Provider: model.NativeProviderRef(), OrdinaryReviewerPolicy: model.ReviewerEnforced},
+		Claude: Agent{Runtime: string(model.RuntimeClaude), Provider: model.NativeProviderRef(), PermissionMode: "yolo", OrdinaryReviewerPolicy: model.ReviewerEnforced},
+		Codex:  Agent{Runtime: string(model.RuntimeCodex), Provider: model.NativeProviderRef(), ApprovalPolicy: "yolo", OrdinaryReviewerPolicy: model.ReviewerEnforced},
 	}
 }
 

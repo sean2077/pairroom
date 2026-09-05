@@ -17,7 +17,7 @@
     "model": "",
     "effort": "",
     "instructions": "",
-    "permission_mode": "",
+    "permission_mode": "yolo",
     "ordinary_reviewer_policy": "enforced"
   },
   "codex": {
@@ -26,7 +26,7 @@
     "model": "",
     "effort": "",
     "instructions": "",
-    "approval_policy": "",
+    "approval_policy": "yolo",
     "sandbox": "",
     "ordinary_reviewer_policy": "enforced"
   }

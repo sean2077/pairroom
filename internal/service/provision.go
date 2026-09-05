@@ -236,8 +236,8 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 
 func defaultAgentSelections() map[model.ActorID]model.AgentSelection {
 	return map[model.ActorID]model.AgentSelection{
-		model.ActorClaude: {Runtime: model.RuntimeClaude, Provider: model.NativeProviderRef(), OrdinaryReviewerPolicy: model.ReviewerEnforced},
-		model.ActorCodex:  {Runtime: model.RuntimeCodex, Provider: model.NativeProviderRef(), OrdinaryReviewerPolicy: model.ReviewerEnforced},
+		model.ActorClaude: {Runtime: model.RuntimeClaude, Provider: model.NativeProviderRef(), PermissionMode: "yolo", OrdinaryReviewerPolicy: model.ReviewerEnforced},
+		model.ActorCodex:  {Runtime: model.RuntimeCodex, Provider: model.NativeProviderRef(), ApprovalPolicy: "yolo", OrdinaryReviewerPolicy: model.ReviewerEnforced},
 	}
 }
 
