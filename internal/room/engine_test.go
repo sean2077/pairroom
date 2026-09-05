@@ -943,7 +943,7 @@ func TestExplicitMentionReturnsToDriverWithFullText(t *testing.T) {
 	}
 }
 
-func TestUserDecisionSuppressesAgentMention(t *testing.T) {
+func TestUserAloneDoesNotRelay(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
 		Text: "Implement the ambiguous change", To: []model.ActorID{model.ActorClaude},
@@ -952,16 +952,16 @@ func TestUserDecisionSuppressesAgentMention(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = receiveInput(t, adapters[model.ActorClaude])
-
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
 		TurnID: "turn-needs-human", CorrelationID: incoming.ID,
-		Text:      "@user choose the compatibility policy before review; @codex should wait.",
+		Text:      "Need @user to choose the compatibility policy before review.",
 		CreatedAt: time.Now().UTC(),
 	})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, CorrelationID: incoming.ID, TurnID: "turn-needs-human", Name: "completed", CreatedAt: time.Now().UTC()})
 	select {
 	case input := <-adapters[model.ActorCodex].submissions:
-		t.Fatalf("user decision request incorrectly routed to Reviewer: %#v", input)
+		t.Fatalf("@user alone incorrectly routed to Reviewer: %#v", input)
 	case <-time.After(150 * time.Millisecond):
 	}
 }
@@ -1036,81 +1036,31 @@ func TestExplicitMentionRoutesBeforeGenericStop(t *testing.T) {
 	}
 }
 
-func TestUserMentionOverridesPeerMention(t *testing.T) {
-	engine, adapters := newTestEngine(t, "")
-	incoming, err := engine.Send(context.Background(), SendRequest{Text: "Review boundary", To: []model.ActorID{model.ActorClaude}})
-	if err != nil {
-		t.Fatal(err)
+func TestAgentHandleWinsWhenUserAlsoMentioned(t *testing.T) {
+	texts := []string{
+		"I need @user to choose between these options; @codex should wait.",
+		"@user 你好！我是 @claude (Claude Code)。\n\n@codex 也来打个招呼,介绍下你自己吧。",
+		"你好！我是 Claude Code。@codex 也来打个招呼,介绍下你自己吧。",
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
-	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeFinal, CorrelationID: incoming.ID, TurnID: "user-decision",
-		Text: "I need @user to choose between these options; @codex should wait.", CreatedAt: time.Now().UTC(),
-	})
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, CorrelationID: incoming.ID, TurnID: "user-decision", Name: "completed", CreatedAt: time.Now().UTC()})
-	select {
-	case got := <-adapters[model.ActorCodex].submissions:
-		t.Fatalf("@user decision was routed to peer: %#v", got)
-	case <-time.After(150 * time.Millisecond):
-	}
-	var notice model.SystemNotice
-	found := false
-	events := engine.Snapshot().Events
-	for index := len(events) - 1; index >= 0; index-- {
-		if events[index].Kind != EventSystemNotice {
-			continue
-		}
-		if err := json.Unmarshal(events[index].Data, &notice); err != nil {
-			t.Fatal(err)
-		}
-		found = true
-		break
-	}
-	if !found || !strings.Contains(notice.Text, "@user") || !strings.Contains(notice.Text, "Codex") {
-		t.Fatalf("@user override notice = %#v found=%v", notice, found)
-	}
-}
-
-func TestGreetingUserVocativeSuppressesPeerRelay(t *testing.T) {
-	engine, adapters := newTestEngine(t, "")
-	incoming, err := engine.Send(context.Background(), SendRequest{
-		Text: "hello, 互相打个招呼，介绍下自己", To: []model.ActorID{model.ActorClaude},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
-	text := "@user 你好！我是 @claude (Claude Code)。\n\n@codex 也来打个招呼,介绍下你自己吧。"
-	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeFinal, CorrelationID: incoming.ID, TurnID: "greet-user",
-		Text: text, CreatedAt: time.Now().UTC(),
-	})
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, CorrelationID: incoming.ID, TurnID: "greet-user", Name: "completed", CreatedAt: time.Now().UTC()})
-	select {
-	case got := <-adapters[model.ActorCodex].submissions:
-		t.Fatalf("greeting @user vocative was routed to Codex: %#v", got)
-	case <-time.After(150 * time.Millisecond):
-	}
-}
-
-func TestGreetingPeerHandleWithoutUserRelays(t *testing.T) {
-	engine, adapters := newTestEngine(t, "")
-	incoming, err := engine.Send(context.Background(), SendRequest{
-		Text: "hello, 互相打个招呼，介绍下自己", To: []model.ActorID{model.ActorClaude},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
-	text := "你好！我是 Claude Code。@codex 也来打个招呼,介绍下你自己吧。"
-	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeFinal, CorrelationID: incoming.ID, TurnID: "greet-peer",
-		Text: text, CreatedAt: time.Now().UTC(),
-	})
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, CorrelationID: incoming.ID, TurnID: "greet-peer", Name: "completed", CreatedAt: time.Now().UTC()})
-	got := receiveInput(t, adapters[model.ActorCodex])
-	if got.From != model.ActorClaude || !strings.Contains(got.Text, "@codex") {
-		t.Fatalf("greeting without @user did not relay to Codex: %#v", got)
+	for i, text := range texts {
+		t.Run(fmt.Sprintf("case-%d", i), func(t *testing.T) {
+			engine, adapters := newTestEngine(t, "")
+			incoming, err := engine.Send(context.Background(), SendRequest{Text: "Continue", To: []model.ActorID{model.ActorClaude}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = receiveInput(t, adapters[model.ActorClaude])
+			turnID := fmt.Sprintf("agent-wins-%d", i)
+			engine.HandleRuntimeEvent(model.RuntimeEvent{
+				Agent: model.ActorClaude, Kind: model.RuntimeFinal, CorrelationID: incoming.ID, TurnID: turnID,
+				Text: text, CreatedAt: time.Now().UTC(),
+			})
+			engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, CorrelationID: incoming.ID, TurnID: turnID, Name: "completed", CreatedAt: time.Now().UTC()})
+			got := receiveInput(t, adapters[model.ActorCodex])
+			if got.From != model.ActorClaude || !strings.Contains(got.Text, "@codex") {
+				t.Fatalf("exact Agent handle did not win relay: %#v", got)
+			}
+		})
 	}
 }
 

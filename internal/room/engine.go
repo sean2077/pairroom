@@ -2567,16 +2567,6 @@ func (e *Engine) processing(messageID string, target model.ActorID, state model.
 
 func (e *Engine) agentTargets(actor model.ActorID, text string, sourceSeq, latestHumanSeq uint64) []model.ActorID {
 	mentions := prompt.ParseMentions(text, actor, e.runtimeKinds())
-	if mentions.Human {
-		if len(mentions.Targets) > 0 {
-			names := make([]string, 0, len(mentions.Targets))
-			for _, target := range mentions.Targets {
-				names = append(names, e.participantName(target))
-			}
-			e.notice("warning", fmt.Sprintf("%s mentioned @user, so PairRoom did not start %s.", e.participantName(actor), strings.Join(names, ", ")))
-		}
-		return nil
-	}
 	// A newer human instruction takes precedence over an older Agent result, including an
 	// explicit peer address in that stale result.
 	if sourceSeq > 0 && latestHumanSeq > sourceSeq {

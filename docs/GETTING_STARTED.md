@@ -103,7 +103,7 @@ An unaddressed message goes only to the current Driver. To verify that both Agen
 Greet each other and introduce yourselves.
 ```
 
-The Driver must include the other participant's exact displayed handle in its reply and must omit `@user`. Introducing itself only to the human, or greeting the human with `@user` while also naming the peer, does not start the other Agent: `@user` wins. With unique Claude and Codex runtimes those handles are `@claude` and `@codex`. PairRoom hands the complete reply and attachments to the peer only after the current Turn ends. If the peer then answers without naming the Driver, the greeting ends naturally after two Turns.
+The Driver must include the other participant's exact displayed handle in its reply. Introducing itself only to the human, with no peer handle, does not start the other Agent. If the reply names both `@user` and the peer, the peer handle wins. With unique Claude and Codex runtimes those handles are `@claude` and `@codex`. PairRoom hands the complete reply and attachments to the peer only after the current Turn ends. If the peer then answers without naming the Driver, the greeting ends naturally after two Turns.
 
 For a review, assign Driver and Reviewer directly, then ask the Driver to request independent review only when it has something concrete to inspect:
 
@@ -118,7 +118,7 @@ PairRoom does not compile or approve actor/action stage sequences. Each Agent ma
 - `steer` is the default. Same-target input attempts native same-Turn steering; unavailable or rejected steering falls back to the Room FIFO exactly once, while an unknown result requires explicit Retry;
 - `queue` always waits in the Room FIFO while a Turn is active and starts immediately when the Room is idle;
 - input to the other Agent always waits for the active Turn boundary;
-- only the other participant's exact current `mention_handle` in an Agent reply starts another Agent Turn; no mention ends relay and `@user` overrides Agent handles;
+- only the other participant's exact current `mention_handle` in an Agent reply starts another Agent Turn; no mention ends relay; an Agent handle wins over `@user` in the same reply;
 - Cancelling a message still in the FIFO removes only that message;
 - Input already submitted to a native runtime may require interrupting the whole current native Turn.
 

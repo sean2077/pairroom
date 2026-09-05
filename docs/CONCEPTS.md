@@ -57,7 +57,7 @@ Input to the other Agent is always queued until the active Turn ends, regardless
 
 Only the exact current handle of the other Agent in visible Agent output requests a relay. PairRoom stores and forwards that complete visible response and its attachments after the current native Turn completes. It does not truncate the response, append Room history, or require a structured handoff packet.
 
-A response without the peer's exact handle ends Agent relay. Either Agent may deliver the final result. `@user` takes priority over every Agent handle and leaves the Room waiting for the user; a self-mention never routes. Former aliases such as `@peer`, `@human`, `@all`, `@agent1`, and `@agent2` do not route; an otherwise unaddressed user send that relies on one is rejected. Former `PAIRROOM` control markers are ordinary text.
+A response without the peer's exact handle ends Agent relay. Either Agent may deliver the final result. An exact Agent handle wins over `@user` in the same response; `@user` alone leaves the Room waiting for the user; a self-mention never routes. Former aliases such as `@peer`, `@human`, `@all`, `@agent1`, and `@agent2` do not route; an otherwise unaddressed user send that relies on one is rejected. Former `PAIRROOM` control markers are ordinary text.
 
 PairRoom applies no hop or Turn ceiling to explicit relays. The bootstrap tells each Agent to mention the peer only when another independent response can materially complete the user's request, not to acknowledge, agree, thank, or ceremonially return a Turn. If Agents deliberately keep naming one another, the user can Cancel, Interrupt, or send a newer instruction.
 
