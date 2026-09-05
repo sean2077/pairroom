@@ -1053,6 +1053,65 @@ func TestUserMentionOverridesPeerMention(t *testing.T) {
 		t.Fatalf("@user decision was routed to peer: %#v", got)
 	case <-time.After(150 * time.Millisecond):
 	}
+	var notice model.SystemNotice
+	found := false
+	events := engine.Snapshot().Events
+	for index := len(events) - 1; index >= 0; index-- {
+		if events[index].Kind != EventSystemNotice {
+			continue
+		}
+		if err := json.Unmarshal(events[index].Data, &notice); err != nil {
+			t.Fatal(err)
+		}
+		found = true
+		break
+	}
+	if !found || !strings.Contains(notice.Text, "@user") || !strings.Contains(notice.Text, "Codex") {
+		t.Fatalf("@user override notice = %#v found=%v", notice, found)
+	}
+}
+
+func TestGreetingUserVocativeSuppressesPeerRelay(t *testing.T) {
+	engine, adapters := newTestEngine(t, "")
+	incoming, err := engine.Send(context.Background(), SendRequest{
+		Text: "hello, 互相打个招呼，介绍下自己", To: []model.ActorID{model.ActorClaude},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+	text := "@user 你好！我是 @claude (Claude Code)。\n\n@codex 也来打个招呼,介绍下你自己吧。"
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeFinal, CorrelationID: incoming.ID, TurnID: "greet-user",
+		Text: text, CreatedAt: time.Now().UTC(),
+	})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, CorrelationID: incoming.ID, TurnID: "greet-user", Name: "completed", CreatedAt: time.Now().UTC()})
+	select {
+	case got := <-adapters[model.ActorCodex].submissions:
+		t.Fatalf("greeting @user vocative was routed to Codex: %#v", got)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestGreetingPeerHandleWithoutUserRelays(t *testing.T) {
+	engine, adapters := newTestEngine(t, "")
+	incoming, err := engine.Send(context.Background(), SendRequest{
+		Text: "hello, 互相打个招呼，介绍下自己", To: []model.ActorID{model.ActorClaude},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveInput(t, adapters[model.ActorClaude])
+	text := "你好！我是 Claude Code。@codex 也来打个招呼,介绍下你自己吧。"
+	engine.HandleRuntimeEvent(model.RuntimeEvent{
+		Agent: model.ActorClaude, Kind: model.RuntimeFinal, CorrelationID: incoming.ID, TurnID: "greet-peer",
+		Text: text, CreatedAt: time.Now().UTC(),
+	})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, CorrelationID: incoming.ID, TurnID: "greet-peer", Name: "completed", CreatedAt: time.Now().UTC()})
+	got := receiveInput(t, adapters[model.ActorCodex])
+	if got.From != model.ActorClaude || !strings.Contains(got.Text, "@codex") {
+		t.Fatalf("greeting without @user did not relay to Codex: %#v", got)
+	}
 }
 
 func TestQueuedHumanMessageCancelsOlderRelay(t *testing.T) {
