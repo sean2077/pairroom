@@ -9,7 +9,7 @@ make check
 make smoke
 ```
 
-`make check` runs format, static checks, unit tests, race / dependency checks, and the documentation contract. `make smoke` runs the full Mock collaboration / recovery scenario.
+`make check` runs format, static checks, unit tests, race / dependency checks, and the documentation contract. `make smoke` runs the full Mock collaboration / recovery scenario. `make race` (included in `make check`) requires `CGO_ENABLED=1` and a Go-supported C compiler on `PATH`; on Windows, use an MSYS2 MinGW toolchain or an equivalent supported compiler.
 
 UI changes also run the isolated browser contract in CI. To reproduce it locally:
 

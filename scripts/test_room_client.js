@@ -82,6 +82,33 @@ async function main() {
     c.input.listeners.get('compositionstart')();
     c.key();
     assert.equal(sent.length, 0);
+    c.input.listeners.get('compositioncancel')();
+    c.key();
+    assert.equal(sent.length, 1, 'cancelled IME must not pin the composer closed');
+    request.resolve({});
+    await c.sendMessage();
+    await Promise.resolve();
+    assert.equal(c.state.sending, false);
+  }
+  {
+    const c = client(), request = deferred(), sent = [];
+    c.setAPI((_path, options) => { sent.push(JSON.parse(options.body)); return request.promise; });
+    c.edit('click during IME');
+    c.input.listeners.get('compositionstart')();
+    c.nodes.get('send-button').listeners.get('click')();
+    assert.equal(sent.length, 1, 'explicit Send commits IME and submits');
+    request.resolve({});
+    await c.sendMessage();
+    await Promise.resolve();
+    assert.equal(c.state.sending, false);
+  }
+  {
+    const c = client(), request = deferred(), sent = [];
+    c.setAPI((_path, options) => { sent.push(JSON.parse(options.body)); return request.promise; });
+    c.edit('中文输入确认');
+    c.input.listeners.get('compositionstart')();
+    c.key();
+    assert.equal(sent.length, 0);
     c.input.listeners.get('compositionend')();
     c.key(); c.key();
     c.updateComposerAvailability(); // A render/upload completion cannot unlock a request.

@@ -2529,7 +2529,10 @@
   document.addEventListener('change', (event) => {
     if (event.target.matches('[data-role-actor]')) setRole(event.target.dataset.roleActor, event.target.value);
   });
-  $('send-button').addEventListener('click', sendMessage);
+  $('send-button').addEventListener('click', () => {
+    state.composing = false;
+    sendMessage();
+  });
   $('attach-button').addEventListener('click', () => $('attachment-input').click());
   $('attachment-input').addEventListener('change', (event) => { void addImageFiles(event.target.files); event.target.value = ''; });
   messageInput.addEventListener('keydown', (event) => {
@@ -2541,6 +2544,7 @@
   });
   messageInput.addEventListener('compositionstart', () => { state.composing = true; });
   messageInput.addEventListener('compositionend', () => { state.composing = false; });
+  messageInput.addEventListener('compositioncancel', () => { state.composing = false; });
   messageInput.addEventListener('input', () => { state.draftRevision += 1; autoSizeComposer(); persistComposerDraft(); });
   messageInput.addEventListener('paste', (event) => {
     const files = Array.from(event.clipboardData?.files || []);
