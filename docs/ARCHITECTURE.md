@@ -111,7 +111,11 @@ Empty Provider/model/effort/instructions and runtime-policy overrides inherit th
 
 ## Web updates and native windows
 
-SSE carries durable state events and transient telemetry. Pages should update incrementally or batch high-frequency activity, and must not rebuild the entire chat tree on every token. On reconnect, the snapshot is authoritative; leftover transient state in the browser or desktop webview must not be trusted.
+SSE carries durable state events and transient telemetry. Pages should update incrementally or batch high-frequency activity, and must not rebuild the entire chat tree on every token. On reconnect, the snapshot is authoritative; leftover transient state in the browser or desktop webview must not be trusted. The Room client permits one snapshot read at a time, discards callbacks from obsolete streams, and preserves local composer edits during resynchronization. A bounded-tail replay gap produces an explicit snapshot-required reset rather than skipping durable events.
+
+Read projections live in `internal/room/projection.go`: windowed snapshots slice before deep-copying messages; SSE copies only the retained event tail; runtime capacity/drain checks query activity under the Engine lock without cloning the transcript. These are read optimizations only: the complete Event Log, visible relay response, and native session context remain unchanged.
+
+The composer has a single in-flight submission boundary, independent of the button DOM. IME confirmation and held Enter keys do not submit. Acceptance clears only the unchanged submitted draft and its attachments/reply; new edits survive. Failed mutations are never retried automatically. Browser draft storage is best-effort and is not an availability requirement.
 
 The Management Shell is Room-centric: the sidebar groups by Project, and in-app tabs embed an active Room View through the Management same-origin surface gateway (`/api/v1/rooms/{room}/surface/…`). The iframe uses the Management Session Cookie. The gateway injects the Runtime bearer on the server; the Runtime token never enters the DOM. An in-app tab is not a Runtime lease. Background tabs still obey existing idle / capacity / LRU / explicit-suspend constraints; switching back to a suspended tab requests activation again. An archived Room cannot open as a tab; restore it first.
 

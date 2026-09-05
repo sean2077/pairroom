@@ -107,9 +107,9 @@
           <div class="composer">
             <input id="attachment-input" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple="">
             <button id="attach-button" class="attach-button" type="button" title="Add images; paste or drop also works" data-i18n-title="ui.addImagesPasteOrDropAlsoWorks">＋</button>
-            <textarea id="message-input" rows="3" placeholder="Message an Agent; Enter sends, Shift+Enter inserts a newline…" data-i18n-placeholder="ui.messageAnAgentEnterSendsShiftEnterInsertsANewline"></textarea>
-            <button id="send-button" class="send-button" aria-label="Send message" data-i18n-aria-label="ui.sendMessage">
-              <span data-i18n="ui.send">Send</span><span class="send-arrow">↑</span>
+            <textarea id="message-input" rows="3" aria-label="Message to the Room" data-i18n-aria-label="ui.messageToTheRoom" placeholder="Message an Agent; Enter sends, Shift+Enter inserts a newline…" data-i18n-placeholder="ui.messageAnAgentEnterSendsShiftEnterInsertsANewline"></textarea>
+            <button id="send-button" class="send-button" disabled="" aria-label="Send message" data-i18n-aria-label="ui.sendMessage">
+              <span data-i18n="ui.send">Send</span><span class="send-arrow" aria-hidden="true">↑</span>
             </button>
           </div>
           <div class="composer-footnote">

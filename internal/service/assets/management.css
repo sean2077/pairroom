@@ -12,14 +12,14 @@
   --text: #151b2b;
   --text-strong: #0a1020;
   --muted: #687287;
-  --subtle: #8f98a9;
+  --subtle: #667187;
   --line: #dfe4ec;
   --line-strong: #ccd3df;
   --accent: #5b58e8;
   --accent-hover: #4946d2;
   --accent-soft: #eeedff;
   --accent-line: #c9c7fb;
-  --good: #178558;
+  --good: #146c48;
   --good-soft: #e8f8f0;
   --good-line: #a7dfc5;
   --warn: #a56508;
@@ -53,7 +53,7 @@
   --text: #e9edf5;
   --text-strong: #ffffff;
   --muted: #9aa6ba;
-  --subtle: #748198;
+  --subtle: #96a3b8;
   --line: #252e3e;
   --line-strong: #344056;
   --accent: #9794ff;
@@ -89,7 +89,7 @@
     --text: #e9edf5;
     --text-strong: #ffffff;
     --muted: #9aa6ba;
-    --subtle: #748198;
+    --subtle: #96a3b8;
     --line: #252e3e;
     --line-strong: #344056;
     --accent: #9794ff;
@@ -423,7 +423,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 .service-status-row { min-width: 0; flex: 1; display: flex; align-items: center; gap: 10px; }
 .service-status-row > div { min-width: 0; display: grid; }
 .service-status-row strong { overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.service-status-row small { overflow: hidden; color: var(--subtle); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.service-status-row small { overflow: hidden; color: var(--subtle); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .status-dot { width: 9px; height: 9px; flex: 0 0 9px; border-radius: 50%; background: var(--subtle); box-shadow: 0 0 0 4px color-mix(in srgb, var(--subtle) 13%, transparent); }
 .status-dot.good { background: var(--good); box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 14%, transparent); }
 .status-dot.danger { background: var(--danger); box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 15%, transparent); }
@@ -486,7 +486,7 @@ h3 { color: var(--text-strong); font-size: 14px; }
 .global-search:focus-within { border-color: var(--accent); box-shadow: var(--focus); }
 .global-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; }
 .global-search input::placeholder { color: var(--subtle); }
-kbd { padding: 1px 5px; border: 1px solid var(--line); border-bottom-color: var(--line-strong); border-radius: 5px; background: var(--bg-soft); color: var(--subtle); font-size: 10px; }
+kbd { padding: 1px 5px; border: 1px solid var(--line); border-bottom-color: var(--line-strong); border-radius: 5px; background: var(--bg-soft); color: var(--subtle); font-size: 11px; }
 
 button, .button {
   min-height: var(--control-h);
@@ -536,7 +536,7 @@ button:disabled { cursor: not-allowed; opacity: .47; }
 
 .view { max-width: 1500px; min-height: calc(100vh - 140px); margin: 0 auto; padding: 26px clamp(18px, 3vw, 42px) 46px; }
 .view:focus { outline: none; }
-.workspace-footer { display: flex; justify-content: space-between; gap: 16px; padding: 14px clamp(18px, 3vw, 42px); border-top: 1px solid var(--line); color: var(--subtle); font-size: 10px; }
+.workspace-footer { display: flex; justify-content: space-between; gap: 16px; padding: 14px clamp(18px, 3vw, 42px); border-top: 1px solid var(--line); color: var(--subtle); font-size: 11px; }
 
 .view-stack { display: grid; gap: 22px; animation: view-in .2s ease both; }
 .section-header { display: flex; align-items: end; justify-content: space-between; gap: 18px; }
@@ -581,7 +581,7 @@ button:disabled { cursor: not-allowed; opacity: .47; }
 .stat-label { color: var(--muted); font-size: 11px; font-weight: 650; }
 .stat-icon { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 9px; background: var(--bg-soft); color: var(--muted); font-size: 15px; }
 .stat-value { color: var(--text-strong); font-size: 27px; font-weight: 760; line-height: 1; letter-spacing: -.04em; }
-.stat-hint { margin-top: 5px; color: var(--subtle); font-size: 10px; }
+.stat-hint { margin-top: 5px; color: var(--subtle); font-size: 11px; }
 .stat-card.accent .stat-icon { background: var(--accent-soft); color: var(--accent); }
 .stat-card.good .stat-icon { background: var(--good-soft); color: var(--good); }
 .stat-card.warn .stat-icon { background: var(--warn-soft); color: var(--warn); }

@@ -1,0 +1,2 @@
+# Development-only browser verification; no shipped frontend dependency.
+playwright==1.57.0

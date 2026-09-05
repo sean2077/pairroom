@@ -27,6 +27,11 @@
     draftCorrelation: { claude: '', codex: '' },
     selectedTarget: 'driver',
     replyTo: '',
+    replyRevision: 0,
+    draftRevision: 0,
+    composing: false,
+    sending: false,
+    localRoomID: '',
     pendingAttachments: [],
     attachmentObjectURLs: new Set(),
     mediaObjectURLs: new Map(),
@@ -49,6 +54,9 @@
     searchQuery: '',
     shellActive: true,
     source: null,
+    snapshotPromise: null,
+    reconnectTimer: null,
+    reconnectAttempt: 0,
     renderQueued: false,
     streamRenderTimer: null,
     runtimeRenderQueued: false,
@@ -151,33 +159,75 @@
     });
   }
 
-  async function loadSnapshot() {
-    state.snapshot = await api('/api/v1/snapshot?message_limit=250');
-    state.drafts = { claude: '', codex: '' };
-    state.draftCorrelation = { claude: '', codex: '' };
-    initializeRoomLocalState();
-    if (state.snapshot?.meta?.id) document.body.dataset.roomId = state.snapshot.meta.id;
-    render(true);
-    connectEvents();
-    refreshGitStatus();
-    postSurfaceState();
+  // Reads may be retried; message submissions must never be replayed implicitly.
+  // Closing the old stream before the read also discards its queued telemetry.
+  function loadSnapshot() {
+    if (state.snapshotPromise) return state.snapshotPromise;
+    const initial = !state.snapshot;
+    closeEvents();
+    clearTimeout(state.reconnectTimer);
+    state.reconnectTimer = null;
+    state.snapshotPromise = (async () => {
+      const limit = Math.min(1000, Math.max(250, state.snapshot?.messages?.length || 0));
+      state.snapshot = await api(`/api/v1/snapshot?message_limit=${limit}`);
+      state.drafts = { claude: '', codex: '' };
+      state.draftCorrelation = { claude: '', codex: '' };
+      initializeRoomLocalState();
+      if (state.snapshot?.meta?.id) document.body.dataset.roomId = state.snapshot.meta.id;
+      render(initial);
+      connectEvents();
+      refreshGitStatus();
+      postSurfaceState();
+    })().catch((error) => {
+      if (!initial) scheduleReconnect();
+      throw error;
+    }).finally(() => { state.snapshotPromise = null; });
+    return state.snapshotPromise;
+  }
+
+  function closeEvents() {
+    if (state.source) state.source.close();
+    state.source = null;
+  }
+
+  function scheduleReconnect() {
+    setConnection(false, t('room.reconnecting'));
+    if (state.reconnectTimer !== null) return;
+    const delay = Math.min(15000, 500 * (2 ** Math.min(state.reconnectAttempt++, 5)));
+    state.reconnectTimer = setTimeout(() => {
+      state.reconnectTimer = null;
+      void loadSnapshot().catch(() => {}); // loadSnapshot schedules the next read.
+    }, delay);
   }
 
   function connectEvents() {
-    if (state.source) state.source.close();
+    closeEvents();
     const since = state.snapshot ? state.snapshot.latest_seq || 0 : 0;
     const query = new URLSearchParams({ since: String(since) });
     const source = new EventSource(roomURL(`/api/v1/events?${query}`));
     state.source = source;
     setConnection(false, t('ui.connecting'));
-    source.addEventListener('open', () => setConnection(true, t('room.live')));
-    source.addEventListener('error', () => setConnection(false, t('room.reconnecting')));
+    source.addEventListener('open', () => {
+      if (state.source !== source) return;
+      state.reconnectAttempt = 0;
+      setConnection(true, t('room.live'));
+    });
+    source.addEventListener('error', () => {
+      if (state.source !== source) return;
+      closeEvents();
+      scheduleReconnect();
+    });
+    source.addEventListener('reset', () => {
+      if (state.source !== source) return;
+      void loadSnapshot().catch(() => {});
+    });
     source.addEventListener('pairroom', (raw) => {
+      if (state.source !== source) return;
       try {
-        const event = JSON.parse(raw.data);
-        applyEvent(event);
+        applyEvent(JSON.parse(raw.data));
       } catch (error) {
-        toast(t("ui.couldNotParseEventValue", { value0: (error.message) }), 'error');
+        toast(t("ui.couldNotParseEventValue", { value0: error.message }), 'error');
+        void loadSnapshot().catch(() => {});
       }
     });
   }
@@ -187,7 +237,7 @@
     const durable = Number(event.seq || 0) > 0;
     const latest = Number(state.snapshot.latest_seq || 0);
     if (durable && event.seq <= latest) return;
-    if (durable && latest > 0 && event.seq > latest + 1) {
+    if (durable && event.seq > latest + 1) {
       toast(t("ui.eventSequenceGapValueValueResynchronizing", { value0: (latest), value1: (event.seq) }), 'error');
       loadSnapshot().catch((error) => toast(error.message, 'error'));
       return;
@@ -346,6 +396,13 @@
     state.runtimeRenderScopes.clear();
     state.runtimeMessageRenderIDs.clear();
     const nearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 140;
+    const scrollTop = timeline.scrollTop;
+    const top = timeline.getBoundingClientRect().top;
+    const anchor = !forceBottom && !nearBottom
+      ? Array.from(timeline.querySelectorAll('[data-message-id]')).find((node) => node.getBoundingClientRect().bottom > top)
+      : null;
+    const anchorID = anchor?.dataset.messageId;
+    const anchorOffset = anchor ? anchor.getBoundingClientRect().top - top : 0;
     $('room-name').textContent = state.snapshot.meta.name;
     $('repo-path').textContent = state.snapshot.meta.repo;
 	const chatDescription = $('chat-description');
@@ -360,6 +417,11 @@
     renderActivity();
     renderApprovals();
     if (forceBottom || nearBottom) requestAnimationFrame(scrollBottom);
+    else requestAnimationFrame(() => {
+      const current = anchorID && timeline.querySelector(`[data-message-id="${CSS.escape(anchorID)}"]`);
+      if (current) timeline.scrollTop += current.getBoundingClientRect().top - timeline.getBoundingClientRect().top - anchorOffset;
+      else timeline.scrollTop = scrollTop;
+    });
   }
 
   function renderTurnOwnerBar() {
@@ -648,6 +710,7 @@
       else timeline.appendChild(separator);
     }
     const node = messageNode(message);
+    node.classList.add('is-new');
     if (firstStreaming) timeline.insertBefore(node, firstStreaming);
     else timeline.appendChild(node);
     if (streaming) streaming.remove();
@@ -680,16 +743,6 @@
         ? t("ui.loadingEarlierMessages")
         : t("ui.loadEarlierMessagesShowingValueValue", { value0: (windowInfo.loaded || state.snapshot.messages.length), value1: (windowInfo.total) });
       timeline.appendChild(older);
-    }
-
-    if (!items.length && !state.drafts.claude && !state.drafts.codex && !windowInfo?.has_more) {
-      const empty = document.createElement('div');
-      empty.className = 'timeline-empty';
-      const inner = document.createElement('div');
-      inner.innerHTML = "<div class=\"empty-orbit\"></div><h2 data-i18n=\"ui.startAThreePartyCollaboration\">Start a three-party collaboration</h2><p data-i18n=\"ui.giveBothAgentsATaskTheyKeepTheirNativeHarnessesAndDiscuss\">Give both agents a task. They keep their native harnesses and discuss in this shared room; you can interrupt or redirect at any time.</p>";
-      empty.appendChild(inner);
-      timeline.appendChild(empty);
-      return;
     }
 
     const query = state.searchQuery.trim().toLocaleLowerCase();
@@ -728,6 +781,16 @@
         visibleCount += 1;
       }
     });
+    if (!(state.snapshot.messages || []).length && !state.drafts.claude && !state.drafts.codex
+      && !windowInfo?.has_more && !query && !state.threadFilter && state.conversationFilter === 'all') {
+      const empty = document.createElement('div');
+      empty.className = 'timeline-empty';
+      const inner = document.createElement('div');
+      inner.innerHTML = "<div class=\"empty-orbit\"></div><h2 data-i18n=\"ui.startAThreePartyCollaboration\">Start a three-party collaboration</h2><p data-i18n=\"room.startWithOneAgent\">Choose a starting Agent and describe your goal. Only an exact peer mention continues the relay; you stay in control.</p>";
+      empty.appendChild(inner);
+      timeline.appendChild(empty);
+    }
+
     if ((query || state.conversationFilter !== 'all' || state.threadFilter) && visibleCount === 0) {
       const empty = document.createElement('div');
       empty.className = 'timeline-empty';
@@ -792,7 +855,7 @@
       label = window.PairRoomI18n.formatDate(date, {
         year: date.getFullYear() === today.getFullYear() ? undefined : 'numeric',
         month: 'long', day: 'numeric', weekday: 'short',
-      }).format(date);
+      });
     }
     const span = document.createElement('span');
     span.textContent = label;
@@ -1658,6 +1721,7 @@
       remove.type = 'button';
       remove.className = 'remove-attachment';
       remove.dataset.removeAttachment = item.key;
+      remove.disabled = Boolean(item.submitting);
       remove.setAttribute('aria-label', t("ui.removeValue", { value0: (item.file.name || t('ui.image')) }));
       remove.textContent = '×';
       card.append(image, meta, remove);
@@ -1675,7 +1739,7 @@
 
   async function removePendingAttachment(key) {
     const index = state.pendingAttachments.findIndex((item) => item.key === key);
-    if (index < 0) return;
+    if (index < 0 || state.pendingAttachments[index].submitting) return;
     const [item] = state.pendingAttachments.splice(index, 1);
     item.removed = true;
     if (item.controller) item.controller.abort();
@@ -1698,8 +1762,9 @@
     void uploadPendingAttachment(item);
   }
 
-  function clearPendingAttachments(preserveServer = false) {
+  function clearPendingAttachments(preserveServer = false, keys = null) {
     for (const item of state.pendingAttachments) {
+      if (keys && !keys.has(item.key)) continue;
       if (!preserveServer && item.attachment?.id) {
         void api(`/api/v1/attachments/${encodeURIComponent(item.attachment.id)}`, { method: 'DELETE' }).catch(() => {});
       }
@@ -1708,22 +1773,37 @@
       if (item.previewURL) URL.revokeObjectURL(item.previewURL);
       state.attachmentObjectURLs.delete(item.previewURL);
     }
-    state.pendingAttachments = [];
+    state.pendingAttachments = state.pendingAttachments.filter((item) => !item.removed);
     renderAttachmentStrip();
     updateComposerAvailability();
   }
 
   function updateComposerAvailability() {
     const uploading = state.pendingAttachments.some((item) => item.status === 'uploading');
-    $('send-button').disabled = uploading;
-    $('send-button').title = uploading ? t("ui.sendAfterImageUploadsFinish") : '';
+    const button = $('send-button');
+    button.disabled = !state.snapshot || uploading || state.sending;
+    button.setAttribute('aria-busy', String(state.sending));
+    button.title = state.sending ? t('ui.sendingMessage') : uploading ? t('ui.sendAfterImageUploadsFinish') : '';
+    button.dataset.i18nAriaLabel = state.sending ? 'ui.sendingMessage' : 'ui.sendMessage';
+    button.setAttribute('aria-label', t(button.dataset.i18nAriaLabel));
+    const label = button.querySelector('[data-i18n]');
+    if (label) {
+      label.dataset.i18n = state.sending ? 'ui.sendingMessage' : 'ui.send';
+      label.textContent = t(label.dataset.i18n);
+    }
   }
 
   async function sendMessage() {
+    if (!state.snapshot || state.sending || state.composing) return;
+    const draftText = messageInput.value;
+    const draftRevision = state.draftRevision;
+    const replyRevision = state.replyRevision;
+    const replyTo = state.replyTo;
     const text = messageInput.value.trim();
     const uploading = state.pendingAttachments.some((item) => item.status === 'uploading');
     const failed = state.pendingAttachments.some((item) => item.status === 'error');
-    const attachments = state.pendingAttachments.filter((item) => item.status === 'ready' && item.attachment).map((item) => ({ id: item.attachment.id }));
+    const submitted = state.pendingAttachments.filter((item) => item.status === 'ready' && item.attachment);
+    const attachments = submitted.map((item) => ({ id: item.attachment.id }));
     if (uploading) {
       toast(t("ui.waitForImageUploadsToFinish"), 'error');
       return;
@@ -1733,7 +1813,10 @@
       return;
     }
     if (!text && attachments.length === 0) return;
-    $('send-button').disabled = true;
+    state.sending = true;
+    submitted.forEach((item) => { item.submitting = true; });
+    updateComposerAvailability();
+    renderAttachmentStrip();
     try {
       await api('/api/v1/messages', {
         method: 'POST',
@@ -1741,22 +1824,26 @@
           text,
           to: recipientsForTarget(state.selectedTarget),
           target_role: ['driver', 'reviewer'].includes(state.selectedTarget) ? state.selectedTarget : undefined,
-          reply_to: state.replyTo || undefined,
+          reply_to: replyTo || undefined,
           attachments,
-		  intent: $('message-intent').value,
+          intent: $('message-intent').value,
         }),
       });
-      messageInput.value = '';
+      // Keep anything composed while the accepted request was in flight.
+      if (state.draftRevision === draftRevision && messageInput.value === draftText) messageInput.value = '';
       persistComposerDraft();
-      clearReply();
-      clearPendingAttachments(true);
+      if (state.replyRevision === replyRevision) clearReply();
+      clearPendingAttachments(true, new Set(submitted.map((item) => item.key)));
       autoSizeComposer();
       scrollBottom();
     } catch (error) {
       toast(error.message, 'error');
     } finally {
+      state.sending = false;
+      submitted.forEach((item) => { item.submitting = false; });
+      renderAttachmentStrip();
       updateComposerAvailability();
-      messageInput.focus();
+      if (document.activeElement === $('send-button')) messageInput.focus();
     }
   }
 
@@ -1903,6 +1990,7 @@
   function setReply(messageId) {
     const message = state.snapshot.messages.find((item) => item.id === messageId);
     if (!message) return;
+    state.replyRevision += 1;
     state.replyTo = messageId;
     if (['claude', 'codex'].includes(message.from)) setTarget(message.from);
     $('reply-preview').textContent = `${displayName(message.from)}：${truncate(message.text || attachmentSummary(message), 120)}`;
@@ -1911,6 +1999,7 @@
   }
 
   function clearReply() {
+    state.replyRevision += 1;
     state.replyTo = '';
     $('reply-banner').classList.add('hidden');
     $('reply-preview').textContent = '';
@@ -1981,24 +2070,40 @@
     messageInput.focus();
   }
 
+  function readLocal(key) {
+    try { return localStorage.getItem(key); } catch { return null; }
+  }
+
+  function writeLocal(key, value) {
+    try {
+      if (value === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, value);
+    } catch { /* Private/embedded contexts may deny browser storage. */ }
+  }
+
   function initializeRoomLocalState() {
     const roomID = state.snapshot?.meta?.id || 'default';
+    if (state.localRoomID === roomID) {
+      recomputeUnread();
+      return;
+    }
+    state.localRoomID = roomID;
     state.draftKey = `pairroom.draft.${roomID}`;
     const seenKey = `pairroom.lastSeen.${roomID}`;
-    const storedSeen = Number(localStorage.getItem(seenKey) || 0);
+    const storedSeen = Number(readLocal(seenKey) || 0);
     if (storedSeen > 0) state.lastSeenSeq = storedSeen;
     else {
       state.lastSeenSeq = Number(state.snapshot.latest_seq || 0);
-      localStorage.setItem(seenKey, String(state.lastSeenSeq));
+      writeLocal(seenKey, String(state.lastSeenSeq));
     }
     try {
-      const draft = JSON.parse(localStorage.getItem(state.draftKey) || 'null');
-      if (draft && typeof draft === 'object') {
+      const draft = JSON.parse(readLocal(state.draftKey) || 'null');
+      if (draft && typeof draft === 'object' && state.draftRevision === 0) {
         messageInput.value = String(draft.text || '');
         if (['driver', 'reviewer', 'claude', 'codex'].includes(draft.target)) state.selectedTarget = draft.target;
         if (['steer', 'queue'].includes(draft.intent)) $('message-intent').value = draft.intent;
       }
-    } catch { localStorage.removeItem(state.draftKey); }
+    } catch { writeLocal(state.draftKey, null); }
     setTarget(state.selectedTarget);
     autoSizeComposer();
     recomputeUnread();
@@ -2008,8 +2113,7 @@
   function persistComposerDraft() {
     if (!state.draftKey) return;
     const value = { text: messageInput.value, target: state.selectedTarget, intent: $('message-intent').value };
-    if (!value.text) localStorage.removeItem(state.draftKey);
-    else localStorage.setItem(state.draftKey, JSON.stringify(value));
+    writeLocal(state.draftKey, value.text ? JSON.stringify(value) : null);
   }
 
   function recomputeUnread() {
@@ -2045,7 +2149,7 @@
     if (state.unreadCount === 0 && state.lastSeenSeq === lastSeen) return;
     state.lastSeenSeq = lastSeen;
     state.unreadCount = 0;
-    localStorage.setItem(`pairroom.lastSeen.${state.snapshot.meta.id}`, String(state.lastSeenSeq));
+    writeLocal(`pairroom.lastSeen.${state.snapshot.meta.id}`, String(state.lastSeenSeq));
     updateUnreadUI();
   }
 
@@ -2093,7 +2197,11 @@
 
   async function loadOlderMessages(button) {
     if (state.loadingOlder || !state.snapshot?.message_window?.has_more) return;
-    const oldest = Math.min(...(state.snapshot.messages || []).map((message) => Number(message.seq || 0)).filter((value) => value > 0));
+    const snapshot = state.snapshot;
+    const oldest = (snapshot.messages || []).reduce((oldest, message) => {
+      const seq = Number(message.seq || 0);
+      return seq > 0 ? Math.min(oldest, seq) : oldest;
+    }, Infinity);
     if (!Number.isFinite(oldest)) return;
     state.loadingOlder = true;
     if (button) button.disabled = true;
@@ -2101,11 +2209,12 @@
     const oldTop = timeline.scrollTop;
     try {
       const page = await api(`/api/v1/messages?before_seq=${oldest}&limit=100`);
+      if (state.snapshot !== snapshot) return; // A resync supersedes this page.
       const existing = new Set((state.snapshot.messages || []).map((message) => message.id));
       const added = (page.messages || []).filter((message) => !existing.has(message.id));
       state.snapshot.messages = [...added, ...(state.snapshot.messages || [])].sort((a, b) => Number(a.seq) - Number(b.seq));
       state.snapshot.message_window = {
-        total: page.total,
+        total: Math.max(Number(page.total || 0), Number(state.snapshot.message_window?.total || 0), state.snapshot.messages.length),
         loaded: state.snapshot.messages.length,
         has_more: Boolean(page.has_more),
         oldest_seq: state.snapshot.messages[0]?.seq || 0,
@@ -2132,6 +2241,8 @@
     const start = Number.isInteger(messageInput.selectionStart) ? messageInput.selectionStart : messageInput.value.length;
     const end = Number.isInteger(messageInput.selectionEnd) ? messageInput.selectionEnd : start;
     messageInput.setRangeText(text, start, end, 'end');
+    state.draftRevision += 1;
+    persistComposerDraft();
     autoSizeComposer();
   }
 
@@ -2422,12 +2533,15 @@
   $('attach-button').addEventListener('click', () => $('attachment-input').click());
   $('attachment-input').addEventListener('change', (event) => { void addImageFiles(event.target.files); event.target.value = ''; });
   messageInput.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.repeat
+      && !event.isComposing && event.keyCode !== 229 && !state.composing) {
       event.preventDefault();
       sendMessage();
     }
   });
-  messageInput.addEventListener('input', () => { autoSizeComposer(); persistComposerDraft(); });
+  messageInput.addEventListener('compositionstart', () => { state.composing = true; });
+  messageInput.addEventListener('compositionend', () => { state.composing = false; });
+  messageInput.addEventListener('input', () => { state.draftRevision += 1; autoSizeComposer(); persistComposerDraft(); });
   messageInput.addEventListener('paste', (event) => {
     const files = Array.from(event.clipboardData?.files || []);
     if (!files.length) return;
@@ -2440,7 +2554,7 @@
   $('clear-timeline-scope').addEventListener('click', clearThreadFilter);
   $('save-settings').addEventListener('click', saveSettings);
   $('stall-disabled').addEventListener('change', () => { $('stall-warning').disabled = $('stall-disabled').checked; });
-  $('refresh-button').addEventListener('click', loadSnapshot);
+  $('refresh-button').addEventListener('click', () => { void loadSnapshot().catch((error) => toast(error.message, 'error')); });
   $('message-search').addEventListener('input', (event) => {
     state.searchQuery = event.target.value;
     timeline.scrollTop = 0;
@@ -2527,6 +2641,8 @@
   });
 
   window.addEventListener('beforeunload', () => {
+    closeEvents();
+    clearTimeout(state.reconnectTimer);
     state.attachmentObjectURLs.forEach((url) => URL.revokeObjectURL(url));
     state.mediaObjectURLs.forEach((value) => { if (typeof value === 'string') URL.revokeObjectURL(value); });
   });

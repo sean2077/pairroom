@@ -24,7 +24,7 @@ ifeq ($(strip $(GOBIN)),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package clean docs-check
+.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package clean docs-check browser-check
 
 build:
 	mkdir -p $(DIST)
@@ -43,7 +43,7 @@ test:
 	go test -count=1 ./...
 
 race:
-	@test "$$(go env CGO_ENABLED)" = 1 || { printf '%s\n' 'make race requires CGO_ENABLED=1 and a Go-supported C compiler on PATH; see docs/DEVELOPMENT.md' >&2; exit 1; }
+	@test "$$(go env CGO_ENABLED)" = 1 || { printf '%s\n' 'make race requires CGO_ENABLED=1 and a Go-supported C compiler on PATH; see CONTRIBUTING.md' >&2; exit 1; }
 	go test -race -count=1 ./...
 
 vet:
@@ -73,6 +73,7 @@ check: test race vet agent-contract release-contract docs-check
 		node --check scripts/test_i18n.js && \
 		node --check scripts/test_theme.js && \
 		node scripts/test_room_shell.js && \
+		node scripts/test_room_client.js && \
 		node scripts/test_i18n.js && \
 		node scripts/test_theme.js; \
 	fi
@@ -123,4 +124,9 @@ clean:
 	rm -rf -- "$(CURDIR)/dist" "$(CURDIR)/.coverage"
 
 docs-check:
-	python3 scripts/docs-check.py
+	"$(PYTHON)" scripts/test_docs_check.py
+	"$(PYTHON)" scripts/docs-check.py
+
+# Development-only: install scripts/requirements-browser.txt and its Chromium first.
+browser-check:
+	"$(PYTHON)" scripts/test_room_browser.py

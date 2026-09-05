@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Room submission now ignores IME confirmation and held Enter, serializes pending sends, and preserves newer draft text, replies, and attachments while a request is pending. Failed requests remain explicit retries rather than automatic duplicate native Turns.
+- Historical date separators no longer throw during rendering. Reconnects coalesce snapshot reads, discard obsolete stream/page callbacks, and preserve loaded history and the visible message anchor.
+- Optional owner, thread, and reply bars no longer consume the timeline's flexible row. Room controls wrap without squeezing labels; light-theme contrast, mobile targets, focus states, and busy feedback are clearer.
+- SSE replay honors `Last-Event-ID` over the original URL cursor and explicitly requests a fresh snapshot when its bounded replay tail cannot bridge a gap. Inspector tail previews retain valid UTF-8.
+
+### Changed
+
+- Message-window reads copy only their requested slice; SSE and Service busy checks no longer clone the full transcript. These are projection optimizations, not message truncation, changes to native prompts, or a new persistent schema.
+- Invalid snapshot message limits now return HTTP 400; omitted or zero limits retain the existing full-snapshot behavior. External SSE clients must handle `reset` by fetching a fresh snapshot; see the upgrade guide.
+- The generated API inventory includes production methods, wildcard routes, and constant paths without collecting test-only URLs.
+
+### Added
+
+- Deterministic Room client and Chromium behavior/layout regressions, fixed-window allocation benchmarks, and browser evidence artifacts in CI. Native vendor E2E remains separate.
+
 ## [v2.1.0] — 2026-09-05
 
 ### Added

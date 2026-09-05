@@ -9,3 +9,7 @@ __pycache__/
 .claude/settings.local.json
 .worktrees/
 .claude/allow-trunk-edit
+
+# Optional isolated browser verification
+.browser-venv/
+.browser-results/

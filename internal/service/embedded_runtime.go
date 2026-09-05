@@ -414,32 +414,7 @@ func (r *embeddedRuntime) Busy() bool {
 	if r == nil || r.engine == nil {
 		return false
 	}
-	return snapshotBusy(r.engine.Snapshot())
-}
-
-func snapshotBusy(snapshot model.RoomSnapshot) bool {
-	for _, participant := range snapshot.Participants {
-		if participant.CurrentTurn != "" {
-			return true
-		}
-		switch participant.State {
-		case model.StateStarting, model.StateWorking, model.StateWaiting:
-			return true
-		}
-	}
-	for _, approval := range snapshot.Approvals {
-		if approval.Status == "pending" {
-			return true
-		}
-	}
-	for _, message := range snapshot.Messages {
-		for _, state := range message.Processing {
-			if state == model.ProcessingWaiting || state == model.ProcessingWorking {
-				return true
-			}
-		}
-	}
-	return false
+	return r.engine.Busy()
 }
 
 func (r *embeddedRuntime) SetDraining(value bool) {

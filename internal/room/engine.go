@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sean2077/pairroom/internal/agent"
 	"github.com/sean2077/pairroom/internal/bus"
@@ -524,68 +525,6 @@ func (e *Engine) prepareWorkspaceBoundaries(ctx context.Context, claudeRole, cod
 		boundaries[model.ActorCodex] = reviewer
 	}
 	return boundaries, nil
-}
-
-func (e *Engine) Snapshot() model.RoomSnapshot {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return cloneSnapshot(e.snapshot)
-}
-
-// WindowedSnapshot returns the newest messages while retaining full room and
-// runtime state. The authoritative in-memory/event-sourced transcript remains
-// complete; this is only a transport optimization for long-lived rooms.
-func (e *Engine) WindowedSnapshot(limit int) model.RoomSnapshot {
-	snapshot := e.Snapshot()
-	total := len(snapshot.Messages)
-	if limit <= 0 || limit > 1000 {
-		limit = 250
-	}
-	if total > limit {
-		snapshot.Messages = append([]model.Message(nil), snapshot.Messages[total-limit:]...)
-	}
-	window := &model.MessageWindow{Total: total, Loaded: len(snapshot.Messages), HasMore: total > len(snapshot.Messages)}
-	if len(snapshot.Messages) > 0 {
-		window.OldestSeq = snapshot.Messages[0].Seq
-	}
-	snapshot.MessageWindow = window
-	return snapshot
-}
-
-// MessagesPage returns messages immediately before beforeSeq. A zero cursor
-// addresses the newest page. Results remain chronological for direct merging.
-func (e *Engine) MessagesPage(beforeSeq uint64, limit int) model.MessagePage {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	if limit <= 0 {
-		limit = 100
-	}
-	if limit > 500 {
-		limit = 500
-	}
-	end := len(e.snapshot.Messages)
-	if beforeSeq > 0 {
-		end = 0
-		for i := range e.snapshot.Messages {
-			if e.snapshot.Messages[i].Seq >= beforeSeq {
-				break
-			}
-			end = i + 1
-		}
-	}
-	start := end - limit
-	if start < 0 {
-		start = 0
-	}
-	messages := make([]model.Message, end-start)
-	for i := start; i < end; i++ {
-		messages[i-start] = cloneMessage(e.snapshot.Messages[i])
-	}
-	page := model.MessagePage{Messages: messages, Total: len(e.snapshot.Messages), HasMore: start > 0}
-	if len(messages) > 0 {
-		page.OldestSeq = messages[0].Seq
-	}
-	return page
 }
 
 func (e *Engine) Subscribe() (<-chan model.Event, func()) { return e.cfg.Hub.Subscribe() }
@@ -2338,7 +2277,15 @@ func boundedTail(value string, limit int) string {
 	if limit <= 0 || len(value) <= limit {
 		return value
 	}
-	return "…" + value[len(value)-limit+1:]
+	marker := "…"
+	if limit < len(marker) {
+		marker = ""
+	}
+	start := len(value) - (limit - len(marker))
+	for start < len(value) && !utf8.RuneStart(value[start]) {
+		start++
+	}
+	return marker + value[start:]
 }
 
 func boundedRaw(value json.RawMessage, limit int) json.RawMessage {
