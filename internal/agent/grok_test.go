@@ -43,6 +43,17 @@ func TestGrokACPCommandPassesExplicitRuntimeOverrides(t *testing.T) {
 	}
 }
 
+func TestGrokYoloPermissionModeUsesAlwaysApprove(t *testing.T) {
+	adapter := NewGrok(Config{Actor: model.ActorClaude, Command: "grok", PermissionMode: "yolo"}, func(model.RuntimeEvent) {})
+	joined := strings.Join(adapter.buildACPArgs(), " ")
+	if !strings.Contains(joined, "--always-approve") {
+		t.Fatalf("yolo did not emit --always-approve: %s", joined)
+	}
+	if strings.Contains(joined, "--permission-mode") {
+		t.Fatalf("yolo should not pass --permission-mode: %s", joined)
+	}
+}
+
 func TestSelectGrokAuthMethodUsesAdvertisedDefault(t *testing.T) {
 	raw := json.RawMessage(`{"authMethods":[{"id":"xai.api_key"},{"id":"cached_token"}],"_meta":{"defaultAuthMethodId":"cached_token"}}`)
 	method, err := selectGrokAuthMethod(raw)

@@ -4,6 +4,8 @@
 
 ### Added
 
+- Room Agent policy accepts `yolo` as the native bypass alias: Claude Code projects `bypassPermissions` with `--dangerously-skip-permissions`, Codex projects approval `never`, and Grok Build projects `--always-approve`. Management exposes the values in the permission/approval selectors.
+
 - `make dev` stops an installed PairRoom daemon, recovers a crash-stale `service.lock` only after the recorded PID is gone, starts the current-tree Management Service, and opens the Management Shell. `make stop` is the stop-only helper. Legacy `make run` / `make demo` still call `pairroom serve`.
 
 - Management, Room View, and Desktop startup share an embedded i18next 26.4.2 runtime, semantic `en`/`zh-CN` catalogs, locale-aware formatting, stable error-code localization, and the persistent `pairroom.lang` preference.

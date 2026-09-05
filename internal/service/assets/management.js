@@ -1569,6 +1569,16 @@
 	document.querySelectorAll(`[data-actor="${actor}"] [data-policy-for]`).forEach((field) => {
 	  field.hidden = !field.dataset.policyFor.split(',').includes(runtime);
 	});
+	const permission = $(`${actor}-permission-mode`);
+	const previousPermission = permission.value;
+	const permissionValues = runtime === 'claude'
+	  ? ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions', 'yolo']
+	  : runtime === 'grok' ? ['default', 'ask', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions', 'always-approve', 'yolo'] : [];
+	permission.replaceChildren(
+	  node('option', { value: '', textContent: t('common.inherit') }),
+	  ...permissionValues.map((value) => node('option', { value, textContent: value })),
+	);
+	permission.value = permissionValues.includes(previousPermission) ? previousPermission : '';
 	const sandbox = $(`${actor}-sandbox`);
 	const previousSandbox = sandbox.value;
 	const sandboxValues = runtime === 'codex'

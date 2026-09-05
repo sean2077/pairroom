@@ -193,9 +193,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	if flags["--permission-prompt-tool"] {
 		args = append(args, "--permission-prompt-tool", "stdio")
 	}
-	if flags["--permission-mode"] && c.cfg.PermissionMode != "" {
-		args = append(args, "--permission-mode", c.cfg.PermissionMode)
-	}
+	args = appendClaudePermissionArgs(args, flags, c.cfg.PermissionMode)
 	c.mu.Lock()
 	role := c.role
 	c.mu.Unlock()
@@ -306,6 +304,36 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	session.SessionID = c.SessionID()
 	c.sink(session)
 	return nil
+}
+
+func claudePermissionBypass(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "bypasspermissions", "bypass", "yolo", "always-approve", "always_approve":
+		return true
+	default:
+		return false
+	}
+}
+
+func appendClaudePermissionArgs(args []string, flags map[string]bool, mode string) []string {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return args
+	}
+	native := mode
+	if claudePermissionBypass(mode) {
+		native = "bypassPermissions"
+		if flags["--allow-dangerously-skip-permissions"] {
+			args = append(args, "--allow-dangerously-skip-permissions")
+		}
+		if flags["--dangerously-skip-permissions"] {
+			args = append(args, "--dangerously-skip-permissions")
+		}
+	}
+	if flags["--permission-mode"] {
+		args = append(args, "--permission-mode", native)
+	}
+	return args
 }
 
 func appendClaudeStreamFlags(args []string, flags map[string]bool, strictResume bool) []string {
