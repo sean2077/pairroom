@@ -208,6 +208,34 @@ func TestManagementPollingSkipsUnchangedSnapshotRenders(t *testing.T) {
 	}
 }
 
+func TestManagementProviderChangeKeepsSelectedProfile(t *testing.T) {
+	registry, _ := testRegistry(t, testGitRepo(t))
+	server, _ := newManagementTestServer(t, registry, SyntheticProvisioner{})
+
+	asset := httptest.NewRecorder()
+	server.Handler().ServeHTTP(asset, managementRequest(http.MethodGet, "/management.js", "", false))
+	if asset.Code != http.StatusOK {
+		t.Fatalf("management asset status=%d body=%s", asset.Code, asset.Body.String())
+	}
+	body := asset.Body.String()
+	for _, marker := range []string{
+		"$(`${actor}-provider`).addEventListener('change', () => {",
+		"syncAgentProviderAndModels(actor, false);",
+	} {
+		if !strings.Contains(body, marker) {
+			t.Fatalf("management provider-change contract omitted %q", marker)
+		}
+	}
+	for _, forbidden := range []string{
+		"$(`${actor}-provider`).addEventListener('change', () => syncAgentProviderAndModels(actor, true));",
+		"$(`${actor}-provider`).addEventListener('change', () => syncAgentProviderAndModels(actor, true)",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("management provider change must not reset the selected Profile via %q", forbidden)
+		}
+	}
+}
+
 func TestManagementProjectCardsKeepUnavailableRemovalReachable(t *testing.T) {
 	registry, _ := testRegistry(t, testGitRepo(t))
 	server, _ := newManagementTestServer(t, registry, SyntheticProvisioner{})
