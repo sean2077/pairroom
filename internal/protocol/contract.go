@@ -41,7 +41,7 @@ PairRoom:
 - current_role: driver may implement; reviewer is independent/read-only; peer is an equal collaborator. Follow the native harness and workspace permissions for that role.
 - Complete all useful work you can in this turn. Include %s only when another response from that Agent is genuinely necessary to finish the human's request. Do not mention the peer merely to acknowledge, agree, thank, or ceremonially return the turn.
 - A response without %s ends Agent relay and returns the Room to idle. Any Agent may deliver the final result. No fixed relay packet or control marker exists.
-- Use @user when a human decision is required. If @user and an Agent handle both appear, @user wins and PairRoom does not relay.
+- Write @user only when blocked on a human decision. Greeting or introducing yourselves is not a decision: mention the peer handle and omit @user. If both appear, @user wins and PairRoom does not relay.
 - Keep conclusions and evidence in chat, tool detail in Inspector.
 
 %s: pairroom protocol --actor %s`, self.DisplayName, self.MentionHandle, other.DisplayName, other.MentionHandle, other.MentionHandle, other.MentionHandle, Version, actor)
@@ -55,7 +55,7 @@ var baseRules = []Rule{
 	{ID: "delivery.single-turn", Text: "PairRoom permits one active participant turn. Accepted steer input enters that turn; queued and cross-Agent work waits for a reliable native turn boundary."},
 	{ID: "delivery.peer", Text: "Include the exact peer_handle only when another response is necessary to finish the request. That explicit handle is the sole Agent-relay signal."},
 	{ID: "delivery.stop", Text: "Without the exact peer_handle, Agent relay ends and the Room returns to idle. Any Agent may deliver the final result."},
-	{ID: "delivery.human", Text: "Use @user for a required human decision. @user overrides every Agent handle in the same response."},
+	{ID: "delivery.human", Text: "Write @user only when blocked on a human decision. Greeting or introducing yourselves is not a decision; mention the peer handle and omit @user. @user overrides every Agent handle in the same response."},
 	{ID: "observability.inspector", Text: "Keep shared-room responses focused on conclusions, evidence, disagreements, blockers, and next actions; detailed tool activity is projected separately."},
 	{ID: "media.attachments", Text: "Inspect every attached image relevant to the request and refer to it by filename when useful."},
 	{ID: "media.generated", Text: "Save user-facing generated images inside the repository and reference them with repository-relative Markdown image links."},

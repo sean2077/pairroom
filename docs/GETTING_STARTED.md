@@ -103,7 +103,7 @@ An unaddressed message goes only to the current Driver. To verify that both Agen
 Greet each other and introduce yourselves.
 ```
 
-The Driver must include the other participant's exact displayed handle in its reply; introducing itself only to the human does not start the other Agent. With unique Claude and Codex runtimes those handles are `@claude` and `@codex`. PairRoom hands the complete reply and attachments to the peer only after the current Turn ends. If the peer then answers without naming the Driver, the greeting ends naturally after two Turns.
+The Driver must include the other participant's exact displayed handle in its reply and must omit `@user`. Introducing itself only to the human, or greeting the human with `@user` while also naming the peer, does not start the other Agent: `@user` wins. With unique Claude and Codex runtimes those handles are `@claude` and `@codex`. PairRoom hands the complete reply and attachments to the peer only after the current Turn ends. If the peer then answers without naming the Driver, the greeting ends naturally after two Turns.
 
 For a review, assign Driver and Reviewer directly, then ask the Driver to request independent review only when it has something concrete to inspect:
 
