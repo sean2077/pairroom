@@ -23,9 +23,9 @@ A generic Codex `error` can be a mid-Turn diagnostic. PairRoom records it, but o
 
 This is expected while the current Agent still holds the native Turn. Cross-Agent messages sit in the Room FIFO and wait for a reliable terminal boundary. The “current turn” bar above the timeline shows the owner and queue depth.
 
-Agent relay accepts only the other participant's exact current handle. For a unique runtime that is `@claude`, `@codex`, or `@grok`; when both slots use the same runtime, use the displayed `0/1` handles. An unsuffixed duplicate handle is ambiguous and PairRoom reports both valid choices. `@peer`, `@human`, slot aliases, and old control markers do not route. Use `@user` for a human decision.
+Agent relay accepts only the other participant's exact current handle. For a unique runtime that is `@claude`, `@codex`, or `@grok`; when both slots use the same runtime, use the displayed `0/1` handles. An unsuffixed duplicate handle is ambiguous and PairRoom reports both valid choices. `@peer`, `@human`, slot aliases, and old control markers do not route. `@user` alone returns the decision to the human; an exact Agent handle in the same reply wins.
 
-If a human said “greet each other” and the current Driver only introduced itself to the user, or also wrote `@user`, its response correctly ended the relay: Agent relay requires the exact peer handle and `@user` overrides every Agent handle in the same reply. Unaddressed human messages start only the Driver. Check the participant card for the exact peer handle and the Inspector envelope for `peer_handle`.
+If a human said “greet each other” and the current Driver only introduced itself to the user without naming the peer, its response correctly ended the relay. Unaddressed human messages start only the Driver. Check the participant card for the exact peer handle and the Inspector envelope for `peer_handle`.
 
 ## A message did not continue after restart
 

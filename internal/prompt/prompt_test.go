@@ -23,7 +23,7 @@ func TestMentionsUseRuntimeHandlesOnly(t *testing.T) {
 	}{
 		{name: "actual runtimes", text: "@GROK review with @codex", sender: model.ActorUser, want: []model.ActorID{model.ActorClaude, model.ActorCodex}},
 		{name: "self ignored", text: "@grok note to self then @codex", sender: model.ActorClaude, want: []model.ActorID{model.ActorCodex}},
-		{name: "human wins recorded separately", text: "@codex and @user", sender: model.ActorClaude, want: []model.ActorID{model.ActorCodex}, human: true},
+		{name: "human recorded separately from agent targets", text: "@codex and @user", sender: model.ActorClaude, want: []model.ActorID{model.ActorCodex}, human: true},
 		{name: "legacy aliases removed", text: "@peer @human @all @agent1 @agent2", sender: model.ActorClaude, removed: 5},
 		{name: "email ignored", text: "mail a@codex.dev, me+tag@codex.dev, or @codex@example.com", sender: model.ActorUser},
 		{name: "urls ignored", text: "see https://example.test/@codex, ssh://host/@codex, example.test/@codex, localhost/@codex, or 127.0.0.1:7332/@codex", sender: model.ActorUser},
@@ -93,7 +93,7 @@ func TestBootstrapPromptUsesVersionedContractAndStaysCompact(t *testing.T) {
 		if len([]byte(got)) > MaxBootstrapBytes {
 			t.Fatalf("%s bootstrap = %d bytes, budget = %d:\n%s", actor, len([]byte(got)), MaxBootstrapBytes, got)
 		}
-		for _, fragment := range []string{protocol.Version, "pairroom protocol --actor " + string(actor), "current_role", "single active turn", "@user", "omit @user", "No fixed relay packet"} {
+		for _, fragment := range []string{protocol.Version, "pairroom protocol --actor " + string(actor), "current_role", "single active turn", "@user", "Agent handle wins", "No fixed relay packet"} {
 			if !strings.Contains(got, fragment) {
 				t.Fatalf("%s bootstrap missing %q:\n%s", actor, fragment, got)
 			}

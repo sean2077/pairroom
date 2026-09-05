@@ -31,7 +31,7 @@ Key properties:
 
 - **Human authority**: the user can choose the target Agent, override later flow, approve, cancel, or stop;
 - **Single owner**: two native runtimes never own execution at the same time, even when both slots use the same runtime;
-- **Exact dynamic mentions**: a unique runtime uses `@claude`, `@codex`, or `@grok`; duplicate runtimes use stable slot suffixes such as `@codex0` and `@codex1`. Only the other Agent's exact current handle relays a complete response after the native Turn boundary. No mention ends the relay, while `@user` always returns the decision to the user;
+- **Exact dynamic mentions**: a unique runtime uses `@claude`, `@codex`, or `@grok`; duplicate runtimes use stable slot suffixes such as `@codex0` and `@codex1`. Only the other Agent's exact current handle relays a complete response after the native Turn boundary. No mention ends the relay. An Agent handle wins over `@user` in the same reply; `@user` alone returns the decision to the user;
 - **Durable FIFO, fail-closed submission**: queued work that never crossed the native boundary resumes after restart; an uncertain native submission is never replayed automatically;
 - **No relay ceiling**: PairRoom does not count Agent hops. Agents are instructed to omit the peer handle once another independent response is no longer necessary, and the user can cancel, interrupt, or redirect explicitly;
 - **Native harness first**: PairRoom does not rewrite the Claude Code, Codex, or Grok Build tool loops or permission models.

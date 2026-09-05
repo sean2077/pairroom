@@ -34,7 +34,7 @@ Ordinary Agent answers are always visible to the user. After the native Turn bou
 
 Matching is case-insensitive. An unsuffixed duplicated-runtime handle is ambiguous, produces a visible warning, and does not route. Mentions inside fenced code, inline code, URLs, and email addresses are ignored. A self-handle does not route.
 
-`@user` overrides every Agent handle in the same response. Greeting or introducing participants is not a human decision: omit `@user` and mention the peer handle. Without `@user` or the exact peer handle, Agent relay ends and either Agent's answer may be the final result.
+An exact Agent handle in the same response wins over `@user`. `@user` alone returns the decision to the human. Without the exact peer handle, Agent relay ends and either Agent's answer may be the final result.
 
 The removed aliases `@peer`, `@human`, `@all`, `@agent1`, and `@agent2` have no routing meaning. In Agent output they remain ordinary visible text; an otherwise unaddressed user send that relies on one is rejected instead of silently falling back to the Driver. Removed `PAIRROOM:HANDOFF`, `PAIRROOM:NEXT`, `PAIRROOM:DONE`, `PAIRROOM:WAIT`, and `PAIRROOM:BLOCKED` markers are ordinary visible text. No fixed handoff format is accepted or required.
 

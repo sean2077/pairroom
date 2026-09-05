@@ -22,7 +22,7 @@ func TestResolveFiltersRoleAndContainsMentionRules(t *testing.T) {
 	for _, fragment := range []string{
 		Version, "actor: codex", "role: reviewer", "[authority.human]",
 		"[delivery.single-turn]", "[delivery.peer]", "[delivery.stop]",
-		"[delivery.human]", "[role.reviewer]", "exact peer_handle", "@user overrides",
+		"[delivery.human]", "[role.reviewer]", "exact peer_handle", "Agent handle wins",
 	} {
 		if !strings.Contains(got, fragment) {
 			t.Fatalf("contract missing %q:\n%s", fragment, got)
