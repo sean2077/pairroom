@@ -41,7 +41,7 @@ const untranslated = [];
 const literalAllowlist = new Set([
   'PairRoom', 'PairRoom Service', 'Claude', 'Codex', 'Claude × Codex', 'JSON', 'EN', '1:1',
   'P', 'R', 'Y', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode',
-  'untrusted', 'on-request', 'never', 'read-only', 'workspace-write', 'danger-full-access',
+  'untrusted', 'on-request', 'never', 'yolo', 'read-only', 'workspace-write', 'danger-full-access',
 ]);
 function humanCopy(value) {
   const text = String(value || '').trim();
