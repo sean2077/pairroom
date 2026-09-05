@@ -1536,6 +1536,8 @@
 	return (state.agentCatalog?.runtimes || []).find((entry) => entry.runtime === runtime);
   }
 
+  // resetDependent is only for Runtime changes: it rewinds Provider to native
+  // and clears Model. A Provider change must pass false so the selected Profile stays.
   function syncAgentProviderAndModels(actor, resetDependent = false) {
 	const runtime = $(`${actor}-runtime`).value;
 	const provider = $(`${actor}-provider`);
@@ -2517,7 +2519,10 @@
       diagnostic.classList.toggle('runtime-unavailable', !entry?.available);
       syncAgentProviderAndModels(actor, true);
     });
-    $(`${actor}-provider`).addEventListener('change', () => syncAgentProviderAndModels(actor, true));
+    $(`${actor}-provider`).addEventListener('change', () => {
+      syncAgentProviderAndModels(actor, false);
+      $(`${actor}-model`).value = '';
+    });
     $(`${actor}-reviewer-policy`).addEventListener('change', () => syncAgentPolicy(actor));
   }
   $('agent-catalog-refresh').addEventListener('click', async () => {
