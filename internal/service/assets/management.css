@@ -742,6 +742,8 @@ select { appearance: auto; }
 .key-value { min-width: 0; display: grid; gap: 3px; padding: 13px 15px; background: var(--bg-raised); }
 .key-value span { color: var(--subtle); font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .key-value strong, .key-value code { overflow-wrap: anywhere; color: var(--text); font-size: 11px; }
+.key-value a.external-link { overflow-wrap: anywhere; color: var(--accent); font-size: 11px; font-weight: 650; }
+.key-value a.external-link:hover { text-decoration: underline; }
 
 .capacity-card { display: grid; gap: 12px; padding: 17px; }
 .capacity-heading { display: flex; align-items: end; justify-content: space-between; gap: 10px; }

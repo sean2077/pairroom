@@ -6,8 +6,9 @@ import (
 )
 
 const (
-	Current     = "2.0.0"
-	StoreSchema = 9
+	Current       = "2.0.0"
+	StoreSchema   = 9
+	RepositoryURL = "https://github.com/sean2077/pairroom"
 )
 
 // Commit, BuildDate, LastTag, and CommitsSinceTag are populated by the make
@@ -27,12 +28,14 @@ type Info struct {
 	LastTag         string `json:"last_tag"`
 	CommitsSinceTag string `json:"commits_since_tag"`
 	StoreSchema     int    `json:"store_schema"`
+	RepositoryURL   string `json:"repository_url"`
 }
 
 func BuildInfo() Info {
 	return Info{
 		Version: Current, Commit: Commit, BuildDate: BuildDate,
 		LastTag: LastTag, CommitsSinceTag: CommitsSinceTag, StoreSchema: StoreSchema,
+		RepositoryURL: RepositoryURL,
 	}
 }
 

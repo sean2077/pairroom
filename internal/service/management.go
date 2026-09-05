@@ -99,6 +99,8 @@ type ServiceSnapshot struct {
 	Version       string                  `json:"version"`
 	Commit        string                  `json:"commit,omitempty"`
 	BuildDate     string                  `json:"build_date,omitempty"`
+	StoreSchema   int                     `json:"store_schema"`
+	RepositoryURL string                  `json:"repository_url,omitempty"`
 	DataRoot      string                  `json:"data_root"`
 	GeneratedAt   time.Time               `json:"generated_at"`
 	Projects      []Project               `json:"projects"`
@@ -263,6 +265,7 @@ func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
 	healthErr := s.registry.Healthy()
 	payload := ServiceSnapshot{
 		Version: version.Describe(), Commit: version.Commit, BuildDate: version.BuildDate,
+		StoreSchema: version.StoreSchema, RepositoryURL: version.RepositoryURL,
 		DataRoot: s.registry.Root(), GeneratedAt: time.Now().UTC(),
 		Projects: registry.Projects, Rooms: registry.Rooms, Runtimes: runtimes,
 		RuntimePolicy: s.runtimes.Policy(),
