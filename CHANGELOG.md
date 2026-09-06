@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v3.0.0] — 2026-09-06
+
 ### Room and runtime names
 
 - Generate omitted Room names once from the durable ID. Right-click sidebar Rooms, tabs, or Project rows to rename; retain keyboard and explicit-button access, validation, failure drafts, and correct target identity.
