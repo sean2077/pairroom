@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,7 +32,7 @@ func newTestServerWithBoundary(t *testing.T, token, boundary string) (*Server, *
 	return newTestServerWithOptions(t, token, boundary, "")
 }
 
-func newTestServerWithOptions(t *testing.T, token, boundary, cookieName string) (*Server, *room.Engine) {
+func newTestServerWithOptions(t *testing.T, token, boundary, cookieName string, codexFactories ...agent.Factory) (*Server, *room.Engine) {
 	t.Helper()
 	repo := t.TempDir()
 	dataDir := t.TempDir()
@@ -42,10 +44,14 @@ func newTestServerWithOptions(t *testing.T, token, boundary, cookieName string) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	codexFactory := agent.MockFactory
+	if len(codexFactories) > 0 {
+		codexFactory = codexFactories[0]
+	}
 	engine, err := room.New(room.Config{
 		Name: "test room", Repo: repo, Store: eventStore,
 		Settings:      model.RoomSettings{StallWarningSeconds: 300},
-		ClaudeFactory: agent.MockFactory, CodexFactory: agent.MockFactory,
+		ClaudeFactory: agent.MockFactory, CodexFactory: codexFactory,
 		ClaudeConfig: agent.Config{MockDelay: 5 * time.Millisecond},
 		CodexConfig:  agent.Config{MockDelay: 5 * time.Millisecond},
 		Attachments:  media,
@@ -475,8 +481,24 @@ func TestSSECursorKeepsTransientEventsLive(t *testing.T) {
 	}
 }
 
+// Fail the initial native submission deterministically instead of trying to
+// inject a failure before a millisecond Mock Turn finishes on a loaded runner.
+type failFirstTurnAdapter struct {
+	agent.Adapter
+	failed atomic.Bool
+}
+
+func (a *failFirstTurnAdapter) StartTurn(ctx context.Context, input model.AgentInput) error {
+	if !a.failed.Swap(true) {
+		return errors.New("synthetic submission failure")
+	}
+	return a.Adapter.StartTurn(ctx, input)
+}
+
 func TestRetryAndExportAPI(t *testing.T) {
-	server, engine := newTestServer(t, "")
+	server, engine := newTestServerWithOptions(t, "", "", "", func(cfg agent.Config, sink agent.EventSink) agent.Adapter {
+		return &failFirstTurnAdapter{Adapter: agent.MockFactory(cfg, sink)}
+	})
 
 	send := httptest.NewRecorder()
 	request := localRequest(http.MethodPost, "/api/v1/messages", bytes.NewBufferString(`{"text":"Inspect failure","to":["codex"]}`))
@@ -490,32 +512,23 @@ func TestRetryAndExportAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(5 * time.Second)
+	failed := false
 	for time.Now().Before(deadline) {
-		var accepted bool
 		for _, message := range engine.Snapshot().Messages {
-			if message.ID == original.ID && message.Delivery[model.ActorCodex] != model.DeliveryPending {
-				accepted = true
+			if message.ID == original.ID && message.Delivery[model.ActorCodex] == model.DeliveryFailed {
+				failed = true
 				break
 			}
 		}
-		if accepted {
+		if failed {
 			break
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(time.Millisecond)
 	}
-	currentTurn := ""
-	for _, value := range engine.Snapshot().Messages {
-		if value.ID == original.ID {
-			currentTurn = value.ProcessingTurn[model.ActorCodex]
-			break
-		}
+	if !failed {
+		t.Fatal("initial submission did not reach failed delivery state")
 	}
-	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorCodex, Kind: model.RuntimeInputFailed,
-		CorrelationID: original.ID, TurnID: currentTurn, Text: "synthetic failure",
-		CreatedAt: time.Now().UTC(),
-	})
 
 	retry := httptest.NewRecorder()
 	retryRequest := localRequest(http.MethodPost, "/api/v1/messages/"+original.ID+"/retry", bytes.NewBufferString(`{"to":["codex"]}`))
@@ -753,5 +766,39 @@ func TestWindowedSnapshotAndMessagePaginationAPI(t *testing.T) {
 	server.Handler().ServeHTTP(bad, localRequest(http.MethodGet, "/api/v1/messages?before_seq=nope", nil))
 	if bad.Code != http.StatusBadRequest {
 		t.Fatalf("invalid cursor status = %d", bad.Code)
+	}
+}
+
+func TestRemovedRoleAPIAndTargetCannotMutateLegacyRoom(t *testing.T) {
+	s, engine := newTestServer(t, "")
+	before := engine.Snapshot().LatestSeq
+	for _, tc := range []struct {
+		method, path, body string
+		status             int
+	}{
+		{http.MethodPut, "/api/v1/participants/claude/role", `{"role":"reviewer"}`, http.StatusNotFound},
+		{http.MethodPost, "/api/v1/messages", `{"text":"inspect","target_role":"driver"}`, http.StatusBadRequest},
+	} {
+		response := httptest.NewRecorder()
+		r := localRequest(tc.method, tc.path, bytes.NewBufferString(tc.body))
+		r.Header.Set("Content-Type", "application/json")
+		s.Handler().ServeHTTP(response, r)
+		if response.Code != tc.status {
+			t.Fatalf("%s: %d %s", tc.path, response.Code, response.Body.String())
+		}
+	}
+	if engine.Snapshot().LatestSeq != before {
+		t.Fatal("removed role interface mutated the log")
+	}
+}
+
+func TestTranscriptExportsCollaborationInsteadOfLegacyRole(t *testing.T) {
+	c, _ := (model.Collaboration{Mode: model.CollaborationCustom, Instructions: "Agent 2 plans. Agent 1 implements."}).ForCreation()
+	s := model.RoomSnapshot{Meta: model.RoomMeta{Name: "custom", Collaboration: &c}, Participants: map[model.ActorID]model.ParticipantSnapshot{
+		model.ActorClaude: {DisplayName: "Grok Build", MentionHandle: "@grok", Role: model.RolePeer, Responsibility: "participant", PermissionProfile: model.PermissionReadOnly},
+	}}
+	got := renderMarkdownTranscript(s)
+	if !strings.Contains(got, c.Instructions) || !strings.Contains(got, "permissions `read-only`") || strings.Contains(got, "role `peer`") {
+		t.Fatalf("incorrect transcript metadata: %s", got)
 	}
 }

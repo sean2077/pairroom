@@ -138,6 +138,7 @@ type Project struct {
 }
 
 type Room struct {
+	Collaboration            *model.Collaboration                   `json:"collaboration,omitempty"`
 	ID                       string                                 `json:"id"`
 	ProjectID                string                                 `json:"project_id"`
 	Name                     string                                 `json:"name"`
@@ -177,6 +178,11 @@ func (r Room) HasBlockingPendingBindings() bool {
 }
 
 func (r Room) Validate() error {
+	if r.Collaboration != nil {
+		if err := r.Collaboration.Validate(); err != nil {
+			return err
+		}
+	}
 	if strings.TrimSpace(r.ID) == "" {
 		return errors.New("room ID is required")
 	}
@@ -232,13 +238,19 @@ func (r Room) Validate() error {
 }
 
 type ProvisionRequest struct {
-	ProjectID string                                 `json:"project_id"`
-	Name      string                                 `json:"name"`
-	Bindings  map[model.ActorID]BindingSpec          `json:"bindings"`
-	Agents    map[model.ActorID]model.AgentSelection `json:"agents,omitempty"`
+	Collaboration *model.Collaboration                   `json:"collaboration,omitempty"`
+	ProjectID     string                                 `json:"project_id"`
+	Name          string                                 `json:"name"`
+	Bindings      map[model.ActorID]BindingSpec          `json:"bindings"`
+	Agents        map[model.ActorID]model.AgentSelection `json:"agents,omitempty"`
 }
 
 func (r ProvisionRequest) Validate() error {
+	if r.Collaboration != nil {
+		if _, err := r.Collaboration.ForCreation(); err != nil {
+			return err
+		}
+	}
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}
@@ -271,6 +283,7 @@ func (r ProvisionRequest) Validate() error {
 }
 
 type roomProvisionedPayload struct {
+	Collaboration            *model.Collaboration                   `json:"collaboration,omitempty"`
 	Schema                   int                                    `json:"schema"`
 	Project                  Project                                `json:"project"`
 	RoomID                   string                                 `json:"room_id"`

@@ -108,13 +108,13 @@ Images can still contain secrets, customer information, or other window contents
 - Startup must complete native control initialize;
 - Unknown control requests return error;
 - `can_use_tool`/`AskUserQuestion` enter the durable approval lifecycle;
-- Reviewer uses plan permission mode and blocks write tools;
+- The read-only permission profile (or an enforced legacy Reviewer) uses plan permission mode and blocks write tools;
 - The control layer fail-closes again on write requests that still arrive.
 
 ### 5.2 Codex
 
 - Unknown app-server requests fail closed;
-- Reviewer Turns use a read-only sandbox;
+- The read-only permission profile (or an enforced legacy Reviewer) uses a read-only sandbox;
 - Additional permissions can be granted only as a subset of the original request;
 - command/file/additional-permission requests enter the unified approval lifecycle.
 
@@ -127,13 +127,15 @@ Images can still contain secrets, customer information, or other window contents
 
 ### 5.4 Approval lifecycle
 
-Interrupt, stop, restart, Runtime error/exit, role switch, and PairRoom restart expire pending approvals that cannot be reused safely. The UI must not replay an old decision onto a new vendor request.
+Interrupt, stop, restart, Runtime error/exit, permission replacement, and PairRoom restart expire pending approvals that cannot be reused safely. The UI must not replay an old decision onto a new vendor request.
 
-Role changes follow “apply Adapter policy first, then persist the Room role”, so the UI cannot show Reviewer while the underlying process still runs with Driver permission.
+Modern permission changes require an idle Room with no queued work or pending approvals. Intent is recorded before effects; the old adapter is stopped before the effective profile is committed and the replacement is started. A failed stop cannot grant a new policy, and a failed restart cannot fall back to broader permissions. Saved collaboration instructions and native session identity are retained. Legacy role mutation is not a public operation.
 
-## 6. Reviewer workspace boundary
+## 6. Workspace and responsibility boundaries
 
-The Reviewer runs in an independent Git snapshot by default:
+**Modern Rooms default to YOLO for both Agents and both use the live workspace.** Lead / Executor are instruction responsibilities, not sandbox guarantees. The Room serializes native Turns but does not isolate the host from tools, MCP, Hooks, or subprocesses. Select explicit native read-only/plan policy or use a controlled container/VM/independent checkout for untrusted work. The creation form warns about bypassing routine approvals. Explicitly narrower or empty/native policy selections are respected.
+
+Legacy Rooms without a collaboration record preserve the old independent Reviewer Git snapshot:
 
 - includes HEAD;
 - applies staged + unstaged tracked diff;
@@ -145,7 +147,7 @@ The Reviewer runs in an independent Git snapshot by default:
 
 This is not a container, VM, read-only mount, or malware sandbox. External MCP, a vendor Runtime bug, Windows permission semantics, or user-custom configuration can widen access. For untrusted tasks, use a controlled container/VM/independent checkout.
 
-The Driver is the only writer by default. A Reviewer snapshot should not be a parallel implementation branch. If two writers are required, use a human-managed independent Git worktree/branch and an explicit merge.
+In a legacy Room, the Driver remains the only writer by default; its Reviewer snapshot is not a parallel implementation branch. Upgrading does not convert such a Room into modern YOLO collaboration. New Rooms may have both participants write sequentially. For independent parallel writers outside PairRoom, use human-managed worktrees/branches and explicit merges.
 
 ## 7. Persistence and recovery
 
@@ -202,7 +204,7 @@ PairRoom does not automatically load remote Markdown images. After the user acti
 
 1. Run only on trusted repositories;
 2. Keep secrets where the Agent does not need to read them;
-3. Default to one Driver and one Reviewer;
+3. Do not treat Lead / Executor responsibilities as tool permission restrictions;
 4. Start from conservative vendor permission/sandbox;
 5. Review commands, paths, and permission scope carefully;
 6. Check visible sensitive information before sending images;

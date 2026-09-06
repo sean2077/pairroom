@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Collaboration and permissions
+
+- New Rooms choose only default Lead/Executor or custom natural-language instructions, fixed at creation and restored unchanged. Runtime, Provider, model, effort, and additional instructions remain independently selectable per slot.
+- Both modern participants use the live workspace and default to YOLO. Responsibility is no longer a permission boundary; idle-boundary controls change only effective native permissions. Remove public role switches, `target_role`, and role mention aliases. Legacy Rooms retain their existing policy/workspace boundaries.
+- Protocol v6 moves fixed identity and collaboration rules to native instructions. Envelopes carry sender, full body, and attachment metadata only; transport/persistence retain correlation IDs. No response truncation or fixed workflow engine is added.
+- Write Store schema 10 / provisioning schema 3, while reading schema 9 and provisioning 1/2 without relabeling or granting new privileges. Downgrades require the verified pre-upgrade backup; see the upgrade guide.
+- Add default/custom creation, reload, native-permission mapping, shutdown replacement, immutable-mode API, browser interaction, and envelope-budget regressions.
+
 ### Fixed
 
 - An open Room HTTP connection, including the long-lived SSE stream, is treated as use so idle suspend cannot force-close a runtime a browser is still reading. After the last request ends, the normal idle window applies. Management polls ignore the ticking `last_used_at` of that in-flight lease so they do not rebuild the shell on every refresh.

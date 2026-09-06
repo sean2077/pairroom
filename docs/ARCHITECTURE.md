@@ -2,7 +2,7 @@
 
 ## Goal
 
-PairRoom is a local control plane above native Agent harnesses. It solves session binding, sequential scheduling, role isolation, approvals, persistence, observation, and recovery. It does not reimplement the Claude Code, Codex, or Grok Build tool loops.
+PairRoom is a local control plane above native Agent harnesses. It solves session binding, sequential scheduling, creation-time collaboration instructions, independent tool permissions, approvals, persistence, observation, and recovery. It does not reimplement the Claude Code, Codex, or Grok Build tool loops.
 
 ```text
 Browser / Wails Desktop / CLI
@@ -39,12 +39,13 @@ Every adapter must emit the configured slot actor on events. Never hard-code a v
 | State | Authority |
 |---|---|
 | Project / Room registration and Binding | Service registry and Room service events |
-| Per-Room Runtime/Provider/model/policy selection | schema-v2 `service.room.provisioned` event (`Room.agents`) |
+| Per-Room Runtime/Provider/model/policy selection | schema-v3 `service.room.provisioned` event (`Room.agents`; schema-v2 legacy selections remain readable) |
 | CC Switch Profile contents and credentials | CC Switch schema-18 database; read afresh for creation validation and activation |
-| Messages, approvals, roles, FIFO delivery state, Turn summary | Room Event Log |
+| Collaboration mode and versioned instructions | `room.created` and matching schema-v3 provisioning fact |
+| Messages, approvals, effective permission profiles, FIFO delivery state, Turn summary | Room Event Log |
 | Current native process / stdout / request ID | Agent adapter |
-| live source tree | Driver workspace |
-| review filesystem view | Reviewer snapshot |
+| live source tree | Shared live workspace for both modern participants, single native Turn owner |
+| legacy review filesystem view | Preserved schema-9 Reviewer snapshot |
 | Page display | Server projection; neither the browser nor the desktop webview is SSOT |
 | native window, tray, and second-launch focus | Wails Desktop host |
 
@@ -94,11 +95,11 @@ Desktop startup follows a single-owner decision: validated explicit Management U
 
 The Service can activate or reclaim a Room runtime according to capacity and idle policy. An in-flight Room HTTP request, including the long-lived `/api/v1/events` stream, is real use: idle suspend does not close a runtime a browser is still reading. That live request is not a Management tab identity; explicit suspend and capacity LRU still apply. Reclaiming a native process does not delete the Room. Reactivation restores the durable projection, session Binding, and Room-owned FIFO entries that never crossed a native boundary. A delivery persisted as `submitting` has unknown native ownership after a crash and fails for explicit Retry instead of being replayed.
 
-Role / workspace switches must share the same safety boundary as delivery serialization, so a reviewer snapshot is not captured while the Driver is still mutating the live tree.
+Modern Rooms persist `default` Lead/Executor or `custom` instructions once. Both participants use the live workspace; responsibility never selects a sandbox. Native permission changes require both participants idle, an empty FIFO, and no pending approvals. The Room records intent before stopping the adapter, commits the effective profile only after stopping, and restarts with the same Provider/model/instructions and exact materialized session. Replacement is serialized with Room shutdown. Failures never fall back to broader policy. Legacy role/workspace facts are replayed without conversion; no public role-change route remains.
 
 New Rooms snapshot two secret-free `AgentSelection` values. Native ProviderRefs inherit CLI user/global configuration; CC Switch ProviderRefs are resolved into an ephemeral child-process configuration at activation. Already active processes are not mutated when a Profile changes. Grok Build prompt and instruction text stay in a prompt file, never in process argv.
 
-The provisioning event schema is version 2. Its reader accepts schema 1 as `Legacy defaults` without rewriting the Event Log. Unknown newer provisioning schemas fail closed, so downgrade requires restoring the pre-upgrade data-root backup rather than allowing an old binary to reinterpret new Room facts. `service-registry.json` uses checkpoint schema 2 and remains a rebuildable index.
+The provisioning event schema is version 3 and requires its collaboration record to match `room.created`. Its reader accepts schema 1 as `Legacy defaults` and schema 2 with its original Agent selections, without rewriting the Event Log or granting new permissions. New stores use schema 10; schema-9 stores remain readable without relabeling. Unknown newer provisioning schemas fail closed, so downgrade requires restoring the pre-upgrade data-root backup rather than allowing an old binary to reinterpret new Room facts. `service-registry.json` uses checkpoint schema 2 and remains a rebuildable index.
 
 ## Native interaction ownership
 

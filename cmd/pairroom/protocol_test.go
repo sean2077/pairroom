@@ -12,14 +12,14 @@ import (
 
 func TestWriteProtocolText(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	err := writeProtocol([]string{"--actor", "codex", "--role", "reviewer"}, &stdout, &stderr)
+	err := writeProtocol([]string{"--actor", "codex"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, fragment := range []string{
 		protocol.Version,
 		"actor: codex",
-		"[role.reviewer]",
+		"[collaboration.creation]",
 		"[delivery.single-turn]",
 		"[delivery.peer]",
 		"exact peer_handle",
@@ -66,5 +66,12 @@ func TestWriteProtocolHelpAndValidation(t *testing.T) {
 	stderr.Reset()
 	if err := writeProtocol([]string{"--routing", "turns"}, &stdout, &stderr); err == nil {
 		t.Fatal("removed routing flag succeeded")
+	}
+}
+
+func TestProtocolNoLongerOffersRoleModes(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := writeProtocol([]string{"--role", "driver"}, &stdout, &stderr); err == nil {
+		t.Fatal("removed role option accepted")
 	}
 }

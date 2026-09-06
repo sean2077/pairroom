@@ -425,6 +425,8 @@ func runServe(args []string) error {
 
 	flags := flag.NewFlagSet("pairroom serve", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
+	collaborationMode := flags.String("collaboration", "default", "new Room collaboration: default (Lead/Executor) or custom")
+	collaborationInstructions := flags.String("collaboration-instructions", "", "natural-language rules for a new custom Room")
 	configFlag := flags.String("config", configPath, "JSON configuration file")
 	repoFlag := flags.String("repo", ".", "repository/workspace directory")
 	nameFlag := flags.String("name", fileCfg.RoomName, "room display name")
@@ -484,6 +486,16 @@ func runServe(args []string) error {
 		return errors.New("stall-warning-seconds must be -1 or between 30 and 86400")
 	}
 
+	collaboration, err := (model.Collaboration{Mode: *collaborationMode, Instructions: *collaborationInstructions}).ForCreation()
+	if err != nil {
+		return err
+	}
+	requireCollaborationMatch := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "collaboration" || f.Name == "collaboration-instructions" {
+			requireCollaborationMatch = true
+		}
+	})
 	token := *tokenFlag
 
 	eventStore, err := store.Open(dataDir)
@@ -527,6 +539,7 @@ func runServe(args []string) error {
 		return fmt.Errorf("resolve Agent 2: %w", err)
 	}
 	engine, err := room.New(room.Config{
+		Collaboration: &collaboration, RequireCollaborationMatch: requireCollaborationMatch,
 		Name: *nameFlag,
 		Repo: repo,
 		Settings: model.RoomSettings{

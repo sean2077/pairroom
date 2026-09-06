@@ -72,9 +72,9 @@ Both entries share the same Project, Room, Binding, Event Log, Runtime, and auth
 In the Management Shell:
 
 1. Register the target repository as a Project;
-2. Create a Room;
+2. Create a Room using default Lead/Executor or custom natural-language collaboration instructions; this choice is fixed;
 3. For Agent 1 and Agent 2, select a Runtime, native or supported CC Switch Profile, and optionally edit the Model and advanced Runtime policy. Unavailable Runtimes and Profiles that require OAuth, proxy conversion, or failover remain visible but disabled;
-4. Confirm both Bindings (JSON keys `claude` / `codex`). Agent 1 starts as Driver and Agent 2 as Reviewer; both slots may use the same Runtime/Profile;
+4. Confirm both Bindings (JSON keys `claude` / `codex`). default mode assigns Agent 1 as Lead (planning/review) and Agent 2 as Executor (implementation/feedback); both slots may use the same Runtime/Profile;
 5. Open the Room from the sidebar; it becomes an in-app tab. Use **Open in browser** for a separate browser window.
 
 A Project is a repository-level management record. A Room is a long-lived collaboration context. Unregistering a Project does not delete the repository, and archiving a Room does not permanently delete Room data.
@@ -97,18 +97,18 @@ message accepted
   -> Room owner released
 ```
 
-An unaddressed message goes only to the current Driver. To verify that both Agents can collaborate in sequence, you can say:
+In a new Room, an unaddressed message starts only Agent 1 (Lead in default mode). Both participants default to YOLO; choose narrower native policy for a safe first experiment. Responsibility never implies read-only access. To verify that both Agents can collaborate in sequence, you can say:
 
 ```text
 Greet each other and introduce yourselves.
 ```
 
-The Driver must include the other participant's exact displayed handle in its reply. Introducing itself only to the human, with no peer handle, does not start the other Agent. If the reply names both `@user` and the peer, the peer handle wins. With unique Claude and Codex runtimes those handles are `@claude` and `@codex`. PairRoom hands the complete reply and attachments to the peer only after the current Turn ends. If the peer then answers without naming the Driver, the greeting ends naturally after two Turns.
+The starting Agent must include the other participant's exact displayed handle in its reply. Introducing itself only to the human, with no peer handle, does not start the other Agent. If the reply names both `@user` and the peer, the peer handle wins. With unique Claude and Codex runtimes those handles are `@claude` and `@codex`. PairRoom hands the complete reply and attachments to the peer only after the current Turn ends. If the peer then answers without naming the starting Agent, the greeting ends naturally after two Turns.
 
-For a review, assign Driver and Reviewer directly, then ask the Driver to request independent review only when it has something concrete to inspect:
+In default mode, ask the Lead to delegate implementation and then review the concrete results:
 
 ```text
-Implement and verify the change. When the patch is ready, ask the displayed Reviewer handle for an independent review.
+Plan the change, delegate implementation and verification to your peer, then review the diff and evidence. Ask me only for decisions you cannot resolve from the repository.
 ```
 
 PairRoom does not compile or approve actor/action stage sequences. Each Agent may finish the user's request; another Turn exists only after an exact Agent handle or a new user Message.

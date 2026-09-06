@@ -1,6 +1,6 @@
 # Agent protocol
 
-This document defines the minimum collaboration contract the model must understand. Scheduling, permissions, persistence, and cancellation are enforced by code, not by prompt self-discipline. The current machine-readable contract is `pairroom-protocol/v5` and is printed by:
+This document defines the minimum collaboration contract the model must understand. Scheduling, permissions, persistence, and cancellation are enforced by code, not by prompt self-discipline. The current machine-readable contract is `pairroom-protocol/v6` and is printed by:
 
 ```bash
 pairroom protocol --json
@@ -8,20 +8,22 @@ pairroom protocol --json
 
 ## Bootstrap
 
-Each native session receives a compact stable bootstrap. It identifies the Agent's current public display name and exact mention handle, explains single-Turn ownership, and asks the Agent to mention its peer only when another response is genuinely necessary. Claude Code and Codex use their native instruction layers. A new Grok ACP session receives the rules through `_meta.rules`; an exactly loaded Grok session receives the current bootstrap once in its first PairRoom prompt instead of replacing its native system prompt.
+Each native session receives a compact stable bootstrap plus the Room's stored, versioned collaboration instructions and any per-Agent additional instructions. Default mode assigns Lead / Executor; custom mode inserts the supplied prose instead, without default responsibilities. It identifies the Agent's current public display name and exact mention handle, explains single-Turn ownership, and asks the Agent to mention its peer only when another response is genuinely necessary. Claude Code and Codex use their native instruction layers. A new Grok ACP session receives the rules through `_meta.rules`; an exactly loaded Grok session receives the current bootstrap once in its first PairRoom prompt instead of replacing its native system prompt.
 
 ## Input envelope
 
-Every native Turn or steer receives one dynamic `[PairRoom message]` envelope containing:
+Every native Turn or steer receives a dynamic envelope, for example:
 
-- protocol, Message ID, and Thread ID;
-- `from_handle`, `self_handle`, and `peer_handle`;
-- optional `reply_to`;
-- `current_role`;
-- verified attachment metadata and adapter-only local paths;
-- the complete current message body.
+```text
+[PairRoom message]
+from: @codex
 
-Hop counters, remaining-turn budgets, Workflow fields, delivery intent, and redundant transport metadata are not part of the envelope. Agent-to-Agent delivery contains the complete visible peer response and attachments, not a summary or accumulated Room history.
+Implemented the change; tests passed. @claude Please review the diff.
+```
+
+When attachments are present, a compact `attachments:` list between `from` and the body carries quoted filename, media type, and adapter-only local path. Binary image parts continue through native transport. The complete body remains unchanged, including its whitespace; relay never summarizes a peer response or appends accumulated Room history.
+
+Message ID, Thread ID, ReplyTo, native request/session IDs, delivery intent, and protocol version remain available to transport, Event Log, and diagnostics where applicable. They are not repeated as model-facing envelope fields. Self/peer identity and fixed responsibility live at the instruction layer, not in `self_handle`, `peer_handle`, or `current_role` per turn. Static contract checks cap the ordinary envelope overhead at 128 bytes (excluding body/media) and the bootstrap plus default collaboration at 1,800 bytes. Custom instructions have a separate 16 KiB UTF-8 input limit; these byte budgets are not token-billing claims.
 
 The Agent should treat repository state as authoritative and independently verify peer claims. A transport receipt or another Agent's assertion is not execution evidence.
 
@@ -36,7 +38,7 @@ Matching is case-insensitive. An unsuffixed duplicated-runtime handle is ambiguo
 
 An exact Agent handle in the same response wins over `@user`. `@user` alone returns the decision to the human. Without the exact peer handle, Agent relay ends and either Agent's answer may be the final result.
 
-The removed aliases `@peer`, `@human`, `@all`, `@agent1`, and `@agent2` have no routing meaning. In Agent output they remain ordinary visible text; an otherwise unaddressed user send that relies on one is rejected instead of silently falling back to the Driver. Removed `PAIRROOM:HANDOFF`, `PAIRROOM:NEXT`, `PAIRROOM:DONE`, `PAIRROOM:WAIT`, and `PAIRROOM:BLOCKED` markers are ordinary visible text. No fixed handoff format is accepted or required.
+The removed aliases `@driver`, `@reviewer`, `@lead`, `@executor`, `@peer`, `@human`, `@all`, `@agent1`, and `@agent2` have no routing meaning. In Agent output they remain ordinary visible text; an otherwise unaddressed user send that relies on one is rejected instead of silently falling back to Agent 1. Removed `PAIRROOM:HANDOFF`, `PAIRROOM:NEXT`, `PAIRROOM:DONE`, `PAIRROOM:WAIT`, and `PAIRROOM:BLOCKED` markers are ordinary visible text. No fixed handoff format is accepted or required.
 
 ## Convergence
 
@@ -44,9 +46,11 @@ There is no PairRoom relay counter or automatic circuit breaker. Agents must omi
 
 The user remains the active circuit breaker: Cancel removes queued work, Interrupt stops the current native Turn, and a newer instruction cancels stale not-yet-started Agent relays.
 
-## Role contract
+## Creation-time collaboration contract
 
-The Driver may modify the live workspace within authorization. The Reviewer independently checks evidence against an isolated snapshot and must not claim verification that did not run. A Peer is an equal collaborator but gains no implicit write permission or approval authority.
+`default` assigns Lead (Agent 1) and Executor (Agent 2). The Lead plans, delegates implementation and routine verification, and reviews evidence. The Executor implements, tests, and reports results, risks, or disagreements. Avoid needless debate and ceremonial turns; scale planning/review to the task. `custom` uses the human's natural-language rules without adding those default responsibilities. Both choices are persisted at creation and injected unchanged on activation.
+
+The instructions do not grant tools or force a particular number of Turns. Native permission profiles remain independent; both modern participants use the live workspace. Legacy Rooms receive their preserved role guidance and retain their old workspace/permission boundaries. No public role-change operation or role-based addressing remains.
 
 ## Authority
 

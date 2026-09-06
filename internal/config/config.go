@@ -96,8 +96,8 @@ func Defaults() File {
 			Codex:  RuntimeTemplate{Command: "codex"},
 			Grok:   RuntimeTemplate{Command: "grok"},
 		},
-		Claude: Agent{Runtime: string(model.RuntimeClaude), Provider: model.NativeProviderRef(), PermissionMode: "yolo", OrdinaryReviewerPolicy: model.ReviewerEnforced},
-		Codex:  Agent{Runtime: string(model.RuntimeCodex), Provider: model.NativeProviderRef(), ApprovalPolicy: "yolo", OrdinaryReviewerPolicy: model.ReviewerEnforced},
+		Claude: Agent{Runtime: string(model.RuntimeClaude), Provider: model.NativeProviderRef(), PermissionMode: "yolo"},
+		Codex:  Agent{Runtime: string(model.RuntimeCodex), Provider: model.NativeProviderRef(), ApprovalPolicy: "yolo", Sandbox: "danger-full-access"},
 	}
 }
 
@@ -171,12 +171,6 @@ func (c *File) applyDefaults() {
 	if c.Codex.Provider.Source == "" {
 		c.Codex.Provider = model.NativeProviderRef()
 	}
-	if c.Claude.OrdinaryReviewerPolicy == "" {
-		c.Claude.OrdinaryReviewerPolicy = model.ReviewerEnforced
-	}
-	if c.Codex.OrdinaryReviewerPolicy == "" {
-		c.Codex.OrdinaryReviewerPolicy = model.ReviewerEnforced
-	}
 	if strings.TrimSpace(c.Runtimes.Claude.Command) == "" {
 		c.Runtimes.Claude.Command = defaults.Runtimes.Claude.Command
 	}
@@ -193,7 +187,8 @@ func (c *File) applyDefaults() {
 func (a *Agent) reconcileDefaultYolo(actor model.ActorID) {
 	switch a.RuntimeKind(actor) {
 	case model.RuntimeClaude, model.RuntimeGrok:
-		if a.ApprovalPolicy == "yolo" && a.Sandbox == "" {
+		if a.ApprovalPolicy == "yolo" && (a.Sandbox == "" || a.Sandbox == "danger-full-access") {
+			a.Sandbox = ""
 			a.ApprovalPolicy = ""
 			if strings.TrimSpace(a.PermissionMode) == "" {
 				a.PermissionMode = "yolo"
@@ -204,6 +199,7 @@ func (a *Agent) reconcileDefaultYolo(actor model.ActorID) {
 			a.PermissionMode = ""
 			if strings.TrimSpace(a.ApprovalPolicy) == "" {
 				a.ApprovalPolicy = "yolo"
+				a.Sandbox = "danger-full-access"
 			}
 		}
 	}

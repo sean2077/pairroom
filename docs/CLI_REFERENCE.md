@@ -2,6 +2,8 @@
 
 CLI Reference describes command responsibilities and how to discover flags. It does not copy the full `--help` output of every subcommand. Exact defaults, allowed values, and platform differences always come from the current binary.
 
+New standalone Rooms support `pairroom serve --collaboration default` (the default) or `--collaboration custom --collaboration-instructions "..."`. An existing Room restores its saved instructions; conflicting explicit flags fail. `pairroom protocol` prints the shared v6 mechanics; the removed `--role` flag no longer selects a collaboration mode.
+
 ## Top-level commands
 
 | Command | Responsibility |
@@ -72,7 +74,7 @@ The following names are extracted from `cmd/pairroom/*.go`. Use them to find omi
 
 <!-- generated:flags -->
 <details>
-<summary>Show current flag names</summary>
+<summary>Show current flags</summary>
 
 - `--actor`
 - `--auto-start`
@@ -90,6 +92,8 @@ The following names are extracted from `cmd/pairroom/*.go`. Use them to find omi
 - `--codex-model`
 - `--codex-runtime`
 - `--codex-sandbox`
+- `--collaboration`
+- `--collaboration-instructions`
 - `--config`
 - `--daemon-control-file`
 - `--data-dir`
@@ -110,7 +114,6 @@ The following names are extracted from `cmd/pairroom/*.go`. Use them to find omi
 - `--output`
 - `--recover-stale-lock`
 - `--repo`
-- `--role`
 - `--runtime-limit`
 - `--shutdown-timeout`
 - `--stall-warning-seconds`

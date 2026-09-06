@@ -245,19 +245,21 @@ type WorkspaceBoundary struct {
 }
 
 type ParticipantSnapshot struct {
-	ID            ActorID           `json:"id"`
-	DisplayName   string            `json:"display_name"`
-	MentionHandle string            `json:"mention_handle"`
-	Role          ParticipantRole   `json:"role"`
-	State         AgentState        `json:"state"`
-	SessionID     string            `json:"session_id,omitempty"`
-	Model         string            `json:"model,omitempty"`
-	RuntimeKind   RuntimeKind       `json:"runtime_kind,omitempty"`
-	CurrentTurn   string            `json:"current_turn,omitempty"`
-	LastError     string            `json:"last_error,omitempty"`
-	LastActivity  time.Time         `json:"last_activity,omitempty"`
-	Runtime       RuntimeInfo       `json:"runtime,omitempty"`
-	Workspace     WorkspaceBoundary `json:"workspace,omitempty"`
+	PermissionProfile PermissionProfile `json:"permission_profile,omitempty"`
+	Responsibility    string            `json:"responsibility,omitempty"`
+	ID                ActorID           `json:"id"`
+	DisplayName       string            `json:"display_name"`
+	MentionHandle     string            `json:"mention_handle"`
+	Role              ParticipantRole   `json:"role"`
+	State             AgentState        `json:"state"`
+	SessionID         string            `json:"session_id,omitempty"`
+	Model             string            `json:"model,omitempty"`
+	RuntimeKind       RuntimeKind       `json:"runtime_kind,omitempty"`
+	CurrentTurn       string            `json:"current_turn,omitempty"`
+	LastError         string            `json:"last_error,omitempty"`
+	LastActivity      time.Time         `json:"last_activity,omitempty"`
+	Runtime           RuntimeInfo       `json:"runtime,omitempty"`
+	Workspace         WorkspaceBoundary `json:"workspace,omitempty"`
 }
 
 type RoomSettings struct {
@@ -269,10 +271,11 @@ func DefaultRoomSettings() RoomSettings {
 }
 
 type RoomMeta struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Repo      string    `json:"repo"`
-	CreatedAt time.Time `json:"created_at"`
+	Collaboration *Collaboration `json:"collaboration,omitempty"`
+	ID            string         `json:"id"`
+	Name          string         `json:"name"`
+	Repo          string         `json:"repo"`
+	CreatedAt     time.Time      `json:"created_at"`
 }
 
 type Approval struct {

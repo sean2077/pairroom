@@ -25,7 +25,7 @@ This is expected while the current Agent still holds the native Turn. Cross-Agen
 
 Agent relay accepts only the other participant's exact current handle. For a unique runtime that is `@claude`, `@codex`, or `@grok`; when both slots use the same runtime, use the displayed `0/1` handles. An unsuffixed duplicate handle is ambiguous and PairRoom reports both valid choices. `@peer`, `@human`, slot aliases, and old control markers do not route. `@user` alone returns the decision to the human; an exact Agent handle in the same reply wins.
 
-If a human said “greet each other” and the current Driver only introduced itself to the user without naming the peer, its response correctly ended the relay. Unaddressed human messages start only the Driver. Check the participant card for the exact peer handle and the Inspector envelope for `peer_handle`.
+If a human said “greet each other” and the starting Agent only introduced itself to the user without naming the peer, its response correctly ended the relay. Unaddressed human messages start only Agent 1 in new Rooms. Check participant cards for exact handles and expand Collaboration for saved rules. Peer identity now lives in native instructions, not an envelope `peer_handle` field.
 
 ## A message did not continue after restart
 
@@ -35,9 +35,9 @@ Room-owned FIFO entries that never crossed the native submission boundary resume
 
 Messages in the FIFO can be cancelled precisely. After a native runtime has accepted input, vendor interrupt is often at the whole active Turn. PairRoom keeps unrelated Room FIFO items, but multiple inputs in the same native Turn for the current Agent may terminate together.
 
-## Reviewer does not see the Driver's latest files
+## A legacy Reviewer does not see the latest files
 
-The Reviewer uses an isolated snapshot. Confirm that review started at a new boundary after the Driver Turn completed. If a role switch or snapshot refresh failed, inspect the system notice. Do not let Reviewer and Driver write the live workspace at the same time.
+Only legacy Rooms use role-bound isolated Reviewer snapshots; modern Lead and Executor share the live workspace. In a legacy Room, the Reviewer uses an isolated snapshot. Confirm that review started at a new boundary after the Driver Turn completed. If a role switch or snapshot refresh failed, inspect the system notice. Do not let Reviewer and Driver write the live workspace at the same time.
 
 ## UI refreshes often or the scroll position jumps
 
@@ -48,12 +48,12 @@ Confirm you are on the current build, then check the browser console and SSE rec
 Common causes:
 
 - Event Log corruption;
-- the Room uses a Store schema other than `9`;
+- the Room uses a Store schema other than `9` or `10`;
 - the Project path has moved;
 - a strict Binding session does not exist;
 - the backup is incomplete.
 
-Keep the original data directory. Verify the backup and the first replay error first. Store schema `9` has no migration path from older Rooms; rebuild them or restore a matching old binary with its complete backup.
+Keep the original data directory. Verify the backup and the first replay error first. Pre-schema-9 stores have no migration path; rebuild them or restore a matching old binary with its complete backup.
 
 ## Port or token problems
 

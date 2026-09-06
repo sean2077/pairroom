@@ -4,14 +4,14 @@
 
 | Kind | Examples | After restart |
 |---|---|---|
-| Durable | Room metadata, Message, FIFO delivery / processing projection, role, Turn summary, resolved approval, Binding, attachment metadata | Replayed from the Event Log / registry |
+| Durable | Room metadata, Message, FIFO delivery / processing projection, collaboration instructions, permission profile (legacy role), Turn summary, resolved approval, Binding, attachment metadata | Replayed from the Event Log / registry |
 | Ephemeral | native process, current stdout connection, vendor request ID, active owner, transient text delta | Not restored |
 
 Room-owned FIFO entries are persistent only while PairRoom can prove they did not cross the native submission boundary. Any input that may already have produced side effects without a confirmed ownership result is not executed again automatically.
 
 ## Event Log
 
-A Room uses an append-only JSONL store. Metadata schema is checked before Event Log replay, then current-schema events are replayed in order to rebuild the projection. Schema `9` deliberately has no migration from older Rooms; illegal events fail explicitly instead of guessing a repair.
+A Room uses an append-only JSONL store. Metadata schema is checked before Event Log replay, then current-schema events are replayed in order to rebuild the projection. New stores use schema `10`; schema `9` remains readable without rewriting its metadata or converting its legacy policy. Other schemas fail before replay/repair. A modern Room persists its collaboration instructions with `room.created` and, when managed, matching provisioning schema 3. Illegal events fail explicitly instead of guessing a repair.
 
 The schema source of truth is `internal/model/types.go`, the event write / apply code, and `internal/store/`, not a hand-written fictional schema file in the docs.
 

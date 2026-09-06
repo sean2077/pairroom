@@ -12,25 +12,29 @@ The JSON decoder rejects unknown fields. Spelling mistakes are therefore not sil
 
 Collaboration routing has no configurable mode or hop limit. PairRoom always enforces one native Turn owner and one Room FIFO. An Agent response relays only when it contains the other participant's exact current runtime-derived handle; without that handle the relay ends. See [Core concepts](CONCEPTS.md) for duplicate-runtime suffixes and steer fallback semantics.
 
+Collaboration **instructions** have only two creation-time modes: `default` Lead/Executor or `custom` natural-language rules (non-blank, valid UTF-8, no NUL, at most 16 KiB after trimming). This is separate from routing. The Management create form and Room creation API persist the choice; `pairroom serve --collaboration custom --collaboration-instructions "..."` supplies it for a new standalone Room. Reopening restores the stored choice; an explicitly conflicting choice fails. Mode and instructions cannot be edited later.
+
 `stall_warning_seconds` only controls the “no Runtime event for a long time” reminder; silence alone does not mean the Turn has terminated.
 
 ## Agent slots and runtimes
 
 The JSON keys `claude` and `codex` are durable Agent 1 and Agent 2 slots, not vendor identities. Each slot has a `runtime` of `claude`, `codex`, or `grok`. Both slots may select the same runtime.
 
-Each slot supplies a default `AgentSelection`: `runtime`, a structured `provider`, optional `model`, `effort`, `instructions`, Runtime-specific permission/approval/sandbox values, and `ordinary_reviewer_policy`. A new Room snapshots both selections; changing Service configuration later does not rewrite it. Existing schema-v1 Rooms have no selection snapshot, are shown as `Legacy defaults`, and continue to resolve the current Service defaults at activation.
+Each slot supplies a default `AgentSelection`: `runtime`, a structured `provider`, optional `model`, `effort`, `instructions`, Runtime-specific permission/approval/sandbox values. A new Room snapshots both selections; changing Service configuration later does not rewrite it. Existing schema-v1 Rooms have no selection snapshot, are shown as `Legacy defaults`, and continue to resolve the current Service defaults at activation.
 
-`provider: {"source":"native"}` delegates Provider and credentials to the selected CLI's user/global configuration. Empty model, effort, instructions, and sandbox fields inherit native configuration. New Service defaults use `yolo` for Claude Code `permission_mode` and Codex `approval_policy`; an explicit empty string still inherits the selected CLI. `ordinary_reviewer_policy` defaults to `enforced`; `explicit` is the dangerous opt-in that applies the selected Runtime policy to ordinary Reviewer Turns. The Reviewer workspace snapshot remains isolated in either mode; `enforced` additionally projects the native read-only / plan policy.
+`provider: {"source":"native"}` delegates Provider and credentials to the selected CLI's user/global configuration. Empty model, effort, and per-Agent instructions add no override. New Service defaults use Claude `permission_mode: yolo` and Codex `approval_policy: yolo` with `sandbox: danger-full-access`; Grok YOLO projects bypass and sandbox `off`. Both default-mode participants use these permissions, regardless of responsibility. Explicit narrower settings remain respected; explicitly empty permission/approval/sandbox fields inherit native configuration. When restoring a configured policy, an explicit `yolo` with no sandbox completes the full-access sandbox override; clear both fields to request native inheritance.
+
+`ordinary_reviewer_policy` is a deprecated legacy-read field. It remains meaningful for old Rooms with role-bound workspaces, but is omitted from new selections and the creation form. It does not create a third collaboration mode. Modern permission controls select `configured`, `read-only`, or `yolo` at an idle boundary; the configured creation-time values themselves stay immutable.
 
 Commands are not part of a Room selection. `runtimes.claude`, `runtimes.codex`, and `runtimes.grok` each own one Service-level `command`/`args` template, preventing a Room request from selecting an executable.
 
-Runtime policy fields are validated per Runtime: Claude Code accepts `permission_mode` (`default`, `manual`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, or `yolo`); Codex accepts `approval_policy` (`untrusted`, `unless-trusted`, `unlessTrusted`, `on-failure`, `on-request`, `never`, or `yolo`) and `sandbox` (`read-only`, `workspace-write`, or `danger-full-access`); Grok Build accepts `permission_mode` (`default`, `ask`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, `always-approve`, or `yolo`) and `sandbox` (`read-only`, `workspace`, `strict`, or `off`). `yolo` is the Room-level bypass alias: Claude Code projects `bypassPermissions` plus `--dangerously-skip-permissions`, Codex projects `never`, and Grok Build projects `--always-approve`. Empty values inherit native configuration. Service runtime `args` templates must not preselect model, effort, permission, approval, sandbox, or bypass flags, because those values belong to the immutable Room selection and native role-policy projection.
+Runtime policy fields are validated per Runtime: Claude Code accepts `permission_mode` (`default`, `manual`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, or `yolo`); Codex accepts `approval_policy` (`untrusted`, `unless-trusted`, `unlessTrusted`, `on-failure`, `on-request`, `never`, or `yolo`) and `sandbox` (`read-only`, `workspace-write`, or `danger-full-access`); Grok Build accepts `permission_mode` (`default`, `ask`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, `always-approve`, or `yolo`) and `sandbox` (`read-only`, `workspace`, `strict`, or `off`). `yolo` is the Room-level bypass alias: Claude Code projects `bypassPermissions` plus `--dangerously-skip-permissions`, Codex projects `never` and full-access sandbox for default YOLO, and Grok Build projects `--always-approve` with sandbox `off`. Empty values inherit native configuration. Service runtime `args` templates must not preselect model, effort, permission, approval, sandbox, or bypass flags, because those values belong to the immutable Room selection and independent native permission projection.
 
 Recommendations:
 
 - Keep credentials in the vendor CLI, environment variables, or a controlled Provider profile;
 - Do not put API keys in command arguments, logs, Room messages, or the repository;
-- Give the Reviewer read-only / plan boundaries; only the Driver uses write permission;
+- Use explicit read-only / plan permissions for untrusted review work; Lead / Executor responsibilities alone do not restrict tools;
 - After changing an executable or Provider, run Mock first, then a real read-only Turn;
 - Keep Grok Build prompt and instruction text out of process argv. PairRoom uses the long-lived ACP stdio protocol, projects new-session collaboration rules through `_meta.rules`, and injects a bootstrap once when exactly loading an existing session.
 
@@ -56,8 +60,8 @@ The following JSON names are extracted from struct tags in `internal/config/`. T
 <details>
 <summary>Show current JSON fields</summary>
 
-- `approval_policy`
 - `app_type`
+- `approval_policy`
 - `args`
 - `auto_start`
 - `cc_switch`

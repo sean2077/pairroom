@@ -119,7 +119,6 @@ button { color: inherit; }
 .mini-button { padding: 6px 8px; border: 1px solid var(--border); background: var(--surface); border-radius: var(--control-radius); color: var(--muted); font-size: var(--text-control); min-height: var(--control-h); cursor: pointer; }
 .mini-button:hover { color: var(--text); border-color: var(--border-strong); }
 .mini-button.danger:hover { color: var(--red); }
-.role-select { width: 100%; margin-top: 8px; padding: 6px 8px; font-size: var(--text-control); }
 .native-policy {
   margin-top: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px;
   background: rgba(255,255,255,.018); color: var(--faint); font-size: var(--text-sm); line-height: 1.4;
@@ -135,7 +134,7 @@ button { color: inherit; }
   background: var(--surface-2); color: var(--faint); font-size: var(--text-sm); line-height: 1.45;
 }
 .field-label { display: block; color: var(--faint); font-size: var(--text-sm); margin: 10px 0 5px; }
-.select-control, .mini-select, .role-select {
+.select-control, .mini-select, .permission-select {
   appearance: none; border: 1px solid var(--border); border-radius: var(--control-radius); background: var(--surface-2); color: var(--text); min-height: var(--control-h); outline: none;
 }
 .select-control { width: 100%; padding: 6px 10px; font-size: var(--text-control); }
@@ -647,3 +646,11 @@ html[data-embed="1"] .session-copy {
   margin-top: 8px;
   width: fit-content;
 }
+
+/* Collaboration is a read-only instruction summary, not a role switch. */
+.room-collaboration { flex: 0 0 auto; padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.room-collaboration summary { cursor: pointer; color: var(--muted); }
+.room-collaboration pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; font: inherit; line-height: 1.6; margin: 10px 0 2px; }
+.permission-select { appearance: auto; width: 100%; min-height: 36px; margin-top: 8px; padding: 6px 8px; font-size: var(--text-control); }
+.permission-select:disabled { cursor: not-allowed; opacity: .65; }
+@media (max-width: 680px) { .permission-select { min-height: 44px; } }

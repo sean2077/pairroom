@@ -21,7 +21,7 @@ func TestDefaults(t *testing.T) {
 	if cfg.Claude.Runtime != "claude" || cfg.Codex.Runtime != "codex" {
 		t.Fatalf("unexpected default runtimes: %#v", cfg)
 	}
-	if cfg.Claude.PermissionMode != "yolo" || cfg.Codex.ApprovalPolicy != "yolo" || cfg.Codex.Sandbox != "" {
+	if cfg.Claude.PermissionMode != "yolo" || cfg.Codex.ApprovalPolicy != "yolo" || cfg.Codex.Sandbox != "danger-full-access" {
 		t.Fatalf("runtime-policy defaults must use yolo: %#v %#v", cfg.Claude, cfg.Codex)
 	}
 }
@@ -184,5 +184,39 @@ func TestStallWarningConfiguration(t *testing.T) {
 		if err := cfg.Validate(); err == nil {
 			t.Fatalf("stall_warning_seconds=%d should be rejected", invalid)
 		}
+	}
+}
+
+func TestRuntimeChangesKeepDefaultYOLOAndExplicitPermissionsWin(t *testing.T) {
+	for _, runtime := range []string{"claude", "codex", "grok"} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		data := `{"claude":{"runtime":"` + runtime + `"},"codex":{"runtime":"` + runtime + `"}}`
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("%s: %v", runtime, err)
+		}
+		for _, a := range []Agent{cfg.Claude, cfg.Codex} {
+			if runtime == "codex" {
+				if a.ApprovalPolicy != "yolo" || a.Sandbox != "danger-full-access" {
+					t.Fatalf("%s: %+v", runtime, a)
+				}
+			} else if a.PermissionMode != "yolo" {
+				t.Fatalf("%s: %+v", runtime, a)
+			}
+		}
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"claude":{"permission_mode":""},"codex":{"approval_policy":"","sandbox":""}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Claude.PermissionMode != "" || cfg.Codex.ApprovalPolicy != "" || cfg.Codex.Sandbox != "" {
+		t.Fatal("explicit native inheritance was replaced by YOLO")
 	}
 }

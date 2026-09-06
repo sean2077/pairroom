@@ -53,7 +53,7 @@ func TestManagementCreatesImmutablePerRoomAgentSelections(t *testing.T) {
 	if created.LegacyDefaults || created.Agents[model.ActorClaude].Runtime != model.RuntimeGrok || created.Agents[model.ActorCodex].Runtime != model.RuntimeGrok {
 		t.Fatalf("Room selections = %#v", created)
 	}
-	if created.Agents[model.ActorCodex].OrdinaryReviewerPolicy != model.ReviewerExplicit || created.Agents[model.ActorCodex].Model != "grok-custom-b" {
+	if created.Agents[model.ActorCodex].OrdinaryReviewerPolicy != "" || created.Agents[model.ActorCodex].Model != "grok-custom-b" {
 		t.Fatalf("Agent 2 selection = %#v", created.Agents[model.ActorCodex])
 	}
 

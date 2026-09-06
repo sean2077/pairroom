@@ -25,7 +25,8 @@
     snapshot: null,
     drafts: { claude: '', codex: '' },
     draftCorrelation: { claude: '', codex: '' },
-    selectedTarget: 'driver',
+    selectedTarget: 'claude',
+    permissionSubmitting: new Set(),
     replyTo: '',
     replyRevision: 0,
     draftRevision: 0,
@@ -256,6 +257,10 @@
         state.snapshot.settings = data;
         renderScope = 'settings';
         break;
+      case 'participant.permissions.updated':
+        if (state.snapshot.participants[data.actor]) state.snapshot.participants[data.actor].permission_profile = data.profile;
+        renderScope = 'participants';
+        break;
       case 'participant.updated':
         state.snapshot.participants[data.id] = data;
         renderScope = 'participants';
@@ -406,6 +411,9 @@
     const anchorOffset = anchor ? anchor.getBoundingClientRect().top - top : 0;
     $('room-name').textContent = state.snapshot.meta.name;
     $('repo-path').textContent = state.snapshot.meta.repo;
+    const collaboration = state.snapshot.meta.collaboration;
+    $('room-collaboration-label').textContent = t(collaboration?.mode === 'default' ? 'room.collaboration.default' : collaboration ? 'room.collaboration.custom' : 'room.collaboration.legacy');
+    $('room-collaboration-instructions').textContent = collaboration?.instructions || t('room.collaboration.legacyHelp');
 	const chatDescription = $('chat-description');
 	if (chatDescription) chatDescription.textContent = ['You', displayName('claude'), displayName('codex')].join(' · ');
     renderParticipants();
@@ -491,7 +499,7 @@
       strong.textContent = p.display_name || displayName(actor);
       const roleBadge = document.createElement('span');
       roleBadge.className = 'role-badge';
-      roleBadge.textContent = roleText(p.role);
+      roleBadge.textContent = responsibilityText(p.responsibility);
       title.append(strong, roleBadge);
       main.appendChild(title);
 
@@ -585,17 +593,18 @@
 		main.appendChild(workspaceLine);
 	  }
 
-      const roleSelect = document.createElement('select');
-      roleSelect.className = 'role-select';
-      roleSelect.dataset.roleActor = actor;
-      [['driver', t("ui.driverImplement")], ['reviewer', t("ui.reviewerIndependentReview")], ['peer', t("ui.peerEqualDiscussion")]].forEach(([value, label]) => {
-        const option = document.createElement('option');
-        option.value = value;
-        option.textContent = label;
-        option.selected = p.role === value;
-        roleSelect.appendChild(option);
-      });
-      main.appendChild(roleSelect);
+      if (state.snapshot.meta.collaboration) {
+        const permission = document.createElement('select');
+        permission.className = 'permission-select';
+        permission.dataset.permissionActor = actor;
+        permission.setAttribute('aria-label', `${displayName(actor)} · ${t('room.collaboration.permissions')}`);
+        for (const [value, key] of [['configured','room.collaboration.configured'],['read-only','room.collaboration.readOnly'],['yolo','room.collaboration.yolo']]) {
+          const option = document.createElement('option'); option.value = value; option.textContent = t(key);
+          option.selected = (p.permission_profile || 'configured') === value; permission.appendChild(option);
+        }
+        permission.disabled = state.permissionSubmitting.has(actor) || Object.values(state.snapshot.participants).some((p) => !['stopped','idle','error'].includes(p.state));
+        main.appendChild(permission);
+      }
 
       const actions = document.createElement('div');
       actions.className = 'agent-actions';
@@ -1889,7 +1898,6 @@
         body: JSON.stringify({
           text,
           to: recipientsForTarget(state.selectedTarget),
-          target_role: ['driver', 'reviewer'].includes(state.selectedTarget) ? state.selectedTarget : undefined,
           reply_to: replyTo || undefined,
           attachments,
           intent: $('message-intent').value,
@@ -1997,14 +2005,18 @@
     }
   }
 
-  async function setRole(actor, role) {
+  async function setPermissions(actor, profile) {
+    if (state.permissionSubmitting.has(actor)) return;
+    state.permissionSubmitting.add(actor);
+    renderParticipants();
     try {
-      await api(`/api/v1/participants/${actor}/role`, { method: 'PUT', body: JSON.stringify({ role }) });
-      toast(t("ui.valueChangedToValue", { value0: (displayName(actor)), value1: (roleText(role)) }), 'success');
-    } catch (error) {
-      toast(error.message, 'error');
+      await api(`/api/v1/participants/${actor}/permissions`, { method: 'PUT', body: JSON.stringify({ profile }) });
+      toast(t('room.collaboration.permissionsUpdated'), 'success');
+      // A read started before the write cannot confirm its result.
+      if (state.snapshotPromise) await state.snapshotPromise.catch(() => {});
       await loadSnapshot();
-    }
+    } catch (error) { toast(error.message, 'error'); }
+    finally { state.permissionSubmitting.delete(actor); renderParticipants(); }
   }
 
   async function resolveApproval(id, decision, button, extra = {}) {
@@ -2096,42 +2108,16 @@
     if (tab === 'diff') refreshDiff();
   }
 
-  function currentDriver() {
-    const participants = state.snapshot?.participants || {};
-    const drivers = ['claude', 'codex'].filter((actor) => participants[actor]?.role === 'driver');
-    return drivers.length === 1 ? drivers[0] : '';
-  }
-
-  function currentReviewer() {
-    const participants = state.snapshot?.participants || {};
-    const reviewers = ['claude', 'codex'].filter((actor) => participants[actor]?.role === 'reviewer');
-    return reviewers.length === 1 ? reviewers[0] : '';
-  }
-
   function recipientsForTarget(target) {
-    // Role targets are resolved atomically by the server. A role switch from
-    // another browser cannot turn @Driver or @Reviewer into an explicit send to
-    // the participant that used to hold that role.
-    if (target === 'driver' || target === 'reviewer') return [];
-    if (target === 'claude') return ['claude'];
-    if (target === 'codex') return ['codex'];
-    return [];
+    return ['claude', 'codex'].includes(target) ? [target] : ['claude'];
   }
 
   function updateDeliveryHint() {
-    const driver = currentDriver();
-    const reviewer = currentReviewer();
-    const labels = {
-      driver: driver ? t("ui.sendToCurrentDriverValue", { value0: (displayName(driver)) }) : t("ui.theDriverRoleIsAmbiguousChooseASpecificAgent"),
-      reviewer: reviewer ? t("ui.sendToCurrentReviewerValue", { value0: (displayName(reviewer)) }) : t("ui.theReviewerRoleIsAmbiguousChooseASpecificAgent"),
-      claude: t("ui.sendOnlyToValue", { value0: displayName('claude') }),
-      codex: t("ui.sendOnlyToValue", { value0: displayName('codex') }),
-    };
-    $('delivery-hint').textContent = labels[state.selectedTarget] || labels.driver;
+    $('delivery-hint').textContent = t('ui.sendOnlyToValue', { value0: displayName(state.selectedTarget) });
   }
 
   function setTarget(target) {
-    if (!['driver', 'reviewer', 'claude', 'codex'].includes(target)) target = 'driver';
+    if (!['claude', 'codex'].includes(target)) target = 'claude';
     state.selectedTarget = target;
     document.querySelectorAll('.target-button').forEach((button) => {
       const active = button.dataset.target === target;
@@ -2173,7 +2159,11 @@
       const draft = JSON.parse(readLocal(state.draftKey) || 'null');
       if (draft && typeof draft === 'object' && state.draftRevision === 0) {
         messageInput.value = String(draft.text || '');
-        if (['driver', 'reviewer', 'claude', 'codex'].includes(draft.target)) state.selectedTarget = draft.target;
+        if (['claude', 'codex'].includes(draft.target)) state.selectedTarget = draft.target;
+        else if (['driver', 'reviewer'].includes(draft.target)) {
+          const matching = ['claude', 'codex'].filter((actor) => state.snapshot?.participants[actor]?.role === draft.target);
+          if (matching.length === 1) state.selectedTarget = matching[0];
+        }
         if (['steer', 'queue'].includes(draft.intent)) $('message-intent').value = draft.intent;
       }
     } catch { writeLocal(state.draftKey, null); }
@@ -2350,50 +2340,10 @@
   }
 
   function participantPolicy(participant) {
-    const role = participant.role || 'peer';
     const runtime = participant.runtime || {};
-	const runtimeKind = participant.runtime_kind || runtime.runtime_kind || (participant.id === 'claude' ? 'claude' : 'codex');
-    if (role === 'reviewer') {
-      if (runtimeKind === 'claude') {
-        return {
-          protected: true,
-          text: t("ui.nativeProtectionPlanMode"),
-          title: t("ui.reviewerUsesClaudeCodeSNativePlanPermissionModeAvoidsModificationsBut"),
-        };
-      }
-      if (runtimeKind === 'grok') return {
-		protected: true,
-		text: t('room.nativeProtectionGrokReadOnly'),
-		title: t('room.grokReviewerUsesPlanAndReadOnlySandbox'),
-	  };
-      return {
-        protected: true,
-        text: t("ui.nativeProtectionReadOnlySandbox"),
-        title: t("ui.eachCodexTurnOfReviewerUsesAppServerSNativeReadonlySandbox"),
-      };
-    }
-    if (runtimeKind === 'claude') {
-      const mode = runtime.permission_mode || t('common.inheritedPolicy');
-      return {
-        protected: false,
-        text: `${role === 'driver' ? t("ui.writer") : t("ui.peerCollaboration")} · ${mode}`,
-        title: t("ui.thisRoleUsesTheCurrentClaudeCodePermissionModeAndMayModify"),
-      };
-    }
-	if (runtimeKind === 'grok') {
-	  const policy = [runtime.permission_mode, runtime.sandbox].filter(Boolean).join(' · ') || t('common.inheritedPolicy');
-	  return {
-		protected: false,
-		text: `${role === 'driver' ? t("ui.writer") : t("ui.peerCollaboration")} · ${policy}`,
-		title: t('room.thisRoleUsesTheCurrentGrokPolicy'),
-	  };
-	}
-    const sandbox = runtime.sandbox || t('common.inheritedPolicy');
-    return {
-      protected: false,
-      text: `${role === 'driver' ? t("ui.writer") : t("ui.peerCollaboration")} · ${sandbox}`,
-      title: t("ui.thisRoleUsesTheCurrentCodexSandboxPolicyAndMayModifyThe"),
-    };
+    const readOnly = ['read-only', 'readOnly'].includes(runtime.sandbox) || runtime.permission_mode === 'plan' || participant.permission_profile === 'read-only' || (!participant.permission_profile && participant.role === 'reviewer');
+    const policy = [runtime.permission_mode, runtime.approval_policy, runtime.sandbox].filter(Boolean).join(' · ') || t('common.inheritedPolicy');
+    return { protected: readOnly, text: policy, title: t('room.collaboration.permissionBoundary') };
   }
 
   function participantLooksStalled(participant) {
@@ -2409,9 +2359,10 @@
   function stateText(value) {
     return ({ stopped: t('common.stopped'), starting: t('common.starting'), idle: t('common.ready'), working: t('ui.working694b71b'), waiting: t('ui.waiting'), error: t('common.error') })[value] || value;
   }
-  function roleText(value) {
-    return ({ driver: t('common.driver'), reviewer: t('common.reviewer'), peer: t('common.peer') })[value] || value;
+  function responsibilityText(value) {
+    return ({ lead: t('room.collaboration.lead'), executor: t('room.collaboration.executor') })[value] || t('room.collaboration.participant');
   }
+
   function deliveryText(value) {
     return ({ pending: t("ui.sending"), submitting: t("ui.submitting"), started: t("ui.startedANewTurn"), injected: t("ui.injectedIntoTheCurrentTurn"), queued: t("ui.queued"), failed: t("ui.failed"), skipped: t("ui.skipped") })[value] || value;
   }
@@ -2599,7 +2550,7 @@
     if (retryUpload) retryPendingAttachment(retryUpload.dataset.retryUpload);
   });
   document.addEventListener('change', (event) => {
-    if (event.target.matches('[data-role-actor]')) setRole(event.target.dataset.roleActor, event.target.value);
+    if (event.target.matches('[data-permission-actor]')) setPermissions(event.target.dataset.permissionActor, event.target.value);
   });
   $('send-button').addEventListener('click', () => {
     state.composing = false;

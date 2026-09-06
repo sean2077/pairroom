@@ -1672,7 +1672,13 @@
 	const runtimeEntry = runtimeCatalogEntry(runtime);
 	const models = new Set([...(runtimeEntry?.default_models || []), ...(profile?.models || [])]);
 	$(`${actor}-model-options`).replaceChildren(...[...models].filter(Boolean).sort().map((modelName) => node('option', { value: modelName })));
-	if (resetDependent) $(`${actor}-model`).value = '';
+	if (resetDependent) {
+      $(`${actor}-model`).value = '';
+      syncAgentPolicy(actor);
+      $(`${actor}-permission-mode`).value = runtime === 'codex' ? '' : 'yolo';
+      $(`${actor}-approval-policy`).value = runtime === 'codex' ? 'yolo' : '';
+      $(`${actor}-sandbox`).value = runtime === 'codex' ? 'danger-full-access' : runtime === 'grok' ? 'off' : '';
+    }
 	const providerDiagnostic = $(`${actor}-provider-diagnostic`);
 	providerDiagnostic.textContent = provider.validationMessage || (state.agentCatalog?.provider_error
 	  ? (window.PairRoomI18n?.errorMessage(state.agentCatalog.provider_error) || state.agentCatalog.provider_error.error || '')
@@ -1708,7 +1714,6 @@
 	sandbox.value = sandboxValues.includes(previousSandbox) ? previousSandbox : '';
 	const bindingKind = runtime === 'codex' ? t('room.thread') : t('room.session');
 	$(`${actor}-binding-label`).textContent = t('agent.bindingId', { runtime: runtimeCatalogEntry(runtime)?.display_name || runtime, binding: bindingKind });
-	$(`${actor}-reviewer-warning`).hidden = $(`${actor}-reviewer-policy`).value !== 'explicit';
   }
 
   function profileDisabledReason(profile) {
@@ -1738,7 +1743,6 @@
 	$(`${actor}-approval-policy`).value = selection?.approval_policy || '';
 	$(`${actor}-sandbox`).value = selection?.sandbox || '';
 	$(`${actor}-instructions`).value = selection?.instructions || '';
-	$(`${actor}-reviewer-policy`).value = selection?.ordinary_reviewer_policy || 'enforced';
 	syncAgentProviderAndModels(actor, false);
   }
 
@@ -1753,7 +1757,6 @@
 	  permission_mode: runtime === 'codex' ? '' : $(`${actor}-permission-mode`).value.trim(),
 	  approval_policy: runtime === 'codex' ? $(`${actor}-approval-policy`).value : '',
 	  sandbox: runtime === 'claude' ? '' : $(`${actor}-sandbox`).value,
-	  ordinary_reviewer_policy: $(`${actor}-reviewer-policy`).value,
 	};
   }
 
@@ -1768,6 +1771,9 @@
     select.replaceChildren(...projects.map((project) => node('option', { value: project.id, textContent: `${projectName(project)} — ${project.root}` })));
     select.value = projects.some((project) => project.id === projectID) ? projectID : projects[0].id;
 	$('room-name').value = '';
+    $('room-collaboration-mode').value = 'default';
+    $('room-collaboration-instructions').value = '';
+    syncCollaborationControls();
     document.querySelector('input[name="claude-mode"][value="new"]').checked = true;
     document.querySelector('input[name="codex-mode"][value="new"]').checked = true;
     $('claude-session-id').value = '';
@@ -1781,11 +1787,23 @@
 	  const catalog = await loadAgentCatalog();
       if (revision !== state.roomDialogRevision || !$('room-dialog').open || !state.authenticated) return;
 	  for (const actor of ['claude', 'codex']) populateAgentControls(actor, catalog.defaults?.[actor]);
+      syncCollaborationControls();
 	  $('room-submit').disabled = false;
 	  queueMicrotask(() => $('room-name').focus());
 	} catch (error) {
 	  showFormError('room-form-error', error.message);
 	}
+  }
+
+  function syncCollaborationControls() {
+    const custom = $('room-collaboration-mode').value === 'custom';
+    $('collaboration-custom-field').hidden = !custom;
+    $('collaboration-default-details').hidden = custom;
+    $('room-collaboration-instructions').required = custom;
+    $('collaboration-help').textContent = t(custom ? 'room.collaboration.customHelp' : 'room.collaboration.defaultHelp');
+    $('collaboration-default-instructions').textContent = state.agentCatalog?.collaboration_default?.instructions || t('room.collaboration.defaultHelp');
+    setRenderedText('claude-responsibility-label', custom ? t('agent.agent1') : t('room.collaboration.leadSlot'));
+    setRenderedText('codex-responsibility-label', custom ? t('agent.agent2') : t('room.collaboration.executorSlot'));
   }
 
   function syncBindingInputs() {
@@ -1806,6 +1824,12 @@
       showFormError('room-form-error', t("ui.roomNameCannotBeEmpty"));
       return;
     }
+    const mode = $('room-collaboration-mode').value;
+    const instructions = mode === 'custom' ? $('room-collaboration-instructions').value.trim() : '';
+    if (mode === 'custom' && (!instructions || new TextEncoder().encode(instructions).length > 16384)) {
+      showFormError('room-form-error', t('room.collaboration.invalidInstructions')); return;
+    }
+    const collaboration = { mode, ...(mode === 'custom' ? { instructions } : {}) };
     const bindings = {};
     for (const actor of ['claude', 'codex']) {
       if (!$(`${actor}-provider`).reportValidity()) return;
@@ -1821,7 +1845,7 @@
     await withBusy($('room-submit'), async () => {
       try {
         hideFormError('room-form-error');
-		await api(`/api/v1/projects/${encodeURIComponent(projectID)}/rooms`, { method: 'POST', body: JSON.stringify({ name, bindings, agents }) });
+		await api(`/api/v1/projects/${encodeURIComponent(projectID)}/rooms`, { method: 'POST', body: JSON.stringify({ name, bindings, agents, collaboration }) });
         closeDialog('room-dialog');
         toast(t("ui.roomCreated"), t("ui.agentBindingsCompletedAtomicVerification"), 'success');
         await refresh({ forceRender: true, fresh: true });
@@ -2677,7 +2701,6 @@
       syncAgentProviderAndModels(actor, false);
       $(`${actor}-model`).value = '';
     });
-    $(`${actor}-reviewer-policy`).addEventListener('change', () => syncAgentPolicy(actor));
   }
   $('agent-catalog-refresh').addEventListener('click', async () => {
     const revision = state.roomDialogRevision;
@@ -2688,6 +2711,7 @@
         if (revision !== state.roomDialogRevision || !$('room-dialog').open || !state.authenticated) return;
         const current = hadCatalog ? { claude: readAgentSelection('claude'), codex: readAgentSelection('codex') } : null;
         for (const actor of ['claude', 'codex']) populateAgentControls(actor, current?.[actor] || catalog.defaults?.[actor]);
+        syncCollaborationControls();
         hideFormError('room-form-error');
         toast(t('agent.catalogRefreshed'), '', 'success');
       } catch (error) {
@@ -2700,6 +2724,7 @@
     setRenderedText('room-dialog-title', t("ui.createRoomInValue", { value0: (projectName(project)) }));
   });
   $('project-form').addEventListener('submit', submitProject);
+  $('room-collaboration-mode').addEventListener('change', syncCollaborationControls);
   $('room-form').addEventListener('submit', createRoom);
   $('rename-form').addEventListener('submit', submitRename);
   $('binding-form').addEventListener('submit', submitBindingCompletion);
@@ -2816,6 +2841,7 @@
   document.addEventListener('pairroom:lang', () => {
     if (window.PairRoomI18n) window.PairRoomI18n.apply(document);
     render();
+    if ($('room-dialog').open) syncCollaborationControls();
   });
   scheduleRefresh();
   renderLoading();

@@ -48,13 +48,13 @@ function client() {
   const source = fs.readFileSync('internal/server/assets/app.js', 'utf8');
   const hook = `
     globalThis.room = {state, sendMessage, loadSnapshot, connectEvents, applyEvent,
-      updateComposerAvailability, removePendingAttachment, clearReply,
+      updateComposerAvailability, removePendingAttachment, clearReply, setPermissions,
       initializeRoomLocalState, persistComposerDraft, scheduleReconnect, loadOlderMessages,
       setAPI(callback) { api = callback; }};
     render = (force) => renders.push(force);
     toast = (message) => notices.push(message);
     renderAttachmentStrip = refreshGitStatus = postSurfaceState = autoSizeComposer =
-      renderTimeline = queueRender = scrollBottom = setConnection = updateDeliveryHint = updateNotificationButton = recomputeUnread = () => {};
+      renderParticipants = renderTimeline = queueRender = scrollBottom = setConnection = updateDeliveryHint = updateNotificationButton = recomputeUnread = () => {};
   `;
   assert.ok(source.endsWith('  bootRoom();\n})();\n'), 'keep unit-test boot interception explicit');
   vm.runInNewContext(source.replace(/  bootRoom\(\);\n\}\)\(\);\n$/, hook + '\n})();\n'), sandbox);
@@ -216,6 +216,33 @@ async function main() {
     request.resolve({messages: [{id: 'obsolete', seq: 4}], total: 4});
     await loading;
     assert.equal(c.state.snapshot.messages.length, 0, 'stale history response cannot overwrite resynchronized state');
+  }
+  {
+    const c = client(), oldRead = deferred(), write = deferred(); let reads = 0, writes = 0;
+    c.setAPI((_path, options) => {
+      if (options?.method === 'PUT') { writes++; return write.promise; }
+      reads++;
+      if (reads === 1) return oldRead.promise;
+      const fresh = c.snapshot(); fresh.participants.codex = {permission_profile:'read-only'}; return Promise.resolve(fresh);
+    });
+    const pending = c.loadSnapshot();
+    const change = c.setPermissions('codex','read-only');
+    await c.setPermissions('codex','yolo');
+    assert.equal(writes, 1, 'permission writes cannot overlap even with a rebuilt DOM');
+    write.resolve({ok:true}); await Promise.resolve();
+    assert.equal(reads, 1, 'wait for the obsolete read before requesting fresh state');
+    oldRead.resolve(c.snapshot()); await pending; await change;
+    assert.equal(reads, 2, 'a pre-write snapshot cannot confirm permission changes');
+    assert.equal(c.state.snapshot.participants.codex.permission_profile, 'read-only');
+    assert.equal(c.state.permissionSubmitting.size, 0);
+  }
+  {
+    const c = client(); let writes = 0;
+    c.setAPI(async () => { writes++; throw new Error('stop failed'); });
+    await c.setPermissions('claude', 'yolo');
+    assert.equal(writes, 1, 'failed permission mutation is never automatically retried');
+    assert.equal(c.state.permissionSubmitting.size, 0);
+    assert.ok(c.notices.includes('stop failed'));
   }
   console.log('room-client transport and composer: ok');
 }

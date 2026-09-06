@@ -310,8 +310,9 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 		return err
 	}
 	engine, err = room.New(room.Config{
-		Name: durableRoom.Name,
-		Repo: project.Root,
+		Name:          durableRoom.Name,
+		Collaboration: model.CloneCollaboration(durableRoom.Collaboration),
+		Repo:          project.Root,
 		Settings: model.RoomSettings{
 			StallWarningSeconds: cfg.StallWarningSeconds,
 		},

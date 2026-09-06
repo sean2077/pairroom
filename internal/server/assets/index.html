@@ -86,6 +86,7 @@
             <button id="scroll-bottom" class="ghost-button" data-i18n="ui.jumpToLatest">Jump to latest</button>
           </div>
         </div>
+        <details id="room-collaboration" class="room-collaboration"><summary id="room-collaboration-label"></summary><pre id="room-collaboration-instructions"></pre></details>
         <div id="turn-owner-bar" class="turn-owner-bar hidden" aria-live="polite"></div>
         <div id="timeline-scope" class="timeline-scope hidden">
           <div><span class="scope-label" data-i18n="ui.threadView">Thread view</span><span id="timeline-scope-text"></span></div>
@@ -98,9 +99,7 @@
         </div>
         <div class="composer-wrap">
           <div class="target-picker" role="group" aria-label="Message recipients" data-i18n-aria-label="ui.messageRecipients">
-            <button class="target-button active" data-target="driver" aria-pressed="true" data-i18n="room.targetDriver">@ Driver</button>
-            <button class="target-button" data-target="reviewer" aria-pressed="false" data-i18n="room.targetReviewer">@ Reviewer</button>
-            <button class="target-button" data-target="claude" aria-pressed="false" data-i18n="room.targetAgent1">@ Agent 1</button>
+            <button class="target-button active" data-target="claude" aria-pressed="true" data-i18n="room.targetAgent1">@ Agent 1</button>
             <button class="target-button" data-target="codex" aria-pressed="false" data-i18n="room.targetAgent2">@ Agent 2</button>
           </div>
           <div id="attachment-strip" class="attachment-strip hidden" aria-live="polite"></div>

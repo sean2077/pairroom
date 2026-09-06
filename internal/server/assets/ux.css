@@ -192,7 +192,7 @@ body.ux-enhanced .message-row:focus-within .reply-action { opacity: 1; }
 /* Touch devices have no hover to reveal per-message actions; keep them visible. */
 @media (hover: none) {
   body.ux-enhanced .reply-action { opacity: 1; }
-  body.ux-enhanced :is(.target-button, .attach-button, .mini-button, .role-select) { min-height: 44px; }
+  body.ux-enhanced :is(.target-button, .attach-button, .mini-button, .permission-select) { min-height: 44px; }
 }
 body.ux-enhanced .composer-wrap {
   position: relative;

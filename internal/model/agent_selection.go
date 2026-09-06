@@ -91,7 +91,7 @@ type AgentSelection struct {
 	PermissionMode         string                 `json:"permission_mode,omitempty"`
 	ApprovalPolicy         string                 `json:"approval_policy,omitempty"`
 	Sandbox                string                 `json:"sandbox,omitempty"`
-	OrdinaryReviewerPolicy OrdinaryReviewerPolicy `json:"ordinary_reviewer_policy"`
+	OrdinaryReviewerPolicy OrdinaryReviewerPolicy `json:"ordinary_reviewer_policy,omitempty"`
 }
 
 func (s AgentSelection) Normalized(actor ActorID) AgentSelection {
@@ -107,9 +107,6 @@ func (s AgentSelection) Normalized(actor ActorID) AgentSelection {
 	s.PermissionMode = strings.TrimSpace(s.PermissionMode)
 	s.ApprovalPolicy = strings.TrimSpace(s.ApprovalPolicy)
 	s.Sandbox = strings.TrimSpace(s.Sandbox)
-	if s.OrdinaryReviewerPolicy == "" {
-		s.OrdinaryReviewerPolicy = ReviewerEnforced
-	}
 	return s
 }
 
@@ -124,7 +121,7 @@ func (s AgentSelection) Validate(actor ActorID) error {
 	if err := s.Provider.ValidateForRuntime(s.Runtime); err != nil {
 		return err
 	}
-	if !s.OrdinaryReviewerPolicy.Valid() {
+	if s.OrdinaryReviewerPolicy != "" && !s.OrdinaryReviewerPolicy.Valid() {
 		return fmt.Errorf("invalid ordinary_reviewer_policy %q", s.OrdinaryReviewerPolicy)
 	}
 	switch s.Runtime.Canonical() {

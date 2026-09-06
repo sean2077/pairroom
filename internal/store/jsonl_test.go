@@ -283,7 +283,7 @@ func TestSaveAndLoadJSON(t *testing.T) {
 }
 
 func TestOpenRejectsEveryNonCurrentSchemaWithoutMigration(t *testing.T) {
-	for _, schema := range []int{1, version.StoreSchema - 1, version.StoreSchema + 1, 999} {
+	for _, schema := range []int{1, version.LegacyStoreSchema - 1, version.StoreSchema + 1, 999} {
 		t.Run(fmt.Sprintf("schema-%d", schema), func(t *testing.T) {
 			dir := t.TempDir()
 			metadata := fmt.Sprintf(`{"format":"pairroom-jsonl","schema_version":%d,"app_version":"0.1.0"}`, schema)
@@ -299,7 +299,7 @@ func TestOpenRejectsEveryNonCurrentSchemaWithoutMigration(t *testing.T) {
 
 func TestOpenRejectsOldSchemaBeforeRepairOrReplay(t *testing.T) {
 	dir := t.TempDir()
-	metadata := fmt.Sprintf(`{"format":"pairroom-jsonl","schema_version":%d}`, version.StoreSchema-1)
+	metadata := fmt.Sprintf(`{"format":"pairroom-jsonl","schema_version":%d}`, version.LegacyStoreSchema-1)
 	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(metadata), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -317,5 +317,23 @@ func TestOpenRejectsOldSchemaBeforeRepairOrReplay(t *testing.T) {
 	}
 	if string(data) != brokenTail {
 		t.Fatalf("old event log was repaired before schema rejection: %q", data)
+	}
+}
+
+func TestSchemaNineRemainsReadableWithoutRewritingMarker(t *testing.T) {
+	dir := t.TempDir()
+	metadata := `{"format":"pairroom-jsonl","schema_version":9,"app_version":"2.1.0"}`
+	path := filepath.Join(dir, "metadata.json")
+	if err := os.WriteFile(path, []byte(metadata), 0600); err != nil {
+		t.Fatal(err)
+	}
+	value, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer value.Close()
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != metadata {
+		t.Fatalf("schema-9 marker was rewritten: %s %v", got, err)
 	}
 }

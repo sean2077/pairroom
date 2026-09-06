@@ -8,8 +8,8 @@ import (
 )
 
 func TestProtocolVersionMatchesMentionRelayContract(t *testing.T) {
-	if Version != "pairroom-protocol/v5" {
-		t.Fatalf("protocol version = %q, want pairroom-protocol/v5", Version)
+	if Version != "pairroom-protocol/v6" {
+		t.Fatalf("protocol version = %q, want pairroom-protocol/v6", Version)
 	}
 }
 
@@ -50,7 +50,7 @@ func TestResolveWithoutFiltersIsCompleteAndDeterministic(t *testing.T) {
 	if first.Text() != second.Text() {
 		t.Fatal("contract output must be deterministic")
 	}
-	for _, fragment := range []string{"[role.driver]", "[role.reviewer]", "[role.peer]", "[convergence.intentional]"} {
+	for _, fragment := range []string{"[collaboration.creation]", "[convergence.intentional]"} {
 		if !strings.Contains(first.Text(), fragment) {
 			t.Fatalf("complete contract missing %q", fragment)
 		}

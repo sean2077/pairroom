@@ -12,17 +12,27 @@ PairRoom's CLI, Event Log, HTTP API, and native adapters evolve with the officia
 
 ## HTTP client adjustments (Unreleased)
 
-This polish update does not change Store schema 9, provisioning schema 2, native prompts, or complete-response Agent relay. Existing supported Rooms require no data migration for these changes.
+The HTTP reliability changes below preserve complete-response Agent relay. The collaboration update additionally changes native instructions and new-Room schemas as described in the next section.
 
 For external HTTP/SSE clients, validate `message_limit` as an integer from 0 to 1000; invalid values now return HTTP 400 rather than being silently reinterpreted. Omitted or zero limits still request the full snapshot. On an SSE `reset` event, fetch a fresh snapshot and reconnect from its `latest_seq`; the server closes that stream because the cursor is ahead or older than the bounded replay tail. A non-empty `Last-Event-ID` takes precedence over `since`. See [API reference](API_REFERENCE.md) for the wire contract.
 
-Native approval clients should render Grok's advertised options and send `decision: "option:<optionId>"`. One-time grants no longer fall back to remembered authorization, and cancellation is not a remembered rejection. Claude question responses must answer every exact native question text; incomplete or unknown answers fail without consuming the request. See [API reference](API_REFERENCE.md#native-approval-responses). No Event Log/provisioning schema change is required.
+Native approval clients should render Grok's advertised options and send `decision: "option:<optionId>"`. One-time grants no longer fall back to remembered authorization, and cancellation is not a remembered rejection. Claude question responses must answer every exact native question text; incomplete or unknown answers fail without consuming the request. See [API reference](API_REFERENCE.md#native-approval-responses). Those approval fixes alone did not change schemas.
 
-## Current breaking boundary
+## Collaboration modes and native permissions (Unreleased)
+
+New Rooms write **Store schema 10 / provisioning schema 3**. They choose only default Lead/Executor or custom natural-language instructions, fixed at creation. Both participants use the live workspace and default Service policy is YOLO; use the explicit creation controls or native configuration to narrow access. The new permission endpoint can change effective tool policy at an idle boundary without changing the mode or session identity.
+
+Existing Store-schema-9 Rooms and provisioning-1/2 records remain readable with their original policy and workspace boundaries. Opening them does not relabel metadata, add a new mode, or silently grant YOLO. Legacy public role controls are removed; create a new Room to adopt the new collaboration model. No in-place data migration is required or performed. Earlier pre-schema-9 stores remain unsupported.
+
+External clients must replace role controls with the independent permission endpoint for modern Rooms and must not send `target_role` or role aliases. The model-facing protocol is now v6: fixed identity/mode rules move into native instructions and dynamic envelopes contain only sender/body/media. Correlation IDs remain in transport and persistence, and message bodies/attachments are not summarized.
+
+An old binary cannot safely read new schema-10 / provisioning-3 data. Keep and verify a complete pre-upgrade backup. For downgrade, stop/drain normally and restore that backup with its matching binary; never edit schema numbers or copy partial Event Logs.
+
+## Earlier breaking boundaries still enforced
 
 ### Provider and Room provisioning migration
 
-This release moves the root module to Go 1.25, replaces PairRoom-owned Provider configuration with read-only CC Switch v3.20.1/schema 18 references, and writes new Rooms with provisioning schema 2.
+The earlier Provider update moved the root module to Go 1.25, replaced PairRoom-owned Provider configuration with read-only CC Switch v3.20.1/schema 18 references, and introduced provisioning schema 2. These Provider constraints remain; newly created Rooms now use schema 3.
 
 Before installing the new binary:
 
@@ -34,15 +44,15 @@ Before installing the new binary:
 
 Configuration containing removed Provider fields fails startup with migration guidance; it is never silently ignored. PairRoom does not copy old secrets into CC Switch and does not change the CC Switch current Profile.
 
-Existing schema-v1 Rooms are read without modification and shown as `Legacy defaults`. New schema-v2 Rooms retain their immutable two-slot Agent selections. An older PairRoom binary fails closed on schema-v2 provisioning facts. To downgrade, stop the newer Service and restore the complete pre-upgrade data-root backup; do not copy individual Event Logs or edit schema numbers.
+Existing schema-v1 Rooms are read without modification and shown as `Legacy defaults`. Existing schema-v2 Rooms retain their immutable two-slot Agent selections. An older PairRoom binary fails closed on schema-v2 provisioning facts. To downgrade, stop the newer Service and restore the complete pre-upgrade data-root backup; do not copy individual Event Logs or edit schema numbers.
 
 ### Routing migration
 
-The current Store schema is `9`. PairRoom rejects every older or newer Room before Event Log replay and provides no migration. Back up old Room data, keep the matching old binary if you need to inspect it, and create a new Room for the current release. Do not rewrite JSONL or metadata to fake a migration.
+The earlier routing redesign established Store schema `9`. The current reader accepts `9` and `10`, rejects all other schemas before Event Log replay, and does not migrate pre-9 Rooms. Keep their matching binary and backup for inspection; do not rewrite JSONL or metadata to fake a migration.
 
 Remove `routing_mode` and `max_agent_hops` from JSON configuration and remove `--routing` / `--max-hops` from automation. The strict decoder and CLI reject those removed interfaces. HTTP clients must send only `steer` or `queue` Message intents; `steer` is the default. Old `append`, `next_turn`, and `supersede` values are invalid.
 
-Workflow state, compilation, events, approval gates, and UI have been removed. Express the current task to one Agent, select Driver / Reviewer / Peer roles directly, and use native approvals. Agent relay now recognizes only runtime-derived exact handles: unique runtimes use `@claude`, `@codex`, or `@grok`; duplicate runtimes use stable `0/1` suffixes. Old aliases no longer route, and an unaddressed user send that relies on one is rejected; old control markers are ordinary text.
+Workflow state, compilation, events, approval gates, and UI have been removed. Express the task to one Agent, use creation-time collaboration instructions, and retain native approvals. Agent relay now recognizes only runtime-derived exact handles: unique runtimes use `@claude`, `@codex`, or `@grok`; duplicate runtimes use stable `0/1` suffixes. Old aliases no longer route, and an unaddressed user send that relies on one is rejected; old control markers are ordinary text.
 
 JSON keys `claude` and `codex` remain durable Agent 1 / Agent 2 slots. Add `runtime` (`claude` | `codex` | `grok`) per slot when selecting a non-default harness. Empty `provider`, `model`, `effort`, and `instructions` now inherit the selected native CLI's user/global configuration.
 
@@ -61,7 +71,7 @@ Then verify:
 - the Project registry can be read;
 - a new Mock Room can complete exact-handle relay and a multi-Turn FIFO;
 - backup verification succeeds;
-- real mode first completes a read-only single-Agent Turn, then an explicitly addressed Reviewer Turn.
+- real mode first completes a read-only single-Agent Turn, then an explicitly addressed peer review Turn.
 
 ## Rollback
 

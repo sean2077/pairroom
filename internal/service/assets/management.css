@@ -1068,3 +1068,9 @@ body[data-density="compact"] .stat-card { min-height: 98px; }
 
 .spinning { animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.collaboration-config { padding: 16px; border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
+.collaboration-config summary { cursor: pointer; font-size: 13px; }
+.collaboration-config textarea { width: 100%; min-height: 112px; resize: vertical; }
+.collaboration-instructions { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow-y: auto; font: inherit; font-size: 12px; line-height: 1.6; }
+.compact-callout { margin: 0; font-size: 12px; line-height: 1.5; }

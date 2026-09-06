@@ -152,9 +152,8 @@ func TestEmbeddedRuntimesIsolateRoomStateBindingsAndHTTPAuth(t *testing.T) {
 	if tokenA == tokenB || tokenA == "" || tokenB == "" {
 		t.Fatal("Room runtimes did not receive independent non-empty HTTP tokens")
 	}
-	// Role mutations refresh the reviewer Git worktree before committing the
-	// event. That durable boundary can exceed two seconds on Windows while the
-	// HTTP handler itself deliberately permits up to 45 seconds.
+	// Permission changes restart the selected native process at an idle boundary.
+	// Allow slower Windows process and filesystem startup here.
 	client := &http.Client{Timeout: 30 * time.Second}
 	readSnapshot := func(t *testing.T, endpoint, token string, wantStatus int) model.RoomSnapshot {
 		t.Helper()
@@ -189,29 +188,40 @@ func TestEmbeddedRuntimesIsolateRoomStateBindingsAndHTTPAuth(t *testing.T) {
 	_ = readSnapshot(t, endpointB, tokenA, http.StatusUnauthorized)
 	_ = readSnapshot(t, endpointA, tokenB, http.StatusUnauthorized)
 
-	// Participant roles are durable Room state. Changing Claude's role through
-	// Room A's HTTP API must not mutate Room B even though both runtimes use the
-	// same Project and loopback host.
-	roleEndpointA, _ := roomRuntimeEndpoint(t, runtimeA.URL(), "/api/v1/participants/claude/role")
-	roleRequest, err := http.NewRequestWithContext(ctx, http.MethodPut, roleEndpointA, strings.NewReader(`{"role":"peer"}`))
+	// Permissions are independent, durable Room state. A change in Room A
+	// must not affect Room B or either Room's collaboration responsibility.
+	permissionEndpoint, _ := roomRuntimeEndpoint(t, runtimeA.URL(), "/api/v1/participants/claude/permissions")
+	permissionRequest, err := http.NewRequestWithContext(ctx, http.MethodPut, permissionEndpoint, strings.NewReader(`{"profile":"read-only"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	roleRequest.Header.Set("Authorization", "Bearer "+tokenA)
-	roleRequest.Header.Set("Content-Type", "application/json")
-	roleResponse, err := client.Do(roleRequest)
+	permissionRequest.Header.Set("Authorization", "Bearer "+tokenA)
+	permissionRequest.Header.Set("Content-Type", "application/json")
+	permissionResponse, err := client.Do(permissionRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	roleResponse.Body.Close()
-	if roleResponse.StatusCode != http.StatusOK {
-		t.Fatalf("change Room A Claude role status=%d, want %d", roleResponse.StatusCode, http.StatusOK)
+	permissionResponse.Body.Close()
+	if permissionResponse.StatusCode != http.StatusOK {
+		t.Fatalf("permission update status=%d", permissionResponse.StatusCode)
 	}
-	if got := readSnapshot(t, endpointA, tokenA, http.StatusOK).Participants[model.ActorClaude].Role; got != model.RolePeer {
-		t.Fatalf("Room A Claude role=%q, want %q", got, model.RolePeer)
+	if got := readSnapshot(t, endpointA, tokenA, http.StatusOK).Participants[model.ActorClaude]; got.PermissionProfile != model.PermissionReadOnly || got.Responsibility != "lead" {
+		t.Fatalf("Room A participant=%+v", got)
 	}
-	if got := readSnapshot(t, endpointB, tokenB, http.StatusOK).Participants[model.ActorClaude].Role; got != model.RoleDriver {
-		t.Fatalf("Room A role mutation leaked into Room B: Claude role=%q", got)
+	if got := readSnapshot(t, endpointB, tokenB, http.StatusOK).Participants[model.ActorClaude]; got.PermissionProfile != model.PermissionConfigured || got.Responsibility != "lead" {
+		t.Fatalf("Room A permission mutation leaked into Room B: %+v", got)
+	}
+	oldEndpoint, _ := roomRuntimeEndpoint(t, runtimeA.URL(), "/api/v1/participants/claude/role")
+	oldRequest, _ := http.NewRequestWithContext(ctx, http.MethodPut, oldEndpoint, strings.NewReader(`{"role":"reviewer"}`))
+	oldRequest.Header.Set("Authorization", "Bearer "+tokenA)
+	oldRequest.Header.Set("Content-Type", "application/json")
+	oldResponse, err := client.Do(oldRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldResponse.Body.Close()
+	if oldResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("retired role API status=%d", oldResponse.StatusCode)
 	}
 
 	// Attachment stores are Room-scoped even when two runtimes serve the same

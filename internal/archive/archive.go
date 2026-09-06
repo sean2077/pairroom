@@ -127,7 +127,7 @@ func Verify(dataDir string) VerifyReport {
 		if metadata.SchemaVersion < 1 {
 			report.Errors = append(report.Errors, "metadata schema version must be positive")
 		}
-		if metadata.SchemaVersion != version.StoreSchema {
+		if !version.SupportsStoreSchema(metadata.SchemaVersion) {
 			report.Errors = append(report.Errors, fmt.Sprintf("schema %d is unsupported; this build requires schema %d", metadata.SchemaVersion, version.StoreSchema))
 		}
 	}

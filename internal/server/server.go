@@ -91,7 +91,7 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("GET /api/v1/export", s.exportRoom)
 	mux.HandleFunc("PUT /api/v1/settings", s.updateSettings)
 	mux.HandleFunc("POST /api/v1/participants/{actor}/{action}", s.participantAction)
-	mux.HandleFunc("PUT /api/v1/participants/{actor}/role", s.participantRole)
+	mux.HandleFunc("PUT /api/v1/participants/{actor}/permissions", s.participantPermissions)
 	mux.HandleFunc("POST /api/v1/approvals/{id}", s.resolveApproval)
 	mux.HandleFunc("GET /api/v1/git/status", s.gitStatus)
 	mux.HandleFunc("GET /api/v1/git/diff", s.gitDiff)
@@ -330,6 +330,10 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSON(w, r, &request); err != nil {
 		return
 	}
+	if request.TargetRole != "" {
+		writeError(w, http.StatusBadRequest, "target_role was removed; choose an exact participant handle")
+		return
+	}
 	message, err := s.engine.Send(r.Context(), request)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -454,10 +458,17 @@ func renderMarkdownTranscript(snapshot model.RoomSnapshot) string {
 	fmt.Fprintln(&out, "- Agent relay: exact runtime mention only; no PairRoom turn limit")
 	fmt.Fprintln(&out)
 
+	if c := snapshot.Meta.Collaboration; c != nil {
+		fmt.Fprintf(&out, "## Collaboration (%s; fixed at creation)\n\n%s\n\n", c.Mode, c.Instructions)
+	}
 	out.WriteString("## Participants\n\n")
 	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
 		p := snapshot.Participants[actor]
-		fmt.Fprintf(&out, "- **%s** (`%s`) — role `%s`, state `%s`", p.DisplayName, p.MentionHandle, p.Role, p.State)
+		if snapshot.Meta.Collaboration != nil {
+			fmt.Fprintf(&out, "- **%s** (`%s`) — %s, permissions `%s`, state `%s`", p.DisplayName, p.MentionHandle, p.Responsibility, p.PermissionProfile, p.State)
+		} else {
+			fmt.Fprintf(&out, "- **%s** (`%s`) — legacy role `%s`, state `%s`", p.DisplayName, p.MentionHandle, p.Role, p.State)
+		}
 		if p.Runtime.Version != "" {
 			fmt.Fprintf(&out, ", runtime `%s`", p.Runtime.Version)
 		}
@@ -591,24 +602,22 @@ func (s *Server) participantAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "actor": actor, "action": action})
 }
 
-func (s *Server) participantRole(w http.ResponseWriter, r *http.Request) {
-	actor := model.ActorID(strings.ToLower(r.PathValue("actor")))
+func (s *Server) participantPermissions(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		Role model.ParticipantRole `json:"role"`
+		Profile model.PermissionProfile `json:"profile"`
 	}
 	if err := decodeJSON(w, r, &request); err != nil {
 		return
 	}
+	actor := model.ActorID(strings.ToLower(r.PathValue("actor")))
+	if !actor.ValidParticipant() || !request.Profile.Valid() {
+		writeError(w, http.StatusBadRequest, "invalid participant or permission profile")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
-	var err error
-	if request.Role == model.RoleDriver {
-		err = s.engine.SwitchDriver(ctx, actor)
-	} else {
-		err = s.engine.SetRole(ctx, actor, request.Role)
-	}
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := s.engine.SetPermissions(ctx, actor, request.Profile); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
