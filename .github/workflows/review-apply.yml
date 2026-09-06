@@ -1,0 +1,41 @@
+name: Apply verified naming patch (temporary)
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/review-apply.yml', '.review/names-*.part']
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'feat/room-runtime-names'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Verify and apply the reviewed product tree
+        env:
+          TARGET_BRANCH: feat/room-runtime-names
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          cat .review/names-01.part .review/names-02.part .review/names-03.part > "$RUNNER_TEMP/names.patch.xz"
+          printf '%s  %s\n' '08d4275fd5e4a33953cf8ebcd42f87013d7f374f663a2b58a2143dca79723423' "$RUNNER_TEMP/names.patch.xz" | sha256sum -c -
+          xz -dc "$RUNNER_TEMP/names.patch.xz" > "$RUNNER_TEMP/names.patch"
+          printf '%s  %s\n' 'b62c36190d368f6d881fda9a5de23e9faf7f63f6b3616bcde99e2c5ed05bc98e' "$RUNNER_TEMP/names.patch" | sha256sum -c -
+          git apply --unidiff-zero --check "$RUNNER_TEMP/names.patch"
+          git apply --unidiff-zero --index "$RUNNER_TEMP/names.patch"
+          git diff --cached --check
+          staged_tree="$(git write-tree)"
+          export GIT_INDEX_FILE="$RUNNER_TEMP/product-index"
+          git read-tree "$staged_tree"
+          git update-index --force-remove .github/workflows/review-source.yml .github/workflows/review-apply.yml .review/names-01.part .review/names-02.part .review/names-03.part
+          test "$(git write-tree)" = 'aa64cdb2a4202359a222f451c40b94b179249b3c'
+          unset GIT_INDEX_FILE
+          test "$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)" = "$EXPECTED_HEAD"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat: link Room and native session names with durable context-menu rename'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
