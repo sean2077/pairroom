@@ -380,9 +380,10 @@ func (s *ManagementServer) removeProject(w http.ResponseWriter, r *http.Request)
 
 func (s *ManagementServer) provisionRoom(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		Name     string                        `json:"name"`
-		Bindings map[model.ActorID]BindingSpec `json:"bindings"`
-		Agents   json.RawMessage               `json:"agents"`
+		Collaboration *model.Collaboration          `json:"collaboration"`
+		Name          string                        `json:"name"`
+		Bindings      map[model.ActorID]BindingSpec `json:"bindings"`
+		Agents        json.RawMessage               `json:"agents"`
 	}
 	if err := decodeManagementJSON(w, r, &request); err != nil {
 		return
@@ -411,7 +412,8 @@ func (s *ManagementServer) provisionRoom(w http.ResponseWriter, r *http.Request)
 		agents = validated
 	}
 	room, err := s.registry.ProvisionRoom(r.Context(), ProvisionRequest{
-		ProjectID: r.PathValue("project"), Name: request.Name, Bindings: request.Bindings, Agents: agents,
+		Collaboration: request.Collaboration,
+		ProjectID:     r.PathValue("project"), Name: request.Name, Bindings: request.Bindings, Agents: agents,
 	}, s.provisioner)
 	if err != nil {
 		s.writeError(w, err)

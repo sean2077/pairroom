@@ -85,6 +85,54 @@ func TestInvalidModeFailsBeforeNativeBindingValidation(t *testing.T) {
 	}
 }
 
+func TestManagementHTTPAcceptsCreationCollaboration(t *testing.T) {
+	registry, project := testRegistry(t, testGitRepo(t))
+	manager, _ := NewRuntimeManager(registry, (&fakeRuntimeFactory{}).open, RuntimeManagerConfig{Limit: 2})
+	defer manager.Shutdown(context.Background())
+	server, err := NewManagementServer(ManagementServerConfig{Registry: registry, Runtimes: manager, Provisioner: SyntheticProvisioner{}, Token: "management-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := `{"claude":{"mode":"new"},"codex":{"mode":"new"}}`
+	defaultBody := `{"name":"ui-default","bindings":` + bindings + `,"collaboration":{"mode":"default"}}`
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, managementRequest(http.MethodPost, "/api/v1/projects/"+project.ID+"/rooms", defaultBody, true))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("default create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created Room
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := (model.Collaboration{}).ForCreation()
+	if created.Collaboration == nil || *created.Collaboration != want {
+		t.Fatalf("default collaboration=%+v", created.Collaboration)
+	}
+
+	custom := "Agent 2 plans; Agent 1 implements. 保留中文规则。"
+	customBody, _ := json.Marshal(map[string]any{
+		"name": "ui-custom", "bindings": specs(BindingNew, BindingNew, ""),
+		"collaboration": map[string]string{"mode": model.CollaborationCustom, "instructions": custom},
+	})
+	customResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(customResponse, managementRequest(http.MethodPost, "/api/v1/projects/"+project.ID+"/rooms", string(customBody), true))
+	if customResponse.Code != http.StatusCreated {
+		t.Fatalf("custom create status=%d body=%s", customResponse.Code, customResponse.Body.String())
+	}
+	if err := json.Unmarshal(customResponse.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Collaboration == nil || created.Collaboration.Mode != model.CollaborationCustom || created.Collaboration.Instructions != custom {
+		t.Fatalf("custom collaboration=%+v", created.Collaboration)
+	}
+
+	rejected := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rejected, managementRequest(http.MethodPost, "/api/v1/projects/"+project.ID+"/rooms", `{"name":"bad","bindings":`+bindings+`,"collaboration":{"mode":"discussion"}}`, true))
+	if rejected.Code != http.StatusBadRequest || !strings.Contains(rejected.Body.String(), "invalid collaboration mode") {
+		t.Fatalf("invalid mode status=%d body=%s", rejected.Code, rejected.Body.String())
+	}
+}
+
 func TestManagementRejectsChangingCollaborationAfterCreation(t *testing.T) {
 	registry, project := testRegistry(t, testGitRepo(t))
 	created, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: project.ID, Name: "fixed", Bindings: specs(BindingNew, BindingNew, "")}, SyntheticProvisioner{})
