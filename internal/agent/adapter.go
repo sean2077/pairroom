@@ -21,6 +21,7 @@ type Config struct {
 	Actor                  model.ActorID
 	Repo                   string
 	DataDir                string
+	RoomID                 string
 	RoomName               string
 	ClientVersion          string
 	Command                string

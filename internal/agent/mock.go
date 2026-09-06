@@ -73,6 +73,10 @@ func (m *MockAdapter) Start(ctx context.Context) error {
 		Available: true, Command: "mock", Protocol: "pairroom-mock", Version: version.Current,
 		Model: "deterministic-mock", Capabilities: []string{"queued-input", "interrupt", "tool-events"}, ProbedAt: time.Now().UTC(),
 	}
+	info.SessionName = configuredSessionName(m.cfg)
+	if info.SessionName != "" {
+		info.SessionNameStatus = "simulated"
+	}
 	emitRuntimeInfo(m.sink, m.cfg.Actor, info)
 	sessionEvent := runtimeEvent(m.cfg.Actor, model.RuntimeSession)
 	sessionEvent.SessionID = m.SessionID()

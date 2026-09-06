@@ -16,6 +16,8 @@ Management、Room View 与 Desktop 启动页共享内嵌的 i18next 26.4.2 `en`/
 
 **新 Room 的两位 Agent 默认均为 YOLO**，都使用实时工作区，可跳过常规工具审批执行命令、修改文件。请使用可信仓库，或选择更严格的原生权限。Room 内只能在空闲边界调整权限，不能切换身份或修改模式；寻址仅用界面显示的运行时句柄，不使用 `@driver`、`@reviewer` 或职责别名。旧 Room 保留既有权限与工作区边界，见[升级说明](docs/UPGRADING.md)。
 
+**Room 与原生会话名称可相互核对。** 创建时留空会生成 `Room-<短 ID>` 临时名；可右键侧栏、标签页或项目列表中的 Room 重命名，也可用 Shift+F10 打开菜单。原生会话在下次启动时按 `<Room 名> · <@句柄> · <Room 短 ID>` 设置名称；Room 内同时显示同步状态和不变的原生 ID。重命名等待当前任务结束，不中断正在执行的 Turn。
+
 ## 核心模型
 
 PairRoom 不让两个 Agent 像 IM 群聊一样并发互相唤醒。每个 Room 同一时刻只有一个 **native Turn owner**：

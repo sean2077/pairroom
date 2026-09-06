@@ -543,6 +543,24 @@ func (s *ManagementServer) renameRoom(w http.ResponseWriter, r *http.Request) {
 	roomID := r.PathValue("room")
 	unlock := s.lockRoom(roomID)
 	defer unlock()
+	// Reject bad/no-op names before draining a native runtime.
+	if err := validateSubmittedRoomName(request.Name, false); err != nil {
+		s.writeError(w, err)
+		return
+	}
+	if err := s.registry.Healthy(); err != nil {
+		s.writeError(w, err)
+		return
+	}
+	current, ok := s.registry.Room(roomID)
+	if !ok {
+		s.writeError(w, ErrRoomNotFound)
+		return
+	}
+	if current.Name == strings.TrimSpace(request.Name) {
+		writeManagementJSON(w, http.StatusOK, current)
+		return
+	}
 	// Keeping control-plane appends outside an active Engine avoids introducing
 	// a second live projection of the same append-only log. Active work is never
 	// interrupted; this request waits for the safe Turn boundary.
@@ -989,6 +1007,8 @@ func (s *ManagementServer) writeError(w http.ResponseWriter, err error) {
 
 	code := http.StatusInternalServerError
 	switch {
+	case errors.Is(err, ErrInvalidRoomName):
+		code = http.StatusBadRequest
 	case errors.Is(err, ErrProjectAlreadyRegistered), errors.Is(err, ErrProjectHasRooms),
 		errors.Is(err, ErrBindingOwned), errors.Is(err, ErrRoomBindingPending):
 		code = http.StatusConflict

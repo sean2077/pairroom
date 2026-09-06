@@ -12,8 +12,9 @@ import json
 import os
 import re
 from pathlib import Path
+from urllib.parse import urlparse
 
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, expect
 
 from test_room_browser import ROOT, collaboration_fixture
 
@@ -26,7 +27,7 @@ def fixture_html() -> str:
         return (ROOT / directory / src.rsplit('/', 1)[-1]).read_text(encoding='utf-8')
 
     html = re.sub(r'<link\b[^>]*rel="icon"[^>]*>', '', html)
-    html = re.sub(r'<link\b[^>]*rel="stylesheet"[^>]*href="([^"]+)"[^>]*>', lambda m: '<style>' + asset(m[1]) + '</style>', html)
+    html = re.sub(r'<link\b[^>]*rel="stylesheet"[^>]*href="([^"]+)"[^>]*>', lambda m: ('<style id="management-styles">' if m[1] == '/management.css' else '<style>') + asset(m[1]) + '</style>', html)
     html = re.sub(r'<script\b[^>]*src="([^"]+)"[^>]*></script>', lambda m: '<script>' + asset(m[1]).replace('</script>', '<\\/script>') + '</script>', html)
     mock = r'''
       window.__snapshot = {
@@ -64,7 +65,167 @@ def fixture_html() -> str:
     return html.replace('<head>', '<head><script>' + mock + '</script>', 1)
 
 
-async def verify(browser_path: str | None, artifacts: Path) -> None:
+async def load_csp_fixture(page) -> None:
+    """Load real external assets under the production CSP, with test-only HTTP state."""
+    mock = re.search(r'<head><script>(.*?)</script>', fixture_html(), re.S)
+    assert mock, 'missing Management state fixture'
+    await page.add_init_script(mock[1])
+    await page.add_init_script("window.__cspErrors=[]; document.addEventListener('securitypolicyviolation', e=>__cspErrors.push(e.violatedDirective))")
+    server = (ROOT / 'internal/service/management.go').read_text(encoding='utf-8')
+    csp = re.search(r'Set\("Content-Security-Policy", "([^"]+)"\)', server)
+    assert csp, 'missing production Management CSP'
+
+    async def route(request):
+        path = urlparse(request.request.url).path
+        if path == '/':
+            await request.fulfill(status=200, content_type='text/html', headers={'Content-Security-Policy': csp[1]},
+                                  body=(ROOT / 'internal/service/assets/index.html').read_text(encoding='utf-8'))
+        elif path.endswith('/surface/'):
+            await request.fulfill(status=200, content_type='text/html', body='<html><body>Inert Room fixture</body></html>')
+        else:
+            directory = 'internal/webui/assets' if path.startswith('/_pairroom/') else 'internal/service/assets'
+            asset = ROOT / directory / path.rsplit('/', 1)[-1]
+            if not asset.is_file():
+                await request.fulfill(status=404, body='Fixture resource not found')
+                return
+            content_type = {'.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'}.get(asset.suffix, 'text/plain')
+            await request.fulfill(status=200, content_type=content_type, body=asset.read_bytes())
+
+    await page.route('http://127.0.0.1:7332/**', route)
+    await page.goto('http://127.0.0.1:7332/#/projects/p1')
+
+
+async def verify_names(browser, artifacts: Path, in_page_fixture: bool = False) -> dict:
+    page = await browser.new_page(viewport={'width': 1440, 'height': 1000}, locale='en-US', reduced_motion='reduce')
+    page.set_default_timeout(5000)
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    if in_page_fixture:
+        await page.evaluate("location.hash='#/projects/p1'")
+        await page.set_content(fixture_html())
+    else:
+        await load_csp_fixture(page)
+    await page.wait_for_selector('#app:not([hidden]) .tree-room')
+    # Stateful fixture mirrors only the name/read-side contract. Real persistence,
+    # authentication and safe native boundaries are verified in Go tests.
+    await page.evaluate("""() => {
+      const original=window.fetch;
+      window.__nameWrites=[]; window.__renameFail=false; window.__expired=false;
+      const names=room => Object.fromEntries(['claude','codex'].map(actor=>[actor,`${room.name} · @${actor} · ${room.id.slice(-12)}`]));
+      __snapshot.rooms.forEach(room=>room.runtime_names=names(room));
+      window.fetch=async(path,options={})=>{
+        const reply=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json'}});
+        if(__expired&&path==='/api/v1/service') return reply({error:'Expired'},401);
+        if(options.method==='POST'&&path==='/api/v1/projects/p1/rooms'){
+          const sent=JSON.parse(options.body); __nameWrites.push({path,...sent});
+          const room={...structuredClone(__snapshot.rooms[0]),id:'room-111111111111cccccccccccc',name:sent.name||'Room-cccccccccccc',bindings:sent.bindings,agents:sent.agents};
+          room.runtime_names=names(room); __snapshot.rooms.push(room);return reply(room,201);
+        }
+        if(options.method==='PATCH'&&path.startsWith('/api/v1/rooms/')){
+          const sent=JSON.parse(options.body); __nameWrites.push({path,...sent});
+          if(__renameFail) return reply({error:'Fixture rename failed'},409);
+          const room=__snapshot.rooms.find(room=>room.id===path.split('/').at(-1));
+          room.name=sent.name; room.runtime_names=names(room);return reply(room);
+        }
+        return original(path,options);
+      };
+      document.getElementById('refresh-button').click();
+    }""")
+    await page.get_by_role('button', name='+ Create Room', exact=True).first.click()
+    await expect(page.locator('#room-submit')).to_be_enabled()
+    assert not await page.locator('#room-name').get_attribute('required')
+    assert await page.locator('#room-name').input_value() == ''
+    await page.screenshot(path=str(artifacts / 'room-name-optional-light.png'))
+    await page.locator('#room-submit').click()
+    await expect(page.locator('#room-dialog')).not_to_be_visible()
+    await page.wait_for_selector('.tree-room[data-room-id="room-111111111111cccccccccccc"]')
+    assert await page.evaluate('__nameWrites[0].name') == '', 'browser generated its own competing name'
+    auto = page.locator('.tree-room[data-room-id="room-111111111111cccccccccccc"]')
+    assert 'Room-cccccccccccc' in await auto.inner_text()
+    # A genuine mouse context menu on the sidebar addresses the clicked Room.
+    await auto.click(button='right')
+    assert await page.locator('#room-context-menu').is_visible()
+    assert await page.locator('#context-room-name').inner_text() == 'Room-cccccccccccc'
+    await page.screenshot(path=str(artifacts / 'room-context-menu-light.png'))
+    await page.locator('#context-rename-room').click()
+    assert await page.locator('#rename-room-id').input_value() == 'room-111111111111cccccccccccc'
+    await page.locator('#rename-room-name').fill('地图渲染优化')
+    await page.locator('#rename-form [type=submit]').click()
+    await expect(page.locator('#rename-dialog')).not_to_be_visible()
+    await expect(auto).to_contain_text('地图渲染优化')
+    assert await page.locator('.room-row[data-room-id="room-111111111111cccccccccccc"] .binding-runtime-name').evaluate_all('nodes=>nodes.map(n=>n.textContent)') == ['地图渲染优化 · @claude · cccccccccccc', '地图渲染优化 · @codex · cccccccccccc']
+    # The open tab's identity survives a display-name change. No new native ID.
+    await auto.click()
+    tab = page.locator('.room-tab[data-room-id="room-111111111111cccccccccccc"] .room-tab-target')
+    await tab.wait_for()
+    await tab.press('Shift+F10')
+    assert await page.locator('#room-context-menu').is_visible()
+    await page.keyboard.press('Escape')
+    assert await tab.evaluate('node=>document.activeElement===node'), 'keyboard menu lost focus'
+    await tab.click(button='right')
+    await page.locator('#context-rename-room').click()
+    await page.locator('#rename-room-name').fill('Renderer review')
+    await page.locator('#rename-form [type=submit]').click()
+    await expect(page.locator('#rename-dialog')).not_to_be_visible()
+    await expect(tab).to_contain_text('Renderer review')
+    assert await page.locator('#room-stage [data-room-id="room-111111111111cccccccccccc"]').count() == 1
+    # Project-row context menu works without navigating into the Room first.
+    await page.evaluate("location.hash='#/projects/p1'")
+    row = page.locator('.room-row[data-room-id="r2"]')
+    await row.wait_for()
+    await row.click(button='right')
+    await page.locator('#context-rename-room').click()
+    assert await page.locator('#rename-room-id').input_value() == 'r2'
+    count = await page.evaluate('__nameWrites.length')
+    await page.locator('#rename-room-name').fill('名' * 54)
+    await page.locator('#rename-form [type=submit]').click()
+    assert await page.evaluate('__nameWrites.length') == count, 'UTF-8 limit bypassed'
+    await page.locator('#rename-room-name').fill('Review workspace')
+    await page.locator('#rename-form [type=submit]').click()
+    assert await page.evaluate('__nameWrites.length') == count, 'unchanged name sent a mutation'
+    assert not await page.locator('#rename-dialog').evaluate('node=>node.open')
+    await row.click(button='right')
+    await page.locator('#context-rename-room').click()
+    await page.evaluate('__renameFail=true')
+    await page.locator('#rename-room-name').fill('Retain failed rename')
+    await page.locator('#rename-form [type=submit]').click()
+    await expect(page.locator('#rename-form-error')).to_contain_text('Fixture rename failed')
+    assert await page.locator('#rename-room-name').input_value() == 'Retain failed rename'
+    await page.locator('#rename-dialog [data-close-dialog=rename-dialog]').first.click()
+    # Viewport positioning and localized accessible operation labels.
+    await page.evaluate("PairRoomI18n.setLang('zh-CN'); PairRoomTheme.setTheme('dark')")
+    await page.set_viewport_size({'width':390,'height':844})
+    await page.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+    await row.evaluate("node=>node.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:388,clientY:842}))")
+    # Stylesheet-rule changes are reflected at the next rendering opportunity.
+    await page.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+    menu = await page.locator('#room-context-menu').bounding_box()
+    assert menu and menu['x'] >= 0 and menu['x']+menu['width']<=390 and menu['y']+menu['height']<=844, menu
+    assert await page.locator('#context-rename-room').inner_text() == '重命名 Room'
+    await page.screenshot(path=str(artifacts / 'room-context-menu-mobile-dark.png'))
+    await page.keyboard.press('Escape')
+    await page.set_viewport_size({'width':1440,'height':1000})
+    await row.click(button='right')
+    await page.evaluate("__snapshot.rooms=__snapshot.rooms.filter(r=>r.id!=='r2');document.getElementById('refresh-button').click()")
+    await expect(page.locator('#room-context-menu')).not_to_be_visible()
+    await page.locator('.tree-room[data-room-id="r1"]').click(button='right')
+    await page.evaluate("__expired=true;document.getElementById('refresh-button').click()")
+    await page.wait_for_selector('#login-screen:not([hidden])')
+    assert not await page.locator('#room-context-menu').is_visible(), 'menu survived logout'
+    assert not errors, errors
+    if not in_page_fixture:
+        assert not await page.evaluate('__cspErrors'), 'context menu violated production CSP'
+    assert await page.locator('#room-context-menu').get_attribute('style') is None
+    # Reopening the same menu must replace, not accumulate, positioning rules.
+    assert await page.evaluate("Array.from(document.styleSheets).flatMap(s=>Array.from(s.cssRules)).filter(r=>r.selectorText==='#room-context-menu').length") == 1
+    await page.close()
+    return dict(context_menu_strict_csp=not in_page_fixture, optional_room_name=True, server_name_receipt=True, context_rename_sidebar_tab_row=True,
+                name_maps_preserved=True, rename_keyboard_focus=True, rename_utf8_limit=True,
+                rename_noop_no_post=True, rename_failure_preserves_text=True, stale_menu_closed=True,
+                context_menu_mobile_clamped=True, names_page_errors=errors)
+
+
+async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: bool = False) -> None:
     artifacts.mkdir(parents=True, exist_ok=True)
     results = {}
     async with async_playwright() as playwright:
@@ -225,6 +386,7 @@ async def verify(browser_path: str | None, artifacts: Path) -> None:
             await page.set_viewport_size({'width': 1440, 'height': 1000})
         results['responsive_header_and_locale_identity'] = True
         assert not errors, errors
+        results.update(await verify_names(browser, artifacts, in_page_fixture))
         results['page_errors'] = errors
         (artifacts / 'results.json').write_text(json.dumps(results, indent=2) + '\n', encoding='utf-8')
         print(json.dumps(results, indent=2))
@@ -235,5 +397,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--browser', default=os.environ.get('PAIRROOM_BROWSER_EXECUTABLE'))
     parser.add_argument('--artifacts', type=Path, default=ROOT / '.browser-results' / 'management')
+    parser.add_argument('--in-page-fixture', action='store_true', help='For isolated browsers that forbid navigation: skip the production CSP check, use inline fixture assets')
     args = parser.parse_args()
-    asyncio.run(verify(args.browser, args.artifacts))
+    asyncio.run(verify(args.browser, args.artifacts, args.in_page_fixture))

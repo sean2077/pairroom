@@ -34,6 +34,18 @@ Durable `ActorID` values identify the two Room slots: `claude` is Agent 1 and `c
 
 Every adapter must emit the configured slot actor on events. Never hard-code a vendor as the event actor. Persistence and Binding ownership stay on the slot, while public display names and `mention_handle` values derive from the current runtime assignment. Duplicate runtimes use stable slot-order suffixes `0/1`.
 
+## Room and native session names
+
+`Room.name` is mutable display metadata; `Room.id` and `(ActorID, vendor_session_id)` remain the durable identities. Creation generates a missing name from the Room ID before writing its facts. The existing `service.room.renamed` event owns subsequent names, so registry rebuild and engine replay agree. Runtime name maps are derived read-side projections, never an independent authority. Neither paths nor native identities are renamed.
+
+The native name is `<Room name> · <@handle> · <short Room ID>`, limited to 100 Unicode scalars with the handle and suffix intact. The shared helper in `internal/model/names.go` is used by Management and native adapters. These labels do not enter collaboration instructions or per-turn envelopes. Startup and permission-replacement adapters receive the current durable Room ID/name; provisioning probes intentionally have no Room ID and cannot rename an existing session before binding it.
+
+Claude uses the advertised `--name=<title>` launch option (one argument, including leading-dash names). Codex calls `thread/name/set` with `threadId` and `name` after exact thread creation/resume. Grok calls `x.ai/session/rename` with `sessionId`, `title`, and `cwd` after opening its native session; only method-not-found permits the older `_x.ai/session/rename` spelling. JSON-RPC naming waits have a two-second context deadline. A naming error is visible in RuntimeInfo, not a failed user Turn or a reason to change session identity. Unsupported Claude flags are omitted. No naming operation invokes a model or edits vendor-owned storage directly.
+
+Room rename retains the single-writer lifecycle: close the mutation gate, wait for native work to settle without interrupting, suspend, then append the rename fact. Native metadata catches up on the next activation; a dormant/archived Room does not wake a vendor merely to update its title. This can replace a manually chosen title on a session explicitly bound to the Room. RuntimeInfo distinguishes a desired name, configured CLI argument, acknowledged metadata request, failure, and Mock simulation; it does not claim an unsupported CLI has renamed anything.
+
+Upstream contracts: [Claude CLI reference](https://code.claude.com/docs/en/cli-reference), [Codex App Server](https://github.com/openai/codex/blob/6af345407d9c2a568da9d01b6c4b81a9e61495c0/codex-rs/app-server/README.md), and [Grok session administration](https://github.com/xai-org/grok-build/blob/72a61251fcffb464bcc687aeb5a998e5a98ec0c9/crates/codegen/xai-grok-shell/src/extensions/session_admin.rs). Adapter tests use deterministic protocol fixtures, not authenticated vendor E2E.
+
 ## State ownership
 
 | State | Authority |

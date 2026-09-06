@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/sean2077/pairroom/internal/model"
 )
@@ -138,6 +140,7 @@ type Project struct {
 }
 
 type Room struct {
+	RuntimeNames             map[model.ActorID]string               `json:"runtime_names,omitempty"`
 	Collaboration            *model.Collaboration                   `json:"collaboration,omitempty"`
 	ID                       string                                 `json:"id"`
 	ProjectID                string                                 `json:"project_id"`
@@ -254,7 +257,7 @@ func (r ProvisionRequest) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}
-	if err := validateRoomName(r.Name); err != nil {
+	if err := validateSubmittedRoomName(r.Name, true); err != nil {
 		return err
 	}
 	if len(r.Bindings) != 2 {
@@ -356,6 +359,22 @@ func validateRoomName(name string) error {
 	}
 	if strings.ContainsAny(name, "\r\n\x00") {
 		return errors.New("room name contains control characters")
+	}
+	return nil
+}
+
+var ErrInvalidRoomName = errors.New("invalid room name")
+
+// Stronger validation applies to new submissions, not historical Room facts.
+func validateSubmittedRoomName(name string, optional bool) error {
+	if !utf8.ValidString(name) || strings.IndexFunc(name, unicode.IsControl) >= 0 {
+		return fmt.Errorf("%w: must be valid UTF-8 without control characters", ErrInvalidRoomName)
+	}
+	if optional && strings.TrimSpace(name) == "" {
+		return nil
+	}
+	if err := validateRoomName(name); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidRoomName, err)
 	}
 	return nil
 }

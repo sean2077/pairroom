@@ -41,6 +41,10 @@
     projectMode: 'register',
     bindingRoomID: '',
     roomDialogRevision: 0,
+    contextRoomID: '',
+    contextTrigger: null,
+    contextScrollPositions: new Map(),
+    contextPositionRule: null,
     confirmAction: null,
     confirmRequirement: '',
     confirmAcknowledgementRequired: false,
@@ -147,6 +151,7 @@
   }
 
   function showCredentialLogin(message = '') {
+    closeRoomContextMenu();
     invalidateSessionReads();
     state.authenticated = false;
     state.connected = false;
@@ -309,6 +314,7 @@
         const nextRenderKey = snapshotRenderKey(snapshot);
         const snapshotChanged = nextRenderKey !== state.renderedSnapshotKey;
         state.snapshot = snapshot;
+        if (state.contextRoomID && !roomByID(state.contextRoomID)) closeRoomContextMenu();
         pruneRoomSelection(snapshot);
         state.connected = true;
         state.lastError = '';
@@ -542,6 +548,8 @@
     return node('button', {
       type: 'button',
       className: `tree-room ${current ? 'active' : ''} ${archived ? 'archived' : ''}`,
+      'data-room-id': room.id,
+      'aria-haspopup': 'menu',
       title: archived ? t("ui.archivedCanOnlyBeOpenedAfterRestoration") : room.name,
       onClick: () => {
         if (archived) {
@@ -1028,8 +1036,8 @@
 	  room.legacy_defaults ? statusBadge(t('room.legacyDefaults'), 'info') : null
 	);
 	const meta = node('div', { className: 'room-meta' },
-	  bindingMeta('claude', room.bindings?.claude),
-	  bindingMeta('codex', room.bindings?.codex),
+	  bindingMeta('claude', room.bindings?.claude, room.runtime_names?.claude),
+	  bindingMeta('codex', room.bindings?.codex, room.runtime_names?.codex),
 	  room.agents?.claude ? agentSelectionMeta(t('agent.agent1'), room.agents.claude) : null,
 	  room.agents?.codex ? agentSelectionMeta(t('agent.agent2'), room.agents.codex) : null,
 	  node('code', { textContent: room.id, title: room.id })
@@ -1065,7 +1073,7 @@
       actions.append(actionButton(t("ui.rename"), () => openRenameDialog(room), 'secondary-button compact-button room-action-control'));
       actions.append(actionButton(t("ui.archive"), () => archiveRoom(room), 'danger-button outline compact-button room-action-control'));
     }
-    return node('article', { className: 'room-row' }, node('div', { className: 'room-row-main' }, title, meta), actions);
+    return node('article', { className: 'room-row', 'data-room-id': room.id }, node('div', { className: 'room-row-main' }, title, meta), actions);
   }
 
   function agentSelectionMeta(label, selection) {
@@ -1536,9 +1544,12 @@
     return `${mode}${compact ? ` · ${compact}` : ''}`;
   }
 
-  function bindingMeta(actor, binding) {
-    const title = bindingText(binding);
-    return node('span', { className: 'binding-line', title }, node('span', { className: `agent-dot ${actor}`, textContent: actor === 'claude' ? '1' : '2' }), node('span', { textContent: title }));
+  function bindingMeta(actor, binding, runtimeName = '') {
+    const title = [runtimeName, binding?.session_id || bindingText(binding)].filter(Boolean).join('\n');
+    const copy = node('span', { className: 'binding-copy' });
+    if (runtimeName) copy.append(node('span', { className: 'binding-runtime-name', textContent: runtimeName, title: t('room.runtimeNameOnActivation') }));
+    copy.append(node('span', { textContent: bindingText(binding) }));
+    return node('span', { className: 'binding-line', title }, node('span', { className: `agent-dot ${actor}`, textContent: actor === 'claude' ? '1' : '2' }), copy);
   }
 
   function runtimeLabel(runtime) {
@@ -1820,8 +1831,8 @@
     event.preventDefault();
     const projectID = $('room-project-id').value;
     const name = $('room-name').value.trim();
-    if (!name) {
-      showFormError('room-form-error', t("ui.roomNameCannotBeEmpty"));
+    if (!validRoomName($('room-name').value, true)) {
+      showFormError('room-form-error', t('room.invalidName'));
       return;
     }
     const mode = $('room-collaboration-mode').value;
@@ -1856,6 +1867,62 @@
     });
   }
 
+  function validRoomName(value, optional) {
+    const trimmed = value.trim();
+    return (optional || Boolean(trimmed)) && new TextEncoder().encode(trimmed).length <= 160
+      && !/[\u0000-\u001f\u007f-\u009f]/u.test(value);
+  }
+
+  function closeRoomContextMenu(restoreFocus = false) {
+    const roomID = state.contextRoomID;
+    const trigger = state.contextTrigger?.isConnected ? state.contextTrigger
+      : Array.from(document.querySelectorAll('.tree-room[data-room-id], .room-tab[data-room-id]')).find(node => node.dataset.roomId === roomID);
+    $('room-context-menu').hidden = true;
+    state.contextRoomID = '';
+    state.contextTrigger = null;
+    state.contextScrollPositions.clear();
+    if (restoreFocus && trigger) (trigger.matches('button') ? trigger : trigger.querySelector('button'))?.focus({ preventScroll: true });
+  }
+
+  function positionRoomContextMenu(left, top) {
+    // Mutate only the same-origin, shipped stylesheet: no inline style
+    // attributes, injected style elements, or relaxation of Management CSP.
+    const sheet = $('management-styles')?.sheet;
+    if (!sheet) return; // Static top/left keep the action reachable on failure.
+    const previous = state.contextPositionRule;
+    if (previous?.parentStyleSheet === sheet) {
+      const index = Array.from(sheet.cssRules).indexOf(previous);
+      if (index >= 0) sheet.deleteRule(index);
+    }
+    const index = sheet.insertRule(`#room-context-menu { left: ${left}px; top: ${top}px; }`, sheet.cssRules.length);
+    state.contextPositionRule = sheet.cssRules[index];
+  }
+
+  function openRoomContextMenu(event, keyboard = false) {
+    const trigger = event.target.closest?.('.tree-room[data-room-id], .room-tab[data-room-id], .room-row[data-room-id]');
+    const room = trigger && roomByID(trigger.dataset.roomId);
+    if (!room || !state.authenticated) return;
+    event.preventDefault();
+    event.stopPropagation();
+    state.contextRoomID = room.id;
+    state.contextTrigger = trigger.matches('button') ? trigger : trigger.querySelector('button');
+    state.contextScrollPositions.clear();
+    for (let ancestor = trigger; ancestor; ancestor = ancestor.parentElement) {
+      state.contextScrollPositions.set(ancestor, [ancestor.scrollLeft, ancestor.scrollTop]);
+    }
+    const menu = $('room-context-menu');
+    $('context-room-name').textContent = room.name;
+    menu.hidden = false;
+    const rect = trigger.getBoundingClientRect();
+    const x = !keyboard && Number.isFinite(event.clientX) ? event.clientX : rect.left;
+    const y = !keyboard && Number.isFinite(event.clientY) ? event.clientY : rect.bottom;
+    positionRoomContextMenu(
+      Math.max(8, Math.min(x, window.innerWidth - menu.offsetWidth - 8)),
+      Math.max(8, Math.min(y, window.innerHeight - menu.offsetHeight - 8)),
+    );
+    $('context-rename-room').focus({ preventScroll: true });
+  }
+
   function openRenameDialog(room) {
     $('rename-room-id').value = room.id;
     $('rename-room-name').value = room.name;
@@ -1869,8 +1936,8 @@
     const roomID = $('rename-room-id').value;
     const name = $('rename-room-name').value.trim();
     const room = roomByID(roomID);
-    if (!name) {
-      showFormError('rename-form-error', t("ui.roomNameCannotBeEmpty"));
+    if (!validRoomName($('rename-room-name').value, false)) {
+      showFormError('rename-form-error', t('room.invalidName'));
       return;
     }
     if (room && name === room.name) {
@@ -2727,6 +2794,36 @@
   $('room-collaboration-mode').addEventListener('change', syncCollaborationControls);
   $('room-form').addEventListener('submit', createRoom);
   $('rename-form').addEventListener('submit', submitRename);
+  document.addEventListener('contextmenu', (event) => openRoomContextMenu(event));
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+      openRoomContextMenu(event, true);
+    } else if (state.contextRoomID && event.key === 'Escape') {
+      event.preventDefault(); closeRoomContextMenu(true);
+    } else if (state.contextRoomID && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault(); $('context-rename-room').focus();
+    } else if (state.contextRoomID && event.key === 'Tab') {
+      closeRoomContextMenu(true);
+    }
+  });
+  $('context-rename-room').addEventListener('click', () => {
+    const room = roomByID(state.contextRoomID);
+    closeRoomContextMenu(true);
+    if (room && state.authenticated) openRenameDialog(room);
+  });
+  document.addEventListener('pointerdown', (event) => {
+    if (state.contextRoomID && !$('room-context-menu').contains(event.target)) closeRoomContextMenu();
+  }, true);
+  document.addEventListener('scroll', (event) => {
+    if (!state.contextRoomID) return;
+    const target = event.target === document ? document.scrollingElement : event.target;
+    const openedAt = state.contextScrollPositions.get(target);
+    // A focus/click scroll may already have happened before contextmenu while
+    // its notification is still queued. Only a subsequent ancestor movement
+    // invalidates the menu's viewport position; unrelated panels do not.
+    if (openedAt && (target.scrollLeft !== openedAt[0] || target.scrollTop !== openedAt[1])) closeRoomContextMenu();
+  }, true);
+  window.addEventListener('resize', () => closeRoomContextMenu());
   $('binding-form').addEventListener('submit', submitBindingCompletion);
   $('confirm-form').addEventListener('submit', submitConfirm);
   $('confirm-input').addEventListener('input', syncConfirmRequirement);
@@ -2752,6 +2849,7 @@
   $('sidebar-backdrop').addEventListener('click', () => app.classList.remove('sidebar-open'));
   $('sidebar-collapse').addEventListener('click', () => app.classList.toggle('sidebar-collapsed'));
   window.addEventListener('hashchange', () => {
+    closeRoomContextMenu();
     if (new URLSearchParams(location.hash.replace(/^#/, '')).has('token')) {
       location.reload();
       return;
@@ -2839,6 +2937,7 @@
 
   applyPreferences();
   document.addEventListener('pairroom:lang', () => {
+    closeRoomContextMenu();
     if (window.PairRoomI18n) window.PairRoomI18n.apply(document);
     render();
     if ($('room-dialog').open) syncCollaborationControls();

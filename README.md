@@ -16,6 +16,8 @@ When creating a Room, configure each Agent slot's Runtime, native or CC Switch P
 
 Management, Room View, and Desktop startup share embedded i18next 26.4.2 `en`/`zh-CN` catalogs and a persisted language choice. The Management topbar, Room tabstrip, Settings, and standalone Room expose the same `system | light | dark` theme preference; embedded Rooms follow Management.
 
+**Room and native session names stay traceable.** Leave the Room name blank for a temporary `Room-<short ID>` name. Right-click a Room in the sidebar, tabstrip, or Project list to rename it (keyboard: Shift+F10). Native session names follow `<Room name> · <@handle> · <short Room ID>` at their next activation, with synchronization status and the unchanged native ID visible in the Room. Rename waits for active work to settle; it does not interrupt a Turn.
+
 ## Core model
 
 PairRoom does not let two Agents wake each other concurrently like an IM group chat. Each Room has one **native Turn owner** at a time:

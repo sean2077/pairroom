@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Room and runtime names
+
+- Generate omitted Room names once from the durable ID. Right-click sidebar Rooms, tabs, or Project rows to rename; retain keyboard and explicit-button access, validation, failure drafts, and correct target identity.
+- Derive native session names from the Room name, runtime handle, and short Room ID. Apply them via supported Claude launch naming or Codex/Grok metadata calls at activation; expose configured/acknowledged/unsupported/failed status without model Turns or direct vendor-store edits.
+- Preserve names through event-log rebuild, permission replacement, and native restart. Rename retains the safe Turn-boundary suspension path; IDs, Bindings, instructions, and permissions never change. Invalid or unchanged names do not drain a runtime, and invalid names return 400 rather than 500.
+
 ### Collaboration and permissions
 
 - New Rooms choose only default Lead/Executor or custom natural-language instructions, fixed at creation and restored unchanged. Runtime, Provider, model, effort, and additional instructions remain independently selectable per slot.

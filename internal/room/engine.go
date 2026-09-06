@@ -432,6 +432,7 @@ func (e *Engine) Start(parent context.Context) error {
 	codexParticipant := e.snapshot.Participants[model.ActorCodex]
 	repo := e.snapshot.Meta.Repo
 	roomName := e.snapshot.Meta.Name
+	roomID := e.snapshot.Meta.ID
 	e.mu.Unlock()
 
 	boundaries, err := e.prepareWorkspaceBoundaries(parent, claudeParticipant.Role, codexParticipant.Role)
@@ -452,6 +453,7 @@ func (e *Engine) Start(parent context.Context) error {
 	claudeCfg.Repo = boundaries[model.ActorClaude].Path
 	claudeCfg.DataDir = e.cfg.Store.Dir()
 	claudeCfg.RoomName = roomName
+	claudeCfg.RoomID = roomID
 	if !claudeCfg.RequireExactSession {
 		claudeCfg.SessionID = claudeParticipant.SessionID
 	}
@@ -462,6 +464,7 @@ func (e *Engine) Start(parent context.Context) error {
 	codexCfg.Repo = boundaries[model.ActorCodex].Path
 	codexCfg.DataDir = e.cfg.Store.Dir()
 	codexCfg.RoomName = roomName
+	codexCfg.RoomID = roomID
 	if !codexCfg.RequireExactSession {
 		codexCfg.SessionID = codexParticipant.SessionID
 	}

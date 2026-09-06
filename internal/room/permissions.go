@@ -117,7 +117,7 @@ func (e *Engine) SetPermissions(ctx context.Context, actor model.ActorID, profil
 	cfg.Runtime = cfg.Runtime.CanonicalForSlot(actor)
 	cfg.PeerRuntime = slotAgentConfig(e.cfg, model.OtherParticipant(actor)).Runtime.CanonicalForSlot(model.OtherParticipant(actor))
 	meta := e.SnapshotMeta()
-	cfg.Repo, cfg.DataDir, cfg.RoomName = current.Workspace.Path, e.cfg.Store.Dir(), meta.Name
+	cfg.Repo, cfg.DataDir, cfg.RoomName, cfg.RoomID = current.Workspace.Path, e.cfg.Store.Dir(), meta.Name, meta.ID
 	if cfg.Repo == "" {
 		cfg.Repo = meta.Repo
 	}

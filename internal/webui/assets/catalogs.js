@@ -1064,7 +1064,18 @@
       "room.collaboration.readOnly": "Read-only / plan",
       "room.collaboration.viewInstructions": "View native instructions",
       "room.collaboration.yolo": "YOLO · unrestricted tools",
-      "room.collaboration.yoloWarning": "New Rooms default to YOLO. Both Agents may modify files and run commands without routine approval. Use trusted workspaces, or choose a narrower native policy below."
+      "room.collaboration.yoloWarning": "New Rooms default to YOLO. Both Agents may modify files and run commands without routine approval. Use trusted workspaces, or choose a narrower native policy below.",
+      "room.temporaryNameHint": "Optional. Leave blank for a temporary name; right-click a Room to rename it later.",
+      "room.invalidName": "Use a non-empty name of at most 160 UTF-8 bytes, without control characters.",
+      "room.runtimeNameOnActivation": "Expected native session name. Applied on the next native activation; session IDs never change.",
+      "room.copyRuntimeName": "Copy runtime name",
+      "room.runtimeNameCopied": "Runtime name copied",
+      "room.runtimeNamePending": "Native name pending",
+      "room.runtimeNameConfigured": "Name configured at native launch",
+      "room.runtimeNameSynced": "Native name synchronized",
+      "room.runtimeNameUnsupported": "Native renaming unavailable; check by session ID",
+      "room.runtimeNameFailed": "Name sync failed; check by session ID. Retried at next activation.",
+      "room.runtimeNameSimulated": "Mock name only"
     }
   },
   "zh-CN": {
@@ -2130,7 +2141,18 @@
       "room.collaboration.readOnly": "只读／规划权限",
       "room.collaboration.viewInstructions": "查看原生指令",
       "room.collaboration.yolo": "YOLO · 放开工具权限",
-      "room.collaboration.yoloWarning": "新 Room 默认 YOLO。两个 Agent 均可修改文件并执行命令，无需常规批准。请使用可信工作区，或在下方选择更严格的原生权限。"
+      "room.collaboration.yoloWarning": "新 Room 默认 YOLO。两个 Agent 均可修改文件并执行命令，无需常规批准。请使用可信工作区，或在下方选择更严格的原生权限。",
+      "room.temporaryNameHint": "可留空以生成临时名称；后续右键 Room 即可重命名。",
+      "room.invalidName": "名称不能为空，最多 160 个 UTF-8 字节，且不能含控制字符。",
+      "room.runtimeNameOnActivation": "预期原生会话名称，在下一次原生运行时启动时同步；会话 ID 保持不变。",
+      "room.copyRuntimeName": "复制运行时名称",
+      "room.runtimeNameCopied": "已复制运行时名称",
+      "room.runtimeNamePending": "原生名称待同步",
+      "room.runtimeNameConfigured": "已通过原生启动参数设置名称",
+      "room.runtimeNameSynced": "原生名称已同步",
+      "room.runtimeNameUnsupported": "原生运行时不支持命名，请通过会话 ID 核对",
+      "room.runtimeNameFailed": "名称同步失败，请通过会话 ID 核对；下次启动时重试。",
+      "room.runtimeNameSimulated": "仅为 Mock 模拟名称"
     }
   }
 };

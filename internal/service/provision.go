@@ -104,6 +104,9 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 	r.mu.RUnlock()
 
 	roomID := model.NewID("room")
+	if strings.TrimSpace(request.Name) == "" {
+		request.Name = model.TemporaryRoomName(roomID)
+	}
 	stageDir, err := os.MkdirTemp(r.roomsRoot, ".provision-"+roomID+"-")
 	if err != nil {
 		return Room{}, fmt.Errorf("create room provisioning directory: %w", err)

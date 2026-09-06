@@ -81,7 +81,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 			"--include-partial-messages", "--replay-user-messages",
 			"--forward-subagent-text", "--include-hook-events",
 			"--model", "--effort", "--permission-mode", "--disallowedTools",
-			"--resume", "--session-id", "--verbose", "--add-dir",
+			"--resume", "--session-id", "--verbose", "--add-dir", "--name",
 			"--dangerously-skip-permissions", "--allow-dangerously-skip-permissions",
 		}
 		if helpErr != nil {
@@ -203,7 +203,7 @@ func (p ProbeResult) RuntimeInfo(cfg Config) model.RuntimeInfo {
 		"version_line": p.VersionLine,
 		"warnings":     p.Warnings,
 	})
-	return model.RuntimeInfo{
+	info := model.RuntimeInfo{
 		Available: true, Command: p.Command, Path: p.Path,
 		Protocol: p.Protocol, Version: p.Version, RuntimeKind: cfg.Runtime.CanonicalForSlot(cfg.Actor),
 		Provider: cfg.Provider, Model: cfg.Model, Effort: cfg.Effort,
@@ -211,6 +211,11 @@ func (p ProbeResult) RuntimeInfo(cfg Config) model.RuntimeInfo {
 		Capabilities: append([]string(nil), p.Capabilities...), Warnings: append([]string(nil), p.Warnings...),
 		ProbedAt: time.Now().UTC(), Data: data,
 	}
+	info.SessionName = configuredSessionName(cfg)
+	if info.SessionName != "" {
+		info.SessionNameStatus = "pending"
+	}
+	return info
 }
 
 func emitRuntimeInfo(sink EventSink, actor model.ActorID, info model.RuntimeInfo) {
