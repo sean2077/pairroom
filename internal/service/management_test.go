@@ -179,7 +179,7 @@ func TestManagementPollingSkipsUnchangedSnapshotRenders(t *testing.T) {
 	for _, marker := range []string{
 		"renderedSnapshotKey: ''",
 		"delete renderableSnapshot.generated_at;",
-		"if (renderableRuntime.busy) delete renderableRuntime.last_used_at;",
+		"if (renderableRuntime.busy || renderableRuntime.http_in_use) delete renderableRuntime.last_used_at;",
 		"const snapshotChanged = nextRenderKey !== state.renderedSnapshotKey;",
 		"if (notify || forceRender) $('refresh-button').classList.add('spinning');",
 		"if (forceRender || snapshotChanged) {",

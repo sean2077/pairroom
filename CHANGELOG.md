@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- An open Room HTTP connection, including the long-lived SSE stream, is treated as use so idle suspend cannot force-close a runtime a browser is still reading. After the last request ends, the normal idle window applies. Management polls ignore the ticking `last_used_at` of that in-flight lease so they do not rebuild the shell on every refresh.
 - Keep Management route and confirmation identities intact on locale changes; prevent translated mobile header actions from expanding or clipping.
 
 - Pending approval cards retain typed/selected answers, focused controls, and expanded native details across unrelated updates and locale changes. Native command/cwd summaries are visible, and permission choices follow the request kind rather than the historical slot ID.

@@ -48,6 +48,13 @@ type RuntimeActivity interface {
 	LastActivity() time.Time
 }
 
+// RuntimeLease is an optional capability. InUse reports an in-flight Room HTTP
+// request, including the long-lived /events stream. Idle suspend must not close
+// that runtime; last-used still advances so LRU prefers truly idle Rooms.
+type RuntimeLease interface {
+	InUse() bool
+}
+
 // RuntimeDrainControl is an optional admission-control capability. The manager
 // uses it while archiving or shutting down so no new Room mutation can race the
 // idle boundary. Implementations must still admit approval, cancel, and
@@ -97,6 +104,7 @@ type RuntimeStatus struct {
 	Phase            RuntimePhase `json:"phase"`
 	QueuePosition    int          `json:"queue_position,omitempty"`
 	Busy             bool         `json:"busy"`
+	HTTPInUse        bool         `json:"http_in_use,omitempty"`
 	OccupiesCapacity bool         `json:"occupies_capacity"`
 	URL              string       `json:"url,omitempty"`
 	LastUsedAt       time.Time    `json:"last_used_at,omitempty"`
@@ -655,7 +663,7 @@ func (m *RuntimeManager) reconcile() {
 	now := m.cfg.Now()
 	for roomID, entry := range m.entries {
 		m.refreshUsageLocked(entry)
-		if entry.phase != RuntimeActive || entry.runtime == nil || entry.runtime.Busy() {
+		if entry.phase != RuntimeActive || entry.runtime == nil || entry.runtime.Busy() || runtimeInUse(entry.runtime) {
 			continue
 		}
 		if now.Sub(entry.lastUsed) < m.cfg.IdleTimeout {
@@ -855,11 +863,12 @@ func (m *RuntimeManager) refreshUsageLocked(entry *runtimeEntry) {
 	if entry == nil || entry.runtime == nil {
 		return
 	}
-	// A running turn is itself recent use.  LastActivity is primarily driven by
-	// HTTP/UI traffic, so without this refresh a long background turn could
-	// finish with an old timestamp and be suspended immediately instead of
-	// receiving a full idle-timeout window.
-	if entry.runtime.Busy() {
+	// A running turn or in-flight Room HTTP request is itself recent use.
+	// LastActivity is primarily stamped at request start/end, so without this
+	// refresh a long background turn or SSE stream could finish with an old
+	// timestamp and be suspended immediately instead of receiving a full
+	// idle-timeout window.
+	if entry.runtime.Busy() || runtimeInUse(entry.runtime) {
 		if now := m.cfg.Now(); now.After(entry.lastUsed) {
 			entry.lastUsed = now
 		}
@@ -873,6 +882,11 @@ func (m *RuntimeManager) refreshUsageLocked(entry *runtimeEntry) {
 	}
 }
 
+func runtimeInUse(runtime RoomRuntime) bool {
+	lease, ok := runtime.(RuntimeLease)
+	return ok && lease.InUse()
+}
+
 func (m *RuntimeManager) statusLocked(roomID string, entry *runtimeEntry) RuntimeStatus {
 	status := RuntimeStatus{
 		RoomID: roomID, Phase: entry.phase, LastUsedAt: entry.lastUsed,
@@ -882,6 +896,7 @@ func (m *RuntimeManager) statusLocked(roomID string, entry *runtimeEntry) Runtim
 	}
 	if entry.runtime != nil && entry.phase != RuntimeFailed {
 		status.Busy = entry.runtime.Busy()
+		status.HTTPInUse = runtimeInUse(entry.runtime)
 		status.URL = entry.runtime.URL()
 	}
 	if entry.phase == RuntimeQueued {
