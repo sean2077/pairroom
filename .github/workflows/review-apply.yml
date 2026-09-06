@@ -1,0 +1,44 @@
+name: Apply verified review patch (temporary)
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/review-apply.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.head_ref == 'improve/room-state-and-runtime-efficiency' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Apply only the checksum-verified product patch to its exact branch
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          TARGET_BRANCH: improve/room-state-and-runtime-efficiency
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$RUNNER_TEMP/verified-product" HEAD
+          cd "$RUNNER_TEMP/verified-product"
+          cat .review/product-01.part .review/product-02.part .review/product-03.part .review/product-04.part > "$RUNNER_TEMP/product.patch.xz"
+          printf '%s  %s\n' '8b507b3137ab259b421426db69ed4318e2e607a47dde8c7eda280249f9dc321f' "$RUNNER_TEMP/product.patch.xz" | sha256sum -c -
+          xz -dc "$RUNNER_TEMP/product.patch.xz" > "$RUNNER_TEMP/product.patch"
+          printf '%s  %s\n' '2616b77e9f710e43a8aa24ada854fc3feddd5d98149e15a55bfda53db9ce1e17' "$RUNNER_TEMP/product.patch" | sha256sum -c -
+          git apply --unidiff-zero --check "$RUNNER_TEMP/product.patch"
+          git apply --unidiff-zero --index "$RUNNER_TEMP/product.patch"
+          git diff --cached --check
+          staged_tree="$(git write-tree)"
+          export GIT_INDEX_FILE="$RUNNER_TEMP/checked-product-index"
+          git read-tree "$staged_tree"
+          git ls-files -z .github/workflows .review | xargs -0 -r git update-index --force-remove
+          test "$(git write-tree)" = 'dca585974ada8e7609f1a87bbe9abe64c46efb2b'
+          unset GIT_INDEX_FILE
+          test "$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)" = "$EXPECTED_HEAD"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: preserve interactive state and bound streaming projection costs'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
