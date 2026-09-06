@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- Align the Management Room gateway with the embedded scripts and independent permission API. Reject the removed role-change route; test every entry-point asset and cookie/CSRF-protected permission forwarding.
+
+- Keep Activity cards keyed by complete Turn/event identity. Preserve expanded evidence, keyboard focus, text selection, and the visible scroll anchor across unrelated updates and unchanged snapshots. Defer hidden-Inspector reconciliation and clarify disclosure/focus affordances.
+- Keep participant lifecycle, permission, retry, and cancel operations single-flight across DOM replacements. Reject another retry of the same source/participant while a direct retry child is waiting or working; terminal processing cannot regress in the browser after a late update.
+- Preserve unsaved settings and edits made during Save, confirm successful saves with a post-write snapshot, and ignore obsolete Git status/diff responses. Changing the staged-diff selector now refreshes its corresponding view.
+- Avoid cloning Turn summaries for non-projecting text/state/session telemetry. Maintain the bounded event tail with amortized slice growth and promptly release evicted payloads; detach optional timestamps in public snapshots. Complete transcripts, native instructions, and schemas are unchanged.
+- Add allocation, lifecycle-concurrency, Inspector, and real-browser Mock Service regressions. The new integration smoke exercises actual cookies/CSRF, HTTP/SSE, Room creation, gateway, permissions, renaming, and restart rather than replacing network calls with in-page fixtures.
+
 ## [v3.0.0] — 2026-09-06
 
 ### Room and runtime names

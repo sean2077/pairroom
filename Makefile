@@ -61,6 +61,7 @@ check: test race vet agent-contract release-contract docs-check
 	@if command -v node >/dev/null 2>&1; then \
 		node --check internal/webui/assets/i18n.js && \
 		node --check internal/server/assets/app.js && \
+		node --check internal/server/assets/activity-view.js && \
 		node --check internal/server/assets/room-shell.js && \
 		node --check internal/server/assets/richtext.js && \
 		node --check internal/server/assets/ux.js && \
@@ -132,3 +133,4 @@ docs-check:
 browser-check:
 	"$(PYTHON)" scripts/test_room_browser.py
 	"$(PYTHON)" scripts/test_management_browser.py
+	"$(PYTHON)" scripts/test_service_browser.py

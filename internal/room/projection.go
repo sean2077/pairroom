@@ -3,6 +3,7 @@ package room
 import (
 	"encoding/json"
 	"sort"
+	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
 )
@@ -111,4 +112,127 @@ func (e *Engine) Busy() bool {
 		}
 	}
 	return false
+}
+
+func cloneSnapshot(in model.RoomSnapshot) model.RoomSnapshot {
+	out := in
+	out.Meta.Collaboration = model.CloneCollaboration(in.Meta.Collaboration)
+	out.Messages = make([]model.Message, len(in.Messages))
+	for i, message := range in.Messages {
+		out.Messages[i] = cloneMessage(message)
+	}
+	if in.MessageWindow != nil {
+		window := *in.MessageWindow
+		out.MessageWindow = &window
+	}
+	out.Approvals = make([]model.Approval, len(in.Approvals))
+	for i, approval := range in.Approvals {
+		out.Approvals[i] = approval
+		out.Approvals[i].Detail = append(json.RawMessage(nil), approval.Detail...)
+		out.Approvals[i].ResolvedAt = cloneTime(approval.ResolvedAt)
+	}
+	out.Turns = make([]model.TurnSummary, len(in.Turns))
+	for i, summary := range in.Turns {
+		out.Turns[i] = cloneTurnSummary(summary)
+	}
+	out.Participants = make(map[model.ActorID]model.ParticipantSnapshot, len(in.Participants))
+	for key, value := range in.Participants {
+		value.Runtime = cloneRuntimeInfo(value.Runtime)
+		value.Workspace.Warnings = append([]string(nil), value.Workspace.Warnings...)
+		out.Participants[key] = value
+	}
+	out.Events = make([]model.Event, len(in.Events))
+	for i, event := range in.Events {
+		out.Events[i] = event
+		out.Events[i].Data = append(json.RawMessage(nil), event.Data...)
+	}
+	return out
+}
+
+func cloneMessage(message model.Message) model.Message {
+	out := message
+	out.To = append([]model.ActorID(nil), message.To...)
+	out.Attachments = append([]model.Attachment(nil), message.Attachments...)
+	out.Delivery = cloneDelivery(message.Delivery)
+	out.DeliveryDetail = cloneDetails(message.DeliveryDetail)
+	out.Processing = cloneProcessing(message.Processing)
+	out.ProcessingDetail = cloneDetails(message.ProcessingDetail)
+	out.ProcessingTurn = cloneDetails(message.ProcessingTurn)
+	out.ProcessingLastUpdatedAt = cloneTimes(message.ProcessingLastUpdatedAt)
+	return out
+}
+
+func cloneTurnSummary(in model.TurnSummary) model.TurnSummary {
+	out := in
+	out.CompletedAt = cloneTime(in.CompletedAt)
+	out.MessageIDs = append([]string(nil), in.MessageIDs...)
+	out.Usage = append(json.RawMessage(nil), in.Usage...)
+	out.Items = make([]model.TurnWorkItem, len(in.Items))
+	for i, item := range in.Items {
+		out.Items[i] = item
+		out.Items[i].Data = append(json.RawMessage(nil), item.Data...)
+		out.Items[i].CompletedAt = cloneTime(item.CompletedAt)
+	}
+	return out
+}
+
+func cloneRuntimeInfo(in model.RuntimeInfo) model.RuntimeInfo {
+	out := in
+	out.Capabilities = append([]string(nil), in.Capabilities...)
+	out.Warnings = append([]string(nil), in.Warnings...)
+	out.Data = append(json.RawMessage(nil), in.Data...)
+	return out
+}
+
+func cloneProcessing(in map[model.ActorID]model.ProcessingState) map[model.ActorID]model.ProcessingState {
+	if in == nil {
+		return nil
+	}
+	out := make(map[model.ActorID]model.ProcessingState, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneTimes(in map[model.ActorID]time.Time) map[model.ActorID]time.Time {
+	if in == nil {
+		return nil
+	}
+	out := make(map[model.ActorID]time.Time, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneDelivery(in map[model.ActorID]model.DeliveryState) map[model.ActorID]model.DeliveryState {
+	if in == nil {
+		return nil
+	}
+	out := make(map[model.ActorID]model.DeliveryState, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneDetails(in map[model.ActorID]string) map[model.ActorID]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[model.ActorID]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+// cloneTime detaches optional timestamps along with the rest of a snapshot.
+func cloneTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }

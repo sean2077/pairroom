@@ -50,54 +50,6 @@
       && envelope.data?.kind === 'text.delta';
   }
 
-  function mayRenderActivity(envelope) {
-    if (!envelope) return false;
-    if (envelope.kind === 'turn.summary.updated') return true;
-    return envelope.kind === 'runtime.event' && envelope.data?.kind !== 'text.delta';
-  }
-
-  function detailsStateKey(details, index) {
-    const classes = String(details.className || '')
-      .split(/\s+/)
-      .filter((value) => value && !value.startsWith('status-'))
-      .join('.');
-    const isTurnCard = details.classList?.contains('turn-card');
-    const owner = isTurnCard ? details : details.closest?.('details.turn-card');
-    const turn = owner?.querySelector('.turn-card-title strong')?.textContent?.trim() || '';
-    const summary = details.firstElementChild?.tagName === 'SUMMARY'
-      ? details.firstElementChild.textContent?.trim() || ''
-      : '';
-    return isTurnCard ? `turn:${turn || index}` : `detail:${turn}|${classes}|${summary || index}`;
-  }
-
-  function captureActivityState() {
-    const container = document.getElementById('activity-tab');
-    if (!container) return null;
-    const openDetails = new Map();
-    Array.from(container.querySelectorAll('details')).forEach((details, index) => {
-      openDetails.set(detailsStateKey(details, index), details.open);
-    });
-    return { scrollTop: container.scrollTop, openDetails };
-  }
-
-  function restoreActivityState(snapshot) {
-    if (!snapshot) return;
-    const container = document.getElementById('activity-tab');
-    if (!container) return;
-    Array.from(container.querySelectorAll('details')).forEach((details, index) => {
-      const open = snapshot.openDetails.get(detailsStateKey(details, index));
-      if (typeof open === 'boolean') details.open = open;
-    });
-    container.scrollTop = snapshot.scrollTop;
-  }
-
-  function scheduleActivityRestore(snapshot) {
-    if (!snapshot) return;
-    // app.js registers its render callback while processing the event. This
-    // callback is registered afterwards, so it restores state after that render.
-    requestAnimationFrame(() => restoreActivityState(snapshot));
-  }
-
   function stateFor(source) {
     let state = sourceState.get(source);
     if (!state) {
@@ -113,9 +65,7 @@
     if (state.timer) clearTimeout(state.timer);
     state.timer = 0;
     const records = state.records.splice(0);
-    const activity = captureActivityState();
     records.forEach((record) => invokeListener(record.listener, source, record.event));
-    scheduleActivityRestore(activity);
   }
 
   function queueTransientEvent(source, listener, event) {
@@ -180,10 +130,8 @@
           // telemetry before delivering it; text deltas stay on their existing
           // low-latency draft path.
           if (!isImmediateTextDelta(envelope)) flushTransientEvents(this);
-          const activity = mayRenderActivity(envelope) ? captureActivityState() : null;
           invokeListener(listener, this, event);
-          scheduleActivityRestore(activity);
-        };
+              };
         wrappers.set(wrapperKey(listener, options), wrapped);
         return super.addEventListener(type, wrapped, options);
       }

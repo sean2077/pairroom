@@ -1075,7 +1075,11 @@
       "room.runtimeNameSynced": "Native name synchronized",
       "room.runtimeNameUnsupported": "Native renaming unavailable; check by session ID",
       "room.runtimeNameFailed": "Name sync failed; check by session ID. Retried at next activation.",
-      "room.runtimeNameSimulated": "Mock name only"
+      "room.runtimeNameSimulated": "Mock name only",
+      "room.savingSettings": "Saving…",
+      "room.unsavedSettings": "Unsaved changes",
+      "room.settingsUnconfirmed": "Settings were accepted, but confirmation failed: {{detail}}. Refresh before retrying.",
+      "room.retryPending": "A retry for this participant is already pending."
     }
   },
   "zh-CN": {
@@ -2152,7 +2156,11 @@
       "room.runtimeNameSynced": "原生名称已同步",
       "room.runtimeNameUnsupported": "原生运行时不支持命名，请通过会话 ID 核对",
       "room.runtimeNameFailed": "名称同步失败，请通过会话 ID 核对；下次启动时重试。",
-      "room.runtimeNameSimulated": "仅为 Mock 模拟名称"
+      "room.runtimeNameSimulated": "仅为 Mock 模拟名称",
+      "room.savingSettings": "正在保存…",
+      "room.unsavedSettings": "有未保存的更改",
+      "room.settingsUnconfirmed": "设置已提交，但读取确认失败：{{detail}}。请刷新后再决定是否重试。",
+      "room.retryPending": "此 Agent 的重试仍在排队或执行中。"
     }
   }
 };

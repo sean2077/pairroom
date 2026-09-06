@@ -398,6 +398,7 @@
     syncLayoutControls();
     if (persist) storeState();
     if (announcement) announce(announcement);
+    document.dispatchEvent(new CustomEvent('pairroom:layout'));
   }
 
   function setPanelAccessibility(panel, hidden) {

@@ -37,38 +37,6 @@ const timers = new Map();
 let nextTimer = 1;
 const animationFrames = [];
 const leaveButton = { listener: null, addEventListener(_type, listener) { this.listener = listener; } };
-function turnCard(title, open, sectionOpen) {
-  const card = {
-    className: 'turn-card turn-claude status-working',
-    open,
-    firstElementChild: { tagName: 'SUMMARY', textContent: title },
-    classList: { contains(value) { return value === 'turn-card'; } },
-    querySelector(selector) {
-      return selector === '.turn-card-title strong' ? { textContent: title } : null;
-    },
-    closest(selector) { return selector === 'details.turn-card' ? card : null; },
-    sections: [],
-  };
-  const section = {
-    className: 'turn-section',
-    open: sectionOpen,
-    firstElementChild: { tagName: 'SUMMARY', textContent: 'Plan' },
-    classList: { contains() { return false; } },
-    querySelector() { return null; },
-    closest(selector) { return selector === 'details.turn-card' ? card : null; },
-  };
-  card.sections.push(section);
-  return card;
-}
-
-const activity = {
-  scrollTop: 17,
-  cards: [turnCard('Claude · turn-1', false, true)],
-  querySelectorAll(selector) {
-    if (selector !== 'details') return [];
-    return this.cards.flatMap((card) => [card, ...card.sections]);
-  },
-};
 let historyBacks = 0;
 let closes = 0;
 let replacedWith = '';
@@ -84,7 +52,7 @@ const documentObject = {
   hidden: false,
   getElementById(id) {
     if (id === 'leave-room') return leaveButton;
-    if (id === 'activity-tab') return activity;
+    if (id === 'activity-tab') throw new Error('transport must not inspect Activity DOM');
     return null;
   },
 };
@@ -143,9 +111,7 @@ function runAnimationFrames() {
   const seen = [];
   source.addEventListener('pairroom', (event) => {
     seen.push(JSON.parse(event.data).data.kind);
-    // Simulate app.js replacing the Activity DOM during its scheduled render.
-    activity.cards = [turnCard('Claude · turn-1', true, false)];
-    activity.scrollTop = 0;
+
   });
   source.emit('pairroom', envelope(0, 'runtime.event', { kind: 'command.output', text: 'one' }));
   source.emit('pairroom', envelope(0, 'runtime.event', { kind: 'usage.updated' }));
@@ -154,9 +120,6 @@ function runAnimationFrames() {
   runTimers();
   runAnimationFrames();
   assert.deepEqual(seen, ['command.output', 'usage.updated', 'log'], 'batching must preserve every transient event and arrival order');
-  assert.equal(activity.cards[0].open, false, 'Activity Turn expansion state must survive live rendering');
-  assert.equal(activity.cards[0].sections[0].open, true, 'nested Activity sections must survive live rendering');
-  assert.equal(activity.scrollTop, 17, 'Activity scroll position must survive live rendering');
 }
 
 {
