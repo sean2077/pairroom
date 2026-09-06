@@ -268,15 +268,16 @@
 
   function snapshotRenderKey(snapshot) {
     if (!snapshot) return '';
-    // generated_at is request metadata. A busy Runtime advances last_used_at
-    // on every status read, while an idle Runtime's activity timestamp is
-    // meaningful to the Runtimes table and must still trigger a refresh.
+    // generated_at is request metadata. A busy Runtime or one with in-flight
+    // Room HTTP (including SSE) advances last_used_at on every status read,
+    // while a truly idle Runtime's activity timestamp is meaningful to the
+    // Runtimes table and must still trigger a refresh.
     const renderableSnapshot = { ...snapshot };
     delete renderableSnapshot.generated_at;
     if (Array.isArray(renderableSnapshot.runtimes)) {
       renderableSnapshot.runtimes = renderableSnapshot.runtimes.map((runtime) => {
         const renderableRuntime = { ...runtime };
-        if (renderableRuntime.busy) delete renderableRuntime.last_used_at;
+        if (renderableRuntime.busy || renderableRuntime.http_in_use) delete renderableRuntime.last_used_at;
         return renderableRuntime;
       });
     }

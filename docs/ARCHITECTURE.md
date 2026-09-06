@@ -92,7 +92,7 @@ Desktop startup follows a single-owner decision: validated explicit Management U
 
 ## Runtime lifecycle
 
-The Service can activate or reclaim a Room runtime according to capacity and idle policy. Reclaiming a native process does not delete the Room. Reactivation restores the durable projection, session Binding, and Room-owned FIFO entries that never crossed a native boundary. A delivery persisted as `submitting` has unknown native ownership after a crash and fails for explicit Retry instead of being replayed.
+The Service can activate or reclaim a Room runtime according to capacity and idle policy. An in-flight Room HTTP request, including the long-lived `/api/v1/events` stream, is real use: idle suspend does not close a runtime a browser is still reading. That live request is not a Management tab identity; explicit suspend and capacity LRU still apply. Reclaiming a native process does not delete the Room. Reactivation restores the durable projection, session Binding, and Room-owned FIFO entries that never crossed a native boundary. A delivery persisted as `submitting` has unknown native ownership after a crash and fails for explicit Retry instead of being replayed.
 
 Role / workspace switches must share the same safety boundary as delivery serialization, so a reviewer snapshot is not captured while the Driver is still mutating the live tree.
 
@@ -125,7 +125,7 @@ Management coalesces ordinary polls, but a completed mutation invalidates older 
 
 Pending approval cards and open Room tabs are reconciled by identity instead of recreated during unrelated updates. Approval drafts remain local and are retained only for the same native request. Management removes archived/deleted Room surfaces from fresh snapshots and binds each surface message to its actual iframe's Room ID. `management.js` owns tab identity/state; `management-ux.js` owns keyboard/ARIA enhancements and reconciles them on `pairroom:tabs-updated`.
 
-The Management Shell is Room-centric: the sidebar groups by Project, and in-app tabs embed an active Room View through the Management same-origin surface gateway (`/api/v1/rooms/{room}/surface/…`). The iframe uses the Management Session Cookie. The gateway injects the Runtime bearer on the server; the Runtime token never enters the DOM. An in-app tab is not a Runtime lease. Background tabs still obey existing idle / capacity / LRU / explicit-suspend constraints; switching back to a suspended tab requests activation again. An archived Room cannot open as a tab; restore it first.
+The Management Shell is Room-centric: the sidebar groups by Project, and in-app tabs embed an active Room View through the Management same-origin surface gateway (`/api/v1/rooms/{room}/surface/…`). The iframe uses the Management Session Cookie. The gateway injects the Runtime bearer on the server; the Runtime token never enters the DOM. An in-app tab is not a Runtime lease. A live Room HTTP/SSE connection delays idle suspend; background tabs without a live request still obey idle / capacity / LRU / explicit-suspend constraints; switching back to a suspended tab requests activation again. An archived Room cannot open as a tab; restore it first.
 
 **Open in browser** waits until the Runtime is ready, then the Service opens a one-time Room Runtime URL with the system browser. It does not use `window.open`. The Wails host still keeps one main webview and blocks non-PairRoom `window.open` targets outside numeric loopback. Multiple windows are not a durable contract.
 

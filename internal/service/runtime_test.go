@@ -349,6 +349,107 @@ func TestRuntimeActivityRefreshPreventsPrematureIdleSuspend(t *testing.T) {
 	waitRuntimeStatus(t, manager, rooms[0].ID, func(status RuntimeStatus) bool { return status.Phase == RuntimeSuspended })
 }
 
+// leaseRuntime models the active-connection lease exposed by the real
+// embeddedRuntime: InUse is true while a Room HTTP request (such as the
+// long-lived /api/v1/events SSE stream) is in flight.
+type leaseRuntime struct {
+	busy      atomic.Bool
+	connected atomic.Bool
+	activity  atomic.Int64
+	closeOnce sync.Once
+	closed    chan struct{}
+}
+
+func (r *leaseRuntime) URL() string { return "http://room.invalid/lease" }
+func (r *leaseRuntime) Busy() bool  { return r.busy.Load() }
+func (r *leaseRuntime) InUse() bool { return r.connected.Load() }
+func (r *leaseRuntime) Close(context.Context) error {
+	r.closeOnce.Do(func() { close(r.closed) })
+	return nil
+}
+func (r *leaseRuntime) LastActivity() time.Time {
+	value := r.activity.Load()
+	if value <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, value).UTC()
+}
+
+func TestOpenHTTPConnectionPreventsIdleSuspend(t *testing.T) {
+	registry, rooms := provisionRuntimeRooms(t, 1)
+	base := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)
+	var now atomic.Int64
+	now.Store(base.UnixNano())
+	lease := &leaseRuntime{closed: make(chan struct{})}
+	manager, err := NewRuntimeManager(registry, func(context.Context, Room) (RoomRuntime, error) {
+		return lease, nil
+	}, RuntimeManagerConfig{
+		Limit: 1, IdleTimeout: 10 * time.Minute, PollInterval: 5 * time.Millisecond, CloseTimeout: time.Second,
+		Now: func() time.Time { return time.Unix(0, now.Load()).UTC() },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownRuntimeManager(t, manager, nil)
+	activateRuntime(t, manager, rooms[0].ID)
+
+	// An open SSE stream keeps the runtime alive well past the idle timeout.
+	lease.connected.Store(true)
+	lease.activity.Store(base.UnixNano())
+	now.Store(base.Add(30 * time.Minute).UnixNano())
+	time.Sleep(30 * time.Millisecond)
+	status := manager.Status(rooms[0].ID)
+	if status.Phase != RuntimeActive || !status.HTTPInUse {
+		t.Fatalf("runtime suspended while an HTTP connection is open: %#v", status)
+	}
+
+	// Once the last connection closes, the runtime earns a full idle window from
+	// the moment it stopped seeing active HTTP use, then is suspended.
+	disconnect := base.Add(30 * time.Minute)
+	lease.connected.Store(false)
+	lease.activity.Store(disconnect.UnixNano())
+	now.Store(base.Add(39 * time.Minute).UnixNano())
+	time.Sleep(30 * time.Millisecond)
+	if status := manager.Status(rooms[0].ID); status.Phase != RuntimeActive || status.HTTPInUse {
+		t.Fatalf("Room was suspended before its post-stream idle timeout: %#v", status)
+	}
+	now.Store(base.Add(41 * time.Minute).UnixNano())
+	waitRuntimeStatus(t, manager, rooms[0].ID, func(status RuntimeStatus) bool { return status.Phase == RuntimeSuspended })
+}
+
+func TestOpenHTTPConnectionIsNotIdleLRUVictim(t *testing.T) {
+	registry, rooms := provisionRuntimeRooms(t, 3)
+	base := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)
+	var now atomic.Int64
+	now.Store(base.UnixNano())
+	leases := map[string]*leaseRuntime{}
+	manager, err := NewRuntimeManager(registry, func(_ context.Context, room Room) (RoomRuntime, error) {
+		lease := &leaseRuntime{closed: make(chan struct{})}
+		leases[room.ID] = lease
+		return lease, nil
+	}, RuntimeManagerConfig{
+		Limit: 2, IdleTimeout: time.Hour, PollInterval: 5 * time.Millisecond, CloseTimeout: time.Second,
+		Now: func() time.Time { return time.Unix(0, now.Load()).UTC() },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownRuntimeManager(t, manager, nil)
+	activateRuntime(t, manager, rooms[0].ID)
+	leases[rooms[0].ID].connected.Store(true)
+	now.Store(base.Add(time.Minute).UnixNano())
+	activateRuntime(t, manager, rooms[1].ID)
+	now.Store(base.Add(2 * time.Minute).UnixNano())
+	if _, err := manager.RequestActivation(rooms[2].ID); err != nil {
+		t.Fatal(err)
+	}
+	waitRuntimeStatus(t, manager, rooms[2].ID, func(status RuntimeStatus) bool { return status.Phase == RuntimeActive })
+	if status := manager.Status(rooms[0].ID); status.Phase != RuntimeActive {
+		t.Fatalf("connected Room was evicted: %#v", status)
+	}
+	waitRuntimeStatus(t, manager, rooms[1].ID, func(status RuntimeStatus) bool { return status.Phase == RuntimeSuspended })
+}
+
 func TestBusyRuntimeReceivesFullIdleWindowAfterTurnCompletes(t *testing.T) {
 	registry, rooms := provisionRuntimeRooms(t, 1)
 	base := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)

@@ -194,6 +194,10 @@ type embeddedRuntime struct {
 	closeErr     error
 	poll         time.Duration
 	lastActivity atomic.Int64
+	// activeHTTP counts in-flight Room HTTP requests, including long-lived
+	// connections such as the /api/v1/events SSE stream. InUse reports that
+	// lease so idle suspend cannot close a runtime a browser is still reading.
+	activeHTTP atomic.Int64
 }
 
 func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project Project, durableRoom Room, cfg EmbeddedRuntimeConfig) (_ RoomRuntime, resultErr error) {
@@ -410,6 +414,10 @@ func (r *embeddedRuntime) LastActivity() time.Time {
 	return time.Unix(0, value).UTC()
 }
 
+func (r *embeddedRuntime) InUse() bool {
+	return r != nil && r.activeHTTP.Load() > 0
+}
+
 func (r *embeddedRuntime) Busy() bool {
 	if r == nil || r.engine == nil {
 		return false
@@ -588,6 +596,11 @@ func (r *embeddedRuntime) close(ctx context.Context) (error, bool) {
 
 func (r *embeddedRuntime) drainHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		r.activeHTTP.Add(1)
+		defer func() {
+			r.lastActivity.Store(time.Now().UTC().UnixNano())
+			r.activeHTTP.Add(-1)
+		}()
 		r.lastActivity.Store(time.Now().UTC().UnixNano())
 		mutating := request.Method != http.MethodGet && request.Method != http.MethodHead && request.Method != http.MethodOptions
 		if mutating {
