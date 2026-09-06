@@ -16,7 +16,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Export public tracked Git objects only
+      - name: Export public tracked Git objects and recovered review patch
         shell: bash
         run: |
           set -euo pipefail
@@ -25,7 +25,7 @@ jobs:
           sha256sum "$RUNNER_TEMP/pairroom-source.bundle"
       - uses: actions/upload-artifact@v7
         with:
-          name: pairroom-polish-source
+          name: pairroom-polish-recovered-source
           path: ${{ runner.temp }}/pairroom-source.bundle
           retention-days: 1
           compression-level: 0
