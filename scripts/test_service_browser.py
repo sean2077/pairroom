@@ -106,6 +106,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     options['executable_path'] = browser_path
                 browser = await playwright.chromium.launch(**options)
                 try:
+                    print('Service browser: authenticate and create a Room', flush=True)
                     management_url = await service.start()
                     origin = management_url.split('/#', 1)[0].rstrip('/')
                     context = await browser.new_context(viewport={'width':1440,'height':1000}, locale='en-US', reduced_motion='reduce')
@@ -145,6 +146,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     surface = origin+f'/api/v1/rooms/{room_id}/surface'
                     snapshot_url = surface+'/api/v1/snapshot'
                     assert 200 in event_streams, 'real SSE was not opened'
+                    print('Service browser: send through real HTTP/SSE and both Mock slots', flush=True)
                     # One explicit peer mention exercises both native Mock slots.
                     text = '@codex Review the deterministic HTTP path and reply once.'
                     await frame.locator('#message-input').fill(text)
@@ -156,6 +158,10 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                         await expect(frame.locator(f'[data-message-id="{message["id"]}"]')).to_be_visible()
                     identities = {actor: participant['session_id'] for actor,participant in snapshot['participants'].items()}
                     assert all(identities.values()), 'native Mock session identity not materialized'
+                    print('Service browser: persist settings and independent permissions', flush=True)
+                    if await frame.locator('.participants-panel').get_attribute('aria-hidden') == 'true':
+                        await frame.locator('#ux-layout-button').click()
+                        await frame.locator('[data-ux-action="participants"]').click()
                     # Settings travel through Room HTTP, its event log and actual SSE.
                     await frame.locator('#stall-warning').fill('600')
                     await frame.locator('#save-settings').click()
@@ -166,6 +172,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     assert snapshot['meta']['collaboration']['instructions'] == instructions
                     assert {a:p['session_id'] for a,p in snapshot['participants'].items()} == identities
                     await page.screenshot(path=str(artifacts/'service-live-room.png'))
+                    print('Service browser: rename and drain before restarting', flush=True)
                     await page.locator(f'.tree-room[data-room-id="{room_id}"]').click(button='right')
                     await page.locator('#context-rename-room').click()
                     await page.locator('#rename-room-name').fill('Verified HTTP workspace')
@@ -174,6 +181,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     await expect(page.locator(f'.tree-room[data-room-id="{room_id}"]')).to_contain_text('Verified HTTP workspace')
                     await context.close()
                     await service.stop()
+                    print('Service browser: verify recovered Room and session identities', flush=True)
                     # New process and cookie jar: no stale lock recovery, no reuse of auth.
                     management_url = await service.start()
                     origin = management_url.split('/#',1)[0].rstrip('/')

@@ -270,11 +270,11 @@ async def verify_activity(browser, artifacts: Path) -> dict:
     snap = snapshot_fixture()
     snap['turns'] = [
         {'id': f'claude:identical-truncated-prefix-{i}', 'turn_id': f'identical-truncated-prefix-{i}',
-         'agent': 'claude', 'status': 'completed', 'updated_at': f'2026-01-01T12:{20-i:02}:00Z',
+         'agent': 'claude', 'status': 'completed', 'updated_at': f'2026-01-01T12:{59-i:02}:00Z',
          'plan': f'Plan {i}: preserve the complete native evidence and the user reading position.',
          'items': [{'id': f'command-{i}', 'kind': 'command', 'status': 'completed', 'name': 'go test ./...',
                     'detail': 'Verified evidence\n' + ('Long output remains inspectable.\n' * 12), 'data': {'exit_code': 0}}]}
-        for i in range(12)
+        for i in range(24)
     ]
     html = fixture_html().replace(json.dumps(snapshot_fixture()).replace('</', '<\\/'), json.dumps(snap).replace('</', '<\\/'))
     await page.set_content(html)
@@ -324,14 +324,18 @@ async def verify_activity(browser, artifacts: Path) -> dict:
     await page.wait_for_selector('[data-section="final"]')
     await page.evaluate('__observer.disconnect(); getSelection().removeAllRanges()')
     # Scroll away from the top, reorder two offscreen cards, retain visible anchor.
-    await page.locator('#activity-tab').evaluate('node => node.scrollTop=700')
+    # Keep a viewport of slack below the anchor: at the bottom, reordering
+    # cannot preserve an anchor beyond the new scroll range on compact fonts.
+    await page.locator('#activity-tab').evaluate('node => node.scrollTop=Math.min(700, (node.scrollHeight-node.clientHeight)/2)')
+    assert await page.locator('#activity-tab').evaluate('node => node.scrollTop > 0 && node.scrollHeight-node.clientHeight-node.scrollTop > 160')
     anchor = """() => {const el=document.getElementById('activity-tab'),top=el.getBoundingClientRect().top;
       const node=[...el.children].find(n=>n.dataset.activityKey && n.getBoundingClientRect().bottom>top);
       return {key:node.dataset.activityKey,offset:node.getBoundingClientRect().top-top};}"""
     before = await page.evaluate(anchor)
-    await page.evaluate("""() => {const value={...__snapshot.turns[10],updated_at:'2026-01-02T00:00:00Z'};
-      __snapshot.turns[10]=value; __emit('turn.summary.updated',value); }""")
+    await page.evaluate("""() => {const value={...__snapshot.turns[20],updated_at:'2026-01-02T00:00:00Z'};
+      __snapshot.turns[20]=value; __emit('turn.summary.updated',value); }""")
     await page.wait_for_timeout(200)
+    await page.wait_for_function("() => document.querySelector('#activity-tab .turn-card')?.dataset.turnId === 'claude:identical-truncated-prefix-20'")
     after = await page.evaluate(anchor)
     assert before['key'] == after['key'] and abs(before['offset']-after['offset']) < 2, (before, after)
     await page.locator('#activity-tab').evaluate('node => node.scrollTop=0')
