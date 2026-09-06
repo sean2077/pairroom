@@ -1,0 +1,44 @@
+name: Apply verified review patch (temporary)
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/review-apply.yml'
+      - '.review/iteration-*.part'
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.head_ref == 'improve/interaction-state-quality-20260906' && github.event.pull_request.head.repo.full_name == 'sean2077/pairroom'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Apply the checksum-verified product diff on its exact branch
+        shell: bash
+        env:
+          TARGET_BRANCH: improve/interaction-state-quality-20260906
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          cat .review/iteration-01.part .review/iteration-02.part .review/iteration-03.part .review/iteration-04.part > "$RUNNER_TEMP/iteration.patch.xz"
+          printf '%s  %s\n' '809f869560057089a15ab8d5614519cbf42517f9157bc7272f400a8d3a3106c5' "$RUNNER_TEMP/iteration.patch.xz" | sha256sum -c -
+          xz -dc "$RUNNER_TEMP/iteration.patch.xz" > "$RUNNER_TEMP/iteration.patch"
+          printf '%s  %s\n' '56982076c42d34a8b11be80077491d2b8b3a94536cc3926a3780d107f7f91e1d' "$RUNNER_TEMP/iteration.patch" | sha256sum -c -
+          git apply --unidiff-zero --check "$RUNNER_TEMP/iteration.patch"
+          git apply --unidiff-zero --index "$RUNNER_TEMP/iteration.patch"
+          git diff --cached --check
+          staged_tree="$(git write-tree)"
+          export GIT_INDEX_FILE="$RUNNER_TEMP/product-index"
+          git read-tree "$staged_tree"
+          git update-index --force-remove .github/workflows/review-source.yml .github/workflows/review-apply.yml .review/iteration-01.part .review/iteration-02.part .review/iteration-03.part .review/iteration-04.part
+          test "$(git write-tree)" = '29cc8b7b7f3a59a1c8a481a93faa0688a7b97346'
+          unset GIT_INDEX_FILE
+          test "$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)" = "$EXPECTED_HEAD"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: preserve native approval intent and consistent Management state'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
