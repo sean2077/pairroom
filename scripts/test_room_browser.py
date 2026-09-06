@@ -157,7 +157,11 @@ async def verify_approvals(browser, artifacts: Path) -> dict:
     # confirmation must not send it. Re-render while pending cannot unlock it.
     await field.evaluate("node => node.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',isComposing:true,bubbles:true,cancelable:true}))")
     assert await page.evaluate('__approvalSent.length') == 0
-    await page.evaluate('__failApproval = true; __approvalGate = new Promise(resolve => { __releaseApproval = resolve; })')
+    # page.evaluate awaits a returned Promise; keep this assignment from completing as one.
+    await page.evaluate("""() => {
+      window.__failApproval = true;
+      window.__approvalGate = new Promise((resolve) => { window.__releaseApproval = resolve; });
+    }""")
     await field.press('Enter')
     await page.wait_for_function('__approvalSent.length === 1')
     await page.locator('#refresh-button').click()
