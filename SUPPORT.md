@@ -140,7 +140,7 @@ Not in the current support contract:
 A feature request should explain:
 
 - a concrete user workflow, not only “support tool X”;
-- why the existing Service/Room/Driver/Reviewer model is insufficient;
+- why the existing Service/Room, creation-only collaboration, and independent permission model is insufficient;
 - fact sources, failure recovery, and migration needs;
 - security, privacy, and multi-Room identity/capacity impact;
 - whether it would weaken official harness native capability;

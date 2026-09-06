@@ -647,3 +647,11 @@ html[data-embed="1"] .session-copy {
   margin-top: 8px;
   width: fit-content;
 }
+
+/* Collaboration is a read-only instruction summary, not a role switch. */
+.room-collaboration { flex: 0 0 auto; padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.room-collaboration summary { cursor: pointer; color: var(--muted); }
+.room-collaboration pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; font: inherit; line-height: 1.6; margin: 10px 0 2px; }
+.permission-select { width: 100%; min-height: 36px; margin-top: 8px; font-size: 12px; }
+.permission-select:disabled { cursor: not-allowed; opacity: .65; }
+@media (max-width: 680px) { .permission-select { min-height: 44px; } }

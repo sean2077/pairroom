@@ -40,19 +40,21 @@ const (
 )
 
 type Config struct {
-	Name                  string
-	Repo                  string
-	Settings              model.RoomSettings
-	Store                 *store.JSONLStore
-	Hub                   *bus.Hub
-	ClaudeFactory         agent.Factory
-	CodexFactory          agent.Factory
-	ClaudeConfig          agent.Config
-	CodexConfig           agent.Config
-	Attachments           AttachmentStore
-	Workspaces            WorkspaceManager
-	AutoStart             bool
-	OnSessionMaterialized func(context.Context, model.ActorID, string) error
+	Collaboration             *model.Collaboration
+	RequireCollaborationMatch bool
+	Name                      string
+	Repo                      string
+	Settings                  model.RoomSettings
+	Store                     *store.JSONLStore
+	Hub                       *bus.Hub
+	ClaudeFactory             agent.Factory
+	CodexFactory              agent.Factory
+	ClaudeConfig              agent.Config
+	CodexConfig               agent.Config
+	Attachments               AttachmentStore
+	Workspaces                WorkspaceManager
+	AutoStart                 bool
+	OnSessionMaterialized     func(context.Context, model.ActorID, string) error
 }
 
 // AttachmentStore keeps presentation metadata durable while resolving an
@@ -119,9 +121,11 @@ type scheduledDelivery struct {
 }
 
 type Engine struct {
-	mu        sync.RWMutex
-	routingMu sync.Mutex
-	turnMu    sync.Mutex
+	// lifecycleMu serializes permission-driven process replacement with Close.
+	lifecycleMu sync.Mutex
+	mu          sync.RWMutex
+	routingMu   sync.Mutex
+	turnMu      sync.Mutex
 
 	cfg      Config
 	snapshot model.RoomSnapshot
@@ -189,6 +193,9 @@ func (e *Engine) restore() error {
 		}
 	}
 	if e.snapshot.Meta.ID != "" {
+		if e.cfg.RequireCollaborationMatch && (e.snapshot.Meta.Collaboration == nil || e.cfg.Collaboration == nil || *e.snapshot.Meta.Collaboration != *e.cfg.Collaboration) {
+			return errors.New("collaboration is immutable; create a new Room to change its mode or instructions")
+		}
 		if err := e.ensureSnapshotDefaults(); err != nil {
 			return err
 		}
@@ -199,11 +206,17 @@ func (e *Engine) restore() error {
 	if name == "" {
 		name = "Claude × Codex"
 	}
+	if e.cfg.Collaboration != nil {
+		if err := e.cfg.Collaboration.Validate(); err != nil {
+			return err
+		}
+	}
 	meta := model.RoomMeta{
-		ID:        model.NewID("room"),
-		Name:      name,
-		Repo:      e.cfg.Repo,
-		CreatedAt: time.Now().UTC(),
+		Collaboration: model.CloneCollaboration(e.cfg.Collaboration),
+		ID:            model.NewID("room"),
+		Name:          name,
+		Repo:          e.cfg.Repo,
+		CreatedAt:     time.Now().UTC(),
 	}
 	e.mu.Lock()
 	e.snapshot = model.RoomSnapshot{
@@ -236,6 +249,11 @@ func (e *Engine) restore() error {
 		},
 	}
 	for _, participant := range participants {
+		if meta.Collaboration != nil {
+			participant.Role = model.RolePeer
+			participant.PermissionProfile = model.PermissionConfigured
+			participant.Responsibility = meta.Collaboration.Responsibility(participant.ID)
+		}
 		if _, err := e.record(EventParticipantUpdated, participant.ID, participant); err != nil {
 			return err
 		}
@@ -268,6 +286,19 @@ func (e *Engine) ensureSnapshotDefaults() error {
 		participant.MentionHandle = identities[actor].MentionHandle
 		if !participant.Role.Valid() {
 			participant.Role = model.RolePeer
+		}
+		if c := e.snapshot.Meta.Collaboration; c != nil {
+			if err := c.Validate(); err != nil {
+				return err
+			}
+			participant.Role = model.RolePeer
+			participant.Responsibility = c.Responsibility(actor)
+			if participant.PermissionProfile == "" {
+				participant.PermissionProfile = model.PermissionConfigured
+			}
+			if !participant.PermissionProfile.Valid() {
+				return fmt.Errorf("invalid stored permission profile %q", participant.PermissionProfile)
+			}
 		}
 		// Runtime processes do not survive PairRoom restarts. Session IDs do.
 		participant.State = model.StateStopped
@@ -435,6 +466,8 @@ func (e *Engine) Start(parent context.Context) error {
 		codexCfg.SessionID = codexParticipant.SessionID
 	}
 
+	claudeCfg = e.configureParticipant(claudeCfg, claudeParticipant)
+	codexCfg = e.configureParticipant(codexCfg, codexParticipant)
 	e.mu.Lock()
 	if e.closed {
 		e.mu.Unlock()
@@ -455,6 +488,7 @@ func (e *Engine) Start(parent context.Context) error {
 		actor, boundary := actor, boundary
 		_ = e.mutateParticipant(model.ActorSystem, actor, func(p *model.ParticipantSnapshot) {
 			p.Workspace = boundary
+			applyRoleRuntimeProjection(p, actor, p.Role, e.cfg)
 			if p.Workspace.Path == "" {
 				p.Workspace.Path = repo
 			}
@@ -462,10 +496,10 @@ func (e *Engine) Start(parent context.Context) error {
 	}
 	// Apply the restored room roles before either native process starts. Codex
 	// enforces reviewer policy per turn; Claude maps reviewer to native plan mode.
-	if err := claudeAdapter.SetRole(parent, claudeParticipant.Role); err != nil {
+	if err := claudeAdapter.SetRole(parent, nativePermissionRole(claudeParticipant)); err != nil {
 		return fmt.Errorf("apply Claude role: %w", err)
 	}
-	if err := codexAdapter.SetRole(parent, codexParticipant.Role); err != nil {
+	if err := codexAdapter.SetRole(parent, nativePermissionRole(codexParticipant)); err != nil {
 		return fmt.Errorf("apply Codex role: %w", err)
 	}
 	e.resumeRestoredDeliveries(parent)
@@ -1045,7 +1079,11 @@ func (e *Engine) UpdateSettings(settings model.RoomSettings) error {
 	return err
 }
 
+// SetRole is retained only for legacy replay regression coverage. Public role mutation is removed.
 func (e *Engine) SetRole(ctx context.Context, actor model.ActorID, role model.ParticipantRole) error {
+	if e.SnapshotMeta().Collaboration != nil {
+		return errors.New("collaboration responsibilities are immutable")
+	}
 	if !actor.ValidParticipant() {
 		return errors.New("participant must be claude or codex")
 	}
@@ -1139,6 +1177,9 @@ func (e *Engine) SetRole(ctx context.Context, actor model.ActorID, role model.Pa
 }
 
 func (e *Engine) SwitchDriver(ctx context.Context, driver model.ActorID) error {
+	if e.SnapshotMeta().Collaboration != nil {
+		return errors.New("collaboration responsibilities are immutable")
+	}
 	if !driver.ValidParticipant() {
 		return errors.New("driver must be claude or codex")
 	}
@@ -1283,15 +1324,19 @@ func slotAgentConfig(cfg Config, actor model.ActorID) agent.Config {
 
 func applyRoleRuntimeProjection(participant *model.ParticipantSnapshot, actor model.ActorID, role model.ParticipantRole, cfg Config) {
 	slot := slotAgentConfig(cfg, actor)
+	slot.Actor = actor
+	if participant.PermissionProfile != "" {
+		slot = agent.PermissionConfig(slot, participant.PermissionProfile)
+		role = nativePermissionRole(*participant)
+	}
 	kind := slot.Runtime.CanonicalForSlot(actor)
 	identity := model.ParticipantIdentityFor(actor, runtimeKindsForConfig(cfg))
 	participant.RuntimeKind = kind
 	participant.DisplayName = identity.DisplayName
 	participant.MentionHandle = identity.MentionHandle
 	// Rebuild the policy projection from the immutable slot selection on every
-	// role transition. A process can move from a read-only Reviewer stage back
-	// to a Driver turn; leaving fields from the previous role in the snapshot
-	// would make the UI/API claim a policy that is no longer active.
+	// permission transition (or legacy role transition). Never retain policy
+	// fields from the previous process in the public snapshot.
 	participant.Runtime.PermissionMode = ""
 	participant.Runtime.ApprovalPolicy = ""
 	participant.Runtime.Sandbox = ""
@@ -1311,6 +1356,9 @@ func applyRoleRuntimeProjection(participant *model.ParticipantSnapshot, actor mo
 	case model.RuntimeCodex:
 		if nativeRole == model.RoleReviewer {
 			participant.Runtime.Sandbox = "readOnly"
+			if participant.PermissionProfile != "" {
+				participant.Runtime.ApprovalPolicy = slot.ApprovalPolicy
+			}
 		} else {
 			participant.Runtime.ApprovalPolicy = slot.ApprovalPolicy
 			participant.Runtime.Sandbox = slot.Sandbox
@@ -1327,6 +1375,8 @@ func applyRoleRuntimeProjection(participant *model.ParticipantSnapshot, actor mo
 }
 
 func (e *Engine) Close() error {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
 	e.mu.Lock()
 	if e.closed {
 		e.mu.Unlock()
@@ -1790,7 +1840,7 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 		PeerHandle:  identities[model.OtherParticipant(target)].MentionHandle,
 		Text:        message.Text,
 		ReplyTo:     message.ReplyTo,
-		Role:        participant.Role,
+		Role:        nativePermissionRole(participant),
 		Attachments: attachments,
 		Intent:      message.Intent,
 	}
@@ -2635,6 +2685,9 @@ func (e *Engine) resolveUserTargets(text string, explicit []model.ActorID, targe
 	if err != nil {
 		return nil, err
 	}
+	if targetRole != "" && e.SnapshotMeta().Collaboration != nil {
+		return nil, errors.New("target_role was removed; choose an exact participant handle")
+	}
 	if targetRole != "" {
 		if len(targets) > 0 {
 			return nil, errors.New("choose either explicit recipients or target_role, not both")
@@ -2678,6 +2731,9 @@ func (e *Engine) resolveUserTargets(text string, explicit []model.ActorID, targe
 		if found && replied.From.ValidParticipant() {
 			return []model.ActorID{replied.From}, nil
 		}
+	}
+	if e.SnapshotMeta().Collaboration != nil {
+		return []model.ActorID{model.ActorClaude}, nil
 	}
 	e.mu.RLock()
 	drivers := make([]model.ActorID, 0, 2)
@@ -2888,9 +2944,25 @@ func decodeCurrentEventData(data []byte, target any) error {
 func (e *Engine) applyLocked(event model.Event) error {
 	e.snapshot.LatestSeq = event.Seq
 	switch event.Kind {
+	case EventPermissionsUpdated:
+		var update permissionsUpdate
+		if err := json.Unmarshal(event.Data, &update); err != nil {
+			return err
+		}
+		if e.snapshot.Meta.Collaboration == nil || !update.Actor.ValidParticipant() || !update.Profile.Valid() {
+			return errors.New("invalid permissions event")
+		}
+		p := e.snapshot.Participants[update.Actor]
+		p.PermissionProfile = update.Profile
+		e.snapshot.Participants[update.Actor] = p
 	case EventRoomCreated:
 		if err := json.Unmarshal(event.Data, &e.snapshot.Meta); err != nil {
 			return err
+		}
+		if e.snapshot.Meta.Collaboration != nil {
+			if err := e.snapshot.Meta.Collaboration.Validate(); err != nil {
+				return err
+			}
 		}
 	case eventServiceRoomRenamed:
 		var update serviceRoomRenamedProjection
@@ -3119,6 +3191,7 @@ func processingTransitionAllowed(current, next model.ProcessingState) bool {
 
 func cloneSnapshot(in model.RoomSnapshot) model.RoomSnapshot {
 	out := in
+	out.Meta.Collaboration = model.CloneCollaboration(in.Meta.Collaboration)
 	out.Messages = make([]model.Message, len(in.Messages))
 	for i, message := range in.Messages {
 		out.Messages[i] = cloneMessage(message)

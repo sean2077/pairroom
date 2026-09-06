@@ -12,7 +12,7 @@ import (
 // Tests intentionally fail when either projection grows past its release gate.
 const (
 	MaxBootstrapBytes        = 1800
-	MaxEnvelopeOverheadBytes = 560
+	MaxEnvelopeOverheadBytes = 128
 )
 
 // BootstrapPrompt is projected once at the native harness's instruction layer.
@@ -33,30 +33,27 @@ func SystemPrompt(actor model.ActorID, roomName, _ string) string {
 	return BootstrapPrompt(actor)
 }
 
+// Envelope carries dynamic sender/body/media only. Durable MessageID, ThreadID,
+// ReplyTo, and Role remain available to native transport and Room diagnostics;
+// they are not model instructions. The original body is never summarized.
 func Envelope(input model.AgentInput) string {
 	var b strings.Builder
 	fmt.Fprintln(&b, "[PairRoom message]")
-	fmt.Fprintf(&b, "protocol: %s\n", protocol.Version)
-	fmt.Fprintf(&b, "message_id: %s\n", input.MessageID)
-	fmt.Fprintf(&b, "thread_id: %s\n", input.ThreadID)
-	fmt.Fprintf(&b, "from_handle: %s\n", input.FromHandle)
-	fmt.Fprintf(&b, "self_handle: %s\n", input.SelfHandle)
-	if input.PeerHandle != "" {
-		fmt.Fprintf(&b, "peer_handle: %s\n", input.PeerHandle)
+	from := input.FromHandle
+	if from == "" {
+		from = "@user"
 	}
-	if input.ReplyTo != "" {
-		fmt.Fprintf(&b, "reply_to: %s\n", input.ReplyTo)
-	}
-	fmt.Fprintf(&b, "current_role: %s\n", input.Role)
+	fmt.Fprintf(&b, "from: %s\n", from)
 	if len(input.Attachments) > 0 {
 		fmt.Fprintln(&b, "attachments:")
-		for _, value := range input.Attachments {
-			fmt.Fprintf(&b, "- name: %s\n  media_type: %s\n  size: %d\n  id: %s\n", value.Name, value.MediaType, value.Size, value.ID)
-			if value.Path != "" {
-				fmt.Fprintf(&b, "  local_path: %s\n", value.Path)
+		for _, a := range input.Attachments {
+			fmt.Fprintf(&b, "- name: %q; type: %q", a.Name, a.MediaType)
+			if a.Path != "" {
+				fmt.Fprintf(&b, "; path: %q", a.Path)
 			}
+			fmt.Fprintln(&b)
 		}
 	}
-	fmt.Fprintf(&b, "\n--- message body ---\n%s\n--- end message ---\n", input.Text)
+	fmt.Fprintf(&b, "\n%s", input.Text)
 	return b.String()
 }

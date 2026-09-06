@@ -10,6 +10,10 @@ PairRoom is a local collaboration control plane for official Claude Code, Codex,
 
 When creating a Room, configure each Agent slot's Runtime, native or CC Switch Provider reference, editable model, effort, instructions, and Runtime-specific safety policy. The selection is immutable for that Room. Native Provider references inherit the selected CLI's user/global configuration; PairRoom reads supported CC Switch 3.20.1/schema 18 API-key Profiles without changing CC Switch current state or storing credentials.
 
+**Two collaboration modes, fixed at creation.** In the default mode, Agent 1 is the **Lead** for planning, technical decisions, and final review; Agent 2 is the **Executor** for implementation, verification, and constructive challenges. Put the stronger planning model in Agent 1 and the more economical implementation model in Agent 2; PairRoom does not guess model capability or price. **Custom** replaces that default prose with your natural-language rules, for example: “Agent 2 proposes; Agent 1 implements; both challenge unsupported assumptions.” Both modes use native instructions, not a rigid workflow engine.
+
+**New Rooms default to YOLO for both Agents.** Both can use the live workspace and run commands without routine approval. Use trusted repositories or choose narrower native permissions. Room permission controls can change tool policy at an idle boundary, but cannot switch responsibility or rewrite the mode. `@driver`, `@reviewer`, and responsibility aliases are not addressing handles; use the displayed runtime handle. Older Rooms retain their previous policy and workspace boundaries; see [Upgrading](docs/UPGRADING.md).
+
 Management, Room View, and Desktop startup share embedded i18next 26.4.2 `en`/`zh-CN` catalogs and a persisted language choice. The Management topbar, Room tabstrip, Settings, and standalone Room expose the same `system | light | dark` theme preference; embedded Rooms follow Management.
 
 ## Core model
@@ -65,7 +69,7 @@ After the Management Shell opens:
 
 1. Register a local Git Project;
 2. Create a Room;
-3. Choose Driver / Reviewer;
+3. Choose **Lead + Executor** (default) or write **Custom** collaboration instructions; select each Agent's Runtime/model and review its permissions;
 4. Send a task to one Agent and let it name the other only when another response is necessary;
 5. Watch Turn, tool activity, approvals, delivery, and error state in Room View.
 

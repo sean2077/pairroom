@@ -12,6 +12,10 @@ PairRoom 是一个运行在本机的协作控制面，协调官方 Claude Code�
 
 Management、Room View 与 Desktop 启动页共享内嵌的 i18next 26.4.2 `en`/`zh-CN` 词典和持久化语言选择。Management 顶栏、Room tabstrip、Settings 与独立 Room 共用 `system | light | dark` 主题；内嵌 Room 跟随 Management。
 
+**仅两种协作模式，创建后固定。** 默认由 Agent 1 作为**主导者（Lead）**负责规划、技术决策与最终审查，Agent 2 作为**执行者（Executor）**负责实现、验证并补充或质疑方案。可将较强的规划模型放在 Agent 1、较经济的执行模型放在 Agent 2；PairRoom 不会自动猜测模型能力或价格。**自定义**模式用自然语言替换默认规则，例如：“Agent 2 出方案，Agent 1 实现，双方质疑缺乏证据的判断。”规则进入原生指令，不编译成固定流程。
+
+**新 Room 的两位 Agent 默认均为 YOLO**，都使用实时工作区，可跳过常规工具审批执行命令、修改文件。请使用可信仓库，或选择更严格的原生权限。Room 内只能在空闲边界调整权限，不能切换身份或修改模式；寻址仅用界面显示的运行时句柄，不使用 `@driver`、`@reviewer` 或职责别名。旧 Room 保留既有权限与工作区边界，见[升级说明](docs/UPGRADING.md)。
+
 ## 核心模型
 
 PairRoom 不让两个 Agent 像 IM 群聊一样并发互相唤醒。每个 Room 同一时刻只有一个 **native Turn owner**：
@@ -65,7 +69,7 @@ Management Shell 打开后：
 
 1. 注册一个本地 Git Project；
 2. 创建 Room；
-3. 选择 Driver / Reviewer；
+3. 选择默认的**主导者 + 执行者**，或用自然语言填写**自定义**协作规则，并配置两位 Agent 的运行时、模型与权限；
 4. 向一个 Agent 发送任务，并让它只在确实需要另一轮时点名对方；
 5. 在 Room View 中观察 Turn、工具活动、审批、投递与错误状态。
 

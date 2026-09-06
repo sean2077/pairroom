@@ -755,3 +755,37 @@ func TestWindowedSnapshotAndMessagePaginationAPI(t *testing.T) {
 		t.Fatalf("invalid cursor status = %d", bad.Code)
 	}
 }
+
+func TestRemovedRoleAPIAndTargetCannotMutateLegacyRoom(t *testing.T) {
+	s, engine := newTestServer(t, "")
+	before := engine.Snapshot().LatestSeq
+	for _, tc := range []struct {
+		method, path, body string
+		status             int
+	}{
+		{http.MethodPut, "/api/v1/participants/claude/role", `{"role":"reviewer"}`, http.StatusNotFound},
+		{http.MethodPost, "/api/v1/messages", `{"text":"inspect","target_role":"driver"}`, http.StatusBadRequest},
+	} {
+		response := httptest.NewRecorder()
+		r := localRequest(tc.method, tc.path, bytes.NewBufferString(tc.body))
+		r.Header.Set("Content-Type", "application/json")
+		s.Handler().ServeHTTP(response, r)
+		if response.Code != tc.status {
+			t.Fatalf("%s: %d %s", tc.path, response.Code, response.Body.String())
+		}
+	}
+	if engine.Snapshot().LatestSeq != before {
+		t.Fatal("removed role interface mutated the log")
+	}
+}
+
+func TestTranscriptExportsCollaborationInsteadOfLegacyRole(t *testing.T) {
+	c, _ := (model.Collaboration{Mode: model.CollaborationCustom, Instructions: "Agent 2 plans. Agent 1 implements."}).ForCreation()
+	s := model.RoomSnapshot{Meta: model.RoomMeta{Name: "custom", Collaboration: &c}, Participants: map[model.ActorID]model.ParticipantSnapshot{
+		model.ActorClaude: {DisplayName: "Grok Build", MentionHandle: "@grok", Role: model.RolePeer, Responsibility: "participant", PermissionProfile: model.PermissionReadOnly},
+	}}
+	got := renderMarkdownTranscript(s)
+	if !strings.Contains(got, c.Instructions) || !strings.Contains(got, "permissions `read-only`") || strings.Contains(got, "role `peer`") {
+		t.Fatalf("incorrect transcript metadata: %s", got)
+	}
+}

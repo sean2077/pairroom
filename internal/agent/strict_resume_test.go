@@ -231,7 +231,7 @@ func runGrokACPHelper(args []string) int {
 		case "session/new":
 			meta, _ := request.Params["_meta"].(map[string]any)
 			_, hasMCP := request.Params["mcpServers"]
-			if !hasMCP || !strings.Contains(fmt.Sprint(meta["rules"]), "pairroom-protocol/v5") {
+			if !hasMCP || !strings.Contains(fmt.Sprint(meta["rules"]), "pairroom-protocol/v6") {
 				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32602, "message": "missing PairRoom session rules or mcpServers"}})
 				continue
 			}
@@ -258,7 +258,7 @@ func runGrokACPHelper(args []string) int {
 			}
 			if mode == "resume" {
 				text := "bootstrap-missing"
-				if strings.Contains(promptText, "pairroom-protocol/v5") {
+				if strings.Contains(promptText, "pairroom-protocol/v6") {
 					text = "bootstrap-present"
 				}
 				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": sessionID, "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}}}})

@@ -72,7 +72,7 @@ Backup success is defined by manifest / checksum verification, not by a compress
 
 ## Graceful shutdown
 
-A normal exit should stop active adapters, settle in-flight projections, close the store, and clean reviewer workspaces. After a forced kill, the next start restores only Room-owned FIFO entries that were still before native submission and fails uncertain submission windows closed; it never guesses whether an accepted native operation completed.
+A normal exit should stop active adapters, settle in-flight projections, close the store, and clean any legacy reviewer workspaces. After a forced kill, the next start restores only Room-owned FIFO entries that were still before native submission and fails uncertain submission windows closed; it never guesses whether an accepted native operation completed.
 
 An embedded Service used by the desktop host follows the same shutdown contract. The Wails window lifecycle cannot bypass Room Runtime drain.
 

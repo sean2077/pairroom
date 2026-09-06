@@ -6,9 +6,10 @@ import (
 )
 
 const (
-	Current       = "2.1.0"
-	StoreSchema   = 9
-	RepositoryURL = "https://github.com/sean2077/pairroom"
+	Current           = "2.1.0"
+	StoreSchema       = 10
+	LegacyStoreSchema = 9
+	RepositoryURL     = "https://github.com/sean2077/pairroom"
 )
 
 // Commit, BuildDate, LastTag, and CommitsSinceTag are populated by the make
@@ -59,4 +60,9 @@ func Describe() string {
 		return fmt.Sprintf("%s+%d.%s", tag, n, sha)
 	}
 	return tag + "+" + sha
+}
+
+// SupportsStoreSchema permits the preceding read-compatible schema without rewriting it.
+func SupportsStoreSchema(schema int) bool {
+	return schema == StoreSchema || schema == LegacyStoreSchema
 }

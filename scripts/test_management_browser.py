@@ -15,7 +15,7 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-from test_room_browser import ROOT
+from test_room_browser import ROOT, collaboration_fixture
 
 
 def fixture_html() -> str:
@@ -30,7 +30,7 @@ def fixture_html() -> str:
     html = re.sub(r'<script\b[^>]*src="([^"]+)"[^>]*></script>', lambda m: '<script>' + asset(m[1]).replace('</script>', '<\\/script>') + '</script>', html)
     mock = r'''
       window.__snapshot = {
-        version:'2.1.0',store_schema:9,data_root:'/state',healthy:true,
+        version:'2.1.0',store_schema:10,data_root:'/state',healthy:true,
         generated_at:'2026-09-06T00:00:00Z',
         projects:[{id:'p1',root:'/workspace/example',available:true}],
         rooms:['r1','r2'].map((id,i)=>({id,project_id:'p1',name:i?'Review workspace':'Implementation workspace',
@@ -40,9 +40,9 @@ def fixture_html() -> str:
         runtime_policy:{limit:4,idle_timeout_seconds:900},
         capabilities:{room_surface:true,room_deletion:true,project_refresh:true,project_removal:true,runtime_suspend:true}
       };
-      window.__catalog = {profiles:[{name:'Example Provider',runtime:'claude',supported:true,provider:{source:'cc-switch',app_type:'claude',profile_id:'fixture'}}],runtimes:['claude','codex','grok'].map(runtime=>({runtime,
+      window.__catalog = {collaboration_default:COLLABORATION,profiles:[{name:'Example Provider',runtime:'claude',supported:true,provider:{source:'cc-switch',app_type:'claude',profile_id:'fixture'}}],runtimes:['claude','codex','grok'].map(runtime=>({runtime,
         display_name:{claude:'Claude Code',codex:'Codex',grok:'Grok Build'}[runtime],available:true})),
-        defaults:{claude:{runtime:'claude',provider:{source:'native'}},codex:{runtime:'codex',provider:{source:'native'}}}};
+        defaults:{claude:{runtime:'claude',provider:{source:'native'},permission_mode:'yolo'},codex:{runtime:'codex',provider:{source:'native'},approval_policy:'yolo',sandbox:'danger-full-access'}}};
       window.__serviceReads = 0; window.__readDelay = 0; window.__catalogDelay = 0;
       window.__catalogReads = 0; window.__catalogWrites = 0; window.__writes = [];
       window.fetch = async (path,options={}) => {
@@ -60,6 +60,7 @@ def fixture_html() -> str:
         return new Response(JSON.stringify(body),{status:200,headers:{'content-type':'application/json'}});
       };
     '''
+    mock = mock.replace('COLLABORATION', json.dumps(collaboration_fixture()).replace('</', '<\\/'))
     return html.replace('<head>', '<head><script>' + mock + '</script>', 1)
 
 
@@ -133,6 +134,27 @@ async def verify(browser_path: str | None, artifacts: Path) -> None:
         await page.wait_for_timeout(100)
         await page.get_by_role('button', name='+ Create Room', exact=True).first.click()
         await page.wait_for_function("!document.getElementById('room-submit').disabled")
+        assert await page.locator('#room-collaboration-mode option').evaluate_all('nodes=>nodes.map(n=>n.value)') == ['default', 'custom']
+        assert await page.locator('#room-collaboration-mode').input_value() == 'default'
+        assert 'Lead' in await page.locator('#claude-responsibility-label').inner_text()
+        assert 'Executor' in await page.locator('#codex-responsibility-label').inner_text()
+        assert await page.locator('#claude-permission-mode').input_value() == 'yolo'
+        assert await page.locator('#codex-approval-policy').input_value() == 'yolo'
+        assert await page.locator('#codex-sandbox').input_value() == 'danger-full-access'
+        assert await page.locator('#claude-reviewer-policy, #codex-reviewer-policy').count() == 0
+        await page.locator('#room-collaboration-mode').select_option('custom')
+        assert not await page.locator('#room-collaboration-instructions').evaluate('node=>node.checkValidity()')
+        custom = 'Agent 2 proposes. Agent 1 implements; both challenge unsupported assumptions.'
+        await page.locator('#room-collaboration-instructions').fill(custom)
+        await page.evaluate("PairRoomI18n.setLang('zh-CN')")
+        await page.wait_for_timeout(80)
+        assert await page.locator('#room-collaboration-instructions').input_value() == custom
+        assert '主导者' not in await page.locator('#claude-responsibility-label').inner_text()
+        await page.set_viewport_size({'width':390, 'height':844})
+        assert not await page.locator('#room-dialog').evaluate('node=>node.scrollWidth>node.clientWidth')
+        await page.screenshot(path=str(artifacts / 'creation-custom-mobile-zh-CN.png'))
+        await page.set_viewport_size({'width':1440, 'height':1000})
+        await page.evaluate("PairRoomI18n.setLang('en')")
         await page.locator('#claude-model').fill('model-before')
         await page.evaluate('__catalogDelay=250')
         await page.locator('#agent-catalog-refresh').click()
@@ -154,7 +176,20 @@ async def verify(browser_path: str | None, artifacts: Path) -> None:
         assert await page.evaluate('__writes.length') == writes, 'invalid provider selection reached room creation'
         results['unavailable_provider_requires_explicit_choice'] = True
         await provider.select_option(label='Native / Runtime default')
+        await page.locator('#claude-model').fill('model-before-submit')
         await page.screenshot(path=str(artifacts / 'management-room-config-light.png'))
+        await page.locator('#room-submit').click()
+        await page.wait_for_function("!document.getElementById('room-dialog').open")
+        sent = await page.evaluate("JSON.parse(__writes.filter(w=>w.path.endsWith('/rooms')).at(-1).body)")
+        assert sent['collaboration'] == {'mode':'custom', 'instructions':custom}
+        assert sent['agents']['claude']['model'] == 'model-before-submit'
+        assert all('ordinary_reviewer_policy' not in agent for agent in sent['agents'].values())
+        await page.get_by_role('button', name='+ Create Room', exact=True).first.click()
+        await page.wait_for_function("!document.getElementById('room-submit').disabled")
+        assert await page.locator('#room-collaboration-mode').input_value() == 'default'
+        assert await page.locator('#room-collaboration-instructions').input_value() == ''
+        await page.screenshot(path=str(artifacts / 'creation-default-light.png'))
+        results.update(two_creation_modes=True, default_yolo=True, custom_payload_exact=True, custom_locale_preserved=True)
         await page.locator('#room-dialog [data-close-dialog="room-dialog"]').first.click()
         await page.get_by_role('button', name='Show archived', exact=True).click()
         await page.get_by_role('button', name='Permanently delete', exact=True).click()

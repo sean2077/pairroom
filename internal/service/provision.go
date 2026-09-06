@@ -39,6 +39,15 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 	if provisioner == nil {
 		return Room{}, errors.New("binding provisioner is required")
 	}
+	spec := model.Collaboration{}
+	if request.Collaboration != nil {
+		spec = *request.Collaboration
+	}
+	collaboration, err := spec.ForCreation()
+	if err != nil {
+		return Room{}, err
+	}
+	request.Collaboration = &collaboration
 	// A nil map represents the omitted JSON field and snapshots the current
 	// Service defaults. A non-nil empty/partial map is an explicit submission
 	// and must fail closed rather than silently filling one missing slot.
@@ -52,6 +61,10 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 	selections, err := validateAgentSelections(request.Agents)
 	if err != nil {
 		return Room{}, err
+	}
+	for actor, selection := range selections {
+		selection.OrdinaryReviewerPolicy = ""
+		selections[actor] = selection
 	}
 	request.Agents = selections
 	if err := request.Validate(); err != nil {
@@ -185,12 +198,13 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 	now := r.now()
 	room := Room{
 		ID: roomID, ProjectID: project.ID, Name: strings.TrimSpace(request.Name),
-		Lifecycle: RoomActive, Bindings: bindings, Agents: cloneAgentSelections(request.Agents),
+		Collaboration: model.CloneCollaboration(request.Collaboration),
+		Lifecycle:     RoomActive, Bindings: bindings, Agents: cloneAgentSelections(request.Agents),
 		TranscriptBoundaryNotice: TranscriptBoundaryNotice,
 		CreatedAt:                now, UpdatedAt: now,
 	}
 	payload := roomProvisionedPayload{
-		Schema: 2, Project: project, RoomID: room.ID, Name: room.Name,
+		Schema: 3, Collaboration: model.CloneCollaboration(room.Collaboration), Project: project, RoomID: room.ID, Name: room.Name,
 		Lifecycle: room.Lifecycle, Bindings: cloneBindings(room.Bindings),
 		Agents:                   cloneAgentSelections(room.Agents),
 		TranscriptBoundaryNotice: room.TranscriptBoundaryNotice, CreatedAt: room.CreatedAt,
@@ -236,8 +250,8 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 
 func defaultAgentSelections() map[model.ActorID]model.AgentSelection {
 	return map[model.ActorID]model.AgentSelection{
-		model.ActorClaude: {Runtime: model.RuntimeClaude, Provider: model.NativeProviderRef(), PermissionMode: "yolo", OrdinaryReviewerPolicy: model.ReviewerEnforced},
-		model.ActorCodex:  {Runtime: model.RuntimeCodex, Provider: model.NativeProviderRef(), ApprovalPolicy: "yolo", OrdinaryReviewerPolicy: model.ReviewerEnforced},
+		model.ActorClaude: {Runtime: model.RuntimeClaude, Provider: model.NativeProviderRef(), PermissionMode: "yolo"},
+		model.ActorCodex:  {Runtime: model.RuntimeCodex, Provider: model.NativeProviderRef(), ApprovalPolicy: "yolo", Sandbox: "danger-full-access"},
 	}
 }
 
@@ -262,7 +276,7 @@ func writeInitialRoomLog(dir string, project Project, room Room, payload roomPro
 		}
 		return nil
 	}
-	meta := model.RoomMeta{ID: room.ID, Name: room.Name, Repo: project.Root, CreatedAt: room.CreatedAt}
+	meta := model.RoomMeta{ID: room.ID, Name: room.Name, Repo: project.Root, CreatedAt: room.CreatedAt, Collaboration: model.CloneCollaboration(room.Collaboration)}
 	if err := appendEvent("room.created", model.ActorSystem, meta); err != nil {
 		return err
 	}
@@ -277,8 +291,8 @@ func writeInitialRoomLog(dir string, project Project, room Room, payload roomPro
 		model.ActorCodex:  room.Agents[model.ActorCodex].Runtime,
 	})
 	participants := []model.ParticipantSnapshot{
-		{ID: model.ActorClaude, DisplayName: identities[model.ActorClaude].DisplayName, MentionHandle: identities[model.ActorClaude].MentionHandle, Role: model.RoleDriver, State: model.StateStopped, Model: room.Agents[model.ActorClaude].Model, RuntimeKind: room.Agents[model.ActorClaude].Runtime, SessionID: room.Bindings[model.ActorClaude].SessionID},
-		{ID: model.ActorCodex, DisplayName: identities[model.ActorCodex].DisplayName, MentionHandle: identities[model.ActorCodex].MentionHandle, Role: model.RoleReviewer, State: model.StateStopped, Model: room.Agents[model.ActorCodex].Model, RuntimeKind: room.Agents[model.ActorCodex].Runtime, SessionID: room.Bindings[model.ActorCodex].SessionID},
+		{ID: model.ActorClaude, DisplayName: identities[model.ActorClaude].DisplayName, MentionHandle: identities[model.ActorClaude].MentionHandle, Role: model.RolePeer, PermissionProfile: model.PermissionConfigured, Responsibility: room.Collaboration.Responsibility(model.ActorClaude), State: model.StateStopped, Model: room.Agents[model.ActorClaude].Model, RuntimeKind: room.Agents[model.ActorClaude].Runtime, SessionID: room.Bindings[model.ActorClaude].SessionID},
+		{ID: model.ActorCodex, DisplayName: identities[model.ActorCodex].DisplayName, MentionHandle: identities[model.ActorCodex].MentionHandle, Role: model.RolePeer, PermissionProfile: model.PermissionConfigured, Responsibility: room.Collaboration.Responsibility(model.ActorCodex), State: model.StateStopped, Model: room.Agents[model.ActorCodex].Model, RuntimeKind: room.Agents[model.ActorCodex].Runtime, SessionID: room.Bindings[model.ActorCodex].SessionID},
 	}
 	for _, participant := range participants {
 		if err := appendEvent("participant.updated", participant.ID, participant); err != nil {

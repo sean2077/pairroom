@@ -36,12 +36,13 @@ type SafeCatalogError struct {
 }
 
 type AgentCatalog struct {
-	Schema        int                                    `json:"schema"`
-	GeneratedAt   time.Time                              `json:"generated_at"`
-	Runtimes      []RuntimeCatalogEntry                  `json:"runtimes"`
-	Profiles      []ccswitch.ProfileSummary              `json:"profiles"`
-	ProviderError *SafeCatalogError                      `json:"provider_error,omitempty"`
-	Defaults      map[model.ActorID]model.AgentSelection `json:"defaults"`
+	CollaborationDefault model.Collaboration                    `json:"collaboration_default"`
+	Schema               int                                    `json:"schema"`
+	GeneratedAt          time.Time                              `json:"generated_at"`
+	Runtimes             []RuntimeCatalogEntry                  `json:"runtimes"`
+	Profiles             []ccswitch.ProfileSummary              `json:"profiles"`
+	ProviderError        *SafeCatalogError                      `json:"provider_error,omitempty"`
+	Defaults             map[model.ActorID]model.AgentSelection `json:"defaults"`
 }
 
 type AgentResolverConfig struct {
@@ -263,6 +264,7 @@ func writeGrokOverlay(dataDir string, actor model.ActorID, content string) (stri
 
 func (r *AgentResolver) Catalog(ctx context.Context) AgentCatalog {
 	result := AgentCatalog{Schema: 1, GeneratedAt: time.Now().UTC(), Defaults: r.DefaultSelections()}
+	result.CollaborationDefault, _ = (model.Collaboration{}).ForCreation()
 	ccCatalog, err := r.ccswitch.Catalog(ctx)
 	if err != nil {
 		result.ProviderError = safeCatalogError(err)

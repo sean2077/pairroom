@@ -7,6 +7,24 @@ Defines project-wide identity and collaboration terms.
 - `en`
 - `zh-CN`
 
+## Collaboration
+
+**Collaboration mode**:
+The Room's creation-time instruction choice: default or custom.
+_Equivalent (zh-CN)_: 协作模式
+
+**Lead**:
+Agent 1's planning and review responsibility in default mode, independent of its Runtime and tool permissions.
+_Equivalent (zh-CN)_: 主导者
+
+**Executor**:
+Agent 2's implementation, verification, and technical feedback responsibility in default mode.
+_Equivalent (zh-CN)_: 执行者
+
+**Permission profile**:
+A participant's effective native-tool policy selection, separate from collaboration responsibility.
+_Equivalent (zh-CN)_: 权限配置
+
 ## Language
 
 **Participant slot**:

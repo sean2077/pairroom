@@ -796,7 +796,7 @@ func (r *Registry) verifyMissingRoomArchiveStub(state inspectedDeletionEntry) er
 	if err := decodeStrictJSON(paths["metadata.json"], &metadata); err != nil {
 		return fmt.Errorf("decode archive stub metadata: %w", err)
 	}
-	if metadata.Format != "pairroom-jsonl" || metadata.SchemaVersion != version.StoreSchema || strings.TrimSpace(metadata.AppVersion) == "" {
+	if metadata.Format != "pairroom-jsonl" || !version.SupportsStoreSchema(metadata.SchemaVersion) || strings.TrimSpace(metadata.AppVersion) == "" {
 		return fmt.Errorf("archive stub metadata is not a PairRoom schema %d store", version.StoreSchema)
 	}
 

@@ -11,11 +11,11 @@ PairRoom's browser UI uses a local HTTP API and SSE. CLI / UI is the preferred e
 
 ## Resource families
 
-The Management API owns Project and Room registration, immutable per-Room Agent selection, Binding, archive, backup, and Service diagnostics. The Room API owns message, Turn, participant, role, approval, retry, cancel, attachment, and the event stream. In-app Room tabs use the Management same-origin surface: `/api/v1/rooms/{room}/surface/…` uses the Management Session, and the server injects the Runtime bearer. `PATCH /api/v1/runtime-policy` only adjusts the concurrent Runtime cap. `POST /api/v1/rooms/{room}/open-browser` opens the system browser after the Runtime is ready. An archived Room has no surface and cannot be opened externally.
+The Management API owns Project and Room registration, immutable per-Room Agent selection, Binding, archive, backup, and Service diagnostics. The Room API owns message, Turn, participant, independent permissions, approval, retry, cancel, attachment, and the event stream. In-app Room tabs use the Management same-origin surface: `/api/v1/rooms/{room}/surface/…` uses the Management Session, and the server injects the Runtime bearer. `PATCH /api/v1/runtime-policy` only adjusts the concurrent Runtime cap. `POST /api/v1/rooms/{room}/open-browser` opens the system browser after the Runtime is ready. An archived Room has no surface and cannot be opened externally.
 
 ## Agent catalog and Room creation
 
-`GET /api/v1/agent-catalog` and `POST /api/v1/agent-catalog/refresh` return all three Runtime entries with availability diagnostics, sanitized CC Switch Profile summaries, local model suggestions, disabled reasons, and the current two Service defaults. The response never contains raw Profile configuration, endpoints, headers, tokens, API keys, or Runtime arguments. Refresh is explicit, and Room creation still re-resolves the selected Profile server-side instead of trusting the catalog returned to the browser.
+`GET /api/v1/agent-catalog` and `POST /api/v1/agent-catalog/refresh` return all three Runtime entries with availability diagnostics, sanitized CC Switch Profile summaries, local model suggestions, disabled reasons, the current two Service defaults, and canonical `collaboration_default` instructions for the creation preview. The response never contains raw Profile configuration, endpoints, headers, tokens, API keys, or Runtime arguments. Refresh is explicit, and Room creation still re-resolves the selected Profile server-side instead of trusting the catalog returned to the browser.
 
 `POST /api/v1/projects/{project}/rooms` accepts the existing `name` and complete two-slot `bindings` map plus an optional complete `agents` map keyed by historical ActorIDs `claude` and `codex`. Omitting `agents` snapshots both current Service defaults. Sending only one slot is rejected. A selection has this shape:
 
@@ -28,12 +28,27 @@ The Management API owns Project and Room registration, immutable per-Room Agent 
   "instructions": "Review compatibility boundaries.",
   "permission_mode": "",
   "approval_policy": "on-request",
-  "sandbox": "workspace-write",
-  "ordinary_reviewer_policy": "enforced"
+  "sandbox": "workspace-write"
 }
 ```
 
 The created Room returns the immutable `agents` map. There is no Agent-reconfiguration endpoint. Schema-v1 Rooms instead return `legacy_defaults: true` and no `agents` map.
+
+## Creation-only collaboration and independent permissions
+
+Room creation also accepts optional `collaboration`. Omission or `{"mode":"default"}` persists canonical version-1 Lead/Executor instructions. Custom input is, for example:
+
+```json
+{"collaboration":{"mode":"custom","instructions":"Agent 2 plans. Agent 1 implements. Both challenge unsupported assumptions."}}
+```
+
+The server trims outer whitespace and requires non-blank UTF-8 without NUL, at most 16 KiB. Only `default` and `custom` are accepted. Default prose cannot be overwritten; choose custom instead. The response includes `{version, mode, instructions}` and the same record is stored in `room.created` and provisioning schema 3. PATCH does not accept mode or instruction changes. Old provisioning 1/2 Rooms have no collaboration record and keep their legacy behavior.
+
+Participant snapshots add `responsibility` (`lead`, `executor`, or generic `participant`) and `permission_profile`. Modern `role` remains `peer` solely for old response readers; it is not a collaboration selector. Runtime policy fields describe the effective native policy.
+
+`PUT /api/v1/participants/{actor}/permissions` accepts `{"profile":"configured"}`, `{"profile":"read-only"}`, or `{"profile":"yolo"}`. Configured restores the creation-time Agent policy, read-only uses native plan/read-only restrictions, and YOLO requests bypass/full access. The Room rejects pending Turns, queued input, pending approvals, and legacy Rooms. Invalid profiles return 400; unsafe transitions or runtime failures return 409. On success, read a fresh snapshot. `participant.permissions.requested` records intent before process effects; `participant.permissions.updated` commits effective policy after stopping the old process. A restart failure leaves the committed policy, not a broader fallback.
+
+Permissions are not collaboration modes. They do not change the saved instructions, Runtime, Provider, model, or exact materialized session. The former `/participants/{actor}/role` route is removed (404). `target_role` submissions are rejected (400); choose one stable `to` slot or its exact displayed runtime handle. `@driver`, `@reviewer`, `@lead`, and `@executor` are not handle aliases.
 
 ## Errors
 
@@ -113,7 +128,7 @@ The following method/path patterns are extracted from production HTTP registrati
 - `POST /api/v1/rooms/{room}/restore`
 - `POST /api/v1/rooms/{room}/suspend`
 - `POST /api/v1/session`
-- `PUT /api/v1/participants/{actor}/role`
+- `PUT /api/v1/participants/{actor}/permissions`
 - `PUT /api/v1/settings`
 </details>
 <!-- /generated:routes -->

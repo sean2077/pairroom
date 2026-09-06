@@ -4,7 +4,7 @@
 
 **Project** is the registration record of a local Git repository in the Management Service. It stores the repository location and the Rooms that can be created there. It is not a copy of the repository and does not own user source.
 
-**Room** is the persistence boundary for collaboration. It holds participant roles, messages, Turn summaries, approvals, Bindings, attachments, and the Event Log. A Room can continue across process starts, but the native process itself is not restored with the Event Log.
+**Room** is the persistence boundary for collaboration. It holds creation-time collaboration instructions, independent permission profiles, messages, Turn summaries, approvals, Bindings, attachments, and the Event Log. A Room can continue across process starts, but the native process itself is not restored with the Event Log.
 
 **Binding** binds a stable Room participant slot to a vendor-native session or thread. Durable ActorIDs `claude` and `codex` still identify Agent 1 and Agent 2 internally; `RuntimeKind` independently selects Claude Code, Codex, or Grok Build. A Binding is managed by the Service and cannot be reused freely by another active Room.
 
@@ -57,17 +57,19 @@ Input to the other Agent is always queued until the active Turn ends, regardless
 
 Only the exact current handle of the other Agent in visible Agent output requests a relay. PairRoom stores and forwards that complete visible response and its attachments after the current native Turn completes. It does not truncate the response, append Room history, or require a structured handoff packet.
 
-A response without the peer's exact handle ends Agent relay. Either Agent may deliver the final result. An exact Agent handle wins over `@user` in the same response; `@user` alone leaves the Room waiting for the user; a self-mention never routes. Former aliases such as `@peer`, `@human`, `@all`, `@agent1`, and `@agent2` do not route; an otherwise unaddressed user send that relies on one is rejected. Former `PAIRROOM` control markers are ordinary text.
+A response without the peer's exact handle ends Agent relay. Either Agent may deliver the final result. An exact Agent handle wins over `@user` in the same response; `@user` alone leaves the Room waiting for the user; a self-mention never routes. Former aliases such as `@driver`, `@reviewer`, `@lead`, `@executor`, `@peer`, `@human`, `@all`, `@agent1`, and `@agent2` do not route; an otherwise unaddressed user send that relies on one is rejected. Former `PAIRROOM` control markers are ordinary text.
 
 PairRoom applies no hop or Turn ceiling to explicit relays. The bootstrap tells each Agent to mention the peer only when another independent response can materially complete the user's request, not to acknowledge, agree, thank, or ceremonially return a Turn. If Agents deliberately keep naming one another, the user can Cancel, Interrupt, or send a newer instruction.
 
-## Role and Workspace
+## Collaboration and permissions
 
-- **Driver** implements in the live workspace;
-- **Reviewer** inspects in an isolated reviewer snapshot and does not modify the Driver's live tree by default;
-- **Peer** is an equal collaborator operating within its native permissions and current workspace boundary.
+A new Room has exactly two collaboration choices. **Default** gives Agent 1 the Lead responsibility (planning, technical decisions, final review) and Agent 2 the Executor responsibility (implementation, verification, and useful challenges to the plan). Choose their Runtime, Provider, model, and effort independently. **Custom** replaces those responsibilities with the user's natural-language instructions; generic Agent 1 / Agent 2 labels remain. The versioned instructions are stored at creation and restored unchanged. There is no in-Room mode editor or role switch.
 
-Roles are runtime permission and workspace boundaries, not just prompt labels. Switching roles must happen at a safe Turn boundary.
+Responsibilities are instructions, not tool grants or a mandatory phase machine. Both participants use the same live workspace and the Room still permits only one native Turn owner. An unaddressed human message starts Agent 1; use the displayed exact handle or target selector for Agent 2. Only an exact peer mention requests a relay. Later human instructions may redirect the task without rewriting the saved mode.
+
+New Service defaults explicitly use YOLO for both participants. The creation form exposes narrower native policy overrides and a warning about bypassing routine approvals. During an idle Room, **Configured** restores the immutable creation-time selection, **Read-only** applies native plan/read-only policy, and **YOLO** requests bypass and full native access. Permission changes cannot alter responsibility, Provider, model, instructions, or native session identity. Read-only is a native-tool boundary, not an OS sandbox or separate snapshot.
+
+Legacy Rooms without a collaboration record retain their existing Driver / Reviewer / Peer policy and isolated Reviewer workspace. They are not silently converted to the new defaults. The legacy role controls and aliases are no longer public; create a new Room to adopt the new model.
 
 ## Approval and human questions
 

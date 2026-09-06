@@ -93,7 +93,7 @@ func TestBootstrapPromptUsesVersionedContractAndStaysCompact(t *testing.T) {
 		if len([]byte(got)) > MaxBootstrapBytes {
 			t.Fatalf("%s bootstrap = %d bytes, budget = %d:\n%s", actor, len([]byte(got)), MaxBootstrapBytes, got)
 		}
-		for _, fragment := range []string{protocol.Version, "pairroom protocol --actor " + string(actor), "current_role", "single active turn", "@user", "Agent handle wins", "No fixed relay packet"} {
+		for _, fragment := range []string{protocol.Version, "pairroom protocol --actor " + string(actor), "from names its sender", "single active turn", "@user", "Agent handle wins", "No fixed relay packet"} {
 			if !strings.Contains(got, fragment) {
 				t.Fatalf("%s bootstrap missing %q:\n%s", actor, fragment, got)
 			}
@@ -123,15 +123,13 @@ func TestEnvelopeCarriesOnlyDynamicTurnContext(t *testing.T) {
 	}
 	got := Envelope(input)
 	for _, fragment := range []string{
-		"protocol: " + protocol.Version, "message_id: msg-0123456789abcdef01234567",
-		"thread_id: thread-0123456789abcdef01234567", "from_handle: @claude",
-		"self_handle: @codex", "peer_handle: @claude", "current_role: reviewer", "Inspect the race",
+		"[PairRoom message]", "from: @claude", "Inspect the race",
 	} {
 		if !strings.Contains(got, fragment) {
 			t.Fatalf("Envelope() missing %q:\n%s", fragment, got)
 		}
 	}
-	for _, fragment := range []string{"hop:", "remaining_agent_hops", "workflow", "delivery_intent", "HANDOFF", "PAIRROOM:"} {
+	for _, fragment := range []string{"message_id:", "thread_id:", "reply_to:", "current_role:", "protocol:", "self_handle:", "peer_handle:", "hop:", "remaining_agent_hops", "workflow", "delivery_intent", "HANDOFF", "PAIRROOM:"} {
 		if strings.Contains(got, fragment) {
 			t.Fatalf("Envelope() contains removed field %q:\n%s", fragment, got)
 		}
@@ -139,5 +137,24 @@ func TestEnvelopeCarriesOnlyDynamicTurnContext(t *testing.T) {
 	overhead := len([]byte(got)) - len([]byte(input.Text))
 	if overhead > MaxEnvelopeOverheadBytes {
 		t.Fatalf("Envelope() overhead = %d bytes, budget = %d:\n%s", overhead, MaxEnvelopeOverheadBytes, got)
+	}
+}
+
+func TestCompactEnvelopePreservesVerbatimBodyAndQuotedMedia(t *testing.T) {
+	body := "  ## 原始正文\n\n@claude inspect `x`\n--- end message ---\n"
+	input := model.AgentInput{Text: body, FromHandle: "@codex1", Attachments: []model.AgentAttachment{{Attachment: model.Attachment{ID: "opaque-id", Name: "name\nwith\"quote.png", MediaType: "image/png", Size: 100}, Path: "C:\\repo\\图.png"}}}
+	got := Envelope(input)
+	if !strings.HasSuffix(got, body) || !strings.Contains(got, `name: "name\nwith\"quote.png"`) || !strings.Contains(got, `path: "C:\\repo\\图.png"`) {
+		t.Fatalf("media/body corrupted: %s", got)
+	}
+	if strings.Contains(got, "opaque-id") {
+		t.Fatal("opaque transport IDs remain in the model prompt")
+	}
+}
+
+func TestResponsibilityNamesNeverBecomeMentionAliases(t *testing.T) {
+	got := ParseMentions("@driver @reviewer @lead @executor", model.ActorUser, map[model.ActorID]model.RuntimeKind{})
+	if len(got.Targets) != 0 || len(got.RemovedAliases) != 4 {
+		t.Fatalf("role aliases still route: %+v", got)
 	}
 }

@@ -151,10 +151,20 @@
           <label><span class="field-label" data-i18n="common.project">Project</span><select id="room-project-id" required=""></select></label>
           <label><span class="field-label" data-i18n="ui.roomName">Room name</span><input id="room-name" type="text" required="" maxlength="120" autocomplete="off" placeholder="For example: Auth refactor review" data-i18n-placeholder="ui.forExampleAuthRefactorReview"></label>
         </div>
+        <section class="collaboration-config" aria-labelledby="collaboration-label">
+          <label><span id="collaboration-label" class="field-label" data-i18n="room.collaboration.mode">Collaboration</span>
+            <select id="room-collaboration-mode"><option value="default" data-i18n="room.collaboration.default">Lead + Executor (default)</option><option value="custom" data-i18n="room.collaboration.custom">Custom instructions</option></select>
+          </label>
+          <p id="collaboration-help" class="field-help"></p>
+          <details id="collaboration-default-details"><summary data-i18n="room.collaboration.viewInstructions">View native instructions</summary><pre id="collaboration-default-instructions" class="collaboration-instructions"></pre></details>
+          <label id="collaboration-custom-field" hidden><span class="field-label" data-i18n="room.collaboration.instructions">Collaboration instructions</span><textarea id="room-collaboration-instructions" rows="4" maxlength="16384" data-i18n-placeholder="room.collaboration.placeholder" placeholder="Describe how Agent 1 and Agent 2 should collaborate…"></textarea></label>
+          <p class="field-help" data-i18n="room.collaboration.immutable">Fixed at creation; instructions guide collaboration, not tool permissions.</p>
+        </section>
+        <p class="callout warning compact-callout" data-i18n="room.collaboration.yoloWarning">New Rooms default to YOLO. Both Agents may modify files and run commands without routine approval. Use trusted workspaces, or choose a narrower native policy below.</p>
         <div class="section-label-row"><div><span class="field-label" data-i18n="room.agentConfiguration">Agent configuration</span><p class="field-help" data-i18n="room.agentConfigurationImmutable">This configuration is fixed for the lifetime of the Room.</p></div><button id="agent-catalog-refresh" class="secondary-button compact-button" type="button" data-i18n="agent.refreshCatalog">Refresh Agent catalog</button></div>
         <div class="binding-grid">
           <fieldset class="binding-card" data-actor="claude">
-            <legend><span class="agent-avatar claude">1</span><span><strong data-i18n="agent.slot1">Agent 1 · initial Driver</strong><small data-i18n="agent.runtimeAndBinding">Runtime + Binding</small></span></legend>
+            <legend><span class="agent-avatar claude">1</span><span><strong id="claude-responsibility-label" data-i18n="room.collaboration.leadSlot">Agent 1 · Lead</strong><small data-i18n="agent.runtimeAndBinding">Runtime + Binding</small></span></legend>
             <div class="agent-selection-grid">
               <label><span class="field-label" data-i18n="agent.runtime">Runtime</span><select id="claude-runtime" required></select><small id="claude-runtime-diagnostic" class="field-help"></small></label>
               <label><span class="field-label" data-i18n="agent.provider">Provider</span><select id="claude-provider" required></select><small id="claude-provider-diagnostic" class="field-help"></small></label>
@@ -166,17 +176,15 @@
                 <label data-policy-for="claude,grok"><span class="field-label" data-i18n="agent.permissionMode">Permission mode</span><select id="claude-permission-mode"><option value="" data-i18n="common.inherit">Inherit</option></select></label>
                 <label data-policy-for="codex"><span class="field-label" data-i18n="agent.approvalPolicy">Approval policy</span><select id="claude-approval-policy"><option value="" data-i18n="common.inherit">Inherit</option><option>untrusted</option><option>on-request</option><option>never</option><option>yolo</option></select></label>
                 <label data-policy-for="codex,grok"><span class="field-label" data-i18n="agent.sandbox">Sandbox</span><select id="claude-sandbox"><option value="" data-i18n="common.inherit">Inherit</option><option>read-only</option><option>workspace-write</option><option>danger-full-access</option></select></label>
-                <label><span class="field-label" data-i18n="agent.reviewerPolicy">Ordinary Reviewer policy</span><select id="claude-reviewer-policy"><option value="enforced" data-i18n="agent.reviewerEnforced">Enforce read-only Reviewer protection</option><option value="explicit" data-i18n="agent.reviewerExplicit">Danger: apply the explicit Runtime policy</option></select></label>
                 <label class="agent-instructions"><span class="field-label" data-i18n="agent.instructions">Additional instructions</span><textarea id="claude-instructions" rows="3" maxlength="65536"></textarea></label>
               </div>
-              <p id="claude-reviewer-warning" class="callout warning compact-callout" hidden data-i18n="agent.reviewerExplicitWarning">Ordinary Reviewer turns may modify the workspace when explicit Runtime policy is selected.</p>
             </details>
             <label class="choice-card"><input type="radio" name="claude-mode" value="new" checked=""><span><strong data-i18n="ui.createSession">Create Session</strong><small data-i18n="ui.theIdentityIsMaterializedAfterTheCliAcceptsTheFirstRealTurn">The Identity is materialized after the CLI accepts the first real Turn</small></span></label>
             <label class="choice-card"><input type="radio" name="claude-mode" value="existing"><span><strong data-i18n="ui.reuseExisting">Reuse Existing</strong><small data-i18n="ui.resumeTheExactExistingVendorContext">Resume the exact existing vendor context</small></span></label>
             <label class="session-field" for="claude-session-id"><span id="claude-binding-label" data-i18n="agent.sessionOrThreadId">Session / Thread ID</span><input id="claude-session-id" type="text" placeholder="Paste Session ID" autocomplete="off" spellcheck="false" disabled="" data-i18n-placeholder="ui.pasteSessionId"></label>
           </fieldset>
           <fieldset class="binding-card" data-actor="codex">
-            <legend><span class="agent-avatar codex">2</span><span><strong data-i18n="agent.slot2">Agent 2 · initial Reviewer</strong><small data-i18n="agent.runtimeAndBinding">Runtime + Binding</small></span></legend>
+            <legend><span class="agent-avatar codex">2</span><span><strong id="codex-responsibility-label" data-i18n="room.collaboration.executorSlot">Agent 2 · Executor</strong><small data-i18n="agent.runtimeAndBinding">Runtime + Binding</small></span></legend>
             <div class="agent-selection-grid">
               <label><span class="field-label" data-i18n="agent.runtime">Runtime</span><select id="codex-runtime" required></select><small id="codex-runtime-diagnostic" class="field-help"></small></label>
               <label><span class="field-label" data-i18n="agent.provider">Provider</span><select id="codex-provider" required></select><small id="codex-provider-diagnostic" class="field-help"></small></label>
@@ -188,10 +196,8 @@
                 <label data-policy-for="claude,grok"><span class="field-label" data-i18n="agent.permissionMode">Permission mode</span><select id="codex-permission-mode"><option value="" data-i18n="common.inherit">Inherit</option></select></label>
                 <label data-policy-for="codex"><span class="field-label" data-i18n="agent.approvalPolicy">Approval policy</span><select id="codex-approval-policy"><option value="" data-i18n="common.inherit">Inherit</option><option>untrusted</option><option>on-request</option><option>never</option><option>yolo</option></select></label>
                 <label data-policy-for="codex,grok"><span class="field-label" data-i18n="agent.sandbox">Sandbox</span><select id="codex-sandbox"><option value="" data-i18n="common.inherit">Inherit</option><option>read-only</option><option>workspace-write</option><option>danger-full-access</option></select></label>
-                <label><span class="field-label" data-i18n="agent.reviewerPolicy">Ordinary Reviewer policy</span><select id="codex-reviewer-policy"><option value="enforced" data-i18n="agent.reviewerEnforced">Enforce read-only Reviewer protection</option><option value="explicit" data-i18n="agent.reviewerExplicit">Danger: apply the explicit Runtime policy</option></select></label>
                 <label class="agent-instructions"><span class="field-label" data-i18n="agent.instructions">Additional instructions</span><textarea id="codex-instructions" rows="3" maxlength="65536"></textarea></label>
               </div>
-              <p id="codex-reviewer-warning" class="callout warning compact-callout" hidden data-i18n="agent.reviewerExplicitWarning">Ordinary Reviewer turns may modify the workspace when explicit Runtime policy is selected.</p>
             </details>
             <label class="choice-card"><input type="radio" name="codex-mode" value="new" checked=""><span><strong data-i18n="ui.createThread">Create Thread</strong><small data-i18n="ui.theIdentityIsMaterializedAfterTheCliAcceptsTheFirstRealTurn">The Identity is materialized after the CLI accepts the first real Turn</small></span></label>
             <label class="choice-card"><input type="radio" name="codex-mode" value="existing"><span><strong data-i18n="ui.reuseExisting">Reuse Existing</strong><small data-i18n="ui.resumeTheExactExistingVendorContext">Resume the exact existing vendor context</small></span></label>

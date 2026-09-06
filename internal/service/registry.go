@@ -420,13 +420,23 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 			if err := json.Unmarshal(event.Data, &payload); err != nil {
 				return Room{}, Project{}, false, fmt.Errorf("decode %s event %d: %w", event.Kind, event.Seq, err)
 			}
-			if payload.Schema != 1 && payload.Schema != 2 {
+			if payload.Schema != 1 && payload.Schema != 2 && payload.Schema != 3 {
 				return Room{}, Project{}, false, fmt.Errorf("unsupported room service schema %d", payload.Schema)
 			}
 			if payload.Schema == 1 && len(payload.Agents) != 0 {
 				return Room{}, Project{}, false, errors.New("room service schema 1 must not contain Agent selections")
 			}
-			if payload.Schema == 2 {
+			if payload.Schema == 3 {
+				if payload.Collaboration == nil {
+					return Room{}, Project{}, false, errors.New("schema 3 requires collaboration instructions")
+				}
+				if err := payload.Collaboration.Validate(); err != nil {
+					return Room{}, Project{}, false, err
+				}
+			} else if payload.Collaboration != nil {
+				return Room{}, Project{}, false, errors.New("legacy provisioning must not contain collaboration instructions")
+			}
+			if payload.Schema >= 2 {
 				if _, err := validateAgentSelections(payload.Agents); err != nil {
 					return Room{}, Project{}, false, fmt.Errorf("invalid provisioned Agent selections: %w", err)
 				}
@@ -614,7 +624,11 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 		if !meta.CreatedAt.Equal(payload.CreatedAt) {
 			return Room{}, Project{}, false, fmt.Errorf("room.created time %s conflicts with provisioned time %s", meta.CreatedAt, payload.CreatedAt)
 		}
+		if (meta.Collaboration == nil) != (payload.Collaboration == nil) || (meta.Collaboration != nil && *meta.Collaboration != *payload.Collaboration) {
+			return Room{}, Project{}, false, errors.New("room.created collaboration conflicts with provisioning")
+		}
 		room := Room{
+			Collaboration:            model.CloneCollaboration(payload.Collaboration),
 			ID:                       payload.RoomID,
 			ProjectID:                payload.Project.ID,
 			Name:                     payload.Name,
@@ -719,8 +733,8 @@ func validateRoomStoreMetadata(dir string) error {
 	if metadata.Format != "" && metadata.Format != "pairroom-jsonl" {
 		return fmt.Errorf("unsupported event metadata format %q", metadata.Format)
 	}
-	if metadata.SchemaVersion != version.StoreSchema {
-		return fmt.Errorf("event store schema %d is unsupported; this build requires schema %d and provides no migration", metadata.SchemaVersion, version.StoreSchema)
+	if !version.SupportsStoreSchema(metadata.SchemaVersion) {
+		return fmt.Errorf("event store schema %d is unsupported; this build requires schema %d (schema 9 is also readable) and provides no migration", metadata.SchemaVersion, version.StoreSchema)
 	}
 	return nil
 }
@@ -946,6 +960,7 @@ func readEventsReadOnly(path string) ([]model.Event, error) {
 }
 
 func cloneRoom(room Room) Room {
+	room.Collaboration = model.CloneCollaboration(room.Collaboration)
 	room.Bindings = cloneBindings(room.Bindings)
 	room.Agents = cloneAgentSelections(room.Agents)
 	return room

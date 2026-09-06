@@ -9,7 +9,7 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 )
 
-const Version = "pairroom-protocol/v5"
+const Version = "pairroom-protocol/v6"
 
 type Selection struct {
 	Actor model.ActorID
@@ -34,23 +34,21 @@ func Bootstrap(actor model.ActorID, selfRuntime, peerRuntime model.RuntimeKind) 
 	identities := model.ParticipantIdentities(runtimes)
 	self := identities[actor]
 	other := identities[peer]
-	return fmt.Sprintf(`You are %s (%s) in PairRoom with a human and %s (%s). Native harness, project, permission, sandbox, and safety rules remain authoritative.
-
-PairRoom:
-- [PairRoom message] is current input. The envelope gives exact sender, self, and peer handles. Human instructions win; PairRoom owns the single active turn, transcript, and lifecycle.
-- current_role: driver may implement; reviewer is independent/read-only; peer is an equal collaborator. Follow the native harness and workspace permissions for that role.
-- Complete all useful work you can in this turn. Include %s only when another response from that Agent is genuinely necessary to finish the human's request. Do not mention the peer merely to acknowledge, agree, thank, or ceremonially return the turn.
-- A response without %s ends Agent relay and returns the Room to idle. Any Agent may deliver the final result. No fixed relay packet or control marker exists.
-- @user alone returns the decision to the human. If @user and an Agent handle both appear, the Agent handle wins and PairRoom relays.
-- Keep conclusions and evidence in chat, tool detail in Inspector.
-
-%s: pairroom protocol --actor %s`, self.DisplayName, self.MentionHandle, other.DisplayName, other.MentionHandle, other.MentionHandle, other.MentionHandle, Version, actor)
+	selfSlot, peerSlot := "Agent 1", "Agent 2"
+	if actor == model.ActorCodex {
+		selfSlot, peerSlot = peerSlot, selfSlot
+	}
+	return fmt.Sprintf(`You are %s: %s (%s), with a human and %s: %s (%s).
+[PairRoom message] is current input; from names its sender. Native harness, project, permission, sandbox, and safety rules remain authoritative. Human instructions win. PairRoom owns the single active turn and transcript.
+Complete useful work before replying. Include %s only when the peer must respond to finish the request, never for acknowledgement or ceremonial turn return. A response without %s ends Agent relay. Any Agent may deliver the final result. No fixed relay packet exists.
+@user alone returns the decision to the human; with both handles the Agent handle wins. Keep conclusions and evidence in chat, tool detail in Inspector.
+%s: pairroom protocol --actor %s`, selfSlot, self.DisplayName, self.MentionHandle, peerSlot, other.DisplayName, other.MentionHandle, other.MentionHandle, other.MentionHandle, Version, actor)
 }
 
 var baseRules = []Rule{
 	{ID: "authority.human", Text: "The human has final authority; newer human instructions take precedence over agent discussion."},
 	{ID: "authority.harness", Text: "The native coding harness, project instructions, skills, tools, sandbox, permission rules, and safety policy remain authoritative."},
-	{ID: "input.envelope", Text: "Treat each [PairRoom message] envelope as current input; from_handle, self_handle, and peer_handle name the participants, and the delimited body is the sender's message."},
+	{ID: "input.envelope", Text: "Treat each [PairRoom message] envelope as current input; from names the sender; stable participant handles and collaboration responsibilities are supplied at the native instruction layer, not repeated in each envelope."},
 	{ID: "output.verbatim", Text: "The final natural-language response is posted verbatim to the shared Room; make it useful without replaying tool chatter."},
 	{ID: "delivery.single-turn", Text: "PairRoom permits one active participant turn. Accepted steer input enters that turn; queued and cross-Agent work waits for a reliable native turn boundary."},
 	{ID: "delivery.peer", Text: "Include the exact peer_handle only when another response is necessary to finish the request. That explicit handle is the sole Agent-relay signal."},
@@ -70,7 +68,11 @@ func Resolve(selection Selection) (Contract, error) {
 		return Contract{}, fmt.Errorf("invalid role %q: use driver, reviewer, or peer", selection.Role)
 	}
 	contract := Contract{Version: Version, Actor: selection.Actor, Role: selection.Role, Rules: append([]Rule(nil), baseRules...)}
-	contract.Rules = append(contract.Rules, roleRules(selection.Role)...)
+	if selection.Role != "" { // explicit legacy CLI inspection only, not a selectable Room mode
+		contract.Rules = append(contract.Rules, roleRules(selection.Role)...)
+	} else {
+		contract.Rules = append(contract.Rules, Rule{ID: "collaboration.creation", Text: "A Room fixes default (Lead/Executor) or custom natural-language instructions at creation. Responsibility never grants tool permissions."})
+	}
 	return contract, nil
 }
 
@@ -100,4 +102,20 @@ func (contract Contract) Text() string {
 		fmt.Fprintf(&b, "[%s] %s\n", rule.ID, rule.Text)
 	}
 	return b.String()
+}
+
+// CollaborationInstructions adds the stored human policy once at the native
+// instruction layer. Legacy Rooms retain their previous permission guidance.
+func CollaborationInstructions(actor model.ActorID, c *model.Collaboration, legacy model.ParticipantRole) string {
+	if c == nil {
+		if legacy == "" {
+			return ""
+		}
+		rules := roleRules(legacy)
+		if len(rules) == 0 {
+			return ""
+		}
+		return "Legacy Room: " + rules[0].Text
+	}
+	return fmt.Sprintf("Room collaboration (fixed at creation; %s):\n%s\nYour responsibility: %s.", c.Mode, c.Instructions, c.Responsibility(actor))
 }

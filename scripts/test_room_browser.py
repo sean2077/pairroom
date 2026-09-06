@@ -19,19 +19,28 @@ from playwright.async_api import async_playwright
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def collaboration_fixture() -> dict:
+    # Read the versioned default prose from its Go authority, not a second copy.
+    source = (ROOT / "internal/model/collaboration.go").read_text(encoding="utf-8")
+    match = re.search(r'DefaultCollaborationInstructions\s*=\s*("(?:[^"\\]|\\.)*")', source)
+    assert match, "default instructions must remain a versioned constant"
+    return {"version": 1, "mode": "default", "instructions": json.loads(match[1])}
+
+
 def snapshot_fixture() -> dict:
     participants = {}
-    for actor, name, role in [("claude", "Claude Code", "driver"), ("codex", "Codex", "reviewer")]:
+    for actor, name, responsibility in [("claude", "Claude Code", "lead"), ("codex", "Codex", "executor")]:
         participants[actor] = {
             "id": actor, "display_name": name, "mention_handle": "@" + actor,
-            "role": role, "state": "idle", "session_id": "fixture-" + actor,
+            "role": "peer", "responsibility": responsibility, "permission_profile": "configured",
+            "state": "idle", "session_id": "fixture-" + actor,
             "model": "deterministic-fixture", "runtime_kind": actor,
-            "runtime": {"available": True, "command": "fixture", "protocol": "browser-fixture", "capabilities": []},
-            "workspace": {"kind": "driver-live" if role == "driver" else "reviewer-snapshot",
-                          "path": "/workspace/example", "read_only": role == "reviewer", "read_only_enforced": role == "reviewer"},
+            "runtime": {"available": True, "command": "fixture", "protocol": "browser-fixture", "capabilities": [],
+                        **({"permission_mode": "yolo"} if actor == "claude" else {"approval_policy": "yolo", "sandbox": "danger-full-access"})},
+            "workspace": {"kind": "driver-live", "path": "/workspace/example", "read_only": False},
         }
     return {
-        "meta": {"id": "browser-fixture", "name": "Example workspace", "repo": "/workspace/example"},
+        "meta": {"id": "browser-fixture", "name": "Example workspace", "repo": "/workspace/example", "collaboration": collaboration_fixture()},
         "settings": {"stall_warning_seconds": 300}, "participants": participants,
         "messages": [], "approvals": [], "turns": [], "latest_seq": 1,
         "message_window": {"total": 0, "loaded": 0, "has_more": False},
@@ -58,7 +67,7 @@ def fixture_html() -> str:
       window.__snapshot = SNAPSHOT;
       window.__sent = []; window.__sources = []; window.__snapshotRequests = 0;
       window.__postDelay = 250; window.__snapshotDelay = 0; window.__failPost = false;
-      window.__approvalSent = []; window.__failApproval = false;
+      window.__approvalSent = []; window.__failApproval = false; window.__permissionSent = [];
       window.fetch = async (path, options = {}) => {
         let body = {}, status = 200;
         if (path.includes('/session')) body = {csrf_token: 'fixture'};
@@ -74,6 +83,12 @@ def fixture_html() -> str:
           window.__approvalSent.push({path, ...JSON.parse(options.body)});
           await new Promise(resolve => setTimeout(resolve, window.__postDelay));
           if (window.__failApproval) { status = 400; body = {error: 'fixture: invalid choice'}; }
+        } else if (path.endsWith('/permissions') && options.method === 'PUT') {
+          const actor=path.split('/').at(-2), request=JSON.parse(options.body);
+          __permissionSent.push({actor,...request});
+          await new Promise(resolve => setTimeout(resolve, __postDelay));
+          __snapshot.participants[actor].permission_profile=request.profile;
+          __snapshot.participants[actor].runtime.sandbox=request.profile==='read-only'?'read-only':'danger-full-access';
         } else if (path.includes('/git/status')) body = {status: 'clean'};
         return new Response(JSON.stringify(body), {status, headers: {'content-type': 'application/json'}});
       };
@@ -189,6 +204,50 @@ async def verify_approvals(browser, artifacts: Path) -> dict:
     return {"approval_draft_preserved": True, "native_option_identity": True, "approval_single_submission": True, "approval_page_errors": errors}
 
 
+async def verify_collaboration(browser, artifacts: Path) -> dict:
+    page = await browser.new_page(viewport={"width": 1440, "height": 1000}, locale="en-US")
+    page.set_default_timeout(5000)
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    await page.set_content(fixture_html())
+    await page.wait_for_selector("#connection.connected")
+    assert await page.locator("[data-role-actor]").count() == 0
+    assert await page.locator(".target-button").evaluate_all("nodes=>nodes.map(n=>n.dataset.target)") == ["claude", "codex"]
+    assert "lead" in (await page.locator("#participants").inner_text()).lower()
+    assert "executor" in (await page.locator("#participants").inner_text()).lower()
+    await page.locator("#room-collaboration summary").click()
+    assert await page.locator("#room-collaboration-instructions").text_content() == collaboration_fixture()["instructions"]
+    await page.screenshot(path=str(artifacts / "collaboration-default-light.png"))
+    # Two DOM change events during one pending PUT still have one mutation owner.
+    await page.locator("[data-permission-actor=codex]").evaluate("""node=>{
+      node.value='read-only'; node.dispatchEvent(new Event('change',{bubbles:true}));
+      node.dispatchEvent(new Event('change',{bubbles:true}));
+    }""")
+    await page.wait_for_function("__permissionSent.length===1 && document.querySelector('[data-permission-actor=codex]').value==='read-only' && !document.querySelector('[data-permission-actor=codex]').disabled")
+    assert await page.evaluate("__permissionSent.length") == 1
+    assert "executor" in (await page.locator("#participants").inner_text()).lower(), "permission change replaced responsibility"
+    custom = "Agent 2 proposes a plan; Agent 1 implements. Ask the user before deployment."
+    await page.evaluate("text=>{__snapshot.meta.collaboration={version:1,mode:'custom',instructions:text};Object.values(__snapshot.participants).forEach(p=>p.responsibility='participant');}", custom)
+    await page.locator("#refresh-button").click()
+    await page.wait_for_function("document.getElementById('room-collaboration-label').textContent==='Custom instructions'")
+    assert await page.locator("#room-collaboration-instructions").text_content() == custom
+    await page.evaluate("PairRoomI18n.setLang('zh-CN'); PairRoomTheme.setTheme('dark')")
+    await page.set_viewport_size({"width": 390, "height": 844})
+    await page.wait_for_timeout(100)
+    assert await page.locator("#room-collaboration-instructions").text_content() == custom
+    assert not await page.evaluate("document.documentElement.scrollWidth>innerWidth")
+    await page.screenshot(path=str(artifacts / "collaboration-custom-mobile-dark.png"))
+    # Legacy state is visible but cannot silently opt into new permissions.
+    await page.evaluate("delete __snapshot.meta.collaboration")
+    await page.locator("#refresh-button").click()
+    await page.wait_for_function("document.querySelectorAll('[data-permission-actor]').length===0")
+    assert await page.locator("[data-role-actor]").count() == 0
+    assert not errors, errors
+    await page.close()
+    return {"creation_only_mode_display": True, "permission_single_submission": True,
+            "responsibility_not_permission": True, "custom_instructions_verbatim": True, "collaboration_page_errors": errors}
+
+
 async def verify(browser_path: str | None, artifacts: Path) -> None:
     artifacts.mkdir(parents=True, exist_ok=True)
     results = {}
@@ -285,6 +344,7 @@ async def verify(browser_path: str | None, artifacts: Path) -> None:
             await page.screenshot(path=str(artifacts / f"room-mobile-{theme}-{language}.png"))
             await page.set_viewport_size({"width": 1440, "height": 1000})
         results.update(await verify_approvals(browser, artifacts))
+        results.update(await verify_collaboration(browser, artifacts))
         assert not errors, errors
         results.update(ime_submissions=0, rapid_enter_submissions=1, retained_draft=True,
                        resync_reads_per_burst=1, page_errors=errors)

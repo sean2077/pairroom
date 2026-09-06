@@ -66,7 +66,7 @@ func ParseMentions(text string, sender model.ActorID, runtimes map[model.ActorID
 			continue
 		}
 		switch name {
-		case "peer", "human", "all", "agent1", "agent2":
+		case "driver", "reviewer", "lead", "executor", "peer", "human", "all", "agent1", "agent2":
 			removed["@"+name] = struct{}{}
 			continue
 		}
@@ -86,7 +86,7 @@ func ParseMentions(text string, sender model.ActorID, runtimes map[model.ActorID
 			result.Ambiguous = append(result.Ambiguous, name)
 		}
 	}
-	for _, name := range []string{"@peer", "@human", "@all", "@agent1", "@agent2"} {
+	for _, name := range []string{"@driver", "@reviewer", "@lead", "@executor", "@peer", "@human", "@all", "@agent1", "@agent2"} {
 		if _, ok := removed[name]; ok {
 			result.RemovedAliases = append(result.RemovedAliases, name)
 		}

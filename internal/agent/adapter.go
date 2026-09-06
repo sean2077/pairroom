@@ -10,11 +10,14 @@ import (
 
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/prompt"
+	"github.com/sean2077/pairroom/internal/protocol"
 )
 
 type EventSink func(model.RuntimeEvent)
 
 type Config struct {
+	Collaboration          *model.Collaboration
+	LegacyRole             model.ParticipantRole
 	Actor                  model.ActorID
 	Repo                   string
 	DataDir                string
@@ -119,10 +122,11 @@ func SlotFactory(mock bool, kind model.RuntimeKind) Factory {
 }
 
 func collaborationPrompt(cfg Config) string {
-	if strings.TrimSpace(cfg.SystemPrompt) != "" {
-		return appendInstructions(cfg.SystemPrompt, cfg.AdditionalInstructions)
+	base := cfg.SystemPrompt
+	if strings.TrimSpace(base) == "" {
+		base = prompt.BootstrapPromptWithRuntime(cfg.Actor, cfg.Runtime, cfg.PeerRuntime)
 	}
-	return appendInstructions(prompt.BootstrapPromptWithRuntime(cfg.Actor, cfg.Runtime, cfg.PeerRuntime), cfg.AdditionalInstructions)
+	return appendInstructions(appendInstructions(base, protocol.CollaborationInstructions(cfg.Actor, cfg.Collaboration, cfg.LegacyRole)), cfg.AdditionalInstructions)
 }
 
 func configuredParticipantName(cfg Config) string {

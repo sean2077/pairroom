@@ -477,7 +477,7 @@ func grokStartupHints() map[string]any {
 
 func (g *GrokAdapter) applyRoleMode(ctx context.Context, sessionID string, role model.ParticipantRole) error {
 	mode := "default"
-	if role == model.RoleReviewer {
+	if role == model.RoleReviewer || strings.EqualFold(g.cfg.PermissionMode, "plan") {
 		mode = "plan"
 	}
 	_, err := g.call(ctx, "session/set_mode", map[string]any{"sessionId": sessionID, "modeId": mode})

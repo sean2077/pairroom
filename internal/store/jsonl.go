@@ -166,8 +166,8 @@ func (s *JSONLStore) ensureMetadata(allowCreate bool) error {
 		if metadata.Format != "" && metadata.Format != "pairroom-jsonl" {
 			return fmt.Errorf("unsupported event metadata format %q", metadata.Format)
 		}
-		if metadata.SchemaVersion != version.StoreSchema {
-			return fmt.Errorf("event store schema %d is unsupported; this build requires schema %d and provides no migration", metadata.SchemaVersion, version.StoreSchema)
+		if !version.SupportsStoreSchema(metadata.SchemaVersion) {
+			return fmt.Errorf("event store schema %d is unsupported; this build requires schema %d (schema 9 is also readable) and provides no migration", metadata.SchemaVersion, version.StoreSchema)
 		}
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {

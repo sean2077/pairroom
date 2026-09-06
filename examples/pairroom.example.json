@@ -7,27 +7,38 @@
     "database": ""
   },
   "runtimes": {
-    "claude": { "command": "claude", "args": [] },
-    "codex": { "command": "codex", "args": [] },
-    "grok": { "command": "grok", "args": [] }
+    "claude": {
+      "command": "claude",
+      "args": []
+    },
+    "codex": {
+      "command": "codex",
+      "args": []
+    },
+    "grok": {
+      "command": "grok",
+      "args": []
+    }
   },
   "claude": {
     "runtime": "claude",
-    "provider": { "source": "native" },
+    "provider": {
+      "source": "native"
+    },
     "model": "",
     "effort": "",
     "instructions": "",
-    "permission_mode": "yolo",
-    "ordinary_reviewer_policy": "enforced"
+    "permission_mode": "yolo"
   },
   "codex": {
     "runtime": "codex",
-    "provider": { "source": "native" },
+    "provider": {
+      "source": "native"
+    },
     "model": "",
     "effort": "",
     "instructions": "",
     "approval_policy": "yolo",
-    "sandbox": "",
-    "ordinary_reviewer_policy": "enforced"
+    "sandbox": "danger-full-access"
   }
 }
