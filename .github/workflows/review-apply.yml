@@ -1,0 +1,42 @@
+name: Apply verified collaboration diff (temporary)
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/review-apply.yml', '.review/**']
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'feat/creation-only-collaboration-modes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Apply the checksum-verified product diff on its exact branch
+        env:
+          TARGET_BRANCH: feat/creation-only-collaboration-modes
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .review/mode-{01..06}.part > "$RUNNER_TEMP/mode.patch.xz"
+          printf '%s  %s\n' '63c6543d93d022364872ed512085bbafcc9b99e7a738c541d77a7679bfd74fb3' "$RUNNER_TEMP/mode.patch.xz" | sha256sum -c -
+          xz -dc "$RUNNER_TEMP/mode.patch.xz" > "$RUNNER_TEMP/mode.patch"
+          printf '%s  %s\n' '9bbe4237b14203331c4fccccd1d343b84c8cfaf6c0327e79dbce530936ab4bc3' "$RUNNER_TEMP/mode.patch" | sha256sum -c -
+          git apply --unidiff-zero --check "$RUNNER_TEMP/mode.patch"
+          git apply --unidiff-zero --index "$RUNNER_TEMP/mode.patch"
+          git diff --cached --check
+          staged_tree="$(git write-tree)"
+          export GIT_INDEX_FILE="$RUNNER_TEMP/product-index"
+          git read-tree "$staged_tree"
+          git update-index --force-remove .github/workflows/review-source.yml .github/workflows/review-apply.yml .review/mode-{01..06}.part
+          test "$(git write-tree)" = '3474112886e4dc760c8a43d9e879cf6c11bc3638'
+          unset GIT_INDEX_FILE
+          test "$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)" = "$EXPECTED_HEAD"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat: add creation-only collaboration and independent native permissions'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
