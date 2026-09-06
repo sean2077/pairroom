@@ -28,14 +28,15 @@ jobs:
           printf '%s  %s\n' '809f869560057089a15ab8d5614519cbf42517f9157bc7272f400a8d3a3106c5' "$RUNNER_TEMP/iteration.patch.xz" | sha256sum -c -
           xz -dc "$RUNNER_TEMP/iteration.patch.xz" > "$RUNNER_TEMP/iteration.patch"
           printf '%s  %s\n' '56982076c42d34a8b11be80077491d2b8b3a94536cc3926a3780d107f7f91e1d' "$RUNNER_TEMP/iteration.patch" | sha256sum -c -
-          git apply --unidiff-zero --check "$RUNNER_TEMP/iteration.patch"
-          git apply --unidiff-zero --index "$RUNNER_TEMP/iteration.patch"
+          # Workflow edits are committed separately through the authorized connector.
+          git apply --unidiff-zero --exclude='.github/workflows/*' --check "$RUNNER_TEMP/iteration.patch"
+          git apply --unidiff-zero --exclude='.github/workflows/*' --index "$RUNNER_TEMP/iteration.patch"
           git diff --cached --check
           staged_tree="$(git write-tree)"
           export GIT_INDEX_FILE="$RUNNER_TEMP/product-index"
           git read-tree "$staged_tree"
           git update-index --force-remove .github/workflows/review-source.yml .github/workflows/review-apply.yml .review/iteration-01.part .review/iteration-02.part .review/iteration-03.part .review/iteration-04.part
-          test "$(git write-tree)" = '29cc8b7b7f3a59a1c8a481a93faa0688a7b97346'
+          test "$(git write-tree)" = '0b8419550be194fb6d095b76af8e1bbf699331fd'
           unset GIT_INDEX_FILE
           test "$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)" = "$EXPECTED_HEAD"
           git config user.name 'github-actions[bot]'
