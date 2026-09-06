@@ -10,7 +10,7 @@ PairRoom's CLI, Event Log, HTTP API, and native adapters evolve with the officia
 4. Record the current binary, Claude Code / Codex / Grok Build, and configuration versions;
 5. Make sure the working repository has no unrecognized native side effects.
 
-## HTTP client adjustments (Unreleased)
+## HTTP client adjustments (v3.0.0)
 
 The HTTP reliability changes below preserve complete-response Agent relay. The collaboration update additionally changes native instructions and new-Room schemas as described in the next section.
 
@@ -18,7 +18,7 @@ For external HTTP/SSE clients, validate `message_limit` as an integer from 0 to 
 
 Native approval clients should render Grok's advertised options and send `decision: "option:<optionId>"`. One-time grants no longer fall back to remembered authorization, and cancellation is not a remembered rejection. Claude question responses must answer every exact native question text; incomplete or unknown answers fail without consuming the request. See [API reference](API_REFERENCE.md#native-approval-responses). Those approval fixes alone did not change schemas.
 
-## Room names (Unreleased)
+## Room names (v3.0.0)
 
 The naming update adds no new Store/provisioning schema or event kind. Existing Room names and native IDs remain unchanged on upgrade; the normal next activation applies the Room-derived native display title where the CLI supports it. This includes explicitly bound existing sessions and can replace their old manual title. Unsupported/failed synchronization remains visible alongside the original session ID; upgrade the native CLI or check by that ID instead of assuming the display title changed.
 
@@ -26,7 +26,7 @@ New Room names are optional; omitted names are generated once and persist throug
 
 Reverting only this naming change does not restore a native title already changed through a vendor's naming API. Rename it in that native CLI if necessary. The earlier schema-10 downgrade restrictions below still apply.
 
-## Collaboration modes and native permissions (Unreleased)
+## Collaboration modes and native permissions (v3.0.0)
 
 New Rooms write **Store schema 10 / provisioning schema 3**. They choose only default Lead/Executor or custom natural-language instructions, fixed at creation. Both participants use the live workspace and default Service policy is YOLO; use the explicit creation controls or native configuration to narrow access. The new permission endpoint can change effective tool policy at an idle boundary without changing the mode or session identity.
 
