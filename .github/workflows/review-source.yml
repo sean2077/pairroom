@@ -1,0 +1,30 @@
+name: Review source snapshot (temporary)
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/review-source.yml']
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    if: github.head_ref == 'improve/interaction-state-quality-20260906'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Export tracked source history only
+        run: |
+          git bundle create "$RUNNER_TEMP/repository.bundle" HEAD refs/remotes/origin/main
+          cd "$RUNNER_TEMP"
+          sha256sum repository.bundle > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pairroom-review-source
+          path: |
+            ${{ runner.temp }}/repository.bundle
+            ${{ runner.temp }}/SHA256SUMS
+          retention-days: 1
