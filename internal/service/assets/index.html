@@ -5,7 +5,7 @@
   <meta name="theme-color" content="#0b1020">
   <title>PairRoom Service</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/management.css">
+  <link id="management-styles" rel="stylesheet" href="/management.css">
   <link rel="stylesheet" href="/management-ux.css">
   <link rel="stylesheet" href="/management-workbench.css">
 </head>
@@ -149,7 +149,7 @@
       <div class="modal-body room-form-body">
         <div class="form-grid two-columns">
           <label><span class="field-label" data-i18n="common.project">Project</span><select id="room-project-id" required=""></select></label>
-          <label><span class="field-label" data-i18n="ui.roomName">Room name</span><input id="room-name" type="text" required="" maxlength="120" autocomplete="off" placeholder="For example: Auth refactor review" data-i18n-placeholder="ui.forExampleAuthRefactorReview"></label>
+          <label><span class="field-label" data-i18n="ui.roomName">Room name</span><input id="room-name" type="text" maxlength="160" aria-describedby="room-name-hint" autocomplete="off" placeholder="For example: Auth refactor review" data-i18n-placeholder="ui.forExampleAuthRefactorReview"><span id="room-name-hint" class="field-hint" data-i18n="room.temporaryNameHint">Optional. Leave blank for a temporary name; right-click a Room to rename it later.</span></label>
         </div>
         <section class="collaboration-config" aria-labelledby="collaboration-label">
           <label><span id="collaboration-label" class="field-label" data-i18n="room.collaboration.mode">Collaboration</span>
@@ -211,10 +211,15 @@
     </form>
   </dialog>
 
+  <div id="room-context-menu" class="room-context-menu" role="menu" aria-labelledby="context-room-name" hidden>
+    <div id="context-room-name" class="context-room-name" role="presentation"></div>
+    <button id="context-rename-room" type="button" role="menuitem" data-i18n="ui.renameRoom">Rename Room</button>
+  </div>
+
   <dialog id="rename-dialog" class="modal modal-small" aria-labelledby="rename-dialog-title">
     <form id="rename-form" method="dialog" novalidate="">
       <header class="modal-header"><div><p class="eyebrow" data-i18n="common.roomUpper">ROOM</p><h2 id="rename-dialog-title" data-i18n="ui.renameRoom">Rename Room</h2><p class="muted" data-i18n="ui.theOperationWaitsForASafeTurnBoundaryAndDoesNotInterrupt">The operation waits for a safe Turn boundary and does not interrupt active work.</p></div><button class="icon-button modal-close" type="button" data-close-dialog="rename-dialog" aria-label="Close" data-i18n-aria-label="common.close">×</button></header>
-      <div class="modal-body"><input id="rename-room-id" type="hidden"><label><span class="field-label" data-i18n="ui.newName">New name</span><input id="rename-room-name" type="text" required="" maxlength="120" autocomplete="off"></label><p id="rename-form-error" class="form-error" role="alert" hidden=""></p></div>
+      <div class="modal-body"><input id="rename-room-id" type="hidden"><label><span class="field-label" data-i18n="ui.newName">New name</span><input id="rename-room-name" type="text" required="" maxlength="160" autocomplete="off"></label><p id="rename-form-error" class="form-error" role="alert" hidden=""></p></div>
       <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="rename-dialog" data-i18n="ui.cancel">Cancel</button><button class="primary-button" type="submit" data-i18n="ui.saveName">Save name</button></footer>
     </form>
   </dialog>

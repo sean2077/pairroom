@@ -17,7 +17,7 @@ The Management API owns Project and Room registration, immutable per-Room Agent 
 
 `GET /api/v1/agent-catalog` and `POST /api/v1/agent-catalog/refresh` return all three Runtime entries with availability diagnostics, sanitized CC Switch Profile summaries, local model suggestions, disabled reasons, the current two Service defaults, and canonical `collaboration_default` instructions for the creation preview. The response never contains raw Profile configuration, endpoints, headers, tokens, API keys, or Runtime arguments. Refresh is explicit, and Room creation still re-resolves the selected Profile server-side instead of trusting the catalog returned to the browser.
 
-`POST /api/v1/projects/{project}/rooms` accepts the existing `name` and complete two-slot `bindings` map plus an optional complete `agents` map keyed by historical ActorIDs `claude` and `codex`. Omitting `agents` snapshots both current Service defaults. Sending only one slot is rejected. A selection has this shape:
+`POST /api/v1/projects/{project}/rooms` accepts an optional `name` and complete two-slot `bindings` map plus an optional complete `agents` map keyed by historical ActorIDs `claude` and `codex`. Omitting `agents` snapshots both current Service defaults. Sending only one slot is rejected. A selection has this shape:
 
 ```json
 {
@@ -33,6 +33,27 @@ The Management API owns Project and Room registration, immutable per-Room Agent 
 ```
 
 The created Room returns the immutable `agents` map. There is no Agent-reconfiguration endpoint. Schema-v1 Rooms instead return `legacy_defaults: true` and no `agents` map.
+
+## Room names and native session correspondence
+
+Omitting `name`, or supplying only ordinary spaces, generates `Room-<short Room ID>` once during the creation transaction. The returned `Room.name` and Event Log contain that same value. No model call or client-side naming authority is involved. Supplied names are trimmed, at most 160 UTF-8 bytes, and must not contain control characters. Invalid names return HTTP 400 before provisioning or draining a runtime.
+
+`PATCH /api/v1/rooms/{room}` accepts only `{"name":"New name"}`. The existing safe-boundary path waits for active work to finish, suspends the runtime, then appends `service.room.renamed` before updating the registry. It never interrupts a Turn. A blank rename is rejected; an unchanged name is a no-op and does not suspend the runtime or append another event. Room ID, data directory, native session IDs, Bindings, collaboration, permissions, and message history do not change. The endpoint uses the normal Management authentication/CSRF boundary.
+
+Each Management Room projection includes `runtime_names`, keyed by the stable `claude` / `codex` slots. Values are desired names, computed from `<Room name> · <current @handle> · <short Room ID>`; they do **not** prove native synchronization. Duplicate runtimes keep their `0`/`1` handle suffixes. Long display names are shortened to fit the shared 100-Unicode-scalar title budget while preserving the handle and ID suffix. Short IDs are display hints, never lookup keys.
+
+Participant `runtime` adds `session_name` (desired native title) and `session_name_status`:
+
+| Status | Meaning |
+|---|---|
+| `pending` | Native session naming has not completed |
+| `configured` | Claude's advertised `--name` option was supplied at launch; not a separate title-read acknowledgement |
+| `synced` | Codex/Grok acknowledged their metadata rename request |
+| `unsupported` | The CLI did not expose the naming option/method |
+| `failed` | Naming failed; the original session remains usable, with retry on next activation |
+| `simulated` | Mock runtime only; no native title was changed |
+
+Native titles are applied on activation/session opening, including permission-driven restarts, only after the Room binding exists. Provisioning validators do not rename sessions. Dormant or archived Rooms do not spawn a native process merely to rename one: their native titles catch up when next activated. An active Room rename uses the safe-boundary suspension above; reactivate normally afterward. Names use native metadata, not prompts or direct writes to vendor session storage. See [Architecture](ARCHITECTURE.md#room-and-native-session-names) for adapter support.
 
 ## Creation-only collaboration and independent permissions
 

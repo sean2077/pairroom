@@ -963,6 +963,10 @@ func cloneRoom(room Room) Room {
 	room.Collaboration = model.CloneCollaboration(room.Collaboration)
 	room.Bindings = cloneBindings(room.Bindings)
 	room.Agents = cloneAgentSelections(room.Agents)
+	room.RuntimeNames = make(map[model.ActorID]string, 2)
+	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+		room.RuntimeNames[actor] = model.NativeSessionName(room.ID, room.Name, actor, room.Agents[actor].Runtime, room.Agents[model.OtherParticipant(actor)].Runtime)
+	}
 	return room
 }
 

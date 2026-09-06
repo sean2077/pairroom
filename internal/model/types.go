@@ -208,22 +208,26 @@ type ProcessingUpdate struct {
 }
 
 type RuntimeInfo struct {
-	Available      bool            `json:"available"`
-	Command        string          `json:"command,omitempty"`
-	Path           string          `json:"path,omitempty"`
-	Protocol       string          `json:"protocol,omitempty"`
-	Version        string          `json:"version,omitempty"`
-	RuntimeKind    RuntimeKind     `json:"runtime_kind,omitempty"`
-	Provider       string          `json:"provider,omitempty"`
-	Model          string          `json:"model,omitempty"`
-	Effort         string          `json:"effort,omitempty"`
-	PermissionMode string          `json:"permission_mode,omitempty"`
-	ApprovalPolicy string          `json:"approval_policy,omitempty"`
-	Sandbox        string          `json:"sandbox,omitempty"`
-	Capabilities   []string        `json:"capabilities,omitempty"`
-	Warnings       []string        `json:"warnings,omitempty"`
-	ProbedAt       time.Time       `json:"probed_at,omitempty"`
-	Data           json.RawMessage `json:"data,omitempty"`
+	// SessionName is the desired display name, not a session lookup key.
+	// Status distinguishes a native acknowledgement from an unsupported CLI.
+	SessionName       string          `json:"session_name,omitempty"`
+	SessionNameStatus string          `json:"session_name_status,omitempty"`
+	Available         bool            `json:"available"`
+	Command           string          `json:"command,omitempty"`
+	Path              string          `json:"path,omitempty"`
+	Protocol          string          `json:"protocol,omitempty"`
+	Version           string          `json:"version,omitempty"`
+	RuntimeKind       RuntimeKind     `json:"runtime_kind,omitempty"`
+	Provider          string          `json:"provider,omitempty"`
+	Model             string          `json:"model,omitempty"`
+	Effort            string          `json:"effort,omitempty"`
+	PermissionMode    string          `json:"permission_mode,omitempty"`
+	ApprovalPolicy    string          `json:"approval_policy,omitempty"`
+	Sandbox           string          `json:"sandbox,omitempty"`
+	Capabilities      []string        `json:"capabilities,omitempty"`
+	Warnings          []string        `json:"warnings,omitempty"`
+	ProbedAt          time.Time       `json:"probed_at,omitempty"`
+	Data              json.RawMessage `json:"data,omitempty"`
 }
 
 // WorkspaceBoundary describes the filesystem view assigned to a participant.

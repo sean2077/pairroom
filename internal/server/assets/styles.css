@@ -654,3 +654,6 @@ html[data-embed="1"] .session-copy {
 .permission-select { appearance: auto; width: 100%; min-height: 36px; margin-top: 8px; padding: 6px 8px; font-size: var(--text-control); }
 .permission-select:disabled { cursor: not-allowed; opacity: .65; }
 @media (max-width: 680px) { .permission-select { min-height: 44px; } }
+
+.runtime-session-name { display: block; max-width: 100%; min-width: 0; padding: 3px 0; text-align: left; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; font-size: 12px; }
+.runtime-name-status { font-size: 11px; overflow-wrap: anywhere; }

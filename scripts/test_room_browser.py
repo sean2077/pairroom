@@ -36,6 +36,8 @@ def snapshot_fixture() -> dict:
             "state": "idle", "session_id": "fixture-" + actor,
             "model": "deterministic-fixture", "runtime_kind": actor,
             "runtime": {"available": True, "command": "fixture", "protocol": "browser-fixture", "capabilities": [],
+                        "session_name": f"Example workspace · @{actor} · 123456789abc",
+                        "session_name_status": "configured" if actor == "claude" else "synced",
                         **({"permission_mode": "yolo"} if actor == "claude" else {"approval_policy": "yolo", "sandbox": "danger-full-access"})},
             "workspace": {"kind": "driver-live", "path": "/workspace/example", "read_only": False},
         }
@@ -224,6 +226,10 @@ async def verify_collaboration(browser, artifacts: Path) -> dict:
     await page.locator("#room-collaboration summary").click()
     assert await page.locator("#room-collaboration-instructions").text_content() == collaboration_fixture()["instructions"]
     assert await page.locator("[data-permission-actor=codex]").evaluate("node=>{const s=getComputedStyle(node); return parseFloat(s.borderTopLeftRadius)>0 && parseFloat(s.paddingLeft)>=8;}"), "permission control lost shared form styling"
+    assert await page.locator('.runtime-session-name').evaluate_all('nodes=>nodes.map(n=>n.textContent)') == ['Example workspace · @claude · 123456789abc', 'Example workspace · @codex · 123456789abc']
+    statuses = await page.locator('.runtime-name-status').evaluate_all('nodes=>nodes.map(n=>n.textContent)')
+    assert len(set(statuses)) == 2, 'configured CLI label falsely rendered as an acknowledged sync'
+    assert 'fixture-claude' in await page.locator('#participants').inner_text() or await page.locator('#participants [title="fixture-claude"]').count() > 0, 'native ID lost behind the display name'
     await page.screenshot(path=str(artifacts / "collaboration-default-light.png"))
     # Two DOM change events during one pending PUT still have one mutation owner.
     await page.locator("[data-permission-actor=codex]").evaluate("""node=>{

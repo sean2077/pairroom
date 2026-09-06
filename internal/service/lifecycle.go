@@ -13,7 +13,7 @@ import (
 )
 
 func (r *Registry) RenameRoom(ctx context.Context, roomID, name string) (Room, error) {
-	if err := validateRoomName(name); err != nil {
+	if err := validateSubmittedRoomName(name, false); err != nil {
 		return Room{}, err
 	}
 	updatedAt := r.now()
@@ -68,6 +68,9 @@ func (r *Registry) mutateRoom(ctx context.Context, roomID, eventKind string, pay
 		return cloneRoom(room), nil
 	}
 
+	if eventKind == EventRoomRenamed && room.Name == payload.(roomRenamedPayload).Name {
+		return cloneRoom(room), nil
+	}
 	eventCommitted := true
 	if err := appendServiceEvent(room, eventKind, payload); err != nil {
 		// Archive is the mandatory safety gate before permanent removal. If the

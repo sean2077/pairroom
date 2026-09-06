@@ -146,6 +146,12 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	} else {
 		info.Warnings = []string{probeErr.Error()}
 	}
+	if info.SessionName != "" {
+		info.SessionNameStatus = "unsupported"
+		if flags["--name"] {
+			info.SessionNameStatus = "configured"
+		}
+	}
 	c.mu.Lock()
 	c.flags = flags
 	c.runtimeInfo = info
@@ -160,6 +166,9 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 
 	args := append([]string(nil), c.cfg.CommandArgs...)
 	args = append(args, "-p", "--input-format", "stream-json", "--output-format", "stream-json")
+	if info.SessionName != "" && flags["--name"] {
+		args = append(args, "--name="+info.SessionName)
+	}
 	if flags["--verbose"] {
 		args = append(args, "--verbose")
 	}

@@ -14,6 +14,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv("PAIRROOM_NAMES_HELPER") == "claude" {
+		os.Exit(runClaudeNameHelper(os.Args[1:]))
+	}
 	if os.Getenv("PAIRROOM_CLAUDE_HELPER") == "1" {
 		os.Exit(runClaudeStrictResumeHelper(os.Args[1:]))
 	}

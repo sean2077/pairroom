@@ -547,6 +547,26 @@
       main.appendChild(meta);
 
       const runtime = p.runtime || {};
+      if (runtime.session_name) {
+        const nameLine = document.createElement('button');
+        nameLine.type = 'button';
+        nameLine.className = 'ghost-button runtime-session-name';
+        nameLine.textContent = runtime.session_name;
+        nameLine.title = t('room.copyRuntimeName') + ': ' + runtime.session_name;
+        nameLine.addEventListener('click', async () => {
+          try { await navigator.clipboard.writeText(runtime.session_name); toast(t('room.runtimeNameCopied'), 'success'); }
+          catch { toast(t('ui.copyFailed'), 'error'); }
+        });
+        main.appendChild(nameLine);
+        const nameStatus = document.createElement('div');
+        nameStatus.className = 'participant-subtitle runtime-name-status';
+        const statuses = {
+          pending: 'room.runtimeNamePending', configured: 'room.runtimeNameConfigured', synced: 'room.runtimeNameSynced',
+          unsupported: 'room.runtimeNameUnsupported', failed: 'room.runtimeNameFailed', simulated: 'room.runtimeNameSimulated',
+        };
+        nameStatus.textContent = t(statuses[runtime.session_name_status] || 'room.runtimeNamePending');
+        main.appendChild(nameStatus);
+      }
       if (runtime.protocol || runtime.version || runtime.path || runtime.command) {
         const runtimeLine = document.createElement('div');
         runtimeLine.className = 'runtime-line';

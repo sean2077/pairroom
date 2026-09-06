@@ -88,6 +88,7 @@ type GrokAdapter struct {
 	sessionOpened    bool
 	bootstrapPending bool
 	capabilities     grokCapabilities
+	runtimeInfo      model.RuntimeInfo
 	cmd              *exec.Cmd
 	stdin            io.WriteCloser
 	done             chan struct{}
@@ -178,6 +179,9 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 	} else {
 		info.Warnings = []string{probeErr.Error()}
 	}
+	g.mu.Lock()
+	g.runtimeInfo = info
+	g.mu.Unlock()
 	emitRuntimeInfo(g.sink, g.cfg.Actor, info)
 	if probeErr != nil {
 		g.setState(model.StateError, probeErr.Error())
@@ -463,7 +467,15 @@ func (g *GrokAdapter) ensureSession(ctx context.Context) error {
 	}
 	g.sessionOpened = true
 	g.bootstrapPending = loaded
+	info := g.runtimeInfo
 	g.mu.Unlock()
+	if info.SessionName != "" {
+		info = g.syncSessionName(ctx, info, required)
+		g.mu.Lock()
+		g.runtimeInfo = info
+		g.mu.Unlock()
+		emitRuntimeInfo(g.sink, g.cfg.Actor, info)
+	}
 
 	session := runtimeEvent(g.cfg.Actor, model.RuntimeSession)
 	session.SessionID = required

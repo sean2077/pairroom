@@ -232,7 +232,7 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 		_ = c.Stop(context.Background())
 		return fmt.Errorf("initialize codex app-server: %w", err)
 	}
-	c.emitInitializeRuntimeInfo(initializeResult, probe, probeErr)
+	runtimeInfo := c.emitInitializeRuntimeInfo(initializeResult, probe, probeErr)
 	if err := c.notify("initialized", map[string]any{}); err != nil {
 		_ = c.Stop(context.Background())
 		return fmt.Errorf("acknowledge codex initialization: %w", err)
@@ -284,6 +284,10 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	c.mu.Lock()
 	c.threadID = threadResult.Thread.ID
 	c.mu.Unlock()
+	if runtimeInfo.SessionName != "" {
+		runtimeInfo = c.syncSessionName(ctx, runtimeInfo, threadResult.Thread.ID)
+		emitRuntimeInfo(c.sink, c.cfg.Actor, runtimeInfo)
+	}
 	c.setState(model.StateIdle, "")
 	session := runtimeEvent(c.cfg.Actor, model.RuntimeSession)
 	session.SessionID = threadResult.Thread.ID
@@ -688,7 +692,7 @@ func (c *CodexAdapter) emitInputTerminal(turnID string, input model.AgentInput, 
 	c.sink(e)
 }
 
-func (c *CodexAdapter) emitInitializeRuntimeInfo(result json.RawMessage, probe ProbeResult, probeErr error) {
+func (c *CodexAdapter) emitInitializeRuntimeInfo(result json.RawMessage, probe ProbeResult, probeErr error) model.RuntimeInfo {
 	info := model.RuntimeInfo{
 		Available: true, Command: c.cfg.Command, Protocol: "codex-app-server-jsonrpc",
 		Model: c.cfg.Model, ApprovalPolicy: c.cfg.ApprovalPolicy, Sandbox: c.cfg.Sandbox,
@@ -714,6 +718,7 @@ func (c *CodexAdapter) emitInitializeRuntimeInfo(result json.RawMessage, probe P
 		"capabilities":    info.Capabilities,
 	})
 	emitRuntimeInfo(c.sink, c.cfg.Actor, info)
+	return info
 }
 
 func (c *CodexAdapter) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
