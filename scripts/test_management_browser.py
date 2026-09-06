@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, expect
 
 from test_room_browser import ROOT, collaboration_fixture
 
@@ -132,12 +132,12 @@ async def verify_names(browser, artifacts: Path, in_page_fixture: bool = False) 
       document.getElementById('refresh-button').click();
     }""")
     await page.get_by_role('button', name='+ Create Room', exact=True).first.click()
-    await page.wait_for_function("!document.getElementById('room-submit').disabled")
+    await expect(page.locator('#room-submit')).to_be_enabled()
     assert not await page.locator('#room-name').get_attribute('required')
     assert await page.locator('#room-name').input_value() == ''
     await page.screenshot(path=str(artifacts / 'room-name-optional-light.png'))
     await page.locator('#room-submit').click()
-    await page.wait_for_function("!document.getElementById('room-dialog').open")
+    await expect(page.locator('#room-dialog')).not_to_be_visible()
     await page.wait_for_selector('.tree-room[data-room-id="room-111111111111cccccccccccc"]')
     assert await page.evaluate('__nameWrites[0].name') == '', 'browser generated its own competing name'
     auto = page.locator('.tree-room[data-room-id="room-111111111111cccccccccccc"]')
@@ -151,8 +151,8 @@ async def verify_names(browser, artifacts: Path, in_page_fixture: bool = False) 
     assert await page.locator('#rename-room-id').input_value() == 'room-111111111111cccccccccccc'
     await page.locator('#rename-room-name').fill('地图渲染优化')
     await page.locator('#rename-form [type=submit]').click()
-    await page.wait_for_function("!document.getElementById('rename-dialog').open")
-    await page.wait_for_function("document.querySelector('.tree-room[data-room-id=\"room-111111111111cccccccccccc\"]').textContent.includes('地图渲染优化')")
+    await expect(page.locator('#rename-dialog')).not_to_be_visible()
+    await expect(auto).to_contain_text('地图渲染优化')
     assert await page.locator('.room-row[data-room-id="room-111111111111cccccccccccc"] .binding-runtime-name').evaluate_all('nodes=>nodes.map(n=>n.textContent)') == ['地图渲染优化 · @claude · cccccccccccc', '地图渲染优化 · @codex · cccccccccccc']
     # The open tab's identity survives a display-name change. No new native ID.
     await auto.click()
@@ -166,8 +166,8 @@ async def verify_names(browser, artifacts: Path, in_page_fixture: bool = False) 
     await page.locator('#context-rename-room').click()
     await page.locator('#rename-room-name').fill('Renderer review')
     await page.locator('#rename-form [type=submit]').click()
-    await page.wait_for_function("!document.getElementById('rename-dialog').open")
-    await page.wait_for_function("document.querySelector('.room-tab[data-room-id=\"room-111111111111cccccccccccc\"] .room-tab-target').textContent.includes('Renderer review')")
+    await expect(page.locator('#rename-dialog')).not_to_be_visible()
+    await expect(tab).to_contain_text('Renderer review')
     assert await page.locator('#room-stage [data-room-id="room-111111111111cccccccccccc"]').count() == 1
     # Project-row context menu works without navigating into the Room first.
     await page.evaluate("location.hash='#/projects/p1'")
@@ -189,7 +189,7 @@ async def verify_names(browser, artifacts: Path, in_page_fixture: bool = False) 
     await page.evaluate('__renameFail=true')
     await page.locator('#rename-room-name').fill('Retain failed rename')
     await page.locator('#rename-form [type=submit]').click()
-    await page.wait_for_function("document.getElementById('rename-form-error').textContent.includes('Fixture rename failed')")
+    await expect(page.locator('#rename-form-error')).to_contain_text('Fixture rename failed')
     assert await page.locator('#rename-room-name').input_value() == 'Retain failed rename'
     await page.locator('#rename-dialog [data-close-dialog=rename-dialog]').first.click()
     # Viewport positioning and localized accessible operation labels.
@@ -207,7 +207,7 @@ async def verify_names(browser, artifacts: Path, in_page_fixture: bool = False) 
     await page.set_viewport_size({'width':1440,'height':1000})
     await row.click(button='right')
     await page.evaluate("__snapshot.rooms=__snapshot.rooms.filter(r=>r.id!=='r2');document.getElementById('refresh-button').click()")
-    await page.wait_for_function("document.getElementById('room-context-menu').hidden")
+    await expect(page.locator('#room-context-menu')).not_to_be_visible()
     await page.locator('.tree-room[data-room-id="r1"]').click(button='right')
     await page.evaluate("__expired=true;document.getElementById('refresh-button').click()")
     await page.wait_for_selector('#login-screen:not([hidden])')
