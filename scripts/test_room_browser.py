@@ -67,7 +67,7 @@ def fixture_html() -> str:
       window.__snapshot = SNAPSHOT;
       window.__sent = []; window.__sources = []; window.__snapshotRequests = 0;
       window.__postDelay = 250; window.__snapshotDelay = 0; window.__failPost = false;
-      window.__approvalSent = []; window.__failApproval = false; window.__permissionSent = [];
+      window.__approvalSent = []; window.__failApproval = false; window.__approvalGate = null; window.__permissionSent = [];
       window.fetch = async (path, options = {}) => {
         let body = {}, status = 200;
         if (path.includes('/session')) body = {csrf_token: 'fixture'};
@@ -81,7 +81,8 @@ def fixture_html() -> str:
           if (window.__failPost) { status = 503; body = {error: 'fixture: unavailable'}; }
         } else if (path.includes('/approvals/') && options.method === 'POST') {
           window.__approvalSent.push({path, ...JSON.parse(options.body)});
-          await new Promise(resolve => setTimeout(resolve, window.__postDelay));
+          if (window.__approvalGate) await window.__approvalGate;
+          else await new Promise(resolve => setTimeout(resolve, window.__postDelay));
           if (window.__failApproval) { status = 400; body = {error: 'fixture: invalid choice'}; }
         } else if (path.endsWith('/permissions') && options.method === 'PUT') {
           const actor=path.split('/').at(-2), request=JSON.parse(options.body);
@@ -156,12 +157,13 @@ async def verify_approvals(browser, artifacts: Path) -> dict:
     # confirmation must not send it. Re-render while pending cannot unlock it.
     await field.evaluate("node => node.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',isComposing:true,bubbles:true,cancelable:true}))")
     assert await page.evaluate('__approvalSent.length') == 0
-    await page.evaluate('__failApproval = true')
+    await page.evaluate('__failApproval = true; __approvalGate = new Promise(resolve => { __releaseApproval = resolve; })')
     await field.press('Enter')
     await page.wait_for_function('__approvalSent.length === 1')
     await page.locator('#refresh-button').click()
     await page.wait_for_timeout(50)
     assert await page.locator('[data-question-submit]').is_disabled()
+    await page.evaluate('__releaseApproval(); __approvalGate = null')
     await page.wait_for_function("!document.querySelector('[data-question-submit]').disabled")
     assert await field.input_value() == "Preserve native sessions and exact permission scope."
     await page.evaluate('__failApproval = false')
@@ -217,6 +219,7 @@ async def verify_collaboration(browser, artifacts: Path) -> dict:
     assert "executor" in (await page.locator("#participants").inner_text()).lower()
     await page.locator("#room-collaboration summary").click()
     assert await page.locator("#room-collaboration-instructions").text_content() == collaboration_fixture()["instructions"]
+    assert await page.locator("[data-permission-actor=codex]").evaluate("node=>{const s=getComputedStyle(node); return parseFloat(s.borderTopLeftRadius)>0 && parseFloat(s.paddingLeft)>=8;}"), "permission control lost shared form styling"
     await page.screenshot(path=str(artifacts / "collaboration-default-light.png"))
     # Two DOM change events during one pending PUT still have one mutation owner.
     await page.locator("[data-permission-actor=codex]").evaluate("""node=>{
@@ -245,7 +248,7 @@ async def verify_collaboration(browser, artifacts: Path) -> dict:
     assert not errors, errors
     await page.close()
     return {"creation_only_mode_display": True, "permission_single_submission": True,
-            "responsibility_not_permission": True, "custom_instructions_verbatim": True, "collaboration_page_errors": errors}
+            "responsibility_not_permission": True, "permission_control_styled": True, "custom_instructions_verbatim": True, "collaboration_page_errors": errors}
 
 
 async def verify(browser_path: str | None, artifacts: Path) -> None:
