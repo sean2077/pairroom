@@ -282,18 +282,19 @@ button { color: inherit; }
 }
 .approval-card.approval-claude { border-color: rgba(224,139,91,.32); background: rgba(224,139,91,.055); }
 .approval-card.approval-codex { border-color: rgba(86,185,159,.3); background: rgba(86,185,159,.05); }
-.approval-card.submitting { opacity: .55; pointer-events: none; }
+.approval-card.submitting { opacity: .8; pointer-events: none; }
 .approval-title { font-size: var(--text-control); font-weight: 680; line-height: 1.4; }
 .approval-meta { font-size: var(--text-xs); color: var(--faint); margin-top: 4px; }
 .approval-summary {
   margin: 9px 0; padding: 8px 9px; border: 1px solid var(--border); border-radius: 8px;
-  background: rgba(0,0,0,.12); color: var(--muted); font: var(--text-xs)/1.55 ui-monospace, monospace;
+  background: var(--surface-2); color: var(--text); font: var(--text-sm)/1.55 ui-monospace, monospace;
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .approval-warning { color: var(--yellow); border-color: rgba(234,191,99,.32); }
 .approval-raw { margin: 8px 0 10px; color: var(--faint); font-size: var(--text-xs); }
 .approval-raw summary { cursor: pointer; user-select: none; }
 .approval-detail { max-height: 230px; overflow: auto; white-space: pre-wrap; font: var(--text-xs)/1.55 ui-monospace, monospace; color: var(--muted); margin: 8px 0 0; }
+.approval-actions > button { min-height: 36px; max-width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; }
 .approval-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .approve-button, .decline-button {
   border: 1px solid var(--border); border-radius: 7px; padding: 6px 9px; cursor: pointer; font-size: var(--text-sm);
@@ -305,7 +306,7 @@ button { color: inherit; }
 .question-form { margin-top: 10px; }
 .question-block {
   min-width: 0; margin: 0 0 9px; padding: 10px; border: 1px solid var(--border); border-radius: 9px;
-  background: rgba(0,0,0,.1);
+  background: var(--surface-2);
 }
 .question-block.invalid { border-color: var(--red); box-shadow: 0 0 0 2px rgba(238,113,130,.08); }
 .question-block legend { max-width: 100%; padding: 0 4px; color: var(--text); font-size: var(--text-sm); line-height: 1.45; }

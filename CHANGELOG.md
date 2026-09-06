@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- Keep Management route and confirmation identities intact on locale changes; prevent translated mobile header actions from expanding or clipping.
+
+- Pending approval cards retain typed/selected answers, focused controls, and expanded native details across unrelated updates and locale changes. Native command/cwd summaries are visible, and permission choices follow the request kind rather than the historical slot ID.
+- Grok permissions preserve exact native option IDs and names; one-time grants/rejections never widen to remembered scope, invalid grants remain answerable, and cancellation returns the native cancelled outcome. Claude question validation rejects incomplete or mismatched answers before responding.
+- Approval resolution and Management confirmations reject concurrent duplicate submissions. Mutation callers wait for post-write snapshots rather than older pending polls, and obsolete browser-session/catalog responses cannot replace newer state.
+- Browser opening uses the activation readiness receipt rather than a stale polling snapshot. Background archived/deleted tabs and surfaces are removed; iframe actions cannot target a different Room. Incremental tabs retain keyboard focus during polls/unread updates, and in-flight catalog refreshes preserve new model/instruction edits.
+- Missing/disabled selected Provider Profiles remain explicit invalid choices after catalog refresh; Room creation cannot silently switch them to the native Provider.
+- Room language switches retain live/reconnecting/offline status and do not replace native Git output with loading placeholders. Approval context has clearer contrast and wrapping.
+
 - Room submission now ignores IME confirmation and held Enter, serializes pending sends, and preserves newer draft text, replies, and attachments while a request is pending. Failed requests remain explicit retries rather than automatic duplicate native Turns.
 - Historical date separators no longer throw during rendering. Reconnects coalesce snapshot reads, discard obsolete stream/page callbacks, and preserve loaded history and the visible message anchor.
 - Optional owner, thread, and reply bars no longer consume the timeline's flexible row. Room controls wrap without squeezing labels; light-theme contrast, mobile targets, focus states, and busy feedback are clearer.
@@ -17,6 +26,7 @@
 
 ### Added
 
+- Native permission-scope, question completeness, approval-concurrency, Management transport, and real-asset browser regressions. CI publishes both Room and Management screenshot/assertion evidence.
 - Deterministic Room client and Chromium behavior/layout regressions, fixed-window allocation benchmarks, and browser evidence artifacts in CI. Native vendor E2E remains separate.
 
 ## [v2.1.0] — 2026-09-05

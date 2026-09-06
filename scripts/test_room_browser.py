@@ -58,6 +58,7 @@ def fixture_html() -> str:
       window.__snapshot = SNAPSHOT;
       window.__sent = []; window.__sources = []; window.__snapshotRequests = 0;
       window.__postDelay = 250; window.__snapshotDelay = 0; window.__failPost = false;
+      window.__approvalSent = []; window.__failApproval = false;
       window.fetch = async (path, options = {}) => {
         let body = {}, status = 200;
         if (path.includes('/session')) body = {csrf_token: 'fixture'};
@@ -69,6 +70,10 @@ def fixture_html() -> str:
           window.__sent.push(JSON.parse(options.body));
           await new Promise(resolve => setTimeout(resolve, window.__postDelay));
           if (window.__failPost) { status = 503; body = {error: 'fixture: unavailable'}; }
+        } else if (path.includes('/approvals/') && options.method === 'POST') {
+          window.__approvalSent.push({path, ...JSON.parse(options.body)});
+          await new Promise(resolve => setTimeout(resolve, window.__postDelay));
+          if (window.__failApproval) { status = 400; body = {error: 'fixture: invalid choice'}; }
         } else if (path.includes('/git/status')) body = {status: 'clean'};
         return new Response(JSON.stringify(body), {status, headers: {'content-type': 'application/json'}});
       };
@@ -82,6 +87,106 @@ def fixture_html() -> str:
       window.EventSource = FixtureEventSource;
     '''.replace('SNAPSHOT', json.dumps(snapshot_fixture()).replace('</', '<\\/'))
     return html.replace('<head>', '<head><script>' + mock + '</script>', 1)
+
+
+async def verify_approvals(browser, artifacts: Path) -> dict:
+    page = await browser.new_page(viewport={"width": 1440, "height": 1000}, locale="en-US")
+    page.set_default_timeout(5000)
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    await page.set_content(fixture_html())
+    await page.wait_for_selector("#connection.connected")
+    await page.evaluate("""() => {
+      __snapshot.participants.claude.runtime_kind='codex';
+      __snapshot.participants.claude.display_name='Codex';
+      __snapshot.participants.claude.mention_handle='@codex';
+      __snapshot.participants.codex.runtime_kind='claude';
+      __snapshot.participants.codex.display_name='Claude Code';
+      __snapshot.participants.codex.mention_handle='@claude';
+      __snapshot.approvals = [
+        {id:'question-1',agent:'codex',kind:'claude.userQuestion',title:'Choose the review boundary',status:'pending',
+         detail:{input:{questions:[{question:'What should remain native?',options:[{label:'Session ownership',description:'Keep the vendor session authoritative.'}]}]}}},
+        {id:'command-1',agent:'claude',kind:'item/commandExecution/requestApproval',title:'Run focused tests',status:'pending',
+         detail:{command:['go','test','./internal/agent/...'],cwd:'/workspace/example'}}
+      ];
+    }""")
+    await page.locator("#refresh-button").click()
+    await page.locator('[data-tab="approvals"]').first.click()
+    field = page.locator(".question-other")
+    await field.fill("Preserve native sessions and exact permission scope.")
+    await page.locator('.question-option input').check()
+    await page.locator('.approval-raw summary').click()
+    await field.focus()
+    await page.evaluate("window.__approvalField = document.activeElement")
+    # Unrelated telemetry/approval events must not replace the native question DOM.
+    await page.evaluate("""() => __sources.at(-1).dispatchEvent(new MessageEvent('pairroom', {
+      data:JSON.stringify({seq:2,kind:'approval.updated',data:__snapshot.approvals[1]})}))""")
+    await page.wait_for_timeout(120)
+    assert await page.evaluate("document.activeElement === __approvalField && __approvalField.isConnected"), "approval refresh stole focus"
+    await page.locator("#refresh-button").click()
+    await page.wait_for_timeout(120)
+    assert await field.input_value() == "Preserve native sessions and exact permission scope.", "snapshot cleared question draft"
+    assert await page.locator('.question-option input').is_checked(), "snapshot cleared selected answer"
+    assert await page.locator('.approval-raw').evaluate("node => node.open"), "snapshot collapsed native details"
+    await page.wait_for_selector('[data-approval-card="command-1"] [data-decision="acceptForSession"]')
+    summary = await page.locator('[data-approval-card="command-1"] .approval-summary').inner_text()
+    assert 'go test ./internal/agent/...' in summary and '/workspace/example' in summary, "native command or cwd hidden from decision summary"
+    for theme, language in [("light", "en"), ("dark", "zh-CN")]:
+        await page.evaluate("args => {PairRoomTheme.setTheme(args[0]); PairRoomI18n.setLang(args[1]);}", [theme, language])
+        await page.wait_for_timeout(120)
+        assert await field.input_value() == "Preserve native sessions and exact permission scope.", "locale switch cleared the draft"
+        assert await page.locator('#connection span:last-child').get_attribute('data-i18n') == 'room.live', "locale switch reset live status to Connecting"
+        await page.screenshot(path=str(artifacts / f"approvals-{theme}-{language}.png"))
+    # Form Enter is a controlled native answer, not a browser navigation. An IME
+    # confirmation must not send it. Re-render while pending cannot unlock it.
+    await field.evaluate("node => node.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',isComposing:true,bubbles:true,cancelable:true}))")
+    assert await page.evaluate('__approvalSent.length') == 0
+    await page.evaluate('__failApproval = true')
+    await field.press('Enter')
+    await page.wait_for_function('__approvalSent.length === 1')
+    await page.locator('#refresh-button').click()
+    await page.wait_for_timeout(50)
+    assert await page.locator('[data-question-submit]').is_disabled()
+    await page.wait_for_function("!document.querySelector('[data-question-submit]').disabled")
+    assert await field.input_value() == "Preserve native sessions and exact permission scope."
+    await page.evaluate('__failApproval = false')
+    await field.press('Enter')
+    await page.wait_for_function('__approvalSent.length === 2')
+    await page.wait_for_timeout(300)
+    assert await page.locator('[data-question-submit]').is_disabled(), "accepted resolution unlocked before durable state"
+    assert await page.locator('#connection.connected').count() == 1, "form submission navigated away"
+    # Native Grok labels disambiguate two choices with the same kind. Slot identity
+    # and locale must not replace these vendor-provided options with generic grants.
+    await page.evaluate("""() => {
+      __snapshot.participants.claude.runtime_kind='grok';
+      __snapshot.participants.claude.display_name='Grok Build';
+      __snapshot.approvals=[{id:'grok-1',agent:'claude',kind:'grok.permission',status:'pending',title:'Select native execution mode',
+        detail:{toolCall:{title:'Run checks',rawInput:{command:'go test ./...'}},options:[
+          {optionId:'manual',name:'Allow once, inspect each edit',kind:'allow_once'},
+          {optionId:'automatic',name:'Allow once, apply this batch',kind:'allow_once'},
+          {optionId:'remember',name:'Remember this permission',kind:'allow_always'},
+          {optionId:'deny',name:'Reject this request',kind:'reject_once'}]}}];
+    }""")
+    await page.locator('#refresh-button').click()
+    choice = page.get_by_role('button', name='Allow once, apply this batch', exact=True)
+    await choice.wait_for()
+    assert await page.locator('[data-decision="acceptForSession"]').count() == 0, "invented session scope for Grok"
+    await page.set_viewport_size({"width": 390, "height": 844})
+    # The Inspector is a mobile drawer; expose the real approvals tab.
+    await page.locator('#ux-layout-button').click()
+    await page.locator('[data-ux-action="inspector"]').click()
+    await page.wait_for_timeout(100)
+    await page.screenshot(path=str(artifacts / 'approvals-native-mobile-dark.png'))
+    assert not await page.evaluate("document.documentElement.scrollWidth > innerWidth"), "native option label caused horizontal overflow"
+    await page.set_viewport_size({"width": 1440, "height": 1000})
+    await choice.click()
+    await page.wait_for_function('__approvalSent.length === 3')
+    assert await page.evaluate('__approvalSent.at(-1).decision') == 'option:automatic'
+    await page.wait_for_timeout(300)
+    assert await choice.is_disabled(), "native permission could be sent twice"
+    assert not errors, errors
+    await page.close()
+    return {"approval_draft_preserved": True, "native_option_identity": True, "approval_single_submission": True, "approval_page_errors": errors}
 
 
 async def verify(browser_path: str | None, artifacts: Path) -> None:
@@ -179,6 +284,7 @@ async def verify(browser_path: str | None, artifacts: Path) -> None:
             assert not await page.evaluate("document.documentElement.scrollWidth > innerWidth"), "mobile horizontal overflow"
             await page.screenshot(path=str(artifacts / f"room-mobile-{theme}-{language}.png"))
             await page.set_viewport_size({"width": 1440, "height": 1000})
+        results.update(await verify_approvals(browser, artifacts))
         assert not errors, errors
         results.update(ime_submissions=0, rapid_enter_submissions=1, retained_draft=True,
                        resync_reads_per_burst=1, page_errors=errors)

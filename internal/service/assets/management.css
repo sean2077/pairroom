@@ -948,11 +948,19 @@ body[data-density="compact"] .stat-card { min-height: 98px; }
 }
 
 @media (max-width: 680px) {
-  .topbar { align-items: flex-start; flex-wrap: wrap; gap: 10px; }
+  .topbar { min-height: 64px; align-items: center; flex-wrap: wrap; gap: 10px; }
   .page-heading { order: 1; min-width: 0; flex: 1; }
-  .topbar-actions { order: 2; }
+  .page-heading .eyebrow { display: none; }
+  .page-heading h1 { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .topbar-actions { order: 2; flex: 0 0 auto; }
   .topbar-actions .primary-button { width: 40px; overflow: hidden; padding: 0; font-size: 0; }
-  .topbar-actions .primary-button span { font-size: 18px; }
+  .topbar-actions .primary-button span[aria-hidden="true"] { font-size: 18px; }
+  /* Keep the full accessible name without laying out its translated text in
+     the compact icon button (especially multi-character Chinese labels). */
+  .topbar-actions .primary-button span:not([aria-hidden="true"]) {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
   .view { padding-inline: 13px; }
   .connection-banner { margin-inline: 13px; align-items: flex-start; }
   .connection-banner > div { display: grid; }

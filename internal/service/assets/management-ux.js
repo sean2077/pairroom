@@ -54,6 +54,7 @@
   installRoomTabNavigation();
   installScrollFeedback();
   document.addEventListener('pairroom:lang', localizeEnhancements);
+  window.addEventListener('pairroom:tabs-updated', scheduleRoomChromeEnhancement);
 
   function installSkipLink() {
     const existing = document.querySelector('.management-skip-link');
@@ -582,7 +583,8 @@
   function enhanceRoomTabs() {
     if (!roomTablist) return;
     const tabs = Array.from(roomTablist.children).filter((child) => child.classList?.contains('room-tab'));
-    tabs.forEach((tab) => {
+    const hasSelected = tabs.some((tab) => tab.classList.contains('active'));
+    tabs.forEach((tab, index) => {
       const roomID = tab.dataset.roomId || '';
       const selected = tab.classList.contains('active') || tab.getAttribute('aria-selected') === 'true';
       const close = directChildByClass(tab, 'room-tab-close') || tab.querySelector('.room-tab-close');
@@ -621,7 +623,7 @@
       target.setAttribute('aria-selected', String(selected));
       target.setAttribute('aria-label', `${label}${selected ? t("ui.currentTab") : ''}`);
       target.setAttribute('aria-keyshortcuts', 'Delete');
-      target.tabIndex = selected ? 0 : -1;
+      target.tabIndex = selected || (!hasSelected && index === 0) ? 0 : -1;
       target.title = label;
       if (panel) {
         panel.id = `room-panel-${token}`;

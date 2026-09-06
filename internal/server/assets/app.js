@@ -31,6 +31,7 @@
     draftRevision: 0,
     composing: false,
     sending: false,
+    approvalSubmissions: new Map(),
     localRoomID: '',
     pendingAttachments: [],
     attachmentObjectURLs: new Set(),
@@ -191,7 +192,7 @@
   }
 
   function scheduleReconnect() {
-    setConnection(false, t('room.reconnecting'));
+    setConnection(false, 'room.reconnecting');
     if (state.reconnectTimer !== null) return;
     const delay = Math.min(15000, 500 * (2 ** Math.min(state.reconnectAttempt++, 5)));
     state.reconnectTimer = setTimeout(() => {
@@ -206,11 +207,11 @@
     const query = new URLSearchParams({ since: String(since) });
     const source = new EventSource(roomURL(`/api/v1/events?${query}`));
     state.source = source;
-    setConnection(false, t('ui.connecting'));
+    setConnection(false, 'ui.connecting');
     source.addEventListener('open', () => {
       if (state.source !== source) return;
       state.reconnectAttempt = 0;
-      setConnection(true, t('room.live'));
+      setConnection(true, 'room.live');
     });
     source.addEventListener('error', () => {
       if (state.source !== source) return;
@@ -1437,59 +1438,113 @@
 
   function renderApprovals() {
     const container = $('approvals-tab');
-    container.replaceChildren();
     const pending = (state.snapshot.approvals || []).filter((item) => item.status === 'pending');
+    const ids = new Set(pending.map((item) => item.id));
+    for (const id of state.approvalSubmissions.keys()) {
+      if (!ids.has(id)) state.approvalSubmissions.delete(id);
+    }
     $('approval-count').textContent = String(pending.length);
     if (!pending.length) {
-      const empty = document.createElement('div');
-      empty.className = 'approvals-empty';
-      empty.textContent = t("ui.noPendingNativeApprovals");
-      container.appendChild(empty);
+      if (!container.querySelector('.approvals-empty')) {
+        const empty = document.createElement('div');
+        empty.className = 'approvals-empty';
+        container.replaceChildren(empty);
+      }
+      container.firstElementChild.textContent = t("ui.noPendingNativeApprovals");
       return;
     }
-    pending.forEach((approval) => {
+    container.querySelector('.approvals-empty')?.remove();
+    for (const card of container.querySelectorAll('[data-approval-card]')) {
+      if (!ids.has(card.dataset.approvalCard)) card.remove();
+    }
+    pending.forEach((approval, index) => {
       const detail = approvalDetail(approval);
-      const card = document.createElement('section');
-      card.className = `approval-card approval-${approval.agent}`;
-      card.dataset.approvalCard = approval.id;
-
-      const title = document.createElement('div');
-      title.className = 'approval-title';
-      title.textContent = approval.title || t('room.nativeAgentRequest');
-      const meta = document.createElement('div');
-      meta.className = 'approval-meta';
-      meta.textContent = `${displayName(approval.agent)} · ${approval.kind} · ${formatTime(approval.requested_at)}`;
-      card.append(title, meta);
-
-      if (approval.kind === 'claude.userQuestion') {
-        renderClaudeQuestions(card, approval, detail);
-      } else {
-        const summary = document.createElement('div');
-        summary.className = 'approval-summary';
-        summary.textContent = approvalSummary(approval, detail);
-        card.appendChild(summary);
-
-        const raw = document.createElement('details');
-        raw.className = 'approval-raw';
-        const rawTitle = document.createElement('summary');
-        rawTitle.textContent = t("ui.viewFullNativeRequest");
-        const rawBody = document.createElement('pre');
-        rawBody.className = 'approval-detail';
-        rawBody.textContent = prettyJSON(approval.detail);
-        raw.append(rawTitle, rawBody);
-        card.appendChild(raw);
-
-        const actions = document.createElement('div');
-        actions.className = 'approval-actions';
-        actions.appendChild(approvalButton(approval.id, 'accept', t("ui.allowOnce"), 'approve-button'));
-        if (approval.agent === 'codex' || detail.permission_suggestions) {
-          actions.appendChild(approvalButton(approval.id, 'acceptForSession', t("ui.allowForThisSession"), 'approve-button secondary-approve'));
+      let card = container.querySelector(`[data-approval-card="${CSS.escape(approval.id)}"]`);
+      // Approval payloads are immutable while pending. Keep the actual controls
+      // through unrelated events and snapshot reads, not just their text values.
+      const key = JSON.stringify([approval, document.documentElement.lang]);
+      if (!card || card.dataset.renderKey !== key) {
+        const previous = card;
+        const controls = Array.from(previous?.querySelectorAll('input') || []).map((input) => ({
+          value: input.value, checked: input.checked, focused: input === document.activeElement,
+          start: input.selectionStart, end: input.selectionEnd,
+        }));
+        const expanded = Array.from(previous?.querySelectorAll('details') || []).map((node) => node.open);
+        card = document.createElement('section');
+        card.className = `approval-card approval-${approval.agent}`;
+        card.dataset.approvalCard = approval.id;
+        card.dataset.renderKey = key;
+        const title = document.createElement('div');
+        title.className = 'approval-title';
+        title.textContent = approval.title || t('room.nativeAgentRequest');
+        const meta = document.createElement('div');
+        meta.className = 'approval-meta';
+        meta.textContent = `${displayName(approval.agent)} · ${approval.kind} · ${formatTime(approval.requested_at)}`;
+        card.append(title, meta);
+        if (approval.kind === 'claude.userQuestion') {
+          renderClaudeQuestions(card, approval, detail);
+        } else {
+          const summary = document.createElement('div');
+          summary.className = 'approval-summary';
+          summary.textContent = approvalSummary(approval, detail);
+          const raw = document.createElement('details');
+          raw.className = 'approval-raw';
+          const rawTitle = document.createElement('summary');
+          rawTitle.textContent = t("ui.viewFullNativeRequest");
+          const rawBody = document.createElement('pre');
+          rawBody.className = 'approval-detail';
+          rawBody.textContent = prettyJSON(approval.detail);
+          raw.append(rawTitle, rawBody);
+          const actions = document.createElement('div');
+          actions.className = 'approval-actions';
+          if (approval.kind === 'grok.permission') {
+            // ACP labels and option IDs belong to the native runtime. Do not
+            // collapse them into a broader permission or invent a session scope.
+            for (const option of Array.isArray(detail.options) ? detail.options : []) {
+              if (!option || typeof option.optionId !== 'string' || !option.optionId || typeof option.name !== 'string' || !option.name) continue;
+              const allow = String(option.kind || '').startsWith('allow_');
+              actions.appendChild(approvalButton(approval.id, `option:${option.optionId}`, option.name, allow ? 'approve-button' : 'decline-button'));
+            }
+            actions.appendChild(approvalButton(approval.id, 'cancel', t('ui.cancel'), 'decline-button'));
+          } else {
+            actions.appendChild(approvalButton(approval.id, 'accept', t("ui.allowOnce"), 'approve-button'));
+            if (String(approval.kind).endsWith('/requestApproval') ||
+                (approval.kind === 'claude.toolApproval' && Array.isArray(detail.permission_suggestions) && detail.permission_suggestions.length)) {
+              actions.appendChild(approvalButton(approval.id, 'acceptForSession', t("ui.allowForThisSession"), 'approve-button secondary-approve'));
+            }
+            actions.appendChild(approvalButton(approval.id, 'decline', t("ui.reject"), 'decline-button'));
+          }
+          card.append(summary, raw, actions);
         }
-        actions.appendChild(approvalButton(approval.id, 'decline', t("ui.reject"), 'decline-button'));
-        card.appendChild(actions);
+        if (previous) previous.replaceWith(card);
+        else container.appendChild(card);
+        // A locale change may rebuild labels. Restore edits only when the
+        // underlying native request has not changed.
+        if (previous?.dataset.requestKey === JSON.stringify(approval)) {
+          card.querySelectorAll('input').forEach((input, i) => {
+            const saved = controls[i];
+            if (!saved) return;
+            input.value = saved.value; input.checked = saved.checked;
+            if (saved.focused) {
+              input.focus({ preventScroll: true });
+              if (saved.start !== null) input.setSelectionRange(saved.start, saved.end);
+            }
+          });
+          card.querySelectorAll('details').forEach((node, i) => { node.open = expanded[i] || false; });
+        }
+        card.dataset.requestKey = JSON.stringify(approval);
       }
-      container.appendChild(card);
+      // Do not detach/reinsert unchanged cards: that also loses keyboard focus.
+      if (container.children[index] !== card) container.insertBefore(card, container.children[index] || null);
+      setApprovalBusy(card, state.approvalSubmissions.has(approval.id));
     });
+  }
+
+  function setApprovalBusy(card, busy) {
+    if (!card) return;
+    card.classList.toggle('submitting', busy);
+    card.setAttribute('aria-busy', String(busy));
+    card.querySelectorAll('button, input').forEach((control) => { control.disabled = busy; });
   }
 
   function approvalDetail(approval) {
@@ -1500,17 +1555,20 @@
   }
 
   function approvalSummary(approval, detail) {
-    const input = detail.input && typeof detail.input === 'object' ? detail.input : {};
-    const command = Array.isArray(input.command) ? input.command.join(' ') : (input.command || input.cmd || '');
+    const input = detail.input && typeof detail.input === 'object' ? detail.input : detail;
+    const call = detail.toolCall || {};
+    const commandValue = input.command || input.cmd || call.rawInput?.command || '';
+    const command = Array.isArray(commandValue) ? commandValue.join(' ') : commandValue;
     const path = input.file_path || input.path || input.cwd || detail.path || '';
-    const description = detail.description || input.description || '';
-    const tool = detail.tool_name || detail.method || approval.kind;
-    return [tool, command ? t("ui.commandValue", { value0: (truncate(command, 260)) }) : '', path ? t("ui.pathValue", { value0: (path) }) : '', description].filter(Boolean).join('\n');
+    const description = detail.description || input.description || detail.reason || '';
+    const tool = detail.tool_name || detail.method || call.title || approval.kind;
+    return [tool, command ? t("ui.commandValue", { value0: command }) : '', path ? t("ui.pathValue", { value0: path }) : '', description].filter(Boolean).join('\n');
   }
 
   function renderClaudeQuestions(card, approval, detail) {
     const questions = Array.isArray(detail?.input?.questions) ? detail.input.questions : [];
-    if (!questions.length) {
+    const questionTexts = questions.map((question) => question?.question);
+    if (!questions.length || questionTexts.some((text) => typeof text !== 'string' || !text.trim()) || new Set(questionTexts).size !== questions.length) {
       const warning = document.createElement('div');
       warning.className = 'approval-summary approval-warning';
       warning.textContent = t("ui.claudeAskedAnInteractiveQuestionWithoutAParseableListItCanOnly");
@@ -1525,6 +1583,13 @@
     const form = document.createElement('form');
     form.className = 'question-form';
     form.dataset.questionForm = approval.id;
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      submitQuestionApproval(approval.id, form.querySelector('[data-question-submit]'));
+    });
+    form.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && (event.isComposing || event.keyCode === 229 || event.repeat)) event.preventDefault();
+    });
     questions.forEach((question, index) => {
       const text = String(question.question || question.header || t('room.questionNumber', { value: index + 1 }));
       const block = document.createElement('fieldset');
@@ -1569,6 +1634,7 @@
       other.className = 'question-other';
       other.placeholder = options.length ? t("ui.otherAnswerOptional") : t("ui.enterAnAnswer");
       other.dataset.questionOther = 'true';
+      other.setAttribute('aria-label', text);
       block.appendChild(other);
       form.appendChild(block);
     });
@@ -1576,7 +1642,7 @@
     const actions = document.createElement('div');
     actions.className = 'approval-actions';
     const submit = document.createElement('button');
-    submit.type = 'button';
+    submit.type = 'submit';
     submit.className = 'approve-button';
     submit.dataset.questionSubmit = approval.id;
     submit.textContent = t("ui.submitAnswers");
@@ -1942,19 +2008,24 @@
   }
 
   async function resolveApproval(id, decision, button, extra = {}) {
-    button.disabled = true;
-    const card = button.closest('[data-approval-card]');
-    if (card) card.classList.add('submitting');
+    if (state.approvalSubmissions.has(id)) return;
+    const approval = (state.snapshot?.approvals || []).find((item) => item.id === id);
+    if (!approval || approval.status !== 'pending') return;
+    state.approvalSubmissions.set(id, 'submitting');
+    setApprovalBusy(button.closest('[data-approval-card]'), true);
     try {
       await api(`/api/v1/approvals/${encodeURIComponent(id)}`, {
         method: 'POST',
         body: JSON.stringify({ decision, ...extra }),
       });
+      // Remain disabled until durable SSE/snapshot state removes this request.
+      if (state.approvalSubmissions.has(id)) state.approvalSubmissions.set(id, 'submitted');
       toast(decision === 'decline' || decision === 'cancel' ? t("ui.nativeRequestRejected") : t("ui.approvalSubmitted"), 'success');
     } catch (error) {
+      state.approvalSubmissions.delete(id);
+      const card = $('approvals-tab').querySelector(`[data-approval-card="${CSS.escape(id)}"]`);
+      setApprovalBusy(card, false);
       toast(error.message, 'error');
-      button.disabled = false;
-      if (card) card.classList.remove('submitting');
     }
   }
 
@@ -1968,6 +2039,8 @@
   }
 
   async function refreshGitStatus() {
+    // Native output is not a static translatable placeholder.
+    $('git-status').removeAttribute('data-i18n');
     try {
       const result = await api('/api/v1/git/status');
       $('git-status').textContent = result.text || t('room.workingTreeClean');
@@ -2229,11 +2302,12 @@
     }
   }
 
-  function setConnection(connected, label) {
+  function setConnection(connected, labelKey) {
     const node = $('connection');
     node.classList.toggle('connected', connected);
     node.classList.toggle('disconnected', !connected);
-    node.lastElementChild.textContent = label;
+    node.lastElementChild.dataset.i18n = labelKey;
+    node.lastElementChild.textContent = t(labelKey);
     postSurfaceState();
   }
 
@@ -2494,8 +2568,6 @@
     if (thread) focusThread(thread.dataset.threadId);
     const tab = event.target.closest('.tab');
     if (tab) switchTab(tab.dataset.tab);
-    const questionSubmit = event.target.closest('[data-question-submit]');
-    if (questionSubmit) submitQuestionApproval(questionSubmit.dataset.questionSubmit, questionSubmit);
     const approval = event.target.closest('[data-approval-id][data-decision]');
     if (approval) void resolveApproval(approval.dataset.approvalId, approval.dataset.decision, approval);
     const retry = event.target.closest('[data-retry-id][data-retry-target]');
@@ -2714,17 +2786,17 @@
 
   function bootRoom() {
     showTimelineLoading();
-    setConnection(false, t('ui.connecting'));
+    setConnection(false, 'ui.connecting');
     initializeSession().then(loadSnapshot).catch((error) => {
       toast(error.message, 'error');
       showTimelineError(error.message);
-      setConnection(false, t('room.offline'));
+      setConnection(false, 'room.offline');
     });
   }
 
   document.addEventListener('pairroom:lang', () => {
     if (window.PairRoomI18n) window.PairRoomI18n.apply(document);
-    if (state.snapshot) render(true);
+    if (state.snapshot) render();
   });
 
   bootRoom();

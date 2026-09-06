@@ -100,6 +100,10 @@ New Rooms snapshot two secret-free `AgentSelection` values. Native ProviderRefs 
 
 The provisioning event schema is version 2. Its reader accepts schema 1 as `Legacy defaults` without rewriting the Event Log. Unknown newer provisioning schemas fail closed, so downgrade requires restoring the pre-upgrade data-root backup rather than allowing an old binary to reinterpret new Room facts. `service-registry.json` uses checkpoint schema 2 and remains a rebuildable index.
 
+## Native interaction ownership
+
+The Room Engine reserves an approval while its native response is being submitted, so concurrent browser/API decisions cannot answer the same request twice. Validation failure releases that reservation without resolving the durable request. Grok permission grants preserve exact advertised option identity and never broaden one-time authorization into a remembered grant. Transport failures are surfaced for explicit recovery, never automatically replayed.
+
 ## CC Switch boundary
 
 PairRoom reads only CC Switch v3.20.1/schema 18. The database connection uses `mode=ro` and `PRAGMA query_only=1`; PairRoom never changes the current Profile or invokes CC Switch mutation paths. The safe public catalog contains Profile identity, display name, Runtime, local model suggestions, support state, and disabled reason. Raw `settings_config` and `meta` remain inside the mapper. Only directly materializable API-key configurations cross the boundary: secrets become environment entries for one target child, while safe Provider/model parameters may become CLI overrides. Missing, locked, malformed, deleted, unsupported, or version-mismatched state fails activation without fallback.
@@ -116,6 +120,10 @@ SSE carries durable state events and transient telemetry. Pages should update in
 Read projections live in `internal/room/projection.go`: windowed snapshots slice before deep-copying messages; SSE copies only the retained event tail; runtime capacity/drain checks query activity under the Engine lock without cloning the transcript. These are read optimizations only: the complete Event Log, visible relay response, and native session context remain unchanged.
 
 The composer has a single in-flight submission boundary, independent of the button DOM. IME confirmation and held Enter keys do not submit. Acceptance clears only the unchanged submitted draft and its attachments/reply; new edits survive. Failed mutations are never retried automatically. Browser draft storage is best-effort and is not an availability requirement.
+
+Management coalesces ordinary polls, but a completed mutation invalidates older in-flight reads and waits for a post-mutation snapshot. Session generations prevent obsolete snapshot/catalog completions or 401 responses from replacing a newer browser session. These are ephemeral presentation guards, not durable state owners. Catalog refresh retains edits and preserves unavailable explicit Provider selections as invalid instead of silently falling back to native configuration. Browser-open readiness comes from the activation response; the server still owns creation and opening of the one-time URL.
+
+Pending approval cards and open Room tabs are reconciled by identity instead of recreated during unrelated updates. Approval drafts remain local and are retained only for the same native request. Management removes archived/deleted Room surfaces from fresh snapshots and binds each surface message to its actual iframe's Room ID. `management.js` owns tab identity/state; `management-ux.js` owns keyboard/ARIA enhancements and reconciles them on `pairroom:tabs-updated`.
 
 The Management Shell is Room-centric: the sidebar groups by Project, and in-app tabs embed an active Room View through the Management same-origin surface gateway (`/api/v1/rooms/{room}/surface/…`). The iframe uses the Management Session Cookie. The gateway injects the Runtime bearer on the server; the Runtime token never enters the DOM. An in-app tab is not a Runtime lease. Background tabs still obey existing idle / capacity / LRU / explicit-suspend constraints; switching back to a suspended tab requests activation again. An archived Room cannot open as a tab; restore it first.
 

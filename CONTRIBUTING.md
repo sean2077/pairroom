@@ -22,7 +22,9 @@ make browser-check PYTHON=.browser-venv/bin/python
 
 On Windows, the environment's interpreter is `.browser-venv/Scripts/python.exe`. A managed Linux machine may need Playwright's `install --with-deps chromium` command. To use an already installed Chromium, set `PAIRROOM_BROWSER_EXECUTABLE` to its executable path.
 
-Browser verification loads the real embedded assets with deterministic in-page HTTP/SSE fixtures and writes screenshots plus assertions to `.browser-results/`. It covers IME input, duplicate submissions, draft retention, reconnect bursts, scroll anchors, older date separators, optional status/reply rows, and English/Chinese light/dark responsive views. It does not verify real browser authentication, vendor processes, or model behavior; those boundaries require the Go/Mock and native tests described below.
+Browser verification loads the real embedded assets with deterministic in-page HTTP/SSE fixtures and writes screenshots plus assertions to `.browser-results/`. It covers IME input, duplicate submissions, draft retention, reconnect bursts, scroll anchors, older date separators, optional status/reply rows, English/Chinese light/dark responsive views, native approval drafts/options, Management tab focus and surface identity, external archive/removal, and configuration edits and unavailable explicit Provider selections during catalog refresh. Management frame identities are inert fixtures; Room assets are exercised separately. It does not verify real browser authentication, vendor processes, or model behavior; those boundaries require the Go/Mock and native tests described below.
+
+`node scripts/test_management_client.js` additionally checks post-mutation freshness, stale browser-session responses, catalog ordering, and duplicate action guards without browser timing. Native approval contract and concurrency tests run as part of `make check`.
 
 For message-window allocation regressions, use `go test ./internal/room -run '^$' -bench BenchmarkWindowedSnapshot -benchmem`. Compare allocations at a fixed window size rather than imposing a machine-dependent timing threshold.
 

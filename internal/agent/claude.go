@@ -1311,7 +1311,10 @@ func (c *ClaudeAdapter) Stop(context.Context) error {
 	return nil
 }
 
-func (c *ClaudeAdapter) ResolveApproval(_ context.Context, approvalID string, resolution model.ApprovalResolution) error {
+func (c *ClaudeAdapter) ResolveApproval(ctx context.Context, approvalID string, resolution model.ApprovalResolution) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	decision := strings.TrimSpace(resolution.Decision)
 	c.mu.Lock()
 	pending, ok := c.approvals[approvalID]
@@ -1341,11 +1344,8 @@ func (c *ClaudeAdapter) ResolveApproval(_ context.Context, approvalID string, re
 			updatedInput[key] = value
 		}
 		if pending.toolName == "AskUserQuestion" {
-			if len(resolution.Answers) == 0 {
-				return errors.New("Claude question approval requires answers")
-			}
-			if _, ok := updatedInput["questions"]; !ok {
-				return errors.New("Claude question request omitted questions")
+			if err := validateClaudeQuestionAnswers(updatedInput["questions"], resolution.Answers); err != nil {
+				return err
 			}
 			updatedInput["answers"] = resolution.Answers
 		}
@@ -1382,6 +1382,36 @@ func (c *ClaudeAdapter) ResolveApproval(_ context.Context, approvalID string, re
 		c.setState(model.StateWorking, "")
 	} else {
 		c.setState(model.StateIdle, "")
+	}
+	return nil
+}
+
+// Native question text is the answer-map identity. Validate completeness before
+// sending the control response, without rewriting questions or free-form answers.
+func validateClaudeQuestionAnswers(raw any, answers map[string]string) error {
+	questions, ok := raw.([]any)
+	if !ok || len(questions) == 0 {
+		return errors.New("Claude question request has no parseable questions")
+	}
+	expected := make(map[string]bool, len(questions))
+	for _, rawQuestion := range questions {
+		question, ok := rawQuestion.(map[string]any)
+		if !ok {
+			return errors.New("Claude question request contains a malformed question")
+		}
+		text, ok := question["question"].(string)
+		if !ok || strings.TrimSpace(text) == "" || expected[text] {
+			return errors.New("Claude question request has missing or ambiguous question text")
+		}
+		expected[text] = true
+		if strings.TrimSpace(answers[text]) == "" {
+			return fmt.Errorf("Claude question approval requires an answer to %q", text)
+		}
+	}
+	for text := range answers {
+		if !expected[text] {
+			return fmt.Errorf("Claude question approval contains an unknown question %q", text)
+		}
 	}
 	return nil
 }
