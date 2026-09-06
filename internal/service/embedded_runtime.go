@@ -194,6 +194,11 @@ type embeddedRuntime struct {
 	closeErr     error
 	poll         time.Duration
 	lastActivity atomic.Int64
+	// activeHTTP counts in-flight Room HTTP requests, including long-lived
+	// connections such as the /api/v1/events SSE stream. It lets the manager
+	// treat an open stream as real use so an idle-suspend decision never closes a
+	// runtime that a browser is still reading from.
+	activeHTTP atomic.Int64
 }
 
 func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project Project, durableRoom Room, cfg EmbeddedRuntimeConfig) (_ RoomRuntime, resultErr error) {
@@ -403,6 +408,12 @@ func (r *embeddedRuntime) LastActivity() time.Time {
 	if r == nil {
 		return time.Time{}
 	}
+	// An open Room HTTP connection is real use. Returning the current time while
+	// any request (including a long-lived SSE stream) is in flight keeps the
+	// manager's idle-suspend check from treating a connected runtime as idle.
+	if r.activeHTTP.Load() > 0 {
+		return time.Now().UTC()
+	}
 	value := r.lastActivity.Load()
 	if value <= 0 {
 		return time.Time{}
@@ -588,6 +599,8 @@ func (r *embeddedRuntime) close(ctx context.Context) (error, bool) {
 
 func (r *embeddedRuntime) drainHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		r.activeHTTP.Add(1)
+		defer r.activeHTTP.Add(-1)
 		r.lastActivity.Store(time.Now().UTC().UnixNano())
 		mutating := request.Method != http.MethodGet && request.Method != http.MethodHead && request.Method != http.MethodOptions
 		if mutating {

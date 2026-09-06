@@ -349,6 +349,65 @@ func TestRuntimeActivityRefreshPreventsPrematureIdleSuspend(t *testing.T) {
 	waitRuntimeStatus(t, manager, rooms[0].ID, func(status RuntimeStatus) bool { return status.Phase == RuntimeSuspended })
 }
 
+// leaseRuntime models the active-connection lease exposed by the real
+// embeddedRuntime: while a Room HTTP request (such as the long-lived
+// /api/v1/events SSE stream) is in flight, LastActivity reports the current
+// time. That makes the manager treat an open stream as real use and keeps an
+// idle-suspend decision from closing a runtime a browser is still reading.
+type leaseRuntime struct {
+	busy      atomic.Bool
+	connected atomic.Bool
+	now       func() time.Time
+	closeOnce sync.Once
+	closed    chan struct{}
+}
+
+func (r *leaseRuntime) URL() string { return "http://room.invalid/lease" }
+func (r *leaseRuntime) Busy() bool  { return r.busy.Load() }
+func (r *leaseRuntime) Close(context.Context) error {
+	r.closeOnce.Do(func() { close(r.closed) })
+	return nil
+}
+func (r *leaseRuntime) LastActivity() time.Time {
+	if r.connected.Load() {
+		return r.now()
+	}
+	return time.Time{}
+}
+
+func TestOpenHTTPConnectionPreventsIdleSuspend(t *testing.T) {
+	registry, rooms := provisionRuntimeRooms(t, 1)
+	base := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)
+	var now atomic.Int64
+	now.Store(base.UnixNano())
+	lease := &leaseRuntime{now: func() time.Time { return time.Unix(0, now.Load()).UTC() }, closed: make(chan struct{})}
+	manager, err := NewRuntimeManager(registry, func(context.Context, Room) (RoomRuntime, error) {
+		return lease, nil
+	}, RuntimeManagerConfig{
+		Limit: 1, IdleTimeout: 10 * time.Minute, PollInterval: 5 * time.Millisecond, CloseTimeout: time.Second,
+		Now: func() time.Time { return time.Unix(0, now.Load()).UTC() },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownRuntimeManager(t, manager, nil)
+	activateRuntime(t, manager, rooms[0].ID)
+
+	// An open SSE stream keeps the runtime alive well past the idle timeout.
+	lease.connected.Store(true)
+	now.Store(base.Add(30 * time.Minute).UnixNano())
+	time.Sleep(30 * time.Millisecond)
+	if status := manager.Status(rooms[0].ID); status.Phase != RuntimeActive {
+		t.Fatalf("runtime suspended while an HTTP connection is open: %#v", status)
+	}
+
+	// Once the last connection closes, the runtime earns a full idle window from
+	// the moment it stopped seeing active HTTP use, then is suspended.
+	lease.connected.Store(false)
+	now.Store(base.Add(41 * time.Minute).UnixNano())
+	waitRuntimeStatus(t, manager, rooms[0].ID, func(status RuntimeStatus) bool { return status.Phase == RuntimeSuspended })
+}
+
 func TestBusyRuntimeReceivesFullIdleWindowAfterTurnCompletes(t *testing.T) {
 	registry, rooms := provisionRuntimeRooms(t, 1)
 	base := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)
