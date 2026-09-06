@@ -59,6 +59,21 @@ func TestRoomSurfaceGatewayUsesManagementSessionAndHidesRuntimeToken(t *testing.
 		switch r.URL.Path {
 		case "/", "/index.html":
 			io.WriteString(w, `<html><body>room-index</body></html>`)
+		case "/activity-view.js":
+			w.Header().Set("Content-Type", "application/javascript")
+			io.WriteString(w, `window.PairRoomActivity = {};`)
+		case "/api/v1/participants/codex/permissions":
+			if r.Method != http.MethodPut {
+				http.Error(w, "expected PUT", http.StatusMethodNotAllowed)
+				return
+			}
+			body, err := io.ReadAll(r.Body)
+			if err != nil || string(body) != `{"profile":"read-only"}` || r.Header.Get(websession.CSRFHeaderName) != "" {
+				http.Error(w, "permission payload changed or CSRF leaked to Runtime", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"ok":true}`)
 		case "/api/v1/snapshot":
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"ok":true}`)
@@ -151,6 +166,29 @@ func TestRoomSurfaceGatewayUsesManagementSessionAndHidesRuntimeToken(t *testing.
 	}
 	if strings.Contains(index.Body.String(), "runtime-secret") {
 		t.Fatal("runtime token leaked through surface HTML")
+	}
+
+	asset := httptest.NewRecorder()
+	assetRequest := managementRequest(http.MethodGet, "/api/v1/rooms/"+room.ID+"/surface/activity-view.js", "", false)
+	assetRequest.AddCookie(cookie)
+	server.Handler().ServeHTTP(asset, assetRequest)
+	if asset.Code != http.StatusOK || asset.Body.String() != `window.PairRoomActivity = {};` {
+		t.Fatalf("activity module unavailable through gateway: status=%d body=%s", asset.Code, asset.Body.String())
+	}
+
+	for _, csrf := range []bool{false, true} {
+		response := httptest.NewRecorder()
+		request := managementRequest(http.MethodPut, "/api/v1/rooms/"+room.ID+"/surface/api/v1/participants/codex/permissions", `{"profile":"read-only"}`, false)
+		request.AddCookie(cookie)
+		want := http.StatusForbidden
+		if csrf {
+			request.Header.Set(websession.CSRFHeaderName, session.CSRF)
+			want = http.StatusOK
+		}
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != want {
+			t.Fatalf("permission gateway with csrf=%v: status=%d want=%d body=%s", csrf, response.Code, want, response.Body.String())
+		}
 	}
 
 	snapshot := httptest.NewRecorder()

@@ -22,6 +22,7 @@ var surfaceStaticFiles = map[string]struct{}{
 	"/favicon.svg":              {},
 	"/styles.css":               {},
 	"/ux.css":                   {},
+	"/activity-view.js":         {},
 	"/app.js":                   {},
 	"/ux.js":                    {},
 	"/room-shell.js":            {},
@@ -96,10 +97,22 @@ func allowedSurfaceRequest(method, p string) bool {
 		return method == http.MethodPost
 	case strings.HasPrefix(p, "/api/v1/messages/") && strings.HasSuffix(p, "/cancel"):
 		return method == http.MethodPost
-	case strings.HasPrefix(p, "/api/v1/participants/") && strings.HasSuffix(p, "/role"):
-		return method == http.MethodPut
 	case strings.HasPrefix(p, "/api/v1/participants/"):
-		return method == http.MethodPost
+		actor, action, ok := strings.Cut(strings.TrimPrefix(p, "/api/v1/participants/"), "/")
+		if !ok || actor == "" {
+			return false
+		}
+		// Keep the public gateway aligned with the Room's native controls.
+		// Removed role switching and unknown/nested actions must not pass through.
+		if action == "permissions" {
+			return method == http.MethodPut
+		}
+		switch strings.ToLower(action) {
+		case "start", "stop", "restart", "interrupt":
+			return method == http.MethodPost
+		default:
+			return false
+		}
 	case strings.HasPrefix(p, "/api/v1/approvals/"):
 		return method == http.MethodPost
 	default:
