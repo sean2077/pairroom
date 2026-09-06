@@ -10,7 +10,7 @@ PairRoom's CLI, Event Log, HTTP API, and native adapters evolve with the officia
 4. Record the current binary, Claude Code / Codex / Grok Build, and configuration versions;
 5. Make sure the working repository has no unrecognized native side effects.
 
-## Pending retry exclusion (Unreleased)
+## Pending retry exclusion (v3.0.1)
 
 A retry request returns HTTP 409 while a direct retry of the same source Message and participant is already waiting or working. External clients should display the existing pending attempt instead of repeatedly submitting. Completed/failed/cancelled attempts still allow an explicit new retry. This change adds no schema, event kind, or native prompt; Store schema 10 / provisioning schema 3 remain unchanged. Normal stop/drain and reverting the code are sufficient to roll back this change without rewriting Room data.
 
