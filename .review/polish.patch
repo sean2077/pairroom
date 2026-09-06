@@ -1,0 +1,111 @@
+diff --git a/internal/server/assets/styles.css b/internal/server/assets/styles.css
+index 74935b0..31bae62 100644
+--- a/internal/server/assets/styles.css
++++ b/internal/server/assets/styles.css
+@@ -122 +121,0 @@ button { color: inherit; }
+-.role-select { width: 100%; margin-top: 8px; padding: 6px 8px; font-size: var(--text-control); }
+@@ -138 +137 @@ button { color: inherit; }
+-.select-control, .mini-select, .role-select {
++.select-control, .mini-select, .permission-select {
+@@ -655 +654 @@ html[data-embed="1"] .session-copy {
+-.permission-select { width: 100%; min-height: 36px; margin-top: 8px; font-size: 12px; }
++.permission-select { appearance: auto; width: 100%; min-height: 36px; margin-top: 8px; padding: 6px 8px; font-size: var(--text-control); }
+diff --git a/internal/server/assets/ux.css b/internal/server/assets/ux.css
+index b598cdc..c43d5ca 100644
+--- a/internal/server/assets/ux.css
++++ b/internal/server/assets/ux.css
+@@ -195 +195 @@ body.ux-enhanced .message-row:focus-within .reply-action { opacity: 1; }
+-  body.ux-enhanced :is(.target-button, .attach-button, .mini-button, .role-select) { min-height: 44px; }
++  body.ux-enhanced :is(.target-button, .attach-button, .mini-button, .permission-select) { min-height: 44px; }
+diff --git a/internal/server/server_test.go b/internal/server/server_test.go
+index a2c2572..433bb82 100644
+--- a/internal/server/server_test.go
++++ b/internal/server/server_test.go
+@@ -7,0 +8 @@ import (
++	"errors"
+@@ -12,0 +14 @@ import (
++	"sync/atomic"
+@@ -33 +35 @@ func newTestServerWithBoundary(t *testing.T, token, boundary string) (*Server, *
+-func newTestServerWithOptions(t *testing.T, token, boundary, cookieName string) (*Server, *room.Engine) {
++func newTestServerWithOptions(t *testing.T, token, boundary, cookieName string, codexFactories ...agent.Factory) (*Server, *room.Engine) {
+@@ -44,0 +47,4 @@ func newTestServerWithOptions(t *testing.T, token, boundary, cookieName string)
++	codexFactory := agent.MockFactory
++	if len(codexFactories) > 0 {
++		codexFactory = codexFactories[0]
++	}
+@@ -48 +54 @@ func newTestServerWithOptions(t *testing.T, token, boundary, cookieName string)
+-		ClaudeFactory: agent.MockFactory, CodexFactory: agent.MockFactory,
++		ClaudeFactory: agent.MockFactory, CodexFactory: codexFactory,
+@@ -477,0 +484,14 @@ func TestSSECursorKeepsTransientEventsLive(t *testing.T) {
++// Fail the initial native submission deterministically instead of trying to
++// inject a failure before a millisecond Mock Turn finishes on a loaded runner.
++type failFirstTurnAdapter struct {
++	agent.Adapter
++	failed atomic.Bool
++}
++
++func (a *failFirstTurnAdapter) StartTurn(ctx context.Context, input model.AgentInput) error {
++	if !a.failed.Swap(true) {
++		return errors.New("synthetic submission failure")
++	}
++	return a.Adapter.StartTurn(ctx, input)
++}
++
+@@ -479 +499,3 @@ func TestRetryAndExportAPI(t *testing.T) {
+-	server, engine := newTestServer(t, "")
++	server, engine := newTestServerWithOptions(t, "", "", "", func(cfg agent.Config, sink agent.EventSink) agent.Adapter {
++		return &failFirstTurnAdapter{Adapter: agent.MockFactory(cfg, sink)}
++	})
+@@ -493 +515,2 @@ func TestRetryAndExportAPI(t *testing.T) {
+-	deadline := time.Now().Add(time.Second)
++	deadline := time.Now().Add(5 * time.Second)
++	failed := false
+@@ -495 +517,0 @@ func TestRetryAndExportAPI(t *testing.T) {
+-		var accepted bool
+@@ -497,2 +519,2 @@ func TestRetryAndExportAPI(t *testing.T) {
+-			if message.ID == original.ID && message.Delivery[model.ActorCodex] != model.DeliveryPending {
+-				accepted = true
++			if message.ID == original.ID && message.Delivery[model.ActorCodex] == model.DeliveryFailed {
++				failed = true
+@@ -502 +524 @@ func TestRetryAndExportAPI(t *testing.T) {
+-		if accepted {
++		if failed {
+@@ -505 +527 @@ func TestRetryAndExportAPI(t *testing.T) {
+-		time.Sleep(5 * time.Millisecond)
++		time.Sleep(time.Millisecond)
+@@ -507,6 +529,2 @@ func TestRetryAndExportAPI(t *testing.T) {
+-	currentTurn := ""
+-	for _, value := range engine.Snapshot().Messages {
+-		if value.ID == original.ID {
+-			currentTurn = value.ProcessingTurn[model.ActorCodex]
+-			break
+-		}
++	if !failed {
++		t.Fatal("initial submission did not reach failed delivery state")
+@@ -514,5 +531,0 @@ func TestRetryAndExportAPI(t *testing.T) {
+-	engine.HandleRuntimeEvent(model.RuntimeEvent{
+-		Agent: model.ActorCodex, Kind: model.RuntimeInputFailed,
+-		CorrelationID: original.ID, TurnID: currentTurn, Text: "synthetic failure",
+-		CreatedAt: time.Now().UTC(),
+-	})
+diff --git a/scripts/test_room_browser.py b/scripts/test_room_browser.py
+index ff0e90d..d18ebc1 100644
+--- a/scripts/test_room_browser.py
++++ b/scripts/test_room_browser.py
+@@ -70 +70 @@ def fixture_html() -> str:
+-      window.__approvalSent = []; window.__failApproval = false; window.__permissionSent = [];
++      window.__approvalSent = []; window.__failApproval = false; window.__approvalGate = null; window.__permissionSent = [];
+@@ -84 +84,2 @@ def fixture_html() -> str:
+-          await new Promise(resolve => setTimeout(resolve, window.__postDelay));
++          if (window.__approvalGate) await window.__approvalGate;
++          else await new Promise(resolve => setTimeout(resolve, window.__postDelay));
+@@ -159 +160 @@ async def verify_approvals(browser, artifacts: Path) -> dict:
+-    await page.evaluate('__failApproval = true')
++    await page.evaluate('__failApproval = true; __approvalGate = new Promise(resolve => { __releaseApproval = resolve; })')
+@@ -164,0 +166 @@ async def verify_approvals(browser, artifacts: Path) -> dict:
++    await page.evaluate('__releaseApproval(); __approvalGate = null')
+@@ -219,0 +222 @@ async def verify_collaboration(browser, artifacts: Path) -> dict:
++    assert await page.locator("[data-permission-actor=codex]").evaluate("node=>{const s=getComputedStyle(node); return parseFloat(s.borderTopLeftRadius)>0 && parseFloat(s.paddingLeft)>=8;}"), "permission control lost shared form styling"
+@@ -248 +251 @@ async def verify_collaboration(browser, artifacts: Path) -> dict:
+-            "responsibility_not_permission": True, "custom_instructions_verbatim": True, "collaboration_page_errors": errors}
++            "responsibility_not_permission": True, "permission_control_styled": True, "custom_instructions_verbatim": True, "collaboration_page_errors": errors}
