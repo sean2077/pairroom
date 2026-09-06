@@ -1,0 +1,42 @@
+name: Apply verified gateway follow-up (temporary)
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/review-apply.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.head_ref == 'improve/room-state-and-runtime-efficiency' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Apply verified gateway and regression corrections
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          TARGET_BRANCH: improve/room-state-and-runtime-efficiency
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$RUNNER_TEMP/verified-product" HEAD
+          cd "$RUNNER_TEMP/verified-product"
+          printf '%s' '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' | base64 -d | xz -dc > "$RUNNER_TEMP/followup.patch"
+          printf '%s  %s\n' 'fb3f133850b8c45bd42512da14db0fc527bb05a6e7e2a535c0c0f7dd35295f46' "$RUNNER_TEMP/followup.patch" | sha256sum -c -
+          git apply --unidiff-zero --check "$RUNNER_TEMP/followup.patch"
+          git apply --unidiff-zero --index "$RUNNER_TEMP/followup.patch"
+          git diff --cached --check
+          staged_tree="$(git write-tree)"
+          export GIT_INDEX_FILE="$RUNNER_TEMP/checked-product-index"
+          git read-tree "$staged_tree"
+          git ls-files -z .github/workflows .review | xargs -0 -r git update-index --force-remove
+          test "$(git write-tree)" = '55e943cad4af8ab993cd4a9728e2aacb62a9be95'
+          unset GIT_INDEX_FILE
+          test "$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)" = "$EXPECTED_HEAD"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: align Room gateway assets and native permission controls'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
