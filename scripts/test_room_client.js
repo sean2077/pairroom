@@ -24,6 +24,8 @@ function client() {
         scrollHeight: 300, scrollTop: 0, clientHeight: 100,
         addEventListener(type, callback) { this.listeners.set(type, callback); },
         setAttribute(key, value) { this.attributes[key] = value; },
+        removeAttribute(key) { delete this.attributes[key]; },
+        reportValidity() { return true; },
         querySelector() { return null; },
         focus() { document.activeElement = this; },
         classList: { add() {}, remove() {}, toggle() {} },
@@ -49,12 +51,14 @@ function client() {
   const hook = `
     globalThis.room = {state, sendMessage, loadSnapshot, connectEvents, applyEvent,
       updateComposerAvailability, removePendingAttachment, clearReply, setPermissions,
+      saveSettings, renderSettings, editSettings, participantAction, retryMessage, cancelMessage,
+      refreshDiff, readGitStatus: refreshGitStatus, processingTransitionAllowed,
       initializeRoomLocalState, persistComposerDraft, scheduleReconnect, loadOlderMessages,
       setAPI(callback) { api = callback; }};
     render = (force) => renders.push(force);
     toast = (message) => notices.push(message);
     renderAttachmentStrip = refreshGitStatus = postSurfaceState = autoSizeComposer =
-      renderParticipants = renderTimeline = queueRender = scrollBottom = setConnection = updateDeliveryHint = updateNotificationButton = recomputeUnread = () => {};
+      renderMessage = renderParticipants = renderTimeline = queueRender = scrollBottom = setConnection = updateDeliveryHint = updateNotificationButton = recomputeUnread = () => {};
   `;
   assert.ok(source.endsWith('  bootRoom();\n})();\n'), 'keep unit-test boot interception explicit');
   vm.runInNewContext(source.replace(/  bootRoom\(\);\n\}\)\(\);\n$/, hook + '\n})();\n'), sandbox);
@@ -66,7 +70,7 @@ function client() {
     return event;
   }
   nodes.get('message-intent').value = 'steer';
-  const snapshot = () => ({ meta: { id: 'test', name: 'Test' }, latest_seq: 10, messages: [], participants: {}, approvals: [], events: [] });
+  const snapshot = () => ({ meta: { id: 'test', name: 'Test' }, latest_seq: 10, settings: {stall_warning_seconds:300}, messages: [], participants: {}, approvals: [], events: [] });
   sandbox.room.state.snapshot = snapshot();
   return { ...sandbox.room, nodes, input, edit, key, timers, storage, localStorage, notices, renders, snapshot };
 }
@@ -244,6 +248,101 @@ async function main() {
     assert.equal(c.state.permissionSubmitting.size, 0);
     assert.ok(c.notices.includes('stop failed'));
   }
-  console.log('room-client transport and composer: ok');
+  {
+    const c = client();
+    c.renderSettings();
+    c.nodes.get('stall-warning').value = '600'; c.editSettings();
+    c.state.snapshot.settings.stall_warning_seconds = 900; c.renderSettings();
+    assert.equal(c.nodes.get('stall-warning').value, '600', 'remote settings must not erase unsaved edits');
+    assert.equal(c.state.settingsDirty, true);
+    const oldRead = deferred(), write = deferred(); let reads = 0, writes = 0;
+    c.setAPI((_path, options) => {
+      if (options?.method === 'PUT') { writes++; return write.promise; }
+      reads++; if (reads === 1) return oldRead.promise;
+      const result = c.snapshot(); result.settings.stall_warning_seconds = 600; return Promise.resolve(result);
+    });
+    const loading = c.loadSnapshot(), saving = c.saveSettings();
+    await c.saveSettings(); assert.equal(writes, 1);
+    c.nodes.get('stall-warning').value = '1200'; c.editSettings();
+    write.resolve({}); await Promise.resolve(); assert.equal(reads, 1);
+    oldRead.resolve(c.snapshot()); await loading; await saving;
+    assert.equal(reads, 2, 'save must be confirmed by a post-write read');
+    assert.equal(c.nodes.get('stall-warning').value, '1200', 'edits made during Save must survive confirmation');
+    assert.equal(c.state.settingsDirty, true);
+    c.setAPI(async (_path, options) => {
+      const value = c.snapshot(); value.settings.stall_warning_seconds = 1200; return value;
+    });
+    await c.saveSettings();
+    assert.equal(c.state.settingsDirty, false);
+    assert.equal(c.nodes.get('stall-warning').value, 1200);
+  }
+  {
+    const c = client(); c.renderSettings();
+    c.nodes.get('stall-warning').value = '600'; c.editSettings();
+    c.setAPI(async () => { throw new Error('offline'); });
+    await c.saveSettings(); assert.equal(c.nodes.get('stall-warning').value, '600');
+    assert.equal(c.state.settingsDirty, true); assert.equal(c.state.settingsSaving, false);
+  }
+  {
+    const c = client(), write = deferred(); let writes = 0;
+    c.setAPI((_path, options) => {
+      if (options?.method) { writes++; return write.promise; }
+      return Promise.resolve(c.snapshot());
+    });
+    const start = c.participantAction('claude', 'restart');
+    await c.participantAction('claude', 'stop');
+    await c.setPermissions('claude', 'yolo');
+    assert.equal(writes, 1, 'participant operations and permissions share one in-flight owner');
+    write.resolve({}); await start; assert.equal(c.state.participantActions.size, 0);
+  }
+  {
+    const c = client(), request = deferred(); let writes = 0;
+    c.setAPI((_path, options) => {
+      if (options?.method === 'POST') { writes++; return request.promise; }
+      const snapshot = c.snapshot(); snapshot.messages = [{ id:'child', retry_of:'source', processing:{codex:'waiting'} }];
+      return Promise.resolve(snapshot);
+    });
+    const pending = c.retryMessage('source', 'codex', {});
+    await c.retryMessage('source', 'codex', {}); await c.cancelMessage('source', 'codex', {});
+    assert.equal(writes, 1, 'DOM replacement cannot unlock a native message operation');
+    request.resolve({}); await pending;
+    await c.retryMessage('source', 'codex', {});
+    assert.equal(writes, 1, 'visible pending retry stays excluded after the HTTP response');
+    assert.equal(c.state.messageActions.size, 0);
+  }
+  {
+    const c = client(), request = deferred(); let writes = 0;
+    c.setAPI((_path, options) => { if (options?.method) { writes++; return request.promise; } return Promise.resolve(c.snapshot()); });
+    const pending = c.cancelMessage('source', 'codex', {}); await c.cancelMessage('source', 'codex', {});
+    assert.equal(writes, 1); request.resolve({}); await pending; assert.equal(c.state.messageActions.size, 0);
+  }
+  {
+    const c = client();
+    c.state.snapshot.messages = [{id:'message', processing:{codex:'completed'}}];
+    c.applyEvent({seq:11,kind:'message.processing.updated',data:{message_id:'message',target:'codex',state:'working'}});
+    assert.equal(c.state.snapshot.messages[0].processing.codex, 'completed', 'late receipts cannot revive settled work');
+    assert.equal(c.processingTransitionAllowed('working','waiting'),false);
+    assert.equal(c.processingTransitionAllowed('working','failed'),true);
+    c.state.snapshot.events = [{id:'evidence',kind:'runtime.event',data:{kind:'log'}}];
+    for(let i=0;i<700;i++) c.applyEvent({kind:'runtime.event',data:{agent:'claude',kind:'text.delta',text:'a'}});
+    assert.equal(c.state.snapshot.events.length, 1, 'text tokens must not displace diagnostics');
+    assert.equal(c.state.drafts.claude.length, 700, 'full text stays in its draft projection');
+  }
+  {
+    const c = client(), older = deferred(), newer = deferred(); let reads = 0;
+    c.setAPI(() => (++reads === 1 ? older.promise : newer.promise));
+    c.nodes.get('staged-diff').checked = false;
+    const first = c.refreshDiff(); c.nodes.get('staged-diff').checked = true; const second = c.refreshDiff();
+    newer.resolve({text:'staged evidence'}); await second; older.resolve({text:'obsolete worktree'}); await first;
+    assert.equal(c.nodes.get('diff-output').textContent, 'staged evidence');
+    assert.equal(c.nodes.get('diff-output').attributes['aria-busy'], 'false');
+  }
+  {
+    const c = client(), older = deferred(); let reads = 0;
+    c.setAPI(() => (++reads === 1 ? older.promise : Promise.resolve({text:'latest status'})));
+    const first = c.readGitStatus(); await c.readGitStatus(); older.reject(new Error('obsolete error')); await first;
+    assert.equal(c.nodes.get('git-status').textContent, 'latest status');
+  }
+  console.log('room-client transport, lifecycle, settings and Git state: ok');
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

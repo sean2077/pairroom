@@ -726,7 +726,7 @@ func TestAttachmentUploadRejectsNonImageAndSecurityHeadersAllowBlobPreview(t *te
 
 func TestWindowedSnapshotAndMessagePaginationAPI(t *testing.T) {
 	t.Parallel()
-	server, engine := newTestServer(t, "")
+	server, engine := newDormantTestServer(t)
 	for i := 0; i < 9; i++ {
 		if _, err := engine.Send(context.Background(), room.SendRequest{
 			Text: fmt.Sprintf("history-%02d", i), To: []model.ActorID{model.ActorClaude},

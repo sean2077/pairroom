@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/sean2077/pairroom/internal/agent"
 	"github.com/sean2077/pairroom/internal/bus"
@@ -608,7 +607,7 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 		return model.Message{}, err
 	}
 	if len(targets) == 0 {
-		return model.Message{}, errors.New("message has no target; use an exact Agent handle, Driver, or Reviewer")
+		return model.Message{}, errors.New("message has no target; choose an exact participant handle")
 	}
 	if len(targets) != 1 {
 		return model.Message{}, errors.New("a Room message accepts exactly one starting Agent")
@@ -823,6 +822,9 @@ func (e *Engine) Retry(ctx context.Context, messageID string, req RetryRequest) 
 
 	e.mu.RLock()
 	original, found := e.findMessageLocked(messageID)
+	if found {
+		original = cloneMessage(original) // Late native receipts may still update lifecycle maps.
+	}
 	e.mu.RUnlock()
 	if !found {
 		return model.Message{}, fmt.Errorf("unknown message %q", messageID)
@@ -852,6 +854,23 @@ func (e *Engine) Retry(ctx context.Context, messageID string, req RetryRequest) 
 			return model.Message{}, fmt.Errorf("delivery to %s is not retryable", e.participantName(target))
 		}
 	}
+
+	// One source/target may have only one pending retry, even when independent
+	// browser sessions race. The original remains auditable and retryable after
+	// that child settles; no model input is silently replayed or deduplicated by text.
+	e.mu.RLock()
+	for _, message := range e.snapshot.Messages {
+		if message.RetryOf != original.ID {
+			continue
+		}
+		for _, target := range targets {
+			if state := message.Processing[target]; state == model.ProcessingWaiting || state == model.ProcessingWorking {
+				e.mu.RUnlock()
+				return model.Message{}, errors.New("a retry for this message and participant is already pending")
+			}
+		}
+	}
+	e.mu.RUnlock()
 
 	intent := original.Intent
 	if intent == "" {
@@ -2089,115 +2108,6 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 	}
 }
 
-func (e *Engine) projectTurnSummary(runtimeEvent model.RuntimeEvent) {
-	if !runtimeEvent.Agent.ValidParticipant() || strings.TrimSpace(runtimeEvent.TurnID) == "" {
-		return
-	}
-	id := string(runtimeEvent.Agent) + ":" + runtimeEvent.TurnID
-	e.mu.RLock()
-	var summary model.TurnSummary
-	for _, existing := range e.snapshot.Turns {
-		if existing.ID == id {
-			summary = cloneTurnSummary(existing)
-			break
-		}
-	}
-	e.mu.RUnlock()
-	if summary.ID == "" {
-		summary = model.TurnSummary{
-			ID: id, Agent: runtimeEvent.Agent, TurnID: runtimeEvent.TurnID,
-			Status: "working", StartedAt: runtimeEvent.CreatedAt,
-		}
-	}
-	if summary.StartedAt.IsZero() {
-		summary.StartedAt = runtimeEvent.CreatedAt
-	}
-	summary.UpdatedAt = runtimeEvent.CreatedAt
-	if runtimeEvent.SessionID != "" {
-		summary.SessionID = runtimeEvent.SessionID
-	}
-	if runtimeEvent.CorrelationID != "" && !containsString(summary.MessageIDs, runtimeEvent.CorrelationID) {
-		summary.MessageIDs = append(summary.MessageIDs, runtimeEvent.CorrelationID)
-	}
-
-	persist := true
-	switch runtimeEvent.Kind {
-	case model.RuntimeTurnStarted:
-		summary.Status = "working"
-	case model.RuntimeToolStarted:
-		upsertTurnItem(&summary, runtimeEvent, "tool", "working")
-	case model.RuntimeToolCompleted:
-		upsertTurnItem(&summary, runtimeEvent, "tool", "completed")
-	case model.RuntimeCommandOutput:
-		item := findOrCreateTurnItem(&summary, runtimeEvent.ItemID, "command")
-		item.Status = "working"
-		item.Detail = boundedTail(item.Detail+runtimeEvent.Text, 12<<10)
-		persist = false
-	case model.RuntimePlanUpdated:
-		if runtimeEvent.Text != "" {
-			summary.Plan = boundedTail(summary.Plan+runtimeEvent.Text, 24<<10)
-		} else if len(runtimeEvent.Data) > 0 {
-			summary.Plan = boundedTail(string(runtimeEvent.Data), 24<<10)
-		}
-	case model.RuntimeDiffUpdated:
-		if runtimeEvent.Text != "" {
-			summary.Diff = boundedTail(runtimeEvent.Text, 48<<10)
-		} else if len(runtimeEvent.Data) > 0 {
-			summary.Diff = boundedTail(string(runtimeEvent.Data), 48<<10)
-		}
-	case model.RuntimeUsageUpdated:
-		summary.Usage = boundedRaw(runtimeEvent.Data, 16<<10)
-	case model.RuntimeFinal:
-		summary.FinalText = boundedTail(runtimeEvent.Text, 48<<10)
-	case model.RuntimeInputCancelled:
-		summary.Status = "cancelled"
-		summary.Error = boundedTail(runtimeEvent.Text, 8<<10)
-	case model.RuntimeInputFailed:
-		summary.Status = "failed"
-		summary.Error = boundedTail(runtimeEvent.Text, 8<<10)
-	case model.RuntimeError:
-		// Keep diagnostic errors visible without declaring the native Turn
-		// terminal. A later input.failed or turn.completed owns final status.
-		summary.Error = boundedTail(runtimeEvent.Text, 8<<10)
-	case model.RuntimeTurnCompleted:
-		for i := range summary.Items {
-			if summary.Items[i].CompletedAt == nil && summary.Items[i].Status == "working" {
-				summary.Items[i].Status = "completed"
-				completed := runtimeEvent.CreatedAt
-				summary.Items[i].CompletedAt = &completed
-			}
-		}
-		status := strings.TrimSpace(runtimeEvent.Name)
-		if status == "" || status == "completed" || status == "success" {
-			status = "completed"
-		}
-		if summary.Status != "failed" && summary.Status != "cancelled" {
-			summary.Status = status
-		}
-		completed := runtimeEvent.CreatedAt
-		summary.CompletedAt = &completed
-		summary.DurationMillis = max(int64(0), completed.Sub(summary.StartedAt).Milliseconds())
-	case model.RuntimeTextDelta, model.RuntimeState, model.RuntimeSession, model.RuntimeInfoUpdated:
-		return
-	default:
-		// Retain a summary heartbeat for durable turn-scoped events, but avoid
-		// creating extra events for unrelated adapter status notifications.
-		if runtimeEvent.Kind == model.RuntimeLog || runtimeEvent.Kind == model.RuntimeApprovalRequested || runtimeEvent.Kind == model.RuntimeApprovalResolved {
-			persist = false
-		}
-	}
-	if len(summary.Items) > 128 {
-		summary.Items = append([]model.TurnWorkItem(nil), summary.Items[len(summary.Items)-128:]...)
-	}
-	if persist {
-		_, _ = e.record(EventTurnSummaryUpdated, runtimeEvent.Agent, summary)
-		return
-	}
-	e.mu.Lock()
-	replaceTurnSummaryLocked(&e.snapshot, summary)
-	e.mu.Unlock()
-}
-
 // runtimeTurnMatches rejects a late completion from an older native turn.
 // Vendor streams can deliver notifications after a replacement turn has
 // already started; treating that stale notification as the current boundary
@@ -2304,91 +2214,6 @@ func (e *Engine) settleTurnInputs(runtimeEvent model.RuntimeEvent) {
 	for _, messageID := range messageIDs {
 		e.processing(messageID, runtimeEvent.Agent, state, detail, runtimeEvent.TurnID)
 	}
-}
-
-func upsertTurnItem(summary *model.TurnSummary, event model.RuntimeEvent, kind, status string) {
-	item := findOrCreateTurnItem(summary, event.ItemID, kind)
-	if event.Name != "" {
-		item.Name = event.Name
-	}
-	item.Status = status
-	if item.StartedAt.IsZero() {
-		item.StartedAt = event.CreatedAt
-	}
-	if event.Text != "" {
-		item.Detail = boundedTail(event.Text, 12<<10)
-	}
-	if len(event.Data) > 0 {
-		item.Data = boundedRaw(event.Data, 16<<10)
-	}
-	if status == "completed" || status == "failed" || status == "cancelled" {
-		completed := event.CreatedAt
-		item.CompletedAt = &completed
-	}
-}
-
-func findOrCreateTurnItem(summary *model.TurnSummary, itemID, kind string) *model.TurnWorkItem {
-	if itemID == "" {
-		itemID = kind + "-" + fmt.Sprint(len(summary.Items)+1)
-	}
-	for i := range summary.Items {
-		if summary.Items[i].ID == itemID {
-			if summary.Items[i].Kind == "" {
-				summary.Items[i].Kind = kind
-			}
-			return &summary.Items[i]
-		}
-	}
-	summary.Items = append(summary.Items, model.TurnWorkItem{ID: itemID, Kind: kind, Status: "working"})
-	return &summary.Items[len(summary.Items)-1]
-}
-
-func boundedTail(value string, limit int) string {
-	if limit <= 0 || len(value) <= limit {
-		return value
-	}
-	marker := "…"
-	if limit < len(marker) {
-		marker = ""
-	}
-	start := len(value) - (limit - len(marker))
-	for start < len(value) && !utf8.RuneStart(value[start]) {
-		start++
-	}
-	return marker + value[start:]
-}
-
-func boundedRaw(value json.RawMessage, limit int) json.RawMessage {
-	if len(value) == 0 {
-		return nil
-	}
-	if len(value) <= limit {
-		return append(json.RawMessage(nil), value...)
-	}
-	wrapped, _ := json.Marshal(map[string]any{
-		"truncated": true,
-		"tail":      boundedTail(string(value), limit-64),
-	})
-	return wrapped
-}
-
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
-}
-
-func replaceTurnSummaryLocked(snapshot *model.RoomSnapshot, summary model.TurnSummary) {
-	for i := range snapshot.Turns {
-		if snapshot.Turns[i].ID == summary.ID {
-			snapshot.Turns[i] = summary
-			return
-		}
-	}
-	snapshot.Turns = append(snapshot.Turns, summary)
 }
 
 // High-volume display telemetry is useful while a turn is running but should
@@ -3142,7 +2967,11 @@ func (e *Engine) applyLocked(event model.Event) error {
 
 	e.snapshot.Events = append(e.snapshot.Events, event)
 	if len(e.snapshot.Events) > recentEventLimit {
-		e.snapshot.Events = append([]model.Event(nil), e.snapshot.Events[len(e.snapshot.Events)-recentEventLimit:]...)
+		// Advance the bounded window rather than copying 600 structs per event.
+		// Clear the retired entry so its payload can be reclaimed even while the
+		// current window still shares the old backing array.
+		e.snapshot.Events[0] = model.Event{}
+		e.snapshot.Events = e.snapshot.Events[1:]
 	}
 	return nil
 }
@@ -3190,95 +3019,6 @@ func processingTransitionAllowed(current, next model.ProcessingState) bool {
 		return true
 	}
 	return current == next
-}
-
-func cloneSnapshot(in model.RoomSnapshot) model.RoomSnapshot {
-	out := in
-	out.Meta.Collaboration = model.CloneCollaboration(in.Meta.Collaboration)
-	out.Messages = make([]model.Message, len(in.Messages))
-	for i, message := range in.Messages {
-		out.Messages[i] = cloneMessage(message)
-	}
-	if in.MessageWindow != nil {
-		window := *in.MessageWindow
-		out.MessageWindow = &window
-	}
-	out.Approvals = make([]model.Approval, len(in.Approvals))
-	for i, approval := range in.Approvals {
-		out.Approvals[i] = approval
-		out.Approvals[i].Detail = append(json.RawMessage(nil), approval.Detail...)
-	}
-	out.Turns = make([]model.TurnSummary, len(in.Turns))
-	for i, summary := range in.Turns {
-		out.Turns[i] = cloneTurnSummary(summary)
-	}
-	out.Participants = make(map[model.ActorID]model.ParticipantSnapshot, len(in.Participants))
-	for key, value := range in.Participants {
-		value.Runtime = cloneRuntimeInfo(value.Runtime)
-		value.Workspace.Warnings = append([]string(nil), value.Workspace.Warnings...)
-		out.Participants[key] = value
-	}
-	out.Events = make([]model.Event, len(in.Events))
-	for i, event := range in.Events {
-		out.Events[i] = event
-		out.Events[i].Data = append(json.RawMessage(nil), event.Data...)
-	}
-	return out
-}
-
-func cloneMessage(message model.Message) model.Message {
-	out := message
-	out.To = append([]model.ActorID(nil), message.To...)
-	out.Attachments = append([]model.Attachment(nil), message.Attachments...)
-	out.Delivery = cloneDelivery(message.Delivery)
-	out.DeliveryDetail = cloneDetails(message.DeliveryDetail)
-	out.Processing = cloneProcessing(message.Processing)
-	out.ProcessingDetail = cloneDetails(message.ProcessingDetail)
-	out.ProcessingTurn = cloneDetails(message.ProcessingTurn)
-	out.ProcessingLastUpdatedAt = cloneTimes(message.ProcessingLastUpdatedAt)
-	return out
-}
-
-func cloneTurnSummary(in model.TurnSummary) model.TurnSummary {
-	out := in
-	out.MessageIDs = append([]string(nil), in.MessageIDs...)
-	out.Usage = append(json.RawMessage(nil), in.Usage...)
-	out.Items = make([]model.TurnWorkItem, len(in.Items))
-	for i, item := range in.Items {
-		out.Items[i] = item
-		out.Items[i].Data = append(json.RawMessage(nil), item.Data...)
-	}
-	return out
-}
-
-func cloneRuntimeInfo(in model.RuntimeInfo) model.RuntimeInfo {
-	out := in
-	out.Capabilities = append([]string(nil), in.Capabilities...)
-	out.Warnings = append([]string(nil), in.Warnings...)
-	out.Data = append(json.RawMessage(nil), in.Data...)
-	return out
-}
-
-func cloneProcessing(in map[model.ActorID]model.ProcessingState) map[model.ActorID]model.ProcessingState {
-	if in == nil {
-		return nil
-	}
-	out := make(map[model.ActorID]model.ProcessingState, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
-}
-
-func cloneTimes(in map[model.ActorID]time.Time) map[model.ActorID]time.Time {
-	if in == nil {
-		return nil
-	}
-	out := make(map[model.ActorID]time.Time, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
 }
 
 func ensureMessageLifecycleMaps(message *model.Message) {
@@ -3373,26 +3113,4 @@ func (e *Engine) actorHasPendingApprovalLocked(actor model.ActorID) bool {
 		}
 	}
 	return false
-}
-
-func cloneDelivery(in map[model.ActorID]model.DeliveryState) map[model.ActorID]model.DeliveryState {
-	if in == nil {
-		return nil
-	}
-	out := make(map[model.ActorID]model.DeliveryState, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
-}
-
-func cloneDetails(in map[model.ActorID]string) map[model.ActorID]string {
-	if in == nil {
-		return nil
-	}
-	out := make(map[model.ActorID]string, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
 }

@@ -261,6 +261,94 @@ async def verify_collaboration(browser, artifacts: Path) -> dict:
             "responsibility_not_permission": True, "permission_control_styled": True, "custom_instructions_verbatim": True, "collaboration_page_errors": errors}
 
 
+async def verify_activity(browser, artifacts: Path) -> dict:
+    """The renderer, rather than SSE, owns identity and unfinished reading."""
+    page = await browser.new_page(viewport={"width": 1440, "height": 1000})
+    page.set_default_timeout(10000)
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    snap = snapshot_fixture()
+    snap['turns'] = [
+        {'id': f'claude:identical-truncated-prefix-{i}', 'turn_id': f'identical-truncated-prefix-{i}',
+         'agent': 'claude', 'status': 'completed', 'updated_at': f'2026-01-01T12:{20-i:02}:00Z',
+         'plan': f'Plan {i}: preserve the complete native evidence and the user reading position.',
+         'items': [{'id': f'command-{i}', 'kind': 'command', 'status': 'completed', 'name': 'go test ./...',
+                    'detail': 'Verified evidence\n' + ('Long output remains inspectable.\n' * 12), 'data': {'exit_code': 0}}]}
+        for i in range(12)
+    ]
+    html = fixture_html().replace(json.dumps(snapshot_fixture()).replace('</', '<\\/'), json.dumps(snap).replace('</', '<\\/'))
+    await page.set_content(html)
+    await page.wait_for_selector('.turn-card')
+    first = page.locator('[data-turn-id="claude:identical-truncated-prefix-0"]')
+    second = page.locator('[data-turn-id="claude:identical-truncated-prefix-1"]')
+    await first.locator(':scope > summary').click()
+    await first.locator('[data-section="plan"] > summary').click()
+    await first.locator('.turn-item > summary').click()
+    assert not await second.evaluate('node => node.open'), 'abbreviated IDs shared state'
+    await page.evaluate("""() => {
+      window.__activityCard = document.querySelector('.turn-card');
+      window.__activityText = __activityCard.querySelector('[data-section="plan"] pre').firstChild;
+      window.__activityFocus = __activityCard.querySelector('.turn-item > summary');
+      __activityFocus.focus();
+      getSelection().setBaseAndExtent(__activityText, 0, __activityText, 6);
+      window.__emit = (kind, data) => {
+        __snapshot.latest_seq++;
+        __sources.at(-1).dispatchEvent(new MessageEvent('pairroom', {data:JSON.stringify({
+          seq:__snapshot.latest_seq, id:'event-'+__snapshot.latest_seq, kind, data})}));
+      };
+      __emit('runtime.event',{kind:'log',agent:'codex',text:'Unrelated native event'});
+    }""")
+    await page.wait_for_timeout(200)
+    assert await page.evaluate('document.querySelector(".turn-card") === __activityCard && __activityText.isConnected')
+    assert await page.evaluate('document.activeElement === __activityFocus && getSelection().toString() === "Plan 0"'), 'event stole focus or selection'
+    # A logically identical new snapshot must retain the actual nodes.
+    await page.evaluate("document.getElementById('refresh-button').click()")
+    await page.wait_for_timeout(200)
+    assert await page.evaluate('document.querySelector(".turn-card") === __activityCard && getSelection().toString() === "Plan 0"')
+    # Updating another section must preserve open Plan/tool sections.
+    await page.evaluate("""() => {const value={...__snapshot.turns[0],usage:{tokens:42}};
+      __snapshot.turns[0]=value; __emit('turn.summary.updated',value); }""")
+    await page.wait_for_selector('[data-section="usage"]')
+    assert await first.locator('[data-section="plan"]').evaluate('node => node.open')
+    assert await first.locator('.turn-item').evaluate('node => node.open')
+    # A hidden tab does no DOM work; returning renders the pending state once.
+    await page.locator('[data-tab="diff"]').click()
+    await page.evaluate("""() => {window.__activityMutations=0;
+      window.__observer=new MutationObserver(records => __activityMutations+=records.length);
+      __observer.observe(document.getElementById('activity-tab'),{childList:true,subtree:true,characterData:true});
+      const value={...__snapshot.turns[0],final_text:'Final evidence after hidden update'};
+      __snapshot.turns[0]=value; __emit('turn.summary.updated',value); }""")
+    await page.wait_for_timeout(200)
+    assert await page.evaluate('__activityMutations') == 0, 'hidden Inspector rebuilt DOM'
+    await page.locator('[data-tab="activity"]').click()
+    await page.wait_for_selector('[data-section="final"]')
+    await page.evaluate('__observer.disconnect(); getSelection().removeAllRanges()')
+    # Scroll away from the top, reorder two offscreen cards, retain visible anchor.
+    await page.locator('#activity-tab').evaluate('node => node.scrollTop=700')
+    anchor = """() => {const el=document.getElementById('activity-tab'),top=el.getBoundingClientRect().top;
+      const node=[...el.children].find(n=>n.dataset.activityKey && n.getBoundingClientRect().bottom>top);
+      return {key:node.dataset.activityKey,offset:node.getBoundingClientRect().top-top};}"""
+    before = await page.evaluate(anchor)
+    await page.evaluate("""() => {const value={...__snapshot.turns[10],updated_at:'2026-01-02T00:00:00Z'};
+      __snapshot.turns[10]=value; __emit('turn.summary.updated',value); }""")
+    await page.wait_for_timeout(200)
+    after = await page.evaluate(anchor)
+    assert before['key'] == after['key'] and abs(before['offset']-after['offset']) < 2, (before, after)
+    await page.locator('#activity-tab').evaluate('node => node.scrollTop=0')
+    await page.screenshot(path=str(artifacts / 'inspector-light-en.png'))
+    await page.evaluate("() => {PairRoomI18n.setLang('zh-CN'); PairRoomTheme.setTheme('dark');}")
+    await page.set_viewport_size({'width':390,'height':844})
+    await page.locator('#ux-layout-button').click()
+    await page.locator('[data-ux-action="inspector"]').click()
+    await page.wait_for_timeout(150)
+    assert not await page.evaluate('document.documentElement.scrollWidth > innerWidth'), 'Inspector causes viewport overflow'
+    await page.screenshot(path=str(artifacts / 'inspector-mobile-dark.png'))
+    assert not errors, errors
+    await page.close()
+    return {'inspector_full_id_keys':True,'inspector_nodes_focus_selection_retained':True,
+            'inspector_hidden_render_deferred':True,'inspector_scroll_anchor':True,'inspector_page_errors':errors}
+
+
 async def verify(browser_path: str | None, artifacts: Path) -> None:
     artifacts.mkdir(parents=True, exist_ok=True)
     results = {}
@@ -358,6 +446,7 @@ async def verify(browser_path: str | None, artifacts: Path) -> None:
             await page.set_viewport_size({"width": 1440, "height": 1000})
         results.update(await verify_approvals(browser, artifacts))
         results.update(await verify_collaboration(browser, artifacts))
+        results.update(await verify_activity(browser, artifacts))
         assert not errors, errors
         results.update(ime_submissions=0, rapid_enter_submissions=1, retained_draft=True,
                        resync_reads_per_burst=1, page_errors=errors)

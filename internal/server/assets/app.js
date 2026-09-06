@@ -27,6 +27,13 @@
     draftCorrelation: { claude: '', codex: '' },
     selectedTarget: 'claude',
     permissionSubmitting: new Set(),
+    participantActions: new Set(),
+    messageActions: new Set(),
+    settingsDirty: false,
+    settingsRevision: 0,
+    settingsSaving: false,
+    gitStatusRequest: 0,
+    diffRequest: 0,
     replyTo: '',
     replyRevision: 0,
     draftRevision: 0,
@@ -246,7 +253,9 @@
     }
     if (durable) state.snapshot.latest_seq = event.seq;
     state.snapshot.events = state.snapshot.events || [];
-    state.snapshot.events.push(event);
+    // Streaming text is accumulated in drafts. It is not diagnostic history
+    // and must not evict useful tool/approval events on every generated token.
+    if (!(event.kind === 'runtime.event' && event.data?.kind === 'text.delta')) state.snapshot.events.push(event);
     if (state.snapshot.events.length > 600) state.snapshot.events.splice(0, state.snapshot.events.length - 600);
     const data = event.data || {};
     let renderScope = 'full';
@@ -280,6 +289,7 @@
           state.drafts[data.from] = '';
           state.draftCorrelation[data.from] = '';
         }
+        if (data.retry_of) queueRuntimeRender(['messages'], data.retry_of);
         renderScope = 'message-created';
         renderMessageID = data.id || '';
         break;
@@ -306,10 +316,13 @@
           message.processing_detail = message.processing_detail || {};
           message.processing_turn = message.processing_turn || {};
           message.processing_last_updated_at = message.processing_last_updated_at || {};
-          message.processing[data.target] = data.state;
-          message.processing_detail[data.target] = data.detail || '';
-          message.processing_turn[data.target] = data.turn_id || '';
-          message.processing_last_updated_at[data.target] = data.updated_at || new Date().toISOString();
+          if (processingTransitionAllowed(message.processing[data.target], data.state)) {
+            message.processing[data.target] = data.state;
+            message.processing_detail[data.target] = data.detail || '';
+            message.processing_turn[data.target] = data.turn_id || '';
+            message.processing_last_updated_at[data.target] = data.updated_at || new Date().toISOString();
+          }
+          if (message.retry_of) queueRuntimeRender(['messages'], message.retry_of);
         }
         renderScope = 'message';
         renderMessageID = data.message_id || '';
@@ -390,6 +403,30 @@
       default:
         return current === next;
     }
+  }
+
+  // Mirror the durable projection: a late receipt cannot revive settled work.
+  function processingTransitionAllowed(current, next) {
+    if (!next) return false;
+    if (!current || current === 'waiting') return true;
+    if (['completed', 'failed', 'cancelled'].includes(current)) return current === next;
+    return ['completed', 'failed', 'cancelled'].includes(next) || current === next;
+  }
+
+  async function refreshAfterWrite() {
+    if (state.snapshotPromise) await state.snapshotPromise.catch(() => {});
+    await loadSnapshot();
+  }
+
+  function participantBusy(actor) {
+    return state.participantActions.has(actor) || state.permissionSubmitting.has(actor);
+  }
+
+  function messageActionKey(id, target) { return JSON.stringify([id, target]); }
+
+  function pendingRetry(id, target) {
+    return (state.snapshot?.messages || []).some((message) => message.retry_of === id
+      && ['waiting', 'working'].includes(message.processing?.[target]));
   }
 
   function render(forceBottom = false) {
@@ -622,7 +659,7 @@
           const option = document.createElement('option'); option.value = value; option.textContent = t(key);
           option.selected = (p.permission_profile || 'configured') === value; permission.appendChild(option);
         }
-        permission.disabled = state.permissionSubmitting.has(actor) || Object.values(state.snapshot.participants).some((p) => !['stopped','idle','error'].includes(p.state));
+        permission.disabled = participantBusy(actor) || Object.values(state.snapshot.participants).some((p) => !['stopped','idle','error'].includes(p.state));
         main.appendChild(permission);
       }
 
@@ -647,14 +684,30 @@
     button.dataset.actor = actor;
     button.dataset.action = action;
     button.textContent = label;
+    button.disabled = participantBusy(actor);
+    button.setAttribute('aria-busy', String(state.participantActions.has(actor)));
     return button;
   }
 
   function renderSettings() {
-    const stall = Number(state.snapshot.settings.stall_warning_seconds ?? 300);
-    $('stall-disabled').checked = stall < 0;
-    $('stall-warning').disabled = stall < 0;
-    $('stall-warning').value = stall < 0 ? 300 : stall;
+    if (!state.settingsDirty && !state.settingsSaving) {
+      const stall = Number(state.snapshot?.settings?.stall_warning_seconds ?? 300);
+      $('stall-disabled').checked = stall < 0;
+      $('stall-warning').value = stall < 0 ? 300 : stall;
+    }
+    $('stall-warning').disabled = $('stall-disabled').checked;
+    const save = $('save-settings');
+    save.removeAttribute('data-i18n');
+    save.disabled = state.settingsSaving || !state.snapshot;
+    save.setAttribute('aria-busy', String(state.settingsSaving));
+    save.textContent = t(state.settingsSaving ? 'room.savingSettings' : 'ui.saveSettings');
+    $('settings-status').textContent = state.settingsDirty ? t('room.unsavedSettings') : '';
+  }
+
+  function editSettings() {
+    state.settingsRevision += 1;
+    state.settingsDirty = true;
+    renderSettings();
   }
 
   function renderStreamingDrafts() {
@@ -1011,6 +1064,9 @@
         retryButton.className = 'retry-button';
         retryButton.dataset.retryId = message.id;
         retryButton.dataset.retryTarget = target;
+        retryButton.disabled = state.messageActions.has(messageActionKey(message.id, target)) || pendingRetry(message.id, target);
+        retryButton.setAttribute('aria-busy', String(state.messageActions.has(messageActionKey(message.id, target))));
+        if (pendingRetry(message.id, target)) retryButton.title = t('room.retryPending');
         retryButton.textContent = t("ui.retryValue", { value0: (displayName(target)) });
         delivery.appendChild(retryButton);
       }
@@ -1019,6 +1075,8 @@
         cancelButton.className = 'cancel-message-button';
         cancelButton.dataset.cancelMessage = message.id;
         cancelButton.dataset.cancelTarget = target;
+        cancelButton.disabled = state.messageActions.has(messageActionKey(message.id, target));
+        cancelButton.setAttribute('aria-busy', String(cancelButton.disabled));
         cancelButton.textContent = t("ui.cancelValue", { value0: (displayName(target)) });
         cancelButton.title = status === 'pending'
           ? t("ui.thisMessageIsStillInTheRoomFifoRemovingItWillNot")
@@ -1304,151 +1362,36 @@
     return [dimensions, formatBytes(value.size)].filter(Boolean).join(' · ');
   }
 
+  let activityView;
   function renderActivity() {
-    const container = $('activity-tab');
-    container.replaceChildren();
+    if (!state.snapshot || state.inspectorTab !== 'activity' || document.hidden || !state.shellActive) return;
+    if (document.querySelector('.inspector-panel')?.getAttribute('aria-hidden') === 'true') return;
     const scope = $('inspector-scope');
     const scopedMessage = state.inspectorCorrelation
-      ? (state.snapshot.messages || []).find((message) => message.id === state.inspectorCorrelation)
-      : null;
+      ? (state.snapshot.messages || []).find((message) => message.id === state.inspectorCorrelation) : null;
     const turnIDs = new Set(scopedMessage ? Object.values(scopedMessage.processing_turn || {}).filter(Boolean) : []);
-    if (scopedMessage) {
-      scope.classList.remove('hidden');
-      $('inspector-scope-text').textContent = t("ui.showOnlyWorkForValueMessageValue", { value0: (displayName(scopedMessage.from)), value1: (truncate(scopedMessage.id, 18)) });
-    } else {
-      scope.classList.add('hidden');
-      $('inspector-scope-text').textContent = '';
-    }
-
+    scope.classList.toggle('hidden', !scopedMessage);
+    $('inspector-scope-text').textContent = scopedMessage
+      ? t('ui.showOnlyWorkForValueMessageValue', { value0: displayName(scopedMessage.from), value1: truncate(scopedMessage.id, 18) }) : '';
     const summaries = (state.snapshot.turns || [])
       .filter((turn) => state.inspectorAgent === 'all' || turn.agent === state.inspectorAgent)
       .filter((turn) => !scopedMessage || (turn.message_ids || []).includes(scopedMessage.id) || turnIDs.has(turn.turn_id))
       .sort((a, b) => String(b.updated_at || b.started_at).localeCompare(String(a.updated_at || a.started_at)))
       .slice(0, 40);
-    if (summaries.length) {
-      const title = document.createElement('div');
-      title.className = 'activity-section-title';
-      title.textContent = t('room.turnSummaries');
-      container.appendChild(title);
-      summaries.forEach((summary) => container.appendChild(renderTurnSummary(summary)));
-    }
-
     const events = (state.snapshot.events || [])
       .filter((event) => event.kind === 'runtime.event')
-      .map((event) => ({ seq: event.seq, ...event.data }))
-      .filter((event) => state.inspectorAgent === 'all' || event.agent === state.inspectorAgent)
-      .filter((event) => !['text.delta', 'state', 'session'].includes(event.kind))
-      .filter((event) => !scopedMessage || event.correlation_id === scopedMessage.id || (event.turn_id && turnIDs.has(event.turn_id)))
-      .slice(-100)
-      .reverse();
-    if (events.length) {
-      const title = document.createElement('div');
-      title.className = 'activity-section-title';
-      title.textContent = t('room.recentNativeEvents');
-      container.appendChild(title);
-    }
-    for (const event of events) {
-      const card = document.createElement('div');
-      card.className = 'activity-card';
-      const head = document.createElement('div');
-      head.className = 'activity-card-head';
-      const kind = document.createElement('div');
-      kind.className = 'activity-kind';
-      const icon = document.createElement('span');
-      icon.className = 'activity-icon';
-      icon.textContent = activityIcon(event.kind);
-      const label = document.createElement('span');
-      label.textContent = activityLabel(event);
-      kind.append(icon, label);
-      const agent = document.createElement('span');
-      agent.className = 'activity-agent';
-      agent.textContent = displayName(event.agent);
-      head.append(kind, agent);
-      card.appendChild(head);
-      const detail = activityDetail(event);
-      if (detail) {
-        const body = document.createElement('div');
-        body.className = 'activity-body';
-        body.textContent = detail;
-        card.appendChild(body);
-      }
-      container.appendChild(card);
-    }
-    if (!summaries.length && !events.length) {
-      const empty = document.createElement('div');
-      empty.className = 'activity-empty';
-      empty.textContent = scopedMessage
-        ? t("ui.thisMessageDoesNotYetHaveADurableWorkSummary")
-        : t("ui.agentTurnsToolCallsCommandsPlansDiffsAndLogsAppearHere");
-      container.appendChild(empty);
-    }
-  }
-
-  function renderTurnSummary(summary) {
-    const card = document.createElement('details');
-    card.className = `turn-card turn-${summary.agent} status-${summary.status || 'unknown'}`;
-    card.open = summary.status === 'working' || summary.status === 'waiting' || Boolean(state.inspectorCorrelation);
-    const head = document.createElement('summary');
-    head.className = 'turn-card-head';
-    const title = document.createElement('div');
-    title.className = 'turn-card-title';
-    const status = document.createElement('span');
-    status.className = `turn-status status-${summary.status || 'unknown'}`;
-    status.textContent = turnStatusText(summary.status);
-    const name = document.createElement('strong');
-    name.textContent = `${displayName(summary.agent)} · ${truncate(summary.turn_id || summary.id, 20)}`;
-    title.append(status, name);
-    const meta = document.createElement('span');
-    meta.className = 'turn-card-meta';
-    meta.textContent = [
-      summary.duration_millis ? formatDuration(summary.duration_millis) : '',
-      t('room.itemCount', { count: (summary.items || []).length }),
-      formatTime(summary.updated_at || summary.started_at),
-    ].filter(Boolean).join(' · ');
-    head.append(title, meta);
-    card.appendChild(head);
-
-    const body = document.createElement('div');
-    body.className = 'turn-card-body';
-    if (summary.error) body.appendChild(turnSection(t('common.error'), summary.error, 'error'));
-    if (summary.plan) body.appendChild(turnSection(t('common.plan'), summary.plan));
-    if (summary.diff) body.appendChild(turnSection(t('common.diff'), summary.diff));
-    if (summary.final_text) body.appendChild(turnSection(t('common.final'), summary.final_text));
-    const items = summary.items || [];
-    if (items.length) {
-      const list = document.createElement('div');
-      list.className = 'turn-item-list';
-      items.slice(-40).forEach((item) => {
-        const row = document.createElement('div');
-        row.className = `turn-item item-${item.kind || 'event'} status-${item.status || 'unknown'}`;
-        const tag = document.createElement('span');
-        tag.className = 'turn-item-tag';
-        tag.textContent = item.kind || 'event';
-        const text = document.createElement('span');
-        text.className = 'turn-item-text';
-        text.textContent = [item.name, item.detail ? truncate(item.detail, 380) : ''].filter(Boolean).join(' · ') || item.id;
-        const itemStatus = document.createElement('span');
-        itemStatus.className = 'turn-item-status';
-        itemStatus.textContent = item.status || '';
-        row.append(tag, text, itemStatus);
-        list.appendChild(row);
-      });
-      body.appendChild(list);
-    }
-    if (summary.usage) body.appendChild(turnSection(t('common.usage'), prettyJSON(summary.usage)));
-    card.appendChild(body);
-    return card;
-  }
-
-  function turnSection(label, value, tone = '') {
-    const details = document.createElement('details');
-    details.className = `turn-section ${tone}`;
-    const title = document.createElement('summary');
-    title.textContent = label;
-    const content = document.createElement('pre');
-    content.textContent = value;
-    details.append(title, content);
-    return details;
+      .filter((event) => state.inspectorAgent === 'all' || event.data?.agent === state.inspectorAgent)
+      .filter((event) => !['text.delta', 'state', 'session'].includes(event.data?.kind))
+      .filter((event) => !scopedMessage || event.data?.correlation_id === scopedMessage.id || turnIDs.has(event.data?.turn_id))
+      .slice(-100).reverse();
+    activityView ||= window.PairRoomActivity.create($('activity-tab'), {
+      t, displayName, formatTime, formatDuration, turnStatusText, activityIcon, activityLabel, activityDetail, prettyJSON, truncate,
+    });
+    activityView.render(summaries, events, {
+      scoped: Boolean(scopedMessage),
+      version: JSON.stringify([window.PairRoomI18n?.lang, displayName('claude'), displayName('codex')]),
+      emptyText: t(scopedMessage ? 'ui.thisMessageDoesNotYetHaveADurableWorkSummary' : 'ui.agentTurnsToolCallsCommandsPlansDiffsAndLogsAppearHere'),
+    });
   }
 
   function turnStatusText(status) {
@@ -1941,65 +1884,82 @@
     }
   }
 
-  async function participantAction(actor, action, button) {
-    button.disabled = true;
-    const old = button.textContent;
-    button.textContent = '…';
+  async function participantAction(actor, action) {
+    if (participantBusy(actor)) return;
+    state.participantActions.add(actor);
+    renderParticipants();
     try {
       await api(`/api/v1/participants/${actor}/${action}`, { method: 'POST' });
+      await refreshAfterWrite();
       toast(`${displayName(actor)}：${actionText(action)}`, 'success');
     } catch (error) {
       toast(error.message, 'error');
     } finally {
-      button.disabled = false;
-      button.textContent = old;
+      state.participantActions.delete(actor);
+      renderParticipants();
     }
   }
 
   async function saveSettings() {
+    if (state.settingsSaving || !state.snapshot) return;
+    if (!$('stall-disabled').checked && !$('stall-warning').reportValidity()) return;
+    const revision = state.settingsRevision;
+    const value = $('stall-disabled').checked ? -1 : Number($('stall-warning').value);
+    state.settingsSaving = true;
+    renderSettings();
+    let accepted = false;
     try {
-      await api('/api/v1/settings', {
-        method: 'PUT',
-        body: JSON.stringify({
-          stall_warning_seconds: $('stall-disabled').checked ? -1 : Number($('stall-warning').value),
-        }),
-      });
-      toast(t("ui.settingsSaved"), 'success');
+      await api('/api/v1/settings', { method: 'PUT', body: JSON.stringify({ stall_warning_seconds: value }) });
+      accepted = true;
+      // Keep local edits while waiting for authoritative post-write state.
+      await refreshAfterWrite();
+      if (state.settingsRevision === revision) state.settingsDirty = false;
+      toast(t('ui.settingsSaved'), 'success');
     } catch (error) {
-      toast(error.message, 'error');
+      toast(accepted ? t('room.settingsUnconfirmed', { detail: error.message }) : error.message, 'error');
+    } finally {
+      state.settingsSaving = false;
+      renderSettings();
     }
   }
 
-  async function retryMessage(messageId, target, button) {
-    button.disabled = true;
-    const old = button.textContent;
-    button.textContent = t("ui.retrying");
+  async function retryMessage(messageId, target) {
+    const key = messageActionKey(messageId, target);
+    if (state.messageActions.has(key) || pendingRetry(messageId, target)) return;
+    state.messageActions.add(key);
+    renderMessage(messageId);
     try {
       await api(`/api/v1/messages/${encodeURIComponent(messageId)}/retry`, {
-        method: 'POST',
-        body: JSON.stringify({ to: [target] }),
+        method: 'POST', body: JSON.stringify({ to: [target] }),
       });
-      toast(t("ui.createdAnAuditableRetryMessageForValue", { value0: (displayName(target)) }), 'success');
+      await refreshAfterWrite();
+      toast(t('ui.createdAnAuditableRetryMessageForValue', { value0: displayName(target) }), 'success');
     } catch (error) {
       toast(error.message, 'error');
-      button.disabled = false;
-      button.textContent = old;
+    } finally {
+      state.messageActions.delete(key);
+      renderMessage(messageId);
     }
   }
 
-	async function cancelMessage(messageId, target, button) {
-	  button.disabled = true;
-	  try {
-		await api(`/api/v1/messages/${encodeURIComponent(messageId)}/cancel`, {
-		  method: 'POST', body: JSON.stringify({ target }),
-		});
-		toast(t("ui.requestedCancellationOfInFlightWorkForValue", { value0: (displayName(target)) }), 'success');
-	  } catch (error) {
-		toast(t("ui.cancellationFailedValue", { value0: (error.message) }), 'error');
-	  } finally {
-		button.disabled = false;
-	  }
-	}
+  async function cancelMessage(messageId, target) {
+    const key = messageActionKey(messageId, target);
+    if (state.messageActions.has(key)) return;
+    state.messageActions.add(key);
+    renderMessage(messageId);
+    try {
+      await api(`/api/v1/messages/${encodeURIComponent(messageId)}/cancel`, {
+        method: 'POST', body: JSON.stringify({ target }),
+      });
+      await refreshAfterWrite();
+      toast(t('ui.requestedCancellationOfInFlightWorkForValue', { value0: displayName(target) }), 'success');
+    } catch (error) {
+      toast(t('ui.cancellationFailedValue', { value0: error.message }), 'error');
+    } finally {
+      state.messageActions.delete(key);
+      renderMessage(messageId);
+    }
+  }
 
   async function downloadExport(format) {
     try {
@@ -2026,15 +1986,14 @@
   }
 
   async function setPermissions(actor, profile) {
-    if (state.permissionSubmitting.has(actor)) return;
+    if (participantBusy(actor)) return;
     state.permissionSubmitting.add(actor);
     renderParticipants();
     try {
       await api(`/api/v1/participants/${actor}/permissions`, { method: 'PUT', body: JSON.stringify({ profile }) });
       toast(t('room.collaboration.permissionsUpdated'), 'success');
       // A read started before the write cannot confirm its result.
-      if (state.snapshotPromise) await state.snapshotPromise.catch(() => {});
-      await loadSnapshot();
+      await refreshAfterWrite();
     } catch (error) { toast(error.message, 'error'); }
     finally { state.permissionSubmitting.delete(actor); renderParticipants(); }
   }
@@ -2071,24 +2030,30 @@
   }
 
   async function refreshGitStatus() {
-    // Native output is not a static translatable placeholder.
+    const request = ++state.gitStatusRequest;
     $('git-status').removeAttribute('data-i18n');
     try {
       const result = await api('/api/v1/git/status');
-      $('git-status').textContent = result.text || t('room.workingTreeClean');
+      if (request === state.gitStatusRequest) $('git-status').textContent = result.text || t('room.workingTreeClean');
     } catch (error) {
-      $('git-status').textContent = error.message;
+      if (request === state.gitStatusRequest) $('git-status').textContent = error.message;
     }
   }
 
   async function refreshDiff() {
-    $('diff-output').textContent = t("ui.readingDiff");
+    const request = ++state.diffRequest;
+    const staged = $('staged-diff').checked;
+    const output = $('diff-output');
+    output.removeAttribute('data-i18n');
+    output.setAttribute('aria-busy', 'true');
+    output.textContent = t('ui.readingDiff');
     try {
-      const staged = $('staged-diff').checked ? '?staged=1' : '';
-      const result = await api(`/api/v1/git/diff${staged}`);
-      $('diff-output').textContent = result.text || t('room.noChanges');
+      const result = await api(`/api/v1/git/diff${staged ? '?staged=1' : ''}`);
+      if (request === state.diffRequest && staged === $('staged-diff').checked) output.textContent = result.text || t('room.noChanges');
     } catch (error) {
-      $('diff-output').textContent = error.message;
+      if (request === state.diffRequest) output.textContent = error.message;
+    } finally {
+      if (request === state.diffRequest) output.setAttribute('aria-busy', 'false');
     }
   }
 
@@ -2126,6 +2091,7 @@
     document.querySelectorAll('.tab').forEach((button) => button.classList.toggle('active', button.dataset.tab === tab));
     document.querySelectorAll('.tab-content').forEach((panel) => panel.classList.toggle('active', panel.id === `${tab}-tab`));
     if (tab === 'diff') refreshDiff();
+    if (tab === 'activity') renderActivity();
   }
 
   function recipientsForTarget(target) {
@@ -2600,7 +2566,8 @@
   $('cancel-reply').addEventListener('click', clearReply);
   $('clear-timeline-scope').addEventListener('click', clearThreadFilter);
   $('save-settings').addEventListener('click', saveSettings);
-  $('stall-disabled').addEventListener('change', () => { $('stall-warning').disabled = $('stall-disabled').checked; });
+  $('stall-disabled').addEventListener('change', editSettings);
+  $('stall-warning').addEventListener('input', editSettings);
   $('refresh-button').addEventListener('click', () => { void loadSnapshot().catch((error) => toast(error.message, 'error')); });
   $('message-search').addEventListener('input', (event) => {
     state.searchQuery = event.target.value;
@@ -2618,8 +2585,10 @@
   $('message-intent').addEventListener('change', persistComposerDraft);
   $('scroll-bottom').addEventListener('click', () => { scrollBottom(); markConversationRead(true); });
   timeline.addEventListener('scroll', () => markConversationRead(false), { passive: true });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) markConversationRead(false); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { markConversationRead(false); renderActivity(); } });
+  document.addEventListener('pairroom:layout', renderActivity);
   $('refresh-diff').addEventListener('click', refreshDiff);
+  $('staged-diff').addEventListener('change', refreshDiff);
   $('inspector-agent').addEventListener('change', (event) => { state.inspectorAgent = event.target.value; renderActivity(); });
   $('clear-inspector-scope').addEventListener('click', clearInspectorScope);
   $('lightbox-close').addEventListener('click', closeLightbox);
@@ -2687,7 +2656,8 @@
     }
   });
 
-  window.addEventListener('beforeunload', () => {
+  window.addEventListener('beforeunload', (event) => {
+    if (state.settingsDirty) { event.preventDefault(); event.returnValue = ''; }
     closeEvents();
     clearTimeout(state.reconnectTimer);
     state.attachmentObjectURLs.forEach((url) => URL.revokeObjectURL(url));
@@ -2752,6 +2722,7 @@
     if (data.action === 'active') {
       state.shellActive = true;
       markConversationRead(true);
+      renderActivity();
     }
   });
 

@@ -87,6 +87,10 @@ Durable events carry a monotonic sequence and can be resumed after disconnect. H
 
 `GET /api/v1/events?since={latest_seq}` resumes after that durable sequence. A non-empty `Last-Event-ID` header takes precedence over `since` on native EventSource reconnects; malformed cursors return HTTP 400. If the cursor is ahead of the Room or older than its retained event tail, the server emits `event: reset` with `{"reason":"snapshot_required","latest_seq":...}` and closes the stream. Fetch a fresh snapshot before reconnecting; do not interpret this as a Turn completion. Transient events and reset notifications never advance the durable SSE ID.
 
+## Explicit retries
+
+`POST /api/v1/messages/{id}/retry` returns HTTP 202 with a new auditable Message; it does not modify the failed source Message. Only an unsuccessful terminal target can be retried. While a direct retry child for that source and participant is `waiting` or `working`, another request returns HTTP 409 before creating or submitting another Message. Once the child settles, a subsequent explicit retry is allowed. This is pending-work exclusion, not exactly-once execution across crashes or arbitrarily delayed requests. Do not automatically repeat an ambiguous/failed POST; inspect durable Message state and ask for explicit retry when necessary.
+
 ## Native approval responses
 
 `POST /api/v1/approvals/{id}` resolves a pending request with a JSON body containing `decision` and, for Claude questions, `answers`. Concurrent submissions for the same approval are rejected before calling the native adapter. The browser disables that request until its durable resolution arrives; it does not automatically retry failed writes.
