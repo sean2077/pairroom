@@ -1,0 +1,28 @@
+name: Review source (temporary)
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/review-source.yml']
+permissions:
+  contents: read
+jobs:
+  source:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'feat/room-runtime-names'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Export tracked public Git objects
+        run: |
+          mkdir -p "$RUNNER_TEMP/source"
+          git bundle create "$RUNNER_TEMP/source/source.bundle" HEAD refs/remotes/origin/main --tags
+          git rev-parse HEAD > "$RUNNER_TEMP/source/HEAD"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pairroom-names-source
+          path: ${{ runner.temp }}/source
+          retention-days: 1
