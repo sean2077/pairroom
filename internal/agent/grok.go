@@ -863,33 +863,49 @@ func (g *GrokAdapter) ResolveApproval(ctx context.Context, approvalID string, re
 	}
 	g.mu.Lock()
 	pending, ok := g.approvals[approvalID]
-	if ok {
-		delete(g.approvals, approvalID)
-	}
-	g.mu.Unlock()
 	if !ok {
+		g.mu.Unlock()
 		return fmt.Errorf("unknown Grok approval %q", approvalID)
 	}
-	var result any
-	if pending.kind == "plan" {
-		outcome := "cancelled"
-		if resolution.Decision == "accept" || resolution.Decision == "acceptForSession" {
-			outcome = "approved"
-		}
-		result = map[string]any{"outcome": outcome}
-	} else {
-		optionID := selectGrokPermissionOption(pending.options, resolution.Decision)
-		if optionID == "" {
-			result = map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}
-		} else {
-			result = map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": optionID}}
-		}
+	result, err := grokApprovalResult(pending, resolution.Decision)
+	if err != nil {
+		g.mu.Unlock()
+		return err // Invalid input must not consume a still-answerable request.
 	}
+	delete(g.approvals, approvalID)
+	g.mu.Unlock()
+	// Consume before writing: concurrent requests cannot answer the same native
+	// RPC twice, and a transport failure is not safe for automatic replay.
 	if err := g.sendRawResponse(pending.rawID, result, nil); err != nil {
 		return err
 	}
 	g.setState(model.StateWorking, "")
 	return nil
+}
+
+func grokApprovalResult(pending grokPendingApproval, decision string) (any, error) {
+	if pending.kind == "plan" {
+		switch decision {
+		case "accept":
+			return map[string]any{"outcome": "approved"}, nil
+		case "decline", "cancel":
+			return map[string]any{"outcome": "cancelled"}, nil
+		default:
+			return nil, fmt.Errorf("unsupported Grok plan decision %q", decision)
+		}
+	}
+	cancelled := map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}
+	if decision == "cancel" {
+		return cancelled, nil
+	}
+	optionID := selectGrokPermissionOption(pending.options, decision)
+	if optionID == "" {
+		if decision == "decline" {
+			return cancelled, nil // Never turn one rejection into reject_always.
+		}
+		return nil, fmt.Errorf("Grok permission decision %q has no unambiguous native option", decision)
+	}
+	return map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": optionID}}, nil
 }
 
 func (g *GrokAdapter) cancelPendingInteractions() error {
@@ -914,24 +930,33 @@ func (g *GrokAdapter) cancelPendingInteractions() error {
 }
 
 func selectGrokPermissionOption(options []grokPermissionOption, decision string) string {
-	wants := []string{"reject_once", "reject_always"}
-	switch decision {
-	case "acceptForSession":
-		wants = []string{"allow_always", "allow_once"}
-	case "accept":
-		wants = []string{"allow_once", "allow_always"}
-	case "decline", "cancel":
-	default:
+	id, explicit := strings.CutPrefix(decision, "option:")
+	kind := map[string]string{"accept": "allow_once", "acceptForSession": "allow_always", "decline": "reject_once"}[decision]
+	if (!explicit && kind == "") || (explicit && id == "") {
 		return ""
 	}
-	for _, want := range wants {
+	selected := ""
+	for _, option := range options {
+		if option.ID == "" || (explicit && option.ID != id) || (!explicit && option.Kind != kind) {
+			continue
+		}
+		if selected != "" {
+			return "" // Do not guess between semantically different native choices.
+		}
+		selected = option.ID
+	}
+	if selected != "" {
+		matches := 0
 		for _, option := range options {
-			if strings.EqualFold(option.Kind, want) {
-				return option.ID
+			if option.ID == selected {
+				matches++
 			}
 		}
+		if matches != 1 {
+			return ""
+		}
 	}
-	return ""
+	return selected
 }
 
 func (g *GrokAdapter) SetRole(ctx context.Context, role model.ParticipantRole) error {
@@ -1251,7 +1276,6 @@ func (g *GrokAdapter) handlePermissionRequest(id json.RawMessage, raw json.RawMe
 	}
 	detail := map[string]any{}
 	_ = json.Unmarshal(raw, &detail)
-	detail["permission_suggestions"] = true
 	detailRaw, _ := json.Marshal(detail)
 	detailRaw = g.redactRaw(detailRaw)
 	approval := model.Approval{

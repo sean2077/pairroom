@@ -133,6 +133,7 @@ type Engine struct {
 
 	lastRuntimeActivity map[model.ActorID]time.Time
 	stallWarnedTurn     map[model.ActorID]string
+	approvalSubmitting  map[string]bool
 	deliveryMu          map[model.ActorID]chan struct{}
 	turnOwner           model.ActorID
 	turnQueue           []scheduledDelivery
@@ -986,7 +987,10 @@ func (e *Engine) Interrupt(ctx context.Context, actor model.ActorID) error {
 }
 
 func (e *Engine) ResolveApproval(ctx context.Context, approvalID string, resolution model.ApprovalResolution) error {
-	e.mu.RLock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	e.mu.Lock()
 	var current *model.Approval
 	for i := range e.snapshot.Approvals {
 		if e.snapshot.Approvals[i].ID == approvalID {
@@ -995,13 +999,26 @@ func (e *Engine) ResolveApproval(ctx context.Context, approvalID string, resolut
 			break
 		}
 	}
-	e.mu.RUnlock()
-	if current == nil {
-		return fmt.Errorf("unknown approval %q", approvalID)
+	if current == nil || current.Status != "pending" || e.approvalSubmitting[approvalID] {
+		e.mu.Unlock()
+		if current == nil {
+			return fmt.Errorf("unknown approval %q", approvalID)
+		}
+		if current.Status != "pending" {
+			return fmt.Errorf("approval %q is already %s", approvalID, current.Status)
+		}
+		return fmt.Errorf("approval %q is already being submitted", approvalID)
 	}
-	if current.Status != "pending" {
-		return fmt.Errorf("approval %q is already %s", approvalID, current.Status)
+	if e.approvalSubmitting == nil {
+		e.approvalSubmitting = make(map[string]bool)
 	}
+	e.approvalSubmitting[approvalID] = true
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		delete(e.approvalSubmitting, approvalID)
+		e.mu.Unlock()
+	}()
 	adapter, err := e.adapter(current.Agent)
 	if err != nil {
 		return err

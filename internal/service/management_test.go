@@ -181,7 +181,7 @@ func TestManagementPollingSkipsUnchangedSnapshotRenders(t *testing.T) {
 		"delete renderableSnapshot.generated_at;",
 		"if (renderableRuntime.busy) delete renderableRuntime.last_used_at;",
 		"const snapshotChanged = nextRenderKey !== state.renderedSnapshotKey;",
-		"const showProgress = notify || forceRender;",
+		"if (notify || forceRender) $('refresh-button').classList.add('spinning');",
 		"if (forceRender || snapshotChanged) {",
 		"window.dispatchEvent(new Event('pairroom:management-render-pending'));",
 		"state.renderedSnapshotKey = snapshotRenderKey(state.snapshot);",

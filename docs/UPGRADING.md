@@ -16,6 +16,8 @@ This polish update does not change Store schema 9, provisioning schema 2, native
 
 For external HTTP/SSE clients, validate `message_limit` as an integer from 0 to 1000; invalid values now return HTTP 400 rather than being silently reinterpreted. Omitted or zero limits still request the full snapshot. On an SSE `reset` event, fetch a fresh snapshot and reconnect from its `latest_seq`; the server closes that stream because the cursor is ahead or older than the bounded replay tail. A non-empty `Last-Event-ID` takes precedence over `since`. See [API reference](API_REFERENCE.md) for the wire contract.
 
+Native approval clients should render Grok's advertised options and send `decision: "option:<optionId>"`. One-time grants no longer fall back to remembered authorization, and cancellation is not a remembered rejection. Claude question responses must answer every exact native question text; incomplete or unknown answers fail without consuming the request. See [API reference](API_REFERENCE.md#native-approval-responses). No Event Log/provisioning schema change is required.
+
 ## Current breaking boundary
 
 ### Provider and Room provisioning migration

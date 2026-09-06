@@ -39,7 +39,7 @@ The created Room returns the immutable `agents` map. There is no Agent-reconfigu
 
 Error responses retain the English `error` field and add a stable `code`. Errors that can be safely localized may include `params` or `details`; these never contain Profile secrets. Clients localize recognized codes and display the original `error` for unknown or native diagnostics.
 
-Status requests return the current projection. Command requests first record an auditable event, then drive the native runtime asynchronously. HTTP success means only that the control plane accepted the command. Judge final execution from message processing, Turn summary, or SSE events.
+Status requests return the current projection. Message submission records the user Message before driving native execution; its HTTP success is not proof of a completed Turn. Judge execution from message processing, Turn summary, or SSE events. Other action receipts follow their endpoint contract: an approval resolution, for example, is recorded after the adapter response succeeds.
 
 `POST /api/v1/messages` accepts one starting Agent and an optional `intent` of `steer` or `queue`; omission defaults to `steer`. Removed intent values and removed Room settings are rejected by the strict request decoder. Participant snapshots expose the stable slot `id`, runtime-derived `display_name`, and exact `mention_handle`. `PUT /api/v1/settings` currently accepts only `stall_warning_seconds`.
 
@@ -50,6 +50,20 @@ Durable events carry a monotonic sequence and can be resumed after disconnect. H
 `GET /api/v1/snapshot?message_limit=250` returns the newest messages and `message_window` pagination metadata while retaining current Room/runtime state. `message_limit` accepts integers from 0 to 1000; zero or omission retains the legacy full-transcript response. Invalid values return HTTP 400. Older messages are available through `GET /api/v1/messages?before_seq={oldest_seq}&limit=100`, in chronological order and strictly before the cursor.
 
 `GET /api/v1/events?since={latest_seq}` resumes after that durable sequence. A non-empty `Last-Event-ID` header takes precedence over `since` on native EventSource reconnects; malformed cursors return HTTP 400. If the cursor is ahead of the Room or older than its retained event tail, the server emits `event: reset` with `{"reason":"snapshot_required","latest_seq":...}` and closes the stream. Fetch a fresh snapshot before reconnecting; do not interpret this as a Turn completion. Transient events and reset notifications never advance the durable SSE ID.
+
+## Native approval responses
+
+`POST /api/v1/approvals/{id}` resolves a pending request with a JSON body containing `decision` and, for Claude questions, `answers`. Concurrent submissions for the same approval are rejected before calling the native adapter. The browser disables that request until its durable resolution arrives; it does not automatically retry failed writes.
+
+Claude Code and Codex retain their native `accept`, `acceptForSession`, `decline`, and `cancel` decisions where supported. Claude `AskUserQuestion` acceptance requires one non-blank answer keyed by each exact native `question` text, with no unknown keys. Malformed, ambiguous, or incomplete question answers are rejected without consuming the request; free-form answers and the original native tool input remain unchanged.
+
+For `grok.permission`, use the advertised native `detail.options` names and IDs rather than guessing scope:
+
+```json
+{"decision":"option:the-exact-native-optionId"}
+```
+
+PairRoom passes that exact, unique `optionId` to ACP. `cancel` returns ACP's cancelled outcome, not a remembered rejection. Legacy `accept` selects an unambiguous `allow_once`; `acceptForSession` selects an unambiguous native `allow_always` (whose scope is defined by Grok, not a PairRoom session promise). Neither grants a different scope if that kind is unavailable. Legacy `decline` selects `reject_once` or cancels if no unique one-time rejection exists. Invalid grant/option choices leave the approval pending. `grok.planExit` accepts only `accept`, `decline`, or `cancel`.
 
 ## Current source route inventory
 

@@ -32,7 +32,7 @@ jobs:
         run: make cover
 
   browser:
-    name: Room browser behavior and layout
+    name: Room and Management browser behavior and layout
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -44,6 +44,8 @@ jobs:
           "${RUNNER_TEMP}/browser-venv/bin/python" -m playwright install --with-deps chromium
       - name: Verify Room composer, reconnect, history, and responsive layout
         run: '"${RUNNER_TEMP}/browser-venv/bin/python" scripts/test_room_browser.py --artifacts "${RUNNER_TEMP}/browser-results"'
+      - name: Verify Management tabs, surface ownership, configuration, and layout
+        run: '"${RUNNER_TEMP}/browser-venv/bin/python" scripts/test_management_browser.py --artifacts "${RUNNER_TEMP}/browser-results/management"'
       - name: Upload browser evidence
         if: always()
         uses: actions/upload-artifact@v7

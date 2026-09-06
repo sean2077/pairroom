@@ -23,6 +23,11 @@
     lastError: '',
     search: '',
     refreshPromise: null,
+    refreshRevision: 0,
+    refreshOptions: {},
+    sessionGeneration: 0,
+    openingBrowsers: new Set(),
+    busyButtons: new WeakSet(),
     refreshTimer: null,
     renderPending: false,
     renderedSnapshotKey: '',
@@ -35,6 +40,7 @@
     dragTabID: '',
     projectMode: 'register',
     bindingRoomID: '',
+    roomDialogRevision: 0,
     confirmAction: null,
     confirmRequirement: '',
     confirmAcknowledgementRequired: false,
@@ -59,13 +65,27 @@
   const app = $('app');
   const view = $('view');
 
+  // Startup translation is declarative; a rendered state/operation takes over
+  // its label so later global localization cannot restore misleading defaults.
+  function setRenderedText(id, value) {
+    const element = $(id);
+    element.removeAttribute('data-i18n');
+    element.textContent = value;
+  }
+
   async function createBrowserSession(credential = '') {
+    const generation = invalidateSessionReads();
     const token = String(credential || '').trim();
     const headers = new Headers();
     const method = token ? 'POST' : 'GET';
     if (token) headers.set('Authorization', `Bearer ${token}`);
     const response = await fetch('/api/v1/session', { method, headers, credentials: 'same-origin' });
     const payload = await response.json().catch(() => ({}));
+    if (generation !== state.sessionGeneration) {
+      const error = new Error('Obsolete browser session response');
+      error.code = 'obsolete_session';
+      throw error;
+    }
     if (!response.ok) {
       const message = response.status === 401
         ? (token
@@ -116,7 +136,18 @@
     $('login-token').focus({ preventScroll: true });
   }
 
+  function invalidateSessionReads() {
+    state.sessionGeneration += 1;
+    state.refreshPromise = null;
+    state.refreshOptions = {};
+    state.agentCatalog = null;
+    state.agentCatalogPromise = null;
+    $('refresh-button').classList.remove('spinning');
+    return state.sessionGeneration;
+  }
+
   function showCredentialLogin(message = '') {
+    invalidateSessionReads();
     state.authenticated = false;
     state.connected = false;
     state.snapshot = null;
@@ -179,6 +210,7 @@
         renderLoading();
         await refresh({ forceRender: true });
       } catch (error) {
+        if (error.code === 'obsolete_session') return;
         showCredentialLogin(error.message);
       }
     });
@@ -206,6 +238,7 @@
       showManagementShell();
       return await refresh(options);
     } catch (error) {
+      if (error.code === 'obsolete_session') return null;
       const message = error.code === 'login_required' ? '' : error.message;
       showCredentialLogin(message);
       if (options.notify && message) toast(t("ui.connectionFailed"), message, 'error');
@@ -214,6 +247,7 @@
   }
 
   async function api(path, options = {}) {
+    const generation = state.sessionGeneration;
     const headers = new Headers(options.headers || {});
     const method = String(options.method || 'GET').toUpperCase();
     if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && state.csrfToken) headers.set('X-PairRoom-CSRF', state.csrfToken);
@@ -223,7 +257,7 @@
     if (!response.ok) {
 	  const error = new Error(window.PairRoomI18n?.errorMessage(payload) || payload.error || response.statusText || `HTTP ${response.status}`);
       error.status = response.status;
-      if (response.status === 401 && path !== '/api/v1/session') {
+      if (response.status === 401 && path !== '/api/v1/session' && generation === state.sessionGeneration) {
         error.code = 'login_required';
         showCredentialLogin(t("ui.theBrowserSessionHasExpiredPleaseReEnterTheServiceToken"));
       }
@@ -248,44 +282,63 @@
     }
     return JSON.stringify(renderableSnapshot);
   }
-  async function refresh({ notify = false, forceRender = false } = {}) {
+  function refresh({ notify = false, forceRender = false, fresh = false } = {}) {
+    // A mutation invalidates reads already in flight. Ordinary polls coalesce;
+    // callers after writes wait for a read that actually started after them.
+    if (fresh) state.refreshRevision += 1;
+    state.refreshOptions.notify ||= notify;
+    state.refreshOptions.forceRender ||= forceRender;
+    if (notify || forceRender) $('refresh-button').classList.add('spinning');
     if (state.refreshPromise) return state.refreshPromise;
-    const showProgress = notify || forceRender;
-    if (showProgress) $('refresh-button').classList.add('spinning');
-    state.refreshPromise = api('/api/v1/service').then((snapshot) => {
-      if (!state.authenticated) return null;
-      const nextRenderKey = snapshotRenderKey(snapshot);
-      const snapshotChanged = nextRenderKey !== state.renderedSnapshotKey;
-      state.snapshot = snapshot;
-      pruneRoomSelection(snapshot);
-      state.connected = true;
-      state.lastError = '';
-      updateChrome();
-      if (forceRender || snapshotChanged) {
-        if (forceRender || canRenderNow()) {
-          render();
-        } else {
-          state.renderPending = true;
-          window.dispatchEvent(new Event('pairroom:management-render-pending'));
+    const generation = state.sessionGeneration;
+    const request = (async () => {
+      while (generation === state.sessionGeneration) {
+        const revision = state.refreshRevision;
+        let snapshot;
+        try {
+          snapshot = await api('/api/v1/service');
+        } catch (error) {
+          if (generation !== state.sessionGeneration) return null;
+          if (revision !== state.refreshRevision) continue;
+          throw error;
         }
-      } else {
-        state.renderPending = false;
+        if (generation !== state.sessionGeneration || !state.authenticated) return null;
+        if (revision !== state.refreshRevision) continue;
+        const { notify, forceRender } = state.refreshOptions;
+        const nextRenderKey = snapshotRenderKey(snapshot);
+        const snapshotChanged = nextRenderKey !== state.renderedSnapshotKey;
+        state.snapshot = snapshot;
+        pruneRoomSelection(snapshot);
+        state.connected = true;
+        state.lastError = '';
+        updateChrome();
+        if (forceRender || snapshotChanged) {
+          if (forceRender || canRenderNow()) render();
+          else {
+            state.renderPending = true;
+            window.dispatchEvent(new Event('pairroom:management-render-pending'));
+          }
+        } else state.renderPending = false;
+        if (notify) toast(t("ui.synchronized"), t("ui.managementShellStatusRefreshed"), 'success');
+        return snapshot;
       }
-      if (notify) toast(t("ui.synchronized"), t("ui.managementShellStatusRefreshed"), 'success');
-      return snapshot;
-    }).catch((error) => {
-      if (error.status === 401) return null;
+      return null;
+    })().catch((error) => {
+      if (generation !== state.sessionGeneration || error.status === 401) return null;
       const changed = state.connected || state.lastError !== error.message;
       state.connected = false;
       state.lastError = error.message;
       setDisconnected(error.message);
-      if (notify || changed) toast(t("ui.connectionFailed"), error.message, 'error');
+      if (state.refreshOptions.notify || changed) toast(t("ui.connectionFailed"), error.message, 'error');
       return null;
     }).finally(() => {
+      if (state.refreshPromise !== request) return;
       state.refreshPromise = null;
-      if (showProgress) $('refresh-button').classList.remove('spinning');
+      state.refreshOptions = {};
+      $('refresh-button').classList.remove('spinning');
     });
-    return state.refreshPromise;
+    state.refreshPromise = request;
+    return request;
   }
 
   function canRenderNow() {
@@ -330,15 +383,15 @@
     const summary = serviceSummary(snapshot);
     const healthy = Boolean(snapshot?.healthy);
     $('connection-banner').hidden = state.connected;
-    $('sidebar-health').textContent = state.connected ? (healthy ? t('common.serviceHealthy') : t('common.serviceFailClosed')) : t('common.serviceDisconnected');
+    setRenderedText('sidebar-health', state.connected ? (healthy ? t('common.serviceHealthy') : t('common.serviceFailClosed')) : t('common.serviceDisconnected'));
     $('sidebar-version').textContent = snapshot ? `PairRoom ${snapshot.version || ''}`.trim() : 'PairRoom Service';
     $('health-dot').className = `status-dot ${state.connected ? (healthy ? 'good' : 'danger') : 'danger'}`;
     $('nav-project-count').textContent = snapshot ? formatNumber(summary.projects) : '';
     $('nav-runtime-count').textContent = snapshot && summary.runtime_capacity_used ? formatNumber(summary.runtime_capacity_used) : '';
     const routeInfo = routeMetadata();
-    $('page-eyebrow').textContent = routeInfo.eyebrow;
-    $('page-title').textContent = routeInfo.title;
-    $('page-subtitle').textContent = routeInfo.subtitle;
+    setRenderedText('page-eyebrow', routeInfo.eyebrow);
+    setRenderedText('page-title', routeInfo.title);
+    setRenderedText('page-subtitle', routeInfo.subtitle);
     document.title = `${routeInfo.title} · PairRoom`;
     document.querySelectorAll('[data-nav]').forEach((node) => {
       const current = state.route.name === 'project' ? 'projects' : (state.route.name === 'room' ? '' : state.route.name);
@@ -346,15 +399,15 @@
       if (node.dataset.nav === current) node.setAttribute('aria-current', 'page');
       else node.removeAttribute('aria-current');
     });
-    if (snapshot?.generated_at) $('last-updated').textContent = t("ui.lastSynchronizedValue", { value0: (formatRelativeTime(snapshot.generated_at)) });
+    if (snapshot?.generated_at) setRenderedText('last-updated', t("ui.lastSynchronizedValue", { value0: (formatRelativeTime(snapshot.generated_at)) }));
     syncRoomTree();
     syncRoomTabs();
   }
 
   function setDisconnected(message) {
     $('connection-banner').hidden = false;
-    $('connection-message').textContent = message || t("ui.waitingForTheLocalServiceToRecover");
-    $('sidebar-health').textContent = t('common.serviceDisconnected');
+    setRenderedText('connection-message', message || t("ui.waitingForTheLocalServiceToRecover"));
+    setRenderedText('sidebar-health', t('common.serviceDisconnected'));
     $('health-dot').className = 'status-dot danger';
   }
 
@@ -403,8 +456,8 @@
     }
     if (roomMode) {
       const room = roomByID(state.route.roomID);
-      if (room?.lifecycle === 'archived') {
-        toast(t("ui.roomArchived"), t("ui.canOnlyBeOpenedAfterRecovery"), 'warning');
+      if (!room || room.lifecycle === 'archived') {
+        toast(t(room ? 'ui.roomArchived' : 'room.noLongerAvailable'), room ? t('ui.canOnlyBeOpenedAfterRecovery') : '', 'warning');
         closeTab(state.route.roomID);
         return;
       }
@@ -502,35 +555,59 @@
   function syncRoomTabs() {
     const list = $('room-tablist');
     if (!list) return;
-    list.replaceChildren(...state.tabs.map((roomID, index) => {
+    // A different client may archive/remove a background Room. Prune both its
+    // tab and its surface from the same authoritative snapshot.
+    if (state.snapshot) {
+      const available = new Set((state.snapshot.rooms || []).filter((room) => room.lifecycle !== 'archived').map((room) => room.id));
+      state.tabs = state.tabs.filter((id) => {
+        if (available.has(id)) return true;
+        delete state.tabMeta[id];
+        return false;
+      });
+    }
+    $('room-tabstrip').hidden = state.tabs.length === 0;
+    const keep = new Set(state.tabs);
+    Array.from(list.children).forEach((tab) => { if (!keep.has(tab.dataset.roomId)) tab.remove(); });
+    state.tabs.forEach((roomID, index) => {
       const room = roomByID(roomID);
-      const runtime = getRuntime(roomID);
       const meta = state.tabMeta[roomID] || {};
       const selected = state.route.name === 'room' && state.route.roomID === roomID;
-      const tab = node('div', {
-        className: `room-tab ${selected ? 'active' : ''}`,
-        role: 'tab',
-        draggable: 'true',
-        'aria-selected': String(selected),
-        'data-room-id': roomID,
-        tabindex: selected ? '0' : '-1',
-        onClick: () => openRoom(roomID),
-        onDragStart: (event) => { state.dragTabID = roomID; event.dataTransfer.setData('text/plain', roomID); },
-        onDragOver: (event) => { event.preventDefault(); },
-        onDrop: (event) => {
-          event.preventDefault();
-          reorderTab(state.dragTabID || event.dataTransfer.getData('text/plain'), index);
-        },
-    }, node('span', { className: `tree-room-dot ${runtimeTone(runtime)}`, 'aria-hidden': 'true' }), node('span', { className: 'room-tab-label', textContent: room?.name || roomID }), meta.unread ? node('span', { className: 'tab-badge', textContent: formatNumber(meta.unread) }) : null, node('button', {
-        type: 'button',
-        className: 'room-tab-close',
-        'aria-label': t("ui.closeValue", { value0: (room?.name || roomID) }),
-        textContent: '×',
-        onClick: (event) => { event.stopPropagation(); closeTab(roomID); },
-      }));
-      return tab;
-    }));
+      let tab = list.querySelector(`[data-room-id="${CSS.escape(roomID)}"]`);
+      if (!tab) {
+        tab = node('div', {
+          className: 'room-tab', role: 'tab', draggable: 'true', 'data-room-id': roomID,
+          onClick: () => openRoom(roomID),
+          onDragStart: (event) => { state.dragTabID = roomID; event.dataTransfer.setData('text/plain', roomID); },
+          onDragOver: (event) => event.preventDefault(),
+          onDrop: (event) => {
+            event.preventDefault();
+            reorderTab(state.dragTabID || event.dataTransfer.getData('text/plain'), state.tabs.indexOf(roomID));
+          },
+        }, node('span', { className: 'tree-room-dot', 'aria-hidden': 'true' }),
+        node('span', { className: 'room-tab-label' }), node('span', { className: 'tab-badge' }),
+        node('button', { type: 'button', className: 'room-tab-close', textContent: '×',
+          onClick: (event) => { event.stopPropagation(); closeTab(roomID); } }));
+      }
+      // Keep enhanced tab targets and focused controls attached during polls
+      // and unread-count updates. management-ux owns keyboard enhancements.
+      tab.classList.toggle('active', selected);
+      const target = tab.querySelector('.room-tab-target') || tab;
+      target.setAttribute('aria-selected', String(selected));
+      target.tabIndex = selected || (state.route.name !== 'room' && index === 0) ? 0 : -1;
+      const dot = tab.querySelector('.tree-room-dot');
+      const dotClass = `tree-room-dot ${runtimeTone(getRuntime(roomID))}`;
+      if (dot.className !== dotClass) dot.className = dotClass;
+      const label = tab.querySelector('.room-tab-label');
+      if (label.textContent !== (room?.name || roomID)) label.textContent = room?.name || roomID;
+      const badge = tab.querySelector('.tab-badge');
+      badge.hidden = !meta.unread;
+      const unread = meta.unread ? formatNumber(meta.unread) : '';
+      if (badge.textContent !== unread) badge.textContent = unread;
+      tab.querySelector('.room-tab-close').setAttribute('aria-label', t('ui.closeValue', { value0: room?.name || roomID }));
+      if (list.children[index] !== tab) list.insertBefore(tab, list.children[index] || null);
+    });
     syncRoomStage();
+    window.dispatchEvent(new Event('pairroom:tabs-updated'));
   }
 
   function reorderTab(roomID, toIndex) {
@@ -602,7 +679,10 @@
 
   function closeTab(roomID) {
     const index = state.tabs.indexOf(roomID);
-    if (index < 0) return;
+    if (index < 0) {
+      if (state.route.name === 'room' && state.route.roomID === roomID) navigate('#/overview');
+      return;
+    }
     state.tabs.splice(index, 1);
     delete state.tabMeta[roomID];
     const stage = $('room-stage');
@@ -626,7 +706,7 @@
     state.activating.add(roomID);
     try {
       const status = await api(`/api/v1/rooms/${encodeURIComponent(roomID)}/activate`, { method: 'POST' });
-      await refresh({ forceRender: true });
+      await refresh({ forceRender: true, fresh: true });
       return status;
     } catch (error) {
       toast(t("ui.roomActivationFailed"), error.message, 'error');
@@ -1248,7 +1328,7 @@
         try {
           await api('/api/v1/runtime-policy', { method: 'PATCH', body: JSON.stringify({ limit }) });
           toast(t("ui.runtimeCapacityUpdated"), t("ui.atMostValueRuntimesCanBeActiveSimultaneously", { value0: (limit) }), 'success');
-          await refresh({ forceRender: true });
+          await refresh({ forceRender: true, fresh: true });
         } catch (error) {
           toast(t("ui.couldNotUpdateCapacity"), error.message, 'error');
           event.target.value = String(policy.limit || 8);
@@ -1487,10 +1567,10 @@
     const importing = mode === 'import';
     $('project-mode-register').setAttribute('aria-selected', String(!importing));
     $('project-mode-import').setAttribute('aria-selected', String(importing));
-    $('project-dialog-title').textContent = importing ? t("ui.importLegacyRoom") : t("ui.registerProject9c99cf3");
-    $('project-dialog-subtitle').textContent = importing ? t("ui.explicitlyRegisterCustomOldDataDir") : t("ui.addACanonicalGitWorktree");
+    setRenderedText('project-dialog-title', importing ? t("ui.importLegacyRoom") : t("ui.registerProject9c99cf3"));
+    setRenderedText('project-dialog-subtitle', importing ? t("ui.explicitlyRegisterCustomOldDataDir") : t("ui.addACanonicalGitWorktree"));
     $('project-path').placeholder = importing ? '/absolute/path/to/legacy/room-data' : '/absolute/path/to/git/worktree';
-    $('project-submit').textContent = importing ? t("ui.importLegacyRoom") : t("ui.registerProject9c99cf3");
+    setRenderedText('project-submit', importing ? t("ui.importLegacyRoom") : t("ui.registerProject9c99cf3"));
     const help = $('project-mode-help');
     help.replaceChildren(
       node('strong', { textContent: importing ? t("ui.nonDestructiveImport") : t("ui.explicitPathBoundary") }),
@@ -1516,7 +1596,7 @@
           : await api('/api/v1/projects', { method: 'POST', body: JSON.stringify({ path }) });
         closeDialog('project-dialog');
         toast(state.projectMode === 'import' ? t("ui.legacyRoomHasBeenImported") : t("ui.projectRegistered"), state.projectMode === 'import' ? t("ui.theOldDataRemainsInPlaceAndHasNotBeenOverwritten") : t("ui.canonicalWorktreeHasJoinedTheServiceRegistry"), 'success');
-        await refresh({ forceRender: true });
+        await refresh({ forceRender: true, fresh: true });
         const projectID = state.projectMode === 'import' ? result.project_id : result.id;
         if (projectID) navigate(`#/projects/${encodeURIComponent(projectID)}`);
       } catch (error) {
@@ -1526,18 +1606,41 @@
   }
 
   async function loadAgentCatalog(force = false) {
-	if (!force && state.agentCatalog) return state.agentCatalog;
-	if (!force && state.agentCatalogPromise) return state.agentCatalogPromise;
-	const path = force ? '/api/v1/agent-catalog/refresh' : '/api/v1/agent-catalog';
-	state.agentCatalogPromise = api(path, force ? { method: 'POST' } : {}).then((catalog) => {
-	  state.agentCatalog = catalog;
-	  return catalog;
-	}).finally(() => { state.agentCatalogPromise = null; });
-	return state.agentCatalogPromise;
+    if (!force && state.agentCatalogPromise) return state.agentCatalogPromise;
+    if (!force && state.agentCatalog) return state.agentCatalog;
+    const generation = state.sessionGeneration;
+    const path = force ? '/api/v1/agent-catalog/refresh' : '/api/v1/agent-catalog';
+    const request = api(path, force ? { method: 'POST' } : {}).then(async (catalog) => {
+      if (generation !== state.sessionGeneration) {
+        const error = new Error('Obsolete Agent catalog response');
+        error.code = 'obsolete_session';
+        throw error;
+      }
+      if (state.agentCatalogPromise !== request) return state.agentCatalogPromise || state.agentCatalog;
+      state.agentCatalog = catalog;
+      return catalog;
+    }).finally(() => {
+      if (state.agentCatalogPromise === request) state.agentCatalogPromise = null;
+    });
+    state.agentCatalogPromise = request;
+    return request;
   }
 
   function providerOptionValue(ref) {
 	return JSON.stringify(ref || { source: 'native' });
+  }
+
+  function setProviderSelection(provider, requested) {
+    const value = requested || providerOptionValue({ source: 'native' });
+    let option = [...provider.options].find((entry) => entry.value === value);
+    if (!option) {
+      // A catalog refresh may remove a Profile. Preserve the explicit reference
+      // and require a human choice rather than silently switching Providers.
+      option = node('option', { value, textContent: t('agent.selectedProviderUnavailable'), disabled: true });
+      provider.append(option);
+    }
+    provider.value = value;
+    provider.setCustomValidity(option.disabled ? t('agent.selectedProviderUnavailable') : '');
   }
 
   function selectedProviderRef(actor) {
@@ -1562,7 +1665,7 @@
 	  options.push(node('option', { value: providerOptionValue(profile.provider), textContent: label, disabled: !profile.supported }));
 	}
 	provider.replaceChildren(...options);
-	provider.value = [...provider.options].some((option) => option.value === previous && !option.disabled) ? previous : providerOptionValue({ source: 'native' });
+	setProviderSelection(provider, previous);
 	const selected = selectedProviderRef(actor);
 	const profile = (state.agentCatalog?.profiles || []).find((entry) => providerOptionValue(entry.provider) === providerOptionValue(selected));
 	const runtimeEntry = runtimeCatalogEntry(runtime);
@@ -1570,10 +1673,10 @@
 	$(`${actor}-model-options`).replaceChildren(...[...models].filter(Boolean).sort().map((modelName) => node('option', { value: modelName })));
 	if (resetDependent) $(`${actor}-model`).value = '';
 	const providerDiagnostic = $(`${actor}-provider-diagnostic`);
-	providerDiagnostic.textContent = state.agentCatalog?.provider_error
+	providerDiagnostic.textContent = provider.validationMessage || (state.agentCatalog?.provider_error
 	  ? (window.PairRoomI18n?.errorMessage(state.agentCatalog.provider_error) || state.agentCatalog.provider_error.error || '')
-	  : '';
-	providerDiagnostic.classList.toggle('runtime-unavailable', Boolean(state.agentCatalog?.provider_error));
+	  : '');
+	providerDiagnostic.classList.toggle('runtime-unavailable', Boolean(provider.validationMessage || state.agentCatalog?.provider_error));
 	syncAgentPolicy(actor);
   }
 
@@ -1627,7 +1730,7 @@
 	diagnostic.classList.toggle('runtime-unavailable', !runtimeEntry?.available);
 	syncAgentProviderAndModels(actor, false);
 	const wantedProvider = providerOptionValue(selection?.provider || { source: 'native' });
-	if ([...$(`${actor}-provider`).options].some((option) => option.value === wantedProvider && !option.disabled)) $(`${actor}-provider`).value = wantedProvider;
+	setProviderSelection($(`${actor}-provider`), wantedProvider);
 	$(`${actor}-model`).value = selection?.model || '';
 	$(`${actor}-effort`).value = selection?.effort || '';
 	$(`${actor}-permission-mode`).value = selection?.permission_mode || '';
@@ -1654,6 +1757,7 @@
   }
 
   async function openRoomDialog(projectID = '') {
+    const revision = ++state.roomDialogRevision;
     const projects = (state.snapshot?.projects || []).filter((project) => project.available);
     if (!projects.length) {
       toast(t("ui.noAvailableProject"), t("ui.pleaseRegisterOrRepairAGitWorktreeFirst"), 'warning');
@@ -1669,11 +1773,12 @@
     $('codex-session-id').value = '';
 	syncBindingInputs();
 	hideFormError('room-form-error');
-    $('room-dialog-title').textContent = t("ui.createRoomInValue", { value0: (projectName(projects.find((project) => project.id === select.value))) });
+    setRenderedText('room-dialog-title', t("ui.createRoomInValue", { value0: (projectName(projects.find((project) => project.id === select.value))) }));
 	showDialog('room-dialog');
 	$('room-submit').disabled = true;
 	try {
 	  const catalog = await loadAgentCatalog();
+      if (revision !== state.roomDialogRevision || !$('room-dialog').open || !state.authenticated) return;
 	  for (const actor of ['claude', 'codex']) populateAgentControls(actor, catalog.defaults?.[actor]);
 	  $('room-submit').disabled = false;
 	  queueMicrotask(() => $('room-name').focus());
@@ -1702,6 +1807,7 @@
     }
     const bindings = {};
     for (const actor of ['claude', 'codex']) {
+      if (!$(`${actor}-provider`).reportValidity()) return;
       const mode = document.querySelector(`input[name="${actor}-mode"]:checked`)?.value || 'new';
       const sessionID = $(`${actor}-session-id`).value.trim();
       if (mode === 'existing' && !sessionID) {
@@ -1717,7 +1823,7 @@
 		await api(`/api/v1/projects/${encodeURIComponent(projectID)}/rooms`, { method: 'POST', body: JSON.stringify({ name, bindings, agents }) });
         closeDialog('room-dialog');
         toast(t("ui.roomCreated"), t("ui.agentBindingsCompletedAtomicVerification"), 'success');
-        await refresh({ forceRender: true });
+        await refresh({ forceRender: true, fresh: true });
         navigate(`#/projects/${encodeURIComponent(projectID)}`);
       } catch (error) {
         showFormError('room-form-error', error.message);
@@ -1752,7 +1858,7 @@
         await api(`/api/v1/rooms/${encodeURIComponent(roomID)}`, { method: 'PATCH', body: JSON.stringify({ name }) });
         closeDialog('rename-dialog');
         toast(t("ui.roomRenamed"), t("ui.changesAreCommittedAtTheSafeTurnBoundary"), 'success');
-        await refresh({ forceRender: true });
+        await refresh({ forceRender: true, fresh: true });
       } catch (error) {
         showFormError('rename-form-error', error.message);
       }
@@ -1808,7 +1914,7 @@
         await api(`/api/v1/rooms/${encodeURIComponent(state.bindingRoomID)}/bindings`, { method: 'POST', body: JSON.stringify({ bindings }) });
         closeDialog('binding-dialog');
         toast(t("ui.bindingsCompleted"), t("ui.legacyRoomIsNowSafeToActivate"), 'success');
-        await refresh({ forceRender: true });
+        await refresh({ forceRender: true, fresh: true });
       } catch (error) {
         showFormError('binding-form-error', error.message);
       }
@@ -1826,7 +1932,7 @@
       action: async () => {
         await api(`/api/v1/rooms/${encodeURIComponent(room.id)}/archive`, { method: 'POST' });
         toast(t("ui.roomArchived"), t("ui.historyAndBindingIdentityHaveBeenPreserved"), 'success');
-        await refresh({ forceRender: true });
+        await refresh({ forceRender: true, fresh: true });
       },
     });
   }
@@ -1839,7 +1945,7 @@
       } else {
         toast(t("ui.projectRemainsUnavailable"), refreshed.diagnostic || t("ui.canonicalWorktreeIsCurrentlyInaccessible"), 'warning');
       }
-      await refresh({ forceRender: true });
+      await refresh({ forceRender: true, fresh: true });
     } catch (error) {
       toast(t("ui.projectCheckFailed"), error.message, 'error');
     }
@@ -1965,7 +2071,7 @@
           body: JSON.stringify({ confirm_project_id: project.id }),
         });
         toast(t("ui.projectUnregistered"), t("ui.gitWorktreeAndExternalDataAreNotModified"), 'success');
-        await refresh({ forceRender: true });
+        await refresh({ forceRender: true, fresh: true });
         navigate('#/projects');
       },
     });
@@ -2014,7 +2120,7 @@
         } else {
           toast(t("ui.roomArchived"), t("ui.archivedValueRoomsTheyRemainSelectedSoYouCanContinueWithBatch", { value0: (succeeded.length) }), 'success');
         }
-        await refresh({ forceRender: true });
+        await refresh({ forceRender: true, fresh: true });
       },
     });
   }
@@ -2076,7 +2182,7 @@
         } else {
           toast(t("ui.roomPermanentlyDeleted"), t("ui.permanentlyDeletedValueArchivedRooms", { value0: (succeeded.length) }), 'success');
         }
-        await refresh({ forceRender: true });
+        await refresh({ forceRender: true, fresh: true });
       },
     });
   }
@@ -2088,7 +2194,7 @@
       } else {
         toast(t("ui.roomCleanupCompleted"), t("ui.theDeletionQuarantineHasBeenCleared"), 'success');
       }
-      await refresh({ forceRender: true });
+      await refresh({ forceRender: true, fresh: true });
     } catch (error) {
       toast(t("ui.roomCleanupRetryFailed"), error.message, 'error');
     }
@@ -2097,7 +2203,7 @@
     try {
       await api(`/api/v1/rooms/${encodeURIComponent(room.id)}/restore`, { method: 'POST' });
       toast(t("ui.roomRestored"), t("ui.theFullHistoryAndBindingIdentityAreAvailableAgain"), 'success');
-      await refresh({ forceRender: true });
+      await refresh({ forceRender: true, fresh: true });
     } catch (error) {
       toast(t("ui.restoreFailed"), error.message, 'error');
     }
@@ -2115,7 +2221,7 @@
       action: async () => {
         await api(`/api/v1/rooms/${encodeURIComponent(room.id)}/suspend`, { method: 'POST' });
         toast(queued ? t("ui.queueCanceled") : t("ui.runtimeHasHung"), queued ? t("ui.roomRemainsRecoverable") : t("ui.capacityHasBeenSafelyReleased"), 'success');
-        await refresh({ forceRender: true });
+        await refresh({ forceRender: true, fresh: true });
       },
     });
   }
@@ -2141,6 +2247,7 @@
   }
 
   async function openRoomInBrowserAction(roomID) {
+    if (state.openingBrowsers.has(roomID)) return;
     const room = roomByID(roomID);
     if (!room || room.lifecycle === 'archived') {
       toast(t("ui.couldNotOpenInBrowser"), t("ui.theArchiveRoomDoesNotHaveAnIndependentRuntimeUrlPleaseRestore"), 'warning');
@@ -2150,25 +2257,32 @@
       completeBindings(room);
       return;
     }
+    const generation = state.sessionGeneration;
+    state.openingBrowsers.add(roomID);
     const deadline = Date.now() + 60000;
     toast(t("ui.preparingTheSystemBrowser"), t("ui.waitForTheRuntimeToBeReadyBeforeOpeningIt"), 'success');
     try {
-      while (Date.now() < deadline) {
+      while (Date.now() < deadline && generation === state.sessionGeneration) {
         const status = await api(`/api/v1/rooms/${encodeURIComponent(roomID)}/activate`, { method: 'POST' });
-        if (status.phase === 'active' && status.url) break;
+        if (generation !== state.sessionGeneration) return;
+        if (status.phase === 'failed') throw new Error(status.last_error || t("ui.runtimeFailed"));
+        if (status.phase === 'active') {
+          // The activation response, not a potentially older polling snapshot,
+          // is the readiness receipt. The server owns the one-time browser URL.
+          await api(`/api/v1/rooms/${encodeURIComponent(roomID)}/open-browser`, { method: 'POST' });
+          if (generation !== state.sessionGeneration) return;
+          toast(t("ui.openedInTheSystemBrowser"), t("ui.willNotLeaveTheCurrentWorkbench"), 'success');
+          await refresh({ forceRender: true, fresh: true });
+          return;
+        }
         await new Promise((resolve) => setTimeout(resolve, 400));
-        await refresh();
+        await refresh({ fresh: true });
       }
-      const runtime = getRuntime(roomID);
-      if (runtime.phase !== 'active' || !runtime.url) {
-        throw new Error(t("ui.waitForRuntimeToTimeout"));
-      }
-      await api(`/api/v1/rooms/${encodeURIComponent(roomID)}/open-browser`, { method: 'POST' });
-      toast(t("ui.openedInTheSystemBrowser"), t("ui.willNotLeaveTheCurrentWorkbench"), 'success');
+      if (generation === state.sessionGeneration) throw new Error(t("ui.waitForRuntimeToTimeout"));
     } catch (error) {
-      const runtime = getRuntime(roomID);
-      if (runtime.url) await copyText(runtime.url, t("ui.theOneTimeRoomUrlHasBeenCopiedAndCanBePasted"));
-      toast(t("ui.couldNotOpenTheSystemBrowser"), error.message, 'error');
+      if (generation === state.sessionGeneration) toast(t("ui.couldNotOpenTheSystemBrowser"), error.message, 'error');
+    } finally {
+      state.openingBrowsers.delete(roomID);
     }
   }
 
@@ -2209,15 +2323,15 @@
     const acknowledged = !state.confirmAcknowledgementRequired || acknowledgement.checked;
     input.setCustomValidity(matches ? '' : t("ui.pleaseEnterACompleteWordForWordMatchingId"));
     acknowledgement.setCustomValidity(acknowledged ? '' : t("ui.pleaseMakeSureYouUnderstandThatThisOperationIsNotReversible"));
-    submit.disabled = !matches || !acknowledged;
+    submit.disabled = state.busyButtons.has(submit) || !matches || !acknowledged;
   }
   function openConfirm({ eyebrow = t('common.confirmUpper'), title, message, detail = '', label = t("ui.confirm"), tone = 'danger', confirmation = '', confirmationLabel = t("ui.enterTheFullIdToConfirm"), acknowledgement = '', action }) {
     resetConfirmState();
     state.confirmAction = action;
     state.confirmRequirement = confirmation;
     state.confirmAcknowledgementRequired = Boolean(acknowledgement);
-    $('confirm-eyebrow').textContent = eyebrow;
-    $('confirm-title').textContent = title;
+    setRenderedText('confirm-eyebrow', eyebrow);
+    setRenderedText('confirm-title', title);
     $('confirm-message').textContent = message;
     const detailNode = $('confirm-detail');
     detailNode.hidden = !detail;
@@ -2228,15 +2342,15 @@
     const acknowledgementWrapper = $('confirm-ack-wrap');
     const acknowledgementInput = $('confirm-ack');
     requirement.hidden = !confirmation;
-    $('confirm-input-label').textContent = confirmationLabel;
+    setRenderedText('confirm-input-label', confirmationLabel);
     $('confirm-expected').textContent = confirmation;
     input.required = Boolean(confirmation);
     input.value = '';
     acknowledgementWrapper.hidden = !acknowledgement;
-    $('confirm-ack-label').textContent = acknowledgement || t("ui.iUnderstandThisActionCannotBeUndone");
+    setRenderedText('confirm-ack-label', acknowledgement || t("ui.iUnderstandThisActionCannotBeUndone"));
     acknowledgementInput.required = Boolean(acknowledgement);
     acknowledgementInput.checked = false;
-    $('confirm-submit').textContent = label;
+    setRenderedText('confirm-submit', label);
     $('confirm-submit').className = tone === 'danger' ? 'danger-button' : 'primary-button';
     syncConfirmRequirement();
     showDialog('confirm-dialog');
@@ -2356,11 +2470,19 @@
   }
 
   async function withBusy(button, work) {
-    if (!button || button.disabled) return;
+    if (!button || button.disabled || state.busyButtons.has(button)) return;
     const original = button.textContent;
+    state.busyButtons.add(button);
     button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
     button.textContent = t("ui.processing");
-    try { await work(); } finally { button.disabled = false; button.textContent = original; }
+    try { await work(); } finally {
+      state.busyButtons.delete(button);
+      button.disabled = false;
+      button.setAttribute('aria-busy', 'false');
+      button.textContent = original;
+      if (button === $('confirm-submit')) syncConfirmRequirement();
+    }
   }
 
   function showFormError(id, message) {
@@ -2533,6 +2655,7 @@
     dialog.addEventListener('cancel', () => { if (dialog.id === 'confirm-dialog') resetConfirmState(); });
     dialog.addEventListener('close', () => {
       if (dialog.id === 'confirm-dialog') resetConfirmState();
+      if (dialog.id === 'room-dialog') state.roomDialogRevision += 1;
       if (state.renderPending && !document.querySelector('dialog[open]')) {
         render();
         state.renderPending = false;
@@ -2556,10 +2679,13 @@
     $(`${actor}-reviewer-policy`).addEventListener('change', () => syncAgentPolicy(actor));
   }
   $('agent-catalog-refresh').addEventListener('click', async () => {
-    const current = state.agentCatalog ? { claude: readAgentSelection('claude'), codex: readAgentSelection('codex') } : null;
+    const revision = state.roomDialogRevision;
+    const hadCatalog = Boolean(state.agentCatalog);
     await withBusy($('agent-catalog-refresh'), async () => {
       try {
         const catalog = await loadAgentCatalog(true);
+        if (revision !== state.roomDialogRevision || !$('room-dialog').open || !state.authenticated) return;
+        const current = hadCatalog ? { claude: readAgentSelection('claude'), codex: readAgentSelection('codex') } : null;
         for (const actor of ['claude', 'codex']) populateAgentControls(actor, current?.[actor] || catalog.defaults?.[actor]);
         hideFormError('room-form-error');
         toast(t('agent.catalogRefreshed'), '', 'success');
@@ -2570,7 +2696,7 @@
   });
   $('room-project-id').addEventListener('change', () => {
     const project = state.snapshot?.projects?.find((item) => item.id === $('room-project-id').value);
-    $('room-dialog-title').textContent = t("ui.createRoomInValue", { value0: (projectName(project)) });
+    setRenderedText('room-dialog-title', t("ui.createRoomInValue", { value0: (projectName(project)) }));
   });
   $('project-form').addEventListener('submit', submitProject);
   $('room-form').addEventListener('submit', createRoom);
@@ -2618,9 +2744,11 @@
     const data = event.data;
     if (!data || data.type !== 'pairroom-surface') return;
     const frames = Array.from(document.querySelectorAll('#room-stage iframe'));
-    if (!frames.some((frame) => frame.contentWindow === event.source)) return;
+    const frame = frames.find((frame) => frame.contentWindow === event.source);
+    const roomID = frame?.parentElement?.dataset.roomId;
+    if (!roomID || (data.roomId && data.roomId !== roomID)) return;
     if (data.action === 'close-tab') {
-      closeTab(data.roomId || state.route.roomID);
+      closeTab(roomID);
       return;
     }
     if (!data.roomId) return;

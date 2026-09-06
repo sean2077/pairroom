@@ -74,6 +74,7 @@ check: test race vet agent-contract release-contract docs-check
 		node --check scripts/test_theme.js && \
 		node scripts/test_room_shell.js && \
 		node scripts/test_room_client.js && \
+		node scripts/test_management_client.js && \
 		node scripts/test_i18n.js && \
 		node scripts/test_theme.js; \
 	fi
@@ -130,3 +131,4 @@ docs-check:
 # Development-only: install scripts/requirements-browser.txt and its Chromium first.
 browser-check:
 	"$(PYTHON)" scripts/test_room_browser.py
+	"$(PYTHON)" scripts/test_management_browser.py
