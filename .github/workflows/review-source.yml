@@ -1,4 +1,4 @@
-name: Review source (temporary)
+name: Review latest source (temporary)
 on:
   pull_request:
     branches: [main]
@@ -23,6 +23,6 @@ jobs:
           git rev-parse HEAD > "$RUNNER_TEMP/source/HEAD"
       - uses: actions/upload-artifact@v7
         with:
-          name: pairroom-names-source
+          name: pairroom-names-latest-source
           path: ${{ runner.temp }}/source
           retention-days: 1
