@@ -18,7 +18,7 @@ tasks:
       - task: common:generate:icons
     cmds:
       - go build {{.BUILD_FLAGS}} -o {{.OUTPUT}}
-      - python scripts/build-cli.py
+      - '"{{.PYTHON}}" scripts/build-cli.py'
     vars:
       BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags production -trimpath -buildvcs=false -ldflags="-w -s"{{else}}-buildvcs=false -gcflags=all="-l"{{end}}'
       DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}'
@@ -66,10 +66,11 @@ tasks:
   create:app:bundle:
     summary: Creates an `.app` bundle
     cmds:
-      - mkdir -p {{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/{MacOS,Resources}
+      - rm -rf {{.BIN_DIR}}/{{.APP_NAME}}.app
+      - mkdir -p {{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/{MacOS,Helpers,Resources}
       - cp build/darwin/icons.icns {{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources
       - cp {{.BIN_DIR}}/{{.APP_NAME}} {{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS
-      - cp {{.BIN_DIR}}/pairroom {{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS
+      - cp {{.BIN_DIR}}/cli/pairroom {{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Helpers
       - cp build/darwin/Info.plist {{.BIN_DIR}}/{{.APP_NAME}}.app/Contents
       - codesign --force --deep --sign - {{.BIN_DIR}}/{{.APP_NAME}}.app
 

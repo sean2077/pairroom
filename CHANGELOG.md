@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Desktop launch no longer installs a daemon from its bundled CLI. Reuse an installed daemon, or own an embedded Service when no daemon is installed. Keep stale-lock recovery and graceful Turn draining intact.
+- Add an opt-in Settings → Desktop → Launch at login switch backed by native OS registration, independent of daemon installation. Read the real registration state and surface failures; ordinary browsers do not expose the native control.
+- Add `make desktop-update` to build and update the existing local desktop host and bundled CLI (or macOS app bundle), with custom path selection, staged replacement/rollback, and no process killing, daemon changes, or user-data removal.
+
 ## [v3.0.2] — 2026-09-07
 
 - Desktop and `pairroom daemon start` recover a crash-stale `service.lock` after verifying the recorded PID is gone, then start or restart the installed daemon so a leftover lock does not block launch. A live lock owner still fails closed; Desktop does not start a competing embedded Service.

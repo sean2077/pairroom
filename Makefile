@@ -24,7 +24,7 @@ ifeq ($(strip $(GOBIN)),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package clean docs-check browser-check
+.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package desktop-update desktop-check clean docs-check browser-check
 
 build:
 	mkdir -p $(DIST)
@@ -56,7 +56,7 @@ cover:
 	go test -count=1 -coverprofile=.coverage ./...
 	go tool cover -func=.coverage
 
-check: test race vet agent-contract release-contract docs-check
+check: test race vet agent-contract release-contract docs-check desktop-check
 	@test -z "$$(gofmt -l $(GO_FILES))" || { echo 'Go files are not gofmt-clean'; gofmt -l $(GO_FILES); exit 1; }
 	@if command -v node >/dev/null 2>&1; then \
 		node --check internal/webui/assets/i18n.js && \
@@ -77,7 +77,8 @@ check: test race vet agent-contract release-contract docs-check
 		node scripts/test_room_client.js && \
 		node scripts/test_management_client.js && \
 		node scripts/test_i18n.js && \
-		node scripts/test_theme.js; \
+		node scripts/test_theme.js && \
+		node scripts/test_desktop_settings.js; \
 	fi
 	@go run scripts/check_dependencies.go
 	# The vendored upstream UMD intentionally retains its published trailing
@@ -116,10 +117,17 @@ release:
 package: release
 
 desktop-build:
-	cd "$(DESKTOP_DIR)" && "$(DESKTOP_PYTHON)" scripts/prepare-build.py && "$(DESKTOP_WAILS)" task build
+	cd "$(DESKTOP_DIR)" && PAIRROOM_WAILS="$(DESKTOP_WAILS)" "$(DESKTOP_PYTHON)" scripts/prepare-build.py && PAIRROOM_WAILS="$(DESKTOP_WAILS)" PAIRROOM_DESKTOP_PYTHON="$(DESKTOP_PYTHON)" "$(DESKTOP_WAILS)" task build
 
 desktop-package:
-	cd "$(DESKTOP_DIR)" && "$(DESKTOP_PYTHON)" scripts/prepare-build.py && "$(DESKTOP_WAILS)" task package
+	cd "$(DESKTOP_DIR)" && PAIRROOM_WAILS="$(DESKTOP_WAILS)" "$(DESKTOP_PYTHON)" scripts/prepare-build.py && PAIRROOM_WAILS="$(DESKTOP_WAILS)" PAIRROOM_DESKTOP_PYTHON="$(DESKTOP_PYTHON)" "$(DESKTOP_WAILS)" task package
+
+desktop-check:
+	"$(DESKTOP_PYTHON)" "$(DESKTOP_DIR)/scripts/test_update_local.py"
+
+# Rebuild and replace the local host + bundled CLI without changing daemon state.
+desktop-update:
+	cd "$(DESKTOP_DIR)" && "$(DESKTOP_PYTHON)" scripts/update-local.py --wails "$(DESKTOP_WAILS)" $(if $(strip $(DESKTOP_INSTALL_DIR)),--install-dir "$(DESKTOP_INSTALL_DIR)",)
 
 clean:
 	@test "$(DIST)" = dist || { echo 'clean only accepts the default DIST=dist' >&2; exit 1; }
@@ -134,3 +142,4 @@ browser-check:
 	"$(PYTHON)" scripts/test_room_browser.py
 	"$(PYTHON)" scripts/test_management_browser.py
 	"$(PYTHON)" scripts/test_service_browser.py
+	"$(PYTHON)" scripts/test_desktop_settings_browser.py

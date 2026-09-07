@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/desktop/internal/host"
+	"github.com/sean2077/pairroom/desktop/internal/startup"
 	"github.com/sean2077/pairroom/internal/webui"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -292,8 +293,24 @@ func main() {
 	var window *application.WebviewWindow
 	windowGate := &desktopWindowGate{}
 	var startDesktop func()
+	var startupSettings *startup.Settings
 
 	app := application.New(application.Options{
+		RawMessageHandler: func(sender application.Window, message string, origin *application.OriginInfo) {
+			if window == nil || sender != window || origin == nil || startupSettings == nil {
+				return
+			}
+			controller.hostMu.Lock()
+			currentURL := controller.host.URL()
+			controller.hostMu.Unlock()
+			if !startup.TrustedOrigin(currentURL, origin.Origin, origin.TopOrigin, runtime.GOOS, origin.IsMainFrame) {
+				return
+			}
+			if response, ok := startupSettings.Handle(message); ok {
+				encoded, _ := json.Marshal(response)
+				window.ExecJS("window.PairRoomDesktop?.receive(" + string(encoded) + ");")
+			}
+		},
 		Name:        "PairRoom",
 		Description: "Claude Code and Codex local collaboration control plane",
 		Assets: application.AssetOptions{
@@ -324,6 +341,9 @@ func main() {
 			ApplicationShouldTerminateAfterLastWindowClosed: false,
 		},
 	})
+
+	// Reading or rendering Settings never opts a user into autostart.
+	startupSettings = startup.New(app.Autostart)
 
 	window = app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:      "pairroom-main",

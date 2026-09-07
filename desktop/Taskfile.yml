@@ -7,6 +7,8 @@ includes:
   linux: ./build/linux/Taskfile.yml
 
 vars:
+  WAILS: '{{env "PAIRROOM_WAILS" | default "wails3"}}'
+  PYTHON: '{{env "PAIRROOM_DESKTOP_PYTHON" | default "python"}}'
   APP_NAME: "PairRoom"
   BIN_DIR: "bin"
 

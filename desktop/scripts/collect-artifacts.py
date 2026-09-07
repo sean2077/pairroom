@@ -79,7 +79,7 @@ def collect(platform: str) -> list[pathlib.Path]:
         app = binary_dir / "PairRoom.app"
         if not app.is_dir():
             raise SystemExit(f"expected macOS bundle: {app}")
-        cli = app / "Contents" / "MacOS" / "pairroom"
+        cli = app / "Contents" / "Helpers" / "pairroom"
         if not cli.is_file():
             raise SystemExit(
                 f"expected PairRoom CLI inside the macOS bundle: {cli}"

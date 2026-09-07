@@ -20,14 +20,15 @@ import (
 
 type fakeDaemonManager struct {
 	status    daemon.Status
+	installed int
 	started   int
 	restarted int
 	start     func() error
 	restart   func() error
 }
 
-func (*fakeDaemonManager) Install(daemon.Config) error { return nil }
-func (*fakeDaemonManager) Uninstall() error            { return nil }
+func (m *fakeDaemonManager) Install(daemon.Config) error { m.installed++; return nil }
+func (*fakeDaemonManager) Uninstall() error              { return nil }
 func (m *fakeDaemonManager) Start() error {
 	m.started++
 	if m.start != nil {
@@ -339,73 +340,27 @@ func TestStartRefusesInstalledDaemonWithoutMetadata(t *testing.T) {
 	}
 }
 
-func TestBundledCLICandidatesDoNotAliasWindowsHost(t *testing.T) {
-	dir := filepath.Join("C:", "Program Files", "PairRoom")
-	got := bundledCLICandidates(dir)
-	for _, path := range got {
-		if samePath(path, filepath.Join(dir, "PairRoom.exe")) {
-			t.Fatalf("Windows CLI candidate %q collides with the desktop host name", path)
-		}
+func TestDefaultStartDoesNotInstallDaemon(t *testing.T) {
+	setHostUserConfigDir(t, t.TempDir())
+	for _, name := range []string{"PAIRROOM_DESKTOP_URL", configPathVariable, dataRootVariable} {
+		t.Setenv(name, "")
 	}
-	if runtime.GOOS == "windows" {
-		if len(got) == 0 || !strings.Contains(got[0], filepath.Join("bin", "pairroom.exe")) {
-			t.Fatalf("Windows candidates = %v", got)
-		}
-	}
-}
-
-func TestDaemonWorkDirUsesHostDirectory(t *testing.T) {
-	if got := daemonWorkDir(filepath.Join("C:", "app", "bin", "pairroom.exe")); !strings.EqualFold(got, filepath.Join("C:", "app")) {
-		t.Fatalf("install layout work dir = %q", got)
-	}
-	if got := daemonWorkDir(filepath.Join("C:", "app", "cli", "pairroom.exe")); !strings.EqualFold(got, filepath.Join("C:", "app")) {
-		t.Fatalf("build layout work dir = %q", got)
-	}
-}
-
-func TestStartInstallsBundledCLIWhenDaemonIsMissing(t *testing.T) {
-	configRoot := t.TempDir()
-	setHostUserConfigDir(t, configRoot)
-	t.Setenv("PAIRROOM_DESKTOP_URL", "")
-	t.Setenv(dataRootVariable, "")
-
-	managementSecret := "desktop-bundled-secret"
-	managementURL := ""
-	logFile := filepath.Join(configRoot, "service.log")
-	dataRoot := filepath.Join(configRoot, "data")
-	server := newTestManagementServer(t, managementSecret, &managementURL, dataRoot)
-	defer server.Close()
-
-	manager := &fakeDaemonManager{status: daemon.Status{Installed: false, Running: false}}
-	manager.start = func() error {
-		return os.WriteFile(logFile, []byte("management: "+managementURL+"\n"), 0o600)
-	}
-	originalManager := newDaemonManager
-	t.Cleanup(func() { newDaemonManager = originalManager })
+	manager := &fakeDaemonManager{}
+	original := newDaemonManager
+	t.Cleanup(func() { newDaemonManager = original })
 	newDaemonManager = func() (daemon.Manager, error) { return manager, nil }
-
-	installed := 0
-	originalLookup := lookupBundledCLI
-	originalInstall := installFromBundledCLI
-	t.Cleanup(func() {
-		lookupBundledCLI = originalLookup
-		installFromBundledCLI = originalInstall
-	})
-	lookupBundledCLI = func() (string, bool) { return filepath.Join(configRoot, "pairroom.exe"), true }
-	installFromBundledCLI = func(context.Context, string) error {
-		installed++
-		manager.status = daemon.Status{Installed: true, Running: false}
-		return daemon.SaveMeta(&daemon.Meta{LogFile: logFile, LogBackups: 1, DataRoot: dataRoot, BinaryPath: "pairroom.exe"})
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	host, err := Start(ctx, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if host.Mode() != ModeExternal || installed != 1 || manager.started != 1 {
-		t.Fatalf("host mode=%q installs=%d daemon starts=%d", host.Mode(), installed, manager.started)
+	defer host.Shutdown(context.Background())
+	if host.Mode() != ModeEmbedded || manager.installed != 0 || manager.started != 0 || manager.restarted != 0 {
+		t.Fatalf("mode=%q, daemon mutations=%+v", host.Mode(), manager)
+	}
+	if _, err := daemon.LoadMeta(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("desktop launch created daemon metadata: %v", err)
 	}
 }
 

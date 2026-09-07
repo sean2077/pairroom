@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Build the PairRoom CLI next to the desktop host.
 
-A desktop package without pairroom cannot own the default data root: the
-desktop host must reuse or install `pairroom daemon`. This script builds the
-root-module CLI into desktop/bin using the same version ldflags as `make build`.
+The bundled CLI supports explicit daemon administration and diagnostics.
+Desktop startup never installs a daemon. This script builds the root-module
+CLI into desktop/bin using the same version ldflags as `make build`.
 """
 from __future__ import annotations
 
@@ -38,6 +38,9 @@ def cli_destination() -> pathlib.Path:
         # NTFS is case-insensitive: desktop/bin/pairroom.exe would overwrite
         # PairRoom.exe. Keep the Windows CLI in a subdirectory.
         return ROOT / "bin" / "cli" / "pairroom.exe"
+    if goos == "darwin":
+        # Default macOS volumes are also case-insensitive: do not replace PairRoom.
+        return ROOT / "bin" / "cli" / "pairroom"
     return ROOT / "bin" / "pairroom"
 
 

@@ -87,6 +87,8 @@ On startup, the desktop host:
 2. Discovers an installed `pairroom daemon`, recovers a crash-stale lock after the recorded PID is gone, starts or restarts it when needed, and waits for an authenticated Management URL;
 3. Starts a PairRoom Service in the current desktop process only when no daemon is installed. If a daemon is installed but unreachable, it fails closed and does not start a second Service.
 
+Desktop startup never installs a daemon. Use **Settings → Desktop → Launch at login** to opt into or out of desktop startup at sign-in; the OS persists that setting independently of daemon installation.
+
 Closing the main window only hides to the system tray and does not interrupt an active Agent. Explicit quit shuts down only an embedded Service owned by the desktop host, draining along the existing native-Turn boundary; an external daemon is unaffected. Build, dependency, and package notes are in [PairRoom Desktop](desktop/README.md). Browser and CLI entry points remain fully available.
 
 ## Documentation
@@ -115,9 +117,12 @@ Desktop module:
 ```bash
 make desktop-build
 make desktop-package
+make desktop-update
 ```
 
 `make desktop-build` builds the current-platform desktop host and bundled `pairroom` CLI. `make desktop-package` builds the current-platform production installer or app bundle (Windows NSIS, including `PairRoom.exe` and `bin\pairroom.exe`). Artifacts land in `desktop/bin/`. Desktop module tests still run from `desktop/`: `cd desktop && go test -count=1 ./...`.
+
+`make desktop-update` rebuilds the current checkout and updates the installed desktop host and bundled CLI. Use `DESKTOP_INSTALL_DIR="installation directory"` for custom or ambiguous locations, and quit from the tray first. User data and login settings are preserved; no processes are killed and no daemon is installed or reconfigured. See [desktop development notes](desktop/README.md#update-the-installed-desktop-from-source) for dependencies, paths, and AppImage limitations.
 
 `docs-check` verifies documentation links, source paths, CLI flags, HTTP routes, and JSON configuration fields so docs cannot silently drift as the code evolves. The root and desktop modules use Go 1.25. The root dependency gate permits only the pinned CGo-free SQLite closure; Wails remains isolated to the desktop module. Third-party notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 

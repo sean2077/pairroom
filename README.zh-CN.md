@@ -87,6 +87,8 @@ Management Shell 打开后：
 2. 发现已安装的 `pairroom daemon`，在确认锁内 PID 已退出后回收 crash-stale `service.lock`，必要时启动或重启 daemon，并等待 authenticated Management URL；
 3. 只有没有安装 daemon 时，才在当前桌面进程中启动 PairRoom Service；已安装但不可达时 fail closed，不启动第二个 Service。
 
+桌面端启动不会自动安装 daemon。可在 **设置 → 桌面端 → 开机启动** 中启用或关闭登录系统时启动桌面端；设置保存在操作系统中，与 daemon 安装相互独立。
+
 关闭主窗口只会隐藏到系统托盘，不会中断活动 Agent。显式退出只关闭桌面端拥有的内嵌 Service，并沿现有 native-Turn drain 边界优雅退出；外部 daemon 不受影响。构建、依赖和安装包说明见 [PairRoom Desktop](desktop/README.md)。浏览器和 CLI 入口保持完整可用。
 
 ## 文档入口
@@ -115,9 +117,12 @@ make smoke
 ```bash
 make desktop-build
 make desktop-package
+make desktop-update
 ```
 
 `make desktop-build` 构建当前平台的桌面 Host 和捆绑的 `pairroom` CLI，`make desktop-package` 构建当前平台的生产安装包或应用包（Windows 为 NSIS 安装包，内含 `PairRoom.exe` 与 `bin\pairroom.exe`），产物位于 `desktop/bin/`。桌面模块测试仍从 `desktop/` 目录运行：`cd desktop && go test -count=1 ./...`。
+
+`make desktop-update` 从当前源码重建并更新本地已安装的桌面端和捆绑 CLI；自定义或存在多个安装目录时使用 `DESKTOP_INSTALL_DIR="安装目录"`。执行前通过托盘退出桌面端。更新保留用户数据和开机启动设置，不强杀进程，也不安装或修改 daemon。依赖、路径规则和 AppImage 限制见 [桌面开发说明](desktop/README.md#update-the-installed-desktop-from-source)。
 
 `docs-check` 会校验文档链接、源码路径、CLI 参数、HTTP 路由和 JSON 配置字段，防止文档在代码继续演进后静默漂移。根模块与桌面模块均使用 Go 1.25；根模块只允许固定的 CGo-free SQLite 依赖闭包，Wails 仍隔离在桌面模块。第三方许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 

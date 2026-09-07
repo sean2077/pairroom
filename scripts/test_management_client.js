@@ -46,7 +46,8 @@ function client() {
   const hook = `
     globalThis.management = {state, api, refresh, loadAgentCatalog, withBusy,
       syncConfirmRequirement, createBrowserSession, showCredentialLogin,
-      invalidateSessionReads, openRoomInBrowserAction, connect,
+      invalidateSessionReads, openRoomInBrowserAction, connect, updateDesktopStartup,
+      setDesktop(value) { window.PairRoomDesktop = value; },
       setAPI(callback) { api = callback; }, setCanRender(value) { canRenderNow = () => value; }};
     render = () => { renders.push(state.snapshot); state.renderedSnapshotKey = snapshotRenderKey(state.snapshot); };
     toast = (...args) => notices.push(args);
@@ -65,6 +66,25 @@ function client() {
 async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
 
 async function main() {
+  {
+    const c = client(), update = deferred(); let writes = 0;
+    c.setDesktop({readStartup: async () => false, setStartup: () => { writes++; return update.promise; }});
+    await c.updateDesktopStartup();
+    assert.equal(c.state.desktopStartup.enabled, false);
+    const write = c.updateDesktopStartup(true);
+    assert.equal(c.state.desktopStartup.pending, true);
+    await c.updateDesktopStartup(false);
+    assert.equal(writes, 1, 'coalesce native setting changes while pending');
+    update.reject(Object.assign(new Error('access denied'), {enabled: false}));
+    await write;
+    assert.equal(c.state.desktopStartup.enabled, false, 'failed toggle shows actual native state, not optimistic success');
+    assert.equal(c.state.desktopStartup.pending, false);
+    assert.equal(c.state.desktopStartup.error, 'access denied');
+    c.setDesktop({readStartup: async () => { throw new Error('unavailable'); }});
+    await c.updateDesktopStartup();
+    assert.equal(c.state.desktopStartup.enabled, null, 'unknown OS state disables the toggle');
+  }
+
   {
     const c = client(), oldRead = deferred(), newRead = deferred(); let reads = 0;
     c.setAPI(() => (++reads === 1 ? oldRead : newRead).promise);
