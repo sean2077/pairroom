@@ -525,7 +525,7 @@
 
       const avatar = document.createElement('div');
       avatar.className = `avatar avatar-${actor}`;
-      avatar.textContent = (p.display_name || displayName(actor)).slice(0, 1).toUpperCase();
+      avatar.textContent = avatarText(actor);
       card.appendChild(avatar);
 
       const main = document.createElement('div');
@@ -954,7 +954,7 @@
 
     const avatar = document.createElement('div');
     avatar.className = `message-avatar avatar-${actor === 'user' ? 'human' : actor}`;
-    avatar.textContent = actor === 'user' ? 'Y' : actor === 'claude' ? '1' : '2';
+    avatar.textContent = avatarText(actor);
 
     const content = document.createElement('div');
     content.className = 'message-content';
@@ -1094,7 +1094,7 @@
     row.dataset.streamingCorrelation = correlation || '';
     const avatar = document.createElement('div');
     avatar.className = `message-avatar avatar-${actor}`;
-    avatar.textContent = actor === 'claude' ? '1' : '2';
+    avatar.textContent = avatarText(actor);
     const content = document.createElement('div');
     content.className = 'message-content';
     const meta = document.createElement('div');
@@ -2341,6 +2341,15 @@
   function displayName(actor) {
 	if (actor === 'claude' || actor === 'codex') return state.snapshot?.participants?.[actor]?.display_name || (actor === 'claude' ? t('agent.agent1') : t('agent.agent2'));
     return ({ user: t('common.you'), system: 'PairRoom' })[actor] || actor;
+  }
+
+  function avatarText(actor) {
+    if (actor === 'user') return 'Y';
+    if (actor === 'claude' || actor === 'codex') {
+      const p = state.snapshot?.participants?.[actor];
+      return (p?.display_name || displayName(actor)).slice(0, 1).toUpperCase();
+    }
+    return actor.slice(0, 1).toUpperCase();
   }
   function stateText(value) {
     return ({ stopped: t('common.stopped'), starting: t('common.starting'), idle: t('common.ready'), working: t('ui.working694b71b'), waiting: t('ui.waiting'), error: t('common.error') })[value] || value;
