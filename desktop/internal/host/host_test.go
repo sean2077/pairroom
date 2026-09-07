@@ -19,9 +19,11 @@ import (
 )
 
 type fakeDaemonManager struct {
-	status  daemon.Status
-	started int
-	start   func() error
+	status    daemon.Status
+	started   int
+	restarted int
+	start     func() error
+	restart   func() error
 }
 
 func (*fakeDaemonManager) Install(daemon.Config) error { return nil }
@@ -33,8 +35,14 @@ func (m *fakeDaemonManager) Start() error {
 	}
 	return nil
 }
-func (*fakeDaemonManager) Stop() error    { return nil }
-func (*fakeDaemonManager) Restart() error { return nil }
+func (*fakeDaemonManager) Stop() error { return nil }
+func (m *fakeDaemonManager) Restart() error {
+	m.restarted++
+	if m.restart != nil {
+		return m.restart()
+	}
+	return nil
+}
 func (m *fakeDaemonManager) Status() (*daemon.Status, error) {
 	status := m.status
 	return &status, nil
@@ -75,8 +83,8 @@ func TestEmbeddedHostOwnsOneDataRootAndShutsDown(t *testing.T) {
 		DataRoot:                 root,
 		Mock:                     true,
 		DisableExternalDiscovery: true,
-	}); !errors.Is(err, service.ErrServiceAlreadyRunning) {
-		t.Fatalf("second host error = %v, want ErrServiceAlreadyRunning", err)
+	}); !errors.Is(err, service.ErrServiceLockOwnerRunning) {
+		t.Fatalf("second host error = %v, want ErrServiceLockOwnerRunning", err)
 	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -86,6 +94,40 @@ func TestEmbeddedHostOwnsOneDataRootAndShutsDown(t *testing.T) {
 	}
 	if err := first.Shutdown(shutdownCtx); err != nil {
 		t.Fatalf("idempotent shutdown: %v", err)
+	}
+}
+
+func TestStartEmbeddedRecoversCrashStaleLock(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := json.Marshal(map[string]any{"pid": 99999999, "started_at": "2026-09-02T03:55:24Z", "nonce": "stale"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "service.lock"), append(lock, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	host, err := Start(ctx, Options{
+		DataRoot:                 root,
+		Mock:                     true,
+		DisableExternalDiscovery: true,
+		RuntimeLimit:             1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer host.Shutdown(context.Background())
+	if host.Mode() != ModeEmbedded {
+		t.Fatalf("mode = %q", host.Mode())
+	}
+	info, found, err := service.InspectServiceLock(root)
+	if err != nil || !found || info.PID != os.Getpid() {
+		t.Fatalf("embedded lock after stale recovery: found=%v pid=%d err=%v", found, info.PID, err)
 	}
 }
 
@@ -123,7 +165,100 @@ func TestStartStartsInstalledDaemonInsteadOfStartingEmbeddedCompetitor(t *testin
 	}
 }
 
-func TestStartReportsInstalledDaemonStaleLockWithoutEmbeddedFallback(t *testing.T) {
+func TestStartRecoversCrashStaleLockAndStartsInstalledDaemon(t *testing.T) {
+	configRoot := t.TempDir()
+	setHostUserConfigDir(t, configRoot)
+	t.Setenv("PAIRROOM_DESKTOP_URL", "")
+	t.Setenv(dataRootVariable, "")
+
+	managementSecret := "desktop-stale-secret"
+	managementURL := ""
+	logFile := filepath.Join(configRoot, "service.log")
+	dataRoot := filepath.Join(configRoot, "data")
+	server := newTestManagementServer(t, managementSecret, &managementURL, dataRoot)
+	defer server.Close()
+	if err := daemon.SaveMeta(&daemon.Meta{LogFile: logFile, LogBackups: 1, DataRoot: dataRoot, BinaryPath: "pairroom.exe"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dataRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const stalePID = 99999999
+	lock, err := json.Marshal(map[string]any{"pid": stalePID, "started_at": "2026-09-02T03:55:24Z", "nonce": "stale"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(dataRoot, "service.lock")
+	if err := os.WriteFile(lockPath, append(lock, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := &fakeDaemonManager{status: daemon.Status{Installed: true, Running: false}}
+	manager.start = func() error {
+		return os.WriteFile(logFile, []byte("management: "+managementURL+"\n"), 0o600)
+	}
+	original := newDaemonManager
+	t.Cleanup(func() { newDaemonManager = original })
+	newDaemonManager = func() (daemon.Manager, error) { return manager, nil }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	host, err := Start(ctx, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host.Mode() != ModeExternal || manager.started != 1 || manager.restarted != 0 {
+		t.Fatalf("host mode=%q daemon starts=%d restarts=%d", host.Mode(), manager.started, manager.restarted)
+	}
+	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("crash-stale lock still present: %v", err)
+	}
+}
+
+func TestStartRestartsRunningDaemonAfterCrashStaleLockRecovery(t *testing.T) {
+	configRoot := t.TempDir()
+	setHostUserConfigDir(t, configRoot)
+	t.Setenv("PAIRROOM_DESKTOP_URL", "")
+	t.Setenv(dataRootVariable, "")
+
+	managementSecret := "desktop-stale-restart-secret"
+	managementURL := ""
+	logFile := filepath.Join(configRoot, "service.log")
+	dataRoot := filepath.Join(configRoot, "data")
+	server := newTestManagementServer(t, managementSecret, &managementURL, dataRoot)
+	defer server.Close()
+	if err := daemon.SaveMeta(&daemon.Meta{LogFile: logFile, LogBackups: 1, DataRoot: dataRoot, BinaryPath: "pairroom.exe"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dataRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := json.Marshal(map[string]any{"pid": 99999999, "started_at": "2026-09-02T03:55:24Z", "nonce": "stale"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataRoot, "service.lock"), append(lock, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := &fakeDaemonManager{status: daemon.Status{Installed: true, Running: true}}
+	manager.restart = func() error {
+		return os.WriteFile(logFile, []byte("management: "+managementURL+"\n"), 0o600)
+	}
+	original := newDaemonManager
+	t.Cleanup(func() { newDaemonManager = original })
+	newDaemonManager = func() (daemon.Manager, error) { return manager, nil }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	host, err := Start(ctx, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host.Mode() != ModeExternal || manager.started != 0 || manager.restarted != 1 {
+		t.Fatalf("host mode=%q daemon starts=%d restarts=%d", host.Mode(), manager.started, manager.restarted)
+	}
+}
+
+func TestStartLeavesLiveLockOwnerAndDoesNotStartEmbeddedCompetitor(t *testing.T) {
 	configRoot := t.TempDir()
 	setHostUserConfigDir(t, configRoot)
 	t.Setenv("PAIRROOM_DESKTOP_URL", "")
@@ -136,12 +271,15 @@ func TestStartReportsInstalledDaemonStaleLockWithoutEmbeddedFallback(t *testing.
 	if err := os.MkdirAll(dataRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	const stalePID = 99999999
-	lock, err := json.Marshal(map[string]any{"pid": stalePID, "started_at": "2026-09-02T03:55:24Z", "nonce": "stale"})
+	if err := os.WriteFile(logFile, []byte("not a management url\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := json.Marshal(map[string]any{"pid": os.Getpid(), "started_at": "2026-09-02T03:55:24Z", "nonce": "live"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dataRoot, "service.lock"), append(lock, '\n'), 0o600); err != nil {
+	lockPath := filepath.Join(dataRoot, "service.lock")
+	if err := os.WriteFile(lockPath, append(lock, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	manager := &fakeDaemonManager{status: daemon.Status{Installed: true, Running: false}}
@@ -152,11 +290,14 @@ func TestStartReportsInstalledDaemonStaleLockWithoutEmbeddedFallback(t *testing.
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 	_, err = Start(ctx, Options{})
-	if err == nil || !strings.Contains(err.Error(), "crash-stale service.lock") || !strings.Contains(err.Error(), "pid 99999999") {
-		t.Fatalf("stale-lock startup error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "authenticated Management Shell did not become available") {
+		t.Fatalf("live-lock startup error = %v", err)
 	}
-	if manager.started != 0 {
-		t.Fatalf("daemon starts=%d, want no start while a stale lock requires explicit recovery", manager.started)
+	if manager.started != 0 || manager.restarted != 0 {
+		t.Fatalf("daemon starts=%d restarts=%d, want no start while a live owner holds the root", manager.started, manager.restarted)
+	}
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("live lock was removed: %v", err)
 	}
 }
 

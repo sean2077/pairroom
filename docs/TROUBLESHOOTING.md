@@ -61,6 +61,6 @@ Use `--help` on the current command to check listen / token flags, and confirm a
 
 ## Desktop, daemon, and service.lock conflicts
 
-The default PairRoom data root allows only one Service owner. After discovering an installed daemon, the desktop host connects to it, starting it if needed. If a daemon installation exists but cannot provide an authenticated Management Shell, the desktop host stops startup and shows the data root, binary, and lock-owner information; it does not start a second embedded Service.
+The default PairRoom data root allows only one Service owner. After discovering an installed daemon, the desktop host recovers a crash-stale lock whose recorded PID is gone, then starts or restarts that daemon and connects to it. If a live owner remains, or the daemon stays unreachable after that heal, the desktop host stops startup and shows the data root, binary, and lock-owner information; it does not start a second embedded Service.
 
-When handling a leftover lock, run `pairroom daemon status` first. Only after confirming the task is stopped and the PID in the lock no longer exists, run `pairroom daemon start --recover-stale-lock`. If the PID is still running, use `pairroom daemon stop` and wait for graceful drain. Desktop quit shuts down only an embedded Service it owns; it does not stop an external daemon.
+If startup still reports a live `service.lock` owner, run `pairroom daemon status`. When the recorded PID is running, use `pairroom daemon stop` and wait for graceful drain. Desktop quit shuts down only an embedded Service it owns; it does not stop an external daemon.

@@ -58,8 +58,8 @@ func ServiceLockOwnerRunning(info ServiceLockInfo) (bool, error) {
 
 // ServiceLock is a cooperative process lock for one service data root. The
 // on-disk nonce prevents a delayed Close from deleting a replacement owner's
-// lock. Crash-stale locks are recovered only through an explicit CLI flag;
-// PairRoom never guesses that another process is dead.
+// lock. Crash-stale locks are recovered only after the recorded PID is
+// confirmed gone; PairRoom never guesses that another process is dead.
 type ServiceLock struct {
 	root  string
 	path  string
@@ -201,11 +201,12 @@ func sameServiceLockMetadata(left, right serviceLockMetadata) bool {
 	return left.PID == right.PID && left.StartedAt.Equal(right.StartedAt) && left.Nonce == right.Nonce
 }
 
-// RecoverServiceLock removes one explicitly authorized crash-stale lock. The
-// owner metadata is validated and its PID is probed before the file is moved
-// aside; the live path is never deleted in place, so a replacement owner that
-// appears after the move is left untouched. Normal startup never invokes this
-// path implicitly.
+// RecoverServiceLock removes one crash-stale lock after the recorded PID is
+// confirmed gone. The owner metadata is validated and its PID is probed before
+// the file is moved aside; the live path is never deleted in place, so a
+// replacement owner that appears after the move is left untouched. Desktop and
+// daemon start invoke this after that liveness check; a live owner still fails
+// closed.
 func RecoverServiceLock(input string) error {
 	root, err := ResolveRoot(input)
 	if err != nil {

@@ -333,8 +333,7 @@ func daemonUninstall(args []string) error {
 }
 
 func daemonStart(args []string) error {
-	recoverStale, err := parseRecoverFlag("start", args)
-	if err != nil {
+	if _, err := parseRecoverFlag("start", args); err != nil {
 		return err
 	}
 	manager, status, err := installedDaemonManager()
@@ -345,10 +344,8 @@ func daemonStart(args []string) error {
 		fmt.Println("PairRoom daemon is already running.")
 		return nil
 	}
-	if recoverStale {
-		if err := recoverDaemonServiceLock(); err != nil {
-			return err
-		}
+	if err := recoverDaemonServiceLockIfPresent(); err != nil {
+		return err
 	}
 	if err := manager.Start(); err != nil {
 		return err
@@ -392,14 +389,21 @@ func daemonRestart(args []string) error {
 				return err
 			}
 		}
-		if err := recoverDaemonServiceLock(); err != nil {
+		if err := recoverDaemonServiceLockIfPresent(); err != nil {
 			return err
 		}
 		if err := manager.Start(); err != nil {
 			return err
 		}
-	} else if err := manager.Restart(); err != nil {
-		return err
+	} else {
+		if !status.Running {
+			if err := recoverDaemonServiceLockIfPresent(); err != nil {
+				return err
+			}
+		}
+		if err := manager.Restart(); err != nil {
+			return err
+		}
 	}
 	fmt.Println("PairRoom daemon restarted.")
 	autoOpenDaemonManagementShell()
@@ -417,8 +421,11 @@ func parseRecoverFlag(command string, args []string) (bool, error) {
 	return recoverStale, nil
 }
 
-func recoverDaemonServiceLock() error {
+func recoverDaemonServiceLockIfPresent() error {
 	meta, err := daemon.LoadMeta()
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("load daemon metadata before stale-lock recovery: %w", err)
 	}
@@ -501,7 +508,7 @@ func printDaemonMetadata(meta *daemon.Meta) {
 		} else if running {
 			fmt.Printf("  lock:      pid %d running (started %s)\n", info.PID, info.StartedAt.Format(time.RFC3339))
 		} else {
-			fmt.Printf("  lock:      pid %d not running; `pairroom daemon start --recover-stale-lock` can recover it\n", info.PID)
+			fmt.Printf("  lock:      pid %d not running; daemon start recovers this crash-stale lock\n", info.PID)
 		}
 	} else {
 		fmt.Printf("  data root: unresolved (%v)\n", rootErr)
@@ -822,7 +829,7 @@ Unrecognized install options are forwarded to pairroom service. The daemon
 always adds --no-browser and an internal graceful-shutdown control file.
 
 Start/restart options:
-  --recover-stale-lock  Recover a crash-stale service.lock after verifying the recorded PID is gone
+  --recover-stale-lock  Accepted for compatibility; start already recovers a crash-stale lock after verifying the recorded PID is gone. On restart, stop first so a live owner can drain.
 
 Logs options:
   -n N                Show the last N lines (default: 100)

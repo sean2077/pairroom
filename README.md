@@ -84,7 +84,7 @@ Before using a real Runtime, confirm that each selected CLI (`claude`, `codex`, 
 On startup, the desktop host:
 
 1. Validates and reuses an explicitly supplied authenticated numeric-loopback Management URL;
-2. Discovers an installed `pairroom daemon` and, if it is stopped, starts it and waits for an authenticated Management URL;
+2. Discovers an installed `pairroom daemon`, recovers a crash-stale lock after the recorded PID is gone, starts or restarts it when needed, and waits for an authenticated Management URL;
 3. Starts a PairRoom Service in the current desktop process only when no daemon is installed. If a daemon is installed but unreachable, it fails closed and does not start a second Service.
 
 Closing the main window only hides to the system tray and does not interrupt an active Agent. Explicit quit shuts down only an embedded Service owned by the desktop host, draining along the existing native-Turn boundary; an external daemon is unaffected. Build, dependency, and package notes are in [PairRoom Desktop](desktop/README.md). Browser and CLI entry points remain fully available.

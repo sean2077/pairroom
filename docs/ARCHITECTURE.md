@@ -85,7 +85,7 @@ Control-plane facts that are user-visible and need audit should be written to th
 
 ### Desktop ownership is explicit
 
-Desktop startup follows a single-owner decision: validated explicit Management URL → installed daemon (started and waited for by the desktop host when needed) → embedded in-process Service only when no daemon is installed. If a daemon is installed but unreachable, fail closed and do not start a competing instance. Reusing an external Service does not transfer ownership; desktop quit must not stop an external daemon. An embedded Service is owned by the desktop process and shuts down in Management shutdown → Runtime drain → Registry / lock release order. No path implicitly recovers a stale `service.lock`.
+Desktop startup follows a single-owner decision: validated explicit Management URL → installed daemon (recovered, started, and waited for by the desktop host when needed) → embedded in-process Service only when no daemon is installed. A crash-stale `service.lock` is recovered after the recorded PID is confirmed gone; a live owner still fails closed. If a daemon is installed but remains unreachable after that heal, fail closed and do not start a competing instance. Reusing an external Service does not transfer ownership; desktop quit must not stop an external daemon. An embedded Service is owned by the desktop process and shuts down in Management shutdown → Runtime drain → Registry / lock release order.
 
 ## Main modules
 
