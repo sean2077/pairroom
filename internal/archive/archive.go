@@ -5,6 +5,7 @@ package archive
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -27,6 +28,8 @@ const (
 	backupFormatVersion = 1
 	maxRestoreFiles     = 100_000
 	maxRestoreBytes     = int64(8 << 30)
+	maxManifestBytes    = int64(32 << 20)
+	maxTrailingPadding  = int64(1 << 20)
 )
 
 type VerifyReport struct {
@@ -162,7 +165,7 @@ func Verify(dataDir string) VerifyReport {
 					report.FirstSequence = event.Seq
 				}
 				report.LastSequence = event.Seq
-				if event.Seq == 0 || (previous != 0 && event.Seq != previous+1) {
+				if event.Seq == 0 || event.Seq != previous+1 {
 					report.Errors = append(report.Errors, fmt.Sprintf("event sequence at line %d is %d after %d", lineNo, event.Seq, previous))
 				}
 				previous = event.Seq
@@ -172,6 +175,9 @@ func Verify(dataDir string) VerifyReport {
 					report.Errors = append(report.Errors, fmt.Sprintf("duplicate event id %q", event.ID))
 				} else {
 					seenIDs[event.ID] = struct{}{}
+				}
+				if strings.TrimSpace(event.RoomID) == "" {
+					report.Errors = append(report.Errors, fmt.Sprintf("event line %d has an empty room id", lineNo))
 				}
 				if report.RoomID == "" {
 					report.RoomID = event.RoomID
@@ -312,6 +318,10 @@ func verifyAttachments(root string, referenced map[string]struct{}) (map[string]
 // Backup writes a verified, self-describing tar.gz archive. Runtime caches,
 // reviewer worktrees, browser sessions, and temporary uploads are excluded.
 func Backup(dataDir, output string) (BackupManifest, error) {
+	output, err := archiveOutputPath(dataDir, output)
+	if err != nil {
+		return BackupManifest{}, err
+	}
 	report := Verify(dataDir)
 	if !report.OK {
 		return BackupManifest{}, fmt.Errorf("data verification failed: %s", strings.Join(report.Errors, "; "))
@@ -327,13 +337,6 @@ func Backup(dataDir, output string) (BackupManifest, error) {
 	manifest := BackupManifest{
 		Format: backupFormat, FormatVersion: backupFormatVersion,
 		PairRoomVersion: version.Current, CreatedAt: time.Now().UTC(), Files: files,
-	}
-	if strings.TrimSpace(output) == "" {
-		return BackupManifest{}, errors.New("backup output path is required")
-	}
-	output, err = filepath.Abs(output)
-	if err != nil {
-		return BackupManifest{}, err
 	}
 	if err := os.MkdirAll(filepath.Dir(output), 0o700); err != nil {
 		return BackupManifest{}, fmt.Errorf("create backup output directory: %w", err)
@@ -465,6 +468,7 @@ func Restore(input, target string, force bool) (VerifyReport, error) {
 
 	reader := tar.NewReader(gzipReader)
 	var manifest BackupManifest
+	manifestSeen := false
 	seen := make(map[string]manifestFile)
 	var total int64
 	for count := 0; ; count++ {
@@ -490,8 +494,12 @@ func Restore(input, target string, force bool) (VerifyReport, error) {
 		}
 		total += header.Size
 		if rel == "manifest.json" {
-			if manifest.Format != "" {
+			if manifestSeen {
 				return VerifyReport{}, errors.New("backup contains duplicate manifest")
+			}
+			manifestSeen = true
+			if header.Size > maxManifestBytes {
+				return VerifyReport{}, errors.New("backup manifest exceeds size limit")
 			}
 			data, err := io.ReadAll(io.LimitReader(reader, header.Size+1))
 			if err != nil || int64(len(data)) != header.Size {
@@ -523,6 +531,16 @@ func Restore(input, target string, force bool) (VerifyReport, error) {
 			return VerifyReport{}, closeErr
 		}
 		seen[rel] = manifestFile{Path: rel, Size: written, SHA256: hex.EncodeToString(hash.Sum(nil))}
+	}
+	// tar EOF does not consume gzip's checksum/trailer. Validate the complete
+	// container before replacing the target, allowing only bounded zero padding
+	// after tar's end marker (not another hidden archive or a compression bomb).
+	padding, err := io.ReadAll(io.LimitReader(gzipReader, maxTrailingPadding+1))
+	if err != nil {
+		return VerifyReport{}, fmt.Errorf("validate backup gzip: %w", err)
+	}
+	if int64(len(padding)) > maxTrailingPadding || len(bytes.Trim(padding, "\x00")) != 0 {
+		return VerifyReport{}, errors.New("backup contains invalid trailing tar data")
 	}
 	if manifest.Format != backupFormat || manifest.FormatVersion != backupFormatVersion {
 		return VerifyReport{}, fmt.Errorf("unsupported backup format %q version %d", manifest.Format, manifest.FormatVersion)
@@ -594,6 +612,10 @@ func Restore(input, target string, force bool) (VerifyReport, error) {
 // runtime payloads, image bytes, credentials, tokens, and browser sessions are
 // intentionally excluded.
 func Diagnostics(dataDir, output, goos, goarch string) error {
+	output, err := archiveOutputPath(dataDir, output)
+	if err != nil {
+		return err
+	}
 	report := Verify(dataDir)
 	events, _ := readEventHeaders(filepath.Join(dataDir, "events.jsonl"), 100)
 	summary := diagnosticSummary{
@@ -606,10 +628,6 @@ func Diagnostics(dataDir, output, goos, goarch string) error {
 	}
 	data, _ := json.MarshalIndent(summary, "", "  ")
 	data = append(data, '\n')
-	output, err := filepath.Abs(output)
-	if err != nil {
-		return err
-	}
 	if err := os.MkdirAll(filepath.Dir(output), 0o700); err != nil {
 		return err
 	}
@@ -619,9 +637,14 @@ func Diagnostics(dataDir, output, goos, goarch string) error {
 	}
 	name := tmp.Name()
 	defer os.Remove(name)
-	_ = tmp.Chmod(0o600)
+	defer tmp.Close()
+	if err := tmp.Chmod(0o600); err != nil {
+		return err
+	}
 	gz := gzip.NewWriter(tmp)
+	defer gz.Close()
 	tw := tar.NewWriter(gz)
+	defer tw.Close()
 	if err := writeTarBytes(tw, "diagnostics.json", data, summary.GeneratedAt); err != nil {
 		return err
 	}

@@ -16,3 +16,27 @@ func TestAgentSelectionAcceptsYoloPermissionAliases(t *testing.T) {
 		t.Fatalf("Codex yolo approval should be valid: %v", err)
 	}
 }
+
+func TestProviderNormalizationPreservesIncompleteReferences(t *testing.T) {
+	for _, provider := range []ProviderRef{
+		{ProfileID: "selected-profile"},
+		{AppType: "codex"},
+		{AppType: "codex", ProfileID: "selected-profile"},
+	} {
+		t.Run(provider.AppType+"/"+provider.ProfileID, func(t *testing.T) {
+			selection := AgentSelection{Runtime: RuntimeCodex, Provider: provider}
+			normalized := selection.Normalized(ActorCodex)
+			if normalized.Provider.AppType != provider.AppType || normalized.Provider.ProfileID != provider.ProfileID {
+				t.Errorf("normalization discarded explicit provider identity: %+v -> %+v", provider, normalized.Provider)
+			}
+			if err := selection.Validate(ActorCodex); err == nil {
+				t.Fatal("incomplete profile reference silently fell back to native configuration")
+			}
+		})
+	}
+	for _, provider := range []ProviderRef{{}, NativeProviderRef(), {Source: ProviderCCSwitch, AppType: "codex", ProfileID: "selected-profile"}} {
+		if err := (AgentSelection{Runtime: RuntimeCodex, Provider: provider}).Validate(ActorCodex); err != nil {
+			t.Fatalf("valid provider %+v: %v", provider, err)
+		}
+	}
+}

@@ -6,8 +6,11 @@
 package main
 
 import (
-	"bufio"
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sort"
@@ -43,50 +46,67 @@ var allowed = map[string]string{
 	"modernc.org/token":                  "v1.1.0",
 }
 
-func main() {
-	command := exec.Command("go", "list", "-m", "-f", "{{.Path}} {{.Version}}", "all")
-	output, err := command.Output()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "dependency check: go list -m all:", err)
-		os.Exit(1)
-	}
-	seen := make(map[string]bool, len(allowed))
+type resolvedModule struct {
+	Path    string
+	Version string
+	Replace *resolvedModule
+}
+
+func verifyModules(input io.Reader, approved map[string]string) []string {
+	seen := make(map[string]bool, len(approved))
 	var violations []string
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if len(fields) == 0 {
-			continue
+	decoder := json.NewDecoder(input)
+	for {
+		var module resolvedModule
+		err := decoder.Decode(&module)
+		if err == io.EOF {
+			break
 		}
-		path := fields[0]
-		version := ""
-		if len(fields) > 1 {
-			version = fields[1]
+		if err != nil {
+			violations = append(violations, "decode module graph: "+err.Error())
+			break
 		}
-		want, ok := allowed[path]
+		if seen[module.Path] {
+			violations = append(violations, "duplicate module "+module.Path)
+		}
+		seen[module.Path] = true
+		if module.Replace != nil {
+			violations = append(violations, fmt.Sprintf("unapproved replacement for %s: %s %s", module.Path, module.Replace.Path, module.Replace.Version))
+		}
+		want, ok := approved[module.Path]
 		if !ok {
-			violations = append(violations, "unapproved module "+path+" "+version)
+			violations = append(violations, "unapproved module "+module.Path+" "+module.Version)
 			continue
 		}
-		seen[path] = true
-		if version != want {
-			violations = append(violations, fmt.Sprintf("module %s resolved to %s; want %s", path, version, want))
+		if module.Version != want {
+			violations = append(violations, fmt.Sprintf("module %s resolved to %s; want %s", module.Path, module.Version, want))
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		violations = append(violations, "scan module list: "+err.Error())
-	}
-	for path := range allowed {
+	for path := range approved {
 		if !seen[path] {
 			violations = append(violations, "approved module missing from graph: "+path)
 		}
 	}
-	if len(violations) > 0 {
-		sort.Strings(violations)
+	sort.Strings(violations)
+	return violations
+}
+
+func main() {
+	command := exec.Command("go", "list", "-mod=readonly", "-m", "-json", "all")
+	output, err := command.Output()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "dependency check: go list -m all:", err)
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			fmt.Fprintln(os.Stderr, strings.TrimSpace(string(exit.Stderr)))
+		}
+		os.Exit(1)
+	}
+	if violations := verifyModules(bytes.NewReader(output), allowed); len(violations) > 0 {
 		for _, violation := range violations {
 			fmt.Fprintln(os.Stderr, "dependency check:", violation)
 		}
 		os.Exit(1)
 	}
-	fmt.Printf("dependency allowlist ok (%d modules)\n", len(seen))
+	fmt.Printf("dependency allowlist ok (%d modules; no replacements)\n", len(allowed))
 }

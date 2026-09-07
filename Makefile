@@ -24,7 +24,7 @@ ifeq ($(strip $(GOBIN)),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package desktop-update desktop-check clean docs-check browser-check
+.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package desktop-update desktop-check clean docs-check browser-check js-check
 
 build:
 	mkdir -p $(DIST)
@@ -56,34 +56,20 @@ cover:
 	go test -count=1 -coverprofile=.coverage ./...
 	go tool cover -func=.coverage
 
-check: test race vet agent-contract release-contract docs-check desktop-check
+check: test race vet agent-contract release-contract docs-check desktop-check js-check
 	@test -z "$$(gofmt -l $(GO_FILES))" || { echo 'Go files are not gofmt-clean'; gofmt -l $(GO_FILES); exit 1; }
-	@if command -v node >/dev/null 2>&1; then \
-		node --check internal/webui/assets/i18n.js && \
-		node --check internal/server/assets/app.js && \
-		node --check internal/server/assets/activity-view.js && \
-		node --check internal/server/assets/room-shell.js && \
-		node --check internal/server/assets/richtext.js && \
-		node --check internal/server/assets/ux.js && \
-		node --check internal/webui/assets/i18next.min.js && \
-		node --check internal/webui/assets/catalogs.js && \
-		node --check internal/webui/assets/theme.js && \
-		node --check internal/service/assets/management.js && \
-		node --check internal/service/assets/management-ux.js && \
-		node --check scripts/test_room_shell.js && \
-		node --check scripts/test_i18n.js && \
-		node --check scripts/test_theme.js && \
-		node scripts/test_room_shell.js && \
-		node scripts/test_room_client.js && \
-		node scripts/test_management_client.js && \
-		node scripts/test_i18n.js && \
-		node scripts/test_theme.js && \
-		node scripts/test_desktop_settings.js; \
-	fi
+	@go test scripts/check_dependencies.go scripts/check_dependencies_test.go
 	@go run scripts/check_dependencies.go
 	# The vendored upstream UMD intentionally retains its published trailing
 	# blank line; whitespace diagnostics apply to project-authored text only.
 	@git diff --check -- . ':(exclude)internal/webui/assets/i18next.min.js'
+
+# JavaScript is a required part of verification, not an optional capability.
+# Discover owned scripts so a new client or regression cannot silently escape.
+js-check:
+	@command -v node >/dev/null 2>&1 || { printf '%s\n' 'make js-check requires Node.js on PATH; see CONTRIBUTING.md' >&2; exit 1; }
+	@set -e; for file in internal/webui/assets/*.js internal/server/assets/*.js internal/service/assets/*.js desktop/frontend/*.js scripts/*.js; do test -f "$$file" || continue; node --check "$$file"; done
+	@set -e; for file in scripts/test_*.js; do node "$$file"; done
 
 agent-contract:
 	"$(PYTHON)" .agents/tools/generate-subagents.py --check

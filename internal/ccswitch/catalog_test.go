@@ -247,3 +247,11 @@ func TestReaderFailsClosedWhenDatabaseIsExclusivelyLocked(t *testing.T) {
 		t.Fatalf("locked database error = %v", err)
 	}
 }
+
+func TestCatalogRedactionUsesLongestMatchWithoutReprocessingMarkers(t *testing.T) {
+	for _, secrets := range [][]string{{"key", "key-long", "redacted"}, {"redacted", "key-long", "key"}} {
+		if got := redactSecrets("key-long key redacted", secrets); got != "[redacted] [redacted] [redacted]" {
+			t.Fatalf("partial credential or rewritten marker: %q", got)
+		}
+	}
+}

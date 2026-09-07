@@ -219,8 +219,8 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 	if cfg.ListenHost == "" {
 		cfg.ListenHost = "127.0.0.1"
 	}
-	if cfg.ListenHost != "127.0.0.1" && cfg.ListenHost != "::1" && !strings.EqualFold(cfg.ListenHost, "localhost") {
-		return nil, errors.New("Room runtimes must listen on loopback")
+	if ip := net.ParseIP(cfg.ListenHost); ip == nil || !ip.IsLoopback() {
+		return nil, errors.New("Room runtimes must listen on a numeric loopback address")
 	}
 	if cfg.StallWarningSeconds == 0 {
 		cfg.StallWarningSeconds = model.DefaultRoomSettings().StallWarningSeconds
@@ -232,7 +232,7 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 		cfg.DrainPollInterval = 100 * time.Millisecond
 	}
 
-	eventStore, err := store.Open(durableRoom.DataDir)
+	eventStore, err := store.OpenExistingForRoom(durableRoom.DataDir, durableRoom.ID)
 	if err != nil {
 		return nil, fmt.Errorf("open Room store: %w", err)
 	}

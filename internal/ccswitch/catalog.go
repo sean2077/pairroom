@@ -626,12 +626,20 @@ func containsAnySecretInValues(values, secrets []string) bool {
 }
 
 func redactSecrets(value string, secrets []string) string {
-	for _, secret := range secrets {
-		if secret != "" {
-			value = strings.ReplaceAll(value, secret, "[redacted]")
+	// Longest matches win, and replacements are never scanned again. A short
+	// credential must not expose the suffix of another or rewrite the marker.
+	ordered := uniqueSecrets(secrets)
+	sort.Slice(ordered, func(i, j int) bool {
+		if len(ordered[i]) != len(ordered[j]) {
+			return len(ordered[i]) > len(ordered[j])
 		}
+		return ordered[i] < ordered[j]
+	})
+	pairs := make([]string, 0, len(ordered)*2)
+	for _, secret := range ordered {
+		pairs = append(pairs, secret, "[redacted]")
 	}
-	return value
+	return strings.NewReplacer(pairs...).Replace(value)
 }
 
 func profileError(p profileRow, reason, detail string) error {

@@ -311,7 +311,18 @@ func (s *Store) load(id string) (model.Attachment, string, error) {
 	if !attachmentIDPattern.MatchString(id) {
 		return model.Attachment{}, "", errors.New("invalid attachment id")
 	}
-	data, err := os.ReadFile(filepath.Join(s.root, id+".json"))
+	manifestPath := filepath.Join(s.root, id+".json")
+	manifestInfo, err := os.Lstat(manifestPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return model.Attachment{}, "", fmt.Errorf("unknown attachment %q", id)
+		}
+		return model.Attachment{}, "", fmt.Errorf("inspect attachment metadata: %w", err)
+	}
+	if !manifestInfo.Mode().IsRegular() {
+		return model.Attachment{}, "", errors.New("attachment metadata is not a regular file")
+	}
+	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return model.Attachment{}, "", fmt.Errorf("unknown attachment %q", id)

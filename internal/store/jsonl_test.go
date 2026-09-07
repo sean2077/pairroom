@@ -337,3 +337,42 @@ func TestSchemaNineRemainsReadableWithoutRewritingMarker(t *testing.T) {
 		t.Fatalf("schema-9 marker was rewritten: %s %v", got, err)
 	}
 }
+
+// Opening a Room should validate its history without retaining a second replay
+// slice. Fixture creation is outside the measured section (no per-event fsync).
+func BenchmarkOpenExisting(b *testing.B) {
+	for _, count := range []int{1000, 10000} {
+		b.Run(fmt.Sprintf("events-%d", count), func(b *testing.B) {
+			dir := b.TempDir()
+			store, err := Open(dir)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if err := store.Close(); err != nil {
+				b.Fatal(err)
+			}
+			var log strings.Builder
+			for seq := 1; seq <= count; seq++ {
+				fmt.Fprintf(&log, "{\"seq\":%d,\"room_id\":\"room-1\",\"kind\":\"message.created\",\"actor\":\"user\",\"data\":{\"body\":%q}}\n", seq, strings.Repeat("hello ", 40))
+			}
+			if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(log.String()), 0o600); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.SetBytes(int64(log.Len()))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				store, err := OpenExisting(dir)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if store.lastSeq != uint64(count) {
+					b.Fatalf("last sequence=%d, want %d", store.lastSeq, count)
+				}
+				if err := store.Close(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

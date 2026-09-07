@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/sean2077/pairroom/internal/model"
 )
@@ -114,8 +116,52 @@ func Load(path string) (File, error) {
 	if err != nil {
 		return File{}, fmt.Errorf("read config: %w", err)
 	}
-	if err := rejectRemovedProviderConfig(data); err != nil {
+	raw, err := configObject(data)
+	if err != nil {
+		return File{}, fmt.Errorf("decode config: %w", err)
+	}
+	if raw == nil {
+		return File{}, errors.New("config must contain one JSON object")
+	}
+	if err := rejectRemovedProviderConfig(raw); err != nil {
 		return File{}, err
+	}
+	// Choose defaults in runtime identity, not historical slot identity, before
+	// decoding explicit fields. Post-decode conversion cannot distinguish an
+	// omitted policy from an explicit empty/native override.
+	for _, entry := range []struct {
+		key   string
+		actor model.ActorID
+		agent *Agent
+	}{
+		{"claude", model.ActorClaude, &cfg.Claude},
+		{"codex", model.ActorCodex, &cfg.Codex},
+	} {
+		if value, ok := raw[entry.key]; ok {
+			fields, err := configObject(value)
+			if err != nil {
+				return File{}, fmt.Errorf("%s config must be a JSON object", entry.key)
+			}
+			for _, key := range []string{"runtime", "permission_mode", "approval_policy", "sandbox"} {
+				if bytes.Equal(bytes.TrimSpace(fields[key]), []byte("null")) {
+					return File{}, fmt.Errorf("%s.%s must be a string; use an empty string for native inheritance", entry.key, key)
+				}
+			}
+			var selector struct {
+				Runtime string `json:"runtime"`
+			}
+			if value := fields["runtime"]; value != nil {
+				if err := json.Unmarshal(value, &selector.Runtime); err != nil {
+					return File{}, fmt.Errorf("decode %s config: %w", entry.key, err)
+				}
+			}
+			entry.agent.PermissionMode, entry.agent.ApprovalPolicy, entry.agent.Sandbox = "", "", ""
+			if model.ParseRuntimeKind(selector.Runtime).CanonicalForSlot(entry.actor) == model.RuntimeCodex {
+				entry.agent.ApprovalPolicy, entry.agent.Sandbox = "yolo", "danger-full-access"
+			} else {
+				entry.agent.PermissionMode = "yolo"
+			}
+		}
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -129,11 +175,70 @@ func Load(path string) (File, error) {
 	return cfg, nil
 }
 
-func rejectRemovedProviderConfig(data []byte) error {
-	var raw map[string]json.RawMessage
-	if json.Unmarshal(data, &raw) != nil {
-		return nil
+// Match encoding/json's case-insensitive struct fields, but reject ambiguous
+// duplicate fields rather than merging two different runtime/policy objects.
+func configObject(data []byte) (map[string]json.RawMessage, error) {
+	return configObjectDepth(data, 0)
+}
+
+func configObjectDepth(data []byte, depth int) (map[string]json.RawMessage, error) {
+	// The schema is only a few objects deep. Bound validation work even for
+	// malformed input before the typed decoder reports an unknown field.
+	if depth >= 64 {
+		return nil, errors.New("config object nesting exceeds 64 levels")
 	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return nil, errors.New("expected a JSON object")
+	}
+	fields := make(map[string]json.RawMessage)
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		name := configFieldName(key.(string))
+		if _, exists := fields[name]; exists {
+			return nil, fmt.Errorf("duplicate config field %q", name)
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, err
+		}
+		if nested := bytes.TrimSpace(value); len(nested) > 0 && nested[0] == '{' {
+			if _, err := configObjectDepth(nested, depth+1); err != nil {
+				return nil, fmt.Errorf("config field %q: %w", name, err)
+			}
+		}
+		fields[name] = value
+	}
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, errors.New("expected exactly one JSON object")
+	}
+	return fields, nil
+}
+
+// encoding/json uses Unicode simple folding, not strings.ToLower. In
+// particular, long s (ſ) and Kelvin sign (K) also match ASCII field letters.
+// Keep lower-case map keys for the known schema without losing those aliases.
+func configFieldName(name string) string {
+	return strings.Map(func(r rune) rune {
+		for {
+			next := unicode.SimpleFold(r)
+			if next <= r {
+				return unicode.ToLower(next)
+			}
+			r = next
+		}
+	}, name)
+}
+
+func rejectRemovedProviderConfig(raw map[string]json.RawMessage) error {
 	if _, ok := raw["providers"]; ok {
 		return &MigrationError{Detail: "legacy PairRoom providers configuration was removed; back up the PairRoom data root, migrate Service defaults to a CC Switch profile reference, and remove the top-level providers field (see docs/UPGRADING.md)"}
 	}
@@ -141,8 +246,8 @@ func rejectRemovedProviderConfig(data []byte) error {
 		return &MigrationError{Detail: "legacy cc_connect imports were removed; back up the PairRoom data root, migrate Service defaults to a CC Switch profile reference, and remove cc_connect (see docs/UPGRADING.md)"}
 	}
 	for _, key := range []string{"claude", "codex"} {
-		var slot map[string]json.RawMessage
-		if json.Unmarshal(raw[key], &slot) != nil {
+		slot, err := configObject(raw[key])
+		if err != nil {
 			continue
 		}
 		if value, ok := slot["provider"]; ok && len(value) > 0 && value[0] == '"' {
@@ -166,10 +271,10 @@ func (c *File) applyDefaults() {
 		c.Codex.Runtime = defaults.Codex.Runtime
 	}
 	if c.Claude.Provider.Source == "" {
-		c.Claude.Provider = model.NativeProviderRef()
+		c.Claude.Provider.Source = model.ProviderNative
 	}
 	if c.Codex.Provider.Source == "" {
-		c.Codex.Provider = model.NativeProviderRef()
+		c.Codex.Provider.Source = model.ProviderNative
 	}
 	if strings.TrimSpace(c.Runtimes.Claude.Command) == "" {
 		c.Runtimes.Claude.Command = defaults.Runtimes.Claude.Command
@@ -179,29 +284,6 @@ func (c *File) applyDefaults() {
 	}
 	if strings.TrimSpace(c.Runtimes.Grok.Command) == "" {
 		c.Runtimes.Grok.Command = defaults.Runtimes.Grok.Command
-	}
-	c.Claude.reconcileDefaultYolo(model.ActorClaude)
-	c.Codex.reconcileDefaultYolo(model.ActorCodex)
-}
-
-func (a *Agent) reconcileDefaultYolo(actor model.ActorID) {
-	switch a.RuntimeKind(actor) {
-	case model.RuntimeClaude, model.RuntimeGrok:
-		if a.ApprovalPolicy == "yolo" && (a.Sandbox == "" || a.Sandbox == "danger-full-access") {
-			a.Sandbox = ""
-			a.ApprovalPolicy = ""
-			if strings.TrimSpace(a.PermissionMode) == "" {
-				a.PermissionMode = "yolo"
-			}
-		}
-	case model.RuntimeCodex:
-		if a.PermissionMode == "yolo" && a.Sandbox == "" {
-			a.PermissionMode = ""
-			if strings.TrimSpace(a.ApprovalPolicy) == "" {
-				a.ApprovalPolicy = "yolo"
-				a.Sandbox = "danger-full-access"
-			}
-		}
 	}
 }
 
@@ -223,6 +305,9 @@ func (c File) Validate() error {
 		template := c.Runtimes.For(kind)
 		if strings.TrimSpace(template.Command) == "" {
 			return fmt.Errorf("runtimes.%s.command is required", kind)
+		}
+		if strings.ContainsRune(template.Command, '\x00') {
+			return fmt.Errorf("runtimes.%s.command contains a NUL byte", kind)
 		}
 		for _, arg := range template.Args {
 			if strings.ContainsRune(arg, '\x00') {
@@ -259,9 +344,17 @@ func validateRuntimeTemplateArgs(kind model.RuntimeKind, args []string) error {
 			forbidden = matchesOption(arg, "--model", "--effort", "--permission-mode", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions")
 		case model.RuntimeCodex:
 			forbidden = matchesOption(arg, "--model", "-m", "--ask-for-approval", "-a", "--sandbox", "-s", "--dangerously-bypass-approvals-and-sandbox")
-			if !forbidden && (arg == "-c" || arg == "--config") && index+1 < len(args) {
-				key := strings.ToLower(strings.TrimSpace(strings.SplitN(args[index+1], "=", 2)[0]))
-				forbidden = key == "model" || key == "model_provider" || strings.HasPrefix(key, "model_providers.") || key == "approval_policy" || key == "sandbox_mode"
+			if !forbidden {
+				if value, ok := configOptionValue(args, index); ok {
+					key := strings.ToLower(strings.TrimSpace(strings.SplitN(value, "=", 2)[0]))
+					// TOML permits quoted and spaced dotted keys as well.
+					key = strings.NewReplacer("\"", "", "'", "").Replace(key)
+					root := strings.TrimSpace(strings.SplitN(key, ".", 2)[0])
+					switch root {
+					case "model", "model_provider", "model_providers", "model_reasoning_effort", "approval_policy", "sandbox_mode", "sandbox_workspace_write":
+						forbidden = true
+					}
+				}
 			}
 		case model.RuntimeGrok:
 			forbidden = matchesOption(arg, "--model", "-m", "--effort", "--permission-mode", "--always-approve", "--yolo", "--sandbox")
@@ -275,9 +368,26 @@ func validateRuntimeTemplateArgs(kind model.RuntimeKind, args []string) error {
 
 func matchesOption(value string, names ...string) bool {
 	for _, name := range names {
-		if value == name || strings.HasPrefix(value, name+"=") {
+		if value == name || strings.HasPrefix(value, name+"=") ||
+			(len(name) == 2 && strings.HasPrefix(name, "-") && strings.HasPrefix(value, name)) {
 			return true
 		}
 	}
 	return false
+}
+
+func configOptionValue(args []string, index int) (string, bool) {
+	arg := strings.TrimSpace(args[index])
+	if arg == "-c" || arg == "--config" {
+		if index+1 < len(args) {
+			return args[index+1], true
+		}
+		return "", false
+	}
+	for _, prefix := range []string{"--config=", "-c=", "-c"} {
+		if strings.HasPrefix(arg, prefix) {
+			return strings.TrimPrefix(arg, prefix), true
+		}
+	}
+	return "", false
 }

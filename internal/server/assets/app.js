@@ -2667,10 +2667,20 @@
 
   window.addEventListener('beforeunload', (event) => {
     if (state.settingsDirty) { event.preventDefault(); event.returnValue = ''; }
+  });
+
+  // beforeunload can be cancelled. Do not destroy a still-visible Room there.
+  window.addEventListener('pagehide', (event) => {
     closeEvents();
     clearTimeout(state.reconnectTimer);
+    state.reconnectTimer = null;
+    if (event.persisted) return; // The back-forward cache retains its DOM.
     state.attachmentObjectURLs.forEach((url) => URL.revokeObjectURL(url));
     state.mediaObjectURLs.forEach((value) => { if (typeof value === 'string') URL.revokeObjectURL(value); });
+  });
+
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) void refreshAfterWrite().catch(() => {});
   });
 
   function showTimelineLoading() {

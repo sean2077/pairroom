@@ -10,6 +10,16 @@ PairRoom's CLI, Event Log, HTTP API, and native adapters evolve with the officia
 4. Record the current binary, Claude Code / Codex / Grok Build, and configuration versions;
 5. Make sure the working repository has no unrecognized native side effects.
 
+## Integrity and configuration hardening (unreleased)
+
+No schema, event kind, collaboration instruction, or native session identity changes. Valid schema-9/10 Event Logs and provisioning-v1/2/3 records remain readable.
+
+Service configuration must be one JSON object. Duplicate object fields (including nested and Unicode-equivalent keys), trailing documents, and `null` runtime/policy fields are rejected rather than ambiguously merging with defaults. Use explicit empty policy strings for native inheritance. Runtime templates cannot override per-Room model, Provider, effort, or permission settings through attached short flags or inline Codex `-c`/`--config` options; move these choices to the Agent selection instead. When changing a slot's Runtime, omitted policy defaults come from that Runtime, while explicit empty or narrower settings remain intact. A Provider reference with an App type or Profile ID but no source is invalid; it no longer silently falls back to native credentials.
+
+Event sequences must start at 1 and remain contiguous; a missing log is not an empty Room. Back up corrupt data before investigating a rejected start or restore. Do not renumber complete records to bypass verification. Only an incomplete final JSONL record can be repaired automatically. An ambiguous append I/O failure closes the writer; stop the affected Runtime/Service and reopen only after checking storage health and the verified Event Log. Rollback does not require rewriting valid Room data.
+
+Backup and diagnostics outputs must now be outside the source Room data directory, including symlink aliases. Restore validates the complete gzip container before replacing a destination, rejects duplicate or oversized manifests (32 MiB limit), and permits only bounded zero padding (1 MiB) after the tar end marker. Damaged archives that older versions accepted must be recreated from verified source data, not forced through restore. Attachment metadata symlinks and changes to a Message's recorded image digest are rejected. These checks do not alter the backup format.
+
 ## Desktop launch no longer installs a daemon (v3.1.0)
 
 Opening Desktop reuses an already-installed daemon or owns an embedded Service when none is installed. It no longer runs `pairroom daemon install` from the bundled CLI. Launch-at-login is an explicit Settings control and does not install, start, or remove a daemon. If you still want a persistent background Service, run `pairroom daemon install` yourself. `make desktop-update` replaces the host and bundled CLI only; it does not change daemon configuration. This change adds no schema, event kind, or native prompt; Store schema 10 / provisioning schema 3 remain unchanged. Normal stop/drain and reverting the code are sufficient to roll back this change without rewriting Room data.
@@ -56,7 +66,7 @@ The earlier Provider update moved the root module to Go 1.25, replaced PairRoom-
 
 Before installing the new binary:
 
-1. Stop the Service after active Turns drain, then run `pairroom backup` for the complete data root and verify the archive;
+1. Stop the Service after active Turns drain. Back up and verify each Room with `pairroom backup`, and separately preserve the complete Service data root with an offline filesystem backup (see [Operations](OPERATIONS.md#backup));
 2. Preserve that backup unchanged as the downgrade point;
 3. Remove top-level `providers` and `cc_connect` configuration. Move per-slot `command`/`args` into `runtimes.claude`, `runtimes.codex`, or `runtimes.grok`;
 4. Replace a string-valued slot `provider` with `{"source":"native"}` or `{"source":"cc-switch","app_type":"…","profile_id":"…"}`. Use `pairroom providers --json` to inspect the sanitized CC Switch catalog and disabled reasons;
@@ -108,3 +118,5 @@ Do not mix old and new data files.
 ## Documentation and clients
 
 External tools that call the HTTP API, parse the Event Log, or depend on CLI copy must re-run contract tests at upgrade time. The route inventory in `docs/API_REFERENCE.md` and the flag inventory in `docs/CLI_REFERENCE.md` are checked against current source by `make docs-check`.
+
+Published Room activation and lifecycle mutations now require the existing Event Log to begin with the expected Room identity. Missing, empty, or replaced Room data fails closed before tail repair or new writes; restore the correct verified Room backup rather than relying on activation to recreate history. Embedded Room listeners, like public Service listeners, accept numeric loopback addresses only.
