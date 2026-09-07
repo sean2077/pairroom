@@ -92,7 +92,8 @@ func open(dir string, create bool, roomID string) (*JSONLStore, error) {
 	if err := store.ensureMetadata(allowMetadataCreate); err != nil {
 		return nil, err
 	}
-	if err := repairEventLog(path, create, roomID); err != nil {
+	lastSeq, err := repairEventLog(path, create, roomID)
+	if err != nil {
 		return nil, err
 	}
 	flags := os.O_RDWR | os.O_APPEND
@@ -103,15 +104,9 @@ func open(dir string, create bool, roomID string) (*JSONLStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open event log: %w", err)
 	}
-	store.file = file
-	events, err := store.Load()
-	if err != nil {
-		_ = file.Close()
-		return nil, err
-	}
-	if len(events) > 0 {
-		store.lastSeq = events[len(events)-1].Seq
-	}
+	// Repair already decoded and validated every complete record. Reuse its
+	// sequence instead of allocating and decoding the entire replay again.
+	store.file, store.lastSeq = file, lastSeq
 	return store, nil
 }
 
@@ -121,14 +116,14 @@ func open(dir string, create bool, roomID string) (*JSONLStore, error) {
 // valid event onto the broken object. We truncate only an invalid unterminated
 // final line. A valid final object without a newline is normalized by adding
 // one. Corruption before the final line remains a hard error.
-func repairEventLog(path string, create bool, roomID string) error {
+func repairEventLog(path string, create bool, roomID string) (uint64, error) {
 	flags := os.O_RDWR
 	if create {
 		flags |= os.O_CREATE
 	}
 	file, err := os.OpenFile(path, flags, 0o600)
 	if err != nil {
-		return fmt.Errorf("open event log for repair: %w", err)
+		return 0, fmt.Errorf("open event log for repair: %w", err)
 	}
 	defer file.Close()
 
@@ -142,38 +137,38 @@ func repairEventLog(path string, create bool, roomID string) error {
 			if err := json.Unmarshal(line, &event); err != nil {
 				if errors.Is(readErr, io.EOF) {
 					if roomID != "" && lastSeq == 0 {
-						return errors.New("published Room has no complete identity event")
+						return 0, errors.New("published Room has no complete identity event")
 					}
 					if err := file.Truncate(lastGood); err != nil {
-						return fmt.Errorf("truncate partial event log tail: %w", err)
+						return 0, fmt.Errorf("truncate partial event log tail: %w", err)
 					}
-					return file.Sync()
+					return lastSeq, file.Sync()
 				}
-				return fmt.Errorf("decode event log line %d during repair: %w", lineNo, err)
+				return 0, fmt.Errorf("decode event log line %d during repair: %w", lineNo, err)
 			}
 			if err := checkSequence(event.Seq, lastSeq); err != nil {
-				return fmt.Errorf("event log line %d during repair: %w", lineNo, err)
+				return 0, fmt.Errorf("event log line %d during repair: %w", lineNo, err)
 			}
 			if err := checkRoomIdentity(event, roomID, lastSeq == 0); err != nil {
-				return err
+				return 0, err
 			}
 			lastSeq = event.Seq
 			lastGood += int64(len(line))
 			if errors.Is(readErr, io.EOF) && line[len(line)-1] != '\n' {
 				if _, err := file.WriteAt([]byte{'\n'}, lastGood); err != nil {
-					return fmt.Errorf("normalize event log newline: %w", err)
+					return 0, fmt.Errorf("normalize event log newline: %w", err)
 				}
-				return file.Sync()
+				return lastSeq, file.Sync()
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
 			if roomID != "" && lastSeq == 0 {
-				return errors.New("published Room event log is empty")
+				return 0, errors.New("published Room event log is empty")
 			}
-			return nil
+			return lastSeq, nil
 		}
 		if readErr != nil {
-			return fmt.Errorf("read event log during repair: %w", readErr)
+			return 0, fmt.Errorf("read event log during repair: %w", readErr)
 		}
 	}
 }

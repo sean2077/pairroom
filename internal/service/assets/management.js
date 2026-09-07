@@ -167,6 +167,7 @@
     state.tabs = [];
     state.tabMeta = {};
     state.activating.clear();
+    scheduleRefresh();
     $('global-search').value = '';
     view.replaceChildren();
     $('room-tree')?.replaceChildren();
@@ -345,6 +346,7 @@
       state.refreshPromise = null;
       state.refreshOptions = {};
       $('refresh-button').classList.remove('spinning');
+      scheduleRefresh();
     });
     state.refreshPromise = request;
     return request;
@@ -358,12 +360,18 @@
   }
 
   function scheduleRefresh() {
-    if (state.refreshTimer) clearInterval(state.refreshTimer);
+    if (state.refreshTimer) clearTimeout(state.refreshTimer);
     state.refreshTimer = null;
-    if (state.preferences.refreshMs > 0) {
-      state.refreshTimer = setInterval(() => {
-        if (state.authenticated && !document.hidden) refresh();
-      }, state.preferences.refreshMs);
+    if (!state.authenticated || document.hidden) return;
+    // Activation is asynchronous (202). Reuse the one refresh timer to observe
+    // open tab readiness, even when ordinary auto-refresh is disabled.
+    const pending = state.tabs.some(roomID => ['starting', 'queued'].includes(getRuntime(roomID).phase));
+    const delay = pending ? 1000 : state.preferences.refreshMs;
+    if (delay > 0) {
+      state.refreshTimer = setTimeout(() => {
+        state.refreshTimer = null;
+        return refresh();
+      }, delay);
     }
   }
 
@@ -471,7 +479,7 @@
         return;
       }
       const runtime = getRuntime(state.route.roomID);
-      if (room && !roomHasBlockingPendingBindings(room) && !['active', 'starting', 'queued'].includes(runtime.phase)) {
+      if (room && !roomHasBlockingPendingBindings(room) && runtime.phase === 'suspended') {
         activateRoomRuntime(state.route.roomID);
       } else {
         syncRoomStage();
@@ -695,6 +703,7 @@
       return;
     }
     state.tabs.splice(index, 1);
+    scheduleRefresh();
     delete state.tabMeta[roomID];
     const stage = $('room-stage');
     stage?.querySelector(`[data-room-id="${CSS.escape(roomID)}"]`)?.remove();
@@ -712,6 +721,7 @@
     const runtime = getRuntime(roomID);
     if (['active', 'starting', 'queued'].includes(runtime.phase)) {
       syncRoomStage();
+      scheduleRefresh();
       return runtime;
     }
     state.activating.add(roomID);
@@ -2945,6 +2955,7 @@
     }
   });
   document.addEventListener('visibilitychange', () => {
+    scheduleRefresh();
     if (state.authenticated && !document.hidden) refresh({ forceRender: state.renderPending });
   });
 

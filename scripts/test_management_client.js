@@ -13,7 +13,8 @@ function deferred() {
 }
 
 function client() {
-  const nodes = new Map(), renders = [], notices = [], events = [];
+  const nodes = new Map(), renders = [], notices = [], events = [], timers = new Map();
+  let timerID = 0;
   const document = {
     hidden: false, activeElement: null, body: {dataset: {}},
     querySelectorAll() { return []; }, querySelector() { return null; },
@@ -36,7 +37,11 @@ function client() {
   const sandbox = {
     document, location, history: {replaceState() {}}, console, URL, URLSearchParams, Headers, Response,
     window: {location, localStorage: {getItem() { return null; }}, addEventListener() {}, dispatchEvent(e) { events.push(e); }},
-    requestAnimationFrame() {}, setTimeout: () => 1, clearTimeout() {}, queueMicrotask,
+    requestAnimationFrame() {}, queueMicrotask,
+    setTimeout(callback, delay) { const id = ++timerID; timers.set(id, {callback, delay}); return id; },
+    clearTimeout(id) { timers.delete(id); },
+    setInterval(callback, delay) { const id = ++timerID; timers.set(id, {callback, delay, interval: true}); return id; },
+    clearInterval(id) { timers.delete(id); },
     Event: class {constructor(type) { this.type = type; }},
     fetch: async () => { throw new Error('unexpected fetch'); }, renders, notices,
   };
@@ -44,14 +49,14 @@ function client() {
   const marker = "  loadStoredTheme();\n  window.addEventListener('storage'";
   assert.ok(source.includes(marker), 'keep boot interception explicit');
   const hook = `
-    globalThis.management = {state, api, refresh, loadAgentCatalog, withBusy,
+    globalThis.management = {state, api, refresh, loadAgentCatalog, withBusy, scheduleRefresh,
       syncConfirmRequirement, submitConfirm, resetConfirmState, createBrowserSession, showCredentialLogin,
       invalidateSessionReads, openRoomInBrowserAction, connect, updateDesktopStartup,
       setDesktop(value) { window.PairRoomDesktop = value; },
       setAPI(callback) { api = callback; }, setCanRender(value) { canRenderNow = () => value; }};
     render = () => { renders.push(state.snapshot); state.renderedSnapshotKey = snapshotRenderKey(state.snapshot); };
     toast = (...args) => notices.push(args);
-    updateChrome = setDisconnected = applyPreferences = scheduleRefresh = renderLoading = () => {};
+    updateChrome = setDisconnected = applyPreferences = renderLoading = () => {};
     connect = async () => {};
   `;
   vm.runInNewContext(source.replace(marker, hook + marker), sandbox);
@@ -60,12 +65,56 @@ function client() {
   c.state.csrfToken = 'current-session';
   c.state.snapshot = {rooms: [], runtimes: [], projects: []};
   c.setCanRender(true);
-  return {...c, nodes, getNode: id => document.getElementById(id), renders, notices, events, setFetch(callback) { sandbox.fetch = callback; }};
+  timers.clear();
+  return {...c, nodes, getNode: id => document.getElementById(id), timers, document, renders, notices, events, setFetch(callback) { sandbox.fetch = callback; }};
 }
 
 async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
 
 async function main() {
+  {
+    const c = client();
+    c.state.tabs = ['r'];
+    c.state.snapshot.rooms = [{id: 'r', lifecycle: 'active'}];
+    c.state.snapshot.runtimes = [{room_id: 'r', phase: 'starting'}];
+    // Completion of a 202 activation must not wait for the ordinary 10s poll,
+    // including when the user disables background auto-refresh.
+    c.state.preferences.refreshMs = 0;
+    c.scheduleRefresh();
+    assert.equal(c.timers.size, 1, 'pending activation still needs a readiness read');
+    const [id, timer] = [...c.timers][0];
+    assert.ok(timer.delay > 0 && timer.delay <= 1000, 'show readiness promptly');
+    let reads = 0;
+    c.setAPI(async () => {
+      reads++;
+      return {rooms: [{id: 'r', lifecycle: 'active'}], runtimes: [{room_id: 'r', phase: 'active'}]};
+    });
+    c.timers.delete(id);
+    await timer.callback();
+    await flush();
+    assert.equal(reads, 1);
+    assert.equal(c.timers.size, 0, 'completed activation respects disabled auto-refresh');
+  }
+  {
+    const c = client();
+    c.state.tabs = ['r'];
+    c.state.snapshot.rooms = [{id: 'r', lifecycle: 'active'}];
+    c.state.snapshot.runtimes = [{room_id: 'r', phase: 'queued'}];
+    c.scheduleRefresh();
+    c.scheduleRefresh();
+    assert.equal(c.timers.size, 1, 'only one refresh timer, even during queue polling');
+    assert.ok([...c.timers.values()][0].delay <= 1000);
+    c.state.snapshot.runtimes[0].phase = 'failed';
+    c.scheduleRefresh();
+    assert.equal([...c.timers.values()][0].delay, 10000, 'failure returns to ordinary polling, not automatic retries');
+    c.document.hidden = true;
+    c.scheduleRefresh();
+    assert.equal(c.timers.size, 0, 'hidden pages do not keep polling');
+    c.document.hidden = false;
+    c.state.authenticated = false;
+    c.scheduleRefresh();
+    assert.equal(c.timers.size, 0, 'signed-out pages do not keep polling');
+  }
   {
     const c = client(), pending = deferred();
     const button = c.getNode('confirm-submit');

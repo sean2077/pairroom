@@ -225,6 +225,41 @@ async def verify_names(browser, artifacts: Path, in_page_fixture: bool = False) 
                 context_menu_mobile_clamped=True, names_page_errors=errors)
 
 
+async def verify_activation(browser) -> dict:
+    page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+    try:
+        await page.evaluate("location.hash='#/overview'")
+        await page.set_content(fixture_html())
+        await page.wait_for_selector('#app:not([hidden]) .tree-room')
+        await page.evaluate("""() => {
+          const original = window.fetch;
+          window.__activationRequests = 0;
+          window.__pendingReads = 0;
+          __snapshot.runtimes[0].phase = 'starting';
+          window.fetch = async (path, options = {}) => {
+            if (path.endsWith('/activate')) __activationRequests++;
+            if (path === '/api/v1/service' && __snapshot.runtimes[0].phase === 'starting') {
+              if (++__pendingReads >= 3) __snapshot.runtimes[0].phase = 'active';
+            }
+            return original(path, options);
+          };
+          document.getElementById('refresh-button').click();
+        }""")
+        await page.wait_for_function('__pendingReads === 1')
+        await page.locator('.tree-room[data-room-id="r1"]').click()
+        await expect(page.locator('#room-stage [data-room-id="r1"] iframe')).to_have_count(1, timeout=5000)
+        assert await page.evaluate('__activationRequests') == 0, 'readiness polling must not restart a queued/starting runtime'
+        await page.evaluate("""() => {
+          __snapshot.runtimes[0].phase = 'failed';
+          document.getElementById('refresh-button').click();
+        }""")
+        await expect(page.locator('#room-stage [data-room-id="r1"] iframe')).to_have_count(0)
+        assert await page.evaluate('__activationRequests') == 0, 'a failed runtime requires explicit retry, not a render-triggered restart'
+        return dict(asynchronous_activation_readiness=True, failed_runtime_no_automatic_retry=True)
+    finally:
+        await page.close()
+
+
 async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: bool = False) -> None:
     artifacts.mkdir(parents=True, exist_ok=True)
     results = {}
@@ -387,6 +422,7 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
         results['responsive_header_and_locale_identity'] = True
         assert not errors, errors
         results.update(await verify_names(browser, artifacts, in_page_fixture))
+        results.update(await verify_activation(browser))
         results['page_errors'] = errors
         (artifacts / 'results.json').write_text(json.dumps(results, indent=2) + '\n', encoding='utf-8')
         print(json.dumps(results, indent=2))
