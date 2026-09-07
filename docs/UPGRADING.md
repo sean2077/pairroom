@@ -10,7 +10,7 @@ PairRoom's CLI, Event Log, HTTP API, and native adapters evolve with the officia
 4. Record the current binary, Claude Code / Codex / Grok Build, and configuration versions;
 5. Make sure the working repository has no unrecognized native side effects.
 
-## Integrity and configuration hardening (unreleased)
+## Integrity and configuration hardening (v3.1.1)
 
 No schema, event kind, collaboration instruction, or native session identity changes. Valid schema-9/10 Event Logs and provisioning-v1/2/3 records remain readable.
 
