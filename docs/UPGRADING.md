@@ -118,3 +118,5 @@ Do not mix old and new data files.
 ## Documentation and clients
 
 External tools that call the HTTP API, parse the Event Log, or depend on CLI copy must re-run contract tests at upgrade time. The route inventory in `docs/API_REFERENCE.md` and the flag inventory in `docs/CLI_REFERENCE.md` are checked against current source by `make docs-check`.
+
+Published Room activation and lifecycle mutations now require the existing Event Log to begin with the expected Room identity. Missing, empty, or replaced Room data fails closed before tail repair or new writes; restore the correct verified Room backup rather than relying on activation to recreate history. Embedded Room listeners, like public Service listeners, accept numeric loopback addresses only.

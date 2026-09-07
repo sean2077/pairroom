@@ -126,7 +126,7 @@ func roomDataDirMissing(path string) (bool, error) {
 }
 
 func appendServiceEvent(room Room, kind string, payload any) error {
-	eventStore, err := store.OpenExisting(room.DataDir)
+	eventStore, err := store.OpenExistingForRoom(room.DataDir, room.ID)
 	if err != nil {
 		return fmt.Errorf("open room event log: %w", err)
 	}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/sean2077/pairroom/internal/model"
@@ -23,20 +24,31 @@ type JSONLStore struct {
 	path    string
 	file    *os.File
 	lastSeq uint64
+	roomID  string
 }
 
 func Open(dir string) (*JSONLStore, error) {
-	return open(dir, true)
+	return open(dir, true, "")
 }
 
 // OpenExisting opens an already-published event store without creating a
 // missing data directory or events.jsonl. Lifecycle mutations use this stricter
 // boundary so external data loss cannot be mistaken for a new empty Room.
 func OpenExisting(dir string) (*JSONLStore, error) {
-	return open(dir, false)
+	return open(dir, false, "")
 }
 
-func open(dir string, create bool) (*JSONLStore, error) {
+// OpenExistingForRoom also binds the writer to the published Room identity.
+// Validate identity during the existing repair scan, before changing any bytes,
+// so missing/replaced history cannot become a new Room or a cross-Room append.
+func OpenExistingForRoom(dir, roomID string) (*JSONLStore, error) {
+	if strings.TrimSpace(roomID) == "" {
+		return nil, errors.New("published Room ID is required")
+	}
+	return open(dir, false, roomID)
+}
+
+func open(dir string, create bool, roomID string) (*JSONLStore, error) {
 	if dir == "" {
 		return nil, errors.New("data directory is required")
 	}
@@ -73,14 +85,14 @@ func open(dir string, create bool) (*JSONLStore, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("stat event log: %w", err)
 	}
-	store := &JSONLStore{dir: dir, path: path}
+	store := &JSONLStore{dir: dir, path: path, roomID: roomID}
 	// Schema is the compatibility boundary. Check it before repairing or
 	// decoding Event Log bytes so an old Room cannot be partially interpreted
 	// or mutated by a build that explicitly provides no migration.
 	if err := store.ensureMetadata(allowMetadataCreate); err != nil {
 		return nil, err
 	}
-	if err := repairEventLog(path, create); err != nil {
+	if err := repairEventLog(path, create, roomID); err != nil {
 		return nil, err
 	}
 	flags := os.O_RDWR | os.O_APPEND
@@ -109,7 +121,7 @@ func open(dir string, create bool) (*JSONLStore, error) {
 // valid event onto the broken object. We truncate only an invalid unterminated
 // final line. A valid final object without a newline is normalized by adding
 // one. Corruption before the final line remains a hard error.
-func repairEventLog(path string, create bool) error {
+func repairEventLog(path string, create bool, roomID string) error {
 	flags := os.O_RDWR
 	if create {
 		flags |= os.O_CREATE
@@ -129,6 +141,9 @@ func repairEventLog(path string, create bool) error {
 			var event model.Event
 			if err := json.Unmarshal(line, &event); err != nil {
 				if errors.Is(readErr, io.EOF) {
+					if roomID != "" && lastSeq == 0 {
+						return errors.New("published Room has no complete identity event")
+					}
 					if err := file.Truncate(lastGood); err != nil {
 						return fmt.Errorf("truncate partial event log tail: %w", err)
 					}
@@ -138,6 +153,9 @@ func repairEventLog(path string, create bool) error {
 			}
 			if err := checkSequence(event.Seq, lastSeq); err != nil {
 				return fmt.Errorf("event log line %d during repair: %w", lineNo, err)
+			}
+			if err := checkRoomIdentity(event, roomID, lastSeq == 0); err != nil {
+				return err
 			}
 			lastSeq = event.Seq
 			lastGood += int64(len(line))
@@ -149,6 +167,9 @@ func repairEventLog(path string, create bool) error {
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
+			if roomID != "" && lastSeq == 0 {
+				return errors.New("published Room event log is empty")
+			}
 			return nil
 		}
 		if readErr != nil {
@@ -207,6 +228,9 @@ func (s *JSONLStore) Append(event *model.Event) error {
 	if err := checkSequence(candidate.Seq, s.lastSeq); err != nil {
 		return err
 	}
+	if err := checkRoomIdentity(candidate, s.roomID, s.lastSeq == 0); err != nil {
+		return err
+	}
 	data, err := json.Marshal(candidate)
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
@@ -221,6 +245,24 @@ func (s *JSONLStore) Append(event *model.Event) error {
 	// Only acknowledge a sequence after the complete record is durable. A
 	// rejected marshal must not poison a retry or create a replay-breaking gap.
 	s.lastSeq, event.Seq = candidate.Seq, candidate.Seq
+	return nil
+}
+
+func checkRoomIdentity(event model.Event, roomID string, first bool) error {
+	if roomID == "" {
+		return nil
+	}
+	if event.RoomID != roomID {
+		return fmt.Errorf("event belongs to Room %q, expected %q", event.RoomID, roomID)
+	}
+	if first {
+		var meta model.RoomMeta
+		if event.Kind != "room.created" || json.Unmarshal(event.Data, &meta) != nil || meta.ID != roomID {
+			return fmt.Errorf("published Room %q has no matching room.created identity", roomID)
+		}
+	} else if event.Kind == "room.created" {
+		return errors.New("published Room has multiple room.created identities")
+	}
 	return nil
 }
 
@@ -268,6 +310,9 @@ func (s *JSONLStore) Load() ([]model.Event, error) {
 			if err := checkSequence(event.Seq, lastSeq); err != nil {
 				return nil, fmt.Errorf("event log line %d: %w", lineNo, err)
 			}
+			if err := checkRoomIdentity(event, s.roomID, lastSeq == 0); err != nil {
+				return nil, err
+			}
 			lastSeq = event.Seq
 			events = append(events, event)
 		}
@@ -277,6 +322,9 @@ func (s *JSONLStore) Load() ([]model.Event, error) {
 		if readErr != nil {
 			return nil, fmt.Errorf("read event log: %w", readErr)
 		}
+	}
+	if s.roomID != "" && len(events) == 0 {
+		return nil, errors.New("published Room event log is empty")
 	}
 	return events, nil
 }
