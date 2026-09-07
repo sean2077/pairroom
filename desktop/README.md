@@ -9,7 +9,7 @@ The desktop process does not launch a second-language sidecar and does not reimp
 Startup follows this order:
 
 1. validate and reuse `PAIRROOM_DESKTOP_URL` when explicitly supplied;
-2. discover an installed `pairroom daemon`, start it when it is stopped, and wait for its authenticated Management URL;
+2. discover an installed `pairroom daemon`, recover a crash-stale `service.lock` after the recorded PID is gone, start or restart it when needed, and wait for its authenticated Management URL;
 3. only when no daemon is installed, start the existing PairRoom Service in-process on an ephemeral numeric-loopback listener;
 4. if an installation exists but cannot become reachable, fail closed with repair guidance instead of starting a competing Service.
 
@@ -58,7 +58,7 @@ The desktop host accepts these optional environment variables:
 - `PAIRROOM_DESKTOP_CONFIG`: PairRoom JSON configuration for an explicitly embedded Service;
 - `PAIRROOM_DESKTOP_DATA_ROOT`: absolute Service data root for an explicitly embedded Service.
 
-An installed daemon is never stopped by the desktop process. An embedded Service is shut down in the existing safe order: stop Management admission, drain Room runtimes without interrupting active native Turns, then release `service.lock`.
+Quit never stops an external daemon. Startup may restart an installed daemon only after recovering a crash-stale lock whose recorded PID is gone. An embedded Service is shut down in the existing safe order: stop Management admission, drain Room runtimes without interrupting active native Turns, then release `service.lock`.
 
 ## Packages
 

@@ -183,9 +183,10 @@ func installDaemonFromCLI(ctx context.Context, path string) error {
 }
 
 // connectInstalledDaemon makes the installed daemon the sole owner for the
-// default data root. A desktop launch may start a stopped daemon and wait for
-// its authenticated endpoint, but it never starts an embedded competitor when
-// daemon metadata says an installation exists.
+// default data root. A desktop launch may recover a crash-stale lock, start or
+// restart a stopped or zombie daemon, and wait for its authenticated endpoint.
+// It never starts an embedded competitor when daemon metadata says an
+// installation exists.
 func connectInstalledDaemon(ctx context.Context) (access.Access, bool, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -226,22 +227,9 @@ func connectInstalledDaemon(ctx context.Context) (access.Access, bool, error) {
 		return access.Access{}, true, err
 	}
 	root := daemonDataRoot(meta)
-	liveOwner := false
-	if info, found, err := service.InspectServiceLock(root); err != nil {
-		return access.Access{}, true, fmt.Errorf("inspect installed PairRoom service lock: %w", err)
-	} else if found && info.PID > 0 {
-		running, probeErr := service.ServiceLockOwnerRunning(info)
-		if probeErr != nil {
-			return access.Access{}, true, fmt.Errorf("verify installed PairRoom service lock owner pid %d: %w", info.PID, probeErr)
-		}
-		if running {
-			// The process may be the daemon in its brief Task Scheduler startup
-			// window. Wait for its authenticated endpoint instead of starting a
-			// second owner or rejecting a legitimate launch race.
-			liveOwner = true
-		} else if !status.Running {
-			return access.Access{}, true, fmt.Errorf("PairRoom daemon is stopped but data root %s has a crash-stale service.lock (pid %d, started %s); verify the process is gone, then run `pairroom daemon start --recover-stale-lock`", root, info.PID, info.StartedAt.Format(time.RFC3339))
-		}
+	recoveredStale, liveOwner, err := recoverInstalledDaemonLock(root)
+	if err != nil {
+		return access.Access{}, true, err
 	}
 	if value, ok, err := access.DiscoverDaemonForRoot(ctx, root); err != nil {
 		return access.Access{}, true, fmt.Errorf("discover installed PairRoom daemon: %w", err)
@@ -250,7 +238,15 @@ func connectInstalledDaemon(ctx context.Context) (access.Access, bool, error) {
 	}
 
 	started := false
-	if !status.Running && !liveOwner {
+	// A live lock owner may be the daemon in its brief Task Scheduler startup
+	// window. Wait for its authenticated endpoint instead of starting a second
+	// owner or rejecting a legitimate launch race.
+	if !liveOwner && status.Running && recoveredStale {
+		if err := manager.Restart(); err != nil {
+			return access.Access{}, true, fmt.Errorf("restart installed PairRoom daemon after crash-stale lock recovery: %w", err)
+		}
+		started = true
+	} else if !liveOwner && !status.Running {
 		if err := manager.Start(); err != nil {
 			return access.Access{}, true, fmt.Errorf("start installed PairRoom daemon: %w", err)
 		}
@@ -287,18 +283,42 @@ func daemonUnavailableError(meta *daemon.Meta, status *daemon.Status, started bo
 	}
 	root := daemonDataRoot(meta)
 	lockDetail := ""
+	hint := "run `pairroom daemon restart`"
 	if info, found, err := service.InspectServiceLock(root); found && err == nil && info.PID > 0 {
 		lockDetail = fmt.Sprintf("; service.lock reports pid %d started %s", info.PID, info.StartedAt.Format(time.RFC3339))
+		if running, probeErr := service.ServiceLockOwnerRunning(info); probeErr == nil && running {
+			hint = "run `pairroom daemon stop` and wait for graceful drain if that process is the installed daemon"
+		}
 	}
 	binary := ""
 	if meta != nil {
 		binary = meta.BinaryPath
 	}
-	hint := "run `pairroom daemon restart`"
-	if started {
-		hint = "run `pairroom daemon status`; if service.lock is stale, verify its recorded PID is gone and then run `pairroom daemon start --recover-stale-lock`"
-	}
 	return fmt.Errorf("installed PairRoom daemon is %s but its authenticated Management Shell did not become available (data root %s, binary %s%s); %s: %w", state, root, binary, lockDetail, hint, cause)
+}
+
+// recoverInstalledDaemonLock removes a crash-stale lock after the recorded PID
+// is confirmed gone so the installed daemon can become the sole owner. A live
+// owner is left untouched.
+func recoverInstalledDaemonLock(root string) (recovered bool, liveOwner bool, err error) {
+	info, found, err := service.InspectServiceLock(root)
+	if err != nil {
+		return false, false, fmt.Errorf("inspect installed PairRoom service lock: %w", err)
+	}
+	if !found || info.PID <= 0 {
+		return false, false, nil
+	}
+	running, probeErr := service.ServiceLockOwnerRunning(info)
+	if probeErr != nil {
+		return false, false, fmt.Errorf("verify installed PairRoom service lock owner pid %d: %w", info.PID, probeErr)
+	}
+	if running {
+		return false, true, nil
+	}
+	if err := service.RecoverServiceLock(root); err != nil {
+		return false, false, fmt.Errorf("recover crash-stale PairRoom service.lock (pid %d, started %s): %w", info.PID, info.StartedAt.Format(time.RFC3339), err)
+	}
+	return true, false, nil
 }
 
 func daemonDataRoot(meta *daemon.Meta) string {
@@ -329,7 +349,7 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 	if err != nil {
 		return nil, err
 	}
-	lock, err := service.AcquireServiceLock(dataRoot, false)
+	lock, err := service.AcquireServiceLock(dataRoot, true)
 	if err != nil {
 		return nil, err
 	}
@@ -396,8 +416,8 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 		shutdownCancel()
 		if err != nil {
 			// Keep the lock when the Runtime drain is uncertain. There is no
-			// safe way for another Service to share this data root until an
-			// operator explicitly verifies the process and recovers the lock.
+			// safe way for another Service to share this data root until the
+			// recorded owner PID is gone and crash-stale recovery can run.
 			cleanupLock = false
 		}
 		return err
@@ -513,8 +533,8 @@ func (h *Host) Shutdown(ctx context.Context) error {
 	}
 	// Keep the lock on any incomplete or uncertain drain. The process may
 	// still have a live Runtime, and removing the lock would permit another
-	// Service to race it. A subsequent explicit stale-lock recovery is the
-	// safe escape hatch after the process is confirmed gone.
+	// Service to race it. The next Desktop or daemon start recovers the lock
+	// only after this process is confirmed gone.
 	if h.lock != nil && result == nil {
 		result = errors.Join(result, h.lock.Close())
 	}

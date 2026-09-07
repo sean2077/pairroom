@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Desktop and `pairroom daemon start` recover a crash-stale `service.lock` after verifying the recorded PID is gone, then start or restart the installed daemon so a leftover lock does not block launch. A live lock owner still fails closed; Desktop does not start a competing embedded Service.
+
 ## [v3.0.1] — 2026-09-07
 
 - Align the Management Room gateway with the embedded scripts and independent permission API. Reject the removed role-change route; test every entry-point asset and cookie/CSRF-protected permission forwarding.

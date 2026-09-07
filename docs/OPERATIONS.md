@@ -17,7 +17,7 @@ All built-in entries default to numeric loopback. Before exposing any other inte
 On startup the desktop host chooses a single Service owner in this order:
 
 1. Validate that `PAIRROOM_DESKTOP_URL` points at an authenticated numeric-loopback PairRoom Service;
-2. Discover an installed daemon; if it is stopped, the desktop host starts it and waits for the current authenticated Management URL;
+2. Discover an installed daemon; recover a crash-stale lock after the recorded PID is gone, start or restart the daemon when needed, and wait for the current authenticated Management URL;
 3. If there is no daemon, but a bundled `pairroom` CLI sits next to the desktop host, run `pairroom daemon install` with it and then connect;
 4. Start an embedded Service in the desktop process only when there is neither a daemon nor a bundled CLI. If a daemon is installed but unreachable, stay fail closed.
 
@@ -28,9 +28,9 @@ Behavior boundaries:
 - Quit while using an external daemon: exit only the GUI; the daemon and active Turns keep running;
 - Windows daemon: Service logs go to the rotating log file and do not keep a taskbar console; use `pairroom daemon logs` to inspect output;
 - Quit while using an embedded Service: stop accepting Management requests, wait for Runtimes to drain at a native-Turn boundary, then release the Registry and `service.lock`;
-- stale lock: the desktop host stays fail closed and does not recover implicitly.
+- crash-stale lock: recover after the recorded PID is gone, then start or restart the installed daemon; a live owner still fails closed;
 
-If desktop startup reports a `service.lock` conflict, run `pairroom daemon status` first. Only after status is stopped and the PID recorded in the lock no longer exists, run `pairroom daemon start --recover-stale-lock`. The desktop host will not delete the lock or seize the data root for the user.
+Desktop startup recovers a crash-stale `service.lock` after confirming the recorded PID is gone, then starts or restarts the installed daemon. A live lock owner still fails closed: run `pairroom daemon status`, then `pairroom daemon stop` and wait for graceful drain if that process is the installed daemon. The desktop host will not start a competing embedded Service or kill a live owner.
 
 Desktop packages are built only for `v*` release tags (or manual `workflow_dispatch`) and attached to the same GitHub Release: CLI assets are `pairroom-cli-vX.Y.Z-…`, desktop assets are `pairroom-desktop-vX.Y.Z-…` (Windows `-setup.exe`, Linux `.deb`/`.AppImage`, macOS `.app.zip`). Pull requests and `main` only run desktop module verification. These packages remain unsigned by default. Windows code signing and Apple Developer ID signing / notarization can be claimed only after they actually run in the production release environment.
 

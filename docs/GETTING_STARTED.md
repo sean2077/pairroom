@@ -40,7 +40,7 @@ On Windows, download `pairroom-cli-vX.Y.Z-windows-amd64.exe`. The desktop instal
 
 ### PairRoom Desktop
 
-Install the desktop package for your platform and start PairRoom. The desktop host first validates and reuses an explicit Management URL. If it finds an installed daemon, it starts or connects to it. The package includes the `pairroom` CLI: if no daemon exists, the desktop host installs and connects with that CLI instead of leaving a `PairRoom.exe` with no `pairroom`. If a daemon is installed but unreachable, the desktop host stops and shows repair guidance; it does not start a second Service. Source/test entry points without a bundled CLI can still start an embedded Service when no daemon is installed.
+Install the desktop package for your platform and start PairRoom. The desktop host first validates and reuses an explicit Management URL. If it finds an installed daemon, it recovers a crash-stale lock after the recorded PID is gone, then starts or connects to that daemon. The package includes the `pairroom` CLI: if no daemon exists, the desktop host installs and connects with that CLI instead of leaving a `PairRoom.exe` with no `pairroom`. If a live lock owner remains, or a daemon is installed but stays unreachable, the desktop host stops and shows repair guidance; it does not start a second Service. Source/test entry points without a bundled CLI can still start an embedded Service when no daemon is installed.
 
 Build from source:
 

@@ -333,6 +333,79 @@ func TestDaemonStartKeepsLifecycleSuccessWhenAutomaticOpenFails(t *testing.T) {
 	}
 }
 
+func TestDaemonStartRecoversCrashStaleLockWithoutFlag(t *testing.T) {
+	root := t.TempDir()
+	setDaemonTestConfigDir(t, filepath.Join(root, "config"))
+	dataRoot := filepath.Join(root, "data")
+	if err := os.MkdirAll(dataRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := json.Marshal(map[string]any{"pid": 99999999, "started_at": "2026-09-02T03:55:24Z", "nonce": "stale"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(dataRoot, "service.lock")
+	if err := os.WriteFile(lockPath, append(lock, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := daemon.SaveMeta(&daemon.Meta{LogFile: filepath.Join(root, "service.log"), LogBackups: 1, DataRoot: dataRoot}); err != nil {
+		t.Fatal(err)
+	}
+	manager := &fakeDaemonManager{status: daemon.Status{Installed: true, Running: false}}
+	original := newDaemonManager
+	originalOpen := openManagementBrowser
+	t.Cleanup(func() {
+		newDaemonManager = original
+		openManagementBrowser = originalOpen
+	})
+	newDaemonManager = func() (daemon.Manager, error) { return manager, nil }
+	openManagementBrowser = func(string) error { return nil }
+
+	if err := daemonStart(nil); err != nil {
+		t.Fatalf("daemon start: %v", err)
+	}
+	if manager.started != 1 {
+		t.Fatalf("start calls = %d, want 1", manager.started)
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("crash-stale lock still present: %v", err)
+	}
+}
+
+func TestDaemonStartRefusesLiveLockOwner(t *testing.T) {
+	root := t.TempDir()
+	setDaemonTestConfigDir(t, filepath.Join(root, "config"))
+	dataRoot := filepath.Join(root, "data")
+	if err := os.MkdirAll(dataRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := json.Marshal(map[string]any{"pid": os.Getpid(), "started_at": "2026-09-02T03:55:24Z", "nonce": "live"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(dataRoot, "service.lock")
+	if err := os.WriteFile(lockPath, append(lock, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := daemon.SaveMeta(&daemon.Meta{LogFile: filepath.Join(root, "service.log"), LogBackups: 1, DataRoot: dataRoot}); err != nil {
+		t.Fatal(err)
+	}
+	manager := &fakeDaemonManager{status: daemon.Status{Installed: true, Running: false}}
+	original := newDaemonManager
+	t.Cleanup(func() { newDaemonManager = original })
+	newDaemonManager = func() (daemon.Manager, error) { return manager, nil }
+
+	if err := daemonStart(nil); err == nil || !strings.Contains(err.Error(), "still running") {
+		t.Fatalf("live-lock daemon start error = %v", err)
+	}
+	if manager.started != 0 {
+		t.Fatalf("start calls = %d, want 0 while a live owner holds the root", manager.started)
+	}
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("live lock was removed: %v", err)
+	}
+}
+
 func TestParseManagementAccessRejectsUnsafeOrTokenlessURLs(t *testing.T) {
 	for _, value := range []string{
 		"https://127.0.0.1:7332/#token=secret",

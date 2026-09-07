@@ -158,7 +158,7 @@ In a legacy Room, the Driver remains the only writer by default; its Reviewer sn
 - A Registry checkpoint can be rebuilt from default Room Event Logs;
 - If checkpoint write fails and consistency cannot be proven, later mutations are blocked;
 - One data root allows only one Service writer;
-- A stale lock is not guessed automatically; recover explicitly after confirming the old process has exited;
+- A stale lock is recovered only after confirming the recorded owner PID has exited; a live owner still fails closed;
 - Backup/restore rejects traversal, links, duplicates, undeclared files, size, and hash anomalies;
 - Ordinary transcript export does not include the verbose Inspector event tail;
 - Diagnostics are designed to omit transcript body and attachment bytes, but still need a human check.
