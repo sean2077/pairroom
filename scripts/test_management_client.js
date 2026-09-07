@@ -45,7 +45,7 @@ function client() {
   assert.ok(source.includes(marker), 'keep boot interception explicit');
   const hook = `
     globalThis.management = {state, api, refresh, loadAgentCatalog, withBusy,
-      syncConfirmRequirement, createBrowserSession, showCredentialLogin,
+      syncConfirmRequirement, submitConfirm, resetConfirmState, createBrowserSession, showCredentialLogin,
       invalidateSessionReads, openRoomInBrowserAction, connect, updateDesktopStartup,
       setDesktop(value) { window.PairRoomDesktop = value; },
       setAPI(callback) { api = callback; }, setCanRender(value) { canRenderNow = () => value; }};
@@ -60,12 +60,31 @@ function client() {
   c.state.csrfToken = 'current-session';
   c.state.snapshot = {rooms: [], runtimes: [], projects: []};
   c.setCanRender(true);
-  return {...c, nodes, renders, notices, events, setFetch(callback) { sandbox.fetch = callback; }};
+  return {...c, nodes, getNode: id => document.getElementById(id), renders, notices, events, setFetch(callback) { sandbox.fetch = callback; }};
 }
 
 async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
 
 async function main() {
+  {
+    const c = client(), pending = deferred();
+    const button = c.getNode('confirm-submit');
+    const dialog = c.getNode('confirm-dialog');
+    dialog.open = true;
+    button.textContent = 'Archive';
+    c.state.confirmAction = () => pending.promise;
+    const submitting = c.submitConfirm({ preventDefault() {} });
+    c.resetConfirmState(); // Escape, then open a different confirmation.
+    const replacement = async () => {};
+    c.state.confirmAction = replacement;
+    dialog.open = true;
+    button.textContent = 'Delete a different Room';
+    pending.resolve();
+    await submitting;
+    assert.equal(dialog.open, true, 'old action completion must not close a new confirmation');
+    assert.equal(c.state.confirmAction, replacement, 'new action ownership must survive');
+    assert.equal(button.textContent, 'Delete a different Room', 'old busy label must not overwrite a new action');
+  }
   {
     const c = client(), update = deferred(); let writes = 0;
     c.setDesktop({readStartup: async () => false, setStartup: () => { writes++; return update.promise; }});

@@ -46,6 +46,7 @@
     contextScrollPositions: new Map(),
     contextPositionRule: null,
     confirmAction: null,
+    confirmRevision: 0,
     confirmRequirement: '',
     confirmAcknowledgementRequired: false,
     selectedRoomIDs: new Set(),
@@ -2411,6 +2412,7 @@
   }
 
   function resetConfirmState() {
+    state.confirmRevision += 1;
     state.confirmAction = null;
     state.confirmRequirement = '';
     state.confirmAcknowledgementRequired = false;
@@ -2483,6 +2485,7 @@
   async function submitConfirm(event) {
     event.preventDefault();
     const action = state.confirmAction;
+    const revision = state.confirmRevision;
     if (!action) {
       closeDialog('confirm-dialog');
       return;
@@ -2499,7 +2502,7 @@
     await withBusy($('confirm-submit'), async () => {
       try {
         await action();
-        closeDialog('confirm-dialog');
+        if (revision === state.confirmRevision && state.confirmAction === action) closeDialog('confirm-dialog');
       } catch (error) {
         toast(t("ui.actionFailed"), error.message, 'error');
       }
@@ -2599,12 +2602,13 @@
     state.busyButtons.add(button);
     button.disabled = true;
     button.setAttribute('aria-busy', 'true');
-    button.textContent = t("ui.processing");
+    const busyLabel = t("ui.processing");
+    button.textContent = busyLabel;
     try { await work(); } finally {
       state.busyButtons.delete(button);
       button.disabled = false;
       button.setAttribute('aria-busy', 'false');
-      button.textContent = original;
+      if (button.textContent === busyLabel) button.textContent = original;
       if (button === $('confirm-submit')) syncConfirmRequirement();
     }
   }

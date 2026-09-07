@@ -1770,6 +1770,14 @@ func (f *fakeAttachmentStore) Resolve(id string) (model.Attachment, string, erro
 	return value, f.paths[id], nil
 }
 
+func (f *fakeAttachmentStore) Remove(id string) error {
+	if _, exists := f.metadata[id]; !exists {
+		return errors.New("unknown fake attachment")
+	}
+	delete(f.metadata, id)
+	return nil
+}
+
 func (f *fakeAttachmentStore) DiscoverRepoImages(string, string) []model.Attachment {
 	return append([]model.Attachment(nil), f.discovered...)
 }

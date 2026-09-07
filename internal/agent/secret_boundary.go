@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"sort"
 	"strings"
 
 	"github.com/sean2077/pairroom/internal/model"
@@ -23,7 +26,8 @@ func RedactingFactory(factory Factory) Factory {
 }
 
 type secretRedactor struct {
-	values []string
+	values   []string
+	replacer *strings.Replacer
 }
 
 func newSecretRedactor(env map[string]string) *secretRedactor {
@@ -43,7 +47,17 @@ func newSecretRedactor(env map[string]string) *secretRedactor {
 		seen[value] = struct{}{}
 		values = append(values, value)
 	}
-	return &secretRedactor{values: values}
+	sort.Slice(values, func(i, j int) bool {
+		if len(values[i]) != len(values[j]) {
+			return len(values[i]) > len(values[j])
+		}
+		return values[i] < values[j]
+	})
+	pairs := make([]string, 0, len(values)*2)
+	for _, value := range values {
+		pairs = append(pairs, value, "[redacted]")
+	}
+	return &secretRedactor{values: values, replacer: strings.NewReplacer(pairs...)}
 }
 
 func credentialEnvKey(value string) bool {
@@ -59,21 +73,55 @@ func credentialEnvKey(value string) bool {
 }
 
 func (r *secretRedactor) text(value string) string {
-	if r == nil {
+	if r == nil || r.replacer == nil {
 		return value
 	}
-	for _, secret := range r.values {
-		value = strings.ReplaceAll(value, secret, "[redacted]")
-	}
-	return value
+	return r.replacer.Replace(value)
 }
 
 func (r *secretRedactor) raw(value json.RawMessage) json.RawMessage {
 	if len(value) == 0 {
 		return nil
 	}
-	redacted := r.text(string(value))
-	return json.RawMessage(redacted)
+	if r == nil || len(r.values) == 0 {
+		return value
+	}
+	// Redact decoded strings, not serialized bytes: escaping quotes, backslashes
+	// or Unicode must neither bypass the boundary nor corrupt the JSON payload.
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return json.RawMessage(`null`)
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return json.RawMessage(`null`)
+	}
+	redacted, err := json.Marshal(r.jsonValue(decoded))
+	if err != nil {
+		return json.RawMessage(`null`)
+	}
+	return redacted
+}
+
+func (r *secretRedactor) jsonValue(value any) any {
+	switch value := value.(type) {
+	case string:
+		return r.text(value)
+	case []any:
+		for index := range value {
+			value[index] = r.jsonValue(value[index])
+		}
+		return value
+	case map[string]any:
+		clean := make(map[string]any, len(value))
+		for key, item := range value {
+			clean[r.text(key)] = r.jsonValue(item)
+		}
+		return clean
+	default:
+		return value
+	}
 }
 
 func (r *secretRedactor) event(event model.RuntimeEvent) model.RuntimeEvent {
@@ -83,6 +131,10 @@ func (r *secretRedactor) event(event model.RuntimeEvent) model.RuntimeEvent {
 	event.Data = r.raw(event.Data)
 	if event.Runtime != nil {
 		info := *event.Runtime
+		info.SessionName = r.text(info.SessionName)
+		info.SessionNameStatus = r.text(info.SessionNameStatus)
+		info.Version = r.text(info.Version)
+		info.Protocol = r.text(info.Protocol)
 		info.Command = r.text(info.Command)
 		info.Path = r.text(info.Path)
 		info.Provider = r.text(info.Provider)

@@ -10,7 +10,7 @@
 
 From a source checkout, `make dev` stops an installed daemon, recovers a crash-stale lock only after the recorded PID is gone, starts the current-tree Management Service, and opens the Management Shell. `make stop` is the stop-only helper. Do not leave `make dev` running at the same time as a started daemon.
 
-All built-in entries default to numeric loopback. Before exposing any other interface, configure a token and assess the risk of local repositories, Agent credentials, and attachments.
+All built-in listeners require numeric loopback addresses; a token does not enable LAN, wildcard, or hostname binds. For remote access, use SSH local port forwarding and keep the Service bound to loopback. Protect the forwarded endpoint and bootstrap token as access to local repositories, Agent credentials, and attachments.
 
 ## Desktop lifecycle
 
@@ -18,8 +18,9 @@ On startup the desktop host chooses a single Service owner in this order:
 
 1. Validate that `PAIRROOM_DESKTOP_URL` points at an authenticated numeric-loopback PairRoom Service;
 2. Discover an installed daemon; recover a crash-stale lock after the recorded PID is gone, start or restart the daemon when needed, and wait for the current authenticated Management URL;
-3. If there is no daemon, but a bundled `pairroom` CLI sits next to the desktop host, run `pairroom daemon install` with it and then connect;
-4. Start an embedded Service in the desktop process only when there is neither a daemon nor a bundled CLI. If a daemon is installed but unreachable, stay fail closed.
+3. If no daemon is installed, own an embedded Service in the desktop process. A bundled CLI does not authorize daemon installation. If a daemon is installed but unreachable, stay fail closed.
+
+Explicit data-root/configuration or Mock options select their own embedded Service instead of discovering an unrelated default daemon; an explicit validated Management URL remains the strongest override when external discovery is enabled. Settings → Desktop → Launch at login changes only native login registration. It does not install a daemon. `make desktop-update` replaces the host and bundled CLI without changing login registration or user data.
 
 Behavior boundaries:
 

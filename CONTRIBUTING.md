@@ -2,6 +2,8 @@
 
 ## Development setup
 
+Install Go 1.25, Node.js (CI uses 22.x), Python 3, Git, Make, and Bash. The root CLI is CGo-free; the race test additionally needs the compiler described below.
+
 ```bash
 git clone https://github.com/sean2077/pairroom.git
 cd pairroom
@@ -9,7 +11,7 @@ make check
 make smoke
 ```
 
-`make check` runs format, static checks, unit tests, race / dependency checks, and the documentation contract. `make smoke` runs the full Mock collaboration / recovery scenario. `make race` (included in `make check`) requires `CGO_ENABLED=1` and a Go-supported C compiler on `PATH`; on Windows, use an MSYS2 MinGW toolchain or an equivalent supported compiler.
+`make check` runs format, static checks, unit tests, race / dependency checks, JavaScript syntax/client regressions, and the documentation contract. `make js-check` runs the fast JavaScript layer alone and fails with an actionable error when Node.js is missing; it never silently skips frontend verification. The dependency check rejects local/versioned replacements as well as module/version drift. `make smoke` runs the full Mock collaboration / recovery scenario. `make race` (included in `make check`) requires `CGO_ENABLED=1` and a Go-supported C compiler on `PATH`; on Windows, use an MSYS2 MinGW toolchain or an equivalent supported compiler.
 
 UI changes also run the isolated browser contract in CI. To reproduce it locally:
 

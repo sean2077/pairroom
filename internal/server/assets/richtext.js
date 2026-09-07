@@ -1,6 +1,9 @@
 (() => {
   'use strict';
 
+  // Bound formatting work without dropping any user/Agent text.
+  const MAX_NESTING = 32;
+
   const t = (key, options) => window.PairRoomI18n ? window.PairRoomI18n.t(key, options) : key;
 
   function render(parent, source, options = {}) {
@@ -15,7 +18,8 @@
     return String(value || '').replace(/\r\n?/g, '\n');
   }
 
-  function parseBlocks(parent, source, options) {
+  function parseBlocks(parent, source, options, depth = 0) {
+    if (depth >= MAX_NESTING) { appendTextWithBreaks(parent, source); return; }
     const lines = source.split('\n');
     let index = 0;
     while (index < lines.length) {
@@ -64,7 +68,7 @@
           index += 1;
         }
         const quote = document.createElement('blockquote');
-        parseBlocks(quote, body.join('\n'), options);
+        parseBlocks(quote, body.join('\n'), options, depth + 1);
         parent.appendChild(quote);
         continue;
       }
@@ -240,7 +244,8 @@
     return wrap;
   }
 
-  function parseInline(parent, source, options) {
+  function parseInline(parent, source, options, depth = 0) {
+    if (depth >= MAX_NESTING) { appendTextWithBreaks(parent, source); return; }
     const patterns = [
       { type: 'image', regex: /!\[([^\]]*)\]\(([^\s)]+)(?:\s+["']([^"']*)["'])?\)/g },
       { type: 'link', regex: /\[([^\]]+)\]\(([^\s)]+)(?:\s+["']([^"']*)["'])?\)/g },
@@ -286,7 +291,7 @@
       } else if (type === 'strong' || type === 'em' || type === 'strike') {
         const tag = type === 'strong' ? 'strong' : type === 'strike' ? 'del' : 'em';
         const node = document.createElement(tag);
-        parseInline(node, match[1] || match[2] || '', options);
+        parseInline(node, match[1] || match[2] || '', options, depth + 1);
         parent.appendChild(node);
       } else if (type === 'link') {
         appendLink(parent, match[2], match[1], match[3] || '');

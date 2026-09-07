@@ -10,6 +10,14 @@ PairRoom's CLI, Event Log, HTTP API, and native adapters evolve with the officia
 4. Record the current binary, Claude Code / Codex / Grok Build, and configuration versions;
 5. Make sure the working repository has no unrecognized native side effects.
 
+## Integrity and configuration hardening (unreleased)
+
+No schema, event kind, collaboration instruction, or native session identity changes. Valid schema-9/10 Event Logs and provisioning-v1/2/3 records remain readable.
+
+Service configuration must be one JSON object. Duplicate root/Agent fields, trailing documents, and `null` runtime/policy fields are rejected rather than ambiguously merging with defaults. Use explicit empty policy strings for native inheritance. Runtime templates cannot override per-Room model, Provider, effort, or permission settings through attached short flags or inline Codex `-c`/`--config` options; move these choices to the Agent selection instead. When changing a slot's Runtime, omitted policy defaults come from that Runtime, while explicit empty or narrower settings remain intact.
+
+Event sequences must start at 1 and remain contiguous; a missing log is not an empty Room. Back up corrupt data before investigating a rejected start or restore. Do not renumber complete records to bypass verification. Only an incomplete final JSONL record can be repaired automatically. An ambiguous append I/O failure closes the writer; stop the affected Runtime/Service and reopen only after checking storage health and the verified Event Log. Rollback does not require rewriting valid Room data.
+
 ## Desktop launch no longer installs a daemon (v3.1.0)
 
 Opening Desktop reuses an already-installed daemon or owns an embedded Service when none is installed. It no longer runs `pairroom daemon install` from the bundled CLI. Launch-at-login is an explicit Settings control and does not install, start, or remove a daemon. If you still want a persistent background Service, run `pairroom daemon install` yourself. `make desktop-update` replaces the host and bundled CLI only; it does not change daemon configuration. This change adds no schema, event kind, or native prompt; Store schema 10 / provisioning schema 3 remain unchanged. Normal stop/drain and reverting the code are sufficient to roll back this change without rewriting Room data.

@@ -232,6 +232,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
+	if r.Method == http.MethodHead {
+		return
+	}
 
 	ch, cancel := s.engine.Subscribe()
 	defer cancel()
@@ -404,12 +407,12 @@ func (s *Server) deleteAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if s.engine.AttachmentReferenced(id) {
-		writeError(w, http.StatusConflict, "attachment is already part of the durable room transcript")
-		return
-	}
-	if err := s.media.Remove(id); err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+	if err := s.engine.RemoveAttachment(id); err != nil {
+		status := http.StatusNotFound
+		if errors.Is(err, room.ErrAttachmentReferenced) {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

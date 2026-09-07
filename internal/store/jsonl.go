@@ -122,6 +122,7 @@ func repairEventLog(path string, create bool) error {
 
 	reader := bufio.NewReaderSize(file, 128*1024)
 	var lastGood int64
+	var lastSeq uint64
 	for lineNo := 1; ; lineNo++ {
 		line, readErr := reader.ReadBytes('\n')
 		if len(line) > 0 {
@@ -135,6 +136,10 @@ func repairEventLog(path string, create bool) error {
 				}
 				return fmt.Errorf("decode event log line %d during repair: %w", lineNo, err)
 			}
+			if err := checkSequence(event.Seq, lastSeq); err != nil {
+				return fmt.Errorf("event log line %d during repair: %w", lineNo, err)
+			}
+			lastSeq = event.Seq
 			lastGood += int64(len(line))
 			if errors.Is(readErr, io.EOF) && line[len(line)-1] != '\n' {
 				if _, err := file.WriteAt([]byte{'\n'}, lastGood); err != nil {
@@ -192,34 +197,54 @@ func (s *JSONLStore) Append(event *model.Event) error {
 	if s.file == nil {
 		return errors.New("event store is closed")
 	}
-	if event.Seq == 0 {
-		s.lastSeq++
-		event.Seq = s.lastSeq
-	} else if event.Seq > s.lastSeq {
-		s.lastSeq = event.Seq
-	} else {
-		return fmt.Errorf("event sequence %d is not greater than last sequence %d", event.Seq, s.lastSeq)
+	if event == nil {
+		return errors.New("event is required")
 	}
-	data, err := json.Marshal(event)
+	candidate := *event
+	if candidate.Seq == 0 {
+		candidate.Seq = s.lastSeq + 1
+	}
+	if err := checkSequence(candidate.Seq, s.lastSeq); err != nil {
+		return err
+	}
+	data, err := json.Marshal(candidate)
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
 	}
 	data = append(data, '\n')
 	if _, err := s.file.Write(data); err != nil {
-		return fmt.Errorf("append event: %w", err)
+		return s.failWriteLocked("append event", err)
 	}
 	if err := s.file.Sync(); err != nil {
-		return fmt.Errorf("sync event log: %w", err)
+		return s.failWriteLocked("sync event log", err)
+	}
+	// Only acknowledge a sequence after the complete record is durable. A
+	// rejected marshal must not poison a retry or create a replay-breaking gap.
+	s.lastSeq, event.Seq = candidate.Seq, candidate.Seq
+	return nil
+}
+
+func checkSequence(seq, previous uint64) error {
+	if seq == 0 || seq != previous+1 {
+		return fmt.Errorf("event sequence %d must immediately follow %d", seq, previous)
 	}
 	return nil
 }
 
+func (s *JSONLStore) failWriteLocked(operation string, err error) error {
+	// The write may have reached disk partially, or Sync may have failed after
+	// a complete write. Continuing to append would concatenate onto an unknown
+	// tail or reuse an uncertain sequence. Reopening repairs/replays disk truth.
+	_ = s.file.Close()
+	s.file = nil
+	return fmt.Errorf("%s: %w; event store closed, reopen before retrying", operation, err)
+}
+
 func (s *JSONLStore) Load() ([]model.Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	file, err := os.Open(s.path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("open event log for reading: %w", err)
 	}
 	defer file.Close()
@@ -227,6 +252,7 @@ func (s *JSONLStore) Load() ([]model.Event, error) {
 	reader := bufio.NewReaderSize(file, 128*1024)
 	events := make([]model.Event, 0, 256)
 	lineNo := 0
+	var lastSeq uint64
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if len(line) > 0 {
@@ -239,6 +265,10 @@ func (s *JSONLStore) Load() ([]model.Event, error) {
 				}
 				return nil, fmt.Errorf("decode event log line %d: %w", lineNo, err)
 			}
+			if err := checkSequence(event.Seq, lastSeq); err != nil {
+				return nil, fmt.Errorf("event log line %d: %w", lineNo, err)
+			}
+			lastSeq = event.Seq
 			events = append(events, event)
 		}
 		if errors.Is(readErr, io.EOF) {

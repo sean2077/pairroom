@@ -14,7 +14,7 @@ function deferred() {
 }
 
 function client() {
-  const nodes = new Map(), timers = new Map(), storage = new Map(), notices = [], renders = [];
+  const nodes = new Map(), timers = new Map(), storage = new Map(), notices = [], renders = [], lifecycle = new Map(), revoked = [];
   let timerID = 0;
   const document = { body: { dataset: {} }, hidden: false, activeElement: null,
     addEventListener() {}, querySelectorAll() { return []; }, querySelector() { return null; },
@@ -39,11 +39,11 @@ function client() {
     close() { this.closed = true; }
     emit(type, value) { this.listeners.get(type)?.({ data: JSON.stringify(value) }); }
   }
-  const window = { location: { hash: '', pathname: '/', search: '' }, addEventListener() {} };
+  const window = { location: { hash: '', pathname: '/', search: '' }, addEventListener(type, callback) { lifecycle.set(type, callback); } };
   const localStorage = { getItem: (key) => storage.get(key) || null,
     setItem: (key, value) => storage.set(key, value), removeItem: (key) => storage.delete(key) };
   const sandbox = { window, document, localStorage, EventSource, URLSearchParams, Headers, FormData,
-    URL: { revokeObjectURL() {} }, console,
+    URL: { revokeObjectURL(url) { revoked.push(url); } }, console,
     setTimeout(callback) { const id = ++timerID; timers.set(id, callback); return id; },
     clearTimeout(id) { timers.delete(id); }, requestAnimationFrame() {},
     notices, renders };
@@ -72,10 +72,33 @@ function client() {
   nodes.get('message-intent').value = 'steer';
   const snapshot = () => ({ meta: { id: 'test', name: 'Test' }, latest_seq: 10, settings: {stall_warning_seconds:300}, messages: [], participants: {}, approvals: [], events: [] });
   sandbox.room.state.snapshot = snapshot();
-  return { ...sandbox.room, nodes, input, edit, key, timers, storage, localStorage, notices, renders, snapshot };
+  return { ...sandbox.room, nodes, input, edit, key, timers, storage, localStorage, notices, renders, snapshot, lifecycle, revoked };
 }
 
 async function main() {
+  {
+    const c = client();
+    c.state.settingsDirty = true;
+    c.state.attachmentObjectURLs.add('blob:pending');
+    c.state.mediaObjectURLs.set('image', 'blob:history');
+    c.connectEvents();
+    const stream = c.state.source;
+    let prompted = false;
+    c.lifecycle.get('beforeunload')({ preventDefault() { prompted = true; } });
+    assert.equal(prompted, true, 'unsaved settings still prompt before leaving');
+    assert.equal(c.revoked.length, 0, 'cancelling navigation must keep image previews usable');
+    assert.equal(stream.closed, false, 'cancelling navigation must not silently kill live updates');
+    c.lifecycle.get('pagehide')({ persisted: true });
+    assert.equal(c.revoked.length, 0, 'back-forward cache retains its image URLs');
+    assert.equal(stream.closed, true, 'cached pages must stop retaining a Room runtime');
+    c.setAPI(async () => c.snapshot());
+    c.lifecycle.get('pageshow')({ persisted: true });
+    await c.state.snapshotPromise;
+    assert.notEqual(c.state.source, stream, 'cache restoration reads a fresh snapshot and reconnects');
+    c.lifecycle.get('pagehide')({ persisted: false });
+    assert.deepEqual(c.revoked, ['blob:pending', 'blob:history']);
+    assert.equal(stream.closed, true, 'real page destruction releases the stream');
+  }
   {
     const c = client(), request = deferred(), sent = [];
     c.setAPI((_path, options) => { sent.push(JSON.parse(options.body)); return request.promise; });

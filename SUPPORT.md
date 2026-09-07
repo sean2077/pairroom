@@ -97,7 +97,7 @@ Typical symptoms: Management refresh 401, Room session/CSRF, SSE disconnect, his
 
 ### Vendor Runtime
 
-Typical symptoms: `doctor` probe, Claude control initialize, Codex app-server request, Grok streaming-json turn, Session/Thread resume, permission/sandbox, a real Turn stuck.
+Typical symptoms: `doctor` probe, Claude control initialize, Codex app-server request, Grok ACP stdio session/turn, Session/Thread resume, permission/sandbox, a real Turn stuck.
 
 More accurate classification makes it easier not to treat a vendor service outage as a PairRoom Store bug, or a tab Token loss as a daemon failure.
 
@@ -120,6 +120,7 @@ one local Service per data root
 multiple canonical Git Projects
 multiple durable Rooms
 bounded active Room Runtimes
+Project unregistration and archived Room deletion (with explicit acknowledgement)
 one human + two Agent slots per Room
 each slot: Claude Code, Codex, or Grok Build (same runtime allowed twice)
 ```
@@ -130,7 +131,6 @@ Not in the current support contract:
 - a direct LAN/public listener or built-in TLS;
 - remote workers;
 - more than two Agent slots in one Room;
-- Project removal / permanent Room deletion;
 - full Runtime policy hot modification;
 - Reviewer container-grade security guarantees;
 - a stable plugin API for additional vendors.

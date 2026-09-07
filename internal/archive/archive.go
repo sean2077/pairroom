@@ -162,7 +162,7 @@ func Verify(dataDir string) VerifyReport {
 					report.FirstSequence = event.Seq
 				}
 				report.LastSequence = event.Seq
-				if event.Seq == 0 || (previous != 0 && event.Seq != previous+1) {
+				if event.Seq == 0 || event.Seq != previous+1 {
 					report.Errors = append(report.Errors, fmt.Sprintf("event sequence at line %d is %d after %d", lineNo, event.Seq, previous))
 				}
 				previous = event.Seq
@@ -172,6 +172,9 @@ func Verify(dataDir string) VerifyReport {
 					report.Errors = append(report.Errors, fmt.Sprintf("duplicate event id %q", event.ID))
 				} else {
 					seenIDs[event.ID] = struct{}{}
+				}
+				if strings.TrimSpace(event.RoomID) == "" {
+					report.Errors = append(report.Errors, fmt.Sprintf("event line %d has an empty room id", lineNo))
 				}
 				if report.RoomID == "" {
 					report.RoomID = event.RoomID

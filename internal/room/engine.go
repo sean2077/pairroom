@@ -61,6 +61,7 @@ type Config struct {
 type AttachmentStore interface {
 	Resolve(id string) (model.Attachment, string, error)
 	DiscoverRepoImages(text, source string) []model.Attachment
+	Remove(id string) error
 }
 
 type WorkspaceManager interface {
@@ -566,6 +567,23 @@ func (e *Engine) prepareWorkspaceBoundaries(ctx context.Context, claudeRole, cod
 
 func (e *Engine) Subscribe() (<-chan model.Event, func()) { return e.cfg.Hub.Subscribe() }
 
+var ErrAttachmentReferenced = errors.New("attachment is already part of the durable room transcript")
+
+// RemoveAttachment shares the routing gate with every new transcript reference.
+// The reference check and removal must not race canonicalization + persistence.
+func (e *Engine) RemoveAttachment(id string) error {
+	e.routingMu.Lock()
+	defer e.routingMu.Unlock()
+	id = strings.TrimSpace(id)
+	if e.AttachmentReferenced(id) {
+		return ErrAttachmentReferenced
+	}
+	if e.cfg.Attachments == nil {
+		return errors.New("attachment storage is unavailable")
+	}
+	return e.cfg.Attachments.Remove(id)
+}
+
 func (e *Engine) AttachmentReferenced(id string) bool {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -592,6 +610,8 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 	if !intent.Valid() {
 		return model.Message{}, fmt.Errorf("invalid message intent %q", intent)
 	}
+	e.routingMu.Lock()
+	defer e.routingMu.Unlock()
 	attachments, err := e.canonicalAttachments(req.Attachments)
 	if err != nil {
 		return model.Message{}, err
@@ -600,8 +620,6 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 		return model.Message{}, errors.New("message text or image is required")
 	}
 
-	e.routingMu.Lock()
-	defer e.routingMu.Unlock()
 	targets, err := e.resolveUserTargets(text, req.To, req.TargetRole, req.ReplyTo)
 	if err != nil {
 		return model.Message{}, err
