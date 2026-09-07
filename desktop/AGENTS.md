@@ -20,7 +20,9 @@ This contract applies under `desktop/`. Read it together with the repository roo
 - `build/config.yml`, `build/Taskfile.yml`, `Taskfile.yml`, and the scripts under `scripts/` are maintained source.
 - Keep the startup page minimal. Product UI changes belong to the existing embedded PairRoom Web assets, not `desktop/frontend/`.
 - Windows `wails3 task build` must stay GUI-subsystem (`-H windowsgui`) so `bin/PairRoom.exe` does not allocate a log console. `CONSOLE=true` is the explicit diagnostic exception.
-- Packaged desktop builds must ship the PairRoom CLI with the host. On Windows the CLI cannot share a directory with `PairRoom.exe` (NTFS is case-insensitive); keep it at `desktop/bin/cli/pairroom.exe` in the build tree and `$INSTDIR\bin\pairroom.exe` in the installer. Unix packages may keep a `pairroom` sibling. CI collects the installer/app bundle, not a host binary without the CLI. If no daemon is installed, the host installs one from that bundled CLI instead of embedding a competing Service.
+- Packaged desktop builds must ship the PairRoom CLI with the host. On Windows the CLI cannot share a directory with `PairRoom.exe` (NTFS is case-insensitive); keep it at `desktop/bin/cli/pairroom.exe` in the build tree and `$INSTDIR\bin\pairroom.exe` in the installer. Unix packages may keep a `pairroom` sibling. CI collects the installer/app bundle, not a host binary without the CLI. Launching Desktop must never install a daemon. With no daemon installed, use the existing embedded Service and own its graceful drain. Launch at login is an explicit native Settings operation, with the OS registration as the only persistent source of truth; never infer consent from the bundled CLI or from a browser URL flag.
+
+`make desktop-update` rebuilds and replaces the existing local desktop host and bundled CLI (or macOS app bundle). Preserve data, startup registration, and unrelated installation files; stage replacements and retain recoverable backups on failure. Never force-kill active processes or install/reconfigure a daemon during update.
 
 ## Verification
 

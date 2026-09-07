@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 import pathlib
 import plistlib
 import re
@@ -61,7 +62,7 @@ def main() -> int:
         )
     subprocess.run(
         [
-            "wails3",
+            os.environ.get("PAIRROOM_WAILS", "wails3"),
             "update",
             "build-assets",
             "-name",

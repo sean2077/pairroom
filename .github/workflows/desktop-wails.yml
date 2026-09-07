@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'desktop/**'
+      - 'Makefile'
+      - 'scripts/test_desktop_settings.js'
       - '.github/workflows/desktop-wails.yml'
       - 'VERSION'
       - 'go.mod'
@@ -13,6 +15,8 @@ on:
     branches: [main]
     paths:
       - 'desktop/**'
+      - 'Makefile'
+      - 'scripts/test_desktop_settings.js'
       - '.github/workflows/desktop-wails.yml'
       - 'VERSION'
       - 'go.mod'
@@ -41,6 +45,10 @@ jobs:
           cache-dependency-path: |
             desktop/go.mod
             desktop/go.sum
+      - name: Test local desktop updater and native settings transport
+        run: |
+          python desktop/scripts/test_update_local.py
+          node scripts/test_desktop_settings.js
       - name: Install Linux webview dependencies
         run: |
           sudo apt-get update
@@ -69,6 +77,26 @@ jobs:
       - name: Compile Linux desktop application
         working-directory: desktop
         run: wails3 task linux:build ARCH=amd64 PRODUCTION=true
+
+  native-tests:
+    name: Test native desktop (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-15]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.x'
+          cache-dependency-path: desktop/go.sum
+      - name: Test desktop host and startup settings
+        working-directory: desktop
+        run: go test -count=1 ./...
+      - name: Test transactional local update
+        run: python desktop/scripts/test_update_local.py
 
   package:
     name: Package ${{ matrix.label }}

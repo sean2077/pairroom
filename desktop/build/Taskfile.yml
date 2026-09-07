@@ -26,10 +26,10 @@ tasks:
       - darwin/icons.icns
       - windows/icon.ico
     cmds:
-      - wails3 generate icons -input appicon.png -macfilename darwin/icons.icns -windowsfilename windows/icon.ico
+      - '"{{.WAILS}}" generate icons -input appicon.png -macfilename darwin/icons.icns -windowsfilename windows/icon.ico'
 
   update:build-assets:
     summary: Refreshes Wails v3 platform packaging assets
     dir: build
     cmds:
-      - wails3 update build-assets -name "PairRoom" -binaryname "PairRoom" -config config.yml -dir .
+      - '"{{.WAILS}}" update build-assets -name "PairRoom" -binaryname "PairRoom" -config config.yml -dir .'

@@ -6,9 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +14,6 @@ import (
 	"github.com/sean2077/pairroom/internal/ccswitch"
 	"github.com/sean2077/pairroom/internal/config"
 	"github.com/sean2077/pairroom/internal/daemon"
-	"github.com/sean2077/pairroom/internal/execx"
 	"github.com/sean2077/pairroom/internal/service"
 )
 
@@ -87,99 +83,11 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 			if err != nil {
 				return nil, err
 			}
-			if path, ok := lookupBundledCLI(); ok {
-				if err := installFromBundledCLI(ctx, path); err != nil {
-					return nil, err
-				}
-				value, installed, err := connectInstalledDaemon(ctx)
-				if err != nil {
-					return nil, err
-				}
-				if !installed {
-					return nil, errors.New("bundled PairRoom CLI did not install a daemon")
-				}
-				return &Host{mode: ModeExternal, access: value}, nil
-			}
 		}
 	}
+	// Launching the UI is not consent to install a persistent system service.
+	// With no installed daemon, this process owns and drains the Service.
 	return startEmbedded(ctx, options)
-}
-
-var lookupBundledCLI = bundledCLIPath
-var installFromBundledCLI = installDaemonFromCLI
-
-func bundledCLIPath() (string, bool) {
-	executable, err := os.Executable()
-	if err != nil {
-		return "", false
-	}
-	if resolved, err := filepath.EvalSymlinks(executable); err == nil {
-		executable = resolved
-	}
-	dir := filepath.Dir(executable)
-	for _, path := range bundledCLICandidates(dir) {
-		if samePath(path, executable) {
-			continue
-		}
-		info, err := os.Stat(path)
-		if err != nil || info.IsDir() {
-			continue
-		}
-		return path, true
-	}
-	return "", false
-}
-
-func bundledCLICandidates(dir string) []string {
-	if runtime.GOOS == "windows" {
-		// NTFS treats PairRoom.exe and pairroom.exe as the same name.
-		return []string{
-			filepath.Join(dir, "bin", "pairroom.exe"),
-			filepath.Join(dir, "cli", "pairroom.exe"),
-		}
-	}
-	return []string{filepath.Join(dir, "pairroom")}
-}
-
-func samePath(left, right string) bool {
-	left, right = filepath.Clean(left), filepath.Clean(right)
-	if runtime.GOOS == "windows" {
-		return strings.EqualFold(left, right)
-	}
-	return left == right
-}
-
-func daemonWorkDir(cliPath string) string {
-	dir := filepath.Dir(cliPath)
-	switch strings.ToLower(filepath.Base(dir)) {
-	case "bin", "cli":
-		return filepath.Dir(dir)
-	default:
-		return dir
-	}
-}
-
-func installDaemonFromCLI(ctx context.Context, path string) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	command := exec.CommandContext(ctx, path, "daemon", "install", "--binary", path, "--work-dir", daemonWorkDir(path))
-	execx.NoConsole(command)
-	output, err := command.CombinedOutput()
-	if err == nil {
-		return nil
-	}
-	text := strings.TrimSpace(string(output))
-	if strings.Contains(text, "already installed") {
-		return nil
-	}
-	if text == "" {
-		return fmt.Errorf("install bundled PairRoom daemon: %w", err)
-	}
-	return fmt.Errorf("install bundled PairRoom daemon: %s (%w)", text, err)
 }
 
 // connectInstalledDaemon makes the installed daemon the sole owner for the

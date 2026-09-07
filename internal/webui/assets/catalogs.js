@@ -3,6 +3,11 @@
   window.PairRoomLocales = {
   "en": {
     "translation": {
+      "desktop.settings": "Desktop",
+      "desktop.launchAtLogin": "Launch at login",
+      "desktop.launchAtLoginHelp": "Open PairRoom Desktop when you sign in. This does not install or enable a daemon.",
+      "desktop.updating": "Reading or updating the system startup setting…",
+      "desktop.systemSetting": "Saved in your operating system, shared by desktop windows.",
       "ui.10Seconds": "10 seconds",
       "ui.30Seconds": "30 seconds",
       "ui.5Seconds": "5 seconds",
@@ -1084,6 +1089,11 @@
   },
   "zh-CN": {
     "translation": {
+      "desktop.settings": "桌面端",
+      "desktop.launchAtLogin": "开机启动",
+      "desktop.launchAtLoginHelp": "登录系统时启动 PairRoom 桌面端；不会安装或启用 daemon。",
+      "desktop.updating": "正在读取或更新系统启动设置…",
+      "desktop.systemSetting": "保存在操作系统中，所有桌面窗口共用。",
       "ui.10Seconds": "10 秒",
       "ui.30Seconds": "30 秒",
       "ui.5Seconds": "5 秒",

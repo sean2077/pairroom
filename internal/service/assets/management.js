@@ -50,6 +50,7 @@
     confirmAcknowledgementRequired: false,
     selectedRoomIDs: new Set(),
 	settingsSection: 'interface',
+ desktopStartup: {enabled: null, pending: false, error: ''},
 	agentCatalog: null,
 	agentCatalogPromise: null,
     showRawSnapshot: false,
@@ -1176,9 +1177,10 @@
     const sections = [
       ['interface', t("ui.interfaceExperience")], ['runtime', t("ui.runtimeStrategy")], ['operations', t("ui.daemonOperationAndMaintenance")], ['service', t("ui.serviceAndDiagnosis")], ['boundaries', t("ui.securityBoundary")], ['about', t("ui.about")],
     ];
+    if (window.PairRoomDesktop) sections.splice(1, 0, ['desktop', t('desktop.settings')]);
     const nav = node('nav', { className: 'panel settings-nav', 'aria-label': t("ui.setUpPartitions") }, ...sections.map(([key, label]) => {
       const active = state.settingsSection === key;
-      const button = actionButton(label, () => { state.settingsSection = key; renderSettings(); }, active ? 'active' : '');
+      const button = actionButton(label, () => { state.settingsSection = key; if (key === 'desktop') updateDesktopStartup(); renderSettings(); }, active ? 'active' : '');
       button.setAttribute('aria-pressed', String(active));
       return button;
     }));
@@ -1197,6 +1199,7 @@
   function renderSettingsSection() {
     const snapshot = state.snapshot;
     const policy = runtimePolicy(snapshot);
+    if (state.settingsSection === 'desktop' && window.PairRoomDesktop) return renderDesktopSettings();
     if (state.settingsSection === 'runtime') {
       const command = runtimeCommand(policy);
       return node('div', { className: 'view-stack' },
@@ -1317,6 +1320,35 @@
       ),
       node('aside', { className: 'callout neutral' }, node('strong', { textContent: t("ui.noImplicitPersistence") }), node('span', { textContent: t("ui.theseInterfaceOptionsDoNotWriteToTheServiceRegistryAndDo") }))
     );
+  }
+
+  async function updateDesktopStartup(enabled) {
+    const setting = state.desktopStartup;
+    if (!window.PairRoomDesktop || setting.pending) return;
+    setting.pending = true;
+    setting.error = '';
+    try {
+      setting.enabled = await (typeof enabled === 'boolean'
+        ? window.PairRoomDesktop.setStartup(enabled) : window.PairRoomDesktop.readStartup());
+    } catch (error) {
+      setting.enabled = typeof error.enabled === 'boolean' ? error.enabled : null;
+      setting.error = error.message;
+    } finally {
+      setting.pending = false;
+      if (state.route.name === 'settings' && state.settingsSection === 'desktop') renderSettings();
+    }
+  }
+
+  function renderDesktopSettings() {
+    const setting = state.desktopStartup;
+    const toggle = toggleButton(setting.enabled === true, updateDesktopStartup, t('desktop.launchAtLogin'));
+    toggle.disabled = setting.pending || setting.enabled === null;
+    const rows = [settingRow(t('desktop.launchAtLogin'), t('desktop.launchAtLoginHelp'), toggle)];
+    if (setting.pending) rows.push(node('p', {role: 'status', textContent: t('desktop.updating')}));
+    if (setting.error) rows.push(node('div', {className: 'callout danger', role: 'alert'},
+      node('span', {textContent: setting.error}),
+      actionButton(t('ui.retryNow'), () => { updateDesktopStartup(); renderSettings(); }, 'secondary-button')));
+    return settingsPanel(t('desktop.settings'), t('desktop.systemSetting'), ...rows);
   }
 
   function settingsPanel(title, subtitle, ...rows) {
