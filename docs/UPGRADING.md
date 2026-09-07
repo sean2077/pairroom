@@ -10,6 +10,10 @@ PairRoom's CLI, Event Log, HTTP API, and native adapters evolve with the officia
 4. Record the current binary, Claude Code / Codex / Grok Build, and configuration versions;
 5. Make sure the working repository has no unrecognized native side effects.
 
+## Desktop launch no longer installs a daemon (v3.1.0)
+
+Opening Desktop reuses an already-installed daemon or owns an embedded Service when none is installed. It no longer runs `pairroom daemon install` from the bundled CLI. Launch-at-login is an explicit Settings control and does not install, start, or remove a daemon. If you still want a persistent background Service, run `pairroom daemon install` yourself. `make desktop-update` replaces the host and bundled CLI only; it does not change daemon configuration. This change adds no schema, event kind, or native prompt; Store schema 10 / provisioning schema 3 remain unchanged. Normal stop/drain and reverting the code are sufficient to roll back this change without rewriting Room data.
+
 ## Desktop crash-stale lock recovery (v3.0.2)
 
 Desktop and `pairroom daemon start` recover a crash-stale `service.lock` after verifying the recorded PID is gone, then start or restart the installed daemon. A live lock owner still fails closed; Desktop does not start a competing embedded Service. `--recover-stale-lock` remains for foreground `pairroom service` and as a compatibility daemon option. This change adds no schema, event kind, or native prompt; Store schema 10 / provisioning schema 3 remain unchanged. Normal stop/drain and reverting the code are sufficient to roll back this change without rewriting Room data.

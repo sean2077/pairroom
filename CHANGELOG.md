@@ -2,9 +2,13 @@
 
 ## [Unreleased]
 
+## [v3.1.0] — 2026-09-07
+
 - Desktop launch no longer installs a daemon from its bundled CLI. Reuse an installed daemon, or own an embedded Service when no daemon is installed. Keep stale-lock recovery and graceful Turn draining intact.
 - Add an opt-in Settings → Desktop → Launch at login switch backed by native OS registration, independent of daemon installation. Read the real registration state and surface failures; ordinary browsers do not expose the native control.
 - Add `make desktop-update` to build and update the existing local desktop host and bundled CLI (or macOS app bundle), with custom path selection, staged replacement/rollback, and no process killing, daemon changes, or user-data removal.
+- Keep the macOS bundled CLI at `Contents/Helpers/pairroom`, separate from `Contents/MacOS/PairRoom`, so case-insensitive volumes cannot overwrite the host.
+- Keep Agent avatars consistent from participant display names in the sidebar and message timeline.
 
 ## [v3.0.2] — 2026-09-07
 
