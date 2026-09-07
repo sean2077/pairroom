@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/sean2077/pairroom/internal/model"
 )
@@ -177,6 +178,15 @@ func Load(path string) (File, error) {
 // Match encoding/json's case-insensitive struct fields, but reject ambiguous
 // duplicate fields rather than merging two different runtime/policy objects.
 func configObject(data []byte) (map[string]json.RawMessage, error) {
+	return configObjectDepth(data, 0)
+}
+
+func configObjectDepth(data []byte, depth int) (map[string]json.RawMessage, error) {
+	// The schema is only a few objects deep. Bound validation work even for
+	// malformed input before the typed decoder reports an unknown field.
+	if depth >= 64 {
+		return nil, errors.New("config object nesting exceeds 64 levels")
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	opening, err := decoder.Token()
 	if err != nil || opening != json.Delim('{') {
@@ -188,13 +198,18 @@ func configObject(data []byte) (map[string]json.RawMessage, error) {
 		if err != nil {
 			return nil, err
 		}
-		name := strings.ToLower(key.(string))
+		name := configFieldName(key.(string))
 		if _, exists := fields[name]; exists {
 			return nil, fmt.Errorf("duplicate config field %q", name)
 		}
 		var value json.RawMessage
 		if err := decoder.Decode(&value); err != nil {
 			return nil, err
+		}
+		if nested := bytes.TrimSpace(value); len(nested) > 0 && nested[0] == '{' {
+			if _, err := configObjectDepth(nested, depth+1); err != nil {
+				return nil, fmt.Errorf("config field %q: %w", name, err)
+			}
 		}
 		fields[name] = value
 	}
@@ -206,6 +221,21 @@ func configObject(data []byte) (map[string]json.RawMessage, error) {
 		return nil, errors.New("expected exactly one JSON object")
 	}
 	return fields, nil
+}
+
+// encoding/json uses Unicode simple folding, not strings.ToLower. In
+// particular, long s (ſ) and Kelvin sign (K) also match ASCII field letters.
+// Keep lower-case map keys for the known schema without losing those aliases.
+func configFieldName(name string) string {
+	return strings.Map(func(r rune) rune {
+		for {
+			next := unicode.SimpleFold(r)
+			if next <= r {
+				return unicode.ToLower(next)
+			}
+			r = next
+		}
+	}, name)
 }
 
 func rejectRemovedProviderConfig(raw map[string]json.RawMessage) error {
@@ -241,10 +271,10 @@ func (c *File) applyDefaults() {
 		c.Codex.Runtime = defaults.Codex.Runtime
 	}
 	if c.Claude.Provider.Source == "" {
-		c.Claude.Provider = model.NativeProviderRef()
+		c.Claude.Provider.Source = model.ProviderNative
 	}
 	if c.Codex.Provider.Source == "" {
-		c.Codex.Provider = model.NativeProviderRef()
+		c.Codex.Provider.Source = model.ProviderNative
 	}
 	if strings.TrimSpace(c.Runtimes.Claude.Command) == "" {
 		c.Runtimes.Claude.Command = defaults.Runtimes.Claude.Command

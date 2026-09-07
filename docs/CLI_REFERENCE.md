@@ -61,6 +61,8 @@ pairroom version
 
 Project and Room lifecycle is managed by the `pairroom service` Management Shell and REST API, not by this CLI. Daemon, Backup, Restore, and similar commands have subcommands or dedicated flags. Do not guess flags from older docs; read `--help` at the matching command level.
 
+Backup and Restore target one Room, not a multi-Room Service root. Backup and diagnostics output paths must be outside the source Room data directory. See [Operations](OPERATIONS.md#backup) for complete-Service rollback scope.
+
 ## Exit and errors
 
 - Argument, configuration, and security-precondition errors return a non-zero exit code;

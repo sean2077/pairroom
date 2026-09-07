@@ -97,7 +97,7 @@ type AgentSelection struct {
 func (s AgentSelection) Normalized(actor ActorID) AgentSelection {
 	s.Runtime = s.Runtime.CanonicalForSlot(actor)
 	if s.Provider.Source == "" {
-		s.Provider = NativeProviderRef()
+		s.Provider.Source = ProviderNative
 	}
 	s.Provider.AppType = strings.TrimSpace(s.Provider.AppType)
 	s.Provider.ProfileID = strings.TrimSpace(s.Provider.ProfileID)

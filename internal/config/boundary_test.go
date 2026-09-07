@@ -94,3 +94,34 @@ func TestCaseInsensitiveRuntimeFieldsAndAmbiguousPolicies(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigUnicodeFoldMatchesJSON(t *testing.T) {
+	for _, input := range []string{
+		`{"codex":{"ſandbox":null}}`,
+		`{"claude":{"permiſſion_mode":null}}`,
+		`{"codex":{"sandbox":"read-only","ſandbox":"danger-full-access"}}`,
+		`{"runtimes":{"codex":{"command":"codex","COMMAND":"other"}}}`,
+		`{"codex":{"provider":{"source":"native","SOURCE":"native"}}}`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			if cfg, err := loadTestConfig(t, input); err == nil {
+				t.Fatalf("accepted ambiguous config %s: %+v", input, cfg)
+			}
+		})
+	}
+	cfg, err := loadTestConfig(t, `{"codex":{"ſandbox":"read-only"}}`)
+	if err != nil || cfg.Codex.Sandbox != "read-only" {
+		t.Fatalf("encoding/json-compatible field rejected: %+v, %v", cfg, err)
+	}
+}
+
+func TestConfigRejectsIncompleteProviderReferences(t *testing.T) {
+	for _, input := range []string{
+		`{"claude":{"provider":{"source":"","profile_id":"selected-profile","app_type":"claudecode"}}}`,
+		`{"codex":{"provider":{"source":"","profile_id":"selected-profile","app_type":"codex"}}}`,
+	} {
+		if _, err := loadTestConfig(t, input); err == nil {
+			t.Errorf("incomplete profile reference silently fell back to native configuration: %s", input)
+		}
+	}
+}

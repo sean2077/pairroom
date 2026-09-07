@@ -2,9 +2,10 @@
 
 ## [Unreleased]
 
-- Preserve explicit native/narrow permission settings when a Service default slot changes Runtime. Reject ambiguous configuration objects, null policy fields, and inline Runtime-template overrides of per-Room settings.
+- Preserve explicit native/narrow permission settings when a Service default slot changes Runtime. Reject ambiguous configuration objects (including nested and Unicode-equivalent duplicate keys), null policy fields, incomplete Provider references, and inline Runtime-template overrides of per-Room settings.
 - Commit Event Log sequence numbers only after a successful append and sync; close an ambiguous failed writer, reject missing/gapped/duplicate histories, and require backups to begin at sequence 1 with a Room ID.
-- Serialize attachment removal with send/relay/retry admission so committed messages cannot race deletion of their media. Return SSE headers without starting a stream for HEAD requests.
+- Serialize attachment removal with send/relay/retry admission so committed messages cannot race deletion of their media. Reject symlinked attachment manifests and changes to an accepted Message's image digest at native delivery. Return SSE headers without starting a stream for HEAD requests.
+- Validate complete gzip trailers before restoring a backup, reject duplicate/oversized manifests and hidden/unbounded trailing data, and prevent backup/diagnostics output from overwriting source Room data (including through symlinked ancestors). Keep archive outputs outside the source Room directory.
 - Keep Room streams and image previews alive when navigation is cancelled; resynchronize after back-forward cache restoration. Prevent an older Management confirmation from closing or relabeling a newer one, and bound pathological Markdown nesting without truncating message text.
 - Redact decoded JSON credentials and overlapping credential values without exposing escaped secrets, corrupting JSON, or partially revealing longer values. Preserve numeric telemetry precision and redact native display metadata. Respect Windows case-insensitive environment names while retaining drive-directory entries.
 - Make JavaScript verification mandatory and discover all owned scripts. Reject dependency replacements, add failure-boundary/race regressions and native Windows/macOS boundary checks, and correct stale operations/support guidance.

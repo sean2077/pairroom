@@ -2679,6 +2679,12 @@ func (e *Engine) agentAttachments(values []model.Attachment) ([]model.AgentAttac
 		if err != nil {
 			return nil, fmt.Errorf("resolve image %q: %w", value.ID, err)
 		}
+		// Revalidating the current file against its current manifest is not
+		// enough: queued/retried input must still reference the bytes accepted
+		// in the durable Message, even if both stored files were replaced.
+		if value.SHA256 != "" && !strings.EqualFold(value.SHA256, resolved.SHA256) {
+			return nil, fmt.Errorf("image %q content changed since the message was accepted", value.ID)
+		}
 		out = append(out, model.AgentAttachment{Attachment: resolved, Path: path})
 	}
 	return out, nil

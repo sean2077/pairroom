@@ -14,9 +14,11 @@ PairRoom's CLI, Event Log, HTTP API, and native adapters evolve with the officia
 
 No schema, event kind, collaboration instruction, or native session identity changes. Valid schema-9/10 Event Logs and provisioning-v1/2/3 records remain readable.
 
-Service configuration must be one JSON object. Duplicate root/Agent fields, trailing documents, and `null` runtime/policy fields are rejected rather than ambiguously merging with defaults. Use explicit empty policy strings for native inheritance. Runtime templates cannot override per-Room model, Provider, effort, or permission settings through attached short flags or inline Codex `-c`/`--config` options; move these choices to the Agent selection instead. When changing a slot's Runtime, omitted policy defaults come from that Runtime, while explicit empty or narrower settings remain intact.
+Service configuration must be one JSON object. Duplicate object fields (including nested and Unicode-equivalent keys), trailing documents, and `null` runtime/policy fields are rejected rather than ambiguously merging with defaults. Use explicit empty policy strings for native inheritance. Runtime templates cannot override per-Room model, Provider, effort, or permission settings through attached short flags or inline Codex `-c`/`--config` options; move these choices to the Agent selection instead. When changing a slot's Runtime, omitted policy defaults come from that Runtime, while explicit empty or narrower settings remain intact. A Provider reference with an App type or Profile ID but no source is invalid; it no longer silently falls back to native credentials.
 
 Event sequences must start at 1 and remain contiguous; a missing log is not an empty Room. Back up corrupt data before investigating a rejected start or restore. Do not renumber complete records to bypass verification. Only an incomplete final JSONL record can be repaired automatically. An ambiguous append I/O failure closes the writer; stop the affected Runtime/Service and reopen only after checking storage health and the verified Event Log. Rollback does not require rewriting valid Room data.
+
+Backup and diagnostics outputs must now be outside the source Room data directory, including symlink aliases. Restore validates the complete gzip container before replacing a destination, rejects duplicate or oversized manifests (32 MiB limit), and permits only bounded zero padding (1 MiB) after the tar end marker. Damaged archives that older versions accepted must be recreated from verified source data, not forced through restore. Attachment metadata symlinks and changes to a Message's recorded image digest are rejected. These checks do not alter the backup format.
 
 ## Desktop launch no longer installs a daemon (v3.1.0)
 
@@ -64,7 +66,7 @@ The earlier Provider update moved the root module to Go 1.25, replaced PairRoom-
 
 Before installing the new binary:
 
-1. Stop the Service after active Turns drain, then run `pairroom backup` for the complete data root and verify the archive;
+1. Stop the Service after active Turns drain. Back up and verify each Room with `pairroom backup`, and separately preserve the complete Service data root with an offline filesystem backup (see [Operations](OPERATIONS.md#backup));
 2. Preserve that backup unchanged as the downgrade point;
 3. Remove top-level `providers` and `cc_connect` configuration. Move per-slot `command`/`args` into `runtimes.claude`, `runtimes.codex`, or `runtimes.grok`;
 4. Replace a string-valued slot `provider` with `{"source":"native"}` or `{"source":"cc-switch","app_type":"…","profile_id":"…"}`. Use `pairroom providers --json` to inspect the sanitized CC Switch catalog and disabled reasons;

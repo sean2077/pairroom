@@ -212,3 +212,28 @@ func TestResolveRejectsSymlinkedAttachmentContent(t *testing.T) {
 		t.Fatal("expected symlinked attachment rejection")
 	}
 }
+
+func TestResolveRejectsSymlinkedAttachmentManifest(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation commonly requires elevated Windows privileges")
+	}
+	store, err := Open(t.TempDir(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachment, err := store.SaveImage("screen.png", bytes.NewReader(pngBytes(t)), "upload")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(store.Root(), attachment.ID+".json")
+	original := filepath.Join(t.TempDir(), "external-manifest.json")
+	if err := os.Rename(path, original); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(original, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Resolve(attachment.ID); err == nil {
+		t.Fatal("symlinked attachment manifest accepted")
+	}
+}

@@ -69,7 +69,9 @@ Create and verify a backup before:
 - manually repairing an Event Log;
 - changing session / Binding policy.
 
-Backup success is defined by manifest / checksum verification, not by a compression command's exit code alone.
+`pairroom backup` and `pairroom restore` operate on **one Room data directory**, not the multi-Room Service root. For a complete Service rollback, stop/drain the Service and separately preserve its entire data root with an offline filesystem backup; also preserve any explicitly imported Room directories outside that root. Native CLI session stores and the user's Git repository are separate and are not included in a Room archive.
+
+Write backup and diagnostics bundles **outside the source Room data directory**. In-place outputs and symlink aliases into that directory are rejected to prevent replacing Event Logs or attachment data. Restore verifies the file set, hashes, and complete gzip trailer before publishing the target. Backup success is defined by verification, not by a compression command's exit code alone.
 
 ## Graceful shutdown
 
