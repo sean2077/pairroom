@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v3.1.1] — 2026-09-08
+
 - Show asynchronous Room activation promptly using the existing refresh timer, including when ordinary auto-refresh is disabled. Stop polling hidden/signed-out pages and leave failed activation for explicit retry instead of retrying from rendering.
 - Reuse the sequence from Event Log validation when opening a store, eliminating a redundant full replay and its allocations without weakening identity, sequence, or crash-tail checks.
 - Preserve explicit native/narrow permission settings when a Service default slot changes Runtime. Reject ambiguous configuration objects (including nested and Unicode-equivalent duplicate keys), null policy fields, incomplete Provider references, and inline Runtime-template overrides of per-Room settings.
