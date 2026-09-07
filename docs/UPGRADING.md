@@ -10,6 +10,10 @@ PairRoom's CLI, Event Log, HTTP API, and native adapters evolve with the officia
 4. Record the current binary, Claude Code / Codex / Grok Build, and configuration versions;
 5. Make sure the working repository has no unrecognized native side effects.
 
+## Desktop crash-stale lock recovery (v3.0.2)
+
+Desktop and `pairroom daemon start` recover a crash-stale `service.lock` after verifying the recorded PID is gone, then start or restart the installed daemon. A live lock owner still fails closed; Desktop does not start a competing embedded Service. `--recover-stale-lock` remains for foreground `pairroom service` and as a compatibility daemon option. This change adds no schema, event kind, or native prompt; Store schema 10 / provisioning schema 3 remain unchanged. Normal stop/drain and reverting the code are sufficient to roll back this change without rewriting Room data.
+
 ## Pending retry exclusion (v3.0.1)
 
 A retry request returns HTTP 409 while a direct retry of the same source Message and participant is already waiting or working. External clients should display the existing pending attempt instead of repeatedly submitting. Completed/failed/cancelled attempts still allow an explicit new retry. This change adds no schema, event kind, or native prompt; Store schema 10 / provisioning schema 3 remain unchanged. Normal stop/drain and reverting the code are sufficient to roll back this change without rewriting Room data.
