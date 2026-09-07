@@ -105,7 +105,7 @@ def validate_payload(platform: str, root: Path = ROOT) -> list[tuple[Path, Path]
     required = [source for source, _ in files]
     if platform == "darwin":
         required = [root / "bin/PairRoom.app" / suffix for suffix in (
-            "Contents/MacOS/PairRoom", "Contents/MacOS/pairroom", "Contents/Info.plist")]
+            "Contents/MacOS/PairRoom", "Contents/Helpers/pairroom", "Contents/Info.plist")]
     for source in required:
         if not source.is_file() or source.stat().st_size == 0:
             raise RuntimeError(f"missing or empty desktop build artifact: {source}")

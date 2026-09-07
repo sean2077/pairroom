@@ -17,14 +17,14 @@ class UpdateLocalTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.build = self.root / "source" / "desktop"
         self.destination = self.root / "Installed PairRoom"
 
     def source_files(self, platform):
         files = updater.payload(platform, self.build)
         if platform == "darwin":
-            for rel in ["Contents/MacOS/PairRoom", "Contents/MacOS/pairroom", "Contents/Info.plist"]:
+            for rel in ["Contents/MacOS/PairRoom", "Contents/Helpers/pairroom", "Contents/Info.plist"]:
                 path = files[0][0] / rel
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("new " + rel)
@@ -36,7 +36,13 @@ class UpdateLocalTest(unittest.TestCase):
         return updater.validate_payload(platform, self.build)
 
     def test_updates_all_platform_payloads_without_deleting_other_files(self):
-        for platform in ["linux", "win32", "darwin"]:
+        probe = self.root / "CaseProbe"
+        probe.write_text("probe")
+        platforms = ["win32", "darwin"]
+        # A Linux sibling layout cannot be represented on a case-folding volume.
+        if not (self.root / "caseprobe").exists():
+            platforms.append("linux")
+        for platform in platforms:
             with self.subTest(platform=platform):
                 destination = self.destination / platform
                 destination.mkdir(parents=True)
@@ -51,6 +57,10 @@ class UpdateLocalTest(unittest.TestCase):
                         self.assertEqual(target.read_bytes(), source.read_bytes())
                         self.assertEqual(target.stat().st_mode, source.stat().st_mode)
                 updater.replace_payload(destination, files) # repeat update
+                if platform == "darwin":
+                    app = destination / "PairRoom.app"
+                    for relative in ["Contents/MacOS/PairRoom", "Contents/Helpers/pairroom"]:
+                        self.assertEqual((app / relative).read_text(), "new " + relative)
                 self.assertEqual(unrelated.read_text(), "preserve")
                 self.assertFalse(list(destination.glob(".pairroom-desktop-update*")))
 
@@ -81,16 +91,16 @@ class UpdateLocalTest(unittest.TestCase):
         self.assertFalse(list(self.destination.glob(".pairroom-desktop-update*")))
 
     def test_copy_failure_leaves_existing_install_untouched(self):
-        files = self.source_files("linux")
+        files = self.source_files("win32")
         self.destination.mkdir()
-        (self.destination / "PairRoom").write_text("old")
+        (self.destination / "PairRoom.exe").write_text("old")
         with patch.object(updater.shutil, "copy2", side_effect=OSError("disk full")):
             with self.assertRaises(OSError):
                 updater.replace_payload(self.destination, files)
-        self.assertEqual((self.destination / "PairRoom").read_text(), "old")
+        self.assertEqual((self.destination / "PairRoom.exe").read_text(), "old")
 
     def test_refuses_concurrent_update(self):
-        files = self.source_files("linux")
+        files = self.source_files("win32")
         lock = self.destination / ".pairroom-desktop-update.lock"
         lock.mkdir(parents=True)
         with self.assertRaisesRegex(RuntimeError, "another update"):
@@ -98,10 +108,10 @@ class UpdateLocalTest(unittest.TestCase):
         self.assertTrue(lock.exists())
 
     def test_refuses_installing_into_build_output(self):
-        files = self.source_files("linux")
+        files = self.source_files("win32")
         with self.assertRaisesRegex(RuntimeError, "build output itself"):
             updater.replace_payload(self.build / "bin", files)
-        self.assertEqual((self.build / "bin/PairRoom").read_text(), "new PairRoom")
+        self.assertEqual((self.build / "bin/PairRoom.exe").read_text(), "new PairRoom.exe")
 
     def test_explicit_directory_and_unsupported_platform(self):
         self.assertEqual(updater.installation_directory("win32", str(self.destination)), self.destination)
@@ -131,6 +141,14 @@ class UpdateLocalTest(unittest.TestCase):
                 arguments = run.call_args_list[-1].args[0]
                 self.assertEqual(arguments[1:], ["task", task, "PRODUCTION=true", "ARCH=amd64"])
                 self.assertEqual(run.call_args.kwargs["env"]["PAIRROOM_DESKTOP_PYTHON"], updater.sys.executable)
+
+    def test_cli_build_paths_do_not_overwrite_native_host(self):
+        build_spec = importlib.util.spec_from_file_location("build_cli", Path(__file__).with_name("build-cli.py"))
+        cli = importlib.util.module_from_spec(build_spec)
+        build_spec.loader.exec_module(cli)
+        for goos, relative in [("windows", "bin/cli/pairroom.exe"), ("darwin", "bin/cli/pairroom"), ("linux", "bin/pairroom")]:
+            with patch.dict(os.environ, {"GOOS": goos}):
+                self.assertEqual(cli.cli_destination(), cli.ROOT / relative)
 
     def test_cross_compilation_is_rejected(self):
         with patch.dict(os.environ, {"GOOS": "windows"}), \

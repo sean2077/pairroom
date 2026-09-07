@@ -66,7 +66,9 @@ make desktop-update
 This builds the current checkout in production mode, then replaces the host and
 bundled CLI together. Windows and Linux build directly without generating NSIS
 or Linux distribution packages; macOS builds and ad-hoc signs the complete app
-bundle. Go 1.25, the pinned Wails CLI, Python, and native build dependencies are
+bundle. The macOS CLI lives under `Contents/Helpers/pairroom`, not beside
+`Contents/MacOS/PairRoom`, so case-insensitive volumes cannot overwrite the host.
+Go 1.25, the pinned Wails CLI, Python, and native build dependencies are
 still required. There is no release download or automatic `git pull`.
 
 Existing Windows NSIS installations are discovered through uninstall metadata
@@ -117,11 +119,11 @@ Quit never stops an external daemon. Startup may restart an installed daemon onl
 
 ## Packages
 
-`.github/workflows/desktop-wails.yml` verifies the desktop module on pull requests and `main`. It builds installers and app bundles only for `v*` tags (and manual `workflow_dispatch`), then attaches them to the GitHub Release as `pairroom-desktop-vX.Y.Z-…`:
+`.github/workflows/desktop-wails.yml` verifies the desktop module on pull requests and `main`. PR checks also rebuild and update temporary native installations. Release installer/app-bundle artifact collection runs only for `v*` tags (and manual `workflow_dispatch`), then attaches the tag artifacts to the GitHub Release as `pairroom-desktop-vX.Y.Z-…`:
 
 - Linux amd64: AppImage and Debian package (the `.deb` includes `/usr/local/bin/pairroom`);
 - Windows amd64: NSIS setup (`pairroom-desktop-vX.Y.Z-windows-amd64-setup.exe`) that installs `PairRoom.exe` and `bin\pairroom.exe`;
-- macOS arm64: `.app.zip` with `pairroom` next to the host inside `Contents/MacOS`;
-- macOS amd64: `.app.zip` with `pairroom` next to the host inside `Contents/MacOS`.
+- macOS arm64: `.app.zip` with the CLI at `Contents/Helpers/pairroom` and host at `Contents/MacOS/PairRoom`;
+- macOS amd64: `.app.zip` with the CLI at `Contents/Helpers/pairroom` and host at `Contents/MacOS/PairRoom`.
 
 Release packages are unsigned development artifacts until Windows code signing and Apple Developer ID signing/notarization actually run.

@@ -38,6 +38,9 @@ def cli_destination() -> pathlib.Path:
         # NTFS is case-insensitive: desktop/bin/pairroom.exe would overwrite
         # PairRoom.exe. Keep the Windows CLI in a subdirectory.
         return ROOT / "bin" / "cli" / "pairroom.exe"
+    if goos == "darwin":
+        # Default macOS volumes are also case-insensitive: do not replace PairRoom.
+        return ROOT / "bin" / "cli" / "pairroom"
     return ROOT / "bin" / "pairroom"
 
 

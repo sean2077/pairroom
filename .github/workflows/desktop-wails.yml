@@ -77,6 +77,8 @@ jobs:
       - name: Compile Linux desktop application
         working-directory: desktop
         run: wails3 task linux:build ARCH=amd64 PRODUCTION=true
+      - name: Rebuild and update a local installation through Make
+        run: make desktop-update DESKTOP_INSTALL_DIR="${{ runner.temp }}/PairRoom local update"
 
   native-tests:
     name: Test native desktop (${{ matrix.os }})
@@ -97,6 +99,13 @@ jobs:
         run: go test -count=1 ./...
       - name: Test transactional local update
         run: python desktop/scripts/test_update_local.py
+      - name: Install pinned Wails CLI for native update smoke
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.16
+      - name: Build and update a native installation with a spaced path
+        shell: bash
+        run: |
+          python desktop/scripts/update-local.py --install-dir "${{ runner.temp }}/PairRoom local update"
+          python desktop/scripts/update-local.py --skip-build --install-dir "${{ runner.temp }}/PairRoom local update"
 
   package:
     name: Package ${{ matrix.label }}
