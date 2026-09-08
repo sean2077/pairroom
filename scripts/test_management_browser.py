@@ -113,6 +113,16 @@ async def load_csp_fixture(page) -> None:
     await page.goto('http://127.0.0.1:7332/#/projects/p1')
 
 
+async def wait_fixture_state(page, expression, *, arg=None):
+    # Playwright wait_for_function uses page-world eval, which production CSP
+    # rejects. Poll via the automation channel without relaxing that policy.
+    deadline = asyncio.get_running_loop().time() + 5
+    while not await page.evaluate(expression, arg):
+        if asyncio.get_running_loop().time() >= deadline:
+            raise AssertionError(f"fixture state did not settle: {expression}")
+        await asyncio.sleep(0.02)
+
+
 async def verify_diagnostics(browser, artifacts: Path, in_page_fixture: bool = False) -> dict:
     page = await browser.new_page(viewport={'width': 1440, 'height': 1000}, locale='en-US', reduced_motion='reduce')
     page.set_default_timeout(5000)
@@ -196,7 +206,7 @@ async def verify_diagnostics(browser, artifacts: Path, in_page_fixture: bool = F
       HTMLAnchorElement.prototype.click=function(){ if (!this.download) click.call(this); };
     }""")
     await page.get_by_role('button', name='Download safe report').click()
-    await page.wait_for_function('window.__diagnosticDownload')
+    await wait_fixture_state(page, 'window.__diagnosticDownload')
     exported = json.loads(await page.evaluate('__diagnosticDownload'))
     assert exported['scope'] == 'default_profile'
     assert 'raw_output' not in exported and 'path' not in exported
@@ -234,7 +244,7 @@ async def verify_diagnostics(browser, artifacts: Path, in_page_fixture: bool = F
     await expect(page.locator('#diagnostic-status')).to_contain_text('Check cancelled')
     await page.locator('#diagnostic-environment').click()
     await page.evaluate("location.hash='#/projects/p1'")
-    await page.wait_for_function('__diagnosticAborts===2')
+    await wait_fixture_state(page, '__diagnosticAborts===2')
     await expect(page.locator('#project-room-search')).to_be_visible()
     await page.evaluate("__diagnosticDelay=0;__diagnosticInvalid=true;location.hash='#/diagnostics'")
     await page.locator('#diagnostic-environment').click()
@@ -427,13 +437,7 @@ async def verify_pair_profiles(browser, artifacts: Path, in_page_fixture: bool =
     await page.wait_for_selector('#app:not([hidden]) .tree-room')
 
     async def wait_state(expression, *, arg=None):
-        # Playwright's wait_for_function polls through eval in the page world;
-        # use the automation evaluation channel without weakening production CSP.
-        deadline = asyncio.get_running_loop().time() + 5
-        while not await page.evaluate(expression, arg):
-            if asyncio.get_running_loop().time() >= deadline:
-                raise AssertionError(f"fixture state did not settle: {expression}")
-            await asyncio.sleep(0.02)
+        await wait_fixture_state(page, expression, arg=arg)
 
     async def settings():
         await page.evaluate("location.hash='#/settings'")
