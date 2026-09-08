@@ -34,7 +34,7 @@ func TestRuntimeDiagnosticEvidenceAndCleanup(t *testing.T) {
 		{"success", "responded"}, {"deltas", "responded"}, {"wrong-response", "unexpected_response"},
 		{"wrong-turn", "unexpected_response"}, {"approval", "interaction_required"}, {"tool", "interaction_required"},
 		{"auth", "authentication_failed"}, {"quota", "quota_or_rate_limit"}, {"startup", "startup_failed"},
-		{"cancel", "cancelled"}, {"overflow", "output_limit"},
+		{"cancel", "cancelled"}, {"overflow", "output_limit"}, {"cleanup", "cleanup_failed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -79,7 +79,7 @@ func TestRuntimeDiagnosticEvidenceAndCleanup(t *testing.T) {
 							sink(model.RuntimeEvent{Agent: actual.Actor, Kind: kind, Text: text, CorrelationID: correlation})
 						}
 						switch test.name {
-						case "success":
+						case "success", "cleanup":
 							send(model.RuntimeFinal, marker, id)
 						case "deltas":
 							send(model.RuntimeTextDelta, "PAIRROOM_CHECK_", id)
@@ -106,7 +106,13 @@ func TestRuntimeDiagnosticEvidenceAndCleanup(t *testing.T) {
 						send(model.RuntimeInputCompleted, "", id)
 						return nil
 					},
-					stop: func(context.Context) error { stopped = true; return nil },
+					stop: func(context.Context) error {
+						stopped = true
+						if test.name == "cleanup" {
+							return errors.New("secret-fixture cleanup error")
+						}
+						return nil
+					},
 				}
 			}
 			checks := checkRuntime(ctx, cfg, factory)

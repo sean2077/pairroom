@@ -526,6 +526,12 @@
     }
     const models = buildProjectModels(snapshot);
     const activeRoomID = state.route.name === 'room' ? state.route.roomID : '';
+    // Polling may rebuild the tree while a keyboard user is navigating it.
+    // Restore stable control identity without scrolling the sidebar sideways.
+    const focused = tree.contains(document.activeElement) ? document.activeElement : null;
+    const focusAttribute = ['aria-controls', 'href', 'data-room-id'].find((attribute) => focused?.hasAttribute(attribute));
+    const focusSelector = focusAttribute ? `[${focusAttribute}="${CSS.escape(focused.getAttribute(focusAttribute))}"]` : '';
+    const scrollTop = tree.scrollTop;
     tree.replaceChildren(...models.map((model) => {
       const { project, rooms } = model;
       if (!state.knownProjects.has(project.id)) {
@@ -576,6 +582,8 @@
         node('div', { id: roomsID, className: 'tree-rooms', hidden: !expanded }, ...children)
       );
     }));
+    if (focusSelector) tree.querySelector(focusSelector)?.focus({ preventScroll: true });
+    tree.scrollTop = scrollTop;
   }
 
   function renderTreeRoom(room, current) {
@@ -1093,7 +1101,7 @@
     const archived = room.lifecycle === 'archived';
     const title = node('div', { className: 'room-title-line' },
       node('strong', { textContent: room.name }),
-      statusBadge(room.lifecycle || 'active', archived ? 'warn' : 'good'),
+      archived ? statusBadge('archived', 'warn') : null,
 	  !archived ? statusBadge(runtimeLabel(runtime), runtimeTone(runtime), runtime.busy ? 'busy' : '') : null,
 	  room.legacy ? statusBadge('legacy', 'info') : null,
 	  room.legacy_defaults ? statusBadge(t('room.legacyDefaults'), 'info') : null

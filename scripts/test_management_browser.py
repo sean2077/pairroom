@@ -173,6 +173,14 @@ async def verify_diagnostics(browser, artifacts: Path, in_page_fixture: bool = F
     await expect(page.locator('#view')).to_contain_text('No matching Rooms')
     await page.get_by_role('button', name='Clear filters', exact=True).click()
     assert await page.locator('#view .room-row').count() == 2
+    for width in [320, 390, 768, 1440]:
+        await page.set_viewport_size({'width':width, 'height':1000})
+        await page.wait_for_timeout(80)
+        assert await page.locator('#room-tree').evaluate('e=>e.scrollWidth<=e.clientWidth'), 'sidebar Project/Room labels forced horizontal scrolling'
+        assert not await page.evaluate('document.documentElement.scrollWidth>innerWidth'), f'project workspace overflow at {width}'
+    await project_link.click()
+    assert await page.locator('#room-tree').evaluate('e=>e.scrollLeft===0'), 'Project navigation clipped the disclosure control'
+    assert await page.locator('#view .room-row').first.locator('.room-title-line .badge').count() == 1, 'duplicate Active statuses'
     await page.screenshot(path=str(artifacts / 'project-workspace.png'), full_page=True)
     await page.evaluate("location.hash='#/diagnostics'")
     await expect(page.locator('#diagnostic-environment')).to_be_visible()

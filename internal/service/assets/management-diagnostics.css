@@ -1,4 +1,6 @@
 /* Project-first navigation and diagnostics share existing semantic theme tokens. */
+.room-tree { grid-template-columns: minmax(0, 1fr); }
+.tree-project, .tree-rooms, .tree-room { min-width: 0; }
 .tree-project-header { display: flex; align-items: center; gap: 2px; border-radius: var(--radius-sm); min-width: 0; }
 .tree-project-header:hover { background: var(--bg-muted); }
 .tree-project-header.current { background: var(--accent-soft); color: var(--accent); }

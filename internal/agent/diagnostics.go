@@ -96,7 +96,7 @@ func checkRuntime(parent context.Context, cfg Config, factory Factory) (checks [
 	cfg.PermissionMode, cfg.ApprovalPolicy, cfg.Sandbox = "plan", "never", "read-only"
 	cfg.OrdinaryReviewerPolicy = ""
 	cfg.SystemPrompt = "This is a connectivity diagnostic. Reply with the exact requested text only. Do not use tools, read files, run commands, or ask questions."
-	id := model.NewID()
+	id := model.NewID("diagnostic")
 	marker := "PAIRROOM_CHECK_" + id
 	events := make(chan model.RuntimeEvent, 64)
 	overflow := make(chan struct{}, 1)
@@ -149,6 +149,12 @@ func checkRuntime(parent context.Context, cfg Config, factory Factory) (checks [
 		case <-overflow:
 			return finish(1, "fail", "output_limit")
 		case event := <-events:
+			// A dropped event must not be mistaken for a completed response.
+			select {
+			case <-overflow:
+				return finish(1, "fail", "output_limit")
+			default:
+			}
 			if event.Kind == model.RuntimeApprovalRequested || event.Kind == model.RuntimeToolStarted {
 				return finish(1, "fail", "interaction_required")
 			}
