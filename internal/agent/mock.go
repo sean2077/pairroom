@@ -94,13 +94,23 @@ func (m *MockAdapter) StartTurn(ctx context.Context, input model.AgentInput) err
 	}
 	m.lifecycle.Lock()
 	defer m.lifecycle.Unlock()
-	if state := m.State(); state == model.StateWorking || state == model.StateWaiting || len(m.queue) > 0 {
+	m.mu.Lock()
+	state := m.state
+	if state == model.StateWorking || state == model.StateWaiting || len(m.queue) > 0 {
+		m.mu.Unlock()
 		return errors.New("mock runtime already has an active turn")
 	}
+	// Reserve ownership before enqueueing: the worker may receive the input
+	// before it publishes StateWorking, leaving an empty queue in that window.
+	m.state = model.StateWorking
+	m.mu.Unlock()
 	select {
 	case m.queue <- input:
 		return nil
 	case <-ctx.Done():
+		m.mu.Lock()
+		m.state = state
+		m.mu.Unlock()
 		return ctx.Err()
 	}
 }
