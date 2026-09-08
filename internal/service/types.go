@@ -241,11 +241,12 @@ func (r Room) Validate() error {
 }
 
 type ProvisionRequest struct {
-	Collaboration *model.Collaboration                   `json:"collaboration,omitempty"`
-	ProjectID     string                                 `json:"project_id"`
-	Name          string                                 `json:"name"`
-	Bindings      map[model.ActorID]BindingSpec          `json:"bindings"`
-	Agents        map[model.ActorID]model.AgentSelection `json:"agents,omitempty"`
+	AgentPairProfileID string                                 `json:"agent_pair_profile_id,omitempty"`
+	Collaboration      *model.Collaboration                   `json:"collaboration,omitempty"`
+	ProjectID          string                                 `json:"project_id"`
+	Name               string                                 `json:"name"`
+	Bindings           map[model.ActorID]BindingSpec          `json:"bindings"`
+	Agents             map[model.ActorID]model.AgentSelection `json:"agents,omitempty"`
 }
 
 func (r ProvisionRequest) Validate() error {

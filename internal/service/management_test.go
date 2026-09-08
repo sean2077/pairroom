@@ -220,7 +220,7 @@ func TestManagementPermissionModeExposesYolo(t *testing.T) {
 	}
 	body := asset.Body.String()
 	for _, marker := range []string{
-		"['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions', 'yolo']",
+		"['default', 'manual', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions', 'bypass', 'always-approve', 'yolo']",
 		"'always-approve', 'yolo'",
 	} {
 		if !strings.Contains(body, marker) {

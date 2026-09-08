@@ -151,6 +151,7 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	}
 	mux := http.NewServeMux()
 	webui.Mount(mux)
+	server.mountAgentPairProfiles(mux)
 	mux.HandleFunc("POST /api/v1/session", server.createBrowserSession)
 	mux.HandleFunc("GET /api/v1/session", server.readBrowserSession)
 	mux.HandleFunc("DELETE /api/v1/session", server.deleteBrowserSession)
@@ -380,20 +381,31 @@ func (s *ManagementServer) removeProject(w http.ResponseWriter, r *http.Request)
 
 func (s *ManagementServer) provisionRoom(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		Collaboration *model.Collaboration          `json:"collaboration"`
-		Name          string                        `json:"name"`
-		Bindings      map[model.ActorID]BindingSpec `json:"bindings"`
-		Agents        json.RawMessage               `json:"agents"`
+		AgentPairProfileID string                        `json:"agent_pair_profile_id"`
+		Collaboration      *model.Collaboration          `json:"collaboration"`
+		Name               string                        `json:"name"`
+		Bindings           map[model.ActorID]BindingSpec `json:"bindings"`
+		Agents             json.RawMessage               `json:"agents"`
 	}
 	if err := decodeManagementJSON(w, r, &request); err != nil {
 		return
 	}
 	var agents map[model.ActorID]model.AgentSelection
 	if request.Agents == nil {
-		if s.agentResolver != nil {
+		var err error
+		agents, err = s.registry.agentPairProfileSelections(request.AgentPairProfileID)
+		if err != nil {
+			s.writeAgentPairProfiles(w, 0, AgentPairProfileCatalog{}, err)
+			return
+		}
+		if agents == nil && s.agentResolver != nil {
 			agents = s.agentResolver.DefaultSelections()
 		}
 	} else {
+		if request.AgentPairProfileID != "" {
+			writeManagementError(w, http.StatusBadRequest, "provide agents or agent_pair_profile_id, not both")
+			return
+		}
 		if value := strings.TrimSpace(string(request.Agents)); value == "" || value == "null" {
 			writeManagementError(w, http.StatusBadRequest, "agents must contain both Agent selections when provided")
 			return

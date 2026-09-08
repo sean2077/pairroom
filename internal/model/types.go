@@ -376,6 +376,13 @@ const (
 	RuntimeError             = "error"
 )
 
+// AgentQuote is transient, server-resolved context for an explicit user reply.
+// Its ID remains in AgentInput.ReplyTo; it is not a new Event Log field.
+type AgentQuote struct {
+	FromHandle string `json:"from_handle"`
+	Text       string `json:"text"`
+}
+
 type AgentInput struct {
 	MessageID   string            `json:"message_id"`
 	ThreadID    string            `json:"thread_id"`
@@ -386,6 +393,7 @@ type AgentInput struct {
 	PeerHandle  string            `json:"peer_handle"`
 	Text        string            `json:"text"`
 	ReplyTo     string            `json:"reply_to,omitempty"`
+	Quote       *AgentQuote       `json:"quote,omitempty"`
 	Role        ParticipantRole   `json:"role"`
 	Attachments []AgentAttachment `json:"attachments,omitempty"`
 	Intent      MessageIntent     `json:"intent,omitempty"`

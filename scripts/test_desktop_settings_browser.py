@@ -25,6 +25,10 @@ async def verify(executable: str | None, artifacts: Path) -> None:
           window.chrome = window.chrome || {};
           window.chrome.webview = {postMessage(message) {
             const request = JSON.parse(message);
+            if (request.kind === 'pairroom.desktop.browser') {
+              (window.__browserLinks ||= []).push(request.url);
+              return;
+            }
             const reply = () => {
               if (request.action === 'set') {
                 __startupWrites++;
@@ -38,6 +42,34 @@ async def verify(executable: str | None, artifacts: Path) -> None:
         ''')
         await load_csp_fixture(page)
         await page.goto('http://127.0.0.1:7332/?desktop=1#/settings')
+        bridge = (ROOT / 'desktop/main.go').read_text(encoding='utf-8').split('const desktopWindowBridge = `', 1)[1].split('`', 1)[0]
+        await page.evaluate(bridge)
+        await page.evaluate(bridge)  # reinjection must not open links twice
+        await page.evaluate('''() => {
+          const link = document.createElement('a');
+          link.id = 'browser-test-link'; link.href = 'https://example.com/path?q=test';
+          Object.assign(link.style, {position: 'fixed', top: '0', left: '0', zIndex: '99999'});
+          link.innerHTML = '<span>External link</span>'; document.body.prepend(link);
+        }''')
+        await page.locator('#browser-test-link span').click(modifiers=['Control'])
+        await page.locator('#browser-test-link span').click(modifiers=['Meta'])
+        assert await page.evaluate('__browserLinks') == ['https://example.com/path?q=test'] * 2
+        await page.evaluate('''() => {
+          const frame = document.createElement('iframe'); frame.id = 'browser-test-frame';
+          Object.assign(frame.style, {position: 'fixed', top: '40px', left: '0', zIndex: '99999'});
+          frame.srcdoc = '<a href="https://example.com/room"><b>Room link</b></a>';
+          document.body.prepend(frame);
+        }''')
+        await page.frame_locator('#browser-test-frame').locator('b').click(modifiers=['Control'])
+        assert await page.evaluate('__browserLinks.at(-1)') == 'https://example.com/room'
+        await page.evaluate('''() => {
+          const link = document.querySelector('#browser-test-link');
+          link.addEventListener('click', event => event.preventDefault());
+          link.dispatchEvent(new MouseEvent('click', {ctrlKey: true, bubbles: true, cancelable: true}));
+          document.querySelector('#browser-test-frame').remove();
+          document.querySelector('#browser-test-link').remove();
+        }''')
+        assert await page.evaluate('__browserLinks.length') == 3, 'synthetic clicks must not launch the browser'
         await page.get_by_role('button', name='Desktop', exact=True).click()
         toggle = page.get_by_role('switch', name='Launch at login', exact=True)
         await expect(toggle).to_be_enabled()

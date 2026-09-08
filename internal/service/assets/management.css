@@ -460,7 +460,6 @@ code, pre, kbd { font-family: var(--font-mono); }
   backdrop-filter: blur(22px) saturate(130%);
 }
 .page-heading { min-width: 220px; flex: 1; display: flex; align-items: baseline; gap: 10px; }
-.page-heading .eyebrow { margin: 0; flex: 0 0 auto; }
 .page-heading h1 { margin-bottom: 0; flex: 0 0 auto; }
 .page-heading .page-subtitle { flex: 0 1 auto; min-width: 0; }
 .eyebrow { margin: 0 0 2px; color: var(--accent); font-size: 9px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
@@ -950,7 +949,6 @@ body[data-density="compact"] .stat-card { min-height: 98px; }
 @media (max-width: 680px) {
   .topbar { min-height: 64px; align-items: center; flex-wrap: wrap; gap: 10px; }
   .page-heading { order: 1; min-width: 0; flex: 1; }
-  .page-heading .eyebrow { display: none; }
   .page-heading h1 { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .topbar-actions { order: 2; flex: 0 0 auto; }
   .topbar-actions .primary-button { width: 40px; overflow: hidden; padding: 0; font-size: 0; }
@@ -1089,3 +1087,17 @@ body[data-density="compact"] .stat-card { min-height: 98px; }
 .binding-runtime-name { color: var(--text); user-select: all; }
 
 #room-name-hint { display: block; margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+/* Agent pair profiles reuse the Room Agent fields; profile actions wrap instead
+   of squeezing names or overflowing the Settings panel on narrow windows. */
+.pair-profile-controls { display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.pair-profile-controls > label, .pair-profile-metadata > label { display: grid; gap: 6px; }
+.pair-profile-controls summary { cursor: pointer; }
+.pair-profile-metadata { display: grid; gap: 12px; margin-top: 12px; }
+.pair-profile-metadata > .pair-profile-default { display: flex; align-items: center; gap: 8px; }
+.pair-profile-default input { flex: 0 0 auto; width: auto; }
+.pair-profile-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.pair-profile-controls [hidden], .pair-profile-metadata [hidden] { display: none !important; }
+.setting-row[data-pair-profile-id] { flex-wrap: wrap; gap: 12px; }
+.setting-row[data-pair-profile-id] .setting-copy { overflow-wrap: anywhere; }
+.setting-row[data-pair-profile-id] .setting-control { max-width: 100%; }

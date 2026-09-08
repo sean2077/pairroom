@@ -33,9 +33,10 @@ func SystemPrompt(actor model.ActorID, roomName, _ string) string {
 	return BootstrapPrompt(actor)
 }
 
-// Envelope carries dynamic sender/body/media only. Durable MessageID, ThreadID,
-// ReplyTo, and Role remain available to native transport and Room diagnostics;
-// they are not model instructions. The original body is never summarized.
+// Envelope carries dynamic sender/body/media and explicit user-quoted context.
+// Durable MessageID, ThreadID, ReplyTo, and Role stay in transport/diagnostics.
+// The current body and quoted message are never summarized; quote strings are
+// escaped so their contents cannot create new envelope fields.
 func Envelope(input model.AgentInput) string {
 	var b strings.Builder
 	fmt.Fprintln(&b, "[PairRoom message]")
@@ -53,6 +54,9 @@ func Envelope(input model.AgentInput) string {
 			}
 			fmt.Fprintln(&b)
 		}
+	}
+	if input.Quote != nil {
+		fmt.Fprintf(&b, "quoted_message:\n  from: %q\n  text: %q\n", input.Quote.FromHandle, input.Quote.Text)
 	}
 	fmt.Fprintf(&b, "\n%s", input.Text)
 	return b.String()

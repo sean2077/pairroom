@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -294,6 +295,7 @@ func main() {
 	windowGate := &desktopWindowGate{}
 	var startDesktop func()
 	var startupSettings *startup.Settings
+	var openBrowser func(string) error
 
 	app := application.New(application.Options{
 		RawMessageHandler: func(sender application.Window, message string, origin *application.OriginInfo) {
@@ -304,6 +306,12 @@ func main() {
 			currentURL := controller.host.URL()
 			controller.hostMu.Unlock()
 			if !startup.TrustedOrigin(currentURL, origin.Origin, origin.TopOrigin, runtime.GOOS, origin.IsMainFrame) {
+				return
+			}
+			if target, ok := desktopBrowserTarget(message); ok {
+				if err := openBrowser(target); err != nil {
+					window.ExecJS("window.alert('Could not open the default browser.');")
+				}
 				return
 			}
 			if response, ok := startupSettings.Handle(message); ok {
@@ -344,6 +352,7 @@ func main() {
 
 	// Reading or rendering Settings never opts a user into autostart.
 	startupSettings = startup.New(app.Autostart)
+	openBrowser = app.Browser.OpenURL
 
 	window = app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:      "pairroom-main",
@@ -481,8 +490,57 @@ func showStartupError(window *application.WebviewWindow, err error) {
 	window.ExecJS("window.pairroomDesktopError(" + string(encoded) + ");")
 }
 
+// desktopBrowserTarget limits native browser requests to web links. In particular,
+// file URLs and OS application protocols must never reach the shell opener.
+func desktopBrowserTarget(message string) (string, bool) {
+	if len(message) > 16384 {
+		return "", false
+	}
+	var request struct {
+		Kind string `json:"kind"`
+		URL  string `json:"url"`
+	}
+	if json.Unmarshal([]byte(message), &request) != nil || request.Kind != "pairroom.desktop.browser" {
+		return "", false
+	}
+	u, err := url.Parse(request.URL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+		return "", false
+	}
+	return u.String(), true
+}
+
 const desktopWindowBridge = `
 (() => {
+  if (window !== window.top || window.__pairroomWindowBridge) return;
+  window.__pairroomWindowBridge = true;
+  const transport = window.chrome?.webview || window.webkit?.messageHandlers?.external;
+  const documents = new WeakSet();
+  function watchDocument(doc) {
+    if (!doc || documents.has(doc)) return;
+    documents.add(doc);
+    doc.addEventListener('click', (event) => {
+      if (!event.isTrusted || event.button !== 0 || !(event.ctrlKey || event.metaKey)) return;
+      const link = event.target.closest?.('a[href]');
+      if (!link || link.hasAttribute('download') || typeof transport?.postMessage !== 'function') return;
+      let target;
+      try { target = new URL(link.href, doc.baseURI); } catch (_) { return; }
+      if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      transport.postMessage(JSON.stringify({kind: 'pairroom.desktop.browser', url: target.href}));
+    }, true);
+    function watchFrame(frame) {
+      // Room Views are same-origin; never grant a foreign frame a bridge.
+      try { watchDocument(frame.contentDocument); } catch (_) {}
+    }
+    doc.addEventListener('load', (event) => {
+      if (event.target.tagName === 'IFRAME') watchFrame(event.target);
+    }, true);
+    doc.querySelectorAll('iframe').forEach(watchFrame);
+  }
+  watchDocument(document);
+
   function isNumericLoopback(url) {
     if (url.protocol === "about:") return url.href === "about:blank";
     if (url.protocol !== "http:" || !url.port) return false;

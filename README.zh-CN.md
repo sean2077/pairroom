@@ -12,7 +12,7 @@
 
 当你已经在使用两个编程会话，却反复需要搬运回复、确认谁正在执行、转交审查意见，以及排查中断后究竟做到了哪一步时，PairRoom 才有明确的价值。
 
-- **保留原生工具。** 两个 Agent 槽位分别选择受支持的原生运行时（Runtime）、Provider、模型、effort 和附加指令，也可使用两个相同 Runtime。未指定的覆盖项继承原生 CLI 配置；受支持的 CC Switch Profile 仅以只读引用使用。
+- **保留原生工具。** 两个 Agent 槽位分别选择受支持的原生运行时（Runtime）、Provider、模型、effort 和附加指令，也可使用两个相同 Runtime。未指定的覆盖项继承原生 CLI 配置；受支持的 CC Switch Profile 仅以只读引用使用。 常用双 Agent 组合可保存为 [Agent 组合配置](docs/CONFIGURATION.md#agent-pair-profiles)，并设为新建 Room 的默认组合。
 - **围绕同一项修改协作。** 默认由 Agent 1 担任主导者（Lead），Agent 2 担任执行者（Executor）；自定义模式使用你的自然语言规则。规则在创建 Room 时固定，不会编译成死板的阶段流程。
 - **看清并控制 Agent 接力。** 每个 Room 同一时刻只有一位参与者拥有原生 Turn。回复点名对方的精确句柄，才在 Turn 结束后接力完整回复；不点名则结束。你可以查看工具与审批、追加引导或排队输入、取消、打断，并检查持久投递状态。
 

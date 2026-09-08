@@ -3,6 +3,7 @@ package room
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -12,7 +13,7 @@ import (
 	"github.com/sean2077/pairroom/internal/prompt"
 )
 
-func recordQuoteSource(t *testing.T, engine *Engine) model.Message {
+func recordDetailedQuoteSource(t *testing.T, engine *Engine) model.Message {
 	t.Helper()
 	ancestor := model.Message{ID: model.NewID("msg"), From: model.ActorUser, Text: "unrelated ancestor must not be replayed", ThreadID: model.NewID("thread")}
 	if _, err := engine.record(EventMessageCreated, ancestor.From, ancestor); err != nil {
@@ -46,15 +47,14 @@ func waitQuoteDelivery(t *testing.T, engine *Engine, id string, target model.Act
 
 func assertNativeQuote(t *testing.T, input model.AgentInput, source, message model.Message) {
 	t.Helper()
-	want := "[Quoted message from @codex]\n> " + strings.ReplaceAll(source.Text, "\n", "\n> ") + "\n\n[Current message]\n" + message.Text
-	if input.Text != want {
-		t.Fatalf("native input omitted or changed the quote: got %q, want %q", input.Text, want)
+	if input.Text != message.Text || input.Quote == nil || input.Quote.Text != source.Text || input.Quote.FromHandle != "@codex" {
+		t.Fatalf("native input omitted or changed the quote: %+v", input)
 	}
 	if input.ReplyTo != source.ID || input.MessageID != message.ID || input.ThreadID != source.ThreadID {
 		t.Fatalf("quote changed transport correlation: %+v", input)
 	}
 	envelope := prompt.Envelope(input)
-	if !strings.Contains(envelope, want) || strings.Contains(envelope, source.ID) || strings.Contains(envelope, source.ReplyTo) || strings.Contains(envelope, "unrelated ancestor") {
+	if !strings.Contains(envelope, fmt.Sprintf("  text: %q\n", source.Text)) || strings.Count(envelope, "quoted_message:\n") != 1 || strings.Contains(envelope, source.ID) || strings.Contains(envelope, source.ReplyTo) || strings.Contains(envelope, "unrelated ancestor") {
 		t.Fatal("model envelope lost quoted content or replayed transport IDs / recursive history")
 	}
 }
@@ -64,7 +64,7 @@ func TestUserQuoteReachesNativeInputs(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			engine, adapters := newTestEngine(t, dir)
-			source := recordQuoteSource(t, engine)
+			source := recordDetailedQuoteSource(t, engine)
 			var seed model.Message
 			if mode != "start" {
 				var err error
@@ -129,7 +129,7 @@ func TestUserQuoteReachesNativeInputs(t *testing.T) {
 func TestUserQuoteRetryAfterRestart(t *testing.T) {
 	dir := t.TempDir()
 	engine, adapters := newTestEngine(t, dir)
-	source := recordQuoteSource(t, engine)
+	source := recordDetailedQuoteSource(t, engine)
 	message, err := engine.Send(context.Background(), SendRequest{Text: "Review it", To: []model.ActorID{model.ActorClaude}, ReplyTo: source.ID})
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +154,7 @@ func TestUserQuoteRetryAfterRestart(t *testing.T) {
 
 func TestUserQuoteUsesFullRoomHistoryAndRuntimeIdentity(t *testing.T) {
 	engine, _ := newTestEngine(t, "")
-	source := recordQuoteSource(t, engine)
+	source := recordDetailedQuoteSource(t, engine)
 	if window := engine.WindowedSnapshot(1); len(window.Messages) != 1 {
 		t.Fatal("invalid history fixture")
 	}
@@ -165,8 +165,8 @@ func TestUserQuoteUsesFullRoomHistoryAndRuntimeIdentity(t *testing.T) {
 	if engine.WindowedSnapshot(1).Messages[0].ID == source.ID {
 		t.Fatal("quote still appears in the browser window")
 	}
-	text, _, err := engine.nativeMessageContent(model.Message{From: model.ActorUser, ReplyTo: source.ID, Text: "review"})
-	if err != nil || !strings.Contains(text, "final line") {
+	quote, _, err := engine.deliveryQuote(model.Message{From: model.ActorUser, ReplyTo: source.ID, Text: "review"})
+	if err != nil || quote == nil || !strings.Contains(quote.Text, "final line") {
 		t.Fatalf("older quoted source was omitted: %v", err)
 	}
 
@@ -182,24 +182,24 @@ func TestUserQuoteUsesFullRoomHistoryAndRuntimeIdentity(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := &Engine{cfg: Config{ClaudeConfig: agent.Config{Runtime: tc.first}, CodexConfig: agent.Config{Runtime: tc.second}}, snapshot: model.RoomSnapshot{Messages: []model.Message{source}}}
-			text, _, err := e.nativeMessageContent(model.Message{From: model.ActorUser, ReplyTo: source.ID, Text: "review"})
-			if err != nil || !strings.HasPrefix(text, "[Quoted message from "+tc.handle+"]\n") {
-				t.Fatalf("quote used slot/vendor identity instead of runtime handle: %q, %v", text, err)
+			quote, _, err := e.deliveryQuote(model.Message{From: model.ActorUser, ReplyTo: source.ID, Text: "review"})
+			if err != nil || quote == nil || quote.FromHandle != tc.handle {
+				t.Fatalf("quote used slot/vendor identity instead of runtime handle: %+v, %v", quote, err)
 			}
 		})
 	}
 }
 
-func TestNativeMessageContentDoesNotExpandAgentCorrelation(t *testing.T) {
+func TestDeliveryQuoteDoesNotExpandOrdinaryInputOrAgentCorrelation(t *testing.T) {
 	engine := &Engine{}
 	for _, message := range []model.Message{
 		{From: model.ActorUser, Text: "ordinary input"},
 		{From: model.ActorClaude, ReplyTo: "transport-correlation", Text: "@codex full visible response"},
 		{From: model.ActorCodex, ReplyTo: "transport-correlation", Text: "@claude another response"},
 	} {
-		text, _, err := engine.nativeMessageContent(message)
-		if err != nil || text != message.Text {
-			t.Fatalf("ordinary input or Agent relay acquired quote history: %q, %v", text, err)
+		quote, _, err := engine.deliveryQuote(message)
+		if err != nil || quote != nil {
+			t.Fatalf("ordinary input or Agent relay acquired quote history: %+v, %v", quote, err)
 		}
 	}
 }
@@ -207,13 +207,15 @@ func TestNativeMessageContentDoesNotExpandAgentCorrelation(t *testing.T) {
 func TestMissingUserQuoteFailsBeforeNativeSubmission(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	other, _ := newTestEngine(t, "")
-	foreign := recordQuoteSource(t, other)
+	foreign := recordDetailedQuoteSource(t, other)
 	for _, id := range []string{"missing-message", foreign.ID} {
-		message, err := engine.Send(context.Background(), SendRequest{Text: "Review it", To: []model.ActorID{model.ActorClaude}, ReplyTo: id})
-		if err != nil {
-			t.Fatal(err)
+		_, err := engine.Send(context.Background(), SendRequest{Text: "Review it", To: []model.ActorID{model.ActorClaude}, ReplyTo: id})
+		if err == nil {
+			t.Fatal("missing or cross-Room quote was accepted")
 		}
-		waitQuoteDelivery(t, engine, message.ID, model.ActorClaude, model.DeliveryFailed, model.ProcessingFailed)
+		if _, _, err := engine.deliveryQuote(model.Message{From: model.ActorUser, ReplyTo: id}); err == nil {
+			t.Fatal("restored input with a missing or cross-Room quote was accepted")
+		}
 		select {
 		case <-adapters[model.ActorClaude].submissions:
 			t.Fatal("missing or cross-Room quote silently submitted a context-free input")
@@ -229,15 +231,23 @@ func TestUserQuoteAttachmentsKeepContentIdentity(t *testing.T) {
 	source := model.Message{ID: "source", From: model.ActorCodex, Attachments: []model.Attachment{image}}
 	engine := &Engine{cfg: Config{Attachments: media}, snapshot: model.RoomSnapshot{Messages: []model.Message{source}}}
 	message := model.Message{From: model.ActorUser, ReplyTo: source.ID, Text: "Compare these", Attachments: []model.Attachment{own, image}}
-	text, metadata, err := engine.nativeMessageContent(message)
-	if err != nil || !strings.Contains(text, `name: "diagram.png"`) || len(metadata) != 2 || metadata[0].ID != image.ID || metadata[1].ID != own.ID {
-		t.Fatalf("image-only quote was lost or duplicated: %q, %+v, %v", text, metadata, err)
+	quote, metadata, err := engine.deliveryQuote(message)
+	if err != nil || quote == nil || quote.Text != "" || quote.FromHandle != "@codex" || len(metadata) != 2 || metadata[0].ID != own.ID || metadata[1].ID != image.ID {
+		t.Fatalf("image-only quote was lost or duplicated: %+v, %+v, %v", quote, metadata, err)
+	}
+	// Also exercise an image that exists only on the quoted source: its
+	// integrity must be checked even when the current message does not attach it.
+	quoteOnly := message
+	quoteOnly.Attachments = []model.Attachment{own}
+	_, metadata, err = engine.deliveryQuote(quoteOnly)
+	if err != nil || len(metadata) != 2 || metadata[1].ID != image.ID {
+		t.Fatalf("quote-only image was omitted: %+v, %v", metadata, err)
 	}
 	native, err := engine.agentAttachments(metadata)
-	if err != nil || len(native) != 2 || native[0].Path != media.paths[image.ID] {
+	if err != nil || len(native) != 2 || native[1].Path != media.paths[image.ID] {
 		t.Fatalf("quoted image did not reach the native attachment boundary: %+v, %v", native, err)
 	}
-	serialized, err := json.Marshal(model.AgentInput{Text: text, Attachments: native})
+	serialized, err := json.Marshal(model.AgentInput{Text: message.Text, Quote: quote, Attachments: native})
 	if err != nil || strings.Contains(string(serialized), "/private/") {
 		t.Fatal("quoted image exposed a host-local path in JSON")
 	}
