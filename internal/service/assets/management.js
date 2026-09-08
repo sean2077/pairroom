@@ -406,7 +406,6 @@
     $('nav-project-count').textContent = snapshot ? formatNumber(summary.projects) : '';
     $('nav-runtime-count').textContent = snapshot && summary.runtime_capacity_used ? formatNumber(summary.runtime_capacity_used) : '';
     const routeInfo = routeMetadata();
-    setRenderedText('page-eyebrow', routeInfo.eyebrow);
     setRenderedText('page-title', routeInfo.title);
     setRenderedText('page-subtitle', routeInfo.subtitle);
     document.title = `${routeInfo.title} · PairRoom`;
@@ -432,26 +431,25 @@
     const snapshot = state.snapshot;
     switch (state.route.name) {
       case 'projects':
-        return { eyebrow: t('common.workspacesUpper'), title: t('ui.projectsAndRooms'), subtitle: t("ui.manageCanonicalGitWorktreesAndCollaborationRoomsThatAreIsolatedFromEach") };
+        return { title: t('ui.projectsAndRooms'), subtitle: t("ui.manageCanonicalGitWorktreesAndCollaborationRoomsThatAreIsolatedFromEach") };
       case 'project': {
         const project = snapshot?.projects?.find((item) => item.id === state.route.projectID);
-        return { eyebrow: t('common.projectUpper'), title: projectName(project) || t('common.project'), subtitle: project?.root || t("ui.checkTheProjectIdentityRoomAndRunningStatus") };
+        return { title: projectName(project) || t('common.project'), subtitle: project?.root || t("ui.checkTheProjectIdentityRoomAndRunningStatus") };
       }
       case 'runtimes':
-        return { eyebrow: t('common.orchestrationUpper'), title: t('room.roomRuntimes'), subtitle: t("ui.viewCapacityQueuesActiveTurnAndIdlePendingStatus") };
+        return { title: t('room.roomRuntimes'), subtitle: t("ui.viewCapacityQueuesActiveTurnAndIdlePendingStatus") };
       case 'settings':
-        return { eyebrow: t('common.controlPlaneUpper'), title: t("ui.settings"), subtitle: t("ui.adjustTheCurrentAdminPageExperienceAndCheckServiceStartupPoliciesAnd") };
+        return { title: t("ui.settings"), subtitle: t("ui.adjustTheCurrentAdminPageExperienceAndCheckServiceStartupPoliciesAnd") };
       case 'room': {
         const room = roomByID(state.route.roomID);
         const runtime = getRuntime(state.route.roomID);
         return {
-          eyebrow: t('common.roomUpper'),
           title: room?.name || t('common.room'),
           subtitle: runtimeLabel(runtime),
         };
       }
       default:
-        return { eyebrow: t('common.pairroomServiceUpper'), title: t("ui.overview"), subtitle: t("ui.multiProjectLocalCollaborationControlSurfaceForSupportedRuntimes") };
+        return { title: t("ui.overview"), subtitle: t("ui.multiProjectLocalCollaborationControlSurfaceForSupportedRuntimes") };
     }
   }
 

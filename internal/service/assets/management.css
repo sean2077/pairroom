@@ -460,7 +460,6 @@ code, pre, kbd { font-family: var(--font-mono); }
   backdrop-filter: blur(22px) saturate(130%);
 }
 .page-heading { min-width: 220px; flex: 1; display: flex; align-items: baseline; gap: 10px; }
-.page-heading .eyebrow { margin: 0; flex: 0 0 auto; }
 .page-heading h1 { margin-bottom: 0; flex: 0 0 auto; }
 .page-heading .page-subtitle { flex: 0 1 auto; min-width: 0; }
 .eyebrow { margin: 0 0 2px; color: var(--accent); font-size: 9px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
@@ -950,7 +949,6 @@ body[data-density="compact"] .stat-card { min-height: 98px; }
 @media (max-width: 680px) {
   .topbar { min-height: 64px; align-items: center; flex-wrap: wrap; gap: 10px; }
   .page-heading { order: 1; min-width: 0; flex: 1; }
-  .page-heading .eyebrow { display: none; }
   .page-heading h1 { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .topbar-actions { order: 2; flex: 0 0 auto; }
   .topbar-actions .primary-button { width: 40px; overflow: hidden; padding: 0; font-size: 0; }

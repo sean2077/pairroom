@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Remove the uppercase eyebrow labels from the Management topbar heading.
+
 ## [v3.1.1] — 2026-09-08
 
 - Show asynchronous Room activation promptly using the existing refresh timer, including when ordinary auto-refresh is disabled. Stop polling hidden/signed-out pages and leave failed activation for explicit retry instead of retrying from rendering.
