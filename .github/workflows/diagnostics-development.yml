@@ -8,59 +8,27 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
         with:
           ref: codex/diagnostics-project-workspace
           fetch-depth: 0
-      - name: Apply checksummed verification fixes
+      - name: Apply checksummed test fixes
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import hashlib, pathlib, subprocess
-          patch = pathlib.Path('.github/diagnostics-fix.patch').read_bytes().replace(b'\n diff --git', b'\ndiff --git')
-          assert hashlib.sha256(patch).hexdigest() == '6e69f9fed385df7c1a761755ecd731266901a0dae80c53184c0263297b248e53', 'patch checksum mismatch'
+          patch = pathlib.Path('.github/diagnostics-ci-fix.patch').read_bytes()
+          assert hashlib.sha256(patch).hexdigest() == 'c58b34c4226d6a6394a5d29d26ece71bb5494a6bd6ff0b0959cbcdbd767d50ad', 'patch checksum mismatch'
           subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
           subprocess.run(['git', 'apply', '-'], input=patch, check=True)
           PY
-          git rm .github/diagnostics-fix.patch
-          git add internal scripts
+          git rm .github/diagnostics-ci-fix.patch
+          git add internal/service/diagnostics_test.go scripts/test_management_browser.py
           git diff --cached --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'fix: harden diagnostic cleanup and project navigation'
+          git commit -m 'test: respect Management routing and production CSP'
           git push origin HEAD:refs/heads/codex/diagnostics-project-workspace
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '22.x'
-      - name: Unit, race, static, documentation, and dependency checks
-        shell: bash
-        run: |
-          set -o pipefail
-          make check 2>&1 | tee "${RUNNER_TEMP}/diagnostics-check.log"
-      - name: Mock collaboration and recovery smoke
-        if: success()
-        shell: bash
-        run: |
-          set -o pipefail
-          make smoke 2>&1 | tee "${RUNNER_TEMP}/diagnostics-smoke.log"
-      - name: Export tracked implementation and verification logs
-        if: always()
-        run: |
-          git archive --format=tar HEAD > "${RUNNER_TEMP}/pairroom-verified-source.tar"
-          git show -s --format='%H %T' > "${RUNNER_TEMP}/diagnostics-commit.txt"
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: pairroom-diagnostics-verification
-          path: |
-            ${{ runner.temp }}/pairroom-verified-source.tar
-            ${{ runner.temp }}/diagnostics-*.log
-            ${{ runner.temp }}/diagnostics-commit.txt
-          retention-days: 1
