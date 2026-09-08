@@ -49,7 +49,7 @@ function client() {
   const marker = "  loadStoredTheme();\n  window.addEventListener('storage'";
   assert.ok(source.includes(marker), 'keep boot interception explicit');
   const hook = `
-    globalThis.management = {state, api, refresh, loadAgentCatalog, withBusy, scheduleRefresh,
+    globalThis.management = {state, api, refresh, loadAgentCatalog, loadAgentPairProfiles, mutateAgentPairProfiles, withBusy, scheduleRefresh,
       syncConfirmRequirement, submitConfirm, resetConfirmState, createBrowserSession, showCredentialLogin,
       invalidateSessionReads, openRoomInBrowserAction, connect, updateDesktopStartup,
       setDesktop(value) { window.PairRoomDesktop = value; },
@@ -72,6 +72,40 @@ function client() {
 async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
 
 async function main() {
+  {
+    const c = client(), oldRead = deferred(), freshRead = deferred();
+    let reads = 0;
+    c.setAPI(() => (++reads === 1 ? oldRead.promise : freshRead.promise));
+    const old = c.loadAgentPairProfiles();
+    const fresh = c.loadAgentPairProfiles(true);
+    oldRead.resolve({schema: 1, default_profile_id: 'old', profiles: []});
+    freshRead.resolve({schema: 1, default_profile_id: 'fresh', profiles: []});
+    assert.equal((await fresh).default_profile_id, 'fresh');
+    assert.equal((await old).default_profile_id, 'fresh', 'obsolete profile read must join the newer read');
+    assert.equal(c.state.agentPairProfiles.default_profile_id, 'fresh');
+  }
+  {
+    const c = client(), oldRead = deferred(), write = deferred();
+    c.setAPI((_path, options) => options?.method ? write.promise : oldRead.promise);
+    const old = c.loadAgentPairProfiles();
+    const saved = c.mutateAgentPairProfiles('/default', {method: 'PATCH'});
+    await assert.rejects(c.mutateAgentPairProfiles('/default', {method: 'PATCH'}), /busy/);
+    write.resolve({schema: 1, default_profile_id: 'saved', profiles: []});
+    await saved;
+    oldRead.resolve({schema: 1, default_profile_id: 'old', profiles: []});
+    assert.equal((await old).default_profile_id, 'saved', 'a read cannot restore the pre-write default');
+    assert.equal(c.state.agentPairProfiles.default_profile_id, 'saved');
+  }
+  for (const mutation of [false, true]) {
+    const c = client(), request = deferred();
+    c.setAPI(() => request.promise);
+    const pending = mutation ? c.mutateAgentPairProfiles('', {method: 'POST'}) : c.loadAgentPairProfiles();
+    c.invalidateSessionReads();
+    request.resolve({schema: 1, default_profile_id: 'old-session', profiles: []});
+    await assert.rejects(pending, error => error.code === 'obsolete_session');
+    assert.equal(c.state.agentPairProfiles, null, 'profile data must not cross browser sessions');
+  }
+
   {
     const c = client();
     c.state.tabs = ['r'];

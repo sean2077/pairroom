@@ -12,7 +12,7 @@
 
 Use PairRoom when coordinating two existing coding sessions has become repetitive work: carrying answers between terminals, tracking which agent owns the task, passing review findings back, and checking what happened after an interruption.
 
-- **Keep your native tools.** Each of the two slots independently selects a supported Runtime, Provider, model, effort, and additional instructions. The same Runtime can occupy both slots. Unspecified overrides inherit native CLI configuration; supported CC Switch Profiles are read-only references.
+- **Keep your native tools.** Each of the two slots independently selects a supported Runtime, Provider, model, effort, and additional instructions. The same Runtime can occupy both slots. Unspecified overrides inherit native CLI configuration; supported CC Switch Profiles are read-only references. Save your usual pair as an [Agent pair profile](docs/CONFIGURATION.md#agent-pair-profiles), optionally the default for new Rooms.
 - **Collaborate on the same change.** Default mode gives Agent 1 the Lead responsibility and Agent 2 the Executor responsibility. Custom mode uses your natural-language rules. These are creation-time instructions, not a rigid phase machine.
 - **See and control the relay.** One participant owns a native Turn at a time in each Room. An exact peer mention relays the complete response after that Turn; no peer mention ends relay. Observe tools and approvals, steer or queue input, cancel, interrupt, and inspect durable delivery state.
 

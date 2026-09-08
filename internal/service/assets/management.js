@@ -41,6 +41,14 @@
     projectMode: 'register',
     bindingRoomID: '',
     roomDialogRevision: 0,
+    pairProfileMode: false,
+    pairProfileReady: false,
+    pairProfileID: '',
+    pairProfileBusy: false,
+    agentPairProfiles: null,
+    agentPairProfilesPromise: null,
+    agentPairProfilesRevision: 0,
+    agentPairProfilesError: '',
     contextRoomID: '',
     contextTrigger: null,
     contextScrollPositions: new Map(),
@@ -148,6 +156,10 @@
     state.refreshOptions = {};
     state.agentCatalog = null;
     state.agentCatalogPromise = null;
+    state.agentPairProfiles = null;
+    state.agentPairProfilesPromise = null;
+    state.agentPairProfilesRevision += 1;
+    state.agentPairProfilesError = '';
     $('refresh-button').classList.remove('spinning');
     return state.sessionGeneration;
   }
@@ -1183,13 +1195,14 @@
   }
 
   function renderSettings() {
+    if (state.settingsSection === 'pair-profiles' && !state.agentPairProfiles && !state.agentPairProfilesPromise && !state.agentPairProfilesError) refreshPairProfileSettings();
     const sections = [
-      ['interface', t("ui.interfaceExperience")], ['runtime', t("ui.runtimeStrategy")], ['operations', t("ui.daemonOperationAndMaintenance")], ['service', t("ui.serviceAndDiagnosis")], ['boundaries', t("ui.securityBoundary")], ['about', t("ui.about")],
+      ['interface', t("ui.interfaceExperience")], ['pair-profiles', t('agent.pairProfile.title')], ['runtime', t("ui.runtimeStrategy")], ['operations', t("ui.daemonOperationAndMaintenance")], ['service', t("ui.serviceAndDiagnosis")], ['boundaries', t("ui.securityBoundary")], ['about', t("ui.about")],
     ];
     if (window.PairRoomDesktop) sections.splice(1, 0, ['desktop', t('desktop.settings')]);
     const nav = node('nav', { className: 'panel settings-nav', 'aria-label': t("ui.setUpPartitions") }, ...sections.map(([key, label]) => {
       const active = state.settingsSection === key;
-      const button = actionButton(label, () => { state.settingsSection = key; if (key === 'desktop') updateDesktopStartup(); renderSettings(); }, active ? 'active' : '');
+      const button = actionButton(label, () => { state.settingsSection = key; if (key === 'pair-profiles') refreshPairProfileSettings(); if (key === 'desktop') updateDesktopStartup(); renderSettings(); }, active ? 'active' : '');
       button.setAttribute('aria-pressed', String(active));
       return button;
     }));
@@ -1208,6 +1221,7 @@
   function renderSettingsSection() {
     const snapshot = state.snapshot;
     const policy = runtimePolicy(snapshot);
+    if (state.settingsSection === 'pair-profiles') return renderPairProfileSettings();
     if (state.settingsSection === 'desktop' && window.PairRoomDesktop) return renderDesktopSettings();
     if (state.settingsSection === 'runtime') {
       const command = runtimeCommand(policy);
@@ -1679,6 +1693,181 @@
     return request;
   }
 
+
+  const PAIR_PROFILES_PATH = '/api/v1/agent-pair-profiles';
+
+  async function loadAgentPairProfiles(force = false) {
+    if (!force && state.agentPairProfilesPromise) return state.agentPairProfilesPromise;
+    if (!force && state.agentPairProfiles) return state.agentPairProfiles;
+    const generation = state.sessionGeneration;
+    const revision = ++state.agentPairProfilesRevision;
+    const request = api(PAIR_PROFILES_PATH).then((catalog) => {
+      if (generation !== state.sessionGeneration) {
+        const error = new Error('Obsolete Agent pair profiles response');
+        error.code = 'obsolete_session';
+        throw error;
+      }
+      if (revision !== state.agentPairProfilesRevision) return state.agentPairProfilesPromise || state.agentPairProfiles;
+      if (catalog.schema !== 1 || !Array.isArray(catalog.profiles)) throw new Error(t('agent.pairProfile.loadFailed'));
+      state.agentPairProfiles = catalog;
+      state.agentPairProfilesError = '';
+      return catalog;
+    }).finally(() => {
+      if (state.agentPairProfilesPromise === request) state.agentPairProfilesPromise = null;
+    });
+    state.agentPairProfilesPromise = request;
+    return request;
+  }
+
+  async function mutateAgentPairProfiles(path, options) {
+    if (state.pairProfileBusy) throw new Error(t('agent.pairProfile.busy'));
+    state.pairProfileBusy = true;
+    const generation = state.sessionGeneration;
+    // Invalidate in-flight reads, including reads from before this write.
+    state.agentPairProfilesRevision += 1;
+    state.agentPairProfilesPromise = null;
+    try {
+      const catalog = await api(PAIR_PROFILES_PATH + path, options);
+      if (generation !== state.sessionGeneration) {
+        const error = new Error('Obsolete Agent pair profiles response');
+        error.code = 'obsolete_session';
+        throw error;
+      }
+      state.agentPairProfilesRevision += 1;
+      state.agentPairProfilesPromise = null;
+      state.agentPairProfiles = catalog;
+      state.agentPairProfilesError = '';
+      return catalog;
+    } finally {
+      state.pairProfileBusy = false;
+    }
+  }
+
+  async function refreshPairProfileSettings() {
+    const generation = state.sessionGeneration;
+    try { await loadAgentPairProfiles(true); }
+    catch (error) {
+      if (generation !== state.sessionGeneration) return;
+      state.agentPairProfilesError = error.message;
+    }
+    if (state.authenticated && state.route.name === 'settings' && state.settingsSection === 'pair-profiles') renderSettings();
+  }
+
+  function renderPairProfileSettings() {
+    const catalog = state.agentPairProfiles;
+    const rows = (catalog?.profiles || []).map((profile) => {
+      const isDefault = profile.id === catalog.default_profile_id;
+      const summary = ['claude', 'codex'].map((actor) => {
+        const agent = profile.agents[actor];
+        return [agent.runtime, agent.model || t('common.inherit'), agent.effort].filter(Boolean).join(' · ');
+      }).join(' / ');
+      const controls = node('div', { className: 'pair-profile-actions' },
+        actionButton(t('agent.pairProfile.edit'), () => openRoomDialog('', profile.id), 'secondary-button compact-button'),
+        actionButton(isDefault ? t('agent.pairProfile.clearDefault') : t('agent.pairProfile.setDefault'), async () => {
+          try {
+            await mutateAgentPairProfiles('/default', { method: 'PATCH', body: JSON.stringify({ profile_id: isDefault ? '' : profile.id }) });
+            if (state.route.name === 'settings') renderSettings();
+          } catch (error) { toast(t('ui.actionFailed'), error.message, 'error'); }
+        }, 'secondary-button compact-button'),
+        actionButton(t('agent.pairProfile.delete'), () => openConfirm({
+          title: t('agent.pairProfile.delete'), message: t('agent.pairProfile.deleteConfirm', { name: profile.name }),
+          label: t('agent.pairProfile.delete'), action: async () => {
+            await mutateAgentPairProfiles('/' + encodeURIComponent(profile.id), { method: 'DELETE' });
+            if (state.route.name === 'settings') renderSettings();
+          },
+        }), 'secondary-button compact-button'),
+      );
+      const row = settingRow(profile.name + (isDefault ? ` — ${t('agent.pairProfile.default')}` : ''), summary, controls);
+      row.dataset.pairProfileId = profile.id;
+      return row;
+    });
+    return node('div', { className: 'view-stack' },
+      settingsPanel(t('agent.pairProfile.title'), t('agent.pairProfile.settingsHelp'),
+        node('div', { className: 'panel-body pair-profile-actions' },
+          actionButton(t('agent.pairProfile.new'), () => openRoomDialog('', ''), 'primary-button'),
+          actionButton(t('agent.pairProfile.refresh'), refreshPairProfileSettings, 'secondary-button')),
+        state.agentPairProfilesError ? node('p', { className: 'form-error', role: 'alert', textContent: state.agentPairProfilesError }) : null,
+        ...rows,
+        !rows.length ? node('p', { className: 'panel-body', textContent: catalog ? t('agent.pairProfile.empty') : t('agent.pairProfile.loading') }) : null,
+      ),
+    );
+  }
+
+  function populatePairProfilePicker(id = '') {
+    const catalog = state.agentPairProfiles;
+    $('room-pair-profile').replaceChildren(
+      node('option', { value: '', textContent: t('agent.pairProfile.serviceDefaults') }),
+      ...(catalog?.profiles || []).map((profile) => node('option', {
+        value: profile.id, textContent: profile.name + (profile.id === catalog.default_profile_id ? ` — ${t('agent.pairProfile.default')}` : ''),
+      })),
+    );
+    $('room-pair-profile').value = id;
+    $('pair-profile-update').disabled = !id;
+  }
+
+  function applyPairProfile(id) {
+    const profile = state.agentPairProfiles?.profiles.find((entry) => entry.id === id);
+    if (id && !profile) throw new Error(t('agent.pairProfile.notFound'));
+    state.pairProfileID = id;
+    for (const actor of ['claude', 'codex']) populateAgentControls(actor, (profile?.agents || state.agentCatalog?.defaults)?.[actor]);
+    $('pair-profile-name').value = profile?.name || '';
+    $('pair-profile-default').checked = Boolean(id && id === state.agentPairProfiles?.default_profile_id);
+    $('pair-profile-update').disabled = !id;
+    syncCollaborationControls();
+  }
+
+  async function saveCurrentPairProfile(update = false) {
+    if (!state.pairProfileReady) return;
+    const name = $('pair-profile-name').value;
+    if (!validRoomName(name, false)) {
+      showFormError('room-form-error', t('agent.pairProfile.invalidName'));
+      $('pair-profile-save-options').open = true;
+      $('pair-profile-name').focus();
+      return;
+    }
+    const id = update ? state.pairProfileID : '';
+    if (update && !id) return;
+    const revision = state.roomDialogRevision;
+    const editor = state.pairProfileMode;
+    const input = { name: name.trim(), is_default: $('pair-profile-default').checked,
+      agents: { claude: readAgentSelection('claude'), codex: readAgentSelection('codex') } };
+    if (state.pairProfileBusy) return;
+    const buttons = ['pair-profile-save-new', 'pair-profile-update', 'room-submit'];
+    buttons.forEach((key) => { $(key).disabled = true; });
+    try {
+      hideFormError('room-form-error');
+      const catalog = await mutateAgentPairProfiles(id ? '/' + encodeURIComponent(id) : '', {
+        method: id ? 'PUT' : 'POST', body: JSON.stringify(input),
+      });
+      if (revision !== state.roomDialogRevision || !state.authenticated || !$('room-dialog').open) return;
+      const saved = catalog.profiles.find((entry) => id ? entry.id === id : entry.name === input.name);
+      state.pairProfileID = saved?.id || '';
+      populatePairProfilePicker(state.pairProfileID);
+      if (editor) {
+        closeDialog('room-dialog');
+        if (state.route.name === 'settings') renderSettings();
+      }
+      toast(t('agent.pairProfile.saved'), input.name, 'success');
+    } catch (error) {
+      if (revision === state.roomDialogRevision) showFormError('room-form-error', error.message);
+    } finally {
+      if (revision === state.roomDialogRevision) {
+        $('room-submit').disabled = false;
+        $('pair-profile-save-new').disabled = false;
+        $('pair-profile-update').disabled = !state.pairProfileID;
+      }
+    }
+  }
+
+  // Selects must preserve explicit values from a saved profile, including a
+  // newer effort level that was not in this build's suggestion list.
+  function setAgentSelectValue(select, value) {
+    if (value && ![...select.options].some((option) => option.value === value)) {
+      select.append(node('option', { value, textContent: value }));
+    }
+    select.value = value || '';
+  }
+
   function providerOptionValue(ref) {
 	return JSON.stringify(ref || { source: 'native' });
   }
@@ -1747,7 +1936,7 @@
 	const permission = $(`${actor}-permission-mode`);
 	const previousPermission = permission.value;
 	const permissionValues = runtime === 'claude'
-	  ? ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions', 'yolo']
+	  ? ['default', 'manual', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions', 'bypass', 'always-approve', 'yolo']
 	  : runtime === 'grok' ? ['default', 'ask', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions', 'always-approve', 'yolo'] : [];
 	permission.replaceChildren(
 	  node('option', { value: '', textContent: t('common.inherit') }),
@@ -1780,8 +1969,8 @@
 	  textContent: `${entry.display_name}${entry.available ? '' : ` — ${t('agent.unavailable')}`}`,
 	  disabled: !entry.available,
 	})));
-	runtime.value = selection?.runtime || (actor === 'claude' ? 'claude' : 'codex');
-	if (!runtime.value) runtime.selectedIndex = [...runtime.options].findIndex((option) => !option.disabled);
+    setAgentSelectValue(runtime, selection?.runtime || (actor === 'claude' ? 'claude' : 'codex'));
+    runtime.setCustomValidity(runtimeCatalogEntry(runtime.value)?.available ? '' : t('agent.unavailable'));
 	const runtimeEntry = runtimeCatalogEntry(runtime.value);
 	const diagnostic = $(`${actor}-runtime-diagnostic`);
 	diagnostic.textContent = runtimeEntry?.diagnostic || (runtimeEntry?.version ? `v${runtimeEntry.version}` : '');
@@ -1790,9 +1979,9 @@
 	const wantedProvider = providerOptionValue(selection?.provider || { source: 'native' });
 	setProviderSelection($(`${actor}-provider`), wantedProvider);
 	$(`${actor}-model`).value = selection?.model || '';
-	$(`${actor}-effort`).value = selection?.effort || '';
+    setAgentSelectValue($(`${actor}-effort`), selection?.effort);
 	$(`${actor}-permission-mode`).value = selection?.permission_mode || '';
-	$(`${actor}-approval-policy`).value = selection?.approval_policy || '';
+    setAgentSelectValue($(`${actor}-approval-policy`), selection?.approval_policy);
 	$(`${actor}-sandbox`).value = selection?.sandbox || '';
 	$(`${actor}-instructions`).value = selection?.instructions || '';
 	syncAgentProviderAndModels(actor, false);
@@ -1812,43 +2001,70 @@
 	};
   }
 
-  async function openRoomDialog(projectID = '') {
-    const revision = ++state.roomDialogRevision;
+  async function openRoomDialog(projectID = '', profileID = null) {
+    const editor = profileID !== null;
     const projects = (state.snapshot?.projects || []).filter((project) => project.available);
-    if (!projects.length) {
+    if (!editor && !projects.length) {
       toast(t("ui.noAvailableProject"), t("ui.pleaseRegisterOrRepairAGitWorktreeFirst"), 'warning');
       return;
     }
+    const revision = ++state.roomDialogRevision;
+    state.pairProfileMode = editor;
+    state.pairProfileReady = false;
+    state.pairProfileID = profileID || '';
     const select = $('room-project-id');
     select.replaceChildren(...projects.map((project) => node('option', { value: project.id, textContent: `${projectName(project)} — ${project.root}` })));
-    select.value = projects.some((project) => project.id === projectID) ? projectID : projects[0].id;
-	$('room-name').value = '';
+    select.value = projects.some((project) => project.id === projectID) ? projectID : (projects[0]?.id || '');
+    $('room-name').value = '';
     $('room-collaboration-mode').value = 'default';
     $('room-collaboration-instructions').value = '';
+    document.querySelectorAll('#room-dialog [data-room-only]').forEach((element) => { element.hidden = editor; });
+    $('pair-profile-picker').hidden = editor;
+    $('pair-profile-save-actions').hidden = editor;
+    $('pair-profile-save-options').open = editor;
+    $('pair-profile-name').value = '';
+    $('pair-profile-default').checked = false;
+    $('room-pair-profile').disabled = true;
+    $('pair-profile-save-new').disabled = true;
+    $('pair-profile-update').disabled = true;
     syncCollaborationControls();
     document.querySelector('input[name="claude-mode"][value="new"]').checked = true;
     document.querySelector('input[name="codex-mode"][value="new"]').checked = true;
     $('claude-session-id').value = '';
     $('codex-session-id').value = '';
-	syncBindingInputs();
-	hideFormError('room-form-error');
-    setRenderedText('room-dialog-title', t("ui.createRoomInValue", { value0: (projectName(projects.find((project) => project.id === select.value))) }));
-	showDialog('room-dialog');
-	$('room-submit').disabled = true;
-	try {
-	  const catalog = await loadAgentCatalog();
+    syncBindingInputs();
+    hideFormError('room-form-error');
+    setRenderedText('room-dialog-title', editor ? t(profileID ? 'agent.pairProfile.edit' : 'agent.pairProfile.new')
+      : t("ui.createRoomInValue", { value0: projectName(projects.find((project) => project.id === select.value)) }));
+    syncPairProfileDialogLabels();
+    showDialog('room-dialog');
+    $('room-submit').disabled = true;
+    try {
+      const [, profiles] = await Promise.all([loadAgentCatalog(), loadAgentPairProfiles(true)]);
       if (revision !== state.roomDialogRevision || !$('room-dialog').open || !state.authenticated) return;
-	  for (const actor of ['claude', 'codex']) populateAgentControls(actor, catalog.defaults?.[actor]);
-      syncCollaborationControls();
-	  $('room-submit').disabled = false;
-	  queueMicrotask(() => $('room-name').focus());
-	} catch (error) {
-	  showFormError('room-form-error', error.message);
-	}
+      const selectedID = editor ? profileID : (profiles.default_profile_id || '');
+      populatePairProfilePicker(selectedID);
+      applyPairProfile(selectedID);
+      state.pairProfileReady = true;
+      $('room-pair-profile').disabled = false;
+      $('pair-profile-save-new').disabled = false;
+      $('room-submit').disabled = false;
+      queueMicrotask(() => $(editor ? 'pair-profile-name' : 'room-name').focus());
+    } catch (error) {
+      if (revision === state.roomDialogRevision) showFormError('room-form-error', error.message);
+    }
+  }
+
+  function syncPairProfileDialogLabels() {
+    if (state.pairProfileMode) setRenderedText('room-dialog-title', t(state.pairProfileID ? 'agent.pairProfile.edit' : 'agent.pairProfile.new'));
+    setRenderedText('pair-profile-help', t(state.pairProfileMode ? 'agent.pairProfile.editorHelp' : 'agent.pairProfile.templateHelp'));
+    if (!state.pairProfileBusy && !state.busyButtons.has($('room-submit'))) {
+      setRenderedText('room-submit', t(state.pairProfileMode ? 'agent.pairProfile.save' : 'ui.createRoomAtomically'));
+    }
   }
 
   function syncCollaborationControls() {
-    const custom = $('room-collaboration-mode').value === 'custom';
+    const custom = state.pairProfileMode || $('room-collaboration-mode').value === 'custom';
     $('collaboration-custom-field').hidden = !custom;
     $('collaboration-default-details').hidden = custom;
     $('room-collaboration-instructions').required = custom;
@@ -1870,6 +2086,8 @@
 
   async function createRoom(event) {
     event.preventDefault();
+    if (state.pairProfileMode) return saveCurrentPairProfile(Boolean(state.pairProfileID));
+    if (state.pairProfileBusy || $('room-submit').disabled) return;
     const projectID = $('room-project-id').value;
     const name = $('room-name').value.trim();
     if (!validRoomName($('room-name').value, true)) {
@@ -1884,7 +2102,7 @@
     const collaboration = { mode, ...(mode === 'custom' ? { instructions } : {}) };
     const bindings = {};
     for (const actor of ['claude', 'codex']) {
-      if (!$(`${actor}-provider`).reportValidity()) return;
+      if (!$(`${actor}-runtime`).reportValidity() || !$(`${actor}-provider`).reportValidity()) return;
       const mode = document.querySelector(`input[name="${actor}-mode"]:checked`)?.value || 'new';
       const sessionID = $(`${actor}-session-id`).value.trim();
       if (mode === 'existing' && !sessionID) {
@@ -2803,6 +3021,7 @@
   for (const actor of ['claude', 'codex']) {
     $(`${actor}-runtime`).addEventListener('change', () => {
       const entry = runtimeCatalogEntry($(`${actor}-runtime`).value);
+      $(`${actor}-runtime`).setCustomValidity(entry?.available ? '' : t('agent.unavailable'));
       const diagnostic = $(`${actor}-runtime-diagnostic`);
       diagnostic.textContent = entry?.diagnostic || (entry?.version ? `v${entry.version}` : '');
       diagnostic.classList.toggle('runtime-unavailable', !entry?.available);
@@ -2815,13 +3034,23 @@
   }
   $('agent-catalog-refresh').addEventListener('click', async () => {
     const revision = state.roomDialogRevision;
-    const hadCatalog = Boolean(state.agentCatalog);
+    const wasReady = state.pairProfileReady;
     await withBusy($('agent-catalog-refresh'), async () => {
       try {
-        const catalog = await loadAgentCatalog(true);
+        const [catalog, profiles] = await Promise.all([loadAgentCatalog(true), wasReady ? null : loadAgentPairProfiles(true)]);
         if (revision !== state.roomDialogRevision || !$('room-dialog').open || !state.authenticated) return;
-        const current = hadCatalog ? { claude: readAgentSelection('claude'), codex: readAgentSelection('codex') } : null;
-        for (const actor of ['claude', 'codex']) populateAgentControls(actor, current?.[actor] || catalog.defaults?.[actor]);
+        if (wasReady) {
+          const current = { claude: readAgentSelection('claude'), codex: readAgentSelection('codex') };
+          for (const actor of ['claude', 'codex']) populateAgentControls(actor, current[actor] || catalog.defaults?.[actor]);
+        } else {
+          const id = state.pairProfileMode ? state.pairProfileID : (profiles.default_profile_id || '');
+          populatePairProfilePicker(id);
+          applyPairProfile(id);
+          state.pairProfileReady = true;
+          $('room-pair-profile').disabled = false;
+          $('pair-profile-save-new').disabled = false;
+          $('room-submit').disabled = false;
+        }
         syncCollaborationControls();
         hideFormError('room-form-error');
         toast(t('agent.catalogRefreshed'), '', 'success');
@@ -2830,6 +3059,12 @@
       }
     });
   });
+  $('room-pair-profile').addEventListener('change', () => {
+    try { applyPairProfile($('room-pair-profile').value); hideFormError('room-form-error'); }
+    catch (error) { showFormError('room-form-error', error.message); }
+  });
+  $('pair-profile-save-new').addEventListener('click', () => saveCurrentPairProfile(false));
+  $('pair-profile-update').addEventListener('click', () => saveCurrentPairProfile(true));
   $('room-project-id').addEventListener('change', () => {
     const project = state.snapshot?.projects?.find((item) => item.id === $('room-project-id').value);
     setRenderedText('room-dialog-title', t("ui.createRoomInValue", { value0: (projectName(project)) }));
@@ -2985,7 +3220,11 @@
     closeRoomContextMenu();
     if (window.PairRoomI18n) window.PairRoomI18n.apply(document);
     render();
-    if ($('room-dialog').open) syncCollaborationControls();
+    if ($('room-dialog').open) {
+      syncCollaborationControls();
+      syncPairProfileDialogLabels();
+      if (state.pairProfileReady && !state.pairProfileBusy) populatePairProfilePicker(state.pairProfileID);
+    }
   });
   scheduleRefresh();
   renderLoading();

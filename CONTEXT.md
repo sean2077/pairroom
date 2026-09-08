@@ -25,6 +25,10 @@ _Equivalent (zh-CN)_: 执行者
 A participant's effective native-tool policy selection, separate from collaboration responsibility.
 _Equivalent (zh-CN)_: 权限配置
 
+**Agent pair profile**:
+A named, reusable template for the two Agent slots' Runtime and native configuration overrides, optionally selected as the Service default for new Rooms.
+_Equivalent (zh-CN)_: Agent 组合配置
+
 ## Language
 
 **Participant slot**:

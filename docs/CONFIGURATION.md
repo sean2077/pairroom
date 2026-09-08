@@ -38,6 +38,16 @@ Recommendations:
 - After changing an executable or Provider, run Mock first, then a real read-only Turn;
 - Keep Grok Build prompt and instruction text out of process argv. PairRoom uses the long-lived ACP stdio protocol, projects new-session collaboration rules through `_meta.rules`, and injects a bootstrap once when exactly loading an existing session.
 
+## Agent pair profiles
+
+An **Agent pair profile** saves a named pair of Agent selections across Projects in the same Management Service. In **Settings → Agent pair profiles**, create, edit/rename, delete, or set/clear the default. Profile editing also works before registering a Project. In **Create Room**, select a profile or use **Service defaults (no profile)**; **Save or update this pair** saves the current controls as a new profile or explicitly updates the selected one. The shared browser and Desktop Management UI use the same storage and API.
+
+A profile includes each slot's Runtime/harness, Provider reference, model, effort, additional instructions, and applicable permission/approval/sandbox overrides. Both slots may use the same Runtime. Empty overrides retain native inheritance; no resolved global model, credential, command, or Runtime arguments are captured. Do not put secrets in names or instructions. Profiles do not save Projects, paths, Room names, session IDs/Bindings, or collaboration modes. A pair profile is distinct from a CC Switch Provider Profile and from a Room participant's Permission profile.
+
+New Room forms fill the saved default automatically. Selecting a profile only fills the controls: changes are temporary unless explicitly saved. Room creation copies the final pair into the immutable Room selections and revalidates Provider references. Editing, renaming, or deleting a profile never changes existing Rooms. Deleting the default clears it rather than arbitrarily choosing another profile; with no default, new Rooms use Service defaults. A missing Provider stays visible and blocks creation rather than silently falling back; saved profiles remain editable while a Provider is unavailable.
+
+Profiles are Service user configuration in `<service data root>/agent-pair-profiles.json`, not fields in the startup JSON file and not browser local storage. The file survives restart and Registry-index rebuild. Different Service data roots have independent profiles; the legacy standalone `pairroom serve` does not read them. Up to 100 names are accepted, unique case-insensitively, non-blank, at most 160 UTF-8 bytes and without control characters. Use the [Management API](API_REFERENCE.md#agent-pair-profiles) for programmatic management.
+
 ## CC Switch Provider references
 
 PairRoom supports CC Switch v3.20.1/schema 18 through the CGo-free `modernc.org/sqlite` driver. It opens `~/.cc-switch/cc-switch.db` in SQLite read-only/query-only mode; `cc_switch.database` may override it only with an absolute path. PairRoom does not create or update this database, change `is_current`, manage Providers, or write live CLI configuration.

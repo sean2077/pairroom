@@ -5,6 +5,7 @@
 | Kind | Examples | After restart |
 |---|---|---|
 | Durable | Room metadata, Message, FIFO delivery / processing projection, collaboration instructions, permission profile (legacy role), Turn summary, resolved approval, Binding, attachment metadata | Replayed from the Event Log / registry |
+| User configuration | Named Agent pairs and default ID | Read from `agent-pair-profiles.json` under the Service data root, independently of Registry-index rebuild |
 | Ephemeral | native process, current stdout connection, vendor request ID, active owner, transient text delta | Not restored |
 
 Room-owned FIFO entries are persistent only while PairRoom can prove they did not cross the native submission boundary. Any input that may already have produced side effects without a confirmed ownership result is not executed again automatically.
@@ -45,6 +46,8 @@ Stop or archive the related Room before backup, so “the files were copied” i
 - that the Room schema is exactly supported by the current release.
 
 Restoring a current-schema backup may restart Room-owned FIFO entries that never crossed the native submission boundary. Accepted or uncertain native work is never replayed automatically.
+
+Agent pair profiles are not part of a Room backup or restore. Preserve the Service's `agent-pair-profiles.json` separately when migrating its user configuration. Writes use a private temporary file, file sync, rename, and directory sync where supported. Reads reject non-regular/symlinked files, oversized data, unknown schemas/fields, invalid pairs, and dangling defaults; profile operations fail closed without replacing the damaged file. Copy it before repair. Explicit full Room selections remain independent of profile-file health.
 
 ## Corruption handling
 

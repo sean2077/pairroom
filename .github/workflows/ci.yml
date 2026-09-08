@@ -49,6 +49,8 @@ jobs:
         run: go test -count=1 ./internal/config ./internal/store ./internal/bus ./internal/daemon
       - name: Test per-process environment and credential boundaries
         run: go test -count=1 ./internal/agent -run 'Test(Redactor|RuntimeEnvironment)'
+      - name: Test Agent pair profile persistence and API boundaries
+        run: go test -count=1 ./internal/service -run 'Test(AgentPairProfile|ManagementAgentPairProfile)'
 
   browser:
     name: Room and Management browser behavior and layout

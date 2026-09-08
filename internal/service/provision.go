@@ -51,6 +51,15 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 	// A nil map represents the omitted JSON field and snapshots the current
 	// Service defaults. A non-nil empty/partial map is an explicit submission
 	// and must fail closed rather than silently filling one missing slot.
+	if request.Agents != nil && request.AgentPairProfileID != "" {
+		return Room{}, errors.New("provide agents or agent_pair_profile_id, not both")
+	}
+	if request.Agents == nil {
+		request.Agents, err = r.agentPairProfileSelections(request.AgentPairProfileID)
+		if err != nil {
+			return Room{}, err
+		}
+	}
 	if request.Agents == nil {
 		if defaults, ok := provisioner.(defaultAgentSelectionProvider); ok {
 			request.Agents = defaults.DefaultSelections()

@@ -17,7 +17,7 @@ The Management API owns Project and Room registration, immutable per-Room Agent 
 
 `GET /api/v1/agent-catalog` and `POST /api/v1/agent-catalog/refresh` return all three Runtime entries with availability diagnostics, sanitized CC Switch Profile summaries, local model suggestions, disabled reasons, the current two Service defaults, and canonical `collaboration_default` instructions for the creation preview. The response never contains raw Profile configuration, endpoints, headers, tokens, API keys, or Runtime arguments. Refresh is explicit, and Room creation still re-resolves the selected Profile server-side instead of trusting the catalog returned to the browser.
 
-`POST /api/v1/projects/{project}/rooms` accepts an optional `name` and complete two-slot `bindings` map plus an optional complete `agents` map keyed by historical ActorIDs `claude` and `codex`. Omitting `agents` snapshots both current Service defaults. Sending only one slot is rejected. A selection has this shape:
+`POST /api/v1/projects/{project}/rooms` accepts an optional `name` and complete two-slot `bindings` map plus an optional complete `agents` map keyed by historical ActorIDs `claude` and `codex`. Omitting `agents` snapshots the saved default Agent pair profile, falling back to both current Service defaults only when no default profile exists. An optional `agent_pair_profile_id` explicitly selects a saved pair. Supplying both a non-empty profile ID and `agents` is rejected, as are missing profile IDs and partial/null `agents`. A complete explicit `agents` map bypasses the saved default; this is how the browser sends temporary overrides. A selection has this shape:
 
 ```json
 {
@@ -33,6 +33,30 @@ The Management API owns Project and Room registration, immutable per-Room Agent 
 ```
 
 The created Room returns the immutable `agents` map. There is no Agent-reconfiguration endpoint. Schema-v1 Rooms instead return `legacy_defaults: true` and no `agents` map.
+
+## Agent pair profiles
+
+All routes use the existing Management bearer or browser-session/CSRF boundary. They operate on Service-scoped templates, not native CC Switch Profiles or existing Rooms.
+
+| Method/path | Request and result |
+|---|---|
+| `GET /api/v1/agent-pair-profiles` | Read the catalog, including the optional default ID |
+| `POST /api/v1/agent-pair-profiles` | Create `{name, agents, is_default}`; return the updated catalog with HTTP 201 |
+| `PUT /api/v1/agent-pair-profiles/{profile}` | Replace the named profile's `{name, agents, is_default}`; preserve its ID; return catalog with HTTP 200 |
+| `PATCH /api/v1/agent-pair-profiles/default` | Set `{"profile_id":"pair-id"}` or explicitly clear with `{"profile_id":""}`; return catalog |
+| `DELETE /api/v1/agent-pair-profiles/{profile}` | Delete; also clear the default if it referenced this profile; return catalog |
+
+The catalog shape is `{"schema":1,"default_profile_id":"","profiles":[{"id":"pair-id","name":"Daily pair","agents":{"claude":{...},"codex":{...}}}]}`. `agents` is the same complete two-slot `AgentSelection` map used for Room creation. POST/PUT require a name and both selections; `is_default` defaults to false and replaces that profile's default status, including clearing it on PUT. Names are trimmed, non-blank, case-insensitively unique, and limited to 160 UTF-8 bytes without control characters. The catalog allows up to 100 profiles.
+
+Saving validates the selection structure without materializing Providers or probing native sessions. Removed/offline Provider references can be retained and repaired; creation and activation still perform their existing Provider validation. Unknown fields, including credentials, command configuration, Bindings, and collaboration, are rejected. No native credential material is stored or returned. Missing profile IDs return 404; duplicate names/capacity return 409; invalid input returns 400; unreadable/corrupt/unsupported profile storage returns 503 rather than being overwritten or silently ignored. Profile changes do not write Room events or reconfigure existing Rooms.
+
+To create a Room using a saved pair, omit `agents` and include:
+
+```json
+{"agent_pair_profile_id":"pair-id","bindings":{"claude":{"mode":"new"},"codex":{"mode":"new"}}}
+```
+
+Omit both `agents` and `agent_pair_profile_id` to use the saved default or Service defaults. Explicit full `agents` always wins by being the only selection source; do not send a profile ID alongside it. Profile contents are copied once, not linked to the Room.
 
 ## Room names and native session correspondence
 
@@ -115,11 +139,13 @@ The following method/path patterns are extracted from production HTTP registrati
 
 - `/api/v1/rooms/{room}/surface`
 - `/api/v1/rooms/{room}/surface/{path...}`
+- `DELETE /api/v1/agent-pair-profiles/{profile}`
 - `DELETE /api/v1/attachments/{id}`
 - `DELETE /api/v1/projects/{project}`
 - `DELETE /api/v1/rooms/{room}`
 - `DELETE /api/v1/session`
 - `GET /api/v1/agent-catalog`
+- `GET /api/v1/agent-pair-profiles`
 - `GET /api/v1/attachments/{id}`
 - `GET /api/v1/events`
 - `GET /api/v1/export`
@@ -130,9 +156,11 @@ The following method/path patterns are extracted from production HTTP registrati
 - `GET /api/v1/service`
 - `GET /api/v1/session`
 - `GET /api/v1/snapshot`
+- `PATCH /api/v1/agent-pair-profiles/default`
 - `PATCH /api/v1/rooms/{room}`
 - `PATCH /api/v1/runtime-policy`
 - `POST /api/v1/agent-catalog/refresh`
+- `POST /api/v1/agent-pair-profiles`
 - `POST /api/v1/approvals/{id}`
 - `POST /api/v1/attachments`
 - `POST /api/v1/import`
@@ -153,6 +181,7 @@ The following method/path patterns are extracted from production HTTP registrati
 - `POST /api/v1/rooms/{room}/restore`
 - `POST /api/v1/rooms/{room}/suspend`
 - `POST /api/v1/session`
+- `PUT /api/v1/agent-pair-profiles/{profile}`
 - `PUT /api/v1/participants/{actor}/permissions`
 - `PUT /api/v1/settings`
 </details>
