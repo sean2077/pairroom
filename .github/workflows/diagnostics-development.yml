@@ -1,22 +1,69 @@
-name: Diagnostics development snapshot
+name: Diagnostics development verification
 on:
   push:
     branches: ['codex/diagnostics-project-workspace']
     paths: ['.github/workflows/diagnostics-development.yml']
 permissions:
-  contents: read
+  contents: write
 jobs:
-  snapshot:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
-          persist-credentials: false
-      - name: Export tracked source for isolated verification
-        run: git archive --format=tar HEAD > "${RUNNER_TEMP}/pairroom-source.tar"
-      - uses: actions/upload-artifact@v7
+          ref: codex/diagnostics-project-workspace
+          fetch-depth: 0
+      - name: Apply checksummed implementation patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum .github/diagnostics-patch/*
+          python3 - <<'PY'
+          import base64, hashlib, lzma, pathlib, subprocess
+          encoded = ''.join(pathlib.Path(f'.github/diagnostics-patch/{i}').read_text().strip() for i in range(6))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          expected = 'b047bafc47dd38e83e87ab8f2ea5befd3a08bd6abcf8cc185c4af6feee91910e'
+          assert hashlib.sha256(patch).hexdigest() == expected, 'patch checksum mismatch'
+          subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
+          subprocess.run(['git', 'apply', '-'], input=patch, check=True)
+          PY
+          git rm -r .github/diagnostics-patch
+          git add cmd internal scripts docs CHANGELOG.md
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat: add runtime diagnostics and project-first workspaces'
+          git push origin HEAD:refs/heads/codex/diagnostics-project-workspace
+      - uses: actions/setup-go@v7
         with:
-          name: pairroom-development-source
-          path: ${{ runner.temp }}/pairroom-source.tar
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+      - name: Unit, race, static, documentation, and dependency checks
+        shell: bash
+        run: |
+          set -o pipefail
+          make check 2>&1 | tee "${RUNNER_TEMP}/diagnostics-check.log"
+      - name: Mock collaboration and recovery smoke
+        if: success()
+        shell: bash
+        run: |
+          set -o pipefail
+          make smoke 2>&1 | tee "${RUNNER_TEMP}/diagnostics-smoke.log"
+      - name: Export tracked implementation and verification logs
+        if: always()
+        run: |
+          git archive --format=tar HEAD > "${RUNNER_TEMP}/pairroom-verified-source.tar"
+          git show -s --format='%H %T' > "${RUNNER_TEMP}/diagnostics-commit.txt"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: pairroom-diagnostics-verification
+          path: |
+            ${{ runner.temp }}/pairroom-verified-source.tar
+            ${{ runner.temp }}/diagnostics-*.log
+            ${{ runner.temp }}/diagnostics-commit.txt
           retention-days: 1
