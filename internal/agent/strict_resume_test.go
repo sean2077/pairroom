@@ -226,7 +226,7 @@ func runGrokACPHelper(args []string) int {
 			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{
 				"protocolVersion": 1,
 				"agentCapabilities": map[string]any{
-					"loadSession": true, "promptCapabilities": map[string]any{"image": true},
+					"loadSession": true, "promptCapabilities": map[string]any{"image": os.Getenv("PAIRROOM_GROK_HELPER_NO_IMAGES") != "1"},
 					"sessionCapabilities": map[string]any{"close": map[string]any{}},
 				},
 				"authMethods": []any{},
