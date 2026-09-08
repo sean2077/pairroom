@@ -541,7 +541,7 @@
     // Polling may rebuild the tree while a keyboard user is navigating it.
     // Restore stable control identity without scrolling the sidebar sideways.
     const focused = tree.contains(document.activeElement) ? document.activeElement : null;
-    const focusAttribute = ['data-order-key', 'aria-controls', 'href', 'data-room-id'].find((attribute) => focused?.hasAttribute(attribute));
+    const focusAttribute = ['aria-controls', 'href', 'data-room-id'].find((attribute) => focused?.hasAttribute(attribute));
     const focusSelector = focusAttribute ? `[${focusAttribute}="${CSS.escape(focused.getAttribute(focusAttribute))}"]` : '';
     const scrollTop = tree.scrollTop;
     tree.replaceChildren(...models.map((model) => {
@@ -969,7 +969,7 @@
         !project.available && state.snapshot?.capabilities?.project_refresh ? actionButton(t('ui.recheck'), () => refreshProject(project), 'secondary-button compact-button') : null,
         actionButton(t('ui.details'), () => navigate(`#/projects/${encodeURIComponent(project.id)}`), 'secondary-button compact-button'),
         actionButton(t('room.addRoom'), () => openRoomDialog(project.id), 'primary-button compact-button', !project.available))
-    ), 'project', project.id, heading);
+    ), 'project', project.id);
   }
 
   function renderProjectDetail(projectID) {

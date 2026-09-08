@@ -21,8 +21,9 @@
       const room = snapshot.rooms?.find((item) => item.id === id);
       return ordered((snapshot.rooms || []).filter((item) => item.project_id === room?.project_id && item.lifecycle === room?.lifecycle), snapshot.navigation_order?.rooms?.[room?.project_id]);
     }
-    function controlSelector(kind, id) {
-      return `[data-order-kind="${kind}"][data-order-id="${CSS.escape(id)}"] .order-handle`;
+    const FOCUSABLE = 'a[href],button:not([disabled]),input,select,textarea,[tabindex]:not([tabindex="-1"])';
+    function rowSelector(kind, id) {
+      return `[data-order-kind="${kind}"][data-order-id="${CSS.escape(id)}"]`;
     }
     async function move(kind, id, targetID, position, scope) {
       if (saving || !targetID || id === targetID) return;
@@ -30,7 +31,7 @@
       saving = true;
       const current = isCurrent();
       announce(t('workspace.ordering.saving'));
-      document.querySelectorAll('.order-handle').forEach((button) => { button.disabled = true; });
+      document.querySelectorAll('[data-order-kind]').forEach((row) => { row.classList.add('order-saving'); });
       try {
         await api('/api/v1/navigation-order', { method: 'PATCH', body: JSON.stringify({ kind, id, target_id: targetID, position }) });
         if (!current()) return;
@@ -47,9 +48,19 @@
       } finally {
         saving = false;
         if (current()) {
-          const focusHere = document.activeElement === document.body || document.activeElement?.classList.contains('order-handle');
+          document.querySelectorAll('[data-order-kind]').forEach((row) => { row.classList.remove('order-saving'); });
+          // render() rebuilds the row, so remember which of its controls held
+          // focus and restore it; Alt+Arrow must work repeatedly.
+          const before = document.querySelector(`${scope} ${rowSelector(kind, id)}`);
+          const controls = before ? [...before.querySelectorAll(FOCUSABLE)] : [];
+          const held = controls.indexOf(document.activeElement);
+          const restore = held >= 0 ? held : document.activeElement === document.body ? 0 : -1;
           render();
-          if (focusHere) document.querySelector(`${scope} ${controlSelector(kind, id)}`)?.focus({ preventScroll: true });
+          if (restore >= 0) {
+            const after = document.querySelector(`${scope} ${rowSelector(kind, id)}`);
+            const next = after ? [...after.querySelectorAll(FOCUSABLE)] : [];
+            next[Math.min(restore, next.length - 1)]?.focus({ preventScroll: true });
+          }
         }
       }
     }
@@ -60,23 +71,21 @@
     }
     function closeMenu() {
       if (!menu) return;
-      menu.button.setAttribute('aria-expanded', 'false');
       menu.row.classList.remove('order-menu-open');
       menu.element.remove();
       menu = null;
     }
-    function openMenu(button, row, kind, id, scope) {
-      if (menu?.button === button) { closeMenu(); return; }
+    function openMenu(row, kind, id, scope) {
+      if (menu?.row === row) { closeMenu(); return; }
       closeMenu();
       const list = items(kind, id), index = list.findIndex((item) => item.id === id);
       const element = node('div', { className: 'order-menu', role: 'group', 'aria-label': t('workspace.ordering.actions') },
         node('button', { type: 'button', textContent: t('workspace.ordering.up'), disabled: index <= 0, onClick: () => step(kind, id, -1, scope) }),
         node('button', { type: 'button', textContent: t('workspace.ordering.down'), disabled: index < 0 || index === list.length - 1, onClick: () => step(kind, id, 1, scope) })
       );
-      button.setAttribute('aria-expanded', 'true');
       row.append(element);
       row.classList.add('order-menu-open');
-      menu = { button, element, row };
+      menu = { element, row };
       const boundary = row.closest('#room-tree')?.getBoundingClientRect().bottom || innerHeight;
       if (element.getBoundingClientRect().bottom > Math.min(innerHeight, boundary)) element.classList.add('order-menu-above');
       element.querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
@@ -111,9 +120,9 @@
       clearTarget();
       gesture = null;
       cancelAnimationFrame(scrollFrame);
-      old.row.classList.remove('order-dragging');
+      old.row.classList.remove('order-dragging', 'order-holding');
       document.body.classList.remove('navigation-dragging');
-      if (old.button.hasPointerCapture(old.pointerID)) old.button.releasePointerCapture(old.pointerID);
+      if (old.row.hasPointerCapture(old.pointerID)) old.row.releasePointerCapture(old.pointerID);
       return old;
     }
     function cancel() {
@@ -121,70 +130,98 @@
       if (old?.dragging) announce(t('workspace.ordering.cancelled'));
       closeMenu();
     }
-    function decorate(row, kind, id, handleHost = row) {
+    function startDragging(gesture) {
+      if (gesture.dragging) return;
+      gesture.dragging = true;
+      gesture.row.classList.remove('order-holding');
+      gesture.row.classList.add('order-dragging');
+      document.body.classList.add('navigation-dragging');
+      // Capture only once the gesture commits: capturing at pointerdown would
+      // retarget the press/release sequence to the row and eat child clicks.
+      try { gesture.row.setPointerCapture(gesture.pointerID); } catch { /* pointer already released */ }
+      announce(t('workspace.ordering.help'));
+      autoScroll();
+    }
+    // Drag affordance is the whole row. Interactive children stay clickable
+    // because only a 6px move commits the gesture; a press that never moves is
+    // a plain click, however long it is held.
+    function decorate(row, kind, id) {
       const snapshot = getSnapshot();
       if (!snapshot?.navigation_order) return row;
       const item = (kind === 'project' ? snapshot.projects : snapshot.rooms)?.find((value) => value.id === id);
       if (!item) return row;
+      const sortable = !(snapshot.navigation_order_error || items(kind, id).length < 2);
       row.dataset.orderKind = kind;
       row.dataset.orderId = id;
       row.dataset.orderGroup = kind === 'project' ? 'projects' : `${item.project_id}/${item.lifecycle}`;
-      const name = item.name || item.root?.split(/[\\/]/).filter(Boolean).pop() || id;
-      const button = node('button', { type: 'button', className: 'order-handle', textContent: '⠿',
-        'data-order-key': `${kind}:${id}`, title: t('workspace.ordering.help'), 'aria-label': t('workspace.ordering.label', { name }), 'aria-expanded': 'false',
-        disabled: saving || snapshot.navigation_order_error || items(kind, id).length < 2 });
+      if (saving) row.classList.add('order-saving');
+      if (!sortable) return row;
+      row.title = t('workspace.ordering.help');
       const scope = () => row.closest('#room-tree') ? '#room-tree' : '#view';
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        if (suppressClick) { suppressClick = false; return; }
-        if (!saving) openMenu(button, row, kind, id, scope());
+      row.addEventListener('contextmenu', (event) => {
+        if (saving) return;
+        event.preventDefault(); event.stopPropagation();
+        openMenu(row, kind, id, scope());
       });
-      button.addEventListener('keydown', (event) => {
-        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-          event.preventDefault(); event.stopPropagation();
-          step(kind, id, event.key === 'ArrowUp' ? -1 : 1, scope());
-        }
+      // Keyboard parity without an extra tab stop: Alt+Arrow moves the row that
+      // currently holds focus, matching the right-click move menu.
+      row.addEventListener('keydown', (event) => {
+        if (saving || !event.altKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return;
+        if (!row.contains(document.activeElement)) return;
+        event.preventDefault(); event.stopPropagation();
+        step(kind, id, event.key === 'ArrowUp' ? -1 : 1, scope());
       });
-      button.addEventListener('pointerdown', (event) => {
-        if (saving || gesture || event.button !== 0 || event.isPrimary === false) return;
+      row.addEventListener('pointerdown', (event) => {
+        // A press inside the open move menu belongs to the menu: starting (or
+        // cancelling) a gesture here would detach the button before its click.
+        if (menu?.element.contains(event.target)) return;
+        // A second press while a gesture is held cancels it (native text
+        // selection or an out-of-row release both look like this on a row).
+        if (gesture?.pointerID !== event.pointerId) cancel();
+        // Touch keeps native list scrolling; a long press opens the move menu.
+        if (saving || gesture || event.button !== 0 || event.isPrimary === false || event.pointerType === 'touch') return;
         closeMenu(); suppressClick = false;
         let scroll = row.parentElement;
         while (scroll && !/(auto|scroll)/.test(getComputedStyle(scroll).overflowY)) scroll = scroll.parentElement;
-        gesture = { row, button, kind, id, scope: scope(), pointerID: event.pointerId, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, scroll: scroll || document.scrollingElement, dragging: false, target: null };
-        button.setPointerCapture(event.pointerId);
+        gesture = { row, kind, id, scope: scope(), pointerID: event.pointerId, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, scroll: scroll || document.scrollingElement, dragging: false, target: null };
+        row.classList.add('order-holding');
       });
-      button.addEventListener('pointermove', (event) => {
-        if (!gesture || gesture.pointerID !== event.pointerId) return;
-        gesture.x = event.clientX; gesture.y = event.clientY;
-        if (!gesture.dragging && Math.hypot(gesture.x - gesture.startX, gesture.y - gesture.startY) >= 6) {
-          gesture.dragging = true;
-          row.classList.add('order-dragging');
-          document.body.classList.add('navigation-dragging');
-          announce(t('workspace.ordering.help'));
-          autoScroll();
-        }
-        if (gesture.dragging) { event.preventDefault(); targetAtPointer(); }
-      });
-      button.addEventListener('pointerup', (event) => {
-        if (!gesture || gesture.pointerID !== event.pointerId) return;
-        const targetID = gesture.target?.dataset.orderId, position = gesture.position;
-        const old = stopGesture();
-        if (old.dragging) {
-          event.preventDefault(); suppressClick = true;
-          if (targetID) void move(kind, id, targetID, position, old.scope);
-          else { announce(t('workspace.ordering.cancelled')); render(); }
-        }
-      });
-      button.addEventListener('pointercancel', cancel);
-      button.addEventListener('lostpointercapture', () => { if (gesture?.button === button) cancel(); });
-      handleHost.prepend(button);
       return row;
     }
-    document.addEventListener('pointerdown', (event) => { if (menu && !menu.element.contains(event.target) && menu.button !== event.target) closeMenu(); });
+    // Move/release are tracked document-wide: the pointer may leave the row
+    // before the 6px threshold, and capture only starts once dragging commits.
+    document.addEventListener('pointermove', (event) => {
+      if (!gesture || gesture.pointerID !== event.pointerId) return;
+      gesture.x = event.clientX; gesture.y = event.clientY;
+      if (!gesture.dragging && Math.hypot(gesture.x - gesture.startX, gesture.y - gesture.startY) >= 6) startDragging(gesture);
+      if (gesture.dragging) { event.preventDefault(); targetAtPointer(); }
+    });
+    document.addEventListener('pointerup', (event) => {
+      if (!gesture || gesture.pointerID !== event.pointerId) return;
+      const { kind, id, scope } = gesture;
+      const targetID = gesture.target?.dataset.orderId, position = gesture.position;
+      const old = stopGesture();
+      if (old.dragging) {
+        event.preventDefault(); suppressClick = true;
+        if (targetID) void move(kind, id, targetID, position, scope);
+        else { announce(t('workspace.ordering.cancelled')); render(); }
+      }
+    });
+    document.addEventListener('click', (event) => {
+      if (!suppressClick) return;
+      suppressClick = false;
+      event.preventDefault(); event.stopPropagation();
+    }, true);
+    document.addEventListener('pointercancel', cancel);
+    document.addEventListener('lostpointercapture', () => { if (gesture && !gesture.row.hasPointerCapture(gesture.pointerID)) cancel(); });
+    document.addEventListener('pointerdown', (event) => {
+      // Never let a stale drag flag eat an unrelated later click.
+      suppressClick = false;
+      if (menu && !menu.element.contains(event.target) && !menu.row.contains(event.target)) closeMenu();
+    });
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape' && (gesture || menu)) {
-        const button = gesture?.button || menu?.button;
-        event.preventDefault(); cancel(); button?.focus({ preventScroll: true });
+        event.preventDefault(); cancel();
       }
     });
     window.addEventListener('blur', cancel);
