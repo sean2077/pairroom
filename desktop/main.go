@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -392,35 +393,109 @@ func main() {
 	tray := app.SystemTray.New()
 	tray.SetIcon(applicationIcon)
 	tray.SetTooltip("PairRoom")
-	menu := app.NewMenu()
-	menu.Add("Open PairRoom").OnClick(func(*application.Context) {
+
+	var statusMu sync.Mutex
+	statusText := "Service: starting…"
+	setServiceStatus := func(text string) {
+		statusMu.Lock()
+		statusText = text
+		statusMu.Unlock()
+	}
+	// Declared before the menu actions that trigger it; assigned once the tray
+	// items exist.
+	var syncTray func()
+	showWindow := func() {
 		window.Restore()
 		window.Show()
 		window.Focus()
 		if startDesktop != nil {
 			startDesktop()
 		}
+	}
+	currentHost := func() *host.Host {
+		controller.hostMu.Lock()
+		defer controller.hostMu.Unlock()
+		return controller.host
+	}
+
+	menu := app.NewMenu()
+	menu.Add("Open PairRoom").OnClick(func(*application.Context) { showWindow() })
+	openBrowserItem := menu.Add("Open Management in Browser").OnClick(func(*application.Context) {
+		target := currentHost().BrowserURL()
+		if target == "" {
+			return
+		}
+		if err := openBrowser(target); err != nil {
+			app.Logger.Error("could not open the Management Shell in the default browser", "error", err)
+		}
 	})
+	menu.AddSeparator()
+	statusItem := menu.Add(statusText).SetEnabled(false)
+	restartItem := menu.Add("Restart Service").
+		SetTooltip("Drains active Turns and restarts the Service this Desktop owns. An installed daemon is restarted with `pairroom daemon restart`.").
+		OnClick(func(*application.Context) {
+			controller.hostMu.Lock()
+			value := controller.host
+			embedded := value.Mode() == host.ModeEmbedded
+			if embedded {
+				controller.host = nil
+			}
+			controller.hostMu.Unlock()
+			if !embedded {
+				return
+			}
+			setServiceStatus("Service: restarting…")
+			syncTray()
+			go func() {
+				drainCtx, cancel := context.WithTimeout(context.Background(), desktopShutdownTimeout)
+				err := value.Shutdown(drainCtx)
+				cancel()
+				if err != nil {
+					app.Logger.Error("embedded Service did not drain cleanly before tray restart", "error", err)
+				}
+				if startDesktop != nil {
+					startDesktop()
+				}
+			}()
+		})
+	dataFolderItem := menu.Add("Open Service Data Folder").OnClick(func(*application.Context) {
+		root := currentHost().DataRoot()
+		if root == "" {
+			return
+		}
+		if err := openLocalFolder(root); err != nil {
+			app.Logger.Error("could not open the Service data folder", "error", err)
+		}
+	})
+	menu.AddSeparator()
 	menu.Add("Quit PairRoom").OnClick(func(*application.Context) {
 		requestQuit(app, controller)
 	})
 	tray.SetMenu(menu)
-	tray.OnClick(func() {
-		window.Restore()
-		window.Show()
-		window.Focus()
-		if startDesktop != nil {
-			startDesktop()
+
+	// The tray mirrors Service ownership: disabled actions stay honest about
+	// what this Desktop process may control.
+	syncTray = func() {
+		value := currentHost()
+		statusMu.Lock()
+		text := statusText
+		statusMu.Unlock()
+		if value != nil {
+			text = "Service: embedded in Desktop"
+			if value.Mode() == host.ModeExternal {
+				text = "Service: installed daemon"
+			}
 		}
-	})
+		statusItem.SetLabel(text)
+		openBrowserItem.SetEnabled(value.BrowserURL() != "")
+		restartItem.SetEnabled(value.Mode() == host.ModeEmbedded)
+		dataFolderItem.SetEnabled(value.DataRoot() != "")
+	}
+	syncTray()
+	tray.OnClick(showWindow)
 
 	app.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(*application.ApplicationEvent) {
-		window.Restore()
-		window.Show()
-		window.Focus()
-		if startDesktop != nil {
-			startDesktop()
-		}
+		showWindow()
 	})
 	startDesktop = func() {
 		startCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -432,9 +507,12 @@ func main() {
 			},
 			func(value *host.Host) {
 				windowGate.submit(func() { navigateWindow(window, value.URL()) })
+				syncTray()
 			},
 			func(err error) {
 				windowGate.submit(func() { showStartupError(window, err) })
+				setServiceStatus("Service: unavailable")
+				syncTray()
 			},
 		)
 	}
@@ -472,6 +550,20 @@ func requestQuit(app *application.App, controller *desktopController) {
 		}
 		app.Quit()
 	}()
+}
+
+// openLocalFolder reveals a Service data directory with the platform file
+// manager. The path comes from local Service state, never from web content, and
+// is passed as a single argument so no shell interpretation is involved.
+func openLocalFolder(path string) error {
+	switch runtime.GOOS {
+	case "windows":
+		return exec.Command("explorer", path).Start()
+	case "darwin":
+		return exec.Command("open", path).Start()
+	default:
+		return exec.Command("xdg-open", path).Start()
+	}
 }
 
 func navigateWindow(window *application.WebviewWindow, value string) {

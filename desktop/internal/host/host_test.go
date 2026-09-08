@@ -79,6 +79,12 @@ func TestEmbeddedHostOwnsOneDataRootAndShutsDown(t *testing.T) {
 	if first.Mode() != ModeEmbedded || !strings.Contains(first.URL(), "?desktop=1#token=") {
 		t.Fatalf("unexpected embedded host: mode=%q url=%q", first.Mode(), first.URL())
 	}
+	if got := filepath.Clean(first.DataRoot()); got != filepath.Clean(root) {
+		t.Fatalf("embedded data root = %q, want %q", got, root)
+	}
+	if first.BrowserURL() == "" || strings.Contains(first.BrowserURL(), "desktop=1") || !strings.Contains(first.BrowserURL(), "#token=") {
+		t.Fatalf("embedded browser URL = %q, want token fragment without the desktop marker", first.BrowserURL())
+	}
 
 	if _, err := Start(ctx, Options{
 		DataRoot:                 root,
@@ -163,6 +169,12 @@ func TestStartStartsInstalledDaemonInsteadOfStartingEmbeddedCompetitor(t *testin
 	}
 	if host.Mode() != ModeExternal || manager.started != 1 {
 		t.Fatalf("host mode=%q daemon starts=%d", host.Mode(), manager.started)
+	}
+	if got := filepath.Clean(host.DataRoot()); got != filepath.Clean(dataRoot) {
+		t.Fatalf("external host data root = %q, want daemon root %q", got, dataRoot)
+	}
+	if host.BrowserURL() == "" || strings.Contains(host.BrowserURL(), "desktop=1") {
+		t.Fatalf("external host browser URL = %q, want authenticated URL without the desktop marker", host.BrowserURL())
 	}
 }
 

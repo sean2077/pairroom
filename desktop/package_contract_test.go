@@ -58,3 +58,32 @@ func TestWindowsInstallerShipsPairroomCLI(t *testing.T) {
 		t.Fatal("Windows desktop release files must use -setup.exe so they are not confused with the CLI .exe")
 	}
 }
+
+func TestTrayMenuExposesServiceControls(t *testing.T) {
+	text, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(text)
+	for _, label := range []string{
+		"Open PairRoom",
+		"Open Management in Browser",
+		"Restart Service",
+		"Open Service Data Folder",
+		"Quit PairRoom",
+	} {
+		if !strings.Contains(source, `menu.Add("`+label+`")`) {
+			t.Fatalf("tray menu must offer %q", label)
+		}
+	}
+	// Restarting from the tray may only touch the Service this Desktop owns; an
+	// installed daemon stays under `pairroom daemon` control.
+	if !strings.Contains(source, "restartItem.SetEnabled(value.Mode() == host.ModeEmbedded)") {
+		t.Fatal("tray Restart Service must be enabled only for the embedded Service")
+	}
+	// Launch-at-login registration remains owned solely by the native Settings
+	// switch; the tray must not grow a second autostart control.
+	if strings.Contains(source, "AddCheckbox") {
+		t.Fatal("tray menu must not add checkbox controls; autostart stays in native Settings")
+	}
+}
