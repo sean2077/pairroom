@@ -40,7 +40,9 @@ func TestManagementDiagnosticsBoundaries(t *testing.T) {
 		status       int
 	}{
 		{"POST", `{"mode":"environment"}`, false, 401},
-		{"GET", "", true, 405},
+		// Unregistered API methods reach the existing Management asset fallback.
+		{"GET", "", true, 404},
+		{"HEAD", "", true, 404},
 		{"POST", `{"mode":"runtime","actor":"claude"}`, true, 400},
 		{"POST", `{"mode":"runtime","actor":"invalid","confirm":true}`, true, 400},
 		{"POST", `{"mode":"unknown"}`, true, 400},
