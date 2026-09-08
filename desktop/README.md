@@ -101,6 +101,8 @@ an already-running Unix process continues using its previous binary until quit.
 
 On Windows, `wails3 task build` links a GUI-subsystem `bin/PairRoom.exe`, so launching it from Explorer does not open a log console. Use `wails3 task build CONSOLE=true` only when you need stdout attached to a terminal.
 
+Ctrl+click a web link in the Management Shell or a Room View to open it in the system default browser (Cmd+click also works on macOS). Download links retain their normal behavior.
+
 Run tests:
 
 ```bash
