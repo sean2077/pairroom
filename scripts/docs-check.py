@@ -1,31 +1,107 @@
 #!/usr/bin/env python3
+"""Check repository documentation without a network or Markdown dependency."""
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
+from html import unescape
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 CURATED = {
-    "README.md",
-    "GETTING_STARTED.md",
-    "CONCEPTS.md",
-    "CONFIGURATION.md",
-    "CLI_REFERENCE.md",
-    "API_REFERENCE.md",
-    "ARCHITECTURE.md",
-    "STORAGE.md",
-    "OPERATIONS.md",
-    "TROUBLESHOOTING.md",
-    "UPGRADING.md",
-    "PROTOCOL.md",
+    "README.md", "WHY_PAIRROOM.md", "ALTERNATIVES.md", "GETTING_STARTED.md",
+    "CONCEPTS.md", "CONFIGURATION.md", "CLI_REFERENCE.md", "API_REFERENCE.md",
+    "ARCHITECTURE.md", "STORAGE.md", "OPERATIONS.md", "TROUBLESHOOTING.md",
+    "UPGRADING.md", "PROTOCOL.md",
 }
 ERRORS: list[str] = []
 
 
 def error(message: str) -> None:
     ERRORS.append(message)
+
+
+def markdown_files(root: Path) -> list[Path]:
+    """Include tracked and new docs; ignore deleted files and build/worktree noise."""
+    if (root / ".git").exists():
+        result = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others",
+             "--exclude-standard", "--", "*.md"],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        paths = {root / name.decode("utf-8") for name in result.stdout.split(b"\0") if name}
+    else:
+        # Release source archives have no Git metadata. Do not traverse generated
+        # outputs or nested development environments in that case either.
+        excluded = {".git", ".worktrees", "node_modules", ".venv", ".browser-venv",
+                    ".browser-results", "__pycache__", "dist", "bin", "vendor"}
+        paths = {p for p in root.rglob("*.md")
+                 if not excluded.intersection(p.relative_to(root).parts)}
+    return sorted(p for p in paths if p.is_file() or p.is_symlink())
+
+
+def prose(text: str) -> str:
+    """Remove fenced examples and comments, not inline code inside link labels."""
+    lines: list[str] = []
+    fence = ""
+    size = 0
+    for line in text.splitlines():
+        match = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if match:
+            run, rest = match.groups()
+            if not fence:
+                fence, size = run[0], len(run)
+                continue
+            if run[0] == fence and len(run) >= size and not rest.strip():
+                fence = ""
+                continue
+        if not fence:
+            lines.append(line)
+    return re.sub(r"<!--.*?-->", "", "\n".join(lines), flags=re.S)
+
+
+def link_targets(text: str) -> list[str]:
+    """Local inline/reference links and Markdown/HTML images (not remote checks)."""
+    text = prose(text)
+    # Strip code spans before finding links so an example `[x](missing.md)`
+    # does not become a maintained link. Real link labels may contain code.
+    text = re.sub(r"(`+)(.+?)\1", "", text)
+    destination = r'(<[^>\n]+>|[^\s)]+)(?:\s+[\'\"][^\n]*?[\'\"])?'
+    targets = re.findall(r'!?\[[^\]\n]*\]\(\s*' + destination + r'\s*\)', text)
+    targets += re.findall(r'^ {0,3}\[[^\]\n]+\]:\s*(<[^>\n]+>|\S+)', text, re.M)
+    targets += [m[1] for m in re.findall(
+        r'<(?:img|a)\b[^>]*?\b(?:src|href)\s*=\s*([\'\"])(.*?)\1', text, re.I)]
+    return [unescape(target.strip("<>")) for target in targets]
+
+
+def check_links(path: Path, root: Path) -> list[str]:
+    failures: list[str] = []
+    label = path.relative_to(root)
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return [f"{label}: document symlink escapes repository"]
+    if not path.exists():
+        return [f"{label}: broken document symlink"]
+    for target in link_targets(path.read_text(encoding="utf-8")):
+        try:
+            parsed = urlsplit(target)
+        except ValueError:
+            failures.append(f"{label}: malformed link: {target}")
+            continue
+        if parsed.scheme or parsed.netloc or not parsed.path:
+            continue
+        resolved = (path.parent / unquote(parsed.path)).resolve()
+        try:
+            resolved.relative_to(root.resolve())
+        except ValueError:
+            failures.append(f"{label}: link escapes repository: {target}")
+            continue
+        if not resolved.exists():
+            failures.append(f"{label}: broken link or image: {target}")
+    return failures
 
 
 def extract_flags() -> list[str]:
@@ -37,12 +113,7 @@ def extract_flags() -> list[str]:
 
 
 def extract_routes(root: Path = ROOT) -> list[str]:
-    """Inventory registered production routes, not arbitrary URLs in tests.
-
-    Preserve Go 1.22 method and wildcard patterns. Resolve simple string
-    constants used in registrations; fail visibly if a new expression needs
-    support rather than silently dropping an API route from the contract.
-    """
+    """Inventory production registrations, retaining Go methods and wildcards."""
     sources = [source for base in (root / "internal/server", root / "internal/service")
                if base.exists() for source in base.rglob("*.go")
                if not source.name.endswith("_test.go")]
@@ -62,8 +133,7 @@ def extract_routes(root: Path = ROOT) -> list[str]:
                 else:
                     raise ValueError(f"{source.relative_to(root)}: unsupported route expression {expression!r}")
             pattern = "".join(parts)
-            path = pattern.split(" ")[-1]
-            if path.startswith(("/api/", "/events")):
+            if pattern.split(" ")[-1].startswith(("/api/", "/events")):
                 values.add(pattern)
     return sorted(values)
 
@@ -78,11 +148,9 @@ def extract_config_fields() -> list[str]:
 
 
 def generated_values(path: Path, marker: str, prefix: str = "") -> list[str]:
-    text = path.read_text(encoding="utf-8")
     match = re.search(
         rf'<!-- generated:{re.escape(marker)} -->(.*?)<!-- /generated:{re.escape(marker)} -->',
-        text,
-        flags=re.S,
+        path.read_text(encoding="utf-8"), flags=re.S,
     )
     if not match:
         error(f"{path.relative_to(ROOT)}: missing generated marker {marker}")
@@ -95,31 +163,18 @@ def main() -> None:
     actual_docs = {p.name for p in (ROOT / "docs").glob("*.md")}
     if actual_docs != CURATED:
         error(f"docs inventory differs: missing={sorted(CURATED-actual_docs)} unexpected={sorted(actual_docs-CURATED)}")
-
-    managed = [ROOT / "README.md", ROOT / "README.zh-CN.md", ROOT / "CONTRIBUTING.md", *(ROOT / "docs").glob("*.md")]
-    link_pattern = re.compile(r'(?<!!)\[[^\]]*\]\(([^)]+)\)')
+    managed = markdown_files(ROOT)
     for path in managed:
-        text = path.read_text(encoding="utf-8")
-        for raw in link_pattern.findall(text):
-            target = raw.strip().split()[0].strip("<>")
-            if not target or target.startswith(("http://", "https://", "mailto:", "#")):
-                continue
-            target = unquote(target.split("#", 1)[0])
-            resolved = (path.parent / target).resolve()
-            try:
-                resolved.relative_to(ROOT.resolve())
-            except ValueError:
-                error(f"{path.relative_to(ROOT)}: link escapes repository: {raw}")
-                continue
-            if not resolved.exists():
-                error(f"{path.relative_to(ROOT)}: broken link: {raw}")
+        ERRORS.extend(check_links(path, ROOT))
 
+    # Backticked paths in the public reference set are repository-relative.
+    # Elsewhere prose can describe a different cwd; validate actual links there.
+    references = [ROOT / "README.md", ROOT / "README.zh-CN.md", ROOT / "CONTRIBUTING.md",
+                  *(ROOT / "docs").glob("*.md")]
     source_ref = re.compile(r'`((?:cmd|internal|docs|scripts|examples|\.github)/[^`\n]+)`')
-    for path in managed:
-        text = path.read_text(encoding="utf-8")
-        for raw in source_ref.findall(text):
-            candidate = raw.rstrip(".,;:)")
-            candidate = candidate.split("#", 1)[0]
+    for path in references:
+        for raw in source_ref.findall(path.read_text(encoding="utf-8")):
+            candidate = raw.rstrip(".,;:)").split("#", 1)[0]
             candidate = re.sub(r':\d+(?:-\d+)?$', '', candidate)
             if any(ch in candidate for ch in "*{}<>"):
                 continue
@@ -140,21 +195,19 @@ def main() -> None:
             error(f"expected top-level command missing from source: {command}")
         if f'`pairroom {command}`' not in cli_doc:
             error(f"CLI reference missing top-level command: {command}")
-
     protocol_source = (ROOT / "cmd" / "pairroom" / "protocol.go").read_text(encoding="utf-8")
     if re.search(r'legacy[^\n]*(?:manual|mentions|roundtable)', protocol_source, re.I):
         error("protocol help still advertises removed routing compatibility")
-
     for path in (ROOT / "README.md", ROOT / "README.zh-CN.md", ROOT / "docs" / "README.md"):
         if re.search(r'\bv\d+\.\d+(?:\.\d+)?\b', path.read_text(encoding="utf-8")):
             error(f"{path.relative_to(ROOT)}: hard-coded current release")
-
     if ERRORS:
         print("documentation checks failed:", file=sys.stderr)
         for item in ERRORS:
             print(f"- {item}", file=sys.stderr)
         raise SystemExit(1)
-    print(f"documentation checks passed ({len(managed)} maintained Markdown files)")
+    print(f"documentation checks passed ({len(managed)} repository Markdown files)")
+    print("Covered: " + ", ".join(str(p.relative_to(ROOT)) for p in managed))
 
 
 if __name__ == "__main__":
