@@ -1,0 +1,22 @@
+name: Diagnostics development snapshot
+on:
+  push:
+    branches: ['codex/diagnostics-project-workspace']
+    paths: ['.github/workflows/diagnostics-development.yml']
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Export tracked source for isolated verification
+        run: git archive --format=tar HEAD > "${RUNNER_TEMP}/pairroom-source.tar"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pairroom-development-source
+          path: ${{ runner.temp }}/pairroom-source.tar
+          retention-days: 1
