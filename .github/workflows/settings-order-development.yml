@@ -1,0 +1,39 @@
+name: Settings ordering development
+on:
+  push:
+    branches: ['codex/settings-order-development']
+    paths: ['.github/workflows/settings-order-development.yml']
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Export source and public toolchain dependencies
+        run: |
+          git bundle create "${RUNNER_TEMP}/source.bundle" refs/remotes/origin/main
+          go mod download
+          mkdir -p "${RUNNER_TEMP}/tools"
+          cp -a "$(go env GOROOT)" "${RUNNER_TEMP}/tools/go"
+          cp -a "$(go env GOMODCACHE)" "${RUNNER_TEMP}/tools/mod"
+          tar -czf "${RUNNER_TEMP}/tools.tar.gz" -C "${RUNNER_TEMP}/tools" .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: settings-order-source
+          path: ${{ runner.temp }}/source.bundle
+          retention-days: 1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: settings-order-tools
+          path: ${{ runner.temp }}/tools.tar.gz
+          compression-level: 0
+          retention-days: 1
