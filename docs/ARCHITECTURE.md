@@ -124,3 +124,9 @@ Room data, screenshots, and tool output may contain private source. Known Provid
 The architectural checks are state-transition tests, not persuasive prompt wording. Changes to ownership/recovery need successful, rejected, ambiguous, cancelled, restarted, and late-callback cases. Contract inventories must match source registrations and fields. UI fixtures, real-browser Mock Service tests, and authenticated native E2E prove different layers.
 
 Use [Contributing](../CONTRIBUTING.md) for commands and PR evidence. This architecture describes current contracts; a historical plan, old validation JSON, or a successful Mock run cannot establish a new runtime capability.
+
+## Diagnostics and Project navigation
+
+Diagnostics are an on-demand, authenticated Service operation, not another Room Runtime or durable workflow. `internal/service/diagnostics.go` selects immutable Room or current default-pair settings, gates concurrent checks, and projects an allowlisted report. `internal/agent/diagnostics.go` shares bounded metadata and real adapter checks with CLI doctor. Each live test uses a temporary Git workspace and fresh native session, rejects tool/approval interaction, and requires correlated response completion; it never consumes a managed Room slot or preempts a Room. Native global hooks/MCP still apply. Mock is reported as unverified.
+
+The Management Project-name link navigates to `#/projects/{id}`; its separate disclosure button only expands/collapses Rooms. Project-local search, attention/working filters, and archive visibility survive navigation without leaking into another Project. The primary Room list owns the main width; identity/maintenance is progressively disclosed. The shared Diagnostics module owns cancellation, consent, result validation, and safe browser-only export; it does not persist diagnostic data or launch checks during rendering.
