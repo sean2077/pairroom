@@ -2,10 +2,15 @@
 
 ## [Unreleased]
 
+## [v3.3.0] — 2026-09-09
+
 - Consolidate diagnostics under Settings, including the existing Service support summary; preserve legacy diagnosis links and increase Settings navigation readability. Use single-row Project summaries and shared, Service-persisted Project/Room ordering with mouse/touch handles, click/keyboard alternatives, cancellation, failure feedback, and cross-Project/lifecycle safeguards.
 
 - Add explicit environment and native runtime diagnostics with separate installation/startup/model-response evidence, default-profile or immutable Room configuration, consent, cancellation, bounded output, cleanup reporting, and allowlisted support downloads. Add `doctor --live` and correct executable overrides for Runtime kinds, including Grok Build.
 - Make sidebar Project names navigate to dedicated workspaces while separate accessible controls disclose Rooms. Add retained per-Project search/status filters, full-width Room lists, concise contextual bulk actions, progressive maintenance details, and direct diagnosis entry points. Cover bilingual/responsive behavior, API/auth boundaries, Mock labeling, native evidence correlation, and cleanup with regression tests.
+- Replace the per-row drag handle with whole-row drag reordering for Projects and Rooms: pressing anywhere on a sortable row and moving at least a few pixels drags it, right-click or Alt+↑/↓ opens the Move up/Move down menu, Escape cancels, and focus returns to the same control after a save while interactive children keep their clicks.
+- Enrich the desktop tray menu with Service controls: open the authenticated Management Shell in the default browser, show a Service ownership status line, restart only the Desktop-owned embedded Service after draining active Turns, and reveal the Service data folder. Launch-at-login remains exclusive to the native Settings switch.
+- Keep Settings toggle switches pill-shaped: the global button minimum height no longer stretches the switch box into a circle.
 
 ## [v3.2.0] — 2026-09-08
 
