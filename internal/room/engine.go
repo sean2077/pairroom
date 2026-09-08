@@ -1858,7 +1858,13 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 	e.mu.RLock()
 	participant := e.snapshot.Participants[target]
 	e.mu.RUnlock()
-	attachments, err := e.agentAttachments(message.Attachments)
+	text, attachmentValues, err := e.nativeMessageContent(message)
+	if err != nil {
+		e.delivery(message.ID, target, model.DeliveryFailed, err.Error())
+		e.processing(message.ID, target, model.ProcessingFailed, "quoted context resolution failed: "+err.Error(), "")
+		return ""
+	}
+	attachments, err := e.agentAttachments(attachmentValues)
 	if err != nil {
 		e.delivery(message.ID, target, model.DeliveryFailed, err.Error())
 		e.processing(message.ID, target, model.ProcessingFailed, "image resolution failed: "+err.Error(), "")
@@ -1878,7 +1884,7 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 		FromHandle:  fromHandle,
 		SelfHandle:  identities[target].MentionHandle,
 		PeerHandle:  identities[model.OtherParticipant(target)].MentionHandle,
-		Text:        message.Text,
+		Text:        text,
 		ReplyTo:     message.ReplyTo,
 		Role:        nativePermissionRole(participant),
 		Attachments: attachments,
