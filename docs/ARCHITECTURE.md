@@ -48,7 +48,9 @@ Historical slot IDs remain `claude` and `codex`; RuntimeKind is independent. Con
 
 A modern Room does not automatically create an isolated task worktree. Its two participants use the live workspace. The one-native-Turn rule does not lock a repository against other Rooms, external editors, or native subprocesses. Independent writing tasks need separate workspaces and explicit integration outside that rule.
 
-Room names are display metadata. Rename uses the existing safe suspension boundary; it does not change IDs, Bindings, or collaboration. Native title synchronization occurs at activation where supported and reports configured/acknowledged/unsupported/failed state. Desired display metadata is not proof of vendor acknowledgement. See [API reference](API_REFERENCE.md#room-names-and-native-session-correspondence).
+## Room and native session names
+
+Room names are display metadata. Rename uses the existing safe suspension boundary; it does not change IDs, Bindings, or collaboration. Native title synchronization occurs at activation where supported and reports configured/acknowledged/unsupported/failed state. Desired display metadata is not proof of vendor acknowledgement. Claude supplies its advertised `--name` launch option and reports configuration, not a separate title-read acknowledgement; Codex/Grok use native metadata acknowledgement. Naming never requires a model Turn or direct vendor-store edits. See [API reference](API_REFERENCE.md#room-names-and-native-session-correspondence).
 
 ## Admission and native Turn ownership
 

@@ -39,7 +39,8 @@ def markdown_files(root: Path) -> list[Path]:
                     ".browser-results", "__pycache__", "dist", "bin", "vendor"}
         paths = {p for p in root.rglob("*.md")
                  if not excluded.intersection(p.relative_to(root).parts)}
-    return sorted(p for p in paths if p.is_file() or p.is_symlink())
+    return sorted((p for p in paths if p.is_file() or p.is_symlink()),
+                  key=lambda p: p.relative_to(root).as_posix())
 
 
 def prose(text: str) -> str:
