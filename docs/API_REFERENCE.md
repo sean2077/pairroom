@@ -81,7 +81,7 @@ Native titles are applied on activation/session opening, including permission-dr
 
 ## Creation-only collaboration and independent permissions
 
-Room creation also accepts optional `collaboration`. Omission or `{"mode":"default"}` persists canonical version-1 Lead/Executor instructions. Custom input is, for example:
+Room creation also accepts optional `collaboration`. Omission or `{"mode":"default"}` persists canonical version-2 flexible Lead/Executor instructions. Custom input is, for example:
 
 ```json
 {"collaboration":{"mode":"custom","instructions":"Agent 2 plans. Agent 1 implements. Both challenge unsupported assumptions."}}
