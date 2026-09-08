@@ -2,6 +2,10 @@
 
 PairRoom's CLI, Event Log, HTTP API, and native adapters evolve with the official CLIs. Treat an upgrade as a controlled change, not as overwriting a binary in place.
 
+## Flexible default collaboration
+
+New Rooms use version-2 default instructions: the addressed Agent completes simple tasks directly, with delegation and review chosen by complexity and risk. Existing version-1 defaults and custom instructions remain readable and unchanged; to use the new default in an existing Room, give equivalent human instructions for the current task or create a new Room.
+
 ## Before upgrading
 
 1. Read [CHANGELOG](../CHANGELOG.md);

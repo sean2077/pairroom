@@ -20,7 +20,7 @@ A Room name is mutable display metadata, not an ID. A missing creation name is g
 
 | Creation choice | Responsibility |
 |---|---|
-| `default` | Agent 1 is Lead: planning, decisions, delegation, final review. Agent 2 is Executor: implementation, verification, and evidence-based feedback. |
+| `default` | The addressed Agent completes simple tasks directly. When collaboration helps, Agent 1 leads planning and review; Agent 2 handles implementation, verification, and technical feedback. |
 | `custom` | User-supplied natural-language rules replace the default responsibility instructions. |
 
 The Room saves this choice at creation and restores it on activation. These instructions do not enforce a particular number or order of Turns, establish a plan-approval gate, or grant tools. A user can redirect the current task, but cannot edit the stored mode or immutable Agent selection inside an existing Room.

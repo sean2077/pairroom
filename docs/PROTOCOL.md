@@ -8,7 +8,7 @@ pairroom protocol --json
 
 ## Bootstrap
 
-Each native session receives a compact stable bootstrap plus the Room's stored, versioned collaboration instructions and any per-Agent additional instructions. Default mode assigns Lead / Executor; custom mode inserts the supplied prose instead, without default responsibilities. It identifies the Agent's current public display name and exact mention handle, explains single-Turn ownership, and asks the Agent to mention its peer only when another response is genuinely necessary. Claude Code and Codex use their native instruction layers. A new Grok ACP session receives the rules through `_meta.rules`; an exactly loaded Grok session receives the current bootstrap once in its first PairRoom prompt instead of replacing its native system prompt.
+Each native session receives a compact stable bootstrap plus the Room's stored, versioned collaboration instructions and any per-Agent additional instructions. Default mode provides flexible Lead / Executor responsibilities; custom mode inserts the supplied prose instead, without default responsibilities. It identifies the Agent's current public display name and exact mention handle, explains single-Turn ownership, and asks the Agent to mention its peer only when another response is genuinely necessary. Claude Code and Codex use their native instruction layers. A new Grok ACP session receives the rules through `_meta.rules`; an exactly loaded Grok session receives the current bootstrap once in its first PairRoom prompt instead of replacing its native system prompt.
 
 ## Input envelope
 
@@ -25,7 +25,7 @@ When attachments are present, a compact `attachments:` list between `from` and t
 
 When the current user message explicitly replies to another message in the same Room, a `quoted_message:` block follows any attachments and precedes the body. It carries the quoted sender handle and complete original text, both Go-quoted so embedded newlines cannot form new envelope fields. Quoted images are merged into the current `attachments:` list by canonical ID without duplicating files already on the input. Agent `ReplyTo` values remain correlation links and are not expanded. Unknown quoted IDs fail closed before persistence. The quoted text is never summarized.
 
-Message ID, Thread ID, ReplyTo, native request/session IDs, delivery intent, and protocol version remain available to transport, Event Log, and diagnostics where applicable. They are not repeated as model-facing envelope fields. Self/peer identity and fixed responsibility live at the instruction layer, not in `self_handle`, `peer_handle`, or `current_role` per turn. Static contract checks cap the ordinary envelope overhead at 128 bytes (excluding body, media, and quoted-message text) and the bootstrap plus default collaboration at 1,800 bytes. Custom instructions have a separate 16 KiB UTF-8 input limit; these byte budgets are not token-billing claims.
+Message ID, Thread ID, ReplyTo, native request/session IDs, delivery intent, and protocol version remain available to transport, Event Log, and diagnostics where applicable. They are not repeated as model-facing envelope fields. Self/peer identity and collaboration responsibility live at the instruction layer, not in `self_handle`, `peer_handle`, or `current_role` per turn. Static contract checks cap the ordinary envelope overhead at 128 bytes (excluding body, media, and quoted-message text) and the bootstrap plus default collaboration at 1,800 bytes. Custom instructions have a separate 16 KiB UTF-8 input limit; these byte budgets are not token-billing claims.
 
 The Agent should treat repository state as authoritative and independently verify peer claims. A transport receipt or another Agent's assertion is not execution evidence.
 
@@ -50,7 +50,9 @@ The user remains the active circuit breaker: Cancel removes queued work, Interru
 
 ## Creation-time collaboration contract
 
-`default` assigns Lead (Agent 1) and Executor (Agent 2). The Lead plans, delegates implementation and routine verification, and reviews evidence. The Executor implements, tests, and reports results, risks, or disagreements. Avoid needless debate and ceremonial turns; scale planning/review to the task. `custom` uses the human's natural-language rules without adding those default responsibilities. Both choices are persisted at creation and injected unchanged on activation.
+`default` uses the least coordination needed for an accurate result. For simple, low-risk tasks, the addressed Agent executes, verifies, and answers directly, without delegation or peer review. Otherwise, Lead (Agent 1) focuses on planning, decisions, and review; Executor (Agent 2) implements, verifies, and contributes technical feedback. Complexity, uncertainty, or risk can justify involving the peer; the responsibilities are defaults, not a mandatory sequence. Newer human instructions take precedence. `custom` uses the human's natural-language rules without adding these defaults.
+
+New Rooms use collaboration version 2 unless an explicit supported version is supplied. Version-1 and custom instructions remain readable and are injected unchanged on activation; upgrading PairRoom never rewrites an existing Room's policy. Create a new Room to adopt the new default, or give a newer human instruction for the current task. The relay protocol remains `pairroom-protocol/v6`.
 
 The instructions do not grant tools or force a particular number of Turns. Native permission profiles remain independent; both modern participants use the live workspace. Legacy Rooms receive their preserved role guidance and retain their old workspace/permission boundaries. No public role-change operation or role-based addressing remains.
 
