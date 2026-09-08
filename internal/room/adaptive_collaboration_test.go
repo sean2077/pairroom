@@ -37,7 +37,7 @@ func TestDefaultCollaborationEitherMentionedAgentCanFinishDirectly(t *testing.T)
 			}
 			snapshot := e.Snapshot()
 			last := snapshot.Messages[len(snapshot.Messages)-1]
-			if last.From != actor || last.Text != answer || len(last.To) != 0 {
+			if last.From != actor || last.Text != answer || len(last.To) != 1 || last.To[0] != model.ActorUser {
 				t.Fatalf("direct result was not the final Room answer: %+v", last)
 			}
 			e.turnMu.Lock()
