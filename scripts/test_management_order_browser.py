@@ -127,6 +127,22 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
     await page.evaluate("document.querySelectorAll('#toasts .toast-close').forEach(b=>b.click())")
     await page.screenshot(path=str(artifacts / 'rooms-ordered-light-en.png'), full_page=True)
 
+    # The row's Details action remains available even for a missing worktree;
+    # maintenance can unregister an empty Project but not bypass Room cleanup.
+    for project_id, blocked in [('p3', False), ('p1', True)]:
+        await page.evaluate("id=>{__snapshot.projects.find(p=>p.id===id).available=false;location.hash='#/projects';}", project_id)
+        await page.locator('#refresh-button').click()
+        row = page.locator(f'#view [data-order-kind="project"][data-order-id="{project_id}"]')
+        await row.get_by_role('button', name='Details', exact=True).click()
+        await page.locator('.project-details > summary').click()
+        removal = page.locator('.project-details button.danger-button')
+        if blocked:
+            await expect(removal).to_be_disabled()
+        else:
+            await expect(removal).to_be_enabled()
+        await page.evaluate("id=>__snapshot.projects.find(p=>p.id===id).available=true", project_id)
+    await page.locator('#refresh-button').click()
+
     await page.evaluate("location.hash='#/diagnostics/r1'")
     await expect(page.locator('#settings-diagnostics')).to_be_visible()
     assert await page.evaluate('location.hash') == '#/settings/diagnostics/r1'
@@ -151,7 +167,7 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
         assert not await page.evaluate('__cspErrors')
     assert not errors, errors
     await page.close()
-    return dict(project_single_rows=True,project_and_room_drag_persisted=True,ordering_keyboard_and_click=True,ordering_failure_and_cancellation=True,ordering_poll_dom_stable=True,ordering_filtered_and_scoped=True,diagnostics_single_settings_destination=True,settings_readable_navigation=True)
+    return dict(unavailable_project_maintenance_reachable=True,project_single_rows=True,project_and_room_drag_persisted=True,ordering_keyboard_and_click=True,ordering_failure_and_cancellation=True,ordering_poll_dom_stable=True,ordering_filtered_and_scoped=True,diagnostics_single_settings_destination=True,settings_readable_navigation=True)
 
 
 async def main(args):
