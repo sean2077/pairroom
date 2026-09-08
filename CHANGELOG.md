@@ -2,8 +2,15 @@
 
 ## [Unreleased]
 
+## [v3.2.0] — 2026-09-08
+
 - Add reusable Agent pair profiles with per-slot Runtime, Provider reference, model, effort, instructions, and native policies. Save/select/update pairs during Room creation or manage them in Settings, including an optional default for new Rooms. Persist Service-scoped profiles independently of the Registry index; copy selections into new Rooms without changing existing Rooms or capturing Provider credentials. Add authenticated API, persistence/race/failure-boundary, client freshness, and bilingual browser regressions.
 - Resolve explicit user replies into native envelope `quoted_message` context at delivery, including quoted images, without expanding Agent-relay correlation links or baking quotes into the durable user message.
+- Let the addressed Agent complete simple, low-risk tasks directly, including verification and the final reply. Use delegation or independent review as complexity, uncertainty, or risk warrants. New Rooms use compact version-2 default instructions; existing version-1 and custom policies remain unchanged.
+- Deliver Grok Build text input when its ACP session does not support images, with explicit attachment fallback context.
+- Open Ctrl-clicked desktop links in the default browser and refresh the message input's IME position when the window regains focus.
+- Reserve Mock Turn ownership before its worker can dequeue accepted work, preventing competing admissions.
+- Reorganize onboarding, architecture, protocol, and operations documentation, and add repository-wide Markdown and image-link checks.
 - Remove the uppercase eyebrow labels from the Management topbar heading.
 
 ## [v3.1.1] — 2026-09-08
