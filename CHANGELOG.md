@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Add explicit environment and native runtime diagnostics with separate installation/startup/model-response evidence, default-profile or immutable Room configuration, consent, cancellation, bounded output, cleanup reporting, and allowlisted support downloads. Add `doctor --live` and correct executable overrides for Runtime kinds, including Grok Build.
+- Make sidebar Project names navigate to dedicated workspaces while separate accessible controls disclose Rooms. Add retained per-Project search/status filters, full-width Room lists, concise contextual bulk actions, progressive maintenance details, and direct diagnosis entry points. Cover bilingual/responsive behavior, API/auth boundaries, Mock labeling, native evidence correlation, and cleanup with regression tests.
+
 ## [v3.2.0] — 2026-09-08
 
 - Add reusable Agent pair profiles with per-slot Runtime, Provider reference, model, effort, instructions, and native policies. Save/select/update pairs during Room creation or manage them in Settings, including an optional default for new Rooms. Persist Service-scoped profiles independently of the Registry index; copy selections into new Rooms without changing existing Rooms or capturing Provider credentials. Add authenticated API, persistence/race/failure-boundary, client freshness, and bilingual browser regressions.

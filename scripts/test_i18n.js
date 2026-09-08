@@ -23,7 +23,7 @@ function placeholders(value) {
 }
 
 for (const key of enKeys) {
-  if (!/^(?:ui|common|theme|desktop|errors|room|agent)\.[A-Za-z0-9][A-Za-z0-9._-]*$/.test(key)) throw new Error(`non-semantic catalog key: ${key}`);
+  if (!/^(?:ui|common|theme|desktop|errors|room|agent|diagnostics|workspace)\.[A-Za-z0-9][A-Za-z0-9._-]*$/.test(key)) throw new Error(`non-semantic catalog key: ${key}`);
   if (/[\u3400-\u9fff]/u.test(en[key])) throw new Error(`English catalog entry contains Chinese: ${key}`);
   if (/<\/?[A-Za-z][^>]*>/.test(en[key]) || /<\/?[A-Za-z][^>]*>/.test(zh[key])) throw new Error(`catalog entry contains HTML: ${key}`);
   if (JSON.stringify(placeholders(en[key])) !== JSON.stringify(placeholders(zh[key]))) {

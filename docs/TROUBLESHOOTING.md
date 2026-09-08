@@ -2,6 +2,12 @@
 
 Start by identifying the layer: Service, Room, participant/native Runtime, or browser. Preserve the first error and relevant IDs before restarting. Use [Support](../SUPPORT.md) for a safe bug report and [Operations](OPERATIONS.md) for lifecycle commands.
 
+## Start with Diagnostics
+
+Open **Diagnostics** from the sidebar (or the command palette, `G D`). **Check environment** does not call a model. Use **Test runtime** with a selected Agent and configuration to check native startup plus a real response; confirm the possible Provider charge and native-hook behavior first. To diagnose one failing Room, use its Diagnostics action in Runtimes or its Project and select its stored configuration rather than the current default pair. Leaving the page cancels an in-flight check. Download the allowlisted report for support; raw native output is intentionally omitted.
+
+An installed CLI is not proof of authentication, model access, or a usable response. Mock results never certify a native Runtime. A passing live response is a point-in-time connectivity check, not proof of every tool, native hook, working repository, or long-running task. [CLI reference](CLI_REFERENCE.md#installation-versus-runtime-availability) explains `doctor --live` and report boundaries.
+
 ## Agent will not start
 
 Run the selected native CLI directly as the same OS user and in the same repository. Check its executable, authentication, Provider, working directory, and policy. Then inspect `pairroom doctor --repo /absolute/path/to/repository --json`, the participant's Runtime info, and `LastError`.
