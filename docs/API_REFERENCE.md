@@ -34,6 +34,22 @@ The Management API owns Project and Room registration, immutable per-Room Agent 
 
 The created Room returns the immutable `agents` map. There is no Agent-reconfiguration endpoint. Schema-v1 Rooms instead return `legacy_defaults: true` and no `agents` map.
 
+## Project and Room display order
+
+`GET /api/v1/service` includes `navigation_order` with `{"schema":1,"projects":[],"rooms":{}}` when no preference has been saved. Ranked IDs come first; newly discovered items retain Registry creation order. Active and archived Rooms remain separate display groups. All Management clients of the same Service share the order.
+
+`PATCH /api/v1/navigation-order` uses normal Management bearer or browser-session/CSRF authentication. Submit a single anchored move, not a replacement array:
+
+```json
+{"kind":"room","id":"room-to-move","target_id":"another-room","position":"before"}
+```
+
+`kind` is `project` or `room`; `position` is `before` or `after`. Distinct existing IDs are required. Rooms must belong to the same Project and active/archived group. A move changes display order only, never Project membership, lifecycle, runtime capacity, session state, or Room events. It may be performed while a Room is running. Concurrent moves are serialized against the latest saved order, retaining unrelated/filtered items. Newly discovered IDs are appended and deleted IDs pruned when saving. Success returns the updated order; malformed/invalid moves return 400, unavailable preference storage returns 503.
+
+Preferences live in `navigation-order.json`, separate from the rebuildable Registry. On a corrupt/unreadable file, the Service snapshot still works but sets `navigation_order_error: true`; ordering is disabled until the file is repaired. Back up that file before replacing it. Ordinary Service health is not a claim that this optional preference file is valid.
+
+The Projects page uses one row per Project. Drag its handle or click for Move up/Move down; focus the handle and use arrow keys as a keyboard alternative. The sidebar and Project-detail Room lists offer the same controls. Escape cancels a drag. Diagnostics and the existing Service support export share **Settings → Diagnostics**; old `#/diagnostics[/room]` links redirect there without starting a check.
+
 ## Agent pair profiles
 
 All routes use the existing Management bearer or browser-session/CSRF boundary. They operate on Service-scoped templates, not native CC Switch Profiles or existing Rooms.
@@ -157,6 +173,7 @@ The following method/path patterns are extracted from production HTTP registrati
 - `GET /api/v1/session`
 - `GET /api/v1/snapshot`
 - `PATCH /api/v1/agent-pair-profiles/default`
+- `PATCH /api/v1/navigation-order`
 - `PATCH /api/v1/rooms/{room}`
 - `PATCH /api/v1/runtime-policy`
 - `POST /api/v1/agent-catalog/refresh`

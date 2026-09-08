@@ -99,22 +99,24 @@ type ServiceCapabilities struct {
 }
 
 type ServiceSnapshot struct {
-	Version       string                  `json:"version"`
-	Commit        string                  `json:"commit,omitempty"`
-	BuildDate     string                  `json:"build_date,omitempty"`
-	StoreSchema   int                     `json:"store_schema"`
-	RepositoryURL string                  `json:"repository_url,omitempty"`
-	DataRoot      string                  `json:"data_root"`
-	GeneratedAt   time.Time               `json:"generated_at"`
-	Projects      []Project               `json:"projects"`
-	Rooms         []Room                  `json:"rooms"`
-	Runtimes      []RuntimeStatus         `json:"runtimes"`
-	RuntimePolicy RuntimePolicy           `json:"runtime_policy"`
-	Summary       ServiceSummary          `json:"summary"`
-	Capabilities  ServiceCapabilities     `json:"capabilities"`
-	Healthy       bool                    `json:"healthy"`
-	Diagnostic    string                  `json:"diagnostic,omitempty"`
-	Maintenance   RoomDeletionMaintenance `json:"maintenance"`
+	NavigationOrder      *NavigationOrder        `json:"navigation_order,omitempty"`
+	NavigationOrderError bool                    `json:"navigation_order_error,omitempty"`
+	Version              string                  `json:"version"`
+	Commit               string                  `json:"commit,omitempty"`
+	BuildDate            string                  `json:"build_date,omitempty"`
+	StoreSchema          int                     `json:"store_schema"`
+	RepositoryURL        string                  `json:"repository_url,omitempty"`
+	DataRoot             string                  `json:"data_root"`
+	GeneratedAt          time.Time               `json:"generated_at"`
+	Projects             []Project               `json:"projects"`
+	Rooms                []Room                  `json:"rooms"`
+	Runtimes             []RuntimeStatus         `json:"runtimes"`
+	RuntimePolicy        RuntimePolicy           `json:"runtime_policy"`
+	Summary              ServiceSummary          `json:"summary"`
+	Capabilities         ServiceCapabilities     `json:"capabilities"`
+	Healthy              bool                    `json:"healthy"`
+	Diagnostic           string                  `json:"diagnostic,omitempty"`
+	Maintenance          RoomDeletionMaintenance `json:"maintenance"`
 }
 
 func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) {
@@ -155,6 +157,7 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	mux := http.NewServeMux()
 	webui.Mount(mux)
 	server.mountAgentPairProfiles(mux)
+	server.mountNavigationOrder(mux)
 	mux.HandleFunc("POST "+diagnosticsPath, server.runDiagnostics)
 	mux.HandleFunc("POST /api/v1/session", server.createBrowserSession)
 	mux.HandleFunc("GET /api/v1/session", server.readBrowserSession)
@@ -288,6 +291,12 @@ func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
 		maintenanceAttention = 1
 	}
 	payload.Summary.AttentionItems = payload.Summary.UnavailableProjects + payload.Summary.PendingBindings + payload.Summary.FailedRuntimes + maintenanceAttention
+	order, orderErr := s.registry.NavigationOrder()
+	if orderErr == nil {
+		payload.NavigationOrder = &order
+	} else {
+		payload.NavigationOrderError = true
+	}
 	if healthErr != nil {
 		payload.Diagnostic = healthErr.Error()
 	}

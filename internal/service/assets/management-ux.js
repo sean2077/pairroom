@@ -157,7 +157,7 @@
 
   function commands() {
     const items = [
-      { id: 'diagnostics', group: t('ui.navigation'), icon: '⊕', label: t('diagnostics.title'), detail: t('diagnostics.subtitle'), keys: 'G D', keywords: t('diagnostics.keywords'), action: () => navigate('#/diagnostics') },
+      { id: 'diagnostics', group: t('ui.navigation'), icon: '⊕', label: t('diagnostics.title'), detail: t('diagnostics.subtitle'), keys: 'G D', keywords: t('diagnostics.keywords'), action: () => navigate('#/settings/diagnostics') },
       {
         id: 'overview', group: t("ui.navigation"), icon: '◫', label: t("ui.openOverview"), detail: t("ui.serviceProjectAndRoomOverview"), keys: 'G O',
         keywords: t("ui.overviewHomeService"), action: () => navigate('#/overview'),
@@ -842,7 +842,7 @@
         go: () => navigate('#/overview'),
         gp: () => navigate('#/projects'),
         gr: () => navigate('#/runtimes'),
-        gd: () => navigate('#/diagnostics'),
+        gd: () => navigate('#/settings/diagnostics'),
         gs: () => navigate('#/settings'),
         np: () => addProjectButton?.click(),
       };

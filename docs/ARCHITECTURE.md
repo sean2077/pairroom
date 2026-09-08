@@ -34,6 +34,8 @@ The root module is Go 1.25 with the pinned CGo-free SQLite closure for CC Switch
 
 Agent pair profiles are separate Service-scoped user configuration. `agent-pair-profiles.json` owns the named pairs and default ID; the rebuildable `service-registry.json` does not. Creation resolves and copies a pair, then follows ordinary Provider validation and immutable Room persistence. Profile updates/deletion never mutate Rooms.
 
+Project and Room navigation order is separate Service-scoped user configuration in `navigation-order.json`. Its schema-1 Project IDs and per-Project Room ID lists are atomic display preferences, not Room events, scheduling priority, or Project membership. The sidebar and Project pages share this order. Missing/new IDs fall back to stable Registry creation order; moves preserve hidden items and prune removed IDs. Corrupt preferences are reported without breaking Service health or overwriting the file.
+
 The Event Log is authoritative for a Room. Registry records/indexes enable Service discovery and ownership checks; browser snapshots and Turn summaries are projections, not alternative stores of truth. High-frequency transient telemetry can remain off disk, but auditable state transitions must be persisted before they are published as facts.
 
 Event sequences begin at 1 and remain contiguous. Room activation/lifecycle operations must validate the existing published Room identity before repair or new writes. A missing or empty log is not a fresh version of that Room. An ambiguous append failure closes the writer rather than continuing with uncertain sequence state. Only an incomplete final record is eligible for tail repair; middle corruption is not skipped.
