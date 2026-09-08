@@ -33,7 +33,7 @@
       const focusID = host.contains(document.activeElement) ? document.activeElement.id : '';
       const busy = Boolean(controller);
       const room = snapshot.rooms?.find((value) => value.id === roomID);
-      const scopeSelect = node('select', { id: 'diagnostic-scope', disabled: busy, onChange: (event) => navigate(event.target.value ? `#/diagnostics/${encodeURIComponent(event.target.value)}` : '#/diagnostics') },
+      const scopeSelect = node('select', { id: 'diagnostic-scope', disabled: busy, onChange: (event) => navigate(event.target.value ? `#/settings/diagnostics/${encodeURIComponent(event.target.value)}` : '#/settings/diagnostics') },
         node('option', { value: '', textContent: t('diagnostics.defaultPair') }),
         ...(snapshot.rooms || []).filter((item) => item.agents?.claude && item.agents?.codex).map((item) => node('option', { value: item.id, textContent: item.name }))
       );

@@ -179,6 +179,21 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     await page.locator('#rename-form [type="submit"]').click()
                     await expect(page.locator('#rename-dialog')).not_to_be_visible()
                     await expect(page.locator(f'.tree-room[data-room-id="{room_id}"]')).to_contain_text('Verified HTTP workspace')
+                    print('Service browser: persist navigation order through authenticated HTTP', flush=True)
+                    csrf = (await read_json(context,origin+'/api/v1/session'))['csrf_token']
+                    headers = {'X-PairRoom-CSRF':csrf}
+                    # Real second Room; provisioning does not invoke a model.
+                    created_second = await context.request.post(origin+f'/api/v1/projects/{room["project_id"]}/rooms', headers=headers,
+                        data={'name':'Second workspace','bindings':{'claude':{'mode':'new'},'codex':{'mode':'new'}}})
+                    assert created_second.status == 201
+                    second_id = (await created_second.json())['id']
+                    move={'kind':'room','id':second_id,'target_id':room_id,'position':'before'}
+                    denied = await context.request.patch(origin+'/api/v1/navigation-order',data=move)
+                    assert denied.status == 403, 'navigation move skipped CSRF'
+                    moved = await context.request.patch(origin+'/api/v1/navigation-order',headers=headers,data=move)
+                    assert moved.status == 200
+                    expected_order = (await moved.json())['rooms'][room['project_id']]
+                    assert expected_order == [second_id,room_id]
                     await context.close()
                     await service.stop()
                     print('Service browser: verify recovered Room and session identities', flush=True)
@@ -190,6 +205,10 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     page = await context.new_page()
                     page.on('pageerror', lambda error: errors.append(str(error)))
                     await page.goto(management_url)
+                    await expect(page.locator('#app')).to_be_visible()
+                    restored_order=(await read_json(context,origin+'/api/v1/service'))['navigation_order']
+                    assert restored_order['rooms'][room['project_id']] == expected_order
+                    await expect(page.locator('#room-tree [data-order-kind="room"]').first).to_have_attribute('data-order-id',second_id)
                     await page.locator(f'.tree-room[data-room-id="{room_id}"]').click()
                     frame = page.frame_locator(f'#room-stage [data-room-id="{room_id}"] iframe')
                     await expect(frame.locator('#connection')).to_have_class(re.compile(r'\bconnected\b'))
@@ -206,7 +225,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     assert not errors, errors
                     results = dict(real_http_authentication=True,csrf_required=True,creation_custom_optional_name=True,
                                    real_sse=True,both_mock_slots=True,settings_persisted=True,permission_independent=True,
-                                   rename_restart_identity=True,unchanged_management_csp=True,page_errors=errors)
+                                   rename_restart_identity=True,navigation_order_http_and_restart=True,unchanged_management_csp=True,page_errors=errors)
                 finally:
                     await browser.close()
         finally:

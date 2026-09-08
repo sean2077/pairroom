@@ -82,6 +82,9 @@
   const view = $('view');
   const diagnostics = window.PairRoomDiagnostics.create({ t, node, actionButton, api, confirm: openConfirm, navigate });
 
+  const ordering = window.PairRoomOrder.create({ t, node, getSnapshot: () => state.snapshot, api, refresh, render, toast,
+    isCurrent: () => { const generation = state.sessionGeneration; return () => generation === state.sessionGeneration && state.authenticated; } });
+
   // Startup translation is declarative; a rendered state/operation takes over
   // its label so later global localization cannot restore misleading defaults.
   function setRenderedText(id, value) {
@@ -155,6 +158,7 @@
 
   function invalidateSessionReads() {
     diagnostics.reset();
+    ordering.cancel();
     state.projectFilters.clear();
     state.sessionGeneration += 1;
     state.refreshPromise = null;
@@ -370,7 +374,7 @@
   }
 
   function canRenderNow() {
-    if (document.querySelector('dialog[open]')) return false;
+    if (ordering.interacting() || document.querySelector('dialog[open]')) return false;
     const active = document.activeElement;
     if (!active || active === document.body || active === $('global-search')) return true;
     return !view.contains(active) || !['INPUT', 'SELECT', 'TEXTAREA'].includes(active.tagName);
@@ -398,7 +402,15 @@
       try { return decodeURIComponent(part); } catch { return part; }
     });
     if (parts[0] === 'projects' && parts[1]) return { name: 'project', projectID: parts[1] };
-    if (parts[0] === 'diagnostics') return { name: 'diagnostics', roomID: parts[1] || '' };
+    if (parts[0] === 'diagnostics') {
+      history.replaceState(null, '', `#/settings/diagnostics${parts[1] ? '/' + encodeURIComponent(parts[1]) : ''}`);
+      return { name: 'settings', section: 'service', roomID: parts[1] || '' };
+    }
+    if (parts[0] === 'settings') {
+      const section = parts[1] === 'diagnostics' ? 'service' : parts[1];
+      const known = ['interface', 'pair-profiles', 'runtime', 'operations', 'service', 'boundaries', 'about', ...(window.PairRoomDesktop ? ['desktop'] : [])];
+      return { name: 'settings', section: section && (known.includes(section) ? section : 'interface'), roomID: section === 'service' ? parts[2] || '' : '' };
+    }
     if (parts[0] === 'rooms' && parts[1]) return { name: 'room', roomID: parts[1] };
     if (['overview', 'projects', 'runtimes', 'settings'].includes(parts[0])) return { name: parts[0] };
     return { name: 'overview' };
@@ -456,8 +468,6 @@
       }
       case 'runtimes':
         return { title: t('room.roomRuntimes'), subtitle: t("ui.viewCapacityQueuesActiveTurnAndIdlePendingStatus") };
-      case 'diagnostics':
-        return { title: t('diagnostics.title'), subtitle: t('diagnostics.subtitle') };
       case 'settings':
         return { title: t("ui.settings"), subtitle: t("ui.adjustTheCurrentAdminPageExperienceAndCheckServiceStartupPoliciesAnd") };
       case 'room': {
@@ -474,7 +484,9 @@
   }
 
   function render() {
+    if (ordering.interacting()) { state.renderPending = true; return; }
     state.route = parseRoute();
+    if (state.route.name === 'settings' && state.route.section) state.settingsSection = state.route.section;
     if (state.route.name === 'room' && state.route.roomID && !state.tabs.includes(state.route.roomID)) {
       state.tabs.push(state.route.roomID);
     }
@@ -508,7 +520,6 @@
         case 'project': renderProjectDetail(state.route.projectID); break;
         case 'runtimes': renderRuntimes(); break;
         case 'settings': renderSettings(); break;
-        case 'diagnostics': diagnostics.render(view, state.snapshot, state.route.roomID); break;
         default: renderOverview(); break;
       }
     }
@@ -517,6 +528,7 @@
   }
 
   function syncRoomTree() {
+    if (ordering.interacting()) return;
     const tree = $('room-tree');
     if (!tree) return;
     const snapshot = state.snapshot;
@@ -529,7 +541,7 @@
     // Polling may rebuild the tree while a keyboard user is navigating it.
     // Restore stable control identity without scrolling the sidebar sideways.
     const focused = tree.contains(document.activeElement) ? document.activeElement : null;
-    const focusAttribute = ['aria-controls', 'href', 'data-room-id'].find((attribute) => focused?.hasAttribute(attribute));
+    const focusAttribute = ['data-order-key', 'aria-controls', 'href', 'data-room-id'].find((attribute) => focused?.hasAttribute(attribute));
     const focusSelector = focusAttribute ? `[${focusAttribute}="${CSS.escape(focused.getAttribute(focusAttribute))}"]` : '';
     const scrollTop = tree.scrollTop;
     tree.replaceChildren(...models.map((model) => {
@@ -562,7 +574,7 @@
       }
       const roomsID = `project-rooms-${encodeURIComponent(project.id)}`;
       return node('section', { className: `tree-project ${expanded ? 'open' : ''}` },
-        node('div', { className: `tree-project-header ${currentProject ? 'current' : ''}` },
+        ordering.decorate(node('div', { className: `tree-project-header ${currentProject ? 'current' : ''}` },
           node('button', {
             type: 'button', className: 'tree-project-toggle',
             'aria-label': t(expanded ? 'workspace.collapse' : 'workspace.expand', { name: projectName(project) }),
@@ -578,7 +590,7 @@
             className: 'tree-project-link', href: `#/projects/${encodeURIComponent(project.id)}`,
             title: project.root, 'aria-current': currentProject ? 'page' : null,
           }, node('strong', { textContent: projectName(project) }), node('span', { className: 'nav-count', textContent: formatNumber(activeRooms.length) }))
-        ),
+        ), 'project', project.id),
         node('div', { id: roomsID, className: 'tree-rooms', hidden: !expanded }, ...children)
       );
     }));
@@ -594,7 +606,7 @@
     if (meta.unread) badges.push(node('span', { className: 'tab-badge', textContent: formatNumber(meta.unread) }));
     if (meta.pendingApprovals) badges.push(node('span', { className: 'tab-badge warn', textContent: '!' }));
     if (meta.error) badges.push(node('span', { className: 'tab-badge danger', textContent: '×' }));
-    return node('button', {
+    const button = node('button', {
       type: 'button',
       className: `tree-room ${current ? 'active' : ''} ${archived ? 'archived' : ''}`,
       'data-room-id': room.id,
@@ -608,6 +620,7 @@
         openRoom(room.id);
       },
     }, node('span', { className: `tree-room-dot ${runtimeTone(runtime)}`, 'aria-hidden': 'true' }), node('span', { className: 'tree-room-name', textContent: room.name }), ...badges);
+    return ordering.decorate(node('div', { className: 'tree-room-row' }, button), 'room', room.id);
   }
 
   function syncRoomTabs() {
@@ -897,8 +910,7 @@
   function renderProjects() {
     const snapshot = state.snapshot;
     const projectModels = buildProjectModels(snapshot)
-      .filter((model) => projectMatchesFilters(model))
-      .sort((a, b) => Number(b.project.available) - Number(a.project.available) || Number(b.runtimeCounts.busy) - Number(a.runtimeCounts.busy) || projectName(a.project).localeCompare(projectName(b.project)));
+      .filter((model) => projectMatchesFilters(model));
 
     const availability = selectControl([
       ['all', t("ui.allStatus")], ['available', t('common.available')], ['unavailable', t('common.unavailable')],
@@ -923,24 +935,9 @@
             })
           ),
           availability,
-          actionButton(state.filters.showArchived ? t("ui.showArchived") : t("ui.showArchived9738720"), () => {
-            state.filters.showArchived = !state.filters.showArchived;
-            renderProjects();
-          }, `filter-chip ${state.filters.showArchived ? 'active' : ''}`),
-          state.snapshot?.capabilities?.room_deletion
-            ? roomSelectionToggleButton(visibleRoomsForBatch(projectModels.flatMap((model) => model.rooms)), t("ui.currentlyVisibleResults"))
-            : null,
-          state.snapshot?.capabilities?.room_deletion
-            ? roomClearSelectionButton()
-            : null,
-          state.snapshot?.capabilities?.room_deletion
-            ? roomBatchArchiveButton(selectedActiveRooms(visibleRoomsForBatch(projectModels.flatMap((model) => model.rooms))))
-            : null,
-          state.snapshot?.capabilities?.room_deletion
-            ? roomBatchRemovalButton(selectedArchivedRooms(visibleRoomsForBatch(projectModels.flatMap((model) => model.rooms))))
-            : null,
           node('span', { className: 'muted', textContent: t('room.projectFilterCount', { visible: projectModels.length, total: (snapshot.projects || []).length }) })
         ),
+        snapshot.navigation_order_error ? node('aside', { className: 'callout warning', role: 'alert', textContent: t('workspace.ordering.unavailable') }) : null,
         projectModels.length
           ? node('section', { className: 'project-grid' }, ...projectModels.map(renderProjectCard))
           : emptyState('⌕', t("ui.noMatchingProject"), state.search ? t("ui.adjustYourSearchTermsOrFilters") : t("ui.registerAGitWorktreeToGetStarted"), false,
@@ -956,50 +953,23 @@
 
   function renderProjectCard(model) {
     const { project, rooms, activeRooms, runtimeCounts } = model;
-    const visibleRooms = rooms.filter((room) => state.filters.showArchived || room.lifecycle !== 'archived');
-    const archivedRoomsHidden = !state.filters.showArchived && rooms.length > 0 && visibleRooms.length === 0;
-    const emptyRoomTitle = archivedRoomsHidden ? t("ui.thisProjectOnlyHasArchivedRoomsLeft") : t("ui.thereIsNoRoomYetForThisProject");
-    const emptyRoomDescription = archivedRoomsHidden
-      ? t("ui.onceArchivedRoomsAreDisplayedAndPermanentlyClearedYouCanLogOut")
-      : project.available
-        ? t("ui.createARoomAndConfigureBothAgents")
-        : t("ui.unavailabilityOfTheLocalPathDoesNotAffectLoggingOutOfThis");
-    const emptyRoomAction = archivedRoomsHidden
-      ? actionButton(t("ui.showArchivedRooms"), () => {
-          state.filters.showArchived = true;
-          renderProjects();
-        }, 'secondary-button compact-button')
-      : project.available
-        ? actionButton(t("ui.createRooma1cda23"), () => openRoomDialog(project.id), 'secondary-button compact-button')
-        : null;
-    return node('article', { className: 'panel project-card' },
-      node('header', { className: 'project-card-header' },
-        node('div', { className: 'project-avatar', textContent: projectInitials(project) }),
-        node('div', { className: 'project-card-title' },
-          node('div', {}, node('h2', { textContent: projectName(project) }), statusBadge(project.available ? 'available' : 'unavailable', project.available ? 'good' : 'danger')),
-          node('code', { className: 'project-path', textContent: project.root, title: project.root })
-        ),
-        node('div', { className: 'project-card-actions' },
-          state.snapshot?.capabilities?.project_refresh && !project.available
-            ? actionButton(t("ui.recheck"), () => refreshProject(project), 'secondary-button compact-button')
-            : null,
-          actionButton(t("ui.copyPath"), () => copyText(project.root, t("ui.projectPathCopied")), 'secondary-button compact-button'),
-          actionButton(t("ui.details"), () => navigate(`#/projects/${encodeURIComponent(project.id)}`), 'secondary-button compact-button'),
-          projectRemovalButton(project, rooms.length, true),
-          actionButton(t('room.addRoom'), () => openRoomDialog(project.id), 'primary-button compact-button', !project.available)
-        )
-      ),
-      node('div', { className: 'project-summary' },
-        summaryCell(activeRooms, t("ui.activityRoom")),
-        summaryCell(rooms.length - activeRooms, t("ui.archived")),
-        summaryCell(runtimeCounts.busy, t("ui.atWork")),
-        summaryCell(runtimeCounts.queued, t("ui.queue"))
-      ),
-      project.diagnostic ? node('div', { className: 'callout danger project-diagnostic-callout' }, node('strong', { textContent: t("ui.pathDiagnostics") }), node('span', { textContent: project.diagnostic })) : null,
-      visibleRooms.length
-        ? node('div', { className: 'room-list' }, ...visibleRooms.map((room) => renderRoomRow(room, model.runtimeByRoom.get(room.id))))
-        : emptyState('◇', emptyRoomTitle, emptyRoomDescription, true, emptyRoomAction)
+    const heading = node('div', { className: 'project-list-identity' },
+      node('div', { className: 'project-avatar', textContent: projectInitials(project), 'aria-hidden': 'true' }),
+      node('div', { className: 'project-card-title' },
+        node('h2', {}, node('a', { href: `#/projects/${encodeURIComponent(project.id)}`, textContent: projectName(project) })),
+        node('code', { className: 'project-path', textContent: project.root, title: project.root }))
     );
+    return ordering.decorate(node('article', { className: 'panel project-card project-list-row' },
+      heading,
+      node('div', { className: 'project-list-status' },
+        statusBadge(project.available ? 'available' : 'unavailable', project.available ? 'good' : 'danger'),
+        node('span', { textContent: t('room.projectWorkingSummary', { rooms: activeRooms, working: runtimeCounts.busy }) }),
+        rooms.length > activeRooms ? node('span', { className: 'muted', textContent: t('ui.valueArchivedc521841', { value0: rooms.length - activeRooms }) }) : null),
+      node('div', { className: 'project-list-actions' },
+        !project.available && state.snapshot?.capabilities?.project_refresh ? actionButton(t('ui.recheck'), () => refreshProject(project), 'secondary-button compact-button') : null,
+        actionButton(t('ui.details'), () => navigate(`#/projects/${encodeURIComponent(project.id)}`), 'secondary-button compact-button'),
+        actionButton(t('room.addRoom'), () => openRoomDialog(project.id), 'primary-button compact-button', !project.available))
+    ), 'project', project.id, heading);
   }
 
   function renderProjectDetail(projectID) {
@@ -1037,11 +1007,12 @@
             )
           ),
           node('div', { className: 'detail-actions' },
-            actionButton(t('diagnostics.title'), () => navigate('#/diagnostics'), 'secondary-button'),
+            actionButton(t('diagnostics.title'), () => navigate('#/settings/diagnostics'), 'secondary-button'),
             actionButton(t("ui.copyPath"), () => copyText(project.root, t("ui.projectPathCopied")), 'secondary-button'),
             actionButton(t("ui.createRoom"), () => openRoomDialog(project.id), 'primary-button', !project.available)
           )
         ),
+        snapshot.navigation_order_error ? node('aside', { className: 'callout warning', role: 'alert', textContent: t('workspace.ordering.unavailable') }) : null,
         project.diagnostic ? node('aside', { className: 'callout danger' }, node('strong', { textContent: t("ui.projectIsNotAvailable") }), node('span', { textContent: project.diagnostic })) : null,
         node('section', { className: 'stats-grid' },
           statCard(t("workspace.activeRooms"), activeRooms, t("ui.valueArchivedc521841", { value0: (rooms.length - activeRooms) }), '◇', 'accent'),
@@ -1116,7 +1087,7 @@
     if (runtime.last_error) meta.append(node('span', { className: 'badge danger plain', textContent: truncate(runtime.last_error, 90), title: runtime.last_error }));
 
     const actions = node('div', { className: 'room-actions' });
-    if (runtime.phase === 'failed' && room.agents?.claude && room.agents?.codex) actions.append(actionButton(t('diagnostics.title'), () => navigate(`#/diagnostics/${encodeURIComponent(room.id)}`), 'secondary-button compact-button room-action-control'));
+    if (runtime.phase === 'failed' && room.agents?.claude && room.agents?.codex) actions.append(actionButton(t('diagnostics.title'), () => navigate(`#/settings/diagnostics/${encodeURIComponent(room.id)}`), 'secondary-button compact-button room-action-control'));
     if (state.snapshot?.capabilities?.room_deletion) {
       actions.append(
         node('label', {
@@ -1145,7 +1116,7 @@
       actions.append(actionButton(t("ui.rename"), () => openRenameDialog(room), 'secondary-button compact-button room-action-control'));
       actions.append(actionButton(t("ui.archive"), () => archiveRoom(room), 'danger-button outline compact-button room-action-control'));
     }
-    return node('article', { className: 'room-row', 'data-room-id': room.id }, node('div', { className: 'room-row-main' }, title, meta), actions);
+    return ordering.decorate(node('article', { className: 'room-row', 'data-room-id': room.id }, node('div', { className: 'room-row-main' }, title, meta), actions), 'room', room.id);
   }
 
   function agentSelectionMeta(label, selection) {
@@ -1210,7 +1181,7 @@
     models.forEach(({ room, project, runtime }) => {
       const actionCell = node('div', { className: 'runtime-actions' });
       const cleanupUncertain = runtime.phase === 'failed' && runtime.occupies_capacity;
-      if (room.agents?.claude && room.agents?.codex) actionCell.append(actionButton(t('diagnostics.title'), () => navigate(`#/diagnostics/${encodeURIComponent(room.id)}`), 'secondary-button compact-button'));
+      if (room.agents?.claude && room.agents?.codex) actionCell.append(actionButton(t('diagnostics.title'), () => navigate(`#/settings/diagnostics/${encodeURIComponent(room.id)}`), 'secondary-button compact-button'));
       if (room.lifecycle !== 'archived') {
         actionCell.append(actionButton(
           cleanupUncertain ? t("ui.requiresControlledRestart") : (runtime.phase === 'active' ? t("ui.open") : t("ui.activate")),
@@ -1248,12 +1219,14 @@
   function renderSettings() {
     if (state.settingsSection === 'pair-profiles' && !state.agentPairProfiles && !state.agentPairProfilesPromise && !state.agentPairProfilesError) refreshPairProfileSettings();
     const sections = [
-      ['interface', t("ui.interfaceExperience")], ['pair-profiles', t('agent.pairProfile.title')], ['runtime', t("ui.runtimeStrategy")], ['operations', t("ui.daemonOperationAndMaintenance")], ['service', t("ui.serviceAndDiagnosis")], ['boundaries', t("ui.securityBoundary")], ['about', t("ui.about")],
+      ['interface', t("ui.interfaceExperience")], ['pair-profiles', t('agent.pairProfile.title')], ['runtime', t("ui.runtimeStrategy")], ['operations', t("ui.daemonOperationAndMaintenance")], ['service', t('diagnostics.title')], ['boundaries', t("ui.securityBoundary")], ['about', t("ui.about")],
     ];
     if (window.PairRoomDesktop) sections.splice(1, 0, ['desktop', t('desktop.settings')]);
     const nav = node('nav', { className: 'panel settings-nav', 'aria-label': t("ui.setUpPartitions") }, ...sections.map(([key, label]) => {
       const active = state.settingsSection === key;
-      const button = actionButton(label, () => { state.settingsSection = key; if (key === 'pair-profiles') refreshPairProfileSettings(); if (key === 'desktop') updateDesktopStartup(); renderSettings(); }, active ? 'active' : '');
+      const button = actionButton(label, () => { if (key === 'pair-profiles') refreshPairProfileSettings(); if (key === 'desktop') updateDesktopStartup(); navigate(`#/settings/${key === 'service' ? 'diagnostics' : key}`); }, active ? 'active' : '');
+      button.dataset.settingsSection = key;
+      if (active) button.setAttribute('aria-current', 'page');
       button.setAttribute('aria-pressed', String(active));
       return button;
     }));
@@ -1261,12 +1234,12 @@
     view.replaceChildren(
       node('div', { className: 'view-stack' },
         node('section', { className: 'section-header' },
-          node('div', {}, node('h2', { textContent: t('room.managementSettings') }), node('p', { textContent: t("ui.interfacePreferencesOnlyApplyToTheCurrentTabServicePoliciesAreDetermined") })),
-          actionButton(t("ui.exportDesensitizationDiagnosis"), downloadDiagnosticSnapshot, 'secondary-button')
+          node('div', {}, node('h2', { textContent: t('room.managementSettings') }), node('p', { textContent: t("ui.interfacePreferencesOnlyApplyToTheCurrentTabServicePoliciesAreDetermined") }))
         ),
         node('div', { className: 'settings-grid' }, nav, content)
       )
     );
+    if (state.settingsSection === 'service') diagnostics.render($('settings-diagnostics'), state.snapshot, state.route.roomID || '');
   }
 
   function renderSettingsSection() {
@@ -1335,6 +1308,9 @@
     if (state.settingsSection === 'service') {
       const safe = diagnosticSnapshot();
       return node('div', { className: 'view-stack' },
+        node('div', { id: 'settings-diagnostics' }),
+        node('details', { className: 'project-details panel service-support' },
+          node('summary', { textContent: t('workspace.ordering.serviceSummary') }),
         node('section', { className: 'panel' },
           node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: t('room.serviceIdentity') }), node('p', { textContent: t("ui.buildInformationAndStableDataRoots") }))),
           node('div', { className: 'key-value-grid' },
@@ -1343,12 +1319,11 @@
           )
         ),
         settingsPanel(t("ui.diagnosticTools"), t("ui.exportingContentRemovesTheRoomRuntimeUrlLocalPathsAndBusinessMetadata"),
-          settingRow(t("diagnostics.title"), t("diagnostics.subtitle"), actionButton(t("diagnostics.title"), () => navigate("#/diagnostics"), "primary-button")),
           settingRow(t("ui.copyServiceSummary"), t("ui.suitableForPastingIntoALocalIssueOrDebuggingSession"), actionButton(t("ui.copyJson"), () => copyText(JSON.stringify(safe, null, 2), t("ui.desensitizationDiagnosticsHaveBeenReproduced")), 'secondary-button')),
           settingRow(t("ui.downloadDiagnosticFiles"), t("ui.filesAreOnlyGeneratedLocallyInTheBrowserAndAreNotUploaded"), actionButton(t("ui.downloadJson"), downloadDiagnosticSnapshot, 'secondary-button')),
           settingRow(t("ui.viewOriginalStructure"), t("ui.expandTheDesensitizedServiceSnapshotOnThePage"), toggleButton(state.showRawSnapshot, (value) => { state.showRawSnapshot = value; renderSettings(); }, t("ui.switchSnapshotDisplay")))
         ),
-        state.showRawSnapshot ? node('pre', { className: 'raw-snapshot', textContent: JSON.stringify(safe, null, 2) }) : null,
+        state.showRawSnapshot ? node('pre', { className: 'raw-snapshot', textContent: JSON.stringify(safe, null, 2) }) : null),
         snapshot.maintenance?.pending_cleanup || snapshot.maintenance?.diagnostic
           ? settingsPanel(t("ui.roomDeleteCleanup"), t("ui.tombstoneCommittedManagedDataInQuarantineStillNeedsToBePhysicallyCleaned"),
             settingRow(
@@ -1534,8 +1509,8 @@
       values.push(room);
       roomsByProject.set(room.project_id, values);
     });
-    return (snapshot.projects || []).map((project) => {
-      const rooms = (roomsByProject.get(project.id) || []).sort((a, b) => Number(a.lifecycle === 'archived') - Number(b.lifecycle === 'archived') || a.name.localeCompare(b.name));
+    return ordering.ordered(snapshot.projects || [], snapshot.navigation_order?.projects).map((project) => {
+      const rooms = ordering.ordered(roomsByProject.get(project.id) || [], snapshot.navigation_order?.rooms?.[project.id]).sort((a, b) => Number(a.lifecycle === 'archived') - Number(b.lifecycle === 'archived'));
       const runtimes = rooms.filter((room) => room.lifecycle !== 'archived').map((room) => runtimeByRoom.get(room.id) || suspendedRuntime(room.id));
       return {
         project, rooms, runtimeByRoom,
@@ -3181,6 +3156,7 @@
   $('sidebar-collapse').addEventListener('click', () => app.classList.toggle('sidebar-collapsed'));
   window.addEventListener('hashchange', () => {
     diagnostics.cancel();
+    ordering.cancel();
     closeRoomContextMenu();
     if (new URLSearchParams(location.hash.replace(/^#/, '')).has('token')) {
       location.reload();
