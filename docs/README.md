@@ -1,52 +1,61 @@
 # Documentation map
 
-This directory keeps only documentation that still needs maintenance. Historical designs, one-off reviews, release snapshots, and old screenshots stay in Git history and are not copied forward in the current tree.
+Start with the question you need answered. Each document has one primary responsibility; follow its links rather than copying its contract into every guide.
 
-## Read by task
+## Choose, start, and operate
 
-| Goal | Document | Unique responsibility |
+| Question | Document | Owns |
 |---|---|---|
-| First run | [GETTING_STARTED](GETTING_STARTED.md) | From install or desktop launch through the first Room |
-| Understand behavior | [CONCEPTS](CONCEPTS.md) | Project, Room, Turn, FIFO, dynamic handles, roles, and approval semantics |
-| Change configuration | [CONFIGURATION](CONFIGURATION.md) | JSON configuration, Providers, runtime policy, and safety boundaries |
-| Look up commands | [CLI_REFERENCE](CLI_REFERENCE.md) | Command entry points, how to discover flags, and the auto-checked inventory |
-| Call HTTP | [API_REFERENCE](API_REFERENCE.md) | Management / Room HTTP and SSE contract |
-| Change the implementation | [ARCHITECTURE](ARCHITECTURE.md) | Components, state ownership, invariants, and code navigation |
-| Understand persistence | [STORAGE](STORAGE.md) | Event Log, Binding, attachments, backup, and restart recovery |
-| Deploy and maintain | [OPERATIONS](OPERATIONS.md) | Desktop, Service, Daemon, archive, delete, diagnostics, and recovery |
-| Diagnose problems | [TROUBLESHOOTING](TROUBLESHOOTING.md) | Symptom-oriented common failures |
-| Upgrade across versions | [UPGRADING](UPGRADING.md) | Breaking changes, backup, verification, and rollback |
-| Change the Agent contract | [PROTOCOL](PROTOCOL.md) | Input envelopes, exact mention routing, and convergence rules |
+| Is this useful for my workflow? | [Why PairRoom](WHY_PAIRROOM.md) | Value, use cases, costs, limits, evaluation method |
+| Why not a similar tool? | [Alternatives](ALTERNATIVES.md) | Dated primary-source comparison and selection tradeoffs |
+| How do I complete a first task? | [Getting started](GETTING_STARTED.md) | Prebuilt/source entry points, Mock, first real Room |
+| What does the Room do? | [Concepts](CONCEPTS.md) | User-facing Room, Binding, Turn, relay, permission, and recovery semantics |
+| What can I configure? | [Configuration](CONFIGURATION.md) | Precedence, immutable Agent selection, Providers, supported native policy |
+| How do I run and maintain it? | [Operations](OPERATIONS.md) | Desktop/daemon ownership, capacity, archive/delete, backup, shutdown |
+| What should I check when it fails? | [Troubleshooting](TROUBLESHOOTING.md) | Symptom-to-action guidance, not a second specification |
+| What changes on upgrade? | [Upgrading](UPGRADING.md) | Compatibility boundaries, migration actions, rollback |
 
-The top-level [README](../README.md) owns English product positioning and the shortest path to a first run. The Simplified Chinese equivalent is [README.zh-CN.md](../README.zh-CN.md). [CONTRIBUTING](../CONTRIBUTING.md) owns the development process. [CHANGELOG](../CHANGELOG.md) owns version history. Desktop toolchain and packaging commands live in [desktop/README](../desktop/README.md).
+## Integrate and develop
 
-## Content boundaries
-
-Each fact should have one detailed explanation:
-
-- Collaboration semantics belong in `CONCEPTS.md`;
-- Code structure, desktop-host boundaries, and concurrency invariants belong in `ARCHITECTURE.md`;
-- Exact command and interface names belong in Reference documents;
-- Failure handling belongs in `TROUBLESHOOTING.md`;
-- Version migration belongs in `UPGRADING.md`.
-
-Other documents link to that explanation instead of copying it. Short-lived plans that tests or source cannot verify belong in an Issue / PR, not in long-lived Reference.
-
-## Maintenance rules
-
-When the following code changes, update the matching documents:
-
-| Code area | Documents |
+| Document | Owns |
 |---|---|
-| `desktop/` | `GETTING_STARTED.md`, `ARCHITECTURE.md`, `OPERATIONS.md`, and `desktop/README.md` |
-| `internal/room/`, `internal/agent/` | `CONCEPTS.md`, `ARCHITECTURE.md`, `PROTOCOL.md` |
-| `internal/config/`, Provider parsing | `CONFIGURATION.md` |
-| `cmd/pairroom/` | `CLI_REFERENCE.md` |
-| `internal/server/`, `internal/service/` HTTP handlers | `API_REFERENCE.md` |
-| `internal/store/`, archive / backup | `STORAGE.md`, `OPERATIONS.md`, `UPGRADING.md` |
+| [CLI reference](CLI_REFERENCE.md) | Command responsibilities and source-derived flag inventory |
+| [API reference](API_REFERENCE.md) | HTTP/SSE contracts, receipts, errors, source-derived routes |
+| [Protocol](PROTOCOL.md) | Model-facing bootstrap, envelope, exact-handle relay, convergence |
+| [Architecture](ARCHITECTURE.md) | Components, state ownership, lifecycle and implementation invariants |
+| [Storage](STORAGE.md) | Durable/ephemeral state, schema, replay, recovery and archive boundaries |
+| [Contributing](../CONTRIBUTING.md) | Development setup, verification layers, PR and documentation workflow |
+| [Desktop development](../desktop/README.md) | Native build dependencies, packaging, source-based local update |
 
-Before committing, run:
+## Repository-wide documents
 
-```bash
-make docs-check
-```
+The documentation set includes more than this directory.
+
+| Source | Responsibility and authority |
+|---|---|
+| [English README](../README.md) / [Chinese README](../README.zh-CN.md) | Equivalent product entry points and quick start; only these product overviews are translated |
+| [Security](../SECURITY.md) | Threat model, authentication, permissions, privacy/data path, vulnerability reporting |
+| [Support](../SUPPORT.md) | Support and compatibility scope, safe issue-reporting evidence |
+| [Project language](../CONTEXT.md) | Canonical terms and English/Chinese equivalents |
+| [Root Agent contract](../AGENTS.md) / [Desktop Agent contract](../desktop/AGENTS.md) | Contributor instructions for their respective scopes; `CLAUDE.md` is a projection, not a separate authority |
+| [Skill boundary](../.agents/skills/README.md) / [Subagent boundary](../.agents/subagents/README.md) | Project-authored skill/subagent sources and generated projection ownership |
+| [License](../LICENSE) / [Third-party notices](../THIRD_PARTY_NOTICES.md) | Legal terms and retained third-party notices, not product guidance |
+| [Changelog](../CHANGELOG.md) | Historical release facts; older entries do not define current behavior |
+| [History provenance](../HISTORY_PROVENANCE.md) | Reconstruction history, not current build or compatibility evidence |
+| [Historical validation records](validation/README.md) | Scope and limitations of retained old JSON reports; not proof that today's source passes |
+
+## Reading authority and status
+
+For runtime facts, inspect the implementation, tests, and current reference for the relevant version. The CLI's `--help` owns exact flag defaults; source registrations own routes; configuration structs/parser own fields; the Store and replay code own schemas. Examples illustrate these contracts rather than overriding them.
+
+The Why and Alternatives pages are explanations and analysis. Their `reviewed` metadata identifies the source-review date, not a successful runtime test. A comparison of a repository's main branch is not certification of a released package. A document marked `status: historical` is retained evidence, not an active specification. Proposals and one-off audit reports belong in Issues/PRs until accepted and implemented.
+
+An older plan, transcript, validation JSON, or release note must not reintroduce removed workflow stages, role aliases, Provider fields, or security behavior. When documents disagree, correct the owning current reference against source first, then update summaries and links. Do not silently convert a future proposal into an implemented capability.
+
+## Maintenance checks
+
+Run `make docs-check` after documentation changes. It checks repository Markdown local links and images, including root support/security pages, nested guides, and newly added non-ignored files. It also preserves the curated top-level guide inventory and the source-derived flag/route/configuration inventories. Source archives without Git metadata are supported.
+
+The checker handles common inline links, reference destinations, and HTML image/link targets; it ignores fenced examples and comments. It does not make network requests, certify external claims, validate every Markdown extension or heading fragment, or execute example commands. Review those manually, including both README languages. Do not weaken a check merely to retain a stale reference.
+
+When changing a contract, update its owner and the smallest relevant summaries. Keep technical documentation in English, the two root READMEs equivalent, terminology aligned with `CONTEXT.md`, and historical records intact. Add a new page only for a distinct reader need; do not resurrect deleted one-off plans or duplicate privacy, compatibility, or troubleshooting pages.

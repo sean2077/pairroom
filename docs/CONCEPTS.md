@@ -1,90 +1,77 @@
 # Core concepts
 
-## Project, Room, and Binding
+PairRoom coordinates native coding sessions. It is not a model provider, a replacement tool loop, or an enforced workflow compiler. This page defines the user-facing behavior; [Protocol](PROTOCOL.md) owns exact model-facing routing rules, and [Architecture](ARCHITECTURE.md) owns implementation invariants. Canonical terminology is in [Project language](../CONTEXT.md).
 
-**Project** is the registration record of a local Git repository in the Management Service. It stores the repository location and the Rooms that can be created there. It is not a copy of the repository and does not own user source.
+## Project, Room, and Runtime
 
-**Room** is the persistence boundary for collaboration. It holds creation-time collaboration instructions, independent permission profiles, messages, Turn summaries, approvals, Bindings, attachments, and the Event Log. A Room can continue across process starts, but the native process itself is not restored with the Event Log.
+A **Project** registers a canonical local Git repository. A **Room** is a durable collaboration context belonging to a Project, containing two participant slots, messages, session Bindings, and saved collaboration instructions. A **Room Runtime** is the active set of processes and HTTP surfaces serving that Room. Suspending a Runtime does not delete the Room.
 
-**Binding** binds a stable Room participant slot to a vendor-native session or thread. Durable ActorIDs `claude` and `codex` still identify Agent 1 and Agent 2 internally; `RuntimeKind` independently selects Claude Code, Codex, or Grok Build. A Binding is managed by the Service and cannot be reused freely by another active Room.
+A participant's **Runtime** selects Claude Code, Codex, or Grok Build. Either slot may use any supported Runtime, including the same Runtime twice. Historical ActorIDs `claude` and `codex` mean Agent 1 and Agent 2 in persisted data; they do not require those vendors to occupy the slots.
 
-## Public identity and mention handles
+Public display names and mention handles come from the selected Runtimes. Unique Runtimes use `@claude`, `@codex`, or `@grok`; duplicates use stable slot-order suffixes such as `@codex0` and `@codex1`. Copy the handle shown in the Room rather than inferring it from an ActorID or responsibility.
 
-Public identity follows the runtime currently assigned to each slot. When a runtime occurs once, its display name and handle are `Claude Code` / `@claude`, `Codex` / `@codex`, or `Grok Build` / `@grok`. When both slots use the same runtime, stable slot order adds zero-based suffixes everywhere: for example `Codex 0` / `@codex0` for Agent 1 and `Codex 1` / `@codex1` for Agent 2. Changing a runtime may therefore change public identity without changing the durable ActorID or Binding owner.
+## Binding and naming
 
-An unsuffixed handle for a duplicated runtime is ambiguous and does not route. PairRoom reports the two exact handles to use. Handle matching is case-insensitive. Mentions inside fenced code, inline code, URLs, and email addresses are ignored.
+A **Binding** associates a participant slot with a native session. New Bindings materialize when native execution creates the session; existing Bindings must resume their exact native identity. The Service owns Binding uniqueness, including archived Rooms. Native login/configuration and the pre-binding transcript remain owned by the native CLI; PairRoom does not import the earlier transcript.
 
-## Message and native Turn
+A Room name is mutable display metadata, not an ID. A missing creation name is generated once. Rename waits for a safe boundary, suspends the Runtime without interrupting the Turn, and records the new name. The next activation applies a derived native session title where supported. A desired name or failed title synchronization does not replace the native session ID. See [API reference](API_REFERENCE.md#room-names-and-native-session-correspondence).
 
-A Message is PairRoom's auditable input or output. A native Turn is one complete round actually executed by Claude Code, Codex, or Grok Build. They are not one-to-one:
+## Collaboration and permissions are separate
 
-- one Turn can receive multiple accepted steering messages;
-- a queued message may start a new Turn later;
-- successful transport delivery does not mean the Turn completed;
-- an ordinary diagnostic error does not necessarily mean the Turn terminated.
+| Creation choice | Responsibility |
+|---|---|
+| `default` | Agent 1 is Lead: planning, decisions, delegation, final review. Agent 2 is Executor: implementation, verification, and evidence-based feedback. |
+| `custom` | User-supplied natural-language rules replace the default responsibility instructions. |
 
-PairRoom releases the owner only at a reliable boundary, such as native `turn/completed`, a confirmed process exit, or an explicit cancel or abort termination event.
+The Room saves this choice at creation and restores it on activation. These instructions do not enforce a particular number or order of Turns, establish a plan-approval gate, or grant tools. A user can redirect the current task, but cannot edit the stored mode or immutable Agent selection inside an existing Room.
 
-## FIFO and single ownership
+Modern participants both use the live workspace. New Rooms default to **YOLO** for both; select narrower native policies explicitly. The independent Permission profile can be `configured`, `read-only`, or `yolo`, changed only when both participants are idle, the FIFO is empty, and no approval is pending. It does not switch responsibility, model, Provider reference, or native identity.
 
-```text
-idle
-  -> reserve one FIFO item
-  -> start one native Turn
-  -> optionally accept same-Turn steer for that same Agent
-  -> reliable terminal boundary
-  -> release owner
-  -> reserve the next FIFO item
-```
+Legacy Rooms retain their old role/workspace boundaries, including the legacy Reviewer snapshot where applicable. They are not silently converted to YOLO. Public role switching and role-based addressing are removed. See [Configuration](CONFIGURATION.md), [Security](../SECURITY.md), and [Upgrading](UPGRADING.md).
 
-Invariants:
+## One native Turn owner
 
-1. A Room has at most one active native Turn owner;
-2. Cross-Agent input starts only after the current Turn ends;
-3. A queued item is checked for cancellation again before the native submission boundary;
-4. an adapter never owns a hidden second queue; the Room FIFO is the sole queue;
-5. a generic runtime error updates diagnostics but does not release ownership by itself;
-6. a newer user instruction cancels an older not-yet-started Agent relay without implicitly interrupting the active native Turn.
+A native **Turn** can contain many model/tool events; it is not one chat bubble or one tool call. PairRoom permits one participant's native Turn at a time **within a Room**. Cross-Agent input waits in the Room's FIFO until a reliable terminal boundary releases ownership.
 
-## Message intent
+This is not automatic A/B/A/B rotation. The current Agent may finish all useful work and answer the user. A diagnostic error, lack of recent output, or HTTP submission receipt does not prove its native Turn has ended.
 
-- `steer` is the default. When the target already owns the active Turn, PairRoom asks its adapter to steer that Turn. `accepted` enters the Turn; `unavailable` or `rejected` moves the same Message into the Room FIFO exactly once; `unknown` fails visibly and requires an explicit Retry so PairRoom cannot duplicate uncertain work.
-- `queue` always enters the Room FIFO when another Turn is active. When the Room is idle, it starts immediately.
+The ownership rule does not create a per-Room Git worktree, lock the repository against external writers, isolate other Rooms, or disable native tool/subagent concurrency. Arrange separate checkouts/worktrees and explicit integration for independent writing tasks. Native permissions and host isolation remain separate concerns.
 
-Input to the other Agent is always queued until the active Turn ends, regardless of intent. A user who wants to stop current work uses Cancel or Interrupt explicitly.
+## Agent relay
 
-## Agent relay and convergence
+After the current native Turn ends, an Agent's complete visible reply is relayed only when it contains the other participant's exact current handle. Code, URLs, email addresses, ambiguous duplicate handles, and self-handles do not create a peer relay under the [Protocol](PROTOCOL.md#output-routing) rules.
 
-Only the exact current handle of the other Agent in visible Agent output requests a relay. PairRoom stores and forwards that complete visible response and its attachments after the current native Turn completes. It does not truncate the response, append Room history, or require a structured handoff packet.
+No exact peer handle means Agent relay ends. `@user` alone returns the decision to the human; an Agent handle in the same reply wins over `@user`. Neither `@lead`/`@executor` nor historical role aliases are routing handles. An unaddressed human message starts Agent 1 in a modern Room.
 
-A response without the peer's exact handle ends Agent relay. Either Agent may deliver the final result. An exact Agent handle wins over `@user` in the same response; `@user` alone leaves the Room waiting for the user; a self-mention never routes. Former aliases such as `@driver`, `@reviewer`, `@lead`, `@executor`, `@peer`, `@human`, `@all`, `@agent1`, and `@agent2` do not route; an otherwise unaddressed user send that relies on one is rejected. Former `PAIRROOM` control markers are ordinary text.
+Only the current complete peer response and its attachments are forwarded, not an appended copy of all Room history. Each native session retains its own context. A peer's claim is input to verify, not proof that a command succeeded or that the user approved an action.
 
-PairRoom applies no hop or Turn ceiling to explicit relays. The bootstrap tells each Agent to mention the peer only when another independent response can materially complete the user's request, not to acknowledge, agree, thank, or ceremonially return a Turn. If Agents deliberately keep naming one another, the user can Cancel, Interrupt, or send a newer instruction.
+There is no automatic relay-count ceiling. Agents are instructed not to continue for acknowledgement, thanks, or ceremonial turn return, but the human remains the active circuit breaker. Do not confuse these instructions with a cost budget or an unattended-completion guarantee.
 
-## Collaboration and permissions
+## Human controls and receipts
 
-A new Room has exactly two collaboration choices. **Default** gives Agent 1 the Lead responsibility (planning, technical decisions, final review) and Agent 2 the Executor responsibility (implementation, verification, and useful challenges to the plan). Choose their Runtime, Provider, model, and effort independently. **Custom** replaces those responsibilities with the user's natural-language instructions; generic Agent 1 / Agent 2 labels remain. The versioned instructions are stored at creation and restored unchanged. There is no in-Room mode editor or role switch.
+| Action or state | Meaning |
+|---|---|
+| Send / `steer` | Default intent. Same-target input may join the active Turn if the adapter confirms native steering. |
+| `queue` / cross-Agent input | Wait for ownership in the Room FIFO. No hidden competing adapter queue. |
+| Steering unavailable/rejected | Queue the same input once. An unknown submission result instead fails visibly for explicit recovery. |
+| Cancel while waiting | Remove that FIFO item without clearing unrelated queued input. |
+| Interrupt after native acceptance | May stop the entire active native Turn, including multiple inputs absorbed into it. |
+| Retry | Create a new auditable Message for an unsuccessful terminal target; do not mutate or blindly resubmit the old one. |
+| Native approval | Answer the actual advertised request and scope; it is not an approval for an arbitrary PairRoom plan. |
 
-Responsibilities are instructions, not tool grants or a mandatory phase machine. Both participants use the same live workspace and the Room still permits only one native Turn owner. An unaddressed human message starts Agent 1; use the displayed exact handle or target selector for Agent 2. Only an exact peer mention requests a relay. Later human instructions may redirect the task without rewriting the saved mode.
+Support for steering differs by Runtime. Codex uses native Turn steering, Claude's current adapter reports it unavailable, and Grok uses its supported interjection extension. See [Architecture](ARCHITECTURE.md#native-adapters) for adapter boundaries.
 
-New Service defaults explicitly use YOLO for both participants. The creation form exposes narrower native policy overrides and a warning about bypassing routine approvals. During an idle Room, **Configured** restores the immutable creation-time selection, **Read-only** applies native plan/read-only policy, and **YOLO** requests bypass and full native access. Permission changes cannot alter responsibility, Provider, model, instructions, or native session identity. Read-only is a native-tool boundary, not an OS sandbox or separate snapshot.
+A newer human instruction can cancel stale not-yet-started Agent relays. A send receipt means input was recorded/admitted, not that a change was made or a Turn completed. Inspect delivery/processing state, Turn summary, and actual repository/test evidence. Concurrent pending retries of the same source/participant are rejected; this is not an exactly-once guarantee. Wire details belong in [API reference](API_REFERENCE.md).
 
-Legacy Rooms without a collaboration record retain their existing Driver / Reviewer / Peer policy and isolated Reviewer workspace. They are not silently converted to the new defaults. The legacy role controls and aliases are no longer public; create a new Room to adopt the new model.
+## What survives an interruption?
 
-## Approval and human questions
+The Event Log retains Room facts and auditable state. Current process connections, transient token deltas, native request IDs, and the active owner are not durable processes you can resume by replaying the UI.
 
-Native permission requests remain visible Room approvals and retain the vendor's available decisions. A request ID belongs to one live native connection, so unresolved approvals expire across process restart.
+| State at restart | Recovery |
+|---|---|
+| Room-owned input that never crossed native submission | Rebuild in FIFO order |
+| Input caught in `submitting` with unknown native ownership | Fail for explicit Retry after inspection |
+| Unfinished input already accepted by the native Runtime | Cancel without automatic replay |
+| Connection-local pending approval | Expire rather than reusing the response |
 
-When a headless runtime cannot continue an interactive question in place, the generic human-input bridge emits the question visibly with `@user`, interrupts that native Turn, and lets the user's reply start a new Turn. PairRoom does not hide a native prompt or reintroduce a workflow layer.
-
-## Restart and recovery
-
-The Event Log, Binding, Messages, and Room-owned FIFO states are durable. On restart:
-
-- FIFO entries that never crossed the native submission boundary are restored in original order;
-- an entry caught in the native submission acceptance window is marked failed with explicit Retry guidance, because automatic replay could duplicate execution;
-- input already accepted by a native runtime is not replayed and its unfinished processing is cancelled;
-- pending approvals expire;
-- the user inspects repository state before retrying any uncertain or accepted work.
-
-This distinction preserves queued work while failing closed wherever native ownership cannot be proven.
+Inspect repository side effects before retrying uncertain work. A backup of Room data does not include the repository or all native session stores. [Storage](STORAGE.md) is the authority for replay/schema details; [Operations](OPERATIONS.md) covers backup and shutdown.
