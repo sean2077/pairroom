@@ -21,7 +21,7 @@ from: @codex
 Implemented the change; tests passed. @claude Please review the diff.
 ```
 
-When attachments are present, a compact `attachments:` list between `from` and the body carries quoted filename, media type, and adapter-only local path. Binary image parts continue through native transport. The complete body remains unchanged, including its whitespace; relay never summarizes a peer response or appends accumulated Room history.
+When attachments are present, a compact `attachments:` list between `from` and the body carries quoted filename, media type, and adapter-only local path. Binary image parts continue through native transport when supported. When Grok ACP does not advertise image input, PairRoom still validates the attachments and delivers the complete text envelope with local paths, plus an explicit notice that no visual content was sent. Grok may use a permitted native image-reading tool or ask `@user` for missing details; the fallback does not claim image understanding. The complete body remains unchanged, including its whitespace; relay never summarizes a peer response or appends accumulated Room history.
 
 Message ID, Thread ID, ReplyTo, native request/session IDs, delivery intent, and protocol version remain available to transport, Event Log, and diagnostics where applicable. They are not repeated as model-facing envelope fields. Self/peer identity and fixed responsibility live at the instruction layer, not in `self_handle`, `peer_handle`, or `current_role` per turn. Static contract checks cap the ordinary envelope overhead at 128 bytes (excluding body/media) and the bootstrap plus default collaboration at 1,800 bytes. Custom instructions have a separate 16 KiB UTF-8 input limit; these byte budgets are not token-billing claims.
 

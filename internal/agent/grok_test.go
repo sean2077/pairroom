@@ -2,15 +2,64 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/prompt"
 )
+
+func TestGrokContentImageCapabilityFallback(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "设备.png")
+	data := []byte("verified attachment bytes")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attachment := model.AgentAttachment{Attachment: model.Attachment{Kind: "image", Name: "设备.png", MediaType: "image/png", Size: int64(len(data))}, Path: path}
+	input := model.AgentInput{Text: "  inspect devices\n\n", FromHandle: "@codex", Attachments: []model.AgentAttachment{attachment}}
+	envelope := prompt.Envelope(input)
+	for _, images := range []bool{false, true} {
+		content, err := grokContent(envelope, input.Attachments, images)
+		if err != nil || len(content) != 2 {
+			t.Fatalf("images=%v content=%v err=%v", images, content, err)
+		}
+		if content[0]["text"] != envelope {
+			t.Fatal("body or attachment metadata changed")
+		}
+		if images {
+			if content[1]["type"] != "image" || content[1]["data"] != base64.StdEncoding.EncodeToString(data) || content[1]["mimeType"] != "image/png" {
+				t.Fatalf("image transport changed: %v", content)
+			}
+		} else if content[1]["type"] != "text" || !strings.Contains(content[1]["text"].(string), "not sent as visual content") {
+			t.Fatalf("missing explicit image limitation: %v", content)
+		}
+		plain, err := grokContent("text only", nil, images)
+		if err != nil || len(plain) != 1 || plain[0]["text"] != "text only" {
+			t.Fatalf("plain text changed: %v %v", plain, err)
+		}
+		invalid := attachment
+		invalid.Kind = "file"
+		if _, err := grokContent(envelope, []model.AgentAttachment{invalid}, images); err == nil {
+			t.Fatal("unsupported attachment accepted")
+		}
+		invalid = attachment
+		invalid.Size++
+		if _, err := grokContent(envelope, []model.AgentAttachment{invalid}, images); err == nil {
+			t.Fatal("changed attachment accepted")
+		}
+		invalid = attachment
+		invalid.Path += ".missing"
+		if _, err := grokContent(envelope, []model.AgentAttachment{invalid}, images); err == nil {
+			t.Fatal("missing attachment accepted")
+		}
+	}
+}
 
 func TestGrokACPCommandOmitsUnsetOverridesAndPromptText(t *testing.T) {
 	adapter := NewGrok(Config{
@@ -176,6 +225,12 @@ func TestClassifyGrokInterjectAcknowledgement(t *testing.T) {
 func TestGrokACPLifecycleCreatesSessionAndInterjects(t *testing.T) {
 	t.Setenv("PAIRROOM_GROK_HELPER", "1")
 	t.Setenv("PAIRROOM_GROK_HELPER_MODE", "interject")
+	t.Setenv("PAIRROOM_GROK_HELPER_NO_IMAGES", "1")
+	path := filepath.Join(t.TempDir(), "device.png")
+	if err := os.WriteFile(path, []byte("image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attachments := []model.AgentAttachment{{Attachment: model.Attachment{Kind: "image", Name: "device.png", MediaType: "image/png", Size: 5}, Path: path}}
 	events := make(chan model.RuntimeEvent, 64)
 	adapter := NewGrok(Config{Actor: model.ActorClaude, Command: os.Args[0], Repo: t.TempDir()}, func(event model.RuntimeEvent) { events <- event })
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -183,6 +238,7 @@ func TestGrokACPLifecycleCreatesSessionAndInterjects(t *testing.T) {
 	if err := adapter.StartTurn(ctx, model.AgentInput{
 		MessageID: "first", ThreadID: "thread", From: model.ActorUser, To: model.ActorClaude,
 		FromHandle: "@user", SelfHandle: "@grok", PeerHandle: "@codex", Role: model.RoleDriver, Text: "begin",
+		Attachments: attachments,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +248,7 @@ func TestGrokACPLifecycleCreatesSessionAndInterjects(t *testing.T) {
 	outcome := adapter.Steer(ctx, model.AgentInput{
 		MessageID: "steer", ThreadID: "thread", From: model.ActorUser, To: model.ActorClaude,
 		FromHandle: "@user", SelfHandle: "@grok", PeerHandle: "@codex", Role: model.RoleDriver, Text: "change direction",
+		Attachments: attachments,
 	})
 	if outcome.State != SteerAccepted {
 		t.Fatalf("Grok interject outcome = %+v", outcome)

@@ -586,12 +586,6 @@ func (g *GrokAdapter) StartTurn(ctx context.Context, input model.AgentInput) err
 
 func grokContent(text string, attachments []model.AgentAttachment, allowImages bool) ([]map[string]any, error) {
 	content := []map[string]any{{"type": "text", "text": text}}
-	if !allowImages {
-		if len(attachments) > 0 {
-			return nil, errors.New("Grok Build does not advertise image prompt support")
-		}
-		return content, nil
-	}
 	for _, attachment := range attachments {
 		if attachment.Kind != "image" || !strings.HasPrefix(strings.ToLower(attachment.MediaType), "image/") {
 			return nil, fmt.Errorf("attachment %q is not a Grok image", attachment.Name)
@@ -603,9 +597,17 @@ func grokContent(text string, attachments []model.AgentAttachment, allowImages b
 		if len(data) == 0 || (attachment.Size > 0 && int64(len(data)) != attachment.Size) {
 			return nil, fmt.Errorf("Grok image %q changed after attachment validation", attachment.Name)
 		}
+		if !allowImages {
+			continue
+		}
 		content = append(content, map[string]any{
 			"type": "image", "data": base64.StdEncoding.EncodeToString(data), "mimeType": attachment.MediaType,
 		})
+	}
+	if !allowImages && len(attachments) > 0 {
+		// The envelope retains the verified local paths. Do not send unsupported
+		// binary blocks or reject the complete message because of optional media.
+		content = append(content, map[string]any{"type": "text", "text": "[PairRoom attachment notice]\nGrok Build does not support image input over ACP. The images were not sent as visual content; their names and local paths are listed in the message. Use an available native image-reading tool if supported and permitted. If you cannot inspect them, state that limitation and ask @user for the needed details; do not infer image contents from filenames."})
 	}
 	return content, nil
 }
