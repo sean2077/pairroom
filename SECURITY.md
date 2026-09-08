@@ -1,222 +1,131 @@
 # PairRoom security policy
 
-> [Architecture](docs/ARCHITECTURE.md) · [Privacy model](docs/PRIVACY.md) · [Operations](docs/OPERATIONS.md) · [Support scope](SUPPORT.md)
+[Architecture](docs/ARCHITECTURE.md) · [Data and privacy](#9-sensitive-local-data) · [Operations](docs/OPERATIONS.md) · [Support](SUPPORT.md)
 
 ## 1. Threat model
 
-PairRoom starts high-privilege local coding Agents. An Agent may read files, modify a repository, run commands, access the network, and invoke user-configured Skills, MCP, Hooks, and plugins. The PairRoom Web UI is a control and observation surface. It does not replace Claude Code, Codex, or Grok Build permissions, sandbox, or organization policy.
+PairRoom starts high-privilege local coding Agents. Native tools, Skills, MCP, Hooks, plugins, and subprocesses may read/modify files, run commands, and access the network. PairRoom's UI and Room scheduler do not replace native permission, sandbox, or organization policy.
 
-PairRoom also stores sensitive discussion, runtime events, and images, so the focus is:
+The intended environment is one user, a trusted local machine, and a trusted repository. There is no security boundary against a malicious same-user local process, compromised OS, or kernel. The control plane addresses unauthorized browser/API access, CSRF/DNS rebinding, credential exposure, unsafe attachments/imports, ambiguous high-privilege native requests, and divergence between durable Room facts and runtime ownership.
 
-- unauthorized browser access to the Management/Room API;
-- DNS rebinding, cross-origin commands, and CSRF;
-- Token leakage through URL, history, Web Storage, logs, or screenshots;
-- malicious images, forged media types, and resource exhaustion;
-- path traversal, symlink escape, and importing files outside the repository;
-- implicit access leakage from remote Markdown images;
-- unknown high-privilege vendor requests being allowed by mistake;
-- UI role disagreeing with actual Runtime permission;
-- leftover approvals, locks, or “ghost working” after a crash;
-- Registry, Event Log, and Binding ownership divergence;
-- treating Reviewer as container-grade isolation.
-
-PairRoom primarily targets a single user, a trusted local machine, and a trusted repository. It does not provide a security boundary against a malicious local same-user process, a compromised kernel, or an untrusted OS.
+**New Rooms default to YOLO for both participants.** Lower approval friction is not stronger security. Lead/Executor are responsibilities, not tool restrictions. There is no automatic Agent-relay count or cost ceiling. Use explicit native restrictions and controlled execution environments for tasks that require them.
 
 ## 2. Network security defaults
 
 ### 2.1 Numeric loopback only
 
-- `pairroom service`, `pairroom serve`, and each Room Runtime accept only numeric loopback addresses;
-- Wildcard addresses, LAN/public addresses, hostnames, and `localhost` are rejected before opening repository or Service state;
-- Tokenless `serve` still performs loopback Host and same-origin checks;
-- PairRoom has no built-in TLS or remote listener;
-- Remote access uses only SSH local port forwarding.
+`pairroom service`, `pairroom serve`, and Room listeners accept only numeric loopback addresses. Wildcard, LAN/public, hostname, and `localhost` binds are rejected before state is opened. **A token does not enable a non-loopback listener.** Tokenless compatibility `serve` still performs loopback Host and same-origin checks.
 
-A Bearer Token is defense in depth, not a substitute for transport encryption.
+There is no built-in TLS or remote listener. Use SSH local port forwarding for remote access while retaining loopback and authentication checks. Treat the forwarded endpoint as access to local repositories and high-privilege Agent tools, not a multi-user hosting interface.
 
 ### 2.2 Management Shell authentication
 
-When the Service is not given an explicit Token, it generates a random Management Bearer Token and places it in the startup URL fragment.
+Without an explicit Service token, PairRoom generates a random Management Bearer token and puts it in the startup URL fragment. The browser can enter through that full URL, or through the origin's login form using the token/full URL.
 
-The browser flow supports two entries:
+The browser removes the fragment with `history.replaceState`, exchanges the token through `POST /api/v1/session`, and receives a 12-hour sliding-expiry `HttpOnly`, `SameSite=Strict` cookie scoped to `/api/v1/`. CSRF is kept only in page memory; session-authenticated mutations send `X-PairRoom-CSRF`.
 
-1. Full Management URL: JavaScript reads the Token from the fragment and immediately removes the fragment from the address bar with `history.replaceState`;
-2. Opening the Management origin directly: if there is no recoverable Session, a credential login page accepts the configured Service Token or a complete Management URL containing `#token=...`;
-3. Both entries use `Authorization: Bearer <token>` once to call `POST /api/v1/session`;
-4. The Service returns a 12-hour sliding-expiry `HttpOnly`, `SameSite=Strict` Session Cookie path-limited to `/api/v1/`, plus a CSRF Token kept only in page memory;
-5. The bootstrap/login Token is then cleared from page memory and the input box. Later browser requests use the Session Cookie, and mutations must also provide `X-PairRoom-CSRF`;
-6. Explicit logout calls `DELETE /api/v1/session`. When the Session is invalid, the page returns to the login entry.
-
-Management Token, Session ID, and CSRF are not written to `localStorage`/`sessionStorage`. On refresh, the page can recover CSRF from a still-valid Cookie via `GET /api/v1/session`. Service restart, session expiry, explicit logout, or a new browser context requires the Service Token again. CLI/API clients may keep sending a Bearer Header. A query-string token does not authorize the Management API.
+The bootstrap token is cleared from page memory/input after exchange. Neither tokens, session IDs, nor CSRF are stored in Web Storage. Refresh can recover CSRF via `GET /api/v1/session` while the cookie is valid. Restart, expiry, logout, or another browser context requires authentication again; explicit logout uses `DELETE /api/v1/session`. CLI/API clients may use a Bearer header. A query-string token does not authorize Management requests.
 
 ### 2.3 Room View authentication
 
-A Service Room Runtime automatically uses an independent Token; compatibility `serve` may set a Token explicitly. When a Token is enabled:
+A Service-managed Room has an independent token; compatibility `serve` may configure one. When token authentication is enabled, the browser exchanges a fragment credential for a 12-hour sliding-expiry `HttpOnly`, `SameSite=Strict` session cookie and uses per-session CSRF for writes. Tokens and CSRF do not enter query strings or Web Storage. REST, SSE, and attachments do not accept a query token as authorization.
 
-1. Startup credentials appear only in the URL fragment;
-2. The browser exchanges them through the bootstrap endpoint for a 12-hour sliding-expiry `HttpOnly`, `SameSite=Strict` Session Cookie;
-3. Writes require a per-session CSRF Token;
-4. Long-lived Tokens and CSRF do not enter URL query or Web Storage;
-5. CLI/API clients may keep using the Authorization Header;
-6. A query token does not authorize REST, SSE, or attachment APIs.
-
-Room A's Token, Session, CSRF, SSE cursor, and attachment authorization cannot be used for Room B.
+Room A's token/session/CSRF, event cursor, and attachment authorization cannot authorize Room B. The Management same-origin Room gateway is not permission to transfer Room identities or reuse stale actions against a different embedded surface.
 
 ### 2.4 HTTP protections
 
-- The Management API accepts a direct Bearer or a valid browser session. Session-authenticated mutations require CSRF, and all mutations also check `Sec-Fetch-Site`/Origin;
-- The Room API performs Host and same-origin checks; when a browser session is enabled, mutations also perform CSRF checks;
-- The Room API rate-limits by client with a fixed window to reduce local abuse and accidental loops;
-- Both Web surfaces enable CSP, `frame-ancestors 'none'`, no-referrer, and no-sniff response headers. The Management same-origin Room surface changes only its own responses to `frame-ancestors 'self'`; a direct Runtime URL still forbids framing;
-- Room attachment responses require authentication and use `nosniff`, ETag, and inline disposition;
-- The startup fragment is not sent with HTTP requests or Referer, but it can still leak through screen sharing, log copy, or browser extensions.
+Management mutations check origin/fetch-site context; cookie-authenticated writes additionally require CSRF. Room requests perform Host and same-origin checks, with CSRF for enabled browser sessions. Room rate limiting reduces local abuse and accidental request loops; it is not an Agent spending budget.
+
+Both surfaces set CSP, no-referrer, no-sniff, and default `frame-ancestors 'none'`. Only the Management same-origin Room surface uses `frame-ancestors 'self'`; a direct Runtime URL remains unframeable. Attachments require the relevant authentication and use no-sniff, ETag, and inline disposition.
+
+URL fragments are not sent as HTTP requests/Referer, but can leak through screen sharing, copied startup output, or browser extensions. Do not publish a complete Management or Room URL.
 
 ## 3. Project, Room, and Binding
 
-- A Project accepts only an absolute path the user entered explicitly;
-- The server resolves symlinks, the Git worktree root, and canonicalizes;
-- It does not scan common development directories and does not provide a server filesystem browser;
-- Room provisioning completes in a hidden directory and is published atomically after full success;
-- `(agent, vendor_session_id)` is globally unique inside the Service; archive does not release ownership;
-- An Existing Binding must resume exactly;
-- A deferred New Binding materializes only after the first real input is accepted;
-- Event append, ownership checkpoint, or uniqueness failure interrupts execution and fails closed;
-- PairRoom does not import the vendor transcript from before the binding.
+Projects use absolute paths explicitly entered by the user, canonicalized through symlink and Git worktree-root resolution. PairRoom does not discover repositories by scanning common development directories or provide a general server filesystem browser.
 
-`agent` in Binding identity is the durable slot (`claude` / `codex`), not the selected runtime.
+Room provisioning is private until atomically published. The Service enforces Binding uniqueness by durable slot and native session ID; archive does not release ownership. An existing Binding must resume exactly. A deferred new Binding materializes only after real native input acceptance. Event/checkpoint/uniqueness failures fail closed rather than creating another owner.
+
+The Binding's `agent` is the stable slot (`claude`/`codex`), not an assumption about its selected Runtime. PairRoom does not import the vendor transcript from before the Binding.
 
 ## 4. Attachment safety
 
-- Only PNG, JPEG, GIF, and WebP are accepted;
-- SVG, HTML, scripts, and arbitrary binaries are rejected;
-- Real content signatures are checked; file extension and client MIME are not trusted;
-- Single-image size, per-message total size, count, edge length, and total pixels are limited;
-- Files and manifests use random opaque IDs and conservative permissions;
-- Every Resolve rechecks size, regular file, non-symlink, dimensions, and SHA-256;
-- Message/API/export do not include the attachment's local absolute path;
-- Repository image import goes through canonical path and symlink boundary checks;
-- Remote URLs do not enter the automatic import flow;
-- Attachments already in the durable transcript cannot be removed through a DELETE API;
-- Object URLs exist only in the current page and are not persistent public links.
+Only verified PNG, JPEG, GIF, and WebP images are accepted. SVG, HTML, scripts, and arbitrary binaries are rejected. Content signatures, not filename/MIME alone, determine acceptance. Limits cover count, individual/combined size, edge length, and pixel count.
 
-Images can still contain secrets, customer information, or other window contents that are visible to the eye. Format validation does not replace a human check before sending.
+Attachments and manifests use opaque IDs and conservative permissions. Resolve checks size, regular-file/non-symlink status, dimensions, and SHA-256 again. Accepted Message image identity cannot be silently changed. Repository image import enforces canonical path/symlink boundaries; remote URLs are not automatically imported. Committed transcript attachments cannot be removed through the attachment DELETE API.
+
+The API/transcript carries verified metadata, not an absolute host attachment path. Adapter-local resolution occurs only at the native boundary. Browser object URLs are transient, not persistent public links. Image validation cannot detect whether a screenshot visibly contains a secret; inspect content before sending or sharing.
 
 ## 5. Runtime and approvals
 
 ### 5.1 Claude
 
-- Startup must complete native control initialize;
-- Unknown control requests return error;
-- `can_use_tool`/`AskUserQuestion` enter the durable approval lifecycle;
-- The read-only permission profile (or an enforced legacy Reviewer) uses plan permission mode and blocks write tools;
-- The control layer fail-closes again on write requests that still arrive.
+Native control initialize must succeed. Unknown control requests error; native tool/question requests enter the Room approval lifecycle. A read-only profile or preserved enforced legacy Reviewer uses plan permissions and blocked write tools, with another fail-closed control check for write requests that still arrive.
 
 ### 5.2 Codex
 
-- Unknown app-server requests fail closed;
-- The read-only permission profile (or an enforced legacy Reviewer) uses a read-only sandbox;
-- Additional permissions can be granted only as a subset of the original request;
-- command/file/additional-permission requests enter the unified approval lifecycle.
+Unknown app-server requests fail closed. A read-only profile or preserved legacy Reviewer uses the read-only sandbox. Additional permissions can only be granted within the requested scope. Command/file/additional-permission requests use the approval lifecycle. A generic diagnostic `error` does not by itself prove a Turn ended.
 
 ### 5.3 Grok Build
 
-- Empty `provider`, `model`, `effort`, permission, and sandbox overrides are omitted so the native CLI user/global configuration is inherited;
-- Prompt and instruction text travel through the long-lived ACP stdio connection rather than process argv. Configured credentials travel only in the child environment, and known credential values are redacted from Grok runtime logs and diagnostics;
-- PairRoom advertises `terminal=false`, so Grok Build retains native tool execution instead of delegating a terminal to PairRoom;
-- Standard permission requests enter the Room approval lifecycle, cancellation resolves pending requests as cancelled, and unknown high-privilege reverse requests fail closed rather than auto-allowing.
+Unspecified Provider/model/effort/native-policy overrides retain native inheritance. Prompt and instruction text travels through long-lived ACP stdio, not argv or a prompt-file transport. Supported configured credentials are passed in the child environment; known values are redacted at the relevant log/diagnostic boundaries.
+
+PairRoom advertises `terminal=false`, retaining native tool execution. Permission choices retain the vendor's exact option identities; cancellation is cancelled, not remembered authorization. Unknown high-privilege reverse requests fail closed.
 
 ### 5.4 Approval lifecycle
 
-Interrupt, stop, restart, Runtime error/exit, permission replacement, and PairRoom restart expire pending approvals that cannot be reused safely. The UI must not replay an old decision onto a new vendor request.
+Interrupt, stop/restart, terminal failure or confirmed exit, permission replacement, and PairRoom restart expire pending requests that cannot safely be reused. A stale browser decision must not authorize a new vendor request. Invalid or incomplete answers remain answerable rather than consuming the request.
 
-Modern permission changes require an idle Room with no queued work or pending approvals. Intent is recorded before effects; the old adapter is stopped before the effective profile is committed and the replacement is started. A failed stop cannot grant a new policy, and a failed restart cannot fall back to broader permissions. Saved collaboration instructions and native session identity are retained. Legacy role mutation is not a public operation.
+Modern permission changes require an idle Room, empty FIFO, and no pending approval. Intent precedes effects; the old adapter stops before the effective policy is committed and the replacement starts. Failure cannot grant broader fallback access. Collaboration instructions and native session identity remain intact. Legacy role mutation is not a public operation. Exact wire semantics are in [API reference](docs/API_REFERENCE.md#native-approval-responses).
 
 ## 6. Workspace and responsibility boundaries
 
-**Modern Rooms default to YOLO for both Agents and both use the live workspace.** Lead / Executor are instruction responsibilities, not sandbox guarantees. The Room serializes native Turns but does not isolate the host from tools, MCP, Hooks, or subprocesses. Select explicit native read-only/plan policy or use a controlled container/VM/independent checkout for untrusted work. The creation form warns about bypassing routine approvals. Explicitly narrower or empty/native policy selections are respected.
+Modern Lead and Executor share the live workspace and default to YOLO. One native Turn owner is enforced **per Room**, not as a repository-wide lock or isolation from native children, MCP, Hooks, external editors, or other Rooms. A “reviewer” instruction does not create an independent read-only copy. Select actual native restrictions and use controlled containers/VMs or independently managed workspaces when isolation matters.
 
-Legacy Rooms without a collaboration record preserve the old independent Reviewer Git snapshot:
+Legacy role-bound Reviewer snapshots preserve HEAD, staged/unstaged tracked changes, and untracked regular files; unsafe symlinks/out-of-bound references are rejected. The snapshot records provenance and removes write bits on POSIX, then layers the native read-only/plan policy. It is not a container, VM, read-only mount, or malware sandbox. Windows semantics, native bugs, external tools, and user configuration can widen access.
 
-- includes HEAD;
-- applies staged + unstaged tracked diff;
-- copies untracked regular files;
-- rejects unsafe symlinks and out-of-bound references;
-- records source HEAD, dirty, and snapshot digest;
-- removes the write bit on POSIX;
-- then layers Claude plan/disallowed tools or Codex read-only sandbox.
-
-This is not a container, VM, read-only mount, or malware sandbox. External MCP, a vendor Runtime bug, Windows permission semantics, or user-custom configuration can widen access. For untrusted tasks, use a controlled container/VM/independent checkout.
-
-In a legacy Room, the Driver remains the only writer by default; its Reviewer snapshot is not a parallel implementation branch. Upgrading does not convert such a Room into modern YOLO collaboration. New Rooms may have both participants write sequentially. For independent parallel writers outside PairRoom, use human-managed worktrees/branches and explicit merges.
+Legacy Driver/Reviewer boundaries remain legacy; upgrading does not convert them to modern YOLO. For independent parallel writing tasks, manage separate worktrees/branches and explicit merges rather than relying on Room labels.
 
 ## 7. Persistence and recovery
 
-- The data root uses private directory permissions. Events, prompts, images, and manifests use conservative file permissions when the platform supports it;
-- Append-only events are synced before publish;
-- Only a damaged final half-line is repaired;
-- Mid-file corruption, sequence forks, or a future schema are rejected;
-- A Registry checkpoint can be rebuilt from default Room Event Logs;
-- If checkpoint write fails and consistency cannot be proven, later mutations are blocked;
-- One data root allows only one Service writer;
-- A stale lock is recovered only after confirming the recorded owner PID has exited; a live owner still fails closed;
-- Backup/restore rejects traversal, links, duplicates, undeclared files, size, and hash anomalies;
-- Ordinary transcript export does not include the verbose Inspector event tail;
-- Diagnostics are designed to omit transcript body and attachment bytes, but still need a human check.
+Data directories/files use conservative permissions where supported. Auditable events are synced before publication; high-frequency transient telemetry need not be durable. Sequences must begin at 1 and remain contiguous. Room identity is verified before repairing or appending to a published Room. Missing/empty/replaced histories, middle corruption, and unsupported schemas fail closed; only an incomplete final record can be repaired automatically.
 
-Do not hand-edit Event sequence, Store schema, attachment manifest, or Binding Identity.
+The Registry can be rebuilt from authoritative Room records. Checkpoint failure blocks mutations when consistency cannot be proven. One Service owns a data root. Recover a crash-stale lock only after proving its recorded PID is gone; do not delete a live owner's lock.
+
+Backup/restore validates paths, links, duplicates, declared files, bounds, hashes, and archive integrity. Outputs must be outside the source Room directory, including symlink aliases. A Room archive excludes the user's repository and native session stores; a full Service rollback needs a separate offline data-root backup. [Storage](docs/STORAGE.md) and [Operations](docs/OPERATIONS.md#backup) own the procedures.
+
+Recovery does not re-execute uncertain or accepted native work automatically. The Event Log is not an exactly-once side-effect mechanism or a tamper-proof compliance ledger. Do not hand-edit sequence/schema/Binding/image identity fields to bypass verification.
 
 ## 8. Runtime capacity and shutdown
 
-- An active Turn is not interrupted for capacity reclaim;
-- A queued Runtime can be cancelled;
-- active+idle Runtimes can drain safely;
-- busy, starting/stopping conflict, or cleanup-uncertain failed is not pretended to be suspended;
-- A Runtime whose cleanup is uncertain continues to occupy capacity;
-- Shutdown first stops Management mutation, then waits for in-flight management requests and Room Turns, then releases the lock.
+Capacity reclamation does not interrupt an active Turn. Cleanup-uncertain Runtimes continue to occupy capacity rather than being reported as safely suspended. Graceful shutdown stops Management mutation, drains admitted work/native Turns, then releases stores and the Service lock.
 
-Force-killing the process can leave a stale lock, pending approvals, or Processing state that needs replay to close. Prefer the normal daemon/Service lifecycle.
+Forced termination can leave native side effects, stale locks, and pending state that needs reconciliation. Prefer explicit lifecycle actions. Desktop Quit drains only an embedded Service it owns; an external daemon remains running. Closing the window merely hides it. See [Operations](docs/OPERATIONS.md#desktop-lifecycle).
 
 ## 9. Sensitive local data
 
-`events.jsonl` may contain:
+Room data can contain prompts, replies, source/diffs, filenames, command/tool output, errors, approval details, session IDs, and screenshots/customer material. Treat Event Logs, attachments, backups, and exports as private code assets.
 
-- user prompts and Agent answers;
-- filenames, diffs, tool arguments;
-- command output, errors, and local paths;
-- model/runtime diagnostics;
-- approval details and Session/Thread IDs.
-
-`attachments/` may contain error screenshots, product UI, architecture diagrams, data charts, and customer material. Treat the entire Room data, logs, backups, and exports as private code assets.
+Ordinary transcript export excludes the verbose Inspector tail. Diagnostics are designed to omit transcript bodies and attachment bytes, but can retain structured errors, paths, and environment facts. Neither is a blanket redaction guarantee for arbitrary user/Agent content. Inspect files before sharing them.
 
 ## 10. Vendor data path and custom configuration
 
-When using a cloud model, code, images, and tool results may be sent to the corresponding vendor. PairRoom does not proxy, encrypt, or change that path.
+Cloud-model requests can include code, images, and tool results sent through the selected native CLI to its Provider. PairRoom does not change or encrypt that vendor path. Local coordination/storage is not offline inference, an on-device model guarantee, or a promise that code never leaves the machine.
 
-Official CLIs still load user/project configuration, Skills, MCP, Hooks, and plugins. Malicious or overly broad configuration can widen read/write, network, and external-service access. PairRoom does not audit those configurations.
+Native user/project configuration, Skills, MCP, Hooks, and plugins remain active within supported adapter behavior; PairRoom does not audit them. Unspecified overrides inherit native configuration. Malicious or broad native configuration can widen access.
 
-Empty PairRoom `provider`/`model`/`effort`/`instructions` inherit that native CLI global configuration. Add only explicit overrides.
+Supported CC Switch references are read-only and re-resolved at creation/activation; changing an external Profile can affect a later activation. PairRoom does not change CC Switch's current Profile or maintain a second credential database. Unsupported credential/proxy/schema cases fail closed. [Configuration](docs/CONFIGURATION.md) owns the exact supported boundary.
 
 ## 11. Remote resources
 
-PairRoom does not automatically load remote Markdown images. After the user actively opens an ordinary `https` link, the browser visits the target site directly; the target site sees a normal network request.
+PairRoom does not automatically load remote Markdown images. Opening an ordinary external link deliberately sends the browser to that site; the site then receives a normal network request. Review remote content and native tools with the same trust assumptions as other project inputs.
 
 ## 12. Recommended practice
 
-1. Run only on trusted repositories;
-2. Keep secrets where the Agent does not need to read them;
-3. Do not treat Lead / Executor responsibilities as tool permission restrictions;
-4. Start from conservative vendor permission/sandbox;
-5. Review commands, paths, and permission scope carefully;
-6. Check visible sensitive information before sending images;
-7. Keep the listener on numeric loopback; use only SSH forwarding remotely;
-8. After upgrading a vendor CLI, run `pairroom doctor` and a real smoke on a non-critical repository;
-9. Verify/backup regularly and protect Room data according to sensitivity;
-10. Use a container/VM/independent checkout when strong isolation is required;
-11. Do not put complete Management/Room startup URLs in public logs or Issues;
-12. Inspect diagnostics by hand before sharing.
+Use trusted repositories and explicit native permissions; do not mistake responsibilities or natural-language “plan first” for enforcement. Keep unnecessary secrets out of the execution environment, review approval scope and screenshots, protect tokens/data/backups, and verify native CLI upgrades on a disposable read-only task before important work. Maintain normal shutdown and verified backups. Use controlled isolation for untrusted execution and keep the listener on numeric loopback.
 
 ## 13. Vulnerability reports
 
-Do not attach secrets, private repository contents, real attachments, authentication Tokens, Cookies, complete startup URLs, or directly exploitable sensitive payloads to a public Issue.
+Do not post exploit details, credentials, private code, real attachments, tokens/cookies, or complete startup URLs to a public Issue. Prefer the repository's private security reporting channel, with a minimal reproduction, affected version/platform, threat assumptions, and expected boundary.
 
-Prefer the repository's private security reporting channel. Provide only a minimal reproduction, affected versions, platform, threat assumptions, and expected boundary. If a private channel is unavailable, first file a public Issue without exploit details asking maintainers to establish a security communication channel.
+If no private channel is available, first open a public Issue without exploit details asking maintainers to establish one. Ordinary bug-report evidence and redaction guidance are in [Support](SUPPORT.md).

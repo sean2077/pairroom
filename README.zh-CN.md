@@ -2,134 +2,76 @@
 
 [English](README.md) · **简体中文**
 
+**两个原生编程 Agent，一个任务，一个本地 Room。** PairRoom 协调 Claude Code、Codex 与 Grok Build，不替换它们的原生编程 harness。让一位参与者规划和审查，另一位实现、验证，并对方案提出有依据的补充或质疑。
+
 <p align="center">
-  <img src="docs/images/pairroom-runtime-overview.png" alt="PairRoom Room View：两个 Agent 槽位在同一 Room 中按 Turn 协作">
+  <img src="docs/images/pairroom-runtime-overview.png" alt="PairRoom 协作界面">
 </p>
 
-PairRoom 是一个运行在本机的协作控制面，协调官方 Claude Code、Codex 与 Grok Build。每个持久 Room 有两个独立的 Agent 槽位；任一槽位都可以选择 Claude Code、Codex 或 Grok Build，两个槽位也可以使用相同 runtime。它保留各官方 CLI 的会话、工具、审批与沙箱能力，只负责把用户、两个 Agent 和项目工作区组织成可观察、可中断、可审计的协作过程。
+## 为什么使用？
 
-创建 Room 时，可以分别配置两个 Agent 槽位的 Runtime、native 或 CC Switch Provider 引用、可编辑 Model、Effort、附加指令与 Runtime 专属安全策略。配置会随 Room 固化并保持只读。Native Provider 引用继承原生 CLI 的用户/全局配置；PairRoom 只读使用 CC Switch 3.20.1/schema 18 中受支持的 API-key Profile，不改变 CC Switch 当前项，也不保存凭证。
+当你已经在使用两个编程会话，却反复需要搬运回复、确认谁正在执行、转交审查意见，以及排查中断后究竟做到了哪一步时，PairRoom 才有明确的价值。
 
-Management、Room View 与 Desktop 启动页共享内嵌的 i18next 26.4.2 `en`/`zh-CN` 词典和持久化语言选择。Management 顶栏、Room tabstrip、Settings 与独立 Room 共用 `system | light | dark` 主题；内嵌 Room 跟随 Management。
+- **保留原生工具。** 两个 Agent 槽位分别选择受支持的原生运行时（Runtime）、Provider、模型、effort 和附加指令，也可使用两个相同 Runtime。未指定的覆盖项继承原生 CLI 配置；受支持的 CC Switch Profile 仅以只读引用使用。
+- **围绕同一项修改协作。** 默认由 Agent 1 担任主导者（Lead），Agent 2 担任执行者（Executor）；自定义模式使用你的自然语言规则。规则在创建 Room 时固定，不会编译成死板的阶段流程。
+- **看清并控制 Agent 接力。** 每个 Room 同一时刻只有一位参与者拥有原生 Turn。回复点名对方的精确句柄，才在 Turn 结束后接力完整回复；不点名则结束。你可以查看工具与审批、追加引导或排队输入、取消、打断，并检查持久投递状态。
 
-**仅两种协作模式，创建后固定。** 默认由 Agent 1 作为**主导者（Lead）**负责规划、技术决策与最终审查，Agent 2 作为**执行者（Executor）**负责实现、验证并补充或质疑方案。可将较强的规划模型放在 Agent 1、较经济的执行模型放在 Agent 2；PairRoom 不会自动猜测模型能力或价格。**自定义**模式用自然语言替换默认规则，例如：“Agent 2 出方案，Agent 1 实现，双方质疑缺乏证据的判断。”规则进入原生指令，不编译成固定流程。
+这不意味着两个 Agent 总比一个更准确或更便宜。简单任务直接使用原生 CLI 往往就够了。Cherry Studio 已有执行型 Agent 和文档化的跨会话协作，原生 harness 也已有多 Agent 能力。选择 PairRoom 的理由应当是它具体的本地双 Agent 工作方式，而不是假设其他工具没有这些功能。
 
-**新 Room 的两位 Agent 默认均为 YOLO**，都使用实时工作区，可跳过常规工具审批执行命令、修改文件。请使用可信仓库，或选择更严格的原生权限。Room 内只能在空闲边界调整权限，不能切换身份或修改模式；寻址仅用界面显示的运行时句柄，不使用 `@driver`、`@reviewer` 或职责别名。旧 Room 保留既有权限与工作区边界，见[升级说明](docs/UPGRADING.md)。
+**[Why PairRoom](docs/WHY_PAIRROOM.md)** 说明适用场景、代价、示例和评估方法；**[替代方案比较](docs/ALTERNATIVES.md)** 基于注明日期的一手资料，对照 Cherry Studio、原生 Claude Code/Codex、Aider、Vibe Kanban、Conductor 与手动接力。
 
-**Room 与原生会话名称可相互核对。** 创建时留空会生成 `Room-<短 ID>` 临时名；可右键侧栏、标签页或项目列表中的 Room 重命名，也可用 Shift+F10 打开菜单。原生会话在下次启动时按 `<Room 名> · <@句柄> · <Room 短 ID>` 设置名称；Room 内同时显示同步状态和不变的原生 ID。重命名等待当前任务结束，不中断正在执行的 Turn。
+## 安装与体验
 
-## 核心模型
+从 [Releases](https://github.com/sean2077/pairroom/releases/latest) 下载对应安装包。`pairroom-cli-…` 为命令行，`pairroom-desktop-…` 为桌面包。Windows 桌面包以 `-setup.exe` 结尾；Linux 使用 `.deb` / `.AppImage`，macOS 使用 `.app.zip`。
 
-PairRoom 不让两个 Agent 像 IM 群聊一样并发互相唤醒。每个 Room 同一时刻只有一个 **native Turn owner**：
-
-```text
-user
-  -> current Agent completes one native Turn
-  -> reliable terminal boundary
-  -> 仅在确实需要另一轮时写出对方当前精确句柄
-  -> 完整回复进入 Room FIFO
-  -> 不点名即结束接力
-```
-
-这不是机械的 A/B/A/B 消息轮换。当前 Agent 可以在一个 native Turn 内执行工具、更新计划并接受 steering；只有在可靠的 Turn 结束边界之后，另一个 Agent 才能开始。
-
-关键性质：
-
-- **Human authority**：用户可以指定目标 Agent、覆盖后续流程、审批、取消或停止；
-- **Single owner**：两个 native runtime 不会同时拥有执行权，即使两个槽位选择了相同 runtime；
-- **精确动态点名**：唯一 runtime 使用 `@claude`、`@codex` 或 `@grok`；同类双开使用稳定槽位后缀，例如 `@codex0` 与 `@codex1`。只有对方当前精确句柄会在 native Turn 边界后接力完整回复；无点名即结束。同一条里 Agent 句柄优先于 `@user`；单独 `@user` 才把决定交还用户；
-- **持久 FIFO 与 fail closed 提交**：尚未跨过原生边界的排队工作会在重启后恢复；原生提交结果不确定时绝不自动重放；
-- **无接力上限**：PairRoom 不计算 Agent hop。Agent 会被要求在不再需要独立响应时停止点名，用户也可以显式取消、打断或改向；
-- **Native harness first**：PairRoom 不重写 Claude Code、Codex 或 Grok Build 的工具循环与权限模型。
-
-## 安装
-
-CLI（Linux / macOS / Git Bash）：
+Linux、macOS 或 Git Bash 的 CLI 安装入口：
 
 ```bash
 curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh | sh
+pairroom service --mock
 ```
 
-Windows PowerShell：
+执行前检查安装脚本，或直接下载对应 CLI 文件。Windows PowerShell 中可使用 `./pairroom.exe service --mock` 启动下载的可执行文件。
 
-```powershell
-$tag = (Invoke-RestMethod https://api.github.com/repos/sean2077/pairroom/releases/latest).tag_name
-curl.exe -fsSL -o pairroom.exe "https://github.com/sean2077/pairroom/releases/download/$tag/pairroom-cli-$tag-windows-amd64.exe"
+**使用预编译 CLI 或桌面包不需要安装 Go。** 首次使用建议选择可丢弃的 Git 仓库，并创建新的 Mock Room。Mock 不启动供应商 CLI，也不消耗模型额度。避免与已运行的 Service 争用数据目录；[入门指南](docs/GETTING_STARTED.md) 提供独立演示目录的启动方式，以及切换到真实 Agent 的步骤。
+
+在 Management Shell 中注册仓库为 Project，创建 Room，选择两位参与者及其权限，再向 Agent 1 发送一个小任务。可用下面的指令体验协作：
+
+```text
+规划能解决问题的最小修改，让另一位参与者负责实现和验证，
+然后审查实际 diff 与测试证据。任务完成后停止，不交换纯确认消息。
+只有无法从仓库判断的产品决策才询问我。
 ```
 
-Release 资产按前缀区分：`pairroom-cli-vX.Y.Z-…` 是命令行，`pairroom-desktop-vX.Y.Z-…` 是桌面包。Windows 桌面是 `-setup.exe`（与 CLI 的 `.exe` 区分）；Linux 用 `.deb` / `.AppImage`，macOS 用 `.app.zip`。
+这是期望的任务顺序，不是强制审批闸门。使用真实 Agent 前，应确认所选 CLI（`claude`、`codex` 和/或 `grok`）已独立安装、完成认证，并能在目标仓库正常工作。
 
-## 快速体验
+## 必须了解的边界
 
-关掉遗留 daemon，并打开当前源码的 Management Shell：
+**新 Room 的两位参与者默认均为 YOLO。** 两者使用实时工作区；主导者和执行者只是职责，不会限制工具权限。需要更严格的原生权限时必须明确选择。Room 内的单 Turn 规则不是操作系统沙箱，也不会锁住其他 Room 或外部进程对仓库的写入。
+
+PairRoom 没有自动接力次数或费用上限。重启恢复会区分尚未提交、提交结果不确定和已被原生运行时接受的工作，不会盲目重放执行。本地保存状态也不意味着云端模型请求不会离开本机。详见[安全说明](SECURITY.md)、[核心概念](docs/CONCEPTS.md)与[存储恢复](docs/STORAGE.md)。
+
+## 桌面端与源码开发
+
+桌面端和浏览器共用 Management Shell 与 Service。启动桌面端不会安装 daemon：它会复用已安装的 daemon，或自行管理内嵌 Service。**设置 → 桌面端 → 开机启动** 只改变操作系统的登录启动注册。关闭窗口会隐藏到托盘；退出桌面端不会停止外部 daemon。详见[桌面生命周期](docs/OPERATIONS.md#desktop-lifecycle)。
+
+从源码仓库开发，并安装开发依赖后，可运行：
 
 ```bash
-make dev
-```
-
-Management Shell 打开后：
-
-1. 注册一个本地 Git Project；
-2. 创建 Room；
-3. 选择默认的**主导者 + 执行者**，或用自然语言填写**自定义**协作规则，并配置两位 Agent 的运行时、模型与权限；
-4. 向一个 Agent 发送任务，并让它只在确实需要另一轮时点名对方；
-5. 在 Room View 中观察 Turn、工具活动、审批、投递与错误状态。
-
-使用真实 Runtime 前，先分别确认所选 CLI（`claude`、`codex` 和/或 `grok`）已安装、已针对所选 Provider 完成认证，并能在目标仓库独立工作。创建 Room 的 catalog 会显示不可用 Runtime 与不受支持的 CC Switch Profile，但不会通过网络枚举模型。完整步骤见 [Getting Started](docs/GETTING_STARTED.md)。
-
-## 桌面端
-
-`desktop/` 提供基于 **Wails v3** 的 Windows、macOS 与 Linux 原生入口。它不是第二套 PairRoom 后端或前端：桌面 Host 直接复用现有 Management Shell、Room View、Service Registry、Runtime Manager、配置、锁和 native Agent adapters。
-
-启动时，桌面端会按顺序：
-
-1. 验证并复用显式提供的 authenticated numeric-loopback Management URL；
-2. 发现已安装的 `pairroom daemon`，在确认锁内 PID 已退出后回收 crash-stale `service.lock`，必要时启动或重启 daemon，并等待 authenticated Management URL；
-3. 只有没有安装 daemon 时，才在当前桌面进程中启动 PairRoom Service；已安装但不可达时 fail closed，不启动第二个 Service。
-
-桌面端启动不会自动安装 daemon。可在 **设置 → 桌面端 → 开机启动** 中启用或关闭登录系统时启动桌面端；设置保存在操作系统中，与 daemon 安装相互独立。
-
-关闭主窗口只会隐藏到系统托盘，不会中断活动 Agent。显式退出只关闭桌面端拥有的内嵌 Service，并沿现有 native-Turn drain 边界优雅退出；外部 daemon 不受影响。构建、依赖和安装包说明见 [PairRoom Desktop](desktop/README.md)。浏览器和 CLI 入口保持完整可用。
-
-## 文档入口
-
-- [文档地图](docs/README.md)
-- [核心概念与接力语义](docs/CONCEPTS.md)
-- [配置与 Provider](docs/CONFIGURATION.md)
-- [CLI 参考](docs/CLI_REFERENCE.md)
-- [架构与不变量](docs/ARCHITECTURE.md)
-- [运维、备份与恢复](docs/OPERATIONS.md)
-- [升级说明](docs/UPGRADING.md)
-- [贡献指南](CONTRIBUTING.md)
-
-## 开发验证
-
-根模块：
-
-```bash
+make dev            # 停止已安装的 daemon，运行当前源码的 Service
 make docs-check
 make check
 make smoke
 ```
 
-桌面模块：
+桌面构建、打包及更新现有本地安装分别使用 `make desktop-build`、`make desktop-package`、`make desktop-update`，详见[桌面开发说明](desktop/README.md)。这些是源码开发命令，不是使用 Release 安装包的前提。
 
-```bash
-make desktop-build
-make desktop-package
-make desktop-update
-```
+## 文档与支持
 
-`make desktop-build` 构建当前平台的桌面 Host 和捆绑的 `pairroom` CLI，`make desktop-package` 构建当前平台的生产安装包或应用包（Windows 为 NSIS 安装包，内含 `PairRoom.exe` 与 `bin\pairroom.exe`），产物位于 `desktop/bin/`。桌面模块测试仍从 `desktop/` 目录运行：`cd desktop && go test -count=1 ./...`。
+[文档地图](docs/README.md) · [配置](docs/CONFIGURATION.md) · [CLI](docs/CLI_REFERENCE.md) · [API](docs/API_REFERENCE.md) · [故障排查](docs/TROUBLESHOOTING.md) · [升级](docs/UPGRADING.md) · [贡献指南](CONTRIBUTING.md) · [支持范围](SUPPORT.md)
 
-`make desktop-update` 从当前源码重建并更新本地已安装的桌面端和捆绑 CLI；自定义或存在多个安装目录时使用 `DESKTOP_INSTALL_DIR="安装目录"`。执行前通过托盘退出桌面端。更新保留用户数据和开机启动设置，不强杀进程，也不安装或修改 daemon。依赖、路径规则和 AppImage 限制见 [桌面开发说明](desktop/README.md#update-the-installed-desktop-from-source)。
-
-`docs-check` 会校验文档链接、源码路径、CLI 参数、HTTP 路由和 JSON 配置字段，防止文档在代码继续演进后静默漂移。根模块与桌面模块均使用 Go 1.25；根模块只允许固定的 CGo-free SQLite 依赖闭包，Wails 仍隔离在桌面模块。第三方许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
-
-## 状态与边界
-
-PairRoom 仍在快速演进。CLI、HTTP API、Event Log 和 Agent 协议的 breaking change 会记录在 [CHANGELOG](CHANGELOG.md) 与 [Upgrading](docs/UPGRADING.md)。当前 Mock E2E 可以验证调度、持久化和恢复链路，但不能替代真实 Claude Code / Codex / Grok Build native E2E；桌面 CI 的 unsigned packages 也不能替代生产签名与 macOS notarization。
+PairRoom 仍在演进。[Changelog](CHANGELOG.md) 记录发布历史，当前行为以参考文档为准。Mock 与浏览器 fixture 测试不能代替真实供应商 E2E；桌面包也不宣称已完成生产签名或 notarization。界面支持英文和简体中文，维护中的技术文档使用英文。
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) · [第三方许可声明](THIRD_PARTY_NOTICES.md)

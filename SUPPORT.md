@@ -1,149 +1,62 @@
-# PairRoom support scope
+# Support scope
 
-> [Getting started](docs/GETTING_STARTED.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Security policy](SECURITY.md) · [Operations](docs/OPERATIONS.md)
+[Getting started](docs/GETTING_STARTED.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Security](SECURITY.md) · [Operations](docs/OPERATIONS.md)
 
-PairRoom is a local-first open-source project. Support is best-effort through the GitHub repository. Before filing an issue, decide whether it belongs to environment, Service/daemon, Room data, browser UI, or Vendor Runtime.
+PairRoom is a local-first open-source project with best-effort support through its GitHub repository. Identify whether a problem belongs to the environment, Service/daemon, Room data, browser, Provider configuration, or native Runtime before reporting it.
 
-## 1. Before filing an Issue
-
-### 1.1 Version and environment
+## Collect a minimal, safe report
 
 ```bash
 pairroom version --json
 pairroom doctor --repo /absolute/path/to/repository --json
-```
-
-Record the operating system, architecture, install method, PairRoom binary path, and the current official Claude Code / Codex / Grok Build versions for the selected runtimes.
-
-### 1.2 Service / daemon
-
-```bash
 pairroom daemon status
-pairroom daemon logs -n 200
 ```
 
-Foreground mode keeps startup output, but remove complete Management/Room URLs, Tokens, and sensitive paths before sharing.
+For daemon problems, include relevant output from `pairroom daemon logs -n 200`. For a foreground Service, retain startup/error output but remove complete Management/Room URLs and tokens. Management's Service diagnostics help with Project registration, capacity, and Registry problems; they do not replace Room diagnostics.
 
-Export Service diagnostics from the Management Shell for Project/Room/Runtime/capacity/Registry problems. That file does not replace Room diagnostics.
-
-### 1.3 Room data
+For a specific Room:
 
 ```bash
 pairroom verify --data-dir /absolute/path/to/room --json
 pairroom diagnostics \
   --data-dir /absolute/path/to/room \
-  --output pairroom-diagnostics.tar.gz
+  --output /absolute/path/outside-the-room/pairroom-diagnostics.tar.gz
 ```
 
-Diagnostics are designed to omit transcript body and attachment bytes, but they may still contain versions, structured event headers, errors, and environment paths. Read [SECURITY.md](SECURITY.md) and inspect the archive by hand before sharing.
+Diagnostics are designed to omit transcript bodies and attachment bytes, but can still contain paths, versions, structured event headers, errors, and environment details. Inspect every archive before sharing it. Do not attach the full Event Log as a default troubleshooting step.
 
-### 1.4 Mock comparison
+A useful report states the OS/architecture, actual binary path and install/launch method, PairRoom version/commit, selected native CLI versions, selected Runtime/Provider type, and the most recent upgrade or Binding change. Add exact steps, expected/actual result, relevant Room/Message/Turn IDs and state, and whether it reproduces in a non-sensitive repository with Mock. UI reports also need browser/viewport details and a safe screenshot or console error.
 
-Try reproducing in a minimal test repository:
+Do not publicly submit tokens, cookies, CSRF values, complete startup URLs, credentials, private prompts/replies, source/diffs, real approval payloads, or sensitive images. Use [Security reporting](SECURITY.md#13-vulnerability-reports) for vulnerabilities rather than a public exploit report.
+
+## Separate control-plane and vendor evidence
+
+Use a disposable repository and an isolated data root for a Mock reproduction:
 
 ```bash
-pairroom service --mock
-# or
-pairroom serve --repo /absolute/path/to/test-repo --mock
+pairroom service --mock --data-root /absolute/path/to/isolated-demo-data
 ```
 
-Mock helps distinguish PairRoom control-plane/Room-state problems from vendor CLI problems. Mock success does not prove a real vendor will work.
+Mock helps isolate PairRoom scheduling, persistence, and UI behavior from a vendor CLI or Provider failure. It does not prove authenticated native sessions or model quality work. A successful build, unit test, browser fixture, real-browser Mock Service test, and real vendor E2E are different evidence layers; report which one you actually ran.
 
-## 2. A bug report should include
+For a native failure, first try the selected CLI independently as the same user in the same repository. Include sanitized executable/configuration and exact native resume/permission/transport errors. Do not interpret a vendor outage as Store corruption, or a quiet native Turn as a confirmed process exit.
 
-- operating system and architecture;
-- PairRoom version/commit/build date;
-- actual binary path and launch entry;
-- minimal relevant Service/Room parameters, with Tokens redacted;
-- current official Claude Code / Codex / Grok Build versions for the selected runtimes;
-- Project/Room/Runtime phase and visible Delivery/Processing state;
-- exact steps, expected result, and actual result;
-- whether it reproduces with `--mock`;
-- whether it reproduces in a minimal non-sensitive Git repository;
-- redacted `verify`/`doctor` results;
-- the most recent upgrade, daemon reinstall, Binding, or data migration before the problem.
+## Compatibility policy
 
-For UI issues, add browser version, viewport, console error, and a minimal screenshot that can be made public.
+Adapters track the documented native interfaces of Claude Code, Codex, and Grok Build. This is not certification of every release, interactive feature, or third-party Provider combination. There is no permanent support matrix for obsolete CLIs. After updating a native CLI, run `doctor` and a real read-only single-Agent smoke followed by an explicitly addressed peer Turn on a non-critical repository.
 
-## 3. Do not submit publicly
+[Configuration](docs/CONFIGURATION.md) owns native inheritance, supported CC Switch schema/Profile mappings, immutable selections, and failure behavior. The catalog's unsupported reason is meaningful; PairRoom must not silently substitute another Provider or permission policy. [Upgrading](docs/UPGRADING.md) owns Store/provisioning compatibility and rollback. There is no separate compatibility page or product roadmap that overrides those contracts.
 
-- API/Management/Room Tokens;
-- Cookies, CSRF, or a complete startup URL;
-- private prompts, Agent answers, or Event Log;
-- source code, diffs, command output, or approval payloads;
-- customer/product screenshots and attachments;
-- vendor credentials or organization information;
-- directly exploitable details of an unpublished security vulnerability.
+## Current support boundary
 
-Handle security vulnerabilities through the private reporting path in [SECURITY.md](SECURITY.md).
+Supported design: one local Service owner per data root, multiple canonical Git Projects and durable Rooms, bounded active Room Runtimes, and one human plus **two participant slots per Room**. Either slot may select Claude Code, Codex, or Grok Build, including the same Runtime twice. Project unregistration and archived Room deletion have explicit preconditions and do not imply deleting the user's repository.
 
-## 4. Issue classification
+Outside that contract: multi-user hosting/RBAC, cloud sync, direct LAN/public listeners or built-in TLS, remote workers, more than two slots in one Room, arbitrary Runtime reconfiguration inside an existing Room, container-grade isolation from responsibility labels, and a stable plugin API for arbitrary vendors.
 
-### Service / daemon
+The two participants' native Turns are serialized within a Room, not across all external writers. Creation-time rules are instructions, not enforced workflow stages. No automatic relay-count/cost ceiling or guaranteed unattended completion is provided. See [Why PairRoom](docs/WHY_PAIRROOM.md) before choosing it for a different problem.
 
-Typical symptoms: cannot install/start, stale lock, log rotation, different CWD opens different data, Runtime capacity/queue, Registry unhealthy.
+## Feature requests
 
-### Project / Room lifecycle
+Describe a concrete workflow, why the existing Room/collaboration/permission model is insufficient, and the smallest verifiable acceptance criteria. Explain state ownership, failure recovery, migration, security/privacy, and multi-Room impact. Say how the proposal preserves the native harness rather than replacing its capabilities.
 
-Typical symptoms: Project unavailable, duplicate canonical root, Room provisioning, Existing Binding conflict, Legacy pending, archive/restore.
-
-### Room data
-
-Typical symptoms: Event sequence, future schema, attachment hash, backup/restore, state that does not close after restart.
-
-### Browser
-
-Typical symptoms: Management refresh 401, Room session/CSRF, SSE disconnect, history paging, image preview, mobile overflow.
-
-### Vendor Runtime
-
-Typical symptoms: `doctor` probe, Claude control initialize, Codex app-server request, Grok ACP stdio session/turn, Session/Thread resume, permission/sandbox, a real Turn stuck.
-
-More accurate classification makes it easier not to treat a vendor service outage as a PairRoom Store bug, or a tab Token loss as a daemon failure.
-
-## 5. Compatibility policy
-
-PairRoom follows the current stable public Claude Code / Codex / Grok Build interfaces. It does not maintain a permanent compatibility matrix for obsolete CLIs. After updating any vendor CLI:
-
-```bash
-pairroom doctor --repo /absolute/path/to/safe-test-repo
-```
-
-and complete a real smoke on a non-critical repository. See [Runtime compatibility](docs/RUNTIME_COMPATIBILITY.md) for the detailed policy.
-
-## 6. Current support boundary
-
-Currently supported:
-
-```text
-one local Service per data root
-multiple canonical Git Projects
-multiple durable Rooms
-bounded active Room Runtimes
-Project unregistration and archived Room deletion (with explicit acknowledgement)
-one human + two Agent slots per Room
-each slot: Claude Code, Codex, or Grok Build (same runtime allowed twice)
-```
-
-Not in the current support contract:
-
-- multi-user hosting, team RBAC, cloud sync;
-- a direct LAN/public listener or built-in TLS;
-- remote workers;
-- more than two Agent slots in one Room;
-- full Runtime policy hot modification;
-- Reviewer container-grade security guarantees;
-- a stable plugin API for additional vendors.
-
-## 7. Feature requests
-
-A feature request should explain:
-
-- a concrete user workflow, not only “support tool X”;
-- why the existing Service/Room, creation-only collaboration, and independent permission model is insufficient;
-- fact sources, failure recovery, and migration needs;
-- security, privacy, and multi-Room identity/capacity impact;
-- whether it would weaken official harness native capability;
-- the smallest verifiable acceptance criteria.
-
-Read [Product plan](docs/PRODUCT_PLAN.md) and [Architecture](docs/ARCHITECTURE.md) first, and avoid requesting documented non-goals.
+Read [Why PairRoom](docs/WHY_PAIRROOM.md), [Alternatives](docs/ALTERNATIVES.md), and [Architecture](docs/ARCHITECTURE.md) first. A proposal in an Issue or PR is not a current feature contract. Contributions should follow [Contributing](CONTRIBUTING.md).

@@ -1,66 +1,73 @@
 # Troubleshooting
 
+Start by identifying the layer: Service, Room, participant/native Runtime, or browser. Preserve the first error and relevant IDs before restarting. Use [Support](../SUPPORT.md) for a safe bug report and [Operations](OPERATIONS.md) for lifecycle commands.
+
 ## Agent will not start
 
-1. Run `claude --version` / `codex --version` / `grok --version` directly as the same user in the same repository directory, for the runtime selected by that slot;
-2. Check executable, Provider, cwd, permission, and sandbox;
-3. Inspect the participant `LastError` and Runtime info;
-4. If strict session resume is configured, confirm the native session pointed to by the Binding still exists.
+Run the selected native CLI directly as the same OS user and in the same repository. Check its executable, authentication, Provider, working directory, and policy. Then inspect `pairroom doctor --repo /absolute/path/to/repository --json`, the participant's Runtime info, and `LastError`.
 
-Empty `provider`, `model`, `effort`, and `instructions` inherit the selected native CLI's user/global configuration. PairRoom does not replace vendor CLI login.
+Only the Runtimes selected for your two slots need to work. Empty PairRoom overrides inherit native configuration; PairRoom does not replace vendor login. A configured existing Binding must resume exactly. A missing native session is not permission to silently start a different one.
 
-## Turn has no output for a long time
+For CC Switch failures, inspect `pairroom providers --json` and the catalog's disabled reason. Missing/deleted Profiles, unsupported credential or proxy arrangements, locked databases, and schema mismatch fail closed. Correct the referenced Profile or create a new Room with the intended selection; do not expect a fallback to native credentials. See [Configuration](CONFIGURATION.md).
 
-First check Inspector / the Turn card for a long command, an approval, or ongoing tool activity. A stall notice only means there has been no new event for a while; it does not interrupt the Turn.
+## Turn is quiet, or Codex reports an error while working
 
-If it is truly stuck, choose steering, interrupt, cancel, or restart in risk order. Do not force-submit to the other Agent at the same time; that would break the single-owner boundary.
+A stall notice means no recent runtime event, not “the process is dead.” Inspect tool activity, approvals, native process state, and the first error. A long command, context compaction, or unexposed native step can be quiet. A generic Codex `error` notification is diagnostic; only a reliable terminal boundary or confirmed process exit releases the native Turn owner.
 
-## Codex shows an error but is still working
+Do not infer a hang solely from elapsed time or the absence of `turn/completed`. When the evidence indicates the native Turn is unresponsive, consider steering if supported, then explicit interruption or normal restart according to side-effect risk. Interruption can affect the whole native Turn. Never force another participant to run concurrently or blindly retry an uncertain write.
 
-A generic Codex `error` can be a mid-Turn diagnostic. PairRoom records it, but only `turn/completed`, an explicit abort / cancellation, or a confirmed process exit releases the owner. If no terminal event follows, treat it as stuck.
+## Peer message remains Waiting, or relay stops too soon
 
-## Messages to the peer stay Waiting
+Waiting is expected while the current participant still owns the native Turn. Check the owner and queue depth before treating the queue as stuck.
 
-This is expected while the current Agent still holds the native Turn. Cross-Agent messages sit in the Room FIFO and wait for a reliable terminal boundary. The “current turn” bar above the timeline shows the owner and queue depth.
+Agent relay requires the other participant's exact current handle: unique Runtimes use `@claude`, `@codex`, or `@grok`; duplicate Runtimes use the displayed `0/1` suffixes. An unsuffixed duplicate is ambiguous. Role aliases and old control markers do not route. Without an exact peer handle, the Agent's reply intentionally ends relay, even if the human expected a discussion.
 
-Agent relay accepts only the other participant's exact current handle. For a unique runtime that is `@claude`, `@codex`, or `@grok`; when both slots use the same runtime, use the displayed `0/1` handles. An unsuffixed duplicate handle is ambiguous and PairRoom reports both valid choices. `@peer`, `@human`, slot aliases, and old control markers do not route. `@user` alone returns the decision to the human; an exact Agent handle in the same reply wins.
+`@user` alone returns the decision to the human; a peer handle in the same answer takes priority. Do not add the peer handle merely to acknowledge a final answer. There is no hop limit, so stop unwanted repeated relay with Cancel/Interrupt or a newer instruction. Exact matching exclusions and removed aliases are in [Protocol](PROTOCOL.md).
 
-If a human said “greet each other” and the starting Agent only introduced itself to the user without naming the peer, its response correctly ended the relay. Unaddressed human messages start only Agent 1 in new Rooms. Check participant cards for exact handles and expand Collaboration for saved rules. Peer identity now lives in native instructions, not an envelope `peer_handle` field.
+## A message did not resume after restart
 
-## A message did not continue after restart
+Only queued input that provably never crossed native submission is automatically rebuilt. Input caught in the acceptance window fails for explicit Retry; accepted unfinished work is cancelled without replay. This avoids guessing whether an external side effect already happened.
 
-Room-owned FIFO entries that never crossed the native submission boundary resume automatically in Event Log order. Input already accepted by a native runtime is not replayed. A message caught inside the native acceptance window is marked failed with explicit Retry guidance because its ownership is unknown and automatic replay could duplicate side effects. Inspect the repository before retrying, and never hand-edit an old Message ID back to pending.
+Inspect the repository and native session before retrying. A retry creates a new Message ID. HTTP 409 on Retry can mean a direct retry of that source/participant is already waiting or working; inspect that attempt instead of sending duplicates. Never hand-edit old JSONL IDs or processing state. See [Storage](STORAGE.md).
 
-## Cancelling one message affected the whole Turn
+## Cancel affected more than one input
 
-Messages in the FIFO can be cancelled precisely. After a native runtime has accepted input, vendor interrupt is often at the whole active Turn. PairRoom keeps unrelated Room FIFO items, but multiple inputs in the same native Turn for the current Agent may terminate together.
+A waiting FIFO item can be cancelled precisely. After a native Runtime accepts input, interruption may be scoped to the whole active Turn, including additional inputs steered into it. PairRoom retains unrelated Room FIFO entries, but cannot promise vendor-level per-input cancellation after acceptance.
 
-## A legacy Reviewer does not see the latest files
+## Cannot change a model, mode, or permission
 
-Only legacy Rooms use role-bound isolated Reviewer snapshots; modern Lead and Executor share the live workspace. In a legacy Room, the Reviewer uses an isolated snapshot. Confirm that review started at a new boundary after the Driver Turn completed. If a role switch or snapshot refresh failed, inspect the system notice. Do not let Reviewer and Driver write the live workspace at the same time.
+Runtime, Provider reference, model, effort, additional instructions, and collaboration are creation-time selections. Create another Room to change them. They are not Settings edits on an existing Room.
 
-## UI refreshes often or the scroll position jumps
+Only effective native permissions can change inside a modern Room, and only when both participants are idle, no queued work exists, and no approvals are pending. A failed transition must not broaden access. Legacy role controls are removed, and legacy Rooms keep their old policies. Lead/Executor are responsibilities, not permission profiles or mention aliases.
 
-Confirm you are on the current build, then check the browser console and SSE reconnects. The page should batch high-frequency telemetry instead of rebuilding the whole DOM per token. If the snapshot sequence repeatedly goes backwards, report the Room ID and event sequence.
+## A legacy Reviewer sees an old snapshot
 
-## Room cannot be restored
+Only legacy Rooms use the role-bound Reviewer snapshot. Check that review began at a new boundary after the Driver's work completed, and inspect any snapshot-refresh failure. Modern Rooms use the live workspace for both participants; a stale file there needs a different diagnosis. Do not treat the legacy snapshot as a container-grade sandbox.
 
-Common causes:
+## UI jumps, refreshes repeatedly, or loses live state
 
-- Event Log corruption;
-- the Room uses a Store schema other than `9` or `10`;
-- the Project path has moved;
-- a strict Binding session does not exist;
-- the backup is incomplete.
+Check the actual binary/version, browser console, and SSE reconnects. The UI should update incrementally, preserve drafts and disclosure state, and rebuild current state from a fresh snapshot after a replay gap. A bounded event-tail reset is not a completed Turn.
 
-Keep the original data directory. Verify the backup and the first replay error first. Pre-schema-9 stores have no migration path; rebuild them or restore a matching old binary with its complete backup.
+Record the Room ID, sequence, browser, viewport, and minimal reproduction. Do not repeatedly click Send after an ambiguous network failure: inspect durable Message state first. For a Room removed by archive/delete, refresh Management rather than reusing an obsolete embedded surface.
 
-## Port or token problems
+## Port, hostname, or token failure
 
-Use `--help` on the current command to check listen / token flags, and confirm another process is not using the port. A non-loopback listener without a token is a configuration error, not something to bypass.
+All built-in listeners accept **numeric loopback only**. LAN/public addresses, wildcard binds, `localhost`, and other hostnames are rejected **even with a token**. Use a numeric loopback address; use SSH local forwarding for remote access, retaining normal authentication. PairRoom does not become a remote server by setting `--token`.
 
-## Desktop, daemon, and service.lock conflicts
+For an occupied port, inspect the existing process rather than opening a competing Service on the same data root. Browser sessions can expire or be invalidated by a Service restart; reopen the current authenticated Management URL or use its token login. Never share complete startup URLs, cookies, or tokens. See [Security](../SECURITY.md).
 
-The default PairRoom data root allows only one Service owner. After discovering an installed daemon, the desktop host recovers a crash-stale lock whose recorded PID is gone, then starts or restarts that daemon and connects to it. If a live owner remains, or the daemon stays unreachable after that heal, the desktop host stops startup and shows the data root, binary, and lock-owner information; it does not start a second embedded Service.
+## Desktop, daemon, and service.lock conflict
 
-If startup still reports a live `service.lock` owner, run `pairroom daemon status`. When the recorded PID is running, use `pairroom daemon stop` and wait for graceful drain. Desktop quit shuts down only an embedded Service it owns; it does not stop an external daemon.
+Desktop never installs a daemon. Without an installed daemon it owns an embedded Service; with one installed it must reuse that owner. It may recover a crash-stale lock only after confirming its recorded PID has exited, then start/restart the daemon. A live owner or an installed daemon that remains unreachable still fails closed.
+
+Run `pairroom daemon status`. Stop a confirmed installed-daemon owner with `pairroom daemon stop` and allow graceful drain. Do not delete a live lock or force-kill an unrelated process. Explicitly selected data roots/configurations can refer to a different Service; compare the reported paths before taking action.
+
+Closing the desktop window hides it. Quit stops only an embedded Service it owns, not an external daemon. Launch-at-login registration is separate from daemon installation. Updating the desktop from source requires the build tools and a quit desktop, not another `daemon install`; see [Desktop development](../desktop/README.md#update-the-installed-desktop-from-source).
+
+## Backup, restore, or Room activation fails
+
+Preserve the original data directory. Check the first identity/schema/replay error with `pairroom verify --data-dir /absolute/path/to/room --json`. Current readers accept Store schemas 9 and 10; do not edit metadata to make another schema appear supported.
+
+A missing, empty, gapped, or replaced Event Log is not an empty existing Room. Restore a verified matching backup rather than recreating or renumbering history. Check repository availability, exact native Binding, and complete backup contents separately.
+
+Backup and diagnostics outputs must be outside the source Room directory, including symlink aliases. A Room backup is not a full Service-root, repository, or native-session backup. Damaged gzip/trailer or manifest validation failures need a sound backup, not disabled validation. Follow [Storage](STORAGE.md), [Operations](OPERATIONS.md#backup), and [Upgrading](UPGRADING.md).

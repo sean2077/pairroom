@@ -1,147 +1,120 @@
 # Getting started
 
-This guide covers only “from zero to the first collaboration Turn”. Concepts, full configuration, and operations live in other documents.
+This guide takes you from a release package to a first Room. For the adoption decision, read [Why PairRoom](WHY_PAIRROOM.md); for all options, use [Configuration](CONFIGURATION.md) and the [CLI reference](CLI_REFERENCE.md).
 
-## 1. Prerequisites
+## Prerequisites
 
-- a local Git repository;
-- for CLI / browser mode, a Go toolchain matching the root `go.mod`;
-- when building the desktop host from source, the Wails v3 toolchain and platform dependencies listed in `desktop/README.md`;
-- for real mode, independently runnable and signed-in native CLIs for the runtimes you select (`claude`, `codex`, and/or `grok`);
-- a browser or PairRoom Desktop that can reach the local loopback Service.
+| Entry | Needed to use it | Needed only to build from source |
+|---|---|---|
+| Prebuilt CLI + browser | Git, a local Git repository, and a browser | Go 1.25 and the development tools in [Contributing](../CONTRIBUTING.md) |
+| Prebuilt desktop | Git, a local Git repository, and the package's platform requirements | Go, pinned Wails, Python, and platform tools in [Desktop development](../desktop/README.md) |
+| Real Agents, either entry | Each selected native CLI installed and authenticated for its selected Provider | No additional PairRoom source build |
+| Mock, either entry | No vendor CLI or model account | None for a prebuilt package |
 
-First-time use should start in Mock mode. It verifies PairRoom scheduling, UI, Event Log, and recovery without consuming model quota.
+**Go is not required to run a prebuilt PairRoom binary.** Only install the native Runtimes you will actually select: Claude Code, Codex, and/or Grok Build. Two slots may use the same Runtime.
 
-## 2. Choose a launch entry
+## Install a release
 
-### From source (full Service)
+Choose the matching OS/architecture asset from [Releases](https://github.com/sean2077/pairroom/releases/latest). CLI assets start with `pairroom-cli-`; desktop assets start with `pairroom-desktop-`. A Windows desktop `-setup.exe` is not the standalone CLI `.exe`. Linux desktop assets are `.deb`/`.AppImage`; macOS uses `.app.zip`.
 
-```bash
-make dev
-```
-
-This stops any leftover daemon, recovers a crash-stale `service.lock` only after the recorded PID is gone, starts the current-tree Management Service, and opens the Management Shell in a browser. Equivalent commands:
+For Linux, macOS, or Git Bash, the CLI installer is:
 
 ```bash
-go run ./cmd/pairroom daemon stop
-go run ./cmd/pairroom service --recover-stale-lock
+curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh -o install-pairroom.sh
+# Inspect install-pairroom.sh before executing it.
+sh install-pairroom.sh
+pairroom version
 ```
 
-`make stop` is the stop-only helper (`daemon stop` fails if nothing is installed; `make stop` treats that as clean). Legacy single-Room `make run` / `make demo` still call `pairroom serve`.
+Alternatively, download the CLI binary directly and verify it using the checksums provided with that release. Make it executable where required and put it on `PATH`. In Windows PowerShell, use `./pairroom.exe` when running a downloaded binary in the current directory.
 
-### CLI install
+Desktop packages are not claimed to be production-signed/notarized unless that release explicitly provides such evidence. See [Desktop development](../desktop/README.md#packages) for package boundaries.
+
+## First run without vendor calls
+
+Use a disposable Git repository and a separate PairRoom data root so the demo does not contend with an existing Service or reuse real Rooms.
+
+Linux/macOS/Git Bash:
 
 ```bash
-curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh | sh
-pairroom service --mock
+pairroom service --mock --data-root "$HOME/.pairroom-demo"
 ```
 
-On Windows, download `pairroom-cli-vX.Y.Z-windows-amd64.exe`. The desktop installer is `pairroom-desktop-vX.Y.Z-windows-amd64-setup.exe`.
+Windows PowerShell with the downloaded CLI:
 
-### PairRoom Desktop
+```powershell
+./pairroom.exe service --mock --data-root "$env:USERPROFILE\.pairroom-demo"
+```
 
-Install the desktop package for your platform and start PairRoom. The desktop host first validates and reuses an explicit Management URL. If it finds an installed daemon, it recovers a crash-stale lock after the recorded PID is gone, then starts or connects to that daemon. The package includes the `pairroom` CLI: if no daemon exists, the desktop host installs and connects with that CLI instead of leaving a `PairRoom.exe` with no `pairroom`. If a live lock owner remains, or a daemon is installed but stays unreachable, the desktop host stops and shows repair guidance; it does not start a second Service. Source/test entry points without a bundled CLI can still start an embedded Service when no daemon is installed.
+Open the Management URL printed at startup if the browser does not open automatically. The URL can contain an authentication token; do not publish it. Keep the foreground process running while using its Rooms. `Ctrl+C` requests normal shutdown.
 
-Build from source:
+In Management:
+
+1. Register the absolute path of the disposable Git repository as a **Project**. Registration does not copy the repository.
+2. Create a **Room** with two participants and new session Bindings. The name is optional; a generated name can be changed later.
+3. Choose default Lead/Executor instructions or custom natural-language collaboration instructions. Inspect both Agent selections and native permissions before creating the Room.
+4. Open the Room and send a small task to Agent 1. Inspect the conversation, Turn activity, message state, and participant diagnostics.
+
+Mock is deterministic control-plane verification, not a language model. It does not demonstrate coding quality or prove a real Provider/CLI combination works. Use fresh real Rooms for real execution rather than treating a Mock transcript as a native session.
+
+## First real Room
+
+Confirm that each selected CLI works independently as the same OS user and in the target repository:
 
 ```bash
-make desktop-build
-make desktop-package
-```
-
-Both targets run for the current host platform. Packaged artifacts write to `desktop/bin/`. To run desktop module tests alone: `cd desktop && go test -count=1 ./...`.
-
-The desktop main window still loads the existing Management Shell. There is no separate desktop business state. Closing the window only hides to the tray; **Quit PairRoom** from the tray exits the application.
-
-### CLI + browser (Mock)
-
-```bash
-go run ./cmd/pairroom service --mock
-```
-
-PairRoom listens on loopback by default. If a browser does not open automatically, the terminal prints the Management Shell address. Exact options come from the command itself:
-
-```bash
-go run ./cmd/pairroom service --help
-```
-
-Both entries share the same Project, Room, Binding, Event Log, Runtime, and authentication semantics.
-
-## 3. Create a Project and Room
-
-In the Management Shell:
-
-1. Register the target repository as a Project;
-2. Create a Room using default Lead/Executor or custom natural-language collaboration instructions; this choice is fixed;
-3. For Agent 1 and Agent 2, select a Runtime, native or supported CC Switch Profile, and optionally edit the Model and advanced Runtime policy. Unavailable Runtimes and Profiles that require OAuth, proxy conversion, or failover remain visible but disabled;
-4. Confirm both Bindings (JSON keys `claude` / `codex`). default mode assigns Agent 1 as Lead (planning/review) and Agent 2 as Executor (implementation/feedback); both slots may use the same Runtime/Profile;
-5. Open the Room from the sidebar; it becomes an in-app tab. Use **Open in browser** for a separate browser window.
-
-A Project is a repository-level management record. A Room is a long-lived collaboration context. Unregistering a Project does not delete the repository, and archiving a Room does not permanently delete Room data.
-
-## 4. Complete the first Turn
-
-Start with one Agent and a small verifiable task, for example:
-
-```text
-Read the current repository and describe the test entry points. Do not modify files.
-```
-
-The Room should show, in order:
-
-```text
-message accepted
-  -> native Turn started
-  -> tool / text / approval events
-  -> native Turn completed
-  -> Room owner released
-```
-
-In a new Room, an unaddressed message starts only Agent 1 (Lead in default mode). Both participants default to YOLO; choose narrower native policy for a safe first experiment. Responsibility never implies read-only access. To verify that both Agents can collaborate in sequence, you can say:
-
-```text
-Greet each other and introduce yourselves.
-```
-
-The starting Agent must include the other participant's exact displayed handle in its reply. Introducing itself only to the human, with no peer handle, does not start the other Agent. If the reply names both `@user` and the peer, the peer handle wins. With unique Claude and Codex runtimes those handles are `@claude` and `@codex`. PairRoom hands the complete reply and attachments to the peer only after the current Turn ends. If the peer then answers without naming the starting Agent, the greeting ends naturally after two Turns.
-
-In default mode, ask the Lead to delegate implementation and then review the concrete results:
-
-```text
-Plan the change, delegate implementation and verification to your peer, then review the diff and evidence. Ask me only for decisions you cannot resolve from the repository.
-```
-
-PairRoom does not compile or approve actor/action stage sequences. Each Agent may finish the user's request; another Turn exists only after an exact Agent handle or a new user Message.
-
-## 5. Steering, queue, and cancel
-
-- `steer` is the default. Same-target input attempts native same-Turn steering; unavailable or rejected steering falls back to the Room FIFO exactly once, while an unknown result requires explicit Retry;
-- `queue` always waits in the Room FIFO while a Turn is active and starts immediately when the Room is idle;
-- input to the other Agent always waits for the active Turn boundary;
-- only the other participant's exact current `mention_handle` in an Agent reply starts another Agent Turn; no mention ends relay; an Agent handle wins over `@user` in the same reply;
-- Cancelling a message still in the FIFO removes only that message;
-- Input already submitted to a native runtime may require interrupting the whole current native Turn.
-
-See [Concepts](CONCEPTS.md) for the full semantics.
-
-## 6. Switch to real Agents
-
-First verify the selected native CLIs in the target repository:
-
-```bash
+# Run only the commands for Runtimes you intend to select.
 claude --version
 codex --version
 grok --version
+
+pairroom doctor --repo /absolute/path/to/repository --json
 ```
 
-Then start the real Management Service with `make dev` (not `--mock`) and select the Runtime, ProviderRef, Model, effort, instructions, and permission policy while creating the Room. The complete two-slot selection is immutable after creation. `source: native` and empty overrides inherit each selected CLI's user/global configuration. A CC Switch Profile is re-read at validation and activation; PairRoom never changes CC Switch current state or replaces CLI/Provider credential management. Run `pairroom providers` to inspect the sanitized local catalog.
+A version response or `doctor` probe is not an authenticated end-to-end coding test. Resolve missing executables, login, Provider, and policy problems in the native CLI first. PairRoom does not log in to a vendor for you.
 
-## 7. End correctly
+Stop the isolated Mock Service, then start `pairroom service` without `--mock`, or open Desktop. Use a fresh Room in the normal or another explicitly chosen data root. In the creation form:
 
-- Pause for now: leave the Room; the Runtime may be reclaimed by idle policy;
-- Close the desktop main window: hide to tray; active Turns keep running;
-- Quit the desktop app: an embedded Service shuts down in Management → Runtime drain → lock release order; an external daemon keeps running;
-- Stage complete: archive the Room; archive stops the current Agent Turn first;
-- No longer needed: follow the UI / API permanent-delete flow, and keep a backup first.
+| Choice | Meaning |
+|---|---|
+| Runtime | Native Claude Code, Codex, or Grok Build; independent for each slot |
+| Provider | Native CLI configuration, or a supported read-only CC Switch Profile reference |
+| Model / effort / additional instructions | Explicit overrides; unspecified values retain native inheritance |
+| Collaboration | Default Lead/Executor, or custom instructions; fixed at creation |
+| Permissions | Native tool policy, separate from collaboration responsibility |
+| Binding | New native session, or exact supported resumption of an existing one |
 
-Next, read [Configuration](CONFIGURATION.md) and [Operations](OPERATIONS.md).
+The catalog reports unavailable Runtimes and unsupported Profiles; it is not a network model marketplace. Only supported CC Switch configurations can be materialized. See [Configuration](CONFIGURATION.md) for the pinned schema and unsupported authentication/proxy cases.
+
+**Both participants default to YOLO in new Rooms.** For the first real test, explicitly choose native read-only restrictions for both. Then ask Agent 1:
+
+```text
+Explain how this repository is built and tested. Ask your peer to check the
+important claims against the files, then give me a short corrected answer.
+Do not modify files. End when the answer is complete.
+```
+
+Check that one Agent works at a time, a needed peer response appears after the native Turn boundary, and the result contains actual repository evidence. A relay requires the peer's exact displayed mention handle; an agent's unaddressed reply intentionally ends the relay. See [Concepts](CONCEPTS.md#agent-relay).
+
+Only after that smoke should you grant the permissions needed for an implementation task. Native permissions can change only at an idle boundary with no queued work or pending approvals. Runtime, Provider reference, model, and saved collaboration instructions remain creation-time selections; create another Room to change those choices.
+
+## Native sessions and identity
+
+A new Binding materializes its native session as execution starts. An existing Binding must resume the exact selected session; it is not permission to silently substitute a new one. PairRoom does not import the vendor transcript from before the Binding.
+
+Room names and native session titles help you find the same task, but IDs remain authoritative. Rename through the Room context menu or explicit control; it waits for a safe boundary and does not interrupt a Turn. Title synchronization can be pending, unsupported, or failed without changing the underlying session. See the [API naming contract](API_REFERENCE.md#room-names-and-native-session-correspondence).
+
+## Desktop, daemon, and exit
+
+Opening Desktop **never installs a daemon**. It reuses an already-installed daemon, or owns an embedded Service when none is installed. An installed but unreachable daemon is an error to repair, not permission to create a second Service for the same data root.
+
+**Settings → Desktop → Launch at login** is an explicit OS registration choice, independent of daemon installation. Close hides the window to the tray. Quit drains an owned embedded Service, but does not stop an external daemon. Closing a Room tab is not a command to stop its native work. Use explicit Room/participant lifecycle controls; [Operations](OPERATIONS.md) owns the full lifecycle, archive, and shutdown rules.
+
+Install a persistent background Service only as a separate intentional action with `pairroom daemon install`. It is not a prerequisite for trying the UI.
+
+## Source development is a separate path
+
+In a source checkout, install the dependencies from [Contributing](../CONTRIBUTING.md), then use `make dev`. This helper stops an installed daemon and runs the current-tree Service; do not use it as the next step after installing only a release binary.
+
+For rebuilding/updating an existing desktop installation from source, use `make desktop-update` after quitting Desktop. It preserves data and login registration and does not install or reconfigure a daemon. Requirements and custom paths are in [Desktop development](../desktop/README.md#update-the-installed-desktop-from-source).
+
+Before important work, read [Security](../SECURITY.md). For failures, start with [Troubleshooting](TROUBLESHOOTING.md); before changing versions, read [Upgrading](UPGRADING.md).
