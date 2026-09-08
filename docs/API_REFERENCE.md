@@ -163,6 +163,7 @@ The following method/path patterns are extracted from production HTTP registrati
 - `POST /api/v1/agent-pair-profiles`
 - `POST /api/v1/approvals/{id}`
 - `POST /api/v1/attachments`
+- `POST /api/v1/diagnostics`
 - `POST /api/v1/import`
 - `POST /api/v1/maintenance/room-deletions/retry`
 - `POST /api/v1/messages`
@@ -184,6 +185,7 @@ The following method/path patterns are extracted from production HTTP registrati
 - `PUT /api/v1/agent-pair-profiles/{profile}`
 - `PUT /api/v1/participants/{actor}/permissions`
 - `PUT /api/v1/settings`
+
 </details>
 <!-- /generated:routes -->
 
@@ -194,3 +196,13 @@ The following method/path patterns are extracted from production HTTP registrati
 3. Re-read the projection after a destructive operation;
 4. Do not treat a transient event as a durable receipt;
 5. Read [Upgrading](UPGRADING.md) before a release upgrade.
+
+## Explicit Service diagnostics
+
+`POST /api/v1/diagnostics` is protected by the existing Management authentication, same-origin, and browser CSRF checks. There is no GET-triggered probe. An environment request is `{"mode":"environment"}`; an actual model check requires `{"mode":"runtime","actor":"codex","confirm":true}`. `actor` is the stable slot (`claude` or `codex`), not a Runtime kind. Both modes optionally accept `room_id`; otherwise the saved default Agent pair profile or Service defaults are used. A Room's stored selections never follow later default changes. Legacy Rooms without explicit selections cannot be live-tested through this endpoint.
+
+Only those fields are accepted: clients cannot submit executable paths, environment, credentials, session IDs, or replacement selections. Invalid requests return 400; missing Rooms return 404; concurrent diagnostic requests and unsupported legacy live checks return 409. Checks are single-flight per Service, have bounded deadlines/output, and honor request cancellation. A failed check is evidence in an HTTP 200 report, not an HTTP transport failure. Responses use `Cache-Control: no-store`.
+
+The response is `{schema:1, version, platform, generated_at, mode, scope, checks:[...]}`. Scope is `service_defaults`, `default_profile`, or `room`; no identity/path is exported. Checks contain `id`, `status` (`pass`, `warn`, `fail`, or `skipped`), a fixed `code`, `duration_ms`, and optional Runtime/slot/numeric version. Installation, native startup, and matching completed model response are distinct evidence. Unselected missing CLIs warn; Mock and untested model responses remain skipped. Cleanup warnings do not invalidate a received response, but must be resolved before repeatedly starting new checks. Raw errors and process/model output are never part of this report.
+
+Diagnostics create no durable Room events, do not activate/suspend/resume existing Rooms, and never change native login or CC Switch configuration. A live check can use Provider quota and invoke native global hooks/MCP while starting its disposable session; it is not a sandbox, repository-specific smoke test, or exhaustive tool test. See [CLI reference](CLI_REFERENCE.md#installation-versus-runtime-availability) for operational boundaries.

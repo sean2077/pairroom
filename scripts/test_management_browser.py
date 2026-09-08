@@ -113,6 +113,132 @@ async def load_csp_fixture(page) -> None:
     await page.goto('http://127.0.0.1:7332/#/projects/p1')
 
 
+async def verify_diagnostics(browser, artifacts: Path, in_page_fixture: bool = False) -> dict:
+    page = await browser.new_page(viewport={'width': 1440, 'height': 1000}, locale='en-US', reduced_motion='reduce')
+    page.set_default_timeout(5000)
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    if in_page_fixture:
+        await page.evaluate("location.hash='#/projects/p1'")
+        await page.set_content(fixture_html())
+    else:
+        await load_csp_fixture(page)
+    await expect(page.locator('#project-room-search')).to_be_visible()
+    await page.evaluate("""() => {
+      const original = window.fetch;
+      window.__diagnosticRequests = []; window.__diagnosticDelay = 0; window.__diagnosticAborts = 0;
+      window.__diagnosticCode = 'responded'; window.__diagnosticInvalid = false;
+      __snapshot.rooms.forEach(room => room.agents = structuredClone(__catalog.defaults));
+      window.fetch = async (path, options={}) => {
+        if (path !== '/api/v1/diagnostics') return original(path, options);
+        const request = JSON.parse(options.body);
+        __diagnosticRequests.push(request);
+        await new Promise((resolve, reject) => {
+          const timer=setTimeout(resolve, __diagnosticDelay);
+          options.signal?.addEventListener('abort', () => { clearTimeout(timer); __diagnosticAborts++; reject(new DOMException('Cancelled', 'AbortError')); }, {once:true});
+        });
+        const checks = request.mode === 'environment' ? [
+          {id:'application',status:'pass',code:'application_available'},
+          {id:'installation',runtime:'codex',status:'pass',code:'installed',version:'1.2.3'},
+          {id:'installation',runtime:'grok',status:'warn',code:'cli_unavailable'},
+          {id:'response',status:'skipped',code:'not_checked'}
+        ] : [
+          {id:'startup',runtime:'codex',actor:request.actor,status:'pass',code:'started',duration_ms:150},
+          {id:'response',runtime:'codex',actor:request.actor,status:__diagnosticCode==='responded'?'pass':'fail',code:__diagnosticCode,duration_ms:700}
+        ];
+        return new Response(JSON.stringify({schema:__diagnosticInvalid?999:1,version:'3.2.0',platform:'linux/amd64',generated_at:'2026-09-08T12:00:00Z',mode:request.mode,scope:request.room_id?'room':'default_profile',checks,raw_output:'do-not-export-private-key',path:'/private/path'}), {status:200,headers:{'content-type':'application/json'}});
+      };
+    }""")
+    await page.locator('#refresh-button').click()
+    await page.evaluate("location.hash='#/overview'")
+    project_link = page.locator('.tree-project-link[href="#/projects/p1"]')
+    await project_link.click()
+    await expect(project_link).to_have_attribute('aria-current', 'page')
+    assert await page.evaluate('location.hash') == '#/projects/p1'
+    disclosure = page.locator('.tree-project-toggle').first
+    await disclosure.click()
+    await expect(disclosure).to_have_attribute('aria-expanded', 'false')
+    assert await page.evaluate('location.hash') == '#/projects/p1', 'disclosure navigated'
+    await page.locator('#refresh-button').click()
+    await expect(disclosure).to_have_attribute('aria-expanded', 'false')
+    await disclosure.focus()
+    await page.keyboard.press('Enter')
+    await expect(disclosure).to_have_attribute('aria-expanded', 'true')
+    await page.locator('#project-room-search').fill('Implementation')
+    assert await page.locator('#view .room-row').count() == 1
+    await page.evaluate("location.hash='#/overview'")
+    await project_link.click()
+    await expect(page.locator('#project-room-search')).to_have_value('Implementation')
+    await page.locator('#project-room-search').fill('no-such-room')
+    await expect(page.locator('#view')).to_contain_text('No matching Rooms')
+    await page.get_by_role('button', name='Clear filters', exact=True).click()
+    assert await page.locator('#view .room-row').count() == 2
+    await page.screenshot(path=str(artifacts / 'project-workspace.png'), full_page=True)
+    await page.evaluate("location.hash='#/diagnostics'")
+    await expect(page.locator('#diagnostic-environment')).to_be_visible()
+    assert await page.evaluate('__diagnosticRequests.length') == 0, 'opening diagnostics launched a check'
+    await page.locator('#diagnostic-environment').click()
+    await expect(page.locator('[data-diagnostic-code="not_checked"]')).to_be_visible()
+    assert not await page.get_by_role('heading', name='A real model response was verified').count()
+    assert not await page.locator('#view').evaluate("node=>node.innerText.includes('do-not-export-private-key')")
+    await page.evaluate("""() => {
+      const original=URL.createObjectURL;
+      URL.createObjectURL=blob=>{ blob.text().then(text=>window.__diagnosticDownload=text); return original(blob); };
+      const click=HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click=function(){ if (!this.download) click.call(this); };
+    }""")
+    await page.get_by_role('button', name='Download safe report').click()
+    await page.wait_for_function('window.__diagnosticDownload')
+    exported = json.loads(await page.evaluate('__diagnosticDownload'))
+    assert exported['scope'] == 'default_profile'
+    assert 'raw_output' not in exported and 'path' not in exported
+    assert 'do-not-export' not in json.dumps(exported)
+    await page.screenshot(path=str(artifacts / 'diagnostics-environment.png'), full_page=True)
+    await page.locator('#diagnostic-scope').select_option('r1')
+    await page.locator('#diagnostic-actor').select_option('codex')
+    await page.locator('#diagnostic-live').click()
+    assert await page.evaluate('__diagnosticRequests.length') == 1
+    await expect(page.locator('#confirm-submit')).to_be_disabled()
+    await page.locator('#confirm-ack').check()
+    await page.locator('#confirm-submit').click()
+    await expect(page.locator('[data-diagnostic-code="responded"]')).to_be_visible()
+    assert await page.evaluate('__diagnosticRequests.at(-1)') == {'mode':'runtime','actor':'codex','confirm':True,'room_id':'r1'}
+    await page.screenshot(path=str(artifacts / 'diagnostics-response.png'), full_page=True)
+    await page.evaluate("__diagnosticCode='authentication_failed'")
+    await page.locator('#diagnostic-live').click()
+    await page.locator('#confirm-ack').check()
+    await page.locator('#confirm-submit').click()
+    await expect(page.locator('[data-diagnostic-code="authentication_failed"]')).to_be_visible()
+    await expect(page.locator('#view')).to_contain_text('Sign in through the official CLI')
+    for theme, language in [('light', 'en'), ('dark', 'zh-CN')]:
+        await page.evaluate('args=>{PairRoomTheme.setTheme(args[0]);PairRoomI18n.setLang(args[1]);}', [theme, language])
+        for width in [320, 390, 768, 1440]:
+            await page.set_viewport_size({'width':width, 'height':1000})
+            await page.wait_for_timeout(80)
+            assert not await page.evaluate('document.documentElement.scrollWidth>innerWidth'), f'diagnostics overflow at {width}'
+            assert 'diagnostics.' not in await page.locator('#view').inner_text(), 'untranslated diagnostic keys'
+        await page.screenshot(path=str(artifacts / f'diagnostics-{theme}-{language}.png'), full_page=True)
+    await page.evaluate("PairRoomI18n.setLang('en');__diagnosticDelay=2000")
+    await page.locator('#diagnostic-environment').click()
+    await expect(page.locator('#diagnostic-live')).to_be_disabled()
+    await page.get_by_role('button', name='Cancel check', exact=True).click()
+    assert await page.evaluate('__diagnosticAborts') == 1
+    await expect(page.locator('#diagnostic-status')).to_contain_text('Check cancelled')
+    await page.locator('#diagnostic-environment').click()
+    await page.evaluate("location.hash='#/projects/p1'")
+    await page.wait_for_function('__diagnosticAborts===2')
+    await expect(page.locator('#project-room-search')).to_be_visible()
+    await page.evaluate("__diagnosticDelay=0;__diagnosticInvalid=true;location.hash='#/diagnostics'")
+    await page.locator('#diagnostic-environment').click()
+    await expect(page.locator('#diagnostic-status')).to_contain_text('invalid report')
+    assert not await page.get_by_role('button', name='Download safe report').count()
+    if not in_page_fixture:
+        assert not await page.evaluate('__cspErrors'), 'diagnostics violated production CSP'
+    assert not errors, errors
+    await page.close()
+    return {'project_navigation_and_disclosure':True,'project_local_filters':True,'diagnostics_consent_and_scope':True,'diagnostics_cancel_and_stale_response':True,'diagnostics_safe_export':True,'diagnostics_responsive_and_localized':True}
+
+
 async def verify_names(browser, artifacts: Path, in_page_fixture: bool = False) -> dict:
     page = await browser.new_page(viewport={'width': 1440, 'height': 1000}, locale='en-US', reduced_motion='reduce')
     page.set_default_timeout(5000)
@@ -621,6 +747,7 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
             await page.set_viewport_size({'width': 1440, 'height': 1000})
         results['responsive_header_and_locale_identity'] = True
         assert not errors, errors
+        results.update(await verify_diagnostics(browser, artifacts, in_page_fixture))
         results.update(await verify_names(browser, artifacts, in_page_fixture))
         results.update(await verify_activation(browser))
         results.update(await verify_pair_profiles(browser, artifacts, in_page_fixture))

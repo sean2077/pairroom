@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sean2077/pairroom/internal/ccswitch"
@@ -52,6 +53,7 @@ type ManagementServer struct {
 	sessions      *websession.Store
 	http          *http.Server
 	roomLocks     roomLockSet
+	diagnosticsMu sync.Mutex
 }
 
 type managementAuthMode uint8
@@ -93,6 +95,7 @@ type ServiceCapabilities struct {
 	RoomDeletion          bool `json:"room_deletion"`
 	ServerPathBrowser     bool `json:"server_path_browser"`
 	RoomSurface           bool `json:"room_surface"`
+	Diagnostics           bool `json:"diagnostics"`
 }
 
 type ServiceSnapshot struct {
@@ -152,6 +155,7 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	mux := http.NewServeMux()
 	webui.Mount(mux)
 	server.mountAgentPairProfiles(mux)
+	mux.HandleFunc("POST "+diagnosticsPath, server.runDiagnostics)
 	mux.HandleFunc("POST /api/v1/session", server.createBrowserSession)
 	mux.HandleFunc("GET /api/v1/session", server.readBrowserSession)
 	mux.HandleFunc("DELETE /api/v1/session", server.deleteBrowserSession)
@@ -273,7 +277,7 @@ func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
 		Summary:       summarizeService(registry.Projects, registry.Rooms, runtimes),
 		Capabilities: ServiceCapabilities{
 			LegacyImport: true, RuntimeSuspend: true, RuntimePolicyMutation: true,
-			ProjectRefresh: true, ProjectRemoval: true, RoomDeletion: true, RoomSurface: true,
+			ProjectRefresh: true, ProjectRemoval: true, RoomDeletion: true, RoomSurface: true, Diagnostics: true,
 		},
 		Maintenance: s.registry.RoomDeletionMaintenance(),
 		Healthy:     healthErr == nil,

@@ -615,8 +615,9 @@ type doctorCommandReport struct {
 }
 
 type doctorRuntimeReport struct {
-	Probe *agent.ProbeResult `json:"probe,omitempty"`
-	Error string             `json:"error,omitempty"`
+	Checks []agent.DiagnosticCheck `json:"checks,omitempty"`
+	Probe  *agent.ProbeResult      `json:"probe,omitempty"`
+	Error  string                  `json:"error,omitempty"`
 }
 
 type doctorReport struct {
@@ -640,6 +641,8 @@ func runDoctor(args []string) error {
 	repoFlag := flags.String("repo", ".", "repository/workspace directory")
 	claudeCommand := flags.String("claude-command", fileCfg.Runtimes.Claude.Command, "Claude Code executable")
 	codexCommand := flags.String("codex-command", fileCfg.Runtimes.Codex.Command, "Codex executable")
+	grokCommand := flags.String("grok-command", fileCfg.Runtimes.Grok.Command, "Grok Build executable")
+	liveFlag := flags.Bool("live", false, "explicitly test real model responses in temporary workspaces (may consume provider quota)")
 	jsonFlag := flags.Bool("json", false, "emit a machine-readable report")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -665,13 +668,14 @@ func runDoctor(args []string) error {
 	}
 	fileCfg.Runtimes.Claude.Command = *claudeCommand
 	fileCfg.Runtimes.Codex.Command = *codexCommand
+	fileCfg.Runtimes.Grok.Command = *grokCommand
 	claudeCfg, codexCfg := pairSlotConfigs(fileCfg)
-	claudeCfg.Command = *claudeCommand
-	codexCfg.Command = *codexCommand
 	claudeCfg.Repo = repo
 	codexCfg.Repo = repo
+	rootCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
 	for _, cfg := range []agent.Config{claudeCfg, codexCfg} {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(rootCtx, 15*time.Second)
 		probe, probeErr := agent.ProbeRuntime(ctx, cfg)
 		cancel()
 		entry := doctorRuntimeReport{}
@@ -680,11 +684,17 @@ func runDoctor(args []string) error {
 		} else {
 			entry.Probe = &probe
 		}
+		if *liveFlag && probeErr == nil {
+			entry.Checks = doctorLiveChecks(rootCtx, fileCfg, cfg.Actor)
+		}
 		report.Runtimes[string(cfg.Actor)] = entry
 	}
 	report.OK = report.Git.Available
 	for _, actor := range []string{string(model.ActorClaude), string(model.ActorCodex)} {
 		report.OK = report.OK && report.Runtimes[actor].Error == "" && report.Runtimes[actor].Probe != nil
+		for _, check := range report.Runtimes[actor].Checks {
+			report.OK = report.OK && check.Status == "pass"
+		}
 	}
 
 	if *jsonFlag {
@@ -930,6 +940,12 @@ func printDoctorReport(report doctorReport) {
 		fmt.Printf("%-16s   protocol: %s\n", "", probe.Protocol)
 		if len(probe.Capabilities) > 0 {
 			fmt.Printf("%-16s   capabilities: %s\n", "", strings.Join(probe.Capabilities, ", "))
+		}
+		if len(entry.Checks) == 0 {
+			fmt.Printf("%-16s   model response: not checked (use doctor --live; may consume quota)\n", "")
+		}
+		for _, check := range entry.Checks {
+			fmt.Printf("%-16s   %s: %s (%s, %d ms)\n", "", check.ID, check.Status, check.Code, check.DurationMS)
 		}
 		for _, warning := range probe.Warnings {
 			fmt.Printf("%-16s   warning: %s\n", "", warning)

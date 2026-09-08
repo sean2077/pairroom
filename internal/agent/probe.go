@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sean2077/pairroom/internal/execx"
@@ -182,8 +184,14 @@ func runProbeCommand(ctx context.Context, path string, args []string, actor mode
 	default:
 		cmd.Env = envWithout("CLAUDECODE")
 	}
-	output, err := cmd.CombinedOutput()
-	text := strings.TrimSpace(string(output))
+	output := &probeOutput{}
+	cmd.Stdout, cmd.Stderr = output, output
+	cmd.WaitDelay = time.Second
+	err := cmd.Run()
+	text := strings.TrimSpace(output.String())
+	if output.overflow {
+		return "", fmt.Errorf("probe %s exceeded output limit", actor.DisplayName())
+	}
 	if ctx.Err() != nil {
 		return text, fmt.Errorf("probe %s: %w", actor.DisplayName(), ctx.Err())
 	}
@@ -356,3 +364,25 @@ func firstNonEmptyLine(value string) string {
 	}
 	return "ok"
 }
+
+// Probe output is untrusted. Bound capture even when a wrapper prints forever;
+// the command deadline still terminates it and WaitDelay bounds orphaned pipes.
+type probeOutput struct {
+	mu       sync.Mutex
+	buffer   bytes.Buffer
+	overflow bool
+}
+
+func (b *probeOutput) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := len(p)
+	remaining := (256 << 10) - b.buffer.Len()
+	if len(p) > remaining {
+		b.overflow = true
+		p = p[:remaining]
+	}
+	_, _ = b.buffer.Write(p)
+	return n, nil
+}
+func (b *probeOutput) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.buffer.String() }

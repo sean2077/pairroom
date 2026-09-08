@@ -36,6 +36,8 @@
     tabMeta: {},
     activating: new Set(),
     expandedProjects: new Set(),
+    knownProjects: new Set(),
+    projectFilters: new Map(),
     archivedOpen: new Set(),
     dragTabID: '',
     projectMode: 'register',
@@ -78,6 +80,7 @@
   const $ = (id) => document.getElementById(id);
   const app = $('app');
   const view = $('view');
+  const diagnostics = window.PairRoomDiagnostics.create({ t, node, actionButton, api, confirm: openConfirm, navigate });
 
   // Startup translation is declarative; a rendered state/operation takes over
   // its label so later global localization cannot restore misleading defaults.
@@ -151,6 +154,8 @@
   }
 
   function invalidateSessionReads() {
+    diagnostics.reset();
+    state.projectFilters.clear();
     state.sessionGeneration += 1;
     state.refreshPromise = null;
     state.refreshOptions = {};
@@ -393,6 +398,7 @@
       try { return decodeURIComponent(part); } catch { return part; }
     });
     if (parts[0] === 'projects' && parts[1]) return { name: 'project', projectID: parts[1] };
+    if (parts[0] === 'diagnostics') return { name: 'diagnostics', roomID: parts[1] || '' };
     if (parts[0] === 'rooms' && parts[1]) return { name: 'room', roomID: parts[1] };
     if (['overview', 'projects', 'runtimes', 'settings'].includes(parts[0])) return { name: parts[0] };
     return { name: 'overview' };
@@ -450,6 +456,8 @@
       }
       case 'runtimes':
         return { title: t('room.roomRuntimes'), subtitle: t("ui.viewCapacityQueuesActiveTurnAndIdlePendingStatus") };
+      case 'diagnostics':
+        return { title: t('diagnostics.title'), subtitle: t('diagnostics.subtitle') };
       case 'settings':
         return { title: t("ui.settings"), subtitle: t("ui.adjustTheCurrentAdminPageExperienceAndCheckServiceStartupPoliciesAnd") };
       case 'room': {
@@ -500,6 +508,7 @@
         case 'project': renderProjectDetail(state.route.projectID); break;
         case 'runtimes': renderRuntimes(); break;
         case 'settings': renderSettings(); break;
+        case 'diagnostics': diagnostics.render(view, state.snapshot, state.route.roomID); break;
         default: renderOverview(); break;
       }
     }
@@ -519,8 +528,12 @@
     const activeRoomID = state.route.name === 'room' ? state.route.roomID : '';
     tree.replaceChildren(...models.map((model) => {
       const { project, rooms } = model;
-      const expanded = state.expandedProjects.has(project.id) || rooms.some((room) => room.id === activeRoomID) || state.expandedProjects.size === 0;
-      if (expanded) state.expandedProjects.add(project.id);
+      if (!state.knownProjects.has(project.id)) {
+        state.knownProjects.add(project.id);
+        state.expandedProjects.add(project.id);
+      }
+      const expanded = state.expandedProjects.has(project.id);
+      const currentProject = state.route.name === 'project' && state.route.projectID === project.id;
       const activeRooms = rooms.filter((room) => room.lifecycle !== 'archived');
       const archivedRooms = rooms.filter((room) => room.lifecycle === 'archived');
       const showArchived = state.archivedOpen.has(project.id);
@@ -541,18 +554,26 @@
           if (showArchived) archivedRooms.forEach((room) => children.push(renderTreeRoom(room, false)));
         }
       }
+      const roomsID = `project-rooms-${encodeURIComponent(project.id)}`;
       return node('section', { className: `tree-project ${expanded ? 'open' : ''}` },
-        node('button', {
-          type: 'button',
-          className: 'tree-project-toggle',
-          title: project.root,
-          onClick: () => {
-            if (state.expandedProjects.has(project.id)) state.expandedProjects.delete(project.id);
-            else state.expandedProjects.add(project.id);
-            syncRoomTree();
-          },
-        }, node('span', { className: 'tree-caret', textContent: expanded ? '▾' : '▸' }), node('strong', { textContent: projectName(project) }), node('span', { className: 'nav-count', textContent: formatNumber(activeRooms.length) })),
-        children.length ? node('div', { className: 'tree-rooms' }, ...children) : null
+        node('div', { className: `tree-project-header ${currentProject ? 'current' : ''}` },
+          node('button', {
+            type: 'button', className: 'tree-project-toggle',
+            'aria-label': t(expanded ? 'workspace.collapse' : 'workspace.expand', { name: projectName(project) }),
+            'aria-expanded': String(expanded), 'aria-controls': roomsID,
+            onClick: () => {
+              if (expanded) state.expandedProjects.delete(project.id);
+              else state.expandedProjects.add(project.id);
+              syncRoomTree();
+              tree.querySelector(`[aria-controls="${CSS.escape(roomsID)}"]`)?.focus({ preventScroll: true });
+            },
+          }, node('span', { className: 'tree-caret', 'aria-hidden': 'true', textContent: expanded ? '▾' : '▸' })),
+          node('a', {
+            className: 'tree-project-link', href: `#/projects/${encodeURIComponent(project.id)}`,
+            title: project.root, 'aria-current': currentProject ? 'page' : null,
+          }, node('strong', { textContent: projectName(project) }), node('span', { className: 'nav-count', textContent: formatNumber(activeRooms.length) }))
+        ),
+        node('div', { id: roomsID, className: 'tree-rooms', hidden: !expanded }, ...children)
       );
     }));
   }
@@ -981,9 +1002,23 @@
       return;
     }
     const { project, rooms, activeRooms, runtimeCounts, runtimeByRoom } = model;
-    const visibleRooms = rooms.filter((room) => state.filters.showArchived || room.lifecycle !== 'archived');
+    let filter = state.projectFilters.get(projectID);
+    if (!filter) { filter = { search: '', showArchived: false, phase: 'all' }; state.projectFilters.set(projectID, filter); }
+    const visibleRooms = rooms.filter((room) => (filter.showArchived || room.lifecycle !== 'archived')
+      && (!filter.search || `${room.name} ${room.id}`.toLocaleLowerCase().includes(filter.search.toLocaleLowerCase()))
+      && (filter.phase === 'all' || (filter.phase === 'attention' ? (runtimeByRoom.get(room.id)?.phase === 'failed' || roomHasBlockingPendingBindings(room)) : runtimeByRoom.get(room.id)?.busy)));
+    const search = node('input', { id: 'project-room-search', type: 'search', value: filter.search, placeholder: t('workspace.searchRooms'), 'aria-label': t('workspace.searchRooms'), onInput: (event) => {
+      filter.search = event.target.value;
+      const cursor = event.target.selectionStart;
+      renderProjectDetail(projectID);
+      $('project-room-search').focus({ preventScroll: true });
+      $('project-room-search').setSelectionRange(cursor, cursor);
+    } });
+    const phase = node('select', { id: 'project-room-filter', 'aria-label': t('workspace.filterRooms'), onChange: (event) => { filter.phase = event.target.value; renderProjectDetail(projectID); $('project-room-filter').focus({ preventScroll: true }); } },
+      ...['all', 'attention', 'working'].map((key) => node('option', { value: key, textContent: t(`workspace.filter.${key}`) })));
+    phase.value = filter.phase;
     view.replaceChildren(
-      node('div', { className: 'view-stack' },
+      node('div', { className: 'view-stack project-workspace' },
         actionButton(t("ui.backToProjects"), () => navigate('#/projects'), 'text-button'),
         node('section', { className: 'panel detail-hero' },
           node('div', { className: 'detail-title' },
@@ -994,30 +1029,37 @@
             )
           ),
           node('div', { className: 'detail-actions' },
+            actionButton(t('diagnostics.title'), () => navigate('#/diagnostics'), 'secondary-button'),
             actionButton(t("ui.copyPath"), () => copyText(project.root, t("ui.projectPathCopied")), 'secondary-button'),
             actionButton(t("ui.createRoom"), () => openRoomDialog(project.id), 'primary-button', !project.available)
           )
         ),
+        project.diagnostic ? node('aside', { className: 'callout danger' }, node('strong', { textContent: t("ui.projectIsNotAvailable") }), node('span', { textContent: project.diagnostic })) : null,
         node('section', { className: 'stats-grid' },
-          statCard(t("ui.activityRoom"), activeRooms, t("ui.valueArchivedc521841", { value0: (rooms.length - activeRooms) }), '◇', 'accent'),
-          statCard(t("ui.atWork"), runtimeCounts.busy, t('room.activeCount', { count: runtimeCounts.active }), '◎', runtimeCounts.busy ? 'warn' : ''),
-          statCard(t("ui.queue"), runtimeCounts.queued, runtimeCounts.queued ? t("ui.waitingForGlobalCapacity") : t("ui.thereIsCurrentlyNoWaiting"), '↥', runtimeCounts.queued ? 'warn' : 'good'),
-          statCard(t("ui.failed"), runtimeCounts.failed, runtimeCounts.failed ? t("ui.viewRuntimeDiagnostics") : t("ui.noFailureRuntime"), '!', runtimeCounts.failed ? 'danger' : 'good')
+          statCard(t("workspace.activeRooms"), activeRooms, t("ui.valueArchivedc521841", { value0: (rooms.length - activeRooms) }), '◇', 'accent'),
+          statCard(t("workspace.working"), runtimeCounts.busy, t('room.activeCount', { count: runtimeCounts.active }), '◎', runtimeCounts.busy ? 'warn' : ''),
+          statCard(t("workspace.queued"), runtimeCounts.queued, runtimeCounts.queued ? t("ui.waitingForGlobalCapacity") : t("ui.thereIsCurrentlyNoWaiting"), '↥', runtimeCounts.queued ? 'warn' : 'good'),
+          statCard(t("workspace.failed"), runtimeCounts.failed, runtimeCounts.failed ? t("ui.viewRuntimeDiagnostics") : t("ui.noFailureRuntime"), '!', runtimeCounts.failed ? 'danger' : 'good')
         ),
-        node('section', { className: 'two-panel-grid' },
+        node('section', { className: 'project-room-section' },
           panel(t('common.rooms'), t("ui.publicTimelinesAttachmentsApprovalsAndAgentBindingsAreAllIsolatedByRoom"),
-            visibleRooms.length ? node('div', { className: 'room-list' }, ...visibleRooms.map((room) => renderRoomRow(room, runtimeByRoom.get(room.id))))
-              : emptyState('◇', t("ui.noVisibleRoom"), t("ui.createANewRoomOrDisplayArchivedRooms"), true),
+            node('div', {},
+              node('div', { className: 'project-room-tools' }, search, phase, node('span', { className: 'muted', role: 'status', textContent: t('workspace.results', { count: visibleRooms.length }) })),
+              visibleRooms.length ? node('div', { className: 'room-list' }, ...visibleRooms.map((room) => renderRoomRow(room, runtimeByRoom.get(room.id))))
+              : emptyState('◇', t(filter.search || filter.phase !== 'all' ? 'workspace.noMatches' : 'ui.noVisibleRoom'), t('workspace.emptyHelp'), true, actionButton(t('workspace.clearFilters'), () => { filter.search = ''; filter.phase = 'all'; renderProjectDetail(projectID); }, 'secondary-button'))
+            ),
             '',
             node('div', { className: 'section-actions' },
-              actionButton(state.filters.showArchived ? t("ui.hideArchived") : t("ui.showArchived9738720"), () => { state.filters.showArchived = !state.filters.showArchived; renderProjectDetail(projectID); }, 'secondary-button compact-button'),
+              actionButton(filter.showArchived ? t("ui.hideArchived") : t("ui.showArchived9738720"), () => { filter.showArchived = !filter.showArchived; renderProjectDetail(projectID); }, 'secondary-button compact-button'),
               state.snapshot?.capabilities?.room_deletion ? roomSelectionToggleButton(visibleRooms, t("ui.theCurrentVisibleRangeOfThisProject")) : null,
               state.snapshot?.capabilities?.room_deletion ? roomClearSelectionButton() : null,
-              state.snapshot?.capabilities?.room_deletion ? roomBatchArchiveButton(selectedActiveRooms(visibleRooms)) : null,
-              state.snapshot?.capabilities?.room_deletion ? roomBatchRemovalButton(selectedArchivedRooms(visibleRooms)) : null,
-              actionButton(t('room.addRoom'), () => openRoomDialog(project.id), 'primary-button compact-button', !project.available)
+              state.snapshot?.capabilities?.room_deletion && selectedActiveRooms(visibleRooms).length ? roomBatchArchiveButton(selectedActiveRooms(visibleRooms)) : null,
+              state.snapshot?.capabilities?.room_deletion && selectedArchivedRooms(visibleRooms).length ? roomBatchRemovalButton(selectedArchivedRooms(visibleRooms)) : null
             )
-          ),
+          )
+        ),
+        node('details', { className: 'project-details panel' },
+          node('summary', { textContent: t('workspace.projectDetails') }),
           panel(t('room.projectIdentity'), t("ui.canonicalWorktreeRecordsInTheRegistry"),
             node('div', { className: 'key-value-grid' },
               keyValue(t('room.projectId'), project.id, true),
@@ -1026,8 +1068,7 @@
               keyValue(t("ui.availability"), project.available ? t('common.available') : t('common.unavailable'))
             ),
             project.diagnostic || t("ui.serviceDoesNotImplicitlySwitchProjectFromTheCurrentWorkingDirectory")
-          )
-        ),
+          ),
         state.snapshot?.capabilities?.project_refresh || state.snapshot?.capabilities?.project_removal
           ? panel(t('room.projectMaintenance'), t("ui.recheckTheCanonicalPathOrSafelyLogOutOfTheEmptyProject"),
             node('div', { className: 'section-actions' },
@@ -1040,8 +1081,8 @@
               ? t("ui.stillContainsValueRoomsIncludingArchivedRoomsArchiveAndPermanentlyDeleteEvery", { value0: (rooms.length) })
               : t("ui.unregisteringRemovesOnlyTheRegistryEntryItDoesNotDeleteTheGit")
           )
-          : null,
-        project.diagnostic ? node('aside', { className: 'callout danger' }, node('strong', { textContent: t("ui.projectIsNotAvailable") }), node('span', { textContent: project.diagnostic })) : null,
+          : null
+        ),
         node('aside', { className: 'callout boundary' }, node('strong', { textContent: t('room.workspaceBoundary') }), node('span', { textContent: t("ui.roomPermanentlyBelongsToThisProjectReviewerSnapshotAndGitStatusAre") }))
       )
     );
@@ -1053,7 +1094,7 @@
     const title = node('div', { className: 'room-title-line' },
       node('strong', { textContent: room.name }),
       statusBadge(room.lifecycle || 'active', archived ? 'warn' : 'good'),
-	  statusBadge(runtimeLabel(runtime), runtimeTone(runtime), runtime.busy ? 'busy' : ''),
+	  !archived ? statusBadge(runtimeLabel(runtime), runtimeTone(runtime), runtime.busy ? 'busy' : '') : null,
 	  room.legacy ? statusBadge('legacy', 'info') : null,
 	  room.legacy_defaults ? statusBadge(t('room.legacyDefaults'), 'info') : null
 	);
@@ -1067,6 +1108,7 @@
     if (runtime.last_error) meta.append(node('span', { className: 'badge danger plain', textContent: truncate(runtime.last_error, 90), title: runtime.last_error }));
 
     const actions = node('div', { className: 'room-actions' });
+    if (runtime.phase === 'failed' && room.agents?.claude && room.agents?.codex) actions.append(actionButton(t('diagnostics.title'), () => navigate(`#/diagnostics/${encodeURIComponent(room.id)}`), 'secondary-button compact-button room-action-control'));
     if (state.snapshot?.capabilities?.room_deletion) {
       actions.append(
         node('label', {
@@ -1160,6 +1202,7 @@
     models.forEach(({ room, project, runtime }) => {
       const actionCell = node('div', { className: 'runtime-actions' });
       const cleanupUncertain = runtime.phase === 'failed' && runtime.occupies_capacity;
+      if (room.agents?.claude && room.agents?.codex) actionCell.append(actionButton(t('diagnostics.title'), () => navigate(`#/diagnostics/${encodeURIComponent(room.id)}`), 'secondary-button compact-button'));
       if (room.lifecycle !== 'archived') {
         actionCell.append(actionButton(
           cleanupUncertain ? t("ui.requiresControlledRestart") : (runtime.phase === 'active' ? t("ui.open") : t("ui.activate")),
@@ -1292,6 +1335,7 @@
           )
         ),
         settingsPanel(t("ui.diagnosticTools"), t("ui.exportingContentRemovesTheRoomRuntimeUrlLocalPathsAndBusinessMetadata"),
+          settingRow(t("diagnostics.title"), t("diagnostics.subtitle"), actionButton(t("diagnostics.title"), () => navigate("#/diagnostics"), "primary-button")),
           settingRow(t("ui.copyServiceSummary"), t("ui.suitableForPastingIntoALocalIssueOrDebuggingSession"), actionButton(t("ui.copyJson"), () => copyText(JSON.stringify(safe, null, 2), t("ui.desensitizationDiagnosticsHaveBeenReproduced")), 'secondary-button')),
           settingRow(t("ui.downloadDiagnosticFiles"), t("ui.filesAreOnlyGeneratedLocallyInTheBrowserAndAreNotUploaded"), actionButton(t("ui.downloadJson"), downloadDiagnosticSnapshot, 'secondary-button')),
           settingRow(t("ui.viewOriginalStructure"), t("ui.expandTheDesensitizedServiceSnapshotOnThePage"), toggleButton(state.showRawSnapshot, (value) => { state.showRawSnapshot = value; renderSettings(); }, t("ui.switchSnapshotDisplay")))
@@ -1484,7 +1528,7 @@
     });
     return (snapshot.projects || []).map((project) => {
       const rooms = (roomsByProject.get(project.id) || []).sort((a, b) => Number(a.lifecycle === 'archived') - Number(b.lifecycle === 'archived') || a.name.localeCompare(b.name));
-      const runtimes = rooms.map((room) => runtimeByRoom.get(room.id) || suspendedRuntime(room.id));
+      const runtimes = rooms.filter((room) => room.lifecycle !== 'archived').map((room) => runtimeByRoom.get(room.id) || suspendedRuntime(room.id));
       return {
         project, rooms, runtimeByRoom,
         activeRooms: rooms.filter((room) => room.lifecycle !== 'archived').length,
@@ -2364,10 +2408,10 @@
     const eligible = uniqueRooms(candidates);
     const selected = eligible.filter((room) => state.selectedRoomIDs.has(room.id));
     const allSelected = eligible.length > 0 && selected.length === eligible.length;
-    const label = allSelected
-      ? t("ui.deselectRoomInValueValue", { value0: (scopeLabel), value1: (selected.length) })
-      : t("ui.selectRoomInValueValue", { value0: (scopeLabel), value1: (eligible.length) });
-    return actionButton(label, () => toggleRoomSelectionGroup(eligible), `filter-chip ${selected.length ? 'active' : ''}`, eligible.length === 0);
+    const label = t(allSelected ? 'workspace.deselectAll' : 'workspace.selectAll', { count: eligible.length });
+    const button = actionButton(label, () => toggleRoomSelectionGroup(eligible), `filter-chip ${selected.length ? 'active' : ''}`, eligible.length === 0);
+    button.title = scopeLabel;
+    return button;
   }
   function roomClearSelectionButton() {
     const count = state.selectedRoomIDs.size;
@@ -3128,6 +3172,7 @@
   $('sidebar-backdrop').addEventListener('click', () => app.classList.remove('sidebar-open'));
   $('sidebar-collapse').addEventListener('click', () => app.classList.toggle('sidebar-collapsed'));
   window.addEventListener('hashchange', () => {
+    diagnostics.cancel();
     closeRoomContextMenu();
     if (new URLSearchParams(location.hash.replace(/^#/, '')).has('token')) {
       location.reload();
