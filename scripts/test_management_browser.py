@@ -276,6 +276,24 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
         await page.evaluate("location.hash='#/overview'")
         await page.set_content(fixture_html())
         await page.wait_for_selector('#app:not([hidden]) .tree-room')
+        assert await page.locator('#page-eyebrow, .page-heading .eyebrow').count() == 0, 'topbar must not render a page eyebrow'
+        for route, title in (
+            ('#/overview', 'Overview'),
+            ('#/projects', 'Projects and Rooms'),
+            ('#/runtimes', 'Room Runtimes'),
+            ('#/settings', 'Settings'),
+        ):
+            await page.evaluate(f"location.hash={route!r}")
+            await page.wait_for_function(
+                "title => document.getElementById('page-title')?.textContent === title",
+                arg=title,
+            )
+            heading = await page.locator('.page-heading').inner_text()
+            assert title in heading, heading
+            for label in ('PAIRROOM SERVICE', 'WORKSPACES', 'ORCHESTRATION', 'CONTROL PLANE', 'PROJECT'):
+                assert label not in heading, heading
+        await page.evaluate("location.hash='#/overview'")
+        await page.wait_for_function("document.getElementById('page-title')?.textContent === 'Overview'")
         await page.screenshot(path=str(artifacts / 'management-overview-light.png'))
         await page.locator('.tree-room', has_text='Implementation workspace').click()
         await page.wait_for_selector('#room-tablist .room-tab-target')
