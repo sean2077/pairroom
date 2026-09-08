@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Resolve explicit user replies into native envelope `quoted_message` context at delivery, including quoted images, without expanding Agent-relay correlation links or baking quotes into the durable user message.
 - Remove the uppercase eyebrow labels from the Management topbar heading.
 
 ## [v3.1.1] — 2026-09-08

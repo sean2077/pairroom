@@ -66,7 +66,7 @@ A generic runtime diagnostic, quiet stdout, or a transport receipt is not termin
 
 New Rooms persist default Lead/Executor instructions or user-supplied custom instructions at creation. The stable native instruction layer owns participant identity, exact handles, collaboration responsibilities, and versioned protocol rules. Additional participant instructions remain separate explicit configuration.
 
-The dynamic input envelope carries sender, complete body, and attachment metadata. Correlation IDs remain in transport/persistence where applicable rather than being repeated as model-facing context. Relay forwards the complete visible peer reply and its attachments; it does not summarize the reply or append accumulated Room history.
+The dynamic input envelope carries sender, complete body, attachment metadata, and explicit user-quoted message context resolved from the same Room at delivery. Correlation IDs remain in transport/persistence where applicable rather than being repeated as model-facing context. User quotes are not recursively expanded through Agent-relay correlation links. Relay forwards the complete visible peer reply and its attachments; it does not summarize the reply or append accumulated Room history.
 
 Only an exact current peer handle in visible output requests relay after the native Turn boundary. No such handle ends relay. There is no counter-based relay ceiling, and default/custom instructions are not executable workflow phases or enforced human plan-approval gates. [Protocol](PROTOCOL.md) owns matching exclusions, aliases, `@user` precedence, and envelope budgets; do not duplicate that parser contract here.
 
