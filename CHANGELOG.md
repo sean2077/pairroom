@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 - Add reusable Agent pair profiles with per-slot Runtime, Provider reference, model, effort, instructions, and native policies. Save/select/update pairs during Room creation or manage them in Settings, including an optional default for new Rooms. Persist Service-scoped profiles independently of the Registry index; copy selections into new Rooms without changing existing Rooms or capturing Provider credentials. Add authenticated API, persistence/race/failure-boundary, client freshness, and bilingual browser regressions.
-
+- Resolve explicit user replies into native envelope `quoted_message` context at delivery, including quoted images, without expanding Agent-relay correlation links or baking quotes into the durable user message.
 - Remove the uppercase eyebrow labels from the Management topbar heading.
 
 ## [v3.1.1] — 2026-09-08

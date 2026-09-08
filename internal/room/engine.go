@@ -620,6 +620,12 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 		return model.Message{}, errors.New("message text or image is required")
 	}
 
+	if req.ReplyTo != "" {
+		if _, err := e.messageForUserQuote(req.ReplyTo); err != nil {
+			return model.Message{}, err
+		}
+	}
+
 	targets, err := e.resolveUserTargets(text, req.To, req.TargetRole, req.ReplyTo)
 	if err != nil {
 		return model.Message{}, err
@@ -1858,7 +1864,13 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 	e.mu.RLock()
 	participant := e.snapshot.Participants[target]
 	e.mu.RUnlock()
-	attachments, err := e.agentAttachments(message.Attachments)
+	quote, media, err := e.deliveryQuote(message)
+	if err != nil {
+		e.delivery(message.ID, target, model.DeliveryFailed, err.Error())
+		e.processing(message.ID, target, model.ProcessingFailed, "quoted message resolution failed: "+err.Error(), "")
+		return ""
+	}
+	attachments, err := e.agentAttachments(media)
 	if err != nil {
 		e.delivery(message.ID, target, model.DeliveryFailed, err.Error())
 		e.processing(message.ID, target, model.ProcessingFailed, "image resolution failed: "+err.Error(), "")
@@ -1880,6 +1892,7 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 		PeerHandle:  identities[model.OtherParticipant(target)].MentionHandle,
 		Text:        message.Text,
 		ReplyTo:     message.ReplyTo,
+		Quote:       quote,
 		Role:        nativePermissionRole(participant),
 		Attachments: attachments,
 		Intent:      message.Intent,
