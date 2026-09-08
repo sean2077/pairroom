@@ -44,6 +44,8 @@ def fixture_html() -> str:
       window.__catalog = {collaboration_default:COLLABORATION,profiles:[{name:'Example Provider',runtime:'claude',supported:true,provider:{source:'cc-switch',app_type:'claude',profile_id:'fixture'}}],runtimes:['claude','codex','grok'].map(runtime=>({runtime,
         display_name:{claude:'Claude Code',codex:'Codex',grok:'Grok Build'}[runtime],available:true})),
         defaults:{claude:{runtime:'claude',provider:{source:'native'},permission_mode:'yolo'},codex:{runtime:'codex',provider:{source:'native'},approval_policy:'yolo',sandbox:'danger-full-access'}}};
+      window.__pairProfiles = {schema:1, default_profile_id:'', profiles:[]};
+      window.__pairProfileCounter = 0;
       window.__serviceReads = 0; window.__readDelay = 0; window.__catalogDelay = 0;
       window.__catalogReads = 0; window.__catalogWrites = 0; window.__writes = [];
       window.fetch = async (path,options={}) => {
@@ -52,6 +54,22 @@ def fixture_html() -> str:
         else if (path === '/api/v1/service') {
           __serviceReads++; body=structuredClone(__snapshot);
           await new Promise(resolve=>setTimeout(resolve,__readDelay));
+        } else if (path.startsWith('/api/v1/agent-pair-profiles')) {
+          const base='/api/v1/agent-pair-profiles';
+          const input=options.body ? JSON.parse(options.body) : {};
+          const id=decodeURIComponent(path.slice(base.length+1));
+          if (options.method==='POST' || options.method==='PUT') {
+            const profile={id:options.method==='POST'?'pair-'+(++__pairProfileCounter):id, name:input.name, agents:input.agents};
+            const index=__pairProfiles.profiles.findIndex(p=>p.id===profile.id);
+            if(index<0) __pairProfiles.profiles.push(profile); else __pairProfiles.profiles[index]=profile;
+            if(input.is_default) __pairProfiles.default_profile_id=profile.id;
+            else if(__pairProfiles.default_profile_id===profile.id) __pairProfiles.default_profile_id='';
+          } else if(options.method==='PATCH') __pairProfiles.default_profile_id=input.profile_id;
+          else if(options.method==='DELETE') {
+            __pairProfiles.profiles=__pairProfiles.profiles.filter(p=>p.id!==id);
+            if(__pairProfiles.default_profile_id===id) __pairProfiles.default_profile_id='';
+          }
+          body=structuredClone(__pairProfiles);
         } else if (path.startsWith('/api/v1/agent-catalog')) {
           if (options.method==='POST') __catalogWrites++; else __catalogReads++;
           body=structuredClone(__catalog);
@@ -260,6 +278,161 @@ async def verify_activation(browser) -> dict:
         await page.close()
 
 
+
+async def verify_pair_profiles(browser, artifacts: Path, in_page_fixture: bool = False) -> dict:
+    context = await browser.new_context(viewport={'width': 1440, 'height': 1000}, locale='en-US', reduced_motion='reduce')
+    page = await context.new_page()
+    page.set_default_timeout(5000)
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    if in_page_fixture:
+        await page.evaluate("location.hash='#/projects/p1'")
+        await page.set_content(fixture_html())
+    else:
+        await load_csp_fixture(page)
+    await page.wait_for_selector('#app:not([hidden]) .tree-room')
+
+    async def settings():
+        await page.evaluate("location.hash='#/settings'")
+        await page.get_by_role('button', name='Agent pair profiles', exact=True).click()
+        await page.get_by_role('button', name='New profile', exact=True).wait_for()
+
+    async def create_dialog():
+        await page.evaluate("location.hash='#/projects/p1'")
+        await page.get_by_role('button', name='+ Create Room', exact=True).first.click()
+        await page.wait_for_function("!document.getElementById('room-submit').disabled")
+
+    async def close_dialog():
+        await page.locator('#room-dialog [data-close-dialog="room-dialog"]').first.click()
+
+    # Profile management does not require a Project, and must not save bindings,
+    # collaboration or Project paths along with the reusable pair.
+    await page.evaluate("__snapshot.projects=[]; document.getElementById('refresh-button').click()")
+    await settings()
+    await page.get_by_role('button', name='New profile', exact=True).click()
+    await page.wait_for_function("!document.getElementById('room-submit').disabled")
+    assert not await page.locator('#room-project-id').is_visible()
+    assert not await page.locator('#room-collaboration-mode').is_visible()
+    assert not await page.locator('input[name="claude-mode"]').first.is_visible()
+    await page.locator('#pair-profile-name').fill('Daily code pair')
+    await page.locator('#pair-profile-default').check()
+    await page.locator('#claude-runtime').select_option('codex')
+    for actor, model, effort in [('claude', 'planner-model', 'high'), ('codex', 'executor-model', 'low')]:
+        await page.locator(f'#{actor}-model').fill(model)
+        await page.locator(f'[data-actor="{actor}"] .agent-advanced').evaluate('node=>node.open=true')
+        await page.locator(f'#{actor}-effort').select_option(effort)
+        await page.locator(f'#{actor}-instructions').fill('Instructions for '+actor)
+    await page.locator('#claude-approval-policy').select_option('on-request')
+    await page.locator('#claude-sandbox').select_option('read-only')
+    await page.locator('#room-submit').click()
+    await page.wait_for_function("!document.getElementById('room-dialog').open")
+    catalog = await page.evaluate('__pairProfiles')
+    profile_id = catalog['default_profile_id']
+    assert profile_id and len(catalog['profiles']) == 1
+    profile = catalog['profiles'][0]
+    assert set(profile) == {'id', 'name', 'agents'}
+    assert all(agent['runtime'] == 'codex' for agent in profile['agents'].values())
+    assert profile['agents']['claude']['approval_policy'] == 'on-request'
+    assert await page.evaluate('__writes.length') == 0, 'saving a profile must not create a Room'
+
+    # Restore a Project and create a Room from the default. Temporary overrides
+    # are copied to the request, not written back into the saved profile.
+    await page.evaluate("__snapshot.projects=[{id:'p1',root:'/workspace/example',available:true}]; document.getElementById('refresh-button').click()")
+    await create_dialog()
+    assert await page.locator('#room-pair-profile').input_value() == profile_id
+    assert await page.locator('#claude-model').input_value() == 'planner-model'
+    assert await page.locator('#codex-model').input_value() == 'executor-model'
+    assert await page.locator('#claude-effort').input_value() == 'high'
+    assert await page.locator('#claude-instructions').input_value() == 'Instructions for claude'
+    assert await page.locator('#room-collaboration-mode').input_value() == 'default'
+    assert await page.locator('#claude-session-id').input_value() == ''
+    await page.locator('#claude-model').fill('one-room-only')
+    await page.locator('#room-submit').click()
+    await page.wait_for_function("!document.getElementById('room-dialog').open")
+    payload = await page.evaluate("JSON.parse(__writes.filter(w=>w.path.endsWith('/rooms')).at(-1).body)")
+    assert payload['agents']['claude']['model'] == 'one-room-only'
+    assert (await page.evaluate('__pairProfiles.profiles[0].agents.claude.model')) == 'planner-model'
+
+    await create_dialog()
+    assert await page.locator('#claude-model').input_value() == 'planner-model'
+    await page.locator('#room-pair-profile').select_option('')
+    assert await page.locator('#claude-runtime').input_value() == 'claude'
+    assert await page.locator('#claude-model').input_value() == ''
+    await page.locator('#room-pair-profile').select_option(profile_id)
+    await page.locator('#pair-profile-save-options').evaluate('node=>node.open=true')
+    await page.locator('#pair-profile-name').fill('Economical pair')
+    await page.locator('#codex-model').fill('fast-executor')
+    await page.locator('#pair-profile-save-new').click()
+    await page.wait_for_function('__pairProfiles.profiles.length===2')
+    second_id = await page.evaluate('__pairProfiles.default_profile_id')
+    assert second_id != profile_id
+    assert await page.locator('#room-dialog').is_visible(), 'saving inline must preserve the Room draft'
+    await page.locator('#pair-profile-name').fill('Renamed economical pair')
+    await page.locator('#pair-profile-update').click()
+    await page.wait_for_function("__pairProfiles.profiles.some(p=>p.name==='Renamed economical pair')")
+    assert await page.evaluate('__pairProfiles.profiles.length') == 2, 'update must not create another profile'
+    await close_dialog()
+
+    # Values from newer native CLIs and removed Provider references survive
+    # filling the form. Missing Providers never silently become native.
+    await page.evaluate("""id=>{
+      const profile=__pairProfiles.profiles.find(p=>p.id===id);
+      profile.agents.claude.effort='future-native-effort';
+      profile.agents.claude.provider={source:'cc-switch',app_type:'codex',profile_id:'removed-provider'};
+    }""", second_id)
+    await create_dialog()
+    assert await page.locator('#claude-effort').input_value() == 'future-native-effort'
+    assert 'removed-provider' in await page.locator('#claude-provider').input_value()
+    assert not await page.locator('#claude-provider').evaluate('node=>node.checkValidity()')
+    before = await page.evaluate('__writes.length')
+    await page.locator('#room-submit').click()
+    assert await page.evaluate('__writes.length') == before
+    await close_dialog()
+
+    await settings()
+    row = page.locator(f'[data-pair-profile-id="{second_id}"]')
+    await row.get_by_role('button', name='Edit profile', exact=True).click()
+    await page.wait_for_function("!document.getElementById('room-submit').disabled")
+    assert await page.locator('#claude-effort').input_value() == 'future-native-effort'
+    await page.locator('#claude-provider').select_option(label='Native / Runtime default')
+    await page.locator('#claude-model').fill('updated-planner')
+    await page.evaluate("PairRoomI18n.setLang('zh-CN')")
+    for width in [320, 390]:
+        await page.set_viewport_size({'width': width, 'height': 844})
+        assert not await page.locator('#room-dialog').evaluate('node=>node.scrollWidth>node.clientWidth'), f'profile editor overflow at {width}'
+    await expect(page.locator('#room-submit')).to_have_text('保存组合配置')
+    await expect(page.locator('#room-dialog-title')).to_have_text('编辑组合配置')
+    await page.screenshot(path=str(artifacts / 'pair-profile-editor-mobile-zh-CN.png'))
+    await page.set_viewport_size({'width': 1440, 'height': 1000})
+    await page.evaluate("PairRoomI18n.setLang('en')")
+    await page.locator('#room-submit').click()
+    await page.wait_for_function("!document.getElementById('room-dialog').open")
+    await expect(row).to_contain_text('updated-planner')
+    await row.get_by_role('button', name='Clear default', exact=True).click()
+    await page.wait_for_function("__pairProfiles.default_profile_id===''")
+    first_row = page.locator(f'[data-pair-profile-id="{profile_id}"]')
+    await first_row.get_by_role('button', name='Set as default', exact=True).click()
+    await page.wait_for_function('id=>__pairProfiles.default_profile_id===id', arg=profile_id)
+    await expect(first_row.get_by_role('button', name='Clear default', exact=True)).to_be_visible()
+    await page.evaluate("document.querySelectorAll('#toasts .toast-close').forEach(button=>button.click())")
+    await page.screenshot(path=str(artifacts / 'pair-profiles-settings.png'))
+    await first_row.get_by_role('button', name='Delete profile', exact=True).click()
+    await page.locator('#confirm-submit').click()
+    await page.wait_for_function('__pairProfiles.profiles.length===1 && __pairProfiles.default_profile_id===""')
+    # The last Room request still has its explicit snapshot after update/delete.
+    assert await page.evaluate("JSON.parse(__writes.filter(w=>w.path.endsWith('/rooms')).at(-1).body).agents.claude.model") == 'one-room-only'
+    await create_dialog()
+    assert await page.locator('#room-pair-profile').input_value() == ''
+    assert await page.locator('#claude-runtime').input_value() == 'claude'
+    assert not errors, errors
+    if not in_page_fixture:
+        assert not await page.evaluate('__cspErrors'), 'profile controls violated production CSP'
+    await context.close()
+    return {'pair_profiles_crud_default_and_overrides': True, 'pair_profiles_without_project': True,
+            'pair_profiles_preserve_unknown_effort_and_missing_provider': True, 'pair_profiles_responsive_bilingual': True,
+            'pair_profiles_strict_csp': not in_page_fixture, 'pair_profiles_page_errors': errors}
+
+
 async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: bool = False) -> None:
     artifacts.mkdir(parents=True, exist_ok=True)
     results = {}
@@ -441,6 +614,7 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
         assert not errors, errors
         results.update(await verify_names(browser, artifacts, in_page_fixture))
         results.update(await verify_activation(browser))
+        results.update(await verify_pair_profiles(browser, artifacts, in_page_fixture))
         results['page_errors'] = errors
         (artifacts / 'results.json').write_text(json.dumps(results, indent=2) + '\n', encoding='utf-8')
         print(json.dumps(results, indent=2))

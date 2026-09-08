@@ -1087,3 +1087,17 @@ body[data-density="compact"] .stat-card { min-height: 98px; }
 .binding-runtime-name { color: var(--text); user-select: all; }
 
 #room-name-hint { display: block; margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+/* Agent pair profiles reuse the Room Agent fields; profile actions wrap instead
+   of squeezing names or overflowing the Settings panel on narrow windows. */
+.pair-profile-controls { display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.pair-profile-controls > label, .pair-profile-metadata > label { display: grid; gap: 6px; }
+.pair-profile-controls summary { cursor: pointer; }
+.pair-profile-metadata { display: grid; gap: 12px; margin-top: 12px; }
+.pair-profile-metadata > .pair-profile-default { display: flex; align-items: center; gap: 8px; }
+.pair-profile-default input { flex: 0 0 auto; width: auto; }
+.pair-profile-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.pair-profile-controls [hidden], .pair-profile-metadata [hidden] { display: none !important; }
+.setting-row[data-pair-profile-id] { flex-wrap: wrap; gap: 12px; }
+.setting-row[data-pair-profile-id] .setting-copy { overflow-wrap: anywhere; }
+.setting-row[data-pair-profile-id] .setting-control { max-width: 100%; }
