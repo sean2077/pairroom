@@ -2595,6 +2595,12 @@
   $('scroll-bottom').addEventListener('click', () => { scrollBottom(); markConversationRead(true); });
   timeline.addEventListener('scroll', () => markConversationRead(false), { passive: true });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { markConversationRead(false); renderActivity(); } });
+  window.addEventListener('focus', () => {
+    // Re-focus the message input to update IME context when switching back to PairRoom
+    if (document.activeElement !== messageInput && !messageInput.disabled) {
+      messageInput.focus({ preventScroll: true });
+    }
+  });
   document.addEventListener('pairroom:layout', renderActivity);
   $('refresh-diff').addEventListener('click', refreshDiff);
   $('staged-diff').addEventListener('change', refreshDiff);
