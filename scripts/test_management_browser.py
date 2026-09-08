@@ -233,6 +233,7 @@ async def verify_diagnostics(browser, artifacts: Path, in_page_fixture: bool = F
         for width in [320, 390, 768, 1440]:
             await page.set_viewport_size({'width':width, 'height':1000})
             await page.wait_for_timeout(80)
+            await wait_fixture_state(page, 'document.documentElement.scrollWidth <= innerWidth')
             assert not await page.evaluate('document.documentElement.scrollWidth>innerWidth'), f'diagnostics overflow at {width}'
             assert 'diagnostics.' not in await page.locator('#view').inner_text(), 'untranslated diagnostic keys'
         await page.screenshot(path=str(artifacts / f'diagnostics-{theme}-{language}.png'), full_page=True)
@@ -748,7 +749,7 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
             await page.screenshot(path=str(artifacts / f'management-project-{theme}-{language}.png'))
             for width in [320, 390, 680, 900]:
                 await page.set_viewport_size({'width': width, 'height': 844})
-                await page.wait_for_timeout(80)
+                await wait_fixture_state(page, 'document.documentElement.scrollWidth <= innerWidth')
                 assert not await page.evaluate('document.documentElement.scrollWidth>innerWidth'), f'horizontal overflow at {width}'
                 assert await page.locator('#add-project-button').get_attribute('aria-label') or await page.locator('#add-project-button').inner_text(), 'compact action lost its accessible name'
                 size = await page.locator('#add-project-button').bounding_box()
@@ -759,6 +760,8 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
             await page.set_viewport_size({'width': 1440, 'height': 1000})
         results['responsive_header_and_locale_identity'] = True
         assert not errors, errors
+        from test_management_order_browser import verify_ordering
+        results.update(await verify_ordering(browser, artifacts, in_page_fixture))
         results.update(await verify_diagnostics(browser, artifacts, in_page_fixture))
         results.update(await verify_names(browser, artifacts, in_page_fixture))
         results.update(await verify_activation(browser))

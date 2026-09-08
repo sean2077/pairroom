@@ -3,6 +3,18 @@
   window.PairRoomLocales = {
   "en": {
     "translation": {
+      "workspace.ordering.label": "Reorder {{name}}",
+      "workspace.ordering.help": "Drag to reorder; use ↑ / ↓ or click for move controls. Esc cancels.",
+      "workspace.ordering.actions": "Move item",
+      "workspace.ordering.up": "Move up",
+      "workspace.ordering.down": "Move down",
+      "workspace.ordering.saving": "Saving order…",
+      "workspace.ordering.saved": "Order saved.",
+      "workspace.ordering.failed": "Could not save order",
+      "workspace.ordering.retry": "The order has been refreshed from the Service. Check the connection and try again.",
+      "workspace.ordering.cancelled": "Reordering cancelled.",
+      "workspace.ordering.unavailable": "Saved ordering is unavailable. Repair navigation-order.json in the Service data directory before reordering.",
+      "workspace.ordering.serviceSummary": "Service summary and support export",
       "diagnostics.keywords": "doctor diagnostics runtime environment",
       "diagnostics.check.cleanup": "Cleanup",
       "diagnostics.code.cleanup_failed": "Native shutdown or temporary workspace cleanup did not complete cleanly.",
@@ -1258,6 +1270,18 @@
   },
   "zh-CN": {
     "translation": {
+      "workspace.ordering.label": "调整 {{name}} 的顺序",
+      "workspace.ordering.help": "拖拽排序；可按 ↑ / ↓ 或点击选择移动方向。Esc 取消。",
+      "workspace.ordering.actions": "调整顺序",
+      "workspace.ordering.up": "上移",
+      "workspace.ordering.down": "下移",
+      "workspace.ordering.saving": "正在保存顺序…",
+      "workspace.ordering.saved": "顺序已保存。",
+      "workspace.ordering.failed": "无法保存顺序",
+      "workspace.ordering.retry": "已从 Service 重新读取顺序。请检查连接后重试。",
+      "workspace.ordering.cancelled": "已取消排序。",
+      "workspace.ordering.unavailable": "无法读取已保存的顺序。请修复 Service 数据目录中的 navigation-order.json 后再排序。",
+      "workspace.ordering.serviceSummary": "Service 汇总与支持信息导出",
       "diagnostics.keywords": "诊断 运行时 环境 doctor",
       "diagnostics.check.cleanup": "清理",
       "diagnostics.code.cleanup_failed": "原生运行时关闭或临时工作区清理未顺利完成。",
