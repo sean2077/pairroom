@@ -1116,13 +1116,13 @@ body[data-density="compact"] .stat-card { min-height: 98px; }
 .tree-room-row { padding-inline-start: 8px; display: flex; align-items: center; min-width: 0; }
 .tree-room-row .tree-room { flex: 1; min-width: 0; }
 [data-order-kind] { position: relative; }
-.order-handle { flex: 0 0 28px; width: 28px; min-width: 28px; min-height: 32px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--subtle); font-size: 20px; cursor: grab; touch-action: none; }
-.order-handle:hover, .order-handle:focus-visible, .order-handle[aria-expanded="true"] { color: var(--accent); background: var(--accent-soft); }
-.order-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.order-handle:disabled { opacity: .3; cursor: default; }
-.order-handle:active { cursor: grabbing; }
-.room-row[data-order-kind] { grid-template-columns: 28px minmax(0, 1fr) auto; }
-.navigation-dragging { user-select: none; cursor: grabbing; }
+/* The whole row is the drag affordance; interactive children stay clickable. */
+[data-order-kind] { cursor: grab; touch-action: pan-y; }
+[data-order-kind].order-holding, [data-order-kind].order-dragging { user-select: none; }
+[data-order-kind].order-dragging a, [data-order-kind].order-dragging button { pointer-events: none; }
+[data-order-kind].order-saving { cursor: progress; }
+[data-order-kind].order-saving a, [data-order-kind].order-saving button { pointer-events: none; }
+.navigation-dragging, .navigation-dragging * { user-select: none; cursor: grabbing; }
 .order-dragging { opacity: .55; }
 .order-before::before, .order-after::after { content: ''; position: absolute; inset-inline: 0; height: 3px; background: var(--accent); border-radius: 3px; pointer-events: none; z-index: 4; }
 .order-before::before { top: -3px; }
@@ -1135,16 +1135,12 @@ body[data-density="compact"] .stat-card { min-height: 98px; }
 .settings-content .service-support .panel { border: 0; box-shadow: none; }
 @media (max-width: 1100px) {
   .project-list-row { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
-  .project-list-status { grid-column: 1; justify-content: flex-start; padding-inline-start: 42px; }
+  .project-list-status { grid-column: 1; justify-content: flex-start; }
   .project-list-actions { grid-column: 2; grid-row: 1 / 3; }
-  .room-row[data-order-kind] { grid-template-columns: 28px minmax(0, 1fr); }
-  .room-row[data-order-kind] > .room-actions { grid-column: 2; }
 }
 @media (max-width: 680px) {
   .project-list-row { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 14px; }
-  .project-list-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; padding-inline-start: 42px; }
-  .project-list-status { padding-inline-start: 42px; }
-  .order-handle { min-height: 44px; width: 32px; flex-basis: 32px; }
+  .project-list-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; }
   .settings-nav { scroll-padding-inline: 8px; }
 }
 

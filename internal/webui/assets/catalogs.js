@@ -3,8 +3,7 @@
   window.PairRoomLocales = {
   "en": {
     "translation": {
-      "workspace.ordering.label": "Reorder {{name}}",
-      "workspace.ordering.help": "Drag to reorder; use ↑ / ↓ or click for move controls. Esc cancels.",
+      "workspace.ordering.help": "Drag the row to reorder; right-click or Alt+↑/↓ for move controls. Esc cancels.",
       "workspace.ordering.actions": "Move item",
       "workspace.ordering.up": "Move up",
       "workspace.ordering.down": "Move down",
@@ -1270,8 +1269,7 @@
   },
   "zh-CN": {
     "translation": {
-      "workspace.ordering.label": "调整 {{name}} 的顺序",
-      "workspace.ordering.help": "拖拽排序；可按 ↑ / ↓ 或点击选择移动方向。Esc 取消。",
+      "workspace.ordering.help": "拖拽整行调整顺序；右键或 Alt+↑/↓ 选择移动方向。Esc 取消。",
       "workspace.ordering.actions": "调整顺序",
       "workspace.ordering.up": "上移",
       "workspace.ordering.down": "下移",

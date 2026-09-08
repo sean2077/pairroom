@@ -48,7 +48,7 @@ The created Room returns the immutable `agents` map. There is no Agent-reconfigu
 
 Preferences live in `navigation-order.json`, separate from the rebuildable Registry. On a corrupt/unreadable file, the Service snapshot still works but sets `navigation_order_error: true`; ordering is disabled until the file is repaired. Back up that file before replacing it. Ordinary Service health is not a claim that this optional preference file is valid.
 
-The Projects page uses one row per Project. Drag its handle or click for Move up/Move down; focus the handle and use arrow keys as a keyboard alternative. The sidebar and Project-detail Room lists offer the same controls. Escape cancels a drag. Diagnostics and the existing Service support export share **Settings → Diagnostics**; old `#/diagnostics[/room]` links redirect there without starting a check.
+The Projects page uses one row per Project. Drag the row itself to reorder; right-click a row (or focus a control in it and press Alt+↑/Alt+↓) for Move up/Move down. The sidebar and Project-detail Room lists offer the same controls. Escape cancels a drag. Diagnostics and the existing Service support export share **Settings → Diagnostics**; old `#/diagnostics[/room]` links redirect there without starting a check.
 
 ## Agent pair profiles
 

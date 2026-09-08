@@ -45,16 +45,31 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
       location.hash='#/projects';
     }""")
     await page.locator('#refresh-button').click()
-    await page.wait_for_selector('#view [data-order-id="p3"] .order-handle')
+    await page.wait_for_selector('#view [data-order-id="p3"]')
 
     async def ids(scope, kind):
         return await page.locator(f'{scope} [data-order-kind="{kind}"]').evaluate_all('(rows)=>rows.map(r=>r.dataset.orderId)')
 
+    async def saved():
+        # Saving blocks a new drag gesture on every row and clears afterwards.
+        await wait_fixture_state(page, "!document.querySelector('#view .order-saving')")
+
+    async def refresh():
+        # A refresh re-reads and rebuilds the rows; wait for both frames so the
+        # next locator resolves against the settled DOM instead of a stale row.
+        reads = await page.evaluate('__serviceReads')
+        await page.locator('#refresh-button').click()
+        await wait_fixture_state(page, f'__serviceReads>{reads}')
+        await page.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+
+    def row(scope, kind, order_id):
+        return page.locator(f'{scope} [data-order-kind="{kind}"][data-order-id="{order_id}"]')
+
     async def drag(scope, kind, source, target, *, cancel=False):
-        handle = page.locator(f'{scope} [data-order-kind="{kind}"][data-order-id="{source}"] .order-handle')
-        await handle.scroll_into_view_if_needed()
-        box = await handle.bounding_box()
-        destination = await page.locator(f'{scope} [data-order-kind="{kind}"][data-order-id="{target}"]').bounding_box()
+        source_row = row(scope, kind, source)
+        await source_row.scroll_into_view_if_needed()
+        box = await source_row.bounding_box()
+        destination = await row(scope, kind, target).bounding_box()
         assert box and destination
         await page.mouse.move(box['x']+box['width']/2, box['y']+box['height']/2)
         await page.mouse.down()
@@ -63,62 +78,76 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
             await page.keyboard.press('Escape')
         await page.mouse.up()
 
+    async def move_via_menu(scope, kind, source, label):
+        await row(scope, kind, source).click(button='right')
+        await page.get_by_role('button', name=label, exact=True).click()
+
     assert await ids('#view','project') == ['p1','p2','p3']
+    assert not await page.locator('.order-handle').count(), 'drag handle buttons must be gone'
     boxes = await page.locator('.project-list-row').evaluate_all('(rows)=>rows.map(r=>({x:r.offsetLeft,y:r.offsetTop,w:r.offsetWidth,h:r.offsetHeight}))')
     assert len({b['x'] for b in boxes}) == 1 and len({b['w'] for b in boxes}) == 1
     assert all(boxes[i]['y']+boxes[i]['h']<=boxes[i+1]['y'] for i in range(2)), boxes
     await drag('#view','project','p3','p1')
-    await wait_fixture_state(page, "__snapshot.navigation_order.projects[0]==='p3' && !document.querySelector('#view .order-handle').disabled")
+    await saved()
     assert await ids('#view','project') == ['p3','p1','p2']
     assert await ids('#room-tree','project') == ['p3','p1','p2']
-    await page.locator('#refresh-button').click()
+    await refresh()
     assert await ids('#view','project') == ['p3','p1','p2']
     await page.screenshot(path=str(artifacts / 'projects-ordered-light-en.png'), full_page=True)
+    # Interactive children stay clickable: plain navigation on a link still works.
+    await row('#room-tree','project','p3').get_by_role('link').click()
+    await wait_fixture_state(page, "location.hash.startsWith('#/projects/')")
+    await page.evaluate("location.hash='#/projects'")
+    await refresh()
     count = await page.evaluate('__moves.length')
     await drag('#view','project','p2','p3',cancel=True)
     assert await page.evaluate('__moves.length') == count, 'Escape submitted a drag'
     assert not await page.locator('.order-before,.order-after,.order-dragging').count()
-    # A single-pointer (non-drag) alternative and native keyboard access.
-    await page.locator('#view [data-order-id="p1"] .order-handle').click()
-    await page.get_by_role('button', name='Move down', exact=True).click()
-    await wait_fixture_state(page, "__snapshot.navigation_order.projects[2]==='p1' && !document.querySelector('#view .order-handle').disabled")
-    assert await ids('#view','project') == ['p3','p2','p1']
-    await page.locator('#view [data-order-id="p1"] .order-handle').press('ArrowUp')
-    await wait_fixture_state(page, "__snapshot.navigation_order.projects[1]==='p1' && !document.querySelector('#view .order-handle').disabled")
-    assert await page.locator('#view [data-order-id="p1"] .order-handle').evaluate('(e)=>e===document.activeElement')
+    # Right-click opens the non-drag up/down menu.
+    await move_via_menu('#view','project','p1','Move down')
+    await saved()
+    assert await ids('#view','project') == ['p3','p2','p1'], await ids('#view','project')
+    # Keyboard parity: Alt+Arrow moves the row that holds focus, repeatedly.
+    await row('#view','project','p1').get_by_role('link').focus()
+    await page.keyboard.press('Alt+ArrowUp')
+    await saved()
+    assert await ids('#view','project') == ['p3','p1','p2']
+    assert await row('#view','project','p1').get_by_role('link').evaluate('(e)=>e===document.activeElement')
 
     await page.evaluate("location.hash='#/projects/p1'")
     await page.wait_for_selector('#project-room-search')
     await drag('#view','room','r3','r1')
-    await wait_fixture_state(page,"__snapshot.navigation_order.rooms.p1?.[0]==='r3' && !document.querySelector('#view .order-handle').disabled")
+    await saved()
     assert await ids('#view','room') == ['r3','r1','r2']
     assert (await ids('#room-tree','room'))[:3] == ['r3','r1','r2']
-    # Filtered movement keeps unseen Room IDs; arrows intentionally use the full
-    # Project order, not only the visible search result.
+    # Filtered movement keeps unseen Room IDs; the menu intentionally uses the
+    # full Project order, not only the visible search result.
     await page.locator('#project-room-search').fill('Review')
-    await page.locator('#view [data-order-id="r2"] .order-handle').press('ArrowUp')
-    await wait_fixture_state(page,"__snapshot.navigation_order.rooms.p1?.[1]==='r2' && !document.querySelector('#view .order-handle').disabled")
+    await move_via_menu('#view','room','r2','Move up')
+    await saved()
     assert await page.evaluate('__snapshot.navigation_order.rooms.p1') == ['r3','r2','r1']
     await page.locator('#project-room-search').fill('')
     # Rejected writes do not pretend to reorder the list.
     await page.evaluate('__moveFail=true')
-    await page.locator('#view [data-order-id="r1"] .order-handle').press('ArrowUp')
-    await wait_fixture_state(page,"document.getElementById('navigation-order-status')?.textContent.includes('Could not save order') && !document.querySelector('#view .order-handle').disabled")
+    await move_via_menu('#view','room','r1','Move up')
+    await wait_fixture_state(page,"document.getElementById('navigation-order-status')?.textContent.includes('Could not save order')")
+    await saved()
     assert await ids('#view','room') == ['r3','r2','r1']
     await page.evaluate('__moveFail=false;__moveDelay=200')
-    await page.locator('#view [data-order-id="r1"] .order-handle').press('ArrowUp')
-    assert await page.locator('#view [data-order-id="r1"] .order-handle').is_disabled()
-    await wait_fixture_state(page,"__snapshot.navigation_order.rooms.p1?.[1]==='r1' && !document.querySelector('#view .order-handle').disabled")
-    # Polling during drag retains the exact DOM handle/pointer capture.
-    handle = page.locator('#room-tree [data-order-id="r2"] .order-handle')
-    await handle.evaluate('(e)=>window.__heldHandle=e')
-    box = await handle.bounding_box()
+    await move_via_menu('#view','room','r1','Move up')
+    await page.wait_for_selector('#view [data-order-id="r1"].order-saving')
+    await wait_fixture_state(page,"__snapshot.navigation_order.rooms.p1?.[1]==='r1'")
+    await saved()
+    # Polling during drag retains the exact DOM row and pointer capture.
+    held = row('#room-tree','room','r2')
+    await held.evaluate('(e)=>window.__heldRow=e')
+    box = await held.bounding_box()
     await page.mouse.move(box['x']+14,box['y']+10)
     await page.mouse.down()
     await page.mouse.move(box['x']+16,box['y']+25)
     await page.evaluate("__snapshot.generated_at='changed-during-drag';document.getElementById('refresh-button').click()")
     await page.wait_for_timeout(120)
-    assert await page.evaluate('__heldHandle.isConnected && __heldHandle===document.querySelector(\'#room-tree [data-order-id="r2"] .order-handle\')')
+    assert await page.evaluate('__heldRow.isConnected && __heldRow===document.querySelector(\'#room-tree [data-order-id="r2"]\')')
     await page.keyboard.press('Escape'); await page.mouse.up()
     # Cross-Project hover must not move ownership or write a display rank.
     count = await page.evaluate('__moves.length')
@@ -131,9 +160,9 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
     # maintenance can unregister an empty Project but not bypass Room cleanup.
     for project_id, blocked in [('p3', False), ('p1', True)]:
         await page.evaluate("id=>{__snapshot.projects.find(p=>p.id===id).available=false;location.hash='#/projects';}", project_id)
-        await page.locator('#refresh-button').click()
-        row = page.locator(f'#view [data-order-kind="project"][data-order-id="{project_id}"]')
-        await row.get_by_role('button', name='Details', exact=True).click()
+        await refresh()
+        project_row = page.locator(f'#view [data-order-kind="project"][data-order-id="{project_id}"]')
+        await project_row.get_by_role('button', name='Details', exact=True).click()
         await page.locator('.project-details > summary').click()
         removal = page.locator('.project-details button.danger-button')
         if blocked:
@@ -167,7 +196,7 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
         assert not await page.evaluate('__cspErrors')
     assert not errors, errors
     await page.close()
-    return dict(unavailable_project_maintenance_reachable=True,project_single_rows=True,project_and_room_drag_persisted=True,ordering_keyboard_and_click=True,ordering_failure_and_cancellation=True,ordering_poll_dom_stable=True,ordering_filtered_and_scoped=True,diagnostics_single_settings_destination=True,settings_readable_navigation=True)
+    return dict(unavailable_project_maintenance_reachable=True,project_single_rows=True,project_and_room_drag_persisted=True,ordering_no_handle_whole_row_drag=True,ordering_context_menu_and_navigation=True,ordering_failure_and_cancellation=True,ordering_poll_dom_stable=True,ordering_filtered_and_scoped=True,diagnostics_single_settings_destination=True,settings_readable_navigation=True)
 
 
 async def main(args):
