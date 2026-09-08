@@ -262,7 +262,7 @@ func TestManagementProviderChangeKeepsSelectedProfile(t *testing.T) {
 	}
 }
 
-func TestManagementProjectCardsKeepUnavailableRemovalReachable(t *testing.T) {
+func TestManagementProjectListKeepsUnavailableMaintenanceReachable(t *testing.T) {
 	registry, _ := testRegistry(t, testGitRepo(t))
 	server, _ := newManagementTestServer(t, registry, SyntheticProvisioner{})
 
@@ -272,10 +272,11 @@ func TestManagementProjectCardsKeepUnavailableRemovalReachable(t *testing.T) {
 		t.Fatalf("management asset status=%d body=%s", asset.Code, asset.Body.String())
 	}
 	for _, marker := range []string{
-		"projectRemovalButton(project, rooms.length, true)",
-		"ui.unavailabilityOfTheLocalPathDoesNotAffectLoggingOutOfThis",
-		"ui.onceArchivedRoomsAreDisplayedAndPermanentlyClearedYouCanLogOut",
-		"ui.showArchivedRooms",
+		"actionButton(t('ui.details'), () => navigate(`#/projects/${encodeURIComponent(project.id)}`)",
+		"workspace.projectDetails",
+		"projectRemovalButton(project, rooms.length)",
+		"ui.stillContainsValueRoomsIncludingArchivedRoomsArchiveAndPermanentlyDeleteEvery",
+		"ui.showArchived9738720",
 	} {
 		if !strings.Contains(asset.Body.String(), marker) {
 			t.Fatalf("management asset omitted %q", marker)
@@ -291,8 +292,8 @@ func TestManagementProjectCardsKeepUnavailableRemovalReachable(t *testing.T) {
 		t.Fatalf("management stylesheet status=%d body=%s", style.Code, style.Body.String())
 	}
 	for _, marker := range []string{
-		".project-card-header { display: grid; grid-template-columns: auto minmax(0, 1fr);",
-		".project-card-actions { grid-column: 1 / -1; min-width: 0; display: flex; flex-wrap: wrap; justify-content: flex-end;",
+		".project-list-row",
+		".project-list-actions",
 		".room-actions > .room-action-control {",
 		".room-select-control input {",
 	} {
