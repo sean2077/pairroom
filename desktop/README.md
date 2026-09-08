@@ -17,7 +17,7 @@ The Wails layer owns only native desktop concerns:
 
 - a single application instance;
 - the main webview window;
-- hide-to-tray behavior;
+- hide-to-tray behavior, with a tray menu that opens the window, opens the authenticated Management Shell in the default browser, reports Service ownership, restarts only the Desktop-owned embedded Service, and reveals the Service data folder;
 - explicit native quit;
 - explicit, native launch-at-login settings;
 - platform packaging.

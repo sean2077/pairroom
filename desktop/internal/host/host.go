@@ -42,8 +42,9 @@ type Options struct {
 }
 
 type Host struct {
-	mode   Mode
-	access access.Access
+	mode     Mode
+	access   access.Access
+	dataRoot string
 
 	management *service.ManagementServer
 	runtimes   *service.RuntimeManager
@@ -76,9 +77,9 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 			return &Host{mode: ModeExternal, access: value}, nil
 		}
 		if !explicitEmbedded {
-			value, installed, err := connectInstalledDaemon(ctx)
+			value, root, installed, err := connectInstalledDaemon(ctx)
 			if err == nil && installed {
-				return &Host{mode: ModeExternal, access: value}, nil
+				return &Host{mode: ModeExternal, access: value, dataRoot: root}, nil
 			}
 			if err != nil {
 				return nil, err
@@ -95,7 +96,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 // restart a stopped or zombie daemon, and wait for its authenticated endpoint.
 // It never starts an embedded competitor when daemon metadata says an
 // installation exists.
-func connectInstalledDaemon(ctx context.Context) (access.Access, bool, error) {
+func connectInstalledDaemon(ctx context.Context) (access.Access, string, bool, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -106,43 +107,43 @@ func connectInstalledDaemon(ctx context.Context) (access.Access, bool, error) {
 		// owner is safe; otherwise the task could race this desktop process.
 		manager, managerErr := newDaemonManager()
 		if managerErr != nil {
-			return access.Access{}, true, fmt.Errorf("inspect installed PairRoom daemon without metadata: %w", managerErr)
+			return access.Access{}, "", true, fmt.Errorf("inspect installed PairRoom daemon without metadata: %w", managerErr)
 		}
 		status, statusErr := manager.Status()
 		if statusErr != nil {
-			return access.Access{}, true, fmt.Errorf("inspect installed PairRoom daemon without metadata: %w", statusErr)
+			return access.Access{}, "", true, fmt.Errorf("inspect installed PairRoom daemon without metadata: %w", statusErr)
 		}
 		if status != nil && status.Installed {
-			return access.Access{}, true, errors.New("PairRoom daemon service is installed but daemon metadata is missing; run `pairroom daemon install --force` to repair it")
+			return access.Access{}, "", true, errors.New("PairRoom daemon service is installed but daemon metadata is missing; run `pairroom daemon install --force` to repair it")
 		}
-		return access.Access{}, false, nil
+		return access.Access{}, "", false, nil
 	}
 	if err != nil {
-		return access.Access{}, true, fmt.Errorf("read installed PairRoom daemon metadata: %w", err)
+		return access.Access{}, "", true, fmt.Errorf("read installed PairRoom daemon metadata: %w", err)
 	}
 	manager, err := newDaemonManager()
 	if err != nil {
-		return access.Access{}, true, fmt.Errorf("inspect installed PairRoom daemon: %w", err)
+		return access.Access{}, "", true, fmt.Errorf("inspect installed PairRoom daemon: %w", err)
 	}
 	status, err := manager.Status()
 	if err != nil {
-		return access.Access{}, true, fmt.Errorf("read installed PairRoom daemon status: %w", err)
+		return access.Access{}, "", true, fmt.Errorf("read installed PairRoom daemon status: %w", err)
 	}
 	if status == nil || !status.Installed {
-		return access.Access{}, true, errors.New("PairRoom daemon metadata exists but its service is not installed; run `pairroom daemon install --force` or remove the stale metadata")
+		return access.Access{}, "", true, errors.New("PairRoom daemon metadata exists but its service is not installed; run `pairroom daemon install --force` or remove the stale metadata")
 	}
 	if err := ctx.Err(); err != nil {
-		return access.Access{}, true, err
+		return access.Access{}, "", true, err
 	}
 	root := daemonDataRoot(meta)
 	recoveredStale, liveOwner, err := recoverInstalledDaemonLock(root)
 	if err != nil {
-		return access.Access{}, true, err
+		return access.Access{}, "", true, err
 	}
 	if value, ok, err := access.DiscoverDaemonForRoot(ctx, root); err != nil {
-		return access.Access{}, true, fmt.Errorf("discover installed PairRoom daemon: %w", err)
+		return access.Access{}, "", true, fmt.Errorf("discover installed PairRoom daemon: %w", err)
 	} else if ok {
-		return value, true, nil
+		return value, root, true, nil
 	}
 
 	started := false
@@ -151,25 +152,25 @@ func connectInstalledDaemon(ctx context.Context) (access.Access, bool, error) {
 	// owner or rejecting a legitimate launch race.
 	if !liveOwner && status.Running && recoveredStale {
 		if err := manager.Restart(); err != nil {
-			return access.Access{}, true, fmt.Errorf("restart installed PairRoom daemon after crash-stale lock recovery: %w", err)
+			return access.Access{}, "", true, fmt.Errorf("restart installed PairRoom daemon after crash-stale lock recovery: %w", err)
 		}
 		started = true
 	} else if !liveOwner && !status.Running {
 		if err := manager.Start(); err != nil {
-			return access.Access{}, true, fmt.Errorf("start installed PairRoom daemon: %w", err)
+			return access.Access{}, "", true, fmt.Errorf("start installed PairRoom daemon: %w", err)
 		}
 		started = true
 	}
 	for {
 		value, ok, err := access.DiscoverDaemonForRoot(ctx, root)
 		if err != nil {
-			return access.Access{}, true, fmt.Errorf("discover installed PairRoom daemon after startup: %w", err)
+			return access.Access{}, "", true, fmt.Errorf("discover installed PairRoom daemon after startup: %w", err)
 		}
 		if ok {
-			return value, true, nil
+			return value, root, true, nil
 		}
 		if err := ctx.Err(); err != nil {
-			return access.Access{}, true, daemonUnavailableError(meta, status, started, err)
+			return access.Access{}, "", true, daemonUnavailableError(meta, status, started, err)
 		}
 		timer := time.NewTimer(daemonProbeInterval)
 		select {
@@ -359,6 +360,7 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 	host := &Host{
 		mode:       ModeEmbedded,
 		access:     managementAccess,
+		dataRoot:   lock.Root(),
 		management: management,
 		runtimes:   runtimes,
 		lock:       lock,
@@ -398,6 +400,24 @@ func (h *Host) URL() string {
 		return ""
 	}
 	return h.access.DesktopURL()
+}
+
+// BrowserURL is the authenticated Management URL without the desktop-window
+// marker, suitable for handing to an external browser.
+func (h *Host) BrowserURL() string {
+	if h == nil {
+		return ""
+	}
+	return h.access.BrowserURL
+}
+
+// DataRoot is the Service data root this Host owns or observes. An explicit
+// endpoint override carries no root ownership, so it reports "".
+func (h *Host) DataRoot() string {
+	if h == nil {
+		return ""
+	}
+	return h.dataRoot
 }
 
 func (h *Host) Shutdown(ctx context.Context) error {
