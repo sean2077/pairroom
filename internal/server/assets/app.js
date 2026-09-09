@@ -2346,8 +2346,31 @@
   }
 
   function autoSizeComposer() {
+    // Keep the caret's layout stable while the native IME owns preedit text.
+    // Resetting height to auto on every composition input invalidates its anchor.
+    if (state.composing) return;
     messageInput.style.height = 'auto';
     messageInput.style.height = `${Math.min(messageInput.scrollHeight, 150)}px`;
+  }
+
+  let refreshingComposerFocus = false;
+  function refreshComposerFocus() {
+    // Returning to a WebView can retain DOM focus with a stale native IME
+    // context. focus() alone is a no-op in that case; cycle only this already
+    // focused editor, without stealing focus or interrupting an active preedit.
+    if (refreshingComposerFocus || state.composing || messageInput.disabled
+      || document.hidden || !document.hasFocus() || document.activeElement !== messageInput) return;
+    const { selectionStart, selectionEnd, selectionDirection, scrollTop, scrollLeft } = messageInput;
+    refreshingComposerFocus = true;
+    try {
+      messageInput.blur();
+      messageInput.focus({ preventScroll: true });
+      messageInput.setSelectionRange(selectionStart, selectionEnd, selectionDirection);
+      messageInput.scrollTop = scrollTop;
+      messageInput.scrollLeft = scrollLeft;
+    } finally {
+      refreshingComposerFocus = false;
+    }
   }
 
   function scrollBottom() { timeline.scrollTop = timeline.scrollHeight; }
@@ -2644,8 +2667,8 @@
     }
   });
   messageInput.addEventListener('compositionstart', () => { state.composing = true; });
-  messageInput.addEventListener('compositionend', () => { state.composing = false; });
-  messageInput.addEventListener('compositioncancel', () => { state.composing = false; });
+  messageInput.addEventListener('compositionend', () => { state.composing = false; autoSizeComposer(); });
+  messageInput.addEventListener('compositioncancel', () => { state.composing = false; autoSizeComposer(); });
   messageInput.addEventListener('input', () => { state.draftRevision += 1; autoSizeComposer(); persistComposerDraft(); });
   messageInput.addEventListener('paste', (event) => {
     const files = Array.from(event.clipboardData?.files || []);
@@ -2678,12 +2701,7 @@
   $('scroll-bottom').addEventListener('click', () => { scrollBottom(); markConversationRead(true); });
   timeline.addEventListener('scroll', () => markConversationRead(false), { passive: true });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { markConversationRead(false); renderActivity(); } });
-  window.addEventListener('focus', () => {
-    // Re-focus the message input to update IME context when switching back to PairRoom
-    if (document.activeElement !== messageInput && !messageInput.disabled) {
-      messageInput.focus({ preventScroll: true });
-    }
-  });
+  window.addEventListener('focus', refreshComposerFocus);
   document.addEventListener('pairroom:layout', renderActivity);
   $('refresh-diff').addEventListener('click', refreshDiff);
   $('staged-diff').addEventListener('change', refreshDiff);
