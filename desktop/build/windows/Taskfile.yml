@@ -29,7 +29,7 @@ tasks:
       # bin/PairRoom.exe does not allocate a log console. CONSOLE=true keeps
       # the console-subsystem binary for developer stdout.
       GUI_LDFLAG: '{{if eq .CONSOLE "true"}}{{else}} -H windowsgui{{end}}'
-      BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags production -trimpath -buildvcs=false -ldflags="-w -s{{.GUI_LDFLAG}}"{{else}}-buildvcs=false -gcflags=all="-l" -ldflags="{{.GUI_LDFLAG}}"{{end}}'
+      BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags production -trimpath -buildvcs=false -ldflags="-w -s{{.GUI_LDFLAG}} {{.VERSION_LDFLAGS}}"{{else}}-buildvcs=false -gcflags=all="-l" -ldflags="{{.GUI_LDFLAG}} {{.VERSION_LDFLAGS}}"{{end}}'
     env:
       GOOS: windows
       CGO_ENABLED: 0

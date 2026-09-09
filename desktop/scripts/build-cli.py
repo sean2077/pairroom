@@ -7,6 +7,7 @@ CLI into desktop/bin using the same version ldflags as `make build`.
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import pathlib
 import subprocess
@@ -14,20 +15,18 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 REPOSITORY = ROOT.parent
-VERSION_PKG = "github.com/sean2077/pairroom/internal/version"
 
 
-def git_output(*args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=REPOSITORY,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return ""
-    return result.stdout.strip()
+def _version_ldflags_module():
+    path = pathlib.Path(__file__).resolve().parent / "version-ldflags.py"
+    spec = importlib.util.spec_from_file_location("pairroom_version_ldflags", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# The bundled CLI and the desktop host must never drift on version metadata.
+VERSION_FLAGS = _version_ldflags_module().version_flags()
 
 
 def cli_destination() -> pathlib.Path:
@@ -47,19 +46,7 @@ def cli_destination() -> pathlib.Path:
 def main() -> int:
     destination = cli_destination()
     destination.parent.mkdir(parents=True, exist_ok=True)
-    commit = os.environ.get("COMMIT") or git_output("rev-parse", "HEAD") or "dev"
-    last_tag = git_output("describe", "--tags", "--abbrev=0") or "unknown"
-    commits = git_output("rev-list", f"{last_tag}..HEAD", "--count") or "unknown"
-    build_date = os.environ.get("BUILD_DATE") or git_output(
-        "show", "-s", "--format=%cI", commit
-    )
-    ldflags = (
-        f"-s -w "
-        f"-X '{VERSION_PKG}.Commit={commit}' "
-        f"-X '{VERSION_PKG}.BuildDate={build_date}' "
-        f"-X '{VERSION_PKG}.LastTag={last_tag}' "
-        f"-X '{VERSION_PKG}.CommitsSinceTag={commits}'"
-    )
+    ldflags = f"-s -w {VERSION_FLAGS}"
     env = os.environ.copy()
     env["CGO_ENABLED"] = env.get("CGO_ENABLED", "0")
     subprocess.run(
