@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	Current       = "3.4.0"
+	Current       = "4.0.0"
 	StoreSchema   = 10
 	RepositoryURL = "https://github.com/sean2077/pairroom"
 )

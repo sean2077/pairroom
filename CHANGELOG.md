@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v4.0.0] — 2026-09-09
+
 - Exclude active HTTP/SSE leases from LRU eviction, including equal-timestamp ties. Remove the obsolete global archive-visibility preference; archive results reveal archived Rooms in their existing per-Project filters.
 
 - Remove Legacy Room import, binding completion, schema-9/provisioning-1/2 replay, mutable driver/reviewer routing, isolated reviewer workspaces, and their UI/configuration/test paths. Store schema 10 and provisioning schema 3 remain current; existing version-1/2 collaboration instructions are preserved. Retired formats fail before replay or mutation instead of being migrated, relabeled, or deleted.
