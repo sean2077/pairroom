@@ -953,23 +953,39 @@
 
   function renderProjectCard(model) {
     const { project, rooms, activeRooms, runtimeCounts } = model;
+    const openProject = `#/projects/${encodeURIComponent(project.id)}`;
     const heading = node('div', { className: 'project-list-identity' },
       node('div', { className: 'project-avatar', textContent: projectInitials(project), 'aria-hidden': 'true' }),
       node('div', { className: 'project-card-title' },
-        node('h2', {}, node('a', { href: `#/projects/${encodeURIComponent(project.id)}`, textContent: projectName(project) })),
+        node('h2', {}, node('a', { href: openProject, textContent: projectName(project) })),
         node('code', { className: 'project-path', textContent: project.root, title: project.root }))
     );
-    return ordering.decorate(node('article', { className: 'panel project-card project-list-row' },
+    // Whole-row navigation mirrors the room-tab container click. The row takes no
+    // role and no tabindex: the Project-name link stays the single keyboard and
+    // screen-reader entry point, while the ordering gesture keeps owning drag,
+    // right-click, and Alt+Arrow. Nested controls own their own clicks, and
+    // returning before navigate() leaves native link behaviour — middle click,
+    // modifier click — intact.
+    const row = ordering.decorate(node('article', {
+      className: 'panel project-card project-list-row',
+      onClick: (event) => {
+        if (event.target instanceof Element && event.target.closest('a, button, input, select, textarea, label, summary')) return;
+        navigate(openProject);
+      },
+    },
       heading,
       node('div', { className: 'project-list-status' },
         statusBadge(project.available ? 'available' : 'unavailable', project.available ? 'good' : 'danger'),
         node('span', { textContent: t('room.projectWorkingSummary', { rooms: activeRooms, working: runtimeCounts.busy }) }),
         rooms.length > activeRooms ? node('span', { className: 'muted', textContent: t('ui.valueArchivedc521841', { value0: rooms.length - activeRooms }) }) : null),
       node('div', { className: 'project-list-actions' },
-        !project.available && state.snapshot?.capabilities?.project_refresh ? actionButton(t('ui.recheck'), () => refreshProject(project), 'secondary-button compact-button') : null,
-        actionButton(t('ui.details'), () => navigate(`#/projects/${encodeURIComponent(project.id)}`), 'secondary-button compact-button'),
-        actionButton(t('room.addRoom'), () => openRoomDialog(project.id), 'primary-button compact-button', !project.available))
+        !project.available && state.snapshot?.capabilities?.project_refresh ? actionButton(t('ui.recheck'), (event) => { event.stopPropagation(); refreshProject(project); }, 'secondary-button compact-button') : null,
+        actionButton(t('room.addRoom'), (event) => { event.stopPropagation(); openRoomDialog(project.id); }, 'primary-button compact-button', !project.available))
     ), 'project', project.id);
+    // Only a sortable row was given a drag tooltip, so only a sortable row should
+    // advertise drag controls alongside the new click-to-open affordance.
+    if (row.title) row.title = t('workspace.ordering.helpProjectRow');
+    return row;
   }
 
   function renderProjectDetail(projectID) {

@@ -127,7 +127,10 @@
     }
     function cancel() {
       const old = stopGesture();
-      if (old?.dragging) announce(t('workspace.ordering.cancelled'));
+      // A committed drag that is cancelled still releases over the row, so the
+      // browser fires a click that must not reach the row's own activation. The
+      // next pointerdown clears the flag, so it can never eat an unrelated click.
+      if (old?.dragging) { suppressClick = true; announce(t('workspace.ordering.cancelled')); }
       closeMenu();
     }
     function startDragging(gesture) {

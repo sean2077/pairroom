@@ -91,9 +91,22 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
     await saved()
     assert await ids('#view','project') == ['p3','p1','p2']
     assert await ids('#room-tree','project') == ['p3','p1','p2']
+    assert await page.evaluate('location.hash') == '#/projects', 'a committed drag activated the row'
     await refresh()
     assert await ids('#view','project') == ['p3','p1','p2']
     await page.screenshot(path=str(artifacts / 'projects-ordered-light-en.png'), full_page=True)
+    # The row itself is the activation target; its nested controls are not.
+    await row('#view','project','p2').locator('.project-list-status').click()
+    await wait_fixture_state(page, "location.hash==='#/projects/p2'")
+    await page.evaluate("location.hash='#/projects'")
+    await refresh()
+    await row('#view','project','p2').get_by_role('button', name='＋ Room', exact=True).click()
+    await expect(page.locator('#room-dialog')).to_be_visible()
+    assert await page.evaluate('location.hash') == '#/projects', 'opening the Room dialog activated the row'
+    await page.locator('#room-dialog [data-close-dialog="room-dialog"]').first.click()
+    await expect(page.locator('#room-dialog')).not_to_be_visible()
+    assert await page.evaluate('location.hash') == '#/projects', 'closing the Room dialog activated the row'
+    await refresh()
     # Interactive children stay clickable: plain navigation on a link still works.
     await row('#room-tree','project','p3').get_by_role('link').click()
     await wait_fixture_state(page, "location.hash.startsWith('#/projects/')")
@@ -103,6 +116,7 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
     await drag('#view','project','p2','p3',cancel=True)
     assert await page.evaluate('__moves.length') == count, 'Escape submitted a drag'
     assert not await page.locator('.order-before,.order-after,.order-dragging').count()
+    assert await page.evaluate('location.hash') == '#/projects', 'an Escape-cancelled drag activated the row'
     # Right-click opens the non-drag up/down menu.
     await move_via_menu('#view','project','p1','Move down')
     await saved()
@@ -164,13 +178,17 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
     await page.evaluate("document.querySelectorAll('#toasts .toast-close').forEach(b=>b.click())")
     await page.screenshot(path=str(artifacts / 'rooms-ordered-light-en.png'), full_page=True)
 
-    # The row's Details action remains available even for a missing worktree;
-    # maintenance can unregister an empty Project but not bypass Room cleanup.
+    # The row itself opens the Project even for a missing worktree, so maintenance
+    # stays reachable; it can unregister an empty Project but not bypass Room
+    # cleanup. The identity area is clicked because an unavailable Project also
+    # shows a recheck button elsewhere in the row.
     for project_id, blocked in [('p3', False), ('p1', True)]:
         await page.evaluate("id=>{__snapshot.projects.find(p=>p.id===id).available=false;location.hash='#/projects';}", project_id)
         await refresh()
         project_row = page.locator(f'#view [data-order-kind="project"][data-order-id="{project_id}"]')
-        await project_row.get_by_role('button', name='Details', exact=True).click()
+        assert await project_row.get_by_role('button', name='Details', exact=True).count() == 0, 'Details button survived'
+        await project_row.locator('.project-list-identity').click()
+        await wait_fixture_state(page, f"location.hash==='#/projects/{project_id}'")
         await page.locator('.project-details > summary').click()
         removal = page.locator('.project-details button.danger-button')
         if blocked:
@@ -209,7 +227,7 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
         assert not await page.evaluate('__cspErrors')
     assert not errors, errors
     await page.close()
-    return dict(unavailable_project_maintenance_reachable=True,project_single_rows=True,project_and_room_drag_persisted=True,ordering_no_handle_whole_row_drag=True,ordering_context_menu_and_navigation=True,ordering_failure_and_cancellation=True,ordering_poll_dom_stable=True,ordering_filtered_and_scoped=True,diagnostics_single_settings_destination=True,settings_readable_navigation=True)
+    return dict(unavailable_project_maintenance_reachable=True,project_single_rows=True,project_row_click_navigation=True,project_and_room_drag_persisted=True,ordering_no_handle_whole_row_drag=True,ordering_context_menu_and_navigation=True,ordering_failure_and_cancellation=True,ordering_poll_dom_stable=True,ordering_filtered_and_scoped=True,diagnostics_single_settings_destination=True,settings_readable_navigation=True)
 
 
 async def main(args):

@@ -1132,6 +1132,15 @@ body[data-density="compact"] .stat-card { min-height: 98px; }
 [data-order-kind].order-saving { cursor: progress; }
 [data-order-kind].order-saving a, [data-order-kind].order-saving button { pointer-events: none; }
 .navigation-dragging, .navigation-dragging * { user-select: none; cursor: grabbing; }
+/* A Project row is now also an activation target, so it reads as clickable while
+   idle and shows the drag cursor only mid-gesture. These come after the rules
+   above on purpose: the guarded selector outranks the [data-order-kind] grab,
+   stops matching once body carries .navigation-dragging so grabbing still wins,
+   and excludes .order-saving so progress still wins. A row that cannot be
+   reordered has no data-order-kind and takes the plain rule. */
+.project-list-row { cursor: pointer; }
+.project-list-row:hover { background: color-mix(in srgb, var(--bg-soft) 48%, transparent); }
+body:not(.navigation-dragging) .project-list-row[data-order-kind]:not(.order-saving) { cursor: pointer; }
 .order-dragging { opacity: .55; }
 .order-before::before, .order-after::after { content: ''; position: absolute; inset-inline: 0; height: 3px; background: var(--accent); border-radius: 3px; pointer-events: none; z-index: 4; }
 .order-before::before { top: -3px; }

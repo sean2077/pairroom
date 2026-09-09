@@ -272,7 +272,8 @@ func TestManagementProjectListKeepsUnavailableMaintenanceReachable(t *testing.T)
 		t.Fatalf("management asset status=%d body=%s", asset.Code, asset.Body.String())
 	}
 	for _, marker := range []string{
-		"actionButton(t('ui.details'), () => navigate(`#/projects/${encodeURIComponent(project.id)}`)",
+		"closest('a, button, input, select, textarea, label, summary')",
+		"workspace.ordering.helpProjectRow",
 		"workspace.projectDetails",
 		"projectRemovalButton(project, rooms.length)",
 		"ui.stillContainsValueRoomsIncludingArchivedRoomsArchiveAndPermanentlyDeleteEvery",
@@ -285,6 +286,11 @@ func TestManagementProjectListKeepsUnavailableMaintenanceReachable(t *testing.T)
 	if forbidden := "rooms.length === 0 ? projectRemovalButton"; strings.Contains(asset.Body.String(), forbidden) {
 		t.Fatalf("management asset must not hide Project removal behind %q", forbidden)
 	}
+	// The row itself opens the Project; a separate Details button would be a second
+	// control for the same action and a second tab stop in every row.
+	if forbidden := "t('ui.details')"; strings.Contains(asset.Body.String(), forbidden) {
+		t.Fatalf("management asset must not restore a Details button beside %q", forbidden)
+	}
 
 	style := httptest.NewRecorder()
 	server.Handler().ServeHTTP(style, managementRequest(http.MethodGet, "/management.css", "", false))
@@ -293,6 +299,8 @@ func TestManagementProjectListKeepsUnavailableMaintenanceReachable(t *testing.T)
 	}
 	for _, marker := range []string{
 		".project-list-row",
+		".project-list-row:hover",
+		"body:not(.navigation-dragging) .project-list-row[data-order-kind]:not(.order-saving) { cursor: pointer; }",
 		".project-list-actions",
 		".room-actions > .room-action-control {",
 		".room-select-control input {",
