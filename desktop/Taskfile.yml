@@ -11,6 +11,11 @@ vars:
   PYTHON: '{{env "PAIRROOM_DESKTOP_PYTHON" | default "python"}}'
   APP_NAME: "PairRoom"
   BIN_DIR: "bin"
+  # The Desktop host embeds the PairRoom Service in-process, so the host
+  # binary carries the same version ldflags as the bundled CLI; otherwise
+  # the Management UI degrades to the bare semver without tag/commit detail.
+  VERSION_LDFLAGS:
+    sh: '"{{.PYTHON}}" scripts/version-ldflags.py'
 
 tasks:
   build:

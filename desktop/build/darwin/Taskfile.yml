@@ -20,7 +20,7 @@ tasks:
       - go build {{.BUILD_FLAGS}} -o {{.OUTPUT}}
       - '"{{.PYTHON}}" scripts/build-cli.py'
     vars:
-      BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags production -trimpath -buildvcs=false -ldflags="-w -s"{{else}}-buildvcs=false -gcflags=all="-l"{{end}}'
+      BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags production -trimpath -buildvcs=false -ldflags="-w -s {{.VERSION_LDFLAGS}}"{{else}}-buildvcs=false -gcflags=all="-l" -ldflags="{{.VERSION_LDFLAGS}}"{{end}}'
       DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}'
       OUTPUT: '{{ .OUTPUT | default .DEFAULT_OUTPUT }}'
     env:
