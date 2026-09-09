@@ -10,7 +10,7 @@ import (
 )
 
 func TestRuntimeNamingTracksDurableRoomAfterPermissionsAndRename(t *testing.T) {
-	e, captures, _ := newCollaborationEngine(t, "")
+	e, captures := newCollaborationEngine(t, "")
 	before := e.SnapshotMeta()
 	for _, actor := range model.SlotActors() {
 		cfg := captures.latest(actor)

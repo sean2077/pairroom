@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Exclude active HTTP/SSE leases from LRU eviction, including equal-timestamp ties. Remove the obsolete global archive-visibility preference; archive results reveal archived Rooms in their existing per-Project filters.
+
+- Remove Legacy Room import, binding completion, schema-9/provisioning-1/2 replay, mutable driver/reviewer routing, isolated reviewer workspaces, and their UI/configuration/test paths. Store schema 10 and provisioning schema 3 remain current; existing version-1/2 collaboration instructions are preserved. Retired formats fail before replay or mutation instead of being migrated, relabeled, or deleted.
+- Remove the old lifecycle-only archive-stub recovery path while retaining current missing-directory recovery, deletion quarantine, rollback, and identity checks. External Room directories are no longer registered or erased. Keep standalone `serve` on the current Room model and reject failed Claude/Codex session resume instead of silently creating a replacement session.
+
 ## [v3.4.0] — 2026-09-09
 
 - Open a Project by clicking anywhere on its row and remove the separate Details button. The Project-name link stays the single keyboard and screen-reader entry point, the row's own buttons keep their separate actions, and the cursor reads as clickable while idle and as a drag only mid-gesture. Cancelling a committed drag now suppresses the release click as well, so an Escape no longer activates the row.

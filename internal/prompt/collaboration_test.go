@@ -20,7 +20,7 @@ func TestVersionedDefaultCollaborationFitsEveryRuntimePair(t *testing.T) {
 			for _, self := range runtimes {
 				for _, peer := range runtimes {
 					t.Run(fmt.Sprintf("v%d/%s/%s/%s", version, actor, self, peer), func(t *testing.T) {
-						got := BootstrapPromptWithRuntime(actor, self, peer) + "\n" + protocol.CollaborationInstructions(actor, &spec, model.RolePeer)
+						got := BootstrapPromptWithRuntime(actor, self, peer) + "\n" + protocol.CollaborationInstructions(actor, &spec)
 						if strings.Count(got, spec.Instructions) != 1 {
 							t.Fatal("stored policy must be projected exactly once")
 						}
@@ -42,7 +42,7 @@ func TestCustomCollaborationDoesNotInheritAdaptiveDefaults(t *testing.T) {
 	for _, version := range []int{1, model.CollaborationVersion} {
 		spec := model.Collaboration{Version: version, Mode: model.CollaborationCustom, Instructions: policy}
 		for _, actor := range model.SlotActors() {
-			got := protocol.CollaborationInstructions(actor, &spec, model.RolePeer)
+			got := protocol.CollaborationInstructions(actor, &spec)
 			if !strings.Contains(got, policy) || !strings.Contains(got, "Your responsibility: participant") {
 				t.Fatalf("custom policy changed: %s", got)
 			}

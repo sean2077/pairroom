@@ -64,34 +64,16 @@ func normalizeCCSwitchAppType(value string) string {
 	}
 }
 
-type OrdinaryReviewerPolicy string
-
-const (
-	// ReviewerEnforced keeps the ordinary Reviewer in PairRoom's read-only
-	// native projection, irrespective of the selected runtime policy.
-	ReviewerEnforced OrdinaryReviewerPolicy = "enforced"
-	// ReviewerExplicit applies the explicitly selected native permission,
-	// approval, and sandbox policy to ordinary Reviewer turns. The Room still
-	// owns the Reviewer workspace boundary.
-	ReviewerExplicit OrdinaryReviewerPolicy = "explicit"
-)
-
-func (p OrdinaryReviewerPolicy) Valid() bool {
-	return p == ReviewerEnforced || p == ReviewerExplicit
-}
-
-// AgentSelection is the immutable, secret-free per-slot Room configuration.
-// Historical ActorIDs remain slot identities; Runtime selects the vendor CLI.
+// AgentSelection is immutable, secret-free configuration for one stable Room slot.
 type AgentSelection struct {
-	Runtime                RuntimeKind            `json:"runtime"`
-	Provider               ProviderRef            `json:"provider"`
-	Model                  string                 `json:"model,omitempty"`
-	Effort                 string                 `json:"effort,omitempty"`
-	Instructions           string                 `json:"instructions,omitempty"`
-	PermissionMode         string                 `json:"permission_mode,omitempty"`
-	ApprovalPolicy         string                 `json:"approval_policy,omitempty"`
-	Sandbox                string                 `json:"sandbox,omitempty"`
-	OrdinaryReviewerPolicy OrdinaryReviewerPolicy `json:"ordinary_reviewer_policy,omitempty"`
+	Runtime        RuntimeKind `json:"runtime"`
+	Provider       ProviderRef `json:"provider"`
+	Model          string      `json:"model,omitempty"`
+	Effort         string      `json:"effort,omitempty"`
+	Instructions   string      `json:"instructions,omitempty"`
+	PermissionMode string      `json:"permission_mode,omitempty"`
+	ApprovalPolicy string      `json:"approval_policy,omitempty"`
+	Sandbox        string      `json:"sandbox,omitempty"`
 }
 
 func (s AgentSelection) Normalized(actor ActorID) AgentSelection {
@@ -121,9 +103,6 @@ func (s AgentSelection) Validate(actor ActorID) error {
 	if err := s.Provider.ValidateForRuntime(s.Runtime); err != nil {
 		return err
 	}
-	if s.OrdinaryReviewerPolicy != "" && !s.OrdinaryReviewerPolicy.Valid() {
-		return fmt.Errorf("invalid ordinary_reviewer_policy %q", s.OrdinaryReviewerPolicy)
-	}
 	switch s.Runtime.Canonical() {
 	case RuntimeClaude:
 		if s.ApprovalPolicy != "" || s.Sandbox != "" {
@@ -151,12 +130,6 @@ func (s AgentSelection) Validate(actor ActorID) error {
 		}
 		if s.Sandbox != "" && !oneOf(s.Sandbox, "read-only", "workspace", "strict", "off") {
 			return fmt.Errorf("invalid Grok Build sandbox %q", s.Sandbox)
-		}
-	}
-	if s.OrdinaryReviewerPolicy == ReviewerExplicit {
-		explicit := s.PermissionMode != "" || s.ApprovalPolicy != "" || s.Sandbox != ""
-		if !explicit {
-			return errors.New("ordinary_reviewer_policy explicit requires an explicit Runtime permission, approval, or sandbox value")
 		}
 	}
 	for label, value := range map[string]string{

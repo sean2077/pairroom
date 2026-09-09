@@ -145,7 +145,6 @@ func (r *AgentResolver) Resolve(ctx context.Context, actor model.ActorID, select
 		Model: selection.Model, Effort: selection.Effort,
 		PermissionMode: selection.PermissionMode, ApprovalPolicy: selection.ApprovalPolicy, Sandbox: selection.Sandbox,
 		AdditionalInstructions: selection.Instructions,
-		OrdinaryReviewerPolicy: selection.OrdinaryReviewerPolicy,
 	}
 	if selection.Provider.Source == model.ProviderNative {
 		cfg.Provider = "native"

@@ -205,9 +205,6 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 	if durableRoom.Archived() {
 		return nil, errors.New("archived Room cannot be activated")
 	}
-	if durableRoom.HasBlockingPendingBindings() {
-		return nil, ErrRoomBindingPending
-	}
 	if durableRoom.HasPendingBindings() && registry == nil {
 		return nil, errors.New("service registry is required to materialize deferred bindings")
 	}

@@ -54,7 +54,7 @@ The user remains the active circuit breaker: Cancel removes queued work, Interru
 
 New Rooms use collaboration version 2 unless an explicit supported version is supplied. Version-1 and custom instructions remain readable and are injected unchanged on activation; upgrading PairRoom never rewrites an existing Room's policy. Create a new Room to adopt the new default, or give a newer human instruction for the current task. The relay protocol remains `pairroom-protocol/v6`.
 
-The instructions do not grant tools or force a particular number of Turns. Native permission profiles remain independent; both modern participants use the live workspace. Legacy Rooms receive their preserved role guidance and retain their old workspace/permission boundaries. No public role-change operation or role-based addressing remains.
+The instructions do not grant tools or force a particular number of Turns. Native permission profiles remain independent; both modern participants use the live workspace. Retired Rooms are rejected; no role-specific instruction fallback is generated. No public role-change operation or role-based addressing remains.
 
 ## Authority
 

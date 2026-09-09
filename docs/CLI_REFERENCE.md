@@ -10,7 +10,7 @@ New standalone Rooms support `pairroom serve --collaboration default` (the defau
 |---|---|
 | `pairroom daemon` | Install and manage pairroom service in the OS service manager |
 | `pairroom service` | Start the multi-Project / multi-Room Management Shell |
-| `pairroom serve` | Start the single-repository compatibility entry (legacy single-Room) |
+| `pairroom serve` | Start a current-format standalone Room |
 | `pairroom doctor` | Validate Git and vendor CLI installation |
 | `pairroom providers` | Read and validate the sanitized CC Switch Profile catalog without changing current state |
 | `pairroom verify` | Strictly validate room data integrity |

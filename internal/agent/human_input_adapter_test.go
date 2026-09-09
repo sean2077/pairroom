@@ -42,9 +42,8 @@ func (f *humanInputFakeAdapter) SetRole(_ context.Context, role model.Participan
 	f.mu.Unlock()
 	return nil
 }
-func (f *humanInputFakeAdapter) SetWorkspace(context.Context, string) error { return nil }
-func (f *humanInputFakeAdapter) State() model.AgentState                    { return model.StateIdle }
-func (f *humanInputFakeAdapter) SessionID() string                          { return "fake" }
+func (f *humanInputFakeAdapter) State() model.AgentState { return model.StateIdle }
+func (f *humanInputFakeAdapter) SessionID() string       { return "fake" }
 
 func TestHumanInputAdapterAppliesTurnRoleWithoutWorkflowPolicy(t *testing.T) {
 	fake := &humanInputFakeAdapter{actor: model.ActorClaude}
@@ -58,25 +57,6 @@ func TestHumanInputAdapterAppliesTurnRoleWithoutWorkflowPolicy(t *testing.T) {
 	}
 	if fake.role != model.RoleReviewer || fake.input.Text != input.Text {
 		t.Fatalf("role bridge changed ordinary input: role=%s input=%#v", fake.role, fake.input)
-	}
-}
-
-func TestHumanInputAdapterPreservesExplicitReviewerNativePolicy(t *testing.T) {
-	fake := &humanInputFakeAdapter{actor: model.ActorCodex}
-	wrapper := &humanInputAdapter{
-		cfg:         Config{OrdinaryReviewerPolicy: model.ReviewerExplicit},
-		actor:       model.ActorCodex,
-		inner:       fake,
-		sink:        func(model.RuntimeEvent) {},
-		turnInput:   map[string]model.AgentInput{},
-		pausedTurns: map[string]struct{}{},
-	}
-	input := model.AgentInput{MessageID: "m-explicit", Role: model.RoleReviewer, Text: "inspect in the isolated review workspace"}
-	if err := wrapper.StartTurn(context.Background(), input); err != nil {
-		t.Fatal(err)
-	}
-	if fake.role != model.RoleDriver || fake.input.Role != model.RoleReviewer {
-		t.Fatalf("explicit Reviewer policy did not separate native and durable roles: native=%s input=%s", fake.role, fake.input.Role)
 	}
 }
 

@@ -27,7 +27,7 @@ The Room saves this choice at creation and restores it on activation. These inst
 
 Modern participants both use the live workspace. New Rooms default to **YOLO** for both; select narrower native policies explicitly. The independent Permission profile can be `configured`, `read-only`, or `yolo`, changed only when both participants are idle, the FIFO is empty, and no approval is pending. It does not switch responsibility, model, Provider reference, or native identity.
 
-Legacy Rooms retain their old role/workspace boundaries, including the legacy Reviewer snapshot where applicable. They are not silently converted to YOLO. Public role switching and role-based addressing are removed. See [Configuration](CONFIGURATION.md), [Security](../SECURITY.md), and [Upgrading](UPGRADING.md).
+Retired Room formats are rejected without migration. Both participants use the live workspace; no role-bound Reviewer snapshot, role switching, or role-based addressing remains. See [Configuration](CONFIGURATION.md), [Security](../SECURITY.md), and [Upgrading](UPGRADING.md).
 
 ## One native Turn owner
 

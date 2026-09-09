@@ -92,9 +92,9 @@ func checkRuntime(parent context.Context, cfg Config, factory Factory) (checks [
 	}
 	cfg.SessionID, cfg.RoomID, cfg.RoomName = "", "", ""
 	cfg.RequireExactSession = false
-	cfg.Collaboration, cfg.LegacyRole, cfg.AdditionalInstructions = nil, "", ""
+	cfg.Collaboration, cfg.AdditionalInstructions = nil, ""
 	cfg.PermissionMode, cfg.ApprovalPolicy, cfg.Sandbox = "plan", "never", "read-only"
-	cfg.OrdinaryReviewerPolicy = ""
+
 	cfg.SystemPrompt = "This is a connectivity diagnostic. Reply with the exact requested text only. Do not use tools, read files, run commands, or ask questions."
 	id := model.NewID("diagnostic")
 	marker := "PAIRROOM_CHECK_" + id

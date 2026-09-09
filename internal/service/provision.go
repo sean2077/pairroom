@@ -71,10 +71,6 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 	if err != nil {
 		return Room{}, err
 	}
-	for actor, selection := range selections {
-		selection.OrdinaryReviewerPolicy = ""
-		selections[actor] = selection
-	}
 	request.Agents = selections
 	if err := request.Validate(); err != nil {
 		return Room{}, err

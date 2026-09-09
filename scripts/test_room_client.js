@@ -73,7 +73,7 @@ function client() {
     return event;
   }
   nodes.get('message-intent').value = 'steer';
-  const snapshot = () => ({ meta: { id: 'test', name: 'Test' }, latest_seq: 10, settings: {stall_warning_seconds:300}, messages: [], participants: {}, approvals: [], events: [] });
+  const snapshot = () => ({ meta: { id: 'test', name: 'Test', collaboration: {mode: 'default', instructions: 'Test instructions'} }, latest_seq: 10, settings: {stall_warning_seconds:300}, messages: [], participants: {}, approvals: [], events: [] });
   sandbox.room.state.snapshot = snapshot();
   return { ...sandbox.room, nodes, input, edit, key, timers, storage, localStorage, notices, renders, snapshot, lifecycle, revoked };
 }

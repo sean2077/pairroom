@@ -45,14 +45,10 @@ func (a *humanInputAdapter) ResolveApproval(ctx context.Context, id string, reso
 	return a.inner.ResolveApproval(ctx, id, resolution)
 }
 func (a *humanInputAdapter) SetRole(ctx context.Context, role model.ParticipantRole) error {
-	return a.inner.SetRole(ctx, a.nativeRole(role))
+	return a.inner.SetRole(ctx, role)
 }
-func (a *humanInputAdapter) SetWorkspace(ctx context.Context, workspace string) error {
-	return a.inner.SetWorkspace(ctx, workspace)
-}
-
 func (a *humanInputAdapter) StartTurn(ctx context.Context, input model.AgentInput) error {
-	nativeRole := a.nativeRole(input.Role)
+	nativeRole := input.Role
 	if err := a.inner.SetRole(ctx, nativeRole); err != nil {
 		return fmt.Errorf("apply input role %s: %w", nativeRole, err)
 	}
@@ -60,18 +56,6 @@ func (a *humanInputAdapter) StartTurn(ctx context.Context, input model.AgentInpu
 	a.latestInput = input
 	a.mu.Unlock()
 	return a.inner.StartTurn(ctx, input)
-}
-
-// nativeRole preserves the durable Room role in the PairRoom envelope while
-// honoring the pre-existing explicit Reviewer policy. An explicitly configured
-// Reviewer is still isolated to the Reviewer workspace by the Room engine, but
-// its selected native permission/approval/sandbox policy is allowed to govern
-// the turn. The default (and every empty direct-test config) remains read-only.
-func (a *humanInputAdapter) nativeRole(role model.ParticipantRole) model.ParticipantRole {
-	if role == model.RoleReviewer && a.cfg.OrdinaryReviewerPolicy == model.ReviewerExplicit {
-		return model.RoleDriver
-	}
-	return role
 }
 
 func (a *humanInputAdapter) Steer(ctx context.Context, input model.AgentInput) SteerOutcome {

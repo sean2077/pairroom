@@ -140,19 +140,3 @@ func appendServiceEvent(room Room, kind string, payload any) error {
 	}
 	return nil
 }
-
-func cloneProjects(values map[string]Project) map[string]Project {
-	out := make(map[string]Project, len(values))
-	for key, value := range values {
-		out[key] = value
-	}
-	return out
-}
-
-func cloneStringMap(values map[string]string) map[string]string {
-	out := make(map[string]string, len(values))
-	for key, value := range values {
-		out[key] = value
-	}
-	return out
-}

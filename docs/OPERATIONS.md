@@ -4,7 +4,7 @@
 
 - PairRoom Desktop: Wails v3 native Window / Tray host; reuses a daemon or starts the Service in-process;
 - `pairroom service`: the normal multi-Project / multi-Room management entry;
-- `pairroom serve`: single-repository compatibility entry;
+- `pairroom serve`: current-format standalone Room;
 - `pairroom daemon`: manage the Service as a local background process;
 - `--mock`: deterministic verification mode that does not start vendor CLIs.
 
@@ -75,7 +75,7 @@ Write backup and diagnostics bundles **outside the source Room data directory**.
 
 ## Graceful shutdown
 
-A normal exit should stop active adapters, settle in-flight projections, close the store, and clean any legacy reviewer workspaces. After a forced kill, the next start restores only Room-owned FIFO entries that were still before native submission and fails uncertain submission windows closed; it never guesses whether an accepted native operation completed.
+A normal exit should stop active adapters, settle in-flight projections, close the store. After a forced kill, the next start restores only Room-owned FIFO entries that were still before native submission and fails uncertain submission windows closed; it never guesses whether an accepted native operation completed.
 
 An embedded Service used by the desktop host follows the same shutdown contract. The Wails window lifecycle cannot bypass Room Runtime drain.
 

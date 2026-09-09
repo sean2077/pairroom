@@ -67,7 +67,7 @@ func (r *Registry) MaterializeBinding(ctx context.Context, roomID string, actor 
 	}
 	if binding.Mode != BindingNew {
 		r.mu.RUnlock()
-		return Room{}, fmt.Errorf("%w: %s requires explicit binding completion", ErrRoomBindingPending, actor)
+		return Room{}, fmt.Errorf("%s binding is not a pending new binding", actor)
 	}
 	key := BindingKey{Agent: actor, SessionID: sessionID}
 	if owner, owned := r.bindingOwners[key.String()]; owned && owner != room.ID {

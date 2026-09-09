@@ -29,11 +29,9 @@ const (
 	EventRuntime            = "runtime.event"
 	EventApprovalUpdated    = "approval.updated"
 	EventSystemNotice       = "system.notice"
-	EventParticipantsBatch  = "participants.batch.updated"
 	EventTurnSummaryUpdated = "turn.summary.updated"
 
 	eventServiceRoomRenamed         = "service.room.renamed"
-	eventServiceBindingsCompleted   = "service.room.bindings.completed"
 	eventServiceBindingMaterialized = "service.room.binding.materialized"
 	recentEventLimit                = 600
 )
@@ -51,7 +49,6 @@ type Config struct {
 	ClaudeConfig              agent.Config
 	CodexConfig               agent.Config
 	Attachments               AttachmentStore
-	Workspaces                WorkspaceManager
 	AutoStart                 bool
 	OnSessionMaterialized     func(context.Context, model.ActorID, string) error
 }
@@ -64,17 +61,6 @@ type AttachmentStore interface {
 	Remove(id string) error
 }
 
-type WorkspaceManager interface {
-	DriverBoundary() model.WorkspaceBoundary
-	Refresh(context.Context) (model.WorkspaceBoundary, error)
-	Cleanup(context.Context) error
-}
-
-type participantBatch struct {
-	Reason       string                      `json:"reason"`
-	Participants []model.ParticipantSnapshot `json:"participants"`
-}
-
 type serviceRoomRenamedProjection struct {
 	Name string `json:"name"`
 }
@@ -85,21 +71,16 @@ type serviceBindingProjection struct {
 	Pending   bool          `json:"pending"`
 }
 
-type serviceBindingsCompletedProjection struct {
-	Bindings map[model.ActorID]serviceBindingProjection `json:"bindings"`
-}
-
 type serviceBindingMaterializedProjection struct {
 	Binding serviceBindingProjection `json:"binding"`
 }
 
 type SendRequest struct {
-	Text        string                `json:"text"`
-	To          []model.ActorID       `json:"to,omitempty"`
-	TargetRole  model.ParticipantRole `json:"target_role,omitempty"`
-	ReplyTo     string                `json:"reply_to,omitempty"`
-	Attachments []model.Attachment    `json:"attachments,omitempty"`
-	Intent      model.MessageIntent   `json:"intent,omitempty"`
+	Text        string              `json:"text"`
+	To          []model.ActorID     `json:"to,omitempty"`
+	ReplyTo     string              `json:"reply_to,omitempty"`
+	Attachments []model.Attachment  `json:"attachments,omitempty"`
+	Intent      model.MessageIntent `json:"intent,omitempty"`
 }
 
 type RetryRequest struct {
@@ -206,13 +187,19 @@ func (e *Engine) restore() error {
 	if name == "" {
 		name = "Claude × Codex"
 	}
-	if e.cfg.Collaboration != nil {
-		if err := e.cfg.Collaboration.Validate(); err != nil {
+	collaboration := model.CloneCollaboration(e.cfg.Collaboration)
+	if collaboration == nil {
+		defaults, err := (model.Collaboration{}).ForCreation()
+		if err != nil {
 			return err
 		}
+		collaboration = &defaults
+	} else if err := collaboration.Validate(); err != nil {
+		return err
 	}
+
 	meta := model.RoomMeta{
-		Collaboration: model.CloneCollaboration(e.cfg.Collaboration),
+		Collaboration: collaboration,
 		ID:            model.NewID("room"),
 		Name:          name,
 		Repo:          e.cfg.Repo,
@@ -239,21 +226,18 @@ func (e *Engine) restore() error {
 	participants := []model.ParticipantSnapshot{
 		{
 			ID: model.ActorClaude, DisplayName: identities[model.ActorClaude].DisplayName, MentionHandle: identities[model.ActorClaude].MentionHandle,
-			Role: model.RoleDriver, State: model.StateStopped, Model: e.cfg.ClaudeConfig.Model,
+			Role: model.RolePeer, State: model.StateStopped, Model: e.cfg.ClaudeConfig.Model,
 			RuntimeKind: e.cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorClaude),
 		},
 		{
 			ID: model.ActorCodex, DisplayName: identities[model.ActorCodex].DisplayName, MentionHandle: identities[model.ActorCodex].MentionHandle,
-			Role: model.RoleReviewer, State: model.StateStopped, Model: e.cfg.CodexConfig.Model,
+			Role: model.RolePeer, State: model.StateStopped, Model: e.cfg.CodexConfig.Model,
 			RuntimeKind: e.cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorCodex),
 		},
 	}
 	for _, participant := range participants {
-		if meta.Collaboration != nil {
-			participant.Role = model.RolePeer
-			participant.PermissionProfile = model.PermissionConfigured
-			participant.Responsibility = meta.Collaboration.Responsibility(participant.ID)
-		}
+		participant.PermissionProfile = model.PermissionConfigured
+		participant.Responsibility = meta.Collaboration.Responsibility(participant.ID)
 		if _, err := e.record(EventParticipantUpdated, participant.ID, participant); err != nil {
 			return err
 		}
@@ -274,32 +258,18 @@ func (e *Engine) ensureSnapshotDefaults() error {
 	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
 		participant, ok := e.snapshot.Participants[actor]
 		if !ok {
-			role := model.RolePeer
-			if actor == model.ActorClaude {
-				role = model.RoleDriver
-			} else {
-				role = model.RoleReviewer
-			}
-			participant = model.ParticipantSnapshot{ID: actor, Role: role, State: model.StateStopped}
+			return fmt.Errorf("Room is missing participant %s", actor)
 		}
 		participant.DisplayName = identities[actor].DisplayName
 		participant.MentionHandle = identities[actor].MentionHandle
-		if !participant.Role.Valid() {
-			participant.Role = model.RolePeer
+		if participant.Role != model.RolePeer {
+			return fmt.Errorf("unsupported stored participant role %q; create a new Room", participant.Role)
 		}
-		if c := e.snapshot.Meta.Collaboration; c != nil {
-			if err := c.Validate(); err != nil {
-				return err
-			}
-			participant.Role = model.RolePeer
-			participant.Responsibility = c.Responsibility(actor)
-			if participant.PermissionProfile == "" {
-				participant.PermissionProfile = model.PermissionConfigured
-			}
-			if !participant.PermissionProfile.Valid() {
-				return fmt.Errorf("invalid stored permission profile %q", participant.PermissionProfile)
-			}
+		participant.Responsibility = e.snapshot.Meta.Collaboration.Responsibility(actor)
+		if !participant.PermissionProfile.Valid() {
+			return fmt.Errorf("invalid stored permission profile %q", participant.PermissionProfile)
 		}
+
 		// Runtime processes do not survive PairRoom restarts. Session IDs do.
 		participant.State = model.StateStopped
 		participant.CurrentTurn = ""
@@ -435,15 +405,9 @@ func (e *Engine) Start(parent context.Context) error {
 	roomID := e.snapshot.Meta.ID
 	e.mu.Unlock()
 
-	boundaries, err := e.prepareWorkspaceBoundaries(parent, claudeParticipant.Role, codexParticipant.Role)
-	if err != nil {
-		e.mu.Lock()
-		if e.cancel != nil {
-			e.cancel()
-		}
-		e.ctx, e.cancel = nil, nil
-		e.mu.Unlock()
-		return err
+	boundaries := map[model.ActorID]model.WorkspaceBoundary{
+		model.ActorClaude: {Kind: "live", Path: repo},
+		model.ActorCodex:  {Kind: "live", Path: repo},
 	}
 
 	claudeCfg := e.cfg.ClaudeConfig
@@ -491,19 +455,18 @@ func (e *Engine) Start(parent context.Context) error {
 		actor, boundary := actor, boundary
 		_ = e.mutateParticipant(model.ActorSystem, actor, func(p *model.ParticipantSnapshot) {
 			p.Workspace = boundary
-			applyRoleRuntimeProjection(p, actor, p.Role, e.cfg)
+			applyPermissionRuntimeProjection(p, actor, e.cfg)
 			if p.Workspace.Path == "" {
 				p.Workspace.Path = repo
 			}
 		})
 	}
-	// Apply the restored room roles before either native process starts. Codex
-	// enforces reviewer policy per turn; Claude maps reviewer to native plan mode.
+	// Apply the stored permission profile before either native process starts.
 	if err := claudeAdapter.SetRole(parent, nativePermissionRole(claudeParticipant)); err != nil {
-		return fmt.Errorf("apply Claude role: %w", err)
+		return fmt.Errorf("apply Claude permissions: %w", err)
 	}
 	if err := codexAdapter.SetRole(parent, nativePermissionRole(codexParticipant)); err != nil {
-		return fmt.Errorf("apply Codex role: %w", err)
+		return fmt.Errorf("apply Codex permissions: %w", err)
 	}
 	e.resumeRestoredDeliveries(parent)
 
@@ -522,47 +485,6 @@ func (e *Engine) Start(parent context.Context) error {
 		}
 	}
 	return nil
-}
-
-func (e *Engine) prepareWorkspaceBoundaries(ctx context.Context, claudeRole, codexRole model.ParticipantRole) (map[model.ActorID]model.WorkspaceBoundary, error) {
-	e.mu.RLock()
-	repo := e.snapshot.Meta.Repo
-	e.mu.RUnlock()
-	driver := model.WorkspaceBoundary{Kind: "driver-live", Path: repo}
-	if e.cfg.Workspaces != nil {
-		driver = e.cfg.Workspaces.DriverBoundary()
-	}
-	boundaries := map[model.ActorID]model.WorkspaceBoundary{
-		model.ActorClaude: driver,
-		model.ActorCodex:  driver,
-	}
-	if claudeRole != model.RoleReviewer && codexRole != model.RoleReviewer {
-		return boundaries, nil
-	}
-	if e.cfg.Workspaces == nil {
-		fallback := driver
-		fallback.Kind = "reviewer-live-fallback"
-		fallback.ReadOnly = false
-		fallback.Warnings = []string{"reviewer snapshot manager is unavailable; reviewer sees the live working tree"}
-		if claudeRole == model.RoleReviewer {
-			boundaries[model.ActorClaude] = fallback
-		}
-		if codexRole == model.RoleReviewer {
-			boundaries[model.ActorCodex] = fallback
-		}
-		return boundaries, nil
-	}
-	reviewer, err := e.cfg.Workspaces.Refresh(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("prepare reviewer workspace: %w", err)
-	}
-	if claudeRole == model.RoleReviewer {
-		boundaries[model.ActorClaude] = reviewer
-	}
-	if codexRole == model.RoleReviewer {
-		boundaries[model.ActorCodex] = reviewer
-	}
-	return boundaries, nil
 }
 
 func (e *Engine) Subscribe() (<-chan model.Event, func()) { return e.cfg.Hub.Subscribe() }
@@ -626,7 +548,7 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 		}
 	}
 
-	targets, err := e.resolveUserTargets(text, req.To, req.TargetRole, req.ReplyTo)
+	targets, err := e.resolveUserTargets(text, req.To, req.ReplyTo)
 	if err != nil {
 		return model.Message{}, err
 	}
@@ -747,7 +669,7 @@ func (e *Engine) CancelMessage(ctx context.Context, messageID string, target mod
 	// terminal callback synchronously from Interrupt; holding the delivery scope
 	// prevents the next Room FIFO item from entering the Runtime before we have
 	// captured the exact set of inputs affected by this native interruption.
-	unlock, err := e.lockDeliveryScope(ctx, target)
+	unlock, err := e.lockDelivery(ctx, target)
 	if err != nil {
 		return err
 	}
@@ -1125,224 +1047,12 @@ func (e *Engine) UpdateSettings(settings model.RoomSettings) error {
 	return err
 }
 
-// SetRole is retained only for legacy replay regression coverage. Public role mutation is removed.
-func (e *Engine) SetRole(ctx context.Context, actor model.ActorID, role model.ParticipantRole) error {
-	if e.SnapshotMeta().Collaboration != nil {
-		return errors.New("collaboration responsibilities are immutable")
-	}
-	if !actor.ValidParticipant() {
-		return errors.New("participant must be claude or codex")
-	}
-	if !role.Valid() {
-		return fmt.Errorf("invalid role %q", role)
-	}
-	// The reviewer snapshot manager is shared by both participants. Serialize a
-	// role transition with both submission paths so a concurrent delivery cannot
-	// mutate the live tree while a new reviewer snapshot is captured.
-	unlock, err := e.lockAllDeliveries(ctx)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	e.routingMu.Lock()
-	defer e.routingMu.Unlock()
-	other := model.OtherParticipant(actor)
-	e.mu.RLock()
-	actorSnapshot := e.snapshot.Participants[actor]
-	otherSnapshot := e.snapshot.Participants[other]
-	e.mu.RUnlock()
-	if err := roleChangeSafe(actorSnapshot); err != nil {
-		return err
-	}
-	if actorSnapshot.Role == role {
-		return nil
-	}
-
-	boundary := model.WorkspaceBoundary{Kind: "driver-live", Path: e.snapshot.Meta.Repo}
-	if e.cfg.Workspaces != nil {
-		boundary = e.cfg.Workspaces.DriverBoundary()
-	}
-	if role == model.RoleReviewer {
-		if e.cfg.Workspaces != nil {
-			if otherSnapshot.Role == model.RoleReviewer {
-				return errors.New("reviewer snapshot requires a single Reviewer; assign the other participant as Driver or Peer first")
-			}
-			if err := roleChangeSafe(otherSnapshot); err != nil {
-				return fmt.Errorf("cannot capture reviewer snapshot while the peer may be changing the live workspace: %w", err)
-			}
-		}
-		boundaries, err := e.prepareWorkspaceBoundaries(ctx,
-			roleFor(actor, model.ActorClaude, role, otherSnapshot.Role),
-			roleFor(actor, model.ActorCodex, role, otherSnapshot.Role),
-		)
-		if err != nil {
-			return err
-		}
-		boundary = boundaries[actor]
-	}
-	adapter, err := e.adapter(actor)
-	if err != nil {
-		return err
-	}
-	wasRunning := adapter.State() != model.StateStopped
-	oldBoundary := actorSnapshot.Workspace
-	if oldBoundary.Path == "" {
-		oldBoundary = model.WorkspaceBoundary{Kind: "driver-live", Path: e.snapshot.Meta.Repo}
-	}
-	if wasRunning {
-		if err := adapter.Stop(ctx); err != nil {
-			return fmt.Errorf("stop %s before role change: %w", e.participantName(actor), err)
-		}
-	}
-	rollback := func() {
-		_ = adapter.SetWorkspace(context.Background(), oldBoundary.Path)
-		_ = adapter.SetRole(context.Background(), actorSnapshot.Role)
-		if wasRunning {
-			_ = adapter.Start(context.Background())
-		}
-	}
-	if err := adapter.SetWorkspace(ctx, boundary.Path); err != nil {
-		rollback()
-		return err
-	}
-	if err := adapter.SetRole(ctx, role); err != nil {
-		rollback()
-		return err
-	}
-	if wasRunning {
-		if err := adapter.Start(ctx); err != nil {
-			rollback()
-			return fmt.Errorf("restart %s after role change: %w", e.participantName(actor), err)
-		}
-	}
-	return e.mutateParticipant(model.ActorUser, actor, func(participant *model.ParticipantSnapshot) {
-		participant.Role = role
-		participant.Workspace = boundary
-		applyRoleRuntimeProjection(participant, actor, role, e.cfg)
-	})
-}
-
-func (e *Engine) SwitchDriver(ctx context.Context, driver model.ActorID) error {
-	if e.SnapshotMeta().Collaboration != nil {
-		return errors.New("collaboration responsibilities are immutable")
-	}
-	if !driver.ValidParticipant() {
-		return errors.New("driver must be claude or codex")
-	}
-	unlock, err := e.lockAllDeliveries(ctx)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	e.routingMu.Lock()
-	defer e.routingMu.Unlock()
-	reviewer := model.OtherParticipant(driver)
-	e.mu.RLock()
-	old := map[model.ActorID]model.ParticipantSnapshot{
-		model.ActorClaude: e.snapshot.Participants[model.ActorClaude],
-		model.ActorCodex:  e.snapshot.Participants[model.ActorCodex],
-	}
-	e.mu.RUnlock()
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
-		if err := roleChangeSafe(old[actor]); err != nil {
-			return err
-		}
-	}
-
-	roles := map[model.ActorID]model.ParticipantRole{
-		driver:   model.RoleDriver,
-		reviewer: model.RoleReviewer,
-	}
-	boundaries, err := e.prepareWorkspaceBoundaries(ctx, roles[model.ActorClaude], roles[model.ActorCodex])
-	if err != nil {
-		return err
-	}
-	adapters := map[model.ActorID]agent.Adapter{}
-	running := map[model.ActorID]bool{}
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
-		adapter, err := e.adapter(actor)
-		if err != nil {
-			return err
-		}
-		adapters[actor] = adapter
-		running[actor] = adapter.State() != model.StateStopped
-	}
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
-		if running[actor] {
-			if err := adapters[actor].Stop(ctx); err != nil {
-				for _, stopped := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
-					if stopped == actor {
-						break
-					}
-					if running[stopped] {
-						_ = adapters[stopped].Start(context.Background())
-					}
-				}
-				return fmt.Errorf("stop %s before driver switch: %w", e.participantName(actor), err)
-			}
-		}
-	}
-	rollback := func() {
-		for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
-			_ = adapters[actor].Stop(context.Background())
-			path := old[actor].Workspace.Path
-			if path == "" {
-				path = e.snapshot.Meta.Repo
-			}
-			_ = adapters[actor].SetWorkspace(context.Background(), path)
-			_ = adapters[actor].SetRole(context.Background(), old[actor].Role)
-		}
-		for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
-			if running[actor] {
-				_ = adapters[actor].Start(context.Background())
-			}
-		}
-	}
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
-		if err := adapters[actor].SetWorkspace(ctx, boundaries[actor].Path); err != nil {
-			rollback()
-			return fmt.Errorf("set %s workspace: %w", e.participantName(actor), err)
-		}
-		if err := adapters[actor].SetRole(ctx, roles[actor]); err != nil {
-			rollback()
-			return fmt.Errorf("set %s role: %w", e.participantName(actor), err)
-		}
-	}
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
-		if running[actor] {
-			if err := adapters[actor].Start(ctx); err != nil {
-				rollback()
-				return fmt.Errorf("restart %s after driver switch: %w", e.participantName(actor), err)
-			}
-		}
-	}
-	participants := make([]model.ParticipantSnapshot, 0, 2)
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
-		participant := old[actor]
-		participant.Role = roles[actor]
-		participant.Workspace = boundaries[actor]
-		applyRoleRuntimeProjection(&participant, actor, roles[actor], e.cfg)
-		participants = append(participants, participant)
-	}
-	_, err = e.record(EventParticipantsBatch, model.ActorUser, participantBatch{
-		Reason: "driver_switched", Participants: participants,
-	})
-	return err
-}
-
-func roleFor(changed, target model.ActorID, requested, other model.ParticipantRole) model.ParticipantRole {
-	if changed == target {
-		return requested
-	}
-	return other
-}
-
-func roleChangeSafe(participant model.ParticipantSnapshot) error {
+func permissionChangeSafe(participant model.ParticipantSnapshot) error {
 	switch participant.State {
 	case model.StateStopped, model.StateIdle, model.StateError:
 		return nil
 	default:
-		return fmt.Errorf("interrupt or stop %s before changing roles or workspaces", participant.DisplayName)
+		return fmt.Errorf("interrupt or stop %s before changing permissions", participant.DisplayName)
 	}
 }
 
@@ -1368,30 +1078,22 @@ func slotAgentConfig(cfg Config, actor model.ActorID) agent.Config {
 	return cfg.ClaudeConfig
 }
 
-func applyRoleRuntimeProjection(participant *model.ParticipantSnapshot, actor model.ActorID, role model.ParticipantRole, cfg Config) {
+func applyPermissionRuntimeProjection(participant *model.ParticipantSnapshot, actor model.ActorID, cfg Config) {
 	slot := slotAgentConfig(cfg, actor)
 	slot.Actor = actor
-	if participant.PermissionProfile != "" {
-		slot = agent.PermissionConfig(slot, participant.PermissionProfile)
-		role = nativePermissionRole(*participant)
-	}
+	slot = agent.PermissionConfig(slot, participant.PermissionProfile)
+	nativeRole := nativePermissionRole(*participant)
 	kind := slot.Runtime.CanonicalForSlot(actor)
 	identity := model.ParticipantIdentityFor(actor, runtimeKindsForConfig(cfg))
 	participant.RuntimeKind = kind
 	participant.DisplayName = identity.DisplayName
 	participant.MentionHandle = identity.MentionHandle
 	// Rebuild the policy projection from the immutable slot selection on every
-	// permission transition (or legacy role transition). Never retain policy
+	// permission transition. Never retain policy
 	// fields from the previous process in the public snapshot.
 	participant.Runtime.PermissionMode = ""
 	participant.Runtime.ApprovalPolicy = ""
 	participant.Runtime.Sandbox = ""
-	nativeRole := role
-	if role == model.RoleReviewer && slot.OrdinaryReviewerPolicy == model.ReviewerExplicit {
-		// The Reviewer workspace boundary remains owned by the Room, but the
-		// explicit policy opts the native harness into the selected slot policy.
-		nativeRole = model.RoleDriver
-	}
 	switch kind {
 	case model.RuntimeClaude:
 		if nativeRole == model.RoleReviewer {
@@ -1402,9 +1104,7 @@ func applyRoleRuntimeProjection(participant *model.ParticipantSnapshot, actor mo
 	case model.RuntimeCodex:
 		if nativeRole == model.RoleReviewer {
 			participant.Runtime.Sandbox = "readOnly"
-			if participant.PermissionProfile != "" {
-				participant.Runtime.ApprovalPolicy = slot.ApprovalPolicy
-			}
+			participant.Runtime.ApprovalPolicy = slot.ApprovalPolicy
 		} else {
 			participant.Runtime.ApprovalPolicy = slot.ApprovalPolicy
 			participant.Runtime.Sandbox = slot.Sandbox
@@ -1446,11 +1146,7 @@ func (e *Engine) Close() error {
 			result = errors.Join(result, fmt.Errorf("stop %s adapter: %w", adapter.Actor(), err))
 		}
 	}
-	if e.cfg.Workspaces != nil {
-		if err := e.cfg.Workspaces.Cleanup(ctx); err != nil {
-			result = errors.Join(result, fmt.Errorf("clean up Room workspaces: %w", err))
-		}
-	}
+
 	if err := e.cfg.Store.Close(); err != nil {
 		result = errors.Join(result, fmt.Errorf("close Room event store: %w", err))
 	}
@@ -1753,82 +1449,8 @@ func (e *Engine) lockAllDeliveries(ctx context.Context) (func(), error) {
 	}, nil
 }
 
-func (e *Engine) targetUsesReviewerSnapshot(target model.ActorID) bool {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.cfg.Workspaces != nil && e.snapshot.Participants[target].Role == model.RoleReviewer
-}
-
-// lockDeliveryScope keeps ordinary peer/Driver submissions independent while
-// serializing a Reviewer refresh with both submissions. Role transitions take
-// the same pair of locks, and the role is rechecked after lock acquisition.
-func (e *Engine) lockDeliveryScope(ctx context.Context, target model.ActorID) (func(), error) {
-	for {
-		reviewer := e.targetUsesReviewerSnapshot(target)
-		var (
-			unlock func()
-			err    error
-		)
-		if reviewer {
-			unlock, err = e.lockAllDeliveries(ctx)
-		} else {
-			unlock, err = e.lockDelivery(ctx, target)
-		}
-		if err != nil {
-			return nil, err
-		}
-		if reviewer == e.targetUsesReviewerSnapshot(target) {
-			return unlock, nil
-		}
-		unlock()
-	}
-}
-
-// refreshReviewerWorkspace recreates the reviewer snapshot immediately before
-// a safe new reviewer turn. The startup snapshot is only an initial boundary;
-// without this refresh a reviewer could inspect files from before the Driver's
-// latest implementation. Active reviewer turns keep their existing snapshot so
-// steering remains correlated to one stable filesystem view.
-func (e *Engine) refreshReviewerWorkspace(ctx context.Context, target model.ActorID, adapter agent.Adapter) error {
-	e.mu.RLock()
-	participant := e.snapshot.Participants[target]
-	peer := e.snapshot.Participants[model.OtherParticipant(target)]
-	e.mu.RUnlock()
-	if participant.Role != model.RoleReviewer || e.cfg.Workspaces == nil {
-		return nil
-	}
-	if peer.Role == model.RoleReviewer {
-		return errors.New("reviewer snapshot refresh requires a single Reviewer; assign a Driver or Peer before review")
-	}
-	state := adapter.State()
-	switch state {
-	case model.StateStopped, model.StateIdle, model.StateError:
-	default:
-		return nil
-	}
-	if state != model.StateStopped {
-		if err := adapter.Stop(ctx); err != nil {
-			return fmt.Errorf("stop idle reviewer before snapshot refresh: %w", err)
-		}
-	}
-	boundary, err := e.cfg.Workspaces.Refresh(ctx)
-	if err != nil {
-		return fmt.Errorf("refresh reviewer snapshot: %w", err)
-	}
-	if err := adapter.SetWorkspace(ctx, boundary.Path); err != nil {
-		return fmt.Errorf("apply refreshed reviewer workspace: %w", err)
-	}
-	if err := adapter.SetRole(ctx, model.RoleReviewer); err != nil {
-		return fmt.Errorf("restore reviewer policy after refresh: %w", err)
-	}
-	return e.mutateParticipant(model.ActorSystem, target, func(p *model.ParticipantSnapshot) {
-		p.Workspace = boundary
-		p.LastError = ""
-	})
-}
-
 func (e *Engine) deliver(ctx context.Context, message model.Message, target model.ActorID, steer bool) string {
-	unlock, err := e.lockDeliveryScope(ctx, target)
+	unlock, err := e.lockDelivery(ctx, target)
 	if err != nil {
 		detail := "wait for participant delivery serialization: " + err.Error()
 		e.delivery(message.ID, target, model.DeliveryFailed, detail)
@@ -1848,19 +1470,7 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 		e.processing(message.ID, target, model.ProcessingFailed, "input was not submitted: "+err.Error(), "")
 		return ""
 	}
-	if !steer {
-		if err := e.refreshReviewerWorkspace(ctx, target, adapter); err != nil {
-			detail := "prepare reviewer workspace: " + err.Error()
-			e.delivery(message.ID, target, model.DeliveryFailed, detail)
-			e.processing(message.ID, target, model.ProcessingFailed, detail, "")
-			e.updateParticipant(target, func(p *model.ParticipantSnapshot) {
-				p.State = model.StateError
-				p.LastError = detail
-				p.LastActivity = time.Now().UTC()
-			})
-			return ""
-		}
-	}
+
 	e.mu.RLock()
 	participant := e.snapshot.Participants[target]
 	e.mu.RUnlock()
@@ -2016,7 +1626,7 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 			if info.Model != "" {
 				p.Model = info.Model
 			}
-			applyRoleRuntimeProjection(p, runtimeEvent.Agent, p.Role, e.cfg)
+			applyPermissionRuntimeProjection(p, runtimeEvent.Agent, e.cfg)
 			p.LastActivity = runtimeEvent.CreatedAt
 		})
 	case model.RuntimeInputProcessing:
@@ -2539,32 +2149,10 @@ func (e *Engine) notice(level, text string) {
 	_, _ = e.record(EventSystemNotice, model.ActorSystem, model.SystemNotice{Level: level, Text: text})
 }
 
-func (e *Engine) resolveUserTargets(text string, explicit []model.ActorID, targetRole model.ParticipantRole, replyTo string) ([]model.ActorID, error) {
+func (e *Engine) resolveUserTargets(text string, explicit []model.ActorID, replyTo string) ([]model.ActorID, error) {
 	targets, err := normalizeExplicitActors(explicit)
 	if err != nil {
 		return nil, err
-	}
-	if targetRole != "" && e.SnapshotMeta().Collaboration != nil {
-		return nil, errors.New("target_role was removed; choose an exact participant handle")
-	}
-	if targetRole != "" {
-		if len(targets) > 0 {
-			return nil, errors.New("choose either explicit recipients or target_role, not both")
-		}
-		if targetRole != model.RoleDriver && targetRole != model.RoleReviewer {
-			return nil, errors.New("target_role must be driver or reviewer")
-		}
-		e.mu.RLock()
-		for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
-			if e.snapshot.Participants[actor].Role == targetRole {
-				targets = append(targets, actor)
-			}
-		}
-		e.mu.RUnlock()
-		if len(targets) != 1 {
-			return nil, fmt.Errorf("target_role %q requires exactly one participant, found %d", targetRole, len(targets))
-		}
-		return targets, nil
 	}
 	if len(targets) > 0 {
 		return targets, nil
@@ -2576,7 +2164,7 @@ func (e *Engine) resolveUserTargets(text string, explicit []model.ActorID, targe
 	}
 	// Removed aliases are ordinary prose once a valid current handle is also
 	// present. Reject only an otherwise unaddressed message that still relies on
-	// a retired alias, so legacy text cannot silently fall back to the Driver.
+	// a retired alias, so legacy text cannot silently fall back to Agent 1.
 	if len(mentions.RemovedAliases) > 0 && len(mentions.Targets) == 0 {
 		return nil, fmt.Errorf("removed Agent handle %s is not routable; use the participant's displayed mention handle", strings.Join(mentions.RemovedAliases, ", "))
 	}
@@ -2591,24 +2179,7 @@ func (e *Engine) resolveUserTargets(text string, explicit []model.ActorID, targe
 			return []model.ActorID{replied.From}, nil
 		}
 	}
-	if e.SnapshotMeta().Collaboration != nil {
-		return []model.ActorID{model.ActorClaude}, nil
-	}
-	e.mu.RLock()
-	drivers := make([]model.ActorID, 0, 2)
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
-		if e.snapshot.Participants[actor].Role == model.RoleDriver {
-			drivers = append(drivers, actor)
-		}
-	}
-	e.mu.RUnlock()
-	if len(drivers) == 1 {
-		return drivers, nil
-	}
-	if len(drivers) == 0 {
-		return nil, errors.New("message has no current Driver; choose an exact Agent handle or assign a Driver")
-	}
-	return nil, errors.New("message has multiple Drivers; choose an exact Agent handle or assign one Driver")
+	return []model.ActorID{model.ActorClaude}, nil
 }
 
 func normalizeExplicitActors(values []model.ActorID) ([]model.ActorID, error) {
@@ -2787,7 +2358,7 @@ func (e *Engine) apply(event model.Event) error {
 }
 
 // decodeCurrentEventData is deliberately stricter than ordinary projection
-// decoding. Store schema 9 has no migration or legacy-field compatibility;
+// decoding. Store schema 10 has no migration or legacy-field compatibility;
 // accepting a v4/v8 payload with ignored Handoff, Hop, Workflow, or routing
 // fields would silently create a mixed-version Room that cannot be audited.
 func decodeCurrentEventData(data []byte, target any) error {
@@ -2824,10 +2395,11 @@ func (e *Engine) applyLocked(event model.Event) error {
 		if err := json.Unmarshal(event.Data, &e.snapshot.Meta); err != nil {
 			return err
 		}
-		if e.snapshot.Meta.Collaboration != nil {
-			if err := e.snapshot.Meta.Collaboration.Validate(); err != nil {
-				return err
-			}
+		if e.snapshot.Meta.Collaboration == nil {
+			return errors.New("Room has no collaboration instructions; legacy Rooms are unsupported, create a new Room")
+		}
+		if err := e.snapshot.Meta.Collaboration.Validate(); err != nil {
+			return err
 		}
 	case eventServiceRoomRenamed:
 		var update serviceRoomRenamedProjection
@@ -2839,27 +2411,6 @@ func (e *Engine) applyLocked(event model.Event) error {
 			return errors.New("service Room rename has an empty name")
 		}
 		e.snapshot.Meta.Name = update.Name
-	case eventServiceBindingsCompleted:
-		var update serviceBindingsCompletedProjection
-		if err := json.Unmarshal(event.Data, &update); err != nil {
-			return err
-		}
-		if e.snapshot.Participants == nil {
-			e.snapshot.Participants = make(map[model.ActorID]model.ParticipantSnapshot, 2)
-		}
-		for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
-			binding, ok := update.Bindings[actor]
-			if !ok || binding.Pending || binding.Agent != actor || strings.TrimSpace(binding.SessionID) == "" {
-				return fmt.Errorf("service binding completion has an invalid %s binding", actor)
-			}
-			participant := e.snapshot.Participants[actor]
-			participant.ID = actor
-			identity := model.ParticipantIdentityFor(actor, e.runtimeKinds())
-			participant.DisplayName = identity.DisplayName
-			participant.MentionHandle = identity.MentionHandle
-			participant.SessionID = strings.TrimSpace(binding.SessionID)
-			e.snapshot.Participants[actor] = participant
-		}
 	case eventServiceBindingMaterialized:
 		var update serviceBindingMaterializedProjection
 		if err := json.Unmarshal(event.Data, &update); err != nil {
@@ -2894,20 +2445,8 @@ func (e *Engine) applyLocked(event model.Event) error {
 			e.snapshot.Participants = make(map[model.ActorID]model.ParticipantSnapshot)
 		}
 		e.snapshot.Participants[participant.ID] = participant
-	case EventParticipantsBatch:
-		var update participantBatch
-		if err := decodeCurrentEventData(event.Data, &update); err != nil {
-			return err
-		}
-		if e.snapshot.Participants == nil {
-			e.snapshot.Participants = make(map[model.ActorID]model.ParticipantSnapshot)
-		}
-		for _, participant := range update.Participants {
-			if !participant.ID.ValidParticipant() || strings.TrimSpace(participant.MentionHandle) == "" {
-				return fmt.Errorf("invalid participant in batch update: %q", participant.ID)
-			}
-			e.snapshot.Participants[participant.ID] = participant
-		}
+	case "participants.batch.updated", "service.room.bindings.completed", "service.legacy.imported":
+		return fmt.Errorf("unsupported retired Room event %q", event.Kind)
 	case EventMessageCreated:
 		var message model.Message
 		if err := decodeCurrentEventData(event.Data, &message); err != nil {

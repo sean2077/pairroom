@@ -8,7 +8,6 @@ func PermissionConfig(cfg Config, profile model.PermissionProfile) Config {
 	kind := cfg.Runtime.CanonicalForSlot(cfg.Actor)
 	switch profile {
 	case model.PermissionReadOnly:
-		cfg.OrdinaryReviewerPolicy = model.ReviewerEnforced
 		switch kind {
 		case model.RuntimeClaude:
 			cfg.PermissionMode, cfg.ApprovalPolicy, cfg.Sandbox = "plan", "", ""

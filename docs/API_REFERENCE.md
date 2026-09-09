@@ -32,7 +32,7 @@ The Management API owns Project and Room registration, immutable per-Room Agent 
 }
 ```
 
-The created Room returns the immutable `agents` map. There is no Agent-reconfiguration endpoint. Schema-v1 Rooms instead return `legacy_defaults: true` and no `agents` map.
+The created Room returns the immutable `agents` map. There is no Agent-reconfiguration endpoint.
 
 ## Project and Room display order
 
@@ -105,11 +105,11 @@ Room creation also accepts optional `collaboration`. Omission or `{"mode":"defau
 {"collaboration":{"mode":"custom","instructions":"Agent 2 plans. Agent 1 implements. Both challenge unsupported assumptions."}}
 ```
 
-The server trims outer whitespace and requires non-blank UTF-8 without NUL, at most 16 KiB. Only `default` and `custom` are accepted. Default prose cannot be overwritten; choose custom instead. The response includes `{version, mode, instructions}` and the same record is stored in `room.created` and provisioning schema 3. PATCH does not accept mode or instruction changes. Old provisioning 1/2 Rooms have no collaboration record and keep their legacy behavior.
+The server trims outer whitespace and requires non-blank UTF-8 without NUL, at most 16 KiB. Only `default` and `custom` are accepted. Default prose cannot be overwritten; choose custom instead. The response includes `{version, mode, instructions}` and the same record is stored in `room.created` and provisioning schema 3. PATCH does not accept mode or instruction changes. Provisioning schemas 1/2 are unsupported.
 
 Participant snapshots add `responsibility` (`lead`, `executor`, or generic `participant`) and `permission_profile`. Modern `role` remains `peer` solely for old response readers; it is not a collaboration selector. Runtime policy fields describe the effective native policy.
 
-`PUT /api/v1/participants/{actor}/permissions` accepts `{"profile":"configured"}`, `{"profile":"read-only"}`, or `{"profile":"yolo"}`. Configured restores the creation-time Agent policy, read-only uses native plan/read-only restrictions, and YOLO requests bypass/full access. The Room rejects pending Turns, queued input, pending approvals, and legacy Rooms. Invalid profiles return 400; unsafe transitions or runtime failures return 409. On success, read a fresh snapshot. `participant.permissions.requested` records intent before process effects; `participant.permissions.updated` commits effective policy after stopping the old process. A restart failure leaves the committed policy, not a broader fallback.
+`PUT /api/v1/participants/{actor}/permissions` accepts `{"profile":"configured"}`, `{"profile":"read-only"}`, or `{"profile":"yolo"}`. Configured restores the creation-time Agent policy, read-only uses native plan/read-only restrictions, and YOLO requests bypass/full access. The Room rejects pending Turns, queued input, and pending approvals. Invalid profiles return 400; unsafe transitions or runtime failures return 409. On success, read a fresh snapshot. `participant.permissions.requested` records intent before process effects; `participant.permissions.updated` commits effective policy after stopping the old process. A restart failure leaves the committed policy, not a broader fallback.
 
 Permissions are not collaboration modes. They do not change the saved instructions, Runtime, Provider, model, or exact materialized session. The former `/participants/{actor}/role` route is removed (404). `target_role` submissions are rejected (400); choose one stable `to` slot or its exact displayed runtime handle. `@driver`, `@reviewer`, `@lead`, and `@executor` are not handle aliases.
 
@@ -125,7 +125,7 @@ Status requests return the current projection. Message submission records the us
 
 Durable events carry a monotonic sequence and can be resumed after disconnect. High-frequency text delta / command output and other transient telemetry may be non-persistent; token-by-token replay is not guaranteed after disconnect. After reconnect, clients should fetch a snapshot again, then continue from the durable sequence. The Room browser closes its obsolete stream and coalesces concurrent snapshot requests; failed reads use bounded backoff. It does not automatically retry message submissions.
 
-`GET /api/v1/snapshot?message_limit=250` returns the newest messages and `message_window` pagination metadata while retaining current Room/runtime state. `message_limit` accepts integers from 0 to 1000; zero or omission retains the legacy full-transcript response. Invalid values return HTTP 400. Older messages are available through `GET /api/v1/messages?before_seq={oldest_seq}&limit=100`, in chronological order and strictly before the cursor.
+`GET /api/v1/snapshot?message_limit=250` returns the newest messages and `message_window` pagination metadata while retaining current Room/runtime state. `message_limit` accepts integers from 0 to 1000; zero or omission retains the full-transcript response. Invalid values return HTTP 400. Older messages are available through `GET /api/v1/messages?before_seq={oldest_seq}&limit=100`, in chronological order and strictly before the cursor.
 
 `GET /api/v1/events?since={latest_seq}` resumes after that durable sequence. A non-empty `Last-Event-ID` header takes precedence over `since` on native EventSource reconnects; malformed cursors return HTTP 400. If the cursor is ahead of the Room or older than its retained event tail, the server emits `event: reset` with `{"reason":"snapshot_required","latest_seq":...}` and closes the stream. Fetch a fresh snapshot before reconnecting; do not interpret this as a Turn completion. Transient events and reset notifications never advance the durable SSE ID.
 
@@ -152,9 +152,6 @@ PairRoom passes that exact, unique `optionId` to ACP. `cancel` returns ACP's can
 The following method/path patterns are extracted from production HTTP registrations in `internal/server/` and `internal/service/`, including named constants. Test URLs, query examples, and rejected path-traversal inputs are not API routes. Patterns without a method are the same-origin surface gateway; their allowed operations are enforced by its handler.
 
 <!-- generated:routes -->
-<details>
-<summary>Show current registered methods and routes</summary>
-
 - `/api/v1/rooms/{room}/surface`
 - `/api/v1/rooms/{room}/surface/{path...}`
 - `DELETE /api/v1/agent-pair-profiles/{profile}`
@@ -183,7 +180,6 @@ The following method/path patterns are extracted from production HTTP registrati
 - `POST /api/v1/approvals/{id}`
 - `POST /api/v1/attachments`
 - `POST /api/v1/diagnostics`
-- `POST /api/v1/import`
 - `POST /api/v1/maintenance/room-deletions/retry`
 - `POST /api/v1/messages`
 - `POST /api/v1/messages/{id}/cancel`
@@ -196,7 +192,6 @@ The following method/path patterns are extracted from production HTTP registrati
 - `POST /api/v1/rooms/batch-delete`
 - `POST /api/v1/rooms/{room}/activate`
 - `POST /api/v1/rooms/{room}/archive`
-- `POST /api/v1/rooms/{room}/bindings`
 - `POST /api/v1/rooms/{room}/open-browser`
 - `POST /api/v1/rooms/{room}/restore`
 - `POST /api/v1/rooms/{room}/suspend`
@@ -204,8 +199,6 @@ The following method/path patterns are extracted from production HTTP registrati
 - `PUT /api/v1/agent-pair-profiles/{profile}`
 - `PUT /api/v1/participants/{actor}/permissions`
 - `PUT /api/v1/settings`
-
-</details>
 <!-- /generated:routes -->
 
 ## Client compatibility principles
@@ -218,9 +211,9 @@ The following method/path patterns are extracted from production HTTP registrati
 
 ## Explicit Service diagnostics
 
-`POST /api/v1/diagnostics` is protected by the existing Management authentication, same-origin, and browser CSRF checks. There is no GET-triggered probe. An environment request is `{"mode":"environment"}`; an actual model check requires `{"mode":"runtime","actor":"codex","confirm":true}`. `actor` is the stable slot (`claude` or `codex`), not a Runtime kind. Both modes optionally accept `room_id`; otherwise the saved default Agent pair profile or Service defaults are used. A Room's stored selections never follow later default changes. Legacy Rooms without explicit selections cannot be live-tested through this endpoint.
+`POST /api/v1/diagnostics` is protected by the existing Management authentication, same-origin, and browser CSRF checks. There is no GET-triggered probe. An environment request is `{"mode":"environment"}`; an actual model check requires `{"mode":"runtime","actor":"codex","confirm":true}`. `actor` is the stable slot (`claude` or `codex`), not a Runtime kind. Both modes optionally accept `room_id`; otherwise the saved default Agent pair profile or Service defaults are used. A Room's stored selections never follow later default changes. Invalid Room selections are rejected rather than replaced with Service defaults.
 
-Only those fields are accepted: clients cannot submit executable paths, environment, credentials, session IDs, or replacement selections. Invalid requests return 400; missing Rooms return 404; concurrent diagnostic requests and unsupported legacy live checks return 409. Checks are single-flight per Service, have bounded deadlines/output, and honor request cancellation. A failed check is evidence in an HTTP 200 report, not an HTTP transport failure. Responses use `Cache-Control: no-store`.
+Only those fields are accepted: clients cannot submit executable paths, environment, credentials, session IDs, or replacement selections. Invalid requests return 400; missing Rooms return 404; concurrent diagnostic requests and invalid Room selections return 409. Checks are single-flight per Service, have bounded deadlines/output, and honor request cancellation. A failed check is evidence in an HTTP 200 report, not an HTTP transport failure. Responses use `Cache-Control: no-store`.
 
 The response is `{schema:1, version, platform, generated_at, mode, scope, checks:[...]}`. Scope is `service_defaults`, `default_profile`, or `room`; no identity/path is exported. Checks contain `id`, `status` (`pass`, `warn`, `fail`, or `skipped`), a fixed `code`, `duration_ms`, and optional Runtime/slot/numeric version. Installation, native startup, and matching completed model response are distinct evidence. Unselected missing CLIs warn; Mock and untested model responses remain skipped. Cleanup warnings do not invalidate a received response, but must be resolved before repeatedly starting new checks. Raw errors and process/model output are never part of this report.
 

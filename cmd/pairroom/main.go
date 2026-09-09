@@ -32,7 +32,6 @@ import (
 	"github.com/sean2077/pairroom/internal/service"
 	"github.com/sean2077/pairroom/internal/store"
 	"github.com/sean2077/pairroom/internal/version"
-	"github.com/sean2077/pairroom/internal/workspace"
 )
 
 func main() {
@@ -185,7 +184,6 @@ func slotAgentConfig(actor model.ActorID, slot config.Agent, runtimes config.Run
 		ApprovalPolicy:         selection.ApprovalPolicy,
 		Sandbox:                selection.Sandbox,
 		AdditionalInstructions: selection.Instructions,
-		OrdinaryReviewerPolicy: selection.OrdinaryReviewerPolicy,
 	}
 }
 
@@ -227,7 +225,6 @@ func configuredAgentResolver(fileCfg config.File, mock bool) (*service.AgentReso
 
 // runService starts the process-wide Management Shell. Room runtimes are
 // activated lazily and remain isolated behind their own loopback listeners.
-// The legacy single-Room `serve` command is deliberately preserved below.
 func runService(args []string) (resultErr error) {
 	configPath := preparseValue(args, "--config")
 	fileCfg, err := config.Load(configPath)
@@ -507,11 +504,6 @@ func runServe(args []string) error {
 		_ = eventStore.Close()
 		return err
 	}
-	workspaceManager, err := workspace.New(repo, dataDir)
-	if err != nil {
-		_ = eventStore.Close()
-		return err
-	}
 	fileCfg.Runtimes.Claude.Command = *claudeCommand
 	fileCfg.Runtimes.Codex.Command = *codexCommand
 	fileCfg.Runtimes.Grok.Command = *grokCommand
@@ -551,7 +543,6 @@ func runServe(args []string) error {
 		ClaudeConfig:  claudeCfg,
 		CodexConfig:   codexCfg,
 		Attachments:   attachmentStore,
-		Workspaces:    workspaceManager,
 		AutoStart:     *autoStartFlag,
 	})
 	if err != nil {
@@ -1050,7 +1041,7 @@ func printHelp() {
 Usage:
   pairroom daemon <command>      Install and manage pairroom service in the OS service manager
   pairroom service [options]     Start the multi-Project, multi-Room Management Shell
-  pairroom serve [options]       Start the legacy single-Room daemon and Room View
+  pairroom serve [options]       Start a standalone Room and Room View
   pairroom doctor [options]      Verify Git and vendor CLI installations
   pairroom providers [options]   Inspect the read-only sanitized CC Switch Profile catalog
   pairroom verify [options]      Strictly verify room data integrity
@@ -1068,6 +1059,6 @@ Quick start:
 
 Run "pairroom service -help" for service-capacity and runtime options.
 Run "pairroom daemon -help" for background service management.
-Run "pairroom serve -help" for legacy single-Room options.
+Run "pairroom serve -help" for standalone Room options.
 `)
 }

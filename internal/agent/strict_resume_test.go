@@ -41,18 +41,18 @@ func runClaudeStrictResumeHelper(args []string) int {
 	return 97
 }
 
-func TestClaudeStrictResumeRejectsCLIWithoutResumeSupport(t *testing.T) {
+func TestClaudeResumeRejectsCLIWithoutResumeSupport(t *testing.T) {
 	t.Setenv("PAIRROOM_CLAUDE_HELPER", "1")
-	adapter := NewClaude(Config{
-		Command: os.Args[0], Repo: t.TempDir(), DataDir: t.TempDir(),
-		SessionID: "claude-required", RequireExactSession: true,
-	}, func(model.RuntimeEvent) {})
-	err := adapter.Start(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "cannot resume required session") {
-		t.Fatalf("strict Claude resume error=%v", err)
-	}
-	if adapter.SessionID() != "claude-required" {
-		t.Fatalf("strict resume replaced durable ID with %q", adapter.SessionID())
+	for _, exact := range []bool{false, true} {
+		adapter := NewClaude(Config{Command: os.Args[0], Repo: t.TempDir(), DataDir: t.TempDir(),
+			SessionID: "claude-required", RequireExactSession: exact}, func(model.RuntimeEvent) {})
+		err := adapter.Start(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "cannot resume required session") {
+			t.Fatalf("exact=%v resume error=%v", exact, err)
+		}
+		if adapter.SessionID() != "claude-required" {
+			t.Fatalf("resume replaced durable ID with %q", adapter.SessionID())
+		}
 	}
 }
 
@@ -74,9 +74,9 @@ func TestClaudeStrictResumeDoesNotRequestHistoricalUserReplay(t *testing.T) {
 			t.Fatalf("strict resume unexpectedly removed %s: %v", expected, strict)
 		}
 	}
-	legacy := appendClaudeStreamFlags([]string{"-p"}, flags, false)
-	if !containsString(legacy, "--replay-user-messages") {
-		t.Fatalf("legacy single-Room behavior no longer enables supported replay: %v", legacy)
+	standalone := appendClaudeStreamFlags([]string{"-p"}, flags, false)
+	if !containsString(standalone, "--replay-user-messages") {
+		t.Fatalf("standalone stream omitted supported user replay: %v", standalone)
 	}
 }
 
@@ -107,34 +107,28 @@ func TestClaudeStrictResumeRejectsPreBindingApprovalRequest(t *testing.T) {
 	}
 }
 
-func TestCodexStrictResumeRejectsMissingThread(t *testing.T) {
+func TestCodexResumeNeverReplacesRequiredThread(t *testing.T) {
 	t.Setenv("PAIRROOM_CODEX_HELPER", "1")
-	t.Setenv("PAIRROOM_CODEX_HELPER_MODE", "resume-error")
-	adapter := NewCodex(Config{
-		Command: os.Args[0], Repo: t.TempDir(), SessionID: "thread-required", RequireExactSession: true,
-	}, func(model.RuntimeEvent) {})
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	err := adapter.Start(ctx)
-	if err == nil || !strings.Contains(err.Error(), `resume required Codex thread "thread-required"`) {
-		t.Fatalf("strict Codex resume error=%v", err)
-	}
-	if adapter.SessionID() != "thread-required" {
-		t.Fatalf("strict resume replaced durable thread with %q", adapter.SessionID())
-	}
-}
-
-func TestCodexStrictResumeRejectsMismatchedThread(t *testing.T) {
-	t.Setenv("PAIRROOM_CODEX_HELPER", "1")
-	t.Setenv("PAIRROOM_CODEX_HELPER_MODE", "resume-mismatch")
-	adapter := NewCodex(Config{
-		Command: os.Args[0], Repo: t.TempDir(), SessionID: "thread-required", RequireExactSession: true,
-	}, func(model.RuntimeEvent) {})
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	err := adapter.Start(ctx)
-	if err == nil || !strings.Contains(err.Error(), `instead of required thread "thread-required"`) {
-		t.Fatalf("strict Codex mismatch error=%v", err)
+	for _, mode := range []string{"resume-error", "resume-mismatch"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("PAIRROOM_CODEX_HELPER_MODE", mode)
+			for _, exact := range []bool{false, true} {
+				adapter := NewCodex(Config{Command: os.Args[0], Repo: t.TempDir(), SessionID: "thread-required", RequireExactSession: exact}, func(model.RuntimeEvent) {})
+				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+				err := adapter.Start(ctx)
+				cancel()
+				want := "resume required Codex thread"
+				if mode == "resume-mismatch" {
+					want = "instead of required thread"
+				}
+				if err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("exact=%v resume error=%v", exact, err)
+				}
+				if adapter.SessionID() != "thread-required" {
+					t.Fatalf("resume replaced durable thread with %q", adapter.SessionID())
+				}
+			}
+		})
 	}
 }
 

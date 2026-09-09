@@ -13,16 +13,16 @@ func TestProtocolVersionMatchesMentionRelayContract(t *testing.T) {
 	}
 }
 
-func TestResolveFiltersRoleAndContainsMentionRules(t *testing.T) {
-	contract, err := Resolve(Selection{Actor: model.ActorCodex, Role: model.RoleReviewer})
+func TestResolveContainsCurrentCollaborationAndMentionRules(t *testing.T) {
+	contract, err := Resolve(Selection{Actor: model.ActorCodex})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := contract.Text()
 	for _, fragment := range []string{
-		Version, "actor: codex", "role: reviewer", "[authority.human]",
+		Version, "actor: codex", "[authority.human]",
 		"[delivery.single-turn]", "[delivery.peer]", "[delivery.stop]",
-		"[delivery.human]", "[role.reviewer]", "exact peer_handle", "Agent handle wins",
+		"[delivery.human]", "[collaboration.creation]", "exact peer_handle", "Agent handle wins",
 	} {
 		if !strings.Contains(got, fragment) {
 			t.Fatalf("contract missing %q:\n%s", fragment, got)
@@ -60,7 +60,6 @@ func TestResolveWithoutFiltersIsCompleteAndDeterministic(t *testing.T) {
 func TestResolveRejectsInvalidSelection(t *testing.T) {
 	for _, selection := range []Selection{
 		{Actor: model.ActorID("other")},
-		{Role: model.ParticipantRole("observer")},
 	} {
 		if _, err := Resolve(selection); err == nil {
 			t.Fatalf("Resolve(%+v) succeeded", selection)

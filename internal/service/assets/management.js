@@ -40,8 +40,6 @@
     projectFilters: new Map(),
     archivedOpen: new Set(),
     dragTabID: '',
-    projectMode: 'register',
-    bindingRoomID: '',
     roomDialogRevision: 0,
     pairProfileMode: false,
     pairProfileReady: false,
@@ -67,7 +65,6 @@
     showRawSnapshot: false,
     filters: {
       projectAvailability: 'all',
-      showArchived: false,
       runtimePhase: 'all',
     },
     preferences: {
@@ -509,7 +506,7 @@
         return;
       }
       const runtime = getRuntime(state.route.roomID);
-      if (room && !roomHasBlockingPendingBindings(room) && runtime.phase === 'suspended') {
+      if (room && runtime.phase === 'suspended') {
         activateRoomRuntime(state.route.roomID);
       } else {
         syncRoomStage();
@@ -856,7 +853,7 @@
       : t("ui.explicitlyRegisterTheCanonicalGitWorktreeAndThenCreateIsolatedAgentRooms");
 
     const heroActions = [
-      actionButton(t("ui.registerProject"), () => openProjectDialog('register'), 'primary-button'),
+      actionButton(t("ui.registerProject"), () => openProjectDialog(), 'primary-button'),
     ];
     if (activeProjects.length) heroActions.push(actionButton(t("ui.createRoom"), () => openRoomDialog(activeProjects[0].id), 'secondary-button'));
 
@@ -895,7 +892,7 @@
         ),
         panel(t('common.projects'), t("ui.overviewOfRecentlyRegisteredWorkspacesAndRooms"),
           projects.length ? node('div', { className: 'list' }, ...projects.slice(0, 6).map(renderProjectOverviewItem))
-            : emptyState('⌂', t("ui.notYetRegisteredProject"), t("ui.onlyAbsolutePathsEnteredExplicitlyByTheUserAreAcceptedAndDevelopment"), true, actionButton(t("ui.registerYourFirstProject"), () => openProjectDialog('register'), 'primary-button compact-button')),
+            : emptyState('⌂', t("ui.notYetRegisteredProject"), t("ui.onlyAbsolutePathsEnteredExplicitlyByTheUserAreAcceptedAndDevelopment"), true, actionButton(t("ui.registerYourFirstProject"), () => openProjectDialog(), 'primary-button compact-button')),
           projects.length > 6 ? t("ui.viewAllWorkspacesOnTheProjectsPage") : '',
           projects.length > 6 ? actionButton(t("ui.viewAll"), () => navigate('#/projects'), 'text-button') : null
         ),
@@ -921,8 +918,7 @@
         node('section', { className: 'section-header' },
           node('div', {}, node('h2', { textContent: t("ui.workspaceManagement") }), node('p', { textContent: t("ui.aProjectCorrespondsToACanonicalGitWorktreeEachProjectCanHave") })),
           node('div', { className: 'section-actions' },
-            actionButton(t("ui.importLegacyRoom"), () => openProjectDialog('import'), 'secondary-button'),
-            actionButton(t("ui.registerProject"), () => openProjectDialog('register'), 'primary-button')
+            actionButton(t("ui.registerProject"), () => openProjectDialog(), 'primary-button')
           )
         ),
         node('section', { className: 'panel panel-body toolbar' },
@@ -942,7 +938,7 @@
           ? node('section', { className: 'project-grid' }, ...projectModels.map(renderProjectCard))
           : emptyState('⌕', t("ui.noMatchingProject"), state.search ? t("ui.adjustYourSearchTermsOrFilters") : t("ui.registerAGitWorktreeToGetStarted"), false,
             state.search ? actionButton(t("ui.clearFilters"), () => { state.search = ''; $('global-search').value = ''; state.filters.projectAvailability = 'all'; renderProjects(); }, 'secondary-button')
-              : actionButton(t("ui.registerProject9c99cf3"), () => openProjectDialog('register'), 'primary-button')),
+              : actionButton(t("ui.registerProject9c99cf3"), () => openProjectDialog(), 'primary-button')),
         node('aside', { className: 'callout neutral' },
           node('strong', { textContent: t('room.projectIdentity') }),
           node('span', { textContent: t("ui.theServiceResolvesSymbolicLinksAndPerformsGitWorktreeRootNormalizationEquivalent") })
@@ -1000,7 +996,7 @@
     if (!filter) { filter = { search: '', showArchived: false, phase: 'all' }; state.projectFilters.set(projectID, filter); }
     const visibleRooms = rooms.filter((room) => (filter.showArchived || room.lifecycle !== 'archived')
       && (!filter.search || `${room.name} ${room.id}`.toLocaleLowerCase().includes(filter.search.toLocaleLowerCase()))
-      && (filter.phase === 'all' || (filter.phase === 'attention' ? (runtimeByRoom.get(room.id)?.phase === 'failed' || roomHasBlockingPendingBindings(room)) : runtimeByRoom.get(room.id)?.busy)));
+      && (filter.phase === 'all' || (filter.phase === 'attention' ? (runtimeByRoom.get(room.id)?.phase === 'failed') : runtimeByRoom.get(room.id)?.busy)));
     // Provider display names come from the Agent catalog, which the Room dialog
     // otherwise loads on demand. A direct navigation to a Project has not loaded
     // it, so request it once and re-render only while this Project is still the
@@ -1094,20 +1090,17 @@
           )
           : null
         ),
-        node('aside', { className: 'callout boundary' }, node('strong', { textContent: t('room.workspaceBoundary') }), node('span', { textContent: t("ui.roomPermanentlyBelongsToThisProjectReviewerSnapshotAndGitStatusAre") }))
+        node('aside', { className: 'callout boundary' }, node('strong', { textContent: t('room.workspaceBoundary') }), node('span', { textContent: t("room.liveWorkspaceBoundary") }))
       )
     );
   }
 
   function renderRoomRow(room, runtime = suspendedRuntime(room.id)) {
-    const pending = roomHasBlockingPendingBindings(room);
     const archived = room.lifecycle === 'archived';
     const title = node('div', { className: 'room-title-line' },
       node('strong', { textContent: room.name }),
       archived ? statusBadge('archived', 'warn') : null,
 	  !archived ? statusBadge(runtimeLabel(runtime), runtimeTone(runtime), runtime.busy ? 'busy' : '') : null,
-	  room.legacy ? statusBadge('legacy', 'info') : null,
-	  room.legacy_defaults ? statusBadge(t('room.legacyDefaults'), 'info') : null
 	);
     // Three aligned groups: the two durable Agent slots and the Room identity.
     // The native session name is not rendered here because it repeats the Room
@@ -1146,9 +1139,8 @@
         actions.append(actionButton(t("ui.permanentlyDelete"), () => confirmRoomRemoval([room]), 'danger-button outline compact-button room-action-control'));
       }
     } else {
-      if (pending) actions.append(actionButton(t("ui.completeBindings"), () => completeBindings(room), 'primary-button compact-button room-action-control'));
-      actions.append(actionButton(runtime.phase === 'queued' ? t("ui.queuedValue", { value0: (runtime.queue_position || '?') }) : t("ui.open"), () => openRoom(room.id), 'primary-button compact-button room-action-control', pending));
-      actions.append(actionButton(t("ui.browserOpens"), () => openRoomInBrowserAction(room.id), 'secondary-button compact-button room-action-control', pending));
+      actions.append(actionButton(runtime.phase === 'queued' ? t("ui.queuedValue", { value0: (runtime.queue_position || '?') }) : t("ui.open"), () => openRoom(room.id), 'primary-button compact-button room-action-control'));
+      actions.append(actionButton(t("ui.browserOpens"), () => openRoomInBrowserAction(room.id), 'secondary-button compact-button room-action-control'));
       actions.append(actionButton(t("ui.rename"), () => openRenameDialog(room), 'secondary-button compact-button room-action-control'));
       actions.append(actionButton(t("ui.archive"), () => archiveRoom(room), 'danger-button outline compact-button room-action-control'));
     }
@@ -1156,8 +1148,7 @@
   }
 
   // One aligned column per durable Agent slot: runtime display name, binding
-  // state, model, and Provider display name. A legacy Room has no immutable
-  // selection and says so instead of implying one.
+  // state, model, and Provider display name.
   function roomAgentGroup(actor, room) {
     const selection = room.agents?.[actor];
     const binding = room.bindings?.[actor];
@@ -1170,7 +1161,7 @@
     return node('div', { className: 'room-meta-group', 'data-slot': actor, title },
       node('span', { className: 'room-meta-label', textContent: actor === 'claude' ? t('agent.agent1') : t('agent.agent2') }),
       node('div', { className: 'room-meta-lines' },
-        node('span', { className: 'room-meta-line', textContent: selection ? runtimeDisplayName(selection.runtime) : t('room.legacyDefaults') }),
+        node('span', { className: 'room-meta-line', textContent: runtimeDisplayName(selection?.runtime) }),
         node('span', { className: `badge plain binding-chip ${bindingTone(binding)}`.trim(), textContent: bindingText(binding) }),
         selection ? node('span', { className: 'room-meta-line', textContent: selection.model || t('room.nativeDefault'), title: t('agent.model') }) : null,
         selection ? node('span', { className: 'room-meta-line', textContent: providerDisplayName(selection.provider), title: providerTooltip(selection.provider) }) : null,
@@ -1258,7 +1249,7 @@
           cleanupUncertain ? t("ui.requiresControlledRestart") : (runtime.phase === 'active' ? t("ui.open") : t("ui.activate")),
           () => openRoom(room.id),
           'secondary-button compact-button',
-          roomHasBlockingPendingBindings(room) || cleanupUncertain,
+          cleanupUncertain,
         ));
       }
       if (['active', 'queued', 'starting'].includes(runtime.phase)) {
@@ -1412,7 +1403,6 @@
       return node('div', { className: 'view-stack' },
         settingsPanel(t('room.controlPlaneCapabilities'), t("ui.theInterfaceOnlyPresentsControlCapabilitiesThatAreExplicitlySupportedByThe"),
           capabilityRow(t("ui.registerCanonicalProject"), true, t("ui.explicitAbsolutePathServerSideDirectoryBrowsingIsNotProvided")),
-          capabilityRow(t("ui.importLegacyRoom"), caps.legacy_import !== false, t("ui.nonDestructiveRegistrationDoesNotMoveOrRewriteEventsJsonl")),
           capabilityRow(t("ui.manuallySuspendIdleRuntime"), caps.runtime_suspend === true, t("ui.busyRuntimeWillRejectTheOperation")),
           capabilityRow(t("ui.hotUpdateRuntimeCapacity"), caps.runtime_policy_mutation === true, t("ui.theMaximumNumberOfSimultaneousActiveRoomRuntimesCanBeAdjustedIn")),
           capabilityRow(t("ui.inAppRoomSurface"), caps.room_surface === true, t("ui.theManagementSameOriginGatewayCarriesInApplicationTagsAndDoesNot")),
@@ -1436,8 +1426,7 @@
       settingsPanel(t("ui.refreshAndNavigation"), t("ui.controlsHowTheCurrentPagePollsTheServiceSidebarClickToAlways"),
         settingRow(t("ui.autoRefresh"), t("ui.automaticallyPausesWhenThePageIsHiddenAndSyncsImmediatelyWhenIt"), selectControl([
           ['0', t("ui.off")], ['5000', t("ui.5Seconds")], ['10000', t("ui.10Seconds")], ['30000', t("ui.30Seconds")], ['60000', t("ui.60Seconds")],
-        ], String(state.preferences.refreshMs), (value) => { state.preferences.refreshMs = Number(value); scheduleRefresh(); }, t("ui.autoRefreshInterval"))),
-        settingRow(t("ui.archivedByDefault"), t("ui.affectsProjectsAndProjectDetailsLists"), toggleButton(state.filters.showArchived, (value) => { state.filters.showArchived = value; }, t("ui.toggleArchiveVisibility")))
+        ], String(state.preferences.refreshMs), (value) => { state.preferences.refreshMs = Number(value); scheduleRefresh(); }, t("ui.autoRefreshInterval")))
       ),
       node('aside', { className: 'callout neutral' }, node('strong', { textContent: t("ui.noImplicitPersistence") }), node('span', { textContent: t("ui.theseInterfaceOptionsDoNotWriteToTheServiceRegistryAndDo") }))
     );
@@ -1520,12 +1509,6 @@
     (snapshot.projects || []).forEach((project) => {
       if (!project.available) items.push({ kind: 'project', title: projectName(project), detail: project.diagnostic || t("ui.projectRootIsInaccessible"), symbol: '!', tone: 'danger', action: () => navigate(`#/projects/${encodeURIComponent(project.id)}`) });
     });
-    (snapshot.rooms || []).forEach((room) => {
-      if (roomHasBlockingPendingBindings(room)) {
-        const project = projectForRoom(snapshot, room);
-        items.push({ kind: 'binding', title: room.name, detail: t("ui.valueLegacyBindingIncomplete", { value0: (projectName(project)) }), symbol: 'B', tone: 'warn', action: () => completeBindings(room) });
-      }
-    });
     runtimeModels(snapshot).forEach(({ room, runtime }) => {
       if (runtime.phase === 'failed') items.push({ kind: 'runtime', title: room.name, detail: runtime.last_error || t("ui.runtimeFailedToStartOrShutDown"), symbol: 'R', tone: 'danger', action: () => navigate('#/runtimes') });
     });
@@ -1558,7 +1541,7 @@
   function renderLiveItem({ room, project, runtime }) {
     return node('article', { className: 'list-item' },
       node('div', { className: 'list-main' }, node('div', { className: `item-symbol ${runtime.busy ? 'warn' : 'accent'}`, textContent: runtime.busy ? '●' : '◎' }), node('div', { className: 'list-copy' }, node('strong', { textContent: room.name }), node('p', { textContent: projectName(project) }))),
-      node('div', { className: 'list-meta' }, statusBadge(runtimeLabel(runtime), runtimeTone(runtime), runtime.busy ? 'busy' : ''), actionButton(t("ui.open"), () => openRoom(room.id), 'secondary-button compact-button', roomHasBlockingPendingBindings(room)))
+      node('div', { className: 'list-meta' }, statusBadge(runtimeLabel(runtime), runtimeTone(runtime), runtime.busy ? 'busy' : ''), actionButton(t("ui.open"), () => openRoom(room.id), 'secondary-button compact-button'))
     );
   }
 
@@ -1630,7 +1613,6 @@
     summary.rooms = (snapshot.rooms || []).length;
     summary.active_rooms = (snapshot.rooms || []).filter((room) => room.lifecycle !== 'archived').length;
     summary.archived_rooms = summary.rooms - summary.active_rooms;
-    summary.pending_bindings = (snapshot.rooms || []).filter(roomHasBlockingPendingBindings).length;
     summary.pending_room_cleanup = Number(snapshot.maintenance?.pending_cleanup || 0);
     (snapshot.runtimes || []).forEach((runtime) => {
       if (runtime.occupies_capacity || ['active', 'starting', 'stopping'].includes(runtime.phase)) summary.runtime_capacity_used++;
@@ -1640,11 +1622,11 @@
       if (runtime.phase === 'failed') summary.failed_runtimes++;
     });
     const diagnosticOnlyCleanup = summary.pending_room_cleanup === 0 && Boolean(snapshot.maintenance?.diagnostic) ? 1 : 0;
-    summary.attention_items = summary.unavailable_projects + summary.pending_bindings + summary.failed_runtimes + summary.pending_room_cleanup + diagnosticOnlyCleanup;
+    summary.attention_items = summary.unavailable_projects + summary.failed_runtimes + summary.pending_room_cleanup + diagnosticOnlyCleanup;
     return summary;
   }
   function emptySummary() {
-    return { projects: 0, unavailable_projects: 0, rooms: 0, active_rooms: 0, archived_rooms: 0, pending_bindings: 0, pending_room_cleanup: 0, runtime_capacity_used: 0, active_runtimes: 0, busy_runtimes: 0, queued_runtimes: 0, failed_runtimes: 0, attention_items: 0 };
+    return { projects: 0, unavailable_projects: 0, rooms: 0, active_rooms: 0, archived_rooms: 0, pending_room_cleanup: 0, runtime_capacity_used: 0, active_runtimes: 0, busy_runtimes: 0, queued_runtimes: 0, failed_runtimes: 0, attention_items: 0 };
   }
 
   function runtimePolicy(snapshot) {
@@ -1680,17 +1662,9 @@
     return (chunks.length > 1 ? `${chunks[0][0]}${chunks[1][0]}` : name.slice(0, 2)).toUpperCase();
   }
 
-  function roomHasBlockingPendingBindings(room) {
-    return ['claude', 'codex'].some((actor) => {
-      const binding = room.bindings?.[actor];
-      return !binding || (binding.pending && binding.mode !== 'new');
-    });
-  }
-
   function bindingText(binding) {
     if (!binding) return t('common.missing');
     if (binding.pending && binding.mode === 'new') return `${t('common.new')} · ${t(NEW_BINDING_HINT_KEY)}`;
-    if (binding.pending) return t('room.pendingLegacyBinding');
     const id = String(binding.session_id || '');
     const compact = id.length > 24 ? `${id.slice(0, 10)}…${id.slice(-8)}` : id;
 	const mode = binding.mode === 'new' ? t('common.new') : binding.mode === 'existing' ? t('common.existing') : (binding.mode || t('common.existing'));
@@ -1711,30 +1685,11 @@
     return '';
   }
 
-  function openProjectDialog(mode = 'register') {
-    setProjectMode(mode);
+  function openProjectDialog() {
     $('project-path').value = '';
     hideFormError('project-form-error');
     showDialog('project-dialog');
     queueMicrotask(() => $('project-path').focus());
-  }
-
-  function setProjectMode(mode) {
-    state.projectMode = mode;
-    const importing = mode === 'import';
-    $('project-mode-register').setAttribute('aria-selected', String(!importing));
-    $('project-mode-import').setAttribute('aria-selected', String(importing));
-    setRenderedText('project-dialog-title', importing ? t("ui.importLegacyRoom") : t("ui.registerProject9c99cf3"));
-    setRenderedText('project-dialog-subtitle', importing ? t("ui.explicitlyRegisterCustomOldDataDir") : t("ui.addACanonicalGitWorktree"));
-    $('project-path').placeholder = importing ? '/absolute/path/to/legacy/room-data' : '/absolute/path/to/git/worktree';
-    setRenderedText('project-submit', importing ? t("ui.importLegacyRoom") : t("ui.registerProject9c99cf3"));
-    const help = $('project-mode-help');
-    help.replaceChildren(
-      node('strong', { textContent: importing ? t("ui.nonDestructiveImport") : t("ui.explicitPathBoundary") }),
-      node('span', { textContent: importing
-        ? t("ui.eventsJsonlWillNotBeMovedCopiedOrRewrittenItWillAlso")
-        : t("ui.onlyAbsolutePathsAreAcceptedRootPathsSubdirectoriesAndSymlinksResolveTo") })
-    );
   }
 
   async function submitProject(event) {
@@ -1748,13 +1703,11 @@
     await withBusy(button, async () => {
       try {
         hideFormError('project-form-error');
-        const result = state.projectMode === 'import'
-          ? await api('/api/v1/import', { method: 'POST', body: JSON.stringify({ path }) })
-          : await api('/api/v1/projects', { method: 'POST', body: JSON.stringify({ path }) });
+        const result = await api('/api/v1/projects', { method: 'POST', body: JSON.stringify({ path }) });
         closeDialog('project-dialog');
-        toast(state.projectMode === 'import' ? t("ui.legacyRoomHasBeenImported") : t("ui.projectRegistered"), state.projectMode === 'import' ? t("ui.theOldDataRemainsInPlaceAndHasNotBeenOverwritten") : t("ui.canonicalWorktreeHasJoinedTheServiceRegistry"), 'success');
+        toast(t("ui.projectRegistered"), t("ui.canonicalWorktreeHasJoinedTheServiceRegistry"), 'success');
         await refresh({ forceRender: true, fresh: true });
-        const projectID = state.projectMode === 'import' ? result.project_id : result.id;
+        const projectID = result.id;
         if (projectID) navigate(`#/projects/${encodeURIComponent(projectID)}`);
       } catch (error) {
         showFormError('project-form-error', error.message);
@@ -2306,68 +2259,12 @@
     });
   }
 
-  function completeBindings(room) {
-    state.bindingRoomID = room.id;
-    const container = $('binding-fields');
-    container.replaceChildren();
-    for (const actor of ['claude', 'codex']) {
-      const binding = room.bindings?.[actor];
-      if (binding && (!binding.pending || binding.mode === 'new')) continue;
-	  const label = actor === 'claude' ? t('room.claudeSession') : t('room.codexThread');
-      const field = node('fieldset', { className: 'binding-card', 'data-complete-actor': actor },
-        node('legend', {}, node('span', { className: `agent-avatar ${actor}`, textContent: actor === 'claude' ? '1' : '2' }), node('span', {}, node('strong', { textContent: label }), node('small', { textContent: t('room.missingBinding') }))),
-        node('label', { className: 'choice-card' }, node('input', { type: 'radio', name: `complete-${actor}-mode`, value: 'new', checked: true }), node('span', {}, node('strong', { textContent: t("ui.createValue", { value0: (label) }) }), node('small', { textContent: t("ui.identityIsSolidifiedOnTheFirstRealTurn") }))),
-        node('label', { className: 'choice-card' }, node('input', { type: 'radio', name: `complete-${actor}-mode`, value: 'existing' }), node('span', {}, node('strong', { textContent: t("ui.reuseExisting") }), node('small', { textContent: t("ui.mustNotBeOccupiedByOtherRooms") }))),
-        node('label', { className: 'session-field' }, node('span', { textContent: `${label} ID` }), node('input', { id: `complete-${actor}-session`, type: 'text', placeholder: t("ui.pasteValueId", { value0: (label) }), autocomplete: 'off', disabled: true }))
-      );
-      field.querySelectorAll('input[type="radio"]').forEach((radio) => radio.addEventListener('change', () => {
-        const existing = field.querySelector('input[type="radio"][value="existing"]').checked;
-        const input = field.querySelector('input[type="text"]');
-        input.disabled = !existing;
-        input.required = existing;
-        if (!existing) input.value = '';
-      }));
-      container.append(field);
-    }
-    container.append(node('div', { className: 'callout boundary' }, node('strong', { textContent: t('room.atomicCompletion') }), node('span', { textContent: t("ui.whenAnyExistingIdIsInvalidUnrecoverableOrAlreadyOccupiedTheEntire") })));
-    hideFormError('binding-form-error');
-    showDialog('binding-dialog');
-  }
-
-  async function submitBindingCompletion(event) {
-    event.preventDefault();
-    const bindings = {};
-    for (const actor of ['claude', 'codex']) {
-      const modeNode = document.querySelector(`input[name="complete-${actor}-mode"]:checked`);
-      if (!modeNode) continue;
-      const mode = modeNode.value;
-      const input = $(`complete-${actor}-session`);
-      const sessionID = input?.value.trim() || '';
-      if (mode === 'existing' && !sessionID) {
-        showFormError('binding-form-error', t("ui.valueIdIsRequired", { value0: (actor === 'claude' ? t('room.claudeSession') : t('room.codexThread')) }));
-        return;
-      }
-      bindings[actor] = mode === 'existing' ? { mode, session_id: sessionID } : { mode };
-    }
-    const button = event.submitter || event.currentTarget.querySelector('[type="submit"]');
-    await withBusy(button, async () => {
-      try {
-        await api(`/api/v1/rooms/${encodeURIComponent(state.bindingRoomID)}/bindings`, { method: 'POST', body: JSON.stringify({ bindings }) });
-        closeDialog('binding-dialog');
-        toast(t("ui.bindingsCompleted"), t("ui.legacyRoomIsNowSafeToActivate"), 'success');
-        await refresh({ forceRender: true, fresh: true });
-      } catch (error) {
-        showFormError('binding-form-error', error.message);
-      }
-    });
-  }
-
   function archiveRoom(room) {
     openConfirm({
       eyebrow: t('room.archiveRoomUpper'),
       title: t("ui.archiveValue", { value0: (room.name) }),
       message: t("ui.theActiveTurnStopsFirstThenTheRuntimeIsSuspendedAndThe"),
-      detail: t("ui.eventLogAttachmentsRolesDraftsUnreadStatusAndBindingIdentityOnBoth"),
+      detail: t("room.archivePreservesState"),
       label: t("ui.archiveRoom"),
       tone: 'danger',
       action: async () => {
@@ -2404,9 +2301,6 @@
   }
   function eligibleArchivedRooms(candidates = state.snapshot?.rooms || []) {
     return uniqueRooms(candidates).filter((room) => room.lifecycle === 'archived');
-  }
-  function visibleRoomsForBatch(candidates = state.snapshot?.rooms || []) {
-    return uniqueRooms(candidates).filter((room) => state.filters.showArchived || room.lifecycle !== 'archived');
   }
   function pruneRoomSelection(snapshot = state.snapshot) {
     const roomIDs = new Set(uniqueRooms(snapshot?.rooms || []).map((room) => room.id));
@@ -2546,7 +2440,11 @@
         const succeeded = results.filter((item) => item.status === 'archived' || item.status === 'already_archived');
         const failed = results.filter((item) => item.status !== 'archived' && item.status !== 'already_archived');
         succeeded.forEach((item) => state.selectedRoomIDs.add(item.room_id));
-        if (succeeded.length) state.filters.showArchived = true;
+        for (const item of succeeded) {
+          const room = rooms.find((candidate) => candidate.id === item.room_id);
+          const filter = state.projectFilters.get(room?.project_id);
+          if (filter) filter.showArchived = true;
+        }
         if (failed.length) {
           const detail = failed.slice(0, 2).map((item) => {
             const room = rooms.find((candidate) => candidate.id === item.room_id);
@@ -2604,7 +2502,6 @@
           }
         });
         const cleanupPending = succeeded.filter((item) => item.removal?.data_disposition === 'cleanup_pending').length;
-        const retainedExternal = succeeded.filter((item) => item.removal?.data_disposition === 'retained_external').length;
         if (failed.length) {
           const detail = failed.slice(0, 2).map((item) => {
             const room = rooms.find((candidate) => candidate.id === item.room_id);
@@ -2618,8 +2515,7 @@
           );
         } else if (cleanupPending) {
           toast(t("ui.roomRemovedPhysicalCleanupNeedsRetry"), t("ui.processedValueValueQuarantinedCleanupItemsCanBeRetriedInSettings", { value0: (succeeded.length), value1: (cleanupPending) }), 'warning');
-        } else if (retainedExternal) {
-          toast(t("ui.roomCleanupComplete"), t("ui.processedValueValueImportedExternalDirectoriesRemainInPlace", { value0: (succeeded.length), value1: (retainedExternal) }), 'success');
+
         } else {
           toast(t("ui.roomPermanentlyDeleted"), t("ui.permanentlyDeletedValueArchivedRooms", { value0: (succeeded.length) }), 'success');
         }
@@ -2674,10 +2570,6 @@
       toast(t("ui.roomArchived"), t("ui.canOnlyBeOpenedAfterRecovery"), 'warning');
       return;
     }
-    if (roomHasBlockingPendingBindings(room)) {
-      completeBindings(room);
-      return;
-    }
     if (!state.tabs.includes(roomID)) state.tabs.push(roomID);
     if (location.hash !== `#/rooms/${encodeURIComponent(roomID)}`) navigate(`#/rooms/${encodeURIComponent(roomID)}`);
     else {
@@ -2692,10 +2584,6 @@
     const room = roomByID(roomID);
     if (!room || room.lifecycle === 'archived') {
       toast(t("ui.couldNotOpenInBrowser"), t("ui.theArchiveRoomDoesNotHaveAnIndependentRuntimeUrlPleaseRestore"), 'warning');
-      return;
-    }
-    if (roomHasBlockingPendingBindings(room)) {
-      completeBindings(room);
       return;
     }
     const generation = state.sessionGeneration;
@@ -2970,7 +2858,7 @@
 
   function localizedStatus(value) {
 	const labels = {
-	  active: t('common.active'), available: t('common.available'), unavailable: t('common.unavailable'), archived: t('ui.archived'), legacy: t('common.legacy'),
+	  active: t('common.active'), available: t('common.available'), unavailable: t('common.unavailable'), archived: t('ui.archived'),
 	  queued: t('ui.queued'), starting: t('common.starting'), stopping: t('common.stopping'), suspended: t('common.suspended'), failed: t('ui.failed'),
 	  full: t('common.full'), supported: t('common.supported'), 'not supported': t('common.notSupported'), healthy: t('common.healthy'), 'fail-closed': t('common.failClosed'),
 	};
@@ -3003,9 +2891,6 @@
     return node('div', { className: 'hero-meta-item' }, node('span', { textContent: label }), node('strong', { textContent: value }));
   }
 
-  function summaryCell(value, label) {
-	return node('div', { className: 'project-summary-item' }, node('strong', { textContent: typeof value === 'number' ? formatNumber(value) : String(value) }), node('span', { textContent: label }));
-  }
 
   function keyValue(label, value, mono = false) {
     const content = value instanceof Node ? value : node(mono ? 'code' : 'strong', { textContent: value || '—' });
@@ -3106,7 +2991,6 @@
       }
     });
   });
-  document.querySelectorAll('[data-project-mode]').forEach((button) => button.addEventListener('click', () => setProjectMode(button.dataset.projectMode)));
   document.querySelectorAll('input[name$="-mode"]').forEach((input) => input.addEventListener('change', syncBindingInputs));
   for (const actor of ['claude', 'codex']) {
     $(`${actor}-runtime`).addEventListener('change', () => {
@@ -3193,14 +3077,13 @@
     if (openedAt && (target.scrollLeft !== openedAt[0] || target.scrollTop !== openedAt[1])) closeRoomContextMenu();
   }, true);
   window.addEventListener('resize', () => closeRoomContextMenu());
-  $('binding-form').addEventListener('submit', submitBindingCompletion);
   $('confirm-form').addEventListener('submit', submitConfirm);
   $('confirm-input').addEventListener('input', syncConfirmRequirement);
   $('confirm-ack').addEventListener('change', syncConfirmRequirement);
   $('refresh-button').addEventListener('click', () => refresh({ notify: true, forceRender: true }));
   $('logout-button').addEventListener('click', logoutBrowserSession);
   $('retry-button').addEventListener('click', () => connect({ notify: true, forceRender: true }));
-  $('add-project-button').addEventListener('click', () => openProjectDialog('register'));
+  $('add-project-button').addEventListener('click', () => openProjectDialog());
   $('global-search').addEventListener('input', (event) => {
     state.search = event.target.value;
     if (state.route.name !== 'projects' && state.search) navigate('#/projects');

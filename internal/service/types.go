@@ -163,18 +163,6 @@ func (r Room) HasPendingBindings() bool {
 	return false
 }
 
-// HasBlockingPendingBindings rejects incomplete selections without blocking
-// new native bindings, whose identities materialize after the first input.
-func (r Room) HasBlockingPendingBindings() bool {
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
-		binding, ok := r.Bindings[actor]
-		if !ok || (binding.Pending && binding.Mode != BindingNew) {
-			return true
-		}
-	}
-	return false
-}
-
 func (r Room) Validate() error {
 	if r.Collaboration == nil {
 		return errors.New("Room collaboration instructions are required")

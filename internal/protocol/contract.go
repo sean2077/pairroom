@@ -13,7 +13,6 @@ const Version = "pairroom-protocol/v6"
 
 type Selection struct {
 	Actor model.ActorID
-	Role  model.ParticipantRole
 }
 
 type Rule struct {
@@ -22,10 +21,9 @@ type Rule struct {
 }
 
 type Contract struct {
-	Version string                `json:"version"`
-	Actor   model.ActorID         `json:"actor,omitempty"`
-	Role    model.ParticipantRole `json:"role,omitempty"`
-	Rules   []Rule                `json:"rules"`
+	Version string        `json:"version"`
+	Actor   model.ActorID `json:"actor,omitempty"`
+	Rules   []Rule        `json:"rules"`
 }
 
 func Bootstrap(actor model.ActorID, selfRuntime, peerRuntime model.RuntimeKind) string {
@@ -64,28 +62,9 @@ func Resolve(selection Selection) (Contract, error) {
 	if selection.Actor != "" && !selection.Actor.ValidParticipant() {
 		return Contract{}, fmt.Errorf("invalid actor %q: use claude or codex", selection.Actor)
 	}
-	if selection.Role != "" && !selection.Role.Valid() {
-		return Contract{}, fmt.Errorf("invalid role %q: use driver, reviewer, or peer", selection.Role)
-	}
-	contract := Contract{Version: Version, Actor: selection.Actor, Role: selection.Role, Rules: append([]Rule(nil), baseRules...)}
-	if selection.Role != "" { // explicit legacy CLI inspection only, not a selectable Room mode
-		contract.Rules = append(contract.Rules, roleRules(selection.Role)...)
-	} else {
-		contract.Rules = append(contract.Rules, Rule{ID: "collaboration.creation", Text: "A Room fixes default (Lead/Executor) or custom natural-language instructions at creation. Responsibility never grants tool permissions."})
-	}
+	contract := Contract{Version: Version, Actor: selection.Actor, Rules: append([]Rule(nil), baseRules...)}
+	contract.Rules = append(contract.Rules, Rule{ID: "collaboration.creation", Text: "A Room fixes default (Lead/Executor) or custom natural-language instructions at creation. Responsibility never grants tool permissions."})
 	return contract, nil
-}
-
-func roleRules(role model.ParticipantRole) []Rule {
-	rules := map[model.ParticipantRole]Rule{
-		model.RoleDriver:   {ID: "role.driver", Text: "As driver, implement and verify within the current native and workspace permissions. Mention the exact peer_handle only when an independent response is still needed."},
-		model.RoleReviewer: {ID: "role.reviewer", Text: "As reviewer, inspect independently and read-only. Report a complete verdict; mention the exact peer_handle only when that Agent must respond."},
-		model.RolePeer:     {ID: "role.peer", Text: "As peer, investigate as an equal technical partner and follow the current native and workspace permissions."},
-	}
-	if role != "" {
-		return []Rule{rules[role]}
-	}
-	return []Rule{rules[model.RoleDriver], rules[model.RoleReviewer], rules[model.RolePeer]}
 }
 
 func (contract Contract) Text() string {
@@ -93,9 +72,6 @@ func (contract Contract) Text() string {
 	fmt.Fprintln(&b, contract.Version)
 	if contract.Actor != "" {
 		fmt.Fprintf(&b, "actor: %s\n", contract.Actor)
-	}
-	if contract.Role != "" {
-		fmt.Fprintf(&b, "role: %s\n", contract.Role)
 	}
 	fmt.Fprintln(&b)
 	for _, rule := range contract.Rules {
@@ -105,17 +81,10 @@ func (contract Contract) Text() string {
 }
 
 // CollaborationInstructions adds the stored human policy once at the native
-// instruction layer. Legacy Rooms retain their previous permission guidance.
-func CollaborationInstructions(actor model.ActorID, c *model.Collaboration, legacy model.ParticipantRole) string {
+// instruction layer. Diagnostic adapters omit collaboration instructions.
+func CollaborationInstructions(actor model.ActorID, c *model.Collaboration) string {
 	if c == nil {
-		if legacy == "" {
-			return ""
-		}
-		rules := roleRules(legacy)
-		if len(rules) == 0 {
-			return ""
-		}
-		return "Legacy Room: " + rules[0].Text
+		return ""
 	}
 	return fmt.Sprintf("Room collaboration (fixed at creation; %s):\n%s\nYour responsibility: %s.", c.Mode, c.Instructions, c.Responsibility(actor))
 }

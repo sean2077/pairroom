@@ -275,8 +275,8 @@ func TestMixedNewAndExistingBindingsRebuildAfterMaterialization(t *testing.T) {
 	if binding := selected.Bindings[model.ActorClaude]; !binding.Pending || binding.Mode != BindingNew || binding.SessionID != "" {
 		t.Fatalf("new choice was not deferred: %#v", binding)
 	}
-	if selected.HasBlockingPendingBindings() {
-		t.Fatalf("deferred-new binding blocks activation: %#v", selected.Bindings)
+	if err := selected.Validate(); err != nil {
+		t.Fatal(err)
 	}
 	appendFact := func(kind string, payload any) error { return appendServiceEvent(selected, kind, payload) }
 	materialized, err := registry.MaterializeBinding(context.Background(), selected.ID, model.ActorClaude, "claude-native", appendFact)

@@ -25,7 +25,6 @@ Room HTTP/SSE surface ---- Room Engine ---- native adapters
 | Configuration and selection | `internal/config/`, `internal/model/`, `internal/ccswitch/` | Strict configuration, durable Agent selection, read-only supported external Provider resolution |
 | Persistence and media | `internal/store/`, `internal/attachment/`, `internal/archive/` | JSONL integrity/replay, verified attachment metadata/bytes, bounded backup/restore |
 | Room API and UI | `internal/server/`, `internal/webui/` | HTTP/SSE, authentication, shared assets and client projections |
-| Workspace boundary | `internal/workspace/` | Live workspace and preserved legacy Reviewer snapshot behavior |
 | Desktop | [desktop module](../desktop/README.md) | Native window/tray/login registration and platform packaging over the same Service |
 
 The root module is Go 1.25 with the pinned CGo-free SQLite closure for CC Switch access. Wails and GUI dependencies stay in the isolated desktop Go module. Desktop is not a second backend or a separate copy of the product UI.
@@ -40,7 +39,7 @@ The Event Log is authoritative for a Room. Registry records/indexes enable Servi
 
 Event sequences begin at 1 and remain contiguous. Room activation/lifecycle operations must validate the existing published Room identity before repair or new writes. A missing or empty log is not a fresh version of that Room. An ambiguous append failure closes the writer rather than continuing with uncertain sequence state. Only an incomplete final record is eligible for tail repair; middle corruption is not skipped.
 
-Current writers use Store schema 10 and modern provisioning schema 3. Schema-9 Rooms and provisioning-1/2 records retain their original policy and identity semantics; they are not relabeled or silently broadened. [Storage](STORAGE.md) owns replay details and [Upgrading](UPGRADING.md) owns compatibility/rollback actions.
+Current readers and writers require Store schema 10 and provisioning schema 3. Old stores, missing collaboration records, and inferred Agent selections are rejected without migration or metadata rewriting. [Storage](STORAGE.md) owns replay details and [Upgrading](UPGRADING.md) owns compatibility/rollback actions.
 
 ## Service, Project, Room, and Binding
 
@@ -96,7 +95,7 @@ A modern permission change requires an idle Room with no waiting work or pending
 
 Native approval requests retain their exact identity, advertised scope/options, and validation rules. Unknown high-privilege requests fail closed. Invalid answers do not consume the pending request. Stop/restart/interrupt and terminal lifecycle changes expire requests that cannot be safely reused; a stale browser response cannot authorize a different native request. [API reference](API_REFERENCE.md#native-approval-responses) and [Security](../SECURITY.md) own wire/security details.
 
-Legacy role-bound Reviewer snapshots remain a compatibility boundary, not a new-Room mode or an OS security sandbox. Do not recreate public role switches or silently migrate their permissions.
+Both participants use the live workspace. Native permission profiles are the only in-Room policy control; there is no role-bound workspace or role-switching state machine.
 
 ## Restart, capacity, and shutdown
 

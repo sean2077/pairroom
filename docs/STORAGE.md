@@ -4,7 +4,7 @@
 
 | Kind | Examples | After restart |
 |---|---|---|
-| Durable | Room metadata, Message, FIFO delivery / processing projection, collaboration instructions, permission profile (legacy role), Turn summary, resolved approval, Binding, attachment metadata | Replayed from the Event Log / registry |
+| Durable | Room metadata, Message, FIFO delivery / processing projection, collaboration instructions, permission profile, Turn summary, resolved approval, Binding, attachment metadata | Replayed from the Event Log / registry |
 | User configuration | Named Agent pairs and default ID | Read from `agent-pair-profiles.json` under the Service data root, independently of Registry-index rebuild |
 | Ephemeral | native process, current stdout connection, vendor request ID, active owner, transient text delta | Not restored |
 
@@ -12,7 +12,7 @@ Room-owned FIFO entries are persistent only while PairRoom can prove they did no
 
 ## Event Log
 
-A Room uses an append-only JSONL store. Metadata schema is checked before Event Log replay, then current-schema events are replayed in order to rebuild the projection. New stores use schema `10`; schema `9` remains readable without rewriting its metadata or converting its legacy policy. Other schemas fail before replay/repair. A modern Room persists its collaboration instructions with `room.created` and, when managed, matching provisioning schema 3. Illegal events fail explicitly instead of guessing a repair.
+A Room uses an append-only JSONL store. Metadata schema is checked before Event Log replay, then current-schema events are replayed in order to rebuild the projection. Readers and writers require schema `10`; other schemas fail before replay/repair. Missing metadata is not inferred for a published Room. A modern Room persists its collaboration instructions with `room.created` and, when managed, matching provisioning schema 3. Illegal events fail explicitly instead of guessing a repair.
 
 The schema source of truth is `internal/model/types.go`, the event write / apply code, and `internal/store/`, not a hand-written fictional schema file in the docs.
 

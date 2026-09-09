@@ -187,11 +187,6 @@ func (r *Registry) SaveAgentPairProfile(ctx context.Context, id string, input Ag
 	if err != nil {
 		return AgentPairProfileCatalog{}, fmt.Errorf("%w: %v", errInvalidAgentPairProfile, err)
 	}
-	for actor, selection := range agents {
-		// Retired role-policy metadata is not a reusable native override.
-		selection.OrdinaryReviewerPolicy = ""
-		agents[actor] = selection
-	}
 	return r.mutateAgentPairProfiles(ctx, func(catalog *AgentPairProfileCatalog) error {
 		index := -1
 		for i, profile := range catalog.Profiles {

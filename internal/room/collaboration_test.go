@@ -36,7 +36,7 @@ func (c *configurationCapture) latest(actor model.ActorID) agent.Config {
 }
 func (c *configurationCapture) count() int { c.mu.Lock(); defer c.mu.Unlock(); return len(c.values) }
 
-func newCollaborationEngine(t *testing.T, instructions string) (*Engine, *configurationCapture, *countingWorkspace) {
+func newCollaborationEngine(t *testing.T, instructions string) (*Engine, *configurationCapture) {
 	t.Helper()
 	spec := model.Collaboration{}
 	if instructions != "" {
@@ -52,9 +52,8 @@ func newCollaborationEngine(t *testing.T, instructions string) (*Engine, *config
 		t.Fatal(err)
 	}
 	repo := t.TempDir()
-	workspace := &countingWorkspace{repo: repo, reviewer: t.TempDir()}
 	captures := &configurationCapture{}
-	e, err := New(Config{Name: "mode-test", Repo: repo, Store: eventStore, Workspaces: workspace, Collaboration: &spec,
+	e, err := New(Config{Name: "mode-test", Repo: repo, Store: eventStore, Collaboration: &spec,
 		ClaudeConfig:  agent.Config{Runtime: model.RuntimeClaude, PermissionMode: "yolo", Model: "planning-model", AdditionalInstructions: "user extra", SessionID: "session-a", RequireExactSession: true},
 		CodexConfig:   agent.Config{Runtime: model.RuntimeCodex, ApprovalPolicy: "yolo", Model: "execution-model", SessionID: "session-b", RequireExactSession: true},
 		ClaudeFactory: captures.factory, CodexFactory: captures.factory})
@@ -65,11 +64,11 @@ func newCollaborationEngine(t *testing.T, instructions string) (*Engine, *config
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = e.Close() })
-	return e, captures, workspace
+	return e, captures
 }
 
 func TestCreationModeSeparatesResponsibilitiesFromWorkspaceAndPermissions(t *testing.T) {
-	e, captures, workspace := newCollaborationEngine(t, "")
+	e, captures := newCollaborationEngine(t, "")
 	s := e.Snapshot()
 	if s.Meta.Collaboration == nil || s.Meta.Collaboration.Mode != model.CollaborationDefault {
 		t.Fatal("missing durable mode")
@@ -87,20 +86,8 @@ func TestCreationModeSeparatesResponsibilitiesFromWorkspaceAndPermissions(t *tes
 	if s.Participants[model.ActorClaude].Responsibility != "lead" || s.Participants[model.ActorCodex].Responsibility != "executor" {
 		t.Fatal("wrong display responsibilities")
 	}
-	if workspace.refreshes != 0 {
-		t.Fatal("default mode created a reviewer snapshot")
-	}
 	if cfg := captures.latest(model.ActorCodex); cfg.ApprovalPolicy != "yolo" || cfg.Sandbox != "danger-full-access" {
 		t.Fatalf("Executor is not YOLO: %+v", cfg)
-	}
-	if err := e.SetRole(context.Background(), model.ActorCodex, model.RoleDriver); err == nil {
-		t.Fatal("role switch changed an immutable mode")
-	}
-	if err := e.SwitchDriver(context.Background(), model.ActorCodex); err == nil {
-		t.Fatal("driver switch changed an immutable mode")
-	}
-	if _, err := e.Send(context.Background(), SendRequest{Text: "inspect", TargetRole: model.RoleDriver}); err == nil {
-		t.Fatal("role alias target accepted")
 	}
 	for _, text := range []string{"@driver inspect", "@reviewer inspect", "@lead inspect", "@executor inspect"} {
 		if _, err := e.Send(context.Background(), SendRequest{Text: text}); err == nil {
@@ -114,7 +101,7 @@ func TestCreationModeSeparatesResponsibilitiesFromWorkspaceAndPermissions(t *tes
 }
 
 func TestPermissionChangesPersistWithoutRewritingModeOrNativeIdentity(t *testing.T) {
-	e, captures, workspace := newCollaborationEngine(t, "Agent 2 plans. Agent 1 implements. Keep tests focused.")
+	e, captures := newCollaborationEngine(t, "Agent 2 plans. Agent 1 implements. Keep tests focused.")
 	ctx := context.Background()
 	// Materialized identity is an event-sourced fact, not only an adapter value.
 	e.updateParticipant(model.ActorCodex, func(p *model.ParticipantSnapshot) { p.SessionID = "session-b" })
@@ -134,9 +121,6 @@ func TestPermissionChangesPersistWithoutRewritingModeOrNativeIdentity(t *testing
 		if profile != model.PermissionReadOnly && cfg.Sandbox != "danger-full-access" {
 			t.Fatalf("wrong restored sandbox: %+v", cfg)
 		}
-	}
-	if workspace.refreshes != 0 {
-		t.Fatal("permission changes regenerated review snapshots")
 	}
 	events, _ := e.cfg.Store.Load()
 	requested := 0
@@ -187,7 +171,7 @@ func TestPermissionChangesPersistWithoutRewritingModeOrNativeIdentity(t *testing
 }
 
 func TestExplicitModeChangeOnReopenFailsBeforeWriting(t *testing.T) {
-	e, _, _ := newCollaborationEngine(t, "")
+	e, _ := newCollaborationEngine(t, "")
 	dir := e.cfg.Store.Dir()
 	cfg := e.cfg
 	_ = e.Close()
@@ -210,8 +194,8 @@ func TestExplicitModeChangeOnReopenFailsBeforeWriting(t *testing.T) {
 	}
 }
 
-func TestPermissionsRejectBusyCancelledAndLegacyWithoutSideEffects(t *testing.T) {
-	e, captures, _ := newCollaborationEngine(t, "")
+func TestPermissionsRejectBusyAndCancelledWithoutSideEffects(t *testing.T) {
+	e, captures := newCollaborationEngine(t, "")
 	ctx := context.Background()
 	before := e.Snapshot().LatestSeq
 	count := captures.count()
@@ -239,14 +223,11 @@ func TestPermissionsRejectBusyCancelledAndLegacyWithoutSideEffects(t *testing.T)
 	if e.Snapshot().LatestSeq != before || captures.count() != count {
 		t.Fatal("blocked permission request had side effects")
 	}
-	legacy, _ := newTestEngine(t, "")
-	if err := legacy.SetPermissions(ctx, model.ActorClaude, model.PermissionYOLO); err == nil {
-		t.Fatal("legacy Room was silently upgraded to new permissions")
-	}
+
 }
 
 func TestStopFailureDoesNotCommitPermissionGrant(t *testing.T) {
-	e, captures, _ := newCollaborationEngine(t, "")
+	e, captures := newCollaborationEngine(t, "")
 	current, _ := e.adapter(model.ActorClaude)
 	f := current.(*fakeAdapter)
 	f.mu.Lock()
@@ -265,7 +246,7 @@ func TestStopFailureDoesNotCommitPermissionGrant(t *testing.T) {
 }
 
 func TestCloseWaitsForPermissionReplacementAndStopsTheNewAdapter(t *testing.T) {
-	e, _, _ := newCollaborationEngine(t, "")
+	e, _ := newCollaborationEngine(t, "")
 	started, release := make(chan struct{}), make(chan struct{})
 	next := &fakeAdapter{actor: model.ActorCodex, state: model.StateStopped, startStarted: started, startRelease: release, submissions: make(chan model.AgentInput, 1)}
 	e.cfg.CodexFactory = func(_ agent.Config, sink agent.EventSink) agent.Adapter { next.sink = sink; return next }

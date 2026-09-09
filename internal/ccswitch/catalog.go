@@ -875,33 +875,6 @@ func stringValue(value any) string {
 	return strings.TrimSpace(text)
 }
 
-func flattenStrings(value any) string {
-	var values []string
-	var walk func(any)
-	walk = func(current any) {
-		switch typed := current.(type) {
-		case string:
-			values = append(values, typed)
-		case []any:
-			for _, item := range typed {
-				walk(item)
-			}
-		case map[string]any:
-			keys := make([]string, 0, len(typed))
-			for key := range typed {
-				keys = append(keys, key)
-			}
-			sort.Strings(keys)
-			for _, key := range keys {
-				values = append(values, key)
-				walk(typed[key])
-			}
-		}
-	}
-	walk(value)
-	return strings.Join(values, " ")
-}
-
 func modelSuggestions(settings map[string]any) []string {
 	var candidates []string
 	var walk func(string, any)

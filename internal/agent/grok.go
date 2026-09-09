@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -371,17 +370,6 @@ func (g *GrokAdapter) buildACPArgs() []string {
 		args = append(args, "--sandbox", value)
 	}
 	return append(args, "agent", "stdio")
-}
-
-func grokSandbox(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "workspace-write", "workspacewrite", "workspace_write":
-		return "workspace"
-	case "danger-full-access", "dangerfullaccess", "danger_full_access":
-		return "off"
-	default:
-		return strings.TrimSpace(value)
-	}
 }
 
 func grokPermissionArgs(mode string) []string {
@@ -997,30 +985,6 @@ func (g *GrokAdapter) SetRole(ctx context.Context, role model.ParticipantRole) e
 			return err
 		}
 	}
-	return nil
-}
-
-func (g *GrokAdapter) SetWorkspace(_ context.Context, path string) error {
-	path = filepath.Clean(strings.TrimSpace(path))
-	if path == "." || path == "" {
-		return errors.New("Grok workspace is required")
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("stat Grok workspace: %w", err)
-	}
-	if !info.IsDir() {
-		return errors.New("Grok workspace is not a directory")
-	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.turn != nil || g.state == model.StateWorking || g.state == model.StateWaiting || g.state == model.StateStarting {
-		return errors.New("interrupt or stop Grok before changing its workspace")
-	}
-	if g.cmd != nil && filepath.Clean(g.cfg.Repo) != path {
-		return errors.New("stop Grok before changing its workspace")
-	}
-	g.cfg.Repo = path
 	return nil
 }
 

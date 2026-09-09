@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -23,7 +22,6 @@ var (
 	ErrProjectAlreadyRegistered = errors.New("project is already registered")
 	ErrProjectNotFound          = errors.New("project not found")
 	ErrRoomNotFound             = errors.New("room not found")
-	ErrRoomBindingPending       = errors.New("room has pending agent bindings")
 	ErrBindingOwned             = errors.New("binding identity is already owned")
 	ErrRegistryFailClosed       = errors.New("service registry is fail-closed")
 )
@@ -55,23 +53,6 @@ type Registry struct {
 
 	roomDeletionFS                roomDeletionFS
 	roomDeletionCleanupDiagnostic string
-}
-
-func ensureRealDirectory(path string, mode os.FileMode) error {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		if err := os.Mkdir(path, mode); err != nil {
-			return err
-		}
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return fmt.Errorf("%s is not a real directory", path)
-	}
-	return nil
 }
 
 func DefaultRoot() (string, error) {
@@ -131,11 +112,10 @@ func OpenRegistry(ctx context.Context, cfg RegistryConfig) (*Registry, error) {
 	// have a Room. Room facts and binding ownership are always rebuilt from Room
 	// Event Logs below; a missing or corrupt checkpoint is therefore recoverable.
 	registry.loadCheckpointProjects()
-	// The archive path can hold an archived projection while its data directory
-	// is absent. Recover only from a fully validated checkpoint and keep the Room
-	// visible until the user explicitly completes permanent cleanup.
-	if err := registry.recoverArchivedRoomsWithoutFactsFromCheckpoint(); err != nil {
-		return nil, fmt.Errorf("recover archived Rooms without Event Log facts: %w", err)
+	// An archived Room whose directory was lost remains visible for explicit
+	// cleanup. Only a validated checkpoint can recover its identity.
+	if err := registry.recoverMissingArchivedRoomsFromCheckpoint(); err != nil {
+		return nil, fmt.Errorf("recover archived Rooms with missing data: %w", err)
 	}
 	if err := registry.scanRooms(ctx); err != nil {
 		return nil, err
@@ -295,28 +275,12 @@ func (r *Registry) scanRooms(ctx context.Context) error {
 			}
 			continue
 		}
-		var recoveredWithoutFacts *Room
 		for _, existing := range r.rooms {
-			if filepath.Clean(existing.DataDir) != dir {
-				continue
+			if filepath.Clean(existing.DataDir) == dir {
+				// A previously absent checkpoint-only path has reappeared. Do not
+				// reinterpret replacement bytes as the missing Room's history.
+				return fmt.Errorf("recovered missing Room data path reappeared: %s", dir)
 			}
-			room := cloneRoom(existing)
-			recoveredWithoutFacts = &room
-			break
-		}
-		if existing := recoveredWithoutFacts; existing != nil {
-			// Checkpoint-only archive stubs have no identity facts to replay.
-			// Revalidate their persisted path before allowing permanent cleanup.
-			state := inspectedDeletionEntry{
-				data: dir,
-				intent: roomDeletionIntent{
-					RoomID: existing.ID, ProjectID: existing.ProjectID,
-				},
-			}
-			if err := r.verifyMissingRoomArchiveStub(state); err != nil {
-				return fmt.Errorf("revalidate recovered archive stub %s: %w", dir, err)
-			}
-			continue
 		}
 		room, project, found, err := r.readRoomFacts(ctx, dir)
 		if err != nil {
@@ -808,16 +772,6 @@ func cloneBindings(values map[model.ActorID]Binding) map[model.ActorID]Binding {
 	return out
 }
 
-func pathWithin(root, candidate string) bool {
-	root = filepath.Clean(root)
-	candidate = filepath.Clean(candidate)
-	relative, err := filepath.Rel(root, candidate)
-	if err != nil {
-		return false
-	}
-	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
-}
-
 func syncDir(path string) error {
 	directory, err := os.Open(path)
 	if err != nil {
@@ -834,13 +788,4 @@ func syncDir(path string) error {
 		return fmt.Errorf("sync directory: %w", err)
 	}
 	return nil
-}
-
-func sortedRoomIDs(values map[string]Room) []string {
-	ids := make([]string, 0, len(values))
-	for id := range values {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids
 }

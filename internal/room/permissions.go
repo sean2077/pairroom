@@ -25,10 +25,8 @@ func (e *Engine) SnapshotMeta() model.RoomMeta {
 	return meta
 }
 
+// Native adapters use a read-only role hint for tool policy, not Room duties.
 func nativePermissionRole(p model.ParticipantSnapshot) model.ParticipantRole {
-	if p.PermissionProfile == "" {
-		return p.Role
-	} // schema-9 legacy permission boundary
 	if p.PermissionProfile == model.PermissionReadOnly {
 		return model.RoleReviewer
 	}
@@ -37,11 +35,6 @@ func nativePermissionRole(p model.ParticipantSnapshot) model.ParticipantRole {
 
 func (e *Engine) configureParticipant(cfg agent.Config, p model.ParticipantSnapshot) agent.Config {
 	cfg.Collaboration = e.SnapshotMeta().Collaboration
-	if cfg.Collaboration == nil {
-		cfg.LegacyRole = p.Role
-		return cfg
-	}
-	cfg.LegacyRole = ""
 	return agent.PermissionConfig(cfg, p.PermissionProfile)
 }
 
@@ -50,9 +43,6 @@ func (e *Engine) configureParticipant(cfg agent.Config, p model.ParticipantSnaps
 func (e *Engine) SetPermissions(ctx context.Context, actor model.ActorID, profile model.PermissionProfile) error {
 	if !actor.ValidParticipant() || !profile.Valid() {
 		return errors.New("invalid participant or permission profile")
-	}
-	if e.SnapshotMeta().Collaboration == nil {
-		return errors.New("legacy Room policy is preserved; create a new Room to use independent permissions")
 	}
 	e.lifecycleMu.Lock()
 	defer e.lifecycleMu.Unlock()
@@ -79,7 +69,7 @@ func (e *Engine) SetPermissions(ctx context.Context, actor model.ActorID, profil
 	}
 	current := e.snapshot.Participants[actor]
 	for _, p := range e.snapshot.Participants {
-		if err := roleChangeSafe(p); err != nil {
+		if err := permissionChangeSafe(p); err != nil {
 			e.mu.RUnlock()
 			return errors.New("both participants must be idle before changing permissions")
 		}
@@ -152,7 +142,7 @@ func (e *Engine) SetPermissions(ctx context.Context, actor model.ActorID, profil
 		p.CurrentTurn = ""
 		p.LastError = ""
 		p.LastActivity = time.Now().UTC()
-		applyRoleRuntimeProjection(p, actor, p.Role, e.cfg)
+		applyPermissionRuntimeProjection(p, actor, e.cfg)
 	})
 	if wasRunning {
 		return e.startAgentLocked(ctx, actor)

@@ -585,15 +585,6 @@ func TestCodexSandboxNormalization(t *testing.T) {
 		t.Fatalf("readOnly policy must not include workspace-write fields: %#v", reviewerPolicy)
 	}
 
-	explicit := NewCodex(Config{
-		Sandbox:                "dangerFullAccess",
-		OrdinaryReviewerPolicy: model.ReviewerExplicit,
-		Repo:                   "/repo",
-	}, func(model.RuntimeEvent) {})
-	explicitPolicy := explicit.turnStartParams("thread-1", "review", model.AgentInput{Role: model.RoleReviewer})["sandboxPolicy"].(map[string]any)
-	if got := explicitPolicy["type"]; got != "dangerFullAccess" {
-		t.Fatalf("explicit reviewer policy should reach native sandbox, got %#v", explicitPolicy)
-	}
 }
 
 func TestCodexPlanDeltaUsesCurrentNotificationAndMessageCorrelation(t *testing.T) {

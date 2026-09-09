@@ -178,14 +178,6 @@ func launchdDomains() []string {
 
 func launchdTarget(domain string) string { return domain + "/" + launchdLabel }
 
-func launchdTargets() []string {
-	result := make([]string, 0, 2)
-	for _, domain := range launchdDomains() {
-		result = append(result, launchdTarget(domain))
-	}
-	return result
-}
-
 func loadedLaunchdTarget() (string, string, string, bool) {
 	for _, domain := range launchdDomains() {
 		target := launchdTarget(domain)

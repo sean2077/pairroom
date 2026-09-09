@@ -193,7 +193,7 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 		})
 		if err == nil {
 			// This presentation-only notice is intentionally outside the durable
-			// Room sequence so Existing bindings and legacy imports remain
+			// Room sequence so Existing bindings remain
 			// non-destructive. The Room Event Log still starts at the binding
 			// boundary and never absorbs earlier vendor transcript content.
 			event.Seq = 0
@@ -333,10 +333,7 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSON(w, r, &request); err != nil {
 		return
 	}
-	if request.TargetRole != "" {
-		writeError(w, http.StatusBadRequest, "target_role was removed; choose an exact participant handle")
-		return
-	}
+
 	message, err := s.engine.Send(r.Context(), request)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -467,11 +464,8 @@ func renderMarkdownTranscript(snapshot model.RoomSnapshot) string {
 	out.WriteString("## Participants\n\n")
 	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
 		p := snapshot.Participants[actor]
-		if snapshot.Meta.Collaboration != nil {
-			fmt.Fprintf(&out, "- **%s** (`%s`) — %s, permissions `%s`, state `%s`", p.DisplayName, p.MentionHandle, p.Responsibility, p.PermissionProfile, p.State)
-		} else {
-			fmt.Fprintf(&out, "- **%s** (`%s`) — legacy role `%s`, state `%s`", p.DisplayName, p.MentionHandle, p.Role, p.State)
-		}
+		fmt.Fprintf(&out, "- **%s** (`%s`) — %s, permissions `%s`, state `%s`", p.DisplayName, p.MentionHandle, p.Responsibility, p.PermissionProfile, p.State)
+
 		if p.Runtime.Version != "" {
 			fmt.Fprintf(&out, ", runtime `%s`", p.Runtime.Version)
 		}

@@ -76,7 +76,6 @@ type ServiceSummary struct {
 	Rooms               int `json:"rooms"`
 	ActiveRooms         int `json:"active_rooms"`
 	ArchivedRooms       int `json:"archived_rooms"`
-	PendingBindings     int `json:"pending_bindings"`
 	RuntimeCapacityUsed int `json:"runtime_capacity_used"`
 	ActiveRuntimes      int `json:"active_runtimes"`
 	BusyRuntimes        int `json:"busy_runtimes"`
@@ -287,7 +286,7 @@ func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
 	if maintenanceAttention == 0 && payload.Maintenance.Diagnostic != "" {
 		maintenanceAttention = 1
 	}
-	payload.Summary.AttentionItems = payload.Summary.UnavailableProjects + payload.Summary.PendingBindings + payload.Summary.FailedRuntimes + maintenanceAttention
+	payload.Summary.AttentionItems = payload.Summary.UnavailableProjects + payload.Summary.FailedRuntimes + maintenanceAttention
 	order, orderErr := s.registry.NavigationOrder()
 	if orderErr == nil {
 		payload.NavigationOrder = &order
@@ -321,9 +320,6 @@ func summarizeService(projects []Project, rooms []Room, runtimes []RuntimeStatus
 		} else {
 			summary.ActiveRooms++
 		}
-		if room.HasBlockingPendingBindings() {
-			summary.PendingBindings++
-		}
 	}
 	for _, runtime := range runtimes {
 		if runtime.OccupiesCapacity {
@@ -342,7 +338,7 @@ func summarizeService(projects []Project, rooms []Room, runtimes []RuntimeStatus
 			summary.FailedRuntimes++
 		}
 	}
-	summary.AttentionItems = summary.UnavailableProjects + summary.PendingBindings + summary.FailedRuntimes
+	summary.AttentionItems = summary.UnavailableProjects + summary.FailedRuntimes
 	return summary
 }
 
@@ -420,7 +416,7 @@ func (s *ManagementServer) provisionRoom(w http.ResponseWriter, r *http.Request)
 			writeManagementError(w, http.StatusBadRequest, "agents must contain both Agent selections when provided")
 			return
 		}
-		if err := json.Unmarshal(request.Agents, &agents); err != nil {
+		if err := decodeStrictJSONBytes(request.Agents, &agents); err != nil {
 			writeManagementError(w, http.StatusBadRequest, "agents must be an object containing both Agent selections: "+err.Error())
 			return
 		}
@@ -995,7 +991,7 @@ func (s *ManagementServer) writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrInvalidRoomName):
 		code = http.StatusBadRequest
 	case errors.Is(err, ErrProjectAlreadyRegistered), errors.Is(err, ErrProjectHasRooms),
-		errors.Is(err, ErrBindingOwned), errors.Is(err, ErrRoomBindingPending):
+		errors.Is(err, ErrBindingOwned):
 		code = http.StatusConflict
 	case errors.Is(err, ErrProjectNotFound), errors.Is(err, ErrRoomNotFound):
 		code = http.StatusNotFound
@@ -1035,8 +1031,6 @@ func managementErrorCode(err error, fallback string) string {
 		return "project_has_rooms"
 	case errors.Is(err, ErrBindingOwned):
 		return "binding_owned"
-	case errors.Is(err, ErrRoomBindingPending):
-		return "room_binding_pending"
 	case errors.Is(err, ErrRegistryFailClosed):
 		return "registry_unavailable"
 	case errors.Is(err, ErrRuntimeManagerClosed):

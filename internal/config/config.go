@@ -18,15 +18,14 @@ import (
 // created Room; subsequent Service configuration changes never rewrite it.
 // Executables and process arguments come from RuntimeTemplates, never a Room.
 type Agent struct {
-	Runtime                string                       `json:"runtime,omitempty"`
-	Provider               model.ProviderRef            `json:"provider,omitempty"`
-	Model                  string                       `json:"model,omitempty"`
-	Effort                 string                       `json:"effort,omitempty"`
-	PermissionMode         string                       `json:"permission_mode,omitempty"`
-	ApprovalPolicy         string                       `json:"approval_policy,omitempty"`
-	Sandbox                string                       `json:"sandbox,omitempty"`
-	Instructions           string                       `json:"instructions,omitempty"`
-	OrdinaryReviewerPolicy model.OrdinaryReviewerPolicy `json:"ordinary_reviewer_policy,omitempty"`
+	Runtime        string            `json:"runtime,omitempty"`
+	Provider       model.ProviderRef `json:"provider,omitempty"`
+	Model          string            `json:"model,omitempty"`
+	Effort         string            `json:"effort,omitempty"`
+	PermissionMode string            `json:"permission_mode,omitempty"`
+	ApprovalPolicy string            `json:"approval_policy,omitempty"`
+	Sandbox        string            `json:"sandbox,omitempty"`
+	Instructions   string            `json:"instructions,omitempty"`
 }
 
 func (a Agent) RuntimeKind(slot model.ActorID) model.RuntimeKind {
@@ -38,7 +37,6 @@ func (a Agent) Selection(slot model.ActorID) model.AgentSelection {
 		Runtime: a.RuntimeKind(slot), Provider: a.Provider, Model: a.Model,
 		Effort: a.Effort, Instructions: a.Instructions,
 		PermissionMode: a.PermissionMode, ApprovalPolicy: a.ApprovalPolicy, Sandbox: a.Sandbox,
-		OrdinaryReviewerPolicy: a.OrdinaryReviewerPolicy,
 	}.Normalized(slot)
 }
 
