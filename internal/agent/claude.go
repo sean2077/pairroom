@@ -137,7 +137,9 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	})
 	info := model.RuntimeInfo{
 		Available: false, Command: c.cfg.Command, Protocol: "claude-stream-json",
-		Model: c.cfg.Model, PermissionMode: c.cfg.PermissionMode, ProbedAt: time.Now().UTC(),
+		RuntimeKind: c.cfg.Runtime.CanonicalForSlot(c.cfg.Actor),
+		Provider:    c.cfg.Provider, ProviderName: c.cfg.ProviderName,
+		Model: c.cfg.Model, Effort: c.cfg.Effort, PermissionMode: c.cfg.PermissionMode, ProbedAt: time.Now().UTC(),
 	}
 	flags := map[string]bool{}
 	if probeErr == nil {

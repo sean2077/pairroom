@@ -488,12 +488,18 @@ func TestTranscriptBoundaryFilterDropsUncorrelatedVendorHistory(t *testing.T) {
 		Agent: model.ActorCodex, Kind: model.RuntimeInfoUpdated, Text: secret,
 		Runtime: &model.RuntimeInfo{
 			Available: true, Version: "1.2.3", Capabilities: []string{"resume"},
+			Provider: "cc-switch:grokbuild/profile-a", ProviderName: "Example Profile",
 			Warnings: []string{secret}, Data: json.RawMessage(`{"raw":"secret"}`),
 		},
 		Data: json.RawMessage(`{"raw":"secret"}`),
 	})
 	if !ok || filteredInfo.Runtime == nil || filteredInfo.Runtime.Version != "1.2.3" || len(filteredInfo.Runtime.Warnings) != 0 || len(filteredInfo.Runtime.Data) != 0 || filteredInfo.Text != "" || len(filteredInfo.Data) != 0 {
 		t.Fatalf("safe runtime-info projection=%#v ok=%t", filteredInfo, ok)
+	}
+	// The Provider display name is non-secret projection metadata: it must reach
+	// the embedded Room surface, while Warnings and Data stay stripped.
+	if filteredInfo.Runtime.ProviderName != "Example Profile" || filteredInfo.Runtime.Provider != "cc-switch:grokbuild/profile-a" {
+		t.Fatalf("runtime-info projection dropped provider identity: %#v", filteredInfo.Runtime)
 	}
 
 	filteredError, ok := filterTranscriptBoundaryEvent(expectedSession, model.RuntimeEvent{

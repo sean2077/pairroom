@@ -219,6 +219,7 @@ type RuntimeInfo struct {
 	Version           string          `json:"version,omitempty"`
 	RuntimeKind       RuntimeKind     `json:"runtime_kind,omitempty"`
 	Provider          string          `json:"provider,omitempty"`
+	ProviderName      string          `json:"provider_name,omitempty"`
 	Model             string          `json:"model,omitempty"`
 	Effort            string          `json:"effort,omitempty"`
 	PermissionMode    string          `json:"permission_mode,omitempty"`

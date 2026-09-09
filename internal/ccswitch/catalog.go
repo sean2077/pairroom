@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/sean2077/pairroom/internal/model"
 	_ "modernc.org/sqlite"
@@ -87,6 +88,7 @@ type Catalog struct {
 // must copy Env only into the selected child process and must never log it.
 type Materialization struct {
 	ProviderLabel string            `json:"provider_label"`
+	ProviderName  string            `json:"provider_name,omitempty"`
 	Env           map[string]string `json:"-"`
 	Args          []string          `json:"-"`
 	Models        []string          `json:"models,omitempty"`
@@ -302,7 +304,7 @@ func summarize(p profileRow) ProfileSummary {
 	// malformed or malicious profile must not smuggle a token into a model
 	// suggestion, display name, or ProviderRef even when it is later disabled.
 	secrets := profileSecretValues(settings, meta)
-	s.Name = redactSecrets(s.Name, secrets)
+	s.Name = sanitizeProviderName(redactSecrets(s.Name, secrets))
 	s.ProviderRef.AppType = redactSecrets(s.ProviderRef.AppType, secrets)
 	s.ProviderRef.ProfileID = redactSecrets(s.ProviderRef.ProfileID, secrets)
 	for _, candidate := range modelSuggestions(settings) {
@@ -369,6 +371,11 @@ func decodeProfileJSON(p profileRow) (map[string]any, map[string]any, error) {
 
 func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta map[string]any) (Materialization, error) {
 	label := "cc-switch:" + p.AppType + "/" + p.ID
+	// The Profile display name travels with the internal reference label so a UI
+	// can show a human-readable Provider without parsing the reference form. It
+	// is deliberately not called `name`: the Grok branch already uses that for
+	// the TOML [model.<x>] name, which is a different concept.
+	providerName := sanitizeProviderName(p.Name)
 	switch runtime.Canonical() {
 	case model.RuntimeClaude:
 		env := stringMap(settings["env"])
@@ -383,7 +390,7 @@ func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta 
 			}
 		}
 		models := modelSuggestions(settings)
-		return finishMaterialization(p, Materialization{ProviderLabel: label, Env: allowed, Models: models, DefaultModel: firstNonEmpty(env["ANTHROPIC_MODEL"], first(models))})
+		return finishMaterialization(p, Materialization{ProviderLabel: label, ProviderName: providerName, Env: allowed, Models: models, DefaultModel: firstNonEmpty(env["ANTHROPIC_MODEL"], first(models))})
 	case model.RuntimeCodex:
 		auth := stringMap(settings["auth"])
 		if profileHasManagedOAuth(settings) {
@@ -427,7 +434,7 @@ func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta 
 			"-c", "model_providers." + id + ".base_url=" + tomlQuote(baseURL),
 		}
 		models := modelSuggestions(settings)
-		return finishMaterialization(p, Materialization{ProviderLabel: label, Env: map[string]string{envKey: key}, Args: args, Models: models, DefaultModel: firstNonEmpty(parsed.Root["model"], first(models))})
+		return finishMaterialization(p, Materialization{ProviderLabel: label, ProviderName: providerName, Env: map[string]string{envKey: key}, Args: args, Models: models, DefaultModel: firstNonEmpty(parsed.Root["model"], first(models))})
 	case model.RuntimeGrok:
 		configText, _ := settings["config"].(string)
 		parsed := parseTOML(configText)
@@ -467,6 +474,7 @@ func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta 
 		models := uniqueStrings([]string{selected, upstreamModel})
 		return finishMaterialization(p, Materialization{
 			ProviderLabel: label,
+			ProviderName:  providerName,
 			Env:           map[string]string{envKey: key},
 			Models:        models,
 			DefaultModel:  selected,
@@ -487,7 +495,7 @@ func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta 
 // contains no profile payload or credential.
 func finishMaterialization(profile profileRow, value Materialization) (Materialization, error) {
 	secrets := materializationSecrets(value.Env)
-	values := append([]string{profile.ID, profile.AppType, profile.Name, value.ProviderLabel, value.DefaultModel}, value.Args...)
+	values := append([]string{profile.ID, profile.AppType, profile.Name, value.ProviderLabel, value.ProviderName, value.DefaultModel}, value.Args...)
 	values = append(values, value.Models...)
 	if value.Grok != nil {
 		values = append(values, value.Grok.ProfileModel, value.Grok.UpstreamModel, value.Grok.BaseURL, value.Grok.Name, value.Grok.APIBackend)
@@ -640,6 +648,33 @@ func redactSecrets(value string, secrets []string) string {
 		pairs = append(pairs, secret, "[redacted]")
 	}
 	return strings.NewReplacer(pairs...).Replace(value)
+}
+
+// maxProviderNameBytes bounds a CC Switch Profile display name before it can
+// reach a catalog, RuntimeInfo, or a durable event. The limit matches the
+// Room-name bound so one external string cannot dominate a projection.
+const maxProviderNameBytes = 160
+
+// sanitizeProviderName strips control characters and bounds a Profile display
+// name. The name is not a credential: finishMaterialization fails closed when
+// a secret appears in it. It is still external input that reaches the browser
+// and the append-only event log, so it must be control-free and length-bounded.
+// Truncation walks back to a rune boundary so a multibyte name is never split.
+func sanitizeProviderName(value string) string {
+	value = strings.TrimSpace(strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return -1
+		}
+		return r
+	}, value))
+	if len(value) <= maxProviderNameBytes {
+		return value
+	}
+	cut := maxProviderNameBytes
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(value[:cut])
 }
 
 func profileError(p profileRow, reason, detail string) error {

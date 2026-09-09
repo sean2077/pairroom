@@ -170,7 +170,9 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	if probeErr != nil {
 		info := model.RuntimeInfo{
 			Available: false, Command: c.cfg.Command, Protocol: "codex-app-server-jsonrpc",
-			Model: c.cfg.Model, ApprovalPolicy: c.cfg.ApprovalPolicy, Sandbox: c.cfg.Sandbox,
+			RuntimeKind: c.cfg.Runtime.CanonicalForSlot(c.cfg.Actor),
+			Provider:    c.cfg.Provider, ProviderName: c.cfg.ProviderName,
+			Model: c.cfg.Model, Effort: c.cfg.Effort, ApprovalPolicy: c.cfg.ApprovalPolicy, Sandbox: c.cfg.Sandbox,
 			Warnings: []string{probeErr.Error()}, ProbedAt: time.Now().UTC(),
 		}
 		emitRuntimeInfo(c.sink, c.cfg.Actor, info)
@@ -695,7 +697,9 @@ func (c *CodexAdapter) emitInputTerminal(turnID string, input model.AgentInput, 
 func (c *CodexAdapter) emitInitializeRuntimeInfo(result json.RawMessage, probe ProbeResult, probeErr error) model.RuntimeInfo {
 	info := model.RuntimeInfo{
 		Available: true, Command: c.cfg.Command, Protocol: "codex-app-server-jsonrpc",
-		Model: c.cfg.Model, ApprovalPolicy: c.cfg.ApprovalPolicy, Sandbox: c.cfg.Sandbox,
+		RuntimeKind: c.cfg.Runtime.CanonicalForSlot(c.cfg.Actor),
+		Provider:    c.cfg.Provider, ProviderName: c.cfg.ProviderName,
+		Model: c.cfg.Model, Effort: c.cfg.Effort, ApprovalPolicy: c.cfg.ApprovalPolicy, Sandbox: c.cfg.Sandbox,
 		ProbedAt: time.Now().UTC(),
 	}
 	if probeErr == nil {

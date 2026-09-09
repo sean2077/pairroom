@@ -164,7 +164,7 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 	probe, probeErr := ProbeRuntime(ctx, g.cfg)
 	info := model.RuntimeInfo{
 		Available: false, Command: g.cfg.Command, Protocol: "grok-acp-v1", RuntimeKind: model.RuntimeGrok,
-		Provider: g.cfg.Provider, Model: g.cfg.Model, Effort: g.cfg.Effort,
+		Provider: g.cfg.Provider, ProviderName: g.cfg.ProviderName, Model: g.cfg.Model, Effort: g.cfg.Effort,
 		PermissionMode: g.cfg.PermissionMode, Sandbox: g.cfg.Sandbox, ProbedAt: time.Now().UTC(),
 	}
 	if probeErr == nil {

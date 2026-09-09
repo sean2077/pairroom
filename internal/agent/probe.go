@@ -214,7 +214,7 @@ func (p ProbeResult) RuntimeInfo(cfg Config) model.RuntimeInfo {
 	info := model.RuntimeInfo{
 		Available: true, Command: p.Command, Path: p.Path,
 		Protocol: p.Protocol, Version: p.Version, RuntimeKind: cfg.Runtime.CanonicalForSlot(cfg.Actor),
-		Provider: cfg.Provider, Model: cfg.Model, Effort: cfg.Effort,
+		Provider: cfg.Provider, ProviderName: cfg.ProviderName, Model: cfg.Model, Effort: cfg.Effort,
 		PermissionMode: cfg.PermissionMode, ApprovalPolicy: cfg.ApprovalPolicy, Sandbox: cfg.Sandbox,
 		Capabilities: append([]string(nil), p.Capabilities...), Warnings: append([]string(nil), p.Warnings...),
 		ProbedAt: time.Now().UTC(), Data: data,

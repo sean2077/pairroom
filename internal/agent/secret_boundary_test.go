@@ -45,7 +45,7 @@ func TestRedactorCoversDisplayMetadataAndOverlappingSecrets(t *testing.T) {
 	if got := redactor.text("fixture-secret-long"); got != "[redacted]" {
 		t.Fatalf("partial credential leaked: %q", got)
 	}
-	original := &model.RuntimeInfo{Version: "fixture-secret-long", Protocol: "fixture-secret-long", SessionName: "fixture-secret-long", SessionNameStatus: "fixture-secret-long"}
+	original := &model.RuntimeInfo{Version: "fixture-secret-long", Protocol: "fixture-secret-long", SessionName: "fixture-secret-long", SessionNameStatus: "fixture-secret-long", Provider: "fixture-secret-long", ProviderName: "fixture-secret-long"}
 	event := redactor.event(model.RuntimeEvent{Runtime: original})
 	data, _ := json.Marshal(event)
 	if strings.Contains(string(data), "fixture-secret") {

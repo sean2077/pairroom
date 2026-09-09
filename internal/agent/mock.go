@@ -71,7 +71,11 @@ func (m *MockAdapter) Start(ctx context.Context) error {
 	m.setState(model.StateIdle)
 	info := model.RuntimeInfo{
 		Available: true, Command: "mock", Protocol: "pairroom-mock", Version: version.Current,
-		Model: "deterministic-mock", Capabilities: []string{"queued-input", "interrupt", "tool-events"}, ProbedAt: time.Now().UTC(),
+		RuntimeKind: m.cfg.Runtime.CanonicalForSlot(m.cfg.Actor),
+		Provider:    m.cfg.Provider, ProviderName: m.cfg.ProviderName,
+		Effort:       m.cfg.Effort,
+		Model:        "deterministic-mock",
+		Capabilities: []string{"queued-input", "interrupt", "tool-events"}, ProbedAt: time.Now().UTC(),
 	}
 	info.SessionName = configuredSessionName(m.cfg)
 	if info.SessionName != "" {

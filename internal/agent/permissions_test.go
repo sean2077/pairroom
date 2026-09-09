@@ -13,13 +13,13 @@ func TestIndependentPermissionProfilesAndNativeYOLO(t *testing.T) {
 	for _, kind := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok} {
 		for _, actor := range model.SlotActors() {
 			t.Run(string(kind)+"/"+string(actor), func(t *testing.T) {
-				original := Config{Actor: actor, Runtime: kind, Repo: "/repo", Model: "chosen-model", Provider: "chosen-provider", Effort: "high", AdditionalInstructions: "user instructions", SessionID: "exact-session"}
+				original := Config{Actor: actor, Runtime: kind, Repo: "/repo", Model: "chosen-model", Provider: "chosen-provider", ProviderName: "chosen-provider-name", Effort: "high", AdditionalInstructions: "user instructions", SessionID: "exact-session"}
 				inherited := PermissionConfig(original, model.PermissionConfigured)
 				if inherited.PermissionMode != "" || inherited.ApprovalPolicy != "" || inherited.Sandbox != "" {
 					t.Fatal("empty native overrides stopped inheriting")
 				}
 				yolo := PermissionConfig(original, model.PermissionYOLO)
-				if yolo.Model != original.Model || yolo.Provider != original.Provider || yolo.SessionID != original.SessionID || yolo.AdditionalInstructions != original.AdditionalInstructions {
+				if yolo.Model != original.Model || yolo.Provider != original.Provider || yolo.ProviderName != original.ProviderName || yolo.SessionID != original.SessionID || yolo.AdditionalInstructions != original.AdditionalInstructions {
 					t.Fatal("permissions changed unrelated selection")
 				}
 				restricted := PermissionConfig(original, model.PermissionReadOnly)

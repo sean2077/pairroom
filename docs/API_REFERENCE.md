@@ -90,6 +90,8 @@ Participant `runtime` adds `session_name` (desired native title) and `session_na
 | `configured` | Claude's advertised `--name` option was supplied at launch; not a separate title-read acknowledgement |
 | `synced` | Codex/Grok acknowledged their metadata rename request |
 | `unsupported` | The CLI did not expose the naming option/method |
+
+Participant `runtime` also carries `provider` — the internal Provider label, either `native` or the reference form `cc-switch:<app_type>/<profile_id>` — and, for a CC Switch Profile resolved by this release or later, `provider_name`: the Profile display name, at most 160 UTF-8 bytes, without control characters, and credential-redacted. Browser UIs display `provider_name` and keep the raw label in a tooltip; the label is a stable machine reference, never a lookup key or a display name. Events recorded before `provider_name` existed omit it, and a UI then falls back to the label. `effort` mirrors the creation-time selection and is empty when the slot inherits the native default.
 | `failed` | Naming failed; the original session remains usable, with retry on next activation |
 | `simulated` | Mock runtime only; no native title was changed |
 

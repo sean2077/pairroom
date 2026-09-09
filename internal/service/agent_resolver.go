@@ -156,6 +156,7 @@ func (r *AgentResolver) Resolve(ctx context.Context, actor model.ActorID, select
 		return agent.Config{}, err
 	}
 	cfg.Provider = materialized.ProviderLabel
+	cfg.ProviderName = materialized.ProviderName
 	cfg.Env = copyStringMap(materialized.Env)
 	cfg.CommandArgs = append(cfg.CommandArgs, materialized.Args...)
 	if cfg.Model == "" {

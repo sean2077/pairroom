@@ -39,6 +39,20 @@ _Equivalent (zh-CN)_: Agent 槽位
 The official Claude Code, Codex, or Grok Build harness currently selected for a participant slot.
 _Equivalent (zh-CN)_: 原生运行时
 
+**Provider**:
+The credential and configuration source behind a participant slot's Runtime: the native default, or a reference to a supported read-only CC Switch Profile.
+_Equivalent (zh-CN)_: Provider
+
+**Provider reference**:
+The durable, secret-free pointer to a CC Switch Profile; its `cc-switch:<app_type>/<profile_id>` form is an internal machine reference, not a display name.
+_Equivalent (zh-CN)_: Provider 引用
+_Avoid (en)_: provider string
+_Avoid (zh-CN)_: Provider 字符串
+
+**Provider name**:
+The credential-redacted display name of the referenced CC Switch Profile, shown wherever a Provider is rendered; it never replaces the reference in a stored selection.
+_Equivalent (zh-CN)_: Provider 名称
+
 **Mention handle**:
 The public runtime-derived `@` identifier used to address a Room participant, including a stable `0/1` suffix when both participant slots use the same Runtime.
 _Equivalent (zh-CN)_: 点名句柄
