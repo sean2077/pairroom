@@ -191,6 +191,32 @@ async def verify_diagnostics(browser, artifacts: Path, in_page_fixture: bool = F
     await project_link.click()
     assert await page.locator('#room-tree').evaluate('e=>e.scrollLeft===0'), 'Project navigation clipped the disclosure control'
     assert await page.locator('#view .room-row').first.locator('.room-title-line .badge').count() == 1, 'duplicate Active statuses'
+    # Room attributes are separated into labelled, aligned groups, and a CC Switch
+    # Provider is named by its Profile rather than shown as its internal reference.
+    await page.evaluate("""() => {
+      const defaults = structuredClone(__catalog.defaults);
+      __snapshot.rooms.forEach((room) => {
+        room.agents = {
+          claude: {...defaults.claude, runtime: 'claude', model: 'fixture-model',
+                   provider: {source: 'cc-switch', app_type: 'claude', profile_id: 'fixture'}},
+          codex: {...defaults.codex, runtime: 'codex', provider: {source: 'native'}},
+        };
+      });
+    }""")
+    await page.locator('#refresh-button').click()
+    await wait_fixture_state(page, "document.querySelector('#view .room-row .room-meta-group[data-slot=\"claude\"]')?.textContent.includes('Example Provider')")
+    first_row = page.locator('#view .room-row').first
+    assert await first_row.locator('.room-meta-label').evaluate_all('nodes=>nodes.map(n=>n.textContent)') == ['Agent 1', 'Agent 2', 'Room ID'], 'room attributes are not separated into labelled groups'
+    agent_one = first_row.locator('.room-meta-group[data-slot="claude"]')
+    agent_two = first_row.locator('.room-meta-group[data-slot="codex"]')
+    assert 'Claude Code' in await agent_one.inner_text(), 'runtime shown as its internal kind instead of its display name'
+    assert 'fixture-model' in await agent_one.inner_text()
+    assert 'Example Provider' in await agent_one.inner_text(), 'CC Switch Provider shown as its internal reference'
+    assert 'CC Switch' not in await first_row.inner_text(), 'internal Provider reference rendered as display text'
+    assert 'Codex' in await agent_two.inner_text()
+    assert 'Native / Runtime default' in await agent_two.inner_text(), 'native Provider was not named'
+    assert await first_row.locator('.binding-runtime-name').count() == 0, 'redundant runtime-name line survived'
+    assert await first_row.locator('.room-meta').evaluate('node=>node.scrollWidth<=node.clientWidth'), 'room attribute grid overflowed its row'
     await page.screenshot(path=str(artifacts / 'project-workspace.png'), full_page=True)
     await page.evaluate("location.hash='#/diagnostics'")
     await expect(page.locator('#diagnostic-environment')).to_be_visible()
@@ -316,7 +342,12 @@ async def verify_names(browser, artifacts: Path, in_page_fixture: bool = False) 
     await page.locator('#rename-form [type=submit]').click()
     await expect(page.locator('#rename-dialog')).not_to_be_visible()
     await expect(auto).to_contain_text('地图渲染优化')
-    assert await page.locator('.room-row[data-room-id="room-111111111111cccccccccccc"] .binding-runtime-name').evaluate_all('nodes=>nodes.map(n=>n.textContent)') == ['地图渲染优化 · @claude · cccccccccccc', '地图渲染优化 · @codex · cccccccccccc']
+    # The redundant per-slot runtime-name line is gone from the row, but the
+    # native session name it carried must stay reachable as the group tooltip.
+    renamed_row = page.locator('.room-row[data-room-id="room-111111111111cccccccccccc"]')
+    assert await renamed_row.locator('.binding-runtime-name').count() == 0, 'redundant runtime-name line survived'
+    slot_titles = await renamed_row.locator('.room-meta-group[data-slot]').evaluate_all('nodes=>nodes.map(n=>n.title)')
+    assert [title.splitlines()[0] for title in slot_titles] == ['地图渲染优化 · @claude · cccccccccccc', '地图渲染优化 · @codex · cccccccccccc'], 'native session name lost from the row tooltip'
     # The open tab's identity survives a display-name change. No new native ID.
     await auto.click()
     tab = page.locator('.room-tab[data-room-id="room-111111111111cccccccccccc"] .room-tab-target')

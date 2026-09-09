@@ -149,6 +149,14 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
     await page.wait_for_timeout(120)
     assert await page.evaluate('__heldRow.isConnected && __heldRow===document.querySelector(\'#room-tree [data-order-id="r2"]\')')
     await page.keyboard.press('Escape'); await page.mouse.up()
+    # The refresh above was deferred while the held gesture owned the tree, so its
+    # rebuild lands only after the gesture ends. Settle it before the next drag
+    # resolves a row, or the locator races the rebuild. Dispatched directly rather
+    # than through the helper because the announcement toasts cover the topbar.
+    reads = await page.evaluate('__serviceReads')
+    await page.evaluate("document.getElementById('refresh-button').click()")
+    await wait_fixture_state(page, f'__serviceReads>{reads}')
+    await page.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
     # Cross-Project hover must not move ownership or write a display rank.
     count = await page.evaluate('__moves.length')
     await drag('#room-tree','room','r2','r4')

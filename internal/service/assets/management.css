@@ -693,8 +693,20 @@ select { appearance: auto; }
 .room-title-line { min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .room-title-line strong { overflow: hidden; color: var(--text-strong); text-overflow: ellipsis; white-space: nowrap; }
 .flush-heading { margin: 0; }
-.room-meta { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 5px 12px; color: var(--muted); font-size: 10px; }
+/* Rooms row: three aligned columns (Agent 1 / Agent 2 / Room ID). Every row uses
+   the same template inside an equal-width row, so the columns line up across
+   rows. The micro-label imitates .key-value span. */
+.room-meta { margin-top: 7px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(0, .9fr); gap: 8px 18px; align-items: start; color: var(--muted); font-size: 10px; }
+.room-meta-group { min-width: 0; display: grid; gap: 3px; justify-items: start; }
+.room-meta-label { color: var(--subtle); font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.room-meta-lines { min-width: 0; display: flex; flex-direction: column; align-items: start; gap: 3px; }
+.room-meta-line { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.room-meta-value { color: var(--subtle); overflow-wrap: anywhere; }
 .room-meta code { color: var(--subtle); }
+/* .badge defaults to nowrap; a Provider or Binding string must break rather than
+   widen its column. */
+.room-meta .binding-chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+.room-meta-error { grid-column: 1 / -1; justify-self: start; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .room-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 6px; }
 .room-actions > .room-action-control {
   min-width: 64px;
@@ -726,10 +738,8 @@ select { appearance: auto; }
   box-shadow: var(--focus);
 }
 .room-actions button { min-height: 31px; padding: 4px 9px; border-radius: 8px; font-size: 10px; }
-.binding-line { display: inline-flex; align-items: center; gap: 4px; }
-.agent-dot { width: 17px; height: 17px; display: inline-grid; place-items: center; border-radius: 5px; color: white; font-size: 8px; font-weight: 800; }
-.agent-dot.claude, .agent-avatar.claude { background: #ce6c3f; }
-.agent-dot.codex, .agent-avatar.codex { background: #2d8b73; }
+.agent-avatar.claude { background: #ce6c3f; }
+.agent-avatar.codex { background: #2d8b73; }
 
 .detail-hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center; padding: 20px; }
 .detail-title { display: flex; align-items: center; gap: 13px; }
@@ -973,6 +983,7 @@ body[data-density="compact"] .stat-card { min-height: 98px; }
   .project-summary-item:nth-child(2) { border-right: 0; }
   .project-summary-item:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
   .room-row { grid-template-columns: 1fr; }
+  .room-meta { grid-template-columns: minmax(0, 1fr); }
   .room-actions { justify-content: start; }
   .detail-hero { grid-template-columns: 1fr; }
   .detail-actions { justify-content: start; }
@@ -1084,8 +1095,6 @@ body[data-density="compact"] .stat-card { min-height: 98px; }
 .context-room-name { padding: 7px 10px; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .room-context-menu button { display: block; width: 100%; min-height: 44px; padding: 8px 10px; text-align: left; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
 .room-context-menu button:hover, .room-context-menu button:focus-visible { background: var(--bg-soft); outline: 2px solid var(--accent); outline-offset: -2px; }
-.binding-copy { min-width: 0; display: grid; gap: 2px; overflow-wrap: anywhere; }
-.binding-runtime-name { color: var(--text); user-select: all; }
 
 #room-name-hint { display: block; margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.5; }
 
