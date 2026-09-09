@@ -1,126 +1,52 @@
 # Upgrading
 
-PairRoom's CLI, Event Log, HTTP API, and native adapters evolve with the official CLIs. Treat an upgrade as a controlled change, not as overwriting a binary in place.
+Treat an upgrade as a controlled change, not as overwriting an active binary. Release history is in [CHANGELOG](../CHANGELOG.md); this page describes the current reader and operational boundary.
 
-## Flexible default collaboration
+## Supported Room formats
 
-New Rooms use version-2 default instructions: the addressed Agent completes simple tasks directly, with delegation and review chosen by complexity and risk. Existing version-1 defaults and custom instructions remain readable and unchanged; to use the new default in an existing Room, give equivalent human instructions for the current task or create a new Room.
+Readers and writers require **Store schema 10**. Service-managed Rooms also require **provisioning schema 3**, explicit immutable Agent selections, and matching collaboration instructions. Registry checkpoints use schema 2. Current-schema version-1 default instructions, version-2 flexible defaults, and custom instructions remain readable and unchanged; this cleanup does not upgrade their prose or grant permissions.
+
+Legacy Room compatibility is removed: schema 9, provisioning 1/2, missing-metadata imports, inferred native Bindings, Service-default fallback at activation, role switching, role-bound Reviewer snapshots, and lifecycle-only archive stubs are unsupported. The import and binding-completion HTTP endpoints and UI are removed. `ordinary_reviewer_policy` is no longer a configuration field. The current `configured`, `read-only`, and `yolo` permission profiles remain independent of Lead/Executor responsibilities.
+
+**There is no automatic migration or deletion of old data.** Unsupported stores fail before Event Log replay or tail repair. Preserve them and their matching older binary for inspection. Before starting the current Service, move unsupported Room directories out of its `rooms/` discovery root after stopping all owners and making a backup. Do not edit schema numbers, relabel metadata, copy selected records into a current log, or use new defaults to infer historical permissions. Previously imported external directories are no longer discovered from the checkpoint and are never erased by this cleanup.
+
+Create a new Room to continue work. An explicit Existing Binding may resume a native CLI session, but prior native history remains outside the PairRoom transcript. `pairroom serve` remains a current-format standalone development/diagnostic command; it does not restore Legacy Rooms or import standalone history into the Service.
+
+A current Room whose entire directory is lost can still be archived and explicitly removed using its validated checkpoint identity. Missing files inside a directory, ambiguous replacement data, and unidentified archive stubs fail closed. Prepared deletion quarantine entries are restored when the checkpoint still owns them; committed current-format deletions can finish cleanup after a crash.
 
 ## Before upgrading
 
-1. Read [CHANGELOG](../CHANGELOG.md);
-2. Stop or archive active Rooms;
-3. Create and verify a PairRoom data backup;
-4. Record the current binary, Claude Code / Codex / Grok Build, and configuration versions;
-5. Make sure the working repository has no unrecognized native side effects.
+1. Read the changelog, stop or archive active Rooms, and record the binary and native CLI versions.
+2. Back up the complete Service data root and verify any Room archives with the matching binary. Keep the matching binary and configuration alongside the backup.
+3. Inspect working repositories for unrecognized native side effects. Identify unsupported Room data before replacing the binary.
 
-## Integrity and configuration hardening (v3.1.1)
+## Configuration and native runtimes
 
-No schema, event kind, collaboration instruction, or native session identity changes. Valid schema-9/10 Event Logs and provisioning-v1/2/3 records remain readable.
+Service configuration is one strict JSON object: duplicate fields, trailing documents, unknown fields, and `null` runtime/policy fields are rejected. Empty policy strings request native inheritance. Move per-Room Provider/model/effort/permission choices out of runtime command arguments and into the Agent selection.
 
-Service configuration must be one JSON object. Duplicate object fields (including nested and Unicode-equivalent keys), trailing documents, and `null` runtime/policy fields are rejected rather than ambiguously merging with defaults. Use explicit empty policy strings for native inheritance. Runtime templates cannot override per-Room model, Provider, effort, or permission settings through attached short flags or inline Codex `-c`/`--config` options; move these choices to the Agent selection instead. When changing a slot's Runtime, omitted policy defaults come from that Runtime, while explicit empty or narrower settings remain intact. A Provider reference with an App type or Profile ID but no source is invalid; it no longer silently falls back to native credentials.
+Providers use native configuration or read-only CC Switch references. Back up the data root, configure the equivalent CC Switch profile, then replace removed top-level `providers` / `cc_connect` and per-slot Provider-name strings with structured references. Never copy credentials into Room selections. Native runtime versions and per-process credential boundaries must be rechecked after upgrade.
 
-Event sequences must start at 1 and remain contiguous; a missing log is not an empty Room. Back up corrupt data before investigating a rejected start or restore. Do not renumber complete records to bypass verification. Only an incomplete final JSONL record can be repaired automatically. An ambiguous append I/O failure closes the writer; stop the affected Runtime/Service and reopen only after checking storage health and the verified Event Log. Rollback does not require rewriting valid Room data.
+Remove retired `routing_mode`, `max_agent_hops`, `--routing`, `--max-hops`, and role-target automation. Message intents are `steer` or `queue`. Only current runtime-derived exact handles route Agent relay; old control markers are ordinary text. Stable JSON slot IDs remain `claude` and `codex`, independently of the selected Runtime.
 
-Backup and diagnostics outputs must now be outside the source Room data directory, including symlink aliases. Restore validates the complete gzip container before replacing a destination, rejects duplicate or oversized manifests (32 MiB limit), and permits only bounded zero padding (1 MiB) after the tar end marker. Damaged archives that older versions accepted must be recreated from verified source data, not forced through restore. Attachment metadata symlinks and changes to a Message's recorded image digest are rejected. These checks do not alter the backup format.
+## Desktop and daemon
 
-## Desktop launch no longer installs a daemon (v3.1.0)
+Desktop never installs a daemon implicitly. It reuses an installed daemon or owns an embedded Service when none is installed. Launch at login is an explicit native Settings operation. `make desktop-update` replaces the host and bundled CLI without changing user data or daemon configuration.
 
-Opening Desktop reuses an already-installed daemon or owns an embedded Service when none is installed. It no longer runs `pairroom daemon install` from the bundled CLI. Launch-at-login is an explicit Settings control and does not install, start, or remove a daemon. If you still want a persistent background Service, run `pairroom daemon install` yourself. `make desktop-update` replaces the host and bundled CLI only; it does not change daemon configuration. This change adds no schema, event kind, or native prompt; Store schema 10 / provisioning schema 3 remain unchanged. Normal stop/drain and reverting the code are sufficient to roll back this change without rewriting Room data.
+Desktop and `pairroom daemon start` recover a crash-stale lock only after verifying the recorded PID is gone. A live owner fails closed. Normal stop/restart drains active native Turns; never force a second Service onto an owned data root.
 
-## Desktop crash-stale lock recovery (v3.0.2)
-
-Desktop and `pairroom daemon start` recover a crash-stale `service.lock` after verifying the recorded PID is gone, then start or restart the installed daemon. A live lock owner still fails closed; Desktop does not start a competing embedded Service. `--recover-stale-lock` remains for foreground `pairroom service` and as a compatibility daemon option. This change adds no schema, event kind, or native prompt; Store schema 10 / provisioning schema 3 remain unchanged. Normal stop/drain and reverting the code are sufficient to roll back this change without rewriting Room data.
-
-## Pending retry exclusion (v3.0.1)
-
-A retry request returns HTTP 409 while a direct retry of the same source Message and participant is already waiting or working. External clients should display the existing pending attempt instead of repeatedly submitting. Completed/failed/cancelled attempts still allow an explicit new retry. This change adds no schema, event kind, or native prompt; Store schema 10 / provisioning schema 3 remain unchanged. Normal stop/drain and reverting the code are sufficient to roll back this change without rewriting Room data.
-
-## HTTP client adjustments (v3.0.0)
-
-The HTTP reliability changes below preserve complete-response Agent relay. The collaboration update additionally changes native instructions and new-Room schemas as described in the next section.
-
-For external HTTP/SSE clients, validate `message_limit` as an integer from 0 to 1000; invalid values now return HTTP 400 rather than being silently reinterpreted. Omitted or zero limits still request the full snapshot. On an SSE `reset` event, fetch a fresh snapshot and reconnect from its `latest_seq`; the server closes that stream because the cursor is ahead or older than the bounded replay tail. A non-empty `Last-Event-ID` takes precedence over `since`. See [API reference](API_REFERENCE.md) for the wire contract.
-
-Native approval clients should render Grok's advertised options and send `decision: "option:<optionId>"`. One-time grants no longer fall back to remembered authorization, and cancellation is not a remembered rejection. Claude question responses must answer every exact native question text; incomplete or unknown answers fail without consuming the request. See [API reference](API_REFERENCE.md#native-approval-responses). Those approval fixes alone did not change schemas.
-
-## Room names (v3.0.0)
-
-The naming update adds no new Store/provisioning schema or event kind. Existing Room names and native IDs remain unchanged on upgrade; the normal next activation applies the Room-derived native display title where the CLI supports it. This includes explicitly bound existing sessions and can replace their old manual title. Unsupported/failed synchronization remains visible alongside the original session ID; upgrade the native CLI or check by that ID instead of assuming the display title changed.
-
-New Room names are optional; omitted names are generated once and persist through restart. Right-click the Room in the sidebar, tabstrip, or Project list (or press Shift+F10) to rename it. Existing explicit Rename buttons remain available. Rename waits at the existing safe boundary, suspends without interrupting active work, and then commits. Reactivate normally to apply new native titles; dormant/archived Rooms are not started merely to rename them. Invalid and unchanged names no longer suspend a runtime. External clients must treat `runtime_names` as desired display metadata, not native IDs or synchronization receipts; see [API reference](API_REFERENCE.md#room-names-and-native-session-correspondence).
-
-Reverting only this naming change does not restore a native title already changed through a vendor's naming API. Rename it in that native CLI if necessary. The earlier schema-10 downgrade restrictions below still apply.
-
-## Collaboration modes and native permissions (v3.0.0)
-
-New Rooms write **Store schema 10 / provisioning schema 3**. They choose only default Lead/Executor or custom natural-language instructions, fixed at creation. Both participants use the live workspace and default Service policy is YOLO; use the explicit creation controls or native configuration to narrow access. The new permission endpoint can change effective tool policy at an idle boundary without changing the mode or session identity.
-
-Existing Store-schema-9 Rooms and provisioning-1/2 records remain readable with their original policy and workspace boundaries. Opening them does not relabel metadata, add a new mode, or silently grant YOLO. Legacy public role controls are removed; create a new Room to adopt the new collaboration model. No in-place data migration is required or performed. Earlier pre-schema-9 stores remain unsupported.
-
-External clients must replace role controls with the independent permission endpoint for modern Rooms and must not send `target_role` or role aliases. The model-facing protocol is now v6: fixed identity/mode rules move into native instructions and dynamic envelopes contain only sender/body/media. Correlation IDs remain in transport and persistence, and message bodies/attachments are not summarized.
-
-An old binary cannot safely read new schema-10 / provisioning-3 data. Keep and verify a complete pre-upgrade backup. For downgrade, stop/drain normally and restore that backup with its matching binary; never edit schema numbers or copy partial Event Logs.
-
-## Earlier breaking boundaries still enforced
-
-### Provider and Room provisioning migration
-
-The earlier Provider update moved the root module to Go 1.25, replaced PairRoom-owned Provider configuration with read-only CC Switch v3.20.1/schema 18 references, and introduced provisioning schema 2. These Provider constraints remain; newly created Rooms now use schema 3.
-
-Before installing the new binary:
-
-1. Stop the Service after active Turns drain. Back up and verify each Room with `pairroom backup`, and separately preserve the complete Service data root with an offline filesystem backup (see [Operations](OPERATIONS.md#backup));
-2. Preserve that backup unchanged as the downgrade point;
-3. Remove top-level `providers` and `cc_connect` configuration. Move per-slot `command`/`args` into `runtimes.claude`, `runtimes.codex`, or `runtimes.grok`;
-4. Replace a string-valued slot `provider` with `{"source":"native"}` or `{"source":"cc-switch","app_type":"…","profile_id":"…"}`. Use `pairroom providers --json` to inspect the sanitized CC Switch catalog and disabled reasons;
-5. If an existing schema-v1 Room depends on a former PairRoom Provider default, point the corresponding Service default slot at the equivalent CC Switch Profile before activating that Room.
-
-Configuration containing removed Provider fields fails startup with migration guidance; it is never silently ignored. PairRoom does not copy old secrets into CC Switch and does not change the CC Switch current Profile.
-
-Existing schema-v1 Rooms are read without modification and shown as `Legacy defaults`. Existing schema-v2 Rooms retain their immutable two-slot Agent selections. An older PairRoom binary fails closed on schema-v2 provisioning facts. To downgrade, stop the newer Service and restore the complete pre-upgrade data-root backup; do not copy individual Event Logs or edit schema numbers.
-
-### Routing migration
-
-The earlier routing redesign established Store schema `9`. The current reader accepts `9` and `10`, rejects all other schemas before Event Log replay, and does not migrate pre-9 Rooms. Keep their matching binary and backup for inspection; do not rewrite JSONL or metadata to fake a migration.
-
-Remove `routing_mode` and `max_agent_hops` from JSON configuration and remove `--routing` / `--max-hops` from automation. The strict decoder and CLI reject those removed interfaces. HTTP clients must send only `steer` or `queue` Message intents; `steer` is the default. Old `append`, `next_turn`, and `supersede` values are invalid.
-
-Workflow state, compilation, events, approval gates, and UI have been removed. Express the task to one Agent, use creation-time collaboration instructions, and retain native approvals. Agent relay now recognizes only runtime-derived exact handles: unique runtimes use `@claude`, `@codex`, or `@grok`; duplicate runtimes use stable `0/1` suffixes. Old aliases no longer route, and an unaddressed user send that relies on one is rejected; old control markers are ordinary text.
-
-JSON keys `claude` and `codex` remain durable Agent 1 / Agent 2 slots. Add `runtime` (`claude` | `codex` | `grok`) per slot when selecting a non-default harness. Empty `provider`, `model`, `effort`, and `instructions` now inherit the selected native CLI's user/global configuration.
-
-## Perform the upgrade
-
-After replacing the binary, run:
+## Verify the upgrade
 
 ```bash
 pairroom version
 pairroom service --mock
 ```
 
-Then verify:
+Check strict configuration parsing and Project discovery, then create a Mock Room and exercise exact-handle relay, FIFO, permission changes, restart, and backup verification. Real-runtime verification is separate: start with an explicitly read-only single-Agent Turn before testing an addressed peer response. Mock success does not prove vendor authentication or model availability.
 
-- configuration parses strictly;
-- the Project registry can be read;
-- a new Mock Room can complete exact-handle relay and a multi-Turn FIFO;
-- backup verification succeeds;
-- real mode first completes a read-only single-Agent Turn, then an explicitly addressed peer review Turn.
+HTTP/SSE clients must re-run their contract tests. On a stream `reset`, fetch a fresh snapshot and reconnect from its `latest_seq`; do not replay commands to repair a display gap. See [API reference](API_REFERENCE.md) and [CLI reference](CLI_REFERENCE.md) for the checked inventories.
 
-## Rollback
+## Rollback and integrity
 
-Rolling back the binary is not the same as rolling back the Event Log. If the new version has already written events the old version does not understand:
+Stop/drain the Service, save its current data root, restore the complete verified pre-upgrade backup with its matching binary/configuration, then recheck Bindings and repository side effects. Do not mix old and new data files. Native session titles already changed through vendor metadata APIs require a separate native rename; binary rollback cannot undo them.
 
-1. Stop the Service;
-2. Save the current data root;
-3. Restore the complete, verified pre-upgrade backup;
-4. Restore the matching binary and configuration;
-5. Re-verify Bindings and repository side effects.
-
-Do not mix old and new data files.
-
-## Documentation and clients
-
-External tools that call the HTTP API, parse the Event Log, or depend on CLI copy must re-run contract tests at upgrade time. The route inventory in `docs/API_REFERENCE.md` and the flag inventory in `docs/CLI_REFERENCE.md` are checked against current source by `make docs-check`.
-
-Published Room activation and lifecycle mutations now require the existing Event Log to begin with the expected Room identity. Missing, empty, or replaced Room data fails closed before tail repair or new writes; restore the correct verified Room backup rather than relying on activation to recreate history. Embedded Room listeners, like public Service listeners, accept numeric loopback addresses only.
+Do not renumber complete Event Log records to bypass verification. Only an incomplete final JSONL record in a supported store may be repaired. An ambiguous append I/O error closes the writer; reopen only after checking storage health and the verified log. Restore validates the entire archive before replacing a destination, and backup/diagnostic outputs must remain outside the source Room directory.

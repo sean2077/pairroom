@@ -24,12 +24,10 @@ import (
 	"github.com/sean2077/pairroom/internal/server"
 	"github.com/sean2077/pairroom/internal/store"
 	"github.com/sean2077/pairroom/internal/version"
-	"github.com/sean2077/pairroom/internal/workspace"
 )
 
-// EmbeddedRuntimeConfig controls the per-Room resources created by the
-// service. Each active Room still uses the existing v1 Engine, adapters,
-// attachment store, workspace manager, and Room View HTTP handler.
+// EmbeddedRuntimeConfig controls the per-Room Engine, adapters, attachment
+// store, and Room View HTTP handler created by the Service.
 type EmbeddedRuntimeConfig struct {
 	ListenHost          string
 	Mock                bool
@@ -207,9 +205,6 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 	if durableRoom.Archived() {
 		return nil, errors.New("archived Room cannot be activated")
 	}
-	if durableRoom.HasBlockingPendingBindings() {
-		return nil, ErrRoomBindingPending
-	}
 	if durableRoom.HasPendingBindings() && registry == nil {
 		return nil, errors.New("service registry is required to materialize deferred bindings")
 	}
@@ -247,20 +242,12 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 	if err != nil {
 		return nil, fmt.Errorf("open Room attachment store: %w", err)
 	}
-	workspaceManager, err := workspace.New(project.Root, durableRoom.DataDir)
-	if err != nil {
-		return nil, fmt.Errorf("open Room workspace manager: %w", err)
-	}
 
 	claudeCfg := cfg.Claude
 	codexCfg := cfg.Codex
 	if cfg.Resolver != nil {
-		selections := durableRoom.Agents
-		if durableRoom.LegacyDefaults {
-			selections = cfg.Resolver.DefaultSelections()
-		}
-		claudeSelection := selections[model.ActorClaude]
-		codexSelection := selections[model.ActorCodex]
+		claudeSelection := durableRoom.Agents[model.ActorClaude]
+		codexSelection := durableRoom.Agents[model.ActorCodex]
 		claudeCfg, err = cfg.Resolver.Resolve(startCtx, model.ActorClaude, claudeSelection, codexSelection.Runtime, project.Root, durableRoom.DataDir)
 		if err != nil {
 			return nil, fmt.Errorf("resolve Agent 1 activation: %w", err)
@@ -322,7 +309,6 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 		ClaudeConfig:          claudeCfg,
 		CodexConfig:           codexCfg,
 		Attachments:           attachmentStore,
-		Workspaces:            workspaceManager,
 		AutoStart:             cfg.AutoStart,
 		OnSessionMaterialized: onSessionMaterialized,
 	})

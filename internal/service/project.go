@@ -46,10 +46,6 @@ func NewProjectResolver() *ProjectResolver {
 	return &ProjectResolver{git: execGitRunner{}}
 }
 
-func newProjectResolverForTest(runner gitRunner) *ProjectResolver {
-	return &ProjectResolver{git: runner}
-}
-
 func (r *ProjectResolver) Resolve(ctx context.Context, input string) (Project, error) {
 	if r == nil || r.git == nil {
 		return Project{}, errors.New("project resolver is not configured")

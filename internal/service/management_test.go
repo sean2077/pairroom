@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/version"
 	"github.com/sean2077/pairroom/internal/websession"
 )
@@ -68,7 +67,7 @@ func TestManagementShellAuthenticationAssetsAndSecurityHeaders(t *testing.T) {
 	if asset.Code != http.StatusOK {
 		t.Fatalf("management asset status=%d body=%s", asset.Code, asset.Body.String())
 	}
-	for _, marker := range []string{"/api/v1/session", "/api/v1/service", "X-PairRoom-CSRF", "createBrowserSession", "credentialFromInput", "submitCredentialLogin", "logoutBrowserSession", "login-form", "login-token", "logout-button", "ui.theBrowserSessionHasExpiredPleaseReEnterTheServiceToken", "completeBindings", "ui.completeBindings", "queue_position", "room.materializesOnFirstTurn", "roomHasBlockingPendingBindings", "renderProjects", "renderRuntimes", "renderSettings", "/suspend", "pairroom daemon open", "pairroom daemon status", "ui.onlyAfterConfirmingThatTheOldProcessHasDisappearedCanYouExplicitly", "/api/v1/projects/", "/refresh", "confirm_project_id", "/api/v1/rooms/batch-archive", "/api/v1/rooms/batch-delete", "acknowledge_data_loss", "selectedRoomIDs", "confirm-input", "confirm-input-label", "confirm-ack", "project_refresh", "project_removal", "room_deletion", "pending_room_cleanup", "ui.batchArchiveValue", "ui.batchDeleteValue", "ui.permanentlyDelete", "room-action-control", "room-select-control", "button secondary-button compact-button room-action-control room-select-control", "#/rooms/", "openRoomInBrowserAction", "/api/v1/runtime-policy", "/surface/", "ui.canOnlyBeOpenedAfterRecovery", "const previous = state.tabMeta[data.roomId];", "pairroom.theme", "localStorage.getItem('pairroom.theme'", "PairRoomTheme.setTheme", "pairroom:theme", "ui.about", "ui.githubRepository", "https://github.com/sean2077/pairroom"} {
+	for _, marker := range []string{"/api/v1/session", "/api/v1/service", "X-PairRoom-CSRF", "createBrowserSession", "credentialFromInput", "submitCredentialLogin", "logoutBrowserSession", "login-form", "login-token", "logout-button", "ui.theBrowserSessionHasExpiredPleaseReEnterTheServiceToken", "queue_position", "room.materializesOnFirstTurn", "renderProjects", "renderRuntimes", "renderSettings", "/suspend", "pairroom daemon open", "pairroom daemon status", "ui.onlyAfterConfirmingThatTheOldProcessHasDisappearedCanYouExplicitly", "/api/v1/projects/", "/refresh", "confirm_project_id", "/api/v1/rooms/batch-archive", "/api/v1/rooms/batch-delete", "acknowledge_data_loss", "selectedRoomIDs", "confirm-input", "confirm-input-label", "confirm-ack", "project_refresh", "project_removal", "room_deletion", "pending_room_cleanup", "ui.batchArchiveValue", "ui.batchDeleteValue", "ui.permanentlyDelete", "room-action-control", "room-select-control", "button secondary-button compact-button room-action-control room-select-control", "#/rooms/", "openRoomInBrowserAction", "/api/v1/runtime-policy", "/surface/", "ui.canOnlyBeOpenedAfterRecovery", "const previous = state.tabMeta[data.roomId];", "pairroom.theme", "localStorage.getItem('pairroom.theme'", "PairRoomTheme.setTheme", "pairroom:theme", "ui.about", "ui.githubRepository", "https://github.com/sean2077/pairroom"} {
 		if !strings.Contains(asset.Body.String(), marker) {
 			t.Fatalf("management asset omitted %q", marker)
 		}
@@ -159,7 +158,7 @@ func TestManagementShellAuthenticationAssetsAndSecurityHeaders(t *testing.T) {
 	}
 
 	crossSite := httptest.NewRecorder()
-	crossSiteRequest := managementRequest(http.MethodPost, "/api/v1/import", `{"path":"/tmp/example"}`, true)
+	crossSiteRequest := managementRequest(http.MethodPost, "/api/v1/projects", `{"path":"/tmp/example"}`, true)
 	crossSiteRequest.Header.Set("Origin", "https://evil.example")
 	server.Handler().ServeHTTP(crossSite, crossSiteRequest)
 	if crossSite.Code != http.StatusForbidden {
@@ -441,66 +440,6 @@ func TestManagementSessionCookieNameIsStableAndDataRootScoped(t *testing.T) {
 	}
 }
 
-func TestManagementBindingCompletionEndpointIsAtomicAndDurable(t *testing.T) {
-	repo := testGitRepo(t)
-	custom := filepath.Join(t.TempDir(), "legacy-api")
-	if err := writeLegacyRoom(custom, repo, "legacy-api-room", "Legacy API", "", ""); err != nil {
-		t.Fatal(err)
-	}
-	registry, err := OpenRegistry(context.Background(), RegistryConfig{Root: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacy, err := registry.ImportLegacy(context.Background(), custom)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !legacy.HasPendingBindings() {
-		t.Fatal("legacy fixture did not expose pending bindings")
-	}
-	server, _ := newManagementTestServer(t, registry, SyntheticProvisioner{})
-
-	body := `{"bindings":{"claude":{"mode":"new"},"codex":{"mode":"existing","session_id":"codex-api-existing"}}}`
-	recorder := httptest.NewRecorder()
-	server.Handler().ServeHTTP(recorder, managementRequest(http.MethodPost, "/api/v1/rooms/"+legacy.ID+"/bindings", body, true))
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("binding completion status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-	var completed Room
-	if err := json.Unmarshal(recorder.Body.Bytes(), &completed); err != nil {
-		t.Fatal(err)
-	}
-	if completed.HasPendingBindings() || completed.Bindings[model.ActorClaude].SessionID == "" || completed.Bindings[model.ActorCodex].SessionID != "codex-api-existing" {
-		t.Fatalf("unexpected completed bindings: %#v", completed.Bindings)
-	}
-	for _, binding := range completed.Bindings {
-		owner, ok := registry.BindingOwner(binding.Key())
-		if !ok || owner != completed.ID {
-			t.Fatalf("binding owner=%q ok=%v for %#v", owner, ok, binding)
-		}
-	}
-	events, err := readEventsReadOnly(filepath.Join(custom, "events.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if events[len(events)-1].Kind != EventRoomBindingsCompleted {
-		t.Fatalf("last event=%q, want %q", events[len(events)-1].Kind, EventRoomBindingsCompleted)
-	}
-
-	second := httptest.NewRecorder()
-	server.Handler().ServeHTTP(second, managementRequest(http.MethodPost, "/api/v1/rooms/"+legacy.ID+"/bindings", body, true))
-	if second.Code < 400 {
-		t.Fatalf("second completion unexpectedly succeeded: status=%d body=%s", second.Code, second.Body.String())
-	}
-	after, err := readEventsReadOnly(filepath.Join(custom, "events.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(after) != len(events) {
-		t.Fatalf("rejected second completion appended an event: before=%d after=%d", len(events), len(after))
-	}
-}
-
 func TestArchiveInterruptsActiveTurnThenSuspendsBeforeLifecycleAppend(t *testing.T) {
 	registry, rooms := provisionRuntimeRooms(t, 1)
 	factory := &fakeRuntimeFactory{busy: true}
@@ -676,7 +615,7 @@ func TestManagementSnapshotIncludesSummaryPolicyAndCapabilities(t *testing.T) {
 		snapshot.Summary.ActiveRuntimes != 1 || snapshot.Summary.RuntimeCapacityUsed != 1 {
 		t.Fatalf("unexpected service summary: %#v", snapshot.Summary)
 	}
-	if !snapshot.Capabilities.LegacyImport || !snapshot.Capabilities.RuntimeSuspend || !snapshot.Capabilities.ProjectRefresh ||
+	if !snapshot.Capabilities.RuntimeSuspend || !snapshot.Capabilities.ProjectRefresh ||
 		!snapshot.Capabilities.ProjectRemoval || !snapshot.Capabilities.RoomDeletion || snapshot.Capabilities.ServerPathBrowser ||
 		!snapshot.Capabilities.RuntimePolicyMutation || !snapshot.Capabilities.RoomSurface {
 		t.Fatalf("unexpected capability surface: %#v", snapshot.Capabilities)

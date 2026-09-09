@@ -17,15 +17,10 @@ const (
 	EventRoomRenamed             = "service.room.renamed"
 	EventRoomArchived            = "service.room.archived"
 	EventRoomRestored            = "service.room.restored"
-	EventRoomBindingsCompleted   = "service.room.bindings.completed"
 	EventRoomBindingMaterialized = "service.room.binding.materialized"
-	EventLegacyImported          = "service.legacy.imported"
 )
 
-const (
-	LegacyTranscriptBoundaryNotice = "This PairRoom timeline starts at the binding boundary. Existing vendor context may be resumed, but earlier Claude/Codex transcripts are not imported, copied, summarized, searched, or displayed."
-	TranscriptBoundaryNotice       = "This PairRoom timeline starts at the binding boundary. Existing native Runtime context may be resumed, but earlier native conversation history is not imported, copied, summarized, searched, or displayed."
-)
+const TranscriptBoundaryNotice = "This PairRoom timeline starts at the binding boundary. Existing native Runtime context may be resumed, but earlier native conversation history is not imported, copied, summarized, searched, or displayed."
 
 type BindingMode string
 
@@ -98,6 +93,9 @@ func (b Binding) Validate() error {
 		return fmt.Errorf("invalid binding mode %q", b.Mode)
 	}
 	if b.Pending {
+		if b.Mode != BindingNew {
+			return errors.New("only new bindings may be pending")
+		}
 		if strings.TrimSpace(b.SessionID) != "" {
 			return errors.New("pending binding must not include a session ID")
 		}
@@ -114,7 +112,7 @@ func (b Binding) Validate() error {
 		return errors.New("binding session ID exceeds 512 bytes")
 	}
 	if strings.ContainsAny(b.SessionID, "\r\n\x00") {
-		return errors.New("binding session ID contains control characters")
+		return errors.New("session ID contains control characters")
 	}
 	if b.BoundAt.IsZero() {
 		return errors.New("binding time is required")
@@ -150,8 +148,6 @@ type Room struct {
 	Bindings                 map[model.ActorID]Binding              `json:"bindings"`
 	Agents                   map[model.ActorID]model.AgentSelection `json:"agents,omitempty"`
 	TranscriptBoundaryNotice string                                 `json:"transcript_boundary_notice"`
-	Legacy                   bool                                   `json:"legacy,omitempty"`
-	LegacyDefaults           bool                                   `json:"legacy_defaults,omitempty"`
 	CreatedAt                time.Time                              `json:"created_at"`
 	UpdatedAt                time.Time                              `json:"updated_at"`
 }
@@ -167,24 +163,12 @@ func (r Room) HasPendingBindings() bool {
 	return false
 }
 
-// HasBlockingPendingBindings distinguishes legacy bindings that still need an
-// explicit user choice from new native bindings whose vendor identity is
-// materialized automatically after the first accepted PairRoom input.
-func (r Room) HasBlockingPendingBindings() bool {
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
-		binding, ok := r.Bindings[actor]
-		if !ok || (binding.Pending && binding.Mode != BindingNew) {
-			return true
-		}
-	}
-	return false
-}
-
 func (r Room) Validate() error {
-	if r.Collaboration != nil {
-		if err := r.Collaboration.Validate(); err != nil {
-			return err
-		}
+	if r.Collaboration == nil {
+		return errors.New("Room collaboration instructions are required")
+	}
+	if err := r.Collaboration.Validate(); err != nil {
+		return err
 	}
 	if strings.TrimSpace(r.ID) == "" {
 		return errors.New("room ID is required")
@@ -201,11 +185,7 @@ func (r Room) Validate() error {
 	if !r.Lifecycle.Valid() {
 		return fmt.Errorf("invalid room lifecycle %q", r.Lifecycle)
 	}
-	validBoundary := r.TranscriptBoundaryNotice == TranscriptBoundaryNotice
-	if r.LegacyDefaults {
-		validBoundary = validBoundary || r.TranscriptBoundaryNotice == LegacyTranscriptBoundaryNotice
-	}
-	if !validBoundary {
+	if r.TranscriptBoundaryNotice != TranscriptBoundaryNotice {
 		return errors.New("room transcript boundary policy is missing or invalid")
 	}
 	if len(r.Bindings) != 2 {
@@ -228,14 +208,8 @@ func (r Room) Validate() error {
 			return fmt.Errorf("%s binding: %w", actor, err)
 		}
 	}
-	if r.LegacyDefaults {
-		if len(r.Agents) != 0 {
-			return errors.New("Legacy-defaults Room must not contain immutable Agent selections")
-		}
-	} else {
-		if _, err := validateAgentSelections(r.Agents); err != nil {
-			return fmt.Errorf("Room Agent selections: %w", err)
-		}
+	if _, err := validateAgentSelections(r.Agents); err != nil {
+		return fmt.Errorf("Room Agent selections: %w", err)
 	}
 	return nil
 }
@@ -309,19 +283,9 @@ type roomLifecyclePayload struct {
 	UpdatedAt time.Time     `json:"updated_at"`
 }
 
-type roomBindingsCompletedPayload struct {
-	Bindings  map[model.ActorID]Binding `json:"bindings"`
-	UpdatedAt time.Time                 `json:"updated_at"`
-}
-
 type roomBindingMaterializedPayload struct {
 	Binding   Binding   `json:"binding"`
 	UpdatedAt time.Time `json:"updated_at"`
-}
-
-type legacyImportedPayload struct {
-	SourceDir  string    `json:"source_dir"`
-	ImportedAt time.Time `json:"imported_at"`
 }
 
 type RegistrySnapshot struct {

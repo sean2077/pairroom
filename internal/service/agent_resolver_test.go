@@ -67,7 +67,7 @@ func TestAgentResolverIsolatesConcurrentProfilesAndRefreshesOnlyOnResolve(t *tes
 		return model.AgentSelection{
 			Runtime:  model.RuntimeGrok,
 			Provider: model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "grokbuild", ProfileID: id},
-			Model:    modelName, OrdinaryReviewerPolicy: model.ReviewerEnforced,
+			Model:    modelName,
 		}
 	}
 	type result struct {

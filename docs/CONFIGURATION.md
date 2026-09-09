@@ -20,11 +20,11 @@ Collaboration **instructions** have only two creation-time modes: `default` Lead
 
 The JSON keys `claude` and `codex` are durable Agent 1 and Agent 2 slots, not vendor identities. Each slot has a `runtime` of `claude`, `codex`, or `grok`. Both slots may select the same runtime.
 
-Each slot supplies a default `AgentSelection`: `runtime`, a structured `provider`, optional `model`, `effort`, `instructions`, Runtime-specific permission/approval/sandbox values. A new Room snapshots both selections; changing Service configuration later does not rewrite it. Existing schema-v1 Rooms have no selection snapshot, are shown as `Legacy defaults`, and continue to resolve the current Service defaults at activation.
+Each slot supplies a default `AgentSelection`: `runtime`, a structured `provider`, optional `model`, `effort`, `instructions`, Runtime-specific permission/approval/sandbox values. A new Room snapshots both selections; changing Service configuration later does not rewrite it.
 
 `provider: {"source":"native"}` delegates Provider and credentials to the selected CLI's user/global configuration. Empty model, effort, and per-Agent instructions add no override. New Service defaults use Claude `permission_mode: yolo` and Codex `approval_policy: yolo` with `sandbox: danger-full-access`; Grok YOLO projects bypass and sandbox `off`. Both default-mode participants use these permissions, regardless of responsibility. Explicit narrower settings remain respected; explicitly empty permission/approval/sandbox fields inherit native configuration. When restoring a configured policy, an explicit `yolo` with no sandbox completes the full-access sandbox override; clear both fields to request native inheritance.
 
-`ordinary_reviewer_policy` is a deprecated legacy-read field. It remains meaningful for old Rooms with role-bound workspaces, but is omitted from new selections and the creation form. It does not create a third collaboration mode. Modern permission controls select `configured`, `read-only`, or `yolo` at an idle boundary; the configured creation-time values themselves stay immutable.
+Permission controls select `configured`, `read-only`, or `yolo` at an idle boundary; the configured creation-time values themselves stay immutable.
 
 Commands are not part of a Room selection. `runtimes.claude`, `runtimes.codex`, and `runtimes.grok` each own one Service-level `command`/`args` template, preventing a Room request from selecting an executable.
 
@@ -46,7 +46,7 @@ A profile includes each slot's Runtime/harness, Provider reference, model, effor
 
 New Room forms fill the saved default automatically. Selecting a profile only fills the controls: changes are temporary unless explicitly saved. Room creation copies the final pair into the immutable Room selections and revalidates Provider references. Editing, renaming, or deleting a profile never changes existing Rooms. Deleting the default clears it rather than arbitrarily choosing another profile; with no default, new Rooms use Service defaults. A missing Provider stays visible and blocks creation rather than silently falling back; saved profiles remain editable while a Provider is unavailable.
 
-Profiles are Service user configuration in `<service data root>/agent-pair-profiles.json`, not fields in the startup JSON file and not browser local storage. The file survives restart and Registry-index rebuild. Different Service data roots have independent profiles; the legacy standalone `pairroom serve` does not read them. Up to 100 names are accepted, unique case-insensitively, non-blank, at most 160 UTF-8 bytes and without control characters. Use the [Management API](API_REFERENCE.md#agent-pair-profiles) for programmatic management.
+Profiles are Service user configuration in `<service data root>/agent-pair-profiles.json`, not fields in the startup JSON file and not browser local storage. The file survives restart and Registry-index rebuild. Different Service data roots have independent profiles; standalone `pairroom serve` does not read them. Up to 100 names are accepted, unique case-insensitively, non-blank, at most 160 UTF-8 bytes and without control characters. Use the [Management API](API_REFERENCE.md#agent-pair-profiles) for programmatic management.
 
 ## CC Switch Provider references
 
@@ -67,9 +67,6 @@ Service-level fields control the number of concurrently active Rooms, idle recla
 The following JSON names are extracted from struct tags in `internal/config/`. This is a gap-finding list, not a substitute for field semantics and samples.
 
 <!-- generated:config-fields -->
-<details>
-<summary>Show current JSON fields</summary>
-
 - `app_type`
 - `approval_policy`
 - `args`
@@ -84,7 +81,6 @@ The following JSON names are extracted from struct tags in `internal/config/`. T
 - `instructions`
 - `listen`
 - `model`
-- `ordinary_reviewer_policy`
 - `permission_mode`
 - `profile_id`
 - `provider`
@@ -95,7 +91,6 @@ The following JSON names are extracted from struct tags in `internal/config/`. T
 - `source`
 - `stall_warning_seconds`
 - `token`
-</details>
 <!-- /generated:config-fields -->
 
 ## Change checklist

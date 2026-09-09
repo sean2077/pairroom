@@ -217,9 +217,6 @@ func (a *redactingAdapter) ResolveApproval(ctx context.Context, id string, resol
 func (a *redactingAdapter) SetRole(ctx context.Context, role model.ParticipantRole) error {
 	return a.redactor.err(a.inner.SetRole(ctx, role))
 }
-func (a *redactingAdapter) SetWorkspace(ctx context.Context, workspace string) error {
-	return a.redactor.err(a.inner.SetWorkspace(ctx, workspace))
-}
 
 // Keep the compiler honest if Adapter grows a method without this boundary
 // being updated.

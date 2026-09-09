@@ -153,13 +153,6 @@ func (f *fakeAdapter) SetRole(_ context.Context, role model.ParticipantRole) err
 	f.mu.Unlock()
 	return nil
 }
-func (f *fakeAdapter) SetWorkspace(_ context.Context, workspace string) error {
-	f.mu.Lock()
-	f.workspace = workspace
-	f.mu.Unlock()
-	return nil
-}
-
 func newTestEngine(t *testing.T, dir string) (*Engine, map[model.ActorID]*fakeAdapter) {
 	t.Helper()
 	if dir == "" {
@@ -204,226 +197,6 @@ func receiveInput(t *testing.T, adapter *fakeAdapter) model.AgentInput {
 	}
 }
 
-type countingWorkspace struct {
-	mu             sync.Mutex
-	repo           string
-	reviewer       string
-	refreshes      int
-	refreshStarted chan struct{}
-	refreshRelease chan struct{}
-}
-
-func (w *countingWorkspace) DriverBoundary() model.WorkspaceBoundary {
-	return model.WorkspaceBoundary{Kind: "driver-live", Path: w.repo}
-}
-
-func (w *countingWorkspace) Refresh(context.Context) (model.WorkspaceBoundary, error) {
-	w.mu.Lock()
-	w.refreshes++
-	started := w.refreshStarted
-	release := w.refreshRelease
-	w.refreshStarted = nil
-	w.refreshRelease = nil
-	w.mu.Unlock()
-	if started != nil {
-		close(started)
-		<-release
-	}
-	return model.WorkspaceBoundary{
-		Kind: "reviewer-snapshot", Path: w.reviewer, ReadOnly: true, RefreshedAt: time.Now().UTC(),
-	}, nil
-}
-
-func (w *countingWorkspace) Cleanup(context.Context) error { return nil }
-
-func (w *countingWorkspace) Count() int {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.refreshes
-}
-
-func (w *countingWorkspace) BlockNextRefresh() (<-chan struct{}, func()) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	started := make(chan struct{})
-	release := make(chan struct{})
-	w.refreshStarted = started
-	w.refreshRelease = release
-	return started, func() { close(release) }
-}
-
-func TestReviewerSnapshotRefreshesBeforeSafeDelivery(t *testing.T) {
-	eventStore, err := store.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	repo := t.TempDir()
-	workspaces := &countingWorkspace{repo: repo, reviewer: t.TempDir()}
-	adapters := map[model.ActorID]*fakeAdapter{}
-	factory := func(cfg agent.Config, sink agent.EventSink) agent.Adapter {
-		adapter := &fakeAdapter{
-			actor: cfg.Actor, sink: sink, state: model.StateStopped,
-			sessionID: cfg.SessionID, submissions: make(chan model.AgentInput, 4),
-		}
-		adapters[cfg.Actor] = adapter
-		return adapter
-	}
-	engine, err := New(Config{
-		Name: "review-refresh", Repo: repo, Store: eventStore, Hub: bus.New(32),
-		Settings:      model.RoomSettings{StallWarningSeconds: 300},
-		ClaudeFactory: factory, CodexFactory: factory, Workspaces: workspaces,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := engine.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	defer engine.Close()
-	startupRefreshes := workspaces.Count()
-
-	message, err := engine.Send(context.Background(), SendRequest{
-		Text: "Review the latest Driver changes", To: []model.ActorID{model.ActorCodex},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = receiveInput(t, adapters[model.ActorCodex])
-	waitForDeliveryState(t, engine, message.ID, model.ActorCodex, model.DeliveryStarted)
-	if got := workspaces.Count(); got <= startupRefreshes {
-		t.Fatalf("reviewer snapshot was not refreshed before delivery: startup=%d after=%d", startupRefreshes, got)
-	}
-	boundary := engine.Snapshot().Participants[model.ActorCodex].Workspace
-	if boundary.Path != workspaces.reviewer || !boundary.ReadOnly {
-		t.Fatalf("refreshed reviewer boundary was not projected: %#v", boundary)
-	}
-}
-
-func TestReviewerRefreshSerializesConcurrentDriverSubmission(t *testing.T) {
-	eventStore, err := store.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	repo := t.TempDir()
-	workspaces := &countingWorkspace{repo: repo, reviewer: t.TempDir()}
-	adapters := map[model.ActorID]*fakeAdapter{}
-	factory := func(cfg agent.Config, sink agent.EventSink) agent.Adapter {
-		adapter := &fakeAdapter{
-			actor: cfg.Actor, sink: sink, state: model.StateStopped,
-			sessionID: cfg.SessionID, submissions: make(chan model.AgentInput, 4),
-		}
-		adapters[cfg.Actor] = adapter
-		return adapter
-	}
-	engine, err := New(Config{
-		Name: "review-refresh-lock", Repo: repo, Store: eventStore, Hub: bus.New(32),
-		Settings:      model.RoomSettings{StallWarningSeconds: 300},
-		ClaudeFactory: factory, CodexFactory: factory, Workspaces: workspaces,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := engine.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	defer engine.Close()
-
-	started, release := workspaces.BlockNextRefresh()
-	if _, err := engine.Send(context.Background(), SendRequest{Text: "Review", To: []model.ActorID{model.ActorCodex}}); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("reviewer refresh did not start")
-	}
-	if _, err := engine.Send(context.Background(), SendRequest{Text: "Continue implementation", To: []model.ActorID{model.ActorClaude}}); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case input := <-adapters[model.ActorClaude].submissions:
-		t.Fatalf("Driver submission raced reviewer snapshot capture: %#v", input)
-	case <-time.After(150 * time.Millisecond):
-	}
-	release()
-	_ = receiveInput(t, adapters[model.ActorCodex])
-	select {
-	case input := <-adapters[model.ActorClaude].submissions:
-		t.Fatalf("Driver started before Reviewer completed its turn: %#v", input)
-	case <-time.After(150 * time.Millisecond):
-	}
-	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorCodex, Kind: model.RuntimeTurnCompleted, TurnID: "review-turn", Name: "completed", CreatedAt: time.Now().UTC(),
-	})
-	_ = receiveInput(t, adapters[model.ActorClaude])
-}
-
-func TestReviewerRefreshWaitsForConcurrentStartup(t *testing.T) {
-	eventStore, err := store.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	repo := t.TempDir()
-	workspaces := &countingWorkspace{repo: repo, reviewer: t.TempDir()}
-	adapters := map[model.ActorID]*fakeAdapter{}
-	startStarted := make(chan struct{})
-	startRelease := make(chan struct{})
-	submitStarted := make(chan struct{})
-	factory := func(cfg agent.Config, sink agent.EventSink) agent.Adapter {
-		adapter := &fakeAdapter{
-			actor: cfg.Actor, sink: sink, state: model.StateStopped,
-			sessionID: cfg.SessionID, submissions: make(chan model.AgentInput, 4),
-		}
-		if cfg.Actor == model.ActorCodex {
-			adapter.startStarted = startStarted
-			adapter.startRelease = startRelease
-			adapter.submitStarted = submitStarted
-		}
-		adapters[cfg.Actor] = adapter
-		return adapter
-	}
-	engine, err := New(Config{
-		Name: "review-start-lock", Repo: repo, Store: eventStore, Hub: bus.New(32),
-		Settings:      model.RoomSettings{StallWarningSeconds: 300},
-		ClaudeFactory: factory, CodexFactory: factory, Workspaces: workspaces,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := engine.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	defer engine.Close()
-	startupRefreshes := workspaces.Count()
-
-	startErr := make(chan error, 1)
-	go func() { startErr <- engine.StartAgent(context.Background(), model.ActorCodex) }()
-	select {
-	case <-startStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Reviewer startup did not begin")
-	}
-	message, err := engine.Send(context.Background(), SendRequest{Text: "Review the latest change", To: []model.ActorID{model.ActorCodex}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-submitStarted:
-		close(startRelease)
-		t.Fatal("Reviewer submission entered while startup still held the old snapshot")
-	case <-time.After(150 * time.Millisecond):
-		close(startRelease)
-	}
-	if err := <-startErr; err != nil {
-		t.Fatal(err)
-	}
-	_ = receiveInput(t, adapters[model.ActorCodex])
-	waitForDeliveryState(t, engine, message.ID, model.ActorCodex, model.DeliveryStarted)
-	if got := workspaces.Count(); got <= startupRefreshes {
-		t.Fatalf("Reviewer delivery used the activation-time snapshot after concurrent startup: startup=%d after=%d", startupRefreshes, got)
-	}
-}
-
 func TestLifecycleLockAcquisitionHonorsContext(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	blocked := make(chan struct{})
@@ -465,38 +238,7 @@ func TestLifecycleLockAcquisitionHonorsContext(t *testing.T) {
 	}
 }
 
-func TestSetRoleDoesNotRefreshUnchangedReviewerWorkspace(t *testing.T) {
-	eventStore, err := store.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	repo := t.TempDir()
-	workspaces := &countingWorkspace{repo: repo, reviewer: t.TempDir()}
-	factory := func(cfg agent.Config, sink agent.EventSink) agent.Adapter {
-		return &fakeAdapter{actor: cfg.Actor, sink: sink, state: model.StateStopped, submissions: make(chan model.AgentInput, 2)}
-	}
-	engine, err := New(Config{
-		Name: "role-with-reviewer", Repo: repo, Store: eventStore, Hub: bus.New(32),
-		Settings:      model.RoomSettings{StallWarningSeconds: 300},
-		ClaudeFactory: factory, CodexFactory: factory, Workspaces: workspaces,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := engine.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	defer engine.Close()
-	before := workspaces.Count()
-	if err := engine.SetRole(context.Background(), model.ActorClaude, model.RolePeer); err != nil {
-		t.Fatal(err)
-	}
-	if after := workspaces.Count(); after != before {
-		t.Fatalf("changing the Driver role recreated the unchanged Reviewer workspace: before=%d after=%d", before, after)
-	}
-}
-
-func TestSendPassesRoleAndRoutingContext(t *testing.T) {
+func TestSendPassesNativePermissionAndRoutingContext(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	message, err := engine.Send(context.Background(), SendRequest{
 		Text: "@claude inspect this", To: []model.ActorID{model.ActorClaude},
@@ -508,7 +250,7 @@ func TestSendPassesRoleAndRoutingContext(t *testing.T) {
 	if input.MessageID != message.ID || input.From != model.ActorUser || input.To != model.ActorClaude {
 		t.Fatalf("unexpected delivery envelope: %#v", input)
 	}
-	if input.Role != model.RoleDriver || input.FromHandle != "@user" || input.SelfHandle != "@claude" || input.PeerHandle != "@codex" {
+	if input.Role != model.RolePeer || input.FromHandle != "@user" || input.SelfHandle != "@claude" || input.PeerHandle != "@codex" {
 		t.Fatalf("missing room context: %#v", input)
 	}
 }
@@ -629,7 +371,7 @@ func TestPeerMentionForwardsCompleteLongMessage(t *testing.T) {
 	}
 }
 
-func TestSendWithoutTargetUsesSingleDriver(t *testing.T) {
+func TestSendWithoutTargetUsesAgentOne(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	message, err := engine.Send(context.Background(), SendRequest{Text: "Inspect the current change"})
 	if err != nil {
@@ -645,16 +387,6 @@ func TestSendWithoutTargetUsesSingleDriver(t *testing.T) {
 	case input := <-adapters[model.ActorCodex].submissions:
 		t.Fatalf("Reviewer received redundant default delivery: %#v", input)
 	case <-time.After(150 * time.Millisecond):
-	}
-}
-
-func TestSendWithoutTargetRequiresExactlyOneDriver(t *testing.T) {
-	engine, _ := newTestEngine(t, "")
-	if err := engine.SetRole(context.Background(), model.ActorClaude, model.RolePeer); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := engine.Send(context.Background(), SendRequest{Text: "Which participant should start?"}); err == nil || !strings.Contains(err.Error(), "no current Driver") {
-		t.Fatalf("unaddressed send without a Driver error = %v, want explicit single-start guidance", err)
 	}
 }
 
@@ -827,42 +559,6 @@ func TestStaleTurnCompletionDoesNotReleaseReplacementOwner(t *testing.T) {
 	})
 	if input := receiveInput(t, adapters[model.ActorCodex]); input.MessageID != second.ID {
 		t.Fatalf("current completion did not release the queued owner: %#v", input)
-	}
-}
-
-func TestSendRoleTargetIsResolvedAtomicallyByServer(t *testing.T) {
-	engine, adapters := newTestEngine(t, "")
-	message, err := engine.Send(context.Background(), SendRequest{Text: "Review this", TargetRole: model.RoleReviewer})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(message.To) != 1 || message.To[0] != model.ActorCodex {
-		t.Fatalf("reviewer target = %v, want current Reviewer only", message.To)
-	}
-	if input := receiveInput(t, adapters[model.ActorCodex]); input.MessageID != message.ID || input.Role != model.RoleReviewer {
-		t.Fatalf("Reviewer received unexpected input: %#v", input)
-	}
-	if _, err := engine.Send(context.Background(), SendRequest{
-		Text: "Ambiguous", To: []model.ActorID{model.ActorClaude}, TargetRole: model.RoleReviewer,
-	}); err == nil {
-		t.Fatal("explicit recipient plus target_role succeeded")
-	}
-}
-
-func TestSendRoleTargetFollowsCompletedDriverSwitch(t *testing.T) {
-	engine, adapters := newTestEngine(t, "")
-	if err := engine.SwitchDriver(context.Background(), model.ActorCodex); err != nil {
-		t.Fatal(err)
-	}
-	message, err := engine.Send(context.Background(), SendRequest{Text: "Review after switch", TargetRole: model.RoleReviewer})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(message.To) != 1 || message.To[0] != model.ActorClaude {
-		t.Fatalf("reviewer target after switch = %v, want Claude", message.To)
-	}
-	if input := receiveInput(t, adapters[model.ActorClaude]); input.Role != model.RoleReviewer {
-		t.Fatalf("role target used stale role context: %#v", input)
 	}
 }
 
@@ -1879,42 +1575,6 @@ func TestAgentFinalImportsSafeImagePreviewIntoSharedRoom(t *testing.T) {
 	}
 }
 
-func TestSwitchDriverAppliesNativeRoleBeforeFutureTurns(t *testing.T) {
-	engine, adapters := newTestEngine(t, "")
-	if err := engine.SwitchDriver(context.Background(), model.ActorCodex); err != nil {
-		t.Fatal(err)
-	}
-	snapshot := engine.Snapshot()
-	if snapshot.Participants[model.ActorCodex].Role != model.RoleDriver || snapshot.Participants[model.ActorClaude].Role != model.RoleReviewer {
-		t.Fatalf("room roles did not switch atomically: %#v", snapshot.Participants)
-	}
-	adapters[model.ActorClaude].mu.Lock()
-	claudeRole := adapters[model.ActorClaude].role
-	adapters[model.ActorClaude].mu.Unlock()
-	adapters[model.ActorCodex].mu.Lock()
-	codexRole := adapters[model.ActorCodex].role
-	adapters[model.ActorCodex].mu.Unlock()
-	if claudeRole != model.RoleReviewer || codexRole != model.RoleDriver {
-		t.Fatalf("native role policies were not applied: claude=%q codex=%q", claudeRole, codexRole)
-	}
-
-	claudeMessage, err := engine.Send(context.Background(), SendRequest{Text: "Compare as reviewer", To: []model.ActorID{model.ActorClaude}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := receiveInput(t, adapters[model.ActorClaude]).Role; got != model.RoleReviewer {
-		t.Fatalf("Claude turn role = %q", got)
-	}
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "role-claude", CorrelationID: claudeMessage.ID, Name: "completed", CreatedAt: time.Now().UTC()})
-	_, err = engine.Send(context.Background(), SendRequest{Text: "Compare as driver", To: []model.ActorID{model.ActorCodex}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := receiveInput(t, adapters[model.ActorCodex]).Role; got != model.RoleDriver {
-		t.Fatalf("Codex turn role = %q", got)
-	}
-}
-
 func TestRuntimeErrorDoesNotExpireConnectionLocalApprovalBeforeBoundary(t *testing.T) {
 	engine, _ := newTestEngine(t, "")
 	approval := model.Approval{
@@ -2375,10 +2035,9 @@ func TestServiceMetadataEventsProjectIntoRestoredRoom(t *testing.T) {
 		}
 	}
 	appendEvent(eventServiceRoomRenamed, serviceRoomRenamedProjection{Name: "After rename"})
-	appendEvent(eventServiceBindingsCompleted, serviceBindingsCompletedProjection{Bindings: map[model.ActorID]serviceBindingProjection{
-		model.ActorClaude: {Agent: model.ActorClaude, SessionID: "claude-service-session"},
-		model.ActorCodex:  {Agent: model.ActorCodex, SessionID: "codex-service-thread"},
-	}})
+	for actor, session := range map[model.ActorID]string{model.ActorClaude: "claude-service-session", model.ActorCodex: "codex-service-thread"} {
+		appendEvent(eventServiceBindingMaterialized, serviceBindingMaterializedProjection{Binding: serviceBindingProjection{Agent: actor, SessionID: session}})
+	}
 	if err := appendStore.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -2407,7 +2066,7 @@ func TestServiceMetadataEventsProjectIntoRestoredRoom(t *testing.T) {
 	}
 }
 
-func TestStrictServiceBindingOverridesLegacyParticipantSessionAtAdapterBoundary(t *testing.T) {
+func TestStrictServiceBindingOverridesStaleParticipantSessionAtAdapterBoundary(t *testing.T) {
 	dir := t.TempDir()
 	repo := t.TempDir()
 	eventStore, err := store.Open(dir)
@@ -2423,11 +2082,11 @@ func TestStrictServiceBindingOverridesLegacyParticipantSessionAtAdapterBoundary(
 	}
 	seed.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorClaude, Kind: model.RuntimeSession,
-		SessionID: "stale-legacy-claude", CreatedAt: time.Now().UTC(),
+		SessionID: "stale-projection-claude", CreatedAt: time.Now().UTC(),
 	})
 	seed.HandleRuntimeEvent(model.RuntimeEvent{
 		Agent: model.ActorCodex, Kind: model.RuntimeSession,
-		SessionID: "stale-legacy-codex", CreatedAt: time.Now().UTC(),
+		SessionID: "stale-projection-codex", CreatedAt: time.Now().UTC(),
 	})
 	if err := seed.Close(); err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
@@ -2557,20 +2216,6 @@ func TestAcceptedInputMaterializesFreshNativeSession(t *testing.T) {
 	}
 }
 
-type closeErrorWorkspace struct {
-	err error
-}
-
-func (w *closeErrorWorkspace) DriverBoundary() model.WorkspaceBoundary {
-	return model.WorkspaceBoundary{}
-}
-
-func (w *closeErrorWorkspace) Refresh(context.Context) (model.WorkspaceBoundary, error) {
-	return model.WorkspaceBoundary{}, nil
-}
-
-func (w *closeErrorWorkspace) Cleanup(context.Context) error { return w.err }
-
 func TestEngineCloseReportsAllResourceErrors(t *testing.T) {
 	eventStore, err := store.Open(t.TempDir())
 	if err != nil {
@@ -2578,7 +2223,6 @@ func TestEngineCloseReportsAllResourceErrors(t *testing.T) {
 	}
 	stopClaude := errors.New("claude stop failed")
 	stopCodex := errors.New("codex stop failed")
-	cleanup := errors.New("workspace cleanup failed")
 	adapters := map[model.ActorID]*fakeAdapter{}
 	factory := func(cfg agent.Config, sink agent.EventSink) agent.Adapter {
 		adapter := &fakeAdapter{
@@ -2598,7 +2242,6 @@ func TestEngineCloseReportsAllResourceErrors(t *testing.T) {
 		Name: "close-errors", Repo: t.TempDir(), Store: eventStore, Hub: bus.New(8),
 		Settings:      model.RoomSettings{StallWarningSeconds: 300},
 		ClaudeFactory: factory, CodexFactory: factory,
-		Workspaces: &closeErrorWorkspace{err: cleanup},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2607,7 +2250,7 @@ func TestEngineCloseReportsAllResourceErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	closeErr := engine.Close()
-	for _, expected := range []error{stopClaude, stopCodex, cleanup} {
+	for _, expected := range []error{stopClaude, stopCodex} {
 		if !errors.Is(closeErr, expected) {
 			t.Fatalf("Close() error %v does not contain %v", closeErr, expected)
 		}

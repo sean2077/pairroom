@@ -44,11 +44,8 @@ A waiting FIFO item can be cancelled precisely. After a native Runtime accepts i
 
 Runtime, Provider reference, model, effort, additional instructions, and collaboration are creation-time selections. Create another Room to change them. They are not Settings edits on an existing Room.
 
-Only effective native permissions can change inside a modern Room, and only when both participants are idle, no queued work exists, and no approvals are pending. A failed transition must not broaden access. Legacy role controls are removed, and legacy Rooms keep their old policies. Lead/Executor are responsibilities, not permission profiles or mention aliases.
+Only effective native permissions can change inside a modern Room, and only when both participants are idle, no queued work exists, and no approvals are pending. A failed transition must not broaden access. Role controls and old Room formats are unsupported; create a new Room rather than editing schema markers. Lead/Executor are responsibilities, not permission profiles or mention aliases.
 
-## A legacy Reviewer sees an old snapshot
-
-Only legacy Rooms use the role-bound Reviewer snapshot. Check that review began at a new boundary after the Driver's work completed, and inspect any snapshot-refresh failure. Modern Rooms use the live workspace for both participants; a stale file there needs a different diagnosis. Do not treat the legacy snapshot as a container-grade sandbox.
 
 ## UI jumps, refreshes repeatedly, or loses live state
 

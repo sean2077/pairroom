@@ -16,8 +16,8 @@ import (
 type EventSink func(model.RuntimeEvent)
 
 type Config struct {
-	Collaboration          *model.Collaboration
-	LegacyRole             model.ParticipantRole
+	Collaboration *model.Collaboration
+
 	Actor                  model.ActorID
 	Repo                   string
 	DataDir                string
@@ -40,8 +40,8 @@ type Config struct {
 	SessionID              string
 	RequireExactSession    bool
 	SystemPrompt           string
-	OrdinaryReviewerPolicy model.OrdinaryReviewerPolicy
-	MockDelay              time.Duration
+
+	MockDelay time.Duration
 }
 
 type Adapter interface {
@@ -53,7 +53,6 @@ type Adapter interface {
 	Stop(context.Context) error
 	ResolveApproval(context.Context, string, model.ApprovalResolution) error
 	SetRole(context.Context, model.ParticipantRole) error
-	SetWorkspace(context.Context, string) error
 	State() model.AgentState
 	SessionID() string
 }
@@ -115,7 +114,7 @@ func SlotFactory(mock bool, kind model.RuntimeKind) Factory {
 	if mock {
 		return MockFactory
 	}
-	// The legacy `serve` command and Engine defaults construct slot factories
+	// The standalone `serve` command and Engine defaults construct slot factories
 	// directly, outside the Service's transcript-boundary wrapper. Keep the
 	// credential redaction guarantee at this lowest common process boundary so
 	// native stderr, protocol diagnostics, and startup failures cannot expose a
@@ -128,7 +127,7 @@ func collaborationPrompt(cfg Config) string {
 	if strings.TrimSpace(base) == "" {
 		base = prompt.BootstrapPromptWithRuntime(cfg.Actor, cfg.Runtime, cfg.PeerRuntime)
 	}
-	return appendInstructions(appendInstructions(base, protocol.CollaborationInstructions(cfg.Actor, cfg.Collaboration, cfg.LegacyRole)), cfg.AdditionalInstructions)
+	return appendInstructions(appendInstructions(base, protocol.CollaborationInstructions(cfg.Actor, cfg.Collaboration)), cfg.AdditionalInstructions)
 }
 
 func configuredParticipantName(cfg Config) string {

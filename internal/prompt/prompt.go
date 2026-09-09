@@ -26,13 +26,6 @@ func BootstrapPromptWithRuntime(actor model.ActorID, self, peer model.RuntimeKin
 	return protocol.Bootstrap(actor, self, peer)
 }
 
-// SystemPrompt remains the adapter-facing compatibility entry point. Room and
-// repository identity are deliberately excluded so the stable bootstrap can be
-// reused across Rooms; native cwd and per-turn envelope fields carry dynamics.
-func SystemPrompt(actor model.ActorID, roomName, _ string) string {
-	return BootstrapPrompt(actor)
-}
-
 // Envelope carries dynamic sender/body/media and explicit user-quoted context.
 // Durable MessageID, ThreadID, ReplyTo, and Role stay in transport/diagnostics.
 // The current body and quoted message are never summarized; quote strings are

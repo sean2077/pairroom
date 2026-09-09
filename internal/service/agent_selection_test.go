@@ -37,8 +37,8 @@ func TestManagementCreatesImmutablePerRoomAgentSelections(t *testing.T) {
 	}
 
 	agents := map[model.ActorID]model.AgentSelection{
-		model.ActorClaude: {Runtime: model.RuntimeGrok, Provider: model.NativeProviderRef(), Model: "grok-custom-a", PermissionMode: "default", OrdinaryReviewerPolicy: model.ReviewerEnforced},
-		model.ActorCodex:  {Runtime: model.RuntimeGrok, Provider: model.NativeProviderRef(), Model: "grok-custom-b", PermissionMode: "always-approve", Sandbox: "workspace", OrdinaryReviewerPolicy: model.ReviewerExplicit},
+		model.ActorClaude: {Runtime: model.RuntimeGrok, Provider: model.NativeProviderRef(), Model: "grok-custom-a", PermissionMode: "default"},
+		model.ActorCodex:  {Runtime: model.RuntimeGrok, Provider: model.NativeProviderRef(), Model: "grok-custom-b", PermissionMode: "always-approve", Sandbox: "workspace"},
 	}
 	body, _ := json.Marshal(map[string]any{"name": "two grok slots", "bindings": specs(BindingNew, BindingNew, ""), "agents": agents})
 	response := httptest.NewRecorder()
@@ -50,10 +50,10 @@ func TestManagementCreatesImmutablePerRoomAgentSelections(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.LegacyDefaults || created.Agents[model.ActorClaude].Runtime != model.RuntimeGrok || created.Agents[model.ActorCodex].Runtime != model.RuntimeGrok {
+	if created.Agents[model.ActorClaude].Runtime != model.RuntimeGrok || created.Agents[model.ActorCodex].Runtime != model.RuntimeGrok {
 		t.Fatalf("Room selections = %#v", created)
 	}
-	if created.Agents[model.ActorCodex].OrdinaryReviewerPolicy != "" || created.Agents[model.ActorCodex].Model != "grok-custom-b" {
+	if created.Agents[model.ActorCodex].Model != "grok-custom-b" {
 		t.Fatalf("Agent 2 selection = %#v", created.Agents[model.ActorCodex])
 	}
 
@@ -62,7 +62,7 @@ func TestManagementCreatesImmutablePerRoomAgentSelections(t *testing.T) {
 		t.Fatal(err)
 	}
 	replayed, ok := reopened.Room(created.ID)
-	if !ok || replayed.Agents[model.ActorClaude].Model != "grok-custom-a" || replayed.LegacyDefaults {
+	if !ok || replayed.Agents[model.ActorClaude].Model != "grok-custom-a" {
 		t.Fatalf("replayed Room = %#v ok=%v", replayed, ok)
 	}
 

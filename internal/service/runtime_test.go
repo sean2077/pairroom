@@ -162,7 +162,7 @@ func shutdownRuntimeManager(t *testing.T, manager *RuntimeManager, factory *fake
 	}
 }
 
-func TestRuntimeManagerActivatesPendingNewBindingsButBlocksLegacyPendingBindings(t *testing.T) {
+func TestRuntimeManagerActivatesPendingNewBindings(t *testing.T) {
 	repo := testGitRepo(t)
 	registry, project := testRegistry(t, repo)
 	pendingNew, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
@@ -762,5 +762,27 @@ func TestRuntimeManagerPolicyAndCapacityObservability(t *testing.T) {
 	status = manager.Status(rooms[0].ID)
 	if status.Phase != RuntimeSuspended || status.OccupiesCapacity {
 		t.Fatalf("suspended runtime retained capacity: %#v", status)
+	}
+}
+
+func TestIdleLRUSkipsHTTPLeaseEvenWhenTimestampsTie(t *testing.T) {
+	now := time.Date(2026, 9, 9, 0, 0, 0, 0, time.UTC)
+	connected := &leaseRuntime{}
+	connected.connected.Store(true)
+	idle := &leaseRuntime{}
+	manager := &RuntimeManager{
+		cfg: RuntimeManagerConfig{Now: func() time.Time { return now }},
+		entries: map[string]*runtimeEntry{
+			"a-connected": {phase: RuntimeActive, runtime: connected, lastUsed: now},
+			"z-idle":      {phase: RuntimeActive, runtime: idle, lastUsed: now},
+		},
+	}
+	id, victim := manager.idleLRULocked()
+	if id != "z-idle" || victim != manager.entries["z-idle"] {
+		t.Fatalf("HTTP lease chosen on timestamp tie: %s", id)
+	}
+	idle.connected.Store(true)
+	if id, victim := manager.idleLRULocked(); id != "" || victim != nil {
+		t.Fatalf("in-use capacity was considered idle: %s", id)
 	}
 }

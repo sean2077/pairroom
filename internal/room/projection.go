@@ -138,7 +138,6 @@ func cloneSnapshot(in model.RoomSnapshot) model.RoomSnapshot {
 	out.Participants = make(map[model.ActorID]model.ParticipantSnapshot, len(in.Participants))
 	for key, value := range in.Participants {
 		value.Runtime = cloneRuntimeInfo(value.Runtime)
-		value.Workspace.Warnings = append([]string(nil), value.Workspace.Warnings...)
 		out.Participants[key] = value
 	}
 	out.Events = make([]model.Event, len(in.Events))

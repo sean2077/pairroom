@@ -12,7 +12,7 @@ import (
 func TestDefaultCollaborationEitherMentionedAgentCanFinishDirectly(t *testing.T) {
 	for _, actor := range model.SlotActors() {
 		t.Run(string(actor), func(t *testing.T) {
-			e, _, _ := newCollaborationEngine(t, "")
+			e, _ := newCollaborationEngine(t, "")
 			current, _ := e.adapter(actor)
 			other, _ := e.adapter(model.OtherParticipant(actor))
 			target := current.(*fakeAdapter)

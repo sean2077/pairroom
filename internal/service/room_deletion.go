@@ -13,9 +13,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-
-	"github.com/sean2077/pairroom/internal/model"
-	"github.com/sean2077/pairroom/internal/version"
 )
 
 var (
@@ -27,8 +24,6 @@ const (
 	roomDeletionIntentName     = "intent.json"
 	roomDeletionCommittedName  = "committed.json"
 	roomDeletionDataName       = "data"
-	roomArchiveStubMaxLogSize  = 1 << 20
-	roomArchiveStubMaxEvents   = 128
 )
 
 // RoomNotArchivedError reports the final lifecycle precondition for a
@@ -57,9 +52,6 @@ const (
 	// RoomDataAlreadyMissing means the managed directory had already gone away;
 	// the durable Registry and binding ownership were still removed.
 	RoomDataAlreadyMissing RoomDataDisposition = "already_missing"
-	// RoomDataRetainedExternal means an explicitly imported directory was only
-	// unregistered. PairRoom never recursively deletes an external data path.
-	RoomDataRetainedExternal RoomDataDisposition = "retained_external"
 	// RoomDataCleanupPending means logical removal committed, while the staged
 	// managed data remains in the non-discoverable deletion quarantine. Startup
 	// and later removals retry best-effort cleanup.
@@ -162,8 +154,7 @@ type inspectedDeletionEntry struct {
 // RemoveRoom permanently unregisters one archived Room and releases its Agent
 // binding ownership. PairRoom-managed data is first atomically moved out of the
 // discovery root, then the Registry checkpoint is committed, and only then is
-// the quarantined directory recursively removed. Explicitly imported external
-// directories are never deleted; they are only forgotten by the Service.
+// the quarantined directory recursively removed. External data paths are rejected.
 func (r *Registry) RemoveRoom(ctx context.Context, roomID string) (RoomRemovalResult, error) {
 	roomID = strings.TrimSpace(roomID)
 	if roomID == "" {
@@ -213,11 +204,9 @@ func (r *Registry) RemoveRoom(ctx context.Context, roomID string) (RoomRemovalRe
 		return RoomRemovalResult{}, err
 	}
 	if !managed {
-		if _, ok := r.importedDirs[filepath.Clean(room.DataDir)]; !ok {
-			err := r.poisonLocked(fmt.Errorf("external Room %s is missing its imported-directory index for %s", room.ID, room.DataDir))
-			r.mu.Unlock()
-			return RoomRemovalResult{}, err
-		}
+		err := r.poisonLocked(fmt.Errorf("Room %s has an unsupported external data directory %s", room.ID, room.DataDir))
+		r.mu.Unlock()
+		return RoomRemovalResult{}, err
 	}
 	for _, binding := range room.Bindings {
 		if !binding.OwnsIdentity() {
@@ -234,13 +223,9 @@ func (r *Registry) RemoveRoom(ctx context.Context, roomID string) (RoomRemovalRe
 	// provisionMu keeps the projection stable across staging and checkpointing.
 	r.mu.Unlock()
 
-	var staged *stagedManagedRoom
-	disposition := RoomDataRetainedExternal
-	if managed {
-		staged, disposition, err = r.stageManagedRoom(ctx, room)
-		if err != nil {
-			return RoomRemovalResult{}, err
-		}
+	staged, disposition, err := r.stageManagedRoom(ctx, room)
+	if err != nil {
+		return RoomRemovalResult{}, err
 	}
 
 	r.mu.Lock()
@@ -271,9 +256,6 @@ func (r *Registry) RemoveRoom(ctx context.Context, roomID string) (RoomRemovalRe
 			delete(r.bindingOwners, binding.Key().String())
 		}
 	}
-	if !managed {
-		delete(r.importedDirs, filepath.Clean(room.DataDir))
-	}
 	published, checkpointErr := r.writeCheckpointLocked()
 	if checkpointErr != nil {
 		if published {
@@ -292,9 +274,6 @@ func (r *Registry) RemoveRoom(ctx context.Context, roomID string) (RoomRemovalRe
 			if binding.OwnsIdentity() {
 				r.bindingOwners[binding.Key().String()] = room.ID
 			}
-		}
-		if !managed {
-			r.importedDirs[filepath.Clean(room.DataDir)] = struct{}{}
 		}
 		r.mu.Unlock()
 		if rollbackErr := r.rollbackStagedManagedRoom(staged); rollbackErr != nil {
@@ -666,28 +645,12 @@ func (r *Registry) inspectDeletionEntry(entry os.DirEntry) (inspectedDeletionEnt
 }
 
 func (r *Registry) classifyQuarantinedRoomFacts(ctx context.Context, state inspectedDeletionEntry) (RoomDataDisposition, error) {
-	stubErr := r.verifyMissingRoomArchiveStub(state)
-	if stubErr == nil {
-		// Older PairRoom versions opened lifecycle stores in create mode. If a
-		// managed Room directory had already disappeared, archiving recreated a
-		// tiny metadata + lifecycle-only Event Log. The original Room data was
-		// still gone; stage and remove this narrowly recognized artifact while
-		// reporting the durable data as already missing.
-		return RoomDataAlreadyMissing, nil
-	}
-
 	room, project, found, err := r.readRoomFacts(ctx, state.data)
 	if err != nil {
-		return "", errors.Join(
-			fmt.Errorf("read quarantined Room facts: %w", err),
-			fmt.Errorf("validate missing-data archive stub: %w", stubErr),
-		)
+		return "", fmt.Errorf("read quarantined Room facts: %w", err)
 	}
 	if !found {
-		return "", errors.Join(
-			errors.New("quarantined data does not contain a materializable Room Event Log"),
-			fmt.Errorf("validate missing-data archive stub: %w", stubErr),
-		)
+		return "", errors.New("quarantined data does not contain a materializable Room Event Log")
 	}
 	if room.ID != state.intent.RoomID || room.ProjectID != state.intent.ProjectID || project.ID != state.intent.ProjectID {
 		return "", fmt.Errorf("quarantined Room identity %s/%s does not match intent %s/%s", room.ProjectID, room.ID, state.intent.ProjectID, state.intent.RoomID)
@@ -703,7 +666,7 @@ func (r *Registry) verifyQuarantinedRoomFacts(ctx context.Context, state inspect
 	return err
 }
 
-func (r *Registry) recoverArchivedRoomsWithoutFactsFromCheckpoint() error {
+func (r *Registry) recoverMissingArchivedRoomsFromCheckpoint() error {
 	checkpointRooms, trusted, _ := r.trustedCheckpointRooms()
 	if !trusted {
 		return nil
@@ -725,7 +688,7 @@ func (r *Registry) recoverArchivedRoomsWithoutFactsFromCheckpoint() error {
 		if !managed {
 			continue
 		}
-		info, err := r.roomDeletionFS.lstat(room.DataDir)
+		_, err = r.roomDeletionFS.lstat(room.DataDir)
 		if errors.Is(err, os.ErrNotExist) {
 			project, ok := r.projects[room.ProjectID]
 			if !ok {
@@ -739,156 +702,6 @@ func (r *Registry) recoverArchivedRoomsWithoutFactsFromCheckpoint() error {
 		if err != nil {
 			return fmt.Errorf("inspect checkpoint Room %s data: %w", room.ID, err)
 		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			continue
-		}
-		state := inspectedDeletionEntry{
-			data: room.DataDir,
-			intent: roomDeletionIntent{
-				RoomID: room.ID, ProjectID: room.ProjectID,
-			},
-		}
-		if err := r.verifyMissingRoomArchiveStub(state); err != nil {
-			continue
-		}
-		project, ok := r.projects[room.ProjectID]
-		if !ok {
-			return fmt.Errorf("checkpoint archive stub Room %s references unknown Project %s", room.ID, room.ProjectID)
-		}
-		if err := r.indexRoomLocked(project, room); err != nil {
-			return fmt.Errorf("index checkpoint archive stub Room %s: %w", room.ID, err)
-		}
-	}
-	return nil
-}
-
-func (r *Registry) verifyMissingRoomArchiveStub(state inspectedDeletionEntry) error {
-	entries, err := r.roomDeletionFS.readDir(state.data)
-	if err != nil {
-		return fmt.Errorf("read archive stub directory: %w", err)
-	}
-
-	paths := make(map[string]string, 2)
-	for _, entry := range entries {
-		name := entry.Name()
-		if name != "events.jsonl" && name != "metadata.json" {
-			return fmt.Errorf("archive stub contains unexpected entry %q", name)
-		}
-		path := filepath.Join(state.data, name)
-		info, err := r.roomDeletionFS.lstat(path)
-		if err != nil {
-			return fmt.Errorf("inspect archive stub entry %q: %w", name, err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return fmt.Errorf("archive stub entry %q is not a regular file", name)
-		}
-		paths[name] = path
-	}
-	if len(paths) != 2 {
-		return errors.New("archive stub does not contain both events.jsonl and metadata.json")
-	}
-
-	var metadata struct {
-		Format        string `json:"format"`
-		SchemaVersion int    `json:"schema_version"`
-		AppVersion    string `json:"app_version"`
-	}
-	if err := decodeStrictJSON(paths["metadata.json"], &metadata); err != nil {
-		return fmt.Errorf("decode archive stub metadata: %w", err)
-	}
-	if metadata.Format != "pairroom-jsonl" || !version.SupportsStoreSchema(metadata.SchemaVersion) || strings.TrimSpace(metadata.AppVersion) == "" {
-		return fmt.Errorf("archive stub metadata is not a PairRoom schema %d store", version.StoreSchema)
-	}
-
-	logInfo, err := r.roomDeletionFS.lstat(paths["events.jsonl"])
-	if err != nil {
-		return fmt.Errorf("inspect archive stub Event Log: %w", err)
-	}
-	if logInfo.Size() <= 0 || logInfo.Size() > roomArchiveStubMaxLogSize {
-		return fmt.Errorf("archive stub Event Log size %d is outside the trusted recovery bound", logInfo.Size())
-	}
-	data, err := os.ReadFile(paths["events.jsonl"])
-	if err != nil {
-		return fmt.Errorf("read archive stub Event Log: %w", err)
-	}
-	if len(data) == 0 || data[len(data)-1] != '\n' {
-		return errors.New("archive stub Event Log is empty or has an unterminated tail")
-	}
-	lines := bytes.Split(data[:len(data)-1], []byte{'\n'})
-	if len(lines) == 0 || len(lines) > roomArchiveStubMaxEvents {
-		return fmt.Errorf("archive stub contains %d events; expected 1-%d", len(lines), roomArchiveStubMaxEvents)
-	}
-
-	lifecycle := RoomActive
-	archivedSeen := false
-	eventIDs := make(map[string]struct{}, len(lines))
-	for index, line := range lines {
-		if len(line) == 0 {
-			return fmt.Errorf("archive stub Event Log line %d is empty", index+1)
-		}
-		var event model.Event
-		if err := decodeStrictJSONBytes(line, &event); err != nil {
-			return fmt.Errorf("decode archive stub event %d: %w", index+1, err)
-		}
-		if event.Seq != uint64(index+1) {
-			return fmt.Errorf("archive stub event %d has sequence %d", index+1, event.Seq)
-		}
-		if strings.TrimSpace(event.ID) == "" {
-			return fmt.Errorf("archive stub event %d has an empty ID", index+1)
-		}
-		if _, duplicate := eventIDs[event.ID]; duplicate {
-			return fmt.Errorf("archive stub event %d repeats ID %q", index+1, event.ID)
-		}
-		eventIDs[event.ID] = struct{}{}
-		if event.RoomID != state.intent.RoomID {
-			return fmt.Errorf("archive stub event %d belongs to Room %q instead of %q", index+1, event.RoomID, state.intent.RoomID)
-		}
-		if event.Actor != model.ActorSystem {
-			return fmt.Errorf("archive stub event %d is not authored by system", index+1)
-		}
-		if event.CreatedAt.IsZero() {
-			return fmt.Errorf("archive stub event %d has an empty creation time", index+1)
-		}
-
-		switch event.Kind {
-		case EventRoomRenamed:
-			var payload roomRenamedPayload
-			if err := decodeStrictJSONBytes(event.Data, &payload); err != nil {
-				return fmt.Errorf("decode archive stub rename event %d: %w", index+1, err)
-			}
-			if err := validateRoomName(payload.Name); err != nil {
-				return fmt.Errorf("invalid archive stub rename event %d: %w", index+1, err)
-			}
-			if payload.UpdatedAt.IsZero() {
-				return fmt.Errorf("archive stub rename event %d has an empty update time", index+1)
-			}
-		case EventRoomArchived, EventRoomRestored:
-			var payload roomLifecyclePayload
-			if err := decodeStrictJSONBytes(event.Data, &payload); err != nil {
-				return fmt.Errorf("decode archive stub lifecycle event %d: %w", index+1, err)
-			}
-			expected := RoomArchived
-			if event.Kind == EventRoomRestored {
-				expected = RoomActive
-			}
-			if payload.Lifecycle != expected || payload.UpdatedAt.IsZero() {
-				return fmt.Errorf("invalid archive stub lifecycle event %d", index+1)
-			}
-			if event.Kind == EventRoomArchived {
-				if lifecycle == RoomArchived {
-					return fmt.Errorf("archive stub archives an already archived Room at event %d", index+1)
-				}
-				archivedSeen = true
-			} else if lifecycle != RoomArchived {
-				return fmt.Errorf("archive stub restores an active Room at event %d", index+1)
-			}
-			lifecycle = payload.Lifecycle
-		default:
-			return fmt.Errorf("archive stub contains non-lifecycle event kind %q", event.Kind)
-		}
-	}
-	if !archivedSeen || lifecycle != RoomArchived {
-		return errors.New("archive stub does not end in the archived lifecycle")
 	}
 	return nil
 }
@@ -938,7 +751,7 @@ func (r *Registry) trustedCheckpointRooms() (map[string]Room, bool, string) {
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return nil, false, "service registry checkpoint contains trailing JSON"
 	}
-	if snapshot.Schema != 1 && snapshot.Schema != 2 {
+	if snapshot.Schema != 2 {
 		return nil, false, fmt.Sprintf("unsupported service registry checkpoint schema %d", snapshot.Schema)
 	}
 
@@ -979,11 +792,9 @@ func (r *Registry) trustedCheckpointRooms() (map[string]Room, bool, string) {
 		if owner, duplicate := dataDirs[dir]; duplicate && owner != room.ID {
 			return nil, false, fmt.Sprintf("checkpoint data directory %s belongs to multiple Rooms", dir)
 		}
-		if pathWithin(r.roomsRoot, dir) {
-			relative, relErr := filepath.Rel(r.roomsRoot, dir)
-			if relErr != nil || filepath.Dir(relative) != "." || validateManagedRoomSourceBase(relative) != nil {
-				return nil, false, fmt.Sprintf("checkpoint Room %s has an invalid managed data directory %s", room.ID, dir)
-			}
+		relative, relErr := filepath.Rel(r.roomsRoot, dir)
+		if relErr != nil || filepath.Dir(relative) != "." || validateManagedRoomSourceBase(relative) != nil {
+			return nil, false, fmt.Sprintf("checkpoint Room %s has an invalid managed data directory %s", room.ID, dir)
 		}
 		for _, binding := range room.Bindings {
 			if !binding.OwnsIdentity() {

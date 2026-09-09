@@ -224,22 +224,16 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 
 	c.mu.Lock()
 	expectedSession := c.sessionID
-	strictResume := c.cfg.RequireExactSession && c.resume && expectedSession != ""
+	strictResume := c.resume && expectedSession != ""
 	if c.resume && flags["--resume"] {
 		args = append(args, "--resume="+c.sessionID)
 	} else if !c.resume && flags["--session-id"] {
 		args = append(args, "--session-id="+c.sessionID)
 	} else if c.resume && !flags["--resume"] {
-		if strictResume {
-			c.mu.Unlock()
-			err := fmt.Errorf("Claude Code cannot resume required session %q because this CLI does not expose --resume", expectedSession)
-			c.setState(model.StateError, err.Error())
-			return err
-		}
-		// The legacy single-Room command retains its historical fallback. Service
-		// runtimes set RequireExactSession and therefore fail closed above.
-		c.sessionID = newUUID()
-		c.resume = false
+		c.mu.Unlock()
+		err := fmt.Errorf("Claude Code cannot resume required session %q because this CLI does not expose --resume", expectedSession)
+		c.setState(model.StateError, err.Error())
+		return err
 	}
 	c.mu.Unlock()
 
@@ -1469,55 +1463,6 @@ func (c *ClaudeAdapter) SetRole(ctx context.Context, role model.ParticipantRole)
 		c.cfg.PermissionMode, c.role = oldMode, oldRole
 		c.mu.Unlock()
 		return fmt.Errorf("restart Claude with %s role: %w", role, err)
-	}
-	return nil
-}
-
-// SetWorkspace changes the process working directory only at a safe turn
-// boundary. A running idle process is restarted so Claude Code reloads the
-// correct project instructions, hooks, skills and Git context from that path.
-func (c *ClaudeAdapter) SetWorkspace(ctx context.Context, workspace string) error {
-	workspace = filepath.Clean(strings.TrimSpace(workspace))
-	if workspace == "." || workspace == "" {
-		return errors.New("Claude workspace is required")
-	}
-	info, err := os.Stat(workspace)
-	if err != nil {
-		return fmt.Errorf("stat Claude workspace: %w", err)
-	}
-	if !info.IsDir() {
-		return errors.New("Claude workspace is not a directory")
-	}
-
-	c.mu.Lock()
-	if filepath.Clean(c.cfg.Repo) == workspace {
-		c.mu.Unlock()
-		return nil
-	}
-	if c.state == model.StateWorking || c.state == model.StateWaiting || c.state == model.StateStarting || len(c.pending) > 0 || len(c.approvals) > 0 {
-		c.mu.Unlock()
-		return errors.New("interrupt or stop Claude before changing its workspace")
-	}
-	wasRunning := c.cmd != nil && c.cmd.Process != nil
-	old := c.cfg.Repo
-	c.cfg.Repo = workspace
-	c.protocolSent = false
-	c.mu.Unlock()
-
-	if !wasRunning {
-		return nil
-	}
-	if err := c.Stop(ctx); err != nil {
-		c.mu.Lock()
-		c.cfg.Repo = old
-		c.mu.Unlock()
-		return err
-	}
-	if err := c.Start(ctx); err != nil {
-		c.mu.Lock()
-		c.cfg.Repo = old
-		c.mu.Unlock()
-		return fmt.Errorf("restart Claude in reviewer workspace: %w", err)
 	}
 	return nil
 }

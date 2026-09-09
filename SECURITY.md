@@ -6,7 +6,7 @@
 
 PairRoom starts high-privilege local coding Agents. Native tools, Skills, MCP, Hooks, plugins, and subprocesses may read/modify files, run commands, and access the network. PairRoom's UI and Room scheduler do not replace native permission, sandbox, or organization policy.
 
-The intended environment is one user, a trusted local machine, and a trusted repository. There is no security boundary against a malicious same-user local process, compromised OS, or kernel. The control plane addresses unauthorized browser/API access, CSRF/DNS rebinding, credential exposure, unsafe attachments/imports, ambiguous high-privilege native requests, and divergence between durable Room facts and runtime ownership.
+The intended environment is one user, a trusted local machine, and a trusted repository. There is no security boundary against a malicious same-user local process, compromised OS, or kernel. The control plane addresses unauthorized browser/API access, CSRF/DNS rebinding, credential exposure, unsafe attachments, ambiguous high-privilege native requests, and divergence between durable Room facts and runtime ownership.
 
 **New Rooms default to YOLO for both participants.** Lower approval friction is not stronger security. Lead/Executor are responsibilities, not tool restrictions. There is no automatic Agent-relay count or cost ceiling. Use explicit native restrictions and controlled execution environments for tasks that require them.
 
@@ -14,7 +14,7 @@ The intended environment is one user, a trusted local machine, and a trusted rep
 
 ### 2.1 Numeric loopback only
 
-`pairroom service`, `pairroom serve`, and Room listeners accept only numeric loopback addresses. Wildcard, LAN/public, hostname, and `localhost` binds are rejected before state is opened. **A token does not enable a non-loopback listener.** Tokenless compatibility `serve` still performs loopback Host and same-origin checks.
+`pairroom service`, `pairroom serve`, and Room listeners accept only numeric loopback addresses. Wildcard, LAN/public, hostname, and `localhost` binds are rejected before state is opened. **A token does not enable a non-loopback listener.** Tokenless standalone `serve` still performs loopback Host and same-origin checks.
 
 There is no built-in TLS or remote listener. Use SSH local port forwarding for remote access while retaining loopback and authentication checks. Treat the forwarded endpoint as access to local repositories and high-privilege Agent tools, not a multi-user hosting interface.
 
@@ -28,7 +28,7 @@ The bootstrap token is cleared from page memory/input after exchange. Neither to
 
 ### 2.3 Room View authentication
 
-A Service-managed Room has an independent token; compatibility `serve` may configure one. When token authentication is enabled, the browser exchanges a fragment credential for a 12-hour sliding-expiry `HttpOnly`, `SameSite=Strict` session cookie and uses per-session CSRF for writes. Tokens and CSRF do not enter query strings or Web Storage. REST, SSE, and attachments do not accept a query token as authorization.
+A Service-managed Room has an independent token; standalone `serve` may configure one. When token authentication is enabled, the browser exchanges a fragment credential for a 12-hour sliding-expiry `HttpOnly`, `SameSite=Strict` session cookie and uses per-session CSRF for writes. Tokens and CSRF do not enter query strings or Web Storage. REST, SSE, and attachments do not accept a query token as authorization.
 
 Room A's token/session/CSRF, event cursor, and attachment authorization cannot authorize Room B. The Management same-origin Room gateway is not permission to transfer Room identities or reuse stale actions against a different embedded surface.
 
@@ -60,11 +60,11 @@ The API/transcript carries verified metadata, not an absolute host attachment pa
 
 ### 5.1 Claude
 
-Native control initialize must succeed. Unknown control requests error; native tool/question requests enter the Room approval lifecycle. A read-only profile or preserved enforced legacy Reviewer uses plan permissions and blocked write tools, with another fail-closed control check for write requests that still arrive.
+Native control initialize must succeed. Unknown control requests error; native tool/question requests enter the Room approval lifecycle. A read-only profile uses plan permissions and blocked write tools, with another fail-closed control check for write requests that still arrive.
 
 ### 5.2 Codex
 
-Unknown app-server requests fail closed. A read-only profile or preserved legacy Reviewer uses the read-only sandbox. Additional permissions can only be granted within the requested scope. Command/file/additional-permission requests use the approval lifecycle. A generic diagnostic `error` does not by itself prove a Turn ended.
+Unknown app-server requests fail closed. A read-only profile uses the read-only sandbox. Additional permissions can only be granted within the requested scope. Command/file/additional-permission requests use the approval lifecycle. A generic diagnostic `error` does not by itself prove a Turn ended.
 
 ### 5.3 Grok Build
 
@@ -76,15 +76,13 @@ PairRoom advertises `terminal=false`, retaining native tool execution. Permissio
 
 Interrupt, stop/restart, terminal failure or confirmed exit, permission replacement, and PairRoom restart expire pending requests that cannot safely be reused. A stale browser decision must not authorize a new vendor request. Invalid or incomplete answers remain answerable rather than consuming the request.
 
-Modern permission changes require an idle Room, empty FIFO, and no pending approval. Intent precedes effects; the old adapter stops before the effective policy is committed and the replacement starts. Failure cannot grant broader fallback access. Collaboration instructions and native session identity remain intact. Legacy role mutation is not a public operation. Exact wire semantics are in [API reference](docs/API_REFERENCE.md#native-approval-responses).
+Modern permission changes require an idle Room, empty FIFO, and no pending approval. Intent precedes effects; the old adapter stops before the effective policy is committed and the replacement starts. Failure cannot grant broader fallback access. Collaboration instructions and native session identity remain intact. Role mutation is not supported. Exact wire semantics are in [API reference](docs/API_REFERENCE.md#native-approval-responses).
 
 ## 6. Workspace and responsibility boundaries
 
 Modern Lead and Executor share the live workspace and default to YOLO. One native Turn owner is enforced **per Room**, not as a repository-wide lock or isolation from native children, MCP, Hooks, external editors, or other Rooms. A “reviewer” instruction does not create an independent read-only copy. Select actual native restrictions and use controlled containers/VMs or independently managed workspaces when isolation matters.
 
-Legacy role-bound Reviewer snapshots preserve HEAD, staged/unstaged tracked changes, and untracked regular files; unsafe symlinks/out-of-bound references are rejected. The snapshot records provenance and removes write bits on POSIX, then layers the native read-only/plan policy. It is not a container, VM, read-only mount, or malware sandbox. Windows semantics, native bugs, external tools, and user configuration can widen access.
-
-Legacy Driver/Reviewer boundaries remain legacy; upgrading does not convert them to modern YOLO. For independent parallel writing tasks, manage separate worktrees/branches and explicit merges rather than relying on Room labels.
+Unsupported Room formats fail before replay or repair; upgrading never infers broader permissions. For independent parallel writing tasks, manage separate worktrees/branches and explicit merges rather than relying on Room labels.
 
 ## 7. Persistence and recovery
 

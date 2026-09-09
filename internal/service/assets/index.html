@@ -120,14 +120,10 @@
         <div><p class="eyebrow" data-i18n="common.workspaceUpper">WORKSPACE</p><h2 id="project-dialog-title" data-i18n="ui.registerProject9c99cf3">Register Project</h2><p id="project-dialog-subtitle" class="muted" data-i18n="ui.addACanonicalGitWorktree">Add a canonical Git worktree.</p></div>
         <button class="icon-button modal-close" type="button" data-close-dialog="project-dialog" aria-label="Close" data-i18n-aria-label="common.close">×</button>
       </header>
-      <div class="segmented-control" role="tablist" aria-label="Add method" data-i18n-aria-label="ui.addMethod">
-        <button id="project-mode-register" type="button" role="tab" aria-selected="true" data-project-mode="register" data-i18n="ui.registerProject9c99cf3">Register Project</button>
-        <button id="project-mode-import" type="button" role="tab" aria-selected="false" data-project-mode="import" data-i18n="ui.importLegacyRoom">Import Legacy Room</button>
-      </div>
       <div class="modal-body">
         <label class="field-label" for="project-path" data-i18n="ui.absolutePath">Absolute path</label>
         <input id="project-path" name="path" type="text" required="" placeholder="/absolute/path/to/git/worktree" autocomplete="off" spellcheck="false">
-        <div id="project-mode-help" class="callout neutral">
+        <div id="project-path-help" class="callout neutral">
           <strong data-i18n="ui.explicitPathBoundary">Explicit path boundary</strong>
           <span data-i18n="ui.onlyAbsolutePathsAreAcceptedRootPathsSubdirectoriesAndSymlinksResolveTo">Only absolute paths are accepted. Root paths, subdirectories, and symlinks resolve to the same canonical Git worktree; the Service does not scan development directories.</span>
         </div>
@@ -237,15 +233,6 @@
       <header class="modal-header"><div><p class="eyebrow" data-i18n="common.roomUpper">ROOM</p><h2 id="rename-dialog-title" data-i18n="ui.renameRoom">Rename Room</h2><p class="muted" data-i18n="ui.theOperationWaitsForASafeTurnBoundaryAndDoesNotInterrupt">The operation waits for a safe Turn boundary and does not interrupt active work.</p></div><button class="icon-button modal-close" type="button" data-close-dialog="rename-dialog" aria-label="Close" data-i18n-aria-label="common.close">×</button></header>
       <div class="modal-body"><input id="rename-room-id" type="hidden"><label><span class="field-label" data-i18n="ui.newName">New name</span><input id="rename-room-name" type="text" required="" maxlength="160" autocomplete="off"></label><p id="rename-form-error" class="form-error" role="alert" hidden=""></p></div>
       <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="rename-dialog" data-i18n="ui.cancel">Cancel</button><button class="primary-button" type="submit" data-i18n="ui.saveName">Save name</button></footer>
-    </form>
-  </dialog>
-
-  <dialog id="binding-dialog" class="modal modal-medium" aria-labelledby="binding-dialog-title">
-    <form id="binding-form" method="dialog" novalidate="">
-      <header class="modal-header"><div><p class="eyebrow" data-i18n="common.legacyRoomUpper">LEGACY ROOM</p><h2 id="binding-dialog-title" data-i18n="ui.completeBindings">Complete bindings</h2><p class="muted" data-i18n="ui.changesCommitOnlyAfterEveryMissingBindingValidatesSuccessfully">Changes commit only after every missing Binding validates successfully.</p></div><button class="icon-button modal-close" type="button" data-close-dialog="binding-dialog" aria-label="Close" data-i18n-aria-label="common.close">×</button></header>
-      <div id="binding-fields" class="modal-body stacked-fields"></div>
-      <p id="binding-form-error" class="form-error modal-inline-error" role="alert" hidden=""></p>
-      <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="binding-dialog" data-i18n="ui.cancel">Cancel</button><button class="primary-button" type="submit" data-i18n="ui.completeBindingsAtomically">Complete Bindings atomically</button></footer>
     </form>
   </dialog>
 

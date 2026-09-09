@@ -107,7 +107,9 @@ assert len(s.get('turns',[]))>=3, s.get('turns')
 assert any(m.get('attachments') for m in s['messages']), 'attachment missing from transcript'
 for actor in ('claude','codex'):
     p=s['participants'][actor]
-    assert p['workspace']['kind'] in ('driver-live','reviewer-snapshot'), p
+    assert p['workspace']['kind'] == 'live', p
+    assert p['role'] == 'peer' and p['permission_profile'] == 'configured', p
+    assert p['workspace']['path'] == s['meta']['repo'], p
 PY
 
 # Cursor API should return a valid page even when the room is still small.

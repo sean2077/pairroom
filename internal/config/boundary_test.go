@@ -125,3 +125,14 @@ func TestConfigRejectsIncompleteProviderReferences(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigRejectsRetiredReviewerPolicy(t *testing.T) {
+	for _, document := range []string{
+		`{"claude":{"ordinary_reviewer_policy":"enforced"}}`,
+		`{"codex":{"ordinary_reviewer_policy":"explicit"}}`,
+	} {
+		if _, err := loadTestConfig(t, document); err == nil {
+			t.Fatalf("accepted retired configuration: %s", document)
+		}
+	}
+}

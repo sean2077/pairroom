@@ -76,7 +76,6 @@ type ServiceSummary struct {
 	Rooms               int `json:"rooms"`
 	ActiveRooms         int `json:"active_rooms"`
 	ArchivedRooms       int `json:"archived_rooms"`
-	PendingBindings     int `json:"pending_bindings"`
 	RuntimeCapacityUsed int `json:"runtime_capacity_used"`
 	ActiveRuntimes      int `json:"active_runtimes"`
 	BusyRuntimes        int `json:"busy_runtimes"`
@@ -87,7 +86,6 @@ type ServiceSummary struct {
 }
 
 type ServiceCapabilities struct {
-	LegacyImport          bool `json:"legacy_import"`
 	RuntimeSuspend        bool `json:"runtime_suspend"`
 	RuntimePolicyMutation bool `json:"runtime_policy_mutation"`
 	ProjectRefresh        bool `json:"project_refresh"`
@@ -175,7 +173,6 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	mux.HandleFunc("/api/v1/rooms/{room}/surface/{path...}", server.roomSurface)
 	mux.HandleFunc("PATCH /api/v1/runtime-policy", server.updateRuntimePolicy)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/suspend", server.suspendRoom)
-	mux.HandleFunc("POST /api/v1/rooms/{room}/bindings", server.completeRoomBindings)
 	mux.HandleFunc("PATCH /api/v1/rooms/{room}", server.renameRoom)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/archive", server.archiveRoom)
 	mux.HandleFunc("POST /api/v1/rooms/batch-archive", server.archiveRoomsBatch)
@@ -183,7 +180,6 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	mux.HandleFunc("DELETE /api/v1/rooms/{room}", server.removeRoom)
 	mux.HandleFunc("POST /api/v1/rooms/batch-delete", server.removeRoomsBatch)
 	mux.HandleFunc("POST /api/v1/maintenance/room-deletions/retry", server.retryRoomDeletionCleanup)
-	mux.HandleFunc("POST /api/v1/import", server.importLegacy)
 	mux.Handle("/", http.FileServer(http.FS(assets)))
 	server.http = &http.Server{
 		Handler:           server.securityHeaders(server.sameOrigin(server.authenticate(server.csrf(mux)))),
@@ -279,7 +275,7 @@ func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
 		RuntimePolicy: s.runtimes.Policy(),
 		Summary:       summarizeService(registry.Projects, registry.Rooms, runtimes),
 		Capabilities: ServiceCapabilities{
-			LegacyImport: true, RuntimeSuspend: true, RuntimePolicyMutation: true,
+			RuntimeSuspend: true, RuntimePolicyMutation: true,
 			ProjectRefresh: true, ProjectRemoval: true, RoomDeletion: true, RoomSurface: true, Diagnostics: true,
 		},
 		Maintenance: s.registry.RoomDeletionMaintenance(),
@@ -290,7 +286,7 @@ func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
 	if maintenanceAttention == 0 && payload.Maintenance.Diagnostic != "" {
 		maintenanceAttention = 1
 	}
-	payload.Summary.AttentionItems = payload.Summary.UnavailableProjects + payload.Summary.PendingBindings + payload.Summary.FailedRuntimes + maintenanceAttention
+	payload.Summary.AttentionItems = payload.Summary.UnavailableProjects + payload.Summary.FailedRuntimes + maintenanceAttention
 	order, orderErr := s.registry.NavigationOrder()
 	if orderErr == nil {
 		payload.NavigationOrder = &order
@@ -324,9 +320,6 @@ func summarizeService(projects []Project, rooms []Room, runtimes []RuntimeStatus
 		} else {
 			summary.ActiveRooms++
 		}
-		if room.HasBlockingPendingBindings() {
-			summary.PendingBindings++
-		}
 	}
 	for _, runtime := range runtimes {
 		if runtime.OccupiesCapacity {
@@ -345,7 +338,7 @@ func summarizeService(projects []Project, rooms []Room, runtimes []RuntimeStatus
 			summary.FailedRuntimes++
 		}
 	}
-	summary.AttentionItems = summary.UnavailableProjects + summary.PendingBindings + summary.FailedRuntimes
+	summary.AttentionItems = summary.UnavailableProjects + summary.FailedRuntimes
 	return summary
 }
 
@@ -423,7 +416,7 @@ func (s *ManagementServer) provisionRoom(w http.ResponseWriter, r *http.Request)
 			writeManagementError(w, http.StatusBadRequest, "agents must contain both Agent selections when provided")
 			return
 		}
-		if err := json.Unmarshal(request.Agents, &agents); err != nil {
+		if err := decodeStrictJSONBytes(request.Agents, &agents); err != nil {
 			writeManagementError(w, http.StatusBadRequest, "agents must be an object containing both Agent selections: "+err.Error())
 			return
 		}
@@ -534,28 +527,6 @@ func (s *ManagementServer) suspendRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeManagementJSON(w, http.StatusOK, s.runtimes.Status(roomID))
-}
-
-func (s *ManagementServer) completeRoomBindings(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		Bindings map[model.ActorID]BindingSpec `json:"bindings"`
-	}
-	if err := decodeManagementJSON(w, r, &request); err != nil {
-		return
-	}
-	roomID := r.PathValue("room")
-	unlock := s.lockRoom(roomID)
-	defer unlock()
-	if err := s.runtimes.WaitAndSuspend(r.Context(), roomID); err != nil {
-		s.writeError(w, err)
-		return
-	}
-	room, err := s.registry.CompleteBindings(r.Context(), roomID, request.Bindings, s.provisioner)
-	if err != nil {
-		s.writeError(w, err)
-		return
-	}
-	writeManagementJSON(w, http.StatusOK, room)
 }
 
 func (s *ManagementServer) renameRoom(w http.ResponseWriter, r *http.Request) {
@@ -875,21 +846,6 @@ func (s *ManagementServer) retryRoomDeletionCleanup(w http.ResponseWriter, r *ht
 	writeManagementJSON(w, http.StatusOK, maintenance)
 }
 
-func (s *ManagementServer) importLegacy(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		Path string `json:"path"`
-	}
-	if err := decodeManagementJSON(w, r, &request); err != nil {
-		return
-	}
-	room, err := s.registry.ImportLegacy(r.Context(), request.Path)
-	if err != nil {
-		s.writeError(w, err)
-		return
-	}
-	writeManagementJSON(w, http.StatusCreated, room)
-}
-
 func (s *ManagementServer) lockRoom(roomID string) func() {
 	return s.roomLocks.Lock(roomID)
 }
@@ -1035,7 +991,7 @@ func (s *ManagementServer) writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrInvalidRoomName):
 		code = http.StatusBadRequest
 	case errors.Is(err, ErrProjectAlreadyRegistered), errors.Is(err, ErrProjectHasRooms),
-		errors.Is(err, ErrBindingOwned), errors.Is(err, ErrRoomBindingPending):
+		errors.Is(err, ErrBindingOwned):
 		code = http.StatusConflict
 	case errors.Is(err, ErrProjectNotFound), errors.Is(err, ErrRoomNotFound):
 		code = http.StatusNotFound
@@ -1075,8 +1031,6 @@ func managementErrorCode(err error, fallback string) string {
 		return "project_has_rooms"
 	case errors.Is(err, ErrBindingOwned):
 		return "binding_owned"
-	case errors.Is(err, ErrRoomBindingPending):
-		return "room_binding_pending"
 	case errors.Is(err, ErrRegistryFailClosed):
 		return "registry_unavailable"
 	case errors.Is(err, ErrRuntimeManagerClosed):

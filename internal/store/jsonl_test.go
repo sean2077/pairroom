@@ -283,7 +283,7 @@ func TestSaveAndLoadJSON(t *testing.T) {
 }
 
 func TestOpenRejectsEveryNonCurrentSchemaWithoutMigration(t *testing.T) {
-	for _, schema := range []int{1, version.LegacyStoreSchema - 1, version.StoreSchema + 1, 999} {
+	for _, schema := range []int{0, 1, 8, version.StoreSchema - 1, version.StoreSchema + 1, 999} {
 		t.Run(fmt.Sprintf("schema-%d", schema), func(t *testing.T) {
 			dir := t.TempDir()
 			metadata := fmt.Sprintf(`{"format":"pairroom-jsonl","schema_version":%d,"app_version":"0.1.0"}`, schema)
@@ -297,44 +297,59 @@ func TestOpenRejectsEveryNonCurrentSchemaWithoutMigration(t *testing.T) {
 	}
 }
 
-func TestOpenRejectsOldSchemaBeforeRepairOrReplay(t *testing.T) {
-	dir := t.TempDir()
-	metadata := fmt.Sprintf(`{"format":"pairroom-jsonl","schema_version":%d}`, version.LegacyStoreSchema-1)
-	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(metadata), 0o600); err != nil {
-		t.Fatal(err)
+func TestUnsupportedMetadataNeverRepairsOrRewritesStore(t *testing.T) {
+	t.Parallel()
+	openers := map[string]func(string) (*JSONLStore, error){
+		"new":      Open,
+		"existing": OpenExisting,
+		"published": func(dir string) (*JSONLStore, error) {
+			return OpenExistingForRoom(dir, "room-1")
+		},
 	}
-	const brokenTail = `{"old":"event"`
-	eventPath := filepath.Join(dir, "events.jsonl")
-	if err := os.WriteFile(eventPath, []byte(brokenTail), 0o600); err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name, metadata, want string
+	}{
+		{"schema-9", `{"format":"pairroom-jsonl","schema_version":9,"app_version":"2.1.0"}`, "provides no migration"},
+		{"future", fmt.Sprintf(`{"format":"pairroom-jsonl","schema_version":%d}`, version.StoreSchema+1), "provides no migration"},
+		{"missing-format", fmt.Sprintf(`{"schema_version":%d}`, version.StoreSchema), "unsupported event metadata format"},
+		{"unknown-format", fmt.Sprintf(`{"format":"other","schema_version":%d}`, version.StoreSchema), "unsupported event metadata format"},
+		{"missing-marker", "", "metadata is missing"},
 	}
-	if _, err := Open(dir); err == nil || !strings.Contains(err.Error(), "provides no migration") {
-		t.Fatalf("old schema was not rejected before replay: %v", err)
-	}
-	data, err := os.ReadFile(eventPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != brokenTail {
-		t.Fatalf("old event log was repaired before schema rejection: %q", data)
-	}
-}
-
-func TestSchemaNineRemainsReadableWithoutRewritingMarker(t *testing.T) {
-	dir := t.TempDir()
-	metadata := `{"format":"pairroom-jsonl","schema_version":9,"app_version":"2.1.0"}`
-	path := filepath.Join(dir, "metadata.json")
-	if err := os.WriteFile(path, []byte(metadata), 0600); err != nil {
-		t.Fatal(err)
-	}
-	value, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer value.Close()
-	got, err := os.ReadFile(path)
-	if err != nil || string(got) != metadata {
-		t.Fatalf("schema-9 marker was rewritten: %s %v", got, err)
+	for name, open := range openers {
+		for _, tc := range cases {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				dir := t.TempDir()
+				marker := filepath.Join(dir, "metadata.json")
+				if tc.metadata != "" {
+					if err := os.WriteFile(marker, []byte(tc.metadata), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				const brokenTail = `{"old":"event"`
+				eventPath := filepath.Join(dir, "events.jsonl")
+				if err := os.WriteFile(eventPath, []byte(brokenTail), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				value, err := open(dir)
+				if value != nil {
+					_ = value.Close()
+				}
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("store was not rejected before replay: %v", err)
+				}
+				if data, err := os.ReadFile(eventPath); err != nil || string(data) != brokenTail {
+					t.Fatalf("rejection modified Event Log: %q, %v", data, err)
+				}
+				data, err := os.ReadFile(marker)
+				if tc.metadata == "" {
+					if !errors.Is(err, os.ErrNotExist) {
+						t.Fatalf("rejection created metadata: %q, %v", data, err)
+					}
+				} else if err != nil || string(data) != tc.metadata {
+					t.Fatalf("rejection rewrote metadata: %q, %v", data, err)
+				}
+			})
+		}
 	}
 }
 

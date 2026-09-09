@@ -198,8 +198,8 @@ func (m *RuntimeManager) RequestActivation(roomID string) (RuntimeStatus, error)
 	if room.Archived() {
 		return RuntimeStatus{}, errors.New("archived room must be restored before activation")
 	}
-	if room.HasBlockingPendingBindings() {
-		return RuntimeStatus{}, fmt.Errorf("%w: complete the legacy Room's Claude/Codex bindings before activation", ErrRoomBindingPending)
+	if err := room.Validate(); err != nil {
+		return RuntimeStatus{}, fmt.Errorf("invalid Room: %w", err)
 	}
 
 	entry := m.entries[roomID]
@@ -849,7 +849,7 @@ func (m *RuntimeManager) idleLRULocked() (string, *runtimeEntry) {
 	var selected *runtimeEntry
 	for roomID, entry := range m.entries {
 		m.refreshUsageLocked(entry)
-		if entry.phase != RuntimeActive || entry.runtime == nil || entry.runtime.Busy() {
+		if entry.phase != RuntimeActive || entry.runtime == nil || entry.runtime.Busy() || runtimeInUse(entry.runtime) {
 			continue
 		}
 		if selected == nil || entry.lastUsed.Before(selected.lastUsed) || (entry.lastUsed.Equal(selected.lastUsed) && roomID < id) {

@@ -231,22 +231,17 @@ type RuntimeInfo struct {
 	Data              json.RawMessage `json:"data,omitempty"`
 }
 
-// WorkspaceBoundary describes the filesystem view assigned to a participant.
-// The driver uses the live repository while the reviewer can be placed in an
-// independently materialized Git snapshot.  The metadata is deliberately
-// durable and visible so the UI never implies stronger isolation than the
-// runtime actually provides.
+// WorkspaceBoundary describes the shared live Project worktree. Native tool
+// permissions are projected separately in RuntimeInfo and PermissionProfile.
+// Zero-valued dirty/read_only_enforced/refreshed_at fields remain in the
+// schema-10 wire shape; they do not claim a separately refreshed snapshot.
 type WorkspaceBoundary struct {
 	Kind             string    `json:"kind"`
 	Path             string    `json:"path,omitempty"`
-	SourceHead       string    `json:"source_head,omitempty"`
-	PatchSHA256      string    `json:"patch_sha256,omitempty"`
 	Dirty            bool      `json:"dirty"`
-	UntrackedCount   int       `json:"untracked_count,omitempty"`
 	ReadOnly         bool      `json:"read_only"`
 	ReadOnlyEnforced bool      `json:"read_only_enforced"`
 	RefreshedAt      time.Time `json:"refreshed_at,omitempty"`
-	Warnings         []string  `json:"warnings,omitempty"`
 }
 
 type ParticipantSnapshot struct {

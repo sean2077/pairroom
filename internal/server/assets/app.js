@@ -455,8 +455,8 @@
     $('room-name').textContent = state.snapshot.meta.name;
     $('repo-path').textContent = state.snapshot.meta.repo;
     const collaboration = state.snapshot.meta.collaboration;
-    $('room-collaboration-label').textContent = t(collaboration?.mode === 'default' ? 'room.collaboration.default' : collaboration ? 'room.collaboration.custom' : 'room.collaboration.legacy');
-    $('room-collaboration-instructions').textContent = collaboration?.instructions || t('room.collaboration.legacyHelp');
+    $('room-collaboration-label').textContent = t(collaboration.mode === 'default' ? 'room.collaboration.default' : 'room.collaboration.custom');
+    $('room-collaboration-instructions').textContent = collaboration.instructions;
 	const chatDescription = $('chat-description');
 	if (chatDescription) chatDescription.textContent = ['You', displayName('claude'), displayName('codex')].join(' · ');
     renderParticipants();
@@ -667,13 +667,9 @@
         main.appendChild(warning);
       }
 
-      const showPermissionSelect = Boolean(state.snapshot.meta.collaboration);
       const nativePolicyFields = [runtime.permission_mode, runtime.approval_policy, runtime.sandbox].filter(Boolean);
-      // With a Permission profile selector present and no explicit native
-      // override, this line could only restate "inherited native policy" and so
-      // duplicated the selector's own configured state. A legacy Room has no
-      // selector, so it always keeps the line.
-      if (!showPermissionSelect || nativePolicyFields.length) {
+      // The selector already explains inherited native policy.
+      if (nativePolicyFields.length) {
         const policy = participantPolicy(p);
         const policyLine = document.createElement('div');
         policyLine.className = `native-policy ${policy.protected ? 'protected' : ''}`;
@@ -682,35 +678,25 @@
         main.appendChild(policyLine);
       }
 
-	  const workspace = p.workspace || {};
-	  if (workspace.kind) {
-		const workspaceLine = document.createElement('div');
-		workspaceLine.className = `workspace-boundary ${workspace.read_only ? 'protected' : ''}`;
-		const parts = [workspace.kind === 'reviewer-snapshot' ? t("ui.independentReviewSnapshot") : t("ui.liveWorkspace")];
-		if (workspace.dirty) parts.push(t("ui.hasUncommittedChanges"));
-		if (workspace.untracked_count) parts.push(t("ui.valueUntrackedFiles", { value0: (workspace.untracked_count) }));
-		workspaceLine.textContent = parts.join(' · ');
-		workspaceLine.title = [
-		  workspace.path,
-		  workspace.source_head ? `HEAD ${workspace.source_head}` : '',
-		  workspace.patch_sha256 ? `snapshot ${workspace.patch_sha256}` : '',
-		  ...(workspace.warnings || []),
-		].filter(Boolean).join('\n');
-		main.appendChild(workspaceLine);
-	  }
-
-      if (showPermissionSelect) {
-        const permission = document.createElement('select');
-        permission.className = 'permission-select';
-        permission.dataset.permissionActor = actor;
-        permission.setAttribute('aria-label', `${displayName(actor)} · ${t('room.collaboration.permissions')}`);
-        for (const [value, key] of [['configured','room.collaboration.configured'],['read-only','room.collaboration.readOnly'],['yolo','room.collaboration.yolo']]) {
-          const option = document.createElement('option'); option.value = value; option.textContent = t(key);
-          option.selected = (p.permission_profile || 'configured') === value; permission.appendChild(option);
-        }
-        permission.disabled = participantBusy(actor) || Object.values(state.snapshot.participants).some((p) => !['stopped','idle','error'].includes(p.state));
-        main.appendChild(permission);
+      const workspace = p.workspace || {};
+      if (workspace.path) {
+        const workspaceLine = document.createElement('div');
+        workspaceLine.className = 'workspace-boundary';
+        workspaceLine.textContent = t("ui.liveWorkspace");
+        workspaceLine.title = workspace.path;
+        main.appendChild(workspaceLine);
       }
+
+        const permission = document.createElement('select');
+      permission.className = 'permission-select';
+      permission.dataset.permissionActor = actor;
+      permission.setAttribute('aria-label', `${displayName(actor)} · ${t('room.collaboration.permissions')}`);
+      for (const [value, key] of [['configured','room.collaboration.configured'],['read-only','room.collaboration.readOnly'],['yolo','room.collaboration.yolo']]) {
+        const option = document.createElement('option'); option.value = value; option.textContent = t(key);
+        option.selected = (p.permission_profile || 'configured') === value; permission.appendChild(option);
+      }
+      permission.disabled = participantBusy(actor) || Object.values(state.snapshot.participants).some((p) => !['stopped','idle','error'].includes(p.state));
+      main.appendChild(permission);
 
       const actions = document.createElement('div');
       actions.className = 'agent-actions';

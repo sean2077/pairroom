@@ -45,7 +45,7 @@ def snapshot_fixture() -> dict:
                             "permission_mode": "yolo"} if actor == "claude"
                            else {"provider": "native",
                                  "approval_policy": "yolo", "sandbox": "danger-full-access"})},
-            "workspace": {"kind": "driver-live", "path": "/workspace/example", "read_only": False},
+            "workspace": {"kind": "live", "path": "/workspace/example", "read_only": False},
         }
     return {
         "meta": {"id": "browser-fixture", "name": "Example workspace", "repo": "/workspace/example", "collaboration": collaboration_fixture()},
@@ -277,11 +277,6 @@ async def verify_collaboration(browser, artifacts: Path) -> dict:
     assert await page.locator("#room-collaboration-instructions").text_content() == custom
     assert not await page.evaluate("document.documentElement.scrollWidth>innerWidth")
     await page.screenshot(path=str(artifacts / "collaboration-custom-mobile-dark.png"))
-    # Legacy state is visible but cannot silently opt into new permissions.
-    await page.evaluate("delete __snapshot.meta.collaboration")
-    await page.locator("#refresh-button").click()
-    await page.wait_for_function("document.querySelectorAll('[data-permission-actor]').length===0")
-    assert await page.locator("[data-role-actor]").count() == 0
     assert not errors, errors
     await page.close()
     return {"creation_only_mode_display": True, "permission_single_submission": True,

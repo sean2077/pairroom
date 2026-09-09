@@ -71,9 +71,9 @@ func (s *ManagementServer) runDiagnostics(w http.ResponseWriter, r *http.Request
 			return
 		}
 		report.Scope, selections = "room", room.Agents
-		// Never guess legacy native settings or resume its bound sessions.
+		// Never diagnose with guessed settings or resume bound sessions.
 		if len(selections) != 2 && request.Mode == "runtime" {
-			writeManagementError(w, http.StatusConflict, "this Room has no explicit Agent selections; use its native CLI to diagnose legacy configuration")
+			writeManagementError(w, http.StatusConflict, "this Room has no valid Agent selections; create a new Room")
 			return
 		}
 	} else if resolver != nil {

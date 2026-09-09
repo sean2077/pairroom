@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -244,20 +243,13 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	existingThread := c.threadID
 	c.mu.Unlock()
 	requiredThread := existingThread
-	strictResume := c.cfg.RequireExactSession && requiredThread != ""
+	strictResume := requiredThread != ""
 	var result json.RawMessage
 	if existingThread != "" {
 		result, err = c.call(handshakeCtx, "thread/resume", c.threadResumeParams(existingThread))
 		if err != nil {
-			if strictResume {
-				_ = c.Stop(context.Background())
-				return fmt.Errorf("resume required Codex thread %q: %w", requiredThread, err)
-			}
-			logEvent := runtimeEvent(c.cfg.Actor, model.RuntimeLog)
-			logEvent.Name = "thread.resume"
-			logEvent.Text = "resume failed; creating a new Codex thread: " + err.Error()
-			c.sink(logEvent)
-			existingThread = ""
+			_ = c.Stop(context.Background())
+			return fmt.Errorf("resume required Codex thread %q: %w", requiredThread, err)
 		}
 	}
 	if existingThread == "" {
@@ -519,7 +511,7 @@ func (c *CodexAdapter) threadStartParams() map[string]any {
 		params["approvalPolicy"] = c.cfg.ApprovalPolicy
 	}
 	if c.cfg.Sandbox != "" {
-		params["sandbox"] = c.legacySandbox()
+		params["sandbox"] = c.threadSandbox()
 	}
 	if c.cfg.Model != "" {
 		params["model"] = c.cfg.Model
@@ -536,17 +528,10 @@ func (c *CodexAdapter) turnStartParams(threadID, text string, input model.AgentI
 	if c.cfg.ApprovalPolicy != "" {
 		params["approvalPolicy"] = c.cfg.ApprovalPolicy
 	}
-	effectiveRole := input.Role
-	if input.Role == model.RoleReviewer && c.cfg.OrdinaryReviewerPolicy == model.ReviewerExplicit {
-		// The Room keeps Reviewer as the durable role and workspace boundary,
-		// while the explicit policy opts this ordinary Reviewer turn into the
-		// selected native permission/sandbox profile.
-		effectiveRole = model.RoleDriver
-	}
-	if input.Role == model.RoleReviewer && c.cfg.OrdinaryReviewerPolicy != model.ReviewerExplicit {
+	if input.Role == model.RoleReviewer {
 		params["sandboxPolicy"] = map[string]any{"type": "readOnly"}
 	} else if c.cfg.Sandbox != "" {
-		params["sandboxPolicy"] = c.sandboxPolicy(effectiveRole)
+		params["sandboxPolicy"] = c.sandboxPolicy(input.Role)
 	}
 	if input.MessageID != "" {
 		params["clientUserMessageId"] = input.MessageID
@@ -572,8 +557,8 @@ func codexInputItems(text string, attachments []model.AgentAttachment) []any {
 	return items
 }
 
-func (c *CodexAdapter) legacySandbox() string {
-	// The legacy thread/start sandbox enum uses CLI-style kebab-case, unlike
+func (c *CodexAdapter) threadSandbox() string {
+	// The thread/start sandbox enum uses CLI-style kebab-case, unlike
 	// the camelCase tagged variants in turn/start sandboxPolicy objects.
 	switch strings.ToLower(c.cfg.Sandbox) {
 	case "readonly", "read_only", "read-only":
@@ -1630,55 +1615,6 @@ func (c *CodexAdapter) SetRole(_ context.Context, role model.ParticipantRole) er
 	if c.state == model.StateStarting || c.state == model.StateWorking || c.state == model.StateWaiting ||
 		c.currentTurn != "" || c.startingInput != nil || len(c.wireInputs) > 0 || len(c.approvals) > 0 {
 		return errors.New("interrupt or stop Codex before changing its role")
-	}
-	return nil
-}
-
-// SetWorkspace updates both the app-server process directory and the cwd sent
-// to thread/turn requests. Like role changes, it is rejected while any input
-// can still be in flight so a turn is never relabelled after it started.
-func (c *CodexAdapter) SetWorkspace(ctx context.Context, workspace string) error {
-	workspace = filepath.Clean(strings.TrimSpace(workspace))
-	if workspace == "." || workspace == "" {
-		return errors.New("Codex workspace is required")
-	}
-	info, err := os.Stat(workspace)
-	if err != nil {
-		return fmt.Errorf("stat Codex workspace: %w", err)
-	}
-	if !info.IsDir() {
-		return errors.New("Codex workspace is not a directory")
-	}
-
-	c.mu.Lock()
-	if filepath.Clean(c.cfg.Repo) == workspace {
-		c.mu.Unlock()
-		return nil
-	}
-	if c.state == model.StateStarting || c.state == model.StateWorking || c.state == model.StateWaiting ||
-		c.currentTurn != "" || c.startingInput != nil || len(c.wireInputs) > 0 || len(c.approvals) > 0 {
-		c.mu.Unlock()
-		return errors.New("interrupt or stop Codex before changing its workspace")
-	}
-	wasRunning := c.cmd != nil && c.cmd.Process != nil
-	old := c.cfg.Repo
-	c.cfg.Repo = workspace
-	c.mu.Unlock()
-
-	if !wasRunning {
-		return nil
-	}
-	if err := c.Stop(ctx); err != nil {
-		c.mu.Lock()
-		c.cfg.Repo = old
-		c.mu.Unlock()
-		return err
-	}
-	if err := c.Start(ctx); err != nil {
-		c.mu.Lock()
-		c.cfg.Repo = old
-		c.mu.Unlock()
-		return fmt.Errorf("restart Codex in reviewer workspace: %w", err)
 	}
 	return nil
 }
