@@ -57,9 +57,6 @@ const (
 	// RoomDataAlreadyMissing means the managed directory had already gone away;
 	// the durable Registry and binding ownership were still removed.
 	RoomDataAlreadyMissing RoomDataDisposition = "already_missing"
-	// RoomDataRetainedExternal means an explicitly imported directory was only
-	// unregistered. PairRoom never recursively deletes an external data path.
-	RoomDataRetainedExternal RoomDataDisposition = "retained_external"
 	// RoomDataCleanupPending means logical removal committed, while the staged
 	// managed data remains in the non-discoverable deletion quarantine. Startup
 	// and later removals retry best-effort cleanup.
@@ -162,8 +159,7 @@ type inspectedDeletionEntry struct {
 // RemoveRoom permanently unregisters one archived Room and releases its Agent
 // binding ownership. PairRoom-managed data is first atomically moved out of the
 // discovery root, then the Registry checkpoint is committed, and only then is
-// the quarantined directory recursively removed. Explicitly imported external
-// directories are never deleted; they are only forgotten by the Service.
+// the quarantined directory recursively removed. External data paths are rejected.
 func (r *Registry) RemoveRoom(ctx context.Context, roomID string) (RoomRemovalResult, error) {
 	roomID = strings.TrimSpace(roomID)
 	if roomID == "" {
@@ -213,11 +209,9 @@ func (r *Registry) RemoveRoom(ctx context.Context, roomID string) (RoomRemovalRe
 		return RoomRemovalResult{}, err
 	}
 	if !managed {
-		if _, ok := r.importedDirs[filepath.Clean(room.DataDir)]; !ok {
-			err := r.poisonLocked(fmt.Errorf("external Room %s is missing its imported-directory index for %s", room.ID, room.DataDir))
-			r.mu.Unlock()
-			return RoomRemovalResult{}, err
-		}
+		err := r.poisonLocked(fmt.Errorf("Room %s has an unsupported external data directory %s", room.ID, room.DataDir))
+		r.mu.Unlock()
+		return RoomRemovalResult{}, err
 	}
 	for _, binding := range room.Bindings {
 		if !binding.OwnsIdentity() {
@@ -234,13 +228,9 @@ func (r *Registry) RemoveRoom(ctx context.Context, roomID string) (RoomRemovalRe
 	// provisionMu keeps the projection stable across staging and checkpointing.
 	r.mu.Unlock()
 
-	var staged *stagedManagedRoom
-	disposition := RoomDataRetainedExternal
-	if managed {
-		staged, disposition, err = r.stageManagedRoom(ctx, room)
-		if err != nil {
-			return RoomRemovalResult{}, err
-		}
+	staged, disposition, err := r.stageManagedRoom(ctx, room)
+	if err != nil {
+		return RoomRemovalResult{}, err
 	}
 
 	r.mu.Lock()
@@ -271,9 +261,6 @@ func (r *Registry) RemoveRoom(ctx context.Context, roomID string) (RoomRemovalRe
 			delete(r.bindingOwners, binding.Key().String())
 		}
 	}
-	if !managed {
-		delete(r.importedDirs, filepath.Clean(room.DataDir))
-	}
 	published, checkpointErr := r.writeCheckpointLocked()
 	if checkpointErr != nil {
 		if published {
@@ -292,9 +279,6 @@ func (r *Registry) RemoveRoom(ctx context.Context, roomID string) (RoomRemovalRe
 			if binding.OwnsIdentity() {
 				r.bindingOwners[binding.Key().String()] = room.ID
 			}
-		}
-		if !managed {
-			r.importedDirs[filepath.Clean(room.DataDir)] = struct{}{}
 		}
 		r.mu.Unlock()
 		if rollbackErr := r.rollbackStagedManagedRoom(staged); rollbackErr != nil {
@@ -668,11 +652,9 @@ func (r *Registry) inspectDeletionEntry(entry os.DirEntry) (inspectedDeletionEnt
 func (r *Registry) classifyQuarantinedRoomFacts(ctx context.Context, state inspectedDeletionEntry) (RoomDataDisposition, error) {
 	stubErr := r.verifyMissingRoomArchiveStub(state)
 	if stubErr == nil {
-		// Older PairRoom versions opened lifecycle stores in create mode. If a
-		// managed Room directory had already disappeared, archiving recreated a
-		// tiny metadata + lifecycle-only Event Log. The original Room data was
-		// still gone; stage and remove this narrowly recognized artifact while
-		// reporting the durable data as already missing.
+		// A lifecycle-only archive stub records already-missing data, not a
+		// resumable Room. Keep this narrow recovery path for current-schema
+		// deletion journals without treating the stub as normal Room history.
 		return RoomDataAlreadyMissing, nil
 	}
 
@@ -938,7 +920,7 @@ func (r *Registry) trustedCheckpointRooms() (map[string]Room, bool, string) {
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return nil, false, "service registry checkpoint contains trailing JSON"
 	}
-	if snapshot.Schema != 1 && snapshot.Schema != 2 {
+	if snapshot.Schema != 2 {
 		return nil, false, fmt.Sprintf("unsupported service registry checkpoint schema %d", snapshot.Schema)
 	}
 
@@ -979,11 +961,9 @@ func (r *Registry) trustedCheckpointRooms() (map[string]Room, bool, string) {
 		if owner, duplicate := dataDirs[dir]; duplicate && owner != room.ID {
 			return nil, false, fmt.Sprintf("checkpoint data directory %s belongs to multiple Rooms", dir)
 		}
-		if pathWithin(r.roomsRoot, dir) {
-			relative, relErr := filepath.Rel(r.roomsRoot, dir)
-			if relErr != nil || filepath.Dir(relative) != "." || validateManagedRoomSourceBase(relative) != nil {
-				return nil, false, fmt.Sprintf("checkpoint Room %s has an invalid managed data directory %s", room.ID, dir)
-			}
+		relative, relErr := filepath.Rel(r.roomsRoot, dir)
+		if relErr != nil || filepath.Dir(relative) != "." || validateManagedRoomSourceBase(relative) != nil {
+			return nil, false, fmt.Sprintf("checkpoint Room %s has an invalid managed data directory %s", room.ID, dir)
 		}
 		for _, binding := range room.Bindings {
 			if !binding.OwnsIdentity() {

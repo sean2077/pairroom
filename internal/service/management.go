@@ -87,7 +87,6 @@ type ServiceSummary struct {
 }
 
 type ServiceCapabilities struct {
-	LegacyImport          bool `json:"legacy_import"`
 	RuntimeSuspend        bool `json:"runtime_suspend"`
 	RuntimePolicyMutation bool `json:"runtime_policy_mutation"`
 	ProjectRefresh        bool `json:"project_refresh"`
@@ -175,7 +174,6 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	mux.HandleFunc("/api/v1/rooms/{room}/surface/{path...}", server.roomSurface)
 	mux.HandleFunc("PATCH /api/v1/runtime-policy", server.updateRuntimePolicy)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/suspend", server.suspendRoom)
-	mux.HandleFunc("POST /api/v1/rooms/{room}/bindings", server.completeRoomBindings)
 	mux.HandleFunc("PATCH /api/v1/rooms/{room}", server.renameRoom)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/archive", server.archiveRoom)
 	mux.HandleFunc("POST /api/v1/rooms/batch-archive", server.archiveRoomsBatch)
@@ -183,7 +181,6 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	mux.HandleFunc("DELETE /api/v1/rooms/{room}", server.removeRoom)
 	mux.HandleFunc("POST /api/v1/rooms/batch-delete", server.removeRoomsBatch)
 	mux.HandleFunc("POST /api/v1/maintenance/room-deletions/retry", server.retryRoomDeletionCleanup)
-	mux.HandleFunc("POST /api/v1/import", server.importLegacy)
 	mux.Handle("/", http.FileServer(http.FS(assets)))
 	server.http = &http.Server{
 		Handler:           server.securityHeaders(server.sameOrigin(server.authenticate(server.csrf(mux)))),
@@ -279,7 +276,7 @@ func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
 		RuntimePolicy: s.runtimes.Policy(),
 		Summary:       summarizeService(registry.Projects, registry.Rooms, runtimes),
 		Capabilities: ServiceCapabilities{
-			LegacyImport: true, RuntimeSuspend: true, RuntimePolicyMutation: true,
+			RuntimeSuspend: true, RuntimePolicyMutation: true,
 			ProjectRefresh: true, ProjectRemoval: true, RoomDeletion: true, RoomSurface: true, Diagnostics: true,
 		},
 		Maintenance: s.registry.RoomDeletionMaintenance(),
@@ -534,28 +531,6 @@ func (s *ManagementServer) suspendRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeManagementJSON(w, http.StatusOK, s.runtimes.Status(roomID))
-}
-
-func (s *ManagementServer) completeRoomBindings(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		Bindings map[model.ActorID]BindingSpec `json:"bindings"`
-	}
-	if err := decodeManagementJSON(w, r, &request); err != nil {
-		return
-	}
-	roomID := r.PathValue("room")
-	unlock := s.lockRoom(roomID)
-	defer unlock()
-	if err := s.runtimes.WaitAndSuspend(r.Context(), roomID); err != nil {
-		s.writeError(w, err)
-		return
-	}
-	room, err := s.registry.CompleteBindings(r.Context(), roomID, request.Bindings, s.provisioner)
-	if err != nil {
-		s.writeError(w, err)
-		return
-	}
-	writeManagementJSON(w, http.StatusOK, room)
 }
 
 func (s *ManagementServer) renameRoom(w http.ResponseWriter, r *http.Request) {
@@ -873,21 +848,6 @@ func (s *ManagementServer) retryRoomDeletionCleanup(w http.ResponseWriter, r *ht
 		return
 	}
 	writeManagementJSON(w, http.StatusOK, maintenance)
-}
-
-func (s *ManagementServer) importLegacy(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		Path string `json:"path"`
-	}
-	if err := decodeManagementJSON(w, r, &request); err != nil {
-		return
-	}
-	room, err := s.registry.ImportLegacy(r.Context(), request.Path)
-	if err != nil {
-		s.writeError(w, err)
-		return
-	}
-	writeManagementJSON(w, http.StatusCreated, room)
 }
 
 func (s *ManagementServer) lockRoom(roomID string) func() {

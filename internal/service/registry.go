@@ -51,7 +51,6 @@ type Registry struct {
 	projectByRoot map[string]string
 	rooms         map[string]Room
 	bindingOwners map[string]string
-	importedDirs  map[string]struct{}
 	poisoned      error
 
 	roomDeletionFS                roomDeletionFS
@@ -119,7 +118,6 @@ func OpenRegistry(ctx context.Context, cfg RegistryConfig) (*Registry, error) {
 		projectByRoot:    make(map[string]string),
 		rooms:            make(map[string]Room),
 		bindingOwners:    make(map[string]string),
-		importedDirs:     make(map[string]struct{}),
 		roomDeletionFS:   defaultRoomDeletionFS(),
 	}
 	// Resolve crash-interrupted Room deletions before the normal discovery scan.
@@ -133,11 +131,8 @@ func OpenRegistry(ctx context.Context, cfg RegistryConfig) (*Registry, error) {
 	// have a Room. Room facts and binding ownership are always rebuilt from Room
 	// Event Logs below; a missing or corrupt checkpoint is therefore recoverable.
 	registry.loadCheckpointProjects()
-	// PairRoom versions before the missing-data archive fix could replace an
-	// externally deleted managed Room with a tiny lifecycle-only Event Log. The
-	// fixed archive path can also hold an archived projection while the whole
-	// directory remains absent. Neither state has independently materializable
-	// facts, so recover only from a fully validated checkpoint and keep the Room
+	// The archive path can hold an archived projection while its data directory
+	// is absent. Recover only from a fully validated checkpoint and keep the Room
 	// visible until the user explicitly completes permanent cleanup.
 	if err := registry.recoverArchivedRoomsWithoutFactsFromCheckpoint(); err != nil {
 		return nil, fmt.Errorf("recover archived Rooms without Event Log facts: %w", err)
@@ -262,7 +257,7 @@ func (r *Registry) loadCheckpointProjects() {
 		return
 	}
 	var snapshot RegistrySnapshot
-	if json.Unmarshal(data, &snapshot) != nil || (snapshot.Schema != 1 && snapshot.Schema != 2) {
+	if json.Unmarshal(data, &snapshot) != nil || snapshot.Schema != 2 {
 		return
 	}
 	for _, project := range snapshot.Projects {
@@ -280,17 +275,6 @@ func (r *Registry) loadCheckpointProjects() {
 		r.projects[project.ID] = project
 		r.projectByRoot[root] = project.ID
 	}
-	// Checkpoint Room entries are never trusted as facts. They only retain the
-	// absolute locations of explicitly imported custom legacy Rooms so those
-	// Event Logs can be scanned again on a normal restart. If the checkpoint is
-	// deleted, only the default Room root is discovered, as required.
-	for _, room := range snapshot.Rooms {
-		dir := filepath.Clean(strings.TrimSpace(room.DataDir))
-		if dir == "" || !filepath.IsAbs(dir) || pathWithin(r.roomsRoot, dir) {
-			continue
-		}
-		r.importedDirs[dir] = struct{}{}
-	}
 }
 
 func (r *Registry) scanRooms(ctx context.Context) error {
@@ -298,35 +282,19 @@ func (r *Registry) scanRooms(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("scan room data root: %w", err)
 	}
-	dirs := make([]string, 0, len(entries)+len(r.importedDirs))
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || entry.Name() == roomDeletionQuarantineName {
 			continue
 		}
-		if entry.Name() == roomDeletionQuarantineName {
-			continue
-		}
+		dir := filepath.Join(r.roomsRoot, entry.Name())
 		if strings.HasPrefix(entry.Name(), ".provision-") {
 			// A staging directory is never a published Room. It can remain only
 			// after process death, so removing it cannot delete visible history.
-			if err := os.RemoveAll(filepath.Join(r.roomsRoot, entry.Name())); err != nil {
+			if err := os.RemoveAll(dir); err != nil {
 				return fmt.Errorf("remove stale room provisioning directory %s: %w", entry.Name(), err)
 			}
 			continue
 		}
-		dirs = append(dirs, filepath.Join(r.roomsRoot, entry.Name()))
-	}
-	for dir := range r.importedDirs {
-		dirs = append(dirs, dir)
-	}
-	sort.Strings(dirs)
-	seen := make(map[string]struct{}, len(dirs))
-	for _, dir := range dirs {
-		dir = filepath.Clean(dir)
-		if _, duplicate := seen[dir]; duplicate {
-			continue
-		}
-		seen[dir] = struct{}{}
 		var recoveredWithoutFacts *Room
 		for _, existing := range r.rooms {
 			if filepath.Clean(existing.DataDir) != dir {
@@ -337,10 +305,8 @@ func (r *Registry) scanRooms(ctx context.Context) error {
 			break
 		}
 		if existing := recoveredWithoutFacts; existing != nil {
-			// Match checkpoint-only archive stubs by their persisted DataDir because
-			// older managed Rooms can predate the durable-ID directory convention.
-			// The stub has no room.created/provisioned fact to replay, so revalidate
-			// it after recovery and fail closed on a path replacement race.
+			// Checkpoint-only archive stubs have no identity facts to replay.
+			// Revalidate their persisted path before allowing permanent cleanup.
 			state := inspectedDeletionEntry{
 				data: dir,
 				intent: roomDeletionIntent{
@@ -362,26 +328,27 @@ func (r *Registry) scanRooms(ctx context.Context) error {
 		if err := r.indexRoomLocked(project, room); err != nil {
 			return err
 		}
-		if !pathWithin(r.roomsRoot, dir) {
-			r.importedDirs[dir] = struct{}{}
-		}
 	}
 	return nil
 }
 
 func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project, bool, error) {
-	// A Room's metadata is the compatibility boundary. Check it before reading
-	// Event Log bytes so registry discovery cannot index an old/new schema and
-	// defer the failure until activation. Missing metadata remains accepted only
-	// for explicitly supported legacy imports; current stores always create it.
+	if err := ctx.Err(); err != nil {
+		return Room{}, Project{}, false, err
+	}
+	eventPath := filepath.Join(dir, "events.jsonl")
+	if _, err := os.Stat(eventPath); errors.Is(err, os.ErrNotExist) {
+		return Room{}, Project{}, false, nil
+	} else if err != nil {
+		return Room{}, Project{}, false, err
+	}
+	// Validate the current schema before reading Event Log bytes. Discovery and
+	// activation share the same boundary; neither imports nor migrates old data.
 	if err := validateRoomStoreMetadata(dir); err != nil {
 		return Room{}, Project{}, false, err
 	}
-	events, err := readEventsReadOnly(filepath.Join(dir, "events.jsonl"))
+	events, err := readEventsReadOnly(eventPath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return Room{}, Project{}, false, nil
-		}
 		return Room{}, Project{}, false, err
 	}
 	if len(events) == 0 {
@@ -389,10 +356,8 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 	}
 
 	var provisioned *roomProvisionedPayload
-	var bindingsCompleted *roomBindingsCompletedPayload
 	materializedBindings := make(map[model.ActorID]Binding, 2)
 	var meta model.RoomMeta
-	participants := make(map[model.ActorID]model.ParticipantSnapshot)
 	var lifecycle RoomLifecycle = RoomActive
 	var renamed string
 	var updatedAt time.Time
@@ -410,9 +375,6 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 			if provisioned != nil {
 				return Room{}, Project{}, false, errors.New("room has multiple provisioning events")
 			}
-			if bindingsCompleted != nil {
-				return Room{}, Project{}, false, errors.New("room binding completion precedes provisioning")
-			}
 			if serviceMutationSeen {
 				return Room{}, Project{}, false, errors.New("room service mutation precedes provisioning")
 			}
@@ -420,26 +382,17 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 			if err := json.Unmarshal(event.Data, &payload); err != nil {
 				return Room{}, Project{}, false, fmt.Errorf("decode %s event %d: %w", event.Kind, event.Seq, err)
 			}
-			if payload.Schema != 1 && payload.Schema != 2 && payload.Schema != 3 {
-				return Room{}, Project{}, false, fmt.Errorf("unsupported room service schema %d", payload.Schema)
+			if payload.Schema != 3 {
+				return Room{}, Project{}, false, fmt.Errorf("unsupported room service schema %d; this build requires schema 3 and provides no migration", payload.Schema)
 			}
-			if payload.Schema == 1 && len(payload.Agents) != 0 {
-				return Room{}, Project{}, false, errors.New("room service schema 1 must not contain Agent selections")
+			if payload.Collaboration == nil {
+				return Room{}, Project{}, false, errors.New("schema 3 requires collaboration instructions")
 			}
-			if payload.Schema == 3 {
-				if payload.Collaboration == nil {
-					return Room{}, Project{}, false, errors.New("schema 3 requires collaboration instructions")
-				}
-				if err := payload.Collaboration.Validate(); err != nil {
-					return Room{}, Project{}, false, err
-				}
-			} else if payload.Collaboration != nil {
-				return Room{}, Project{}, false, errors.New("legacy provisioning must not contain collaboration instructions")
+			if err := payload.Collaboration.Validate(); err != nil {
+				return Room{}, Project{}, false, err
 			}
-			if payload.Schema >= 2 {
-				if _, err := validateAgentSelections(payload.Agents); err != nil {
-					return Room{}, Project{}, false, fmt.Errorf("invalid provisioned Agent selections: %w", err)
-				}
+			if _, err := validateAgentSelections(payload.Agents); err != nil {
+				return Room{}, Project{}, false, fmt.Errorf("invalid provisioned Agent selections: %w", err)
 			}
 			if payload.RoomID != event.RoomID {
 				return Room{}, Project{}, false, fmt.Errorf("provisioned room ID %q conflicts with event room ID %q", payload.RoomID, event.RoomID)
@@ -461,36 +414,13 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 			}
 			provisioned = &payload
 			updatedAt = event.CreatedAt
-		case EventRoomBindingsCompleted:
-			if event.Actor != model.ActorSystem {
-				return Room{}, Project{}, false, fmt.Errorf("%s event %d must be authored by system", event.Kind, event.Seq)
-			}
-			if !createdSeen {
-				return Room{}, Project{}, false, fmt.Errorf("%s event %d precedes room.created", event.Kind, event.Seq)
-			}
-			if provisioned != nil {
-				return Room{}, Project{}, false, errors.New("a provisioned Room cannot replace its durable bindings")
-			}
-			if bindingsCompleted != nil {
-				return Room{}, Project{}, false, errors.New("room has multiple binding-completion events")
-			}
-			var payload roomBindingsCompletedPayload
-			if err := json.Unmarshal(event.Data, &payload); err != nil {
-				return Room{}, Project{}, false, fmt.Errorf("decode %s event %d: %w", event.Kind, event.Seq, err)
-			}
-			if err := validateProvisionedBindings(payload.Bindings); err != nil {
-				return Room{}, Project{}, false, fmt.Errorf("invalid %s event %d: %w", event.Kind, event.Seq, err)
-			}
-			if payload.UpdatedAt.IsZero() {
-				return Room{}, Project{}, false, fmt.Errorf("%s event %d has an empty update time", event.Kind, event.Seq)
-			}
-			bindingsCompleted = &payload
-			updatedAt = payload.UpdatedAt
+		case "service.room.bindings.completed", "service.legacy.imported":
+			return Room{}, Project{}, false, fmt.Errorf("unsupported retired Room event %q", event.Kind)
 		case EventRoomBindingMaterialized:
 			if event.Actor != model.ActorSystem {
 				return Room{}, Project{}, false, fmt.Errorf("%s event %d must be authored by system", event.Kind, event.Seq)
 			}
-			if !createdSeen || (provisioned == nil && bindingsCompleted == nil) {
+			if !createdSeen || provisioned == nil {
 				return Room{}, Project{}, false, fmt.Errorf("%s event %d requires selected Room bindings", event.Kind, event.Seq)
 			}
 			if lifecycle == RoomArchived {
@@ -507,13 +437,7 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 			if err := binding.Validate(); err != nil {
 				return Room{}, Project{}, false, fmt.Errorf("invalid %s event %d binding: %w", event.Kind, event.Seq, err)
 			}
-			var selectedBindings map[model.ActorID]Binding
-			if provisioned != nil {
-				selectedBindings = provisioned.Bindings
-			} else {
-				selectedBindings = bindingsCompleted.Bindings
-			}
-			initial, ok := selectedBindings[binding.Agent]
+			initial, ok := provisioned.Bindings[binding.Agent]
 			if !ok || !initial.Pending || initial.Mode != BindingNew || initial.SessionID != "" {
 				return Room{}, Project{}, false, fmt.Errorf("%s event %d replaces a non-pending %s binding", event.Kind, event.Seq, binding.Agent)
 			}
@@ -596,111 +520,43 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 				return Room{}, Project{}, false, errors.New("room.created has an empty creation time")
 			}
 			createdSeen = true
-		case "participant.updated":
-			var participant model.ParticipantSnapshot
-			if err := json.Unmarshal(event.Data, &participant); err != nil {
-				return Room{}, Project{}, false, fmt.Errorf("decode participant.updated event %d: %w", event.Seq, err)
-			}
-			if participant.ID.ValidParticipant() {
-				participants[participant.ID] = participant
-			}
 		}
 	}
 
-	if provisioned != nil {
-		payload := *provisioned
-		if err := validateProvisionedProject(payload.Project); err != nil {
-			return Room{}, Project{}, false, err
-		}
-		if meta.ID != "" && meta.ID != payload.RoomID {
-			return Room{}, Project{}, false, fmt.Errorf("room.created ID %q conflicts with provisioned ID %q", meta.ID, payload.RoomID)
-		}
-		if meta.Repo != "" && filepath.Clean(meta.Repo) != filepath.Clean(payload.Project.Root) {
-			return Room{}, Project{}, false, fmt.Errorf("room.created repository %q conflicts with provisioned Project root %q", meta.Repo, payload.Project.Root)
-		}
-		if strings.TrimSpace(meta.Name) != strings.TrimSpace(payload.Name) {
-			return Room{}, Project{}, false, fmt.Errorf("room.created name %q conflicts with provisioned name %q", meta.Name, payload.Name)
-		}
-		if !meta.CreatedAt.Equal(payload.CreatedAt) {
-			return Room{}, Project{}, false, fmt.Errorf("room.created time %s conflicts with provisioned time %s", meta.CreatedAt, payload.CreatedAt)
-		}
-		if (meta.Collaboration == nil) != (payload.Collaboration == nil) || (meta.Collaboration != nil && *meta.Collaboration != *payload.Collaboration) {
-			return Room{}, Project{}, false, errors.New("room.created collaboration conflicts with provisioning")
-		}
-		room := Room{
-			Collaboration:            model.CloneCollaboration(payload.Collaboration),
-			ID:                       payload.RoomID,
-			ProjectID:                payload.Project.ID,
-			Name:                     payload.Name,
-			DataDir:                  dir,
-			Lifecycle:                payload.Lifecycle,
-			Bindings:                 cloneBindings(payload.Bindings),
-			Agents:                   cloneAgentSelections(payload.Agents),
-			TranscriptBoundaryNotice: payload.TranscriptBoundaryNotice,
-			LegacyDefaults:           payload.Schema == 1,
-			CreatedAt:                payload.CreatedAt,
-			UpdatedAt:                updatedAt,
-		}
-		if room.Lifecycle == "" {
-			room.Lifecycle = lifecycle
-		}
-		if lifecycle.Valid() {
-			room.Lifecycle = lifecycle
-		}
-		if renamed != "" {
-			room.Name = renamed
-		}
-		if bindingsCompleted != nil {
-			room.Bindings = cloneBindings(bindingsCompleted.Bindings)
-		}
-		for actor, binding := range materializedBindings {
-			room.Bindings[actor] = binding
-		}
-		if room.UpdatedAt.IsZero() {
-			room.UpdatedAt = room.CreatedAt
-		}
-		if err := room.Validate(); err != nil {
-			return Room{}, Project{}, false, err
-		}
-		return room, payload.Project, true, nil
+	if provisioned == nil {
+		return Room{}, Project{}, false, errors.New("Room has no service.room.provisioned event; standalone Room stores are unsupported")
 	}
-
-	if strings.TrimSpace(meta.ID) == "" || strings.TrimSpace(meta.Repo) == "" {
-		return Room{}, Project{}, false, errors.New("legacy room has no reconstructable room.created event")
+	payload := *provisioned
+	if meta.ID != payload.RoomID {
+		return Room{}, Project{}, false, fmt.Errorf("room.created ID %q conflicts with provisioned ID %q", meta.ID, payload.RoomID)
 	}
-	if bindingsCompleted != nil {
-		for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
-			existingID := strings.TrimSpace(participants[actor].SessionID)
-			if existingID == "" {
-				continue
-			}
-			if completedID := strings.TrimSpace(bindingsCompleted.Bindings[actor].SessionID); completedID != existingID {
-				return Room{}, Project{}, false, fmt.Errorf("binding completion replaces existing %s session %q with %q", actor, existingID, completedID)
-			}
-		}
+	if filepath.Clean(meta.Repo) != filepath.Clean(payload.Project.Root) {
+		return Room{}, Project{}, false, fmt.Errorf("room.created repository %q conflicts with provisioned Project root %q", meta.Repo, payload.Project.Root)
 	}
-	project := r.legacyProject(ctx, meta.Repo, meta.CreatedAt)
-	bindings := make(map[model.ActorID]Binding, 2)
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
-		participant := participants[actor]
-		sessionID := strings.TrimSpace(participant.SessionID)
-		bindings[actor] = Binding{
-			Agent: actor, Mode: BindingExisting, SessionID: sessionID,
-			Pending: sessionID == "", BoundAt: meta.CreatedAt,
-		}
+	if strings.TrimSpace(meta.Name) != strings.TrimSpace(payload.Name) {
+		return Room{}, Project{}, false, fmt.Errorf("room.created name %q conflicts with provisioned name %q", meta.Name, payload.Name)
 	}
-	name := meta.Name
-	if renamed != "" {
-		name = renamed
+	if !meta.CreatedAt.Equal(payload.CreatedAt) {
+		return Room{}, Project{}, false, fmt.Errorf("room.created time %s conflicts with provisioned time %s", meta.CreatedAt, payload.CreatedAt)
+	}
+	if meta.Collaboration == nil || *meta.Collaboration != *payload.Collaboration {
+		return Room{}, Project{}, false, errors.New("room.created collaboration conflicts with provisioning")
 	}
 	room := Room{
-		ID: meta.ID, ProjectID: project.ID, Name: name, DataDir: dir,
-		Lifecycle: lifecycle, Bindings: bindings,
-		TranscriptBoundaryNotice: LegacyTranscriptBoundaryNotice,
-		Legacy:                   true, LegacyDefaults: true, CreatedAt: meta.CreatedAt, UpdatedAt: updatedAt,
+		Collaboration:            model.CloneCollaboration(payload.Collaboration),
+		ID:                       payload.RoomID,
+		ProjectID:                payload.Project.ID,
+		Name:                     payload.Name,
+		DataDir:                  dir,
+		Lifecycle:                lifecycle,
+		Bindings:                 cloneBindings(payload.Bindings),
+		Agents:                   cloneAgentSelections(payload.Agents),
+		TranscriptBoundaryNotice: payload.TranscriptBoundaryNotice,
+		CreatedAt:                payload.CreatedAt,
+		UpdatedAt:                updatedAt,
 	}
-	if bindingsCompleted != nil {
-		room.Bindings = cloneBindings(bindingsCompleted.Bindings)
+	if renamed != "" {
+		room.Name = renamed
 	}
 	for actor, binding := range materializedBindings {
 		room.Bindings[actor] = binding
@@ -711,15 +567,12 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 	if err := room.Validate(); err != nil {
 		return Room{}, Project{}, false, err
 	}
-	return room, project, true, nil
+	return room, payload.Project, true, nil
 }
 
 func validateRoomStoreMetadata(dir string) error {
 	path := filepath.Join(dir, "metadata.json")
 	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
 	if err != nil {
 		return fmt.Errorf("read event metadata: %w", err)
 	}
@@ -730,11 +583,11 @@ func validateRoomStoreMetadata(dir string) error {
 	if err := json.Unmarshal(data, &metadata); err != nil {
 		return fmt.Errorf("decode event metadata: %w", err)
 	}
-	if metadata.Format != "" && metadata.Format != "pairroom-jsonl" {
+	if metadata.Format != "pairroom-jsonl" {
 		return fmt.Errorf("unsupported event metadata format %q", metadata.Format)
 	}
 	if !version.SupportsStoreSchema(metadata.SchemaVersion) {
-		return fmt.Errorf("event store schema %d is unsupported; this build requires schema %d (schema 9 is also readable) and provides no migration", metadata.SchemaVersion, version.StoreSchema)
+		return fmt.Errorf("event store schema %d is unsupported; this build requires schema %d and provides no migration", metadata.SchemaVersion, version.StoreSchema)
 	}
 	return nil
 }
@@ -801,31 +654,9 @@ func (r *Registry) refreshProjectAvailability(ctx context.Context) {
 	}
 }
 
-func (r *Registry) legacyProject(ctx context.Context, repo string, createdAt time.Time) Project {
-	project, err := r.resolver.Resolve(ctx, repo)
-	if err == nil {
-		project.CreatedAt = createdAt
-		return project
-	}
-	root := filepath.Clean(strings.TrimSpace(repo))
-	// A relative repository path in a legacy log is not a stable Project
-	// Identity. Preserve it as unavailable instead of resolving it against the
-	// Service process's current working directory.
-	if filepath.IsAbs(root) {
-		if resolved, resolveErr := filepath.EvalSymlinks(root); resolveErr == nil {
-			root = resolved
-		}
-	}
-	return Project{
-		ID: projectID(root), Root: root, Available: false,
-		Diagnostic: err.Error(), CreatedAt: createdAt,
-	}
-}
-
 func (r *Registry) indexRoomLocked(project Project, room Room) error {
-	// Preflight every conflict before changing any map. This function is used by
-	// explicit legacy import while the Service remains live; a failed import must
-	// not leave a Project or one side of a Binding reservation behind.
+	// Preflight every conflict before changing any map, so a failed Room
+	// registration cannot leave a partial Project or Binding reservation behind.
 	if strings.TrimSpace(project.ID) == "" || strings.TrimSpace(project.Root) == "" {
 		return errors.New("room has an invalid Project Identity")
 	}
@@ -854,7 +685,6 @@ func (r *Registry) indexRoomLocked(project Project, room Room) error {
 	}
 
 	if existing, ok := r.projects[project.ID]; ok {
-		// Prefer a currently accessible projection over an unavailable legacy one.
 		if !existing.Available && project.Available {
 			r.projects[project.ID] = project
 		}

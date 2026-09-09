@@ -77,8 +77,8 @@ func open(dir string, create bool, roomID string) (*JSONLStore, error) {
 	}
 	// Only a caller creating a genuinely new empty event log may create the
 	// schema marker. An existing directory opened through OpenExisting is an
-	// already-published Room; a missing marker there is legacy/ambiguous state
-	// and must fail closed rather than being silently upgraded.
+	// already-published Room; a missing marker must fail closed rather than
+	// being silently upgraded.
 	allowMetadataCreate := create
 	if info, err := os.Stat(path); err == nil {
 		allowMetadataCreate = create && info.Size() == 0
@@ -184,11 +184,11 @@ func (s *JSONLStore) ensureMetadata(allowCreate bool) error {
 		if err := s.LoadJSON(name, &metadata); err != nil {
 			return err
 		}
-		if metadata.Format != "" && metadata.Format != "pairroom-jsonl" {
+		if metadata.Format != "pairroom-jsonl" {
 			return fmt.Errorf("unsupported event metadata format %q", metadata.Format)
 		}
 		if !version.SupportsStoreSchema(metadata.SchemaVersion) {
-			return fmt.Errorf("event store schema %d is unsupported; this build requires schema %d (schema 9 is also readable) and provides no migration", metadata.SchemaVersion, version.StoreSchema)
+			return fmt.Errorf("event store schema %d is unsupported; this build requires schema %d and provides no migration", metadata.SchemaVersion, version.StoreSchema)
 		}
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
