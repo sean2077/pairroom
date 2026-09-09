@@ -12,6 +12,12 @@
     history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
   }
   const STREAM_RENDER_INTERVAL_MS = 50;
+  // Slot identity is durable and separate from runtime identity: ActorID
+  // `claude`/`codex` name Agent 1/Agent 2, while RuntimeKind selects the vendor
+  // CLI and either slot may run any runtime. These mirror model.SlotActors(),
+  // model.SlotLabel(), RuntimeKind.DisplayName(), and CanonicalForSlot().
+  const SLOT_RANK = { claude: 0, codex: 1 };
+  const RUNTIME_DISPLAY = { claude: 'Claude Code', codex: 'Codex', grok: 'Grok Build' };
   const SURFACE_PREFIX = (() => {
     const match = window.location.pathname.match(/^(.*\/api\/v1\/rooms\/[^/]+\/surface)(?:\/|$)/);
     return match ? match[1].replace(/\/$/, '') : '';
@@ -516,8 +522,9 @@
   function renderParticipants() {
     const container = $('participants');
     container.replaceChildren();
-    ['claude', 'codex'].forEach((actor) => {
+    participantSlotActors().forEach((actor) => {
       const p = state.snapshot.participants[actor] || { id: actor, state: 'stopped', role: 'peer' };
+      const runtime = p.runtime || {};
       const card = document.createElement('div');
       const stalled = participantLooksStalled(p);
       card.className = `participant-card agent-card ${actor}${stalled ? ' stalled' : ''}`;
@@ -532,17 +539,25 @@
       main.className = 'participant-main';
       const title = document.createElement('div');
       title.className = 'participant-title';
+      // The slot badge is durable identity; the strong text is the runtime the
+      // slot currently runs. Showing both keeps two slots on the same runtime
+      // distinguishable without relying on the avatar initial alone.
+      const slotBadge = document.createElement('span');
+      slotBadge.className = 'slot-badge';
+      slotBadge.textContent = slotLabel(actor);
       const strong = document.createElement('strong');
-      strong.textContent = p.display_name || displayName(actor);
+      strong.textContent = p.display_name || RUNTIME_DISPLAY[runtimeKindOf(p, actor)] || slotLabel(actor);
       const roleBadge = document.createElement('span');
       roleBadge.className = 'role-badge';
       roleBadge.textContent = responsibilityText(p.responsibility);
-      title.append(strong, roleBadge);
+      title.append(slotBadge, strong, roleBadge);
       main.appendChild(title);
 
+      // Identity and failure are separate regions: an error must not replace the
+      // session summary, or a broken runtime loses its own identification.
       const subtitle = document.createElement('div');
-      subtitle.className = 'participant-subtitle';
-      subtitle.textContent = p.last_error || [p.mention_handle, sessionSummary(p)].filter(Boolean).join(' · ');
+      subtitle.className = 'participant-subtitle participant-identity';
+      subtitle.textContent = sessionSummary(p);
       main.appendChild(subtitle);
 	  const mentionButton = document.querySelector(`.target-button[data-target="${actor}"]`);
 	  if (mentionButton) mentionButton.textContent = p.mention_handle || `@${actor}`;
@@ -553,7 +568,7 @@
       copy.type = 'button';
       copy.className = 'ghost-button compact-button session-copy';
       const vendorID = String(p.session_id || '').trim();
-	  const runtimeKind = p.runtime_kind || p.runtime?.runtime_kind || (actor === 'claude' ? 'claude' : 'codex');
+	  const runtimeKind = runtimeKindOf(p, actor);
       if (!vendorID) {
         copy.disabled = true;
         copy.textContent = t("ui.notYetCreated");
@@ -577,13 +592,36 @@
       const status = document.createElement('span');
       status.className = `state-badge state-${p.state}`;
       status.textContent = stateText(p.state);
-      const model = document.createElement('span');
-      model.className = 'participant-subtitle';
-      model.textContent = [p.runtime?.provider, p.model || t('room.nativeDefault')].filter(Boolean).join(' · ');
-      meta.append(status, model);
+      meta.appendChild(status);
+      const providerText = providerDisplay(runtime);
+      const providerChip = document.createElement('span');
+      providerChip.className = 'meta-chip provider-chip';
+      providerChip.textContent = providerText;
+      const providerRef = String(runtime.provider || '').trim();
+      if (providerRef && providerRef !== providerText) providerChip.title = providerRef;
+      meta.appendChild(providerChip);
+      const modelChip = document.createElement('span');
+      modelChip.className = 'meta-chip model-chip';
+      modelChip.textContent = p.model || t('room.nativeDefault');
+      modelChip.title = t('agent.model');
+      meta.appendChild(modelChip);
+      if (runtime.effort) {
+        const effortChip = document.createElement('span');
+        effortChip.className = 'meta-chip effort-chip';
+        effortChip.textContent = t('agent.effortValue', { value: runtime.effort });
+        effortChip.title = t('agent.effort');
+        meta.appendChild(effortChip);
+      }
       main.appendChild(meta);
 
-      const runtime = p.runtime || {};
+      if (p.last_error) {
+        const errorLine = document.createElement('div');
+        errorLine.className = 'participant-error';
+        errorLine.textContent = truncate(p.last_error, 160);
+        errorLine.title = p.last_error;
+        main.appendChild(errorLine);
+      }
+
       if (runtime.session_name) {
         const nameLine = document.createElement('button');
         nameLine.type = 'button';
@@ -626,12 +664,20 @@
         main.appendChild(warning);
       }
 
-      const policy = participantPolicy(p);
-      const policyLine = document.createElement('div');
-      policyLine.className = `native-policy ${policy.protected ? 'protected' : ''}`;
-      policyLine.textContent = policy.text;
-      policyLine.title = policy.title;
-      main.appendChild(policyLine);
+      const showPermissionSelect = Boolean(state.snapshot.meta.collaboration);
+      const nativePolicyFields = [runtime.permission_mode, runtime.approval_policy, runtime.sandbox].filter(Boolean);
+      // With a Permission profile selector present and no explicit native
+      // override, this line could only restate "inherited native policy" and so
+      // duplicated the selector's own configured state. A legacy Room has no
+      // selector, so it always keeps the line.
+      if (!showPermissionSelect || nativePolicyFields.length) {
+        const policy = participantPolicy(p);
+        const policyLine = document.createElement('div');
+        policyLine.className = `native-policy ${policy.protected ? 'protected' : ''}`;
+        policyLine.textContent = policy.text;
+        policyLine.title = policy.title;
+        main.appendChild(policyLine);
+      }
 
 	  const workspace = p.workspace || {};
 	  if (workspace.kind) {
@@ -650,7 +696,7 @@
 		main.appendChild(workspaceLine);
 	  }
 
-      if (state.snapshot.meta.collaboration) {
+      if (showPermissionSelect) {
         const permission = document.createElement('select');
         permission.className = 'permission-select';
         permission.dataset.permissionActor = actor;
@@ -2325,6 +2371,40 @@
     node.append(text, close);
   }
 
+  // The two durable participant slots, in Agent 1 / Agent 2 order. The snapshot
+  // is a map keyed by ActorID, so ordering is asserted here rather than read
+  // from object key order. Falls back to both slots before a snapshot arrives,
+  // which is the pre-existing placeholder behavior.
+  function participantSlotActors() {
+    const actors = Object.keys(state.snapshot?.participants || {})
+      .filter((actor) => actor !== 'user' && actor !== 'system')
+      .sort((a, b) => (SLOT_RANK[a] ?? 99) - (SLOT_RANK[b] ?? 99) || String(a).localeCompare(String(b)));
+    return actors.length ? actors : ['claude', 'codex'];
+  }
+
+  function slotLabel(actor) {
+    return actor === 'claude' ? t('agent.agent1') : actor === 'codex' ? t('agent.agent2') : String(actor);
+  }
+
+  // Never infer a runtime from a slot: a slot only implies a runtime when the
+  // participant has reported none yet, matching CanonicalForSlot().
+  function runtimeKindOf(participant, actor) {
+    return participant?.runtime_kind || participant?.runtime?.runtime_kind
+      || (String(actor ?? participant?.id) === 'codex' ? 'codex' : 'claude');
+  }
+
+  // A CC Switch Provider is identified internally as
+  // `cc-switch:<app_type>/<profile_id>`. That reference is a stable machine
+  // label, not a display name, so the redacted Profile name is shown instead and
+  // the reference stays reachable through the tooltip.
+  function providerDisplay(runtime) {
+    const raw = String(runtime?.provider || '').trim();
+    const name = String(runtime?.provider_name || '').trim();
+    if (name) return name;
+    if (!raw || raw === 'native') return t('agent.nativeProvider');
+    return raw;
+  }
+
   function participantPolicy(participant) {
     const runtime = participant.runtime || {};
     const readOnly = ['read-only', 'readOnly'].includes(runtime.sandbox) || runtime.permission_mode === 'plan' || participant.permission_profile === 'read-only' || (!participant.permission_profile && participant.role === 'reviewer');
@@ -2375,7 +2455,7 @@
   }
   function sessionSummary(p) {
     if (p.current_turn) return t('room.turnValue', { value: truncate(p.current_turn, 18) });
-	const runtimeKind = p.runtime_kind || p.runtime?.runtime_kind || '';
+	const runtimeKind = runtimeKindOf(p, p.id);
     if (p.session_id) return runtimeKind === 'codex'
 	  ? t('room.threadValue', { value: truncate(p.session_id, 18) })
 	  : t('room.sessionValue', { value: truncate(p.session_id, 18) });

@@ -38,7 +38,13 @@ def snapshot_fixture() -> dict:
             "runtime": {"available": True, "command": "fixture", "protocol": "browser-fixture", "capabilities": [],
                         "session_name": f"Example workspace · @{actor} · 123456789abc",
                         "session_name_status": "configured" if actor == "claude" else "synced",
-                        **({"permission_mode": "yolo"} if actor == "claude" else {"approval_policy": "yolo", "sandbox": "danger-full-access"})},
+                        # One slot resolves a CC Switch Profile (internal reference label plus the
+                        # redacted display name) and one stays native, so the card must name both.
+                        **({"provider": "cc-switch:claude/6687bc5e-aaac-462d-bcc7-6d735f092f30",
+                            "provider_name": "Example Provider", "effort": "high",
+                            "permission_mode": "yolo"} if actor == "claude"
+                           else {"provider": "native",
+                                 "approval_policy": "yolo", "sandbox": "danger-full-access"})},
             "workspace": {"kind": "driver-live", "path": "/workspace/example", "read_only": False},
         }
     return {
@@ -230,6 +236,27 @@ async def verify_collaboration(browser, artifacts: Path) -> dict:
     statuses = await page.locator('.runtime-name-status').evaluate_all('nodes=>nodes.map(n=>n.textContent)')
     assert len(set(statuses)) == 2, 'configured CLI label falsely rendered as an acknowledged sync'
     assert 'fixture-claude' in await page.locator('#participants').inner_text() or await page.locator('#participants [title="fixture-claude"]').count() > 0, 'native ID lost behind the display name'
+    # A CC Switch Provider is named by its redacted Profile display name; the
+    # internal reference label stays reachable as a tooltip instead of vanishing.
+    participants_text = await page.locator('#participants').inner_text()
+    assert 'Example Provider' in participants_text, 'CC Switch Profile display name was not shown'
+    assert 'cc-switch:claude' not in participants_text, 'internal Provider reference label rendered as display text'
+    assert await page.locator('#participants [title="cc-switch:claude/6687bc5e-aaac-462d-bcc7-6d735f092f30"]').count() >= 1, 'internal Provider reference lost from the tooltip'
+    assert 'Native / Runtime default' in participants_text, 'native Provider was not named'
+    assert 'Effort: high' in participants_text, 'effort was not surfaced on the Agent card'
+    assert await page.locator('.participant-card .slot-badge').evaluate_all('nodes=>nodes.map(n=>n.textContent)') == ['Agent 1', 'Agent 2'], 'durable slot identity was not visible'
+    assert await page.locator('.participants-panel').evaluate('node=>node.scrollWidth<=node.clientWidth'), 'Agent card burst the fixed-width participants panel'
+    # An error gets its own region so a broken runtime keeps its identification.
+    await page.evaluate("()=>{__snapshot.participants.claude.last_error='native runtime failed: '+'x'.repeat(400);}")
+    await page.locator('#refresh-button').click()
+    await page.wait_for_function("document.querySelectorAll('.participant-error').length===1")
+    errored_text = await page.locator('#participants').inner_text()
+    assert 'fixture-claude' in errored_text, 'a runtime error replaced the participant identity'
+    assert await page.locator('.participant-error').first.evaluate('node=>node.title.length>node.textContent.length'), 'long error was truncated without keeping the full text reachable'
+    assert await page.locator('.participants-panel').evaluate('node=>node.scrollWidth<=node.clientWidth'), 'a long runtime error burst the participants panel'
+    await page.evaluate("()=>{delete __snapshot.participants.claude.last_error;}")
+    await page.locator('#refresh-button').click()
+    await page.wait_for_function("document.querySelectorAll('.participant-error').length===0")
     await page.screenshot(path=str(artifacts / "collaboration-default-light.png"))
     # Two DOM change events during one pending PUT still have one mutation owner.
     await page.locator("[data-permission-actor=codex]").evaluate("""node=>{
@@ -258,7 +285,9 @@ async def verify_collaboration(browser, artifacts: Path) -> dict:
     assert not errors, errors
     await page.close()
     return {"creation_only_mode_display": True, "permission_single_submission": True,
-            "responsibility_not_permission": True, "permission_control_styled": True, "custom_instructions_verbatim": True, "collaboration_page_errors": errors}
+            "responsibility_not_permission": True, "permission_control_styled": True, "custom_instructions_verbatim": True,
+            "provider_display_name_not_reference": True, "slot_identity_visible": True, "error_does_not_replace_identity": True,
+            "collaboration_page_errors": errors}
 
 
 async def verify_activity(browser, artifacts: Path) -> dict:

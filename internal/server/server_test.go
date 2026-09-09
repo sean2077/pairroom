@@ -202,7 +202,7 @@ func TestRichConversationAssetsAreEmbedded(t *testing.T) {
 
 	app := httptest.NewRecorder()
 	server.Handler().ServeHTTP(app, localRequest(http.MethodGet, "/app.js", nil))
-	for _, marker := range []string{"threadFilter", "uploadPendingAttachment", "openLightbox", "renderClaudeQuestions", "initializeSession", "X-PairRoom-CSRF", "queueStreamingRender", "queueRuntimeRender", "runtimeRenderScopes", "runtimeMessageRenderIDs", "renderStreamingDrafts", "renderCreatedMessage", "renderMessage", "deliveryNode", "data-streaming-actor", "data-streaming-text", "streamingCorrelation", "renderScope = 'message-created'", "renderScope = 'message'", "renderScope = 'activity'", "roomURL", "pairroom-surface", "ui.notYetCreated", "ui.copySessionId", "ui.copyThreadId", "if (state.unreadCount === 0 && state.lastSeenSeq === lastSeen) return;"} {
+	for _, marker := range []string{"threadFilter", "uploadPendingAttachment", "openLightbox", "renderClaudeQuestions", "initializeSession", "X-PairRoom-CSRF", "queueStreamingRender", "queueRuntimeRender", "runtimeRenderScopes", "runtimeMessageRenderIDs", "renderStreamingDrafts", "renderCreatedMessage", "renderMessage", "deliveryNode", "data-streaming-actor", "data-streaming-text", "streamingCorrelation", "renderScope = 'message-created'", "renderScope = 'message'", "renderScope = 'activity'", "roomURL", "pairroom-surface", "ui.notYetCreated", "ui.copySessionId", "ui.copyThreadId", "if (state.unreadCount === 0 && state.lastSeenSeq === lastSeen) return;", "providerDisplay", "provider_name", "participantSlotActors", "runtimeKindOf", "slot-badge", "participant-error", "agent.effortValue"} {
 		if app.Code != http.StatusOK || !strings.Contains(app.Body.String(), marker) {
 			t.Fatalf("app asset omitted %q: status=%d", marker, app.Code)
 		}
@@ -210,6 +210,18 @@ func TestRichConversationAssetsAreEmbedded(t *testing.T) {
 	for _, forbidden := range []string{"existing.replaceWith(replacement)", "existing.replaceWith(messageNode(message))", "appendRichContent(bubble, text, { draft: true"} {
 		if strings.Contains(app.Body.String(), forbidden) {
 			t.Fatalf("app asset retained unstable streaming projection %q", forbidden)
+		}
+	}
+	// The Agent card must not go back to printing the internal Provider
+	// reference label as its display text, letting a runtime error replace the
+	// participant identity, or inferring a runtime from a slot.
+	for _, forbidden := range []string{
+		"[p.runtime?.provider, p.model || t('room.nativeDefault')].filter(Boolean).join(' · ')",
+		"p.last_error || [p.mention_handle, sessionSummary(p)].filter(Boolean).join(' · ')",
+		"(actor === 'claude' ? 'claude' : 'codex')",
+	} {
+		if strings.Contains(app.Body.String(), forbidden) {
+			t.Fatalf("app asset retained the raw-reference Agent card projection %q", forbidden)
 		}
 	}
 	if strings.Contains(app.Body.String(), "pairroom.token") || strings.Contains(app.Body.String(), "sessionStorage.setItem") {
@@ -235,6 +247,19 @@ func TestRichConversationAssetsAreEmbedded(t *testing.T) {
 	for _, marker := range []string{".ux-layout-menu", ".ux-resizer", "@media (max-width: 1120px)", "prefers-reduced-motion"} {
 		if !strings.Contains(uxStyles.Body.String(), marker) {
 			t.Fatalf("room UX styles omitted %q", marker)
+		}
+	}
+
+	roomStyles := httptest.NewRecorder()
+	server.Handler().ServeHTTP(roomStyles, localRequest(http.MethodGet, "/styles.css", nil))
+	if roomStyles.Code != http.StatusOK {
+		t.Fatalf("room styles status=%d body=%s", roomStyles.Code, roomStyles.Body.String())
+	}
+	// Every participant-card text region can receive an unbreakable external
+	// string, so the wrapping guard and the new regions must both stay present.
+	for _, marker := range []string{".slot-badge", ".meta-chip", ".participant-error", "overflow-wrap: anywhere", ".participant-meta { display: flex; flex-wrap: wrap;"} {
+		if !strings.Contains(roomStyles.Body.String(), marker) {
+			t.Fatalf("room styles omitted %q", marker)
 		}
 	}
 }
