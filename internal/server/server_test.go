@@ -212,9 +212,12 @@ func TestRichConversationAssetsAreEmbedded(t *testing.T) {
 			t.Fatalf("app asset retained unstable streaming projection %q", forbidden)
 		}
 	}
-	// The Agent card must not go back to printing the internal Provider
-	// reference label as its display text, letting a runtime error replace the
-	// participant identity, or inferring a runtime from a slot.
+	// The Agent card must not go back to printing the internal Provider reference
+	// label as its display text, letting a runtime error replace the participant
+	// identity, or reintroducing the inline slot-to-runtime inference at the
+	// copy-button and session-summary call sites. The single remaining fallback
+	// lives in runtimeKindOf, applies only when the participant reported no
+	// runtime at all, and mirrors RuntimeKind.CanonicalForSlot.
 	for _, forbidden := range []string{
 		"[p.runtime?.provider, p.model || t('room.nativeDefault')].filter(Boolean).join(' · ')",
 		"p.last_error || [p.mention_handle, sessionSummary(p)].filter(Boolean).join(' · ')",

@@ -304,7 +304,10 @@ func summarize(p profileRow) ProfileSummary {
 	// malformed or malicious profile must not smuggle a token into a model
 	// suggestion, display name, or ProviderRef even when it is later disabled.
 	secrets := profileSecretValues(settings, meta)
-	s.Name = sanitizeProviderName(redactSecrets(s.Name, secrets))
+	// Sanitize before redacting: stripping control characters first would
+	// otherwise rejoin a credential that was split across them, producing a value
+	// the redaction pass can no longer recognize.
+	s.Name = redactSecrets(sanitizeProviderName(p.Name), secrets)
 	s.ProviderRef.AppType = redactSecrets(s.ProviderRef.AppType, secrets)
 	s.ProviderRef.ProfileID = redactSecrets(s.ProviderRef.ProfileID, secrets)
 	for _, candidate := range modelSuggestions(settings) {
@@ -375,7 +378,12 @@ func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta 
 	// can show a human-readable Provider without parsing the reference form. It
 	// is deliberately not called `name`: the Grok branch already uses that for
 	// the TOML [model.<x>] name, which is a different concept.
-	providerName := sanitizeProviderName(p.Name)
+	// Sanitize before redacting (a credential split across stripped control
+	// characters must not be rejoined past the redaction pass), and redact
+	// against the full profile secret set rather than only the materialized
+	// environment, so a credential in a field PairRoom never copies into Env
+	// still cannot survive in the display name.
+	providerName := redactSecrets(sanitizeProviderName(p.Name), profileSecretValues(settings, meta))
 	switch runtime.Canonical() {
 	case model.RuntimeClaude:
 		env := stringMap(settings["env"])

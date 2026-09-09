@@ -1008,7 +1008,13 @@
     // showing the compact reference.
     if (!state.agentCatalog && !state.agentCatalogPromise && visibleRooms.some((room) => room.agents)) {
       loadAgentCatalog().then((catalog) => {
-        if (catalog && state.route.name === 'project' && state.route.projectID === projectID) render();
+        // Any Project view benefits from the names, not only the one that started
+        // the request. Honour the same focus/dialog deferral as the refresh path
+        // so an in-flight catalog cannot destroy a caret mid-typing.
+        if (catalog && state.route.name === 'project') {
+          if (canRenderNow()) render();
+          else state.renderPending = true;
+        }
       }).catch(() => {});
     }
     const search = node('input', { id: 'project-room-search', type: 'search', value: filter.search, placeholder: t('workspace.searchRooms'), 'aria-label': t('workspace.searchRooms'), onInput: (event) => {

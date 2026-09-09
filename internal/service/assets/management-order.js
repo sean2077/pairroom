@@ -223,6 +223,11 @@
       if (menu && !menu.element.contains(event.target) && !menu.row.contains(event.target)) closeMenu();
     });
     document.addEventListener('keydown', (event) => {
+      // A keyboard activation (Enter/Space) produces a click with no preceding
+      // pointerdown, so nothing else would clear a flag left armed by a drag
+      // that ended without an in-document release. Clearing first still lets the
+      // Escape branch below re-arm it for the release that follows.
+      suppressClick = false;
       if (event.key === 'Escape' && (gesture || menu)) {
         event.preventDefault(); cancel();
       }

@@ -240,6 +240,43 @@ func TestCatalogAndResolveBoundProfileDisplayNameAndRejectCredentialNames(t *tes
 	}
 }
 
+// A credential split across control characters in the display name must not be
+// rejoined by sanitization into a value the redaction pass then misses. Both
+// projections of the name — the catalog and the materialization — must agree.
+func TestProviderNameCannotRejoinCredentialSplitByControlCharacters(t *testing.T) {
+	const splitSecret = "sk-split-secret"
+	path := writeFixture(t, 18,
+		fixtureProfile{"split", "claude", "Ops sk-\r\nsplit-secret gateway", `{"env":{"ANTHROPIC_AUTH_TOKEN":"` + splitSecret + `","ANTHROPIC_MODEL":"claude-test"}}`, `{}`, 0, 0},
+	)
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := reader.Catalog(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(catalog)
+	if strings.Contains(string(encoded), splitSecret) {
+		t.Fatalf("catalog rejoined a control-split credential into the display name: %s", encoded)
+	}
+	materialized, err := reader.Resolve(context.Background(), model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "claude", ProfileID: "split"}, model.RuntimeClaude)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if strings.Contains(materialized.ProviderName, splitSecret) {
+		t.Fatalf("materialized provider name rejoined a control-split credential: %q", materialized.ProviderName)
+	}
+	if materialized.ProviderName != "Ops [redacted] gateway" {
+		t.Fatalf("materialized provider name = %q, want the redacted form", materialized.ProviderName)
+	}
+	for _, profile := range catalog.Profiles {
+		if profile.ProviderRef.ProfileID == "split" && profile.Name != materialized.ProviderName {
+			t.Fatalf("catalog name %q and materialized name %q disagree", profile.Name, materialized.ProviderName)
+		}
+	}
+}
+
 func TestCatalogDisablesProtocolConversionAndResolvesDeclaredEnvironmentCredential(t *testing.T) {
 	t.Setenv("PAIRROOM_FIXTURE_CODEX_KEY", "env-secret")
 	path := writeFixture(t, 18,
