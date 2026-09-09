@@ -415,6 +415,42 @@ async def verify(browser_path: str | None, artifacts: Path) -> None:
         await page.evaluate("""() => { for (const id of ['turn-owner-bar','timeline-scope','reply-banner'])
             document.getElementById(id).classList.add('hidden'); }""")
         input_field = page.locator("#message-input")
+        # Browser-side IME contract: synthetic composition cannot verify the OS
+        # candidate popup, but it can catch layout churn and focus/selection loss.
+        await input_field.fill("draft " * 200)
+        focus_state = await input_field.evaluate("""element => {
+          element.focus(); element.setSelectionRange(4, 12, 'backward');
+          element.scrollTop = 25;
+          const before = element.scrollTop;
+          let blurs = 0;
+          element.addEventListener('blur', () => blurs++, {once:true});
+          window.dispatchEvent(new Event('focus'));
+          return {blurs, focused: document.activeElement === element,
+            start:element.selectionStart, end:element.selectionEnd,
+            direction:element.selectionDirection, scroll:element.scrollTop, before};
+        }""")
+        assert focus_state == dict(blurs=1, focused=True, start=4, end=12,
+                                   direction="backward", scroll=focus_state["before"], before=focus_state["before"]), focus_state
+        preedit = await input_field.evaluate("""async element => {
+          const before = element.getBoundingClientRect().toJSON();
+          const observer = new MutationObserver(() => {});
+          observer.observe(element, {attributes:true, attributeFilter:['style']});
+          element.dispatchEvent(new CompositionEvent('compositionstart', {data:'ni'}));
+          element.value = 'ni';
+          element.dispatchEvent(new InputEvent('input', {isComposing:true, inputType:'insertCompositionText', data:'ni'}));
+          window.dispatchEvent(new Event('focus'));
+          const changes = observer.takeRecords().length;
+          observer.disconnect();
+          const after = element.getBoundingClientRect().toJSON();
+          element.dispatchEvent(new CompositionEvent('compositionend', {data:'你'}));
+          return {changes, before, after, heightAfterCommit:element.getBoundingClientRect().height};
+        }""")
+        assert preedit["changes"] == 0 and preedit["before"] == preedit["after"], preedit
+        assert preedit["heightAfterCommit"] < preedit["before"]["height"], preedit
+        await page.locator('#message-search').focus()
+        await page.evaluate("window.dispatchEvent(new Event('focus'))")
+        assert await page.locator('#message-search').evaluate('element => document.activeElement === element')
+        results["ime_layout_and_focus_preserved"] = True
         await input_field.fill("中文输入确认")
         await input_field.evaluate("element => element.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', isComposing:true, bubbles:true, cancelable:true}))")
         assert await page.evaluate("__sent.length") == 0, "IME confirmation sent a message"

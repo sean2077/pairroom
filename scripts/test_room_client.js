@@ -17,6 +17,7 @@ function client() {
   const nodes = new Map(), timers = new Map(), storage = new Map(), notices = [], renders = [], lifecycle = new Map(), revoked = [];
   let timerID = 0;
   const document = { body: { dataset: {} }, hidden: false, activeElement: null,
+    hasFocus() { return true; },
     addEventListener() {}, querySelectorAll() { return []; }, querySelector() { return null; },
     getElementById(id) {
       if (!nodes.has(id)) nodes.set(id, {
@@ -27,7 +28,9 @@ function client() {
         removeAttribute(key) { delete this.attributes[key]; },
         reportValidity() { return true; },
         querySelector() { return null; },
-        focus() { document.activeElement = this; },
+        focus() { document.activeElement = this; this.focusCount = (this.focusCount || 0) + 1; },
+        blur() { document.activeElement = null; this.blurCount = (this.blurCount || 0) + 1; },
+        setSelectionRange(start, end, direction) { this.selectionStart = start; this.selectionEnd = end; this.selectionDirection = direction; },
         classList: { add() {}, remove() {}, toggle() {} },
       });
       return nodes.get(id);
@@ -57,7 +60,7 @@ function client() {
       setAPI(callback) { api = callback; }};
     render = (force) => renders.push(force);
     toast = (message) => notices.push(message);
-    renderAttachmentStrip = refreshGitStatus = postSurfaceState = autoSizeComposer =
+    renderAttachmentStrip = refreshGitStatus = postSurfaceState =
       renderMessage = renderParticipants = renderTimeline = queueRender = scrollBottom = setConnection = updateDeliveryHint = updateNotificationButton = recomputeUnread = () => {};
   `;
   assert.ok(source.endsWith('  bootRoom();\n})();\n'), 'keep unit-test boot interception explicit');
@@ -76,6 +79,40 @@ function client() {
 }
 
 async function main() {
+  {
+    const c = client();
+    c.edit('draft with selection');
+    c.input.focus();
+    c.input.setSelectionRange(2, 7, 'backward');
+    c.input.scrollTop = 40;
+    c.input.scrollLeft = 12;
+    c.lifecycle.get('focus')();
+    assert.equal(c.input.blurCount, 1, 'retained DOM focus must renew the native IME context');
+    assert.equal(c.input.focusCount, 2);
+    assert.deepEqual([c.input.selectionStart, c.input.selectionEnd, c.input.selectionDirection], [2, 7, 'backward']);
+    assert.deepEqual([c.input.scrollTop, c.input.scrollLeft], [40, 12]);
+    assert.equal(c.input.value, 'draft with selection');
+    c.input.listeners.get('compositionstart')();
+    c.lifecycle.get('focus')();
+    assert.equal(c.input.blurCount, 1, 'active preedit must not be interrupted');
+    c.input.scrollHeight = 80;
+    c.edit('draft with preedit');
+    assert.equal(c.input.style.height, '150px', 'composition input must keep the caret layout stable');
+    c.input.listeners.get('compositionend')();
+    assert.equal(c.input.style.height, '80px', 'committed text must resize the composer');
+    c.input.listeners.get('compositionstart')();
+    c.input.scrollHeight = 100;
+    c.edit('cancelled preedit');
+    c.input.listeners.get('compositioncancel')();
+    assert.equal(c.input.style.height, '100px');
+    c.input.disabled = true;
+    c.lifecycle.get('focus')();
+    assert.equal(c.input.blurCount, 1, 'disabled editors must not regain focus');
+    c.input.disabled = false;
+    c.nodes.get('message-search').focus();
+    c.lifecycle.get('focus')();
+    assert.equal(c.input.focusCount, 2, 'returning to search must not steal focus');
+  }
   {
     const c = client();
     c.state.settingsDirty = true;
