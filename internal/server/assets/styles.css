@@ -107,7 +107,7 @@ button { color: inherit; }
 .slot-badge { flex: 0 0 auto; padding: 2px 6px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
 .authority-badge, .role-badge, .state-badge { padding: 2px 6px; border-radius: 999px; font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .04em; }
 .authority-badge { background: rgba(127,145,255,.14); color: var(--human); }
-.role-badge { background: var(--surface-3); color: var(--muted); }
+.role-badge { background: var(--surface-3); color: var(--muted); white-space: nowrap; }
 .state-badge { display: inline-flex; align-items: center; gap: 5px; background: transparent; color: var(--faint); padding-left: 0; }
 .state-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
 .state-badge.state-idle::before { background: var(--green); }

@@ -547,6 +547,9 @@
       slotBadge.textContent = slotLabel(actor);
       const strong = document.createElement('strong');
       strong.textContent = p.display_name || RUNTIME_DISPLAY[runtimeKindOf(p, actor)] || slotLabel(actor);
+      // The title row is tight in the fixed-width panel and the name ellipsizes;
+      // keep the full identity hover-reachable.
+      strong.title = strong.textContent;
       const roleBadge = document.createElement('span');
       roleBadge.className = 'role-badge';
       roleBadge.textContent = responsibilityText(p.responsibility);
