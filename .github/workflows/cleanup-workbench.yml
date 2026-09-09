@@ -1,0 +1,36 @@
+name: Temporary cleanup workbench
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/cleanup-workbench.yml'
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    if: github.event.pull_request.number == 44
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Export source and public build dependencies
+        run: |
+          mkdir -p /tmp/cleanup-workbench
+          git archive HEAD | gzip > /tmp/cleanup-workbench/head.tar.gz
+          git archive origin/main | gzip > /tmp/cleanup-workbench/main.tar.gz
+          git diff origin/main...HEAD > /tmp/cleanup-workbench/pr.diff
+          go mod download
+          tar -czf /tmp/cleanup-workbench/modules.tar.gz -C "$(go env GOMODCACHE)" .
+          tar -czf /tmp/cleanup-workbench/go.tar.gz -C "$(go env GOROOT)" .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cleanup-workbench
+          path: /tmp/cleanup-workbench/*
+          retention-days: 1
