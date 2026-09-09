@@ -6,10 +6,9 @@ import (
 )
 
 const (
-	Current           = "3.4.0"
-	StoreSchema       = 10
-	LegacyStoreSchema = 9
-	RepositoryURL     = "https://github.com/sean2077/pairroom"
+	Current       = "3.4.0"
+	StoreSchema   = 10
+	RepositoryURL = "https://github.com/sean2077/pairroom"
 )
 
 // Commit, BuildDate, LastTag, and CommitsSinceTag are populated by the make
@@ -62,7 +61,8 @@ func Describe() string {
 	return tag + "+" + sha
 }
 
-// SupportsStoreSchema permits the preceding read-compatible schema without rewriting it.
+// SupportsStoreSchema accepts only the current Event Log contract. Unsupported
+// stores must be rejected before replay or repair, never silently migrated.
 func SupportsStoreSchema(schema int) bool {
-	return schema == StoreSchema || schema == LegacyStoreSchema
+	return schema == StoreSchema
 }
