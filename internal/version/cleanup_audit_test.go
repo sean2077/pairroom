@@ -11,8 +11,8 @@ import (
 // Temporary refactoring inventory; removed when the compatibility cleanup is complete.
 func TestCleanupInventory(t *testing.T) {
 	root := filepath.Join("..", "..")
-	patterns := []string{"legacy", "backward", "deprecated", "compatib", "RoleDriver", "RoleReviewer", "OrdinaryReviewer", "Collaboration == nil", "Collaboration != nil"}
-	for _, dir := range []string{"internal", "cmd", "desktop", "scripts"} {
+	patterns := []string{"importedDirs", "CompleteBindings", "EventRoomBindingsCompleted", "EventLegacyImported", "roomBindingsCompletedPayload", "legacyImportedPayload", "serveCommand", "runServe", "\"serve\"", "pairroom serve", "recover-stale-lock", "Workspaces", "SwapRoles", "TargetRole", "Schema: 1", "Schema != 1", "Schema == 1"}
+	for _, dir := range []string{"internal", "cmd", "desktop", "scripts", "docs"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, entry fs.DirEntry, err error) error {
 			if os.IsNotExist(err) {
 				return nil
@@ -26,11 +26,11 @@ func TestCleanupInventory(t *testing.T) {
 				}
 				return nil
 			}
-			if entry.Name() == "cleanup_audit_test.go" {
+			if entry.Name() == "cleanup_audit_test.go" || strings.HasSuffix(entry.Name(), ".min.js") {
 				return nil
 			}
 			switch filepath.Ext(path) {
-			case ".go", ".js", ".html", ".py":
+			case ".go", ".js", ".html", ".py", ".md", ".sh":
 			default:
 				return nil
 			}
