@@ -4,6 +4,7 @@
   "en": {
     "translation": {
       "workspace.ordering.help": "Drag the row to reorder; right-click or Alt+↑/↓ for move controls. Esc cancels.",
+      "workspace.ordering.helpProjectRow": "Click the row to open the Project. Drag to reorder; right-click or Alt+↑/↓ for move controls. Esc cancels.",
       "workspace.ordering.actions": "Move item",
       "workspace.ordering.up": "Move up",
       "workspace.ordering.down": "Move down",
@@ -1036,6 +1037,7 @@
       "agent.modelCustomHint": "Choose a suggestion or enter a custom model ID",
       "agent.advanced": "Advanced Agent policy",
       "agent.effort": "Effort",
+      "agent.effortValue": "Effort: {{value}}",
       "agent.instructions": "Additional instructions",
       "agent.permissionMode": "Permission mode",
       "agent.approvalPolicy": "Approval policy",
@@ -1181,6 +1183,7 @@
       "room.activeCount_one": "{{count, number}} active",
       "room.activeCount_other": "{{count, number}} active",
       "room.projectId": "Project ID",
+      "room.roomId": "Room ID",
       "room.canonicalRoot": "Canonical Root",
       "room.projectMaintenance": "Project Maintenance",
       "room.workspaceBoundary": "Workspace Boundary",
@@ -1270,6 +1273,7 @@
   "zh-CN": {
     "translation": {
       "workspace.ordering.help": "拖拽整行调整顺序；右键或 Alt+↑/↓ 选择移动方向。Esc 取消。",
+      "workspace.ordering.helpProjectRow": "点击整行打开 Project；拖拽整行调整顺序；右键或 Alt+↑/↓ 选择移动方向。Esc 取消。",
       "workspace.ordering.actions": "调整顺序",
       "workspace.ordering.up": "上移",
       "workspace.ordering.down": "下移",
@@ -2302,6 +2306,7 @@
       "agent.modelCustomHint": "可选择建议项，也可输入自定义 model ID",
       "agent.advanced": "高级 Agent 策略",
       "agent.effort": "Effort",
+      "agent.effortValue": "Effort：{{value}}",
       "agent.instructions": "附加指令",
       "agent.permissionMode": "Permission mode",
       "agent.approvalPolicy": "Approval policy",
@@ -2447,6 +2452,7 @@
       "room.activeCount_one": "{{count, number}} 个活跃",
       "room.activeCount_other": "{{count, number}} 个活跃",
       "room.projectId": "项目 ID",
+      "room.roomId": "Room ID",
       "room.canonicalRoot": "规范根目录",
       "room.projectMaintenance": "项目维护",
       "room.workspaceBoundary": "工作区边界",

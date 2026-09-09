@@ -48,7 +48,7 @@ The created Room returns the immutable `agents` map. There is no Agent-reconfigu
 
 Preferences live in `navigation-order.json`, separate from the rebuildable Registry. On a corrupt/unreadable file, the Service snapshot still works but sets `navigation_order_error: true`; ordering is disabled until the file is repaired. Back up that file before replacing it. Ordinary Service health is not a claim that this optional preference file is valid.
 
-The Projects page uses one row per Project. Drag the row itself to reorder; right-click a row (or focus a control in it and press Alt+↑/Alt+↓) for Move up/Move down. The sidebar and Project-detail Room lists offer the same controls. Escape cancels a drag. Diagnostics and the existing Service support export share **Settings → Diagnostics**; old `#/diagnostics[/room]` links redirect there without starting a check.
+The Projects page uses one row per Project, and clicking the row opens that Project; the Project-name link stays the keyboard and screen-reader entry point, and the row's own buttons (recheck, add Room) keep their separate actions. Drag the row itself to reorder; right-click a row (or focus a control in it and press Alt+↑/Alt+↓) for Move up/Move down. Escape cancels a drag without opening the row. The sidebar and Project-detail Room lists offer the same reorder controls but do not navigate on row click. Diagnostics and the existing Service support export share **Settings → Diagnostics**; old `#/diagnostics[/room]` links redirect there without starting a check.
 
 ## Agent pair profiles
 
@@ -92,6 +92,8 @@ Participant `runtime` adds `session_name` (desired native title) and `session_na
 | `unsupported` | The CLI did not expose the naming option/method |
 | `failed` | Naming failed; the original session remains usable, with retry on next activation |
 | `simulated` | Mock runtime only; no native title was changed |
+
+Participant `runtime` also carries `provider` — the internal Provider label, either `native` or the reference form `cc-switch:<app_type>/<profile_id>` — and, for a CC Switch Profile resolved by this release or later, `provider_name`: the Profile display name, at most 160 UTF-8 bytes, with control characters stripped and credentials redacted against the Profile's full secret set. Browser UIs display `provider_name` and keep the raw label in a tooltip; the label is a stable machine reference, never a lookup key or a display name. Events recorded before `provider_name` existed omit it, and a UI then falls back to the label. `effort` mirrors the creation-time selection and is empty when the slot inherits the native default.
 
 Native titles are applied on activation/session opening, including permission-driven restarts, only after the Room binding exists. Provisioning validators do not rename sessions. Dormant or archived Rooms do not spawn a native process merely to rename one: their native titles catch up when next activated. An active Room rename uses the safe-boundary suspension above; reactivate normally afterward. Names use native metadata, not prompts or direct writes to vendor session storage. See [Architecture](ARCHITECTURE.md#room-and-native-session-names) for adapter support.
 

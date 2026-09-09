@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sean2077/pairroom/internal/model"
 	_ "modernc.org/sqlite"
@@ -98,13 +99,13 @@ func TestCatalogAndResolveSupportedProfilesWithoutSecretOutput(t *testing.T) {
 		}
 	}
 	tests := []struct {
-		ref                       model.ProviderRef
-		runtime                   model.RuntimeKind
-		secret, modelName, envKey string
+		ref                                     model.ProviderRef
+		runtime                                 model.RuntimeKind
+		secret, modelName, envKey, providerName string
 	}{
-		{model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "claude", ProfileID: "c"}, model.RuntimeClaude, claudeSecret, "claude-test", "ANTHROPIC_AUTH_TOKEN"},
-		{model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "codex", ProfileID: "o"}, model.RuntimeCodex, codexSecret, "gpt-test", "PAIRROOM_CC_SWITCH_CODEX_API_KEY"},
-		{model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "grokbuild", ProfileID: "g"}, model.RuntimeGrok, grokSecret, "direct", "PAIRROOM_CC_SWITCH_GROK_API_KEY"},
+		{model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "claude", ProfileID: "c"}, model.RuntimeClaude, claudeSecret, "claude-test", "ANTHROPIC_AUTH_TOKEN", "Claude direct"},
+		{model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "codex", ProfileID: "o"}, model.RuntimeCodex, codexSecret, "gpt-test", "PAIRROOM_CC_SWITCH_CODEX_API_KEY", "Codex direct"},
+		{model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "grokbuild", ProfileID: "g"}, model.RuntimeGrok, grokSecret, "direct", "PAIRROOM_CC_SWITCH_GROK_API_KEY", "Grok direct"},
 	}
 	for _, test := range tests {
 		materialized, err := reader.Resolve(context.Background(), test.ref, test.runtime)
@@ -113,6 +114,14 @@ func TestCatalogAndResolveSupportedProfilesWithoutSecretOutput(t *testing.T) {
 		}
 		if materialized.Env[test.envKey] != test.secret || materialized.DefaultModel != test.modelName {
 			t.Fatal("materialization did not contain the expected isolated credential and model")
+		}
+		// The display name travels with the internal reference label so a UI can
+		// show a human-readable Provider without parsing the reference form.
+		if materialized.ProviderName != test.providerName {
+			t.Fatalf("materialization provider name = %q, want %q", materialized.ProviderName, test.providerName)
+		}
+		if !strings.HasPrefix(materialized.ProviderLabel, "cc-switch:") {
+			t.Fatalf("materialization lost its internal reference label: %q", materialized.ProviderLabel)
 		}
 		encoded, _ := json.Marshal(materialized)
 		if strings.Contains(string(encoded), test.secret) {
@@ -129,6 +138,141 @@ func TestCatalogAndResolveSupportedProfilesWithoutSecretOutput(t *testing.T) {
 			if strings.Contains(overlay, test.secret) || !strings.Contains(overlay, `env_key = "PAIRROOM_CC_SWITCH_GROK_API_KEY"`) || !strings.Contains(overlay, `[model."custom/model"]`) {
 				t.Fatal("Grok overlay contained a fixture credential or lacked safe environment indirection")
 			}
+		}
+	}
+}
+
+func TestSanitizeProviderNameBoundsLengthAndStripsControls(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"empty", "", ""},
+		{"whitespace only", "   \t ", ""},
+		{"plain", "Anthropic Direct", "Anthropic Direct"},
+		{"surrounding space", "  Anthropic Direct  ", "Anthropic Direct"},
+		{"C0 controls", "An\rthr\ropic\x1b[31m\x00Direct", "Anthropic[31mDirect"},
+		{"DEL and C1", "Anthropic\x7fDirect\u0085\u009f", "AnthropicDirect"},
+		{"slash sequence is kept", "Anthropic // prod", "Anthropic // prod"},
+		{"at the bound", strings.Repeat("a", maxProviderNameBytes), strings.Repeat("a", maxProviderNameBytes)},
+		{"over the bound", strings.Repeat("a", maxProviderNameBytes+40), strings.Repeat("a", maxProviderNameBytes)},
+	}
+	for _, test := range tests {
+		if got := sanitizeProviderName(test.value); got != test.want {
+			t.Fatalf("%s: sanitizeProviderName(%q) = %q, want %q", test.name, test.value, got, test.want)
+		}
+	}
+	// Undecodable bytes are normalized rather than passed through, so the result
+	// is always valid UTF-8 for JSON, the browser, and the durable event log.
+	if got := sanitizeProviderName("Anthropic" + string([]byte{0xff, 0xfe}) + "Direct"); !utf8.ValidString(got) {
+		t.Fatalf("invalid UTF-8 survived sanitization: %q", got)
+	}
+	// A multibyte name must be cut on a rune boundary, never mid-rune, so the
+	// result stays valid UTF-8 for the browser and the durable event log.
+	multibyte := strings.Repeat("磁🧪", 100)
+	got := sanitizeProviderName(multibyte)
+	if len(got) > maxProviderNameBytes {
+		t.Fatalf("multibyte name kept %d bytes, want <= %d", len(got), maxProviderNameBytes)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("multibyte truncation produced invalid UTF-8: %q", got)
+	}
+	if !strings.HasPrefix(multibyte, got) {
+		t.Fatal("multibyte truncation was not a prefix of the original")
+	}
+	if len(got) == 0 {
+		t.Fatal("multibyte truncation discarded the whole name")
+	}
+}
+
+func TestCatalogAndResolveBoundProfileDisplayNameAndRejectCredentialNames(t *testing.T) {
+	const leakySecret = "leaky-fixture-secret"
+	longName := "Provider\r\n" + strings.Repeat("磁🧪", 100)
+	path := writeFixture(t, 18,
+		fixtureProfile{"long", "claude", longName, `{"env":{"ANTHROPIC_AUTH_TOKEN":"long-fixture-secret","ANTHROPIC_MODEL":"claude-test"}}`, `{}`, 0, 0},
+		fixtureProfile{"leaky", "claude", "Profile " + leakySecret, `{"env":{"ANTHROPIC_AUTH_TOKEN":"` + leakySecret + `","ANTHROPIC_MODEL":"claude-test"}}`, `{}`, 0, 0},
+	)
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := reader.Catalog(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]ProfileSummary{}
+	for _, profile := range catalog.Profiles {
+		byID[profile.ProviderRef.ProfileID] = profile
+	}
+	long := byID["long"]
+	if len(long.Name) > maxProviderNameBytes || !utf8.ValidString(long.Name) {
+		t.Fatalf("catalog name is unbounded or invalid UTF-8: %d bytes %q", len(long.Name), long.Name)
+	}
+	if strings.ContainsAny(long.Name, "\r\n\x00\x1b\x7f") {
+		t.Fatalf("catalog name kept control characters: %q", long.Name)
+	}
+	// The catalog summary is credential-redacted; the leaky profile stays in the
+	// catalog as disabled rather than disappearing.
+	if strings.Contains(byID["leaky"].Name, leakySecret) {
+		t.Fatal("catalog name leaked a fixture credential")
+	}
+
+	materialized, err := reader.Resolve(context.Background(), model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "claude", ProfileID: "long"}, model.RuntimeClaude)
+	if err != nil {
+		t.Fatalf("resolve bounded name: %v", err)
+	}
+	if len(materialized.ProviderName) > maxProviderNameBytes || !utf8.ValidString(materialized.ProviderName) {
+		t.Fatalf("materialized name is unbounded or invalid UTF-8: %d bytes %q", len(materialized.ProviderName), materialized.ProviderName)
+	}
+	if strings.ContainsAny(materialized.ProviderName, "\r\n\x00\x1b\x7f") {
+		t.Fatalf("materialized name kept control characters: %q", materialized.ProviderName)
+	}
+	// A Profile that embeds its own credential in the display name fails closed
+	// instead of projecting the credential into RuntimeInfo or the event log.
+	_, err = reader.Resolve(context.Background(), model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "claude", ProfileID: "leaky"}, model.RuntimeClaude)
+	var typed *Error
+	if !errors.As(err, &typed) || typed.Code != CodeProfileUnsupported || typed.Params["reason"] != ReasonInvalidConfig {
+		t.Fatalf("credential-bearing name error = %#v", err)
+	}
+	if strings.Contains(err.Error(), leakySecret) {
+		t.Fatal("the fail-closed error leaked the credential it rejected")
+	}
+}
+
+// A credential split across control characters in the display name must not be
+// rejoined by sanitization into a value the redaction pass then misses. Both
+// projections of the name — the catalog and the materialization — must agree.
+func TestProviderNameCannotRejoinCredentialSplitByControlCharacters(t *testing.T) {
+	const splitSecret = "sk-split-secret"
+	path := writeFixture(t, 18,
+		fixtureProfile{"split", "claude", "Ops sk-\r\nsplit-secret gateway", `{"env":{"ANTHROPIC_AUTH_TOKEN":"` + splitSecret + `","ANTHROPIC_MODEL":"claude-test"}}`, `{}`, 0, 0},
+	)
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := reader.Catalog(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(catalog)
+	if strings.Contains(string(encoded), splitSecret) {
+		t.Fatalf("catalog rejoined a control-split credential into the display name: %s", encoded)
+	}
+	materialized, err := reader.Resolve(context.Background(), model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "claude", ProfileID: "split"}, model.RuntimeClaude)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if strings.Contains(materialized.ProviderName, splitSecret) {
+		t.Fatalf("materialized provider name rejoined a control-split credential: %q", materialized.ProviderName)
+	}
+	if materialized.ProviderName != "Ops [redacted] gateway" {
+		t.Fatalf("materialized provider name = %q, want the redacted form", materialized.ProviderName)
+	}
+	for _, profile := range catalog.Profiles {
+		if profile.ProviderRef.ProfileID == "split" && profile.Name != materialized.ProviderName {
+			t.Fatalf("catalog name %q and materialized name %q disagree", profile.Name, materialized.ProviderName)
 		}
 	}
 }

@@ -138,6 +138,7 @@ func (r *secretRedactor) event(event model.RuntimeEvent) model.RuntimeEvent {
 		info.Command = r.text(info.Command)
 		info.Path = r.text(info.Path)
 		info.Provider = r.text(info.Provider)
+		info.ProviderName = r.text(info.ProviderName)
 		info.Model = r.text(info.Model)
 		info.Effort = r.text(info.Effort)
 		info.PermissionMode = r.text(info.PermissionMode)

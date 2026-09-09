@@ -104,6 +104,16 @@ func TestAgentResolverIsolatesConcurrentProfilesAndRefreshesOnlyOnResolve(t *tes
 	if results[0].cfg.Env["GROK_CONFIG_PATH"] == results[1].cfg.Env["GROK_CONFIG_PATH"] {
 		t.Fatal("concurrent Rooms shared a Grok Build overlay")
 	}
+	// The fixture inserts each profile's id as its display name, so the resolved
+	// Config must carry the human-readable name alongside the internal label.
+	for index, want := range []string{"profile-a", "profile-b"} {
+		if results[index].cfg.ProviderName != want {
+			t.Fatalf("resolved provider name = %q, want %q", results[index].cfg.ProviderName, want)
+		}
+		if !strings.HasPrefix(results[index].cfg.Provider, "cc-switch:grokbuild/") {
+			t.Fatalf("resolved provider label lost its internal reference form: %q", results[index].cfg.Provider)
+		}
+	}
 	for _, result := range results {
 		content, err := os.ReadFile(result.cfg.Env["GROK_CONFIG_PATH"])
 		if err != nil {

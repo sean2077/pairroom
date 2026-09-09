@@ -101,12 +101,13 @@ button { color: inherit; }
 .avatar-claude { background: var(--claude-soft); color: var(--claude); }
 .avatar-codex { background: var(--codex-soft); color: var(--codex); }
 .participant-main { min-width: 0; flex: 1; }
-.participant-title { display: flex; align-items: center; gap: 6px; font-size: var(--text-body); }
+.participant-title { display: flex; align-items: center; gap: 6px; font-size: var(--text-body); min-width: 0; }
 .participant-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.participant-subtitle { font-size: var(--text-control); color: var(--faint); margin-top: 4px; line-height: 1.4; }
+.participant-subtitle { font-size: var(--text-control); color: var(--faint); margin-top: 4px; line-height: 1.4; min-width: 0; overflow-wrap: anywhere; }
+.slot-badge { flex: 0 0 auto; padding: 2px 6px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
 .authority-badge, .role-badge, .state-badge { padding: 2px 6px; border-radius: 999px; font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .04em; }
 .authority-badge { background: rgba(127,145,255,.14); color: var(--human); }
-.role-badge { background: var(--surface-3); color: var(--muted); }
+.role-badge { background: var(--surface-3); color: var(--muted); white-space: nowrap; }
 .state-badge { display: inline-flex; align-items: center; gap: 5px; background: transparent; color: var(--faint); padding-left: 0; }
 .state-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
 .state-badge.state-idle::before { background: var(--green); }
@@ -114,7 +115,22 @@ button { color: inherit; }
 .state-badge.state-waiting::before { background: var(--accent); }
 .state-badge.state-error::before { background: var(--red); }
 @keyframes pulse { 50% { opacity: .4; } }
-.participant-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 7px; gap: 8px; }
+.participant-meta { display: flex; flex-wrap: wrap; justify-content: flex-start; align-items: center; gap: 4px 8px; margin-top: 7px; min-width: 0; }
+.meta-chip { min-width: 0; max-width: 100%; overflow-wrap: anywhere; font-size: var(--text-xs); color: var(--faint); line-height: 1.4; }
+.participant-error {
+  margin-top: 7px; padding: 6px 8px; border: 1px solid rgba(238,113,130,.3); border-radius: 8px;
+  background: rgba(238,113,130,.07); color: var(--red); font-size: var(--text-sm); line-height: 1.4;
+  min-width: 0; overflow-wrap: anywhere;
+}
+/* Every participant-card text region can receive an external string — a
+   Provider reference, a model ID, a native session title — so each must break
+   rather than burst the fixed-width participants panel. */
+.participant-card, .participant-main, .participant-title, .participant-meta,
+.participant-subtitle, .participant-error, .meta-chip, .slot-badge,
+.runtime-line, .runtime-name-status, .native-policy, .workspace-boundary {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .agent-actions { display: flex; gap: 5px; margin-top: 9px; }
 .mini-button { padding: 6px 8px; border: 1px solid var(--border); background: var(--surface); border-radius: var(--control-radius); color: var(--muted); font-size: var(--text-control); min-height: var(--control-h); cursor: pointer; }
 .mini-button:hover { color: var(--text); border-color: var(--border-strong); }

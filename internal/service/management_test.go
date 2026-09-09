@@ -272,7 +272,8 @@ func TestManagementProjectListKeepsUnavailableMaintenanceReachable(t *testing.T)
 		t.Fatalf("management asset status=%d body=%s", asset.Code, asset.Body.String())
 	}
 	for _, marker := range []string{
-		"actionButton(t('ui.details'), () => navigate(`#/projects/${encodeURIComponent(project.id)}`)",
+		"closest('a, button, input, select, textarea, label, summary')",
+		"workspace.ordering.helpProjectRow",
 		"workspace.projectDetails",
 		"projectRemovalButton(project, rooms.length)",
 		"ui.stillContainsValueRoomsIncludingArchivedRoomsArchiveAndPermanentlyDeleteEvery",
@@ -285,6 +286,11 @@ func TestManagementProjectListKeepsUnavailableMaintenanceReachable(t *testing.T)
 	if forbidden := "rooms.length === 0 ? projectRemovalButton"; strings.Contains(asset.Body.String(), forbidden) {
 		t.Fatalf("management asset must not hide Project removal behind %q", forbidden)
 	}
+	// The row itself opens the Project; a separate Details button would be a second
+	// control for the same action and a second tab stop in every row.
+	if forbidden := "t('ui.details')"; strings.Contains(asset.Body.String(), forbidden) {
+		t.Fatalf("management asset must not restore a Details button beside %q", forbidden)
+	}
 
 	style := httptest.NewRecorder()
 	server.Handler().ServeHTTP(style, managementRequest(http.MethodGet, "/management.css", "", false))
@@ -293,12 +299,55 @@ func TestManagementProjectListKeepsUnavailableMaintenanceReachable(t *testing.T)
 	}
 	for _, marker := range []string{
 		".project-list-row",
+		".project-list-row:hover",
+		"body:not(.navigation-dragging) .project-list-row[data-order-kind]:not(.order-saving) { cursor: pointer; }",
 		".project-list-actions",
 		".room-actions > .room-action-control {",
 		".room-select-control input {",
 	} {
 		if !strings.Contains(style.Body.String(), marker) {
 			t.Fatalf("management stylesheet omitted %q", marker)
+		}
+	}
+}
+
+func TestManagementRoomRowSeparatesAttributesIntoAlignedGroups(t *testing.T) {
+	registry, _ := testRegistry(t, testGitRepo(t))
+	server, _ := newManagementTestServer(t, registry, SyntheticProvisioner{})
+
+	asset := httptest.NewRecorder()
+	server.Handler().ServeHTTP(asset, managementRequest(http.MethodGet, "/management.js", "", false))
+	if asset.Code != http.StatusOK {
+		t.Fatalf("management asset status=%d body=%s", asset.Code, asset.Body.String())
+	}
+	for _, marker := range []string{
+		"function roomAgentGroup(actor, room)",
+		"function providerDisplayName(ref)",
+		"function runtimeDisplayName(runtime)",
+		"className: 'room-meta-group'",
+		"className: 'room-meta-label'",
+	} {
+		if !strings.Contains(asset.Body.String(), marker) {
+			t.Fatalf("management asset omitted room attribute group marker %q", marker)
+		}
+	}
+	// The per-slot native session name repeated the Room name, mention handle, and
+	// short Room ID already present in the row, and the Provider was shown as its
+	// internal reference. Neither projection may come back as display text.
+	for _, forbidden := range []string{"binding-runtime-name", "function bindingMeta(", "function agentSelectionMeta("} {
+		if strings.Contains(asset.Body.String(), forbidden) {
+			t.Fatalf("management asset retained the redundant room attribute projection %q", forbidden)
+		}
+	}
+
+	style := httptest.NewRecorder()
+	server.Handler().ServeHTTP(style, managementRequest(http.MethodGet, "/management.css", "", false))
+	if style.Code != http.StatusOK {
+		t.Fatalf("management stylesheet status=%d body=%s", style.Code, style.Body.String())
+	}
+	for _, marker := range []string{".room-meta-group", ".room-meta-label", ".room-meta-lines", ".room-meta .binding-chip"} {
+		if !strings.Contains(style.Body.String(), marker) {
+			t.Fatalf("management stylesheet omitted room attribute marker %q", marker)
 		}
 	}
 }

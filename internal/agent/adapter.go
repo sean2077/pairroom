@@ -30,6 +30,7 @@ type Config struct {
 	Runtime                model.RuntimeKind
 	PeerRuntime            model.RuntimeKind
 	Provider               string
+	ProviderName           string
 	Model                  string
 	Effort                 string
 	PermissionMode         string

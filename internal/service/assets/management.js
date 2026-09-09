@@ -953,23 +953,39 @@
 
   function renderProjectCard(model) {
     const { project, rooms, activeRooms, runtimeCounts } = model;
+    const openProject = `#/projects/${encodeURIComponent(project.id)}`;
     const heading = node('div', { className: 'project-list-identity' },
       node('div', { className: 'project-avatar', textContent: projectInitials(project), 'aria-hidden': 'true' }),
       node('div', { className: 'project-card-title' },
-        node('h2', {}, node('a', { href: `#/projects/${encodeURIComponent(project.id)}`, textContent: projectName(project) })),
+        node('h2', {}, node('a', { href: openProject, textContent: projectName(project) })),
         node('code', { className: 'project-path', textContent: project.root, title: project.root }))
     );
-    return ordering.decorate(node('article', { className: 'panel project-card project-list-row' },
+    // Whole-row navigation mirrors the room-tab container click. The row takes no
+    // role and no tabindex: the Project-name link stays the single keyboard and
+    // screen-reader entry point, while the ordering gesture keeps owning drag,
+    // right-click, and Alt+Arrow. Nested controls own their own clicks, and
+    // returning before navigate() leaves native link behaviour — middle click,
+    // modifier click — intact.
+    const row = ordering.decorate(node('article', {
+      className: 'panel project-card project-list-row',
+      onClick: (event) => {
+        if (event.target instanceof Element && event.target.closest('a, button, input, select, textarea, label, summary')) return;
+        navigate(openProject);
+      },
+    },
       heading,
       node('div', { className: 'project-list-status' },
         statusBadge(project.available ? 'available' : 'unavailable', project.available ? 'good' : 'danger'),
         node('span', { textContent: t('room.projectWorkingSummary', { rooms: activeRooms, working: runtimeCounts.busy }) }),
         rooms.length > activeRooms ? node('span', { className: 'muted', textContent: t('ui.valueArchivedc521841', { value0: rooms.length - activeRooms }) }) : null),
       node('div', { className: 'project-list-actions' },
-        !project.available && state.snapshot?.capabilities?.project_refresh ? actionButton(t('ui.recheck'), () => refreshProject(project), 'secondary-button compact-button') : null,
-        actionButton(t('ui.details'), () => navigate(`#/projects/${encodeURIComponent(project.id)}`), 'secondary-button compact-button'),
-        actionButton(t('room.addRoom'), () => openRoomDialog(project.id), 'primary-button compact-button', !project.available))
+        !project.available && state.snapshot?.capabilities?.project_refresh ? actionButton(t('ui.recheck'), (event) => { event.stopPropagation(); refreshProject(project); }, 'secondary-button compact-button') : null,
+        actionButton(t('room.addRoom'), (event) => { event.stopPropagation(); openRoomDialog(project.id); }, 'primary-button compact-button', !project.available))
     ), 'project', project.id);
+    // Only a sortable row was given a drag tooltip, so only a sortable row should
+    // advertise drag controls alongside the new click-to-open affordance.
+    if (row.title) row.title = t('workspace.ordering.helpProjectRow');
+    return row;
   }
 
   function renderProjectDetail(projectID) {
@@ -985,6 +1001,22 @@
     const visibleRooms = rooms.filter((room) => (filter.showArchived || room.lifecycle !== 'archived')
       && (!filter.search || `${room.name} ${room.id}`.toLocaleLowerCase().includes(filter.search.toLocaleLowerCase()))
       && (filter.phase === 'all' || (filter.phase === 'attention' ? (runtimeByRoom.get(room.id)?.phase === 'failed' || roomHasBlockingPendingBindings(room)) : runtimeByRoom.get(room.id)?.busy)));
+    // Provider display names come from the Agent catalog, which the Room dialog
+    // otherwise loads on demand. A direct navigation to a Project has not loaded
+    // it, so request it once and re-render only while this Project is still the
+    // visible route. An unavailable catalog is not an error here: the rows keep
+    // showing the compact reference.
+    if (!state.agentCatalog && !state.agentCatalogPromise && visibleRooms.some((room) => room.agents)) {
+      loadAgentCatalog().then((catalog) => {
+        // Any Project view benefits from the names, not only the one that started
+        // the request. Honour the same focus/dialog deferral as the refresh path
+        // so an in-flight catalog cannot destroy a caret mid-typing.
+        if (catalog && state.route.name === 'project') {
+          if (canRenderNow()) render();
+          else state.renderPending = true;
+        }
+      }).catch(() => {});
+    }
     const search = node('input', { id: 'project-room-search', type: 'search', value: filter.search, placeholder: t('workspace.searchRooms'), 'aria-label': t('workspace.searchRooms'), onInput: (event) => {
       filter.search = event.target.value;
       const cursor = event.target.selectionStart;
@@ -1077,14 +1109,18 @@
 	  room.legacy ? statusBadge('legacy', 'info') : null,
 	  room.legacy_defaults ? statusBadge(t('room.legacyDefaults'), 'info') : null
 	);
-	const meta = node('div', { className: 'room-meta' },
-	  bindingMeta('claude', room.bindings?.claude, room.runtime_names?.claude),
-	  bindingMeta('codex', room.bindings?.codex, room.runtime_names?.codex),
-	  room.agents?.claude ? agentSelectionMeta(t('agent.agent1'), room.agents.claude) : null,
-	  room.agents?.codex ? agentSelectionMeta(t('agent.agent2'), room.agents.codex) : null,
-	  node('code', { textContent: room.id, title: room.id })
+    // Three aligned groups: the two durable Agent slots and the Room identity.
+    // The native session name is not rendered here because it repeats the Room
+    // name, the current mention handle, and the short Room ID — all already
+    // visible in this row — so it survives only as the group tooltip.
+    const meta = node('div', { className: 'room-meta' },
+      roomAgentGroup('claude', room),
+      roomAgentGroup('codex', room),
+      node('div', { className: 'room-meta-group room-id-group' },
+        node('span', { className: 'room-meta-label', textContent: t('room.roomId') }),
+        node('code', { className: 'room-meta-value', textContent: room.id, title: room.id })),
     );
-    if (runtime.last_error) meta.append(node('span', { className: 'badge danger plain', textContent: truncate(runtime.last_error, 90), title: runtime.last_error }));
+    if (runtime.last_error) meta.append(node('span', { className: 'badge danger plain room-meta-error', textContent: truncate(runtime.last_error, 90), title: runtime.last_error }));
 
     const actions = node('div', { className: 'room-actions' });
     if (runtime.phase === 'failed' && room.agents?.claude && room.agents?.codex) actions.append(actionButton(t('diagnostics.title'), () => navigate(`#/settings/diagnostics/${encodeURIComponent(room.id)}`), 'secondary-button compact-button room-action-control'));
@@ -1119,15 +1155,50 @@
     return ordering.decorate(node('article', { className: 'room-row', 'data-room-id': room.id }, node('div', { className: 'room-row-main' }, title, meta), actions), 'room', room.id);
   }
 
-  function agentSelectionMeta(label, selection) {
-	const provider = selection.provider?.source === 'cc-switch'
-	  ? `CC Switch · ${selection.provider.app_type}/${selection.provider.profile_id}`
-	  : t('agent.nativeProvider');
-	return node('span', {
-	  className: 'badge plain',
-	  textContent: `${label}: ${selection.runtime}${selection.model ? ` · ${selection.model}` : ''}`,
-	  title: `${t('agent.provider')}: ${provider}. ${t('room.agentConfigurationImmutable')}`,
-	});
+  // One aligned column per durable Agent slot: runtime display name, binding
+  // state, model, and Provider display name. A legacy Room has no immutable
+  // selection and says so instead of implying one.
+  function roomAgentGroup(actor, room) {
+    const selection = room.agents?.[actor];
+    const binding = room.bindings?.[actor];
+    const runtimeName = room.runtime_names?.[actor] || '';
+    const title = [
+      runtimeName,
+      runtimeName ? t('room.runtimeNameOnActivation') : '',
+      binding?.session_id || bindingText(binding),
+    ].filter(Boolean).join('\n');
+    return node('div', { className: 'room-meta-group', 'data-slot': actor, title },
+      node('span', { className: 'room-meta-label', textContent: actor === 'claude' ? t('agent.agent1') : t('agent.agent2') }),
+      node('div', { className: 'room-meta-lines' },
+        node('span', { className: 'room-meta-line', textContent: selection ? runtimeDisplayName(selection.runtime) : t('room.legacyDefaults') }),
+        node('span', { className: `badge plain binding-chip ${bindingTone(binding)}`.trim(), textContent: bindingText(binding) }),
+        selection ? node('span', { className: 'room-meta-line', textContent: selection.model || t('room.nativeDefault'), title: t('agent.model') }) : null,
+        selection ? node('span', { className: 'room-meta-line', textContent: providerDisplayName(selection.provider), title: providerTooltip(selection.provider) }) : null,
+      ));
+  }
+
+  function bindingTone(binding) {
+    if (!binding) return '';
+    if (binding.pending) return binding.mode === 'new' ? 'info' : 'warn';
+    return 'good';
+  }
+
+  function runtimeDisplayName(runtime) {
+    return runtimeCatalogEntry(runtime)?.display_name || runtime || '';
+  }
+
+  // Join the immutable reference against the Agent catalog exactly the way the
+  // creation form does. A Profile removed from CC Switch stays visible as a
+  // compact reference rather than silently falling back to native.
+  function providerDisplayName(ref) {
+    if (ref?.source !== 'cc-switch') return t('agent.nativeProvider');
+    const match = (state.agentCatalog?.profiles || []).find((entry) => providerOptionValue(entry.provider) === providerOptionValue(ref));
+    return match?.name || `${ref.app_type}/${ref.profile_id}`;
+  }
+
+  function providerTooltip(ref) {
+    const described = ref?.source === 'cc-switch' ? `CC Switch · ${ref.app_type}/${ref.profile_id}` : t('agent.nativeProvider');
+    return `${t('agent.provider')}: ${described}. ${t('room.agentConfigurationImmutable')}`;
   }
 
   function renderRuntimes() {
@@ -1486,7 +1557,7 @@
 
   function renderLiveItem({ room, project, runtime }) {
     return node('article', { className: 'list-item' },
-      node('div', { className: 'list-main' }, node('div', { className: `item-symbol ${runtime.busy ? 'warn' : 'accent'}`, textContent: runtime.busy ? '●' : '◎' }), node('div', { className: 'list-copy' }, node('strong', { textContent: room.name }), node('p', { textContent: `${projectName(project)} · ${runtimeLabel(runtime)}` }))),
+      node('div', { className: 'list-main' }, node('div', { className: `item-symbol ${runtime.busy ? 'warn' : 'accent'}`, textContent: runtime.busy ? '●' : '◎' }), node('div', { className: 'list-copy' }, node('strong', { textContent: room.name }), node('p', { textContent: projectName(project) }))),
       node('div', { className: 'list-meta' }, statusBadge(runtimeLabel(runtime), runtimeTone(runtime), runtime.busy ? 'busy' : ''), actionButton(t("ui.open"), () => openRoom(room.id), 'secondary-button compact-button', roomHasBlockingPendingBindings(room)))
     );
   }
@@ -1624,14 +1695,6 @@
     const compact = id.length > 24 ? `${id.slice(0, 10)}…${id.slice(-8)}` : id;
 	const mode = binding.mode === 'new' ? t('common.new') : binding.mode === 'existing' ? t('common.existing') : (binding.mode || t('common.existing'));
     return `${mode}${compact ? ` · ${compact}` : ''}`;
-  }
-
-  function bindingMeta(actor, binding, runtimeName = '') {
-    const title = [runtimeName, binding?.session_id || bindingText(binding)].filter(Boolean).join('\n');
-    const copy = node('span', { className: 'binding-copy' });
-    if (runtimeName) copy.append(node('span', { className: 'binding-runtime-name', textContent: runtimeName, title: t('room.runtimeNameOnActivation') }));
-    copy.append(node('span', { textContent: bindingText(binding) }));
-    return node('span', { className: 'binding-line', title }, node('span', { className: `agent-dot ${actor}`, textContent: actor === 'claude' ? '1' : '2' }), copy);
   }
 
   function runtimeLabel(runtime) {
