@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v3.4.0] — 2026-09-09
+
 - Open a Project by clicking anywhere on its row and remove the separate Details button. The Project-name link stays the single keyboard and screen-reader entry point, the row's own buttons keep their separate actions, and the cursor reads as clickable while idle and as a drag only mid-gesture. Cancelling a committed drag now suppresses the release click as well, so an Escape no longer activates the row.
 
 - Separate Room row attributes into aligned, labelled Agent 1 / Agent 2 / Room ID groups instead of one unlabelled wrapping line, and stop repeating the Room name and short Room ID three times each: the per-slot native session name leaves the row and survives as its group tooltip. Show the runtime display name rather than its internal kind, tone the Binding chip by state, and name the Provider. The Overview live item no longer prints the runtime status twice.
