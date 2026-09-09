@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- Open a Project by clicking anywhere on its row and remove the separate Details button. The Project-name link stays the single keyboard and screen-reader entry point, the row's own buttons keep their separate actions, and the cursor reads as clickable while idle and as a drag only mid-gesture. Cancelling a committed drag now suppresses the release click as well, so an Escape no longer activates the row.
+
+- Separate Room row attributes into aligned, labelled Agent 1 / Agent 2 / Room ID groups instead of one unlabelled wrapping line, and stop repeating the Room name and short Room ID three times each: the per-slot native session name leaves the row and survives as its group tooltip. Show the runtime display name rather than its internal kind, tone the Binding chip by state, and name the Provider. The Overview live item no longer prints the runtime status twice.
+
+- Name the Provider on the in-Room Agent card. CC Switch selections showed the internal reference form `cc-switch:<app_type>/<profile_id>`; the redacted Profile display name now travels from the read-only catalog through `RuntimeInfo.provider_name` to the browser, with the reference kept as a tooltip. The name is bounded to 160 UTF-8 bytes and stripped of control characters before it can reach a catalog, `RuntimeInfo`, or the durable Event Log, is re-checked at the materialization secret boundary, and is redacted at the event boundary; a Profile whose name embeds its own credential still fails closed.
+
+- Add the durable slot label, runtime display name, and effort to the Agent card, give a runtime error its own region so it no longer replaces the participant's identity, and omit the native policy line when a Permission profile selector is present with no explicit override to report. Stop inferring a runtime from a slot, which mislabelled a Grok Build runtime in Agent 2 as Codex in the session/thread wording. Apply the wrapping guard to every card text region so an unbreakable Provider reference, model ID, or native session title can no longer burst the fixed-width participants panel, and fill in the `RuntimeKind`, `Provider`, and `Effort` that the Claude, Codex, and Mock probe-failure paths omitted.
+
 ## [v3.3.0] — 2026-09-09
 
 - Consolidate diagnostics under Settings, including the existing Service support summary; preserve legacy diagnosis links and increase Settings navigation readability. Use single-row Project summaries and shared, Service-persisted Project/Room ordering with mouse/touch handles, click/keyboard alternatives, cancellation, failure feedback, and cross-Project/lifecycle safeguards.
