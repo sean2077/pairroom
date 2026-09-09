@@ -211,9 +211,16 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
     assert 'Service' in await page.locator('.settings-content details').inner_text()
     await summary.click()
     # A switch stays a horizontal pill: the global button min-height must not
-    # stretch it back into a circle.
+    # stretch it back into a circle. The section switch is applied on hashchange,
+    # so sample until the layout settles instead of reading one possibly
+    # mid-replacement frame; a switch that is genuinely collapsed still fails.
     await page.get_by_role('button', name='Interface experience', exact=True).click()
-    switches = await page.locator('.settings-content .toggle-switch').evaluate_all('(els)=>els.map(e=>{const r=e.getBoundingClientRect();return [r.width,r.height];})')
+    switches = []
+    for _ in range(50):
+        switches = await page.locator('.settings-content .toggle-switch').evaluate_all('(els)=>els.map(e=>{const r=e.getBoundingClientRect();return [r.width,r.height];})')
+        if switches and all(w > h * 1.5 for w, h in switches):
+            break
+        await page.wait_for_timeout(50)
     assert switches and all(w > h * 1.5 for w, h in switches), switches
     for theme, language in [('light','en'),('dark','zh-CN')]:
         await page.evaluate("args=>{PairRoomTheme.setTheme(args[0]);PairRoomI18n.setLang(args[1]);}",[theme,language])

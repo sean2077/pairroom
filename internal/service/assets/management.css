@@ -1141,6 +1141,10 @@ body[data-density="compact"] .stat-card { min-height: 98px; }
 .project-list-row { cursor: pointer; }
 .project-list-row:hover { background: color-mix(in srgb, var(--bg-soft) 48%, transparent); }
 body:not(.navigation-dragging) .project-list-row[data-order-kind]:not(.order-saving) { cursor: pointer; }
+/* The plain rule above and .navigation-dragging * tie at one class each, and
+   source order would let pointer win mid-drag; outrank it so a dragged Project
+   row shows the same grabbing cursor as a dragged Room row. */
+body.navigation-dragging .project-list-row { cursor: grabbing; }
 .order-dragging { opacity: .55; }
 .order-before::before, .order-after::after { content: ''; position: absolute; inset-inline: 0; height: 3px; background: var(--accent); border-radius: 3px; pointer-events: none; z-index: 4; }
 .order-before::before { top: -3px; }
