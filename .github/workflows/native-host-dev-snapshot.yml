@@ -1,0 +1,40 @@
+name: Native host development snapshot
+
+on:
+  push:
+    branches: [feat/native-host-mode-spec]
+  pull_request:
+    paths: [.github/workflows/native-host-dev-snapshot.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Prepare offline validation fixture (no Git credentials or user state)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/native-host-fixture/source"
+          git archive HEAD | tar -x -C "${RUNNER_TEMP}/native-host-fixture/source"
+          cd "${RUNNER_TEMP}/native-host-fixture/source"
+          go mod vendor
+          cp -a "$(go env GOROOT)" "${RUNNER_TEMP}/native-host-fixture/go"
+          tar -czf "${RUNNER_TEMP}/native-host-fixture.tar.gz" -C "${RUNNER_TEMP}/native-host-fixture" source go
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-host-offline-fixture-${{ github.sha }}
+          path: ${{ runner.temp }}/native-host-fixture.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
