@@ -141,7 +141,7 @@ func editHooks(root string, kind model.RuntimeKind, remove bool) error {
 	return relay.AtomicJSON(path, config)
 }
 
-// The canonical public skill lives at assets/skills/pairroom-relay/SKILL.md,
+// The canonical public skill lives at skills/pairroom-relay/SKILL.md,
 // distributable through skill installers (npx skills, plugin manifest). This
 // projection is embedded for `relay install`; a freshness test keeps the two
 // byte-identical.

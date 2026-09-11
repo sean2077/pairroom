@@ -161,12 +161,12 @@ func TestBindZeroFlagResolvesRoomAndSlot(t *testing.T) {
 }
 
 func TestPublishedSkillMatchesEmbeddedProjection(t *testing.T) {
-	published, err := os.ReadFile(filepath.Join("..", "..", "assets", "skills", "pairroom-relay", "SKILL.md"))
+	published, err := os.ReadFile(filepath.Join("..", "..", "skills", "pairroom-relay", "SKILL.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(published) != skillContent {
-		t.Fatal("assets/skills/pairroom-relay/SKILL.md drifted from the embedded projection; edit assets/ then copy it over internal/relayclient/skill/pairroom-relay/SKILL.md")
+		t.Fatal("skills/pairroom-relay/SKILL.md drifted from the embedded projection; edit assets/ then copy it over internal/relayclient/skill/pairroom-relay/SKILL.md")
 	}
 	if !strings.Contains(skillContent, "name: pairroom-relay") || !strings.Contains(skillContent, "bind --create --name") {
 		t.Fatal("skill lost its identity or create flow")
