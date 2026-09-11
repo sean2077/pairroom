@@ -250,6 +250,12 @@ body.workbench-room .long-message-fade::after { background: linear-gradient(tran
 body.workbench-room .message-row.user .long-message-fade::after { background: linear-gradient(transparent, var(--wb-chrome)); }
 :root body.workbench-room .code-block { background: var(--wb-chrome); border-color: var(--wb-line); border-radius: 6px; }
 :root body.workbench-room .code-block pre code { color: var(--wb-ink); }
+/* Message-body links are the Room's only prose links. The surface palette kept a
+   hard-coded dark-theme hue that measures 2.4:1 on the light canvas and removed
+   the underline, so color was the only cue. Use a palette hue that clears 4.5:1
+   on both canvases and keep a persistent underline. */
+body.workbench-room .rich-content a { color: var(--wb-blue); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+body.workbench-room .rich-content a:hover { text-decoration-thickness: 2px; }
 body.workbench-room.ux-enhanced .composer-wrap { padding: 10px 16px 12px; background: var(--wb-canvas); border-top: 0; backdrop-filter: none; }
 body.workbench-room.ux-enhanced .composer { border-radius: 8px; background: var(--wb-chrome); box-shadow: none; }
 body.workbench-room.ux-enhanced .composer:focus-within { border-color: var(--wb-focus); box-shadow: 0 0 0 1px var(--wb-focus); background: var(--wb-chrome); }

@@ -26,6 +26,9 @@ for (const [kind, file] of Object.entries(entries)) {
 const css = read('internal/webui/assets/workbench.css');
 assert.doesNotMatch(css, /@import|@font-face|https?:\/\//, 'skin must work offline without remote dependencies');
 for (const rule of ['prefers-reduced-motion', 'forced-colors', 'focus-visible']) assert(css.includes(rule));
+// Prose links must stay a palette hue with a non-color cue, not the surface's
+// hard-coded dark-theme color.
+assert(css.includes('.rich-content a { color: var(--wb-blue); text-decoration: underline'), 'message links need palette contrast and an underline');
 
 function luminance(hex) {
   const values = hex.match(/[a-f\d]{2}/gi).map(v => parseInt(v, 16) / 255)
