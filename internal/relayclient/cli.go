@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -309,7 +310,7 @@ func management(ctx context.Context, endpoint relay.Endpoint, method, path strin
 	}
 	return json.NewDecoder(io.LimitReader(res.Body, 16<<20)).Decode(result)
 }
-func bind(ctx context.Context, root string, o options, out io.Writer) error {
+func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr error) {
 	slot := model.ActorID(o.slot)
 	if !slot.ValidParticipant() {
 		return errors.New("bind requires --slot claude|codex")
@@ -337,7 +338,25 @@ func bind(ctx context.Context, root string, o options, out io.Writer) error {
 		return err
 	}
 	created := false
+	defer func() {
+		if created && resultErr != nil {
+			resultErr = fmt.Errorf("Room %s was created but binding failed: %w; finish setup, then recover with %s --replace (revokes any pending binding; cannot stop native work). Do not repeat --create", o.room, resultErr, bindCommand(root, endpointPath, o.room, slot))
+		}
+	}()
 	if o.create {
+		agents, err := createAgents(o, slot)
+		if err != nil {
+			return err
+		}
+		if agents != nil {
+			if err := installed(root, agents[slot].Runtime); err != nil {
+				return err
+			}
+		} else if installed(root, model.RuntimeClaude) != nil && installed(root, model.RuntimeCodex) != nil {
+			// The Service owns the default pair. Do not guess it, but reject a
+			// workspace with no usable relay hook before creating durable state.
+			return errors.New("bind --create requires an approved relay Stop hook; run pairroom relay install --runtime claude|codex for the intended harness first")
+		}
 		room, err := createNativeRoom(ctx, endpoint, root, o, slot)
 		if err != nil {
 			return err
@@ -468,15 +487,28 @@ func bind(ctx context.Context, root string, o options, out io.Writer) error {
 	}
 	payload := map[string]any{"binding": result.Binding, "bind_nonce": s.Nonce, "bootstrap": result.Bootstrap, "collaboration": result.Collaboration, "notice": result.Notice + " Added .pairroom/ to .gitignore. Echo bind_nonce in your visible final reply once; the approved Stop hook will associate this session. No long-lived secret is included."}
 	if created {
-		payload["peer_join"] = "pairroom relay bind --room " + o.room + " --slot " + string(peerSlot(slot))
+		payload["peer_join"] = bindCommand(root, endpointPath, o.room, peerSlot(slot))
 	}
 	return writeJSON(out, payload)
 }
 
+// Commands are pasted into the native PowerShell (Windows) or POSIX shell.
+// Quote paths as literals so spaces, quotes and shell expansion are preserved.
+func quoteShellPath(value string) string {
+	if runtime.GOOS == "windows" {
+		return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func bindCommand(root, endpoint, room string, slot model.ActorID) string {
+	return "pairroom relay bind --room " + room + " --slot " + string(slot) + " --service-file " + quoteShellPath(endpoint) + " --repo " + quoteShellPath(root)
+}
+
 // resolveSlotDefaults fills omitted --room/--slot for per-slot foreground
-// commands. Explicit flags always win. When both are omitted, the workspace's
-// sole binding is used; with multiple bindings, a unique native-harness lineage
-// recorded at bind time selects this session's slot; remaining ambiguity fails
+// commands. Explicit flags always win. When both are omitted, a recognized
+// caller must match a unique recorded native-harness lineage, even with one
+// binding. An unrecognized caller may use the sole workspace binding; ambiguity fails
 // with the candidate list. Lineage only selects convenience: every call still
 // presents the slot's owner-only credential, and the hook path still requires
 // the associated official session identity.
@@ -512,16 +544,11 @@ func resolveSlotDefaults(root string, o *options) error {
 		return errors.New("no relay binding in this workspace; run pairroom relay bind first")
 	}
 	matched := all
-	if len(all) > 1 {
-		if pid, name, ok := harnessAncestor(); ok {
-			var byLineage []candidate
-			for _, c := range all {
-				if c.harnessPID == pid && strings.EqualFold(c.harness, name) {
-					byLineage = append(byLineage, c)
-				}
-			}
-			if len(byLineage) > 0 {
-				matched = byLineage
+	if pid, name, ok := harnessAncestor(); ok {
+		matched = nil
+		for _, c := range all {
+			if c.harnessPID == pid && strings.EqualFold(c.harness, name) {
+				matched = append(matched, c)
 			}
 		}
 	}
@@ -530,7 +557,7 @@ func resolveSlotDefaults(root string, o *options) error {
 		for _, c := range all {
 			list = append(list, "--room "+c.room+" --slot "+string(c.slot))
 		}
-		return fmt.Errorf("multiple relay bindings match this workspace; pass one explicitly: %s", strings.Join(list, " | "))
+		return fmt.Errorf("no unique relay binding matches this caller; pass one explicitly: %s", strings.Join(list, " | "))
 	}
 	o.room = matched[0].room
 	o.slot = string(matched[0].slot)
@@ -576,7 +603,7 @@ func createNativeRoom(ctx context.Context, endpoint relay.Endpoint, root string,
 	}
 	var room struct{ ID string }
 	if err := management(ctx, endpoint, http.MethodPost, "/api/v1/projects/"+project+"/rooms", request, &room); err != nil {
-		return "", err
+		return "", fmt.Errorf("Room creation was not confirmed: %w; inspect Management for an already-created Room before repeating --create", err)
 	}
 	if !safePart(room.ID) {
 		return "", errors.New("Service returned an unusable Room ID")

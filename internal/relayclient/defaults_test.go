@@ -34,6 +34,7 @@ func stubLineage(t *testing.T, pid int, name string, ok bool) {
 }
 
 func TestResolveSlotDefaultsSoleBinding(t *testing.T) {
+	stubLineage(t, 0, "", false)
 	root := t.TempDir()
 	writeSlotState(t, root, "room1", "claude", 0, "")
 	var o options
@@ -42,6 +43,47 @@ func TestResolveSlotDefaultsSoleBinding(t *testing.T) {
 	}
 	if o.room != "room1" || o.slot != "claude" {
 		t.Fatalf("resolved %q/%q", o.room, o.slot)
+	}
+}
+
+func TestResolveSlotDefaultsSoleBindingChecksRecognizedCaller(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		pid       int
+		harness   string
+		wantError bool
+	}{
+		{"same session", 111, "claude", false},
+		{"different runtime", 222, "codex", true},
+		{"different session", 222, "claude", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeSlotState(t, root, "room", "claude", 111, "claude")
+			stubLineage(t, tc.pid, tc.harness, true)
+			var o options
+			err := resolveSlotDefaults(root, &o)
+			if (err != nil) != tc.wantError {
+				t.Fatalf("resolve = %+v, %v", o, err)
+			}
+			if tc.wantError && (o.room != "" || o.slot != "" || !strings.Contains(err.Error(), "--room room --slot claude")) {
+				t.Fatalf("mismatch must require explicit selection: %+v %v", o, err)
+			}
+		})
+	}
+}
+
+func TestResolveSlotDefaultsRecognizedCallerRequiresRecordedLineage(t *testing.T) {
+	root := t.TempDir()
+	writeSlotState(t, root, "legacy", "claude", 0, "")
+	stubLineage(t, 222, "claude", true)
+	var o options
+	if err := resolveSlotDefaults(root, &o); err == nil {
+		t.Fatal("unknown binding lineage silently selected")
+	}
+	o = options{room: "legacy", slot: "claude"}
+	if err := resolveSlotDefaults(root, &o); err != nil {
+		t.Fatal(err)
 	}
 }
 
