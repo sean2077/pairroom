@@ -428,7 +428,11 @@ func (s *ManagementServer) provisionRoom(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	if s.agentResolver != nil && request.HostMode != model.HostNative {
+	// Native rooms revalidate selections at creation like embedded rooms: the
+	// persisted AgentSelection is a durable fact and a CC Switch ProviderRef
+	// must be re-read at creation validation. Display-only native semantics
+	// cover activation/injection, not the creation-time read-only validation.
+	if s.agentResolver != nil {
 		validated, err := s.agentResolver.ValidateSelections(r.Context(), agents)
 		if err != nil {
 			s.writeError(w, err)
