@@ -1,25 +1,47 @@
 {
   "hooks": {
-    "PreToolUse": [
+    "PostToolUse": [
       {
-        "matcher": "Edit|MultiEdit|Write|NotebookEdit",
         "hooks": [
           {
-            "type": "command",
+            "command": "python -X utf8 .agents/tools/hooks/hook-paths.py --budget",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "Edit|MultiEdit|Write"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
             "command": "python -X utf8 .agents/tools/hooks/hook-paths.py --guard",
-            "timeout": 30
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "Edit|MultiEdit|Write|NotebookEdit"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "pairroom relay hook --runtime claude",
+            "timeout": 45,
+            "type": "command"
           }
         ]
       }
     ],
-    "PostToolUse": [
+    "StopFailure": [
       {
-        "matcher": "Edit|MultiEdit|Write",
         "hooks": [
           {
-            "type": "command",
-            "command": "python -X utf8 .agents/tools/hooks/hook-paths.py --budget",
-            "timeout": 30
+            "command": "pairroom relay hook --runtime claude",
+            "timeout": 45,
+            "type": "command"
           }
         ]
       }
