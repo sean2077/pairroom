@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Require recognized native callers to match the recorded binding lineage even for a sole workspace binding. Preflight one-shot Room setup, preserve created Room recovery details on bind failure, and retain literal Service/workspace paths in peer join commands.
 - Foreground relay commands resolve omitted `--room`/`--slot` from the workspace's sole binding, or from the unique native-harness process lineage recorded at bind time, failing with the candidate list when ambiguity remains; `relay install` infers `--runtime` inside a recognized native session. Lineage is a default selector only, never authentication material.
 - Add `pairroom relay bind --create`: register the workspace Project when missing, create a native Room through the same validated Management path the browser uses, bind the calling session, and print the peer join command. Omitted runtimes keep the Service default pair; explicit `--runtime`/`--peer-runtime` stay empty-field selections that inherit the native configuration.
 - Reject repeated bind attempts for pending Native slots without reissuing their nonce; recovery requires explicit replacement. Allow valid receipts for already claimed Native messages to settle during runtime draining without admitting new work or reactivating suspended Rooms.
