@@ -197,8 +197,12 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	err = c.Publish(ctx, *hook.LastAssistantMessage)
 	release()
 	if err != nil {
+		// Spec §6 decoupling: a failed or uncertain publication retains its
+		// pending state for the next hook's reconciliation and must not
+		// suppress this hook's receive-side park. The diagnostic goes to
+		// stderr; the stdout decision JSON and exit code stay intact so the
+		// harness still honors any block below.
 		_, _ = fmt.Fprintln(diagnostic, "PairRoom: publication pending or unknown; inspect relay status. No new-ID replay was attempted.")
-		return err
 	}
 	if hook.StopHookActive && c.State.Blocks >= relay.MaxBlocks {
 		return writeJSON(out, map[string]any{})
