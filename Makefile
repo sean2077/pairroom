@@ -127,6 +127,7 @@ docs-check:
 browser-check:
 	"$(PYTHON)" scripts/test_room_browser.py
 	"$(PYTHON)" scripts/test_management_browser.py
+	"$(PYTHON)" scripts/test_workbench_browser.py
 	"$(PYTHON)" scripts/test_service_browser.py
 	"$(PYTHON)" scripts/test_native_host_browser.py
 	"$(PYTHON)" scripts/test_desktop_settings_browser.py

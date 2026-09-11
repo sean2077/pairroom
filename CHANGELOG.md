@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Rework the browser presentation of Management, embedded/standalone Rooms and Native Rooms around one shared neutral light/dark palette: compact editor-like chrome, original dependency-free SVG control icons, palette and UA color-scheme resolved before the first stylesheet, and narrow-width Room utilities folded into the existing layout menu. Collaboration, protocol, permission, native-session and authentication behavior is unchanged; no new runtime dependency or route permission is added.
 - Require recognized native callers to match the recorded binding lineage even for a sole workspace binding. Preflight one-shot Room setup, preserve created Room recovery details on bind failure, and retain literal Service/workspace paths in peer join commands.
 - Foreground relay commands resolve omitted `--room`/`--slot` from the workspace's sole binding, or from the unique native-harness process lineage recorded at bind time, failing with the candidate list when ambiguity remains; `relay install` infers `--runtime` inside a recognized native session. Lineage is a default selector only, never authentication material.
 - Add `pairroom relay bind --create`: register the workspace Project when missing, create a native Room through the same validated Management path the browser uses, bind the calling session, and print the peer join command. Omitted runtimes keep the Service default pair; explicit `--runtime`/`--peer-runtime` stay empty-field selections that inherit the native configuration.

@@ -1,16 +1,19 @@
 <!DOCTYPE html><html lang="en"><head>
   <meta charset="utf-8">
+  <script src="/_pairroom/theme.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#0b1020">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1b1b1e" media="(prefers-color-scheme: dark)">
   <title>PairRoom Service</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link id="management-styles" rel="stylesheet" href="/management.css">
   <link rel="stylesheet" href="/management-ux.css">
   <link rel="stylesheet" href="/management-workbench.css">
   <link rel="stylesheet" href="/management-diagnostics.css">
+  <link rel="stylesheet" href="/_pairroom/workbench.css">
 </head>
-<body>
+<body class="workbench workbench-management">
   <main id="login-screen" class="login-screen" aria-labelledby="login-title">
     <section class="login-card">
       <div class="login-brand" aria-hidden="true">
@@ -279,7 +282,6 @@
   <script src="/_pairroom/i18next.min.js" defer=""></script>
   <script src="/_pairroom/catalogs.js" defer=""></script>
   <script src="/_pairroom/i18n.js" defer=""></script>
-  <script src="/_pairroom/theme.js" defer=""></script>
   <script src="/_pairroom/desktop.js" defer=""></script>
   <script src="/management-diagnostics.js" defer></script>
   <script src="/management-order.js" defer></script>
@@ -287,4 +289,5 @@
   <script src="/management-ux.js" defer=""></script>
 
 
+  <script src="/_pairroom/workbench.js" defer></script>
 </body></html>

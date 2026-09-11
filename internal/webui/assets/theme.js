@@ -5,6 +5,10 @@
   const media = window.matchMedia('(prefers-color-scheme: dark)');
   let mode = readMode();
 
+  // Resolve the palette in the head before CSS; control/iframe updates wait for DOM.
+  document.documentElement.dataset.theme = resolved();
+  document.documentElement.dataset.themeMode = mode;
+
   function readMode() {
     try {
       const value = localStorage.getItem(STORAGE_KEY);
