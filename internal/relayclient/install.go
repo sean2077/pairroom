@@ -1,6 +1,7 @@
 package relayclient
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -149,6 +150,20 @@ func editHooks(root string, kind model.RuntimeKind, remove bool) error {
 //go:embed skill/pairroom-relay/SKILL.md
 var skillContent string
 
+// skillHeadings are the headings PairRoom's own projections have shipped. A
+// projection installed by an earlier `relay install` must stay upgradable; only
+// genuinely unrelated content at that path is refused.
+var skillHeadings = []string{"# pairroom-relay", "# PairRoom Native relay"}
+
+func ownedSkill(data []byte) bool {
+	for _, heading := range skillHeadings {
+		if bytes.Contains(data, []byte(heading)) {
+			return true
+		}
+	}
+	return false
+}
+
 func installSkill(kind model.RuntimeKind) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -166,7 +181,7 @@ func installSkill(kind model.RuntimeKind) error {
 		return err
 	}
 	path := filepath.Join(dir, "SKILL.md")
-	if data, err := os.ReadFile(path); err == nil && !strings.Contains(string(data), "# pairroom-relay") {
+	if data, err := os.ReadFile(path); err == nil && !ownedSkill(data) {
 		return errors.New("an unrelated pairroom-relay skill exists; refusing to overwrite")
 	}
 	return atomicText(path, skillContent, 0600)

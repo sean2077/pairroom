@@ -34,7 +34,7 @@ func createBindFixture(t *testing.T, own model.RuntimeKind) (string, string, *in
 	mux.HandleFunc("GET /api/v1/service", func(w http.ResponseWriter, r *http.Request) {
 		rooms := []any{}
 		for i := 1; i <= created; i++ {
-			rooms = append(rooms, map[string]any{"id": fmt.Sprintf("room%d", i), "project_id": "project", "host_mode": "native", "agents": map[model.ActorID]model.AgentSelection{model.ActorClaude: {Runtime: own}, model.ActorCodex: {Runtime: model.RuntimeCodex}}})
+			rooms = append(rooms, map[string]any{"id": fmt.Sprintf("room%d", i), "project_id": "project", "host_mode": "native", "lifecycle": "active", "agents": map[model.ActorID]model.AgentSelection{model.ActorClaude: {Runtime: own}, model.ActorCodex: {Runtime: model.RuntimeCodex}}})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"projects": []any{map[string]string{"id": "project", "root": root}}, "rooms": rooms})
 	})

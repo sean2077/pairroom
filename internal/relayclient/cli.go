@@ -45,7 +45,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.SetOutput(diagnostic)
 	flags.StringVar(&o.repo, "repo", ".", "Room project path")
 	flags.StringVar(&o.room, "room", "", "Room ID")
-	flags.StringVar(&o.slot, "slot", "", "stable slot ID: claude or codex, independent of runtime")
+	flags.StringVar(&o.slot, "slot", "", "Agent slot: 1 or 2; the durable IDs claude|codex are also accepted. Never a runtime name")
 	flags.StringVar(&o.kind, "runtime", "", "native harness: claude or codex")
 	flags.StringVar(&o.endpoint, "service-file", "", "owner-only relay-endpoint.json path for a custom Service data root")
 	flags.StringVar(&o.text, "text", "", "message body; otherwise read stdin")
@@ -355,14 +355,26 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		}
 	}()
 	if o.create {
-		if slot == "" {
+		switch {
+		case slot != "":
+		case o.kind != "" || o.peer != "":
+			// An explicit runtime selection is placed at the slot whose default
+			// runtime matches it, so that slot must be known before creation.
 			inferred, err := inferCreateSlot(o)
 			if err != nil {
 				return err
 			}
 			slot = inferred
 			o.slot = string(slot)
+		case callerRuntime(o) == "":
+			// No slot can ever be resolved for this caller; fail before the
+			// Service creates durable state.
+			return errCreateSlotUnresolved
 		}
+		// Otherwise the Service owns the default pair. That pair is user
+		// configuration (agent-pair-profiles.json, then config defaults) and
+		// need not match slot order, so the slot stays unresolved here and is
+		// matched against the created Room's real selections below.
 		agents, err := createAgents(o, slot)
 		if err != nil {
 			return err
@@ -371,9 +383,17 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 			if err := installed(root, agents[slot].Runtime); err != nil {
 				return err
 			}
+		} else if rt := callerRuntime(o); rt != "" {
+			// The Service owns the default pair, so the slot is only resolved
+			// after creation. The caller's own harness is already known: reject a
+			// workspace that could never associate this session before the
+			// Service creates durable state.
+			if err := installed(root, rt); err != nil {
+				return err
+			}
 		} else if installed(root, model.RuntimeClaude) != nil && installed(root, model.RuntimeCodex) != nil {
-			// The Service owns the default pair. Do not guess it, but reject a
-			// workspace with no usable relay hook before creating durable state.
+			// Do not guess the pair, but reject a workspace with no usable relay
+			// hook before creating durable state.
 			return errors.New("bind --create requires an approved relay Stop hook; run pairroom relay install --runtime claude|codex for the intended harness first")
 		}
 		room, err := createNativeRoom(ctx, endpoint, root, o, slot)
@@ -530,8 +550,15 @@ func quoteShellPath(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
+// bindCommand renders a literal, paste-safe bind command. An unresolved slot is
+// omitted rather than rendered as a guessed Agent number; the accompanying
+// error lists the real candidates.
 func bindCommand(root, endpoint, room string, slot model.ActorID) string {
-	return "pairroom relay bind --room " + room + " --slot " + strconv.Itoa(slotNumber(slot)) + " --service-file " + quoteShellPath(endpoint) + " --repo " + quoteShellPath(root)
+	command := "pairroom relay bind --room " + room
+	if slot.ValidParticipant() {
+		command += " --slot " + strconv.Itoa(slotNumber(slot))
+	}
+	return command + " --service-file " + quoteShellPath(endpoint) + " --repo " + quoteShellPath(root)
 }
 
 // serviceSnapshot is the read-only Management projection used for Room and
@@ -551,8 +578,14 @@ type serviceRoom struct {
 	ID        string                                 `json:"id"`
 	ProjectID string                                 `json:"project_id"`
 	HostMode  model.HostMode                         `json:"host_mode"`
+	Lifecycle string                                 `json:"lifecycle"`
 	Agents    map[model.ActorID]model.AgentSelection `json:"agents"`
 }
+
+// roomLifecycleActive mirrors the Service's active Room lifecycle. The relay
+// client reads the projected JSON only and stays decoupled from the Service
+// package; the Service remains the authority and rejects bindings itself.
+const roomLifecycleActive = "active"
 
 func (s serviceSnapshot) findRoom(id string) (serviceRoom, bool) {
 	for _, room := range s.Rooms {
@@ -595,7 +628,10 @@ func callerRuntime(o options) model.RuntimeKind {
 	return ""
 }
 
-// resolveNativeRoom selects the unique native Room of the canonical workspace.
+// resolveNativeRoom selects the unique active native Room of the canonical
+// workspace. Archived Rooms are never candidates: the Service rejects their
+// bindings, so counting them would either block a workspace that has exactly
+// one usable Room or offer an unusable one.
 func resolveNativeRoom(snapshot serviceSnapshot, root string) (string, error) {
 	roots := make(map[string]string, len(snapshot.Projects))
 	for _, p := range snapshot.Projects {
@@ -603,18 +639,21 @@ func resolveNativeRoom(snapshot serviceSnapshot, root string) (string, error) {
 	}
 	var ids []string
 	for _, room := range snapshot.Rooms {
-		if room.HostMode == model.HostNative && roots[room.ProjectID] == root {
+		if room.HostMode == model.HostNative && room.Lifecycle == roomLifecycleActive && roots[room.ProjectID] == root {
 			ids = append(ids, room.ID)
 		}
 	}
 	switch len(ids) {
 	case 1:
+		if !safePart(ids[0]) {
+			return "", errors.New("Service returned an unusable Room ID")
+		}
 		return ids[0], nil
 	case 0:
-		return "", errors.New("no native Room exists for this workspace; create one with pairroom relay bind --create, or pass --room")
+		return "", errors.New("no active native Room exists for this workspace; create one with pairroom relay bind --create, or pass --room")
 	}
 	sort.Strings(ids)
-	return "", fmt.Errorf("multiple native Rooms match this workspace; pass --room explicitly: %s", strings.Join(ids, ", "))
+	return "", fmt.Errorf("multiple active native Rooms match this workspace; pass --room explicitly: %s", strings.Join(ids, ", "))
 }
 
 // resolveSlotForRoom infers the caller's slot only when exactly one slot of
@@ -642,8 +681,15 @@ func resolveSlotForRoom(room serviceRoom, rt model.RuntimeKind) (model.ActorID, 
 	return "", fmt.Errorf("the %q harness does not match exactly one slot of Room %s (%s); pass --slot 1|2", rt, room.ID, strings.Join(desc, ", "))
 }
 
-// inferCreateSlot picks the creator's slot for a Room that does not exist yet:
-// the caller's runtime occupies the slot whose default runtime matches.
+// errCreateSlotUnresolved is returned when a creator slot cannot be known
+// before the Room exists. It never authorizes a guess.
+var errCreateSlotUnresolved = errors.New("bind --create requires --slot 1|2 unless run inside a recognized claude/codex session (or with --runtime claude|codex)")
+
+// inferCreateSlot picks the slot that an explicit runtime selection occupies:
+// the caller's runtime takes the slot whose default runtime matches. It is only
+// used when `createAgents` will send explicit selections, because those are
+// placed by slot. When the Service owns the default pair the slot is resolved
+// after creation against the Room's real selections instead.
 func inferCreateSlot(o options) (model.ActorID, error) {
 	rt := callerRuntime(o)
 	switch rt {
@@ -652,7 +698,7 @@ func inferCreateSlot(o options) (model.ActorID, error) {
 	case model.RuntimeCodex:
 		return model.ActorCodex, nil
 	}
-	return "", errors.New("bind --create requires --slot 1|2 unless run inside a recognized claude/codex session (or with --runtime claude|codex)")
+	return "", errCreateSlotUnresolved
 }
 
 // resolveSlotDefaults fills omitted --room/--slot for per-slot foreground
