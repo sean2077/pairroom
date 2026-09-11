@@ -161,7 +161,10 @@ func installSkill(kind model.RuntimeKind) error {
 	if err != nil {
 		return err
 	}
-	host := ".agents"
+	// Install into the directory each host actually discovers: Claude reads
+	// ~/.claude/skills, Codex reads ~/.codex/skills. ~/.agents is this
+	// repository's SSOT convention, not a user-machine discovery path.
+	host := ".codex"
 	if kind == model.RuntimeClaude {
 		host = ".claude"
 	}
