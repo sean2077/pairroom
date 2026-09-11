@@ -7,8 +7,6 @@
 - Read Store 10/provisioning 3 unchanged and create all new Rooms with Store 11/provisioning 4 plus immutable host mode. Keep Registry checkpoint schema 2 byte shape unchanged. Preserve embedded protocol v6 and add bounded native v7 bootstrap.
 - Cover synthetic hooks, real HTTP/CLI transport, crashes, binding uniqueness, restart, browser recovery and schema rollback boundaries separately from authenticated vendor E2E, which remains release-gated.
 
-## [Unreleased]
-
 ## [v4.0.0] — 2026-09-09
 
 - Exclude active HTTP/SSE leases from LRU eviction, including equal-timestamp ties. Remove the obsolete global archive-visibility preference; archive results reveal archived Rooms in their existing per-Project filters.

@@ -174,7 +174,7 @@ All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. For a
 |---|---|
 | `bind --continue --session-id <id>` | Resume the same associated session; a different session is rejected |
 | `bind --replace` | Explicitly revoke an occupied generation and require a new nonce association; cannot stop old native work |
-| `send --id <client-id> --text <body>` | Explicit message to peer; repeat the same ID after an uncertain response, never deduplicate by body |
+| `send --id <client-id> --text <body>` | Explicit message to peer; requires the completed association like every collection call; repeat the same ID after an uncertain response, never deduplicate by body |
 | `send --to @user --attach <image>` | Human escalation with optional repeatable image paths; stdin supplies text when `--text` is absent |
 | `wait --timeout 30` | Foreground collection for an associated session; stdout precedes ack; timeout leaves work queued |
 | `status` / `peer` | Public delivery/binding state and original publication reconciliation / optional peer session references |

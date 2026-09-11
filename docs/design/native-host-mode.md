@@ -60,6 +60,7 @@ delivering ──ack 缺失（CLI 死亡/通知丢失/持久化失败，reaper �
 - **bind**：`pairroom relay bind --room <id> --slot <slot>`。空槽才能普通 bind；已有活跃绑定时同一身份（关联 session_id 匹配，含 `--continue` 重启）幂等恢复，不同身份拒绝并提示显式 replace；generation 仅在 replace/unbind 后重绑时轮换。
 - **会话关联（需 hook 通道，D3 收窄的原因）**：bind 输出仅含非秘密材料（room/slot/bind id、一次性 `bind_nonce`、后续指令）。agent 在可见回复中带出 nonce；自己的 Stop hook 上报 `last_assistant_message` 携回 → Service 建立 session_id ↔ bind 关联。未携 nonce 的上报不产生关联；nonce 单次有效，重放拒绝。**零 hook 环境无法完成关联，bind 显式拒绝并给出文档指引（不静默、不承诺）**。Codex 侧等价载荷 Phase 0 ① 验证，无通道则 Codex native 不发布。SessionStart hook 先行关联列为 Phase 0 优化项。
 - **凭据生命周期**：长期 relay 秘密由 bind 时的 CLI 进程生成写入 `.pairroom/rooms/<room>/slots/<slot>/credentials`（0600），**永不输出给模型**；relay 调用与每次 hook 进程从文件读秘密 + 呈现身份（hook 用官方输入的 session_id）向 Service 认证；Service 校验凭据 + generation + 关联三者一致；第二次及后续 hook 取件零模型参与。
+- **关联前置（实现对 v10 的从严澄清，合并前评审收敛）**：显式 `send` 与 `wait` 取件均要求关联完成；首轮 Stop hook 关联前二者被拒绝（nonce 上报与主路径自动接力不受影响）。
 - **威胁边界（诚实声明）**：同一用户、同一工作区内的隔离目标 = 防误绑与撤销卫生，不声称抵御拥有任意文件读取能力的另一会话。bind 确保 `.gitignore` 含 `.pairroom/`（唯一的工作区卫生写入，bind 时披露）。
 - replace：撤销旧 generation 与旧凭据（文件原子覆写 + Service 拒旧代次）；「inbox 空」不证明旧会话 idle；replace 不能停止已开始的原生工作，UI 如实陈述。归档不释放绑定所有权；断连 ≠ 解绑；上报 session_id 参与全局 `(agent, vendor_session_id)` 唯一性检查，冲突 fail-closed；不复用 `internal/service/native.go` 的 existing 验证路径（其会 spawn 临时 adapter）。
 
@@ -152,11 +153,6 @@ Cancel 仅移除 inbox queued（对 delivering/unknown 无效，走 Retry 路径
 - `.pairroom/` 状态文件原子写与并发细则。
 - 桌面通知缓解空闲降级（可选，一期外）。
 - 实现落地的 `CONTEXT.md` 新术语条目（建议：宿主模式 host mode、native 房、park 驻留、publication gap 发布缺口、report sequence 上报序号、bind generation 绑定代次；最终命名按术语硬规则以仓库证据收敛）。
-
-## Phase 0 结论（待追加）
-
-（实现方在 Phase 0 完成后将结论、实测版本号与证据追加于本节；gate 失败时按 §13 声明，不得静默降级。）
-
 
 ## Phase 0 结论（2026-09-11，本 PR 实现记录）
 
