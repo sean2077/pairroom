@@ -36,7 +36,7 @@ class Service:
         env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / '.config'))
         self.output = self.log.open('w')
         self.process = subprocess.Popen(
-            [str(self.binary), 'service', '--mock', '--no-browser', '--listen', '127.0.0.1:0',
+            [str(self.binary), 'service', '--mock', '--no-browser', '--recover-stale-lock', '--listen', '127.0.0.1:0',
              '--data-root', str(self.root / 'state'), '--shutdown-timeout', '10s'],
             cwd=self.root, env=env, stdout=self.output, stderr=subprocess.STDOUT,
         )
@@ -51,18 +51,24 @@ class Service:
         raise AssertionError('Mock service did not publish a Management URL')
 
     async def stop(self) -> None:
-        if self.process and self.process.poll() is None:
-            self.process.terminate()
-            try:
-                await asyncio.to_thread(self.process.wait, 15)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                await asyncio.to_thread(self.process.wait, 5)
-                raise AssertionError('Mock service failed to drain normally')
-            if self.process.returncode != 0:
-                raise AssertionError(f'Mock service shutdown exit {self.process.returncode}')
-        if self.output:
-            self.output.close()
+        try:
+            if self.process and self.process.poll() is None:
+                self.process.terminate()
+                try:
+                    await asyncio.to_thread(self.process.wait, 15)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    await asyncio.to_thread(self.process.wait, 5)
+                    raise AssertionError('Mock service failed to stop')
+                # terminate() uses TerminateProcess(exit=1) on Windows, not
+                # SIGTERM. Its restart fixture proves crash recovery there,
+                # rather than graceful draining (covered by Go tests).
+                allowed = (0, 1) if os.name == 'nt' else (0,)
+                if self.process.returncode not in allowed:
+                    raise AssertionError(f'Mock service shutdown exit {self.process.returncode}')
+        finally:
+            if self.output:
+                self.output.close()
 
 
 async def read_json(context, url: str) -> dict:

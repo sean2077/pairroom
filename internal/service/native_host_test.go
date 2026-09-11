@@ -135,6 +135,139 @@ func associateCLI(t *testing.T, f *nativeFixture, slot model.ActorID) relay.Auth
 	}
 	return a
 }
+
+func TestNativePendingBindCannotRediscloseNonce(t *testing.T) {
+	f := nativeHTTP(t)
+	a, nonce := f.bind(t, model.ActorClaude)
+	dir := filepath.Join(f.project.Root, ".pairroom", "rooms", f.room.ID, "slots", "claude")
+	state, _ := os.ReadFile(filepath.Join(dir, "state.json"))
+	credentials, _ := os.ReadFile(filepath.Join(dir, "credentials"))
+	args := []string{"bind", "--room", f.room.ID, "--slot", "claude", "--service-file", f.endpoint}
+	for _, extra := range [][]string{nil, {"--continue", "--session-id", a.SessionID}} {
+		out, err := f.run(t, append(append([]string{}, args...), extra...), nil)
+		if err == nil || !strings.Contains(err.Error(), "pending binding") || len(out) != 0 {
+			t.Fatalf("pending bind must fail without output: %q %v", out, err)
+		}
+	}
+	for name, before := range map[string][]byte{"state.json": state, "credentials": credentials} {
+		after, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("rejected bind changed %s: %v", name, err)
+		}
+	}
+	// The original nonce still completes the association, and an associated
+	// session can explicitly resume without replacing its generation.
+	_ = f.native.engine.Park(a.Slot, false)
+	if _, err := f.hook(t, a, nonce, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run(t, append(args, "--continue", "--session-id", a.SessionID), nil); err != nil {
+		t.Fatal(err)
+	}
+	b, err := f.native.engine.Inspect(a)
+	if err != nil || b.Generation != a.Generation || b.SessionID != a.SessionID {
+		t.Fatalf("original binding did not survive: %+v %v", b, err)
+	}
+}
+
+func TestNativePendingBindRecoveryRequiresReplace(t *testing.T) {
+	f := nativeHTTP(t)
+	a, firstNonce := f.bind(t, model.ActorClaude)
+	out, err := f.run(t, []string{"bind", "--room", f.room.ID, "--slot", "claude", "--service-file", f.endpoint, "--replace"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var replacement struct {
+		Binding relay.Binding `json:"binding"`
+		Nonce   string        `json:"bind_nonce"`
+	}
+	if err := json.Unmarshal(out, &replacement); err != nil {
+		t.Fatal(err)
+	}
+	if replacement.Nonce == "" || replacement.Nonce == firstNonce || replacement.Binding.Generation != a.Generation+1 {
+		t.Fatalf("replacement did not rotate identity: %+v", replacement.Binding)
+	}
+	if _, err := f.native.engine.Inspect(a); !errors.Is(err, relay.ErrAuth) {
+		t.Fatalf("old pending credentials remain usable: %v", err)
+	}
+	_ = f.native.engine.Park(a.Slot, false)
+	if out, err := f.hook(t, a, firstNonce, false); err != nil || strings.TrimSpace(string(out)) != "{}" {
+		t.Fatalf("revoked nonce was not ignored: %q %v", out, err)
+	}
+	if _, err := f.hook(t, a, replacement.Nonce, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.native.engine.Snapshot().Bindings[a.Slot]; got.SessionID != a.SessionID {
+		t.Fatal("replacement nonce did not associate")
+	}
+}
+
+func TestNativeHTTPAckSettlesDrainingRuntime(t *testing.T) {
+	for _, shutdown := range []bool{false, true} {
+		t.Run(fmt.Sprintf("shutdown=%t", shutdown), func(t *testing.T) {
+			f := nativeHTTP(t)
+			a := associateCLI(t, f, model.ActorClaude)
+			m, err := f.native.engine.SendUser(relay.SendRequest{ID: "before-drain", To: a.Slot, Text: "accepted work"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			claim, err := f.native.engine.Claim(context.Background(), a, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				if shutdown {
+					done <- f.manager.Shutdown(ctx)
+				} else {
+					done <- f.manager.WaitAndSuspend(ctx, f.room.ID)
+				}
+			}()
+			for {
+				f.manager.mu.Lock()
+				draining := f.manager.entries[f.room.ID].drainRequested
+				changed := f.manager.changed
+				f.manager.mu.Unlock()
+				if draining {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					t.Fatal("drain did not start")
+				case <-changed:
+				}
+			}
+			if _, err := f.native.engine.SendUser(relay.SendRequest{ID: "after-drain", To: a.Slot, Text: "must not start"}); !errors.Is(err, relay.ErrClosed) {
+				t.Fatalf("drain admitted new work: %v", err)
+			}
+			body, _ := json.Marshal(map[string]string{"id": claim.ID, "receipt": claim.Receipt})
+			req, _ := http.NewRequestWithContext(ctx, http.MethodPost, f.server.URL+"/api/v1/relay/"+f.room.ID+"/claude/ack", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Relay "+a.Secret)
+			req.Header.Set("X-PairRoom-Bind", a.BindID)
+			req.Header.Set("X-PairRoom-Generation", fmt.Sprint(a.Generation))
+			req.Header.Set("X-PairRoom-Session", a.SessionID)
+			res, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = res.Body.Close()
+			if res.StatusCode != http.StatusOK {
+				t.Fatalf("draining ack status=%d", res.StatusCode)
+			}
+			if err := <-done; err != nil {
+				t.Fatalf("drain failed to settle before lease expiry: %v", err)
+			}
+			if got := f.native.engine.Snapshot().Messages[0]; got.ID != m.ID || got.State != "handed_off" {
+				t.Fatalf("drain manufactured uncertainty: %+v", got)
+			}
+			if _, err := f.manager.runtimeForCompletion(f.room.ID); !errors.Is(err, ErrRuntimeNotReady) {
+				t.Fatalf("completion reopened suspended runtime: %v", err)
+			}
+		})
+	}
+}
 func TestNativeCLIHookAssociationRoutingAndEightBlockBudget(t *testing.T) {
 	f := nativeHTTP(t)
 	a, nonce := f.bind(t, model.ActorClaude)

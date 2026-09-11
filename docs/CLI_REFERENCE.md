@@ -168,6 +168,8 @@ pairroom relay bind --room <room-id> --slot codex
 
 Run each bind from its intended native session, then include the returned one-time `bind_nonce` verbatim in that session's visible reply. The Stop hook associates the official session ID. Slots `claude`/`codex` mean Agent 1/2 regardless of the selected Runtime; use the slot-specific commands shown in the Room. Bind stdout contains no long-lived secret. No installed Stop hook means bind is rejected. Native configuration selections are display-only, and PairRoom never starts or interrupts either process.
 
+A pending binding already occupies its slot. Repeating ordinary bind, including `--continue` before association, never returns its nonce again. Finish in the original session using the nonce it already received. If that output or the bind confirmation was lost, use `bind --replace` explicitly to revoke the pending generation and obtain a new nonce; this cannot stop any native work.
+
 All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. For a custom Service root, give bind `--service-file <root>/relay-endpoint.json`; this is a **file path**, never a token. Later commands follow the saved path and re-read the endpoint after Service restart.
 
 | Subcommand | Meaning |

@@ -148,7 +148,7 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	}
 	if c.State.Generation == 0 {
 		release()
-		return errors.New("bind confirmation missing; run bind again before association")
+		return errors.New("bind confirmation missing; use bind --replace explicitly before association")
 	}
 	c.State.SessionID = hook.SessionID
 	var binding relay.Binding

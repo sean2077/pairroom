@@ -224,6 +224,44 @@ func TestNativeParkDisableTimeoutAndWake(t *testing.T) {
 		t.Fatalf("timed-out wait persisted fake activity/delivery: seq=%d", before)
 	}
 }
+
+func TestNativeDrainAcknowledgementRetainsAuthentication(t *testing.T) {
+	e, auth, _ := testEngine(t)
+	receiver := auth[model.ActorCodex]
+	if _, err := e.Send(auth[model.ActorClaude], SendRequest{ID: "drain", Text: "work"}); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := e.Claim(context.Background(), receiver, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.SetDraining(true)
+	wrongGeneration := receiver
+	wrongGeneration.Generation++
+	for _, a := range []Auth{auth[model.ActorClaude], wrongGeneration} {
+		if err := e.Ack(a, claim.ID, claim.Receipt); !errors.Is(err, ErrAuth) {
+			t.Fatalf("invalid draining ack authorized: %v", err)
+		}
+	}
+	if err := e.Ack(receiver, claim.ID, "wrong-receipt"); !errors.Is(err, ErrAuth) {
+		t.Fatal(err)
+	}
+	if _, err := e.Claim(context.Background(), receiver, false); !errors.Is(err, ErrClosed) {
+		t.Fatalf("drain allowed claim: %v", err)
+	}
+	if err := e.Ack(receiver, claim.ID, claim.Receipt); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Ack(receiver, claim.ID, claim.Receipt); err != nil {
+		t.Fatalf("ack retry not idempotent: %v", err)
+	}
+	if err := e.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Ack(receiver, claim.ID, claim.Receipt); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed engine accepted ack: %v", err)
+	}
+}
 func TestNativeBindingAssociationRevocationAndNonce(t *testing.T) {
 	e, a, _ := testEngine(t)
 	slot := model.ActorClaude
