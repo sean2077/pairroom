@@ -39,7 +39,7 @@ The Event Log is authoritative for a Room. Registry records/indexes enable Servi
 
 Event sequences begin at 1 and remain contiguous. Room activation/lifecycle operations must validate the existing published Room identity before repair or new writes. A missing or empty log is not a fresh version of that Room. An ambiguous append failure closes the writer rather than continuing with uncertain sequence state. Only an incomplete final record is eligible for tail repair; middle corruption is not skipped.
 
-Current readers and writers require Store schema 10 and provisioning schema 3. Old stores, missing collaboration records, and inferred Agent selections are rejected without migration or metadata rewriting. [Storage](STORAGE.md) owns replay details and [Upgrading](UPGRADING.md) owns compatibility/rollback actions.
+Readers accept Store schema 10/provisioning 3 as embedded, and schema 11/provisioning 4 with explicit immutable `host_mode`. All new Rooms write 11/4; existing 10/3 Rooms retain their original event bytes and append schema. Registry checkpoint schema 2 has no new fields; host mode is rebuilt from Room events. Old stores, missing collaboration records, and inferred Agent selections are rejected without migration or metadata rewriting. [Storage](STORAGE.md) owns replay details and [Upgrading](UPGRADING.md) owns compatibility/rollback actions.
 
 ## Service, Project, Room, and Binding
 
@@ -55,7 +55,7 @@ A modern Room does not automatically create an isolated task worktree. Its two p
 
 Room names are display metadata. Rename uses the existing safe suspension boundary; it does not change IDs, Bindings, or collaboration. Native title synchronization occurs at activation where supported and reports configured/acknowledged/unsupported/failed state. Desired display metadata is not proof of vendor acknowledgement. Claude supplies its advertised `--name` launch option and reports configuration, not a separate title-read acknowledgement; Codex/Grok use native metadata acknowledgement. Naming never requires a model Turn or direct vendor-store edits. See [API reference](API_REFERENCE.md#room-names-and-native-session-correspondence).
 
-## Admission and native Turn ownership
+## Embedded admission and native Turn ownership
 
 The Room owns the only coordination FIFO. Adapters must not create an additional hidden queue. At most one participant owns a native Turn in a Room; another participant cannot start until a reliable native terminal boundary or confirmed exit releases that owner.
 
@@ -131,3 +131,15 @@ Use [Contributing](../CONTRIBUTING.md) for commands and PR evidence. This archit
 Diagnostics are an on-demand, authenticated Service operation, not another Room Runtime or durable workflow. `internal/service/diagnostics.go` selects immutable Room or current default-pair settings, gates concurrent checks, and projects an allowlisted report. `internal/agent/diagnostics.go` shares bounded metadata and real adapter checks with CLI doctor. Each live test uses a temporary Git workspace and fresh native session, rejects tool/approval interaction, and requires correlated response completion; it never consumes a managed Room slot or preempts a Room. Native global hooks/MCP still apply. Mock is reported as unverified.
 
 The Management Project-name link navigates to `#/projects/{id}`; its separate disclosure button only expands/collapses Rooms. Project-local search, attention/working filters, and archive visibility survive navigation without leaking into another Project. The primary Room list owns the main width; identity/maintenance is progressively disclosed. The shared Diagnostics module owns cancellation, consent, result validation, and safe browser-only export; it does not persist diagnostic data or launch checks during rendering.
+
+## Native host mode
+
+`host_mode` is a Room creation choice, independent of default/custom collaboration. `embedded` owns adapters as above; `native` owns only the relay bus, public binding state and audit. `internal/relay/` implements the Native Room state machine, `internal/relayclient/` the CLI and approved hooks, and `internal/service/native_host_runtime.go` its authenticated HTTP/SSE surface. Activation and binding never spawn a vendor adapter. A bound session's idle state and model acceptance are not knowable from a transport receipt.
+
+The Native Engine serializes each durable append before publishing a projection. Per-slot inboxes are FIFO; different slots may run independently because Owner Turn is advisory. Binding association checks the Runtime plus official session ID globally, including embedded Rooms, duplicate-runtime slots and archived Rooms. Archive keeps ownership; unbind or explicit replacement revokes the old generation. These operations cannot stop work already executing in a native harness. Native archive fails closed on missing data.
+
+A CLI-generated secret stays in the slot's owner-only credentials file; the Event Log contains only its hash. Binding stdout carries a public binding reference and a single-use nonce. An approved Stop hook must return the nonce with its official session identity before publication or collection. Missing hooks, nonce-less competing sessions, cross-slot credentials and revoked generations are rejected. File access by another same-user process is outside the isolation claim. Project trust and native hook approval are not granted by PairRoom.
+
+Stop publication and receive-side park are independent: persisting a reply does not wait for peer output. The CLI records one bounded pending publication before submission and reconciles ambiguous results with the original key. Collection records `delivering` before returning an envelope, then requires an explicit stdout-after-write acknowledgement. Recovery never automatically replays an uncertain delivery. [Protocol](PROTOCOL.md#native-host-protocol-v7) and [Storage](STORAGE.md#native-relay-state) specify the boundaries.
+
+The Native Room view exposes bindings, generation, last observed activity, relay history, pending delivery, explicit Retry and park controls. It has no Interrupt or process-start controls. Stored selections are display-only; neither provider resolution nor per-process policy injection is attempted. Current implementation is experimental pending authenticated Codex Desktop ↔ Claude Code multi-round verification; synthetic hook/transport regressions prove only the PairRoom side.

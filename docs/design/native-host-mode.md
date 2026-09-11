@@ -1,6 +1,6 @@
 # Native 宿主模式（原生焦点协作）设计规格
 
-- **状态**：已批准（v10，2026-09-10，项目所有者明确批准）；实现未开始，Phase 0 结论将追加至本文档。
+- **状态**：已批准（v10，2026-09-10，项目所有者明确批准）；实现进行中；Phase 0 文档通道核验通过，真实双端 E2E 仍为发布门禁。
 - **评审史**：经 gpt-6-astra 七轮只读技术评审收敛；全部成立意见已合并，无悬置决策、无已知逻辑矛盾。
 - **定位与存放**：本文档是在途功能的权威设计规格，**不是当前契约**。按 `docs/README.md` 的文档政策（提案在被接受并实现之前归属 Issue/PR，不得把未来提案静默转换为已实现能力），本规格在实现落地前只存在于本 PR 分支，不合入 main。本文以中文保存以逐字保留批准措辞；实现落地时，耐久契约必须以**英文**同步迁入 `ARCHITECTURE.md` / `PROTOCOL.md` / `STORAGE.md` / `UPGRADING.md` / `SUPPORT.md` 与 `CLAUDE.md` invariant（同一 change 内），本文档届时随实现 PR 合入或关闭，新概念术语按术语硬规则进 `CONTEXT.md`。
 
@@ -156,3 +156,12 @@ Cancel 仅移除 inbox queued（对 delivering/unknown 无效，走 Retry 路径
 ## Phase 0 结论（待追加）
 
 （实现方在 Phase 0 完成后将结论、实测版本号与证据追加于本节；gate 失败时按 §13 声明，不得静默降级。）
+
+
+## Phase 0 结论（2026-09-11，本 PR 实现记录）
+
+- **① 文档/载荷通道成立，非真实 CLI 验收**：2026-09-11 读取 OpenAI 官方 [Hooks](https://developers.openai.com/codex/hooks)（重定向官方 learn.chatgpt.com/docs/hooks）确认项目级 `.codex/hooks.json`、精确 hook 定义信任、共同 `session_id`、Stop 的 `last_assistant_message` / `stop_hook_active`、`decision:block` + `reason` 自动续跑。Claude 官方 [Hooks](https://code.claude.com/docs/en/hooks) 提供同构 Stop 载荷与 StopFailure 仅可见性事件。安装不绕过同意；nonce 经真实 Stop 回传才关联。
+- **运行环境边界**：本环境有离线 Go 1.25 源码与依赖，可运行 Mock/HTTP/崩溃窗口测试；没有已认证的 Codex Desktop 或 Claude Code 会话。不得据此声称真实多轮 E2E、厂商版本实测、token 成本实测或完整 A1 已通过。
+- **接收策略**：保守默认 park 30 秒，hook timeout 45 秒；最多连续 8 次带真实新 envelope 的 block，无空转再武装。超时/禁用/预算耗尽保持 queued；下一次用户自然轮次重置预算。两个方向的真实时长、打断和 8-block 行为仍须发布前复验。
+- **未纳入承诺**：session_crons / ScheduleWakeup、并发 resume、SessionStart 先行关联没有实测，均未用于实现或支持声明。
+- **发布门禁**：本 PR 的实现和确定性测试不等于官方双端验收；完成 spec §10 的真实 Codex Desktop ↔ Claude Code 多轮场景之前，不将 Native 标为已验证稳定能力。

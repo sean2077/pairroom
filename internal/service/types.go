@@ -138,6 +138,7 @@ type Project struct {
 }
 
 type Room struct {
+	HostMode                 model.HostMode                         `json:"host_mode,omitempty"`
 	RuntimeNames             map[model.ActorID]string               `json:"runtime_names,omitempty"`
 	Collaboration            *model.Collaboration                   `json:"collaboration,omitempty"`
 	ID                       string                                 `json:"id"`
@@ -164,6 +165,9 @@ func (r Room) HasPendingBindings() bool {
 }
 
 func (r Room) Validate() error {
+	if r.HostMode != "" && !r.HostMode.Valid() {
+		return fmt.Errorf("invalid host_mode %q", r.HostMode)
+	}
 	if r.Collaboration == nil {
 		return errors.New("Room collaboration instructions are required")
 	}
@@ -211,10 +215,21 @@ func (r Room) Validate() error {
 	if _, err := validateAgentSelections(r.Agents); err != nil {
 		return fmt.Errorf("Room Agent selections: %w", err)
 	}
+	if r.HostMode == model.HostNative {
+		for actor, selection := range r.Agents {
+			if selection.Runtime != model.RuntimeClaude && selection.Runtime != model.RuntimeCodex {
+				return errors.New("native hosting supports only Claude Code and Codex")
+			}
+			if r.Bindings[actor].Mode != BindingNew {
+				return errors.New("native bindings require hook association, not existing adapter sessions")
+			}
+		}
+	}
 	return nil
 }
 
 type ProvisionRequest struct {
+	HostMode           model.HostMode                         `json:"host_mode,omitempty"`
 	AgentPairProfileID string                                 `json:"agent_pair_profile_id,omitempty"`
 	Collaboration      *model.Collaboration                   `json:"collaboration,omitempty"`
 	ProjectID          string                                 `json:"project_id"`
@@ -224,6 +239,22 @@ type ProvisionRequest struct {
 }
 
 func (r ProvisionRequest) Validate() error {
+	if !r.HostMode.ForCreation().Valid() {
+		return fmt.Errorf("invalid host_mode %q", r.HostMode)
+	}
+	if r.HostMode == model.HostNative {
+		for _, spec := range r.Bindings {
+			if spec.Mode != BindingNew {
+				return errors.New("native Rooms bind through consented relay hooks after creation; existing adapter bindings are not supported")
+			}
+		}
+		for _, selection := range r.Agents {
+			if selection.Runtime != model.RuntimeClaude && selection.Runtime != model.RuntimeCodex {
+				return errors.New("native hosting supports only Claude Code and Codex")
+			}
+		}
+	}
+
 	if r.Collaboration != nil {
 		if _, err := r.Collaboration.ForCreation(); err != nil {
 			return err
@@ -261,6 +292,7 @@ func (r ProvisionRequest) Validate() error {
 }
 
 type roomProvisionedPayload struct {
+	HostMode                 model.HostMode                         `json:"host_mode,omitempty"`
 	Collaboration            *model.Collaboration                   `json:"collaboration,omitempty"`
 	Schema                   int                                    `json:"schema"`
 	Project                  Project                                `json:"project"`

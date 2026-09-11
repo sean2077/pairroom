@@ -27,6 +27,7 @@ import (
 	"github.com/sean2077/pairroom/internal/daemon"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/openbrowser"
+	"github.com/sean2077/pairroom/internal/relayclient"
 	"github.com/sean2077/pairroom/internal/room"
 	"github.com/sean2077/pairroom/internal/server"
 	"github.com/sean2077/pairroom/internal/service"
@@ -77,6 +78,10 @@ func run(args []string) error {
 		return runRestore(args[1:])
 	case "diagnostics":
 		return runDiagnostics(args[1:])
+	case "relay":
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		return relayclient.Run(ctx, args[1:], os.Stdin, os.Stdout, os.Stderr)
 	case "protocol":
 		return runProtocol(args[1:])
 	case "version", "--version", "-v":
@@ -1048,6 +1053,7 @@ Usage:
   pairroom backup [options]      Create a verified room-data backup
   pairroom restore [options]     Restore and verify a room-data backup
   pairroom diagnostics [options] Create a redacted diagnostics bundle
+  pairroom relay <command>       Bind user-owned native sessions and exchange durable relay messages
   pairroom protocol [options]    Print the versioned agent collaboration contract
   pairroom version               Print version
 

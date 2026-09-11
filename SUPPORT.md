@@ -60,3 +60,13 @@ The two participants' native Turns are serialized within a Room, not across all 
 Describe a concrete workflow, why the existing Room/collaboration/permission model is insufficient, and the smallest verifiable acceptance criteria. Explain state ownership, failure recovery, migration, security/privacy, and multi-Room impact. Say how the proposal preserves the native harness rather than replacing its capabilities.
 
 Read [Why PairRoom](docs/WHY_PAIRROOM.md), [Alternatives](docs/ALTERNATIVES.md), and [Architecture](docs/ARCHITECTURE.md) first. A proposal in an Issue or PR is not a current feature contract. Contributions should follow [Contributing](CONTRIBUTING.md).
+
+## Native host verification boundary
+
+Native host mode is experimental. The implementation supports the documented project Stop-hook channel for Claude Code and Codex, nonce association, durable relay, explicit send/wait, stdout acknowledgement and bounded park. It does not yet have authenticated Codex Desktop ↔ Claude Code multi-round acceptance evidence from this development environment. Grok native hosting, zero-hook binding, live attach, concurrent resume injection and scheduled idle self-wake are not supported.
+
+Official channel references: [Codex hooks](https://developers.openai.com/codex/hooks) and [Claude Code hooks](https://code.claude.com/docs/en/hooks). These establish the documented payload/control contract, not compatibility with an arbitrary installed version. Record actual CLI/Desktop versions, project trust and exact approved hook definitions when validating. Codex requires reviewing changed hook definitions in `/hooks`; installation alone does not grant approval.
+
+`make check` covers deterministic Go state transitions, race checks and real HTTP/CLI synthetic-hook integration; `make smoke` covers embedded Mock regression. `make browser-check` additionally covers native Room creation, bindings, FIFO, a killed collector, explicit Retry, bilingual/responsive rendering and restart through real HTTP/SSE using synthetic hook inputs. None is vendor E2E. Before release, record real bidirectional multi-round park/timeout/interruption, the eight-block cap, StopFailure coverage and measured re-arm cost in the design's Phase 0 findings. PairRoom cannot certify model acceptance from CLI stdout.
+
+For relay trouble, inspect `pairroom relay status`, the Room's binding generation and last activity. Unknown pending publication is reconciled with its original sequence; unknown delivery is not automatically retried. Never share `credentials`, `relay-endpoint.json`, full pending reply bodies or unreviewed Event Logs in a public issue.

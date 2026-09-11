@@ -108,7 +108,7 @@ func allowedSurfaceRequest(method, p string) bool {
 			return method == http.MethodPut
 		}
 		switch strings.ToLower(action) {
-		case "start", "stop", "restart", "interrupt":
+		case "start", "stop", "restart", "interrupt", "park":
 			return method == http.MethodPost
 		default:
 			return false

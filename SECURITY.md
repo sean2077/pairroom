@@ -127,3 +127,11 @@ Use trusted repositories and explicit native permissions; do not mistake respons
 Do not post exploit details, credentials, private code, real attachments, tokens/cookies, or complete startup URLs to a public Issue. Prefer the repository's private security reporting channel, with a minimal reproduction, affected version/platform, threat assumptions, and expected boundary.
 
 If no private channel is available, first open a public Issue without exploit details asking maintainers to establish one. Ordinary bug-report evidence and redaction guidance are in [Support](SUPPORT.md).
+
+## Native relay credentials and evidence
+
+Native hosting never owns or interrupts the user's vendor processes. Project hook installation is explicit; PairRoom does not grant project trust or approve its own hook. An official Stop payload must return a one-time nonce before a session is associated. Relay authorization requires the slot's secret, generation and associated native identity together; management/browser credentials do not authorize that channel. Replacement revokes old credentials but cannot stop work already running.
+
+Relay secrets remain in owner-only workspace `credentials` files; their hashes, not secrets, are persisted for service authentication. The Service's owner-only `relay-endpoint.json` contains current local endpoint/authentication discovery and must not be exported. Both files are sensitive. Model-visible bind output carries only public identifiers and a nonce. This protects against accidental cross-binding and stale ownership; it does not claim isolation from arbitrary file reads by another process running as the same OS user. POSIX 0600 checks are not a Windows ACL isolation claim.
+
+Native relay displays `handed_off` only for confirmed CLI stdout. It cannot prove model acceptance. Delivery without acknowledgement is `unknown`, never automatically replayed; explicit Retry may duplicate work. Unpublished interrupted replies or pre-atomic-write crashes can be undetectably lost. Synthetic hook/HTTP/browser tests do not establish authenticated Claude Code/Codex E2E. Inspect histories and workspace effects before recovery and redact private message text before sharing audit evidence.

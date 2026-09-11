@@ -36,6 +36,10 @@ func (f ProvisionerFunc) Provision(ctx context.Context, project Project, actor m
 }
 
 func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, provisioner BindingProvisioner) (Room, error) {
+	request.HostMode = request.HostMode.ForCreation()
+	if request.HostMode == model.HostNative && request.Bindings == nil {
+		request.Bindings = map[model.ActorID]BindingSpec{model.ActorClaude: {Mode: BindingNew}, model.ActorCodex: {Mode: BindingNew}}
+	}
 	if provisioner == nil {
 		return Room{}, errors.New("binding provisioner is required")
 	}
@@ -97,6 +101,11 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 		return Room{}, fmt.Errorf("project is unavailable: %s", project.Diagnostic)
 	}
 	for actor, spec := range request.Bindings {
+		candidate := Room{Agents: request.Agents, HostMode: request.HostMode}
+		if err := r.checkNativeIdentityLocked(candidate, actor, spec.SessionID); err != nil {
+			r.mu.RUnlock()
+			return Room{}, err
+		}
 		if spec.Mode != BindingExisting {
 			continue
 		}
@@ -146,7 +155,10 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 		var binding Binding
 		var cleanup func(context.Context) error
 		var err error
-		if selected, ok := provisioner.(selectionBindingProvisioner); ok {
+		if request.HostMode == model.HostNative {
+			// Native harnesses remain user-owned. Do not validate by spawning an adapter.
+			binding = Binding{Agent: actor, Mode: BindingNew, Pending: true, BoundAt: r.now()}
+		} else if selected, ok := provisioner.(selectionBindingProvisioner); ok {
 			binding, cleanup, err = selected.ProvisionSelection(ctx, project, actor, spec, selection, peerRuntime, stageDir)
 		} else {
 			binding, cleanup, err = provisioner.Provision(ctx, project, actor, spec, stageDir)
@@ -192,7 +204,12 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 		r.mu.RUnlock()
 		return Room{}, err
 	}
-	for _, binding := range bindings {
+	for actor, binding := range bindings {
+		candidate := Room{ID: roomID, HostMode: request.HostMode, Agents: request.Agents, Bindings: bindings}
+		if err := r.checkNativeIdentityLocked(candidate, actor, binding.SessionID); err != nil {
+			r.mu.RUnlock()
+			return Room{}, err
+		}
 		if !binding.OwnsIdentity() {
 			continue
 		}
@@ -205,14 +222,15 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 
 	now := r.now()
 	room := Room{
-		ID: roomID, ProjectID: project.ID, Name: strings.TrimSpace(request.Name),
+		HostMode: request.HostMode,
+		ID:       roomID, ProjectID: project.ID, Name: strings.TrimSpace(request.Name),
 		Collaboration: model.CloneCollaboration(request.Collaboration),
 		Lifecycle:     RoomActive, Bindings: bindings, Agents: cloneAgentSelections(request.Agents),
 		TranscriptBoundaryNotice: TranscriptBoundaryNotice,
 		CreatedAt:                now, UpdatedAt: now,
 	}
 	payload := roomProvisionedPayload{
-		Schema: 3, Collaboration: model.CloneCollaboration(room.Collaboration), Project: project, RoomID: room.ID, Name: room.Name,
+		Schema: 4, HostMode: room.HostMode, Collaboration: model.CloneCollaboration(room.Collaboration), Project: project, RoomID: room.ID, Name: room.Name,
 		Lifecycle: room.Lifecycle, Bindings: cloneBindings(room.Bindings),
 		Agents:                   cloneAgentSelections(room.Agents),
 		TranscriptBoundaryNotice: room.TranscriptBoundaryNotice, CreatedAt: room.CreatedAt,

@@ -7,7 +7,7 @@ import (
 
 const (
 	Current       = "4.0.0"
-	StoreSchema   = 10
+	StoreSchema   = 11
 	RepositoryURL = "https://github.com/sean2077/pairroom"
 )
 
@@ -61,8 +61,8 @@ func Describe() string {
 	return tag + "+" + sha
 }
 
-// SupportsStoreSchema accepts only the current Event Log contract. Unsupported
+// SupportsStoreSchema accepts the current and immediately preceding contracts. Unsupported
 // stores must be rejected before replay or repair, never silently migrated.
 func SupportsStoreSchema(schema int) bool {
-	return schema == StoreSchema
+	return schema == 10 || schema == StoreSchema
 }

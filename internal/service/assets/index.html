@@ -147,6 +147,10 @@
           <label><span class="field-label" data-i18n="common.project">Project</span><select id="room-project-id" required=""></select></label>
           <label><span class="field-label" data-i18n="ui.roomName">Room name</span><input id="room-name" type="text" maxlength="160" aria-describedby="room-name-hint" autocomplete="off" placeholder="For example: Auth refactor review" data-i18n-placeholder="ui.forExampleAuthRefactorReview"><span id="room-name-hint" class="field-hint" data-i18n="room.temporaryNameHint">Optional. Leave blank for a temporary name; right-click a Room to rename it later.</span></label>
         </div>
+        <section class="collaboration-config" data-room-only>
+          <label><span class="field-label" data-i18n="ui.native.hostMode">Host mode</span><select id="room-host-mode"><option value="embedded" data-i18n="ui.native.embedded">Embedded · PairRoom manages sessions</option><option value="native" data-i18n="ui.native.native">Native · relay between your native sessions (experimental)</option></select></label>
+          <p id="room-native-help" class="field-help" data-i18n="ui.native.help" hidden>Approve project Stop hooks, then bind both native sessions. PairRoom does not start or interrupt them. Provider, model, effort, instructions and permission settings below are display-only.</p>
+        </section>
         <section class="collaboration-config" aria-labelledby="collaboration-label" data-room-only>
           <label><span id="collaboration-label" class="field-label" data-i18n="room.collaboration.mode">Collaboration</span>
             <select id="room-collaboration-mode"><option value="default" data-i18n="room.collaboration.default">Lead + Executor (default)</option><option value="custom" data-i18n="room.collaboration.custom">Custom instructions</option></select>

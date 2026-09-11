@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("docs_check", Path(__file__).with_name("docs-check.py"))
 docs_check = importlib.util.module_from_spec(spec)
@@ -46,6 +47,21 @@ func test() {
             (source / "service.go").write_text('mux.HandleFunc(dynamicRoute, handler)', encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "unsupported route expression"):
                 docs_check.extract_routes(root)
+
+
+class FlagInventoryTests(unittest.TestCase):
+    def test_bound_relay_flags_and_test_exclusion(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            cli = root / "cmd/pairroom"
+            cli.mkdir(parents=True)
+            relay = root / "internal/relayclient"
+            relay.mkdir(parents=True)
+            (cli / "main.go").write_text('flags.Bool("mock", false, "")')
+            (cli / "main_test.go").write_text('flags.Bool("test-only", false, "")')
+            (relay / "cli.go").write_text('flags.StringVar(&o.room, "room", "", "")\nflags.Var(&paths, "attach", "")')
+            with patch.object(docs_check, "ROOT", root):
+                self.assertEqual(docs_check.extract_flags(), ["attach", "mock", "room"])
 
 
 class MarkdownTests(unittest.TestCase):
