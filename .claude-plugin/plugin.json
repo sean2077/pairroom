@@ -1,0 +1,7 @@
+{
+  "name": "pairroom",
+  "description": "Native-session relay skills for PairRoom.",
+  "skills": [
+    "./skills/pairroom-relay"
+  ]
+}

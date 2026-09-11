@@ -34,7 +34,7 @@ func createBindFixture(t *testing.T, own model.RuntimeKind) (string, string, *in
 	mux.HandleFunc("GET /api/v1/service", func(w http.ResponseWriter, r *http.Request) {
 		rooms := []any{}
 		for i := 1; i <= created; i++ {
-			rooms = append(rooms, map[string]any{"id": fmt.Sprintf("room%d", i), "project_id": "project", "host_mode": "native", "agents": map[model.ActorID]model.AgentSelection{model.ActorClaude: {Runtime: own}, model.ActorCodex: {Runtime: model.RuntimeCodex}}})
+			rooms = append(rooms, map[string]any{"id": fmt.Sprintf("room%d", i), "project_id": "project", "host_mode": "native", "lifecycle": "active", "agents": map[model.ActorID]model.AgentSelection{model.ActorClaude: {Runtime: own}, model.ActorCodex: {Runtime: model.RuntimeCodex}}})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"projects": []any{map[string]string{"id": "project", "root": root}}, "rooms": rooms})
 	})
@@ -121,17 +121,21 @@ func TestBindCreatePeerJoinPreservesLiteralPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var args []string
+	// PowerShell parses a bare numeric token like `2` as an int, so decode
+	// loosely and compare rendered forms; the real CLI receives argv strings.
+	var rendered string
 	if runtime.GOOS == "windows" {
+		var args []any
 		if err := json.Unmarshal(output, &args); err != nil {
 			t.Fatal(err)
 		}
+		rendered = fmt.Sprint(args)
 	} else {
-		args = strings.Split(strings.TrimSuffix(string(output), "\n"), "\n")
+		rendered = fmt.Sprint(strings.Split(strings.TrimSuffix(string(output), "\n"), "\n"))
 	}
-	want := []string{"relay", "bind", "--room", "room1", "--slot", "codex", "--service-file", endpoint, "--repo", root}
-	if fmt.Sprint(args) != fmt.Sprint(want) {
-		t.Fatalf("peer command changed literal paths: got=%q want=%q", args, want)
+	want := []string{"relay", "bind", "--room", "room1", "--slot", "2", "--service-file", endpoint, "--repo", root}
+	if rendered != fmt.Sprint(want) {
+		t.Fatalf("peer command changed literal paths: got=%q want=%q", rendered, fmt.Sprint(want))
 	}
 }
 

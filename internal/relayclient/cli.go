@@ -14,6 +14,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,7 +45,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.SetOutput(diagnostic)
 	flags.StringVar(&o.repo, "repo", ".", "Room project path")
 	flags.StringVar(&o.room, "room", "", "Room ID")
-	flags.StringVar(&o.slot, "slot", "", "stable slot ID: claude or codex, independent of runtime")
+	flags.StringVar(&o.slot, "slot", "", "Agent slot: 1 or 2; the durable IDs claude|codex are also accepted. Never a runtime name")
 	flags.StringVar(&o.kind, "runtime", "", "native harness: claude or codex")
 	flags.StringVar(&o.endpoint, "service-file", "", "owner-only relay-endpoint.json path for a custom Service data root")
 	flags.StringVar(&o.text, "text", "", "message body; otherwise read stdin")
@@ -70,6 +72,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	if flags.NArg() != 0 {
 		return errors.New("unexpected relay arguments")
 	}
+	o.slot = normalizeSlot(o.slot)
 	if action == "hook" {
 		return runHook(ctx, o, in, out, diagnostic)
 	}
@@ -93,7 +96,11 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if err := installSkill(kind); err != nil {
 			return err
 		}
-		return writeJSON(out, map[string]any{"installed": true, "runtime": kind, "notice": "Restart/review the exact project hook in your native harness (Codex: /hooks). This command does not grant native trust. Keep pairroom on PATH. Real authenticated bidirectional E2E remains release-gated."})
+		return writeJSON(out, map[string]any{"installed": true, "runtime": kind, "notice": "Restart/review the exact project hook in your native harness (Codex: /hooks). This command does not grant native trust. Keep pairroom on PATH. Real authenticated bidirectional E2E remains release-gated.", "next_steps": []string{
+			"Create a room and bind this session: pairroom relay bind --create --name \"<topic>\" (skill: /pairroom-relay <topic>)",
+			"The peer session joins with the printed peer_join command, or zero-flag inside a recognized session: pairroom relay bind",
+			"Echo the returned bind_nonce in your visible reply once so the approved Stop hook associates the session",
+		}})
 	}
 	if action == "bind" {
 		return bind(ctx, root, o, out)
@@ -311,16 +318,16 @@ func management(ctx context.Context, endpoint relay.Endpoint, method, path strin
 	return json.NewDecoder(io.LimitReader(res.Body, 16<<20)).Decode(result)
 }
 func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr error) {
-	slot := model.ActorID(o.slot)
-	if !slot.ValidParticipant() {
-		return errors.New("bind requires --slot claude|codex")
+	slot := model.ActorID(o.slot) // normalized in Run; empty means "infer below"
+	if o.slot != "" && !slot.ValidParticipant() {
+		return errors.New("bind requires --slot 1|2 (Agent 1/2), or the durable IDs claude|codex")
 	}
 	if o.create {
 		if o.room != "" {
 			return errors.New("bind --create creates the Room itself; pass --create or --room, not both")
 		}
-	} else if !safePart(o.room) {
-		return errors.New("bind requires --room and --slot claude|codex")
+	} else if o.room != "" && !safePart(o.room) {
+		return errors.New("invalid --room value")
 	}
 	if o.endpoint == "" {
 		var err error
@@ -337,6 +344,10 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 	if err != nil {
 		return err
 	}
+	var snapshot serviceSnapshot
+	if err := management(ctx, endpoint, http.MethodGet, "/api/v1/service", nil, &snapshot); err != nil {
+		return err
+	}
 	created := false
 	defer func() {
 		if created && resultErr != nil {
@@ -344,6 +355,26 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		}
 	}()
 	if o.create {
+		switch {
+		case slot != "":
+		case o.kind != "" || o.peer != "":
+			// An explicit runtime selection is placed at the slot whose default
+			// runtime matches it, so that slot must be known before creation.
+			inferred, err := inferCreateSlot(o)
+			if err != nil {
+				return err
+			}
+			slot = inferred
+			o.slot = string(slot)
+		case callerRuntime(o) == "":
+			// No slot can ever be resolved for this caller; fail before the
+			// Service creates durable state.
+			return errCreateSlotUnresolved
+		}
+		// Otherwise the Service owns the default pair. That pair is user
+		// configuration (agent-pair-profiles.json, then config defaults) and
+		// need not match slot order, so the slot stays unresolved here and is
+		// matched against the created Room's real selections below.
 		agents, err := createAgents(o, slot)
 		if err != nil {
 			return err
@@ -352,9 +383,17 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 			if err := installed(root, agents[slot].Runtime); err != nil {
 				return err
 			}
+		} else if rt := callerRuntime(o); rt != "" {
+			// The Service owns the default pair, so the slot is only resolved
+			// after creation. The caller's own harness is already known: reject a
+			// workspace that could never associate this session before the
+			// Service creates durable state.
+			if err := installed(root, rt); err != nil {
+				return err
+			}
 		} else if installed(root, model.RuntimeClaude) != nil && installed(root, model.RuntimeCodex) != nil {
-			// The Service owns the default pair. Do not guess it, but reject a
-			// workspace with no usable relay hook before creating durable state.
+			// Do not guess the pair, but reject a workspace with no usable relay
+			// hook before creating durable state.
 			return errors.New("bind --create requires an approved relay Stop hook; run pairroom relay install --runtime claude|codex for the intended harness first")
 		}
 		room, err := createNativeRoom(ctx, endpoint, root, o, slot)
@@ -363,18 +402,28 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		}
 		o.room = room
 		created = true
-	}
-	var snapshot struct {
-		Projects []struct{ ID, Root string }
-		Rooms    []struct {
-			ID        string
-			ProjectID string                                 `json:"project_id"`
-			HostMode  model.HostMode                         `json:"host_mode"`
-			Agents    map[model.ActorID]model.AgentSelection `json:"agents"`
+		// The refreshed snapshot must include the just-created Room.
+		if err := management(ctx, endpoint, http.MethodGet, "/api/v1/service", nil, &snapshot); err != nil {
+			return err
 		}
+	} else if o.room == "" {
+		roomID, err := resolveNativeRoom(snapshot, root)
+		if err != nil {
+			return err
+		}
+		o.room = roomID
 	}
-	if err := management(ctx, endpoint, http.MethodGet, "/api/v1/service", nil, &snapshot); err != nil {
-		return err
+	if slot == "" {
+		target, ok := snapshot.findRoom(o.room)
+		if !ok || target.HostMode != model.HostNative {
+			return errors.New("bind requires a native-hosted Room")
+		}
+		inferred, err := resolveSlotForRoom(target, callerRuntime(o))
+		if err != nil {
+			return err
+		}
+		slot = inferred
+		o.slot = string(slot)
 	}
 	var kind model.RuntimeKind
 	var project string
@@ -501,8 +550,155 @@ func quoteShellPath(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
+// bindCommand renders a literal, paste-safe bind command. An unresolved slot is
+// omitted rather than rendered as a guessed Agent number; the accompanying
+// error lists the real candidates.
 func bindCommand(root, endpoint, room string, slot model.ActorID) string {
-	return "pairroom relay bind --room " + room + " --slot " + string(slot) + " --service-file " + quoteShellPath(endpoint) + " --repo " + quoteShellPath(root)
+	command := "pairroom relay bind --room " + room
+	if slot.ValidParticipant() {
+		command += " --slot " + strconv.Itoa(slotNumber(slot))
+	}
+	return command + " --service-file " + quoteShellPath(endpoint) + " --repo " + quoteShellPath(root)
+}
+
+// serviceSnapshot is the read-only Management projection used for Room and
+// slot resolution. Resolution only selects convenience; binding still presents
+// credentials and the hook path still requires the official session identity.
+type serviceSnapshot struct {
+	Projects []serviceProject `json:"projects"`
+	Rooms    []serviceRoom    `json:"rooms"`
+}
+
+type serviceProject struct {
+	ID   string `json:"id"`
+	Root string `json:"root"`
+}
+
+type serviceRoom struct {
+	ID        string                                 `json:"id"`
+	ProjectID string                                 `json:"project_id"`
+	HostMode  model.HostMode                         `json:"host_mode"`
+	Lifecycle string                                 `json:"lifecycle"`
+	Agents    map[model.ActorID]model.AgentSelection `json:"agents"`
+}
+
+// roomLifecycleActive mirrors the Service's active Room lifecycle. The relay
+// client reads the projected JSON only and stays decoupled from the Service
+// package; the Service remains the authority and rejects bindings itself.
+const roomLifecycleActive = "active"
+
+func (s serviceSnapshot) findRoom(id string) (serviceRoom, bool) {
+	for _, room := range s.Rooms {
+		if room.ID == id {
+			return room, true
+		}
+	}
+	return serviceRoom{}, false
+}
+
+// normalizeSlot maps the Agent-number UX onto the durable participant IDs.
+// Slot 1/2 are the primary names; claude/codex remain accepted durable IDs and
+// never denote the runtime.
+func normalizeSlot(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "agent1", "claude":
+		return string(model.ActorClaude)
+	case "2", "agent2", "codex":
+		return string(model.ActorCodex)
+	}
+	return value
+}
+
+func slotNumber(slot model.ActorID) int {
+	if slot == model.ActorClaude {
+		return 1
+	}
+	return 2
+}
+
+// callerRuntime resolves the runtime the caller actually is: an explicit
+// --runtime wins, otherwise the recognized native harness lineage.
+func callerRuntime(o options) model.RuntimeKind {
+	if o.kind != "" {
+		return model.RuntimeKind(o.kind)
+	}
+	if _, name, ok := harnessAncestor(); ok {
+		return harnessRuntimes[name]
+	}
+	return ""
+}
+
+// resolveNativeRoom selects the unique active native Room of the canonical
+// workspace. Archived Rooms are never candidates: the Service rejects their
+// bindings, so counting them would either block a workspace that has exactly
+// one usable Room or offer an unusable one.
+func resolveNativeRoom(snapshot serviceSnapshot, root string) (string, error) {
+	roots := make(map[string]string, len(snapshot.Projects))
+	for _, p := range snapshot.Projects {
+		roots[p.ID] = p.Root
+	}
+	var ids []string
+	for _, room := range snapshot.Rooms {
+		if room.HostMode == model.HostNative && room.Lifecycle == roomLifecycleActive && roots[room.ProjectID] == root {
+			ids = append(ids, room.ID)
+		}
+	}
+	switch len(ids) {
+	case 1:
+		if !safePart(ids[0]) {
+			return "", errors.New("Service returned an unusable Room ID")
+		}
+		return ids[0], nil
+	case 0:
+		return "", errors.New("no active native Room exists for this workspace; create one with pairroom relay bind --create, or pass --room")
+	}
+	sort.Strings(ids)
+	return "", fmt.Errorf("multiple active native Rooms match this workspace; pass --room explicitly: %s", strings.Join(ids, ", "))
+}
+
+// resolveSlotForRoom infers the caller's slot only when exactly one slot of
+// the Room runs the caller's runtime; every other case fails with candidates.
+func resolveSlotForRoom(room serviceRoom, rt model.RuntimeKind) (model.ActorID, error) {
+	if rt == "" {
+		return "", errors.New("bind requires --slot 1|2 (Agent 1/2) outside a recognized native session")
+	}
+	order := []model.ActorID{model.ActorClaude, model.ActorCodex}
+	var matches []model.ActorID
+	for _, slot := range order {
+		if sel, ok := room.Agents[slot]; ok && sel.Runtime == rt {
+			matches = append(matches, slot)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	desc := make([]string, 0, len(order))
+	for _, slot := range order {
+		if sel, ok := room.Agents[slot]; ok {
+			desc = append(desc, fmt.Sprintf("--slot %d = %s runtime", slotNumber(slot), sel.Runtime))
+		}
+	}
+	return "", fmt.Errorf("the %q harness does not match exactly one slot of Room %s (%s); pass --slot 1|2", rt, room.ID, strings.Join(desc, ", "))
+}
+
+// errCreateSlotUnresolved is returned when a creator slot cannot be known
+// before the Room exists. It never authorizes a guess.
+var errCreateSlotUnresolved = errors.New("bind --create requires --slot 1|2 unless run inside a recognized claude/codex session (or with --runtime claude|codex)")
+
+// inferCreateSlot picks the slot that an explicit runtime selection occupies:
+// the caller's runtime takes the slot whose default runtime matches. It is only
+// used when `createAgents` will send explicit selections, because those are
+// placed by slot. When the Service owns the default pair the slot is resolved
+// after creation against the Room's real selections instead.
+func inferCreateSlot(o options) (model.ActorID, error) {
+	rt := callerRuntime(o)
+	switch rt {
+	case model.RuntimeClaude:
+		return model.ActorClaude, nil
+	case model.RuntimeCodex:
+		return model.ActorCodex, nil
+	}
+	return "", errCreateSlotUnresolved
 }
 
 // resolveSlotDefaults fills omitted --room/--slot for per-slot foreground
@@ -574,9 +770,7 @@ func createNativeRoom(ctx context.Context, endpoint relay.Endpoint, root string,
 	if err != nil {
 		return "", err
 	}
-	var snapshot struct {
-		Projects []struct{ ID, Root string }
-	}
+	var snapshot serviceSnapshot
 	if err := management(ctx, endpoint, http.MethodGet, "/api/v1/service", nil, &snapshot); err != nil {
 		return "", err
 	}

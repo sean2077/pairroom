@@ -78,4 +78,4 @@ PairRoom 仍在演进。[Changelog](CHANGELOG.md) 记录发布历史，当前行
 
 ## Native 宿主模式（实验性）
 
-创建 Room 时选择 **Native**，双方保留在自己的 Claude Code / Codex 原生会话中；PairRoom 只负责绑定、持久化中继和审计，不启动或中断原生进程。安装并批准项目级 Stop hooks，分别绑定槽位，再在各自回复中返回一次性 nonce 完成关联。[设置与恢复命令](docs/CLI_REFERENCE.md#native-relay-commands) 说明 park 等待窗口、前台取件与显式 Retry。Provider、模型、effort 和权限仍由原生会话控制。真实认证后多轮互通仍是发布验收门槛，合成 hook 测试不代表模型已接受消息。
+创建 Room 时选择 **Native**，双方保留在自己的 Claude Code / Codex 原生会话中；PairRoom 只负责绑定、持久化中继和审计，不启动或中断原生进程。安装并批准项目级 Stop hooks，分别绑定槽位，再在各自回复中返回一次性 nonce 完成关联。`pairroom-relay` 技能位于 `skills/`，可经技能安装器分发（`npx skills add sean2077/pairroom`），`relay install` 也写入同一份规范文件；加载后 `/pairroom-relay <topic>` 一步创建 Room 并绑定当前会话、返回对方的加入命令，`pairroom relay bind` 在可识别的原生会话内零参数完成加入。[设置与恢复命令](docs/CLI_REFERENCE.md#native-relay-commands) 说明 park 等待窗口、前台取件与显式 Retry。Provider、模型、effort 和权限仍由原生会话控制。真实认证后多轮互通仍是发布验收门槛，合成 hook 测试不代表模型已接受消息。
