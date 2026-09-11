@@ -1,11 +1,29 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/sean2077/pairroom/internal/daemon"
 	"github.com/sean2077/pairroom/internal/version"
 )
+
+func TestConfigureProcessLoggingExemptsRelayStdout(t *testing.T) {
+	t.Setenv(daemon.LogFileEnvironment, filepath.Join(t.TempDir(), "relay-hijack.log"))
+	stdout, stderr := os.Stdout, os.Stderr
+	cleanup, err := configureProcessLogging([]string{"relay", "wait", "--timeout", "1"})
+	if err != nil {
+		t.Fatalf("configureProcessLogging(relay): %v", err)
+	}
+	if os.Stdout != stdout || os.Stderr != stderr {
+		t.Fatal("relay subcommand must keep the original stdout/stderr for harness handoff")
+	}
+	if err := cleanup(); err != nil {
+		t.Fatalf("relay cleanup: %v", err)
+	}
+}
 
 func TestSubcommandHelpReturnsSuccess(t *testing.T) {
 	for _, args := range [][]string{{"daemon", "--help"}, {"daemon", "install", "--help"}, {"daemon", "logs", "--help"}, {"service", "--help"}, {"serve", "--help"}, {"doctor", "--help"}, {"providers", "--help"}, {"verify", "--help"}, {"backup", "--help"}, {"restore", "--help"}, {"diagnostics", "--help"}, {"protocol", "--help"}, {"help"}, {"--help"}} {

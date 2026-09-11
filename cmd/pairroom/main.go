@@ -36,7 +36,7 @@ import (
 )
 
 func main() {
-	cleanupLogging, err := daemon.ConfigureProcessLoggingFromEnvironment()
+	cleanupLogging, err := configureProcessLogging(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "pairroom: configure daemon logging:", err)
 		os.Exit(1)
@@ -52,6 +52,18 @@ func main() {
 	if runErr != nil || loggingErr != nil {
 		os.Exit(1)
 	}
+}
+
+// configureProcessLogging applies environment-driven log redirection for every
+// subcommand except `relay`. Relay stdout is a machine-readable handoff
+// channel consumed by native harnesses (Stop-hook decision JSON, wait
+// envelopes); a PAIRROOM_LOG_FILE inherited from the harness environment must
+// never silently swallow hook decisions or deliveries into a log pipe.
+func configureProcessLogging(args []string) (func() error, error) {
+	if len(args) > 0 && args[0] == "relay" {
+		return func() error { return nil }, nil
+	}
+	return daemon.ConfigureProcessLoggingFromEnvironment()
 }
 
 func run(args []string) error {
