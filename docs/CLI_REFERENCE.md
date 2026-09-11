@@ -159,16 +159,16 @@ The Management **Settings → Diagnostics** section offers the same live check w
 
 ## Native relay commands
 
-Create a Room with host mode **Native** in Management, or let the first session create it: `pairroom relay bind --create --slot <slot>` registers the Project when missing, creates the native Room through the same validated Management path, binds that session, and prints the peer's `peer_join` command. Keep `pairroom` on the native harness's PATH. In that Project's worktree, install and then approve the exact hook in each native harness (Codex: `/hooks`; Claude: project hook consent). Installation is explicit and preserves unrelated settings.
+Create a Room with host mode **Native** in Management, or let the first session create it: `pairroom relay bind --create` registers the Project when missing, creates the native Room through the same validated Management path, binds that session, and prints the peer's `peer_join` command. Keep `pairroom` on the native harness's PATH. In that Project's worktree, install and then approve the exact hook in each native harness (Codex: `/hooks`; Claude: project hook consent). Installation is explicit and preserves unrelated settings. The `pairroom-relay` skill ships in `assets/skills/pairroom-relay/` and is installable through skill installers (`npx skills add sean2077/pairroom`); `relay install` writes the same canonical file, and a freshness test keeps the embedded projection identical. With the skill loaded, `/pairroom-relay <topic>` runs the create flow.
 
 ```bash
-pairroom relay install --runtime claude
+pairroom relay install --runtime claude          # inside a recognized session, --runtime is inferred
 pairroom relay install --runtime codex
-pairroom relay bind --create --slot claude          # one-shot: create the native Room and bind this session
-pairroom relay bind --room <room-id> --slot codex   # peer runs the printed peer_join command
+pairroom relay bind --create --name "<topic>"    # creator: project + native Room + bind; prints peer_join
+pairroom relay bind                              # peer: zero-flag inside a recognized session
 ```
 
-Run each bind from its intended native session, then include the returned one-time `bind_nonce` verbatim in that session's visible reply. The Stop hook associates the official session ID. Slots `claude`/`codex` mean Agent 1/2 regardless of the selected Runtime; use the slot-specific commands shown in the Room. Bind stdout contains no long-lived secret. No installed Stop hook means bind is rejected. Native configuration selections are display-only, and PairRoom never starts or interrupts either process.
+Run each bind from its intended native session, then include the returned one-time `bind_nonce` verbatim in that session's visible reply. The Stop hook associates the official session ID. Slots are Agent 1 / Agent 2: `--slot 1|2` is the primary form and the durable IDs `claude`/`codex` remain accepted; slot names never denote the selected Runtime. Omitted `--room` resolves the workspace's sole native Room; omitted `--slot` resolves only when exactly one Room slot runs the caller's harness runtime; anything ambiguous fails with the candidate list instead of guessing. Bind stdout contains no long-lived secret. No installed Stop hook means bind is rejected. Native configuration selections are display-only, and PairRoom never starts or interrupts either process.
 
 A pending binding already occupies its slot. Repeating ordinary bind, including `--continue` before association, never returns its nonce again. Finish in the original session using the nonce it already received. If that output or the bind confirmation was lost, use `bind --replace` explicitly to revoke the pending generation and obtain a new nonce; this cannot stop any native work.
 
@@ -176,9 +176,10 @@ All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Foreg
 
 | Subcommand | Meaning |
 |---|---|
+| `bind` (zero-flag) | Inside a recognized native session: resolve the workspace's sole native Room and the slot whose runtime matches the caller's harness; ambiguity fails with candidates |
 | `bind --continue --session-id <id>` | Resume the same associated session; a different session is rejected |
 | `bind --replace` | Explicitly revoke an occupied generation and require a new nonce association; cannot stop old native work |
-| `bind --create [--name <display-name>] [--runtime claude\|codex] [--peer-runtime claude\|codex]` | Without `--room`: register the workspace Project when missing, create a native Room through the same validated Management path the browser uses, bind this session, and print the peer's `peer_join` command. Omitted runtimes keep the Service default pair; explicit runtimes stay empty-field selections that inherit the native configuration |
+| `bind --create [--name <display-name>] [--runtime claude\|codex] [--peer-runtime claude\|codex]` | Without `--room`: register the workspace Project when missing, create a native Room through the same validated Management path the browser uses, bind this session, and print the peer's `peer_join` command. Without `--slot`, the creator's slot is inferred from the recognized harness (its runtime occupies the default-matching slot). Omitted runtimes keep the Service default pair; explicit runtimes stay empty-field selections that inherit the native configuration |
 | `send --id <client-id> --text <body>` | Explicit message to peer; requires the completed association like every collection call; repeat the same ID after an uncertain response, never deduplicate by body |
 | `send --to @user --attach <image>` | Human escalation with optional repeatable image paths; stdin supplies text when `--text` is absent |
 | `wait --timeout 30` | Foreground collection for an associated session; stdout precedes ack; timeout leaves work queued |

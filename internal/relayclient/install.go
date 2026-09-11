@@ -1,6 +1,7 @@
 package relayclient
 
 import (
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -140,21 +141,13 @@ func editHooks(root string, kind model.RuntimeKind, remove bool) error {
 	return relay.AtomicJSON(path, config)
 }
 
-const skillContent = `---
-name: pairroom-relay
-description: Bind this native Claude Code or Codex session to a PairRoom Native slot and relay discussions through approved Stop hooks.
----
-
-# PairRoom Native relay
-
-Run ` + "`pairroom relay bind --room <id> --slot <claude|codex>`" + ` in the Room's project. Slot IDs are not runtime names. If the Room does not exist yet, ` + "`pairroom relay bind --create --slot <claude|codex>`" + ` registers the project when missing, creates the native Room through the validated Management path, binds this session, and prints the peer's join command. If missing, install the reported runtime's project hooks and have the user approve them; never bypass native trust. Echo the returned one-time nonce in your visible reply once. Keep the returned bootstrap/collaboration instructions as this session's protocol. After binding, foreground commands (` + "`send`" + `, ` + "`wait`" + `, ` + "`status`" + `, ` + "`reconcile`" + `, ` + "`peer`" + `, ` + "`park`" + `, ` + "`nudge`" + `) accept omitted ` + "`--room`" + `/` + "`--slot`" + `; a recognized harness must match the recorded lineage even for a sole binding; an unrecognized caller may use the sole workspace binding. Missing or ambiguous matches require explicit flags. If bind --create reports a created Room plus a recovery command, finish setup and run that command instead of creating another Room. Credentials are read by the CLI; never read or print the credential file.
-
-Stop publishes your complete final visible reply. Use the exact peer handle to continue a discussion, only @user to escalate, or neither to end. When already using ` + "`relay send`" + ` this turn, omit the peer handle in the final reply unless intentionally publishing a second authoritative reply; the two paths are not semantically deduplicated. Explicit send defaults to the peer even if its body has other mentions. Only explicit send supports attachments.
-
-Park can keep the session busy for 30 seconds. After timeout, eight actual-message continuation blocks, or disabling park, messages remain queued; use ` + "`relay wait`" + ` or ask the user to nudge. No empty rearm loop. After peer-addressed work, inspect ` + "`relay status`" + ` at your next opportunity; this cannot guarantee detection of a crash before publication state existed.
-
-Use ` + "`relay peer`" + ` for optional peer session/transcript references; absence does not block relay. Never treat handed_off as native model acceptance. For unknown delivery inspect the Room log and workspace before explicit Retry. For unknown publication use ` + "`relay reconcile`" + `; never allocate a new ID to evade uncertainty. Replacement cannot stop native work. Provider/model/effort/permissions are controlled by the native harness, not this Room.
-`
+// The canonical public skill lives at assets/skills/pairroom-relay/SKILL.md,
+// distributable through skill installers (npx skills, plugin manifest). This
+// projection is embedded for `relay install`; a freshness test keeps the two
+// byte-identical.
+//
+//go:embed skill/pairroom-relay/SKILL.md
+var skillContent string
 
 func installSkill(kind model.RuntimeKind) error {
 	home, err := os.UserHomeDir()
@@ -173,7 +166,7 @@ func installSkill(kind model.RuntimeKind) error {
 		return err
 	}
 	path := filepath.Join(dir, "SKILL.md")
-	if data, err := os.ReadFile(path); err == nil && !strings.Contains(string(data), "# PairRoom Native relay") {
+	if data, err := os.ReadFile(path); err == nil && !strings.Contains(string(data), "# pairroom-relay") {
 		return errors.New("an unrelated pairroom-relay skill exists; refusing to overwrite")
 	}
 	return atomicText(path, skillContent, 0600)
