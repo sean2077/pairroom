@@ -371,6 +371,9 @@ func bind(ctx context.Context, root string, o options, out io.Writer) error {
 	var cred credentials
 	prior := readPrivate(filepath.Join(dir, "state.json"), &s)
 	if prior == nil && !o.replace {
+		if s.SessionID == "" {
+			return errors.New("slot has a pending binding; finish association with the nonce already returned to its original session, or use bind --replace explicitly to revoke it and start again")
+		}
 		if err := readPrivate(filepath.Join(dir, "credentials"), &cred); err != nil {
 			return err
 		}

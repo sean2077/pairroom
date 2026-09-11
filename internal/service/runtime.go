@@ -237,6 +237,22 @@ func (m *RuntimeManager) RequestActivation(roomID string) (RuntimeStatus, error)
 	return m.statusLocked(roomID, entry), nil
 }
 
+// runtimeForCompletion returns only an existing active runtime, including
+// while shutdown drains it. Receipts must never request a new activation or
+// restart a suspended Room merely to acknowledge old work.
+func (m *RuntimeManager) runtimeForCompletion(roomID string) (RoomRuntime, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.registry.Healthy(); err != nil {
+		return nil, err
+	}
+	entry := m.entries[roomID]
+	if entry == nil || entry.phase != RuntimeActive || entry.runtime == nil {
+		return nil, ErrRuntimeNotReady
+	}
+	return entry.runtime, nil
+}
+
 func (m *RuntimeManager) Activate(ctx context.Context, roomID string) (RoomRuntime, RuntimeStatus, error) {
 	if _, err := m.RequestActivation(roomID); err != nil {
 		return nil, RuntimeStatus{}, err

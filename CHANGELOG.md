@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Reject repeated bind attempts for pending Native slots without reissuing their nonce; recovery requires explicit replacement. Allow valid receipts for already claimed Native messages to settle during runtime draining without admitting new work or reactivating suspended Rooms.
 - Add experimental Room-level Native hosting for user-owned Claude Code/Codex sessions: consented project Stop hooks, nonce association, per-slot durable FIFO, public binding/activity UI, and a relay CLI. No adapter spawning or native Interrupt control; provider/model/effort/permissions remain display-only.
 - Add atomic sequence/pending publication recovery, original-key reconciliation, durable claim before stdout and explicit acknowledgement afterward. Unknown delivery requires explicit Retry; two publication paths intentionally remain independently auditable.
 - Read Store 10/provisioning 3 unchanged and create all new Rooms with Store 11/provisioning 4 plus immutable host mode. Keep Registry checkpoint schema 2 byte shape unchanged. Preserve embedded protocol v6 and add bounded native v7 bootstrap.

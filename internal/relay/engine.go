@@ -114,10 +114,22 @@ func reportKey(id string, generation, seq uint64) string {
 }
 
 func (e *Engine) healthy() error {
+	if err := e.available(); err != nil {
+		return err
+	}
+	if e.draining {
+		return ErrClosed
+	}
+	return nil
+}
+
+// available permits completion of admitted work while draining, but never
+// permits effects after closure or an uncertain store write.
+func (e *Engine) available() error {
 	if e.fatal != nil {
 		return fmt.Errorf("native relay fail-closed: %w", e.fatal)
 	}
-	if e.closed || e.draining {
+	if e.closed {
 		return ErrClosed
 	}
 	return nil
@@ -277,6 +289,13 @@ func (e *Engine) Bind(slot model.ActorID, req BindRequest) (Binding, error) {
 }
 func (e *Engine) auth(a Auth, pending bool) (bindingFact, error) {
 	if err := e.healthy(); err != nil {
+		return bindingFact{}, err
+	}
+	return e.authenticate(a, pending)
+}
+
+func (e *Engine) authenticate(a Auth, pending bool) (bindingFact, error) {
+	if err := e.available(); err != nil {
 		return bindingFact{}, err
 	}
 	b, ok := e.bindings[a.Slot]
@@ -640,7 +659,8 @@ func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
 func (e *Engine) Ack(a Auth, id, receipt string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if _, err := e.auth(a, false); err != nil {
+	// Draining blocks new work, not receipts for already released envelopes.
+	if _, err := e.authenticate(a, false); err != nil {
 		return err
 	}
 	if err := e.reapLocked(false); err != nil {

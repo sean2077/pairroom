@@ -37,7 +37,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
 
         def cli(args, payload=None):
             result = subprocess.run([str(binary), 'relay', *args, '--repo', str(repo)],
-                                    input=None if payload is None else json.dumps(payload),
+                                    input=payload if isinstance(payload, str) else None if payload is None else json.dumps(payload),
                                     text=True, capture_output=True, env=env, cwd=repo, timeout=45)
             assert result.returncode == 0, f'relay {args[0]} failed: {result.stderr[:1000]}'
             return result.stdout
@@ -121,7 +121,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 print('Native browser: real CLI killed after durable claim, unknown + explicit Retry dialog', flush=True)
                 # A pipe with no reader blocks the large stdout write. Killing
                 # there must never acknowledge delivery or automatically replay.
-                raw = await asyncio.to_thread(cli,['send','--room',room_id,'--slot','codex','--id','kill-fixture','--text','large reply\n'+('x'*(96<<10))])
+                raw = await asyncio.to_thread(cli,['send','--room',room_id,'--slot','codex','--id','kill-fixture'],'large reply\n'+('x'*(96<<10)))
                 interrupted = json.loads(raw)
                 waiting = subprocess.Popen([str(binary),'relay','wait','--repo',str(repo),'--room',room_id,'--slot','claude','--timeout','1'],
                                            env=env,cwd=repo,stdout=subprocess.PIPE,stderr=subprocess.PIPE)

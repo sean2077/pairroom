@@ -116,7 +116,20 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 		nativeResult(w, nil, relay.ErrAuth)
 		return
 	}
-	runtime, err := s.nativeRuntime(r.Context(), durable.ID)
+	var runtime *nativeHostRuntime
+	if r.PathValue("action") == "ack" {
+		var active RoomRuntime
+		active, err = s.runtimes.runtimeForCompletion(durable.ID)
+		if err == nil {
+			var ok bool
+			runtime, ok = active.(*nativeHostRuntime)
+			if !ok {
+				err = errors.New("Room is not a native relay runtime")
+			}
+		}
+	} else {
+		runtime, err = s.nativeRuntime(r.Context(), durable.ID)
+	}
 	if err != nil {
 		s.writeError(w, err)
 		return
