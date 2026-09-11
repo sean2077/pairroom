@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Foreground relay commands resolve omitted `--room`/`--slot` from the workspace's sole binding, or from the unique native-harness process lineage recorded at bind time, failing with the candidate list when ambiguity remains; `relay install` infers `--runtime` inside a recognized native session. Lineage is a default selector only, never authentication material.
+- Add `pairroom relay bind --create`: register the workspace Project when missing, create a native Room through the same validated Management path the browser uses, bind the calling session, and print the peer join command. Omitted runtimes keep the Service default pair; explicit `--runtime`/`--peer-runtime` stay empty-field selections that inherit the native configuration.
 - Reject repeated bind attempts for pending Native slots without reissuing their nonce; recovery requires explicit replacement. Allow valid receipts for already claimed Native messages to settle during runtime draining without admitting new work or reactivating suspended Rooms.
 - Add experimental Room-level Native hosting for user-owned Claude Code/Codex sessions: consented project Stop hooks, nonce association, per-slot durable FIFO, public binding/activity UI, and a relay CLI. No adapter spawning or native Interrupt control; provider/model/effort/permissions remain display-only.
 - Add atomic sequence/pending publication recovery, original-key reconciliation, durable claim before stdout and explicit acknowledgement afterward. Unknown delivery requires explicit Retry; two publication paths intentionally remain independently auditable.

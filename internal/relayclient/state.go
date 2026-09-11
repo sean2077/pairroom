@@ -41,6 +41,8 @@ type State struct {
 	LastConfirmedSeq uint64            `json:"last_confirmed_seq"`
 	Pending          *Pending          `json:"pending,omitempty"`
 	Blocks           int               `json:"blocks"`
+	HarnessPID       int               `json:"harness_pid,omitempty"`
+	HarnessName      string            `json:"harness_name,omitempty"`
 }
 
 type credentials struct {
