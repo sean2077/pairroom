@@ -183,7 +183,7 @@ body.workbench-management .room-tab.active { background: var(--wb-canvas); borde
 body.workbench-management .room-tab.active::after { display: none; }
 body.workbench-management .room-tab-title { font-size: 12px; font-weight: 500; }
 body.workbench-management .settings-nav { padding: 4px; background: transparent; border-color: transparent; }
-body.workbench-management .settings-nav button { min-height: 40px; padding: 9px 12px; font-size: 14px; font-weight: 500; }
+body.workbench-management .settings-nav button { min-height: 44px; padding: 9px 12px; font-size: 14px; font-weight: 500; }
 body.workbench-management .settings-nav button.active { background: var(--wb-hover); color: var(--wb-ink); font-weight: 600; box-shadow: none; }
 body.workbench-management .setting-copy strong { font-size: 13px; font-weight: 550; }
 body.workbench-management :is(.setting-copy p, .field-help) { font-size: 12px; line-height: 1.5; }

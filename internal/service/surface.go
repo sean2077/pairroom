@@ -31,6 +31,8 @@ var surfaceStaticFiles = map[string]struct{}{
 	"/_pairroom/catalogs.js":    {},
 	"/_pairroom/i18n.js":        {},
 	"/_pairroom/theme.js":       {},
+	"/_pairroom/workbench.css":  {},
+	"/_pairroom/workbench.js":   {},
 }
 
 func isRoomSurfacePath(p string) bool {

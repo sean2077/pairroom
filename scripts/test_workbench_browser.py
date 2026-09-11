@@ -98,7 +98,9 @@ async def verify(browser_path: str | None, artifacts: Path) -> None:
                 if surface == 'management':
                     await page.evaluate("location.hash='#/settings'")
                     await expect(page.locator('.settings-nav')).to_be_visible()
-                    assert await page.locator('.settings-nav button').first.evaluate('el=>parseFloat(getComputedStyle(el).fontSize)') >= 14
+                    sizes = await page.locator('.settings-nav button').evaluate_all(
+                        'nodes=>nodes.map(el=>[parseFloat(getComputedStyle(el).fontSize), el.getBoundingClientRect().height])')
+                    assert sizes and all(font >= 14 and height >= 44 for font, height in sizes), sizes
                     await page.screenshot(path=str(artifacts / 'settings-dark-zh-CN.png'))
                 else:
                     # Focused controls move, rather than clone, at the breakpoint.
