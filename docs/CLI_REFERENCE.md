@@ -17,7 +17,8 @@ New standalone Rooms support `pairroom serve --collaboration default` (the defau
 | `pairroom backup` | Create a verified room-data backup |
 | `pairroom restore` | Restore and verify a room-data backup |
 | `pairroom diagnostics` | Generate a redacted diagnostics bundle |
-| `pairroom protocol` | Print the versioned Agent collaboration contract |
+| `pairroom relay` | Install approved project hooks, bind user-owned sessions, and publish/collect native relay messages |
+| `pairroom protocol` | Print embedded v6 or `--host-mode native` v7 collaboration contracts |
 | `pairroom version` | Print the build version |
 
 Start every command with:
@@ -75,10 +76,8 @@ Backup and Restore target one Room, not a multi-Room Service root. Backup and di
 The following names are extracted from `cmd/pairroom/*.go`. Use them to find omissions; they do not mean every flag applies to every command.
 
 <!-- generated:flags -->
-<details>
-<summary>Show current flags</summary>
-
 - `--actor`
+- `--attach`
 - `--auto-start`
 - `--cc-switch-db`
 - `--claude-command`
@@ -97,13 +96,19 @@ The following names are extracted from `cmd/pairroom/*.go`. Use them to find omi
 - `--collaboration`
 - `--collaboration-instructions`
 - `--config`
+- `--continue`
 - `--daemon-control-file`
 - `--data-dir`
 - `--data-root`
 - `--database`
+- `--discard`
+- `--enabled`
+- `--f`
 - `--follow`
 - `--force`
 - `--grok-command`
+- `--host-mode`
+- `--id`
 - `--idle-timeout`
 - `--input`
 - `--json`
@@ -115,14 +120,23 @@ The following names are extracted from `cmd/pairroom/*.go`. Use them to find omi
 - `--name`
 - `--no-browser`
 - `--output`
+- `--purge-hooks`
 - `--recover-stale-lock`
+- `--replace`
 - `--repo`
+- `--resend`
+- `--room`
+- `--runtime`
 - `--runtime-limit`
+- `--service-file`
+- `--session-id`
 - `--shutdown-timeout`
+- `--slot`
 - `--stall-warning-seconds`
+- `--text`
+- `--timeout`
+- `--to`
 - `--token`
-
-</details>
 <!-- /generated:flags -->
 
 ## Installation versus runtime availability
@@ -140,3 +154,35 @@ pairroom doctor --config /absolute/path/pairroom.json --live --json
 The Management **Settings → Diagnostics** section offers the same live check with explicit confirmation and cancellation, plus Service storage, Registry, Project, capacity, and three-CLI environment checks. Its default pair follows the saved Service default Agent pair profile; selecting a Room uses that Room's immutable selections. CLI `doctor` instead uses the supplied configuration file, not Service-scoped profiles. Neither entry point resumes an existing Room session. Mock results are explicitly unverified.
 
 **Download safe report** exports only check codes/statuses, platform, numeric versions, timestamps, and timings. It excludes local paths, Room names/IDs, Provider details, native session IDs, command arguments, credentials, and raw process/model output. This report does not replace `pairroom diagnostics`, the existing redacted Room archive bundle.
+
+## Native relay commands
+
+Create a Room with host mode **Native** in Management first. Keep `pairroom` on the native harness's PATH. In that Project's worktree, install and then approve the exact hook in each native harness (Codex: `/hooks`; Claude: project hook consent). Installation is explicit and preserves unrelated settings.
+
+```bash
+pairroom relay install --runtime claude
+pairroom relay install --runtime codex
+pairroom relay bind --room <room-id> --slot claude
+pairroom relay bind --room <room-id> --slot codex
+```
+
+Run each bind from its intended native session, then include the returned one-time `bind_nonce` verbatim in that session's visible reply. The Stop hook associates the official session ID. Slots `claude`/`codex` mean Agent 1/2 regardless of the selected Runtime; use the slot-specific commands shown in the Room. Bind stdout contains no long-lived secret. No installed Stop hook means bind is rejected. Native configuration selections are display-only, and PairRoom never starts or interrupts either process.
+
+All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. For a custom Service root, give bind `--service-file <root>/relay-endpoint.json`; this is a **file path**, never a token. Later commands follow the saved path and re-read the endpoint after Service restart.
+
+| Subcommand | Meaning |
+|---|---|
+| `bind --continue --session-id <id>` | Resume the same associated session; a different session is rejected |
+| `bind --replace` | Explicitly revoke an occupied generation and require a new nonce association; cannot stop old native work |
+| `send --id <client-id> --text <body>` | Explicit message to peer; requires the completed association like every collection call; repeat the same ID after an uncertain response, never deduplicate by body |
+| `send --to @user --attach <image>` | Human escalation with optional repeatable image paths; stdin supplies text when `--text` is absent |
+| `wait --timeout 30` | Foreground collection for an associated session; stdout precedes ack; timeout leaves work queued |
+| `status` / `peer` | Public delivery/binding state and original publication reconciliation / optional peer session references |
+| `park --enabled=false` | Disable hook parking without removing association; foreground wait remains available |
+| `nudge` | Print collection guidance only; no promise of native input injection |
+| `reconcile` | Query pending publication: clear accepted, supplement definite absence with same sequence, otherwise retain unknown |
+| `reconcile --resend` / `--discard` | Explicit decision on an unknown pending publication; resend retains original key, discard retains consumed sequence |
+| `unbind --purge-hooks` | Revoke binding, remove slot files and remove only owned hooks when no other local slot uses them |
+| `hook --runtime <kind>` | Official hook JSON on stdin; publishes Stop first, then bounded park; not a user-authored identity shortcut |
+
+Park defaults to 30 seconds and at most eight consecutive message-bearing blocks. Outside this window, use foreground wait or a native human nudge. Unknown delivery must be inspected before the Room's explicit Retry. Same-turn send plus a peer-directed final reply deliberately creates two publications; omit that handle after send unless the second full reply is intended.

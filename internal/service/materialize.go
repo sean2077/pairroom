@@ -49,6 +49,10 @@ func (r *Registry) MaterializeBinding(ctx context.Context, roomID string, actor 
 		r.mu.RUnlock()
 		return Room{}, ErrRoomNotFound
 	}
+	if room.HostMode == model.HostNative {
+		r.mu.RUnlock()
+		return Room{}, errors.New("native Room association requires the approved hook nonce channel")
+	}
 	if room.Archived() {
 		r.mu.RUnlock()
 		return Room{}, errors.New("archived Room cannot materialize a binding")
@@ -68,6 +72,10 @@ func (r *Registry) MaterializeBinding(ctx context.Context, roomID string, actor 
 	if binding.Mode != BindingNew {
 		r.mu.RUnlock()
 		return Room{}, fmt.Errorf("%s binding is not a pending new binding", actor)
+	}
+	if err := r.checkNativeIdentityLocked(room, actor, sessionID); err != nil {
+		r.mu.RUnlock()
+		return Room{}, err
 	}
 	key := BindingKey{Agent: actor, SessionID: sessionID}
 	if owner, owned := r.bindingOwners[key.String()]; owned && owner != room.ID {

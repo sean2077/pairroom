@@ -1051,7 +1051,7 @@ func TestRegistryRequiresCurrentProvisioningAndExplicitSelections(t *testing.T) 
 	}{
 		{"schema-1", func(p *roomProvisionedPayload) { p.Schema = 1 }, "unsupported room service schema"},
 		{"schema-2", func(p *roomProvisionedPayload) { p.Schema = 2 }, "unsupported room service schema"},
-		{"future-schema", func(p *roomProvisionedPayload) { p.Schema = 4 }, "unsupported room service schema"},
+		{"future-schema", func(p *roomProvisionedPayload) { p.Schema = 5 }, "unsupported room service schema"},
 		{"missing-collaboration", func(p *roomProvisionedPayload) { p.Collaboration = nil }, "requires collaboration"},
 		{"missing-agents", func(p *roomProvisionedPayload) { p.Agents = nil }, "Agent selections"},
 		{"missing-agent-2", func(p *roomProvisionedPayload) { delete(p.Agents, model.ActorCodex) }, "Agent selections"},

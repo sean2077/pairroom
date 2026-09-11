@@ -106,10 +106,16 @@ def check_links(path: Path, root: Path) -> list[str]:
 
 
 def extract_flags() -> list[str]:
-    pattern = re.compile(r'\.(?:String|Bool|Int|Int64|Uint|Duration|Float64|StringVar|BoolVar|IntVar|DurationVar)\(\s*"([^"]+)"')
+    direct = re.compile(r'\.(?:String|Bool|Int|Int64|Uint|Duration|Float64)\(\s*"([^"]+)"')
+    bound = re.compile(r'\.(?:StringVar|BoolVar|IntVar|Int64Var|UintVar|DurationVar|Float64Var|Var)\(\s*[^,]+,\s*"([^"]+)"')
     values: set[str] = set()
-    for source in (ROOT / "cmd" / "pairroom").glob("*.go"):
-        values.update(pattern.findall(source.read_text(encoding="utf-8")))
+    sources = list((ROOT / "cmd" / "pairroom").glob("*.go")) + [ROOT / "internal" / "relayclient" / "cli.go"]
+    for source in sources:
+        if source.name.endswith("_test.go") or not source.exists():
+            continue
+        text = source.read_text(encoding="utf-8")
+        values.update(direct.findall(text))
+        values.update(bound.findall(text))
     return sorted(values)
 
 
@@ -191,7 +197,7 @@ def main() -> None:
 
     main_source = (ROOT / "cmd" / "pairroom" / "main.go").read_text(encoding="utf-8")
     cli_doc = (ROOT / "docs" / "CLI_REFERENCE.md").read_text(encoding="utf-8")
-    for command in ("daemon", "service", "serve", "doctor", "providers", "verify", "backup", "restore", "diagnostics", "protocol", "version"):
+    for command in ("daemon", "service", "serve", "doctor", "providers", "verify", "backup", "restore", "diagnostics", "protocol", "relay", "version"):
         if f'"{command}"' not in main_source:
             error(f"expected top-level command missing from source: {command}")
         if f'`pairroom {command}`' not in cli_doc:

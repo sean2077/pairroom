@@ -46,11 +46,11 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Test native configuration, Event Log, fan-out, and daemon behavior
-        run: go test -count=1 ./internal/config ./internal/store ./internal/bus ./internal/daemon
+        run: go test -count=1 ./internal/config ./internal/store ./internal/bus ./internal/daemon ./internal/relay ./internal/relayclient
       - name: Test per-process environment and credential boundaries
         run: go test -count=1 ./internal/agent -run 'Test(Redactor|RuntimeEnvironment)'
       - name: Test Agent pair profile persistence and API boundaries
-        run: go test -count=1 ./internal/service -run 'Test(AgentPairProfile|ManagementAgentPairProfile)'
+        run: go test -count=1 ./internal/service -run 'Test(AgentPairProfile|ManagementAgentPairProfile|Native)'
 
   browser:
     name: Room and Management browser behavior and layout
@@ -73,6 +73,8 @@ jobs:
         run: '"${RUNNER_TEMP}/browser-venv/bin/python" scripts/test_management_browser.py --artifacts "${RUNNER_TEMP}/browser-results/management"'
       - name: Verify authenticated Service, real SSE, and restart recovery
         run: '"${RUNNER_TEMP}/browser-venv/bin/python" scripts/test_service_browser.py --artifacts "${RUNNER_TEMP}/browser-results/service"'
+      - name: Verify Native host real transport, hook fixtures, and recovery
+        run: '"${RUNNER_TEMP}/browser-venv/bin/python" scripts/test_native_host_browser.py --artifacts "${RUNNER_TEMP}/browser-results/native-host"'
       - name: Verify native Settings UI with an IPC fixture
         run: '"${RUNNER_TEMP}/browser-venv/bin/python" scripts/test_desktop_settings_browser.py --artifacts "${RUNNER_TEMP}/browser-results/desktop-settings"'
       - name: Upload browser evidence

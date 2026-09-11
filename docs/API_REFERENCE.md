@@ -158,6 +158,7 @@ The following method/path patterns are extracted from production HTTP registrati
 - `DELETE /api/v1/attachments/{id}`
 - `DELETE /api/v1/projects/{project}`
 - `DELETE /api/v1/rooms/{room}`
+- `DELETE /api/v1/rooms/{room}/native-bindings/{slot}`
 - `DELETE /api/v1/session`
 - `GET /api/v1/agent-catalog`
 - `GET /api/v1/agent-pair-profiles`
@@ -188,10 +189,12 @@ The following method/path patterns are extracted from production HTTP registrati
 - `POST /api/v1/projects`
 - `POST /api/v1/projects/{project}/refresh`
 - `POST /api/v1/projects/{project}/rooms`
+- `POST /api/v1/relay/{room}/{slot}/{action}`
 - `POST /api/v1/rooms/batch-archive`
 - `POST /api/v1/rooms/batch-delete`
 - `POST /api/v1/rooms/{room}/activate`
 - `POST /api/v1/rooms/{room}/archive`
+- `POST /api/v1/rooms/{room}/native-bindings/{slot}`
 - `POST /api/v1/rooms/{room}/open-browser`
 - `POST /api/v1/rooms/{room}/restore`
 - `POST /api/v1/rooms/{room}/suspend`
@@ -218,3 +221,15 @@ Only those fields are accepted: clients cannot submit executable paths, environm
 The response is `{schema:1, version, platform, generated_at, mode, scope, checks:[...]}`. Scope is `service_defaults`, `default_profile`, or `room`; no identity/path is exported. Checks contain `id`, `status` (`pass`, `warn`, `fail`, or `skipped`), a fixed `code`, `duration_ms`, and optional Runtime/slot/numeric version. Installation, native startup, and matching completed model response are distinct evidence. Unselected missing CLIs warn; Mock and untested model responses remain skipped. Cleanup warnings do not invalidate a received response, but must be resolved before repeatedly starting new checks. Raw errors and process/model output are never part of this report.
 
 Diagnostics create no durable Room events, do not activate/suspend/resume existing Rooms, and never change native login or CC Switch configuration. A live check can use Provider quota and invoke native global hooks/MCP while starting its disposable session; it is not a sandbox, repository-specific smoke test, or exhaustive tool test. See [CLI reference](CLI_REFERENCE.md#installation-versus-runtime-availability) for operational boundaries.
+
+## Native host mode
+
+`POST /api/v1/rooms` accepts immutable `host_mode: "embedded" | "native"` (default embedded). New Rooms use Store 11/provisioning 4 in both modes. Native creation retains two Agent selections but does not apply providers/models/effort/permissions or spawn adapters; only Claude Code/Codex are supported. Existing adapter-session Binding requests are rejected. The native surface uses the same scoped Management gateway but a relay-specific snapshot/UI.
+
+Management-authenticated `POST /api/v1/rooms/{room}/native-bindings/{slot}` accepts a public bind ID, credential hash, nonce hash and explicit replacement intent. `DELETE` revokes the binding without claiming to stop native work. The response contains public metadata and bootstrap instructions, never credentials. Model-facing long-lived secrets are not part of this API.
+
+`POST /api/v1/relay/{room}/{slot}/{action}` has separate relay authentication, not browser-cookie or management-token authority. It requires `Authorization: Relay <secret>` and the CLI's binding/generation/official-session headers; credentials are loaded from an owner-only file, not command arguments. Actions are `inspect`, `associate`, `report`, `publication`, `send`, `wait`, `ack`, `status`, `peer`, `failure`, `park`, `unbind`, and `upload`. Before association only the narrow inspection/nonce/revocation paths are usable. Every operation rechecks the live generation. Body limit is 256 KiB UTF-8 before JSON escaping; HTTP JSON is bounded to 2 MiB. Wait is bounded to 30 seconds and performs no claim while idle. Only the CLI acknowledges after writing stdout.
+
+Within a native Room surface, `GET api/v1/snapshot` returns `{room, relay, protocol, config_notice, identities}`. `relay` contains public bindings, ordered messages, audit entries and a sequence cursor. `GET api/v1/events` emits `native` SSE invalidations; clients refresh snapshots, never replay commands. `POST api/v1/messages` accepts `{id,to,text,attachment_ids,quote_id}`. Quoted messages must belong to the same Room. `POST api/v1/messages/{id}/cancel` is queued-only; `/retry` requires an unknown source and generates a new ID. `POST api/v1/participants/{slot}/park` accepts `{enabled}`. Uploads return the attachment object directly; downloads retain existing authenticated image validation. There is no native Interrupt/start/restart/permission control.
+
+Native delivery states are `queued`, `delivering`, `handed_off`, `unknown`, `cancelled`, and `human` (UI escalation). `handed_off` means stdout was written, not native acceptance. Display binding plus last observed activity rather than live-presence claims. Public snapshots and exports never expose credential hashes, raw secrets or claim receipts.

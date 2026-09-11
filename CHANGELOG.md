@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Add experimental Room-level Native hosting for user-owned Claude Code/Codex sessions: consented project Stop hooks, nonce association, per-slot durable FIFO, public binding/activity UI, and a relay CLI. No adapter spawning or native Interrupt control; provider/model/effort/permissions remain display-only.
+- Add atomic sequence/pending publication recovery, original-key reconciliation, durable claim before stdout and explicit acknowledgement afterward. Unknown delivery requires explicit Retry; two publication paths intentionally remain independently auditable.
+- Read Store 10/provisioning 3 unchanged and create all new Rooms with Store 11/provisioning 4 plus immutable host mode. Keep Registry checkpoint schema 2 byte shape unchanged. Preserve embedded protocol v6 and add bounded native v7 bootstrap.
+- Cover synthetic hooks, real HTTP/CLI transport, crashes, binding uniqueness, restart, browser recovery and schema rollback boundaries separately from authenticated vendor E2E, which remains release-gated.
+
 ## [v4.0.0] — 2026-09-09
 
 - Exclude active HTTP/SSE leases from LRU eviction, including equal-timestamp ties. Remove the obsolete global archive-visibility preference; archive results reveal archived Rooms in their existing per-Project filters.

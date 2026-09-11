@@ -21,6 +21,7 @@ import (
 	"github.com/sean2077/pairroom/internal/ccswitch"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/openbrowser"
+	"github.com/sean2077/pairroom/internal/relay"
 	"github.com/sean2077/pairroom/internal/version"
 	"github.com/sean2077/pairroom/internal/websession"
 	"github.com/sean2077/pairroom/internal/webui"
@@ -156,6 +157,7 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	webui.Mount(mux)
 	server.mountAgentPairProfiles(mux)
 	server.mountNavigationOrder(mux)
+	server.mountNativeRelay(mux)
 	mux.HandleFunc("POST "+diagnosticsPath, server.runDiagnostics)
 	mux.HandleFunc("POST /api/v1/session", server.createBrowserSession)
 	mux.HandleFunc("GET /api/v1/session", server.readBrowserSession)
@@ -197,6 +199,10 @@ func (s *ManagementServer) Token() string         { return s.token }
 func (s *ManagementServer) Serve(listener net.Listener) error {
 	if listener == nil {
 		return errors.New("Management Shell listener is required")
+	}
+	endpoint := relay.Endpoint{URL: "http://" + listener.Addr().String(), Token: s.token}
+	if err := relay.WriteEndpoint(s.registry.Root(), endpoint); err != nil {
+		return fmt.Errorf("write relay Service discovery: %w", err)
 	}
 	err := s.http.Serve(listener)
 	if errors.Is(err, http.ErrServerClosed) {
@@ -387,6 +393,7 @@ func (s *ManagementServer) removeProject(w http.ResponseWriter, r *http.Request)
 
 func (s *ManagementServer) provisionRoom(w http.ResponseWriter, r *http.Request) {
 	var request struct {
+		HostMode           model.HostMode                `json:"host_mode"`
 		AgentPairProfileID string                        `json:"agent_pair_profile_id"`
 		Collaboration      *model.Collaboration          `json:"collaboration"`
 		Name               string                        `json:"name"`
@@ -421,6 +428,10 @@ func (s *ManagementServer) provisionRoom(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
+	// Native rooms revalidate selections at creation like embedded rooms: the
+	// persisted AgentSelection is a durable fact and a CC Switch ProviderRef
+	// must be re-read at creation validation. Display-only native semantics
+	// cover activation/injection, not the creation-time read-only validation.
 	if s.agentResolver != nil {
 		validated, err := s.agentResolver.ValidateSelections(r.Context(), agents)
 		if err != nil {
@@ -430,6 +441,7 @@ func (s *ManagementServer) provisionRoom(w http.ResponseWriter, r *http.Request)
 		agents = validated
 	}
 	room, err := s.registry.ProvisionRoom(r.Context(), ProvisionRequest{
+		HostMode:      request.HostMode,
 		Collaboration: request.Collaboration,
 		ProjectID:     r.PathValue("project"), Name: request.Name, Bindings: request.Bindings, Agents: agents,
 	}, s.provisioner)
@@ -852,6 +864,10 @@ func (s *ManagementServer) lockRoom(roomID string) func() {
 
 func (s *ManagementServer) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/relay/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if !strings.HasPrefix(r.URL.Path, "/api/") {
 			next.ServeHTTP(w, r)
 			return

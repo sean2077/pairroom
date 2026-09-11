@@ -78,7 +78,7 @@ func (r *Registry) mutateRoom(ctx context.Context, roomID, eventKind string, pay
 		// archive event must not recreate a partial, unverifiable Event Log. Keep
 		// this exception narrow: rename, restore, missing files inside an existing
 		// directory, and every other filesystem error still fail closed.
-		if eventKind != EventRoomArchived || !options.allowMissingDataDir {
+		if eventKind != EventRoomArchived || !options.allowMissingDataDir || room.HostMode == model.HostNative {
 			return Room{}, err
 		}
 		missing, inspectErr := roomDataDirMissing(room.DataDir)

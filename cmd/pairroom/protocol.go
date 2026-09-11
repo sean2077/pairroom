@@ -22,6 +22,7 @@ func writeProtocol(args []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	actorFlag := flags.String("actor", "", "limit actor-specific rules to claude or codex")
 
+	hostFlag := flags.String("host-mode", "embedded", "Room host mode: embedded or native")
 	jsonFlag := flags.Bool("json", false, "emit the contract as JSON")
 	flags.Usage = func() {
 		fmt.Fprintln(stderr, "usage: pairroom protocol [--actor claude|codex] [--json]")
@@ -37,9 +38,15 @@ func writeProtocol(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
 
-	contract, err := protocol.Resolve(protocol.Selection{
-		Actor: model.ActorID(strings.TrimSpace(*actorFlag)),
-	})
+	host := model.HostMode(*hostFlag)
+	if !host.Valid() {
+		return fmt.Errorf("invalid host-mode %q", host)
+	}
+	resolve := protocol.Resolve
+	if host == model.HostNative {
+		resolve = protocol.ResolveNative
+	}
+	contract, err := resolve(protocol.Selection{Actor: model.ActorID(strings.TrimSpace(*actorFlag))})
 	if err != nil {
 		return err
 	}

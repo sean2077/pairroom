@@ -2059,6 +2059,7 @@
     select.replaceChildren(...projects.map((project) => node('option', { value: project.id, textContent: `${projectName(project)} — ${project.root}` })));
     select.value = projects.some((project) => project.id === projectID) ? projectID : (projects[0]?.id || '');
     $('room-name').value = '';
+    $('room-host-mode').value = 'embedded';
     $('room-collaboration-mode').value = 'default';
     $('room-collaboration-instructions').value = '';
     document.querySelectorAll('#room-dialog [data-room-only]').forEach((element) => { element.hidden = editor; });
@@ -2088,6 +2089,7 @@
       const selectedID = editor ? profileID : (profiles.default_profile_id || '');
       populatePairProfilePicker(selectedID);
       applyPairProfile(selectedID);
+      syncHostMode();
       state.pairProfileReady = true;
       $('room-pair-profile').disabled = false;
       $('pair-profile-save-new').disabled = false;
@@ -2115,6 +2117,23 @@
     $('collaboration-default-instructions').textContent = state.agentCatalog?.collaboration_default?.instructions || t('room.collaboration.defaultHelp');
     setRenderedText('claude-responsibility-label', custom ? t('agent.agent1') : t('room.collaboration.leadSlot'));
     setRenderedText('codex-responsibility-label', custom ? t('agent.agent2') : t('room.collaboration.executorSlot'));
+  }
+
+  function nativeCreation() { return !state.pairProfileMode && $('room-host-mode').value === 'native'; }
+  function syncHostMode() {
+    const native = nativeCreation();
+    $('room-native-help').hidden = !native;
+    const warning = document.querySelector('[data-i18n="room.collaboration.yoloWarning"]');
+    if (warning) warning.hidden = native || state.pairProfileMode;
+    for (const actor of ['claude', 'codex']) {
+      if (native) document.querySelector(`input[name="${actor}-mode"][value="new"]`).checked = true;
+      document.querySelectorAll(`input[name="${actor}-mode"]`).forEach(input => { input.disabled = native; });
+      const select = $(`${actor}-runtime`);
+      for (const option of select.options) option.disabled = native ? !['claude', 'codex'].includes(option.value) : !runtimeCatalogEntry(option.value)?.available;
+      if (native && !['claude', 'codex'].includes(select.value)) select.value = actor;
+      select.setCustomValidity(native || runtimeCatalogEntry(select.value)?.available ? '' : t('agent.unavailable'));
+    }
+    syncBindingInputs();
   }
 
   function syncBindingInputs() {
@@ -2145,7 +2164,8 @@
     const collaboration = { mode, ...(mode === 'custom' ? { instructions } : {}) };
     const bindings = {};
     for (const actor of ['claude', 'codex']) {
-      if (!$(`${actor}-runtime`).reportValidity() || !$(`${actor}-provider`).reportValidity()) return;
+      if (!nativeCreation() && (!$(`${actor}-runtime`).reportValidity() || !$(`${actor}-provider`).reportValidity())) return;
+      if (nativeCreation() && !['claude', 'codex'].includes($(`${actor}-runtime`).value)) { showFormError('room-form-error', t('ui.native.supported')); return; }
       const mode = document.querySelector(`input[name="${actor}-mode"]:checked`)?.value || 'new';
       const sessionID = $(`${actor}-session-id`).value.trim();
       if (mode === 'existing' && !sessionID) {
@@ -2158,9 +2178,9 @@
     await withBusy($('room-submit'), async () => {
       try {
         hideFormError('room-form-error');
-		await api(`/api/v1/projects/${encodeURIComponent(projectID)}/rooms`, { method: 'POST', body: JSON.stringify({ name, bindings, agents, collaboration }) });
+		await api(`/api/v1/projects/${encodeURIComponent(projectID)}/rooms`, { method: 'POST', body: JSON.stringify({ name, bindings, agents, collaboration, host_mode: $('room-host-mode').value }) });
         closeDialog('room-dialog');
-        toast(t("ui.roomCreated"), t("ui.agentBindingsCompletedAtomicVerification"), 'success');
+        toast(t("ui.roomCreated"), t(nativeCreation() ? "ui.native.pending" : "ui.agentBindingsCompletedAtomicVerification"), 'success');
         await refresh({ forceRender: true, fresh: true });
         navigate(`#/projects/${encodeURIComponent(projectID)}`);
       } catch (error) {
@@ -3000,6 +3020,7 @@
       diagnostic.textContent = entry?.diagnostic || (entry?.version ? `v${entry.version}` : '');
       diagnostic.classList.toggle('runtime-unavailable', !entry?.available);
       syncAgentProviderAndModels(actor, true);
+      syncHostMode();
     });
     $(`${actor}-provider`).addEventListener('change', () => {
       syncAgentProviderAndModels(actor, false);
@@ -3045,6 +3066,7 @@
   });
   $('project-form').addEventListener('submit', submitProject);
   $('room-collaboration-mode').addEventListener('change', syncCollaborationControls);
+  $('room-host-mode').addEventListener('change', syncHostMode);
   $('room-form').addEventListener('submit', createRoom);
   $('rename-form').addEventListener('submit', submitRename);
   document.addEventListener('contextmenu', (event) => openRoomContextMenu(event));

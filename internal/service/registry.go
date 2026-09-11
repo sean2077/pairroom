@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/relay"
 	"github.com/sean2077/pairroom/internal/version"
 )
 
@@ -308,7 +309,8 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 	}
 	// Validate the current schema before reading Event Log bytes. Discovery and
 	// activation share the same boundary; neither imports nor migrates old data.
-	if err := validateRoomStoreMetadata(dir); err != nil {
+	storeSchema, err := readRoomStoreSchema(dir)
+	if err != nil {
 		return Room{}, Project{}, false, err
 	}
 	events, err := readEventsReadOnly(eventPath)
@@ -321,6 +323,7 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 
 	var provisioned *roomProvisionedPayload
 	materializedBindings := make(map[model.ActorID]Binding, 2)
+	nativeBindings := make(map[model.ActorID]relay.Binding, 2)
 	var meta model.RoomMeta
 	var lifecycle RoomLifecycle = RoomActive
 	var renamed string
@@ -328,6 +331,16 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 	createdSeen := false
 	serviceMutationSeen := false
 	for _, event := range events {
+		if strings.HasPrefix(event.Kind, "native.") {
+			if provisioned == nil || provisioned.HostMode != model.HostNative || lifecycle == RoomArchived {
+				return Room{}, Project{}, false, errors.New("native event requires an active native Room")
+			}
+			switch event.Kind {
+			case relay.EventBinding, relay.EventMessage, relay.EventPublication, relay.EventPublicationGap, relay.EventFailure:
+			default:
+				return Room{}, Project{}, false, fmt.Errorf("unsupported native event %q", event.Kind)
+			}
+		}
 		switch event.Kind {
 		case EventRoomProvisioned:
 			if event.Actor != model.ActorSystem {
@@ -346,11 +359,22 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 			if err := json.Unmarshal(event.Data, &payload); err != nil {
 				return Room{}, Project{}, false, fmt.Errorf("decode %s event %d: %w", event.Kind, event.Seq, err)
 			}
-			if payload.Schema != 3 {
-				return Room{}, Project{}, false, fmt.Errorf("unsupported room service schema %d; this build requires schema 3 and provides no migration", payload.Schema)
+			if payload.Schema != 3 && payload.Schema != 4 {
+				return Room{}, Project{}, false, fmt.Errorf("unsupported room service schema %d; expected 3 or 4", payload.Schema)
+			}
+			if (storeSchema == 10 && payload.Schema != 3) || (storeSchema == 11 && payload.Schema != 4) {
+				return Room{}, Project{}, false, errors.New("store/provisioning schema mismatch: require 10/3 or 11/4")
+			}
+			if payload.Schema == 3 {
+				if payload.HostMode != "" {
+					return Room{}, Project{}, false, errors.New("provisioning 3 must not contain host_mode")
+				}
+				payload.HostMode = model.HostEmbedded
+			} else if !payload.HostMode.Valid() {
+				return Room{}, Project{}, false, errors.New("provisioning 4 requires explicit host_mode")
 			}
 			if payload.Collaboration == nil {
-				return Room{}, Project{}, false, errors.New("schema 3 requires collaboration instructions")
+				return Room{}, Project{}, false, errors.New("provisioning requires collaboration instructions")
 			}
 			if err := payload.Collaboration.Validate(); err != nil {
 				return Room{}, Project{}, false, err
@@ -380,7 +404,26 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 			updatedAt = event.CreatedAt
 		case "service.room.bindings.completed", "service.legacy.imported":
 			return Room{}, Project{}, false, fmt.Errorf("unsupported retired Room event %q", event.Kind)
+		case relay.EventBinding:
+			if provisioned == nil || provisioned.HostMode != model.HostNative || lifecycle == RoomArchived {
+				return Room{}, Project{}, false, errors.New("native binding requires an active native Room")
+			}
+			b, err := relay.BindingFromEvent(event)
+			if err != nil {
+				return Room{}, Project{}, false, err
+			}
+			if event.Actor != b.Slot {
+				return Room{}, Project{}, false, errors.New("native binding actor mismatch")
+			}
+			prior := nativeBindings[b.Slot]
+			if b.Generation < prior.Generation || (b.Generation == prior.Generation && prior.BindID != "" && b.BindID != prior.BindID) {
+				return Room{}, Project{}, false, errors.New("native binding generation regressed")
+			}
+			nativeBindings[b.Slot] = b
 		case EventRoomBindingMaterialized:
+			if provisioned != nil && provisioned.HostMode == model.HostNative {
+				return Room{}, Project{}, false, errors.New("native Rooms require hook association, not embedded materialization")
+			}
 			if event.Actor != model.ActorSystem {
 				return Room{}, Project{}, false, fmt.Errorf("%s event %d must be authored by system", event.Kind, event.Seq)
 			}
@@ -507,6 +550,7 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 		return Room{}, Project{}, false, errors.New("room.created collaboration conflicts with provisioning")
 	}
 	room := Room{
+		HostMode:                 payload.HostMode,
 		Collaboration:            model.CloneCollaboration(payload.Collaboration),
 		ID:                       payload.RoomID,
 		ProjectID:                payload.Project.ID,
@@ -525,6 +569,9 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 	for actor, binding := range materializedBindings {
 		room.Bindings[actor] = binding
 	}
+	for actor, binding := range nativeBindings {
+		room.Bindings[actor] = nativeRegistryBinding(binding)
+	}
 	if room.UpdatedAt.IsZero() {
 		room.UpdatedAt = room.CreatedAt
 	}
@@ -534,26 +581,28 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 	return room, payload.Project, true, nil
 }
 
-func validateRoomStoreMetadata(dir string) error {
+func validateRoomStoreMetadata(dir string) error { _, err := readRoomStoreSchema(dir); return err }
+
+func readRoomStoreSchema(dir string) (int, error) {
 	path := filepath.Join(dir, "metadata.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("read event metadata: %w", err)
+		return 0, fmt.Errorf("read event metadata: %w", err)
 	}
 	var metadata struct {
 		Format        string `json:"format"`
 		SchemaVersion int    `json:"schema_version"`
 	}
 	if err := json.Unmarshal(data, &metadata); err != nil {
-		return fmt.Errorf("decode event metadata: %w", err)
+		return 0, fmt.Errorf("decode event metadata: %w", err)
 	}
 	if metadata.Format != "pairroom-jsonl" {
-		return fmt.Errorf("unsupported event metadata format %q", metadata.Format)
+		return 0, fmt.Errorf("unsupported event metadata format %q", metadata.Format)
 	}
 	if !version.SupportsStoreSchema(metadata.SchemaVersion) {
-		return fmt.Errorf("event store schema %d is unsupported; this build requires schema %d and provides no migration", metadata.SchemaVersion, version.StoreSchema)
+		return 0, fmt.Errorf("event store schema %d is unsupported; this build reads schemas 10 and 11 and provides no migration", metadata.SchemaVersion)
 	}
-	return nil
+	return metadata.SchemaVersion, nil
 }
 
 func validateProvisionedProject(project Project) error {
@@ -639,7 +688,13 @@ func (r *Registry) indexRoomLocked(project Project, room Room) error {
 	if existing, ok := r.projects[project.ID]; ok && existing.Root != project.Root {
 		return fmt.Errorf("project ID %s maps to conflicting roots %s and %s", project.ID, existing.Root, project.Root)
 	}
-	for _, binding := range room.Bindings {
+	for actor, binding := range room.Bindings {
+		if err := r.checkNativeIdentityLocked(room, actor, binding.SessionID); err != nil {
+			return err
+		}
+		if room.HostMode == model.HostNative {
+			continue
+		}
 		if !binding.OwnsIdentity() {
 			continue
 		}
@@ -657,6 +712,9 @@ func (r *Registry) indexRoomLocked(project Project, room Room) error {
 	}
 	r.projectByRoot[project.Root] = project.ID
 	for _, binding := range room.Bindings {
+		if room.HostMode == model.HostNative {
+			continue
+		}
 		if binding.OwnsIdentity() {
 			r.bindingOwners[binding.Key().String()] = room.ID
 		}
@@ -671,7 +729,9 @@ func (r *Registry) writeCheckpointLocked() (bool, error) {
 		snapshot.Projects = append(snapshot.Projects, project)
 	}
 	for _, room := range r.rooms {
-		snapshot.Rooms = append(snapshot.Rooms, cloneRoom(room))
+		checkpointRoom := cloneRoom(room)
+		checkpointRoom.HostMode = ""
+		snapshot.Rooms = append(snapshot.Rooms, checkpointRoom)
 	}
 	snapshot = snapshot.Sorted()
 	data, err := json.MarshalIndent(snapshot, "", "  ")

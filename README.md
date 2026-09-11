@@ -75,3 +75,7 @@ PairRoom is evolving. [Changelog](CHANGELOG.md) records release history; current
 ## License
 
 [MIT](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md)
+
+## Native host mode (experimental)
+
+Choose **Native** when creating a Room to keep both participants in their original Claude Code/Codex sessions. PairRoom supplies bindings, durable relay and audit, without spawning or interrupting processes. Install and approve the project Stop hooks, bind each slot, and return its one-time nonce. [Setup and recovery commands](docs/CLI_REFERENCE.md#native-relay-commands) explain bounded park, foreground collection and explicit Retry. Provider/model/effort/permissions remain native-controlled. Authenticated multi-round vendor E2E is still a release gate; synthetic tests are not evidence of model acceptance.

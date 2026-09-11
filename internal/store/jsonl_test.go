@@ -283,7 +283,7 @@ func TestSaveAndLoadJSON(t *testing.T) {
 }
 
 func TestOpenRejectsEveryNonCurrentSchemaWithoutMigration(t *testing.T) {
-	for _, schema := range []int{0, 1, 8, version.StoreSchema - 1, version.StoreSchema + 1, 999} {
+	for _, schema := range []int{0, 1, 8, 9, version.StoreSchema + 1, 999} {
 		t.Run(fmt.Sprintf("schema-%d", schema), func(t *testing.T) {
 			dir := t.TempDir()
 			metadata := fmt.Sprintf(`{"format":"pairroom-jsonl","schema_version":%d,"app_version":"0.1.0"}`, schema)

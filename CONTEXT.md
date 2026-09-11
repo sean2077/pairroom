@@ -64,3 +64,21 @@ Delivery of one Agent's complete visible response to the other participant after
 _Equivalent (zh-CN)_: Agent 接力
 _Avoid (en)_: handoff
 _Avoid (zh-CN)_: 交接
+
+## Hosting
+
+**Host mode**:
+The immutable Room-level choice between PairRoom-owned adapter processes (`embedded`) and user-owned native sessions (`native`), independent of collaboration mode.
+_Equivalent (zh-CN)_: 宿主模式
+
+**Native host mode**:
+A Room that relays messages and records audit while participants work in their original harnesses.
+_Equivalent (zh-CN)_: Native 宿主模式
+
+**Park window**:
+The bounded interval during which an approved Stop hook waits for new inbox work before the native response ends.
+_Equivalent (zh-CN)_: Park 等待窗口
+
+**Publication gap**:
+An observed jump in one binding generation's report sequence, not an inference from missing activity.
+_Equivalent (zh-CN)_: 发布缺口

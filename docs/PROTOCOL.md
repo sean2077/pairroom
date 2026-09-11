@@ -1,6 +1,6 @@
 # Agent protocol
 
-This document defines the minimum collaboration contract the model must understand. Scheduling, permissions, persistence, and cancellation are enforced by code, not by prompt self-discipline. The current machine-readable contract is `pairroom-protocol/v6` and is printed by:
+This document defines the minimum collaboration contract the model must understand. Scheduling, permissions, persistence, and cancellation are enforced by code, not by prompt self-discipline. The embedded machine-readable contract is `pairroom-protocol/v6` and is printed by:
 
 ```bash
 pairroom protocol --json
@@ -31,7 +31,7 @@ The Agent should treat repository state as authoritative and independently verif
 
 ## Output routing
 
-Ordinary Agent answers are always visible to the user. After the native Turn boundary, PairRoom scans visible output for the exact current `peer_handle`:
+In embedded Rooms, ordinary Agent answers are always visible to the user. After the native Turn boundary, PairRoom scans visible output for the exact current `peer_handle`:
 
 - unique runtime: `@claude`, `@codex`, or `@grok`;
 - duplicated runtime: stable slot-order handles such as `@claude0` and `@claude1`.
@@ -65,3 +65,17 @@ user decision
   > peer message
   > model inference
 ```
+
+## Native host protocol v7
+
+`pairroom protocol --host-mode native --json` prints `pairroom-protocol/v7`. The embedded v6 contract and envelope remain unchanged. The compact native bootstrap plus stored default collaboration stays within 1,800 UTF-8 bytes; the ordinary envelope overhead remains at most 128 bytes. Native session/transcript references are queried with `relay peer`, never included in an envelope. Missing or inaccessible peer history does not block relay.
+
+An approved Stop hook supplies its official `session_id` and `last_assistant_message`; PairRoom does not parse vendor transcripts. Exact current peer handles use the same case-insensitive parser and code/URL exclusions as embedded mode. A peer handle wins over `@user`; only `@user` creates a human escalation; no peer/user handle ends relay without recording the private reply body. Minimal publication receipts still make sequence reconciliation possible. User interruption may produce no Stop and no publication. Claude StopFailure records only an allowlisted failure category, never the partial reply.
+
+`relay send` is a separate explicit path into the same inbox: default target is the peer, `--to @user` escalates, and body mentions never route. It is the attachment path. Automatic publication is idempotent by `(bind_id, generation, report_seq)`; explicit send uses the client message ID within its binding generation. Neither path deduplicates by body. Same-turn send plus a peer-directed Stop creates two independently auditable messages. The bootstrap instructs the Agent to omit the final peer handle after send unless that second full boundary publication is intentional.
+
+Collection transitions `queued → delivering → handed_off`. `handed_off` asserts only that the CLI wrote stdout, not that the native harness injected it or the model accepted it. Missing acknowledgement or collector death becomes `unknown`; explicit Retry creates a new ID after inspecting history and side effects. Cancellation removes only queued work. A replacement binding invalidates old-generation work and cannot undo a handed-off message.
+
+A hook publishes first, then parks up to 30 seconds within a 45-second installed hook timeout, reserving time for stdout and acknowledgement. No claim occurs while waiting. New inbox work returns `{"decision":"block","reason":"<envelope>"}`. At most eight consecutive actual-message blocks are allowed; `stop_hook_active` with no inbox does not spend a block on empty re-arming. There is no idle wake-up promise after timeout, disabled park or the block cap: messages remain queued for the already-associated session's `relay wait` or a human nudge. Each continued model turn may cost tokens; no real vendor token measurement is claimed.
+
+PairRoom does not own native processes. Owner Turn is advisory, not a workspace lock. Native provider/model/effort/permission selections are metadata, not applied configuration. Native approval and input interruption remain in the original harness. Authenticated multi-round Claude Code ↔ Codex acceptance remains a release gate, separate from synthetic hook tests.

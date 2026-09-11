@@ -53,7 +53,7 @@ func TestCollaborationIsCreatedOnceAndRecoveredFromRoomFacts(t *testing.T) {
 					_ = json.Unmarshal(event.Data, &provisioned)
 				}
 			}
-			if meta.Collaboration == nil || *meta.Collaboration != want || provisioned.Schema != 3 || provisioned.Collaboration == nil || *provisioned.Collaboration != want {
+			if meta.Collaboration == nil || *meta.Collaboration != want || provisioned.Schema != 4 || provisioned.Collaboration == nil || *provisioned.Collaboration != want {
 				t.Fatal("Room and service authorities disagree")
 			}
 			reopened, err := OpenRegistry(context.Background(), RegistryConfig{Root: root})
@@ -156,8 +156,7 @@ func TestManagementRejectsChangingCollaborationAfterCreation(t *testing.T) {
 	if *after.Collaboration != *created.Collaboration || after.Name != created.Name {
 		t.Fatal("rejected mutation changed state")
 	}
-	// Metadata 10 fails closed in older builds; this release does not relabel
-	// existing schema-9 logs, but creates new-mode Rooms with a new boundary.
+	// New Rooms use schema 11; existing schema-10 Rooms remain byte-identical.
 	data, err := os.ReadFile(filepath.Join(created.DataDir, "metadata.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +164,7 @@ func TestManagementRejectsChangingCollaborationAfterCreation(t *testing.T) {
 	var meta struct {
 		Schema int `json:"schema_version"`
 	}
-	if json.Unmarshal(data, &meta) != nil || meta.Schema != 10 {
+	if json.Unmarshal(data, &meta) != nil || meta.Schema != 11 {
 		t.Fatalf("new-mode metadata=%s", data)
 	}
 }

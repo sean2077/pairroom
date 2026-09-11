@@ -141,6 +141,9 @@ func EmbeddedRuntimeFactory(registry *Registry, cfg EmbeddedRuntimeConfig) Runti
 		if !project.Available {
 			return nil, fmt.Errorf("project is unavailable: %s", project.Diagnostic)
 		}
+		if durableRoom.HostMode == model.HostNative {
+			return startNativeHostRuntime(ctx, registry, project, durableRoom, cfg.ListenHost)
+		}
 		return startEmbeddedRuntime(ctx, registry, project, durableRoom, cfg)
 	}
 }
