@@ -47,6 +47,13 @@ for (const [, block] of palettes) {
   for (const surface of ['primary', 'primary-hover']) {
     assert(contrast(tokens['on-primary'], tokens[surface]) >= 4.5, `${surface}: CTA contrast`);
   }
+  // Actor, status and delivery-state colors stay meaningful, so they must also
+  // clear 4.5:1 on every surface they are rendered against.
+  for (const surface of ['canvas', 'chrome', 'hover']) {
+    for (const accent of ['green', 'amber', 'red', 'blue']) {
+      assert(contrast(tokens[accent], tokens[surface]) >= 4.5, `${surface}: ${accent} status contrast`);
+    }
+  }
 }
 
 // Head execution must not require body nodes, i18n, or an available storage API.

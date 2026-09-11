@@ -3,6 +3,10 @@
    dependencies copied. Surface styles still own layout and interaction state. */
 :root,
 :root[data-theme] {
+  /* UA chrome (scrollbars, native form controls) must follow the resolved
+     palette, not the OS preference. theme.js sets data-theme before the first
+     stylesheet, so this holds on the initial paint as well. */
+  color-scheme: light;
   --wb-canvas: #ffffff;
   --wb-chrome: #f7f7f8;
   --wb-hover: #eeeeef;
@@ -83,6 +87,7 @@
   --room-workbench-tab-height: 32px;
 }
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --wb-canvas: #1b1b1e;
   --wb-chrome: #222225;
   --wb-hover: #2c2c30;

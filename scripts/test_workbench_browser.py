@@ -14,7 +14,7 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright, expect
 from test_management_browser import fixture_html as management_html
-from test_room_browser import fixture_html as room_html
+from test_room_browser import ROOT, fixture_html as room_html
 
 
 async def contrast(locator) -> float:
@@ -137,6 +137,6 @@ async def verify(browser_path: str | None, artifacts: Path) -> None:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--browser', default=os.environ.get('PAIRROOM_BROWSER'))
-    parser.add_argument('--artifacts', type=Path, default=Path('dist/browser-workbench'))
+    parser.add_argument('--artifacts', type=Path, default=ROOT / '.browser-results' / 'workbench')
     args = parser.parse_args()
     asyncio.run(verify(args.browser, args.artifacts))
