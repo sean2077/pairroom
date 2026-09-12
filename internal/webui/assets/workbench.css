@@ -1,5 +1,5 @@
 /* Shared visual language for Management, embedded/standalone and Native Rooms.
-   Emdash-inspired editor chrome; original PairRoom implementation, no assets or
+   Orca-inspired layered workspace chrome; original PairRoom implementation, no assets or
    dependencies copied. Surface styles still own layout and interaction state. */
 :root,
 :root[data-theme] {
@@ -8,15 +8,18 @@
      stylesheet, so this holds on the initial paint as well. */
   color-scheme: light;
   --wb-canvas: #ffffff;
-  --wb-chrome: #f7f7f8;
-  --wb-hover: #eeeeef;
-  --wb-selected: #e7e7e9;
-  --wb-line: #e2e2e5;
-  --wb-line-strong: #c9c9cf;
-  --wb-ink: #242428;
-  --wb-muted: #64646c;
-  --wb-primary: #303035;
-  --wb-primary-hover: #45454c;
+  --wb-chrome: #f5f5f5;
+  --wb-panel: #fafafa;
+  --wb-input: #f7f7f7;
+  --sidebar-width: 244px;
+  --wb-hover: #eeeeee;
+  --wb-selected: #eaeaea;
+  --wb-line: #e5e5e5;
+  --wb-line-strong: #c7c7c7;
+  --wb-ink: #171717;
+  --wb-muted: #636363;
+  --wb-primary: #171717;
+  --wb-primary-hover: #333333;
   --wb-on-primary: #ffffff;
   --wb-focus: #3869c8;
   --wb-green: #24764d;
@@ -81,24 +84,26 @@
   --focus: 0 0 0 2px var(--wb-focus);
   --ux-focus-ring: var(--focus);
   --management-ux-focus: var(--focus);
-  --ux-topbar-height: 52px;
-  --ux-panel-gap: 6px;
+  --ux-topbar-height: 46px;
+  --ux-panel-gap: 4px;
   --room-workbench-tabbar-height: 40px;
-  --room-workbench-tab-height: 32px;
+  --room-workbench-tab-height: 36px;
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --wb-canvas: #1b1b1e;
-  --wb-chrome: #222225;
-  --wb-hover: #2c2c30;
-  --wb-selected: #36363c;
-  --wb-line: #333338;
-  --wb-line-strong: #51515b;
-  --wb-ink: #ededf0;
-  --wb-muted: #a4a4ae;
-  --wb-primary: #e3e3e8;
+  --wb-canvas: #0e0e0e;
+  --wb-chrome: #242424;
+  --wb-panel: #171717;
+  --wb-input: #1c1c1c;
+  --wb-hover: #303030;
+  --wb-selected: #3b3b3b;
+  --wb-line: #2c2c2c;
+  --wb-line-strong: #555555;
+  --wb-ink: #ededed;
+  --wb-muted: #ababab;
+  --wb-primary: #eeeeee;
   --wb-primary-hover: #ffffff;
-  --wb-on-primary: #242428;
+  --wb-on-primary: #171717;
   --wb-focus: #9dbdff;
   --wb-green: #7bcca1;
   --wb-amber: #e0b767;
@@ -127,11 +132,11 @@
 
 /* Management: quiet navigation, compact headers and aligned document rows. */
 body.workbench-management .sidebar { background: var(--wb-chrome); backdrop-filter: none; }
-body.workbench-management .sidebar-top { min-height: 52px; padding-block: 8px; border-bottom-color: transparent; }
-body.workbench-management .brand-mark { width: 28px; height: 28px; flex-basis: 28px; border-radius: 7px; background: var(--wb-primary); color: var(--wb-on-primary); }
+body.workbench-management .sidebar-top { min-height: 46px; padding-block: 6px; border-bottom-color: transparent; }
+body.workbench-management .brand-mark { width: 24px; height: 24px; flex-basis: 24px; border-radius: 6px; background: var(--wb-primary); color: var(--wb-on-primary); }
 body.workbench-management .brand-copy strong { font-size: 14px; font-weight: 650; letter-spacing: -.02em; }
-body.workbench-management .brand-copy small { font-size: 9px; margin-top: 3px; font-weight: 500; letter-spacing: .1em; }
-body.workbench-management .primary-nav { padding: 10px 8px 18px; gap: 2px; }
+body.workbench-management .brand-copy small { display: none; }
+body.workbench-management .primary-nav { padding: 8px 8px 6px; gap: 2px; }
 body.workbench-management .primary-nav a { min-height: 34px; padding: 6px 10px; gap: 10px; border: 0; border-radius: 6px; font-size: 13px; font-weight: 500; }
 body.workbench-management .primary-nav a:hover { translate: none; }
 body.workbench-management .primary-nav a.active { background: var(--wb-selected); color: var(--wb-ink); }
@@ -142,12 +147,12 @@ body.workbench-management .primary-nav a.active .nav-count { background: transpa
 body.workbench-management .room-tree { padding-inline: 8px; }
 body.workbench-management :is(.tree-project-toggle, .tree-room) { min-height: 32px; border-radius: 5px; font-size: 12px; }
 body.workbench-management .tree-project-toggle { font-weight: 600; }
-body.workbench-management .tree-rooms { margin-left: 13px; padding-left: 10px; border-left: 1px solid var(--wb-line); }
-body.workbench-management .tree-room.active { background: var(--wb-selected); box-shadow: none; color: var(--wb-ink); }
+body.workbench-management .tree-rooms { margin: 4px 0 12px; padding-left: 0; border-left: 0; }
+body.workbench-management .tree-room.active { background: var(--wb-selected); box-shadow: inset 0 0 0 1px var(--wb-line-strong); color: var(--wb-ink); }
 body.workbench-management .tree-room.active .tree-room-name { font-weight: 600; }
 body.workbench-management .tree-room-dot { width: 6px; height: 6px; flex-basis: 6px; box-shadow: none; }
 body.workbench-management .sidebar-service { background: transparent; padding: 12px; }
-body.workbench-management .topbar { min-height: 52px; padding: 8px 24px; gap: 12px; background: var(--wb-canvas); box-shadow: none; backdrop-filter: none; }
+body.workbench-management .topbar { min-height: 52px; padding: 8px 20px; gap: 12px; background: var(--wb-panel); box-shadow: none; backdrop-filter: none; }
 body.workbench-management .page-heading { min-width: 100px; }
 body.workbench-management .page-heading h1 { font-size: 15px; font-weight: 600; letter-spacing: -.015em; }
 body.workbench-management .page-subtitle { font-size: 12px; }
@@ -163,28 +168,28 @@ body.workbench-management h2 { font-size: 16px; font-weight: 600; }
 body.workbench-management h3 { font-weight: 600; }
 body.workbench-management :is(.panel, .project-card) { border-radius: 8px; box-shadow: none; background: var(--wb-canvas); }
 body.workbench-management .project-card:hover { box-shadow: none; border-color: var(--wb-line-strong); }
-body.workbench-management .panel-header { min-height: 48px; padding: 12px 16px; }
-body.workbench-management .hero-panel { border-color: var(--wb-line); background: var(--wb-chrome); box-shadow: none; }
+body.workbench-management .panel-header { min-height: 44px; padding: 10px 16px; background: var(--wb-panel); }
+body.workbench-management .hero-panel { border: 0; border-bottom: 1px solid var(--wb-line); border-radius: 0; background: transparent; box-shadow: none; }
 body.workbench-management .hero-panel::after { display: none; }
 body.workbench-management :is(.project-workspace .detail-hero, .diagnostic-controls) { border-top: 1px solid var(--wb-line); }
-body.workbench-management .hero-copy { padding: 20px; }
+body.workbench-management .hero-copy { padding: 12px 0 24px; }
 body.workbench-management .hero-copy h2 { font-size: 22px; line-height: 1.3; letter-spacing: -.025em; }
 body.workbench-management .hero-copy p { margin-bottom: 14px; }
-body.workbench-management .hero-meta { padding: 20px; background: transparent; border-left-color: var(--wb-line); }
+body.workbench-management .hero-meta { padding: 12px 16px 24px; background: transparent; border-left-color: var(--wb-line); }
 body.workbench-management .stats-grid { gap: 0; border: 1px solid var(--wb-line); border-radius: 8px; overflow: hidden; }
-body.workbench-management .stat-card { min-height: 96px; gap: 12px; justify-content: stretch; border: 0; border-right: 1px solid var(--wb-line); border-radius: 0; padding: 14px 16px; text-align: left; }
+body.workbench-management .stat-card { min-height: 80px; gap: 12px; justify-content: stretch; border: 0; border-right: 1px solid var(--wb-line); border-radius: 0; padding: 12px 16px; text-align: left; }
 body.workbench-management .stat-card:last-child { border-right: 0; }
 body.workbench-management button.stat-card:hover { background: var(--wb-chrome); box-shadow: none; transform: none; }
 body.workbench-management .stat-icon { width: 24px; height: 24px; border-radius: 5px; }
-body.workbench-management .stat-value { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+body.workbench-management .stat-value { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
 body.workbench-management .project-avatar { width: 34px; height: 34px; border-radius: 7px; background: var(--wb-hover); font-size: 13px; font-weight: 600; }
 body.workbench-management .project-card-title h2 { font-size: 14px; }
 body.workbench-management :is(.room-row, .list-item) { padding-block: 12px; }
 body.workbench-management :is(.room-title-line strong, .list-copy strong) { font-weight: 600; }
 body.workbench-management .room-row:focus-within { box-shadow: none; background: var(--wb-chrome); }
-body.workbench-management .room-tabstrip { background: var(--wb-chrome); border-bottom-color: var(--wb-line); box-shadow: none; padding-inline: 6px; gap: 4px; }
-body.workbench-management .room-tab { border-radius: 5px; background: transparent; border-color: transparent; box-shadow: none; }
-body.workbench-management .room-tab.active { background: var(--wb-canvas); border-color: var(--wb-line); color: var(--wb-ink); box-shadow: 0 1px 2px #00000008; }
+body.workbench-management .room-tabstrip { background: var(--wb-panel); border-bottom-color: var(--wb-line); box-shadow: none; padding-inline: 0; gap: 0; }
+body.workbench-management .room-tab { border: 0; border-right: 1px solid var(--wb-line); border-radius: 0; background: transparent; box-shadow: none; }
+body.workbench-management .room-tab.active { background: var(--wb-canvas); color: var(--wb-ink); box-shadow: inset 0 2px var(--wb-line-strong); }
 body.workbench-management .room-tab.active::after { display: none; }
 body.workbench-management .room-tab-title { font-size: 12px; font-weight: 500; }
 body.workbench-management .settings-nav { padding: 4px; background: transparent; border-color: transparent; }
@@ -199,7 +204,7 @@ body.workbench-management .workspace-footer { padding: 9px 24px; background: var
 
 /* Room: contiguous resizable panes; actor colors remain semantic accents. */
 body.workbench-room .app-shell { grid-template-rows: var(--ux-topbar-height) minmax(0, 1fr); }
-body.workbench-room.ux-enhanced .topbar { grid-template-columns: minmax(160px, 20%) minmax(0, 1fr) auto; min-height: var(--ux-topbar-height); padding: 6px 14px; background: var(--wb-chrome); box-shadow: none; backdrop-filter: none; }
+body.workbench-room.ux-enhanced .topbar { grid-template-columns: minmax(160px, 20%) minmax(0, 1fr) auto; min-height: var(--ux-topbar-height); padding: 5px 14px; background: var(--wb-panel); box-shadow: none; backdrop-filter: none; }
 body.workbench-room .brand { gap: 9px; }
 body.workbench-room .brand-mark { width: 30px; height: 30px; border-radius: 7px; background: var(--wb-canvas); box-shadow: none; }
 body.workbench-room .brand-mark span { top: 9px; }
@@ -232,23 +237,21 @@ body.workbench-room .ux-resizer:hover::before, body.workbench-room .ux-resizer:f
 body.workbench-room .ux-panel-rail { box-shadow: none; background: var(--wb-chrome); }
 body.workbench-room .ux-panel-rail-participants { left: 0; }
 body.workbench-room .ux-panel-rail-inspector { right: 0; }
-body.workbench-room.ux-enhanced .chat-toolbar { min-height: 48px; padding: 9px 16px; gap: 10px; background: var(--wb-canvas); }
+body.workbench-room.ux-enhanced .chat-toolbar { min-height: 44px; padding: 8px 16px; gap: 8px; background: var(--wb-panel); }
 body.workbench-room :is(.chat-title, .inspector-header .panel-heading) { font-size: 13px; font-weight: 600; }
 body.workbench-room .chat-description { font-size: 11px; }
 body.workbench-room .workbench-room-utilities { display: flex; gap: 8px; padding: 4px 4px 10px; }
 body.workbench-room .workbench-room-utilities[hidden] { display: none; }
 body.workbench-room .search-box { background: var(--wb-chrome); }
-body.workbench-room .room-collaboration { padding-block: 7px; background: var(--wb-canvas); }
+body.workbench-room .room-collaboration { padding-block: 7px; background: var(--wb-panel); }
 body.workbench-room.ux-enhanced .timeline { padding-block: 20px 24px; }
 body.workbench-room .message-meta strong { font-weight: 600; }
-body.workbench-room.ux-enhanced .message-bubble, body.workbench-room.ux-enhanced .message-row:hover .message-bubble { border-color: var(--wb-line); border-radius: 8px; background: var(--wb-canvas); box-shadow: none; }
-body.workbench-room.ux-enhanced .message-row.user .message-bubble { background: var(--wb-chrome); border-color: var(--wb-line); }
-body.workbench-room.ux-enhanced .message-row.claude .message-bubble { border-left-color: var(--claude); }
-body.workbench-room.ux-enhanced .message-row.codex .message-bubble { border-left-color: var(--codex); }
+body.workbench-room.ux-enhanced .message-bubble, body.workbench-room.ux-enhanced .message-row:hover .message-bubble { border: 0; padding: 2px 0 8px; border-radius: 0; background: transparent; box-shadow: none; }
+body.workbench-room.ux-enhanced .message-row.user .message-bubble { background: var(--wb-input); border: 1px solid var(--wb-line); border-radius: 8px; padding: 12px 14px; }
 body.workbench-room .message-bubble .mention { color: var(--wb-ink); }
 body.workbench-room .long-message-fade::after { background: linear-gradient(transparent, var(--wb-canvas)); }
-body.workbench-room .message-row.user .long-message-fade::after { background: linear-gradient(transparent, var(--wb-chrome)); }
-:root body.workbench-room .code-block { background: var(--wb-chrome); border-color: var(--wb-line); border-radius: 6px; }
+body.workbench-room .message-row.user .long-message-fade::after { background: linear-gradient(transparent, var(--wb-input)); }
+:root body.workbench-room .code-block { background: var(--wb-panel); border-color: var(--wb-line); border-radius: 6px; }
 :root body.workbench-room .code-block pre code { color: var(--wb-ink); }
 /* Message-body links are the Room's only prose links. The surface palette kept a
    hard-coded dark-theme hue that measures 2.4:1 on the light canvas and removed
@@ -257,33 +260,97 @@ body.workbench-room .message-row.user .long-message-fade::after { background: li
 body.workbench-room .rich-content a { color: var(--wb-blue); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 body.workbench-room .rich-content a:hover { text-decoration-thickness: 2px; }
 body.workbench-room.ux-enhanced .composer-wrap { padding: 10px 16px 12px; background: var(--wb-canvas); border-top: 0; backdrop-filter: none; }
-body.workbench-room.ux-enhanced .composer { border-radius: 8px; background: var(--wb-chrome); box-shadow: none; }
-body.workbench-room.ux-enhanced .composer:focus-within { border-color: var(--wb-focus); box-shadow: 0 0 0 1px var(--wb-focus); background: var(--wb-chrome); }
+body.workbench-room.ux-enhanced .composer { border-radius: 10px; background: var(--wb-input); border-color: var(--wb-line-strong); box-shadow: 0 2px 8px #0000000a; }
+body.workbench-room.ux-enhanced .composer:focus-within { border-color: var(--wb-focus); box-shadow: 0 0 0 1px var(--wb-focus); background: var(--wb-input); }
 body.workbench-room .target-button { border-radius: 5px; }
 body.workbench-room .target-button.active { background: var(--wb-hover); border-color: var(--wb-line-strong); color: var(--wb-ink); }
 body.workbench-room .send-button { border-radius: 6px; }
-body.workbench-room .inspector-header { min-height: 60px; padding: 12px 14px; }
+body.workbench-room .inspector-header { min-height: 60px; padding: 12px 14px; background: var(--wb-panel); }
 body.workbench-room .tab { font-weight: 500; }
 body.workbench-room .tab.active { color: var(--wb-ink); }
-:root body.workbench-room :is(.activity-card, .turn-card, .system-chip) { background: var(--wb-chrome); border-color: var(--wb-line); border-radius: 6px; box-shadow: none; }
+:root body.workbench-room :is(.activity-card, .turn-card, .system-chip) { background: var(--wb-panel); border-color: var(--wb-line); border-radius: 6px; box-shadow: none; }
 :root body.workbench-room .diff-output { background: var(--wb-chrome); color: var(--wb-ink); }
 
 /* Native Room retains ownership notices, uncertain-delivery and retry states. */
-body.workbench-native .workspace { padding: 20px 24px 32px; }
+body.workbench-native .workspace { padding: 16px 20px 28px; }
 body.workbench-native .room-header { margin-bottom: 16px; }
 body.workbench-native h1 { font-size: 22px; font-weight: 600; letter-spacing: -.025em; }
 body.workbench-native :is(h2, h3) { font-size: 14px; font-weight: 600; }
-body.workbench-native .notice { background: var(--wb-chrome); border-left: 2px solid var(--wb-line-strong); border-radius: 6px; }
+body.workbench-native .notice { background: var(--wb-panel); border-left: 2px solid var(--wb-line-strong); border-radius: 6px; }
 body.workbench-native .bindings { gap: 12px; margin-bottom: 16px; }
-body.workbench-native .binding { padding: 14px; border-radius: 8px; }
-body.workbench-native .content-grid { gap: 16px; }
+body.workbench-native .binding { padding: 14px; border-radius: 6px; background: var(--wb-panel); }
+body.workbench-native .content-grid { gap: 12px; }
 body.workbench-native .panel { border-radius: 8px; }
-body.workbench-native .section-header { padding: 12px 16px; }
+body.workbench-native .section-header { padding: 12px 16px; background: var(--wb-panel); }
 body.workbench-native .message { border-radius: 6px; }
 body.workbench-native .composer textarea { background: var(--wb-chrome); }
 body.workbench-native input::file-selector-button { min-height: 32px; padding: 5px 9px; margin-right: 8px; border: 1px solid var(--wb-line-strong); border-radius: 6px; background: var(--wb-canvas); color: var(--wb-ink); font: inherit; cursor: pointer; }
 body.workbench-native :is(.badge, .count) { border-radius: 5px; }
-body.workbench-native .audit-panel { background: var(--wb-chrome); }
+body.workbench-native .audit-panel { background: var(--wb-panel); }
+
+
+/* One navigation spine, docked document tabs and an uncluttered transcript. */
+body.workbench-management .sidebar-top .brand { order: -1; }
+body.workbench-management .workbench-launcher { display: flex; width: calc(100% - 16px); margin: 2px 8px 12px; padding: 6px 10px; gap: 9px; min-height: 34px; color: var(--wb-muted); background: transparent; border-color: transparent; border-radius: 6px; font-family: var(--font-sans); font-size: 12px; font-weight: 500; box-shadow: none; }
+body.workbench-management .workbench-launcher::after { display: none; }
+body.workbench-management .workbench-launcher:hover { background: var(--wb-hover); color: var(--wb-ink); }
+body.workbench-management .workbench-launcher-label { flex: 1; text-align: left; }
+body.workbench-management .workbench-launcher kbd { font-size: 10px; border: 0; background: transparent; }
+body.workbench-management .workbench-project-heading { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; color: var(--wb-muted); font-size: 11px; font-weight: 500; }
+body.workbench-management .workbench-project-heading .icon-button { width: 28px; height: 28px; min-height: 28px; padding: 0; border: 0; background: transparent; }
+body.workbench-management .tree-project-header { border-radius: 5px; }
+body.workbench-management .tree-project-header.current { background: var(--wb-hover); }
+body.workbench-management .tree-project-link { padding-block: 5px; font-size: 12px; }
+body.workbench-management .tree-project-link strong { font-weight: 500; }
+body.workbench-management .tree-room { min-height: 38px; padding: 8px 9px; gap: 8px; }
+body.workbench-management .tree-room-name { font-size: 12px; line-height: 1.45; }
+body.workbench-management .tree-room-row:has(.tab-badge.warn) .tree-room { box-shadow: inset 2px 0 var(--wb-amber); }
+body.workbench-management .tree-room-row:has(.tab-badge.danger) .tree-room { box-shadow: inset 2px 0 var(--wb-red); }
+body.workbench-management .sidebar-service { border-top: 1px solid var(--wb-line); padding: 10px 14px; }
+body.workbench-management .service-status-row { gap: 8px; }
+body.workbench-management .service-status-row > div { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+body.workbench-management .service-status-row strong { font-size: 11px; font-weight: 500; }
+body.workbench-management .service-status-row small { font-size: 10px; }
+body.workbench-management .room-tablist { gap: 0; }
+body.workbench-management .workspace-footer { background: var(--wb-panel); font-size: 11px; }
+body.workbench-room .message-row { margin-bottom: 22px; }
+body.workbench-room .message-meta { margin-bottom: 8px; flex-wrap: wrap; row-gap: 2px; }
+body.workbench-room .message-meta :is(.message-author, time) { white-space: nowrap; flex-shrink: 0; }
+body.workbench-room .message-bubble .rich-content { line-height: 1.7; }
+body.workbench-room .avatar, body.workbench-room .message-avatar { border-radius: 5px; }
+body.workbench-room .inspector-panel > .tabs { background: var(--wb-panel); }
+body.workbench-room .participant-card { border-bottom: 1px solid var(--wb-line); }
+body.workbench-room .human-card { padding-bottom: 14px; }
+body.workbench-room .target-picker { gap: 4px; }
+body.workbench-room .target-button { font-size: 12px; }
+body.workbench-native .message { background: transparent; border: 0; border-bottom: 1px solid var(--wb-line); border-radius: 0; }
+
+/* The separator owns one CSSOM rule. Never put CSP-blocked inline styles on
+   the shell, and never resize/recreate an iframe or conversation DOM node. */
+body.workbench-management .workbench-sidebar-resizer { position: absolute; inset: 0 -4px 0 auto; width: 8px; cursor: ew-resize; touch-action: none; z-index: 2; }
+body.workbench-management .workbench-sidebar-resizer::before { content: ''; position: absolute; inset: 0 3px; background: transparent; }
+body.workbench-management .workbench-sidebar-resizer:hover::before,
+body.workbench-management .workbench-sidebar-resizer:focus-visible::before { background: var(--wb-focus); }
+body.workbench-management.workbench-resizing { cursor: ew-resize; user-select: none; }
+body.workbench-management.workbench-resizing .sidebar,
+body.workbench-management.workbench-resizing .workspace-shell { transition: none; }
+body.workbench-management.workbench-resizing .workbench-sidebar-resizer::after { content: ''; position: fixed; inset: 0; cursor: ew-resize; }
+body.workbench-management .app-shell:is(.sidebar-collapsed, .room-maximized) .workbench-sidebar-resizer { display: none; }
+@media (min-width: 901px) {
+  body.workbench-management .app-shell.sidebar-collapsed .workbench-launcher { width: 40px; min-width: 40px; margin-inline: auto; justify-content: center; padding-inline: 0; }
+  body.workbench-management .app-shell.sidebar-collapsed :is(.workbench-launcher-label, .workbench-launcher kbd, .workbench-project-heading) { display: none; }
+}
+/* Hover-only presentation, not hover-only access: reveal for keyboard, touch
+   and forced-color users, reserving the same space to prevent layout shifts. */
+@media (hover: hover) and (pointer: fine) {
+  body.workbench-management .room-tab:not(.active) .room-tab-close { opacity: 0; }
+  body.workbench-management .room-tab:is(:hover, :focus-within) .room-tab-close { opacity: 1; }
+}
+@media (max-width: 900px) {
+  body.workbench-management .workbench-sidebar-resizer { display: none; }
+  body.workbench-management .workbench-launcher { margin: 0; width: 34px; padding: 0; justify-content: center; }
+  body.workbench-management :is(.workbench-launcher-label, .workbench-launcher kbd) { display: none; }
+}
 
 body.workbench :is(button, a, input, select, textarea, summary, [tabindex]:not([tabindex="-1"]), [role="separator"]):focus-visible { outline: 2px solid var(--wb-focus); outline-offset: 2px; box-shadow: none; }
 body.workbench-room.ux-enhanced .composer textarea:focus-visible, body.workbench-management .global-search input:focus-visible { outline: 0; box-shadow: none; }
@@ -319,11 +386,13 @@ body.workbench-management .global-search:focus-within { border-color: var(--wb-f
   :root, :root[data-theme] { --ux-topbar-height: 58px; }
   body.workbench :is(.primary-button, .secondary-button, .ghost-button, .icon-button, .target-button, .mini-button, .permission-select, button.primary), body.workbench-management :is(.primary-nav a, .settings-nav button, .tree-room, .tree-project-toggle), body.workbench-native :is(button, select) { min-height: 44px; }
   body.workbench .icon-button { min-width: 44px; }
+  body.workbench-management .workbench-project-heading .icon-button { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   body.workbench *, body.workbench *::before, body.workbench *::after { animation: none; transition: none; scroll-behavior: auto; }
 }
 @media (forced-colors: active) {
+  body.workbench-management .room-tab .room-tab-close { opacity: 1; }
   body.workbench :is(.primary-button, .send-button, button.primary) { border: 1px solid ButtonText; }
   body.workbench-management :is(.primary-nav a.active, .tree-room.active, .room-tab.active, .settings-nav button.active) { outline: 1px solid Highlight; outline-offset: -2px; }
 }
