@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fix the Management sidebar separator focus handoff when it becomes hidden: hiding a focused element blurs it to the document before media/class listeners run, so the separator now remembers that it held focus and deterministically moves focus to a visible navigation control at mobile widths or while collapsed/maximized.
+
 ## [v4.1.0] — 2026-09-12
 
 - Ship the `pairroom-relay` skill as a distributable asset (root `skills/pairroom-relay/`, `npx skills add sean2077/pairroom`); `relay install` embeds the same canonical file, kept byte-identical by a freshness test, upgrades its own previously installed projection instead of refusing it, and the slimmed skill defers protocol depth to the bind bootstrap. Add zero-flag onboarding: `bind --create` resolves the creator slot from the recognized harness against the created Room's real selections, because the Service-owned default pair is user configuration and never assumed to match slot order; zero-flag `bind` resolves the workspace's sole active native Room (archived Rooms are never candidates) and the caller's slot; `--slot 1|2` becomes the primary Agent-number form (durable `claude`/`codex` IDs remain accepted); and every ambiguity fails with candidates instead of guessing.
