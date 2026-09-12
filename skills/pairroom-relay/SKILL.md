@@ -1,6 +1,6 @@
 ---
 name: pairroom-relay
-description: Use when the user invokes /pairroom-relay, asks to create or join a PairRoom native room, bind this session for cross-agent relay, or tell this agent to discuss something with its peer agent through PairRoom.
+description: Use when the user invokes /pairroom-relay, asks to create or join a PairRoom native room, bind this session for cross-agent relay, or tell this agent to discuss or review a problem with its peer through PairRoom.
 ---
 
 # pairroom-relay
@@ -27,6 +27,10 @@ Zero flags inside a recognized native session: resolves the workspace's sole act
 
 1. Echo the returned `bind_nonce` verbatim in your visible final reply; the approved Stop hook associates this session.
 2. Adopt the returned bootstrap/collaboration instructions as this session's relay protocol: handles, `@user`, park windows, publication and recovery rules all come from there, not from this skill.
+
+## When the user asks for joint review
+
+Reuse the associated Room for follow-up reviews unless the user requests another. Review the same problem and exact workspace/revision; do not create a worktree or subagent hierarchy just to exchange opinions. Challenge material assumptions with evidence and counterexamples. Keep replies focused on new findings and necessary context, not repeated transcripts. Stop when known material objections are resolved or need a user decision; agreement is not proof. Review completion does not authorize implementation. Once the user assigns execution, leave tools, permissions and subagents to that native harness, and involve the peer again only when useful or requested.
 
 ## Rules
 
