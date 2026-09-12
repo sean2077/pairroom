@@ -135,6 +135,11 @@
     handle.setAttribute('aria-valuemin', String(min));
     handle.setAttribute('aria-valuemax', String(max));
     sidebar.append(handle);
+    // Hiding a focused element blurs it to <body> before media/class listeners
+    // run, so remember that the separator held focus instead of racing the blur.
+    let hadFocus = false;
+    handle.addEventListener('focus', () => { hadFocus = true; });
+    document.addEventListener('focusin', event => { if (event.target !== handle) hadFocus = false; });
     let drag = null;
     function apply(value) {
       width = normalize(value);
@@ -176,7 +181,10 @@
     function syncVisibility() {
       if (!mobile.matches && !app.hidden && !app.classList.contains('sidebar-collapsed') && !app.classList.contains('room-maximized')) return;
       finish(true);
-      if (!app.hidden && document.activeElement === handle) {
+      const stranded = document.activeElement === handle
+        || (hadFocus && (!document.activeElement || document.activeElement === document.body));
+      if (!app.hidden && stranded) {
+        hadFocus = false;
         const candidates = ['sidebar-collapse', 'mobile-menu'];
         const fallback = candidates.map(id => document.getElementById(id)).find(node => node?.getClientRects().length)
           || document.querySelector('.room-workspace-menu');
