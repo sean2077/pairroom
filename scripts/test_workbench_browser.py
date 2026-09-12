@@ -67,6 +67,23 @@ async def verify(browser_path: str | None, artifacts: Path) -> None:
                     field = page.locator('#message-input')
                     await field.fill('Keep this draft while changing appearance.')
                     await page.evaluate("window.__draftNode = document.getElementById('message-input')")
+                    # A narrow embedded pane must wrap the action group, not
+                    # split the Agent name or timestamp into separate lines.
+                    await page.evaluate("""() => {
+                      __snapshot.messages = [{id:'header-layout', from:'claude',
+                        text:'Keep the native Agent identity readable beside its actions.',
+                        created_at:'2026-09-12T04:00:00Z', intent:'queue'}];
+                    }""")
+                    await page.locator('#refresh-button').click()
+                    await expect(page.locator('.message-meta > time')).to_have_count(1)
+                    await page.set_viewport_size({'width':1200,'height':1000})
+                    lines = await page.locator('.message-meta > .message-author, .message-meta > time').evaluate_all("""nodes => nodes.map(el => {
+                      const range = document.createRange(); range.selectNodeContents(el);
+                      return [...range.getClientRects()].filter(r => r.width && r.height).length;
+                    })""")
+                    assert lines == [1, 1], f'Agent name/time wrapped inside the metadata row: {lines}'
+                    await page.screenshot(path=str(artifacts / 'room-metadata-1200.png'))
+                    await page.set_viewport_size({'width':1440,'height':1000})
                 for theme, language in [('light','en'), ('dark','zh-CN')]:
                     await page.evaluate("args => {PairRoomTheme.setTheme(args[0]); PairRoomI18n.setLang(args[1]);}", [theme, language])
                     await expect(page.locator('html')).to_have_attribute('data-theme', theme)

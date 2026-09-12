@@ -314,7 +314,8 @@ body.workbench-management .service-status-row small { font-size: 10px; }
 body.workbench-management .room-tablist { gap: 0; }
 body.workbench-management .workspace-footer { background: var(--wb-panel); font-size: 11px; }
 body.workbench-room .message-row { margin-bottom: 22px; }
-body.workbench-room .message-meta { margin-bottom: 8px; }
+body.workbench-room .message-meta { margin-bottom: 8px; flex-wrap: wrap; row-gap: 2px; }
+body.workbench-room .message-meta :is(.message-author, time) { white-space: nowrap; flex-shrink: 0; }
 body.workbench-room .message-bubble .rich-content { line-height: 1.7; }
 body.workbench-room .avatar, body.workbench-room .message-avatar { border-radius: 5px; }
 body.workbench-room .inspector-panel > .tabs { background: var(--wb-panel); }
