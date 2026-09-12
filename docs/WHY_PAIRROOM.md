@@ -1,122 +1,123 @@
 ---
 status: active
 kind: explanation
-reviewed: 2026-09-08
+reviewed: 2026-09-12
 ---
 
 # Why PairRoom?
 
-**Choose PairRoom when the recurring problem is coordinating two coding agents on one task, not finding another place to chat with a model.** It puts planning, implementation, peer review, user decisions, and execution state in one local Room while the selected native harnesses still do the coding.
+**Two independent coding agents, one problem. Keep the harness; add a second opinion only when it earns its cost.** PairRoom is for repeated cross-review between two supported native sessions, not for replacing their execution engines with another agent framework.
 
-This is a selection guide, not a claim that two agents outperform one. For dated competitor evidence, read [Alternatives](ALTERNATIVES.md). For the shortest runnable path, read [Getting started](GETTING_STARTED.md).
+A useful outcome can be just a reviewed plan. Once assumptions and material objections are resolved, the user can let either native agent execute with its own tools, skills, permissions, and subagents. PairRoom need not manage every implementation step. Review and implementation can also stay in the Room when that is useful; neither path is a mandatory pipeline.
+
+This is a selection guide, not evidence that two agents are always more accurate or cheaper. [Alternatives](ALTERNATIVES.md) compares Orca, native harnesses, and other products using dated primary sources. [Getting started](GETTING_STARTED.md#review-first-execute-where-it-fits) provides reusable prompts.
 
 ## The problem it addresses
 
-A developer already using two coding CLIs can ask one to plan and the other to implement. The repetitive work is in between: carrying the latest answer across terminals, telling the second agent when the first has finished, checking which session belongs to which task, passing review findings back, and deciding whether a quiet or interrupted process really finished.
+The recurring work is between two agents: carrying a proposal to the other session, returning a concrete objection, checking the revision against repository evidence, and knowing when another opinion is no longer useful. The point is not to maximize agent count or divide every task into parallel jobs. It is to improve one decision without making the human a message courier.
 
-PairRoom makes that coordination explicit. A Room binds two native sessions, admits only one participant's native Turn at a time, relays an explicitly addressed complete response at the Turn boundary, and records messages and delivery state. The intended benefit is less **human coordination work** and clearer execution evidence. Whether that benefit exceeds setup time, extra model work, and maintenance is something to measure on your tasks.
+PairRoom relays an explicitly addressed complete response at the native Turn boundary, keeps the sessions' identities, and records delivery state. It does not make agents agree, prove a plan correct, or replace human product decisions. An independent review must add evidence, a counterexample, or a meaningful correction; agreement alone is not verification.
 
-## What users get
+## Keep the harness, and choose the interaction surface
 
-| Need | PairRoom mechanism | Boundary |
+Keeping a native harness and keeping its original desktop/terminal UI are different promises. Choose the Room's immutable host mode accordingly:
+
+| Need | Embedded Room | Native Room (experimental) |
 |---|---|---|
-| Use a planner and an implementer with different strengths | Two independently selected Runtimes, Providers, models, effort levels, and additional instructions | No automatic model ranking, price optimizer, or demonstrated cost saving |
-| Keep existing coding tools | Adapters for native Claude Code, Codex, and Grok Build; either Runtime may occupy either slot, including the same Runtime twice | Supported adapter interfaces, not a promise that every interactive CLI feature is exposed |
-| Work through one change together | Default Lead/Executor instructions, or custom natural-language collaboration rules | Instructions guide agents; they are not an enforced phase machine |
-| Avoid the two Room participants starting overlapping Turns | One native Turn owner and one Room FIFO | Not a repository-wide lock, process sandbox, or guarantee against a harness's own parallel tools/subagents |
-| Inspect and redirect execution | Shared conversation, Turn/tool activity, native approvals, steering, queue, cancel, interrupt, and explicit retry | Native steering support varies; human supervision remains necessary |
-| Retain a task's coordination record | Durable Room, native-session Binding, Event Log, attachments, and recovery rules | Does not restore a running process or import all pre-existing native conversation history |
+| Where you interact | PairRoom's conversation and controls; adapters drive the supported native harness interfaces | Your own Claude Code / Codex sessions, including the intended Codex Desktop workflow; approved hooks bind them to the relay |
+| Who owns execution | PairRoom schedules the two participants' Turns; each harness still runs its own tools and subagents | The original harness owns its process, tools, permissions, input and interruption; PairRoom does not launch or interrupt it |
+| Provider / model / effort | Each slot independently selects supported overrides or inherits native configuration | Configured in each original harness; Room selection fields are metadata, not applied overrides |
+| Delivery and control | Single Room Turn owner, FIFO, supported steering, queue, cancel, interrupt and explicit retry | Durable per-slot FIFO and binding audit; advisory Turn ownership, no process lock or Interrupt control |
+| Important limit | Native tool execution does not expose every interactive vendor feature or preserve an independent Desktop UI | Automatic continuation is bounded by park; authenticated multi-round vendor E2E remains a release gate |
 
-Mechanics are specified in [Concepts](CONCEPTS.md), [Protocol](PROTOCOL.md), [Configuration](CONFIGURATION.md), and [Storage](STORAGE.md). These are implementation-backed capabilities, not uniqueness claims: other tools also have agents, queues, approvals, or persistent sessions.
+A requirement to keep **Codex Desktop** is a reason to evaluate Native, not to claim Embedded is a transparent attachment to that application. Native currently supports Claude Code and Codex; Grok Build is an Embedded option. A Native Room's hook parks for up to 30 seconds, with a cap of eight consecutive actual-message blocks. Outside that window/cap, messages stay queued for collection or a human nudge. Neither `handed_off` nor synthetic hook tests prove model acceptance. See [Protocol](PROTOCOL.md#native-host-protocol-v7) and [Support](../SUPPORT.md).
 
-### Keep the harness, change the coordination layer
+### Independent configuration without a Provider manager
 
-A model is not the same thing as its harness. The harness supplies tools, repository instructions, native session handling, configuration, and permission behavior. PairRoom coordinates selected native harnesses rather than implementing another general-purpose model/tool loop.
+Embedded selections can independently reference supported CC Switch Profiles without changing CC Switch's current Profile. Unspecified values inherit native configuration. References are read-only and revalidated; they do not freeze the external Profile or make unsupported authentication work. Save a usual pair as an [Agent pair profile](CONFIGURATION.md#agent-pair-profiles).
 
-This matters when the reason for choosing a second agent is not merely its model name, but its existing CLI workflow or native session. It also creates a maintenance cost: upstream protocol changes can break an adapter. Verify the chosen CLI and Provider combination before relying on it; [Support](../SUPPORT.md) describes that boundary.
+Native preserves the configuration chosen in each original session rather than injecting child-process overrides. Do not present Embedded Provider selection as a Native feature. PairRoom is not a credential store or a universal Provider marketplace. [Configuration](CONFIGURATION.md) owns the exact support boundary.
 
-Native configuration remains the default source for unspecified overrides. Supported CC Switch references are read-only, resolved for creation and activation, and do not change CC Switch's current Profile. A saved reference does not freeze the external Profile's contents. PairRoom is not a Provider manager and does not make an unsupported credential/protocol combination work.
+## Review together; leave execution to the chosen agent
 
-### Make peer review convenient, not ceremonial
-
-The Lead can request implementation, inspect the resulting diff and test evidence, and request a correction only when it changes the outcome. The Executor can challenge an unsupported plan instead of acting as a blind file editor. Both operate on the same live workspace in a modern Room.
-
-A second context can offer another perspective, but agents can share blind spots and repeat one another's mistakes. A review should identify a concrete defect, examine a change, or check evidence; agreement alone is not verification. For a trivial edit, involving the peer may add cost with no useful benefit. Either agent can finish without another relay.
-
-The model-facing relay contains the complete visible response and attachments, not an automatically appended Room transcript. That avoids one source of repeated context, but does **not** establish lower billed tokens: both native sessions have their own context and additional Turns consume work.
-
-### Expose uncertainty instead of silently repeating work
-
-Delivery, execution, and completion are different facts. After restart, PairRoom can restore queued input that never crossed the native submission boundary. Work caught in an uncertain submission window fails for explicit Retry; accepted unfinished work is not automatically replayed. Pending connection-local approvals expire.
-
-This is valuable when duplicate execution would be worse than stopping for inspection. It is not exactly-once execution, automatic rollback, or uninterrupted unattended recovery. Inspect repository side effects before retrying. The Event Log is a coordination record, not a tamper-proof compliance audit or a backup of your Git repository and native session stores.
-
-## A representative use case
-
-Create a **default** Room with the planning/review configuration in Agent 1 and the implementation configuration in Agent 2. Both may use the same Runtime, or different supported Runtimes. A possible first task is:
+The default Lead/Executor responsibilities are flexible instructions, not mandatory ranks or phases. Both participants can be high-capability reviewers. A user may ask them to challenge a plan, stop at a decision, and only later assign execution to either one. A custom Room can express that preference without introducing another mode.
 
 ```text
-Find the smallest change that fixes this bug. Delegate implementation and
-verification to your peer, then review the actual diff and test evidence.
-Challenge unsupported assumptions. Ask me about unresolved product decisions.
-Stop when the result is complete; do not exchange acknowledgement-only replies.
+One problem -> proposal <-> evidence-based objections and revisions
+            -> reviewed plan + remaining uncertainty -> user chooses execution
 ```
 
-An example outcome is:
+This is an example interaction, not a state machine. Relay requires the peer's exact displayed handle; `@user` without a peer handle returns the decision to the human, and no peer handle ends Agent relay. Do not mention the peer merely to acknowledge, agree, or ceremonially return a Turn.
 
-```text
-Human request -> Lead plan -> Executor change and tests
-              -> Lead review -> Human receives result
-```
+Codex and Claude Code already provide native delegation/subagent capabilities; Claude also documents agent teams. PairRoom's reason to exist is not to recreate those mechanisms. It connects the two top-level sessions the user chose, while leaving native decomposition, tool use and subagent decisions to the executing harness. If native delegation already supplies the required second opinion, use it directly. See the [native-harness comparison](ALTERNATIVES.md#native-harnesses-the-default-alternative-to-adding-infrastructure).
 
-This sequence is an example, **not a scheduler guarantee**. The agent must use the peer's exact displayed mention handle to request another Turn. A response without that handle ends Agent relay; responsibilities such as Lead are not routing aliases. A human can redirect the task without editing the saved collaboration mode.
+After review, Native users can continue in the chosen original session without another peer relay unless requested. Embedded users can direct one participant in the Room. Moving that same Embedded session to an external harness requires ending/draining PairRoom's ownership first and verifying native resumption support; it is not automatic live attachment or mode conversion. Never operate the same session from two owners at once.
 
-For a discussion-only task, select native read-only permissions for both participants. Saying “plan first” is not equivalent to an enforced human-approval gate. New Rooms default to YOLO for both participants; select narrower policies explicitly. A natural-language instruction to stop is not a budget limit or a sandbox.
+For discussion-only work, choose native read-only restrictions where supported. A prompt saying “do not implement yet” is not an enforced approval gate. Embedded new Rooms default to YOLO; Native permissions remain controlled by the original harness.
+
+## Keep the project's workflow and worktrees
+
+PairRoom does not require a new worktree per agent or install its own task-branch manager into user projects. Keep repository instructions, agent-scaffold, existing skills, tests, and PR/MR delivery policy authoritative. A Project registration is not a migration to another IDE or directory layout.
+
+A valid workflow starts both sessions at the primary checkout while edits and tests target one explicitly named directory such as `.worktrees/log-upload`. Opening a session at the primary checkout is not permission to edit it. Share the exact task path and revision with both agents so a reviewer does not inspect the primary checkout's older files by mistake. Tool permissions and hooks must permit the intended access; PairRoom does not bypass them.
+
+Assign one writer when sharing a task worktree. Embedded's single-Turn ownership covers only its two participants, not other Rooms, native subagents, or external processes. Native has no enforced writer lock. Worktree creation, merge and cleanup should have one owner, following the project's existing rules. Do not run a cleanup helper that also merges/pushes as though it only deletes a directory.
+
+## What is actually lightweight?
+
+The [protocol](PROTOCOL.md) keeps fixed identity/routing guidance in a compact bootstrap and sends sender, body, attachments and explicit user-quoted context in a dynamic envelope. It does **not** automatically append accumulated Room history, summarize the peer's response, or require a Task/Dispatch acknowledgement in every model reply.
+
+Static tests cap the ordinary envelope overhead at **128 UTF-8 bytes** and bootstrap plus default collaboration at **1,800 bytes**, excluding the documented body/media/quote/custom-instruction costs. These are byte budgets, not token counts, cache-hit guarantees or billing measurements. Optional onboarding skill text is separate and also consumes context when loaded.
+
+Both sessions retain their native context. Full peer replies, repeated code reads, native compaction, reasoning, tool results and retries still cost work. Keep follow-ups focused on changed assumptions, new findings and necessary evidence rather than repeating the entire plan. PairRoom does not truncate the reply for you. A more economical model or a smaller relay envelope does not guarantee a cheaper completed task.
+
+The target is **accuracy, efficiency and acceptable total cost together**. Better convenience alone does not justify materially worse results or an unacceptable bill. There is no automatic relay-count or cost ceiling; choose a simpler single-agent path when peer review does not earn its overhead.
+
+## Orca is a useful workbench, not an imaginary non-collaborator
+
+Orca combines terminals, workspaces, notifications, review tools and an experimental structured orchestration layer. Its explicit messages, blocking ask/reply and existing-terminal reuse can support repeated review of the **same** problem, not just independent parallel jobs. It also supports externally created worktrees. Calling it “parallel only” would be incorrect. [Alternatives](ALTERNATIVES.md#orca-workbench-and-supervised-coordination-versus-a-pair-relay) documents the evidence and Provider distinction.
+
+The fit question is whether you want that workbench and supervised task lifecycle. If you need two original sessions to review one proposal and then let a native harness execute normally, another Run/Task/Dispatch layer may add little value. That is a workflow preference, not proof that Orca is intrinsically slow, token-heavy or unable to collaborate.
+
+Adopting Orca's terminal/notification surface does not require adopting its orchestration or moving worktree ownership. Conversely, PairRoom Embedded sessions do not automatically become Orca-controlled terminal panes. Native can be evaluated with a compatible terminal host, but hook coexistence and recovery need real testing. Do not let two coordinators drive the same pair simultaneously.
 
 ## Choose another tool when it fits better
 
-| Your main need | Start with |
+| Main need | Start with |
 |---|---|
-| One agent already completes the task reliably | That native CLI; use its subagents when appropriate |
-| An occasional second opinion | Two existing sessions and a manual relay |
-| A broad assistant, knowledge, document, and Agent workstation | Cherry Studio |
-| Architect-model proposals translated into edits without preserving two native harness sessions | Aider's architect/editor mode |
-| Many independent tasks, isolated worktrees, multiple repositories, and integrated change review | A workspace-oriented tool such as Vibe Kanban |
-| Cloud execution and collaboration across people | A product designed for that deployment, such as Conductor's documented cloud offering |
-| Enforced phase gates, delegation budgets, or unattended multi-step business automation | A workflow system with those explicit guarantees, not PairRoom instructions alone |
+| One harness already finishes reliably, including its own subagents | That native harness |
+| Only an occasional independent second opinion | Two existing sessions and manual relay |
+| Many sessions, integrated terminals, attention management, workspaces and supervised tasks | Orca or another workspace-oriented workbench |
+| A broad assistant, knowledge and Agent workstation | Cherry Studio |
+| An architect/editor model split without two preserved native sessions | Aider |
+| Cloud/team execution or enforced workflow budgets and gates | A product with those explicit deployment and control guarantees |
 
-These are task-fit recommendations, not statements that competitors lack all other capabilities. In particular, Cherry Studio is **not chat-only**, and native coding harnesses already support multi-agent work. See the [dated comparison](ALTERNATIVES.md).
+PairRoom adds its own Service, bindings, storage and compatibility maintenance. It is not zero setup, a generic agent graph, a full IDE, multi-user hosting, cloud sync, or a replacement for every native session feature. Its web listeners are local and loopback-only; the selected models may still receive code through their Providers. See [Security](../SECURITY.md).
 
-## Costs and limits to accept up front
+## Expose uncertainty instead of silently repeating work
 
-PairRoom adds a Service, Room state, adapters, and UI to tools you could run directly. It currently has exactly two participant slots per Room. Room creation fixes collaboration and Agent selection; changing only the effective permission profile later does not change the model, Provider reference, or responsibility. It does not implement an arbitrary agent graph or a provider-neutral replacement for every native session feature.
-
-Sequential ownership favors dependent implementation/review work over parallel throughput. Its scope is the two participants in **one Room**. Other Rooms, external tools, and native child processes are not isolated by this rule. Use separate checkouts/worktrees and explicit integration when independent tasks may write concurrently.
-
-There is no automatic relay ceiling or cost circuit breaker. Agents can continue mentioning each other; Cancel, Interrupt, and a newer human instruction are the available controls. With YOLO defaults, lower approval friction is also a larger trust commitment, not a security advantage. Read [Security](../SECURITY.md) before using untrusted code or broad tool access.
-
-The Service is local and loopback-only. That is useful for a single-user local workflow, but not multi-user hosting, remote workers, RBAC, or built-in cloud sync. Cloud-model requests still travel through the selected native CLI to its Provider. Local coordination does not mean offline inference or that code never leaves the machine.
+Delivery, execution and completion are different facts. Recovery preserves safe queued work and requires explicit decisions for uncertain delivery; it does not promise exactly-once execution or automatic rollback. Embedded and Native have different submission/collection boundaries, documented in [Protocol](PROTOCOL.md) and [Storage](STORAGE.md). Inspect side effects before Retry. The Event Log is a coordination record, not a tamper-proof compliance audit or a repository backup.
 
 ## How to decide whether it pays off
 
-Compare representative tasks from the **same repository revision**, with the same acceptance tests and explicit permission constraints. Include these baselines: one native agent, two native agents with manual relay, and PairRoom. Where relevant, add the native subagent or workspace tool you already use. Record the actual CLI versions, models, effort, Provider, context/session freshness, and task budget; do not attribute a stronger model's improvement to the coordination UI.
+Compare the same repository revision, acceptance criteria, permissions, model/effort/Provider combination and comparable session freshness. Include one native agent, native subagents when relevant, manual two-session relay, PairRoom, and Orca when it fits. Evaluate Embedded and Native separately rather than pooling their different continuation behavior.
 
-Measure completed acceptance criteria, regressions, human interventions, time spent relaying context, elapsed time, review findings that changed the result, and actual Provider usage/cost. Include failed runs and recovery attempts, not only successful demonstrations. Repeat tasks and report variation. Use native/provider accounting where available; do not assume PairRoom has a complete cross-provider billing meter.
+Record defects found and resolved, regressions, unresolved assumptions, human interventions, context-relay work, elapsed time, actual cached/uncached input and output usage, and Provider charges. Include failed runs and recovery. Repeat tasks and report variation; do not attribute a stronger model to the coordination tool. Native/provider accounting is authoritative where available, not a presumed complete PairRoom billing meter.
 
-Separate two questions: does the UI reduce coordination effort for the **same pair**, and does adding a second agent improve the overall workflow enough to justify its work? Mock tests answer neither question about model quality. They check control-plane behavior, not comparative productivity.
+Separate “does this surface make the same pair easier to operate?” from “does a second agent improve the result enough to justify its work?” Mock tests establish neither comparative quality nor cost. No head-to-head Orca/PairRoom benchmark was performed for this document.
 
-**Adopt PairRoom when it removes recurring coordination work you can observe. Skip it when it only adds another layer to a workflow that already works.**
+**Adopt PairRoom when an observable improvement in cross-review justifies the coordination layer. Keep execution and tooling choices where they already work.**
 
 ## Implementation evidence and maintenance
 
-This explanation was checked against PairRoom commit `94dbc6e1add9a7d66eadb89d4779304a7cdc0714`. Current technical documents and executable tests take precedence when behavior changes.
+Reviewed against PairRoom commit `d76c089161180cd06baa1f53f22e93413e4266bf`. The current implementation and technical references take precedence; this explanation does not add runtime guarantees.
 
 | Claim | Implementation / contract entry |
 |---|---|
-| Creation-only responsibilities, shared workspace, independent permission profiles | [Collaboration regressions](../internal/room/collaboration_test.go), [permission transitions](../internal/room/permissions.go) |
-| Explicit relay, native authority, no ceremonial turns | [Versioned protocol](../internal/protocol/contract.go), [Room Engine](../internal/room/engine.go) |
-| Independent Agent selection and native adapters | [Selection model](../internal/model/agent_selection.go), [adapters](../internal/agent/), [CC Switch boundary](../internal/ccswitch/) |
-| Persistent state and explicit recovery | [Engine regressions](../internal/room/engine_test.go), [store](../internal/store/), [Storage](STORAGE.md) |
-| One desktop host over the same Service | [Desktop host](../desktop/internal/host/host.go), [Operations](OPERATIONS.md#desktop-lifecycle) |
+| Flexible responsibilities, not a phase compiler | [Protocol](PROTOCOL.md), [collaboration regressions](../internal/room/collaboration_test.go) |
+| Exact-handle relay and byte budgets | [Versioned protocol](../internal/protocol/contract.go), [Room Engine](../internal/room/engine.go) |
+| Independent Embedded selections | [Selection model](../internal/model/agent_selection.go), [CC Switch boundary](../internal/ccswitch/) |
+| Native process/configuration boundary and bounded continuation | [Native protocol](PROTOCOL.md#native-host-protocol-v7), [relay client](../internal/relayclient/) |
+| Persistent state and explicit recovery | [Engine regressions](../internal/room/engine_test.go), [Storage](STORAGE.md) |
 
-Revisit positioning when a native harness or a close competitor changes its collaboration model. Do not preserve a comparison merely because it once favored PairRoom, and do not turn possible future capabilities into present-tense product claims.
+Revisit positioning when native harnesses or close competitors change. Product breadth, stars and marketing claims do not establish superiority; no single ingredient here is claimed exclusive to PairRoom.
