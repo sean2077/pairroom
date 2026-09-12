@@ -43,7 +43,7 @@ const palettes = [...css.matchAll(/:root(?:,\s*:root\[data-theme\]|\[data-theme=
 assert.equal(palettes.length, 2);
 for (const [, block] of palettes) {
   const tokens = Object.fromEntries([...block.matchAll(/--wb-([\w-]+):\s*(#[a-f\d]{6});/gi)].map(m => [m[1], m[2]]));
-  for (const surface of ['canvas', 'chrome', 'hover']) {
+  for (const surface of ['canvas', 'chrome', 'hover', 'panel', 'input', 'selected']) {
     assert(contrast(tokens.ink, tokens[surface]) >= 4.5, `${surface}: body text contrast`);
     assert(contrast(tokens.muted, tokens[surface]) >= 4.5, `${surface}: metadata contrast`);
   }
@@ -52,7 +52,7 @@ for (const [, block] of palettes) {
   }
   // Actor, status and delivery-state colors stay meaningful, so they must also
   // clear 4.5:1 on every surface they are rendered against.
-  for (const surface of ['canvas', 'chrome', 'hover']) {
+  for (const surface of ['canvas', 'chrome', 'hover', 'panel', 'input', 'selected']) {
     for (const accent of ['green', 'amber', 'red', 'blue']) {
       assert(contrast(tokens[accent], tokens[surface]) >= 4.5, `${surface}: ${accent} status contrast`);
     }

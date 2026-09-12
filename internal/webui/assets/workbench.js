@@ -59,9 +59,140 @@
     media.addEventListener('change', sync);
     sync();
   }
+  function installWorkspaceNavigation() {
+    if (!document.body.classList.contains('workbench-management')) return;
+    const sidebar = document.getElementById('sidebar');
+    const app = document.getElementById('app');
+    const tree = document.getElementById('room-tree');
+    const command = document.getElementById('management-command-button');
+    if (!sidebar || !app || !tree || !command) return;
+    const t = key => window.PairRoomI18n?.t(key) || key;
+    const mobile = window.matchMedia('(max-width: 900px)');
+    const home = document.createComment('quick actions toolbar position');
+    command.before(home);
+    command.classList.add('workbench-launcher');
+    const glyph = document.createElement('span');
+    glyph.className = 'workbench-command-glyph';
+    const label = document.createElement('span');
+    label.className = 'workbench-launcher-label';
+    label.dataset.i18n = 'ui.quickOperation';
+    label.textContent = t(label.dataset.i18n);
+    const shortcut = document.createElement('kbd');
+    shortcut.textContent = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘ K' : 'Ctrl K';
+    shortcut.setAttribute('aria-hidden', 'true');
+    command.replaceChildren(glyph, label, shortcut);
+    const heading = document.createElement('div');
+    heading.className = 'workbench-project-heading';
+    const title = document.createElement('span');
+    title.dataset.i18n = 'ui.projectsAndRooms';
+    title.textContent = t(title.dataset.i18n);
+    const add = document.createElement('button');
+    add.className = 'icon-button workbench-add-project';
+    add.type = 'button';
+    add.dataset.i18nAriaLabel = 'ui.registerProject9c99cf3';
+    add.dataset.i18nTitle = add.dataset.i18nAriaLabel;
+    add.setAttribute('aria-label', t(add.dataset.i18nAriaLabel));
+    add.title = t(add.dataset.i18nTitle);
+    add.addEventListener('click', () => document.getElementById('add-project-button')?.click());
+    heading.append(title, add);
+    tree.before(heading);
+    function placeCommand() {
+      const focused = document.activeElement === command;
+      if (mobile.matches) home.after(command);
+      else heading.before(command);
+      if (focused) {
+        // Room mode hides the ordinary toolbar; restore to its visible peer.
+        const target = command.getClientRects().length ? command
+          : document.querySelector('.room-workspace-command');
+        target?.focus({preventScroll: true});
+      }
+    }
+    mobile.addEventListener('change', placeCommand);
+    placeCommand();
+
+    // Like density and sidebar collapse, width is a tab-local UI preference.
+    // A single stylesheet rule is CSP-compatible; no inline style or DOM rebuild.
+    const min = 208, max = 360, initial = 244;
+    const normalize = value => value === null || value === '' || !Number.isFinite(Number(value))
+      ? initial : Math.min(max, Math.max(min, Math.round(Number(value))));
+    let width = initial;
+    let rule;
+    try {
+      const sheet = Array.from(document.styleSheets).find(item => item.href?.split('?')[0].endsWith('/workbench.css'))
+        || document.getElementById('management-styles')?.sheet;
+      if (!sheet) return;
+      const index = sheet.insertRule('body.workbench-management {}', sheet.cssRules.length);
+      rule = sheet.cssRules[index];
+    } catch (_) { return; /* stylesheet access must not prevent navigation */ }
+    const handle = document.createElement('div');
+    handle.className = 'workbench-sidebar-resizer';
+    handle.tabIndex = 0;
+    handle.setAttribute('role', 'separator');
+    handle.setAttribute('aria-orientation', 'vertical');
+    handle.setAttribute('aria-controls', 'sidebar');
+    handle.dataset.i18nAriaLabel = 'ui.primaryNavigation';
+    handle.setAttribute('aria-label', t(handle.dataset.i18nAriaLabel));
+    handle.setAttribute('aria-valuemin', String(min));
+    handle.setAttribute('aria-valuemax', String(max));
+    sidebar.append(handle);
+    let drag = null;
+    function apply(value) {
+      width = normalize(value);
+      rule.style.setProperty('--sidebar-width', `${width}px`);
+      handle.setAttribute('aria-valuenow', String(width));
+      handle.setAttribute('aria-valuetext', `${width}px`);
+    }
+    function finish(cancelled = false) {
+      if (!drag) return;
+      const {startWidth, pointerId} = drag;
+      drag = null;
+      document.body.classList.remove('workbench-resizing');
+      apply(cancelled ? startWidth : width);
+      if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
+    }
+    handle.addEventListener('pointerdown', event => {
+      if (event.button !== 0 || !event.isPrimary || mobile.matches || app.classList.contains('sidebar-collapsed')) return;
+      event.preventDefault();
+      handle.focus({preventScroll: true});
+      drag = {startX: event.clientX, startWidth: width, pointerId: event.pointerId};
+      handle.setPointerCapture(event.pointerId);
+      document.body.classList.add('workbench-resizing');
+    });
+    handle.addEventListener('pointermove', event => {
+      if (drag && event.pointerId === drag.pointerId) apply(drag.startWidth + event.clientX - drag.startX);
+    });
+    handle.addEventListener('pointerup', () => finish());
+    handle.addEventListener('pointercancel', () => finish(true));
+    handle.addEventListener('lostpointercapture', () => finish(true));
+    handle.addEventListener('dblclick', () => apply(initial));
+    handle.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && drag) { event.preventDefault(); event.stopPropagation(); finish(true); return; }
+      const step = event.shiftKey ? 32 : 8;
+      const next = {ArrowLeft: width - step, ArrowRight: width + step, Home: min, End: max}[event.key];
+      if (next === undefined) return;
+      event.preventDefault(); event.stopPropagation();
+      apply(next);
+    });
+    function syncVisibility() {
+      if (!mobile.matches && !app.hidden && !app.classList.contains('sidebar-collapsed') && !app.classList.contains('room-maximized')) return;
+      finish(true);
+      if (!app.hidden && document.activeElement === handle) {
+        const candidates = ['sidebar-collapse', 'mobile-menu'];
+        const fallback = candidates.map(id => document.getElementById(id)).find(node => node?.getClientRects().length)
+          || document.querySelector('.room-workspace-menu');
+        fallback?.focus({preventScroll: true});
+      }
+    }
+    new MutationObserver(syncVisibility).observe(app, {attributes: true, attributeFilter: ['class', 'hidden']});
+    mobile.addEventListener('change', syncVisibility);
+    window.addEventListener('blur', () => finish(true));
+    apply(width);
+  }
+
   function start() {
     if (!document.body.classList.contains('workbench')) return;
     compactRoomTools();
+    installWorkspaceNavigation();
     const icons = {
       '[data-nav="overview"] .nav-icon': 'overview',
       '[data-nav="projects"] .nav-icon': 'folder',
@@ -71,11 +202,12 @@
       '#refresh-button, .room-workspace-refresh': 'refresh',
       '#notification-button': 'bell',
       '#mobile-menu, .room-workspace-menu': 'menu',
-      '#room-picker-button, #attach-button': 'plus',
+      '#room-picker-button, #attach-button, .workbench-add-project': 'plus',
       '.modal-close, .ux-menu-close': 'close',
       '.room-workspace-maximize': 'maximize',
       '#ux-layout-button': 'layout',
-      '.management-command-button, .room-workspace-command': 'command',
+      '.management-command-button:not(.workbench-launcher), .room-workspace-command': 'command',
+      '.workbench-command-glyph': 'search',
     };
     for (const [selector, name] of Object.entries(icons)) {
       document.querySelectorAll(selector).forEach(node => targets.set(node, () => name));

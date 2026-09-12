@@ -15,6 +15,7 @@ from pathlib import Path
 from playwright.async_api import async_playwright, expect
 from test_management_browser import fixture_html as management_html
 from test_room_browser import ROOT, fixture_html as room_html
+from test_orca_navigation_browser import verify_navigation
 
 
 async def contrast(locator) -> float:
@@ -70,7 +71,7 @@ async def verify(browser_path: str | None, artifacts: Path) -> None:
                     await page.evaluate("args => {PairRoomTheme.setTheme(args[0]); PairRoomI18n.setLang(args[1]);}", [theme, language])
                     await expect(page.locator('html')).to_have_attribute('data-theme', theme)
                     await page.wait_for_timeout(100)
-                    expected = 'rgb(255, 255, 255)' if theme == 'light' else 'rgb(27, 27, 30)'
+                    expected = 'rgb(255, 255, 255)' if theme == 'light' else 'rgb(14, 14, 14)'
                     assert await page.locator('body').evaluate('el=>getComputedStyle(el).backgroundColor') == expected
                     assert await page.locator('body').evaluate('el=>getComputedStyle(el).backgroundImage') == 'none'
                     primary = page.locator('#add-project-button' if surface == 'management' else '#send-button')
@@ -128,6 +129,7 @@ async def verify(browser_path: str | None, artifacts: Path) -> None:
                 assert await control.evaluate('el=>getComputedStyle(el).outlineStyle') != 'none'
                 assert not errors, errors
                 await page.close()
+            await verify_navigation(browser, artifacts / 'orca-navigation')
         finally:
             await browser.close()
     (artifacts / 'results.json').write_text(json.dumps(results, indent=2) + '\n', encoding='utf-8')
