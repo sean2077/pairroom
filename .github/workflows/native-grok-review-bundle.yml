@@ -1,0 +1,40 @@
+name: Native Grok offline review bundle (temporary)
+
+on:
+  push:
+    branches: ['feat/native-grok-build']
+    paths: ['.github/workflows/native-grok-review-bundle.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ab843dae15e734c4589090b012d4bec65821ef15
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Export only tracked source and public build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/native-grok-review"
+          mkdir -p "$out"
+          git archive --format=tar.gz HEAD > "$out/pairroom-base.tar.gz"
+          go mod download
+          tar -czf "$out/go-toolchain.tar.gz" -C "$(go env GOROOT)" .
+          tar -czf "$out/go-modules.tar.gz" -C "$(go env GOMODCACHE)" .
+          curl --fail --location --retry 2 https://codeload.github.com/xai-org/grok-build/tar.gz/37949780c144e37df692e3d669051a21fec24f20 -o "$out/grok-source.tar.gz"
+          (cd "$out" && sha256sum *.tar.gz > SHA256SUMS)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-grok-offline-review
+          path: ${{ runner.temp }}/native-grok-review/
+          retention-days: 1
