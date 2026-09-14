@@ -6,9 +6,22 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"testing"
 
 	"github.com/sean2077/pairroom/internal/model"
 )
+
+// IsolateNativeCaller clears inherited session metadata and process ancestry so
+// tests can install an exact caller fixture. Production code never calls this.
+func IsolateNativeCaller(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{"CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "GROK_SESSION_ID", "CLAUDECODE"} {
+		t.Setenv(key, "")
+	}
+	before := harnessAncestor
+	harnessAncestor = func() (int, string, bool) { return 0, "", false }
+	t.Cleanup(func() { harnessAncestor = before })
+}
 
 // nativeCaller is discovery metadata, never a replacement for approved-hook
 // association or the Service's credential/generation/session checks. A desktop
@@ -92,7 +105,7 @@ func applyCallerDefaults(root, action string, o *options) error {
 	if err != nil {
 		return err
 	}
-	var matches []State
+	var matches, pending []State
 	for _, path := range paths {
 		var s State
 		if err := readPrivate(path, &s); err != nil {
@@ -101,23 +114,26 @@ func applyCallerDefaults(root, action string, o *options) error {
 		if s.Runtime != caller.runtime {
 			continue
 		}
-		// A pending binding has no authoritative session yet. Permit only an
-		// explicitly addressed status inspection; the Service returns its own
-		// pending binding, never peer mail. All collection still needs an exact
-		// associated session. This keeps failed onboarding diagnosable.
-		pendingStatus := action == "status" && s.SessionID == "" && o.room == s.Room && o.slot == string(s.Slot)
-		if s.SessionID != caller.session && !pendingStatus {
+		associated := s.SessionID == caller.session
+		if !associated && s.SessionID != "" {
 			continue
 		}
-		if action == "bind" && o.create {
+		if associated && action == "bind" && o.create {
 			return errors.New("this native session is already associated; use pairroom relay bind to resume it, not bind --create")
 		}
 		if !safePart(s.Room) || !s.Slot.ValidParticipant() || filepath.Base(filepath.Dir(path)) != string(s.Slot) || filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(path)))) != s.Room {
 			return errors.New("invalid local relay binding identity")
 		}
-		if (o.room == "" || o.room == s.Room) && (o.slot == "" || o.slot == string(s.Slot)) {
-			matches = append(matches, s)
+		if (o.room != "" && o.room != s.Room) || (o.slot != "" && o.slot != string(s.Slot)) {
+			continue
 		}
+		if associated {
+			matches = append(matches, s)
+			continue
+		}
+		// Pending bindings have no official session yet. Status may inspect a
+		// unique match; send/wait/exchange still require nonce association.
+		pending = append(pending, s)
 	}
 	if len(matches) > 1 {
 		return errors.New("native session matches multiple relay bindings; inspect them and pass --room/--slot explicitly")
@@ -133,10 +149,21 @@ func applyCallerDefaults(root, action string, o *options) error {
 		}
 		return nil
 	}
+	if action == "status" && len(pending) == 1 {
+		s := pending[0]
+		o.room, o.slot = s.Room, string(s.Slot)
+		return nil
+	}
+	if action == "status" && len(pending) > 1 {
+		return errors.New("multiple pending native bindings; pass --room/--slot to inspect one (status does not associate or collect)")
+	}
 	if action == "bind" {
 		// New/pending bindings still resolve against the Service's active Room
 		// and pair selections, then require the official Stop-hook nonce.
 		return nil
+	}
+	if len(pending) > 0 {
+		return errors.New("this native session is awaiting approved Stop-hook nonce association; echo bind_nonce in this session's visible reply before send/wait/exchange")
 	}
 	return errors.New("this native session has no matching associated binding in this workspace; run pairroom relay bind here first (do not consume another session's inbox)")
 }

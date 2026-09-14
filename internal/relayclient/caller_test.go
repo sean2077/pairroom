@@ -16,13 +16,7 @@ import (
 )
 
 func isolateCaller(t *testing.T) {
-	t.Helper()
-	for _, key := range []string{"CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "GROK_SESSION_ID", "CLAUDECODE"} {
-		t.Setenv(key, "")
-	}
-	before := harnessAncestor
-	harnessAncestor = func() (int, string, bool) { return 0, "", false }
-	t.Cleanup(func() { harnessAncestor = before })
+	IsolateNativeCaller(t)
 }
 
 func callerState(t *testing.T, root, room, session string, slot model.ActorID, kind model.RuntimeKind) State {
@@ -111,8 +105,20 @@ func TestNativeCallerNeverAssociatesPendingStateOrDuplicatesCreatedRoom(t *testi
 	if err := applyCallerDefaults(root, "bind", &o); err != nil || o.cont || o.session != "" {
 		t.Fatalf("metadata bypassed nonce: %+v %v", o, err)
 	}
-	if err := applyCallerDefaults(root, "send", &options{}); err == nil {
-		t.Fatal("pending binding granted collection")
+	if err := applyCallerDefaults(root, "send", &options{}); err == nil || !strings.Contains(err.Error(), "nonce") {
+		t.Fatalf("pending binding granted collection: %v", err)
+	}
+	o = options{}
+	if err := applyCallerDefaults(root, "status", &o); err != nil || o.room != "pending" || o.slot != "claude" || o.cont {
+		t.Fatalf("unique pending status not diagnosable: %+v %v", o, err)
+	}
+	callerState(t, root, "other-pending", "", model.ActorClaude, model.RuntimeClaude)
+	if err := applyCallerDefaults(root, "status", &options{}); err == nil || !strings.Contains(err.Error(), "multiple pending") {
+		t.Fatalf("two pending bindings were guessed: %v", err)
+	}
+	o = options{room: "pending", slot: "claude"}
+	if err := applyCallerDefaults(root, "status", &o); err != nil || o.room != "pending" {
+		t.Fatalf("explicit pending status lost: %+v %v", o, err)
 	}
 	callerState(t, root, "associated", "session", model.ActorClaude, model.RuntimeClaude)
 	if err := applyCallerDefaults(root, "bind", &options{create: true}); err == nil {
@@ -127,9 +133,8 @@ func TestNativeCallerNeverAssociatesPendingStateOrDuplicatesCreatedRoom(t *testi
 }
 
 func TestNativeCreateRunsInsideHarnessWithoutRuntimeOrSlotFlags(t *testing.T) {
-	isolateCaller(t)
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "launching-session")
 	root, endpoint, created := createBindFixture(t, model.RuntimeClaude)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "launching-session")
 	if output, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v %s", err, output)
 	}

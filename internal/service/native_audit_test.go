@@ -111,7 +111,7 @@ func TestNativeBriefStatusInspectsPendingWithoutAssociatingOrCollecting(t *testi
 	t.Setenv("CLAUDE_CODE_SESSION_ID", a.SessionID)
 	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("GROK_SESSION_ID", "")
-	out, err := f.run(t, []string{"status", "--brief", "--room", f.room.ID, "--slot", "1"}, nil)
+	out, err := f.run(t, []string{"status", "--brief"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestNativeBriefStatusInspectsPendingWithoutAssociatingOrCollecting(t *testi
 	if err := json.Unmarshal(out, &got); err != nil || len(got.Relay.Bindings) != 1 || got.Relay.Bindings[a.Slot].Associated || len(got.Relay.Inboxes) != 0 {
 		t.Fatalf("pending status leaked or associated: %s %v", out, err)
 	}
-	out, err = f.run(t, []string{"wait", "--timeout", "1", "--room", f.room.ID, "--slot", "1"}, nil)
+	out, err = f.run(t, []string{"wait", "--timeout", "1"}, nil)
 	if err == nil || len(out) != 0 {
 		t.Fatal("pending inspection authorized collection")
 	}

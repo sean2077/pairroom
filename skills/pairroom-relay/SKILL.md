@@ -26,7 +26,7 @@ For an already-associated native session, its session metadata selects the exist
 ## After a new bind, once
 
 1. Echo `bind_nonce` verbatim in your visible final reply; the approved Stop hook associates the official session ID. Environment/PID discovery alone never associates it.
-2. Adopt the returned bootstrap/collaboration instructions. A resumed association needs no new nonce echo or process restart.
+2. Adopt the returned bootstrap/collaboration instructions. A resumed association needs no new nonce echo or process restart. Before association, `pairroom relay status --brief` can inspect this pending binding without inbox access; do not wait or exchange until the nonce is echoed.
 
 ## Joint review
 
@@ -49,7 +49,7 @@ For diagnosis, start with `pairroom relay status --brief`; full `status` returns
 ## Rules
 
 - Slots are Agent 1 / Agent 2 (`--slot 1|2`), never runtimes; durable IDs `claude`/`codex` remain accepted.
-- Associated foreground commands normally need no Room/slot flags. Session metadata wins over shared-PID inference; conflicting/unmatched metadata must not select a different session.
+- Associated foreground commands normally need no Room/slot flags. A unique pending binding is diagnosable with `status --brief` the same way; send/wait/exchange still require the nonce. Session metadata wins over shared-PID inference; conflicting/unmatched metadata must not select a different session.
 - Missing hooks: run `pairroom relay install` in the intended session and have the user approve the exact project hook. Installing never grants trust. Explicit `--runtime claude|codex` can prepare peer hooks; never use it to relabel the session being bound.
 - Never read or print `.pairroom/**/credentials`; the CLI owns secrets.
 - Follow the recovery named in the error; never repeat `--create` after a created-Room failure.

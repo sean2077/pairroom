@@ -25,7 +25,10 @@ No provider secrets or guessed model/effort settings are harvested.
 
 A nearest recognized harness scopes inherited outer-harness variables. Ambiguous
 or unmatched metadata fails rather than consuming another session's inbox.
-Older harnesses without session metadata retain lineage and explicit flags.
+A unique pending binding of the same runtime is diagnosable with `status --brief`
+without Room/slot flags; multiple pending bindings still need an explicit
+candidate. Send, wait and exchange never select a pending nonce. Older
+harnesses without session metadata retain lineage and explicit flags.
 These are convenience selectors, not proof of identity or a sandbox against
 other programs running as the same OS user. Authoritative association still
 requires the approved Stop hook, one-time nonce, and official session ID; all
@@ -53,10 +56,11 @@ runtime allowlist. Future support needs an explicit tested adapter and handling
 for those limits, not a fake Claude identity or transcript scraping.
 
 Sources: [Claude session environment](https://code.claude.com/docs/en/env-vars),
-[Codex SDK session reference](https://github.com/openai/codex/blob/main/sdk/typescript/README.md),
-[Grok hook contract](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md).
-Vendor documentation describes interfaces, not successful authenticated E2E in
-this repository.
+[Codex SDK session reference](https://github.com/openai/codex/blob/main/sdk/typescript/README.md).
+Grok hook stdin uses camelCase (`sessionId`, `lastAssistantMessage`,
+`stopHookActive`); `GROK_SESSION_ID` identifies the session; Stop feedback and
+last-assistant text are clipped. Vendor documentation describes interfaces, not
+successful authenticated E2E in this repository.
 
 ## The two receive paths share one mailbox
 
@@ -82,7 +86,7 @@ a peer-directed final reply unless a second Stop publication is intended.
 
 | Finding | Practical severity | Fix and regression evidence |
 | --- | --- | --- |
-| PID-only selection cannot distinguish Desktop threads and requires identity flags after resume | High workflow correctness value | Native session-aware selection and same-session bind resume; conflicting metadata, pending nonce and same-PID/different-thread tests |
+| PID-only selection cannot distinguish Desktop threads and requires identity flags after resume | High workflow correctness value | Native session-aware selection and same-session bind resume; conflicting metadata, unique pending status inspection, pending nonce and same-PID/different-thread tests |
 | Multiple CLI collectors can compete for different FIFO messages | High reliability value | Separate process-owned collector lock across wait/exchange; exchange acquires it before publication; hook publishes first and skips collection if occupied; subprocess/crash-release tests |
 | Every active relay request rereads the full Event Log for admission | Medium scaling/performance value, not evidence of data loss | Active Engine authentication, durable pre-authentication for cold activation; effect-boundary reauthentication retained; loader-count and revocation tests |
 | SSE clones the full snapshot to read one sequence number | Medium allocation/scaling value | Locked scalar cursor read, zero-allocation assertion; browser/Event Log semantics unchanged |
