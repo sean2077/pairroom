@@ -98,7 +98,15 @@ func applyCallerDefaults(root, action string, o *options) error {
 		if err := readPrivate(path, &s); err != nil {
 			return err
 		}
-		if s.Runtime != caller.runtime || s.SessionID != caller.session {
+		if s.Runtime != caller.runtime {
+			continue
+		}
+		// A pending binding has no authoritative session yet. Permit only an
+		// explicitly addressed status inspection; the Service returns its own
+		// pending binding, never peer mail. All collection still needs an exact
+		// associated session. This keeps failed onboarding diagnosable.
+		pendingStatus := action == "status" && s.SessionID == "" && o.room == s.Room && o.slot == string(s.Slot)
+		if s.SessionID != caller.session && !pendingStatus {
 			continue
 		}
 		if action == "bind" && o.create {
