@@ -20,6 +20,7 @@ import (
 
 func createBindFixture(t *testing.T, own model.RuntimeKind) (string, string, *int) {
 	t.Helper()
+	IsolateNativeCaller(t)
 	root := filepath.Join(t.TempDir(), "project's space")
 	if err := os.Mkdir(root, 0700); err != nil {
 		t.Fatal(err)
@@ -235,6 +236,7 @@ func TestCreateNativeRoomRejectsUnsupportedRuntimeBeforeAnyRequest(t *testing.T)
 }
 
 func TestBindCreateRejectsExplicitRoom(t *testing.T) {
+	IsolateNativeCaller(t)
 	var out, diagnostic bytes.Buffer
 	err := Run(context.Background(), []string{"bind", "--create", "--room", "r1", "--slot", "claude"}, strings.NewReader(""), &out, &diagnostic)
 	if err == nil || !strings.Contains(err.Error(), "not both") {

@@ -33,6 +33,7 @@ type nativeFixture struct {
 
 func nativeHTTP(t *testing.T) *nativeFixture {
 	t.Helper()
+	relayclient.IsolateNativeCaller(t)
 	registry, project := testRegistry(t, testGitRepo(t))
 	noSpawn := ProvisionerFunc(func(context.Context, Project, model.ActorID, BindingSpec, string) (Binding, func(context.Context) error, error) {
 		t.Error("native provisioning spawned an adapter")
