@@ -214,41 +214,54 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 // A failed/short write, killed CLI or missing acknowledgement becomes unknown in
 // the Service. The hook's block count changes only for actual inbox messages.
 func deliver(ctx context.Context, c *Client, hook bool, seconds int, out io.Writer) error {
+	_, err := deliverOnce(ctx, c, hook, seconds, out)
+	return err
+}
+
+// deliverOnce reports whether one envelope was fully written and acknowledged.
+// An empty successful poll can be renewed; every error must stop collection.
+func deliverOnce(ctx context.Context, c *Client, hook bool, seconds int, out io.Writer) (bool, error) {
 	if seconds < 1 || seconds > 30 {
-		return errors.New("wait timeout must be 1–30 seconds")
+		return false, errors.New("wait timeout must be 1–30 seconds")
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline) - 4*time.Second
 		if remaining < time.Second {
 			if hook {
-				return writeJSON(out, map[string]any{})
+				return false, writeJSON(out, map[string]any{})
 			}
-			return context.DeadlineExceeded
+			return false, context.DeadlineExceeded
 		}
 		if time.Duration(seconds)*time.Second > remaining {
 			seconds = int(remaining / time.Second)
 		}
 	}
 	var result struct {
-		Claim *relay.Claim `json:"claim"`
+		Claim json.RawMessage `json:"claim"`
 	}
 	if err := c.call(ctx, "wait", map[string]any{"park": hook, "timeout_seconds": seconds}, &result); err != nil {
-		return err
+		return false, err
 	}
-	if result.Claim == nil {
+	if len(result.Claim) == 0 {
+		return false, errors.New("wait response missing claim; outcome uncertain, collection stopped")
+	}
+	if strings.TrimSpace(string(result.Claim)) == "null" {
 		if hook {
-			return writeJSON(out, map[string]any{})
+			return false, writeJSON(out, map[string]any{})
 		}
-		return nil
+		return false, nil
 	}
-	claim := result.Claim
+	var claim relay.Claim
+	if err := json.Unmarshal(result.Claim, &claim); err != nil {
+		return false, errors.New("invalid delivery claim; acknowledgement withheld")
+	}
 	if claim.ID == "" || claim.Receipt == "" || claim.Envelope == "" {
-		return errors.New("incomplete delivery claim; acknowledgement withheld")
+		return false, errors.New("incomplete delivery claim; acknowledgement withheld")
 	}
 	if hook {
 		release, err := lockSlot(ctx, c.Dir)
 		if err != nil {
-			return err
+			return false, err
 		}
 		current, err := load(c.Dir)
 		if err == nil && (current.State.BindID != c.State.BindID || current.State.Generation != c.State.Generation) {
@@ -261,10 +274,10 @@ func deliver(ctx context.Context, c *Client, hook bool, seconds int, out io.Writ
 		}
 		release()
 		if err != nil {
-			return err
+			return false, err
 		}
 		if err := writeJSON(out, map[string]string{"decision": "block", "reason": claim.Envelope}); err != nil {
-			return err
+			return false, err
 		}
 	} else {
 		bytes := []byte(claim.Envelope + "\n")
@@ -273,11 +286,11 @@ func deliver(ctx context.Context, c *Client, hook bool, seconds int, out io.Writ
 			err = io.ErrShortWrite
 		}
 		if err != nil {
-			return err
+			return false, err
 		}
 	}
 	if err := c.call(ctx, "ack", map[string]string{"id": claim.ID, "receipt": claim.Receipt}, nil); err != nil {
-		return errors.New("stdout written but acknowledgement unavailable; inspect Room delivery state, never automatically replay")
+		return false, errors.New("stdout written but acknowledgement unavailable; inspect Room delivery state, never automatically replay")
 	}
-	return nil
+	return true, nil
 }

@@ -79,6 +79,10 @@ _Equivalent (zh-CN)_: Native 宿主模式
 The bounded interval during which an approved Stop hook waits for new inbox work before the native response ends.
 _Equivalent (zh-CN)_: Park 等待窗口
 
+**Foreground exchange**:
+An explicit native-session publication followed by collection of the next Room inbox message within one CLI invocation.
+_Equivalent (zh-CN)_: 前台交换
+
 **Publication gap**:
 An observed jump in one binding generation's report sequence, not an inference from missing activity.
 _Equivalent (zh-CN)_: 发布缺口

@@ -37,7 +37,7 @@ func (s *stringsFlag) String() string     { return strings.Join(*s, ",") }
 func (s *stringsFlag) Set(v string) error { *s = append(*s, v); return nil }
 func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("use pairroom relay install|bind|hook|send|wait|status|peer|park|nudge|reconcile|unbind (see docs/CLI_REFERENCE.md)")
+		return errors.New("use pairroom relay install|bind|hook|send|exchange|wait|status|peer|park|nudge|reconcile|unbind (see docs/CLI_REFERENCE.md)")
 	}
 	action := args[0]
 	o := options{}
@@ -49,7 +49,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.StringVar(&o.kind, "runtime", "", "native harness: claude or codex")
 	flags.StringVar(&o.endpoint, "service-file", "", "owner-only relay-endpoint.json path for a custom Service data root")
 	flags.StringVar(&o.text, "text", "", "message body; otherwise read stdin")
-	flags.StringVar(&o.id, "id", "", "stable client message ID; reuse on uncertain send")
+	flags.StringVar(&o.id, "id", "", "stable client message ID (required for exchange); reuse on uncertain send")
 	flags.StringVar(&o.to, "to", "", "explicit send target: @user, or empty for peer")
 	flags.StringVar(&o.session, "session-id", "", "associated session identity for explicit --continue")
 	flags.BoolVar(&o.create, "create", false, "bind only: register the project when missing, create a native Room, then bind this session")
@@ -61,7 +61,11 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.BoolVar(&o.enabled, "enabled", true, "park enabled")
 	flags.BoolVar(&o.discard, "discard", false, "explicitly discard uncertain pending publication, retaining its consumed sequence")
 	flags.BoolVar(&o.resend, "resend", false, "explicitly supplement uncertain pending with its ORIGINAL sequence")
-	flags.IntVar(&o.timeout, "timeout", 30, "wait seconds (1–30)")
+	defaultTimeout := 30
+	if action == "exchange" {
+		defaultTimeout = 600
+	}
+	flags.IntVar(&o.timeout, "timeout", defaultTimeout, "foreground wait seconds (1–1800); hook park remains at most 30 seconds")
 	flags.Var(&o.attachments, "attach", "image attachment path (repeatable)")
 	if err := flags.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -71,6 +75,20 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected relay arguments")
+	}
+	// Reject collection options before workspace I/O or any publication.
+	if action == "wait" || action == "exchange" {
+		if err := validateForegroundTimeout(o.timeout); err != nil {
+			return err
+		}
+	}
+	if action == "exchange" {
+		if !safePart(o.id) || len(o.id) > 128 {
+			return errors.New("exchange requires a stable --id (1–128 letters, digits, '-' or '_'); reuse it only for the same publication")
+		}
+		if o.to != "" {
+			return errors.New("exchange sends to the peer only; use send --to @user for escalation")
+		}
 	}
 	o.slot = normalizeSlot(o.slot)
 	if action == "hook" {
@@ -139,7 +157,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	}
 	release()
 	switch action {
-	case "send":
+	case "send", "exchange":
 		text := o.text
 		if text == "" {
 			data, err := io.ReadAll(io.LimitReader(in, relay.MaxBodyBytes+1))
@@ -177,9 +195,13 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if err != nil {
 			return fmt.Errorf("%w; publication uncertain: retry with the SAME --id %s, not a new ID", err, o.id)
 		}
+		if action == "exchange" {
+			return finishExchange(ctx, c, o, msg, text, out, diagnostic)
+		}
 		return writeJSON(out, msg)
 	case "wait":
-		return deliver(ctx, c, false, o.timeout, out)
+		_, err := deliverForeground(ctx, c, o.timeout, out)
+		return err
 	case "peer":
 		var peer relay.Binding
 		if err := c.call(ctx, "peer", nil, &peer); err != nil {
