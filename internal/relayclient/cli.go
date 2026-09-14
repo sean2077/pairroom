@@ -896,7 +896,7 @@ func (c *Client) upload(ctx context.Context, path string) (string, error) {
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 && res.StatusCode != 201 {
-		return errors.New("attachment rejected by Room validation")
+		return "", errors.New("attachment rejected by Room validation")
 	}
 	var value model.Attachment
 	if err := json.NewDecoder(io.LimitReader(res.Body, 16<<10)).Decode(&value); err != nil {
