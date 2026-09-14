@@ -10,19 +10,20 @@ import (
 	"github.com/sean2077/pairroom/internal/relay"
 )
 
-// deliverForeground keeps the legacy one-poll behavior for waits <= 30 seconds.
-// Longer waits renew the existing bounded HTTP operation, without a model turn,
-// a held slot-state lock, a new API, or a change to Stop-hook parking.
+// deliverForeground keeps the legacy one-poll behavior for finite waits <= 30 seconds.
+// Longer or unbounded waits renew the existing bounded HTTP operation, without a model
+// turn, a held slot-state lock, a new API, or a change to Stop-hook parking.
 func deliverForeground(ctx context.Context, c *Client, seconds int, out io.Writer) (bool, error) {
 	if err := validateForegroundTimeout(seconds); err != nil {
 		return false, err
 	}
-	if seconds <= 30 {
+	if seconds > 0 && seconds <= 30 {
 		return deliverOnce(ctx, c, false, seconds, out)
 	}
-	return waitForInbox(ctx, time.Duration(seconds)*time.Second, 30*time.Second, func(ctx context.Context, span time.Duration) (bool, error) {
-		// The wire API accepts whole seconds. Round the last window up, by
-		// less than one second, rather than silently dropping its remainder.
+	budget := time.Duration(seconds) * time.Second
+	return waitForInbox(ctx, budget, 30*time.Second, func(ctx context.Context, span time.Duration) (bool, error) {
+		// The wire API accepts whole seconds. Round a finite last window up,
+		// by less than one second, rather than silently dropping its remainder.
 		pollSeconds := int((span + time.Second - 1) / time.Second)
 		return deliverOnce(ctx, c, false, pollSeconds, out)
 	})
