@@ -63,9 +63,9 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.BoolVar(&o.resend, "resend", false, "explicitly supplement uncertain pending with its ORIGINAL sequence")
 	defaultTimeout := 30
 	if action == "exchange" {
-		defaultTimeout = 600
+		defaultTimeout = 3600
 	}
-	flags.IntVar(&o.timeout, "timeout", defaultTimeout, "foreground wait seconds (1–1800); hook park remains at most 30 seconds")
+	flags.IntVar(&o.timeout, "timeout", defaultTimeout, "foreground wait seconds (0 or 1–21600); 0 waits until cancellation; hook park remains at most 30 seconds")
 	flags.Var(&o.attachments, "attach", "image attachment path (repeatable)")
 	if err := flags.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

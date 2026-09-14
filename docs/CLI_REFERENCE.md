@@ -182,8 +182,8 @@ All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Foreg
 | `bind --create [--name <display-name>] [--runtime claude\|codex] [--peer-runtime claude\|codex]` | Without `--room`: register the workspace Project when missing, create a native Room through the same validated Management path the browser uses, bind this session, and print the peer's `peer_join` command. Without `--slot`, the creator's slot is resolved from the recognized harness against the created Room's real selections, because the Service-owned default pair is user configuration and need not match slot order; with explicit runtimes the slot is inferred before creation, and an unrecognized caller must pass `--slot 1|2`. Omitted runtimes keep the Service default pair; explicit runtimes stay empty-field selections that inherit the native configuration |
 | `send --id <client-id> --text <body>` | Explicit message to peer; requires the completed association like every collection call; repeat the same ID after an uncertain response, never deduplicate by body |
 | `send --to @user --attach <image>` | Human escalation with optional repeatable image paths; stdin supplies text when `--text` is absent |
-| `exchange --id <client-id> --text <body> --timeout 600` | One explicit peer send, then the next FIFO input; stable ID required, receipt on stderr and only the incoming envelope on stdout; not a correlated request/reply transaction |
-| `wait --timeout 600` | Foreground collection for an associated session; 1–1,800 seconds, default 30; renews only successful empty HTTP polls; stdout precedes ack |
+| `exchange --id <client-id> --text <body>` | One explicit peer send, then the next FIFO input; defaults to a 3,600-second wait, supports `--timeout 0` for no PairRoom total deadline, and finite values up to 21,600 seconds; not a correlated request/reply transaction |
+| `wait --timeout 0` | Foreground collection for an associated session; default 30 seconds, `0` means no PairRoom total deadline, finite values may be 1–21,600 seconds; renews only successful empty HTTP polls; stdout precedes ack |
 | `status` / `peer` | Public delivery/binding state and original publication reconciliation / optional peer session references |
 | `park --enabled=false` | Disable hook parking without removing association; foreground wait remains available |
 | `nudge` | Print collection guidance only; no promise of native input injection |
@@ -203,28 +203,28 @@ This optional Native path borrows the active wait idea from [Orca's messaging lo
 After BOTH sessions have completed their nonce association, tell one to receive and the other to start. Run these through the intended native agents' tools, not a third unrelated terminal:
 
 ```bash
-# Participant B: wait for the opening proposal, then review it.
-pairroom relay wait --timeout 600
+# Participant B: wait without a PairRoom total deadline when the native harness permits it.
+pairroom relay wait --timeout 0
 
-# Participant A: choose a fresh client ID for this new publication.
-pairroom relay exchange --id review-opening-01 --text "Review this proposal against the repository: ..." --timeout 600
+# Participant A: choose a fresh client ID. Exchange defaults to a one-hour total wait.
+pairroom relay exchange --id review-opening-01 --text "Review this proposal against the repository: ..."
 
 # Participant B: after receiving and reviewing, use another fresh ID.
-pairroom relay exchange --id review-findings-01 --text "I found this counterexample: ..." --timeout 600
+pairroom relay exchange --id review-findings-01 --text "I found this counterexample: ..." --timeout 0
 ```
 
 These are separate commands in separate sessions, not a script to run sequentially in one shell. Follow-up rounds reuse the binding and native session, but each new message needs a fresh client ID. Exchange IDs allow 1–128 letters, digits, `-` or `_` (not `.`/`..`). Exchange also accepts stdin text and repeatable `--attach` through the existing send path. It targets only the peer; use `send --to @user` for human escalation.
 
 Exchange is **send once, then receive next**, not an atomic conversation transaction or a promise to match a reply. An already-queued message or user steering can arrive first; handle the actual envelope rather than skipping it. No accumulated history or outgoing body is appended to the returned envelope. Do not run two collectors for the same binding or enable another coordinator for the same pair. For a final peer-facing result, use `relay send` and finish instead of calling exchange and leaving both sides waiting for ceremonial acknowledgements.
 
-Long foreground waits keep the existing HTTP window at most 30 seconds and renew only an explicit successful `{"claim":null}`. The loop runs in the CLI, not in the model. Ordinary `wait` retains its 30-second default and successful-empty-timeout behavior; exchange defaults to 600 seconds and reports an empty overall timeout as an error with safe recovery. Both allow up to 1,800 seconds. The last poll rounds up by less than a second and completes its bounded transport/output/ack work; this budget is not a hard process deadline, task completion signal or cost limit. Caller cancellation/native tool deadlines still apply. No slot-state lock is held during the wait, and the hook's 30-second park/45-second timeout and block cap are unchanged.
+Long foreground waits keep the existing HTTP window at most 30 seconds and renew only an explicit successful `{"claim":null}`. The loop runs in the CLI, not in the model. Ordinary `wait` retains its 30-second default. Exchange defaults to 3,600 seconds. Both accept finite waits up to 21,600 seconds (6 hours), while `--timeout 0` removes PairRoom's total deadline and waits until delivery, caller/native cancellation, transport/auth failure, or process/service shutdown. A finite last poll can round up by less than a second and completes its bounded transport/output/ack work; these budgets are not hard task-completion or cost limits. No slot-state lock is held during the wait, and the hook's 30-second park/45-second timeout and block cap are unchanged.
 
 | Outcome | Next action |
 |---|---|
 | Exchange returned an envelope | Process that exact input; send a new message only when needed, with a fresh ID |
-| Publication confirmed, no input by timeout | Use the printed receive-only `relay wait` command; do not repeat send/exchange |
+| Finite publication wait expired with no input | Use the printed receive-only `relay wait` command; do not repeat send/exchange |
 | Send outcome uncertain | Inspect `relay status`; recover only the same publication with the original client ID and unchanged content, never a new ID |
 | Collection, stdout or acknowledgement error | Inspect state/history and side effects first; the CLI stops and does not retry a possibly issued claim |
 | Peer is idle, disconnected or outside a park | Start its foreground wait in that native session or use a human nudge; exchange cannot wake it |
 
-Hook installation/approval and official session association remain required. Model acceptance, uninterrupted long-running native tool calls and lower billed token usage require real vendor testing; synthetic transport tests do not establish them. No new Room mode, protocol version, schema, stage compiler, background model worker or process ownership is introduced. Existing send/wait and automatic Stop relay remain usable independently.
+Hook installation/approval and official session association remain required. `--timeout 0` does not guarantee a vendor tool can stay pending forever; native harness/tool cancellation remains authoritative. Model acceptance, uninterrupted long-running native tool calls and lower billed token usage require real vendor testing; synthetic transport tests do not establish them. No new Room mode, protocol version, schema, stage compiler, background model worker or process ownership is introduced. Existing send/wait and automatic Stop relay remain usable independently.
