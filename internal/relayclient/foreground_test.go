@@ -187,9 +187,9 @@ func TestExchangeValidationBeforeWorkspaceOrPublication(t *testing.T) {
 		{[]string{"exchange", "--id", "unsafe;command"}, "stable --id"},
 		{[]string{"exchange", "--id", strings.Repeat("a", 129)}, "stable --id"},
 		{[]string{"exchange", "--id", "review-1", "--to", "@user"}, "peer only"},
-		{[]string{"exchange", "--id", "review-1", "--timeout", "0"}, "1–1800"},
-		{[]string{"exchange", "--id", "review-1", "--timeout", "1801"}, "1–1800"},
-		{[]string{"wait", "--timeout", "1801"}, "1–1800"},
+		{[]string{"exchange", "--id", "review-1", "--timeout", "-1"}, "0–21600"},
+		{[]string{"exchange", "--id", "review-1", "--timeout", "21601"}, "0–21600"},
+		{[]string{"wait", "--timeout", "21601"}, "0–21600"},
 	} {
 		var out bytes.Buffer
 		err := Run(context.Background(), append(tc.args, "--repo", filepath.Join(t.TempDir(), "absent")), strings.NewReader("proposal"), &out, io.Discard)
@@ -248,7 +248,7 @@ func TestExchangeSendsOnceReturnsOnlyIncomingEnvelopeAndPreservesState(t *testin
 }
 
 func TestForegroundWaitBoundsEachHTTPRequestAndPreservesShortWait(t *testing.T) {
-	for _, seconds := range []string{"1", "30", "31", "600", "1800"} {
+	for _, seconds := range []string{"0", "1", "30", "31", "600", "1800", "3600", "21600"} {
 		f := newForegroundFixture(t, foregroundFixtureOptions{})
 		if err := f.run(context.Background(), "wait", strings.NewReader(""), io.Discard, io.Discard, "--timeout", seconds); err != nil {
 			t.Fatal(err)
