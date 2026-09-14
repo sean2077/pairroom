@@ -8,12 +8,12 @@ import (
 )
 
 func TestForegroundTimeoutBounds(t *testing.T) {
-	for _, seconds := range []int{-1, 0, 1801} {
+	for _, seconds := range []int{-1, 21601} {
 		if validateForegroundTimeout(seconds) == nil {
 			t.Fatalf("accepted timeout %d", seconds)
 		}
 	}
-	for _, seconds := range []int{1, 30, 31, 600, 1800} {
+	for _, seconds := range []int{0, 1, 30, 31, 600, 1800, 3600, 21600} {
 		if err := validateForegroundTimeout(seconds); err != nil {
 			t.Fatalf("timeout %d: %v", seconds, err)
 		}
@@ -62,6 +62,33 @@ func TestInboxLoopCancellationWhileWaiting(t *testing.T) {
 	}
 }
 
+func TestInboxLoopUnboundedWaitEndsOnlyOnDeliveryOrCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	got, err := waitForInbox(ctx, 0, time.Millisecond, func(context.Context, time.Duration) (bool, error) {
+		calls++
+		if calls == 3 {
+			return true, nil
+		}
+		return false, nil
+	})
+	cancel()
+	if err != nil || !got || calls != 3 {
+		t.Fatalf("unbounded delivery failed: delivered=%v calls=%d err=%v", got, calls, err)
+	}
+
+	ctx, cancel = context.WithCancel(context.Background())
+	calls = 0
+	got, err = waitForInbox(ctx, 0, time.Millisecond, func(context.Context, time.Duration) (bool, error) {
+		calls++
+		cancel()
+		return false, nil
+	})
+	if !errors.Is(err, context.Canceled) || got || calls != 1 {
+		t.Fatalf("unbounded cancellation ignored: delivered=%v calls=%d err=%v", got, calls, err)
+	}
+}
+
 func TestInboxLoopAlreadyCancelledDoesNotPoll(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -102,12 +129,12 @@ func TestInboxLoopDoesNotCancelFinalClaimAtBudgetEdge(t *testing.T) {
 	}
 }
 
-func TestInboxLoopExpiredBudgetDoesNotPoll(t *testing.T) {
-	got, err := waitForInbox(context.Background(), 0, time.Second, func(context.Context, time.Duration) (bool, error) {
-		t.Fatal("polled with expired budget")
+func TestInboxLoopRejectsNegativeBudget(t *testing.T) {
+	got, err := waitForInbox(context.Background(), -time.Second, time.Second, func(context.Context, time.Duration) (bool, error) {
+		t.Fatal("polled with invalid negative budget")
 		return false, nil
 	})
-	if err != nil || got {
+	if err == nil || got {
 		t.Fatalf("delivered=%v err=%v", got, err)
 	}
 }
