@@ -334,15 +334,15 @@ func (n *nativeHostRuntime) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	var cursor uint64
 	for {
-		snapshot := n.engine.Snapshot()
-		if cursor != snapshot.Sequence || cursor == 0 {
-			data, _ := json.Marshal(map[string]any{"sequence": snapshot.Sequence})
-			_, err := fmt.Fprintf(w, "id: %d\nevent: native\ndata: %s\n\n", snapshot.Sequence, data)
+		sequence := n.engine.Sequence()
+		if cursor != sequence || cursor == 0 {
+			data, _ := json.Marshal(map[string]any{"sequence": sequence})
+			_, err := fmt.Fprintf(w, "id: %d\nevent: native\ndata: %s\n\n", sequence, data)
 			if err != nil {
 				return
 			}
 			flusher.Flush()
-			cursor = snapshot.Sequence
+			cursor = sequence
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		err := n.engine.WaitChanges(ctx, cursor)
