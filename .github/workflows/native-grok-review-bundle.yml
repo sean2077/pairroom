@@ -1,6 +1,8 @@
 name: Native Grok offline review bundle (temporary)
 
 on:
+  pull_request:
+    types: [opened, synchronize]
   push:
     branches: ['feat/native-grok-build']
     paths: ['.github/workflows/native-grok-review-bundle.yml']
@@ -10,6 +12,7 @@ permissions:
 
 jobs:
   bundle:
+    if: github.head_ref == 'feat/native-grok-build' || github.ref == 'refs/heads/feat/native-grok-build'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
