@@ -31,13 +31,15 @@ func testEngine(t *testing.T) (*Engine, map[model.ActorID]Auth, string) {
 	auth := map[model.ActorID]Auth{}
 	for _, slot := range model.SlotActors() {
 		secret := "secret-" + string(slot)
-		nonce := "nonce-" + string(slot)
-		b, err := e.Bind(slot, BindRequest{BindID: "bind-" + string(slot), CredentialHash: Digest(secret), NonceHash: Digest(nonce)})
+		session := "session-" + string(slot)
+		// bind associates immediately from the harness-provided official session id.
+		b, err := e.Bind(slot, BindRequest{BindID: "bind-" + string(slot), CredentialHash: Digest(secret), SessionID: session})
 		if err != nil {
 			t.Fatal(err)
 		}
-		a := Auth{Slot: slot, BindID: b.BindID, Generation: b.Generation, SessionID: "session-" + string(slot), Secret: secret}
-		if _, err := e.Associate(a, nonce, a.SessionID, "/optional/transcript"); err != nil {
+		a := Auth{Slot: slot, BindID: b.BindID, Generation: b.Generation, SessionID: session, Secret: secret}
+		// The Stop hook records the transcript path the environment does not carry.
+		if _, err := e.ConfirmSession(a, session, "/optional/transcript"); err != nil {
 			t.Fatal(err)
 		}
 		auth[slot] = a
@@ -262,22 +264,25 @@ func TestNativeDrainAcknowledgementRetainsAuthentication(t *testing.T) {
 		t.Fatalf("closed engine accepted ack: %v", err)
 	}
 }
-func TestNativeBindingAssociationRevocationAndNonce(t *testing.T) {
+func TestNativeBindingAssociationAndRevocation(t *testing.T) {
 	e, a, _ := testEngine(t)
 	slot := model.ActorClaude
 	old := a[slot]
-	if _, err := e.Associate(old, "nonce-claude", old.SessionID, ""); !errors.Is(err, ErrNonce) {
-		t.Fatal("nonce replay accepted")
-	}
-	if _, err := e.Bind(slot, BindRequest{BindID: "new-bind", CredentialHash: Digest("new-secret"), NonceHash: Digest("new-nonce")}); !errors.Is(err, ErrOccupied) {
+	// A different official session cannot take an occupied slot without replace.
+	if _, err := e.Bind(slot, BindRequest{BindID: "new-bind", CredentialHash: Digest("new-secret"), SessionID: "intruder-session"}); !errors.Is(err, ErrOccupied) {
 		t.Fatal("occupied slot not protected")
 	}
-	same, err := e.Bind(slot, BindRequest{BindID: old.BindID, CredentialHash: Digest(old.Secret), NonceHash: Digest("consumed"), SessionID: old.SessionID})
+	// bind requires the official session id captured from the harness environment.
+	if _, err := e.Bind(slot, BindRequest{BindID: "new-bind", CredentialHash: Digest("new-secret"), Replace: true}); err == nil {
+		t.Fatal("bind without a session id was accepted")
+	}
+	// The same session recovers idempotently without consuming a generation.
+	same, err := e.Bind(slot, BindRequest{BindID: old.BindID, CredentialHash: Digest(old.Secret), SessionID: old.SessionID})
 	if err != nil || same.Generation != old.Generation {
 		t.Fatal("same session did not recover idempotently")
 	}
 	_, _ = e.Send(a[model.ActorCodex], SendRequest{ID: "old-target", Text: "cannot cross generations"})
-	replacement, err := e.Bind(slot, BindRequest{BindID: "new-bind", CredentialHash: Digest("new-secret"), NonceHash: Digest("new-nonce"), Replace: true})
+	replacement, err := e.Bind(slot, BindRequest{BindID: "new-bind", CredentialHash: Digest("new-secret"), SessionID: "new-session", Replace: true})
 	if err != nil || replacement.Generation != old.Generation+1 {
 		t.Fatal("replace generation failed")
 	}
@@ -287,17 +292,12 @@ func TestNativeBindingAssociationRevocationAndNonce(t *testing.T) {
 	if e.Snapshot().Messages[0].State != "cancelled" {
 		t.Fatal("old-generation queued work survived replacement")
 	}
+	// The replacement is associated at bind, so it authenticates and claims at once.
 	next := Auth{Slot: slot, BindID: replacement.BindID, Generation: replacement.Generation, Secret: "new-secret", SessionID: "new-session"}
-	if _, err := e.Claim(context.Background(), next, true); !errors.Is(err, ErrAuth) {
-		t.Fatal("unassociated session could claim")
+	if _, err := e.ConfirmSession(next, "another-session", ""); err == nil {
+		t.Fatal("mismatched hook session was confirmed")
 	}
-	if _, err := e.Associate(next, "missing", next.SessionID, ""); !errors.Is(err, ErrNonce) {
-		t.Fatal("nonmatching nonce associated")
-	}
-	if _, err := e.Associate(next, "new-nonce", "another-session", ""); err == nil {
-		t.Fatal("payload and presented official identity mismatch accepted")
-	}
-	if _, err := e.Associate(next, "new-nonce", next.SessionID, ""); err != nil {
+	if _, err := e.ConfirmSession(next, next.SessionID, "/transcript"); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.UnbindAs(old); err == nil {
@@ -306,7 +306,7 @@ func TestNativeBindingAssociationRevocationAndNonce(t *testing.T) {
 	if err := e.UnbindAs(next); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Bind(slot, BindRequest{BindID: next.BindID, CredentialHash: Digest(next.Secret), NonceHash: Digest("nonce")}); err == nil {
+	if _, err := e.Bind(slot, BindRequest{BindID: next.BindID, CredentialHash: Digest(next.Secret), SessionID: "new-session"}); err == nil {
 		t.Fatal("revoked ID reused")
 	}
 }

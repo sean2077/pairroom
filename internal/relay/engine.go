@@ -264,14 +264,18 @@ func (e *Engine) Bind(slot model.ActorID, req BindRequest) (Binding, error) {
 	if err := e.healthy(); err != nil {
 		return Binding{}, err
 	}
-	if !slot.ValidParticipant() || !validID(req.BindID) || !validHash(req.CredentialHash) || !validHash(req.NonceHash) {
+	// Association happens at bind: the caller presents the official session id it
+	// read from its harness environment (Claude Code CLAUDE_CODE_SESSION_ID, Codex
+	// CODEX_SESSION_ID), so the binding materializes that identity immediately and
+	// commitBinding runs the global (runtime, session) uniqueness check at once.
+	if !slot.ValidParticipant() || !validID(req.BindID) || !validHash(req.CredentialHash) || !validID(req.SessionID) {
 		return Binding{}, errors.New("invalid binding request")
 	}
 	old := e.bindings[slot]
 	if old.Active {
 		// Recovery of an in-flight bind is idempotent without consuming another
-		// nonce/generation. An associated session must identify itself as well.
-		if old.BindID == req.BindID && same(old.CredentialHash, req.CredentialHash) && (old.SessionID == "" || old.SessionID == req.SessionID) {
+		// generation. The same session must identify itself identically.
+		if old.BindID == req.BindID && same(old.CredentialHash, req.CredentialHash) && old.SessionID == req.SessionID {
 			return old.Binding, nil
 		}
 		if !req.Replace {
@@ -281,7 +285,7 @@ func (e *Engine) Bind(slot model.ActorID, req BindRequest) (Binding, error) {
 	if e.seenBinds[req.BindID] {
 		return Binding{}, errors.New("revoked bind ID cannot be reused")
 	}
-	b := bindingFact{Binding: Binding{Slot: slot, BindID: req.BindID, Generation: old.Generation + 1, Active: true, ParkEnabled: true, LastActivity: e.cfg.Now()}, CredentialHash: req.CredentialHash, NonceHash: req.NonceHash}
+	b := bindingFact{Binding: Binding{Slot: slot, BindID: req.BindID, Generation: old.Generation + 1, Active: true, ParkEnabled: true, LastActivity: e.cfg.Now(), SessionID: req.SessionID}, CredentialHash: req.CredentialHash}
 	if err := e.commitBinding(b); err != nil {
 		return Binding{}, err
 	}
@@ -319,22 +323,29 @@ func (e *Engine) Inspect(a Auth) (Binding, error) {
 	b, err := e.auth(a, true)
 	return b.Binding, err
 }
-func (e *Engine) Associate(a Auth, nonce, sessionID, transcript string) (Binding, error) {
+
+// ConfirmSession is the Stop hook's reverse check. The binding already carries
+// the session id captured from the harness environment at bind, so the official
+// hook session must match it; a mismatch fails closed instead of associating.
+// A match opportunistically records the transcript path, which the environment
+// does not carry, keeping `relay peer` references available.
+func (e *Engine) ConfirmSession(a Auth, sessionID, transcript string) (Binding, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	b, err := e.auth(a, true)
+	b, err := e.auth(a, false)
 	if err != nil {
 		return Binding{}, err
 	}
 	if a.SessionID != sessionID || !validID(sessionID) || len(transcript) > 4096 || strings.ContainsAny(transcript, "\x00\r\n") {
 		return Binding{}, errors.New("invalid official hook session metadata")
 	}
-	if b.SessionID != "" || b.NonceHash == "" || nonce == "" || !same(Digest(nonce), b.NonceHash) {
-		return Binding{}, ErrNonce
+	if b.SessionID != sessionID {
+		return Binding{}, ErrAuth
 	}
-	b.SessionID = sessionID
+	if b.TranscriptPath == transcript {
+		return b.Binding, nil
+	}
 	b.TranscriptPath = transcript
-	b.NonceHash = ""
 	if err := e.commitBinding(b); err != nil {
 		return Binding{}, err
 	}
@@ -352,7 +363,6 @@ func (e *Engine) Unbind(slot model.ActorID) error {
 	}
 	b.Active = false
 	b.CredentialHash = ""
-	b.NonceHash = ""
 	b.SessionID = ""
 	b.TranscriptPath = ""
 	b.LastActivity = e.cfg.Now()
@@ -879,7 +889,6 @@ func (e *Engine) UnbindAs(a Auth) error {
 	}
 	b.Active = false
 	b.CredentialHash = ""
-	b.NonceHash = ""
 	b.SessionID = ""
 	b.TranscriptPath = ""
 	b.LastActivity = e.cfg.Now()
@@ -903,7 +912,7 @@ func (e *Engine) AuthSnapshot(a Auth) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	if b.SessionID == "" {
-		return Snapshot{RoomID: e.cfg.RoomID, HostMode: model.HostNative, Bindings: map[model.ActorID]Binding{a.Slot: b.Binding}, Notice: "Awaiting nonce from an approved official Stop hook; no inbox access before association."}, nil
+		return Snapshot{RoomID: e.cfg.RoomID, HostMode: model.HostNative, Bindings: map[model.ActorID]Binding{a.Slot: b.Binding}, Notice: "Binding is not associated with an official session; rebind inside the native session. No inbox access before association."}, nil
 	}
 	return e.snapshotLocked(), nil
 }

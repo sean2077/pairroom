@@ -33,6 +33,10 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
         env = os.environ.copy()
         env.update(HOME=str(root/'home'), USERPROFILE=str(root/'home'), XDG_CONFIG_HOME=str(root/'home'/'.config'))
         env['PATH'] = str(binary.parent) + os.pathsep + env.get('PATH', '')
+        # bind associates from the official session id the harness exposes to
+        # tool-call subprocesses; expose the synthetic ids the hooks also report.
+        env['CLAUDE_CODE_SESSION_ID'] = 'synthetic-claude'
+        env['CODEX_SESSION_ID'] = 'synthetic-codex'
         errors = []
 
         def cli(args, payload=None):
@@ -86,17 +90,17 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 csrf = (await read_json(context, origin+'/api/v1/session'))['csrf_token']
                 headers = {'X-PairRoom-CSRF': csrf}
                 endpoint = root/'state'/'relay-endpoint.json'
-                print('Native browser: approved-hook setup fixture and nonce association through real CLI', flush=True)
+                print('Native browser: approved-hook setup fixture and bind-time environment association through real CLI', flush=True)
                 for slot in ('claude','codex'):
                     await asyncio.to_thread(cli, ['install','--runtime',slot])
                     raw = await asyncio.to_thread(cli, ['bind','--room',room_id,'--slot',slot,'--service-file',str(endpoint)])
                     bound = json.loads(raw)
+                    # bind associates immediately from the harness environment; no
+                    # nonce echo round-trip is required or returned.
+                    assert bound['binding']['session_id'] == 'synthetic-'+slot, bound['binding']
+                    assert 'bind_nonce' not in bound, bound
                     response = await context.request.post(surface+f'/api/v1/participants/{slot}/park', headers=headers, data={'enabled':False})
                     assert response.status == 200
-                    hook = {'hook_event_name':'Stop','session_id':'synthetic-'+slot,'cwd':str(repo),
-                            'last_assistant_message':bound['bind_nonce'],'stop_hook_active':False,
-                            'transcript_path':'/optional/unavailable/transcript'}
-                    assert json.loads(await asyncio.to_thread(cli,['hook','--runtime',slot],hook)) == {}
                 snapshot = await wait_snapshot(context,snapshot_url,lambda s:all(b.get('session_id') for b in s['relay']['bindings'].values()))
                 assert snapshot['protocol'] == 'pairroom-protocol/v7'
                 await expect(frame.locator('[data-slot="claude"]')).to_contain_text('Associated')
@@ -192,7 +196,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 assert not errors, f'browser errors: {errors}'
                 (artifacts/'results.json').write_text(json.dumps({
                     'mode':'synthetic native-hook inputs over real CLI/HTTP/SSE/browser',
-                    'real_vendor_e2e':False,'native_creation':True,'nonce_association':True,
+                    'real_vendor_e2e':False,'native_creation':True,'bind_env_association':True,
                     'fifo_stdout_ack':True,'idempotent_explicit_send':True,'three_bidirectional_rounds':True,
                     'killed_cli_unknown':True,'explicit_retry_confirmation':True,'cancel_only_queued':True,
                     'checkpoint_schema_2_unchanged':True,'restart_queue_and_bindings':True,

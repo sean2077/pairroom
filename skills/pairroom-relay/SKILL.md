@@ -5,7 +5,7 @@ description: Use when the user invokes /pairroom-relay, asks to create or join a
 
 # pairroom-relay
 
-Bind this native Claude Code / Codex session to a PairRoom Room so the two agents relay through approved project Stop hooks. Prerequisites: `pairroom` on PATH, and the one-time human-approved `pairroom relay install` for each runtime (project hooks + this skill).
+Bind this native Claude Code / Codex session to a PairRoom Room so the two agents relay through approved project Stop hooks. Run every command below as a tool call inside THIS session, not a detached terminal: `bind` associates the session from the harness environment (`CLAUDE_CODE_SESSION_ID` / `CODEX_SESSION_ID`), which only that in-session subprocess inherits. Prerequisites: `pairroom` on PATH, and the one-time human-approved `pairroom relay install` for each runtime (project hooks + this skill).
 
 ## Create a room — `/pairroom-relay <topic>`
 
@@ -13,7 +13,7 @@ Bind this native Claude Code / Codex session to a PairRoom Room so the two agent
 pairroom relay bind --create --name "<topic>"
 ```
 
-Creates the native Room, binds this session (its Agent slot is resolved from this harness's runtime; `--slot 1|2` overrides), and prints `bind_nonce`, the bootstrap instructions, and the peer's join command. Report that join command to the user for the OTHER session; it does not work in this one.
+Creates the native Room, binds and immediately associates this session from its harness environment (its Agent slot is resolved from this harness's runtime; `--slot 1|2` overrides), and prints the bootstrap instructions and the peer's join command. Report that join command to the user for the OTHER session; it does not work in this one.
 
 ## Join an existing room
 
@@ -23,10 +23,9 @@ pairroom relay bind
 
 Zero flags inside a recognized native session: resolves the workspace's sole active native Room and this session's slot. Otherwise run the exact join command the creator printed, or pass `--room`/`--slot` from the error's candidate list.
 
-## After bind, once per session
+## After bind
 
-1. Echo the returned `bind_nonce` verbatim in your visible final reply; the approved Stop hook associates this session.
-2. Adopt the returned bootstrap/collaboration instructions as this session's relay protocol: handles, `@user`, park windows, publication and recovery rules all come from there, not from this skill.
+`bind` associates this session immediately from its harness environment, so there is no nonce to echo and nothing to wait for: once bind succeeds you can relay. Adopt the returned bootstrap/collaboration instructions as this session's relay protocol — handles, `@user`, park windows, publication and recovery rules all come from there, not from this skill. The approved Stop hook still publishes each finished reply and re-confirms the same session identity.
 
 ## When the user asks for joint review
 
@@ -34,7 +33,7 @@ Reuse the associated Room for follow-up reviews unless the user requests another
 
 ## Optional foreground discussion
 
-After BOTH Stop-hook associations complete, use `pairroom relay exchange --help` to check the installed CLI. An older binary may not support exchange; retain its documented send/wait path rather than guessing flags. This is a Native-only tool-call loop, not a new Room mode.
+After BOTH sessions are bound (association is immediate at bind), use `pairroom relay exchange --help` to check the installed CLI. An older binary may not support exchange; retain its documented send/wait path rather than guessing flags. This is a Native-only tool-call loop, not a new Room mode.
 
 Start one participant collecting with `pairroom relay wait --timeout 0` when the surrounding native harness can safely keep the tool pending. The other sends focused text and waits in one invocation; exchange defaults to one hour when `--timeout` is omitted:
 
@@ -51,5 +50,6 @@ A finite confirmed-publication timeout means collect with `relay wait`, not rese
 - Slots are Agent 1 / Agent 2 (`--slot 1|2`), never runtimes; the legacy IDs `claude`/`codex` remain accepted.
 - After bind, foreground commands need no `--room`/`--slot`: `send`, `exchange`, `wait`, `status`, `peer`, `park`, `nudge`, `reconcile`.
 - If bind reports a missing relay hook, run `pairroom relay install --runtime claude|codex` and have the user approve that exact project hook in the harness; installing never grants native trust and never bypasses approval.
+- If bind reports the harness session id is missing, the command ran outside the native session; rerun it as a tool call inside that session so it inherits `CLAUDE_CODE_SESSION_ID` / `CODEX_SESSION_ID`.
 - Never read or print `.pairroom/**/credentials`; the CLI owns all secrets.
 - On failure, run the recovery command named in the error (for example `bind --replace`); never repeat `--create` after a created-Room failure.

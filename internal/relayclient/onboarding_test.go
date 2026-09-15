@@ -137,7 +137,7 @@ func TestBindZeroFlagResolvesRoomAndSlot(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: request.BindID, Generation: 1, Slot: model.ActorClaude, Active: true}, "bootstrap": "b", "collaboration": "c"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: request.BindID, Generation: 1, Slot: model.ActorClaude, Active: true, SessionID: request.SessionID}, "bootstrap": "b", "collaboration": "c"})
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -147,6 +147,7 @@ func TestBindZeroFlagResolvesRoomAndSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 	stubLineage(t, 4242, "claude", true)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "official-session")
 	var out bytes.Buffer
 	if err := bind(context.Background(), root, options{endpoint: endpointPath}, &out); err != nil {
 		t.Fatalf("zero-flag bind: %v", err)
@@ -221,7 +222,7 @@ func TestBindCreateResolvesSlotFromCreatedRoomSelections(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: request.BindID, Generation: 1, Slot: model.ActorID(bound), Active: true}, "bootstrap": "b", "collaboration": "c"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: request.BindID, Generation: 1, Slot: model.ActorID(bound), Active: true, SessionID: request.SessionID}, "bootstrap": "b", "collaboration": "c"})
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -230,6 +231,7 @@ func TestBindCreateResolvesSlotFromCreatedRoomSelections(t *testing.T) {
 		t.Fatal(err)
 	}
 	stubLineage(t, 4242, "codex", true)
+	t.Setenv("CODEX_SESSION_ID", "official-session")
 	var out bytes.Buffer
 	if err := bind(context.Background(), root, options{create: true, endpoint: endpointPath}, &out); err != nil {
 		t.Fatalf("create bind against a swapped default pair: %v", err)

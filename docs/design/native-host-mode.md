@@ -1,6 +1,7 @@
 # Native 宿主模式（原生焦点协作）设计规格
 
 - **状态**：已批准（v10，2026-09-10，项目所有者明确批准）；实现进行中；Phase 0 文档通道核验通过，真实双端 E2E 仍为发布门禁。
+- **实现修订（2026-09-15，会话关联机制）**：关联由「bind 打印一次性 `bind_nonce` → agent 可见回复回显 → Stop hook 携回建立 session_id↔bind」改为「`pairroom relay bind` 作为会话内工具调用，直接读取 harness 暴露给子进程的官方 session_id（Claude Code `CLAUDE_CODE_SESSION_ID`、Codex `CODEX_SESSION_ID`）并在 bind 时即时关联」。nonce 回显与「关联前 send/wait 被拒」的等待窗口一并删除；Stop hook 仍必需，但只负责响应边界发布 + park 中继，并反向校验 session 一致性、补全 transcript_path。下文 D3/D7 与 §10/§11 中所有 nonce/关联相关条目以本修订与 §5 为准；其余设计（中继、park、FIFO、绑定唯一性、发布可靠性、schema 兼容）不变。证据与动机见 §5。
 - **评审史**：经 gpt-6-astra 七轮只读技术评审收敛；全部成立意见已合并，无悬置决策、无已知逻辑矛盾。
 - **定位与存放**：本文档是在途功能的权威设计规格，**不是当前契约**。按 `docs/README.md` 的文档政策（提案在被接受并实现之前归属 Issue/PR，不得把未来提案静默转换为已实现能力），本规格在实现落地前只存在于本 PR 分支，不合入 main。本文以中文保存以逐字保留批准措辞；实现落地时，耐久契约必须以**英文**同步迁入 `ARCHITECTURE.md` / `PROTOCOL.md` / `STORAGE.md` / `UPGRADING.md` / `SUPPORT.md` 与 `CLAUDE.md` invariant（同一 change 内），本文档届时随实现 PR 合入或关闭，新概念术语按术语硬规则进 `CONTEXT.md`。
 
@@ -58,9 +59,9 @@ delivering ──ack 缺失（CLI 死亡/通知丢失/持久化失败，reaper �
 ## 5. 绑定、会话关联与凭据生命周期
 
 - **bind**：`pairroom relay bind --room <id> --slot <slot>`。空槽才能普通 bind；已有活跃绑定时同一身份（关联 session_id 匹配，含 `--continue` 重启）幂等恢复，不同身份拒绝并提示显式 replace；generation 仅在 replace/unbind 后重绑时轮换。
-- **会话关联（需 hook 通道，D3 收窄的原因）**：bind 输出仅含非秘密材料（room/slot/bind id、一次性 `bind_nonce`、后续指令）。agent 在可见回复中带出 nonce；自己的 Stop hook 上报 `last_assistant_message` 携回 → Service 建立 session_id ↔ bind 关联。未携 nonce 的上报不产生关联；nonce 单次有效，重放拒绝。**零 hook 环境无法完成关联，bind 显式拒绝并给出文档指引（不静默、不承诺）**。Codex 侧等价载荷 Phase 0 ① 验证，无通道则 Codex native 不发布。SessionStart hook 先行关联列为 Phase 0 优化项。
+- **会话关联（实现修订：bind 时 env 直读，取代 nonce 回显）**：官方 harness 把当前 session_id 暴露给工具子进程——Claude Code `CLAUDE_CODE_SESSION_ID`（本会话实测，值与 Stop hook 上报一致；官方 env-vars 文档未列，按未文档化变量处理）；Codex `CODEX_SESSION_ID`（openai/codex 源码 `codex-rs/protocol/src/shell_environment.rs` 定义、`codex-rs/core/src/exec_env.rs` 在执行命令时 `env.insert(...)` 注入子进程；功能请求 #8923 已于 2026-02-04 关闭实现）。`pairroom relay bind` 作为会话内工具调用按已识别 runtime 读取对应变量，把真实 session_id 一并提交，Service 在 bind 内即建立 session_id↔bind 关联并执行全局 `(runtime, session_id)` 唯一性校验；bind 输出不再含 `bind_nonce`、无需任何回显。bind 必须在该原生会话内运行：脱离会话（env 无该变量）则 fail-closed 并给出指引，**无 nonce 回退**。已批准的 Stop hook 仍必需，但只负责响应边界发布回复 + park 中继；它上报的官方 session_id 必须与 bind 时一致（不一致 fail-closed，等价保留原 nonce 的防误绑证明），并机会性补全 env 不携带的 transcript_path（供 `relay peer`）。
 - **凭据生命周期**：长期 relay 秘密由 bind 时的 CLI 进程生成写入 `.pairroom/rooms/<room>/slots/<slot>/credentials`（0600），**永不输出给模型**；relay 调用与每次 hook 进程从文件读秘密 + 呈现身份（hook 用官方输入的 session_id）向 Service 认证；Service 校验凭据 + generation + 关联三者一致；第二次及后续 hook 取件零模型参与。
-- **关联前置（实现对 v10 的从严澄清，合并前评审收敛）**：显式 `send` 与 `wait` 取件均要求关联完成；首轮 Stop hook 关联前二者被拒绝（nonce 上报与主路径自动接力不受影响）。
+- **关联前置（实现修订）**：关联在 bind 时即完成，故 bind 成功后 `send`/`wait`/`exchange` 立即可用，不再有「首轮 Stop hook 关联前被拒」的等待窗口；Stop hook 仍负责其后的发布与中继。
 - **威胁边界（诚实声明）**：同一用户、同一工作区内的隔离目标 = 防误绑与撤销卫生，不声称抵御拥有任意文件读取能力的另一会话。bind 确保 `.gitignore` 含 `.pairroom/`（唯一的工作区卫生写入，bind 时披露）。
 - replace：撤销旧 generation 与旧凭据（文件原子覆写 + Service 拒旧代次）；「inbox 空」不证明旧会话 idle；replace 不能停止已开始的原生工作，UI 如实陈述。归档不释放绑定所有权；断连 ≠ 解绑；上报 session_id 参与全局 `(agent, vendor_session_id)` 唯一性检查，冲突 fail-closed；不复用 `internal/service/native.go` 的 existing 验证路径（其会 spawn 临时 adapter）。
 
@@ -156,7 +157,7 @@ Cancel 仅移除 inbox queued（对 delivering/unknown 无效，走 Retry 路径
 
 ## Phase 0 结论（2026-09-11，本 PR 实现记录）
 
-- **① 文档/载荷通道成立，非真实 CLI 验收**：2026-09-11 读取 OpenAI 官方 [Hooks](https://developers.openai.com/codex/hooks)（重定向官方 learn.chatgpt.com/docs/hooks）确认项目级 `.codex/hooks.json`、精确 hook 定义信任、共同 `session_id`、Stop 的 `last_assistant_message` / `stop_hook_active`、`decision:block` + `reason` 自动续跑。Claude 官方 [Hooks](https://code.claude.com/docs/en/hooks) 提供同构 Stop 载荷与 StopFailure 仅可见性事件。安装不绕过同意；nonce 经真实 Stop 回传才关联。
+- **① 文档/载荷通道成立，非真实 CLI 验收**：2026-09-11 读取 OpenAI 官方 [Hooks](https://developers.openai.com/codex/hooks)（重定向官方 learn.chatgpt.com/docs/hooks）确认项目级 `.codex/hooks.json`、精确 hook 定义信任、共同 `session_id`、Stop 的 `last_assistant_message` / `stop_hook_active`、`decision:block` + `reason` 自动续跑。Claude 官方 [Hooks](https://code.claude.com/docs/en/hooks) 提供同构 Stop 载荷与 StopFailure 仅可见性事件。安装不绕过同意。**实现修订（2026-09-15）**：关联不再经 nonce 回显，改为 bind 时从 harness 环境直读官方 session_id 即时完成（Claude Code `CLAUDE_CODE_SESSION_ID` 实测、Codex `CODEX_SESSION_ID` 源码确证，见 §5）；Stop hook 仍上报 session_id 用于发布/中继并反向校验关联一致性。
 - **运行环境边界**：本环境有离线 Go 1.25 源码与依赖，可运行 Mock/HTTP/崩溃窗口测试；没有已认证的 Codex Desktop 或 Claude Code 会话。不得据此声称真实多轮 E2E、厂商版本实测、token 成本实测或完整 A1 已通过。
 - **接收策略**：保守默认 park 30 秒，hook timeout 45 秒；最多连续 8 次带真实新 envelope 的 block，无空转再武装。超时/禁用/预算耗尽保持 queued；下一次用户自然轮次重置预算。两个方向的真实时长、打断和 8-block 行为仍须发布前复验。
 - **未纳入承诺**：session_crons / ScheduleWakeup、并发 resume、SessionStart 先行关联没有实测，均未用于实现或支持声明。

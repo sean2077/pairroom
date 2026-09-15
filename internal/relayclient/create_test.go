@@ -20,6 +20,10 @@ import (
 
 func createBindFixture(t *testing.T, own model.RuntimeKind) (string, string, *int) {
 	t.Helper()
+	// bind associates from the harness environment; expose a session id for both
+	// native runtimes so the resolved slot's runtime finds one.
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "official-session")
+	t.Setenv("CODEX_SESSION_ID", "official-session")
 	root := filepath.Join(t.TempDir(), "project's space")
 	if err := os.Mkdir(root, 0700); err != nil {
 		t.Fatal(err)
@@ -48,7 +52,7 @@ func createBindFixture(t *testing.T, own model.RuntimeKind) (string, string, *in
 			t.Error(err)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: request.BindID, Generation: 1, Slot: model.ActorClaude, Active: true}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: request.BindID, Generation: 1, Slot: model.ActorClaude, Active: true, SessionID: request.SessionID}})
 	})
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)

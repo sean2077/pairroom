@@ -25,7 +25,6 @@ const (
 var (
 	ErrAuth     = errors.New("relay authentication failed: binding, generation and associated session must match")
 	ErrOccupied = errors.New("slot is occupied; resume the same session with --continue or explicitly --replace (cannot stop native work)")
-	ErrNonce    = errors.New("binding nonce is missing, invalid or already consumed")
 	ErrClosed   = errors.New("native relay is closed or draining")
 	ErrUnknown  = errors.New("publication result unknown; inspect status before explicitly deciding recovery")
 )
@@ -44,14 +43,17 @@ type Binding struct {
 type bindingFact struct {
 	Binding
 	CredentialHash string `json:"credential_hash"`
-	NonceHash      string `json:"nonce_hash,omitempty"`
 }
 
+// BindRequest associates at bind time: the native harness exposes its official
+// session id to tool-call subprocesses (Claude Code: CLAUDE_CODE_SESSION_ID;
+// Codex: CODEX_SESSION_ID), so the client presents it directly and no nonce
+// round-trip is required. SessionID is mandatory and participates in the global
+// (runtime, session) uniqueness check.
 type BindRequest struct {
 	BindID         string `json:"bind_id"`
 	CredentialHash string `json:"credential_hash"`
-	NonceHash      string `json:"nonce_hash"`
-	SessionID      string `json:"session_id,omitempty"`
+	SessionID      string `json:"session_id"`
 	Replace        bool   `json:"replace,omitempty"`
 }
 

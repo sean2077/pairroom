@@ -2474,12 +2474,12 @@
 Object.assign(window.PairRoomLocales.en.translation, {
   'ui.native.hostMode': 'Host mode', 'ui.native.embedded': 'Embedded · PairRoom manages sessions', 'ui.native.native': 'Native · relay between your native sessions (experimental)',
   'ui.native.help': 'Approve project Stop hooks, then bind both native sessions. PairRoom does not start or interrupt them. Provider, model, effort, instructions and permission settings below are display-only.',
-  'ui.native.supported': 'Native hosting supports Claude Code and Codex only.', 'ui.native.pending': 'Native Room created. Bind and associate both sessions through their approved Stop hooks.'
+  'ui.native.supported': 'Native hosting supports Claude Code and Codex only.', 'ui.native.pending': 'Native Room created. Bind both sessions; each associates from its harness environment, and the approved Stop hooks relay replies.'
 });
 Object.assign(window.PairRoomLocales['zh-CN'].translation, {
   'ui.native.hostMode': '宿主模式', 'ui.native.embedded': 'Embedded · PairRoom 管理会话', 'ui.native.native': 'Native · 中继原生会话（实验性）',
   'ui.native.help': '批准项目 Stop hook 后，在两侧原生会话绑定。PairRoom 不会启动或中断原生进程。下面的 Provider、模型、effort、附加指令与权限配置仅作展示。',
-  'ui.native.supported': 'Native 宿主模式仅支持 Claude Code 和 Codex。', 'ui.native.pending': 'Native Room 已创建，请通过已批准的 Stop hook 完成双方绑定与会话关联。'
+  'ui.native.supported': 'Native 宿主模式仅支持 Claude Code 和 Codex。', 'ui.native.pending': 'Native Room 已创建，请在两个原生会话内分别 bind；各自从 harness 环境即时关联，已批准的 Stop hook 负责中继回复。'
 });
 
 Object.assign(window.PairRoomLocales["en"].translation, {
@@ -2499,8 +2499,8 @@ Object.assign(window.PairRoomLocales["en"].translation, {
   "room.native.audit": "Activity",
   "room.native.activityHelp": "Binding state and last activity are observations, not live presence.",
   "room.native.setup": "Connect a session",
-  "room.native.setupHelp": "Use the commands in each slot, approve the project hook, then echo the one-time bind nonce in the native session. Replacing a binding never stops existing native work.",
-  "room.native.resumeHelp": "To recover the same session, bind with --continue --session-id SESSION_ID. A different session needs explicit --replace.",
+  "room.native.setupHelp": "Use the commands in each slot and approve the project hook. Run bind inside each native session: it associates from the harness environment, with no nonce to echo. Replacing a binding never stops existing native work.",
+  "room.native.resumeHelp": "Re-running bind inside the same session resumes it automatically. A different session needs explicit --replace.",
   "room.native.retryTitle": "Retry uncertain delivery?",
   "room.native.retryBody": "Inspect the Event Log and workspace first. The original may already have been used. Retry creates a new message ID and can duplicate native work.",
   "room.native.back": "Go back",
@@ -2569,8 +2569,8 @@ Object.assign(window.PairRoomLocales["zh-CN"].translation, {
   "room.native.audit": "活动记录",
   "room.native.activityHelp": "绑定状态与最后活动只是观察记录，不代表实时在线。",
   "room.native.setup": "连接原生会话",
-  "room.native.setupHelp": "使用各槽位内的命令，批准项目 hook，然后在原生回复中带出一次性绑定 nonce。替换绑定不会停止已经开始的原生工作。",
-  "room.native.resumeHelp": "恢复同一会话时，bind 添加 --continue --session-id SESSION_ID。不同会话须显式 --replace。",
+  "room.native.setupHelp": "使用各槽位内的命令并批准项目 hook。在每个原生会话内运行 bind：它会从 harness 环境即时关联，无需回显 nonce。替换绑定不会停止已经开始的原生工作。",
+  "room.native.resumeHelp": "在同一会话内重新运行 bind 会自动恢复该绑定。不同会话须显式 --replace。",
   "room.native.retryTitle": "重试结果不明的投递？",
   "room.native.retryBody": "请先检查事件日志和工作区。原消息可能已被执行。重试会创建新消息 ID，可能导致原生工作重复。",
   "room.native.back": "返回检查",

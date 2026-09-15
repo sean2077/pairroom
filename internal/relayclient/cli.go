@@ -117,7 +117,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		return writeJSON(out, map[string]any{"installed": true, "runtime": kind, "notice": "Restart/review the exact project hook in your native harness (Codex: /hooks). This command does not grant native trust. Keep pairroom on PATH. Real authenticated bidirectional E2E remains release-gated.", "next_steps": []string{
 			"Create a room and bind this session: pairroom relay bind --create --name \"<topic>\" (skill: /pairroom-relay <topic>)",
 			"The peer session joins with the printed peer_join command, or zero-flag inside a recognized session: pairroom relay bind",
-			"Echo the returned bind_nonce in your visible reply once so the approved Stop hook associates the session",
+			"bind associates this session from its harness environment (no nonce echo); the approved Stop hook still relays each reply",
 		}})
 	}
 	if action == "bind" {
@@ -418,6 +418,12 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 			// hook before creating durable state.
 			return errors.New("bind --create requires an approved relay Stop hook; run pairroom relay install --runtime claude|codex for the intended harness first")
 		}
+		// Do not create durable state when this process cannot associate: bind
+		// reads the official session id from the harness environment, so a caller
+		// outside its native session is rejected before the Room exists.
+		if rt := callerRuntime(o); rt != "" && sessionIDFromEnv(rt) == "" {
+			return fmt.Errorf("bind --create associates from the harness environment, but %s is not set; run this command inside your native %s session, not a plain terminal", sessionEnvVars[rt], rt)
+		}
 		room, err := createNativeRoom(ctx, endpoint, root, o, slot)
 		if err != nil {
 			return err
@@ -476,6 +482,12 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 	if err := installed(root, kind); err != nil {
 		return err
 	}
+	// Association is captured here, not deferred to a nonce echo: the harness
+	// exposes the official session id to this tool-call subprocess.
+	envSession := sessionIDFromEnv(kind)
+	if envSession == "" {
+		return fmt.Errorf("bind associates from the harness environment, but %s is not set; run this command as a tool call inside your native %s session, not a plain terminal", sessionEnvVars[kind], kind)
+	}
 	dir, err := secureDir(root, ".pairroom", "rooms", o.room, "slots", o.slot)
 	if err != nil {
 		return err
@@ -491,7 +503,7 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 	prior := readPrivate(filepath.Join(dir, "state.json"), &s)
 	if prior == nil && !o.replace {
 		if s.SessionID == "" {
-			return errors.New("slot has a pending binding; finish association with the nonce already returned to its original session, or use bind --replace explicitly to revoke it and start again")
+			return errors.New("slot has an incomplete legacy binding; use bind --replace explicitly to revoke it and rebind from this session")
 		}
 		if err := readPrivate(filepath.Join(dir, "credentials"), &cred); err != nil {
 			return err
@@ -499,8 +511,13 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		if cred.BindID != s.BindID {
 			return errors.New("state/credential mismatch: inspect and --replace explicitly")
 		}
-		if s.SessionID != "" && (!o.cont || o.session != s.SessionID) {
+		// The same official session resumes idempotently; a different one is
+		// rejected without an explicit --replace.
+		if s.SessionID != envSession {
 			return relay.ErrOccupied
+		}
+		if o.session != "" && o.session != envSession {
+			return errors.New("--session-id does not match this session's harness environment identity")
 		}
 		if s.Room != o.room || s.Slot != slot || s.Runtime != kind {
 			return errors.New("local binding identity mismatch")
@@ -517,11 +534,7 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		if err != nil {
 			return err
 		}
-		nonce, err := relay.RandomID()
-		if err != nil {
-			return err
-		}
-		s = State{Schema: 1, Room: o.room, Slot: slot, Runtime: kind, Workspace: root, EndpointPath: endpointPath, BindID: id, Nonce: "[pairroom-bind:" + nonce + "]"}
+		s = State{Schema: 1, Room: o.room, Slot: slot, Runtime: kind, Workspace: root, EndpointPath: endpointPath, BindID: id, SessionID: envSession}
 		cred = credentials{BindID: id, Secret: secret}
 	}
 	// Best-effort lineage for foreground default selection in multi-binding
@@ -543,20 +556,21 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		Binding                                              relay.Binding `json:"binding"`
 		Bootstrap, Collaboration, Workspace, Runtime, Notice string
 	}
-	// A consumed nonce's hash is still syntactically valid on an idempotent resume;
-	// the Service returns the existing binding without creating a new nonce.
-	request := relay.BindRequest{BindID: s.BindID, CredentialHash: relay.Digest(cred.Secret), NonceHash: relay.Digest(s.Nonce), SessionID: s.SessionID, Replace: o.replace}
+	// bind presents the official session id read from the harness environment, so
+	// the Service associates immediately; an idempotent resume returns the same
+	// binding without consuming another generation.
+	request := relay.BindRequest{BindID: s.BindID, CredentialHash: relay.Digest(cred.Secret), SessionID: s.SessionID, Replace: o.replace}
 	if err := management(ctx, endpoint, http.MethodPost, "/api/v1/rooms/"+o.room+"/native-bindings/"+o.slot, request, &result); err != nil {
 		return err
 	}
-	if result.Binding.BindID != s.BindID || result.Binding.Generation == 0 {
+	if result.Binding.BindID != s.BindID || result.Binding.Generation == 0 || result.Binding.SessionID != s.SessionID {
 		return errors.New("binding response identity mismatch")
 	}
 	s.Generation = result.Binding.Generation
 	if err := relay.AtomicJSON(filepath.Join(dir, "state.json"), s); err != nil {
 		return err
 	}
-	payload := map[string]any{"binding": result.Binding, "bind_nonce": s.Nonce, "bootstrap": result.Bootstrap, "collaboration": result.Collaboration, "notice": result.Notice + " Added .pairroom/ to .gitignore. Echo bind_nonce in your visible final reply once; the approved Stop hook will associate this session. No long-lived secret is included."}
+	payload := map[string]any{"binding": result.Binding, "bootstrap": result.Bootstrap, "collaboration": result.Collaboration, "notice": result.Notice + " Added .pairroom/ to .gitignore. This session is associated from its harness environment; no nonce echo is required. The approved Stop hook still relays each reply. No long-lived secret is included."}
 	if created {
 		payload["peer_join"] = bindCommand(root, endpointPath, o.room, peerSlot(slot))
 	}

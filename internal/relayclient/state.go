@@ -36,7 +36,6 @@ type State struct {
 	BindID           string            `json:"bind_id"`
 	Generation       uint64            `json:"generation"`
 	SessionID        string            `json:"session_id,omitempty"`
-	Nonce            string            `json:"bind_nonce,omitempty"`
 	LastSeq          uint64            `json:"last_seq"`
 	LastConfirmedSeq uint64            `json:"last_confirmed_seq"`
 	Pending          *Pending          `json:"pending,omitempty"`

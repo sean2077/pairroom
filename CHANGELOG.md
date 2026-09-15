@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Associate native relay sessions at `bind` from the official session id the harness exposes to its tool-call environment (Claude Code `CLAUDE_CODE_SESSION_ID`, Codex `CODEX_SESSION_ID`), removing the one-time `bind_nonce` and the requirement to echo it in a visible reply before `send`/`wait`/`exchange` unlock. `bind` now associates immediately and must run inside the native session, failing closed when that environment is absent (no nonce fallback); the approved Stop hook still publishes finished replies, parks for relay, re-confirms the same session identity, and records the transcript path the environment does not carry. Binding uniqueness, owner-only credentials, generation/`replace` revocation, durable FIFO, append-only audit, embedded mode and protocol v6 are unchanged.
 - Fix the Management sidebar separator focus handoff when it becomes hidden: hiding a focused element blurs it to the document before media/class listeners run, so the separator now remembers that it held focus and deterministically moves focus to a visible navigation control at mobile widths or while collapsed/maximized.
 
 ## [v4.1.0] — 2026-09-12
