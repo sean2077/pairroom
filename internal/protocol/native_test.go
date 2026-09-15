@@ -9,8 +9,8 @@ import (
 
 func TestNativeBootstrapBudgetAndBoundaries(t *testing.T) {
 	for _, slot := range model.SlotActors() {
-		for _, a := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex} {
-			for _, b := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex} {
+		for _, a := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok} {
+			for _, b := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok} {
 				text := NativeBootstrap(slot, a, b)
 				for _, version := range []int{1, model.CollaborationVersion} {
 					collaboration, err := (model.Collaboration{Version: version}).ForCreation()
@@ -29,5 +29,17 @@ func TestNativeBootstrapBudgetAndBoundaries(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestGrokNativeBootstrapExplainsForegroundDelivery(t *testing.T) {
+	text := NativeBootstrap(model.ActorClaude, model.RuntimeGrok, model.RuntimeGrok)
+	for _, wanted := range []string{"@grok0", "@grok1", "clips hook text", "relay wait", "relay send/exchange"} {
+		if !strings.Contains(text, wanted) {
+			t.Fatalf("missing Grok contract %q", wanted)
+		}
+	}
+	if strings.Contains(text, "Stop relays your full visible reply.") {
+		t.Fatal("Grok bootstrap promised unclipped hook output")
 	}
 }

@@ -24,13 +24,13 @@ Keeping a native harness and keeping its original desktop/terminal UI are differ
 
 | Need | Embedded Room | Native Room (experimental) |
 |---|---|---|
-| Where you interact | PairRoom's conversation and controls; adapters drive the supported native harness interfaces | Your own Claude Code / Codex sessions, including the intended Codex Desktop workflow; approved hooks bind them to the relay |
+| Where you interact | PairRoom's conversation and controls; adapters drive the supported native harness interfaces | Your own Claude Code / Codex / Grok Build sessions, including the intended Codex Desktop workflow; approved hooks bind them to the relay |
 | Who owns execution | PairRoom schedules the two participants' Turns; each harness still runs its own tools and subagents | The original harness owns its process, tools, permissions, input and interruption; PairRoom does not launch or interrupt it |
 | Provider / model / effort | Each slot independently selects supported overrides or inherits native configuration | Configured in each original harness; Room selection fields are metadata, not applied overrides |
 | Delivery and control | Single Room Turn owner, FIFO, supported steering, queue, cancel, interrupt and explicit retry | Durable per-slot FIFO and binding audit; advisory Turn ownership, no process lock or Interrupt control |
 | Important limit | Native tool execution does not expose every interactive vendor feature or preserve an independent Desktop UI | Automatic continuation is bounded by park; authenticated multi-round vendor E2E remains a release gate |
 
-A requirement to keep **Codex Desktop** is a reason to evaluate Native, not to claim Embedded is a transparent attachment to that application. Native currently supports Claude Code and Codex; Grok Build is an Embedded option. A Native Room's hook parks for up to 30 seconds, with a cap of eight consecutive actual-message blocks. Outside that window/cap, messages stay queued for collection or a human nudge. Neither `handed_off` nor synthetic hook tests prove model acceptance. See [Protocol](PROTOCOL.md#native-host-protocol-v7) and [Support](../SUPPORT.md).
+A requirement to keep **Codex Desktop** is a reason to evaluate Native, not to claim Embedded is a transparent attachment to that application. Native supports Claude Code, Codex and Grok Build. Grok uses bounded Hook readiness hints and foreground collection to avoid clipped inputs; clipped Stop replies require explicit full-text publication. See [Grok Native](CLI_REFERENCE.md#grok-build-native). A Native Room's hook parks for up to 30 seconds, with a cap of eight consecutive actual-message blocks. Outside that window/cap, messages stay queued for collection or a human nudge. Neither `handed_off` nor synthetic hook tests prove model acceptance. See [Protocol](PROTOCOL.md#native-host-protocol-v7) and [Support](../SUPPORT.md).
 
 ### Independent configuration without a Provider manager
 

@@ -36,7 +36,7 @@ func TestNativeCallerUsesSessionMetadataWithoutProcessVisibility(t *testing.T) {
 	for _, tc := range []struct {
 		key  string
 		kind model.RuntimeKind
-	}{{"CLAUDE_CODE_SESSION_ID", model.RuntimeClaude}, {"CODEX_THREAD_ID", model.RuntimeCodex}} {
+	}{{"CLAUDE_CODE_SESSION_ID", model.RuntimeClaude}, {"CODEX_THREAD_ID", model.RuntimeCodex}, {"GROK_SESSION_ID", model.RuntimeGrok}} {
 		t.Run(tc.key, func(t *testing.T) {
 			isolateCaller(t)
 			t.Setenv(tc.key, "native-session")
@@ -157,13 +157,16 @@ func TestNativeCreateRunsInsideHarnessWithoutRuntimeOrSlotFlags(t *testing.T) {
 	}
 }
 
-func TestNativeCallerRecognizesUnsupportedGrokWithoutMisBinding(t *testing.T) {
+func TestNativeCallerRecognizesGrokWithoutMisBinding(t *testing.T) {
 	isolateCaller(t)
 	harnessAncestor = func() (int, string, bool) { return 4, "grok", true }
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "outer-claude")
-	err := applyCallerDefaults(t.TempDir(), "bind", &options{create: true})
-	if err == nil || !strings.Contains(err.Error(), "Grok Build was detected") {
-		t.Fatalf("unsupported harness was treated as Claude: %v", err)
+	if err := applyCallerDefaults(t.TempDir(), "bind", &options{create: true}); err != nil {
+		t.Fatal(err)
+	}
+	caller, err := currentNativeCaller()
+	if err != nil || caller.runtime != model.RuntimeGrok || caller.session != "" {
+		t.Fatalf("Grok inherited another runtime's session: %+v %v", caller, err)
 	}
 }
 

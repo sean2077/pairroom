@@ -23,8 +23,10 @@ func hookPath(root string, kind model.RuntimeKind) (string, error) {
 		return filepath.Join(root, ".claude", "settings.json"), nil
 	case model.RuntimeCodex:
 		return filepath.Join(root, ".codex", "hooks.json"), nil
+	case model.RuntimeGrok:
+		return filepath.Join(root, ".grok", "hooks", "pairroom.json"), nil
 	default:
-		return "", errors.New("native relay supports Claude Code and Codex only")
+		return "", errors.New("native relay supports Claude Code, Codex and Grok Build")
 	}
 }
 func readHooks(path string) (map[string]any, error) {
@@ -84,7 +86,11 @@ func editHooks(root string, kind model.RuntimeKind, remove bool) error {
 	if err != nil {
 		return err
 	}
-	if _, err = secureDir(root, filepath.Base(filepath.Dir(path))); err != nil {
+	relDir, err := filepath.Rel(root, filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	if _, err = secureDir(root, strings.Split(relDir, string(filepath.Separator))...); err != nil {
 		return err
 	}
 	config, err := readHooks(path)
@@ -99,7 +105,7 @@ func editHooks(root string, kind model.RuntimeKind, remove bool) error {
 		hooks = map[string]any{}
 	}
 	events := []string{"Stop"}
-	if kind == model.RuntimeClaude {
+	if kind == model.RuntimeClaude || kind == model.RuntimeGrok {
 		events = append(events, "StopFailure")
 	}
 	for _, event := range events {
@@ -169,14 +175,30 @@ func installSkill(kind model.RuntimeKind) error {
 	if err != nil {
 		return err
 	}
-	// Install into the directory each host actually discovers: Claude reads
-	// ~/.claude/skills, Codex reads ~/.codex/skills. ~/.agents is this
-	// repository's SSOT convention, not a user-machine discovery path.
+	// Product skill discovery follows the selected host, not .agents/ SSOT.
 	host := ".codex"
-	if kind == model.RuntimeClaude {
+	switch kind {
+	case model.RuntimeClaude:
 		host = ".claude"
+	case model.RuntimeGrok:
+		host = ".grok"
 	}
-	dir, err := secureDir(home, host, "skills", "pairroom-relay")
+	parts := []string{host, "skills", "pairroom-relay"}
+	if kind == model.RuntimeGrok && os.Getenv("GROK_HOME") != "" {
+		home, err = filepath.Abs(os.Getenv("GROK_HOME"))
+		if err != nil {
+			return err
+		}
+		if err = os.MkdirAll(home, 0700); err != nil {
+			return err
+		}
+		info, err := os.Lstat(home)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("GROK_HOME must be a directory, not a symlink")
+		}
+		parts = []string{"skills", "pairroom-relay"}
+	}
+	dir, err := secureDir(home, parts...)
 	if err != nil {
 		return err
 	}

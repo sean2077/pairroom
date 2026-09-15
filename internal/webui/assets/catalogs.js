@@ -2474,19 +2474,19 @@
 Object.assign(window.PairRoomLocales.en.translation, {
   'ui.native.hostMode': 'Host mode', 'ui.native.embedded': 'Embedded · PairRoom manages sessions', 'ui.native.native': 'Native · relay between your native sessions (experimental)',
   'ui.native.help': 'Approve project Stop hooks, then bind both native sessions. PairRoom does not start or interrupt them. Provider, model, effort, instructions and permission settings below are display-only.',
-  'ui.native.supported': 'Native hosting supports Claude Code and Codex only.', 'ui.native.pending': 'Native Room created. Bind and associate both sessions through their approved Stop hooks.'
+  'ui.native.supported': 'Native hosting supports Claude Code, Codex and Grok Build.', 'ui.native.pending': 'Native Room created. Bind and associate both sessions through their approved Stop hooks.'
 });
 Object.assign(window.PairRoomLocales['zh-CN'].translation, {
   'ui.native.hostMode': '宿主模式', 'ui.native.embedded': 'Embedded · PairRoom 管理会话', 'ui.native.native': 'Native · 中继原生会话（实验性）',
   'ui.native.help': '批准项目 Stop hook 后，在两侧原生会话绑定。PairRoom 不会启动或中断原生进程。下面的 Provider、模型、effort、附加指令与权限配置仅作展示。',
-  'ui.native.supported': 'Native 宿主模式仅支持 Claude Code 和 Codex。', 'ui.native.pending': 'Native Room 已创建，请通过已批准的 Stop hook 完成双方绑定与会话关联。'
+  'ui.native.supported': 'Native 宿主模式支持 Claude Code、Codex 和 Grok Build。', 'ui.native.pending': 'Native Room 已创建，请通过已批准的 Stop hook 完成双方绑定与会话关联。'
 });
 
 Object.assign(window.PairRoomLocales["en"].translation, {
   "room.native.subtitle": "Your native sessions. One auditable relay.",
   "room.native.experimental": "Experimental",
   "room.native.boundaryTitle": "PairRoom relays; your harness runs.",
-  "room.native.boundary": "No native processes are started or interrupted here. Provider, model, effort and permission settings are display-only. Real authenticated Claude Code ↔ Codex multi-turn validation remains release-gated.",
+  "room.native.boundary": "No native processes are started or interrupted here. Provider, model, effort and permission settings are display-only. Real authenticated cross-harness multi-turn validation remains release-gated.",
   "room.native.limits": "Publication and wake-up limits",
   "room.native.limitations": "Handed off means CLI stdout was written, not that the model accepted it. Outside a park window, messages stay queued until the native session runs relay wait. Interruptions and crashes before publication state exists may leave no detectable record. Two publishing paths may visibly duplicate a task.",
   "room.native.messages": "Relay messages",
@@ -2556,7 +2556,7 @@ Object.assign(window.PairRoomLocales["zh-CN"].translation, {
   "room.native.subtitle": "留在原生会话，协作记录可审计。",
   "room.native.experimental": "实验性",
   "room.native.boundaryTitle": "PairRoom 负责中继，原生工具负责执行。",
-  "room.native.boundary": "这里不会启动或中断原生进程。Provider、模型、effort 和权限配置仅作展示；真实认证的 Claude Code ↔ Codex 多轮验证仍是发布前置条件。",
+  "room.native.boundary": "这里不会启动或中断原生进程。Provider、模型、effort 和权限配置仅作展示；真实认证的跨 harness 多轮验证仍是发布前置条件。",
   "room.native.limits": "发布与唤醒的边界",
   "room.native.limitations": "「CLI 已写出」不代表模型已接受。park 窗口外，消息保持待取件，需在原生会话运行 relay wait。用户中断或发布状态落盘前崩溃可能不留下可检测记录。同轮两种发布路径可能产生可见重复。",
   "room.native.messages": "中继消息",

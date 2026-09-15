@@ -5,7 +5,7 @@ description: Use when the user invokes /pairroom-relay, asks to create or join a
 
 # pairroom-relay
 
-Run these commands through THIS native Claude Code / Codex CLI or Desktop session's tools, not a separate terminal or another agent. PairRoom owns the Room and message transport, not your process, provider, model, permissions, worktrees or subagents. Prerequisites: `pairroom` on PATH and one-time human approval of the project hooks installed by `pairroom relay install`.
+Run these commands through THIS native Claude Code / Codex CLI or Desktop / Grok Build session's tools, not a separate terminal or another agent. PairRoom owns the Room and message transport, not your process, provider, model, permissions, worktrees or subagents. Prerequisites: `pairroom` on PATH and one-time human approval of the project hooks installed by `pairroom relay install`.
 
 ## Create a room — `/pairroom-relay <topic>`
 
@@ -21,7 +21,7 @@ Creates the native Room, binds this session, and prints `bind_nonce`, bootstrap 
 pairroom relay bind
 ```
 
-For an already-associated native session, its session metadata selects the existing Room/slot and saved Service endpoint, even when a Desktop process serves multiple sessions. Otherwise resolve the workspace's sole active native Room and its matching runtime slot. Only a real ambiguity requires the exact join command or explicit candidate flags. Never copy credentials or invent session IDs. A Grok caller is identified and rejected explicitly: Native Grok is not implemented; do not impersonate Claude. Embedded Grok support is separate.
+For an already-associated native session, its session metadata selects the existing Room/slot and saved Service endpoint, even when a Desktop process serves multiple sessions. Otherwise resolve the workspace's sole active native Room and its matching runtime slot. Only a real ambiguity requires the exact join command or explicit candidate flags. Never copy credentials or invent session IDs.
 
 ## After a new bind, once
 
@@ -46,10 +46,16 @@ pairroom relay exchange --id <new-client-id> --text "<question or findings>"
 
 For diagnosis, start with `pairroom relay status --brief`; full `status` returns history and is only needed for targeted investigation. A finite confirmed-publication timeout requires `relay wait`, not another send/exchange. Transport, output or acknowledgement errors require inspection before recovery; never automatically replay uncertain work. Finish with `relay send`, not another ceremonial wait. After explicit send/exchange, omit the final peer handle unless a second Stop publication is intended. Stop hooks still publish while a foreground collector is active, but do not steal its input. No command wakes an already-idle peer or bypasses native approval.
 
+## Grok Build
+
+Install in the Grok session with `pairroom relay install`; review `.grok/hooks/pairroom.json` through `/hooks` and let the user decide project trust (`/hooks-trust`). PairRoom never grants trust. To choose a peer, use `bind --create --peer-runtime codex` (or `claude`/`grok`); your own runtime is inferred. With no pair overrides, the Service's default pair must already match the intended runtimes. Use the printed join command when both slots run Grok.
+
+Grok clips Stop text and hook feedback. Prefer explicit `send`/`exchange` with the COMPLETE text (stdin for large bodies), then a short unaddressed final reply. A clipped Stop is not published; follow its recovery hint without resending text already explicitly published. An inbox-ready Stop hint contains only a receive command, not the peer's reply: run it to collect the full FIFO envelope. Never mistake a truncated native tool result for complete input. Native cancellation and Grok's own continuation limit still apply; no transcript fallback or idle wake-up exists.
+
 ## Rules
 
 - Slots are Agent 1 / Agent 2 (`--slot 1|2`), never runtimes; durable IDs `claude`/`codex` remain accepted.
 - Associated foreground commands normally need no Room/slot flags. A unique pending binding is diagnosable with `status --brief` the same way; send/wait/exchange still require the nonce. Session metadata wins over shared-PID inference; conflicting/unmatched metadata must not select a different session.
-- Missing hooks: run `pairroom relay install` in the intended session and have the user approve the exact project hook. Installing never grants trust. Explicit `--runtime claude|codex` can prepare peer hooks; never use it to relabel the session being bound.
+- Missing hooks: run `pairroom relay install` in the intended session and have the user approve the exact project hook. Installing never grants trust. Explicit `--runtime claude|codex|grok` can prepare peer hooks; never use it to relabel the session being bound.
 - Never read or print `.pairroom/**/credentials`; the CLI owns secrets.
 - Follow the recovery named in the error; never repeat `--create` after a created-Room failure.

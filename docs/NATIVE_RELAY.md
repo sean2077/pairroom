@@ -1,14 +1,14 @@
 # Native relay: ownership, discovery, reliability and cost
 
-Status: implementation review, 2026-09-14. Baseline: PairRoom
-`5a47fdc5ef0e37794cf9a66457b905896d352a0c` (includes #51 and the corrected #52).
+Status: implementation review, 2026-09-15. Baseline: PairRoom
+`ab843dae15e734c4589090b012d4bec65821ef15` (includes #51–#53), with Grok Native support.
 This document explains the implementation and the audit fixes accompanying it;
 [Protocol](PROTOCOL.md#native-host-protocol-v7) owns the transport contract and
 [CLI reference](CLI_REFERENCE.md#native-relay-commands) owns command usage.
 
 ## Run inside the native harness
 
-The user starts Claude Code, Codex CLI or Codex Desktop normally. The agent runs
+The user starts Claude Code, Codex CLI/Desktop or Grok Build normally. The agent runs
 `pairroom relay bind --create` or `pairroom relay bind` through its own command
 execution tool. There is no requirement to launch a separate terminal or fill
 in every configuration field. "PairRoom does not own the native process" means
@@ -16,7 +16,7 @@ it does not spawn, replace or interrupt that process, not that onboarding runs
 outside it.
 
 Discovery uses the current Git workspace, recognized harness lineage and native
-session metadata (`CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`). Exact session
+session metadata (`CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`, `GROK_SESSION_ID`). Exact session
 metadata selects an existing associated Room/slot ahead of PID-only matching:
 a Desktop or app-server process can host multiple threads. Repeating `bind` in
 that same session resumes its saved Service endpoint and identity without
@@ -46,14 +46,24 @@ worktrees. Changing the shell's directory does not grant a new Room identity.
 
 ### Runtime boundary
 
-Native currently supports Claude Code and Codex. Grok Build is recognized so
-it cannot accidentally fall through to an outer Claude/Codex binding, but is
-not enabled as a Native runtime by this change. Embedded Grok is separate.
-Grok's current hook contract uses camelCase session/reply fields, clips the
-last assistant message, and caps feedback delivered through a Stop gate. It
-cannot honestly inherit the existing full-reply relay guarantee by changing a
-runtime allowlist. Future support needs an explicit tested adapter and handling
-for those limits, not a fake Claude identity or transcript scraping.
+Native supports Claude Code, Codex and Grok Build. Grok has a distinct file-hook
+adapter: camelCase fields, main-session `end_turn` filtering, ignored cancellation
+and teardown/subagent reports, and no Claude-compatibility double publication.
+Its clipped reply is rejected rather than relayed as complete; use explicit
+send/exchange for the complete original.
+
+Grok hook feedback carries only a bounded readiness instruction, never an inbox
+body. The service probes without claiming; the existing foreground command
+then performs normal FIFO delivery and acknowledgement. This avoids feeding a
+large peer reply through Grok's 10,000-character feedback cap, without changing
+the native process, message schema or model loop. There is still no arbitrary
+idle wake-up. See [Grok setup and limits](CLI_REFERENCE.md#grok-build-native).
+
+The reviewed upstream is [Grok Build's hook contract](https://github.com/xai-org/grok-build/blob/37949780c144e37df692e3d669051a21fec24f20/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md)
+and [clipping implementation](https://github.com/xai-org/grok-build/blob/37949780c144e37df692e3d669051a21fec24f20/crates/codegen/xai-grok-hooks/src/event.rs).
+Session discovery and skill installation follow its
+[tool environment](https://github.com/xai-org/grok-build/blob/37949780c144e37df692e3d669051a21fec24f20/crates/codegen/xai-grok-shell/src/session/agent_rebuild.rs)
+and [skill paths](https://github.com/xai-org/grok-build/blob/37949780c144e37df692e3d669051a21fec24f20/crates/codegen/xai-grok-agent/src/prompt/skills.rs).
 
 Sources: [Claude session environment](https://code.claude.com/docs/en/env-vars),
 [Codex SDK session reference](https://github.com/openai/codex/blob/main/sdk/typescript/README.md).
@@ -64,10 +74,9 @@ successful authenticated E2E in this repository.
 
 ## The two receive paths share one mailbox
 
-A Stop hook publishes the complete routed reply and may park for up to 30 seconds
+A Stop hook publishes the complete available routed reply and may park for up to 30 seconds
 inside its installed 45-second budget. `decision:block` requests continuation;
-it is not arbitrary idle-session wake-up. The eight actual-message block cap is
-unchanged.
+it is not arbitrary idle-session wake-up. The eight-block cap is unchanged; Grok readiness/recovery hints count too.
 
 Foreground `exchange` sends once, then returns the next eligible FIFO input in
 the same tool invocation. `wait` only collects. Their HTTP polls remain at most
@@ -159,8 +168,8 @@ collection and cancellation, (3) warm/cold authentication and revocation,
 contracts and documentation. The concrete findings above have code and tests;
 that is not a guarantee of no undiscovered defects.
 
-Native vendor/tool E2E remains unverified here: real Codex Desktop and Claude
-Code tool continuation, approvals, backgrounding, one-hour work, interruption,
+Native vendor/tool E2E remains unverified here: real Codex Desktop, Claude
+Code and Grok Build tool continuation, approvals, backgrounding, one-hour work, interruption,
 process restart and comparative billed usage need an authenticated run. No
 synthetic fixture establishes these. A fair cost comparison holds model,
 provider, effort, task revision and acceptance criteria constant, then records

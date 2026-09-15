@@ -2129,8 +2129,8 @@
       if (native) document.querySelector(`input[name="${actor}-mode"][value="new"]`).checked = true;
       document.querySelectorAll(`input[name="${actor}-mode"]`).forEach(input => { input.disabled = native; });
       const select = $(`${actor}-runtime`);
-      for (const option of select.options) option.disabled = native ? !['claude', 'codex'].includes(option.value) : !runtimeCatalogEntry(option.value)?.available;
-      if (native && !['claude', 'codex'].includes(select.value)) select.value = actor;
+      for (const option of select.options) option.disabled = native ? !['claude', 'codex', 'grok'].includes(option.value) : !runtimeCatalogEntry(option.value)?.available;
+      if (native && !['claude', 'codex', 'grok'].includes(select.value)) select.value = actor;
       select.setCustomValidity(native || runtimeCatalogEntry(select.value)?.available ? '' : t('agent.unavailable'));
     }
     syncBindingInputs();
@@ -2165,7 +2165,7 @@
     const bindings = {};
     for (const actor of ['claude', 'codex']) {
       if (!nativeCreation() && (!$(`${actor}-runtime`).reportValidity() || !$(`${actor}-provider`).reportValidity())) return;
-      if (nativeCreation() && !['claude', 'codex'].includes($(`${actor}-runtime`).value)) { showFormError('room-form-error', t('ui.native.supported')); return; }
+      if (nativeCreation() && !['claude', 'codex', 'grok'].includes($(`${actor}-runtime`).value)) { showFormError('room-form-error', t('ui.native.supported')); return; }
       const mode = document.querySelector(`input[name="${actor}-mode"]:checked`)?.value || 'new';
       const sessionID = $(`${actor}-session-id`).value.trim();
       if (mode === 'existing' && !sessionID) {

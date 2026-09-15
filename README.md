@@ -13,7 +13,7 @@
 Use PairRoom when carrying proposals, objections and corrections between two existing sessions has become repetitive work. The goal is a better decision with less coordination, not another mandatory agent hierarchy.
 
 - **Review the same problem.** Both participants can be high-capability reviewers. Default Lead/Executor responsibilities are flexible; simple tasks stay with the addressed agent. Custom natural-language instructions need no phase compiler. Review completion does not automatically authorize implementation.
-- **Keep the interaction surface you need.** Embedded provides PairRoom controls over supported native adapters. Experimental Native keeps your own Claude Code / Codex sessions, including the intended Codex Desktop workflow, with approved hooks and bounded relay rather than process ownership.
+- **Keep the interaction surface you need.** Embedded provides PairRoom controls over supported native adapters. Experimental Native keeps your own Claude Code / Codex / Grok Build sessions, including the intended Codex Desktop workflow, with approved hooks and bounded relay rather than process ownership.
 - **Keep the project's workflow.** Retain repository instructions, agent-scaffold, worktrees and PR/MR policy. Relay forwards the complete addressed reply without appending accumulated Room history. Compact byte budgets are not a guarantee of lower billed tokens or greater accuracy.
 
 | Host mode | Configuration and control | Boundary |
@@ -59,7 +59,7 @@ There is no automatic relay-count or cost limit. Durable recovery distinguishes 
 
 ## Native host mode (experimental)
 
-Choose **Native** when creating a Room to keep both participants in their original Claude Code/Codex sessions. PairRoom supplies bindings, durable relay and audit, without spawning or interrupting processes. Install and approve the project Stop hooks, bind each slot, and return its one-time nonce.
+Choose **Native** when creating a Room to keep both participants in their original Claude Code/Codex/Grok Build sessions. PairRoom supplies bindings, durable relay and audit, without spawning or interrupting processes. Install and approve the project Stop hooks, bind each slot, and return its one-time nonce. Grok uses [foreground delivery](docs/CLI_REFERENCE.md#grok-build-native) to avoid its clipped hook feedback; clipped outgoing replies require explicit send/exchange.
 
 The `pairroom-relay` skill ships in `skills/` for skill installers (`npx skills add sean2077/pairroom`) and is also written by `relay install`. Once loaded, `/pairroom-relay <topic>` creates the Room and binds that session and reports the peer's join command; `pairroom relay bind` runs zero-flag inside a recognized session. Reuse that binding for follow-up reviews rather than creating a Room per round.
 

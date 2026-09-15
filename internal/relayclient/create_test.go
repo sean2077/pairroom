@@ -229,8 +229,8 @@ func TestCreateNativeRoomReusesRegisteredProjectWithServerDefaults(t *testing.T)
 }
 
 func TestCreateNativeRoomRejectsUnsupportedRuntimeBeforeAnyRequest(t *testing.T) {
-	_, err := createNativeRoom(context.Background(), relay.Endpoint{URL: "http://127.0.0.1:0"}, "/ws", options{peer: "grok"}, model.ActorClaude)
-	if err == nil || !strings.Contains(err.Error(), "claude or codex only") {
+	_, err := createNativeRoom(context.Background(), relay.Endpoint{URL: "http://127.0.0.1:0"}, "/ws", options{peer: "unsupported"}, model.ActorClaude)
+	if err == nil || !strings.Contains(err.Error(), "claude, codex or grok") {
 		t.Fatalf("err = %v", err)
 	}
 }

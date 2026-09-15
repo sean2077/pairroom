@@ -83,9 +83,6 @@ func applyCallerDefaults(root, action string, o *options) error {
 	if o.kind != "" && caller.runtime != "" && model.RuntimeKind(o.kind) != caller.runtime {
 		return errors.New("--runtime conflicts with the calling native harness")
 	}
-	if caller.runtime == model.RuntimeGrok {
-		return errors.New("Grok Build was detected, but PairRoom Native currently supports Claude Code and Codex only; do not bind Grok as another runtime (Embedded Grok remains available)")
-	}
 	if caller.session != "" && o.session != "" && o.session != caller.session {
 		return errors.New("--session-id conflicts with the calling native session")
 	}
