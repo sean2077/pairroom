@@ -46,6 +46,7 @@ type foregroundFixture struct {
 
 func newForegroundFixture(t *testing.T, opts foregroundFixtureOptions) *foregroundFixture {
 	t.Helper()
+	IsolateNativeCaller(t)
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

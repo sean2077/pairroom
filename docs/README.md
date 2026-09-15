@@ -21,6 +21,7 @@ Start with the question you need answered. Each document has one primary respons
 |---|---|
 | [CLI reference](CLI_REFERENCE.md) | Command responsibilities and source-derived flag inventory |
 | [API reference](API_REFERENCE.md) | HTTP/SSE contracts, receipts, errors, source-derived routes |
+| [Native relay](NATIVE_RELAY.md) | Harness-local onboarding, peer receive paths, delivery evidence and efficiency boundaries |
 | [Protocol](PROTOCOL.md) | Model-facing bootstrap, envelope, exact-handle relay, convergence |
 | [Architecture](ARCHITECTURE.md) | Components, state ownership, lifecycle and implementation invariants |
 | [Storage](STORAGE.md) | Durable/ephemeral state, schema, replay, recovery and archive boundaries |
