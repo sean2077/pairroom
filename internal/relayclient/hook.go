@@ -182,6 +182,16 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	if hook.StopHookActive && c.State.Blocks >= relay.MaxBlocks {
 		return writeJSON(out, map[string]any{})
 	}
+	// Publishing remains independent of collection. A foreground tool may be
+	// waiting through the native Stop boundary; never steal its next input.
+	releaseCollector, err := acquireCollector(ctx, c.Dir)
+	if errors.Is(err, errCollectorBusy) {
+		return writeJSON(out, map[string]any{})
+	}
+	if err != nil {
+		return err
+	}
+	defer releaseCollector()
 	return deliver(ctx, c, true, 30, out)
 }
 
@@ -199,13 +209,16 @@ func deliverOnce(ctx context.Context, c *Client, hook bool, seconds int, out io.
 	if seconds < 1 || seconds > 30 {
 		return false, errors.New("wait timeout must be 1–30 seconds")
 	}
-	if deadline, ok := ctx.Deadline(); ok {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	// Only Stop hooks need to reserve time inside their lifecycle deadline.
+	// Foreground tools keep the caller context, including sub-second budgets,
+	// so an already-queued envelope can still be collected and acknowledged.
+	if deadline, ok := ctx.Deadline(); hook && ok {
 		remaining := time.Until(deadline) - 4*time.Second
 		if remaining < time.Second {
-			if hook {
-				return false, writeJSON(out, map[string]any{})
-			}
-			return false, context.DeadlineExceeded
+			return false, writeJSON(out, map[string]any{})
 		}
 		if time.Duration(seconds)*time.Second > remaining {
 			seconds = int(remaining / time.Second)

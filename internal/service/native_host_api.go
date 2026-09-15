@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"path/filepath"
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
@@ -90,29 +89,15 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 		nativeResult(w, nil, relay.ErrAuth)
 		return
 	}
-	// Reject unauthorized activation before acquiring runtime capacity. Recheck
-	// inside Engine operations after activation to close replace/revoke races.
-	events, err := readEventsReadOnly(filepath.Join(durable.DataDir, "events.jsonl"))
-	if err != nil {
+	// Active Rooms already own the authoritative binding projection. Avoid
+	// rereading the complete Event Log on every 30-second poll. A suspended
+	// Room still authenticates from durable facts before consuming capacity.
+	active, activeErr := s.runtimes.runtimeForCompletion(durable.ID)
+	if activeErr != nil && !errors.Is(activeErr, ErrRuntimeNotReady) {
 		nativeResult(w, nil, relay.ErrAuth)
 		return
 	}
-	var authenticated bool
-	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Kind != relay.EventBinding {
-			continue
-		}
-		b, err := relay.BindingFromEvent(events[i])
-		if err != nil {
-			break
-		}
-		if b.Slot != auth.Slot {
-			continue
-		}
-		authenticated = relay.AuthenticateBindingEvent(events[i], auth) == nil
-		break
-	}
-	if !authenticated {
+	if authenticateNativeRelay(active, durable.DataDir, auth, readEventsReadOnly) != nil {
 		nativeResult(w, nil, relay.ErrAuth)
 		return
 	}
@@ -201,6 +186,9 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 	case "status":
 		snapshot, err := runtime.engine.AuthSnapshot(auth)
 		nativeResult(w, snapshot, err)
+	case "summary":
+		summary, err := runtime.engine.AuthSummary(auth)
+		nativeResult(w, summary, err)
 	case "peer":
 		peer, err := runtime.engine.Peer(auth)
 		nativeResult(w, peer, err)

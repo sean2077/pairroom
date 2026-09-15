@@ -28,9 +28,8 @@ func writeSlotState(t *testing.T, root, room, slot string, pid int, name string)
 
 func stubLineage(t *testing.T, pid int, name string, ok bool) {
 	t.Helper()
-	original := harnessAncestor
+	IsolateNativeCaller(t)
 	harnessAncestor = func() (int, string, bool) { return pid, name, ok }
-	t.Cleanup(func() { harnessAncestor = original })
 }
 
 func TestResolveSlotDefaultsSoleBinding(t *testing.T) {

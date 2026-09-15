@@ -28,8 +28,7 @@ func TestNativeRejectedCLIBindKeepsOriginalRelayUsable(t *testing.T) {
 	if _, _, err := f.manager.Activate(context.Background(), other.ID); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("CLAUDE_CODE_SESSION_ID", a.SessionID)
-	if _, err := f.run(t, []string{"bind", "--room", other.ID, "--slot", "2", "--runtime", "claude", "--service-file", f.endpoint}, nil); err == nil {
+	if _, err := f.runAs(t, model.RuntimeClaude, a.SessionID, []string{"bind", "--room", other.ID, "--slot", "2", "--runtime", "claude", "--service-file", f.endpoint}, nil); err == nil {
 		t.Fatal("duplicate session accepted")
 	}
 	if _, err := os.Stat(filepath.Join(f.project.Root, ".pairroom", "rooms", other.ID, "slots", "codex", "state.json")); !os.IsNotExist(err) {
@@ -61,8 +60,7 @@ func TestNativeRejectedReplaceKeepsOldLocalBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := []string{"bind", "--room", other.ID, "--slot", "1", "--runtime", "claude", "--service-file", f.endpoint}
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "other-official-session")
-	beforeResult, err := f.run(t, args, nil)
+	beforeResult, err := f.runAs(t, model.RuntimeClaude, "other-official-session", args, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,8 +79,7 @@ func TestNativeRejectedReplaceKeepsOldLocalBinding(t *testing.T) {
 		}
 		before[name] = string(data)
 	}
-	t.Setenv("CLAUDE_CODE_SESSION_ID", a.SessionID)
-	if _, err := f.run(t, append(append([]string{}, args...), "--replace"), nil); err == nil {
+	if _, err := f.runAs(t, model.RuntimeClaude, a.SessionID, append(append([]string{}, args...), "--replace"), nil); err == nil {
 		t.Fatal("globally conflicting replace accepted")
 	}
 	for name, expected := range before {
@@ -91,8 +88,7 @@ func TestNativeRejectedReplaceKeepsOldLocalBinding(t *testing.T) {
 			t.Fatalf("rejected replace changed %s", name)
 		}
 	}
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "other-official-session")
-	afterResult, err := f.run(t, args, nil)
+	afterResult, err := f.runAs(t, model.RuntimeClaude, "other-official-session", args, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,9 +106,8 @@ func TestNativeRejectedReplaceKeepsOldLocalBinding(t *testing.T) {
 func TestNativeHookIdentityMismatchIsVisibleWithoutEffects(t *testing.T) {
 	f := nativeHTTP(t)
 	a := associateCLI(t, f, model.ActorClaude)
-	t.Setenv("CLAUDE_CODE_SESSION_ID", a.SessionID)
 	before := f.native.engine.Snapshot()
-	out, err := f.run(t, []string{"hook", "--runtime", "claude"}, map[string]any{"hook_event_name": "Stop", "session_id": "different-hook-session", "cwd": f.project.Root, "last_assistant_message": "@codex must never publish", "stop_hook_active": false})
+	out, err := f.runAs(t, model.RuntimeClaude, a.SessionID, []string{"hook", "--runtime", "claude"}, map[string]any{"hook_event_name": "Stop", "session_id": "different-hook-session", "cwd": f.project.Root, "last_assistant_message": "@codex must never publish", "stop_hook_active": false})
 	if err == nil || !strings.Contains(err.Error(), "different session identity") || len(out) != 0 {
 		t.Fatalf("identity mismatch was silently ignored: %s %v", out, err)
 	}

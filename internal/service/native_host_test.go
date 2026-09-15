@@ -33,6 +33,7 @@ type nativeFixture struct {
 
 func nativeHTTP(t *testing.T) *nativeFixture {
 	t.Helper()
+	relayclient.IsolateNativeCaller(t)
 	registry, project := testRegistry(t, testGitRepo(t))
 	noSpawn := ProvisionerFunc(func(context.Context, Project, model.ActorID, BindingSpec, string) (Binding, func(context.Context) error, error) {
 		t.Error("native provisioning spawned an adapter")
@@ -72,7 +73,7 @@ func nativeHTTP(t *testing.T) *nativeFixture {
 	}
 	return &nativeFixture{registry: registry, room: room, project: project, manager: manager, server: server, native: native, endpoint: endpoint}
 }
-func (f *nativeFixture) run(t *testing.T, args []string, input any) ([]byte, error) {
+func (f *nativeFixture) exec(t *testing.T, args []string, input any) ([]byte, error) {
 	t.Helper()
 	var in []byte
 	if input != nil {
@@ -82,6 +83,31 @@ func (f *nativeFixture) run(t *testing.T, args []string, input any) ([]byte, err
 	args = append(args, "--repo", f.project.Root)
 	err := relayclient.Run(context.Background(), args, bytes.NewReader(in), &out, &diagnostic)
 	return out.Bytes(), err
+}
+
+// run clears any inherited native session environment so foreground commands
+// rely on their explicit --room/--slot, like a caller without session metadata.
+// bind/hook set the single relevant variable themselves via exec.
+func (f *nativeFixture) run(t *testing.T, args []string, input any) ([]byte, error) {
+	t.Helper()
+	clearNativeSessionEnv(t)
+	return f.exec(t, args, input)
+}
+
+func clearNativeSessionEnv(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("GROK_SESSION_ID", "")
+}
+
+// runAs simulates one CLI invocation from inside a specific native session: it
+// exposes exactly that session's id (clearing the others) so caller resolution
+// never sees conflicting metadata, then runs without the env-clearing f.run.
+func (f *nativeFixture) runAs(t *testing.T, kind model.RuntimeKind, session string, args []string, input any) ([]byte, error) {
+	t.Helper()
+	clearNativeSessionEnv(t)
+	t.Setenv(sessionEnvVar(kind), session)
+	return f.exec(t, args, input)
 }
 
 // sessionEnvVar mirrors relayclient.sessionEnvVars: the environment variable a
@@ -102,11 +128,10 @@ func (f *nativeFixture) bind(t *testing.T, slot model.ActorID) relay.Auth {
 	// The harness exposes the official session id to tool-call subprocesses; bind
 	// reads it and associates immediately, with no nonce echo round-trip.
 	session := "official-session-" + string(slot)
-	t.Setenv(sessionEnvVar(kind), session)
 	if _, err := f.run(t, []string{"install", "--runtime", string(kind)}, nil); err != nil {
 		t.Fatal(err)
 	}
-	output, err := f.run(t, []string{"bind", "--room", f.room.ID, "--slot", string(slot), "--service-file", f.endpoint}, nil)
+	output, err := f.runAs(t, kind, session, []string{"bind", "--room", f.room.ID, "--slot", string(slot), "--service-file", f.endpoint}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,8 +171,7 @@ func (f *nativeFixture) bind(t *testing.T, slot model.ActorID) relay.Auth {
 func (f *nativeFixture) hook(t *testing.T, a relay.Auth, text string, active bool) ([]byte, error) {
 	t.Helper()
 	// The synthetic invocation carries this caller's environment as well as its payload.
-	t.Setenv(sessionEnvVar(f.room.Agents[a.Slot].Runtime), a.SessionID)
-	return f.run(t, []string{"hook", "--runtime", string(f.room.Agents[a.Slot].Runtime)}, map[string]any{"hook_event_name": "Stop", "session_id": a.SessionID, "cwd": f.project.Root, "last_assistant_message": text, "stop_hook_active": active, "transcript_path": "/unavailable/optional/transcript"})
+	return f.runAs(t, f.room.Agents[a.Slot].Runtime, a.SessionID, []string{"hook", "--runtime", string(f.room.Agents[a.Slot].Runtime)}, map[string]any{"hook_event_name": "Stop", "session_id": a.SessionID, "cwd": f.project.Root, "last_assistant_message": text, "stop_hook_active": active, "transcript_path": "/unavailable/optional/transcript"})
 }
 func associateCLI(t *testing.T, f *nativeFixture, slot model.ActorID) relay.Auth {
 	t.Helper()
@@ -168,7 +192,7 @@ func TestNativeRebindSameSessionIsIdempotent(t *testing.T) {
 	args := []string{"bind", "--room", f.room.ID, "--slot", "claude", "--service-file", f.endpoint}
 	// Re-binding from the same official session resumes idempotently: no new
 	// generation, no credential rotation, and still no secret in stdout.
-	out, err := f.run(t, args, nil)
+	out, err := f.runAs(t, model.RuntimeClaude, a.SessionID, args, nil)
 	if err != nil {
 		t.Fatalf("same-session rebind failed: %v", err)
 	}
@@ -183,8 +207,7 @@ func TestNativeRebindSameSessionIsIdempotent(t *testing.T) {
 	credentials, _ := os.ReadFile(filepath.Join(dir, "credentials"))
 	// A different official session cannot take the occupied slot, and the rejected
 	// bind leaves the existing binding files untouched.
-	t.Setenv(sessionEnvVar(model.RuntimeClaude), "a-different-session")
-	if out, err := f.run(t, args, nil); err == nil || !errors.Is(err, relay.ErrOccupied) || len(out) != 0 {
+	if out, err := f.runAs(t, model.RuntimeClaude, "a-different-session", args, nil); err == nil || !errors.Is(err, relay.ErrOccupied) || len(out) != 0 {
 		t.Fatalf("different session must be rejected as occupied: %q %v", out, err)
 	}
 	for name, before := range map[string][]byte{"state.json": state, "credentials": credentials} {
@@ -198,7 +221,7 @@ func TestNativeRebindSameSessionIsIdempotent(t *testing.T) {
 func TestNativeReplaceRotatesGeneration(t *testing.T) {
 	f := nativeHTTP(t)
 	a := f.bind(t, model.ActorClaude)
-	out, err := f.run(t, []string{"bind", "--room", f.room.ID, "--slot", "claude", "--service-file", f.endpoint, "--replace"}, nil)
+	out, err := f.runAs(t, model.RuntimeClaude, a.SessionID, []string{"bind", "--room", f.room.ID, "--slot", "claude", "--service-file", f.endpoint, "--replace"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

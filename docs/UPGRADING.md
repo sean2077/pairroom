@@ -61,7 +61,7 @@ Before downgrading, use the matching new binary to `pairroom relay unbind --repo
 
 ## Native binding setup
 
-Use the matching CLI and app/Service release and follow [Native setup](NATIVE_SETUP.md).
+Use the matching CLI and app/Service release and follow [Native setup](NATIVE_RELAY.md).
 Previously associated bindings retain their identity. An incomplete binding from
 an older release requires explicit `bind --replace` inside the intended session.
 For a lost response to a current bind, rerun bind for the same Room/slot without

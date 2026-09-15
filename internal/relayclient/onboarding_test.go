@@ -258,6 +258,9 @@ func TestBindCreateRejectsMissingCallerHookBeforeCreating(t *testing.T) {
 		t.Fatal(err)
 	}
 	stubLineage(t, 4242, "codex", true)
+	// stubLineage isolates the caller (clearing session env); restore it so the
+	// missing-hook check, not a missing identity, is what rejects this create.
+	t.Setenv("CODEX_SESSION_ID", "official-session")
 	var out bytes.Buffer
 	err := bind(context.Background(), root, options{create: true, endpoint: endpoint}, &out)
 	if err == nil || !strings.Contains(err.Error(), "relay install") {

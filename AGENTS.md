@@ -52,20 +52,27 @@ PairRoom is a local Go coordination layer for official Claude Code, Codex, and G
 - Verified commands: `docs/CLI_REFERENCE.md`; native-runtime E2E limits: Durable invariants below
 
 <!-- agent-scaffold:start — managed; keep project prose outside; upgrade refreshes this block. -->
-## Agent Harness (Claude Code + Codex)
+## Agent Harness
 
 `.agents/` is the SSOT for harness-owned skills, subagents, and runtime; `.claude/` and `.codex/` contain host projections.
 
+### Session and task context
+
+Prefer the task checkout for new implementation/review sessions. A primary-checkout session remains valid for planning, coordination, or an existing conversation; honor the user's entry preference without moving the session. Record a persistent preference in project-owned prose outside this block, not a new scaffold mode.
+
+Before task-specific reads or writes, identify the exact task checkout and revision. Use that checkout's `AGENTS.md` chain, terminology, skills, and tool working directories; pass its absolute path and review revision to peers. A shell `cd` does not reload host instructions or change session permissions. Resolve conflicting guidance or unavailable access explicitly.
+
 ### Worktree-per-change (hard rule)
 
-The primary worktree's checked-out branch is the active trunk (`--trunk` overrides); `new` records it and `done` merges back. Never edit the primary worktree directly, including docs:
+Never edit the primary worktree directly, including docs. Reuse the assigned linked task worktree, whether created by the user, an external workbench, or the scaffold, inside or outside the primary directory. Do not create another worktree merely because a session starts in one.
+
+Choose one owner for creation, integration, and cleanup. Only when no task worktree is assigned and the scaffold owns that lifecycle:
 
 ```bash
-bash .agents/tools/worktree.sh new <name>  # work in .worktrees/<name>/
-bash .agents/tools/worktree.sh done        # merge, clean up, and ff-only push
+bash .agents/tools/worktree.sh new <name>  # creates .worktrees/<name>/; does not move the session
 ```
 
-On Windows, leave the target worktree and run `done --dir <absolute-wt>` from the primary worktree; `new` prints the exact command.
+The helper uses the primary worktree's checked-out branch as active trunk (`--trunk` overrides) and records it. Its `done --dir <absolute-wt>` performs merge, clean up, and ff-only push; it is NOT generic task completion or a PR/MR handoff. Use it only for an authorized scaffold-owned lifecycle, from outside the target worktree (especially on Windows). Leave externally managed worktrees to their owner and follow the project's PR/MR policy instead of implicitly merging or cleaning up.
 
 The trunk guard blocks non-ignored project-file edits in the primary worktree, regardless of branch name. Bypass it only with explicit user approval: `WORKTREE_ALLOW_TRUNK_EDIT=1`, or `touch .claude/allow-trunk-edit` for a 2 h flag.
 
@@ -79,6 +86,10 @@ The trunk guard blocks non-ignored project-file edits in the primary worktree, r
 - **Resolve conflicts explicitly.** Surface conflicts, follow higher-priority instructions, ask the owner when authority is unclear, and repair stale guidance when authorized.
 
 The authority-document budget hook remains advisory; projects may override its default line and character limits.
+
+### Reading project documentation
+
+Consider document metadata alongside its content, current repository evidence, and user intent. Drafts, revision-needed notes, and superseded material are usually context to assess rather than settled implementation guidance. Missing metadata alone is not a blocker. Where helpful, start with flat `status` and `updated` fields; project Agents choose conventions and interpret them for the task, keeping material uncertainty visible.
 
 ### Project terminology (hard rule)
 

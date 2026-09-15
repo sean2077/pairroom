@@ -33,16 +33,27 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
         env = os.environ.copy()
         env.update(HOME=str(root/'home'), USERPROFILE=str(root/'home'), XDG_CONFIG_HOME=str(root/'home'/'.config'))
         env['PATH'] = str(binary.parent) + os.pathsep + env.get('PATH', '')
-        # bind associates from the official session id the harness exposes to
-        # tool-call subprocesses; expose the synthetic ids the hooks also report.
-        env['CLAUDE_CODE_SESSION_ID'] = 'synthetic-claude'
-        env['CODEX_SESSION_ID'] = 'synthetic-codex'
+        # bind associates from the official session id the harness exposes to its
+        # tool-call subprocess. Expose exactly one per invocation (clearing the
+        # others) so caller resolution never sees conflicting metadata; hooks match
+        # by payload session_id and explicit-flag commands need none.
+        session_vars = ('CLAUDE_CODE_SESSION_ID', 'CODEX_SESSION_ID', 'GROK_SESSION_ID')
+        # Never inherit the surrounding (real) harness session into the fixture;
+        # cli() exposes exactly one synthetic id per bind, and direct subprocess
+        # calls then run with no session metadata so explicit flags win.
+        for key in session_vars:
+            env[key] = ''
         errors = []
 
-        def cli(args, payload=None):
+        def cli(args, payload=None, session=None):
+            call_env = dict(env)
+            for key in session_vars:
+                call_env[key] = ''
+            if session:
+                call_env[session[0]] = session[1]
             result = subprocess.run([str(binary), 'relay', *args, '--repo', str(repo)],
                                     input=payload if isinstance(payload, str) else None if payload is None else json.dumps(payload),
-                                    text=True, capture_output=True, env=env, cwd=repo, timeout=45)
+                                    text=True, capture_output=True, env=call_env, cwd=repo, timeout=45)
             assert result.returncode == 0, f'relay {args[0]} failed: {result.stderr[:1000]}'
             return result.stdout
 
@@ -93,7 +104,8 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 print('Native browser: approved-hook setup fixture and bind-time environment association through real CLI', flush=True)
                 for slot in ('claude','codex'):
                     await asyncio.to_thread(cli, ['install','--runtime',slot])
-                    raw = await asyncio.to_thread(cli, ['bind','--room',room_id,'--slot',slot,'--service-file',str(endpoint)])
+                    svar = 'CLAUDE_CODE_SESSION_ID' if slot == 'claude' else 'CODEX_SESSION_ID'
+                    raw = await asyncio.to_thread(cli, ['bind','--room',room_id,'--slot',slot,'--service-file',str(endpoint)], None, (svar, 'synthetic-'+slot))
                     bound = json.loads(raw)
                     # bind associates immediately from the harness environment; no
                     # nonce echo round-trip is required or returned.

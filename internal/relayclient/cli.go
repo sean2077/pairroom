@@ -27,7 +27,7 @@ type options struct {
 	repo, room, slot, kind, endpoint, text, id, to string
 	name, peer                                     string
 	replace, purge, enabled, discard, resend       bool
-	create                                         bool
+	create, brief                                  bool
 	timeout                                        int
 	attachments                                    stringsFlag
 	preparedAgents                                 map[model.ActorID]model.AgentSelection
@@ -58,6 +58,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.BoolVar(&o.replace, "replace", false, "explicitly revoke occupied binding; does not stop native work")
 	flags.BoolVar(&o.purge, "purge-hooks", false, "remove this runtime's relay hooks when no other local binding uses them")
 	flags.BoolVar(&o.enabled, "enabled", true, "park enabled")
+	flags.BoolVar(&o.brief, "brief", false, "status/reconcile: bounded transport summary without transcript bodies")
 	flags.BoolVar(&o.discard, "discard", false, "explicitly discard uncertain pending publication, retaining its consumed sequence")
 	flags.BoolVar(&o.resend, "resend", false, "explicitly supplement uncertain pending with its ORIGINAL sequence")
 	defaultTimeout := 30
@@ -74,6 +75,9 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected relay arguments")
+	}
+	if o.brief && action != "status" && action != "reconcile" {
+		return errors.New("--brief applies only to status or reconcile")
 	}
 	// Reject collection options before workspace I/O or any publication.
 	if action == "wait" || action == "exchange" {
@@ -95,6 +99,9 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	}
 	root, err := workspace(ctx, o.repo)
 	if err != nil {
+		return err
+	}
+	if err := applyCallerDefaults(root, action, &o); err != nil {
 		return err
 	}
 	if action == "install" {
@@ -155,6 +162,13 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		}
 	}
 	release()
+	if action == "wait" || action == "exchange" {
+		releaseCollector, err := acquireCollector(ctx, dir)
+		if err != nil {
+			return err
+		}
+		defer releaseCollector()
+	}
 	switch action {
 	case "send", "exchange":
 		text := o.text
@@ -216,8 +230,13 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	case "nudge":
 		return writeJSON(out, map[string]string{"notice": "PairRoom cannot inject outside a park window. Run the following in the associated native session.", "command": fmt.Sprintf("pairroom relay wait --room %s --slot %s", o.room, o.slot)})
 	case "status", "reconcile":
-		var status relay.Snapshot
-		if e := c.call(ctx, "status", nil, &status); e != nil {
+		var status any = &relay.Snapshot{}
+		operation := "status"
+		if o.brief {
+			status = &relay.Summary{}
+			operation = "summary"
+		}
+		if e := c.call(ctx, operation, nil, status); e != nil {
 			return e
 		}
 		local := map[string]any{"last_confirmed_seq": c.State.LastConfirmedSeq, "last_seq": c.State.LastSeq, "publication_unknown": errors.Is(err, relay.ErrUnknown)}
@@ -415,15 +434,17 @@ func slotNumber(slot model.ActorID) int {
 }
 
 // callerRuntime resolves the runtime the caller actually is: an explicit
-// --runtime wins, otherwise the recognized native harness lineage.
+// --runtime wins after caller consistency checks; otherwise use native session
+// metadata or the recognized harness lineage. Neither grants association.
 func callerRuntime(o options) model.RuntimeKind {
 	if o.kind != "" {
 		return model.RuntimeKind(o.kind)
 	}
-	if _, name, ok := harnessAncestor(); ok {
-		return harnessRuntimes[name]
+	caller, err := currentNativeCaller()
+	if err != nil {
+		return ""
 	}
-	return ""
+	return caller.runtime
 }
 
 // resolveNativeRoom selects the unique active native Room of the canonical

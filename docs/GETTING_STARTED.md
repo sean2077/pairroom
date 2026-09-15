@@ -202,4 +202,4 @@ For rebuilding/updating an existing desktop installation from source, use `make 
 
 Before important work, read [Security](../SECURITY.md). For failures, start with [Troubleshooting](TROUBLESHOOTING.md); before changing versions, read [Upgrading](UPGRADING.md).
 
-Native installation prerequisites and the full create/join/recovery sequence are collected in [Native setup and usage](NATIVE_SETUP.md) and in the app’s Native setup guide.
+Native installation prerequisites and the full create/join/recovery sequence are collected in [Native setup and usage](NATIVE_RELAY.md) and in the app’s Native setup guide.

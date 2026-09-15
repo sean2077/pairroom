@@ -17,11 +17,12 @@ type procInfo struct {
 // variable so tests can stub the platform scan.
 var processTable = platformProcessTable
 
-// harnessRuntimes maps lowercase harness process base names (without ".exe")
-// to their runtime kinds.
+// harnessRuntimes also recognizes unsupported Native runtimes so their tools
+// cannot accidentally select an outer Claude/Codex session's relay binding.
 var harnessRuntimes = map[string]model.RuntimeKind{
 	"claude": model.RuntimeClaude,
 	"codex":  model.RuntimeCodex,
+	"grok":   model.RuntimeGrok,
 }
 
 // sessionEnvVars maps a native runtime to the environment variable its official
@@ -63,7 +64,7 @@ func findHarnessAncestor() (int, string, bool) {
 		if !ok {
 			return 0, "", false
 		}
-		name := strings.ToLower(strings.TrimSuffix(entry.name, ".exe"))
+		name := strings.TrimSuffix(strings.ToLower(entry.name), ".exe")
 		if _, isHarness := harnessRuntimes[name]; isHarness {
 			return pid, name, true
 		}

@@ -20,9 +20,10 @@ import (
 
 func createBindFixture(t *testing.T, own model.RuntimeKind) (string, string, *int) {
 	t.Helper()
+	// stubLineage isolates the caller (and clears inherited session env), so set
+	// the session ids afterward. Lineage scopes the caller to claude, so exposing
+	// both runtimes' variables never looks like conflicting metadata.
 	stubLineage(t, 4242, "claude", true)
-	// bind associates from the harness environment; expose a session id for both
-	// native runtimes so the resolved slot's runtime finds one.
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "official-session")
 	t.Setenv("CODEX_SESSION_ID", "official-session")
 	root := filepath.Join(t.TempDir(), "project's space")
@@ -229,6 +230,7 @@ func TestCreateNativeRoomRejectsUnsupportedRuntimeBeforeAnyRequest(t *testing.T)
 }
 
 func TestBindCreateRejectsExplicitRoom(t *testing.T) {
+	IsolateNativeCaller(t)
 	var out, diagnostic bytes.Buffer
 	err := Run(context.Background(), []string{"bind", "--create", "--room", "r1", "--slot", "claude"}, strings.NewReader(""), &out, &diagnostic)
 	if err == nil || !strings.Contains(err.Error(), "not both") {

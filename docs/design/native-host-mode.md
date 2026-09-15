@@ -3,7 +3,7 @@
 Status: implemented, experimental. Current contracts live in
 [Architecture](../ARCHITECTURE.md), [Protocol](../PROTOCOL.md#native-host-protocol-v7)
 and [Storage](../STORAGE.md#native-relay-state). User setup is documented in
-[Native setup and usage](../NATIVE_SETUP.md).
+[Native setup and usage](../NATIVE_RELAY.md).
 
 ## Decisions
 
