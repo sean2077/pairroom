@@ -42,7 +42,7 @@ func sessionIDFromEnv(kind model.RuntimeKind) string {
 	if !ok {
 		return ""
 	}
-	return strings.TrimSpace(os.Getenv(name))
+	return os.Getenv(name)
 }
 
 // harnessAncestor walks the current process ancestry for a native harness.

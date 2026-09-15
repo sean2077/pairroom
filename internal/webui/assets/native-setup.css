@@ -1,0 +1,22 @@
+.native-setup {
+  margin-block: 0.75rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  border-radius: 0.65rem;
+  min-inline-size: 0;
+}
+.native-setup summary { cursor: pointer; font-weight: 600; }
+.native-setup summary:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
+.native-setup-body { line-height: 1.6; max-inline-size: 78ch; }
+.native-setup-body ol { padding-inline-start: 1.5rem; }
+.native-setup-body li { margin-block: 1rem; }
+.native-setup-body h3 { font-size: 1em; margin-block: 0 0.3rem; }
+.native-setup-body p { margin-block: 0.4rem 0.7rem; }
+.native-setup-body pre {
+  padding: 0.65rem;
+  border: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  border-radius: 0.4rem;
+  font-size: 0.9em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

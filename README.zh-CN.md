@@ -59,6 +59,8 @@ PairRoom 没有自动接力次数或费用上限。持久化恢复会区分安�
 
 ## Native 宿主模式（实验性）
 
+安装前提、项目批准、加入及恢复步骤见 [Native 安装与使用](docs/NATIVE_SETUP.md)。浏览器与桌面应用中也提供同一套操作引导。
+
 创建 Room 时选择 **Native**，双方保留在自己的 Claude Code / Codex 原生会话中；PairRoom 负责绑定、持久化中继和审计，不启动或中断原生进程。安装并批准项目级 Stop hooks，然后在各自会话内运行 bind；它会读取 harness 的会话 ID 环境变量并立即完成关联。
 
 `pairroom-relay` 技能位于 `skills/`，可经技能安装器分发（`npx skills add sean2077/pairroom`），`relay install` 也写入同一份文件。加载后 `/pairroom-relay <topic>` 创建 Room、绑定当前会话并返回对方的加入命令；`pairroom relay bind` 可在识别到的原生会话内零参数运行。后续审查复用绑定，不要每轮重建 Room。

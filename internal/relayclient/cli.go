@@ -24,12 +24,13 @@ import (
 )
 
 type options struct {
-	repo, room, slot, kind, endpoint, text, id, to, session string
-	name, peer                                              string
-	replace, cont, purge, enabled, discard, resend          bool
-	create                                                  bool
-	timeout                                                 int
-	attachments                                             stringsFlag
+	repo, room, slot, kind, endpoint, text, id, to string
+	name, peer                                     string
+	replace, purge, enabled, discard, resend       bool
+	create                                         bool
+	timeout                                        int
+	attachments                                    stringsFlag
+	preparedAgents                                 map[model.ActorID]model.AgentSelection
 }
 type stringsFlag []string
 
@@ -51,12 +52,10 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.StringVar(&o.text, "text", "", "message body; otherwise read stdin")
 	flags.StringVar(&o.id, "id", "", "stable client message ID (required for exchange); reuse on uncertain send")
 	flags.StringVar(&o.to, "to", "", "explicit send target: @user, or empty for peer")
-	flags.StringVar(&o.session, "session-id", "", "associated session identity for explicit --continue")
 	flags.BoolVar(&o.create, "create", false, "bind only: register the project when missing, create a native Room, then bind this session")
 	flags.StringVar(&o.name, "name", "", "optional Room display name for bind --create")
 	flags.StringVar(&o.peer, "peer-runtime", "", "peer slot runtime claude|codex for bind --create")
 	flags.BoolVar(&o.replace, "replace", false, "explicitly revoke occupied binding; does not stop native work")
-	flags.BoolVar(&o.cont, "continue", false, "restore the same associated session")
 	flags.BoolVar(&o.purge, "purge-hooks", false, "remove this runtime's relay hooks when no other local binding uses them")
 	flags.BoolVar(&o.enabled, "enabled", true, "park enabled")
 	flags.BoolVar(&o.discard, "discard", false, "explicitly discard uncertain pending publication, retaining its consumed sequence")
@@ -117,7 +116,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		return writeJSON(out, map[string]any{"installed": true, "runtime": kind, "notice": "Restart/review the exact project hook in your native harness (Codex: /hooks). This command does not grant native trust. Keep pairroom on PATH. Real authenticated bidirectional E2E remains release-gated.", "next_steps": []string{
 			"Create a room and bind this session: pairroom relay bind --create --name \"<topic>\" (skill: /pairroom-relay <topic>)",
 			"The peer session joins with the printed peer_join command, or zero-flag inside a recognized session: pairroom relay bind",
-			"bind associates this session from its harness environment (no nonce echo); the approved Stop hook still relays each reply",
+			"After both sessions bind, give the agents the task and desired collaboration",
 		}})
 	}
 	if action == "bind" {
@@ -243,7 +242,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if err := c.call(ctx, "unbind", nil, nil); err != nil {
 			return err
 		}
-		for _, name := range []string{"state.json", "credentials", "bootstrap"} {
+		for _, name := range []string{"state.json", "credentials", "bootstrap", bindAttemptFile} {
 			if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
@@ -338,243 +337,6 @@ func management(ctx context.Context, endpoint relay.Endpoint, method, path strin
 		return fmt.Errorf("Service rejected request: %s", e.Error)
 	}
 	return json.NewDecoder(io.LimitReader(res.Body, 16<<20)).Decode(result)
-}
-func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr error) {
-	slot := model.ActorID(o.slot) // normalized in Run; empty means "infer below"
-	if o.slot != "" && !slot.ValidParticipant() {
-		return errors.New("bind requires --slot 1|2 (Agent 1/2), or the durable IDs claude|codex")
-	}
-	if o.create {
-		if o.room != "" {
-			return errors.New("bind --create creates the Room itself; pass --create or --room, not both")
-		}
-	} else if o.room != "" && !safePart(o.room) {
-		return errors.New("invalid --room value")
-	}
-	if o.endpoint == "" {
-		var err error
-		o.endpoint, err = defaultEndpoint()
-		if err != nil {
-			return err
-		}
-	}
-	endpointPath, err := filepath.Abs(o.endpoint)
-	if err != nil {
-		return err
-	}
-	endpoint, err := relay.ReadEndpoint(endpointPath)
-	if err != nil {
-		return err
-	}
-	var snapshot serviceSnapshot
-	if err := management(ctx, endpoint, http.MethodGet, "/api/v1/service", nil, &snapshot); err != nil {
-		return err
-	}
-	created := false
-	defer func() {
-		if created && resultErr != nil {
-			resultErr = fmt.Errorf("Room %s was created but binding failed: %w; finish setup, then recover with %s --replace (revokes any pending binding; cannot stop native work). Do not repeat --create", o.room, resultErr, bindCommand(root, endpointPath, o.room, slot))
-		}
-	}()
-	if o.create {
-		switch {
-		case slot != "":
-		case o.kind != "" || o.peer != "":
-			// An explicit runtime selection is placed at the slot whose default
-			// runtime matches it, so that slot must be known before creation.
-			inferred, err := inferCreateSlot(o)
-			if err != nil {
-				return err
-			}
-			slot = inferred
-			o.slot = string(slot)
-		case callerRuntime(o) == "":
-			// No slot can ever be resolved for this caller; fail before the
-			// Service creates durable state.
-			return errCreateSlotUnresolved
-		}
-		// Otherwise the Service owns the default pair. That pair is user
-		// configuration (agent-pair-profiles.json, then config defaults) and
-		// need not match slot order, so the slot stays unresolved here and is
-		// matched against the created Room's real selections below.
-		agents, err := createAgents(o, slot)
-		if err != nil {
-			return err
-		}
-		if agents != nil {
-			if err := installed(root, agents[slot].Runtime); err != nil {
-				return err
-			}
-		} else if rt := callerRuntime(o); rt != "" {
-			// The Service owns the default pair, so the slot is only resolved
-			// after creation. The caller's own harness is already known: reject a
-			// workspace that could never associate this session before the
-			// Service creates durable state.
-			if err := installed(root, rt); err != nil {
-				return err
-			}
-		} else if installed(root, model.RuntimeClaude) != nil && installed(root, model.RuntimeCodex) != nil {
-			// Do not guess the pair, but reject a workspace with no usable relay
-			// hook before creating durable state.
-			return errors.New("bind --create requires an approved relay Stop hook; run pairroom relay install --runtime claude|codex for the intended harness first")
-		}
-		// Do not create durable state when this process cannot associate: bind
-		// reads the official session id from the harness environment, so a caller
-		// outside its native session is rejected before the Room exists.
-		if rt := callerRuntime(o); rt != "" && sessionIDFromEnv(rt) == "" {
-			return fmt.Errorf("bind --create associates from the harness environment, but %s is not set; run this command inside your native %s session, not a plain terminal", sessionEnvVars[rt], rt)
-		}
-		room, err := createNativeRoom(ctx, endpoint, root, o, slot)
-		if err != nil {
-			return err
-		}
-		o.room = room
-		created = true
-		// The refreshed snapshot must include the just-created Room.
-		if err := management(ctx, endpoint, http.MethodGet, "/api/v1/service", nil, &snapshot); err != nil {
-			return err
-		}
-	} else if o.room == "" {
-		roomID, err := resolveNativeRoom(snapshot, root)
-		if err != nil {
-			return err
-		}
-		o.room = roomID
-	}
-	if slot == "" {
-		target, ok := snapshot.findRoom(o.room)
-		if !ok || target.HostMode != model.HostNative {
-			return errors.New("bind requires a native-hosted Room")
-		}
-		inferred, err := resolveSlotForRoom(target, callerRuntime(o))
-		if err != nil {
-			return err
-		}
-		slot = inferred
-		o.slot = string(slot)
-	}
-	var kind model.RuntimeKind
-	var project string
-	for _, room := range snapshot.Rooms {
-		if room.ID == o.room {
-			if room.HostMode != model.HostNative {
-				return errors.New("bind requires a native-hosted Room")
-			}
-			kind = room.Agents[slot].Runtime
-			for _, p := range snapshot.Projects {
-				if p.ID == room.ProjectID {
-					project = p.Root
-				}
-			}
-			break
-		}
-	}
-	if kind == "" {
-		return errors.New("Room or slot not found")
-	}
-	canonical, err := filepath.EvalSymlinks(project)
-	if err != nil || canonical != root {
-		return errors.New("bind must run in the Room's canonical project workspace")
-	}
-	if o.kind != "" && model.RuntimeKind(o.kind) != kind {
-		return errors.New("--runtime does not match the Room's selected runtime")
-	}
-	if err := installed(root, kind); err != nil {
-		return err
-	}
-	// Association is captured here, not deferred to a nonce echo: the harness
-	// exposes the official session id to this tool-call subprocess.
-	envSession := sessionIDFromEnv(kind)
-	if envSession == "" {
-		return fmt.Errorf("bind associates from the harness environment, but %s is not set; run this command as a tool call inside your native %s session, not a plain terminal", sessionEnvVars[kind], kind)
-	}
-	dir, err := secureDir(root, ".pairroom", "rooms", o.room, "slots", o.slot)
-	if err != nil {
-		return err
-	}
-	release, err := lockSlot(ctx, dir)
-	if err != nil {
-		return err
-	}
-	defer release()
-	cleanupAtomicTemps(dir)
-	var s State
-	var cred credentials
-	prior := readPrivate(filepath.Join(dir, "state.json"), &s)
-	if prior == nil && !o.replace {
-		if s.SessionID == "" {
-			return errors.New("slot has an incomplete legacy binding; use bind --replace explicitly to revoke it and rebind from this session")
-		}
-		if err := readPrivate(filepath.Join(dir, "credentials"), &cred); err != nil {
-			return err
-		}
-		if cred.BindID != s.BindID {
-			return errors.New("state/credential mismatch: inspect and --replace explicitly")
-		}
-		// The same official session resumes idempotently; a different one is
-		// rejected without an explicit --replace.
-		if s.SessionID != envSession {
-			return relay.ErrOccupied
-		}
-		if o.session != "" && o.session != envSession {
-			return errors.New("--session-id does not match this session's harness environment identity")
-		}
-		if s.Room != o.room || s.Slot != slot || s.Runtime != kind {
-			return errors.New("local binding identity mismatch")
-		}
-	} else {
-		if prior != nil && !errors.Is(prior, os.ErrNotExist) && !o.replace {
-			return prior
-		}
-		id, err := relay.RandomID()
-		if err != nil {
-			return err
-		}
-		secret, err := relay.RandomID()
-		if err != nil {
-			return err
-		}
-		s = State{Schema: 1, Room: o.room, Slot: slot, Runtime: kind, Workspace: root, EndpointPath: endpointPath, BindID: id, SessionID: envSession}
-		cred = credentials{BindID: id, Secret: secret}
-	}
-	// Best-effort lineage for foreground default selection in multi-binding
-	// workspaces; never authentication material.
-	if pid, name, ok := harnessAncestor(); ok {
-		s.HarnessPID, s.HarnessName = pid, name
-	}
-	s.EndpointPath = endpointPath
-	if err := ignoreWorkspace(root); err != nil {
-		return err
-	}
-	if err := relay.AtomicJSON(filepath.Join(dir, "credentials"), cred); err != nil {
-		return err
-	}
-	if err := relay.AtomicJSON(filepath.Join(dir, "state.json"), s); err != nil {
-		return err
-	}
-	var result struct {
-		Binding                                              relay.Binding `json:"binding"`
-		Bootstrap, Collaboration, Workspace, Runtime, Notice string
-	}
-	// bind presents the official session id read from the harness environment, so
-	// the Service associates immediately; an idempotent resume returns the same
-	// binding without consuming another generation.
-	request := relay.BindRequest{BindID: s.BindID, CredentialHash: relay.Digest(cred.Secret), SessionID: s.SessionID, Replace: o.replace}
-	if err := management(ctx, endpoint, http.MethodPost, "/api/v1/rooms/"+o.room+"/native-bindings/"+o.slot, request, &result); err != nil {
-		return err
-	}
-	if result.Binding.BindID != s.BindID || result.Binding.Generation == 0 || result.Binding.SessionID != s.SessionID {
-		return errors.New("binding response identity mismatch")
-	}
-	s.Generation = result.Binding.Generation
-	if err := relay.AtomicJSON(filepath.Join(dir, "state.json"), s); err != nil {
-		return err
-	}
-	payload := map[string]any{"binding": result.Binding, "bootstrap": result.Bootstrap, "collaboration": result.Collaboration, "notice": result.Notice + " Added .pairroom/ to .gitignore. This session is associated from its harness environment; no nonce echo is required. The approved Stop hook still relays each reply. No long-lived secret is included."}
-	if created {
-		payload["peer_join"] = bindCommand(root, endpointPath, o.room, peerSlot(slot))
-	}
-	return writeJSON(out, payload)
 }
 
 // Commands are pasted into the native PowerShell (Windows) or POSIX shell.
@@ -767,7 +529,7 @@ func resolveSlotDefaults(root string, o *options) error {
 		if err := readPrivate(path, &s); err != nil {
 			return err
 		}
-		if !s.Slot.ValidParticipant() || !safePart(s.Room) {
+		if !s.Slot.ValidParticipant() || !safePart(s.Room) || s.Generation == 0 || s.SessionID == "" {
 			continue
 		}
 		all = append(all, candidate{room: s.Room, slot: s.Slot, harnessPID: s.HarnessPID, harness: s.HarnessName})
@@ -842,6 +604,9 @@ func createNativeRoom(ctx context.Context, endpoint relay.Endpoint, root string,
 }
 
 func createAgents(o options, slot model.ActorID) (map[model.ActorID]model.AgentSelection, error) {
+	if o.preparedAgents != nil {
+		return o.preparedAgents, nil
+	}
 	own, peer := model.RuntimeKind(o.kind), model.RuntimeKind(o.peer)
 	if own == "" && peer == "" {
 		return nil, nil

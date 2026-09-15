@@ -239,7 +239,7 @@ func cleanupAtomicTemps(dir string) {
 		return
 	}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".state.json-") || strings.HasPrefix(entry.Name(), ".credentials-") {
+		if strings.HasPrefix(entry.Name(), ".state.json-") || strings.HasPrefix(entry.Name(), ".credentials-") || strings.HasPrefix(entry.Name(), ".bind-attempt.json-") {
 			if entry.Type().IsRegular() {
 				_ = os.Remove(filepath.Join(dir, entry.Name()))
 			}

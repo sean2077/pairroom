@@ -202,6 +202,7 @@ func TestBindCreateResolvesSlotFromCreatedRoomSelections(t *testing.T) {
 	}
 	created := 0
 	mux := http.NewServeMux()
+	serveDefaultPairForTest(mux, map[model.ActorID]model.AgentSelection{model.ActorClaude: {Runtime: model.RuntimeCodex}, model.ActorCodex: {Runtime: model.RuntimeClaude}})
 	mux.HandleFunc("GET /api/v1/service", func(w http.ResponseWriter, r *http.Request) {
 		rooms := []any{}
 		for i := 1; i <= created; i++ {
@@ -275,7 +276,7 @@ func TestBindCreateUnrecognizedCallerFailsBeforeCreating(t *testing.T) {
 	stubLineage(t, 0, "", false)
 	var out bytes.Buffer
 	err := bind(context.Background(), root, options{create: true, endpoint: endpoint}, &out)
-	if err == nil || !strings.Contains(err.Error(), "--slot 1|2") {
+	if err == nil || !strings.Contains(err.Error(), "inside your native session") {
 		t.Fatalf("err = %v", err)
 	}
 	if *created != 0 || out.Len() != 0 {

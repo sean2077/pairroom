@@ -98,21 +98,9 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	if err != nil {
 		return err
 	}
-	candidates := []string{}
-	for _, path := range paths {
-		var s State
-		if err := readPrivate(path, &s); err != nil {
-			return err
-		}
-		if s.Runtime != kind {
-			continue
-		}
-		// Association happened at bind from the harness environment, so the
-		// official hook session matches the recorded session id directly.
-		if s.SessionID == hook.SessionID {
-			candidates = append(candidates, filepath.Dir(path))
-			continue
-		}
+	candidates, err := boundHookCandidates(paths, kind, hook.SessionID)
+	if err != nil {
+		return err
 	}
 	if len(candidates) == 0 {
 		return writeJSON(out, map[string]any{})
@@ -133,7 +121,7 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	cleanupAtomicTemps(dir)
 	// The binding was associated at bind from the harness environment, so the
 	// official hook session must equal the recorded one. A mismatch fails closed
-	// instead of re-associating; this reverse check replaces the nonce proof.
+	// without re-associating the session.
 	if c.State.SessionID != hook.SessionID {
 		release()
 		return relay.ErrAuth

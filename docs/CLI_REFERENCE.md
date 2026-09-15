@@ -96,7 +96,6 @@ The following names are extracted from `cmd/pairroom/*.go`. Use them to find omi
 - `--collaboration`
 - `--collaboration-instructions`
 - `--config`
-- `--continue`
 - `--create`
 - `--daemon-control-file`
 - `--data-dir`
@@ -131,7 +130,6 @@ The following names are extracted from `cmd/pairroom/*.go`. Use them to find omi
 - `--runtime`
 - `--runtime-limit`
 - `--service-file`
-- `--session-id`
 - `--shutdown-timeout`
 - `--slot`
 - `--stall-warning-seconds`
@@ -168,7 +166,7 @@ pairroom relay bind --create --name "<topic>"    # creator: project + native Roo
 pairroom relay bind                              # peer: zero-flag inside a recognized session
 ```
 
-Run each bind as a tool call inside its intended native session: the official harnesses expose the current session ID to tool-call subprocesses (Claude Code sets `CLAUDE_CODE_SESSION_ID`; Codex sets `CODEX_SESSION_ID`), and bind associates that session immediately. In a detached or plain terminal where the variable is absent, bind fails closed with guidance to run it inside the session; there is no fallback. Slots are Agent 1 / Agent 2: `--slot 1|2` is the primary form and the durable IDs `claude`/`codex` remain accepted; slot names never denote the selected Runtime. Omitted `--room` resolves the workspace's sole active native Room; omitted `--slot` resolves only when exactly one Room slot runs the caller's harness runtime; anything ambiguous fails with the candidate list instead of guessing. Bind stdout contains no long-lived secret. No installed Stop hook means bind is rejected. Native configuration selections are display-only, and PairRoom never starts or interrupts either process.
+Run each bind as a tool call inside its intended native session: the official harnesses expose the current session ID to tool-call subprocesses (Claude Code sets `CLAUDE_CODE_SESSION_ID`; Codex sets `CODEX_SESSION_ID`), and bind associates that session immediately. In a detached or plain terminal where the variable is absent, bind fails closed with guidance to run it inside the session; there is no fallback. Slots are Agent 1 / Agent 2: `--slot 1|2` is the primary form and the durable IDs `claude`/`codex` remain accepted; slot names never denote the selected Runtime. Omitted `--room` resolves the workspace's sole active native Room; omitted `--slot` resolves only when exactly one Room slot runs the caller's harness runtime; anything ambiguous fails with the candidate list instead of guessing. Bind stdout contains no long-lived secret. No installed Stop hook means bind is rejected. See [Native setup and usage](NATIVE_SETUP.md) for installation and approval steps. Native configuration selections are display-only, and PairRoom never starts or interrupts either process.
 
 A completed binding already occupies its slot. Re-running bind inside the same session resumes idempotently without rotating the generation; a different session is rejected as occupied. Use `bind --replace` explicitly to revoke the existing generation and rebind from the current session; this cannot stop any native work.
 
@@ -177,9 +175,8 @@ All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Foreg
 | Subcommand | Meaning |
 |---|---|
 | `bind` (zero-flag) | Inside a recognized native session: resolve the workspace's sole active native Room and the slot whose runtime matches the caller's harness; archived Rooms are never candidates and ambiguity fails with candidates |
-| `bind --continue --session-id <id>` | Accepted flags; re-running bind inside the same session resumes idempotently, and a different session is rejected |
 | `bind --replace` | Explicitly revoke an occupied generation and rebind the current session; cannot stop old native work |
-| `bind --create [--name <display-name>] [--runtime claude\|codex] [--peer-runtime claude\|codex]` | Without `--room`: register the workspace Project when missing, create a native Room through the same validated Management path the browser uses, bind this session, and print the peer's `peer_join` command. Without `--slot`, the creator's slot is resolved from the recognized harness against the created Room's real selections, because the Service-owned default pair is user configuration and need not match slot order; with explicit runtimes the slot is inferred before creation, and an unrecognized caller must pass `--slot 1|2`. Omitted runtimes keep the Service default pair; explicit runtimes stay empty-field selections that inherit the native configuration |
+| `bind --create [--name <display-name>] [--runtime claude\|codex] [--peer-runtime claude\|codex]` | Without `--room`: register the workspace Project when missing, create a native Room through the same validated Management path the browser uses, bind this session, and print the peer's `peer_join` command. The creator runtime, actual slot, session identity and installed hook are validated before creating anything. A default pair is read from the Service and pinned for that creation; an unrecognized caller must run inside the native session and explicitly identify its runtime. Omitted runtimes copy the Service default pair after a read-only preflight, before any Project/Room creation; explicit runtimes stay empty-field selections that inherit native configuration |
 | `send --id <client-id> --text <body>` | Explicit message to peer; requires the bind-time association like every collection call; repeat the same ID after an uncertain response, never deduplicate by body |
 | `send --to @user --attach <image>` | Human escalation with optional repeatable image paths; stdin supplies text when `--text` is absent |
 | `exchange --id <client-id> --text <body>` | One explicit peer send, then the next FIFO input; defaults to a 3,600-second wait, supports `--timeout 0` for no PairRoom total deadline, and finite values up to 21,600 seconds; not a correlated request/reply transaction |

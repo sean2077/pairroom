@@ -201,3 +201,5 @@ In a source checkout, install the dependencies from [Contributing](../CONTRIBUTI
 For rebuilding/updating an existing desktop installation from source, use `make desktop-update` after quitting Desktop. It preserves data and login registration and does not install or reconfigure a daemon. Requirements and custom paths are in [Desktop development](../desktop/README.md#update-the-installed-desktop-from-source).
 
 Before important work, read [Security](../SECURITY.md). For failures, start with [Troubleshooting](TROUBLESHOOTING.md); before changing versions, read [Upgrading](UPGRADING.md).
+
+Native installation prerequisites and the full create/join/recovery sequence are collected in [Native setup and usage](NATIVE_SETUP.md) and in the app’s Native setup guide.

@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="/management-ux.css">
   <link rel="stylesheet" href="/management-workbench.css">
   <link rel="stylesheet" href="/management-diagnostics.css">
+  <link rel="stylesheet" href="/_pairroom/native-setup.css">
   <link rel="stylesheet" href="/_pairroom/workbench.css">
 </head>
 <body class="workbench workbench-management">
@@ -153,6 +154,7 @@
         <section class="collaboration-config" data-room-only>
           <label><span class="field-label" data-i18n="ui.native.hostMode">Host mode</span><select id="room-host-mode"><option value="embedded" data-i18n="ui.native.embedded">Embedded · PairRoom manages sessions</option><option value="native" data-i18n="ui.native.native">Native · relay between your native sessions (experimental)</option></select></label>
           <p id="room-native-help" class="field-help" data-i18n="ui.native.help" hidden>Approve project Stop hooks, then bind both native sessions. PairRoom does not start or interrupt them. Provider, model, effort, instructions and permission settings below are display-only.</p>
+          <div data-native-setup data-native-source="room-native-help" hidden></div>
         </section>
         <section class="collaboration-config" aria-labelledby="collaboration-label" data-room-only>
           <label><span id="collaboration-label" class="field-label" data-i18n="room.collaboration.mode">Collaboration</span>
@@ -289,5 +291,6 @@
   <script src="/management-ux.js" defer=""></script>
 
 
+  <script src="/_pairroom/native-setup.js" defer></script>
   <script src="/_pairroom/workbench.js" defer></script>
 </body></html>

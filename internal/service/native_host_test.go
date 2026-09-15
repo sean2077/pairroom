@@ -127,10 +127,26 @@ func (f *nativeFixture) bind(t *testing.T, slot model.ActorID) relay.Auth {
 	if strings.Contains(string(output), cred.Secret) || strings.Contains(string(output), "management-secret") {
 		t.Fatal("bind stdout exposed long-lived credentials")
 	}
+	// Synthetic sessions are not real descendants of the test runner’s harness.
+	var local relayclient.State
+	statePath := filepath.Join(f.project.Root, ".pairroom", "rooms", f.room.ID, "slots", string(slot), "state.json")
+	stateData, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(stateData, &local); err != nil {
+		t.Fatal(err)
+	}
+	local.HarnessPID, local.HarnessName = 0, ""
+	if err := relay.AtomicJSON(statePath, local); err != nil {
+		t.Fatal(err)
+	}
 	return relay.Auth{Slot: slot, BindID: result.Binding.BindID, Generation: result.Binding.Generation, Secret: cred.Secret, SessionID: session}
 }
 func (f *nativeFixture) hook(t *testing.T, a relay.Auth, text string, active bool) ([]byte, error) {
 	t.Helper()
+	// The synthetic invocation carries this caller's environment as well as its payload.
+	t.Setenv(sessionEnvVar(f.room.Agents[a.Slot].Runtime), a.SessionID)
 	return f.run(t, []string{"hook", "--runtime", string(f.room.Agents[a.Slot].Runtime)}, map[string]any{"hook_event_name": "Stop", "session_id": a.SessionID, "cwd": f.project.Root, "last_assistant_message": text, "stop_hook_active": active, "transcript_path": "/unavailable/optional/transcript"})
 }
 func associateCLI(t *testing.T, f *nativeFixture, slot model.ActorID) relay.Auth {

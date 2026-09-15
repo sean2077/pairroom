@@ -24,7 +24,7 @@ const (
 
 var (
 	ErrAuth     = errors.New("relay authentication failed: binding, generation and associated session must match")
-	ErrOccupied = errors.New("slot is occupied; resume the same session with --continue or explicitly --replace (cannot stop native work)")
+	ErrOccupied = errors.New("slot is occupied; run bind in the original session or explicitly --replace (cannot stop native work)")
 	ErrClosed   = errors.New("native relay is closed or draining")
 	ErrUnknown  = errors.New("publication result unknown; inspect status before explicitly deciding recovery")
 )
