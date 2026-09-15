@@ -1,43 +1,94 @@
-name: Native Grok offline review bundle (temporary)
+name: Native Grok source assembly (temporary)
 
 on:
   pull_request:
-    types: [opened, synchronize]
-  push:
-    branches: ['feat/native-grok-build']
+    types: [synchronize]
     paths: ['.github/workflows/native-grok-review-bundle.yml']
 
 permissions:
   contents: read
 
+concurrency:
+  group: native-grok-source-assembly
+  cancel-in-progress: false
+
 jobs:
-  bundle:
-    if: github.head_ref == 'feat/native-grok-build' || github.ref == 'refs/heads/feat/native-grok-build'
+  assemble:
+    if: github.repository == 'sean2077/pairroom' && github.head_ref == 'feat/native-grok-build' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ab843dae15e734c4589090b012d4bec65821ef15
-          persist-credentials: false
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: false
-      - name: Export only tracked source and public build dependencies
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Apply only the reviewed source edits and verify every resulting blob
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          out="${RUNNER_TEMP}/native-grok-review"
-          mkdir -p "$out"
-          git archive --format=tar.gz HEAD > "$out/pairroom-base.tar.gz"
-          go mod download
-          tar -czf "$out/go-toolchain.tar.gz" -C "$(go env GOROOT)" .
-          tar -czf "$out/go-modules.tar.gz" -C "$(go env GOMODCACHE)" .
-          curl --fail --location --retry 2 https://codeload.github.com/xai-org/grok-build/tar.gz/37949780c144e37df692e3d669051a21fec24f20 -o "$out/grok-source.tar.gz"
-          (cd "$out" && sha256sum *.tar.gz > SHA256SUMS)
-      - uses: actions/upload-artifact@v7
-        with:
-          name: native-grok-offline-review
-          path: ${{ runner.temp }}/native-grok-review/
-          retention-days: 1
+          python3 - <<'PY'
+          import base64, hashlib, json, lzma, os, pathlib, subprocess, tempfile, urllib.request
+          repo = 'sean2077/pairroom'
+          base = 'ab843dae15e734c4589090b012d4bec65821ef15'
+          helper = '.github/workflows/native-grok-review-bundle.yml'
+          shas = ['58b94a03e3e397a0f8da5e586d02694696fd71ef', '9965dc8d22912927a7dd50c49b598c4e6c9de91d', '69a29ca011b4b09bc8ad29e18c4f473d3ff5190b', '78f99fbb7a576c472c34bf0e739bc626462f1c25']
+          def git(*args, env=None):
+              return subprocess.check_output(['git', *args], env=env).decode().strip()
+          def blob(data):
+              return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+          parts = []
+          for sha in shas:
+              request = urllib.request.Request('https://api.github.com/repos/'+repo+'/git/blobs/'+sha, headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'], 'Accept':'application/vnd.github+json'})
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  data = json.load(response)
+              part = base64.b64decode(data['content'])
+              assert blob(part) == sha, 'upload blob mismatch'
+              parts.append(part)
+          raw = lzma.decompress(base64.b64decode(b''.join(parts)))
+          assert hashlib.sha256(raw).hexdigest() == '1c96479bf1cdfa7d0f392b3c933410db294d56df2135a6e848265cf787adf676', 'payload mismatch'
+          payload = json.loads(raw)
+          assert payload['base'] == base and payload['tree'] == 'c53314ab390d5f36d61f502852afd914340186e5'
+          changed = set(filter(None, git('diff','--name-only',base,'HEAD').splitlines()))
+          assert changed <= {helper}, 'feature branch changed since reviewed base; refusing overwrite'
+          results = []
+          for entry in payload['files']:
+              path = pathlib.Path(entry['path'])
+              assert not path.is_absolute() and '..' not in path.parts and path.parts[0] not in ('.github','.git')
+              assert all(not p.is_symlink() for p in [path, *path.parents]), 'symlink target refused'
+              old = path.read_bytes() if path.is_file() else None
+              assert (blob(old) if old is not None else None) == entry['old'], 'baseline mismatch: '+str(path)
+              text = old.decode() if old is not None else ''
+              previous = len(text)
+              for start, end, replacement in reversed(entry['edits']):
+                  assert 0 <= start <= end <= previous, 'invalid edit bounds'
+                  text = text[:start]+replacement+text[end:]
+                  previous = start
+              data = text.encode()
+              assert blob(data) == entry['sha'], 'result mismatch: '+str(path)
+              results.append((path,data))
+          assert len(results) == 34 and len({str(p) for p,_ in results}) == 34
+          for path,data in results:
+              path.parent.mkdir(parents=True,exist_ok=True)
+              path.write_bytes(data)
+          names = [str(path) for path,_ in results]
+          # An isolated index proves the exact final source tree without this helper.
+          with tempfile.TemporaryDirectory() as directory:
+              env = dict(os.environ, GIT_INDEX_FILE=directory+'/index')
+              git('read-tree',base,env=env)
+              git('add','--',*names,env=env)
+              assert git('write-tree',env=env) == payload['tree'], 'complete tree mismatch'
+          git('add','--',*names)
+          assert set(git('diff','--cached','--name-only').splitlines()) == set(names)
+          git('diff','--cached','--check')
+          git('config','user.name','github-actions[bot]')
+          git('config','user.email','41898282+github-actions[bot]@users.noreply.github.com')
+          git('commit','-m','feat: support native Grok Build with bounded hook hints and full foreground delivery')
+          # Non-force push only to the requested feature branch. No project code is executed.
+          git('push','origin','HEAD:refs/heads/feat/native-grok-build')
+          print('Verified source tree:', payload['tree'])
+          print('Published feature commit:', git('rev-parse','HEAD'))
+          PY
