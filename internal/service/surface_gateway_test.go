@@ -62,7 +62,7 @@ func TestRoomSurfaceGatewayUsesManagementSessionAndHidesRuntimeToken(t *testing.
 		case "/activity-view.js":
 			w.Header().Set("Content-Type", "application/javascript")
 			io.WriteString(w, `window.PairRoomActivity = {};`)
-		case "/api/v1/participants/codex/permissions":
+		case "/api/v1/participants/slot2/permissions":
 			if r.Method != http.MethodPut {
 				http.Error(w, "expected PUT", http.StatusMethodNotAllowed)
 				return
@@ -178,7 +178,7 @@ func TestRoomSurfaceGatewayUsesManagementSessionAndHidesRuntimeToken(t *testing.
 
 	for _, csrf := range []bool{false, true} {
 		response := httptest.NewRecorder()
-		request := managementRequest(http.MethodPut, "/api/v1/rooms/"+room.ID+"/surface/api/v1/participants/codex/permissions", `{"profile":"read-only"}`, false)
+		request := managementRequest(http.MethodPut, "/api/v1/rooms/"+room.ID+"/surface/api/v1/participants/slot2/permissions", `{"profile":"read-only"}`, false)
 		request.AddCookie(cookie)
 		want := http.StatusForbidden
 		if csrf {

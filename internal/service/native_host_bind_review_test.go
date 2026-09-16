@@ -17,10 +17,10 @@ import (
 // These regressions are deliberately not described as real vendor E2E.
 func TestNativeRejectedCLIBindKeepsOriginalRelayUsable(t *testing.T) {
 	f := nativeHTTP(t)
-	a := associateCLI(t, f, model.ActorClaude)
-	b := associateCLI(t, f, model.ActorCodex)
+	a := associateCLI(t, f, model.ActorSlot1)
+	b := associateCLI(t, f, model.ActorSlot2)
 	pair := defaultAgentSelections()
-	pair[model.ActorCodex] = pair[model.ActorClaude]
+	pair[model.ActorSlot2] = pair[model.ActorSlot1]
 	other, err := f.registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: f.project.ID, Name: "duplicate target", HostMode: model.HostNative, Agents: pair}, SyntheticProvisioner{})
 	if err != nil {
 		t.Fatal(err)
@@ -31,7 +31,7 @@ func TestNativeRejectedCLIBindKeepsOriginalRelayUsable(t *testing.T) {
 	if _, err := f.runAs(t, model.RuntimeClaude, a.SessionID, []string{"bind", "--room", other.ID, "--slot", "2", "--runtime", "claude", "--service-file", f.endpoint}, nil); err == nil {
 		t.Fatal("duplicate session accepted")
 	}
-	if _, err := os.Stat(filepath.Join(f.project.Root, ".pairroom", "rooms", other.ID, "slots", "codex", "state.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(f.project.Root, ".pairroom", "rooms", other.ID, "slots", "slot2", "state.json")); !os.IsNotExist(err) {
 		t.Fatal("rejected bind created discoverable state")
 	}
 	if _, err := f.hook(t, a, "@codex original publication survives", false); err != nil {
@@ -51,7 +51,7 @@ func TestNativeRejectedCLIBindKeepsOriginalRelayUsable(t *testing.T) {
 
 func TestNativeRejectedReplaceKeepsOldLocalBinding(t *testing.T) {
 	f := nativeHTTP(t)
-	a := associateCLI(t, f, model.ActorClaude)
+	a := associateCLI(t, f, model.ActorSlot1)
 	other, err := f.registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: f.project.ID, Name: "replace target", HostMode: model.HostNative}, SyntheticProvisioner{})
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +70,7 @@ func TestNativeRejectedReplaceKeepsOldLocalBinding(t *testing.T) {
 	if err := json.Unmarshal(beforeResult, &beforeBinding); err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(f.project.Root, ".pairroom", "rooms", other.ID, "slots", "claude")
+	dir := filepath.Join(f.project.Root, ".pairroom", "rooms", other.ID, "slots", "slot1")
 	before := map[string]string{}
 	for _, name := range []string{"state.json", "credentials"} {
 		data, err := os.ReadFile(filepath.Join(dir, name))
@@ -105,7 +105,7 @@ func TestNativeRejectedReplaceKeepsOldLocalBinding(t *testing.T) {
 
 func TestNativeHookIdentityMismatchIsVisibleWithoutEffects(t *testing.T) {
 	f := nativeHTTP(t)
-	a := associateCLI(t, f, model.ActorClaude)
+	a := associateCLI(t, f, model.ActorSlot1)
 	before := f.native.engine.Snapshot()
 	out, err := f.runAs(t, model.RuntimeClaude, a.SessionID, []string{"hook", "--runtime", "claude"}, map[string]any{"hook_event_name": "Stop", "session_id": "different-hook-session", "cwd": f.project.Root, "last_assistant_message": "@codex must never publish", "stop_hook_active": false})
 	if err == nil || !strings.Contains(err.Error(), "different session identity") || len(out) != 0 {

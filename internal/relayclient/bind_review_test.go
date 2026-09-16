@@ -78,10 +78,10 @@ func testBindLostResponseReusesAttemptIdentity(t *testing.T, kind model.RuntimeK
 	mux.HandleFunc("GET /api/v1/service", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"projects": []any{map[string]string{"id": "project", "root": root}},
-			"rooms":    []any{map[string]any{"id": "room", "project_id": "project", "host_mode": "native", "lifecycle": "active", "agents": map[model.ActorID]model.AgentSelection{model.ActorClaude: {Runtime: kind}, model.ActorCodex: {Runtime: model.RuntimeCodex}}}},
+			"rooms":    []any{map[string]any{"id": "room", "project_id": "project", "host_mode": "native", "lifecycle": "active", "agents": map[model.ActorID]model.AgentSelection{model.ActorSlot1: {Runtime: kind}, model.ActorSlot2: {Runtime: model.RuntimeCodex}}}},
 		})
 	})
-	mux.HandleFunc("POST /api/v1/rooms/room/native-bindings/claude", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/v1/rooms/room/native-bindings/slot1", func(w http.ResponseWriter, r *http.Request) {
 		var req relay.BindRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Error(err)
@@ -103,7 +103,7 @@ func testBindLostResponseReusesAttemptIdentity(t *testing.T, kind model.RuntimeK
 		if req != accepted {
 			t.Error("recovery changed original binding request")
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: accepted.BindID, Generation: 1, Slot: model.ActorClaude, Active: true, SessionID: accepted.SessionID}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: accepted.BindID, Generation: 1, Slot: model.ActorSlot1, Active: true, SessionID: accepted.SessionID}})
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -116,7 +116,7 @@ func testBindLostResponseReusesAttemptIdentity(t *testing.T, kind model.RuntimeK
 	if err := bind(context.Background(), root, o, &out); err == nil {
 		t.Fatal("lost response must be uncertain")
 	}
-	dir := filepath.Join(root, ".pairroom", "rooms", "room", "slots", "claude")
+	dir := filepath.Join(root, ".pairroom", "rooms", "room", "slots", "slot1")
 	if _, err := os.Stat(filepath.Join(dir, "state.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("unconfirmed bind entered discovery")
 	}
@@ -144,7 +144,7 @@ func testBindLostResponseReusesAttemptIdentity(t *testing.T, kind model.RuntimeK
 
 func TestBindPromotionRecoveryPreservesPublicationWAL(t *testing.T) {
 	dir := t.TempDir()
-	s := State{Schema: 1, Room: "room", Slot: model.ActorClaude, Runtime: model.RuntimeClaude, Workspace: "/project", BindID: "bind", SessionID: "session"}
+	s := State{Schema: 2, Room: "room", Slot: model.ActorSlot1, Runtime: model.RuntimeClaude, Workspace: "/project", BindID: "bind", SessionID: "session"}
 	cred := credentials{BindID: "bind", Secret: "private-test-secret"}
 	if err := relay.AtomicJSON(filepath.Join(dir, bindAttemptFile), bindAttempt{State: s, Credentials: cred}); err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestHookIdentityDivergenceIsNotAnUnrelatedSession(t *testing.T) {
 	for _, via := range []string{"lineage", "environment"} {
 		t.Run(via, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "state.json")
-			s := State{Schema: 1, Room: "room", Slot: model.ActorClaude, Runtime: model.RuntimeClaude, BindID: "bind", Generation: 1, SessionID: "bound", HarnessPID: 4242, HarnessName: "claude"}
+			s := State{Schema: 2, Room: "room", Slot: model.ActorSlot1, Runtime: model.RuntimeClaude, BindID: "bind", Generation: 1, SessionID: "bound", HarnessPID: 4242, HarnessName: "claude"}
 			if err := relay.AtomicJSON(path, s); err != nil {
 				t.Fatal(err)
 			}
@@ -207,7 +207,7 @@ func TestHookExactSessionSurvivesSharedHarnessProcess(t *testing.T) {
 	var paths []string
 	for _, session := range []string{"first-session", "second-session"} {
 		path := filepath.Join(t.TempDir(), "state.json")
-		s := State{Schema: 1, Room: session, Slot: model.ActorClaude, Runtime: model.RuntimeClaude, BindID: session, Generation: 1, SessionID: session, HarnessPID: 4242, HarnessName: "claude"}
+		s := State{Schema: 2, Room: session, Slot: model.ActorSlot1, Runtime: model.RuntimeClaude, BindID: session, Generation: 1, SessionID: session, HarnessPID: 4242, HarnessName: "claude"}
 		if err := relay.AtomicJSON(path, s); err != nil {
 			t.Fatal(err)
 		}
@@ -221,7 +221,7 @@ func TestHookExactSessionSurvivesSharedHarnessProcess(t *testing.T) {
 
 func TestBindAttemptRetryAndExplicitReplacementHaveSeparateIntent(t *testing.T) {
 	dir := t.TempDir()
-	s := State{Schema: 1, Room: "room", Slot: model.ActorClaude, Runtime: model.RuntimeClaude, Workspace: "/project", BindID: "old-attempt", SessionID: "session"}
+	s := State{Schema: 2, Room: "room", Slot: model.ActorSlot1, Runtime: model.RuntimeClaude, Workspace: "/project", BindID: "old-attempt", SessionID: "session"}
 	pending := bindAttempt{State: s, Credentials: credentials{BindID: s.BindID, Secret: "private-test-secret"}, Replace: true}
 	if err := relay.AtomicJSON(filepath.Join(dir, bindAttemptFile), pending); err != nil {
 		t.Fatal(err)

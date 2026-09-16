@@ -30,7 +30,7 @@ func publicationClient(t *testing.T) (*Client, *publicationServer) {
 	if err := relay.AtomicJSON(endpointPath, relay.Endpoint{URL: httpServer.URL, Token: "management-secret-not-output"}); err != nil {
 		t.Fatal(err)
 	}
-	s := State{Schema: 1, Room: "room", Slot: model.ActorClaude, Runtime: model.RuntimeClaude, Workspace: dir, EndpointPath: endpointPath, BindID: "binding", Generation: 1, SessionID: "session"}
+	s := State{Schema: 2, Room: "room", Slot: model.ActorSlot1, Runtime: model.RuntimeClaude, Workspace: dir, EndpointPath: endpointPath, BindID: "binding", Generation: 1, SessionID: "session"}
 	if err := relay.AtomicJSON(filepath.Join(dir, "state.json"), s); err != nil {
 		t.Fatal(err)
 	}
@@ -257,6 +257,32 @@ func TestDeliveryAcknowledgesOnlyAfterCompleteStdout(t *testing.T) {
 	files, _ := os.ReadDir(c.Dir)
 	if len(files) != 2 {
 		t.Fatalf("unexpected per-message/lock files: %+v", files)
+	}
+}
+
+func TestLoadRejectsRetiredStateBeforeCredentials(t *testing.T) {
+	dir := t.TempDir()
+	state := State{Schema: 1, Room: "room", Slot: model.ActorSlot1, Runtime: model.RuntimeClaude, BindID: "bind", Generation: 1, SessionID: "session"}
+	if err := relay.AtomicJSON(filepath.Join(dir, "state.json"), state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := load(dir); err == nil || !strings.Contains(err.Error(), "retired relay state format") {
+		t.Fatalf("retired state load error = %v", err)
+	}
+}
+
+func TestStateDiscoveryIgnoresLegacySlotDirectories(t *testing.T) {
+	root := t.TempDir()
+	legacy := filepath.Join(root, ".pairroom", "rooms", "room", "slots", "claude")
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "state.json"), []byte("not inspected"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := statePaths(root)
+	if err != nil || len(paths) != 0 {
+		t.Fatalf("legacy state directory entered discovery: paths=%v err=%v", paths, err)
 	}
 }
 func TestHookInstallPreservesUnrelatedSettingsAndRejectsMissingHooks(t *testing.T) {

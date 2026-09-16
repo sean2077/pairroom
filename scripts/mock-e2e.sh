@@ -63,14 +63,14 @@ curl -fsS "$BASE/api/v1/health" >/dev/null
 
 MESSAGE=$(curl -fsS -X POST "$BASE/api/v1/messages" \
   -H 'Content-Type: application/json' \
-  --data '{"text":"@claude inspect the release boundary and report risks","to":["claude"],"intent":"steer"}')
+  --data '{"text":"@claude inspect the release boundary and report risks","to":["slot1"],"intent":"steer"}')
 printf '%s' "$MESSAGE" >"$TMP/message.json"
 
 # A cross-agent input is accepted immediately but must wait until the active
 # Claude native turn completes before Codex starts.
 curl -fsS -X POST "$BASE/api/v1/messages" \
   -H 'Content-Type: application/json' \
-  --data '{"text":"@codex independently review the release boundary after Claude finishes","to":["codex"],"intent":"queue"}' >/dev/null
+  --data '{"text":"@codex independently review the release boundary after Claude finishes","to":["slot2"],"intent":"queue"}' >/dev/null
 
 # Exercise the persistent image path and multimodal transcript without relying
 # on a vendor network connection.
@@ -80,7 +80,7 @@ curl -fsS -X POST "$BASE/api/v1/attachments" -F "file=@${PIXEL_PATH};type=image/
 "$PYTHON" - "$TMP/attachment.json" "$TMP/image-message.json" <<'PY'
 import json,sys
 att=json.load(open(sys.argv[1]))
-json.dump({'text':'@claude inspect this image','to':['claude'],'attachments':[att]},open(sys.argv[2],'w'))
+json.dump({'text':'@claude inspect this image','to':['slot1'],'attachments':[att]},open(sys.argv[2],'w'))
 PY
 IMAGE_MESSAGE_PATH=$(curl_file_path "$TMP/image-message.json")
 curl -fsS -X POST "$BASE/api/v1/messages" -H 'Content-Type: application/json' --data-binary "@${IMAGE_MESSAGE_PATH}" >/dev/null
@@ -92,7 +92,7 @@ import json,sys
 s=json.load(open(sys.argv[1]))
 msgs=s.get('messages',[])
 participants=s.get('participants',{})
-ok=len(msgs)>=6 and all(participants.get(a,{}).get('state') in ('idle','stopped') for a in ('claude','codex'))
+ok=len(msgs)>=6 and all(participants.get(a,{}).get('state') in ('idle','stopped') for a in ('slot1','slot2'))
 raise SystemExit(0 if ok else 1)
 PY
   then break; fi
@@ -105,7 +105,7 @@ s=json.load(open(sys.argv[1]))
 assert len(s.get('messages',[]))>=6, s
 assert len(s.get('turns',[]))>=3, s.get('turns')
 assert any(m.get('attachments') for m in s['messages']), 'attachment missing from transcript'
-for actor in ('claude','codex'):
+for actor in ('slot1','slot2'):
     p=s['participants'][actor]
     assert p['workspace']['kind'] == 'live', p
     assert p['role'] == 'peer' and p['permission_profile'] == 'configured', p

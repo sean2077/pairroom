@@ -29,20 +29,20 @@ def collaboration_fixture() -> dict:
 
 def snapshot_fixture() -> dict:
     participants = {}
-    for actor, name, responsibility in [("claude", "Claude Code", "lead"), ("codex", "Codex", "executor")]:
+    for actor, runtime, name, responsibility in [("slot1", "claude", "Claude Code", "lead"), ("slot2", "codex", "Codex", "executor")]:
         participants[actor] = {
-            "id": actor, "display_name": name, "mention_handle": "@" + actor,
+            "id": actor, "display_name": name, "mention_handle": "@" + runtime,
             "role": "peer", "responsibility": responsibility, "permission_profile": "configured",
             "state": "idle", "session_id": "fixture-" + actor,
-            "model": "deterministic-fixture", "runtime_kind": actor,
+            "model": "deterministic-fixture", "runtime_kind": runtime,
             "runtime": {"available": True, "command": "fixture", "protocol": "browser-fixture", "capabilities": [],
-                        "session_name": f"Example workspace · @{actor} · 123456789abc",
-                        "session_name_status": "configured" if actor == "claude" else "synced",
+                        "session_name": f"Example workspace · @{runtime} · 123456789abc",
+                        "session_name_status": "configured" if actor == "slot1" else "synced",
                         # One slot resolves a CC Switch Profile (internal reference label plus the
                         # redacted display name) and one stays native, so the card must name both.
                         **({"provider": "cc-switch:claude/6687bc5e-aaac-462d-bcc7-6d735f092f30",
                             "provider_name": "Example Provider", "effort": "high",
-                            "permission_mode": "yolo"} if actor == "claude"
+                            "permission_mode": "yolo"} if actor == "slot1"
                            else {"provider": "native",
                                  "approval_policy": "yolo", "sandbox": "danger-full-access"})},
             "workspace": {"kind": "live", "path": "/workspace/example", "read_only": False},
@@ -121,16 +121,16 @@ async def verify_approvals(browser, artifacts: Path) -> dict:
     await page.set_content(fixture_html())
     await page.wait_for_selector("#connection.connected")
     await page.evaluate("""() => {
-      __snapshot.participants.claude.runtime_kind='codex';
-      __snapshot.participants.claude.display_name='Codex';
-      __snapshot.participants.claude.mention_handle='@codex';
-      __snapshot.participants.codex.runtime_kind='claude';
-      __snapshot.participants.codex.display_name='Claude Code';
-      __snapshot.participants.codex.mention_handle='@claude';
+      __snapshot.participants.slot1.runtime_kind='codex';
+      __snapshot.participants.slot1.display_name='Codex';
+      __snapshot.participants.slot1.mention_handle='@codex';
+      __snapshot.participants.slot2.runtime_kind='claude';
+      __snapshot.participants.slot2.display_name='Claude Code';
+      __snapshot.participants.slot2.mention_handle='@claude';
       __snapshot.approvals = [
-        {id:'question-1',agent:'codex',kind:'claude.userQuestion',title:'Choose the review boundary',status:'pending',
+        {id:'question-1',agent:'slot2',kind:'claude.userQuestion',title:'Choose the review boundary',status:'pending',
          detail:{input:{questions:[{question:'What should remain native?',options:[{label:'Session ownership',description:'Keep the vendor session authoritative.'}]}]}}},
-        {id:'command-1',agent:'claude',kind:'item/commandExecution/requestApproval',title:'Run focused tests',status:'pending',
+        {id:'command-1',agent:'slot1',kind:'item/commandExecution/requestApproval',title:'Run focused tests',status:'pending',
          detail:{command:['go','test','./internal/agent/...'],cwd:'/workspace/example'}}
       ];
     }""")
@@ -187,9 +187,9 @@ async def verify_approvals(browser, artifacts: Path) -> dict:
     # Native Grok labels disambiguate two choices with the same kind. Slot identity
     # and locale must not replace these vendor-provided options with generic grants.
     await page.evaluate("""() => {
-      __snapshot.participants.claude.runtime_kind='grok';
-      __snapshot.participants.claude.display_name='Grok Build';
-      __snapshot.approvals=[{id:'grok-1',agent:'claude',kind:'grok.permission',status:'pending',title:'Select native execution mode',
+      __snapshot.participants.slot1.runtime_kind='grok';
+      __snapshot.participants.slot1.display_name='Grok Build';
+      __snapshot.approvals=[{id:'grok-1',agent:'slot1',kind:'grok.permission',status:'pending',title:'Select native execution mode',
         detail:{toolCall:{title:'Run checks',rawInput:{command:'go test ./...'}},options:[
           {optionId:'manual',name:'Allow once, inspect each edit',kind:'allow_once'},
           {optionId:'automatic',name:'Allow once, apply this batch',kind:'allow_once'},
@@ -226,16 +226,16 @@ async def verify_collaboration(browser, artifacts: Path) -> dict:
     await page.set_content(fixture_html())
     await page.wait_for_selector("#connection.connected")
     assert await page.locator("[data-role-actor]").count() == 0
-    assert await page.locator(".target-button").evaluate_all("nodes=>nodes.map(n=>n.dataset.target)") == ["claude", "codex"]
+    assert await page.locator(".target-button").evaluate_all("nodes=>nodes.map(n=>n.dataset.target)") == ["slot1", "slot2"]
     assert "lead" in (await page.locator("#participants").inner_text()).lower()
     assert "executor" in (await page.locator("#participants").inner_text()).lower()
     await page.locator("#room-collaboration summary").click()
     assert await page.locator("#room-collaboration-instructions").text_content() == collaboration_fixture()["instructions"]
-    assert await page.locator("[data-permission-actor=codex]").evaluate("node=>{const s=getComputedStyle(node); return parseFloat(s.borderTopLeftRadius)>0 && parseFloat(s.paddingLeft)>=8;}"), "permission control lost shared form styling"
+    assert await page.locator("[data-permission-actor=slot2]").evaluate("node=>{const s=getComputedStyle(node); return parseFloat(s.borderTopLeftRadius)>0 && parseFloat(s.paddingLeft)>=8;}"), "permission control lost shared form styling"
     assert await page.locator('.runtime-session-name').evaluate_all('nodes=>nodes.map(n=>n.textContent)') == ['Example workspace · @claude · 123456789abc', 'Example workspace · @codex · 123456789abc']
     statuses = await page.locator('.runtime-name-status').evaluate_all('nodes=>nodes.map(n=>n.textContent)')
     assert len(set(statuses)) == 2, 'configured CLI label falsely rendered as an acknowledged sync'
-    assert 'fixture-claude' in await page.locator('#participants').inner_text() or await page.locator('#participants [title="fixture-claude"]').count() > 0, 'native ID lost behind the display name'
+    assert 'fixture-slot1' in await page.locator('#participants').inner_text() or await page.locator('#participants [title="fixture-slot1"]').count() > 0, 'native ID lost behind the display name'
     # A CC Switch Provider is named by its redacted Profile display name; the
     # internal reference label stays reachable as a tooltip instead of vanishing.
     participants_text = await page.locator('#participants').inner_text()
@@ -247,23 +247,23 @@ async def verify_collaboration(browser, artifacts: Path) -> dict:
     assert await page.locator('.participant-card .slot-badge').evaluate_all('nodes=>nodes.map(n=>n.textContent)') == ['Agent 1', 'Agent 2'], 'durable slot identity was not visible'
     assert await page.locator('.participants-panel').evaluate('node=>node.scrollWidth<=node.clientWidth'), 'Agent card burst the fixed-width participants panel'
     # An error gets its own region so a broken runtime keeps its identification.
-    await page.evaluate("()=>{__snapshot.participants.claude.last_error='native runtime failed: '+'x'.repeat(400);}")
+    await page.evaluate("()=>{__snapshot.participants.slot1.last_error='native runtime failed: '+'x'.repeat(400);}")
     await page.locator('#refresh-button').click()
     await page.wait_for_function("document.querySelectorAll('.participant-error').length===1")
     errored_text = await page.locator('#participants').inner_text()
-    assert 'fixture-claude' in errored_text, 'a runtime error replaced the participant identity'
+    assert 'fixture-slot1' in errored_text, 'a runtime error replaced the participant identity'
     assert await page.locator('.participant-error').first.evaluate('node=>node.title.length>node.textContent.length'), 'long error was truncated without keeping the full text reachable'
     assert await page.locator('.participants-panel').evaluate('node=>node.scrollWidth<=node.clientWidth'), 'a long runtime error burst the participants panel'
-    await page.evaluate("()=>{delete __snapshot.participants.claude.last_error;}")
+    await page.evaluate("()=>{delete __snapshot.participants.slot1.last_error;}")
     await page.locator('#refresh-button').click()
     await page.wait_for_function("document.querySelectorAll('.participant-error').length===0")
     await page.screenshot(path=str(artifacts / "collaboration-default-light.png"))
     # Two DOM change events during one pending PUT still have one mutation owner.
-    await page.locator("[data-permission-actor=codex]").evaluate("""node=>{
+    await page.locator("[data-permission-actor=slot2]").evaluate("""node=>{
       node.value='read-only'; node.dispatchEvent(new Event('change',{bubbles:true}));
       node.dispatchEvent(new Event('change',{bubbles:true}));
     }""")
-    await page.wait_for_function("__permissionSent.length===1 && document.querySelector('[data-permission-actor=codex]').value==='read-only' && !document.querySelector('[data-permission-actor=codex]').disabled")
+    await page.wait_for_function("__permissionSent.length===1 && document.querySelector('[data-permission-actor=slot2]').value==='read-only' && !document.querySelector('[data-permission-actor=slot2]').disabled")
     assert await page.evaluate("__permissionSent.length") == 1
     assert "executor" in (await page.locator("#participants").inner_text()).lower(), "permission change replaced responsibility"
     custom = "Agent 2 proposes a plan; Agent 1 implements. Ask the user before deployment."
@@ -293,8 +293,8 @@ async def verify_activity(browser, artifacts: Path) -> dict:
     page.on('pageerror', lambda error: errors.append(str(error)))
     snap = snapshot_fixture()
     snap['turns'] = [
-        {'id': f'claude:identical-truncated-prefix-{i}', 'turn_id': f'identical-truncated-prefix-{i}',
-         'agent': 'claude', 'status': 'completed', 'updated_at': f'2026-01-01T12:{59-i:02}:00Z',
+        {'id': f'slot1:identical-truncated-prefix-{i}', 'turn_id': f'identical-truncated-prefix-{i}',
+         'agent': 'slot1', 'status': 'completed', 'updated_at': f'2026-01-01T12:{59-i:02}:00Z',
          'plan': f'Plan {i}: preserve the complete native evidence and the user reading position.',
          'items': [{'id': f'command-{i}', 'kind': 'command', 'status': 'completed', 'name': 'go test ./...',
                     'detail': 'Verified evidence\n' + ('Long output remains inspectable.\n' * 12), 'data': {'exit_code': 0}}]}
@@ -303,8 +303,8 @@ async def verify_activity(browser, artifacts: Path) -> dict:
     html = fixture_html().replace(json.dumps(snapshot_fixture()).replace('</', '<\\/'), json.dumps(snap).replace('</', '<\\/'))
     await page.set_content(html)
     await page.wait_for_selector('.turn-card')
-    first = page.locator('[data-turn-id="claude:identical-truncated-prefix-0"]')
-    second = page.locator('[data-turn-id="claude:identical-truncated-prefix-1"]')
+    first = page.locator('[data-turn-id="slot1:identical-truncated-prefix-0"]')
+    second = page.locator('[data-turn-id="slot1:identical-truncated-prefix-1"]')
     await first.locator(':scope > summary').click()
     await first.locator('[data-section="plan"] > summary').click()
     await first.locator('.turn-item > summary').click()
@@ -320,7 +320,7 @@ async def verify_activity(browser, artifacts: Path) -> dict:
         __sources.at(-1).dispatchEvent(new MessageEvent('pairroom', {data:JSON.stringify({
           seq:__snapshot.latest_seq, id:'event-'+__snapshot.latest_seq, kind, data})}));
       };
-      __emit('runtime.event',{kind:'log',agent:'codex',text:'Unrelated native event'});
+      __emit('runtime.event',{kind:'log',agent:'slot2',text:'Unrelated native event'});
     }""")
     await page.wait_for_timeout(200)
     assert await page.evaluate('document.querySelector(".turn-card") === __activityCard && __activityText.isConnected')
@@ -359,7 +359,7 @@ async def verify_activity(browser, artifacts: Path) -> dict:
     await page.evaluate("""() => {const value={...__snapshot.turns[20],updated_at:'2026-01-02T00:00:00Z'};
       __snapshot.turns[20]=value; __emit('turn.summary.updated',value); }""")
     await page.wait_for_timeout(200)
-    await page.wait_for_function("() => document.querySelector('#activity-tab .turn-card')?.dataset.turnId === 'claude:identical-truncated-prefix-20'")
+    await page.wait_for_function("() => document.querySelector('#activity-tab .turn-card')?.dataset.turnId === 'slot1:identical-truncated-prefix-20'")
     after = await page.evaluate(anchor)
     assert before['key'] == after['key'] and abs(before['offset']-after['offset']) < 2, (before, after)
     await page.locator('#activity-tab').evaluate('node => node.scrollTop=0')
@@ -477,7 +477,7 @@ async def verify(browser_path: str | None, artifacts: Path) -> None:
         # Render a long transcript, scroll back, and refresh without losing the visible anchor.
         await page.evaluate("""() => {
           __snapshotDelay = 0;
-          __snapshot.messages = Array.from({length:80}, (_,i) => ({id:'m'+i,seq:i+2,from:'user',to:['claude'],
+          __snapshot.messages = Array.from({length:80}, (_,i) => ({id:'m'+i,seq:i+2,from:'user',to:['slot1'],
             text:'Message '+i+'\\n'+('Visible transcript content. '.repeat(15)),created_at:'2026-01-01T12:00:00Z'}));
           __snapshot.message_window = {total:80,loaded:80,has_more:false};
         }""")

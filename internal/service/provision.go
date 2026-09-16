@@ -36,9 +36,19 @@ func (f ProvisionerFunc) Provision(ctx context.Context, project Project, actor m
 }
 
 func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, provisioner BindingProvisioner) (Room, error) {
+	normalizedBindings, err := normalizeBindingSpecsInput(request.Bindings)
+	if err != nil {
+		return Room{}, err
+	}
+	request.Bindings = normalizedBindings
+	selectionsInput, err := normalizeAgentSelectionsInput(request.Agents)
+	if err != nil {
+		return Room{}, err
+	}
+	request.Agents = selectionsInput
 	request.HostMode = request.HostMode.ForCreation()
 	if request.HostMode == model.HostNative && request.Bindings == nil {
-		request.Bindings = map[model.ActorID]BindingSpec{model.ActorClaude: {Mode: BindingNew}, model.ActorCodex: {Mode: BindingNew}}
+		request.Bindings = map[model.ActorID]BindingSpec{model.ActorSlot1: {Mode: BindingNew}, model.ActorSlot2: {Mode: BindingNew}}
 	}
 	if provisioner == nil {
 		return Room{}, errors.New("binding provisioner is required")
@@ -148,7 +158,7 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 		return joined
 	}
 
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 		spec := request.Bindings[actor]
 		selection := request.Agents[actor]
 		peerRuntime := request.Agents[model.OtherParticipant(actor)].Runtime
@@ -230,7 +240,7 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 		CreatedAt:                now, UpdatedAt: now,
 	}
 	payload := roomProvisionedPayload{
-		Schema: 4, HostMode: room.HostMode, Collaboration: model.CloneCollaboration(room.Collaboration), Project: project, RoomID: room.ID, Name: room.Name,
+		Schema: 5, HostMode: room.HostMode, Collaboration: model.CloneCollaboration(room.Collaboration), Project: project, RoomID: room.ID, Name: room.Name,
 		Lifecycle: room.Lifecycle, Bindings: cloneBindings(room.Bindings),
 		Agents:                   cloneAgentSelections(room.Agents),
 		TranscriptBoundaryNotice: room.TranscriptBoundaryNotice, CreatedAt: room.CreatedAt,
@@ -276,8 +286,8 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 
 func defaultAgentSelections() map[model.ActorID]model.AgentSelection {
 	return map[model.ActorID]model.AgentSelection{
-		model.ActorClaude: {Runtime: model.RuntimeClaude, Provider: model.NativeProviderRef(), PermissionMode: "yolo"},
-		model.ActorCodex:  {Runtime: model.RuntimeCodex, Provider: model.NativeProviderRef(), ApprovalPolicy: "yolo", Sandbox: "danger-full-access"},
+		model.ActorSlot1: {Runtime: model.RuntimeClaude, Provider: model.NativeProviderRef(), PermissionMode: "yolo"},
+		model.ActorSlot2: {Runtime: model.RuntimeCodex, Provider: model.NativeProviderRef(), ApprovalPolicy: "yolo", Sandbox: "danger-full-access"},
 	}
 }
 
@@ -313,12 +323,12 @@ func writeInitialRoomLog(dir string, project Project, room Room, payload roomPro
 		return err
 	}
 	identities := model.ParticipantIdentities(map[model.ActorID]model.RuntimeKind{
-		model.ActorClaude: room.Agents[model.ActorClaude].Runtime,
-		model.ActorCodex:  room.Agents[model.ActorCodex].Runtime,
+		model.ActorSlot1: room.Agents[model.ActorSlot1].Runtime,
+		model.ActorSlot2: room.Agents[model.ActorSlot2].Runtime,
 	})
 	participants := []model.ParticipantSnapshot{
-		{ID: model.ActorClaude, DisplayName: identities[model.ActorClaude].DisplayName, MentionHandle: identities[model.ActorClaude].MentionHandle, Role: model.RolePeer, PermissionProfile: model.PermissionConfigured, Responsibility: room.Collaboration.Responsibility(model.ActorClaude), State: model.StateStopped, Model: room.Agents[model.ActorClaude].Model, RuntimeKind: room.Agents[model.ActorClaude].Runtime, SessionID: room.Bindings[model.ActorClaude].SessionID},
-		{ID: model.ActorCodex, DisplayName: identities[model.ActorCodex].DisplayName, MentionHandle: identities[model.ActorCodex].MentionHandle, Role: model.RolePeer, PermissionProfile: model.PermissionConfigured, Responsibility: room.Collaboration.Responsibility(model.ActorCodex), State: model.StateStopped, Model: room.Agents[model.ActorCodex].Model, RuntimeKind: room.Agents[model.ActorCodex].Runtime, SessionID: room.Bindings[model.ActorCodex].SessionID},
+		{ID: model.ActorSlot1, DisplayName: identities[model.ActorSlot1].DisplayName, MentionHandle: identities[model.ActorSlot1].MentionHandle, Role: model.RolePeer, PermissionProfile: model.PermissionConfigured, Responsibility: room.Collaboration.Responsibility(model.ActorSlot1), State: model.StateStopped, Model: room.Agents[model.ActorSlot1].Model, RuntimeKind: room.Agents[model.ActorSlot1].Runtime, SessionID: room.Bindings[model.ActorSlot1].SessionID},
+		{ID: model.ActorSlot2, DisplayName: identities[model.ActorSlot2].DisplayName, MentionHandle: identities[model.ActorSlot2].MentionHandle, Role: model.RolePeer, PermissionProfile: model.PermissionConfigured, Responsibility: room.Collaboration.Responsibility(model.ActorSlot2), State: model.StateStopped, Model: room.Agents[model.ActorSlot2].Model, RuntimeKind: room.Agents[model.ActorSlot2].Runtime, SessionID: room.Bindings[model.ActorSlot2].SessionID},
 	}
 	for _, participant := range participants {
 		if err := appendEvent("participant.updated", participant.ID, participant); err != nil {

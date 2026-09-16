@@ -42,7 +42,7 @@ func TestRuntimeDiagnosticEvidenceAndCleanup(t *testing.T) {
 			realRepo := t.TempDir()
 			var workspace string
 			stopped := false
-			cfg := Config{Actor: model.ActorClaude, Runtime: model.RuntimeCodex, Repo: realRepo, DataDir: realRepo,
+			cfg := Config{Actor: model.ActorSlot1, Runtime: model.RuntimeCodex, Repo: realRepo, DataDir: realRepo,
 				SessionID: "existing-private-session", RequireExactSession: true, RoomID: "private-room", RoomName: "private-name",
 				AdditionalInstructions: "write production files", Model: "selected-model", Effort: "high", Env: map[string]string{"API_KEY": "secret-fixture"},
 				PermissionMode: "yolo", Sandbox: "danger-full-access", ApprovalPolicy: "yolo"}

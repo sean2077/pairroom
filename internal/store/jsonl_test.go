@@ -26,7 +26,7 @@ func TestAppendLoadAndSequence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := model.NewEvent("room-1", "two", model.ActorClaude, map[string]string{"v": "b"})
+	second, err := model.NewEvent("room-1", "two", model.ActorSlot1, map[string]string{"v": "b"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestOpenExistingReopensPublishedStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	second, _ := model.NewEvent("room-1", "second", model.ActorCodex, map[string]string{"ok": "yes"})
+	second, _ := model.NewEvent("room-1", "second", model.ActorSlot2, map[string]string{"ok": "yes"})
 	if err := reopened.Append(&second); err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestReopenRepairsPartialTailBeforeNextAppend(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer repaired.Close()
-	second, _ := model.NewEvent("room-1", "second", model.ActorCodex, map[string]string{"ok": "yes"})
+	second, _ := model.NewEvent("room-1", "second", model.ActorSlot2, map[string]string{"ok": "yes"})
 	if err := repaired.Append(&second); err != nil {
 		t.Fatal(err)
 	}
@@ -283,14 +283,14 @@ func TestSaveAndLoadJSON(t *testing.T) {
 }
 
 func TestOpenRejectsEveryNonCurrentSchemaWithoutMigration(t *testing.T) {
-	for _, schema := range []int{0, 1, 8, 9, version.StoreSchema + 1, 999} {
+	for _, schema := range []int{0, 1, 8, 9, version.StoreSchema - 1, version.StoreSchema + 1, 999} {
 		t.Run(fmt.Sprintf("schema-%d", schema), func(t *testing.T) {
 			dir := t.TempDir()
 			metadata := fmt.Sprintf(`{"format":"pairroom-jsonl","schema_version":%d,"app_version":"0.1.0"}`, schema)
 			if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(metadata), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Open(dir); err == nil || !strings.Contains(err.Error(), "provides no migration") {
+			if _, err := Open(dir); err == nil || !(strings.Contains(err.Error(), "retired development") || strings.Contains(err.Error(), "provides no migration")) {
 				t.Fatalf("non-current schema should be rejected without migration, got %v", err)
 			}
 		})
@@ -309,7 +309,8 @@ func TestUnsupportedMetadataNeverRepairsOrRewritesStore(t *testing.T) {
 	cases := []struct {
 		name, metadata, want string
 	}{
-		{"schema-9", `{"format":"pairroom-jsonl","schema_version":9,"app_version":"2.1.0"}`, "provides no migration"},
+		{"schema-9", `{"format":"pairroom-jsonl","schema_version":9,"app_version":"2.1.0"}`, "retired development"},
+		{"schema-11", `{"format":"pairroom-jsonl","schema_version":11,"app_version":"4.1.0"}`, "retired development"},
 		{"future", fmt.Sprintf(`{"format":"pairroom-jsonl","schema_version":%d}`, version.StoreSchema+1), "provides no migration"},
 		{"missing-format", fmt.Sprintf(`{"schema_version":%d}`, version.StoreSchema), "unsupported event metadata format"},
 		{"unknown-format", fmt.Sprintf(`{"format":"other","schema_version":%d}`, version.StoreSchema), "unsupported event metadata format"},

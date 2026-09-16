@@ -6,7 +6,7 @@ PairRoom coordinates native coding sessions. It is not a model provider, a repla
 
 A **Project** registers a canonical local Git repository. A **Room** is a durable collaboration context belonging to a Project, containing two participant slots, messages, session Bindings, and saved collaboration instructions. A **Room Runtime** is the active set of processes and HTTP surfaces serving that Room. Suspending a Runtime does not delete the Room.
 
-A participant's **Runtime** selects Claude Code, Codex, or Grok Build. Either slot may use any supported Runtime, including the same Runtime twice. Historical ActorIDs `claude` and `codex` mean Agent 1 and Agent 2 in persisted data; they do not require those vendors to occupy the slots.
+A participant's **Runtime** selects Claude Code, Codex, or Grok Build. Either slot may use any supported Runtime, including the same Runtime twice. Persisted ActorIDs `slot1` and `slot2` mean Agent 1 and Agent 2; they do not require particular vendors to occupy the slots. `claude` and `codex` are relay CLI input aliases only.
 
 Public display names and mention handles come from the selected Runtimes. Unique Runtimes use `@claude`, `@codex`, or `@grok`; duplicates use stable slot-order suffixes such as `@codex0` and `@codex1`. Copy the handle shown in the Room rather than inferring it from an ActorID or responsibility.
 

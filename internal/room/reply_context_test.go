@@ -20,7 +20,7 @@ func recordDetailedQuoteSource(t *testing.T, engine *Engine) model.Message {
 		t.Fatal(err)
 	}
 	source := model.Message{
-		ID: model.NewID("msg"), From: model.ActorCodex, ReplyTo: ancestor.ID, ThreadID: ancestor.ThreadID,
+		ID: model.NewID("msg"), From: model.ActorSlot2, ReplyTo: ancestor.ID, ThreadID: ancestor.ThreadID,
 		Text: "@codex 引用内容\n```go\nanswer := 42\n```\n" + strings.Repeat("完整上下文 ", 400) + "\nfinal line",
 	}
 	event, err := engine.record(EventMessageCreated, source.From, source)
@@ -68,17 +68,17 @@ func TestUserQuoteReachesNativeInputs(t *testing.T) {
 			var seed model.Message
 			if mode != "start" {
 				var err error
-				seed, err = engine.Send(context.Background(), SendRequest{Text: "active work", To: []model.ActorID{model.ActorClaude}})
+				seed, err = engine.Send(context.Background(), SendRequest{Text: "active work", To: []model.ActorID{model.ActorSlot1}})
 				if err != nil {
 					t.Fatal(err)
 				}
-				receiveInput(t, adapters[model.ActorClaude])
-				waitQuoteDelivery(t, engine, seed.ID, model.ActorClaude, model.DeliveryStarted, model.ProcessingWorking)
+				receiveInput(t, adapters[model.ActorSlot1])
+				waitQuoteDelivery(t, engine, seed.ID, model.ActorSlot1, model.DeliveryStarted, model.ProcessingWorking)
 			}
 			if mode == "steer-fallback" {
-				adapters[model.ActorClaude].mu.Lock()
-				adapters[model.ActorClaude].steerOutcome = agent.SteerOutcome{State: agent.SteerUnavailable}
-				adapters[model.ActorClaude].mu.Unlock()
+				adapters[model.ActorSlot1].mu.Lock()
+				adapters[model.ActorSlot1].steerOutcome = agent.SteerOutcome{State: agent.SteerUnavailable}
+				adapters[model.ActorSlot1].mu.Unlock()
 			}
 			intent := model.IntentSteer
 			if mode == "queue" || mode == "restore-queue" {
@@ -86,18 +86,18 @@ func TestUserQuoteReachesNativeInputs(t *testing.T) {
 			}
 			body := "Please check this quoted proposal."
 			message, err := engine.Send(context.Background(), SendRequest{
-				Text: body, To: []model.ActorID{model.ActorClaude}, ReplyTo: source.ID, Intent: intent,
+				Text: body, To: []model.ActorID{model.ActorSlot1}, ReplyTo: source.ID, Intent: intent,
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if message.Text != body || len(message.To) != 1 || message.To[0] != model.ActorClaude {
+			if message.Text != body || len(message.To) != 1 || message.To[0] != model.ActorSlot1 {
 				t.Fatal("quote changed the durable user body or routed a quoted mention")
 			}
 			if mode == "queue" || mode == "steer-fallback" || mode == "restore-queue" {
-				waitQuoteDelivery(t, engine, message.ID, model.ActorClaude, model.DeliveryQueued, model.ProcessingWaiting)
+				waitQuoteDelivery(t, engine, message.ID, model.ActorSlot1, model.DeliveryQueued, model.ProcessingWaiting)
 				select {
-				case <-adapters[model.ActorClaude].submissions:
+				case <-adapters[model.ActorSlot1].submissions:
 					t.Fatal("queued quote bypassed the native turn boundary")
 				default:
 				}
@@ -107,16 +107,16 @@ func TestUserQuoteReachesNativeInputs(t *testing.T) {
 					}
 					engine, adapters = newTestEngine(t, dir)
 				} else {
-					engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, CorrelationID: seed.ID})
+					engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted, CorrelationID: seed.ID})
 				}
 			}
-			input := receiveInput(t, adapters[model.ActorClaude])
+			input := receiveInput(t, adapters[model.ActorSlot1])
 			assertNativeQuote(t, input, source, message)
 			delivery := model.DeliveryStarted
 			if mode == "steer" {
 				delivery = model.DeliveryInjected
 			}
-			waitQuoteDelivery(t, engine, message.ID, model.ActorClaude, delivery, model.ProcessingWorking)
+			waitQuoteDelivery(t, engine, message.ID, model.ActorSlot1, delivery, model.ProcessingWorking)
 			for _, stored := range engine.Snapshot().Messages {
 				if stored.ID == message.ID && stored.Text != body {
 					t.Fatal("expanded native quote was written back into the Event Log projection")
@@ -130,12 +130,12 @@ func TestUserQuoteRetryAfterRestart(t *testing.T) {
 	dir := t.TempDir()
 	engine, adapters := newTestEngine(t, dir)
 	source := recordDetailedQuoteSource(t, engine)
-	message, err := engine.Send(context.Background(), SendRequest{Text: "Review it", To: []model.ActorID{model.ActorClaude}, ReplyTo: source.ID})
+	message, err := engine.Send(context.Background(), SendRequest{Text: "Review it", To: []model.ActorID{model.ActorSlot1}, ReplyTo: source.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := receiveInput(t, adapters[model.ActorClaude])
-	waitQuoteDelivery(t, engine, message.ID, model.ActorClaude, model.DeliveryStarted, model.ProcessingWorking)
+	first := receiveInput(t, adapters[model.ActorSlot1])
+	waitQuoteDelivery(t, engine, message.ID, model.ActorSlot1, model.DeliveryStarted, model.ProcessingWorking)
 	if err := engine.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -144,12 +144,12 @@ func TestUserQuoteRetryAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := receiveInput(t, adapters[model.ActorClaude])
+	input := receiveInput(t, adapters[model.ActorSlot1])
 	assertNativeQuote(t, input, source, retry)
 	if input.Text != first.Text || retry.RetryOf != message.ID || retry.Text != message.Text {
 		t.Fatal("retry dropped, duplicated, or persisted the expanded quote")
 	}
-	waitQuoteDelivery(t, engine, retry.ID, model.ActorClaude, model.DeliveryStarted, model.ProcessingWorking)
+	waitQuoteDelivery(t, engine, retry.ID, model.ActorSlot1, model.DeliveryStarted, model.ProcessingWorking)
 }
 
 func TestUserQuoteUsesFullRoomHistoryAndRuntimeIdentity(t *testing.T) {
@@ -194,8 +194,8 @@ func TestDeliveryQuoteDoesNotExpandOrdinaryInputOrAgentCorrelation(t *testing.T)
 	engine := &Engine{}
 	for _, message := range []model.Message{
 		{From: model.ActorUser, Text: "ordinary input"},
-		{From: model.ActorClaude, ReplyTo: "transport-correlation", Text: "@codex full visible response"},
-		{From: model.ActorCodex, ReplyTo: "transport-correlation", Text: "@claude another response"},
+		{From: model.ActorSlot1, ReplyTo: "transport-correlation", Text: "@codex full visible response"},
+		{From: model.ActorSlot2, ReplyTo: "transport-correlation", Text: "@claude another response"},
 	} {
 		quote, _, err := engine.deliveryQuote(message)
 		if err != nil || quote != nil {
@@ -209,7 +209,7 @@ func TestMissingUserQuoteFailsBeforeNativeSubmission(t *testing.T) {
 	other, _ := newTestEngine(t, "")
 	foreign := recordDetailedQuoteSource(t, other)
 	for _, id := range []string{"missing-message", foreign.ID} {
-		_, err := engine.Send(context.Background(), SendRequest{Text: "Review it", To: []model.ActorID{model.ActorClaude}, ReplyTo: id})
+		_, err := engine.Send(context.Background(), SendRequest{Text: "Review it", To: []model.ActorID{model.ActorSlot1}, ReplyTo: id})
 		if err == nil {
 			t.Fatal("missing or cross-Room quote was accepted")
 		}
@@ -217,7 +217,7 @@ func TestMissingUserQuoteFailsBeforeNativeSubmission(t *testing.T) {
 			t.Fatal("restored input with a missing or cross-Room quote was accepted")
 		}
 		select {
-		case <-adapters[model.ActorClaude].submissions:
+		case <-adapters[model.ActorSlot1].submissions:
 			t.Fatal("missing or cross-Room quote silently submitted a context-free input")
 		default:
 		}
@@ -228,7 +228,7 @@ func TestUserQuoteAttachmentsKeepContentIdentity(t *testing.T) {
 	image := model.Attachment{ID: "quoted-image", Name: "diagram.png", Kind: "image", MediaType: "image/png", SHA256: strings.Repeat("a", 64)}
 	own := model.Attachment{ID: "own-image", Name: "comparison.png", Kind: "image", MediaType: "image/png", SHA256: strings.Repeat("b", 64)}
 	media := &fakeAttachmentStore{metadata: map[string]model.Attachment{image.ID: image, own.ID: own}, paths: map[string]string{image.ID: "/private/diagram.png", own.ID: "/private/comparison.png"}}
-	source := model.Message{ID: "source", From: model.ActorCodex, Attachments: []model.Attachment{image}}
+	source := model.Message{ID: "source", From: model.ActorSlot2, Attachments: []model.Attachment{image}}
 	engine := &Engine{cfg: Config{Attachments: media}, snapshot: model.RoomSnapshot{Messages: []model.Message{source}}}
 	message := model.Message{From: model.ActorUser, ReplyTo: source.ID, Text: "Compare these", Attachments: []model.Attachment{own, image}}
 	quote, metadata, err := engine.deliveryQuote(message)

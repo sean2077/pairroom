@@ -63,7 +63,7 @@ func TestGrokContentImageCapabilityFallback(t *testing.T) {
 
 func TestGrokACPCommandOmitsUnsetOverridesAndPromptText(t *testing.T) {
 	adapter := NewGrok(Config{
-		Actor: model.ActorClaude, Command: "grok", Repo: "/repo",
+		Actor: model.ActorSlot1, Command: "grok", Repo: "/repo",
 		AdditionalInstructions: "Never mention secrets.",
 	}, func(model.RuntimeEvent) {})
 	joined := strings.Join(adapter.buildACPArgs(), " ")
@@ -81,7 +81,7 @@ func TestGrokACPCommandOmitsUnsetOverridesAndPromptText(t *testing.T) {
 
 func TestGrokACPCommandPassesExplicitRuntimeOverrides(t *testing.T) {
 	adapter := NewGrok(Config{
-		Actor: model.ActorCodex, Command: "grok", Repo: "/repo", Model: "grok-4.6",
+		Actor: model.ActorSlot2, Command: "grok", Repo: "/repo", Model: "grok-4.6",
 		Effort: "high", PermissionMode: "auto", Sandbox: "workspace-write",
 	}, func(model.RuntimeEvent) {})
 	joined := strings.Join(adapter.buildACPArgs(), " ")
@@ -93,7 +93,7 @@ func TestGrokACPCommandPassesExplicitRuntimeOverrides(t *testing.T) {
 }
 
 func TestGrokYoloPermissionModeUsesAlwaysApprove(t *testing.T) {
-	adapter := NewGrok(Config{Actor: model.ActorClaude, Command: "grok", PermissionMode: "yolo"}, func(model.RuntimeEvent) {})
+	adapter := NewGrok(Config{Actor: model.ActorSlot1, Command: "grok", PermissionMode: "yolo"}, func(model.RuntimeEvent) {})
 	joined := strings.Join(adapter.buildACPArgs(), " ")
 	if !strings.Contains(joined, "--always-approve") {
 		t.Fatalf("yolo did not emit --always-approve: %s", joined)
@@ -130,7 +130,7 @@ func TestParseGrokCapabilitiesPinsLifecycleAndImageSupport(t *testing.T) {
 
 func TestGrokSessionUpdateProjectsRootAgentText(t *testing.T) {
 	var events []model.RuntimeEvent
-	adapter := NewGrok(Config{Actor: model.ActorCodex}, func(event model.RuntimeEvent) { events = append(events, event) })
+	adapter := NewGrok(Config{Actor: model.ActorSlot2}, func(event model.RuntimeEvent) { events = append(events, event) })
 	turn := &grokTurn{turnID: "turn-1", inputs: []model.AgentInput{{MessageID: "msg-1"}}}
 	adapter.sessionID = "session-1"
 	adapter.turn = turn
@@ -178,7 +178,7 @@ func jsonNumber(value int64) string {
 }
 
 func TestGrokSteerUsesInterjectAndClassifiesMethodMissing(t *testing.T) {
-	adapter := NewGrok(Config{Actor: model.ActorClaude}, func(model.RuntimeEvent) {})
+	adapter := NewGrok(Config{Actor: model.ActorSlot1}, func(model.RuntimeEvent) {})
 	recorder := &grokRPCRecorder{adapter: adapter}
 	adapter.stdin = recorder
 	adapter.sessionID = "session-1"
@@ -232,11 +232,11 @@ func TestGrokACPLifecycleCreatesSessionAndInterjects(t *testing.T) {
 	}
 	attachments := []model.AgentAttachment{{Attachment: model.Attachment{Kind: "image", Name: "device.png", MediaType: "image/png", Size: 5}, Path: path}}
 	events := make(chan model.RuntimeEvent, 64)
-	adapter := NewGrok(Config{Actor: model.ActorClaude, Command: os.Args[0], Repo: t.TempDir()}, func(event model.RuntimeEvent) { events <- event })
+	adapter := NewGrok(Config{Actor: model.ActorSlot1, Command: os.Args[0], Repo: t.TempDir()}, func(event model.RuntimeEvent) { events <- event })
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	if err := adapter.StartTurn(ctx, model.AgentInput{
-		MessageID: "first", ThreadID: "thread", From: model.ActorUser, To: model.ActorClaude,
+		MessageID: "first", ThreadID: "thread", From: model.ActorUser, To: model.ActorSlot1,
 		FromHandle: "@user", SelfHandle: "@grok", PeerHandle: "@codex", Role: model.RoleDriver, Text: "begin",
 		Attachments: attachments,
 	}); err != nil {
@@ -246,7 +246,7 @@ func TestGrokACPLifecycleCreatesSessionAndInterjects(t *testing.T) {
 		t.Fatalf("first Grok chunk = %#v", event)
 	}
 	outcome := adapter.Steer(ctx, model.AgentInput{
-		MessageID: "steer", ThreadID: "thread", From: model.ActorUser, To: model.ActorClaude,
+		MessageID: "steer", ThreadID: "thread", From: model.ActorUser, To: model.ActorSlot1,
 		FromHandle: "@user", SelfHandle: "@grok", PeerHandle: "@codex", Role: model.RoleDriver, Text: "change direction",
 		Attachments: attachments,
 	})
@@ -274,7 +274,7 @@ func TestGrokACPExactLoadFiltersReplayAndInjectsBootstrapOnce(t *testing.T) {
 	t.Setenv("PAIRROOM_GROK_HELPER_MODE", "resume")
 	events := make(chan model.RuntimeEvent, 64)
 	adapter := NewGrok(Config{
-		Actor: model.ActorCodex, Command: os.Args[0], Repo: t.TempDir(), SessionID: "required-session", RequireExactSession: true,
+		Actor: model.ActorSlot2, Command: os.Args[0], Repo: t.TempDir(), SessionID: "required-session", RequireExactSession: true,
 	}, func(event model.RuntimeEvent) { events <- event })
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
@@ -285,7 +285,7 @@ func TestGrokACPExactLoadFiltersReplayAndInjectsBootstrapOnce(t *testing.T) {
 		t.Fatalf("Grok did not validate exact session/load during startup: session=%q opened=%v bootstrap=%v", adapter.SessionID(), adapter.sessionOpened, adapter.bootstrapPending)
 	}
 	if err := adapter.StartTurn(ctx, model.AgentInput{
-		MessageID: "resume", ThreadID: "thread", From: model.ActorUser, To: model.ActorCodex,
+		MessageID: "resume", ThreadID: "thread", From: model.ActorUser, To: model.ActorSlot2,
 		FromHandle: "@user", SelfHandle: "@grok", PeerHandle: "@claude", Role: model.RoleReviewer, Text: "continue",
 	}); err != nil {
 		t.Fatal(err)
@@ -315,7 +315,7 @@ func TestGrokACPPermissionResolutionAndCancellation(t *testing.T) {
 			t.Setenv("PAIRROOM_GROK_HELPER", "1")
 			t.Setenv("PAIRROOM_GROK_HELPER_MODE", "permission")
 			events := make(chan model.RuntimeEvent, 64)
-			adapter := NewGrok(Config{Actor: model.ActorClaude, Command: os.Args[0], Repo: t.TempDir()}, func(event model.RuntimeEvent) { events <- event })
+			adapter := NewGrok(Config{Actor: model.ActorSlot1, Command: os.Args[0], Repo: t.TempDir()}, func(event model.RuntimeEvent) { events <- event })
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			defer cancel()
 			if err := adapter.StartTurn(ctx, model.AgentInput{MessageID: "permission", ThreadID: "thread", Role: model.RoleDriver, Text: "run"}); err != nil {
@@ -364,8 +364,8 @@ func waitRuntimeEvent(t *testing.T, events <-chan model.RuntimeEvent, kind strin
 }
 
 func TestGrokFactoryEmitsConfiguredSlotActor(t *testing.T) {
-	adapter := GrokFactory(Config{Actor: model.ActorCodex, Runtime: model.RuntimeGrok}, func(model.RuntimeEvent) {})
-	if adapter.Actor() != model.ActorCodex {
+	adapter := GrokFactory(Config{Actor: model.ActorSlot2, Runtime: model.RuntimeGrok}, func(model.RuntimeEvent) {})
+	if adapter.Actor() != model.ActorSlot2 {
 		t.Fatalf("Grok factory actor = %s", adapter.Actor())
 	}
 }
@@ -374,7 +374,7 @@ func TestGrokRuntimeLogsRedactConfiguredSecrets(t *testing.T) {
 	const secret = "grok-provider-secret-value"
 	var events []model.RuntimeEvent
 	adapter := NewGrok(Config{
-		Actor: model.ActorClaude,
+		Actor: model.ActorSlot1,
 		Env:   map[string]string{"XAI_API_KEY": secret},
 	}, func(event model.RuntimeEvent) {
 		events = append(events, event)

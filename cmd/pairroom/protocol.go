@@ -20,12 +20,12 @@ func runProtocol(args []string) error {
 func writeProtocol(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("pairroom protocol", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	actorFlag := flags.String("actor", "", "limit actor-specific rules to claude or codex")
+	actorFlag := flags.String("actor", "", "limit actor-specific rules to slot1 or slot2; 1/2 and claude/codex are CLI aliases")
 
 	hostFlag := flags.String("host-mode", "embedded", "Room host mode: embedded or native")
 	jsonFlag := flags.Bool("json", false, "emit the contract as JSON")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "usage: pairroom protocol [--actor claude|codex] [--json]")
+		fmt.Fprintln(stderr, "usage: pairroom protocol [--actor slot1|slot2] [--json]")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -46,7 +46,7 @@ func writeProtocol(args []string, stdout, stderr io.Writer) error {
 	if host == model.HostNative {
 		resolve = protocol.ResolveNative
 	}
-	contract, err := resolve(protocol.Selection{Actor: model.ActorID(strings.TrimSpace(*actorFlag))})
+	contract, err := resolve(protocol.Selection{Actor: parseProtocolActor(*actorFlag)})
 	if err != nil {
 		return err
 	}
@@ -57,4 +57,18 @@ func writeProtocol(args []string, stdout, stderr io.Writer) error {
 	}
 	_, err = io.WriteString(stdout, contract.Text())
 	return err
+}
+
+func parseProtocolActor(value string) model.ActorID {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "slot1", "1", "agent1", "claude":
+		if strings.TrimSpace(value) == "" {
+			return ""
+		}
+		return model.ActorSlot1
+	case "slot2", "2", "agent2", "codex":
+		return model.ActorSlot2
+	default:
+		return model.ActorID(strings.ToLower(strings.TrimSpace(value)))
+	}
 }

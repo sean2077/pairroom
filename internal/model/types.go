@@ -13,21 +13,21 @@ type ActorID string
 
 const (
 	ActorUser   ActorID = "user"
-	ActorClaude ActorID = "claude"
-	ActorCodex  ActorID = "codex"
+	ActorSlot1  ActorID = "slot1"
+	ActorSlot2  ActorID = "slot2"
 	ActorSystem ActorID = "system"
 )
 
-func (a ActorID) ValidParticipant() bool { return a == ActorClaude || a == ActorCodex }
+func (a ActorID) ValidParticipant() bool { return a == ActorSlot1 || a == ActorSlot2 }
 
 func (a ActorID) DisplayName() string {
 	switch a {
 	case ActorUser:
 		return "You"
-	case ActorClaude:
-		return "Claude Code"
-	case ActorCodex:
-		return "Codex"
+	case ActorSlot1:
+		return "Agent 1"
+	case ActorSlot2:
+		return "Agent 2"
 	case ActorSystem:
 		return "PairRoom"
 	default:
@@ -455,10 +455,10 @@ func NormalizeActors(values []ActorID) []ActorID {
 
 func OtherParticipant(actor ActorID) ActorID {
 	switch actor {
-	case ActorClaude:
-		return ActorCodex
-	case ActorCodex:
-		return ActorClaude
+	case ActorSlot1:
+		return ActorSlot2
+	case ActorSlot2:
+		return ActorSlot1
 	default:
 		return ""
 	}

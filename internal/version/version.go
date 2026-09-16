@@ -6,8 +6,8 @@ import (
 )
 
 const (
-	Current       = "4.1.0"
-	StoreSchema   = 11
+	Current       = "5.0.0"
+	StoreSchema   = 12
 	RepositoryURL = "https://github.com/sean2077/pairroom"
 )
 
@@ -61,8 +61,8 @@ func Describe() string {
 	return tag + "+" + sha
 }
 
-// SupportsStoreSchema accepts the current and immediately preceding contracts. Unsupported
+// SupportsStoreSchema accepts only the current clean-cutover contract. Retired
 // stores must be rejected before replay or repair, never silently migrated.
 func SupportsStoreSchema(schema int) bool {
-	return schema == 10 || schema == StoreSchema
+	return schema == StoreSchema
 }

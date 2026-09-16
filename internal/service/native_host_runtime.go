@@ -197,7 +197,7 @@ func (n *nativeHostRuntime) boundary(next http.Handler) http.Handler {
 	})
 }
 func (n *nativeHostRuntime) snapshot() map[string]any {
-	return map[string]any{"room": n.room, "relay": n.engine.Snapshot(), "protocol": protocol.NativeVersion, "config_notice": "Provider, model, effort, instructions and permissions are display-only here; configure them in the native harness.", "identities": model.ParticipantIdentities(map[model.ActorID]model.RuntimeKind{model.ActorClaude: n.room.Agents[model.ActorClaude].Runtime, model.ActorCodex: n.room.Agents[model.ActorCodex].Runtime})}
+	return map[string]any{"room": n.room, "relay": n.engine.Snapshot(), "protocol": protocol.NativeVersion, "config_notice": "Provider, model, effort, instructions and permissions are display-only here; configure them in the native harness.", "identities": model.ParticipantIdentities(map[model.ActorID]model.RuntimeKind{model.ActorSlot1: n.room.Agents[model.ActorSlot1].Runtime, model.ActorSlot2: n.room.Agents[model.ActorSlot2].Runtime})}
 }
 func (n *nativeHostRuntime) serve(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path

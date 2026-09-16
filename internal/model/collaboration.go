@@ -90,7 +90,7 @@ func CloneCollaboration(c *Collaboration) *Collaboration {
 
 func (c Collaboration) Responsibility(actor ActorID) string {
 	if c.Mode == CollaborationDefault {
-		if actor == ActorClaude {
+		if actor == ActorSlot1 {
 			return "lead"
 		}
 		return "executor"

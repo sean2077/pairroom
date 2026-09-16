@@ -32,11 +32,11 @@ func (a *gatedApprovalAdapter) ResolveApproval(ctx context.Context, _ string, _ 
 
 func TestApprovalHasSingleResolutionOwner(t *testing.T) {
 	e, adapters := newTestEngine(t, "")
-	a := &gatedApprovalAdapter{fakeAdapter: adapters[model.ActorClaude], started: make(chan struct{}), release: make(chan struct{})}
+	a := &gatedApprovalAdapter{fakeAdapter: adapters[model.ActorSlot1], started: make(chan struct{}), release: make(chan struct{})}
 	e.mu.Lock()
-	e.adapters[model.ActorClaude] = a
+	e.adapters[model.ActorSlot1] = a
 	e.mu.Unlock()
-	if _, err := e.record(EventApprovalUpdated, model.ActorClaude, model.Approval{ID: "ask", Agent: model.ActorClaude, Status: "pending"}); err != nil {
+	if _, err := e.record(EventApprovalUpdated, model.ActorSlot1, model.Approval{ID: "ask", Agent: model.ActorSlot1, Status: "pending"}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -71,12 +71,12 @@ func TestApprovalHasSingleResolutionOwner(t *testing.T) {
 
 func TestInvalidApprovalResolutionReleasesReservation(t *testing.T) {
 	e, adapters := newTestEngine(t, "")
-	a := &gatedApprovalAdapter{fakeAdapter: adapters[model.ActorClaude], started: make(chan struct{}), release: make(chan struct{}), err: errors.New("invalid native choice")}
+	a := &gatedApprovalAdapter{fakeAdapter: adapters[model.ActorSlot1], started: make(chan struct{}), release: make(chan struct{}), err: errors.New("invalid native choice")}
 	close(a.release)
 	e.mu.Lock()
-	e.adapters[model.ActorClaude] = a
+	e.adapters[model.ActorSlot1] = a
 	e.mu.Unlock()
-	if _, err := e.record(EventApprovalUpdated, model.ActorClaude, model.Approval{ID: "ask", Agent: model.ActorClaude, Status: "pending"}); err != nil {
+	if _, err := e.record(EventApprovalUpdated, model.ActorSlot1, model.Approval{ID: "ask", Agent: model.ActorSlot1, Status: "pending"}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

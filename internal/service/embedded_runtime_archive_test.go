@@ -57,7 +57,7 @@ func TestEmbeddedRuntimeArchiveInterruptsActiveTurnAndClosesRuntime(t *testing.T
 	}
 	if _, err := runtime.engine.Send(ctx, room.SendRequest{
 		Text: "keep this turn active until archive interrupts it",
-		To:   []model.ActorID{model.ActorClaude},
+		To:   []model.ActorID{model.ActorSlot1},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestEmbeddedRuntimeArchiveInterruptsActiveTurnAndClosesRuntime(t *testing.T
 		t.Fatal("archive returned before the embedded Runtime closed")
 	}
 	snapshot := runtime.engine.Snapshot()
-	claude := snapshot.Participants[model.ActorClaude]
+	claude := snapshot.Participants[model.ActorSlot1]
 	if claude.CurrentTurn != "" || claude.State == model.StateStarting || claude.State == model.StateWorking || claude.State == model.StateWaiting {
 		t.Fatalf("active Claude turn did not settle before archive: %#v", claude)
 	}

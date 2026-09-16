@@ -141,10 +141,10 @@ func New(cfg Config) (*Engine, error) {
 		return nil, errors.New("stall_warning_seconds must be -1 (disabled) or between 30 and 86400")
 	}
 	if cfg.ClaudeFactory == nil {
-		cfg.ClaudeFactory = agent.SlotFactory(false, cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorClaude))
+		cfg.ClaudeFactory = agent.SlotFactory(false, cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorSlot1))
 	}
 	if cfg.CodexFactory == nil {
-		cfg.CodexFactory = agent.SlotFactory(false, cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorCodex))
+		cfg.CodexFactory = agent.SlotFactory(false, cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorSlot2))
 	}
 
 	e := &Engine{
@@ -153,8 +153,8 @@ func New(cfg Config) (*Engine, error) {
 		lastRuntimeActivity: make(map[model.ActorID]time.Time, 2),
 		stallWarnedTurn:     make(map[model.ActorID]string, 2),
 		deliveryMu: map[model.ActorID]chan struct{}{
-			model.ActorClaude: make(chan struct{}, 1),
-			model.ActorCodex:  make(chan struct{}, 1),
+			model.ActorSlot1: make(chan struct{}, 1),
+			model.ActorSlot2: make(chan struct{}, 1),
 		},
 	}
 	if err := e.restore(); err != nil {
@@ -225,14 +225,14 @@ func (e *Engine) restore() error {
 	identities := model.ParticipantIdentities(runtimes)
 	participants := []model.ParticipantSnapshot{
 		{
-			ID: model.ActorClaude, DisplayName: identities[model.ActorClaude].DisplayName, MentionHandle: identities[model.ActorClaude].MentionHandle,
+			ID: model.ActorSlot1, DisplayName: identities[model.ActorSlot1].DisplayName, MentionHandle: identities[model.ActorSlot1].MentionHandle,
 			Role: model.RolePeer, State: model.StateStopped, Model: e.cfg.ClaudeConfig.Model,
-			RuntimeKind: e.cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorClaude),
+			RuntimeKind: e.cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorSlot1),
 		},
 		{
-			ID: model.ActorCodex, DisplayName: identities[model.ActorCodex].DisplayName, MentionHandle: identities[model.ActorCodex].MentionHandle,
+			ID: model.ActorSlot2, DisplayName: identities[model.ActorSlot2].DisplayName, MentionHandle: identities[model.ActorSlot2].MentionHandle,
 			Role: model.RolePeer, State: model.StateStopped, Model: e.cfg.CodexConfig.Model,
-			RuntimeKind: e.cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorCodex),
+			RuntimeKind: e.cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorSlot2),
 		},
 	}
 	for _, participant := range participants {
@@ -255,7 +255,7 @@ func (e *Engine) ensureSnapshotDefaults() error {
 		e.snapshot.Participants = make(map[model.ActorID]model.ParticipantSnapshot, 2)
 	}
 	identities := model.ParticipantIdentities(e.runtimeKinds())
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 		participant, ok := e.snapshot.Participants[actor]
 		if !ok {
 			return fmt.Errorf("Room is missing participant %s", actor)
@@ -398,23 +398,23 @@ func (e *Engine) Start(parent context.Context) error {
 		return nil
 	}
 	e.ctx, e.cancel = context.WithCancel(parent)
-	claudeParticipant := e.snapshot.Participants[model.ActorClaude]
-	codexParticipant := e.snapshot.Participants[model.ActorCodex]
+	claudeParticipant := e.snapshot.Participants[model.ActorSlot1]
+	codexParticipant := e.snapshot.Participants[model.ActorSlot2]
 	repo := e.snapshot.Meta.Repo
 	roomName := e.snapshot.Meta.Name
 	roomID := e.snapshot.Meta.ID
 	e.mu.Unlock()
 
 	boundaries := map[model.ActorID]model.WorkspaceBoundary{
-		model.ActorClaude: {Kind: "live", Path: repo},
-		model.ActorCodex:  {Kind: "live", Path: repo},
+		model.ActorSlot1: {Kind: "live", Path: repo},
+		model.ActorSlot2: {Kind: "live", Path: repo},
 	}
 
 	claudeCfg := e.cfg.ClaudeConfig
-	claudeCfg.Actor = model.ActorClaude
-	claudeCfg.Runtime = claudeCfg.Runtime.CanonicalForSlot(model.ActorClaude)
-	claudeCfg.PeerRuntime = e.cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorCodex)
-	claudeCfg.Repo = boundaries[model.ActorClaude].Path
+	claudeCfg.Actor = model.ActorSlot1
+	claudeCfg.Runtime = claudeCfg.Runtime.CanonicalForSlot(model.ActorSlot1)
+	claudeCfg.PeerRuntime = e.cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorSlot2)
+	claudeCfg.Repo = boundaries[model.ActorSlot1].Path
 	claudeCfg.DataDir = e.cfg.Store.Dir()
 	claudeCfg.RoomName = roomName
 	claudeCfg.RoomID = roomID
@@ -422,10 +422,10 @@ func (e *Engine) Start(parent context.Context) error {
 		claudeCfg.SessionID = claudeParticipant.SessionID
 	}
 	codexCfg := e.cfg.CodexConfig
-	codexCfg.Actor = model.ActorCodex
-	codexCfg.Runtime = codexCfg.Runtime.CanonicalForSlot(model.ActorCodex)
-	codexCfg.PeerRuntime = e.cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorClaude)
-	codexCfg.Repo = boundaries[model.ActorCodex].Path
+	codexCfg.Actor = model.ActorSlot2
+	codexCfg.Runtime = codexCfg.Runtime.CanonicalForSlot(model.ActorSlot2)
+	codexCfg.PeerRuntime = e.cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorSlot1)
+	codexCfg.Repo = boundaries[model.ActorSlot2].Path
 	codexCfg.DataDir = e.cfg.Store.Dir()
 	codexCfg.RoomName = roomName
 	codexCfg.RoomID = roomID
@@ -441,14 +441,14 @@ func (e *Engine) Start(parent context.Context) error {
 		return errors.New("room is closed")
 	}
 	e.started = true
-	e.adapters[model.ActorClaude] = e.cfg.ClaudeFactory(claudeCfg, e.HandleRuntimeEvent)
-	e.adapters[model.ActorCodex] = e.cfg.CodexFactory(codexCfg, e.HandleRuntimeEvent)
-	claudeAdapter := e.adapters[model.ActorClaude]
-	codexAdapter := e.adapters[model.ActorCodex]
+	e.adapters[model.ActorSlot1] = e.cfg.ClaudeFactory(claudeCfg, e.HandleRuntimeEvent)
+	e.adapters[model.ActorSlot2] = e.cfg.CodexFactory(codexCfg, e.HandleRuntimeEvent)
+	claudeAdapter := e.adapters[model.ActorSlot1]
+	codexAdapter := e.adapters[model.ActorSlot2]
 	autoStart := e.cfg.AutoStart
 	now := time.Now().UTC()
-	e.lastRuntimeActivity[model.ActorClaude] = now
-	e.lastRuntimeActivity[model.ActorCodex] = now
+	e.lastRuntimeActivity[model.ActorSlot1] = now
+	e.lastRuntimeActivity[model.ActorSlot2] = now
 	e.mu.Unlock()
 
 	for actor, boundary := range boundaries {
@@ -473,7 +473,7 @@ func (e *Engine) Start(parent context.Context) error {
 	go e.monitorStalledTurns()
 
 	if autoStart {
-		for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+		for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 			actor := actor
 			go func() {
 				ctx, cancel := context.WithTimeout(e.ctx, 30*time.Second)
@@ -1062,8 +1062,8 @@ func (e *Engine) runtimeKinds() map[model.ActorID]model.RuntimeKind {
 
 func runtimeKindsForConfig(cfg Config) map[model.ActorID]model.RuntimeKind {
 	return map[model.ActorID]model.RuntimeKind{
-		model.ActorClaude: cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorClaude),
-		model.ActorCodex:  cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorCodex),
+		model.ActorSlot1: cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorSlot1),
+		model.ActorSlot2: cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorSlot2),
 	}
 }
 
@@ -1072,7 +1072,7 @@ func (e *Engine) participantName(actor model.ActorID) string {
 }
 
 func slotAgentConfig(cfg Config, actor model.ActorID) agent.Config {
-	if actor == model.ActorCodex {
+	if actor == model.ActorSlot2 {
 		return cfg.CodexConfig
 	}
 	return cfg.ClaudeConfig
@@ -1434,11 +1434,11 @@ func (e *Engine) lockDelivery(ctx context.Context, actor model.ActorID) (func(),
 }
 
 func (e *Engine) lockAllDeliveries(ctx context.Context) (func(), error) {
-	claudeUnlock, err := e.lockDelivery(ctx, model.ActorClaude)
+	claudeUnlock, err := e.lockDelivery(ctx, model.ActorSlot1)
 	if err != nil {
 		return nil, err
 	}
-	codexUnlock, err := e.lockDelivery(ctx, model.ActorCodex)
+	codexUnlock, err := e.lockDelivery(ctx, model.ActorSlot2)
 	if err != nil {
 		claudeUnlock()
 		return nil, err
@@ -2058,7 +2058,7 @@ func (e *Engine) agentTargets(actor model.ActorID, text string, sourceSeq, lates
 	}
 	if len(mentions.Ambiguous) > 0 {
 		identities := model.ParticipantIdentities(e.runtimeKinds())
-		e.notice("warning", fmt.Sprintf("%s used ambiguous handle %s; use %s or %s. No Agent relay was started.", e.participantName(actor), strings.Join(mentions.Ambiguous, ", "), identities[model.ActorClaude].MentionHandle, identities[model.ActorCodex].MentionHandle))
+		e.notice("warning", fmt.Sprintf("%s used ambiguous handle %s; use %s or %s. No Agent relay was started.", e.participantName(actor), strings.Join(mentions.Ambiguous, ", "), identities[model.ActorSlot1].MentionHandle, identities[model.ActorSlot2].MentionHandle))
 		return nil
 	}
 	return mentions.Targets
@@ -2160,7 +2160,7 @@ func (e *Engine) resolveUserTargets(text string, explicit []model.ActorID, reply
 	mentions := prompt.ParseMentions(text, model.ActorUser, e.runtimeKinds())
 	if len(mentions.Ambiguous) > 0 {
 		identities := model.ParticipantIdentities(e.runtimeKinds())
-		return nil, fmt.Errorf("ambiguous Agent handle %s; use %s or %s", strings.Join(mentions.Ambiguous, ", "), identities[model.ActorClaude].MentionHandle, identities[model.ActorCodex].MentionHandle)
+		return nil, fmt.Errorf("ambiguous Agent handle %s; use %s or %s", strings.Join(mentions.Ambiguous, ", "), identities[model.ActorSlot1].MentionHandle, identities[model.ActorSlot2].MentionHandle)
 	}
 	// Removed aliases are ordinary prose once a valid current handle is also
 	// present. Reject only an otherwise unaddressed message that still relies on
@@ -2179,19 +2179,32 @@ func (e *Engine) resolveUserTargets(text string, explicit []model.ActorID, reply
 			return []model.ActorID{replied.From}, nil
 		}
 	}
-	return []model.ActorID{model.ActorClaude}, nil
+	return []model.ActorID{model.ActorSlot1}, nil
 }
 
 func normalizeExplicitActors(values []model.ActorID) ([]model.ActorID, error) {
 	canonical := make([]model.ActorID, 0, len(values))
 	for _, value := range values {
-		actor := model.ActorID(strings.ToLower(strings.TrimSpace(string(value))))
+		actor := canonicalHTTPActor(value)
 		if !actor.ValidParticipant() {
-			return nil, fmt.Errorf("invalid Agent recipient %q; use claude or codex", value)
+			return nil, fmt.Errorf("invalid Agent recipient %q; use slot1 or slot2", value)
 		}
 		canonical = append(canonical, actor)
 	}
 	return model.NormalizeActors(canonical), nil
+}
+
+// canonicalHTTPActor accepts only the canonical durable IDs and the documented
+// numeric HTTP aliases. Legacy runtime-named values are deliberately rejected.
+func canonicalHTTPActor(value model.ActorID) model.ActorID {
+	switch strings.ToLower(strings.TrimSpace(string(value))) {
+	case "slot1", "1":
+		return model.ActorSlot1
+	case "slot2", "2":
+		return model.ActorSlot2
+	default:
+		return model.ActorID(strings.ToLower(strings.TrimSpace(string(value))))
+	}
 }
 
 func (e *Engine) canonicalAttachments(values []model.Attachment) ([]model.Attachment, error) {
@@ -2648,7 +2661,7 @@ func (e *Engine) monitorStalledTurns() {
 				continue
 			}
 			threshold := time.Duration(seconds) * time.Second
-			for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+			for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 				participant := e.snapshot.Participants[actor]
 				if participant.State != model.StateWorking && participant.State != model.StateWaiting {
 					continue

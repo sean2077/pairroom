@@ -22,8 +22,8 @@ import (
 
 func pairProfileInput(name string) AgentPairProfileInput {
 	return AgentPairProfileInput{Name: name, IsDefault: true, Agents: map[model.ActorID]model.AgentSelection{
-		model.ActorClaude: {Runtime: model.RuntimeCodex, Provider: model.NativeProviderRef(), Model: "planner", Effort: "high", Instructions: "Plan and review.", ApprovalPolicy: "on-request", Sandbox: "read-only"},
-		model.ActorCodex:  {Runtime: model.RuntimeCodex, Provider: model.NativeProviderRef(), Model: "executor", Effort: "low", Instructions: "Implement and verify.", ApprovalPolicy: "yolo", Sandbox: "danger-full-access"},
+		model.ActorSlot1: {Runtime: model.RuntimeCodex, Provider: model.NativeProviderRef(), Model: "planner", Effort: "high", Instructions: "Plan and review.", ApprovalPolicy: "on-request", Sandbox: "read-only"},
+		model.ActorSlot2: {Runtime: model.RuntimeCodex, Provider: model.NativeProviderRef(), Model: "executor", Effort: "low", Instructions: "Implement and verify.", ApprovalPolicy: "yolo", Sandbox: "danger-full-access"},
 	}}
 }
 
@@ -31,7 +31,7 @@ func TestAgentPairProfilesPersistIndependentlyOfRoomsAndRegistryIndex(t *testing
 	ctx := context.Background()
 	registry, project := testRegistry(t, testGitRepo(t))
 	catalog, err := registry.AgentPairProfiles()
-	if err != nil || catalog.Schema != 1 || catalog.Profiles == nil || len(catalog.Profiles) != 0 {
+	if err != nil || catalog.Schema != 2 || catalog.Profiles == nil || len(catalog.Profiles) != 0 {
 		t.Fatalf("empty catalog = %#v, %v", catalog, err)
 	}
 	input := pairProfileInput(" Daily pair ")
@@ -44,7 +44,7 @@ func TestAgentPairProfilesPersistIndependentlyOfRoomsAndRegistryIndex(t *testing
 		t.Fatalf("catalog = %#v", catalog)
 	}
 	// Copies returned to callers are not shared mutable configuration.
-	catalog.Profiles[0].Agents[model.ActorClaude] = model.AgentSelection{}
+	catalog.Profiles[0].Agents[model.ActorSlot1] = model.AgentSelection{}
 	room, err := registry.ProvisionRoom(ctx, ProvisionRequest{ProjectID: project.ID, Bindings: specs(BindingNew, BindingNew, "")}, SyntheticProvisioner{})
 	if err != nil {
 		t.Fatal(err)
@@ -53,14 +53,14 @@ func TestAgentPairProfilesPersistIndependentlyOfRoomsAndRegistryIndex(t *testing
 		t.Fatalf("default selections = %#v", room.Agents)
 	}
 	changed := pairProfileInput("Renamed pair")
-	selection := changed.Agents[model.ActorClaude]
+	selection := changed.Agents[model.ActorSlot1]
 	selection.Model = "new-planner"
-	changed.Agents[model.ActorClaude] = selection
+	changed.Agents[model.ActorSlot1] = selection
 	if _, err := registry.SaveAgentPairProfile(ctx, id, changed); err != nil {
 		t.Fatal(err)
 	}
 	current, _ := registry.Room(room.ID)
-	if current.Agents[model.ActorClaude].Model != "planner" {
+	if current.Agents[model.ActorSlot1].Model != "planner" {
 		t.Fatal("profile update mutated existing Room")
 	}
 	if err := os.Remove(filepath.Join(registry.Root(), "service-registry.json")); err != nil {
@@ -75,7 +75,7 @@ func TestAgentPairProfilesPersistIndependentlyOfRoomsAndRegistryIndex(t *testing
 		t.Fatalf("reopened = %#v, %v", catalog, err)
 	}
 	replayed, ok := reopened.Room(room.ID)
-	if !ok || replayed.Agents[model.ActorClaude].Model != "planner" {
+	if !ok || replayed.Agents[model.ActorSlot1].Model != "planner" {
 		t.Fatal("Room snapshot changed on replay")
 	}
 	if _, err := reopened.DeleteAgentPairProfile(ctx, id); err != nil {
@@ -100,7 +100,7 @@ func TestAgentPairProfilesValidateWithoutFreezingNativeDefaults(t *testing.T) {
 	registry, _ := testRegistry(t, testGitRepo(t))
 	ctx := context.Background()
 	input := AgentPairProfileInput{Name: "Inherited", Agents: map[model.ActorID]model.AgentSelection{
-		model.ActorClaude: {Runtime: model.RuntimeGrok}, model.ActorCodex: {Runtime: model.RuntimeClaude},
+		model.ActorSlot1: {Runtime: model.RuntimeGrok}, model.ActorSlot2: {Runtime: model.RuntimeClaude},
 	}}
 	catalog, err := registry.SaveAgentPairProfile(ctx, "", input)
 	if err != nil {
@@ -120,7 +120,7 @@ func TestAgentPairProfilesValidateWithoutFreezingNativeDefaults(t *testing.T) {
 			t.Fatalf("accepted name %q", name)
 		}
 	}
-	for _, agents := range []map[model.ActorID]model.AgentSelection{nil, {}, {model.ActorClaude: {}}, {model.ActorClaude: {}, model.ActorID("unexpected"): {}}} {
+	for _, agents := range []map[model.ActorID]model.AgentSelection{nil, {}, {model.ActorSlot1: {}}, {model.ActorSlot1: {}, model.ActorID("unexpected"): {}}} {
 		if _, err := registry.SaveAgentPairProfile(ctx, "", AgentPairProfileInput{Name: "invalid", Agents: agents}); err == nil {
 			t.Fatalf("accepted selections %#v", agents)
 		}
@@ -133,7 +133,7 @@ func TestAgentPairProfilesValidateWithoutFreezingNativeDefaults(t *testing.T) {
 }
 
 func TestAgentPairProfilesFailClosedWithoutOverwritingDamagedFile(t *testing.T) {
-	for _, damaged := range []string{"{}", `{"schema":2,"profiles":[]}`, `{"schema":1,"profiles":[],"default_profile_id":"missing"}`, `{"schema":1,"profiles":[]}{}`, `{"schema":1,"profiles":null}`, `{"schema":1,"profiles":[],"token":"do-not-echo"}`, "{"} {
+	for _, damaged := range []string{"{}", `{"schema":3,"profiles":[]}`, `{"schema":1,"profiles":[],"default_profile_id":"missing"}`, `{"schema":2,"profiles":[]}{}`, `{"schema":2,"profiles":null}`, `{"schema":2,"profiles":[],"token":"do-not-echo"}`, "{"} {
 		t.Run(damaged, func(t *testing.T) {
 			registry, _ := testRegistry(t, testGitRepo(t))
 			path := filepath.Join(registry.Root(), agentPairProfilesFile)
@@ -165,7 +165,7 @@ func TestAgentPairProfilesFailClosedWithoutOverwritingDamagedFile(t *testing.T) 
 			t.Fatal(err)
 		}
 		external := filepath.Join(t.TempDir(), "external.json")
-		if err := os.WriteFile(external, []byte(`{"schema":1,"profiles":[]}`), 0o600); err != nil {
+		if err := os.WriteFile(external, []byte(`{"schema":2,"profiles":[]}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Symlink(external, path); err != nil {
@@ -242,7 +242,7 @@ func TestManagementAgentPairProfileCRUDAndCreation(t *testing.T) {
 		if override != "explicit-agents" && !reflect.DeepEqual(room.Agents, input.Agents) {
 			t.Fatalf("%s = %#v", override, room.Agents)
 		}
-		if override == "explicit-agents" && room.Agents[model.ActorClaude].Model == "planner" {
+		if override == "explicit-agents" && room.Agents[model.ActorSlot1].Model == "planner" {
 			t.Fatal("default overrode explicit selections")
 		}
 	}
@@ -314,12 +314,12 @@ func TestManagementAgentPairProfilesRevalidateProvidersAtCreation(t *testing.T) 
 		t.Fatal(err)
 	}
 	input := pairProfileInput("Offline Provider")
-	selection := input.Agents[model.ActorCodex]
+	selection := input.Agents[model.ActorSlot2]
 	selection.Provider = model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "codex", ProfileID: "removed"}
-	input.Agents[model.ActorCodex] = selection
+	input.Agents[model.ActorSlot2] = selection
 	pairProfileRequest(t, server, "POST", agentPairProfilesPath, input, 201)
 	response := httptest.NewRecorder()
-	server.Handler().ServeHTTP(response, managementRequest("POST", "/api/v1/projects/"+project.ID+"/rooms", `{"bindings":{"claude":{"mode":"new"},"codex":{"mode":"new"}}}`, true))
+	server.Handler().ServeHTTP(response, managementRequest("POST", "/api/v1/projects/"+project.ID+"/rooms", `{"bindings":{"slot1":{"mode":"new"},"slot2":{"mode":"new"}}}`, true))
 	if response.Code < 400 {
 		t.Fatalf("stale Provider was accepted: %s", response.Body.String())
 	}
@@ -332,7 +332,7 @@ func TestAgentPairProfileLimitAndIndependentExplicitRoomSelection(t *testing.T) 
 	ctx := context.Background()
 	registry, project := testRegistry(t, testGitRepo(t))
 	input := pairProfileInput("Replacement")
-	catalog := AgentPairProfileCatalog{Schema: 1, Profiles: make([]AgentPairProfile, maxAgentPairProfiles)}
+	catalog := AgentPairProfileCatalog{Schema: 2, Profiles: make([]AgentPairProfile, maxAgentPairProfiles)}
 	for i := range catalog.Profiles {
 		catalog.Profiles[i] = AgentPairProfile{ID: fmt.Sprintf("pair-%d", i), Name: fmt.Sprintf("Pair %d", i), Agents: input.Agents}
 	}

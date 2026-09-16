@@ -158,7 +158,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     await frame.locator('#message-input').fill(text)
                     await frame.locator('#send-button').click()
                     snapshot = await wait_snapshot(context, snapshot_url, lambda s:
-                        {'claude','codex'}.issubset({m['from'] for m in s['messages']})
+                        {'slot1','slot2'}.issubset({m['from'] for m in s['messages']})
                         and all(v not in ('waiting','working') for m in s['messages'] for v in m.get('processing',{}).values()))
                     for message in snapshot['messages']:
                         await expect(frame.locator(f'[data-message-id="{message["id"]}"]')).to_be_visible()
@@ -173,8 +173,8 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     await frame.locator('#save-settings').click()
                     await expect(frame.locator('#settings-status')).to_have_text('')
                     assert (await read_json(context,snapshot_url))['settings']['stall_warning_seconds'] == 600
-                    await frame.locator('[data-permission-actor="codex"]').select_option('read-only')
-                    snapshot = await wait_snapshot(context,snapshot_url,lambda s:s['participants']['codex']['permission_profile']=='read-only')
+                    await frame.locator('[data-permission-actor="slot2"]').select_option('read-only')
+                    snapshot = await wait_snapshot(context,snapshot_url,lambda s:s['participants']['slot2']['permission_profile']=='read-only')
                     assert snapshot['meta']['collaboration']['instructions'] == instructions
                     assert {a:p['session_id'] for a,p in snapshot['participants'].items()} == identities
                     await page.screenshot(path=str(artifacts/'service-live-room.png'))
@@ -190,7 +190,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     headers = {'X-PairRoom-CSRF':csrf}
                     # Real second Room; provisioning does not invoke a model.
                     created_second = await context.request.post(origin+f'/api/v1/projects/{room["project_id"]}/rooms', headers=headers,
-                        data={'name':'Second workspace','bindings':{'claude':{'mode':'new'},'codex':{'mode':'new'}}})
+                        data={'name':'Second workspace','bindings':{'slot1':{'mode':'new'},'slot2':{'mode':'new'}}})
                     assert created_second.status == 201
                     second_id = (await created_second.json())['id']
                     move={'kind':'room','id':second_id,'target_id':room_id,'position':'before'}
@@ -222,7 +222,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     assert recovered['meta']['name'] == 'Verified HTTP workspace'
                     assert recovered['meta']['collaboration']['instructions'] == instructions
                     assert recovered['settings']['stall_warning_seconds'] == 600
-                    assert recovered['participants']['codex']['permission_profile'] == 'read-only'
+                    assert recovered['participants']['slot2']['permission_profile'] == 'read-only'
                     assert {a:p['session_id'] for a,p in recovered['participants'].items()} == identities
                     assert [m['id'] for m in recovered['messages']] == [m['id'] for m in snapshot['messages']]
                     await expect(frame.locator('#stall-warning')).to_have_value('600')

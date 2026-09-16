@@ -132,8 +132,8 @@ func Load(path string) (File, error) {
 		actor model.ActorID
 		agent *Agent
 	}{
-		{"claude", model.ActorClaude, &cfg.Claude},
-		{"codex", model.ActorCodex, &cfg.Codex},
+		{"claude", model.ActorSlot1, &cfg.Claude},
+		{"codex", model.ActorSlot2, &cfg.Codex},
 	} {
 		if value, ok := raw[entry.key]; ok {
 			fields, err := configObject(value)
@@ -287,8 +287,8 @@ func (c *File) applyDefaults() {
 
 func (c File) DefaultSelections() map[model.ActorID]model.AgentSelection {
 	return map[model.ActorID]model.AgentSelection{
-		model.ActorClaude: c.Claude.Selection(model.ActorClaude),
-		model.ActorCodex:  c.Codex.Selection(model.ActorCodex),
+		model.ActorSlot1: c.Claude.Selection(model.ActorSlot1),
+		model.ActorSlot2: c.Codex.Selection(model.ActorSlot2),
 	}
 }
 
@@ -320,8 +320,8 @@ func (c File) Validate() error {
 		actor     model.ActorID
 		selection model.AgentSelection
 	}{
-		{model.ActorClaude, c.Claude.Selection(model.ActorClaude)},
-		{model.ActorCodex, c.Codex.Selection(model.ActorCodex)},
+		{model.ActorSlot1, c.Claude.Selection(model.ActorSlot1)},
+		{model.ActorSlot2, c.Codex.Selection(model.ActorSlot2)},
 	} {
 		if err := entry.selection.Validate(entry.actor); err != nil {
 			return fmt.Errorf("%s default: %w", model.SlotLabel(entry.actor), err)

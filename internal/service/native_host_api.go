@@ -41,7 +41,7 @@ func (s *ManagementServer) bindNative(w http.ResponseWriter, r *http.Request) {
 	if decodeNativeJSON(w, r, &req) != nil {
 		return
 	}
-	slot := model.ActorID(r.PathValue("slot"))
+	slot := canonicalInputSlot(model.ActorID(r.PathValue("slot")))
 	if !slot.ValidParticipant() {
 		writeManagementError(w, 400, "invalid slot")
 		return
@@ -69,7 +69,12 @@ func (s *ManagementServer) unbindNative(w http.ResponseWriter, r *http.Request) 
 	}
 	release := runtime.acquire()
 	defer release()
-	nativeResult(w, map[string]bool{"unbound": true}, runtime.engine.Unbind(model.ActorID(r.PathValue("slot"))))
+	slot := canonicalInputSlot(model.ActorID(r.PathValue("slot")))
+	if !slot.ValidParticipant() {
+		writeManagementError(w, 400, "invalid slot")
+		return
+	}
+	nativeResult(w, map[string]bool{"unbound": true}, runtime.engine.Unbind(slot))
 }
 
 func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +84,12 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 		nativeResult(w, nil, relay.ErrAuth)
 		return
 	}
-	auth, err := parseRelayAuth(r, model.ActorID(r.PathValue("slot")))
+	slot := canonicalInputSlot(model.ActorID(r.PathValue("slot")))
+	if !slot.ValidParticipant() {
+		nativeResult(w, nil, relay.ErrAuth)
+		return
+	}
+	auth, err := parseRelayAuth(r, slot)
 	if err != nil {
 		nativeResult(w, nil, relay.ErrAuth)
 		return

@@ -1107,8 +1107,8 @@
     // name, the current mention handle, and the short Room ID — all already
     // visible in this row — so it survives only as the group tooltip.
     const meta = node('div', { className: 'room-meta' },
-      roomAgentGroup('claude', room),
-      roomAgentGroup('codex', room),
+      roomAgentGroup('slot1', room),
+      roomAgentGroup('slot2', room),
       node('div', { className: 'room-meta-group room-id-group' },
         node('span', { className: 'room-meta-label', textContent: t('room.roomId') }),
         node('code', { className: 'room-meta-value', textContent: room.id, title: room.id })),
@@ -1116,7 +1116,7 @@
     if (runtime.last_error) meta.append(node('span', { className: 'badge danger plain room-meta-error', textContent: truncate(runtime.last_error, 90), title: runtime.last_error }));
 
     const actions = node('div', { className: 'room-actions' });
-    if (runtime.phase === 'failed' && room.agents?.claude && room.agents?.codex) actions.append(actionButton(t('diagnostics.title'), () => navigate(`#/settings/diagnostics/${encodeURIComponent(room.id)}`), 'secondary-button compact-button room-action-control'));
+    if (runtime.phase === 'failed' && room.agents?.slot1 && room.agents?.slot2) actions.append(actionButton(t('diagnostics.title'), () => navigate(`#/settings/diagnostics/${encodeURIComponent(room.id)}`), 'secondary-button compact-button room-action-control'));
     if (state.snapshot?.capabilities?.room_deletion) {
       actions.append(
         node('label', {
@@ -1159,7 +1159,7 @@
       binding?.session_id || bindingText(binding),
     ].filter(Boolean).join('\n');
     return node('div', { className: 'room-meta-group', 'data-slot': actor, title },
-      node('span', { className: 'room-meta-label', textContent: actor === 'claude' ? t('agent.agent1') : t('agent.agent2') }),
+      node('span', { className: 'room-meta-label', textContent: actor === 'slot1' ? t('agent.agent1') : t('agent.agent2') }),
       node('div', { className: 'room-meta-lines' },
         node('span', { className: 'room-meta-line', textContent: runtimeDisplayName(selection?.runtime) }),
         node('span', { className: `badge plain binding-chip ${bindingTone(binding)}`.trim(), textContent: bindingText(binding) }),
@@ -1243,7 +1243,7 @@
     models.forEach(({ room, project, runtime }) => {
       const actionCell = node('div', { className: 'runtime-actions' });
       const cleanupUncertain = runtime.phase === 'failed' && runtime.occupies_capacity;
-      if (room.agents?.claude && room.agents?.codex) actionCell.append(actionButton(t('diagnostics.title'), () => navigate(`#/settings/diagnostics/${encodeURIComponent(room.id)}`), 'secondary-button compact-button'));
+      if (room.agents?.slot1 && room.agents?.slot2) actionCell.append(actionButton(t('diagnostics.title'), () => navigate(`#/settings/diagnostics/${encodeURIComponent(room.id)}`), 'secondary-button compact-button'));
       if (room.lifecycle !== 'archived') {
         actionCell.append(actionButton(
           cleanupUncertain ? t("ui.requiresControlledRestart") : (runtime.phase === 'active' ? t("ui.open") : t("ui.activate")),
@@ -1800,7 +1800,7 @@
     const catalog = state.agentPairProfiles;
     const rows = (catalog?.profiles || []).map((profile) => {
       const isDefault = profile.id === catalog.default_profile_id;
-      const summary = ['claude', 'codex'].map((actor) => {
+      const summary = ['slot1', 'slot2'].map((actor) => {
         const agent = profile.agents[actor];
         return [agent.runtime, agent.model || t('common.inherit'), agent.effort].filter(Boolean).join(' · ');
       }).join(' / ');
@@ -1852,7 +1852,7 @@
     const profile = state.agentPairProfiles?.profiles.find((entry) => entry.id === id);
     if (id && !profile) throw new Error(t('agent.pairProfile.notFound'));
     state.pairProfileID = id;
-    for (const actor of ['claude', 'codex']) populateAgentControls(actor, (profile?.agents || state.agentCatalog?.defaults)?.[actor]);
+    for (const actor of ['slot1', 'slot2']) populateAgentControls(actor, (profile?.agents || state.agentCatalog?.defaults)?.[actor]);
     $('pair-profile-name').value = profile?.name || '';
     $('pair-profile-default').checked = Boolean(id && id === state.agentPairProfiles?.default_profile_id);
     $('pair-profile-update').disabled = !id;
@@ -1873,7 +1873,7 @@
     const revision = state.roomDialogRevision;
     const editor = state.pairProfileMode;
     const input = { name: name.trim(), is_default: $('pair-profile-default').checked,
-      agents: { claude: readAgentSelection('claude'), codex: readAgentSelection('codex') } };
+      agents: { slot1: readAgentSelection('slot1'), slot2: readAgentSelection('slot2') } };
     if (state.pairProfileBusy) return;
     const buttons = ['pair-profile-save-new', 'pair-profile-update', 'room-submit'];
     buttons.forEach((key) => { $(key).disabled = true; });
@@ -2012,7 +2012,7 @@
 	  textContent: `${entry.display_name}${entry.available ? '' : ` — ${t('agent.unavailable')}`}`,
 	  disabled: !entry.available,
 	})));
-    setAgentSelectValue(runtime, selection?.runtime || (actor === 'claude' ? 'claude' : 'codex'));
+    setAgentSelectValue(runtime, selection?.runtime || (actor === 'slot1' ? 'claude' : 'codex'));
     runtime.setCustomValidity(runtimeCatalogEntry(runtime.value)?.available ? '' : t('agent.unavailable'));
 	const runtimeEntry = runtimeCatalogEntry(runtime.value);
 	const diagnostic = $(`${actor}-runtime-diagnostic`);
@@ -2072,10 +2072,10 @@
     $('pair-profile-save-new').disabled = true;
     $('pair-profile-update').disabled = true;
     syncCollaborationControls();
-    document.querySelector('input[name="claude-mode"][value="new"]').checked = true;
-    document.querySelector('input[name="codex-mode"][value="new"]').checked = true;
-    $('claude-session-id').value = '';
-    $('codex-session-id').value = '';
+    document.querySelector('input[name="slot1-mode"][value="new"]').checked = true;
+    document.querySelector('input[name="slot2-mode"][value="new"]').checked = true;
+    $('slot1-session-id').value = '';
+    $('slot2-session-id').value = '';
     syncBindingInputs();
     hideFormError('room-form-error');
     setRenderedText('room-dialog-title', editor ? t(profileID ? 'agent.pairProfile.edit' : 'agent.pairProfile.new')
@@ -2115,8 +2115,8 @@
     $('room-collaboration-instructions').required = custom;
     $('collaboration-help').textContent = t(custom ? 'room.collaboration.customHelp' : 'room.collaboration.defaultHelp');
     $('collaboration-default-instructions').textContent = state.agentCatalog?.collaboration_default?.instructions || t('room.collaboration.defaultHelp');
-    setRenderedText('claude-responsibility-label', custom ? t('agent.agent1') : t('room.collaboration.leadSlot'));
-    setRenderedText('codex-responsibility-label', custom ? t('agent.agent2') : t('room.collaboration.executorSlot'));
+    setRenderedText('slot1-responsibility-label', custom ? t('agent.agent1') : t('room.collaboration.leadSlot'));
+    setRenderedText('slot2-responsibility-label', custom ? t('agent.agent2') : t('room.collaboration.executorSlot'));
   }
 
   function nativeCreation() { return !state.pairProfileMode && $('room-host-mode').value === 'native'; }
@@ -2125,19 +2125,19 @@
     $('room-native-help').hidden = !native;
     const warning = document.querySelector('[data-i18n="room.collaboration.yoloWarning"]');
     if (warning) warning.hidden = native || state.pairProfileMode;
-    for (const actor of ['claude', 'codex']) {
+    for (const actor of ['slot1', 'slot2']) {
       if (native) document.querySelector(`input[name="${actor}-mode"][value="new"]`).checked = true;
       document.querySelectorAll(`input[name="${actor}-mode"]`).forEach(input => { input.disabled = native; });
       const select = $(`${actor}-runtime`);
       for (const option of select.options) option.disabled = native ? !['claude', 'codex', 'grok'].includes(option.value) : !runtimeCatalogEntry(option.value)?.available;
-      if (native && !['claude', 'codex', 'grok'].includes(select.value)) select.value = actor;
+      if (native && !['claude', 'codex', 'grok'].includes(select.value)) select.value = actor === 'slot1' ? 'claude' : 'codex';
       select.setCustomValidity(native || runtimeCatalogEntry(select.value)?.available ? '' : t('agent.unavailable'));
     }
     syncBindingInputs();
   }
 
   function syncBindingInputs() {
-    ['claude', 'codex'].forEach((actor) => {
+    ['slot1', 'slot2'].forEach((actor) => {
       const mode = document.querySelector(`input[name="${actor}-mode"]:checked`)?.value || 'new';
       const input = $(`${actor}-session-id`);
       input.disabled = mode !== 'existing';
@@ -2163,7 +2163,7 @@
     }
     const collaboration = { mode, ...(mode === 'custom' ? { instructions } : {}) };
     const bindings = {};
-    for (const actor of ['claude', 'codex']) {
+    for (const actor of ['slot1', 'slot2']) {
       if (!nativeCreation() && (!$(`${actor}-runtime`).reportValidity() || !$(`${actor}-provider`).reportValidity())) return;
       if (nativeCreation() && !['claude', 'codex', 'grok'].includes($(`${actor}-runtime`).value)) { showFormError('room-form-error', t('ui.native.supported')); return; }
       const mode = document.querySelector(`input[name="${actor}-mode"]:checked`)?.value || 'new';
@@ -2174,7 +2174,7 @@
       }
 	  bindings[actor] = mode === 'existing' ? { mode, session_id: sessionID } : { mode };
 	}
-	const agents = { claude: readAgentSelection('claude'), codex: readAgentSelection('codex') };
+	const agents = { slot1: readAgentSelection('slot1'), slot2: readAgentSelection('slot2') };
     await withBusy($('room-submit'), async () => {
       try {
         hideFormError('room-form-error');
@@ -3012,7 +3012,7 @@
     });
   });
   document.querySelectorAll('input[name$="-mode"]').forEach((input) => input.addEventListener('change', syncBindingInputs));
-  for (const actor of ['claude', 'codex']) {
+  for (const actor of ['slot1', 'slot2']) {
     $(`${actor}-runtime`).addEventListener('change', () => {
       const entry = runtimeCatalogEntry($(`${actor}-runtime`).value);
       $(`${actor}-runtime`).setCustomValidity(entry?.available ? '' : t('agent.unavailable'));
@@ -3035,8 +3035,8 @@
         const [catalog, profiles] = await Promise.all([loadAgentCatalog(true), wasReady ? null : loadAgentPairProfiles(true)]);
         if (revision !== state.roomDialogRevision || !$('room-dialog').open || !state.authenticated) return;
         if (wasReady) {
-          const current = { claude: readAgentSelection('claude'), codex: readAgentSelection('codex') };
-          for (const actor of ['claude', 'codex']) populateAgentControls(actor, current[actor] || catalog.defaults?.[actor]);
+          const current = { slot1: readAgentSelection('slot1'), slot2: readAgentSelection('slot2') };
+          for (const actor of ['slot1', 'slot2']) populateAgentControls(actor, current[actor] || catalog.defaults?.[actor]);
         } else {
           const id = state.pairProfileMode ? state.pairProfileID : (profiles.default_profile_id || '');
           populatePairProfilePicker(id);

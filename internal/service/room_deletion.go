@@ -734,81 +734,12 @@ func (r *Registry) restoreDeletionEntry(state inspectedDeletionEntry) error {
 }
 
 func (r *Registry) trustedCheckpointRooms() (map[string]Room, bool, string) {
-	data, err := os.ReadFile(r.checkpoint)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, false, "service registry checkpoint is missing"
-	}
+	_, rooms, exists, err := r.validatedCheckpoint()
 	if err != nil {
-		return nil, false, fmt.Sprintf("read service registry checkpoint: %v", err)
+		return nil, false, err.Error()
 	}
-	var snapshot RegistrySnapshot
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&snapshot); err != nil {
-		return nil, false, fmt.Sprintf("decode service registry checkpoint: %v", err)
-	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return nil, false, "service registry checkpoint contains trailing JSON"
-	}
-	if snapshot.Schema != 2 {
-		return nil, false, fmt.Sprintf("unsupported service registry checkpoint schema %d", snapshot.Schema)
-	}
-
-	projects := make(map[string]Project, len(snapshot.Projects))
-	projectRoots := make(map[string]string, len(snapshot.Projects))
-	for _, project := range snapshot.Projects {
-		root := strings.TrimSpace(project.Root)
-		if strings.TrimSpace(project.ID) == "" || root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root || project.ID != projectID(root) {
-			return nil, false, fmt.Sprintf("checkpoint Project %q has an invalid identity", project.ID)
-		}
-		if _, duplicate := projects[project.ID]; duplicate {
-			return nil, false, fmt.Sprintf("checkpoint contains duplicate Project %s", project.ID)
-		}
-		if owner, duplicate := projectRoots[root]; duplicate && owner != project.ID {
-			return nil, false, fmt.Sprintf("checkpoint Project root %s has multiple identities", root)
-		}
-		projects[project.ID] = project
-		projectRoots[root] = project.ID
-	}
-
-	rooms := make(map[string]Room, len(snapshot.Rooms))
-	dataDirs := make(map[string]string, len(snapshot.Rooms))
-	bindingOwners := make(map[string]string)
-	for _, room := range snapshot.Rooms {
-		if err := room.Validate(); err != nil {
-			return nil, false, fmt.Sprintf("checkpoint Room %q is invalid: %v", room.ID, err)
-		}
-		if _, ok := projects[room.ProjectID]; !ok {
-			return nil, false, fmt.Sprintf("checkpoint Room %s references unknown Project %s", room.ID, room.ProjectID)
-		}
-		if _, duplicate := rooms[room.ID]; duplicate {
-			return nil, false, fmt.Sprintf("checkpoint contains duplicate Room %s", room.ID)
-		}
-		dir := strings.TrimSpace(room.DataDir)
-		if dir == "" || !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
-			return nil, false, fmt.Sprintf("checkpoint Room %s has an invalid data directory", room.ID)
-		}
-		if owner, duplicate := dataDirs[dir]; duplicate && owner != room.ID {
-			return nil, false, fmt.Sprintf("checkpoint data directory %s belongs to multiple Rooms", dir)
-		}
-		relative, relErr := filepath.Rel(r.roomsRoot, dir)
-		if relErr != nil || filepath.Dir(relative) != "." || validateManagedRoomSourceBase(relative) != nil {
-			return nil, false, fmt.Sprintf("checkpoint Room %s has an invalid managed data directory %s", room.ID, dir)
-		}
-		for _, binding := range room.Bindings {
-			if !binding.OwnsIdentity() {
-				continue
-			}
-			key := binding.Key().String()
-			if owner, duplicate := bindingOwners[key]; duplicate && owner != room.ID {
-				return nil, false, fmt.Sprintf("checkpoint binding %s session %q belongs to multiple Rooms", binding.Agent, binding.SessionID)
-			}
-			bindingOwners[key] = room.ID
-		}
-		room.DataDir = dir
-		rooms[room.ID] = cloneRoom(room)
-		dataDirs[dir] = room.ID
+	if !exists {
+		return nil, false, "service registry checkpoint is missing"
 	}
 	return rooms, true, ""
 }

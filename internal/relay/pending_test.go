@@ -12,8 +12,8 @@ import (
 
 func TestHookReadinessNeverClaimsOrCopiesInbox(t *testing.T) {
 	e, a, _ := testEngine(t)
-	receiver := a[model.ActorCodex]
-	m, err := e.Send(a[model.ActorClaude], SendRequest{ID: "large", Text: strings.Repeat("界", 12000)})
+	receiver := a[model.ActorSlot2]
+	m, err := e.Send(a[model.ActorSlot1], SendRequest{ID: "large", Text: strings.Repeat("界", 12000)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestHookReadinessNeverClaimsOrCopiesInbox(t *testing.T) {
 	if err != nil || claim.ID != m.ID || !strings.Contains(claim.Envelope, m.Text) {
 		t.Fatal("foreground lost original message")
 	}
-	_, err = e.Send(a[model.ActorClaude], SendRequest{ID: "next", Text: "next"})
+	_, err = e.Send(a[model.ActorSlot1], SendRequest{ID: "next", Text: "next"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestHookReadinessNeverClaimsOrCopiesInbox(t *testing.T) {
 
 func TestHookReadinessHonorsDisabledParkCancellationAndRevocation(t *testing.T) {
 	e, a, _ := testEngine(t)
-	receiver := a[model.ActorCodex]
+	receiver := a[model.ActorSlot2]
 	if err := e.Park(receiver.Slot, false); err != nil {
 		t.Fatal(err)
 	}
@@ -80,13 +80,13 @@ func TestHookReadinessWakesWithoutPublicationOrClaim(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		ready, err := e.WaitForPending(ctx, a[model.ActorCodex])
+		ready, err := e.WaitForPending(ctx, a[model.ActorSlot2])
 		if err == nil && !ready {
 			err = errors.New("missing readiness")
 		}
 		done <- err
 	}()
-	if _, err := e.Send(a[model.ActorClaude], SendRequest{ID: "new", Text: "new input"}); err != nil {
+	if _, err := e.Send(a[model.ActorSlot1], SendRequest{ID: "new", Text: "new input"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-done; err != nil {

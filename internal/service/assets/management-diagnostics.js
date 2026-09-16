@@ -4,7 +4,7 @@
   // Deliberately no automatic probes, persistence, or native-session access.
   window.PairRoomDiagnostics = { create({ t, node, actionButton, api, confirm, navigate }) {
     let host, snapshot, roomID = '', report = null, controller = null, revision = 0, error = '';
-    let actor = 'claude';
+    let actor = 'slot1';
     const codes = new Set(['cleanup_failed', 'installed', 'cli_unavailable', 'timeout', 'started', 'responded', 'not_checked', 'workspace_unavailable', 'startup_failed', 'response_failed', 'output_limit', 'interaction_required', 'unexpected_response', 'cancelled', 'authentication_failed', 'quota_or_rate_limit', 'model_unavailable', 'network_failed', 'profile_unavailable', 'application_unavailable', 'application_available', 'registry_unhealthy', 'registry_healthy', 'storage_writable', 'storage_unwritable', 'git_unavailable', 'git_available', 'project_unavailable', 'projects_available', 'room_failed', 'rooms_healthy', 'capacity_queued', 'capacity_available', 'resolver_unavailable', 'provider_unavailable', 'selection_valid', 'mock']);
     const ids = new Set(['cleanup', 'installation', 'startup', 'response', 'selection', 'application', 'registry', 'storage', 'git', 'projects', 'rooms', 'capacity']);
     const statuses = new Set(['pass', 'warn', 'fail', 'skipped']);
@@ -21,7 +21,7 @@
           if (!ids.has(check.id) || !statuses.has(check.status) || !codes.has(check.code)) throw new Error('invalid_report');
           const clean = { id: check.id, status: check.status, code: check.code, duration_ms: Math.max(0, Math.min(120000, Number(check.duration_ms) || 0)) };
           if (runtimes.has(check.runtime)) clean.runtime = check.runtime;
-          if (['claude', 'codex'].includes(check.actor)) clean.actor = check.actor;
+          if (['slot1', 'slot2'].includes(check.actor)) clean.actor = check.actor;
           if (/^\d+\.\d+\.\d+$/.test(check.version || '')) clean.version = check.version;
           return clean;
         }),
@@ -35,11 +35,11 @@
       const room = snapshot.rooms?.find((value) => value.id === roomID);
       const scopeSelect = node('select', { id: 'diagnostic-scope', disabled: busy, onChange: (event) => navigate(event.target.value ? `#/settings/diagnostics/${encodeURIComponent(event.target.value)}` : '#/settings/diagnostics') },
         node('option', { value: '', textContent: t('diagnostics.defaultPair') }),
-        ...(snapshot.rooms || []).filter((item) => item.agents?.claude && item.agents?.codex).map((item) => node('option', { value: item.id, textContent: item.name }))
+        ...(snapshot.rooms || []).filter((item) => item.agents?.slot1 && item.agents?.slot2).map((item) => node('option', { value: item.id, textContent: item.name }))
       );
       scopeSelect.value = roomID;
       const actorSelect = node('select', { id: 'diagnostic-actor', disabled: busy, onChange: (event) => { actor = event.target.value; } },
-        ...['claude', 'codex'].map((id, index) => node('option', { value: id, textContent: `${t(index ? 'agent.agent2' : 'agent.agent1')}${room?.agents?.[id]?.runtime ? ` · ${room.agents[id].runtime}` : ''}` }))
+        ...['slot1', 'slot2'].map((id, index) => node('option', { value: id, textContent: `${t(index ? 'agent.agent2' : 'agent.agent1')}${room?.agents?.[id]?.runtime ? ` · ${room.agents[id].runtime}` : ''}` }))
       );
       actorSelect.value = actor;
       const live = actionButton(t('diagnostics.testRuntime'), () => {
@@ -54,7 +54,7 @@
           // page owns progress and cancellation, not a modal spinner.
           action: () => { if (confirmedScope === roomID && confirmedRevision === revision) void run('runtime', selectedActor); },
         });
-      }, 'primary-button', busy || Boolean(roomID && !room?.agents?.claude));
+      }, 'primary-button', busy || Boolean(roomID && !room?.agents?.slot1));
       live.id = 'diagnostic-live';
       const environment = actionButton(t('diagnostics.checkEnvironment'), () => run('environment'), 'secondary-button', busy);
       environment.id = 'diagnostic-environment';
@@ -85,7 +85,7 @@
           node('div', { className: 'diagnostic-checks' }, ...report.checks.map((check) => node('article', { className: 'diagnostic-check', 'data-diagnostic-code': check.code },
             node('span', { className: `diagnostic-indicator ${check.status}`, 'aria-hidden': 'true', textContent: ({ pass: '✓', warn: '!', fail: '×', skipped: '—' })[check.status] }),
             node('div', { className: 'diagnostic-check-copy' },
-              node('div', { className: 'diagnostic-check-title' }, node('strong', { textContent: [check.runtime, check.actor ? t(check.actor === 'claude' ? 'agent.agent1' : 'agent.agent2') : '', t(`diagnostics.check.${check.id}`)].filter(Boolean).join(' · ') }), node('span', { className: 'badge plain', textContent: t(`diagnostics.status.${check.status}`) })),
+              node('div', { className: 'diagnostic-check-title' }, node('strong', { textContent: [check.runtime, check.actor ? t(check.actor === 'slot1' ? 'agent.agent1' : 'agent.agent2') : '', t(`diagnostics.check.${check.id}`)].filter(Boolean).join(' · ') }), node('span', { className: 'badge plain', textContent: t(`diagnostics.status.${check.status}`) })),
               node('p', { textContent: t(`diagnostics.code.${check.code}`) }),
               node('p', { className: 'muted diagnostic-remedy', textContent: t(`diagnostics.help.${check.code}`) })
             ),

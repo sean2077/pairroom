@@ -6,8 +6,8 @@ import (
 )
 
 // RuntimeKind selects the native coding-agent CLI bound to a Room slot.
-// ActorID remains the durable slot identity (claude = Agent 1, codex = Agent 2)
-// so existing Event Logs and Bindings stay valid when a slot switches runtime.
+// ActorID remains the durable slot identity (slot1 = Agent 1, slot2 = Agent 2)
+// when a slot switches runtime.
 type RuntimeKind string
 
 const (
@@ -47,7 +47,7 @@ func (k RuntimeKind) Canonical() RuntimeKind {
 func (k RuntimeKind) CanonicalForSlot(actor ActorID) RuntimeKind {
 	if strings.TrimSpace(string(k)) == "" {
 		switch actor {
-		case ActorCodex:
+		case ActorSlot2:
 			return RuntimeCodex
 		default:
 			return RuntimeClaude
@@ -91,9 +91,9 @@ func (k RuntimeKind) ProviderAgentType() string {
 
 func SlotLabel(actor ActorID) string {
 	switch actor {
-	case ActorClaude:
+	case ActorSlot1:
 		return "Agent 1"
-	case ActorCodex:
+	case ActorSlot2:
 		return "Agent 2"
 	default:
 		return actor.DisplayName()
@@ -101,7 +101,7 @@ func SlotLabel(actor ActorID) string {
 }
 
 func SlotActors() []ActorID {
-	return []ActorID{ActorClaude, ActorCodex}
+	return []ActorID{ActorSlot1, ActorSlot2}
 }
 
 type ParticipantIdentity struct {

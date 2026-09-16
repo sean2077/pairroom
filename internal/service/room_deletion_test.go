@@ -32,8 +32,8 @@ func (p roomDeletionTestProvisioner) Provision(_ context.Context, _ Project, act
 
 func roomDeletionTestSpecs() map[model.ActorID]BindingSpec {
 	return map[model.ActorID]BindingSpec{
-		model.ActorClaude: {Mode: BindingNew},
-		model.ActorCodex:  {Mode: BindingNew},
+		model.ActorSlot1: {Mode: BindingNew},
+		model.ActorSlot2: {Mode: BindingNew},
 	}
 }
 
@@ -749,6 +749,46 @@ func stageRoomDeletionCrash(t *testing.T, registry *Registry, room Room) *staged
 	return staged
 }
 
+func TestRetiredCheckpointPreflightLeavesPreparedDeletionUntouched(t *testing.T) {
+	ctx := context.Background()
+	registry, _, room := roomDeletionTestRegistry(t, "retired-checkpoint")
+	archived, err := registry.ArchiveRoom(ctx, room.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged := stageRoomDeletionCrash(t, registry, archived)
+	checkpointPath := filepath.Join(registry.Root(), "service-registry.json")
+	data, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot RegistrySnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Schema = 2
+	retiredCheckpoint := mustJSON(t, snapshot)
+	if err := os.WriteFile(checkpointPath, retiredCheckpoint, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	preparedEvents, err := os.ReadFile(filepath.Join(staged.data, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenRegistry(ctx, RegistryConfig{Root: registry.Root()}); err == nil || !strings.Contains(err.Error(), "retired Service data root") {
+		t.Fatalf("retired checkpoint reached recovery: %v", err)
+	}
+	if after, err := os.ReadFile(checkpointPath); err != nil || !bytes.Equal(after, retiredCheckpoint) {
+		t.Fatalf("retired checkpoint was rewritten: %v", err)
+	}
+	if after, err := os.ReadFile(filepath.Join(staged.data, "events.jsonl")); err != nil || !bytes.Equal(after, preparedEvents) {
+		t.Fatalf("prepared deletion was replayed or repaired: %v", err)
+	}
+	if _, err := os.Stat(staged.container); err != nil {
+		t.Fatalf("prepared deletion container was mutated: %v", err)
+	}
+}
+
 func commitRoomRemovalCheckpointForTest(t *testing.T, registry *Registry, room Room) {
 	t.Helper()
 	registry.mu.Lock()
@@ -837,15 +877,11 @@ func TestOpenRegistryHonorsCommittedMarkerWhenCheckpointBecomesCorrupt(t *testin
 		t.Fatal(err)
 	}
 
-	reopened, err := OpenRegistry(ctx, RegistryConfig{Root: registry.Root()})
-	if err != nil {
-		t.Fatal(err)
+	if _, err := OpenRegistry(ctx, RegistryConfig{Root: registry.Root()}); err == nil || !strings.Contains(err.Error(), "inspect Service registry checkpoint before recovery") {
+		t.Fatalf("corrupt root was recovered or rewritten: %v", err)
 	}
-	if _, ok := reopened.Room(room.ID); ok {
-		t.Fatal("committed marker allowed a Room to return after checkpoint corruption")
-	}
-	if _, err := os.Stat(staged.container); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("committed quarantine remained: %v", err)
+	if _, err := os.Stat(staged.container); err != nil {
+		t.Fatalf("corrupt root cleanup mutated quarantine: %v", err)
 	}
 }
 

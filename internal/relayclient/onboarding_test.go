@@ -18,8 +18,8 @@ import (
 
 func TestNormalizeSlot(t *testing.T) {
 	cases := map[string]string{
-		"1": "claude", "agent1": "claude", "AGENT1": "claude", " claude ": "claude",
-		"2": "codex", "agent2": "codex", "codex": "codex",
+		"1": "slot1", "agent1": "slot1", "AGENT1": "slot1", " claude ": "slot1",
+		"2": "slot2", "agent2": "slot2", "codex": "slot2",
 		"3": "3", "": "", "grok": "grok",
 	}
 	for in, want := range cases {
@@ -68,22 +68,22 @@ func TestResolveNativeRoomMultipleListsCandidates(t *testing.T) {
 
 func dualRuntimeRoom() serviceRoom {
 	return serviceRoom{ID: "r1", ProjectID: "p1", HostMode: model.HostNative, Agents: map[model.ActorID]model.AgentSelection{
-		model.ActorClaude: {Runtime: model.RuntimeClaude},
-		model.ActorCodex:  {Runtime: model.RuntimeCodex},
+		model.ActorSlot1: {Runtime: model.RuntimeClaude},
+		model.ActorSlot2: {Runtime: model.RuntimeCodex},
 	}}
 }
 
 func TestResolveSlotForRoomUniqueRuntime(t *testing.T) {
 	slot, err := resolveSlotForRoom(dualRuntimeRoom(), model.RuntimeCodex)
-	if err != nil || slot != model.ActorCodex {
+	if err != nil || slot != model.ActorSlot2 {
 		t.Fatalf("slot = %q, err = %v", slot, err)
 	}
 }
 
 func TestResolveSlotForRoomSameRuntimeFailsClosed(t *testing.T) {
 	room := serviceRoom{ID: "r1", HostMode: model.HostNative, Agents: map[model.ActorID]model.AgentSelection{
-		model.ActorClaude: {Runtime: model.RuntimeClaude},
-		model.ActorCodex:  {Runtime: model.RuntimeClaude},
+		model.ActorSlot1: {Runtime: model.RuntimeClaude},
+		model.ActorSlot2: {Runtime: model.RuntimeClaude},
 	}}
 	_, err := resolveSlotForRoom(room, model.RuntimeClaude)
 	if err == nil || !strings.Contains(err.Error(), "--slot 1") || !strings.Contains(err.Error(), "--slot 2") {
@@ -101,11 +101,11 @@ func TestResolveSlotForRoomUnrecognizedCallerFailsClosed(t *testing.T) {
 func TestInferCreateSlot(t *testing.T) {
 	stubLineage(t, 4242, "claude", true)
 	slot, err := inferCreateSlot(options{})
-	if err != nil || slot != model.ActorClaude {
+	if err != nil || slot != model.ActorSlot1 {
 		t.Fatalf("slot = %q, err = %v", slot, err)
 	}
 	slot, err = inferCreateSlot(options{kind: "codex"})
-	if err != nil || slot != model.ActorCodex {
+	if err != nil || slot != model.ActorSlot2 {
 		t.Fatalf("explicit runtime slot = %q, err = %v", slot, err)
 	}
 	stubLineage(t, 0, "", false)
@@ -128,16 +128,16 @@ func TestBindZeroFlagResolvesRoomAndSlot(t *testing.T) {
 	mux.HandleFunc("GET /api/v1/service", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"projects": []any{map[string]string{"id": "p1", "root": root}},
-			"rooms":    []any{map[string]any{"id": "roomJ", "project_id": "p1", "host_mode": "native", "lifecycle": "active", "agents": map[string]any{"claude": map[string]string{"runtime": "claude"}, "codex": map[string]string{"runtime": "codex"}}}},
+			"rooms":    []any{map[string]any{"id": "roomJ", "project_id": "p1", "host_mode": "native", "lifecycle": "active", "agents": map[string]any{"slot1": map[string]string{"runtime": "claude"}, "slot2": map[string]string{"runtime": "codex"}}}},
 		})
 	})
-	mux.HandleFunc("POST /api/v1/rooms/roomJ/native-bindings/claude", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/v1/rooms/roomJ/native-bindings/slot1", func(w http.ResponseWriter, r *http.Request) {
 		var request relay.BindRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: request.BindID, Generation: 1, Slot: model.ActorClaude, Active: true, SessionID: request.SessionID}, "bootstrap": "b", "collaboration": "c"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: request.BindID, Generation: 1, Slot: model.ActorSlot1, Active: true, SessionID: request.SessionID}, "bootstrap": "b", "collaboration": "c"})
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -152,7 +152,7 @@ func TestBindZeroFlagResolvesRoomAndSlot(t *testing.T) {
 	if err := bind(context.Background(), root, options{endpoint: endpointPath}, &out); err != nil {
 		t.Fatalf("zero-flag bind: %v", err)
 	}
-	statePath := filepath.Join(root, ".pairroom", "rooms", "roomJ", "slots", "claude", "state.json")
+	statePath := filepath.Join(root, ".pairroom", "rooms", "roomJ", "slots", "slot1", "state.json")
 	data, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatalf("zero-flag bind must materialize the inferred slot state: %v", err)
@@ -202,12 +202,12 @@ func TestBindCreateResolvesSlotFromCreatedRoomSelections(t *testing.T) {
 	}
 	created := 0
 	mux := http.NewServeMux()
-	serveDefaultPairForTest(mux, map[model.ActorID]model.AgentSelection{model.ActorClaude: {Runtime: model.RuntimeCodex}, model.ActorCodex: {Runtime: model.RuntimeClaude}})
+	serveDefaultPairForTest(mux, map[model.ActorID]model.AgentSelection{model.ActorSlot1: {Runtime: model.RuntimeCodex}, model.ActorSlot2: {Runtime: model.RuntimeClaude}})
 	mux.HandleFunc("GET /api/v1/service", func(w http.ResponseWriter, r *http.Request) {
 		rooms := []any{}
 		for i := 1; i <= created; i++ {
 			rooms = append(rooms, map[string]any{"id": fmt.Sprintf("room%d", i), "project_id": "p1", "host_mode": "native", "lifecycle": "active",
-				"agents": map[string]any{"claude": map[string]string{"runtime": "codex"}, "codex": map[string]string{"runtime": "claude"}}})
+				"agents": map[string]any{"slot1": map[string]string{"runtime": "codex"}, "slot2": map[string]string{"runtime": "claude"}}})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"projects": []any{map[string]string{"id": "p1", "root": root}}, "rooms": rooms})
 	})
@@ -237,14 +237,14 @@ func TestBindCreateResolvesSlotFromCreatedRoomSelections(t *testing.T) {
 	if err := bind(context.Background(), root, options{create: true, endpoint: endpointPath}, &out); err != nil {
 		t.Fatalf("create bind against a swapped default pair: %v", err)
 	}
-	if bound != "claude" {
+	if bound != "slot1" {
 		t.Fatalf("a codex harness must bind the slot that runs codex, bound slot = %q", bound)
 	}
-	if _, err := os.Stat(filepath.Join(root, ".pairroom", "rooms", "room1", "slots", "claude", "state.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, ".pairroom", "rooms", "room1", "slots", "slot1", "state.json")); err != nil {
 		t.Fatalf("state was not materialized in the runtime-matched slot: %v", err)
 	}
 	var state State
-	if err := readPrivate(filepath.Join(root, ".pairroom", "rooms", "room1", "slots", "claude", "state.json"), &state); err != nil {
+	if err := readPrivate(filepath.Join(root, ".pairroom", "rooms", "room1", "slots", "slot1", "state.json"), &state); err != nil {
 		t.Fatal(err)
 	}
 	if state.Runtime != model.RuntimeCodex {

@@ -43,6 +43,7 @@ func (s *ManagementServer) runDiagnostics(w http.ResponseWriter, r *http.Request
 	if decodeManagementJSON(w, r, &request) != nil {
 		return
 	}
+	request.Actor = canonicalInputSlot(request.Actor)
 	if request.Mode != "environment" && request.Mode != "runtime" {
 		writeManagementError(w, http.StatusBadRequest, "mode must be environment or runtime")
 		return

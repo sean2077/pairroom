@@ -464,7 +464,7 @@ func TestCodexThreadRequestsUseDeveloperInstructions(t *testing.T) {
 		t.Fatalf("thread/resume threadId = %#v", got)
 	}
 	defaultAdapter := NewCodex(Config{}, func(model.RuntimeEvent) {})
-	if got := defaultAdapter.threadStartParams()["developerInstructions"]; got != prompt.BootstrapPrompt(model.ActorCodex) {
+	if got := defaultAdapter.threadStartParams()["developerInstructions"]; got != prompt.BootstrapPrompt(model.ActorSlot2) {
 		t.Fatalf("default developerInstructions = %#v", got)
 	}
 }

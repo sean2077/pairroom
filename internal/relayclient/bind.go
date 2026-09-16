@@ -25,6 +25,7 @@ type bindAttempt struct {
 }
 
 func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr error) {
+	o.slot = normalizeSlot(o.slot)
 	slot := model.ActorID(o.slot)
 	if o.slot != "" && !slot.ValidParticipant() {
 		return errors.New("bind requires --slot 1|2")
@@ -195,7 +196,7 @@ func prepareBindAttempt(dir, root, endpoint string, o options, slot model.ActorI
 	var pending bindAttempt
 	pendingErr := readPrivate(filepath.Join(dir, bindAttemptFile), &pending)
 	matches := pendingErr == nil && pending.State.SessionID == session
-	validPending := pending.State.Schema == 1 && pending.State.Room == o.room && pending.State.Slot == slot && pending.State.Runtime == kind && pending.State.Workspace == root && safePart(pending.State.BindID) && pending.Credentials.BindID == pending.State.BindID && pending.Credentials.Secret != ""
+	validPending := pending.State.Schema == 2 && pending.State.Room == o.room && pending.State.Slot == slot && pending.State.Runtime == kind && pending.State.Workspace == root && safePart(pending.State.BindID) && pending.Credentials.BindID == pending.State.BindID && pending.Credentials.Secret != ""
 	if matches && !validPending && !o.replace {
 		return bindAttempt{}, false, errors.New("invalid pending bind identity; inspect before explicitly replacing it")
 	}
@@ -206,7 +207,7 @@ func prepareBindAttempt(dir, root, endpoint string, o options, slot model.ActorI
 		var cred credentials
 		if readPrivate(filepath.Join(dir, "state.json"), &promoted) == nil &&
 			readPrivate(filepath.Join(dir, "credentials"), &cred) == nil &&
-			promoted.Schema == 1 && promoted.BindID == pending.State.BindID &&
+			promoted.Schema == 2 && promoted.BindID == pending.State.BindID &&
 			promoted.Generation > 0 && promoted.Room == o.room && promoted.Slot == slot &&
 			promoted.Runtime == kind && promoted.Workspace == root && promoted.SessionID == session &&
 			cred.BindID == pending.Credentials.BindID && cred.Secret == pending.Credentials.Secret {
@@ -226,7 +227,7 @@ func prepareBindAttempt(dir, root, endpoint string, o options, slot model.ActorI
 		if current.SessionID != session {
 			return bindAttempt{}, false, relay.ErrOccupied
 		}
-		if current.Schema != 1 || current.Room != o.room || current.Slot != slot || current.Runtime != kind || current.Workspace != root {
+		if current.Schema != 2 || current.Room != o.room || current.Slot != slot || current.Runtime != kind || current.Workspace != root {
 			return bindAttempt{}, false, errors.New("local binding identity mismatch")
 		}
 		var cred credentials
@@ -253,5 +254,5 @@ func prepareBindAttempt(dir, root, endpoint string, o options, slot model.ActorI
 	if err != nil {
 		return bindAttempt{}, false, err
 	}
-	return bindAttempt{State: State{Schema: 1, Room: o.room, Slot: slot, Runtime: kind, Workspace: root, EndpointPath: endpoint, BindID: id, SessionID: session}, Credentials: credentials{BindID: id, Secret: secret}, Replace: o.replace}, true, nil
+	return bindAttempt{State: State{Schema: 2, Room: o.room, Slot: slot, Runtime: kind, Workspace: root, EndpointPath: endpoint, BindID: id, SessionID: session}, Credentials: credentials{BindID: id, Secret: secret}, Replace: o.replace}, true, nil
 }

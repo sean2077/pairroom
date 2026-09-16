@@ -84,15 +84,15 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 await page.locator('#room-name').fill('Native collaboration workspace')
                 await page.locator('#room-host-mode').select_option('native')
                 await expect(page.locator('#room-native-help')).to_be_visible()
-                await expect(page.locator('input[name="claude-mode"][value="existing"]')).to_be_disabled()
-                for slot in ('claude', 'codex'):
+                await expect(page.locator('input[name="slot1-mode"][value="existing"]')).to_be_disabled()
+                for slot in ('slot1', 'slot2'):
                     await expect(page.locator(f'#{slot}-runtime option[value="grok"]')).to_be_enabled()
                     await page.locator(f'#{slot}-runtime').select_option('grok')
                 await page.locator('#room-host-mode').select_option('embedded')
                 await page.locator('#room-host-mode').select_option('native')
-                for slot in ('claude', 'codex'):
+                for slot, runtime in (('slot1', 'claude'), ('slot2', 'codex')):
                     await expect(page.locator(f'#{slot}-runtime')).to_have_value('grok')
-                    await page.locator(f'#{slot}-runtime').select_option(slot)
+                    await page.locator(f'#{slot}-runtime').select_option(runtime)
                 async with page.expect_response(lambda r: r.url.endswith('/rooms') and r.request.method == 'POST') as created:
                     await page.locator('#room-submit').click()
                 creation = await created.value
@@ -110,9 +110,8 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 headers = {'X-PairRoom-CSRF': csrf}
                 endpoint = root/'state'/'relay-endpoint.json'
                 print('Native browser: approved-hook setup fixture and bind-time environment association through real CLI', flush=True)
-                for slot in ('claude','codex'):
-                    await asyncio.to_thread(cli, ['install','--runtime',slot])
-                    svar = 'CLAUDE_CODE_SESSION_ID' if slot == 'claude' else 'CODEX_SESSION_ID'
+                for slot, runtime, svar in (('slot1', 'claude', 'CLAUDE_CODE_SESSION_ID'), ('slot2', 'codex', 'CODEX_SESSION_ID')):
+                    await asyncio.to_thread(cli, ['install','--runtime',runtime])
                     raw = await asyncio.to_thread(cli, ['bind','--room',room_id,'--slot',slot,'--service-file',str(endpoint)], None, (svar, 'synthetic-'+slot))
                     bound = json.loads(raw)
                     # bind associates immediately from the harness environment; no
@@ -122,32 +121,32 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     response = await context.request.post(surface+f'/api/v1/participants/{slot}/park', headers=headers, data={'enabled':False})
                     assert response.status == 200
                 snapshot = await wait_snapshot(context,snapshot_url,lambda s:all(b.get('session_id') for b in s['relay']['bindings'].values()))
-                assert snapshot['protocol'] == 'pairroom-protocol/v7'
-                await expect(frame.locator('[data-slot="claude"]')).to_contain_text('Associated')
+                assert snapshot['protocol'] == 'pairroom-protocol/v8'
+                await expect(frame.locator('[data-slot="slot1"]')).to_contain_text('Associated')
                 # UI -> durable inbox -> CLI stdout -> explicit ack, with no model
                 # acceptance fiction. A draft survives independent SSE messages.
                 await frame.locator('#message-text').fill('User input for a native session')
                 await frame.locator('#send').click()
                 snapshot = await wait_snapshot(context,snapshot_url,lambda s:len(s['relay']['messages']) == 1)
                 assert snapshot['relay']['messages'][0]['state'] == 'queued'
-                received = await asyncio.to_thread(cli,['wait','--room',room_id,'--slot','claude','--timeout','1'])
+                received = await asyncio.to_thread(cli,['wait','--room',room_id,'--slot','slot1','--timeout','1'])
                 assert 'User input for a native session' in received
                 await wait_snapshot(context,snapshot_url,lambda s:s['relay']['messages'][0]['state']=='handed_off')
                 await frame.locator('#message-text').fill('Preserve this unsent draft')
-                await asyncio.to_thread(cli,['send','--room',room_id,'--slot','claude','--id','explicit-fixture','--text','@user is body text: explicit send still targets the peer'])
+                await asyncio.to_thread(cli,['send','--room',room_id,'--slot','slot1','--id','explicit-fixture','--text','@user is body text: explicit send still targets the peer'])
                 await expect(frame.locator('#message-text')).to_have_value('Preserve this unsent draft')
                 snapshot = await wait_snapshot(context,snapshot_url,lambda s:len(s['relay']['messages']) == 2)
-                assert snapshot['relay']['messages'][1]['to']=='codex'
-                await asyncio.to_thread(cli,['send','--room',room_id,'--slot','claude','--id','explicit-fixture','--text','same ID returns original receipt'])
+                assert snapshot['relay']['messages'][1]['to']=='slot2'
+                await asyncio.to_thread(cli,['send','--room',room_id,'--slot','slot1','--id','explicit-fixture','--text','same ID returns original receipt'])
                 assert len((await read_json(context,snapshot_url))['relay']['messages']) == 2
-                await asyncio.to_thread(cli,['wait','--room',room_id,'--slot','codex','--timeout','1'])
+                await asyncio.to_thread(cli,['wait','--room',room_id,'--slot','slot2','--timeout','1'])
 
                 print('Native browser: real CLI killed after durable claim, unknown + explicit Retry dialog', flush=True)
                 # A pipe with no reader blocks the large stdout write. Killing
                 # there must never acknowledge delivery or automatically replay.
-                raw = await asyncio.to_thread(cli,['send','--room',room_id,'--slot','codex','--id','kill-fixture'],'large reply\n'+('x'*(96<<10)))
+                raw = await asyncio.to_thread(cli,['send','--room',room_id,'--slot','slot2','--id','kill-fixture'],'large reply\n'+('x'*(96<<10)))
                 interrupted = json.loads(raw)
-                waiting = subprocess.Popen([str(binary),'relay','wait','--repo',str(repo),'--room',room_id,'--slot','claude','--timeout','1'],
+                waiting = subprocess.Popen([str(binary),'relay','wait','--repo',str(repo),'--room',room_id,'--slot','slot1','--timeout','1'],
                                            env=env,cwd=repo,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
                 try:
                     await wait_snapshot(context,snapshot_url,lambda s:any(m['id']==interrupted['id'] and m['state']=='delivering' for m in s['relay']['messages']))
@@ -173,23 +172,23 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 # Both actual Stop process calls park concurrently and exchange
                 # replies. This is synthetic hook-input E2E, NOT native model E2E.
                 print('Native browser: multi-round bidirectional Stop processes, no fetch/SSE mocks', flush=True)
-                for slot in ('claude','codex'):
+                for slot in ('slot1','slot2'):
                     response = await context.request.post(surface+f'/api/v1/participants/{slot}/park',headers=headers,data={'enabled':True})
                     assert response.status == 200
                 for round_no in range(3):
-                    def hook(slot,peer):
+                    def hook(runtime,peer,slot):
                         return {'hook_event_name':'Stop','session_id':'synthetic-'+slot,'cwd':str(repo),
-                                'last_assistant_message':f'@{peer} complete boundary reply {round_no} from {slot}',
+                                'last_assistant_message':f'@{peer} complete boundary reply {round_no} from {runtime}',
                                 'stop_hook_active':round_no>0}
                     left,right = await asyncio.gather(
-                        asyncio.to_thread(cli,['hook','--runtime','claude'],hook('claude','codex')),
-                        asyncio.to_thread(cli,['hook','--runtime','codex'],hook('codex','claude')))
+                        asyncio.to_thread(cli,['hook','--runtime','claude'],hook('claude','codex','slot1')),
+                        asyncio.to_thread(cli,['hook','--runtime','codex'],hook('codex','claude','slot2')))
                     assert json.loads(left)['decision'] == json.loads(right)['decision'] == 'block'
                     assert f'reply {round_no} from codex' in json.loads(left)['reason']
                     assert f'reply {round_no} from claude' in json.loads(right)['reason']
-                await asyncio.to_thread(cli,['send','--room',room_id,'--slot','claude','--id','restart-fixture','--text','Queued across Service restart'])
+                await asyncio.to_thread(cli,['send','--room',room_id,'--slot','slot1','--id','restart-fixture','--text','Queued across Service restart'])
                 checkpoint=json.loads((root/'state'/'service-registry.json').read_text())
-                assert checkpoint['schema']==2 and all('host_mode' not in r for r in checkpoint['rooms'])
+                assert checkpoint['schema']==3 and all(r.get('host_mode') in ('embedded','native') for r in checkpoint['rooms'])
                 # Use a direct native surface for responsive/locale screenshots.
                 await page.goto(surface+'/')
                 await expect(page.locator('#messages-title')).to_have_text('Relay messages')
@@ -208,10 +207,10 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 management_url = await service.start()
                 origin=management_url.split('/#',1)[0].rstrip('/')
                 # CLI reloads the new endpoint from the same owner-only file.
-                status=json.loads(await asyncio.to_thread(cli,['status','--room',room_id,'--slot','claude']))
-                assert status['relay']['bindings']['claude']['session_id']=='synthetic-claude'
+                status=json.loads(await asyncio.to_thread(cli,['status','--room',room_id,'--slot','slot1']))
+                assert status['relay']['bindings']['slot1']['session_id']=='synthetic-slot1'
                 assert any(m['text']=='Queued across Service restart' and m['state']=='queued' for m in status['relay']['messages'])
-                received=await asyncio.to_thread(cli,['wait','--room',room_id,'--slot','codex','--timeout','1'])
+                received=await asyncio.to_thread(cli,['wait','--room',room_id,'--slot','slot2','--timeout','1'])
                 assert 'Queued across Service restart' in received
                 assert not errors, f'browser errors: {errors}'
                 (artifacts/'results.json').write_text(json.dumps({
@@ -219,7 +218,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     'real_vendor_e2e':False,'native_creation':True,'native_grok_selection':True,'bind_env_association':True,
                     'fifo_stdout_ack':True,'idempotent_explicit_send':True,'three_bidirectional_rounds':True,
                     'killed_cli_unknown':True,'explicit_retry_confirmation':True,'cancel_only_queued':True,
-                    'checkpoint_schema_2_unchanged':True,'restart_queue_and_bindings':True,
+                    'checkpoint_schema_3_canonical':True,'restart_queue_and_bindings':True,
                     'english_chinese_light_dark_responsive':True,'browser_errors':errors,
                 },indent=2)+'\n',encoding='utf-8')
                 print('Native host real-transport browser checks passed (vendor E2E unverified)',flush=True)

@@ -10,8 +10,8 @@ import (
 
 func TestMentionsUseRuntimeHandlesOnly(t *testing.T) {
 	runtimes := map[model.ActorID]model.RuntimeKind{
-		model.ActorClaude: model.RuntimeGrok,
-		model.ActorCodex:  model.RuntimeCodex,
+		model.ActorSlot1: model.RuntimeGrok,
+		model.ActorSlot2: model.RuntimeCodex,
 	}
 	tests := []struct {
 		name    string
@@ -21,10 +21,10 @@ func TestMentionsUseRuntimeHandlesOnly(t *testing.T) {
 		human   bool
 		removed int
 	}{
-		{name: "actual runtimes", text: "@GROK review with @codex", sender: model.ActorUser, want: []model.ActorID{model.ActorClaude, model.ActorCodex}},
-		{name: "self ignored", text: "@grok note to self then @codex", sender: model.ActorClaude, want: []model.ActorID{model.ActorCodex}},
-		{name: "human recorded separately from agent targets", text: "@codex and @user", sender: model.ActorClaude, want: []model.ActorID{model.ActorCodex}, human: true},
-		{name: "legacy aliases removed", text: "@peer @human @all @agent1 @agent2", sender: model.ActorClaude, removed: 5},
+		{name: "actual runtimes", text: "@GROK review with @codex", sender: model.ActorUser, want: []model.ActorID{model.ActorSlot1, model.ActorSlot2}},
+		{name: "self ignored", text: "@grok note to self then @codex", sender: model.ActorSlot1, want: []model.ActorID{model.ActorSlot2}},
+		{name: "human recorded separately from agent targets", text: "@codex and @user", sender: model.ActorSlot1, want: []model.ActorID{model.ActorSlot2}, human: true},
+		{name: "legacy aliases removed", text: "@peer @human @all @agent1 @agent2", sender: model.ActorSlot1, removed: 5},
 		{name: "email ignored", text: "mail a@codex.dev, me+tag@codex.dev, or @codex@example.com", sender: model.ActorUser},
 		{name: "urls ignored", text: "see https://example.test/@codex, ssh://host/@codex, example.test/@codex, localhost/@codex, or 127.0.0.1:7332/@codex", sender: model.ActorUser},
 		{name: "inline code ignored", text: "write `@codex` and ``@codex`` literally", sender: model.ActorUser},
@@ -60,8 +60,8 @@ func TestDuplicateRuntimeRequiresSuffixedHandle(t *testing.T) {
 	for _, runtimeKind := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok} {
 		t.Run(string(runtimeKind), func(t *testing.T) {
 			runtimes := map[model.ActorID]model.RuntimeKind{
-				model.ActorClaude: runtimeKind,
-				model.ActorCodex:  runtimeKind,
+				model.ActorSlot1: runtimeKind,
+				model.ActorSlot2: runtimeKind,
 			}
 			base := "@" + string(runtimeKind)
 			ambiguous := ParseMentions("ask "+base, model.ActorUser, runtimes)
@@ -69,7 +69,7 @@ func TestDuplicateRuntimeRequiresSuffixedHandle(t *testing.T) {
 				t.Fatalf("ambiguous result = %+v", ambiguous)
 			}
 			resolved := ParseMentions(base+"1 review", model.ActorUser, runtimes)
-			if len(resolved.Targets) != 1 || resolved.Targets[0] != model.ActorCodex {
+			if len(resolved.Targets) != 1 || resolved.Targets[0] != model.ActorSlot2 {
 				t.Fatalf("resolved result = %+v", resolved)
 			}
 		})
@@ -88,7 +88,7 @@ func TestMentionsHumanOnlyRecognizesUser(t *testing.T) {
 }
 
 func TestBootstrapPromptUsesVersionedContractAndStaysCompact(t *testing.T) {
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 		got := BootstrapPromptWithRuntime(actor, actorRuntime(actor), actorRuntime(model.OtherParticipant(actor)))
 		if len([]byte(got)) > MaxBootstrapBytes {
 			t.Fatalf("%s bootstrap = %d bytes, budget = %d:\n%s", actor, len([]byte(got)), MaxBootstrapBytes, got)
@@ -107,7 +107,7 @@ func TestBootstrapPromptUsesVersionedContractAndStaysCompact(t *testing.T) {
 }
 
 func actorRuntime(actor model.ActorID) model.RuntimeKind {
-	if actor == model.ActorCodex {
+	if actor == model.ActorSlot2 {
 		return model.RuntimeCodex
 	}
 	return model.RuntimeClaude
@@ -116,7 +116,7 @@ func actorRuntime(actor model.ActorID) model.RuntimeKind {
 func TestEnvelopeCarriesOnlyDynamicTurnContext(t *testing.T) {
 	input := model.AgentInput{
 		MessageID: "msg-0123456789abcdef01234567", ThreadID: "thread-0123456789abcdef01234567",
-		From: model.ActorClaude, To: model.ActorCodex,
+		From: model.ActorSlot1, To: model.ActorSlot2,
 		FromHandle: "@claude", SelfHandle: "@codex", PeerHandle: "@claude",
 		Text: "Inspect the race", ReplyTo: "msg-0123456789abcdef01234567",
 		Role: model.RoleReviewer, Intent: model.IntentQueue,

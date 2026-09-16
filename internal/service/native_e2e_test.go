@@ -42,14 +42,14 @@ func TestNativeSessionMaterializationAndExactResume(t *testing.T) {
 		ProjectID: project.ID,
 		Name:      "Native session materialization E2E",
 		Bindings: map[model.ActorID]BindingSpec{
-			model.ActorClaude: {Mode: BindingNew},
-			model.ActorCodex:  {Mode: BindingNew},
+			model.ActorSlot1: {Mode: BindingNew},
+			model.ActorSlot2: {Mode: BindingNew},
 		},
 	}, provisioner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 		if binding := created.Bindings[actor]; !binding.Pending || binding.SessionID != "" {
 			t.Fatalf("%s binding was materialized before a real input: %#v", actor, binding)
 		}
@@ -61,15 +61,15 @@ func TestNativeSessionMaterializationAndExactResume(t *testing.T) {
 		Codex:  agent.Config{Command: "codex", ApprovalPolicy: "untrusted", Sandbox: "readOnly"},
 	}
 	first := activateNativeE2ERuntime(t, ctx, registry, created.ID, runtimeConfig)
-	waitForNativeMarker(t, ctx, first.engine, model.ActorClaude, "PAIRROOM_CLAUDE_NATIVE_ROUND_1")
-	waitForNativeMarker(t, ctx, first.engine, model.ActorCodex, "PAIRROOM_CODEX_NATIVE_ROUND_1")
+	waitForNativeMarker(t, ctx, first.engine, model.ActorSlot1, "PAIRROOM_CLAUDE_NATIVE_ROUND_1")
+	waitForNativeMarker(t, ctx, first.engine, model.ActorSlot2, "PAIRROOM_CODEX_NATIVE_ROUND_1")
 	waitForNativeIdle(t, ctx, first)
 	materialized, ok := registry.Room(created.ID)
 	if !ok {
 		t.Fatal("materialized Room disappeared from Registry")
 	}
 	firstIDs := make(map[model.ActorID]string, 2)
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 		binding := materialized.Bindings[actor]
 		if binding.Pending || strings.TrimSpace(binding.SessionID) == "" {
 			t.Fatalf("%s binding was not materialized by its first accepted input: %#v", actor, binding)
@@ -93,8 +93,8 @@ func TestNativeSessionMaterializationAndExactResume(t *testing.T) {
 	}
 
 	second := activateNativeE2ERuntime(t, ctx, rebuilt, created.ID, runtimeConfig)
-	waitForNativeMarker(t, ctx, second.engine, model.ActorClaude, "PAIRROOM_CLAUDE_NATIVE_ROUND_2")
-	waitForNativeMarker(t, ctx, second.engine, model.ActorCodex, "PAIRROOM_CODEX_NATIVE_ROUND_2")
+	waitForNativeMarker(t, ctx, second.engine, model.ActorSlot1, "PAIRROOM_CLAUDE_NATIVE_ROUND_2")
+	waitForNativeMarker(t, ctx, second.engine, model.ActorSlot2, "PAIRROOM_CODEX_NATIVE_ROUND_2")
 	waitForNativeIdle(t, ctx, second)
 	resumed, ok := rebuilt.Room(created.ID)
 	if !ok {

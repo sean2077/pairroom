@@ -31,13 +31,13 @@ func TestUserQuoteReachesNativeInput(t *testing.T) {
 		owner model.ActorID
 	}{
 		{name: "new turn"},
-		{name: "same target steer", owner: model.ActorCodex},
-		{name: "Room FIFO", owner: model.ActorClaude},
+		{name: "same target steer", owner: model.ActorSlot2},
+		{name: "Room FIFO", owner: model.ActorSlot1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			engine, adapters := newTestEngine(t, "")
 			source := recordQuoteSource(t, engine, model.Message{
-				From: model.ActorClaude,
+				From: model.ActorSlot1,
 				Text: strings.Repeat("完整原文 @claude\n", 512),
 			})
 			// Reserve a pre-existing owner to select the relevant scheduling path.
@@ -45,24 +45,24 @@ func TestUserQuoteReachesNativeInput(t *testing.T) {
 			engine.turnOwner = test.owner
 			engine.turnMu.Unlock()
 			sent, err := engine.Send(context.Background(), SendRequest{
-				Text: "Review this", To: []model.ActorID{model.ActorCodex}, ReplyTo: source.ID,
+				Text: "Review this", To: []model.ActorID{model.ActorSlot2}, ReplyTo: source.ID,
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if test.owner == model.ActorClaude {
+			if test.owner == model.ActorSlot1 {
 				select {
-				case <-adapters[model.ActorCodex].submissions:
+				case <-adapters[model.ActorSlot2].submissions:
 					t.Fatal("quoted message bypassed the Room FIFO")
 				default:
 				}
-				engine.finishTurn(model.ActorClaude)
+				engine.finishTurn(model.ActorSlot1)
 			}
-			input := receiveInput(t, adapters[model.ActorCodex])
+			input := receiveInput(t, adapters[model.ActorSlot2])
 			if input.Quote == nil || input.Quote.Text != source.Text || input.Quote.FromHandle != "@claude" {
 				t.Fatalf("quoted source did not reach native input: %+v", input.Quote)
 			}
-			if input.Text != sent.Text || input.To != model.ActorCodex || input.ReplyTo != source.ID {
+			if input.Text != sent.Text || input.To != model.ActorSlot2 || input.ReplyTo != source.ID {
 				t.Fatalf("quote changed current text/target/correlation: %+v", input)
 			}
 			if !strings.Contains(prompt.Envelope(input), fmt.Sprintf("  text: %q\n", source.Text)) {
@@ -81,20 +81,20 @@ func TestUserQuoteReachesNativeInput(t *testing.T) {
 
 func TestRetryPreservesQuotedMessage(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
-	source := recordQuoteSource(t, engine, model.Message{From: model.ActorClaude, Text: "Original proposal"})
+	source := recordQuoteSource(t, engine, model.Message{From: model.ActorSlot1, Text: "Original proposal"})
 	original, err := engine.Send(context.Background(), SendRequest{
-		Text: "Review this", To: []model.ActorID{model.ActorCodex}, ReplyTo: source.ID,
+		Text: "Review this", To: []model.ActorID{model.ActorSlot2}, ReplyTo: source.ID,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorCodex])
-	engine.processing(original.ID, model.ActorCodex, model.ProcessingFailed, "test failure", "")
+	_ = receiveInput(t, adapters[model.ActorSlot2])
+	engine.processing(original.ID, model.ActorSlot2, model.ProcessingFailed, "test failure", "")
 	retried, err := engine.Retry(context.Background(), original.ID, RetryRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := receiveInput(t, adapters[model.ActorCodex])
+	input := receiveInput(t, adapters[model.ActorSlot2])
 	if retried.ID == original.ID || retried.RetryOf != original.ID || input.ReplyTo != source.ID ||
 		input.Quote == nil || input.Quote.Text != source.Text || input.Text != original.Text {
 		t.Fatalf("retry lost quote or message identity: %+v", input)
@@ -107,7 +107,7 @@ func TestMissingQuoteIsRejectedBeforePersistence(t *testing.T) {
 			engine, adapters := newTestEngine(t, "")
 			req := SendRequest{Text: "Review this", ReplyTo: "not-in-this-Room"}
 			if explicit {
-				req.To = []model.ActorID{model.ActorCodex}
+				req.To = []model.ActorID{model.ActorSlot2}
 			}
 			if _, err := engine.Send(context.Background(), req); err == nil {
 				t.Fatal("missing quote silently accepted")
@@ -136,14 +136,14 @@ func TestDeliveryQuoteUsesRuntimeIdentityWithoutExpandingReplyChains(t *testing.
 			CodexConfig:  agent.Config{Runtime: model.RuntimeGrok},
 		},
 		snapshot: model.RoomSnapshot{Messages: []model.Message{{
-			ID: "source", From: model.ActorClaude, Text: "Immediate source only", ReplyTo: "older-message",
+			ID: "source", From: model.ActorSlot1, Text: "Immediate source only", ReplyTo: "older-message",
 		}}},
 	}
 	quote, _, err := engine.deliveryQuote(model.Message{From: model.ActorUser, ReplyTo: "source"})
 	if err != nil || quote == nil || quote.FromHandle != "@grok0" || quote.Text != "Immediate source only" {
 		t.Fatalf("wrong quote attribution or recursive expansion: %+v, %v", quote, err)
 	}
-	for _, from := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+	for _, from := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 		quote, _, err := engine.deliveryQuote(model.Message{From: from, ReplyTo: "missing-correlation"})
 		if err != nil || quote != nil {
 			t.Fatalf("Agent relay correlation was treated as an explicit quote: %+v, %v", quote, err)

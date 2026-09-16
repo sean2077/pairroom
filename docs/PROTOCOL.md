@@ -1,6 +1,6 @@
 # Agent protocol
 
-This document defines the minimum collaboration contract the model must understand. Scheduling, permissions, persistence, and cancellation are enforced by code, not by prompt self-discipline. The embedded machine-readable contract is `pairroom-protocol/v6` and is printed by:
+This document defines the minimum collaboration contract the model must understand. Scheduling, permissions, persistence, and cancellation are enforced by code, not by prompt self-discipline. The embedded machine-readable contract is `pairroom-protocol/v7` and is printed by:
 
 ```bash
 pairroom protocol --json
@@ -52,7 +52,7 @@ The user remains the active circuit breaker: Cancel removes queued work, Interru
 
 `default` uses the least coordination needed for an accurate result. For simple, low-risk tasks, the addressed Agent executes, verifies, and answers directly, without delegation or peer review. Otherwise, Lead (Agent 1) focuses on planning, decisions, and review; Executor (Agent 2) implements, verifies, and contributes technical feedback. Complexity, uncertainty, or risk can justify involving the peer; the responsibilities are defaults, not a mandatory sequence. Newer human instructions take precedence. `custom` uses the human's natural-language rules without adding these defaults.
 
-New Rooms use collaboration version 2 unless an explicit supported version is supplied. Version-1 and custom instructions remain readable and are injected unchanged on activation; upgrading PairRoom never rewrites an existing Room's policy. Create a new Room to adopt the new default, or give a newer human instruction for the current task. The relay protocol remains `pairroom-protocol/v6`.
+New Rooms use collaboration version 2 unless an explicit supported version is supplied. Current-schema custom instructions remain readable and are injected unchanged on activation; upgrading PairRoom never rewrites an existing Room's policy. Create a new Room to adopt the new default, or give a newer human instruction for the current task. The embedded protocol remains `pairroom-protocol/v7`.
 
 The instructions do not grant tools or force a particular number of Turns. Native permission profiles remain independent; both modern participants use the live workspace. Retired Rooms are rejected; no role-specific instruction fallback is generated. No public role-change operation or role-based addressing remains.
 
@@ -66,9 +66,9 @@ user decision
   > model inference
 ```
 
-## Native host protocol v7
+## Native host protocol v8
 
-`pairroom protocol --host-mode native --json` prints `pairroom-protocol/v7`. The embedded v6 contract and envelope remain unchanged. The compact native bootstrap plus stored default collaboration stays within 1,800 UTF-8 bytes; the ordinary envelope overhead remains at most 128 bytes. Native session/transcript references are queried with `relay peer`, never included in an envelope. Missing or inaccessible peer history does not block relay.
+`pairroom protocol --host-mode native --json` prints `pairroom-protocol/v8`; embedded mode prints `pairroom-protocol/v7`. The compact native bootstrap plus stored default collaboration stays within 1,800 UTF-8 bytes; the ordinary envelope overhead remains at most 128 bytes. Native session/transcript references are queried with `relay peer`, never included in an envelope. Missing or inaccessible peer history does not block relay.
 
 Association is captured at bind from the official `session_id` the harness exposes to its tool-call environment (Claude Code `CLAUDE_CODE_SESSION_ID`, Codex `CODEX_SESSION_ID`, Grok `GROK_SESSION_ID`); there is no nonce echo, and a bind run outside that environment fails closed. An approved Stop hook then supplies the same official `session_id` and `last_assistant_message` at each response boundary, re-confirming that identity (a mismatch fails closed) and recording the transcript path the environment does not carry; PairRoom does not parse vendor transcripts. Exact current peer handles use the same case-insensitive parser and code/URL exclusions as embedded mode. A peer handle wins over `@user`; only `@user` creates a human escalation; no peer/user handle ends relay without recording the private reply body. Minimal publication receipts still make sequence reconciliation possible. User interruption may produce no Stop and no publication. Claude/Grok StopFailure records only an allowlisted failure category, never the partial reply.
 

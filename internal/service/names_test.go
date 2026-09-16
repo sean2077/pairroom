@@ -76,9 +76,9 @@ func TestTemporaryRoomNamesAndRenameSurviveRebuild(t *testing.T) {
 		t.Fatal("unnamed Room changed name on restart")
 	}
 	// Public projections must never become a second name authority or expose a mutable map.
-	restored.RuntimeNames[model.ActorClaude] = "tampered"
+	restored.RuntimeNames[model.ActorSlot1] = "tampered"
 	again, _ := rebuilt.Room(before.ID)
-	if again.RuntimeNames[model.ActorClaude] == "tampered" {
+	if again.RuntimeNames[model.ActorSlot1] == "tampered" {
 		t.Fatal("projection aliases registry")
 	}
 }
@@ -152,7 +152,7 @@ func TestCreateHTTPAcceptsOmittedRoomName(t *testing.T) {
 	registry, project := testRegistry(t, testGitRepo(t))
 	server, _ := newManagementTestServer(t, registry, SyntheticProvisioner{})
 	response := httptest.NewRecorder()
-	server.Handler().ServeHTTP(response, managementRequest(http.MethodPost, "/api/v1/projects/"+project.ID+"/rooms", `{"bindings":{"claude":{"mode":"new"},"codex":{"mode":"new"}},"collaboration":{"mode":"custom","instructions":"Agent 1 plans; Agent 2 executes and verifies."}}`, true))
+	server.Handler().ServeHTTP(response, managementRequest(http.MethodPost, "/api/v1/projects/"+project.ID+"/rooms", `{"bindings":{"slot1":{"mode":"new"},"slot2":{"mode":"new"}},"collaboration":{"mode":"custom","instructions":"Agent 1 plans; Agent 2 executes and verifies."}}`, true))
 	if response.Code != http.StatusCreated {
 		t.Fatalf("create=%d %s", response.Code, response.Body.String())
 	}

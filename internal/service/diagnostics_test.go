@@ -43,12 +43,12 @@ func TestManagementDiagnosticsBoundaries(t *testing.T) {
 		// Unregistered API methods reach the existing Management asset fallback.
 		{"GET", "", true, 404},
 		{"HEAD", "", true, 404},
-		{"POST", `{"mode":"runtime","actor":"claude"}`, true, 400},
+		{"POST", `{"mode":"runtime","actor":"slot1"}`, true, 400},
 		{"POST", `{"mode":"runtime","actor":"invalid","confirm":true}`, true, 400},
 		{"POST", `{"mode":"unknown"}`, true, 400},
 		{"POST", `{"mode":"environment","command":"bad-command"}`, true, 400},
 		{"POST", `{"mode":"environment"} {}`, true, 400},
-		{"POST", `{"mode":"runtime","actor":"claude","confirm":true,"room_id":"missing"}`, true, 404},
+		{"POST", `{"mode":"runtime","actor":"slot1","confirm":true,"room_id":"missing"}`, true, 404},
 	} {
 		response := httptest.NewRecorder()
 		server.Handler().ServeHTTP(response, managementRequest(test.method, diagnosticsPath, test.body, test.auth))
@@ -83,7 +83,7 @@ func TestManagementDiagnosticsMockAndExport(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := server.registry.Snapshot(true)
-	for _, body := range []string{`{"mode":"environment"}`, `{"mode":"runtime","actor":"codex","confirm":true,"room_id":"` + room.ID + `"}`} {
+	for _, body := range []string{`{"mode":"environment"}`, `{"mode":"runtime","actor":"slot2","confirm":true,"room_id":"` + room.ID + `"}`} {
 		response := httptest.NewRecorder()
 		server.Handler().ServeHTTP(response, managementRequest("POST", diagnosticsPath, body, true))
 		if response.Code != 200 || response.Header().Get("Cache-Control") != "no-store" {
@@ -131,9 +131,9 @@ func TestManagementDiagnosticsHonorsDefaultProfileAndStoredRoom(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := pairProfileInput("private-default-profile")
-	selection := input.Agents[model.ActorCodex]
+	selection := input.Agents[model.ActorSlot2]
 	selection.Provider = model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "codex", ProfileID: "removed"}
-	input.Agents[model.ActorCodex] = selection
+	input.Agents[model.ActorSlot2] = selection
 	input.IsDefault = true
 	if _, err := server.registry.SaveAgentPairProfile(context.Background(), "", input); err != nil {
 		t.Fatal(err)
@@ -142,7 +142,7 @@ func TestManagementDiagnosticsHonorsDefaultProfileAndStoredRoom(t *testing.T) {
 		{"", "default_profile", "provider_unavailable"},
 		{room.ID, "room", "mock"},
 	} {
-		body, _ := json.Marshal(diagnosticRequest{Mode: "runtime", Actor: model.ActorCodex, Confirm: true, RoomID: test.roomID})
+		body, _ := json.Marshal(diagnosticRequest{Mode: "runtime", Actor: model.ActorSlot2, Confirm: true, RoomID: test.roomID})
 		response := httptest.NewRecorder()
 		server.Handler().ServeHTTP(response, managementRequest("POST", diagnosticsPath, string(body), true))
 		var report DiagnosticReport

@@ -73,6 +73,7 @@ func currentNativeCaller() (nativeCaller, error) {
 // target another known session. No provider, model or credential configuration
 // is harvested.
 func applyCallerDefaults(root, action string, o *options) error {
+	o.slot = normalizeSlot(o.slot)
 	// Preparing another harness's hooks is an explicit setup operation, not
 	// an attempt to bind this session as that runtime. Keep that path usable.
 	if action == "install" && o.kind != "" {

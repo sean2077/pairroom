@@ -62,7 +62,7 @@ func TestIndependentPermissionProfilesAndNativeYOLO(t *testing.T) {
 	}
 	// Explicit YOLO completes the sandbox override, but an explicit narrower
 	// sandbox from creation still wins when restoring that configuration.
-	cfg := PermissionConfig(Config{Actor: model.ActorCodex, Runtime: model.RuntimeCodex, ApprovalPolicy: "yolo"}, model.PermissionConfigured)
+	cfg := PermissionConfig(Config{Actor: model.ActorSlot2, Runtime: model.RuntimeCodex, ApprovalPolicy: "yolo"}, model.PermissionConfigured)
 	if cfg.Sandbox != "danger-full-access" {
 		t.Fatal("default Codex YOLO left a restrictive inherited sandbox")
 	}
@@ -95,7 +95,7 @@ func TestCollaborationInstructionsAreStableAndOutsideEnvelopes(t *testing.T) {
 		}
 	}
 	c, _ := (model.Collaboration{Mode: model.CollaborationCustom, Instructions: "Agent 2 plans. Agent 1 implements. Ask the user before deployment."}).ForCreation()
-	got := collaborationPrompt(Config{Actor: model.ActorCodex, Collaboration: &c, AdditionalInstructions: "Keep project conventions."})
+	got := collaborationPrompt(Config{Actor: model.ActorSlot2, Collaboration: &c, AdditionalInstructions: "Keep project conventions."})
 	if strings.Count(got, c.Instructions) != 1 || strings.Contains(got, d.Instructions) || !strings.Contains(got, "Keep project conventions.") {
 		t.Fatal("custom mode lost user text or acquired default responsibilities")
 	}

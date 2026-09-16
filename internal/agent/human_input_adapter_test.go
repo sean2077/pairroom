@@ -46,9 +46,9 @@ func (f *humanInputFakeAdapter) State() model.AgentState { return model.StateIdl
 func (f *humanInputFakeAdapter) SessionID() string       { return "fake" }
 
 func TestHumanInputAdapterAppliesTurnRoleWithoutWorkflowPolicy(t *testing.T) {
-	fake := &humanInputFakeAdapter{actor: model.ActorClaude}
+	fake := &humanInputFakeAdapter{actor: model.ActorSlot1}
 	wrapper := &humanInputAdapter{
-		actor: model.ActorClaude, inner: fake, sink: func(model.RuntimeEvent) {},
+		actor: model.ActorSlot1, inner: fake, sink: func(model.RuntimeEvent) {},
 		turnInput: map[string]model.AgentInput{}, pausedTurns: map[string]struct{}{},
 	}
 	input := model.AgentInput{MessageID: "m1", Role: model.RoleReviewer, Text: "review exactly this"}
@@ -79,10 +79,10 @@ func TestHiddenRuntimeQuestionsBecomeVisibleUserRequests(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fake := &humanInputFakeAdapter{actor: model.ActorCodex}
+			fake := &humanInputFakeAdapter{actor: model.ActorSlot2}
 			var events []model.RuntimeEvent
 			wrapper := &humanInputAdapter{
-				cfg: Config{Runtime: tt.runtimeKind}, actor: model.ActorCodex, inner: fake,
+				cfg: Config{Runtime: tt.runtimeKind}, actor: model.ActorSlot2, inner: fake,
 				sink:      func(event model.RuntimeEvent) { events = append(events, event) },
 				turnInput: map[string]model.AgentInput{}, pausedTurns: map[string]struct{}{},
 				latestInput: model.AgentInput{MessageID: "m1"}, activeTurn: "turn-1",
@@ -92,7 +92,7 @@ func TestHiddenRuntimeQuestionsBecomeVisibleUserRequests(t *testing.T) {
 				t.Fatal(err)
 			}
 			wrapper.handleEvent(model.RuntimeEvent{
-				Agent: model.ActorCodex, Kind: model.RuntimeLog, Name: "server_request.unsupported",
+				Agent: model.ActorSlot2, Kind: model.RuntimeLog, Name: "server_request.unsupported",
 				Text: tt.method, Data: raw,
 			})
 			var visible *model.RuntimeEvent

@@ -68,7 +68,7 @@ func (r *Registry) AgentPairProfiles() (AgentPairProfileCatalog, error) {
 }
 
 func (r *Registry) readAgentPairProfilesLocked() (AgentPairProfileCatalog, error) {
-	catalog := AgentPairProfileCatalog{Schema: 1, Profiles: []AgentPairProfile{}}
+	catalog := AgentPairProfileCatalog{Schema: 2, Profiles: []AgentPairProfile{}}
 	path := filepath.Join(r.root, agentPairProfilesFile)
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -95,7 +95,10 @@ func (r *Registry) readAgentPairProfilesLocked() (AgentPairProfileCatalog, error
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return AgentPairProfileCatalog{}, errAgentPairProfilesStore
 	}
-	if catalog.Schema != 1 || catalog.Profiles == nil || len(catalog.Profiles) > maxAgentPairProfiles {
+	if catalog.Schema == 1 {
+		return AgentPairProfileCatalog{}, fmt.Errorf("%w: retired Agent pair profile format; recreate profiles before retrying", errAgentPairProfilesStore)
+	}
+	if catalog.Schema != 2 || catalog.Profiles == nil || len(catalog.Profiles) > maxAgentPairProfiles {
 		return AgentPairProfileCatalog{}, errAgentPairProfilesStore
 	}
 	ids, names := map[string]bool{}, []string{}
@@ -183,7 +186,11 @@ func (r *Registry) SaveAgentPairProfile(ctx context.Context, id string, input Ag
 		return AgentPairProfileCatalog{}, fmt.Errorf("%w: %v", errInvalidAgentPairProfile, err)
 	}
 	name := strings.TrimSpace(input.Name)
-	agents, err := validateAgentSelections(input.Agents)
+	normalizedInput, err := normalizeAgentSelectionsInput(input.Agents)
+	if err != nil {
+		return AgentPairProfileCatalog{}, fmt.Errorf("%w: %v", errInvalidAgentPairProfile, err)
+	}
+	agents, err := validateAgentSelections(normalizedInput)
 	if err != nil {
 		return AgentPairProfileCatalog{}, fmt.Errorf("%w: %v", errInvalidAgentPairProfile, err)
 	}

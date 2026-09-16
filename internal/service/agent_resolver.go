@@ -296,7 +296,7 @@ func (r *AgentResolver) Catalog(ctx context.Context) AgentCatalog {
 			template := r.runtimes.For(kind)
 			probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 			defer cancel()
-			probe, probeErr := agent.ProbeRuntime(probeCtx, agent.Config{Actor: model.ActorClaude, Runtime: kind, Command: template.Command, CommandArgs: template.Args})
+			probe, probeErr := agent.ProbeRuntime(probeCtx, agent.Config{Actor: model.ActorSlot1, Runtime: kind, Command: template.Command, CommandArgs: template.Args})
 			if probeErr != nil {
 				entry.Diagnostic = probeErr.Error()
 			} else {

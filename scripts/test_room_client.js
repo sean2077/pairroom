@@ -228,7 +228,7 @@ async function main() {
     c.connectEvents(); const obsolete = c.state.source;
     c.edit('draft survives resync');
     c.state.localRoomID = 'test';
-    c.state.drafts.claude = 'stale transient';
+    c.state.drafts.slot1 = 'stale transient';
     const first = c.loadSnapshot(), second = c.loadSnapshot();
     assert.equal(first, second, 'snapshot reads must be single-flight');
     for (let i = 0; i < 40; i++) obsolete.emit('pairroom', { seq: 100 + i });
@@ -237,7 +237,7 @@ async function main() {
     assert.equal(obsolete.closed, true);
     request.resolve(c.snapshot()); await first;
     assert.equal(c.input.value, 'draft survives resync');
-    assert.equal(c.state.drafts.claude, '');
+    assert.equal(c.state.drafts.slot1, '');
     assert.equal(c.renders.at(-1), false, 'reconnect must not force a scroll to the bottom');
     assert.notEqual(c.state.source, obsolete);
     assert.equal(c.state.snapshotPromise, null);
@@ -287,23 +287,23 @@ async function main() {
       if (options?.method === 'PUT') { writes++; return write.promise; }
       reads++;
       if (reads === 1) return oldRead.promise;
-      const fresh = c.snapshot(); fresh.participants.codex = {permission_profile:'read-only'}; return Promise.resolve(fresh);
+      const fresh = c.snapshot(); fresh.participants.slot2 = {permission_profile:'read-only'}; return Promise.resolve(fresh);
     });
     const pending = c.loadSnapshot();
-    const change = c.setPermissions('codex','read-only');
-    await c.setPermissions('codex','yolo');
+    const change = c.setPermissions('slot2','read-only');
+    await c.setPermissions('slot2','yolo');
     assert.equal(writes, 1, 'permission writes cannot overlap even with a rebuilt DOM');
     write.resolve({ok:true}); await Promise.resolve();
     assert.equal(reads, 1, 'wait for the obsolete read before requesting fresh state');
     oldRead.resolve(c.snapshot()); await pending; await change;
     assert.equal(reads, 2, 'a pre-write snapshot cannot confirm permission changes');
-    assert.equal(c.state.snapshot.participants.codex.permission_profile, 'read-only');
+    assert.equal(c.state.snapshot.participants.slot2.permission_profile, 'read-only');
     assert.equal(c.state.permissionSubmitting.size, 0);
   }
   {
     const c = client(); let writes = 0;
     c.setAPI(async () => { writes++; throw new Error('stop failed'); });
-    await c.setPermissions('claude', 'yolo');
+    await c.setPermissions('slot1', 'yolo');
     assert.equal(writes, 1, 'failed permission mutation is never automatically retried');
     assert.equal(c.state.permissionSubmitting.size, 0);
     assert.ok(c.notices.includes('stop failed'));
@@ -349,9 +349,9 @@ async function main() {
       if (options?.method) { writes++; return write.promise; }
       return Promise.resolve(c.snapshot());
     });
-    const start = c.participantAction('claude', 'restart');
-    await c.participantAction('claude', 'stop');
-    await c.setPermissions('claude', 'yolo');
+    const start = c.participantAction('slot1', 'restart');
+    await c.participantAction('slot1', 'stop');
+    await c.setPermissions('slot1', 'yolo');
     assert.equal(writes, 1, 'participant operations and permissions share one in-flight owner');
     write.resolve({}); await start; assert.equal(c.state.participantActions.size, 0);
   }
@@ -359,34 +359,34 @@ async function main() {
     const c = client(), request = deferred(); let writes = 0;
     c.setAPI((_path, options) => {
       if (options?.method === 'POST') { writes++; return request.promise; }
-      const snapshot = c.snapshot(); snapshot.messages = [{ id:'child', retry_of:'source', processing:{codex:'waiting'} }];
+      const snapshot = c.snapshot(); snapshot.messages = [{ id:'child', retry_of:'source', processing:{slot2:'waiting'} }];
       return Promise.resolve(snapshot);
     });
-    const pending = c.retryMessage('source', 'codex', {});
-    await c.retryMessage('source', 'codex', {}); await c.cancelMessage('source', 'codex', {});
+    const pending = c.retryMessage('source', 'slot2', {});
+    await c.retryMessage('source', 'slot2', {}); await c.cancelMessage('source', 'slot2', {});
     assert.equal(writes, 1, 'DOM replacement cannot unlock a native message operation');
     request.resolve({}); await pending;
-    await c.retryMessage('source', 'codex', {});
+    await c.retryMessage('source', 'slot2', {});
     assert.equal(writes, 1, 'visible pending retry stays excluded after the HTTP response');
     assert.equal(c.state.messageActions.size, 0);
   }
   {
     const c = client(), request = deferred(); let writes = 0;
     c.setAPI((_path, options) => { if (options?.method) { writes++; return request.promise; } return Promise.resolve(c.snapshot()); });
-    const pending = c.cancelMessage('source', 'codex', {}); await c.cancelMessage('source', 'codex', {});
+    const pending = c.cancelMessage('source', 'slot2', {}); await c.cancelMessage('source', 'slot2', {});
     assert.equal(writes, 1); request.resolve({}); await pending; assert.equal(c.state.messageActions.size, 0);
   }
   {
     const c = client();
-    c.state.snapshot.messages = [{id:'message', processing:{codex:'completed'}}];
-    c.applyEvent({seq:11,kind:'message.processing.updated',data:{message_id:'message',target:'codex',state:'working'}});
-    assert.equal(c.state.snapshot.messages[0].processing.codex, 'completed', 'late receipts cannot revive settled work');
+    c.state.snapshot.messages = [{id:'message', processing:{slot2:'completed'}}];
+    c.applyEvent({seq:11,kind:'message.processing.updated',data:{message_id:'message',target:'slot2',state:'working'}});
+    assert.equal(c.state.snapshot.messages[0].processing.slot2, 'completed', 'late receipts cannot revive settled work');
     assert.equal(c.processingTransitionAllowed('working','waiting'),false);
     assert.equal(c.processingTransitionAllowed('working','failed'),true);
     c.state.snapshot.events = [{id:'evidence',kind:'runtime.event',data:{kind:'log'}}];
-    for(let i=0;i<700;i++) c.applyEvent({kind:'runtime.event',data:{agent:'claude',kind:'text.delta',text:'a'}});
+    for(let i=0;i<700;i++) c.applyEvent({kind:'runtime.event',data:{agent:'slot1',kind:'text.delta',text:'a'}});
     assert.equal(c.state.snapshot.events.length, 1, 'text tokens must not displace diagnostics');
-    assert.equal(c.state.drafts.claude.length, 700, 'full text stays in its draft projection');
+    assert.equal(c.state.drafts.slot1.length, 700, 'full text stays in its draft projection');
   }
   {
     const c = client(), older = deferred(), newer = deferred(); let reads = 0;

@@ -103,7 +103,10 @@ func load(dir string) (*Client, error) {
 	if err := readPrivate(filepath.Join(dir, "state.json"), &state); err != nil {
 		return nil, err
 	}
-	if state.Schema != 1 || !state.Slot.ValidParticipant() || state.Room == "" || state.BindID == "" {
+	if state.Schema != 2 {
+		return nil, errors.New("retired relay state format; re-bind this slot without reading legacy credentials")
+	}
+	if !state.Slot.ValidParticipant() || state.Room == "" || state.BindID == "" {
 		return nil, errors.New("invalid relay state identity")
 	}
 	var cred credentials

@@ -9,7 +9,7 @@ import (
 )
 
 func TestMockReservesOwnershipBeforeWorkerStarts(t *testing.T) {
-	adapter := NewMock(Config{Actor: model.ActorClaude}, func(model.RuntimeEvent) {})
+	adapter := NewMock(Config{Actor: model.ActorSlot1}, func(model.RuntimeEvent) {})
 	// Model an idle worker without starting a goroutine, so the dequeue-to-start
 	// interval is deterministic rather than dependent on scheduler timing.
 	adapter.state = model.StateIdle
@@ -29,7 +29,7 @@ func TestMockReservesOwnershipBeforeWorkerStarts(t *testing.T) {
 }
 
 func TestMockCancelledAdmissionReleasesOwnership(t *testing.T) {
-	adapter := NewMock(Config{Actor: model.ActorClaude}, func(model.RuntimeEvent) {})
+	adapter := NewMock(Config{Actor: model.ActorSlot1}, func(model.RuntimeEvent) {})
 	adapter.state = model.StateIdle
 	adapter.queue = make(chan model.AgentInput) // No receiver: admission must cancel.
 	ctx, cancel := context.WithCancel(context.Background())

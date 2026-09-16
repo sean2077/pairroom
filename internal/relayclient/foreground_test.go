@@ -63,10 +63,10 @@ func newForegroundFixture(t *testing.T, opts foregroundFixtureOptions) *foregrou
 	}
 	peer := opts.peer
 	if peer == nil {
-		peer = &relay.Binding{Slot: model.ActorCodex, Runtime: model.RuntimeCodex, SessionID: "peer-session"}
+		peer = &relay.Binding{Slot: model.ActorSlot2, Runtime: model.RuntimeCodex, SessionID: "peer-session"}
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || !strings.HasPrefix(r.URL.Path, "/api/v1/relay/room/claude/") ||
+		if r.Method != http.MethodPost || !strings.HasPrefix(r.URL.Path, "/api/v1/relay/room/slot1/") ||
 			r.Header.Get("Authorization") != "Relay private-long-lived-secret" ||
 			r.Header.Get("X-PairRoom-Bind") != "binding" ||
 			r.Header.Get("X-PairRoom-Generation") != "1" ||
@@ -96,7 +96,7 @@ func newForegroundFixture(t *testing.T, opts foregroundFixtureOptions) *foregrou
 				if state == "" {
 					state = "queued"
 				}
-				msg = relay.Message{ID: "outgoing-" + req.ID, From: model.ActorClaude, To: model.ActorCodex, Text: req.Text, State: state}
+				msg = relay.Message{ID: "outgoing-" + req.ID, From: model.ActorSlot1, To: model.ActorSlot2, Text: req.Text, State: state}
 				f.messages[req.ID] = msg
 			}
 			f.mu.Unlock()
@@ -167,12 +167,12 @@ func newForegroundFixture(t *testing.T, opts foregroundFixtureOptions) *foregrou
 	if err := relay.AtomicJSON(endpoint, relay.Endpoint{URL: srv.URL, Token: "management-secret-not-output"}); err != nil {
 		t.Fatal(err)
 	}
-	dir, err := secureDir(root, ".pairroom", "rooms", "room", "slots", "claude")
+	dir, err := secureDir(root, ".pairroom", "rooms", "room", "slots", "slot1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.statePath = filepath.Join(dir, "state.json")
-	state := State{Schema: 1, Room: "room", Slot: model.ActorClaude, Runtime: model.RuntimeClaude, Workspace: root, EndpointPath: endpoint, BindID: "binding", Generation: 1, SessionID: "session", Blocks: relay.MaxBlocks}
+	state := State{Schema: 2, Room: "room", Slot: model.ActorSlot1, Runtime: model.RuntimeClaude, Workspace: root, EndpointPath: endpoint, BindID: "binding", Generation: 1, SessionID: "session", Blocks: relay.MaxBlocks}
 	if err := relay.AtomicJSON(f.statePath, state); err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +442,7 @@ func TestSendQueuedReceiptAddsPeerCollectionHint(t *testing.T) {
 }
 
 func TestSendQueuedClaudePeerOmitsWakeCommand(t *testing.T) {
-	f := newForegroundFixture(t, foregroundFixtureOptions{peer: &relay.Binding{Slot: model.ActorCodex, Runtime: model.RuntimeClaude, SessionID: "peer-session"}})
+	f := newForegroundFixture(t, foregroundFixtureOptions{peer: &relay.Binding{Slot: model.ActorSlot2, Runtime: model.RuntimeClaude, SessionID: "peer-session"}})
 	var out, diagnostic bytes.Buffer
 	if err := f.run(context.Background(), "send", strings.NewReader("proposal"), &out, &diagnostic, "--id", "review-1"); err != nil {
 		t.Fatal(err)
@@ -489,15 +489,15 @@ func TestBriefStatusAddsHintsOnlyForQueuedInboxes(t *testing.T) {
 		{
 			name: "queued self and peer",
 			summary: relay.Summary{Inboxes: map[model.ActorID]relay.InboxSummary{
-				model.ActorClaude: {Queued: 2},
-				model.ActorCodex:  {Queued: 1, Delivering: 3},
+				model.ActorSlot1: {Queued: 2},
+				model.ActorSlot2: {Queued: 1, Delivering: 3},
 			}},
 			want: 2,
 		},
 		{
 			name: "delivering only",
 			summary: relay.Summary{Inboxes: map[model.ActorID]relay.InboxSummary{
-				model.ActorCodex: {Delivering: 1},
+				model.ActorSlot2: {Delivering: 1},
 			}},
 			want: 0,
 		},

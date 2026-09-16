@@ -23,11 +23,11 @@ func TestRuntimeSwitchPreservesExplicitNativePolicies(t *testing.T) {
 		slot                          model.ActorID
 		permission, approval, sandbox string
 	}{
-		{"second-claude-inherit", `{"codex":{"runtime":"claude","permission_mode":""}}`, model.ActorCodex, "", "", ""},
-		{"second-grok-strict", `{"codex":{"runtime":"grok","permission_mode":"ask","sandbox":"strict"}}`, model.ActorCodex, "ask", "", "strict"},
-		{"first-codex-inherit", `{"claude":{"runtime":"codex","approval_policy":"","sandbox":""}}`, model.ActorClaude, "", "", ""},
-		{"first-codex-restricted", `{"claude":{"runtime":"codex","approval_policy":"on-request","sandbox":"workspace-write"}}`, model.ActorClaude, "", "on-request", "workspace-write"},
-		{"first-codex-read-only", `{"claude":{"runtime":"codex","sandbox":"read-only"}}`, model.ActorClaude, "", "yolo", "read-only"},
+		{"second-claude-inherit", `{"codex":{"runtime":"claude","permission_mode":""}}`, model.ActorSlot2, "", "", ""},
+		{"second-grok-strict", `{"codex":{"runtime":"grok","permission_mode":"ask","sandbox":"strict"}}`, model.ActorSlot2, "ask", "", "strict"},
+		{"first-codex-inherit", `{"claude":{"runtime":"codex","approval_policy":"","sandbox":""}}`, model.ActorSlot1, "", "", ""},
+		{"first-codex-restricted", `{"claude":{"runtime":"codex","approval_policy":"on-request","sandbox":"workspace-write"}}`, model.ActorSlot1, "", "on-request", "workspace-write"},
+		{"first-codex-read-only", `{"claude":{"runtime":"codex","sandbox":"read-only"}}`, model.ActorSlot1, "", "yolo", "read-only"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg, err := loadTestConfig(t, tt.document)

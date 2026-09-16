@@ -80,8 +80,8 @@ func TestAgentResolverIsolatesConcurrentProfilesAndRefreshesOnlyOnResolve(t *tes
 		actor         model.ActorID
 		id, modelName string
 	}{
-		{model.ActorClaude, "profile-a", "custom-a"},
-		{model.ActorCodex, "profile-b", "custom-b"},
+		{model.ActorSlot1, "profile-a", "custom-a"},
+		{model.ActorSlot2, "profile-b", "custom-b"},
 	} {
 		group.Add(1)
 		go func(index int, test struct {
@@ -138,7 +138,7 @@ func TestAgentResolverIsolatesConcurrentProfilesAndRefreshesOnlyOnResolve(t *tes
 	if results[0].cfg.Env["PAIRROOM_CC_SWITCH_GROK_API_KEY"] != "secret-a" {
 		t.Fatal("an active materialization changed without re-resolution")
 	}
-	fresh, err := resolver.Resolve(context.Background(), model.ActorClaude, selection("profile-a", "custom-a"), model.RuntimeGrok, t.TempDir(), t.TempDir())
+	fresh, err := resolver.Resolve(context.Background(), model.ActorSlot1, selection("profile-a", "custom-a"), model.RuntimeGrok, t.TempDir(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

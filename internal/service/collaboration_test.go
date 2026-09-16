@@ -53,7 +53,7 @@ func TestCollaborationIsCreatedOnceAndRecoveredFromRoomFacts(t *testing.T) {
 					_ = json.Unmarshal(event.Data, &provisioned)
 				}
 			}
-			if meta.Collaboration == nil || *meta.Collaboration != want || provisioned.Schema != 4 || provisioned.Collaboration == nil || *provisioned.Collaboration != want {
+			if meta.Collaboration == nil || *meta.Collaboration != want || provisioned.Schema != 5 || provisioned.Collaboration == nil || *provisioned.Collaboration != want {
 				t.Fatal("Room and service authorities disagree")
 			}
 			reopened, err := OpenRegistry(context.Background(), RegistryConfig{Root: root})
@@ -93,7 +93,7 @@ func TestManagementHTTPAcceptsCreationCollaboration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bindings := `{"claude":{"mode":"new"},"codex":{"mode":"new"}}`
+	bindings := `{"slot1":{"mode":"new"},"slot2":{"mode":"new"}}`
 	defaultBody := `{"name":"ui-default","bindings":` + bindings + `,"collaboration":{"mode":"default"}}`
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, managementRequest(http.MethodPost, "/api/v1/projects/"+project.ID+"/rooms", defaultBody, true))
@@ -156,7 +156,7 @@ func TestManagementRejectsChangingCollaborationAfterCreation(t *testing.T) {
 	if *after.Collaboration != *created.Collaboration || after.Name != created.Name {
 		t.Fatal("rejected mutation changed state")
 	}
-	// New Rooms use schema 11; existing schema-10 Rooms remain byte-identical.
+	// New Rooms use schema 12; retired formats are rejected before replay.
 	data, err := os.ReadFile(filepath.Join(created.DataDir, "metadata.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +164,7 @@ func TestManagementRejectsChangingCollaborationAfterCreation(t *testing.T) {
 	var meta struct {
 		Schema int `json:"schema_version"`
 	}
-	if json.Unmarshal(data, &meta) != nil || meta.Schema != 11 {
+	if json.Unmarshal(data, &meta) != nil || meta.Schema != 12 {
 		t.Fatalf("new-mode metadata=%s", data)
 	}
 }

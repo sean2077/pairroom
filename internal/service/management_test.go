@@ -228,7 +228,7 @@ func TestManagementPermissionModeExposesYolo(t *testing.T) {
 	}
 	shell := httptest.NewRecorder()
 	server.Handler().ServeHTTP(shell, managementRequest(http.MethodGet, "/", "", false))
-	if shell.Code != http.StatusOK || !strings.Contains(shell.Body.String(), `id="claude-permission-mode"`) || strings.Contains(shell.Body.String(), `<input id="claude-permission-mode"`) {
+	if shell.Code != http.StatusOK || !strings.Contains(shell.Body.String(), `id="slot1-permission-mode"`) || strings.Contains(shell.Body.String(), `<input id="slot1-permission-mode"`) {
 		t.Fatalf("permission mode must be a selectable list, not a free-text input")
 	}
 }

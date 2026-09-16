@@ -13,7 +13,7 @@ func TestMockStopCancelsActiveAndRejectsAdapterQueue(t *testing.T) {
 	var mu sync.Mutex
 	var events []model.RuntimeEvent
 	started := make(chan struct{}, 1)
-	adapter := NewMock(Config{Actor: model.ActorClaude, MockDelay: 2 * time.Second}, func(event model.RuntimeEvent) {
+	adapter := NewMock(Config{Actor: model.ActorSlot1, MockDelay: 2 * time.Second}, func(event model.RuntimeEvent) {
 		mu.Lock()
 		events = append(events, event)
 		mu.Unlock()
@@ -59,7 +59,7 @@ func TestMockStopCancelsActiveAndRejectsAdapterQueue(t *testing.T) {
 
 func TestMockPreservesConfiguredSessionID(t *testing.T) {
 	const sessionID = "durable-room-session"
-	adapter := NewMock(Config{Actor: model.ActorClaude, SessionID: sessionID}, func(model.RuntimeEvent) {})
+	adapter := NewMock(Config{Actor: model.ActorSlot1, SessionID: sessionID}, func(model.RuntimeEvent) {})
 	if got := adapter.SessionID(); got != sessionID {
 		t.Fatalf("SessionID()=%q, want %q", got, sessionID)
 	}

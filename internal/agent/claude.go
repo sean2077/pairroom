@@ -68,7 +68,7 @@ type ClaudeAdapter struct {
 
 func NewClaude(cfg Config, sink EventSink) *ClaudeAdapter {
 	if !cfg.Actor.ValidParticipant() {
-		cfg.Actor = model.ActorClaude
+		cfg.Actor = model.ActorSlot1
 	}
 	if cfg.Command == "" {
 		cfg.Command = "claude"

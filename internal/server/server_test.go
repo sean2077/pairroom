@@ -95,7 +95,7 @@ func TestHealthSnapshotAndMessageAPI(t *testing.T) {
 		t.Fatalf("health status = %d: %s", health.Code, health.Body.String())
 	}
 
-	body := bytes.NewBufferString(`{"text":"Review the design","to":["claude"]}`)
+	body := bytes.NewBufferString(`{"text":"Review the design","to":["slot1"]}`)
 	send := httptest.NewRecorder()
 	request := localRequest(http.MethodPost, "/api/v1/messages", body)
 	request.Header.Set("Content-Type", "application/json")
@@ -401,7 +401,7 @@ func TestBrowserSessionAndCSRF(t *testing.T) {
 	}
 
 	missingCSRF := httptest.NewRecorder()
-	missingRequest := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/v1/messages", strings.NewReader(`{"text":"blocked","to":["claude"]}`))
+	missingRequest := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/v1/messages", strings.NewReader(`{"text":"blocked","to":["slot1"]}`))
 	missingRequest.Header.Set("Content-Type", "application/json")
 	missingRequest.AddCookie(cookie)
 	server.Handler().ServeHTTP(missingCSRF, missingRequest)
@@ -410,7 +410,7 @@ func TestBrowserSessionAndCSRF(t *testing.T) {
 	}
 
 	accepted := httptest.NewRecorder()
-	acceptedRequest := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/v1/messages", strings.NewReader(`{"text":"accepted","to":["claude"]}`))
+	acceptedRequest := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/v1/messages", strings.NewReader(`{"text":"accepted","to":["slot1"]}`))
 	acceptedRequest.Header.Set("Content-Type", "application/json")
 	acceptedRequest.Header.Set(csrfHeaderName, session.CSRF)
 	acceptedRequest.AddCookie(cookie)
@@ -529,7 +529,7 @@ func TestRetryAndExportAPI(t *testing.T) {
 	})
 
 	send := httptest.NewRecorder()
-	request := localRequest(http.MethodPost, "/api/v1/messages", bytes.NewBufferString(`{"text":"Inspect failure","to":["codex"]}`))
+	request := localRequest(http.MethodPost, "/api/v1/messages", bytes.NewBufferString(`{"text":"Inspect failure","to":["slot2"]}`))
 	request.Header.Set("Content-Type", "application/json")
 	server.Handler().ServeHTTP(send, request)
 	if send.Code != http.StatusAccepted {
@@ -544,7 +544,7 @@ func TestRetryAndExportAPI(t *testing.T) {
 	failed := false
 	for time.Now().Before(deadline) {
 		for _, message := range engine.Snapshot().Messages {
-			if message.ID == original.ID && message.Delivery[model.ActorCodex] == model.DeliveryFailed {
+			if message.ID == original.ID && message.Delivery[model.ActorSlot2] == model.DeliveryFailed {
 				failed = true
 				break
 			}
@@ -559,7 +559,7 @@ func TestRetryAndExportAPI(t *testing.T) {
 	}
 
 	retry := httptest.NewRecorder()
-	retryRequest := localRequest(http.MethodPost, "/api/v1/messages/"+original.ID+"/retry", bytes.NewBufferString(`{"to":["codex"]}`))
+	retryRequest := localRequest(http.MethodPost, "/api/v1/messages/"+original.ID+"/retry", bytes.NewBufferString(`{"to":["slot2"]}`))
 	retryRequest.Header.Set("Content-Type", "application/json")
 	server.Handler().ServeHTTP(retry, retryRequest)
 	if retry.Code != http.StatusAccepted {
@@ -676,7 +676,7 @@ func TestAttachmentUploadServeDeleteAndTranscriptReference(t *testing.T) {
 	}
 
 	payload, err := json.Marshal(map[string]any{
-		"text": "Review this diagram", "to": []string{"claude"}, "attachments": []model.Attachment{image},
+		"text": "Review this diagram", "to": []string{"slot1"}, "attachments": []model.Attachment{image},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -757,7 +757,7 @@ func TestWindowedSnapshotAndMessagePaginationAPI(t *testing.T) {
 	server, engine := newDormantTestServer(t)
 	for i := 0; i < 9; i++ {
 		if _, err := engine.Send(context.Background(), room.SendRequest{
-			Text: fmt.Sprintf("history-%02d", i), To: []model.ActorID{model.ActorClaude},
+			Text: fmt.Sprintf("history-%02d", i), To: []model.ActorID{model.ActorSlot1},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -823,7 +823,7 @@ func TestRemovedRoleAPIAndTargetCannotMutateLegacyRoom(t *testing.T) {
 func TestTranscriptExportsCollaborationInsteadOfLegacyRole(t *testing.T) {
 	c, _ := (model.Collaboration{Mode: model.CollaborationCustom, Instructions: "Agent 2 plans. Agent 1 implements."}).ForCreation()
 	s := model.RoomSnapshot{Meta: model.RoomMeta{Name: "custom", Collaboration: &c}, Participants: map[model.ActorID]model.ParticipantSnapshot{
-		model.ActorClaude: {DisplayName: "Grok Build", MentionHandle: "@grok", Role: model.RolePeer, Responsibility: "participant", PermissionProfile: model.PermissionReadOnly},
+		model.ActorSlot1: {DisplayName: "Grok Build", MentionHandle: "@grok", Role: model.RolePeer, Responsibility: "participant", PermissionProfile: model.PermissionReadOnly},
 	}}
 	got := renderMarkdownTranscript(s)
 	if !strings.Contains(got, c.Instructions) || !strings.Contains(got, "permissions `read-only`") || strings.Contains(got, "role `peer`") {

@@ -18,7 +18,6 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
 	"github.com/sean2077/pairroom/internal/relayclient"
-	"github.com/sean2077/pairroom/internal/store"
 )
 
 type nativeFixture struct {
@@ -191,7 +190,7 @@ func associateCLI(t *testing.T, f *nativeFixture, slot model.ActorID) relay.Auth
 
 func TestNativeRebindSameSessionIsIdempotent(t *testing.T) {
 	f := nativeHTTP(t)
-	a := f.bind(t, model.ActorClaude)
+	a := f.bind(t, model.ActorSlot1)
 	args := []string{"bind", "--room", f.room.ID, "--slot", "claude", "--service-file", f.endpoint}
 	// Re-binding from the same official session resumes idempotently: no new
 	// generation, no credential rotation, and still no secret in stdout.
@@ -205,7 +204,7 @@ func TestNativeRebindSameSessionIsIdempotent(t *testing.T) {
 	if json.Unmarshal(out, &result) != nil || result.Binding.Generation != a.Generation || result.Binding.SessionID != a.SessionID {
 		t.Fatalf("same-session rebind rotated identity: %+v", result.Binding)
 	}
-	dir := filepath.Join(f.project.Root, ".pairroom", "rooms", f.room.ID, "slots", "claude")
+	dir := filepath.Join(f.project.Root, ".pairroom", "rooms", f.room.ID, "slots", "slot1")
 	state, _ := os.ReadFile(filepath.Join(dir, "state.json"))
 	credentials, _ := os.ReadFile(filepath.Join(dir, "credentials"))
 	// A different official session cannot take the occupied slot, and the rejected
@@ -223,7 +222,7 @@ func TestNativeRebindSameSessionIsIdempotent(t *testing.T) {
 
 func TestNativeReplaceRotatesGeneration(t *testing.T) {
 	f := nativeHTTP(t)
-	a := f.bind(t, model.ActorClaude)
+	a := f.bind(t, model.ActorSlot1)
 	out, err := f.runAs(t, model.RuntimeClaude, a.SessionID, []string{"bind", "--room", f.room.ID, "--slot", "claude", "--service-file", f.endpoint, "--replace"}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -251,7 +250,7 @@ func TestNativeHTTPAckSettlesDrainingRuntime(t *testing.T) {
 	for _, shutdown := range []bool{false, true} {
 		t.Run(fmt.Sprintf("shutdown=%t", shutdown), func(t *testing.T) {
 			f := nativeHTTP(t)
-			a := associateCLI(t, f, model.ActorClaude)
+			a := associateCLI(t, f, model.ActorSlot1)
 			m, err := f.native.engine.SendUser(relay.SendRequest{ID: "before-drain", To: a.Slot, Text: "accepted work"})
 			if err != nil {
 				t.Fatal(err)
@@ -288,7 +287,7 @@ func TestNativeHTTPAckSettlesDrainingRuntime(t *testing.T) {
 				t.Fatalf("drain admitted new work: %v", err)
 			}
 			body, _ := json.Marshal(map[string]string{"id": claim.ID, "receipt": claim.Receipt})
-			req, _ := http.NewRequestWithContext(ctx, http.MethodPost, f.server.URL+"/api/v1/relay/"+f.room.ID+"/claude/ack", bytes.NewReader(body))
+			req, _ := http.NewRequestWithContext(ctx, http.MethodPost, f.server.URL+"/api/v1/relay/"+f.room.ID+"/slot1/ack", bytes.NewReader(body))
 			req.Header.Set("Authorization", "Relay "+a.Secret)
 			req.Header.Set("X-PairRoom-Bind", a.BindID)
 			req.Header.Set("X-PairRoom-Generation", fmt.Sprint(a.Generation))
@@ -315,7 +314,7 @@ func TestNativeHTTPAckSettlesDrainingRuntime(t *testing.T) {
 }
 func TestNativeCLIHookAssociationRoutingAndEightBlockBudget(t *testing.T) {
 	f := nativeHTTP(t)
-	a := f.bind(t, model.ActorClaude)
+	a := f.bind(t, model.ActorSlot1)
 	_ = f.native.engine.Park(a.Slot, false)
 	// bind already associated the official session from the environment; a hook
 	// from an unrelated session matches no local binding and cannot disturb it.
@@ -328,7 +327,7 @@ func TestNativeCLIHookAssociationRoutingAndEightBlockBudget(t *testing.T) {
 	if b, err := f.native.engine.Inspect(a); err != nil || b.SessionID != a.SessionID {
 		t.Fatalf("unrelated hook disturbed association: %+v %v", b, err)
 	}
-	b := associateCLI(t, f, model.ActorCodex)
+	b := associateCLI(t, f, model.ActorSlot2)
 	// Native input is mocked; every CLI call below traverses real authenticated
 	// HTTP, durable Room events and the same Stop continuation serializer.
 	if _, err := f.hook(t, a, "@codex discuss this whole reply", false); err != nil {
@@ -392,8 +391,8 @@ func TestNativeCLIHookAssociationRoutingAndEightBlockBudget(t *testing.T) {
 }
 func TestNativeHTTPAuthorizationAndPublicSurface(t *testing.T) {
 	f := nativeHTTP(t)
-	a := associateCLI(t, f, model.ActorClaude)
-	_ = associateCLI(t, f, model.ActorCodex)
+	a := associateCLI(t, f, model.ActorSlot1)
+	_ = associateCLI(t, f, model.ActorSlot2)
 	call := func(path, body string, auth relay.Auth, bearer bool) (int, []byte) {
 		t.Helper()
 		req, err := http.NewRequest(http.MethodPost, f.server.URL+path, strings.NewReader(body))
@@ -418,14 +417,14 @@ func TestNativeHTTPAuthorizationAndPublicSurface(t *testing.T) {
 		_, _ = data.ReadFrom(res.Body)
 		return res.StatusCode, data.Bytes()
 	}
-	path := "/api/v1/relay/" + f.room.ID + "/claude/send"
+	path := "/api/v1/relay/" + f.room.ID + "/slot1/send"
 	for _, test := range []struct {
 		a      relay.Auth
 		bearer bool
 		path   string
 	}{
 		{a, true, path}, {relay.Auth{Slot: a.Slot, BindID: a.BindID, Generation: a.Generation, SessionID: "wrong", Secret: a.Secret}, false, path},
-		{a, false, "/api/v1/relay/" + f.room.ID + "/codex/send"}, {a, false, path + "?token=bad"},
+		{a, false, "/api/v1/relay/" + f.room.ID + "/slot2/send"}, {a, false, path + "?token=bad"},
 	} {
 		if code, body := call(test.path, `{"id":"denied","text":"must not publish"}`, test.a, test.bearer); code != 401 {
 			t.Fatalf("unauthorized code=%d body=%s", code, body)
@@ -437,11 +436,11 @@ func TestNativeHTTPAuthorizationAndPublicSurface(t *testing.T) {
 	}
 	base := "/api/v1/rooms/" + f.room.ID + "/surface"
 	for _, action := range []string{"interrupt", "stop", "restart"} {
-		if code, data := call(base+"/api/v1/participants/claude/"+action, `{}`, a, true); code != 404 {
+		if code, data := call(base+"/api/v1/participants/slot1/"+action, `{}`, a, true); code != 404 {
 			t.Fatalf("native process control offered %s: %d %s", action, code, data)
 		}
 	}
-	if code, data := call(base+"/api/v1/participants/claude/park", `{"enabled":false}`, a, true); code != 200 {
+	if code, data := call(base+"/api/v1/participants/slot1/park", `{"enabled":false}`, a, true); code != 200 {
 		t.Fatalf("park gateway failed: %d %s", code, data)
 	}
 	for _, path := range []string{"/", "/app.js", "/styles.css", "/_pairroom/i18n.js", "/api/v1/snapshot"} {
@@ -490,92 +489,28 @@ func TestNativeSchemaCompatibilityAndCheckpointShape(t *testing.T) {
 	if err := os.WriteFile(metaPath, metadata, 0600); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenRegistry(context.Background(), RegistryConfig{Root: registry.Root()})
+	checkpointPath := filepath.Join(registry.Root(), "service-registry.json")
+	checkpointBefore, err := os.ReadFile(checkpointPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	recovered, ok := reopened.Room(old.ID)
-	if !ok || recovered.HostMode != model.HostEmbedded {
-		t.Fatal("prov3 not interpreted as embedded")
-	}
-	if after, _ := os.ReadFile(path); !bytes.Equal(after, data) {
-		t.Fatal("reading old era rewrote event bytes")
-	}
-	log, err := store.OpenExistingForRoom(old.DataDir, old.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	event, _ := model.NewEvent(old.ID, "room.diagnostic", model.ActorSystem, map[string]bool{"test": true})
-	if err := log.Append(&event); err != nil {
-		t.Fatal(err)
-	}
-	_ = log.Close()
-	after, _ := os.ReadFile(path)
-	if !bytes.HasPrefix(after, data) {
-		t.Fatal("old era append rewrote prefix")
+	_, err = OpenRegistry(context.Background(), RegistryConfig{Root: registry.Root()})
+	if err == nil || !strings.Contains(err.Error(), "retired Service data root") {
+		t.Fatalf("retired root was not rejected: %v", err)
 	}
 	if after, _ := os.ReadFile(metaPath); !bytes.Equal(after, metadata) {
-		t.Fatal("old era metadata relabeled")
+		t.Fatal("retired metadata was rewritten")
 	}
-	for _, mode := range []model.HostMode{model.HostEmbedded, model.HostNative} {
-		created, err := reopened.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: project.ID, Name: string(mode), HostMode: mode, Bindings: specs(BindingNew, BindingNew, "")}, SyntheticProvisioner{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		schema, err := readRoomStoreSchema(created.DataDir)
-		if err != nil || schema != 11 {
-			t.Fatal("new Room not schema11")
-		}
-		facts, _, found, err := reopened.readRoomFacts(context.Background(), created.DataDir)
-		if err != nil || !found || facts.HostMode != mode {
-			t.Fatal("host_mode not recovered")
-		}
-	}
-	// The strict old checkpoint reader accepts the unchanged shape. Check the
-	// nested room objects with the new field explicitly excluded from the schema.
-	checkpoint, err := os.ReadFile(filepath.Join(reopened.Root(), "service-registry.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(checkpoint), "host_mode") {
-		t.Fatal("host_mode contaminated schema2 checkpoint")
-	}
-	var raw struct {
-		Schema int               `json:"schema"`
-		Rooms  []json.RawMessage `json:"rooms"`
-	}
-	if json.Unmarshal(checkpoint, &raw) != nil || raw.Schema != 2 {
-		t.Fatal("checkpoint schema changed")
-	}
-	for _, entry := range raw.Rooms {
-		var oldShape map[string]any
-		_ = json.Unmarshal(entry, &oldShape)
-		for key := range oldShape {
-			if key == "host_mode" {
-				t.Fatal("unknown old reader field")
-			}
-		}
-	}
-	// Downgrade only metadata of a native fixture: the new reader must reject
-	// mismatched data rather than accepting native facts in an old era.
-	for _, room := range reopened.Snapshot(true).Rooms {
-		if room.HostMode == model.HostNative {
-			if err := os.WriteFile(filepath.Join(room.DataDir, "metadata.json"), metadata, 0600); err != nil {
-				t.Fatal(err)
-			}
-			if _, _, _, err := reopened.readRoomFacts(context.Background(), room.DataDir); err == nil {
-				t.Fatal("schema10/prov4 native accepted")
-			}
-			break
-		}
+	if after, _ := os.ReadFile(checkpointPath); !bytes.Equal(after, checkpointBefore) {
+		t.Fatal("retired root checkpoint was rewritten")
 	}
 }
 func TestNativeGlobalSessionOwnershipIncludingEmbeddedAndArchive(t *testing.T) {
 	f := nativeHTTP(t)
-	a := associateCLI(t, f, model.ActorClaude)
+	a := associateCLI(t, f, model.ActorSlot1)
 	// Same runtime in a different stable slot still conflicts globally.
 	pair := defaultAgentSelections()
-	pair[model.ActorCodex] = pair[model.ActorClaude]
+	pair[model.ActorSlot2] = pair[model.ActorSlot1]
 	other, err := f.registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: f.project.ID, Name: "other native", HostMode: model.HostNative, Agents: pair}, SyntheticProvisioner{})
 	if err != nil {
 		t.Fatal(err)
@@ -587,7 +522,7 @@ func TestNativeGlobalSessionOwnershipIncludingEmbeddedAndArchive(t *testing.T) {
 	native := rt.(*nativeHostRuntime)
 	// Association is captured at bind, so binding the same official session into
 	// another Room slot conflicts globally during Bind itself.
-	if _, err := native.engine.Bind(model.ActorCodex, relay.BindRequest{BindID: "other-bind", CredentialHash: relay.Digest("secret"), SessionID: a.SessionID}); !errors.Is(err, ErrBindingOwned) {
+	if _, err := native.engine.Bind(model.ActorSlot2, relay.BindRequest{BindID: "other-bind", CredentialHash: relay.Digest("secret"), SessionID: a.SessionID}); !errors.Is(err, ErrBindingOwned) {
 		t.Fatalf("duplicate runtime identity accepted: %v", err)
 	}
 	embedded, err := f.registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: f.project.ID, Name: "embedded", Bindings: specs(BindingNew, BindingNew, "")}, deferredNewProvisioner{})
@@ -595,10 +530,10 @@ func TestNativeGlobalSessionOwnershipIncludingEmbeddedAndArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	called := false
-	if _, err := f.registry.MaterializeBinding(context.Background(), embedded.ID, model.ActorClaude, a.SessionID, func(string, any) error { called = true; return nil }); !errors.Is(err, ErrBindingOwned) || called {
+	if _, err := f.registry.MaterializeBinding(context.Background(), embedded.ID, model.ActorSlot1, a.SessionID, func(string, any) error { called = true; return nil }); !errors.Is(err, ErrBindingOwned) || called {
 		t.Fatal("embedded materialization ignored native owner")
 	}
-	if _, err := f.registry.MaterializeBinding(context.Background(), f.room.ID, model.ActorClaude, "bypass", func(string, any) error { t.Fatal("native bypass wrote"); return nil }); err == nil {
+	if _, err := f.registry.MaterializeBinding(context.Background(), f.room.ID, model.ActorSlot1, "bypass", func(string, any) error { t.Fatal("native bypass wrote"); return nil }); err == nil {
 		t.Fatal("native association bypassed hooks")
 	}
 	if err := f.manager.Suspend(context.Background(), f.room.ID); err != nil {
@@ -607,7 +542,7 @@ func TestNativeGlobalSessionOwnershipIncludingEmbeddedAndArchive(t *testing.T) {
 	if _, err := f.registry.ArchiveRoom(context.Background(), f.room.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := native.engine.Bind(model.ActorCodex, relay.BindRequest{BindID: "other-bind-2", CredentialHash: relay.Digest("secret"), SessionID: a.SessionID}); !errors.Is(err, ErrBindingOwned) {
+	if _, err := native.engine.Bind(model.ActorSlot2, relay.BindRequest{BindID: "other-bind-2", CredentialHash: relay.Digest("secret"), SessionID: a.SessionID}); !errors.Is(err, ErrBindingOwned) {
 		t.Fatal("archive released binding ownership")
 	}
 }

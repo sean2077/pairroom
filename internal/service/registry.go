@@ -2,6 +2,7 @@ package service
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -28,6 +29,8 @@ var (
 )
 
 const roomDeletionQuarantineName = ".deleted-rooms"
+
+const registryCheckpointSchema = 3
 
 type RegistryConfig struct {
 	Root     string
@@ -69,17 +72,10 @@ func OpenRegistry(ctx context.Context, cfg RegistryConfig) (*Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		return nil, fmt.Errorf("create service data root: %w", err)
+	if err := preflightRegistryRoot(root); err != nil {
+		return nil, err
 	}
 	roomsRoot := filepath.Join(root, "rooms")
-	if err := os.MkdirAll(roomsRoot, 0o700); err != nil {
-		return nil, fmt.Errorf("create room data root: %w", err)
-	}
-	// Keep the deletion quarantine lazy. A fresh Registry should not gain an
-	// otherwise unexplained data directory until the first permanent Room
-	// removal. Startup recovery validates and scans it only when it already
-	// exists.
 	deletedRoomsRoot := filepath.Join(roomsRoot, roomDeletionQuarantineName)
 	resolver := cfg.Resolver
 	if resolver == nil {
@@ -102,17 +98,27 @@ func OpenRegistry(ctx context.Context, cfg RegistryConfig) (*Registry, error) {
 		bindingOwners:    make(map[string]string),
 		roomDeletionFS:   defaultRoomDeletionFS(),
 	}
-	// Resolve crash-interrupted Room deletions before the normal discovery scan.
-	// Recovery restores prepared data when the durable checkpoint still owns the
-	// Room (or cannot be trusted), and completes cleanup only after a committed
-	// marker or a valid checkpoint proves that logical deletion won.
+	// Validate a current checkpoint before creating a root/rooms directory or
+	// performing any recovery mutation. A retired or malformed root is never
+	// repaired, replayed, rewritten, or even completed with missing directories.
+	if err := registry.loadCheckpointProjects(); err != nil {
+		return nil, fmt.Errorf("load service registry checkpoint: %w", err)
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return nil, fmt.Errorf("create service data root: %w", err)
+	}
+	if err := os.MkdirAll(roomsRoot, 0o700); err != nil {
+		return nil, fmt.Errorf("create room data root: %w", err)
+	}
+	// Keep the deletion quarantine lazy. A fresh Registry should not gain an
+	// otherwise unexplained data directory until the first permanent Room
+	// removal. Startup recovery validates and scans it only when it already
+	// exists.
+	// Resolve crash-interrupted Room deletions only after the root and checkpoint
+	// have passed the retirement boundary.
 	if err := registry.recoverRoomDeletionQuarantine(ctx); err != nil {
 		return nil, fmt.Errorf("recover Room deletion quarantine: %w", err)
 	}
-	// A valid checkpoint preserves explicitly registered projects that do not yet
-	// have a Room. Room facts and binding ownership are always rebuilt from Room
-	// Event Logs below; a missing or corrupt checkpoint is therefore recoverable.
-	registry.loadCheckpointProjects()
 	// An archived Room whose directory was lost remains visible for explicit
 	// cleanup. Only a validated checkpoint can recover its identity.
 	if err := registry.recoverMissingArchivedRoomsFromCheckpoint(); err != nil {
@@ -205,7 +211,7 @@ func (r *Registry) Snapshot(includeArchived bool) RegistrySnapshot {
 		}
 		rooms = append(rooms, cloneRoom(room))
 	}
-	return RegistrySnapshot{Schema: 2, GeneratedAt: r.now(), Projects: projects, Rooms: rooms}.Sorted()
+	return RegistrySnapshot{Schema: registryCheckpointSchema, GeneratedAt: r.now(), Projects: projects, Rooms: rooms}.Sorted()
 }
 
 func (r *Registry) BindingOwner(key BindingKey) (string, bool) {
@@ -232,30 +238,207 @@ func (r *Registry) poisonLocked(err error) error {
 	return fmt.Errorf("%w: %v", ErrRegistryFailClosed, r.poisoned)
 }
 
-func (r *Registry) loadCheckpointProjects() {
-	data, err := os.ReadFile(r.checkpoint)
+// preflightRegistryRoot is intentionally read-only and runs before OpenRegistry
+// creates directories, repairs deletion quarantine, replays events, or rewrites
+// a checkpoint. A schema-2 root is retired as one unit, including empty Project
+// registrations that cannot be reconstructed from Room logs.
+func preflightRegistryRoot(root string) error {
+	info, err := os.Lstat(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
-		return
+		return fmt.Errorf("inspect Service data root: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("Service data root must be a direct directory")
+	}
+	if schema, exists, err := readSchemaHeader(filepath.Join(root, "service-registry.json")); err != nil {
+		return fmt.Errorf("inspect Service registry checkpoint before recovery: %w", err)
+	} else if exists && schema < registryCheckpointSchema {
+		return fmt.Errorf("retired Service data root (checkpoint schema %d); start with a new data root and recreate Rooms and profiles; legacy data was not modified", schema)
+	}
+	if schema, exists, err := readSchemaHeader(filepath.Join(root, agentPairProfilesFile)); err != nil {
+		return fmt.Errorf("inspect Agent pair profiles before recovery: %w", err)
+	} else if exists && schema < 2 {
+		return fmt.Errorf("retired Service data root (Agent pair profile schema %d); start with a new data root and recreate Rooms and profiles; legacy data was not modified", schema)
+	}
+	return preflightRoomSchemas(filepath.Join(root, "rooms"))
+}
+
+func readSchemaHeader(path string) (int, bool, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > 16<<20 {
+		return 0, false, errors.New("schema file must be a bounded regular file")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false, err
+	}
+	var header struct {
+		Schema int `json:"schema"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return 0, false, err
+	}
+	return header.Schema, true, nil
+}
+
+func preflightRoomSchemas(roomsRoot string) error {
+	info, err := os.Lstat(roomsRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect Room data root: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("Room data root must be a direct directory")
+	}
+	return filepath.WalkDir(roomsRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return errors.New("Room data root contains a symlink")
+		}
+		if entry.IsDir() || entry.Name() != "metadata.json" {
+			return nil
+		}
+		schema, _, err := readStoreSchemaHeader(path)
+		if err != nil {
+			return fmt.Errorf("inspect Room metadata %s: %w", path, err)
+		}
+		if schema < version.StoreSchema {
+			return fmt.Errorf("retired Service data root (Room store schema %d); start with a new data root and recreate Rooms and profiles; legacy data was not modified", schema)
+		}
+		return nil
+	})
+}
+
+func readStoreSchemaHeader(path string) (int, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false, err
+	}
+	var metadata struct {
+		Format        string `json:"format"`
+		SchemaVersion int    `json:"schema_version"`
+	}
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return 0, false, err
+	}
+	if metadata.Format != "pairroom-jsonl" {
+		return 0, false, fmt.Errorf("unsupported event metadata format %q", metadata.Format)
+	}
+	return metadata.SchemaVersion, true, nil
+}
+
+func (r *Registry) readCheckpoint() (RegistrySnapshot, bool, error) {
+	data, err := os.ReadFile(r.checkpoint)
+	if errors.Is(err, os.ErrNotExist) {
+		return RegistrySnapshot{}, false, nil
+	}
+	if err != nil {
+		return RegistrySnapshot{}, false, err
 	}
 	var snapshot RegistrySnapshot
-	if json.Unmarshal(data, &snapshot) != nil || snapshot.Schema != 2 {
-		return
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&snapshot); err != nil {
+		return RegistrySnapshot{}, false, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return RegistrySnapshot{}, false, errors.New("service registry checkpoint contains trailing JSON")
+	}
+	if snapshot.Schema < registryCheckpointSchema {
+		return RegistrySnapshot{}, false, fmt.Errorf("retired service registry checkpoint schema %d", snapshot.Schema)
+	}
+	if snapshot.Schema != registryCheckpointSchema {
+		return RegistrySnapshot{}, false, fmt.Errorf("unsupported service registry checkpoint schema %d", snapshot.Schema)
+	}
+	return snapshot, true, nil
+}
+
+func (r *Registry) validatedCheckpoint() (RegistrySnapshot, map[string]Room, bool, error) {
+	snapshot, exists, err := r.readCheckpoint()
+	if err != nil || !exists {
+		return RegistrySnapshot{}, nil, exists, err
+	}
+	projects := make(map[string]Project, len(snapshot.Projects))
+	projectRoots := make(map[string]string, len(snapshot.Projects))
+	for _, project := range snapshot.Projects {
+		root := strings.TrimSpace(project.Root)
+		if strings.TrimSpace(project.ID) == "" || root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root || project.ID != projectID(root) {
+			return RegistrySnapshot{}, nil, false, fmt.Errorf("checkpoint Project %q has an invalid identity", project.ID)
+		}
+		if _, duplicate := projects[project.ID]; duplicate {
+			return RegistrySnapshot{}, nil, false, fmt.Errorf("checkpoint contains duplicate Project %s", project.ID)
+		}
+		if owner, duplicate := projectRoots[root]; duplicate && owner != project.ID {
+			return RegistrySnapshot{}, nil, false, fmt.Errorf("checkpoint Project root %s has multiple identities", root)
+		}
+		projects[project.ID] = project
+		projectRoots[root] = project.ID
+	}
+	rooms := make(map[string]Room, len(snapshot.Rooms))
+	dataDirs := make(map[string]string, len(snapshot.Rooms))
+	bindingOwners := make(map[string]string)
+	for _, room := range snapshot.Rooms {
+		if err := validateCheckpointRoom(room); err != nil {
+			return RegistrySnapshot{}, nil, false, fmt.Errorf("checkpoint Room %q is invalid: %w", room.ID, err)
+		}
+		if _, ok := projects[room.ProjectID]; !ok {
+			return RegistrySnapshot{}, nil, false, fmt.Errorf("checkpoint Room %s references unknown Project %s", room.ID, room.ProjectID)
+		}
+		if _, duplicate := rooms[room.ID]; duplicate {
+			return RegistrySnapshot{}, nil, false, fmt.Errorf("checkpoint contains duplicate Room %s", room.ID)
+		}
+		dir := strings.TrimSpace(room.DataDir)
+		if dir == "" || !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
+			return RegistrySnapshot{}, nil, false, fmt.Errorf("checkpoint Room %s has an invalid data directory", room.ID)
+		}
+		if owner, duplicate := dataDirs[dir]; duplicate && owner != room.ID {
+			return RegistrySnapshot{}, nil, false, fmt.Errorf("checkpoint data directory %s belongs to multiple Rooms", dir)
+		}
+		relative, relErr := filepath.Rel(r.roomsRoot, dir)
+		if relErr != nil || filepath.Dir(relative) != "." || validateManagedRoomSourceBase(relative) != nil {
+			return RegistrySnapshot{}, nil, false, fmt.Errorf("checkpoint Room %s has an invalid managed data directory %s", room.ID, dir)
+		}
+		for _, binding := range room.Bindings {
+			if !binding.OwnsIdentity() {
+				continue
+			}
+			key := binding.Key().String()
+			if owner, duplicate := bindingOwners[key]; duplicate && owner != room.ID {
+				return RegistrySnapshot{}, nil, false, fmt.Errorf("checkpoint binding %s session %q belongs to multiple Rooms", binding.Agent, binding.SessionID)
+			}
+			bindingOwners[key] = room.ID
+		}
+		room.DataDir = dir
+		rooms[room.ID] = cloneRoom(room)
+		dataDirs[dir] = room.ID
+	}
+	return snapshot, rooms, true, nil
+}
+
+func (r *Registry) loadCheckpointProjects() error {
+	snapshot, _, exists, err := r.validatedCheckpoint()
+	if err != nil || !exists {
+		return err
 	}
 	for _, project := range snapshot.Projects {
-		root := filepath.Clean(strings.TrimSpace(project.Root))
-		if strings.TrimSpace(project.ID) == "" || root == "." || !filepath.IsAbs(root) || project.ID != projectID(root) {
-			continue
-		}
-		project.Root = root
-		if existingID, ok := r.projectByRoot[root]; ok && existingID != project.ID {
-			continue
-		}
-		if existing, ok := r.projects[project.ID]; ok && existing.Root != root {
-			continue
-		}
 		r.projects[project.ID] = project
-		r.projectByRoot[root] = project.ID
+		r.projectByRoot[project.Root] = project.ID
 	}
+	return nil
 }
 
 func (r *Registry) scanRooms(ctx context.Context) error {
@@ -331,6 +514,9 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 	createdSeen := false
 	serviceMutationSeen := false
 	for _, event := range events {
+		if !validDurableEventActor(event.Actor) {
+			return Room{}, Project{}, false, fmt.Errorf("event %d has a retired or invalid actor %q", event.Seq, event.Actor)
+		}
 		if strings.HasPrefix(event.Kind, "native.") {
 			if provisioned == nil || provisioned.HostMode != model.HostNative || lifecycle == RoomArchived {
 				return Room{}, Project{}, false, errors.New("native event requires an active native Room")
@@ -359,19 +545,17 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 			if err := json.Unmarshal(event.Data, &payload); err != nil {
 				return Room{}, Project{}, false, fmt.Errorf("decode %s event %d: %w", event.Kind, event.Seq, err)
 			}
-			if payload.Schema != 3 && payload.Schema != 4 {
-				return Room{}, Project{}, false, fmt.Errorf("unsupported room service schema %d; expected 3 or 4", payload.Schema)
+			if payload.Schema < 5 {
+				return Room{}, Project{}, false, fmt.Errorf("retired room provisioning schema %d; recreate the Room", payload.Schema)
 			}
-			if (storeSchema == 10 && payload.Schema != 3) || (storeSchema == 11 && payload.Schema != 4) {
-				return Room{}, Project{}, false, errors.New("store/provisioning schema mismatch: require 10/3 or 11/4")
+			if payload.Schema != 5 {
+				return Room{}, Project{}, false, fmt.Errorf("unsupported room provisioning schema %d", payload.Schema)
 			}
-			if payload.Schema == 3 {
-				if payload.HostMode != "" {
-					return Room{}, Project{}, false, errors.New("provisioning 3 must not contain host_mode")
-				}
-				payload.HostMode = model.HostEmbedded
-			} else if !payload.HostMode.Valid() {
-				return Room{}, Project{}, false, errors.New("provisioning 4 requires explicit host_mode")
+			if storeSchema != version.StoreSchema {
+				return Room{}, Project{}, false, errors.New("store/provisioning schema mismatch: require 12/5")
+			}
+			if !payload.HostMode.Valid() {
+				return Room{}, Project{}, false, errors.New("provisioning 5 requires explicit host_mode")
 			}
 			if payload.Collaboration == nil {
 				return Room{}, Project{}, false, errors.New("provisioning requires collaboration instructions")
@@ -599,8 +783,11 @@ func readRoomStoreSchema(dir string) (int, error) {
 	if metadata.Format != "pairroom-jsonl" {
 		return 0, fmt.Errorf("unsupported event metadata format %q", metadata.Format)
 	}
+	if metadata.SchemaVersion < version.StoreSchema {
+		return 0, fmt.Errorf("retired event store schema %d; recreate the Room", metadata.SchemaVersion)
+	}
 	if !version.SupportsStoreSchema(metadata.SchemaVersion) {
-		return 0, fmt.Errorf("event store schema %d is unsupported; this build reads schemas 10 and 11 and provides no migration", metadata.SchemaVersion)
+		return 0, fmt.Errorf("event store schema %d is unsupported; this build requires schema %d", metadata.SchemaVersion, version.StoreSchema)
 	}
 	return metadata.SchemaVersion, nil
 }
@@ -623,7 +810,7 @@ func validateProvisionedBindings(bindings map[model.ActorID]Binding) error {
 	if len(bindings) != 2 {
 		return fmt.Errorf("exactly two bindings are required; got %d", len(bindings))
 	}
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 		binding, ok := bindings[actor]
 		if !ok {
 			return fmt.Errorf("missing %s binding", actor)
@@ -639,7 +826,7 @@ func validateProvisionedBindings(bindings map[model.ActorID]Binding) error {
 		}
 	}
 	for actor := range bindings {
-		if actor != model.ActorClaude && actor != model.ActorCodex {
+		if actor != model.ActorSlot1 && actor != model.ActorSlot2 {
 			return fmt.Errorf("unexpected binding agent %q", actor)
 		}
 	}
@@ -724,14 +911,12 @@ func (r *Registry) indexRoomLocked(project Project, room Room) error {
 }
 
 func (r *Registry) writeCheckpointLocked() (bool, error) {
-	snapshot := RegistrySnapshot{Schema: 2, GeneratedAt: r.now()}
+	snapshot := RegistrySnapshot{Schema: registryCheckpointSchema, GeneratedAt: r.now()}
 	for _, project := range r.projects {
 		snapshot.Projects = append(snapshot.Projects, project)
 	}
 	for _, room := range r.rooms {
-		checkpointRoom := cloneRoom(room)
-		checkpointRoom.HostMode = ""
-		snapshot.Rooms = append(snapshot.Rooms, checkpointRoom)
+		snapshot.Rooms = append(snapshot.Rooms, cloneRoom(room))
 	}
 	snapshot = snapshot.Sorted()
 	data, err := json.MarshalIndent(snapshot, "", "  ")
@@ -813,12 +998,37 @@ func readEventsReadOnly(path string) ([]model.Event, error) {
 	return events, nil
 }
 
+func validDurableEventActor(actor model.ActorID) bool {
+	return actor == model.ActorUser || actor == model.ActorSystem || actor.ValidParticipant()
+}
+
+func validateCheckpointRoom(room Room) error {
+	if err := room.Validate(); err != nil {
+		return err
+	}
+	if len(room.RuntimeNames) != 2 {
+		return errors.New("checkpoint Room must contain exactly two canonical runtime_names")
+	}
+	for _, actor := range model.SlotActors() {
+		name := strings.TrimSpace(room.RuntimeNames[actor])
+		if name == "" {
+			return fmt.Errorf("checkpoint Room runtime_names is missing %s", actor)
+		}
+	}
+	for actor := range room.RuntimeNames {
+		if !actor.ValidParticipant() {
+			return fmt.Errorf("checkpoint Room runtime_names contains retired or invalid slot %q", actor)
+		}
+	}
+	return nil
+}
+
 func cloneRoom(room Room) Room {
 	room.Collaboration = model.CloneCollaboration(room.Collaboration)
 	room.Bindings = cloneBindings(room.Bindings)
 	room.Agents = cloneAgentSelections(room.Agents)
 	room.RuntimeNames = make(map[model.ActorID]string, 2)
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 		room.RuntimeNames[actor] = model.NativeSessionName(room.ID, room.Name, actor, room.Agents[actor].Runtime, room.Agents[model.OtherParticipant(actor)].Runtime)
 	}
 	return room

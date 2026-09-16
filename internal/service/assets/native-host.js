@@ -25,7 +25,7 @@
   }
   function renderBindings(value) {
     const key=JSON.stringify([value.relay.bindings,value.room.agents,language()]);if(key===bindingsKey)return;bindingsKey=key;
-    const nodes=['claude','codex'].map((slot,index)=>{
+    const nodes=['slot1','slot2'].map((slot,index)=>{
       const b=value.relay.bindings[slot]||{};const selection=value.room.agents[slot]||{};
       const card=element('article',undefined,'binding');card.dataset.slot=slot;
       const top=element('div',undefined,'binding-top');top.append(element('h3',`${index+1} · ${handle(slot)}`),element('span',tr(!b.active?'unbound':b.session_id?'bound':'pending'),'badge'));

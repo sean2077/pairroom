@@ -36,7 +36,7 @@ func TestAttachmentRemovalSharesSubmissionGate(t *testing.T) {
 	media.engine = engine
 	// The first Resolve is canonicalization; later native-path reads are not
 	// expected to hold the routing gate.
-	_, err := engine.Send(context.Background(), SendRequest{Text: "image", To: []model.ActorID{model.ActorClaude}, Attachments: []model.Attachment{image}, Intent: model.IntentQueue})
+	_, err := engine.Send(context.Background(), SendRequest{Text: "image", To: []model.ActorID{model.ActorSlot1}, Attachments: []model.Attachment{image}, Intent: model.IntentQueue})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestRemovedAttachmentCannotEnterTranscript(t *testing.T) {
 	if err := engine.RemoveAttachment(image.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Send(context.Background(), SendRequest{To: []model.ActorID{model.ActorClaude}, Attachments: []model.Attachment{image}}); err == nil {
+	if _, err := engine.Send(context.Background(), SendRequest{To: []model.ActorID{model.ActorSlot1}, Attachments: []model.Attachment{image}}); err == nil {
 		t.Fatal("deleted attachment accepted")
 	}
 	if engine.AttachmentReferenced(image.ID) {
