@@ -12,10 +12,11 @@ Reuse its Room for follow-up work unless the user asks for a new one.
 - **Join**: `pairroom relay bind`. Use the returned candidate guidance when a Room or slot is ambiguous.
 - **Collaborate**: follow the bind result's protocol and collaboration instructions. Do simple work directly; involve the peer when useful.
 - **Discuss in a tool call**: the receiver runs `pairroom relay wait`; the sender runs `pairroom relay exchange --id <stable-id> --text "<message>"`. Reuse an ID only for the same publication; after a confirmed send times out, collect with `wait` rather than sending again.
+- **Stay reachable while a joint task is active**: in a harness that wakes an idle session when tracked background work completes (Claude Code `run_in_background`), end each turn with exactly one background `pairroom relay wait` (`--timeout` at most 300) pending. It owns the sole collector — the Stop hook still publishes but never claims; resolve the wait's result before the next `wait`/`exchange`. Re-hang only after real peer input or an explicit confirmation that the joint task continues; never auto-re-hang on an empty timeout; cancel at task end or Room exit. In a harness without background wake (Codex), a held wait is reachable only by explicit polling within the same active turn; the only automatic continuation PairRoom promises is the bounded Stop-park window at each turn end, never a deep-idle wake. A message queued to an idle peer waits for its next turn or a human nudge.
 
 If the Service is unavailable, run `pairroom daemon status`, then tell the user to wait for it or, only after confirmation, run `pairroom daemon install`; do not expand diagnosis with help or state inspection.
 
-Follow setup and recovery errors instead of bypassing approvals or retrying `--create` except for the documented preflight mismatch. A different session requires explicit `bind --replace`.
+Follow setup and recovery errors instead of bypassing approvals or retrying `--create` except for the documented preflight mismatch. A different session requires explicit `bind --replace`. Never run two relay collectors in one session; resolve a woken background wait before opening a foreground collector.
 Use the CLI for status and recovery; never inspect or expose its private state.
 
 Follow runtime-specific hook guidance; publish complete text explicitly when
