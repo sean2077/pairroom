@@ -199,7 +199,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if err := writeJSON(out, msg); err != nil {
 			return err
 		}
-		writeQueuedDeliveryHint(diagnostic, c, msg)
+		writeQueuedDeliveryHint(ctx, diagnostic, c, msg)
 		return nil
 	case "wait":
 		_, err := deliverForeground(ctx, c, o.timeout, out)
@@ -236,7 +236,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		result := map[string]any{"local": local, "relay": status}
 		if action == "status" && o.brief {
 			if summary, ok := status.(*relay.Summary); ok {
-				if hints := queuedInboxHints(c, summary); len(hints) > 0 {
+				if hints := queuedInboxHints(ctx, c, summary); len(hints) > 0 {
 					result["queued_inbox_hints"] = hints
 				}
 			}

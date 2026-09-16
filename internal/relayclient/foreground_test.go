@@ -30,6 +30,7 @@ type foregroundFixtureOptions struct {
 	missingClaim    bool
 	outgoingState   string
 	summary         *relay.Summary
+	peer            *relay.Binding
 	envelope        string
 	waitEntered     chan struct{}
 	ackAfterWrite   *atomic.Bool
@@ -59,6 +60,10 @@ func newForegroundFixture(t *testing.T, opts foregroundFixtureOptions) *foregrou
 		args:     []string{"--repo", root, "--room", "room", "--slot", "1"},
 		calls:    map[string]int{},
 		messages: map[string]relay.Message{},
+	}
+	peer := opts.peer
+	if peer == nil {
+		peer = &relay.Binding{Slot: model.ActorCodex, Runtime: model.RuntimeCodex, SessionID: "peer-session"}
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || !strings.HasPrefix(r.URL.Path, "/api/v1/relay/room/claude/") ||
@@ -150,6 +155,8 @@ func newForegroundFixture(t *testing.T, opts foregroundFixtureOptions) *foregrou
 				return
 			}
 			_ = json.NewEncoder(w).Encode(opts.summary)
+		case "peer":
+			_ = json.NewEncoder(w).Encode(peer)
 		default:
 			t.Errorf("unexpected side effect: %s", action)
 			http.Error(w, "unexpected operation", http.StatusBadRequest)
@@ -245,7 +252,7 @@ func TestExchangeSendsOnceReturnsOnlyIncomingEnvelopeAndPreservesState(t *testin
 	if !strings.Contains(diagnostic.String(), "review-1") {
 		t.Fatal("publication identity missing from receipt")
 	}
-	if !strings.Contains(diagnostic.String(), `"queued_delivery"`) || !strings.Contains(diagnostic.String(), "pairroom relay wait --room room --slot 2") {
+	if !strings.Contains(diagnostic.String(), `"queued_delivery"`) || !strings.Contains(diagnostic.String(), "pairroom relay wait --room room --slot 2") || !strings.Contains(diagnostic.String(), `"wake_command"`) {
 		t.Fatalf("queued exchange receipt omitted collection hint: %q", diagnostic.String())
 	}
 	f.mu.Lock()
@@ -423,11 +430,42 @@ func TestSendQueuedReceiptAddsPeerCollectionHint(t *testing.T) {
 	var result struct {
 		QueuedDelivery *queuedDeliveryHint `json:"queued_delivery"`
 	}
-	if err := json.Unmarshal(diagnostic.Bytes(), &result); err != nil || result.QueuedDelivery == nil || !strings.Contains(result.QueuedDelivery.Notice, "not handed off") || result.QueuedDelivery.Command != "pairroom relay wait --room room --slot 2" {
+	if err := json.Unmarshal(diagnostic.Bytes(), &result); err != nil || result.QueuedDelivery == nil || !strings.Contains(result.QueuedDelivery.Notice, "not handed off") || result.QueuedDelivery.Command != "pairroom relay wait --room room --slot 2" || result.QueuedDelivery.WakeCommand != codexWakeCommand(model.RuntimeCodex, "peer-session") {
 		t.Fatalf("queued send hint = %+v, err=%v", result, err)
 	}
 	if strings.Contains(diagnostic.String(), "proposal") {
 		t.Fatalf("queued send hint exposed body: %q", diagnostic.String())
+	}
+	if !strings.Contains(result.QueuedDelivery.WakeCommand, codexWakeNudge) {
+		t.Fatalf("wake command lost fixed nudge: %q", result.QueuedDelivery.WakeCommand)
+	}
+}
+
+func TestSendQueuedClaudePeerOmitsWakeCommand(t *testing.T) {
+	f := newForegroundFixture(t, foregroundFixtureOptions{peer: &relay.Binding{Slot: model.ActorCodex, Runtime: model.RuntimeClaude, SessionID: "peer-session"}})
+	var out, diagnostic bytes.Buffer
+	if err := f.run(context.Background(), "send", strings.NewReader("proposal"), &out, &diagnostic, "--id", "review-1"); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		QueuedDelivery *queuedDeliveryHint `json:"queued_delivery"`
+	}
+	if err := json.Unmarshal(diagnostic.Bytes(), &result); err != nil || result.QueuedDelivery == nil || result.QueuedDelivery.WakeCommand != "" {
+		t.Fatalf("non-Codex peer exposed wake command: %+v, err=%v", result, err)
+	}
+}
+
+func TestSendQueuedPeerLookupFailureOmitsWakeCommand(t *testing.T) {
+	f := newForegroundFixture(t, foregroundFixtureOptions{failAction: "peer"})
+	var out, diagnostic bytes.Buffer
+	if err := f.run(context.Background(), "send", strings.NewReader("proposal"), &out, &diagnostic, "--id", "review-1"); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		QueuedDelivery *queuedDeliveryHint `json:"queued_delivery"`
+	}
+	if err := json.Unmarshal(diagnostic.Bytes(), &result); err != nil || result.QueuedDelivery == nil || result.QueuedDelivery.WakeCommand != "" || f.count("send") != 1 {
+		t.Fatalf("failed optional peer lookup changed send result: %+v, err=%v", result, err)
 	}
 }
 
@@ -477,7 +515,7 @@ func TestBriefStatusAddsHintsOnlyForQueuedInboxes(t *testing.T) {
 				t.Fatalf("status hints = %+v, err=%v", result.QueuedInboxHints, err)
 			}
 			if tc.want == 2 {
-				if result.QueuedInboxHints[0].Command != "pairroom relay wait --room room --slot 1" || result.QueuedInboxHints[1].Command != "pairroom relay wait --room room --slot 2" || !strings.Contains(result.QueuedInboxHints[1].Notice, "peer's associated native session") {
+				if result.QueuedInboxHints[0].Command != "pairroom relay wait --room room --slot 1" || result.QueuedInboxHints[0].WakeCommand != "" || result.QueuedInboxHints[1].Command != "pairroom relay wait --room room --slot 2" || result.QueuedInboxHints[1].WakeCommand != codexWakeCommand(model.RuntimeCodex, "peer-session") || !strings.Contains(result.QueuedInboxHints[1].Notice, "peer's associated native session") {
 					t.Fatalf("status hints are not actionable: %+v", result.QueuedInboxHints)
 				}
 			}

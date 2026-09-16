@@ -380,11 +380,14 @@ func TestNativeCLIHookAssociationRoutingAndEightBlockBudget(t *testing.T) {
 		t.Fatal("StopFailure relayed content or secret error")
 	}
 	peer, err := f.run(t, []string{"peer", "--room", f.room.ID, "--slot", "claude"}, nil)
-	if err != nil || !strings.Contains(string(peer), b.SessionID) {
+	if err != nil || !strings.Contains(string(peer), b.SessionID) || !strings.Contains(string(peer), `"runtime":"codex"`) {
 		t.Fatal("peer metadata unavailable")
 	}
 	if strings.Contains(string(peer), b.Secret) {
 		t.Fatal("peer reveals credential")
+	}
+	if got := f.native.engine.Snapshot().Bindings[b.Slot].Runtime; got != "" {
+		t.Fatalf("peer response runtime leaked into durable binding: %q", got)
 	}
 }
 func TestNativeHTTPAuthorizationAndPublicSurface(t *testing.T) {
