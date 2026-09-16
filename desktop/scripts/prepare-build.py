@@ -17,7 +17,7 @@ def allow_macos_local_networking() -> None:
     if not plist_path.is_file():
         raise SystemExit(f"Wails did not generate the macOS plist: {plist_path}")
     contents = plist_path.read_bytes()
-    # Wails beta.16 emits a DOCTYPE-first XML plist on a clean checkout.
+    # Wails beta.22 emits a DOCTYPE-first XML plist on a clean checkout.
     # Apple's tools accept it, but Python's plistlib requires the XML
     # declaration before the DOCTYPE. Add it only for that generated form;
     # plistlib can already read declaration-first XML and binary plists.
