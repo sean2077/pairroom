@@ -23,13 +23,18 @@ Room does not reconfigure your existing sessions.
 
 ## One-time project setup
 
-Run `pairroom relay install` from each intended session. It chooses that
-session's runtime; when identification is unavailable, use the matching explicit
-command below. Install once per selected runtime, not once per Room or round.
+Run `pairroom relay install` once per Project, from any terminal in its worktree
+(it does not need a native session). Pass `--runtime` with a comma-separated list
+(`cc|claude`, `codex`, `grok`); inside a recognized session it infers the harness,
+and at an interactive terminal without `--runtime` it prompts a multi-select.
+Non-interactive use without `--runtime` fails with the options listed rather than
+waiting. Grok Build reuses Claude Code's `.claude` hooks, so selecting Claude Code
+already covers Grok, and native Grok relay is not supported — install says so and
+writes no separate Grok hook.
 
 ```bash
-pairroom relay install --runtime claude
-pairroom relay install --runtime codex
+pairroom relay install                      # prompts at a terminal; or:
+pairroom relay install --runtime claude,codex
 ```
 
 Review and approve the exact project hooks in each harness. Codex uses `/hooks`;
