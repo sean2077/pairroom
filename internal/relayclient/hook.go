@@ -98,32 +98,9 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	if err != nil {
 		return err
 	}
-	candidates := []string{}
-	for _, path := range paths {
-		var s State
-		if err := readPrivate(path, &s); err != nil {
-			return err
-		}
-		if s.Runtime != kind {
-			continue
-		}
-		if s.SessionID == hook.SessionID || (s.SessionID == "" && s.Nonce != "" && hook.LastAssistantMessage != nil && strings.Contains(*hook.LastAssistantMessage, s.Nonce)) {
-			candidates = append(candidates, filepath.Dir(path))
-			continue
-		}
-		// Recover association acknowledged by the Service before a local crash. An
-		// unrelated session receives only a pending binding, never inbox contents.
-		if s.SessionID == "" && s.Generation > 0 {
-			c, err := load(filepath.Dir(path))
-			if err != nil {
-				continue
-			}
-			c.State.SessionID = hook.SessionID
-			var b relay.Binding
-			if c.call(ctx, "inspect", nil, &b) == nil && b.SessionID == hook.SessionID {
-				candidates = append(candidates, c.Dir)
-			}
-		}
+	candidates, err := boundHookCandidates(paths, kind, hook.SessionID)
+	if err != nil {
+		return err
 	}
 	if len(candidates) == 0 {
 		return writeJSON(out, map[string]any{})
@@ -142,37 +119,35 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		return err
 	}
 	cleanupAtomicTemps(dir)
-	if c.State.SessionID != "" && c.State.SessionID != hook.SessionID {
+	// The binding was associated at bind from the harness environment, so the
+	// official hook session must equal the recorded one. A mismatch fails closed
+	// without re-associating the session.
+	if c.State.SessionID != hook.SessionID {
 		release()
 		return relay.ErrAuth
 	}
 	if c.State.Generation == 0 {
 		release()
-		return errors.New("bind confirmation missing; use bind --replace explicitly before association")
+		return errors.New("bind confirmation missing; use bind --replace explicitly")
 	}
-	c.State.SessionID = hook.SessionID
 	var binding relay.Binding
 	if err := c.call(ctx, "inspect", nil, &binding); err != nil {
 		release()
 		return err
 	}
-	if binding.SessionID == "" {
-		if c.State.Nonce == "" || hook.LastAssistantMessage == nil || !strings.Contains(*hook.LastAssistantMessage, c.State.Nonce) {
-			release()
-			return writeJSON(out, map[string]any{})
-		}
-		if err := c.call(ctx, "associate", map[string]any{"nonce": c.State.Nonce, "session_id": hook.SessionID, "transcript_path": hook.TranscriptPath}, &binding); err != nil {
-			release()
-			return err
-		}
-	}
 	if binding.SessionID != hook.SessionID {
 		release()
 		return relay.ErrAuth
 	}
+	// Opportunistically record the transcript path, which the harness environment
+	// does not carry, so `relay peer` references stay available.
+	if binding.TranscriptPath == "" && hook.TranscriptPath != "" {
+		if err := c.call(ctx, "confirm", map[string]any{"session_id": hook.SessionID, "transcript_path": hook.TranscriptPath}, &binding); err != nil {
+			release()
+			return err
+		}
+	}
 	next := c.State
-	next.SessionID = hook.SessionID
-	next.Nonce = ""
 	if !hook.StopHookActive {
 		next.Blocks = 0
 	}

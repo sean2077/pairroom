@@ -59,7 +59,7 @@ func (s *ManagementServer) bindNative(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bootstrap := protocol.NativeBootstrap(slot, runtime.room.Agents[slot].Runtime, runtime.room.Agents[model.OtherParticipant(slot)].Runtime)
-	nativeResult(w, map[string]any{"binding": binding, "bootstrap": bootstrap, "collaboration": protocol.CollaborationInstructions(slot, runtime.room.Collaboration), "workspace": runtime.project.Root, "runtime": runtime.room.Agents[slot].Runtime, "notice": "Provider/model/effort/permissions are display-only. Native work is not stopped by replace. Association is pending until your approved Stop hook returns the nonce."}, nil)
+	nativeResult(w, map[string]any{"binding": binding, "bootstrap": bootstrap, "collaboration": protocol.CollaborationInstructions(slot, runtime.room.Collaboration), "workspace": runtime.project.Root, "runtime": runtime.room.Agents[slot].Runtime, "notice": "Provider/model/effort/permissions are display-only. Native work is not stopped by replace. This session is associated from its harness environment at bind; the approved Stop hook re-confirms the same session and relays replies."}, nil)
 }
 func (s *ManagementServer) unbindNative(w http.ResponseWriter, r *http.Request) {
 	runtime, err := s.nativeRuntime(r.Context(), r.PathValue("room"))
@@ -132,7 +132,6 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Nonce          string        `json:"nonce,omitempty"`
 		SessionID      string        `json:"session_id,omitempty"`
 		TranscriptPath string        `json:"transcript_path,omitempty"`
 		ReportSeq      uint64        `json:"report_seq,omitempty"`
@@ -154,8 +153,8 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 	case "inspect":
 		b, err := runtime.engine.Inspect(auth)
 		nativeResult(w, b, err)
-	case "associate":
-		b, err := runtime.engine.Associate(auth, req.Nonce, req.SessionID, req.TranscriptPath)
+	case "confirm":
+		b, err := runtime.engine.ConfirmSession(auth, req.SessionID, req.TranscriptPath)
 		nativeResult(w, b, err)
 	case "report":
 		p, err := runtime.engine.Report(auth, req.ReportSeq, req.Text)

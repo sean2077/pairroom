@@ -137,7 +137,7 @@ func TestBindZeroFlagResolvesRoomAndSlot(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: request.BindID, Generation: 1, Slot: model.ActorClaude, Active: true}, "bootstrap": "b", "collaboration": "c"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: request.BindID, Generation: 1, Slot: model.ActorClaude, Active: true, SessionID: request.SessionID}, "bootstrap": "b", "collaboration": "c"})
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -147,6 +147,7 @@ func TestBindZeroFlagResolvesRoomAndSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 	stubLineage(t, 4242, "claude", true)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "official-session")
 	var out bytes.Buffer
 	if err := bind(context.Background(), root, options{endpoint: endpointPath}, &out); err != nil {
 		t.Fatalf("zero-flag bind: %v", err)
@@ -201,6 +202,7 @@ func TestBindCreateResolvesSlotFromCreatedRoomSelections(t *testing.T) {
 	}
 	created := 0
 	mux := http.NewServeMux()
+	serveDefaultPairForTest(mux, map[model.ActorID]model.AgentSelection{model.ActorClaude: {Runtime: model.RuntimeCodex}, model.ActorCodex: {Runtime: model.RuntimeClaude}})
 	mux.HandleFunc("GET /api/v1/service", func(w http.ResponseWriter, r *http.Request) {
 		rooms := []any{}
 		for i := 1; i <= created; i++ {
@@ -221,7 +223,7 @@ func TestBindCreateResolvesSlotFromCreatedRoomSelections(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: request.BindID, Generation: 1, Slot: model.ActorID(bound), Active: true}, "bootstrap": "b", "collaboration": "c"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: request.BindID, Generation: 1, Slot: model.ActorID(bound), Active: true, SessionID: request.SessionID}, "bootstrap": "b", "collaboration": "c"})
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -230,6 +232,7 @@ func TestBindCreateResolvesSlotFromCreatedRoomSelections(t *testing.T) {
 		t.Fatal(err)
 	}
 	stubLineage(t, 4242, "codex", true)
+	t.Setenv("CODEX_SESSION_ID", "official-session")
 	var out bytes.Buffer
 	if err := bind(context.Background(), root, options{create: true, endpoint: endpointPath}, &out); err != nil {
 		t.Fatalf("create bind against a swapped default pair: %v", err)
@@ -255,6 +258,9 @@ func TestBindCreateRejectsMissingCallerHookBeforeCreating(t *testing.T) {
 		t.Fatal(err)
 	}
 	stubLineage(t, 4242, "codex", true)
+	// stubLineage isolates the caller (clearing session env); restore it so the
+	// missing-hook check, not a missing identity, is what rejects this create.
+	t.Setenv("CODEX_SESSION_ID", "official-session")
 	var out bytes.Buffer
 	err := bind(context.Background(), root, options{create: true, endpoint: endpoint}, &out)
 	if err == nil || !strings.Contains(err.Error(), "relay install") {
@@ -273,7 +279,7 @@ func TestBindCreateUnrecognizedCallerFailsBeforeCreating(t *testing.T) {
 	stubLineage(t, 0, "", false)
 	var out bytes.Buffer
 	err := bind(context.Background(), root, options{create: true, endpoint: endpoint}, &out)
-	if err == nil || !strings.Contains(err.Error(), "--slot 1|2") {
+	if err == nil || !strings.Contains(err.Error(), "inside your native session") {
 		t.Fatalf("err = %v", err)
 	}
 	if *created != 0 || out.Len() != 0 {

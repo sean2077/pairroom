@@ -86,7 +86,7 @@ func TestNativeBindResumesInCallingSessionWithoutIdentityFlags(t *testing.T) {
 	// Real hook association has already happened. Environment only discovers
 	// that exact state; no second association or provider setting is written.
 	t.Setenv("CLAUDE_CODE_SESSION_ID", a.SessionID)
-	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("CODEX_SESSION_ID", "")
 	t.Setenv("GROK_SESSION_ID", "")
 	var out bytes.Buffer
 	if err := relayclient.Run(context.Background(), []string{"bind", "--repo", f.project.Root}, strings.NewReader(""), &out, io.Discard); err != nil {
@@ -102,30 +102,5 @@ func TestNativeBindResumesInCallingSessionWithoutIdentityFlags(t *testing.T) {
 	b, err := f.native.engine.Inspect(a)
 	if err != nil || b.Generation != a.Generation || b.SessionID != a.SessionID {
 		t.Fatal("resume changed official identity", err)
-	}
-}
-
-func TestNativeBriefStatusInspectsPendingWithoutAssociatingOrCollecting(t *testing.T) {
-	f := nativeHTTP(t)
-	a, _ := f.bind(t, model.ActorClaude)
-	t.Setenv("CLAUDE_CODE_SESSION_ID", a.SessionID)
-	t.Setenv("CODEX_THREAD_ID", "")
-	t.Setenv("GROK_SESSION_ID", "")
-	out, err := f.run(t, []string{"status", "--brief"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got struct {
-		Relay relay.Summary `json:"relay"`
-	}
-	if err := json.Unmarshal(out, &got); err != nil || len(got.Relay.Bindings) != 1 || got.Relay.Bindings[a.Slot].Associated || len(got.Relay.Inboxes) != 0 {
-		t.Fatalf("pending status leaked or associated: %s %v", out, err)
-	}
-	out, err = f.run(t, []string{"wait", "--timeout", "1"}, nil)
-	if err == nil || len(out) != 0 {
-		t.Fatal("pending inspection authorized collection")
-	}
-	if f.native.engine.Snapshot().Bindings[a.Slot].SessionID != "" {
-		t.Fatal("status completed nonce association")
 	}
 }

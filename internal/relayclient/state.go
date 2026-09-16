@@ -36,7 +36,6 @@ type State struct {
 	BindID           string            `json:"bind_id"`
 	Generation       uint64            `json:"generation"`
 	SessionID        string            `json:"session_id,omitempty"`
-	Nonce            string            `json:"bind_nonce,omitempty"`
 	LastSeq          uint64            `json:"last_seq"`
 	LastConfirmedSeq uint64            `json:"last_confirmed_seq"`
 	Pending          *Pending          `json:"pending,omitempty"`
@@ -240,7 +239,7 @@ func cleanupAtomicTemps(dir string) {
 		return
 	}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".state.json-") || strings.HasPrefix(entry.Name(), ".credentials-") {
+		if strings.HasPrefix(entry.Name(), ".state.json-") || strings.HasPrefix(entry.Name(), ".credentials-") || strings.HasPrefix(entry.Name(), ".bind-attempt.json-") {
 			if entry.Type().IsRegular() {
 				_ = os.Remove(filepath.Join(dir, entry.Name()))
 			}

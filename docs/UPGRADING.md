@@ -58,3 +58,12 @@ Native mode is experimental until the authenticated multi-round Codex Desktop â†
 A schema-10-only binary rejects schema-11 Rooms before replay. Even one schema-11 Room under a mixed Service discovery root makes that old Service fail closed. First choice is a complete matching-version backup. Without one: stop all PairRoom owners and native work, back up the data root, identify schema-11 Room directories from their `metadata.json` without editing them, and move **all** of those directories outside `rooms/`. Start the old binary only for the remaining supported schema-10 Rooms. Leave `service-registry.json` intact: its unchanged schema 2 preserves registered Projects, including those without Rooms. Never relabel a schema or rewrite Event Log records.
 
 Before downgrading, use the matching new binary to `pairroom relay unbind --repo <project> --room <id> --slot <slot> --purge-hooks` for each native slot. After confirming that no other local native bindings use them, remove the remaining workspace `.pairroom/` data and any unused managed relay skill. The purge operation removes only PairRoom-owned hook entries; unrelated settings/hooks are retained. Archive alone does not release binding ownership or stop native processes. Keep schema-11 data isolated for its matching reader.
+
+## Native binding setup
+
+Use the matching CLI and app/Service release and follow [Native setup](NATIVE_RELAY.md).
+Previously associated bindings retain their identity. An incomplete binding from
+an older release requires explicit `bind --replace` inside the intended session.
+For a lost response to a current bind, rerun bind for the same Room/slot without
+`--create` or `--replace` to reconcile its original identity; do not repeat `--create`. Native remains experimental and real vendor
+acceptance remains a separate release gate.

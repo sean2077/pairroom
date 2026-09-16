@@ -118,7 +118,7 @@ Open the two original sessions in that repository. For skill-based creation, ens
 /pairroom-relay Log-upload plan review
 ```
 
-That session runs `pairroom relay bind --create`, returns its nonce and the other session's exact join command. Have the creator echo the returned nonce in its visible reply. Paste the join command into the **other** session and have it echo its own nonce. The approved Stop hooks establish the associations. Do not paste one session's nonce into the other; do not create another Room just to join the first.
+That session runs `pairroom relay bind --create`, which creates the Room, associates that session immediately from its harness session-ID environment variable, and prints the other session's exact join command. Paste the join command into the **other** session and have it run `pairroom relay bind` there, which associates it immediately as well. Each bind must run as a tool call inside its native session so the subprocess inherits that variable; run in a detached terminal where it is absent, bind fails closed with guidance and there is no fallback. Nothing is echoed; the approved Stop hooks then relay finished replies and re-confirm the bind-time session identity. Do not create another Room just to join the first.
 
 Alternatively, create a Native Room in Management with the intended pair. **Skip the creation command above** and ask each recognized session to run `pairroom relay bind`, or use the exact Room/slot command returned by the CLI when there is ambiguity. After either setup path, check `pairroom relay status` from the bound session. Reuse the binding for later review rounds.
 
@@ -182,7 +182,7 @@ A later review can simply name the diff/revision, acceptance criteria and unreso
 
 ## Native sessions and identity
 
-In Embedded, a new Binding materializes its native session as execution starts. An existing Binding must resume the exact selected session; it is not permission to silently substitute a new one. PairRoom does not import the vendor transcript from before the Binding. Native uses the approved hook/nonce association described above instead of spawning an adapter.
+In Embedded, a new Binding materializes its native session as execution starts. An existing Binding must resume the exact selected session; it is not permission to silently substitute a new one. PairRoom does not import the vendor transcript from before the Binding. Native uses the bind-time environment association described above instead of spawning an adapter.
 
 Room names and native session titles help you find the same task, but IDs remain authoritative. Rename through the Room context menu or explicit control; it waits for a safe boundary and does not interrupt a Turn. Embedded title synchronization can be pending, unsupported or failed without changing the underlying session. See the [API naming contract](API_REFERENCE.md#room-names-and-native-session-correspondence).
 
@@ -201,3 +201,5 @@ In a source checkout, install the dependencies from [Contributing](../CONTRIBUTI
 For rebuilding/updating an existing desktop installation from source, use `make desktop-update` after quitting Desktop. It preserves data and login registration and does not install or reconfigure a daemon. Requirements and custom paths are in [Desktop development](../desktop/README.md#update-the-installed-desktop-from-source).
 
 Before important work, read [Security](../SECURITY.md). For failures, start with [Troubleshooting](TROUBLESHOOTING.md); before changing versions, read [Upgrading](UPGRADING.md).
+
+Native installation prerequisites and the full create/join/recovery sequence are collected in [Native setup and usage](NATIVE_RELAY.md) and in the app’s Native setup guide.

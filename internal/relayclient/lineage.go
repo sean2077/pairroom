@@ -25,6 +25,27 @@ var harnessRuntimes = map[string]model.RuntimeKind{
 	"grok":   model.RuntimeGrok,
 }
 
+// sessionEnvVars maps a native runtime to the environment variable its official
+// harness exposes to tool-call subprocesses carrying the current session id:
+// Claude Code sets CLAUDE_CODE_SESSION_ID, and Codex sets CODEX_SESSION_ID
+// (openai/codex codex-rs/core/src/exec_env.rs). bind reads this to associate the
+// official session immediately, replacing the former nonce echo round-trip. The
+// approved Stop hook later reports the same id, which the Service re-checks.
+var sessionEnvVars = map[model.RuntimeKind]string{
+	model.RuntimeClaude: "CLAUDE_CODE_SESSION_ID",
+	model.RuntimeCodex:  "CODEX_SESSION_ID",
+}
+
+// sessionIDFromEnv returns the official session id the harness exposed to this
+// subprocess, or "" when running outside a recognized native session for kind.
+func sessionIDFromEnv(kind model.RuntimeKind) string {
+	name, ok := sessionEnvVars[kind]
+	if !ok {
+		return ""
+	}
+	return os.Getenv(name)
+}
+
 // harnessAncestor walks the current process ancestry for a native harness.
 // Lineage is a best-effort DEFAULT SELECTOR for foreground relay commands in
 // multi-binding workspaces; it is never authentication material. Authorization

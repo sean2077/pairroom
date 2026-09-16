@@ -59,7 +59,9 @@ There is no automatic relay-count or cost limit. Durable recovery distinguishes 
 
 ## Native host mode (experimental)
 
-Choose **Native** when creating a Room to keep both participants in their original Claude Code/Codex sessions. PairRoom supplies bindings, durable relay and audit, without spawning or interrupting processes. Install and approve the project Stop hooks, bind each slot, and return its one-time nonce.
+See [Native setup and usage](docs/NATIVE_RELAY.md) for installation prerequisites, project approval, joining and recovery. The guide is also available inside the browser/desktop app.
+
+Choose **Native** when creating a Room to keep both participants in their original Claude Code/Codex sessions. PairRoom supplies bindings, durable relay and audit, without spawning or interrupting processes. Install and approve the project Stop hooks, then run bind inside each session; it associates immediately from the harness's session-ID environment.
 
 The `pairroom-relay` skill ships in `skills/` for skill installers (`npx skills add sean2077/pairroom`) and is also written by `relay install`. Once loaded, `/pairroom-relay <topic>` creates the Room and binds that session and reports the peer's join command; `pairroom relay bind` runs zero-flag inside a recognized session. Reuse that binding for follow-up reviews rather than creating a Room per round.
 

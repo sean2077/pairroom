@@ -33,12 +33,27 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
         env = os.environ.copy()
         env.update(HOME=str(root/'home'), USERPROFILE=str(root/'home'), XDG_CONFIG_HOME=str(root/'home'/'.config'))
         env['PATH'] = str(binary.parent) + os.pathsep + env.get('PATH', '')
+        # bind associates from the official session id the harness exposes to its
+        # tool-call subprocess. Expose exactly one per invocation (clearing the
+        # others) so caller resolution never sees conflicting metadata; hooks match
+        # by payload session_id and explicit-flag commands need none.
+        session_vars = ('CLAUDE_CODE_SESSION_ID', 'CODEX_SESSION_ID', 'GROK_SESSION_ID')
+        # Never inherit the surrounding (real) harness session into the fixture;
+        # cli() exposes exactly one synthetic id per bind, and direct subprocess
+        # calls then run with no session metadata so explicit flags win.
+        for key in session_vars:
+            env[key] = ''
         errors = []
 
-        def cli(args, payload=None):
+        def cli(args, payload=None, session=None):
+            call_env = dict(env)
+            for key in session_vars:
+                call_env[key] = ''
+            if session:
+                call_env[session[0]] = session[1]
             result = subprocess.run([str(binary), 'relay', *args, '--repo', str(repo)],
                                     input=payload if isinstance(payload, str) else None if payload is None else json.dumps(payload),
-                                    text=True, capture_output=True, env=env, cwd=repo, timeout=45)
+                                    text=True, capture_output=True, env=call_env, cwd=repo, timeout=45)
             assert result.returncode == 0, f'relay {args[0]} failed: {result.stderr[:1000]}'
             return result.stdout
 
@@ -86,17 +101,18 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 csrf = (await read_json(context, origin+'/api/v1/session'))['csrf_token']
                 headers = {'X-PairRoom-CSRF': csrf}
                 endpoint = root/'state'/'relay-endpoint.json'
-                print('Native browser: approved-hook setup fixture and nonce association through real CLI', flush=True)
+                print('Native browser: approved-hook setup fixture and bind-time environment association through real CLI', flush=True)
                 for slot in ('claude','codex'):
                     await asyncio.to_thread(cli, ['install','--runtime',slot])
-                    raw = await asyncio.to_thread(cli, ['bind','--room',room_id,'--slot',slot,'--service-file',str(endpoint)])
+                    svar = 'CLAUDE_CODE_SESSION_ID' if slot == 'claude' else 'CODEX_SESSION_ID'
+                    raw = await asyncio.to_thread(cli, ['bind','--room',room_id,'--slot',slot,'--service-file',str(endpoint)], None, (svar, 'synthetic-'+slot))
                     bound = json.loads(raw)
+                    # bind associates immediately from the harness environment; no
+                    # nonce echo round-trip is required or returned.
+                    assert bound['binding']['session_id'] == 'synthetic-'+slot, bound['binding']
+                    assert 'bind_nonce' not in bound, bound
                     response = await context.request.post(surface+f'/api/v1/participants/{slot}/park', headers=headers, data={'enabled':False})
                     assert response.status == 200
-                    hook = {'hook_event_name':'Stop','session_id':'synthetic-'+slot,'cwd':str(repo),
-                            'last_assistant_message':bound['bind_nonce'],'stop_hook_active':False,
-                            'transcript_path':'/optional/unavailable/transcript'}
-                    assert json.loads(await asyncio.to_thread(cli,['hook','--runtime',slot],hook)) == {}
                 snapshot = await wait_snapshot(context,snapshot_url,lambda s:all(b.get('session_id') for b in s['relay']['bindings'].values()))
                 assert snapshot['protocol'] == 'pairroom-protocol/v7'
                 await expect(frame.locator('[data-slot="claude"]')).to_contain_text('Associated')
@@ -192,7 +208,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 assert not errors, f'browser errors: {errors}'
                 (artifacts/'results.json').write_text(json.dumps({
                     'mode':'synthetic native-hook inputs over real CLI/HTTP/SSE/browser',
-                    'real_vendor_e2e':False,'native_creation':True,'nonce_association':True,
+                    'real_vendor_e2e':False,'native_creation':True,'bind_env_association':True,
                     'fifo_stdout_ack':True,'idempotent_explicit_send':True,'three_bidirectional_rounds':True,
                     'killed_cli_unknown':True,'explicit_retry_confirmation':True,'cancel_only_queued':True,
                     'checkpoint_schema_2_unchanged':True,'restart_queue_and_bindings':True,

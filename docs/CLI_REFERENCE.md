@@ -97,7 +97,6 @@ The following names are extracted from `cmd/pairroom/*.go`. Use them to find omi
 - `--collaboration`
 - `--collaboration-instructions`
 - `--config`
-- `--continue`
 - `--create`
 - `--daemon-control-file`
 - `--data-dir`
@@ -132,7 +131,6 @@ The following names are extracted from `cmd/pairroom/*.go`. Use them to find omi
 - `--runtime`
 - `--runtime-limit`
 - `--service-file`
-- `--session-id`
 - `--shutdown-timeout`
 - `--slot`
 - `--stall-warning-seconds`
@@ -171,25 +169,24 @@ pairroom relay bind --create --name "<topic>"    # creator: project + native Roo
 pairroom relay bind                              # peer: zero-flag inside a recognized session
 ```
 
-Run each bind from its intended native session, then include the returned one-time `bind_nonce` verbatim in that session's visible reply. The Stop hook associates the official session ID. Slots are Agent 1 / Agent 2: `--slot 1|2` is the primary form and the durable IDs `claude`/`codex` remain accepted; slot names never denote the selected Runtime. For a first association, omitted `--room` resolves the workspace's sole active native Room; omitted `--slot` resolves only when exactly one Room slot runs the caller's harness runtime; anything ambiguous fails with the candidate list instead of guessing. Bind stdout contains no long-lived secret. No installed Stop hook means bind is rejected. Native configuration selections are display-only, and PairRoom never starts or interrupts either process.
+Run each bind as a tool call inside its intended native session: the official harnesses expose the current session ID to tool-call subprocesses (Claude Code sets `CLAUDE_CODE_SESSION_ID`; Codex sets `CODEX_SESSION_ID`), and bind associates that session immediately. In a detached or plain terminal where the variable is absent, bind fails closed with guidance to run it inside the session; there is no fallback. Slots are Agent 1 / Agent 2: `--slot 1|2` is the primary form and the durable IDs `claude`/`codex` remain accepted; slot names never denote the selected Runtime. Omitted `--room` resolves the workspace's sole active native Room; omitted `--slot` resolves only when exactly one Room slot runs the caller's harness runtime; anything ambiguous fails with the candidate list instead of guessing. Bind stdout contains no long-lived secret. No installed Stop hook means bind is rejected. See [Native relay setup and usage](NATIVE_RELAY.md) for installation and approval steps. Native configuration selections are display-only, and PairRoom never starts or interrupts either process.
 
-A pending binding already occupies its slot. Repeating ordinary bind, including `--continue` before association, never returns its nonce again. Finish in the original session using the nonce it already received. If that output or the bind confirmation was lost, use `bind --replace` explicitly to revoke the pending generation and obtain a new nonce; this cannot stop any native work.
+A completed binding already occupies its slot. Re-running bind inside the same session resumes idempotently without rotating the generation; a different session is rejected as occupied. Use `bind --replace` explicitly to revoke the existing generation and rebind from the current session; this cannot stop any native work.
 
-All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Normally omit Room/slot flags inside the native session: `CLAUDE_CODE_SESSION_ID` or `CODEX_THREAD_ID` selects its exact associated binding before PID-based fallback, including multiple Desktop threads sharing one process. Repeating `bind` in the same associated session also restores its saved Service endpoint and needs no manual `--continue --session-id` or nonce echo. Conflicting or unmatched session metadata fails instead of selecting another session. A new or pending binding still requires its approved-hook nonce association; discovery metadata never grants collection. `status --brief` may inspect a unique pending binding of this runtime, including without `--room`/`--slot`; send/wait/exchange still fail until the nonce is echoed. Older harnesses without session metadata retain lineage-based defaults and explicit flags. Runtime ambiguity and multiple unassociated Rooms still require an explicit candidate. `install` infers the recognized harness; native provider/model/effort settings are not re-entered or harvested. For the first bind to a custom Service root, use `--service-file <root>/relay-endpoint.json` (a file path, never a token); later commands use the saved endpoint. Native Grok is not implemented; a detected Grok caller is rejected, not treated as Claude or Codex.
+All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Normally omit Room/slot flags inside the native session: `CLAUDE_CODE_SESSION_ID` or `CODEX_SESSION_ID` selects its exact associated binding before PID-based fallback, including multiple Desktop sessions sharing one process. Repeating `bind` in the same session resumes it and restores its saved Service endpoint without manual flags. Conflicting or unmatched session metadata fails instead of selecting another session. Association happens at bind from that environment; discovery metadata never grants collection. `status --brief` may inspect a unique incomplete binding of this runtime, including without `--room`/`--slot`; send/wait/exchange require a completed bind. Older harnesses without session metadata retain lineage-based defaults and explicit flags. Runtime ambiguity and multiple unassociated Rooms still require an explicit candidate. `install` infers the recognized harness; native provider/model/effort settings are not re-entered or harvested. For the first bind to a custom Service root, use `--service-file <root>/relay-endpoint.json` (a file path, never a token); later commands use the saved endpoint. Native Grok is not implemented; a detected Grok caller is rejected, not treated as Claude or Codex.
 
 | Subcommand | Meaning |
 |---|---|
-| `bind` (zero-flag) | Resume this associated native session using its metadata; otherwise resolve the sole active native Room and matching runtime slot, failing on ambiguity |
-| `bind --continue --session-id <id>` | Resume the same associated session; a different session is rejected |
-| `bind --replace` | Explicitly revoke an occupied generation and require a new nonce association; cannot stop old native work |
-| `bind --create [--name <display-name>] [--runtime claude\|codex] [--peer-runtime claude\|codex]` | Without `--room`: register the workspace Project when missing, create a native Room through the same validated Management path the browser uses, bind this session, and print the peer's `peer_join` command. Without `--slot`, the creator's slot is resolved from the recognized harness against the created Room's real selections, because the Service-owned default pair is user configuration and need not match slot order; with explicit runtimes the slot is inferred before creation, and an unrecognized caller must pass `--slot 1|2`. Omitted runtimes keep the Service default pair; explicit runtimes stay empty-field selections that inherit the native configuration |
-| `send --id <client-id> --text <body>` | Explicit message to peer; requires the completed association like every collection call; repeat the same ID after an uncertain response, never deduplicate by body |
+| `bind` (zero-flag) | Inside a recognized native session: resolve the workspace's sole active native Room and the slot whose runtime matches the caller's harness; archived Rooms are never candidates and ambiguity fails with candidates |
+| `bind --replace` | Explicitly revoke an occupied generation and rebind the current session; cannot stop old native work |
+| `bind --create [--name <display-name>] [--runtime claude\|codex] [--peer-runtime claude\|codex]` | Without `--room`: register the workspace Project when missing, create a native Room through the same validated Management path the browser uses, bind this session, and print the peer's `peer_join` command. The creator runtime, actual slot, session identity and installed hook are validated before creating anything. A default pair is read from the Service and pinned for that creation; an unrecognized caller must run inside the native session and explicitly identify its runtime. Omitted runtimes copy the Service default pair after a read-only preflight, before any Project/Room creation; explicit runtimes stay empty-field selections that inherit native configuration |
+| `send --id <client-id> --text <body>` | Explicit message to peer; requires the bind-time association like every collection call; repeat the same ID after an uncertain response, never deduplicate by body |
 | `send --to @user --attach <image>` | Human escalation with optional repeatable image paths; stdin supplies text when `--text` is absent |
 | `exchange --id <client-id> --text <body>` | One explicit peer send, then the next FIFO input; defaults to a 3,600-second wait, supports `--timeout 0` for no PairRoom total deadline, and finite values up to 21,600 seconds; not a correlated request/reply transaction |
 | `wait --timeout 0` | Foreground collection for an associated session; default 30 seconds, `0` means no PairRoom total deadline, finite values may be 1–21,600 seconds; renews only successful empty HTTP polls; stdout precedes ack |
 | `status --brief` / `reconcile --brief` | Bounded authenticated transport summary, generated without copying message bodies, native session/transcript references or the full audit log; includes inbox counts and at most eight unknown-delivery recovery IDs |
 | `status` / `peer` | Public delivery/binding state and original publication reconciliation / optional peer session references |
-| `park --enabled=false` | Disable hook parking without removing association; foreground wait remains available |
+| `park --enabled=false` | Disable hook parking without removing the binding; foreground wait remains available |
 | `nudge` | Print collection guidance only; no promise of native input injection |
 | `reconcile` | Query pending publication: clear accepted, supplement definite absence with same sequence, otherwise retain unknown |
 | `reconcile --resend` / `--discard` | Explicit decision on an unknown pending publication; resend retains original key, discard retains consumed sequence |
@@ -204,7 +201,7 @@ If creation succeeds but binding fails, the error preserves the Room ID and a re
 
 This optional Native path borrows the active wait idea from [Orca's messaging loop](https://github.com/stablyai/orca/blob/403b62a8d8fa6e896a93acc4c15405be0f0b7dc7/skill-guides/orchestration/references/messaging-and-gates.md), not its Run/Task/Dispatch hierarchy. It reuses PairRoom's explicit send, associated bindings, inbox and acknowledgement. Install the updated CLI and relay skill; `pairroom relay exchange --help` checks command availability. An older CLI is not made compatible by installing the new skill alone.
 
-After BOTH sessions have completed their nonce association, tell one to receive and the other to start. Run these through the intended native agents' tools, not a third unrelated terminal:
+After BOTH sessions are bound, tell one to receive and the other to start. Run these through the intended native agents' tools, not a third unrelated terminal:
 
 ```bash
 # Participant B: wait without a PairRoom total deadline when the native harness permits it.

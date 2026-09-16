@@ -63,7 +63,9 @@ Read [Why PairRoom](docs/WHY_PAIRROOM.md), [Alternatives](docs/ALTERNATIVES.md),
 
 ## Native host verification boundary
 
-Native host mode is experimental. The implementation supports the documented project Stop-hook channel for Claude Code and Codex, nonce association, durable relay, explicit send/wait, stdout acknowledgement and bounded park. It does not yet have authenticated Codex Desktop ↔ Claude Code multi-round acceptance evidence from this development environment. Grok native hosting, zero-hook binding, live attach, concurrent resume injection and scheduled idle self-wake are not supported.
+For installation prerequisites and troubleshooting, see [Native setup and usage](docs/NATIVE_RELAY.md), also available in the app.
+
+Native host mode is experimental. The implementation supports the documented project Stop-hook channel for Claude Code and Codex, bind-time environment session association, durable relay, explicit send/wait, stdout acknowledgement and bounded park. It does not yet have authenticated Codex Desktop ↔ Claude Code multi-round acceptance evidence from this development environment. Grok native hosting, zero-hook binding, live attach, concurrent resume injection and scheduled idle self-wake are not supported.
 
 Official channel references: [Codex hooks](https://developers.openai.com/codex/hooks) and [Claude Code hooks](https://code.claude.com/docs/en/hooks). These establish the documented payload/control contract, not compatibility with an arbitrary installed version. Record actual CLI/Desktop versions, project trust and exact approved hook definitions when validating. Codex requires reviewing changed hook definitions in `/hooks`; installation alone does not grant approval.
 
