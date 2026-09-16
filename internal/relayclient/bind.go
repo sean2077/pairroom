@@ -35,6 +35,12 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 	if !o.create && o.room != "" && !safePart(o.room) {
 		return errors.New("invalid --room value")
 	}
+	// bind associates from the session id the harness exposes to its tool-call
+	// environment, so it only works inside the native session. Give one clear hint
+	// here instead of a confusing downstream slot/identity error in a plain terminal.
+	if !insideNativeSession() {
+		return errors.New("pairroom relay bind must run inside your native session — as a tool call in your Claude Code or Codex session, not a standalone terminal. It associates from the session id the harness exposes there (CLAUDE_CODE_SESSION_ID / CODEX_SESSION_ID); a plain terminal has none. Ask the agent to run it, or run it from that session's own tool shell.")
+	}
 	if o.create {
 		// An explicit slot is not evidence of an in-session caller. Reject before
 		// even discovering Service defaults, and certainly before provisioning.

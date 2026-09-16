@@ -47,7 +47,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.StringVar(&o.repo, "repo", ".", "Room project path")
 	flags.StringVar(&o.room, "room", "", "Room ID")
 	flags.StringVar(&o.slot, "slot", "", "Agent slot: 1 or 2; the durable IDs claude|codex are also accepted. Never a runtime name")
-	flags.StringVar(&o.kind, "runtime", "", "native harness: claude or codex")
+	flags.StringVar(&o.kind, "runtime", "", "native harness: claude (cc) or codex; install also accepts grok and a comma-separated list (grok reuses Claude Code's hooks)")
 	flags.StringVar(&o.endpoint, "service-file", "", "owner-only relay-endpoint.json path for a custom Service data root")
 	flags.StringVar(&o.text, "text", "", "message body; otherwise read stdin")
 	flags.StringVar(&o.id, "id", "", "stable client message ID (required for exchange); reuse on uncertain send")
@@ -105,26 +105,11 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		return err
 	}
 	if action == "install" {
-		kind := model.RuntimeKind(o.kind)
-		if kind == "" {
-			if _, name, ok := harnessAncestor(); ok {
-				kind = harnessRuntimes[name]
-			}
-		}
-		if kind != model.RuntimeClaude && kind != model.RuntimeCodex {
-			return errors.New("install requires --runtime claude|codex unless run inside a recognized native session")
-		}
-		if err := editHooks(root, kind, false); err != nil {
+		kinds, err := selectInstallRuntimes(o.kind, in, diagnostic)
+		if err != nil {
 			return err
 		}
-		if err := installSkill(kind); err != nil {
-			return err
-		}
-		return writeJSON(out, map[string]any{"installed": true, "runtime": kind, "notice": "Restart/review the exact project hook in your native harness (Codex: /hooks). This command does not grant native trust. Keep pairroom on PATH. Real authenticated bidirectional E2E remains release-gated.", "next_steps": []string{
-			"Create a room and bind this session: pairroom relay bind --create --name \"<topic>\" (skill: /pairroom-relay <topic>)",
-			"The peer session joins with the printed peer_join command, or zero-flag inside a recognized session: pairroom relay bind",
-			"After both sessions bind, give the agents the task and desired collaboration",
-		}})
+		return runInstall(root, kinds, out)
 	}
 	if action == "bind" {
 		return bind(ctx, root, o, out)

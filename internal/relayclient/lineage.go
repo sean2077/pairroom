@@ -46,6 +46,22 @@ func sessionIDFromEnv(kind model.RuntimeKind) string {
 	return os.Getenv(name)
 }
 
+// insideNativeSession reports whether this process appears to run inside a
+// native harness: either a recognized harness ancestor or a session id the
+// harness exposed to its tool-call environment. bind associates from that
+// identity, so it only works in this context; a standalone terminal has neither.
+func insideNativeSession() bool {
+	if _, _, ok := harnessAncestor(); ok {
+		return true
+	}
+	for _, name := range sessionEnvVars {
+		if strings.TrimSpace(os.Getenv(name)) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // harnessAncestor walks the current process ancestry for a native harness.
 // Lineage is a best-effort DEFAULT SELECTOR for foreground relay commands in
 // multi-binding workspaces; it is never authentication material. Authorization
