@@ -41,7 +41,7 @@ explicit CLI operation.
 Install Go 1.25 and the pinned Wails CLI:
 
 ```bash
-go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.16
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
 ```
 
 Prepare generated packaging assets and build the host platform:

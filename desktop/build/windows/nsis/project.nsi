@@ -1,7 +1,7 @@
 Unicode true
 
 ####
-## Synchronized with Wails v3.0.0-beta.16. Template replacements do not work
+## Synchronized with Wails v3.0.0-beta.22. Template replacements do not work
 ## in this file; generated defaults are supplied by wails_tools.nsh.
 ####
 !include "wails_tools.nsh"

@@ -1,6 +1,6 @@
 version: '3'
 
-# Synchronized with Wails v3.0.0-beta.16. Update with the pinned dependency.
+# Synchronized with Wails v3.0.0-beta.22. Update with the pinned dependency.
 includes:
   common: ../Taskfile.yml
 
