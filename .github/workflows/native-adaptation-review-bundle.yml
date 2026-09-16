@@ -1,0 +1,37 @@
+name: Native adaptation source bundle (temporary)
+
+on:
+  pull_request:
+    paths: ['.github/workflows/native-adaptation-review-bundle.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    if: github.head_ref == 'feat/native-grok-build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 654ad089d8ce13c64fa5dd05cffcbd5fc7649616
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Export pinned repository source history only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin b2e242761a88d720e1209325948d52710657df22
+          git branch review-main 654ad089d8ce13c64fa5dd05cffcbd5fc7649616
+          git branch review-grok b2e242761a88d720e1209325948d52710657df22
+          git branch review-base ab843dae15e734c4589090b012d4bec65821ef15
+          out="${RUNNER_TEMP}/native-adaptation-source"
+          mkdir -p "$out"
+          git bundle create "$out/review.bundle" review-main review-grok review-base
+          (cd "$out" && sha256sum review.bundle > SHA256SUMS)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-adaptation-source
+          path: ${{ runner.temp }}/native-adaptation-source/
+          retention-days: 1
