@@ -29,6 +29,7 @@ type foregroundFixtureOptions struct {
 	incompleteClaim bool
 	missingClaim    bool
 	outgoingState   string
+	summary         *relay.Summary
 	envelope        string
 	waitEntered     chan struct{}
 	ackAfterWrite   *atomic.Bool
@@ -142,6 +143,13 @@ func newForegroundFixture(t *testing.T, opts foregroundFixtureOptions) *foregrou
 				t.Error("ack lost exact claim identity")
 			}
 			_, _ = io.WriteString(w, `{"handed_off":true}`)
+		case "summary":
+			if opts.summary == nil {
+				t.Error("unexpected summary request")
+				http.Error(w, "unexpected operation", http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(opts.summary)
 		default:
 			t.Errorf("unexpected side effect: %s", action)
 			http.Error(w, "unexpected operation", http.StatusBadRequest)
@@ -236,6 +244,9 @@ func TestExchangeSendsOnceReturnsOnlyIncomingEnvelopeAndPreservesState(t *testin
 	}
 	if !strings.Contains(diagnostic.String(), "review-1") {
 		t.Fatal("publication identity missing from receipt")
+	}
+	if !strings.Contains(diagnostic.String(), `"queued_delivery"`) || !strings.Contains(diagnostic.String(), "pairroom relay wait --room room --slot 2") {
+		t.Fatalf("queued exchange receipt omitted collection hint: %q", diagnostic.String())
 	}
 	f.mu.Lock()
 	if len(f.waits) != 1 || f.waits[0] != 30 || f.parks[0] {
@@ -400,6 +411,77 @@ func TestLegacySendRemainsReceiptOnly(t *testing.T) {
 	var msg relay.Message
 	if err := json.Unmarshal(out.Bytes(), &msg); err != nil || msg.Text != "proposal" || f.count("send") != 1 || f.count("wait") != 0 || f.count("ack") != 0 {
 		t.Fatalf("send acquired exchange semantics: msg=%+v err=%v", msg, err)
+	}
+}
+
+func TestSendQueuedReceiptAddsPeerCollectionHint(t *testing.T) {
+	f := newForegroundFixture(t, foregroundFixtureOptions{})
+	var out, diagnostic bytes.Buffer
+	if err := f.run(context.Background(), "send", strings.NewReader("proposal"), &out, &diagnostic, "--id", "review-1"); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		QueuedDelivery *queuedDeliveryHint `json:"queued_delivery"`
+	}
+	if err := json.Unmarshal(diagnostic.Bytes(), &result); err != nil || result.QueuedDelivery == nil || !strings.Contains(result.QueuedDelivery.Notice, "not handed off") || result.QueuedDelivery.Command != "pairroom relay wait --room room --slot 2" {
+		t.Fatalf("queued send hint = %+v, err=%v", result, err)
+	}
+	if strings.Contains(diagnostic.String(), "proposal") {
+		t.Fatalf("queued send hint exposed body: %q", diagnostic.String())
+	}
+}
+
+func TestSendHandedOffReceiptOmitsQueuedHint(t *testing.T) {
+	f := newForegroundFixture(t, foregroundFixtureOptions{outgoingState: "handed_off"})
+	var out, diagnostic bytes.Buffer
+	if err := f.run(context.Background(), "send", strings.NewReader("proposal"), &out, &diagnostic, "--id", "review-1"); err != nil {
+		t.Fatal(err)
+	}
+	if diagnostic.Len() != 0 {
+		t.Fatalf("non-queued send emitted a collection hint: %q", diagnostic.String())
+	}
+}
+
+func TestBriefStatusAddsHintsOnlyForQueuedInboxes(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		summary relay.Summary
+		want    int
+	}{
+		{
+			name: "queued self and peer",
+			summary: relay.Summary{Inboxes: map[model.ActorID]relay.InboxSummary{
+				model.ActorClaude: {Queued: 2},
+				model.ActorCodex:  {Queued: 1, Delivering: 3},
+			}},
+			want: 2,
+		},
+		{
+			name: "delivering only",
+			summary: relay.Summary{Inboxes: map[model.ActorID]relay.InboxSummary{
+				model.ActorCodex: {Delivering: 1},
+			}},
+			want: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newForegroundFixture(t, foregroundFixtureOptions{summary: &tc.summary})
+			var out bytes.Buffer
+			if err := f.run(context.Background(), "status", strings.NewReader(""), &out, io.Discard, "--brief"); err != nil {
+				t.Fatal(err)
+			}
+			var result struct {
+				QueuedInboxHints []queuedInboxHint `json:"queued_inbox_hints"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &result); err != nil || len(result.QueuedInboxHints) != tc.want {
+				t.Fatalf("status hints = %+v, err=%v", result.QueuedInboxHints, err)
+			}
+			if tc.want == 2 {
+				if result.QueuedInboxHints[0].Command != "pairroom relay wait --room room --slot 1" || result.QueuedInboxHints[1].Command != "pairroom relay wait --room room --slot 2" || !strings.Contains(result.QueuedInboxHints[1].Notice, "peer's associated native session") {
+					t.Fatalf("status hints are not actionable: %+v", result.QueuedInboxHints)
+				}
+			}
+		})
 	}
 }
 
