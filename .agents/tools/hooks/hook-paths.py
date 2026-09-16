@@ -318,9 +318,11 @@ def run_guard(data: dict[object, object]) -> int:
             stale = " (a STALE %s exists — touch it again to renew)" % flag
         sys.stderr.write(
             "trunk_edit_guard: BLOCKED — %s\n"
-            "This is the primary worktree on active trunk branch '%s'. Every change,\n"
-            'however small ("just docs" is NOT an exception), starts in .worktrees/:\n'
-            "    %s new <name>      # then edit inside .worktrees/<name>/\n"
+            "This is the primary worktree on active trunk branch '%s'.\n"
+            "Edit the assigned linked task worktree instead, including for docs.\n"
+            "Reuse user/workbench worktrees wherever located; do not create a second one.\n"
+            "Only with no assigned worktree and a scaffold-owned lifecycle:\n"
+            "    %s new <name>      # then target the printed worktree path\n"
             "Only if the user explicitly authorized a trunk edit in this conversation:\n"
             "    touch %s    # auto-expires in 2 h%s\n"
             % (

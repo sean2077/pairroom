@@ -70,7 +70,7 @@ user decision
 
 `pairroom protocol --host-mode native --json` prints `pairroom-protocol/v7`. The embedded v6 contract and envelope remain unchanged. The compact native bootstrap plus stored default collaboration stays within 1,800 UTF-8 bytes; the ordinary envelope overhead remains at most 128 bytes. Native session/transcript references are queried with `relay peer`, never included in an envelope. Missing or inaccessible peer history does not block relay.
 
-An approved Stop hook supplies its official session identity and last assistant message; Claude/Codex use `session_id` and `last_assistant_message`, while Grok file hooks use `sessionId` and `lastAssistantMessage`. PairRoom does not parse vendor transcripts. Exact current peer handles use the same case-insensitive parser and code/URL exclusions as embedded mode. A peer handle wins over `@user`; only `@user` creates a human escalation; no peer/user handle ends relay without recording the private reply body. Minimal publication receipts still make sequence reconciliation possible. User interruption may produce no Stop and no publication. Claude/Grok StopFailure records only an allowlisted failure category, never the partial reply. Grok handles only main-session `reason:end_turn` Stops; cancellation, subagent and observe-only teardown events do not publish or continue a turn. Grok payloads accidentally invoking the Claude compatibility hook are ignored, not relabelled.
+Association is captured at bind from the official `session_id` the harness exposes to its tool-call environment (Claude Code `CLAUDE_CODE_SESSION_ID`, Codex `CODEX_SESSION_ID`, Grok `GROK_SESSION_ID`); there is no nonce echo, and a bind run outside that environment fails closed. An approved Stop hook then supplies the same official `session_id` and `last_assistant_message` at each response boundary, re-confirming that identity (a mismatch fails closed) and recording the transcript path the environment does not carry; PairRoom does not parse vendor transcripts. Exact current peer handles use the same case-insensitive parser and code/URL exclusions as embedded mode. A peer handle wins over `@user`; only `@user` creates a human escalation; no peer/user handle ends relay without recording the private reply body. Minimal publication receipts still make sequence reconciliation possible. User interruption may produce no Stop and no publication. Claude/Grok StopFailure records only an allowlisted failure category, never the partial reply.
 
 `relay send` is a separate explicit path into the same inbox: default target is the peer, `--to @user` escalates, and body mentions never route. It is the attachment path. Automatic publication is idempotent by `(bind_id, generation, report_seq)`; explicit send uses the client message ID within its binding generation. Neither path deduplicates by body. Same-turn send plus a peer-directed Stop creates two independently auditable messages. The bootstrap instructs the Agent to omit the final peer handle after send unless that second full boundary publication is intentional.
 
@@ -78,13 +78,7 @@ Collection transitions `queued → delivering → handed_off`. `handed_off` asse
 
 Runtime draining rejects new publications and claims while allowing valid acknowledgements of already released envelopes to settle. An acknowledgement never activates a suspended Room and still requires the current binding, generation, session and receipt; closure, revocation, expired delivery leases and uncertain store writes remain fail-closed.
 
-A hook publishes first, then parks up to 30 seconds within a 45-second installed hook timeout, reserving time for stdout and acknowledgement. No claim occurs while waiting. New inbox work returns `{"decision":"block","reason":"<envelope>"}`. At most eight consecutive actual-message blocks are allowed; `stop_hook_active` with no inbox does not spend a block on empty re-arming. There is no idle wake-up promise after timeout, disabled park or the block cap: messages remain queued for the already-associated session's `relay wait` or a human nudge. Each continued model turn may cost tokens; no real vendor token measurement is claimed.
-
-### Grok hook adaptation
-
-Grok Native keeps the same v7 binding, FIFO and acknowledgement contract. Its file-hook payload clips assistant replies after 32,768 Unicode scalars and caps feedback at 10,000. A clipped Stop reply is not published; a bounded local hint directs the agent to explicitly send/exchange the complete original if needed, without duplicating a prior explicit publication. Missing text is never reconstructed from a transcript.
-
-For Grok inbox delivery the hook's park probes readiness only. It emits a short `decision:block` instruction to run the existing foreground wait; the peer body remains queued and no delivery receipt or acknowledgement is issued. Foreground collection returns the complete original envelope through stdout. Hints share the existing eight-block cap, respect the collector lock and cannot wake an idle session. Grok's own cancellation/continuation/tool-output limits still apply; a stdout receipt is not proof that its tool displayed every character. Update the CLI, Service and skill together.
+A hook publishes first, then parks up to 30 seconds within a 45-second installed hook timeout, reserving time for stdout and acknowledgement. No claim occurs while waiting. For Claude/Codex, new inbox work returns `{"decision":"block","reason":"<envelope>"}`. At most eight consecutive actual-message blocks are allowed; `stop_hook_active` with no inbox does not spend a block on empty re-arming. There is no idle wake-up promise after timeout, disabled park or the block cap: messages remain queued for the already-associated session's `relay wait` or a human nudge. Each continued model turn may cost tokens; no real vendor token measurement is claimed.
 
 ### Optional foreground exchange
 
@@ -94,4 +88,22 @@ Foreground `wait` keeps a 30-second default, accepts finite totals of 1–21,600
 
 A confirmed publication followed by a finite empty exchange timeout exits nonzero and gives receive-only `relay wait` recovery. It never authorizes sending again. An uncertain send keeps the original client ID for inspection/recovery; uncertain collection is never automatically replayed. The CLI holds a process-owned per-slot collector lock across `wait`/`exchange` and rejects a second collector before it publishes or claims; a Stop hook still publishes but does not take the foreground inbox. Do not enable another coordinator for the same pair, and do not use this loop inside Embedded's single-owner turns. Finish with a final explicit send when appropriate rather than waiting for another ceremonial reply, and omit a final peer handle after explicit exchange unless a second Stop publication is intentional. See the [CLI workflow](CLI_REFERENCE.md#foreground-discussion-loop) for entry and recovery.
 
-PairRoom does not own native processes. Owner Turn is advisory, not a workspace lock. Native provider/model/effort/permission selections are metadata, not applied configuration. Native approval and input interruption remain in the original harness. Authenticated multi-round Claude Code ↔ Codex acceptance remains a release gate, separate from synthetic hook tests. Foreground exchange does not establish that a particular native tool can stay pending for an hour, six hours, or indefinitely, or wake an already-idle peer. This additive CLI composition changes no Room mode, protocol/bootstrap byte budget, store schema or automatic Stop-hook behavior.
+PairRoom does not own native processes. Owner Turn is advisory, not a workspace lock. Native provider/model/effort/permission selections are metadata, not applied configuration. Native approval and input interruption remain in the original harness. Authenticated multi-round Claude Code/Codex/Grok acceptance remains a release gate, separate from synthetic hook tests. Foreground exchange does not establish that a particular native tool can stay pending for an hour, six hours, or indefinitely, or wake an already-idle peer. This additive CLI composition changes no Room mode, protocol/bootstrap byte budget, store schema or automatic Stop-hook behavior.
+
+
+### Grok hook boundaries
+
+Grok file hooks use `sessionId`, `lastAssistantMessage` and `stopHookActive`.
+Only main-session `Stop` with `reason: end_turn` publishes; cancellation,
+subagent and observe-only teardown events are inert, as is the duplicate
+invocation through Grok's Claude-compatible hook sources. The hook checks the
+identity captured at bind; it cannot create or change a binding.
+
+Grok clips outgoing hook text and Stop feedback. A clipped reply is never
+published as complete: reconcile existing pending publication, then require
+explicit full-text send/exchange. A Grok hook park probes readiness without
+claiming an envelope and returns only a bounded instruction to run foreground
+wait. The complete input stays queued until that tool claims, writes and
+acknowledges it. These hints share the eight-continuation cap; readiness is not
+`handed_off`. No transcript parsing, automatic resend or idle wake-up is added.
+See [Grok Native](CLI_REFERENCE.md#grok-build-native) for the upstream limits.

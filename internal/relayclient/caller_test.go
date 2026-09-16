@@ -36,7 +36,7 @@ func TestNativeCallerUsesSessionMetadataWithoutProcessVisibility(t *testing.T) {
 	for _, tc := range []struct {
 		key  string
 		kind model.RuntimeKind
-	}{{"CLAUDE_CODE_SESSION_ID", model.RuntimeClaude}, {"CODEX_THREAD_ID", model.RuntimeCodex}, {"GROK_SESSION_ID", model.RuntimeGrok}} {
+	}{{"CLAUDE_CODE_SESSION_ID", model.RuntimeClaude}, {"CODEX_SESSION_ID", model.RuntimeCodex}, {"GROK_SESSION_ID", model.RuntimeGrok}} {
 		t.Run(tc.key, func(t *testing.T) {
 			isolateCaller(t)
 			t.Setenv(tc.key, "native-session")
@@ -55,7 +55,7 @@ func TestNativeCallerUsesSessionMetadataWithoutProcessVisibility(t *testing.T) {
 func TestNativeCallerRejectsAmbiguityAndIgnoresOuterHarnessHints(t *testing.T) {
 	isolateCaller(t)
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "inner")
-	t.Setenv("CODEX_THREAD_ID", "outer")
+	t.Setenv("CODEX_SESSION_ID", "outer")
 	if _, err := currentNativeCaller(); err == nil {
 		t.Fatal("ambiguous environment guessed a runtime")
 	}
@@ -75,14 +75,14 @@ func TestNativeCallerSelectsDesktopSessionNotSharedPID(t *testing.T) {
 	root := t.TempDir()
 	callerState(t, root, "room-a", "thread-a", model.ActorClaude, model.RuntimeCodex)
 	want := callerState(t, root, "room-b", "thread-b", model.ActorCodex, model.RuntimeCodex)
-	t.Setenv("CODEX_THREAD_ID", "thread-b")
+	t.Setenv("CODEX_SESSION_ID", "thread-b")
 	for _, action := range []string{"wait", "exchange", "status", "bind"} {
 		o := options{}
 		if err := applyCallerDefaults(root, action, &o); err != nil || o.room != want.Room || o.slot != string(want.Slot) {
 			t.Fatalf("%s guessed shared-PID binding: %+v %v", action, o, err)
 		}
-		if action == "bind" && (!o.cont || o.session != want.SessionID || o.endpoint != want.EndpointPath) {
-			t.Fatalf("resume lost session/custom Service defaults: %+v", o)
+		if action == "bind" && o.endpoint != want.EndpointPath {
+			t.Fatalf("resume lost the custom Service endpoint default: %+v", o)
 		}
 	}
 	for _, o := range []options{{room: "room-a", slot: "claude"}, {room: "room-b"}} {
@@ -90,7 +90,7 @@ func TestNativeCallerSelectsDesktopSessionNotSharedPID(t *testing.T) {
 			t.Fatal("wrong-session or partial explicit target accepted")
 		}
 	}
-	t.Setenv("CODEX_THREAD_ID", "new-thread")
+	t.Setenv("CODEX_SESSION_ID", "new-thread")
 	if err := applyCallerDefaults(root, "wait", &options{}); err == nil {
 		t.Fatal("unassociated session fell back to an unrelated inbox")
 	}
@@ -102,30 +102,27 @@ func TestNativeCallerNeverAssociatesPendingStateOrDuplicatesCreatedRoom(t *testi
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "session")
 	callerState(t, root, "pending", "", model.ActorClaude, model.RuntimeClaude)
 	o := options{}
-	if err := applyCallerDefaults(root, "bind", &o); err != nil || o.cont || o.session != "" {
-		t.Fatalf("metadata bypassed nonce: %+v %v", o, err)
+	if err := applyCallerDefaults(root, "bind", &o); err != nil || o.room != "" {
+		t.Fatalf("incomplete binding was auto-selected for bind: %+v %v", o, err)
 	}
-	if err := applyCallerDefaults(root, "send", &options{}); err == nil || !strings.Contains(err.Error(), "nonce") {
-		t.Fatalf("pending binding granted collection: %v", err)
+	if err := applyCallerDefaults(root, "send", &options{}); err == nil || !strings.Contains(err.Error(), "incomplete binding") {
+		t.Fatalf("incomplete binding granted collection: %v", err)
 	}
 	o = options{}
-	if err := applyCallerDefaults(root, "status", &o); err != nil || o.room != "pending" || o.slot != "claude" || o.cont {
-		t.Fatalf("unique pending status not diagnosable: %+v %v", o, err)
+	if err := applyCallerDefaults(root, "status", &o); err != nil || o.room != "pending" || o.slot != "claude" {
+		t.Fatalf("unique incomplete binding not diagnosable via status: %+v %v", o, err)
 	}
 	callerState(t, root, "other-pending", "", model.ActorClaude, model.RuntimeClaude)
 	if err := applyCallerDefaults(root, "status", &options{}); err == nil || !strings.Contains(err.Error(), "multiple pending") {
-		t.Fatalf("two pending bindings were guessed: %v", err)
+		t.Fatalf("two incomplete bindings were guessed: %v", err)
 	}
 	o = options{room: "pending", slot: "claude"}
 	if err := applyCallerDefaults(root, "status", &o); err != nil || o.room != "pending" {
-		t.Fatalf("explicit pending status lost: %+v %v", o, err)
+		t.Fatalf("explicit incomplete-binding status lost: %+v %v", o, err)
 	}
 	callerState(t, root, "associated", "session", model.ActorClaude, model.RuntimeClaude)
 	if err := applyCallerDefaults(root, "bind", &options{create: true}); err == nil {
 		t.Fatal("create duplicated an already-associated session")
-	}
-	if err := applyCallerDefaults(root, "bind", &options{session: "another"}); err == nil {
-		t.Fatal("explicit session mismatch ignored")
 	}
 	if err := applyCallerDefaults(root, "bind", &options{kind: "codex"}); err == nil {
 		t.Fatal("runtime mismatch ignored")
@@ -146,27 +143,27 @@ func TestNativeCreateRunsInsideHarnessWithoutRuntimeOrSlotFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	var result struct {
-		Nonce string `json:"bind_nonce"`
+		Binding relay.Binding `json:"binding"`
 	}
-	if err := json.Unmarshal(out.Bytes(), &result); err != nil || result.Nonce == "" || *created != 1 {
-		t.Fatalf("create did not preserve nonce association: %s %v", out.String(), err)
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil || *created != 1 || result.Binding.SessionID != "launching-session" {
+		t.Fatalf("create did not associate from the environment: %s %v", out.String(), err)
+	}
+	if bytes.Contains(out.Bytes(), []byte("bind_nonce")) {
+		t.Fatal("create still emitted a bind nonce")
 	}
 	var s State
-	if err := readPrivate(filepath.Join(root, ".pairroom", "rooms", "room1", "slots", "claude", "state.json"), &s); err != nil || s.SessionID != "" {
-		t.Fatalf("create forged official association: %+v %v", s, err)
+	if err := readPrivate(filepath.Join(root, ".pairroom", "rooms", "room1", "slots", "claude", "state.json"), &s); err != nil || s.SessionID != "launching-session" {
+		t.Fatalf("create did not record the environment association: %+v %v", s, err)
 	}
 }
 
-func TestNativeCallerRecognizesGrokWithoutMisBinding(t *testing.T) {
+func TestNativeCallerRecognizesGrokWithoutOuterSessionMisBinding(t *testing.T) {
 	isolateCaller(t)
 	harnessAncestor = func() (int, string, bool) { return 4, "grok", true }
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "outer-claude")
-	if err := applyCallerDefaults(t.TempDir(), "bind", &options{create: true}); err != nil {
-		t.Fatal(err)
-	}
-	caller, err := currentNativeCaller()
-	if err != nil || caller.runtime != model.RuntimeGrok || caller.session != "" {
-		t.Fatalf("Grok inherited another runtime's session: %+v %v", caller, err)
+	err := applyCallerDefaults(t.TempDir(), "bind", &options{create: true})
+	if err != nil || callerRuntime(options{}) != model.RuntimeGrok {
+		t.Fatalf("Grok was treated as its outer Claude harness: %v", err)
 	}
 }
 

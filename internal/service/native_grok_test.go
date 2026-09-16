@@ -48,27 +48,24 @@ func grokHook(t *testing.T, f *nativeFixture, a relay.Auth, text string, extra m
 	for key, value := range extra {
 		fields[key] = value
 	}
-	return f.run(t, []string{"hook", "--runtime", "grok"}, fields)
+	return f.runAs(t, model.RuntimeGrok, a.SessionID, []string{"hook", "--runtime", "grok"}, fields)
 }
 
-func associateGrok(t *testing.T, f *nativeFixture, slot model.ActorID) relay.Auth {
+func bindGrok(t *testing.T, f *nativeFixture, slot model.ActorID) relay.Auth {
 	t.Helper()
-	a, nonce := f.bind(t, slot)
+	a := f.bind(t, slot)
 	if err := f.native.engine.Park(slot, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := grokHook(t, f, a, nonce, nil); err != nil {
-		t.Fatal(err)
-	}
 	if b, err := f.native.engine.Inspect(a); err != nil || b.SessionID != a.SessionID {
-		t.Fatalf("Grok official nonce association failed: %+v %v", b, err)
+		t.Fatalf("Grok bind-time association failed: %+v %v", b, err)
 	}
 	return a
 }
 
 func TestGrokNativeRoundTripDefersFullInboxToForeground(t *testing.T) {
 	f := grokNativeHTTP(t, model.RuntimeCodex)
-	grok := associateGrok(t, f, model.ActorClaude)
+	grok := bindGrok(t, f, model.ActorClaude)
 	peer := associateCLI(t, f, model.ActorCodex)
 	text := strings.Repeat("完整消息🌟", 4000) // longer than Grok's 10k hook feedback
 	incoming, err := f.native.engine.Send(peer, relay.SendRequest{ID: "opening", Text: text})
@@ -88,7 +85,7 @@ func TestGrokNativeRoundTripDefersFullInboxToForeground(t *testing.T) {
 		}
 	}
 	t.Setenv("GROK_SESSION_ID", grok.SessionID)
-	output, err = f.run(t, []string{"wait", "--timeout", "1"}, nil)
+	output, err = f.runAs(t, model.RuntimeGrok, grok.SessionID, []string{"wait", "--timeout", "1"}, nil)
 	if err != nil || !strings.HasSuffix(string(output), text+"\n") {
 		t.Fatalf("foreground truncated the original: %v", err)
 	}
@@ -103,7 +100,7 @@ func TestGrokNativeRoundTripDefersFullInboxToForeground(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err = f.run(t, []string{"exchange", "--id", "long-findings", "--text", text, "--timeout", "1"}, nil)
+	output, err = f.runAs(t, model.RuntimeGrok, grok.SessionID, []string{"exchange", "--id", "long-findings", "--text", text, "--timeout", "1"}, nil)
 	if err != nil || !strings.Contains(string(output), "from: @user") {
 		t.Fatalf("Grok exchange lost user steering: %s %v", output, err)
 	}
@@ -118,7 +115,7 @@ func TestGrokNativeRoundTripDefersFullInboxToForeground(t *testing.T) {
 		t.Fatal("Grok explicit publication lost full reply")
 	}
 	// Ordinary bind restores the associated session and endpoint, no new nonce.
-	output, err = f.run(t, []string{"bind"}, nil)
+	output, err = f.runAs(t, model.RuntimeGrok, grok.SessionID, []string{"bind"}, nil)
 	if err != nil || strings.Contains(string(output), `"bind_nonce"`) {
 		t.Fatalf("Grok resume failed: %s %v", output, err)
 	}
@@ -126,7 +123,7 @@ func TestGrokNativeRoundTripDefersFullInboxToForeground(t *testing.T) {
 
 func TestGrokClippedStopIsNotPublishedAndPassiveEventsStayPassive(t *testing.T) {
 	f := grokNativeHTTP(t, model.RuntimeClaude)
-	a := associateGrok(t, f, model.ActorClaude)
+	a := bindGrok(t, f, model.ActorClaude)
 	seq := f.native.engine.Snapshot().Sequence
 	for _, extra := range []map[string]any{
 		{"reason": "shutdown"}, {"reason": "channel_closed"}, {"subagentType": "explore"},
@@ -165,8 +162,8 @@ func TestGrokClippedStopIsNotPublishedAndPassiveEventsStayPassive(t *testing.T) 
 
 func TestTwoNativeGrokSessionsUseDistinctSlotsAndHandles(t *testing.T) {
 	f := grokNativeHTTP(t, model.RuntimeGrok)
-	a := associateGrok(t, f, model.ActorClaude)
-	b := associateGrok(t, f, model.ActorCodex)
+	a := bindGrok(t, f, model.ActorClaude)
+	b := bindGrok(t, f, model.ActorCodex)
 	for i, sender := range []relay.Auth{a, b} {
 		to := model.OtherParticipant(sender.Slot)
 		text := fmt.Sprintf("@grok%d review this", 1-i)
@@ -179,14 +176,14 @@ func TestTwoNativeGrokSessionsUseDistinctSlotsAndHandles(t *testing.T) {
 			t.Fatal("Grok runtime became a third slot or routed to self")
 		}
 		t.Setenv("GROK_SESSION_ID", sender.SessionID)
-		output, err := f.run(t, []string{"bind"}, nil)
+		output, err := f.runAs(t, model.RuntimeGrok, sender.SessionID, []string{"bind"}, nil)
 		if err != nil || strings.Contains(string(output), `"bind_nonce"`) {
 			t.Fatal("same-runtime session resume failed")
 		}
 		t.Setenv("GROK_SESSION_ID", "")
 	}
 	// Old-generation credentials cannot consume the inbox after replacement.
-	_, err := f.native.engine.Bind(a.Slot, relay.BindRequest{BindID: "replacement", CredentialHash: relay.Digest("secret"), NonceHash: relay.Digest("nonce"), Replace: true})
+	_, err := f.native.engine.Bind(a.Slot, relay.BindRequest{BindID: "replacement", CredentialHash: relay.Digest("secret"), SessionID: "replacement-session", Replace: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,8 +245,8 @@ func TestGrokNativeCreateInsideHarnessWithoutIdentityFlags(t *testing.T) {
 				Binding relay.Binding `json:"binding"`
 				Nonce   string        `json:"bind_nonce"`
 			}
-			if json.Unmarshal(out.Bytes(), &created) != nil || created.Nonce == "" || created.Binding.Slot != wantSlot || created.Binding.SessionID != "" {
-				t.Fatalf("create guessed identity or bypassed nonce: %s", out.String())
+			if json.Unmarshal(out.Bytes(), &created) != nil || created.Nonce != "" || strings.Contains(out.String(), "bind_nonce") || created.Binding.Slot != wantSlot || created.Binding.SessionID != "grok-creator" {
+				t.Fatalf("create did not associate directly from the Grok environment: %s", out.String())
 			}
 			for _, room := range f.registry.Snapshot(true).Rooms {
 				if room.Name == "Harness-created Grok pair" {
@@ -267,7 +264,8 @@ func TestGrokNativeCreateInsideHarnessWithoutIdentityFlags(t *testing.T) {
 			if err := f.native.engine.Park(wantSlot, false); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := grokHook(t, f, relay.Auth{Slot: wantSlot, SessionID: "grok-creator"}, created.Nonce, nil); err != nil {
+			// No Stop hook is required to unlock foreground use or resume.
+			if err := run([]string{"send", "--id", "before-first-stop", "--to", "@user", "--text", "ready immediately"}); err != nil {
 				t.Fatal(err)
 			}
 			if err := run([]string{"bind"}); err != nil || strings.Contains(out.String(), `"bind_nonce"`) {

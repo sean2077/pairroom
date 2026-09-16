@@ -16,7 +16,7 @@ func writeSlotState(t *testing.T, root, room, slot string, pid int, name string)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	s := State{Schema: 1, Room: room, Slot: model.ActorID(slot), BindID: "bind-" + room + slot, HarnessPID: pid, HarnessName: name}
+	s := State{Schema: 1, Room: room, Slot: model.ActorID(slot), BindID: "bind-" + room + slot, Generation: 1, SessionID: "session-" + room + slot, HarnessPID: pid, HarnessName: name}
 	data, err := json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)
@@ -131,6 +131,29 @@ func TestResolveSlotDefaultsNoBinding(t *testing.T) {
 	err := resolveSlotDefaults(t.TempDir(), &o)
 	if err == nil || !strings.Contains(err.Error(), "run pairroom relay bind first") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestResolveSlotDefaultsSkipsIncompleteBinding(t *testing.T) {
+	// A bind that never confirmed (no generation/session id) must not be
+	// auto-selected for foreground commands; the caller is told to bind first.
+	root := t.TempDir()
+	dir := filepath.Join(root, ".pairroom", "rooms", "room1", "slots", "claude")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s := State{Schema: 1, Room: "room1", Slot: model.ActorClaude, Runtime: model.RuntimeClaude, BindID: "bind-incomplete"}
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stubLineage(t, 0, "", false)
+	var o options
+	if err := resolveSlotDefaults(root, &o); err == nil || !strings.Contains(err.Error(), "run pairroom relay bind first") {
+		t.Fatalf("incomplete binding must be skipped: %v", err)
 	}
 }
 

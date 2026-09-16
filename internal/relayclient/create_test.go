@@ -20,7 +20,12 @@ import (
 
 func createBindFixture(t *testing.T, own model.RuntimeKind) (string, string, *int) {
 	t.Helper()
-	IsolateNativeCaller(t)
+	// stubLineage isolates the caller (and clears inherited session env), so set
+	// the session ids afterward. Lineage scopes the caller to claude, so exposing
+	// both runtimes' variables never looks like conflicting metadata.
+	stubLineage(t, 4242, "claude", true)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "official-session")
+	t.Setenv("CODEX_SESSION_ID", "official-session")
 	root := filepath.Join(t.TempDir(), "project's space")
 	if err := os.Mkdir(root, 0700); err != nil {
 		t.Fatal(err)
@@ -32,6 +37,7 @@ func createBindFixture(t *testing.T, own model.RuntimeKind) (string, string, *in
 	}
 	created := 0
 	mux := http.NewServeMux()
+	serveDefaultPairForTest(mux, map[model.ActorID]model.AgentSelection{model.ActorClaude: {Runtime: own}, model.ActorCodex: {Runtime: model.RuntimeCodex}})
 	mux.HandleFunc("GET /api/v1/service", func(w http.ResponseWriter, r *http.Request) {
 		rooms := []any{}
 		for i := 1; i <= created; i++ {
@@ -49,7 +55,7 @@ func createBindFixture(t *testing.T, own model.RuntimeKind) (string, string, *in
 			t.Error(err)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: request.BindID, Generation: 1, Slot: model.ActorClaude, Active: true}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: request.BindID, Generation: 1, Slot: model.ActorClaude, Active: true, SessionID: request.SessionID}})
 	})
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
@@ -73,27 +79,15 @@ func TestBindCreateMissingHooksDoesNotCreateRoom(t *testing.T) {
 	}
 }
 
-func TestBindCreateFailurePreservesRoomForRecovery(t *testing.T) {
-	// The Service default pair can differ from the installed local hook. Its
-	// resolved selection remains authoritative; post-create failure must name
-	// the created Room instead of encouraging another --create.
+func TestBindCreateSlotRuntimeMismatchFailsBeforeCreation(t *testing.T) {
 	root, endpoint, created := createBindFixture(t, model.RuntimeCodex)
 	if err := editHooks(root, model.RuntimeClaude, false); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
 	err := bind(context.Background(), root, options{slot: "claude", create: true, endpoint: endpoint}, &out)
-	if err == nil || *created != 1 || !strings.Contains(err.Error(), "Room room1 was created") || !strings.Contains(err.Error(), "--room room1") || !strings.Contains(err.Error(), "--replace") || !strings.Contains(err.Error(), "--service-file") {
-		t.Fatalf("missing actionable recovery: created=%d err=%v", *created, err)
-	}
-	if err := editHooks(root, model.RuntimeCodex, false); err != nil {
-		t.Fatal(err)
-	}
-	if err := bind(context.Background(), root, options{slot: "claude", room: "room1", replace: true, endpoint: endpoint}, &out); err != nil {
-		t.Fatal(err)
-	}
-	if *created != 1 {
-		t.Fatal("recovery created another Room")
+	if err == nil || *created != 0 || !strings.Contains(err.Error(), "does not match") || out.Len() != 0 {
+		t.Fatalf("creator-slot preflight did not fail before provisioning: created=%d err=%v", *created, err)
 	}
 }
 

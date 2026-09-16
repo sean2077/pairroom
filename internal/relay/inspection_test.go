@@ -51,22 +51,6 @@ func TestNativeSummaryIsBoundedBodyFreeAndAuthenticated(t *testing.T) {
 	}
 }
 
-func TestNativeSummaryPendingBindingHasNoPeerOrInbox(t *testing.T) {
-	e, auth, _ := testEngine(t)
-	_, err := e.Send(auth["claude"], SendRequest{ID: "queued", Text: "secret"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := e.Bind("claude", BindRequest{BindID: "replacement", CredentialHash: Digest("new-secret"), NonceHash: Digest("nonce"), Replace: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s, err := e.AuthSummary(Auth{Slot: "claude", BindID: b.BindID, Generation: b.Generation, Secret: "new-secret"})
-	if err != nil || len(s.Bindings) != 1 || s.Bindings["claude"].Associated || len(s.Inboxes) != 0 || len(s.Recovery) != 0 {
-		t.Fatalf("pending binding saw peer/inbox: %+v %v", s, err)
-	}
-}
-
 func TestNativeSequenceAvoidsSnapshotAllocations(t *testing.T) {
 	e, auth, _ := testEngine(t)
 	_, err := e.Send(auth["claude"], SendRequest{ID: "sample", Text: "body"})

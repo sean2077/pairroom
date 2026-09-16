@@ -59,11 +59,15 @@ PairRoom 没有自动接力次数或费用上限。持久化恢复会区分安�
 
 ## Native 宿主模式（实验性）
 
-创建 Room 时选择 **Native**，双方保留在自己的 Claude Code / Codex / Grok Build 原生会话中；PairRoom 负责绑定、持久化中继和审计，不启动或中断原生进程。安装并批准项目级 Stop hooks，分别绑定槽位，在各自回复中返回一次性 nonce。Grok 使用[前台收件](docs/CLI_REFERENCE.md#grok-build-native)避免 Hook 反馈截断；被截断的输出需要显式 send/exchange。
+安装前提、项目批准、加入及恢复步骤见 [Native 安装与使用](docs/NATIVE_RELAY.md)。浏览器与桌面应用中也提供同一套操作引导。
+
+创建 Room 时选择 **Native**，双方保留在自己的 Claude Code / Codex / Grok Build 原生会话中；PairRoom 负责绑定、持久化中继和审计，不启动或中断原生进程。安装并批准项目级 Stop hooks，然后在各自会话内运行 bind；它会读取 harness 的会话 ID 环境变量并立即完成关联。
 
 `pairroom-relay` 技能位于 `skills/`，可经技能安装器分发（`npx skills add sean2077/pairroom`），`relay install` 也写入同一份文件。加载后 `/pairroom-relay <topic>` 创建 Room、绑定当前会话并返回对方的加入命令；`pairroom relay bind` 可在识别到的原生会话内零参数运行。后续审查复用绑定，不要每轮重建 Room。
 
 [Native 入门](docs/GETTING_STARTED.md#keep-codex-desktop-a-native-room)与[恢复命令](docs/CLI_REFERENCE.md#native-relay-commands)说明有界 park、前台取件和显式 Retry。Provider、模型、effort、权限仍由原生会话控制。真实认证后的多轮互通仍是发布验收门槛，合成测试不代表模型已接受消息。
+
+Grok 使用[前台收件](docs/CLI_REFERENCE.md#grok-build-native)避免 Hook 反馈截断；被截断的输出需要显式发送完整原文。
 
 ## 桌面端与源码开发
 

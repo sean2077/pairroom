@@ -159,7 +159,7 @@ var skillContent string
 // skillHeadings are the headings PairRoom's own projections have shipped. A
 // projection installed by an earlier `relay install` must stay upgradable; only
 // genuinely unrelated content at that path is refused.
-var skillHeadings = []string{"# pairroom-relay", "# PairRoom Native relay"}
+var skillHeadings = []string{"# pairroom-relay", "# PairRoom Native relay", "# PairRoom relay"}
 
 func ownedSkill(data []byte) bool {
 	for _, heading := range skillHeadings {

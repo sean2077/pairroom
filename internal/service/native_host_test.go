@@ -73,7 +73,7 @@ func nativeHTTP(t *testing.T) *nativeFixture {
 	}
 	return &nativeFixture{registry: registry, room: room, project: project, manager: manager, server: server, native: native, endpoint: endpoint}
 }
-func (f *nativeFixture) run(t *testing.T, args []string, input any) ([]byte, error) {
+func (f *nativeFixture) exec(t *testing.T, args []string, input any) ([]byte, error) {
 	t.Helper()
 	var in []byte
 	if input != nil {
@@ -84,25 +84,65 @@ func (f *nativeFixture) run(t *testing.T, args []string, input any) ([]byte, err
 	err := relayclient.Run(context.Background(), args, bytes.NewReader(in), &out, &diagnostic)
 	return out.Bytes(), err
 }
-func (f *nativeFixture) bind(t *testing.T, slot model.ActorID) (relay.Auth, string) {
+
+// run clears any inherited native session environment so foreground commands
+// rely on their explicit --room/--slot, like a caller without session metadata.
+// bind/hook set the single relevant variable themselves via exec.
+func (f *nativeFixture) run(t *testing.T, args []string, input any) ([]byte, error) {
+	t.Helper()
+	clearNativeSessionEnv(t)
+	return f.exec(t, args, input)
+}
+
+func clearNativeSessionEnv(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("GROK_SESSION_ID", "")
+}
+
+// runAs simulates one CLI invocation from inside a specific native session: it
+// exposes exactly that session's id (clearing the others) so caller resolution
+// never sees conflicting metadata, then runs without the env-clearing f.run.
+func (f *nativeFixture) runAs(t *testing.T, kind model.RuntimeKind, session string, args []string, input any) ([]byte, error) {
+	t.Helper()
+	clearNativeSessionEnv(t)
+	t.Setenv(sessionEnvVar(kind), session)
+	return f.exec(t, args, input)
+}
+
+// sessionEnvVar mirrors relayclient.sessionEnvVars: the environment variable a
+// native harness exposes to tool-call subprocesses carrying its session id.
+func sessionEnvVar(kind model.RuntimeKind) string {
+	if kind == model.RuntimeCodex {
+		return "CODEX_SESSION_ID"
+	}
+	if kind == model.RuntimeGrok {
+		return "GROK_SESSION_ID"
+	}
+	return "CLAUDE_CODE_SESSION_ID"
+}
+
+func (f *nativeFixture) bind(t *testing.T, slot model.ActorID) relay.Auth {
 	t.Helper()
 	kind := f.room.Agents[slot].Runtime
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	// The harness exposes the official session id to tool-call subprocesses; bind
+	// reads it and associates immediately, with no nonce echo round-trip.
+	session := "official-session-" + string(slot)
 	if _, err := f.run(t, []string{"install", "--runtime", string(kind)}, nil); err != nil {
 		t.Fatal(err)
 	}
-	output, err := f.run(t, []string{"bind", "--room", f.room.ID, "--slot", string(slot), "--service-file", f.endpoint}, nil)
+	output, err := f.runAs(t, kind, session, []string{"bind", "--room", f.room.ID, "--slot", string(slot), "--service-file", f.endpoint}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var result struct {
 		Binding relay.Binding `json:"binding"`
-		Nonce   string        `json:"bind_nonce"`
 	}
-	if json.Unmarshal(output, &result) != nil || result.Nonce == "" {
-		t.Fatal("nonce missing")
+	if json.Unmarshal(output, &result) != nil || result.Binding.SessionID != session {
+		t.Fatalf("bind did not associate from the environment: %s", output)
 	}
 	data, err := os.ReadFile(filepath.Join(f.project.Root, ".pairroom", "rooms", f.room.ID, "slots", string(slot), "credentials"))
 	if err != nil {
@@ -115,40 +155,63 @@ func (f *nativeFixture) bind(t *testing.T, slot model.ActorID) (relay.Auth, stri
 	if strings.Contains(string(output), cred.Secret) || strings.Contains(string(output), "management-secret") {
 		t.Fatal("bind stdout exposed long-lived credentials")
 	}
-	return relay.Auth{Slot: slot, BindID: result.Binding.BindID, Generation: result.Binding.Generation, Secret: cred.Secret, SessionID: "official-session-" + string(slot)}, result.Nonce
+	// Synthetic sessions are not real descendants of the test runner’s harness.
+	var local relayclient.State
+	statePath := filepath.Join(f.project.Root, ".pairroom", "rooms", f.room.ID, "slots", string(slot), "state.json")
+	stateData, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(stateData, &local); err != nil {
+		t.Fatal(err)
+	}
+	local.HarnessPID, local.HarnessName = 0, ""
+	if err := relay.AtomicJSON(statePath, local); err != nil {
+		t.Fatal(err)
+	}
+	return relay.Auth{Slot: slot, BindID: result.Binding.BindID, Generation: result.Binding.Generation, Secret: cred.Secret, SessionID: session}
 }
 func (f *nativeFixture) hook(t *testing.T, a relay.Auth, text string, active bool) ([]byte, error) {
 	t.Helper()
-	return f.run(t, []string{"hook", "--runtime", string(f.room.Agents[a.Slot].Runtime)}, map[string]any{"hook_event_name": "Stop", "session_id": a.SessionID, "cwd": f.project.Root, "last_assistant_message": text, "stop_hook_active": active, "transcript_path": "/unavailable/optional/transcript"})
+	// The synthetic invocation carries this caller's environment as well as its payload.
+	return f.runAs(t, f.room.Agents[a.Slot].Runtime, a.SessionID, []string{"hook", "--runtime", string(f.room.Agents[a.Slot].Runtime)}, map[string]any{"hook_event_name": "Stop", "session_id": a.SessionID, "cwd": f.project.Root, "last_assistant_message": text, "stop_hook_active": active, "transcript_path": "/unavailable/optional/transcript"})
 }
 func associateCLI(t *testing.T, f *nativeFixture, slot model.ActorID) relay.Auth {
 	t.Helper()
-	a, nonce := f.bind(t, slot)
+	a := f.bind(t, slot)
 	if err := f.native.engine.Park(slot, false); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.hook(t, a, nonce, false); err != nil {
 		t.Fatal(err)
 	}
 	b, err := f.native.engine.Inspect(a)
 	if err != nil || b.SessionID != a.SessionID {
-		t.Fatal("official Stop nonce did not associate")
+		t.Fatal("bind did not associate the official session")
 	}
 	return a
 }
 
-func TestNativePendingBindCannotRediscloseNonce(t *testing.T) {
+func TestNativeRebindSameSessionIsIdempotent(t *testing.T) {
 	f := nativeHTTP(t)
-	a, nonce := f.bind(t, model.ActorClaude)
+	a := f.bind(t, model.ActorClaude)
+	args := []string{"bind", "--room", f.room.ID, "--slot", "claude", "--service-file", f.endpoint}
+	// Re-binding from the same official session resumes idempotently: no new
+	// generation, no credential rotation, and still no secret in stdout.
+	out, err := f.runAs(t, model.RuntimeClaude, a.SessionID, args, nil)
+	if err != nil {
+		t.Fatalf("same-session rebind failed: %v", err)
+	}
+	var result struct {
+		Binding relay.Binding `json:"binding"`
+	}
+	if json.Unmarshal(out, &result) != nil || result.Binding.Generation != a.Generation || result.Binding.SessionID != a.SessionID {
+		t.Fatalf("same-session rebind rotated identity: %+v", result.Binding)
+	}
 	dir := filepath.Join(f.project.Root, ".pairroom", "rooms", f.room.ID, "slots", "claude")
 	state, _ := os.ReadFile(filepath.Join(dir, "state.json"))
 	credentials, _ := os.ReadFile(filepath.Join(dir, "credentials"))
-	args := []string{"bind", "--room", f.room.ID, "--slot", "claude", "--service-file", f.endpoint}
-	for _, extra := range [][]string{nil, {"--continue", "--session-id", a.SessionID}} {
-		out, err := f.run(t, append(append([]string{}, args...), extra...), nil)
-		if err == nil || !strings.Contains(err.Error(), "pending binding") || len(out) != 0 {
-			t.Fatalf("pending bind must fail without output: %q %v", out, err)
-		}
+	// A different official session cannot take the occupied slot, and the rejected
+	// bind leaves the existing binding files untouched.
+	if out, err := f.runAs(t, model.RuntimeClaude, "a-different-session", args, nil); err == nil || !errors.Is(err, relay.ErrOccupied) || len(out) != 0 {
+		t.Fatalf("different session must be rejected as occupied: %q %v", out, err)
 	}
 	for name, before := range map[string][]byte{"state.json": state, "credentials": credentials} {
 		after, err := os.ReadFile(filepath.Join(dir, name))
@@ -156,50 +219,31 @@ func TestNativePendingBindCannotRediscloseNonce(t *testing.T) {
 			t.Fatalf("rejected bind changed %s: %v", name, err)
 		}
 	}
-	// The original nonce still completes the association, and an associated
-	// session can explicitly resume without replacing its generation.
-	_ = f.native.engine.Park(a.Slot, false)
-	if _, err := f.hook(t, a, nonce, false); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.run(t, append(args, "--continue", "--session-id", a.SessionID), nil); err != nil {
-		t.Fatal(err)
-	}
-	b, err := f.native.engine.Inspect(a)
-	if err != nil || b.Generation != a.Generation || b.SessionID != a.SessionID {
-		t.Fatalf("original binding did not survive: %+v %v", b, err)
-	}
 }
 
-func TestNativePendingBindRecoveryRequiresReplace(t *testing.T) {
+func TestNativeReplaceRotatesGeneration(t *testing.T) {
 	f := nativeHTTP(t)
-	a, firstNonce := f.bind(t, model.ActorClaude)
-	out, err := f.run(t, []string{"bind", "--room", f.room.ID, "--slot", "claude", "--service-file", f.endpoint, "--replace"}, nil)
+	a := f.bind(t, model.ActorClaude)
+	out, err := f.runAs(t, model.RuntimeClaude, a.SessionID, []string{"bind", "--room", f.room.ID, "--slot", "claude", "--service-file", f.endpoint, "--replace"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var replacement struct {
 		Binding relay.Binding `json:"binding"`
-		Nonce   string        `json:"bind_nonce"`
 	}
 	if err := json.Unmarshal(out, &replacement); err != nil {
 		t.Fatal(err)
 	}
-	if replacement.Nonce == "" || replacement.Nonce == firstNonce || replacement.Binding.Generation != a.Generation+1 {
-		t.Fatalf("replacement did not rotate identity: %+v", replacement.Binding)
+	if replacement.Binding.Generation != a.Generation+1 || replacement.Binding.SessionID != a.SessionID {
+		t.Fatalf("replacement did not rotate generation: %+v", replacement.Binding)
 	}
+	// The revoked generation no longer authenticates.
 	if _, err := f.native.engine.Inspect(a); !errors.Is(err, relay.ErrAuth) {
-		t.Fatalf("old pending credentials remain usable: %v", err)
+		t.Fatalf("old credentials remain usable: %v", err)
 	}
-	_ = f.native.engine.Park(a.Slot, false)
-	if out, err := f.hook(t, a, firstNonce, false); err != nil || strings.TrimSpace(string(out)) != "{}" {
-		t.Fatalf("revoked nonce was not ignored: %q %v", out, err)
-	}
-	if _, err := f.hook(t, a, replacement.Nonce, false); err != nil {
-		t.Fatal(err)
-	}
-	if got := f.native.engine.Snapshot().Bindings[a.Slot]; got.SessionID != a.SessionID {
-		t.Fatal("replacement nonce did not associate")
+	// The replacement is associated immediately from the harness environment.
+	if got := f.native.engine.Snapshot().Bindings[a.Slot]; got.SessionID != a.SessionID || got.Generation != a.Generation+1 {
+		t.Fatalf("replacement was not associated: %+v", got)
 	}
 }
 
@@ -271,19 +315,18 @@ func TestNativeHTTPAckSettlesDrainingRuntime(t *testing.T) {
 }
 func TestNativeCLIHookAssociationRoutingAndEightBlockBudget(t *testing.T) {
 	f := nativeHTTP(t)
-	a, nonce := f.bind(t, model.ActorClaude)
+	a := f.bind(t, model.ActorClaude)
 	_ = f.native.engine.Park(a.Slot, false)
+	// bind already associated the official session from the environment; a hook
+	// from an unrelated session matches no local binding and cannot disturb it.
 	impostor := a
 	impostor.SessionID = "another-session"
-	output, err := f.hook(t, impostor, "no nonce", false)
+	output, err := f.hook(t, impostor, "unrelated session text", false)
 	if err != nil || strings.TrimSpace(string(output)) != "{}" {
 		t.Fatalf("unrelated session should ignore hook: %s %v", output, err)
 	}
-	if b, _ := f.native.engine.Inspect(a); b.SessionID != "" {
-		t.Fatal("competing hook stole pending association")
-	}
-	if _, err := f.hook(t, a, nonce, false); err != nil {
-		t.Fatal(err)
+	if b, err := f.native.engine.Inspect(a); err != nil || b.SessionID != a.SessionID {
+		t.Fatalf("unrelated hook disturbed association: %+v %v", b, err)
 	}
 	b := associateCLI(t, f, model.ActorCodex)
 	// Native input is mocked; every CLI call below traverses real authenticated
@@ -539,12 +582,9 @@ func TestNativeGlobalSessionOwnershipIncludingEmbeddedAndArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	native := rt.(*nativeHostRuntime)
-	b, err := native.engine.Bind(model.ActorCodex, relay.BindRequest{BindID: "other-bind", CredentialHash: relay.Digest("secret"), NonceHash: relay.Digest("nonce")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	otherAuth := relay.Auth{Slot: model.ActorCodex, BindID: b.BindID, Generation: b.Generation, Secret: "secret", SessionID: a.SessionID}
-	if _, err := native.engine.Associate(otherAuth, "nonce", a.SessionID, ""); !errors.Is(err, ErrBindingOwned) {
+	// Association is captured at bind, so binding the same official session into
+	// another Room slot conflicts globally during Bind itself.
+	if _, err := native.engine.Bind(model.ActorCodex, relay.BindRequest{BindID: "other-bind", CredentialHash: relay.Digest("secret"), SessionID: a.SessionID}); !errors.Is(err, ErrBindingOwned) {
 		t.Fatalf("duplicate runtime identity accepted: %v", err)
 	}
 	embedded, err := f.registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: f.project.ID, Name: "embedded", Bindings: specs(BindingNew, BindingNew, "")}, deferredNewProvisioner{})
@@ -564,7 +604,7 @@ func TestNativeGlobalSessionOwnershipIncludingEmbeddedAndArchive(t *testing.T) {
 	if _, err := f.registry.ArchiveRoom(context.Background(), f.room.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := native.engine.Associate(otherAuth, "nonce", a.SessionID, ""); !errors.Is(err, ErrBindingOwned) {
+	if _, err := native.engine.Bind(model.ActorCodex, relay.BindRequest{BindID: "other-bind-2", CredentialHash: relay.Digest("secret"), SessionID: a.SessionID}); !errors.Is(err, ErrBindingOwned) {
 		t.Fatal("archive released binding ownership")
 	}
 }

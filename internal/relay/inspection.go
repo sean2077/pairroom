@@ -64,7 +64,7 @@ func (e *Engine) AuthSummary(a Auth) (Summary, error) {
 	if b.SessionID == "" {
 		s.Sequence = 0
 		s.Bindings[a.Slot] = BindingSummary{Active: b.Active, ParkEnabled: b.ParkEnabled}
-		s.Notice = "Awaiting approved Stop-hook nonce association; no inbox access."
+		s.Notice = "Binding is not associated with an official session; rebind inside the native session. No inbox access before association."
 		return s, nil
 	}
 	for slot, b := range e.bindings {

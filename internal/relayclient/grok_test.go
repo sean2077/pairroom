@@ -91,7 +91,7 @@ func TestGrokCreatorInfersOwnRuntimeWithPeerSelection(t *testing.T) {
 	root := t.TempDir()
 	callerState(t, root, "grok-room", "own", model.ActorCodex, model.RuntimeGrok)
 	resume := options{}
-	if err := applyCallerDefaults(root, "bind", &resume); err != nil || resume.room != "grok-room" || resume.slot != "codex" || !resume.cont {
+	if err := applyCallerDefaults(root, "bind", &resume); err != nil || resume.room != "grok-room" || resume.slot != "codex" || resume.endpoint != filepath.Join(root, "custom-endpoint.json") {
 		t.Fatalf("Grok resume failed: %+v %v", resume, err)
 	}
 }
@@ -152,5 +152,56 @@ func TestGrokSkillHonorsConfiguredHome(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".grok")); !os.IsNotExist(err) {
 		t.Fatal("ignored GROK_HOME")
+	}
+}
+
+func TestGrokBindCannotUseInheritedOuterRuntimeIdentity(t *testing.T) {
+	root, endpoint, created := createBindFixture(t, model.RuntimeClaude)
+	*created = 1 // existing Claude/Codex Room, not a Grok creator
+	stubLineage(t, 42, "grok", true)
+	t.Setenv("GROK_SESSION_ID", "actual-grok-session")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "outer-claude-session")
+	var out bytes.Buffer
+	err := bind(context.Background(), root, options{room: "room1", slot: "claude", endpoint: endpoint}, &out)
+	if err == nil || !strings.Contains(err.Error(), "runtime does not match") || out.Len() != 0 {
+		t.Fatalf("explicit slot adopted an inherited outer identity: %s %v", out.String(), err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".pairroom")); !os.IsNotExist(err) {
+		t.Fatal("runtime mismatch wrote a local binding")
+	}
+}
+
+// The compact Native skill on main uses a new heading. Updating a matching
+// installed product skill must remain repeatable across all supported hosts.
+func TestNativeSkillInstallAcceptsCurrentCompactHeading(t *testing.T) {
+	for _, kind := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok} {
+		t.Run(string(kind), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("GROK_HOME", "")
+			for i := 0; i < 2; i++ {
+				if err := installSkill(kind); err != nil {
+					t.Fatalf("install %d: %v", i+1, err)
+				}
+			}
+			path := filepath.Join(home, "."+string(kind), "skills", "pairroom-relay", "SKILL.md")
+			body, err := os.ReadFile(path)
+			if err != nil || string(body) != skillContent {
+				t.Fatalf("installed skill differs: %v", err)
+			}
+			// Retain refusal of unrelated content, even at the product path.
+			unrelated := []byte("# My unrelated skill\n")
+			if err := os.WriteFile(path, unrelated, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := installSkill(kind); err == nil {
+				t.Fatal("overwrote unrelated skill")
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(after, unrelated) {
+				t.Fatal("refusal modified unrelated content")
+			}
+		})
 	}
 }
