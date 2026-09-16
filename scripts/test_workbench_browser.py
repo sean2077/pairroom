@@ -88,7 +88,7 @@ async def verify(browser_path: str | None, artifacts: Path) -> None:
                     await page.evaluate("args => {PairRoomTheme.setTheme(args[0]); PairRoomI18n.setLang(args[1]);}", [theme, language])
                     await expect(page.locator('html')).to_have_attribute('data-theme', theme)
                     await page.wait_for_timeout(100)
-                    expected = 'rgb(255, 255, 255)' if theme == 'light' else 'rgb(14, 14, 14)'
+                    expected = 'rgb(246, 244, 240)' if theme == 'light' else 'rgb(23, 24, 29)'
                     assert await page.locator('body').evaluate('el=>getComputedStyle(el).backgroundColor') == expected
                     assert await page.locator('body').evaluate('el=>getComputedStyle(el).backgroundImage') == 'none'
                     primary = page.locator('#add-project-button' if surface == 'management' else '#send-button')

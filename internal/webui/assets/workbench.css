@@ -7,25 +7,28 @@
      palette, not the OS preference. theme.js sets data-theme before the first
      stylesheet, so this holds on the initial paint as well. */
   color-scheme: light;
-  --wb-canvas: #ffffff;
-  --wb-chrome: #f5f5f5;
-  --wb-panel: #fafafa;
-  --wb-input: #f7f7f7;
+  /* Warm paper neutrals: no pure white anywhere, so large canvases stay
+     glare-free, while chrome/panel/input steps keep the layering legible. */
+  --wb-canvas: #f6f4f0;
+  --wb-chrome: #edebe6;
+  --wb-panel: #f2f0eb;
+  --wb-input: #efede8;
   --sidebar-width: 244px;
-  --wb-hover: #eeeeee;
-  --wb-selected: #eaeaea;
-  --wb-line: #e5e5e5;
-  --wb-line-strong: #c7c7c7;
-  --wb-ink: #171717;
-  --wb-muted: #636363;
-  --wb-primary: #171717;
-  --wb-primary-hover: #333333;
+  --wb-hover: #e7e5df;
+  --wb-selected: #dfddd6;
+  --wb-line: #e0ded7;
+  --wb-line-strong: #c6c3ba;
+  --wb-ink: #1c1b18;
+  --wb-muted: #5f5d56;
+  --wb-primary: #1c1b18;
+  --wb-primary-hover: #34322c;
   --wb-on-primary: #ffffff;
   --wb-focus: #3869c8;
-  --wb-green: #24764d;
-  --wb-amber: #90600e;
-  --wb-red: #bd3545;
-  --wb-blue: #3869b6;
+  --wb-ring: 0 0 0 3px color-mix(in srgb, var(--wb-focus) 16%, transparent);
+  --wb-green: #1f6743;
+  --wb-amber: #7d5309;
+  --wb-red: #a82c3c;
+  --wb-blue: #315c9f;
   --wb-overlay-shadow: 0 12px 36px #0000001f, 0 2px 6px #0000000a;
   --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
@@ -91,20 +94,23 @@
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --wb-canvas: #0e0e0e;
-  --wb-chrome: #242424;
-  --wb-panel: #171717;
-  --wb-input: #1c1c1c;
-  --wb-hover: #303030;
-  --wb-selected: #3b3b3b;
-  --wb-line: #2c2c2c;
-  --wb-line-strong: #555555;
-  --wb-ink: #ededed;
-  --wb-muted: #ababab;
-  --wb-primary: #eeeeee;
+  /* Cool graphite steps: blue undertone plus wider surface separation keeps
+     the dark theme layered instead of one flat neutral slab. */
+  --wb-canvas: #17181d;
+  --wb-chrome: #22252c;
+  --wb-panel: #1c1e24;
+  --wb-input: #1f2128;
+  --wb-hover: #2c2f38;
+  --wb-selected: #363a45;
+  --wb-line: #2d3039;
+  --wb-line-strong: #4a4f5c;
+  --wb-ink: #e9eaee;
+  --wb-muted: #a6abb7;
+  --wb-primary: #e9eaee;
   --wb-primary-hover: #ffffff;
-  --wb-on-primary: #171717;
+  --wb-on-primary: #17181d;
   --wb-focus: #9dbdff;
+  --wb-ring: 0 0 0 3px color-mix(in srgb, var(--wb-focus) 22%, transparent);
   --wb-green: #7bcca1;
   --wb-amber: #e0b767;
   --wb-red: #f1919e;
@@ -157,7 +163,26 @@ body.workbench-management .page-heading { min-width: 100px; }
 body.workbench-management .page-heading h1 { font-size: 15px; font-weight: 600; letter-spacing: -.015em; }
 body.workbench-management .page-subtitle { font-size: 12px; }
 body.workbench-management .topbar-actions { gap: 6px; }
-body.workbench-management .global-search { background: var(--wb-chrome); border-color: transparent; box-shadow: none; height: 32px; }
+body.workbench-management .global-search {
+  height: 32px;
+  gap: 7px;
+  padding: 0 8px 0 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-input);
+  color: var(--wb-muted);
+  transition: border-color 130ms, background 130ms, box-shadow 130ms, color 130ms;
+}
+body.workbench-management .global-search:hover { border-color: var(--wb-line-strong); }
+body.workbench-management .global-search > span { color: var(--wb-muted); }
+body.workbench-management .global-search kbd {
+  padding: 2px 6px;
+  border: 1px solid var(--wb-line);
+  border-radius: 5px;
+  background: var(--wb-canvas);
+  color: var(--wb-muted);
+  font: 500 10px/1.2 var(--font-mono);
+}
 body.workbench-management .topbar .icon-button { border-color: transparent; background: transparent; box-shadow: none; }
 body.workbench-management button:hover:not(:disabled), body.workbench-management .button:hover { transform: none; }
 body.workbench-management button { font-weight: 500; }
@@ -242,7 +267,9 @@ body.workbench-room :is(.chat-title, .inspector-header .panel-heading) { font-si
 body.workbench-room .chat-description { font-size: 11px; }
 body.workbench-room .workbench-room-utilities { display: flex; gap: 8px; padding: 4px 4px 10px; }
 body.workbench-room .workbench-room-utilities[hidden] { display: none; }
-body.workbench-room .search-box { background: var(--wb-chrome); }
+body.workbench-room .search-box { background: var(--wb-input); border-color: var(--wb-line); transition: border-color 130ms, background 130ms, box-shadow 130ms; }
+body.workbench-room .search-box:hover { border-color: var(--wb-line-strong); }
+body.workbench-room .search-box:focus-within { border-color: var(--wb-focus); box-shadow: var(--wb-ring); background: var(--wb-canvas); }
 body.workbench-room .room-collaboration { padding-block: 7px; background: var(--wb-panel); }
 body.workbench-room.ux-enhanced .timeline { padding-block: 20px 24px; }
 body.workbench-room .message-meta strong { font-weight: 600; }
@@ -291,11 +318,38 @@ body.workbench-native .audit-panel { background: var(--wb-panel); }
 
 /* One navigation spine, docked document tabs and an uncluttered transcript. */
 body.workbench-management .sidebar-top .brand { order: -1; }
-body.workbench-management .workbench-launcher { display: flex; width: calc(100% - 16px); margin: 2px 8px 12px; padding: 6px 10px; gap: 9px; min-height: 34px; color: var(--wb-muted); background: transparent; border-color: transparent; border-radius: 6px; font-family: var(--font-sans); font-size: 12px; font-weight: 500; box-shadow: none; }
+body.workbench-management .workbench-launcher {
+  display: flex;
+  align-items: center;
+  width: calc(100% - 16px);
+  min-height: 36px;
+  margin: 6px 8px 12px;
+  padding: 0 7px 0 9px;
+  gap: 8px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-input);
+  color: var(--wb-muted);
+  box-shadow: none;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  transition: border-color 130ms, background 130ms, color 130ms;
+}
 body.workbench-management .workbench-launcher::after { display: none; }
-body.workbench-management .workbench-launcher:hover { background: var(--wb-hover); color: var(--wb-ink); }
+body.workbench-management .workbench-launcher:hover { border-color: var(--wb-line-strong); background: var(--wb-hover); color: var(--wb-ink); }
+body.workbench-management .workbench-launcher:active { background: var(--wb-selected); }
+body.workbench-management .workbench-launcher .workbench-icon { color: var(--wb-muted); }
+body.workbench-management .workbench-launcher:hover .workbench-icon { color: var(--wb-ink); }
 body.workbench-management .workbench-launcher-label { flex: 1; text-align: left; }
-body.workbench-management .workbench-launcher kbd { font-size: 10px; border: 0; background: transparent; }
+body.workbench-management .workbench-launcher kbd {
+  padding: 2px 6px;
+  border: 1px solid var(--wb-line);
+  border-radius: 5px;
+  background: var(--wb-canvas);
+  color: var(--wb-muted);
+  font: 500 10px/1.2 var(--font-mono);
+}
 body.workbench-management .workbench-project-heading { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; color: var(--wb-muted); font-size: 11px; font-weight: 500; }
 body.workbench-management .workbench-project-heading .icon-button { width: 28px; height: 28px; min-height: 28px; padding: 0; border: 0; background: transparent; }
 body.workbench-management .tree-project-header { border-radius: 5px; }
@@ -353,8 +407,9 @@ body.workbench-management .app-shell:is(.sidebar-collapsed, .room-maximized) .wo
 }
 
 body.workbench :is(button, a, input, select, textarea, summary, [tabindex]:not([tabindex="-1"]), [role="separator"]):focus-visible { outline: 2px solid var(--wb-focus); outline-offset: 2px; box-shadow: none; }
-body.workbench-room.ux-enhanced .composer textarea:focus-visible, body.workbench-management .global-search input:focus-visible { outline: 0; box-shadow: none; }
-body.workbench-management .global-search:focus-within { border-color: var(--wb-focus); box-shadow: 0 0 0 1px var(--wb-focus); }
+body.workbench-room.ux-enhanced .composer textarea:focus-visible, body.workbench-management .topbar .global-search input:focus-visible { outline: 0; box-shadow: none; }
+body.workbench-management .global-search:focus-within { border-color: var(--wb-focus); box-shadow: var(--wb-ring); background: var(--wb-canvas); }
+body.workbench-management .global-search:focus-within > span { color: var(--wb-focus); }
 @media (max-width: 1120px) {
   body.workbench-room.ux-enhanced .topbar { grid-template-columns: minmax(0, 1fr) auto; }
   body.workbench-room.ux-enhanced :is(.participants-panel, .inspector-panel) { top: var(--ux-topbar-height); bottom: 0; border-radius: 0; box-shadow: var(--wb-overlay-shadow); }
@@ -396,3 +451,27 @@ body.workbench-management .global-search:focus-within { border-color: var(--wb-f
   body.workbench :is(.primary-button, .send-button, button.primary) { border: 1px solid ButtonText; }
   body.workbench-management :is(.primary-nav a.active, .tree-room.active, .room-tab.active, .settings-nav button.active) { outline: 1px solid Highlight; outline-offset: -2px; }
 }
+
+/* Ctrl+K palette: quiet shell, header carries the focus state, and the
+   selected row reads through surface steps plus a lifted icon chip. */
+body.workbench-management .management-command-shell { border-color: var(--wb-line-strong); background: var(--wb-canvas); }
+body.workbench-management .management-command-header { border-bottom-color: var(--wb-line); background: var(--wb-panel); }
+body.workbench-management .management-command-dialog .management-command-header input:focus-visible { outline: 0; }
+body.workbench-management .management-command-header:focus-within { box-shadow: inset 0 -1px 0 var(--wb-focus); }
+body.workbench-management .management-command-header:focus-within .management-command-symbol { color: var(--wb-focus); }
+body.workbench-management .management-command-header > kbd,
+body.workbench-management .management-command-footer kbd { border-color: var(--wb-line); background: var(--wb-canvas); }
+body.workbench-management .management-command-icon { border-color: var(--wb-line); background: var(--wb-panel); color: var(--wb-muted); }
+body.workbench-management .management-command-item:hover:not([aria-selected="true"]) { background: var(--wb-hover); }
+body.workbench-management .management-command-item[aria-selected="true"] { border-color: var(--wb-line-strong); background: var(--wb-selected); }
+body.workbench-management .management-command-item[aria-selected="true"] .management-command-icon { border-color: var(--wb-line-strong); background: var(--wb-canvas); color: var(--wb-ink); }
+body.workbench-management .management-command-item > kbd { border-color: var(--wb-line); background: var(--wb-panel); }
+body.workbench-management .management-command-footer { border-top-color: var(--wb-line); background: var(--wb-panel); }
+
+/* Dark depth: a faint cool wash over the management content column and
+   hairline highlights on the chrome bands keep the layered surfaces from
+   reading as one flat slab. */
+:root[data-theme="dark"] body.workbench-management .workspace-main { background: radial-gradient(1100px 420px at 78% -12%, color-mix(in srgb, var(--wb-focus) 9%, transparent), transparent 72%); }
+:root[data-theme="dark"] body.workbench-management .sidebar { box-shadow: inset -1px 0 0 rgb(255 255 255 / .04); }
+:root[data-theme="dark"] body.workbench-management .topbar { box-shadow: inset 0 1px 0 rgb(255 255 255 / .03); }
+:root[data-theme="dark"] body.workbench-management :is(.primary-nav a.active, .tree-room.active) { background: color-mix(in srgb, var(--wb-focus) 10%, var(--wb-selected)); }
