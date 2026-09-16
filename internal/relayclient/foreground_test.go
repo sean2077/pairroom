@@ -430,7 +430,7 @@ func TestSendQueuedReceiptAddsPeerCollectionHint(t *testing.T) {
 	var result struct {
 		QueuedDelivery *queuedDeliveryHint `json:"queued_delivery"`
 	}
-	if err := json.Unmarshal(diagnostic.Bytes(), &result); err != nil || result.QueuedDelivery == nil || !strings.Contains(result.QueuedDelivery.Notice, "not handed off") || result.QueuedDelivery.Command != "pairroom relay wait --room room --slot 2" || result.QueuedDelivery.WakeCommand != codexWakeCommand(model.RuntimeCodex, "peer-session") {
+	if err := json.Unmarshal(diagnostic.Bytes(), &result); err != nil || result.QueuedDelivery == nil || !strings.Contains(result.QueuedDelivery.Notice, "not handed off") || result.QueuedDelivery.Command != "pairroom relay wait --room room --slot 2" || result.QueuedDelivery.WakeCommand != codexWakeTemplate(model.RuntimeCodex, "peer-session").Command || result.QueuedDelivery.WakeNotice != codexWakeNotice {
 		t.Fatalf("queued send hint = %+v, err=%v", result, err)
 	}
 	if strings.Contains(diagnostic.String(), "proposal") {
@@ -450,7 +450,7 @@ func TestSendQueuedClaudePeerOmitsWakeCommand(t *testing.T) {
 	var result struct {
 		QueuedDelivery *queuedDeliveryHint `json:"queued_delivery"`
 	}
-	if err := json.Unmarshal(diagnostic.Bytes(), &result); err != nil || result.QueuedDelivery == nil || result.QueuedDelivery.WakeCommand != "" {
+	if err := json.Unmarshal(diagnostic.Bytes(), &result); err != nil || result.QueuedDelivery == nil || result.QueuedDelivery.WakeCommand != "" || result.QueuedDelivery.WakeNotice != "" {
 		t.Fatalf("non-Codex peer exposed wake command: %+v, err=%v", result, err)
 	}
 }
@@ -464,7 +464,7 @@ func TestSendQueuedPeerLookupFailureOmitsWakeCommand(t *testing.T) {
 	var result struct {
 		QueuedDelivery *queuedDeliveryHint `json:"queued_delivery"`
 	}
-	if err := json.Unmarshal(diagnostic.Bytes(), &result); err != nil || result.QueuedDelivery == nil || result.QueuedDelivery.WakeCommand != "" || f.count("send") != 1 {
+	if err := json.Unmarshal(diagnostic.Bytes(), &result); err != nil || result.QueuedDelivery == nil || result.QueuedDelivery.WakeCommand != "" || result.QueuedDelivery.WakeNotice != "" || f.count("send") != 1 {
 		t.Fatalf("failed optional peer lookup changed send result: %+v, err=%v", result, err)
 	}
 }
@@ -515,7 +515,7 @@ func TestBriefStatusAddsHintsOnlyForQueuedInboxes(t *testing.T) {
 				t.Fatalf("status hints = %+v, err=%v", result.QueuedInboxHints, err)
 			}
 			if tc.want == 2 {
-				if result.QueuedInboxHints[0].Command != "pairroom relay wait --room room --slot 1" || result.QueuedInboxHints[0].WakeCommand != "" || result.QueuedInboxHints[1].Command != "pairroom relay wait --room room --slot 2" || result.QueuedInboxHints[1].WakeCommand != codexWakeCommand(model.RuntimeCodex, "peer-session") || !strings.Contains(result.QueuedInboxHints[1].Notice, "peer's associated native session") {
+				if result.QueuedInboxHints[0].Command != "pairroom relay wait --room room --slot 1" || result.QueuedInboxHints[0].WakeCommand != "" || result.QueuedInboxHints[0].WakeNotice != "" || result.QueuedInboxHints[1].Command != "pairroom relay wait --room room --slot 2" || result.QueuedInboxHints[1].WakeCommand != codexWakeTemplate(model.RuntimeCodex, "peer-session").Command || result.QueuedInboxHints[1].WakeNotice != codexWakeNotice || !strings.Contains(result.QueuedInboxHints[1].Notice, "peer's associated native session") {
 					t.Fatalf("status hints are not actionable: %+v", result.QueuedInboxHints)
 				}
 			}

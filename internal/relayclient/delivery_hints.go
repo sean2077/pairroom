@@ -13,6 +13,7 @@ type queuedDeliveryHint struct {
 	Notice      string `json:"notice"`
 	Command     string `json:"command"`
 	WakeCommand string `json:"wake_command,omitempty"`
+	WakeNotice  string `json:"wake_notice,omitempty"`
 }
 
 type publicationReceipt struct {
@@ -27,37 +28,46 @@ type queuedInboxHint struct {
 	Notice      string        `json:"notice"`
 	Command     string        `json:"command"`
 	WakeCommand string        `json:"wake_command,omitempty"`
+	WakeNotice  string        `json:"wake_notice,omitempty"`
 }
 
 const codexWakeNudge = "PairRoom inbox has messages for you. Run: pairroom relay wait"
+const codexWakeNotice = "Human-executed vendor wake; fixed body-free nudge; PairRoom never runs it."
+
+type wakeTemplate struct {
+	Command string
+	Notice  string
+}
 
 func waitCommand(room string, slot model.ActorID) string {
 	return fmt.Sprintf("pairroom relay wait --room %s --slot %d", room, slotNumber(slot))
 }
 
-func codexWakeCommand(runtime model.RuntimeKind, sessionID string) string {
+func codexWakeTemplate(runtime model.RuntimeKind, sessionID string) wakeTemplate {
 	if runtime.Canonical() != model.RuntimeCodex || sessionID == "" {
-		return ""
+		return wakeTemplate{}
 	}
-	return "codex queue --thread " + quoteShellPath(sessionID) + " --message " + quoteShellPath(codexWakeNudge)
+	return wakeTemplate{Command: "codex queue --thread " + quoteShellPath(sessionID) + " --message " + quoteShellPath(codexWakeNudge), Notice: codexWakeNotice}
 }
 
-func peerWakeCommand(ctx context.Context, c *Client) string {
+func peerWakeTemplate(ctx context.Context, c *Client) wakeTemplate {
 	var peer relay.Binding
 	if c.call(ctx, "peer", nil, &peer) != nil {
-		return ""
+		return wakeTemplate{}
 	}
-	return codexWakeCommand(peer.Runtime, peer.SessionID)
+	return codexWakeTemplate(peer.Runtime, peer.SessionID)
 }
 
 func queuedDeliveryHintFor(ctx context.Context, c *Client, msg relay.Message) *queuedDeliveryHint {
 	if msg.State != "queued" || msg.To != peerSlot(c.State.Slot) {
 		return nil
 	}
+	wake := peerWakeTemplate(ctx, c)
 	return &queuedDeliveryHint{
 		Notice:      "Message is queued and was not handed off at this response. PairRoom cannot wake an idle native model; if it remains queued, run this command in the peer's associated native session.",
 		Command:     waitCommand(c.State.Room, msg.To),
-		WakeCommand: peerWakeCommand(ctx, c),
+		WakeCommand: wake.Command,
+		WakeNotice:  wake.Notice,
 	}
 }
 
@@ -71,7 +81,7 @@ func writeQueuedDeliveryHint(ctx context.Context, diagnostic io.Writer, c *Clien
 
 func queuedInboxHints(ctx context.Context, c *Client, summary *relay.Summary) []queuedInboxHint {
 	hints := make([]queuedInboxHint, 0, len(model.SlotActors()))
-	peerWake := ""
+	peerWake := wakeTemplate{}
 	peerWakeLoaded := false
 	for _, slot := range model.SlotActors() {
 		queued := summary.Inboxes[slot].Queued
@@ -82,17 +92,17 @@ func queuedInboxHints(ctx context.Context, c *Client, summary *relay.Summary) []
 		if slot == c.State.Slot {
 			notice = "This associated inbox has queued input at this status snapshot. PairRoom cannot wake an idle native model; run this command to collect it."
 		}
-		wakeCommand := ""
+		wake := wakeTemplate{}
 		if slot == c.State.Slot {
-			wakeCommand = codexWakeCommand(c.State.Runtime, c.State.SessionID)
+			wake = codexWakeTemplate(c.State.Runtime, c.State.SessionID)
 		} else {
 			if !peerWakeLoaded {
-				peerWake = peerWakeCommand(ctx, c)
+				peerWake = peerWakeTemplate(ctx, c)
 				peerWakeLoaded = true
 			}
-			wakeCommand = peerWake
+			wake = peerWake
 		}
-		hints = append(hints, queuedInboxHint{Slot: slot, Queued: queued, Notice: notice, Command: waitCommand(c.State.Room, slot), WakeCommand: wakeCommand})
+		hints = append(hints, queuedInboxHint{Slot: slot, Queued: queued, Notice: notice, Command: waitCommand(c.State.Room, slot), WakeCommand: wake.Command, WakeNotice: wake.Notice})
 	}
 	return hints
 }
