@@ -343,10 +343,68 @@ func installSkill(kind model.RuntimeKind) error {
 		}
 		parts = []string{"skills", "pairroom-relay"}
 	}
-	dir, err := secureDir(home, parts...)
+	// The host/skills parents must be real directories PairRoom creates itself;
+	// keep them on the strict fail-closed path. Only the leaf skill directory is
+	// allowed to be a symlink, because external skill installers (cc-switch,
+	// `npx skills`) legitimately symlink a managed skill into place.
+	parent, err := secureDir(home, parts[:len(parts)-1]...)
 	if err != nil {
 		return err
 	}
+	return installSkillLeaf(parent, parts[len(parts)-1])
+}
+
+// installSkillLeaf installs the bundled pairroom-relay skill into parent/name.
+//
+// A real directory is created if needed and written. A leaf that an external
+// skill installer already symlinked in is recognized as installed only when it
+// resolves to a directory holding PairRoom-owned content; PairRoom never writes
+// through that symlink into the installer's store. Dangling links, links that
+// resolve to a non-directory, and unrelated content all fail closed.
+func installSkillLeaf(parent, name string) error {
+	dir := filepath.Join(parent, name)
+	info, err := os.Lstat(dir)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		if err := os.Mkdir(dir, 0700); err != nil {
+			return err
+		}
+		return writeSkillFile(dir)
+	case err != nil:
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		resolved, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			return fmt.Errorf("pairroom-relay skill at %s is a broken symlink; repair it with your skill installer", dir)
+		}
+		target, err := os.Stat(resolved)
+		if err != nil || !target.IsDir() {
+			return fmt.Errorf("pairroom-relay skill at %s is a symlink that does not resolve to a directory", dir)
+		}
+		// Externally managed: accept an existing PairRoom-owned skill as already
+		// installed, but never write through the symlink.
+		data, err := os.ReadFile(filepath.Join(resolved, "SKILL.md"))
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("pairroom-relay skill at %s is a symlink with no SKILL.md; install it with your skill installer", dir)
+		}
+		if err != nil {
+			return err
+		}
+		if !ownedSkill(data) {
+			return errors.New("an unrelated pairroom-relay skill exists; refusing to overwrite")
+		}
+		return nil
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("pairroom-relay skill path %s must be a directory", dir)
+	}
+	return writeSkillFile(dir)
+}
+
+// writeSkillFile upgrades the bundled skill into a real PairRoom-owned
+// directory, refusing to clobber genuinely unrelated content.
+func writeSkillFile(dir string) error {
 	path := filepath.Join(dir, "SKILL.md")
 	if data, err := os.ReadFile(path); err == nil && !ownedSkill(data) {
 		return errors.New("an unrelated pairroom-relay skill exists; refusing to overwrite")
