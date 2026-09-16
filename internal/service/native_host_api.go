@@ -201,6 +201,9 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 		nativeResult(w, summary, err)
 	case "peer":
 		peer, err := runtime.engine.Peer(auth)
+		if err == nil {
+			peer.Runtime = runtime.room.Agents[peer.Slot].Runtime.CanonicalForSlot(peer.Slot)
+		}
 		nativeResult(w, peer, err)
 	case "failure":
 		nativeResult(w, map[string]bool{"recorded": true}, runtime.engine.Failure(auth, req.Error))

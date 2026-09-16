@@ -30,14 +30,15 @@ var (
 )
 
 type Binding struct {
-	Slot           model.ActorID `json:"slot"`
-	BindID         string        `json:"bind_id"`
-	Generation     uint64        `json:"generation"`
-	Active         bool          `json:"active"`
-	SessionID      string        `json:"session_id,omitempty"`
-	TranscriptPath string        `json:"transcript_path,omitempty"`
-	ParkEnabled    bool          `json:"park_enabled"`
-	LastActivity   time.Time     `json:"last_activity,omitempty"`
+	Slot           model.ActorID     `json:"slot"`
+	Runtime        model.RuntimeKind `json:"runtime,omitempty"`
+	BindID         string            `json:"bind_id"`
+	Generation     uint64            `json:"generation"`
+	Active         bool              `json:"active"`
+	SessionID      string            `json:"session_id,omitempty"`
+	TranscriptPath string            `json:"transcript_path,omitempty"`
+	ParkEnabled    bool              `json:"park_enabled"`
+	LastActivity   time.Time         `json:"last_activity,omitempty"`
 }
 
 type bindingFact struct {
