@@ -44,7 +44,7 @@ The workbench is useful independently of that layer: notifications and an Agents
 
 | Dimension | Orca, reviewed sources | PairRoom |
 |---|---|---|
-| Primary interaction surface | Agents in Orca terminal/workspace surfaces; optional Chat UI [O2][O4] | Embedded has PairRoom controls; experimental Native keeps user-owned Claude Code/Codex sessions, including the intended Codex Desktop path |
+| Primary interaction surface | Agents in Orca terminal/workspace surfaces; optional Chat UI [O2][O4] | Embedded has PairRoom controls; experimental Native keeps user-owned Claude Code/Codex/Grok Build sessions, including the intended Codex Desktop path |
 | Same-problem collaboration | Explicit messaging, blocking questions, supervised review Tasks and terminal reuse [O1] | Exact peer handle at the Turn boundary relays the full visible response; Native also has explicit send |
 | Model-visible coordination | New Dispatch preambles teach reports, heartbeat, ask, check and completion ownership [O1] | Stable bootstrap plus small dynamic envelopes; no model-managed Run/Task/Dispatch lifecycle |
 | Native subagents | Can coexist with Orca supervision; that extra layer serves a different lifecycle scope [O1] | Decomposition and native subagents stay with the executing harness; no new worker hierarchy is required |

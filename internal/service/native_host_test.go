@@ -116,6 +116,9 @@ func sessionEnvVar(kind model.RuntimeKind) string {
 	if kind == model.RuntimeCodex {
 		return "CODEX_SESSION_ID"
 	}
+	if kind == model.RuntimeGrok {
+		return "GROK_SESSION_ID"
+	}
 	return "CLAUDE_CODE_SESSION_ID"
 }
 

@@ -85,6 +85,14 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 await page.locator('#room-host-mode').select_option('native')
                 await expect(page.locator('#room-native-help')).to_be_visible()
                 await expect(page.locator('input[name="claude-mode"][value="existing"]')).to_be_disabled()
+                for slot in ('claude', 'codex'):
+                    await expect(page.locator(f'#{slot}-runtime option[value="grok"]')).to_be_enabled()
+                    await page.locator(f'#{slot}-runtime').select_option('grok')
+                await page.locator('#room-host-mode').select_option('embedded')
+                await page.locator('#room-host-mode').select_option('native')
+                for slot in ('claude', 'codex'):
+                    await expect(page.locator(f'#{slot}-runtime')).to_have_value('grok')
+                    await page.locator(f'#{slot}-runtime').select_option(slot)
                 async with page.expect_response(lambda r: r.url.endswith('/rooms') and r.request.method == 'POST') as created:
                     await page.locator('#room-submit').click()
                 creation = await created.value
@@ -208,7 +216,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 assert not errors, f'browser errors: {errors}'
                 (artifacts/'results.json').write_text(json.dumps({
                     'mode':'synthetic native-hook inputs over real CLI/HTTP/SSE/browser',
-                    'real_vendor_e2e':False,'native_creation':True,'bind_env_association':True,
+                    'real_vendor_e2e':False,'native_creation':True,'native_grok_selection':True,'bind_env_association':True,
                     'fifo_stdout_ack':True,'idempotent_explicit_send':True,'three_bidirectional_rounds':True,
                     'killed_cli_unknown':True,'explicit_retry_confirmation':True,'cancel_only_queued':True,
                     'checkpoint_schema_2_unchanged':True,'restart_queue_and_bindings':True,

@@ -158,7 +158,7 @@ The Management **Settings → Diagnostics** section offers the same live check w
 
 ## Native relay commands
 
-Run create, bind and foreground commands through the intended native harness's command tool (Claude Code, Codex CLI or Codex Desktop), not a separate terminal. The current Git workspace and native session metadata supply defaults. PairRoom does not start a replacement Agent process. For ownership, runtime limits, audit fixes and the evidence behind efficiency claims, see [Native relay](NATIVE_RELAY.md).
+Run create, bind and foreground commands through the intended native harness's command tool (Claude Code, Codex CLI/Desktop or Grok Build), not a separate terminal. The current Git workspace and native session metadata supply defaults. PairRoom does not start a replacement Agent process. For ownership, runtime limits, audit fixes and the evidence behind efficiency claims, see [Native relay](NATIVE_RELAY.md).
 
 Create a Room with host mode **Native** in Management, or let the first session create it: `pairroom relay bind --create` registers the Project when missing, creates the native Room through the same validated Management path, binds that session, and prints the peer's `peer_join` command. Keep `pairroom` on the native harness's PATH. In that Project's worktree, install and then approve the exact hook in each native harness (Codex: `/hooks`; Claude: project hook consent). Installation is explicit and preserves unrelated settings. The `pairroom-relay` skill ships in `skills/pairroom-relay/` and is installable through skill installers (`npx skills add sean2077/pairroom`); `relay install` writes the same canonical file, and a freshness test keeps the embedded projection identical. With the skill loaded, `/pairroom-relay <topic>` runs the create flow.
 
@@ -169,17 +169,17 @@ pairroom relay bind --create --name "<topic>"    # creator: project + native Roo
 pairroom relay bind                              # peer: zero-flag inside a recognized session
 ```
 
-Run each bind as a tool call inside its intended native session: the official harnesses expose the current session ID to tool-call subprocesses (Claude Code sets `CLAUDE_CODE_SESSION_ID`; Codex sets `CODEX_SESSION_ID`), and bind associates that session immediately. In a detached or plain terminal where the variable is absent, bind fails closed with guidance to run it inside the session; there is no fallback. Slots are Agent 1 / Agent 2: `--slot 1|2` is the primary form and the durable IDs `claude`/`codex` remain accepted; slot names never denote the selected Runtime. Omitted `--room` resolves the workspace's sole active native Room; omitted `--slot` resolves only when exactly one Room slot runs the caller's harness runtime; anything ambiguous fails with the candidate list instead of guessing. Bind stdout contains no long-lived secret. No installed Stop hook means bind is rejected. See [Native relay setup and usage](NATIVE_RELAY.md) for installation and approval steps. Native configuration selections are display-only, and PairRoom never starts or interrupts either process.
+Run each bind as a tool call inside its intended native session: the official harnesses expose the current session ID to tool-call subprocesses (Claude Code sets `CLAUDE_CODE_SESSION_ID`; Codex sets `CODEX_SESSION_ID`; Grok sets `GROK_SESSION_ID`), and bind associates that session immediately. In a detached or plain terminal where the variable is absent, bind fails closed with guidance to run it inside the session; there is no fallback. Slots are Agent 1 / Agent 2: `--slot 1|2` is the primary form and the durable IDs `claude`/`codex` remain accepted; slot names never denote the selected Runtime. Omitted `--room` resolves the workspace's sole active native Room; omitted `--slot` resolves only when exactly one Room slot runs the caller's harness runtime; anything ambiguous fails with the candidate list instead of guessing. Bind stdout contains no long-lived secret. No installed Stop hook means bind is rejected. See [Native relay setup and usage](NATIVE_RELAY.md) for installation and approval steps. Native configuration selections are display-only, and PairRoom never starts or interrupts either process.
 
 A completed binding already occupies its slot. Re-running bind inside the same session resumes idempotently without rotating the generation; a different session is rejected as occupied. Use `bind --replace` explicitly to revoke the existing generation and rebind from the current session; this cannot stop any native work.
 
-All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Normally omit Room/slot flags inside the native session: `CLAUDE_CODE_SESSION_ID` or `CODEX_SESSION_ID` selects its exact associated binding before PID-based fallback, including multiple Desktop sessions sharing one process. Repeating `bind` in the same session resumes it and restores its saved Service endpoint without manual flags. Conflicting or unmatched session metadata fails instead of selecting another session. Association happens at bind from that environment; discovery metadata never grants collection. `status --brief` may inspect a unique incomplete binding of this runtime, including without `--room`/`--slot`; send/wait/exchange require a completed bind. Older harnesses without session metadata retain lineage-based defaults and explicit flags. Runtime ambiguity and multiple unassociated Rooms still require an explicit candidate. `install` infers the recognized harness; native provider/model/effort settings are not re-entered or harvested. For the first bind to a custom Service root, use `--service-file <root>/relay-endpoint.json` (a file path, never a token); later commands use the saved endpoint. Native Grok is not implemented; a detected Grok caller is rejected, not treated as Claude or Codex.
+All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Normally omit Room/slot flags inside the native session: `CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID` or `GROK_SESSION_ID` selects its exact associated binding before PID-based fallback, including multiple Desktop sessions sharing one process. Repeating `bind` in the same session resumes it and restores its saved Service endpoint without manual flags. Conflicting or unmatched session metadata fails instead of selecting another session. Association happens at bind from that environment; discovery metadata never grants collection. `status --brief` may inspect a unique incomplete binding of this runtime, including without `--room`/`--slot`; send/wait/exchange require a completed bind. Older harnesses without session metadata retain lineage-based defaults and explicit flags. Runtime ambiguity and multiple unassociated Rooms still require an explicit candidate. `install` infers the recognized harness; native provider/model/effort settings are not re-entered or harvested. For the first bind to a custom Service root, use `--service-file <root>/relay-endpoint.json` (a file path, never a token); later commands use the saved endpoint.
 
 | Subcommand | Meaning |
 |---|---|
 | `bind` (zero-flag) | Inside a recognized native session: resolve the workspace's sole active native Room and the slot whose runtime matches the caller's harness; archived Rooms are never candidates and ambiguity fails with candidates |
 | `bind --replace` | Explicitly revoke an occupied generation and rebind the current session; cannot stop old native work |
-| `bind --create [--name <display-name>] [--runtime claude\|codex] [--peer-runtime claude\|codex]` | Without `--room`: register the workspace Project when missing, create a native Room through the same validated Management path the browser uses, bind this session, and print the peer's `peer_join` command. The creator runtime, actual slot, session identity and installed hook are validated before creating anything. A default pair is read from the Service and pinned for that creation; an unrecognized caller must run inside the native session and explicitly identify its runtime. Omitted runtimes copy the Service default pair after a read-only preflight, before any Project/Room creation; explicit runtimes stay empty-field selections that inherit native configuration |
+| `bind --create [--name <display-name>] [--runtime claude\|codex\|grok] [--peer-runtime claude\|codex\|grok]` | Without `--room`: register the workspace Project when missing, create a native Room through the same validated Management path the browser uses, bind this session, and print the peer's `peer_join` command. The creator runtime, actual slot, session identity and installed hook are validated before creating anything. A default pair is read from the Service and pinned for that creation; an unrecognized caller must run inside the native session and explicitly identify its runtime. Omitted runtimes copy the Service default pair after a read-only preflight, before any Project/Room creation; explicit runtimes stay empty-field selections that inherit native configuration |
 | `send --id <client-id> --text <body>` | Explicit message to peer; requires the bind-time association like every collection call; repeat the same ID after an uncertain response, never deduplicate by body |
 | `send --to @user --attach <image>` | Human escalation with optional repeatable image paths; stdin supplies text when `--text` is absent |
 | `exchange --id <client-id> --text <body>` | One explicit peer send, then the next FIFO input; defaults to a 3,600-second wait, supports `--timeout 0` for no PairRoom total deadline, and finite values up to 21,600 seconds; not a correlated request/reply transaction |
@@ -229,3 +229,49 @@ Long foreground waits keep the existing HTTP window at most 30 seconds and renew
 | Peer is idle, disconnected or outside a park | Start its foreground wait in that native session or use a human nudge; exchange cannot wake it |
 
 Hook installation/approval and official session association remain required. `--timeout 0` does not guarantee a vendor tool can stay pending forever; native harness/tool cancellation remains authoritative. Model acceptance, uninterrupted long-running native tool calls and lower billed token usage require real vendor testing; synthetic transport tests do not establish them. No new Room mode, protocol version, schema, stage compiler, background model worker or process ownership is introduced. Existing send/wait and automatic Stop relay remain usable independently.
+
+
+### Grok Build Native
+
+Run setup and binding through the existing Grok session's own terminal tool.
+`pairroom relay install` infers Grok where the native session/lineage is visible;
+`--runtime grok` is the explicit setup fallback. It writes only PairRoom's
+entries in the project's `.grok/hooks/pairroom.json` and installs the relay skill
+under `$GROK_HOME/skills` (default `~/.grok/skills`). Existing hooks/configuration
+are preserved. Review `/hooks`; project trust is a human decision via
+`/hooks-trust`, not a permission PairRoom can grant.
+
+```bash
+# In Grok, after reviewing the installed hook:
+pairroom relay bind --create --name "Joint review" --peer-runtime codex
+# In the intended peer session, use the printed join command (or unambiguous bind):
+pairroom relay bind
+```
+
+Choose `--peer-runtime claude|codex|grok` when creating a specific pair. The
+calling Grok runtime is inferred; no vendor-named third slot is created. Without
+pair overrides the Service's saved default pair still applies and must contain
+the intended runtimes. Two Grok sessions use two distinct slots; the printed
+join command disambiguates the peer. Bind reads `GROK_SESSION_ID` from the
+harness environment and immediately enables relay: there is no nonce and no
+need to finish a first Stop before send/wait/exchange. Later `bind` resumes the
+same binding. Missing identity fails before creation; a lost response uses the
+existing private bind-attempt journal, not a new ID or automatic replacement.
+
+Grok clips Stop output after 32,768 Unicode scalars and hook feedback at 10,000.
+Use explicit `relay send`/`exchange` for long replies, preferably stdin rather
+than a very long shell argument, then omit a final peer handle. A clipped Stop
+is never forwarded as a complete reply. Its recovery hint does not authorize
+resending an already confirmed explicit publication.
+
+A Grok Stop with queued input returns only a small instruction to run foreground
+`relay wait`: the input remains queued, with no claim/ack, until that command
+actually collects the full FIFO envelope. Active `exchange` rounds need no
+intermediate Stop. Readiness is not delivery or model acceptance. Native tool
+output truncation, cancellation and Grok's own continuation cap remain separate
+boundaries; do not mistake a truncated tool result for a complete review.
+
+This implements the [pinned Grok file-hook contract](https://github.com/xai-org/grok-build/blob/37949780c144e37df692e3d669051a21fec24f20/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md),
+not a transcript adapter or idle-session injector. SDK hook callback payloads
+are not the installed file-hook channel. Authenticated Grok multi-round/tool
+E2E and billed cost improvements are not established by fixture tests.

@@ -17,8 +17,7 @@ same PairRoom release as the running app/Service. Source installations use
 Restart an existing shell after changing PATH.
 
 Install and sign in to the selected harnesses, and open both sessions in the
-same Git project. Current Native support is Claude Code and Codex; Grok Build
-remains embedded-only. Selecting Provider/model/effort/permissions in a Native
+same Git project. Current Native support is Claude Code, Codex and Grok Build. Selecting Provider/model/effort/permissions in a Native
 Room does not reconfigure your existing sessions.
 
 ## One-time project setup
@@ -30,9 +29,11 @@ command below. Install once per selected runtime, not once per Room or round.
 ```bash
 pairroom relay install --runtime claude
 pairroom relay install --runtime codex
+pairroom relay install --runtime grok
 ```
 
 Review and approve the exact project hooks in each harness. Codex uses `/hooks`;
+Grok uses `/hooks` and its project folder-trust decision;
 review changed definitions again. Follow the harness's trust/restart guidance.
 PairRoom never grants approval on your behalf. Installation writes the relay
 skill as well; a skill-only installation does not install or approve hooks.
@@ -55,7 +56,8 @@ names. Follow the candidate list rather than guessing when selection is ambiguou
 Alternatively, create a **Native** Room in the app and bind both sessions to that
 Room; do not also run `--create`. Each successful bind is immediately ready for
 relay: bind reads the official session id the harness exposes to its tool-call
-environment (Claude Code `CLAUDE_CODE_SESSION_ID`, Codex `CODEX_SESSION_ID`) and
+environment (Claude Code `CLAUDE_CODE_SESSION_ID`, Codex `CODEX_SESSION_ID`,
+Grok `GROK_SESSION_ID`) and
 associates at once, so there is no nonce to echo and nothing to wait for. Run
 bind as a tool call inside the intended session, not a detached terminal; without
 that environment bind fails closed rather than guessing. Run `pairroom relay
@@ -78,15 +80,20 @@ worktrees. Changing the shell's directory does not grant a new Room identity.
 
 ## Runtime boundary and discovery
 
-Native currently supports Claude Code and Codex. Grok Build is recognized so it
-cannot accidentally fall through to an outer Claude/Codex binding, but is not
-enabled as a Native runtime; Embedded Grok is separate. Grok's current hook
-contract uses camelCase session/reply fields, clips the last assistant message,
-and caps feedback delivered through a Stop gate, so it cannot honestly inherit
-the full-reply relay guarantee without an explicit tested adapter.
+Native supports Claude Code, Codex and Grok Build, including two sessions of
+one runtime. Slots remain Agent 1/2. For a Grok creator with an explicit Codex
+peer, use `pairroom relay bind --create --peer-runtime codex`; no own-runtime or
+slot flag is needed. Without overrides, the Service's configured pair is kept.
+
+Grok's hook text is clipped by the harness. PairRoom never forwards a clipped
+reply as complete and never puts a full inbox body into Grok's Stop feedback.
+Instead, a short readiness instruction asks the agent to collect the still-queued
+input with foreground `wait`. For long outgoing replies use full-text
+`send/exchange`. See [Grok Native](CLI_REFERENCE.md#grok-build-native) for limits,
+owned hook/skill locations, compatibility filtering and validation boundaries.
 
 Discovery uses the current Git workspace, recognized harness lineage and native
-session metadata (`CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`). Exact session
+session metadata (`CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`, `GROK_SESSION_ID`). Exact session
 metadata selects an existing associated Room/slot ahead of PID-only matching: a
 Desktop or app-server process can host multiple sessions. Repeating `bind` in the
 same session resumes its saved Service endpoint and identity without manual
@@ -104,8 +111,8 @@ and session.
 
 A Stop hook publishes the complete routed reply and may park for up to 30 seconds
 inside its installed 45-second budget. `decision:block` requests continuation;
-it is not arbitrary idle-session wake-up. The eight actual-message block cap is
-unchanged.
+it is not arbitrary idle-session wake-up. The eight-block cap is unchanged; Grok readiness/recovery hints count toward it
+without claiming that inbox text reached the model.
 
 Foreground `exchange` sends once, then returns the next eligible FIFO input in
 the same tool invocation. `wait` only collects. Their HTTP polls remain at most
@@ -147,7 +154,7 @@ history.
 | Delivery is `unknown` | Inspect the Room and workspace before explicit Retry; it can duplicate work. `handed_off` proves stdout only, not model acceptance. |
 
 Native remains experimental. Synthetic hook, Mock and browser tests are not real
-vendor acceptance. Authenticated multi-round Claude Code ↔ Codex testing,
+vendor acceptance. Authenticated multi-round Claude Code/Codex/Grok testing,
 including resume/fork behavior and comparative billed usage, remains a separate
 release gate; do not run paid vendor benchmarks without consent or publish
 private transcripts as evidence.

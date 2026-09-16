@@ -176,6 +176,16 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(seconds)*time.Second)
 		defer cancel()
+		if req.Park && runtime.room.Agents[auth.Slot].Runtime == model.RuntimeGrok {
+			// Grok clips Stop feedback. Readiness must not claim/ack a body
+			// that the native harness could truncate before the model reads it.
+			ready, err := runtime.engine.WaitForPending(ctx, auth)
+			if errors.Is(err, context.DeadlineExceeded) {
+				err = nil
+			}
+			nativeResult(w, map[string]any{"claim": nil, "foreground_required": ready}, err)
+			return
+		}
 		claim, err := runtime.engine.Claim(ctx, auth, req.Park)
 		if errors.Is(err, context.DeadlineExceeded) {
 			err = nil

@@ -2474,19 +2474,19 @@
 Object.assign(window.PairRoomLocales.en.translation, {
   'ui.native.hostMode': 'Host mode', 'ui.native.embedded': 'Embedded · PairRoom manages sessions', 'ui.native.native': 'Native · relay between your native sessions (experimental)',
   'ui.native.help': 'Approve project Stop hooks, then bind both native sessions. PairRoom does not start or interrupt them. Provider, model, effort, instructions and permission settings below are display-only.',
-  'ui.native.supported': 'Native hosting supports Claude Code and Codex only.', 'ui.native.pending': 'Native Room created. Bind both sessions; each associates from its harness environment, and the approved Stop hooks relay replies.'
+  'ui.native.supported': 'Native hosting supports Claude Code, Codex and Grok Build.', 'ui.native.pending': 'Native Room created. Bind both sessions; each associates from its harness environment, and the approved Stop hooks relay replies.'
 });
 Object.assign(window.PairRoomLocales['zh-CN'].translation, {
   'ui.native.hostMode': '宿主模式', 'ui.native.embedded': 'Embedded · PairRoom 管理会话', 'ui.native.native': 'Native · 中继原生会话（实验性）',
   'ui.native.help': '批准项目 Stop hook 后，在两侧原生会话绑定。PairRoom 不会启动或中断原生进程。下面的 Provider、模型、effort、附加指令与权限配置仅作展示。',
-  'ui.native.supported': 'Native 宿主模式仅支持 Claude Code 和 Codex。', 'ui.native.pending': 'Native Room 已创建，请在两个原生会话内分别 bind；各自从 harness 环境即时关联，已批准的 Stop hook 负责中继回复。'
+  'ui.native.supported': 'Native 宿主模式支持 Claude Code、Codex 和 Grok Build。', 'ui.native.pending': 'Native Room 已创建，请在两个原生会话内分别 bind；各自从 harness 环境即时关联，已批准的 Stop hook 负责中继回复。'
 });
 
 Object.assign(window.PairRoomLocales["en"].translation, {
   "room.native.subtitle": "Your native sessions. One auditable relay.",
   "room.native.experimental": "Experimental",
   "room.native.boundaryTitle": "PairRoom relays; your harness runs.",
-  "room.native.boundary": "No native processes are started or interrupted here. Provider, model, effort and permission settings are display-only. Real authenticated Claude Code ↔ Codex multi-turn validation remains release-gated.",
+  "room.native.boundary": "No native processes are started or interrupted here. Provider, model, effort and permission settings are display-only. Real authenticated cross-harness multi-turn validation remains release-gated.",
   "room.native.limits": "Publication and wake-up limits",
   "room.native.limitations": "Handed off means CLI stdout was written, not that the model accepted it. Outside a park window, messages stay queued until the native session runs relay wait. Interruptions and crashes before publication state exists may leave no detectable record. Two publishing paths may visibly duplicate a task.",
   "room.native.messages": "Relay messages",
@@ -2553,7 +2553,7 @@ Object.assign(window.PairRoomLocales["zh-CN"].translation, {
   "room.native.subtitle": "留在原生会话，协作记录可审计。",
   "room.native.experimental": "实验性",
   "room.native.boundaryTitle": "PairRoom 负责中继，原生工具负责执行。",
-  "room.native.boundary": "这里不会启动或中断原生进程。Provider、模型、effort 和权限配置仅作展示；真实认证的 Claude Code ↔ Codex 多轮验证仍是发布前置条件。",
+  "room.native.boundary": "这里不会启动或中断原生进程。Provider、模型、effort 和权限配置仅作展示；真实认证的跨 harness 多轮验证仍是发布前置条件。",
   "room.native.limits": "发布与唤醒的边界",
   "room.native.limitations": "「CLI 已写出」不代表模型已接受。park 窗口外，消息保持待取件，需在原生会话运行 relay wait。用户中断或发布状态落盘前崩溃可能不留下可检测记录。同轮两种发布路径可能产生可见重复。",
   "room.native.messages": "中继消息",
@@ -2620,13 +2620,13 @@ Object.assign(window.PairRoomLocales["en"].translation, {
   "room.native.setup.title": "Native setup & usage",
   "room.native.setup.intro": "Connect two sessions you already run. Setup is performed through their tools; the app does not start or configure them.",
   "room.native.setup.prerequisites": "Check the prerequisites",
-  "room.native.setup.prerequisitesBody": "Install PairRoom and Git, then open the desktop app or start pairroom service (not a second Service). Verify the commands below in each agent’s tool shell. The CLI and app/Service should be from the same release. Sign in to the selected harnesses and open both sessions in the same Git project. Current Native support: Claude Code and Codex; Grok Build is embedded-only.",
+  "room.native.setup.prerequisitesBody": "Install PairRoom and Git, then open the desktop app or start pairroom service (not a second Service). Verify the commands below in each agent’s tool shell. The CLI and app/Service should be from the same release. Sign in to the selected harnesses and open both sessions in the same Git project. Current Native support: Claude Code, Codex and Grok Build.",
   "room.native.setup.install": "Install and approve the project hooks",
-  "room.native.setup.installBody": "Run the install command in each selected runtime’s session, once per project. When identification is unavailable, add --runtime claude or --runtime codex as appropriate. Review and approve the exact hooks in the harness (Codex: /hooks); installation does not grant trust. Restart or re-review changed definitions as directed. Install also writes the optional relay skill; installing only a skill does not install the hooks.",
+  "room.native.setup.installBody": "Run the install command in each selected runtime’s session, once per project. When identification is unavailable, add --runtime claude, --runtime codex or --runtime grok as appropriate. Review and approve the exact hooks in the harness (Codex: /hooks; Grok: /hooks and project folder trust); installation does not grant trust. Restart or re-review changed definitions as directed. Install also writes the optional relay skill; installing only a skill does not install the hooks.",
   "room.native.setup.connect": "Create once, then join",
   "room.native.setup.connectBody": "In the first session, use /pairroom-relay TOPIC or the creation command below. Give the returned peer_join command to the other session. A unique matching Room can also be joined with bind. If you created a Native Room in the app, both sessions join that Room instead: do not also use --create. Follow candidate guidance when Room/slot selection is ambiguous.",
   "room.native.setup.use": "Verify and collaborate",
-  "room.native.setup.useBody": "Run status in both sessions, then give the agents a task and the desired collaboration. Successful bind is immediately ready for relay. The app shows published messages and delivery state, not private histories. If messages stay queued, ask the receiving agent to run wait. Reuse the Room for later rounds.",
+  "room.native.setup.useBody": "Run status in both sessions, then give the agents a task and the desired collaboration. Successful bind is immediately ready for relay. The app shows published messages and delivery state, not private histories. If messages stay queued, ask the receiving agent to run wait. Grok hooks give only a readiness hint; wait collects the full input. Publish clipped replies explicitly with send/exchange. Reuse the Room for later rounds.",
   "room.native.setup.recovery": "Missing CLI: fix PATH in the agent’s shell. Missing Service: open the app/start the Service; custom roots use --service-file ROOT/relay-endpoint.json (never paste its contents). Missing identity: run bind inside the intended session. Lost bind response: retry bind for that Room/slot without --create or --replace. A different session needs explicit --replace; unknown delivery needs inspection before explicit Retry because work may be duplicated.",
   "room.native.setup.boundary": "Native is experimental. PairRoom cannot interrupt native work or inject into an idle session. Handed off confirms stdout only, not model acceptance. Real authenticated multi-round vendor testing remains a separate release gate.",
   "room.native.setup.join": "Other session: run the returned join command, or use bind when the Room and slot are unambiguous."
@@ -2636,13 +2636,13 @@ Object.assign(window.PairRoomLocales["zh-CN"].translation, {
   "room.native.setup.title": "Native 安装与使用",
   "room.native.setup.intro": "关联两个你自行运行的会话。请通过各自的工具完成设置；应用不会启动或配置这些会话。",
   "room.native.setup.prerequisites": "检查安装前提",
-  "room.native.setup.prerequisitesBody": "安装 PairRoom 与 Git，打开桌面应用或启动 pairroom service，不要重复启动同一数据目录的 Service。在每个 agent 的工具终端中验证下列命令；CLI 与应用/Service 应使用同一发布版本。登录所选 harness，并在同一个 Git 项目中打开双方会话。当前 Native 支持 Claude Code 和 Codex；Grok Build 仅支持 embedded。",
+  "room.native.setup.prerequisitesBody": "安装 PairRoom 与 Git，打开桌面应用或启动 pairroom service，不要重复启动同一数据目录的 Service。在每个 agent 的工具终端中验证下列命令；CLI 与应用/Service 应使用同一发布版本。登录所选 harness，并在同一个 Git 项目中打开双方会话。当前 Native 支持 Claude Code、Codex 和 Grok Build。",
   "room.native.setup.install": "安装并批准项目 hook",
-  "room.native.setup.installBody": "在每个所选 runtime 的会话中运行安装命令，每个项目安装一次。无法识别时，按实际 runtime 添加 --runtime claude 或 --runtime codex。在 harness 内审阅并批准准确的 hook 定义（Codex：/hooks）；安装不等于授予信任。定义变更后按提示重新审阅或重启。安装也会写入可选的 relay skill；仅安装 skill 并不会安装 hook。",
+  "room.native.setup.installBody": "在每个所选 runtime 的会话中运行安装命令，每个项目安装一次。无法识别时，按实际 runtime 添加 --runtime claude、--runtime codex 或 --runtime grok。在 harness 内审阅并批准准确的 hook 定义（Codex：/hooks；Grok：/hooks 与项目文件夹信任）；安装不等于授予信任。定义变更后按提示重新审阅或重启。安装也会写入可选的 relay skill；仅安装 skill 并不会安装 hook。",
   "room.native.setup.connect": "只建一次房，再加入",
   "room.native.setup.connectBody": "在第一个会话中调用 /pairroom-relay TOPIC 或运行下列建房命令，把输出的 peer_join 命令交给另一会话执行。只有一个匹配的 Room 时，也可直接运行 bind 加入。若已在应用中创建 Native Room，双方直接加入该房间，不要再执行 --create。Room 或槽位不明确时，按候选提示选择。",
   "room.native.setup.use": "验证并开始协作",
-  "room.native.setup.useBody": "双方分别运行 status，再用自然语言说明任务和协作方式。bind 成功后即可交互。应用展示已发布的消息与投递状态，不展示私人历史。消息一直排队时，请让接收方 agent 运行 wait。后续轮次复用已有 Room。",
+  "room.native.setup.useBody": "双方分别运行 status，再用自然语言说明任务和协作方式。bind 成功后即可交互。应用展示已发布的消息与投递状态，不展示私人历史。消息一直排队时，请让接收方 agent 运行 wait。Grok hook 仅提示待收件，由 wait 获取完整正文；输出被截断时，用 send/exchange 显式发送完整原文。后续轮次复用已有 Room。",
   "room.native.setup.recovery": "找不到 CLI：修复 agent 工具终端的 PATH。找不到 Service：打开应用或启动 Service；自定义数据目录通过 --service-file ROOT/relay-endpoint.json 指定，切勿粘贴文件内容。缺少会话身份：在目标原生会话中运行 bind。绑定响应丢失：对同一 Room/槽位重试 bind，不带 --create 或 --replace。更换会话才使用显式 --replace；投递 unknown 时先检查再显式 Retry，重试可能重复执行。",
   "room.native.setup.boundary": "Native 仍为实验功能。PairRoom 无法中断原生任务，也无法直接向空闲会话注入消息。Handed off 仅证明已写出 stdout，不代表模型已接受。真实、已认证的双端多轮测试仍是独立发布门禁。",
   "room.native.setup.join": "另一会话：运行返回的加入命令；Room 和槽位唯一明确时也可直接运行 bind。"

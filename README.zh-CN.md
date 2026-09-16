@@ -13,7 +13,7 @@
 当你反复需要在两个已有会话之间搬运方案、异议和修正时，PairRoom 才有明确价值。目标是减少协调负担、改善决策，而不是增加一套必须遵循的 Agent 层级。
 
 - **共同审查一个问题。** 双方都可以是高能力审查者。默认 Lead/Executor 职责可以变通；简单任务由被指定的 Agent 直接完成。自定义自然语言规则无需阶段编译器，审查完成也不自动授权实现。
-- **保留需要的交互入口。** Embedded 通过受支持的原生适配器提供 PairRoom 界面和控制。实验性的 Native 保留你自己的 Claude Code / Codex 会话，包括目标中的 Codex Desktop 工作方式；依靠已批准 hooks 和有界接力，不接管原生进程。
+- **保留需要的交互入口。** Embedded 通过受支持的原生适配器提供 PairRoom 界面和控制。实验性的 Native 保留你自己的 Claude Code / Codex / Grok Build 会话，包括目标中的 Codex Desktop 工作方式；依靠已批准 hooks 和有界接力，不接管原生进程。
 - **保留项目工作流。** 沿用仓库规则、agent-scaffold、worktree 和 PR/MR 流程。中继发送完整的定向回复，不追加累计 Room 历史。紧凑的字节预算不等于保证账单更低或准确率更高。
 
 | 宿主模式 | 配置与控制 | 边界 |
@@ -61,11 +61,13 @@ PairRoom 没有自动接力次数或费用上限。持久化恢复会区分安�
 
 安装前提、项目批准、加入及恢复步骤见 [Native 安装与使用](docs/NATIVE_RELAY.md)。浏览器与桌面应用中也提供同一套操作引导。
 
-创建 Room 时选择 **Native**，双方保留在自己的 Claude Code / Codex 原生会话中；PairRoom 负责绑定、持久化中继和审计，不启动或中断原生进程。安装并批准项目级 Stop hooks，然后在各自会话内运行 bind；它会读取 harness 的会话 ID 环境变量并立即完成关联。
+创建 Room 时选择 **Native**，双方保留在自己的 Claude Code / Codex / Grok Build 原生会话中；PairRoom 负责绑定、持久化中继和审计，不启动或中断原生进程。安装并批准项目级 Stop hooks，然后在各自会话内运行 bind；它会读取 harness 的会话 ID 环境变量并立即完成关联。
 
 `pairroom-relay` 技能位于 `skills/`，可经技能安装器分发（`npx skills add sean2077/pairroom`），`relay install` 也写入同一份文件。加载后 `/pairroom-relay <topic>` 创建 Room、绑定当前会话并返回对方的加入命令；`pairroom relay bind` 可在识别到的原生会话内零参数运行。后续审查复用绑定，不要每轮重建 Room。
 
 [Native 入门](docs/GETTING_STARTED.md#keep-codex-desktop-a-native-room)与[恢复命令](docs/CLI_REFERENCE.md#native-relay-commands)说明有界 park、前台取件和显式 Retry。Provider、模型、effort、权限仍由原生会话控制。真实认证后的多轮互通仍是发布验收门槛，合成测试不代表模型已接受消息。
+
+Grok 使用[前台收件](docs/CLI_REFERENCE.md#grok-build-native)避免 Hook 反馈截断；被截断的输出需要显式发送完整原文。
 
 ## 桌面端与源码开发
 

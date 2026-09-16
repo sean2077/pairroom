@@ -23,9 +23,10 @@ func IsolateNativeCaller(t *testing.T) {
 	t.Cleanup(func() { harnessAncestor = before })
 }
 
-// nativeCaller is discovery metadata, never a replacement for approved-hook
-// association or the Service's credential/generation/session checks. A desktop
-// may serve several sessions from one process, so session metadata beats PID.
+// nativeCaller supplies bind-time identity and discovery metadata. It never
+// replaces the Service's credential/generation/session checks or hook approval.
+// A desktop may serve several sessions from one process, so session metadata
+// beats PID.
 type nativeCaller struct {
 	runtime model.RuntimeKind
 	session string
@@ -83,9 +84,6 @@ func applyCallerDefaults(root, action string, o *options) error {
 	}
 	if o.kind != "" && caller.runtime != "" && model.RuntimeKind(o.kind) != caller.runtime {
 		return errors.New("--runtime conflicts with the calling native harness")
-	}
-	if caller.runtime == model.RuntimeGrok {
-		return errors.New("Grok Build was detected, but PairRoom Native currently supports Claude Code and Codex only; do not bind Grok as another runtime (Embedded Grok remains available)")
 	}
 	if action == "install" {
 		if o.kind == "" {

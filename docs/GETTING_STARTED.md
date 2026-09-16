@@ -11,7 +11,7 @@ This guide takes you from a release package to a first Room. For the adoption de
 | Real Agents, either entry | Each selected native CLI installed and authenticated for its selected Provider | No additional PairRoom source build |
 | Mock, either entry | No vendor CLI or model account | None for a prebuilt package |
 
-**Go is not required to run a prebuilt PairRoom binary.** Only install the native Runtimes you will actually select: Claude Code, Codex, and/or Grok Build. Two slots may use the same Runtime. Native host mode currently supports Claude Code and Codex, not Grok Build.
+**Go is not required to run a prebuilt PairRoom binary.** Only install the native Runtimes you will actually select: Claude Code, Codex, and/or Grok Build. Two slots may use the same Runtime. Native host mode supports Claude Code, Codex and Grok Build; see [Grok Native](CLI_REFERENCE.md#grok-build-native) for its hook/foreground boundary.
 
 ## Install a release
 

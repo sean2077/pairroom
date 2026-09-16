@@ -98,7 +98,7 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 	}
 	o.slot = string(slot)
 	kind := target.Agents[slot].Runtime
-	if o.kind != "" && model.RuntimeKind(o.kind) != kind {
+	if own := callerRuntime(o); own != "" && own != kind {
 		return errors.New("this session's runtime does not match the selected Room slot")
 	}
 	project := ""

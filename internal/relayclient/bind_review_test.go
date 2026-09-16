@@ -54,15 +54,23 @@ func TestBindCreateMissingIdentityHasNoProvisioning(t *testing.T) {
 }
 
 func TestBindLostResponseReusesAttemptIdentity(t *testing.T) {
+	for _, kind := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok} {
+		t.Run(string(kind), func(t *testing.T) { testBindLostResponseReusesAttemptIdentity(t, kind) })
+	}
+}
+
+func testBindLostResponseReusesAttemptIdentity(t *testing.T, kind model.RuntimeKind) {
+	t.Helper()
+	isolateCaller(t)
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := editHooks(root, model.RuntimeClaude, false); err != nil {
+	if err := editHooks(root, kind, false); err != nil {
 		t.Fatal(err)
 	}
-	stubLineage(t, 4242, "claude", true)
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "official-session")
+	stubLineage(t, 4242, string(kind), true)
+	t.Setenv(sessionEnvVars[kind], "official-session")
 	var mu sync.Mutex
 	var accepted relay.BindRequest
 	calls := 0
@@ -70,7 +78,7 @@ func TestBindLostResponseReusesAttemptIdentity(t *testing.T) {
 	mux.HandleFunc("GET /api/v1/service", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"projects": []any{map[string]string{"id": "project", "root": root}},
-			"rooms":    []any{map[string]any{"id": "room", "project_id": "project", "host_mode": "native", "lifecycle": "active", "agents": map[model.ActorID]model.AgentSelection{model.ActorClaude: {Runtime: model.RuntimeClaude}, model.ActorCodex: {Runtime: model.RuntimeCodex}}}},
+			"rooms":    []any{map[string]any{"id": "room", "project_id": "project", "host_mode": "native", "lifecycle": "active", "agents": map[model.ActorID]model.AgentSelection{model.ActorClaude: {Runtime: kind}, model.ActorCodex: {Runtime: model.RuntimeCodex}}}},
 		})
 	})
 	mux.HandleFunc("POST /api/v1/rooms/room/native-bindings/claude", func(w http.ResponseWriter, r *http.Request) {

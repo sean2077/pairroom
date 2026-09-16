@@ -15,16 +15,6 @@ import (
 	"github.com/sean2077/pairroom/internal/relay"
 )
 
-type HookInput struct {
-	Event                string  `json:"hook_event_name"`
-	SessionID            string  `json:"session_id"`
-	CWD                  string  `json:"cwd"`
-	TranscriptPath       string  `json:"transcript_path"`
-	LastAssistantMessage *string `json:"last_assistant_message"`
-	StopHookActive       bool    `json:"stop_hook_active"`
-	Error                string  `json:"error"`
-}
-
 // statePaths never follows symlinks, including a substituted .pairroom root.
 func statePaths(root string) ([]string, error) {
 	base := filepath.Join(root, ".pairroom")
@@ -76,16 +66,16 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	if len(data) > 2<<20 {
 		return errors.New("official hook payload exceeds limit")
 	}
-	var hook HookInput
-	if json.Unmarshal(data, &hook) != nil {
-		return errors.New("invalid official hook input")
+	kind := model.RuntimeKind(o.kind)
+	if kind != model.RuntimeClaude && kind != model.RuntimeCodex && kind != model.RuntimeGrok {
+		return errors.New("hook requires --runtime claude|codex|grok")
+	}
+	hook, err := decodeNativeHook(data, kind == model.RuntimeGrok)
+	if err != nil {
+		return err
 	}
 	if hook.Event != "Stop" && hook.Event != "StopFailure" {
 		return writeJSON(out, map[string]any{})
-	}
-	kind := model.RuntimeKind(o.kind)
-	if kind != model.RuntimeClaude && kind != model.RuntimeCodex {
-		return errors.New("hook requires --runtime claude|codex")
 	}
 	if hook.SessionID == "" || hook.CWD == "" {
 		return errors.New("official hook session_id and cwd are required; no transcript fallback")
@@ -158,7 +148,11 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	if hook.Event == "StopFailure" {
 		// A vendor error may contain tokens or partial reply text. Send only the
 		// allowlisted observation; StopFailure cannot request continuation.
-		err = c.call(ctx, "failure", map[string]string{"error": "api_error"}, nil)
+		category := "api_error"
+		if kind == model.RuntimeGrok {
+			category = hook.Error
+		}
+		err = c.call(ctx, "failure", map[string]string{"error": category}, nil)
 		release()
 		if err != nil {
 			return err
@@ -168,6 +162,16 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	if hook.LastAssistantMessage == nil {
 		release()
 		return errors.New("Stop payload has no last_assistant_message; no transcript parsing or fake publication")
+	}
+	if hook.Clipped {
+		// Never publish Grok's truncated prefix as a full response. Older pending
+		// publication keeps its identity and is reconciled before recovery.
+		err = c.Reconcile(ctx, false)
+		release()
+		if err != nil {
+			return err
+		}
+		return grokContinuation(ctx, c, grokClippedReplyNotice, out)
 	}
 	err = c.Publish(ctx, *hook.LastAssistantMessage)
 	release()
@@ -225,7 +229,8 @@ func deliverOnce(ctx context.Context, c *Client, hook bool, seconds int, out io.
 		}
 	}
 	var result struct {
-		Claim json.RawMessage `json:"claim"`
+		Claim              json.RawMessage `json:"claim"`
+		ForegroundRequired bool            `json:"foreground_required"`
 	}
 	if err := c.call(ctx, "wait", map[string]any{"park": hook, "timeout_seconds": seconds}, &result); err != nil {
 		return false, err
@@ -233,11 +238,22 @@ func deliverOnce(ctx context.Context, c *Client, hook bool, seconds int, out io.
 	if len(result.Claim) == 0 {
 		return false, errors.New("wait response missing claim; outcome uncertain, collection stopped")
 	}
+	if result.ForegroundRequired {
+		if !hook || c.State.Runtime != model.RuntimeGrok || strings.TrimSpace(string(result.Claim)) != "null" {
+			return false, errors.New("invalid foreground-collection notice; acknowledgement withheld")
+		}
+		// This is readiness, not delivery. No receipt or inbox content has
+		// left the Service. The native tool will collect the full envelope.
+		return false, grokContinuation(ctx, c, "PairRoom has pending input. Run "+foregroundWaitCommand(c, 30)+" in this native session and process the returned envelope. This notice contains no peer reply.", out)
+	}
 	if strings.TrimSpace(string(result.Claim)) == "null" {
 		if hook {
 			return false, writeJSON(out, map[string]any{})
 		}
 		return false, nil
+	}
+	if hook && c.State.Runtime == model.RuntimeGrok {
+		return false, errors.New("Grok hook received a claim instead of readiness; update CLI and Service together; acknowledgement withheld")
 	}
 	var claim relay.Claim
 	if err := json.Unmarshal(result.Claim, &claim); err != nil {
