@@ -18,7 +18,7 @@ or invalid identity, an incompatible creator slot, or missing local hooks fails
 before Project/Room creation. Service defaults are read and pinned before that
 preflight; full creation-time validation remains on the Service.
 
-The approved Stop hook publishes the complete finished response and may park
+The approved Stop hook publishes a complete finished response and may park
 for incoming relay. It confirms the binding identity and opportunistically
 records the transcript path. A known bound harness with a different identity
 fails visibly without publication or collection; an unrelated unbound session
@@ -27,6 +27,10 @@ is a no-op. Identity/lineage observations used for diagnostics are not authority
 Claude Code documents `CLAUDE_CODE_SESSION_ID` for tool subprocesses and its
 agreement with hook `session_id` in the [official environment reference](https://code.claude.com/docs/en/env-vars).
 Codex injects `CODEX_SESSION_ID` in its [execution environment](https://github.com/openai/codex/blob/main/codex-rs/core/src/exec_env.rs).
+Grok exposes `GROK_SESSION_ID` to tools; its file hooks use camelCase identity
+and reply fields. Hook feedback carries only readiness for foreground collection;
+clipped outgoing replies require explicit full-text publication. See
+[Grok Native](../CLI_REFERENCE.md#grok-build-native) for the pinned contract.
 These references do not replace testing installed versions, resume/fork/child
 sessions or actual response boundaries. Missing or divergent identity fails
 closed; the same-user threat boundary does not resist intentional environment
@@ -64,5 +68,5 @@ budget, Go 1.25 and the approved dependency closure remain unchanged. Native
 uses protocol v7; Registry checkpoint schema 2 stays unchanged.
 
 Mock and synthetic hook/HTTP/SSE/browser results must be labeled separately.
-Real authenticated Claude Code ↔ Codex multi-round acceptance remains an unmet
+Real authenticated Claude Code/Codex/Grok multi-round acceptance remains an unmet
 release gate until the actual installed harnesses are exercised and reported.

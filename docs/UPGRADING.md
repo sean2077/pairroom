@@ -67,3 +67,25 @@ an older release requires explicit `bind --replace` inside the intended session.
 For a lost response to a current bind, rerun bind for the same Room/slot without
 `--create` or `--replace` to reconcile its original identity; do not repeat `--create`. Native remains experimental and real vendor
 acceptance remains a separate release gate.
+
+
+### Adding Grok Build to Native Rooms
+
+Update the CLI, Service and distributed relay skill together. In the intended
+Grok session, run `pairroom relay install` (or explicit `--runtime grok` for
+setup), then review the exact project hook and trust decision in Grok before
+binding. Installation adds `.grok/hooks/pairroom.json` and the Grok skill; it
+does not modify native provider/model configuration or grant folder trust.
+See [Grok Build Native](CLI_REFERENCE.md#grok-build-native) for create/join and
+the clipped-reply/foreground-collection boundaries.
+
+Existing Claude/Codex Native Rooms retain their stored selections and protocol.
+Grok uses the same current schema, but older PairRoom readers that restrict
+Native runtimes to Claude/Codex reject Grok-containing Rooms. For rollback,
+prefer a complete matching-version backup. Otherwise stop all owners and
+native work, back up the data root, use the current binary to unbind affected
+Grok Rooms, and keep **every Grok-containing Room directory** outside the older
+Service's discovery root. Archive alone is not compatibility isolation. Do not
+change stored runtime names, schemas or events to force an older reader to
+accept them. Unused PairRoom Grok hooks may be purged through the current CLI;
+leave unrelated hooks and native data alone.

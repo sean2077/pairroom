@@ -16,3 +16,6 @@ Reuse its Room for follow-up work unless the user asks for a new one.
 Follow setup and recovery errors instead of bypassing approvals or retrying
 `--create`. A different session requires explicit `bind --replace`.
 Use the CLI for status and recovery; never inspect or expose its private state.
+
+Follow runtime-specific hook guidance; publish complete text explicitly when
+a reply is clipped, and collect with `wait` when prompted.

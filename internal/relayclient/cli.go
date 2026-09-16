@@ -47,14 +47,14 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.StringVar(&o.repo, "repo", ".", "Room project path")
 	flags.StringVar(&o.room, "room", "", "Room ID")
 	flags.StringVar(&o.slot, "slot", "", "Agent slot: 1 or 2; the durable IDs claude|codex are also accepted. Never a runtime name")
-	flags.StringVar(&o.kind, "runtime", "", "native harness: claude or codex")
+	flags.StringVar(&o.kind, "runtime", "", "native harness: claude, codex or grok")
 	flags.StringVar(&o.endpoint, "service-file", "", "owner-only relay-endpoint.json path for a custom Service data root")
 	flags.StringVar(&o.text, "text", "", "message body; otherwise read stdin")
 	flags.StringVar(&o.id, "id", "", "stable client message ID (required for exchange); reuse on uncertain send")
 	flags.StringVar(&o.to, "to", "", "explicit send target: @user, or empty for peer")
 	flags.BoolVar(&o.create, "create", false, "bind only: register the project when missing, create a native Room, then bind this session")
 	flags.StringVar(&o.name, "name", "", "optional Room display name for bind --create")
-	flags.StringVar(&o.peer, "peer-runtime", "", "peer slot runtime claude|codex for bind --create")
+	flags.StringVar(&o.peer, "peer-runtime", "", "peer slot runtime claude|codex|grok for bind --create")
 	flags.BoolVar(&o.replace, "replace", false, "explicitly revoke occupied binding; does not stop native work")
 	flags.BoolVar(&o.purge, "purge-hooks", false, "remove this runtime's relay hooks when no other local binding uses them")
 	flags.BoolVar(&o.enabled, "enabled", true, "park enabled")
@@ -111,8 +111,8 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 				kind = harnessRuntimes[name]
 			}
 		}
-		if kind != model.RuntimeClaude && kind != model.RuntimeCodex {
-			return errors.New("install requires --runtime claude|codex unless run inside a recognized native session")
+		if kind != model.RuntimeClaude && kind != model.RuntimeCodex && kind != model.RuntimeGrok {
+			return errors.New("install requires --runtime claude|codex|grok unless run inside a recognized native session")
 		}
 		if err := editHooks(root, kind, false); err != nil {
 			return err
@@ -120,7 +120,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if err := installSkill(kind); err != nil {
 			return err
 		}
-		return writeJSON(out, map[string]any{"installed": true, "runtime": kind, "notice": "Restart/review the exact project hook in your native harness (Codex: /hooks). This command does not grant native trust. Keep pairroom on PATH. Real authenticated bidirectional E2E remains release-gated.", "next_steps": []string{
+		return writeJSON(out, map[string]any{"installed": true, "runtime": kind, "notice": "Restart/review the exact project hook in your native harness (Codex: /hooks; Grok: /hooks and project trust). This command does not grant native trust. Keep pairroom on PATH. Real authenticated bidirectional E2E remains release-gated.", "next_steps": []string{
 			"Create a room and bind this session: pairroom relay bind --create --name \"<topic>\" (skill: /pairroom-relay <topic>)",
 			"The peer session joins with the printed peer_join command, or zero-flag inside a recognized session: pairroom relay bind",
 			"After both sessions bind, give the agents the task and desired collaboration",
@@ -502,7 +502,7 @@ func resolveSlotForRoom(room serviceRoom, rt model.RuntimeKind) (model.ActorID, 
 
 // errCreateSlotUnresolved is returned when a creator slot cannot be known
 // before the Room exists. It never authorizes a guess.
-var errCreateSlotUnresolved = errors.New("bind --create requires --slot 1|2 unless run inside a recognized claude/codex session (or with --runtime claude|codex)")
+var errCreateSlotUnresolved = errors.New("bind --create requires --slot 1|2 unless run inside a recognized claude/codex/grok session (or with --runtime claude|codex|grok)")
 
 // inferCreateSlot picks the slot that an explicit runtime selection occupies:
 // the caller's runtime takes the slot whose default runtime matches. It is only
@@ -512,7 +512,9 @@ var errCreateSlotUnresolved = errors.New("bind --create requires --slot 1|2 unle
 func inferCreateSlot(o options) (model.ActorID, error) {
 	rt := callerRuntime(o)
 	switch rt {
-	case model.RuntimeClaude:
+	case model.RuntimeClaude, model.RuntimeGrok:
+		// Explicit Grok creators use Agent 1 unless --slot selects otherwise.
+		// Omitted pair settings are resolved against the Service before creation.
 		return model.ActorClaude, nil
 	case model.RuntimeCodex:
 		return model.ActorCodex, nil
@@ -633,14 +635,17 @@ func createAgents(o options, slot model.ActorID) (map[model.ActorID]model.AgentS
 		return nil, nil
 	}
 	if own == "" {
-		own = defaultRuntimeFor(slot)
+		own = callerRuntime(o)
+		if own == "" {
+			own = defaultRuntimeFor(slot)
+		}
 	}
 	if peer == "" {
 		peer = defaultRuntimeFor(peerSlot(slot))
 	}
 	for _, kind := range []model.RuntimeKind{own, peer} {
-		if kind != model.RuntimeClaude && kind != model.RuntimeCodex {
-			return nil, errors.New("native Rooms support --runtime/--peer-runtime claude or codex only")
+		if kind != model.RuntimeClaude && kind != model.RuntimeCodex && kind != model.RuntimeGrok {
+			return nil, errors.New("native Rooms support --runtime/--peer-runtime claude, codex or grok")
 		}
 	}
 	return map[model.ActorID]model.AgentSelection{
