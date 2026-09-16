@@ -1,4 +1,4 @@
-name: Native adaptation source bundle (temporary)
+name: Native adaptation source assembly (temporary)
 
 on:
   push:
@@ -6,32 +6,96 @@ on:
     paths: ['.github/workflows/native-adaptation-review-bundle.yml']
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  bundle:
+  assemble:
+    if: github.repository == 'sean2077/pairroom' && github.ref == 'refs/heads/feat/native-grok-build'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 654ad089d8ce13c64fa5dd05cffcbd5fc7649616
+          ref: ${{ github.sha }}
           fetch-depth: 0
-          persist-credentials: false
-      - name: Export pinned repository source history only
+      - name: Verify exact reviewed source and fast-forward feature branch only
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git fetch origin b2e242761a88d720e1209325948d52710657df22
-          git branch review-main 654ad089d8ce13c64fa5dd05cffcbd5fc7649616
-          git branch review-grok b2e242761a88d720e1209325948d52710657df22
-          git branch review-base ab843dae15e734c4589090b012d4bec65821ef15
-          out="${RUNNER_TEMP}/native-adaptation-source"
-          mkdir -p "$out"
-          git bundle create "$out/review.bundle" review-main review-grok review-base
-          (cd "$out" && sha256sum review.bundle > SHA256SUMS)
-      - uses: actions/upload-artifact@v7
-        with:
-          name: native-adaptation-source
-          path: ${{ runner.temp }}/native-adaptation-source/
-          retention-days: 1
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, subprocess, urllib.request, zlib
+          REPO = 'sean2077/pairroom'
+          BRANCH = 'feat/native-grok-build'
+          MAIN = '654ad089d8ce13c64fa5dd05cffcbd5fc7649616'
+          OLD = 'b2e242761a88d720e1209325948d52710657df22'
+          TREE = '8b43d0e51cf9829374c57e6aba24d289763b9f9f'
+          PREVIOUS = '88b488fa9fe5cbc8f49dff347fe1627136931a64'
+          HELPER = '.github/workflows/native-adaptation-review-bundle.yml'
+          BLOBS = ['1c68f42d8798b91d3699fcdf2659caf0339a98f2', '73f23ecc6dd8789e56644e5892a79be4aab93c22', '555edf4f6a0b27e860d2ef2ad53b4462c96e8640']
+          def git(*args, data=None):
+              return subprocess.check_output(['git', *args], input=data)
+          def blob_hash(data):
+              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          head = os.environ['GITHUB_SHA']
+          assert os.environ['GITHUB_REPOSITORY'] == REPO
+          assert os.environ['GITHUB_REF'] == 'refs/heads/' + BRANCH
+          assert git('rev-parse', head + '^').decode().strip() == PREVIOUS
+          assert git('diff-tree', '--no-commit-id', '--name-only', '-r', head).decode().splitlines() == [HELPER]
+          helper = pathlib.Path(HELPER).read_bytes()
+          encoded = []
+          for sha in BLOBS:
+              req = urllib.request.Request('https://api.github.com/repos/' + REPO + '/git/blobs/' + sha, headers={'Accept': 'application/vnd.github+json', 'Authorization': 'Bearer ' + os.environ['GH_TOKEN']})
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  item = json.load(response)
+              assert item['sha'] == sha and item['encoding'] == 'base64'
+              data = base64.b64decode(item['content'])
+              assert blob_hash(data) == sha
+              encoded.append(data)
+          compressed = base64.b64decode(b''.join(encoded), validate=True)
+          assert hashlib.sha256(compressed).hexdigest() == '0bc65a7ed076818ca73badd9a65c7462075321757e98a18a6e869963f11a26df'
+          payload = json.loads(zlib.decompress(compressed))
+          assert (payload['main'], payload['old_pr'], payload['tree']) == (MAIN, OLD, TREE)
+          assert len(payload['files']) == 41
+          git('fetch', 'origin', MAIN, OLD)
+          git('checkout', '--detach', MAIN)
+          root = pathlib.Path.cwd().resolve()
+          seen = set()
+          for item in payload['files']:
+              path = pathlib.PurePosixPath(item['path'])
+              assert not path.is_absolute() and '..' not in path.parts and path.parts[0] != '.git'
+              assert str(path) not in seen and str(path) != HELPER
+              seen.add(str(path))
+              assert item['mode'] == '100644'
+              lines = git('cat-file', 'blob', item['base']).decode('utf-8').splitlines(keepends=True) if item['base'] else []
+              previous_end = 0
+              for start, end, replacement in item['edits']:
+                  assert isinstance(start, int) and isinstance(end, int) and isinstance(replacement, str)
+                  assert previous_end <= start <= end <= len(lines)
+                  previous_end = end
+              for start, end, replacement in reversed(item['edits']):
+                  lines[start:end] = [replacement]
+              data = ''.join(lines).encode('utf-8')
+              assert blob_hash(data) == item['sha'], str(path)
+              target = root.joinpath(*path.parts)
+              assert target.resolve().is_relative_to(root) and not target.is_symlink()
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_bytes(data)
+              target.chmod(0o644)
+              git('add', '--', str(path))
+          git('diff', '--cached', '--check')
+          assert git('write-tree').decode().strip() == TREE
+          # Keep only this helper for one commit; connector deletion triggers
+          # normal CI and produces exactly TREE, without permanent CI changes.
+          pathlib.Path(HELPER).write_bytes(helper)
+          git('add', '--', HELPER)
+          assembled_tree = git('write-tree').decode().strip()
+          git('config', 'user.name', 'Sean')
+          git('config', 'user.email', '37324769+sean2077@users.noreply.github.com')
+          commit = git('commit-tree', assembled_tree, '-p', head, '-p', MAIN, data=b'feat: adapt native Grok relay to bind-time session identity on latest main\n').decode().strip()
+          current = git('ls-remote', 'origin', 'refs/heads/' + BRANCH).decode().split()[0]
+          assert current == head, 'feature branch advanced; do not overwrite concurrent work'
+          git('push', 'origin', commit + ':refs/heads/' + BRANCH)
+          print('Published feature-only merge', commit, 'reviewed tree without helper', TREE)
+          PY
