@@ -1,6 +1,6 @@
 # Participant-slot ActorID clean cutover: `claude`/`codex` retired, canonical `slot1`/`slot2`
 
-Status: draft v7 — owner direction (clean cutover, no migration compatibility) plus peer sanity-check completeness requirements incorporated. Two owner decisions remain (Release version, Service-root policy); everything else is design-final. Nothing here is implemented.
+Status: approved — owner decisions resolved 2026-09-16 (R1: release 5.0.0; S1: whole-root retirement). Peer review: four adversarial rounds on the superseded migration design plus a clean-cutover sanity check; objection window closed at implementation delegation. Ready for Phase 1. Nothing here is implemented yet.
 Updated: 2026-09-16.
 
 ## Owner direction
@@ -93,13 +93,14 @@ All existing Rooms on this machine — including today's test Room — plus thei
 - Release: VERSION/version.Current/changelog/tag agreement tests.
 - `make check`, `make smoke`, `make browser-check`; real vendor E2E stays a separate release gate.
 
-## Owner decisions
+## Owner decisions (resolved 2026-09-16)
 
-- **R. Release version**: R1 = 5.0.0 (recommended) or R2 = explicit prerelease policy.
-- **S. Service-root policy**: S1 = whole-root retirement, fail closed (recommended) or S2 = accept and report empty-Project loss.
+- **R. Release version**: **R1 = 5.0.0** (SemVer major; VERSION, `internal/version.Current`, changelog heading, tag and release tests agree in the same change).
+- **S. Service-root policy**: **S1 = whole-root retirement** — an old Service data root fails closed entirely at startup with actionable text; doctor provides purge tooling; empty-Project registrations are recreated by the user; schema-2 checkpoints are never overwritten in place.
 
 ## Revision log
 
+- approved (2026-09-16): owner resolved R1 (5.0.0) and S1 (whole-root retirement); status draft → approved.
 - v7 (2026-09-16): peer sanity-check incorporated — explicit protocol map (embedded v7 / native v8); release-version decision R; root-format retirement preflight before any recovery mutation; Service-root policy decision S; strict canonical validation against fabricated current-format rooms; backup/restore destination preflight; credential-directory isolation guarantees; retired/fail-closed test naming; prose convention note.
 - v6 (2026-09-16): owner direction — clean cutover, legacy retired, compatibility machinery removed. Supersedes v1–v5.
 - v1–v5: migration-compatibility design iterations under four rounds of adversarial review (kept in git history for rationale).
