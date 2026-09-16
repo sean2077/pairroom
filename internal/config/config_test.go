@@ -94,7 +94,7 @@ func TestLoadAcceptsGrokRuntimeAndIdenticalSlots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Claude.RuntimeKind(model.ActorClaude) != model.RuntimeGrok || cfg.Codex.RuntimeKind(model.ActorCodex) != model.RuntimeGrok {
+	if cfg.Claude.RuntimeKind(model.ActorSlot1) != model.RuntimeGrok || cfg.Codex.RuntimeKind(model.ActorSlot2) != model.RuntimeGrok {
 		t.Fatalf("expected two Grok slots: %#v", cfg)
 	}
 	if cfg.Claude.Model != "" || cfg.Claude.Effort != "" || cfg.Codex.Effort != "" {

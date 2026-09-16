@@ -70,7 +70,7 @@ async def verify(browser_path: str | None, artifacts: Path) -> None:
                     # A narrow embedded pane must wrap the action group, not
                     # split the Agent name or timestamp into separate lines.
                     await page.evaluate("""() => {
-                      __snapshot.messages = [{id:'header-layout', from:'claude',
+                      __snapshot.messages = [{id:'header-layout', from:'slot1',
                         text:'Keep the native Agent identity readable beside its actions.',
                         created_at:'2026-09-12T04:00:00Z', intent:'queue'}];
                     }""")

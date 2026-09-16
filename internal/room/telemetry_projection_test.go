@@ -14,7 +14,7 @@ func telemetryProjectionFixture() *Engine {
 	for i := 0; i < 1000; i++ {
 		e.snapshot.Turns = append(e.snapshot.Turns, model.TurnSummary{ID: "historical"})
 	}
-	summary := model.TurnSummary{ID: "claude:active", TurnID: "active", Agent: model.ActorClaude,
+	summary := model.TurnSummary{ID: "claude:active", TurnID: "active", Agent: model.ActorSlot1,
 		Status: "working", MessageIDs: []string{"message"}, Usage: json.RawMessage(`{"tokens":42}`)}
 	for i := 0; i < 128; i++ {
 		summary.Items = append(summary.Items, model.TurnWorkItem{ID: "tool", Data: json.RawMessage(`{"command":"go test ./..."}`)})
@@ -27,7 +27,7 @@ func TestNonProjectingTelemetryDoesNotCloneTurnHistory(t *testing.T) {
 	e := telemetryProjectionFixture()
 	before, _ := json.Marshal(e.snapshot)
 	for _, kind := range []string{model.RuntimeTextDelta, model.RuntimeState, model.RuntimeSession, model.RuntimeInfoUpdated} {
-		event := model.RuntimeEvent{Agent: model.ActorClaude, TurnID: "active", Kind: kind, Text: "delta"}
+		event := model.RuntimeEvent{Agent: model.ActorSlot1, TurnID: "active", Kind: kind, Text: "delta"}
 		if allocs := testing.AllocsPerRun(10, func() { e.projectTurnSummary(event) }); allocs != 0 {
 			t.Errorf("%s allocated %v times despite not projecting a summary", kind, allocs)
 		}
@@ -96,7 +96,7 @@ func TestEvictedEventDoesNotKeepPayloadInBackingArray(t *testing.T) {
 
 func BenchmarkTextDeltaSummaryProjection(b *testing.B) {
 	e := telemetryProjectionFixture()
-	event := model.RuntimeEvent{Agent: model.ActorClaude, TurnID: "active", Kind: model.RuntimeTextDelta, Text: "delta"}
+	event := model.RuntimeEvent{Agent: model.ActorSlot1, TurnID: "active", Kind: model.RuntimeTextDelta, Text: "delta"}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {

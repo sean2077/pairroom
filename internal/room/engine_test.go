@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -201,12 +202,12 @@ func TestLifecycleLockAcquisitionHonorsContext(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	blocked := make(chan struct{})
 	release := make(chan struct{})
-	adapters[model.ActorCodex].beforeReturn = func(model.AgentInput) {
+	adapters[model.ActorSlot2].beforeReturn = func(model.AgentInput) {
 		close(blocked)
 		<-release
 	}
 
-	message, err := engine.Send(context.Background(), SendRequest{Text: "Block in submit", To: []model.ActorID{model.ActorCodex}})
+	message, err := engine.Send(context.Background(), SendRequest{Text: "Block in submit", To: []model.ActorID{model.ActorSlot2}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +219,7 @@ func TestLifecycleLockAcquisitionHonorsContext(t *testing.T) {
 
 	stopCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	started := time.Now()
-	err = engine.StopAgent(stopCtx, model.ActorCodex)
+	err = engine.StopAgent(stopCtx, model.ActorSlot2)
 	cancel()
 	if !errors.Is(err, context.DeadlineExceeded) {
 		close(release)
@@ -230,10 +231,10 @@ func TestLifecycleLockAcquisitionHonorsContext(t *testing.T) {
 	}
 
 	close(release)
-	waitForDeliveryState(t, engine, message.ID, model.ActorCodex, model.DeliveryStarted)
+	waitForDeliveryState(t, engine, message.ID, model.ActorSlot2, model.DeliveryStarted)
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cleanupCancel()
-	if err := engine.StopAgent(cleanupCtx, model.ActorCodex); err != nil {
+	if err := engine.StopAgent(cleanupCtx, model.ActorSlot2); err != nil {
 		t.Fatalf("StopAgent after delivery release: %v", err)
 	}
 }
@@ -241,13 +242,13 @@ func TestLifecycleLockAcquisitionHonorsContext(t *testing.T) {
 func TestSendPassesNativePermissionAndRoutingContext(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	message, err := engine.Send(context.Background(), SendRequest{
-		Text: "@claude inspect this", To: []model.ActorID{model.ActorClaude},
+		Text: "@claude inspect this", To: []model.ActorID{model.ActorSlot1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := receiveInput(t, adapters[model.ActorClaude])
-	if input.MessageID != message.ID || input.From != model.ActorUser || input.To != model.ActorClaude {
+	input := receiveInput(t, adapters[model.ActorSlot1])
+	if input.MessageID != message.ID || input.From != model.ActorUser || input.To != model.ActorSlot1 {
 		t.Fatalf("unexpected delivery envelope: %#v", input)
 	}
 	if input.Role != model.RolePeer || input.FromHandle != "@user" || input.SelfHandle != "@claude" || input.PeerHandle != "@codex" {
@@ -258,49 +259,49 @@ func TestSendPassesNativePermissionAndRoutingContext(t *testing.T) {
 func TestMentionRelayWaitsForBoundaryAndEndsWithoutAnotherMention(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
-		Text: "Introduce yourselves", To: []model.ActorID{model.ActorClaude},
+		Text: "Introduce yourselves", To: []model.ActorID{model.ActorSlot1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
+	_ = receiveInput(t, adapters[model.ActorSlot1])
 
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
+		Agent: model.ActorSlot1, Kind: model.RuntimeFinal,
 		TurnID: "turn-1", CorrelationID: incoming.ID,
 		Text:      "你好，我是 Claude。@codex 请介绍一下自己。\n[PAIRROOM:DONE]",
 		CreatedAt: time.Now().UTC(),
 	})
 	select {
-	case got := <-adapters[model.ActorCodex].submissions:
+	case got := <-adapters[model.ActorSlot2].submissions:
 		t.Fatalf("peer started before the active native turn completed: %#v", got)
 	case <-time.After(150 * time.Millisecond):
 	}
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "turn-1", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC(),
+		Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted, TurnID: "turn-1", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC(),
 	})
-	peerInput := receiveInput(t, adapters[model.ActorCodex])
-	if peerInput.From != model.ActorClaude || peerInput.ReplyTo != incoming.ID || peerInput.Text != "你好，我是 Claude。@codex 请介绍一下自己。\n[PAIRROOM:DONE]" {
+	peerInput := receiveInput(t, adapters[model.ActorSlot2])
+	if peerInput.From != model.ActorSlot1 || peerInput.ReplyTo != incoming.ID || peerInput.Text != "你好，我是 Claude。@codex 请介绍一下自己。\n[PAIRROOM:DONE]" {
 		t.Fatalf("unexpected peer relay: %#v", peerInput)
 	}
 
 	snapshot := engine.Snapshot()
 	last := snapshot.Messages[len(snapshot.Messages)-1]
-	if last.From != model.ActorClaude || last.ReplyTo != incoming.ID || last.ThreadID != incoming.ThreadID {
+	if last.From != model.ActorSlot1 || last.ReplyTo != incoming.ID || last.ThreadID != incoming.ThreadID {
 		t.Fatalf("unexpected room reply: %#v", last)
 	}
 
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorCodex, Kind: model.RuntimeFinal,
+		Agent: model.ActorSlot2, Kind: model.RuntimeFinal,
 		TurnID: "turn-2", CorrelationID: last.ID,
 		Text:      "你好，我是 Codex。很高兴认识你。",
 		CreatedAt: time.Now().UTC(),
 	})
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorCodex, Kind: model.RuntimeTurnCompleted, TurnID: "turn-2", CorrelationID: last.ID, Name: "completed", CreatedAt: time.Now().UTC(),
+		Agent: model.ActorSlot2, Kind: model.RuntimeTurnCompleted, TurnID: "turn-2", CorrelationID: last.ID, Name: "completed", CreatedAt: time.Now().UTC(),
 	})
 	select {
-	case got := <-adapters[model.ActorClaude].submissions:
+	case got := <-adapters[model.ActorSlot1].submissions:
 		t.Fatalf("unmentioned reciprocal turn was started: %#v", got)
 	case <-time.After(150 * time.Millisecond):
 	}
@@ -309,19 +310,19 @@ func TestMentionRelayWaitsForBoundaryAndEndsWithoutAnotherMention(t *testing.T) 
 func TestAgentFinalWithoutPeerHandleEndsRelay(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
-		Text: "Answer directly", To: []model.ActorID{model.ActorClaude},
+		Text: "Answer directly", To: []model.ActorID{model.ActorSlot1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
+	_ = receiveInput(t, adapters[model.ActorSlot1])
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeFinal, TurnID: "turn-direct", CorrelationID: incoming.ID,
+		Agent: model.ActorSlot1, Kind: model.RuntimeFinal, TurnID: "turn-direct", CorrelationID: incoming.ID,
 		Text: "Final answer with no recipient.", CreatedAt: time.Now().UTC(),
 	})
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "turn-direct", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC()})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted, TurnID: "turn-direct", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC()})
 	select {
-	case got := <-adapters[model.ActorCodex].submissions:
+	case got := <-adapters[model.ActorSlot2].submissions:
 		t.Fatalf("peer started without an exact handle: %#v", got)
 	case <-time.After(150 * time.Millisecond):
 	}
@@ -329,17 +330,17 @@ func TestAgentFinalWithoutPeerHandleEndsRelay(t *testing.T) {
 
 func TestDuplicateAgentFinalDoesNotCreateDuplicateRoomMessage(t *testing.T) {
 	engine, _ := newTestEngine(t, "")
-	incoming, err := engine.Send(context.Background(), SendRequest{Text: "answer once", To: []model.ActorID{model.ActorClaude}})
+	incoming, err := engine.Send(context.Background(), SendRequest{Text: "answer once", To: []model.ActorID{model.ActorSlot1}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := "one visible answer"
-	event := model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeFinal, TurnID: "same-turn", CorrelationID: incoming.ID, Text: text, CreatedAt: time.Now().UTC()}
+	event := model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeFinal, TurnID: "same-turn", CorrelationID: incoming.ID, Text: text, CreatedAt: time.Now().UTC()}
 	engine.HandleRuntimeEvent(event)
 	engine.HandleRuntimeEvent(event)
 	count := 0
 	for _, message := range engine.Snapshot().Messages {
-		if message.From == model.ActorClaude && message.ReplyTo == incoming.ID && message.TurnID == "same-turn" {
+		if message.From == model.ActorSlot1 && message.ReplyTo == incoming.ID && message.TurnID == "same-turn" {
 			count++
 		}
 	}
@@ -351,21 +352,21 @@ func TestDuplicateAgentFinalDoesNotCreateDuplicateRoomMessage(t *testing.T) {
 func TestPeerMentionForwardsCompleteLongMessage(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
-		Text: "Continue the discussion", To: []model.ActorID{model.ActorClaude},
+		Text: "Continue the discussion", To: []model.ActorID{model.ActorSlot1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
+	_ = receiveInput(t, adapters[model.ActorSlot1])
 	visible := strings.Repeat("context ", 900) + "@codex please continue"
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeFinal, TurnID: "turn-fallback", CorrelationID: incoming.ID,
+		Agent: model.ActorSlot1, Kind: model.RuntimeFinal, TurnID: "turn-fallback", CorrelationID: incoming.ID,
 		Text: visible, CreatedAt: time.Now().UTC(),
 	})
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "turn-fallback", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC(),
+		Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted, TurnID: "turn-fallback", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC(),
 	})
-	peerInput := receiveInput(t, adapters[model.ActorCodex])
+	peerInput := receiveInput(t, adapters[model.ActorSlot2])
 	if peerInput.Text != visible || len([]rune(peerInput.Text)) <= 4000 {
 		t.Fatalf("long peer message was changed or truncated: got=%d want=%d", len([]rune(peerInput.Text)), len([]rune(visible)))
 	}
@@ -377,14 +378,14 @@ func TestSendWithoutTargetUsesAgentOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(message.To) != 1 || message.To[0] != model.ActorClaude {
+	if len(message.To) != 1 || message.To[0] != model.ActorSlot1 {
 		t.Fatalf("unaddressed message targets = %v, want current Driver only", message.To)
 	}
-	if input := receiveInput(t, adapters[model.ActorClaude]); input.MessageID != message.ID {
+	if input := receiveInput(t, adapters[model.ActorSlot1]); input.MessageID != message.ID {
 		t.Fatalf("Driver received unexpected input: %#v", input)
 	}
 	select {
-	case input := <-adapters[model.ActorCodex].submissions:
+	case input := <-adapters[model.ActorSlot2].submissions:
 		t.Fatalf("Reviewer received redundant default delivery: %#v", input)
 	case <-time.After(150 * time.Millisecond):
 	}
@@ -393,43 +394,43 @@ func TestSendWithoutTargetUsesAgentOne(t *testing.T) {
 func TestQueueIntentStartsImmediatelyWhenRoomIsIdle(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	message, err := engine.Send(context.Background(), SendRequest{
-		Text: "start from an idle Room", To: []model.ActorID{model.ActorClaude}, Intent: model.IntentQueue,
+		Text: "start from an idle Room", To: []model.ActorID{model.ActorSlot1}, Intent: model.IntentQueue,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if input := receiveInput(t, adapters[model.ActorClaude]); input.MessageID != message.ID || input.Intent != model.IntentQueue {
+	if input := receiveInput(t, adapters[model.ActorSlot1]); input.MessageID != message.ID || input.Intent != model.IntentQueue {
 		t.Fatalf("idle queue intent did not start immediately: %#v", input)
 	}
-	waitForDeliveryState(t, engine, message.ID, model.ActorClaude, model.DeliveryStarted)
+	waitForDeliveryState(t, engine, message.ID, model.ActorSlot1, model.DeliveryStarted)
 }
 
 func TestRoomQueuePreservesFIFOAcrossParticipants(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
-	first, err := engine.Send(context.Background(), SendRequest{Text: "first", To: []model.ActorID{model.ActorClaude}})
+	first, err := engine.Send(context.Background(), SendRequest{Text: "first", To: []model.ActorID{model.ActorSlot1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
-	second, err := engine.Send(context.Background(), SendRequest{Text: "second", To: []model.ActorID{model.ActorCodex}})
+	_ = receiveInput(t, adapters[model.ActorSlot1])
+	second, err := engine.Send(context.Background(), SendRequest{Text: "second", To: []model.ActorID{model.ActorSlot2}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	third, err := engine.Send(context.Background(), SendRequest{Text: "third", To: []model.ActorID{model.ActorClaude}, Intent: model.IntentQueue})
+	third, err := engine.Send(context.Background(), SendRequest{Text: "third", To: []model.ActorID{model.ActorSlot1}, Intent: model.IntentQueue})
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, CorrelationID: first.ID, TurnID: "first", Name: "completed", CreatedAt: time.Now().UTC()})
-	if input := receiveInput(t, adapters[model.ActorCodex]); input.MessageID != second.ID {
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted, CorrelationID: first.ID, TurnID: "first", Name: "completed", CreatedAt: time.Now().UTC()})
+	if input := receiveInput(t, adapters[model.ActorSlot2]); input.MessageID != second.ID {
 		t.Fatalf("first FIFO successor = %#v, want %s", input, second.ID)
 	}
 	select {
-	case input := <-adapters[model.ActorClaude].submissions:
+	case input := <-adapters[model.ActorSlot1].submissions:
 		t.Fatalf("third FIFO entry overtook second: %#v", input)
 	case <-time.After(100 * time.Millisecond):
 	}
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorCodex, Kind: model.RuntimeTurnCompleted, CorrelationID: second.ID, TurnID: "second", Name: "completed", CreatedAt: time.Now().UTC()})
-	if input := receiveInput(t, adapters[model.ActorClaude]); input.MessageID != third.ID {
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot2, Kind: model.RuntimeTurnCompleted, CorrelationID: second.ID, TurnID: "second", Name: "completed", CreatedAt: time.Now().UTC()})
+	if input := receiveInput(t, adapters[model.ActorSlot1]); input.MessageID != third.ID {
 		t.Fatalf("second FIFO successor = %#v, want %s", input, third.ID)
 	}
 }
@@ -437,7 +438,7 @@ func TestRoomQueuePreservesFIFOAcrossParticipants(t *testing.T) {
 func TestSendRejectsMultipleAgentRecipients(t *testing.T) {
 	engine, _ := newTestEngine(t, "")
 	_, err := engine.Send(context.Background(), SendRequest{
-		Text: "Run in parallel", To: []model.ActorID{model.ActorClaude, model.ActorCodex},
+		Text: "Run in parallel", To: []model.ActorID{model.ActorSlot1, model.ActorSlot2},
 	})
 	if err == nil || !strings.Contains(err.Error(), "one starting Agent") {
 		t.Fatalf("multi-recipient send error = %v, want single-start rejection", err)
@@ -451,6 +452,16 @@ func TestSendRejectsInvalidExplicitRecipientInsteadOfFallingBackToDriver(t *test
 	})
 	if err == nil || !strings.Contains(err.Error(), "invalid Agent recipient") {
 		t.Fatalf("invalid explicit recipient error = %v", err)
+	}
+}
+
+func TestExplicitHTTPRecipientsAcceptOnlyNumericSlotAliases(t *testing.T) {
+	actors, err := normalizeExplicitActors([]model.ActorID{"1", "2"})
+	if err != nil || !reflect.DeepEqual(actors, []model.ActorID{model.ActorSlot1, model.ActorSlot2}) {
+		t.Fatalf("numeric HTTP aliases = %#v, %v", actors, err)
+	}
+	if _, err := normalizeExplicitActors([]model.ActorID{"claude"}); err == nil || !strings.Contains(err.Error(), "slot1 or slot2") {
+		t.Fatalf("legacy HTTP recipient was accepted: %v", err)
 	}
 }
 
@@ -471,141 +482,141 @@ func TestSendIgnoresRemovedAliasWhenCurrentHandleAddressesMessage(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if input := receiveInput(t, adapters[model.ActorCodex]); input.MessageID != message.ID {
+	if input := receiveInput(t, adapters[model.ActorSlot2]); input.MessageID != message.ID {
 		t.Fatalf("message with a current handle was not routed to that participant: %#v", input)
 	}
 }
 
 func TestRuntimeErrorWaitsForReliableTurnBoundary(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
-	first, err := engine.Send(context.Background(), SendRequest{Text: "Start", To: []model.ActorID{model.ActorCodex}})
+	first, err := engine.Send(context.Background(), SendRequest{Text: "Start", To: []model.ActorID{model.ActorSlot2}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorCodex])
-	waitForProcessingState(t, engine, first.ID, model.ActorCodex, model.ProcessingWorking)
-	second, err := engine.Send(context.Background(), SendRequest{Text: "Follow up", To: []model.ActorID{model.ActorClaude}})
+	_ = receiveInput(t, adapters[model.ActorSlot2])
+	waitForProcessingState(t, engine, first.ID, model.ActorSlot2, model.ProcessingWorking)
+	second, err := engine.Send(context.Background(), SendRequest{Text: "Follow up", To: []model.ActorID{model.ActorSlot1}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	select {
-	case got := <-adapters[model.ActorClaude].submissions:
+	case got := <-adapters[model.ActorSlot1].submissions:
 		t.Fatalf("queued peer started before current turn ended: %#v", got)
 	case <-time.After(100 * time.Millisecond):
 	}
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorCodex, Kind: model.RuntimeError, CorrelationID: first.ID,
+		Agent: model.ActorSlot2, Kind: model.RuntimeError, CorrelationID: first.ID,
 		TurnID: "turn-with-diagnostic", Text: "recoverable mid-turn error", CreatedAt: time.Now().UTC(),
 	})
 	select {
-	case got := <-adapters[model.ActorClaude].submissions:
+	case got := <-adapters[model.ActorSlot1].submissions:
 		t.Fatalf("diagnostic error released the active owner: %#v", got)
 	case <-time.After(100 * time.Millisecond):
 	}
-	if got := findMessage(t, engine.Snapshot(), first.ID).Processing[model.ActorCodex]; got != model.ProcessingWorking {
+	if got := findMessage(t, engine.Snapshot(), first.ID).Processing[model.ActorSlot2]; got != model.ProcessingWorking {
 		t.Fatalf("diagnostic error settled active input as %q", got)
 	}
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorCodex, Kind: model.RuntimeTurnCompleted, CorrelationID: first.ID,
+		Agent: model.ActorSlot2, Kind: model.RuntimeTurnCompleted, CorrelationID: first.ID,
 		TurnID: "turn-with-diagnostic", Name: "failed", CreatedAt: time.Now().UTC(),
 	})
-	if got := receiveInput(t, adapters[model.ActorClaude]); got.MessageID != second.ID {
+	if got := receiveInput(t, adapters[model.ActorSlot1]); got.MessageID != second.ID {
 		t.Fatalf("wrong queued message started after terminal boundary: %#v", got)
 	}
-	waitForProcessingState(t, engine, first.ID, model.ActorCodex, model.ProcessingFailed)
+	waitForProcessingState(t, engine, first.ID, model.ActorSlot2, model.ProcessingFailed)
 }
 
 func TestStaleTurnCompletionDoesNotReleaseReplacementOwner(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
-	first, err := engine.Send(context.Background(), SendRequest{Text: "active", To: []model.ActorID{model.ActorClaude}})
+	first, err := engine.Send(context.Background(), SendRequest{Text: "active", To: []model.ActorID{model.ActorSlot1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
+	_ = receiveInput(t, adapters[model.ActorSlot1])
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeTurnStarted, TurnID: "turn-current", CorrelationID: first.ID,
+		Agent: model.ActorSlot1, Kind: model.RuntimeTurnStarted, TurnID: "turn-current", CorrelationID: first.ID,
 		CreatedAt: time.Now().UTC(),
 	})
-	second, err := engine.Send(context.Background(), SendRequest{Text: "queued", To: []model.ActorID{model.ActorCodex}})
+	second, err := engine.Send(context.Background(), SendRequest{Text: "queued", To: []model.ActorID{model.ActorSlot2}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeFinal, TurnID: "turn-stale", CorrelationID: first.ID,
+		Agent: model.ActorSlot1, Kind: model.RuntimeFinal, TurnID: "turn-stale", CorrelationID: first.ID,
 		Text: "stale answer @codex", CreatedAt: time.Now().UTC(),
 	})
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeInputCompleted, TurnID: "turn-stale", CorrelationID: first.ID,
+		Agent: model.ActorSlot1, Kind: model.RuntimeInputCompleted, TurnID: "turn-stale", CorrelationID: first.ID,
 		CreatedAt: time.Now().UTC(),
 	})
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "turn-stale", CorrelationID: first.ID, Name: "completed",
+		Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted, TurnID: "turn-stale", CorrelationID: first.ID, Name: "completed",
 		CreatedAt: time.Now().UTC(),
 	})
 	select {
-	case input := <-adapters[model.ActorCodex].submissions:
+	case input := <-adapters[model.ActorSlot2].submissions:
 		t.Fatalf("stale completion released the queued owner: %#v", input)
 	case <-time.After(120 * time.Millisecond):
 	}
-	if got := engine.Snapshot().Participants[model.ActorClaude].CurrentTurn; got != "turn-current" {
+	if got := engine.Snapshot().Participants[model.ActorSlot1].CurrentTurn; got != "turn-current" {
 		t.Fatalf("stale completion changed current turn to %q", got)
 	}
-	if got := findMessage(t, engine.Snapshot(), first.ID).Processing[model.ActorClaude]; got != model.ProcessingWorking {
+	if got := findMessage(t, engine.Snapshot(), first.ID).Processing[model.ActorSlot1]; got != model.ProcessingWorking {
 		t.Fatalf("stale completion settled the old input as %q", got)
 	}
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "turn-current", CorrelationID: first.ID, Name: "completed",
+		Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted, TurnID: "turn-current", CorrelationID: first.ID, Name: "completed",
 		CreatedAt: time.Now().UTC(),
 	})
-	if input := receiveInput(t, adapters[model.ActorCodex]); input.MessageID != second.ID {
+	if input := receiveInput(t, adapters[model.ActorSlot2]); input.MessageID != second.ID {
 		t.Fatalf("current completion did not release the queued owner: %#v", input)
 	}
 }
 
 func TestReplyWithoutExplicitTargetUsesAgentBeingRepliedTo(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
-	incoming, err := engine.Send(context.Background(), SendRequest{Text: "Review this", To: []model.ActorID{model.ActorCodex}})
+	incoming, err := engine.Send(context.Background(), SendRequest{Text: "Review this", To: []model.ActorID{model.ActorSlot2}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorCodex])
+	_ = receiveInput(t, adapters[model.ActorSlot2])
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorCodex, Kind: model.RuntimeFinal,
+		Agent: model.ActorSlot2, Kind: model.RuntimeFinal,
 		TurnID: "turn-review-reply", CorrelationID: incoming.ID,
 		Text: "Review result.\n[PAIRROOM:DONE]", CreatedAt: time.Now().UTC(),
 	})
 	snapshot := engine.Snapshot()
 	review := snapshot.Messages[len(snapshot.Messages)-1]
-	if review.From != model.ActorCodex {
+	if review.From != model.ActorSlot2 {
 		t.Fatalf("expected Codex review message, got %#v", review)
 	}
 	reply, err := engine.Send(context.Background(), SendRequest{Text: "Please clarify", ReplyTo: review.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reply.To) != 1 || reply.To[0] != model.ActorCodex {
+	if len(reply.To) != 1 || reply.To[0] != model.ActorSlot2 {
 		t.Fatalf("reply target = %v, want replied-to Agent Codex", reply.To)
 	}
-	if input := receiveInput(t, adapters[model.ActorCodex]); input.MessageID != reply.ID {
+	if input := receiveInput(t, adapters[model.ActorSlot2]); input.MessageID != reply.ID {
 		t.Fatalf("reply reached the wrong Agent: %#v", input)
 	}
 }
 
 func TestLegacyControlMarkersAreOrdinaryText(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
-	incoming, err := engine.Send(context.Background(), SendRequest{Text: "Implement the fix", To: []model.ActorID{model.ActorClaude}})
+	incoming, err := engine.Send(context.Background(), SendRequest{Text: "Implement the fix", To: []model.ActorID{model.ActorSlot1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
+	_ = receiveInput(t, adapters[model.ActorSlot1])
 
 	text := "Implementation complete.\n[PAIRROOM:HANDOFF]\nLegacy packet remains visible.\n[/PAIRROOM:HANDOFF]\n[PAIRROOM:NEXT]\n[PAIRROOM:DONE]"
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeFinal, TurnID: "turn-implemented",
+		Agent: model.ActorSlot1, Kind: model.RuntimeFinal, TurnID: "turn-implemented",
 		CorrelationID: incoming.ID, Text: text, CreatedAt: time.Now().UTC(),
 	})
 	select {
-	case input := <-adapters[model.ActorCodex].submissions:
+	case input := <-adapters[model.ActorSlot2].submissions:
 		t.Fatalf("legacy control text incorrectly started a relay: %#v", input)
 	case <-time.After(150 * time.Millisecond):
 	}
@@ -618,22 +629,22 @@ func TestLegacyControlMarkersAreOrdinaryText(t *testing.T) {
 func TestExplicitMentionReturnsToDriverWithFullText(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
-		Text: "Review the implementation", To: []model.ActorID{model.ActorCodex},
+		Text: "Review the implementation", To: []model.ActorID{model.ActorSlot2},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorCodex])
+	_ = receiveInput(t, adapters[model.ActorSlot2])
 
 	text := "One blocking issue remains. @claude fix the stale completion race.\n[PAIRROOM:HANDOFF]\nLegacy packet is ordinary text.\n[/PAIRROOM:HANDOFF]\n[PAIRROOM:NEXT]"
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorCodex, Kind: model.RuntimeFinal,
+		Agent: model.ActorSlot2, Kind: model.RuntimeFinal,
 		TurnID: "turn-review", CorrelationID: incoming.ID,
 		Text:      text,
 		CreatedAt: time.Now().UTC(),
 	})
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorCodex, Kind: model.RuntimeTurnCompleted, TurnID: "turn-review", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC()})
-	input := receiveInput(t, adapters[model.ActorClaude])
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot2, Kind: model.RuntimeTurnCompleted, TurnID: "turn-review", CorrelationID: incoming.ID, Name: "completed", CreatedAt: time.Now().UTC()})
+	input := receiveInput(t, adapters[model.ActorSlot1])
 	if input.Text != text {
 		t.Fatalf("Driver did not receive the complete reviewer response: %q", input.Text)
 	}
@@ -642,21 +653,21 @@ func TestExplicitMentionReturnsToDriverWithFullText(t *testing.T) {
 func TestUserAloneDoesNotRelay(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	incoming, err := engine.Send(context.Background(), SendRequest{
-		Text: "Implement the ambiguous change", To: []model.ActorID{model.ActorClaude},
+		Text: "Implement the ambiguous change", To: []model.ActorID{model.ActorSlot1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
+	_ = receiveInput(t, adapters[model.ActorSlot1])
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
+		Agent: model.ActorSlot1, Kind: model.RuntimeFinal,
 		TurnID: "turn-needs-human", CorrelationID: incoming.ID,
 		Text:      "Need @user to choose the compatibility policy before review.",
 		CreatedAt: time.Now().UTC(),
 	})
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, CorrelationID: incoming.ID, TurnID: "turn-needs-human", Name: "completed", CreatedAt: time.Now().UTC()})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted, CorrelationID: incoming.ID, TurnID: "turn-needs-human", Name: "completed", CreatedAt: time.Now().UTC()})
 	select {
-	case input := <-adapters[model.ActorCodex].submissions:
+	case input := <-adapters[model.ActorSlot2].submissions:
 		t.Fatalf("@user alone incorrectly routed to Reviewer: %#v", input)
 	case <-time.After(150 * time.Millisecond):
 	}
@@ -664,25 +675,25 @@ func TestUserAloneDoesNotRelay(t *testing.T) {
 
 func TestNewHumanMessageInSameThreadSuppressesStaleRelay(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
-	first, err := engine.Send(context.Background(), SendRequest{Text: "First direction", To: []model.ActorID{model.ActorClaude}})
+	first, err := engine.Send(context.Background(), SendRequest{Text: "First direction", To: []model.ActorID{model.ActorSlot1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
+	_ = receiveInput(t, adapters[model.ActorSlot1])
 	if _, err := engine.Send(context.Background(), SendRequest{
-		Text: "New direction", To: []model.ActorID{model.ActorClaude}, ReplyTo: first.ID,
+		Text: "New direction", To: []model.ActorID{model.ActorSlot1}, ReplyTo: first.ID,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
+	_ = receiveInput(t, adapters[model.ActorSlot1])
 
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
+		Agent: model.ActorSlot1, Kind: model.RuntimeFinal,
 		CorrelationID: first.ID, TurnID: "old", Text: "Old answer asks @codex to continue.",
 		CreatedAt: time.Now().UTC(),
 	})
 	select {
-	case got := <-adapters[model.ActorCodex].submissions:
+	case got := <-adapters[model.ActorSlot2].submissions:
 		t.Fatalf("stale response was incorrectly handed to Codex: %#v", got)
 	case <-time.After(150 * time.Millisecond):
 	}
@@ -690,23 +701,23 @@ func TestNewHumanMessageInSameThreadSuppressesStaleRelay(t *testing.T) {
 
 func TestNewUnthreadedAppendToSameAgentSuppressesStaleRelay(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
-	first, err := engine.Send(context.Background(), SendRequest{Text: "First direction", To: []model.ActorID{model.ActorClaude}})
+	first, err := engine.Send(context.Background(), SendRequest{Text: "First direction", To: []model.ActorID{model.ActorSlot1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
-	if _, err := engine.Send(context.Background(), SendRequest{Text: "Correct that direction", To: []model.ActorID{model.ActorClaude}}); err != nil {
+	_ = receiveInput(t, adapters[model.ActorSlot1])
+	if _, err := engine.Send(context.Background(), SendRequest{Text: "Correct that direction", To: []model.ActorID{model.ActorSlot1}}); err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
+	_ = receiveInput(t, adapters[model.ActorSlot1])
 
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
+		Agent: model.ActorSlot1, Kind: model.RuntimeFinal,
 		CorrelationID: first.ID, TurnID: "old-unthreaded", Text: "Old answer asks @codex to continue.",
 		CreatedAt: time.Now().UTC(),
 	})
 	select {
-	case got := <-adapters[model.ActorCodex].submissions:
+	case got := <-adapters[model.ActorSlot2].submissions:
 		t.Fatalf("newer unthreaded message did not suppress stale relay: %#v", got)
 	case <-time.After(150 * time.Millisecond):
 	}
@@ -714,20 +725,20 @@ func TestNewUnthreadedAppendToSameAgentSuppressesStaleRelay(t *testing.T) {
 
 func TestExplicitMentionRoutesBeforeGenericStop(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
-	first, err := engine.Send(context.Background(), SendRequest{Text: "First direction", To: []model.ActorID{model.ActorClaude}})
+	first, err := engine.Send(context.Background(), SendRequest{Text: "First direction", To: []model.ActorID{model.ActorSlot1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
+	_ = receiveInput(t, adapters[model.ActorSlot1])
 
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
+		Agent: model.ActorSlot1, Kind: model.RuntimeFinal,
 		CorrelationID: first.ID, TurnID: "explicit-peer", Text: "Plan is ready. @codex review the evidence.\n[PAIRROOM:DONE]",
 		CreatedAt: time.Now().UTC(),
 	})
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "explicit-peer", CorrelationID: first.ID, Name: "completed", CreatedAt: time.Now().UTC()})
-	got := receiveInput(t, adapters[model.ActorCodex])
-	if got.From != model.ActorClaude || !strings.Contains(got.Text, "review the evidence") {
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted, TurnID: "explicit-peer", CorrelationID: first.ID, Name: "completed", CreatedAt: time.Now().UTC()})
+	got := receiveInput(t, adapters[model.ActorSlot2])
+	if got.From != model.ActorSlot1 || !strings.Contains(got.Text, "review the evidence") {
 		t.Fatalf("explicit peer mention did not override generic stop marker: %#v", got)
 	}
 }
@@ -741,19 +752,19 @@ func TestAgentHandleWinsWhenUserAlsoMentioned(t *testing.T) {
 	for i, text := range texts {
 		t.Run(fmt.Sprintf("case-%d", i), func(t *testing.T) {
 			engine, adapters := newTestEngine(t, "")
-			incoming, err := engine.Send(context.Background(), SendRequest{Text: "Continue", To: []model.ActorID{model.ActorClaude}})
+			incoming, err := engine.Send(context.Background(), SendRequest{Text: "Continue", To: []model.ActorID{model.ActorSlot1}})
 			if err != nil {
 				t.Fatal(err)
 			}
-			_ = receiveInput(t, adapters[model.ActorClaude])
+			_ = receiveInput(t, adapters[model.ActorSlot1])
 			turnID := fmt.Sprintf("agent-wins-%d", i)
 			engine.HandleRuntimeEvent(model.RuntimeEvent{
-				Agent: model.ActorClaude, Kind: model.RuntimeFinal, CorrelationID: incoming.ID, TurnID: turnID,
+				Agent: model.ActorSlot1, Kind: model.RuntimeFinal, CorrelationID: incoming.ID, TurnID: turnID,
 				Text: text, CreatedAt: time.Now().UTC(),
 			})
-			engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, CorrelationID: incoming.ID, TurnID: turnID, Name: "completed", CreatedAt: time.Now().UTC()})
-			got := receiveInput(t, adapters[model.ActorCodex])
-			if got.From != model.ActorClaude || !strings.Contains(got.Text, "@codex") {
+			engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted, CorrelationID: incoming.ID, TurnID: turnID, Name: "completed", CreatedAt: time.Now().UTC()})
+			got := receiveInput(t, adapters[model.ActorSlot2])
+			if got.From != model.ActorSlot1 || !strings.Contains(got.Text, "@codex") {
 				t.Fatalf("exact Agent handle did not win relay: %#v", got)
 			}
 		})
@@ -762,36 +773,36 @@ func TestAgentHandleWinsWhenUserAlsoMentioned(t *testing.T) {
 
 func TestQueuedHumanMessageCancelsOlderRelay(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
-	first, err := engine.Send(context.Background(), SendRequest{Text: "First task", To: []model.ActorID{model.ActorClaude}})
+	first, err := engine.Send(context.Background(), SendRequest{Text: "First task", To: []model.ActorID{model.ActorSlot1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
+	_ = receiveInput(t, adapters[model.ActorSlot1])
 	second, err := engine.Send(context.Background(), SendRequest{
-		Text: "Independent task", To: []model.ActorID{model.ActorClaude}, Intent: model.IntentQueue,
+		Text: "Independent task", To: []model.ActorID{model.ActorSlot1}, Intent: model.IntentQueue,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	select {
-	case got := <-adapters[model.ActorClaude].submissions:
+	case got := <-adapters[model.ActorSlot1].submissions:
 		t.Fatalf("queued message started before the active turn completed: %#v", got)
 	case <-time.After(100 * time.Millisecond):
 	}
 
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeFinal,
+		Agent: model.ActorSlot1, Kind: model.RuntimeFinal,
 		CorrelationID: first.ID, TurnID: "first-task", Text: "First task result. @codex verify it.",
 		CreatedAt: time.Now().UTC(),
 	})
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "first-task", CorrelationID: first.ID, Name: "completed", CreatedAt: time.Now().UTC()})
-	queued := receiveInput(t, adapters[model.ActorClaude])
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted, TurnID: "first-task", CorrelationID: first.ID, Name: "completed", CreatedAt: time.Now().UTC()})
+	queued := receiveInput(t, adapters[model.ActorSlot1])
 	if queued.MessageID != second.ID {
 		t.Fatalf("first queued next turn = %#v, want %s", queued, second.ID)
 	}
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "independent-task", CorrelationID: second.ID, Name: "completed", CreatedAt: time.Now().UTC()})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted, TurnID: "independent-task", CorrelationID: second.ID, Name: "completed", CreatedAt: time.Now().UTC()})
 	select {
-	case got := <-adapters[model.ActorCodex].submissions:
+	case got := <-adapters[model.ActorSlot2].submissions:
 		t.Fatalf("newer human message did not cancel the older relay: %#v", got)
 	case <-time.After(150 * time.Millisecond):
 	}
@@ -799,39 +810,39 @@ func TestQueuedHumanMessageCancelsOlderRelay(t *testing.T) {
 
 func TestNewHumanInstructionCancelsRelayAlreadyInFIFOWithoutInterruptingTurn(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
-	first, err := engine.Send(context.Background(), SendRequest{Text: "First task", To: []model.ActorID{model.ActorClaude}})
+	first, err := engine.Send(context.Background(), SendRequest{Text: "First task", To: []model.ActorID{model.ActorSlot1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
+	_ = receiveInput(t, adapters[model.ActorSlot1])
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeFinal, CorrelationID: first.ID,
+		Agent: model.ActorSlot1, Kind: model.RuntimeFinal, CorrelationID: first.ID,
 		TurnID: "first-task", Text: "First result. @codex inspect it.", CreatedAt: time.Now().UTC(),
 	})
 	snapshot := engine.Snapshot()
 	relay := snapshot.Messages[len(snapshot.Messages)-1]
-	waitForDeliveryState(t, engine, relay.ID, model.ActorCodex, model.DeliveryQueued)
+	waitForDeliveryState(t, engine, relay.ID, model.ActorSlot2, model.DeliveryQueued)
 
-	human, err := engine.Send(context.Background(), SendRequest{Text: "Use this newer direction", To: []model.ActorID{model.ActorClaude}})
+	human, err := engine.Send(context.Background(), SendRequest{Text: "Use this newer direction", To: []model.ActorID{model.ActorSlot1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if input := receiveInput(t, adapters[model.ActorClaude]); input.MessageID != human.ID {
+	if input := receiveInput(t, adapters[model.ActorSlot1]); input.MessageID != human.ID {
 		t.Fatalf("new human instruction was not steered to the active owner: %#v", input)
 	}
-	waitForProcessingState(t, engine, relay.ID, model.ActorCodex, model.ProcessingCancelled)
-	adapters[model.ActorClaude].mu.Lock()
-	interrupts := adapters[model.ActorClaude].interrupts
-	adapters[model.ActorClaude].mu.Unlock()
+	waitForProcessingState(t, engine, relay.ID, model.ActorSlot2, model.ProcessingCancelled)
+	adapters[model.ActorSlot1].mu.Lock()
+	interrupts := adapters[model.ActorSlot1].interrupts
+	adapters[model.ActorSlot1].mu.Unlock()
 	if interrupts != 0 {
 		t.Fatalf("new human instruction interrupted the active turn %d times", interrupts)
 	}
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, CorrelationID: human.ID,
+		Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted, CorrelationID: human.ID,
 		TurnID: "first-task", Name: "completed", CreatedAt: time.Now().UTC(),
 	})
 	select {
-	case input := <-adapters[model.ActorCodex].submissions:
+	case input := <-adapters[model.ActorSlot2].submissions:
 		t.Fatalf("cancelled Agent relay started after the boundary: %#v", input)
 	case <-time.After(150 * time.Millisecond):
 	}
@@ -839,38 +850,38 @@ func TestNewHumanInstructionCancelsRelayAlreadyInFIFOWithoutInterruptingTurn(t *
 
 func TestNewHumanInstructionCancelsRelayReservedBeforeNativeSubmission(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
-	first, err := engine.Send(context.Background(), SendRequest{Text: "First task", To: []model.ActorID{model.ActorClaude}})
+	first, err := engine.Send(context.Background(), SendRequest{Text: "First task", To: []model.ActorID{model.ActorSlot1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
+	_ = receiveInput(t, adapters[model.ActorSlot1])
 
 	// Hold the peer's delivery lock so the Room can reserve this relay as the
 	// next owner without allowing it to cross the native submission boundary.
-	engine.deliveryMu[model.ActorCodex] <- struct{}{}
+	engine.deliveryMu[model.ActorSlot2] <- struct{}{}
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeFinal, CorrelationID: first.ID,
+		Agent: model.ActorSlot1, Kind: model.RuntimeFinal, CorrelationID: first.ID,
 		TurnID: "first-task", Text: "First result. @codex inspect it.", CreatedAt: time.Now().UTC(),
 	})
 	snapshot := engine.Snapshot()
 	relay := snapshot.Messages[len(snapshot.Messages)-1]
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, CorrelationID: first.ID,
+		Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted, CorrelationID: first.ID,
 		TurnID: "first-task", Name: "completed", CreatedAt: time.Now().UTC(),
 	})
-	waitForDeliveryState(t, engine, relay.ID, model.ActorCodex, model.DeliveryQueued)
+	waitForDeliveryState(t, engine, relay.ID, model.ActorSlot2, model.DeliveryQueued)
 
-	human, err := engine.Send(context.Background(), SendRequest{Text: "Use this newer direction", To: []model.ActorID{model.ActorClaude}})
+	human, err := engine.Send(context.Background(), SendRequest{Text: "Use this newer direction", To: []model.ActorID{model.ActorSlot1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitForProcessingState(t, engine, relay.ID, model.ActorCodex, model.ProcessingCancelled)
-	<-engine.deliveryMu[model.ActorCodex]
-	if input := receiveInput(t, adapters[model.ActorClaude]); input.MessageID != human.ID {
+	waitForProcessingState(t, engine, relay.ID, model.ActorSlot2, model.ProcessingCancelled)
+	<-engine.deliveryMu[model.ActorSlot2]
+	if input := receiveInput(t, adapters[model.ActorSlot1]); input.MessageID != human.ID {
 		t.Fatalf("new human instruction did not follow the cancelled reservation: %#v", input)
 	}
 	select {
-	case input := <-adapters[model.ActorCodex].submissions:
+	case input := <-adapters[model.ActorSlot2].submissions:
 		t.Fatalf("cancelled reserved Agent relay crossed the native boundary: %#v", input)
 	case <-time.After(150 * time.Millisecond):
 	}
@@ -879,8 +890,8 @@ func TestNewHumanInstructionCancelsRelayReservedBeforeNativeSubmission(t *testin
 func TestExplicitMentionsHaveNoHopLimit(t *testing.T) {
 	engine, _ := newTestEngine(t, "")
 	for turn := 0; turn < 100; turn++ {
-		targets := engine.agentTargets(model.ActorClaude, "@codex continue", 1, 1)
-		if len(targets) != 1 || targets[0] != model.ActorCodex {
+		targets := engine.agentTargets(model.ActorSlot1, "@codex continue", 1, 1)
+		if len(targets) != 1 || targets[0] != model.ActorSlot2 {
 			t.Fatalf("explicit mention stopped at synthetic turn %d: %v", turn, targets)
 		}
 	}
@@ -890,7 +901,7 @@ func TestAmbiguousDuplicateRuntimeHandleDoesNotRouteAndNamesBothChoices(t *testi
 	engine, _ := newTestEngine(t, "")
 	engine.cfg.ClaudeConfig.Runtime = model.RuntimeCodex
 	engine.cfg.CodexConfig.Runtime = model.RuntimeCodex
-	if targets := engine.agentTargets(model.ActorClaude, "@codex continue", 1, 1); len(targets) != 0 {
+	if targets := engine.agentTargets(model.ActorSlot1, "@codex continue", 1, 1); len(targets) != 0 {
 		t.Fatalf("ambiguous unsuffixed handle routed: %v", targets)
 	}
 	events := engine.Snapshot().Events
@@ -919,7 +930,7 @@ func TestSessionIDsSurviveRoomRestartButRuntimeStateDoesNot(t *testing.T) {
 	dir := t.TempDir()
 	engine, _ := newTestEngine(t, dir)
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeSession,
+		Agent: model.ActorSlot1, Kind: model.RuntimeSession,
 		SessionID: "claude-session-123", CreatedAt: time.Now().UTC(),
 	})
 	if err := engine.Close(); err != nil && !errors.Is(err, context.Canceled) {
@@ -938,7 +949,7 @@ func TestSessionIDsSurviveRoomRestartButRuntimeStateDoesNot(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	participant := reopened.Snapshot().Participants[model.ActorClaude]
+	participant := reopened.Snapshot().Participants[model.ActorSlot1]
 	if participant.SessionID != "claude-session-123" {
 		t.Fatalf("session id was not restored: %#v", participant)
 	}
@@ -965,23 +976,23 @@ func waitForDeliveryState(t *testing.T, engine *Engine, messageID string, target
 func TestDeliveryFailureIsTerminalAndLateStateIsNotPublished(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	message, err := engine.Send(context.Background(), SendRequest{
-		Text: "inspect", To: []model.ActorID{model.ActorClaude},
+		Text: "inspect", To: []model.ActorID{model.ActorSlot1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
-	waitForDeliveryState(t, engine, message.ID, model.ActorClaude, model.DeliveryStarted)
+	_ = receiveInput(t, adapters[model.ActorSlot1])
+	waitForDeliveryState(t, engine, message.ID, model.ActorSlot1, model.DeliveryStarted)
 
 	before := len(engine.Snapshot().Events)
-	engine.delivery(message.ID, model.ActorClaude, model.DeliveryFailed, "runtime failed")
-	engine.delivery(message.ID, model.ActorClaude, model.DeliveryStarted, "late submit result")
+	engine.delivery(message.ID, model.ActorSlot1, model.DeliveryFailed, "runtime failed")
+	engine.delivery(message.ID, model.ActorSlot1, model.DeliveryStarted, "late submit result")
 
 	snapshot := engine.Snapshot()
 	var got model.DeliveryState
 	for _, item := range snapshot.Messages {
 		if item.ID == message.ID {
-			got = item.Delivery[model.ActorClaude]
+			got = item.Delivery[model.ActorSlot1]
 			break
 		}
 	}
@@ -1006,7 +1017,7 @@ func TestTransientRuntimeEventIsLiveButNotPersisted(t *testing.T) {
 	before := engine.Snapshot().LatestSeq
 
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeTextDelta,
+		Agent: model.ActorSlot1, Kind: model.RuntimeTextDelta,
 		TurnID: "turn-live", CorrelationID: "msg-live", Text: "token",
 		CreatedAt: time.Now().UTC(),
 	})
@@ -1068,27 +1079,27 @@ func TestRestartResumesRoomQueuedDeliveryAndExpiresApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	message := model.Message{
-		ID: model.NewID("msg"), From: model.ActorUser, To: []model.ActorID{model.ActorCodex},
+		ID: model.NewID("msg"), From: model.ActorUser, To: []model.ActorID{model.ActorSlot2},
 		Text: "pending", ThreadID: model.NewID("thread"), CreatedAt: time.Now().UTC(),
-		Delivery: map[model.ActorID]model.DeliveryState{model.ActorCodex: model.DeliveryPending},
+		Delivery: map[model.ActorID]model.DeliveryState{model.ActorSlot2: model.DeliveryPending},
 	}
 	if _, err := engine.record(EventMessageCreated, model.ActorUser, message); err != nil {
 		t.Fatal(err)
 	}
 	second := model.Message{
-		ID: model.NewID("msg"), From: model.ActorUser, To: []model.ActorID{model.ActorClaude},
+		ID: model.NewID("msg"), From: model.ActorUser, To: []model.ActorID{model.ActorSlot1},
 		Text: "queued second", Intent: model.IntentQueue, ThreadID: model.NewID("thread"), CreatedAt: time.Now().UTC(),
-		Delivery:   map[model.ActorID]model.DeliveryState{model.ActorClaude: model.DeliveryQueued},
-		Processing: map[model.ActorID]model.ProcessingState{model.ActorClaude: model.ProcessingWaiting},
+		Delivery:   map[model.ActorID]model.DeliveryState{model.ActorSlot1: model.DeliveryQueued},
+		Processing: map[model.ActorID]model.ProcessingState{model.ActorSlot1: model.ProcessingWaiting},
 	}
 	if _, err := engine.record(EventMessageCreated, model.ActorUser, second); err != nil {
 		t.Fatal(err)
 	}
 	approval := model.Approval{
-		ID: model.NewID("approval"), Agent: model.ActorCodex, Kind: "command",
+		ID: model.NewID("approval"), Agent: model.ActorSlot2, Kind: "command",
 		Title: "pending", Status: "pending", RequestedAt: time.Now().UTC(),
 	}
-	if _, err := engine.record(EventApprovalUpdated, model.ActorCodex, approval); err != nil {
+	if _, err := engine.record(EventApprovalUpdated, model.ActorSlot2, approval); err != nil {
 		t.Fatal(err)
 	}
 	if err := engine.Close(); err != nil {
@@ -1097,12 +1108,12 @@ func TestRestartResumesRoomQueuedDeliveryAndExpiresApproval(t *testing.T) {
 
 	reopened, adapters := newTestEngine(t, dir)
 	snapshot := reopened.Snapshot()
-	if input := receiveInput(t, adapters[model.ActorCodex]); input.MessageID != message.ID {
+	if input := receiveInput(t, adapters[model.ActorSlot2]); input.MessageID != message.ID {
 		t.Fatalf("restart did not resume the Room-owned FIFO entry: %#v", input)
 	}
-	waitForDeliveryState(t, reopened, message.ID, model.ActorCodex, model.DeliveryStarted)
-	reopened.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorCodex, Kind: model.RuntimeTurnCompleted, CorrelationID: message.ID, TurnID: "restored-first", Name: "completed", CreatedAt: time.Now().UTC()})
-	if input := receiveInput(t, adapters[model.ActorClaude]); input.MessageID != second.ID {
+	waitForDeliveryState(t, reopened, message.ID, model.ActorSlot2, model.DeliveryStarted)
+	reopened.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot2, Kind: model.RuntimeTurnCompleted, CorrelationID: message.ID, TurnID: "restored-first", Name: "completed", CreatedAt: time.Now().UTC()})
+	if input := receiveInput(t, adapters[model.ActorSlot1]); input.MessageID != second.ID {
 		t.Fatalf("restart changed Room FIFO order: %#v", input)
 	}
 	var restored *model.Approval
@@ -1128,10 +1139,10 @@ func TestRestartFailsUnknownNativeSubmissionWithoutReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	message := model.Message{
-		ID: model.NewID("msg"), From: model.ActorUser, To: []model.ActorID{model.ActorCodex},
+		ID: model.NewID("msg"), From: model.ActorUser, To: []model.ActorID{model.ActorSlot2},
 		Text: "ownership unknown", Intent: model.IntentSteer, ThreadID: model.NewID("thread"), CreatedAt: time.Now().UTC(),
-		Delivery:   map[model.ActorID]model.DeliveryState{model.ActorCodex: model.DeliverySubmitting},
-		Processing: map[model.ActorID]model.ProcessingState{model.ActorCodex: model.ProcessingWaiting},
+		Delivery:   map[model.ActorID]model.DeliveryState{model.ActorSlot2: model.DeliverySubmitting},
+		Processing: map[model.ActorID]model.ProcessingState{model.ActorSlot2: model.ProcessingWaiting},
 	}
 	if _, err := engine.record(EventMessageCreated, model.ActorUser, message); err != nil {
 		t.Fatal(err)
@@ -1142,14 +1153,14 @@ func TestRestartFailsUnknownNativeSubmissionWithoutReplay(t *testing.T) {
 
 	reopened, adapters := newTestEngine(t, dir)
 	got := findMessage(t, reopened.Snapshot(), message.ID)
-	if got.Delivery[model.ActorCodex] != model.DeliveryFailed || got.Processing[model.ActorCodex] != model.ProcessingFailed {
+	if got.Delivery[model.ActorSlot2] != model.DeliveryFailed || got.Processing[model.ActorSlot2] != model.ProcessingFailed {
 		t.Fatalf("unknown submission was not failed closed: %#v", got)
 	}
-	if !strings.Contains(got.ProcessingDetail[model.ActorCodex], "explicit retry") {
+	if !strings.Contains(got.ProcessingDetail[model.ActorSlot2], "explicit retry") {
 		t.Fatalf("unknown submission lacks retry guidance: %#v", got.ProcessingDetail)
 	}
 	select {
-	case input := <-adapters[model.ActorCodex].submissions:
+	case input := <-adapters[model.ActorSlot2].submissions:
 		t.Fatalf("unknown native submission was replayed: %#v", input)
 	case <-time.After(150 * time.Millisecond):
 	}
@@ -1182,27 +1193,27 @@ func waitForProcessingState(t *testing.T, engine *Engine, messageID string, targ
 
 func TestDeliveryFallbackDoesNotOverwriteNativeProcessingCorrelation(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
-	adapter := adapters[model.ActorCodex]
+	adapter := adapters[model.ActorSlot2]
 	adapter.beforeReturn = func(input model.AgentInput) {
 		adapter.sink(model.RuntimeEvent{
-			Agent: model.ActorCodex, Kind: model.RuntimeInputProcessing,
+			Agent: model.ActorSlot2, Kind: model.RuntimeInputProcessing,
 			CorrelationID: input.MessageID, TurnID: "turn-native", Text: "native runtime accepted input",
 			CreatedAt: time.Now().UTC(),
 		})
 	}
 
 	message, err := engine.Send(context.Background(), SendRequest{
-		Text: "inspect", To: []model.ActorID{model.ActorCodex},
+		Text: "inspect", To: []model.ActorID{model.ActorSlot2},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = receiveInput(t, adapter)
-	waitForDeliveryState(t, engine, message.ID, model.ActorCodex, model.DeliveryStarted)
-	waitForProcessingState(t, engine, message.ID, model.ActorCodex, model.ProcessingWorking)
+	waitForDeliveryState(t, engine, message.ID, model.ActorSlot2, model.DeliveryStarted)
+	waitForProcessingState(t, engine, message.ID, model.ActorSlot2, model.ProcessingWorking)
 
 	got := findMessage(t, engine.Snapshot(), message.ID)
-	if got.ProcessingDetail[model.ActorCodex] != "native runtime accepted input" || got.ProcessingTurn[model.ActorCodex] != "turn-native" {
+	if got.ProcessingDetail[model.ActorSlot2] != "native runtime accepted input" || got.ProcessingTurn[model.ActorSlot2] != "turn-native" {
 		t.Fatalf("delivery fallback overwrote native processing metadata: %#v", got)
 	}
 }
@@ -1210,31 +1221,31 @@ func TestDeliveryFallbackDoesNotOverwriteNativeProcessingCorrelation(t *testing.
 func TestRuntimeFailurePreservesAcceptedDeliveryAndMarksProcessingFailed(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	message, err := engine.Send(context.Background(), SendRequest{
-		Text: "inspect", To: []model.ActorID{model.ActorCodex},
+		Text: "inspect", To: []model.ActorID{model.ActorSlot2},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorCodex])
-	waitForDeliveryState(t, engine, message.ID, model.ActorCodex, model.DeliveryStarted)
+	_ = receiveInput(t, adapters[model.ActorSlot2])
+	waitForDeliveryState(t, engine, message.ID, model.ActorSlot2, model.DeliveryStarted)
 
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorCodex, Kind: model.RuntimeInputProcessing,
+		Agent: model.ActorSlot2, Kind: model.RuntimeInputProcessing,
 		CorrelationID: message.ID, TurnID: "turn-1", Text: "working",
 		CreatedAt: time.Now().UTC(),
 	})
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorCodex, Kind: model.RuntimeInputFailed,
+		Agent: model.ActorSlot2, Kind: model.RuntimeInputFailed,
 		CorrelationID: message.ID, TurnID: "turn-1", Text: "native turn failed",
 		CreatedAt: time.Now().UTC(),
 	})
 
-	waitForProcessingState(t, engine, message.ID, model.ActorCodex, model.ProcessingFailed)
+	waitForProcessingState(t, engine, message.ID, model.ActorSlot2, model.ProcessingFailed)
 	got := findMessage(t, engine.Snapshot(), message.ID)
-	if got.Delivery[model.ActorCodex] != model.DeliveryStarted {
+	if got.Delivery[model.ActorSlot2] != model.DeliveryStarted {
 		t.Fatalf("accepted delivery was overwritten by runtime failure: %#v", got.Delivery)
 	}
-	if got.ProcessingDetail[model.ActorCodex] != "native turn failed" || got.ProcessingTurn[model.ActorCodex] != "turn-1" {
+	if got.ProcessingDetail[model.ActorSlot2] != "native turn failed" || got.ProcessingTurn[model.ActorSlot2] != "turn-1" {
 		t.Fatalf("failure detail was not projected: %#v", got)
 	}
 }
@@ -1242,42 +1253,42 @@ func TestRuntimeFailurePreservesAcceptedDeliveryAndMarksProcessingFailed(t *test
 func TestRetryCreatesNewAuditableMessageForFailedTarget(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	original, err := engine.Send(context.Background(), SendRequest{
-		Text: "review", To: []model.ActorID{model.ActorCodex},
+		Text: "review", To: []model.ActorID{model.ActorSlot2},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorCodex])
-	waitForDeliveryState(t, engine, original.ID, model.ActorCodex, model.DeliveryStarted)
+	_ = receiveInput(t, adapters[model.ActorSlot2])
+	waitForDeliveryState(t, engine, original.ID, model.ActorSlot2, model.DeliveryStarted)
 
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorCodex, Kind: model.RuntimeInputFailed,
+		Agent: model.ActorSlot2, Kind: model.RuntimeInputFailed,
 		CorrelationID: original.ID, TurnID: "turn-failed", Text: "tool crashed",
 		CreatedAt: time.Now().UTC(),
 	})
-	waitForProcessingState(t, engine, original.ID, model.ActorCodex, model.ProcessingFailed)
+	waitForProcessingState(t, engine, original.ID, model.ActorSlot2, model.ProcessingFailed)
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorCodex, Kind: model.RuntimeTurnCompleted,
+		Agent: model.ActorSlot2, Kind: model.RuntimeTurnCompleted,
 		CorrelationID: original.ID, TurnID: "turn-failed", Name: "failed", CreatedAt: time.Now().UTC(),
 	})
 
-	retry, err := engine.Retry(context.Background(), original.ID, RetryRequest{To: []model.ActorID{model.ActorCodex}})
+	retry, err := engine.Retry(context.Background(), original.ID, RetryRequest{To: []model.ActorID{model.ActorSlot2}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if retry.ID == original.ID || retry.RetryOf != original.ID {
 		t.Fatalf("retry did not create an auditable child message: original=%#v retry=%#v", original, retry)
 	}
-	if retry.ThreadID != original.ThreadID || retry.Text != original.Text || len(retry.To) != 1 || retry.To[0] != model.ActorCodex {
+	if retry.ThreadID != original.ThreadID || retry.Text != original.Text || len(retry.To) != 1 || retry.To[0] != model.ActorSlot2 {
 		t.Fatalf("retry did not preserve conversation identity: %#v", retry)
 	}
-	input := receiveInput(t, adapters[model.ActorCodex])
+	input := receiveInput(t, adapters[model.ActorSlot2])
 	if input.MessageID != retry.ID {
 		t.Fatalf("runtime received original message ID instead of retry ID: %#v", input)
 	}
-	waitForDeliveryState(t, engine, retry.ID, model.ActorCodex, model.DeliveryStarted)
+	waitForDeliveryState(t, engine, retry.ID, model.ActorSlot2, model.DeliveryStarted)
 
-	if _, err := engine.Retry(context.Background(), original.ID, RetryRequest{To: []model.ActorID{model.ActorClaude}}); err == nil {
+	if _, err := engine.Retry(context.Background(), original.ID, RetryRequest{To: []model.ActorID{model.ActorSlot1}}); err == nil {
 		t.Fatal("successful/non-terminal Claude target should not be retryable")
 	}
 }
@@ -1287,25 +1298,25 @@ func TestRetryPreservesCompletePeerMessage(t *testing.T) {
 	now := time.Now().UTC()
 	text := strings.Repeat("full visible context ", 300) + "@codex challenge concurrency"
 	original := model.Message{
-		ID: model.NewID("msg"), From: model.ActorClaude, To: []model.ActorID{model.ActorCodex},
+		ID: model.NewID("msg"), From: model.ActorSlot1, To: []model.ActorID{model.ActorSlot2},
 		Text: text, ThreadID: model.NewID("thread"), Intent: model.IntentQueue, CreatedAt: now,
-		Delivery:   map[model.ActorID]model.DeliveryState{model.ActorCodex: model.DeliveryStarted},
-		Processing: map[model.ActorID]model.ProcessingState{model.ActorCodex: model.ProcessingFailed},
+		Delivery:   map[model.ActorID]model.DeliveryState{model.ActorSlot2: model.DeliveryStarted},
+		Processing: map[model.ActorID]model.ProcessingState{model.ActorSlot2: model.ProcessingFailed},
 	}
-	event, err := engine.record(EventMessageCreated, model.ActorClaude, original)
+	event, err := engine.record(EventMessageCreated, model.ActorSlot1, original)
 	if err != nil {
 		t.Fatal(err)
 	}
 	original.Seq = event.Seq
 
-	retry, err := engine.Retry(context.Background(), original.ID, RetryRequest{To: []model.ActorID{model.ActorCodex}})
+	retry, err := engine.Retry(context.Background(), original.ID, RetryRequest{To: []model.ActorID{model.ActorSlot2}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if retry.Text != original.Text || retry.Intent != model.IntentQueue {
 		t.Fatalf("retry lost the complete peer message: %#v", retry)
 	}
-	input := receiveInput(t, adapters[model.ActorCodex])
+	input := receiveInput(t, adapters[model.ActorSlot2])
 	if input.Text != original.Text {
 		t.Fatalf("retry changed peer delivery: %#v", input)
 	}
@@ -1315,19 +1326,19 @@ func TestRestartCancelsInFlightProcessing(t *testing.T) {
 	dir := t.TempDir()
 	engine, adapters := newTestEngine(t, dir)
 	message, err := engine.Send(context.Background(), SendRequest{
-		Text: "long-running", To: []model.ActorID{model.ActorClaude},
+		Text: "long-running", To: []model.ActorID{model.ActorSlot1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
-	waitForDeliveryState(t, engine, message.ID, model.ActorClaude, model.DeliveryStarted)
+	_ = receiveInput(t, adapters[model.ActorSlot1])
+	waitForDeliveryState(t, engine, message.ID, model.ActorSlot1, model.DeliveryStarted)
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeInputProcessing,
+		Agent: model.ActorSlot1, Kind: model.RuntimeInputProcessing,
 		CorrelationID: message.ID, TurnID: "turn-live", Text: "working",
 		CreatedAt: time.Now().UTC(),
 	})
-	waitForProcessingState(t, engine, message.ID, model.ActorClaude, model.ProcessingWorking)
+	waitForProcessingState(t, engine, message.ID, model.ActorSlot1, model.ProcessingWorking)
 	if err := engine.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -1345,13 +1356,13 @@ func TestRestartCancelsInFlightProcessing(t *testing.T) {
 	}
 	defer reopened.Close()
 	got := findMessage(t, reopened.Snapshot(), message.ID)
-	if got.Delivery[model.ActorClaude] != model.DeliveryStarted {
+	if got.Delivery[model.ActorSlot1] != model.DeliveryStarted {
 		t.Fatalf("restart must retain historical delivery acceptance: %#v", got.Delivery)
 	}
-	if got.Processing[model.ActorClaude] != model.ProcessingCancelled {
+	if got.Processing[model.ActorSlot1] != model.ProcessingCancelled {
 		t.Fatalf("restart left ghost working state: %#v", got.Processing)
 	}
-	if !strings.Contains(got.ProcessingDetail[model.ActorClaude], "restarted") {
+	if !strings.Contains(got.ProcessingDetail[model.ActorSlot1], "restarted") {
 		t.Fatalf("restart cancellation lacks a useful reason: %#v", got.ProcessingDetail)
 	}
 }
@@ -1364,20 +1375,20 @@ func TestRuntimeInfoProjectionIsDeepCloned(t *testing.T) {
 		Data: json.RawMessage(`{"source":"probe"}`), ProbedAt: time.Now().UTC(),
 	}
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeInfoUpdated, Runtime: &info,
+		Agent: model.ActorSlot1, Kind: model.RuntimeInfoUpdated, Runtime: &info,
 		CreatedAt: time.Now().UTC(),
 	})
 	first := engine.Snapshot()
-	participant := first.Participants[model.ActorClaude]
+	participant := first.Participants[model.ActorSlot1]
 	if participant.Runtime.Version != info.Version || len(participant.Runtime.Capabilities) != 1 {
 		t.Fatalf("runtime info was not projected: %#v", participant.Runtime)
 	}
 	participant.Runtime.Capabilities[0] = "mutated"
 	participant.Runtime.Warnings[0] = "mutated"
 	participant.Runtime.Data[0] = '['
-	first.Participants[model.ActorClaude] = participant
+	first.Participants[model.ActorSlot1] = participant
 
-	second := engine.Snapshot().Participants[model.ActorClaude].Runtime
+	second := engine.Snapshot().Participants[model.ActorSlot1].Runtime
 	if second.Capabilities[0] != "stream-json" || second.Warnings[0] != "test warning" || string(second.Data) != `{"source":"probe"}` {
 		t.Fatalf("snapshot leaked mutable runtime info: %#v", second)
 	}
@@ -1386,35 +1397,35 @@ func TestRuntimeInfoProjectionIsDeepCloned(t *testing.T) {
 func TestStopAgentCancelsInFlightMessagesAndExpiresApprovals(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	message, err := engine.Send(context.Background(), SendRequest{
-		Text: "keep working", To: []model.ActorID{model.ActorCodex},
+		Text: "keep working", To: []model.ActorID{model.ActorSlot2},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorCodex])
-	waitForDeliveryState(t, engine, message.ID, model.ActorCodex, model.DeliveryStarted)
+	_ = receiveInput(t, adapters[model.ActorSlot2])
+	waitForDeliveryState(t, engine, message.ID, model.ActorSlot2, model.DeliveryStarted)
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorCodex, Kind: model.RuntimeInputProcessing,
+		Agent: model.ActorSlot2, Kind: model.RuntimeInputProcessing,
 		CorrelationID: message.ID, TurnID: "turn-stop", Text: "working",
 		CreatedAt: time.Now().UTC(),
 	})
 	approval := model.Approval{
-		ID: model.NewID("approval"), Agent: model.ActorCodex, Kind: "command",
+		ID: model.NewID("approval"), Agent: model.ActorSlot2, Kind: "command",
 		Title: "run command", Status: "pending", RequestedAt: time.Now().UTC(),
 	}
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorCodex, Kind: model.RuntimeApprovalRequested,
+		Agent: model.ActorSlot2, Kind: model.RuntimeApprovalRequested,
 		Approval: &approval, CreatedAt: time.Now().UTC(),
 	})
 
-	if err := engine.StopAgent(context.Background(), model.ActorCodex); err != nil {
+	if err := engine.StopAgent(context.Background(), model.ActorSlot2); err != nil {
 		t.Fatal(err)
 	}
 	got := findMessage(t, engine.Snapshot(), message.ID)
-	if got.Processing[model.ActorCodex] != model.ProcessingCancelled {
+	if got.Processing[model.ActorSlot2] != model.ProcessingCancelled {
 		t.Fatalf("stop left an in-flight message unresolved: %#v", got.Processing)
 	}
-	if got.Delivery[model.ActorCodex] != model.DeliveryStarted {
+	if got.Delivery[model.ActorSlot2] != model.DeliveryStarted {
 		t.Fatalf("stop rewrote historical delivery state: %#v", got.Delivery)
 	}
 	var resolved *model.Approval
@@ -1432,22 +1443,22 @@ func TestStopAgentCancelsInFlightMessagesAndExpiresApprovals(t *testing.T) {
 
 func TestSubmitFailureSettlesDeliveryAndProcessing(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
-	adapters[model.ActorClaude].submitErr = errors.New("native input rejected")
+	adapters[model.ActorSlot1].submitErr = errors.New("native input rejected")
 
 	message, err := engine.Send(context.Background(), SendRequest{
-		Text: "inspect", To: []model.ActorID{model.ActorClaude},
+		Text: "inspect", To: []model.ActorID{model.ActorSlot1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitForDeliveryState(t, engine, message.ID, model.ActorClaude, model.DeliveryFailed)
-	waitForProcessingState(t, engine, message.ID, model.ActorClaude, model.ProcessingFailed)
+	waitForDeliveryState(t, engine, message.ID, model.ActorSlot1, model.DeliveryFailed)
+	waitForProcessingState(t, engine, message.ID, model.ActorSlot1, model.ProcessingFailed)
 
 	got := findMessage(t, engine.Snapshot(), message.ID)
-	if !strings.Contains(got.DeliveryDetail[model.ActorClaude], "native input rejected") {
+	if !strings.Contains(got.DeliveryDetail[model.ActorSlot1], "native input rejected") {
 		t.Fatalf("delivery failure detail was lost: %#v", got.DeliveryDetail)
 	}
-	if !strings.Contains(got.ProcessingDetail[model.ActorClaude], "did not accept") {
+	if !strings.Contains(got.ProcessingDetail[model.ActorSlot1], "did not accept") {
 		t.Fatalf("processing failure did not explain pre-execution rejection: %#v", got.ProcessingDetail)
 	}
 }
@@ -1516,7 +1527,7 @@ func TestSendCanonicalizesImagesAndResolvesPathsOnlyForAgentBoundary(t *testing.
 	}
 	engine, adapters := newAttachmentEngine(t, media)
 	message, err := engine.Send(context.Background(), SendRequest{
-		Text: "Review the image", To: []model.ActorID{model.ActorClaude},
+		Text: "Review the image", To: []model.ActorID{model.ActorSlot1},
 		Attachments: []model.Attachment{{ID: image.ID, Name: "forged-name.exe", Size: 999999}},
 	})
 	if err != nil {
@@ -1528,18 +1539,18 @@ func TestSendCanonicalizesImagesAndResolvesPathsOnlyForAgentBoundary(t *testing.
 	if encoded, _ := json.Marshal(message); strings.Contains(string(encoded), "/private/pairroom") {
 		t.Fatalf("host-local path leaked into durable transcript: %s", encoded)
 	}
-	input := receiveInput(t, adapters[model.ActorClaude])
+	input := receiveInput(t, adapters[model.ActorSlot1])
 	if len(input.Attachments) != 1 || input.Attachments[0].Path != "/private/pairroom/attachments/diagram.png" || input.Attachments[0].Name != "diagram.png" {
 		t.Fatalf("native adapter did not receive resolved image: %#v", input.Attachments)
 	}
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeFinal, CorrelationID: message.ID, TurnID: "image-relay",
+		Agent: model.ActorSlot1, Kind: model.RuntimeFinal, CorrelationID: message.ID, TurnID: "image-relay",
 		Text: "The image is relevant. @codex verify the visual evidence.", CreatedAt: time.Now().UTC(),
 	})
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, CorrelationID: message.ID, TurnID: "image-relay", Name: "completed", CreatedAt: time.Now().UTC(),
+		Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted, CorrelationID: message.ID, TurnID: "image-relay", Name: "completed", CreatedAt: time.Now().UTC(),
 	})
-	peerInput := receiveInput(t, adapters[model.ActorCodex])
+	peerInput := receiveInput(t, adapters[model.ActorSlot2])
 	if len(peerInput.Attachments) != 1 || peerInput.Attachments[0].ID != image.ID || peerInput.Attachments[0].Path != "/private/pairroom/attachments/diagram.png" {
 		t.Fatalf("peer relay lost the original attachment: %#v", peerInput.Attachments)
 	}
@@ -1552,20 +1563,20 @@ func TestAgentFinalImportsSafeImagePreviewIntoSharedRoom(t *testing.T) {
 	}
 	media := &fakeAttachmentStore{metadata: map[string]model.Attachment{}, paths: map[string]string{}, discovered: []model.Attachment{generated}}
 	engine, adapters := newAttachmentEngine(t, media)
-	incoming, err := engine.Send(context.Background(), SendRequest{Text: "Show the architecture", To: []model.ActorID{model.ActorClaude}})
+	incoming, err := engine.Send(context.Background(), SendRequest{Text: "Show the architecture", To: []model.ActorID{model.ActorSlot1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
+	_ = receiveInput(t, adapters[model.ActorSlot1])
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeFinal, CorrelationID: incoming.ID, TurnID: "turn-image",
+		Agent: model.ActorSlot1, Kind: model.RuntimeFinal, CorrelationID: incoming.ID, TurnID: "turn-image",
 		Text: "Rendered the result: ![architecture](docs/architecture.png)", CreatedAt: time.Now().UTC(),
 	})
 
 	snapshot := engine.Snapshot()
 	var response *model.Message
 	for i := range snapshot.Messages {
-		if snapshot.Messages[i].From == model.ActorClaude && snapshot.Messages[i].ReplyTo == incoming.ID {
+		if snapshot.Messages[i].From == model.ActorSlot1 && snapshot.Messages[i].ReplyTo == incoming.ID {
 			copy := snapshot.Messages[i]
 			response = &copy
 		}
@@ -1578,11 +1589,11 @@ func TestAgentFinalImportsSafeImagePreviewIntoSharedRoom(t *testing.T) {
 func TestRuntimeErrorDoesNotExpireConnectionLocalApprovalBeforeBoundary(t *testing.T) {
 	engine, _ := newTestEngine(t, "")
 	approval := model.Approval{
-		ID: model.NewID("approval"), Agent: model.ActorClaude, Kind: "claude.toolApproval",
+		ID: model.NewID("approval"), Agent: model.ActorSlot1, Kind: "claude.toolApproval",
 		Title: "Use Bash", Status: "pending", RequestedAt: time.Now().UTC(),
 	}
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeApprovalRequested, Approval: &approval, CreatedAt: time.Now().UTC()})
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeError, Text: "recoverable diagnostic", CreatedAt: time.Now().UTC()})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeApprovalRequested, Approval: &approval, CreatedAt: time.Now().UTC()})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeError, Text: "recoverable diagnostic", CreatedAt: time.Now().UTC()})
 	var got *model.Approval
 	for _, value := range engine.Snapshot().Approvals {
 		if value.ID == approval.ID {
@@ -1595,7 +1606,7 @@ func TestRuntimeErrorDoesNotExpireConnectionLocalApprovalBeforeBoundary(t *testi
 	}
 
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted,
+		Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted,
 		TurnID: "turn-with-approval", Name: "process_exited", CreatedAt: time.Now().UTC(),
 	})
 	got = nil
@@ -1613,29 +1624,29 @@ func TestRuntimeErrorDoesNotExpireConnectionLocalApprovalBeforeBoundary(t *testi
 func TestSteerAcceptedDoesNotInterruptActiveTurn(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	first, err := engine.Send(context.Background(), SendRequest{
-		Text: "old instruction", To: []model.ActorID{model.ActorCodex},
+		Text: "old instruction", To: []model.ActorID{model.ActorSlot2},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorCodex])
-	waitForProcessingState(t, engine, first.ID, model.ActorCodex, model.ProcessingWorking)
+	_ = receiveInput(t, adapters[model.ActorSlot2])
+	waitForProcessingState(t, engine, first.ID, model.ActorSlot2, model.ProcessingWorking)
 
 	replacement, err := engine.Send(context.Background(), SendRequest{
-		Text: "new instruction", To: []model.ActorID{model.ActorCodex}, Intent: model.IntentSteer,
+		Text: "new instruction", To: []model.ActorID{model.ActorSlot2}, Intent: model.IntentSteer,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := receiveInput(t, adapters[model.ActorCodex])
+	input := receiveInput(t, adapters[model.ActorSlot2])
 	if input.Intent != model.IntentSteer || input.MessageID != replacement.ID {
 		t.Fatalf("input intent = %q", input.Intent)
 	}
-	waitForDeliveryState(t, engine, replacement.ID, model.ActorCodex, model.DeliveryInjected)
-	waitForProcessingState(t, engine, first.ID, model.ActorCodex, model.ProcessingWorking)
-	adapters[model.ActorCodex].mu.Lock()
-	interrupts := adapters[model.ActorCodex].interrupts
-	adapters[model.ActorCodex].mu.Unlock()
+	waitForDeliveryState(t, engine, replacement.ID, model.ActorSlot2, model.DeliveryInjected)
+	waitForProcessingState(t, engine, first.ID, model.ActorSlot2, model.ProcessingWorking)
+	adapters[model.ActorSlot2].mu.Lock()
+	interrupts := adapters[model.ActorSlot2].interrupts
+	adapters[model.ActorSlot2].mu.Unlock()
 	if interrupts != 0 {
 		t.Fatalf("accepted steer interrupted the active turn %d times", interrupts)
 	}
@@ -1645,20 +1656,20 @@ func TestSteerUnavailableOrRejectedFallsBackToRoomFIFOExactlyOnce(t *testing.T) 
 	for _, state := range []agent.SteerState{agent.SteerUnavailable, agent.SteerRejected} {
 		t.Run(string(state), func(t *testing.T) {
 			engine, adapters := newTestEngine(t, "")
-			adapter := adapters[model.ActorCodex]
-			first, err := engine.Send(context.Background(), SendRequest{Text: "first", To: []model.ActorID{model.ActorCodex}})
+			adapter := adapters[model.ActorSlot2]
+			first, err := engine.Send(context.Background(), SendRequest{Text: "first", To: []model.ActorID{model.ActorSlot2}})
 			if err != nil {
 				t.Fatal(err)
 			}
 			_ = receiveInput(t, adapter)
-			waitForDeliveryState(t, engine, first.ID, model.ActorCodex, model.DeliveryStarted)
+			waitForDeliveryState(t, engine, first.ID, model.ActorSlot2, model.DeliveryStarted)
 
 			adapter.steerOutcome = agent.SteerOutcome{State: state, Detail: "fixture fallback"}
-			second, err := engine.Send(context.Background(), SendRequest{Text: "second", To: []model.ActorID{model.ActorCodex}})
+			second, err := engine.Send(context.Background(), SendRequest{Text: "second", To: []model.ActorID{model.ActorSlot2}})
 			if err != nil {
 				t.Fatal(err)
 			}
-			waitForDeliveryState(t, engine, second.ID, model.ActorCodex, model.DeliveryQueued)
+			waitForDeliveryState(t, engine, second.ID, model.ActorSlot2, model.DeliveryQueued)
 			select {
 			case input := <-adapter.submissions:
 				t.Fatalf("fallback entered the runtime before the turn boundary: %#v", input)
@@ -1666,14 +1677,14 @@ func TestSteerUnavailableOrRejectedFallsBackToRoomFIFOExactlyOnce(t *testing.T) 
 			}
 
 			engine.HandleRuntimeEvent(model.RuntimeEvent{
-				Agent: model.ActorCodex, Kind: model.RuntimeTurnCompleted,
+				Agent: model.ActorSlot2, Kind: model.RuntimeTurnCompleted,
 				CorrelationID: first.ID, TurnID: "first-turn", Name: "completed", CreatedAt: time.Now().UTC(),
 			})
 			input := receiveInput(t, adapter)
 			if input.MessageID != second.ID {
 				t.Fatalf("fallback started the wrong FIFO entry: %#v", input)
 			}
-			waitForDeliveryState(t, engine, second.ID, model.ActorCodex, model.DeliveryStarted)
+			waitForDeliveryState(t, engine, second.ID, model.ActorSlot2, model.DeliveryStarted)
 			select {
 			case duplicate := <-adapter.submissions:
 				t.Fatalf("fallback delivered the message more than once: %#v", duplicate)
@@ -1685,8 +1696,8 @@ func TestSteerUnavailableOrRejectedFallsBackToRoomFIFOExactlyOnce(t *testing.T) 
 
 func TestSteerFallbackRetainsDurableMessageFIFOWhenCallbackIsLate(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
-	codex := adapters[model.ActorCodex]
-	first, err := engine.Send(context.Background(), SendRequest{Text: "first", To: []model.ActorID{model.ActorCodex}})
+	codex := adapters[model.ActorSlot2]
+	first, err := engine.Send(context.Background(), SendRequest{Text: "first", To: []model.ActorID{model.ActorSlot2}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1696,7 +1707,7 @@ func TestSteerFallbackRetainsDurableMessageFIFOWhenCallbackIsLate(t *testing.T) 
 	codex.steerStarted = make(chan struct{})
 	codex.steerRelease = make(chan struct{})
 	codex.mu.Unlock()
-	second, err := engine.Send(context.Background(), SendRequest{Text: "second", To: []model.ActorID{model.ActorCodex}})
+	second, err := engine.Send(context.Background(), SendRequest{Text: "second", To: []model.ActorID{model.ActorSlot2}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1705,46 +1716,46 @@ func TestSteerFallbackRetainsDurableMessageFIFOWhenCallbackIsLate(t *testing.T) 
 	case <-time.After(time.Second):
 		t.Fatal("steer did not reach the adapter")
 	}
-	third, err := engine.Send(context.Background(), SendRequest{Text: "third", To: []model.ActorID{model.ActorClaude}})
+	third, err := engine.Send(context.Background(), SendRequest{Text: "third", To: []model.ActorID{model.ActorSlot1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitForDeliveryState(t, engine, third.ID, model.ActorClaude, model.DeliveryQueued)
+	waitForDeliveryState(t, engine, third.ID, model.ActorSlot1, model.DeliveryQueued)
 	close(codex.steerRelease)
-	waitForDeliveryState(t, engine, second.ID, model.ActorCodex, model.DeliveryQueued)
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorCodex, Kind: model.RuntimeTurnCompleted, TurnID: "first", CorrelationID: first.ID, Name: "completed", CreatedAt: time.Now().UTC()})
+	waitForDeliveryState(t, engine, second.ID, model.ActorSlot2, model.DeliveryQueued)
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot2, Kind: model.RuntimeTurnCompleted, TurnID: "first", CorrelationID: first.ID, Name: "completed", CreatedAt: time.Now().UTC()})
 	if input := receiveInput(t, codex); input.MessageID != second.ID {
 		t.Fatalf("late steer fallback let a later message overtake it: %#v", input)
 	}
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorCodex, Kind: model.RuntimeTurnCompleted, TurnID: "second", CorrelationID: second.ID, Name: "completed", CreatedAt: time.Now().UTC()})
-	if input := receiveInput(t, adapters[model.ActorClaude]); input.MessageID != third.ID {
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot2, Kind: model.RuntimeTurnCompleted, TurnID: "second", CorrelationID: second.ID, Name: "completed", CreatedAt: time.Now().UTC()})
+	if input := receiveInput(t, adapters[model.ActorSlot1]); input.MessageID != third.ID {
 		t.Fatalf("FIFO successor after fallback = %#v, want %s", input, third.ID)
 	}
 }
 
 func TestSteerUnknownFailsWithoutAutomaticReplay(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
-	adapter := adapters[model.ActorCodex]
-	first, err := engine.Send(context.Background(), SendRequest{Text: "first", To: []model.ActorID{model.ActorCodex}})
+	adapter := adapters[model.ActorSlot2]
+	first, err := engine.Send(context.Background(), SendRequest{Text: "first", To: []model.ActorID{model.ActorSlot2}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = receiveInput(t, adapter)
-	waitForDeliveryState(t, engine, first.ID, model.ActorCodex, model.DeliveryStarted)
+	waitForDeliveryState(t, engine, first.ID, model.ActorSlot2, model.DeliveryStarted)
 
 	adapter.steerOutcome = agent.SteerOutcome{State: agent.SteerUnknown, Detail: "connection lost after write"}
-	second, err := engine.Send(context.Background(), SendRequest{Text: "second", To: []model.ActorID{model.ActorCodex}})
+	second, err := engine.Send(context.Background(), SendRequest{Text: "second", To: []model.ActorID{model.ActorSlot2}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitForDeliveryState(t, engine, second.ID, model.ActorCodex, model.DeliveryFailed)
-	waitForProcessingState(t, engine, second.ID, model.ActorCodex, model.ProcessingFailed)
+	waitForDeliveryState(t, engine, second.ID, model.ActorSlot2, model.DeliveryFailed)
+	waitForProcessingState(t, engine, second.ID, model.ActorSlot2, model.ProcessingFailed)
 	got := findMessage(t, engine.Snapshot(), second.ID)
-	if !strings.Contains(got.ProcessingDetail[model.ActorCodex], "explicit retry") {
+	if !strings.Contains(got.ProcessingDetail[model.ActorSlot2], "explicit retry") {
 		t.Fatalf("unknown steer lacks explicit retry guidance: %#v", got.ProcessingDetail)
 	}
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorCodex, Kind: model.RuntimeTurnCompleted,
+		Agent: model.ActorSlot2, Kind: model.RuntimeTurnCompleted,
 		CorrelationID: first.ID, TurnID: "first-turn", Name: "completed", CreatedAt: time.Now().UTC(),
 	})
 	select {
@@ -1756,43 +1767,43 @@ func TestSteerUnknownFailsWithoutAutomaticReplay(t *testing.T) {
 
 func TestCancelActiveMessagePreservesRoomQueuedTurn(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
-	first, err := engine.Send(context.Background(), SendRequest{Text: "one", To: []model.ActorID{model.ActorClaude}})
+	first, err := engine.Send(context.Background(), SendRequest{Text: "one", To: []model.ActorID{model.ActorSlot1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := engine.Send(context.Background(), SendRequest{Text: "two", To: []model.ActorID{model.ActorClaude}, Intent: model.IntentQueue})
+	second, err := engine.Send(context.Background(), SendRequest{Text: "two", To: []model.ActorID{model.ActorSlot1}, Intent: model.IntentQueue})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
-	waitForProcessingState(t, engine, first.ID, model.ActorClaude, model.ProcessingWorking)
-	waitForProcessingState(t, engine, second.ID, model.ActorClaude, model.ProcessingWaiting)
-	adapters[model.ActorClaude].mu.Lock()
-	adapters[model.ActorClaude].onInterrupt = func() {
+	_ = receiveInput(t, adapters[model.ActorSlot1])
+	waitForProcessingState(t, engine, first.ID, model.ActorSlot1, model.ProcessingWorking)
+	waitForProcessingState(t, engine, second.ID, model.ActorSlot1, model.ProcessingWaiting)
+	adapters[model.ActorSlot1].mu.Lock()
+	adapters[model.ActorSlot1].onInterrupt = func() {
 		engine.HandleRuntimeEvent(model.RuntimeEvent{
-			Agent: model.ActorClaude, Kind: model.RuntimeInputCancelled,
+			Agent: model.ActorSlot1, Kind: model.RuntimeInputCancelled,
 			TurnID: "cancelled-turn", CorrelationID: first.ID, Text: "interrupted by user", CreatedAt: time.Now().UTC(),
 		})
 		engine.HandleRuntimeEvent(model.RuntimeEvent{
-			Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted,
+			Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted,
 			TurnID: "cancelled-turn", CorrelationID: first.ID, Name: "cancelled", CreatedAt: time.Now().UTC(),
 		})
 		// Give an incorrectly unlocked scheduler enough time to submit the next
 		// FIFO item before Interrupt returns and exposes the cancellation race.
 		time.Sleep(50 * time.Millisecond)
 	}
-	adapters[model.ActorClaude].mu.Unlock()
-	if err := engine.CancelMessage(context.Background(), first.ID, model.ActorClaude); err != nil {
+	adapters[model.ActorSlot1].mu.Unlock()
+	if err := engine.CancelMessage(context.Background(), first.ID, model.ActorSlot1); err != nil {
 		t.Fatal(err)
 	}
-	waitForProcessingState(t, engine, first.ID, model.ActorClaude, model.ProcessingCancelled)
-	if got := receiveInput(t, adapters[model.ActorClaude]); got.MessageID != second.ID {
+	waitForProcessingState(t, engine, first.ID, model.ActorSlot1, model.ProcessingCancelled)
+	if got := receiveInput(t, adapters[model.ActorSlot1]); got.MessageID != second.ID {
 		t.Fatalf("preserved next turn did not start after cancellation boundary: %#v", got)
 	}
-	waitForProcessingState(t, engine, second.ID, model.ActorClaude, model.ProcessingWorking)
-	adapters[model.ActorClaude].mu.Lock()
-	interrupts := adapters[model.ActorClaude].interrupts
-	adapters[model.ActorClaude].mu.Unlock()
+	waitForProcessingState(t, engine, second.ID, model.ActorSlot1, model.ProcessingWorking)
+	adapters[model.ActorSlot1].mu.Lock()
+	interrupts := adapters[model.ActorSlot1].interrupts
+	adapters[model.ActorSlot1].mu.Unlock()
 	if interrupts != 1 {
 		t.Fatalf("active native turn interrupts = %d, want 1", interrupts)
 	}
@@ -1802,37 +1813,37 @@ func TestCancelReservedPendingDeliveryPreventsNativeSubmission(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	now := time.Now().UTC()
 	message := model.Message{
-		ID: model.NewID("msg"), From: model.ActorUser, To: []model.ActorID{model.ActorClaude},
+		ID: model.NewID("msg"), From: model.ActorUser, To: []model.ActorID{model.ActorSlot1},
 		Text: "reserved but not submitted", ThreadID: model.NewID("thread"), CreatedAt: now,
-		Delivery:                map[model.ActorID]model.DeliveryState{model.ActorClaude: model.DeliveryPending},
-		Processing:              map[model.ActorID]model.ProcessingState{model.ActorClaude: model.ProcessingWaiting},
-		ProcessingLastUpdatedAt: map[model.ActorID]time.Time{model.ActorClaude: now},
+		Delivery:                map[model.ActorID]model.DeliveryState{model.ActorSlot1: model.DeliveryPending},
+		Processing:              map[model.ActorID]model.ProcessingState{model.ActorSlot1: model.ProcessingWaiting},
+		ProcessingLastUpdatedAt: map[model.ActorID]time.Time{model.ActorSlot1: now},
 	}
 	if _, err := engine.record(EventMessageCreated, model.ActorUser, message); err != nil {
 		t.Fatal(err)
 	}
 	engine.turnMu.Lock()
-	engine.turnOwner = model.ActorClaude
+	engine.turnOwner = model.ActorSlot1
 	engine.turnSubmitting = 1
 	engine.turnBoundarySeen = false
 	engine.turnMu.Unlock()
 
-	if err := engine.CancelMessage(context.Background(), message.ID, model.ActorClaude); err != nil {
+	if err := engine.CancelMessage(context.Background(), message.ID, model.ActorSlot1); err != nil {
 		t.Fatal(err)
 	}
 	got := findMessage(t, engine.Snapshot(), message.ID)
-	if got.Delivery[model.ActorClaude] != model.DeliverySkipped || got.Processing[model.ActorClaude] != model.ProcessingCancelled {
-		t.Fatalf("reserved pending cancellation = delivery %q processing %q", got.Delivery[model.ActorClaude], got.Processing[model.ActorClaude])
+	if got.Delivery[model.ActorSlot1] != model.DeliverySkipped || got.Processing[model.ActorSlot1] != model.ProcessingCancelled {
+		t.Fatalf("reserved pending cancellation = delivery %q processing %q", got.Delivery[model.ActorSlot1], got.Processing[model.ActorSlot1])
 	}
-	engine.runScheduledDelivery(context.Background(), message, model.ActorClaude, false)
+	engine.runScheduledDelivery(context.Background(), message, model.ActorSlot1, false)
 	select {
-	case submitted := <-adapters[model.ActorClaude].submissions:
+	case submitted := <-adapters[model.ActorSlot1].submissions:
 		t.Fatalf("cancelled reserved delivery reached native adapter: %#v", submitted)
 	case <-time.After(100 * time.Millisecond):
 	}
-	adapters[model.ActorClaude].mu.Lock()
-	interrupts := adapters[model.ActorClaude].interrupts
-	adapters[model.ActorClaude].mu.Unlock()
+	adapters[model.ActorSlot1].mu.Lock()
+	interrupts := adapters[model.ActorSlot1].interrupts
+	adapters[model.ActorSlot1].mu.Unlock()
 	if interrupts != 0 {
 		t.Fatalf("reserved pending cancellation interrupted runtime %d times", interrupts)
 	}
@@ -1840,38 +1851,38 @@ func TestCancelReservedPendingDeliveryPreventsNativeSubmission(t *testing.T) {
 
 func TestCancelRoomQueuedPeerMessageDoesNotInterruptRuntime(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
-	first, err := engine.Send(context.Background(), SendRequest{Text: "one", To: []model.ActorID{model.ActorClaude}})
+	first, err := engine.Send(context.Background(), SendRequest{Text: "one", To: []model.ActorID{model.ActorSlot1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
-	queued, err := engine.Send(context.Background(), SendRequest{Text: "peer follow-up", To: []model.ActorID{model.ActorCodex}})
+	_ = receiveInput(t, adapters[model.ActorSlot1])
+	queued, err := engine.Send(context.Background(), SendRequest{Text: "peer follow-up", To: []model.ActorID{model.ActorSlot2}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitForProcessingState(t, engine, queued.ID, model.ActorCodex, model.ProcessingWaiting)
+	waitForProcessingState(t, engine, queued.ID, model.ActorSlot2, model.ProcessingWaiting)
 
-	if err := engine.CancelMessage(context.Background(), queued.ID, model.ActorCodex); err != nil {
+	if err := engine.CancelMessage(context.Background(), queued.ID, model.ActorSlot2); err != nil {
 		t.Fatal(err)
 	}
-	waitForProcessingState(t, engine, queued.ID, model.ActorCodex, model.ProcessingCancelled)
+	waitForProcessingState(t, engine, queued.ID, model.ActorSlot2, model.ProcessingCancelled)
 	got := findMessage(t, engine.Snapshot(), queued.ID)
-	if got.Delivery[model.ActorCodex] != model.DeliverySkipped {
-		t.Fatalf("Room-queued cancellation delivery = %q, want skipped", got.Delivery[model.ActorCodex])
+	if got.Delivery[model.ActorSlot2] != model.DeliverySkipped {
+		t.Fatalf("Room-queued cancellation delivery = %q, want skipped", got.Delivery[model.ActorSlot2])
 	}
-	adapters[model.ActorCodex].mu.Lock()
-	interrupts := adapters[model.ActorCodex].interrupts
-	adapters[model.ActorCodex].mu.Unlock()
+	adapters[model.ActorSlot2].mu.Lock()
+	interrupts := adapters[model.ActorSlot2].interrupts
+	adapters[model.ActorSlot2].mu.Unlock()
 	if interrupts != 0 {
 		t.Fatalf("cancelling Room queue interrupted Codex %d times", interrupts)
 	}
 
 	engine.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted,
+		Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted,
 		TurnID: "first-turn", CorrelationID: first.ID, Name: "completed", CreatedAt: time.Now().UTC(),
 	})
 	select {
-	case submitted := <-adapters[model.ActorCodex].submissions:
+	case submitted := <-adapters[model.ActorSlot2].submissions:
 		t.Fatalf("cancelled Room-queued peer message was submitted: %#v", submitted)
 	case <-time.After(100 * time.Millisecond):
 	}
@@ -1881,23 +1892,23 @@ func TestTurnSummaryPersistsAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
 	engine, adapters := newTestEngine(t, dir)
 	message, err := engine.Send(context.Background(), SendRequest{
-		Text: "inspect and verify", To: []model.ActorID{model.ActorClaude},
+		Text: "inspect and verify", To: []model.ActorID{model.ActorSlot1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = receiveInput(t, adapters[model.ActorClaude])
+	_ = receiveInput(t, adapters[model.ActorSlot1])
 	started := time.Now().UTC().Add(-2 * time.Second)
 	events := []model.RuntimeEvent{
-		{Agent: model.ActorClaude, Kind: model.RuntimeTurnStarted, TurnID: "turn-summary", SessionID: "session-summary", CorrelationID: message.ID, CreatedAt: started},
-		{Agent: model.ActorClaude, Kind: model.RuntimeToolStarted, TurnID: "turn-summary", CorrelationID: message.ID, ItemID: "tool-1", Name: "Read", Text: "README.md", CreatedAt: started.Add(100 * time.Millisecond)},
-		{Agent: model.ActorClaude, Kind: model.RuntimeCommandOutput, TurnID: "turn-summary", CorrelationID: message.ID, ItemID: "tool-1", Text: "line one\nline two\n", CreatedAt: started.Add(200 * time.Millisecond)},
-		{Agent: model.ActorClaude, Kind: model.RuntimeToolCompleted, TurnID: "turn-summary", CorrelationID: message.ID, ItemID: "tool-1", Name: "Read", Text: "completed", CreatedAt: started.Add(300 * time.Millisecond)},
-		{Agent: model.ActorClaude, Kind: model.RuntimePlanUpdated, TurnID: "turn-summary", CorrelationID: message.ID, Text: "1. Inspect\n2. Verify", CreatedAt: started.Add(400 * time.Millisecond)},
-		{Agent: model.ActorClaude, Kind: model.RuntimeDiffUpdated, TurnID: "turn-summary", CorrelationID: message.ID, Text: "diff --git a/a b/a", CreatedAt: started.Add(500 * time.Millisecond)},
-		{Agent: model.ActorClaude, Kind: model.RuntimeUsageUpdated, TurnID: "turn-summary", CorrelationID: message.ID, Data: json.RawMessage(`{"input_tokens":12,"output_tokens":7}`), CreatedAt: started.Add(600 * time.Millisecond)},
-		{Agent: model.ActorClaude, Kind: model.RuntimeFinal, TurnID: "turn-summary", CorrelationID: message.ID, Text: "Verified successfully.", CreatedAt: started.Add(700 * time.Millisecond)},
-		{Agent: model.ActorClaude, Kind: model.RuntimeTurnCompleted, TurnID: "turn-summary", CorrelationID: message.ID, Name: "completed", CreatedAt: started.Add(2 * time.Second)},
+		{Agent: model.ActorSlot1, Kind: model.RuntimeTurnStarted, TurnID: "turn-summary", SessionID: "session-summary", CorrelationID: message.ID, CreatedAt: started},
+		{Agent: model.ActorSlot1, Kind: model.RuntimeToolStarted, TurnID: "turn-summary", CorrelationID: message.ID, ItemID: "tool-1", Name: "Read", Text: "README.md", CreatedAt: started.Add(100 * time.Millisecond)},
+		{Agent: model.ActorSlot1, Kind: model.RuntimeCommandOutput, TurnID: "turn-summary", CorrelationID: message.ID, ItemID: "tool-1", Text: "line one\nline two\n", CreatedAt: started.Add(200 * time.Millisecond)},
+		{Agent: model.ActorSlot1, Kind: model.RuntimeToolCompleted, TurnID: "turn-summary", CorrelationID: message.ID, ItemID: "tool-1", Name: "Read", Text: "completed", CreatedAt: started.Add(300 * time.Millisecond)},
+		{Agent: model.ActorSlot1, Kind: model.RuntimePlanUpdated, TurnID: "turn-summary", CorrelationID: message.ID, Text: "1. Inspect\n2. Verify", CreatedAt: started.Add(400 * time.Millisecond)},
+		{Agent: model.ActorSlot1, Kind: model.RuntimeDiffUpdated, TurnID: "turn-summary", CorrelationID: message.ID, Text: "diff --git a/a b/a", CreatedAt: started.Add(500 * time.Millisecond)},
+		{Agent: model.ActorSlot1, Kind: model.RuntimeUsageUpdated, TurnID: "turn-summary", CorrelationID: message.ID, Data: json.RawMessage(`{"input_tokens":12,"output_tokens":7}`), CreatedAt: started.Add(600 * time.Millisecond)},
+		{Agent: model.ActorSlot1, Kind: model.RuntimeFinal, TurnID: "turn-summary", CorrelationID: message.ID, Text: "Verified successfully.", CreatedAt: started.Add(700 * time.Millisecond)},
+		{Agent: model.ActorSlot1, Kind: model.RuntimeTurnCompleted, TurnID: "turn-summary", CorrelationID: message.ID, Name: "completed", CreatedAt: started.Add(2 * time.Second)},
 	}
 	for _, event := range events {
 		engine.HandleRuntimeEvent(event)
@@ -1909,7 +1920,7 @@ func TestTurnSummaryPersistsAcrossRestart(t *testing.T) {
 			t.Fatalf("turn summaries = %d, want 1: %#v", len(snapshot.Turns), snapshot.Turns)
 		}
 		got := snapshot.Turns[0]
-		if got.TurnID != "turn-summary" || got.Agent != model.ActorClaude || got.SessionID != "session-summary" {
+		if got.TurnID != "turn-summary" || got.Agent != model.ActorSlot1 || got.SessionID != "session-summary" {
 			t.Fatalf("unexpected summary identity: %#v", got)
 		}
 		if got.Status != "completed" || got.DurationMillis != 2000 || got.CompletedAt == nil {
@@ -1948,10 +1959,10 @@ func TestTurnSummaryPersistsAcrossRestart(t *testing.T) {
 func TestTurnSummaryBoundsHighVolumeDetail(t *testing.T) {
 	engine, _ := newTestEngine(t, "")
 	started := time.Now().UTC()
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorCodex, Kind: model.RuntimeTurnStarted, TurnID: "bounded", CreatedAt: started})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot2, Kind: model.RuntimeTurnStarted, TurnID: "bounded", CreatedAt: started})
 	payload := strings.Repeat("x", 20<<10)
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorCodex, Kind: model.RuntimeCommandOutput, TurnID: "bounded", ItemID: "command", Text: payload, CreatedAt: started.Add(time.Second)})
-	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorCodex, Kind: model.RuntimeTurnCompleted, TurnID: "bounded", CreatedAt: started.Add(2 * time.Second)})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot2, Kind: model.RuntimeCommandOutput, TurnID: "bounded", ItemID: "command", Text: payload, CreatedAt: started.Add(time.Second)})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot2, Kind: model.RuntimeTurnCompleted, TurnID: "bounded", CreatedAt: started.Add(2 * time.Second)})
 	got := engine.Snapshot().Turns[0]
 	if len(got.Items) != 1 || len(got.Items[0].Detail) > (12<<10)+3 || !strings.HasPrefix(got.Items[0].Detail, "…") {
 		t.Fatalf("command output was not bounded: %d %#v", len(got.Items[0].Detail), got.Items)
@@ -1962,12 +1973,12 @@ func TestWindowedSnapshotAndMessagesPage(t *testing.T) {
 	engine, adapters := newTestEngine(t, "")
 	for i := 0; i < 12; i++ {
 		message, err := engine.Send(context.Background(), SendRequest{
-			Text: fmt.Sprintf("message-%02d", i), To: []model.ActorID{model.ActorClaude},
+			Text: fmt.Sprintf("message-%02d", i), To: []model.ActorID{model.ActorSlot1},
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		input := receiveInput(t, adapters[model.ActorClaude])
+		input := receiveInput(t, adapters[model.ActorSlot1])
 		if input.MessageID != message.ID {
 			t.Fatalf("submission %d correlated to %q, want %q", i, input.MessageID, message.ID)
 		}
@@ -2035,7 +2046,7 @@ func TestServiceMetadataEventsProjectIntoRestoredRoom(t *testing.T) {
 		}
 	}
 	appendEvent(eventServiceRoomRenamed, serviceRoomRenamedProjection{Name: "After rename"})
-	for actor, session := range map[model.ActorID]string{model.ActorClaude: "claude-service-session", model.ActorCodex: "codex-service-thread"} {
+	for actor, session := range map[model.ActorID]string{model.ActorSlot1: "claude-service-session", model.ActorSlot2: "codex-service-thread"} {
 		appendEvent(eventServiceBindingMaterialized, serviceBindingMaterializedProjection{Binding: serviceBindingProjection{Agent: actor, SessionID: session}})
 	}
 	if err := appendStore.Close(); err != nil {
@@ -2058,10 +2069,10 @@ func TestServiceMetadataEventsProjectIntoRestoredRoom(t *testing.T) {
 	if snapshot.Meta.Name != "After rename" {
 		t.Fatalf("restored Room name=%q", snapshot.Meta.Name)
 	}
-	if got := snapshot.Participants[model.ActorClaude].SessionID; got != "claude-service-session" {
+	if got := snapshot.Participants[model.ActorSlot1].SessionID; got != "claude-service-session" {
 		t.Fatalf("restored Claude session=%q", got)
 	}
-	if got := snapshot.Participants[model.ActorCodex].SessionID; got != "codex-service-thread" {
+	if got := snapshot.Participants[model.ActorSlot2].SessionID; got != "codex-service-thread" {
 		t.Fatalf("restored Codex thread=%q", got)
 	}
 }
@@ -2081,11 +2092,11 @@ func TestStrictServiceBindingOverridesStaleParticipantSessionAtAdapterBoundary(t
 		t.Fatal(err)
 	}
 	seed.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeSession,
+		Agent: model.ActorSlot1, Kind: model.RuntimeSession,
 		SessionID: "stale-projection-claude", CreatedAt: time.Now().UTC(),
 	})
 	seed.HandleRuntimeEvent(model.RuntimeEvent{
-		Agent: model.ActorCodex, Kind: model.RuntimeSession,
+		Agent: model.ActorSlot2, Kind: model.RuntimeSession,
 		SessionID: "stale-projection-codex", CreatedAt: time.Now().UTC(),
 	})
 	if err := seed.Close(); err != nil && !errors.Is(err, context.Canceled) {
@@ -2119,10 +2130,10 @@ func TestStrictServiceBindingOverridesStaleParticipantSessionAtAdapterBoundary(t
 	if err := engine.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := adapters[model.ActorClaude].SessionID(); got != "durable-service-claude" {
+	if got := adapters[model.ActorSlot1].SessionID(); got != "durable-service-claude" {
 		t.Fatalf("Claude adapter session=%q", got)
 	}
-	if got := adapters[model.ActorCodex].SessionID(); got != "durable-service-codex" {
+	if got := adapters[model.ActorSlot2].SessionID(); got != "durable-service-codex" {
 		t.Fatalf("Codex adapter session=%q", got)
 	}
 }
@@ -2137,8 +2148,8 @@ func TestStrictEmptyBindingStartsFreshInsteadOfRestoringStaleParticipantSession(
 	if err != nil {
 		t.Fatal(err)
 	}
-	seed.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorClaude, Kind: model.RuntimeSession, SessionID: "stale-unmaterialized-claude", CreatedAt: time.Now().UTC()})
-	seed.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorCodex, Kind: model.RuntimeSession, SessionID: "stale-unmaterialized-codex", CreatedAt: time.Now().UTC()})
+	seed.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeSession, SessionID: "stale-unmaterialized-claude", CreatedAt: time.Now().UTC()})
+	seed.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot2, Kind: model.RuntimeSession, SessionID: "stale-unmaterialized-codex", CreatedAt: time.Now().UTC()})
 	if err := seed.Close(); err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
@@ -2165,7 +2176,7 @@ func TestStrictEmptyBindingStartsFreshInsteadOfRestoringStaleParticipantSession(
 	if err := engine.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 		if got := configs[actor].SessionID; got != "" {
 			t.Fatalf("%s restored stale unmaterialized session %q", actor, got)
 		}
@@ -2203,12 +2214,12 @@ func TestAcceptedInputMaterializesFreshNativeSession(t *testing.T) {
 	if err := engine.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Send(context.Background(), SendRequest{Text: "materialize", To: []model.ActorID{model.ActorClaude}}); err != nil {
+	if _, err := engine.Send(context.Background(), SendRequest{Text: "materialize", To: []model.ActorID{model.ActorSlot1}}); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case got := <-materialized:
-		if got.actor != model.ActorClaude || got.sessionID != "fake-claude" {
+		if got.actor != model.ActorSlot1 || got.sessionID != "fake-slot1" {
 			t.Fatalf("materialized=%#v", got)
 		}
 	case <-time.After(2 * time.Second):
@@ -2230,9 +2241,9 @@ func TestEngineCloseReportsAllResourceErrors(t *testing.T) {
 			sessionID: cfg.SessionID, submissions: make(chan model.AgentInput, 1),
 		}
 		switch cfg.Actor {
-		case model.ActorClaude:
+		case model.ActorSlot1:
 			adapter.stopErr = stopClaude
-		case model.ActorCodex:
+		case model.ActorSlot2:
 			adapter.stopErr = stopCodex
 		}
 		adapters[cfg.Actor] = adapter

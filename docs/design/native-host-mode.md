@@ -1,7 +1,7 @@
 # Native host mode
 
 Status: implemented, experimental. Current contracts live in
-[Architecture](../ARCHITECTURE.md), [Protocol](../PROTOCOL.md#native-host-protocol-v7)
+[Architecture](../ARCHITECTURE.md), [Protocol](../PROTOCOL.md#native-host-protocol-v8)
 and [Storage](../STORAGE.md#native-relay-state). User setup is documented in
 [Native setup and usage](../NATIVE_RELAY.md).
 
@@ -63,9 +63,7 @@ concurrent resume injection or scheduled idle self-wake is introduced.
 
 Bind-to-send/wait/exchange, global ownership, replacement/unbind, visible hook
 identity mismatch, pre-creation failures, FIFO/ack/restart recovery and skill
-projection freshness require regressions. Embedded protocol v6, its prompt
-budget, Go 1.25 and the approved dependency closure remain unchanged. Native
-uses protocol v7; Registry checkpoint schema 2 stays unchanged.
+projection freshness require regressions. Embedded protocol v7 and native protocol v8, their prompt budgets, Go 1.25 and the approved dependency closure remain current. Registry checkpoint schema 3 has strict canonical slot keys and retains host mode.
 
 Mock and synthetic hook/HTTP/SSE/browser results must be labeled separately.
 Real authenticated Claude Code/Codex/Grok multi-round acceptance remains an unmet

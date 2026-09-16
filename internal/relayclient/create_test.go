@@ -37,11 +37,11 @@ func createBindFixture(t *testing.T, own model.RuntimeKind) (string, string, *in
 	}
 	created := 0
 	mux := http.NewServeMux()
-	serveDefaultPairForTest(mux, map[model.ActorID]model.AgentSelection{model.ActorClaude: {Runtime: own}, model.ActorCodex: {Runtime: model.RuntimeCodex}})
+	serveDefaultPairForTest(mux, map[model.ActorID]model.AgentSelection{model.ActorSlot1: {Runtime: own}, model.ActorSlot2: {Runtime: model.RuntimeCodex}})
 	mux.HandleFunc("GET /api/v1/service", func(w http.ResponseWriter, r *http.Request) {
 		rooms := []any{}
 		for i := 1; i <= created; i++ {
-			rooms = append(rooms, map[string]any{"id": fmt.Sprintf("room%d", i), "project_id": "project", "host_mode": "native", "lifecycle": "active", "agents": map[model.ActorID]model.AgentSelection{model.ActorClaude: {Runtime: own}, model.ActorCodex: {Runtime: model.RuntimeCodex}}})
+			rooms = append(rooms, map[string]any{"id": fmt.Sprintf("room%d", i), "project_id": "project", "host_mode": "native", "lifecycle": "active", "agents": map[model.ActorID]model.AgentSelection{model.ActorSlot1: {Runtime: own}, model.ActorSlot2: {Runtime: model.RuntimeCodex}}})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"projects": []any{map[string]string{"id": "project", "root": root}}, "rooms": rooms})
 	})
@@ -49,13 +49,13 @@ func createBindFixture(t *testing.T, own model.RuntimeKind) (string, string, *in
 		created++
 		_ = json.NewEncoder(w).Encode(map[string]string{"id": fmt.Sprintf("room%d", created)})
 	})
-	mux.HandleFunc("POST /api/v1/rooms/room1/native-bindings/claude", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/v1/rooms/room1/native-bindings/slot1", func(w http.ResponseWriter, r *http.Request) {
 		var request relay.BindRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: request.BindID, Generation: 1, Slot: model.ActorClaude, Active: true, SessionID: request.SessionID}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: request.BindID, Generation: 1, Slot: model.ActorSlot1, Active: true, SessionID: request.SessionID}})
 	})
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
@@ -174,7 +174,7 @@ func TestCreateNativeRoomRegistersMissingProject(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	id, err := createNativeRoom(context.Background(), relay.Endpoint{URL: srv.URL, Token: "token"}, "/ws", options{name: "Discuss", kind: "codex", peer: "claude"}, model.ActorCodex)
+	id, err := createNativeRoom(context.Background(), relay.Endpoint{URL: srv.URL, Token: "token"}, "/ws", options{name: "Discuss", kind: "codex", peer: "claude"}, model.ActorSlot2)
 	if err != nil {
 		t.Fatalf("createNativeRoom: %v", err)
 	}
@@ -191,8 +191,8 @@ func TestCreateNativeRoomRegistersMissingProject(t *testing.T) {
 	if !ok {
 		t.Fatalf("agents missing: %v", roomRequest)
 	}
-	codex, _ := agents["codex"].(map[string]any)
-	claude, _ := agents["claude"].(map[string]any)
+	codex, _ := agents["slot2"].(map[string]any)
+	claude, _ := agents["slot1"].(map[string]any)
 	if codex["runtime"] != "codex" || claude["runtime"] != "claude" {
 		t.Fatalf("agents = %v", agents)
 	}
@@ -221,7 +221,7 @@ func TestCreateNativeRoomReusesRegisteredProjectWithServerDefaults(t *testing.T)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	id, err := createNativeRoom(context.Background(), relay.Endpoint{URL: srv.URL, Token: "token"}, "/ws", options{}, model.ActorClaude)
+	id, err := createNativeRoom(context.Background(), relay.Endpoint{URL: srv.URL, Token: "token"}, "/ws", options{}, model.ActorSlot1)
 	if err != nil {
 		t.Fatalf("createNativeRoom: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestCreateNativeRoomReusesRegisteredProjectWithServerDefaults(t *testing.T)
 }
 
 func TestCreateNativeRoomRejectsUnsupportedRuntimeBeforeAnyRequest(t *testing.T) {
-	_, err := createNativeRoom(context.Background(), relay.Endpoint{URL: "http://127.0.0.1:0"}, "/ws", options{peer: "unsupported"}, model.ActorClaude)
+	_, err := createNativeRoom(context.Background(), relay.Endpoint{URL: "http://127.0.0.1:0"}, "/ws", options{peer: "unsupported"}, model.ActorSlot1)
 	if err == nil || !strings.Contains(err.Error(), "claude, codex or grok") {
 		t.Fatalf("err = %v", err)
 	}

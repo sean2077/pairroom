@@ -33,7 +33,7 @@ func TestNativeBootstrapBudgetAndBoundaries(t *testing.T) {
 }
 
 func TestGrokNativeBootstrapExplainsForegroundDelivery(t *testing.T) {
-	text := NativeBootstrap(model.ActorClaude, model.RuntimeGrok, model.RuntimeGrok)
+	text := NativeBootstrap(model.ActorSlot1, model.RuntimeGrok, model.RuntimeGrok)
 	for _, wanted := range []string{"@grok0", "@grok1", "clips hook text", "relay wait", "relay send/exchange"} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("missing Grok contract %q", wanted)

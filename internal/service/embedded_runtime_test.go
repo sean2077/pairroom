@@ -95,7 +95,7 @@ func TestEmbeddedRuntimesIsolateRoomStateBindingsAndHTTPAuth(t *testing.T) {
 		if snapshot.Meta.ID != durable.ID {
 			t.Fatalf("snapshot Room ID=%q, want %q", snapshot.Meta.ID, durable.ID)
 		}
-		for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+		for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 			if got, want := snapshot.Participants[actor].SessionID, durable.Bindings[actor].SessionID; got != want {
 				t.Fatalf("%s session=%q, want durable binding %q", actor, got, want)
 			}
@@ -103,14 +103,14 @@ func TestEmbeddedRuntimesIsolateRoomStateBindingsAndHTTPAuth(t *testing.T) {
 	}
 	assertRoomBindings(t, runtimeA, roomA)
 	assertRoomBindings(t, runtimeB, roomB)
-	if roomA.Bindings[model.ActorClaude].SessionID == roomB.Bindings[model.ActorClaude].SessionID {
+	if roomA.Bindings[model.ActorSlot1].SessionID == roomB.Bindings[model.ActorSlot1].SessionID {
 		t.Fatal("provisioned Rooms unexpectedly share a Claude binding")
 	}
 
-	if _, err := runtimeA.engine.Send(ctx, room.SendRequest{Text: "message-visible-only-in-room-a", To: []model.ActorID{model.ActorClaude}}); err != nil {
+	if _, err := runtimeA.engine.Send(ctx, room.SendRequest{Text: "message-visible-only-in-room-a", To: []model.ActorID{model.ActorSlot1}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtimeB.engine.Send(ctx, room.SendRequest{Text: "message-visible-only-in-room-b", To: []model.ActorID{model.ActorCodex}}); err != nil {
+	if _, err := runtimeB.engine.Send(ctx, room.SendRequest{Text: "message-visible-only-in-room-b", To: []model.ActorID{model.ActorSlot2}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -190,7 +190,7 @@ func TestEmbeddedRuntimesIsolateRoomStateBindingsAndHTTPAuth(t *testing.T) {
 
 	// Permissions are independent, durable Room state. A change in Room A
 	// must not affect Room B or either Room's collaboration responsibility.
-	permissionEndpoint, _ := roomRuntimeEndpoint(t, runtimeA.URL(), "/api/v1/participants/claude/permissions")
+	permissionEndpoint, _ := roomRuntimeEndpoint(t, runtimeA.URL(), "/api/v1/participants/slot1/permissions")
 	permissionRequest, err := http.NewRequestWithContext(ctx, http.MethodPut, permissionEndpoint, strings.NewReader(`{"profile":"read-only"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -205,13 +205,13 @@ func TestEmbeddedRuntimesIsolateRoomStateBindingsAndHTTPAuth(t *testing.T) {
 	if permissionResponse.StatusCode != http.StatusOK {
 		t.Fatalf("permission update status=%d", permissionResponse.StatusCode)
 	}
-	if got := readSnapshot(t, endpointA, tokenA, http.StatusOK).Participants[model.ActorClaude]; got.PermissionProfile != model.PermissionReadOnly || got.Responsibility != "lead" {
+	if got := readSnapshot(t, endpointA, tokenA, http.StatusOK).Participants[model.ActorSlot1]; got.PermissionProfile != model.PermissionReadOnly || got.Responsibility != "lead" {
 		t.Fatalf("Room A participant=%+v", got)
 	}
-	if got := readSnapshot(t, endpointB, tokenB, http.StatusOK).Participants[model.ActorClaude]; got.PermissionProfile != model.PermissionConfigured || got.Responsibility != "lead" {
+	if got := readSnapshot(t, endpointB, tokenB, http.StatusOK).Participants[model.ActorSlot1]; got.PermissionProfile != model.PermissionConfigured || got.Responsibility != "lead" {
 		t.Fatalf("Room A permission mutation leaked into Room B: %+v", got)
 	}
-	oldEndpoint, _ := roomRuntimeEndpoint(t, runtimeA.URL(), "/api/v1/participants/claude/role")
+	oldEndpoint, _ := roomRuntimeEndpoint(t, runtimeA.URL(), "/api/v1/participants/slot1/role")
 	oldRequest, _ := http.NewRequestWithContext(ctx, http.MethodPut, oldEndpoint, strings.NewReader(`{"role":"reviewer"}`))
 	oldRequest.Header.Set("Authorization", "Bearer "+tokenA)
 	oldRequest.Header.Set("Content-Type", "application/json")
@@ -259,7 +259,7 @@ func TestEmbeddedRuntimesIsolateRoomStateBindingsAndHTTPAuth(t *testing.T) {
 	eventsA, streamErrA := subscribeRuntimeEvents(t, streamCtx, runtimeA.URL(), tokenA, cursorA)
 	eventsB, streamErrB := subscribeRuntimeEvents(t, streamCtx, runtimeB.URL(), tokenB, cursorB)
 	const sseMarker = "sse-visible-only-in-room-a"
-	if _, err := runtimeA.engine.Send(ctx, room.SendRequest{Text: sseMarker, To: []model.ActorID{model.ActorClaude}}); err != nil {
+	if _, err := runtimeA.engine.Send(ctx, room.SendRequest{Text: sseMarker, To: []model.ActorID{model.ActorSlot1}}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.NewTimer(2 * time.Second)
@@ -325,13 +325,13 @@ sseIsolationObserved:
 	}
 	assertRoomBindings(t, reopened, roomA)
 	reopenedSnapshot := reopened.engine.Snapshot()
-	if got := reopenedSnapshot.Participants[model.ActorClaude].Role; got != model.RolePeer {
+	if got := reopenedSnapshot.Participants[model.ActorSlot1].Role; got != model.RolePeer {
 		t.Fatalf("reactivated Room Claude role=%q, want durable %q", got, model.RolePeer)
 	}
 	if !containsMessage(reopenedSnapshot, "only-in-room-a") || containsMessage(reopenedSnapshot, "only-in-room-b") {
 		t.Fatalf("reactivated Room history leaked or was lost: %#v", reopenedSnapshot.Messages)
 	}
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 		if got, want := reopenedSnapshot.Participants[actor].SessionID, roomA.Bindings[actor].SessionID; got != want {
 			t.Fatalf("reactivated %s session=%q, want original binding %q", actor, got, want)
 		}
@@ -464,7 +464,7 @@ func TestTranscriptBoundaryFilterDropsUncorrelatedVendorHistory(t *testing.T) {
 		model.RuntimeLog,
 	} {
 		if filtered, ok := filterTranscriptBoundaryEvent(expectedSession, model.RuntimeEvent{
-			Agent: model.ActorClaude, Kind: kind, TurnID: "vendor-turn", Text: secret,
+			Agent: model.ActorSlot1, Kind: kind, TurnID: "vendor-turn", Text: secret,
 			Data: json.RawMessage(`{"transcript":"` + secret + `"}`),
 		}); ok {
 			t.Fatalf("uncorrelated %s event crossed transcript boundary: %#v", kind, filtered)
@@ -472,12 +472,12 @@ func TestTranscriptBoundaryFilterDropsUncorrelatedVendorHistory(t *testing.T) {
 	}
 
 	if filtered, ok := filterTranscriptBoundaryEvent(expectedSession, model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeSession, SessionID: "wrong-session", Text: secret,
+		Agent: model.ActorSlot1, Kind: model.RuntimeSession, SessionID: "wrong-session", Text: secret,
 	}); ok {
 		t.Fatalf("wrong native session crossed boundary: %#v", filtered)
 	}
 	filteredSession, ok := filterTranscriptBoundaryEvent(expectedSession, model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeSession, SessionID: expectedSession,
+		Agent: model.ActorSlot1, Kind: model.RuntimeSession, SessionID: expectedSession,
 		Text: secret, Data: json.RawMessage(`{"transcript":"secret"}`),
 	})
 	if !ok || filteredSession.SessionID != expectedSession || filteredSession.Text != "" || len(filteredSession.Data) != 0 {
@@ -485,7 +485,7 @@ func TestTranscriptBoundaryFilterDropsUncorrelatedVendorHistory(t *testing.T) {
 	}
 
 	filteredInfo, ok := filterTranscriptBoundaryEvent(expectedSession, model.RuntimeEvent{
-		Agent: model.ActorCodex, Kind: model.RuntimeInfoUpdated, Text: secret,
+		Agent: model.ActorSlot2, Kind: model.RuntimeInfoUpdated, Text: secret,
 		Runtime: &model.RuntimeInfo{
 			Available: true, Version: "1.2.3", Capabilities: []string{"resume"},
 			Provider: "cc-switch:grokbuild/profile-a", ProviderName: "Example Profile",
@@ -503,7 +503,7 @@ func TestTranscriptBoundaryFilterDropsUncorrelatedVendorHistory(t *testing.T) {
 	}
 
 	filteredError, ok := filterTranscriptBoundaryEvent(expectedSession, model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeError, Text: secret,
+		Agent: model.ActorSlot1, Kind: model.RuntimeError, Text: secret,
 		Data: json.RawMessage(`{"stderr":"secret"}`),
 	})
 	if !ok || filteredError.Text != uncorrelatedRuntimeErrorNotice || strings.Contains(filteredError.Text, secret) || len(filteredError.Data) != 0 {
@@ -511,7 +511,7 @@ func TestTranscriptBoundaryFilterDropsUncorrelatedVendorHistory(t *testing.T) {
 	}
 
 	correlated := model.RuntimeEvent{
-		Agent: model.ActorClaude, Kind: model.RuntimeFinal, CorrelationID: "room-message-1",
+		Agent: model.ActorSlot1, Kind: model.RuntimeFinal, CorrelationID: "room-message-1",
 		TurnID: "vendor-turn", Text: "post-binding answer", Data: json.RawMessage(`{"post_binding":true}`),
 	}
 	filteredCorrelated, ok := filterTranscriptBoundaryEvent(expectedSession, correlated)
@@ -566,12 +566,12 @@ func TestDrainHandlerAllowsOnlySettlingControls(t *testing.T) {
 		{http.MethodGet, "/api/v1/snapshot", true},
 		{http.MethodPost, "/api/v1/session", true},
 		{http.MethodPost, "/api/v1/approvals/approval-1", true},
-		{http.MethodPost, "/api/v1/participants/claude/interrupt", true},
+		{http.MethodPost, "/api/v1/participants/slot1/interrupt", true},
 		{http.MethodPost, "/api/v1/messages/message-1/cancel", true},
 		{http.MethodPost, "/api/v1/messages", false},
 		{http.MethodPost, "/api/v1/messages/message-1/retry", false},
 		{http.MethodPut, "/api/v1/settings", false},
-		{http.MethodPost, "/api/v1/participants/claude/stop", false},
+		{http.MethodPost, "/api/v1/participants/slot1/stop", false},
 		{http.MethodPost, "/api/v1/approvals/approval-1/extra", false},
 		{http.MethodDelete, "/api/v1/session", false},
 	}
@@ -627,7 +627,7 @@ func TestEmbeddedRuntimeCloseTimeoutIsRetryableAndDoesNotInterruptTurn(t *testin
 
 	message, err := runtime.engine.Send(context.Background(), room.SendRequest{
 		Text: "complete this turn without interruption",
-		To:   []model.ActorID{model.ActorClaude},
+		To:   []model.ActorID{model.ActorSlot1},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -677,7 +677,7 @@ func TestEmbeddedRuntimeCloseTimeoutIsRetryableAndDoesNotInterruptTurn(t *testin
 			break
 		}
 	}
-	if persisted == nil || persisted.Processing[model.ActorClaude] != model.ProcessingCompleted {
+	if persisted == nil || persisted.Processing[model.ActorSlot1] != model.ProcessingCompleted {
 		t.Fatalf("Close timeout interrupted or lost the active turn: %#v", persisted)
 	}
 

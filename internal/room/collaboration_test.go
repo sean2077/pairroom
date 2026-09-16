@@ -83,10 +83,10 @@ func TestCreationModeSeparatesResponsibilitiesFromWorkspaceAndPermissions(t *tes
 			t.Fatal("mode not forwarded to native instructions")
 		}
 	}
-	if s.Participants[model.ActorClaude].Responsibility != "lead" || s.Participants[model.ActorCodex].Responsibility != "executor" {
+	if s.Participants[model.ActorSlot1].Responsibility != "lead" || s.Participants[model.ActorSlot2].Responsibility != "executor" {
 		t.Fatal("wrong display responsibilities")
 	}
-	if cfg := captures.latest(model.ActorCodex); cfg.ApprovalPolicy != "yolo" || cfg.Sandbox != "danger-full-access" {
+	if cfg := captures.latest(model.ActorSlot2); cfg.ApprovalPolicy != "yolo" || cfg.Sandbox != "danger-full-access" {
 		t.Fatalf("Executor is not YOLO: %+v", cfg)
 	}
 	for _, text := range []string{"@driver inspect", "@reviewer inspect", "@lead inspect", "@executor inspect"} {
@@ -104,15 +104,15 @@ func TestPermissionChangesPersistWithoutRewritingModeOrNativeIdentity(t *testing
 	e, captures := newCollaborationEngine(t, "Agent 2 plans. Agent 1 implements. Keep tests focused.")
 	ctx := context.Background()
 	// Materialized identity is an event-sourced fact, not only an adapter value.
-	e.updateParticipant(model.ActorCodex, func(p *model.ParticipantSnapshot) { p.SessionID = "session-b" })
+	e.updateParticipant(model.ActorSlot2, func(p *model.ParticipantSnapshot) { p.SessionID = "session-b" })
 	original := *e.Snapshot().Meta.Collaboration
 	for _, profile := range []model.PermissionProfile{model.PermissionReadOnly, model.PermissionYOLO, model.PermissionConfigured} {
-		if err := e.SetPermissions(ctx, model.ActorCodex, profile); err != nil {
+		if err := e.SetPermissions(ctx, model.ActorSlot2, profile); err != nil {
 			t.Fatal(err)
 		}
 		s := e.Snapshot()
-		cfg := captures.latest(model.ActorCodex)
-		if *s.Meta.Collaboration != original || s.Participants[model.ActorCodex].Responsibility != "participant" || cfg.SessionID != "session-b" || !cfg.RequireExactSession || cfg.Model != "execution-model" || cfg.Repo != s.Meta.Repo {
+		cfg := captures.latest(model.ActorSlot2)
+		if *s.Meta.Collaboration != original || s.Participants[model.ActorSlot2].Responsibility != "participant" || cfg.SessionID != "session-b" || !cfg.RequireExactSession || cfg.Model != "execution-model" || cfg.Repo != s.Meta.Repo {
 			t.Fatalf("permission mutated collaboration or identity: %+v %+v", s.Meta, cfg)
 		}
 		if profile == model.PermissionReadOnly && (cfg.Sandbox != "read-only" || cfg.ApprovalPolicy != "on-request") {
@@ -140,7 +140,7 @@ func TestPermissionChangesPersistWithoutRewritingModeOrNativeIdentity(t *testing
 		t.Fatalf("requests/commits=%d/%d", requested, committed)
 	}
 	// A stopped/reopened Room uses the recorded effective policy, not launch defaults.
-	if err := e.SetPermissions(ctx, model.ActorCodex, model.PermissionReadOnly); err != nil {
+	if err := e.SetPermissions(ctx, model.ActorSlot2, model.PermissionReadOnly); err != nil {
 		t.Fatal(err)
 	}
 	dir := e.cfg.Store.Dir()
@@ -162,10 +162,10 @@ func TestPermissionChangesPersistWithoutRewritingModeOrNativeIdentity(t *testing
 	if err = restored.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := restored.Snapshot(); *got.Meta.Collaboration != original || got.Participants[model.ActorCodex].PermissionProfile != model.PermissionReadOnly {
+	if got := restored.Snapshot(); *got.Meta.Collaboration != original || got.Participants[model.ActorSlot2].PermissionProfile != model.PermissionReadOnly {
 		t.Fatalf("restore lost durable mode or permissions: %+v", got.Meta)
 	}
-	if cfg := captures.latest(model.ActorCodex); cfg.Sandbox != "read-only" || cfg.SessionID != "session-b" {
+	if cfg := captures.latest(model.ActorSlot2); cfg.Sandbox != "read-only" || cfg.SessionID != "session-b" {
 		t.Fatalf("restore widened native permissions: %+v", cfg)
 	}
 }
@@ -201,20 +201,20 @@ func TestPermissionsRejectBusyAndCancelledWithoutSideEffects(t *testing.T) {
 	count := captures.count()
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	if err := e.SetPermissions(cancelled, model.ActorCodex, model.PermissionReadOnly); !errors.Is(err, context.Canceled) {
+	if err := e.SetPermissions(cancelled, model.ActorSlot2, model.PermissionReadOnly); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled permissions: %v", err)
 	}
 	e.turnMu.Lock()
-	e.turnOwner = model.ActorClaude
+	e.turnOwner = model.ActorSlot1
 	e.turnMu.Unlock()
-	if err := e.SetPermissions(ctx, model.ActorCodex, model.PermissionReadOnly); err == nil {
+	if err := e.SetPermissions(ctx, model.ActorSlot2, model.PermissionReadOnly); err == nil {
 		t.Fatal("policy changed during native ownership")
 	}
 	e.turnMu.Lock()
 	e.turnOwner = ""
 	e.turnQueue = []scheduledDelivery{{}}
 	e.turnMu.Unlock()
-	if err := e.SetPermissions(ctx, model.ActorCodex, model.PermissionReadOnly); err == nil {
+	if err := e.SetPermissions(ctx, model.ActorSlot2, model.PermissionReadOnly); err == nil {
 		t.Fatal("policy changed with queued delivery")
 	}
 	e.turnMu.Lock()
@@ -228,16 +228,16 @@ func TestPermissionsRejectBusyAndCancelledWithoutSideEffects(t *testing.T) {
 
 func TestStopFailureDoesNotCommitPermissionGrant(t *testing.T) {
 	e, captures := newCollaborationEngine(t, "")
-	current, _ := e.adapter(model.ActorClaude)
+	current, _ := e.adapter(model.ActorSlot1)
 	f := current.(*fakeAdapter)
 	f.mu.Lock()
 	f.stopErr = errors.New("stop failed")
 	f.mu.Unlock()
 	before := captures.count()
-	if err := e.SetPermissions(context.Background(), model.ActorClaude, model.PermissionYOLO); err == nil {
+	if err := e.SetPermissions(context.Background(), model.ActorSlot1, model.PermissionYOLO); err == nil {
 		t.Fatal("stop failure swallowed")
 	}
-	if e.Snapshot().Participants[model.ActorClaude].PermissionProfile != model.PermissionConfigured || captures.count() != before {
+	if e.Snapshot().Participants[model.ActorSlot1].PermissionProfile != model.PermissionConfigured || captures.count() != before {
 		t.Fatal("failed stop changed effective permissions")
 	}
 	f.mu.Lock()
@@ -248,17 +248,17 @@ func TestStopFailureDoesNotCommitPermissionGrant(t *testing.T) {
 func TestCloseWaitsForPermissionReplacementAndStopsTheNewAdapter(t *testing.T) {
 	e, _ := newCollaborationEngine(t, "")
 	started, release := make(chan struct{}), make(chan struct{})
-	next := &fakeAdapter{actor: model.ActorCodex, state: model.StateStopped, startStarted: started, startRelease: release, submissions: make(chan model.AgentInput, 1)}
+	next := &fakeAdapter{actor: model.ActorSlot2, state: model.StateStopped, startStarted: started, startRelease: release, submissions: make(chan model.AgentInput, 1)}
 	e.cfg.CodexFactory = func(_ agent.Config, sink agent.EventSink) agent.Adapter { next.sink = sink; return next }
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	// Start the old adapter so a policy replacement also starts the new one.
-	if err := e.StartAgent(ctx, model.ActorCodex); err != nil {
+	if err := e.StartAgent(ctx, model.ActorSlot2); err != nil {
 		t.Fatal(err)
 	}
-	e.updateParticipant(model.ActorCodex, func(p *model.ParticipantSnapshot) { p.State = model.StateIdle })
+	e.updateParticipant(model.ActorSlot2, func(p *model.ParticipantSnapshot) { p.State = model.StateIdle })
 	changed := make(chan error, 1)
-	go func() { changed <- e.SetPermissions(ctx, model.ActorCodex, model.PermissionReadOnly) }()
+	go func() { changed <- e.SetPermissions(ctx, model.ActorSlot2, model.PermissionReadOnly) }()
 	select {
 	case <-started:
 	case err := <-changed:
@@ -283,7 +283,7 @@ func TestCloseWaitsForPermissionReplacementAndStopsTheNewAdapter(t *testing.T) {
 	if next.State() != model.StateStopped {
 		t.Fatal("replacement process survived Room close")
 	}
-	if err := e.SetPermissions(ctx, model.ActorCodex, model.PermissionYOLO); err == nil {
+	if err := e.SetPermissions(ctx, model.ActorSlot2, model.PermissionYOLO); err == nil {
 		t.Fatal("closed Room accepted permission changes")
 	}
 }

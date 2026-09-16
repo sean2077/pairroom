@@ -100,7 +100,7 @@ type GrokAdapter struct {
 
 func NewGrok(cfg Config, sink EventSink) *GrokAdapter {
 	if !cfg.Actor.ValidParticipant() {
-		cfg.Actor = model.ActorClaude
+		cfg.Actor = model.ActorSlot1
 	}
 	if cfg.Command == "" {
 		cfg.Command = model.RuntimeGrok.DefaultCommand()

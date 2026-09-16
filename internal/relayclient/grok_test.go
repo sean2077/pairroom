@@ -77,7 +77,7 @@ func TestGrokCreatorInfersOwnRuntimeWithPeerSelection(t *testing.T) {
 	t.Setenv("GROK_SESSION_ID", "own")
 	o := options{peer: "codex"}
 	slot, err := inferCreateSlot(o)
-	if err != nil || slot != model.ActorClaude {
+	if err != nil || slot != model.ActorSlot1 {
 		t.Fatalf("slot=%s err=%v", slot, err)
 	}
 	selections, err := createAgents(o, slot)
@@ -89,9 +89,9 @@ func TestGrokCreatorInfersOwnRuntimeWithPeerSelection(t *testing.T) {
 		t.Fatal("zero overrides silently changed Service defaults")
 	}
 	root := t.TempDir()
-	callerState(t, root, "grok-room", "own", model.ActorCodex, model.RuntimeGrok)
+	callerState(t, root, "grok-room", "own", model.ActorSlot2, model.RuntimeGrok)
 	resume := options{}
-	if err := applyCallerDefaults(root, "bind", &resume); err != nil || resume.room != "grok-room" || resume.slot != "codex" || resume.endpoint != filepath.Join(root, "custom-endpoint.json") {
+	if err := applyCallerDefaults(root, "bind", &resume); err != nil || resume.room != "grok-room" || resume.slot != "slot2" || resume.endpoint != filepath.Join(root, "custom-endpoint.json") {
 		t.Fatalf("Grok resume failed: %+v %v", resume, err)
 	}
 }

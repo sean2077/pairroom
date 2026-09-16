@@ -80,7 +80,7 @@ func TestNativeSessionNameSyncIsOptionalBoundedMetadata(t *testing.T) {
 		}
 		syncSessionName(ctx, info, func(context.Context, string) error { t.Fatal("unneeded/cancelled metadata request"); return nil })
 	}
-	cfg := Config{Actor: model.ActorClaude, RoomName: "validation"}
+	cfg := Config{Actor: model.ActorSlot1, RoomName: "validation"}
 	if got := configuredSessionName(cfg); got != "" {
 		t.Fatalf("renamed before binding commit: %q", got)
 	}
@@ -88,7 +88,7 @@ func TestNativeSessionNameSyncIsOptionalBoundedMetadata(t *testing.T) {
 
 func TestCodexSessionNameUsesExactThreadMetadataRPC(t *testing.T) {
 	for _, unsupported := range []bool{false, true} {
-		a := NewCodex(Config{Actor: model.ActorCodex}, func(model.RuntimeEvent) {})
+		a := NewCodex(Config{Actor: model.ActorSlot2}, func(model.RuntimeEvent) {})
 		a.threadID = "same-thread"
 		w := &nameRPCWriter{receive: a.handleRPCLine, respond: func(map[string]any) map[string]any {
 			if unsupported {
@@ -124,7 +124,7 @@ func TestGrokSessionNameFallbackOnlyForMissingMethod(t *testing.T) {
 		{"invalid", -32602, true, 1, "failed"}, {"negative receipt", 0, false, 1, "failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a := NewGrok(Config{Actor: model.ActorClaude, Repo: "/actual workspace"}, func(model.RuntimeEvent) {})
+			a := NewGrok(Config{Actor: model.ActorSlot1, Repo: "/actual workspace"}, func(model.RuntimeEvent) {})
 			a.sessionID = "same-session"
 			w := &nameRPCWriter{receive: a.handleRPCLine, respond: func(req map[string]any) map[string]any {
 				if tc.code != 0 && req["method"] == "x.ai/session/rename" {
@@ -196,7 +196,7 @@ func TestClaudeNameIsAnOptionalSingleArgOnTheSameSession(t *testing.T) {
 			t.Setenv("PAIRROOM_NAME_SUPPORTED", supported)
 			path := filepath.Join(t.TempDir(), "argv.json")
 			t.Setenv("PAIRROOM_NAME_ARGS", path)
-			cfg := Config{Actor: model.ActorClaude, Runtime: model.RuntimeClaude, PeerRuntime: model.RuntimeCodex, RoomName: "--help '名' $(touch never)", Command: os.Args[0], Repo: t.TempDir(), DataDir: t.TempDir(), SessionID: "same-native-session", RequireExactSession: true}
+			cfg := Config{Actor: model.ActorSlot1, Runtime: model.RuntimeClaude, PeerRuntime: model.RuntimeCodex, RoomName: "--help '名' $(touch never)", Command: os.Args[0], Repo: t.TempDir(), DataDir: t.TempDir(), SessionID: "same-native-session", RequireExactSession: true}
 			if tc.owned {
 				cfg.RoomID = "room-0123456789abcdef01234567"
 			}
@@ -249,7 +249,7 @@ func TestClaudeNameIsAnOptionalSingleArgOnTheSameSession(t *testing.T) {
 }
 
 func TestDisplayNamesDoNotEnterInstructions(t *testing.T) {
-	cfg := Config{Actor: model.ActorClaude, RoomID: "room-123456789abc", RoomName: "Before"}
+	cfg := Config{Actor: model.ActorSlot1, RoomID: "room-123456789abc", RoomName: "Before"}
 	before := collaborationPrompt(cfg)
 	cfg.RoomName = "Different user label"
 	if collaborationPrompt(cfg) != before {

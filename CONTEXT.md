@@ -32,8 +32,10 @@ _Equivalent (zh-CN)_: Agent 组合配置
 ## Language
 
 **Participant slot**:
-One of the Room's two stable participant identities, persisted as ActorID `claude` for Agent 1 or `codex` for Agent 2 independently of the selected native runtime.
+One of the Room's two stable participant identities, persisted as ActorID `slot1` for Agent 1 or `slot2` for Agent 2 independently of the selected native runtime.
 _Equivalent (zh-CN)_: Agent 槽位
+_Avoid (en)_: claude/codex slot IDs
+_Avoid (zh-CN)_: Claude/Codex 槽位 ID
 
 **Runtime**:
 The official Claude Code, Codex, or Grok Build harness currently selected for a participant slot.

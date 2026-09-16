@@ -18,11 +18,11 @@ func TestRuntimeNamingTracksDurableRoomAfterPermissionsAndRename(t *testing.T) {
 			t.Fatalf("missing initial name identity: %+v", cfg)
 		}
 	}
-	e.updateParticipant(model.ActorCodex, func(p *model.ParticipantSnapshot) { p.SessionID = "session-b" })
-	if err := e.SetPermissions(context.Background(), model.ActorCodex, model.PermissionReadOnly); err != nil {
+	e.updateParticipant(model.ActorSlot2, func(p *model.ParticipantSnapshot) { p.SessionID = "session-b" })
+	if err := e.SetPermissions(context.Background(), model.ActorSlot2, model.PermissionReadOnly); err != nil {
 		t.Fatal(err)
 	}
-	cfg := captures.latest(model.ActorCodex)
+	cfg := captures.latest(model.ActorSlot2)
 	if cfg.RoomID != before.ID || cfg.RoomName != before.Name || cfg.SessionID != "session-b" {
 		t.Fatal("permission restart lost name/session identity")
 	}

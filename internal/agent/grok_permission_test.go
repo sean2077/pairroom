@@ -42,7 +42,7 @@ func TestGrokPermissionSelectionNeverWidensOrGuessesScope(t *testing.T) {
 
 func TestGrokInvalidPermissionLeavesNativeRequestAnswerable(t *testing.T) {
 	writer := &testWriteCloser{}
-	adapter := NewGrok(Config{Actor: model.ActorClaude}, func(model.RuntimeEvent) {})
+	adapter := NewGrok(Config{Actor: model.ActorSlot1}, func(model.RuntimeEvent) {})
 	adapter.stdin = writer
 	adapter.approvals["permission"] = grokPendingApproval{
 		rawID: json.RawMessage(`"native-request"`), kind: "permission",

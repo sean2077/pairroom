@@ -281,7 +281,7 @@ async function main() {
   }
   {
     const c = client(), activation = deferred(); let activations = 0, opens = 0;
-    c.state.snapshot.rooms = [{id: 'r', lifecycle: 'active', bindings: {claude: {mode: 'new'}, codex: {mode: 'new'}}}];
+    c.state.snapshot.rooms = [{id: 'r', lifecycle: 'active', bindings: {slot1: {mode: 'new'}, slot2: {mode: 'new'}}}];
     c.state.snapshot.runtimes = [{room_id: 'r', phase: 'suspended'}];
     c.setAPI((path) => {
       if (path.endsWith('/activate')) { activations++; return activation.promise; }

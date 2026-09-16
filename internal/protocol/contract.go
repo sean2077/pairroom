@@ -9,7 +9,7 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 )
 
-const Version = "pairroom-protocol/v6"
+const Version = "pairroom-protocol/v7"
 
 type Selection struct {
 	Actor model.ActorID
@@ -33,7 +33,7 @@ func Bootstrap(actor model.ActorID, selfRuntime, peerRuntime model.RuntimeKind) 
 	self := identities[actor]
 	other := identities[peer]
 	selfSlot, peerSlot := "Agent 1", "Agent 2"
-	if actor == model.ActorCodex {
+	if actor == model.ActorSlot2 {
 		selfSlot, peerSlot = peerSlot, selfSlot
 	}
 	return fmt.Sprintf(`You are %s: %s (%s), with a human and %s: %s (%s).

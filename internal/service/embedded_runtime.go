@@ -249,41 +249,41 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 	claudeCfg := cfg.Claude
 	codexCfg := cfg.Codex
 	if cfg.Resolver != nil {
-		claudeSelection := durableRoom.Agents[model.ActorClaude]
-		codexSelection := durableRoom.Agents[model.ActorCodex]
-		claudeCfg, err = cfg.Resolver.Resolve(startCtx, model.ActorClaude, claudeSelection, codexSelection.Runtime, project.Root, durableRoom.DataDir)
+		claudeSelection := durableRoom.Agents[model.ActorSlot1]
+		codexSelection := durableRoom.Agents[model.ActorSlot2]
+		claudeCfg, err = cfg.Resolver.Resolve(startCtx, model.ActorSlot1, claudeSelection, codexSelection.Runtime, project.Root, durableRoom.DataDir)
 		if err != nil {
 			return nil, fmt.Errorf("resolve Agent 1 activation: %w", err)
 		}
-		codexCfg, err = cfg.Resolver.Resolve(startCtx, model.ActorCodex, codexSelection, claudeSelection.Runtime, project.Root, durableRoom.DataDir)
+		codexCfg, err = cfg.Resolver.Resolve(startCtx, model.ActorSlot2, codexSelection, claudeSelection.Runtime, project.Root, durableRoom.DataDir)
 		if err != nil {
 			return nil, fmt.Errorf("resolve Agent 2 activation: %w", err)
 		}
 	}
-	claudeFactory := agent.SlotFactory(cfg.Mock, claudeCfg.Runtime.CanonicalForSlot(model.ActorClaude))
-	codexFactory := agent.SlotFactory(cfg.Mock, codexCfg.Runtime.CanonicalForSlot(model.ActorCodex))
+	claudeFactory := agent.SlotFactory(cfg.Mock, claudeCfg.Runtime.CanonicalForSlot(model.ActorSlot1))
+	codexFactory := agent.SlotFactory(cfg.Mock, codexCfg.Runtime.CanonicalForSlot(model.ActorSlot2))
 	// Credentials are present only in Config.Env for the child process. Redact
 	// any accidental echo from native stderr/telemetry before the transcript
 	// boundary or Room projection can persist/publish it.
 	claudeFactory = agent.RedactingFactory(transcriptBoundaryFactory(claudeFactory))
 	codexFactory = agent.RedactingFactory(transcriptBoundaryFactory(codexFactory))
 	pendingBindings := make(map[model.ActorID]bool, 2)
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 		binding := durableRoom.Bindings[actor]
 		pendingBindings[actor] = binding.Pending && binding.Mode == BindingNew
 	}
 	claudeCfg.ClientVersion = version.Current
-	claudeCfg.Actor = model.ActorClaude
-	claudeCfg.Runtime = claudeCfg.Runtime.CanonicalForSlot(model.ActorClaude)
-	if !pendingBindings[model.ActorClaude] {
-		claudeCfg.SessionID = durableRoom.Bindings[model.ActorClaude].SessionID
+	claudeCfg.Actor = model.ActorSlot1
+	claudeCfg.Runtime = claudeCfg.Runtime.CanonicalForSlot(model.ActorSlot1)
+	if !pendingBindings[model.ActorSlot1] {
+		claudeCfg.SessionID = durableRoom.Bindings[model.ActorSlot1].SessionID
 	}
 	claudeCfg.RequireExactSession = true
 	codexCfg.ClientVersion = version.Current
-	codexCfg.Actor = model.ActorCodex
-	codexCfg.Runtime = codexCfg.Runtime.CanonicalForSlot(model.ActorCodex)
-	if !pendingBindings[model.ActorCodex] {
-		codexCfg.SessionID = durableRoom.Bindings[model.ActorCodex].SessionID
+	codexCfg.Actor = model.ActorSlot2
+	codexCfg.Runtime = codexCfg.Runtime.CanonicalForSlot(model.ActorSlot2)
+	if !pendingBindings[model.ActorSlot2] {
+		codexCfg.SessionID = durableRoom.Bindings[model.ActorSlot2].SessionID
 	}
 	codexCfg.RequireExactSession = true
 	claudeCfg.PeerRuntime = codexCfg.Runtime

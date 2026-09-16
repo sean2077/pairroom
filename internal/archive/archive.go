@@ -130,7 +130,9 @@ func Verify(dataDir string) VerifyReport {
 		if metadata.SchemaVersion < 1 {
 			report.Errors = append(report.Errors, "metadata schema version must be positive")
 		}
-		if !version.SupportsStoreSchema(metadata.SchemaVersion) {
+		if metadata.SchemaVersion < version.StoreSchema {
+			report.Errors = append(report.Errors, fmt.Sprintf("retired data schema %d; recreate the Room with schema %d", metadata.SchemaVersion, version.StoreSchema))
+		} else if !version.SupportsStoreSchema(metadata.SchemaVersion) {
 			report.Errors = append(report.Errors, fmt.Sprintf("schema %d is unsupported; this build requires schema %d", metadata.SchemaVersion, version.StoreSchema))
 		}
 	}
@@ -158,6 +160,9 @@ func Verify(dataDir string) VerifyReport {
 				if err := json.Unmarshal(line, &event); err != nil {
 					report.Errors = append(report.Errors, fmt.Sprintf("events.jsonl line %d: %v", lineNo, err))
 					break
+				}
+				if event.Actor != model.ActorUser && event.Actor != model.ActorSystem && !event.Actor.ValidParticipant() {
+					report.Errors = append(report.Errors, fmt.Sprintf("event line %d uses retired or invalid actor %q", lineNo, event.Actor))
 				}
 				report.EventCount++
 				report.EventKinds[event.Kind]++

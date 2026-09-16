@@ -103,7 +103,7 @@ func (e codexRPCError) Error() string {
 
 func NewCodex(cfg Config, sink EventSink) *CodexAdapter {
 	if !cfg.Actor.ValidParticipant() {
-		cfg.Actor = model.ActorCodex
+		cfg.Actor = model.ActorSlot2
 	}
 	if cfg.Command == "" {
 		cfg.Command = "codex"

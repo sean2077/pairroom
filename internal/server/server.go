@@ -462,7 +462,7 @@ func renderMarkdownTranscript(snapshot model.RoomSnapshot) string {
 		fmt.Fprintf(&out, "## Collaboration (%s; fixed at creation)\n\n%s\n\n", c.Mode, c.Instructions)
 	}
 	out.WriteString("## Participants\n\n")
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 		p := snapshot.Participants[actor]
 		fmt.Fprintf(&out, "- **%s** (`%s`) — %s, permissions `%s`, state `%s`", p.DisplayName, p.MentionHandle, p.Responsibility, p.PermissionProfile, p.State)
 
@@ -570,9 +570,9 @@ func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) participantAction(w http.ResponseWriter, r *http.Request) {
-	actor := model.ActorID(strings.ToLower(r.PathValue("actor")))
+	actor := canonicalParticipantPath(r.PathValue("actor"))
 	if !actor.ValidParticipant() {
-		writeError(w, http.StatusBadRequest, "participant must be claude or codex")
+		writeError(w, http.StatusBadRequest, "participant must be slot1 or slot2")
 		return
 	}
 	action := strings.ToLower(r.PathValue("action"))
@@ -606,7 +606,7 @@ func (s *Server) participantPermissions(w http.ResponseWriter, r *http.Request) 
 	if err := decodeJSON(w, r, &request); err != nil {
 		return
 	}
-	actor := model.ActorID(strings.ToLower(r.PathValue("actor")))
+	actor := canonicalParticipantPath(r.PathValue("actor"))
 	if !actor.ValidParticipant() || !request.Profile.Valid() {
 		writeError(w, http.StatusBadRequest, "invalid participant or permission profile")
 		return
@@ -618,6 +618,17 @@ func (s *Server) participantPermissions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func canonicalParticipantPath(value string) model.ActorID {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "slot1", "1":
+		return model.ActorSlot1
+	case "slot2", "2":
+		return model.ActorSlot2
+	default:
+		return model.ActorID(strings.ToLower(strings.TrimSpace(value)))
+	}
 }
 
 func (s *Server) resolveApproval(w http.ResponseWriter, r *http.Request) {

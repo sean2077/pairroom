@@ -733,8 +733,8 @@ select { appearance: auto; }
   box-shadow: var(--focus);
 }
 .room-actions button { min-height: 31px; padding: 4px 9px; border-radius: 8px; font-size: 10px; }
-.agent-avatar.claude { background: #ce6c3f; }
-.agent-avatar.codex { background: #2d8b73; }
+.agent-avatar.slot1 { background: #ce6c3f; }
+.agent-avatar.slot2 { background: #2d8b73; }
 
 .detail-hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center; padding: 20px; }
 .detail-title { display: flex; align-items: center; gap: 13px; }

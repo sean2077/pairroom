@@ -18,7 +18,7 @@ func TestWriteProtocolText(t *testing.T) {
 	}
 	for _, fragment := range []string{
 		protocol.Version,
-		"actor: codex",
+		"actor: slot2",
 		"[collaboration.creation]",
 		"[delivery.single-turn]",
 		"[delivery.peer]",
@@ -45,7 +45,7 @@ func TestWriteProtocolJSON(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &contract); err != nil {
 		t.Fatalf("decode JSON: %v\n%s", err, stdout.String())
 	}
-	if contract.Version != protocol.Version || contract.Actor != model.ActorClaude || len(contract.Rules) == 0 {
+	if contract.Version != protocol.Version || contract.Actor != model.ActorSlot1 || len(contract.Rules) == 0 {
 		t.Fatalf("unexpected contract: %+v", contract)
 	}
 }

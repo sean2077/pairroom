@@ -48,9 +48,9 @@ func (p *NativeProvisioner) Provision(ctx context.Context, project Project, acto
 	}
 	var cfg agent.Config
 	switch actor {
-	case model.ActorClaude:
+	case model.ActorSlot1:
 		cfg = p.cfg.Claude
-	case model.ActorCodex:
+	case model.ActorSlot2:
 		cfg = p.cfg.Codex
 	default:
 		return Binding{}, nil, fmt.Errorf("unsupported binding agent %q", actor)
@@ -85,10 +85,10 @@ func (p *NativeProvisioner) ProvisionSelection(ctx context.Context, project Proj
 func (p *NativeProvisioner) provisionWithConfig(ctx context.Context, project Project, actor model.ActorID, spec BindingSpec, dataDir string, cfg agent.Config) (Binding, func(context.Context) error, error) {
 	cfg.Actor = actor
 	cfg.Runtime = cfg.Runtime.CanonicalForSlot(actor)
-	if cfg.PeerRuntime == "" && actor == model.ActorClaude {
-		cfg.PeerRuntime = p.cfg.Codex.Runtime.CanonicalForSlot(model.ActorCodex)
+	if cfg.PeerRuntime == "" && actor == model.ActorSlot1 {
+		cfg.PeerRuntime = p.cfg.Codex.Runtime.CanonicalForSlot(model.ActorSlot2)
 	} else if cfg.PeerRuntime == "" {
-		cfg.PeerRuntime = p.cfg.Claude.Runtime.CanonicalForSlot(model.ActorClaude)
+		cfg.PeerRuntime = p.cfg.Claude.Runtime.CanonicalForSlot(model.ActorSlot1)
 	}
 	factory := agent.RedactingFactory(agent.FactoryFor(cfg.Runtime))
 	cfg.Repo = project.Root

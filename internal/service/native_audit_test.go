@@ -17,7 +17,7 @@ import (
 
 func TestNativeRelayActiveAdmissionNeverReadsHistoricalLog(t *testing.T) {
 	f := nativeHTTP(t)
-	a := associateCLI(t, f, model.ActorClaude)
+	a := associateCLI(t, f, model.ActorSlot1)
 	reads := 0
 	load := func(path string) ([]model.Event, error) {
 		reads++
@@ -55,7 +55,7 @@ func TestNativeRelayActiveAdmissionNeverReadsHistoricalLog(t *testing.T) {
 
 func TestNativeBriefStatusThroughCLIAndRealService(t *testing.T) {
 	f := nativeHTTP(t)
-	a := associateCLI(t, f, model.ActorClaude)
+	a := associateCLI(t, f, model.ActorSlot1)
 	if _, err := f.native.engine.Send(a, relay.SendRequest{ID: "proposal", Text: strings.Repeat("PRIVATE_PROPOSAL", 200)}); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestNativeBriefStatusThroughCLIAndRealService(t *testing.T) {
 	var got struct {
 		Relay relay.Summary `json:"relay"`
 	}
-	if err := json.Unmarshal(out, &got); err != nil || got.Relay.Inboxes[model.ActorCodex].Queued != 1 {
+	if err := json.Unmarshal(out, &got); err != nil || got.Relay.Inboxes[model.ActorSlot2].Queued != 1 {
 		t.Fatalf("brief status=%s err=%v", out, err)
 	}
 	for _, forbidden := range []string{"PRIVATE_PROPOSAL", a.SessionID, a.Secret, "transcript_path", "\"messages\"", "\"audit\""} {
@@ -82,7 +82,7 @@ func TestNativeBriefStatusThroughCLIAndRealService(t *testing.T) {
 
 func TestNativeBindResumesInCallingSessionWithoutIdentityFlags(t *testing.T) {
 	f := nativeHTTP(t)
-	a := associateCLI(t, f, model.ActorClaude)
+	a := associateCLI(t, f, model.ActorSlot1)
 	// Real hook association has already happened. Environment only discovers
 	// that exact state; no second association or provider setting is written.
 	t.Setenv("CLAUDE_CODE_SESSION_ID", a.SessionID)

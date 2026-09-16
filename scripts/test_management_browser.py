@@ -31,11 +31,11 @@ def fixture_html() -> str:
     html = re.sub(r'<script\b[^>]*src="([^"]+)"[^>]*></script>', lambda m: '<script>' + asset(m[1]).replace('</script>', '<\\/script>') + '</script>', html)
     mock = r'''
       window.__snapshot = {
-        version:'2.1.0',store_schema:10,data_root:'/state',healthy:true,
+        version:'5.0.0',store_schema:12,data_root:'/state',healthy:true,
         generated_at:'2026-09-06T00:00:00Z',
         projects:[{id:'p1',root:'/workspace/example',available:true}],
         rooms:['r1','r2'].map((id,i)=>({id,project_id:'p1',name:i?'Review workspace':'Implementation workspace',
-          lifecycle:'active',bindings:{claude:{agent:'claude',mode:'new',pending:true},codex:{agent:'codex',mode:'new',pending:true}},
+          lifecycle:'active',bindings:{slot1:{agent:'slot1',mode:'new',pending:true},slot2:{agent:'slot2',mode:'new',pending:true}},
           transcript_boundary_notice:'Earlier native history remains in its native harness.'})),
         runtimes:['r1','r2'].map(room_id=>({room_id,phase:'active',busy:false,occupies_capacity:true})),
         runtime_policy:{limit:4,idle_timeout_seconds:900},
@@ -43,8 +43,8 @@ def fixture_html() -> str:
       };
       window.__catalog = {collaboration_default:COLLABORATION,profiles:[{name:'Example Provider',runtime:'claude',supported:true,provider:{source:'cc-switch',app_type:'claude',profile_id:'fixture'}}],runtimes:['claude','codex','grok'].map(runtime=>({runtime,
         display_name:{claude:'Claude Code',codex:'Codex',grok:'Grok Build'}[runtime],available:true})),
-        defaults:{claude:{runtime:'claude',provider:{source:'native'},permission_mode:'yolo'},codex:{runtime:'codex',provider:{source:'native'},approval_policy:'yolo',sandbox:'danger-full-access'}}};
-      window.__pairProfiles = {schema:1, default_profile_id:'', profiles:[]};
+        defaults:{slot1:{runtime:'claude',provider:{source:'native'},permission_mode:'yolo'},slot2:{runtime:'codex',provider:{source:'native'},approval_policy:'yolo',sandbox:'danger-full-access'}}};
+      window.__pairProfiles = {schema:2, default_profile_id:'', profiles:[]};
       window.__pairProfileCounter = 0;
       window.__serviceReads = 0; window.__readDelay = 0; window.__catalogDelay = 0;
       window.__catalogReads = 0; window.__catalogWrites = 0; window.__writes = [];
@@ -197,18 +197,18 @@ async def verify_diagnostics(browser, artifacts: Path, in_page_fixture: bool = F
       const defaults = structuredClone(__catalog.defaults);
       __snapshot.rooms.forEach((room) => {
         room.agents = {
-          claude: {...defaults.claude, runtime: 'claude', model: 'fixture-model',
+          slot1: {...defaults.slot1, runtime: 'claude', model: 'fixture-model',
                    provider: {source: 'cc-switch', app_type: 'claude', profile_id: 'fixture'}},
-          codex: {...defaults.codex, runtime: 'codex', provider: {source: 'native'}},
+          slot2: {...defaults.slot2, runtime: 'codex', provider: {source: 'native'}},
         };
       });
     }""")
     await page.locator('#refresh-button').click()
-    await wait_fixture_state(page, "document.querySelector('#view .room-row .room-meta-group[data-slot=\"claude\"]')?.textContent.includes('Example Provider')")
+    await wait_fixture_state(page, "document.querySelector('#view .room-row .room-meta-group[data-slot=\"slot1\"]')?.textContent.includes('Example Provider')")
     first_row = page.locator('#view .room-row').first
     assert await first_row.locator('.room-meta-label').evaluate_all('nodes=>nodes.map(n=>n.textContent)') == ['Agent 1', 'Agent 2', 'Room ID'], 'room attributes are not separated into labelled groups'
-    agent_one = first_row.locator('.room-meta-group[data-slot="claude"]')
-    agent_two = first_row.locator('.room-meta-group[data-slot="codex"]')
+    agent_one = first_row.locator('.room-meta-group[data-slot="slot1"]')
+    agent_two = first_row.locator('.room-meta-group[data-slot="slot2"]')
     assert 'Claude Code' in await agent_one.inner_text(), 'runtime shown as its internal kind instead of its display name'
     assert 'fixture-model' in await agent_one.inner_text()
     assert 'Example Provider' in await agent_one.inner_text(), 'CC Switch Provider shown as its internal reference'
@@ -239,14 +239,14 @@ async def verify_diagnostics(browser, artifacts: Path, in_page_fixture: bool = F
     assert 'do-not-export' not in json.dumps(exported)
     await page.screenshot(path=str(artifacts / 'diagnostics-environment.png'), full_page=True)
     await page.locator('#diagnostic-scope').select_option('r1')
-    await page.locator('#diagnostic-actor').select_option('codex')
+    await page.locator('#diagnostic-actor').select_option('slot2')
     await page.locator('#diagnostic-live').click()
     assert await page.evaluate('__diagnosticRequests.length') == 1
     await expect(page.locator('#confirm-submit')).to_be_disabled()
     await page.locator('#confirm-ack').check()
     await page.locator('#confirm-submit').click()
     await expect(page.locator('[data-diagnostic-code="responded"]')).to_be_visible()
-    assert await page.evaluate('__diagnosticRequests.at(-1)') == {'mode':'runtime','actor':'codex','confirm':True,'room_id':'r1'}
+    assert await page.evaluate('__diagnosticRequests.at(-1)') == {'mode':'runtime','actor':'slot2','confirm':True,'room_id':'r1'}
     await page.screenshot(path=str(artifacts / 'diagnostics-response.png'), full_page=True)
     await page.evaluate("__diagnosticCode='authentication_failed'")
     await page.locator('#diagnostic-live').click()
@@ -300,7 +300,7 @@ async def verify_names(browser, artifacts: Path, in_page_fixture: bool = False) 
     await page.evaluate("""() => {
       const original=window.fetch;
       window.__nameWrites=[]; window.__renameFail=false; window.__expired=false;
-      const names=room => Object.fromEntries(['claude','codex'].map(actor=>[actor,`${room.name} · @${actor} · ${room.id.slice(-12)}`]));
+      const names=room => Object.fromEntries(['slot1','slot2'].map((actor,index)=>[actor,`${room.name} · @${index ? 'codex' : 'claude'} · ${room.id.slice(-12)}`]));
       __snapshot.rooms.forEach(room=>room.runtime_names=names(room));
       window.fetch=async(path,options={})=>{
         const reply=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json'}});
@@ -492,17 +492,17 @@ async def verify_pair_profiles(browser, artifacts: Path, in_page_fixture: bool =
     await wait_state("!document.getElementById('room-submit').disabled")
     assert not await page.locator('#room-project-id').is_visible()
     assert not await page.locator('#room-collaboration-mode').is_visible()
-    assert not await page.locator('input[name="claude-mode"]').first.is_visible()
+    assert not await page.locator('input[name="slot1-mode"]').first.is_visible()
     await page.locator('#pair-profile-name').fill('Daily code pair')
     await page.locator('#pair-profile-default').check()
-    await page.locator('#claude-runtime').select_option('codex')
-    for actor, model, effort in [('claude', 'planner-model', 'high'), ('codex', 'executor-model', 'low')]:
+    await page.locator('#slot1-runtime').select_option('codex')
+    for actor, model, effort in [('slot1', 'planner-model', 'high'), ('slot2', 'executor-model', 'low')]:
         await page.locator(f'#{actor}-model').fill(model)
         await page.locator(f'[data-actor="{actor}"] .agent-advanced').evaluate('node=>node.open=true')
         await page.locator(f'#{actor}-effort').select_option(effort)
         await page.locator(f'#{actor}-instructions').fill('Instructions for '+actor)
-    await page.locator('#claude-approval-policy').select_option('on-request')
-    await page.locator('#claude-sandbox').select_option('read-only')
+    await page.locator('#slot1-approval-policy').select_option('on-request')
+    await page.locator('#slot1-sandbox').select_option('read-only')
     await page.locator('#room-submit').click()
     await wait_state("!document.getElementById('room-dialog').open")
     catalog = await page.evaluate('__pairProfiles')
@@ -511,7 +511,7 @@ async def verify_pair_profiles(browser, artifacts: Path, in_page_fixture: bool =
     profile = catalog['profiles'][0]
     assert set(profile) == {'id', 'name', 'agents'}
     assert all(agent['runtime'] == 'codex' for agent in profile['agents'].values())
-    assert profile['agents']['claude']['approval_policy'] == 'on-request'
+    assert profile['agents']['slot1']['approval_policy'] == 'on-request'
     assert await page.evaluate('__writes.length') == 0, 'saving a profile must not create a Room'
 
     # Restore a Project and create a Room from the default. Temporary overrides
@@ -519,28 +519,28 @@ async def verify_pair_profiles(browser, artifacts: Path, in_page_fixture: bool =
     await page.evaluate("__snapshot.projects=[{id:'p1',root:'/workspace/example',available:true}]; document.getElementById('refresh-button').click()")
     await create_dialog()
     assert await page.locator('#room-pair-profile').input_value() == profile_id
-    assert await page.locator('#claude-model').input_value() == 'planner-model'
-    assert await page.locator('#codex-model').input_value() == 'executor-model'
-    assert await page.locator('#claude-effort').input_value() == 'high'
-    assert await page.locator('#claude-instructions').input_value() == 'Instructions for claude'
+    assert await page.locator('#slot1-model').input_value() == 'planner-model'
+    assert await page.locator('#slot2-model').input_value() == 'executor-model'
+    assert await page.locator('#slot1-effort').input_value() == 'high'
+    assert await page.locator('#slot1-instructions').input_value() == 'Instructions for slot1'
     assert await page.locator('#room-collaboration-mode').input_value() == 'default'
-    assert await page.locator('#claude-session-id').input_value() == ''
-    await page.locator('#claude-model').fill('one-room-only')
+    assert await page.locator('#slot1-session-id').input_value() == ''
+    await page.locator('#slot1-model').fill('one-room-only')
     await page.locator('#room-submit').click()
     await wait_state("!document.getElementById('room-dialog').open")
     payload = await page.evaluate("JSON.parse(__writes.filter(w=>w.path.endsWith('/rooms')).at(-1).body)")
-    assert payload['agents']['claude']['model'] == 'one-room-only'
-    assert (await page.evaluate('__pairProfiles.profiles[0].agents.claude.model')) == 'planner-model'
+    assert payload['agents']['slot1']['model'] == 'one-room-only'
+    assert (await page.evaluate('__pairProfiles.profiles[0].agents.slot1.model')) == 'planner-model'
 
     await create_dialog()
-    assert await page.locator('#claude-model').input_value() == 'planner-model'
+    assert await page.locator('#slot1-model').input_value() == 'planner-model'
     await page.locator('#room-pair-profile').select_option('')
-    assert await page.locator('#claude-runtime').input_value() == 'claude'
-    assert await page.locator('#claude-model').input_value() == ''
+    assert await page.locator('#slot1-runtime').input_value() == 'claude'
+    assert await page.locator('#slot1-model').input_value() == ''
     await page.locator('#room-pair-profile').select_option(profile_id)
     await page.locator('#pair-profile-save-options').evaluate('node=>node.open=true')
     await page.locator('#pair-profile-name').fill('Economical pair')
-    await page.locator('#codex-model').fill('fast-executor')
+    await page.locator('#slot2-model').fill('fast-executor')
     await page.locator('#pair-profile-save-new').click()
     await wait_state('__pairProfiles.profiles.length===2')
     second_id = await page.evaluate('__pairProfiles.default_profile_id')
@@ -556,13 +556,13 @@ async def verify_pair_profiles(browser, artifacts: Path, in_page_fixture: bool =
     # filling the form. Missing Providers never silently become native.
     await page.evaluate("""id=>{
       const profile=__pairProfiles.profiles.find(p=>p.id===id);
-      profile.agents.claude.effort='future-native-effort';
-      profile.agents.claude.provider={source:'cc-switch',app_type:'codex',profile_id:'removed-provider'};
+      profile.agents.slot1.effort='future-native-effort';
+      profile.agents.slot1.provider={source:'cc-switch',app_type:'codex',profile_id:'removed-provider'};
     }""", second_id)
     await create_dialog()
-    assert await page.locator('#claude-effort').input_value() == 'future-native-effort'
-    assert 'removed-provider' in await page.locator('#claude-provider').input_value()
-    assert not await page.locator('#claude-provider').evaluate('node=>node.checkValidity()')
+    assert await page.locator('#slot1-effort').input_value() == 'future-native-effort'
+    assert 'removed-provider' in await page.locator('#slot1-provider').input_value()
+    assert not await page.locator('#slot1-provider').evaluate('node=>node.checkValidity()')
     before = await page.evaluate('__writes.length')
     await page.locator('#room-submit').click()
     assert await page.evaluate('__writes.length') == before
@@ -572,9 +572,9 @@ async def verify_pair_profiles(browser, artifacts: Path, in_page_fixture: bool =
     row = page.locator(f'[data-pair-profile-id="{second_id}"]')
     await row.get_by_role('button', name='Edit profile', exact=True).click()
     await wait_state("!document.getElementById('room-submit').disabled")
-    assert await page.locator('#claude-effort').input_value() == 'future-native-effort'
-    await page.locator('#claude-provider').select_option(label='Native / Runtime default')
-    await page.locator('#claude-model').fill('updated-planner')
+    assert await page.locator('#slot1-effort').input_value() == 'future-native-effort'
+    await page.locator('#slot1-provider').select_option(label='Native / Runtime default')
+    await page.locator('#slot1-model').fill('updated-planner')
     await page.evaluate("PairRoomI18n.setLang('zh-CN')")
     for width in [320, 390]:
         await page.set_viewport_size({'width': width, 'height': 844})
@@ -599,10 +599,10 @@ async def verify_pair_profiles(browser, artifacts: Path, in_page_fixture: bool =
     await page.locator('#confirm-submit').click()
     await wait_state('__pairProfiles.profiles.length===1 && __pairProfiles.default_profile_id===""')
     # The last Room request still has its explicit snapshot after update/delete.
-    assert await page.evaluate("JSON.parse(__writes.filter(w=>w.path.endsWith('/rooms')).at(-1).body).agents.claude.model") == 'one-room-only'
+    assert await page.evaluate("JSON.parse(__writes.filter(w=>w.path.endsWith('/rooms')).at(-1).body).agents.slot1.model") == 'one-room-only'
     await create_dialog()
     assert await page.locator('#room-pair-profile').input_value() == ''
-    assert await page.locator('#claude-runtime').input_value() == 'claude'
+    assert await page.locator('#slot1-runtime').input_value() == 'claude'
     assert not errors, errors
     if not in_page_fixture:
         assert not await page.evaluate('__cspErrors'), 'profile controls violated production CSP'
@@ -702,12 +702,12 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
         await page.wait_for_function("!document.getElementById('room-submit').disabled")
         assert await page.locator('#room-collaboration-mode option').evaluate_all('nodes=>nodes.map(n=>n.value)') == ['default', 'custom']
         assert await page.locator('#room-collaboration-mode').input_value() == 'default'
-        assert 'Lead' in await page.locator('#claude-responsibility-label').inner_text()
-        assert 'Executor' in await page.locator('#codex-responsibility-label').inner_text()
-        assert await page.locator('#claude-permission-mode').input_value() == 'yolo'
-        assert await page.locator('#codex-approval-policy').input_value() == 'yolo'
-        assert await page.locator('#codex-sandbox').input_value() == 'danger-full-access'
-        assert await page.locator('#claude-reviewer-policy, #codex-reviewer-policy').count() == 0
+        assert 'Lead' in await page.locator('#slot1-responsibility-label').inner_text()
+        assert 'Executor' in await page.locator('#slot2-responsibility-label').inner_text()
+        assert await page.locator('#slot1-permission-mode').input_value() == 'yolo'
+        assert await page.locator('#slot2-approval-policy').input_value() == 'yolo'
+        assert await page.locator('#slot2-sandbox').input_value() == 'danger-full-access'
+        assert await page.locator('#slot1-reviewer-policy, #slot2-reviewer-policy').count() == 0
         await page.locator('#room-collaboration-mode').select_option('custom')
         assert not await page.locator('#room-collaboration-instructions').evaluate('node=>node.checkValidity()')
         custom = 'Agent 2 proposes. Agent 1 implements; both challenge unsupported assumptions.'
@@ -715,20 +715,20 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
         await page.evaluate("PairRoomI18n.setLang('zh-CN')")
         await page.wait_for_timeout(80)
         assert await page.locator('#room-collaboration-instructions').input_value() == custom
-        assert '主导者' not in await page.locator('#claude-responsibility-label').inner_text()
+        assert '主导者' not in await page.locator('#slot1-responsibility-label').inner_text()
         await page.set_viewport_size({'width':390, 'height':844})
         assert not await page.locator('#room-dialog').evaluate('node=>node.scrollWidth>node.clientWidth')
         await page.screenshot(path=str(artifacts / 'creation-custom-mobile-zh-CN.png'))
         await page.set_viewport_size({'width':1440, 'height':1000})
         await page.evaluate("PairRoomI18n.setLang('en')")
-        await page.locator('#claude-model').fill('model-before')
+        await page.locator('#slot1-model').fill('model-before')
         await page.evaluate('__catalogDelay=250')
         await page.locator('#agent-catalog-refresh').click()
-        await page.locator('#claude-model').fill('model-edited-while-refreshing')
+        await page.locator('#slot1-model').fill('model-edited-while-refreshing')
         await page.wait_for_function("document.getElementById('agent-catalog-refresh').getAttribute('aria-busy')==='false'")
-        assert await page.locator('#claude-model').input_value() == 'model-edited-while-refreshing', 'catalog refresh overwrote a new model override'
+        assert await page.locator('#slot1-model').input_value() == 'model-edited-while-refreshing', 'catalog refresh overwrote a new model override'
         results['catalog_edit_preserved'] = True
-        provider = page.locator('#claude-provider')
+        provider = page.locator('#slot1-provider')
         choice = await provider.locator('option').nth(1).get_attribute('value')
         await provider.select_option(choice)
         await page.evaluate('__catalog.profiles=[]')
@@ -742,13 +742,13 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
         assert await page.evaluate('__writes.length') == writes, 'invalid provider selection reached room creation'
         results['unavailable_provider_requires_explicit_choice'] = True
         await provider.select_option(label='Native / Runtime default')
-        await page.locator('#claude-model').fill('model-before-submit')
+        await page.locator('#slot1-model').fill('model-before-submit')
         await page.screenshot(path=str(artifacts / 'management-room-config-light.png'))
         await page.locator('#room-submit').click()
         await page.wait_for_function("!document.getElementById('room-dialog').open")
         sent = await page.evaluate("JSON.parse(__writes.filter(w=>w.path.endsWith('/rooms')).at(-1).body)")
         assert sent['collaboration'] == {'mode':'custom', 'instructions':custom}
-        assert sent['agents']['claude']['model'] == 'model-before-submit'
+        assert sent['agents']['slot1']['model'] == 'model-before-submit'
         assert all('ordinary_reviewer_policy' not in agent for agent in sent['agents'].values())
         await page.get_by_role('button', name='+ Create Room', exact=True).first.click()
         await page.wait_for_function("!document.getElementById('room-submit').disabled")

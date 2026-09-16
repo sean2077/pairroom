@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -101,14 +102,14 @@ func testRegistry(t *testing.T, repo string) (*Registry, Project) {
 
 func specs(claudeMode, codexMode BindingMode, suffix string) map[model.ActorID]BindingSpec {
 	values := map[model.ActorID]BindingSpec{
-		model.ActorClaude: {Mode: claudeMode},
-		model.ActorCodex:  {Mode: codexMode},
+		model.ActorSlot1: {Mode: claudeMode},
+		model.ActorSlot2: {Mode: codexMode},
 	}
 	if claudeMode == BindingExisting {
-		values[model.ActorClaude] = BindingSpec{Mode: BindingExisting, SessionID: "claude-existing-" + suffix}
+		values[model.ActorSlot1] = BindingSpec{Mode: BindingExisting, SessionID: "claude-existing-" + suffix}
 	}
 	if codexMode == BindingExisting {
-		values[model.ActorCodex] = BindingSpec{Mode: BindingExisting, SessionID: "codex-existing-" + suffix}
+		values[model.ActorSlot2] = BindingSpec{Mode: BindingExisting, SessionID: "codex-existing-" + suffix}
 	}
 	return values
 }
@@ -203,7 +204,7 @@ func TestPendingNewBindingMaterializesAfterNativeInputAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 		binding := created.Bindings[actor]
 		if !binding.Pending || binding.Mode != BindingNew || binding.SessionID != "" {
 			t.Fatalf("%s binding was not deferred: %#v", actor, binding)
@@ -216,31 +217,31 @@ func TestPendingNewBindingMaterializesAfterNativeInputAcceptance(t *testing.T) {
 		}
 		return appendServiceEvent(created, kind, payload)
 	}
-	if _, err := registry.MaterializeBinding(context.Background(), created.ID, model.ActorClaude, "claude-native-session", func(string, any) error {
+	if _, err := registry.MaterializeBinding(context.Background(), created.ID, model.ActorSlot1, "claude-native-session", func(string, any) error {
 		return errors.New("synthetic append failure")
 	}); err == nil || !strings.Contains(err.Error(), "synthetic append failure") {
 		t.Fatalf("materialization append failure=%v", err)
 	}
-	if unchanged, ok := registry.Room(created.ID); !ok || !unchanged.Bindings[model.ActorClaude].Pending {
+	if unchanged, ok := registry.Room(created.ID); !ok || !unchanged.Bindings[model.ActorSlot1].Pending {
 		t.Fatalf("failed materialization changed Registry: %#v ok=%v", unchanged, ok)
 	}
-	if _, owned := registry.BindingOwner(BindingKey{Agent: model.ActorClaude, SessionID: "claude-native-session"}); owned {
+	if _, owned := registry.BindingOwner(BindingKey{Agent: model.ActorSlot1, SessionID: "claude-native-session"}); owned {
 		t.Fatal("failed materialization retained native ownership")
 	}
-	materialized, err := registry.MaterializeBinding(context.Background(), created.ID, model.ActorClaude, "claude-native-session", appendFact)
+	materialized, err := registry.MaterializeBinding(context.Background(), created.ID, model.ActorSlot1, "claude-native-session", appendFact)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := materialized.Bindings[model.ActorClaude]; got.Pending || got.SessionID != "claude-native-session" || got.Mode != BindingNew {
+	if got := materialized.Bindings[model.ActorSlot1]; got.Pending || got.SessionID != "claude-native-session" || got.Mode != BindingNew {
 		t.Fatalf("Claude binding was not materialized: %#v", got)
 	}
-	if got := materialized.Bindings[model.ActorCodex]; !got.Pending || got.SessionID != "" {
+	if got := materialized.Bindings[model.ActorSlot2]; !got.Pending || got.SessionID != "" {
 		t.Fatalf("Codex binding changed before its first accepted input: %#v", got)
 	}
-	if owner, ok := registry.BindingOwner(materialized.Bindings[model.ActorClaude].Key()); !ok || owner != created.ID {
+	if owner, ok := registry.BindingOwner(materialized.Bindings[model.ActorSlot1].Key()); !ok || owner != created.ID {
 		t.Fatalf("materialized binding owner=%q ok=%v", owner, ok)
 	}
-	if _, err := registry.MaterializeBinding(context.Background(), created.ID, model.ActorClaude, "replacement-session", appendFact); err == nil || !strings.Contains(err.Error(), "cannot be replaced") {
+	if _, err := registry.MaterializeBinding(context.Background(), created.ID, model.ActorSlot1, "replacement-session", appendFact); err == nil || !strings.Contains(err.Error(), "cannot be replaced") {
 		t.Fatalf("binding replacement error=%v", err)
 	}
 
@@ -252,10 +253,10 @@ func TestPendingNewBindingMaterializesAfterNativeInputAcceptance(t *testing.T) {
 	if !ok {
 		t.Fatal("materialized Room was not rebuilt")
 	}
-	if got := rebuilt.Bindings[model.ActorClaude]; got.Pending || got.SessionID != "claude-native-session" {
+	if got := rebuilt.Bindings[model.ActorSlot1]; got.Pending || got.SessionID != "claude-native-session" {
 		t.Fatalf("rebuilt Claude binding=%#v", got)
 	}
-	if got := rebuilt.Bindings[model.ActorCodex]; !got.Pending || got.SessionID != "" {
+	if got := rebuilt.Bindings[model.ActorSlot2]; !got.Pending || got.SessionID != "" {
 		t.Fatalf("rebuilt Codex binding=%#v", got)
 	}
 }
@@ -265,25 +266,25 @@ func TestMixedNewAndExistingBindingsRebuildAfterMaterialization(t *testing.T) {
 	selected, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
 		ProjectID: project.ID, Name: "Mixed bindings",
 		Bindings: map[model.ActorID]BindingSpec{
-			model.ActorClaude: {Mode: BindingNew},
-			model.ActorCodex:  {Mode: BindingExisting, SessionID: "codex-kept"},
+			model.ActorSlot1: {Mode: BindingNew},
+			model.ActorSlot2: {Mode: BindingExisting, SessionID: "codex-kept"},
 		},
 	}, deferredNewProvisioner{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if binding := selected.Bindings[model.ActorClaude]; !binding.Pending || binding.Mode != BindingNew || binding.SessionID != "" {
+	if binding := selected.Bindings[model.ActorSlot1]; !binding.Pending || binding.Mode != BindingNew || binding.SessionID != "" {
 		t.Fatalf("new choice was not deferred: %#v", binding)
 	}
 	if err := selected.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	appendFact := func(kind string, payload any) error { return appendServiceEvent(selected, kind, payload) }
-	materialized, err := registry.MaterializeBinding(context.Background(), selected.ID, model.ActorClaude, "claude-native", appendFact)
+	materialized, err := registry.MaterializeBinding(context.Background(), selected.ID, model.ActorSlot1, "claude-native", appendFact)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := materialized.Bindings[model.ActorClaude]; got.Pending || got.SessionID != "claude-native" {
+	if got := materialized.Bindings[model.ActorSlot1]; got.Pending || got.SessionID != "claude-native" {
 		t.Fatalf("binding did not materialize: %#v", got)
 	}
 
@@ -292,7 +293,7 @@ func TestMixedNewAndExistingBindingsRebuildAfterMaterialization(t *testing.T) {
 		t.Fatal(err)
 	}
 	rebuilt, ok := reopened.Room(selected.ID)
-	if !ok || rebuilt.Bindings[model.ActorClaude].SessionID != "claude-native" || rebuilt.Bindings[model.ActorCodex].SessionID != "codex-kept" {
+	if !ok || rebuilt.Bindings[model.ActorSlot1].SessionID != "claude-native" || rebuilt.Bindings[model.ActorSlot2].SessionID != "codex-kept" {
 		t.Fatalf("materialization did not rebuild: %#v ok=%v", rebuilt, ok)
 	}
 }
@@ -349,7 +350,7 @@ func TestProvisionRoomSupportsAllBindingCombinations(t *testing.T) {
 		if room.ProjectID != project.ID || room.Lifecycle != RoomActive || room.DataDir == "" {
 			t.Fatalf("unexpected room projection: %#v", room)
 		}
-		for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+		for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 			binding := room.Bindings[actor]
 			if binding.Mode != specs(mode[0], mode[1], fmt.Sprint(index))[actor].Mode || binding.SessionID == "" {
 				t.Fatalf("unexpected %s binding: %#v", actor, binding)
@@ -402,7 +403,7 @@ func TestProvisionRoomRejectsInvalidPendingBindingIdentity(t *testing.T) {
 func TestProvisionFailureLeavesNoVisibleRoomBindingOrDirectory(t *testing.T) {
 	repo := testGitRepo(t)
 	registry, project := testRegistry(t, repo)
-	provisioner := &recordingProvisioner{failActor: model.ActorCodex}
+	provisioner := &recordingProvisioner{failActor: model.ActorSlot2}
 	_, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
 		ProjectID: project.ID, Name: "Must roll back", Bindings: specs(BindingNew, BindingExisting, "rollback"),
 	}, provisioner)
@@ -412,7 +413,7 @@ func TestProvisionFailureLeavesNoVisibleRoomBindingOrDirectory(t *testing.T) {
 	if got := registry.Snapshot(true); len(got.Rooms) != 0 {
 		t.Fatalf("failed provisioning published a room: %#v", got.Rooms)
 	}
-	if _, ok := registry.BindingOwner(BindingKey{Agent: model.ActorCodex, SessionID: "codex-existing-rollback"}); ok {
+	if _, ok := registry.BindingOwner(BindingKey{Agent: model.ActorSlot2, SessionID: "codex-existing-rollback"}); ok {
 		t.Fatal("failed provisioning retained binding ownership")
 	}
 	entries, err := os.ReadDir(registry.RoomsRoot())
@@ -434,8 +435,8 @@ func TestBindingIdentityIsExclusiveAcrossArchivedAndConcurrentRooms(t *testing.T
 	repo := testGitRepo(t)
 	registry, project := testRegistry(t, repo)
 	shared := map[model.ActorID]BindingSpec{
-		model.ActorClaude: {Mode: BindingExisting, SessionID: "shared-claude"},
-		model.ActorCodex:  {Mode: BindingNew},
+		model.ActorSlot1: {Mode: BindingExisting, SessionID: "shared-claude"},
+		model.ActorSlot2: {Mode: BindingNew},
 	}
 	first, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: project.ID, Name: "First", Bindings: shared}, SyntheticProvisioner{})
 	if err != nil {
@@ -449,8 +450,8 @@ func TestBindingIdentityIsExclusiveAcrossArchivedAndConcurrentRooms(t *testing.T
 	}
 
 	concurrent := map[model.ActorID]BindingSpec{
-		model.ActorClaude: {Mode: BindingExisting, SessionID: "concurrent-claude"},
-		model.ActorCodex:  {Mode: BindingExisting, SessionID: "concurrent-codex"},
+		model.ActorSlot1: {Mode: BindingExisting, SessionID: "concurrent-claude"},
+		model.ActorSlot2: {Mode: BindingExisting, SessionID: "concurrent-codex"},
 	}
 	var wg sync.WaitGroup
 	results := make(chan error, 2)
@@ -543,7 +544,11 @@ func TestRegistryRejectsStandaloneRoomWithoutChangingFiles(t *testing.T) {
 				before[name] = data
 			}
 			_, err := OpenRegistry(context.Background(), RegistryConfig{Root: root})
-			if err == nil || !strings.Contains(err.Error(), "unsupported") {
+			want := "standalone"
+			if schema < version.StoreSchema {
+				want = "retired Service data root"
+			}
+			if err == nil || !strings.Contains(err.Error(), want) {
 				t.Fatalf("standalone Room was accepted: %v", err)
 			}
 			for name, want := range before {
@@ -579,17 +584,8 @@ func TestRegistryDoesNotFollowExternalCheckpointRooms(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(root, "service-registry.json"), mustJSON(t, snapshot), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			registry, err := OpenRegistry(context.Background(), RegistryConfig{Root: root})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := registry.Snapshot(true); len(got.Rooms) != 0 {
-				t.Fatalf("external Room was loaded from checkpoint: %#v", got.Rooms)
-			}
-			for _, binding := range external.Bindings {
-				if owner, ok := registry.BindingOwner(binding.Key()); ok {
-					t.Fatalf("external binding was claimed by %q", owner)
-				}
+			if _, err := OpenRegistry(context.Background(), RegistryConfig{Root: root}); err == nil || !strings.Contains(err.Error(), "retired Service data root") {
+				t.Fatalf("retired checkpoint was accepted: %v", err)
 			}
 			if after, err := os.ReadFile(path); err != nil || string(after) != string(before) {
 				t.Fatalf("external Event Log changed: %v", err)
@@ -775,8 +771,8 @@ func writeLegacyRoom(dir, repo, roomID, name, claudeID, codexID string) error {
 		value any
 	}{
 		{"room.created", model.ActorSystem, model.RoomMeta{ID: roomID, Name: name, Repo: repo, CreatedAt: created}},
-		{"participant.updated", model.ActorClaude, model.ParticipantSnapshot{ID: model.ActorClaude, DisplayName: "Claude Code", MentionHandle: "@claude", Role: "driver", State: model.StateStopped, SessionID: claudeID, RuntimeKind: model.RuntimeClaude}},
-		{"participant.updated", model.ActorCodex, model.ParticipantSnapshot{ID: model.ActorCodex, DisplayName: "Codex", MentionHandle: "@codex", Role: "reviewer", State: model.StateStopped, SessionID: codexID, RuntimeKind: model.RuntimeCodex}},
+		{"participant.updated", model.ActorSlot1, model.ParticipantSnapshot{ID: model.ActorSlot1, DisplayName: "Claude Code", MentionHandle: "@claude", Role: "driver", State: model.StateStopped, SessionID: claudeID, RuntimeKind: model.RuntimeClaude}},
+		{"participant.updated", model.ActorSlot2, model.ParticipantSnapshot{ID: model.ActorSlot2, DisplayName: "Codex", MentionHandle: "@codex", Role: "reviewer", State: model.StateStopped, SessionID: codexID, RuntimeKind: model.RuntimeCodex}},
 	}
 	for _, value := range values {
 		event, err := model.NewEvent(roomID, value.kind, value.actor, value.value)
@@ -1049,12 +1045,12 @@ func TestRegistryRequiresCurrentProvisioningAndExplicitSelections(t *testing.T) 
 		mutate func(*roomProvisionedPayload)
 		want   string
 	}{
-		{"schema-1", func(p *roomProvisionedPayload) { p.Schema = 1 }, "unsupported room service schema"},
-		{"schema-2", func(p *roomProvisionedPayload) { p.Schema = 2 }, "unsupported room service schema"},
-		{"future-schema", func(p *roomProvisionedPayload) { p.Schema = 5 }, "unsupported room service schema"},
+		{"schema-1", func(p *roomProvisionedPayload) { p.Schema = 1 }, "retired room provisioning schema"},
+		{"schema-2", func(p *roomProvisionedPayload) { p.Schema = 2 }, "retired room provisioning schema"},
+		{"future-schema", func(p *roomProvisionedPayload) { p.Schema = 6 }, "unsupported room provisioning schema"},
 		{"missing-collaboration", func(p *roomProvisionedPayload) { p.Collaboration = nil }, "requires collaboration"},
 		{"missing-agents", func(p *roomProvisionedPayload) { p.Agents = nil }, "Agent selections"},
-		{"missing-agent-2", func(p *roomProvisionedPayload) { delete(p.Agents, model.ActorCodex) }, "Agent selections"},
+		{"missing-agent-2", func(p *roomProvisionedPayload) { delete(p.Agents, model.ActorSlot2) }, "Agent selections"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1099,6 +1095,106 @@ func TestRegistryRequiresCurrentProvisioningAndExplicitSelections(t *testing.T) 
 	}
 }
 
+func TestRegistryRejectsRetiredActorInsideCurrentRoomWithoutMutation(t *testing.T) {
+	registry, project := testRegistry(t, testGitRepo(t))
+	created, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: project.ID, Name: "Current actor fixture", Bindings: specs(BindingNew, BindingNew, "actor")}, SyntheticProvisioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(created.DataDir, "events.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	var event model.Event
+	if err := json.Unmarshal([]byte(lines[1]), &event); err != nil {
+		t.Fatal(err)
+	}
+	event.Actor = model.ActorID("claude")
+	lines[1] = string(mustJSON(t, event))
+	before := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenRegistry(context.Background(), RegistryConfig{Root: registry.Root()}); err == nil || !strings.Contains(err.Error(), "retired or invalid actor") {
+		t.Fatalf("current-schema legacy actor was accepted: %v", err)
+	}
+	if after, err := os.ReadFile(path); err != nil || string(after) != before {
+		t.Fatalf("replay rejection changed event history: %v", err)
+	}
+}
+
+func TestRegistryRejectsNoncanonicalCheckpointSlotKeysBeforeIndexing(t *testing.T) {
+	for _, key := range []string{"claude", "1"} {
+		t.Run(key, func(t *testing.T) {
+			registry, project := testRegistry(t, testGitRepo(t))
+			if _, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: project.ID, Name: "Checkpoint fixture", Bindings: specs(BindingNew, BindingNew, key)}, SyntheticProvisioner{}); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(registry.Root(), "service-registry.json")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var checkpoint map[string]any
+			if err := json.Unmarshal(data, &checkpoint); err != nil {
+				t.Fatal(err)
+			}
+			room := checkpoint["rooms"].([]any)[0].(map[string]any)
+			bindings := room["bindings"].(map[string]any)
+			bindings[key] = bindings["slot1"]
+			before := mustJSON(t, checkpoint)
+			if err := os.WriteFile(path, before, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := OpenRegistry(context.Background(), RegistryConfig{Root: registry.Root()}); err == nil || !strings.Contains(err.Error(), "checkpoint Room") {
+				t.Fatalf("noncanonical checkpoint key %q was accepted: %v", key, err)
+			}
+			if after, err := os.ReadFile(path); err != nil || !bytes.Equal(after, before) {
+				t.Fatalf("checkpoint rejection rewrote data: %v", err)
+			}
+		})
+	}
+}
+
+func TestMalformedCurrentCheckpointCreatesNoDirectories(t *testing.T) {
+	root := t.TempDir()
+	checkpoint := filepath.Join(root, "service-registry.json")
+	data := []byte(`{"schema":3,"unexpected":true}`)
+	if err := os.WriteFile(checkpoint, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenRegistry(context.Background(), RegistryConfig{Root: root}); err == nil || !strings.Contains(err.Error(), "load service registry checkpoint") {
+		t.Fatalf("malformed current checkpoint was accepted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "rooms")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("malformed checkpoint created Room root: %v", err)
+	}
+	if after, err := os.ReadFile(checkpoint); err != nil || !bytes.Equal(after, data) {
+		t.Fatalf("malformed checkpoint was rewritten: %v", err)
+	}
+}
+
+func TestProvisionInputAcceptsOnlyNumericSlotAliases(t *testing.T) {
+	registry, project := testRegistry(t, testGitRepo(t))
+	numeric := map[model.ActorID]BindingSpec{
+		"1": {Mode: BindingNew},
+		"2": {Mode: BindingNew},
+	}
+	room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: project.ID, Name: "Numeric input", Bindings: numeric}, SyntheticProvisioner{})
+	if err != nil || room.Bindings[model.ActorSlot1].Agent != model.ActorSlot1 || room.Bindings[model.ActorSlot2].Agent != model.ActorSlot2 {
+		t.Fatalf("numeric slot input = %#v, %v", room.Bindings, err)
+	}
+	legacy := map[model.ActorID]BindingSpec{
+		"claude": {Mode: BindingNew},
+		"codex":  {Mode: BindingNew},
+	}
+	if _, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: project.ID, Name: "Legacy input", Bindings: legacy}, SyntheticProvisioner{}); err == nil || !strings.Contains(err.Error(), "invalid binding slot") {
+		t.Fatalf("legacy Service input was accepted: %v", err)
+	}
+}
+
 func TestCanceledProvisionAndLifecycleDoNotCommit(t *testing.T) {
 	registry, project := testRegistry(t, testGitRepo(t))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1107,7 +1203,7 @@ func TestCanceledProvisionAndLifecycleDoNotCommit(t *testing.T) {
 		if id == "" {
 			id = string(actor) + "-canceled-provision"
 		}
-		if actor == model.ActorCodex {
+		if actor == model.ActorSlot2 {
 			cancel()
 		}
 		return Binding{Agent: actor, Mode: spec.Mode, SessionID: id, BoundAt: time.Now().UTC()}, func(context.Context) error { return nil }, nil
@@ -1180,15 +1276,15 @@ func TestRegistryRejectsInvalidLifecycleTransitionDuringRebuild(t *testing.T) {
 }
 
 func TestBindingAndRequestValidationRejectAmbiguousIdentities(t *testing.T) {
-	binding := Binding{Agent: model.ActorClaude, Mode: BindingExisting, SessionID: " session-id ", BoundAt: time.Now().UTC()}
+	binding := Binding{Agent: model.ActorSlot1, Mode: BindingExisting, SessionID: " session-id ", BoundAt: time.Now().UTC()}
 	if err := binding.Validate(); err == nil || !strings.Contains(err.Error(), "whitespace") {
 		t.Fatalf("ambiguous binding identity was accepted: %v", err)
 	}
 	request := ProvisionRequest{
 		ProjectID: "project-test", Name: "Unexpected binding",
 		Bindings: map[model.ActorID]BindingSpec{
-			model.ActorClaude: {Mode: BindingNew},
-			model.ActorCodex:  {Mode: BindingNew},
+			model.ActorSlot1:  {Mode: BindingNew},
+			model.ActorSlot2:  {Mode: BindingNew},
 			model.ActorSystem: {Mode: BindingExisting, SessionID: "unexpected"},
 		},
 	}
@@ -1299,7 +1395,7 @@ func mustJSON(t *testing.T, value any) []byte {
 }
 
 func TestBindingValidationRequiresDurableBoundTime(t *testing.T) {
-	binding := Binding{Agent: model.ActorClaude, Mode: BindingExisting, SessionID: "session-without-time"}
+	binding := Binding{Agent: model.ActorSlot1, Mode: BindingExisting, SessionID: "session-without-time"}
 	if err := binding.Validate(); err == nil || !strings.Contains(err.Error(), "time") {
 		t.Fatalf("binding without durable timestamp was accepted: %v", err)
 	}

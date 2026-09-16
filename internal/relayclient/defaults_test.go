@@ -12,11 +12,12 @@ import (
 
 func writeSlotState(t *testing.T, root, room, slot string, pid int, name string) {
 	t.Helper()
+	slot = normalizeSlot(slot)
 	dir := filepath.Join(root, ".pairroom", "rooms", room, "slots", slot)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	s := State{Schema: 1, Room: room, Slot: model.ActorID(slot), BindID: "bind-" + room + slot, Generation: 1, SessionID: "session-" + room + slot, HarnessPID: pid, HarnessName: name}
+	s := State{Schema: 2, Room: room, Slot: model.ActorID(slot), BindID: "bind-" + room + slot, Generation: 1, SessionID: "session-" + room + slot, HarnessPID: pid, HarnessName: name}
 	data, err := json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +41,7 @@ func TestResolveSlotDefaultsSoleBinding(t *testing.T) {
 	if err := resolveSlotDefaults(root, &o); err != nil {
 		t.Fatalf("resolveSlotDefaults: %v", err)
 	}
-	if o.room != "room1" || o.slot != "claude" {
+	if o.room != "room1" || o.slot != "slot1" {
 		t.Fatalf("resolved %q/%q", o.room, o.slot)
 	}
 }
@@ -65,7 +66,7 @@ func TestResolveSlotDefaultsSoleBindingChecksRecognizedCaller(t *testing.T) {
 			if (err != nil) != tc.wantError {
 				t.Fatalf("resolve = %+v, %v", o, err)
 			}
-			if tc.wantError && (o.room != "" || o.slot != "" || !strings.Contains(err.Error(), "--room room --slot claude")) {
+			if tc.wantError && (o.room != "" || o.slot != "" || !strings.Contains(err.Error(), "--room room --slot slot1")) {
 				t.Fatalf("mismatch must require explicit selection: %+v %v", o, err)
 			}
 		})
@@ -95,7 +96,7 @@ func TestResolveSlotDefaultsLineageSelectsOwnSlot(t *testing.T) {
 	if err := resolveSlotDefaults(root, &o); err != nil {
 		t.Fatalf("resolveSlotDefaults: %v", err)
 	}
-	if o.room != "roomB" || o.slot != "codex" {
+	if o.room != "roomB" || o.slot != "slot2" {
 		t.Fatalf("resolved %q/%q", o.room, o.slot)
 	}
 }
@@ -110,7 +111,7 @@ func TestResolveSlotDefaultsAmbiguityFailsWithCandidates(t *testing.T) {
 	if err == nil {
 		t.Fatal("ambiguous workspace must fail")
 	}
-	if !strings.Contains(err.Error(), "--room roomA --slot claude") || !strings.Contains(err.Error(), "--room roomB --slot codex") {
+	if !strings.Contains(err.Error(), "--room roomA --slot slot1") || !strings.Contains(err.Error(), "--room roomB --slot slot2") {
 		t.Fatalf("error must list candidates: %v", err)
 	}
 }
@@ -138,11 +139,11 @@ func TestResolveSlotDefaultsSkipsIncompleteBinding(t *testing.T) {
 	// A bind that never confirmed (no generation/session id) must not be
 	// auto-selected for foreground commands; the caller is told to bind first.
 	root := t.TempDir()
-	dir := filepath.Join(root, ".pairroom", "rooms", "room1", "slots", "claude")
+	dir := filepath.Join(root, ".pairroom", "rooms", "room1", "slots", "slot1")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	s := State{Schema: 1, Room: "room1", Slot: model.ActorClaude, Runtime: model.RuntimeClaude, BindID: "bind-incomplete"}
+	s := State{Schema: 2, Room: "room1", Slot: model.ActorSlot1, Runtime: model.RuntimeClaude, BindID: "bind-incomplete"}
 	data, err := json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)
@@ -175,7 +176,7 @@ func TestResolveSlotDefaultsPartialFlagsRejected(t *testing.T) {
 func TestStateToleratesPreLineageFiles(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
-	if err := os.WriteFile(path, []byte(`{"schema":1,"room":"r","slot":"claude","runtime":"claude","workspace":"/ws","endpoint_path":"/ep","bind_id":"b","generation":1,"last_seq":0,"last_confirmed_seq":0,"blocks":0}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"schema":2,"room":"r","slot":"slot1","runtime":"claude","workspace":"/ws","endpoint_path":"/ep","bind_id":"b","generation":1,"last_seq":0,"last_confirmed_seq":0,"blocks":0}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var s State

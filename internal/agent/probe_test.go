@@ -53,7 +53,7 @@ case "$1" in
   *) exit 2 ;;
 esac
 `)
-	probe, err := ProbeRuntime(context.Background(), Config{Actor: model.ActorClaude, Command: path})
+	probe, err := ProbeRuntime(context.Background(), Config{Actor: model.ActorSlot1, Command: path})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ case "$1" in
   *) exit 2 ;;
 esac
 `)
-	probe, err := ProbeRuntime(context.Background(), Config{Actor: model.ActorClaude, Command: path})
+	probe, err := ProbeRuntime(context.Background(), Config{Actor: model.ActorSlot1, Command: path})
 	if err != nil {
 		t.Fatalf("incomplete --help must not reject a documented protocol: %v", err)
 	}
@@ -99,7 +99,7 @@ case "$1" in
   *) exit 2 ;;
 esac
 `)
-	probe, err := ProbeRuntime(context.Background(), Config{Actor: model.ActorClaude, Command: path})
+	probe, err := ProbeRuntime(context.Background(), Config{Actor: model.ActorSlot1, Command: path})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ if [ "$1" = "--version" ]; then echo "codex-cli 0.42.0"; exit 0; fi
 if [ "$1" = "app-server" ] && [ "$2" = "--help" ]; then echo "app-server help"; exit 0; fi
 exit 2
 `)
-	probe, err := ProbeRuntime(context.Background(), Config{Actor: model.ActorCodex, Command: path})
+	probe, err := ProbeRuntime(context.Background(), Config{Actor: model.ActorSlot2, Command: path})
 	if err != nil {
 		t.Fatal(err)
 	}

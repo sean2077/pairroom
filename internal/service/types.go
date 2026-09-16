@@ -156,7 +156,7 @@ type Room struct {
 func (r Room) Archived() bool { return r.Lifecycle == RoomArchived }
 
 func (r Room) HasPendingBindings() bool {
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 		if binding, ok := r.Bindings[actor]; !ok || binding.Pending {
 			return true
 		}
@@ -196,11 +196,11 @@ func (r Room) Validate() error {
 		return fmt.Errorf("room must contain exactly two agent bindings; got %d", len(r.Bindings))
 	}
 	for actor := range r.Bindings {
-		if actor != model.ActorClaude && actor != model.ActorCodex {
+		if actor != model.ActorSlot1 && actor != model.ActorSlot2 {
 			return fmt.Errorf("room contains unexpected binding agent %q", actor)
 		}
 	}
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 		binding, ok := r.Bindings[actor]
 		if !ok {
 			return fmt.Errorf("room is missing %s binding", actor)
@@ -238,6 +238,56 @@ type ProvisionRequest struct {
 	Agents             map[model.ActorID]model.AgentSelection `json:"agents,omitempty"`
 }
 
+// canonicalInputSlot accepts the documented HTTP numeric aliases before a
+// request reaches durable validation. Runtime-named legacy values are never
+// aliases outside the relay CLI.
+func canonicalInputSlot(actor model.ActorID) model.ActorID {
+	switch strings.ToLower(strings.TrimSpace(string(actor))) {
+	case "slot1", "1":
+		return model.ActorSlot1
+	case "slot2", "2":
+		return model.ActorSlot2
+	default:
+		return model.ActorID(strings.ToLower(strings.TrimSpace(string(actor))))
+	}
+}
+
+func normalizeBindingSpecsInput(input map[model.ActorID]BindingSpec) (map[model.ActorID]BindingSpec, error) {
+	if input == nil {
+		return nil, nil
+	}
+	output := make(map[model.ActorID]BindingSpec, len(input))
+	for actor, spec := range input {
+		canonical := canonicalInputSlot(actor)
+		if !canonical.ValidParticipant() {
+			return nil, fmt.Errorf("invalid binding slot %q; use slot1 or slot2", actor)
+		}
+		if _, duplicate := output[canonical]; duplicate {
+			return nil, fmt.Errorf("duplicate binding slot %q", canonical)
+		}
+		output[canonical] = spec
+	}
+	return output, nil
+}
+
+func normalizeAgentSelectionsInput(input map[model.ActorID]model.AgentSelection) (map[model.ActorID]model.AgentSelection, error) {
+	if input == nil {
+		return nil, nil
+	}
+	output := make(map[model.ActorID]model.AgentSelection, len(input))
+	for actor, selection := range input {
+		canonical := canonicalInputSlot(actor)
+		if !canonical.ValidParticipant() {
+			return nil, fmt.Errorf("invalid Agent slot %q; use slot1 or slot2", actor)
+		}
+		if _, duplicate := output[canonical]; duplicate {
+			return nil, fmt.Errorf("duplicate Agent slot %q", canonical)
+		}
+		output[canonical] = selection
+	}
+	return output, nil
+}
+
 func (r ProvisionRequest) Validate() error {
 	if !r.HostMode.ForCreation().Valid() {
 		return fmt.Errorf("invalid host_mode %q", r.HostMode)
@@ -270,11 +320,11 @@ func (r ProvisionRequest) Validate() error {
 		return fmt.Errorf("exactly two agent bindings are required; got %d", len(r.Bindings))
 	}
 	for actor := range r.Bindings {
-		if actor != model.ActorClaude && actor != model.ActorCodex {
+		if actor != model.ActorSlot1 && actor != model.ActorSlot2 {
 			return fmt.Errorf("unexpected binding agent %q", actor)
 		}
 	}
-	for _, actor := range []model.ActorID{model.ActorClaude, model.ActorCodex} {
+	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 		spec, ok := r.Bindings[actor]
 		if !ok {
 			return fmt.Errorf("%s binding is required", actor)

@@ -4,7 +4,7 @@ Treat an upgrade as a controlled change, not as overwriting an active binary. Re
 
 ## Supported Room formats
 
-Readers accept **Store schema 10/provisioning 3** as embedded and **Store schema 11/provisioning 4** with explicit immutable `host_mode`. All new Rooms, including embedded Rooms, use 11/4. Existing 10/3 Rooms retain their historical bytes and append schema; no migration runs. Explicit immutable Agent selections and matching collaboration instructions remain required. Registry checkpoints retain schema 2 and exactly the same strict shape; host mode is rebuilt from Room events. Current-schema version-1 default instructions, version-2 flexible defaults, and custom instructions remain readable and unchanged; this cleanup does not upgrade their prose or grant permissions.
+PairRoom 5.0.0 is a clean development cutover. Readers accept only **Store schema 12/provisioning 5** with explicit immutable `host_mode`, registry checkpoint schema 3, relay state schema 2, and Agent pair profile schema 2. Schema ≤11 Rooms, schema-2 checkpoints, old relay state, and old profiles are retired without migration. An old Service data root fails closed before recovery, replay, repair, or rewrite; start a new data root and recreate Rooms and profiles. Legacy data and credential directories remain untouched for explicit human backup or removal.
 
 Legacy Room compatibility is removed: schema 9, provisioning 1/2, missing-metadata imports, inferred native Bindings, Service-default fallback at activation, role switching, role-bound Reviewer snapshots, and lifecycle-only archive stubs are unsupported. The import and binding-completion HTTP endpoints and UI are removed. `ordinary_reviewer_policy` is no longer a configuration field. The current `configured`, `read-only`, and `yolo` permission profiles remain independent of Lead/Executor responsibilities.
 
@@ -26,7 +26,7 @@ Service configuration is one strict JSON object: duplicate fields, trailing docu
 
 Providers use native configuration or read-only CC Switch references. Back up the data root, configure the equivalent CC Switch profile, then replace removed top-level `providers` / `cc_connect` and per-slot Provider-name strings with structured references. Never copy credentials into Room selections. Native runtime versions and per-process credential boundaries must be rechecked after upgrade.
 
-Remove retired `routing_mode`, `max_agent_hops`, `--routing`, `--max-hops`, and role-target automation. Message intents are `steer` or `queue`. Only current runtime-derived exact handles route Agent relay; old control markers are ordinary text. Stable JSON slot IDs remain `claude` and `codex`, independently of the selected Runtime.
+Remove retired `routing_mode`, `max_agent_hops`, `--routing`, `--max-hops`, and role-target automation. Message intents are `steer` or `queue`. Only current runtime-derived exact handles route Agent relay; old control markers are ordinary text. Stable JSON slot IDs are `slot1` and `slot2`, independently of the selected Runtime; `claude` and `codex` are relay CLI input aliases only.
 
 ## Desktop and daemon
 
@@ -55,9 +55,9 @@ Do not renumber complete Event Log records to bypass verification. Only an incom
 
 Native mode is experimental until the authenticated multi-round Codex Desktop ↔ Claude Code gate in [the approved design](design/native-host-mode.md) is exercised. Official hook documentation supports the channel; synthetic Stop inputs and Mock do not prove real native acceptance, installed-version behavior, interruption coverage or token cost.
 
-A schema-10-only binary rejects schema-11 Rooms before replay. Even one schema-11 Room under a mixed Service discovery root makes that old Service fail closed. First choice is a complete matching-version backup. Without one: stop all PairRoom owners and native work, back up the data root, identify schema-11 Room directories from their `metadata.json` without editing them, and move **all** of those directories outside `rooms/`. Start the old binary only for the remaining supported schema-10 Rooms. Leave `service-registry.json` intact: its unchanged schema 2 preserves registered Projects, including those without Rooms. Never relabel a schema or rewrite Event Log records.
+A pre-5.0.0 binary rejects schema-12 Rooms before replay. PairRoom 5.0.0 intentionally does not offer an in-place downgrade path: back up the whole data root before changing binaries, then use a matching binary for any inspection. Never relabel a schema, rewrite Event Log records, or copy legacy credentials into a new root.
 
-Before downgrading, use the matching new binary to `pairroom relay unbind --repo <project> --room <id> --slot <slot> --purge-hooks` for each native slot. After confirming that no other local native bindings use them, remove the remaining workspace `.pairroom/` data and any unused managed relay skill. The purge operation removes only PairRoom-owned hook entries; unrelated settings/hooks are retained. Archive alone does not release binding ownership or stop native processes. Keep schema-11 data isolated for its matching reader.
+Before replacing a 5.0.0 binary, use the matching binary to `pairroom relay unbind --repo <project> --room <id> --slot <slot> --purge-hooks` for each native slot. After confirming that no other local native bindings use them, remove only the intentionally selected workspace `.pairroom/` data and any unused managed relay skill. The purge operation removes only PairRoom-owned hook entries; unrelated settings/hooks are retained. Archive alone does not release binding ownership or stop native processes. Keep retired data isolated for its matching reader.
 
 ## Native binding setup
 

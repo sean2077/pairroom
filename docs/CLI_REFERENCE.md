@@ -2,7 +2,7 @@
 
 CLI Reference describes command responsibilities and how to discover flags. It does not copy the full `--help` output of every subcommand. Exact defaults, allowed values, and platform differences always come from the current binary.
 
-New standalone Rooms support `pairroom serve --collaboration default` (the default) or `--collaboration custom --collaboration-instructions "..."`. An existing Room restores its saved instructions; conflicting explicit flags fail. `pairroom protocol` prints the shared v6 mechanics; the removed `--role` flag no longer selects a collaboration mode.
+New standalone Rooms support `pairroom serve --collaboration default` (the default) or `--collaboration custom --collaboration-instructions "..."`. An existing current-schema Room restores its saved instructions; conflicting explicit flags fail. `pairroom protocol` prints embedded v7 or native v8 mechanics; the removed `--role` flag no longer selects a collaboration mode.
 
 ## Top-level commands
 
@@ -18,7 +18,7 @@ New standalone Rooms support `pairroom serve --collaboration default` (the defau
 | `pairroom restore` | Restore and verify a room-data backup |
 | `pairroom diagnostics` | Generate a redacted diagnostics bundle |
 | `pairroom relay` | Install approved project hooks, bind user-owned sessions, and publish/collect native relay messages |
-| `pairroom protocol` | Print embedded v6 or `--host-mode native` v7 collaboration contracts |
+| `pairroom protocol` | Print embedded v7 or `--host-mode native` v8 collaboration contracts |
 | `pairroom version` | Print the build version |
 
 Start every command with:
@@ -142,7 +142,7 @@ The following names are extracted from `cmd/pairroom/*.go`. Use them to find omi
 
 ## Installation versus runtime availability
 
-`pairroom doctor` is a Git / CLI protocol-metadata check, not an authentication or inference test. It checks the two configured slots, including Grok Build when selected; executable overrides are `--claude-command`, `--codex-command`, and `--grok-command` and follow the Runtime kind rather than the historical slot name.
+`pairroom doctor` is a Git / CLI protocol-metadata check, not an authentication or inference test. It checks the two configured slots, including Grok Build when selected; executable overrides are `--claude-command`, `--codex-command`, and `--grok-command` and follow the Runtime kind rather than the durable slot name. If it finds legacy workspace relay directories named `claude` or `codex`, it reports only their count, never opens credentials or state, and tells the user to re-bind canonical slots.
 
 ```bash
 pairroom doctor --config /absolute/path/pairroom.json --repo /absolute/path/project --json
@@ -171,7 +171,7 @@ pairroom relay bind                              # peer: zero-flag inside a reco
 
 `relay install` does not require a native session: run it from any terminal in the Project's worktree. With `--runtime` it installs those harnesses (comma-separated `cc|claude`, `codex`, `grok`); inside a recognized session it infers the harness; at an interactive terminal without `--runtime` it prompts a multi-select; non-interactively without `--runtime` it fails listing the options instead of hanging. Each selected runtime gets its own project hook (Claude Code `.claude/settings.json`, Codex `.codex/hooks.json`, Grok `.grok/hooks/pairroom.json`) and skill directory.
 
-Run each bind as a tool call inside its intended native session: the official harnesses expose the current session ID to tool-call subprocesses (Claude Code sets `CLAUDE_CODE_SESSION_ID`; Codex sets `CODEX_SESSION_ID`; Grok sets `GROK_SESSION_ID`), and bind associates that session immediately. In a detached or plain terminal where the variable is absent, bind fails closed with guidance to run it inside the session; there is no fallback. Slots are Agent 1 / Agent 2: `--slot 1|2` is the primary form and the durable IDs `claude`/`codex` remain accepted; slot names never denote the selected Runtime. Omitted `--room` resolves the workspace's sole active native Room; omitted `--slot` resolves only when exactly one Room slot runs the caller's harness runtime; anything ambiguous fails with the candidate list instead of guessing. Bind stdout contains no long-lived secret. No installed Stop hook means bind is rejected. See [Native relay setup and usage](NATIVE_RELAY.md) for installation and approval steps. Native configuration selections are display-only, and PairRoom never starts or interrupts either process.
+Run each bind as a tool call inside its intended native session: the official harnesses expose the current session ID to tool-call subprocesses (Claude Code sets `CLAUDE_CODE_SESSION_ID`; Codex sets `CODEX_SESSION_ID`; Grok sets `GROK_SESSION_ID`), and bind associates that session immediately. In a detached or plain terminal where the variable is absent, bind fails closed with guidance to run it inside the session; there is no fallback. Durable slots are `slot1` / `slot2` (Agent 1 / Agent 2); `--slot 1|2` and `agent1|agent2` are canonical CLI forms, while `claude`/`codex` are input aliases normalized before persistence. Slot names never denote the selected Runtime. Omitted `--room` resolves the workspace's sole active native Room; omitted `--slot` resolves only when exactly one Room slot runs the caller's harness runtime; anything ambiguous fails with the candidate list instead of guessing. Bind stdout contains no long-lived secret. No installed Stop hook means bind is rejected. See [Native relay setup and usage](NATIVE_RELAY.md) for installation and approval steps. Native configuration selections are display-only, and PairRoom never starts or interrupts either process.
 
 A completed binding already occupies its slot. Re-running bind inside the same session resumes idempotently without rotating the generation; a different session is rejected as occupied. Use `bind --replace` explicitly to revoke the existing generation and rebind from the current session; this cannot stop any native work.
 

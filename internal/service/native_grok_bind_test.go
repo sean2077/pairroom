@@ -20,7 +20,7 @@ func TestGrokBindEnablesExchangeBeforeFirstStop(t *testing.T) {
 	for _, peerKind := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok} {
 		t.Run(string(peerKind), func(t *testing.T) {
 			f := grokNativeHTTP(t, peerKind)
-			a, b := f.bind(t, model.ActorClaude), f.bind(t, model.ActorCodex)
+			a, b := f.bind(t, model.ActorSlot1), f.bind(t, model.ActorSlot2)
 			for _, audit := range f.native.engine.Snapshot().Audit {
 				if strings.Contains(audit.Kind, "publication") {
 					t.Fatal("binding required a Stop publication")
@@ -56,7 +56,7 @@ func TestGrokBindEnablesExchangeBeforeFirstStop(t *testing.T) {
 
 func TestGrokHookConfirmsBoundIdentityWithoutImplicitAssociation(t *testing.T) {
 	f := grokNativeHTTP(t, model.RuntimeCodex)
-	a := bindGrok(t, f, model.ActorClaude)
+	a := bindGrok(t, f, model.ActorSlot1)
 	before := f.native.engine.Snapshot()
 	input := map[string]any{"hookEventName": "stop", "hook_event_name": "Stop", "sessionId": "different-session", "cwd": f.project.Root, "workspaceRoot": f.project.Root, "reason": "end_turn", "lastAssistantMessage": "@codex must not publish"}
 	out, err := f.runAs(t, model.RuntimeGrok, a.SessionID, []string{"hook", "--runtime", "grok"}, input)
@@ -91,7 +91,7 @@ func TestGrokCreateWithoutSessionHasNoLocalOrDurableEffects(t *testing.T) {
 
 func TestGrokRejectedReplacePreservesCommittedBinding(t *testing.T) {
 	f := grokNativeHTTP(t, model.RuntimeCodex)
-	a := bindGrok(t, f, model.ActorClaude)
+	a := bindGrok(t, f, model.ActorSlot1)
 	other, err := f.registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: f.project.ID, Name: "other Grok", HostMode: model.HostNative, Agents: f.room.Agents}, SyntheticProvisioner{})
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +100,7 @@ func TestGrokRejectedReplacePreservesCommittedBinding(t *testing.T) {
 	if _, err := f.runAs(t, model.RuntimeGrok, "other-session", args, nil); err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(f.project.Root, ".pairroom", "rooms", other.ID, "slots", "claude")
+	dir := filepath.Join(f.project.Root, ".pairroom", "rooms", other.ID, "slots", "slot1")
 	before := map[string][]byte{}
 	for _, name := range []string{"credentials", "state.json"} {
 		before[name], err = os.ReadFile(filepath.Join(dir, name))

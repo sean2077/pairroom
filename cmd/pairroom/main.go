@@ -205,8 +205,8 @@ func slotAgentConfig(actor model.ActorID, slot config.Agent, runtimes config.Run
 }
 
 func pairSlotConfigs(fileCfg config.File) (agent.Config, agent.Config) {
-	claude := slotAgentConfig(model.ActorClaude, fileCfg.Claude, fileCfg.Runtimes)
-	codex := slotAgentConfig(model.ActorCodex, fileCfg.Codex, fileCfg.Runtimes)
+	claude := slotAgentConfig(model.ActorSlot1, fileCfg.Claude, fileCfg.Runtimes)
+	codex := slotAgentConfig(model.ActorSlot2, fileCfg.Codex, fileCfg.Runtimes)
 	claude.PeerRuntime = codex.Runtime
 	codex.PeerRuntime = claude.Runtime
 	return claude, codex
@@ -537,12 +537,12 @@ func runServe(args []string) error {
 		return err
 	}
 	defaults := agentResolver.DefaultSelections()
-	claudeCfg, err := agentResolver.Resolve(context.Background(), model.ActorClaude, defaults[model.ActorClaude], defaults[model.ActorCodex].Runtime, repo, dataDir)
+	claudeCfg, err := agentResolver.Resolve(context.Background(), model.ActorSlot1, defaults[model.ActorSlot1], defaults[model.ActorSlot2].Runtime, repo, dataDir)
 	if err != nil {
 		_ = eventStore.Close()
 		return fmt.Errorf("resolve Agent 1: %w", err)
 	}
-	codexCfg, err := agentResolver.Resolve(context.Background(), model.ActorCodex, defaults[model.ActorCodex], defaults[model.ActorClaude].Runtime, repo, dataDir)
+	codexCfg, err := agentResolver.Resolve(context.Background(), model.ActorSlot2, defaults[model.ActorSlot2], defaults[model.ActorSlot1].Runtime, repo, dataDir)
 	if err != nil {
 		_ = eventStore.Close()
 		return fmt.Errorf("resolve Agent 2: %w", err)
@@ -629,12 +629,13 @@ type doctorRuntimeReport struct {
 }
 
 type doctorReport struct {
-	PairRoom string                         `json:"pairroom"`
-	OS       string                         `json:"os"`
-	Repo     string                         `json:"repository"`
-	Git      doctorCommandReport            `json:"git"`
-	Runtimes map[string]doctorRuntimeReport `json:"runtimes"`
-	OK       bool                           `json:"ok"`
+	PairRoom                    string                         `json:"pairroom"`
+	OS                          string                         `json:"os"`
+	Repo                        string                         `json:"repository"`
+	Git                         doctorCommandReport            `json:"git"`
+	Runtimes                    map[string]doctorRuntimeReport `json:"runtimes"`
+	RetiredRelaySlotDirectories int                            `json:"retired_relay_slot_directories,omitempty"`
+	OK                          bool                           `json:"ok"`
 }
 
 func runDoctor(args []string) error {
@@ -668,11 +669,12 @@ func runDoctor(args []string) error {
 	}
 
 	report := doctorReport{
-		PairRoom: version.Describe(),
-		OS:       runtime.GOOS + "/" + runtime.GOARCH,
-		Repo:     repo,
-		Git:      probeCommand("git", "--version"),
-		Runtimes: make(map[string]doctorRuntimeReport, 2),
+		PairRoom:                    version.Describe(),
+		OS:                          runtime.GOOS + "/" + runtime.GOARCH,
+		Repo:                        repo,
+		Git:                         probeCommand("git", "--version"),
+		Runtimes:                    make(map[string]doctorRuntimeReport, 2),
+		RetiredRelaySlotDirectories: retiredRelaySlotDirectoryCount(repo),
 	}
 	fileCfg.Runtimes.Claude.Command = *claudeCommand
 	fileCfg.Runtimes.Codex.Command = *codexCommand
@@ -698,7 +700,7 @@ func runDoctor(args []string) error {
 		report.Runtimes[string(cfg.Actor)] = entry
 	}
 	report.OK = report.Git.Available
-	for _, actor := range []string{string(model.ActorClaude), string(model.ActorCodex)} {
+	for _, actor := range []string{string(model.ActorSlot1), string(model.ActorSlot2)} {
 		report.OK = report.OK && report.Runtimes[actor].Error == "" && report.Runtimes[actor].Probe != nil
 		for _, check := range report.Runtimes[actor].Checks {
 			report.OK = report.OK && check.Status == "pass"
@@ -718,6 +720,35 @@ func runDoctor(args []string) error {
 		return errors.New("runtime checks failed; pairroom serve --mock remains available")
 	}
 	return nil
+}
+
+// retiredRelaySlotDirectoryCount reports only direct legacy directory names.
+// It never opens state or credential files, follows no symlink, and never
+// changes the workspace; the count is an actionable doctor hint, not recovery.
+func retiredRelaySlotDirectoryCount(repo string) int {
+	roomsRoot := filepath.Join(repo, ".pairroom", "rooms")
+	rooms, err := os.ReadDir(roomsRoot)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, room := range rooms {
+		if !room.IsDir() || strings.HasPrefix(room.Name(), ".") {
+			continue
+		}
+		slotsRoot := filepath.Join(roomsRoot, room.Name(), "slots")
+		slotsInfo, err := os.Lstat(slotsRoot)
+		if err != nil || !slotsInfo.IsDir() || slotsInfo.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+		for _, name := range []string{"claude", "codex"} {
+			info, err := os.Lstat(filepath.Join(slotsRoot, name))
+			if err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func runVerify(args []string) error {
@@ -917,6 +948,9 @@ func printDoctorReport(report doctorReport) {
 	fmt.Printf("PairRoom doctor %s\n", report.PairRoom)
 	fmt.Printf("%-16s %s\n", "OS", report.OS)
 	fmt.Printf("%-16s %s\n", "Repository", report.Repo)
+	if report.RetiredRelaySlotDirectories > 0 {
+		fmt.Printf("%-16s %d ignored (re-bind canonical slots; legacy credentials were not read)\n", "Retired relay dirs", report.RetiredRelaySlotDirectories)
+	}
 	if report.Git.Available {
 		fmt.Printf("%-16s ✓ %s (%s)\n", "Git", report.Git.Output, report.Git.Path)
 	} else {

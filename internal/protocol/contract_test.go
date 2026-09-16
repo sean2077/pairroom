@@ -8,19 +8,19 @@ import (
 )
 
 func TestProtocolVersionMatchesMentionRelayContract(t *testing.T) {
-	if Version != "pairroom-protocol/v6" {
-		t.Fatalf("protocol version = %q, want pairroom-protocol/v6", Version)
+	if Version != "pairroom-protocol/v7" {
+		t.Fatalf("protocol version = %q, want pairroom-protocol/v7", Version)
 	}
 }
 
 func TestResolveContainsCurrentCollaborationAndMentionRules(t *testing.T) {
-	contract, err := Resolve(Selection{Actor: model.ActorCodex})
+	contract, err := Resolve(Selection{Actor: model.ActorSlot2})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := contract.Text()
 	for _, fragment := range []string{
-		Version, "actor: codex", "[authority.human]",
+		Version, "actor: slot2", "[authority.human]",
 		"[delivery.single-turn]", "[delivery.peer]", "[delivery.stop]",
 		"[delivery.human]", "[collaboration.creation]", "exact peer_handle", "Agent handle wins",
 	} {
@@ -68,7 +68,7 @@ func TestResolveRejectsInvalidSelection(t *testing.T) {
 }
 
 func TestBootstrapUsesDynamicDuplicateHandles(t *testing.T) {
-	got := Bootstrap(model.ActorClaude, model.RuntimeCodex, model.RuntimeCodex)
+	got := Bootstrap(model.ActorSlot1, model.RuntimeCodex, model.RuntimeCodex)
 	for _, fragment := range []string{"Codex 0 (@codex0)", "Codex 1 (@codex1)", "Include @codex1", "without @codex1"} {
 		if !strings.Contains(got, fragment) {
 			t.Fatalf("bootstrap missing %q:\n%s", fragment, got)

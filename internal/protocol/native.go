@@ -5,7 +5,7 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 )
 
-const NativeVersion = "pairroom-protocol/v7"
+const NativeVersion = "pairroom-protocol/v8"
 
 func NativeBootstrap(actor model.ActorID, selfRuntime, peerRuntime model.RuntimeKind) string {
 	peer := model.OtherParticipant(actor)

@@ -3,7 +3,7 @@
 Native hosting connects two sessions you already run. PairRoom does not launch,
 configure or interrupt them. The same setup guide is available inside the browser
 and desktop app, before creating a Room and in every Native Room.
-[Protocol](PROTOCOL.md#native-host-protocol-v7) owns the transport contract and
+[Protocol](PROTOCOL.md#native-host-protocol-v8) owns the transport contract and
 the [CLI reference](CLI_REFERENCE.md#native-relay-commands) owns command flags.
 
 ## Before starting

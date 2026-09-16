@@ -121,7 +121,7 @@ That session runs `pairroom relay bind --create`, which creates the Room, associ
 
 Alternatively, create a Native Room in Management with the intended pair. **Skip the creation command above** and ask each recognized session to run `pairroom relay bind`, or use the exact Room/slot command returned by the CLI when there is ambiguity. After either setup path, check `pairroom relay status` from the bound session. Reuse the binding for later review rounds.
 
-Only then send the review task below. Native hooks publish at response boundaries and wait for a bounded park window. Outside that window, a peer reply can remain queued rather than waking the idle model. Use the documented `relay wait` / nudge path in the already-associated session; inspect uncertain outcomes before explicit Retry. Do not start a duplicate session or assume that `handed_off` proves model acceptance. [Native protocol](PROTOCOL.md#native-host-protocol-v7) owns the limits and recovery semantics.
+Only then send the review task below. Native hooks publish at response boundaries and wait for a bounded park window. Outside that window, a peer reply can remain queued rather than waking the idle model. Use the documented `relay wait` / nudge path in the already-associated session; inspect uncertain outcomes before explicit Retry. Do not start a duplicate session or assume that `handed_off` proves model acceptance. [Native protocol](PROTOCOL.md#native-host-protocol-v8) owns the limits and recovery semantics.
 
 ## Review first, execute where it fits
 

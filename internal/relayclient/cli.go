@@ -46,7 +46,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.SetOutput(diagnostic)
 	flags.StringVar(&o.repo, "repo", ".", "Room project path")
 	flags.StringVar(&o.room, "room", "", "Room ID")
-	flags.StringVar(&o.slot, "slot", "", "Agent slot: 1 or 2; the durable IDs claude|codex are also accepted. Never a runtime name")
+	flags.StringVar(&o.slot, "slot", "", "Agent slot: 1 or 2; claude/codex are CLI input aliases only. Never a runtime name")
 	flags.StringVar(&o.kind, "runtime", "", "native harness: claude (cc), codex or grok; install accepts a comma-separated list")
 	flags.StringVar(&o.endpoint, "service-file", "", "owner-only relay-endpoint.json path for a custom Service data root")
 	flags.StringVar(&o.text, "text", "", "message body; otherwise read stdin")
@@ -426,21 +426,21 @@ func (s serviceSnapshot) findRoom(id string) (serviceRoom, bool) {
 	return serviceRoom{}, false
 }
 
-// normalizeSlot maps the Agent-number UX onto the durable participant IDs.
-// Slot 1/2 are the primary names; claude/codex remain accepted durable IDs and
-// never denote the runtime.
+// normalizeSlot maps CLI-only aliases to durable participant IDs before any
+// state or request is persisted. claude/codex never denote a durable slot.
 func normalizeSlot(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1", "agent1", "claude":
-		return string(model.ActorClaude)
-	case "2", "agent2", "codex":
-		return string(model.ActorCodex)
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "slot1", "1", "agent1", "claude":
+		return string(model.ActorSlot1)
+	case "slot2", "2", "agent2", "codex":
+		return string(model.ActorSlot2)
 	}
-	return value
+	return normalized
 }
 
 func slotNumber(slot model.ActorID) int {
-	if slot == model.ActorClaude {
+	if slot == model.ActorSlot1 {
 		return 1
 	}
 	return 2
@@ -494,7 +494,7 @@ func resolveSlotForRoom(room serviceRoom, rt model.RuntimeKind) (model.ActorID, 
 	if rt == "" {
 		return "", errors.New("bind requires --slot 1|2 (Agent 1/2) outside a recognized native session")
 	}
-	order := []model.ActorID{model.ActorClaude, model.ActorCodex}
+	order := []model.ActorID{model.ActorSlot1, model.ActorSlot2}
 	matches := runtimeSlots(room.Agents, rt)
 	if len(matches) == 1 {
 		return matches[0], nil
@@ -523,9 +523,9 @@ func inferCreateSlot(o options) (model.ActorID, error) {
 	case model.RuntimeClaude, model.RuntimeGrok:
 		// Explicit Grok creators use Agent 1 unless --slot selects otherwise.
 		// Omitted pair settings are resolved against the Service before creation.
-		return model.ActorClaude, nil
+		return model.ActorSlot1, nil
 	case model.RuntimeCodex:
-		return model.ActorCodex, nil
+		return model.ActorSlot2, nil
 	}
 	return "", errCreateSlotUnresolved
 }
@@ -538,11 +538,12 @@ func inferCreateSlot(o options) (model.ActorID, error) {
 // presents the slot's owner-only credential, and the hook path still requires
 // the associated official session identity.
 func resolveSlotDefaults(root string, o *options) error {
+	o.slot = normalizeSlot(o.slot)
 	if model.ActorID(o.slot).ValidParticipant() && safePart(o.room) {
 		return nil
 	}
 	if o.slot != "" || o.room != "" {
-		return errors.New("--room and --slot claude|codex are required")
+		return errors.New("--room and --slot 1|2 are required")
 	}
 	paths, err := statePaths(root)
 	if err != nil {
@@ -663,14 +664,14 @@ func createAgents(o options, slot model.ActorID) (map[model.ActorID]model.AgentS
 }
 
 func peerSlot(slot model.ActorID) model.ActorID {
-	if slot == model.ActorClaude {
-		return model.ActorCodex
+	if slot == model.ActorSlot1 {
+		return model.ActorSlot2
 	}
-	return model.ActorClaude
+	return model.ActorSlot1
 }
 
 func defaultRuntimeFor(slot model.ActorID) model.RuntimeKind {
-	if slot == model.ActorCodex {
+	if slot == model.ActorSlot2 {
 		return model.RuntimeCodex
 	}
 	return model.RuntimeClaude

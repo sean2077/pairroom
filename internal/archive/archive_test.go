@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"image"
 	"image/color"
@@ -11,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +53,7 @@ func makeValidDataDir(t *testing.T) (string, model.Attachment) {
 	if err := eventStore.Append(&created); err != nil {
 		t.Fatal(err)
 	}
-	message := model.Message{ID: "msg-test", Seq: 2, From: model.ActorUser, To: []model.ActorID{model.ActorClaude}, Text: "SECRET_TRANSCRIPT_TEXT", ThreadID: "msg-test", CreatedAt: time.Now().UTC(), Attachments: []model.Attachment{attached}}
+	message := model.Message{ID: "msg-test", Seq: 2, From: model.ActorUser, To: []model.ActorID{model.ActorSlot1}, Text: "SECRET_TRANSCRIPT_TEXT", ThreadID: "msg-test", CreatedAt: time.Now().UTC(), Attachments: []model.Attachment{attached}}
 	messageEvent, err := model.NewEvent("room-test", "message.created", model.ActorUser, message)
 	if err != nil {
 		t.Fatal(err)
@@ -212,6 +215,82 @@ func TestRestoreManifestHashMismatch(t *testing.T) {
 	}
 	if _, err := Restore(bad, filepath.Join(t.TempDir(), "restore"), false); err == nil || !strings.Contains(err.Error(), "integrity") {
 		t.Fatalf("hash mismatch restore error = %v", err)
+	}
+}
+
+func TestRestoreRetiredBackupLeavesForcedTargetUntouched(t *testing.T) {
+	dataDir := t.TempDir()
+	eventStore, err := store.Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := model.NewEvent("retired-room", "room.created", model.ActorSystem, model.RoomMeta{ID: "retired-room", Name: "Retired", Repo: t.TempDir(), CreatedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := eventStore.Append(&event); err != nil {
+		t.Fatal(err)
+	}
+	if err := eventStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	events, err := os.ReadFile(filepath.Join(dataDir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup := filepath.Join(t.TempDir(), "retired.tar.gz")
+	writeBackupFixture(t, backup, map[string][]byte{
+		"metadata.json": []byte("{\"format\":\"pairroom-jsonl\",\"schema_version\":11,\"app_version\":\"4.1.0\"}\n"),
+		"events.jsonl":  events,
+	})
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(target, "keep")
+	if err := os.WriteFile(keep, []byte("canonical data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Restore(backup, target, true); err == nil || !strings.Contains(err.Error(), "retired data schema 11") {
+		t.Fatalf("retired backup restore error = %v", err)
+	}
+	if data, err := os.ReadFile(keep); err != nil || string(data) != "canonical data" {
+		t.Fatalf("retired backup mutated forced target: %q %v", data, err)
+	}
+}
+
+func writeBackupFixture(t *testing.T, path string, files map[string][]byte) {
+	t.Helper()
+	manifest := BackupManifest{Format: backupFormat, FormatVersion: backupFormatVersion, PairRoomVersion: "test", CreatedAt: time.Now().UTC()}
+	paths := make([]string, 0, len(files))
+	for name := range files {
+		paths = append(paths, name)
+	}
+	sort.Strings(paths)
+	for _, name := range paths {
+		digest := sha256.Sum256(files[name])
+		manifest.Files = append(manifest.Files, manifestFile{Path: name, Size: int64(len(files[name])), SHA256: hex.EncodeToString(digest[:])})
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	gzipWriter := gzip.NewWriter(file)
+	defer gzipWriter.Close()
+	tarWriter := tar.NewWriter(gzipWriter)
+	defer tarWriter.Close()
+	manifestData, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTarBytes(tarWriter, "manifest.json", manifestData, manifest.CreatedAt); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range paths {
+		if err := writeTarBytes(tarWriter, name, files[name], manifest.CreatedAt); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

@@ -61,9 +61,9 @@ func TestConcurrentHTTPRetryReturnsOneAcceptedOneConflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	original := model.Message{ID: "failed-input", From: model.ActorUser, To: []model.ActorID{model.ActorCodex}, Text: "execute once", ThreadID: "thread",
-		Delivery:   map[model.ActorID]model.DeliveryState{model.ActorCodex: model.DeliveryFailed},
-		Processing: map[model.ActorID]model.ProcessingState{model.ActorCodex: model.ProcessingFailed}}
+	original := model.Message{ID: "failed-input", From: model.ActorUser, To: []model.ActorID{model.ActorSlot2}, Text: "execute once", ThreadID: "thread",
+		Delivery:   map[model.ActorID]model.DeliveryState{model.ActorSlot2: model.DeliveryFailed},
+		Processing: map[model.ActorID]model.ProcessingState{model.ActorSlot2: model.ProcessingFailed}}
 	payload, err := json.Marshal(original)
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +93,7 @@ func TestConcurrentHTTPRetryReturnsOneAcceptedOneConflict(t *testing.T) {
 			defer wg.Done()
 			<-gate
 			response := httptest.NewRecorder()
-			request := localRequest(http.MethodPost, "/api/v1/messages/"+original.ID+"/retry", bytes.NewBufferString(`{"to":["codex"]}`))
+			request := localRequest(http.MethodPost, "/api/v1/messages/"+original.ID+"/retry", bytes.NewBufferString(`{"to":["slot2"]}`))
 			request.Header.Set("Content-Type", "application/json")
 			s.Handler().ServeHTTP(response, request)
 			results <- response.Code

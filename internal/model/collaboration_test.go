@@ -12,11 +12,11 @@ func TestCollaborationHasOnlyTwoCreationModes(t *testing.T) {
 	if err != nil || d.Mode != CollaborationDefault || d.Instructions != DefaultCollaborationInstructions || d.Version != CollaborationVersion {
 		t.Fatalf("default=%+v err=%v", d, err)
 	}
-	if d.Responsibility(ActorClaude) != "lead" || d.Responsibility(ActorCodex) != "executor" {
+	if d.Responsibility(ActorSlot1) != "lead" || d.Responsibility(ActorSlot2) != "executor" {
 		t.Fatal("wrong default responsibilities")
 	}
 	custom, err := (Collaboration{Mode: CollaborationCustom, Instructions: "Agent 2 proposes; Agent 1 challenges.\n保留用户原文。"}).ForCreation()
-	if err != nil || custom.Responsibility(ActorClaude) != "participant" || strings.Contains(custom.Instructions, DefaultCollaborationInstructions) {
+	if err != nil || custom.Responsibility(ActorSlot1) != "participant" || strings.Contains(custom.Instructions, DefaultCollaborationInstructions) {
 		t.Fatalf("custom=%+v err=%v", custom, err)
 	}
 	for _, c := range []Collaboration{

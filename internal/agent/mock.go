@@ -235,7 +235,7 @@ func (m *MockAdapter) response(input model.AgentInput) string {
 	if len(body) > 140 {
 		body = body[:140] + "…"
 	}
-	if m.cfg.Actor == model.ActorClaude {
+	if m.cfg.Actor == model.ActorSlot1 {
 		if input.From == model.ActorUser && mockShouldRelay(input.Text) {
 			return fmt.Sprintf("我先从架构边界和风险入手。对“%s”，建议保持一个写入者、一个独立审查者，并把讨论消息与执行事件分层。%s 请重点检查并发控制、故障恢复和是否存在更简单的实现。", body, input.PeerHandle)
 		}

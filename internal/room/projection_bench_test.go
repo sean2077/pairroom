@@ -28,9 +28,9 @@ func projectionBenchmarkEngine(count int) *Engine {
 	for i := range engine.snapshot.Messages {
 		engine.snapshot.Messages[i] = model.Message{
 			Seq: uint64(i + 1), ID: fmt.Sprintf("message-%d", i), Text: "A complete visible response; never truncate relay text.",
-			To:         []model.ActorID{model.ActorCodex},
-			Delivery:   map[model.ActorID]model.DeliveryState{model.ActorCodex: model.DeliveryQueued},
-			Processing: map[model.ActorID]model.ProcessingState{model.ActorCodex: model.ProcessingCompleted},
+			To:         []model.ActorID{model.ActorSlot2},
+			Delivery:   map[model.ActorID]model.DeliveryState{model.ActorSlot2: model.DeliveryQueued},
+			Processing: map[model.ActorID]model.ProcessingState{model.ActorSlot2: model.ProcessingCompleted},
 		}
 	}
 	return engine

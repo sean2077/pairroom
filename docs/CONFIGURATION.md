@@ -18,7 +18,7 @@ Collaboration **instructions** have only two creation-time modes: `default` Lead
 
 ## Agent slots and runtimes
 
-The JSON keys `claude` and `codex` are durable Agent 1 and Agent 2 slots, not vendor identities. Each slot has a `runtime` of `claude`, `codex`, or `grok`. Both slots may select the same runtime.
+The top-level configuration keys `claude` and `codex` remain Agent 1 and Agent 2 default-template names for compatibility with native configuration; they are not durable ActorIDs and do not select a vendor. Durable Room slots are `slot1` and `slot2`. Each selection has a `runtime` of `claude`, `codex`, or `grok`; both slots may select the same runtime.
 
 Each slot supplies a default `AgentSelection`: `runtime`, a structured `provider`, optional `model`, `effort`, `instructions`, Runtime-specific permission/approval/sandbox values. A new Room snapshots both selections; changing Service configuration later does not rewrite it.
 

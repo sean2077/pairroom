@@ -13,10 +13,10 @@
   }
   const STREAM_RENDER_INTERVAL_MS = 50;
   // Slot identity is durable and separate from runtime identity: ActorID
-  // `claude`/`codex` name Agent 1/Agent 2, while RuntimeKind selects the vendor
+  // `slot1`/`slot2` name Agent 1/Agent 2, while RuntimeKind selects the vendor
   // CLI and either slot may run any runtime. These mirror model.SlotActors(),
   // model.SlotLabel(), RuntimeKind.DisplayName(), and CanonicalForSlot().
-  const SLOT_RANK = { claude: 0, codex: 1 };
+  const SLOT_RANK = { slot1: 0, slot2: 1 };
   const RUNTIME_DISPLAY = { claude: 'Claude Code', codex: 'Codex', grok: 'Grok Build' };
   const SURFACE_PREFIX = (() => {
     const match = window.location.pathname.match(/^(.*\/api\/v1\/rooms\/[^/]+\/surface)(?:\/|$)/);
@@ -29,9 +29,9 @@
   }
   const state = {
     snapshot: null,
-    drafts: { claude: '', codex: '' },
-    draftCorrelation: { claude: '', codex: '' },
-    selectedTarget: 'claude',
+    drafts: { slot1: '', slot2: '' },
+    draftCorrelation: { slot1: '', slot2: '' },
+    selectedTarget: 'slot1',
     permissionSubmitting: new Set(),
     participantActions: new Set(),
     messageActions: new Set(),
@@ -185,8 +185,8 @@
     state.snapshotPromise = (async () => {
       const limit = Math.min(1000, Math.max(250, state.snapshot?.messages?.length || 0));
       state.snapshot = await api(`/api/v1/snapshot?message_limit=${limit}`);
-      state.drafts = { claude: '', codex: '' };
-      state.draftCorrelation = { claude: '', codex: '' };
+      state.drafts = { slot1: '', slot2: '' };
+      state.draftCorrelation = { slot1: '', slot2: '' };
       initializeRoomLocalState();
       if (state.snapshot?.meta?.id) document.body.dataset.roomId = state.snapshot.meta.id;
       render(initial);
@@ -291,7 +291,7 @@
           }
           handleIncomingMessage(data, event.seq);
         }
-        if (data.from === 'claude' || data.from === 'codex') {
+        if (data.from === 'slot1' || data.from === 'slot2') {
           state.drafts[data.from] = '';
           state.draftCorrelation[data.from] = '';
         }
@@ -458,7 +458,7 @@
     $('room-collaboration-label').textContent = t(collaboration.mode === 'default' ? 'room.collaboration.default' : 'room.collaboration.custom');
     $('room-collaboration-instructions').textContent = collaboration.instructions;
 	const chatDescription = $('chat-description');
-	if (chatDescription) chatDescription.textContent = ['You', displayName('claude'), displayName('codex')].join(' · ');
+	if (chatDescription) chatDescription.textContent = ['You', displayName('slot1'), displayName('slot2')].join(' · ');
     renderParticipants();
     updateDeliveryHint();
     renderTurnOwnerBar();
@@ -749,7 +749,7 @@
     if (!state.snapshot || !timeline.isConnected) return;
     const nearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 140;
     let hasVisibleDraft = false;
-    ['claude', 'codex'].forEach((actor) => {
+    ['slot1', 'slot2'].forEach((actor) => {
       const selector = `.message-row.streaming[data-streaming-actor="${actor}"]`;
       const existing = timeline.querySelector(selector);
       const text = state.drafts[actor] || '';
@@ -883,14 +883,14 @@
         continue;
       }
       const filterVisible = state.conversationFilter === 'all'
-        || (state.conversationFilter === 'agents' && ['claude', 'codex'].includes(item.value.from))
+        || (state.conversationFilter === 'agents' && ['slot1', 'slot2'].includes(item.value.from))
         || (state.conversationFilter === 'human' && item.value.from === 'user');
       const threadVisible = !state.threadFilter || item.value.thread_id === state.threadFilter;
       const attachmentText = (item.value.attachments || []).map((attachment) => attachment.name).join(' ');
       const searchVisible = !query || `${displayName(item.value.from)} ${item.value.text} ${attachmentText}`.toLocaleLowerCase().includes(query);
       if (threadVisible && filterVisible && searchVisible) appendVisible(messageNode(item.value), item.createdAt);
     }
-    ['claude', 'codex'].forEach((actor) => {
+    ['slot1', 'slot2'].forEach((actor) => {
       const text = state.drafts[actor];
       const correlated = (state.snapshot.messages || []).find((message) => message.id === state.draftCorrelation[actor]);
       const threadVisible = !state.threadFilter || correlated?.thread_id === state.threadFilter;
@@ -899,7 +899,7 @@
         visibleCount += 1;
       }
     });
-    if (!(state.snapshot.messages || []).length && !state.drafts.claude && !state.drafts.codex
+    if (!(state.snapshot.messages || []).length && !state.drafts.slot1 && !state.drafts.slot2
       && !windowInfo?.has_more && !query && !state.threadFilter && state.conversationFilter === 'all') {
       const empty = document.createElement('div');
       empty.className = 'timeline-empty';
@@ -1424,7 +1424,7 @@
     });
     activityView.render(summaries, events, {
       scoped: Boolean(scopedMessage),
-      version: JSON.stringify([window.PairRoomI18n?.lang, displayName('claude'), displayName('codex')]),
+      version: JSON.stringify([window.PairRoomI18n?.lang, displayName('slot1'), displayName('slot2')]),
       emptyText: t(scopedMessage ? 'ui.thisMessageDoesNotYetHaveADurableWorkSummary' : 'ui.agentTurnsToolCallsCommandsPlansDiffsAndLogsAppearHere'),
     });
   }
@@ -2097,7 +2097,7 @@
     if (!message) return;
     state.replyRevision += 1;
     state.replyTo = messageId;
-    if (['claude', 'codex'].includes(message.from)) setTarget(message.from);
+    if (['slot1', 'slot2'].includes(message.from)) setTarget(message.from);
     $('reply-preview').textContent = `${displayName(message.from)}：${truncate(message.text || attachmentSummary(message), 120)}`;
     $('reply-banner').classList.remove('hidden');
     messageInput.focus();
@@ -2130,7 +2130,7 @@
   }
 
   function recipientsForTarget(target) {
-    return ['claude', 'codex'].includes(target) ? [target] : ['claude'];
+    return ['slot1', 'slot2'].includes(target) ? [target] : ['slot1'];
   }
 
   function updateDeliveryHint() {
@@ -2138,7 +2138,7 @@
   }
 
   function setTarget(target) {
-    if (!['claude', 'codex'].includes(target)) target = 'claude';
+    if (!['slot1', 'slot2'].includes(target)) target = 'slot1';
     state.selectedTarget = target;
     document.querySelectorAll('.target-button').forEach((button) => {
       const active = button.dataset.target === target;
@@ -2180,9 +2180,9 @@
       const draft = JSON.parse(readLocal(state.draftKey) || 'null');
       if (draft && typeof draft === 'object' && state.draftRevision === 0) {
         messageInput.value = String(draft.text || '');
-        if (['claude', 'codex'].includes(draft.target)) state.selectedTarget = draft.target;
+        if (['slot1', 'slot2'].includes(draft.target)) state.selectedTarget = draft.target;
         else if (['driver', 'reviewer'].includes(draft.target)) {
-          const matching = ['claude', 'codex'].filter((actor) => state.snapshot?.participants[actor]?.role === draft.target);
+          const matching = ['slot1', 'slot2'].filter((actor) => state.snapshot?.participants[actor]?.role === draft.target);
           if (matching.length === 1) state.selectedTarget = matching[0];
         }
         if (['steer', 'queue'].includes(draft.intent)) $('message-intent').value = draft.intent;
@@ -2202,12 +2202,12 @@
 
   function recomputeUnread() {
     state.unreadCount = (state.snapshot?.messages || []).filter((message) =>
-      ['claude', 'codex'].includes(message.from) && Number(message.seq || 0) > state.lastSeenSeq).length;
+      ['slot1', 'slot2'].includes(message.from) && Number(message.seq || 0) > state.lastSeenSeq).length;
     updateUnreadUI();
   }
 
   function handleIncomingMessage(message, seq) {
-    if (!['claude', 'codex'].includes(message.from) || Number(seq || 0) <= state.lastSeenSeq) return;
+    if (!['slot1', 'slot2'].includes(message.from) || Number(seq || 0) <= state.lastSeenSeq) return;
     const nearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 160;
     if (!document.hidden && nearBottom) {
       markConversationRead(true);
@@ -2391,18 +2391,18 @@
     const actors = Object.keys(state.snapshot?.participants || {})
       .filter((actor) => actor !== 'user' && actor !== 'system')
       .sort((a, b) => (SLOT_RANK[a] ?? 99) - (SLOT_RANK[b] ?? 99) || String(a).localeCompare(String(b)));
-    return actors.length ? actors : ['claude', 'codex'];
+    return actors.length ? actors : ['slot1', 'slot2'];
   }
 
   function slotLabel(actor) {
-    return actor === 'claude' ? t('agent.agent1') : actor === 'codex' ? t('agent.agent2') : String(actor);
+    return actor === 'slot1' ? t('agent.agent1') : actor === 'slot2' ? t('agent.agent2') : String(actor);
   }
 
   // Never infer a runtime from a slot: a slot only implies a runtime when the
   // participant has reported none yet, matching CanonicalForSlot().
   function runtimeKindOf(participant, actor) {
     return participant?.runtime_kind || participant?.runtime?.runtime_kind
-      || (String(actor ?? participant?.id) === 'codex' ? 'codex' : 'claude');
+      || (String(actor ?? participant?.id) === 'slot2' ? 'codex' : 'claude');
   }
 
   // A CC Switch Provider is identified internally as
@@ -2431,13 +2431,13 @@
   }
 
   function displayName(actor) {
-	if (actor === 'claude' || actor === 'codex') return state.snapshot?.participants?.[actor]?.display_name || (actor === 'claude' ? t('agent.agent1') : t('agent.agent2'));
+	if (actor === 'slot1' || actor === 'slot2') return state.snapshot?.participants?.[actor]?.display_name || (actor === 'slot1' ? t('agent.agent1') : t('agent.agent2'));
     return ({ user: t('common.you'), system: 'PairRoom' })[actor] || actor;
   }
 
   function avatarText(actor) {
     if (actor === 'user') return 'Y';
-    if (actor === 'claude' || actor === 'codex') {
+    if (actor === 'slot1' || actor === 'slot2') {
       const p = state.snapshot?.participants?.[actor];
       return (p?.display_name || displayName(actor)).slice(0, 1).toUpperCase();
     }

@@ -29,7 +29,7 @@ func grokNativeHTTP(t *testing.T, peer model.RuntimeKind) *nativeFixture {
 	})
 	room, err := f.registry.ProvisionRoom(context.Background(), ProvisionRequest{
 		ProjectID: f.project.ID, Name: "Grok pair", HostMode: model.HostNative,
-		Agents: map[model.ActorID]model.AgentSelection{model.ActorClaude: {Runtime: model.RuntimeGrok}, model.ActorCodex: {Runtime: peer}},
+		Agents: map[model.ActorID]model.AgentSelection{model.ActorSlot1: {Runtime: model.RuntimeGrok}, model.ActorSlot2: {Runtime: peer}},
 	}, noSpawn)
 	if err != nil {
 		t.Fatal(err)
@@ -65,8 +65,8 @@ func bindGrok(t *testing.T, f *nativeFixture, slot model.ActorID) relay.Auth {
 
 func TestGrokNativeRoundTripDefersFullInboxToForeground(t *testing.T) {
 	f := grokNativeHTTP(t, model.RuntimeCodex)
-	grok := bindGrok(t, f, model.ActorClaude)
-	peer := associateCLI(t, f, model.ActorCodex)
+	grok := bindGrok(t, f, model.ActorSlot1)
+	peer := associateCLI(t, f, model.ActorSlot2)
 	text := strings.Repeat("完整消息🌟", 4000) // longer than Grok's 10k hook feedback
 	incoming, err := f.native.engine.Send(peer, relay.SendRequest{ID: "opening", Text: text})
 	if err != nil {
@@ -123,7 +123,7 @@ func TestGrokNativeRoundTripDefersFullInboxToForeground(t *testing.T) {
 
 func TestGrokClippedStopIsNotPublishedAndPassiveEventsStayPassive(t *testing.T) {
 	f := grokNativeHTTP(t, model.RuntimeClaude)
-	a := bindGrok(t, f, model.ActorClaude)
+	a := bindGrok(t, f, model.ActorSlot1)
 	seq := f.native.engine.Snapshot().Sequence
 	for _, extra := range []map[string]any{
 		{"reason": "shutdown"}, {"reason": "channel_closed"}, {"subagentType": "explore"},
@@ -162,8 +162,8 @@ func TestGrokClippedStopIsNotPublishedAndPassiveEventsStayPassive(t *testing.T) 
 
 func TestTwoNativeGrokSessionsUseDistinctSlotsAndHandles(t *testing.T) {
 	f := grokNativeHTTP(t, model.RuntimeGrok)
-	a := bindGrok(t, f, model.ActorClaude)
-	b := bindGrok(t, f, model.ActorCodex)
+	a := bindGrok(t, f, model.ActorSlot1)
+	b := bindGrok(t, f, model.ActorSlot2)
 	for i, sender := range []relay.Auth{a, b} {
 		to := model.OtherParticipant(sender.Slot)
 		text := fmt.Sprintf("@grok%d review this", 1-i)
@@ -216,17 +216,17 @@ func TestGrokNativeCreateInsideHarnessWithoutIdentityFlags(t *testing.T) {
 				t.Fatal(err)
 			}
 			args := []string{"bind", "--create", "--name", "Harness-created Grok pair"}
-			wantSlot := model.ActorClaude
+			wantSlot := model.ActorSlot1
 			if useProfile {
 				// A reversed Service pair must not be silently rewritten into
 				// vendor-named slots just because the caller is Grok.
 				_, err = f.registry.SaveAgentPairProfile(context.Background(), "", AgentPairProfileInput{Name: "Grok default", IsDefault: true,
-					Agents: map[model.ActorID]model.AgentSelection{model.ActorClaude: {Runtime: model.RuntimeCodex}, model.ActorCodex: {Runtime: model.RuntimeGrok}},
+					Agents: map[model.ActorID]model.AgentSelection{model.ActorSlot1: {Runtime: model.RuntimeCodex}, model.ActorSlot2: {Runtime: model.RuntimeGrok}},
 				})
 				if err != nil {
 					t.Fatal(err)
 				}
-				wantSlot = model.ActorCodex
+				wantSlot = model.ActorSlot2
 			} else {
 				args = append(args, "--peer-runtime", "codex")
 			}

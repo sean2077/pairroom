@@ -24,13 +24,13 @@ func TestWindowedProjectionIsDetachedAndComplete(t *testing.T) {
 	if len(window.Turns) != 1 || len(window.Approvals) != 1 || len(window.Events) != 1 {
 		t.Fatal("windowing must retain non-transcript state")
 	}
-	window.Messages[0].To[0] = model.ActorClaude
-	window.Messages[0].Delivery[model.ActorCodex] = model.DeliveryFailed
+	window.Messages[0].To[0] = model.ActorSlot1
+	window.Messages[0].Delivery[model.ActorSlot2] = model.DeliveryFailed
 	window.Events[0].Data[0] = '!'
 	window.Approvals[0].Detail[0] = '!'
 	window.Turns[0].MessageIDs[0] = "changed"
 	fresh := engine.Snapshot()
-	if len(fresh.Messages) != 12 || fresh.Messages[9].To[0] != model.ActorCodex || fresh.Messages[9].Delivery[model.ActorCodex] != model.DeliveryQueued {
+	if len(fresh.Messages) != 12 || fresh.Messages[9].To[0] != model.ActorSlot2 || fresh.Messages[9].Delivery[model.ActorSlot2] != model.DeliveryQueued {
 		t.Fatal("window mutation reached authoritative transcript")
 	}
 	if !json.Valid(fresh.Events[0].Data) || !json.Valid(fresh.Approvals[0].Detail) || fresh.Turns[0].MessageIDs[0] != "message-0" {
@@ -104,16 +104,16 @@ func TestReplayEventsDetachedAndConsistent(t *testing.T) {
 
 func TestBusyPreservesControlPlaneActivitySemantics(t *testing.T) {
 	for _, state := range []model.AgentState{model.StateStarting, model.StateWorking, model.StateWaiting} {
-		engine := &Engine{snapshot: model.RoomSnapshot{Participants: map[model.ActorID]model.ParticipantSnapshot{model.ActorClaude: {State: state}}}}
+		engine := &Engine{snapshot: model.RoomSnapshot{Participants: map[model.ActorID]model.ParticipantSnapshot{model.ActorSlot1: {State: state}}}}
 		if !engine.Busy() {
 			t.Errorf("%s must be busy", state)
 		}
 	}
 	for _, snapshot := range []model.RoomSnapshot{
-		{Participants: map[model.ActorID]model.ParticipantSnapshot{model.ActorClaude: {CurrentTurn: "native-turn"}}},
+		{Participants: map[model.ActorID]model.ParticipantSnapshot{model.ActorSlot1: {CurrentTurn: "native-turn"}}},
 		{Approvals: []model.Approval{{Status: "pending"}}},
-		{Messages: []model.Message{{Processing: map[model.ActorID]model.ProcessingState{model.ActorCodex: model.ProcessingWaiting}}}},
-		{Messages: []model.Message{{Processing: map[model.ActorID]model.ProcessingState{model.ActorCodex: model.ProcessingWorking}}}},
+		{Messages: []model.Message{{Processing: map[model.ActorID]model.ProcessingState{model.ActorSlot2: model.ProcessingWaiting}}}},
+		{Messages: []model.Message{{Processing: map[model.ActorID]model.ProcessingState{model.ActorSlot2: model.ProcessingWorking}}}},
 	} {
 		if !(&Engine{snapshot: snapshot}).Busy() {
 			t.Errorf("lost activity: %+v", snapshot)

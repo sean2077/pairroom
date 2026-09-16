@@ -262,7 +262,7 @@ func TestClaudeControlRequestCreatesApprovalAndReturnsAllowResponse(t *testing.T
 			}
 		}
 	}
-	if approval == nil || approval.Agent != model.ActorClaude || approval.Kind != "claude.toolApproval" {
+	if approval == nil || approval.Agent != model.ActorSlot1 || approval.Kind != "claude.toolApproval" {
 		t.Fatalf("unexpected Claude approval event: %#v", approval)
 	}
 	if adapter.State() != model.StateWaiting {

@@ -25,7 +25,7 @@ func callerState(t *testing.T, root, room, session string, slot model.ActorID, k
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := State{Schema: 1, Room: room, Slot: slot, Runtime: kind, Workspace: root, BindID: "binding", Generation: 1, SessionID: session, EndpointPath: filepath.Join(root, "custom-endpoint.json"), HarnessPID: 123, HarnessName: string(kind)}
+	s := State{Schema: 2, Room: room, Slot: slot, Runtime: kind, Workspace: root, BindID: "binding", Generation: 1, SessionID: session, EndpointPath: filepath.Join(root, "custom-endpoint.json"), HarnessPID: 123, HarnessName: string(kind)}
 	if err := relay.AtomicJSON(filepath.Join(dir, "state.json"), s); err != nil {
 		t.Fatal(err)
 	}
@@ -73,8 +73,8 @@ func TestNativeCallerRejectsAmbiguityAndIgnoresOuterHarnessHints(t *testing.T) {
 func TestNativeCallerSelectsDesktopSessionNotSharedPID(t *testing.T) {
 	isolateCaller(t)
 	root := t.TempDir()
-	callerState(t, root, "room-a", "thread-a", model.ActorClaude, model.RuntimeCodex)
-	want := callerState(t, root, "room-b", "thread-b", model.ActorCodex, model.RuntimeCodex)
+	callerState(t, root, "room-a", "thread-a", model.ActorSlot1, model.RuntimeCodex)
+	want := callerState(t, root, "room-b", "thread-b", model.ActorSlot2, model.RuntimeCodex)
 	t.Setenv("CODEX_SESSION_ID", "thread-b")
 	for _, action := range []string{"wait", "exchange", "status", "bind"} {
 		o := options{}
@@ -100,7 +100,7 @@ func TestNativeCallerNeverAssociatesPendingStateOrDuplicatesCreatedRoom(t *testi
 	isolateCaller(t)
 	root := t.TempDir()
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "session")
-	callerState(t, root, "pending", "", model.ActorClaude, model.RuntimeClaude)
+	callerState(t, root, "pending", "", model.ActorSlot1, model.RuntimeClaude)
 	o := options{}
 	if err := applyCallerDefaults(root, "bind", &o); err != nil || o.room != "" {
 		t.Fatalf("incomplete binding was auto-selected for bind: %+v %v", o, err)
@@ -109,10 +109,10 @@ func TestNativeCallerNeverAssociatesPendingStateOrDuplicatesCreatedRoom(t *testi
 		t.Fatalf("incomplete binding granted collection: %v", err)
 	}
 	o = options{}
-	if err := applyCallerDefaults(root, "status", &o); err != nil || o.room != "pending" || o.slot != "claude" {
+	if err := applyCallerDefaults(root, "status", &o); err != nil || o.room != "pending" || o.slot != "slot1" {
 		t.Fatalf("unique incomplete binding not diagnosable via status: %+v %v", o, err)
 	}
-	callerState(t, root, "other-pending", "", model.ActorClaude, model.RuntimeClaude)
+	callerState(t, root, "other-pending", "", model.ActorSlot1, model.RuntimeClaude)
 	if err := applyCallerDefaults(root, "status", &options{}); err == nil || !strings.Contains(err.Error(), "multiple pending") {
 		t.Fatalf("two incomplete bindings were guessed: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestNativeCallerNeverAssociatesPendingStateOrDuplicatesCreatedRoom(t *testi
 	if err := applyCallerDefaults(root, "status", &o); err != nil || o.room != "pending" {
 		t.Fatalf("explicit incomplete-binding status lost: %+v %v", o, err)
 	}
-	callerState(t, root, "associated", "session", model.ActorClaude, model.RuntimeClaude)
+	callerState(t, root, "associated", "session", model.ActorSlot1, model.RuntimeClaude)
 	if err := applyCallerDefaults(root, "bind", &options{create: true}); err == nil {
 		t.Fatal("create duplicated an already-associated session")
 	}
@@ -152,7 +152,7 @@ func TestNativeCreateRunsInsideHarnessWithoutRuntimeOrSlotFlags(t *testing.T) {
 		t.Fatal("create still emitted a bind nonce")
 	}
 	var s State
-	if err := readPrivate(filepath.Join(root, ".pairroom", "rooms", "room1", "slots", "claude", "state.json"), &s); err != nil || s.SessionID != "launching-session" {
+	if err := readPrivate(filepath.Join(root, ".pairroom", "rooms", "room1", "slots", "slot1", "state.json"), &s); err != nil || s.SessionID != "launching-session" {
 		t.Fatalf("create did not record the environment association: %+v %v", s, err)
 	}
 }

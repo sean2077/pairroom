@@ -81,17 +81,17 @@ func factoryActor(cfg Config, fallback model.ActorID) model.ActorID {
 }
 
 func ClaudeFactory(cfg Config, sink EventSink) Adapter {
-	actor := factoryActor(cfg, model.ActorClaude)
+	actor := factoryActor(cfg, model.ActorSlot1)
 	cfg.Runtime = model.RuntimeClaude
 	return newHumanInputAdapter(cfg, actor, sink, func(innerSink EventSink) Adapter { return NewClaude(cfg, innerSink) })
 }
 func CodexFactory(cfg Config, sink EventSink) Adapter {
-	actor := factoryActor(cfg, model.ActorCodex)
+	actor := factoryActor(cfg, model.ActorSlot2)
 	cfg.Runtime = model.RuntimeCodex
 	return newHumanInputAdapter(cfg, actor, sink, func(innerSink EventSink) Adapter { return NewCodex(cfg, innerSink) })
 }
 func GrokFactory(cfg Config, sink EventSink) Adapter {
-	actor := factoryActor(cfg, model.ActorClaude)
+	actor := factoryActor(cfg, model.ActorSlot1)
 	cfg.Runtime = model.RuntimeGrok
 	return newHumanInputAdapter(cfg, actor, sink, func(innerSink EventSink) Adapter { return NewGrok(cfg, innerSink) })
 }

@@ -23,7 +23,7 @@ func testEngine(t *testing.T) (*Engine, map[model.ActorID]Auth, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e, err := Open(Config{RoomID: "room", Store: log, Runtimes: map[model.ActorID]model.RuntimeKind{model.ActorClaude: model.RuntimeClaude, model.ActorCodex: model.RuntimeCodex}})
+	e, err := Open(Config{RoomID: "room", Store: log, Runtimes: map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: model.RuntimeCodex}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,13 +48,13 @@ func testEngine(t *testing.T) (*Engine, map[model.ActorID]Auth, string) {
 }
 func TestNativeRoutingAndPublicationIdentity(t *testing.T) {
 	e, a, _ := testEngine(t)
-	sender := a[model.ActorClaude]
+	sender := a[model.ActorSlot1]
 	cases := []struct {
 		text string
 		to   model.ActorID
 	}{
-		{"@codex complete full reply\nline two", model.ActorCodex},
-		{"@USER human only", model.ActorUser}, {"@USER and @CoDeX: peer wins", model.ActorCodex},
+		{"@codex complete full reply\nline two", model.ActorSlot2},
+		{"@USER human only", model.ActorUser}, {"@USER and @CoDeX: peer wins", model.ActorSlot2},
 		{"finished, no relay", ""}, {"@claude self mention", ""}, {"```\n@codex\n```", ""}, {"https://example.com/@codex", ""}, {"inline `@codex` ignored", ""}, {"@codex-not-exact", ""},
 	}
 	for i, tc := range cases {
@@ -78,7 +78,7 @@ func TestNativeRoutingAndPublicationIdentity(t *testing.T) {
 		}
 	}
 	first, err := e.Send(sender, SendRequest{ID: "explicit-1", Text: "@user and @claude are body only"})
-	if err != nil || first.To != model.ActorCodex {
+	if err != nil || first.To != model.ActorSlot2 {
 		t.Fatalf("explicit default: %+v %v", first, err)
 	}
 	same, err := e.Send(sender, SendRequest{ID: "explicit-1", Text: first.Text})
@@ -116,17 +116,17 @@ func TestNativeRoutingAndPublicationIdentity(t *testing.T) {
 }
 func TestNativeFIFOClaimAckUnknownAndExplicitRetry(t *testing.T) {
 	e, a, _ := testEngine(t)
-	first, _ := e.Send(a[model.ActorClaude], SendRequest{ID: "one", Text: "first"})
-	second, _ := e.Send(a[model.ActorClaude], SendRequest{ID: "two", Text: "second"})
+	first, _ := e.Send(a[model.ActorSlot1], SendRequest{ID: "one", Text: "first"})
+	second, _ := e.Send(a[model.ActorSlot1], SendRequest{ID: "two", Text: "second"})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := e.Claim(ctx, a[model.ActorCodex], false); !errors.Is(err, context.Canceled) {
+	if _, err := e.Claim(ctx, a[model.ActorSlot2], false); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled wait claimed: %v", err)
 	}
 	if e.Snapshot().Messages[0].State != "queued" {
 		t.Fatal("cancellation consumed queued work")
 	}
-	claim, err := e.Claim(context.Background(), a[model.ActorCodex], true)
+	claim, err := e.Claim(context.Background(), a[model.ActorSlot2], true)
 	if err != nil || claim.ID != first.ID || !strings.Contains(claim.Envelope, "first") {
 		t.Fatalf("FIFO: %+v %v", claim, err)
 	}
@@ -140,22 +140,22 @@ func TestNativeFIFOClaimAckUnknownAndExplicitRetry(t *testing.T) {
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	if _, err := e.Claim(ctx, a[model.ActorCodex], false); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := e.Claim(ctx, a[model.ActorSlot2], false); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("second claim overtook first: %v", err)
 	}
-	if err := e.Ack(a[model.ActorClaude], claim.ID, claim.Receipt); err == nil {
+	if err := e.Ack(a[model.ActorSlot1], claim.ID, claim.Receipt); err == nil {
 		t.Fatal("cross-slot acknowledgement accepted")
 	}
-	if err := e.Ack(a[model.ActorCodex], claim.ID, claim.Receipt); err != nil {
+	if err := e.Ack(a[model.ActorSlot2], claim.ID, claim.Receipt); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Ack(a[model.ActorCodex], claim.ID, claim.Receipt); err != nil {
+	if err := e.Ack(a[model.ActorSlot2], claim.ID, claim.Receipt); err != nil {
 		t.Fatal("ack lost response retry not idempotent")
 	}
 	if e.Snapshot().Messages[0].State != "handed_off" {
 		t.Fatal("stdout receipt not terminal")
 	}
-	claim, err = e.Claim(context.Background(), a[model.ActorCodex], false)
+	claim, err = e.Claim(context.Background(), a[model.ActorSlot2], false)
 	if err != nil || claim.ID != second.ID {
 		t.Fatal("second FIFO claim wrong")
 	}
@@ -167,7 +167,7 @@ func TestNativeFIFOClaimAckUnknownAndExplicitRetry(t *testing.T) {
 	if err := e.Reap(); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Ack(a[model.ActorCodex], claim.ID, claim.Receipt); err == nil {
+	if err := e.Ack(a[model.ActorSlot2], claim.ID, claim.Receipt); err == nil {
 		t.Fatal("late ack turned unknown into certainty")
 	}
 	if e.Snapshot().Messages[1].State != "unknown" {
@@ -186,7 +186,7 @@ func TestNativeFIFOClaimAckUnknownAndExplicitRetry(t *testing.T) {
 }
 func TestNativeParkDisableTimeoutAndWake(t *testing.T) {
 	e, a, _ := testEngine(t)
-	receiver := a[model.ActorCodex]
+	receiver := a[model.ActorSlot2]
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	if _, err := e.Claim(ctx, receiver, true); !errors.Is(err, context.DeadlineExceeded) {
@@ -196,7 +196,7 @@ func TestNativeParkDisableTimeoutAndWake(t *testing.T) {
 	if err := e.Park(receiver.Slot, false); err != nil {
 		t.Fatal(err)
 	}
-	message, _ := e.Send(a[model.ActorClaude], SendRequest{ID: "wake", Text: "explicit send wakes identical inbox"})
+	message, _ := e.Send(a[model.ActorSlot1], SendRequest{ID: "wake", Text: "explicit send wakes identical inbox"})
 	if claim, err := e.Claim(context.Background(), receiver, true); err != nil || claim != nil {
 		t.Fatal("disabled park consumed message")
 	}
@@ -215,7 +215,7 @@ func TestNativeParkDisableTimeoutAndWake(t *testing.T) {
 	ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
 	defer cancel2()
 	go func() { c, _ := e.Claim(ctx2, receiver, true); result <- c }()
-	_, err = e.Send(a[model.ActorClaude], SendRequest{ID: "after-park", Text: "a new delivery"})
+	_, err = e.Send(a[model.ActorSlot1], SendRequest{ID: "after-park", Text: "a new delivery"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,8 +229,8 @@ func TestNativeParkDisableTimeoutAndWake(t *testing.T) {
 
 func TestNativeDrainAcknowledgementRetainsAuthentication(t *testing.T) {
 	e, auth, _ := testEngine(t)
-	receiver := auth[model.ActorCodex]
-	if _, err := e.Send(auth[model.ActorClaude], SendRequest{ID: "drain", Text: "work"}); err != nil {
+	receiver := auth[model.ActorSlot2]
+	if _, err := e.Send(auth[model.ActorSlot1], SendRequest{ID: "drain", Text: "work"}); err != nil {
 		t.Fatal(err)
 	}
 	claim, err := e.Claim(context.Background(), receiver, false)
@@ -240,7 +240,7 @@ func TestNativeDrainAcknowledgementRetainsAuthentication(t *testing.T) {
 	e.SetDraining(true)
 	wrongGeneration := receiver
 	wrongGeneration.Generation++
-	for _, a := range []Auth{auth[model.ActorClaude], wrongGeneration} {
+	for _, a := range []Auth{auth[model.ActorSlot1], wrongGeneration} {
 		if err := e.Ack(a, claim.ID, claim.Receipt); !errors.Is(err, ErrAuth) {
 			t.Fatalf("invalid draining ack authorized: %v", err)
 		}
@@ -266,7 +266,7 @@ func TestNativeDrainAcknowledgementRetainsAuthentication(t *testing.T) {
 }
 func TestNativeBindingAssociationAndRevocation(t *testing.T) {
 	e, a, _ := testEngine(t)
-	slot := model.ActorClaude
+	slot := model.ActorSlot1
 	old := a[slot]
 	// A different official session cannot take an occupied slot without replace.
 	if _, err := e.Bind(slot, BindRequest{BindID: "new-bind", CredentialHash: Digest("new-secret"), SessionID: "intruder-session"}); !errors.Is(err, ErrOccupied) {
@@ -281,7 +281,7 @@ func TestNativeBindingAssociationAndRevocation(t *testing.T) {
 	if err != nil || same.Generation != old.Generation {
 		t.Fatal("same session did not recover idempotently")
 	}
-	_, _ = e.Send(a[model.ActorCodex], SendRequest{ID: "old-target", Text: "cannot cross generations"})
+	_, _ = e.Send(a[model.ActorSlot2], SendRequest{ID: "old-target", Text: "cannot cross generations"})
 	replacement, err := e.Bind(slot, BindRequest{BindID: "new-bind", CredentialHash: Digest("new-secret"), SessionID: "new-session", Replace: true})
 	if err != nil || replacement.Generation != old.Generation+1 {
 		t.Fatal("replace generation failed")
@@ -312,12 +312,12 @@ func TestNativeBindingAssociationAndRevocation(t *testing.T) {
 }
 func TestNativeRestartPersistsQueueReceiptsGapsAndUnknown(t *testing.T) {
 	e, a, dir := testEngine(t)
-	published, err := e.Report(a[model.ActorClaude], 3, "@codex observed gap")
+	published, err := e.Report(a[model.ActorSlot1], 3, "@codex observed gap")
 	if err != nil || published.GapFrom != 1 || published.GapTo != 2 {
 		t.Fatalf("gap %+v %v", published, err)
 	}
-	_, _ = e.Send(a[model.ActorClaude], SendRequest{ID: "queued-restart", Text: "safe queued"})
-	claim, err := e.Claim(context.Background(), a[model.ActorCodex], false)
+	_, _ = e.Send(a[model.ActorSlot1], SendRequest{ID: "queued-restart", Text: "safe queued"})
+	claim, err := e.Claim(context.Background(), a[model.ActorSlot2], false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,14 +338,14 @@ func TestNativeRestartPersistsQueueReceiptsGapsAndUnknown(t *testing.T) {
 	if snapshot.Messages[0].State != "unknown" || snapshot.Messages[1].State != "queued" {
 		t.Fatalf("recovery states %+v", snapshot.Messages)
 	}
-	if _, accepted, err := fresh.Publication(a[model.ActorClaude], 3); err != nil || !accepted {
+	if _, accepted, err := fresh.Publication(a[model.ActorSlot1], 3); err != nil || !accepted {
 		t.Fatal("publication receipt lost")
 	}
-	again, err := fresh.Report(a[model.ActorClaude], 3, "@codex same receipt")
+	again, err := fresh.Report(a[model.ActorSlot1], 3, "@codex same receipt")
 	if err != nil || again.Message.ID != claim.ID {
 		t.Fatal("restart duplicated accepted publication")
 	}
-	got, err := fresh.Claim(context.Background(), a[model.ActorCodex], false)
+	got, err := fresh.Claim(context.Background(), a[model.ActorSlot2], false)
 	if err != nil || got.ID != snapshot.Messages[1].ID {
 		t.Fatal("unknown was automatically replayed")
 	}
@@ -359,7 +359,7 @@ func TestNativeConcurrentSendPreservesDurableFIFO(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, err := e.Send(a[model.ActorClaude], SendRequest{ID: fmt.Sprintf("c-%d", i), Text: "same body valid across sends"})
+			_, err := e.Send(a[model.ActorSlot1], SendRequest{ID: fmt.Sprintf("c-%d", i), Text: "same body valid across sends"})
 			if err != nil {
 				errCh <- err
 			}
@@ -375,11 +375,11 @@ func TestNativeConcurrentSendPreservesDurableFIFO(t *testing.T) {
 		t.Fatal("concurrent sends lost or deduplicated")
 	}
 	for _, m := range snapshot.Messages {
-		c, err := e.Claim(context.Background(), a[model.ActorCodex], false)
+		c, err := e.Claim(context.Background(), a[model.ActorSlot2], false)
 		if err != nil || c.ID != m.ID {
 			t.Fatal("durable order changed")
 		}
-		if err := e.Ack(a[model.ActorCodex], c.ID, c.Receipt); err != nil {
+		if err := e.Ack(a[model.ActorSlot2], c.ID, c.Receipt); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -390,7 +390,7 @@ func TestNativeAppendFailureNeverPublishesOrHandsOut(t *testing.T) {
 	if err := e.cfg.Store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Report(a[model.ActorClaude], 1, "@codex unsafe publication"); err == nil {
+	if _, err := e.Report(a[model.ActorSlot1], 1, "@codex unsafe publication"); err == nil {
 		t.Fatal("closed writer accepted publication")
 	}
 	if e.Snapshot().Sequence != before || len(e.Snapshot().Messages) != 0 {
@@ -406,20 +406,20 @@ func TestNativeAppendFailureNeverPublishesOrHandsOut(t *testing.T) {
 }
 func TestNativeDuplicateRuntimeHandlesAndPeerMetadata(t *testing.T) {
 	e, a, _ := testEngine(t)
-	e.cfg.Runtimes[model.ActorClaude] = model.RuntimeCodex
-	p, err := e.Report(a[model.ActorClaude], 1, "@codex1 exact duplicate runtime peer")
-	if err != nil || p.Message == nil || p.Message.To != model.ActorCodex {
+	e.cfg.Runtimes[model.ActorSlot1] = model.RuntimeCodex
+	p, err := e.Report(a[model.ActorSlot1], 1, "@codex1 exact duplicate runtime peer")
+	if err != nil || p.Message == nil || p.Message.To != model.ActorSlot2 {
 		t.Fatal("stable duplicate suffix routing failed")
 	}
-	p, err = e.Report(a[model.ActorClaude], 2, "@codex legacy bare name should not route")
+	p, err = e.Report(a[model.ActorSlot1], 2, "@codex legacy bare name should not route")
 	if err != nil || p.Message != nil {
 		t.Fatal("bare duplicate runtime routed")
 	}
-	peer, err := e.Peer(a[model.ActorClaude])
-	if err != nil || peer.SessionID != a[model.ActorCodex].SessionID || peer.TranscriptPath == "" {
+	peer, err := e.Peer(a[model.ActorSlot1])
+	if err != nil || peer.SessionID != a[model.ActorSlot2].SessionID || peer.TranscriptPath == "" {
 		t.Fatal("peer metadata missing")
 	}
-	claim, err := e.Claim(context.Background(), a[model.ActorCodex], false)
+	claim, err := e.Claim(context.Background(), a[model.ActorSlot2], false)
 	if err != nil {
 		t.Fatal(err)
 	}

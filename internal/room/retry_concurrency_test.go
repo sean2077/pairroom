@@ -10,9 +10,9 @@ import (
 
 func TestConcurrentRetryHasOnePendingChild(t *testing.T) {
 	e, _ := newTestEngine(t, "")
-	original := model.Message{ID: "failed-input", From: model.ActorUser, To: []model.ActorID{model.ActorCodex}, Text: "Do not execute twice", ThreadID: "thread",
-		Delivery:   map[model.ActorID]model.DeliveryState{model.ActorCodex: model.DeliveryFailed},
-		Processing: map[model.ActorID]model.ProcessingState{model.ActorCodex: model.ProcessingFailed}}
+	original := model.Message{ID: "failed-input", From: model.ActorUser, To: []model.ActorID{model.ActorSlot2}, Text: "Do not execute twice", ThreadID: "thread",
+		Delivery:   map[model.ActorID]model.DeliveryState{model.ActorSlot2: model.DeliveryFailed},
+		Processing: map[model.ActorID]model.ProcessingState{model.ActorSlot2: model.ProcessingFailed}}
 	if _, err := e.record(EventMessageCreated, model.ActorUser, original); err != nil {
 		t.Fatal(err)
 	}
@@ -55,12 +55,12 @@ func TestTerminalRetryDoesNotBlockExplicitRetry(t *testing.T) {
 	for _, terminal := range []model.ProcessingState{model.ProcessingCompleted, model.ProcessingCancelled, model.ProcessingFailed} {
 		t.Run(string(terminal), func(t *testing.T) {
 			e, _ := newTestEngine(t, "")
-			original := model.Message{ID: "failed-input", From: model.ActorUser, To: []model.ActorID{model.ActorCodex}, Text: "retry", ThreadID: "thread",
-				Delivery: map[model.ActorID]model.DeliveryState{model.ActorCodex: model.DeliveryFailed}, Processing: map[model.ActorID]model.ProcessingState{model.ActorCodex: model.ProcessingFailed}}
+			original := model.Message{ID: "failed-input", From: model.ActorUser, To: []model.ActorID{model.ActorSlot2}, Text: "retry", ThreadID: "thread",
+				Delivery: map[model.ActorID]model.DeliveryState{model.ActorSlot2: model.DeliveryFailed}, Processing: map[model.ActorID]model.ProcessingState{model.ActorSlot2: model.ProcessingFailed}}
 			child := original
 			child.ID = "old-retry"
 			child.RetryOf = original.ID
-			child.Processing = map[model.ActorID]model.ProcessingState{model.ActorCodex: terminal}
+			child.Processing = map[model.ActorID]model.ProcessingState{model.ActorSlot2: terminal}
 			for _, msg := range []model.Message{original, child} {
 				if _, err := e.record(EventMessageCreated, model.ActorUser, msg); err != nil {
 					t.Fatal(err)

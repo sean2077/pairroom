@@ -30,7 +30,7 @@ Keeping a native harness and keeping its original desktop/terminal UI are differ
 | Delivery and control | Single Room Turn owner, FIFO, supported steering, queue, cancel, interrupt and explicit retry | Durable per-slot FIFO and binding audit; advisory Turn ownership, no process lock or Interrupt control |
 | Important limit | Native tool execution does not expose every interactive vendor feature or preserve an independent Desktop UI | Automatic continuation is bounded by park; authenticated multi-round vendor E2E remains a release gate |
 
-A requirement to keep **Codex Desktop** is a reason to evaluate Native, not to claim Embedded is a transparent attachment to that application. Native supports Claude Code, Codex and Grok Build. Grok uses bounded Hook readiness hints and foreground collection to avoid clipped inputs; clipped Stop replies require explicit full-text publication. See [Grok Native](CLI_REFERENCE.md#grok-build-native). A Native Room's hook parks for up to 30 seconds, with a cap of eight consecutive actual-message blocks. Outside that window/cap, messages stay queued for collection or a human nudge. Neither `handed_off` nor synthetic hook tests prove model acceptance. See [Protocol](PROTOCOL.md#native-host-protocol-v7) and [Support](../SUPPORT.md).
+A requirement to keep **Codex Desktop** is a reason to evaluate Native, not to claim Embedded is a transparent attachment to that application. Native supports Claude Code, Codex and Grok Build. Grok uses bounded Hook readiness hints and foreground collection to avoid clipped inputs; clipped Stop replies require explicit full-text publication. See [Grok Native](CLI_REFERENCE.md#grok-build-native). A Native Room's hook parks for up to 30 seconds, with a cap of eight consecutive actual-message blocks. Outside that window/cap, messages stay queued for collection or a human nudge. Neither `handed_off` nor synthetic hook tests prove model acceptance. See [Protocol](PROTOCOL.md#native-host-protocol-v8) and [Support](../SUPPORT.md).
 
 ### Independent configuration without a Provider manager
 
@@ -117,7 +117,7 @@ Reviewed against PairRoom commit `d76c089161180cd06baa1f53f22e93413e4266bf`. The
 | Flexible responsibilities, not a phase compiler | [Protocol](PROTOCOL.md), [collaboration regressions](../internal/room/collaboration_test.go) |
 | Exact-handle relay and byte budgets | [Versioned protocol](../internal/protocol/contract.go), [Room Engine](../internal/room/engine.go) |
 | Independent Embedded selections | [Selection model](../internal/model/agent_selection.go), [CC Switch boundary](../internal/ccswitch/) |
-| Native process/configuration boundary and bounded continuation | [Native protocol](PROTOCOL.md#native-host-protocol-v7), [relay client](../internal/relayclient/) |
+| Native process/configuration boundary and bounded continuation | [Native protocol](PROTOCOL.md#native-host-protocol-v8), [relay client](../internal/relayclient/) |
 | Persistent state and explicit recovery | [Engine regressions](../internal/room/engine_test.go), [Storage](STORAGE.md) |
 
 Revisit positioning when native harnesses or close competitors change. Product breadth, stars and marketing claims do not establish superiority; no single ingredient here is claimed exclusive to PairRoom.
