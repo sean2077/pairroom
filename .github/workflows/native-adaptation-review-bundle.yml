@@ -1,7 +1,8 @@
 name: Native adaptation source bundle (temporary)
 
 on:
-  pull_request:
+  push:
+    branches: ['feat/native-grok-build']
     paths: ['.github/workflows/native-adaptation-review-bundle.yml']
 
 permissions:
@@ -9,7 +10,6 @@ permissions:
 
 jobs:
   bundle:
-    if: github.head_ref == 'feat/native-grok-build'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
