@@ -115,7 +115,10 @@ and session.
 
 A Stop hook publishes the complete routed reply and may park for up to 30 seconds
 inside its installed 45-second budget. `decision:block` requests continuation;
-it is not arbitrary idle-session wake-up. The eight-block cap is unchanged; Grok readiness/recovery hints count toward it
+it is not arbitrary idle-session wake-up. The park collects the next eligible
+FIFO input, which may be a peer's published reply even when that reply carried
+no routing handle: ending the relay stops the continuation chain, it does not
+suppress delivery. The eight-block cap is unchanged; Grok readiness/recovery hints count toward it
 without claiming that inbox text reached the model.
 
 Foreground `exchange` sends once, then returns the next eligible FIFO input in
@@ -144,6 +147,33 @@ Summary counts and bounded recovery IDs are transport observations, never
 returns a body-free transport summary; full status/export intentionally retain
 history.
 
+## Verified vendor wake surfaces
+
+PairRoom never injects into an idle native session. Two vendor-sanctioned
+surfaces exist around that boundary, verified on real CLIs (2026-09-16):
+
+- **Claude Code**: no external command injects into an existing session, and
+  resuming a running session starts a copy instead. The harness does wake an
+  idle session when harness-tracked background work completes, so an
+  agent-owned background `relay wait` keeps that session reachable by design
+  (see the `pairroom-relay` skill). This is model-initiated, never
+  PairRoom-initiated.
+- **Codex (codex-cli 0.154.0)**: `codex queue --thread <session UUID>
+  --message <text>` woke a deep-idle bound thread in a controlled one-time
+  experiment (accepted queue exit, then an autonomous relay report with no
+  human interaction). Unified-exec background tasks survive turn end and stay
+  pollable cross-turn. A wake nudge must stay body-free; thread identity may
+  be visible to local process observers and vendor/CLI diagnostics, and must
+  never be written to the Event Log, files, or relay bodies.
+- **Grok Build**: native wake unverified; Native Grok binding remains
+  unimplemented.
+
+PairRoom itself never executes a vendor queue command. When a message is queued
+to an idle Codex peer, the CLI prints a human-executable wake template; the
+human decides and runs it. Whether PairRoom may ever perform an opt-in
+automatic wake is a separate owner decision tracked in
+[design/auto-wake.md](design/auto-wake.md).
+
 ## Troubleshooting
 
 | Symptom | Action |
@@ -154,7 +184,7 @@ history.
 | Session identity is missing or differs | Run bind inside the intended session, not a separate terminal. Do not manufacture an environment value. |
 | Slot is occupied | Re-run bind in the original session. Only an intentional session change should use `--replace`. |
 | A bind response was lost | Retry bind for the same Room and slot without `--create` or `--replace`. It reconciles the original attempt; a new explicit `--replace` intentionally starts another replacement. |
-| Messages remain queued | Have the associated receiving agent run `pairroom relay wait`; the app cannot inject into an idle session. |
+| Messages remain queued | Have the associated receiving agent run `pairroom relay wait`. PairRoom never injects into an idle session; for an idle Codex peer a human may run the printed vendor `codex queue` wake template. |
 | Delivery is `unknown` | Inspect the Room and workspace before explicit Retry; it can duplicate work. `handed_off` proves stdout only, not model acceptance. |
 
 Native remains experimental. Synthetic hook, Mock and browser tests are not real
