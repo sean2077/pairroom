@@ -1,9 +1,11 @@
 # Participant-slot ActorID migration: legacy `claude`/`codex` to canonical `slot1`/`slot2`
 
-Status: draft v4 — owner decision required; nothing here is implemented.
-Updated: 2026-09-16, after adversarial peer review round 3 (P0-5/P0-6 and
-P1-12..P1-14 incorporated; Vocabulary module, capability preflight,
-creation ordering and the serialization table added).
+Status: draft v5 — owner decision required; nothing here is implemented.
+Updated: 2026-09-16, after adversarial peer review round 4 (P0-6 restructured
+as a real owner three-way choice F1/F2/F3; D strengthened; call-site-scoped
+prohibition; vocabulary-selection gate; old-CLI upgrade-error contract).
+Rounds 1–4 findings all incorporated; peer review verdict: v4 minus P0-6 is
+an implementation blueprint.
 
 ## Problem
 
@@ -47,10 +49,12 @@ vocabularies.
 - The native relay Engine, native host API path parser, native snapshots
   and Service validators receive the Room's Vocabulary explicitly (plumbed
   from provisioning/generation) and are forbidden from calling the global
-  ActorID slot helpers. Enforcement is mechanical: a repository test
-  fails when native packages reference `ValidParticipant`,
-  `OtherParticipant` or `SlotActors`; the globals remain only for embedded
-  and legacy-vocabulary code paths.
+  ActorID slot helpers. Enforcement is mechanical and **call-site scoped**:
+  the prohibition test enumerates native files/constructors (internal/
+  relay*, native_host_*, and named Service validators) — it must not
+  blanket-ban packages like internal/service that also host embedded
+  paths; shared validators (Room.Validate) gain an explicit vocabulary
+  parameter and appear in both call graphs legitimately.
 - Dual representation (both `claude` and `slot1` for one slot) is rejected
   fail-closed at every map ingress before normalization. Never first-wins.
 - Exclusions: `config.File` top-level `claude`/`codex` are runtime template
@@ -95,21 +99,38 @@ vocabularies.
 
 ## Checkpoint recovery of canonical Rooms (P0-6; owner decisions F, G)
 
-Checkpoint schema 2 and its strict shape stay unchanged (hard invariant);
-checkpoint writes intentionally omit host mode, so a canonical archived
-Room whose data dir is missing has no durable generation evidence in the
-checkpoint. Options:
+Round 4 proved no design-side closure exists: missing-archived recovery
+(`recoverMissingArchivedRoomsFromCheckpoint`) sees only checkpoint Rooms;
+checkpoint writes intentionally omit host mode; and in that branch the data
+dir is missing by definition, so schema-12 metadata cannot be consulted.
+Canonical and legacy Rooms are checkpoint-isomorphic — recovery cannot
+distinguish them, and blanket rejection would break legacy recovery. F/G
+are therefore a real owner three-way choice:
 
-- **(b) Fail-closed recovery (recommended)**: registry recovery
-  reconstructs legacy-vocabulary index entries only; a Room whose store
-  metadata is schema 12 but whose data is missing fails recovery closed
-  with actionable "restore from backup" text. No invariant change; matches
-  the project's fail-closed philosophy; the scenario (archived + data dir
-  lost) is already a backup-restore path.
-- (a) Optional generation field in checkpoint schema 2: rejected —
-  conflicts with the strict-shape invariant and old readers.
-- (c) Encode generation into an existing invariant field: rejected without
-  a safety proof; smuggling semantics into frozen fields is fragile.
+- **F1 (recommended): durable generation index.** A separate, strictly
+  defined one-way index (`room_id → canonical`) written atomically at
+  canonical Room activation — before it can be archived — living beside
+  the Registry but explicitly NOT part of the rebuildable Registry or the
+  checkpoint. Recovery rules: entry present ⇒ fail closed with actionable
+  "restore from backup" text; entry absent ⇒ legacy recovery unchanged;
+  index file missing or corrupt ⇒ all missing-archived recovery fails
+  closed (integrity-first). Stale entries for fully deleted Rooms are
+  harmless (the index only ever grows; an entry for a nonexistent Room
+  matches nothing). Coexistence: the Registry remains fully rebuildable
+  without the index for legacy Rooms; the index is the sole generation
+  authority for recovery and is covered by backup/verify/restore.
+- **F2: canonical Rooms opt out of checkpoint-only recovery.** Archive and
+  delete APIs explicitly block the data-loss path for canonical Rooms or
+  preserve generation evidence at archive time. Smaller durable surface
+  than F1, but constrains the archive/delete lifecycle and still needs a
+  place to keep the evidence — which tends to reimplement F1 scoped down.
+- **F3: retire legacy missing-data recovery entirely.** Every missing
+  archived Room fails closed. Simplest code, but a real behavior
+  regression for legacy Rooms; cannot be described as "legacy unchanged".
+
+G follows from F: with F1, checkpoint schema 2 stays strict and carries no
+generation evidence (recommended); F2 needs an archive-side evidence
+location; F3 needs none.
 
 ## Version skew and capability preflight (P1-12/P1-14; owner decisions B, I)
 
@@ -121,6 +142,14 @@ checkpoint. Options:
   capability is absent; the creation POST re-validates server-side
   (defense in depth); tampered/incorrect capability fails closed at
   creation with the schema error. Golden-tested both directions.
+- **Vocabulary selection**: canonical is never implicit per-request. A
+  Service-level setting (default off) enables canonical native creation;
+  flipping it is the explicit irreversible confirmation of decision D
+  (gated on a verified backup). `bind --create` selects canonical only
+  when the setting is on and the capability field confirms support.
+- **Old-CLI error contract**: an old CLI touching a canonical Room fails
+  at its snapshot lookup with a distinct, actionable **upgrade error**
+  (not a generic runtime-mismatch message), asserted by fixture.
 - **Per-Room response projection**: legacy Rooms project legacy keys, so
   old CLIs keep working on them. Old CLI + canonical Room fails at the
   client-side snapshot lookup — early, actionable, with no bind side
@@ -171,10 +200,11 @@ checkpoint. Options:
    constant deprecation in canonical-only paths; glossary/CLAUDE.md final
    sweep; golden updates.
 
-Only Phase 2 writes canonical bytes. Revertibility ends at the first
-canonical Room (downgrade floor: binaries without schema-12 readers fail
-closed on it; docs recommend `pairroom backup` beforehand; release notes
-mark the floor). Phases 0/1 revert freely.
+Only Phase 2 writes canonical bytes, and only after the Service-level
+irreversible confirmation (decision D gate: verified backup + explicit
+opt-in). Revertibility ends at the first canonical Room (downgrade floor:
+binaries without schema-12 readers fail closed on it; release notes mark
+the floor). Phases 0/1 revert freely.
 
 ## Verification matrix
 
@@ -200,8 +230,13 @@ mark the floor). Phases 0/1 revert freely.
   directions.
 - Creation ordering: OpenNew schema selection before metadata; generation
   missing/tampered fails closed.
-- Recovery: canonical archived missing-data Room fails closed with backup
-  text; legacy recovery unchanged.
+- Recovery: per the F choice — F1: generation index write-before-archive
+  ordering, entry-present fail-closed with backup text, entry-absent
+  legacy recovery unchanged, index missing/corrupt fails all
+  missing-archived recovery closed; legacy recovery fixtures unchanged.
+- Capability/vocabulary selection: setting off ⇒ create stays legacy even
+  on a capable Service; setting on + capability ⇒ canonical; old-CLI
+  upgrade-error text distinct from runtime mismatch (fixture-asserted).
 - Local directories: coexistence fail-closed; credential preservation;
   hook discovery and purge scan both vocabularies; State schema 1/2 real
   binary interoperability fixtures.
@@ -221,25 +256,40 @@ mark the floor). Phases 0/1 revert freely.
   response negotiation (rejected: new protocol surface for transient skew).
 - **C. Snapshots/responses**: per-Room projection (recommended) vs frozen
   legacy everywhere.
-- **D. Downgrade**: first canonical Room = downgrade floor; backup advised
-  in docs (as designed) vs stronger gates.
+- **D. Downgrade / point of no return** (strengthened per round 4): the
+  first canonical Room requires an explicit irreversible Service-level
+  confirmation gated on a **verified** backup (`pairroom backup` +
+  `pairroom verify`), not merely docs advice; alternative: owner
+  consciously accepts an unverified downgrade floor.
 - **E. AgentPairProfile**: schema 1 legacy keys remain the durable form,
   normalize-on-read (recommended) vs profile schema 2.
-- **F. Canonical archived missing-data recovery**: fail-closed + backup
-  text (recommended) vs checkpoint field vs encoded evidence.
-- **G. Checkpoint generation evidence**: none — schema 2 stays strict
-  (recommended, follows from F).
-- **H. Vocabulary module**: approve `RoomSlots` module + prohibition of
-  global slot helpers in native paths (recommended; implementability
-  precondition).
+- **F. Canonical archived missing-data recovery** (real three-way choice,
+  no design-side closure exists): F1 durable one-way generation index
+  (recommended, with integrity-first fail-closed rules) / F2 canonical
+  Rooms opt out of checkpoint-only recovery with archive-side evidence /
+  F3 retire legacy missing-data recovery entirely.
+- **G. Checkpoint generation evidence**: none — schema 2 stays strict;
+  generation authority lives outside the checkpoint per the F choice
+  (F1: separate index).
+- **H. Vocabulary module**: approve `RoomSlots` module + call-site-scoped
+  prohibition of global slot helpers in native paths (recommended;
+  implementability precondition).
 - **I. Capability preflight contract**: additive `slot_vocabularies` field
   on the existing service snapshot, absent ⇒ legacy-only, fail-closed at
-  preflight and creation (recommended).
+  preflight and creation; canonical creation additionally gated by the
+  Service-level setting from decision D (recommended).
 
 ## Revision log
 
-- v4 (2026-09-16): round-3 fixes — explicit `RoomSlots` Vocabulary module
-  with call-site prohibition (P0-5); canonical missing-data recovery
+- v5 (2026-09-16): round-4 fixes — P0-6 restructured from an
+  unimplementable fail-closed claim into owner three-way F1/F2/F3 with F1
+  (one-way durable generation index, integrity-first recovery rules)
+  recommended; D strengthened to explicit irreversible confirmation gated
+  on verified backup; prohibition test scoped to native call sites with
+  shared-validator vocabulary parameter; canonical creation gated by a
+  Service-level setting; old-CLI canonical failure must be a distinct
+  upgrade error; verification matrix extended.
+- v4 (2026-09-16): explicit `RoomSlots` Vocabulary module (P0-5); canonical missing-data recovery
   fail-closed, checkpoint untouched (P0-6); capability preflight contract
   on the existing snapshot read, blocking before any POST (P1-12);
   `store.OpenNew` creation ordering with host-mode-aware schema selection
