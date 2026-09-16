@@ -1,18 +1,163 @@
 package relayclient
 
 import (
+	"bufio"
 	"bytes"
 	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
 )
+
+// installRuntimeChoices is the interactive selection order. Each is a real native
+// runtime with its own project hook location and skill directory.
+var installRuntimeChoices = []struct {
+	kind  model.RuntimeKind
+	label string
+}{
+	{model.RuntimeCodex, "Codex"},
+	{model.RuntimeClaude, "Claude Code (cc)"},
+	{model.RuntimeGrok, "Grok Build"},
+}
+
+func parseRuntimeToken(token string) (model.RuntimeKind, bool) {
+	switch strings.ToLower(strings.TrimSpace(token)) {
+	case "claude", "cc", "claude-code", "claudecode":
+		return model.RuntimeClaude, true
+	case "codex":
+		return model.RuntimeCodex, true
+	case "grok", "grok-build", "grokbuild":
+		return model.RuntimeGrok, true
+	}
+	return "", false
+}
+
+// parseRuntimeList parses a comma/space-separated --runtime value into
+// deduplicated canonical runtimes, preserving first-seen order.
+func parseRuntimeList(value string) ([]model.RuntimeKind, error) {
+	fields := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' })
+	var kinds []model.RuntimeKind
+	seen := map[model.RuntimeKind]bool{}
+	for _, field := range fields {
+		kind, ok := parseRuntimeToken(field)
+		if !ok {
+			return nil, fmt.Errorf("unknown --runtime %q; choose claude (cc), codex, or grok", field)
+		}
+		if !seen[kind] {
+			seen[kind] = true
+			kinds = append(kinds, kind)
+		}
+	}
+	if len(kinds) == 0 {
+		return nil, errors.New("no runtime selected")
+	}
+	return kinds, nil
+}
+
+// stdinIsTTY reports whether in is an interactive terminal, using only the
+// standard library (the dependency invariant forbids golang.org/x/term).
+func stdinIsTTY(in io.Reader) bool {
+	file, ok := in.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+func readLine(in io.Reader) (string, error) {
+	line, err := bufio.NewReader(in).ReadString('\n')
+	trimmed := strings.TrimRight(line, "\r\n")
+	if trimmed == "" && err != nil {
+		return "", err
+	}
+	return trimmed, nil
+}
+
+// promptInstallRuntimes offers a multi-select to a human at a terminal. The menu
+// goes to diagnostic so the JSON result on stdout stays parseable.
+func promptInstallRuntimes(in io.Reader, diagnostic io.Writer) ([]model.RuntimeKind, error) {
+	fmt.Fprintln(diagnostic, "Install PairRoom relay hooks for which harnesses? Enter numbers or names, comma-separated (empty cancels):")
+	for i, choice := range installRuntimeChoices {
+		fmt.Fprintf(diagnostic, "  %d) %s\n", i+1, choice.label)
+	}
+	fmt.Fprint(diagnostic, "Select: ")
+	line, err := readLine(in)
+	if err != nil {
+		return nil, errors.New("could not read the selection; rerun pairroom relay install or pass --runtime claude|codex|grok")
+	}
+	if strings.TrimSpace(line) == "" {
+		return nil, errors.New("no harness selected; rerun pairroom relay install or pass --runtime claude|codex|grok")
+	}
+	var resolved []string
+	for _, token := range strings.FieldsFunc(line, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
+		if n, convErr := strconv.Atoi(token); convErr == nil && n >= 1 && n <= len(installRuntimeChoices) {
+			resolved = append(resolved, string(installRuntimeChoices[n-1].kind))
+			continue
+		}
+		resolved = append(resolved, token)
+	}
+	return parseRuntimeList(strings.Join(resolved, ","))
+}
+
+// selectInstallRuntimes resolves which harnesses to install for: an explicit
+// --runtime list wins; inside a recognized native session the harness is
+// inferred; at an interactive terminal the user is prompted; otherwise the
+// command fails with the valid options instead of hanging an agent tool call.
+func selectInstallRuntimes(flagValue string, in io.Reader, diagnostic io.Writer) ([]model.RuntimeKind, error) {
+	if strings.TrimSpace(flagValue) != "" {
+		return parseRuntimeList(flagValue)
+	}
+	if _, name, ok := harnessAncestor(); ok {
+		if kind, isHarness := harnessRuntimes[name]; isHarness {
+			return []model.RuntimeKind{kind}, nil
+		}
+	}
+	if stdinIsTTY(in) {
+		return promptInstallRuntimes(in, diagnostic)
+	}
+	return nil, errors.New("install needs --runtime claude|codex|grok (comma-separated) when run non-interactively outside a native session; inside a terminal it prompts, and inside a recognized session it infers the harness")
+}
+
+// runInstall writes the relay hooks and skill for each selected harness. Every
+// runtime, including Grok, gets its own project hook location and skill dir.
+func runInstall(root string, kinds []model.RuntimeKind, out io.Writer) error {
+	seen := map[model.RuntimeKind]bool{}
+	installed := []string{}
+	for _, kind := range kinds {
+		if seen[kind] {
+			continue
+		}
+		seen[kind] = true
+		if err := editHooks(root, kind, false); err != nil {
+			return err
+		}
+		if err := installSkill(kind); err != nil {
+			return err
+		}
+		installed = append(installed, string(kind))
+	}
+	return writeJSON(out, map[string]any{
+		"installed": installed,
+		"notice":    "Review and approve the exact project hook in each harness (Codex: /hooks; Grok: /hooks and project folder trust; Claude Code: project hook consent). This command does not grant native trust. Keep pairroom on PATH. Real authenticated bidirectional E2E remains release-gated.",
+		"next_steps": []string{
+			"Create a room and bind this session: pairroom relay bind --create --name \"<topic>\" (skill: /pairroom-relay <topic>)",
+			"The peer session joins with the printed peer_join command, or zero-flag inside a recognized session: pairroom relay bind",
+			"After both sessions bind, give the agents the task and desired collaboration",
+		},
+	})
+}
 
 func hookCommand(kind model.RuntimeKind) string {
 	return "pairroom relay hook --runtime " + string(kind)

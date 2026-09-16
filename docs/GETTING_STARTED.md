@@ -103,11 +103,10 @@ Only after that smoke should you grant the permissions needed for implementation
 
 Native is experimental. It keeps the original Claude Code/Codex sessions and does not own their processes. Configure models, Providers, effort and permissions in those harnesses; the Room's selection metadata does not apply overrides. Real authenticated multi-round acceptance remains a release gate, distinct from Mock and synthetic hook tests.
 
-Start a non-Mock Service or use the one Desktop already owns. In the intended repository, install the relay hooks for the runtimes you will use:
+Start a non-Mock Service or use the one Desktop already owns. In the intended repository, install the relay hooks for the runtimes you will use. `relay install` runs from any terminal in that worktree (it does not need a native session); pass a comma-separated `--runtime` (`cc|claude`, `codex`, `grok`), or run it at a terminal without `--runtime` to pick from a multi-select. Each runtime gets its own project hook, and native relay supports Claude Code, Codex and Grok Build:
 
 ```bash
-pairroom relay install --runtime claude
-pairroom relay install --runtime codex
+pairroom relay install --runtime claude,codex
 ```
 
 Review and approve the exact project hooks in each native harness. Installation does not grant trust or bypass native approval. If using an isolated Service, follow the [CLI reference](CLI_REFERENCE.md#native-relay-commands) for its connection options rather than guessing defaults.
