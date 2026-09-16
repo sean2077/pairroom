@@ -12,6 +12,14 @@ import (
 	"github.com/sean2077/pairroom/internal/relay"
 )
 
+type defaultPairRuntimeMismatchError struct {
+	Runtime model.RuntimeKind
+}
+
+func (e *defaultPairRuntimeMismatchError) Error() string {
+	return fmt.Sprintf("the %q harness matches no slot in the Service default pair", e.Runtime)
+}
+
 func requireSessionID(kind model.RuntimeKind) (string, error) {
 	name, ok := sessionEnvVars[kind]
 	if !ok {
@@ -49,6 +57,7 @@ func prepareNativeCreation(ctx context.Context, endpoint relay.Endpoint, root st
 	if err != nil {
 		return o, slot, err
 	}
+	usingServiceDefaults := agents == nil
 	if agents == nil {
 		agents, err = readDefaultPair(ctx, endpoint)
 		if err != nil {
@@ -72,6 +81,9 @@ func prepareNativeCreation(ctx context.Context, endpoint relay.Endpoint, root st
 		}
 		agents[actor] = selection
 	}
+	if usingServiceDefaults && len(runtimeSlots(agents, caller)) == 0 {
+		return o, slot, &defaultPairRuntimeMismatchError{Runtime: caller}
+	}
 	if slot == "" {
 		slot, err = resolveSlotForRoom(serviceRoom{Agents: agents}, caller)
 		if err != nil {
@@ -84,6 +96,16 @@ func prepareNativeCreation(ctx context.Context, endpoint relay.Endpoint, root st
 	o.slot = string(slot)
 	o.preparedAgents = agents
 	return o, slot, nil
+}
+
+func runtimeSlots(agents map[model.ActorID]model.AgentSelection, runtime model.RuntimeKind) []model.ActorID {
+	var matches []model.ActorID
+	for _, slot := range model.SlotActors() {
+		if selection, ok := agents[slot]; ok && selection.Runtime == runtime {
+			matches = append(matches, slot)
+		}
+	}
+	return matches
 }
 
 func readDefaultPair(ctx context.Context, endpoint relay.Endpoint) (map[model.ActorID]model.AgentSelection, error) {

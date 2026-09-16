@@ -86,8 +86,21 @@ func TestBindCreateSlotRuntimeMismatchFailsBeforeCreation(t *testing.T) {
 	}
 	var out bytes.Buffer
 	err := bind(context.Background(), root, options{slot: "claude", create: true, endpoint: endpoint}, &out)
-	if err == nil || *created != 0 || !strings.Contains(err.Error(), "does not match") || out.Len() != 0 {
+	if err == nil || *created != 0 || !strings.Contains(err.Error(), "matches no slot") || !strings.Contains(err.Error(), "no Room was created") || !strings.Contains(err.Error(), "--peer-runtime <claude|codex|grok>") || out.Len() != 0 {
 		t.Fatalf("creator-slot preflight did not fail before provisioning: created=%d err=%v", *created, err)
+	}
+}
+
+func TestBindExistingRoomSlotMismatchDoesNotOfferCreateRetry(t *testing.T) {
+	root, endpoint, created := createBindFixture(t, model.RuntimeCodex)
+	*created = 1
+	if err := editHooks(root, model.RuntimeClaude, false); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err := bind(context.Background(), root, options{room: "room1", slot: "claude", endpoint: endpoint}, &out)
+	if err == nil || !strings.Contains(err.Error(), "does not match the selected Room slot") || strings.Contains(err.Error(), "no Room was created") || strings.Contains(err.Error(), "--peer-runtime") || out.Len() != 0 {
+		t.Fatalf("existing Room mismatch offered an unsafe create retry: err=%v output=%q", err, out.String())
 	}
 }
 
@@ -101,7 +114,8 @@ func TestBindCreatePeerJoinPreservesLiteralPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	var result struct {
-		PeerJoin string `json:"peer_join"`
+		PeerJoin      string `json:"peer_join"`
+		PeerJoinLocal string `json:"peer_join_local"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
 		t.Fatal(err)
@@ -131,6 +145,9 @@ func TestBindCreatePeerJoinPreservesLiteralPaths(t *testing.T) {
 	want := []string{"relay", "bind", "--room", "room1", "--slot", "2", "--service-file", endpoint, "--repo", root}
 	if rendered != fmt.Sprint(want) {
 		t.Fatalf("peer command changed literal paths: got=%q want=%q", rendered, fmt.Sprint(want))
+	}
+	if result.PeerJoinLocal != "pairroom relay bind --room room1 --slot 2" {
+		t.Fatalf("local peer command = %q", result.PeerJoinLocal)
 	}
 }
 

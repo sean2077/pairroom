@@ -196,7 +196,11 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if action == "exchange" {
 			return finishExchange(ctx, c, o, msg, text, out, diagnostic)
 		}
-		return writeJSON(out, msg)
+		if err := writeJSON(out, msg); err != nil {
+			return err
+		}
+		writeQueuedDeliveryHint(diagnostic, c, msg)
+		return nil
 	case "wait":
 		_, err := deliverForeground(ctx, c, o.timeout, out)
 		return err
@@ -229,7 +233,15 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 			local["pending_seq"] = c.State.Pending.Seq
 			local["publication_unknown"] = c.State.Pending.Unknown
 		}
-		return writeJSON(out, map[string]any{"local": local, "relay": status})
+		result := map[string]any{"local": local, "relay": status}
+		if action == "status" && o.brief {
+			if summary, ok := status.(*relay.Summary); ok {
+				if hints := queuedInboxHints(c, summary); len(hints) > 0 {
+					result["queued_inbox_hints"] = hints
+				}
+			}
+		}
+		return writeJSON(out, result)
 	case "unbind":
 		release, err := lockSlot(ctx, dir)
 		if err != nil {
@@ -363,6 +375,22 @@ func bindCommand(root, endpoint, room string, slot model.ActorID) string {
 	return command + " --service-file " + quoteShellPath(endpoint) + " --repo " + quoteShellPath(root)
 }
 
+func localBindCommand(room string, slot model.ActorID) string {
+	return fmt.Sprintf("pairroom relay bind --room %s --slot %d", room, slotNumber(slot))
+}
+
+func createRetryCommand(root, endpoint string, o options, slot model.ActorID) string {
+	command := "pairroom relay bind --create"
+	if slot.ValidParticipant() {
+		command += " --slot " + strconv.Itoa(slotNumber(slot))
+	}
+	if name := strings.TrimSpace(o.name); name != "" {
+		command += " --name " + quoteShellPath(name)
+	}
+	command += " --peer-runtime <claude|codex|grok>"
+	return command + " --service-file " + quoteShellPath(endpoint) + " --repo " + quoteShellPath(root)
+}
+
 // serviceSnapshot is the read-only Management projection used for Room and
 // slot resolution. Resolution only selects convenience; binding still presents
 // credentials and the hook path still requires the official session identity.
@@ -467,12 +495,7 @@ func resolveSlotForRoom(room serviceRoom, rt model.RuntimeKind) (model.ActorID, 
 		return "", errors.New("bind requires --slot 1|2 (Agent 1/2) outside a recognized native session")
 	}
 	order := []model.ActorID{model.ActorClaude, model.ActorCodex}
-	var matches []model.ActorID
-	for _, slot := range order {
-		if sel, ok := room.Agents[slot]; ok && sel.Runtime == rt {
-			matches = append(matches, slot)
-		}
-	}
+	matches := runtimeSlots(room.Agents, rt)
 	if len(matches) == 1 {
 		return matches[0], nil
 	}

@@ -70,6 +70,10 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 	if o.create {
 		o, slot, err = prepareNativeCreation(ctx, endpoint, root, o, slot)
 		if err != nil {
+			var mismatch *defaultPairRuntimeMismatchError
+			if errors.As(err, &mismatch) {
+				return fmt.Errorf("%w; no Room was created. Choose the intended peer runtime and retry once: %s", err, createRetryCommand(root, endpointPath, o, slot))
+			}
 			return err
 		}
 		o.room, err = createNativeRoom(ctx, endpoint, root, o, slot)
@@ -178,6 +182,7 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 	payload := map[string]any{"binding": result.Binding, "bootstrap": result.Bootstrap, "collaboration": result.Collaboration, "notice": result.Notice + " Added .pairroom/ to .gitignore. This session is ready to relay."}
 	if created {
 		payload["peer_join"] = bindCommand(root, endpointPath, o.room, peerSlot(slot))
+		payload["peer_join_local"] = localBindCommand(o.room, peerSlot(slot))
 	}
 	return writeJSON(out, payload)
 }

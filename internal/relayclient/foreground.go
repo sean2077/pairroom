@@ -47,7 +47,8 @@ func finishExchange(ctx context.Context, c *Client, o options, msg relay.Message
 	}
 	// Do not echo the body, credentials or full send response into the model.
 	// Stdout remains reserved for the one incoming envelope.
-	if err := writeJSON(diagnostic, map[string]string{"published": msg.ID, "client_id": o.id}); err != nil {
+	receipt := publicationReceipt{Published: msg.ID, ClientID: o.id, QueuedDelivery: queuedDeliveryHintFor(c, msg)}
+	if err := writeJSON(diagnostic, receipt); err != nil {
 		return fmt.Errorf("publication %s confirmed but diagnostic output failed: %w; inspect relay status, do not resend", msg.ID, err)
 	}
 	delivered, err := deliverForeground(ctx, c, o.timeout, out)
