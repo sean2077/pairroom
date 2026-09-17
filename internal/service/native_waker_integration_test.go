@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -75,5 +76,55 @@ func TestNativeRelaySendSchedulesRedactedCodexWake(t *testing.T) {
 				t.Fatalf("%s leaked %q: %s", event.Kind, forbidden, event.Data)
 			}
 		}
+	}
+}
+
+// A Service restart rebuilds the Registry from durable facts. The rebuild
+// vocabulary must accept every current-schema native wake fact the Engine can
+// append, or a Room that ever reserved a wake fails closed on the next start.
+func TestRegistryRebuildAcceptsNativeWakeFacts(t *testing.T) {
+	f := nativeHTTPWithWake(t, nativeWakerConfig{
+		Grace: time.Millisecond,
+		Wait:  func(context.Context, time.Duration) error { return nil },
+		Run:   func(context.Context, string, ...string) error { return nil },
+	})
+	sender := associateCLI(t, f, model.ActorSlot1)
+	associateCLI(t, f, model.ActorSlot2)
+	if _, err := f.runAs(t, model.RuntimeClaude, sender.SessionID, []string{"send", "--id", "wake-rebuild", "--text", "queued for rebuild"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	eventPath := filepath.Join(f.room.DataDir, "events.jsonl")
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		events, err := readEventsReadOnly(eventPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kinds := map[string]bool{}
+		for _, event := range events {
+			kinds[event.Kind] = true
+		}
+		if kinds["native.wake.reserved"] && kinds["native.wake.attempted"] {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("wake facts did not settle: %v", kinds)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Cover the configuration fact as well; the message stays queued, so the
+	// idle-boundary guard permits the toggle.
+	if err := f.native.engine.SetWakeEnabled(false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(f.registry.Root(), "service-registry.json")); err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, err := OpenRegistry(context.Background(), RegistryConfig{Root: f.registry.Root()})
+	if err != nil {
+		t.Fatalf("registry rebuild rejected current-schema wake facts: %v", err)
+	}
+	if room, ok := rebuilt.Room(f.room.ID); !ok || room.HostMode != model.HostNative {
+		t.Fatalf("rebuilt room=%#v ok=%v", room, ok)
 	}
 }
