@@ -78,7 +78,7 @@ Collection transitions `queued → delivering → handed_off`. `handed_off` asse
 
 Runtime draining rejects new publications and claims while allowing valid acknowledgements of already released envelopes to settle. An acknowledgement never activates a suspended Room and still requires the current binding, generation, session and receipt; closure, revocation, expired delivery leases and uncertain store writes remain fail-closed.
 
-A hook publishes first, then parks up to 30 seconds within a 45-second installed hook timeout, reserving time for stdout and acknowledgement. No claim occurs while waiting. For Claude/Codex, new inbox work returns `{"decision":"block","reason":"<envelope>"}`. At most eight consecutive actual-message blocks are allowed; `stop_hook_active` with no inbox does not spend a block on empty re-arming. There is no idle wake-up promise after timeout, disabled park or the block cap: messages remain queued for the already-associated session's `relay wait` or a human nudge. Each continued model turn may cost tokens; no real vendor token measurement is claimed.
+A hook publishes first, then parks up to 30 seconds within a 45-second installed hook timeout, reserving time for stdout and acknowledgement. No claim occurs while waiting. For Claude/Codex, new inbox work returns `{"decision":"block","reason":"<envelope>"}`. At most eight consecutive actual-message blocks are allowed; `stop_hook_active` with no inbox does not spend a block on empty re-arming. There is no idle wake-up promise after timeout, disabled park or the block cap: messages remain queued for the already-associated session's `relay wait`, a human nudge, or — for an idle Codex-bound target in a wake-enabled Room — the Service-side automatic wake below. Each continued model turn may cost tokens; no real vendor token measurement is claimed.
 
 ### Optional foreground exchange
 
@@ -90,6 +90,10 @@ A confirmed publication followed by a finite empty exchange timeout exits nonzer
 
 PairRoom does not own native processes. Owner Turn is advisory, not a workspace lock. Native provider/model/effort/permission selections are metadata, not applied configuration. Native approval and input interruption remain in the original harness. Authenticated multi-round Claude Code/Codex/Grok acceptance remains a release gate, separate from synthetic hook tests. Foreground exchange does not establish that a particular native tool can stay pending for an hour, six hours, or indefinitely, or wake an already-idle peer. This additive CLI composition changes no Room mode, protocol/bootstrap byte budget, store schema or automatic Stop-publication identity.
 
+
+### Automatic idle-peer wake
+
+A wake-enabled Room (per-Room configuration, default on, changeable only at an idle Room boundary through the Management surface, never through relay binding credentials) permits the Service to wake a deep-idle Codex-bound session after a durably queued peer-directed message. One burst produces at most one wake: a fixed body-free `codex queue` nudge, rate-limited per Room (minimum interval 60 s, hourly cap 10), preceded by a durable reservation keyed by transport message ID, and never automatically retried. The Event Log records `native.wake.updated`, `native.wake.reserved` and `native.wake.attempted` facts with a fixed outcome/reason vocabulary; vendor thread identity, message bodies and command output never enter the Event Log or relay bodies. A live foreground/park collector or an in-flight delivery suppresses the wake; missing CLI, spawn failure, timeout and non-zero exit fail closed to the queued-to-idle behavior. Claude Code has no external injection surface: a reachable Claude session remains an agent-owned background `relay wait`, and the printed human wake template remains as a fallback. See [design/auto-wake.md](design/auto-wake.md).
 
 ### Grok hook boundaries
 

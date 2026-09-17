@@ -35,7 +35,7 @@ type queuedInboxHint struct {
 }
 
 const codexWakeNudge = "PairRoom inbox has messages for you. Run: pairroom relay wait"
-const codexWakeNotice = "Human-executed vendor wake; fixed body-free nudge; PairRoom never runs it."
+const codexWakeNotice = "Human fallback wake; fixed body-free nudge. In an enabled Room the Service runs the equivalent automatically for an idle Codex peer."
 
 type wakeTemplate struct {
 	Command string
@@ -71,7 +71,7 @@ func queuedDeliveryHintFor(ctx context.Context, c *Client, msg relay.Message) *q
 	}
 	wake := peerWakeTemplate(ctx, c)
 	return &queuedDeliveryHint{
-		Notice:      "Message is queued and was not handed off at this response. PairRoom cannot wake an idle native model; if it remains queued, run this command in the peer's associated native session.",
+		Notice:      "Message is queued and was not handed off at this response. An enabled Room's Service automatically wakes an idle Codex peer; if it remains queued, run this command in the peer's associated native session.",
 		Command:     waitCommand(c.State.Room, msg.To),
 		WakeCommand: wake.Command,
 		WakeNotice:  wake.Notice,
@@ -95,9 +95,9 @@ func queuedInboxHints(ctx context.Context, c *Client, summary *relay.Summary) []
 		if queued == 0 {
 			continue
 		}
-		notice := "Peer inbox has queued input at this status snapshot. PairRoom cannot wake an idle native model; run this command in the peer's associated native session to collect it."
+		notice := "Peer inbox has queued input at this status snapshot. An enabled Room's Service automatically wakes an idle Codex peer; run this command in the peer's associated native session to collect it."
 		if slot == c.State.Slot {
-			notice = "This associated inbox has queued input at this status snapshot. PairRoom cannot wake an idle native model; run this command to collect it."
+			notice = "This associated inbox has queued input at this status snapshot. An enabled Room's Service automatically wakes an idle Codex peer; run this command to collect it."
 		}
 		wake := wakeTemplate{}
 		if slot == c.State.Slot {

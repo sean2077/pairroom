@@ -175,6 +175,7 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	mux.HandleFunc("/api/v1/rooms/{room}/surface/{path...}", server.roomSurface)
 	mux.HandleFunc("PATCH /api/v1/runtime-policy", server.updateRuntimePolicy)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/suspend", server.suspendRoom)
+	mux.HandleFunc("POST /api/v1/rooms/{room}/wake-config", server.setRoomWakeConfig)
 	mux.HandleFunc("PATCH /api/v1/rooms/{room}", server.renameRoom)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/archive", server.archiveRoom)
 	mux.HandleFunc("POST /api/v1/rooms/batch-archive", server.archiveRoomsBatch)
@@ -539,6 +540,34 @@ func (s *ManagementServer) suspendRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeManagementJSON(w, http.StatusOK, s.runtimes.Status(roomID))
+}
+
+// setRoomWakeConfig changes the per-Room automatic-wake configuration at an
+// idle Room boundary. It is Management-authenticated and user-owned: relay
+// binding credentials can never reach it. The Engine rejects the change while
+// delivering/unknown deliveries are unresolved.
+func (s *ManagementServer) setRoomWakeConfig(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := decodeManagementJSON(w, r, &request); err != nil {
+		return
+	}
+	roomID := r.PathValue("room")
+	unlock := s.lockRoom(roomID)
+	defer unlock()
+	runtime, err := s.nativeRuntime(r.Context(), roomID)
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	release := runtime.acquire()
+	defer release()
+	if err := runtime.engine.SetWakeEnabled(request.Enabled); err != nil {
+		s.writeError(w, err)
+		return
+	}
+	writeManagementJSON(w, http.StatusOK, map[string]bool{"wake_enabled": runtime.engine.WakeEnabled()})
 }
 
 func (s *ManagementServer) renameRoom(w http.ResponseWriter, r *http.Request) {
@@ -1014,7 +1043,8 @@ func (s *ManagementServer) writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrRegistryFailClosed), errors.Is(err, ErrRuntimeManagerClosed):
 		code = http.StatusServiceUnavailable
 	case errors.Is(err, ErrRuntimeBusy), errors.Is(err, ErrRuntimeCloseUncertain), errors.Is(err, ErrRuntimeDrainAborted),
-		errors.Is(err, ErrRuntimeRoomDeleting), errors.Is(err, ErrRoomNotArchived), errors.Is(err, ErrRuntimeNotReady):
+		errors.Is(err, ErrRuntimeRoomDeleting), errors.Is(err, ErrRoomNotArchived), errors.Is(err, ErrRuntimeNotReady),
+		errors.Is(err, relay.ErrWakeRoomBusy):
 		code = http.StatusConflict
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		code = http.StatusRequestTimeout

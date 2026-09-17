@@ -37,6 +37,9 @@ type EmbeddedRuntimeConfig struct {
 	Codex               agent.Config
 	Resolver            *AgentResolver
 	DrainPollInterval   time.Duration
+	// nativeWake is test-only dependency injection for the Service-side native
+	// waker. Production leaves it zero-valued and uses the real vendor command.
+	nativeWake nativeWakerConfig
 }
 
 const uncorrelatedRuntimeErrorNotice = "native runtime reported an error outside a PairRoom-authored turn"
@@ -142,7 +145,7 @@ func EmbeddedRuntimeFactory(registry *Registry, cfg EmbeddedRuntimeConfig) Runti
 			return nil, fmt.Errorf("project is unavailable: %s", project.Diagnostic)
 		}
 		if durableRoom.HostMode == model.HostNative {
-			return startNativeHostRuntime(ctx, registry, project, durableRoom, cfg.ListenHost)
+			return startNativeHostRuntime(ctx, registry, project, durableRoom, cfg.ListenHost, cfg.nativeWake)
 		}
 		return startEmbeddedRuntime(ctx, registry, project, durableRoom, cfg)
 	}
