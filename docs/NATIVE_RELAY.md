@@ -147,6 +147,12 @@ process death releases it.
 `handed_off` means the CLI wrote stdout and acknowledged it, not that the model
 read, accepted or completed anything. Lost output/ack and collector death can
 become `unknown`. Do not automatically replay possibly executed effects.
+A body that reached a collector's stdout but not the model — for example a
+detached background waiter whose output the harness never surfaced — stays
+terminally `handed_off`; no later `relay wait` can re-collect it. Recovery is
+diagnostic, not replay: inspect the authorized history (`status --brief=false`)
+and ask the sender for a fresh instruction that does not duplicate the original
+task body, whose side effects may already have executed.
 Summary counts and bounded recovery IDs are transport observations, never
 "working", "done", or "needs user" guesses based on silence. `status` and
 `reconcile` default to bounded body-free summaries; `--brief=false` and export
