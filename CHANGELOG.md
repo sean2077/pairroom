@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Reserve Grok's final Stop publication gate by limiting PairRoom readiness/recovery continuations to seven; simplify its body-free wait hint and clarify hook reload/trust and unverified deep-idle boundaries.
+- Default native `wait` and `exchange` to one-hour CLI-side waiting; return bounded summaries for `status`/`reconcile` (`--brief=false` keeps full history) and compact body-free `send` receipts. Reject reused send IDs with changed text and bound optional wake-metadata lookup independently of collection.
+- Infer a missing Room/slot selector only within the exact associated session, prune unrelated/retired binding trees, and remove incomplete-binding discovery fallback while retaining strict current-generation and symlink checks.
+- Preserve custom Service endpoints in local peer-join commands, accept documented runtime aliases consistently, honor each harness's configured skill root, and streamline the distributable relay skill. No dependency, schema, protocol, migration or process-ownership changes.
+
 ## [v5.0.1] — 2026-09-17
 
 - Fix Desktop (Wails) packaging for the 5.x line: `desktop/build/config.yml` stayed at 4.1.0 when VERSION moved to 5.0.0, so the desktop workflow's prepare-build version gate failed and no `pairroom-desktop-*` packages could attach to the v5.0.0 Release. Sync the desktop build version and add a drift-guard test asserting it matches `internal/version.Current`. The published v5.0.0 CLI artifacts are unaffected; tags are immutable, so desktop packages ship from this release instead.

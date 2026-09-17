@@ -85,7 +85,7 @@ func TestNativeCallerSelectsDesktopSessionNotSharedPID(t *testing.T) {
 			t.Fatalf("resume lost the custom Service endpoint default: %+v", o)
 		}
 	}
-	for _, o := range []options{{room: "room-a", slot: "claude"}, {room: "room-b"}} {
+	for _, o := range []options{{room: "room-a", slot: "claude"}, {room: "room-a"}, {slot: "1"}} {
 		if err := applyCallerDefaults(root, "wait", &o); err == nil {
 			t.Fatal("wrong-session or partial explicit target accepted")
 		}
@@ -105,20 +105,11 @@ func TestNativeCallerNeverAssociatesPendingStateOrDuplicatesCreatedRoom(t *testi
 	if err := applyCallerDefaults(root, "bind", &o); err != nil || o.room != "" {
 		t.Fatalf("incomplete binding was auto-selected for bind: %+v %v", o, err)
 	}
-	if err := applyCallerDefaults(root, "send", &options{}); err == nil || !strings.Contains(err.Error(), "incomplete binding") {
-		t.Fatalf("incomplete binding granted collection: %v", err)
-	}
-	o = options{}
-	if err := applyCallerDefaults(root, "status", &o); err != nil || o.room != "pending" || o.slot != "slot1" {
-		t.Fatalf("unique incomplete binding not diagnosable via status: %+v %v", o, err)
-	}
-	callerState(t, root, "other-pending", "", model.ActorSlot1, model.RuntimeClaude)
-	if err := applyCallerDefaults(root, "status", &options{}); err == nil || !strings.Contains(err.Error(), "multiple pending") {
-		t.Fatalf("two incomplete bindings were guessed: %v", err)
-	}
-	o = options{room: "pending", slot: "claude"}
-	if err := applyCallerDefaults(root, "status", &o); err != nil || o.room != "pending" {
-		t.Fatalf("explicit incomplete-binding status lost: %+v %v", o, err)
+	for _, action := range []string{"send", "wait", "exchange", "status", "reconcile"} {
+		o = options{}
+		if err := applyCallerDefaults(root, action, &o); err == nil || o.room != "" || o.slot != "" {
+			t.Fatalf("%s selected an unassociated record: %+v %v", action, o, err)
+		}
 	}
 	callerState(t, root, "associated", "session", model.ActorSlot1, model.RuntimeClaude)
 	if err := applyCallerDefaults(root, "bind", &options{create: true}); err == nil {

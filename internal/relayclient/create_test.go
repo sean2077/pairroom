@@ -146,7 +146,7 @@ func TestBindCreatePeerJoinPreservesLiteralPaths(t *testing.T) {
 	if rendered != fmt.Sprint(want) {
 		t.Fatalf("peer command changed literal paths: got=%q want=%q", rendered, fmt.Sprint(want))
 	}
-	if result.PeerJoinLocal != "pairroom relay bind --room room1 --slot 2" {
+	if result.PeerJoinLocal != "pairroom relay bind --room room1 --slot 2 --service-file "+quoteShellPath(endpoint) {
 		t.Fatalf("local peer command = %q", result.PeerJoinLocal)
 	}
 }

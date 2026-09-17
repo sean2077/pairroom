@@ -23,17 +23,18 @@ import (
 // Real CLI parsing, workspace discovery, private state and HTTP transport;
 // synthetic service replies, not vendor/model E2E or a second relay engine.
 type foregroundFixtureOptions struct {
-	failAction      string
-	emptyInbox      bool
-	invalidReceipt  bool
-	incompleteClaim bool
-	missingClaim    bool
-	outgoingState   string
-	summary         *relay.Summary
-	peer            *relay.Binding
-	envelope        string
-	waitEntered     chan struct{}
-	ackAfterWrite   *atomic.Bool
+	failAction        string
+	peerLookupStalled bool
+	emptyInbox        bool
+	invalidReceipt    bool
+	incompleteClaim   bool
+	missingClaim      bool
+	outgoingState     string
+	summary           *relay.Summary
+	peer              *relay.Binding
+	envelope          string
+	waitEntered       chan struct{}
+	ackAfterWrite     *atomic.Bool
 }
 
 type foregroundFixture struct {
@@ -156,6 +157,11 @@ func newForegroundFixture(t *testing.T, opts foregroundFixtureOptions) *foregrou
 			}
 			_ = json.NewEncoder(w).Encode(opts.summary)
 		case "peer":
+			if opts.peerLookupStalled {
+				_, _ = io.Copy(io.Discard, r.Body)
+				<-r.Context().Done()
+				return
+			}
 			_ = json.NewEncoder(w).Encode(peer)
 		default:
 			t.Errorf("unexpected side effect: %s", action)
@@ -409,15 +415,15 @@ func TestStopHookPollLimitIsUnchanged(t *testing.T) {
 	}
 }
 
-func TestLegacySendRemainsReceiptOnly(t *testing.T) {
+func TestSendReturnsBodyFreeReceiptWithoutCollecting(t *testing.T) {
 	f := newForegroundFixture(t, foregroundFixtureOptions{})
 	var out bytes.Buffer
 	if err := f.run(context.Background(), "send", strings.NewReader("proposal"), &out, io.Discard, "--id", "review-1"); err != nil {
 		t.Fatal(err)
 	}
-	var msg relay.Message
-	if err := json.Unmarshal(out.Bytes(), &msg); err != nil || msg.Text != "proposal" || f.count("send") != 1 || f.count("wait") != 0 || f.count("ack") != 0 {
-		t.Fatalf("send acquired exchange semantics: msg=%+v err=%v", msg, err)
+	var receipt publicationReceipt
+	if err := json.Unmarshal(out.Bytes(), &receipt); err != nil || receipt.Published != "outgoing-review-1" || receipt.ClientID != "review-1" || receipt.State != "queued" || strings.Contains(out.String(), "proposal") || f.count("send") != 1 || f.count("wait") != 0 || f.count("ack") != 0 {
+		t.Fatalf("send lost its bounded receipt: receipt=%+v err=%v", receipt, err)
 	}
 }
 

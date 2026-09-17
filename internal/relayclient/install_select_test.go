@@ -34,6 +34,7 @@ func TestParseRuntimeListMultiAliasAndGrok(t *testing.T) {
 }
 
 func TestRunInstallGrokUsesOwnHooks(t *testing.T) {
+	IsolateNativeCaller(t)
 	root := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -55,6 +56,7 @@ func TestRunInstallGrokUsesOwnHooks(t *testing.T) {
 }
 
 func TestRunInstallMultipleRuntimesDedupesAndKeepsOrder(t *testing.T) {
+	IsolateNativeCaller(t)
 	root := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("HOME", home)

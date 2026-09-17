@@ -74,7 +74,7 @@ func TestNativeBriefStatusThroughCLIAndRealService(t *testing.T) {
 			t.Fatalf("brief status exposed %q", forbidden)
 		}
 	}
-	full, err := f.run(t, []string{"status", "--room", f.room.ID, "--slot", "1"}, nil)
+	full, err := f.run(t, []string{"status", "--brief=false", "--room", f.room.ID, "--slot", "1"}, nil)
 	if err != nil || !bytes.Contains(full, []byte("PRIVATE_PROPOSAL")) {
 		t.Fatal("full status compatibility lost", err)
 	}

@@ -37,10 +37,12 @@ pairroom relay install --runtime claude,codex,grok
 ```
 
 Review and approve the exact project hooks in each harness. Codex uses `/hooks`;
-Grok uses `/hooks` and its project folder-trust decision;
+Grok uses `/hooks` (press `r` to reload changed files) and its project folder-trust decision;
 review changed definitions again. Follow the harness's trust/restart guidance.
 PairRoom never grants approval on your behalf. Installation writes the relay
 skill as well; a skill-only installation does not install or approve hooks.
+Skill installation honors `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `GROK_HOME`
+for the respective runtime; project hook paths remain project-local.
 The optional `npx skills add sean2077/pairroom` distribution route requires Node
 and its package runner, but Node is not a prerequisite for the Go relay CLI.
 
@@ -52,7 +54,8 @@ In the first session, invoke `/pairroom-relay <topic>` or ask the agent to run:
 pairroom relay bind --create --name "<topic>"
 ```
 
-Give the printed `peer_join` command to the second session, and ask that agent
+Give the printed `peer_join_local` command to a second session in the same
+workspace, or `peer_join` with explicit paths, and ask that agent
 to execute it through its tools. With one matching active Room and slot, it can
 instead run `pairroom relay bind`. Slots are Agent 1/2 (`--slot 1|2`), not vendor
 names. Follow the candidate list rather than guessing when selection is ambiguous.
@@ -64,14 +67,14 @@ environment (Claude Code `CLAUDE_CODE_SESSION_ID`, Codex `CODEX_SESSION_ID`,
 Grok `GROK_SESSION_ID`) and
 associates at once, so there is no nonce to echo and nothing to wait for. Run
 bind as a tool call inside the intended session, not a detached terminal; without
-that environment bind fails closed rather than guessing. Run `pairroom relay
-status` inside each session to verify the binding, then give the agents the task
-and intended collaboration in ordinary language. The app displays published
+that environment bind fails closed rather than guessing. Give the agents the task
+and intended collaboration in ordinary language; no status check or initial Stop
+is needed to unlock relay. `pairroom relay status` is available for diagnosis. The app displays published
 messages and delivery state, not full native history.
 
 For explicit discussion, start the receiver with `pairroom relay wait`, then
 use `pairroom relay exchange --id review-1 --text "Review the proposed change"`
-in the other session. Exchange defaults to one hour; `--timeout 0` waits until
+in the other session. Wait and exchange default to one hour; `--timeout 0` waits until
 cancellation when the harness permits a pending tool. A confirmed send followed
 by a wait timeout calls for `wait`, not a new send. See the
 [CLI reference](CLI_REFERENCE.md#foreground-discussion-loop) for detailed recovery
@@ -118,13 +121,15 @@ inside its installed 45-second budget. `decision:block` requests continuation;
 it is not arbitrary idle-session wake-up. The park collects the next eligible
 FIFO input, which may be a peer's published reply even when that reply carried
 no routing handle: ending the relay stops the continuation chain, it does not
-suppress delivery. The eight-block cap is unchanged; Grok readiness/recovery hints count toward it
-without claiming that inbox text reached the model.
+suppress delivery. Claude/Codex keep eight blocks. Grok readiness/recovery requests stop at seven
+to reserve a final publication before the vendor skips its eighth continuation
+gate; these hints never claim that inbox text reached the model. Other hooks
+can also consume the vendor budget, so this is not an unconditional final-delivery guarantee.
 
 Foreground `exchange` sends once, then returns the next eligible FIFO input in
 the same tool invocation. `wait` only collects. Their HTTP polls remain at most
 30 seconds; a successful explicit empty response renews in the CLI, not the
-model. Exchange defaults to one hour, finite totals allow six hours, and `0`
+model. Both default to one hour, finite totals allow six hours, and `0`
 means no PairRoom total deadline. Caller cancellation, native tool limits,
 revocation and transport errors still end a wait. Neither path owns subagents
 or the native model/tool loop.
@@ -143,9 +148,11 @@ process death releases it.
 read, accepted or completed anything. Lost output/ack and collector death can
 become `unknown`. Do not automatically replay possibly executed effects.
 Summary counts and bounded recovery IDs are transport observations, never
-"working", "done", or "needs user" guesses based on silence. `status --brief`
-returns a body-free transport summary; full status/export intentionally retain
-history.
+"working", "done", or "needs user" guesses based on silence. `status` and
+`reconcile` default to bounded body-free summaries; `--brief=false` and export
+intentionally retain full history. Send receipts contain IDs and transport state,
+not another copy of the outgoing body. Optional wake-metadata lookup has its own
+short deadline and cannot hold up collection for the full transport timeout.
 
 ## Verified vendor wake surfaces
 
@@ -165,8 +172,8 @@ surfaces exist around that boundary, verified on real CLIs (2026-09-16):
   pollable cross-turn. A wake nudge must stay body-free; thread identity may
   be visible to local process observers and vendor/CLI diagnostics, and must
   never be written to the Event Log, files, or relay bodies.
-- **Grok Build**: native wake unverified; Native Grok binding remains
-  unimplemented.
+- **Grok Build**: native binding and bounded Stop readiness are implemented;
+  authenticated multi-round acceptance and deep-idle wake remain unverified.
 
 PairRoom itself never executes a vendor queue command. When a message is queued
 to an idle Codex peer, the CLI prints a human-executable wake template; the

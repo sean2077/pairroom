@@ -60,7 +60,7 @@ func (e *Engine) AuthSummary(a Auth) (Summary, error) {
 	}
 	s := Summary{HostMode: model.HostNative, RoomID: e.cfg.RoomID, Sequence: e.sequence,
 		Bindings: map[model.ActorID]BindingSummary{}, Inboxes: map[model.ActorID]InboxSummary{},
-		Notice: "Transport state only; handed_off is stdout, not model acceptance. Full history is available through status without --brief."}
+		Notice: "Transport state only; handed_off is stdout, not model acceptance. Full history is available through status --brief=false."}
 	if b.SessionID == "" {
 		s.Sequence = 0
 		s.Bindings[a.Slot] = BindingSummary{Active: b.Active, ParkEnabled: b.ParkEnabled}

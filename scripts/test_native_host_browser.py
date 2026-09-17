@@ -41,7 +41,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
         # Never inherit the surrounding (real) harness session into the fixture;
         # cli() exposes exactly one synthetic id per bind, and direct subprocess
         # calls then run with no session metadata so explicit flags win.
-        for key in session_vars:
+        for key in (*session_vars, 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'GROK_HOME'):
             env[key] = ''
         errors = []
 

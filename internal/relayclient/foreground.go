@@ -7,10 +7,11 @@ import (
 	"io"
 	"time"
 
+	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
 )
 
-// deliverForeground keeps the legacy one-poll behavior for finite waits <= 30 seconds.
+// deliverForeground uses one HTTP poll for finite waits <= 30 seconds.
 // Longer or unbounded waits renew the existing bounded HTTP operation, without a model
 // turn, a held slot-state lock, a new API, or a change to Stop-hook parking.
 func deliverForeground(ctx context.Context, c *Client, seconds int, out io.Writer) (bool, error) {
@@ -29,17 +30,26 @@ func deliverForeground(ctx context.Context, c *Client, seconds int, out io.Write
 	})
 }
 
+// validatePublicationReceipt checks identity and idempotency without reflecting the body.
+func validatePublicationReceipt(c *Client, o options, msg relay.Message, text string) error {
+	to := peerSlot(c.State.Slot)
+	if o.to == "@user" {
+		to = model.ActorUser
+	}
+	if !safePart(msg.ID) || len(msg.ID) > 128 || msg.From != c.State.Slot || msg.To != to || msg.State == "" {
+		return fmt.Errorf("publication receipt invalid; inspect relay status; recover only with the SAME --id %s", o.id)
+	}
+	if msg.Text != text {
+		return fmt.Errorf("--id %s already refers to a different body; no new message was published; inspect relay status", o.id)
+	}
+	return nil
+}
+
 // finishExchange is the receive half of an explicit send followed by wait.
 // Publication and collection are NOT one transaction. --id is supplied before
 // send, so even a lost send receipt has a recoverable original idempotency key.
 // The result is the next FIFO input, not proof of a reply to this publication.
-func finishExchange(ctx context.Context, c *Client, o options, msg relay.Message, text string, out, diagnostic io.Writer) error {
-	if !safePart(msg.ID) || len(msg.ID) > 128 || msg.From != c.State.Slot || msg.To != peerSlot(c.State.Slot) {
-		return fmt.Errorf("exchange send receipt invalid; inspect relay status; recover publication only with the SAME --id %s", o.id)
-	}
-	if msg.Text != text {
-		return fmt.Errorf("exchange --id %s already refers to a different body; no new message was published; inspect relay status", o.id)
-	}
+func finishExchange(ctx context.Context, c *Client, o options, msg relay.Message, out, diagnostic io.Writer) error {
 	switch msg.State {
 	case "queued", "delivering", "handed_off":
 	default:

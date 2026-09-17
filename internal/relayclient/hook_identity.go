@@ -20,7 +20,7 @@ func boundHookCandidates(paths []string, kind model.RuntimeKind, session string)
 		if err := readPrivate(path, &s); err != nil {
 			return nil, err
 		}
-		if s.Runtime != kind || s.Generation == 0 || s.SessionID == "" {
+		if s.Schema != 2 || s.Runtime != kind || s.Generation == 0 || s.SessionID == "" {
 			continue
 		}
 		// These observations only identify an error for an already-bound caller.

@@ -288,6 +288,7 @@ func TestBindCreateUnrecognizedCallerFailsBeforeCreating(t *testing.T) {
 }
 
 func TestInstallSkillUpgradesOwnProjectionAndRefusesUnrelated(t *testing.T) {
+	IsolateNativeCaller(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
