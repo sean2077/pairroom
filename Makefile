@@ -115,6 +115,7 @@ desktop-package:
 
 desktop-check:
 	"$(DESKTOP_PYTHON)" "$(DESKTOP_DIR)/scripts/test_update_local.py"
+	"$(DESKTOP_PYTHON)" "$(DESKTOP_DIR)/scripts/test_winget_manifest.py"
 
 # Rebuild and replace the local host + bundled CLI without changing daemon state.
 desktop-update:

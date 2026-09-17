@@ -49,6 +49,7 @@ jobs:
         run: |
           python desktop/scripts/test_update_local.py
           python desktop/scripts/test_windows_packaging.py
+          python desktop/scripts/test_winget_manifest.py
           node scripts/test_desktop_settings.js
       - name: Install Linux webview dependencies
         run: |
@@ -266,3 +267,27 @@ jobs:
             printf '%s\n' "${published}" | grep -Fxq "${required}"
           done
           echo "attached ${#files[@]} desktop package(s) to ${tag}"
+
+  winget:
+    name: Submit the winget manifest for the Windows installer
+    # Runs only after the installer is attached to the Release, so the winget
+    # download URL is stable. Failure here never rewrites the Release; it
+    # leaves this job red for explicit follow-up.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: pairroom-desktop-windows-amd64
+          path: desktop-dist/windows-amd64
+      - name: Submit the rendered manifest through a winget-pkgs fork pull request
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          installer="desktop-dist/windows-amd64/pairroom-desktop-v${version}-windows-amd64-setup.exe"
+          bash desktop/scripts/submit-winget.sh --version "${version}" --installer "${installer}"

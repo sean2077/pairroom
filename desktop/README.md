@@ -206,5 +206,10 @@ quiet uninstall, data/unrelated-file preservation, startup ownership, and the
 NSIS transition guard using `scripts/test_windows_installer.ps1`. This smoke
 script requires a disposable CI runner and retains logs as a CI artifact. It
 is not a signed-installer, interactive visual, or authenticated vendor-Agent E2E
-claim. WinGet submission remains a separate publishing step; use installer type
-`inno` when adding its manifest.
+claim. On `v*` tags the desktop workflow renders the installer's `inno` winget
+manifest from `build/winget/templates/` and submits it to
+`microsoft/winget-pkgs` through a fork pull request
+(`scripts/submit-winget.sh`, guarded by `scripts/test_winget_manifest.py`);
+this requires the `WINGET_TOKEN` repository secret (classic PAT with
+`public_repo`), is idempotent per version, and its failure never rewrites the
+Release.
