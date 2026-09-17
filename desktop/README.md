@@ -153,49 +153,10 @@ not another version constant in the `.iss` file. Release asset names are unchang
 The publish job no longer overwrites existing assets: fixes require a new version,
 not replacing bytes under a URL that a package manager has already hashed.
 
-The installer uses the modern Windows 11 style with system light/dark appearance,
-skips welcome and redundant confirmation pages, and creates a Start Menu entry.
-The existing machine scope and default
-`C:\Program Files\PairRoom contributors\PairRoom` directory are retained; this
-change does not silently move existing installs into a per-user location. An
-initial custom directory is remembered by subsequent Inno upgrades.
-
-A missing machine-wide WebView2 Evergreen Runtime is installed before the payload.
-Internet access is needed only if the runtime is missing; for offline systems,
-preinstall Microsoft's standalone Evergreen Runtime. A runtime installation error
-stops Setup instead of reporting that PairRoom was installed successfully.
-
-Silent install/upgrade and uninstall work without launching the desktop:
-
-```powershell
-# Use the downloaded release filename in place of the local build name as needed.
-.\PairRoom-amd64-installer.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-& 'C:\Program Files\PairRoom contributors\PairRoom\unins000.exe' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-```
-
-Quit Desktop from the tray before upgrading/removing it. If an explicitly
-installed daemon uses the bundled CLI, gracefully stop it before upgrade, or run
-`pairroom daemon uninstall` before removal. The installer never kills a process,
-installs/removes a daemon, changes PATH, or opts into launch at login. Inno removes
-only its logged files and shortcuts, preserving Service data and unrelated files.
-Uninstall removes the current user's native `PairRoom` Run entry only when it
-points exactly at this installation; it does not edit other users' registrations.
-
-### First transition from NSIS
-
-The old NSIS uninstaller recursively deletes its installation directory. Installing
-Inno over it would leave two uninstallers able to remove the same payload. Setup
-therefore rejects an older registered PairRoom installer, or a destination still
-containing `uninstall.exe`, before writing files. It never executes an arbitrary
-registry uninstall command or silently imports installer state.
-
-Back up the Service data folder (available from the tray), quit Desktop and
-remove any daemon that uses the bundled CLI, then uninstall the old package from
-Windows Settings. Run the new installer and use the same directory if preserving
-existing launch paths. The new installer does not purge Service data; restore or
-re-enable explicit startup/daemon settings as necessary after this one-time
-transition. Later Inno versions upgrade in place. `make desktop-update` replaces
-binaries only; it does not convert an old NSIS installation into Inno.
+User-facing installation behavior — machine scope and directory defaults,
+WebView2 handling, silent install/upgrade/uninstall switches, and the one-time
+NSIS transition — is documented in
+[docs/INSTALLATION.md](../docs/INSTALLATION.md#windows-desktop).
 
 ### Verification
 

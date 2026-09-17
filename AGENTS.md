@@ -49,6 +49,7 @@ PairRoom is a local Go coordination layer for official Claude Code, Codex, and G
 - Architecture and source-of-truth boundaries: `docs/ARCHITECTURE.md`
 - Protocol and durable schema: `docs/PROTOCOL.md`
 - Multi-Project/multi-Room service boundaries: `docs/ARCHITECTURE.md`
+- Installation channels and per-channel upgrade/uninstall mechanics: `docs/INSTALLATION.md`
 - Release acceptance: Durable invariants below (`make release`, `VERSION`/`CHANGELOG`, `release.yml`)
 - Verified commands: `docs/CLI_REFERENCE.md`; native-runtime E2E limits: Durable invariants below
 

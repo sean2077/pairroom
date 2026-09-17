@@ -8,7 +8,8 @@ Start with the question you need answered. Each document has one primary respons
 |---|---|---|
 | Is this useful for my workflow? | [Why PairRoom](WHY_PAIRROOM.md) | Value, use cases, costs, limits, evaluation method |
 | Why not a similar tool? | [Alternatives](ALTERNATIVES.md) | Dated primary-source comparison and selection tradeoffs |
-| How do I complete a first task? | [Getting started](GETTING_STARTED.md) | Prebuilt/source entry points, Mock, first real Room |
+| How do I complete a first task? | [Getting started](GETTING_STARTED.md) | Mock demo, first real Room, desktop/daemon boundaries |
+| How do I install it on my platform? | [Installation](INSTALLATION.md) | Channel choice, platform prerequisites, per-channel upgrade/uninstall mechanics, NSIS transition |
 | What does the Room do? | [Concepts](CONCEPTS.md) | User-facing Room, Binding, Turn, relay, permission, and recovery semantics |
 | What can I configure? | [Configuration](CONFIGURATION.md) | Precedence, immutable Agent selection, Providers, supported native policy |
 | How do I run and maintain it? | [Operations](OPERATIONS.md) | Desktop/daemon ownership, capacity, archive/delete, backup, shutdown |
