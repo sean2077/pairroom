@@ -45,7 +45,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
             env[key] = ''
         errors = []
 
-        def cli(args, payload=None, session=None):
+        def cli(args, payload=None, session=None, expect_error=None):
             call_env = dict(env)
             for key in session_vars:
                 call_env[key] = ''
@@ -54,6 +54,9 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
             result = subprocess.run([str(binary), 'relay', *args, '--repo', str(repo)],
                                     input=payload if isinstance(payload, str) else None if payload is None else json.dumps(payload),
                                     text=True, capture_output=True, env=call_env, cwd=repo, timeout=45)
+            if expect_error is not None:
+                assert result.returncode != 0 and not result.stdout and expect_error in result.stderr, result
+                return result.stderr
             assert result.returncode == 0, f'relay {args[0]} failed: {result.stderr[:1000]}'
             return result.stdout
 
@@ -137,7 +140,8 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 await expect(frame.locator('#message-text')).to_have_value('Preserve this unsent draft')
                 snapshot = await wait_snapshot(context,snapshot_url,lambda s:len(s['relay']['messages']) == 2)
                 assert snapshot['relay']['messages'][1]['to']=='slot2'
-                await asyncio.to_thread(cli,['send','--room',room_id,'--slot','slot1','--id','explicit-fixture','--text','same ID returns original receipt'])
+                await asyncio.to_thread(cli,['send','--room',room_id,'--slot','slot1','--id','explicit-fixture','--text','@user is body text: explicit send still targets the peer'])
+                await asyncio.to_thread(cli,['send','--room',room_id,'--slot','slot1','--id','explicit-fixture','--text','changed body must not reuse the ID'], expect_error='already refers to a different body')
                 assert len((await read_json(context,snapshot_url))['relay']['messages']) == 2
                 await asyncio.to_thread(cli,['wait','--room',room_id,'--slot','slot2','--timeout','1'])
 
@@ -145,28 +149,28 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 # A pipe with no reader blocks the large stdout write. Killing
                 # there must never acknowledge delivery or automatically replay.
                 raw = await asyncio.to_thread(cli,['send','--room',room_id,'--slot','slot2','--id','kill-fixture'],'large reply\n'+('x'*(96<<10)))
-                interrupted = json.loads(raw)
+                interrupted_id = json.loads(raw)['published']
                 waiting = subprocess.Popen([str(binary),'relay','wait','--repo',str(repo),'--room',room_id,'--slot','slot1','--timeout','1'],
                                            env=env,cwd=repo,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
                 try:
-                    await wait_snapshot(context,snapshot_url,lambda s:any(m['id']==interrupted['id'] and m['state']=='delivering' for m in s['relay']['messages']))
+                    await wait_snapshot(context,snapshot_url,lambda s:any(m['id']==interrupted_id and m['state']=='delivering' for m in s['relay']['messages']))
                     waiting.kill()
                     await asyncio.to_thread(waiting.communicate, timeout=5)
                 finally:
                     if waiting.poll() is None:
                         waiting.kill()
                         await asyncio.to_thread(waiting.communicate, timeout=5)
-                await wait_snapshot(context,snapshot_url,lambda s:any(m['id']==interrupted['id'] and m['state']=='unknown' for m in s['relay']['messages']))
-                original = frame.locator(f'[data-message-id="{interrupted["id"]}"]')
+                await wait_snapshot(context,snapshot_url,lambda s:any(m['id']==interrupted_id and m['state']=='unknown' for m in s['relay']['messages']))
+                original = frame.locator(f'[data-message-id="{interrupted_id}"]')
                 await original.locator('[data-action="retry"]').click()
                 await expect(frame.locator('#confirm-dialog')).to_be_visible()
                 await frame.locator('#confirm-dialog button[value="cancel"]').click()
                 await expect(frame.locator('#confirm-dialog')).not_to_be_visible()
                 await original.locator('[data-action="retry"]').click()
                 await frame.locator('#confirm-retry').click()
-                snapshot = await wait_snapshot(context,snapshot_url,lambda s:any(m.get('retry_of')==interrupted['id'] for m in s['relay']['messages']))
-                retried = next(m for m in snapshot['relay']['messages'] if m.get('retry_of')==interrupted['id'])
-                assert retried['id']!=interrupted['id'] and retried['state']=='queued'
+                snapshot = await wait_snapshot(context,snapshot_url,lambda s:any(m.get('retry_of')==interrupted_id for m in s['relay']['messages']))
+                retried = next(m for m in snapshot['relay']['messages'] if m.get('retry_of')==interrupted_id)
+                assert retried['id']!=interrupted_id and retried['state']=='queued'
                 await frame.locator(f'[data-message-id="{retried["id"]}"] [data-action="cancel"]').click()
                 await wait_snapshot(context,snapshot_url,lambda s:any(m['id']==retried['id'] and m['state']=='cancelled' for m in s['relay']['messages']))
                 # Both actual Stop process calls park concurrently and exchange
@@ -207,7 +211,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 management_url = await service.start()
                 origin=management_url.split('/#',1)[0].rstrip('/')
                 # CLI reloads the new endpoint from the same owner-only file.
-                status=json.loads(await asyncio.to_thread(cli,['status','--room',room_id,'--slot','slot1']))
+                status=json.loads(await asyncio.to_thread(cli,['status','--room',room_id,'--slot','slot1','--brief=false']))
                 assert status['relay']['bindings']['slot1']['session_id']=='synthetic-slot1'
                 assert any(m['text']=='Queued across Service restart' and m['state']=='queued' for m in status['relay']['messages'])
                 received=await asyncio.to_thread(cli,['wait','--room',room_id,'--slot','slot2','--timeout','1'])
@@ -216,7 +220,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 (artifacts/'results.json').write_text(json.dumps({
                     'mode':'synthetic native-hook inputs over real CLI/HTTP/SSE/browser',
                     'real_vendor_e2e':False,'native_creation':True,'native_grok_selection':True,'bind_env_association':True,
-                    'fifo_stdout_ack':True,'idempotent_explicit_send':True,'three_bidirectional_rounds':True,
+                    'fifo_stdout_ack':True,'idempotent_explicit_send':True,'conflicting_send_id_rejected':True,'three_bidirectional_rounds':True,
                     'killed_cli_unknown':True,'explicit_retry_confirmation':True,'cancel_only_queued':True,
                     'checkpoint_schema_3_canonical':True,'restart_queue_and_bindings':True,
                     'english_chinese_light_dark_responsive':True,'browser_errors':errors,

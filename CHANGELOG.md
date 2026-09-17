@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fix Management rejecting the current v5 Agent pair profile schema, which prevented Room creation and profile loading; reject retired or malformed profile responses on both reads and writes. Align real-transport browser assertions with compact send receipts, conflicting-ID rejection, and explicit full-history inspection.
+
 - Reserve Grok's final Stop publication gate by limiting PairRoom readiness/recovery continuations to seven; simplify its body-free wait hint and clarify hook reload/trust and unverified deep-idle boundaries.
 - Default native `wait` and `exchange` to one-hour CLI-side waiting; return bounded summaries for `status`/`reconcile` (`--brief=false` keeps full history) and compact body-free `send` receipts. Reject reused send IDs with changed text and bound optional wake-metadata lookup independently of collection.
 - Infer a missing Room/slot selector only within the exact associated session, prune unrelated/retired binding trees, and remove incomplete-binding discovery fallback while retaining strict current-generation and symlink checks.

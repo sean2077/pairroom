@@ -1739,6 +1739,10 @@
 
   const PAIR_PROFILES_PATH = '/api/v1/agent-pair-profiles';
 
+  function validateAgentPairProfiles(catalog) {
+    if (catalog?.schema !== 2 || !Array.isArray(catalog.profiles)) throw new Error(t('agent.pairProfile.loadFailed'));
+  }
+
   async function loadAgentPairProfiles(force = false) {
     if (!force && state.agentPairProfilesPromise) return state.agentPairProfilesPromise;
     if (!force && state.agentPairProfiles) return state.agentPairProfiles;
@@ -1751,7 +1755,7 @@
         throw error;
       }
       if (revision !== state.agentPairProfilesRevision) return state.agentPairProfilesPromise || state.agentPairProfiles;
-      if (catalog.schema !== 1 || !Array.isArray(catalog.profiles)) throw new Error(t('agent.pairProfile.loadFailed'));
+      validateAgentPairProfiles(catalog);
       state.agentPairProfiles = catalog;
       state.agentPairProfilesError = '';
       return catalog;
@@ -1776,6 +1780,7 @@
         error.code = 'obsolete_session';
         throw error;
       }
+      validateAgentPairProfiles(catalog);
       state.agentPairProfilesRevision += 1;
       state.agentPairProfilesPromise = null;
       state.agentPairProfiles = catalog;
