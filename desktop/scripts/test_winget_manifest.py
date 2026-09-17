@@ -67,6 +67,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("InstallerType: inno", installer)
         self.assertIn("Scope: machine", installer)
         self.assertIn("ProductCode: com.sean2077.pairroom.desktop_is1", installer)
+        self.assertIn("PackageIdentifier: Microsoft.EdgeWebView2Runtime", installer)
         self.assertIn("ManifestVersion: 1.12.0", installer)
         for name in renderer.MANIFEST_FILES:
             text = (self.output / name).read_text(encoding="utf-8")
