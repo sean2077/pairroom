@@ -156,8 +156,8 @@ short deadline and cannot hold up collection for the full transport timeout.
 
 ## Verified vendor wake surfaces
 
-PairRoom never injects into an idle native session. Two vendor-sanctioned
-surfaces exist around that boundary, verified on real CLIs (2026-09-16):
+Two vendor-sanctioned surfaces exist around the idle-wake boundary, verified
+on real CLIs (2026-09-16):
 
 - **Claude Code**: no external command injects into an existing session, and
   resuming a running session starts a copy instead. The harness does wake an
@@ -175,11 +175,18 @@ surfaces exist around that boundary, verified on real CLIs (2026-09-16):
 - **Grok Build**: native binding and bounded Stop readiness are implemented;
   authenticated multi-round acceptance and deep-idle wake remain unverified.
 
-PairRoom itself never executes a vendor queue command. When a message is queued
-to an idle Codex peer, the CLI prints a human-executable wake template; the
-human decides and runs it. Whether PairRoom may ever perform an opt-in
-automatic wake is a separate owner decision tracked in
-[design/auto-wake.md](design/auto-wake.md).
+In a wake-enabled Room (per-Room configuration, default on; opt-out only at
+an idle Room boundary through the Management surface) the Service
+automatically executes the Codex queue wake for a durably queued
+peer-directed message to a deep-idle Codex-bound session: fixed body-free
+nudge, at most one per burst, rate-limited, durably reserved before the
+command, audited through a fixed outcome/reason vocabulary, and never
+automatically retried. See [design/auto-wake.md](design/auto-wake.md) and
+[PROTOCOL.md](PROTOCOL.md#automatic-idle-peer-wake). Claude Code sessions
+have no external injection surface and stay reachable through the
+agent-owned background `relay wait`. For disabled Rooms, non-Codex targets,
+or wake failures, the CLI still prints a human-executable wake template as
+the fallback; the human decides and runs it.
 
 ## Troubleshooting
 
@@ -191,7 +198,7 @@ automatic wake is a separate owner decision tracked in
 | Session identity is missing or differs | Run bind inside the intended session, not a separate terminal. Do not manufacture an environment value. |
 | Slot is occupied | Re-run bind in the original session. Only an intentional session change should use `--replace`. |
 | A bind response was lost | Retry bind for the same Room and slot without `--create` or `--replace`. It reconciles the original attempt; a new explicit `--replace` intentionally starts another replacement. |
-| Messages remain queued | Have the associated receiving agent run `pairroom relay wait`. PairRoom never injects into an idle session; for an idle Codex peer a human may run the printed vendor `codex queue` wake template. |
+| Messages remain queued | Have the associated receiving agent run `pairroom relay wait`. A wake-enabled Room automatically wakes an idle Codex-bound target; otherwise, for an idle Codex peer a human may run the printed vendor `codex queue` wake template. |
 | Delivery is `unknown` | Inspect the Room and workspace before explicit Retry; it can duplicate work. `handed_off` proves stdout only, not model acceptance. |
 
 Native remains experimental. Synthetic hook, Mock and browser tests are not real
