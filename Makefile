@@ -77,6 +77,7 @@ agent-contract:
 
 release-contract:
 	"$(PYTHON)" scripts/test_extract_changelog.py
+	"$(PYTHON)" scripts/test_bump_version.py
 	bash scripts/test_install.sh
 	@notes="$$(mktemp)"; trap 'rm -f "$$notes"' 0 1 2 3 15; \
 		"$(PYTHON)" scripts/extract-changelog.py --changelog CHANGELOG.md --tag "v$(VERSION)" --output "$$notes"; \
@@ -84,6 +85,10 @@ release-contract:
 
 stop:
 	"$(PYTHON)" scripts/stop-background.py
+
+bump-version:
+	@test -n "$(NEW_VERSION)" || { echo 'usage: make bump-version NEW_VERSION=X.Y.Z'; exit 2; }
+	"$(PYTHON)" scripts/bump-version.py "$(NEW_VERSION)"
 
 dev: stop
 	go run ./cmd/pairroom service --recover-stale-lock
