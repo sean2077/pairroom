@@ -63,6 +63,14 @@ PairRoom 没有自动接力次数或费用上限。持久化恢复会区分安�
 
 创建 Room 时选择 **Native**，双方保留在自己的 Claude Code / Codex / Grok Build 原生会话中；PairRoom 负责绑定、持久化中继和审计，不启动或中断原生进程。安装并批准项目级 Stop hooks，然后在各自会话内运行 bind；它会读取 harness 的会话 ID 环境变量并立即完成关联。
 
+**亮点——等待免费、每条消息只花一个回合的原生对话循环。** 双方保留各自的 harness，循环如下工作：
+
+- 两条命令就绪：第一个会话运行 `/pairroom-relay <topic>`，第二个会话运行它打印的简短 `bind --room <id> --slot <n>`。
+- 你的可见回复就是传输：获批的 Stop hook 把完整的寻址回复发布进 Room FIFO——无转述、无总结回合、无人工复制粘贴。Mention handle（`@peer`、`@user`）负责路由；不带 handle 的回复即结束中继。
+- 跨回合可达性：每回合结束后的 30 秒 park 窗口收集快速回应；Claude Code 会话可挂后台 `relay wait`，消息到达时由其自身 harness 唤醒会话；对深 idle 的 Codex 对端，CLI 打印供人类执行的 `codex queue` 唤醒模板。PairRoom 自身永不向 idle 会话注入。
+- 等待发生在 CLI 进程层而非模型层：HTTP 长轮询由 CLI 内部续期，空闲时间零 token 成本；每条送达的消息恰好花费接收方一个原生回合。
+- 带日期的工作会话实证（2026-09-16/17，Windows；Claude Code 2.1.273 + codex-cli 0.154.0，均已认证）：两个原生会话通宵无人值守跑完整循环——委派、四轮对抗设计评审、实现、行级评审、合并——零消息丢失、零人工内容搬运。此为工作会话证据，不替代发布门槛的真实 vendor E2E。唤醒面详见[已验证的 vendor 唤醒面](docs/NATIVE_RELAY.md#verified-vendor-wake-surfaces)。
+
 `pairroom-relay` 技能位于 `skills/`，可经技能安装器分发（`npx skills add sean2077/pairroom`），`relay install` 也写入同一份文件。加载后 `/pairroom-relay <topic>` 创建 Room、绑定当前会话并返回对方的加入命令；`pairroom relay bind` 可在识别到的原生会话内零参数运行。后续审查复用绑定，不要每轮重建 Room。
 
 [Native 入门](docs/GETTING_STARTED.md#keep-codex-desktop-a-native-room)与[恢复命令](docs/CLI_REFERENCE.md#native-relay-commands)说明有界 park、前台取件和显式 Retry。Provider、模型、effort、权限仍由原生会话控制。真实认证后的多轮互通仍是发布验收门槛，合成测试不代表模型已接受消息。
