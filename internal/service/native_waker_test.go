@@ -357,14 +357,21 @@ func TestNativeWakerReservesRateSlotAtomically(t *testing.T) {
 	_, records := state.snapshot()
 	var accepted, hourlySuppressed int
 	for _, record := range records {
-		if record.outcome == "accepted" {
+		switch {
+		case record.outcome == "accepted":
 			accepted++
-		}
-		if record.outcome == "suppressed" && record.reason == "hourly_limit" {
+		case record.outcome == "suppressed" && record.reason == "hourly_limit":
 			hourlySuppressed++
+		default:
+			t.Fatalf("unexpected audit record %#v", record)
 		}
 	}
-	if accepted != 1 || hourlySuppressed != 1 {
+	// Both legitimate schedules preserve the atomicity invariant (exactly one
+	// vendor command, asserted above): a serialized loser reaches the hourly
+	// cap and records one suppression, while a truly concurrent loser is
+	// swallowed by the per-target pending dedup, which by design records no
+	// audit fact. Pinning the record shape would make the test race-prone.
+	if accepted != 1 || hourlySuppressed > 1 {
 		t.Fatalf("records = %#v", records)
 	}
 }
