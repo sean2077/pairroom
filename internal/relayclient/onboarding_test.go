@@ -170,7 +170,7 @@ func TestPublishedSkillMatchesEmbeddedProjection(t *testing.T) {
 	if string(published) != skillContent {
 		t.Fatal("skills/pairroom-relay/SKILL.md drifted from the embedded projection; edit the published skills/pairroom-relay/SKILL.md, then copy it over internal/relayclient/skill/pairroom-relay/SKILL.md")
 	}
-	if !strings.Contains(skillContent, "name: pairroom-relay") || !strings.Contains(skillContent, "bind --create --name") || !strings.Contains(skillContent, "announce it with one fire-and-forget") || !strings.Contains(skillContent, "In Codex, do not keep a background relay wait") || !strings.Contains(skillContent, "can suppress automatic wake") {
+	if !strings.Contains(skillContent, "name: pairroom-relay") || !strings.Contains(skillContent, "bind --create --name") || !strings.Contains(skillContent, "announce it with one fire-and-forget") || !strings.Contains(skillContent, "In a poll-only harness, do not keep a background relay wait") || !strings.Contains(skillContent, "can suppress automatic wake") {
 		t.Fatal("skill lost its identity, create flow, join announcement, or Codex reachability cost discipline")
 	}
 }
