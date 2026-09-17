@@ -63,6 +63,16 @@ A valid workflow starts both sessions at the primary checkout while edits and te
 
 Assign one writer when sharing a task worktree. Embedded's single-Turn ownership covers only its two participants, not other Rooms, native subagents, or external processes. Native has no enforced writer lock. Worktree creation, merge and cleanup should have one owner, following the project's existing rules. Do not run a cleanup helper that also merges/pushes as though it only deletes a directory.
 
+## The native conversation loop
+
+The Native-mode highlight is not "two agents can talk" but the shape of the loop: your visible reply is the transport. The approved Stop hook publishes the complete addressed reply into the Room's durable FIFO, mention handles route it, and no retelling, summary or acknowledgement turn is added on top. The protocol's byte budgets still apply to what the receiving side injects.
+
+Reachability across turn boundaries is layered, and each layer is honest about its limit: a 30-second park window after each turn collects immediate answers; a Claude Code session can leave a harness-tracked background `relay wait` pending, and its own harness wakes it when a message lands; a deep-idle Codex session can be woken by a human running the `codex queue` template that the CLI prints ([verified surfaces](NATIVE_RELAY.md#verified-vendor-wake-surfaces)). PairRoom itself never injects into an idle session, and queued messages survive restarts instead of being lost.
+
+The cost shape follows from where waiting lives: `exchange`/`wait` polling renews inside the CLI process, so idle collaboration time consumes zero model tokens; every delivered message costs the receiver exactly one native turn; and because your own visible reply is what ships, verbose prose becomes transport cost — brevity pays for itself. None of this changes the honest accounting in the next section: peer replies, code reads and native reasoning still cost real work.
+
+Dated working-session evidence (2026-09-16/17, Windows; Claude Code 2.1.273 + codex-cli 0.154.0, both authenticated): two native sessions ran a full delivery loop overnight without human relaying of message content — task delegation, four adversarial design-review rounds against a schema-migration draft, implementation of the approved design, independent line-level review, and merge — with zero message loss, and conservative peer refusals correctly gating two over-broad authorization interpretations. Working-session evidence; it does not replace the release-gate vendor E2E.
+
 ## What is actually lightweight?
 
 The [protocol](PROTOCOL.md) keeps fixed identity/routing guidance in a compact bootstrap and sends sender, body, attachments and explicit user-quoted context in a dynamic envelope. It does **not** automatically append accumulated Room history, summarize the peer's response, or require a Task/Dispatch acknowledgement in every model reply.

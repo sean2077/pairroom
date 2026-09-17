@@ -63,6 +63,14 @@ See [Native setup and usage](docs/NATIVE_RELAY.md) for installation prerequisite
 
 Choose **Native** when creating a Room to keep both participants in their original Claude Code/Codex/Grok Build sessions. PairRoom supplies bindings, durable relay and audit, without spawning or interrupting processes. Install and approve the project Stop hooks, then run bind inside each session; it associates immediately from the harness's session-ID environment.
 
+**Highlight — a conversation loop where waiting is free and every message costs one turn.** Both sessions keep their own harness; the loop works like this:
+
+- Two commands to set up: `/pairroom-relay <topic>` in the first session, and the short `bind --room <id> --slot <n>` it prints in the second.
+- Your visible reply is the transport: the approved Stop hook publishes the complete addressed reply into the Room FIFO — no retelling, no summary turn, no human copy-paste. Mention handles (`@peer`, `@user`) route it; a reply without a handle ends the relay.
+- Reachability across turns: a 30-second park window after each turn collects fast answers; a Claude Code session can leave a background `relay wait` pending and its own harness wakes it when a message lands; for a deep-idle Codex peer the CLI prints a human-executed `codex queue` wake template. PairRoom itself never injects into an idle session.
+- Waiting lives in the CLI process, not the model: HTTP polls renew internally, so idle time costs zero tokens, and every delivered message costs the receiver exactly one native turn.
+- Dated working-session evidence (2026-09-16/17, Windows; Claude Code 2.1.273 + codex-cli 0.154.0, both authenticated): two native sessions ran a full overnight loop without human relaying of message content — delegation, four adversarial design-review rounds, implementation, line-level review, merge — with zero message loss. Working-session evidence; it does not replace the release-gate vendor E2E. Wake surfaces: [verified vendor wake surfaces](docs/NATIVE_RELAY.md#verified-vendor-wake-surfaces).
+
 The `pairroom-relay` skill ships in `skills/` for skill installers (`npx skills add sean2077/pairroom`) and is also written by `relay install`. Once loaded, `/pairroom-relay <topic>` creates the Room and binds that session and reports the peer's join command; `pairroom relay bind` runs zero-flag inside a recognized session. Reuse that binding for follow-up reviews rather than creating a Room per round.
 
 [Native setup](docs/GETTING_STARTED.md#keep-codex-desktop-a-native-room) and [recovery commands](docs/CLI_REFERENCE.md#native-relay-commands) explain bounded park, foreground collection and explicit Retry. Provider/model/effort/permissions remain native-controlled. Authenticated multi-round vendor E2E is still a release gate; synthetic tests are not evidence of model acceptance.
