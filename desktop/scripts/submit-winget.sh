@@ -75,8 +75,11 @@ trap 'rm -rf "$render_dir"' EXIT
   --output-dir "$render_dir"
 
 # Idempotent rerun: never open a second pull request for the same version.
-existing="$(gh pr list --repo "$UPSTREAM" --state open \
-  --head "${FORK_OWNER}:${branch}" --json url --jq '.[0].url // empty')"
+# GitHub's head filter never matches the owner-prefixed form for fork pull
+# requests, so filter the bare branch name and check the fork owner explicitly.
+existing="$(FORK_OWNER="$FORK_OWNER" gh pr list --repo "$UPSTREAM" --state open \
+  --head "$branch" --json url,headRepositoryOwner \
+  --jq '.[] | select(.headRepositoryOwner.login == env.FORK_OWNER) | .url' | head -n 1)"
 if [ -n "$existing" ]; then
   printf '%s\n' "open winget-pkgs pull request already exists: $existing"
   exit 0
