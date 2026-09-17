@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [v5.0.1] — 2026-09-17
+
+- Fix Desktop (Wails) packaging for the 5.x line: `desktop/build/config.yml` stayed at 4.1.0 when VERSION moved to 5.0.0, so the desktop workflow's prepare-build version gate failed and no `pairroom-desktop-*` packages could attach to the v5.0.0 Release. Sync the desktop build version and add a drift-guard test asserting it matches `internal/version.Current`. The published v5.0.0 CLI artifacts are unaffected; tags are immutable, so desktop packages ship from this release instead.
+
 ## [v5.0.0] — 2026-09-17
 
 - Break persisted ActorID compatibility intentionally: canonical durable slots are `slot1` and `slot2`; the former runtime-named values are accepted only as relay CLI input aliases and are never serialized. Store schema 12/provisioning 5, registry checkpoint 3, relay binding state 2, Agent pair profile 2, embedded protocol v7, and native protocol v8 form one clean generation.
