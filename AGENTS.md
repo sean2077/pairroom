@@ -13,6 +13,7 @@ PairRoom is a local Go coordination layer for official Claude Code, Codex, and G
 - `make install` installs the current source to `GOBIN`, defaulting to `GOPATH/bin`; it reports PATH visibility but never edits PATH.
 - `make cover` records diagnostic package coverage; coverage is not a release percentage gate.
 - `make release` requires a clean tree and builds/verifies the complete local release payload. It does not publish or create a tag.
+- `make bump-version NEW_VERSION=X.Y.Z` rewrites every synchronized version surface fail-closed in one step (root `VERSION`, `internal/version.Current`, `desktop/build/config.yml`, and the canonical `CHANGELOG.md` heading, moving Unreleased notes into the new section); it never commits or tags.
 - The installed `agent-scaffold` skill's `verify --profile default --json` mode is the authoritative full harness check.
 
 ## Durable invariants
