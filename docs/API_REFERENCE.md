@@ -198,6 +198,7 @@ The following method/path patterns are extracted from production HTTP registrati
 - `POST /api/v1/rooms/{room}/open-browser`
 - `POST /api/v1/rooms/{room}/restore`
 - `POST /api/v1/rooms/{room}/suspend`
+- `POST /api/v1/rooms/{room}/wake-config`
 - `POST /api/v1/session`
 - `PUT /api/v1/agent-pair-profiles/{profile}`
 - `PUT /api/v1/participants/{actor}/permissions`
