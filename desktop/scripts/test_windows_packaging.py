@@ -165,5 +165,20 @@ class WindowsPackagingTests(unittest.TestCase):
             self.assertNotIn(forbidden, source)
 
 
+class BootstrapperVerificationTests(unittest.TestCase):
+    def test_signature_check_uses_the_child_powershell_module_path(self):
+        for variable in ("PSModulePath", "PSMODULEPATH"):
+            with self.subTest(variable=variable):
+                with mock.patch.dict(packaging.os.environ, {variable: "wrong-pwsh7-modules"}):
+                    with mock.patch.object(packaging.subprocess, "run") as run:
+                        packaging.verify_bootstrapper(Path("C:/path with spaces/runtime.exe"))
+                environment = run.call_args.kwargs["env"]
+                self.assertFalse(any(key.upper() == "PSMODULEPATH" for key in environment))
+                self.assertEqual(environment["PAIRROOM_WEBVIEW_BOOTSTRAPPER"],
+                                 str(Path("C:/path with spaces/runtime.exe")))
+                self.assertTrue(run.call_args.kwargs["check"])
+                self.assertIn("Get-AuthenticodeSignature", run.call_args.args[0][-1])
+
+
 if __name__ == "__main__":
     unittest.main()

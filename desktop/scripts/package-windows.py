@@ -71,7 +71,10 @@ def find_compiler() -> str:
 def verify_bootstrapper(path: Path) -> None:
     # Wails downloads Microsoft's Evergreen bootstrapper. Authenticate the final
     # downloaded bytes before embedding them; never execute a substituted file.
-    env = dict(os.environ, PAIRROOM_WEBVIEW_BOOTSTRAPPER=str(path))
+    # A pwsh 7 caller can export its own PSModulePath into Windows PowerShell
+    # 5.1, whose CLR cannot load those modules. Let the child use its own defaults.
+    env = {key: value for key, value in os.environ.items() if key.upper() != "PSMODULEPATH"}
+    env["PAIRROOM_WEBVIEW_BOOTSTRAPPER"] = str(path)
     subprocess.run(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
          "$ErrorActionPreference = 'Stop'; "
