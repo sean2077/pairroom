@@ -522,7 +522,7 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 				return Room{}, Project{}, false, errors.New("native event requires an active native Room")
 			}
 			switch event.Kind {
-			case relay.EventBinding, relay.EventMessage, relay.EventPublication, relay.EventPublicationGap, relay.EventFailure:
+			case relay.EventBinding, relay.EventMessage, relay.EventPublication, relay.EventPublicationGap, relay.EventFailure, relay.EventWakeConfig, relay.EventWakeReserved, relay.EventWakeAttempted:
 			default:
 				return Room{}, Project{}, false, fmt.Errorf("unsupported native event %q", event.Kind)
 			}
