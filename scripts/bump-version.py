@@ -40,6 +40,17 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def write_text_lf(path: Path, text: str) -> None:
+    """Write a version surface with LF endings.
+
+    Path.write_text translates newlines to the platform default, which on
+    Windows rewrites whole LF blobs as CRLF and trips gofmt/CI gates for
+    paths without a .gitattributes text rule.
+    """
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(text)
+
+
 def substitute_once(pattern: re.Pattern, text: str, new_version: str, path: Path) -> tuple[str, str]:
     matches = pattern.findall(text)
     if len(matches) != 1:
@@ -84,10 +95,10 @@ def apply_bump(root: Path, new_version: str, day: str) -> list[str]:
     changelog_text, _, moved = plan_changelog(read_text(changelog_file), new_version, day)
 
     # Every surface validated; only now write.
-    version_file.write_text(new_version + "\n", encoding="utf-8")
-    go_file.write_text(go_text, encoding="utf-8")
-    desktop_file.write_text(desktop_text, encoding="utf-8")
-    changelog_file.write_text(changelog_text, encoding="utf-8")
+    write_text_lf(version_file, new_version + "\n")
+    write_text_lf(go_file, go_text)
+    write_text_lf(desktop_file, desktop_text)
+    write_text_lf(changelog_file, changelog_text)
 
     report.append(f"VERSION: {old_root} -> {new_version}")
     report.append(f"internal/version/version.go Current: {go_old} -> {new_version}")
