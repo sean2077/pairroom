@@ -16,5 +16,5 @@
 /build/windows/icon.ico
 /build/windows/info.json
 /build/windows/wails.exe.manifest
-/build/windows/nsis/wails_tools.nsh
-/build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
+/build/windows/nsis/
+/build/windows/inno/MicrosoftEdgeWebview2Setup.exe

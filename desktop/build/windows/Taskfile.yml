@@ -1,6 +1,6 @@
 version: '3'
 
-# Synchronized with Wails v3.0.0-beta.22. Update with the pinned dependency.
+# Build tasks follow Wails v3.0.0-beta.22; Windows packaging is owned by Inno Setup.
 includes:
   common: ../Taskfile.yml
 
@@ -38,9 +38,9 @@ tasks:
       CONSOLE: '{{.CONSOLE | default "false"}}'
 
   package:
-    summary: Packages a production build of the application into a `.exe` bundle
+    summary: Packages the production host and CLI with Inno Setup 7
     cmds:
-      - task: create:nsis:installer
+      - task: create:inno:installer
 
   generate:syso:
     summary: Generates Windows `.syso` file
@@ -50,19 +50,17 @@ tasks:
     vars:
       ARCH: '{{.ARCH | default ARCH}}'
 
-  create:nsis:installer:
-    summary: Creates an NSIS installer
-    dir: build/windows/nsis
+  create:inno:installer:
+    summary: Creates an Inno Setup installer
     deps:
       - task: build
         vars:
           PRODUCTION: "true"
     cmds:
-      - '"{{.WAILS}}" generate webview2bootstrapper -dir "{{.ROOT_DIR}}/build/windows/nsis"'
-      - makensis -DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}\{{.BIN_DIR}}\{{.APP_NAME}}.exe" project.nsi
+      - '"{{.WAILS}}" generate webview2bootstrapper -dir "{{.ROOT_DIR}}/build/windows/inno"'
+      - '"{{.PYTHON}}" scripts/package-windows.py --arch {{.ARCH}}'
     vars:
       ARCH: '{{.ARCH | default ARCH}}'
-      ARG_FLAG: '{{if eq .ARCH "amd64"}}AMD64{{else}}ARM64{{end}}'
 
   run:
     cmds:

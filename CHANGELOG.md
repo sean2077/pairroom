@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Replace Windows NSIS packaging with independently authored Inno Setup 7: SHA256-pinned official compiler, VERSION-derived installer version, PE architecture checks, and an Authenticode-verified WebView2 bootstrapper, retaining machine scope, the Program Files default, the GUI-subsystem host, separate `bin\pairroom.exe`, and release filenames. Setup blocks older registered PairRoom installers and locked binaries instead of terminating active work; uninstall removes only logged files/shortcuts and the exactly matching current user's startup entry, preserving Service data with no PATH, daemon, or startup registration changes. One-time transition: back up Service data, quit Desktop, remove any daemon using the bundled CLI, uninstall the old NSIS package from Windows Settings, then run the Inno installer; later Inno versions upgrade in place. Published desktop assets are no longer overwritten (`--clobber` removed).
+
 - Fix Management rejecting the current v5 Agent pair profile schema, which prevented Room creation and profile loading; reject retired or malformed profile responses on both reads and writes. Align real-transport browser assertions with compact send receipts, conflicting-ID rejection, and explicit full-history inspection.
 
 - Reserve Grok's final Stop publication gate by limiting PairRoom readiness/recovery continuations to seven; simplify its body-free wait hint and clarify hook reload/trust and unverified deep-idle boundaries.

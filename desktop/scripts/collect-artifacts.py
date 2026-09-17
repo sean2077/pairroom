@@ -44,7 +44,7 @@ def release_filename(version: str, platform: str, arch: str, source: pathlib.Pat
     raise SystemExit(f"unsupported platform {platform!r}")
 
 
-def collect(platform: str) -> list[pathlib.Path]:
+def collect(platform: str, arch: str = "amd64") -> list[pathlib.Path]:
     binary_dir = ROOT / "bin"
     if platform == "linux":
         appimages = require_packages(
@@ -59,7 +59,7 @@ def collect(platform: str) -> list[pathlib.Path]:
         return sorted({*appimages, *debs})
     if platform == "windows":
         installers = require_packages(
-            list(binary_dir.glob("*-installer.exe")), "a Windows NSIS installer"
+            [binary_dir / f"PairRoom-{arch}-installer.exe"], "a Windows Inno Setup installer"
         )
         cli = binary_dir / "cli" / "pairroom.exe"
         if not cli.is_file():
@@ -72,7 +72,7 @@ def collect(platform: str) -> list[pathlib.Path]:
             if path.name.lower() in {"pairroom.exe"}:
                 raise SystemExit(
                     "Windows CI must not publish a standalone PairRoom.exe; "
-                    "ship the NSIS installer that contains the host and CLI"
+                    "ship the Inno Setup installer that contains the host and CLI"
                 )
         return packages
     if platform == "darwin":
@@ -118,7 +118,7 @@ def main() -> int:
     version = (REPOSITORY / "VERSION").read_text(encoding="utf-8").strip()
     packages = []
     checksum_lines = []
-    for source in collect(args.platform):
+    for source in collect(args.platform, args.arch):
         target = destination / release_filename(version, args.platform, args.arch, source)
         shutil.copy2(source, target)
         sha256 = digest(target)

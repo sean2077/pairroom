@@ -8,19 +8,28 @@ import (
 )
 
 func TestWindowsInstallerShipsPairroomCLI(t *testing.T) {
-	nsi, err := os.ReadFile(filepath.Join("build", "windows", "nsis", "project.nsi"))
+	iss, err := os.ReadFile(filepath.Join("build", "windows", "inno", "PairRoom.iss"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(nsi)
-	if !strings.Contains(text, `File "/oname=pairroom.exe" "..\..\..\bin\cli\pairroom.exe"`) {
-		t.Fatal("Windows NSIS installer must ship pairroom.exe from bin/cli, not beside PairRoom.exe")
+	text := string(iss)
+	if !strings.Contains(text, `Source: "{#DesktopRoot}\bin\cli\pairroom.exe"; DestDir: "{app}\bin"`) {
+		t.Fatal("Windows Inno installer must ship the CLI from bin/cli into {app}\\bin, separate from PairRoom.exe")
 	}
-	if !strings.Contains(text, `SetOutPath "$INSTDIR\bin"`) {
-		t.Fatal("Windows installer must place the CLI in $INSTDIR\\bin so it does not collide with PairRoom.exe")
+	for _, contract := range []string{
+		`AppId={#PairRoomId}`,
+		`UninstallDisplayName=PairRoom`,
+		`CloseApplications=no`,
+		`RestartApplications=no`,
+		`function InitializeUninstall: Boolean;`,
+		`Result := PayloadError;`,
+	} {
+		if !strings.Contains(text, contract) {
+			t.Fatalf("Windows installer must retain %q", contract)
+		}
 	}
-	if !strings.Contains(text, `daemon uninstall`) {
-		t.Fatal("Windows uninstaller must stop the bundled pairroom daemon")
+	if _, err := os.Stat(filepath.Join("build", "windows", "nsis", "project.nsi")); !os.IsNotExist(err) {
+		t.Fatal("the retired NSIS installer must not coexist with Inno Setup")
 	}
 
 	collect, err := os.ReadFile(filepath.Join("scripts", "collect-artifacts.py"))
@@ -46,10 +55,16 @@ func TestWindowsInstallerShipsPairroomCLI(t *testing.T) {
 		t.Fatal("desktop CI must not build a standalone Windows PairRoom.exe artifact")
 	}
 	if !strings.Contains(string(workflow), `startsWith(github.ref, 'refs/tags/v')`) {
-		t.Fatal("desktop packaging must run only on version tags or workflow_dispatch")
+		t.Fatal("desktop publishing must run only on version tags")
+	}
+	if !strings.Contains(string(workflow), "test_windows_installer.ps1") {
+		t.Fatal("Windows PR CI must exercise the real Inno installer")
 	}
 	if !strings.Contains(string(workflow), "gh release upload") {
 		t.Fatal("desktop packages must be attached to the GitHub Release")
+	}
+	if strings.Contains(string(workflow), "--clobber") {
+		t.Fatal("published installer URLs must retain immutable content")
 	}
 	if !strings.Contains(script, "pairroom-desktop-v") {
 		t.Fatal("published desktop files must use the pairroom-desktop- prefix")
@@ -64,6 +79,7 @@ func TestTrayMenuExposesServiceControls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	source := string(text)
 	for _, label := range []string{
 		"Open PairRoom",

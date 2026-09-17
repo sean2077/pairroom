@@ -48,6 +48,7 @@ jobs:
       - name: Test local desktop updater and native settings transport
         run: |
           python desktop/scripts/test_update_local.py
+          python desktop/scripts/test_windows_packaging.py
           node scripts/test_desktop_settings.js
       - name: Install Linux webview dependencies
         run: |
@@ -83,7 +84,7 @@ jobs:
   native-tests:
     name: Test native desktop (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -107,11 +108,33 @@ jobs:
           python desktop/scripts/update-local.py --install-dir "${{ runner.temp }}/PairRoom local update"
           python desktop/scripts/update-local.py --skip-build --install-dir "${{ runner.temp }}/PairRoom local update"
 
+      - name: Install pinned Inno Setup compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./desktop/scripts/install-inno.ps1
+      - name: Build and smoke-test the Windows installer
+        if: runner.os == 'Windows'
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          wails3 task windows:package ARCH=amd64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/test_windows_installer.ps1 -Installer ./bin/PairRoom-amd64-installer.exe
+      - name: Upload Windows installer smoke logs
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-installer-smoke-logs
+          path: ${{ runner.temp }}/pairroom-installer-smoke-*/**/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+
   package:
     name: Package ${{ matrix.label }}
     # Installers and app bundles are release artifacts, not PR/main CI output.
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
-    needs: verify
+    needs: [verify, native-tests]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -157,17 +180,10 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libwebkitgtk-6.0-dev \
             pkg-config
-      - name: Install NSIS
+      - name: Install pinned Inno Setup compiler
         if: matrix.platform == 'windows'
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          choco install nsis --no-progress -y
-          $nsis = "${env:ProgramFiles(x86)}\NSIS"
-          if (-not (Test-Path (Join-Path $nsis 'makensis.exe'))) {
-            throw "makensis.exe was not installed below $nsis"
-          }
-          $nsis | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        run: ./desktop/scripts/install-inno.ps1
       - name: Install pinned Wails CLI
         run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
       - name: Download isolated desktop module dependencies
@@ -238,7 +254,7 @@ jobs:
           done
           mapfile -t files < <(find desktop-dist -type f -name 'pairroom-desktop-*')
           test "${#files[@]}" -gt 0
-          gh release upload "${tag}" "${files[@]}" --repo "${GITHUB_REPOSITORY}" --clobber
+          gh release upload "${tag}" "${files[@]}" --repo "${GITHUB_REPOSITORY}"
           published="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
           for required in \
             "pairroom-desktop-v${version}-windows-amd64-setup.exe" \

@@ -53,7 +53,7 @@ python scripts/prepare-build.py
 wails3 task build
 ```
 
-From the repository root, the same workflows are available as `make desktop-build` and `make desktop-package`. `desktop-package` creates the production package for the current host platform under `desktop/bin/`; it requires the pinned Wails CLI and the platform packaging tools listed by the Wails toolchain. Set `DESKTOP_PYTHON` or `DESKTOP_WAILS` when those executables are not on the default command path.
+From the repository root, the same workflows are available as `make desktop-build` and `make desktop-package`. `desktop-package` creates the production package for the current host platform under `desktop/bin/`; it requires the pinned Wails CLI and the platform packaging tools (Inno Setup 7 on Windows; the Wails packaging toolchain on Linux/macOS). Set `DESKTOP_PYTHON` or `DESKTOP_WAILS` when those executables are not on the default command path.
 
 ### Update the installed desktop from source
 
@@ -64,14 +64,14 @@ make desktop-update
 ```
 
 This builds the current checkout in production mode, then replaces the host and
-bundled CLI together. Windows and Linux build directly without generating NSIS
+bundled CLI together. Windows and Linux build directly without generating installers
 or Linux distribution packages; macOS builds and ad-hoc signs the complete app
 bundle. The macOS CLI lives under `Contents/Helpers/pairroom`, not beside
 `Contents/MacOS/PairRoom`, so case-insensitive volumes cannot overwrite the host.
 Go 1.25, the pinned Wails CLI, Python, and native build dependencies are
 still required. There is no release download or automatic `git pull`.
 
-Existing Windows NSIS installations are discovered through uninstall metadata
+Existing Windows Inno Setup installations (and older NSIS installations) are discovered through uninstall metadata
 and the standard user/machine paths. macOS checks `~/Applications` and
 `/Applications`. Linux checks `~/.local/lib/pairroom-desktop`, `~/.local/bin`,
 and the package's `/usr/local/bin`. A missing or ambiguous installation fails
@@ -124,8 +124,87 @@ Quit never stops an external daemon. Startup may restart an installed daemon onl
 `.github/workflows/desktop-wails.yml` verifies the desktop module on pull requests and `main`. PR checks also rebuild and update temporary native installations. Release installer/app-bundle artifact collection runs only for `v*` tags (and manual `workflow_dispatch`), then attaches the tag artifacts to the GitHub Release as `pairroom-desktop-vX.Y.Z-…`:
 
 - Linux amd64: AppImage and Debian package (the `.deb` includes `/usr/local/bin/pairroom`);
-- Windows amd64: NSIS setup (`pairroom-desktop-vX.Y.Z-windows-amd64-setup.exe`) that installs `PairRoom.exe` and `bin\pairroom.exe`;
+- Windows amd64: Inno Setup installer (`pairroom-desktop-vX.Y.Z-windows-amd64-setup.exe`) that installs `PairRoom.exe` and `bin\pairroom.exe`;
 - macOS arm64: `.app.zip` with the CLI at `Contents/Helpers/pairroom` and host at `Contents/MacOS/PairRoom`;
 - macOS amd64: `.app.zip` with the CLI at `Contents/Helpers/pairroom` and host at `Contents/MacOS/PairRoom`.
 
 Release packages are unsigned development artifacts until Windows code signing and Apple Developer ID signing/notarization actually run.
+
+## Windows installer
+
+Windows packaging is maintained in `build/windows/inno/PairRoom.iss`, independent
+of Wails' NSIS template. `prepare-build.py` removes the unused NSIS files that
+Wails regenerates. Plain `desktop-build` and `desktop-update` do not need Inno.
+Install Inno Setup 7 and expose `ISCC.exe` on PATH, or set `PAIRROOM_ISCC` to its
+full path. CI provisions the SHA256-pinned official Inno Setup 7.0.2 compiler with
+`scripts/install-inno.ps1`; no extra account or project secret is needed.
+
+```powershell
+# From desktop/, after installing Go, the pinned Wails CLI and Inno Setup 7:
+python scripts/prepare-build.py
+wails3 task windows:package ARCH=amd64
+# Output: bin/PairRoom-amd64-installer.exe (host + bin/pairroom.exe)
+```
+
+`package-windows.py` checks VERSION/config agreement, Windows PE architecture,
+required payloads, and the Microsoft Authenticode signature of the WebView2
+bootstrapper before invoking the compiler. Installer versions come from VERSION,
+not another version constant in the `.iss` file. Release asset names are unchanged.
+The publish job no longer overwrites existing assets: fixes require a new version,
+not replacing bytes under a URL that a package manager has already hashed.
+
+The installer uses the modern Windows 11 style with system light/dark appearance,
+skips welcome and redundant confirmation pages, and creates a Start Menu entry.
+The existing machine scope and default
+`C:\Program Files\PairRoom contributors\PairRoom` directory are retained; this
+change does not silently move existing installs into a per-user location. An
+initial custom directory is remembered by subsequent Inno upgrades.
+
+A missing machine-wide WebView2 Evergreen Runtime is installed before the payload.
+Internet access is needed only if the runtime is missing; for offline systems,
+preinstall Microsoft's standalone Evergreen Runtime. A runtime installation error
+stops Setup instead of reporting that PairRoom was installed successfully.
+
+Silent install/upgrade and uninstall work without launching the desktop:
+
+```powershell
+# Use the downloaded release filename in place of the local build name as needed.
+.\PairRoom-amd64-installer.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+& 'C:\Program Files\PairRoom contributors\PairRoom\unins000.exe' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+```
+
+Quit Desktop from the tray before upgrading/removing it. If an explicitly
+installed daemon uses the bundled CLI, gracefully stop it before upgrade, or run
+`pairroom daemon uninstall` before removal. The installer never kills a process,
+installs/removes a daemon, changes PATH, or opts into launch at login. Inno removes
+only its logged files and shortcuts, preserving Service data and unrelated files.
+Uninstall removes the current user's native `PairRoom` Run entry only when it
+points exactly at this installation; it does not edit other users' registrations.
+
+### First transition from NSIS
+
+The old NSIS uninstaller recursively deletes its installation directory. Installing
+Inno over it would leave two uninstallers able to remove the same payload. Setup
+therefore rejects an older registered PairRoom installer, or a destination still
+containing `uninstall.exe`, before writing files. It never executes an arbitrary
+registry uninstall command or silently imports installer state.
+
+Back up the Service data folder (available from the tray), quit Desktop and
+remove any daemon that uses the bundled CLI, then uninstall the old package from
+Windows Settings. Run the new installer and use the same directory if preserving
+existing launch paths. The new installer does not purge Service data; restore or
+re-enable explicit startup/daemon settings as necessary after this one-time
+transition. Later Inno versions upgrade in place. `make desktop-update` replaces
+binaries only; it does not convert an old NSIS installation into Inno.
+
+### Verification
+
+`python scripts/test_windows_packaging.py` runs cross-platform packaging guards.
+Windows PR CI additionally compiles the real installer and tests fresh install,
+an older-to-current version upgrade, repeat install, locked-file rejection,
+quiet uninstall, data/unrelated-file preservation, startup ownership, and the
+NSIS transition guard using `scripts/test_windows_installer.ps1`. This smoke
+script requires a disposable CI runner and retains logs as a CI artifact. It
+is not a signed-installer, interactive visual, or authenticated vendor-Agent E2E
+claim. WinGet submission remains a separate publishing step; use installer type
+`inno` when adding its manifest.

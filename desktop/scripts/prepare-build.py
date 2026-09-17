@@ -5,6 +5,7 @@ import os
 import pathlib
 import plistlib
 import re
+import shutil
 import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -51,6 +52,13 @@ def include_pairroom_in_linux_package() -> None:
     )
 
 
+def remove_unused_windows_packaging() -> None:
+    """Wails regenerates its NSIS template; only Inno is a supported installer."""
+    directory = ROOT / "build/windows/nsis"
+    if directory.exists():
+        shutil.rmtree(directory)
+
+
 def main() -> int:
     version = (REPOSITORY / "VERSION").read_text(encoding="utf-8").strip()
     config = (ROOT / "build" / "config.yml").read_text(encoding="utf-8")
@@ -77,6 +85,7 @@ def main() -> int:
         cwd=ROOT / "build",
         check=True,
     )
+    remove_unused_windows_packaging()
     allow_macos_local_networking()
     include_pairroom_in_linux_package()
     print(f"prepared Wails v3 build assets for PairRoom {version}")
