@@ -31,6 +31,10 @@ type nativeFixture struct {
 }
 
 func nativeHTTP(t *testing.T) *nativeFixture {
+	return nativeHTTPWithWake(t, nativeWakerConfig{Wait: func(context.Context, time.Duration) error { return context.Canceled }})
+}
+
+func nativeHTTPWithWake(t *testing.T, wakeConfig nativeWakerConfig) *nativeFixture {
 	t.Helper()
 	relayclient.IsolateNativeCaller(t)
 	registry, project := testRegistry(t, testGitRepo(t))
@@ -42,7 +46,7 @@ func nativeHTTP(t *testing.T) *nativeFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	factory := EmbeddedRuntimeFactory(registry, EmbeddedRuntimeConfig{Claude: agent.Config{Command: "missing-do-not-spawn-claude"}, Codex: agent.Config{Command: "missing-do-not-spawn-codex"}})
+	factory := EmbeddedRuntimeFactory(registry, EmbeddedRuntimeConfig{Claude: agent.Config{Command: "missing-do-not-spawn-claude"}, Codex: agent.Config{Command: "missing-do-not-spawn-codex"}, nativeWake: wakeConfig})
 	manager, err := NewRuntimeManager(registry, factory, RuntimeManagerConfig{Limit: 5, IdleTimeout: time.Hour})
 	if err != nil {
 		t.Fatal(err)

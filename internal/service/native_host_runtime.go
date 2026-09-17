@@ -35,6 +35,8 @@ type nativeHostRuntime struct {
 	sessions  *websession.Store
 	http      *http.Server
 	cancel    context.CancelFunc
+	wakeCtx   context.Context
+	waker     *nativeWaker
 	done      chan struct{}
 	active    atomic.Int64
 	last      atomic.Int64
@@ -42,7 +44,7 @@ type nativeHostRuntime struct {
 	closeErr  error
 }
 
-func startNativeHostRuntime(ctx context.Context, registry *Registry, project Project, durable Room, host string) (_ RoomRuntime, resultErr error) {
+func startNativeHostRuntime(ctx context.Context, registry *Registry, project Project, durable Room, host string, wakeConfig nativeWakerConfig) (_ RoomRuntime, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -94,7 +96,8 @@ func startNativeHostRuntime(ctx context.Context, registry *Registry, project Pro
 		return nil, err
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
-	n := &nativeHostRuntime{room: durable, project: project, engine: engine, media: media, token: token, baseURL: "http://" + listener.Addr().String(), sessions: sessions, cancel: cancel, done: make(chan struct{})}
+	wakeConfig.Relay = engine
+	n := &nativeHostRuntime{room: durable, project: project, engine: engine, media: media, token: token, baseURL: "http://" + listener.Addr().String(), sessions: sessions, cancel: cancel, wakeCtx: runCtx, waker: newNativeWaker(wakeConfig), done: make(chan struct{})}
 	mux := http.NewServeMux()
 	webui.Mount(mux)
 	mux.HandleFunc("/", n.serve)
@@ -123,6 +126,12 @@ func (n *nativeHostRuntime) Busy() bool              { return n.engine.Busy() }
 func (n *nativeHostRuntime) InUse() bool             { return n.active.Load() > 0 }
 func (n *nativeHostRuntime) LastActivity() time.Time { return time.Unix(0, n.last.Load()) }
 func (n *nativeHostRuntime) SetDraining(v bool)      { n.engine.SetDraining(v) }
+func (n *nativeHostRuntime) scheduleWake(messageID string) {
+	if n == nil || n.waker == nil || n.wakeCtx == nil || strings.TrimSpace(messageID) == "" {
+		return
+	}
+	n.waker.Schedule(n.wakeCtx, messageID)
+}
 func (n *nativeHostRuntime) acquire() func() {
 	n.active.Add(1)
 	n.last.Store(time.Now().UnixNano())
@@ -259,6 +268,9 @@ func (n *nativeHostRuntime) serve(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			m, err := n.engine.SendUser(req)
+			if err == nil {
+				n.scheduleWake(m.ID)
+			}
 			nativeResult(w, m, err)
 			return
 		case "/api/v1/attachments":
@@ -274,6 +286,9 @@ func (n *nativeHostRuntime) serve(w http.ResponseWriter, r *http.Request) {
 					return
 				case "retry":
 					m, err := n.engine.Retry(id)
+					if err == nil {
+						n.scheduleWake(m.ID)
+					}
 					nativeResult(w, m, err)
 					return
 				}

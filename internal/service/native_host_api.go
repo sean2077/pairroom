@@ -168,12 +168,18 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 		nativeResult(w, b, err)
 	case "report":
 		p, err := runtime.engine.Report(auth, req.ReportSeq, req.Text)
+		if err == nil && p.Message != nil {
+			runtime.scheduleWake(p.Message.ID)
+		}
 		nativeResult(w, p, err)
 	case "publication":
 		p, accepted, err := runtime.engine.Publication(auth, req.ReportSeq)
 		nativeResult(w, map[string]any{"accepted": accepted, "publication": p}, err)
 	case "send":
 		m, err := runtime.engine.Send(auth, relay.SendRequest{ID: req.ID, Text: req.Text, To: req.To, AttachmentIDs: req.AttachmentIDs, QuoteID: req.QuoteID})
+		if err == nil {
+			runtime.scheduleWake(m.ID)
+		}
 		nativeResult(w, m, err)
 	case "wait":
 		seconds := req.TimeoutSeconds
