@@ -2486,9 +2486,9 @@ Object.assign(window.PairRoomLocales["en"].translation, {
   "room.native.subtitle": "Your native sessions. One auditable relay.",
   "room.native.experimental": "Experimental",
   "room.native.boundaryTitle": "PairRoom relays; your harness runs.",
-  "room.native.boundary": "No native processes are started or interrupted here. Provider, model, effort and permission settings are display-only. Real authenticated cross-harness multi-turn validation remains release-gated.",
+  "room.native.boundary": "No agent sessions are started or interrupted here; in a wake-enabled Room the Service can wake a deep-idle Codex session through the vendor-sanctioned, body-free, rate-limited Codex queue. Provider, model, effort and permission settings are display-only. Real authenticated cross-harness multi-turn validation remains release-gated.",
   "room.native.limits": "Publication and wake-up limits",
-  "room.native.limitations": "Handed off means CLI stdout was written, not that the model accepted it. Outside a park window, messages stay queued until the native session runs relay wait. Interruptions and crashes before publication state exists may leave no detectable record. Two publishing paths may visibly duplicate a task.",
+  "room.native.limitations": "Handed off means CLI stdout was written, not that the model accepted it. Outside a park window, messages stay queued; a wake-enabled Room automatically nudges an idle Codex session through the vendor queue surface, otherwise they wait until the native session runs relay wait. Interruptions and crashes before publication state exists may leave no detectable record. Two publishing paths may visibly duplicate a task.",
   "room.native.messages": "Relay messages",
   "room.native.messagesHelp": "Only published messages, not full native transcripts.",
   "room.native.target": "To",
@@ -2553,9 +2553,9 @@ Object.assign(window.PairRoomLocales["zh-CN"].translation, {
   "room.native.subtitle": "留在原生会话，协作记录可审计。",
   "room.native.experimental": "实验性",
   "room.native.boundaryTitle": "PairRoom 负责中继，原生工具负责执行。",
-  "room.native.boundary": "这里不会启动或中断原生进程。Provider、模型、effort 和权限配置仅作展示；真实认证的跨 harness 多轮验证仍是发布前置条件。",
+  "room.native.boundary": "这里不会启动或中断 agent 会话；开启 wake 的 Room 中，Service 可经 vendor 认可的、无正文、限流的 Codex queue 唤醒深度空闲的 Codex 会话。Provider、模型、effort 和权限配置仅作展示；真实认证的跨 harness 多轮验证仍是发布前置条件。",
   "room.native.limits": "发布与唤醒的边界",
-  "room.native.limitations": "「CLI 已写出」不代表模型已接受。park 窗口外，消息保持待取件，需在原生会话运行 relay wait。用户中断或发布状态落盘前崩溃可能不留下可检测记录。同轮两种发布路径可能产生可见重复。",
+  "room.native.limitations": "「CLI 已写出」不代表模型已接受。park 窗口外，消息保持待取件；开启 wake 的 Room 会自动经 vendor queue 唤醒空闲 Codex 会话，否则需在原生会话运行 relay wait 取件。用户中断或发布状态落盘前崩溃可能不留下可检测记录。同轮两种发布路径可能产生可见重复。",
   "room.native.messages": "中继消息",
   "room.native.messagesHelp": "只展示已发布消息，不镜像原生完整会话。",
   "room.native.target": "发送至",
@@ -2628,7 +2628,7 @@ Object.assign(window.PairRoomLocales["en"].translation, {
   "room.native.setup.use": "Verify and collaborate",
   "room.native.setup.useBody": "Run status in both sessions, then give the agents a task and the desired collaboration. Successful bind is immediately ready for relay. The app shows published messages and delivery state, not private histories. If messages stay queued, ask the receiving agent to run wait. Grok hooks give only a readiness hint; wait collects the full input. Publish clipped replies explicitly with send/exchange. Reuse the Room for later rounds.",
   "room.native.setup.recovery": "Missing CLI: fix PATH in the agent’s shell. Missing Service: open the app/start the Service; custom roots use --service-file ROOT/relay-endpoint.json (never paste its contents). Missing identity: run bind inside the intended session. Lost bind response: retry bind for that Room/slot without --create or --replace. A different session needs explicit --replace; unknown delivery needs inspection before explicit Retry because work may be duplicated.",
-  "room.native.setup.boundary": "Native is experimental. PairRoom cannot interrupt native work or inject into an idle session. Handed off confirms stdout only, not model acceptance. Real authenticated multi-round vendor testing remains a separate release gate.",
+  "room.native.setup.boundary": "Native is experimental. PairRoom cannot interrupt native work; in a wake-enabled Room it wakes an idle Codex session only through the vendor-sanctioned, body-free, rate-limited queue nudge. Handed off confirms stdout only, not model acceptance. Real authenticated multi-round vendor testing remains a separate release gate.",
   "room.native.setup.join": "Other session: run the returned join command, or use bind when the Room and slot are unambiguous."
 });
 
@@ -2644,6 +2644,6 @@ Object.assign(window.PairRoomLocales["zh-CN"].translation, {
   "room.native.setup.use": "验证并开始协作",
   "room.native.setup.useBody": "双方分别运行 status，再用自然语言说明任务和协作方式。bind 成功后即可交互。应用展示已发布的消息与投递状态，不展示私人历史。消息一直排队时，请让接收方 agent 运行 wait。Grok hook 仅提示待收件，由 wait 获取完整正文；输出被截断时，用 send/exchange 显式发送完整原文。后续轮次复用已有 Room。",
   "room.native.setup.recovery": "找不到 CLI：修复 agent 工具终端的 PATH。找不到 Service：打开应用或启动 Service；自定义数据目录通过 --service-file ROOT/relay-endpoint.json 指定，切勿粘贴文件内容。缺少会话身份：在目标原生会话中运行 bind。绑定响应丢失：对同一 Room/槽位重试 bind，不带 --create 或 --replace。更换会话才使用显式 --replace；投递 unknown 时先检查再显式 Retry，重试可能重复执行。",
-  "room.native.setup.boundary": "Native 仍为实验功能。PairRoom 无法中断原生任务，也无法直接向空闲会话注入消息。Handed off 仅证明已写出 stdout，不代表模型已接受。真实、已认证的双端多轮测试仍是独立发布门禁。",
+  "room.native.setup.boundary": "Native 仍为实验功能。PairRoom 不会中断原生任务；开启 wake 的 Room 仅通过 vendor 认可的、无正文、限流的 queue nudge 唤醒空闲 Codex 会话。Handed off 仅证明已写出 stdout，不代表模型已接受。真实、已认证的双端多轮测试仍是独立发布门禁。",
   "room.native.setup.join": "另一会话：运行返回的加入命令；Room 和槽位唯一明确时也可直接运行 bind。"
 });

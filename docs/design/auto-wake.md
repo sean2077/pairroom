@@ -1,6 +1,7 @@
 # Automatic wake for idle native sessions
 
-Status: decided — owner approved 2026-09-17; implementation pending.
+Status: landed — owner approved and implemented 2026-09-17
+(`internal/relay/wake.go`, `internal/service/native_waker.go`).
 Updated: 2026-09-17. Evidence base: the verified vendor wake surfaces in
 [NATIVE_RELAY.md](../NATIVE_RELAY.md) (Claude Code background-task wake;
 codex-cli 0.154.0 `queue` wake of a deep-idle thread, one-time controlled
