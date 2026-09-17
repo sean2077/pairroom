@@ -42,13 +42,14 @@ type RecoveryReference struct {
 // transcript paths, native session IDs or historical audit entries. It reports
 // transport facts, never whether the native model is working or finished.
 type Summary struct {
-	HostMode model.HostMode                   `json:"host_mode"`
-	RoomID   string                           `json:"room_id"`
-	Sequence uint64                           `json:"sequence"`
-	Bindings map[model.ActorID]BindingSummary `json:"bindings"`
-	Inboxes  map[model.ActorID]InboxSummary   `json:"inboxes"`
-	Recovery []RecoveryReference              `json:"recovery,omitempty"`
-	Notice   string                           `json:"notice"`
+	HostMode    model.HostMode                   `json:"host_mode"`
+	RoomID      string                           `json:"room_id"`
+	Sequence    uint64                           `json:"sequence"`
+	WakeEnabled bool                             `json:"wake_enabled"`
+	Bindings    map[model.ActorID]BindingSummary `json:"bindings"`
+	Inboxes     map[model.ActorID]InboxSummary   `json:"inboxes"`
+	Recovery    []RecoveryReference              `json:"recovery,omitempty"`
+	Notice      string                           `json:"notice"`
 }
 
 func (e *Engine) AuthSummary(a Auth) (Summary, error) {
@@ -58,7 +59,7 @@ func (e *Engine) AuthSummary(a Auth) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
-	s := Summary{HostMode: model.HostNative, RoomID: e.cfg.RoomID, Sequence: e.sequence,
+	s := Summary{HostMode: model.HostNative, RoomID: e.cfg.RoomID, Sequence: e.sequence, WakeEnabled: e.wakeEnabled,
 		Bindings: map[model.ActorID]BindingSummary{}, Inboxes: map[model.ActorID]InboxSummary{},
 		Notice: "Transport state only; handed_off is stdout, not model acceptance. Full history is available through status --brief=false."}
 	if b.SessionID == "" {

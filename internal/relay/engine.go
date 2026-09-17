@@ -49,6 +49,14 @@ type Engine struct {
 	closed     bool
 	draining   bool
 	fatal      error
+	// wakeEnabled defaults true (per-Room default-on, DP2); only a durable
+	// native.wake.updated fact changes it. wakeReserved dedupes reservations
+	// across replay and runtime; waiters counts Claim long-polls blocked per
+	// slot so WakeCandidate can see live foreground/park collectors.
+	wakeEnabled      bool
+	wakeReservations []WakeReservation
+	wakeReserved     map[string]bool
+	waiters          map[model.ActorID]int
 }
 
 func Open(cfg Config) (*Engine, error) {
@@ -61,7 +69,7 @@ func Open(cfg Config) (*Engine, error) {
 	if cfg.Lease <= 0 {
 		cfg.Lease = DeliveryLease
 	}
-	e := &Engine{cfg: cfg, bindings: map[model.ActorID]bindingFact{}, seenBinds: map[string]bool{}, messages: map[string]Message{}, sends: map[string]string{}, reports: map[string]Publication{}, lastReport: map[string]uint64{}, changed: make(chan struct{})}
+	e := &Engine{cfg: cfg, bindings: map[model.ActorID]bindingFact{}, seenBinds: map[string]bool{}, messages: map[string]Message{}, sends: map[string]string{}, reports: map[string]Publication{}, lastReport: map[string]uint64{}, changed: make(chan struct{}), wakeEnabled: true, wakeReserved: map[string]bool{}, waiters: map[model.ActorID]int{}}
 	events, err := cfg.Store.Load()
 	if err != nil {
 		return nil, err
@@ -228,6 +236,56 @@ func (e *Engine) apply(ev model.Event) error {
 			return err
 		}
 		detail = p.Error
+	case EventWakeConfig:
+		var p struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.Unmarshal(ev.Data, &p); err != nil {
+			return err
+		}
+		e.wakeEnabled = p.Enabled
+		if p.Enabled {
+			detail = "wake enabled"
+		} else {
+			detail = "wake disabled"
+		}
+	case EventWakeReserved:
+		var r WakeReservation
+		if err := json.Unmarshal(ev.Data, &r); err != nil {
+			return err
+		}
+		if !validID(r.MessageID) || !r.Target.ValidParticipant() {
+			return errors.New("invalid native wake reservation fact")
+		}
+		if e.wakeReserved[r.MessageID] {
+			return errors.New("duplicate native wake reservation fact")
+		}
+		r.At = ev.CreatedAt
+		e.wakeReserved[r.MessageID] = true
+		e.wakeReservations = append(e.wakeReservations, r)
+		detail = "wake reserved"
+	case EventWakeAttempted:
+		var p struct {
+			Outcome string        `json:"outcome"`
+			Reason  string        `json:"reason,omitempty"`
+			Target  model.ActorID `json:"target"`
+		}
+		if err := json.Unmarshal(ev.Data, &p); err != nil {
+			return err
+		}
+		if !wakeOutcomes[p.Outcome] || !p.Target.ValidParticipant() {
+			return errors.New("invalid native wake attempt fact")
+		}
+		if p.Reason != "" && !wakeReasons[p.Reason] {
+			return errors.New("invalid native wake attempt reason")
+		}
+		if (p.Outcome == "accepted") != (p.Reason == "") {
+			return errors.New("native wake attempt reason does not match outcome")
+		}
+		detail = "wake " + p.Outcome
+		if p.Reason != "" {
+			detail += " (" + p.Reason + ")"
+		}
 	default:
 		if strings.HasPrefix(ev.Kind, "native.") {
 			return fmt.Errorf("unsupported native event %q", ev.Kind)
@@ -658,12 +716,22 @@ func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
 			return result, nil
 		}
 		changed := e.changed
+		// Register the blocked long-poll so WakeCandidate can atomically see
+		// live foreground/park collectors for this slot. The count is transient
+		// process state, never a durable fact.
+		e.waiters[a.Slot]++
 		e.mu.Unlock()
 		select {
 		case <-ctx.Done():
+			e.mu.Lock()
+			e.waiters[a.Slot]--
+			e.mu.Unlock()
 			return nil, ctx.Err()
 		case <-changed:
 		}
+		e.mu.Lock()
+		e.waiters[a.Slot]--
+		e.mu.Unlock()
 	}
 }
 func (e *Engine) Ack(a Auth, id, receipt string) error {

@@ -20,14 +20,70 @@ const (
 	EventPublicationGap = "native.publication.gap"
 	EventMessage        = "native.message.updated"
 	EventFailure        = "native.failure"
+	EventWakeConfig     = "native.wake.updated"
+	EventWakeReserved   = "native.wake.reserved"
+	EventWakeAttempted  = "native.wake.attempted"
 )
 
 var (
-	ErrAuth     = errors.New("relay authentication failed: binding, generation and associated session must match")
-	ErrOccupied = errors.New("slot is occupied; run bind in the original session or explicitly --replace (cannot stop native work)")
-	ErrClosed   = errors.New("native relay is closed or draining")
-	ErrUnknown  = errors.New("publication result unknown; inspect status before explicitly deciding recovery")
+	ErrAuth         = errors.New("relay authentication failed: binding, generation and associated session must match")
+	ErrOccupied     = errors.New("slot is occupied; run bind in the original session or explicitly --replace (cannot stop native work)")
+	ErrClosed       = errors.New("native relay is closed or draining")
+	ErrUnknown      = errors.New("publication result unknown; inspect status before explicitly deciding recovery")
+	ErrWakeReserved = errors.New("wake is already reserved for this message; no automatic retry")
+	ErrWakeRoomBusy = errors.New("resolve delivering or unknown deliveries before changing wake configuration")
 )
+
+// Wake outcomes and reasons are a fixed redaction vocabulary. They never carry
+// vendor thread identity, message bodies, or command output; RecordWake
+// rejects anything outside these sets so a caller cannot leak them into the
+// durable Event Log.
+var wakeOutcomes = map[string]bool{"accepted": true, "failed": true, "suppressed": true}
+
+var wakeReasons = map[string]bool{
+	"disabled":            true,
+	"burst":               true,
+	"unsupported_runtime": true,
+	"unbound":             true,
+	"duplicate":           true,
+	"minimum_interval":    true,
+	"hourly_limit":        true,
+	"invalid_message":     true,
+	"waiter_active":       true,
+	"collected":           true,
+	"audit_unavailable":   true,
+	"command_unavailable": true,
+	"command_timeout":     true,
+	"command_cancelled":   true,
+	"command_failed":      true,
+}
+
+// WakeReservation is the durable pre-command fact for one wake attempt,
+// keyed by PairRoom transport message ID. It survives Service restart so an
+// interrupted wake is never automatically retried.
+type WakeReservation struct {
+	MessageID string        `json:"message_id"`
+	Target    model.ActorID `json:"target"`
+	At        time.Time     `json:"at"`
+}
+
+// WakeCandidate is the atomic point-in-time answer to "should a durable
+// queued message consider waking its target". QueueStart means the message
+// began a fresh pending burst for the target; WaiterActive means a
+// foreground or park collector is blocked in Claim for the target right
+// now; Delivering means an unacknowledged delivery to the target is in
+// flight. The waker maps these facts onto its suppression vocabulary; the
+// Engine never decides policy.
+type WakeCandidate struct {
+	MessageID    string            `json:"message_id"`
+	Target       model.ActorID     `json:"target"`
+	Runtime      model.RuntimeKind `json:"runtime,omitempty"`
+	SessionID    string            `json:"session_id,omitempty"`
+	Enabled      bool              `json:"enabled"`
+	QueueStart   bool              `json:"queue_start"`
+	WaiterActive bool              `json:"waiter_active"`
+	Delivering   bool              `json:"delivering"`
+}
 
 type Binding struct {
 	Slot           model.ActorID     `json:"slot"`
