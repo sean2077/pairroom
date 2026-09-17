@@ -27,16 +27,14 @@
 
 ## 安装与体验
 
-从 [Releases](https://github.com/sean2077/pairroom/releases/latest) 下载对应安装包。`pairroom-cli-…` 为命令行，`pairroom-desktop-…` 为桌面包。Windows 桌面包以 `-setup.exe` 结尾；Linux 使用 `.deb` / `.AppImage`，macOS 使用 `.app.zip`。
+从 [Releases](https://github.com/sean2077/pairroom/releases/latest) 下载对应安装包；Windows 上可用 `winget install PairRoom` 安装桌面版。各平台与通道的安装前提、静默安装、按通道的升级/卸载以及 Windows NSIS 一次性迁移，见[安装指南](docs/INSTALLATION.md)。
 
-Linux、macOS 或 Git Bash 的 CLI 安装入口：
+Linux、macOS 或 Git Bash 的最快 CLI 路径（执行前检查安装脚本）：
 
 ```bash
 curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh | sh
 pairroom service --mock
 ```
-
-执行前检查安装脚本，或直接下载对应 CLI 文件。Windows PowerShell 中可使用 `./pairroom.exe service --mock` 启动下载的可执行文件。
 
 **使用预编译 CLI 或桌面包不需要 Go。** 首次建议选择可丢弃的 Git 仓库和新的 Mock Room。Mock 不启动供应商 CLI，也不消耗模型额度。避免与已运行的 Service 争用数据目录；[入门指南](docs/GETTING_STARTED.md) 提供独立演示和两种真实宿主模式的步骤。
 

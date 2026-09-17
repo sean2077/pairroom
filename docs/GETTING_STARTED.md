@@ -15,20 +15,7 @@ This guide takes you from a release package to a first Room. For the adoption de
 
 ## Install a release
 
-Choose the matching OS/architecture asset from [Releases](https://github.com/sean2077/pairroom/releases/latest). CLI assets start with `pairroom-cli-`; desktop assets start with `pairroom-desktop-`. A Windows desktop `-setup.exe` is not the standalone CLI `.exe`. Linux desktop assets are `.deb`/`.AppImage`; macOS uses `.app.zip`.
-
-For Linux, macOS, or Git Bash, the CLI installer is:
-
-```bash
-curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh -o install-pairroom.sh
-# Inspect install-pairroom.sh before executing it.
-sh install-pairroom.sh
-pairroom version
-```
-
-Alternatively, download the CLI binary directly and verify it using the checksums provided with that release. Make it executable where required and put it on `PATH`. In Windows PowerShell, use `./pairroom.exe` when running a downloaded binary in the current directory.
-
-Desktop packages are not claimed to be production-signed/notarized unless that release explicitly provides such evidence. See [Desktop development](../desktop/README.md#packages) for package boundaries.
+Follow the [Installation guide](INSTALLATION.md) to choose the channel for your platform — winget, a desktop package, the CLI installer script, or a direct binary — then verify with `pairroom version` and continue here. Prebuilt packages do not require Go.
 
 ## First run without vendor calls
 

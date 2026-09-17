@@ -27,16 +27,14 @@ Native harnesses already have subagents and multi-agent features. Orca also supp
 
 ## Install and try
 
-Download a package from [Releases](https://github.com/sean2077/pairroom/releases/latest). Asset prefixes distinguish `pairroom-cli-…` from `pairroom-desktop-…`. Windows desktop packages end in `-setup.exe`; Linux uses `.deb`/`.AppImage`, and macOS uses `.app.zip`.
+Download a package from [Releases](https://github.com/sean2077/pairroom/releases/latest); on Windows, install the desktop app with `winget install PairRoom`. The [Installation guide](docs/INSTALLATION.md) covers every platform and channel: prerequisites, silent installation, per-channel upgrade/uninstall, and the one-time Windows NSIS transition.
 
-For the CLI on Linux, macOS, or Git Bash:
+Fastest CLI path on Linux, macOS, or Git Bash (review the installer before executing it):
 
 ```bash
 curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh | sh
 pairroom service --mock
 ```
-
-Review the installer before executing it, or download the matching CLI asset directly. In Windows PowerShell, a downloaded executable can be started with `./pairroom.exe service --mock`.
 
 **Prebuilt CLI and desktop packages do not require Go.** Start with a disposable Git repository and a fresh Mock Room. Mock does not launch vendor CLIs or consume model quota. Avoid a data-root conflict with an already-running Service; the [Getting started guide](docs/GETTING_STARTED.md) shows an isolated demo and both real-host paths.
 
