@@ -150,7 +150,7 @@ func runInstall(root string, kinds []model.RuntimeKind, out io.Writer) error {
 	}
 	return writeJSON(out, map[string]any{
 		"installed": installed,
-		"notice":    "Review and approve the exact project hook in each harness (Codex: /hooks; Grok: /hooks and project folder trust; Claude Code: project hook consent). This command does not grant native trust. Keep pairroom on PATH. Real authenticated bidirectional E2E remains release-gated.",
+		"notice":    "Review and approve the exact project hook in each harness (Codex: /hooks; Grok: /hooks, press r to reload, then review project folder trust; Claude Code: project hook consent). This command does not grant native trust. Keep pairroom on PATH. Real authenticated bidirectional E2E remains release-gated.",
 		"next_steps": []string{
 			"Create a room and bind this session: pairroom relay bind --create --name \"<topic>\" (skill: /pairroom-relay <topic>)",
 			"The peer session joins with the printed peer_join command, or zero-flag inside a recognized session: pairroom relay bind",
@@ -316,21 +316,26 @@ func ownedSkill(data []byte) bool {
 }
 
 func installSkill(kind model.RuntimeKind) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
 	// Product skill discovery follows the selected host, not .agents/ SSOT.
-	host := ".codex"
-	switch kind {
-	case model.RuntimeClaude:
-		host = ".claude"
-	case model.RuntimeGrok:
-		host = ".grok"
+	homeVar := map[model.RuntimeKind]string{
+		model.RuntimeClaude: "CLAUDE_CONFIG_DIR",
+		model.RuntimeCodex:  "CODEX_HOME",
+		model.RuntimeGrok:   "GROK_HOME",
+	}[kind]
+	if homeVar == "" {
+		return errors.New("unsupported native skill runtime")
 	}
-	parts := []string{host, "skills", "pairroom-relay"}
-	if kind == model.RuntimeGrok && os.Getenv("GROK_HOME") != "" {
-		home, err = filepath.Abs(os.Getenv("GROK_HOME"))
+	home := os.Getenv(homeVar)
+	parts := []string{"skills", "pairroom-relay"}
+	var err error
+	if home == "" {
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		parts = append([]string{"." + string(kind)}, parts...)
+	} else {
+		home, err = filepath.Abs(home)
 		if err != nil {
 			return err
 		}
@@ -339,9 +344,8 @@ func installSkill(kind model.RuntimeKind) error {
 		}
 		info, err := os.Lstat(home)
 		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return errors.New("GROK_HOME must be a directory, not a symlink")
+			return fmt.Errorf("%s must be a directory, not a symlink", homeVar)
 		}
-		parts = []string{"skills", "pairroom-relay"}
 	}
 	// The host/skills parents must be real directories PairRoom creates itself;
 	// keep them on the strict fail-closed path. Only the leaf skill directory is

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
@@ -19,6 +20,8 @@ type queuedDeliveryHint struct {
 type publicationReceipt struct {
 	Published      string              `json:"published"`
 	ClientID       string              `json:"client_id"`
+	State          string              `json:"state,omitempty"`
+	To             model.ActorID       `json:"to,omitempty"`
 	QueuedDelivery *queuedDeliveryHint `json:"queued_delivery,omitempty"`
 }
 
@@ -51,6 +54,10 @@ func codexWakeTemplate(runtime model.RuntimeKind, sessionID string) wakeTemplate
 }
 
 func peerWakeTemplate(ctx context.Context, c *Client) wakeTemplate {
+	// Optional body-free advice must not consume the foreground collection budget
+	// when a read-only metadata request stalls. Publication is already confirmed.
+	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
 	var peer relay.Binding
 	if c.call(ctx, "peer", nil, &peer) != nil {
 		return wakeTemplate{}

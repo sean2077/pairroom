@@ -174,6 +174,7 @@ func TestInstallSkillLeafRealDirectory(t *testing.T) {
 // TestInstallSkillSucceedsWithSymlinkedLeaf exercises the full installSkill flow
 // (strict parents plus tolerant leaf) the way `relay install` invokes it.
 func TestInstallSkillSucceedsWithSymlinkedLeaf(t *testing.T) {
+	IsolateNativeCaller(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation commonly requires elevated Windows privileges")
 	}

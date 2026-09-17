@@ -126,10 +126,10 @@ func TestGrokContinuationSharesCapWithoutClaiming(t *testing.T) {
 		if err := grokContinuation(context.Background(), c, strings.Repeat("x", 10001), &out); err != nil {
 			t.Fatal(err)
 		}
-		if i < 8 && (!strings.Contains(out.String(), `"block"`) || out.Len() > 1000) {
+		if i < 7 && (!strings.Contains(out.String(), `"block"`) || out.Len() > 1000) {
 			t.Fatal("unsafe/oversized continuation")
 		}
-		if i == 8 && strings.TrimSpace(out.String()) != "{}" {
+		if i >= 7 && strings.TrimSpace(out.String()) != "{}" {
 			t.Fatal("continuation cap bypassed")
 		}
 	}
@@ -174,6 +174,7 @@ func TestGrokBindCannotUseInheritedOuterRuntimeIdentity(t *testing.T) {
 // The compact Native skill on main uses a new heading. Updating a matching
 // installed product skill must remain repeatable across all supported hosts.
 func TestNativeSkillInstallAcceptsCurrentCompactHeading(t *testing.T) {
+	IsolateNativeCaller(t)
 	for _, kind := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok} {
 		t.Run(string(kind), func(t *testing.T) {
 			home := t.TempDir()

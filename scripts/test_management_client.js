@@ -75,14 +75,27 @@ function client() {
 async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
 
 async function main() {
+  // The browser must use v5's current profile generation for both reads and
+  // writes. Invalid/retired responses never replace a usable catalog.
+  for (const mutation of [false, true]) {
+    for (const catalog of [null, {}, {schema: 1, profiles: []}, {schema: 3, profiles: []}, {schema: 2, profiles: {}}]) {
+      const c = client();
+      const current = {schema: 2, default_profile_id: '', profiles: []};
+      c.state.agentPairProfiles = current;
+      c.setAPI(async () => catalog);
+      await assert.rejects(mutation ? c.mutateAgentPairProfiles('', {method: 'POST'}) : c.loadAgentPairProfiles(true), /loadFailed/);
+      assert.equal(c.state.agentPairProfiles, current, 'invalid profile response must not replace the current catalog');
+      assert.equal(c.state.pairProfileBusy, false, 'a rejected write must release its UI lock');
+    }
+  }
   {
     const c = client(), oldRead = deferred(), freshRead = deferred();
     let reads = 0;
     c.setAPI(() => (++reads === 1 ? oldRead.promise : freshRead.promise));
     const old = c.loadAgentPairProfiles();
     const fresh = c.loadAgentPairProfiles(true);
-    oldRead.resolve({schema: 1, default_profile_id: 'old', profiles: []});
-    freshRead.resolve({schema: 1, default_profile_id: 'fresh', profiles: []});
+    oldRead.resolve({schema: 2, default_profile_id: 'old', profiles: []});
+    freshRead.resolve({schema: 2, default_profile_id: 'fresh', profiles: []});
     assert.equal((await fresh).default_profile_id, 'fresh');
     assert.equal((await old).default_profile_id, 'fresh', 'obsolete profile read must join the newer read');
     assert.equal(c.state.agentPairProfiles.default_profile_id, 'fresh');
@@ -93,9 +106,9 @@ async function main() {
     const old = c.loadAgentPairProfiles();
     const saved = c.mutateAgentPairProfiles('/default', {method: 'PATCH'});
     await assert.rejects(c.mutateAgentPairProfiles('/default', {method: 'PATCH'}), /busy/);
-    write.resolve({schema: 1, default_profile_id: 'saved', profiles: []});
+    write.resolve({schema: 2, default_profile_id: 'saved', profiles: []});
     await saved;
-    oldRead.resolve({schema: 1, default_profile_id: 'old', profiles: []});
+    oldRead.resolve({schema: 2, default_profile_id: 'old', profiles: []});
     assert.equal((await old).default_profile_id, 'saved', 'a read cannot restore the pre-write default');
     assert.equal(c.state.agentPairProfiles.default_profile_id, 'saved');
   }
@@ -104,7 +117,7 @@ async function main() {
     c.setAPI(() => request.promise);
     const pending = mutation ? c.mutateAgentPairProfiles('', {method: 'POST'}) : c.loadAgentPairProfiles();
     c.invalidateSessionReads();
-    request.resolve({schema: 1, default_profile_id: 'old-session', profiles: []});
+    request.resolve({schema: 2, default_profile_id: 'old-session', profiles: []});
     await assert.rejects(pending, error => error.code === 'obsolete_session');
     assert.equal(c.state.agentPairProfiles, null, 'profile data must not cross browser sessions');
   }

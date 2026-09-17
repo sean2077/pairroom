@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,45 +13,6 @@ import (
 	"github.com/sean2077/pairroom/internal/relay"
 )
 
-// statePaths never follows symlinks, including a substituted .pairroom root.
-func statePaths(root string) ([]string, error) {
-	base := filepath.Join(root, ".pairroom")
-	info, err := os.Lstat(base)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return nil, errors.New("relay workspace state must not be a symlink")
-	}
-	paths := []string{}
-	err = filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.Type()&os.ModeSymlink != 0 {
-			return errors.New("relay state contains a symlink; refusing discovery")
-		}
-		rel, err := filepath.Rel(base, path)
-		if err != nil {
-			return err
-		}
-		parts := strings.Split(filepath.ToSlash(rel), "/")
-		if d.IsDir() {
-			if len(parts) > 5 {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if len(parts) == 5 && parts[0] == "rooms" && parts[2] == "slots" && parts[4] == "state.json" && safePart(parts[1]) && model.ActorID(parts[3]).ValidParticipant() {
-			paths = append(paths, path)
-		}
-		return nil
-	})
-	return paths, err
-}
 func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Writer) error {
 	// Keep sender reconciliation outside the park duration. The project hook has
 	// 45 seconds; reserve acknowledgement/output time rather than using its edge.
@@ -183,7 +142,7 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		// harness still honors any block below.
 		_, _ = fmt.Fprintln(diagnostic, "PairRoom: publication pending or unknown; inspect relay status. No new-ID replay was attempted.")
 	}
-	if hook.StopHookActive && c.State.Blocks >= relay.MaxBlocks {
+	if hook.StopHookActive && c.State.Blocks >= hookBlockLimit(kind) {
 		return writeJSON(out, map[string]any{})
 	}
 	// Publishing remains independent of collection. A foreground tool may be
@@ -244,7 +203,7 @@ func deliverOnce(ctx context.Context, c *Client, hook bool, seconds int, out io.
 		}
 		// This is readiness, not delivery. No receipt or inbox content has
 		// left the Service. The native tool will collect the full envelope.
-		return false, grokContinuation(ctx, c, "PairRoom has pending input. Run "+foregroundWaitCommand(c, 30)+" in this native session and process the returned envelope. This notice contains no peer reply.", out)
+		return false, grokContinuation(ctx, c, "PairRoom has pending input. In the bound Room workspace, run pairroom relay wait and process its full result. This notice contains no peer reply.", out)
 	}
 	if strings.TrimSpace(string(result.Claim)) == "null" {
 		if hook {

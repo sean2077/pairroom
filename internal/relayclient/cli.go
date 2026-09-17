@@ -58,11 +58,11 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.BoolVar(&o.replace, "replace", false, "explicitly revoke occupied binding; does not stop native work")
 	flags.BoolVar(&o.purge, "purge-hooks", false, "remove this runtime's relay hooks when no other local binding uses them")
 	flags.BoolVar(&o.enabled, "enabled", true, "park enabled")
-	flags.BoolVar(&o.brief, "brief", false, "status/reconcile: bounded transport summary without transcript bodies")
+	flags.BoolVar(&o.brief, "brief", action == "status" || action == "reconcile", "status/reconcile: bounded transport summary; --brief=false includes full history")
 	flags.BoolVar(&o.discard, "discard", false, "explicitly discard uncertain pending publication, retaining its consumed sequence")
 	flags.BoolVar(&o.resend, "resend", false, "explicitly supplement uncertain pending with its ORIGINAL sequence")
 	defaultTimeout := 30
-	if action == "exchange" {
+	if action == "wait" || action == "exchange" {
 		defaultTimeout = 3600
 	}
 	flags.IntVar(&o.timeout, "timeout", defaultTimeout, "foreground wait seconds (0 or 1–21600); 0 waits until cancellation; hook park remains at most 30 seconds")
@@ -92,6 +92,21 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if o.to != "" {
 			return errors.New("exchange sends to the peer only; use send --to @user for escalation")
 		}
+	}
+	// Use the same documented runtime vocabulary for setup and session commands.
+	// Validate before workspace discovery or creation can have side effects.
+	for _, runtimeFlag := range []struct {
+		name  string
+		value *string
+	}{{"--runtime", &o.kind}, {"--peer-runtime", &o.peer}} {
+		if *runtimeFlag.value == "" || action == "install" && runtimeFlag.name == "--runtime" {
+			continue
+		}
+		kind, ok := parseRuntimeToken(*runtimeFlag.value)
+		if !ok {
+			return fmt.Errorf("invalid %s; choose claude (cc), codex, or grok", runtimeFlag.name)
+		}
+		*runtimeFlag.value = string(kind)
 	}
 	o.slot = normalizeSlot(o.slot)
 	if action == "hook" {
@@ -193,11 +208,15 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if err != nil {
 			return fmt.Errorf("%w; publication uncertain: retry with the SAME --id %s, not a new ID", err, o.id)
 		}
-		if action == "exchange" {
-			return finishExchange(ctx, c, o, msg, text, out, diagnostic)
-		}
-		if err := writeJSON(out, msg); err != nil {
+		if err := validatePublicationReceipt(c, o, msg, text); err != nil {
 			return err
+		}
+		if action == "exchange" {
+			return finishExchange(ctx, c, o, msg, out, diagnostic)
+		}
+		receipt := publicationReceipt{Published: msg.ID, ClientID: o.id, State: msg.State, To: msg.To}
+		if err := writeJSON(out, receipt); err != nil {
+			return fmt.Errorf("publication %s confirmed but receipt output failed: %w; recover only with the SAME --id %s", msg.ID, err, o.id)
 		}
 		writeQueuedDeliveryHint(ctx, diagnostic, c, msg)
 		return nil
@@ -375,8 +394,15 @@ func bindCommand(root, endpoint, room string, slot model.ActorID) string {
 	return command + " --service-file " + quoteShellPath(endpoint) + " --repo " + quoteShellPath(root)
 }
 
-func localBindCommand(room string, slot model.ActorID) string {
-	return fmt.Sprintf("pairroom relay bind --room %s --slot %d", room, slotNumber(slot))
+func localBindCommand(endpoint, room string, slot model.ActorID) string {
+	command := fmt.Sprintf("pairroom relay bind --room %s --slot %d", room, slotNumber(slot))
+	// A fresh peer cannot infer a custom Service root from the creator's binding.
+	// Omit only the default endpoint, never a selector needed to find this Room.
+	standard, err := defaultEndpoint()
+	if err != nil || filepath.Clean(endpoint) != filepath.Clean(standard) {
+		command += " --service-file " + quoteShellPath(endpoint)
+	}
+	return command
 }
 
 func createRetryCommand(root, endpoint string, o options, slot model.ActorID) string {
@@ -561,7 +587,7 @@ func resolveSlotDefaults(root string, o *options) error {
 		if err := readPrivate(path, &s); err != nil {
 			return err
 		}
-		if !s.Slot.ValidParticipant() || !safePart(s.Room) || s.Generation == 0 || s.SessionID == "" {
+		if s.Schema != 2 || !s.Slot.ValidParticipant() || !safePart(s.Room) || s.Generation == 0 || s.SessionID == "" {
 			continue
 		}
 		all = append(all, candidate{room: s.Room, slot: s.Slot, harnessPID: s.HarnessPID, harness: s.HarnessName})
