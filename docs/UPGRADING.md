@@ -74,8 +74,10 @@ acceptance remains a separate release gate.
 Update the CLI, Service and distributed relay skill together. In the intended
 Grok session, run `pairroom relay install` (or explicit `--runtime grok` for
 setup), then review the exact project hook and trust decision in Grok before
-binding. Installation adds `.grok/hooks/pairroom.json` and the Grok skill; it
-does not modify native provider/model configuration or grant folder trust.
+binding. Grok Build reuses Claude Code project hooks by default, so install
+writes `.grok/hooks/pairroom.json` only when no Claude Code PairRoom Stop hook
+is present; it always writes the Grok skill. It does not modify native
+provider/model configuration or grant folder trust.
 See [Grok Build Native](CLI_REFERENCE.md#grok-build-native) for create/join and
 the clipped-reply/foreground-collection boundaries.
 

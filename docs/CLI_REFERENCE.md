@@ -164,12 +164,12 @@ Create a Room with host mode **Native** in Management, or let the first session 
 
 ```bash
 pairroom relay install                           # external OK; prompts a multi-select at a terminal, otherwise pass --runtime
-pairroom relay install --runtime claude,codex     # comma-separated; cc|claude, codex, grok (each runtime gets its own hooks; grok uses .grok/hooks)
+pairroom relay install --runtime claude,codex     # comma-separated; cc|claude, codex, grok (Grok reuses Claude Code hooks by default)
 pairroom relay bind --create --name "<topic>"    # creator: project + native Room + bind; prints peer_join and peer_join_local
 pairroom relay bind                              # peer: zero-flag inside a recognized session
 ```
 
-`relay install` does not require a native session: run it from any terminal in the Project's worktree. With `--runtime` it installs those harnesses (comma-separated `cc|claude`, `codex`, `grok`); inside a recognized session it infers the harness; at an interactive terminal without `--runtime` it prompts a multi-select; non-interactively without `--runtime` it fails listing the options instead of hanging. Each selected runtime gets its own project hook (Claude Code `.claude/settings.json`, Codex `.codex/hooks.json`, Grok `.grok/hooks/pairroom.json`) and skill directory. Skill roots honor `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `GROK_HOME` respectively; hook files remain project-local.
+`relay install` does not require a native session: run it from any terminal in the Project's worktree. With `--runtime` it installs those harnesses (comma-separated `cc|claude`, `codex`, `grok`); inside a recognized session it infers the harness; at an interactive terminal without `--runtime` it prompts a multi-select; non-interactively without `--runtime` it fails listing the options instead of hanging. Codex writes `.codex/hooks.json`. Claude Code writes `.claude/settings.json`. Grok Build reuses Claude Code project hooks by default, so a combined Claude Code+Grok install, or a Grok install when that Claude Code PairRoom Stop hook already exists, skips `.grok/hooks/pairroom.json` to avoid a second Stop command; a Grok-only install still writes the Grok file. Installing Claude Code when a PairRoom Grok hook file already exists prints that reuse notice and, at an interactive terminal, offers to remove the extra Grok hook. If `[compat.claude] hooks` is disabled, Grok install writes the Grok file even when Claude Code hooks are present. Each selected runtime still gets its skill directory. Skill roots honor `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `GROK_HOME` respectively; hook files remain project-local.
 
 Run each bind as a tool call inside its intended native session: the official harnesses expose the current session ID to tool-call subprocesses (Claude Code sets `CLAUDE_CODE_SESSION_ID`; Codex sets `CODEX_SESSION_ID`; Grok sets `GROK_SESSION_ID`), and bind associates that session immediately. In a detached or plain terminal where the variable is absent, bind fails closed with guidance to run it inside the session; there is no fallback. Durable slots are `slot1` / `slot2` (Agent 1 / Agent 2); `--slot 1|2` and `agent1|agent2` are canonical CLI forms, while `claude`/`codex` are input aliases normalized before persistence. Slot names never denote the selected Runtime. Omitted `--room` resolves the workspace's sole active native Room; omitted `--slot` resolves only when exactly one Room slot runs the caller's harness runtime; anything ambiguous fails with the candidate list instead of guessing. Bind stdout contains no long-lived secret. No installed Stop hook means bind is rejected. See [Native relay setup and usage](NATIVE_RELAY.md) for installation and approval steps. Native configuration selections are display-only, and PairRoom never starts or interrupts either process.
 
@@ -241,9 +241,12 @@ Hook installation/approval and official session association remain required. `--
 
 Run setup and binding through the existing Grok session's own terminal tool.
 `pairroom relay install` infers Grok where the native session/lineage is visible;
-`--runtime grok` is the explicit setup fallback. It writes only PairRoom's
-entries in the project's `.grok/hooks/pairroom.json` and installs the relay skill
-under `$GROK_HOME/skills` (default `~/.grok/skills`). Existing hooks/configuration
+`--runtime grok` is the explicit setup fallback. Grok Build's Claude Code
+compatibility layer runs `.claude/settings.json` hooks by default, so PairRoom
+writes `.grok/hooks/pairroom.json` only when no Claude Code PairRoom Stop hook is
+present (or when that compatibility is disabled). Combined Claude Code+Grok
+setup uses the Claude Code hook alone. The relay skill still installs under
+`$GROK_HOME/skills` (default `~/.grok/skills`). Existing hooks/configuration
 are preserved. Review `/hooks` and press `r` to reload after installation; project trust is a human decision via
 `/hooks-trust`, not a permission PairRoom can grant.
 

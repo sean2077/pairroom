@@ -72,6 +72,32 @@ func TestGrokInstallOwnsOnlyItsProjectFileAndUserSkill(t *testing.T) {
 	}
 }
 
+func TestGrokBindAcceptsSharedClaudePairRoomHook(t *testing.T) {
+	root, endpoint, created := createBindFixture(t, model.RuntimeGrok)
+	*created = 1
+	if err := editHooks(root, model.RuntimeClaude, false); err != nil {
+		t.Fatal(err)
+	}
+	stubLineage(t, 42, "grok", true)
+	t.Setenv("GROK_SESSION_ID", "official-session")
+	var out bytes.Buffer
+	if err := bind(context.Background(), root, options{room: "room1", slot: "slot1", endpoint: endpoint}, &out); err != nil {
+		t.Fatalf("Grok bind rejected a shared Claude Code hook: %v", err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"hookEventName": "stop", "hook_event_name": "Stop", "sessionId": "official-session", "cwd": root,
+		"workspaceRoot": root, "reason": "end_turn", "lastAssistantMessage": "@codex shared",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hookOut, diagnostic bytes.Buffer
+	err = Run(context.Background(), []string{"hook", "--runtime", "claude"}, bytes.NewReader(payload), &hookOut, &diagnostic)
+	if err == nil && strings.TrimSpace(hookOut.String()) == "{}" {
+		t.Fatalf("Claude command ignored Grok Stop; diagnostic=%s", diagnostic.String())
+	}
+}
+
 func TestGrokCreatorInfersOwnRuntimeWithPeerSelection(t *testing.T) {
 	isolateCaller(t)
 	t.Setenv("GROK_SESSION_ID", "own")

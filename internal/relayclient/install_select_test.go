@@ -40,7 +40,7 @@ func TestRunInstallGrokUsesOwnHooks(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	var out bytes.Buffer
-	if err := runInstall(root, []model.RuntimeKind{model.RuntimeGrok}, &out); err != nil {
+	if err := runInstall(root, []model.RuntimeKind{model.RuntimeGrok}, strings.NewReader(""), &out, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	// Grok is a real native runtime with its own hook path, not Claude Code's.
@@ -62,20 +62,101 @@ func TestRunInstallMultipleRuntimesDedupesAndKeepsOrder(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	var out bytes.Buffer
-	if err := runInstall(root, []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok, model.RuntimeClaude}, &out); err != nil {
+	if err := runInstall(root, []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok, model.RuntimeClaude}, strings.NewReader(""), &out, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{
 		filepath.Join(root, ".claude", "settings.json"),
 		filepath.Join(root, ".codex", "hooks.json"),
-		filepath.Join(root, ".grok", "hooks", "pairroom.json"),
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("missing %s: %v", path, err)
 		}
 	}
-	if !strings.Contains(out.String(), `"installed":["claude","codex","grok"]`) {
-		t.Fatalf("installed list wrong (dedup/order): %s", out.String())
+	if _, err := os.Stat(filepath.Join(root, ".grok", "hooks", "pairroom.json")); err == nil {
+		t.Fatal("claude+grok install wrote a second Grok hook file")
+	}
+	if !strings.Contains(out.String(), `"installed":["claude","codex","grok"]`) || !strings.Contains(out.String(), `"hooks_skipped":["grok"]`) {
+		t.Fatalf("installed list wrong (dedup/order/skip): %s", out.String())
+	}
+}
+
+func TestRunInstallGrokSkipsHooksWhenClaudeAlreadyPresent(t *testing.T) {
+	IsolateNativeCaller(t)
+	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := editHooks(root, model.RuntimeClaude, false); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runInstall(root, []model.RuntimeKind{model.RuntimeGrok}, strings.NewReader(""), &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".grok", "hooks", "pairroom.json")); err == nil {
+		t.Fatal("grok install wrote hooks despite an existing Claude PairRoom hook")
+	}
+	if !strings.Contains(out.String(), `"hooks_skipped":["grok"]`) {
+		t.Fatalf("missing skip: %s", out.String())
+	}
+	if err := installed(root, model.RuntimeGrok); err != nil {
+		t.Fatalf("shared Claude hook should satisfy Grok bind: %v", err)
+	}
+}
+
+func TestRunInstallWritesGrokHooksWhenClaudeCompatDisabled(t *testing.T) {
+	IsolateNativeCaller(t)
+	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("GROK_CLAUDE_HOOKS_ENABLED", "false")
+	if err := editHooks(root, model.RuntimeClaude, false); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runInstall(root, []model.RuntimeKind{model.RuntimeGrok}, strings.NewReader(""), &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".grok", "hooks", "pairroom.json")); err != nil {
+		t.Fatalf("compat-off grok install must write its own hooks: %v", err)
+	}
+	if strings.Contains(out.String(), `"hooks_skipped"`) {
+		t.Fatalf("skipped grok hooks while compatibility was off: %s", out.String())
+	}
+}
+
+func TestRunInstallClaudeLeavesRedundantGrokHooksWithoutTTY(t *testing.T) {
+	IsolateNativeCaller(t)
+	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := editHooks(root, model.RuntimeGrok, false); err != nil {
+		t.Fatal(err)
+	}
+	var out, diagnostic bytes.Buffer
+	if err := runInstall(root, []model.RuntimeKind{model.RuntimeClaude}, strings.NewReader("y\n"), &out, &diagnostic); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".grok", "hooks", "pairroom.json")); err != nil {
+		t.Fatal("non-TTY install removed Grok hooks without confirmation")
+	}
+	if !strings.Contains(diagnostic.String(), "second Grok hook file") && !strings.Contains(diagnostic.String(), "reuses Claude Code") {
+		t.Fatalf("missing cleanup guidance: %s", diagnostic.String())
+	}
+	if strings.Contains(out.String(), `"hooks_removed"`) {
+		t.Fatalf("non-TTY claimed a removal: %s", out.String())
+	}
+}
+
+func TestPromptRemoveRedundantGrokHooksAcceptsYes(t *testing.T) {
+	if !promptRemoveRedundantGrokHooks(strings.NewReader("yes\n"), io.Discard) {
+		t.Fatal("yes should confirm removal")
+	}
+	if promptRemoveRedundantGrokHooks(strings.NewReader("n\n"), io.Discard) {
+		t.Fatal("n should keep Grok hooks")
 	}
 }
 

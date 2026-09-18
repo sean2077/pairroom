@@ -124,7 +124,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if err != nil {
 			return err
 		}
-		return runInstall(root, kinds, out)
+		return runInstall(root, kinds, in, out, diagnostic)
 	}
 	if action == "bind" {
 		return bind(ctx, root, o, out)

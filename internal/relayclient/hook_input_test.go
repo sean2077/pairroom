@@ -46,6 +46,21 @@ func TestGrokHookNormalizesOnlyCompletedMainSession(t *testing.T) {
 	}
 }
 
+func TestGrokStopPayloadPromotesFromClaudeRuntimeDecode(t *testing.T) {
+	data := grokHookJSON(t, map[string]any{
+		"hookEventName": "stop", "hook_event_name": "Stop", "sessionId": "g", "cwd": "/w",
+		"workspaceRoot": "/w", "reason": "end_turn", "lastAssistantMessage": "@claude shared",
+	})
+	hook, err := decodeNativeHook(data, false)
+	if err != nil || hook.Event != "" {
+		t.Fatalf("Claude decode should ignore Grok camelCase: %+v %v", hook, err)
+	}
+	hook, err = decodeNativeHook(data, true)
+	if err != nil || hook.Event != "Stop" || hook.SessionID != "g" || hook.CWD != "/w" {
+		t.Fatalf("Grok decode lost Stop: %+v %v", hook, err)
+	}
+}
+
 func TestGrokHookRejectsConflictingIdentityAndForeignPayloads(t *testing.T) {
 	fields := map[string]any{"hookEventName": "stop", "hook_event_name": "Stop", "sessionId": "grok", "cwd": "/w", "reason": "end_turn", "lastAssistantMessage": "text"}
 	// Grok imports Claude hooks too; the compatibility invocation must be inert.
