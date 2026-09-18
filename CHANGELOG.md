@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+- Fix two Claude slots in one embedded Room sharing a single appended-system-prompt file: the prompt path now carries the durable actor identity and is staged through an atomic rename, so concurrent adapter starts can no longer serve the wrong bootstrap identity or a half-written file.
+
+- Unstick Codex rooms whose approval outlived its turn: a same-role `SetRole` assertion (made before every submission) is now a no-op — only a real role transition requires the safe turn boundary — and a terminal turn answers and drops its own unresolved approval requests instead of wedging every later submission behind a misleading "change role" error.
+
+- Drain adapter stdout/stderr readers before `cmd.Wait()` in all three vendor adapters so a final wire record (result / turn-completed JSON) is never lost to the pipe-close race; Grok's Stop now reports success once the kill path confirmed the process stopped, instead of surfacing the expired context as an uncertain close that strands the runtime's capacity slot.
+
+- Service hardening: crash debris in `service.lock` (a zero-byte or truncated file older than a conservative window, left by the create-to-write gap) is now cleared by the explicit `--recover-stale-lock`/daemon-start recovery, and lock errors name the manual exit instead of dead-ending; Room provisioning and Agent-pair-profile writes get a body limit (1 MiB) that fits their validated fields (two 64 KiB instruction blocks plus collaboration text), and oversized bodies return a real 413 `request_too_large` on both the Management and Room APIs; attachment removal deletes the manifest before the content, so a crash mid-removal degrades to a backup warning instead of refusing every later backup.
+
+- Native wake resolves the Codex executable from the configured command template instead of the Service's inherited PATH (daemon/Desktop launches could silently fail every wake with `command_unavailable`), Mock rooms stay fail-closed, and `relay status` now surfaces a local-only `last_hook_at` so "the Stop hook never fires" is distinguishable from "the hook fires but nothing routes".
+
+- Room UI reliability: the SSE heartbeat is now a named, client-visible event and the client enforces a 50-second silence watchdog, so a half-open connection (sleep/wake, VPN switch, suspended webview) reconnects instead of showing a permanently fake "Live"; toast dismiss buttons carry an accurate accessible name (en/zh).
+
+- Desktop daemon discovery and `pairroom daemon open` read a bounded tail window of the service log (one-time full-read fallback) instead of re-reading every rotated log fully on each 100 ms probe; `install.sh` verifies the release `SHA256SUMS` before installing; `docs/STORAGE.md` no longer claims a `bootstrap` slot file that current binds never write.
+
 ## [v5.1.2] — 2026-09-18
 
 - Restore vendor-neutral wording in the distributable `pairroom-relay` onboarding skill: the free-wake reachability default and Grok's shared project-hook behavior are now expressed in harness-capability terms instead of naming Claude Code/Grok Build, keeping the published-payload canary (`scripts/test_native_setup.js`) green after earlier commits reintroduced vendor names that a persistently failing race stage had masked in CI. This unblocks the `release.yml` payload gate that stopped the v5.1.1 tag from publishing.
