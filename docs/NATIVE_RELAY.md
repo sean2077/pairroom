@@ -153,7 +153,11 @@ process death releases it.
 `queued` means durably accepted; `delivering` precedes envelope release;
 `handed_off` means the CLI wrote stdout and acknowledged it, not that the model
 read, accepted or completed anything. Lost output/ack and collector death can
-become `unknown`. Do not automatically replay possibly executed effects.
+become `unknown`. While no explicit Retry is pending, the original claimer's
+receipt-matched acknowledgement still settles an `unknown` delivery to
+`handed_off`; a pending Retry blocks that late acknowledgement, and without
+the receipt `unknown` stays a diagnostic state. Do not automatically replay
+possibly executed effects.
 A body that reached a collector's stdout but not the model — for example a
 detached background waiter whose output the harness never surfaced — stays
 terminally `handed_off`; no later `relay wait` can re-collect it. Recovery is

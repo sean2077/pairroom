@@ -27,6 +27,7 @@ type options struct {
 	repo, room, slot, kind, endpoint, text, id, to string
 	name, peer                                     string
 	replace, purge, enabled, discard, resend       bool
+	localOnly                                      bool
 	create, brief                                  bool
 	timeout                                        int
 	attachments                                    stringsFlag
@@ -61,6 +62,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.BoolVar(&o.brief, "brief", action == "status" || action == "reconcile", "status/reconcile: bounded transport summary; --brief=false includes full history")
 	flags.BoolVar(&o.discard, "discard", false, "explicitly discard uncertain pending publication, retaining its consumed sequence")
 	flags.BoolVar(&o.resend, "resend", false, "explicitly supplement uncertain pending with its ORIGINAL sequence")
+	flags.BoolVar(&o.localOnly, "local-only", false, "unbind: remove local binding files without contacting the Service; the server-side binding stays active until an explicit unbind or replace")
 	defaultTimeout := 30
 	if action == "wait" || action == "exchange" {
 		defaultTimeout = 3600
@@ -78,6 +80,9 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	}
 	if o.brief && action != "status" && action != "reconcile" {
 		return errors.New("--brief applies only to status or reconcile")
+	}
+	if o.localOnly && action != "unbind" {
+		return errors.New("--local-only applies only to unbind")
 	}
 	// Reject collection options before workspace I/O or any publication.
 	if action == "wait" || action == "exchange" {
@@ -135,6 +140,11 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	dir, err := secureDir(root, ".pairroom", "rooms", o.room, "slots", o.slot)
 	if err != nil {
 		return err
+	}
+	if action == "unbind" && o.localOnly {
+		// Offline path: never reads the endpoint file, so a stopped or
+		// unreachable Service cannot block local cleanup.
+		return unbindLocalOnly(ctx, root, dir, o, out)
 	}
 	release, err := lockSlot(ctx, dir)
 	if err != nil {
@@ -305,6 +315,53 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		return fmt.Errorf("unknown relay operation %q", action)
 	}
 }
+
+// unbindLocalOnly removes this slot's local binding files without contacting
+// the Service. The server-side binding and its generation remain ACTIVE — the
+// slot stays occupied and only loses its local credentials — until an explicit
+// `pairroom relay unbind` or a `bind --replace` from the intended session.
+func unbindLocalOnly(ctx context.Context, root, dir string, o options, out io.Writer) error {
+	release, err := lockSlot(ctx, dir)
+	if err != nil {
+		return err
+	}
+	defer release()
+	cleanupAtomicTemps(dir)
+	var state State
+	if err := readPrivate(filepath.Join(dir, "state.json"), &state); err != nil {
+		return fmt.Errorf("read local binding state: %w", err)
+	}
+	if state.Schema != 2 || !state.Slot.ValidParticipant() {
+		return errors.New("invalid local relay state identity")
+	}
+	for _, name := range []string{"state.json", "credentials", "bootstrap", bindAttemptFile} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	result := map[string]any{
+		"unbound": "local-only",
+		"notice":  "local binding files removed without contacting the Service; the server-side binding stays active and the slot remains occupied until an explicit `pairroom relay unbind` or `pairroom relay bind --replace`",
+	}
+	if o.purge {
+		states, err := statePaths(root)
+		if err != nil {
+			return err
+		}
+		for _, path := range states {
+			var s State
+			if readPrivate(path, &s) == nil && s.Runtime == state.Runtime {
+				result["hooks_preserved"] = "another local binding uses this runtime"
+				return writeJSON(out, result)
+			}
+		}
+		if err := editHooks(root, state.Runtime, true); err != nil {
+			return err
+		}
+	}
+	return writeJSON(out, result)
+}
+
 func safePart(s string) bool {
 	if s == "" || s == "." || s == ".." {
 		return false

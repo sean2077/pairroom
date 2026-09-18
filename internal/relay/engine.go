@@ -761,6 +761,22 @@ func (e *Engine) Ack(a Auth, id, receipt string) error {
 	if m.State == "handed_off" {
 		return nil
 	}
+	if m.State == "unknown" {
+		// Owner-approved late acknowledgement: the per-claim receipt was issued
+		// only to this collector and the binding generation plus session were
+		// re-authenticated above, so a matching receipt proves the envelope
+		// reached stdout even after the lease expired. A live explicit Retry
+		// still wins: settling the original behind a pending retry would
+		// duplicate work the operator already re-queued.
+		for _, other := range e.messages {
+			if other.RetryOf == id && (other.State == "queued" || other.State == "delivering") {
+				return errors.New("an explicit Retry is pending; resolve it before acknowledging the original delivery")
+			}
+		}
+		m.State = "handed_off"
+		m.UpdatedAt = e.cfg.Now()
+		return e.append(EventMessage, a.Slot, messageFact{Message: m, Receipt: receipt})
+	}
 	if m.State != "delivering" {
 		return errors.New("delivery outcome is unknown; inspect before explicit Retry")
 	}

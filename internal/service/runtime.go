@@ -7,6 +7,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/sean2077/pairroom/internal/model"
 )
 
 const (
@@ -748,59 +750,76 @@ func (m *RuntimeManager) dispatchLocked() {
 		return
 	}
 	for len(m.queue) > 0 {
-		roomID := m.queue[0]
+		idx := m.nextDispatchIndexLocked()
+		if idx < 0 {
+			victimID, victim := m.idleLRULocked()
+			if victim == nil {
+				return // all capacity is starting, stopping, or busy; FIFO remains visible
+			}
+			runtime := victim.runtime
+			victim.phase = RuntimeStopping
+			victim.requested = false
+			victim.generation++
+			generation := victim.generation
+			m.wg.Add(1)
+			go func(id string, rt RoomRuntime, gen uint64) {
+				defer m.wg.Done()
+				ctx, cancel := context.WithTimeout(context.Background(), m.cfg.CloseTimeout)
+				err := rt.Close(ctx)
+				cancel()
+				m.finishStop(id, gen, err)
+			}(victimID, runtime, generation)
+			return
+		}
+		roomID := m.queue[idx]
 		entry := m.entries[roomID]
+		m.queue = append(m.queue[:idx], m.queue[idx+1:]...)
 		if entry == nil || entry.phase != RuntimeQueued {
-			m.queue = m.queue[1:]
 			continue
 		}
 		if _, deleting := m.deleting[roomID]; deleting {
-			m.queue = m.queue[1:]
 			entry.phase = RuntimeSuspended
 			entry.requested = false
 			continue
 		}
-		if m.capacityLocked() < m.cfg.Limit {
-			m.queue = m.queue[1:]
-			room, ok := m.registry.Room(roomID)
-			if !ok || room.Archived() {
-				entry.phase = RuntimeFailed
-				entry.lastError = "room no longer exists or is archived"
-				m.signalLocked()
-				continue
-			}
-			entry.phase = RuntimeStarting
-			entry.requested = false
-			entry.generation++
-			generation := entry.generation
-			m.wg.Add(1)
-			go func(id string, value Room, gen uint64) {
-				defer m.wg.Done()
-				runtime, err := m.factory(m.ctx, value)
-				m.finishStart(id, gen, runtime, err)
-			}(roomID, room, generation)
+		room, ok := m.registry.Room(roomID)
+		if !ok || room.Archived() {
+			entry.phase = RuntimeFailed
+			entry.lastError = "room no longer exists or is archived"
+			m.signalLocked()
 			continue
 		}
-
-		victimID, victim := m.idleLRULocked()
-		if victim == nil {
-			return // all capacity is starting, stopping, or busy; FIFO remains visible
-		}
-		runtime := victim.runtime
-		victim.phase = RuntimeStopping
-		victim.requested = false
-		victim.generation++
-		generation := victim.generation
+		entry.phase = RuntimeStarting
+		entry.requested = false
+		entry.generation++
+		generation := entry.generation
 		m.wg.Add(1)
-		go func(id string, rt RoomRuntime, gen uint64) {
+		go func(id string, value Room, gen uint64) {
 			defer m.wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), m.cfg.CloseTimeout)
-			err := rt.Close(ctx)
-			cancel()
-			m.finishStop(id, gen, err)
-		}(victimID, runtime, generation)
-		return
+			runtime, err := m.factory(m.ctx, value)
+			m.finishStart(id, gen, runtime, err)
+		}(roomID, room, generation)
 	}
+}
+
+// nextDispatchIndexLocked returns the first queued Room that can start now.
+// Native-hosted Rooms skip the capacity FIFO so a busy embedded Room cannot
+// starve a long-lived native wait; capacity-consuming Rooms keep their order.
+func (m *RuntimeManager) nextDispatchIndexLocked() int {
+	atCapacity := m.capacityLocked() >= m.cfg.Limit
+	for i, roomID := range m.queue {
+		entry := m.entries[roomID]
+		if entry == nil || entry.phase != RuntimeQueued {
+			return i
+		}
+		if _, deleting := m.deleting[roomID]; deleting {
+			return i
+		}
+		if !atCapacity || m.nativeExemptLocked(roomID) {
+			return i
+		}
+	}
+	return -1
 }
 
 func (m *RuntimeManager) finishStart(roomID string, generation uint64, runtime RoomRuntime, err error) {
@@ -897,9 +916,24 @@ func (m *RuntimeManager) finishStop(roomID string, generation uint64, err error)
 	m.signalLocked()
 }
 
+// nativeExemptLocked reports whether the room is native-hosted. Native
+// runtimes own no vendor process — only a relay engine and a loopback
+// listener — so they neither consume nor free the embedded-capacity budget,
+// and a long-lived foreground relay wait can never starve an embedded Room.
+func (m *RuntimeManager) nativeExemptLocked(roomID string) bool {
+	if m.registry == nil {
+		return false
+	}
+	room, ok := m.registry.Room(roomID)
+	return ok && room.HostMode == model.HostNative
+}
+
 func (m *RuntimeManager) capacityLocked() int {
 	count := 0
-	for _, entry := range m.entries {
+	for roomID, entry := range m.entries {
+		if m.nativeExemptLocked(roomID) {
+			continue
+		}
 		switch entry.phase {
 		case RuntimeStarting, RuntimeActive, RuntimeStopping:
 			count++
@@ -918,6 +952,10 @@ func (m *RuntimeManager) idleLRULocked() (string, *runtimeEntry) {
 	for roomID, entry := range m.entries {
 		m.refreshUsageLocked(entry)
 		if entry.phase != RuntimeActive || entry.runtime == nil || entry.runtime.Busy() || runtimeInUse(entry.runtime) {
+			continue
+		}
+		if m.nativeExemptLocked(roomID) {
+			// Evicting an exempt runtime would not free a counted slot.
 			continue
 		}
 		if selected == nil || entry.lastUsed.Before(selected.lastUsed) || (entry.lastUsed.Equal(selected.lastUsed) && roomID < id) {
@@ -959,8 +997,9 @@ func (m *RuntimeManager) statusLocked(roomID string, entry *runtimeEntry) Runtim
 	status := RuntimeStatus{
 		RoomID: roomID, Phase: entry.phase, LastUsedAt: entry.lastUsed,
 		QueuedAt: entry.queuedAt, LastError: entry.lastError,
-		OccupiesCapacity: entry.phase == RuntimeStarting || entry.phase == RuntimeActive ||
-			entry.phase == RuntimeStopping || (entry.phase == RuntimeFailed && entry.runtime != nil),
+		OccupiesCapacity: !m.nativeExemptLocked(roomID) &&
+			(entry.phase == RuntimeStarting || entry.phase == RuntimeActive ||
+				entry.phase == RuntimeStopping || (entry.phase == RuntimeFailed && entry.runtime != nil)),
 	}
 	if entry.runtime != nil && entry.phase != RuntimeFailed {
 		status.Busy = entry.runtime.Busy()

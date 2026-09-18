@@ -52,6 +52,7 @@ type ManagementServer struct {
 	runtimes      *RuntimeManager
 	provisioner   BindingProvisioner
 	token         string
+	cliToken      string
 	agentResolver *AgentResolver
 	sessions      *websession.Store
 	http          *http.Server
@@ -71,6 +72,9 @@ type managementAuthContextKey struct{}
 type managementRequestAuth struct {
 	Mode    managementAuthMode
 	Session websession.Session
+	// Scoped marks the relay-setup token from relay-endpoint.json: it admits
+	// only the native setup routes, never full Management authority.
+	Scoped bool
 }
 
 type ServiceSummary struct {
@@ -138,6 +142,12 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 			return nil, err
 		}
 	}
+	// The relay CLI's endpoint-discovery file carries this scoped token
+	// instead of the full Management bearer: least privilege for native setup.
+	cliToken, err := randomServiceToken()
+	if err != nil {
+		return nil, err
+	}
 	assets, err := fs.Sub(managementAssets, "assets")
 	if err != nil {
 		return nil, fmt.Errorf("open Management Shell assets: %w", err)
@@ -148,7 +158,7 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	}
 	server := &ManagementServer{
 		registry: cfg.Registry, runtimes: cfg.Runtimes,
-		provisioner: cfg.Provisioner, token: token, sessions: sessions, agentResolver: cfg.AgentResolver,
+		provisioner: cfg.Provisioner, token: token, cliToken: cliToken, sessions: sessions, agentResolver: cfg.AgentResolver,
 	}
 	if server.agentResolver == nil {
 		if native, ok := cfg.Provisioner.(*NativeProvisioner); ok {
@@ -204,7 +214,7 @@ func (s *ManagementServer) Serve(listener net.Listener) error {
 	if listener == nil {
 		return errors.New("Management Shell listener is required")
 	}
-	endpoint := relay.Endpoint{URL: "http://" + listener.Addr().String(), Token: s.token}
+	endpoint := relay.Endpoint{URL: "http://" + listener.Addr().String(), Token: s.cliToken}
 	if err := relay.WriteEndpoint(s.registry.Root(), endpoint); err != nil {
 		return fmt.Errorf("write relay Service discovery: %w", err)
 	}
@@ -237,7 +247,7 @@ func (s *ManagementServer) BrowserURL(address net.Addr) string {
 
 func (s *ManagementServer) createBrowserSession(w http.ResponseWriter, r *http.Request) {
 	auth := managementAuthFromContext(r.Context())
-	if auth.Mode != managementAuthBearer {
+	if auth.Mode != managementAuthBearer || auth.Scoped {
 		writeManagementError(w, http.StatusForbidden, "a bearer bootstrap token is required")
 		return
 	}
@@ -417,6 +427,10 @@ func (s *ManagementServer) provisionRoom(w http.ResponseWriter, r *http.Request)
 		Agents             json.RawMessage               `json:"agents"`
 	}
 	if err := decodeManagementJSONLimit(w, r, &request, 1<<20); err != nil {
+		return
+	}
+	if managementAuthFromContext(r.Context()).Scoped && request.HostMode.ForCreation() != model.HostNative {
+		writeManagementError(w, http.StatusForbidden, "the relay setup token can create native Rooms only")
 		return
 	}
 	var agents map[model.ActorID]model.AgentSelection
@@ -923,6 +937,29 @@ func (s *ManagementServer) lockRoom(roomID string) func() {
 	return s.roomLocks.Lock(roomID)
 }
 
+// scopedRelaySetupRoute lists the exact Management operations the relay CLI
+// performs with the relay-endpoint.json token: read-only service/profile/
+// catalog discovery, Project registration, native Room creation, and the
+// native binding lifecycle. Everything else — including browser session
+// bootstrap — requires the full Management token or a browser session.
+func scopedRelaySetupRoute(method, path string) bool {
+	switch {
+	case method == http.MethodGet && (path == "/api/v1/service" || path == "/api/v1/agent-pair-profiles" || path == "/api/v1/agent-catalog"):
+		return true
+	case method == http.MethodPost && path == "/api/v1/projects":
+		return true
+	}
+	if rest, ok := strings.CutPrefix(path, "/api/v1/projects/"); ok && method == http.MethodPost {
+		return strings.HasSuffix(rest, "/rooms") && strings.Count(rest, "/") == 1
+	}
+	if rest, ok := strings.CutPrefix(path, "/api/v1/rooms/"); ok && method == http.MethodPost {
+		if _, slot, found := strings.Cut(rest, "/native-bindings/"); found {
+			return slot == "slot1" || slot == "slot2"
+		}
+	}
+	return false
+}
+
 func (s *ManagementServer) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/v1/relay/") {
@@ -939,9 +976,20 @@ func (s *ManagementServer) authenticate(next http.Handler) http.Handler {
 		}
 		authorization := strings.TrimSpace(r.Header.Get("Authorization"))
 		const prefix = "Bearer "
-		if strings.HasPrefix(authorization, prefix) && subtle.ConstantTimeCompare([]byte(strings.TrimSpace(strings.TrimPrefix(authorization, prefix))), []byte(s.token)) == 1 {
-			next.ServeHTTP(w, withManagementAuth(r, managementRequestAuth{Mode: managementAuthBearer}))
-			return
+		if strings.HasPrefix(authorization, prefix) {
+			presented := []byte(strings.TrimSpace(strings.TrimPrefix(authorization, prefix)))
+			if subtle.ConstantTimeCompare(presented, []byte(s.token)) == 1 {
+				next.ServeHTTP(w, withManagementAuth(r, managementRequestAuth{Mode: managementAuthBearer}))
+				return
+			}
+			if subtle.ConstantTimeCompare(presented, []byte(s.cliToken)) == 1 {
+				if !scopedRelaySetupRoute(r.Method, r.URL.Path) {
+					writeManagementError(w, http.StatusForbidden, "the relay setup token from relay-endpoint.json is scoped to service discovery, project registration, native Room creation, pair defaults, and native bindings")
+					return
+				}
+				next.ServeHTTP(w, withManagementAuth(r, managementRequestAuth{Mode: managementAuthBearer, Scoped: true}))
+				return
+			}
 		}
 		if value, ok := s.sessions.Get(w, r); ok {
 			next.ServeHTTP(w, withManagementAuth(r, managementRequestAuth{Mode: managementAuthBrowserSession, Session: value}))

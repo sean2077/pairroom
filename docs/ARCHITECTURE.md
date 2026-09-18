@@ -108,7 +108,7 @@ Both participants use the live workspace. Native permission profiles are the onl
 | Runtime cleanup uncertain | Retain its capacity claim rather than pretending it is suspended |
 | Graceful Service shutdown | Stop Management mutations, drain admitted work/native Turns, then close stores and release ownership |
 
-Runtime capacity limits active Rooms, not durable Room count. Idle reclamation frees processes without deleting history. It must not interrupt an active Turn merely to reclaim capacity. A browser disconnect or a hidden window is not proof that native work stopped.
+Runtime capacity limits active Rooms, not durable Room count. Idle reclamation frees processes without deleting history. It must not interrupt an active Turn merely to reclaim capacity. A browser disconnect or a hidden window is not proof that native work stopped. Native-hosted Rooms run no vendor process — only a relay engine and a loopback listener — so they are exempt from the active-runtime capacity budget: they never queue behind embedded Rooms, never occupy a slot, and are never chosen as eviction victims; the limit bounds embedded Rooms that own vendor adapters.
 
 Desktop ownership follows the same Service rules: explicit validated URL, installed daemon, or embedded Service when no daemon exists. Crash-stale lock recovery first proves the recorded PID is gone; live owners fail closed. Desktop never installs a daemon on launch. [Operations](OPERATIONS.md#desktop-lifecycle) owns user-visible close/quit/login behavior and operational commands.
 

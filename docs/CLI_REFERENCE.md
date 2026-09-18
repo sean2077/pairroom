@@ -115,6 +115,7 @@ The following names are extracted from `cmd/pairroom/*.go`. Use them to find omi
 - `--json`
 - `--listen`
 - `--live`
+- `--local-only`
 - `--log-file`
 - `--mock`
 - `--n`
@@ -193,6 +194,7 @@ All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Norma
 | `reconcile` | Reconcile pending publication and return a bounded summary by default; clear accepted, supplement definite absence with same sequence, otherwise retain unknown |
 | `reconcile --resend` / `--discard` | Explicit decision on an unknown pending publication; resend retains original key, discard retains consumed sequence |
 | `unbind --purge-hooks` | Revoke binding, remove slot files and remove only owned hooks when no other local slot uses them |
+| `unbind --local-only` | Offline exit: remove the local slot files without contacting the Service; the server-side binding and generation stay active (the slot remains occupied) until an explicit unbind or `bind --replace` |
 | `hook --runtime <kind>` | Official hook JSON on stdin; publishes Stop first, then bounded park; not a user-authored identity shortcut |
 
 Park defaults to 30 seconds: Claude/Codex allow eight message-bearing blocks; Grok allows seven readiness/recovery hints, reserving its final publication gate. Outside this window, use foreground wait or a native human nudge. Unknown delivery must be inspected before the Room's explicit Retry. Same-turn send/exchange plus a peer-directed final reply deliberately creates two publications; omit that handle after explicit publication unless the second full reply is intended.
