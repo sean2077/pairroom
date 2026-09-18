@@ -367,6 +367,9 @@ func (n *nativeHostRuntime) events(w http.ResponseWriter, r *http.Request) {
 	// Bound each write so a stuck client cannot pin the stream goroutine
 	// indefinitely; the native UI reconnects and re-reads the snapshot.
 	rc := http.NewResponseController(w)
+	// Clear the per-write deadlines when the stream ends so a reused
+	// keep-alive connection never inherits a stale absolute deadline.
+	defer func() { _ = rc.SetWriteDeadline(time.Time{}) }()
 	var cursor uint64
 	for {
 		sequence := n.engine.Sequence()

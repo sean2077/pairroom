@@ -292,6 +292,18 @@ func (r *AgentResolver) CachedCatalog(ctx context.Context) AgentCatalog {
 	return catalog
 }
 
+// RefreshCatalog forces a fresh scan and repopulates the GET cache, so an
+// explicit refresh is immediately visible to every reader.
+func (r *AgentResolver) RefreshCatalog(ctx context.Context) AgentCatalog {
+	catalog := r.Catalog(ctx)
+	r.catalogMu.Lock()
+	stored := catalog
+	r.catalogCache = &stored
+	r.catalogCachedAt = time.Now()
+	r.catalogMu.Unlock()
+	return catalog
+}
+
 func (r *AgentResolver) Catalog(ctx context.Context) AgentCatalog {
 	result := AgentCatalog{Schema: 1, GeneratedAt: time.Now().UTC(), Defaults: r.DefaultSelections()}
 	result.CollaborationDefault, _ = (model.Collaboration{}).ForCreation()

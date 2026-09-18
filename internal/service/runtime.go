@@ -129,7 +129,12 @@ type runtimeEntry struct {
 	lastError      string
 	requested      bool
 	drainRequested bool
-	generation     uint64
+	// fatalStop marks a stop initiated by reconcile's RuntimeHealth check.
+	// finishStop must not resurrect such a runtime through the retryable
+	// drain-aborted path, or the room oscillates between Active and Stopping
+	// and the fatal reason intermittently disappears from Status.
+	fatalStop  bool
+	generation uint64
 }
 
 type RuntimeManager struct {
@@ -697,6 +702,7 @@ func (m *RuntimeManager) reconcile() {
 					// cleanup is uncertain.
 					entry.lastError = err.Error()
 					entry.requested = false
+					entry.fatalStop = true
 					entry.phase = RuntimeStopping
 					entry.generation++
 					generation := entry.generation
@@ -842,6 +848,17 @@ func (m *RuntimeManager) finishStop(roomID string, generation uint64, err error)
 	}
 	if err != nil {
 		if errors.Is(err, ErrRuntimeDrainAborted) {
+			if entry.fatalStop {
+				// A fatal runtime must not oscillate back to Active: keep it
+				// failed with its reason (retaining the runtime and capacity
+				// slot) so Status stays honest and no second runtime is
+				// started for the same durable bindings.
+				entry.phase = RuntimeFailed
+				entry.requested = false
+				m.dispatchLocked()
+				m.signalLocked()
+				return
+			}
 			// The runtime guarantees that it did not cross its irreversible close
 			// boundary. Restore it as active and let the caller retry after the
 			// racing mutation settles; this is not cleanup uncertainty.
@@ -865,6 +882,7 @@ func (m *RuntimeManager) finishStop(roomID string, generation uint64, err error)
 	}
 	entry.runtime = nil
 	entry.drainRequested = false
+	entry.fatalStop = false
 	entry.lastError = ""
 	if entry.requested && !m.closed {
 		entry.phase = RuntimeQueued

@@ -324,7 +324,7 @@ func (s *ManagementServer) readAgentCatalog(w http.ResponseWriter, r *http.Reque
 	// endpoint always forces a fresh scan.
 	catalog := s.agentResolver.CachedCatalog(r.Context())
 	if r.Method == http.MethodPost {
-		catalog = s.agentResolver.Catalog(r.Context())
+		catalog = s.agentResolver.RefreshCatalog(r.Context())
 	}
 	writeManagementJSON(w, http.StatusOK, catalog)
 }

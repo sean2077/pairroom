@@ -634,7 +634,12 @@ func (r *embeddedRuntime) close(ctx context.Context) (error, bool) {
 		}
 	}
 	if r.serveDone != nil {
-		if err := <-r.serveDone; err != nil {
+		if err := <-r.serveDone; err != nil && r.serveFatal.Load() == nil {
+			// A failure already recorded in serveFatal was surfaced through
+			// Fatal(); joining it again here would turn a diagnosed dead
+			// listener into an "uncertain" close that pins the capacity slot
+			// until a Service restart even though nothing vendor-owned is
+			// left to be uncertain about.
 			result = errors.Join(result, fmt.Errorf("serve Room View: %w", err))
 		}
 	}
