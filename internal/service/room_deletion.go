@@ -583,10 +583,10 @@ func (r *Registry) inspectDeletionEntry(entry os.DirEntry) (inspectedDeletionEnt
 		// The quarantine is an internal recovery journal. Unknown files or
 		// symlinks are preserved and fail startup rather than being treated as
 		// disposable debris; deleting them would cross the recovery trust boundary.
-		return state, errors.New("unrecognized non-directory quarantine entry")
+		return state, fmt.Errorf("unrecognized non-directory quarantine entry %q; after confirming no PairRoom deletion is in progress, move it out of the deleted-rooms quarantine root %s, then restart", state.name, r.deletedRoomsRoot)
 	}
 	if !strings.HasPrefix(state.name, ".pending-") {
-		return state, errors.New("unrecognized quarantine directory name")
+		return state, fmt.Errorf("unrecognized quarantine directory name %q; after confirming no PairRoom deletion is in progress, move it out of the deleted-rooms quarantine root %s, then restart", state.name, r.deletedRoomsRoot)
 	}
 
 	children, err := r.roomDeletionFS.readDir(state.path)
@@ -606,7 +606,7 @@ func (r *Registry) inspectDeletionEntry(entry os.DirEntry) (inspectedDeletionEnt
 			continue
 		}
 		if _, ok := known[child.Name()]; !ok {
-			return state, fmt.Errorf("contains unrecognized entry %q", child.Name())
+			return state, fmt.Errorf("contains unrecognized entry %q; after confirming no PairRoom deletion is in progress, move it out of quarantine directory %s, then restart", child.Name(), state.path)
 		}
 		known[child.Name()] = true
 	}

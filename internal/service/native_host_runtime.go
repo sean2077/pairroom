@@ -26,22 +26,25 @@ import (
 )
 
 type nativeHostRuntime struct {
-	room      Room
-	project   Project
-	engine    *relay.Engine
-	media     *attachment.Store
-	token     string
-	baseURL   string
-	sessions  *websession.Store
-	http      *http.Server
-	cancel    context.CancelFunc
-	wakeCtx   context.Context
-	waker     *nativeWaker
-	done      chan struct{}
-	active    atomic.Int64
-	last      atomic.Int64
-	closeOnce sync.Once
-	closeErr  error
+	room     Room
+	project  Project
+	engine   *relay.Engine
+	media    *attachment.Store
+	token    string
+	baseURL  string
+	sessions *websession.Store
+	http     *http.Server
+	cancel   context.CancelFunc
+	wakeCtx  context.Context
+	waker    *nativeWaker
+	done     chan struct{}
+	active   atomic.Int64
+	last     atomic.Int64
+	// serveFatal records an unexpected Room listener failure so Fatal can
+	// surface it instead of leaving a silently dead HTTP surface behind.
+	serveFatal atomic.Pointer[error]
+	closeOnce  sync.Once
+	closeErr   error
 }
 
 func startNativeHostRuntime(ctx context.Context, registry *Registry, project Project, durable Room, host string, wakeConfig nativeWakerConfig) (_ RoomRuntime, resultErr error) {
@@ -102,7 +105,12 @@ func startNativeHostRuntime(ctx context.Context, registry *Registry, project Pro
 	webui.Mount(mux)
 	mux.HandleFunc("/", n.serve)
 	n.http = &http.Server{BaseContext: func(net.Listener) context.Context { return runCtx }, Handler: n.boundary(mux), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 20 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
-	go func() { _ = n.http.Serve(listener) }()
+	go func() {
+		if err := n.http.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			wrapped := fmt.Errorf("native Room listener failed: %w", err)
+			n.serveFatal.Store(&wrapped)
+		}
+	}()
 	go func() {
 		defer close(n.done)
 		ticker := time.NewTicker(time.Second)
@@ -126,6 +134,15 @@ func (n *nativeHostRuntime) Busy() bool              { return n.engine.Busy() }
 func (n *nativeHostRuntime) InUse() bool             { return n.active.Load() > 0 }
 func (n *nativeHostRuntime) LastActivity() time.Time { return time.Unix(0, n.last.Load()) }
 func (n *nativeHostRuntime) SetDraining(v bool)      { n.engine.SetDraining(v) }
+func (n *nativeHostRuntime) Fatal() error {
+	if err := n.engine.Fatal(); err != nil {
+		return err
+	}
+	if p := n.serveFatal.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
 func (n *nativeHostRuntime) scheduleWake(messageID string) {
 	if n == nil || n.waker == nil || n.wakeCtx == nil || strings.TrimSpace(messageID) == "" {
 		return
@@ -347,11 +364,18 @@ func (n *nativeHostRuntime) events(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
+	// Bound each write so a stuck client cannot pin the stream goroutine
+	// indefinitely; the native UI reconnects and re-reads the snapshot.
+	rc := http.NewResponseController(w)
+	// Clear the per-write deadlines when the stream ends so a reused
+	// keep-alive connection never inherits a stale absolute deadline.
+	defer func() { _ = rc.SetWriteDeadline(time.Time{}) }()
 	var cursor uint64
 	for {
 		sequence := n.engine.Sequence()
 		if cursor != sequence || cursor == 0 {
 			data, _ := json.Marshal(map[string]any{"sequence": sequence})
+			_ = rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
 			_, err := fmt.Fprintf(w, "id: %d\nevent: native\ndata: %s\n\n", sequence, data)
 			if err != nil {
 				return
@@ -366,6 +390,7 @@ func (n *nativeHostRuntime) events(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
+			_ = rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
 			if _, err := io.WriteString(w, ": heartbeat\n\n"); err != nil {
 				return
 			}

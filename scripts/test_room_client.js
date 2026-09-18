@@ -42,7 +42,12 @@ function client() {
     close() { this.closed = true; }
     emit(type, value) { this.listeners.get(type)?.({ data: JSON.stringify(value) }); }
   }
-  const window = { location: { hash: '', pathname: '/', search: '' }, addEventListener(type, callback) { lifecycle.set(type, callback); } };
+  // Intervals (the SSE watchdog) are tracked apart from the bounded-backoff
+  // timeout bookkeeping the recovery assertions inspect.
+  const intervals = new Map(); let intervalID = 0;
+  const window = { location: { hash: '', pathname: '/', search: '' }, addEventListener(type, callback) { lifecycle.set(type, callback); },
+    setInterval(callback) { const id = ++intervalID; intervals.set(id, callback); return id; },
+    clearInterval(id) { intervals.delete(id); } };
   const localStorage = { getItem: (key) => storage.get(key) || null,
     setItem: (key, value) => storage.set(key, value), removeItem: (key) => storage.delete(key) };
   const sandbox = { window, document, localStorage, EventSource, URLSearchParams, Headers, FormData,
@@ -260,6 +265,24 @@ async function main() {
     assert.equal(c.timers.size, 0);
     assert.equal(reads, 2);
     assert.ok(c.state.source);
+  }
+  {
+    // Events arriving while a stream-preserving snapshot refresh is in flight
+    // are held and replayed onto the fresh snapshot instead of being rolled
+    // back, and keepStream must not tear down the live connection.
+    const c = client();
+    c.setAPI(async () => c.snapshot());
+    await c.loadSnapshot();
+    const request = deferred();
+    c.setAPI(() => request.promise);
+    const refreshing = c.loadSnapshot({ keepStream: true });
+    const source = c.state.source;
+    assert.ok(source, 'keepStream must not tear down the live connection');
+    const heldSeq = Number(c.state.snapshot?.latest_seq || 0) + 1;
+    source.emit('pairroom', { seq: heldSeq, kind: 'message.created', data: { id: 'held-message', from: 'slot1', text: 'held while refreshing' } });
+    request.resolve(c.snapshot());
+    await refreshing;
+    assert.ok(c.state.snapshot.messages.some((message) => message.id === 'held-message'), 'held durable event must be replayed onto the fresh snapshot');
   }
   {
     const c = client();

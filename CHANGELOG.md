@@ -2,6 +2,58 @@
 
 ## [Unreleased]
 
+- Fix two Claude slots in one embedded Room sharing a single appended-system-prompt file: the prompt path now carries the durable actor identity and is staged through an atomic rename, so concurrent adapter starts can no longer serve the wrong bootstrap identity or a half-written file.
+
+- Unstick Codex rooms whose approval outlived its turn: a same-role `SetRole` assertion (made before every submission) is now a no-op — only a real role transition requires the safe turn boundary — and a terminal turn answers and drops its own unresolved approval requests instead of wedging every later submission behind a misleading "change role" error.
+
+- Drain adapter stdout/stderr readers before `cmd.Wait()` in all three vendor adapters so a final wire record (result / turn-completed JSON) is never lost to the pipe-close race; Grok's Stop now reports success once the kill path confirmed the process stopped, instead of surfacing the expired context as an uncertain close that strands the runtime's capacity slot.
+
+- Service hardening: crash debris in `service.lock` (a zero-byte or truncated file older than a conservative window, left by the create-to-write gap) is now cleared by the explicit `--recover-stale-lock`/daemon-start recovery, and lock errors name the manual exit instead of dead-ending; Room provisioning and Agent-pair-profile writes get a body limit (1 MiB) that fits their validated fields (two 64 KiB instruction blocks plus collaboration text), and oversized bodies return a real 413 `request_too_large` on both the Management and Room APIs; attachment removal deletes the manifest before the content, so a crash mid-removal degrades to a backup warning instead of refusing every later backup.
+
+- Native wake resolves the Codex executable from the configured command template instead of the Service's inherited PATH (daemon/Desktop launches could silently fail every wake with `command_unavailable`), Mock rooms stay fail-closed, and `relay status` now surfaces a local-only `last_hook_at` so "the Stop hook never fires" is distinguishable from "the hook fires but nothing routes".
+
+- Room UI reliability: the SSE heartbeat is now a named, client-visible event and the client enforces a 50-second silence watchdog, so a half-open connection (sleep/wake, VPN switch, suspended webview) reconnects instead of showing a permanently fake "Live"; toast dismiss buttons carry an accurate accessible name (en/zh).
+
+- Desktop daemon discovery and `pairroom daemon open` read a bounded tail window of the service log (one-time full-read fallback) instead of re-reading every rotated log fully on each 100 ms probe; `install.sh` verifies the release `SHA256SUMS` before installing; `docs/STORAGE.md` no longer claims a `bootstrap` slot file that current binds never write.
+
+- Surface internally dead runtimes instead of Active zombies: Room runtimes now report a fatal internal condition (a relay engine fail-closed after an event-log write failure, a dead embedded Room store, or an unexpected Room/native HTTP listener exit), and the RuntimeManager reconcile loop marks such Rooms failed with the reason and attempts a graceful close instead of continuing to serve requests that can only error.
+
+- The embedded Room engine makes durable-store death visible: the first event-log write failure publishes one transient (never persisted) error notice to the Room UI and is recorded for runtime health reporting, so the Room no longer keeps mutating silently in memory while facts are lost.
+
+- Vendor adapter hardening: Claude/Codex Stop gives the CLI a bounded two-second window (or the caller's context) to flush its own session state after stdin closes before the hard kill; a Codex turn/start timeout now says the native turn may still have been accepted and must be inspected before retry; adapter-authored diagnostics (process exit, stream-read failure, out-of-turn boundary rejections) are marked and pass the transcript boundary, so crash causes stop being generalized into an uninformative notice.
+
+- Fix embedded Rooms re-attempting binding materialization on every accepted turn: the pending-binding flag clears once after the durable commit (under a mutex), so a late vendor session-ID drift can no longer interrupt an already accepted native turn on each following message.
+
+- Actionable storage errors: navigation-order and Agent-pair-profile failures now distinguish a corrupt file (with the repair action in the message) from unavailable storage (root cause kept wrapped and logged), while browser responses stay stable and path-free; deletion-quarantine unknown entries and a corrupt registry checkpoint name the concrete manual recovery step in the startup error.
+
+- Room projection hygiene: a FIFO item dropped because its message reached a terminal processing state while queued now records a DeliverySkipped transition instead of leaving a contradictory queued+cancelled display; the standalone default Room name is generated from the pair's actual runtimes instead of hard-coding "Claude × Codex"; stale "claude or codex" wording in cancel/protocol errors now uses the durable slot vocabulary.
+
+- Room UI scale and continuity: the in-memory timeline caps at the same 1,000-message ceiling the snapshot window uses (evicted history stays reachable through "load older"), a post-write refresh no longer tears down the SSE stream (sequence deduplication already reconciles the fresh snapshot with in-flight events, so streaming deltas survive operator actions), and embedded static assets gain a version-keyed ETag with negotiated caching while HTML keeps its no-store posture.
+
+- Automatic idle-peer wake gains its browser surface: a Management dialog on native Rooms reads and toggles the per-Room setting through the existing authenticated wake-config API (new GET route), so the documented "Management surface" is no longer a raw endpoint; the Native Room panel also caps rendered messages at the latest 300 while the badge keeps the true total.
+
+- Management agent-catalog GETs are served from a 45-second cache (the explicit refresh endpoint still forces a fresh scan), so opening or polling the Management shell no longer spawns three vendor CLI probes per request.
+
+- Crash-stale `service.lock` recovery now recognizes PID reuse on Windows (`GetProcessTimes`) and Linux (`/proc` starttime + btime) with a five-minute tolerance, instead of permanently refusing recovery when the recorded PID was recycled by an unrelated process; platforms without a creation-time source stay conservatively fail-closed.
+
+- The Stop hook reserves the reply WAL (sequence claim plus body in one local atomic write) before its inspect/confirm metadata round-trips, so a transient Service failure at the response boundary leaves a reconcilable pending publication instead of losing the reply without a trace; an unresolved earlier publication still takes the original reconcile-then-publish path and the wire request order is unchanged.
+
+- SSE writers bound every event/heartbeat write with a 30-second deadline on both the Room and Native surfaces, so a stuck client can no longer pin a stream goroutine until TCP timeouts; git status/diff output caps at 2 MiB (error details at 4 KiB) so one Inspector request cannot balloon memory on a huge working tree.
+
+- Standalone Room windows count pending native approvals alongside unread messages in the title attention badge (refreshed on approval updates), keeping human questions visible when the Inspector tab is hidden; attachment blob URLs are LRU-pruned beyond 96 entries and never while a rendered image still references them.
+
+- Codex approval resolution no longer projects a Working state after the turn already completed while the decision was in flight; a merged quote can no longer push attachments past the native eight-image limit (previously a guaranteed-failure retry loop at the native boundary).
+
+- Registry checkpoint and Room metadata reads are size-bounded; a checkpoint schema newer than this build is rejected at preflight with an upgrade message; a cleanly stopped Service removes its `relay-endpoint.json` discovery file so a dead bearer token no longer lingers on disk; CC Switch catalog strings filter all control characters, not only CR/LF/NUL.
+
+- Registry startup sweeps atomic-write temporaries a crashed process left in the Service root (known writer prefixes, regular files only, never fatal); `relay install` preserves the existing project hook file mode instead of forcing shared repository metadata to owner-only 0600; the generated API route inventory gains the wake-config GET route.
+
+- An adversarial review pass over the hardening work itself hardened the hardening: stale Codex approval answers now use the adapter's own `decline` wire vocabulary, and Grok's Stop bounds its post-kill pipe-drain wait and reports an uncertain close honestly instead of hanging the whole shutdown chain when a descendant still holds the pipes.
+
+- Service-lock safety: lock acquisition publishes complete owner metadata in one atomic hard-link operation (with an exclusive-create fallback for filesystems without hard links), eliminating the create-to-write window whose crash debris and suspended-writer races recovery previously had to reason about; PID-reuse recovery additionally requires that the process image does not look like PairRoom itself (Linux `/proc/<pid>/exe`→`comm`, Windows `QueryFullProcessImageNameW`), so a corrected boot-time clock can never evict a live owner's lock.
+
+- Runtime and stream correctness: a fatal-triggered runtime stop no longer oscillates back to Active through the retryable drain-aborted path; SSE write deadlines are cleared when a stream ends so a reused keep-alive connection never inherits a stale deadline; events arriving while a stream-preserving snapshot refresh is in flight are held and replayed onto the fresh snapshot (bounded, sequence-deduplicated) instead of being rolled back; every direct Room event-log append path now records the store-fatal state, not only the generic record path; an explicit agent-catalog refresh repopulates the GET cache; the Stop hook stamps its last-run marker before any HTTP; three new regression tests pin reservation-before-HTTP, same-sequence reconciliation, and the single-pending-slot invariant.
+
 ## [v5.1.2] — 2026-09-18
 
 - Restore vendor-neutral wording in the distributable `pairroom-relay` onboarding skill: the free-wake reachability default and Grok's shared project-hook behavior are now expressed in harness-capability terms instead of naming Claude Code/Grok Build, keeping the published-payload canary (`scripts/test_native_setup.js`) green after earlier commits reintroduced vendor names that a persistently failing race stage had masked in CI. This unblocks the `release.yml` payload gate that stopped the v5.1.1 tag from publishing.

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,6 +20,11 @@ const navigationOrderFile = "navigation-order.json"
 const maxNavigationOrderBytes = 4 << 20
 
 var errNavigationOrderStore = errors.New("navigation order is unavailable; repair navigation-order.json before retrying")
+
+// errNavigationOrderCorrupt wraps the store sentinel with the actionable
+// classification: the file exists but cannot be trusted. Root causes stay in
+// the wrapped error for the service log, never in the browser response.
+var errNavigationOrderCorrupt = fmt.Errorf("%w: navigation-order.json is corrupt (invalid JSON, schema, or IDs); repair or remove it, then retry", errNavigationOrderStore)
 var errNavigationOrderMove = errors.New("invalid navigation move: use distinct existing items in the same Project and lifecycle group")
 
 // NavigationOrder is Service-scoped display preference, not runtime scheduling
@@ -49,33 +56,36 @@ func (r *Registry) readNavigationOrderLocked() (NavigationOrder, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return order, nil
 	}
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxNavigationOrderBytes {
-		return NavigationOrder{}, errNavigationOrderStore
+	if err != nil {
+		return NavigationOrder{}, fmt.Errorf("%w: %v", errNavigationOrderStore, err)
+	}
+	if !info.Mode().IsRegular() || info.Size() > maxNavigationOrderBytes {
+		return NavigationOrder{}, errNavigationOrderCorrupt
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return NavigationOrder{}, errNavigationOrderStore
+		return NavigationOrder{}, fmt.Errorf("%w: %v", errNavigationOrderStore, err)
 	}
 	defer file.Close()
 	opened, err := file.Stat()
 	if err != nil || !os.SameFile(info, opened) {
-		return NavigationOrder{}, errNavigationOrderStore
+		return NavigationOrder{}, fmt.Errorf("%w: file changed while it was being read", errNavigationOrderStore)
 	}
 	order = NavigationOrder{}
 	decoder := json.NewDecoder(io.LimitReader(file, maxNavigationOrderBytes+1))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&order); err != nil {
-		return NavigationOrder{}, errNavigationOrderStore
+		return NavigationOrder{}, fmt.Errorf("%w: %v", errNavigationOrderCorrupt, err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return NavigationOrder{}, errNavigationOrderStore
+		return NavigationOrder{}, errNavigationOrderCorrupt
 	}
 	if order.Schema != 1 || order.Projects == nil || order.Rooms == nil || !validOrderIDs(order.Projects) {
-		return NavigationOrder{}, errNavigationOrderStore
+		return NavigationOrder{}, errNavigationOrderCorrupt
 	}
 	for project, ids := range order.Rooms {
 		if !validOrderIDs([]string{project}) || ids == nil || !validOrderIDs(ids) {
-			return NavigationOrder{}, errNavigationOrderStore
+			return NavigationOrder{}, errNavigationOrderCorrupt
 		}
 	}
 	return order, nil
@@ -196,37 +206,40 @@ func (r *Registry) MoveNavigation(ctx context.Context, move NavigationMove) (Nav
 
 func (r *Registry) writeNavigationOrderLocked(ctx context.Context, order NavigationOrder) error {
 	data, err := json.MarshalIndent(order, "", "  ")
-	if err != nil || len(data)+1 > maxNavigationOrderBytes {
-		return errNavigationOrderStore
+	if err != nil {
+		return fmt.Errorf("%w: %v", errNavigationOrderStore, err)
+	}
+	if len(data)+1 > maxNavigationOrderBytes {
+		return fmt.Errorf("%w: navigation order exceeds %d bytes", errNavigationOrderStore, maxNavigationOrderBytes)
 	}
 	file, err := os.CreateTemp(r.root, ".navigation-order-*.tmp")
 	if err != nil {
-		return errNavigationOrderStore
+		return fmt.Errorf("%w: %v", errNavigationOrderStore, err)
 	}
 	defer os.Remove(file.Name())
 	defer file.Close()
 	if err := file.Chmod(0o600); err != nil {
-		return errNavigationOrderStore
+		return fmt.Errorf("%w: %v", errNavigationOrderStore, err)
 	}
 	if _, err := file.Write(append(data, '\n')); err != nil {
-		return errNavigationOrderStore
+		return fmt.Errorf("%w: %v", errNavigationOrderStore, err)
 	}
 	if err := file.Sync(); err != nil {
-		return errNavigationOrderStore
+		return fmt.Errorf("%w: %v", errNavigationOrderStore, err)
 	}
 	if err := file.Close(); err != nil {
-		return errNavigationOrderStore
+		return fmt.Errorf("%w: %v", errNavigationOrderStore, err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := os.Rename(file.Name(), filepath.Join(r.root, navigationOrderFile)); err != nil {
-		return errNavigationOrderStore
+		return fmt.Errorf("%w: %v", errNavigationOrderStore, err)
 	}
 	// On a directory-sync failure the rename may already be durable. The next
 	// request reads disk afresh; never claim success or overwrite from stale memory.
 	if err := syncDir(r.root); err != nil {
-		return errNavigationOrderStore
+		return fmt.Errorf("%w: %v", errNavigationOrderStore, err)
 	}
 	return nil
 }
@@ -240,13 +253,18 @@ func (s *ManagementServer) mountNavigationOrder(mux *http.ServeMux) {
 		order, err := s.registry.MoveNavigation(r.Context(), move)
 		if err != nil {
 			status := http.StatusServiceUnavailable
-			if errors.Is(err, errNavigationOrderMove) {
-				status = http.StatusBadRequest
-			}
-			// Report a stable, non-path-bearing error even when the Registry is poisoned.
+			// Report a stable, non-path-bearing error even when the Registry is
+			// poisoned; the wrapped root cause goes to the service log instead.
 			message := errNavigationOrderStore.Error()
-			if status == http.StatusBadRequest {
+			switch {
+			case errors.Is(err, errNavigationOrderMove):
+				status = http.StatusBadRequest
 				message = errNavigationOrderMove.Error()
+			case errors.Is(err, errNavigationOrderCorrupt):
+				message = errNavigationOrderCorrupt.Error()
+				slog.Warn("navigation order store failure", "error", err)
+			default:
+				slog.Warn("navigation order store failure", "error", err)
 			}
 			writeManagementError(w, status, message)
 			return

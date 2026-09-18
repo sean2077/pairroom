@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !linux
 
 package service
 
@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"syscall"
+	"time"
 )
 
 func serviceLockProcessAlive(pid int) (bool, error) {
@@ -28,4 +29,17 @@ func serviceLockProcessAlive(pid int) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// serviceLockProcessStartedAt has no portable stdlib source on this platform;
+// reporting unknown keeps PID-reuse detection conservative (the caller treats
+// a live PID as the owner).
+func serviceLockProcessStartedAt(pid int) (time.Time, bool, error) {
+	return time.Time{}, false, nil
+}
+
+// serviceLockProcessLooksLikeOwner is unreachable on this platform (startedAt
+// is never ok), but the conservative answer keeps the link-time contract.
+func serviceLockProcessLooksLikeOwner(pid int) bool {
+	return true
 }

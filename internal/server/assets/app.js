@@ -176,21 +176,36 @@
 
   // Reads may be retried; message submissions must never be replayed implicitly.
   // Closing the old stream before the read also discards its queued telemetry.
-  function loadSnapshot() {
+  function loadSnapshot(options = {}) {
     if (state.snapshotPromise) return state.snapshotPromise;
     const initial = !state.snapshot;
-    closeEvents();
-    clearTimeout(state.reconnectTimer);
-    state.reconnectTimer = null;
+    // Read-after-write refreshes keep the SSE stream open: the durable
+    // sequence deduplication already reconciles the fresh snapshot with
+    // events that arrive during the fetch, so no reconnect gap (and no lost
+    // streaming deltas) is needed for consistency.
+    const keepStream = Boolean(options.keepStream) && !initial && state.source;
+    if (!keepStream) {
+      closeEvents();
+      clearTimeout(state.reconnectTimer);
+      state.reconnectTimer = null;
+    }
     state.snapshotPromise = (async () => {
       const limit = Math.min(1000, Math.max(250, state.snapshot?.messages?.length || 0));
       state.snapshot = await api(`/api/v1/snapshot?message_limit=${limit}`);
+      // Replay events held during the fetch; applyEvent's sequence
+      // deduplication drops anything the fresh snapshot already contains and
+      // applies only what was committed after the server-side read.
+      const held = state.streamHold || [];
+      state.streamHold = null;
+      for (const heldEvent of held) {
+        try { applyEvent(heldEvent); } catch { /* one malformed held event must not abort the replay */ }
+      }
       state.drafts = { slot1: '', slot2: '' };
       state.draftCorrelation = { slot1: '', slot2: '' };
       initializeRoomLocalState();
       if (state.snapshot?.meta?.id) document.body.dataset.roomId = state.snapshot.meta.id;
       render(initial);
-      connectEvents();
+      if (!keepStream) connectEvents();
       refreshGitStatus();
       postSurfaceState();
     })().catch((error) => {
@@ -201,6 +216,7 @@
   }
 
   function closeEvents() {
+    if (state.watchdogTimer) { window.clearInterval(state.watchdogTimer); state.watchdogTimer = null; }
     if (state.source) state.source.close();
     state.source = null;
   }
@@ -222,10 +238,22 @@
     const source = new EventSource(roomURL(`/api/v1/events?${query}`));
     state.source = source;
     setConnection(false, 'ui.connecting');
+    // Half-open TCP (sleep/wake, VPN switch, suspended webview) fires no
+    // EventSource error while the stream is silently dead. The server beats
+    // every 20 s; once this connection has proven it can receive anything,
+    // 2.5 silent beats force a reconnect instead of a permanent fake "Live".
+    let lastBeat = Date.now();
+    let sawTraffic = false;
+    const markActivity = () => { lastBeat = Date.now(); sawTraffic = true; };
     source.addEventListener('open', () => {
       if (state.source !== source) return;
       state.reconnectAttempt = 0;
+      markActivity();
       setConnection(true, 'room.live');
+    });
+    source.addEventListener('heartbeat', () => {
+      if (state.source !== source) return;
+      markActivity();
     });
     source.addEventListener('error', () => {
       if (state.source !== source) return;
@@ -234,17 +262,36 @@
     });
     source.addEventListener('reset', () => {
       if (state.source !== source) return;
+      markActivity();
       void loadSnapshot().catch(() => {});
     });
     source.addEventListener('pairroom', (raw) => {
       if (state.source !== source) return;
+      markActivity();
       try {
-        applyEvent(JSON.parse(raw.data));
+        const event = JSON.parse(raw.data);
+        if (state.snapshotPromise) {
+          // A snapshot fetch is about to replace the state wholesale; hold
+          // incoming events so anything the server committed after its
+          // snapshot read is replayed onto the fresh state instead of being
+          // silently rolled back (the stream is never re-subscribed here).
+          state.streamHold = state.streamHold || [];
+          if (state.streamHold.length < 500) state.streamHold.push(event);
+          return;
+        }
+        applyEvent(event);
       } catch (error) {
         toast(t("ui.couldNotParseEventValue", { value0: error.message }), 'error');
         void loadSnapshot().catch(() => {});
       }
     });
+    state.watchdogTimer = window.setInterval(() => {
+      if (state.source !== source || !sawTraffic) return;
+      if (Date.now() - lastBeat > 50000) {
+        closeEvents();
+        scheduleReconnect();
+      }
+    }, 10000);
   }
 
   function applyEvent(event) {
@@ -284,10 +331,22 @@
         if (!state.snapshot.messages.some((item) => item.id === data.id)) {
           data.seq = event.seq;
           state.snapshot.messages.push(data);
+          // Bound the in-memory timeline to the same ceiling the snapshot
+          // window uses, so a long-running relay session cannot grow state
+          // and DOM without limit. Evicted history stays reachable through
+          // the "load older" page, which the window fields now advertise.
+          let evicted = false;
+          if (state.snapshot.messages.length > 1000) {
+            state.snapshot.messages.splice(0, state.snapshot.messages.length - 1000);
+            evicted = true;
+          }
           if (state.snapshot.message_window) {
-            state.snapshot.message_window.total = Number(state.snapshot.message_window.total || 0) + 1;
-            state.snapshot.message_window.loaded = state.snapshot.messages.length;
-            if (!state.snapshot.message_window.oldest_seq) state.snapshot.message_window.oldest_seq = data.seq;
+            const window = state.snapshot.message_window;
+            window.total = Number(window.total || 0) + 1;
+            window.loaded = state.snapshot.messages.length;
+            if (evicted) window.has_more = true;
+            const oldest = state.snapshot.messages[0];
+            if (!window.oldest_seq || evicted) window.oldest_seq = oldest?.seq || window.oldest_seq || data.seq;
           }
           handleIncomingMessage(data, event.seq);
         }
@@ -347,6 +406,7 @@
         const index = state.snapshot.approvals.findIndex((item) => item.id === data.id);
         if (index >= 0) state.snapshot.approvals[index] = data;
         else state.snapshot.approvals.push(data);
+        updateUnreadUI();
         renderScope = 'approvals';
         break;
       }
@@ -421,7 +481,7 @@
 
   async function refreshAfterWrite() {
     if (state.snapshotPromise) await state.snapshotPromise.catch(() => {});
-    await loadSnapshot();
+    await loadSnapshot({ keepStream: true });
   }
 
   function participantBusy(actor) {
@@ -1226,6 +1286,27 @@
     parent.appendChild(gallery);
   }
 
+  // Blob URLs are otherwise only revoked on pagehide; a long session that
+  // streams many distinct images would accumulate them without bound. Evict
+  // the oldest entries that no rendered <img> still references, so a visible
+  // image can never lose its source.
+  const MAX_MEDIA_OBJECT_URLS = 96;
+  function pruneMediaObjectURLs() {
+    const map = state.mediaObjectURLs;
+    if (map.size <= MAX_MEDIA_OBJECT_URLS) return;
+    for (const [key, value] of map) {
+      if (map.size <= MAX_MEDIA_OBJECT_URLS) break;
+      if (typeof value !== 'string') continue;
+      let inUse = false;
+      for (const img of document.querySelectorAll('img')) {
+        if (img.src === value) { inUse = true; break; }
+      }
+      if (inUse) continue;
+      URL.revokeObjectURL(value);
+      map.delete(key);
+    }
+  }
+
   function createAttachmentCard(attachment, options = {}) {
     const inline = Boolean(options.inline);
     const card = document.createElement(inline ? 'figure' : 'div');
@@ -1276,6 +1357,7 @@
       .then((blob) => {
         const url = URL.createObjectURL(blob);
         state.mediaObjectURLs.set(attachment.id, url);
+        pruneMediaObjectURLs();
         return url;
       })
       .catch((error) => {
@@ -2238,7 +2320,11 @@
   }
 
   function updateUnreadUI() {
-    document.title = state.unreadCount > 0 ? `(${state.unreadCount}) PairRoom` : 'PairRoom';
+    // Pending native approvals share the attention badge: in a standalone
+    // window the Inspector tab may be hidden, and an approval waiting on a
+    // human must not be less visible than an unread message.
+    const attention = state.unreadCount + pendingApprovalCount();
+    document.title = attention > 0 ? `(${attention}) PairRoom` : 'PairRoom';
     $('scroll-bottom').textContent = state.unreadCount > 0 ? t("ui.jumpToLatestValue", { value0: (state.unreadCount) }) : t("ui.jumpToLatest");
     postSurfaceState();
   }
@@ -2370,7 +2456,7 @@
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'toast-close';
-    close.setAttribute('aria-label', t("ui.disableNotifications"));
+    close.setAttribute('aria-label', t("ui.dismissNotification"));
     close.textContent = '×';
     $('toast-stack').appendChild(node);
     const duration = type === 'error' ? 8000 : 4500;

@@ -14,6 +14,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -175,6 +177,7 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	mux.HandleFunc("/api/v1/rooms/{room}/surface/{path...}", server.roomSurface)
 	mux.HandleFunc("PATCH /api/v1/runtime-policy", server.updateRuntimePolicy)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/suspend", server.suspendRoom)
+	mux.HandleFunc("GET /api/v1/rooms/{room}/wake-config", server.readRoomWakeConfig)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/wake-config", server.setRoomWakeConfig)
 	mux.HandleFunc("PATCH /api/v1/rooms/{room}", server.renameRoom)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/archive", server.archiveRoom)
@@ -183,7 +186,7 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	mux.HandleFunc("DELETE /api/v1/rooms/{room}", server.removeRoom)
 	mux.HandleFunc("POST /api/v1/rooms/batch-delete", server.removeRoomsBatch)
 	mux.HandleFunc("POST /api/v1/maintenance/room-deletions/retry", server.retryRoomDeletionCleanup)
-	mux.Handle("/", http.FileServer(http.FS(assets)))
+	mux.Handle("/", webui.WithAssetETag(http.FileServer(http.FS(assets))))
 	server.http = &http.Server{
 		Handler:           server.securityHeaders(server.sameOrigin(server.authenticate(server.csrf(mux)))),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -215,6 +218,11 @@ func (s *ManagementServer) Serve(listener net.Listener) error {
 func (s *ManagementServer) Shutdown(ctx context.Context) error {
 	err := s.http.Shutdown(ctx)
 	if err == nil {
+		// A cleanly stopped Service must not leave its bearer token sitting in
+		// the endpoint discovery file; CLI clients then fail with a missing
+		// file instead of a stale-token round trip. A forced close keeps the
+		// file because in-flight handlers may still be settling.
+		_ = os.Remove(filepath.Join(s.registry.Root(), relay.EndpointFile))
 		return nil
 	}
 	// Shutdown only waits for active handlers. Once its deadline expires, force
@@ -311,7 +319,14 @@ func (s *ManagementServer) readAgentCatalog(w http.ResponseWriter, r *http.Reque
 		writeManagementJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "Agent catalog is unavailable", "code": "agent_catalog_unavailable"})
 		return
 	}
-	writeManagementJSON(w, http.StatusOK, s.agentResolver.Catalog(r.Context()))
+	// GET serves a short-TTL cache so opening or polling the Management shell
+	// cannot spawn three vendor CLI probes per request; the explicit refresh
+	// endpoint always forces a fresh scan.
+	catalog := s.agentResolver.CachedCatalog(r.Context())
+	if r.Method == http.MethodPost {
+		catalog = s.agentResolver.RefreshCatalog(r.Context())
+	}
+	writeManagementJSON(w, http.StatusOK, catalog)
 }
 
 func summarizeService(projects []Project, rooms []Room, runtimes []RuntimeStatus) ServiceSummary {
@@ -401,7 +416,7 @@ func (s *ManagementServer) provisionRoom(w http.ResponseWriter, r *http.Request)
 		Bindings           map[model.ActorID]BindingSpec `json:"bindings"`
 		Agents             json.RawMessage               `json:"agents"`
 	}
-	if err := decodeManagementJSON(w, r, &request); err != nil {
+	if err := decodeManagementJSONLimit(w, r, &request, 1<<20); err != nil {
 		return
 	}
 	var agents map[model.ActorID]model.AgentSelection
@@ -567,6 +582,23 @@ func (s *ManagementServer) setRoomWakeConfig(w http.ResponseWriter, r *http.Requ
 		s.writeError(w, err)
 		return
 	}
+	writeManagementJSON(w, http.StatusOK, map[string]bool{"wake_enabled": runtime.engine.WakeEnabled()})
+}
+
+// readRoomWakeConfig reports the current per-Room automatic-wake setting for
+// the Management dialog. Like the setter it is Management-authenticated and
+// user-owned; relay binding credentials can never reach it.
+func (s *ManagementServer) readRoomWakeConfig(w http.ResponseWriter, r *http.Request) {
+	roomID := r.PathValue("room")
+	unlock := s.lockRoom(roomID)
+	defer unlock()
+	runtime, err := s.nativeRuntime(r.Context(), roomID)
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	release := runtime.acquire()
+	defer release()
 	writeManagementJSON(w, http.StatusOK, map[string]bool{"wake_enabled": runtime.engine.WakeEnabled()})
 }
 
@@ -1102,22 +1134,41 @@ func managementErrorCode(err error, fallback string) string {
 	}
 }
 
+// decodeManagementJSON enforces the small default configuration-request body
+// limit. Endpoints whose validated fields legitimately exceed it (Room
+// provisioning and Agent pair profiles carry up to two 64 KiB instruction
+// blocks plus 16 KiB of collaboration text, before JSON escaping) use
+// decodeManagementJSONLimit instead of failing valid requests with a
+// misleading parse error.
 func decodeManagementJSON(w http.ResponseWriter, r *http.Request, target any) error {
+	return decodeManagementJSONLimit(w, r, target, 64<<10)
+}
+
+func decodeManagementJSONLimit(w http.ResponseWriter, r *http.Request, target any, limit int64) error {
 	defer r.Body.Close()
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
-		writeManagementError(w, http.StatusBadRequest, "invalid JSON request: "+err.Error())
+		writeManagementDecodeError(w, err)
 		return err
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		if err == nil {
 			err = errors.New("multiple JSON values are not allowed")
 		}
-		writeManagementError(w, http.StatusBadRequest, "invalid JSON request: "+err.Error())
+		writeManagementDecodeError(w, err)
 		return err
 	}
 	return nil
+}
+
+func writeManagementDecodeError(w http.ResponseWriter, err error) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeManagementError(w, http.StatusRequestEntityTooLarge, "request body exceeds this endpoint's size limit")
+		return
+	}
+	writeManagementError(w, http.StatusBadRequest, "invalid JSON request: "+err.Error())
 }
 
 func writeManagementJSON(w http.ResponseWriter, status int, value any) {

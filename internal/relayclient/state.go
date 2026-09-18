@@ -42,6 +42,10 @@ type State struct {
 	Blocks           int               `json:"blocks"`
 	HarnessPID       int               `json:"harness_pid,omitempty"`
 	HarnessName      string            `json:"harness_name,omitempty"`
+	// LastHookAt is local-only observability: when the approved Stop hook last
+	// ran for this binding, so `relay status` can distinguish "hook never
+	// fires" from "hook fires but nothing routes". Never sent to the Service.
+	LastHookAt string `json:"last_hook_at,omitempty"`
 }
 
 type credentials struct {
@@ -235,6 +239,48 @@ func (c *Client) Publish(ctx context.Context, text string) error {
 	next.LastConfirmedSeq = next.LastSeq
 	return c.persist(next)
 }
+
+// ReservePublication claims the next report sequence and persists the reply
+// body as the WAL before any HTTP for this invocation, so a transient
+// metadata failure cannot lose the reply without a trace. It requires an
+// empty pending slot; an unresolved earlier publication must go through the
+// ordinary Reconcile-then-Publish path instead of overwriting the only
+// pending record.
+func (c *Client) ReservePublication(text string) error {
+	if c.State.Pending != nil {
+		return errors.New("publication reservation requires a reconciled pending slot")
+	}
+	if len(text) > relay.MaxBodyBytes {
+		return errors.New("final reply exceeds bounded publication size; nothing published")
+	}
+	next := c.State
+	next.LastSeq++
+	next.Pending = &Pending{Seq: next.LastSeq, Text: text, At: time.Now().UTC()}
+	// This one replacement is the seq claim and body WAL. No HTTP before it.
+	return c.persist(next)
+}
+
+// PublishReserved reports the already-reserved pending publication. It never
+// allocates a sequence or rewrites the WAL; an ambiguous result keeps the
+// reservation for the next reconciliation.
+func (c *Client) PublishReserved(ctx context.Context) error {
+	if c.State.Pending == nil {
+		return errors.New("no reserved publication to report")
+	}
+	p := *c.State.Pending
+	var result relay.Publication
+	if err := c.call(ctx, "report", map[string]any{"report_seq": p.Seq, "text": p.Text}, &result); err != nil {
+		return relay.ErrUnknown
+	}
+	if result.ReportSeq != p.Seq || result.BindID != c.State.BindID || result.Generation != c.State.Generation {
+		return relay.ErrUnknown
+	}
+	next := c.State
+	next.Pending = nil
+	next.LastConfirmedSeq = p.Seq
+	return c.persist(next)
+}
+
 func (c *Client) DiscardPending() error { next := c.State; next.Pending = nil; return c.persist(next) }
 func cleanupAtomicTemps(dir string) {
 	entries, err := os.ReadDir(dir)

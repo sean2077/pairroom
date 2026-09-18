@@ -1142,6 +1142,7 @@
       actions.append(actionButton(runtime.phase === 'queued' ? t("ui.queuedValue", { value0: (runtime.queue_position || '?') }) : t("ui.open"), () => openRoom(room.id), 'primary-button compact-button room-action-control'));
       actions.append(actionButton(t("ui.browserOpens"), () => openRoomInBrowserAction(room.id), 'secondary-button compact-button room-action-control'));
       actions.append(actionButton(t("ui.rename"), () => openRenameDialog(room), 'secondary-button compact-button room-action-control'));
+      if (room.host_mode === 'native') actions.append(actionButton(t('room.wake.button'), () => openWakeConfig(room), 'secondary-button compact-button room-action-control'));
       actions.append(actionButton(t("ui.archive"), () => archiveRoom(room), 'danger-button outline compact-button room-action-control'));
     }
     return ordering.decorate(node('article', { className: 'room-row', 'data-room-id': room.id }, node('div', { className: 'room-row-main' }, title, meta), actions), 'room', room.id);
@@ -2281,6 +2282,33 @@
       } catch (error) {
         showFormError('rename-form-error', error.message);
       }
+    });
+  }
+
+  // Automatic wake is a per-Room native setting. The dialog reads the current
+  // state on demand (an explicit user action, like opening the Room) and the
+  // Service enforces the idle-Room boundary for any change.
+  async function openWakeConfig(room) {
+    let current;
+    try {
+      const value = await api(`/api/v1/rooms/${encodeURIComponent(room.id)}/wake-config`);
+      current = Boolean(value.wake_enabled);
+    } catch (error) {
+      toast(t('room.wake.title'), error.message, 'error');
+      return;
+    }
+    openConfirm({
+      eyebrow: t('room.wake.eyebrow'),
+      title: t('room.wake.title'),
+      message: current ? t('room.wake.enabledMessage') : t('room.wake.disabledMessage'),
+      detail: t('room.wake.detail'),
+      label: current ? t('room.wake.disable') : t('room.wake.enable'),
+      tone: current ? 'danger' : 'primary',
+      action: async () => {
+        const value = await api(`/api/v1/rooms/${encodeURIComponent(room.id)}/wake-config`, { method: 'POST', body: JSON.stringify({ enabled: !current }) });
+        toast(t('room.wake.updated'), value.wake_enabled ? t('room.wake.enabledMessage') : t('room.wake.disabledMessage'), 'success');
+        await refresh({ forceRender: true, fresh: true });
+      },
     });
   }
 

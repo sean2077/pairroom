@@ -98,6 +98,23 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		release()
 		return errors.New("bind confirmation missing; use bind --replace explicitly")
 	}
+	// Stamp hook activity before any HTTP so even a failed inspect/confirm
+	// leaves the locally observable last-hook marker fresh on the next
+	// persist (the reservation and Blocks writes both carry it forward).
+	c.State.LastHookAt = time.Now().UTC().Format(time.RFC3339)
+	// Reserve the reply WAL before any metadata HTTP for this invocation: a
+	// transient inspect/confirm failure then leaves a reconcilable pending
+	// publication instead of losing this Stop reply without a trace. Only a
+	// clean pending slot qualifies; an unresolved earlier publication keeps
+	// the ordinary Publish path, which reconciles it first.
+	reserved := hook.Event == "Stop" && hook.LastAssistantMessage != nil && !hook.Clipped &&
+		len(*hook.LastAssistantMessage) <= relay.MaxBodyBytes && c.State.Pending == nil
+	if reserved {
+		if err := c.ReservePublication(*hook.LastAssistantMessage); err != nil {
+			release()
+			return err
+		}
+	}
 	var binding relay.Binding
 	if err := c.call(ctx, "inspect", nil, &binding); err != nil {
 		release()
@@ -119,6 +136,8 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	if !hook.StopHookActive {
 		next.Blocks = 0
 	}
+	// Local-only observability for `relay status`; never sent to the Service.
+	next.LastHookAt = time.Now().UTC().Format(time.RFC3339)
 	if err := c.persist(next); err != nil {
 		release()
 		return err
@@ -151,7 +170,11 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		}
 		return grokContinuation(ctx, c, grokClippedReplyNotice, out)
 	}
-	err = c.Publish(ctx, *hook.LastAssistantMessage)
+	if reserved {
+		err = c.PublishReserved(ctx)
+	} else {
+		err = c.Publish(ctx, *hook.LastAssistantMessage)
+	}
 	release()
 	if err != nil {
 		// Spec §6 decoupling: a failed or uncertain publication retains its

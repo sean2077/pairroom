@@ -220,9 +220,13 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 	g.pending = make(map[int64]chan grokRPCReply)
 	g.approvals = make(map[string]grokPendingApproval)
 	g.mu.Unlock()
-	go g.readStdout(stdout)
-	go g.readStderr(stderr)
-	go g.waitProcess(cmd, done)
+	// cmd.Wait closes the pipes; both readers must finish draining before Wait
+	// so a final stdout record is never lost to the race.
+	var readers sync.WaitGroup
+	readers.Add(2)
+	go func() { defer readers.Done(); g.readStdout(stdout) }()
+	go func() { defer readers.Done(); g.readStderr(stderr) }()
+	go func() { readers.Wait(); g.waitProcess(cmd, done) }()
 
 	clientVersion := strings.TrimSpace(g.cfg.ClientVersion)
 	if clientVersion == "" {
@@ -844,7 +848,18 @@ func (g *GrokAdapter) Stop(ctx context.Context) error {
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
-		<-done
+		// Readers reach EOF only once every inherited descriptor holder exits;
+		// a descendant that kept the pipes open must not hang the whole
+		// shutdown chain after the direct process was killed. Report the
+		// uncertain close honestly instead.
+		killWait := time.NewTimer(5 * time.Second)
+		select {
+		case <-done:
+			killWait.Stop()
+		case <-killWait.C:
+			g.setState(model.StateStopped, "")
+			return errors.New("Grok process was killed but its output pipes remain open (a descendant may hold them); close state is uncertain")
+		}
 	}
 	g.mu.Lock()
 	if strings.TrimSpace(g.cfg.SessionID) == "" && !engaged {
@@ -856,7 +871,10 @@ func (g *GrokAdapter) Stop(ctx context.Context) error {
 	g.turn = nil
 	g.mu.Unlock()
 	g.setState(model.StateStopped, "")
-	return ctx.Err()
+	// The process was confirmed stopped (<-done) even on the ctx-timeout kill
+	// path; reporting the expired context here would mark a completed stop as
+	// an uncertain close and strand the runtime's capacity slot.
+	return nil
 }
 
 func (g *GrokAdapter) ResolveApproval(ctx context.Context, approvalID string, resolution model.ApprovalResolution) error {
@@ -1070,6 +1088,7 @@ func (g *GrokAdapter) readStdout(reader io.Reader) {
 	}
 	if err := scanner.Err(); err != nil {
 		e := runtimeEvent(g.cfg.Actor, model.RuntimeError)
+		e.Name = "adapter.stream_error"
 		e.Text = "read Grok ACP stream: " + err.Error()
 		g.sink(e)
 	}
@@ -1351,6 +1370,7 @@ func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, done chan struct{}) {
 			g.sink(completed)
 		}
 		e := runtimeEvent(g.cfg.Actor, model.RuntimeError)
+		e.Name = "adapter.process_exited"
 		e.Text = detail
 		g.sink(e)
 		g.setState(model.StateError, detail)

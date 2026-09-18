@@ -94,6 +94,76 @@ func (s *publicationServer) serve(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{"handed_off":true}`)
 	}
 }
+func TestReservePublicationClaimsWALBeforeAnyHTTP(t *testing.T) {
+	c, server := publicationClient(t)
+	if err := c.ReservePublication("reply @codex"); err != nil {
+		t.Fatal(err)
+	}
+	if c.State.Pending == nil || c.State.Pending.Seq != 1 || c.State.LastSeq != 1 {
+		t.Fatalf("reservation did not claim the WAL: %#v", c.State)
+	}
+	server.mu.Lock()
+	reports, queries := server.reports, server.queries
+	server.mu.Unlock()
+	if reports != 0 || queries != 0 {
+		t.Fatalf("reservation must be local-only: reports=%d queries=%d", reports, queries)
+	}
+	if err := c.ReservePublication("second"); err == nil {
+		t.Fatal("a second reservation must not overwrite the only pending slot")
+	}
+}
+
+func TestPublishReservedFailureKeepsReservationForSameSeqReconcile(t *testing.T) {
+	c, server := publicationClient(t)
+	if err := c.ReservePublication("reply @codex"); err != nil {
+		t.Fatal(err)
+	}
+	server.mu.Lock()
+	server.dropBefore = true
+	server.mu.Unlock()
+	if err := c.PublishReserved(context.Background()); !errors.Is(err, relay.ErrUnknown) {
+		t.Fatalf("reserved report failure = %v, want ErrUnknown", err)
+	}
+	if c.State.Pending == nil || c.State.Pending.Seq != 1 {
+		t.Fatalf("failed reserved report must keep the WAL reservation: %#v", c.State)
+	}
+	server.mu.Lock()
+	server.dropBefore = false
+	server.mu.Unlock()
+	if err := c.Reconcile(context.Background(), false); err != nil {
+		t.Fatalf("reconcile after reserved failure: %v", err)
+	}
+	if c.State.Pending != nil || c.State.LastConfirmedSeq != 1 || c.State.LastSeq != 1 {
+		t.Fatalf("reconcile must confirm the ORIGINAL sequence: %#v", c.State)
+	}
+	server.mu.Lock()
+	reports := server.reports
+	accepted := server.accepted[1]
+	server.mu.Unlock()
+	if reports != 2 || !accepted {
+		t.Fatalf("reports=%d accepted[1]=%v; want one failed then one successful same-seq report", reports, accepted)
+	}
+}
+
+func TestPublishReservedReportsAndClearsReservation(t *testing.T) {
+	c, server := publicationClient(t)
+	if err := c.ReservePublication("reply"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.PublishReserved(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c.State.Pending != nil || c.State.LastConfirmedSeq != 1 {
+		t.Fatalf("state after reserved publish: %#v", c.State)
+	}
+	server.mu.Lock()
+	reports := server.reports
+	server.mu.Unlock()
+	if reports != 1 {
+		t.Fatalf("reports = %d, want exactly one", reports)
+	}
+}
+
 func TestPublicationCrashBeforeAtomicWriteConsumesNothing(t *testing.T) {
 	c, server := publicationClient(t)
 	save := c.Save

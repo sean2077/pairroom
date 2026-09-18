@@ -916,7 +916,7 @@ func uniqueStrings(values []string) []string {
 	result := make([]string, 0, len(values))
 	for _, value := range values {
 		value = strings.TrimSpace(value)
-		if value == "" || len(value) > 256 || strings.ContainsAny(value, "\r\n\x00") || strings.Contains(value, "://") {
+		if value == "" || len(value) > 256 || strings.ContainsFunc(value, unicode.IsControl) || strings.Contains(value, "://") {
 			continue
 		}
 		key := strings.ToLower(value)

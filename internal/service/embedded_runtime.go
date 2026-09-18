@@ -114,6 +114,17 @@ func filterTranscriptBoundaryEvent(expectedSession string, event model.RuntimeEv
 		return event, true
 
 	case model.RuntimeError:
+		if strings.HasPrefix(event.Name, "adapter.") {
+			// Adapter-authored diagnostics are PairRoom's own strings (Go wait
+			// and stream errors), never vendor transcript; keeping them
+			// preserves the crash root cause the generic notice would erase.
+			event.SessionID = ""
+			event.TurnID = ""
+			event.ItemID = ""
+			event.Runtime = nil
+			event.Data = nil
+			return event, true
+		}
 		event.SessionID = ""
 		event.Text = uncorrelatedRuntimeErrorNotice
 		event.Name = ""
@@ -145,10 +156,41 @@ func EmbeddedRuntimeFactory(registry *Registry, cfg EmbeddedRuntimeConfig) Runti
 			return nil, fmt.Errorf("project is unavailable: %s", project.Diagnostic)
 		}
 		if durableRoom.HostMode == model.HostNative {
-			return startNativeHostRuntime(ctx, registry, project, durableRoom, cfg.ListenHost, cfg.nativeWake)
+			wake := cfg.nativeWake
+			if wake.Run == nil {
+				// Production Services resolve the vendor executable from the
+				// configured Codex command template instead of relying on the
+				// Service PATH, which a daemon/Desktop launch may not share
+				// with the user's shell. Test injection still wins.
+				if cfg.Mock {
+					wake.Run = unavailableNativeWakeCommand()
+				} else if cfg.Resolver != nil {
+					if command := strings.TrimSpace(cfg.Resolver.runtimes.For(model.RuntimeCodex).Command); command != "" {
+						wake.Run = fixedNativeWakeCommand(command)
+					}
+				}
+			}
+			return startNativeHostRuntime(ctx, registry, project, durableRoom, cfg.ListenHost, wake)
 		}
 		return startEmbeddedRuntime(ctx, registry, project, durableRoom, cfg)
 	}
+}
+
+// Fatal reports an internal fail-closed condition so the RuntimeManager can
+// surface the Room as failed instead of serving requests that can only error.
+func (r *embeddedRuntime) Fatal() error {
+	if r == nil {
+		return nil
+	}
+	if r.engine != nil {
+		if err := r.engine.Fatal(); err != nil {
+			return err
+		}
+	}
+	if p := r.serveFatal.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 type uncertainRuntime struct {
@@ -185,6 +227,9 @@ type embeddedRuntime struct {
 	http      *http.Server
 	listener  net.Listener
 	serveDone chan error
+	// serveFatal records an unexpected Room View listener failure so Fatal can
+	// surface it while the runtime still looks Active.
+	serveFatal atomic.Pointer[error]
 
 	requestMu       sync.Mutex
 	managerDraining bool
@@ -293,14 +338,27 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 	codexCfg.PeerRuntime = claudeCfg.Runtime
 
 	var engine *room.Engine
+	var pendingMu sync.Mutex
 	onSessionMaterialized := func(ctx context.Context, actor model.ActorID, sessionID string) error {
-		if !pendingBindings[actor] {
+		pendingMu.Lock()
+		pending := pendingBindings[actor]
+		pendingMu.Unlock()
+		if !pending {
 			return nil
 		}
 		_, err := registry.MaterializeBinding(ctx, durableRoom.ID, actor, sessionID, func(kind string, payload any) error {
 			return engine.RecordServiceEvent(kind, payload)
 		})
-		return err
+		if err != nil {
+			return err
+		}
+		// A materialized binding is durable; never re-attempt it on a later
+		// turn. A repeated attempt fails against the committed identity and
+		// would interrupt an already accepted native turn.
+		pendingMu.Lock()
+		pendingBindings[actor] = false
+		pendingMu.Unlock()
+		return nil
 	}
 	engine, err = room.New(room.Config{
 		Name:          durableRoom.Name,
@@ -374,6 +432,10 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 		err := runtime.http.Serve(listener)
 		if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
 			err = nil
+		}
+		if err != nil {
+			wrapped := fmt.Errorf("Room View listener failed: %w", err)
+			runtime.serveFatal.Store(&wrapped)
 		}
 		runtime.serveDone <- err
 	}()
@@ -572,7 +634,12 @@ func (r *embeddedRuntime) close(ctx context.Context) (error, bool) {
 		}
 	}
 	if r.serveDone != nil {
-		if err := <-r.serveDone; err != nil {
+		if err := <-r.serveDone; err != nil && r.serveFatal.Load() == nil {
+			// A failure already recorded in serveFatal was surfaced through
+			// Fatal(); joining it again here would turn a diagnosed dead
+			// listener into an "uncertain" close that pins the capacity slot
+			// until a Service restart even though nothing vendor-owned is
+			// left to be uncertain about.
 			result = errors.Join(result, fmt.Errorf("serve Room View: %w", err))
 		}
 	}

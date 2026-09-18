@@ -142,6 +142,16 @@ func (e *Engine) available() error {
 	}
 	return nil
 }
+
+// Fatal reports the fail-closed store/replay error, if any, so the Service can
+// surface this Room runtime as failed instead of reporting a healthy Active
+// phase while every relay operation can only error.
+func (e *Engine) Fatal() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.fatal
+}
+
 func (e *Engine) signal() { close(e.changed); e.changed = make(chan struct{}) }
 func (e *Engine) append(kind string, actor model.ActorID, payload any) error {
 	if e.closed || e.fatal != nil {

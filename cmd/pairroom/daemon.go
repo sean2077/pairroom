@@ -647,6 +647,60 @@ func waitForManagementURL(logFile string, backups int, timeout time.Duration) (s
 	}
 }
 
+// daemonLogTailWindow bounds the first read of each daemon log while waiting
+// for the Management URL. The newest "management:" start line sits at the tail
+// in the common case; the 100 ms wait loop must not re-read tens of megabytes.
+const daemonLogTailWindow = 1 << 20
+
+func readDaemonLogTail(path string) (text string, truncated bool, err error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", false, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return "", false, err
+	}
+	offset := int64(0)
+	if info.Size() > daemonLogTailWindow {
+		offset = info.Size() - daemonLogTailWindow
+	}
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		return "", false, err
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return "", false, err
+	}
+	if offset > 0 {
+		// Drop a possibly truncated first line.
+		if index := strings.IndexByte(string(data), '\n'); index >= 0 {
+			data = data[index+1:]
+		}
+	}
+	return string(data), offset > 0, nil
+}
+
+func appendManagementURLCandidates(text string, seen map[string]struct{}, candidates *[]string) {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	for lineIndex := len(lines) - 1; lineIndex >= 0; lineIndex-- {
+		line := strings.TrimSpace(lines[lineIndex])
+		if !strings.HasPrefix(line, "management:") {
+			continue
+		}
+		candidate := strings.TrimSpace(strings.TrimPrefix(line, "management:"))
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		*candidates = append(*candidates, candidate)
+	}
+}
+
 func managementURLCandidates(logFile string, backups int) ([]string, error) {
 	seen := make(map[string]struct{})
 	var candidates []string
@@ -655,28 +709,27 @@ func managementURLCandidates(logFile string, backups int) ([]string, error) {
 		if index > 0 {
 			path = fmt.Sprintf("%s.%d", logFile, index)
 		}
-		data, err := os.ReadFile(path)
+		text, truncated, err := readDaemonLogTail(path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			return nil, fmt.Errorf("read daemon log %s: %w", path, err)
 		}
-		lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
-		for lineIndex := len(lines) - 1; lineIndex >= 0; lineIndex-- {
-			line := strings.TrimSpace(lines[lineIndex])
-			if !strings.HasPrefix(line, "management:") {
-				continue
+		before := len(candidates)
+		appendManagementURLCandidates(text, seen, &candidates)
+		if len(candidates) == before && truncated {
+			// A long-running daemon's start line can predate the tail window.
+			// Fall back to a full read of this file for this pass; the
+			// caller's bounded wait window caps how often that can repeat.
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				if errors.Is(readErr, os.ErrNotExist) {
+					continue
+				}
+				return nil, fmt.Errorf("read daemon log %s: %w", path, readErr)
 			}
-			candidate := strings.TrimSpace(strings.TrimPrefix(line, "management:"))
-			if candidate == "" {
-				continue
-			}
-			if _, ok := seen[candidate]; ok {
-				continue
-			}
-			seen[candidate] = struct{}{}
-			candidates = append(candidates, candidate)
+			appendManagementURLCandidates(string(data), seen, &candidates)
 		}
 	}
 	return candidates, nil

@@ -49,13 +49,16 @@ type CodexAdapter struct {
 	cfg  Config
 	sink EventSink
 
-	startMu     sync.Mutex
-	submitMu    sync.Mutex
-	mu          sync.Mutex
-	writeMu     sync.Mutex
-	state       model.AgentState
-	cmd         *exec.Cmd
-	stdin       io.WriteCloser
+	startMu  sync.Mutex
+	submitMu sync.Mutex
+	mu       sync.Mutex
+	writeMu  sync.Mutex
+	state    model.AgentState
+	cmd      *exec.Cmd
+	stdin    io.WriteCloser
+	// procDone is closed once the process exited and waitProcess finished; it
+	// gives Stop a bounded graceful window between closing stdin and Kill.
+	procDone    chan struct{}
 	threadID    string
 	currentTurn string
 	// threadEngaged records whether any turn has started on threadID. Codex
@@ -64,9 +67,13 @@ type CodexAdapter struct {
 	// exit to decide whether the in-memory thread ID is safe to drop.
 	threadEngaged bool
 	intentional   bool
-	pending       map[int64]chan rpcReply
-	approvals     map[string]pendingApproval
-	turnInputs    map[string][]model.AgentInput
+	// role records the last successfully asserted participant role so the
+	// per-submission same-role SetRole assertion is a no-op instead of
+	// re-running the turn-boundary gate (and failing on stale state).
+	role       model.ParticipantRole
+	pending    map[int64]chan rpcReply
+	approvals  map[string]pendingApproval
+	turnInputs map[string][]model.AgentInput
 	// wireInputs holds inputs keyed by Codex's documented
 	// clientUserMessageId while a turn/start or turn/steer request is in flight.
 	// The matching userMessage item echoes this value as clientId, allowing
@@ -210,13 +217,19 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 		return fmt.Errorf("start codex app-server: %w", err)
 	}
 
+	procDone := make(chan struct{})
 	c.mu.Lock()
 	c.cmd = cmd
 	c.stdin = stdin
+	c.procDone = procDone
 	c.mu.Unlock()
-	go c.readStdout(stdout)
-	go c.readStderr(stderr)
-	go c.waitProcess(cmd)
+	// cmd.Wait closes the pipes; both readers must finish draining before Wait
+	// so a final stdout record (turn/completed JSON) is never lost to the race.
+	var readers sync.WaitGroup
+	readers.Add(2)
+	go func() { defer readers.Done(); c.readStdout(stdout) }()
+	go func() { defer readers.Done(); c.readStderr(stderr) }()
+	go func() { readers.Wait(); c.waitProcess(cmd); close(procDone) }()
 
 	handshakeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -327,6 +340,13 @@ func (c *CodexAdapter) StartTurn(ctx context.Context, input model.AgentInput) er
 		c.startingTurnID = ""
 		c.pendingCompletions = make(map[string]json.RawMessage)
 		c.mu.Unlock()
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			// The app-server may have accepted turn/start after the deadline;
+			// the orphaned native turn is not reachable through Interrupt once
+			// local state was cleared, so the failure must tell the operator to
+			// inspect before retrying.
+			return fmt.Errorf("%w; the native turn/start may still have been accepted — inspect the Codex thread before retrying this input", err)
+		}
 		return err
 	}
 	var turnResult struct {
@@ -787,6 +807,7 @@ func (c *CodexAdapter) readStdout(reader io.Reader) {
 	}
 	if err := scanner.Err(); err != nil {
 		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
+		e.Name = "adapter.stream_error"
 		e.Text = "read Codex stream: " + err.Error()
 		c.sink(e)
 	}
@@ -905,6 +926,7 @@ func (c *CodexAdapter) handleServerRequest(rawID json.RawMessage, method string,
 			_ = c.sendRawResponse(rawID, declined, nil)
 		}
 		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
+		e.Name = "adapter.boundary_rejected"
 		e.Text = "Codex emitted an approval request outside a PairRoom-authored turn"
 		c.sink(e)
 		return
@@ -1450,7 +1472,15 @@ func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
 		c.wireInputs = make(map[string]model.AgentInput)
 		c.wireInputOrder = nil
 	}
+	staleApprovals := make([]pendingApproval, 0, len(c.approvals))
+	for id, pending := range c.approvals {
+		if pending.turnID == p.Turn.ID {
+			staleApprovals = append(staleApprovals, pending)
+			delete(c.approvals, id)
+		}
+	}
 	c.mu.Unlock()
+	c.clearStaleApprovals(staleApprovals)
 	for _, item := range inputs {
 		c.emitInputTerminal(p.Turn.ID, item, terminalKind, detail)
 	}
@@ -1481,6 +1511,21 @@ func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
 		return
 	} else {
 		c.setState(model.StateIdle, "")
+	}
+}
+
+// clearStaleApprovals answers approval requests that a terminal turn left
+// unresolved so the vendor is not left waiting on a dead request and the local
+// record can never wedge the SetRole boundary gate. It mirrors Grok's
+// cancelPendingInteractions; the Room-side projection expires through the
+// ordinary turn-boundary handling.
+func (c *CodexAdapter) clearStaleApprovals(stale []pendingApproval) {
+	for _, pending := range stale {
+		result, err := codexApprovalResult(pending, "decline")
+		if err != nil {
+			continue
+		}
+		_ = c.sendRawResponse(pending.rawID, result, nil)
 	}
 }
 
@@ -1595,10 +1640,16 @@ func (c *CodexAdapter) ResolveApproval(ctx context.Context, approvalID string, r
 	}
 	c.mu.Lock()
 	delete(c.approvals, approvalID)
+	active := c.currentTurn != ""
 	c.mu.Unlock()
 	// The room engine owns the user-facing approval projection after this call
 	// succeeds. serverRequest/resolved remains available for server-side clears.
-	c.setState(model.StateWorking, "")
+	// Only a still-active turn returns to Working; the turn may have completed
+	// while the decision was in flight, and resurrecting Working would project
+	// a state the vendor no longer has.
+	if active {
+		c.setState(model.StateWorking, "")
+	}
 	return nil
 }
 
@@ -1612,10 +1663,18 @@ func (c *CodexAdapter) SetRole(_ context.Context, role model.ParticipantRole) er
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.role == role {
+		// The submission path re-asserts the current role before every turn.
+		// A same-role assertion changes nothing and must not fail on turn
+		// state or a stale approval record; only a real transition requires
+		// the safe-boundary gate below.
+		return nil
+	}
 	if c.state == model.StateStarting || c.state == model.StateWorking || c.state == model.StateWaiting ||
 		c.currentTurn != "" || c.startingInput != nil || len(c.wireInputs) > 0 || len(c.approvals) > 0 {
 		return errors.New("interrupt or stop Codex before changing its role")
 	}
+	c.role = role
 	return nil
 }
 
@@ -1676,13 +1735,15 @@ func (c *CodexAdapter) failPendingRPCs(detail string) {
 	}
 }
 
-func (c *CodexAdapter) Stop(context.Context) error {
+func (c *CodexAdapter) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	cmd := c.cmd
 	stdin := c.stdin
+	procDone := c.procDone
 	c.intentional = true
 	c.cmd = nil
 	c.stdin = nil
+	c.procDone = nil
 	c.mu.Unlock()
 	c.failPendingRPCs("Codex was stopped")
 	for _, input := range c.takeOutstandingInputs() {
@@ -1691,6 +1752,9 @@ func (c *CodexAdapter) Stop(context.Context) error {
 	if stdin != nil {
 		_ = stdin.Close()
 	}
+	// Bounded graceful window so app-server can flush its rollout before the
+	// hard kill; a strict resume later then still finds a complete record.
+	waitGracefulExit(ctx, procDone)
 	if cmd != nil && cmd.Process != nil {
 		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			return err
@@ -1748,6 +1812,7 @@ func (c *CodexAdapter) handleUnexpectedProcessExit(err error) {
 	}
 	if err != nil || outstanding.turnID != "" || len(outstanding.inputs) > 0 {
 		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
+		e.Name = "adapter.process_exited"
 		e.Text = detail
 		c.sink(e)
 		c.setState(model.StateError, detail)
