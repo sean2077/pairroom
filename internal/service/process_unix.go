@@ -37,3 +37,9 @@ func serviceLockProcessAlive(pid int) (bool, error) {
 func serviceLockProcessStartedAt(pid int) (time.Time, bool, error) {
 	return time.Time{}, false, nil
 }
+
+// serviceLockProcessLooksLikeOwner is unreachable on this platform (startedAt
+// is never ok), but the conservative answer keeps the link-time contract.
+func serviceLockProcessLooksLikeOwner(pid int) bool {
+	return true
+}

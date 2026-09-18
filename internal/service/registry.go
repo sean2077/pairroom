@@ -151,6 +151,7 @@ func cleanupServiceRootTemps(root string) {
 		{".service-registry-", ".tmp"},
 		{".navigation-order-", ".tmp"},
 		{".agent-pair-profiles-", ".tmp"},
+		{".service-lock-", ".tmp"},
 		{".relay-endpoint.json-", ""},
 		{".diagnostic-", ""},
 	}

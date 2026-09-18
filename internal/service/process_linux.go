@@ -5,6 +5,7 @@ package service
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -78,4 +79,45 @@ func serviceLockProcessStartedAt(pid int) (time.Time, bool, error) {
 	seconds := btime + ticks/userHZ
 	nanos := (ticks % userHZ) * int64(time.Second/userHZ)
 	return time.Unix(seconds, nanos).UTC(), true, nil
+}
+
+// serviceLockProcessLooksLikeOwner reports whether the PID's process image
+// looks like a PairRoom service. Any uncertainty answers true (conservative):
+// the reuse conclusion is only drawn for a clearly foreign image. The derived
+// creation time shares the boot-time clock domain, so this identity check is
+// what keeps a boot-time clock error from evicting a live owner's lock.
+func serviceLockProcessLooksLikeOwner(pid int) bool {
+	self, err := os.Executable()
+	if err != nil {
+		return true
+	}
+	proc := "/proc/" + strconv.Itoa(pid)
+	if target, err := os.Readlink(proc + "/exe"); err == nil {
+		target = strings.TrimSuffix(target, " (deleted)")
+		selfResolved, selfErr := filepath.EvalSymlinks(self)
+		if selfErr != nil {
+			selfResolved = self
+		}
+		targetResolved, targetErr := filepath.EvalSymlinks(target)
+		if targetErr != nil {
+			targetResolved = target
+		}
+		if filepath.Clean(targetResolved) == filepath.Clean(selfResolved) {
+			return true
+		}
+		return filepath.Base(target) == "pairroom"
+	}
+	data, err := os.ReadFile(proc + "/comm")
+	if err != nil {
+		return true
+	}
+	comm := strings.TrimSpace(string(data))
+	if comm == "" {
+		return true
+	}
+	base := filepath.Base(self)
+	if len(base) > 15 {
+		base = base[:15] // comm is truncated to 15 bytes by the kernel
+	}
+	return comm == base || comm == "pairroom"
 }

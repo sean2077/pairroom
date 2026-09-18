@@ -56,9 +56,12 @@ const serviceLockReuseTolerance = 5 * time.Minute
 
 // ServiceLockOwnerRunning checks whether the process recorded in a lock is
 // still present. A true result is conservative: recovery must never proceed
-// while the owner may still be alive. When the platform can report the
-// process creation time, a PID now held by a process created well after the
-// recorded owner started is recognized as reuse: the owner is gone.
+// while the owner may still be alive. A PID whose process was created well
+// after the recorded owner started is treated as reuse only when the process
+// image also does not look like PairRoom itself: on platforms that derive
+// creation time from boot time plus ticks (Linux), a boot-time clock error
+// corrected after startup could otherwise invert the comparison for a live
+// owner, and recovery must never guess that another process is dead.
 func ServiceLockOwnerRunning(info ServiceLockInfo) (bool, error) {
 	alive, err := serviceLockProcessAlive(info.PID)
 	if err != nil || !alive {
@@ -71,13 +74,13 @@ func ServiceLockOwnerRunning(info ServiceLockInfo) (bool, error) {
 	if !ok {
 		return true, nil
 	}
-	// Both timestamps come from the same wall-clock domain: the kernel's
-	// process creation time and this Service's own StartedAt write, which
-	// happens seconds after the process starts. A genuine owner therefore
-	// always satisfies creation <= StartedAt; only a large clock step landing
-	// inside that brief create-to-lock window could invert the comparison, and
-	// the tolerance widens the safe side further.
 	if !info.StartedAt.IsZero() && started.After(info.StartedAt.Add(serviceLockReuseTolerance)) {
+		// Clock-independent cross-check before concluding reuse: a genuine
+		// PairRoom image keeps the lock fail-closed even under clock-domain
+		// anomalies (dual-boot RTC interpretation, VM resume, NTP steps).
+		if serviceLockProcessLooksLikeOwner(info.PID) {
+			return true, nil
+		}
 		return false, nil
 	}
 	return true, nil
@@ -139,30 +142,64 @@ func AcquireServiceLock(input string, recoverStale bool) (*ServiceLock, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode service lock: %w", err)
 	}
+	if err := publishServiceLock(root, path, metadata.Nonce, append(data, '\n')); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return nil, serviceLockOccupiedError(path)
+		}
+		return nil, err
+	}
+	if err := syncDir(root); err != nil {
+		_ = os.Remove(path)
+		return nil, err
+	}
+	return &ServiceLock{root: root, path: path, nonce: metadata.Nonce}, nil
+}
+
+// publishServiceLock makes the lock visible in one atomic namespace
+// operation: complete owner metadata is written and synced to a staged
+// temporary file first, then hard-linked onto the free lock path. The live
+// path is therefore never observable without complete metadata, which closes
+// the create-to-write window whose debris and suspended-writer races the
+// recovery path would otherwise have to reason about. Filesystems without
+// hard-link support fall back to the historical exclusive-create protocol.
+func publishServiceLock(root, path, nonce string, data []byte) error {
+	tmpPath := filepath.Join(root, ".service-lock-"+nonce+".tmp")
+	if err := writeSyncedLockFile(tmpPath, data); err != nil {
+		return err
+	}
+	defer os.Remove(tmpPath)
+	if err := os.Link(tmpPath, path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return err
+		}
+		return createServiceLockExclusive(path, data)
+	}
+	return nil
+}
+
+func writeSyncedLockFile(path string, data []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("stage service lock: %w", err)
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("stage service lock: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("sync staged service lock: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close staged service lock: %w", err)
+	}
+	return nil
+}
+
+func createServiceLockExclusive(path string, data []byte) error {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			detail := ""
-			if existing, readErr := os.ReadFile(path); readErr == nil {
-				if owner, decodeErr := decodeServiceLockMetadata(existing); decodeErr == nil {
-					detail = fmt.Sprintf(" (pid %d, started %s", owner.PID, owner.StartedAt.Format(time.RFC3339))
-					if running, probeErr := serviceLockProcessAlive(owner.PID); probeErr == nil {
-						if running {
-							detail += "; process is running"
-						} else {
-							detail += "; process is not running"
-						}
-					}
-					detail += ")"
-				} else {
-					detail = fmt.Sprintf(" (lock metadata is unreadable: %v; if no PairRoom Service is starting this is crash debris, and --recover-stale-lock removes an unreadable lock older than %s)", decodeErr, serviceLockDebrisAge)
-				}
-			} else {
-				detail = fmt.Sprintf(" (lock metadata could not be read: %v)", readErr)
-			}
-			return nil, fmt.Errorf("%w%s; use --recover-stale-lock only after the recorded owner is confirmed gone", ErrServiceAlreadyRunning, detail)
-		}
-		return nil, fmt.Errorf("create service lock: %w", err)
+		return err
 	}
 	cleanup := true
 	defer func() {
@@ -171,20 +208,39 @@ func AcquireServiceLock(input string, recoverStale bool) (*ServiceLock, error) {
 			_ = os.Remove(path)
 		}
 	}()
-	if _, err := file.Write(append(data, '\n')); err != nil {
-		return nil, fmt.Errorf("write service lock: %w", err)
+	if _, err := file.Write(data); err != nil {
+		return fmt.Errorf("write service lock: %w", err)
 	}
 	if err := file.Sync(); err != nil {
-		return nil, fmt.Errorf("sync service lock: %w", err)
+		return fmt.Errorf("sync service lock: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		return nil, fmt.Errorf("close service lock: %w", err)
-	}
-	if err := syncDir(root); err != nil {
-		return nil, err
+		return fmt.Errorf("close service lock: %w", err)
 	}
 	cleanup = false
-	return &ServiceLock{root: root, path: path, nonce: metadata.Nonce}, nil
+	return nil
+}
+
+func serviceLockOccupiedError(path string) error {
+	detail := ""
+	if existing, readErr := os.ReadFile(path); readErr == nil {
+		if owner, decodeErr := decodeServiceLockMetadata(existing); decodeErr == nil {
+			detail = fmt.Sprintf(" (pid %d, started %s", owner.PID, owner.StartedAt.Format(time.RFC3339))
+			if running, probeErr := serviceLockProcessAlive(owner.PID); probeErr == nil {
+				if running {
+					detail += "; process is running"
+				} else {
+					detail += "; process is not running"
+				}
+			}
+			detail += ")"
+		} else {
+			detail = fmt.Sprintf(" (lock metadata is unreadable: %v; if no PairRoom Service is starting this is crash debris, and --recover-stale-lock removes an unreadable lock older than %s)", decodeErr, serviceLockDebrisAge)
+		}
+	} else {
+		detail = fmt.Sprintf(" (lock metadata could not be read: %v)", readErr)
+	}
+	return fmt.Errorf("%w%s; use --recover-stale-lock only after the recorded owner is confirmed gone", ErrServiceAlreadyRunning, detail)
 }
 
 // InspectServiceLock reports the owner metadata for a selected data root. It
