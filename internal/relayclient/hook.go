@@ -119,6 +119,8 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	if !hook.StopHookActive {
 		next.Blocks = 0
 	}
+	// Local-only observability for `relay status`; never sent to the Service.
+	next.LastHookAt = time.Now().UTC().Format(time.RFC3339)
 	if err := c.persist(next); err != nil {
 		release()
 		return err

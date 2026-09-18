@@ -42,6 +42,10 @@ type State struct {
 	Blocks           int               `json:"blocks"`
 	HarnessPID       int               `json:"harness_pid,omitempty"`
 	HarnessName      string            `json:"harness_name,omitempty"`
+	// LastHookAt is local-only observability: when the approved Stop hook last
+	// ran for this binding, so `relay status` can distinguish "hook never
+	// fires" from "hook fires but nothing routes". Never sent to the Service.
+	LastHookAt string `json:"last_hook_at,omitempty"`
 }
 
 type credentials struct {

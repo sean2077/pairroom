@@ -248,6 +248,9 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 			return e
 		}
 		local := map[string]any{"last_confirmed_seq": c.State.LastConfirmedSeq, "last_seq": c.State.LastSeq, "publication_unknown": errors.Is(err, relay.ErrUnknown)}
+		if c.State.LastHookAt != "" {
+			local["last_hook_at"] = c.State.LastHookAt
+		}
 		if c.State.Pending != nil {
 			local["pending_seq"] = c.State.Pending.Seq
 			local["publication_unknown"] = c.State.Pending.Unknown
