@@ -73,8 +73,8 @@ relay: bind reads the official session id the harness exposes to its tool-call
 environment (Claude Code `CLAUDE_CODE_SESSION_ID`, Codex `CODEX_SESSION_ID`,
 Grok `GROK_SESSION_ID`) and
 associates at once, so there is no nonce to echo and nothing to wait for. Run
-bind as a tool call inside the intended session, not a detached terminal; without
-that environment bind fails closed rather than guessing. Give the agents the task
+bind as a tool call inside the intended session, not a detached terminal or Grok
+shell mode (`!`); without that environment bind fails closed rather than guessing. Give the agents the task
 and intended collaboration in ordinary language; no status check or initial Stop
 is needed to unlock relay. `pairroom relay status` is available for diagnosis. The app displays published
 messages and delivery state, not full native history.
