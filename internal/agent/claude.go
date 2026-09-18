@@ -270,9 +270,13 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	c.resume = true
 	c.mu.Unlock()
 
-	go c.readStdout(stdout)
-	go c.readStderr(stderr)
-	go c.waitProcess(cmd)
+	// cmd.Wait closes the pipes; both readers must finish draining before Wait
+	// so a final stdout record (result/turn JSON) is never lost to the race.
+	var readers sync.WaitGroup
+	readers.Add(2)
+	go func() { defer readers.Done(); c.readStdout(stdout) }()
+	go func() { defer readers.Done(); c.readStderr(stderr) }()
+	go func() { readers.Wait(); c.waitProcess(cmd) }()
 
 	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	initErr := c.initializeControl(initCtx)
@@ -367,9 +371,30 @@ func (c *ClaudeAdapter) ensurePromptFile(content string) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create claude runtime directory: %w", err)
 	}
-	path := filepath.Join(dir, "claude-pairroom-prompt.md")
-	if err := os.WriteFile(path, []byte(content+"\n"), 0o600); err != nil {
+	// Both slots share one Room DataDir and either slot may select Claude. The
+	// prompt file name carries the durable actor identity, and the write is
+	// staged and renamed, so a concurrent Start for the peer slot can never
+	// serve this slot's CLI the wrong bootstrap or a half-written file.
+	actor := string(c.cfg.Actor)
+	if !c.cfg.Actor.ValidParticipant() {
+		actor = "unassigned"
+	}
+	path := filepath.Join(dir, "claude-pairroom-prompt-"+actor+".md")
+	tmp, err := os.CreateTemp(dir, "claude-pairroom-prompt-"+actor+"-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("stage claude system prompt: %w", err)
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err := tmp.Write([]byte(content + "\n")); err != nil {
+		_ = tmp.Close()
 		return "", fmt.Errorf("write claude system prompt: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("close claude system prompt: %w", err)
+	}
+	if err := os.Rename(name, path); err != nil {
+		return "", fmt.Errorf("replace claude system prompt: %w", err)
 	}
 	return path, nil
 }

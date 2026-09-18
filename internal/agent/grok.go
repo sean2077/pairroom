@@ -220,9 +220,13 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 	g.pending = make(map[int64]chan grokRPCReply)
 	g.approvals = make(map[string]grokPendingApproval)
 	g.mu.Unlock()
-	go g.readStdout(stdout)
-	go g.readStderr(stderr)
-	go g.waitProcess(cmd, done)
+	// cmd.Wait closes the pipes; both readers must finish draining before Wait
+	// so a final stdout record is never lost to the race.
+	var readers sync.WaitGroup
+	readers.Add(2)
+	go func() { defer readers.Done(); g.readStdout(stdout) }()
+	go func() { defer readers.Done(); g.readStderr(stderr) }()
+	go func() { readers.Wait(); g.waitProcess(cmd, done) }()
 
 	clientVersion := strings.TrimSpace(g.cfg.ClientVersion)
 	if clientVersion == "" {
@@ -856,7 +860,10 @@ func (g *GrokAdapter) Stop(ctx context.Context) error {
 	g.turn = nil
 	g.mu.Unlock()
 	g.setState(model.StateStopped, "")
-	return ctx.Err()
+	// The process was confirmed stopped (<-done) even on the ctx-timeout kill
+	// path; reporting the expired context here would mark a completed stop as
+	// an uncertain close and strand the runtime's capacity slot.
+	return nil
 }
 
 func (g *GrokAdapter) ResolveApproval(ctx context.Context, approvalID string, resolution model.ApprovalResolution) error {

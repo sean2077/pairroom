@@ -64,9 +64,13 @@ type CodexAdapter struct {
 	// exit to decide whether the in-memory thread ID is safe to drop.
 	threadEngaged bool
 	intentional   bool
-	pending       map[int64]chan rpcReply
-	approvals     map[string]pendingApproval
-	turnInputs    map[string][]model.AgentInput
+	// role records the last successfully asserted participant role so the
+	// per-submission same-role SetRole assertion is a no-op instead of
+	// re-running the turn-boundary gate (and failing on stale state).
+	role       model.ParticipantRole
+	pending    map[int64]chan rpcReply
+	approvals  map[string]pendingApproval
+	turnInputs map[string][]model.AgentInput
 	// wireInputs holds inputs keyed by Codex's documented
 	// clientUserMessageId while a turn/start or turn/steer request is in flight.
 	// The matching userMessage item echoes this value as clientId, allowing
@@ -214,9 +218,13 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	c.cmd = cmd
 	c.stdin = stdin
 	c.mu.Unlock()
-	go c.readStdout(stdout)
-	go c.readStderr(stderr)
-	go c.waitProcess(cmd)
+	// cmd.Wait closes the pipes; both readers must finish draining before Wait
+	// so a final stdout record (turn/completed JSON) is never lost to the race.
+	var readers sync.WaitGroup
+	readers.Add(2)
+	go func() { defer readers.Done(); c.readStdout(stdout) }()
+	go func() { defer readers.Done(); c.readStderr(stderr) }()
+	go func() { readers.Wait(); c.waitProcess(cmd) }()
 
 	handshakeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -1450,7 +1458,15 @@ func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
 		c.wireInputs = make(map[string]model.AgentInput)
 		c.wireInputOrder = nil
 	}
+	staleApprovals := make([]pendingApproval, 0, len(c.approvals))
+	for id, pending := range c.approvals {
+		if pending.turnID == p.Turn.ID {
+			staleApprovals = append(staleApprovals, pending)
+			delete(c.approvals, id)
+		}
+	}
 	c.mu.Unlock()
+	c.clearStaleApprovals(staleApprovals)
 	for _, item := range inputs {
 		c.emitInputTerminal(p.Turn.ID, item, terminalKind, detail)
 	}
@@ -1481,6 +1497,21 @@ func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
 		return
 	} else {
 		c.setState(model.StateIdle, "")
+	}
+}
+
+// clearStaleApprovals answers approval requests that a terminal turn left
+// unresolved so the vendor is not left waiting on a dead request and the local
+// record can never wedge the SetRole boundary gate. It mirrors Grok's
+// cancelPendingInteractions; the Room-side projection expires through the
+// ordinary turn-boundary handling.
+func (c *CodexAdapter) clearStaleApprovals(stale []pendingApproval) {
+	for _, pending := range stale {
+		result, err := codexApprovalResult(pending, "reject")
+		if err != nil {
+			continue
+		}
+		_ = c.sendRawResponse(pending.rawID, result, nil)
 	}
 }
 
@@ -1612,10 +1643,18 @@ func (c *CodexAdapter) SetRole(_ context.Context, role model.ParticipantRole) er
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.role == role {
+		// The submission path re-asserts the current role before every turn.
+		// A same-role assertion changes nothing and must not fail on turn
+		// state or a stale approval record; only a real transition requires
+		// the safe-boundary gate below.
+		return nil
+	}
 	if c.state == model.StateStarting || c.state == model.StateWorking || c.state == model.StateWaiting ||
 		c.currentTurn != "" || c.startingInput != nil || len(c.wireInputs) > 0 || len(c.approvals) > 0 {
 		return errors.New("interrupt or stop Codex before changing its role")
 	}
+	c.role = role
 	return nil
 }
 
