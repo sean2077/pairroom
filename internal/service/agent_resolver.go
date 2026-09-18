@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sean2077/pairroom/internal/agent"
@@ -60,6 +61,12 @@ type AgentResolver struct {
 	runtimes config.RuntimeTemplates
 	ccswitch *ccswitch.Reader
 	mock     bool
+
+	// catalogCache bounds how often a plain Management catalog read may spawn
+	// the three vendor CLI probes; the explicit refresh endpoint bypasses it.
+	catalogMu       sync.Mutex
+	catalogCache    *AgentCatalog
+	catalogCachedAt time.Time
 }
 
 func NewAgentResolver(cfg AgentResolverConfig) (*AgentResolver, error) {
@@ -260,6 +267,29 @@ func writeGrokOverlay(dataDir string, actor model.ActorID, content string) (stri
 	}
 	committed = true
 	return path, nil
+}
+
+// agentCatalogTTL bounds plain catalog reads so opening or polling the
+// Management shell cannot spawn three vendor CLI probes per request.
+const agentCatalogTTL = 45 * time.Second
+
+// CachedCatalog serves the GET catalog endpoint from a short-lived cache. The
+// cached value is treated as read-only; callers must not mutate it.
+func (r *AgentResolver) CachedCatalog(ctx context.Context) AgentCatalog {
+	r.catalogMu.Lock()
+	if r.catalogCache != nil && time.Since(r.catalogCachedAt) < agentCatalogTTL {
+		cached := *r.catalogCache
+		r.catalogMu.Unlock()
+		return cached
+	}
+	r.catalogMu.Unlock()
+	catalog := r.Catalog(ctx)
+	r.catalogMu.Lock()
+	stored := catalog
+	r.catalogCache = &stored
+	r.catalogCachedAt = time.Now()
+	r.catalogMu.Unlock()
+	return catalog
 }
 
 func (r *AgentResolver) Catalog(ctx context.Context) AgentCatalog {
