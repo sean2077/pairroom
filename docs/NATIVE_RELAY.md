@@ -163,7 +163,7 @@ short deadline and cannot hold up collection for the full transport timeout.
 ## Verified vendor wake surfaces
 
 Two vendor-sanctioned surfaces exist around the idle-wake boundary, verified
-on real CLIs (2026-09-16):
+on real CLIs (2026-09-16; Grok Build 2026-09-18):
 
 - **Claude Code**: no external command injects into an existing session, and
   resuming a running session starts a copy instead. The harness does wake an
@@ -178,8 +178,15 @@ on real CLIs (2026-09-16):
   pollable cross-turn. A wake nudge must stay body-free; thread identity may
   be visible to local process observers and vendor/CLI diagnostics, and must
   never be written to the Event Log, files, or relay bodies.
-- **Grok Build**: native binding and bounded Stop readiness are implemented;
-  authenticated multi-round acceptance and deep-idle wake remain unverified.
+- **Grok Build (grok 1.0.34)**: native binding, bounded Stop readiness, and
+  authenticated multi-round acceptance in both directions are verified on
+  real CLIs (2026-09-18 owner-authorized controlled experiment; sanitized
+  fixed categories: 4/4 rounds woke an idle session when an agent-owned
+  background `relay wait` completed, one model turn per round, no polling
+  output). As with Claude Code, this wake is model-initiated — the official
+  Grok background-task completion wakes the idle parent session — never
+  PairRoom-initiated. Service-initiated deep-idle wake has no
+  vendor-sanctioned surface for Grok and stays fail-closed.
 
 In a wake-enabled Room (per-Room configuration, default on; opt-out only at
 an idle Room boundary through the Management surface) the Service
@@ -188,8 +195,8 @@ peer-directed message to a deep-idle Codex-bound session: fixed body-free
 nudge, at most one per burst, rate-limited, durably reserved before the
 command, audited through a fixed outcome/reason vocabulary, and never
 automatically retried. See [design/auto-wake.md](design/auto-wake.md) and
-[PROTOCOL.md](PROTOCOL.md#automatic-idle-peer-wake). Claude Code sessions
-have no external injection surface and stay reachable through the
+[PROTOCOL.md](PROTOCOL.md#automatic-idle-peer-wake). Claude Code and Grok Build
+sessions have no external injection surface and stay reachable through the
 agent-owned background `relay wait`. For disabled Rooms, non-Codex targets,
 or wake failures, the CLI still prints a human-executable wake template as
 the fallback; the human decides and runs it.
