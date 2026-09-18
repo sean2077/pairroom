@@ -36,6 +36,16 @@
 
 - Crash-stale `service.lock` recovery now recognizes PID reuse on Windows (`GetProcessTimes`) and Linux (`/proc` starttime + btime) with a five-minute tolerance, instead of permanently refusing recovery when the recorded PID was recycled by an unrelated process; platforms without a creation-time source stay conservatively fail-closed.
 
+- The Stop hook reserves the reply WAL (sequence claim plus body in one local atomic write) before its inspect/confirm metadata round-trips, so a transient Service failure at the response boundary leaves a reconcilable pending publication instead of losing the reply without a trace; an unresolved earlier publication still takes the original reconcile-then-publish path and the wire request order is unchanged.
+
+- SSE writers bound every event/heartbeat write with a 30-second deadline on both the Room and Native surfaces, so a stuck client can no longer pin a stream goroutine until TCP timeouts; git status/diff output caps at 2 MiB (error details at 4 KiB) so one Inspector request cannot balloon memory on a huge working tree.
+
+- Standalone Room windows count pending native approvals alongside unread messages in the title attention badge (refreshed on approval updates), keeping human questions visible when the Inspector tab is hidden; attachment blob URLs are LRU-pruned beyond 96 entries and never while a rendered image still references them.
+
+- Codex approval resolution no longer projects a Working state after the turn already completed while the decision was in flight; a merged quote can no longer push attachments past the native eight-image limit (previously a guaranteed-failure retry loop at the native boundary).
+
+- Registry checkpoint and Room metadata reads are size-bounded; a checkpoint schema newer than this build is rejected at preflight with an upgrade message; a cleanly stopped Service removes its `relay-endpoint.json` discovery file so a dead bearer token no longer lingers on disk; CC Switch catalog strings filter all control characters, not only CR/LF/NUL.
+
 ## [v5.1.2] — 2026-09-18
 
 - Restore vendor-neutral wording in the distributable `pairroom-relay` onboarding skill: the free-wake reachability default and Grok's shared project-hook behavior are now expressed in harness-capability terms instead of naming Claude Code/Grok Build, keeping the published-payload canary (`scripts/test_native_setup.js`) green after earlier commits reintroduced vendor names that a persistently failing race stage had masked in CI. This unblocks the `release.yml` payload gate that stopped the v5.1.1 tag from publishing.
