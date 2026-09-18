@@ -269,7 +269,10 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-heartbeat.C:
-			if _, err := io.WriteString(w, ": heartbeat\n\n"); err != nil {
+			// A named event (not just a comment) so the client watchdog can
+			// distinguish a silent half-open connection from a healthy idle
+			// stream; it carries no id, so the durable cursor never moves.
+			if _, err := io.WriteString(w, "event: heartbeat\ndata: {}\n\n"); err != nil {
 				return
 			}
 			flusher.Flush()
@@ -804,6 +807,11 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) error {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds this endpoint's size limit")
+			return err
+		}
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return err
 	}

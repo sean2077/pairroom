@@ -201,6 +201,7 @@
   }
 
   function closeEvents() {
+    if (state.watchdogTimer) { window.clearInterval(state.watchdogTimer); state.watchdogTimer = null; }
     if (state.source) state.source.close();
     state.source = null;
   }
@@ -222,10 +223,22 @@
     const source = new EventSource(roomURL(`/api/v1/events?${query}`));
     state.source = source;
     setConnection(false, 'ui.connecting');
+    // Half-open TCP (sleep/wake, VPN switch, suspended webview) fires no
+    // EventSource error while the stream is silently dead. The server beats
+    // every 20 s; once this connection has proven it can receive anything,
+    // 2.5 silent beats force a reconnect instead of a permanent fake "Live".
+    let lastBeat = Date.now();
+    let sawTraffic = false;
+    const markActivity = () => { lastBeat = Date.now(); sawTraffic = true; };
     source.addEventListener('open', () => {
       if (state.source !== source) return;
       state.reconnectAttempt = 0;
+      markActivity();
       setConnection(true, 'room.live');
+    });
+    source.addEventListener('heartbeat', () => {
+      if (state.source !== source) return;
+      markActivity();
     });
     source.addEventListener('error', () => {
       if (state.source !== source) return;
@@ -234,10 +247,12 @@
     });
     source.addEventListener('reset', () => {
       if (state.source !== source) return;
+      markActivity();
       void loadSnapshot().catch(() => {});
     });
     source.addEventListener('pairroom', (raw) => {
       if (state.source !== source) return;
+      markActivity();
       try {
         applyEvent(JSON.parse(raw.data));
       } catch (error) {
@@ -245,6 +260,13 @@
         void loadSnapshot().catch(() => {});
       }
     });
+    state.watchdogTimer = window.setInterval(() => {
+      if (state.source !== source || !sawTraffic) return;
+      if (Date.now() - lastBeat > 50000) {
+        closeEvents();
+        scheduleReconnect();
+      }
+    }, 10000);
   }
 
   function applyEvent(event) {
@@ -2370,7 +2392,7 @@
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'toast-close';
-    close.setAttribute('aria-label', t("ui.disableNotifications"));
+    close.setAttribute('aria-label', t("ui.dismissNotification"));
     close.textContent = '×';
     $('toast-stack').appendChild(node);
     const duration = type === 'error' ? 8000 : 4500;
