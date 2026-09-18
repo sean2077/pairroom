@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v5.2.0] — 2026-09-19
+
 - Fix two Claude slots in one embedded Room sharing a single appended-system-prompt file: the prompt path now carries the durable actor identity and is staged through an atomic rename, so concurrent adapter starts can no longer serve the wrong bootstrap identity or a half-written file.
 
 - Unstick Codex rooms whose approval outlived its turn: a same-role `SetRole` assertion (made before every submission) is now a no-op — only a real role transition requires the safe turn boundary — and a terminal turn answers and drops its own unresolved approval requests instead of wedging every later submission behind a misleading "change role" error.
