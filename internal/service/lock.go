@@ -71,6 +71,12 @@ func ServiceLockOwnerRunning(info ServiceLockInfo) (bool, error) {
 	if !ok {
 		return true, nil
 	}
+	// Both timestamps come from the same wall-clock domain: the kernel's
+	// process creation time and this Service's own StartedAt write, which
+	// happens seconds after the process starts. A genuine owner therefore
+	// always satisfies creation <= StartedAt; only a large clock step landing
+	// inside that brief create-to-lock window could invert the comparison, and
+	// the tolerance widens the safe side further.
 	if !info.StartedAt.IsZero() && started.After(info.StartedAt.Add(serviceLockReuseTolerance)) {
 		return false, nil
 	}

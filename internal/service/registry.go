@@ -110,6 +110,10 @@ func OpenRegistry(ctx context.Context, cfg RegistryConfig) (*Registry, error) {
 	if err := os.MkdirAll(roomsRoot, 0o700); err != nil {
 		return nil, fmt.Errorf("create room data root: %w", err)
 	}
+	// Remove atomic-write temporaries a crashed Service left in the root. Only
+	// this package's own known prefixes are touched as regular files; Room
+	// data directories and the deletion quarantine own their recovery paths.
+	cleanupServiceRootTemps(root)
 	// Keep the deletion quarantine lazy. A fresh Registry should not gain an
 	// otherwise unexplained data directory until the first permanent Room
 	// removal. Startup recovery validates and scans it only when it already
@@ -132,6 +136,36 @@ func OpenRegistry(ctx context.Context, cfg RegistryConfig) (*Registry, error) {
 		return nil, fmt.Errorf("checkpoint rebuilt service registry: %w", err)
 	}
 	return registry, nil
+}
+
+// cleanupServiceRootTemps removes atomic-write temporary files a crashed
+// process left in the Service root. Only the exact prefixes this Service's
+// own writers create are touched, only regular files, and failures are not
+// fatal: a leftover temporary is clutter, never authoritative state.
+func cleanupServiceRootTemps(root string) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	patterns := []struct{ prefix, suffix string }{
+		{".service-registry-", ".tmp"},
+		{".navigation-order-", ".tmp"},
+		{".agent-pair-profiles-", ".tmp"},
+		{".relay-endpoint.json-", ""},
+		{".diagnostic-", ""},
+	}
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		name := entry.Name()
+		for _, pattern := range patterns {
+			if name != pattern.prefix && strings.HasPrefix(name, pattern.prefix) && strings.HasSuffix(name, pattern.suffix) {
+				_ = os.Remove(filepath.Join(root, name))
+				break
+			}
+		}
+	}
 }
 
 func (r *Registry) Root() string      { return r.root }
