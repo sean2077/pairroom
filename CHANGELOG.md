@@ -16,6 +16,18 @@
 
 - Desktop daemon discovery and `pairroom daemon open` read a bounded tail window of the service log (one-time full-read fallback) instead of re-reading every rotated log fully on each 100 ms probe; `install.sh` verifies the release `SHA256SUMS` before installing; `docs/STORAGE.md` no longer claims a `bootstrap` slot file that current binds never write.
 
+- Surface internally dead runtimes instead of Active zombies: Room runtimes now report a fatal internal condition (a relay engine fail-closed after an event-log write failure, a dead embedded Room store, or an unexpected Room/native HTTP listener exit), and the RuntimeManager reconcile loop marks such Rooms failed with the reason and attempts a graceful close instead of continuing to serve requests that can only error.
+
+- The embedded Room engine makes durable-store death visible: the first event-log write failure publishes one transient (never persisted) error notice to the Room UI and is recorded for runtime health reporting, so the Room no longer keeps mutating silently in memory while facts are lost.
+
+- Vendor adapter hardening: Claude/Codex Stop gives the CLI a bounded two-second window (or the caller's context) to flush its own session state after stdin closes before the hard kill; a Codex turn/start timeout now says the native turn may still have been accepted and must be inspected before retry; adapter-authored diagnostics (process exit, stream-read failure, out-of-turn boundary rejections) are marked and pass the transcript boundary, so crash causes stop being generalized into an uninformative notice.
+
+- Fix embedded Rooms re-attempting binding materialization on every accepted turn: the pending-binding flag clears once after the durable commit (under a mutex), so a late vendor session-ID drift can no longer interrupt an already accepted native turn on each following message.
+
+- Actionable storage errors: navigation-order and Agent-pair-profile failures now distinguish a corrupt file (with the repair action in the message) from unavailable storage (root cause kept wrapped and logged), while browser responses stay stable and path-free; deletion-quarantine unknown entries and a corrupt registry checkpoint name the concrete manual recovery step in the startup error.
+
+- Room projection hygiene: a FIFO item dropped because its message reached a terminal processing state while queued now records a DeliverySkipped transition instead of leaving a contradictory queued+cancelled display; the standalone default Room name is generated from the pair's actual runtimes instead of hard-coding "Claude × Codex"; stale "claude or codex" wording in cancel/protocol errors now uses the durable slot vocabulary.
+
 ## [v5.1.2] — 2026-09-18
 
 - Restore vendor-neutral wording in the distributable `pairroom-relay` onboarding skill: the free-wake reachability default and Grok's shared project-hook behavior are now expressed in harness-capability terms instead of naming Claude Code/Grok Build, keeping the published-payload canary (`scripts/test_native_setup.js`) green after earlier commits reintroduced vendor names that a persistently failing race stage had masked in CI. This unblocks the `release.yml` payload gate that stopped the v5.1.1 tag from publishing.
