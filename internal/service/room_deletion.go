@@ -209,7 +209,7 @@ func (r *Registry) RemoveRoom(ctx context.Context, roomID string) (RoomRemovalRe
 		return RoomRemovalResult{}, err
 	}
 	for _, binding := range room.Bindings {
-		if !binding.OwnsIdentity() {
+		if !indexesAdapterBindingOwnership(room, binding) {
 			continue
 		}
 		owner, ok := r.bindingOwners[binding.Key().String()]
@@ -252,7 +252,7 @@ func (r *Registry) RemoveRoom(ctx context.Context, roomID string) (RoomRemovalRe
 
 	delete(r.rooms, room.ID)
 	for _, binding := range room.Bindings {
-		if binding.OwnsIdentity() {
+		if indexesAdapterBindingOwnership(room, binding) {
 			delete(r.bindingOwners, binding.Key().String())
 		}
 	}
@@ -271,7 +271,7 @@ func (r *Registry) RemoveRoom(ctx context.Context, roomID string) (RoomRemovalRe
 		}
 		r.rooms[room.ID] = cloneRoom(room)
 		for _, binding := range room.Bindings {
-			if binding.OwnsIdentity() {
+			if indexesAdapterBindingOwnership(room, binding) {
 				r.bindingOwners[binding.Key().String()] = room.ID
 			}
 		}

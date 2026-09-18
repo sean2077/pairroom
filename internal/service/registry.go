@@ -879,10 +879,7 @@ func (r *Registry) indexRoomLocked(project Project, room Room) error {
 		if err := r.checkNativeIdentityLocked(room, actor, binding.SessionID); err != nil {
 			return err
 		}
-		if room.HostMode == model.HostNative {
-			continue
-		}
-		if !binding.OwnsIdentity() {
+		if !indexesAdapterBindingOwnership(room, binding) {
 			continue
 		}
 		if owner, ok := r.bindingOwners[binding.Key().String()]; ok && owner != room.ID {
@@ -899,10 +896,7 @@ func (r *Registry) indexRoomLocked(project Project, room Room) error {
 	}
 	r.projectByRoot[project.Root] = project.ID
 	for _, binding := range room.Bindings {
-		if room.HostMode == model.HostNative {
-			continue
-		}
-		if binding.OwnsIdentity() {
+		if indexesAdapterBindingOwnership(room, binding) {
 			r.bindingOwners[binding.Key().String()] = room.ID
 		}
 	}

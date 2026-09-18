@@ -85,6 +85,13 @@ func (b Binding) OwnsIdentity() bool {
 	return !b.Pending && strings.TrimSpace(b.SessionID) != ""
 }
 
+// indexesAdapterBindingOwnership reports whether the Service-wide
+// (slot, session) adapter ownership index should reserve this binding.
+// Native Rooms associate vendor sessions through runtime identity instead.
+func indexesAdapterBindingOwnership(room Room, binding Binding) bool {
+	return room.HostMode != model.HostNative && binding.OwnsIdentity()
+}
+
 func (b Binding) Validate() error {
 	if !b.Agent.ValidParticipant() {
 		return fmt.Errorf("invalid binding agent %q", b.Agent)

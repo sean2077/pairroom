@@ -551,6 +551,37 @@ func TestNativeGlobalSessionOwnershipIncludingEmbeddedAndArchive(t *testing.T) {
 	}
 }
 
+func TestRemoveAssociatedNativeRoomDoesNotPoisonAdapterOwnershipIndex(t *testing.T) {
+	f := nativeHTTP(t)
+	auth := associateCLI(t, f, model.ActorSlot2)
+	room, ok := f.registry.Room(f.room.ID)
+	if !ok {
+		t.Fatal("native Room disappeared after association")
+	}
+	binding := room.Bindings[model.ActorSlot2]
+	if !binding.OwnsIdentity() || binding.SessionID != auth.SessionID {
+		t.Fatalf("native slot2 was not associated: %#v", binding)
+	}
+	if owner, indexed := f.registry.BindingOwner(binding.Key()); indexed {
+		t.Fatalf("native session reserved in adapter ownership index: owner=%s", owner)
+	}
+	if err := f.manager.Suspend(context.Background(), f.room.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.registry.ArchiveRoom(context.Background(), f.room.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.registry.RemoveRoom(context.Background(), f.room.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.registry.Healthy(); err != nil {
+		t.Fatalf("removing an associated native Room poisoned the Registry: %v", err)
+	}
+	if _, ok := f.registry.Room(f.room.ID); ok {
+		t.Fatal("removed native Room remained indexed")
+	}
+}
+
 func TestNativeCloseCancelsSSEWithoutShutdownTimeout(t *testing.T) {
 	f := nativeHTTP(t)
 	req, _ := http.NewRequest(http.MethodGet, f.native.baseURL+"/api/v1/events", nil)
