@@ -49,13 +49,16 @@ type CodexAdapter struct {
 	cfg  Config
 	sink EventSink
 
-	startMu     sync.Mutex
-	submitMu    sync.Mutex
-	mu          sync.Mutex
-	writeMu     sync.Mutex
-	state       model.AgentState
-	cmd         *exec.Cmd
-	stdin       io.WriteCloser
+	startMu  sync.Mutex
+	submitMu sync.Mutex
+	mu       sync.Mutex
+	writeMu  sync.Mutex
+	state    model.AgentState
+	cmd      *exec.Cmd
+	stdin    io.WriteCloser
+	// procDone is closed once the process exited and waitProcess finished; it
+	// gives Stop a bounded graceful window between closing stdin and Kill.
+	procDone    chan struct{}
 	threadID    string
 	currentTurn string
 	// threadEngaged records whether any turn has started on threadID. Codex
@@ -214,9 +217,11 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 		return fmt.Errorf("start codex app-server: %w", err)
 	}
 
+	procDone := make(chan struct{})
 	c.mu.Lock()
 	c.cmd = cmd
 	c.stdin = stdin
+	c.procDone = procDone
 	c.mu.Unlock()
 	// cmd.Wait closes the pipes; both readers must finish draining before Wait
 	// so a final stdout record (turn/completed JSON) is never lost to the race.
@@ -224,7 +229,7 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	readers.Add(2)
 	go func() { defer readers.Done(); c.readStdout(stdout) }()
 	go func() { defer readers.Done(); c.readStderr(stderr) }()
-	go func() { readers.Wait(); c.waitProcess(cmd) }()
+	go func() { readers.Wait(); c.waitProcess(cmd); close(procDone) }()
 
 	handshakeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -335,6 +340,13 @@ func (c *CodexAdapter) StartTurn(ctx context.Context, input model.AgentInput) er
 		c.startingTurnID = ""
 		c.pendingCompletions = make(map[string]json.RawMessage)
 		c.mu.Unlock()
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			// The app-server may have accepted turn/start after the deadline;
+			// the orphaned native turn is not reachable through Interrupt once
+			// local state was cleared, so the failure must tell the operator to
+			// inspect before retrying.
+			return fmt.Errorf("%w; the native turn/start may still have been accepted — inspect the Codex thread before retrying this input", err)
+		}
 		return err
 	}
 	var turnResult struct {
@@ -795,6 +807,7 @@ func (c *CodexAdapter) readStdout(reader io.Reader) {
 	}
 	if err := scanner.Err(); err != nil {
 		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
+		e.Name = "adapter.stream_error"
 		e.Text = "read Codex stream: " + err.Error()
 		c.sink(e)
 	}
@@ -913,6 +926,7 @@ func (c *CodexAdapter) handleServerRequest(rawID json.RawMessage, method string,
 			_ = c.sendRawResponse(rawID, declined, nil)
 		}
 		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
+		e.Name = "adapter.boundary_rejected"
 		e.Text = "Codex emitted an approval request outside a PairRoom-authored turn"
 		c.sink(e)
 		return
@@ -1715,13 +1729,15 @@ func (c *CodexAdapter) failPendingRPCs(detail string) {
 	}
 }
 
-func (c *CodexAdapter) Stop(context.Context) error {
+func (c *CodexAdapter) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	cmd := c.cmd
 	stdin := c.stdin
+	procDone := c.procDone
 	c.intentional = true
 	c.cmd = nil
 	c.stdin = nil
+	c.procDone = nil
 	c.mu.Unlock()
 	c.failPendingRPCs("Codex was stopped")
 	for _, input := range c.takeOutstandingInputs() {
@@ -1730,6 +1746,9 @@ func (c *CodexAdapter) Stop(context.Context) error {
 	if stdin != nil {
 		_ = stdin.Close()
 	}
+	// Bounded graceful window so app-server can flush its rollout before the
+	// hard kill; a strict resume later then still finds a complete record.
+	waitGracefulExit(ctx, procDone)
 	if cmd != nil && cmd.Process != nil {
 		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			return err
@@ -1787,6 +1806,7 @@ func (c *CodexAdapter) handleUnexpectedProcessExit(err error) {
 	}
 	if err != nil || outstanding.turnID != "" || len(outstanding.inputs) > 0 {
 		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
+		e.Name = "adapter.process_exited"
 		e.Text = detail
 		c.sink(e)
 		c.setState(model.StateError, detail)

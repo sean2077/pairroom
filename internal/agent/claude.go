@@ -42,16 +42,19 @@ type ClaudeAdapter struct {
 	cfg  Config
 	sink EventSink
 
-	startMu      sync.Mutex
-	submitMu     sync.Mutex
-	mu           sync.Mutex
-	writeMu      sync.Mutex
-	controlMu    sync.Mutex
-	state        model.AgentState
-	sessionID    string
-	resume       bool
-	cmd          *exec.Cmd
-	stdin        io.WriteCloser
+	startMu   sync.Mutex
+	submitMu  sync.Mutex
+	mu        sync.Mutex
+	writeMu   sync.Mutex
+	controlMu sync.Mutex
+	state     model.AgentState
+	sessionID string
+	resume    bool
+	cmd       *exec.Cmd
+	stdin     io.WriteCloser
+	// procDone is closed once the process exited and waitProcess finished; it
+	// gives Stop a bounded graceful window between closing stdin and Kill.
+	procDone     chan struct{}
 	pending      []claudePending
 	output       strings.Builder
 	fallback     string
@@ -264,9 +267,11 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 		return fmt.Errorf("start claude: %w", err)
 	}
 
+	procDone := make(chan struct{})
 	c.mu.Lock()
 	c.cmd = cmd
 	c.stdin = stdin
+	c.procDone = procDone
 	c.resume = true
 	c.mu.Unlock()
 
@@ -276,7 +281,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	readers.Add(2)
 	go func() { defer readers.Done(); c.readStdout(stdout) }()
 	go func() { defer readers.Done(); c.readStderr(stderr) }()
-	go func() { readers.Wait(); c.waitProcess(cmd) }()
+	go func() { readers.Wait(); c.waitProcess(cmd); close(procDone) }()
 
 	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	initErr := c.initializeControl(initCtx)
@@ -636,6 +641,7 @@ func (c *ClaudeAdapter) readStdout(reader io.Reader) {
 	}
 	if err := scanner.Err(); err != nil {
 		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
+		e.Name = "adapter.stream_error"
 		e.Text = "read Claude stream: " + err.Error()
 		c.sink(e)
 	}
@@ -1000,6 +1006,7 @@ func (c *ClaudeAdapter) handleControlRequest(line []byte, pending claudePending,
 		// must neither become a visible approval nor leave this Runtime waiting.
 		_ = c.writeControlError(envelope.RequestID, "PairRoom rejected a control request outside a Room-authored turn")
 		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
+		e.Name = "adapter.boundary_rejected"
 		e.Text = "Claude emitted a control request outside a PairRoom-authored turn"
 		c.sink(e)
 		return
@@ -1276,6 +1283,7 @@ func (c *ClaudeAdapter) waitProcess(cmd *exec.Cmd) {
 	}
 	if err != nil || len(pending) > 0 {
 		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
+		e.Name = "adapter.process_exited"
 		e.Text = detail
 		c.sink(e)
 		c.setState(model.StateError, detail)
@@ -1318,12 +1326,14 @@ func (c *ClaudeAdapter) Interrupt(context.Context) error {
 	return nil
 }
 
-func (c *ClaudeAdapter) Stop(context.Context) error {
+func (c *ClaudeAdapter) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	cmd := c.cmd
 	stdin := c.stdin
+	procDone := c.procDone
 	c.cmd = nil
 	c.stdin = nil
+	c.procDone = nil
 	c.intentional = true
 	c.mu.Unlock()
 	c.cancelPending("stopped", "Claude Code was stopped")
@@ -1332,6 +1342,7 @@ func (c *ClaudeAdapter) Stop(context.Context) error {
 	if stdin != nil {
 		_ = stdin.Close()
 	}
+	waitGracefulExit(ctx, procDone)
 	if cmd != nil && cmd.Process != nil {
 		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			return err
@@ -1339,6 +1350,22 @@ func (c *ClaudeAdapter) Stop(context.Context) error {
 	}
 	c.setState(model.StateStopped, "")
 	return nil
+}
+
+// waitGracefulExit gives the vendor CLI a bounded window to flush its own
+// session state after stdin closed, before the hard kill. A CLI that ignores
+// the closed stdin is killed after the window; the caller's context still wins.
+func waitGracefulExit(ctx context.Context, procDone <-chan struct{}) {
+	if procDone == nil {
+		return
+	}
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-procDone:
+	case <-timer.C:
+	case <-ctx.Done():
+	}
 }
 
 func (c *ClaudeAdapter) ResolveApproval(ctx context.Context, approvalID string, resolution model.ApprovalResolution) error {

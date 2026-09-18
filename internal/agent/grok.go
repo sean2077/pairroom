@@ -1077,6 +1077,7 @@ func (g *GrokAdapter) readStdout(reader io.Reader) {
 	}
 	if err := scanner.Err(); err != nil {
 		e := runtimeEvent(g.cfg.Actor, model.RuntimeError)
+		e.Name = "adapter.stream_error"
 		e.Text = "read Grok ACP stream: " + err.Error()
 		g.sink(e)
 	}
@@ -1358,6 +1359,7 @@ func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, done chan struct{}) {
 			g.sink(completed)
 		}
 		e := runtimeEvent(g.cfg.Actor, model.RuntimeError)
+		e.Name = "adapter.process_exited"
 		e.Text = detail
 		g.sink(e)
 		g.setState(model.StateError, detail)
