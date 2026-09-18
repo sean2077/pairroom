@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/relay"
 	"github.com/sean2077/pairroom/internal/version"
 	"github.com/sean2077/pairroom/internal/websession"
 )
@@ -668,6 +670,130 @@ func TestManagementSuspendEndpointProtectsBusyTurnsAndCancelsQueuedRooms(t *test
 	}
 	if status.Phase != RuntimeSuspended || status.QueuePosition != 0 || status.OccupiesCapacity {
 		t.Fatalf("queued room was not safely canceled: %#v", status)
+	}
+}
+
+func TestScopedRelaySetupRoute(t *testing.T) {
+	allow := [][2]string{
+		{http.MethodGet, "/api/v1/service"},
+		{http.MethodGet, "/api/v1/agent-pair-profiles"},
+		{http.MethodGet, "/api/v1/agent-catalog"},
+		{http.MethodPost, "/api/v1/projects"},
+		{http.MethodPost, "/api/v1/projects/proj/rooms"},
+		{http.MethodPost, "/api/v1/rooms/room1/native-bindings/slot1"},
+		{http.MethodPost, "/api/v1/rooms/room1/native-bindings/slot2"},
+	}
+	for _, route := range allow {
+		if !scopedRelaySetupRoute(route[0], route[1]) {
+			t.Fatalf("setup route rejected: %s %s", route[0], route[1])
+		}
+	}
+	deny := [][2]string{
+		{http.MethodPost, "/api/v1/session"},
+		{http.MethodGet, "/api/v1/session"},
+		{http.MethodPost, "/api/v1/agent-catalog/refresh"},
+		{http.MethodPost, "/api/v1/projects/proj/refresh"},
+		{http.MethodPost, "/api/v1/projects/proj/rooms/extra"},
+		{http.MethodPost, "/api/v1/rooms/room1/activate"},
+		{http.MethodPost, "/api/v1/rooms/room1/native-bindings/slot3"},
+		{http.MethodPatch, "/api/v1/runtime-policy"},
+	}
+	for _, route := range deny {
+		if scopedRelaySetupRoute(route[0], route[1]) {
+			t.Fatalf("privileged route admitted: %s %s", route[0], route[1])
+		}
+	}
+}
+
+func TestRelaySetupTokenIsScopedToNativeSetupRoutes(t *testing.T) {
+	registry, project := testRegistry(t, testGitRepo(t))
+	server, _ := newManagementTestServer(t, registry, SyntheticProvisioner{})
+	if server.cliToken == "" || server.cliToken == server.Token() {
+		t.Fatal("Management server did not mint a distinct relay setup token")
+	}
+
+	allowed := httptest.NewRecorder()
+	req := managementRequest(http.MethodGet, "/api/v1/service", "", false)
+	req.Header.Set("Authorization", "Bearer "+server.cliToken)
+	server.Handler().ServeHTTP(allowed, req)
+	if allowed.Code != http.StatusOK {
+		t.Fatalf("scoped service read status=%d body=%s", allowed.Code, allowed.Body.String())
+	}
+
+	session := httptest.NewRecorder()
+	sessionReq := managementRequest(http.MethodPost, "/api/v1/session", "", false)
+	sessionReq.Header.Set("Authorization", "Bearer "+server.cliToken)
+	server.Handler().ServeHTTP(session, sessionReq)
+	if session.Code != http.StatusForbidden || len(session.Result().Cookies()) != 0 {
+		t.Fatalf("scoped token bootstrapped a browser session: status=%d cookies=%#v body=%s", session.Code, session.Result().Cookies(), session.Body.String())
+	}
+
+	embedded := httptest.NewRecorder()
+	embeddedReq := managementRequest(http.MethodPost, "/api/v1/projects/"+project.ID+"/rooms", `{"name":"embedded from setup token"}`, false)
+	embeddedReq.Header.Set("Authorization", "Bearer "+server.cliToken)
+	server.Handler().ServeHTTP(embedded, embeddedReq)
+	if embedded.Code != http.StatusForbidden {
+		t.Fatalf("scoped token created a non-native Room: status=%d body=%s", embedded.Code, embedded.Body.String())
+	}
+
+	native := httptest.NewRecorder()
+	nativeReq := managementRequest(http.MethodPost, "/api/v1/projects/"+project.ID+"/rooms", `{"host_mode":"native","name":"native from setup token"}`, false)
+	nativeReq.Header.Set("Authorization", "Bearer "+server.cliToken)
+	server.Handler().ServeHTTP(native, nativeReq)
+	if native.Code != http.StatusCreated {
+		t.Fatalf("scoped token failed native Room creation: status=%d body=%s", native.Code, native.Body.String())
+	}
+	var room Room
+	if err := json.Unmarshal(native.Body.Bytes(), &room); err != nil {
+		t.Fatal(err)
+	}
+	if room.HostMode != model.HostNative {
+		t.Fatalf("created Room host_mode=%q", room.HostMode)
+	}
+
+	activate := httptest.NewRecorder()
+	activateReq := managementRequest(http.MethodPost, "/api/v1/rooms/"+room.ID+"/activate", "", false)
+	activateReq.Header.Set("Authorization", "Bearer "+server.cliToken)
+	server.Handler().ServeHTTP(activate, activateReq)
+	if activate.Code != http.StatusForbidden {
+		t.Fatalf("scoped token activated a Room: status=%d body=%s", activate.Code, activate.Body.String())
+	}
+}
+
+func TestRelayEndpointFileCarriesScopedSetupToken(t *testing.T) {
+	registry, _ := testRegistry(t, testGitRepo(t))
+	server, _ := newManagementTestServer(t, registry, SyntheticProvisioner{})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(listener) }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+		<-serveDone
+		_ = listener.Close()
+	})
+
+	var endpoint relay.Endpoint
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		endpoint, err = relay.ReadEndpoint(filepath.Join(registry.Root(), relay.EndpointFile))
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("relay-endpoint.json was not published: %v", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if endpoint.Token == server.Token() {
+		t.Fatal("relay-endpoint.json published the full Management bearer")
+	}
+	if endpoint.Token != server.cliToken {
+		t.Fatalf("relay-endpoint.json token=%q cliToken=%q", endpoint.Token, server.cliToken)
 	}
 }
 

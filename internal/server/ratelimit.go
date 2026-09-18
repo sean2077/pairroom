@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net"
 	"net/http"
 	"strings"
@@ -63,11 +65,30 @@ func (l *rateLimiter) allow(key string) (bool, time.Duration) {
 
 func requestClientKey(r *http.Request) string {
 	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err == nil && host != "" {
-		return host
+	if err != nil || host == "" {
+		host = strings.TrimSpace(r.RemoteAddr)
 	}
-	if value := strings.TrimSpace(r.RemoteAddr); value != "" {
-		return value
+	if host == "" {
+		host = "unknown"
 	}
-	return "unknown"
+	// Every local client shares one loopback source address. Mixing in a hash
+	// of the presented credential material (never the value itself) gives
+	// independent browser sessions and token clients independent budgets, so
+	// one runaway page cannot 429 every other Room tab on this machine.
+	if value := r.Header.Get("Authorization"); value != "" {
+		host += "|b|" + rateKeyDigest(value)
+	} else if cookie := r.Header.Get("Cookie"); cookie != "" {
+		host += "|c|" + rateKeyDigest(cookie)
+	}
+	if r.URL.Path == "/api/v1/events" {
+		// Stream (re)connects get their own budget: a reconnect storm must not
+		// consume the request allowance the rest of the UI needs.
+		host += "|events"
+	}
+	return host
+}
+
+func rateKeyDigest(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:8])
 }

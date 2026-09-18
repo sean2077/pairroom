@@ -167,21 +167,33 @@ func TestNativeFIFOClaimAckUnknownAndExplicitRetry(t *testing.T) {
 	if err := e.Reap(); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Ack(a[model.ActorSlot2], claim.ID, claim.Receipt); err == nil {
-		t.Fatal("late ack turned unknown into certainty")
-	}
 	if e.Snapshot().Messages[1].State != "unknown" {
 		t.Fatal("lease loss not unknown")
+	}
+	if err := e.Ack(a[model.ActorSlot2], claim.ID, "another-receipt"); err == nil {
+		t.Fatal("late ack with a foreign receipt was accepted")
 	}
 	retry, err := e.Retry(second.ID)
 	if err != nil || retry.ID == second.ID || retry.RetryOf != second.ID {
 		t.Fatalf("explicit retry: %+v %v", retry, err)
+	}
+	if err := e.Ack(a[model.ActorSlot2], claim.ID, claim.Receipt); err == nil {
+		t.Fatal("late ack accepted while an explicit Retry is pending")
 	}
 	if _, err := e.Retry(second.ID); err == nil {
 		t.Fatal("duplicate pending retries")
 	}
 	if err := e.Cancel(retry.ID); err != nil {
 		t.Fatal(err)
+	}
+	// With the Retry cancelled, the original claimer's receipt-matched late
+	// acknowledgement is provable and settles the unknown delivery instead of
+	// forcing a duplicate explicit re-send.
+	if err := e.Ack(a[model.ActorSlot2], claim.ID, claim.Receipt); err != nil {
+		t.Fatalf("proven late acknowledgement rejected: %v", err)
+	}
+	if e.Snapshot().Messages[1].State != "handed_off" {
+		t.Fatal("proven late ack did not settle the unknown delivery")
 	}
 }
 func TestNativeParkDisableTimeoutAndWake(t *testing.T) {

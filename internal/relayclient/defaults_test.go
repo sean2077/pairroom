@@ -1,8 +1,12 @@
 package relayclient
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,6 +28,58 @@ func writeSlotState(t *testing.T, root, room, slot string, pid int, name string)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), data, 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestUnbindLocalOnlyRemovesFilesWithoutContactingService(t *testing.T) {
+	isolateCaller(t)
+	root := t.TempDir()
+	writeSlotState(t, root, "room1", "slot1", 0, "")
+	dir := filepath.Join(root, ".pairroom", "rooms", "room1", "slots", "slot1")
+	if err := os.WriteFile(filepath.Join(dir, "credentials"), []byte(`{"bind_id":"bind-room1slot1","secret":"s"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := unbindLocalOnly(context.Background(), root, dir, options{}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"unbound":"local-only"`) || !strings.Contains(out.String(), "stays active") {
+		t.Fatalf("local-only receipt: %s", out.String())
+	}
+	for _, name := range []string{"state.json", "credentials"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s still present: %v", name, err)
+		}
+	}
+}
+
+func TestLocalOnlyFlagAppliesOnlyToUnbind(t *testing.T) {
+	err := Run(context.Background(), []string{"status", "--local-only"}, nil, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "--local-only applies only to unbind") {
+		t.Fatalf("status --local-only: %v", err)
+	}
+}
+
+func TestRunUnbindLocalOnlyDoesNotNeedService(t *testing.T) {
+	isolateCaller(t)
+	root := t.TempDir()
+	if output, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, output)
+	}
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSlotState(t, root, "room1", "slot1", 0, "")
+	var out bytes.Buffer
+	if err := Run(context.Background(), []string{"unbind", "--repo", root, "--room", "room1", "--slot", "1", "--local-only"}, nil, &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"unbound":"local-only"`) {
+		t.Fatalf("run local-only receipt: %s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, ".pairroom", "rooms", "room1", "slots", "slot1", "state.json")); !os.IsNotExist(err) {
+		t.Fatalf("state.json still present: %v", err)
 	}
 }
 

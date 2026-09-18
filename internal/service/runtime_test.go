@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/sean2077/pairroom/internal/model"
 )
 
 type fakeRuntime struct {
@@ -295,6 +297,110 @@ func TestRuntimeManagerEvictsIdleLRUAtCapacity(t *testing.T) {
 	}
 	if factory.get(rooms[1].ID).closeCount.Load() != 0 {
 		t.Fatal("newer idle Room was incorrectly evicted")
+	}
+}
+
+func TestNativeRoomsAreExemptFromRuntimeCapacity(t *testing.T) {
+	registry, project := testRegistry(t, testGitRepo(t))
+	embeddedRoom, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+		ProjectID: project.ID,
+		Name:      "Embedded capacity",
+		Bindings:  specs(BindingNew, BindingNew, "cap-embedded"),
+	}, SyntheticProvisioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeRoom, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+		ProjectID: project.ID,
+		Name:      "Native exempt",
+		HostMode:  model.HostNative,
+	}, SyntheticProvisioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory := &fakeRuntimeFactory{busy: true}
+	manager, err := NewRuntimeManager(registry, factory.open, RuntimeManagerConfig{
+		Limit: 1, IdleTimeout: time.Hour, PollInterval: 5 * time.Millisecond, CloseTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownRuntimeManager(t, manager, factory)
+
+	activateRuntime(t, manager, embeddedRoom.ID)
+	// Capacity is full (one busy embedded runtime). The native Room must still
+	// activate: it owns no vendor process and is exempt from the budget.
+	activateRuntime(t, manager, nativeRoom.ID)
+	if status := manager.Status(nativeRoom.ID); status.OccupiesCapacity {
+		t.Fatalf("native runtime reported capacity occupation: %#v", status)
+	}
+	if status := manager.Status(embeddedRoom.ID); !status.OccupiesCapacity {
+		t.Fatalf("embedded runtime stopped occupying capacity: %#v", status)
+	}
+	// A second embedded Room must still queue behind the limit.
+	embedded2, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+		ProjectID: project.ID,
+		Name:      "Embedded queued",
+		Bindings:  specs(BindingNew, BindingNew, "cap-embedded2"),
+	}, SyntheticProvisioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.RequestActivation(embedded2.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitRuntimeStatus(t, manager, embedded2.ID, func(status RuntimeStatus) bool { return status.Phase == RuntimeQueued })
+	if factory.get(nativeRoom.ID).closeCount.Load() != 0 {
+		t.Fatal("native runtime was evicted for capacity")
+	}
+}
+
+func TestNativeRoomsSkipQueuedEmbeddedAtCapacity(t *testing.T) {
+	registry, project := testRegistry(t, testGitRepo(t))
+	embeddedBusy, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+		ProjectID: project.ID,
+		Name:      "Embedded busy",
+		Bindings:  specs(BindingNew, BindingNew, "cap-busy"),
+	}, SyntheticProvisioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	embeddedQueued, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+		ProjectID: project.ID,
+		Name:      "Embedded queued ahead",
+		Bindings:  specs(BindingNew, BindingNew, "cap-queued"),
+	}, SyntheticProvisioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeRoom, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+		ProjectID: project.ID,
+		Name:      "Native skip-ahead",
+		HostMode:  model.HostNative,
+	}, SyntheticProvisioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory := &fakeRuntimeFactory{busy: true}
+	manager, err := NewRuntimeManager(registry, factory.open, RuntimeManagerConfig{
+		Limit: 1, IdleTimeout: time.Hour, PollInterval: 5 * time.Millisecond, CloseTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownRuntimeManager(t, manager, factory)
+
+	activateRuntime(t, manager, embeddedBusy.ID)
+	if _, err := manager.RequestActivation(embeddedQueued.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitRuntimeStatus(t, manager, embeddedQueued.ID, func(status RuntimeStatus) bool { return status.Phase == RuntimeQueued })
+	activateRuntime(t, manager, nativeRoom.ID)
+	if status := manager.Status(embeddedQueued.ID); status.Phase != RuntimeQueued {
+		t.Fatalf("embedded Room left the capacity FIFO: %#v", status)
+	}
+	if status := manager.Status(nativeRoom.ID); status.OccupiesCapacity {
+		t.Fatalf("native skip-ahead reported capacity occupation: %#v", status)
 	}
 }
 
