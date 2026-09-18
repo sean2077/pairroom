@@ -28,6 +28,14 @@
 
 - Room projection hygiene: a FIFO item dropped because its message reached a terminal processing state while queued now records a DeliverySkipped transition instead of leaving a contradictory queued+cancelled display; the standalone default Room name is generated from the pair's actual runtimes instead of hard-coding "Claude × Codex"; stale "claude or codex" wording in cancel/protocol errors now uses the durable slot vocabulary.
 
+- Room UI scale and continuity: the in-memory timeline caps at the same 1,000-message ceiling the snapshot window uses (evicted history stays reachable through "load older"), a post-write refresh no longer tears down the SSE stream (sequence deduplication already reconciles the fresh snapshot with in-flight events, so streaming deltas survive operator actions), and embedded static assets gain a version-keyed ETag with negotiated caching while HTML keeps its no-store posture.
+
+- Automatic idle-peer wake gains its browser surface: a Management dialog on native Rooms reads and toggles the per-Room setting through the existing authenticated wake-config API (new GET route), so the documented "Management surface" is no longer a raw endpoint; the Native Room panel also caps rendered messages at the latest 300 while the badge keeps the true total.
+
+- Management agent-catalog GETs are served from a 45-second cache (the explicit refresh endpoint still forces a fresh scan), so opening or polling the Management shell no longer spawns three vendor CLI probes per request.
+
+- Crash-stale `service.lock` recovery now recognizes PID reuse on Windows (`GetProcessTimes`) and Linux (`/proc` starttime + btime) with a five-minute tolerance, instead of permanently refusing recovery when the recorded PID was recycled by an unrelated process; platforms without a creation-time source stay conservatively fail-closed.
+
 ## [v5.1.2] — 2026-09-18
 
 - Restore vendor-neutral wording in the distributable `pairroom-relay` onboarding skill: the free-wake reachability default and Grok's shared project-hook behavior are now expressed in harness-capability terms instead of naming Claude Code/Grok Build, keeping the published-payload canary (`scripts/test_native_setup.js`) green after earlier commits reintroduced vendor names that a persistently failing race stage had masked in CI. This unblocks the `release.yml` payload gate that stopped the v5.1.1 tag from publishing.
