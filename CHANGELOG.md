@@ -46,6 +46,8 @@
 
 - Registry checkpoint and Room metadata reads are size-bounded; a checkpoint schema newer than this build is rejected at preflight with an upgrade message; a cleanly stopped Service removes its `relay-endpoint.json` discovery file so a dead bearer token no longer lingers on disk; CC Switch catalog strings filter all control characters, not only CR/LF/NUL.
 
+- Registry startup sweeps atomic-write temporaries a crashed process left in the Service root (known writer prefixes, regular files only, never fatal); `relay install` preserves the existing project hook file mode instead of forcing shared repository metadata to owner-only 0600; the generated API route inventory gains the wake-config GET route.
+
 ## [v5.1.2] — 2026-09-18
 
 - Restore vendor-neutral wording in the distributable `pairroom-relay` onboarding skill: the free-wake reachability default and Grok's shared project-hook behavior are now expressed in harness-capability terms instead of naming Claude Code/Grok Build, keeping the published-payload canary (`scripts/test_native_setup.js`) green after earlier commits reintroduced vendor names that a persistently failing race stage had masked in CI. This unblocks the `release.yml` payload gate that stopped the v5.1.1 tag from publishing.

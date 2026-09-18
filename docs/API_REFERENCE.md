@@ -169,6 +169,7 @@ The following method/path patterns are extracted from production HTTP registrati
 - `GET /api/v1/git/status`
 - `GET /api/v1/health`
 - `GET /api/v1/messages`
+- `GET /api/v1/rooms/{room}/wake-config`
 - `GET /api/v1/service`
 - `GET /api/v1/session`
 - `GET /api/v1/snapshot`
