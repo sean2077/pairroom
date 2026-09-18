@@ -68,6 +68,13 @@ const
   InnoKey = '{#PairRoomId}_is1';
   WebViewKey = 'Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
   RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
+  { Unattended provisioning budget: silent runs never wait indefinitely on the
+    Evergreen download (winget validation starves it and times the install out). }
+  WebView2SilentWaitMs = 300000;
+  WebView2PollIntervalMs = 2000;
+
+procedure Sleep(Milliseconds: DWORD);
+  external 'Sleep@kernel32.dll stdcall';
 
 function CreateFile(Name: String; Access, Share: Cardinal; Security: NativeInt;
   Creation, Flags: Cardinal; Template: NativeInt): NativeInt;
@@ -147,6 +154,7 @@ end;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ExitCode: Integer;
+  Waited: Integer;
 begin
   Result := PayloadError;
   if Result <> '' then
@@ -163,7 +171,37 @@ begin
   if not HasWebView2 then
   begin
     ExtractTemporaryFile('MicrosoftEdgeWebview2Setup.exe');
-    if not Exec(ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe'),
+    if WizardSilent then
+    begin
+      { Start the bootstrapper detached and poll the machine-wide runtime
+        registration with a bounded budget: an unattended run whose download
+        is blocked or starved must fail with actionable guidance instead of
+        hanging until the caller's own timeout (the winget validation verdict
+        for the 5.0.1 submission). A registered runtime means the bootstrap
+        succeeded; its hidden process then winds down on its own. }
+      if not Exec(ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe'),
+        '/silent /install', '', SW_HIDE, ewNoWait, ExitCode) then
+        Result := 'Could not start the Microsoft WebView2 runtime installer.'
+      else
+      begin
+        Waited := 0;
+        while (Waited < WebView2SilentWaitMs) and not HasWebView2 do
+        begin
+          Sleep(WebView2PollIntervalMs);
+          Waited := Waited + WebView2PollIntervalMs;
+        end;
+        if not HasWebView2 then
+        begin
+          Result := 'Microsoft WebView2 runtime was not provisioned within '
+            + IntToStr(WebView2SilentWaitMs div 1000) + ' seconds of silent '
+            + 'installation. Provision the runtime first (for example: winget '
+            + 'install Microsoft.EdgeWebView2Runtime) or run Setup '
+            + 'interactively. PairRoom has not been installed.';
+          Log(Result);
+        end;
+      end;
+    end
+    else if not Exec(ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe'),
       '/silent /install', '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
       Result := 'Could not start the Microsoft WebView2 runtime installer.'
     else if ExitCode = 3010 then

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Bound the Windows installer's WebView2 provisioning under silent/unattended runs: when the machine-wide Evergreen runtime is missing, Setup now starts the bundled bootstrapper detached, polls the runtime registration for at most five minutes, and fails with actionable preinstallation guidance instead of blocking indefinitely — the hang that turned winget's unattended validation into a ~20-minute timeout verdict on the 5.0.1 submission. Interactive installs keep the previous wait-and-verify behavior; machine-wide runtime detection and the manifest's `Microsoft.EdgeWebView2Runtime` package dependency are unchanged.
+
 ## [v5.1.0] — 2026-09-17
 
 - Replace Windows NSIS packaging with independently authored Inno Setup 7: SHA256-pinned official compiler, VERSION-derived installer version, PE architecture checks, and an Authenticode-verified WebView2 bootstrapper, retaining machine scope, the Program Files default, the GUI-subsystem host, separate `bin\pairroom.exe`, and release filenames. Setup blocks older registered PairRoom installers and locked binaries instead of terminating active work; uninstall removes only logged files/shortcuts and the exactly matching current user's startup entry, preserving Service data with no PATH, daemon, or startup registration changes. One-time transition: back up Service data, quit Desktop, remove any daemon using the bundled CLI, uninstall the old NSIS package from Windows Settings, then run the Inno installer; later Inno versions upgrade in place. Published desktop assets are no longer overwritten (`--clobber` removed).
