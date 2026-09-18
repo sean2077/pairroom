@@ -1521,7 +1521,7 @@ func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
 // ordinary turn-boundary handling.
 func (c *CodexAdapter) clearStaleApprovals(stale []pendingApproval) {
 	for _, pending := range stale {
-		result, err := codexApprovalResult(pending, "reject")
+		result, err := codexApprovalResult(pending, "decline")
 		if err != nil {
 			continue
 		}

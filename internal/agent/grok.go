@@ -848,7 +848,18 @@ func (g *GrokAdapter) Stop(ctx context.Context) error {
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
-		<-done
+		// Readers reach EOF only once every inherited descriptor holder exits;
+		// a descendant that kept the pipes open must not hang the whole
+		// shutdown chain after the direct process was killed. Report the
+		// uncertain close honestly instead.
+		killWait := time.NewTimer(5 * time.Second)
+		select {
+		case <-done:
+			killWait.Stop()
+		case <-killWait.C:
+			g.setState(model.StateStopped, "")
+			return errors.New("Grok process was killed but its output pipes remain open (a descendant may hold them); close state is uncertain")
+		}
 	}
 	g.mu.Lock()
 	if strings.TrimSpace(g.cfg.SessionID) == "" && !engaged {
