@@ -97,8 +97,26 @@ if [[ "$OS" == windows ]]; then
 fi
 
 tmp="$(mktemp)"
-trap 'rm -f "$tmp"' EXIT
+tmp_sums="$(mktemp)"
+trap 'rm -f "$tmp" "$tmp_sums"' EXIT
 curl -fsSL "$URL" -o "$tmp"
+
+# Verify the published release checksum before installing: a truncated or
+# tampered download must never become the pairroom binary on PATH.
+SUMS_URL="https://github.com/${REPO}/releases/download/${TAG}/SHA256SUMS"
+curl -fsSL "$SUMS_URL" -o "$tmp_sums" ||
+    die "could not download SHA256SUMS for ${TAG}; refusing to install an unverified binary"
+expected="$(awk -v name="$ASSET" '$2 == name { print $1 }' "$tmp_sums" | head -n 1)"
+[[ -n "$expected" ]] || die "SHA256SUMS for ${TAG} has no entry for ${ASSET}"
+if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$tmp" | awk '{ print $1 }')"
+elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$tmp" | awk '{ print $1 }')"
+else
+    die "neither sha256sum nor shasum is available; cannot verify the downloaded binary"
+fi
+[[ "$actual" == "$expected" ]] || die "checksum mismatch for ${ASSET}: expected ${expected}, got ${actual}"
+
 chmod +x "$tmp"
 mv "$tmp" "$DEST"
 trap - EXIT

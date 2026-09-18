@@ -42,7 +42,12 @@ function client() {
     close() { this.closed = true; }
     emit(type, value) { this.listeners.get(type)?.({ data: JSON.stringify(value) }); }
   }
-  const window = { location: { hash: '', pathname: '/', search: '' }, addEventListener(type, callback) { lifecycle.set(type, callback); } };
+  // Intervals (the SSE watchdog) are tracked apart from the bounded-backoff
+  // timeout bookkeeping the recovery assertions inspect.
+  const intervals = new Map(); let intervalID = 0;
+  const window = { location: { hash: '', pathname: '/', search: '' }, addEventListener(type, callback) { lifecycle.set(type, callback); },
+    setInterval(callback) { const id = ++intervalID; intervals.set(id, callback); return id; },
+    clearInterval(id) { intervals.delete(id); } };
   const localStorage = { getItem: (key) => storage.get(key) || null,
     setItem: (key, value) => storage.set(key, value), removeItem: (key) => storage.delete(key) };
   const sandbox = { window, document, localStorage, EventSource, URLSearchParams, Headers, FormData,
