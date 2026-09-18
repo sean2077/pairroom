@@ -98,6 +98,10 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		release()
 		return errors.New("bind confirmation missing; use bind --replace explicitly")
 	}
+	// Stamp hook activity before any HTTP so even a failed inspect/confirm
+	// leaves the locally observable last-hook marker fresh on the next
+	// persist (the reservation and Blocks writes both carry it forward).
+	c.State.LastHookAt = time.Now().UTC().Format(time.RFC3339)
 	// Reserve the reply WAL before any metadata HTTP for this invocation: a
 	// transient inspect/confirm failure then leaves a reconcilable pending
 	// publication instead of losing this Stop reply without a trace. Only a
