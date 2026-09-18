@@ -127,7 +127,7 @@ func TestRunInstallWritesGrokHooksWhenClaudeCompatDisabled(t *testing.T) {
 	}
 }
 
-func TestRunInstallClaudeLeavesRedundantGrokHooksWithoutTTY(t *testing.T) {
+func TestRunInstallRemovesRedundantGrokHooksWhenClaudeCoversThem(t *testing.T) {
 	IsolateNativeCaller(t)
 	root := t.TempDir()
 	home := t.TempDir()
@@ -136,27 +136,44 @@ func TestRunInstallClaudeLeavesRedundantGrokHooksWithoutTTY(t *testing.T) {
 	if err := editHooks(root, model.RuntimeGrok, false); err != nil {
 		t.Fatal(err)
 	}
-	var out, diagnostic bytes.Buffer
-	if err := runInstall(root, []model.RuntimeKind{model.RuntimeClaude}, strings.NewReader("y\n"), &out, &diagnostic); err != nil {
+	var out bytes.Buffer
+	if err := runInstall(root, []model.RuntimeKind{model.RuntimeClaude}, strings.NewReader(""), &out, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(root, ".grok", "hooks", "pairroom.json")); err != nil {
-		t.Fatal("non-TTY install removed Grok hooks without confirmation")
+	present, _, err := ownRelayStopHook(root, model.RuntimeGrok)
+	if err != nil || present {
+		t.Fatalf("leftover Grok PairRoom Stop hook was not stripped: present=%v err=%v", present, err)
 	}
-	if !strings.Contains(diagnostic.String(), "second Grok hook file") && !strings.Contains(diagnostic.String(), "reuses Claude Code") {
-		t.Fatalf("missing cleanup guidance: %s", diagnostic.String())
+	if !strings.Contains(out.String(), `"hooks_removed":["grok"]`) {
+		t.Fatalf("missing removal: %s", out.String())
 	}
-	if strings.Contains(out.String(), `"hooks_removed"`) {
-		t.Fatalf("non-TTY claimed a removal: %s", out.String())
+	if err := installed(root, model.RuntimeGrok); err != nil {
+		t.Fatalf("shared Claude hook should still satisfy Grok bind: %v", err)
 	}
 }
 
-func TestPromptRemoveRedundantGrokHooksAcceptsYes(t *testing.T) {
-	if !promptRemoveRedundantGrokHooks(strings.NewReader("yes\n"), io.Discard) {
-		t.Fatal("yes should confirm removal")
+func TestRunInstallGrokStripsLeftoverFileWhenClaudeAlreadyPresent(t *testing.T) {
+	IsolateNativeCaller(t)
+	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := editHooks(root, model.RuntimeClaude, false); err != nil {
+		t.Fatal(err)
 	}
-	if promptRemoveRedundantGrokHooks(strings.NewReader("n\n"), io.Discard) {
-		t.Fatal("n should keep Grok hooks")
+	if err := editHooks(root, model.RuntimeGrok, false); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runInstall(root, []model.RuntimeKind{model.RuntimeGrok}, strings.NewReader(""), &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	present, _, err := ownRelayStopHook(root, model.RuntimeGrok)
+	if err != nil || present {
+		t.Fatalf("grok install left a dual Stop hook: present=%v err=%v", present, err)
+	}
+	if !strings.Contains(out.String(), `"hooks_removed":["grok"]`) || !strings.Contains(out.String(), `"hooks_skipped":["grok"]`) {
+		t.Fatalf("expected skip and remove: %s", out.String())
 	}
 }
 

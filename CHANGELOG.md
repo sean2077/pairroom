@@ -2,7 +2,10 @@
 
 ## [Unreleased]
 
-- Avoid a second native Stop command when Claude Code and Grok Build share a Project: Grok Build reuses Claude Code project hooks by default, so `relay install` writes `.grok/hooks/pairroom.json` only for Grok-only setup (or when Claude-hook compatibility is disabled); a Grok payload delivered through the Claude Code hook publishes only when that Grok file is absent, so existing dual files do not double-publish. Installing Claude Code while a PairRoom Grok hook file remains prints that reuse notice and, at an interactive terminal, offers to remove the extra Grok hook.
+- Treat Grok Build's model-initiated background-collector wake as harness-class behavior, not a pinned CLI version: the 2026-09-18 experiment remains evidence, not a version gate.
+- `relay install` now strips a leftover PairRoom Grok Stop hook when Claude Code's project hook already covers Grok, so existing dual-hook Projects stop firing two Stop commands without an interactive prompt.
+
+- Avoid a second native Stop command when Claude Code and Grok Build share a Project: Grok Build reuses Claude Code project hooks by default, so `relay install` writes `.grok/hooks/pairroom.json` only for Grok-only setup (or when Claude-hook compatibility is disabled); a Grok payload delivered through the Claude Code hook publishes only when that Grok file is absent. Leftover dual files are cleaned by the install strip above.
 
 - Bound the Windows installer's WebView2 provisioning under silent/unattended runs: when the machine-wide Evergreen runtime is missing, Setup now starts the bundled bootstrapper detached, polls the runtime registration for at most five minutes, and fails with actionable preinstallation guidance instead of blocking indefinitely — the hang that turned winget's unattended validation into a ~20-minute timeout verdict on the 5.0.1 submission. Interactive installs keep the previous wait-and-verify behavior; machine-wide runtime detection and the manifest's `Microsoft.EdgeWebView2Runtime` package dependency are unchanged.
 

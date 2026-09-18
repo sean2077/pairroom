@@ -130,9 +130,7 @@ func selectInstallRuntimes(flagValue string, in io.Reader, diagnostic io.Writer)
 	return nil, errors.New("install needs --runtime claude|codex|grok (comma-separated) when run non-interactively outside a native session; inside a terminal it prompts, and inside a recognized session it infers the harness")
 }
 
-const grokSharesClaudeHooksNotice = "Grok Build reuses Claude Code project hooks by default, so PairRoom does not write a second Grok hook file when a Claude Code PairRoom Stop hook is present or being installed. Review the Claude Code project hook; Grok's /hooks (press r to reload) still shows that reused definition, and folder trust remains a human decision. If Claude-hook compatibility is disabled ([compat.claude] hooks = false or GROK_CLAUDE_HOOKS_ENABLED=false), install Grok with that compatibility off so PairRoom writes .grok/hooks/pairroom.json."
-
-const grokRedundantHookPrompt = "Grok Build reuses Claude Code project hooks by default. PairRoom's extra .grok/hooks/pairroom.json would fire a second Stop command.\nRemove PairRoom's Grok project hook and keep the Claude Code hook? [y/N] "
+const grokSharesClaudeHooksNotice = "Grok Build reuses Claude Code project hooks by default, so PairRoom does not write a second Grok hook file when a Claude Code PairRoom Stop hook is present or being installed, and it removes PairRoom's extra Grok Stop hook if that leftover file is still there. Review the Claude Code project hook; Grok's /hooks (press r to reload) still shows that reused definition, and folder trust remains a human decision. If Claude-hook compatibility is disabled ([compat.claude] hooks = false or GROK_CLAUDE_HOOKS_ENABLED=false), install Grok with that compatibility off so PairRoom writes .grok/hooks/pairroom.json."
 
 // grokReusesClaudeHooks reports Grok Build's default Claude-hook compatibility.
 // Only the documented env override is consulted; config.toml is left to the harness.
@@ -144,25 +142,13 @@ func grokReusesClaudeHooks() bool {
 	return true
 }
 
-func promptRemoveRedundantGrokHooks(in io.Reader, diagnostic io.Writer) bool {
-	fmt.Fprint(diagnostic, grokRedundantHookPrompt)
-	line, err := readLine(in)
-	if err != nil {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "y", "yes":
-		return true
-	}
-	return false
-}
-
 // runInstall writes the relay skill for each selected harness and the project
 // hook files that harness actually needs. Grok Build's default Claude Code
 // compatibility layer already runs `.claude/settings.json` Stop hooks, so a
-// second `.grok/hooks/pairroom.json` would double-fire; skip it when a Claude
-// Code PairRoom Stop hook is present or selected in this same install.
-func runInstall(root string, kinds []model.RuntimeKind, in io.Reader, out, diagnostic io.Writer) error {
+// second `.grok/hooks/pairroom.json` would double-fire; skip writing it and
+// strip a leftover PairRoom Grok Stop hook when a Claude Code PairRoom Stop
+// hook is present or selected in this same install.
+func runInstall(root string, kinds []model.RuntimeKind, _ io.Reader, out, _ io.Writer) error {
 	seen := map[model.RuntimeKind]bool{}
 	var selected []model.RuntimeKind
 	want := map[model.RuntimeKind]bool{}
@@ -178,7 +164,8 @@ func runInstall(root string, kinds []model.RuntimeKind, in io.Reader, out, diagn
 	if err != nil {
 		return err
 	}
-	skipGrokHooks := want[model.RuntimeGrok] && grokReusesClaudeHooks() && (want[model.RuntimeClaude] || claudePresent)
+	shareClaudeHooks := grokReusesClaudeHooks() && (want[model.RuntimeClaude] || claudePresent)
+	skipGrokHooks := want[model.RuntimeGrok] && shareClaudeHooks
 	installed := []string{}
 	var skipped []string
 	for _, kind := range selected {
@@ -193,20 +180,16 @@ func runInstall(root string, kinds []model.RuntimeKind, in io.Reader, out, diagn
 		installed = append(installed, string(kind))
 	}
 	var removed []string
-	if want[model.RuntimeClaude] {
+	if shareClaudeHooks {
 		grokPresent, _, err := ownRelayStopHook(root, model.RuntimeGrok)
 		if err != nil {
 			return err
 		}
 		if grokPresent {
-			if stdinIsTTY(in) && promptRemoveRedundantGrokHooks(in, diagnostic) {
-				if err := editHooks(root, model.RuntimeGrok, true); err != nil {
-					return err
-				}
-				removed = append(removed, string(model.RuntimeGrok))
-			} else if diagnostic != nil {
-				fmt.Fprintln(diagnostic, grokSharesClaudeHooksNotice)
+			if err := editHooks(root, model.RuntimeGrok, true); err != nil {
+				return err
 			}
+			removed = append(removed, string(model.RuntimeGrok))
 		}
 	}
 	notice := "Review and approve the exact project hook in each harness (Codex: /hooks; Grok: /hooks, press r to reload, then review project folder trust; Claude Code: project hook consent). This command does not grant native trust. Keep pairroom on PATH. Real authenticated bidirectional E2E remains release-gated."
