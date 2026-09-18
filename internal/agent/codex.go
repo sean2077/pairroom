@@ -1640,10 +1640,16 @@ func (c *CodexAdapter) ResolveApproval(ctx context.Context, approvalID string, r
 	}
 	c.mu.Lock()
 	delete(c.approvals, approvalID)
+	active := c.currentTurn != ""
 	c.mu.Unlock()
 	// The room engine owns the user-facing approval projection after this call
 	// succeeds. serverRequest/resolved remains available for server-side clears.
-	c.setState(model.StateWorking, "")
+	// Only a still-active turn returns to Working; the turn may have completed
+	// while the decision was in flight, and resurrecting Working would project
+	// a state the vendor no longer has.
+	if active {
+		c.setState(model.StateWorking, "")
+	}
 	return nil
 }
 
