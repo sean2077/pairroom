@@ -27,6 +27,9 @@ func requireSessionID(kind model.RuntimeKind) (string, error) {
 	}
 	id := sessionIDFromEnv(kind)
 	if id == "" {
+		if kind == model.RuntimeGrok {
+			return "", fmt.Errorf("%s is missing; run bind as an agent tool call inside your native grok session, not a plain terminal or Grok shell mode (!)", name)
+		}
 		return "", fmt.Errorf("%s is missing; run bind as a tool call inside your native %s session, not a plain terminal", name, kind)
 	}
 	if len(id) > 256 || strings.TrimSpace(id) != id || strings.ContainsAny(id, "/\\") || strings.ContainsFunc(id, unicode.IsControl) {

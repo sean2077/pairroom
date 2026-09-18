@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Spell out Grok Build shell mode (`!`) as a non-tool-call environment: a missing `GROK_SESSION_ID` now names that mode, and the relay skill plus native docs tell the agent to run bind/send/wait/exchange itself instead of retrying `!` or asking the human to paste the session id.
+
 - Treat Grok Build's model-initiated background-collector wake as harness-class behavior, not a pinned CLI version: the 2026-09-18 experiment remains evidence, not a version gate.
 - `relay install` now strips a leftover PairRoom Grok Stop hook when Claude Code's project hook already covers Grok, so existing dual-hook Projects stop firing two Stop commands without an interactive prompt.
 

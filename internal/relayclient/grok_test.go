@@ -72,6 +72,18 @@ func TestGrokInstallOwnsOnlyItsProjectFileAndUserSkill(t *testing.T) {
 	}
 }
 
+func TestGrokMissingSessionGuidesAwayFromShellMode(t *testing.T) {
+	isolateCaller(t)
+	_, err := requireSessionID(model.RuntimeGrok)
+	if err == nil || !strings.Contains(err.Error(), "GROK_SESSION_ID is missing") || !strings.Contains(err.Error(), "shell mode") || !strings.Contains(err.Error(), "(!)") {
+		t.Fatalf("missing Grok shell-mode guidance: %v", err)
+	}
+	_, err = requireSessionID(model.RuntimeClaude)
+	if err == nil || !strings.Contains(err.Error(), "plain terminal") || strings.Contains(err.Error(), "shell mode") {
+		t.Fatalf("Claude missing-session error should stay generic: %v", err)
+	}
+}
+
 func TestGrokBindAcceptsSharedClaudePairRoomHook(t *testing.T) {
 	root, endpoint, created := createBindFixture(t, model.RuntimeGrok)
 	*created = 1
