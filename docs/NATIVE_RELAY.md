@@ -27,9 +27,11 @@ Run `pairroom relay install` once per Project, from any terminal in its worktree
 (`cc|claude`, `codex`, `grok`); inside a recognized session it infers the harness,
 and at an interactive terminal without `--runtime` it prompts a multi-select.
 Non-interactive use without `--runtime` fails with the options listed rather than
-waiting. Each selected runtime gets its own project hook and skill directory
-(Claude Code `.claude`, Codex `.codex`, Grok `.grok/hooks/pairroom.json`); native
-relay supports all three.
+waiting. Codex keeps `.codex/hooks.json`. Claude Code keeps `.claude/settings.json`.
+Grok Build's Claude Code compatibility layer runs those Claude Code project hooks
+by default, so installing Claude Code and Grok together writes only the Claude Code
+hook; a Grok-only install still writes `.grok/hooks/pairroom.json`. Native relay
+supports all three. Each selected runtime still gets its skill directory.
 
 ```bash
 pairroom relay install                      # prompts at a terminal; or:
@@ -37,8 +39,13 @@ pairroom relay install --runtime claude,codex,grok
 ```
 
 Review and approve the exact project hooks in each harness. Codex uses `/hooks`;
-Grok uses `/hooks` (press `r` to reload changed files) and its project folder-trust decision;
-review changed definitions again. Follow the harness's trust/restart guidance.
+Claude Code uses project hook consent; Grok uses `/hooks` (press `r` to reload)
+and its project folder-trust decision — when it is reusing the Claude Code hook,
+that is the definition to review. Follow the harness's trust/restart guidance.
+If Claude-hook compatibility is disabled (`[compat.claude] hooks = false`),
+install Grok with that compatibility off so PairRoom writes the Grok hook file.
+Installing Claude Code when a PairRoom Grok hook file already exists leaves that
+file in place unless you confirm removal at an interactive prompt.
 PairRoom never grants approval on your behalf. Installation writes the relay
 skill as well; a skill-only installation does not install or approve hooks.
 Skill installation honors `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `GROK_HOME`

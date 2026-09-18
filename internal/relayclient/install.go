@@ -130,17 +130,61 @@ func selectInstallRuntimes(flagValue string, in io.Reader, diagnostic io.Writer)
 	return nil, errors.New("install needs --runtime claude|codex|grok (comma-separated) when run non-interactively outside a native session; inside a terminal it prompts, and inside a recognized session it infers the harness")
 }
 
-// runInstall writes the relay hooks and skill for each selected harness. Every
-// runtime, including Grok, gets its own project hook location and skill dir.
-func runInstall(root string, kinds []model.RuntimeKind, out io.Writer) error {
+const grokSharesClaudeHooksNotice = "Grok Build reuses Claude Code project hooks by default, so PairRoom does not write a second Grok hook file when a Claude Code PairRoom Stop hook is present or being installed. Review the Claude Code project hook; Grok's /hooks (press r to reload) still shows that reused definition, and folder trust remains a human decision. If Claude-hook compatibility is disabled ([compat.claude] hooks = false or GROK_CLAUDE_HOOKS_ENABLED=false), install Grok with that compatibility off so PairRoom writes .grok/hooks/pairroom.json."
+
+const grokRedundantHookPrompt = "Grok Build reuses Claude Code project hooks by default. PairRoom's extra .grok/hooks/pairroom.json would fire a second Stop command.\nRemove PairRoom's Grok project hook and keep the Claude Code hook? [y/N] "
+
+// grokReusesClaudeHooks reports Grok Build's default Claude-hook compatibility.
+// Only the documented env override is consulted; config.toml is left to the harness.
+func grokReusesClaudeHooks() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("GROK_CLAUDE_HOOKS_ENABLED"))) {
+	case "0", "false", "no", "off":
+		return false
+	}
+	return true
+}
+
+func promptRemoveRedundantGrokHooks(in io.Reader, diagnostic io.Writer) bool {
+	fmt.Fprint(diagnostic, grokRedundantHookPrompt)
+	line, err := readLine(in)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true
+	}
+	return false
+}
+
+// runInstall writes the relay skill for each selected harness and the project
+// hook files that harness actually needs. Grok Build's default Claude Code
+// compatibility layer already runs `.claude/settings.json` Stop hooks, so a
+// second `.grok/hooks/pairroom.json` would double-fire; skip it when a Claude
+// Code PairRoom Stop hook is present or selected in this same install.
+func runInstall(root string, kinds []model.RuntimeKind, in io.Reader, out, diagnostic io.Writer) error {
 	seen := map[model.RuntimeKind]bool{}
-	installed := []string{}
+	var selected []model.RuntimeKind
+	want := map[model.RuntimeKind]bool{}
 	for _, kind := range kinds {
 		if seen[kind] {
 			continue
 		}
 		seen[kind] = true
-		if err := editHooks(root, kind, false); err != nil {
+		want[kind] = true
+		selected = append(selected, kind)
+	}
+	claudePresent, _, err := ownRelayStopHook(root, model.RuntimeClaude)
+	if err != nil {
+		return err
+	}
+	skipGrokHooks := want[model.RuntimeGrok] && grokReusesClaudeHooks() && (want[model.RuntimeClaude] || claudePresent)
+	installed := []string{}
+	var skipped []string
+	for _, kind := range selected {
+		if kind == model.RuntimeGrok && skipGrokHooks {
+			skipped = append(skipped, string(kind))
+		} else if err := editHooks(root, kind, false); err != nil {
 			return err
 		}
 		if err := installSkill(kind); err != nil {
@@ -148,15 +192,43 @@ func runInstall(root string, kinds []model.RuntimeKind, out io.Writer) error {
 		}
 		installed = append(installed, string(kind))
 	}
-	return writeJSON(out, map[string]any{
+	var removed []string
+	if want[model.RuntimeClaude] {
+		grokPresent, _, err := ownRelayStopHook(root, model.RuntimeGrok)
+		if err != nil {
+			return err
+		}
+		if grokPresent {
+			if stdinIsTTY(in) && promptRemoveRedundantGrokHooks(in, diagnostic) {
+				if err := editHooks(root, model.RuntimeGrok, true); err != nil {
+					return err
+				}
+				removed = append(removed, string(model.RuntimeGrok))
+			} else if diagnostic != nil {
+				fmt.Fprintln(diagnostic, grokSharesClaudeHooksNotice)
+			}
+		}
+	}
+	notice := "Review and approve the exact project hook in each harness (Codex: /hooks; Grok: /hooks, press r to reload, then review project folder trust; Claude Code: project hook consent). This command does not grant native trust. Keep pairroom on PATH. Real authenticated bidirectional E2E remains release-gated."
+	if len(skipped) > 0 || len(removed) > 0 {
+		notice = grokSharesClaudeHooksNotice + " " + notice
+	}
+	result := map[string]any{
 		"installed": installed,
-		"notice":    "Review and approve the exact project hook in each harness (Codex: /hooks; Grok: /hooks, press r to reload, then review project folder trust; Claude Code: project hook consent). This command does not grant native trust. Keep pairroom on PATH. Real authenticated bidirectional E2E remains release-gated.",
+		"notice":    notice,
 		"next_steps": []string{
 			"Create a room and bind this session: pairroom relay bind --create --name \"<topic>\" (skill: /pairroom-relay <topic>)",
 			"The peer session joins with the printed peer_join command, or zero-flag inside a recognized session: pairroom relay bind",
 			"After both sessions bind, give the agents the task and desired collaboration",
 		},
-	})
+	}
+	if len(skipped) > 0 {
+		result["hooks_skipped"] = skipped
+	}
+	if len(removed) > 0 {
+		result["hooks_removed"] = removed
+	}
+	return writeJSON(out, result)
 }
 
 func hookCommand(kind model.RuntimeKind) string {
@@ -195,17 +267,17 @@ func readHooks(path string) (map[string]any, error) {
 	}
 	return value, nil
 }
-func installed(root string, kind model.RuntimeKind) error {
+func ownRelayStopHook(root string, kind model.RuntimeKind) (present, disabled bool, err error) {
 	path, err := hookPath(root, kind)
 	if err != nil {
-		return err
+		return false, false, err
 	}
 	config, err := readHooks(path)
 	if err != nil {
-		return err
+		return false, false, err
 	}
 	if disabled, _ := config["disableAllHooks"].(bool); disabled {
-		return errors.New("hooks are disabled; native association requires an approved Stop hook")
+		return false, true, nil
 	}
 	hooks, _ := config["hooks"].(map[string]any)
 	groups, _ := hooks["Stop"].([]any)
@@ -217,9 +289,36 @@ func installed(root string, kind model.RuntimeKind) error {
 			async, _ := entry["async"].(bool)
 			timeout, _ := entry["timeout"].(float64)
 			if entry["type"] == "command" && entry["command"] == hookCommand(kind) && !async && timeout >= 45 {
-				return nil
+				return true, false, nil
 			}
 		}
+	}
+	return false, false, nil
+}
+
+func installed(root string, kind model.RuntimeKind) error {
+	present, disabled, err := ownRelayStopHook(root, kind)
+	if err != nil {
+		return err
+	}
+	if disabled {
+		return errors.New("hooks are disabled; native association requires an approved Stop hook")
+	}
+	if present {
+		return nil
+	}
+	if kind == model.RuntimeGrok && grokReusesClaudeHooks() {
+		present, disabled, err = ownRelayStopHook(root, model.RuntimeClaude)
+		if err != nil {
+			return err
+		}
+		if disabled {
+			return errors.New("hooks are disabled; native association requires an approved Stop hook")
+		}
+		if present {
+			return nil
+		}
+		return errors.New("zero approved relay-hook setup is unsupported: run pairroom relay install --runtime grok, or install --runtime claude so Grok can reuse that project hook, review the project hooks in your harness, then bind again")
 	}
 	return fmt.Errorf("zero approved relay-hook setup is unsupported: run pairroom relay install --runtime %s, review the project hooks in your harness, then bind again", kind)
 }

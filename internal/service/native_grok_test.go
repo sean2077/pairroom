@@ -141,7 +141,7 @@ func TestGrokClippedStopIsNotPublishedAndPassiveEventsStayPassive(t *testing.T) 
 	if len(f.native.engine.Snapshot().Messages) != 0 {
 		t.Fatal("truncated hook wrote a message")
 	}
-	// Imported Claude compatibility hook must not duplicate or misassociate it.
+	// Dual hook files: the Claude command must stay inert so Grok's own file owns Stop.
 	out, err = f.run(t, []string{"hook", "--runtime", "claude"}, map[string]any{
 		"hookEventName": "stop", "hook_event_name": "Stop", "sessionId": a.SessionID, "cwd": f.project.Root,
 		"reason": "end_turn", "lastAssistantMessage": "@claude do not double publish",
@@ -157,6 +157,45 @@ func TestGrokClippedStopIsNotPublishedAndPassiveEventsStayPassive(t *testing.T) 
 	snapshot, _ := json.Marshal(f.native.engine.Snapshot())
 	if strings.Contains(string(snapshot), "PRIVATE") || len(f.native.engine.Snapshot().Messages) != 0 || !strings.Contains(string(snapshot), "authentication_failed") {
 		t.Fatal("failure leaked content or lost its allowlisted category")
+	}
+}
+
+func TestGrokStopUsesSharedClaudeHookWhenGrokFileAbsent(t *testing.T) {
+	f := grokNativeHTTP(t, model.RuntimeClaude)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if _, err := f.run(t, []string{"install", "--runtime", "claude"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.project.Root, ".grok", "hooks", "pairroom.json")); err == nil {
+		t.Fatal("Claude-only install wrote a Grok hook file")
+	}
+	session := "official-session-" + string(model.ActorSlot1)
+	output, err := f.runAs(t, model.RuntimeGrok, session, []string{"bind", "--room", f.room.ID, "--slot", string(model.ActorSlot1), "--service-file", f.endpoint}, nil)
+	if err != nil {
+		t.Fatalf("Grok bind with shared Claude hook: %s %v", output, err)
+	}
+	var result struct {
+		Binding relay.Binding `json:"binding"`
+	}
+	if json.Unmarshal(output, &result) != nil || result.Binding.SessionID != session {
+		t.Fatalf("bind: %s", output)
+	}
+	if err := f.native.engine.Park(model.ActorSlot1, false); err != nil {
+		t.Fatal(err)
+	}
+	seq := f.native.engine.Snapshot().Sequence
+	out, err := f.runAs(t, model.RuntimeGrok, session, []string{"hook", "--runtime", "claude"}, map[string]any{
+		"hookEventName": "stop", "hook_event_name": "Stop", "sessionId": session, "cwd": f.project.Root,
+		"workspaceRoot": f.project.Root, "reason": "end_turn", "lastAssistantMessage": "@claude shared hook should publish",
+	})
+	if err != nil {
+		t.Fatalf("shared Claude hook: %s %v", out, err)
+	}
+	messages := f.native.engine.Snapshot().Messages
+	if f.native.engine.Snapshot().Sequence == seq || len(messages) == 0 || messages[len(messages)-1].Text != "@claude shared hook should publish" {
+		t.Fatalf("shared Claude hook did not publish Grok Stop: %s messages=%+v", out, messages)
 	}
 }
 

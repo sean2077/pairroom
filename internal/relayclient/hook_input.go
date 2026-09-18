@@ -26,9 +26,12 @@ const grokHookReplyLimit = 32768
 var grokClipMarker = regexp.MustCompile(`… \[\+[0-9]+ chars\]\s*$`)
 
 // Grok's file hooks use camelCase, except the optional hook_event_name alias.
-// Its compatible Claude hook sources can invoke our Claude command too: ignore
-// that foreign payload rather than treating a Grok session as Claude. Conversely,
-// --runtime grok never turns a Claude/Codex payload into a Grok session.
+// Grok Build's Claude Code compatibility layer runs `.claude/settings.json`
+// hooks by default, so `--runtime claude` may receive a Grok payload: decode
+// still returns empty here, and runHook promotes that payload to Grok only when
+// no Grok-owned PairRoom hook file is present (otherwise the Claude command
+// stays inert to avoid double publish). Conversely, --runtime grok never turns
+// a Claude/Codex payload into a Grok session.
 func decodeNativeHook(data []byte, grok bool) (HookInput, error) {
 	if !utf8.Valid(data) {
 		return HookInput{}, errors.New("invalid UTF-8 in official hook input")

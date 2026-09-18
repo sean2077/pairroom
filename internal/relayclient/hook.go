@@ -29,9 +29,18 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	if kind != model.RuntimeClaude && kind != model.RuntimeCodex && kind != model.RuntimeGrok {
 		return errors.New("hook requires --runtime claude|codex|grok")
 	}
+	requested := kind
 	hook, err := decodeNativeHook(data, kind == model.RuntimeGrok)
 	if err != nil {
 		return err
+	}
+	sharedGrok := false
+	if requested == model.RuntimeClaude && hook.Event == "" {
+		if grokHook, grokErr := decodeNativeHook(data, true); grokErr == nil && (grokHook.Event == "Stop" || grokHook.Event == "StopFailure") {
+			hook = grokHook
+			kind = model.RuntimeGrok
+			sharedGrok = true
+		}
 	}
 	if hook.Event != "Stop" && hook.Event != "StopFailure" {
 		return writeJSON(out, map[string]any{})
@@ -42,6 +51,16 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	root, err := workspace(ctx, hook.CWD)
 	if err != nil {
 		return err
+	}
+	if sharedGrok {
+		present, _, err := ownRelayStopHook(root, model.RuntimeGrok)
+		if err != nil {
+			return err
+		}
+		if present {
+			// Grok's own hook file will handle this Stop; stay inert to avoid double publish.
+			return writeJSON(out, map[string]any{})
+		}
 	}
 	paths, err := statePaths(root)
 	if err != nil {
