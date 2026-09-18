@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v5.1.2] — 2026-09-18
+
 - Restore vendor-neutral wording in the distributable `pairroom-relay` onboarding skill: the free-wake reachability default and Grok's shared project-hook behavior are now expressed in harness-capability terms instead of naming Claude Code/Grok Build, keeping the published-payload canary (`scripts/test_native_setup.js`) green after earlier commits reintroduced vendor names that a persistently failing race stage had masked in CI. This unblocks the `release.yml` payload gate that stopped the v5.1.1 tag from publishing.
 
 ## [v5.1.1] — 2026-09-18
