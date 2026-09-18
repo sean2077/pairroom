@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/sean2077/pairroom/internal/model"
-	"github.com/sean2077/pairroom/internal/relay"
 )
 
 // installRuntimeChoices is the interactive selection order. Each is a real native
@@ -372,7 +371,18 @@ func editHooks(root string, kind model.RuntimeKind, remove bool) error {
 		}
 	}
 	config["hooks"] = hooks
-	return relay.AtomicJSON(path, config)
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return err
+	}
+	// Project hook configuration is shared repository metadata, not a private
+	// relay-state file: preserve the existing file mode (or default to the
+	// conventional 0644) instead of forcing it owner-only.
+	mode := os.FileMode(0o644)
+	if info, statErr := os.Lstat(path); statErr == nil && info.Mode().IsRegular() {
+		mode = info.Mode().Perm()
+	}
+	return atomicText(path, string(data)+"\n", mode)
 }
 
 // The canonical public skill lives at skills/pairroom-relay/SKILL.md,
