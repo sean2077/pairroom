@@ -257,6 +257,8 @@ func preflightRegistryRoot(root string) error {
 		return fmt.Errorf("inspect Service registry checkpoint before recovery: %w (service-registry.json is a rebuildable index: after backing it up and removing it, Rooms rebuild from their Event Logs, but Project registrations without Rooms must be recreated)", err)
 	} else if exists && schema < registryCheckpointSchema {
 		return fmt.Errorf("retired Service data root (checkpoint schema %d); start with a new data root and recreate Rooms and profiles; legacy data was not modified", schema)
+	} else if exists && schema > registryCheckpointSchema {
+		return fmt.Errorf("Service data root was written by a newer PairRoom (checkpoint schema %d > %d); upgrade this installation before starting it; data was not modified", schema, registryCheckpointSchema)
 	}
 	if schema, exists, err := readSchemaHeader(filepath.Join(root, agentPairProfilesFile)); err != nil {
 		return fmt.Errorf("inspect Agent pair profiles before recovery: %w", err)
@@ -323,6 +325,13 @@ func preflightRoomSchemas(roomsRoot string) error {
 }
 
 func readStoreSchemaHeader(path string) (int, bool, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return 0, false, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 1<<20 {
+		return 0, false, fmt.Errorf("Room metadata %s must be a regular file of at most 1 MiB", path)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return 0, false, err
@@ -340,11 +349,23 @@ func readStoreSchemaHeader(path string) (int, bool, error) {
 	return metadata.SchemaVersion, true, nil
 }
 
+// maxCheckpointBytes bounds the checkpoint read. The file is written by this
+// Service and stays far below this ceiling, so an oversized file is corruption
+// rather than a legitimate snapshot.
+const maxCheckpointBytes = 64 << 20
+
 func (r *Registry) readCheckpoint() (RegistrySnapshot, bool, error) {
-	data, err := os.ReadFile(r.checkpoint)
+	info, err := os.Lstat(r.checkpoint)
 	if errors.Is(err, os.ErrNotExist) {
 		return RegistrySnapshot{}, false, nil
 	}
+	if err != nil {
+		return RegistrySnapshot{}, false, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > maxCheckpointBytes {
+		return RegistrySnapshot{}, false, fmt.Errorf("service registry checkpoint must be a regular file of at most %d bytes", maxCheckpointBytes)
+	}
+	data, err := os.ReadFile(r.checkpoint)
 	if err != nil {
 		return RegistrySnapshot{}, false, err
 	}

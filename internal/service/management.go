@@ -14,6 +14,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -216,6 +218,11 @@ func (s *ManagementServer) Serve(listener net.Listener) error {
 func (s *ManagementServer) Shutdown(ctx context.Context) error {
 	err := s.http.Shutdown(ctx)
 	if err == nil {
+		// A cleanly stopped Service must not leave its bearer token sitting in
+		// the endpoint discovery file; CLI clients then fail with a missing
+		// file instead of a stale-token round trip. A forced close keeps the
+		// file because in-flight handlers may still be settling.
+		_ = os.Remove(filepath.Join(s.registry.Root(), relay.EndpointFile))
 		return nil
 	}
 	// Shutdown only waits for active handlers. Once its deadline expires, force

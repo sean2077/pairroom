@@ -364,11 +364,15 @@ func (n *nativeHostRuntime) events(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
+	// Bound each write so a stuck client cannot pin the stream goroutine
+	// indefinitely; the native UI reconnects and re-reads the snapshot.
+	rc := http.NewResponseController(w)
 	var cursor uint64
 	for {
 		sequence := n.engine.Sequence()
 		if cursor != sequence || cursor == 0 {
 			data, _ := json.Marshal(map[string]any{"sequence": sequence})
+			_ = rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
 			_, err := fmt.Fprintf(w, "id: %d\nevent: native\ndata: %s\n\n", sequence, data)
 			if err != nil {
 				return
@@ -383,6 +387,7 @@ func (n *nativeHostRuntime) events(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
+			_ = rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
 			if _, err := io.WriteString(w, ": heartbeat\n\n"); err != nil {
 				return
 			}
