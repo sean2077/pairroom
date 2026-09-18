@@ -388,6 +388,7 @@
         const index = state.snapshot.approvals.findIndex((item) => item.id === data.id);
         if (index >= 0) state.snapshot.approvals[index] = data;
         else state.snapshot.approvals.push(data);
+        updateUnreadUI();
         renderScope = 'approvals';
         break;
       }
@@ -1267,6 +1268,27 @@
     parent.appendChild(gallery);
   }
 
+  // Blob URLs are otherwise only revoked on pagehide; a long session that
+  // streams many distinct images would accumulate them without bound. Evict
+  // the oldest entries that no rendered <img> still references, so a visible
+  // image can never lose its source.
+  const MAX_MEDIA_OBJECT_URLS = 96;
+  function pruneMediaObjectURLs() {
+    const map = state.mediaObjectURLs;
+    if (map.size <= MAX_MEDIA_OBJECT_URLS) return;
+    for (const [key, value] of map) {
+      if (map.size <= MAX_MEDIA_OBJECT_URLS) break;
+      if (typeof value !== 'string') continue;
+      let inUse = false;
+      for (const img of document.querySelectorAll('img')) {
+        if (img.src === value) { inUse = true; break; }
+      }
+      if (inUse) continue;
+      URL.revokeObjectURL(value);
+      map.delete(key);
+    }
+  }
+
   function createAttachmentCard(attachment, options = {}) {
     const inline = Boolean(options.inline);
     const card = document.createElement(inline ? 'figure' : 'div');
@@ -1317,6 +1339,7 @@
       .then((blob) => {
         const url = URL.createObjectURL(blob);
         state.mediaObjectURLs.set(attachment.id, url);
+        pruneMediaObjectURLs();
         return url;
       })
       .catch((error) => {
@@ -2279,7 +2302,11 @@
   }
 
   function updateUnreadUI() {
-    document.title = state.unreadCount > 0 ? `(${state.unreadCount}) PairRoom` : 'PairRoom';
+    // Pending native approvals share the attention badge: in a standalone
+    // window the Inspector tab may be hidden, and an approval waiting on a
+    // human must not be less visible than an unread message.
+    const attention = state.unreadCount + pendingApprovalCount();
+    document.title = attention > 0 ? `(${attention}) PairRoom` : 'PairRoom';
     $('scroll-bottom').textContent = state.unreadCount > 0 ? t("ui.jumpToLatestValue", { value0: (state.unreadCount) }) : t("ui.jumpToLatest");
     postSurfaceState();
   }

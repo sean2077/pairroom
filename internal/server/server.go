@@ -264,6 +264,10 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 
 	heartbeat := time.NewTicker(20 * time.Second)
 	defer heartbeat.Stop()
+	// A stuck or half-open client must not pin this goroutine (and its FDs)
+	// indefinitely on a blocking write; each write gets a bounded deadline and
+	// a failure hands recovery to the client reconnect path.
+	rc := http.NewResponseController(w)
 	for {
 		select {
 		case <-r.Context().Done():
@@ -272,6 +276,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			// A named event (not just a comment) so the client watchdog can
 			// distinguish a silent half-open connection from a healthy idle
 			// stream; it carries no id, so the durable cursor never moves.
+			_ = rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
 			if _, err := io.WriteString(w, "event: heartbeat\ndata: {}\n\n"); err != nil {
 				return
 			}
@@ -284,6 +289,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			if !write {
 				continue
 			}
+			_ = rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
 			if err := writeSSE(w, event); err != nil {
 				return
 			}
@@ -680,10 +686,22 @@ func (s *Server) runGit(parent context.Context, args ...string) (string, error) 
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
-	if err != nil {
-		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(output)))
+	// A huge working tree must not turn one diff/status request into an
+	// unbounded memory spike; the inspector renders a prefix anyway.
+	const maxGitOutputBytes = 2 << 20
+	text := string(output)
+	truncated := len(text) > maxGitOutputBytes
+	if truncated {
+		text = text[:maxGitOutputBytes] + "\n... output truncated at 2 MiB ..."
 	}
-	return string(output), nil
+	if err != nil {
+		detail := strings.TrimSpace(text)
+		if len(detail) > 4096 {
+			detail = detail[:4096] + "... (truncated)"
+		}
+		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), detail)
+	}
+	return text, nil
 }
 
 func (s *Server) authenticate(next http.Handler) http.Handler {
