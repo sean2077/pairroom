@@ -176,12 +176,19 @@
 
   // Reads may be retried; message submissions must never be replayed implicitly.
   // Closing the old stream before the read also discards its queued telemetry.
-  function loadSnapshot() {
+  function loadSnapshot(options = {}) {
     if (state.snapshotPromise) return state.snapshotPromise;
     const initial = !state.snapshot;
-    closeEvents();
-    clearTimeout(state.reconnectTimer);
-    state.reconnectTimer = null;
+    // Read-after-write refreshes keep the SSE stream open: the durable
+    // sequence deduplication already reconciles the fresh snapshot with
+    // events that arrive during the fetch, so no reconnect gap (and no lost
+    // streaming deltas) is needed for consistency.
+    const keepStream = Boolean(options.keepStream) && !initial && state.source;
+    if (!keepStream) {
+      closeEvents();
+      clearTimeout(state.reconnectTimer);
+      state.reconnectTimer = null;
+    }
     state.snapshotPromise = (async () => {
       const limit = Math.min(1000, Math.max(250, state.snapshot?.messages?.length || 0));
       state.snapshot = await api(`/api/v1/snapshot?message_limit=${limit}`);
@@ -190,7 +197,7 @@
       initializeRoomLocalState();
       if (state.snapshot?.meta?.id) document.body.dataset.roomId = state.snapshot.meta.id;
       render(initial);
-      connectEvents();
+      if (!keepStream) connectEvents();
       refreshGitStatus();
       postSurfaceState();
     })().catch((error) => {
@@ -306,10 +313,22 @@
         if (!state.snapshot.messages.some((item) => item.id === data.id)) {
           data.seq = event.seq;
           state.snapshot.messages.push(data);
+          // Bound the in-memory timeline to the same ceiling the snapshot
+          // window uses, so a long-running relay session cannot grow state
+          // and DOM without limit. Evicted history stays reachable through
+          // the "load older" page, which the window fields now advertise.
+          let evicted = false;
+          if (state.snapshot.messages.length > 1000) {
+            state.snapshot.messages.splice(0, state.snapshot.messages.length - 1000);
+            evicted = true;
+          }
           if (state.snapshot.message_window) {
-            state.snapshot.message_window.total = Number(state.snapshot.message_window.total || 0) + 1;
-            state.snapshot.message_window.loaded = state.snapshot.messages.length;
-            if (!state.snapshot.message_window.oldest_seq) state.snapshot.message_window.oldest_seq = data.seq;
+            const window = state.snapshot.message_window;
+            window.total = Number(window.total || 0) + 1;
+            window.loaded = state.snapshot.messages.length;
+            if (evicted) window.has_more = true;
+            const oldest = state.snapshot.messages[0];
+            if (!window.oldest_seq || evicted) window.oldest_seq = oldest?.seq || window.oldest_seq || data.seq;
           }
           handleIncomingMessage(data, event.seq);
         }
@@ -443,7 +462,7 @@
 
   async function refreshAfterWrite() {
     if (state.snapshotPromise) await state.snapshotPromise.catch(() => {});
-    await loadSnapshot();
+    await loadSnapshot({ keepStream: true });
   }
 
   function participantBusy(actor) {

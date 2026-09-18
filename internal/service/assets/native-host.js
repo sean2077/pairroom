@@ -38,11 +38,17 @@
     for(const option of $('target').options) option.textContent=handle(option.value);
   }
   async function confirmRetry(){const dialog=$('confirm-dialog');dialog.returnValue='cancel';return new Promise(resolve=>{dialog.addEventListener('close',()=>resolve(dialog.returnValue==='confirm'),{once:true});dialog.showModal();});}
+  const MAX_RENDERED_MESSAGES=300;
   function renderMessages(value){
-    const messages=value.relay.messages||[];const active=new Set(messages.map(m=>m.id));
+    const all=value.relay.messages||[];
+    // Render a bounded tail; the full history stays in the Event Log and the
+    // count badge still reports the true total.
+    const messages=all.length>MAX_RENDERED_MESSAGES?all.slice(-MAX_RENDERED_MESSAGES):all;
+    const active=new Set(messages.map(m=>m.id));
     for(const [id,v] of messageNodes){if(!active.has(id)){v.node.remove();messageNodes.delete(id);}}
-    $('message-count').textContent=String(messages.length);$('messages').querySelector('.empty')?.remove();
-    if(!messages.length){$('messages').append(element('div',tr('empty'),'empty'));return;}
+    $('message-count').textContent=String(all.length);$('messages').querySelector('.empty')?.remove();$('messages').querySelectorAll('.truncated-note').forEach(n=>n.remove());
+    if(!all.length){$('messages').append(element('div',tr('empty'),'empty'));return;}
+    if(all.length>messages.length){$('messages').prepend(element('div',`${tr('showingLatest')} ${messages.length} / ${all.length}`,'muted truncated-note'));}
     const nearEnd=$('messages').scrollHeight-$('messages').scrollTop-$('messages').clientHeight<70;
     for(const m of messages){
       const key=JSON.stringify([m,language()]);let entry=messageNodes.get(m.id);if(!entry){entry={node:element('article'),key:''};messageNodes.set(m.id,entry);$('messages').append(entry.node);}
