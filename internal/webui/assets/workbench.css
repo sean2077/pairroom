@@ -29,6 +29,10 @@
   --wb-amber: #7d5309;
   --wb-red: #a82c3c;
   --wb-blue: #315c9f;
+  /* Filled user bubble, as in docs/images/pairroom-runtime-overview.png. */
+  --wb-user-bubble: #5b54c7;
+  --wb-user-bubble-line: #7a73dd;
+  --wb-user-bubble-ink: #ffffff;
   --wb-overlay-shadow: 0 12px 36px #0000001f, 0 2px 6px #0000000a;
   --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
@@ -115,6 +119,9 @@
   --wb-amber: #e0b767;
   --wb-red: #f1919e;
   --wb-blue: #9bbbf1;
+  --wb-user-bubble: #302e58;
+  --wb-user-bubble-line: #57519f;
+  --wb-user-bubble-ink: #e6e4ff;
   --wb-overlay-shadow: 0 12px 40px #00000055, 0 2px 6px #00000033;
 }
 :root body.workbench { background: var(--wb-canvas); color: var(--wb-ink); font-family: var(--font-sans); font-size: 13px; -webkit-font-smoothing: antialiased; }
@@ -273,11 +280,21 @@ body.workbench-room .search-box:focus-within { border-color: var(--wb-focus); bo
 body.workbench-room .room-collaboration { padding-block: 7px; background: var(--wb-panel); }
 body.workbench-room.ux-enhanced .timeline { padding-block: 20px 24px; }
 body.workbench-room .message-meta strong { font-weight: 600; }
-body.workbench-room.ux-enhanced .message-bubble, body.workbench-room.ux-enhanced .message-row:hover .message-bubble { border: 0; padding: 2px 0 8px; border-radius: 0; background: transparent; box-shadow: none; }
-body.workbench-room.ux-enhanced .message-row.user .message-bubble { background: var(--wb-input); border: 1px solid var(--wb-line); border-radius: 8px; padding: 12px 14px; }
+/* Room messages keep the bubble language of docs/images/pairroom-runtime-overview.png:
+   Agent messages are raised cards over the canvas carrying their slot accent edge,
+   user messages a filled accent bubble, so authorship reads without the meta row. */
+body.workbench-room.ux-enhanced .message-bubble { border: 1px solid var(--wb-line); background: var(--wb-panel); border-radius: var(--radius-lg); padding: 12px 14px; box-shadow: 0 2px 10px rgb(0 0 0 / .10); }
+body.workbench-room.ux-enhanced .message-row.user .message-bubble { background: var(--wb-user-bubble); border-color: var(--wb-user-bubble-line); color: var(--wb-user-bubble-ink); }
+body.workbench-room.ux-enhanced .message-row.user:hover .message-bubble { border-color: var(--wb-user-bubble-line); box-shadow: 0 6px 18px rgb(0 0 0 / .18); }
+/* The slot accent edge survives the card border shorthand, as in the overview art. */
+body.workbench-room.ux-enhanced .message-row.slot1 .message-bubble { border-left-color: rgba(224,139,91,.6); }
+body.workbench-room.ux-enhanced .message-row.slot2 .message-bubble { border-left-color: rgba(86,185,159,.6); }
 body.workbench-room .message-bubble .mention { color: var(--wb-ink); }
-body.workbench-room .long-message-fade::after { background: linear-gradient(transparent, var(--wb-canvas)); }
-body.workbench-room .message-row.user .long-message-fade::after { background: linear-gradient(transparent, var(--wb-input)); }
+body.workbench-room .message-row.user .message-bubble .mention { color: color-mix(in srgb, var(--wb-user-bubble-ink) 76%, var(--wb-user-bubble-line)); }
+/* Quoted context inside a card sits one surface step above the card itself. */
+body.workbench-room .reply-quote { background: var(--wb-input); border-left-color: var(--wb-line-strong); border-radius: 0 6px 6px 0; }
+body.workbench-room .long-message-fade::after { background: linear-gradient(transparent, var(--wb-panel)); }
+body.workbench-room .message-row.user .long-message-fade::after { background: linear-gradient(transparent, var(--wb-user-bubble)); }
 :root body.workbench-room .code-block { background: var(--wb-panel); border-color: var(--wb-line); border-radius: 6px; }
 :root body.workbench-room .code-block pre code { color: var(--wb-ink); }
 /* Message-body links are the Room's only prose links. The surface palette kept a
