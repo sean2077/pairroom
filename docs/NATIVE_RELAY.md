@@ -44,8 +44,8 @@ and its project folder-trust decision — when it is reusing the Claude Code hoo
 that is the definition to review. Follow the harness's trust/restart guidance.
 If Claude-hook compatibility is disabled (`[compat.claude] hooks = false`),
 install Grok with that compatibility off so PairRoom writes the Grok hook file.
-Installing Claude Code when a PairRoom Grok hook file already exists leaves that
-file in place unless you confirm removal at an interactive prompt.
+Installing Claude Code or Grok when a leftover PairRoom Grok Stop hook still
+exists removes that extra Grok command so only the Claude Code hook remains.
 PairRoom never grants approval on your behalf. Installation writes the relay
 skill as well; a skill-only installation does not install or approve hooks.
 Skill installation honors `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `GROK_HOME`
@@ -170,7 +170,7 @@ short deadline and cannot hold up collection for the full transport timeout.
 ## Verified vendor wake surfaces
 
 Two vendor-sanctioned surfaces exist around the idle-wake boundary, verified
-on real CLIs (2026-09-16; Grok Build 2026-09-18):
+on real CLIs (2026-09-16; Grok Build experiment 2026-09-18):
 
 - **Claude Code**: no external command injects into an existing session, and
   resuming a running session starts a copy instead. The harness does wake an
@@ -185,15 +185,16 @@ on real CLIs (2026-09-16; Grok Build 2026-09-18):
   pollable cross-turn. A wake nudge must stay body-free; thread identity may
   be visible to local process observers and vendor/CLI diagnostics, and must
   never be written to the Event Log, files, or relay bodies.
-- **Grok Build (grok 1.0.34)**: native binding, bounded Stop readiness, and
-  authenticated multi-round acceptance in both directions are verified on
-  real CLIs (2026-09-18 owner-authorized controlled experiment; sanitized
-  fixed categories: 4/4 rounds woke an idle session when an agent-owned
-  background `relay wait` completed, one model turn per round, no polling
-  output). As with Claude Code, this wake is model-initiated — the official
-  Grok background-task completion wakes the idle parent session — never
-  PairRoom-initiated. Service-initiated deep-idle wake has no
-  vendor-sanctioned surface for Grok and stays fail-closed.
+- **Grok Build**: native binding, bounded Stop readiness, and authenticated
+  multi-round acceptance in both directions are verified on real CLIs
+  (2026-09-18 owner-authorized controlled experiment; sanitized fixed
+  categories: 4/4 rounds woke an idle session when an agent-owned background
+  `relay wait` completed, one model turn per round, no polling output). As
+  with Claude Code, this wake is a harness-class behavior — official
+  background-task completion wakes the idle parent session — never
+  PairRoom-initiated and not pinned to one CLI version. Service-initiated
+  deep-idle wake has no vendor-sanctioned surface for Grok and stays
+  fail-closed.
 
 In a wake-enabled Room (per-Room configuration, default on; opt-out only at
 an idle Room boundary through the Management surface) the Service
