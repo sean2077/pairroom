@@ -3,6 +3,7 @@ package room
 import (
 	"fmt"
 
+	"github.com/sean2077/pairroom/internal/attachment"
 	"github.com/sean2077/pairroom/internal/model"
 )
 
@@ -40,13 +41,19 @@ func (e *Engine) deliveryQuote(message model.Message) (*model.AgentQuote, []mode
 	// Resolve their canonical IDs through agentAttachments in deliver(); never
 	// accept a browser-supplied path or duplicate an image already on the input.
 	seen := make(map[string]bool, len(attachments)+len(source.Attachments))
-	for _, attachment := range attachments {
-		seen[attachment.ID] = true
+	for _, value := range attachments {
+		seen[value.ID] = true
 	}
-	for _, attachment := range source.Attachments {
-		if !seen[attachment.ID] {
-			attachments = append(attachments, attachment)
-			seen[attachment.ID] = true
+	for _, value := range source.Attachments {
+		if len(attachments) >= attachment.MaxImagesPerMessage {
+			// Quoted history must not push the merged set past the native
+			// per-message image limit: the native boundary would reject the
+			// whole turn input and every retry would fail identically.
+			break
+		}
+		if !seen[value.ID] {
+			attachments = append(attachments, value)
+			seen[value.ID] = true
 		}
 	}
 	return quote, attachments, nil
