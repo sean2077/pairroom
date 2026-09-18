@@ -71,6 +71,15 @@ type RuntimeInterruptControl interface {
 	InterruptActive(ctx context.Context) error
 }
 
+// RuntimeHealth is an optional capability. Fatal reports an internal
+// fail-closed condition (a dead event-log writer or a failed Room listener)
+// that makes the runtime unusable while it still looks Active. The manager
+// marks the Room failed and attempts a graceful close instead of serving
+// requests that can only error.
+type RuntimeHealth interface {
+	Fatal() error
+}
+
 // RuntimeFactory returns a running Room runtime. On failure it normally returns
 // nil. A non-nil runtime together with an error means cleanup could not be
 // proven complete; the manager retains that runtime and its capacity slot.
@@ -679,6 +688,31 @@ func (m *RuntimeManager) reconcile() {
 	now := m.cfg.Now()
 	for roomID, entry := range m.entries {
 		m.refreshUsageLocked(entry)
+		if entry.phase == RuntimeActive && entry.runtime != nil {
+			if health, ok := entry.runtime.(RuntimeHealth); ok {
+				if err := health.Fatal(); err != nil {
+					// Surface the fail-closed runtime instead of reporting a
+					// healthy Active phase. Attempt a graceful close; finishStop
+					// retains the runtime (and its capacity slot) whenever
+					// cleanup is uncertain.
+					entry.lastError = err.Error()
+					entry.requested = false
+					entry.phase = RuntimeStopping
+					entry.generation++
+					generation := entry.generation
+					runtime := entry.runtime
+					m.wg.Add(1)
+					go func(id string, rt RoomRuntime, gen uint64) {
+						defer m.wg.Done()
+						ctx, cancel := context.WithTimeout(context.Background(), m.cfg.CloseTimeout)
+						err := rt.Close(ctx)
+						cancel()
+						m.finishStop(id, gen, err)
+					}(roomID, runtime, generation)
+					continue
+				}
+			}
+		}
 		if entry.phase != RuntimeActive || entry.runtime == nil || entry.runtime.Busy() || runtimeInUse(entry.runtime) {
 			continue
 		}
