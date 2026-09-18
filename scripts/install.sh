@@ -119,6 +119,7 @@ fi
 
 chmod +x "$tmp"
 mv "$tmp" "$DEST"
+rm -f "$tmp_sums"
 trap - EXIT
 
 printf 'Installed PairRoom CLI %s to %s\n' "$TAG" "$DEST"

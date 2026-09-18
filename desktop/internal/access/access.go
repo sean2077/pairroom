@@ -408,7 +408,8 @@ func managementCandidates(logFile string, backups int) ([]string, error) {
 		appendManagementCandidates(text, seen, &candidates)
 		if len(candidates) == before && truncated {
 			// A long-running daemon's start line can predate the tail window.
-			// Fall back once to a full read for this file.
+			// Fall back to a full read of this file for this pass; the
+			// caller's bounded probe window caps how often that can repeat.
 			data, readErr := os.ReadFile(path)
 			if readErr != nil {
 				if errors.Is(readErr, os.ErrNotExist) {
