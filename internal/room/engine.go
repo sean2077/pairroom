@@ -2020,10 +2020,16 @@ func (e *Engine) processingFallback(messageID string, target model.ActorID, stat
 	}
 	event, err := model.NewEvent(e.snapshot.Meta.ID, EventProcessingUpdated, target, update)
 	if err == nil {
-		err = e.cfg.Store.Append(&event)
+		if appendErr := e.cfg.Store.Append(&event); appendErr != nil {
+			err = appendErr
+			e.markStoreFatalLocked(fmt.Errorf("room event log write failed: %w", appendErr), e.snapshot.Meta.ID)
+		}
 	}
 	if err == nil {
-		err = e.applyLocked(event)
+		if applyErr := e.applyLocked(event); applyErr != nil {
+			err = applyErr
+			e.markStoreFatalLocked(fmt.Errorf("room event projection failed: %w", applyErr), e.snapshot.Meta.ID)
+		}
 	}
 	e.mu.Unlock()
 	if err == nil {
@@ -2061,10 +2067,16 @@ func (e *Engine) processing(messageID string, target model.ActorID, state model.
 	}
 	event, err := model.NewEvent(e.snapshot.Meta.ID, EventProcessingUpdated, target, update)
 	if err == nil {
-		err = e.cfg.Store.Append(&event)
+		if appendErr := e.cfg.Store.Append(&event); appendErr != nil {
+			err = appendErr
+			e.markStoreFatalLocked(fmt.Errorf("room event log write failed: %w", appendErr), e.snapshot.Meta.ID)
+		}
 	}
 	if err == nil {
-		err = e.applyLocked(event)
+		if applyErr := e.applyLocked(event); applyErr != nil {
+			err = applyErr
+			e.markStoreFatalLocked(fmt.Errorf("room event projection failed: %w", applyErr), e.snapshot.Meta.ID)
+		}
 	}
 	e.mu.Unlock()
 	if err == nil {
@@ -2122,10 +2134,16 @@ func (e *Engine) deliveryIf(messageID string, target model.ActorID, state model.
 	}
 	event, err := model.NewEvent(e.snapshot.Meta.ID, EventDeliveryUpdated, target, update)
 	if err == nil {
-		err = e.cfg.Store.Append(&event)
+		if appendErr := e.cfg.Store.Append(&event); appendErr != nil {
+			err = appendErr
+			e.markStoreFatalLocked(fmt.Errorf("room event log write failed: %w", appendErr), e.snapshot.Meta.ID)
+		}
 	}
 	if err == nil {
-		err = e.applyLocked(event)
+		if applyErr := e.applyLocked(event); applyErr != nil {
+			err = applyErr
+			e.markStoreFatalLocked(fmt.Errorf("room event projection failed: %w", applyErr), e.snapshot.Meta.ID)
+		}
 	}
 	e.mu.Unlock()
 	if err == nil {
@@ -2156,10 +2174,16 @@ func (e *Engine) mutateParticipant(eventActor, participantID model.ActorID, muta
 	mutate(&participant)
 	event, err := model.NewEvent(e.snapshot.Meta.ID, EventParticipantUpdated, eventActor, participant)
 	if err == nil {
-		err = e.cfg.Store.Append(&event)
+		if appendErr := e.cfg.Store.Append(&event); appendErr != nil {
+			err = appendErr
+			e.markStoreFatalLocked(fmt.Errorf("room event log write failed: %w", appendErr), e.snapshot.Meta.ID)
+		}
 	}
 	if err == nil {
-		err = e.applyLocked(event)
+		if applyErr := e.applyLocked(event); applyErr != nil {
+			err = applyErr
+			e.markStoreFatalLocked(fmt.Errorf("room event projection failed: %w", applyErr), e.snapshot.Meta.ID)
+		}
 	}
 	e.mu.Unlock()
 	if err != nil {
