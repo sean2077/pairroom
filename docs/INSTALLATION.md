@@ -31,7 +31,7 @@ The manifest is machine-scoped and declares the Microsoft Edge WebView2 Runtime 
 
 Download `pairroom-desktop-vX.Y.Z-windows-amd64-setup.exe`; it is not the standalone CLI `.exe`. The Inno Setup installer is machine-scoped, defaults to `C:\Program Files\PairRoom contributors\PairRoom`, remembers an initial custom directory for subsequent upgrades, installs `PairRoom.exe` plus `bin\pairroom.exe`, and creates a Start Menu entry.
 
-A missing machine-wide WebView2 Evergreen Runtime is installed before the payload. Internet access is needed only if the runtime is missing; for offline systems, preinstall Microsoft's standalone Evergreen Runtime. A runtime installation error stops Setup instead of reporting that PairRoom was installed successfully.
+A missing machine-wide WebView2 Evergreen Runtime is installed before the payload. Internet access is needed only if the runtime is missing; for offline systems, preinstall Microsoft's standalone Evergreen Runtime. Silent runs give the bootstrapper a bounded five-minute budget to provision the runtime, then fail with preinstallation guidance instead of waiting indefinitely. A runtime installation error stops Setup instead of reporting that PairRoom was installed successfully.
 
 Silent install/upgrade and uninstall work without launching the desktop:
 

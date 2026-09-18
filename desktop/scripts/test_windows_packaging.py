@@ -158,7 +158,8 @@ class WindowsPackagingTests(unittest.TestCase):
         for contract in ("AppId={#PairRoomId}", "UninstallDisplayName=PairRoom",
                          "WizardStyle=modern dynamic windows11", "CloseApplications=no",
                          "RestartApplications=no", "skipifsilent", "function InitializeUninstall",
-                         "function PrepareToInstall", "HKLM32, WebViewKey", "NativeInt"):
+                         "function PrepareToInstall", "HKLM32, WebViewKey", "NativeInt",
+                         "WebView2SilentWaitMs", "WizardSilent"):
             self.assertIn(contract, source)
         for forbidden in ("[InstallDelete]", "[UninstallDelete]", "[UninstallRun]",
                           "restartreplace", "taskkill", 'Flags: recursesubdirs'):
