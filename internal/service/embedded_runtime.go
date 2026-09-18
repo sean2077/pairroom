@@ -145,7 +145,21 @@ func EmbeddedRuntimeFactory(registry *Registry, cfg EmbeddedRuntimeConfig) Runti
 			return nil, fmt.Errorf("project is unavailable: %s", project.Diagnostic)
 		}
 		if durableRoom.HostMode == model.HostNative {
-			return startNativeHostRuntime(ctx, registry, project, durableRoom, cfg.ListenHost, cfg.nativeWake)
+			wake := cfg.nativeWake
+			if wake.Run == nil {
+				// Production Services resolve the vendor executable from the
+				// configured Codex command template instead of relying on the
+				// Service PATH, which a daemon/Desktop launch may not share
+				// with the user's shell. Test injection still wins.
+				if cfg.Mock {
+					wake.Run = unavailableNativeWakeCommand()
+				} else if cfg.Resolver != nil {
+					if command := strings.TrimSpace(cfg.Resolver.runtimes.For(model.RuntimeCodex).Command); command != "" {
+						wake.Run = fixedNativeWakeCommand(command)
+					}
+				}
+			}
+			return startNativeHostRuntime(ctx, registry, project, durableRoom, cfg.ListenHost, wake)
 		}
 		return startEmbeddedRuntime(ctx, registry, project, durableRoom, cfg)
 	}

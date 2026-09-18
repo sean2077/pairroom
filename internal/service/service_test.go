@@ -987,6 +987,39 @@ func TestRecoverServiceLockRefusesIncompleteMetadata(t *testing.T) {
 	}
 }
 
+func TestRecoverServiceLockRemovesAgedUnreadableDebris(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "service.lock")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	aged := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(path, aged, aged); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecoverServiceLock(root); err != nil {
+		t.Fatalf("aged zero-byte lock recovery failed: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("aged debris lock still exists: %v", err)
+	}
+}
+
+func TestRecoverServiceLockRefusesFreshUnreadableDebris(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "service.lock")
+	if err := os.WriteFile(path, []byte(`{"pid":123`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := RecoverServiceLock(root)
+	if err == nil || !strings.Contains(err.Error(), "cannot verify service lock owner") {
+		t.Fatalf("fresh debris recovery error = %v", err)
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Fatalf("fresh debris lock was removed: %v", statErr)
+	}
+}
+
 func TestRecoverServiceLockRemovesOnlyTheSelectedRootLock(t *testing.T) {
 	root := t.TempDir()
 	other := t.TempDir()

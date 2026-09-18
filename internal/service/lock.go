@@ -128,7 +128,7 @@ func AcquireServiceLock(input string, recoverStale bool) (*ServiceLock, error) {
 					}
 					detail += ")"
 				} else {
-					detail = fmt.Sprintf(" (lock metadata is unreadable: %v)", decodeErr)
+					detail = fmt.Sprintf(" (lock metadata is unreadable: %v; if no PairRoom Service is starting this is crash debris, and --recover-stale-lock removes an unreadable lock older than %s)", decodeErr, serviceLockDebrisAge)
 				}
 			} else {
 				detail = fmt.Sprintf(" (lock metadata could not be read: %v)", readErr)
@@ -215,7 +215,10 @@ func RecoverServiceLock(input string) error {
 	path := filepath.Join(root, "service.lock")
 	metadata, found, inspectErr := readServiceLockMetadata(path)
 	if inspectErr != nil {
-		return fmt.Errorf("cannot verify service lock owner before recovery: %w", inspectErr)
+		if handled, debrisErr := recoverUnreadableServiceLock(path, root); handled {
+			return debrisErr
+		}
+		return fmt.Errorf("cannot verify service lock owner before recovery: %w; if no PairRoom Service is starting, remove %s manually after confirming no owner process, then retry", inspectErr, path)
 	}
 	if !found {
 		return nil
@@ -262,6 +265,66 @@ func RecoverServiceLock(input string) error {
 		return err
 	}
 	return nil
+}
+
+// serviceLockDebrisAge is the conservative window after which an unreadable
+// service.lock is treated as crash debris from the O_EXCL-create-to-write gap
+// rather than a possible in-flight acquisition.
+const serviceLockDebrisAge = 2 * time.Minute
+
+// recoverUnreadableServiceLock removes crash debris left between the O_EXCL
+// create and the metadata write: a lock file that does not parse as JSON at
+// all. Debris is only eligible after serviceLockDebrisAge, so a concurrent
+// live acquisition is never stolen. Parseable-but-incomplete metadata is not
+// debris: it may name a real PID that cannot be fully verified, so the caller
+// keeps refusing it. The first return reports whether this path owned the
+// outcome.
+func recoverUnreadableServiceLock(path, root string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return true, nil
+		}
+		return false, nil
+	}
+	var probe serviceLockMetadata
+	if json.Unmarshal(data, &probe) == nil {
+		return false, nil
+	}
+	info, err := os.Stat(path)
+	if err != nil || time.Since(info.ModTime()) < serviceLockDebrisAge {
+		return false, nil
+	}
+	var raw [12]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return true, fmt.Errorf("generate service lock recovery name: %w", err)
+	}
+	moved := path + ".recovering-" + hex.EncodeToString(raw[:])
+	if err := os.Rename(path, moved); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return true, nil
+		}
+		return true, fmt.Errorf("move unreadable service lock aside: %w", err)
+	}
+	if hook := serviceLockRecoveryHook; hook != nil {
+		hook(moved, path)
+	}
+	// A replacement owner that materialized during the move wins: restore or
+	// keep its live lock and drop only the debris that was moved aside.
+	if _, movedFound, movedErr := readServiceLockMetadata(moved); movedErr == nil && movedFound {
+		if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+			if restoreErr := os.Rename(moved, path); restoreErr == nil {
+				return true, errors.New("service lock gained readable owner metadata during recovery; leaving it in place")
+			}
+		}
+	}
+	if err := os.Remove(moved); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return true, fmt.Errorf("remove recovered unreadable service lock: %w", err)
+	}
+	if err := syncDir(root); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 func (l *ServiceLock) Root() string {

@@ -283,7 +283,10 @@ func (s *ManagementServer) mountAgentPairProfiles(mux *http.ServeMux) {
 	})
 	save := func(w http.ResponseWriter, r *http.Request) {
 		var input AgentPairProfileInput
-		if err := decodeManagementJSON(w, r, &input); err != nil {
+		// A profile carries two Agent selections whose validated Instructions
+		// alone may reach 64 KiB each; the small default body limit would
+		// reject a fully valid profile with a misleading parse error.
+		if err := decodeManagementJSONLimit(w, r, &input, 1<<20); err != nil {
 			return
 		}
 		catalog, err := s.registry.SaveAgentPairProfile(r.Context(), r.PathValue("profile"), input)

@@ -401,7 +401,7 @@ func (s *ManagementServer) provisionRoom(w http.ResponseWriter, r *http.Request)
 		Bindings           map[model.ActorID]BindingSpec `json:"bindings"`
 		Agents             json.RawMessage               `json:"agents"`
 	}
-	if err := decodeManagementJSON(w, r, &request); err != nil {
+	if err := decodeManagementJSONLimit(w, r, &request, 1<<20); err != nil {
 		return
 	}
 	var agents map[model.ActorID]model.AgentSelection
@@ -1102,22 +1102,41 @@ func managementErrorCode(err error, fallback string) string {
 	}
 }
 
+// decodeManagementJSON enforces the small default configuration-request body
+// limit. Endpoints whose validated fields legitimately exceed it (Room
+// provisioning and Agent pair profiles carry up to two 64 KiB instruction
+// blocks plus 16 KiB of collaboration text, before JSON escaping) use
+// decodeManagementJSONLimit instead of failing valid requests with a
+// misleading parse error.
 func decodeManagementJSON(w http.ResponseWriter, r *http.Request, target any) error {
+	return decodeManagementJSONLimit(w, r, target, 64<<10)
+}
+
+func decodeManagementJSONLimit(w http.ResponseWriter, r *http.Request, target any, limit int64) error {
 	defer r.Body.Close()
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
-		writeManagementError(w, http.StatusBadRequest, "invalid JSON request: "+err.Error())
+		writeManagementDecodeError(w, err)
 		return err
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		if err == nil {
 			err = errors.New("multiple JSON values are not allowed")
 		}
-		writeManagementError(w, http.StatusBadRequest, "invalid JSON request: "+err.Error())
+		writeManagementDecodeError(w, err)
 		return err
 	}
 	return nil
+}
+
+func writeManagementDecodeError(w http.ResponseWriter, err error) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeManagementError(w, http.StatusRequestEntityTooLarge, "request body exceeds this endpoint's size limit")
+		return
+	}
+	writeManagementError(w, http.StatusBadRequest, "invalid JSON request: "+err.Error())
 }
 
 func writeManagementJSON(w http.ResponseWriter, status int, value any) {

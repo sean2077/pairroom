@@ -284,3 +284,19 @@ func waitNativeWake(ctx context.Context, delay time.Duration) error {
 func runNativeWakeCommand(ctx context.Context, name string, args ...string) error {
 	return exec.CommandContext(ctx, name, args...).Run()
 }
+
+// fixedNativeWakeCommand pins the wake runner to the operator-configured Codex
+// executable so a Service whose PATH does not include codex (daemon/Desktop
+// launch environments snapshot a different PATH than the user's shell) can
+// still wake through the configured command template.
+func fixedNativeWakeCommand(executable string) nativeWakeRun {
+	return func(ctx context.Context, _ string, args ...string) error {
+		return exec.CommandContext(ctx, executable, args...).Run()
+	}
+}
+
+// unavailableNativeWakeCommand keeps Mock rooms fail-closed: the wake audit
+// records command_unavailable instead of spawning a real vendor CLI.
+func unavailableNativeWakeCommand() nativeWakeRun {
+	return func(context.Context, string, ...string) error { return exec.ErrNotFound }
+}
