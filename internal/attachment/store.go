@@ -293,15 +293,18 @@ func (s *Store) DiscoverRepoImages(text, source string) []model.Attachment {
 }
 
 func (s *Store) Remove(id string) error {
-	m, path, err := s.load(id)
+	_, path, err := s.load(id)
 	if err != nil {
 		return err
 	}
-	_ = m
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	// The manifest goes first: a crash between the two removes then leaves an
+	// unreferenced content file (a backup warning) instead of a manifest whose
+	// bytes are gone, which archive verification treats as an error and would
+	// refuse every later backup of the Room.
+	if err := os.Remove(filepath.Join(s.root, id+".json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.Remove(filepath.Join(s.root, id+".json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
