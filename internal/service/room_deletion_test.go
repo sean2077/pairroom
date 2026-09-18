@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/relay"
 	"github.com/sean2077/pairroom/internal/store"
 )
 
@@ -351,6 +352,65 @@ func TestArchiveMissingRoomDataRollsBackBeforeCheckpointPublication(t *testing.T
 	}
 	if result.DataDisposition != RoomDataAlreadyMissing {
 		t.Fatalf("unexpected recovered removal result: %#v", result)
+	}
+}
+
+func TestRemoveAssociatedNativeRoomDoesNotRequireAdapterBindingIndex(t *testing.T) {
+	ctx := context.Background()
+	registry, err := OpenRegistry(ctx, RegistryConfig{Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := registry.RegisterProject(ctx, roomDeletionTestGitRepo(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	agents := defaultAgentSelections()
+	agents[model.ActorSlot2] = model.AgentSelection{
+		Runtime: model.RuntimeGrok, Provider: model.NativeProviderRef(), PermissionMode: "yolo",
+	}
+	room, err := registry.ProvisionRoom(ctx, ProvisionRequest{
+		ProjectID: project.ID,
+		Name:      "测试 cc+grok native 模式",
+		HostMode:  model.HostNative,
+		Agents:    agents,
+	}, SyntheticProvisioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := "01a0ae1f-cecf-74f3-926a-1701f4f09249"
+	if err := registry.commitNativeBinding(room.ID, relay.Binding{
+		Slot: model.ActorSlot2, Runtime: model.RuntimeGrok, BindID: "bind-slot2",
+		Generation: 1, Active: true, SessionID: session, LastActivity: time.Now().UTC(),
+	}, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	associated, ok := registry.Room(room.ID)
+	if !ok {
+		t.Fatal("native Room disappeared after association")
+	}
+	binding := associated.Bindings[model.ActorSlot2]
+	if !binding.OwnsIdentity() || binding.SessionID != session {
+		t.Fatalf("native slot2 was not associated: %#v", binding)
+	}
+	if owner, indexed := registry.BindingOwner(binding.Key()); indexed {
+		t.Fatalf("native session reserved in adapter ownership index: owner=%s", owner)
+	}
+	if _, err := registry.ArchiveRoom(ctx, room.ID); err != nil {
+		t.Fatal(err)
+	}
+	result, err := registry.RemoveRoom(ctx, room.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RoomID != room.ID || result.ProjectID != project.ID || result.DataDisposition != RoomDataDeleted {
+		t.Fatalf("unexpected native removal result: %#v", result)
+	}
+	if err := registry.Healthy(); err != nil {
+		t.Fatalf("removing an associated native Room poisoned the Registry: %v", err)
+	}
+	if _, ok := registry.Room(room.ID); ok {
+		t.Fatal("removed native Room remained indexed")
 	}
 }
 
@@ -795,7 +855,7 @@ func commitRoomRemovalCheckpointForTest(t *testing.T, registry *Registry, room R
 	defer registry.mu.Unlock()
 	delete(registry.rooms, room.ID)
 	for _, binding := range room.Bindings {
-		if binding.OwnsIdentity() {
+		if indexesAdapterBindingOwnership(room, binding) {
 			delete(registry.bindingOwners, binding.Key().String())
 		}
 	}
