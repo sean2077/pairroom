@@ -2,10 +2,11 @@
 
 Status: landed — owner approved and implemented 2026-09-17
 (`internal/relay/wake.go`, `internal/service/native_waker.go`).
-Updated: 2026-09-17. Evidence base: the verified vendor wake surfaces in
+Updated: 2026-09-18. Evidence base: the verified vendor wake surfaces in
 [NATIVE_RELAY.md](../NATIVE_RELAY.md) (Claude Code background-task wake;
 codex-cli 0.154.0 `queue` wake of a deep-idle thread, one-time controlled
-experiment).
+experiment; grok 1.0.34 background-collector wake and multi-round
+authenticated acceptance, controlled experiment 2026-09-18).
 
 ## Problem
 
@@ -22,10 +23,12 @@ wake of an idle Codex-bound session through the vendor queue surface, so a
 publishing agent can reach a deep-idle peer without human presence.
 
 Non-goals: waking Claude Code sessions (no external injection surface exists;
-resume of a running session forks a copy), waking Grok (unverified, binding
-unimplemented), replacing vendor approval semantics, delivering message
-bodies through vendor argv, or any Service-wide always-on switch without
-per-Room opt-out.
+resume of a running session forks a copy), Service-initiated waking of Grok
+Build sessions (no vendor-sanctioned external injection surface today; the
+binding is implemented and the model-initiated background-collector wake was
+verified on grok 1.0.34, 2026-09-18), replacing vendor approval semantics,
+delivering message bodies through vendor argv, or any Service-wide always-on
+switch without per-Room opt-out.
 
 ## Decision points
 
