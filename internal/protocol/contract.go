@@ -60,7 +60,7 @@ var baseRules = []Rule{
 
 func Resolve(selection Selection) (Contract, error) {
 	if selection.Actor != "" && !selection.Actor.ValidParticipant() {
-		return Contract{}, fmt.Errorf("invalid actor %q: use claude or codex", selection.Actor)
+		return Contract{}, fmt.Errorf("invalid actor %q: use slot1 or slot2", selection.Actor)
 	}
 	contract := Contract{Version: Version, Actor: selection.Actor, Rules: append([]Rule(nil), baseRules...)}
 	contract.Rules = append(contract.Rules, Rule{ID: "collaboration.creation", Text: "A Room fixes default (Lead/Executor) or custom natural-language instructions at creation. Responsibility never grants tool permissions."})

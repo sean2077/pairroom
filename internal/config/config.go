@@ -87,8 +87,10 @@ type File struct {
 
 func Defaults() File {
 	return File{
-		Listen:              "127.0.0.1:7332",
-		RoomName:            "Claude × Codex",
+		Listen: "127.0.0.1:7332",
+		// RoomName intentionally defaults to empty: the Room engine generates
+		// the one-time display name from the pair's actual runtimes instead of
+		// claiming a fixed vendor combination.
 		StallWarningSeconds: 300,
 		AutoStart:           true,
 		Runtimes: RuntimeTemplates{

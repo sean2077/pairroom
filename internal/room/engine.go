@@ -115,6 +115,10 @@ type Engine struct {
 	cancel   context.CancelFunc
 	started  bool
 	closed   bool
+	// storeFatal records the first durable-store failure. The Event Log writer
+	// closes itself on any append/sync error; from that point the Room must not
+	// pretend mutations are recorded. Guarded by mu.
+	storeFatal error
 
 	lastRuntimeActivity map[model.ActorID]time.Time
 	stallWarnedTurn     map[model.ActorID]string
@@ -185,7 +189,7 @@ func (e *Engine) restore() error {
 
 	name := strings.TrimSpace(e.cfg.Name)
 	if name == "" {
-		name = "Claude × Codex"
+		name = defaultRoomName(e.cfg.ClaudeConfig.Runtime, e.cfg.CodexConfig.Runtime)
 	}
 	collaboration := model.CloneCollaboration(e.cfg.Collaboration)
 	if collaboration == nil {
@@ -644,7 +648,7 @@ func (e *Engine) cancelQueuedAgentRelaysBefore(humanSeq uint64) {
 
 func (e *Engine) CancelMessage(ctx context.Context, messageID string, target model.ActorID) error {
 	if !target.ValidParticipant() {
-		return errors.New("cancel target must be claude or codex")
+		return errors.New("cancel target must be a participant slot: slot1 or slot2")
 	}
 	e.mu.RLock()
 	message, found := e.findMessageLocked(messageID)
@@ -1310,6 +1314,7 @@ func (e *Engine) reserveNextLocked() *scheduledDelivery {
 		e.turnQueue[0] = scheduledDelivery{}
 		e.turnQueue = e.turnQueue[1:]
 		if !e.deliveryAwaitingNative(candidate.message.ID, candidate.target) {
+			e.recordSupersededQueueDrop(candidate.message.ID, candidate.target)
 			continue
 		}
 		e.turnOwner = candidate.target
@@ -1380,6 +1385,25 @@ func (e *Engine) finishTurnIfIdle(actor model.ActorID, allowWithoutBoundary bool
 	next := e.finishTurnLocked(actor)
 	e.turnMu.Unlock()
 	e.startScheduledDelivery(next)
+}
+
+// recordSupersededQueueDrop writes the DeliverySkipped transition for a FIFO
+// item dropped because its processing reached a terminal state (cancelled or
+// failed) while it was still queued, so the projection never shows a message
+// stuck in queued+cancelled.
+func (e *Engine) recordSupersededQueueDrop(messageID string, target model.ActorID) {
+	e.mu.RLock()
+	message, ok := e.findMessageLocked(messageID)
+	skip := false
+	if ok {
+		delivery := message.Delivery[target]
+		skip = message.Processing[target].Terminal() &&
+			(delivery == model.DeliveryPending || delivery == model.DeliveryQueued)
+	}
+	e.mu.RUnlock()
+	if skip {
+		e.delivery(messageID, target, model.DeliverySkipped, "removed from the FIFO after the message reached a terminal processing state while queued")
+	}
 }
 
 func (e *Engine) deliveryAwaitingNative(messageID string, target model.ActorID) bool {
@@ -2149,6 +2173,54 @@ func (e *Engine) notice(level, text string) {
 	_, _ = e.record(EventSystemNotice, model.ActorSystem, model.SystemNotice{Level: level, Text: text})
 }
 
+// markStoreFatalLocked records the first durable-store failure and publishes
+// one transient (sequence-zero, never persisted) system notice, so the Room UI
+// shows why mutations stopped instead of silently losing facts. Callers hold
+// e.mu for writing; Hub.Publish is a non-blocking buffered send.
+func (e *Engine) markStoreFatalLocked(cause error, roomID string) {
+	if e.storeFatal != nil {
+		return
+	}
+	e.storeFatal = cause
+	payload, err := json.Marshal(model.SystemNotice{Level: "error", Text: "Room event log writes are failing; new facts cannot be recorded until the Service restarts this Room. Check disk space and permissions."})
+	if err != nil {
+		return
+	}
+	e.cfg.Hub.Publish(model.Event{RoomID: roomID, Kind: EventSystemNotice, Actor: model.ActorSystem, Data: payload, CreatedAt: time.Now().UTC()})
+}
+
+// Fatal reports the first durable-store failure, if any, so the Service can
+// surface this runtime as failed instead of reporting a healthy Active phase.
+func (e *Engine) Fatal() error {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.storeFatal
+}
+
+// defaultRoomName generates the one-time display name for a standalone Room
+// from its actual slot runtimes. Room names are display metadata, never
+// lookup keys, and a generated name must not claim vendors the pair does not
+// run (for example "Claude × Codex" for a Grok pair).
+func defaultRoomName(a, b model.RuntimeKind) string {
+	label := func(kind model.RuntimeKind) string {
+		switch kind.Canonical() {
+		case model.RuntimeClaude:
+			return "Claude"
+		case model.RuntimeCodex:
+			return "Codex"
+		case model.RuntimeGrok:
+			return "Grok"
+		default:
+			return ""
+		}
+	}
+	first, second := label(a), label(b)
+	if first == "" || second == "" {
+		return "PairRoom"
+	}
+	return first + " × " + second
+}
+
 func (e *Engine) resolveUserTargets(text string, explicit []model.ActorID, replyTo string) ([]model.ActorID, error) {
 	targets, err := normalizeExplicitActors(explicit)
 	if err != nil {
@@ -2342,10 +2414,12 @@ func (e *Engine) record(kind string, actor model.ActorID, payload any) (model.Ev
 	}
 	e.mu.Lock()
 	if err := e.cfg.Store.Append(&event); err != nil {
+		e.markStoreFatalLocked(fmt.Errorf("room event log write failed: %w", err), roomID)
 		e.mu.Unlock()
 		return model.Event{}, err
 	}
 	if err := e.applyLocked(event); err != nil {
+		e.markStoreFatalLocked(fmt.Errorf("room event projection failed: %w", err), roomID)
 		e.mu.Unlock()
 		return model.Event{}, err
 	}
