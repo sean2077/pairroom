@@ -49,11 +49,32 @@ type ServiceLockInfo struct {
 	StartedAt time.Time
 }
 
+// serviceLockReuseTolerance absorbs clock granularity and the small gap
+// between process start and the lock's StartedAt write when deciding whether
+// a live PID is really the recorded owner or a newer process reusing the PID.
+const serviceLockReuseTolerance = 5 * time.Minute
+
 // ServiceLockOwnerRunning checks whether the process recorded in a lock is
 // still present. A true result is conservative: recovery must never proceed
-// while the owner may still be alive.
+// while the owner may still be alive. When the platform can report the
+// process creation time, a PID now held by a process created well after the
+// recorded owner started is recognized as reuse: the owner is gone.
 func ServiceLockOwnerRunning(info ServiceLockInfo) (bool, error) {
-	return serviceLockProcessAlive(info.PID)
+	alive, err := serviceLockProcessAlive(info.PID)
+	if err != nil || !alive {
+		return alive, err
+	}
+	started, ok, err := serviceLockProcessStartedAt(info.PID)
+	if err != nil {
+		return true, err
+	}
+	if !ok {
+		return true, nil
+	}
+	if !info.StartedAt.IsZero() && started.After(info.StartedAt.Add(serviceLockReuseTolerance)) {
+		return false, nil
+	}
+	return true, nil
 }
 
 // ServiceLock is a cooperative process lock for one service data root. The

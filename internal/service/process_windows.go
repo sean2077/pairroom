@@ -6,7 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"syscall"
+	"time"
 )
+
+// processQueryLimitedInformation is PROCESS_QUERY_LIMITED_INFORMATION (0x1000).
+// The frozen dependency closure is stdlib-only, and Go's syscall package does
+// not export this constant; GetProcessTimes accepts this access right.
+const processQueryLimitedInformation = 0x1000
 
 func serviceLockProcessAlive(pid int) (bool, error) {
 	if pid <= 0 {
@@ -41,4 +47,26 @@ func serviceLockProcessAlive(pid int) (bool, error) {
 	default:
 		return false, fmt.Errorf("unexpected process wait state 0x%x", state)
 	}
+}
+
+// serviceLockProcessStartedAt reports the recorded process's creation time so
+// a reused PID can be distinguished from the original lock owner. Unknown or
+// inaccessible start times report ok=false and leave the caller conservative.
+func serviceLockProcessStartedAt(pid int) (time.Time, bool, error) {
+	if pid <= 0 {
+		return time.Time{}, false, nil
+	}
+	handle, err := syscall.OpenProcess(processQueryLimitedInformation, false, uint32(pid))
+	if err != nil {
+		if errors.Is(err, syscall.Errno(87)) || errors.Is(err, syscall.ERROR_FILE_NOT_FOUND) || errors.Is(err, syscall.ERROR_ACCESS_DENIED) {
+			return time.Time{}, false, nil
+		}
+		return time.Time{}, false, err
+	}
+	defer syscall.CloseHandle(handle)
+	var creation, exit, kernel, user syscall.Filetime
+	if err := syscall.GetProcessTimes(handle, &creation, &exit, &kernel, &user); err != nil {
+		return time.Time{}, false, nil
+	}
+	return time.Unix(0, creation.Nanoseconds()).UTC(), true, nil
 }

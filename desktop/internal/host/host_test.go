@@ -287,7 +287,10 @@ func TestStartLeavesLiveLockOwnerAndDoesNotStartEmbeddedCompetitor(t *testing.T)
 	if err := os.WriteFile(logFile, []byte("not a management url\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	lock, err := json.Marshal(map[string]any{"pid": os.Getpid(), "started_at": "2026-09-02T03:55:24Z", "nonce": "live"})
+	// A live owner's lock StartedAt tracks its own process start; a lock older
+	// than the recorded PID's process creation is exactly the reuse signature
+	// that crash-stale recovery treats as a gone owner.
+	lock, err := json.Marshal(map[string]any{"pid": os.Getpid(), "started_at": time.Now().UTC().Format(time.RFC3339), "nonce": "live"})
 	if err != nil {
 		t.Fatal(err)
 	}
