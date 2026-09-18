@@ -254,7 +254,7 @@ func preflightRegistryRoot(root string) error {
 		return errors.New("Service data root must be a direct directory")
 	}
 	if schema, exists, err := readSchemaHeader(filepath.Join(root, "service-registry.json")); err != nil {
-		return fmt.Errorf("inspect Service registry checkpoint before recovery: %w", err)
+		return fmt.Errorf("inspect Service registry checkpoint before recovery: %w (service-registry.json is a rebuildable index: after backing it up and removing it, Rooms rebuild from their Event Logs, but Project registrations without Rooms must be recreated)", err)
 	} else if exists && schema < registryCheckpointSchema {
 		return fmt.Errorf("retired Service data root (checkpoint schema %d); start with a new data root and recreate Rooms and profiles; legacy data was not modified", schema)
 	}

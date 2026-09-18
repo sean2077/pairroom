@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -187,7 +188,7 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 			seconds = int(relay.DefaultPark / time.Second)
 		}
 		if seconds > int(relay.MaxPark/time.Second) {
-			writeManagementError(w, 400, "wait timeout exceeds 30 seconds")
+			writeManagementError(w, 400, fmt.Sprintf("wait timeout exceeds %d seconds", int(relay.MaxPark/time.Second)))
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(seconds)*time.Second)

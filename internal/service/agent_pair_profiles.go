@@ -29,6 +29,11 @@ var (
 	errAgentPairProfileConflict = errors.New("Agent pair profile name already exists")
 	errAgentPairProfilesLimit   = errors.New("at most 100 Agent pair profiles may be saved")
 	errAgentPairProfilesStore   = errors.New("Agent pair profiles are unavailable; repair the profile file before retrying")
+	// errAgentPairProfilesCorrupt wraps the store sentinel with the actionable
+	// classification; the profile handler surfaces err.Error() directly, so the
+	// distinction between "corrupt file" and "storage failing" must travel in
+	// the wrapped error instead of being collapsed into one message.
+	errAgentPairProfilesCorrupt = fmt.Errorf("%w: agent-pair-profiles.json is corrupt or invalid; repair or remove it, then retry", errAgentPairProfilesStore)
 )
 
 // AgentPairProfile is a reusable, secret-free pair of selections, not a Room or
@@ -74,49 +79,52 @@ func (r *Registry) readAgentPairProfilesLocked() (AgentPairProfileCatalog, error
 	if errors.Is(err, os.ErrNotExist) {
 		return catalog, nil
 	}
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxPairProfilesBytes {
-		return AgentPairProfileCatalog{}, errAgentPairProfilesStore
+	if err != nil {
+		return AgentPairProfileCatalog{}, fmt.Errorf("%w: %v", errAgentPairProfilesStore, err)
+	}
+	if !info.Mode().IsRegular() || info.Size() > maxPairProfilesBytes {
+		return AgentPairProfileCatalog{}, errAgentPairProfilesCorrupt
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return AgentPairProfileCatalog{}, errAgentPairProfilesStore
+		return AgentPairProfileCatalog{}, fmt.Errorf("%w: %v", errAgentPairProfilesStore, err)
 	}
 	defer file.Close()
 	opened, err := file.Stat()
 	if err != nil || !os.SameFile(info, opened) {
-		return AgentPairProfileCatalog{}, errAgentPairProfilesStore
+		return AgentPairProfileCatalog{}, fmt.Errorf("%w: file changed while it was being read", errAgentPairProfilesStore)
 	}
 	catalog = AgentPairProfileCatalog{}
 	decoder := json.NewDecoder(io.LimitReader(file, maxPairProfilesBytes+1))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&catalog); err != nil {
-		return AgentPairProfileCatalog{}, errAgentPairProfilesStore
+		return AgentPairProfileCatalog{}, fmt.Errorf("%w: %v", errAgentPairProfilesCorrupt, err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return AgentPairProfileCatalog{}, errAgentPairProfilesStore
+		return AgentPairProfileCatalog{}, errAgentPairProfilesCorrupt
 	}
 	if catalog.Schema == 1 {
 		return AgentPairProfileCatalog{}, fmt.Errorf("%w: retired Agent pair profile format; recreate profiles before retrying", errAgentPairProfilesStore)
 	}
 	if catalog.Schema != 2 || catalog.Profiles == nil || len(catalog.Profiles) > maxAgentPairProfiles {
-		return AgentPairProfileCatalog{}, errAgentPairProfilesStore
+		return AgentPairProfileCatalog{}, errAgentPairProfilesCorrupt
 	}
 	ids, names := map[string]bool{}, []string{}
 	for i, profile := range catalog.Profiles {
 		if profile.ID == "" || profile.ID == "." || profile.ID == ".." || len(profile.ID) > 128 || strings.ContainsAny(profile.ID, "/\\") || strings.ContainsFunc(profile.ID, unicode.IsSpace) || strings.ContainsFunc(profile.ID, unicode.IsControl) || ids[profile.ID] {
-			return AgentPairProfileCatalog{}, errAgentPairProfilesStore
+			return AgentPairProfileCatalog{}, errAgentPairProfilesCorrupt
 		}
 		if validateAgentPairProfileName(profile.Name) != nil || profile.Name != strings.TrimSpace(profile.Name) {
-			return AgentPairProfileCatalog{}, errAgentPairProfilesStore
+			return AgentPairProfileCatalog{}, errAgentPairProfilesCorrupt
 		}
 		for _, name := range names {
 			if strings.EqualFold(name, profile.Name) {
-				return AgentPairProfileCatalog{}, errAgentPairProfilesStore
+				return AgentPairProfileCatalog{}, errAgentPairProfilesCorrupt
 			}
 		}
 		agents, err := validateAgentSelections(profile.Agents)
 		if err != nil {
-			return AgentPairProfileCatalog{}, errAgentPairProfilesStore
+			return AgentPairProfileCatalog{}, fmt.Errorf("%w: %v", errAgentPairProfilesCorrupt, err)
 		}
 		catalog.Profiles[i].Agents = agents
 		ids[profile.ID] = true
@@ -146,37 +154,40 @@ func (r *Registry) mutateAgentPairProfiles(ctx context.Context, change func(*Age
 	}
 	sort.Slice(catalog.Profiles, func(i, j int) bool { return catalog.Profiles[i].Name < catalog.Profiles[j].Name })
 	data, err := json.MarshalIndent(catalog, "", "  ")
-	if err != nil || len(data)+1 > maxPairProfilesBytes {
-		return AgentPairProfileCatalog{}, errAgentPairProfilesStore
+	if err != nil {
+		return AgentPairProfileCatalog{}, fmt.Errorf("%w: %v", errAgentPairProfilesStore, err)
+	}
+	if len(data)+1 > maxPairProfilesBytes {
+		return AgentPairProfileCatalog{}, fmt.Errorf("%w: profile catalog exceeds %d bytes", errAgentPairProfilesStore, maxPairProfilesBytes)
 	}
 	tmp, err := os.CreateTemp(r.root, ".agent-pair-profiles-*.tmp")
 	if err != nil {
-		return AgentPairProfileCatalog{}, errAgentPairProfilesStore
+		return AgentPairProfileCatalog{}, fmt.Errorf("%w: %v", errAgentPairProfilesStore, err)
 	}
 	defer os.Remove(tmp.Name())
 	defer tmp.Close()
 	if err := tmp.Chmod(0o600); err != nil {
-		return AgentPairProfileCatalog{}, errAgentPairProfilesStore
+		return AgentPairProfileCatalog{}, fmt.Errorf("%w: %v", errAgentPairProfilesStore, err)
 	}
 	if _, err := tmp.Write(append(data, '\n')); err != nil {
-		return AgentPairProfileCatalog{}, errAgentPairProfilesStore
+		return AgentPairProfileCatalog{}, fmt.Errorf("%w: %v", errAgentPairProfilesStore, err)
 	}
 	if err := tmp.Sync(); err != nil {
-		return AgentPairProfileCatalog{}, errAgentPairProfilesStore
+		return AgentPairProfileCatalog{}, fmt.Errorf("%w: %v", errAgentPairProfilesStore, err)
 	}
 	if err := tmp.Close(); err != nil {
-		return AgentPairProfileCatalog{}, errAgentPairProfilesStore
+		return AgentPairProfileCatalog{}, fmt.Errorf("%w: %v", errAgentPairProfilesStore, err)
 	}
 	if err := ctx.Err(); err != nil {
 		return AgentPairProfileCatalog{}, err
 	}
 	if err := os.Rename(tmp.Name(), filepath.Join(r.root, agentPairProfilesFile)); err != nil {
-		return AgentPairProfileCatalog{}, errAgentPairProfilesStore
+		return AgentPairProfileCatalog{}, fmt.Errorf("%w: %v", errAgentPairProfilesStore, err)
 	}
 	if err := syncDir(r.root); err != nil {
 		// The rename may already be durable. Never report success or roll back
 		// from stale memory; the next read reports the actual on-disk state.
-		return AgentPairProfileCatalog{}, errAgentPairProfilesStore
+		return AgentPairProfileCatalog{}, fmt.Errorf("%w: %v", errAgentPairProfilesStore, err)
 	}
 	return catalog, nil
 }
