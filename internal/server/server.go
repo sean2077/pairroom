@@ -268,6 +268,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	// indefinitely on a blocking write; each write gets a bounded deadline and
 	// a failure hands recovery to the client reconnect path.
 	rc := http.NewResponseController(w)
+	// Clear the per-write deadlines when the stream ends so a reused
+	// keep-alive connection never inherits a stale absolute deadline.
+	defer func() { _ = rc.SetWriteDeadline(time.Time{}) }()
 	for {
 		select {
 		case <-r.Context().Done():

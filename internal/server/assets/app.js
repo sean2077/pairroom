@@ -192,6 +192,14 @@
     state.snapshotPromise = (async () => {
       const limit = Math.min(1000, Math.max(250, state.snapshot?.messages?.length || 0));
       state.snapshot = await api(`/api/v1/snapshot?message_limit=${limit}`);
+      // Replay events held during the fetch; applyEvent's sequence
+      // deduplication drops anything the fresh snapshot already contains and
+      // applies only what was committed after the server-side read.
+      const held = state.streamHold || [];
+      state.streamHold = null;
+      for (const heldEvent of held) {
+        try { applyEvent(heldEvent); } catch { /* one malformed held event must not abort the replay */ }
+      }
       state.drafts = { slot1: '', slot2: '' };
       state.draftCorrelation = { slot1: '', slot2: '' };
       initializeRoomLocalState();
@@ -261,7 +269,17 @@
       if (state.source !== source) return;
       markActivity();
       try {
-        applyEvent(JSON.parse(raw.data));
+        const event = JSON.parse(raw.data);
+        if (state.snapshotPromise) {
+          // A snapshot fetch is about to replace the state wholesale; hold
+          // incoming events so anything the server committed after its
+          // snapshot read is replayed onto the fresh state instead of being
+          // silently rolled back (the stream is never re-subscribed here).
+          state.streamHold = state.streamHold || [];
+          if (state.streamHold.length < 500) state.streamHold.push(event);
+          return;
+        }
+        applyEvent(event);
       } catch (error) {
         toast(t("ui.couldNotParseEventValue", { value0: error.message }), 'error');
         void loadSnapshot().catch(() => {});
