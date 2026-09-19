@@ -73,7 +73,7 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		if err != nil {
 			var mismatch *defaultPairRuntimeMismatchError
 			if errors.As(err, &mismatch) {
-				return fmt.Errorf("%w; no Room was created. Choose the intended peer runtime and retry once: %s", err, createRetryCommand(root, endpointPath, o, slot))
+				return fmt.Errorf("%w; no Room was created. Choose the intended peer runtime and retry once: %s", err, createRetryCommand(root, endpointPath, o))
 			}
 			return err
 		}

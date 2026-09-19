@@ -29,7 +29,6 @@ func TestNativeCreatorSlot(t *testing.T) {
 		profile          bool
 		creatorFirst     bool
 		explicitRuntimes bool
-		notInPair        bool
 		wantSlot         model.ActorID
 		wantError        bool
 	}{
@@ -42,11 +41,9 @@ func TestNativeCreatorSlot(t *testing.T) {
 		{name: "codex/peer-flag", caller: model.RuntimeCodex, peer: model.RuntimeClaude, flags: []string{"--peer-runtime", "claude"}, explicitRuntimes: true},
 		{name: "grok/peer-flag", caller: model.RuntimeGrok, peer: model.RuntimeClaude, flags: []string{"--peer-runtime", "claude"}, explicitRuntimes: true},
 		{name: "codex/runtime-flag", caller: model.RuntimeCodex, peer: model.RuntimeClaude, flags: []string{"--runtime", "codex"}, explicitRuntimes: true},
-		{name: "codex/explicit-slot-1", caller: model.RuntimeCodex, peer: model.RuntimeClaude, flags: []string{"--slot", "1"}},
 		{name: "codex/explicit-slot-2", caller: model.RuntimeCodex, peer: model.RuntimeClaude, flags: []string{"--slot", "2"}, wantSlot: model.ActorSlot2},
-		{name: "codex/explicit-slot-2-reorient", caller: model.RuntimeCodex, peer: model.RuntimeClaude, flags: []string{"--slot", "2"}, creatorFirst: true, wantSlot: model.ActorSlot2},
 		{name: "codex/explicit-slot-2-and-peer", caller: model.RuntimeCodex, peer: model.RuntimeClaude, flags: []string{"--slot", "2", "--peer-runtime", "claude"}, wantSlot: model.ActorSlot2, explicitRuntimes: true},
-		{name: "codex/not-in-pair", caller: model.RuntimeCodex, peer: model.RuntimeClaude, notInPair: true, wantError: true},
+		{name: "codex/explicit-mismatch", caller: model.RuntimeCodex, peer: model.RuntimeClaude, flags: []string{"--slot", "1"}, wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			IsolateNativeCaller(t)
@@ -79,9 +76,6 @@ func TestNativeCreatorSlot(t *testing.T) {
 			}
 			own, peer := selection(tc.caller, "creator"), selection(tc.peer, "peer")
 			defaults := map[model.ActorID]model.AgentSelection{model.ActorSlot1: peer, model.ActorSlot2: own}
-			if tc.notInPair {
-				defaults[model.ActorSlot2] = peer
-			}
 			if tc.creatorFirst {
 				defaults[model.ActorSlot1], defaults[model.ActorSlot2] = own, peer
 			}
@@ -156,8 +150,8 @@ func TestNativeCreatorSlot(t *testing.T) {
 			if tc.wantError {
 				mu.Lock()
 				defer mu.Unlock()
-				if err == nil || !strings.Contains(err.Error(), "matches no slot") || created != nil || len(bound) != 0 || out.Len() != 0 {
-					t.Fatalf("a caller missing from the default pair must fail before provisioning: %v", err)
+				if err == nil || !strings.Contains(err.Error(), "selected creator slot does not match") || created != nil || len(bound) != 0 || out.Len() != 0 {
+					t.Fatalf("explicit mismatch must fail before provisioning: %v", err)
 				}
 				return
 			}

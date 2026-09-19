@@ -100,9 +100,7 @@ worktrees. Changing the shell's directory does not grant a new Room identity.
 Native supports Claude Code, Codex and Grok Build, including two sessions of
 one runtime. Slots remain Agent 1/2. For a Grok creator with an explicit Codex
 peer, use `pairroom relay bind --create --peer-runtime codex`; no own-runtime or
-slot flag is needed. Without overrides, the Service's configured pair is copied
-onto the new Room and oriented so the creator is Agent 1; the saved profile is
-unchanged.
+slot flag is needed. Without overrides, the Service's configured pair is kept.
 
 Grok's hook text is clipped by the harness. PairRoom never forwards a clipped
 reply as complete and never puts a full inbox body into Grok's Stop feedback.
