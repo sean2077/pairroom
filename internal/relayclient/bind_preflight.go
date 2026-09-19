@@ -49,7 +49,8 @@ func prepareNativeCreation(ctx context.Context, endpoint relay.Endpoint, root st
 	if err := installed(root, caller); err != nil {
 		return o, slot, err
 	}
-	if slot == "" && (o.kind != "" || o.peer != "") {
+	defaultSlot := slot == ""
+	if defaultSlot {
 		var err error
 		slot, err = inferCreateSlot(o)
 		if err != nil {
@@ -87,11 +88,12 @@ func prepareNativeCreation(ctx context.Context, endpoint relay.Endpoint, root st
 	if usingServiceDefaults && len(runtimeSlots(agents, caller)) == 0 {
 		return o, slot, &defaultPairRuntimeMismatchError{Runtime: caller}
 	}
-	if slot == "" {
-		slot, err = resolveSlotForRoom(serviceRoom{Agents: agents}, caller)
-		if err != nil {
-			return o, slot, err
-		}
+	if usingServiceDefaults && defaultSlot && agents[slot].Runtime != caller {
+		// Orient the new Room around its creator, not the catalog/profile's
+		// historical runtime order. Move the complete selections so Provider,
+		// model, instructions and native policy stay with their runtime.
+		peer := peerSlot(slot)
+		agents[slot], agents[peer] = agents[peer], agents[slot]
 	}
 	if agents[slot].Runtime != caller {
 		return o, slot, errors.New("the selected creator slot does not match this session's runtime; choose a matching slot or configure the intended pair")
