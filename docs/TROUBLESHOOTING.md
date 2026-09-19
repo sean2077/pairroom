@@ -69,7 +69,7 @@ Closing the desktop window hides it. Quit stops only an embedded Service it owns
 
 ## Backup, restore, or Room activation fails
 
-Preserve the original data directory. Check the first identity/schema/replay error with `pairroom verify --data-dir /absolute/path/to/room --json`. Current readers accept Store schemas 9 and 10; do not edit metadata to make another schema appear supported.
+Preserve the original data directory. Check the first identity/schema/replay error with `pairroom verify --data-dir /absolute/path/to/room --json`. Current readers accept only Store schema 12 with explicit `host_mode`; every earlier schema is retired and rejected before replay, repair, or rewrite. Do not edit metadata to make another schema appear supported.
 
 A missing, empty, gapped, or replaced Event Log is not an empty existing Room. Restore a verified matching backup rather than recreating or renumbering history. Check repository availability, exact native Binding, and complete backup contents separately.
 

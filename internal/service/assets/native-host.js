@@ -2,7 +2,7 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const tr = key => window.PairRoomI18n.t(`room.native.${key}`);
-  let csrf = '', snapshot = null, stream = null, pendingSend = null, refreshing = false, refreshAgain = false;
+  let csrf = '', snapshot = null, stream = null, pendingSend = null, refreshing = false, refreshAgain = false, sending = false;
   const messageNodes = new Map();
   let bindingsKey = '', auditKey = '', activityTimer = null;
   const language = () => window.PairRoomI18n?.lang || 'en';
@@ -39,16 +39,18 @@
   }
   async function confirmRetry(){const dialog=$('confirm-dialog');dialog.returnValue='cancel';return new Promise(resolve=>{dialog.addEventListener('close',()=>resolve(dialog.returnValue==='confirm'),{once:true});dialog.showModal();});}
   const MAX_RENDERED_MESSAGES=300;
+  const MAX_MESSAGE_BYTES=256*1024;
   function renderMessages(value){
     const all=value.relay.messages||[];
-    // Render a bounded tail; the full history stays in the Event Log and the
-    // count badge still reports the true total.
+    const total=value.relay.total_messages ?? all.length;
+    // Both the HTTP projection and DOM are bounded; totals still describe the
+    // complete retained history, available through the explicit export API.
     const messages=all.length>MAX_RENDERED_MESSAGES?all.slice(-MAX_RENDERED_MESSAGES):all;
     const active=new Set(messages.map(m=>m.id));
     for(const [id,v] of messageNodes){if(!active.has(id)){v.node.remove();messageNodes.delete(id);}}
-    $('message-count').textContent=String(all.length);$('messages').querySelector('.empty')?.remove();$('messages').querySelectorAll('.truncated-note').forEach(n=>n.remove());
+    $('message-count').textContent=String(total);$('messages').querySelector('.empty')?.remove();$('messages').querySelectorAll('.truncated-note').forEach(n=>n.remove());
     if(!all.length){$('messages').append(element('div',tr('empty'),'empty'));return;}
-    if(all.length>messages.length){$('messages').prepend(element('div',`${tr('showingLatest')} ${messages.length} / ${all.length}`,'muted truncated-note'));}
+    if(total>messages.length){$('messages').prepend(element('div',`${tr('showingLatest')} ${messages.length} / ${total}`,'muted truncated-note'));}
     const nearEnd=$('messages').scrollHeight-$('messages').scrollTop-$('messages').clientHeight<70;
     for(const m of messages){
       const key=JSON.stringify([m,language()]);let entry=messageNodes.get(m.id);if(!entry){entry={node:element('article'),key:''};messageNodes.set(m.id,entry);$('messages').append(entry.node);}
@@ -70,16 +72,26 @@
     $('audit').replaceChildren(...(value.relay.audit||[]).slice(-80).reverse().map(a=>{const li=element('li');li.append(element('strong',tr(names[a.kind]||a.kind)),element('time',time(a.at)));if(a.detail)li.append(element('p',a.detail));return li;}));
   }
   function render(value){snapshot=value;$('room-name').textContent=value.room.name;document.title=`${value.room.name} · PairRoom Native`;renderBindings(value);renderMessages(value);renderAudit(value);}
-  async function refresh(){if(refreshing){refreshAgain=true;return;}refreshing=true;try{do{refreshAgain=false;const value=await request('api/v1/snapshot');if(!snapshot || value.relay.sequence>=snapshot.relay.sequence)render(value);}while(refreshAgain);}finally{refreshing=false;}}
+  async function refresh(){if(refreshing){refreshAgain=true;return;}refreshing=true;try{do{refreshAgain=false;const value=await request('api/v1/snapshot?tail=1');if(!snapshot || value.relay.sequence>=snapshot.relay.sequence)render(value);}while(refreshAgain);}finally{refreshing=false;}}
+  function lockComposer(){
+    // An uncertain publication must be retried with its ORIGINAL payload, not
+    // silently combined with edits or a newly selected attachment.
+    for(const id of ['message-text','target','attachment'])$(id).disabled=sending||pendingSend!==null;
+    $('send').disabled=sending;
+  }
   $('composer').addEventListener('submit',async event=>{
-    event.preventDefault();const text=$('message-text').value.trim();const file=$('attachment').files[0];if(!text&&!file){status(tr('inputRequired'),true);return;}
+    event.preventDefault();if(sending)return;
+    const text=$('message-text').value.trim();const file=$('attachment').files[0];if(!text&&!file){status(tr('inputRequired'),true);return;}
     const to=$('target').value;
     if(pendingSend && (pendingSend.text!==text||pendingSend.to!==to)){status(tr('unknownSend'),true);return;}
-    $('send').disabled=true;
+    // HTML maxlength counts UTF-16 code units, not the relay's UTF-8 budget.
+    // Reject before upload/publication so a known-invalid draft stays editable.
+    if(!pendingSend && new TextEncoder().encode(text).byteLength>MAX_MESSAGE_BYTES){status(`${window.PairRoomI18n.t('errors.request_too_large')} (256 KiB UTF-8)`,true);return;}
+    sending=true;lockComposer();
     try{
       if(!pendingSend){let attachmentIDs=[];if(file){const body=new FormData();body.append('file',file);const a=await request('api/v1/attachments',{method:'POST',body});attachmentIDs=[a.id];}pendingSend={id:crypto.randomUUID(),text,to,attachment_ids:attachmentIDs};}
       await request('api/v1/messages',{method:'POST',body:JSON.stringify(pendingSend)});pendingSend=null;$('message-text').value='';$('attachment').value='';status(tr('sent'));await refresh();
-    }catch(e){status(e.message,true);}finally{$('send').disabled=false;}
+    }catch(e){status(e.message,true);}finally{sending=false;lockComposer();}
   });
   document.addEventListener('pairroom:lang',translations);
   async function start(){

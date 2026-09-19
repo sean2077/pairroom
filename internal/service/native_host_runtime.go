@@ -223,7 +223,10 @@ func (n *nativeHostRuntime) boundary(next http.Handler) http.Handler {
 	})
 }
 func (n *nativeHostRuntime) snapshot() map[string]any {
-	return map[string]any{"room": n.room, "relay": n.engine.Snapshot(), "protocol": protocol.NativeVersion, "config_notice": "Provider, model, effort, instructions and permissions are display-only here; configure them in the native harness.", "identities": model.ParticipantIdentities(map[model.ActorID]model.RuntimeKind{model.ActorSlot1: n.room.Agents[model.ActorSlot1].Runtime, model.ActorSlot2: n.room.Agents[model.ActorSlot2].Runtime})}
+	return n.snapshotWithRelay(n.engine.Snapshot())
+}
+func (n *nativeHostRuntime) snapshotWithRelay(projection any) map[string]any {
+	return map[string]any{"room": n.room, "relay": projection, "protocol": protocol.NativeVersion, "config_notice": "Provider, model, effort, instructions and permissions are display-only here; configure them in the native harness.", "identities": model.ParticipantIdentities(map[model.ActorID]model.RuntimeKind{model.ActorSlot1: n.room.Agents[model.ActorSlot1].Runtime, model.ActorSlot2: n.room.Agents[model.ActorSlot2].Runtime})}
 }
 func (n *nativeHostRuntime) serve(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
@@ -252,9 +255,21 @@ func (n *nativeHostRuntime) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		switch p {
 		case "/api/v1/health":
+			if n.Fatal() != nil {
+				// Health describes this relay, never vendor presence. Do not
+				// expose writer/listener errors, paths or credentials here.
+				writeManagementJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "host_mode": "native", "code": "runtime_not_ready", "error": "native Room runtime is unavailable"})
+				return
+			}
 			writeManagementJSON(w, 200, map[string]any{"ok": true, "host_mode": "native"})
 			return
 		case "/api/v1/snapshot", "/api/v1/export":
+			// Browser refreshes request a bounded window; export and the
+			// unparameterized API keep complete history for explicit inspection.
+			if p == "/api/v1/snapshot" && r.URL.Query().Get("tail") == "1" {
+				writeManagementJSON(w, 200, n.snapshotWithRelay(n.engine.SnapshotTail()))
+				return
+			}
 			writeManagementJSON(w, 200, n.snapshot())
 			return
 		case "/api/v1/messages":
@@ -386,7 +401,7 @@ func (n *nativeHostRuntime) events(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		err := n.engine.WaitChanges(ctx, cursor)
 		cancel()
-		if r.Context().Err() != nil || errors.Is(err, relay.ErrClosed) {
+		if r.Context().Err() != nil || (err != nil && !errors.Is(err, context.DeadlineExceeded)) {
 			return
 		}
 		if errors.Is(err, context.DeadlineExceeded) {

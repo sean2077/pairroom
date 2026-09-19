@@ -5,6 +5,8 @@ configure or interrupt them. The same setup guide is available inside the browse
 and desktop app, before creating a Room and in every Native Room.
 [Protocol](PROTOCOL.md#native-host-protocol-v8) owns the transport contract and
 the [CLI reference](CLI_REFERENCE.md#native-relay-commands) owns command flags.
+For architectural tradeoffs, bounded-history behavior and dated vendor research,
+see [Native efficiency boundaries](design/native-efficiency.md).
 
 ## Before starting
 
@@ -76,7 +78,8 @@ associates at once, so there is no nonce to echo and nothing to wait for. Run
 bind as a tool call inside the intended session, not a detached terminal or Grok
 shell mode (`!`); without that environment bind fails closed rather than guessing. Give the agents the task
 and intended collaboration in ordinary language; no status check or initial Stop
-is needed to unlock relay. `pairroom relay status` is available for diagnosis. The app displays published
+is needed to unlock relay. `pairroom relay status` is available for diagnosis, not
+an extra step after every confirmed publication. The app displays published
 messages and delivery state, not full native history.
 
 For explicit discussion, start the receiver with `pairroom relay wait`, then
@@ -155,15 +158,24 @@ process death releases it.
 read, accepted or completed anything. Lost output/ack and collector death can
 become `unknown`. While no explicit Retry is pending, the original claimer's
 receipt-matched acknowledgement still settles an `unknown` delivery to
-`handed_off`; a pending Retry blocks that late acknowledgement, and without
-the receipt `unknown` stays a diagnostic state. Do not automatically replay
-possibly executed effects.
+`handed_off`, including after Service crash recovery and replay; a pending Retry
+blocks that late acknowledgement, and without the receipt `unknown` stays a
+diagnostic state. Do not automatically replay possibly executed effects.
 A body that reached a collector's stdout but not the model — for example a
 detached background waiter whose output the harness never surfaced — stays
 terminally `handed_off`; no later `relay wait` can re-collect it. Recovery is
 diagnostic, not replay: inspect the authorized history (`status --brief=false`)
 and ask the sender for a fresh instruction that does not duplicate the original
-task body, whose side effects may already have executed.
+task body, whose side effects may already have executed. When a harness supplies
+a saved-file path with a clipped output preview, read that full output before
+acting; the acknowledgement is not evidence of complete model context.
+
+A repeated explicit send ID recovers its original receipt only when the delivered
+body, target, attachment identities and quote match. It never substitutes changed
+content. Receipt recovery uses already-accepted attachment metadata, while new
+publication and collection still validate the actual bytes. A new ID remains an
+intentional new publication even if its body is identical.
+
 Summary counts and bounded recovery IDs are transport observations, never
 "working", "done", or "needs user" guesses based on silence. `status` and
 `reconcile` default to bounded body-free summaries; `--brief=false` and export
@@ -171,34 +183,42 @@ intentionally retain full history. Send receipts contain IDs and transport state
 not another copy of the outgoing body. Optional wake-metadata lookup has its own
 short deadline and cannot hold up collection for the full transport timeout.
 
+Browser refreshes use `GET /api/v1/snapshot?tail=1`: at most 300 recent complete
+messages, a 1 MiB combined message/quote text budget, and 80 recent audit entries.
+The newest message is always retained. `total_messages` and `total_audit` report
+the complete history counts; the budget is not a total JSON byte limit. The
+unparameterized snapshot and `/api/v1/export` retain complete history, even when
+an export request includes `tail=1`. No history is deleted and inbox collection
+is unaffected. Receipt fields remain private in both projections.
+
 ## Verified vendor wake surfaces
 
-Two vendor-sanctioned surfaces exist around the idle-wake boundary, verified
-on real CLIs (2026-09-16; Grok Build experiment 2026-09-18):
+The following are repository-recorded real-CLI experiments from 2026-09-16 and
+2026-09-18, not a new authenticated vendor run or a guarantee about every future
+harness version. Current external documentation is assessed separately in
+[Native efficiency boundaries](design/native-efficiency.md).
 
-- **Claude Code**: no external command injects into an existing session, and
-  resuming a running session starts a copy instead. The harness does wake an
-  idle session when harness-tracked background work completes, so an
-  agent-owned background `relay wait` keeps that session reachable by design
-  (see the `pairroom-relay` skill). This is model-initiated, never
-  PairRoom-initiated.
+- **Claude Code**: the recorded experiment found that resuming an already-running
+  session started a copy, rather than injecting into the existing session.
+  Harness-tracked background completion woke its idle parent, allowing an
+  agent-owned background `relay wait` to keep that session reachable. PairRoom
+  currently uses this model-initiated path, not a Service-initiated Claude wake.
+  Claude's separately documented Channels preview is not integrated here.
 - **Codex (codex-cli 0.154.0)**: `codex queue --thread <session UUID>
   --message <text>` woke a deep-idle bound thread in a controlled one-time
   experiment (accepted queue exit, then an autonomous relay report with no
-  human interaction). Unified-exec background tasks survive turn end and stay
+  human interaction). Unified-exec background tasks survived turn end and stayed
   pollable cross-turn. A wake nudge must stay body-free; thread identity may
   be visible to local process observers and vendor/CLI diagnostics, and must
-  never be written to the Event Log, files, or relay bodies.
+  never be copied into wake audit records or relay bodies.
 - **Grok Build**: native binding, bounded Stop readiness, and authenticated
-  multi-round acceptance in both directions are verified on real CLIs
-  (2026-09-18 owner-authorized controlled experiment; sanitized fixed
-  categories: 4/4 rounds woke an idle session when an agent-owned background
-  `relay wait` completed, one model turn per round, no polling output). As
-  with Claude Code, this wake is a harness-class behavior — official
-  background-task completion wakes the idle parent session — never
-  PairRoom-initiated and not pinned to one CLI version. Service-initiated
-  deep-idle wake has no vendor-sanctioned surface for Grok and stays
-  fail-closed.
+  multi-round acceptance in both directions were verified in the recorded
+  2026-09-18 owner-authorized controlled experiment. Sanitized fixed categories:
+  4/4 rounds woke an idle session when an agent-owned background `relay wait`
+  completed, one model turn per round, no polling output. As with the Claude
+  experiment, this was harness-owned background completion, not a PairRoom
+  Service command. No external Grok wake surface is integrated in PairRoom;
+  Service-initiated Grok wake stays fail-closed.
 
 In a wake-enabled Room (per-Room configuration, default on; opt-out only at
 an idle Room boundary through the Management surface) the Service
@@ -206,12 +226,19 @@ automatically executes the Codex queue wake for a durably queued
 peer-directed message to a deep-idle Codex-bound session: fixed body-free
 nudge, at most one per burst, rate-limited, durably reserved before the
 command, audited through a fixed outcome/reason vocabulary, and never
-automatically retried. See [design/auto-wake.md](design/auto-wake.md) and
-[PROTOCOL.md](PROTOCOL.md#automatic-idle-peer-wake). Claude Code and Grok Build
-sessions have no external injection surface and stay reachable through the
-agent-owned background `relay wait`. For disabled Rooms, non-Codex targets,
-or wake failures, the CLI still prints a human-executable wake template as
-the fallback; the human decides and runs it.
+automatically retried. Reservation rechecks the active binding generation,
+queued message, enabled policy and live collectors under the Engine lock.
+A collector arriving after reservation may still make one nudge redundant;
+the FIFO, not the nudge, determines message delivery.
+See [design/auto-wake.md](design/auto-wake.md) and
+[PROTOCOL.md](PROTOCOL.md#automatic-idle-peer-wake).
+
+Claude Code and Grok Build use agent-owned background `relay wait` only where
+that harness actually surfaces completion without polling turns. This is a
+PairRoom integration boundary, not a claim that vendors have no other features.
+Manual `codex queue` templates are printed only for authenticated Codex targets
+with a known session identity; other targets receive `relay wait` guidance,
+not an invented vendor command. The human decides whether to use a manual wake.
 
 ## Troubleshooting
 

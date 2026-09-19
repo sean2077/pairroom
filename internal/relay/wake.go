@@ -6,6 +6,10 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 )
 
+// ErrWakeIneligible means the candidate changed before the durable effect
+// boundary. No command was authorized and no reservation was consumed.
+var ErrWakeIneligible = errors.New("wake candidate is no longer eligible")
+
 // WakeEnabled reports the per-Room automatic-wake configuration. Absence of a
 // durable native.wake.updated fact means enabled (per-Room default-on, DP2).
 func (e *Engine) WakeEnabled() bool {
@@ -37,10 +41,10 @@ func (e *Engine) SetWakeEnabled(enabled bool) error {
 }
 
 // ReserveWake durably records the pre-command reservation for one wake
-// attempt, keyed by PairRoom transport message ID. The reservation must exist
-// before any vendor command runs, so an interrupted Service never mistakes an
-// attempted vendor effect for a safe automatic retry. Reserving the same
-// message twice fails with ErrWakeReserved instead of overwriting history.
+// attempt, keyed by PairRoom transport message ID. Revalidate the message,
+// binding generation, policy and collector under the SAME lock as the append.
+// A prior WakeCandidate is only an observation, not authorization to run a
+// vendor command after cancel/unbind/replace or collection has won the race.
 func (e *Engine) ReserveWake(messageID string, target model.ActorID) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -53,6 +57,12 @@ func (e *Engine) ReserveWake(messageID string, target model.ActorID) error {
 	if e.wakeReserved[messageID] {
 		return ErrWakeReserved
 	}
+	candidate, ok := e.wakeCandidateLocked(messageID)
+	if !ok || candidate.Target != target || !candidate.Enabled || !candidate.QueueStart || candidate.SessionID == "" || candidate.WaiterActive || candidate.Delivering {
+		return ErrWakeIneligible
+	}
+	// Replacement cancels queued work for the old generation; the candidate
+	// exposes a session only when the message's generation is still active.
 	return e.append(EventWakeReserved, model.ActorSystem, WakeReservation{MessageID: messageID, Target: target})
 }
 
@@ -95,22 +105,19 @@ func (e *Engine) WakeReservations() []WakeReservation {
 	return append([]WakeReservation(nil), e.wakeReservations...)
 }
 
-// WakeCandidate answers atomically, under the Engine lock, whether a durable
-// queued message should consider waking its target: the message must still be
-// queued for a participant, and the result reports whether it began a fresh
-// pending burst, whether a foreground/park collector is blocked in Claim for
-// the target right now, and whether an unacknowledged delivery to the target
-// is in flight. ok=false means there is nothing to evaluate (unknown,
-// already claimed, cancelled, user-directed, or unavailable engine); the
-// caller skips silently. Policy stays in the waker; the Engine only states
-// facts. The answer is a point-in-time observation: a collector can attach
-// immediately afterwards, in which case single-owner FIFO claim still
-// delivers the message exactly once and the wake degenerates to at most one
-// redundant vendor turn.
+// WakeCandidate is a point-in-time observation of a queued message and its
+// target, not a reservation. A later collector/policy/binding change must be
+// checked again by ReserveWake at the durable authorization boundary. A
+// collector arriving after that boundary can still cause one redundant wake;
+// FIFO ownership, not a wake nudge, decides delivery.
 func (e *Engine) WakeCandidate(messageID string) (WakeCandidate, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.fatal != nil || e.closed {
+	return e.wakeCandidateLocked(messageID)
+}
+
+func (e *Engine) wakeCandidateLocked(messageID string) (WakeCandidate, bool) {
+	if e.healthy() != nil {
 		return WakeCandidate{}, false
 	}
 	m, ok := e.messages[messageID]
@@ -119,7 +126,7 @@ func (e *Engine) WakeCandidate(messageID string) (WakeCandidate, bool) {
 	}
 	candidate := WakeCandidate{MessageID: m.ID, Target: m.To, Enabled: e.wakeEnabled}
 	candidate.Runtime = e.cfg.Runtimes[m.To]
-	if b := e.bindings[m.To]; b.Active {
+	if b := e.bindings[m.To]; b.Active && b.Generation == m.TargetGeneration {
 		if candidate.Runtime == "" {
 			candidate.Runtime = b.Runtime
 		}

@@ -40,6 +40,7 @@ type Engine struct {
 	seenBinds  map[string]bool
 	messages   map[string]Message
 	order      []string
+	inFlight   map[string]struct{} // rebuilt from message facts; never scans terminal history
 	sends      map[string]string
 	reports    map[string]Publication
 	lastReport map[string]uint64
@@ -69,7 +70,7 @@ func Open(cfg Config) (*Engine, error) {
 	if cfg.Lease <= 0 {
 		cfg.Lease = DeliveryLease
 	}
-	e := &Engine{cfg: cfg, bindings: map[model.ActorID]bindingFact{}, seenBinds: map[string]bool{}, messages: map[string]Message{}, sends: map[string]string{}, reports: map[string]Publication{}, lastReport: map[string]uint64{}, changed: make(chan struct{}), wakeEnabled: true, wakeReserved: map[string]bool{}, waiters: map[model.ActorID]int{}}
+	e := &Engine{cfg: cfg, bindings: map[model.ActorID]bindingFact{}, seenBinds: map[string]bool{}, messages: map[string]Message{}, inFlight: map[string]struct{}{}, sends: map[string]string{}, reports: map[string]Publication{}, lastReport: map[string]uint64{}, changed: make(chan struct{}), wakeEnabled: true, wakeReserved: map[string]bool{}, waiters: map[model.ActorID]int{}}
 	events, err := cfg.Store.Load()
 	if err != nil {
 		return nil, err
@@ -84,15 +85,10 @@ func Open(cfg Config) (*Engine, error) {
 	}
 	// A previous writer cannot prove whether a claimed envelope reached stdout.
 	// Preserve queued work; no delivery recovery is an automatic replay.
-	for _, id := range e.order {
-		m := e.messages[id]
-		if m.State == "delivering" {
-			m.State = "unknown"
-			m.UpdatedAt = e.cfg.Now()
-			if err := e.append(EventMessage, model.ActorSystem, messageFact{Message: m}); err != nil {
-				return nil, err
-			}
-		}
+	// Use the same transition as lease expiry/close, including its private
+	// receipt. Dropping it here would prevent the original claimer's late ack.
+	if err := e.reapLocked(true); err != nil {
+		return nil, err
 	}
 	return e, nil
 }
@@ -195,17 +191,17 @@ func (e *Engine) apply(ev model.Event) error {
 		e.seenBinds[b.BindID] = true
 		// Revocation is atomic with invalidating old-generation inbox work. Work
 		// already handed off cannot be undone, nor does an empty inbox prove idle.
-		for id, m := range e.messages {
+		for _, m := range e.messages {
 			if m.To == b.Slot && (!b.Active || m.TargetGeneration != b.Generation) {
 				if m.State == "queued" {
 					m.State = "cancelled"
 					m.UpdatedAt = ev.CreatedAt
-					e.messages[id] = m
+					e.putMessage(m)
 				}
 				if m.State == "delivering" {
 					m.State = "unknown"
 					m.UpdatedAt = ev.CreatedAt
-					e.messages[id] = m
+					e.putMessage(m)
 				}
 			}
 		}
@@ -317,6 +313,11 @@ func (e *Engine) putMessage(m Message) {
 		e.order = append(e.order, m.ID)
 	}
 	e.messages[m.ID] = m
+	if m.State == "delivering" {
+		e.inFlight[m.ID] = struct{}{}
+	} else {
+		delete(e.inFlight, m.ID)
+	}
 }
 func (e *Engine) commitBinding(b bindingFact) error {
 	appendFact := func() error { return e.append(EventBinding, b.Slot, b) }
@@ -446,6 +447,9 @@ func (e *Engine) Park(slot model.ActorID, enabled bool) error {
 	if !ok || !b.Active {
 		return ErrAuth
 	}
+	if b.ParkEnabled == enabled {
+		return nil
+	}
 	b.ParkEnabled = enabled
 	return e.append(EventBinding, slot, b)
 }
@@ -565,21 +569,24 @@ func (e *Engine) sendLocked(from, to model.ActorID, req SendRequest, key string)
 	if !validID(req.ID) {
 		return Message{}, errors.New("client message ID is required")
 	}
-	if id, ok := e.sends[key]; ok {
-		return cloneMessage(e.messages[id]), nil
-	}
 	if err := validateBody(req.Text); err != nil {
 		return Message{}, err
 	}
 	if strings.TrimSpace(req.Text) == "" && len(req.AttachmentIDs) == 0 {
 		return Message{}, errors.New("message text or attachments required")
 	}
+	original, retry := e.messages[e.sends[key]]
 	m := e.makeMessage(from, to, req.Text, "send")
 	if len(req.AttachmentIDs) > 0 {
-		if e.cfg.Media == nil {
+		var values []model.Attachment
+		var err error
+		if retry {
+			values, err = acceptedAttachments(original, req.AttachmentIDs)
+		} else if e.cfg.Media == nil {
 			return Message{}, errors.New("attachment store unavailable")
+		} else {
+			values, err = e.cfg.Media.ResolveMany(req.AttachmentIDs)
 		}
-		values, err := e.cfg.Media.ResolveMany(req.AttachmentIDs)
 		if err != nil {
 			return Message{}, err
 		}
@@ -613,6 +620,12 @@ func (e *Engine) sendLocked(from, to model.ActorID, req SendRequest, key string)
 	}
 	if total > attachment.MaxTotalImageBytes {
 		return Message{}, errors.New("message and quoted attachments exceed total image limit")
+	}
+	if retry {
+		if !sameMessagePayload(original, m) {
+			return Message{}, errSendPayloadConflict
+		}
+		return cloneMessage(original), nil
 	}
 	if _, err := e.envelope(m); err != nil {
 		return Message{}, err
@@ -836,7 +849,14 @@ func (e *Engine) Retry(id string) (Message, error) {
 }
 func (e *Engine) reapLocked(all bool) error {
 	now := e.cfg.Now()
-	for _, id := range e.order {
+	// There are normally at most two in-flight deliveries. Stable ordering
+	// keeps simultaneous expirations deterministic without scanning history.
+	ids := make([]string, 0, len(e.inFlight))
+	for id := range e.inFlight {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
 		m := e.messages[id]
 		if m.State == "delivering" && (all || !now.Before(m.ClaimedAt.Add(e.cfg.Lease))) {
 			m.State = "unknown"
@@ -865,12 +885,7 @@ func (e *Engine) SetDraining(value bool) {
 func (e *Engine) Busy() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for _, m := range e.messages {
-		if m.State == "delivering" {
-			return true
-		}
-	}
-	return false
+	return len(e.inFlight) != 0
 }
 func (e *Engine) Close() error {
 	e.mu.Lock()
@@ -889,27 +904,20 @@ func (e *Engine) Snapshot() Snapshot {
 	return e.snapshotLocked()
 }
 func (e *Engine) snapshotLocked() Snapshot {
-	s := Snapshot{HostMode: model.HostNative, RoomID: e.cfg.RoomID, Bindings: map[model.ActorID]Binding{}, Messages: make([]Message, 0, len(e.order)), Audit: append([]Audit(nil), e.audit...), Sequence: e.sequence, Notice: "handed_off means CLI stdout was written, not native acceptance. Interrupted replies and crashes before atomic publication may be undetectably lost. Park is bounded; queue and nudge/wait outside its window. Native work remains user-owned."}
-	for slot, b := range e.bindings {
-		s.Bindings[slot] = b.Binding
-	}
-	for _, id := range e.order {
-		s.Messages = append(s.Messages, cloneMessage(e.messages[id]))
-	}
-	return s
+	return e.snapshotRangeLocked(0, 0)
 }
 func (e *Engine) WaitChanges(ctx context.Context, after uint64) error {
 	e.mu.Lock()
+	if err := e.available(); err != nil {
+		e.mu.Unlock()
+		return err
+	}
 	if e.sequence > after {
 		e.mu.Unlock()
 		return nil
 	}
 	changed := e.changed
-	closed := e.closed
 	e.mu.Unlock()
-	if closed {
-		return ErrClosed
-	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -994,6 +1002,9 @@ func (e *Engine) ParkAs(a Auth, enabled bool) error {
 	b, err := e.auth(a, false)
 	if err != nil {
 		return err
+	}
+	if b.ParkEnabled == enabled {
+		return nil
 	}
 	b.ParkEnabled = enabled
 	return e.append(EventBinding, a.Slot, b)
