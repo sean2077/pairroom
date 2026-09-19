@@ -575,12 +575,18 @@ func (e *Engine) sendLocked(from, to model.ActorID, req SendRequest, key string)
 	if strings.TrimSpace(req.Text) == "" && len(req.AttachmentIDs) == 0 {
 		return Message{}, errors.New("message text or attachments required")
 	}
+	original, retry := e.messages[e.sends[key]]
 	m := e.makeMessage(from, to, req.Text, "send")
 	if len(req.AttachmentIDs) > 0 {
-		if e.cfg.Media == nil {
+		var values []model.Attachment
+		var err error
+		if retry {
+			values, err = acceptedAttachments(original, req.AttachmentIDs)
+		} else if e.cfg.Media == nil {
 			return Message{}, errors.New("attachment store unavailable")
+		} else {
+			values, err = e.cfg.Media.ResolveMany(req.AttachmentIDs)
 		}
-		values, err := e.cfg.Media.ResolveMany(req.AttachmentIDs)
 		if err != nil {
 			return Message{}, err
 		}
@@ -615,10 +621,9 @@ func (e *Engine) sendLocked(from, to model.ActorID, req SendRequest, key string)
 	if total > attachment.MaxTotalImageBytes {
 		return Message{}, errors.New("message and quoted attachments exceed total image limit")
 	}
-	if id, ok := e.sends[key]; ok {
-		original := e.messages[id]
+	if retry {
 		if !sameMessagePayload(original, m) {
-			return Message{}, errors.New("client message ID was already used for a different payload; retry the original request unchanged")
+			return Message{}, errSendPayloadConflict
 		}
 		return cloneMessage(original), nil
 	}

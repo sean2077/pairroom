@@ -161,6 +161,9 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 		if errors.Is(err, relay.ErrWakeReserved) {
 			return w.record("suppressed", "duplicate", candidate.Target)
 		}
+		if errors.Is(err, relay.ErrWakeIneligible) {
+			return w.record("suppressed", "invalid_message", candidate.Target)
+		}
 		return errNativeWakeAudit
 	}
 
