@@ -86,7 +86,7 @@ func TestBindCreateSlotRuntimeMismatchFailsBeforeCreation(t *testing.T) {
 	}
 	var out bytes.Buffer
 	err := bind(context.Background(), root, options{slot: "claude", create: true, endpoint: endpoint}, &out)
-	if err == nil || *created != 0 || !strings.Contains(err.Error(), "matches no slot") || !strings.Contains(err.Error(), "no Room was created") || !strings.Contains(err.Error(), "--peer-runtime <claude|codex|grok>") || out.Len() != 0 {
+	if err == nil || *created != 0 || !strings.Contains(err.Error(), "matches no slot") || !strings.Contains(err.Error(), "no Room was created") || !strings.Contains(err.Error(), "--peer-runtime <claude|codex|grok>") || strings.Contains(err.Error(), "--slot") || out.Len() != 0 {
 		t.Fatalf("creator-slot preflight did not fail before provisioning: created=%d err=%v", *created, err)
 	}
 }
