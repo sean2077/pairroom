@@ -55,7 +55,7 @@ async function fixture({ uploadFailure = false } = {}) {
   };
   const context = vm.createContext({
     document, window: { PairRoomI18n: { t: k => k, apply() {}, lang: 'en' }, addEventListener() {} },
-    fetch, Headers, FormData, crypto: webcrypto, URLSearchParams,
+    fetch, Headers, FormData, TextEncoder, crypto: webcrypto, URLSearchParams,
     location: { hash: '', pathname: '/', search: '' }, history: { replaceState() {} },
     EventSource: class { addEventListener() {} close() {} }, setInterval: () => 1, clearInterval() {}, console
   });
@@ -71,6 +71,36 @@ async function fixture({ uploadFailure = false } = {}) {
 }
 
 async function main() {
+  // HTML maxlength counts UTF-16 code units; the relay budget counts UTF-8 bytes.
+  for (const text of ['x'.repeat(262145), '界'.repeat(87382), '😀'.repeat(65537)]) {
+    const invalid = await fixture();
+    invalid.$('message-text').value = text;
+    invalid.uploadGate.resolve();
+    await invalid.submit();
+    assert.equal(invalid.uploads.length, 0, 'invalid text uploaded an unused image');
+    assert.equal(invalid.sends.length, 0, 'oversized UTF-8 text reached publication');
+    assert.match(invalid.$('status').textContent, /errors.request_too_large/);
+    assert.equal(invalid.$('message-text').value, text, 'validation discarded the draft');
+    for (const id of ['message-text', 'target', 'attachment', 'send']) assert.equal(invalid.$(id).disabled, false);
+    invalid.$('message-text').value = 'corrected';
+    await invalid.submit();
+    await invalid.submit();
+    assert.equal(invalid.uploads.length, 1);
+    assert.equal(invalid.sends.length, 2);
+    assert.deepEqual(invalid.sends[0], invalid.sends[1]);
+    assert.equal(invalid.$('message-text').disabled, false);
+  }
+  for (const text of ['x'.repeat(262144), '界'.repeat(87381) + 'x', '😀'.repeat(65536)]) {
+    assert.equal(Buffer.byteLength(text, 'utf8'), 262144);
+    const valid = await fixture();
+    valid.$('message-text').value = text;
+    valid.$('attachment').files = [];
+    await valid.submit();
+    assert.equal(valid.sends.length, 1, 'the exact byte limit must remain valid');
+    assert.equal(valid.sends[0].text, text, 'validation clipped a complete message');
+    await valid.submit();
+    assert.deepEqual(valid.sends[0], valid.sends[1]);
+  }
   const f = await fixture();
   const first = f.submit();
   await tick();
@@ -95,6 +125,6 @@ async function main() {
   assert.equal(bad.sends.length, 0);
   assert.equal(bad.$('message-text').value, 'review');
   for (const id of ['message-text', 'target', 'attachment', 'send']) assert.equal(bad.$(id).disabled, false);
-  console.log('Native UI: bounded reads, accurate totals, single submission and immutable retry payload passed.');
+  console.log('Native UI: bounded reads, accurate totals, UTF-8 validation, single submission and immutable retry payload passed.');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

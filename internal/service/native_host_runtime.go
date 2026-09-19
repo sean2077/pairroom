@@ -255,6 +255,12 @@ func (n *nativeHostRuntime) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		switch p {
 		case "/api/v1/health":
+			if n.Fatal() != nil {
+				// Health describes this relay, never vendor presence. Do not
+				// expose writer/listener errors, paths or credentials here.
+				writeManagementJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "host_mode": "native", "code": "runtime_not_ready", "error": "native Room runtime is unavailable"})
+				return
+			}
 			writeManagementJSON(w, 200, map[string]any{"ok": true, "host_mode": "native"})
 			return
 		case "/api/v1/snapshot", "/api/v1/export":

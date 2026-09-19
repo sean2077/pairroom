@@ -39,6 +39,7 @@
   }
   async function confirmRetry(){const dialog=$('confirm-dialog');dialog.returnValue='cancel';return new Promise(resolve=>{dialog.addEventListener('close',()=>resolve(dialog.returnValue==='confirm'),{once:true});dialog.showModal();});}
   const MAX_RENDERED_MESSAGES=300;
+  const MAX_MESSAGE_BYTES=256*1024;
   function renderMessages(value){
     const all=value.relay.messages||[];
     const total=value.relay.total_messages ?? all.length;
@@ -83,6 +84,9 @@
     const text=$('message-text').value.trim();const file=$('attachment').files[0];if(!text&&!file){status(tr('inputRequired'),true);return;}
     const to=$('target').value;
     if(pendingSend && (pendingSend.text!==text||pendingSend.to!==to)){status(tr('unknownSend'),true);return;}
+    // HTML maxlength counts UTF-16 code units, not the relay's UTF-8 budget.
+    // Reject before upload/publication so a known-invalid draft stays editable.
+    if(!pendingSend && new TextEncoder().encode(text).byteLength>MAX_MESSAGE_BYTES){status(`${window.PairRoomI18n.t('errors.request_too_large')} (256 KiB UTF-8)`,true);return;}
     sending=true;lockComposer();
     try{
       if(!pendingSend){let attachmentIDs=[];if(file){const body=new FormData();body.append('file',file);const a=await request('api/v1/attachments',{method:'POST',body});attachmentIDs=[a.id];}pendingSend={id:crypto.randomUUID(),text,to,attachment_ids:attachmentIDs};}
