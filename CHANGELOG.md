@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+## [v5.2.1] — 2026-09-19
+
+- Native `bind --create` now orients the creating session to Agent 1 for every recognized runtime, including an explicit `--slot 1`: a Service default or saved profile pair is copied onto the new Room in creator-first order (Provider, model, instructions and native policy stay with their runtime) without modifying the saved profile. Existing Rooms and joins are unchanged. The creator-first behavior was previously described in the v5.2.0 notes before its code landed; this entry records the shipped behavior.
+
+- Preserve the original delivery receipt across crash recovery: a recovered `delivering` delivery now takes the same `delivering → unknown` transition as lease expiry and closure, including its private receipt, so the authenticated original collector can still settle it after a restart or a later replay. A foreign receipt, a revoked generation, or a pending explicit Retry still fails closed, and public snapshots never expose the receipt. A same-ID retry therefore recovers its original receipt instead of being stranded by an unrecoverable `unknown`.
+
+- Reject a reused client send ID that carries different delivered text, target, attachment identities or quoted context, instead of silently returning acceptance for unrelated content. An identical retry returns the original receipt using already-accepted attachment metadata, so a later missing or changed image file cannot undo an accepted publication, while actual new publication and collection still validate image bytes. Different IDs may still intentionally publish identical text.
+
+- Revalidate the queued message, target generation, enabled policy and live collectors under the same lock as the durable wake reservation, so a candidate cancelled, collected, replaced or unbound during the grace window can no longer authorize a stale vendor command or consume the waker's rate quota. Fixed body-free nudges, rate limits and the no-automatic-retry rule are unchanged, and a rejection is audited through the existing redacted vocabulary.
+
+- Bound routine browser history instead of copying the full transcript on every refresh: `GET /api/v1/snapshot?tail=1` returns at most 300 complete recent messages, a 1 MiB combined message/quote text budget and 80 audit records, with `total_messages`/`total_audit` still reporting the full retained history. No message is clipped or deleted, the newest message is retained intact, and the unparameterized snapshot and `GET /api/v1/export` remain complete. The budget covers text, not total JSON bytes.
+
+- Stop the one-second reaper and the `Busy` query from scanning complete terminal history: in-flight deliveries are tracked in a replay-built index that every acknowledgement, expiry, replacement and closure transition maintains. Claim, summary and wake selection still inspect history, so this is not a claim that every operation is constant-time.
+
+- Surface a fatal native runtime instead of reporting healthy idle: `GET /api/v1/health` keeps its Room authentication and returns a redacted HTTP 503 `runtime_not_ready` for fatal Event Log writer or listener state without exposing raw errors or paths, a fatal writer terminates the SSE stream instead of emitting heartbeats, and change waiters observe the failure rather than a silent wait.
+
+- Make browser submission single-flight across the upload/send sequence, so a second submit event during an in-flight upload cannot publish a second request. An uncertain acceptance keeps the original ID and uploaded attachment IDs and prevents edits from changing the pending request; a failed upload before publication leaves the draft editable for correction.
+
+- Validate the 256 KiB byte budget in UTF-8 before uploading or publishing. HTML `maxlength` counts UTF-16 code units, so a Chinese or emoji draft could previously pass browser validation and reach a predictable server rejection that locked it as an uncertain request. An oversized draft is rejected without clipping or discarding it and stays editable; an exact-limit message remains valid.
+
+- Stop appending redundant binding facts for an unchanged park setting, so repeated identical park requests no longer grow the Event Log or emit spurious invalidations.
+
+- Remove the mandatory `relay status` check after every peer reply from both byte-identical skill copies. Status and reconcile are now reserved for uncertainty or failures, and a harness that surfaces only an output preview directs the agent to read its supplied full-output file, since a stdout acknowledgement does not prove the model received the complete input.
+
+- Keep the shipped CLI free of the `testing` runtime: the cross-package caller fixture seam uses a minimal interface instead of importing `testing`, and a regression guard fails the build if the production dependency graph regains it.
+
+- Correct stale API and operations documentation: canonical `slot1`/`slot2` profile keys, Store 12/provisioning 5, the project-scoped creation endpoint, embedded-versus-native API boundaries, bounded snapshots versus full export, payload-bound retries, UTF-8 validation and redacted health failures. `docs/TROUBLESHOOTING.md` no longer claims current readers accept retired Store schemas 9 and 10.
+
+- Add `docs/design/native-efficiency.md`, recording why the user-owned-session/durable-mailbox model remains appropriate and separating model-turn cost from HTTP/CPU/copying cost, together with dated primary-source vendor research on Claude Channels, Codex hook-output spilling and Grok project hook trust. No preview channel is enabled and no credential or permission behavior changes.
+
 ## [v5.2.0] — 2026-09-19
 
 - Fix two Claude slots in one embedded Room sharing a single appended-system-prompt file: the prompt path now carries the durable actor identity and is staged through an atomic rename, so concurrent adapter starts can no longer serve the wrong bootstrap identity or a half-written file.
