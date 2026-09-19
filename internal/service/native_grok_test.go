@@ -257,15 +257,14 @@ func TestGrokNativeCreateInsideHarnessWithoutIdentityFlags(t *testing.T) {
 			args := []string{"bind", "--create", "--name", "Harness-created Grok pair"}
 			wantSlot := model.ActorSlot1
 			if useProfile {
-				// A reversed Service pair must not be silently rewritten into
-				// vendor-named slots just because the caller is Grok.
+				// The new Room orients the Service pair around its creator,
+				// independently of the saved profile's runtime order.
 				_, err = f.registry.SaveAgentPairProfile(context.Background(), "", AgentPairProfileInput{Name: "Grok default", IsDefault: true,
 					Agents: map[model.ActorID]model.AgentSelection{model.ActorSlot1: {Runtime: model.RuntimeCodex}, model.ActorSlot2: {Runtime: model.RuntimeGrok}},
 				})
 				if err != nil {
 					t.Fatal(err)
 				}
-				wantSlot = model.ActorSlot2
 			} else {
 				args = append(args, "--peer-runtime", "codex")
 			}
@@ -292,8 +291,8 @@ func TestGrokNativeCreateInsideHarnessWithoutIdentityFlags(t *testing.T) {
 					f.room = room
 				}
 			}
-			if f.room.Agents[wantSlot].Runtime != model.RuntimeGrok {
-				t.Fatal("caller/runtime selection lost")
+			if f.room.Agents[wantSlot].Runtime != model.RuntimeGrok || f.room.Agents[model.ActorSlot2].Runtime != model.RuntimeCodex {
+				t.Fatal("creator-first runtime selections lost")
 			}
 			rt, _, err := f.manager.Activate(context.Background(), f.room.ID)
 			if err != nil {

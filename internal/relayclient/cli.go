@@ -47,7 +47,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.SetOutput(diagnostic)
 	flags.StringVar(&o.repo, "repo", ".", "Room project path")
 	flags.StringVar(&o.room, "room", "", "Room ID")
-	flags.StringVar(&o.slot, "slot", "", "Agent slot: 1 or 2; claude/codex are CLI input aliases only. Never a runtime name")
+	flags.StringVar(&o.slot, "slot", "", "Agent slot: 1 or 2 (bind --create defaults to 1); claude/codex are CLI input aliases only. Never a runtime name")
 	flags.StringVar(&o.kind, "runtime", "", "native harness: claude (cc), codex or grok; install accepts a comma-separated list")
 	flags.StringVar(&o.endpoint, "service-file", "", "owner-only relay-endpoint.json path for a custom Service data root")
 	flags.StringVar(&o.text, "text", "", "message body; otherwise read stdin")
@@ -598,20 +598,13 @@ func resolveSlotForRoom(room serviceRoom, rt model.RuntimeKind) (model.ActorID, 
 // before the Room exists. It never authorizes a guess.
 var errCreateSlotUnresolved = errors.New("bind --create requires --slot 1|2 unless run inside a recognized claude/codex/grok session (or with --runtime claude|codex|grok)")
 
-// inferCreateSlot picks the slot that an explicit runtime selection occupies:
-// the caller's runtime takes the slot whose default runtime matches. It is only
-// used when `createAgents` will send explicit selections, because those are
-// placed by slot. When the Service owns the default pair the slot is resolved
-// after creation against the Room's real selections instead.
+// inferCreateSlot defaults every recognized creator to Agent 1. Service pair
+// selections are oriented to that slot before creation; an explicit --slot is
+// handled by the caller and never inferred from a runtime name.
 func inferCreateSlot(o options) (model.ActorID, error) {
-	rt := callerRuntime(o)
-	switch rt {
-	case model.RuntimeClaude, model.RuntimeGrok:
-		// Explicit Grok creators use Agent 1 unless --slot selects otherwise.
-		// Omitted pair settings are resolved against the Service before creation.
+	switch callerRuntime(o) {
+	case model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok:
 		return model.ActorSlot1, nil
-	case model.RuntimeCodex:
-		return model.ActorSlot2, nil
 	}
 	return "", errCreateSlotUnresolved
 }
@@ -679,8 +672,8 @@ func resolveSlotDefaults(root string, o *options) error {
 // createNativeRoom registers the workspace Project when missing and creates a
 // native-hosted Room through the same validated Management path the browser
 // uses. It never bypasses creation-time validation or writes Room state
-// directly. Omitted runtimes keep the Service default pair; explicit runtime
-// overrides stay empty-field selections that inherit the native configuration.
+// directly. Preflight pins Service defaults in creator-first order; explicit
+// runtime overrides inherit the native configuration through empty fields.
 func createNativeRoom(ctx context.Context, endpoint relay.Endpoint, root string, o options, slot model.ActorID) (string, error) {
 	agents, err := createAgents(o, slot)
 	if err != nil {
@@ -737,6 +730,11 @@ func createAgents(o options, slot model.ActorID) (map[model.ActorID]model.AgentS
 	}
 	if peer == "" {
 		peer = defaultRuntimeFor(peerSlot(slot))
+		if peer == own {
+			// Moving a Codex creator to Agent 1 must not accidentally create a
+			// Codex/Codex pair. Duplicate runtimes remain an explicit choice.
+			peer = defaultRuntimeFor(slot)
+		}
 	}
 	for _, kind := range []model.RuntimeKind{own, peer} {
 		if kind != model.RuntimeClaude && kind != model.RuntimeCodex && kind != model.RuntimeGrok {

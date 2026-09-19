@@ -99,14 +99,16 @@ func TestResolveSlotForRoomUnrecognizedCallerFailsClosed(t *testing.T) {
 }
 
 func TestInferCreateSlot(t *testing.T) {
-	stubLineage(t, 4242, "claude", true)
-	slot, err := inferCreateSlot(options{})
-	if err != nil || slot != model.ActorSlot1 {
-		t.Fatalf("slot = %q, err = %v", slot, err)
-	}
-	slot, err = inferCreateSlot(options{kind: "codex"})
-	if err != nil || slot != model.ActorSlot2 {
-		t.Fatalf("explicit runtime slot = %q, err = %v", slot, err)
+	for _, kind := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok} {
+		t.Run(string(kind), func(t *testing.T) {
+			stubLineage(t, 4242, string(kind), true)
+			for _, o := range []options{{}, {kind: string(kind)}} {
+				slot, err := inferCreateSlot(o)
+				if err != nil || slot != model.ActorSlot1 {
+					t.Fatalf("creator %s: slot = %q, err = %v", kind, slot, err)
+				}
+			}
+		})
 	}
 	stubLineage(t, 0, "", false)
 	if _, err := inferCreateSlot(options{}); err == nil {
@@ -190,9 +192,8 @@ func TestResolveNativeRoomIgnoresArchived(t *testing.T) {
 	}
 }
 
-// The Service-owned default pair is user configuration and need not match slot
-// order, so a creator slot may never be inferred from the harness alone.
-func TestBindCreateResolvesSlotFromCreatedRoomSelections(t *testing.T) {
+// A default pair that already places the creator first keeps its order.
+func TestBindCreatePreservesCreatorFirstDefaultPair(t *testing.T) {
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
