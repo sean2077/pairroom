@@ -18,7 +18,7 @@ func NativeBootstrap(actor model.ActorID, selfRuntime, peerRuntime model.Runtime
 [PairRoom message] names its sender. Native/project/permission rules remain authoritative; human instructions win. PairRoom owns FIFO and audit, not processes; turn ownership is advisory.
 Mention %s only when another reply is needed. %s No peer handle ends relay; @user alone asks the human; peer wins when both appear.
 relay send defaults to peer, or --to @user, ignoring body mentions; use it for attachments. After send, omit the final peer handle unless a second full reply is intentional. Both paths are never semantically deduplicated.
-Check relay status next time after a peer-directed reply. Interruptions/pre-write crashes may be undetectably lost. Inspect unknown outcomes before explicit Retry. relay peer finds optional peer session metadata. Never read or print relay credentials.
+Use relay status on uncertainty, not after every reply. Interruptions/pre-write crashes may be undetectably lost. Inspect unknown outcomes before explicit Retry. relay peer finds optional peer session metadata. Never read or print relay credentials.
 %s: pairroom protocol --host-mode native --actor %s`, ids[actor].DisplayName, ids[actor].MentionHandle, ids[peer].DisplayName, ids[peer].MentionHandle, ids[peer].MentionHandle, stop, NativeVersion, actor)
 }
 

@@ -6,15 +6,22 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"testing"
 	"unicode"
 
 	"github.com/sean2077/pairroom/internal/model"
 )
 
+// Keep the cross-package fixture seam without importing the testing runtime
+// (and its flag registrations) into the shipped CLI.
+type nativeCallerTest interface {
+	Helper()
+	Setenv(string, string)
+	Cleanup(func())
+}
+
 // IsolateNativeCaller clears inherited session/config metadata and process ancestry so
 // tests can install an exact caller fixture. Production code never calls this.
-func IsolateNativeCaller(t *testing.T) {
+func IsolateNativeCaller(t nativeCallerTest) {
 	t.Helper()
 	for _, key := range []string{"CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "GROK_SESSION_ID", "CLAUDECODE", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME"} {
 		t.Setenv(key, "")
