@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-- Native `bind --create` now defaults the creating session to Agent 1 for every recognized runtime. A Service default or profile pair is copied onto the new Room in creator-first order (Provider, model, instructions and native policy stay with their runtime); the saved profile is not modified. `--slot` still selects the creator's Agent number, and `--slot 1` matches that default. Existing Rooms and joins are unchanged.
-
 ## [v5.2.0] — 2026-09-19
 
 - Fix two Claude slots in one embedded Room sharing a single appended-system-prompt file: the prompt path now carries the durable actor identity and is staged through an atomic rename, so concurrent adapter starts can no longer serve the wrong bootstrap identity or a half-written file.

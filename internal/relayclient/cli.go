@@ -465,11 +465,8 @@ func localBindCommand(endpoint, room string, slot model.ActorID) string {
 	return command
 }
 
-func createRetryCommand(root, endpoint string, o options, slot model.ActorID) string {
+func createRetryCommand(root, endpoint string, o options) string {
 	command := "pairroom relay bind --create"
-	if slot.ValidParticipant() {
-		command += " --slot " + strconv.Itoa(slotNumber(slot))
-	}
 	if name := strings.TrimSpace(o.name); name != "" {
 		command += " --name " + quoteShellPath(name)
 	}
