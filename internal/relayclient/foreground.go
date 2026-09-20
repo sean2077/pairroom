@@ -56,7 +56,7 @@ func finishExchange(ctx context.Context, c *Client, o options, msg relay.Message
 		return fmt.Errorf("exchange publication %s is not pending or handed off; inspect relay status before continuing", msg.ID)
 	}
 	// Do not echo the body, credentials or full send response into the model.
-	// Stdout remains reserved for the one incoming envelope.
+	// Stdout remains reserved for the one incoming envelope or its file receipt.
 	receipt := publicationReceipt{Published: msg.ID, ClientID: o.id, QueuedDelivery: queuedDeliveryHintFor(ctx, c, msg)}
 	if err := writeJSON(diagnostic, receipt); err != nil {
 		return fmt.Errorf("publication %s confirmed but diagnostic output failed: %w; inspect relay status, do not resend", msg.ID, err)
@@ -66,7 +66,11 @@ func finishExchange(ctx context.Context, c *Client, o options, msg relay.Message
 		return fmt.Errorf("publication %s confirmed; collection failed: %w; inspect relay status before further collection, never automatically replay or resend", msg.ID, err)
 	}
 	if !delivered {
-		return fmt.Errorf("publication %s confirmed; %w; continue with %s, not another send/exchange", msg.ID, errExchangeWaiting, foregroundWaitCommand(c, o.timeout))
+		command := foregroundWaitCommand(c, o.timeout)
+		if o.outputFile != "" {
+			command += " --output-file " + quoteShellPath(o.outputFile)
+		}
+		return fmt.Errorf("publication %s confirmed; %w; continue with %s, not another send/exchange", msg.ID, errExchangeWaiting, command)
 	}
 	return nil
 }

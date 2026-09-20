@@ -26,6 +26,8 @@ import (
 type options struct {
 	repo, room, slot, kind, endpoint, text, id, to string
 	name, peer                                     string
+	textFile, outputFile                           string
+	references                                     stringsFlag
 	replace, purge, enabled, discard, resend       bool
 	localOnly                                      bool
 	create, brief                                  bool
@@ -50,7 +52,10 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.StringVar(&o.slot, "slot", "", "Agent slot: 1 or 2 (bind --create defaults to 1); claude/codex are CLI input aliases only. Never a runtime name")
 	flags.StringVar(&o.kind, "runtime", "", "native harness: claude (cc), codex or grok; install accepts a comma-separated list")
 	flags.StringVar(&o.endpoint, "service-file", "", "owner-only relay-endpoint.json path for a custom Service data root")
-	flags.StringVar(&o.text, "text", "", "message body; otherwise read stdin")
+	flags.StringVar(&o.text, "text", "", "message body; otherwise read stdin unless --ref is used")
+	flags.StringVar(&o.textFile, "text-file", "", "send/exchange: read UTF-8 body from a file, or - for stdin")
+	flags.Var(&o.references, "ref", "send/exchange: local file reference with path, size and SHA-256, not an upload (repeatable)")
+	flags.StringVar(&o.outputFile, "output-file", "", "wait/exchange: save the incoming envelope to a new private file; print only its receipt")
 	flags.StringVar(&o.id, "id", "", "stable client message ID (required for exchange); reuse on uncertain send")
 	flags.StringVar(&o.to, "to", "", "explicit send target: @user, or empty for peer")
 	flags.BoolVar(&o.create, "create", false, "bind only: register the project when missing, create a native Room, then bind this session")
@@ -77,6 +82,33 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected relay arguments")
+	}
+	provided := make(map[string]bool)
+	flags.Visit(func(f *flag.Flag) { provided[f.Name] = true })
+	if provided["text-file"] || provided["ref"] {
+		if action != "send" && action != "exchange" {
+			return errors.New("--text-file and --ref apply only to send or exchange")
+		}
+	}
+	if provided["text-file"] {
+		if provided["text"] {
+			return errors.New("choose --text or --text-file, not both")
+		}
+		if o.textFile == "" {
+			return errors.New("--text-file requires a nonempty path, or - for stdin")
+		}
+	}
+	if provided["output-file"] {
+		if action != "wait" && action != "exchange" {
+			return errors.New("--output-file applies only to wait or exchange")
+		}
+		// Preflight before a send or claim; actual creation is still exclusive.
+		writer, err := newEnvelopeFileWriter(o.outputFile, out)
+		if err != nil {
+			return err
+		}
+		o.outputFile = writer.path
+		out = writer
 	}
 	if o.brief && action != "status" && action != "reconcile" {
 		return errors.New("--brief applies only to status or reconcile")
@@ -181,16 +213,14 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	}
 	switch action {
 	case "send", "exchange":
-		text := o.text
-		if text == "" {
-			data, err := io.ReadAll(io.LimitReader(in, relay.MaxBodyBytes+1))
-			if err != nil {
-				return err
-			}
-			text = string(data)
-		}
-		if len(text) > relay.MaxBodyBytes {
-			return errors.New("message exceeds 256 KiB")
+		text, err := readPublicationInput(publicationInput{
+			text:       o.text,
+			textSet:    provided["text"],
+			textFile:   o.textFile,
+			references: o.references,
+		}, in, relay.MaxBodyBytes)
+		if err != nil {
+			return err
 		}
 		if o.id == "" {
 			o.id, err = relay.RandomID()
