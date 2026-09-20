@@ -1,0 +1,11 @@
+# Seeded by agent-scaffold; project-owned after creation.
+# Preserve inherited non-EOL preferences.
+
+[*]
+end_of_line = lf
+
+[*.[bB][aA][tT]]
+end_of_line = crlf
+
+[*.[cC][mM][dD]]
+end_of_line = crlf
