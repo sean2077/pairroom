@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Add native relay file workflows that keep long bodies out of tool arguments and stdout: `send`/`exchange --text-file` reads UTF-8 from a file (`-` selects stdin), repeatable `--ref` appends a canonical path/size/SHA-256 manifest without uploading contents, and `wait`/`exchange --output-file` persists the incoming envelope before a compact receipt and acknowledgement. References are local pointers, not attachments or snapshots; both sessions need access, hashes must be verified, and changed evidence uses a new ID. `--output-file` never overwrites, creates nothing on an empty poll, and preflights a writable new path before publication or claim. Short replies stay inline. This is not a protocol or schema change, not content-based deduplication, and not a billed-token measurement.
+
+- Align CLI wait guidance with the installed skill: use a single long or unbounded background `wait` only where the harness wakes on tracked completion without model polling; otherwise prefer a bounded foreground wait and ending the turn. Explicit `--text ""` is now an empty body rather than an implicit stdin read; `--text-file` and `--ref` also skip the default stdin read.
+
 ## [v5.2.1] — 2026-09-19
 
 - Native `bind --create` now orients the creating session to Agent 1 for every recognized runtime, including an explicit `--slot 1`: a Service default or saved profile pair is copied onto the new Room in creator-first order (Provider, model, instructions and native policy stay with their runtime) without modifying the saved profile. Existing Rooms and joins are unchanged. The creator-first behavior was previously described in the v5.2.0 notes before its code landed; this entry records the shipped behavior.

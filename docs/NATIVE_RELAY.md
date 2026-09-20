@@ -105,8 +105,8 @@ slot flag is needed. Without overrides, the Service's configured pair is kept.
 Grok's hook text is clipped by the harness. PairRoom never forwards a clipped
 reply as complete and never puts a full inbox body into Grok's Stop feedback.
 Instead, a short readiness instruction asks the agent to collect the still-queued
-input with foreground `wait`. For long outgoing replies use full-text
-`send/exchange`. See [Grok Native](CLI_REFERENCE.md#grok-build-native) for limits,
+input with foreground `wait`. For long outgoing replies use
+`send/exchange --text-file` (or stdin). See [Grok Native](CLI_REFERENCE.md#grok-build-native) for limits,
 owned hook/skill locations, compatibility filtering and validation boundaries.
 
 Discovery uses the current Git workspace, recognized harness lineage and native
