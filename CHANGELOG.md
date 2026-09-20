@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v5.3.0] — 2026-09-20
+
 - Add native relay file workflows that keep long bodies out of tool arguments and stdout: `send`/`exchange --text-file` reads UTF-8 from a file (`-` selects stdin), repeatable `--ref` appends a canonical path/size/SHA-256 manifest without uploading contents, and `wait`/`exchange --output-file` persists the incoming envelope before a compact receipt and acknowledgement. References are local pointers, not attachments or snapshots; both sessions need access, hashes must be verified, and changed evidence uses a new ID. `--output-file` never overwrites, creates nothing on an empty poll, and preflights a writable new path before publication or claim. Short replies stay inline. This is not a protocol or schema change, not content-based deduplication, and not a billed-token measurement.
 
 - Align CLI wait guidance with the installed skill: use a single long or unbounded background `wait` only where the harness wakes on tracked completion without model polling; otherwise prefer a bounded foreground wait and ending the turn. Explicit `--text ""` is now an empty body rather than an implicit stdin read; `--text-file` and `--ref` also skip the default stdin read.
