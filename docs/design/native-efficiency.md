@@ -1,6 +1,6 @@
 ---
 status: accepted
-updated: 2026-09-19
+updated: 2026-09-20
 ---
 
 # Native coordination: efficiency and reliability boundaries
@@ -38,6 +38,7 @@ model saw the message, and exchange is not a correlated RPC transaction.
 |---|---|---|
 | Model/tool round trips | Use status/reconcile on uncertainty or failure, not after every confirmed publication. Simple tasks remain direct. | Avoids a mandated diagnostic step; no claim about an exact vendor token bill. |
 | Waiting | Renew successful empty transport polls inside the CLI. Keep one collector, and use background waiting only where completion is surfaced without model polling. | Waiting without inference need not create model turns; a vendor's tool timeout still applies. |
+| Long native messages | `--text-file` reads existing UTF-8 without a model copy step; `--ref` sends path/size/hash, not contents; `--output-file` persists the envelope and prints a locator. Short replies stay inline. | Avoids read-and-retype and unconditional inlining. Not an upload, snapshot, or billed-token proof. Both sessions need file access. |
 | Wake effects | Revalidate queue, binding generation, policy and collectors while reserving the effect durably; preserve rate limits and no automatic retries. | Avoids stale candidates running a vendor command. A collector arriving after reservation can still make one nudge redundant. |
 | Browser history | Request `snapshot?tail=1`; copy at most 300 complete messages with a 1 MiB combined body/quote text budget and 80 audit records. Include complete history counts. | Bounds routine copying, JSON transport and DOM work. Metadata adds JSON overhead; this is not a total wire-byte cap. |
 | Periodic maintenance | Track in-flight messages in a replay-built index and inspect only them in the one-second reaper and Busy query. | Idle maintenance no longer scans all terminal history. Claim, summary and wake selection still have history scans. |

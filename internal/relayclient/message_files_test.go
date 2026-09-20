@@ -246,10 +246,15 @@ func TestEnvelopeFileNeverClobbersExistingPaths(t *testing.T) {
 			t.Fatal("accepted an invalid or existing output path")
 		}
 	}
-	path := filepath.Join(t.TempDir(), "raced.txt")
+	parent := t.TempDir()
+	path := filepath.Join(parent, "raced.txt")
 	writer, err := newEnvelopeFileWriter(path, io.Discard)
 	if err != nil {
 		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(parent)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("writability probe left files in the destination directory: %v", entries)
 	}
 	if err := os.WriteFile(path, []byte("someone else's file"), 0o600); err != nil {
 		t.Fatal(err)
@@ -259,5 +264,22 @@ func TestEnvelopeFileNeverClobbersExistingPaths(t *testing.T) {
 	}
 	if data, err := os.ReadFile(path); err != nil || string(data) != "someone else's file" {
 		t.Fatal("changed or removed someone else's file")
+	}
+}
+
+func TestEnvelopeFilePreflightRequiresWritableParent(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "locked")
+	if err := os.Mkdir(parent, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
+	probe := filepath.Join(parent, "probe.txt")
+	if f, err := os.OpenFile(probe, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600); err == nil {
+		_ = f.Close()
+		_ = os.Remove(probe)
+		t.Skip("parent stayed writable")
+	}
+	if _, err := newEnvelopeFileWriter(filepath.Join(parent, "incoming.txt"), io.Discard); err == nil {
+		t.Fatal("accepted an unwritable output parent")
 	}
 }

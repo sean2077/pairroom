@@ -32,6 +32,21 @@ func TestCLITextFilePublishesOnceWithoutEcho(t *testing.T) {
 	}
 }
 
+func TestCLITextAndReferenceStayCompact(t *testing.T) {
+	path := messageTestFile(t, "evidence.md", strings.Repeat("evidence-not-inline", 32768))
+	f := newForegroundFixture(t, foregroundFixtureOptions{})
+	if err := f.run(context.Background(), "send", unreadMessageInput{t}, io.Discard, io.Discard, "--id", "question", "--text", "Review section 3", "--ref", path); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	msg := f.messages["question"]
+	f.mu.Unlock()
+	refs := parseMessageReferences(t, msg.Text)
+	if !strings.HasPrefix(msg.Text, "Review section 3\n\n") || len(refs) != 1 || strings.Contains(msg.Text, "evidence-not-inline") {
+		t.Fatal("question plus reference inlined or dropped the evidence pointer")
+	}
+}
+
 func TestCLIReferenceOnlyAndChangedReferenceRetry(t *testing.T) {
 	path := messageTestFile(t, "evidence.md", strings.Repeat("evidence-not-inline", 32768))
 	f := newForegroundFixture(t, foregroundFixtureOptions{})
@@ -82,6 +97,18 @@ func TestCLIFileFlagsFailBeforeWorkspaceOrPublication(t *testing.T) {
 	existing := messageTestFile(t, "existing.txt", "keep")
 	if err := f.run(context.Background(), "exchange", unreadMessageInput{t}, io.Discard, io.Discard, "--id", "not-sent", "--text", "proposal", "--output-file", existing); err == nil {
 		t.Fatal("accepted an existing receive destination")
+	}
+	parent := filepath.Join(t.TempDir(), "locked")
+	if err := os.Mkdir(parent, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
+	unwritable := filepath.Join(parent, "incoming.txt")
+	if file, err := os.OpenFile(unwritable, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600); err == nil {
+		_ = file.Close()
+		_ = os.Remove(unwritable)
+	} else if err := f.run(context.Background(), "exchange", unreadMessageInput{t}, io.Discard, io.Discard, "--id", "not-sent-unwritable", "--text", "proposal", "--output-file", unwritable); err == nil {
+		t.Fatal("accepted an unwritable receive destination")
 	}
 	if f.count("send") != 0 || f.count("wait") != 0 || f.count("ack") != 0 {
 		t.Fatal("file validation performed a publication or claim")

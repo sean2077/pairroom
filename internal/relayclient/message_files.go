@@ -201,6 +201,21 @@ func newEnvelopeFileWriter(path string, out io.Writer) (*envelopeFileWriter, err
 		}
 		return nil, fmt.Errorf("--output-file must be a new file: %w", err)
 	}
+	// Prove the parent is writable without occupying the destination, so
+	// exchange cannot publish and then fail at persist after a claim.
+	probe, err := os.CreateTemp(parent, ".pairroom-output-probe-*")
+	if err != nil {
+		return nil, fmt.Errorf("--output-file parent must be writable: %w", err)
+	}
+	probeName := probe.Name()
+	closeErr := probe.Close()
+	removeErr := os.Remove(probeName)
+	if closeErr != nil {
+		return nil, fmt.Errorf("--output-file parent must be writable: %w", closeErr)
+	}
+	if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		return nil, fmt.Errorf("--output-file parent must be writable: %w", removeErr)
+	}
 	return &envelopeFileWriter{path: absolute, out: out}, nil
 }
 
@@ -211,10 +226,10 @@ func (w *envelopeFileWriter) Write(data []byte) (int, error) {
 	if w.used {
 		return 0, errors.New("--output-file accepts one complete envelope only")
 	}
-	w.used = true
 	if err := persistEnvelopeFile(w.path, data); err != nil {
 		return 0, err
 	}
+	w.used = true
 	digest := sha256.Sum256(data)
 	receipt, err := json.Marshal(envelopeFileReceipt{
 		EnvelopeFile: w.path,

@@ -45,6 +45,7 @@ func TestNativeFileWorkflowSkillGuidance(t *testing.T) {
 	for _, guidance := range []string{
 		"--text-file <path>", "--text-file -", "--ref <path>", "--output-file <new-path>",
 		"not uploaded", "read that envelope before acting", "Prefer inline output for small replies",
+		"current CLI", "pairroom relay exchange --help", "retry collection with a fresh path",
 	} {
 		if !strings.Contains(skillContent, guidance) {
 			t.Errorf("distributed skill lost file workflow guidance: %s", guidance)

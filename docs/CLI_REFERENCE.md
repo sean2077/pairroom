@@ -186,10 +186,10 @@ All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Norma
 | `bind` (zero-flag) | Inside a recognized native session: resolve the workspace's sole active native Room and the slot whose runtime matches the caller's harness; archived Rooms are never candidates and ambiguity fails with candidates |
 | `bind --replace` | Explicitly revoke an occupied generation and rebind the current session; cannot stop old native work |
 | `bind --create [--name <display-name>] [--runtime claude\|codex\|grok] [--peer-runtime claude\|codex\|grok]` | Without `--room`: register the workspace Project when missing, create a native Room through the same validated Management path the browser uses, bind this session, and print canonical `peer_join` plus same-machine/data-root/workspace `peer_join_local`. The creator runtime, actual slot, session identity and installed hook are validated before creating anything. If the current runtime matches no Service-default slot, the preflight says no Room was created and prints a one-time `--peer-runtime <claude\|codex\|grok>` retry template; existing-Room slot mismatches never offer that retry. A default pair is read from the Service and pinned for that creation; an unrecognized caller must run inside the native session and explicitly identify its runtime. Omitted runtimes copy the Service default pair after a read-only preflight, before any Project/Room creation; explicit runtimes stay empty-field selections that inherit native configuration |
-| `send --id <client-id> --text <body>` | Explicit message to peer; requires the bind-time association like every collection call; repeat the same ID after an uncertain response, never deduplicate by body. A queued receipt prints a body-free diagnostic and peer `wait` command; for an authenticated Codex target with a known vendor session it also prints a human-executable `wake_command` and `wake_notice` fallback; in a wake-enabled Room the Service additionally wakes the idle Codex-bound target automatically |
-| `send --to @user --attach <image>` | Human escalation with optional repeatable image paths; stdin supplies text when `--text` is absent |
-| `exchange --id <client-id> --text <body>` | One explicit peer send, then the next FIFO input; defaults to a 3,600-second wait, supports `--timeout 0` for no PairRoom total deadline, and finite values up to 21,600 seconds; not a correlated request/reply transaction |
-| `wait --timeout 0` | Foreground collection for an associated session; default 3,600 seconds, `0` means no PairRoom total deadline, finite values may be 1–21,600 seconds; renews only successful empty HTTP polls; stdout precedes ack |
+| `send --id <client-id> --text <body>` | Explicit message to peer; `--text-file PATH` reads UTF-8 from a file (`-` is stdin) and repeatable `--ref PATH` appends a local path/size/SHA-256 pointer without uploading contents; requires the bind-time association like every collection call; repeat the same ID after an uncertain response, never deduplicate by body. A queued receipt prints a body-free diagnostic and peer `wait` command; for an authenticated Codex target with a known vendor session it also prints a human-executable `wake_command` and `wake_notice` fallback; in a wake-enabled Room the Service additionally wakes the idle Codex-bound target automatically |
+| `send --to @user --attach <image>` | Human escalation with optional repeatable image paths; stdin supplies text when `--text`, `--text-file` and `--ref` are absent |
+| `exchange --id <client-id> --text <body>` | One explicit peer send, then the next FIFO input; accepts `--text-file`, `--ref` and `--output-file`; defaults to a 3,600-second wait, supports `--timeout 0` for no PairRoom total deadline, and finite values up to 21,600 seconds; not a correlated request/reply transaction |
+| `wait --timeout 0` | Foreground collection for an associated session; default 3,600 seconds, `0` means no PairRoom total deadline, finite values may be 1–21,600 seconds; renews only successful empty HTTP polls; stdout precedes ack; `--output-file NEW_PATH` persists the envelope and prints a locator |
 | `status --brief` / `reconcile --brief` | Bounded authenticated transport summary, generated without copying message bodies, native session/transcript references or the full audit log; includes inbox counts and at most eight unknown-delivery recovery IDs. `status --brief` adds body-free collection hints only for inboxes queued at that snapshot, including manual Codex `wake_command` and `wake_notice` only when that target's authenticated vendor session is known |
 | `status` / `peer` | Bounded body-free delivery summary by default (`--brief=false` for history) / optional peer session and Runtime metadata |
 | `park --enabled=false` | Disable hook parking without removing the binding; foreground wait remains available |
@@ -254,8 +254,10 @@ including sender/context, without a body preview. Stdout instead contains
 `envelope_file`, `bytes`, `sha256` and a reminder to read the file before acting.
 The CLI exclusively creates a new file, flushes and closes it, writes the complete
 stdout receipt, then acknowledges the original claim. Existing files and symlinks
-are never overwritten; an empty poll creates nothing. Files are mode 0600 on
-POSIX; Windows inherits the destination directory's ACL, so use a private directory.
+are never overwritten; an empty poll creates nothing. The parent directory must
+already exist and be writable; that preflight runs before publication or claim.
+Files are mode 0600 on POSIX; Windows inherits the destination directory's ACL,
+so use a private directory.
 The receipt confirms delivery to local storage/tool output, not model comprehension.
 Read the envelope before acting and clean up only after it is no longer needed.
 Stop-hook output is unchanged; file output is an explicit foreground choice.
@@ -264,7 +266,8 @@ A receipt-output failure retains the complete local file but withholds ack;
 file-write failures also withhold ack. Inspect delivery state before any explicit
 Retry and never automatically replay. After a confirmed exchange times out, its
 printed receive-only command preserves `--output-file`; do not repeat exchange.
-After success, choose a fresh output path for the next collection.
+After success or a withheld acknowledgement, choose a fresh output path for the
+next collection.
 
 Disk/HTTP copies do not themselves consume model tokens. v5.2.1 already prints
 body-free send/exchange publication receipts; these options avoid workflow
