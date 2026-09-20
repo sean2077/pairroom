@@ -73,7 +73,7 @@ Backup and Restore target one Room, not a multi-Room Service root. Backup and di
 
 ## Source flag inventory
 
-The following names are extracted from `cmd/pairroom/*.go`. Use them to find omissions; they do not mean every flag applies to every command.
+The following names are extracted from `cmd/pairroom/*.go` and `internal/relayclient/cli.go`. Use them to find omissions; they do not mean every flag applies to every command.
 
 <!-- generated:flags -->
 - `--actor`
@@ -122,9 +122,11 @@ The following names are extracted from `cmd/pairroom/*.go`. Use them to find omi
 - `--name`
 - `--no-browser`
 - `--output`
+- `--output-file`
 - `--peer-runtime`
 - `--purge-hooks`
 - `--recover-stale-lock`
+- `--ref`
 - `--replace`
 - `--repo`
 - `--resend`
@@ -136,6 +138,7 @@ The following names are extracted from `cmd/pairroom/*.go`. Use them to find omi
 - `--slot`
 - `--stall-warning-seconds`
 - `--text`
+- `--text-file`
 - `--timeout`
 - `--to`
 - `--token`
@@ -205,6 +208,71 @@ Park defaults to 30 seconds: Claude/Codex allow eight message-bearing blocks; Gr
 
 If creation succeeds but binding fails, the error preserves the Room ID and a recovery command with the Service/workspace paths; finish setup and use that command instead of repeating `--create`. The generated canonical `peer_join` preserves those paths, while `peer_join_local` omits the workspace path and only omits the Service path when it is the default. Never shorten away a custom `--service-file`. Generated commands use PowerShell quoting on Windows and POSIX shell quoting elsewhere. When creation itself cannot be confirmed, inspect Management before retrying to avoid duplicate Rooms.
 
+### File-based messages and evidence
+
+Keep short decisions and questions inline. For an existing long report, pass
+`--text-file PATH` to `send` or `exchange`: the CLI reads the complete UTF-8 body
+without putting it in argv or asking the model to copy it from tool output.
+`--text-file -` explicitly reads stdin. Choose one body source, not both
+`--text` and `--text-file`; `--text ""` is an explicit empty body. Without either
+flag, stdin remains the default unless `--ref` is present. The complete body,
+including reference metadata, must fit 256 KiB; invalid UTF-8 and NUL bytes fail
+before publication rather than being silently rewritten by JSON encoding.
+
+```bash
+# Full report: no preliminary cat/read-and-retype step is needed.
+pairroom relay send --id review-full-01 --text-file "/absolute/path/review.md"
+
+# Large evidence: send the decision/question plus a local reference, not the evidence body.
+pairroom relay exchange --id review-evidence-01 --text "Review section 3 against the current patch" --ref "/absolute/path/review.md"
+
+# Receiver: use a NEW path in an existing private directory for a large expected reply.
+pairroom relay wait --output-file "/absolute/path/incoming-review.txt"
+```
+
+`--ref PATH` is repeatable (at most 16, each at most 64 MiB). It appends a compact
+JSON manifest of canonical absolute paths, byte lengths and SHA-256 hashes to the
+ordinary message. Duplicate canonical paths are omitted. Files are hashed
+without expanding their contents into the message; binary files are also allowed.
+Use `--text-file - --ref PATH` to combine a piped body with references. Paths are
+relative to the tool's current working directory, not `--repo`. The same flags
+work with quoted Windows paths; no shell-specific substitution is necessary.
+
+**References are not uploads, snapshots or archived attachments.** Both native
+sessions need access to the same local file under their existing permissions.
+Finish writing before sending, keep the file until publication is reconciled and
+the peer has read it, and use a new revision/path when updating evidence. The
+receiver verifies the hash and reads only the sections needed for the task;
+a missing/changed file is an explicit failure, not permission to infer its content.
+Keep decision-critical context in the short body. Send unchanged conclusions only
+once and use subsequent messages for deltas, blockers or targeted questions.
+For portable, self-contained text use `--text-file`; `--attach` remains the
+validated image-upload path, not a general-file upload facility.
+
+`wait/exchange --output-file NEW_PATH` saves the entire incoming envelope,
+including sender/context, without a body preview. Stdout instead contains
+`envelope_file`, `bytes`, `sha256` and a reminder to read the file before acting.
+The CLI exclusively creates a new file, flushes and closes it, writes the complete
+stdout receipt, then acknowledges the original claim. Existing files and symlinks
+are never overwritten; an empty poll creates nothing. Files are mode 0600 on
+POSIX; Windows inherits the destination directory's ACL, so use a private directory.
+The receipt confirms delivery to local storage/tool output, not model comprehension.
+Read the envelope before acting and clean up only after it is no longer needed.
+Stop-hook output is unchanged; file output is an explicit foreground choice.
+
+A receipt-output failure retains the complete local file but withholds ack;
+file-write failures also withhold ack. Inspect delivery state before any explicit
+Retry and never automatically replay. After a confirmed exchange times out, its
+printed receive-only command preserves `--output-file`; do not repeat exchange.
+After success, choose a fresh output path for the next collection.
+
+Disk/HTTP copies do not themselves consume model tokens. v5.2.1 already prints
+body-free send/exchange publication receipts; these options avoid workflow
+re-copying and optional receiver-side inlining, not an existing send-body echo.
+Creating evidence and reading required content still cost tokens. File output is
+not a better default for small replies, where another read would add a tool turn.
+Tests bound observable output bytes, not vendor billing or model acceptance.
+
 ### Foreground discussion loop
 
 This optional Native path borrows the active wait idea from [Orca's messaging loop](https://github.com/stablyai/orca/blob/403b62a8d8fa6e896a93acc4c15405be0f0b7dc7/skill-guides/orchestration/references/messaging-and-gates.md), not its Run/Task/Dispatch hierarchy. It reuses PairRoom's explicit send, associated bindings, inbox and acknowledgement. Install the updated CLI and relay skill; `pairroom relay exchange --help` checks command availability. An older CLI is not made compatible by installing the new skill alone.
@@ -222,11 +290,11 @@ pairroom relay exchange --id review-opening-01 --text "Review this proposal agai
 pairroom relay exchange --id review-findings-01 --text "I found this counterexample: ..." --timeout 0
 ```
 
-These are separate commands in separate sessions, not a script to run sequentially in one shell. Follow-up rounds reuse the binding and native session, but each new message needs a fresh client ID. Exchange IDs allow 1–128 letters, digits, `-` or `_` (not `.`/`..`). Exchange also accepts stdin text and repeatable `--attach` through the existing send path. It targets only the peer; use `send --to @user` for human escalation.
+These are separate commands in separate sessions, not a script to run sequentially in one shell. Follow-up rounds reuse the binding and native session, but each new message needs a fresh client ID. Exchange IDs allow 1–128 letters, digits, `-` or `_` (not `.`/`..`). Exchange also accepts `--text-file`, repeatable `--ref` and `--attach` through the existing send path, plus `--output-file` for its incoming envelope. It targets only the peer; use `send --to @user` for human escalation.
 
 Exchange is **send once, then receive next**, not an atomic conversation transaction or a promise to match a reply. An already-queued message or user steering can arrive first; handle the actual envelope rather than skipping it. No accumulated history or outgoing body is appended to the returned envelope. A separate process-owned collector lock rejects a second `wait` or `exchange` before it claims or publishes; a Stop hook still publishes but does not take input from the foreground collector. The lock is separate from the short-lived state lock, so status/send/unbind remain available. Do not enable another coordinator for the same pair. For a final peer-facing result, use `relay send` and finish instead of calling exchange and leaving both sides waiting for ceremonial acknowledgements.
 
-Long foreground waits keep the existing HTTP window at most 30 seconds and renew only an explicit successful `{"claim":null}`. The loop runs in the CLI, not in the model. Both `wait` and `exchange` default to 3,600 seconds. Background reachability should explicitly use `wait --timeout 300`. Both accept finite waits up to 21,600 seconds (6 hours), while `--timeout 0` removes PairRoom's total deadline and waits until delivery, caller/native cancellation, transport/auth failure, or process/service shutdown. A finite last poll can round up by less than a second and completes its bounded transport/output/ack work; these budgets are not hard task-completion or cost limits. No slot-state lock is held during the wait, and the hook's 30-second park/45-second timeout remain separate.
+Long foreground waits keep the existing HTTP window at most 30 seconds and renew only an explicit successful `{"claim":null}`. The loop runs in the CLI, not in the model. Both `wait` and `exchange` default to 3,600 seconds. Use a single long or unbounded background wait only when the harness wakes on tracked completion without model polling; otherwise prefer a foreground wait within its tool deadline, then end the turn instead of repeatedly polling. Empty expiries can themselves cost model turns. Both accept finite waits up to 21,600 seconds (6 hours), while `--timeout 0` removes PairRoom's total deadline and waits until delivery, caller/native cancellation, transport/auth failure, or process/service shutdown. A finite last poll can round up by less than a second and completes its bounded transport/output/ack work; these budgets are not hard task-completion or cost limits. No slot-state lock is held during the wait, and the hook's 30-second park/45-second timeout remain separate.
 
 | Outcome | Next action |
 |---|---|
@@ -237,7 +305,6 @@ Long foreground waits keep the existing HTTP window at most 30 seconds and renew
 | Peer is idle, disconnected or outside a park | Start its foreground wait in that native session, rely on a wake-enabled Room's automatic Service wake for a Codex-bound target, or use a human nudge; exchange itself cannot wake it |
 
 Hook installation/approval and official session association remain required. `--timeout 0` does not guarantee a vendor tool can stay pending forever; native harness/tool cancellation remains authoritative. Model acceptance, uninterrupted long-running native tool calls and lower billed token usage require real vendor testing; synthetic transport tests do not establish them. No new Room mode, protocol version, schema, stage compiler, background model worker or process ownership is introduced. Existing send/wait and automatic Stop relay remain usable independently.
-
 
 ### Grok Build Native
 
@@ -273,8 +340,8 @@ Grok shell mode (`!`) does not inject that variable — paste a join command as 
 normal prompt so the agent runs it, rather than executing `! pairroom relay bind`.
 
 Grok clips Stop output after 32,768 Unicode scalars and hook feedback at 10,000.
-Use explicit `relay send`/`exchange` for long replies, preferably stdin rather
-than a very long shell argument, then omit a final peer handle. A clipped Stop
+Use explicit `relay send`/`exchange --text-file PATH` (or stdin) for long replies
+rather than a very long shell argument, then omit a final peer handle. A clipped Stop
 is never forwarded as a complete reply. Its recovery hint does not authorize
 resending an already confirmed explicit publication.
 
