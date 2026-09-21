@@ -157,6 +157,9 @@ func EmbeddedRuntimeFactory(registry *Registry, cfg EmbeddedRuntimeConfig) Runti
 		}
 		if durableRoom.HostMode == model.HostNative {
 			wake := cfg.nativeWake
+			if wake.Claude == nil && !cfg.Mock {
+				wake.Claude = prepareNativeClaudeWake(project.Root, durableRoom.ID)
+			}
 			if wake.Run == nil {
 				// Production Services resolve the vendor executable from the
 				// configured Codex command template instead of relying on the

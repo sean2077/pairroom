@@ -81,11 +81,12 @@ remain historical evidence for their recorded runtime and date.
 **Claude Code.** [Channels documentation](https://code.claude.com/docs/en/channels)
 describes MCP event push into an already-running session, with explicit per-session
 `--channels` opt-in. It is a research preview with authentication, organization
-and plugin-allowlist restrictions. Therefore “PairRoom does not integrate a Claude
-external wake” is accurate; “Claude has no push capability” is not. Adopting
-Channels would be a separate opt-in integration needing lifecycle, authentication,
-duplicate-delivery and real-session tests, not a reason to bypass approval or
-replace the common FIFO with a preview protocol.
+and plugin-allowlist restrictions. PairRoom now uses the separately documented
+[cross-session inbox](https://code.claude.com/docs/en/cross-session-messaging#the-sessions-inbox-socket),
+not Channels, for local fixed-nudge submission to existing sessions. Capability
+capture, inbound-policy limits and synthetic-versus-vendor evidence are documented
+in [Claude inbox wake](claude-inbox-wake.md). Neither surface authorizes changing
+user permissions or replacing the common FIFO.
 
 **Codex.** [Hooks documentation](https://developers.openai.com/codex/hooks#large-hook-output)
 states that oversized model-visible hook output normally spills to a file with a
@@ -105,7 +106,8 @@ permission to install a second publisher or to claim an untested wake surface.
 
 The research does not establish comparative billed cost, model quality, universal
 idle wake, or all-version support. Those require owner-authorized vendor tests.
-No preview channel, new paid run or new credential integration is enabled here.
+No preview channel or new paid vendor run is enabled here. Claude inbox capture
+is an explicit native-binding integration, not a vendor API-key integration.
 
 ## Reproduce the engineering checks
 

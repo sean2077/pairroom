@@ -279,3 +279,40 @@ func TestWakeCandidateReflectsDeliveringAndDisabled(t *testing.T) {
 		t.Fatalf("config change with delivering message = %v, want ErrWakeRoomBusy", unresolved)
 	}
 }
+
+func TestSubmittedWakeReplaysWithoutClaimingDelivery(t *testing.T) {
+	e, a, dir := testEngine(t)
+	m, err := e.Send(a[model.ActorSlot2], SendRequest{ID: "claude-submission", Text: "queued"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, ok := e.WakeCandidate(m.ID)
+	if !ok || candidate.BindID != a[model.ActorSlot1].BindID || candidate.Generation != a[model.ActorSlot1].Generation {
+		t.Fatal("candidate lost exact capability identity")
+	}
+	if err := e.ReserveWake(m.ID, model.ActorSlot1); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.RecordWake("submitted", "", model.ActorSlot1); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.RecordWake("submitted", "socket_failed", model.ActorSlot1); err == nil {
+		t.Fatal("contradictory submitted outcome accepted")
+	}
+	restored := reopenEngine(t, dir)
+	if _, ok := restored.WakeCandidate(m.ID); !ok {
+		t.Fatal("socket submission consumed message")
+	}
+	if err := restored.ReserveWake(m.ID, model.ActorSlot1); !errors.Is(err, ErrWakeReserved) {
+		t.Fatal("submission can be retried after restart")
+	}
+	found := false
+	for _, a := range restored.Snapshot().Audit {
+		if a.Detail == "wake submitted" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("submitted audit missing")
+	}
+}

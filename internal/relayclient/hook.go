@@ -124,6 +124,9 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		release()
 		return relay.ErrAuth
 	}
+	if err := captureClaudeInbox(c.Dir, c.State); err != nil {
+		_, _ = fmt.Fprintln(diagnostic, "PairRoom: Claude external wake is unavailable; relay publication and collection remain available.")
+	}
 	// Opportunistically record the transcript path, which the harness environment
 	// does not carry, so `relay peer` references stay available.
 	if binding.TranscriptPath == "" && hook.TranscriptPath != "" {

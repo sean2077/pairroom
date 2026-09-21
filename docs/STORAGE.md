@@ -66,3 +66,14 @@ A crash before that atomic write leaves no local record and consumes no sequence
 The Service's owner-only `relay-endpoint.json` is ephemeral endpoint discovery for local CLI clients, not a Room credential or a Registry field. It contains the current numeric-loopback URL and a scoped relay-setup token — sufficient for service discovery, Project registration, native Room creation, pair-default reads and the native binding lifecycle, never full Management authority or browser session bootstrap — and must not be exported. Clients re-read it to follow Service port/token changes. Registry checkpoints use strict schema 3 with canonical `slot1`/`slot2` keys and immutable host mode; native credential hashes and relay state never enter it. A retired checkpoint retires the whole Service root rather than being rewritten in place.
 
 Native Room backups do not stop user-owned processes and do not include workspace slot credentials. Stop native work explicitly when consistency matters, preserve the workspace state separately, and inspect side effects before reconnecting restored bindings.
+
+### Claude inbox capability (workspace-private)
+
+`<workspace>/.pairroom/rooms/<room>/slots/<slot>/claude-inbox.json` contains the
+local inbox address/token and exact native bind ID, generation and session ID.
+It is captured only by confirmed Claude bind/Stop, atomically replaced, and
+never serialized into the Room Store, Registry, exports or public API. Missing
+or stale capability disables that wake attempt, not relay. Unix owner/mode
+checks and Windows protected owner-only DACLs guard the file. Treat both it and
+crash-left `.claude-inbox-*` temporaries as secrets; unbind removes the sidecar and slot cleanup removes stale
+temporaries. See [Claude inbox wake](design/claude-inbox-wake.md).

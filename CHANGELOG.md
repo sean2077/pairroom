@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add external wake for already-running Claude Code Native sessions through the session's inbox socket (Unix domain socket or local Windows named pipe). Confirmed bind/Stop captures the official environment capability in a private, generation-bound sidecar; the Service sends only a fixed nudge through the existing reservation, rate-limit and no-retry path. Windows capability files use protected owner-only DACLs. Socket writes are audited as `submitted`, not model acceptance; missing/stale capabilities, permission policy and failures retain the normal `relay wait` fallback. No Claude launch/resume, Channels opt-in, permission rewrite or Stop timeout increase. Synthetic socket/pipe and HTTP tests do not establish authenticated vendor E2E.
+
 ## [v5.3.0] — 2026-09-20
 
 - Add native relay file workflows that keep long bodies out of tool arguments and stdout: `send`/`exchange --text-file` reads UTF-8 from a file (`-` selects stdin), repeatable `--ref` appends a canonical path/size/SHA-256 manifest without uploading contents, and `wait`/`exchange --output-file` persists the incoming envelope before a compact receipt and acknowledgement. References are local pointers, not attachments or snapshots; both sessions need access, hashes must be verified, and changed evidence uses a new ID. `--output-file` never overwrites, creates nothing on an empty poll, and preflights a writable new path before publication or claim. Short replies stay inline. This is not a protocol or schema change, not content-based deduplication, and not a billed-token measurement.
