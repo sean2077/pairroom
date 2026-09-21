@@ -180,7 +180,11 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 			return err
 		}
 	}
+	wakeErr := captureClaudeInbox(dir, attempt.State)
 	payload := map[string]any{"binding": result.Binding, "bootstrap": result.Bootstrap, "collaboration": result.Collaboration, "notice": result.Notice + " Added .pairroom/ to .gitignore. This session is ready to relay."}
+	if wakeErr != nil {
+		payload["wake_notice"] = "Claude external wake is unavailable; relay remains ready. Use relay wait or rebind in the intended session."
+	}
 	if created {
 		payload["peer_join"] = bindCommand(root, endpointPath, o.room, peerSlot(slot))
 		payload["peer_join_local"] = localBindCommand(endpointPath, o.room, peerSlot(slot))

@@ -191,6 +191,21 @@ unparameterized snapshot and `/api/v1/export` retain complete history, even when
 an export request includes `tail=1`. No history is deleted and inbox collection
 is unaffected. Receipt fields remain private in both projections.
 
+## Claude external wake
+
+After updating both Service and CLI, run `pairroom relay bind` in the existing
+Claude session once; an approved Stop hook also refreshes the capability.
+PairRoom reads `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN`
+in that session's tool environment. Do not copy them into prompts or flags.
+No new hook installation or longer Stop timeout is required.
+
+The Service uses a fixed nudge, not task text, through the local inbox. The
+original session's inbound policy remains authoritative; `hold`/`refuse` can
+prevent automatic continuation. An audit of `wake submitted` proves only a
+complete socket write. Missing/stale capability, another OS/network namespace,
+or rejected input leaves the normal `relay wait`/human fallback. Existing
+background collectors take precedence. [Implementation and troubleshooting](design/claude-inbox-wake.md).
+
 ## Verified vendor wake surfaces
 
 The following are repository-recorded real-CLI experiments from 2026-09-16 and
@@ -202,8 +217,10 @@ harness version. Current external documentation is assessed separately in
   session started a copy, rather than injecting into the existing session.
   Harness-tracked background completion woke its idle parent, allowing an
   agent-owned background `relay wait` to keep that session reachable. PairRoom
-  currently uses this model-initiated path, not a Service-initiated Claude wake.
-  Claude's separately documented Channels preview is not integrated here.
+  now also supports Service-initiated wake through the official session inbox;
+  that implementation has synthetic transport tests, not a new authenticated
+  vendor acceptance run. See [Claude inbox setup](design/claude-inbox-wake.md).
+  Channels preview and resume-based injection are not used.
 - **Codex (codex-cli 0.154.0)**: `codex queue --thread <session UUID>
   --message <text>` woke a deep-idle bound thread in a controlled one-time
   experiment (accepted queue exit, then an autonomous relay report with no
@@ -222,8 +239,8 @@ harness version. Current external documentation is assessed separately in
 
 In a wake-enabled Room (per-Room configuration, default on; opt-out only at
 an idle Room boundary through the Management surface) the Service
-automatically executes the Codex queue wake for a durably queued
-peer-directed message to a deep-idle Codex-bound session: fixed body-free
+automatically submits a Claude inbox nudge when its private capability is
+available, or executes the Codex queue wake for a durably queued input: fixed body-free
 nudge, at most one per burst, rate-limited, durably reserved before the
 command, audited through a fixed outcome/reason vocabulary, and never
 automatically retried. Reservation rechecks the active binding generation,
@@ -233,7 +250,8 @@ the FIFO, not the nudge, determines message delivery.
 See [design/auto-wake.md](design/auto-wake.md) and
 [PROTOCOL.md](PROTOCOL.md#automatic-idle-peer-wake).
 
-Claude Code and Grok Build use agent-owned background `relay wait` only where
+Grok Build and Claude sessions without a usable external wake use agent-owned
+background `relay wait` only where
 that harness actually surfaces completion without polling turns. This is a
 PairRoom integration boundary, not a claim that vendors have no other features.
 Manual `codex queue` templates are printed only for authenticated Codex targets
@@ -250,7 +268,7 @@ not an invented vendor command. The human decides whether to use a manual wake.
 | Session identity is missing or differs | Run bind inside the intended session, not a separate terminal. Do not manufacture an environment value. |
 | Slot is occupied | Re-run bind in the original session. Only an intentional session change should use `--replace`. |
 | A bind response was lost | Retry bind for the same Room and slot without `--create` or `--replace`. It reconciles the original attempt; a new explicit `--replace` intentionally starts another replacement. |
-| Messages remain queued | Have the associated receiving agent run `pairroom relay wait`. A wake-enabled Room automatically wakes an idle Codex-bound target; otherwise, for an idle Codex peer a human may run the printed vendor `codex queue` wake template. |
+| Messages remain queued | Have the associated receiving agent run `pairroom relay wait`. A wake-enabled Room can nudge an eligible Claude inbox or idle Codex target; Claude `submitted` does not prove receipt. Otherwise, for an idle Codex peer a human may run the printed vendor `codex queue` wake template. |
 | Delivery is `unknown` | Inspect the Room and workspace before explicit Retry; it can duplicate work. `handed_off` proves stdout only, not model acceptance. |
 
 Native remains experimental. Synthetic hook, Mock and browser tests are not real

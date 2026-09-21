@@ -23,7 +23,7 @@ type nativeCallerTest interface {
 // tests can install an exact caller fixture. Production code never calls this.
 func IsolateNativeCaller(t nativeCallerTest) {
 	t.Helper()
-	for _, key := range []string{"CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "GROK_SESSION_ID", "CLAUDECODE", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME"} {
+	for _, key := range []string{"CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "GROK_SESSION_ID", "CLAUDECODE", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME"} {
 		t.Setenv(key, "")
 	}
 	before := harnessAncestor

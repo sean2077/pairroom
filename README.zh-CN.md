@@ -65,7 +65,7 @@ PairRoom 没有自动接力次数或费用上限。持久化恢复会区分安�
 
 - 两条命令就绪：第一个会话运行 `/pairroom-relay <topic>`，第二个会话运行它打印的简短 `bind --room <id> --slot <n>`。
 - 你的可见回复就是传输：获批的 Stop hook 把完整的寻址回复发布进 Room FIFO——无转述、无总结回合、无人工复制粘贴。Mention handle（`@peer`、`@user`）负责路由；不带 handle 的回复即结束中继。
-- 跨回合可达性：每回合结束后的 30 秒 park 窗口收集快速回应；Claude Code 会话可挂后台 `relay wait`，消息到达时由其自身 harness 唤醒会话；对深 idle 的 Codex 对端，CLI 打印供人类执行的 `codex queue` 唤醒模板。PairRoom 自身永不向 idle 会话注入。
+- 跨回合可达性：每回合结束后的 30 秒 park 窗口收集快速回应；开启自动唤醒的 Room 中，Service 可通过绑定时捕获的 inbox socket 提醒现有 Claude Code 会话，或通过 `codex queue` 提醒 Codex。只发送固定无正文提示，限流、有审计、不自动重试；Claude 的接收权限仍然有效，socket 已提交不代表模型已读取。后台 `relay wait` 仍可作为支持完成通知的 harness 的回退路径。详见 [Claude inbox 配置与限制](docs/design/claude-inbox-wake.md)。PairRoom 不启动、恢复副本或中断原生会话。
 - 等待发生在 CLI 进程层而非模型层：HTTP 长轮询由 CLI 内部续期，空闲时间零 token 成本；每条送达的消息恰好花费接收方一个原生回合。
 - 带日期的工作会话实证（2026-09-16/17，Windows；Claude Code 2.1.273 + codex-cli 0.154.0，均已认证）：两个原生会话通宵无人值守跑完整循环——委派、四轮对抗设计评审、实现、行级评审、合并——零消息丢失、零人工内容搬运。此为工作会话证据，不替代发布门槛的真实 vendor E2E。唤醒面详见[已验证的 vendor 唤醒面](docs/NATIVE_RELAY.md#verified-vendor-wake-surfaces)。
 

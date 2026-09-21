@@ -156,7 +156,8 @@ func TestNativeWakerSuppressesIneligibleCandidates(t *testing.T) {
 		{"waiter", func(v *relay.WakeCandidate) { v.WaiterActive = true }, "waiter_active"},
 		{"delivering", func(v *relay.WakeCandidate) { v.Delivering = true }, "waiter_active"},
 		{"unbound", func(v *relay.WakeCandidate) { v.SessionID = "" }, "unbound"},
-		{"other runtime", func(v *relay.WakeCandidate) { v.Runtime = model.RuntimeClaude }, "unsupported_runtime"},
+		{"other runtime", func(v *relay.WakeCandidate) { v.Runtime = model.RuntimeGrok }, "unsupported_runtime"},
+		{"Claude without capability", func(v *relay.WakeCandidate) { v.Runtime = model.RuntimeClaude }, "capability_unavailable"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

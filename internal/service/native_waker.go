@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sean2077/pairroom/internal/claudewake"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
 )
@@ -33,10 +34,13 @@ type nativeWakeRelay interface {
 	WakeReservations() []relay.WakeReservation
 }
 
+type nativeWakePrepare func(relay.WakeCandidate) (claudewake.Send, error)
+
 type nativeWakeRun func(context.Context, string, ...string) error
 type nativeWakeWait func(context.Context, time.Duration) error
 
 type nativeWakerConfig struct {
+	Claude      nativeWakePrepare
 	Relay       nativeWakeRelay
 	Now         func() time.Time
 	Grace       time.Duration
@@ -51,6 +55,7 @@ type nativeWakerConfig struct {
 // reservations are rehydrated from the Room Event Log; its pending map keeps
 // one grace task per target so a burst produces one wake decision.
 type nativeWaker struct {
+	claude      nativeWakePrepare
 	mu          sync.Mutex
 	relay       nativeWakeRelay
 	now         func() time.Time
@@ -87,6 +92,7 @@ func newNativeWaker(cfg nativeWakerConfig) *nativeWaker {
 		cfg.Wait = waitNativeWake
 	}
 	w := &nativeWaker{
+		claude:      cfg.Claude,
 		relay:       cfg.Relay,
 		now:         cfg.Now,
 		grace:       cfg.Grace,
@@ -111,7 +117,7 @@ func (w *nativeWaker) Schedule(ctx context.Context, messageID string) {
 }
 
 // Wake evaluates one post-enqueue message. A durable reservation is appended
-// before invoking codex queue, so neither a crash nor a duplicate HTTP retry
+// before invoking the vendor wake, so neither a crash nor a duplicate HTTP retry
 // can automatically repeat a possibly accepted vendor effect.
 func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 	if ctx == nil {
@@ -151,6 +157,20 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 	if reason := nativeWakeSuppression(candidate); reason != "" {
 		return w.record("suppressed", reason, candidate.Target)
 	}
+	var claudeSend claudewake.Send
+	if candidate.Runtime.Canonical() == model.RuntimeClaude {
+		if w.claude == nil {
+			return w.record("suppressed", "capability_unavailable", candidate.Target)
+		}
+		var err error
+		claudeSend, err = w.claude(candidate)
+		if err != nil || claudeSend == nil {
+			return w.record("suppressed", "capability_unavailable", candidate.Target)
+		}
+	}
+	if ctx.Err() != nil {
+		return nil
+	}
 	now := w.now().UTC()
 	reservation := relay.WakeReservation{MessageID: candidate.MessageID, Target: candidate.Target, At: now}
 	if reason := w.reserveRate(reservation); reason != "" {
@@ -168,6 +188,20 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 	}
 
 	commandCtx, cancel := context.WithTimeout(ctx, w.timeout)
+	if claudeSend != nil {
+		err := claudeSend(commandCtx, nativeWakeNudge)
+		cancel()
+		if err == nil {
+			return w.record("submitted", "", candidate.Target)
+		}
+		reason := "socket_failed"
+		if errors.Is(err, context.DeadlineExceeded) {
+			reason = "socket_timeout"
+		} else if errors.Is(err, context.Canceled) {
+			reason = "socket_cancelled"
+		}
+		return w.record("failed", reason, candidate.Target)
+	}
 	err := w.run(commandCtx, "codex", "queue", "--thread", candidate.SessionID, "--message", nativeWakeNudge)
 	commandContextErr := commandCtx.Err()
 	cancel()
@@ -185,7 +219,7 @@ func nativeWakeSuppression(candidate relay.WakeCandidate) string {
 		return "waiter_active"
 	case strings.TrimSpace(candidate.SessionID) == "":
 		return "unbound"
-	case candidate.Runtime.Canonical() != model.RuntimeCodex:
+	case candidate.Runtime.Canonical() != model.RuntimeCodex && candidate.Runtime.Canonical() != model.RuntimeClaude:
 		return "unsupported_runtime"
 	default:
 		return ""
@@ -302,4 +336,16 @@ func fixedNativeWakeCommand(executable string) nativeWakeRun {
 // records command_unavailable instead of spawning a real vendor CLI.
 func unavailableNativeWakeCommand() nativeWakeRun {
 	return func(context.Context, string, ...string) error { return exec.ErrNotFound }
+}
+
+// Only the canonical bound workspace can supply a capability. No socket path,
+// token, vendor registry lookup, or arbitrary wake command comes from a message.
+func prepareNativeClaudeWake(workspace, room string) nativeWakePrepare {
+	return func(candidate relay.WakeCandidate) (claudewake.Send, error) {
+		dir, err := claudewake.SlotDir(workspace, room, string(candidate.Target))
+		if err != nil {
+			return nil, err
+		}
+		return claudewake.Prepare(dir, claudewake.Identity{BindID: candidate.BindID, Generation: candidate.Generation, SessionID: candidate.SessionID})
+	}
 }

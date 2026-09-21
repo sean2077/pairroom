@@ -82,9 +82,9 @@ func (e *Engine) RecordWake(outcome, reason string, target model.ActorID) error 
 	if reason != "" && !wakeReasons[reason] {
 		return errors.New("invalid wake reason")
 	}
-	// accepted carries no reason; failed/suppressed must carry one, so the
+	// accepted/submitted carry no reason; failed/suppressed must carry one, so the
 	// audit vocabulary stays self-consistent on replay.
-	if (outcome == "accepted") != (reason == "") {
+	if (outcome == "accepted" || outcome == "submitted") != (reason == "") {
 		return errors.New("wake reason does not match outcome")
 	}
 	payload := struct {
@@ -131,6 +131,8 @@ func (e *Engine) wakeCandidateLocked(messageID string) (WakeCandidate, bool) {
 			candidate.Runtime = b.Runtime
 		}
 		candidate.SessionID = b.SessionID
+		candidate.BindID = b.BindID
+		candidate.Generation = b.Generation
 	}
 	firstQueued := ""
 	for _, id := range e.order {

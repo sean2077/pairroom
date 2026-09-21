@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sean2077/pairroom/internal/claudewake"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
 )
@@ -320,7 +321,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if err := c.call(ctx, "unbind", nil, nil); err != nil {
 			return err
 		}
-		for _, name := range []string{"state.json", "credentials", "bootstrap", bindAttemptFile} {
+		for _, name := range []string{"state.json", "credentials", "bootstrap", bindAttemptFile, claudewake.FileName} {
 			if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
@@ -364,7 +365,7 @@ func unbindLocalOnly(ctx context.Context, root, dir string, o options, out io.Wr
 	if state.Schema != 2 || !state.Slot.ValidParticipant() {
 		return errors.New("invalid local relay state identity")
 	}
-	for _, name := range []string{"state.json", "credentials", "bootstrap", bindAttemptFile} {
+	for _, name := range []string{"state.json", "credentials", "bootstrap", bindAttemptFile, claudewake.FileName} {
 		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}

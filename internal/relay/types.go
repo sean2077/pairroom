@@ -38,24 +38,28 @@ var (
 // vendor thread identity, message bodies, or command output; RecordWake
 // rejects anything outside these sets so a caller cannot leak them into the
 // durable Event Log.
-var wakeOutcomes = map[string]bool{"accepted": true, "failed": true, "suppressed": true}
+var wakeOutcomes = map[string]bool{"accepted": true, "submitted": true, "failed": true, "suppressed": true}
 
 var wakeReasons = map[string]bool{
-	"disabled":            true,
-	"burst":               true,
-	"unsupported_runtime": true,
-	"unbound":             true,
-	"duplicate":           true,
-	"minimum_interval":    true,
-	"hourly_limit":        true,
-	"invalid_message":     true,
-	"waiter_active":       true,
-	"collected":           true,
-	"audit_unavailable":   true,
-	"command_unavailable": true,
-	"command_timeout":     true,
-	"command_cancelled":   true,
-	"command_failed":      true,
+	"disabled":               true,
+	"burst":                  true,
+	"unsupported_runtime":    true,
+	"unbound":                true,
+	"duplicate":              true,
+	"minimum_interval":       true,
+	"hourly_limit":           true,
+	"invalid_message":        true,
+	"waiter_active":          true,
+	"collected":              true,
+	"audit_unavailable":      true,
+	"command_unavailable":    true,
+	"command_timeout":        true,
+	"command_cancelled":      true,
+	"command_failed":         true,
+	"capability_unavailable": true,
+	"socket_failed":          true,
+	"socket_timeout":         true,
+	"socket_cancelled":       true,
 }
 
 // WakeReservation is the durable pre-command fact for one wake attempt,
@@ -75,6 +79,8 @@ type WakeReservation struct {
 // flight. The waker maps these facts onto its suppression vocabulary; the
 // Engine never decides policy.
 type WakeCandidate struct {
+	BindID       string            `json:"-"`
+	Generation   uint64            `json:"-"`
 	MessageID    string            `json:"message_id"`
 	Target       model.ActorID     `json:"target"`
 	Runtime      model.RuntimeKind `json:"runtime,omitempty"`

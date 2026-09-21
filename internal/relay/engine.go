@@ -285,7 +285,7 @@ func (e *Engine) apply(ev model.Event) error {
 		if p.Reason != "" && !wakeReasons[p.Reason] {
 			return errors.New("invalid native wake attempt reason")
 		}
-		if (p.Outcome == "accepted") != (p.Reason == "") {
+		if (p.Outcome == "accepted" || p.Outcome == "submitted") != (p.Reason == "") {
 			return errors.New("native wake attempt reason does not match outcome")
 		}
 		detail = "wake " + p.Outcome
