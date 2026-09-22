@@ -16,6 +16,7 @@ import (
 type nativeCallerTest interface {
 	Helper()
 	Setenv(string, string)
+	TempDir() string
 	Cleanup(func())
 }
 
@@ -23,8 +24,14 @@ type nativeCallerTest interface {
 // tests can install an exact caller fixture. Production code never calls this.
 func IsolateNativeCaller(t nativeCallerTest) {
 	t.Helper()
-	for _, key := range []string{"CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "GROK_SESSION_ID", "CLAUDECODE", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME"} {
+	for _, key := range []string{"CLAUDE_PROJECT_DIR", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "GROK_SESSION_ID", "CLAUDECODE", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME"} {
 		t.Setenv(key, "")
+	}
+	// os.UserConfigDir uses these platform-specific anchors. Isolate locators
+	// without ever reading or writing a developer's real session index.
+	home := t.TempDir()
+	for _, key := range []string{"HOME", "XDG_CONFIG_HOME", "AppData"} {
+		t.Setenv(key, home)
 	}
 	before := harnessAncestor
 	harnessAncestor = func() (int, string, bool) { return 0, "", false }
