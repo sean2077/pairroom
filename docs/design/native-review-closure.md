@@ -10,6 +10,10 @@ Chat bubbles, reading-position anchoring, participant chips, keyboard focus and 
 collapsible inspector are retained. Pending/history/diagnostics share that inspector.
 The real Chromium presentation fixture passes in light/dark and at 320-pixel width;
 real HTTP/SSE recovery and vendor-model acceptance remain separate test categories.
+Also integrated main `0781b5c22d425b9f914022674469776465d488e6` session-workspace
+resolution: history, doctor and review follow the existing session binding across
+cwd changes. Review evidence still uses the bound workspace unless the operator
+selects a different trusted checkout with `--review-repo`.
 
 ## User path
 

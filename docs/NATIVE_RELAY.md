@@ -7,6 +7,8 @@ and desktop app, before creating a Room and in every Native Room.
 the [CLI reference](CLI_REFERENCE.md#native-relay-commands) owns command flags.
 For architectural tradeoffs, bounded-history behavior and dated vendor research,
 see [Native efficiency boundaries](design/native-efficiency.md).
+For cwd/worktree changes, binding discovery and upgrade recovery, see
+[Native session workspace discovery](NATIVE_SESSION_WORKSPACE.md).
 
 ## Before starting
 
@@ -18,9 +20,11 @@ same PairRoom release as the running app/Service. Source installations use
 `make install`; packaged installations follow the [installation guide](../README.md).
 Restart an existing shell after changing PATH.
 
-Install and sign in to the selected harnesses, and open both sessions in the
-same Git project. Current Native support is Claude Code, Codex and Grok Build. Selecting Provider/model/effort/permissions in a Native
-Room does not reconfigure your existing sessions.
+Install and sign in to the selected harnesses, and open both sessions with the
+intended project's approved hooks loaded. Current Native support is Claude Code,
+Codex and Grok Build. Selecting Provider/model/effort/permissions in a Native
+Room does not reconfigure your existing sessions. Their tool-call directories
+can change after binding without changing Room ownership.
 
 ## One-time project setup
 
@@ -63,9 +67,10 @@ In the first session, invoke `/pairroom-relay <topic>` or ask the agent to run:
 pairroom relay bind --create --name "<topic>"
 ```
 
-Give the printed `peer_join_local` command to a second session in the same
-workspace, or `peer_join` with explicit paths, and ask that agent
-to execute it through its tools. With one matching active Room and slot, it can
+Give the printed `peer_join_local` command to a second session using the same
+Service, or `peer_join` with explicit paths, and ask that agent
+to execute it through its tools. An explicit Room resolves its project workspace
+without requiring a prior `cd`. With one matching active Room and slot, it can
 instead run `pairroom relay bind`. Slots are Agent 1/2 (`--slot 1|2`), not vendor
 names. Follow the candidate list rather than guessing when selection is ambiguous.
 
@@ -91,9 +96,11 @@ by a wait timeout calls for `wait`, not a new send. See the
 commands.
 
 The main repository can remain the session entry point while work happens in
-`.worktrees/<task>`. Keep commands pointed at the bound Room workspace and use an
-explicit task path for edits/tests/review; Native does not create or merge
-worktrees. Changing the shell's directory does not grant a new Room identity.
+`.worktrees/<task>`. Relay follows the existing session binding; do not change
+back to the binding directory or rebind merely to communicate. Use the intended
+task path for edits/tests/review; Native does not create or merge worktrees.
+Relative file arguments still use the actual tool-call cwd, not the binding
+workspace. Changing the shell's directory does not grant a new Room identity.
 
 ## Runtime boundary and discovery
 
@@ -109,20 +116,24 @@ input with foreground `wait`. For long outgoing replies use
 `send/exchange --text-file` (or stdin). See [Grok Native](CLI_REFERENCE.md#grok-build-native) for limits,
 owned hook/skill locations, compatibility filtering and validation boundaries.
 
-Discovery uses the current Git workspace, recognized harness lineage and native
-session metadata (`CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`, `GROK_SESSION_ID`). Exact session
-metadata selects an existing associated Room/slot ahead of PID-only matching: a
-Desktop or app-server process can host multiple sessions. Repeating `bind` in the
-same session resumes its saved Service endpoint and identity without manual
-flags. The Service still owns omitted pair selections, read and pinned before any
-Project/Room creation; no provider secrets or guessed model/effort settings are
-harvested. A nearest recognized harness scopes inherited outer-harness variables;
-ambiguous or unmatched metadata fails rather than consuming another session's
-inbox. These are convenience selectors, not proof of identity or a sandbox
-against other programs running as the same OS user. The approved Stop hook
-re-confirms the official session id captured at bind and fails closed on
-divergence; all later operations authenticate the binding credential, generation
-and session.
+Discovery first uses exact native session metadata (`CLAUDE_CODE_SESSION_ID`,
+`CODEX_SESSION_ID`, `GROK_SESSION_ID`) to find a confirmed binding and its stored
+workspace, for both foreground commands and approved hooks. Disposable locators
+are revalidated against the original private binding state; cwd/project paths
+are only cold discovery hints. Explicit selectors must match the bound session,
+and ambiguity fails rather than switching its Room. A Desktop or app-server
+process can host multiple sessions, so PID alone is not session identity.
+Repeating `bind` in the same session resumes its saved Service endpoint and
+identity without manual flags. The Service still owns omitted pair selections,
+read and pinned before any Project/Room creation; no provider secrets or guessed
+model/effort settings are harvested. A nearest recognized harness scopes inherited
+outer-harness variables; ambiguous or unmatched metadata fails rather than
+consuming another session's inbox. These are convenience selectors, not proof
+of identity or a sandbox against other programs running as the same OS user.
+The approved Stop hook re-confirms the official session id captured at bind and
+fails closed on divergence; all later operations authenticate the binding
+credential, generation and session. Existing bindings without a locator can be
+recovered without replacement; see [upgrade and recovery](NATIVE_SESSION_WORKSPACE.md#upgrade-and-recovery).
 
 ## The two receive paths share one mailbox
 
@@ -266,6 +277,7 @@ not an invented vendor command. The human decides whether to use a manual wake.
 | Service endpoint is unavailable | Open the app/start the Service; for a custom data root, bind with `--service-file <root>/relay-endpoint.json`. Never paste its contents. |
 | Hook is missing or not approved | Run `relay install` for the intended runtime and approve the exact definition in that harness. |
 | Session identity is missing or differs | Run bind inside the intended session, not a separate terminal. Do not manufacture an environment value. |
+| Binding is not found after changing directories | Update CLI and skill. For an older binding, resume once in the original session with `bind --repo <original-workspace>`; inspect `status`'s `binding_workspace`, not another workspace's private state. See [workspace recovery](NATIVE_SESSION_WORKSPACE.md#upgrade-and-recovery). |
 | Slot is occupied | Re-run bind in the original session. Only an intentional session change should use `--replace`. |
 | A bind response was lost | Retry bind for the same Room and slot without `--create` or `--replace`. It reconciles the original attempt; a new explicit `--replace` intentionally starts another replacement. |
 | Messages remain queued | Have the associated receiving agent run `pairroom relay wait`. A wake-enabled Room can nudge an eligible Claude inbox or idle Codex target; Claude `submitted` does not prove receipt. Otherwise, for an idle Codex peer a human may run the printed vendor `codex queue` wake template. |

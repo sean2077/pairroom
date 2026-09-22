@@ -62,12 +62,31 @@ Before replacing a 5.0.0 binary, use the matching binary to `pairroom relay unbi
 ## Native binding setup
 
 Use the matching CLI and app/Service release and follow [Native setup](NATIVE_RELAY.md).
-Previously associated bindings retain their identity. An incomplete binding from
-an older release requires explicit `bind --replace` inside the intended session.
-For a lost response to a current bind, rerun bind for the same Room/slot without
-`--create` or `--replace` to reconcile its original identity; do not repeat `--create`. Native remains experimental and real vendor
+Previously associated bindings retain their identity and need no replacement. An
+incomplete binding from an older release requires explicit `bind --replace` inside
+the intended session. For a lost response to a current bind, rerun bind for the
+same Room/slot without `--create` or `--replace` to reconcile its original
+identity; do not repeat `--create`. Native remains experimental and real vendor
 acceptance remains a separate release gate.
 
+Relay now resolves a bound session before the current directory and records a
+disposable locator for it. An associated binding from a release without locators
+still resolves from its workspace or from the Service's registered project roots
+during ordinary foreground commands, which also records the locator. A binding
+whose cwd and `CLAUDE_PROJECT_DIR` hints have both moved must be registered once
+from the original session before its Stop hooks resume publishing:
+
+```bash
+pairroom relay bind --repo "<original-bound-workspace>"
+```
+
+This resumes the existing binding instead of rotating its identity. Because cwd
+is no longer the binding identity, an explicit `--repo`, `--room`, `--slot` or
+`--service-file` that disagrees with the bound session is now rejected rather
+than retargeting it, and a bound session cannot create a second Room with
+`bind --create` from another directory. A bound workspace that is deleted or
+redirected fails closed until its locator is inspected and removed; see
+[Native session workspace discovery](NATIVE_SESSION_WORKSPACE.md).
 
 ### Adding Grok Build to Native Rooms
 

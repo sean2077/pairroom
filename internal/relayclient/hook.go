@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -48,9 +49,15 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	if hook.SessionID == "" || hook.CWD == "" {
 		return errors.New("official hook session_id and cwd are required; no transcript fallback")
 	}
-	root, err := workspace(ctx, hook.CWD)
+	if !o.repoExplicit {
+		o.repo = hook.CWD
+	}
+	root, err := resolveSessionWorkspace(ctx, "hook", &o, nativeCaller{runtime: kind, session: hook.SessionID})
 	if err != nil {
 		return err
+	}
+	if root == "" {
+		return writeJSON(out, map[string]any{})
 	}
 	if sharedGrok {
 		present, _, err := ownRelayStopHook(root, model.RuntimeGrok)
@@ -62,8 +69,13 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 			return writeJSON(out, map[string]any{})
 		}
 	}
-	paths, err := statePaths(root)
-	if err != nil {
+	// Resolution pinned one Room/slot for this session, so match that binding
+	// directly instead of walking every binding in the workspace. Both are
+	// required together; anything else keeps the whole-workspace candidates.
+	var paths []string
+	if safePart(o.room) && model.ActorID(o.slot).ValidParticipant() {
+		paths = []string{filepath.Join(root, ".pairroom", "rooms", o.room, "slots", o.slot, "state.json")}
+	} else if paths, err = statePaths(root); err != nil {
 		return err
 	}
 	candidates, err := boundHookCandidates(paths, kind, hook.SessionID)
@@ -90,13 +102,16 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	// The binding was associated at bind from the harness environment, so the
 	// official hook session must equal the recorded one. A mismatch fails closed
 	// without re-associating the session.
-	if c.State.SessionID != hook.SessionID {
+	if c.State.SessionID != hook.SessionID || c.State.Runtime != kind || !sameWorkspace(c.State.Workspace, root) {
 		release()
 		return relay.ErrAuth
 	}
 	if c.State.Generation == 0 {
 		release()
 		return errors.New("bind confirmation missing; use bind --replace explicitly")
+	}
+	if err := rememberSession(c.State); err != nil {
+		_, _ = fmt.Fprintln(diagnostic, "PairRoom: session locator unavailable; use --repo for this binding until repaired.")
 	}
 	// Stamp hook activity before any HTTP so even a failed inspect/confirm
 	// leaves the locally observable last-hook marker fresh on the next
