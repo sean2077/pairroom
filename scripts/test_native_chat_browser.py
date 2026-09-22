@@ -110,7 +110,20 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
             page.on('pageerror', lambda error: errors.append(str(error)))
             await page.set_content(fixture_html(isolated))
             await expect(page.locator('#messages .message-row')).to_have_count(12)
-            await expect(page.locator('#native-inspector')).to_be_hidden()
+            await expect(page.locator('#native-inspector')).to_be_visible()
+            await expect(page.locator('#native-participants')).to_be_visible()
+            await expect(page.locator('#participants-toggle')).to_have_attribute('aria-expanded', 'true')
+            await expect(page.locator('#inspector-toggle')).to_have_attribute('aria-expanded', 'true')
+            assert await page.evaluate('''() => {
+              const left=document.getElementById('native-participants').getBoundingClientRect();
+              const chat=document.querySelector('.conversation').getBoundingClientRect();
+              const right=document.getElementById('native-inspector').getBoundingClientRect();
+              return left.right<=chat.left+1 && chat.right<=right.left+1 && chat.width>400;
+            }''')
+            await page.evaluate("__snapshot.room.agents.slot1.model='fixture-model';__snapshot.room.agents.slot1.effort='high';__snapshot.summary={inboxes:{slot1:{queued:2,delivering:1,unknown:3},slot2:{queued:0,delivering:0,unknown:0}}};__update()")
+            await expect(page.locator('[data-slot=slot1] .agent-config')).to_contain_text('fixture-model')
+            await expect(page.locator('[data-slot=slot1] .agent-config')).to_contain_text('high')
+            await expect(page.locator('#delivery-summary .delivery-slot').first.locator('dd')).to_have_text(['2','1','3'])
             await expect(page.locator('#messages')).to_have_attribute('role','log')
             assert await page.get_by_role('button', name='Interrupt', exact=False).count() == 0
             await expect(page.locator('.participant-chip')).to_have_count(2)
@@ -154,7 +167,7 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
             # The drawer cannot eat drafts/disclosures or strand keyboard focus
             # during a normal last-activity refresh.
             await page.locator('.participant-chip.slot1').click()
-            await expect(page.locator('#native-inspector')).to_be_visible()
+            await expect(page.locator('#native-participants')).to_be_visible()
             await expect(page.locator('[data-slot="slot1"]')).to_be_focused()
             summary = page.locator('[data-disclosure="slot1-commands"] summary')
             await summary.click()
@@ -163,8 +176,15 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
             await expect(page.locator('[data-disclosure="slot1-commands"]')).to_have_attribute('open','')
             await expect(summary).to_be_focused()
             await summary.press('Escape')
+            await expect(page.locator('#native-participants')).to_be_hidden()
+            await expect(page.locator('#participants-toggle')).to_be_focused()
+            # Left and right visibility are independent desktop preferences.
+            await expect(page.locator('#native-inspector')).to_be_visible()
+            await page.locator('#participants-toggle').click()
+            await page.locator('#inspector-toggle').click()
+            await expect(page.locator('#native-participants')).to_be_visible()
             await expect(page.locator('#native-inspector')).to_be_hidden()
-            await expect(page.locator('#inspector-toggle')).to_be_focused()
+            await page.locator('#inspector-toggle').click()
             # Quotes, safely rendered HTML text and intentional duplicate bodies are not
             # silently reinterpreted or coalesced by the presentation layer.
             await page.evaluate('''() => {
@@ -218,16 +238,28 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
                     await expect(page.locator('#send')).to_be_in_viewport()
                     assert await page.locator('#messages').evaluate('el=>el.clientHeight>50'), (width,height)
                     assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth+1'), (theme,width)
+                    if await page.locator('#native-inspector').is_visible():
+                        await page.locator('#inspector-toggle').click()
                     await page.locator('#inspector-toggle').click()
                     await expect(page.locator('#native-inspector')).to_be_visible()
                     assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth+1'), ('drawer',theme,width)
                     await page.locator('#inspector-toggle').click()
                     await expect(page.locator('#message-text')).to_have_value('仍保留草稿')
+                    if width > 1000:
+                        await page.locator('#inspector-toggle').click()
+                    else:
+                        await page.locator('#participants-toggle').click()
+                        await expect(page.locator('#native-participants')).to_be_visible()
+                        await expect(page.locator('#native-inspector')).to_be_hidden()
+                        assert await page.locator('.conversation').evaluate('el=>el.inert')
+                        await page.locator('#participants-title').press('Escape')
+                        await expect(page.locator('#participants-toggle')).to_be_focused()
+                        assert not await page.locator('.conversation').evaluate('el=>el.inert')
                     if width in (1440,420):
                         await page.screenshot(path=str(artifacts/f'native-im-{theme}-{width}.png'))
             assert not errors, errors
             (artifacts/'results.json').write_text(json.dumps({'fixture':True,'shared_workbench':not isolated,
-                'real_vendor_e2e':False,'checks':['IM alignment','duplicate runtime identities','initial and incoming scroll',
+                'real_vendor_e2e':False,'checks':['three-column panels and independent toggles','visible Agent metadata','delivery summary','narrow panel focus/inertness','IM alignment','duplicate runtime identities','initial and incoming scroll',
                 'history anchor','draft/node preservation','binding disclosure/focus','safe Markdown/quotes/attachments',
                 'retry confirmation/cancel','uncertain send identity','300-message bound','locale switch','responsive light/dark'],
                 'browser_errors':errors},indent=2)+'\n',encoding='utf-8')

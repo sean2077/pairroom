@@ -2227,7 +2227,8 @@
   }
 
   function openRoomContextMenu(event, keyboard = false) {
-    const trigger = event.target.closest?.('.tree-room[data-room-id], .room-tab[data-room-id], .room-row[data-room-id]');
+    const trigger = event.target.closest?.('.tree-room[data-room-id], .room-tab[data-room-id], .room-row[data-room-id]')
+      || event.target.closest?.('.tree-room-row')?.querySelector('.tree-room[data-room-id]');
     const room = trigger && roomByID(trigger.dataset.roomId);
     if (!room || !state.authenticated) return;
     event.preventDefault();
@@ -2240,6 +2241,10 @@
     }
     const menu = $('room-context-menu');
     $('context-room-name').textContent = room.name;
+    $('context-close-room').disabled = !state.tabs.includes(room.id);
+    $('context-archive-room').disabled = room.lifecycle === 'archived';
+    const scope = trigger.closest('#room-tree') ? '#room-tree' : '#view';
+    $('context-room-order').replaceChildren(...ordering.roomMenuItems(room.id, scope, () => closeRoomContextMenu(true)));
     menu.hidden = false;
     const rect = trigger.getBoundingClientRect();
     const x = !keyboard && Number.isFinite(event.clientX) ? event.clientX : rect.left;
@@ -2316,7 +2321,7 @@
     openConfirm({
       eyebrow: t('room.archiveRoomUpper'),
       title: t("ui.archiveValue", { value0: (room.name) }),
-      message: t("ui.theActiveTurnStopsFirstThenTheRuntimeIsSuspendedAndThe"),
+      message: t(room.host_mode === 'native' ? 'room.native.boundary' : 'ui.theActiveTurnStopsFirstThenTheRuntimeIsSuspendedAndThe'),
       detail: t("room.archivePreservesState"),
       label: t("ui.archiveRoom"),
       tone: 'danger',
@@ -3109,7 +3114,12 @@
     } else if (state.contextRoomID && event.key === 'Escape') {
       event.preventDefault(); closeRoomContextMenu(true);
     } else if (state.contextRoomID && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
-      event.preventDefault(); $('context-rename-room').focus();
+      event.preventDefault();
+      const items = [...$('room-context-menu').querySelectorAll('[role="menuitem"]:not(:disabled)')];
+      const index = items.indexOf(document.activeElement);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+        : (index + (event.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length;
+      items[next]?.focus({ preventScroll: true });
     } else if (state.contextRoomID && event.key === 'Tab') {
       closeRoomContextMenu(true);
     }
@@ -3118,6 +3128,17 @@
     const room = roomByID(state.contextRoomID);
     closeRoomContextMenu(true);
     if (room && state.authenticated) openRenameDialog(room);
+  });
+  $('context-close-room').addEventListener('click', () => {
+    const roomID = state.contextRoomID;
+    closeRoomContextMenu(true);
+    // Closing a view is not archival: no API call or native process control.
+    if (state.authenticated && state.tabs.includes(roomID)) closeTab(roomID);
+  });
+  $('context-archive-room').addEventListener('click', () => {
+    const room = roomByID(state.contextRoomID);
+    closeRoomContextMenu(true);
+    if (room && state.authenticated && room.lifecycle !== 'archived') archiveRoom(room);
   });
   document.addEventListener('pointerdown', (event) => {
     if (state.contextRoomID && !$('room-context-menu').contains(event.target)) closeRoomContextMenu();

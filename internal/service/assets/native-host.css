@@ -64,7 +64,9 @@ body.workbench-native.native-chat{height:100vh;height:100dvh;overflow:hidden}
 .native-chat .header-actions{flex-shrink:0;gap:6px}
 .native-chat .header-actions button{white-space:nowrap}
 .workbench-native.native-chat .content-grid{position:relative;display:grid;grid-template-columns:minmax(0,1fr);gap:0;flex:1;min-height:0}
-.native-chat.native-details-open .content-grid{grid-template-columns:minmax(0,1fr) 340px}
+.workbench-native.native-chat.native-participants-open .content-grid{grid-template-columns:236px minmax(0,1fr)}
+.workbench-native.native-chat.native-details-open .content-grid{grid-template-columns:minmax(0,1fr) 300px}
+.workbench-native.native-chat.native-participants-open.native-details-open .content-grid{grid-template-columns:236px minmax(0,1fr) 300px}
 .workbench-native.native-chat .conversation{display:flex;flex-direction:column;min-height:0;min-width:0;border:0;border-radius:0;background:var(--bg);overflow:hidden}
 .workbench-native.native-chat .section-header{flex:none;padding:10px 20px;border-bottom:1px solid var(--line);background:var(--wb-panel,var(--panel))}
 .native-chat .toolbar-actions{flex-shrink:0;gap:8px}
@@ -105,15 +107,28 @@ body.workbench-native.native-chat{height:100vh;height:100dvh;overflow:hidden}
 .workbench-native.native-chat .composer textarea{display:block;resize:none;max-height:140px;margin:6px 0;background:transparent;border:0;border-radius:0;padding:6px 0;line-height:1.5}
 .native-chat .composer textarea:focus-visible{outline-offset:0}
 .native-chat .composer small{max-width:70%;font-size:11px}
-.native-chat .native-inspector{min-width:0;overflow:auto;border-left:1px solid var(--line);padding:14px;background:var(--wb-panel,var(--panel))}
+.native-chat :is(.native-inspector,.native-participants){min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;padding:12px;background:var(--wb-panel,var(--panel))}
+.native-chat .native-inspector{border-left:1px solid var(--line)}
+.native-chat .native-participants{border-right:1px solid var(--line)}
+.native-chat :is(.native-inspector,.native-participants)>.section-header{padding:0 0 10px;gap:6px}
+.native-chat [data-close-panel]{font-size:18px;padding:0 8px;min-width:30px;line-height:1}
+.native-chat .panel-description{font-size:11px;margin:10px 0}
+.native-chat .binding-top{flex-wrap:wrap;gap:8px}
+.native-chat .agent-config{grid-template-columns:64px minmax(0,1fr);gap:6px 8px;margin:12px 0}
+.native-chat .agent-config dd{margin:0}
+.native-chat .binding-meta dd{overflow-wrap:anywhere}
+.native-chat .delivery-slot{padding-block:10px;border-top:1px solid var(--line)}
+.native-chat .delivery-slot:first-child{border-top:0}
+.native-chat .delivery-slot h3{font-size:12px;margin-bottom:8px}
 .workbench-native.native-chat .bindings{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin:14px 0}
 .workbench-native.native-chat .binding{padding:12px}
 .workbench-native.native-chat .audit-panel{padding-bottom:12px}
 .workbench-native.native-chat .audit-panel .section-header{padding:10px 12px}
-@media(max-width:880px){
-  .native-chat.native-details-open .content-grid{grid-template-columns:minmax(0,1fr)}
-  .native-chat .native-inspector{position:absolute;inset:0;z-index:1;border-left:0}
-  .native-chat.native-details-open .conversation{visibility:hidden}
+@media(max-width:1000px){
+  .workbench-native.native-chat:is(.native-details-open,.native-participants-open) .content-grid{grid-template-columns:minmax(0,1fr)}
+  .native-chat :is(.native-inspector,.native-participants){position:absolute;inset:0;z-index:1;border:0}
+  .native-chat:is(.native-details-open,.native-participants-open) .conversation{visibility:hidden}
+  .native-chat .agent-config{grid-template-columns:minmax(80px,auto) minmax(0,1fr);gap:5px 12px}
 }
 @media(max-width:600px){
   .workbench-native.native-chat .room-header{padding:10px 12px;flex-wrap:wrap;gap:8px}
@@ -149,3 +164,5 @@ body.workbench-native.native-chat{height:100vh;height:100dvh;overflow:hidden}
 .native-chat .attention-bar{flex:none;max-height:90px;overflow:auto;gap:6px 12px;padding:6px 20px;font-size:11px}.native-chat .attention-bar:empty{display:none}.native-chat .attention-bar button{font-size:12px}.native-chat .message-body{white-space:normal}.native-chat .rich-content pre,.native-chat .review-evidence pre{background:var(--wb-input,var(--soft));color:var(--ink)}.native-chat .user .message-bubble a{color:inherit;text-decoration:underline}.native-chat .native-inspector .message-evidence{min-width:0;overflow-wrap:anywhere}.native-chat .composer-wrap .outbox{margin:0 auto 8px;max-width:1040px}.native-chat .native-inspector .panel{padding:10px}.native-chat .native-inspector .panel .section-header{padding:0 0 8px}.native-chat .review-evidence span{color:inherit}
 .native-chat .composer-row{gap:6px;margin:3px 0}.native-chat .composer-row label{font-size:12px}.native-chat .composer small{flex:1 1 110px;min-width:0;max-width:none}.native-chat .composer-row label:has(input[type=checkbox]){display:flex;align-items:center;gap:6px}
 @media(max-width:420px) and (max-height:760px){.native-chat .eyebrow,.native-chat #room-subtitle,.native-chat .section-header .muted{display:none}.workbench-native.native-chat .composer textarea{min-height:52px;height:52px}.native-chat .participant-summary{padding-top:6px;padding-bottom:6px}.native-chat .attention-bar{max-height:64px;padding:4px 12px}}
+
+.native-chat .native-inspector .message-heading{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;color:var(--muted);font-size:11px}

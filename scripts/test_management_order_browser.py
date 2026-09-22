@@ -80,7 +80,7 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
 
     async def move_via_menu(scope, kind, source, label):
         await row(scope, kind, source).click(button='right')
-        await page.get_by_role('button', name=label, exact=True).click()
+        await page.get_by_role('menuitem' if kind == 'room' else 'button', name=label, exact=True).click()
 
     assert await ids('#view','project') == ['p1','p2','p3']
     assert not await page.locator('.order-handle').count(), 'drag handle buttons must be gone'
@@ -178,6 +178,63 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
     await page.evaluate("document.querySelectorAll('#toasts .toast-close').forEach(b=>b.click())")
     await page.screenshot(path=str(artifacts / 'rooms-ordered-light-en.png'), full_page=True)
 
+    # Sorted Rooms share rename, close and move actions, not two competing menus.
+    await page.evaluate("__snapshot.rooms.find(r=>r.id==='r3').host_mode='native';__snapshot.runtimes.push({room_id:'r3',phase:'active',busy:false,occupies_capacity:false})")
+    await refresh()
+    tree_room = lambda room_id: page.locator(f'#room-tree .tree-room[data-room-id="{room_id}"]')
+    tab = lambda room_id: page.locator(f'#room-tablist .room-tab[data-room-id="{room_id}"]')
+    await tree_room('r1').click()
+    await tree_room('r3').click()
+    await expect(tab('r3')).to_be_visible()
+    await page.wait_for_selector('#room-stage [data-room-id="r3"] iframe')
+    await page.evaluate("window.__keptFrame=document.querySelector('#room-stage [data-room-id=\"r3\"] iframe')")
+    writes = await page.evaluate('__writes.length')
+    moves = await page.evaluate('__moves.length')
+    await tree_room('r1').click(button='right')
+    await expect(page.locator('#room-context-menu')).to_be_visible()
+    await expect(page.locator('#context-rename-room')).to_be_visible()
+    await expect(page.locator('#context-close-room')).to_be_enabled()
+    await page.locator('#context-close-room').click()
+    await expect(tab('r1')).to_have_count(0)
+    await expect(tab('r3')).to_be_visible()
+    assert await page.evaluate('__keptFrame.isConnected'), 'closing background Room recreated the active frame'
+    await tree_room('r1').click()
+    await expect(tab('r1')).to_be_visible()
+    await tree_room('r1').click(button='right')
+    await page.locator('#context-close-room').click()
+    await wait_fixture_state(page, "location.hash==='#/rooms/r3'")
+    await tree_room('r1').focus()
+    await page.keyboard.press('Shift+F10')
+    await expect(page.locator('#context-close-room')).to_be_disabled()
+    await page.keyboard.press('ArrowDown')
+    assert not await page.locator('#context-close-room').evaluate('el=>el===document.activeElement')
+    await page.keyboard.press('Home')
+    await expect(page.locator('#context-rename-room')).to_be_focused()
+    await page.keyboard.press('End')
+    await expect(page.locator('#context-archive-room')).to_be_focused()
+    await page.keyboard.press('Escape')
+    await expect(tree_room('r1')).to_be_focused()
+    # Archive is separate and requires confirmation; Native copy never promises
+    # to stop a user-owned vendor session. Cancelling changes no durable state.
+    await tree_room('r3').click(button='right')
+    await page.locator('#context-archive-room').click()
+    await expect(page.locator('#confirm-dialog')).to_be_visible()
+    await expect(page.locator('#confirm-dialog')).to_contain_text('No agent sessions are started or interrupted')
+    await page.locator('#confirm-dialog [data-close-dialog]').first.click()
+    await tree_room('r3').click(button='right')
+    await page.locator('#context-close-room').click()
+    await expect(tab('r3')).to_have_count(0)
+    await wait_fixture_state(page, "location.hash==='#/overview'")
+    assert await page.evaluate('__writes.length') == writes, 'close/cancel mutated Room lifecycle'
+    assert await page.evaluate('__moves.length') == moves, 'close changed navigation order'
+    await expect(tree_room('r3')).to_be_visible()
+    await tree_room('r3').click()
+    await expect(tab('r3')).to_be_visible()
+    await tree_room('r3').click(button='right')
+    await page.screenshot(path=str(artifacts / 'room-context-actions.png'))
+    await page.locator('#context-close-room').click()
+    await wait_fixture_state(page, "location.hash==='#/overview'")
+
     # The row itself opens the Project even for a missing worktree, so maintenance
     # stays reachable; it can unregister an empty Project but not bypass Room
     # cleanup. The identity area is clicked because an unavailable Project also
@@ -234,7 +291,7 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
         assert not await page.evaluate('__cspErrors')
     assert not errors, errors
     await page.close()
-    return dict(unavailable_project_maintenance_reachable=True,project_single_rows=True,project_row_click_navigation=True,project_and_room_drag_persisted=True,ordering_no_handle_whole_row_drag=True,ordering_context_menu_and_navigation=True,ordering_failure_and_cancellation=True,ordering_poll_dom_stable=True,ordering_filtered_and_scoped=True,diagnostics_single_settings_destination=True,settings_readable_navigation=True)
+    return dict(room_context_close_and_archive_separate=True,room_context_keyboard_navigation=True,room_context_background_and_last_tab_close=True,unavailable_project_maintenance_reachable=True,project_single_rows=True,project_row_click_navigation=True,project_and_room_drag_persisted=True,ordering_no_handle_whole_row_drag=True,ordering_context_menu_and_navigation=True,ordering_failure_and_cancellation=True,ordering_poll_dom_stable=True,ordering_filtered_and_scoped=True,diagnostics_single_settings_destination=True,settings_readable_navigation=True)
 
 
 async def main(args):
