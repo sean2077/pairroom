@@ -401,6 +401,10 @@ func resolveSessionWorkspace(ctx context.Context, action string, o *options, cal
 }
 
 func resolveCommandWorkspace(ctx context.Context, action string, o *options) (string, error) {
+	// Reject mutually exclusive creation targets before any discovery I/O.
+	if action == "bind" && o.create && o.room != "" {
+		return "", errors.New("choose --create or --room, not both")
+	}
 	// Installation is an explicit project setup operation, not session routing.
 	if action == "install" {
 		return workspace(ctx, o.repo)
