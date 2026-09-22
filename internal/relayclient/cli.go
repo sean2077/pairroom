@@ -32,6 +32,7 @@ type options struct {
 	replace, purge, enabled, discard, resend       bool
 	localOnly                                      bool
 	create, brief                                  bool
+	repoExplicit                                   bool
 	timeout                                        int
 	attachments                                    stringsFlag
 	preparedAgents                                 map[model.ActorID]model.AgentSelection
@@ -48,7 +49,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	o := options{}
 	flags := flag.NewFlagSet("pairroom relay "+action, flag.ContinueOnError)
 	flags.SetOutput(diagnostic)
-	flags.StringVar(&o.repo, "repo", ".", "Room project path")
+	flags.StringVar(&o.repo, "repo", ".", "Room project path; defaults to this native session's binding, then workspace discovery")
 	flags.StringVar(&o.room, "room", "", "Room ID")
 	flags.StringVar(&o.slot, "slot", "", "Agent slot: 1 or 2 (bind --create defaults to 1); claude/codex are CLI input aliases only. Never a runtime name")
 	flags.StringVar(&o.kind, "runtime", "", "native harness: claude (cc), codex or grok; install accepts a comma-separated list")
@@ -86,6 +87,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	}
 	provided := make(map[string]bool)
 	flags.Visit(func(f *flag.Flag) { provided[f.Name] = true })
+	o.repoExplicit = provided["repo"]
 	if provided["text-file"] || provided["ref"] {
 		if action != "send" && action != "exchange" {
 			return errors.New("--text-file and --ref apply only to send or exchange")
@@ -150,7 +152,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	if action == "hook" {
 		return runHook(ctx, o, in, out, diagnostic)
 	}
-	root, err := workspace(ctx, o.repo)
+	root, err := resolveCommandWorkspace(ctx, action, &o)
 	if err != nil {
 		return err
 	}
@@ -187,6 +189,13 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	if err != nil {
 		release()
 		return err
+	}
+	if err := validateCommandCaller(c); err != nil {
+		release()
+		return err
+	}
+	if err := rememberSession(c.State); err != nil {
+		_, _ = fmt.Fprintln(diagnostic, "PairRoom: session locator unavailable; use --repo for this binding until repaired.")
 	}
 	cleanupAtomicTemps(dir)
 	if action == "reconcile" || action == "status" {
@@ -288,7 +297,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if e := c.call(ctx, operation, nil, status); e != nil {
 			return e
 		}
-		local := map[string]any{"last_confirmed_seq": c.State.LastConfirmedSeq, "last_seq": c.State.LastSeq, "publication_unknown": errors.Is(err, relay.ErrUnknown)}
+		local := map[string]any{"last_confirmed_seq": c.State.LastConfirmedSeq, "last_seq": c.State.LastSeq, "publication_unknown": errors.Is(err, relay.ErrUnknown), "binding_workspace": c.State.Workspace}
 		if c.State.LastHookAt != "" {
 			local["last_hook_at"] = c.State.LastHookAt
 		}
@@ -326,6 +335,9 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 				return err
 			}
 		}
+		if err := forgetSession(current.State); err != nil {
+			return fmt.Errorf("unbound, but session locator cleanup failed: %w", err)
+		}
 		if o.purge {
 			states, err := statePaths(root)
 			if err != nil {
@@ -362,6 +374,9 @@ func unbindLocalOnly(ctx context.Context, root, dir string, o options, out io.Wr
 	if err := readPrivate(filepath.Join(dir, "state.json"), &state); err != nil {
 		return fmt.Errorf("read local binding state: %w", err)
 	}
+	if err := validateCommandCaller(&Client{State: state}); err != nil {
+		return err
+	}
 	if state.Schema != 2 || !state.Slot.ValidParticipant() {
 		return errors.New("invalid local relay state identity")
 	}
@@ -369,6 +384,9 @@ func unbindLocalOnly(ctx context.Context, root, dir string, o options, out io.Wr
 		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+	}
+	if err := forgetSession(state); err != nil {
+		return fmt.Errorf("locally unbound, but session locator cleanup failed: %w", err)
 	}
 	result := map[string]any{
 		"unbound": "local-only",

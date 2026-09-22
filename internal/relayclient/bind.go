@@ -113,8 +113,8 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		}
 	}
 	canonical, err := filepath.EvalSymlinks(project)
-	if err != nil || canonical != root {
-		return errors.New("bind must run in the Room's canonical project workspace")
+	if err != nil || !sameWorkspace(canonical, root) {
+		return errors.New("bind must target the Room's canonical project workspace")
 	}
 	session, err := requireSessionID(kind)
 	if err != nil {
@@ -133,6 +133,8 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 	}
 	defer release()
 	cleanupAtomicTemps(dir)
+	var previous State
+	_ = readPrivate(filepath.Join(dir, "state.json"), &previous)
 
 	attempt, staged, err := prepareBindAttempt(dir, root, endpointPath, o, slot, kind, session)
 	if err != nil {
@@ -174,6 +176,14 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 	}
 	if err := relay.AtomicJSON(filepath.Join(dir, "state.json"), attempt.State); err != nil {
 		return err
+	}
+	if err := rememberSession(attempt.State); err != nil {
+		return fmt.Errorf("binding committed but session locator unavailable: %w; retry %s, not --create", err, bindCommand(root, endpointPath, o.room, slot))
+	}
+	// A replaced locator is harmless (identity/generation are revalidated on
+	// every lookup). Clean it when possible, without rolling back a valid bind.
+	if previous.SessionID != "" && previous.SessionID != session {
+		_ = forgetSession(previous)
 	}
 	if staged {
 		if err := os.Remove(filepath.Join(dir, bindAttemptFile)); err != nil {
