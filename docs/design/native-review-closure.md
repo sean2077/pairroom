@@ -5,6 +5,12 @@ Implemented for the nine-point review of main `a299c50870f2e1f08d5897ae7a7e9e057
 The Event Log, FIFO, generation authentication and uncertain-effect boundaries
 remain authoritative. No paid/authenticated vendor acceptance is implied below.
 
+Integrated with the concurrent Native IM update in main `9e079ecafd4f383068f129326f46add007b3aa4e`.
+Chat bubbles, reading-position anchoring, participant chips, keyboard focus and the
+collapsible inspector are retained. Pending/history/diagnostics share that inspector.
+The real Chromium presentation fixture passes in light/dark and at 320-pixel width;
+real HTTP/SSE recovery and vendor-model acceptance remain separate test categories.
+
 ## User path
 
 Bind normally. Use the native conversation for decisions and readable Markdown/code;
