@@ -136,26 +136,30 @@ func indexedSessions(caller nativeCaller) ([]State, error) {
 		return nil, err
 	}
 	if len(entries) > 128 {
-		return nil, errors.New("too many native session locators; inspect relay-sessions before retrying")
+		return nil, fmt.Errorf("too many native session locators in %s; inspect and remove stale ones before retrying", dir)
 	}
 	var states []State
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), ".") {
 			continue // interrupted AtomicJSON temporary; never a discovery input
 		}
+		path := filepath.Join(dir, entry.Name())
 		if !strings.HasSuffix(entry.Name(), ".json") || !entry.Type().IsRegular() {
-			return nil, errors.New("invalid native session locator file")
+			return nil, fmt.Errorf("invalid native session locator file %s", path)
 		}
 		var loc sessionLocator
-		if err := readPrivate(filepath.Join(dir, entry.Name()), &loc); err != nil {
+		if err := readPrivate(path, &loc); err != nil {
 			return nil, err
 		}
+		// These errors are the only signal for the documented manual recovery, so
+		// they name the exact disposable file to inspect or remove. Its directory
+		// is per caller session; no other session's locator is ever reported.
 		if loc.Schema != 1 || !filepath.IsAbs(loc.Workspace) || !safePart(loc.Room) || !loc.Slot.ValidParticipant() || !safePart(loc.BindID) || loc.Generation == 0 {
-			return nil, errors.New("invalid native session locator; inspect the disposable relay-sessions index")
+			return nil, fmt.Errorf("invalid native session locator %s; inspect or remove it before retrying", path)
 		}
 		canonical, err := filepath.EvalSymlinks(loc.Workspace)
 		if err != nil || !sameWorkspace(canonical, loc.Workspace) {
-			return nil, errors.New("bound relay workspace is unavailable or redirected; restore it before retrying")
+			return nil, fmt.Errorf("bound relay workspace %s is unavailable or redirected; restore it or remove the locator %s before retrying", loc.Workspace, path)
 		}
 		stateDir, err := existingDir(loc.Workspace, ".pairroom", "rooms", loc.Room, "slots", string(loc.Slot))
 		if errors.Is(err, os.ErrNotExist) {
@@ -174,7 +178,7 @@ func indexedSessions(caller nativeCaller) ([]State, error) {
 			continue // replaced/revoked identity: never follow the new session
 		}
 		if entry.Name() != locatorFilename(s) {
-			return nil, errors.New("native session locator filename mismatch")
+			return nil, fmt.Errorf("native session locator %s does not match its confirmed binding; inspect or remove it before retrying", path)
 		}
 		states = append(states, s)
 	}

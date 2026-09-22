@@ -69,12 +69,14 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 			return writeJSON(out, map[string]any{})
 		}
 	}
-	paths, err := statePaths(root)
-	if err != nil {
-		return err
-	}
+	// Resolution pinned one Room/slot for this session, so match that binding
+	// directly instead of walking every binding in the workspace. Both are
+	// required together; anything else keeps the whole-workspace candidates.
+	var paths []string
 	if safePart(o.room) && model.ActorID(o.slot).ValidParticipant() {
 		paths = []string{filepath.Join(root, ".pairroom", "rooms", o.room, "slots", o.slot, "state.json")}
+	} else if paths, err = statePaths(root); err != nil {
+		return err
 	}
 	candidates, err := boundHookCandidates(paths, kind, hook.SessionID)
 	if err != nil {

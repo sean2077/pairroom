@@ -81,8 +81,11 @@ call can rebuild a locator when both hints have moved. Unbound hooks are inert,
 including outside Git. Hook environment/session disagreement remains an error,
 not an invitation to associate another identity.
 
-A corrupted disposable locator fails closed; inspect/remove that locator before
-recovering through an explicit original workspace. Do not remove workspace
+A corrupted disposable locator fails closed; the reported error names the exact
+locator file, which must be inspected or removed before recovering through an
+explicit original workspace. Explicit `--repo` does not bypass a locator that
+cannot resolve, and a bound workspace that no longer exists blocks that session's
+relay commands until the locator is removed. Do not remove workspace
 credentials or copy `.pairroom` into a task worktree as a path workaround.
 
 ## File and permission boundaries

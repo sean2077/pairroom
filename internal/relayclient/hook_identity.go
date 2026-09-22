@@ -2,6 +2,7 @@ package relayclient
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -17,7 +18,13 @@ func boundHookCandidates(paths []string, kind model.RuntimeKind, session string)
 	lineageMatches := 0
 	for _, path := range paths {
 		var s State
-		if err := readPrivate(path, &s); err != nil {
+		// A binding removed between resolution and this read (a concurrent local
+		// unbind, or a bind replaced under the same session) no longer exists:
+		// that is inert, not a Stop-hook failure. A present file that cannot be
+		// read still fails closed below.
+		if err := readPrivate(path, &s); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
 			return nil, err
 		}
 		if s.Schema != 2 || s.Runtime != kind || s.Generation == 0 || s.SessionID == "" {
