@@ -61,12 +61,12 @@ See [Native setup and usage](docs/NATIVE_RELAY.md) for installation prerequisite
 
 Choose **Native** when creating a Room to keep both participants in their original Claude Code/Codex/Grok Build sessions. PairRoom supplies bindings, durable relay and audit, without spawning or interrupting processes. Install and approve the project Stop hooks, then run bind inside each session; it associates immediately from the harness's session-ID environment.
 
-**Highlight — a conversation loop where waiting is free and every message costs one turn.** Both sessions keep their own harness; the loop works like this:
+**Highlight — native collaboration without model polling while the CLI waits.** Both sessions keep their own harness; the loop works like this:
 
 - Two commands to set up: `/pairroom-relay <topic>` in the first session, and the short `bind --room <id> --slot <n>` it prints in the second.
-- Your visible reply is the transport: the approved Stop hook publishes the complete addressed reply into the Room FIFO — no retelling, no summary turn, no human copy-paste. Mention handles (`@peer`, `@user`) route it; a reply without a handle ends the relay.
+- Your visible reply is the transport: the approved Stop hook publishes the complete addressed reply into the Room FIFO — no retelling, no summary turn, no human copy-paste. The exact peer handle returned by bind (for example `@codex`) and `@user` route it; a reply without a handle ends the relay.
 - Reachability across turns: a 30-second park window after each turn collects fast answers; in a wake-enabled Room the Service can nudge an existing Claude Code session through its captured inbox socket, or a Codex peer through `codex queue` (fixed body-free nudge, rate-limited, audited, no automatic retry). Claude inbound policy still applies; socket submission is not model acceptance. Background `relay wait` remains a fallback where the harness surfaces completion. See [Claude inbox setup and limits](docs/design/claude-inbox-wake.md). PairRoom never starts or interrupts agent sessions.
-- Waiting lives in the CLI process, not the model: HTTP polls renew internally, so idle time costs zero tokens, and every delivered message costs the receiver exactly one native turn.
+- Waiting lives in the CLI process, not the model: HTTP polls renew internally without calling a model. Actual wake, continuation, tool and billing behavior depends on the harness; no exact turn count or cost saving is guaranteed.
 - Dated working-session evidence (2026-09-16/17, Windows; Claude Code 2.1.273 + codex-cli 0.154.0, both authenticated): two native sessions ran a full overnight loop without human relaying of message content — delegation, four adversarial design-review rounds, implementation, line-level review, merge — with zero message loss. Working-session evidence; it does not replace the release-gate vendor E2E. Wake surfaces: [verified vendor wake surfaces](docs/NATIVE_RELAY.md#verified-vendor-wake-surfaces).
 
 The `pairroom-relay` skill ships in `skills/` for skill installers (`npx skills add sean2077/pairroom`) and is also written by `relay install`. Once loaded, `/pairroom-relay <topic>` creates the Room and binds that session and reports the peer's join command; `pairroom relay bind` runs zero-flag inside a recognized session. Reuse that binding for follow-up reviews rather than creating a Room per round.
@@ -74,6 +74,21 @@ The `pairroom-relay` skill ships in `skills/` for skill installers (`npx skills 
 [Native setup](docs/GETTING_STARTED.md#keep-codex-desktop-a-native-room) and [recovery commands](docs/CLI_REFERENCE.md#native-relay-commands) explain bounded park, foreground collection and explicit Retry. Provider/model/effort/permissions remain native-controlled. Authenticated multi-round vendor E2E is still a release gate; synthetic tests are not evidence of model acceptance.
 
 Grok uses [foreground collection](docs/CLI_REFERENCE.md#grok-build-native) to avoid clipped hook feedback; clipped outgoing replies require explicit full-text send/exchange.
+
+### Inspect and recover without replay
+
+Native Rooms keep **Pending items** separate from recent chat. Inspect older messages,
+review Markdown/code, compare optional Git review versions, and diagnose the current
+Room without reading an entire transcript. An unconfirmed browser send survives
+refresh with its original ID; reloading checks its receipt and never resends it.
+Browser recovery stores the draft locally (not credentials); explicitly forgetting
+it does not cancel work already accepted by the Service.
+
+`pairroom relay doctor` explains local hook/capability and transport observations.
+`relay history --pending` pages unresolved work; `relay history --id ID` reads one
+message without claiming/retrying it. Optional `send --review` and `relay review
+--id ID` identify/check the reviewed Git version, not an execution approval.
+See [Native recovery and review](docs/design/native-review-closure.md).
 
 ## Desktop and source development
 

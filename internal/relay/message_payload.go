@@ -8,13 +8,13 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 )
 
-var errSendPayloadConflict = errors.New("client message ID already refers to a different body, target, attachments, or quote; retry the original request unchanged")
+var errSendPayloadConflict = errors.New("client message ID already refers to a different body, target, attachments, quote, or review evidence; retry the original request unchanged")
 
 // Same-ID recovery may return the original receipt only for the same delivered
 // payload. State, timestamps, generation and receipt are transport facts, not
 // request content. A new ID still intentionally publishes identical content.
 func sameMessagePayload(a, b Message) bool {
-	if a.From != b.From || a.To != b.To || a.Text != b.Text || len(a.Attachments) != len(b.Attachments) || !reflect.DeepEqual(a.Quote, b.Quote) {
+	if a.From != b.From || a.To != b.To || a.Text != b.Text || len(a.Attachments) != len(b.Attachments) || !reflect.DeepEqual(a.Quote, b.Quote) || !reflect.DeepEqual(a.Review, b.Review) {
 		return false
 	}
 	for i := range a.Attachments {

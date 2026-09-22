@@ -21,13 +21,21 @@ import (
 
 	"github.com/sean2077/pairroom/internal/claudewake"
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/protocol"
 	"github.com/sean2077/pairroom/internal/relay"
+	"github.com/sean2077/pairroom/internal/review"
+	"github.com/sean2077/pairroom/internal/version"
 )
 
 type options struct {
+	review                                         bool
+	reviewRepo, reviewBase                         string
 	repo, room, slot, kind, endpoint, text, id, to string
 	name, peer                                     string
 	textFile, outputFile                           string
+	cursor, since                                  string
+	limit                                          int
+	pending                                        bool
 	references                                     stringsFlag
 	replace, purge, enabled, discard, resend       bool
 	localOnly                                      bool
@@ -42,7 +50,7 @@ func (s *stringsFlag) String() string     { return strings.Join(*s, ",") }
 func (s *stringsFlag) Set(v string) error { *s = append(*s, v); return nil }
 func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("use pairroom relay install|bind|hook|send|exchange|wait|status|peer|park|nudge|reconcile|unbind (see docs/CLI_REFERENCE.md)")
+		return errors.New("use pairroom relay install|bind|hook|send|exchange|wait|status|history|doctor|review|peer|park|nudge|reconcile|unbind (see docs/CLI_REFERENCE.md)")
 	}
 	action := args[0]
 	o := options{}
@@ -75,6 +83,13 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	}
 	flags.IntVar(&o.timeout, "timeout", defaultTimeout, "foreground wait seconds (0 or 1–21600); 0 waits until cancellation; hook park remains at most 30 seconds")
 	flags.Var(&o.attachments, "attach", "image attachment path (repeatable)")
+	flags.BoolVar(&o.review, "review", false, "send/exchange: attach a bounded Git review observation")
+	flags.StringVar(&o.reviewRepo, "review-repo", "", "review evidence checkout; defaults to --repo (does not rebind)")
+	flags.StringVar(&o.reviewBase, "review-base", "", "send/exchange --review: base commit/ref, default HEAD")
+	flags.StringVar(&o.cursor, "cursor", "", "history: opaque next_cursor from a previous page")
+	flags.StringVar(&o.since, "since", "", "history: minimum publication time (RFC3339)")
+	flags.IntVar(&o.limit, "limit", 50, "history: page size (1–100; also text-budgeted)")
+	flags.BoolVar(&o.pending, "pending", false, "history: oldest unresolved messages, independently of recent chat")
 	if err := flags.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -86,6 +101,36 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	}
 	provided := make(map[string]bool)
 	flags.Visit(func(f *flag.Flag) { provided[f.Name] = true })
+	if (provided["review"] || provided["review-base"]) && (action != "send" && action != "exchange") {
+		return errors.New("--review/--review-base apply only to send/exchange")
+	}
+	if provided["review-base"] && !o.review {
+		return errors.New("--review-base requires --review")
+	}
+	if provided["review-repo"] && action != "review" && !o.review {
+		return errors.New("--review-repo requires review or send/exchange --review")
+	}
+	if action == "review" && o.id == "" {
+		return errors.New("review requires the published message --id")
+	}
+	if provided["cursor"] || provided["since"] || provided["limit"] || provided["pending"] {
+		if action != "history" {
+			return errors.New("history filters apply only to history")
+		}
+	}
+	if action == "history" {
+		if o.limit < 1 || o.limit > relay.HistoryPageLimit {
+			return errors.New("history limit must be 1–100")
+		}
+		if o.id != "" && (o.cursor != "" || o.pending || o.since != "") {
+			return errors.New("choose --id or a history page")
+		}
+		if o.since != "" {
+			if _, err := time.Parse(time.RFC3339, o.since); err != nil {
+				return errors.New("--since must be RFC3339")
+			}
+		}
+	}
 	if provided["text-file"] || provided["ref"] {
 		if action != "send" && action != "exchange" {
 			return errors.New("--text-file and --ref apply only to send or exchange")
@@ -244,8 +289,20 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 			}
 			attachments = append(attachments, id)
 		}
+		var anchor *review.Anchor
+		if o.review {
+			workspace := o.reviewRepo
+			if workspace == "" {
+				workspace = root
+			}
+			value, e := review.Capture(ctx, workspace, o.reviewBase)
+			if e != nil {
+				return e
+			}
+			anchor = &value
+		}
 		var msg relay.Message
-		err = c.call(ctx, "send", map[string]any{"id": o.id, "text": text, "to": to, "attachment_ids": attachments}, &msg)
+		err = c.call(ctx, "send", map[string]any{"id": o.id, "text": text, "to": to, "attachment_ids": attachments, "review": anchor}, &msg)
 		if err != nil {
 			return fmt.Errorf("%w; publication uncertain: retry with the SAME --id %s, not a new ID", err, o.id)
 		}
@@ -264,6 +321,40 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	case "wait":
 		_, err := deliverForeground(ctx, c, o.timeout, out)
 		return err
+	case "history":
+		var since time.Time
+		if o.since != "" {
+			since, _ = time.Parse(time.RFC3339, o.since)
+		}
+		var page relay.HistoryPage
+		if err := c.call(ctx, "history", relay.HistoryQuery{ID: o.id, Cursor: o.cursor, Limit: o.limit, Pending: o.pending, Since: since}, &page); err != nil {
+			return err
+		}
+		return writeJSON(out, page)
+	case "review":
+		var page relay.HistoryPage
+		if err := c.call(ctx, "history", relay.HistoryQuery{ID: o.id}, &page); err != nil {
+			return err
+		}
+		if len(page.Messages) != 1 || page.Messages[0].Review == nil {
+			return errors.New("message has no review anchor")
+		}
+		workspace := o.reviewRepo
+		if workspace == "" {
+			workspace = root
+		}
+		return writeJSON(out, map[string]any{"id": o.id, "review": page.Messages[0].Review, "status": review.Check(ctx, workspace, *page.Messages[0].Review), "notice": "Observation only; unchanged evidence is not approval. Ignored files require explicit --ref evidence."})
+	case "doctor":
+		var report map[string]any
+		if err := c.call(ctx, "doctor", nil, &report); err != nil {
+			return err
+		}
+		hook := "installed"
+		if installed(root, c.State.Runtime) != nil {
+			hook = "missing_or_disabled"
+		}
+		report["local"] = map[string]any{"cli_version": version.Current, "protocol": protocol.NativeVersion, "protocol_match": report["protocol"] == protocol.NativeVersion, "service_version_match": report["service_version"] == version.Current, "workspace_match": root == c.State.Workspace, "hook_installation": hook, "hook_approval": "unknown", "last_hook_at": c.State.LastHookAt}
+		return writeJSON(out, report)
 	case "peer":
 		var peer relay.Binding
 		if err := c.call(ctx, "peer", nil, &peer); err != nil {
@@ -277,7 +368,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		}
 		return writeJSON(out, result)
 	case "nudge":
-		return writeJSON(out, map[string]string{"notice": "PairRoom cannot inject outside a park window. Run the following in the associated native session.", "command": fmt.Sprintf("pairroom relay wait --room %s --slot %s", o.room, o.slot)})
+		return writeJSON(out, map[string]string{"notice": "Automatic wake is Service-managed for eligible Claude/Codex sessions. This receive-only fallback runs inside the associated session; relay doctor explains the current boundary.", "command": fmt.Sprintf("pairroom relay wait --room %s --slot %s", o.room, o.slot)})
 	case "status", "reconcile":
 		var status any = &relay.Snapshot{}
 		operation := "status"

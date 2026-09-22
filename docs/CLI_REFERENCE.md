@@ -98,6 +98,7 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--collaboration-instructions`
 - `--config`
 - `--create`
+- `--cursor`
 - `--daemon-control-file`
 - `--data-dir`
 - `--data-root`
@@ -113,6 +114,7 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--idle-timeout`
 - `--input`
 - `--json`
+- `--limit`
 - `--listen`
 - `--live`
 - `--local-only`
@@ -124,17 +126,22 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--output`
 - `--output-file`
 - `--peer-runtime`
+- `--pending`
 - `--purge-hooks`
 - `--recover-stale-lock`
 - `--ref`
 - `--replace`
 - `--repo`
 - `--resend`
+- `--review`
+- `--review-base`
+- `--review-repo`
 - `--room`
 - `--runtime`
 - `--runtime-limit`
 - `--service-file`
 - `--shutdown-timeout`
+- `--since`
 - `--slot`
 - `--stall-warning-seconds`
 - `--text`
@@ -190,6 +197,11 @@ All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Norma
 | `send --to @user --attach <image>` | Human escalation with optional repeatable image paths; stdin supplies text when `--text`, `--text-file` and `--ref` are absent |
 | `exchange --id <client-id> --text <body>` | One explicit peer send, then the next FIFO input; accepts `--text-file`, `--ref` and `--output-file`; defaults to a 3,600-second wait, supports `--timeout 0` for no PairRoom total deadline, and finite values up to 21,600 seconds; not a correlated request/reply transaction |
 | `wait --timeout 0` | Foreground collection for an associated session; default 3,600 seconds, `0` means no PairRoom total deadline, finite values may be 1–21,600 seconds; renews only successful empty HTTP polls; stdout precedes ack; `--output-file NEW_PATH` persists the envelope and prints a locator |
+| `doctor` | Read-only current Native Room diagnostics plus local hook installation, CLI/protocol version match and last hook observation. Does not activate a suspended runtime or contact a model; approval and model acceptance remain unknown. |
+| `history --id ID` | Read exactly one published message as evidence, never collect or replay it. |
+| `history [--pending] [--cursor CURSOR] [--limit 1–100] [--since RFC3339]` | Bounded pages: newest history or oldest unresolved work, independent of recent chat. Use returned `next_cursor`; `--id` cannot be combined with filters. |
+| `send/exchange --review [--review-repo PATH] [--review-base REF]` | Add an optional immutable Git review version to an ordinary explicit message. Trusted evidence checkout defaults to `--repo`; base defaults to HEAD. Capture is bounded and needs an existing commit. No new file contents are sent. |
+| `review --id ID [--review-repo PATH]` | Compare a published review version with the selected local checkout. A different checkout is unverified; unchanged observation is not approval. |
 | `status --brief` / `reconcile --brief` | Bounded authenticated transport summary, generated without copying message bodies, native session/transcript references or the full audit log; includes inbox counts and at most eight unknown-delivery recovery IDs. `status --brief` adds body-free collection hints only for inboxes queued at that snapshot, including manual Codex `wake_command` and `wake_notice` only when that target's authenticated vendor session is known |
 | `status` / `peer` | Bounded body-free delivery summary by default (`--brief=false` for history) / optional peer session and Runtime metadata |
 | `park --enabled=false` | Disable hook parking without removing the binding; foreground wait remains available |

@@ -137,3 +137,17 @@ Relay secrets remain in owner-only workspace `credentials` files; their hashes, 
 Claude external wake additionally stores `claude-inbox.json` (and any crash-left `.claude-inbox-*` temporary files) in the bound workspace slot directory. It contains the official local inbox address/token and exact binding identity; never export or paste it. Bind and confirmed Stop refresh it; missing/invalid environment removes stale capability, and generation matching prevents reuse after replacement. The Service reads only a bounded regular private file, not vendor registries/transcripts. Unix checks owner-only files/directories and an owned non-world-writable socket; Windows creates and verifies a protected owner-only DACL and accepts only local named pipes owned by the same OS user with anonymous SQOS. This does not isolate hostile processes running as the same OS user. Credentials never enter Event Log, API/browser projections, command arguments or diagnostics. Socket submission is not vendor acceptance; `crossSessionInbound` remains authoritative and is never rewritten.
 
 Native relay displays `handed_off` only for confirmed CLI stdout. It cannot prove model acceptance. Delivery without acknowledgement is `unknown`, never automatically replayed; explicit Retry may duplicate work. Unpublished interrupted replies or pre-atomic-write crashes can be undetectably lost. Synthetic hook/HTTP/browser tests do not establish authenticated Claude Code/Codex/Grok Build E2E. Grok hook readiness never claims or acknowledges inbox content; the associated foreground command must deliver it. A clipped Grok Stop reply is not published as complete. Inspect histories and workspace effects before recovery and redact private message text before sharing audit evidence.
+
+### Native browser recovery and review observations
+
+Native outbox drafts are plaintext in same-origin browser storage until a matching
+receipt is confirmed or the user explicitly forgets them. They contain message text,
+not authentication/capability tokens. Storage failure blocks new publication. Treat
+a shared browser profile as able to read those drafts; Forget does not cancel work.
+
+History reads preserve receipt redaction and never authorize replay. Optional Git
+review anchors are untrusted evidence metadata, not permissions. The Service compares
+only its configured project root, never a path supplied by an incoming anchor.
+Captures disable external diff/textconv, bound command time/output and untracked
+file reads, and hash symlink targets as link text rather than following external
+files. Ignored files are excluded; use explicit retained/hash-checked file references.

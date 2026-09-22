@@ -121,6 +121,7 @@ func startNativeHostRuntime(ctx context.Context, registry *Registry, project Pro
 				return
 			case <-ticker.C:
 				_ = engine.Reap()
+				n.waker.Reconcile(runCtx)
 			}
 		}
 	}()
@@ -132,6 +133,7 @@ func (n *nativeHostRuntime) ProxyBaseURL() string    { return n.baseURL }
 func (n *nativeHostRuntime) ProxyToken() string      { return n.token }
 func (n *nativeHostRuntime) Busy() bool              { return n.engine.Busy() }
 func (n *nativeHostRuntime) InUse() bool             { return n.active.Load() > 0 }
+func (n *nativeHostRuntime) PendingWake() bool       { return n.waker.InUse() }
 func (n *nativeHostRuntime) LastActivity() time.Time { return time.Unix(0, n.last.Load()) }
 func (n *nativeHostRuntime) SetDraining(v bool)      { n.engine.SetDraining(v) }
 func (n *nativeHostRuntime) Fatal() error {
@@ -159,6 +161,7 @@ func (n *nativeHostRuntime) Close(ctx context.Context) error {
 		n.engine.SetDraining(true)
 		n.cancel()
 		<-n.done
+		n.waker.Close()
 		n.closeErr = errors.Join(n.http.Shutdown(ctx), n.engine.Close())
 		if n.closeErr != nil {
 			_ = n.http.Close()
@@ -226,10 +229,13 @@ func (n *nativeHostRuntime) snapshot() map[string]any {
 	return n.snapshotWithRelay(n.engine.Snapshot())
 }
 func (n *nativeHostRuntime) snapshotWithRelay(projection any) map[string]any {
-	return map[string]any{"room": n.room, "relay": projection, "protocol": protocol.NativeVersion, "config_notice": "Provider, model, effort, instructions and permissions are display-only here; configure them in the native harness.", "identities": model.ParticipantIdentities(map[model.ActorID]model.RuntimeKind{model.ActorSlot1: n.room.Agents[model.ActorSlot1].Runtime, model.ActorSlot2: n.room.Agents[model.ActorSlot2].Runtime})}
+	return map[string]any{"room": n.room, "relay": projection, "protocol": protocol.NativeVersion, "config_notice": "Provider, model, effort, instructions and permissions are display-only here; configure them in the native harness.", "summary": n.engine.Summary(), "identities": model.ParticipantIdentities(map[model.ActorID]model.RuntimeKind{model.ActorSlot1: n.room.Agents[model.ActorSlot1].Runtime, model.ActorSlot2: n.room.Agents[model.ActorSlot2].Runtime})}
 }
 func (n *nativeHostRuntime) serve(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
+	if n.serveInspection(w, r) {
+		return
+	}
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		assets := map[string]string{"/": "native-host.html", "/index.html": "native-host.html", "/app.js": "native-host.js", "/styles.css": "native-host.css", "/favicon.svg": "favicon.svg"}
 		if name, ok := assets[p]; ok {

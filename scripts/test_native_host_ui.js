@@ -7,12 +7,14 @@ const vm = require('node:vm');
 const { webcrypto } = require('node:crypto');
 
 class Element {
-  constructor() {
+  constructor(tagName = "div") {
+    this.tagName = tagName;
     this.children = []; this.events = {}; this.dataset = {}; this.className = '';
     this.value = ''; this.textContent = ''; this.files = []; this.options = [];
     this.disabled = false; this.scrollHeight = 10; this.scrollTop = 0; this.clientHeight = 10;
     this.classList = { toggle() {} };
   }
+  appendChild(node) { this.append(node); return node; }
   append(...nodes) { for (const node of nodes) { node.parent = this; this.children.push(node); } }
   prepend(node) { node.parent = this; this.children.unshift(node); }
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
@@ -26,10 +28,11 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const response = (data, status = 200) => ({ ok: status < 400, status, json: async () => data });
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
 
-async function fixture({ uploadFailure = false } = {}) {
+async function fixture({ uploadFailure = false, storage, receipts = new Map(), draft = true } = {}) {
+  if (!storage) { const values=new Map(); storage={getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)}; }
   const elements = new Map();
   const $ = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
-  const document = { getElementById: $, createElement: () => new Element(), addEventListener() {}, hidden: false };
+  const document = { getElementById: $, createElement: tag => new Element(tag), createTextNode: text => Object.assign(new Element("#text"), {textContent:text}), addEventListener() {}, hidden: false };
   $('target').value = 'slot2';
   const reads = [], uploads = [], sends = [], uploadGate = deferred();
   let failSend = true;
@@ -41,33 +44,37 @@ async function fixture({ uploadFailure = false } = {}) {
   const fetch = async (url, options) => {
     if (url === 'api/v1/session') return response({ csrf_token: 'csrf' });
     if (url.startsWith('api/v1/snapshot')) { reads.push(url); return response(snapshot); }
+    if (url.startsWith('api/v1/pending')) return response({messages:[],total:0});
+    if (url.startsWith('api/v1/sends/')) {const m=receipts.get(decodeURIComponent(url.split('/').pop()));return response({found:Boolean(m),message:m});}
     assert.equal(options.headers.get('X-PairRoom-CSRF'), 'csrf');
     if (url === 'api/v1/attachments') {
       uploads.push(options.body); await uploadGate.promise;
       return response(uploadFailure ? { error: 'invalid image' } : { id: 'image' }, uploadFailure ? 400 : 200);
     }
     if (url === 'api/v1/messages') {
-      sends.push(JSON.parse(options.body));
+      const payload=JSON.parse(options.body); sends.push(payload);
+      receipts.set(payload.id,{from:'user',text:payload.text,to:payload.to,attachments:payload.attachment_ids.map(id=>({id})),review:payload.review});
       if (failSend) { failSend = false; throw new Error('lost acceptance response'); }
-      return response({ accepted: true });
+      return response(receipts.get(payload.id));
     }
     throw new Error(`unexpected request ${url}`);
   };
   const context = vm.createContext({
     document, window: { PairRoomI18n: { t: k => k, apply() {}, lang: 'en' }, addEventListener() {} },
-    fetch, Headers, FormData, TextEncoder, crypto: webcrypto, URLSearchParams,
+    localStorage:storage,fetch, Headers, FormData, TextEncoder, crypto: webcrypto, URLSearchParams,
     location: { hash: '', pathname: '/', search: '' }, history: { replaceState() {} },
     EventSource: class { addEventListener() {} close() {} }, setInterval: () => 1, clearInterval() {}, console
   });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../internal/service/assets/native-host.js'), 'utf8'), context);
+  for (const source of ['../internal/webui/assets/native-outbox.js','../internal/webui/assets/richtext.js','../internal/service/assets/native-host.js'])
+    vm.runInContext(fs.readFileSync(path.join(__dirname,source),'utf8'),context);
   await tick();
-  assert.deepEqual(reads, ['api/v1/snapshot?tail=1']);
+  assert.ok(reads.length >= 1 && reads.every(p => p === 'api/v1/snapshot?tail=1'), 'unbounded history loaded during refresh');
   assert.equal($('message-count').textContent, '5000');
   assert.match($('messages').querySelector('.truncated-note').textContent, /1 \/ 5000$/);
-  $('message-text').value = 'review';
-  $('attachment').files = [new File(['image bytes'], 'image.png', { type: 'image/png' })];
+  if(draft)$('message-text').value = 'review';
+  if(draft)$('attachment').files = [new File(['image bytes'], 'image.png', { type: 'image/png' })];
   const submit = () => $('composer').events.submit({ preventDefault() {} });
-  return { $, reads, uploads, sends, uploadGate, submit };
+  return { $, reads, uploads, sends, uploadGate, submit, storage, receipts };
 }
 
 async function main() {
@@ -125,6 +132,14 @@ async function main() {
   assert.equal(bad.sends.length, 0);
   assert.equal(bad.$('message-text').value, 'review');
   for (const id of ['message-text', 'target', 'attachment', 'send']) assert.equal(bad.$(id).disabled, false);
+  const interrupted = await fixture(); interrupted.uploadGate.resolve(); await interrupted.submit();
+  const reloaded = await fixture({storage:interrupted.storage,receipts:interrupted.receipts,draft:false});await tick();
+  assert.equal(reloaded.sends.length,0,'refresh automatically re-published accepted work');
+  assert.equal(reloaded.$('message-text').value,'');
+  assert.equal(reloaded.$('outbox').hidden,true,'confirmed original receipt did not clear recovery draft');
+  const noStorage=await fixture({storage:{getItem:()=>null,setItem(){throw Error('quota');},removeItem(){}}});noStorage.uploadGate.resolve();await noStorage.submit();
+  assert.equal(noStorage.sends.length,0,'publication preceded durable browser draft');
+  assert.equal(noStorage.$('message-text').disabled,false);
   console.log('Native UI: bounded reads, accurate totals, UTF-8 validation, single submission and immutable retry payload passed.');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

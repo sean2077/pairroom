@@ -193,6 +193,66 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 await asyncio.to_thread(cli,['send','--room',room_id,'--slot','slot1','--id','restart-fixture','--text','Queued across Service restart'])
                 checkpoint=json.loads((root/'state'/'service-registry.json').read_text())
                 assert checkpoint['schema']==3 and all(r.get('host_mode') in ('embedded','native') for r in checkpoint['rooms'])
+                print('Native browser: independent pending history and accepted-response loss across refresh', flush=True)
+                # Add terminal publications through the actual authenticated API,
+                # forcing the original unknown message outside the recent window.
+                for i in range(301):
+                    response = await context.request.post(surface+'/api/v1/messages', headers=headers,
+                        data={'id':f'window-{i}','text':'Completed history fixture','to':'slot2'})
+                    assert response.status == 200
+                    terminal = await response.json()
+                    response = await context.request.post(surface+f'/api/v1/messages/{terminal["id"]}/cancel',headers=headers,data={})
+                    assert response.status == 200
+                tail=await read_json(context,snapshot_url+'?tail=1')
+                assert not any(m['id']==interrupted_id for m in tail['relay']['messages'])
+                pending=await read_json(context,surface+'/api/v1/pending?limit=10')
+                assert any(m['id']==interrupted_id and m['state']=='unknown' for m in pending['messages'])
+                await page.goto(surface+'/')
+                await expect(page.locator(f'[data-pending-id="{interrupted_id}"]')).to_be_visible()
+                await page.locator(f'[data-pending-id="{interrupted_id}"] .message-action').first.click()
+                await expect(page.locator(f'[data-history-id="{interrupted_id}"]')).to_be_visible()
+                await page.locator('#diagnose').click()
+                await expect(page.locator('#diagnostics')).to_contain_text('Uncertain delivery')
+                published=[]
+                async def lose_response(route):
+                    if route.request.method != 'POST':
+                        await route.continue_(); return
+                    payload=route.request.post_data_json
+                    response=await route.fetch()
+                    assert response.status == 200
+                    published.append(payload)
+                    await route.abort('failed') # Only the response is lost; Service acceptance is real.
+                await page.route('**/api/v1/messages',lose_response)
+                await page.locator('#message-text').fill('One publication across reload')
+                await page.locator('#send').click()
+                await expect(page.locator('#outbox')).to_be_visible()
+                assert len(published)==1
+                original_id=published[0]['id']
+                await page.reload()
+                await expect(page.locator('#outbox')).not_to_be_visible()
+                assert len(published)==1,'reload automatically sent again'
+                receipt=await read_json(context,surface+f'/api/v1/sends/{original_id}')
+                assert receipt['found'] and receipt['message']['text']=='One publication across reload'
+                # The original uncertain body has not been duplicated in the authoritative history.
+                full=await read_json(context,snapshot_url)
+                assert sum(m['text']=='One publication across reload' for m in full['relay']['messages'])==1
+                await page.unroute('**/api/v1/messages',lose_response)
+                # A real optional review version can be displayed and checked without model calls.
+                await page.locator('#review-anchor').check()
+                await page.locator('#message-text').fill('## Review evidence\n\n**Versioned** review with `code` and [unsafe](javascript:alert).')
+                await page.locator('#send').click()
+                await expect(page.locator('#outbox')).not_to_be_visible()
+                review_message=await wait_snapshot(context,snapshot_url,lambda v:any(m.get('review') for m in v['relay']['messages']))
+                reviewed=next(m for m in review_message['relay']['messages'] if m.get('review'))
+                card=page.locator(f'[data-message-id="{reviewed["id"]}"]')
+                await expect(card.locator('.rich-content h2')).to_have_text('Review evidence')
+                assert await card.locator('a[href^="javascript:"]').count()==0
+                await card.locator('.review-evidence summary').click()
+                await card.locator('[data-review]').click()
+                await expect(card).to_contain_text('Same observed version')
+                (repo/'review-new-file.txt').write_text('changed version',encoding='utf-8')
+                await card.locator('[data-review]').click()
+                await expect(card).to_contain_text('Evidence changed')
                 # Use a direct native surface for responsive/locale screenshots.
                 await page.goto(surface+'/')
                 await expect(page.locator('#messages-title')).to_have_text('Relay messages')
@@ -221,7 +281,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     'mode':'synthetic native-hook inputs over real CLI/HTTP/SSE/browser',
                     'real_vendor_e2e':False,'native_creation':True,'native_grok_selection':True,'bind_env_association':True,
                     'fifo_stdout_ack':True,'idempotent_explicit_send':True,'conflicting_send_id_rejected':True,'three_bidirectional_rounds':True,
-                    'killed_cli_unknown':True,'explicit_retry_confirmation':True,'cancel_only_queued':True,
+                    'pending_outside_tail':True,'refresh_receipt_recovery_without_resend':True,'review_anchor_staleness':True,'safe_native_markdown':True,'killed_cli_unknown':True,'explicit_retry_confirmation':True,'cancel_only_queued':True,
                     'checkpoint_schema_3_canonical':True,'restart_queue_and_bindings':True,
                     'english_chinese_light_dark_responsive':True,'browser_errors':errors,
                 },indent=2)+'\n',encoding='utf-8')

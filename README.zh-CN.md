@@ -61,12 +61,12 @@ PairRoom 没有自动接力次数或费用上限。持久化恢复会区分安�
 
 创建 Room 时选择 **Native**，双方保留在自己的 Claude Code / Codex / Grok Build 原生会话中；PairRoom 负责绑定、持久化中继和审计，不启动或中断原生进程。安装并批准项目级 Stop hooks，然后在各自会话内运行 bind；它会读取 harness 的会话 ID 环境变量并立即完成关联。
 
-**亮点——等待免费、每条消息只花一个回合的原生对话循环。** 双方保留各自的 harness，循环如下工作：
+**亮点——CLI 等待期间不需要模型轮询的原生协作。** 双方保留各自的 harness，循环如下工作：
 
 - 两条命令就绪：第一个会话运行 `/pairroom-relay <topic>`，第二个会话运行它打印的简短 `bind --room <id> --slot <n>`。
-- 你的可见回复就是传输：获批的 Stop hook 把完整的寻址回复发布进 Room FIFO——无转述、无总结回合、无人工复制粘贴。Mention handle（`@peer`、`@user`）负责路由；不带 handle 的回复即结束中继。
+- 你的可见回复就是传输：获批的 Stop hook 把完整的寻址回复发布进 Room FIFO——无转述、无总结回合、无人工复制粘贴。bind 返回的准确 peer handle（例如 `@codex`）和 `@user` 负责路由；不带 handle 的回复即结束中继。
 - 跨回合可达性：每回合结束后的 30 秒 park 窗口收集快速回应；开启自动唤醒的 Room 中，Service 可通过绑定时捕获的 inbox socket 提醒现有 Claude Code 会话，或通过 `codex queue` 提醒 Codex。只发送固定无正文提示，限流、有审计、不自动重试；Claude 的接收权限仍然有效，socket 已提交不代表模型已读取。后台 `relay wait` 仍可作为支持完成通知的 harness 的回退路径。详见 [Claude inbox 配置与限制](docs/design/claude-inbox-wake.md)。PairRoom 不启动、恢复副本或中断原生会话。
-- 等待发生在 CLI 进程层而非模型层：HTTP 长轮询由 CLI 内部续期，空闲时间零 token 成本；每条送达的消息恰好花费接收方一个原生回合。
+- 等待发生在 CLI 进程层而非模型层：HTTP 长轮询由 CLI 内部续期，不调用模型。实际唤醒、续聊、工具回合与计费行为取决于 harness，不保证固定回合数或节省比例。
 - 带日期的工作会话实证（2026-09-16/17，Windows；Claude Code 2.1.273 + codex-cli 0.154.0，均已认证）：两个原生会话通宵无人值守跑完整循环——委派、四轮对抗设计评审、实现、行级评审、合并——零消息丢失、零人工内容搬运。此为工作会话证据，不替代发布门槛的真实 vendor E2E。唤醒面详见[已验证的 vendor 唤醒面](docs/NATIVE_RELAY.md#verified-vendor-wake-surfaces)。
 
 `pairroom-relay` 技能位于 `skills/`，可经技能安装器分发（`npx skills add sean2077/pairroom`），`relay install` 也写入同一份文件。加载后 `/pairroom-relay <topic>` 创建 Room、绑定当前会话并返回对方的加入命令；`pairroom relay bind` 可在识别到的原生会话内零参数运行。后续审查复用绑定，不要每轮重建 Room。
@@ -74,6 +74,18 @@ PairRoom 没有自动接力次数或费用上限。持久化恢复会区分安�
 [Native 入门](docs/GETTING_STARTED.md#keep-codex-desktop-a-native-room)与[恢复命令](docs/CLI_REFERENCE.md#native-relay-commands)说明有界 park、前台取件和显式 Retry。Provider、模型、effort、权限仍由原生会话控制。真实认证后的多轮互通仍是发布验收门槛，合成测试不代表模型已接受消息。
 
 Grok 使用[前台收件](docs/CLI_REFERENCE.md#grok-build-native)避免 Hook 反馈截断；被截断的输出需要显式发送完整原文。
+
+## Native 恢复与评审
+
+“待处理事项”独立于最近聊天，旧的排队/不确定消息不会因历史窗口截断而失去入口。
+页面支持 Markdown、代码与折叠证据；可定向查询历史、查看当前 Room 诊断，并核验可选的 Git 评审版本。
+浏览器保存未确认发送的原 ID 和不可变草稿（不保存凭据）；刷新仅查询收据，不自动重发。
+明确清除本地草稿不会取消 Service 已接受的任务。
+
+`pairroom relay doctor` 查看实际能力和收件观察；`relay history --pending` 分页查看待处理消息，
+`relay history --id ID` 只读查看一条消息。`send --review` 可附上评审版本，
+`relay review --id ID` 比较当前工作区；版本相同并不代表批准执行。
+唤醒冷却按接收者分别计算，Room 保留总预算；尚未尝试的限流消息会到期重查，可能已提交的唤醒仍不自动重试。
 
 ## 桌面端与源码开发
 

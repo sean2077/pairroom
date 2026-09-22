@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Native review/recovery closure: deferred per-receiver wake scheduling; independent pending and bounded history views; refresh-safe original-ID browser outbox; read-only Native diagnostics; replay-built current-work indexes; optional Git review version checks; shared safe Markdown and evidence/attention UI. No vendor model acceptance or billed-token improvement is inferred from these changes.
+
 - Add external wake for already-running Claude Code Native sessions through the session's inbox socket (Unix domain socket or local Windows named pipe). Confirmed bind/Stop captures the official environment capability in a private, generation-bound sidecar; the Service sends only a fixed nudge through the existing reservation, rate-limit and no-retry path. Windows capability files use protected owner-only DACLs. Socket writes are audited as `submitted`, not model acceptance; missing/stale capabilities, permission policy and failures retain the normal `relay wait` fallback. No Claude launch/resume, Channels opt-in, permission rewrite or Stop timeout increase. Synthetic socket/pipe and HTTP tests do not establish authenticated vendor E2E.
 
 ## [v5.3.0] — 2026-09-20

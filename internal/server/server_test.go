@@ -195,7 +195,7 @@ func TestRichConversationAssetsAreEmbedded(t *testing.T) {
 	}
 
 	rich := httptest.NewRecorder()
-	server.Handler().ServeHTTP(rich, localRequest(http.MethodGet, "/richtext.js", nil))
+	server.Handler().ServeHTTP(rich, localRequest(http.MethodGet, "/_pairroom/richtext.js", nil))
 	if rich.Code != http.StatusOK || !strings.Contains(rich.Body.String(), "createImage") || !strings.Contains(rich.Body.String(), "code-copy") {
 		t.Fatalf("richtext asset is incomplete: status=%d", rich.Code)
 	}

@@ -62,7 +62,7 @@ func peerWakeTemplate(ctx context.Context, c *Client) wakeTemplate {
 	if c.call(ctx, "peer", nil, &peer) != nil {
 		return wakeTemplate{}
 	}
-	return codexWakeTemplate(peer.Runtime, peer.SessionID)
+	return nativeWakeAdvice(peer.Runtime, peer.SessionID)
 }
 
 func queuedDeliveryHintFor(ctx context.Context, c *Client, msg relay.Message) *queuedDeliveryHint {
@@ -71,7 +71,7 @@ func queuedDeliveryHintFor(ctx context.Context, c *Client, msg relay.Message) *q
 	}
 	wake := peerWakeTemplate(ctx, c)
 	return &queuedDeliveryHint{
-		Notice:      "Message is queued and was not handed off at this response. An enabled Room's Service automatically wakes an idle Codex peer; if it remains queued, run this command in the peer's associated native session.",
+		Notice:      "Message is queued and was not handed off at this response. Eligible Claude inbox and Codex queue wakes are Service-managed; unattempted rate-limited work is deferred. Use relay doctor on uncertainty, or run this command in the peer's associated native session.",
 		Command:     waitCommand(c.State.Room, msg.To),
 		WakeCommand: wake.Command,
 		WakeNotice:  wake.Notice,
@@ -95,13 +95,13 @@ func queuedInboxHints(ctx context.Context, c *Client, summary *relay.Summary) []
 		if queued == 0 {
 			continue
 		}
-		notice := "Peer inbox has queued input at this status snapshot. An enabled Room's Service automatically wakes an idle Codex peer; run this command in the peer's associated native session to collect it."
+		notice := "Peer inbox has queued input at this status snapshot. Eligible Claude/Codex external wake is Service-managed. relay doctor explains capability, policy and cooldown; run this command in the peer's associated native session to collect it."
 		if slot == c.State.Slot {
-			notice = "This associated inbox has queued input at this status snapshot. An enabled Room's Service automatically wakes an idle Codex peer; run this command to collect it."
+			notice = "This associated inbox has queued input at this status snapshot. Eligible Claude/Codex external wake is Service-managed. relay doctor explains capability, policy and cooldown; run this command to collect it."
 		}
 		wake := wakeTemplate{}
 		if slot == c.State.Slot {
-			wake = codexWakeTemplate(c.State.Runtime, c.State.SessionID)
+			wake = nativeWakeAdvice(c.State.Runtime, c.State.SessionID)
 		} else {
 			if !peerWakeLoaded {
 				peerWake = peerWakeTemplate(ctx, c)
@@ -112,4 +112,22 @@ func queuedInboxHints(ctx context.Context, c *Client, summary *relay.Summary) []
 		hints = append(hints, queuedInboxHint{Slot: slot, Queued: queued, Notice: notice, Command: waitCommand(c.State.Room, slot), WakeCommand: wake.Command, WakeNotice: wake.Notice})
 	}
 	return hints
+}
+
+// Advice never asserts that a captured capability or a vendor policy is usable.
+// The detailed doctor is an explicit read, not an extra call on every send.
+func nativeWakeAdvice(kind model.RuntimeKind, session string) wakeTemplate {
+	if kind.Canonical() == model.RuntimeCodex {
+		return codexWakeTemplate(kind, session)
+	}
+	if session == "" {
+		return wakeTemplate{}
+	}
+	switch kind.Canonical() {
+	case model.RuntimeClaude:
+		return wakeTemplate{Notice: "Claude external wake requires a captured local inbox capability and native inbound permission. No raw socket command is printed; use relay doctor or receive-only wait."}
+	case model.RuntimeGrok:
+		return wakeTemplate{Notice: "Grok external wake is not integrated. Use a harness-tracked background wait only when its completion reaches the model, or receive-only foreground wait."}
+	}
+	return wakeTemplate{}
 }

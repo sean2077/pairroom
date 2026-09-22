@@ -243,3 +243,26 @@ A native send ID is bound to its accepted delivered payload. Retrying it with di
 `GET api/v1/health` retains Room authentication and returns `{ok:true,host_mode:"native"}` for a healthy relay. A fatal Event Log writer or listener state returns HTTP 503 with `ok:false`, `code:"runtime_not_ready"` and a fixed, non-sensitive error message. It never reports raw storage/listener errors, and healthy relay transport does not establish native model presence or readiness. Fatal writer errors also terminate the SSE stream instead of continuing healthy-looking heartbeats.
 
 Native delivery states are `queued`, `delivering`, `handed_off`, `unknown`, `cancelled`, and `human` (UI escalation). `handed_off` means stdout was written, not native acceptance. Display binding plus last observed activity rather than live-presence claims. Public snapshots and exports never expose credential hashes, raw secrets or claim receipts.
+
+## Native inspection (authenticated Room surface)
+
+- `GET /api/v1/pending?limit=10&cursor=...`: oldest unresolved messages, separate
+  from chat tail, with `total`, `has_more`, `next_cursor`, `sequence` and `messages`.
+- `GET /api/v1/history?id=...` or `?limit=20&cursor=...&since=...`: single-message
+  lookup or newest-first history. Queries reject unknown/duplicate filters and
+  incompatible cursors. Invalid native queries use the existing 409 error contract.
+- `GET /api/v1/sends/<client-id>`: `{found,message?}` for an original **user**
+  publication ID only; peer client IDs cannot match it. Absence is not proof an
+  in-flight request cannot still arrive; explicit retries retain the same ID.
+- `GET /api/v1/diagnostics`: secret-free session/transport observations and next
+  actions; no wake or vendor request is issued. The Management diagnostics POST
+  accepts `{"mode":"native","room_id":"..."}` for an already active Native Room.
+- `GET /api/v1/review`: capture bounded Git evidence from the Room's trusted project;
+  `?id=...` compares that project's current state to a message's review observation.
+  Incoming anchor paths are never used as read authority.
+
+These routes also work through the authenticated Management surface gateway.
+Relay credentials use POST `history`/`doctor` through the existing relay API.
+History, inspection and review do not grant native execution/approval control.
+The Native snapshot additionally exposes a body-free `summary`; its sequence
+identifies the observation independently of the bounded chat snapshot.

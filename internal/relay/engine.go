@@ -34,22 +34,28 @@ type Config struct {
 }
 
 type Engine struct {
-	mu         sync.Mutex
-	cfg        Config
-	bindings   map[model.ActorID]bindingFact
-	seenBinds  map[string]bool
-	messages   map[string]Message
-	order      []string
-	inFlight   map[string]struct{} // rebuilt from message facts; never scans terminal history
-	sends      map[string]string
-	reports    map[string]Publication
-	lastReport map[string]uint64
-	audit      []Audit
-	sequence   uint64
-	changed    chan struct{}
-	closed     bool
-	draining   bool
-	fatal      error
+	lastUserMessage string
+	mu              sync.Mutex
+	cfg             Config
+	bindings        map[model.ActorID]bindingFact
+	seenBinds       map[string]bool
+	messages        map[string]Message
+	order           []string
+	positions       map[string]int
+	queued          map[model.ActorID][]string
+	unresolved      []string
+	counts          map[model.ActorID]InboxSummary
+	lastWake        map[model.ActorID]WakeObservation
+	inFlight        map[string]struct{} // rebuilt from message facts; never scans terminal history
+	sends           map[string]string
+	reports         map[string]Publication
+	lastReport      map[string]uint64
+	audit           []Audit
+	sequence        uint64
+	changed         chan struct{}
+	closed          bool
+	draining        bool
+	fatal           error
 	// wakeEnabled defaults true (per-Room default-on, DP2); only a durable
 	// native.wake.updated fact changes it. wakeReserved dedupes reservations
 	// across replay and runtime; waiters counts Claim long-polls blocked per
@@ -173,6 +179,7 @@ func (e *Engine) append(kind string, actor model.ActorID, payload any) error {
 }
 func (e *Engine) apply(ev model.Event) error {
 	e.sequence = ev.Seq
+	e.initIndexes()
 	detail := ""
 	switch ev.Kind {
 	case EventBinding:
@@ -191,7 +198,8 @@ func (e *Engine) apply(ev model.Event) error {
 		e.seenBinds[b.BindID] = true
 		// Revocation is atomic with invalidating old-generation inbox work. Work
 		// already handed off cannot be undone, nor does an empty inbox prove idle.
-		for _, m := range e.messages {
+		for _, id := range append([]string(nil), e.unresolved...) {
+			m := e.messages[id]
 			if m.To == b.Slot && (!b.Active || m.TargetGeneration != b.Generation) {
 				if m.State == "queued" {
 					m.State = "cancelled"
@@ -288,6 +296,7 @@ func (e *Engine) apply(ev model.Event) error {
 		if (p.Outcome == "accepted" || p.Outcome == "submitted") != (p.Reason == "") {
 			return errors.New("native wake attempt reason does not match outcome")
 		}
+		e.lastWake[p.Target] = WakeObservation{Outcome: p.Outcome, Reason: p.Reason, At: ev.CreatedAt}
 		detail = "wake " + p.Outcome
 		if p.Reason != "" {
 			detail += " (" + p.Reason + ")"
@@ -307,17 +316,6 @@ func validMessageState(s string) bool {
 		return true
 	}
 	return false
-}
-func (e *Engine) putMessage(m Message) {
-	if _, exists := e.messages[m.ID]; !exists {
-		e.order = append(e.order, m.ID)
-	}
-	e.messages[m.ID] = m
-	if m.State == "delivering" {
-		e.inFlight[m.ID] = struct{}{}
-	} else {
-		delete(e.inFlight, m.ID)
-	}
 }
 func (e *Engine) commitBinding(b bindingFact) error {
 	appendFact := func() error { return e.append(EventBinding, b.Slot, b) }
@@ -575,8 +573,17 @@ func (e *Engine) sendLocked(from, to model.ActorID, req SendRequest, key string)
 	if strings.TrimSpace(req.Text) == "" && len(req.AttachmentIDs) == 0 {
 		return Message{}, errors.New("message text or attachments required")
 	}
+	if req.Review != nil {
+		if err := req.Review.Validate(); err != nil {
+			return Message{}, err
+		}
+	}
 	original, retry := e.messages[e.sends[key]]
 	m := e.makeMessage(from, to, req.Text, "send")
+	if req.Review != nil {
+		v := *req.Review
+		m.Review = &v
+	}
 	if len(req.AttachmentIDs) > 0 {
 		var values []model.Attachment
 		var err error
@@ -657,6 +664,9 @@ func (e *Engine) handle(actor model.ActorID) string {
 }
 func (e *Engine) envelope(m Message) (string, error) {
 	input := model.AgentInput{From: m.From, To: m.To, FromHandle: e.handle(m.From), Text: m.Text, Quote: m.Quote}
+	if m.Review != nil {
+		input.Text += m.Review.Envelope()
+	}
 	for _, a := range m.Attachments {
 		if e.cfg.Media == nil {
 			return "", errors.New("attachment store unavailable")
@@ -695,20 +705,12 @@ func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
 			e.mu.Unlock()
 			return nil, err
 		}
-		busy := false
+		busy := e.counts[a.Slot].Delivering > 0
 		var next *Message
-		for _, id := range e.order {
-			m := e.messages[id]
-			if m.To != a.Slot || m.TargetGeneration != a.Generation {
-				continue
-			}
-			if m.State == "delivering" {
-				busy = true
-				break
-			}
-			if m.State == "queued" && next == nil {
-				v := m
-				next = &v
+		if ids := e.queued[a.Slot]; len(ids) > 0 {
+			m := e.messages[ids[0]]
+			if m.TargetGeneration == a.Generation {
+				next = &m
 			}
 		}
 		if !busy && next != nil {
@@ -781,7 +783,8 @@ func (e *Engine) Ack(a Auth, id, receipt string) error {
 		// reached stdout even after the lease expired. A live explicit Retry
 		// still wins: settling the original behind a pending retry would
 		// duplicate work the operator already re-queued.
-		for _, other := range e.messages {
+		for _, key := range e.unresolved {
+			other := e.messages[key]
 			if other.RetryOf == id && (other.State == "queued" || other.State == "delivering") {
 				return errors.New("an explicit Retry is pending; resolve it before acknowledging the original delivery")
 			}
@@ -830,7 +833,8 @@ func (e *Engine) Retry(id string) (Message, error) {
 	if !ok || old.State != "unknown" {
 		return Message{}, errors.New("only unknown messages can be explicitly retried")
 	}
-	for _, m := range e.messages {
+	for _, key := range e.unresolved {
+		m := e.messages[key]
 		if m.RetryOf == id && (m.State == "queued" || m.State == "delivering") {
 			return Message{}, errors.New("a retry is already pending")
 		}
@@ -838,6 +842,7 @@ func (e *Engine) Retry(id string) (Message, error) {
 	m := e.makeMessage(old.From, old.To, old.Text, "retry")
 	m.Attachments = append([]model.Attachment(nil), old.Attachments...)
 	m.Quote = old.Quote
+	m.Review = old.Review
 	m.RetryOf = id
 	if _, err := e.envelope(m); err != nil {
 		return Message{}, err
@@ -927,6 +932,10 @@ func (e *Engine) WaitChanges(ctx context.Context, after uint64) error {
 }
 func cloneMessage(m Message) Message {
 	m.Receipt = ""
+	if m.Review != nil {
+		v := *m.Review
+		m.Review = &v
+	}
 	m.Attachments = append([]model.Attachment(nil), m.Attachments...)
 	if m.Quote != nil {
 		v := *m.Quote

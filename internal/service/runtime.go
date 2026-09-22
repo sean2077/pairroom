@@ -50,6 +50,10 @@ type RuntimeActivity interface {
 	LastActivity() time.Time
 }
 
+// RuntimeWakeLease keeps unattempted delayed transport work reachable without
+// calling it an HTTP request, model activity or workspace ownership.
+type RuntimeWakeLease interface{ PendingWake() bool }
+
 // RuntimeLease is an optional capability. InUse reports an in-flight Room HTTP
 // request, including the long-lived /events stream. Idle suspend must not close
 // that runtime; last-used still advances so LRU prefers truly idle Rooms.
@@ -115,6 +119,7 @@ type RuntimeStatus struct {
 	Phase            RuntimePhase `json:"phase"`
 	QueuePosition    int          `json:"queue_position,omitempty"`
 	Busy             bool         `json:"busy"`
+	WakePending      bool         `json:"native_wake_pending,omitempty"`
 	HTTPInUse        bool         `json:"http_in_use,omitempty"`
 	OccupiesCapacity bool         `json:"occupies_capacity"`
 	URL              string       `json:"url,omitempty"`
@@ -721,7 +726,7 @@ func (m *RuntimeManager) reconcile() {
 				}
 			}
 		}
-		if entry.phase != RuntimeActive || entry.runtime == nil || entry.runtime.Busy() || runtimeInUse(entry.runtime) {
+		if entry.phase != RuntimeActive || entry.runtime == nil || entry.runtime.Busy() || runtimeKeepAlive(entry.runtime) {
 			continue
 		}
 		if now.Sub(entry.lastUsed) < m.cfg.IdleTimeout {
@@ -951,7 +956,7 @@ func (m *RuntimeManager) idleLRULocked() (string, *runtimeEntry) {
 	var selected *runtimeEntry
 	for roomID, entry := range m.entries {
 		m.refreshUsageLocked(entry)
-		if entry.phase != RuntimeActive || entry.runtime == nil || entry.runtime.Busy() || runtimeInUse(entry.runtime) {
+		if entry.phase != RuntimeActive || entry.runtime == nil || entry.runtime.Busy() || runtimeKeepAlive(entry.runtime) {
 			continue
 		}
 		if m.nativeExemptLocked(roomID) {
@@ -974,7 +979,7 @@ func (m *RuntimeManager) refreshUsageLocked(entry *runtimeEntry) {
 	// refresh a long background turn or SSE stream could finish with an old
 	// timestamp and be suspended immediately instead of receiving a full
 	// idle-timeout window.
-	if entry.runtime.Busy() || runtimeInUse(entry.runtime) {
+	if entry.runtime.Busy() || runtimeKeepAlive(entry.runtime) {
 		if now := m.cfg.Now(); now.After(entry.lastUsed) {
 			entry.lastUsed = now
 		}
@@ -986,6 +991,14 @@ func (m *RuntimeManager) refreshUsageLocked(entry *runtimeEntry) {
 	if used := activity.LastActivity(); used.After(entry.lastUsed) {
 		entry.lastUsed = used
 	}
+}
+
+func runtimeWakePending(runtime RoomRuntime) bool {
+	lease, ok := runtime.(RuntimeWakeLease)
+	return ok && lease.PendingWake()
+}
+func runtimeKeepAlive(runtime RoomRuntime) bool {
+	return runtimeInUse(runtime) || runtimeWakePending(runtime)
 }
 
 func runtimeInUse(runtime RoomRuntime) bool {
@@ -1004,6 +1017,7 @@ func (m *RuntimeManager) statusLocked(roomID string, entry *runtimeEntry) Runtim
 	if entry.runtime != nil && entry.phase != RuntimeFailed {
 		status.Busy = entry.runtime.Busy()
 		status.HTTPInUse = runtimeInUse(entry.runtime)
+		status.WakePending = runtimeWakePending(entry.runtime)
 		status.URL = entry.runtime.URL()
 	}
 	if entry.phase == RuntimeQueued {

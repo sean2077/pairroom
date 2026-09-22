@@ -16,7 +16,7 @@ class Node {
 }
 const window = {};
 const document = { createElement: tag => new Node(tag), createTextNode: text => new Node('#text', text) };
-vm.runInNewContext(fs.readFileSync('internal/server/assets/richtext.js', 'utf8'), {window, document});
+vm.runInNewContext(fs.readFileSync('internal/webui/assets/richtext.js', 'utf8'), {window, document});
 const render = source => { const root = new Node('main'); window.PairRoomRichText.render(root, source); return root; };
 const flatten = node => [node, ...node.children.flatMap(flatten)];
 const root = render('# Heading\n\n**bold _nested_** and `literal <script>`\n\n[unsafe](javascript:alert) [safe](https://example.com)\n\n```js\n<script>\n```');

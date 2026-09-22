@@ -77,3 +77,21 @@ or stale capability disables that wake attempt, not relay. Unix owner/mode
 checks and Windows protected owner-only DACLs guard the file. Treat both it and
 crash-left `.claude-inbox-*` temporaries as secrets; unbind removes the sidecar and slot cleanup removes stale
 temporaries. See [Claude inbox wake](design/claude-inbox-wake.md).
+
+## Native current-work and browser recovery projections
+
+Current queued/unresolved ordinals, inbox counters, latest human-directed message
+and wake observations are rebuilt from existing facts during replay. No Room schema
+migration, history deletion or second durable queue is introduced. Wake reservations
+remain the durable no-retry and rate-budget facts; future eligible times are derived.
+
+A Native browser stores at most one unconfirmed immutable user publication per Room
+under `pairroom.native.outbox.v1.<room>` in same-origin localStorage. Its schema, Room
+ID and bounded payload are validated before use. It may contain private message text,
+attachment IDs and review metadata, but no bearer, CSRF, relay credential, session ID
+or Claude inbox token. Persistence must succeed before POST; quota/corruption prevents
+publication rather than silently losing the recovery identity. Reload performs only
+a receipt GET. Explicit same-ID retries preserve payload; confirmed matching receipts
+clear the record. Explicit Forget removes only browser state, never queued work.
+Storage is plaintext origin-local recovery, not encrypted archival or an execution
+log. Clearing browser data loses recovery; inspect server history before resending.

@@ -13,27 +13,29 @@ import (
 // than a second hard-coded asset list. Adding a script must not work standalone
 // but silently fail through Management's authenticated iframe gateway.
 func TestSurfaceAllowsEveryRoomEntryPointAsset(t *testing.T) {
-	page, err := os.ReadFile("../server/assets/index.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	assets := regexp.MustCompile(`<(?:script|link)\b[^>]*\b(?:src|href)="([^"]+)"`).FindAllSubmatch(page, -1)
-	if len(assets) == 0 {
-		t.Fatal("Room entry point has no external assets; contract probe found nothing")
-	}
-	for _, match := range assets {
-		asset, err := url.Parse(string(match[1]))
-		if err != nil || asset.IsAbs() || asset.Host != "" {
-			t.Fatalf("unexpected external Room asset: %q", match[1])
+	for _, entry := range []string{"../server/assets/index.html", "assets/native-host.html"} {
+		page, err := os.ReadFile(entry)
+		if err != nil {
+			t.Fatal(err)
 		}
-		path := "/" + strings.TrimPrefix(asset.Path, "/")
-		for _, method := range []string{http.MethodGet, http.MethodHead} {
-			if !allowedSurfaceRequest(method, path) {
-				t.Errorf("gateway blocks Room asset: %s %s", method, path)
+		assets := regexp.MustCompile(`<(?:script|link)\b[^>]*\b(?:src|href)="([^"]+)"`).FindAllSubmatch(page, -1)
+		if len(assets) == 0 {
+			t.Fatal("Room entry point has no external assets; contract probe found nothing")
+		}
+		for _, match := range assets {
+			asset, err := url.Parse(string(match[1]))
+			if err != nil || asset.IsAbs() || asset.Host != "" {
+				t.Fatalf("unexpected external Room asset: %q", match[1])
 			}
-		}
-		if allowedSurfaceRequest(http.MethodPost, path) {
-			t.Errorf("gateway allows a write to static asset %s", path)
+			path := "/" + strings.TrimPrefix(asset.Path, "/")
+			for _, method := range []string{http.MethodGet, http.MethodHead} {
+				if !allowedSurfaceRequest(method, path) {
+					t.Errorf("gateway blocks Room asset: %s %s", method, path)
+				}
+			}
+			if allowedSurfaceRequest(http.MethodPost, path) {
+				t.Errorf("gateway allows a write to static asset %s", path)
+			}
 		}
 	}
 }
