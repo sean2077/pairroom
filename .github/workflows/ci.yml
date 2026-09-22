@@ -46,7 +46,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Test native configuration, Event Log, fan-out, and daemon behavior
-        run: go test -count=1 ./internal/config ./internal/store ./internal/bus ./internal/daemon ./internal/relay ./internal/relayclient ./internal/claudewake
+        run: go test -count=1 ./internal/config ./internal/store ./internal/bus ./internal/daemon ./internal/relay ./internal/relayclient ./internal/claudewake ./internal/review
       - name: Test per-process environment and credential boundaries
         run: go test -count=1 ./internal/agent -run 'Test(Redactor|RuntimeEnvironment)'
       - name: Test Agent pair profile persistence and API boundaries
