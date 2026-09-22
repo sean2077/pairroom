@@ -88,6 +88,9 @@ it does not cancel work already accepted by the Service.
 `relay history --pending` pages unresolved work; `relay history --id ID` reads one
 message without claiming/retrying it. Optional `send --review` and `relay review
 --id ID` identify/check the reviewed Git version, not an execution approval.
+Wake cooldown is per receiving slot while the Room keeps a shared hourly budget;
+unattempted rate-limited work is rechecked when it becomes eligible, and a
+reserved or possibly submitted wake is never automatically retried.
 See [Native recovery and review](docs/design/native-review-closure.md).
 
 ## Desktop and source development

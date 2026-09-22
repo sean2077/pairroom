@@ -75,7 +75,7 @@ PairRoom 没有自动接力次数或费用上限。持久化恢复会区分安�
 
 Grok 使用[前台收件](docs/CLI_REFERENCE.md#grok-build-native)避免 Hook 反馈截断；被截断的输出需要显式发送完整原文。
 
-## Native 恢复与评审
+### Native 恢复与评审
 
 “待处理事项”独立于最近聊天，旧的排队/不确定消息不会因历史窗口截断而失去入口。
 页面支持 Markdown、代码与折叠证据；可定向查询历史、查看当前 Room 诊断，并核验可选的 Git 评审版本。
@@ -86,6 +86,7 @@ Grok 使用[前台收件](docs/CLI_REFERENCE.md#grok-build-native)避免 Hook �
 `relay history --id ID` 只读查看一条消息。`send --review` 可附上评审版本，
 `relay review --id ID` 比较当前工作区；版本相同并不代表批准执行。
 唤醒冷却按接收者分别计算，Room 保留总预算；尚未尝试的限流消息会到期重查，可能已提交的唤醒仍不自动重试。
+详见[原生评审与恢复](docs/design/native-review-closure.md)。
 
 ## 桌面端与源码开发
 
