@@ -4,7 +4,7 @@
   const tr = key => window.PairRoomI18n.t(`room.native.${key}`);
   let csrf = '', snapshot = null, stream = null, pendingSend = null, refreshing = false, refreshAgain = false, sending = false;
   const messageNodes = new Map();
-  let bindingsKey = '', auditKey = '', activityTimer = null;
+  let bindingsKey = '', auditKey = '', activityTimer = null, messagesRendered = false;
   const language = () => window.PairRoomI18n?.lang || 'en';
   const element = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
   const time = value => value ? new Intl.DateTimeFormat(language(), {dateStyle:'short',timeStyle:'medium'}).format(new Date(value)) : tr('never');
@@ -18,54 +18,119 @@
     return res.status === 204 ? null : res.json();
   }
   function handle(slot) { return snapshot?.identities?.[slot]?.MentionHandle || (slot === 'user' ? tr('user') : slot); }
+  function readingPosition() {
+    const list = $('messages');
+    const stick = !messagesRendered || list.scrollHeight-list.scrollTop-list.clientHeight < 70;
+    const top = list.getBoundingClientRect().top;
+    const anchor = stick ? null : [...list.querySelectorAll('[data-message-id]')].find(node => node.getBoundingClientRect().bottom > top);
+    return {stick, anchor, top: anchor?.getBoundingClientRect().top};
+  }
+  function restoreReadingPosition(position) {
+    const list = $('messages');
+    if(position.stick)list.scrollTop=list.scrollHeight;
+    else if(position.anchor?.isConnected)list.scrollTop+=position.anchor.getBoundingClientRect().top-position.top;
+  }
+  function showInspector(open) {
+    const position = readingPosition();
+    $('native-inspector').hidden = !open;
+    document.body.classList.toggle('native-details-open', open);
+    $('inspector-toggle').setAttribute('aria-expanded', String(open));
+    for (const button of $('participant-summary').children) button.setAttribute('aria-expanded', String(open));
+    restoreReadingPosition(position);
+  }
+  $('inspector-toggle').addEventListener('click', () => showInspector($('native-inspector').hidden));
+  $('scroll-bottom').addEventListener('click', () => { $('messages').scrollTop = $('messages').scrollHeight; });
+  $('native-inspector').addEventListener('keydown', event => {
+    if (event.key === 'Escape') { showInspector(false); $('inspector-toggle').focus(); }
+  });
   function translations() {
     window.PairRoomI18n.apply(document);
     $('message-text').placeholder=tr('placeholder'); bindingsKey='';auditKey='';messageNodes.forEach(v=>{v.key='';});
     if (snapshot) render(snapshot);
   }
   function renderBindings(value) {
-    const key=JSON.stringify([value.relay.bindings,value.room.agents,language()]);if(key===bindingsKey)return;bindingsKey=key;
+    const key=JSON.stringify([value.relay.bindings,value.room.agents,value.identities,language()]);if(key===bindingsKey)return;bindingsKey=key;
+    // Activity refreshes must not collapse a binding's open command/config detail.
+    const disclosures = new Set([...$('bindings').querySelectorAll('details[open]')].map(node => node.dataset.disclosure));
+    const focused = document.activeElement?.dataset.nativeFocus;
+    const chips = [];
     const nodes=['slot1','slot2'].map((slot,index)=>{
       const b=value.relay.bindings[slot]||{};const selection=value.room.agents[slot]||{};
-      const card=element('article',undefined,'binding');card.dataset.slot=slot;
-      const top=element('div',undefined,'binding-top');top.append(element('h3',`${index+1} · ${handle(slot)}`),element('span',tr(!b.active?'unbound':b.session_id?'bound':'pending'),'badge'));
-      if(b.active){const park=element('button',tr(b.park_enabled?'parkOn':'parkOff'));park.type='button';park.dataset.park=slot;park.setAttribute('aria-pressed',String(Boolean(b.park_enabled)));park.addEventListener('click',async()=>{park.disabled=true;try{await request(`api/v1/participants/${slot}/park`,{method:'POST',body:JSON.stringify({enabled:!b.park_enabled})});status(tr('controls'));await refresh();}catch(e){status(e.message,true);}finally{park.disabled=false;}});top.append(park);}
+      const state = tr(!b.active?'unbound':b.session_id?'bound':'pending');
+      const chip = element('button', undefined, `participant-chip ${slot}`);
+      chip.type = 'button'; chip.dataset.participant = slot; chip.dataset.nativeFocus = `${slot}-chip`;
+      chip.setAttribute('aria-controls', 'native-inspector');
+      chip.setAttribute('aria-expanded', String(!$('native-inspector').hidden));
+      chip.title = tr('activityHelp');
+      chip.append(element('span', String(index+1), 'participant-avatar'), element('strong', handle(slot)), element('span', state, 'muted'));
+      chip.addEventListener('click', () => {
+        showInspector(true);
+        const binding = $('bindings').querySelector(`[data-slot="${slot}"]`);
+        binding?.focus();
+      });
+      chips.push(chip);
+      const card=element('article',undefined,'binding');card.dataset.slot=slot;card.tabIndex=-1;card.dataset.nativeFocus=slot;
+      const top=element('div',undefined,'binding-top');top.append(element('h3',`${index+1} · ${handle(slot)}`),element('span',state,'badge'));
+      if(b.active){const park=element('button',tr(b.park_enabled?'parkOn':'parkOff'));park.type='button';park.dataset.park=slot;park.dataset.nativeFocus=`${slot}-park`;park.setAttribute('aria-pressed',String(Boolean(b.park_enabled)));park.addEventListener('click',async()=>{park.disabled=true;try{await request(`api/v1/participants/${slot}/park`,{method:'POST',body:JSON.stringify({enabled:!b.park_enabled})});status(tr('controls'));await refresh();}catch(e){status(e.message,true);}finally{park.disabled=false;}});top.append(park);}
       card.append(top);const meta=element('dl',undefined,'binding-meta');[[tr('binding'),b.bind_id||'—'],[tr('generation'),b.generation||'—'],[tr('session'),b.session_id||'—'],[tr('last'),time(b.last_activity)]].forEach(([k,v])=>meta.append(element('dt',k),element('dd',String(v))));card.append(meta);
-      const instructions=element('details');instructions.append(element('summary',tr('commands')),element('p',tr('bindingHint'),'muted'));
+      const instructions=element('details');instructions.dataset.disclosure=`${slot}-commands`;instructions.open=disclosures.has(instructions.dataset.disclosure);instructions.append(element('summary',tr('commands')),element('p',tr('bindingHint'),'muted'));
+      instructions.firstElementChild.dataset.nativeFocus=`${slot}-commands`;
       instructions.append(element('pre',`pairroom relay install --runtime ${selection.runtime}\npairroom relay bind --room ${value.room.id} --slot ${slot}\npairroom relay wait --room ${value.room.id} --slot ${slot}`));card.append(instructions);
-      const config=element('details');config.append(element('summary',tr('metadata')),element('pre',JSON.stringify(selection,null,2)));card.append(config);return card;
+      const config=element('details');config.dataset.disclosure=`${slot}-config`;config.open=disclosures.has(config.dataset.disclosure);config.append(element('summary',tr('metadata')),element('pre',JSON.stringify(selection,null,2)));config.firstElementChild.dataset.nativeFocus=`${slot}-config`;card.append(config);return card;
     });$('bindings').replaceChildren(...nodes);
+    $('participant-summary').replaceChildren(...chips);
     for(const option of $('target').options) option.textContent=handle(option.value);
+    if(focused)[...document.querySelectorAll('[data-native-focus]')].find(node=>node.dataset.nativeFocus===focused)?.focus({preventScroll:true});
   }
   async function confirmRetry(){const dialog=$('confirm-dialog');dialog.returnValue='cancel';return new Promise(resolve=>{dialog.addEventListener('close',()=>resolve(dialog.returnValue==='confirm'),{once:true});dialog.showModal();});}
   const MAX_RENDERED_MESSAGES=300;
   const MAX_MESSAGE_BYTES=256*1024;
   function renderMessages(value){
+    const list = $('messages');
+    // Measure BEFORE pruning or appending: a long incoming message must not
+    // switch a reader at the bottom into history-reading mode.
+    const position = readingPosition();
     const all=value.relay.messages||[];
     const total=value.relay.total_messages ?? all.length;
-    // Both the HTTP projection and DOM are bounded; totals still describe the
-    // complete retained history, available through the explicit export API.
+    // Both the HTTP projection and DOM remain bounded. Never merge the inbox
+    // and audit into synthetic messages, or hide intentional duplicate sends.
     const messages=all.length>MAX_RENDERED_MESSAGES?all.slice(-MAX_RENDERED_MESSAGES):all;
     const active=new Set(messages.map(m=>m.id));
     for(const [id,v] of messageNodes){if(!active.has(id)){v.node.remove();messageNodes.delete(id);}}
-    $('message-count').textContent=String(total);$('messages').querySelector('.empty')?.remove();$('messages').querySelectorAll('.truncated-note').forEach(n=>n.remove());
-    if(!all.length){$('messages').append(element('div',tr('empty'),'empty'));return;}
-    if(total>messages.length){$('messages').prepend(element('div',`${tr('showingLatest')} ${messages.length} / ${total}`,'muted truncated-note'));}
-    const nearEnd=$('messages').scrollHeight-$('messages').scrollTop-$('messages').clientHeight<70;
+    $('message-count').textContent=String(total);list.querySelector('.empty')?.remove();list.querySelectorAll('.truncated-note').forEach(n=>n.remove());
+    if(!all.length){list.append(element('div',tr('empty'),'empty'));messagesRendered=false;return;}
+    if(total>messages.length){list.prepend(element('div',`${tr('showingLatest')} ${messages.length} / ${total}`,'muted truncated-note'));}
     for(const m of messages){
-      const key=JSON.stringify([m,language()]);let entry=messageNodes.get(m.id);if(!entry){entry={node:element('article'),key:''};messageNodes.set(m.id,entry);$('messages').append(entry.node);}
-      if(key===entry.key)continue;entry.key=key;const node=entry.node;node.className=`message state-${m.state}`;node.dataset.messageId=m.id;
-      const head=element('div',undefined,'message-heading');head.append(element('strong',`${handle(m.from)} → ${handle(m.to)}`),element('span',tr(m.state),'badge'));
-      const items=[head];if(m.quote)items.push(element('blockquote',`${m.quote.from_handle || ''}\n${m.quote.text || ''}`));items.push(element('p',m.text,'message-body'));
-      for(const a of m.attachments||[]){const img=element('img');img.alt=a.name||tr('attach');img.loading='lazy';img.src=`api/v1/attachments/${encodeURIComponent(a.id)}`;items.push(img);}
-      const stamp=element('time',time(m.created_at));stamp.dateTime=m.created_at;items.push(stamp);
+      const key=JSON.stringify([m,language(),handle(m.from),handle(m.to)]);
+      let entry=messageNodes.get(m.id);
+      if(!entry){entry={node:element('article'),key:''};messageNodes.set(m.id,entry);list.append(entry.node);}
+      if(key===entry.key)continue;
+      entry.key=key;
+      const node=entry.node;
+      const actor=['user','slot1','slot2'].includes(m.from)?m.from:'other';
+      node.className=`message message-row ${actor} state-${m.state}`;node.dataset.messageId=m.id;
+      const avatar=element('div',actor==='user'?'Y':actor==='slot1'?'1':actor==='slot2'?'2':'·','message-avatar');
+      avatar.setAttribute('aria-hidden','true');
+      const content=element('div',undefined,'message-content');
+      const head=element('div',undefined,'message-meta');
+      const stamp=element('time',time(m.created_at));stamp.dateTime=m.created_at;
+      head.append(element('strong',handle(m.from),'message-author'),element('span',`${tr('target')} ${handle(m.to)}`,'message-target'),stamp);
+      const bubble=element('div',undefined,'message-bubble');
+      if(m.quote)bubble.append(element('blockquote',`${m.quote.from_handle || ''}\n${m.quote.text || ''}`,'reply-quote'));
+      // Native publications stay literal text; never interpret agent HTML or
+      // fetch external content from a relay body while displaying it.
+      bubble.append(element('p',m.text,'message-body'));
+      for(const a of m.attachments||[]){const img=element('img');img.alt=a.name||tr('attach');img.loading='lazy';img.src=`api/v1/attachments/${encodeURIComponent(a.id)}`;bubble.append(img);}
+      const footer=element('div',undefined,'message-footer');
+      footer.append(element('span',tr(m.state),'badge'));
       if(m.state==='queued'||m.state==='unknown'){
         const action=m.state==='queued'?'cancel':'retry';const button=element('button',tr(action),'message-action');button.type='button';button.dataset.action=action;
-        button.addEventListener('click',async()=>{if(action==='retry' && !await confirmRetry())return;button.disabled=true;try{await request(`api/v1/messages/${encodeURIComponent(m.id)}/${action}`,{method:'POST',body:'{}'});await refresh();}catch(e){status(e.message,true);}finally{button.disabled=false;}});items.push(button);
+        button.addEventListener('click',async()=>{if(action==='retry' && !await confirmRetry())return;button.disabled=true;try{await request(`api/v1/messages/${encodeURIComponent(m.id)}/${action}`,{method:'POST',body:'{}'});await refresh();}catch(e){status(e.message,true);}finally{button.disabled=false;}});footer.append(button);
       }
-      node.replaceChildren(...items);
+      content.append(head,bubble,footer);node.replaceChildren(avatar,content);
     }
-    if(nearEnd)$('messages').scrollTop=$('messages').scrollHeight;
+    messagesRendered=true;
+    restoreReadingPosition(position);
   }
   function renderAudit(value){const key=JSON.stringify([value.relay.audit,language()]);if(key===auditKey)return;auditKey=key;
     const names={'native.binding.updated':'changed','native.publication':'publication','native.publication.gap':'gap','native.message.updated':'updated','native.failure':'failure'};
