@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 from pathlib import Path
 from playwright.async_api import async_playwright, expect
 from test_management_browser import fixture_html, load_csp_fixture, wait_fixture_state
@@ -203,6 +204,9 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
     await tree_room('r1').click(button='right')
     await page.locator('#context-close-room').click()
     await wait_fixture_state(page, "location.hash==='#/rooms/r3'")
+    # location.hash changes before its handler rebuilds the tree and closes
+    # menus. Wait for the replacement active tab before opening a keyboard menu.
+    await expect(tab('r3')).to_have_class(re.compile(r"\bactive\b"))
     await tree_room('r1').focus()
     await page.keyboard.press('Shift+F10')
     await expect(page.locator('#context-close-room')).to_be_disabled()
