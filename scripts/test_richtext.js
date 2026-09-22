@@ -30,4 +30,14 @@ let result;
 assert.doesNotThrow(() => { result = render(deep); }, 'deep Markdown must not break the Room renderer');
 assert.ok(result.textContent.endsWith('Keep the complete visible message'));
 assert.ok(flatten(result).length < 100, 'pathological nesting falls back to text, not thousands of DOM nodes');
-console.log('richtext safety and bounded nesting: ok');
+
+// A published body may use the full 256 KiB transport budget. Inline scanning is
+// linear in the source length; rescanning the tail once per earlier token made
+// this dense case take seconds of blocked transcript main thread.
+const unit = '**a** `c` @codex https://e.x/p ~~s~~ *e* ';
+const long = unit.repeat(Math.ceil((256 * 1024) / unit.length)).slice(0, 256 * 1024);
+const started = Date.now();
+render(long);
+const elapsed = Date.now() - started;
+assert.ok(elapsed < 2000, `256 KiB body must render in bounded time (took ${elapsed} ms)`);
+console.log(`richtext safety, bounded nesting and linear inline scan (${elapsed} ms): ok`);

@@ -4,10 +4,14 @@
   const tr = key => window.PairRoomI18n.t(`room.native.${key}`);
   let csrf = '', snapshot = null, stream = null, pendingSend = null, refreshing = false, refreshAgain = false, sending = false;
   const messageNodes = new Map();
-  let bindingsKey = '', auditKey = '', activityTimer = null, messagesRendered = false;
+  let bindingsKey = '', auditKey = '', attentionKey = '', activityTimer = null, messagesRendered = false;
   let outboxRoom = '', outboxBroken = false, pendingCursor = '', pendingNext = '', pendingKey = '', pendingRequest = 0;
   let historyNext = '', historyFilter = '', historyRequest = 0;
   const outbox = window.PairRoomNativeOutbox;
+  // Local recovery failures are fixed codes, not copy: show the translated
+  // storage message and keep the raw code out of the Room status line.
+  const outboxCodes = new Set(['invalid_room', 'outbox_invalid', 'outbox_conflict', 'outbox_unavailable']);
+  const failureText = error => outboxCodes.has(error?.message) ? tr('storageFailed') : error?.message || '';
   const language = () => window.PairRoomI18n?.lang || 'en';
   const element = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
   const time = value => value ? new Intl.DateTimeFormat(language(), {dateStyle:'short',timeStyle:'medium'}).format(new Date(value)) : tr('never');
@@ -48,7 +52,7 @@
   });
   function translations() {
     window.PairRoomI18n.apply(document);
-    $('message-text').placeholder=tr('placeholder'); bindingsKey='';auditKey='';pendingKey='';messageNodes.forEach(v=>{v.key='';});
+    $('message-text').placeholder=tr('placeholder'); bindingsKey='';auditKey='';attentionKey='';pendingKey='';messageNodes.forEach(v=>{v.key='';});
     if (snapshot) { render(snapshot); renderOutbox(); }
   }
   function renderBindings(value) {
@@ -192,6 +196,9 @@
     }catch(e){status(e.message,true);}finally{$('diagnose').disabled=false;}
   });
   function renderAttention(value){
+    // Activity refreshes must not steal focus from an attention control or make a
+    // polite live region reannounce an unchanged summary.
+    const key=JSON.stringify([value.summary,value.identities,language()]);if(key===attentionKey)return;attentionKey=key;
     const summary=value.summary||{}, items=[];
     const pending=Object.values(summary.inboxes||{}).reduce((n,i)=>n+(i.queued||0)+(i.delivering||0)+(i.unknown||0),0);
     if(pending){const button=element('button',`${tr('pendingTitle')} (${pending})`);button.type='button';button.dataset.pendingOpen='';button.addEventListener('click',()=>{showInspector(true);$('pending-title').scrollIntoView({block:'nearest'});});items.push(button);}
@@ -210,8 +217,11 @@
   function render(value){snapshot=value;restoreOutbox();renderAttention(value);refreshPending().catch(e=>status(e.message,true));$('room-name').textContent=value.room.name;document.title=`${value.room.name} · PairRoom Native`;renderBindings(value);renderMessages(value);renderAudit(value);}
   async function refresh(){if(refreshing){refreshAgain=true;return;}refreshing=true;try{do{refreshAgain=false;const value=await request('api/v1/snapshot?tail=1');if(!snapshot || value.relay.sequence>=snapshot.relay.sequence)render(value);}while(refreshAgain);}finally{refreshing=false;}}
   function lockComposer(){
+    // The Room id scopes the recovery record, so publication stays locked until
+    // the first snapshot identifies it; a click can never be silently dropped.
+    // Drafting stays editable, matching the oversized-draft rule.
     for(const id of ['message-text','target','attachment','review-anchor'])$(id).disabled=sending||pendingSend!==null||outboxBroken;
-    $('send').disabled=sending||outboxBroken;
+    $('send').disabled=!outboxRoom||sending||outboxBroken;
     $('send').textContent=pendingSend?tr('retryOriginal'):tr('send');
     $('outbox-check').disabled=sending||outboxBroken;
     $('outbox-forget').disabled=sending;
@@ -228,7 +238,7 @@
     if(pendingSend){$('message-text').value=pendingSend.text;$('target').value=pendingSend.to;$('review-anchor').checked=Boolean(pendingSend.review);}
     renderOutbox();
     // Read-only reconciliation is safe; loading never posts a message.
-    if(pendingSend)checkOriginal().catch(e=>status(e.message,true));
+    if(pendingSend)checkOriginal().catch(e=>status(failureText(e),true));
   }
   async function checkOriginal(){
     if(!pendingSend||sending)return;
@@ -241,7 +251,7 @@
     pendingSend=null;$('message-text').value='';$('attachment').value='';$('review-anchor').checked=false;
     renderOutbox();status(tr('receiptRecovered'));await refresh();
   }
-  $('outbox-check').addEventListener('click',()=>checkOriginal().catch(e=>status(e.message,true)));
+  $('outbox-check').addEventListener('click',()=>checkOriginal().catch(e=>status(failureText(e),true)));
   $('outbox-forget').addEventListener('click',async()=>{
     if(sending||!await confirmAction('forgetTitle','forgetBody'))return;
     try{outbox.forget(localStorage,outboxRoom);pendingSend=null;outboxBroken=false;$('message-text').value='';$('attachment').value='';renderOutbox();status(tr('forgotten'));}catch(_){status(tr('storageFailed'),true);}
@@ -268,14 +278,14 @@
       if(!outbox.matches(pendingSend,accepted))throw new Error(tr('receiptConflict'));
       outbox.clear(localStorage,outboxRoom,pendingSend.id);
       pendingSend=null;$('message-text').value='';$('attachment').value='';$('review-anchor').checked=false;status(tr('sent'));await refresh();
-    }catch(e){status(pendingSend?`${tr('unknownSend')} ${e.message}`:e.message,true);}finally{sending=false;renderOutbox();}
+    }catch(e){status(pendingSend?`${tr('unknownSend')} ${failureText(e)}`:failureText(e),true);}finally{sending=false;renderOutbox();}
   });
   window.addEventListener('storage',event=>{
-    if(event.key===`pairroom.native.outbox.v1.${outboxRoom}`&&!sending){if(pendingSend){checkOriginal().catch(e=>status(e.message,true));}else{outboxRoom='';restoreOutbox();}}
+    if(event.key===`pairroom.native.outbox.v1.${outboxRoom}`&&!sending){if(pendingSend){checkOriginal().catch(e=>status(failureText(e),true));}else{outboxRoom='';restoreOutbox();}}
   });
   document.addEventListener('pairroom:lang',translations);
   async function start(){
-    translations();try{
+    translations();lockComposer();try{
       const token=new URLSearchParams(location.hash.slice(1)).get('token');
       if(token){const session=await request('api/v1/session',{method:'POST',headers:{Authorization:`Bearer ${token}`}});csrf=session.csrf_token;history.replaceState(null,'',location.pathname+location.search);}
       else{const session=await request('api/v1/session');csrf=session.csrf_token;}
