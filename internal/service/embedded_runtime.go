@@ -157,6 +157,7 @@ func EmbeddedRuntimeFactory(registry *Registry, cfg EmbeddedRuntimeConfig) Runti
 		}
 		if durableRoom.HostMode == model.HostNative {
 			wake := cfg.nativeWake
+			wake.Mock = cfg.Mock
 			if wake.Claude == nil && !cfg.Mock {
 				wake.Claude = prepareNativeClaudeWake(project.Root, durableRoom.ID)
 			}
@@ -170,6 +171,7 @@ func EmbeddedRuntimeFactory(registry *Registry, cfg EmbeddedRuntimeConfig) Runti
 				} else if cfg.Resolver != nil {
 					if command := strings.TrimSpace(cfg.Resolver.runtimes.For(model.RuntimeCodex).Command); command != "" {
 						wake.Run = fixedNativeWakeCommand(command)
+						wake.CodexCommand = command
 					}
 				}
 			}

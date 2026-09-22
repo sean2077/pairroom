@@ -19,20 +19,23 @@ const (
 )
 
 var surfaceStaticFiles = map[string]struct{}{
-	"/favicon.svg":              {},
-	"/styles.css":               {},
-	"/ux.css":                   {},
-	"/activity-view.js":         {},
-	"/app.js":                   {},
-	"/ux.js":                    {},
-	"/room-shell.js":            {},
-	"/richtext.js":              {},
-	"/_pairroom/i18next.min.js": {},
-	"/_pairroom/catalogs.js":    {},
-	"/_pairroom/i18n.js":        {},
-	"/_pairroom/theme.js":       {},
-	"/_pairroom/workbench.css":  {},
-	"/_pairroom/workbench.js":   {},
+	"/_pairroom/native-outbox.js": {},
+	"/_pairroom/native-setup.js":  {},
+	"/_pairroom/native-setup.css": {},
+	"/favicon.svg":                {},
+	"/styles.css":                 {},
+	"/ux.css":                     {},
+	"/activity-view.js":           {},
+	"/app.js":                     {},
+	"/ux.js":                      {},
+	"/room-shell.js":              {},
+	"/_pairroom/richtext.js":      {},
+	"/_pairroom/i18next.min.js":   {},
+	"/_pairroom/catalogs.js":      {},
+	"/_pairroom/i18n.js":          {},
+	"/_pairroom/theme.js":         {},
+	"/_pairroom/workbench.css":    {},
+	"/_pairroom/workbench.js":     {},
 }
 
 func isRoomSurfacePath(p string) bool {
@@ -80,7 +83,7 @@ func allowedSurfaceRequest(method, p string) bool {
 		return method == http.MethodGet || method == http.MethodHead
 	case "/api/v1/session":
 		return method == http.MethodGet || method == http.MethodHead || method == http.MethodPost || method == http.MethodDelete
-	case "/api/v1/health", "/api/v1/snapshot", "/api/v1/events", "/api/v1/export", "/api/v1/git/status", "/api/v1/git/diff":
+	case "/api/v1/history", "/api/v1/pending", "/api/v1/diagnostics", "/api/v1/review", "/api/v1/health", "/api/v1/snapshot", "/api/v1/events", "/api/v1/export", "/api/v1/git/status", "/api/v1/git/diff":
 		return method == http.MethodGet || method == http.MethodHead
 	case "/api/v1/messages":
 		return method == http.MethodGet || method == http.MethodHead || method == http.MethodPost
@@ -93,6 +96,8 @@ func allowedSurfaceRequest(method, p string) bool {
 		return method == http.MethodGet || method == http.MethodHead
 	}
 	switch {
+	case strings.HasPrefix(p, "/api/v1/sends/"):
+		return method == http.MethodGet || method == http.MethodHead
 	case strings.HasPrefix(p, "/api/v1/attachments/"):
 		return method == http.MethodGet || method == http.MethodHead || method == http.MethodDelete
 	case strings.HasPrefix(p, "/api/v1/messages/") && strings.HasSuffix(p, "/retry"):

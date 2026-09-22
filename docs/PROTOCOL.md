@@ -93,7 +93,7 @@ PairRoom does not own native processes. Owner Turn is advisory, not a workspace 
 
 ### Automatic idle-peer wake
 
-A wake-enabled Room (default on; changeable only at an idle Room boundary through Management, never with relay credentials) may nudge an existing Claude Code or Codex session after a durably queued input. One burst produces at most one fixed body-free nudge, rate-limited per Room (minimum interval 60 s, hourly cap 10), durably reserved by transport message ID before the effect and never automatically retried. The reservation rechecks the current binding generation, policy, queue and live collectors. A foreground/park collector or in-flight delivery suppresses wake; a collector arriving after reservation may make one nudge redundant. The FIFO alone determines message delivery.
+A wake-enabled Room (default on; changeable only at an idle Room boundary through Management, never with relay credentials) may nudge an existing Claude Code or Codex session after a durably queued input. One burst produces at most one fixed body-free nudge, rate-limited per Room (minimum interval 60 s per receiver, shared Room hourly cap 10), durably reserved by transport message ID before the effect and never automatically retried. The reservation rechecks the current binding generation, policy, queue and live collectors. A foreground/park collector or in-flight delivery suppresses wake; a collector arriving after reservation may make one nudge redundant. The FIFO alone determines message delivery.
 
 Codex uses `codex queue`. Claude uses the official session inbox captured at confirmed bind/Stop, loaded from a private workspace sidecar matching bind ID, generation and session. Missing, stale or insecure capability means `suppressed/capability_unavailable`; Unix socket/local Windows named-pipe failures mean `failed/socket_failed`, `socket_timeout` or `socket_cancelled`. Successful socket writes mean **`submitted`**, not an acceptance acknowledgement, policy approval, a new model turn, or `handed_off`. Claude `crossSessionInbound` can hold/refuse input; PairRoom never changes it. Both success outcomes (`accepted` for the Codex command, `submitted` for the Claude socket) have no reason; failed/suppressed outcomes require an allowlisted reason. Replay enforces the same vocabulary.
 
@@ -118,3 +118,27 @@ gate before Grok skips Stop hooks after eight continuations. Other hooks share
 the vendor budget; foreground exchange does not consume it. Readiness is not
 `handed_off`. No transcript parsing, automatic resend or idle wake-up is added.
 See [Grok Native](CLI_REFERENCE.md#grok-build-native) for the upstream limits.
+
+### Native observation and review extensions
+
+`history` is an authenticated read-only operation: optional `id` selects one message;
+otherwise `cursor`, `limit` (1–100), `since` (RFC3339) and `pending` select a bounded
+page. Normal history is newest-first, pending is oldest-first. Opaque cursors are
+publication ordinals, not offsets in a shrinking pending list. The page has a 1 MiB
+body/quote budget, retains its first complete message, and inspects at most 5,000
+candidates before returning a continuation. Reading never claims, acknowledges or
+retries. Receipt values remain private. Full export remains explicit and complete.
+
+Summary counts, current queues, last human-directed message and last wake observation
+are replay-built projections of the same Event Log. They are not a second durable
+queue. The browser's pending/history views are independent of its recent chat tail.
+
+An optional `review` in an explicit send contains a schema-1 Git observation:
+`workspace`, resolved `base`/`head` commits and `dirty_sha256`. It is part of immutable
+same-client-ID payload matching and is preserved by explicit Retry. Only explicit
+review sends add that metadata to an envelope; ordinary bootstrap/envelope budgets
+and routing are unchanged. The workspace in a received anchor is data, not authority
+to read another path. Comparison uses the operator-selected trusted checkout.
+
+Unattempted rate-limited wake heads are deferred and rechecked even without a new
+publication; reserved wake effects remain no-auto-retry. See [auto-wake](design/auto-wake.md).

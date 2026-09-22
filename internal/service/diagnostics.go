@@ -44,8 +44,8 @@ func (s *ManagementServer) runDiagnostics(w http.ResponseWriter, r *http.Request
 		return
 	}
 	request.Actor = canonicalInputSlot(request.Actor)
-	if request.Mode != "environment" && request.Mode != "runtime" {
-		writeManagementError(w, http.StatusBadRequest, "mode must be environment or runtime")
+	if request.Mode != "environment" && request.Mode != "runtime" && request.Mode != "native" {
+		writeManagementError(w, http.StatusBadRequest, "mode must be environment, runtime or native")
 		return
 	}
 	if (request.Actor != "" && !request.Actor.ValidParticipant()) || (request.Mode == "runtime" && (!request.Actor.ValidParticipant() || !request.Confirm)) {
@@ -59,6 +59,26 @@ func (s *ManagementServer) runDiagnostics(w http.ResponseWriter, r *http.Request
 	defer s.diagnosticsMu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 75*time.Second)
 	defer cancel()
+	if request.Mode == "native" {
+		if request.RoomID == "" {
+			writeManagementError(w, http.StatusBadRequest, "native diagnostics require a Room")
+			return
+		}
+		active, err := s.runtimes.runtimeForCompletion(request.RoomID)
+		if err != nil {
+			s.writeError(w, err)
+			return
+		}
+		native, ok := active.(*nativeHostRuntime)
+		if !ok {
+			writeManagementError(w, http.StatusConflict, "open the Native Room before inspecting live capabilities; diagnostics do not activate runtimes")
+			return
+		}
+		release := native.acquire()
+		defer release()
+		writeManagementJSON(w, http.StatusOK, native.nativeDiagnostics())
+		return
+	}
 	report := DiagnosticReport{Schema: 1, Version: version.Current, Platform: runtime.GOOS + "/" + runtime.GOARCH, GeneratedAt: time.Now().UTC(), Mode: request.Mode, Scope: "service_defaults", Checks: []agent.DiagnosticCheck{}}
 	add := func(id, status, code string) {
 		report.Checks = append(report.Checks, agent.DiagnosticCheck{ID: id, Status: status, Code: code})

@@ -28,7 +28,7 @@ integrated; its tracked background-collector completion remains available.
 - **One authoritative message source.** Wake carries only `nativeWakeNudge`.
   The FIFO owns task text and collection. Native session identity, inbox paths
   and tokens never enter wake events or relay bodies.
-- **Bounded effects.** Minimum interval 60 seconds per Room, hourly cap 10.
+- **Bounded effects.** Minimum interval 60 seconds per receiver, shared Room hourly cap 10.
   Reserve by transport message ID before the external effect and never retry
   automatically, including after restart. A submitted nudge may cause a billed
   native turn; a failed or held attempt does not prove a model ran.
@@ -47,8 +47,21 @@ or policy change before this boundary suppresses the effect without consuming
 a reservation. Collection arriving afterward may make one nudge redundant;
 the FIFO still prevents a second collection of the same message.
 
-A burst's oldest queued input owns its wake decision; later inputs do not create
-additional attempts. Reservations replay into the rate-limit history, so a
+The current oldest queued input owns its wake decision. The existing one-second
+maintenance tick inspects at most two indexed queue heads, with one active worker
+per receiver. Cancellation, collection, collector exit, binding changes and restart
+therefore cannot strand an unattempted successor merely because no new send arrives.
+A rate-suppressed head has a next eligible time and keeps the runtime alive across
+its idle timeout. At expiry it is revalidated, not blindly submitted. Missing Claude
+capabilities are rechecked at a bounded 30-second cadence while the runtime remains
+active, without holding the runtime lease on its own. Unbound/unsupported sessions
+do not pin a runtime; repeated identical
+suppression observations are coalesced instead of appending audit every second.
+
+A durable reservation means a possibly attempted effect, including a crash before
+the result could be recorded. Such heads are never automatically retried. A mere
+rate suppression has no reservation and may be reconsidered. Runtime shutdown
+cancels and joins wake workers before closing the event writer. Reservations replay into the rate-limit history, so a
 Service restart cannot repeat a possibly successful effect. Missing capability,
 missing CLI, failed transport or native `hold`/`refuse` leaves the receive-only
 `relay wait`/human path available. Do not resend task content to recover wake.

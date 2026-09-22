@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/sean2077/pairroom/internal/model"
 )
 
 func TestNativeSummaryIsBoundedBodyFreeAndAuthenticated(t *testing.T) {
@@ -48,6 +50,42 @@ func TestNativeSummaryIsBoundedBodyFreeAndAuthenticated(t *testing.T) {
 	bad.Secret = "wrong"
 	if _, err := e.AuthSummary(bad); !errors.Is(err, ErrAuth) {
 		t.Fatal("summary bypassed auth", err)
+	}
+}
+
+// A replayed pre-upgrade binding without an official session keeps the documented
+// body-free projection: relay status --brief still explains the rebind step, and
+// no inbox, peer or sequence state becomes readable before association.
+func TestNativeSummaryKeepsUnassociatedBindingProjection(t *testing.T) {
+	e, auth, _ := testEngine(t)
+	slot := model.ActorSlot1
+	generation := e.bindings[slot].Generation + 1
+	e.mu.Lock()
+	err := e.append(EventBinding, slot, bindingFact{Binding: Binding{Slot: slot, BindID: "bind-unassociated", Generation: generation, Active: true, ParkEnabled: true}, CredentialHash: Digest("unassociated-secret")})
+	e.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unassociated := Auth{Slot: slot, BindID: "bind-unassociated", Generation: generation, Secret: "unassociated-secret"}
+	if _, err := e.Send(auth[model.ActorSlot2], SendRequest{ID: "queued", Text: "body"}); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := e.AuthSummary(unassociated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Sequence != 0 || len(summary.Inboxes) != 0 || len(summary.LastWake) != 0 || summary.Bindings[slot].Associated || !summary.Bindings[slot].Active {
+		t.Fatalf("unassociated summary exposed state: %+v", summary)
+	}
+	if _, peer := summary.Bindings[model.ActorSlot2]; peer {
+		t.Fatal("unassociated summary exposed the peer binding")
+	}
+	if !strings.Contains(summary.Notice, "not associated") {
+		t.Fatalf("unassociated summary lost guidance: %q", summary.Notice)
+	}
+	data, err := json.Marshal(summary)
+	if err != nil || strings.Contains(string(data), "body") {
+		t.Fatalf("unassociated summary leaked work: %s %v", data, err)
 	}
 }
 

@@ -246,28 +246,36 @@
 
   function parseInline(parent, source, options, depth = 0) {
     if (depth >= MAX_NESTING) { appendTextWithBreaks(parent, source); return; }
+    // Each pattern caches its next match so the cursor only moves forward: a
+    // cached match that still starts at or after the cursor is reused instead of
+    // rescanning the tail once per earlier token, which keeps a long body linear
+    // rather than quadratic in its length.
     const patterns = [
-      { type: 'image', regex: /!\[([^\]]*)\]\(([^\s)]+)(?:\s+["']([^"']*)["'])?\)/g },
-      { type: 'link', regex: /\[([^\]]+)\]\(([^\s)]+)(?:\s+["']([^"']*)["'])?\)/g },
-      { type: 'autolink', regex: /<(https?:\/\/[^>\s]+|mailto:[^>\s]+)>/gi },
-      { type: 'bare-url', regex: /https?:\/\/[^\s<>()]+[^\s<>().,;:!?]/gi },
-      { type: 'code', regex: /`([^`\n]+)`/g },
-      { type: 'strong', regex: /(?:\*\*|__)(.+?)(?:\*\*|__)/g },
-      { type: 'strike', regex: /~~(.+?)~~/g },
-      { type: 'em', regex: /(?<![\w*])\*([^*\n]+)\*(?!\*)|(?<![\w_])_([^_\n]+)_(?!_)/g },
+      { type: 'image', regex: /!\[([^\]]*)\]\(([^\s)]+)(?:\s+["']([^"']*)["'])?\)/g, match: null, done: false },
+      { type: 'link', regex: /\[([^\]]+)\]\(([^\s)]+)(?:\s+["']([^"']*)["'])?\)/g, match: null, done: false },
+      { type: 'autolink', regex: /<(https?:\/\/[^>\s]+|mailto:[^>\s]+)>/gi, match: null, done: false },
+      { type: 'bare-url', regex: /https?:\/\/[^\s<>()]+[^\s<>().,;:!?]/gi, match: null, done: false },
+      { type: 'code', regex: /`([^`\n]+)`/g, match: null, done: false },
+      { type: 'strong', regex: /(?:\*\*|__)(.+?)(?:\*\*|__)/g, match: null, done: false },
+      { type: 'strike', regex: /~~(.+?)~~/g, match: null, done: false },
+      { type: 'em', regex: /(?<![\w*])\*([^*\n]+)\*(?!\*)|(?<![\w_])_([^_\n]+)_(?!_)/g, match: null, done: false },
       // Keep visual highlighting aligned with the Go router's exact-token
       // boundary. The backend remains authoritative for routing, but a
       // suffix such as `@codex-build` or a Unicode continuation must not look
       // like a routable handle in the transcript.
-      { type: 'mention', regex: /@(?:(?:claude|codex|grok)(?:0|1)?|user)(?![\p{L}\p{N}\p{M}._-])/giu },
+      { type: 'mention', regex: /@(?:(?:claude|codex|grok)(?:0|1)?|user)(?![\p{L}\p{N}\p{M}._-])/giu, match: null, done: false },
     ];
     let cursor = 0;
     while (cursor < source.length) {
       let winner = null;
       for (const pattern of patterns) {
-        pattern.regex.lastIndex = cursor;
-        const match = pattern.regex.exec(source);
-        if (!match) continue;
+        if (pattern.done) continue;
+        if (pattern.match === null || pattern.match.index < cursor) {
+          pattern.regex.lastIndex = cursor;
+          pattern.match = pattern.regex.exec(source);
+          if (pattern.match === null) { pattern.done = true; continue; }
+        }
+        const match = pattern.match;
         if (!winner || match.index < winner.match.index || (match.index === winner.match.index && match[0].length > winner.match[0].length)) {
           winner = { pattern, match };
         }

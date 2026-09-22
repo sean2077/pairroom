@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/review"
 )
 
 const (
@@ -86,6 +87,7 @@ type WakeCandidate struct {
 	Runtime      model.RuntimeKind `json:"runtime,omitempty"`
 	SessionID    string            `json:"session_id,omitempty"`
 	Enabled      bool              `json:"enabled"`
+	Reserved     bool              `json:"reserved"`
 	QueueStart   bool              `json:"queue_start"`
 	WaiterActive bool              `json:"waiter_active"`
 	Delivering   bool              `json:"delivering"`
@@ -130,6 +132,7 @@ type Auth struct {
 }
 
 type Message struct {
+	Review           *review.Anchor     `json:"review,omitempty"`
 	ID               string             `json:"id"`
 	From             model.ActorID      `json:"from"`
 	To               model.ActorID      `json:"to"`
@@ -162,11 +165,12 @@ type Publication struct {
 }
 
 type SendRequest struct {
-	ID            string        `json:"id"`
-	Text          string        `json:"text"`
-	To            model.ActorID `json:"to,omitempty"`
-	AttachmentIDs []string      `json:"attachment_ids,omitempty"`
-	QuoteID       string        `json:"quote_id,omitempty"`
+	Review        *review.Anchor `json:"review,omitempty"`
+	ID            string         `json:"id"`
+	Text          string         `json:"text"`
+	To            model.ActorID  `json:"to,omitempty"`
+	AttachmentIDs []string       `json:"attachment_ids,omitempty"`
+	QuoteID       string         `json:"quote_id,omitempty"`
 }
 
 type Claim struct {

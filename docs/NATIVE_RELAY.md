@@ -288,3 +288,14 @@ vendor acceptance. Authenticated multi-round Claude Code/Codex/Grok testing,
 including resume/fork behavior and comparative billed usage, remains a separate
 release gate; do not run paid vendor benchmarks without consent or publish
 private transcripts as evidence.
+
+## Recovery and review surface
+
+Pending items remain reachable even after they leave the recent chat window. Use
+the pending panel or `relay history --pending`, then inspect a specific ID before
+Retry. Browser refresh restores an unconfirmed original-ID draft and checks its
+receipt without sending. The Native diagnostic button and `relay doctor` expose
+observations, not a claimed vendor session status. Optional review versions and
+shared Markdown make long evidence readable without adding an IDE or phase engine.
+See [native review and recovery](design/native-review-closure.md) for boundaries,
+benchmarks and acceptance scenarios.

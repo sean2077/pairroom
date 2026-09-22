@@ -28,11 +28,19 @@ def fixture_html(isolated: bool = False) -> str:
     # the native sheet followed by the actual production workbench overrides.
     if not isolated:
         styles += (ROOT / 'internal/webui/assets/workbench.css').read_text(encoding='utf-8')
-    script = (ASSETS / 'native-host.js').read_text(encoding='utf-8')
+    script = '\n'.join((ROOT / path).read_text(encoding='utf-8') for path in (
+        'internal/webui/assets/richtext.js', 'internal/webui/assets/native-outbox.js',
+        'internal/service/assets/native-host.js'))
     fixture = r'''
     window.__ids = 0;
     Object.defineProperty(crypto, 'randomUUID', {value:()=>'fixture-send-'+(++__ids)});
     window.__requests = [];
+    // The about:blank presentation fixture has no persistent origin. Real
+    // localStorage/reload behavior is exercised by the separate HTTP suite.
+    const outboxStore = new Map();
+    Object.defineProperty(window, 'localStorage', {value: {
+      getItem:k=>outboxStore.get(k)??null, setItem:(k,v)=>outboxStore.set(k,v), removeItem:k=>outboxStore.delete(k)
+    }});
     window.__snapshot = {
       room:{id:'native-fixture',name:'Native IM collaboration',agents:{slot1:{runtime:'grok'},slot2:{runtime:'grok'}}},
       identities:{slot1:{MentionHandle:'@grok0'},slot2:{MentionHandle:'@grok1'}},
@@ -44,6 +52,8 @@ def fixture_html(isolated: bool = False) -> str:
       cancelled:'Cancelled', cancel:'Cancel queued', retry:'Retry explicitly', published:'Published',
       commands:'Bind / wait commands', metadata:'Display-only configuration', showingLatest:'Showing latest',
       activityHelp:'Binding state and last activity are observations, not live presence.',
+      inspect:'Inspect', sent:'Queued', send:'Queue message', retrySend:'Retry original send',
+      noItems:'No pending items', pendingTitle:'Pending items',
       empty:'No published messages yet.', placeholder:'Queue a message for a native session…'
     };
     window.PairRoomI18n={lang:'en',apply(){},t(key){return labels[key.split('.').pop()]||key;}};
@@ -61,11 +71,13 @@ def fixture_html(isolated: bool = False) -> str:
       __requests.push({path,method:options.method||'GET',body:options.body});
       if(path==='api/v1/session')return Response.json({csrf_token:'fixture-only'});
       if(path.startsWith('api/v1/snapshot'))return Response.json(__snapshot);
+      if(path.startsWith('api/v1/pending')){const messages=__snapshot.relay.messages.filter(m=>['queued','delivering','unknown'].includes(m.state));return Response.json({messages:messages.slice(0,10),total:messages.length});}
+      if(path.startsWith('api/v1/sends/')){const message=__snapshot.relay.messages.find(m=>m.id===path.split('/').pop());return Response.json({found:Boolean(message),message});}
       if(path==='api/v1/messages'){
         const body=JSON.parse(options.body);
         if(window.__failSend){window.__failSend=false;return Response.json({error:'Uncertain send fixture'},{status:500});}
-        if(!__snapshot.relay.messages.some(m=>m.id===body.id))__snapshot.relay.messages.push({...__message(body.id,'user','queued',body.text),to:body.to});
-        __snapshot.relay.sequence++;return Response.json({id:body.id});
+        if(!__snapshot.relay.messages.some(m=>m.id===body.id))__snapshot.relay.messages.push({...__message(body.id,'user','queued',body.text),to:body.to,attachments:(body.attachment_ids||[]).map(id=>({id})),review:body.review});
+        __snapshot.relay.sequence++;return Response.json(__snapshot.relay.messages.find(m=>m.id===body.id));
       }
       const match=path.match(/^api\/v1\/messages\/([^/]+)\/(retry|cancel)$/);
       if(match){
@@ -153,7 +165,7 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
             await summary.press('Escape')
             await expect(page.locator('#native-inspector')).to_be_hidden()
             await expect(page.locator('#inspector-toggle')).to_be_focused()
-            # Quotes, literal HTML and intentional duplicate bodies are not
+            # Quotes, safely rendered HTML text and intentional duplicate bodies are not
             # silently reinterpreted or coalesced by the presentation layer.
             await page.evaluate('''() => {
               const text='<img src=x onerror="window.__injected=true"> same body';
@@ -216,7 +228,7 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
             assert not errors, errors
             (artifacts/'results.json').write_text(json.dumps({'fixture':True,'shared_workbench':not isolated,
                 'real_vendor_e2e':False,'checks':['IM alignment','duplicate runtime identities','initial and incoming scroll',
-                'history anchor','draft/node preservation','binding disclosure/focus','literal text/quotes/attachments',
+                'history anchor','draft/node preservation','binding disclosure/focus','safe Markdown/quotes/attachments',
                 'retry confirmation/cancel','uncertain send identity','300-message bound','locale switch','responsive light/dark'],
                 'browser_errors':errors},indent=2)+'\n',encoding='utf-8')
             print('Native IM browser fixture passed (not vendor E2E)',flush=True)

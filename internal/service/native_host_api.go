@@ -12,6 +12,7 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/protocol"
 	"github.com/sean2077/pairroom/internal/relay"
+	"github.com/sean2077/pairroom/internal/review"
 )
 
 func (s *ManagementServer) mountNativeRelay(mux *http.ServeMux) {
@@ -113,7 +114,7 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var runtime *nativeHostRuntime
-	if r.PathValue("action") == "ack" {
+	if r.PathValue("action") == "ack" || r.PathValue("action") == "doctor" {
 		var active RoomRuntime
 		active, err = s.runtimes.runtimeForCompletion(durable.ID)
 		if err == nil {
@@ -143,19 +144,24 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		SessionID      string        `json:"session_id,omitempty"`
-		TranscriptPath string        `json:"transcript_path,omitempty"`
-		ReportSeq      uint64        `json:"report_seq,omitempty"`
-		Text           string        `json:"text,omitempty"`
-		ID             string        `json:"id,omitempty"`
-		Receipt        string        `json:"receipt,omitempty"`
-		To             model.ActorID `json:"to,omitempty"`
-		AttachmentIDs  []string      `json:"attachment_ids,omitempty"`
-		QuoteID        string        `json:"quote_id,omitempty"`
-		Park           bool          `json:"park,omitempty"`
-		TimeoutSeconds int           `json:"timeout_seconds,omitempty"`
-		Enabled        bool          `json:"enabled,omitempty"`
-		Error          string        `json:"error,omitempty"`
+		Review         *review.Anchor `json:"review,omitempty"`
+		Cursor         string         `json:"cursor,omitempty"`
+		Limit          int            `json:"limit,omitempty"`
+		Pending        bool           `json:"pending,omitempty"`
+		Since          time.Time      `json:"since,omitempty"`
+		SessionID      string         `json:"session_id,omitempty"`
+		TranscriptPath string         `json:"transcript_path,omitempty"`
+		ReportSeq      uint64         `json:"report_seq,omitempty"`
+		Text           string         `json:"text,omitempty"`
+		ID             string         `json:"id,omitempty"`
+		Receipt        string         `json:"receipt,omitempty"`
+		To             model.ActorID  `json:"to,omitempty"`
+		AttachmentIDs  []string       `json:"attachment_ids,omitempty"`
+		QuoteID        string         `json:"quote_id,omitempty"`
+		Park           bool           `json:"park,omitempty"`
+		TimeoutSeconds int            `json:"timeout_seconds,omitempty"`
+		Enabled        bool           `json:"enabled,omitempty"`
+		Error          string         `json:"error,omitempty"`
 	}
 	if decodeNativeJSON(w, r, &req) != nil {
 		return
@@ -177,7 +183,7 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 		p, accepted, err := runtime.engine.Publication(auth, req.ReportSeq)
 		nativeResult(w, map[string]any{"accepted": accepted, "publication": p}, err)
 	case "send":
-		m, err := runtime.engine.Send(auth, relay.SendRequest{ID: req.ID, Text: req.Text, To: req.To, AttachmentIDs: req.AttachmentIDs, QuoteID: req.QuoteID})
+		m, err := runtime.engine.Send(auth, relay.SendRequest{Review: req.Review, ID: req.ID, Text: req.Text, To: req.To, AttachmentIDs: req.AttachmentIDs, QuoteID: req.QuoteID})
 		if err == nil {
 			runtime.scheduleWake(m.ID)
 		}
@@ -216,6 +222,15 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 	case "summary":
 		summary, err := runtime.engine.AuthSummary(auth)
 		nativeResult(w, summary, err)
+	case "history":
+		page, err := runtime.engine.AuthHistory(auth, relay.HistoryQuery{ID: req.ID, Cursor: req.Cursor, Limit: req.Limit, Pending: req.Pending, Since: req.Since})
+		nativeResult(w, page, err)
+	case "doctor":
+		if _, err := runtime.engine.Inspect(auth); err != nil {
+			nativeResult(w, nil, err)
+			return
+		}
+		nativeResult(w, runtime.nativeDiagnostics(), nil)
 	case "peer":
 		peer, err := runtime.engine.Peer(auth)
 		if err == nil {

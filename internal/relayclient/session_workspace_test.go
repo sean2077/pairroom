@@ -83,7 +83,7 @@ func TestNativeSessionWorkspaceSurvivesDirectoryChanges(t *testing.T) {
 				t.Run(filepath.Base(path), func(t *testing.T) {
 					sessionChdir(t, path)
 					before, _ := os.Getwd()
-					for _, action := range []string{"send", "wait", "exchange", "bind", "status", "hook"} {
+					for _, action := range []string{"send", "wait", "exchange", "bind", "status", "history", "doctor", "review", "hook"} {
 						o := options{repo: "."}
 						got, err := resolveSessionWorkspace(context.Background(), action, &o, nativeCaller{runtime: kind, session: "session"})
 						if err != nil || got != root || o.room != s.Room || o.slot != string(s.Slot) {

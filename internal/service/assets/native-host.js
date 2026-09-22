@@ -4,7 +4,14 @@
   const tr = key => window.PairRoomI18n.t(`room.native.${key}`);
   let csrf = '', snapshot = null, stream = null, pendingSend = null, refreshing = false, refreshAgain = false, sending = false;
   const messageNodes = new Map();
-  let bindingsKey = '', auditKey = '', activityTimer = null, messagesRendered = false;
+  let bindingsKey = '', auditKey = '', attentionKey = '', activityTimer = null, messagesRendered = false;
+  let outboxRoom = '', outboxBroken = false, pendingCursor = '', pendingNext = '', pendingKey = '', pendingRequest = 0;
+  let historyNext = '', historyFilter = '', historyRequest = 0;
+  const outbox = window.PairRoomNativeOutbox;
+  // Local recovery failures are fixed codes, not copy: show the translated
+  // storage message and keep the raw code out of the Room status line.
+  const outboxCodes = new Set(['invalid_room', 'outbox_invalid', 'outbox_conflict', 'outbox_unavailable']);
+  const failureText = error => outboxCodes.has(error?.message) ? tr('storageFailed') : error?.message || '';
   const language = () => window.PairRoomI18n?.lang || 'en';
   const element = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
   const time = value => value ? new Intl.DateTimeFormat(language(), {dateStyle:'short',timeStyle:'medium'}).format(new Date(value)) : tr('never');
@@ -17,7 +24,7 @@
     if (!res.ok) { let value = {}; try {value = await res.json();} catch (_) { /* not a JSON error */ } throw new Error(value.error || `${tr('error')} (${res.status})`); }
     return res.status === 204 ? null : res.json();
   }
-  function handle(slot) { return snapshot?.identities?.[slot]?.MentionHandle || (slot === 'user' ? tr('user') : slot); }
+  function handle(slot) { return (snapshot?.identities?.[slot]?.MentionHandle || snapshot?.identities?.[slot]?.mention_handle) || (slot === 'user' ? tr('user') : slot); }
   function readingPosition() {
     const list = $('messages');
     const stick = !messagesRendered || list.scrollHeight-list.scrollTop-list.clientHeight < 70;
@@ -45,8 +52,8 @@
   });
   function translations() {
     window.PairRoomI18n.apply(document);
-    $('message-text').placeholder=tr('placeholder'); bindingsKey='';auditKey='';messageNodes.forEach(v=>{v.key='';});
-    if (snapshot) render(snapshot);
+    $('message-text').placeholder=tr('placeholder'); bindingsKey='';auditKey='';attentionKey='';pendingKey='';messageNodes.forEach(v=>{v.key='';});
+    if (snapshot) { render(snapshot); renderOutbox(); }
   }
   function renderBindings(value) {
     const key=JSON.stringify([value.relay.bindings,value.room.agents,value.identities,language()]);if(key===bindingsKey)return;bindingsKey=key;
@@ -75,14 +82,15 @@
       card.append(top);const meta=element('dl',undefined,'binding-meta');[[tr('binding'),b.bind_id||'—'],[tr('generation'),b.generation||'—'],[tr('session'),b.session_id||'—'],[tr('last'),time(b.last_activity)]].forEach(([k,v])=>meta.append(element('dt',k),element('dd',String(v))));card.append(meta);
       const instructions=element('details');instructions.dataset.disclosure=`${slot}-commands`;instructions.open=disclosures.has(instructions.dataset.disclosure);instructions.append(element('summary',tr('commands')),element('p',tr('bindingHint'),'muted'));
       instructions.firstElementChild.dataset.nativeFocus=`${slot}-commands`;
-      instructions.append(element('pre',`pairroom relay install --runtime ${selection.runtime}\npairroom relay bind --room ${value.room.id} --slot ${slot}\npairroom relay wait --room ${value.room.id} --slot ${slot}`));card.append(instructions);
+      instructions.append(element('pre',`pairroom relay install --runtime ${selection.runtime}\npairroom relay bind --room ${value.room.id} --slot ${index+1}\npairroom relay wait --room ${value.room.id} --slot ${index+1}`));card.append(instructions);
       const config=element('details');config.dataset.disclosure=`${slot}-config`;config.open=disclosures.has(config.dataset.disclosure);config.append(element('summary',tr('metadata')),element('pre',JSON.stringify(selection,null,2)));config.firstElementChild.dataset.nativeFocus=`${slot}-config`;card.append(config);return card;
     });$('bindings').replaceChildren(...nodes);
     $('participant-summary').replaceChildren(...chips);
     for(const option of $('target').options) option.textContent=handle(option.value);
     if(focused)[...document.querySelectorAll('[data-native-focus]')].find(node=>node.dataset.nativeFocus===focused)?.focus({preventScroll:true});
   }
-  async function confirmRetry(){const dialog=$('confirm-dialog');dialog.returnValue='cancel';return new Promise(resolve=>{dialog.addEventListener('close',()=>resolve(dialog.returnValue==='confirm'),{once:true});dialog.showModal();});}
+  async function confirmAction(title,body){$('confirm-retry').textContent=title==='retryTitle'?tr('retry'):tr('forgetDraft');$('confirm-title').textContent=tr(title);$('confirm-body').textContent=tr(body);const dialog=$('confirm-dialog');dialog.returnValue='cancel';return new Promise(resolve=>{dialog.addEventListener('close',()=>resolve(dialog.returnValue==='confirm'),{once:true});dialog.showModal();});}
+  const confirmRetry=()=>confirmAction('retryTitle','retryBody');
   const MAX_RENDERED_MESSAGES=300;
   const MAX_MESSAGE_BYTES=256*1024;
   function renderMessages(value){
@@ -109,58 +117,175 @@
       const node=entry.node;
       const actor=['user','slot1','slot2'].includes(m.from)?m.from:'other';
       node.className=`message message-row ${actor} state-${m.state}`;node.dataset.messageId=m.id;
-      const avatar=element('div',actor==='user'?'Y':actor==='slot1'?'1':actor==='slot2'?'2':'·','message-avatar');
-      avatar.setAttribute('aria-hidden','true');
-      const content=element('div',undefined,'message-content');
-      const head=element('div',undefined,'message-meta');
-      const stamp=element('time',time(m.created_at));stamp.dateTime=m.created_at;
-      head.append(element('strong',handle(m.from),'message-author'),element('span',`${tr('target')} ${handle(m.to)}`,'message-target'),stamp);
-      const bubble=element('div',undefined,'message-bubble');
-      if(m.quote)bubble.append(element('blockquote',`${m.quote.from_handle || ''}\n${m.quote.text || ''}`,'reply-quote'));
-      // Native publications stay literal text; never interpret agent HTML or
-      // fetch external content from a relay body while displaying it.
-      bubble.append(element('p',m.text,'message-body'));
-      for(const a of m.attachments||[]){const img=element('img');img.alt=a.name||tr('attach');img.loading='lazy';img.src=`api/v1/attachments/${encodeURIComponent(a.id)}`;bubble.append(img);}
-      const footer=element('div',undefined,'message-footer');
-      footer.append(element('span',tr(m.state),'badge'));
-      if(m.state==='queued'||m.state==='unknown'){
-        const action=m.state==='queued'?'cancel':'retry';const button=element('button',tr(action),'message-action');button.type='button';button.dataset.action=action;
-        button.addEventListener('click',async()=>{if(action==='retry' && !await confirmRetry())return;button.disabled=true;try{await request(`api/v1/messages/${encodeURIComponent(m.id)}/${action}`,{method:'POST',body:'{}'});await refresh();}catch(e){status(e.message,true);}finally{button.disabled=false;}});footer.append(button);
-      }
-      content.append(head,bubble,footer);node.replaceChildren(avatar,content);
+      fillMessage(node,m,'chat');
     }
     messagesRendered=true;
     restoreReadingPosition(position);
+  }
+  function fillMessage(node,m,view){
+    const chat=view==='chat', actor=['user','slot1','slot2'].includes(m.from)?m.from:'other';
+    const head=element('div',undefined,chat?'message-meta':'message-heading');
+    const stamp=element('time',time(m.created_at));stamp.dateTime=m.created_at;
+    head.append(element('strong',handle(m.from),'message-author'),element('span',`${tr('target')} ${handle(m.to)}`,'message-target'),stamp);
+    const bubble=element('div',undefined,chat?'message-bubble':'message-evidence');
+    if(m.quote)bubble.append(element('blockquote',`${m.quote.from_handle || ''}\n${m.quote.text || ''}`,'reply-quote'));
+    const body=element('div',undefined,'message-body');
+    const content=()=>window.PairRoomRichText.render(body,m.text,{createImage:(_ref,alt)=>element('span',alt||tr('externalImage'),'muted'),onCopyError:()=>status(tr('copyFailed'),true)});
+    if(m.text.length>3000||view==='pending'){
+      const details=element('details');details.append(element('summary',m.text.slice(0,120)||tr('evidence')));let loaded=false;
+      details.addEventListener('toggle',()=>{if(details.open&&!loaded){loaded=true;content();}});details.append(body);bubble.append(details);
+    }else{content();bubble.append(body);}
+    if(m.review){
+      const evidence=element('details',undefined,'review-evidence');evidence.append(element('summary',`${tr('reviewVersion')} · ${m.review.head.slice(0,12)}`),element('pre',JSON.stringify(m.review,null,2)));
+      const check=element('button',tr('checkReview'));check.type='button';check.dataset.review=m.id;
+      const result=element('span',tr('reviewUnverified'),'muted');check.addEventListener('click',async()=>{check.disabled=true;try{const value=await request(`api/v1/review?id=${encodeURIComponent(m.id)}`);result.textContent=tr(`review_${value.status}`);}catch(e){status(e.message,true);}finally{check.disabled=false;}});
+      evidence.append(check,result);bubble.append(evidence);
+    }
+    for(const a of m.attachments||[]){const img=element('img');img.alt=a.name||tr('attach');img.loading='lazy';img.src=`api/v1/attachments/${encodeURIComponent(a.id)}`;bubble.append(img);}
+    const footer=element('div',undefined,'message-footer');footer.append(element('span',tr(m.state),'badge'));
+    const inspect=element('button',tr('inspect'),'message-action');inspect.type='button';inspect.addEventListener('click',()=>inspectMessage(m.id));footer.append(inspect);
+    if(m.state==='queued'||m.state==='unknown'){
+      const action=m.state==='queued'?'cancel':'retry';const button=element('button',tr(action),'message-action');button.type='button';button.dataset.action=action;
+      button.addEventListener('click',async()=>{if(action==='retry'&&!await confirmRetry())return;button.disabled=true;try{await request(`api/v1/messages/${encodeURIComponent(m.id)}/${action}`,{method:'POST',body:'{}'});pendingKey='';await refresh();}catch(e){status(e.message,true);}finally{button.disabled=false;}});footer.append(button);
+    }
+    if(chat){
+      const avatar=element('div',actor==='user'?'Y':actor==='slot1'?'1':actor==='slot2'?'2':'·','message-avatar');avatar.setAttribute('aria-hidden','true');
+      const content=element('div',undefined,'message-content');content.append(head,bubble,footer);node.replaceChildren(avatar,content);
+    }else node.replaceChildren(head,bubble,footer);
+  }
+  function pageMessages(container,messages,view){
+    container.replaceChildren(...messages.map(m=>{const node=element('article',undefined,`message state-${m.state}`);node.dataset[view==='pending'?'pendingId':'historyId']=m.id;fillMessage(node,m,view);return node;}));
+    if(!messages.length)container.append(element('p',tr('noItems'),'muted'));
+  }
+  async function refreshPending(){
+    const key=JSON.stringify([snapshot?.relay.sequence,pendingCursor,language()]);if(key===pendingKey)return;pendingKey=key;
+    const serial=++pendingRequest;
+    try{
+      const page=await request(`api/v1/pending?limit=10${pendingCursor?`&cursor=${encodeURIComponent(pendingCursor)}`:''}`);
+      if(serial!==pendingRequest)return;
+      pendingNext=page.next_cursor||'';$('pending-count').textContent=String(page.total);$('pending-next').disabled=!pendingNext;$('pending-first').disabled=!pendingCursor;
+      pageMessages($('pending-items'),page.messages,'pending');
+    }catch(e){if(serial===pendingRequest)pendingKey='';throw e;}
+  }
+  $('pending-first').addEventListener('click',()=>{pendingCursor='';pendingKey='';refreshPending().catch(e=>status(e.message,true));});
+  $('pending-next').addEventListener('click',()=>{pendingCursor=pendingNext;refreshPending().catch(e=>status(e.message,true));});
+  async function loadHistory(cursor=''){
+    const serial=++historyRequest;
+    const page=await request(`api/v1/history?limit=20${historyFilter}${cursor?`&cursor=${encodeURIComponent(cursor)}`:''}`);
+    if(serial!==historyRequest)return;
+    historyNext=page.next_cursor||'';$('history-next').hidden=!historyNext;pageMessages($('history-items'),page.messages,'history');
+  }
+  function inspectMessage(id){showInspector(true);$('history-panel').open=true;$('history-id').value=id;$('history-since').value='';historyFilter=`&id=${encodeURIComponent(id)}`;loadHistory().then(()=>$('history-panel').scrollIntoView({block:'nearest'})).catch(e=>status(e.message,true));}
+  $('history-form').addEventListener('submit',event=>{
+    event.preventDefault();const id=$('history-id').value.trim(),since=$('history-since').value;
+    if(id&&since){status(tr('chooseHistoryFilter'),true);return;}
+    historyFilter=id?`&id=${encodeURIComponent(id)}`:since?`&since=${encodeURIComponent(new Date(since).toISOString())}`:'';
+    loadHistory().catch(e=>status(e.message,true));
+  });
+  $('history-next').addEventListener('click',()=>loadHistory(historyNext).catch(e=>status(e.message,true)));
+  $('diagnose').addEventListener('click',async()=>{
+    $('diagnose').disabled=true;try{
+      const report=await request('api/v1/diagnostics');
+      $('diagnostics').replaceChildren(element('p',tr('diagnosticBoundary'),'muted'),...Object.entries(report.participants).map(([slot,d])=>{
+        const card=element('section');card.append(element('h3',handle(slot)),element('p',`${tr(`reason_${d.reason}`)} · ${tr(`cap_${d.capability}`)}`),element('p',tr(`next_${d.next_action}`)));
+        if(d.next_eligible_at)card.append(element('p',`${tr('nextEligible')} ${time(d.next_eligible_at)}`));
+        const wake=report.relay.last_wake?.[slot];if(wake)card.append(element('p',`${tr('lastWake')}: ${wake.outcome} / ${wake.reason||'—'} · ${time(wake.at)}`));
+        if(d.head_id){const inspect=element('button',tr('inspect'));inspect.type='button';inspect.addEventListener('click',()=>inspectMessage(d.head_id));card.append(inspect);}
+        return card;
+      }));
+    }catch(e){status(e.message,true);}finally{$('diagnose').disabled=false;}
+  });
+  function renderAttention(value){
+    // Activity refreshes must not steal focus from an attention control or make a
+    // polite live region reannounce an unchanged summary.
+    const key=JSON.stringify([value.summary,value.identities,language()]);if(key===attentionKey)return;attentionKey=key;
+    const summary=value.summary||{}, items=[];
+    const pending=Object.values(summary.inboxes||{}).reduce((n,i)=>n+(i.queued||0)+(i.delivering||0)+(i.unknown||0),0);
+    if(pending){const button=element('button',`${tr('pendingTitle')} (${pending})`);button.type='button';button.dataset.pendingOpen='';button.addEventListener('click',()=>{showInspector(true);$('pending-title').scrollIntoView({block:'nearest'});});items.push(button);}
+    for(const [slot,inbox] of Object.entries(summary.inboxes||{})){
+      if(inbox.unknown)items.push(element('span',`${handle(slot)}: ${inbox.unknown} ${tr('unknown')}`,'badge'));
+      if(inbox.oldest_queued_at)items.push(element('span',`${handle(slot)} · ${tr('oldestQueued')} ${time(inbox.oldest_queued_at)}`,'muted'));
+    }
+    for(const [slot,wake] of Object.entries(summary.last_wake||{}))if(wake.outcome==='failed')items.push(element('span',`${handle(slot)} · ${tr('wakeFailed')}: ${wake.reason}`,'badge'));
+    if(summary.last_user_message){const button=element('button',tr('userAttention'));button.type='button';button.addEventListener('click',()=>inspectMessage(summary.last_user_message));items.push(button);}
+    $('attention').replaceChildren(...items);$('attention').hidden=items.length===0;
   }
   function renderAudit(value){const key=JSON.stringify([value.relay.audit,language()]);if(key===auditKey)return;auditKey=key;
     const names={'native.binding.updated':'changed','native.publication':'publication','native.publication.gap':'gap','native.message.updated':'updated','native.failure':'failure'};
     $('audit').replaceChildren(...(value.relay.audit||[]).slice(-80).reverse().map(a=>{const li=element('li');li.append(element('strong',tr(names[a.kind]||a.kind)),element('time',time(a.at)));if(a.detail)li.append(element('p',a.detail));return li;}));
   }
-  function render(value){snapshot=value;$('room-name').textContent=value.room.name;document.title=`${value.room.name} · PairRoom Native`;renderBindings(value);renderMessages(value);renderAudit(value);}
+  function render(value){snapshot=value;restoreOutbox();renderAttention(value);refreshPending().catch(e=>status(e.message,true));$('room-name').textContent=value.room.name;document.title=`${value.room.name} · PairRoom Native`;renderBindings(value);renderMessages(value);renderAudit(value);}
   async function refresh(){if(refreshing){refreshAgain=true;return;}refreshing=true;try{do{refreshAgain=false;const value=await request('api/v1/snapshot?tail=1');if(!snapshot || value.relay.sequence>=snapshot.relay.sequence)render(value);}while(refreshAgain);}finally{refreshing=false;}}
   function lockComposer(){
-    // An uncertain publication must be retried with its ORIGINAL payload, not
-    // silently combined with edits or a newly selected attachment.
-    for(const id of ['message-text','target','attachment'])$(id).disabled=sending||pendingSend!==null;
-    $('send').disabled=sending;
+    // The Room id scopes the recovery record, so publication stays locked until
+    // the first snapshot identifies it; a click can never be silently dropped.
+    // Drafting stays editable, matching the oversized-draft rule.
+    for(const id of ['message-text','target','attachment','review-anchor'])$(id).disabled=sending||pendingSend!==null||outboxBroken;
+    $('send').disabled=!outboxRoom||sending||outboxBroken;
+    $('send').textContent=pendingSend?tr('retryOriginal'):tr('send');
+    $('outbox-check').disabled=sending||outboxBroken;
+    $('outbox-forget').disabled=sending;
   }
+  function renderOutbox(){
+    $('outbox').hidden=!pendingSend&&!outboxBroken;
+    $('outbox-notice').textContent=tr(outboxBroken?'storageFailed':'savedDraft');
+    lockComposer();
+  }
+  function restoreOutbox(){
+    if(outboxRoom===snapshot.room.id)return;
+    outboxRoom=snapshot.room.id;
+    try{pendingSend=outbox.load(localStorage,outboxRoom);}catch(_){outboxBroken=true;}
+    if(pendingSend){$('message-text').value=pendingSend.text;$('target').value=pendingSend.to;$('review-anchor').checked=Boolean(pendingSend.review);}
+    renderOutbox();
+    // Read-only reconciliation is safe; loading never posts a message.
+    if(pendingSend)checkOriginal().catch(e=>status(failureText(e),true));
+  }
+  async function checkOriginal(){
+    if(!pendingSend||sending)return;
+    const original=pendingSend;
+    const receipt=await request(`api/v1/sends/${encodeURIComponent(original.id)}`);
+    if(pendingSend!==original)return;
+    if(!receipt.found){status(tr('notFoundReceipt'));return;}
+    if(!outbox.matches(original,receipt.message)){outboxBroken=true;renderOutbox();throw new Error(tr('receiptConflict'));}
+    outbox.clear(localStorage,outboxRoom,original.id);
+    pendingSend=null;$('message-text').value='';$('attachment').value='';$('review-anchor').checked=false;
+    renderOutbox();status(tr('receiptRecovered'));await refresh();
+  }
+  $('outbox-check').addEventListener('click',()=>checkOriginal().catch(e=>status(failureText(e),true)));
+  $('outbox-forget').addEventListener('click',async()=>{
+    if(sending||!await confirmAction('forgetTitle','forgetBody'))return;
+    try{outbox.forget(localStorage,outboxRoom);pendingSend=null;outboxBroken=false;$('message-text').value='';$('attachment').value='';renderOutbox();status(tr('forgotten'));}catch(_){status(tr('storageFailed'),true);}
+  });
   $('composer').addEventListener('submit',async event=>{
-    event.preventDefault();if(sending)return;
-    const text=$('message-text').value.trim();const file=$('attachment').files[0];if(!text&&!file){status(tr('inputRequired'),true);return;}
-    const to=$('target').value;
-    if(pendingSend && (pendingSend.text!==text||pendingSend.to!==to)){status(tr('unknownSend'),true);return;}
-    // HTML maxlength counts UTF-16 code units, not the relay's UTF-8 budget.
-    // Reject before upload/publication so a known-invalid draft stays editable.
+    event.preventDefault();if(sending||outboxBroken||!outboxRoom)return;
+    const text=$('message-text').value.trim();const file=$('attachment').files[0];
+    if(!pendingSend&&!text&&!file){status(tr('inputRequired'),true);return;}
     if(!pendingSend && new TextEncoder().encode(text).byteLength>MAX_MESSAGE_BYTES){status(`${window.PairRoomI18n.t('errors.request_too_large')} (256 KiB UTF-8)`,true);return;}
     sending=true;lockComposer();
     try{
-      if(!pendingSend){let attachmentIDs=[];if(file){const body=new FormData();body.append('file',file);const a=await request('api/v1/attachments',{method:'POST',body});attachmentIDs=[a.id];}pendingSend={id:crypto.randomUUID(),text,to,attachment_ids:attachmentIDs};}
-      await request('api/v1/messages',{method:'POST',body:JSON.stringify(pendingSend)});pendingSend=null;$('message-text').value='';$('attachment').value='';status(tr('sent'));await refresh();
-    }catch(e){status(e.message,true);}finally{sending=false;lockComposer();}
+      if(!pendingSend){
+        let attachmentIDs=[];
+        let review;
+        if($('review-anchor').checked)review=await request('api/v1/review');
+        if(file){const body=new FormData();body.append('file',file);const a=await request('api/v1/attachments',{method:'POST',body});attachmentIDs=[a.id];}
+        const draft={id:crypto.randomUUID(),text,to:$('target').value,attachment_ids:attachmentIDs};if(review)draft.review=review;
+        // A storage failure prevents publication. The draft remains editable.
+        outbox.save(localStorage,outboxRoom,draft);pendingSend=draft;
+      }else{
+        outbox.save(localStorage,outboxRoom,pendingSend); // Detect another tab changing the recovery record.
+      }
+      const accepted=await request('api/v1/messages',{method:'POST',body:JSON.stringify(pendingSend)});
+      if(!outbox.matches(pendingSend,accepted))throw new Error(tr('receiptConflict'));
+      outbox.clear(localStorage,outboxRoom,pendingSend.id);
+      pendingSend=null;$('message-text').value='';$('attachment').value='';$('review-anchor').checked=false;status(tr('sent'));await refresh();
+    }catch(e){status(pendingSend?`${tr('unknownSend')} ${failureText(e)}`:failureText(e),true);}finally{sending=false;renderOutbox();}
+  });
+  window.addEventListener('storage',event=>{
+    if(event.key===`pairroom.native.outbox.v1.${outboxRoom}`&&!sending){if(pendingSend){checkOriginal().catch(e=>status(failureText(e),true));}else{outboxRoom='';restoreOutbox();}}
   });
   document.addEventListener('pairroom:lang',translations);
   async function start(){
-    translations();try{
+    translations();lockComposer();try{
       const token=new URLSearchParams(location.hash.slice(1)).get('token');
       if(token){const session=await request('api/v1/session',{method:'POST',headers:{Authorization:`Bearer ${token}`}});csrf=session.csrf_token;history.replaceState(null,'',location.pathname+location.search);}
       else{const session=await request('api/v1/session');csrf=session.csrf_token;}

@@ -26,28 +26,25 @@ func (e *Engine) WaitForPending(ctx context.Context, a Auth) (bool, error) {
 			e.mu.Unlock()
 			return false, err
 		}
-		ready, busy := false, false
-		for _, id := range e.order {
-			m := e.messages[id]
-			if m.To != a.Slot || m.TargetGeneration != a.Generation {
-				continue
-			}
-			if m.State == "delivering" {
-				busy = true
-				break
-			}
-			ready = ready || m.State == "queued"
-		}
+		ready := len(e.queued[a.Slot]) > 0
+		busy := e.counts[a.Slot].Delivering > 0
 		if ready && !busy {
 			e.mu.Unlock()
 			return true, nil
 		}
 		changed := e.changed
+		e.waiters[a.Slot]++
 		e.mu.Unlock()
 		select {
 		case <-ctx.Done():
+			e.mu.Lock()
+			e.waiters[a.Slot]--
+			e.mu.Unlock()
 			return false, ctx.Err()
 		case <-changed:
 		}
+		e.mu.Lock()
+		e.waiters[a.Slot]--
+		e.mu.Unlock()
 	}
 }

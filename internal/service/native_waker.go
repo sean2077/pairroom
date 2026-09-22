@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -40,33 +41,46 @@ type nativeWakeRun func(context.Context, string, ...string) error
 type nativeWakeWait func(context.Context, time.Duration) error
 
 type nativeWakerConfig struct {
-	Claude      nativeWakePrepare
-	Relay       nativeWakeRelay
-	Now         func() time.Time
-	Grace       time.Duration
-	MinInterval time.Duration
-	HourlyLimit int
-	Timeout     time.Duration
-	Run         nativeWakeRun
-	Wait        nativeWakeWait
+	CodexCommand string
+	Mock         bool
+	Claude       nativeWakePrepare
+	Relay        nativeWakeRelay
+	Now          func() time.Time
+	Grace        time.Duration
+	MinInterval  time.Duration
+	HourlyLimit  int
+	Timeout      time.Duration
+	Run          nativeWakeRun
+	Wait         nativeWakeWait
 }
 
 // nativeWaker belongs to one active native Room runtime. Its durable
 // reservations are rehydrated from the Room Event Log; its pending map keeps
 // one grace task per target so a burst produces one wake decision.
 type nativeWaker struct {
-	claude      nativeWakePrepare
-	mu          sync.Mutex
-	relay       nativeWakeRelay
-	now         func() time.Time
-	grace       time.Duration
-	minInterval time.Duration
-	hourlyLimit int
-	timeout     time.Duration
-	run         nativeWakeRun
-	wait        nativeWakeWait
-	attempts    []relay.WakeReservation
-	pending     map[model.ActorID]struct{}
+	codexCommand string
+	mock         bool
+	claude       nativeWakePrepare
+	mu           sync.Mutex
+	relay        nativeWakeRelay
+	now          func() time.Time
+	grace        time.Duration
+	minInterval  time.Duration
+	hourlyLimit  int
+	timeout      time.Duration
+	run          nativeWakeRun
+	wait         nativeWakeWait
+	attempts     []relay.WakeReservation
+	pending      map[model.ActorID]struct{}
+	// attempting marks a target whose wake is already durably reserved, so a
+	// possibly submitted vendor effect never runs through a runtime suspend.
+	// Capability probes and the pre-reservation grace delay deliberately do not
+	// appear here: they hold no effect and must not pin an idle runtime.
+	attempting   map[model.ActorID]struct{}
+	deferred     map[model.ActorID]nativeWakeDeferred
+	lastRecorded map[model.ActorID]string
+	workers      sync.WaitGroup
+	closing      bool
 }
 
 func newNativeWaker(cfg nativeWakerConfig) *nativeWaker {
@@ -92,16 +106,21 @@ func newNativeWaker(cfg nativeWakerConfig) *nativeWaker {
 		cfg.Wait = waitNativeWake
 	}
 	w := &nativeWaker{
-		claude:      cfg.Claude,
-		relay:       cfg.Relay,
-		now:         cfg.Now,
-		grace:       cfg.Grace,
-		minInterval: cfg.MinInterval,
-		hourlyLimit: cfg.HourlyLimit,
-		timeout:     cfg.Timeout,
-		run:         cfg.Run,
-		wait:        cfg.Wait,
-		pending:     map[model.ActorID]struct{}{},
+		codexCommand: cfg.CodexCommand,
+		mock:         cfg.Mock,
+		claude:       cfg.Claude,
+		relay:        cfg.Relay,
+		now:          cfg.Now,
+		grace:        cfg.Grace,
+		minInterval:  cfg.MinInterval,
+		hourlyLimit:  cfg.HourlyLimit,
+		timeout:      cfg.Timeout,
+		run:          cfg.Run,
+		wait:         cfg.Wait,
+		pending:      map[model.ActorID]struct{}{},
+		attempting:   map[model.ActorID]struct{}{},
+		deferred:     map[model.ActorID]nativeWakeDeferred{},
+		lastRecorded: map[model.ActorID]string{},
 	}
 	if cfg.Relay != nil {
 		w.attempts = append(w.attempts, cfg.Relay.WakeReservations()...)
@@ -112,8 +131,106 @@ func newNativeWaker(cfg nativeWakerConfig) *nativeWaker {
 // Schedule is intentionally fire-and-forget at the Service HTTP boundary.
 // The native FIFO is already durable before it is called; a failed wake leaves
 // that message queued for foreground collection rather than affecting send.
+// Schedule owns every worker until Close; cancellation must finish before the
+// Room writer closes. The runtime's existing maintenance tick rechecks heads.
 func (w *nativeWaker) Schedule(ctx context.Context, messageID string) {
-	go func() { _ = w.Wake(ctx, messageID) }()
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	if w.closing {
+		w.mu.Unlock()
+		return
+	}
+	w.workers.Add(1)
+	w.mu.Unlock()
+	go func() { defer w.workers.Done(); _ = w.Wake(ctx, messageID) }()
+}
+
+func (w *nativeWaker) Close() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	w.closing = true
+	w.mu.Unlock()
+	w.workers.Wait()
+}
+
+type nativeWakeDeferred struct {
+	MessageID string
+	At        time.Time
+	Reason    string
+}
+
+type nativeWakeHeadSource interface{ WakeHeads() []relay.WakeCandidate }
+
+// Reconcile is transport maintenance, not a model poll. It examines at most two
+// heads, including after restart, queue-head changes and a collector's exit.
+// A reserved head is NEVER retried. A rate-suppressed (unattempted) head becomes
+// eligible when its deadline passes even if no further messages arrive.
+func (w *nativeWaker) Reconcile(ctx context.Context) {
+	if w == nil || ctx.Err() != nil {
+		return
+	}
+	source, ok := w.relay.(nativeWakeHeadSource)
+	if !ok {
+		return
+	}
+	heads := source.WakeHeads()
+	now := w.now()
+	live := map[model.ActorID]bool{}
+	for _, c := range heads {
+		live[c.Target] = true
+		w.mu.Lock()
+		next := w.deferred[c.Target]
+		if next.MessageID != c.MessageID || c.Reserved || !c.Enabled {
+			delete(w.deferred, c.Target)
+			next = nativeWakeDeferred{}
+		}
+		_, pending := w.pending[c.Target]
+		closed := w.closing
+		w.mu.Unlock()
+		if closed || pending || c.Reserved || nativeWakeSuppression(c) != "" || (!next.At.IsZero() && now.Before(next.At)) {
+			continue
+		}
+		w.Schedule(ctx, c.MessageID)
+	}
+	w.mu.Lock()
+	for slot := range w.deferred {
+		if !live[slot] {
+			delete(w.deferred, slot)
+		}
+	}
+	w.mu.Unlock()
+}
+
+// A deferred rate-limited head holds the Native runtime lease until it can be
+// reconsidered (the Room hourly budget may exceed the ordinary idle timeout), and
+// a reserved wake holds it until its vendor command settles. Unsupported, unbound
+// or capability-missing sessions never pin idle runtimes: their periodic probe
+// carries no reservation and no pending vendor effect.
+func (w *nativeWaker) InUse() bool {
+	if w == nil {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.attempting) > 0 {
+		return true
+	}
+	for _, d := range w.deferred {
+		if d.Reason == "minimum_interval" || d.Reason == "hourly_limit" {
+			return true
+		}
+	}
+	return false
+}
+
+func (w *nativeWaker) deferCandidate(c relay.WakeCandidate, at time.Time, reason string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.deferred[c.Target] = nativeWakeDeferred{MessageID: c.MessageID, At: at, Reason: reason}
 }
 
 // Wake evaluates one post-enqueue message. A durable reservation is appended
@@ -160,11 +277,13 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 	var claudeSend claudewake.Send
 	if candidate.Runtime.Canonical() == model.RuntimeClaude {
 		if w.claude == nil {
+			w.deferCandidate(candidate, w.now().Add(30*time.Second), "capability_unavailable")
 			return w.record("suppressed", "capability_unavailable", candidate.Target)
 		}
 		var err error
 		claudeSend, err = w.claude(candidate)
 		if err != nil || claudeSend == nil {
+			w.deferCandidate(candidate, w.now().Add(30*time.Second), "capability_unavailable")
 			return w.record("suppressed", "capability_unavailable", candidate.Target)
 		}
 	}
@@ -173,7 +292,8 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 	}
 	now := w.now().UTC()
 	reservation := relay.WakeReservation{MessageID: candidate.MessageID, Target: candidate.Target, At: now}
-	if reason := w.reserveRate(reservation); reason != "" {
+	if reason, at := w.reserveRate(reservation); reason != "" {
+		w.deferCandidate(candidate, at, reason)
 		return w.record("suppressed", reason, candidate.Target)
 	}
 	if err := w.relay.ReserveWake(candidate.MessageID, candidate.Target); err != nil {
@@ -186,6 +306,8 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 		}
 		return errNativeWakeAudit
 	}
+	w.beginAttempt(candidate.Target)
+	defer w.endAttempt(candidate.Target)
 
 	commandCtx, cancel := context.WithTimeout(ctx, w.timeout)
 	if claudeSend != nil {
@@ -232,6 +354,9 @@ func (w *nativeWaker) begin(target model.ActorID) bool {
 	if _, exists := w.pending[target]; exists {
 		return false
 	}
+	if w.closing {
+		return false
+	}
 	w.pending[target] = struct{}{}
 	return true
 }
@@ -242,31 +367,74 @@ func (w *nativeWaker) end(target model.ActorID) {
 	w.mu.Unlock()
 }
 
-func (w *nativeWaker) reserveRate(reservation relay.WakeReservation) string {
+// beginAttempt/endAttempt bracket the window between the durable reservation and
+// the settled vendor outcome, which is the only span where a suspend could
+// interrupt an effect that the audit must not replay.
+func (w *nativeWaker) beginAttempt(target model.ActorID) {
+	w.mu.Lock()
+	w.attempting[target] = struct{}{}
+	w.mu.Unlock()
+}
+
+func (w *nativeWaker) endAttempt(target model.ActorID) {
+	w.mu.Lock()
+	delete(w.attempting, target)
+	w.mu.Unlock()
+}
+
+// RateWindow reports an advisory deadline, never permission to call a vendor.
+func (w *nativeWaker) RateWindow(target model.ActorID) (string, time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	now := reservation.At
+	return w.rateWindowLocked(w.now().UTC(), target)
+}
+
+func (w *nativeWaker) rateWindowLocked(now time.Time, target model.ActorID) (string, time.Time) {
 	cutoff := now.Add(-time.Hour)
 	kept := w.attempts[:0]
 	var last time.Time
-	for _, attempt := range w.attempts {
-		if !attempt.At.After(cutoff) {
+	times := make([]time.Time, 0, len(w.attempts))
+	for _, a := range w.attempts {
+		if !a.At.After(cutoff) {
 			continue
 		}
-		kept = append(kept, attempt)
-		if last.IsZero() || attempt.At.After(last) {
-			last = attempt.At
+		kept = append(kept, a)
+		times = append(times, a.At)
+		if a.Target == target && (last.IsZero() || a.At.After(last)) {
+			last = a.At
 		}
 	}
 	w.attempts = kept
+	reason := ""
+	var due time.Time
 	if !last.IsZero() && now.Before(last.Add(w.minInterval)) {
-		return "minimum_interval"
+		reason = "minimum_interval"
+		due = last.Add(w.minInterval)
 	}
-	if len(w.attempts) >= w.hourlyLimit {
-		return "hourly_limit"
+	if len(times) >= w.hourlyLimit {
+		sort.Slice(times, func(i, j int) bool { return times[i].Before(times[j]) })
+		hourly := times[len(times)-w.hourlyLimit].Add(time.Hour)
+		if due.IsZero() || hourly.After(due) {
+			reason = "hourly_limit"
+			due = hourly
+		}
+	}
+	return reason, due
+}
+
+// reserveRate spends one Room-budget slot, or reports the suppression reason and
+// the deadline computed in the same sample. Recomputing the deadline from a
+// second clock reading could cross the boundary and lose the deferred deadline.
+func (w *nativeWaker) reserveRate(reservation relay.WakeReservation) (string, time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	reason, due := w.rateWindowLocked(reservation.At, reservation.Target)
+	if reason != "" {
+		return reason, due
 	}
 	w.attempts = append(w.attempts, reservation)
-	return ""
+	delete(w.deferred, reservation.Target)
+	return "", time.Time{}
 }
 
 func (w *nativeWaker) removeAttempt(messageID string) {
@@ -281,9 +449,25 @@ func (w *nativeWaker) removeAttempt(messageID string) {
 }
 
 func (w *nativeWaker) record(outcome, reason string, target model.ActorID) error {
+	// Maintenance must not grow the audit once a second while a known condition
+	// persists. Changes of reason/outcome are still recorded; never suppress an
+	// accepted/submitted/failed effect record. Only one wake worker runs per
+	// target, so the duplicate check stays exact while the durable append runs
+	// outside w.mu: a slow fsync must not block runtime scheduling, which reads
+	// this state under the manager lock.
+	key := outcome + "/" + reason
+	w.mu.Lock()
+	duplicate := outcome == "suppressed" && w.lastRecorded[target] == key
+	w.mu.Unlock()
+	if duplicate {
+		return nil
+	}
 	if w.relay.RecordWake(outcome, reason, target) != nil {
 		return errNativeWakeAudit
 	}
+	w.mu.Lock()
+	w.lastRecorded[target] = key
+	w.mu.Unlock()
 	return nil
 }
 

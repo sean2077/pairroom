@@ -31,9 +31,8 @@ func (e *Engine) SetWakeEnabled(enabled bool) error {
 	if e.wakeEnabled == enabled {
 		return nil
 	}
-	for _, id := range e.order {
-		switch e.messages[id].State {
-		case "delivering", "unknown":
+	for _, counts := range e.counts {
+		if counts.Delivering > 0 || counts.Unknown > 0 {
 			return ErrWakeRoomBusy
 		}
 	}
@@ -134,22 +133,26 @@ func (e *Engine) wakeCandidateLocked(messageID string) (WakeCandidate, bool) {
 		candidate.BindID = b.BindID
 		candidate.Generation = b.Generation
 	}
-	firstQueued := ""
-	for _, id := range e.order {
-		other := e.messages[id]
-		if other.To != m.To {
-			continue
-		}
-		switch other.State {
-		case "queued":
-			if firstQueued == "" {
-				firstQueued = id
-			}
-		case "delivering":
-			candidate.Delivering = true
-		}
-	}
-	candidate.QueueStart = firstQueued == m.ID
+	ids := e.queued[m.To]
+	candidate.QueueStart = len(ids) > 0 && ids[0] == m.ID
+	candidate.Delivering = e.counts[m.To].Delivering > 0
+	candidate.Reserved = e.wakeReserved[m.ID]
 	candidate.WaiterActive = e.waiters[m.To] > 0
 	return candidate, true
+}
+
+// WakeHeads examines at most two queue heads, regardless of terminal history.
+// Reserved heads remain visible to diagnostics but never earn an automatic retry.
+func (e *Engine) WakeHeads() []WakeCandidate {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	result := make([]WakeCandidate, 0, 2)
+	for _, slot := range model.SlotActors() {
+		if ids := e.queued[slot]; len(ids) > 0 {
+			if candidate, ok := e.wakeCandidateLocked(ids[0]); ok {
+				result = append(result, candidate)
+			}
+		}
+	}
+	return result
 }

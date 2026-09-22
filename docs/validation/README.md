@@ -18,3 +18,5 @@ Read [History provenance](../../HISTORY_PROVENANCE.md) before using early commit
 For current verification, use [Contributing](../../CONTRIBUTING.md) and the CI results for the exact commit being reviewed. Distinguish unit/race tests, build checks, browser fixtures, real-browser Mock Service tests, and authenticated native E2E. A probe or Mock success is not a real coding-agent test, and none of these old reports is a comparative model-quality/cost benchmark.
 
 New one-off run output belongs with its CI run or PR evidence, not copied into this directory as another undocumented source of truth. Current recovery and schema behavior belongs in [Storage](../STORAGE.md) and [Upgrading](../UPGRADING.md).
+
+For the Native wake/recovery/review changes, see the [acceptance map and projection benchmark methodology](../design/native-review-closure.md#acceptance-map). Its tests distinguish unattempted deferred wake from uncertain effects, preserve original send IDs across reload, and exercise session-workspace discovery separately from review-checkout selection. Use the matching PR checks for pass/fail results.
