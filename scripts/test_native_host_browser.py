@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Native-host real HTTP/CLI/browser recovery test with synthetic hook inputs.
+"""Native-host IM presentation and real HTTP/CLI/browser recovery checks.
 
-Exercises the shipped binary, not fetch/EventSource mocks. It does NOT prove
-Claude Code/Codex acceptance or real vendor E2E. No tokens/credentials exported.
+The IM check uses a snapshot fixture; transport checks exercise the shipped
+binary with synthetic hook inputs. Neither proves real vendor E2E or model
+acceptance. No tokens/credentials exported.
 """
 from __future__ import annotations
 
@@ -16,10 +17,12 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright, expect
 from test_service_browser import ROOT, Service, read_json, wait_snapshot
+from test_native_chat_browser import verify as verify_chat
 
 
 async def verify(binary: Path | None, browser_path: str | None, artifacts: Path) -> None:
     artifacts.mkdir(parents=True, exist_ok=True)
+    await verify_chat(browser_path, artifacts/'im')
     with tempfile.TemporaryDirectory(prefix='pairroom-native-browser-') as temporary:
         root = Path(temporary)
         if binary is None:
@@ -29,6 +32,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
         repo = root / 'project'
         repo.mkdir()
         subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+        subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '--allow-empty', '-qm', 'Initial review fixture'], check=True)
         service = Service(binary, root)
         env = os.environ.copy()
         env.update(HOME=str(root/'home'), USERPROFILE=str(root/'home'), XDG_CONFIG_HOME=str(root/'home'/'.config'))
@@ -208,6 +212,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 pending=await read_json(context,surface+'/api/v1/pending?limit=10')
                 assert any(m['id']==interrupted_id and m['state']=='unknown' for m in pending['messages'])
                 await page.goto(surface+'/')
+                await page.locator('[data-pending-open]').click()
                 await expect(page.locator(f'[data-pending-id="{interrupted_id}"]')).to_be_visible()
                 await page.locator(f'[data-pending-id="{interrupted_id}"] .message-action').first.click()
                 await expect(page.locator(f'[data-history-id="{interrupted_id}"]')).to_be_visible()

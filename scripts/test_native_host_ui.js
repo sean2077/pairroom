@@ -15,6 +15,10 @@ class Element {
     this.classList = { toggle() {} };
   }
   appendChild(node) { this.append(node); return node; }
+  // The shipped client measures scroll geometry on every render; this flat stub
+  // keeps the transcript permanently at its end, as these assertions assume.
+  getBoundingClientRect() { return { top: 0, right: 0, bottom: 0, left: 0, width: 0, height: 0 }; }
+  get firstElementChild() { return this.children[0] || null; }
   append(...nodes) { for (const node of nodes) { node.parent = this; this.children.push(node); } }
   prepend(node) { node.parent = this; this.children.unshift(node); }
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
