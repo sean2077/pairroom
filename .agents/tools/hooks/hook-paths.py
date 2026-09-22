@@ -16,7 +16,7 @@ MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
 HOOK_DIR = os.path.dirname(os.path.abspath(__file__))
 GITBASH_DRIVE = re.compile(r"^/([A-Za-z])(?:/(.*))?$")
 _CYGPATH_WINDOWS: bool | None = None
-PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$")
+PATCH_FILE = re.compile(r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$")
 HEAD_REF = "ref: refs/heads/"
 
 
