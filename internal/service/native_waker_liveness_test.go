@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -188,6 +189,70 @@ func TestNativeWakeRechecksCancelledHeadAndDisabledRoom(t *testing.T) {
 	w.workers.Wait()
 	if calls.Load() != 2 {
 		t.Fatal("enabled unattempted work stranded")
+	}
+}
+
+// Only a durably reserved, possibly submitted wake (or a rate-limit deferral) may
+// hold the Native runtime lease. A capability probe waiting out its grace delay
+// carries no effect, so a Claude slot without a captured inbox must not keep a
+// Runtime resident forever: the manager would refresh last-used every few seconds
+// and the Room could never idle-suspend.
+func TestNativeCapabilityProbeDoesNotHoldTheRuntimeLease(t *testing.T) {
+	var clock, calls atomic.Int64
+	clock.Store(1800000000)
+	log, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := relay.Open(relay.Config{RoomID: "probe", Store: log, Now: func() time.Time { return time.Unix(clock.Load(), 0).UTC() }, Runtimes: map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: model.RuntimeClaude}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = e.Close() }()
+	a := map[model.ActorID]relay.Auth{}
+	for _, slot := range model.SlotActors() {
+		b, err := e.Bind(slot, relay.BindRequest{BindID: "bind-" + string(slot), CredentialHash: relay.Digest("secret"), SessionID: "session-" + string(slot)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		a[slot] = relay.Auth{Slot: slot, BindID: b.BindID, Generation: b.Generation, SessionID: b.SessionID, Secret: "secret"}
+	}
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	note := func() {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+	}
+	// No Claude capability is wired, so the probe can only end in a deferral.
+	w := newNativeWaker(nativeWakerConfig{Relay: e, Now: func() time.Time { return time.Unix(clock.Load(), 0).UTC() },
+		Wait: func(context.Context, time.Duration) error { note(); <-release; return nil },
+		Run:  func(context.Context, string, ...string) error { calls.Add(1); return nil }})
+	// Release the grace delay before Close: a failing assertion must not hang.
+	defer w.Close()
+	defer unblock()
+	m, err := e.Send(a[model.ActorSlot1], relay.SendRequest{ID: "probe", Text: "fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Reconcile(context.Background())
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("wake worker never reached its grace delay")
+	}
+	if w.InUse() {
+		t.Fatal("pre-reservation probe held the runtime lease")
+	}
+	unblock()
+	w.workers.Wait()
+	if calls.Load() != 0 || w.InUse() {
+		t.Fatal("capability probe attempted a wake or kept the lease")
+	}
+	if page, err := e.History(relay.HistoryQuery{ID: m.ID}); err != nil || page.Messages[0].State != "queued" {
+		t.Fatal("probe consumed the queued head")
 	}
 }
 

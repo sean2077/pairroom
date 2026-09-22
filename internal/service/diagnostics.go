@@ -61,7 +61,7 @@ func (s *ManagementServer) runDiagnostics(w http.ResponseWriter, r *http.Request
 	defer cancel()
 	if request.Mode == "native" {
 		if request.RoomID == "" {
-			writeManagementError(w, 400, "native diagnostics require a Room")
+			writeManagementError(w, http.StatusBadRequest, "native diagnostics require a Room")
 			return
 		}
 		active, err := s.runtimes.runtimeForCompletion(request.RoomID)
@@ -71,7 +71,7 @@ func (s *ManagementServer) runDiagnostics(w http.ResponseWriter, r *http.Request
 		}
 		native, ok := active.(*nativeHostRuntime)
 		if !ok {
-			writeManagementError(w, 409, "open the Native Room before inspecting live capabilities; diagnostics do not activate runtimes")
+			writeManagementError(w, http.StatusConflict, "open the Native Room before inspecting live capabilities; diagnostics do not activate runtimes")
 			return
 		}
 		release := native.acquire()

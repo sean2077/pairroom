@@ -54,7 +54,8 @@ therefore cannot strand an unattempted successor merely because no new send arri
 A rate-suppressed head has a next eligible time and keeps the runtime alive across
 its idle timeout. At expiry it is revalidated, not blindly submitted. Missing Claude
 capabilities are rechecked at a bounded 30-second cadence while the runtime remains
-active. Unbound/unsupported sessions do not pin a runtime; repeated identical
+active, without holding the runtime lease on its own. Unbound/unsupported sessions
+do not pin a runtime; repeated identical
 suppression observations are coalesced instead of appending audit every second.
 
 A durable reservation means a possibly attempted effect, including a crash before
