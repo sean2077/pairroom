@@ -74,8 +74,18 @@ func (e *Engine) Summary() Summary {
 func (e *Engine) AuthSummary(a Auth) (Summary, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if _, err := e.auth(a, false); err != nil {
+	b, err := e.auth(a, true)
+	if err != nil {
 		return Summary{}, err
+	}
+	if b.SessionID == "" {
+		// A replayed pre-upgrade binding has no confirmed official session yet, so
+		// it keeps the documented body-free projection: no inbox counts, recovery
+		// IDs, wake state or sequence, and no inbox access before association.
+		return Summary{HostMode: model.HostNative, RoomID: e.cfg.RoomID, WakeEnabled: e.wakeEnabled,
+			Bindings: map[model.ActorID]BindingSummary{a.Slot: {Active: b.Active, ParkEnabled: b.ParkEnabled}},
+			Inboxes:  map[model.ActorID]InboxSummary{}, LastWake: map[model.ActorID]WakeObservation{},
+			Notice: "Binding is not associated with an official session; rebind inside the native session. No inbox access before association."}, nil
 	}
 	return e.summaryLocked(), nil
 }
@@ -109,13 +119,6 @@ func (e *Engine) summaryLocked() Summary {
 		}
 	}
 	return s
-}
-
-// Binding returns only one public binding projection without cloning history.
-func (e *Engine) Binding(slot model.ActorID) Binding {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.bindings[slot].Binding
 }
 
 // InspectTransport observes the two bindings/heads and summary at one sequence.

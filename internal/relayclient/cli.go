@@ -123,7 +123,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if o.limit < 1 || o.limit > relay.HistoryPageLimit {
 			return errors.New("history limit must be 1–100")
 		}
-		if o.id != "" && (o.cursor != "" || o.pending || o.since != "") {
+		if o.id != "" && (o.cursor != "" || o.pending || o.since != "" || provided["limit"]) {
 			return errors.New("choose --id or a history page")
 		}
 		if o.since != "" {
