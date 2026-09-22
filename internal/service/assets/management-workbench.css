@@ -277,6 +277,20 @@ body.management-ux-enhanced .app-shell.room-workspace .room-frame {
 }
 body.management-ux-enhanced .app-shell.room-workspace .room-placeholder { min-height: 100%; }
 
+/* A Room owns the bottom of its surface: its composer is pinned there and the
+   send action reaches the bottom-right corner. Shell notifications must not
+   cover a primary action, so in a Room workspace they wait at the top of the
+   stage over the Room's non-interactive heading - the same trade-off the Room
+   makes for its own toasts on narrow screens. They stay clear of the sidebar,
+   the tab strip, and every Room control. */
+body.management-room-workspace .toast-stack {
+  top: calc(var(--room-workbench-tabbar-height) + 10px);
+  bottom: auto;
+  left: calc(var(--sidebar-width) + 18px);
+  right: auto;
+  width: min(390px, calc(100vw - var(--sidebar-width) - 36px));
+}
+
 /* Maximized Room: slide the sidebar away so the Room surface uses the full
    window width. The tab strip stays so the toggle and tab switching remain
    reachable. */
@@ -294,6 +308,8 @@ body.management-ux-enhanced .room-workspace-maximize[aria-pressed="true"] {
 }
 
 @media (max-width: 900px) {
+  /* The sidebar is off-canvas here, so the Room surface starts at the edge. */
+  body.management-room-workspace .toast-stack { left: 18px; width: min(390px, calc(100vw - 36px)); }
   body.management-ux-enhanced .app-shell.room-workspace .workspace-shell { padding-bottom: 0; }
   body.management-ux-enhanced .app-shell.room-workspace .management-mobile-nav { display: none; }
   body.management-ux-enhanced .app-shell.room-workspace .room-workspace-leading { display: flex; }

@@ -12,7 +12,9 @@ const entries = {
 };
 for (const [kind, file] of Object.entries(entries)) {
   const html = read(file);
-  assert.match(html, new RegExp(`<body class="workbench workbench-${kind}">`));
+  // The workbench skin must land on every surface body; a surface may add its
+  // own layout classes after it.
+  assert.match(html, new RegExp(`<body class="workbench workbench-${kind}( [^"]*)?">`));
   const links = [...html.matchAll(/<link\b[^>]*rel="stylesheet"[^>]*>/g)].map(m => m[0]);
   assert.match(links.at(-1), /href="\/_pairroom\/workbench.css"/);
   assert.equal(links.filter(link => link.includes('/workbench.css')).length, 1);
