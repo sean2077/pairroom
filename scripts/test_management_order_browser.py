@@ -266,19 +266,16 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
     summary = page.locator('.settings-content details > summary')
     await summary.click()
     assert 'Service' in await page.locator('.settings-content details').inner_text()
-    await summary.click()
-    # A switch stays a horizontal pill: the global button min-height must not
-    # stretch it back into a circle. The section switch is applied on hashchange,
-    # so sample until the layout settles instead of reading one possibly
-    # mid-replacement frame; a switch that is genuinely collapsed still fails.
-    await page.get_by_role('button', name='Interface experience', exact=True).click()
-    switches = []
-    for _ in range(50):
-        switches = await page.locator('.settings-content .toggle-switch').evaluate_all('(els)=>els.map(e=>{const r=e.getBoundingClientRect();return [r.width,r.height];})')
-        if switches and all(w > h * 1.5 for w, h in switches):
-            break
-        await page.wait_for_timeout(50)
+    # The raw-snapshot switch lives in the expanded Diagnostics summary, not
+    # Interface. Assert before navigating; sampling the outgoing view after a
+    # hashchange made this test pass or fail depending on render timing.
+    switch = page.locator('.settings-content details .toggle-switch')
+    await expect(switch).to_be_visible()
+    switches = await switch.evaluate_all('(els)=>els.map(e=>{const r=e.getBoundingClientRect();return [r.width,r.height];})')
     assert switches and all(w > h * 1.5 for w, h in switches), switches
+    await summary.click()
+    await page.get_by_role('button', name='Interface experience', exact=True).click()
+    await expect(page.locator('.settings-nav [aria-current="page"]')).to_have_text('Interface experience')
     for theme, language in [('light','en'),('dark','zh-CN')]:
         await page.evaluate("args=>{PairRoomTheme.setTheme(args[0]);PairRoomI18n.setLang(args[1]);}",[theme,language])
         await page.screenshot(path=str(artifacts / f'settings-unified-{theme}-{language}.png'),full_page=True)
