@@ -25,11 +25,11 @@ Use a short-lived task branch/worktree from current `main`, respecting the assig
 
 Concurrency/recovery changes should cover success, cancellation, process exit, restart, late events, duplicate callbacks, and unknown submission outcomes. Keep verification proportional, but never replace execution evidence with another Agent's assertion. The installed `agent-scaffold` skill's `verify --profile default --json` is the authoritative full harness check; do not hand-edit its runtime to bypass a failure.
 
-Commit subjects follow the established `type(scope): summary` form in English (`feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`, `chore`; `release: vX.Y.Z` is reserved for version bumps).
+Commit subjects follow the established `type(scope): summary` form in English (`feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`, `chore`; `release: vX.Y.Z` is reserved for version bumps). Commits carry no `Co-Authored-By` or other attribution trailers.
 
 ## Test design
 
-Go tests live beside their package as `*_test.go` and run through `make test`/`make race`. JavaScript `scripts/test_*.js` files are discovered by `make js-check`. Python regressions are not discovered: register a new one in its Makefile target, and register browser tests in `browser-check` and the CI browser job as well.
+Go tests live beside their package as `*_test.go` and run through `make test`/`make race`; run one with `go test -count=1 ./internal/<pkg> -run '^TestName$'`. JavaScript `scripts/test_*.js` files are discovered by `make js-check`. Python regressions are not discovered: register a new one in its Makefile target, and register browser tests in `browser-check` and the CI browser job as well.
 
 Generic test-quality rules are in `.agents/conventions/testing.md`; these are PairRoom's facts. Expected values come from the owning contracts: [Protocol](docs/PROTOCOL.md), [Storage](docs/STORAGE.md), and the API/CLI references. Inject time through the existing `Now func() time.Time` seams. Mock Runtime and fixtures isolate recovery and UI behavior; they are not vendor evidence. Test-first development is not required by project policy.
 
