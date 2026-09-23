@@ -166,29 +166,43 @@ func TestBindPromotionRecoveryPreservesPublicationWAL(t *testing.T) {
 }
 
 func TestHookIdentityDivergenceIsNotAnUnrelatedSession(t *testing.T) {
-	for _, via := range []string{"lineage", "environment"} {
-		t.Run(via, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "state.json")
-			s := State{Schema: 2, Room: "room", Slot: model.ActorSlot1, Runtime: model.RuntimeClaude, BindID: "bind", Generation: 1, SessionID: "bound", HarnessPID: 4242, HarnessName: "claude"}
-			if err := relay.AtomicJSON(path, s); err != nil {
-				t.Fatal(err)
-			}
-			stubLineage(t, 4242, "claude", via == "lineage")
-			t.Setenv("CLAUDE_CODE_SESSION_ID", "")
-			if via == "environment" {
-				t.Setenv("CLAUDE_CODE_SESSION_ID", "bound")
-			}
-			if _, err := boundHookCandidates([]string{path}, model.RuntimeClaude, "changed"); !errors.Is(err, errHookSessionMismatch) {
-				t.Fatalf("divergence not visible: %v", err)
-			}
-			stubLineage(t, 4343, "claude", true)
-			t.Setenv("CLAUDE_CODE_SESSION_ID", "unrelated")
-			got, err := boundHookCandidates([]string{path}, model.RuntimeClaude, "unrelated")
-			if err != nil || len(got) != 0 {
-				t.Fatalf("unbound caller was not ignored: %v", err)
-			}
-		})
+	newBound := func(t *testing.T) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "state.json")
+		s := State{Schema: 2, Room: "room", Slot: model.ActorSlot1, Runtime: model.RuntimeClaude, BindID: "bind", Generation: 1, SessionID: "bound", HarnessPID: 4242, HarnessName: "claude"}
+		if err := relay.AtomicJSON(path, s); err != nil {
+			t.Fatal(err)
+		}
+		return path
 	}
+	// Exact environment metadata is the only divergence evidence: the harness
+	// reported the bound session while this invocation belongs to another one.
+	t.Run("environment", func(t *testing.T) {
+		path := newBound(t)
+		stubLineage(t, 4242, "claude", true)
+		t.Setenv("CLAUDE_CODE_SESSION_ID", "bound")
+		if _, err := boundHookCandidates([]string{path}, model.RuntimeClaude, "changed"); !errors.Is(err, errHookSessionMismatch) {
+			t.Fatalf("divergence not visible: %v", err)
+		}
+	})
+	// A shared or reused harness PID is not session identity: a fresh session in
+	// the same host process stays inert instead of inheriting another session's
+	// binding, and so does a caller with no exact evidence for its own id.
+	t.Run("lineage", func(t *testing.T) {
+		path := newBound(t)
+		stubLineage(t, 4242, "claude", true)
+		t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+		got, err := boundHookCandidates([]string{path}, model.RuntimeClaude, "changed")
+		if err != nil || len(got) != 0 {
+			t.Fatalf("shared harness process decided session identity: candidates=%v err=%v", got, err)
+		}
+		stubLineage(t, 4343, "claude", true)
+		t.Setenv("CLAUDE_CODE_SESSION_ID", "unrelated")
+		got, err = boundHookCandidates([]string{path}, model.RuntimeClaude, "unrelated")
+		if err != nil || len(got) != 0 {
+			t.Fatalf("unbound caller was not ignored: %v", err)
+		}
+	})
 }
 
 func TestRetiredBindFlagsAreRejected(t *testing.T) {

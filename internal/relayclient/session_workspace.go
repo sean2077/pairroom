@@ -192,6 +192,9 @@ func sameWorkspace(a, b string) bool {
 	return a == b || runtime.GOOS == "windows" && strings.EqualFold(a, b)
 }
 
+// Strict discovery for foreground commands and cold locator recovery: every
+// candidate must be readable and valid, and any other session's broken record is
+// an error the caller must repair.
 func matchingSessions(root string, caller nativeCaller) ([]State, error) {
 	return scanMatchingSessions(root, caller, false)
 }

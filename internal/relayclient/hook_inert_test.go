@@ -68,7 +68,14 @@ func inertHookSnapshot(t *testing.T, roots ...string) map[string]inertHookFile {
 			if err != nil {
 				return err
 			}
-			item := inertHookFile{Mode: info.Mode(), Modified: info.ModTime()}
+			item := inertHookFile{Mode: info.Mode()}
+			// Only files carry a comparable modification time: NTFS applies
+			// directory timestamps lazily, so an unchanged directory can report a
+			// one-millisecond-later mtime without any writer. Directory additions
+			// and removals are still caught as snapshot key differences.
+			if !entry.IsDir() {
+				item.Modified = info.ModTime()
+			}
 			if entry.Type()&os.ModeSymlink != 0 {
 				item.Data, err = os.Readlink(path)
 			} else if entry.Type().IsRegular() {
