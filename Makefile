@@ -25,7 +25,7 @@ ifeq ($(strip $(GOBIN)),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package desktop-update desktop-check clean docs-check browser-check js-check vuln vuln-binary
+.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package desktop-update desktop-check clean docs-check browser-check js-check vuln vuln-binary coverage-contract
 
 build:
 	mkdir -p $(DIST)
@@ -59,11 +59,14 @@ vuln-binary:
 fmt:
 	gofmt -w $(GO_FILES)
 
+coverage-contract:
+	"$(PYTHON)" scripts/test_check_coverage.py
+
 cover:
 	go test -count=1 -coverprofile=.coverage ./...
 	go tool cover -func=.coverage
 
-check: test race vet agent-contract release-contract docs-check desktop-check js-check
+check: coverage-contract test race vet agent-contract release-contract docs-check desktop-check js-check
 	@test -z "$$(gofmt -l $(GO_FILES))" || { echo 'Go files are not gofmt-clean'; gofmt -l $(GO_FILES); exit 1; }
 	@go test scripts/check_dependencies.go scripts/check_dependencies_test.go
 	@go run scripts/check_dependencies.go
