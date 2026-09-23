@@ -192,18 +192,34 @@ func sameWorkspace(a, b string) bool {
 	return a == b || runtime.GOOS == "windows" && strings.EqualFold(a, b)
 }
 
+// Strict discovery for foreground commands and cold locator recovery: every
+// candidate must be readable and valid, and any other session's broken record is
+// an error the caller must repair.
 func matchingSessions(root string, caller nativeCaller) ([]State, error) {
+	return scanMatchingSessions(root, caller, false)
+}
+
+// Passive hooks have not established an association at this point. Unreadable
+// workspace candidates must not turn another session's broken state into a hook
+// failure. Exact indexed bindings and explicit commands remain strict.
+func scanMatchingSessions(root string, caller nativeCaller, passive bool) ([]State, error) {
 	if caller.session == "" {
 		return nil, nil
 	}
 	paths, err := statePaths(root)
 	if err != nil {
+		if passive {
+			return nil, nil // never select from a partial or unsafe directory walk
+		}
 		return nil, err
 	}
 	var states []State
 	for _, path := range paths {
 		var s State
 		if err := readPrivate(path, &s); err != nil {
+			if passive {
+				continue // no verified session identity; do not read credentials
+			}
 			return nil, err
 		}
 		if s.Schema != 2 || s.Generation == 0 || s.Runtime != caller.runtime || s.SessionID != caller.session {
@@ -360,7 +376,7 @@ func resolveSessionWorkspace(ctx context.Context, action string, o *options, cal
 		addRoot(os.Getenv("CLAUDE_PROJECT_DIR"))
 	}
 	for _, root := range roots {
-		matches, err := matchingSessions(root, caller)
+		matches, err := scanMatchingSessions(root, caller, action == "hook")
 		if err != nil {
 			return "", err
 		}
@@ -376,15 +392,17 @@ func resolveSessionWorkspace(ctx context.Context, action string, o *options, cal
 		return selectSessionWorkspace(ctx, states, action, o)
 	}
 	if action == "hook" {
-		// Preserve the existing environment/PID mismatch diagnostics, even when
-		// no exact session matched. These paths never authorize a fallback.
-		for _, root := range roots {
-			paths, err := statePaths(root)
-			if err != nil {
-				return "", err
-			}
-			if _, err := boundHookCandidates(paths, caller.runtime, caller.session); err != nil {
-				return "", err
+		// Preserve an exact environment/session mismatch for pre-locator
+		// bindings, but never infer association from a shared/reused host PID.
+		if session := sessionIDFromEnv(caller.runtime); session != "" && session != caller.session {
+			for _, root := range roots {
+				known, err := scanMatchingSessions(root, nativeCaller{runtime: caller.runtime, session: session}, true)
+				if err != nil {
+					return "", err
+				}
+				if len(known) > 0 {
+					return "", errHookSessionMismatch
+				}
 			}
 		}
 		return "", nil // unbound sessions are inert, including outside Git
