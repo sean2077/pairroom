@@ -44,13 +44,12 @@ func (a *humanInputAdapter) Stop(ctx context.Context) error      { return a.inne
 func (a *humanInputAdapter) ResolveApproval(ctx context.Context, id string, resolution model.ApprovalResolution) error {
 	return a.inner.ResolveApproval(ctx, id, resolution)
 }
-func (a *humanInputAdapter) SetRole(ctx context.Context, role model.ParticipantRole) error {
-	return a.inner.SetRole(ctx, role)
+func (a *humanInputAdapter) SetNativeAccess(ctx context.Context, access model.NativeAccess) error {
+	return a.inner.SetNativeAccess(ctx, access)
 }
 func (a *humanInputAdapter) StartTurn(ctx context.Context, input model.AgentInput) error {
-	nativeRole := input.Role
-	if err := a.inner.SetRole(ctx, nativeRole); err != nil {
-		return fmt.Errorf("apply input role %s: %w", nativeRole, err)
+	if err := a.inner.SetNativeAccess(ctx, input.Access); err != nil {
+		return fmt.Errorf("apply input native access %q: %w", input.Access, err)
 	}
 	a.mu.Lock()
 	a.latestInput = input

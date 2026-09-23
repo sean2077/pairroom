@@ -475,10 +475,10 @@ func (e *Engine) Start(parent context.Context) error {
 		})
 	}
 	// Apply the stored permission profile before either native process starts.
-	if err := slot1Adapter.SetRole(parent, nativePermissionRole(slot1Participant)); err != nil {
+	if err := slot1Adapter.SetNativeAccess(parent, nativeAccess(slot1Participant)); err != nil {
 		return fmt.Errorf("apply slot1 permissions: %w", err)
 	}
-	if err := slot2Adapter.SetRole(parent, nativePermissionRole(slot2Participant)); err != nil {
+	if err := slot2Adapter.SetNativeAccess(parent, nativeAccess(slot2Participant)); err != nil {
 		return fmt.Errorf("apply slot2 permissions: %w", err)
 	}
 	e.resumeRestoredDeliveries(parent)
@@ -1096,7 +1096,7 @@ func applyPermissionRuntimeProjection(participant *model.ParticipantSnapshot, ac
 	slot := slotAgentConfig(cfg, actor)
 	slot.Actor = actor
 	slot = agent.PermissionConfig(slot, participant.PermissionProfile)
-	nativeRole := nativePermissionRole(*participant)
+	readOnly := nativeAccess(*participant) == model.NativeAccessReadOnly
 	kind := slot.Runtime.CanonicalForSlot(actor)
 	identity := model.ParticipantIdentityFor(actor, runtimeKindsForConfig(cfg))
 	participant.RuntimeKind = kind
@@ -1110,13 +1110,13 @@ func applyPermissionRuntimeProjection(participant *model.ParticipantSnapshot, ac
 	participant.Runtime.Sandbox = ""
 	switch kind {
 	case model.RuntimeClaude:
-		if nativeRole == model.RoleReviewer {
+		if readOnly {
 			participant.Runtime.PermissionMode = "plan"
 		} else {
 			participant.Runtime.PermissionMode = slot.PermissionMode
 		}
 	case model.RuntimeCodex:
-		if nativeRole == model.RoleReviewer {
+		if readOnly {
 			participant.Runtime.Sandbox = "readOnly"
 			participant.Runtime.ApprovalPolicy = slot.ApprovalPolicy
 		} else {
@@ -1124,7 +1124,7 @@ func applyPermissionRuntimeProjection(participant *model.ParticipantSnapshot, ac
 			participant.Runtime.Sandbox = slot.Sandbox
 		}
 	case model.RuntimeGrok:
-		if nativeRole == model.RoleReviewer {
+		if readOnly {
 			participant.Runtime.PermissionMode = "plan"
 			participant.Runtime.Sandbox = "read-only"
 		} else {
@@ -1542,7 +1542,7 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 		Text:        message.Text,
 		ReplyTo:     message.ReplyTo,
 		Quote:       quote,
-		Role:        nativePermissionRole(participant),
+		Access:      nativeAccess(participant),
 		Attachments: attachments,
 		Intent:      message.Intent,
 	}

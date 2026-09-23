@@ -370,7 +370,7 @@ func TestCodexTurnRequestsUseDocumentedCorrelationFields(t *testing.T) {
 		Repo: "/repo", Model: "gpt-5.3-codex", Effort: "high",
 		ApprovalPolicy: "untrusted", Sandbox: "workspaceWrite",
 	}, func(model.RuntimeEvent) {})
-	input := model.AgentInput{MessageID: "msg-correlation", Role: model.RoleDriver}
+	input := model.AgentInput{MessageID: "msg-correlation", Access: model.NativeAccessDefault}
 
 	started := adapter.turnStartParams("thread-1", "hello", input)
 	if got := started["clientUserMessageId"]; got != input.MessageID {
@@ -565,7 +565,7 @@ func TestCodexSandboxNormalization(t *testing.T) {
 			} else if gotThread != test.wantThread {
 				t.Fatalf("thread/start sandbox = %#v, want %q", gotThread, test.wantThread)
 			}
-			gotTurn := adapter.turnStartParams("thread-1", "hello", model.AgentInput{Role: model.RoleDriver})["sandboxPolicy"]
+			gotTurn := adapter.turnStartParams("thread-1", "hello", model.AgentInput{Access: model.NativeAccessDefault})["sandboxPolicy"]
 			if test.wantTurn == "" {
 				if gotTurn != nil {
 					t.Fatalf("turn/start sandboxPolicy = %#v, want omitted", gotTurn)
@@ -577,7 +577,7 @@ func TestCodexSandboxNormalization(t *testing.T) {
 	}
 
 	adapter := NewCodex(Config{Sandbox: "dangerFullAccess", Repo: "/repo"}, func(model.RuntimeEvent) {})
-	reviewerPolicy := adapter.sandboxPolicy(model.RoleReviewer)
+	reviewerPolicy := adapter.sandboxPolicy(model.NativeAccessReadOnly)
 	if got := reviewerPolicy["type"]; got != "readOnly" {
 		t.Fatalf("reviewer must remain readOnly, got %#v", got)
 	}
@@ -834,21 +834,38 @@ func TestCodexFailPendingRPCsClearsConnectionState(t *testing.T) {
 	}
 }
 
-func TestCodexRoleChangeRequiresSafeTurnBoundary(t *testing.T) {
+func TestCodexNativeAccessChangeRequiresSafeTurnBoundary(t *testing.T) {
 	adapter := NewCodex(Config{}, func(model.RuntimeEvent) {})
-	if err := adapter.SetRole(context.Background(), model.RoleReviewer); err != nil {
-		t.Fatalf("idle role change failed: %v", err)
+	if err := adapter.SetNativeAccess(context.Background(), model.NativeAccessReadOnly); err != nil {
+		t.Fatalf("idle access change failed: %v", err)
 	}
-	if err := adapter.SetRole(context.Background(), model.ParticipantRole("invalid")); err == nil {
-		t.Fatal("expected invalid role rejection")
+	if err := adapter.SetNativeAccess(context.Background(), model.NativeAccess("invalid")); err == nil {
+		t.Fatal("expected invalid access rejection")
 	}
 
 	adapter.mu.Lock()
 	adapter.state = model.StateWorking
 	adapter.currentTurn = "turn-active"
 	adapter.mu.Unlock()
-	if err := adapter.SetRole(context.Background(), model.RoleDriver); err == nil || !strings.Contains(err.Error(), "interrupt or stop") {
+	if err := adapter.SetNativeAccess(context.Background(), model.NativeAccessDefault); err == nil || !strings.Contains(err.Error(), "interrupt or stop") {
 		t.Fatalf("expected active-turn rejection, got %v", err)
 	}
 
+}
+
+// Driver and peer were distinct role strings with identical native policy, so
+// re-asserting default access mid-turn used to hit the active-turn gate. Only
+// a real change of effective access is a boundary transition.
+func TestCodexReassertingDefaultAccessMidTurnIsNoOp(t *testing.T) {
+	adapter := NewCodex(Config{}, func(model.RuntimeEvent) {})
+	adapter.mu.Lock()
+	adapter.state = model.StateWorking
+	adapter.currentTurn = "turn-active"
+	adapter.mu.Unlock()
+	if err := adapter.SetNativeAccess(context.Background(), model.NativeAccessDefault); err != nil {
+		t.Fatalf("unchanged default access was treated as a transition: %v", err)
+	}
+	if err := adapter.SetNativeAccess(context.Background(), model.NativeAccessReadOnly); err == nil {
+		t.Fatal("a real access change during a turn must still be rejected")
+	}
 }

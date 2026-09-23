@@ -26,11 +26,11 @@ func (e *Engine) SnapshotMeta() model.RoomMeta {
 }
 
 // Native adapters use a read-only role hint for tool policy, not Room duties.
-func nativePermissionRole(p model.ParticipantSnapshot) model.ParticipantRole {
+func nativeAccess(p model.ParticipantSnapshot) model.NativeAccess {
 	if p.PermissionProfile == model.PermissionReadOnly {
-		return model.RoleReviewer
+		return model.NativeAccessReadOnly
 	}
-	return model.RolePeer
+	return model.NativeAccessDefault
 }
 
 func (e *Engine) configureParticipant(cfg agent.Config, p model.ParticipantSnapshot) agent.Config {
@@ -123,7 +123,7 @@ func (e *Engine) SetPermissions(ctx context.Context, actor model.ActorID, profil
 		factory = e.cfg.Slot2Factory
 	}
 	next := factory(cfg, e.HandleRuntimeEvent)
-	if err := next.SetRole(ctx, nativePermissionRole(current)); err != nil {
+	if err := next.SetNativeAccess(ctx, nativeAccess(current)); err != nil {
 		return err
 	}
 	// No native process is running at this commit boundary. Failure to persist

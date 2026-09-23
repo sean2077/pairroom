@@ -26,7 +26,7 @@ func TestIndependentPermissionProfilesAndNativeYOLO(t *testing.T) {
 				switch kind {
 				case model.RuntimeClaude:
 					c := NewClaude(yolo, func(model.RuntimeEvent) {})
-					if err := c.SetRole(context.Background(), model.RolePeer); err != nil || c.cfg.PermissionMode != "yolo" {
+					if err := c.SetNativeAccess(context.Background(), model.NativeAccessDefault); err != nil || c.cfg.PermissionMode != "yolo" {
 						t.Fatalf("Claude yolo=%+v err=%v", c.cfg, err)
 					}
 					if restricted.PermissionMode != "plan" {
@@ -34,7 +34,7 @@ func TestIndependentPermissionProfilesAndNativeYOLO(t *testing.T) {
 					}
 				case model.RuntimeCodex:
 					c := NewCodex(yolo, func(model.RuntimeEvent) {})
-					params := c.turnStartParams("thread", "body", model.AgentInput{Role: model.RolePeer, MessageID: "room-correlation"})
+					params := c.turnStartParams("thread", "body", model.AgentInput{Access: model.NativeAccessDefault, MessageID: "room-correlation"})
 					if params["approvalPolicy"] != "never" || params["sandboxPolicy"].(map[string]any)["type"] != "dangerFullAccess" {
 						t.Fatalf("Codex native YOLO=%+v", params)
 					}

@@ -35,11 +35,11 @@ type fakeAdapter struct {
 	beforeReturn  func(model.AgentInput)
 	submitErr     error
 	steerOutcome  agent.SteerOutcome
-	role          model.ParticipantRole
+	access        model.NativeAccess
 	interrupts    int
 	onInterrupt   func()
 	stopErr       error
-	roleErr       error
+	accessErr     error
 }
 
 func (f *fakeAdapter) Actor() model.ActorID { return f.actor }
@@ -148,10 +148,10 @@ func (f *fakeAdapter) Stop(context.Context) error {
 func (f *fakeAdapter) ResolveApproval(context.Context, string, model.ApprovalResolution) error {
 	return agent.ErrApprovalUnsupported
 }
-func (f *fakeAdapter) SetRole(_ context.Context, role model.ParticipantRole) error {
+func (f *fakeAdapter) SetNativeAccess(_ context.Context, access model.NativeAccess) error {
 	f.mu.Lock()
-	f.role = role
-	err := f.roleErr
+	f.access = access
+	err := f.accessErr
 	f.mu.Unlock()
 	return err
 }
@@ -252,7 +252,7 @@ func TestSendPassesNativePermissionAndRoutingContext(t *testing.T) {
 	if input.MessageID != message.ID || input.From != model.ActorUser || input.To != model.ActorSlot1 {
 		t.Fatalf("unexpected delivery envelope: %#v", input)
 	}
-	if input.Role != model.RolePeer || input.FromHandle != "@user" || input.SelfHandle != "@claude" || input.PeerHandle != "@codex" {
+	if input.Access != model.NativeAccessDefault || input.FromHandle != "@user" || input.SelfHandle != "@claude" || input.PeerHandle != "@codex" {
 		t.Fatalf("missing room context: %#v", input)
 	}
 }
@@ -2282,7 +2282,7 @@ func TestStartPermissionFailureNamesSlotNotVendor(t *testing.T) {
 	factory := func(cfg agent.Config, sink agent.EventSink) agent.Adapter {
 		adapter := &fakeAdapter{actor: cfg.Actor, sink: sink, state: model.StateStopped, submissions: make(chan model.AgentInput, 1)}
 		if cfg.Actor == model.ActorSlot2 {
-			adapter.roleErr = errors.New("policy rejected")
+			adapter.accessErr = errors.New("policy rejected")
 		}
 		return adapter
 	}

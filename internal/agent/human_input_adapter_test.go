@@ -11,10 +11,10 @@ import (
 )
 
 type humanInputFakeAdapter struct {
-	actor model.ActorID
-	mu    sync.Mutex
-	role  model.ParticipantRole
-	input model.AgentInput
+	actor  model.ActorID
+	mu     sync.Mutex
+	access model.NativeAccess
+	input  model.AgentInput
 }
 
 func (f *humanInputFakeAdapter) Actor() model.ActorID        { return f.actor }
@@ -36,27 +36,27 @@ func (f *humanInputFakeAdapter) Stop(context.Context) error      { return nil }
 func (f *humanInputFakeAdapter) ResolveApproval(context.Context, string, model.ApprovalResolution) error {
 	return nil
 }
-func (f *humanInputFakeAdapter) SetRole(_ context.Context, role model.ParticipantRole) error {
+func (f *humanInputFakeAdapter) SetNativeAccess(_ context.Context, access model.NativeAccess) error {
 	f.mu.Lock()
-	f.role = role
+	f.access = access
 	f.mu.Unlock()
 	return nil
 }
 func (f *humanInputFakeAdapter) State() model.AgentState { return model.StateIdle }
 func (f *humanInputFakeAdapter) SessionID() string       { return "fake" }
 
-func TestHumanInputAdapterAppliesTurnRoleWithoutWorkflowPolicy(t *testing.T) {
+func TestHumanInputAdapterAppliesTurnAccessWithoutWorkflowPolicy(t *testing.T) {
 	fake := &humanInputFakeAdapter{actor: model.ActorSlot1}
 	wrapper := &humanInputAdapter{
 		actor: model.ActorSlot1, inner: fake, sink: func(model.RuntimeEvent) {},
 		turnInput: map[string]model.AgentInput{}, pausedTurns: map[string]struct{}{},
 	}
-	input := model.AgentInput{MessageID: "m1", Role: model.RoleReviewer, Text: "review exactly this"}
+	input := model.AgentInput{MessageID: "m1", Access: model.NativeAccessReadOnly, Text: "review exactly this"}
 	if err := wrapper.StartTurn(context.Background(), input); err != nil {
 		t.Fatal(err)
 	}
-	if fake.role != model.RoleReviewer || fake.input.Text != input.Text {
-		t.Fatalf("role bridge changed ordinary input: role=%s input=%#v", fake.role, fake.input)
+	if fake.access != model.NativeAccessReadOnly || fake.input.Text != input.Text {
+		t.Fatalf("access bridge changed ordinary input: access=%s input=%#v", fake.access, fake.input)
 	}
 }
 

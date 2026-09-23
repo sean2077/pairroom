@@ -35,16 +35,25 @@ func (a ActorID) DisplayName() string {
 	}
 }
 
+// ParticipantRole is the persisted participant role. Current Rooms store only
+// RolePeer; any other stored value is retired data and is rejected on replay.
 type ParticipantRole string
 
+const RolePeer ParticipantRole = "peer"
+
+// NativeAccess is the per-input native execution access derived from a
+// participant's permission profile. It is not a collaboration role: the zero
+// value keeps the configured native policy, and read-only maps to each
+// Runtime's plan/read-only mode.
+type NativeAccess string
+
 const (
-	RoleDriver   ParticipantRole = "driver"
-	RoleReviewer ParticipantRole = "reviewer"
-	RolePeer     ParticipantRole = "peer"
+	NativeAccessDefault  NativeAccess = ""
+	NativeAccessReadOnly NativeAccess = "read_only"
 )
 
-func (r ParticipantRole) Valid() bool {
-	return r == RoleDriver || r == RoleReviewer || r == RolePeer
+func (a NativeAccess) Valid() bool {
+	return a == NativeAccessDefault || a == NativeAccessReadOnly
 }
 
 type AgentState string
@@ -406,7 +415,7 @@ type AgentInput struct {
 	Text        string            `json:"text"`
 	ReplyTo     string            `json:"reply_to,omitempty"`
 	Quote       *AgentQuote       `json:"quote,omitempty"`
-	Role        ParticipantRole   `json:"role"`
+	Access      NativeAccess      `json:"access,omitempty"`
 	Attachments []AgentAttachment `json:"attachments,omitempty"`
 	Intent      MessageIntent     `json:"intent,omitempty"`
 }
