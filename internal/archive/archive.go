@@ -491,7 +491,8 @@ func Restore(input, target string, force bool) (VerifyReport, error) {
 		if err != nil {
 			return VerifyReport{}, err
 		}
-		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+		// tar.Reader normalizes legacy NUL-typeflag regular files to TypeReg.
+		if header.Typeflag != tar.TypeReg {
 			return VerifyReport{}, fmt.Errorf("backup entry %q is not a regular file", header.Name)
 		}
 		if header.Size < 0 || header.Size > maxRestoreBytes-total {

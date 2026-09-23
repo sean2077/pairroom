@@ -60,14 +60,14 @@ func (s *publicationServer) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&input)
 	if r.Header.Get("Authorization") != "Relay private-long-lived-secret" {
-		http.Error(w, "unauthorized", 401)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	switch filepath.Base(r.URL.Path) {
 	case "publication":
 		s.queries++
 		if s.queryUnknown {
-			http.Error(w, "unavailable", 503)
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		if s.queryMalformed {
@@ -78,12 +78,12 @@ func (s *publicationServer) serve(w http.ResponseWriter, r *http.Request) {
 	case "report":
 		s.reports++
 		if s.dropBefore {
-			http.Error(w, "before acceptance", 503)
+			http.Error(w, "before acceptance", http.StatusServiceUnavailable)
 			return
 		}
 		s.accepted[input.Seq] = true
 		if s.dropAfter {
-			http.Error(w, "response lost", 503)
+			http.Error(w, "response lost", http.StatusServiceUnavailable)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(relay.Publication{BindID: "binding", Generation: 1, ReportSeq: input.Seq})

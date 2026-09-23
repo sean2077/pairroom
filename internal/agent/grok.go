@@ -736,7 +736,7 @@ func (g *GrokAdapter) awaitPrompt(turn *grokTurn, reply <-chan grokRPCReply) {
 	}
 	terminalKind := model.RuntimeInputCompleted
 	terminalState := model.ProcessingCompleted
-	status := "completed"
+	var status string
 	detail := "completed by Grok ACP"
 	if result.err != nil {
 		terminalKind = model.RuntimeInputFailed

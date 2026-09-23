@@ -821,8 +821,6 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 	return room, payload.Project, true, nil
 }
 
-func validateRoomStoreMetadata(dir string) error { _, err := readRoomStoreSchema(dir); return err }
-
 func readRoomStoreSchema(dir string) (int, error) {
 	path := filepath.Join(dir, "metadata.json")
 	data, err := os.ReadFile(path)

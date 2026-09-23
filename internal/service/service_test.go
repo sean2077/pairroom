@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -793,12 +792,6 @@ func contains(values []string, target string) bool {
 		}
 	}
 	return false
-}
-
-func sorted(values []string) []string {
-	out := append([]string(nil), values...)
-	sort.Strings(out)
-	return out
 }
 
 func TestServiceLockExcludesConcurrentOwnersAndReleasesSafely(t *testing.T) {

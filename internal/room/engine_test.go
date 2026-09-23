@@ -36,7 +36,6 @@ type fakeAdapter struct {
 	submitErr     error
 	steerOutcome  agent.SteerOutcome
 	role          model.ParticipantRole
-	workspace     string
 	interrupts    int
 	onInterrupt   func()
 	stopErr       error

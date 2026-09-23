@@ -345,11 +345,3 @@ func absolutePathFrom(base, input string) (string, error) {
 	}
 	return filepath.Clean(absolute), nil
 }
-
-func durationSeconds(value time.Duration) int64 {
-	seconds := int64(value / time.Second)
-	if value%time.Second != 0 {
-		seconds++
-	}
-	return seconds
-}
