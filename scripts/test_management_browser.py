@@ -175,14 +175,14 @@ async def verify_diagnostics(browser, artifacts: Path, in_page_fixture: bool = F
     await page.keyboard.press('Enter')
     await expect(disclosure).to_have_attribute('aria-expanded', 'true')
     await page.locator('#project-room-search').fill('Implementation')
-    assert await page.locator('#view .room-row').count() == 1
+    await expect(page.locator('#view .room-row')).to_have_count(1)
     await page.evaluate("location.hash='#/overview'")
     await project_link.click()
     await expect(page.locator('#project-room-search')).to_have_value('Implementation')
     await page.locator('#project-room-search').fill('no-such-room')
     await expect(page.locator('#view')).to_contain_text('No matching Rooms')
     await page.get_by_role('button', name='Clear filters', exact=True).click()
-    assert await page.locator('#view .room-row').count() == 2
+    await expect(page.locator('#view .room-row')).to_have_count(2)
     for width in [320, 390, 768, 1440]:
         await page.set_viewport_size({'width':width, 'height':1000})
         await page.wait_for_timeout(80)
