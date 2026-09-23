@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v5.4.0] — 2026-09-23
+
 - Give a Room's rows and tabs the actions an operator needs without leaving the list: one context menu now carries rename, the existing ordering move controls, **Close Room tab** and a separately confirmed **Archive Room**, reachable with the context-menu key, Shift+F10, arrows, Home/End and Escape, skipping disabled items and restoring focus on close. Closing a view only closes that view: it never archives, deletes or suspends a Room, appends an event, changes navigation order, or stops a running Turn or a vendor session, and the Room stays in the sidebar for reopening. Archive keeps its own confirmation and a Native Room states that no agent session is started or interrupted instead of reusing the Embedded Turn and Runtime promise.
 
 - Present the Native Room with the information hierarchy Embedded already uses: participants on the left, conversation in the center and work inspector on the right. Both panels open by default on wide viewports and collapse independently; a compact viewport shows one at a time, leaves the hidden conversation inert and restores focus on close or Escape. Agent cards show the stored runtime, Provider reference, model, effort, permission values, observed binding state and last activity as explicitly display-only configuration, and the inspector adds per-slot queued, delivering and unknown totals, the oldest queued input and the last wake observation from the existing snapshot, without a new API, added polling or fabricated tool activity. Drafts, message DOM, transcript scroll anchors, open disclosures, publication recovery and retry identity are unchanged.
