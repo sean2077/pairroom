@@ -29,6 +29,7 @@ Explicit data-root/configuration or Mock options select their own Service instea
 | Quit with an external daemon | Exit the GUI; the daemon continues |
 | Quit with an owned embedded Service | Stop Management mutations, drain owned runtime work, close stores, release the Service lock |
 | `pairroom daemon stop` | Gracefully stop the confirmed installed-daemon owner; do not delete a live lock or kill an unrelated process |
+| `pairroom daemon open` | Open the Management URL recorded in the daemon's own log only after validating it as numeric loopback with a bootstrap token and probing it authenticated; a missing, unauthenticated, or non-loopback target is refused |
 
 None of these controls can stop a user-owned Native harness. Windows daemon output goes to rotating logs rather than a persistent taskbar console; use `pairroom daemon logs`.
 

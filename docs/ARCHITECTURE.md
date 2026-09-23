@@ -99,7 +99,7 @@ Empty overrides retain native inheritance. Supported CC Switch references resolv
 
 Embedded defaults both participants to YOLO, independently of Lead/Executor responsibility. An effective policy change requires both participants idle, no queue, and no pending approval. Persist intent before effects; stop the old adapter before committing policy, then replace it without changing native identity/collaboration. Failed stop/replacement cannot broaden access.
 
-Approvals retain native request identity, scope, options, and validation. Invalid answers do not consume requests; stale browser answers cannot approve a different request. Connection/terminal changes expire requests that cannot be reused safely. Unknown privileged requests fail closed. [API approvals](API_REFERENCE.md#native-approval-responses) and [Security](../SECURITY.md) own details.
+Approvals retain native request identity, scope, options, and validation. Invalid answers do not consume requests; stale browser answers cannot approve a different request. Connection/terminal changes expire requests that cannot be reused safely. Unknown privileged requests fail closed. The general adapter bridge may surface an interactive question it cannot answer natively to the human with `@user`, but it never substitutes for vendor approval semantics or leaves an unexposed native prompt. [API approvals](API_REFERENCE.md#native-approval-responses) and [Security](../SECURITY.md) own details.
 
 Native-hosted approvals, permissions, steering, and interruption stay in the original harness. Stored model/Provider/effort/policy values are metadata only; no per-process policy injection or Provider materialization is attempted.
 

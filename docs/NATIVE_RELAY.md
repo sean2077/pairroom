@@ -20,7 +20,7 @@ pairroom relay install --runtime claude,codex,grok
 
 Without `--runtime`, a recognized session supplies its Runtime; an interactive terminal prompts a multi-select, and non-interactive use fails with guidance rather than waiting. `cc` is accepted as a Claude installation alias.
 
-Codex uses `.codex/hooks.json`; Claude Code uses `.claude/settings.json`. Grok Build normally reuses the Claude Code project hook, avoiding two Stop commands. A Grok-only installation without that hook uses `.grok/hooks/pairroom.json`. When Claude hook compatibility is disabled (`[compat.claude] hooks = false`), install Grok with that configuration in effect so its own hook is written. Reinstallation removes only a redundant PairRoom-owned Grok Stop command when the Claude hook covers it, preserving unrelated hooks.
+Codex uses `.codex/hooks.json`; Claude Code uses `.claude/settings.json`. Grok Build normally reuses the Claude Code project hook, avoiding two Stop commands. A Grok-only installation without that hook uses `.grok/hooks/pairroom.json`. When Claude hook compatibility is disabled, install Grok with that compatibility off so its own hook is written: PairRoom derives this from `GROK_CLAUDE_HOOKS_ENABLED=false` in the installing environment and never reads Grok's `config.toml`, so set that variable alongside Grok's `[compat.claude] hooks = false` and the two agree. Reinstallation removes only a redundant PairRoom-owned Grok Stop command when the Claude hook covers it, preserving unrelated hooks.
 
 Review and approve the exact installed definitions in the harness: Codex `/hooks`, Claude project hook consent, and Grok hook approval plus folder trust. Follow native trust/restart guidance; PairRoom never grants consent for you.
 
