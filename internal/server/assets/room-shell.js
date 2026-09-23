@@ -38,9 +38,11 @@
   }
 
   function isBatchableTransient(envelope) {
-    return envelope
-      && Number(envelope.seq || 0) === 0
-      && envelope.kind === 'runtime.event'
+    if (!envelope || Number(envelope.seq || 0) !== 0) return false;
+    // Live Turn summaries replace their checkpoint in `turns`; batch them with
+    // the telemetry that produced them so one render covers a burst.
+    if (envelope.kind === 'turn.summary.updated') return true;
+    return envelope.kind === 'runtime.event'
       && BATCHED_RUNTIME_KINDS.has(envelope.data?.kind || '');
   }
 

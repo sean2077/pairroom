@@ -407,11 +407,20 @@ type MessageWindow struct {
 	OldestSeq uint64 `json:"oldest_seq,omitempty"`
 }
 
+// TurnWindow describes a windowed snapshot's Turn selection. Omitted Turns
+// remain in the Room projection; message pages return their related Turns.
+type TurnWindow struct {
+	Total  int `json:"total"`
+	Loaded int `json:"loaded"`
+}
+
 type MessagePage struct {
 	Messages  []Message `json:"messages"`
 	Total     int       `json:"total"`
 	HasMore   bool      `json:"has_more"`
 	OldestSeq uint64    `json:"oldest_seq,omitempty"`
+	// Turns are the summaries correlated with this page's messages.
+	Turns []TurnSummary `json:"turns,omitempty"`
 }
 
 type RoomSnapshot struct {
@@ -422,6 +431,7 @@ type RoomSnapshot struct {
 	Approvals     []Approval                      `json:"approvals"`
 	Turns         []TurnSummary                   `json:"turns,omitempty"`
 	MessageWindow *MessageWindow                  `json:"message_window,omitempty"`
+	TurnWindow    *TurnWindow                     `json:"turn_window,omitempty"`
 	LatestSeq     uint64                          `json:"latest_seq"`
 	// Events is a bounded recent tail used by the work inspector. The complete
 	// append-only history remains in events.jsonl.

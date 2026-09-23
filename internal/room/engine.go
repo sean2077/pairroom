@@ -34,6 +34,9 @@ const (
 	eventServiceRoomRenamed         = "service.room.renamed"
 	eventServiceBindingMaterialized = "service.room.binding.materialized"
 	recentEventLimit                = 600
+	// recentEventBytes bounds the in-memory replay/snapshot tail by payload
+	// size as well as count; a cursor older than the tail receives a reset.
+	recentEventBytes = 4 << 20
 )
 
 type Config struct {
@@ -107,6 +110,12 @@ type Engine struct {
 	mu          sync.RWMutex
 	routingMu   sync.Mutex
 	turnMu      sync.Mutex
+	// summaryMu serializes Turn summary projection and checkpoint flushes.
+	// It is acquired before mu, never while holding mu.
+	summaryMu     sync.Mutex
+	turnSummaries turnSummaryTracking
+	// recentEventDataBytes is the payload total of snapshot.Events. Guarded by mu.
+	recentEventDataBytes int
 
 	cfg      Config
 	snapshot model.RoomSnapshot
@@ -918,6 +927,7 @@ func (e *Engine) stopAgentLocked(ctx context.Context, actor model.ActorID) error
 	if err := adapter.Stop(ctx); err != nil {
 		return err
 	}
+	_ = e.flushTurnSummaries(actor, time.Time{})
 	e.cancelInFlight(actor, "native runtime was stopped")
 	e.expireApprovals(actor, "runtime_stopped")
 	e.updateParticipant(actor, func(p *model.ParticipantSnapshot) {
@@ -1149,6 +1159,11 @@ func (e *Engine) Close() error {
 		if err := adapter.Stop(ctx); err != nil {
 			result = errors.Join(result, fmt.Errorf("stop %s adapter: %w", adapter.Actor(), err))
 		}
+	}
+	// Persist in-progress summary checkpoints after adapters can no longer
+	// report, and before the writer closes.
+	if err := e.flushTurnSummaries("", time.Time{}); err != nil {
+		result = errors.Join(result, err)
 	}
 
 	if err := e.cfg.Store.Close(); err != nil {
@@ -2653,10 +2668,12 @@ func (e *Engine) applyLocked(event model.Event) error {
 	}
 
 	e.snapshot.Events = append(e.snapshot.Events, event)
-	if len(e.snapshot.Events) > recentEventLimit {
+	e.recentEventDataBytes += len(event.Data)
+	for len(e.snapshot.Events) > 1 && (len(e.snapshot.Events) > recentEventLimit || e.recentEventDataBytes > recentEventBytes) {
 		// Advance the bounded window rather than copying 600 structs per event.
 		// Clear the retired entry so its payload can be reclaimed even while the
 		// current window still shares the old backing array.
+		e.recentEventDataBytes -= len(e.snapshot.Events[0].Data)
 		e.snapshot.Events[0] = model.Event{}
 		e.snapshot.Events = e.snapshot.Events[1:]
 	}
@@ -2746,6 +2763,8 @@ func (e *Engine) monitorStalledTurns() {
 		case <-e.ctx.Done():
 			return
 		case now := <-ticker.C:
+			// A quiet Turn still reaches its checkpoint without a new event.
+			_ = e.flushTurnSummaries("", now.UTC())
 			type warning struct {
 				actor model.ActorID
 				turn  string

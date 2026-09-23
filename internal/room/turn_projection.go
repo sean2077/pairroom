@@ -2,15 +2,47 @@ package room
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/sean2077/pairroom/internal/model"
 )
 
+const (
+	// turnSummaryCheckpointInterval bounds how often an in-progress summary is
+	// rewritten into the Event Log. Every checkpoint is a complete summary, so
+	// persisting on each tool event made log growth quadratic in tool calls.
+	turnSummaryCheckpointInterval = 30 * time.Second
+	// turnSummaryTransientInterval throttles live-only summary publication for
+	// high-frequency diff/usage telemetry so bursts cannot overflow SSE buffers.
+	turnSummaryTransientInterval = time.Second
+	// turnItemDataLimit bounds the per-item payload copy. The complete tool
+	// payload remains in its own durable runtime.event record.
+	turnItemDataLimit = 4 << 10
+	// turnSummaryByteBudget bounds one serialized summary regardless of item
+	// count, so a single checkpoint record cannot reach hundreds of KiB.
+	turnSummaryByteBudget = 256 << 10
+)
+
+// turnSummaryTracking is guarded by Engine.summaryMu. It is live bookkeeping
+// only: after restart the next event on a known Turn simply checkpoints again.
+type turnSummaryTracking struct {
+	persistedAt map[string]time.Time
+	publishedAt map[string]time.Time
+	dirty       map[string]bool
+}
+
 // Turn projection keeps bounded inspector details separate from native ownership
 // and message routing. Text remains in the complete Message/Event Log authority.
+//
+// The summary is a checkpointed projection, not an auditable transition: the
+// raw runtime.event facts are recorded before projection. Creation, turn start,
+// final text, errors and terminal states persist immediately; other updates stay
+// in memory, are published as transient (sequence-zero) events, and persist at
+// most once per checkpoint interval or when the adapter stops or the Room closes.
 func (e *Engine) projectTurnSummary(runtimeEvent model.RuntimeEvent) {
 	// These events do not change the summary. In particular, text.delta must
 	// not scan history or clone all tool details for every generated token.
@@ -21,6 +53,11 @@ func (e *Engine) projectTurnSummary(runtimeEvent model.RuntimeEvent) {
 	if !runtimeEvent.Agent.ValidParticipant() || strings.TrimSpace(runtimeEvent.TurnID) == "" {
 		return
 	}
+	// Serialize read-modify-persist across adapters and the checkpoint flusher,
+	// so an older dirty copy can never be recorded after a newer terminal one.
+	// Lock order: summaryMu before mu (record takes mu).
+	e.summaryMu.Lock()
+	defer e.summaryMu.Unlock()
 	id := string(runtimeEvent.Agent) + ":" + runtimeEvent.TurnID
 	e.mu.RLock()
 	var summary model.TurnSummary
@@ -31,7 +68,8 @@ func (e *Engine) projectTurnSummary(runtimeEvent model.RuntimeEvent) {
 		}
 	}
 	e.mu.RUnlock()
-	if summary.ID == "" {
+	created := summary.ID == ""
+	if created {
 		summary = model.TurnSummary{
 			ID: id, Agent: runtimeEvent.Agent, TurnID: runtimeEvent.TurnID,
 			Status: "working", StartedAt: runtimeEvent.CreatedAt,
@@ -48,10 +86,16 @@ func (e *Engine) projectTurnSummary(runtimeEvent model.RuntimeEvent) {
 		summary.MessageIDs = append(summary.MessageIDs, runtimeEvent.CorrelationID)
 	}
 
-	persist := true
+	// immediate marks milestones that must be durable without waiting for a
+	// checkpoint. live selects which in-memory updates reach the UI as a
+	// transient event: every event kind that used to publish a durable summary
+	// still publishes, and diff/usage are additionally throttled.
+	immediate := created
+	live, throttled := true, false
 	switch runtimeEvent.Kind {
 	case model.RuntimeTurnStarted:
 		summary.Status = "working"
+		immediate = true
 	case model.RuntimeToolStarted:
 		upsertTurnItem(&summary, runtimeEvent, "tool", "working")
 	case model.RuntimeToolCompleted:
@@ -60,7 +104,8 @@ func (e *Engine) projectTurnSummary(runtimeEvent model.RuntimeEvent) {
 		item := findOrCreateTurnItem(&summary, runtimeEvent.ItemID, "command")
 		item.Status = "working"
 		item.Detail = boundedTail(item.Detail+runtimeEvent.Text, 12<<10)
-		persist = false
+		// Command chunks already stream through their own transient runtime events.
+		live = false
 	case model.RuntimePlanUpdated:
 		if runtimeEvent.Text != "" {
 			summary.Plan = boundedTail(summary.Plan+runtimeEvent.Text, 24<<10)
@@ -73,20 +118,26 @@ func (e *Engine) projectTurnSummary(runtimeEvent model.RuntimeEvent) {
 		} else if len(runtimeEvent.Data) > 0 {
 			summary.Diff = boundedTail(string(runtimeEvent.Data), 48<<10)
 		}
+		throttled = true
 	case model.RuntimeUsageUpdated:
 		summary.Usage = boundedRaw(runtimeEvent.Data, 16<<10)
+		throttled = true
 	case model.RuntimeFinal:
 		summary.FinalText = boundedTail(runtimeEvent.Text, 48<<10)
+		immediate = true
 	case model.RuntimeInputCancelled:
 		summary.Status = "cancelled"
 		summary.Error = boundedTail(runtimeEvent.Text, 8<<10)
+		immediate = true
 	case model.RuntimeInputFailed:
 		summary.Status = "failed"
 		summary.Error = boundedTail(runtimeEvent.Text, 8<<10)
+		immediate = true
 	case model.RuntimeError:
 		// Keep diagnostic errors visible without declaring the native Turn
 		// terminal. A later input.failed or turn.completed owns final status.
 		summary.Error = boundedTail(runtimeEvent.Text, 8<<10)
+		immediate = true
 	case model.RuntimeTurnCompleted:
 		for i := range summary.Items {
 			if summary.Items[i].CompletedAt == nil && summary.Items[i].Status == "working" {
@@ -105,23 +156,168 @@ func (e *Engine) projectTurnSummary(runtimeEvent model.RuntimeEvent) {
 		completed := runtimeEvent.CreatedAt
 		summary.CompletedAt = &completed
 		summary.DurationMillis = max(int64(0), completed.Sub(summary.StartedAt).Milliseconds())
+		immediate = true
 	default:
-		// Retain a summary heartbeat for durable turn-scoped events, but avoid
-		// creating extra events for unrelated adapter status notifications.
+		// Unrelated adapter status notifications only refresh the heartbeat.
 		if runtimeEvent.Kind == model.RuntimeLog || runtimeEvent.Kind == model.RuntimeApprovalRequested || runtimeEvent.Kind == model.RuntimeApprovalResolved {
-			persist = false
+			live = false
 		}
 	}
 	if len(summary.Items) > 128 {
 		summary.Items = append([]model.TurnWorkItem(nil), summary.Items[len(summary.Items)-128:]...)
 	}
-	if persist {
-		_, _ = e.record(EventTurnSummaryUpdated, runtimeEvent.Agent, summary)
+	enforceTurnSummaryBudget(&summary)
+
+	tracking := e.turnSummaryTrackingLocked()
+	now := runtimeEvent.CreatedAt
+	persistedAt, persisted := tracking.persistedAt[id]
+	if immediate || !persisted || now.Sub(persistedAt) >= turnSummaryCheckpointInterval {
+		_ = e.persistTurnSummaryLocked(summary, now)
 		return
 	}
 	e.mu.Lock()
 	replaceTurnSummaryLocked(&e.snapshot, summary)
 	e.mu.Unlock()
+	tracking.dirty[id] = true
+	if !live {
+		return
+	}
+	if throttled {
+		if last, ok := tracking.publishedAt[id]; ok && now.Sub(last) < turnSummaryTransientInterval {
+			return
+		}
+	}
+	tracking.publishedAt[id] = now
+	e.publishTransientTurnSummary(summary)
+}
+
+func (e *Engine) turnSummaryTrackingLocked() *turnSummaryTracking {
+	if e.turnSummaries.dirty == nil {
+		e.turnSummaries = turnSummaryTracking{
+			persistedAt: make(map[string]time.Time),
+			publishedAt: make(map[string]time.Time),
+			dirty:       make(map[string]bool),
+		}
+	}
+	return &e.turnSummaries
+}
+
+// persistTurnSummaryLocked records one complete checkpoint. Callers hold
+// summaryMu. A store failure keeps the newer projection visible in memory and
+// dirty; record has already marked the Room store fatal and surfaced it.
+func (e *Engine) persistTurnSummaryLocked(summary model.TurnSummary, at time.Time) error {
+	tracking := e.turnSummaryTrackingLocked()
+	if _, err := e.record(EventTurnSummaryUpdated, summary.Agent, summary); err != nil {
+		e.mu.Lock()
+		replaceTurnSummaryLocked(&e.snapshot, summary)
+		e.mu.Unlock()
+		tracking.dirty[summary.ID] = true
+		return err
+	}
+	delete(tracking.dirty, summary.ID)
+	if summary.CompletedAt != nil {
+		// A completed Turn receives no further projection work.
+		delete(tracking.persistedAt, summary.ID)
+		delete(tracking.publishedAt, summary.ID)
+		return nil
+	}
+	tracking.persistedAt[summary.ID] = at
+	tracking.publishedAt[summary.ID] = at
+	return nil
+}
+
+// flushTurnSummaries persists dirty in-progress summaries for actor (both
+// participants when actor is empty). A non-zero now persists only summaries
+// whose checkpoint is due; a zero now forces every dirty summary, which Room
+// close and adapter stops use before the native process can no longer report.
+func (e *Engine) flushTurnSummaries(actor model.ActorID, now time.Time) error {
+	e.summaryMu.Lock()
+	defer e.summaryMu.Unlock()
+	tracking := e.turnSummaryTrackingLocked()
+	if len(tracking.dirty) == 0 {
+		return nil
+	}
+	e.mu.RLock()
+	var due []model.TurnSummary
+	for _, summary := range e.snapshot.Turns {
+		if !tracking.dirty[summary.ID] || (actor != "" && summary.Agent != actor) {
+			continue
+		}
+		if !now.IsZero() && now.Sub(tracking.persistedAt[summary.ID]) < turnSummaryCheckpointInterval {
+			continue
+		}
+		due = append(due, cloneTurnSummary(summary))
+	}
+	e.mu.RUnlock()
+	var result error
+	for _, summary := range due {
+		at := now
+		if at.IsZero() {
+			at = time.Now().UTC()
+		}
+		if err := e.persistTurnSummaryLocked(summary, at); err != nil {
+			result = errors.Join(result, fmt.Errorf("checkpoint turn summary %s: %w", summary.ID, err))
+		}
+	}
+	return result
+}
+
+// publishTransientTurnSummary delivers a live-only summary update. Sequence
+// zero never advances the durable SSE cursor and is not replayed.
+func (e *Engine) publishTransientTurnSummary(summary model.TurnSummary) {
+	if e.cfg.Hub == nil {
+		return
+	}
+	e.mu.RLock()
+	roomID := e.snapshot.Meta.ID
+	e.mu.RUnlock()
+	event, err := model.NewEvent(roomID, EventTurnSummaryUpdated, summary.Agent, summary)
+	if err != nil {
+		return
+	}
+	event.Seq = 0
+	e.cfg.Hub.Publish(event)
+}
+
+// enforceTurnSummaryBudget keeps one serialized summary within
+// turnSummaryByteBudget. Plan, diff, final text and error keep their own
+// limits. Evidence is shed oldest-first — an item's payload, then its detail —
+// so the newest work stays fully inspectable; item metadata is kept, and only
+// if metadata alone still exceeds the budget are the oldest items dropped.
+func enforceTurnSummaryBudget(summary *model.TurnSummary) {
+	for i := range summary.Items {
+		if turnSummaryApproxBytes(*summary) <= turnSummaryByteBudget {
+			break
+		}
+		summary.Items[i].Data = nil
+		if turnSummaryApproxBytes(*summary) <= turnSummaryByteBudget {
+			break
+		}
+		summary.Items[i].Detail = ""
+	}
+	for len(summary.Items) > 0 && turnSummaryApproxBytes(*summary) > turnSummaryByteBudget {
+		summary.Items = append([]model.TurnWorkItem(nil), summary.Items[1:]...)
+	}
+	// The estimate ignores JSON escaping; confirm with the real encoding.
+	for len(summary.Items) > 0 {
+		encoded, err := json.Marshal(summary)
+		if err == nil && len(encoded) <= turnSummaryByteBudget {
+			return
+		}
+		summary.Items = append([]model.TurnWorkItem(nil), summary.Items[1:]...)
+	}
+}
+
+func turnSummaryApproxBytes(summary model.TurnSummary) int {
+	const overhead = 512
+	size := overhead + len(summary.Plan) + len(summary.Diff) + len(summary.FinalText) + len(summary.Error) + len(summary.Usage)
+	for _, id := range summary.MessageIDs {
+		size += len(id) + 4
+	}
+	for _, item := range summary.Items {
+		size += 160 + len(item.ID) + len(item.Kind) + len(item.Name) + len(item.Status) + len(item.Detail) + len(item.Data)
+	}
+	return size
 }
 
 func upsertTurnItem(summary *model.TurnSummary, event model.RuntimeEvent, kind, status string) {
@@ -137,7 +333,7 @@ func upsertTurnItem(summary *model.TurnSummary, event model.RuntimeEvent, kind, 
 		item.Detail = boundedTail(event.Text, 12<<10)
 	}
 	if len(event.Data) > 0 {
-		item.Data = boundedRaw(event.Data, 16<<10)
+		item.Data = boundedRaw(event.Data, turnItemDataLimit)
 	}
 	if status == "completed" || status == "failed" || status == "cancelled" {
 		completed := event.CreatedAt

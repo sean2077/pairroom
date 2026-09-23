@@ -18,6 +18,8 @@ The schema source of truth is `internal/model/types.go`, the event write / apply
 
 High-frequency transient telemetry may stay off disk so token-by-token fsync does not block the native stdout reader. State transitions that need audit must be durable.
 
+Embedded Turn summaries are checkpointed projections. Each `turn.summary.updated` record is a complete summary: creation, native turn start, final text, errors, input failure/cancellation and Turn completion are recorded immediately; tool, plan, diff, usage and command-output updates stay in memory, reach the browser as sequence-zero events, and are recorded at most once per 30 seconds per in-progress Turn, when that participant's adapter stops, or when the Room closes. A crash can therefore lose up to the last interval of an unfinished Turn's summary items; the raw `runtime.event` facts are recorded before projection and remain authoritative. Each item keeps at most 4 KiB of payload (the full payload stays in its `runtime.event`), and a summary is bounded to 256 KiB by shedding the oldest item payloads, then details. Logs written with the earlier every-event checkpoints replay unchanged and are never rewritten; no schema change is involved.
+
 ## Restart
 
 In embedded Rooms, after unexpected process exit or restart:

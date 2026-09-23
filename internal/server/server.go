@@ -186,6 +186,7 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 		snapshot = s.engine.WindowedSnapshot(limit)
 	} else {
 		snapshot = s.engine.Snapshot()
+		snapshot.Events = room.WithoutTurnSummaryEvents(snapshot.Events)
 	}
 	if strings.TrimSpace(s.boundary) != "" {
 		event, err := model.NewEvent(snapshot.Meta.ID, room.EventSystemNotice, model.ActorSystem, model.SystemNotice{
