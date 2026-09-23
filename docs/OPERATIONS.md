@@ -49,7 +49,7 @@ Observe four layers of state, not only chat text:
 ## Project, Archive, Delete
 
 - **Unregister Project**: remove the Management Service registration; do not delete the user's Git repository. Handle Rooms that still belong to the Project first;
-- **Archive Room**: stop the current Agent Turn and suspend the Runtime, keeping Room data for audit or restore;
+- **Archive Room**: for an Embedded Room, stop the current Agent Turn and suspend the Runtime; a Native Room has no Service-owned Runtime, so archiving only hides it from the default list and stops nothing in the user's own Claude Code, Codex or Grok Build session. Either way Room data is kept for audit or restore;
 - **Permanent delete**: delete PairRoom-managed data; confirm archive, backup, Binding, and active-runtime preconditions first;
 - **Deleting the repository** is never an implied side effect of PairRoom Project unregister / Room delete.
 

@@ -2204,7 +2204,7 @@
   function closeRoomContextMenu(restoreFocus = false) {
     const roomID = state.contextRoomID;
     const trigger = state.contextTrigger?.isConnected ? state.contextTrigger
-      : Array.from(document.querySelectorAll('.tree-room[data-room-id], .room-tab[data-room-id]')).find(node => node.dataset.roomId === roomID);
+      : Array.from(document.querySelectorAll('.tree-room[data-room-id], .room-tab[data-room-id], .room-row[data-room-id]')).find(node => node.dataset.roomId === roomID);
     $('room-context-menu').hidden = true;
     state.contextRoomID = '';
     state.contextTrigger = null;
@@ -2227,7 +2227,8 @@
   }
 
   function openRoomContextMenu(event, keyboard = false) {
-    const trigger = event.target.closest?.('.tree-room[data-room-id], .room-tab[data-room-id], .room-row[data-room-id]');
+    const trigger = event.target.closest?.('.tree-room[data-room-id], .room-tab[data-room-id], .room-row[data-room-id]')
+      || event.target.closest?.('.tree-room-row')?.querySelector('.tree-room[data-room-id]');
     const room = trigger && roomByID(trigger.dataset.roomId);
     if (!room || !state.authenticated) return;
     event.preventDefault();
@@ -2240,6 +2241,14 @@
     }
     const menu = $('room-context-menu');
     $('context-room-name').textContent = room.name;
+    $('context-close-room').disabled = !state.tabs.includes(room.id);
+    $('context-archive-room').disabled = room.lifecycle === 'archived';
+    const scope = trigger.closest('#room-tree') ? '#room-tree' : '#view';
+    // A Room alone in its Project/lifecycle group has nowhere to move; keep the
+    // named group out of the menu instead of announcing an empty one.
+    const orderItems = ordering.roomMenuItems(room.id, scope, () => closeRoomContextMenu(true));
+    $('context-room-order').hidden = orderItems.length === 0;
+    $('context-room-order').replaceChildren(...orderItems);
     menu.hidden = false;
     const rect = trigger.getBoundingClientRect();
     const x = !keyboard && Number.isFinite(event.clientX) ? event.clientX : rect.left;
@@ -2313,10 +2322,13 @@
   }
 
   function archiveRoom(room) {
+    // Archiving a Native Room never stops a user-owned harness, so the Embedded
+    // Turn/Runtime promise would be wrong here. Use the Native archive facts
+    // instead of the whole Native page notice.
     openConfirm({
       eyebrow: t('room.archiveRoomUpper'),
       title: t("ui.archiveValue", { value0: (room.name) }),
-      message: t("ui.theActiveTurnStopsFirstThenTheRuntimeIsSuspendedAndThe"),
+      message: t(room.host_mode === 'native' ? 'room.native.archiveMessage' : 'ui.theActiveTurnStopsFirstThenTheRuntimeIsSuspendedAndThe'),
       detail: t("room.archivePreservesState"),
       label: t("ui.archiveRoom"),
       tone: 'danger',
@@ -3109,7 +3121,15 @@
     } else if (state.contextRoomID && event.key === 'Escape') {
       event.preventDefault(); closeRoomContextMenu(true);
     } else if (state.contextRoomID && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
-      event.preventDefault(); $('context-rename-room').focus();
+      event.preventDefault();
+      const items = [...$('room-context-menu').querySelectorAll('[role="menuitem"]:not(:disabled)')];
+      const index = items.indexOf(document.activeElement);
+      const step = event.key === 'ArrowUp' ? -1 : 1;
+      // Focus may sit on the menu body (its name band or the order group's
+      // padding) rather than an item; enter the list from the matching end.
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+        : index < 0 ? (step < 0 ? items.length - 1 : 0) : (index + step + items.length) % items.length;
+      items[next]?.focus({ preventScroll: true });
     } else if (state.contextRoomID && event.key === 'Tab') {
       closeRoomContextMenu(true);
     }
@@ -3118,6 +3138,24 @@
     const room = roomByID(state.contextRoomID);
     closeRoomContextMenu(true);
     if (room && state.authenticated) openRenameDialog(room);
+  });
+  $('context-close-room').addEventListener('click', () => {
+    const roomID = state.contextRoomID;
+    // A tab trigger leaves the DOM with its tab: immediately for a background
+    // Room, on the next render for the active one, so its focus cannot survive.
+    const fromTab = Boolean(state.contextTrigger?.closest('#room-tablist'));
+    closeRoomContextMenu(true);
+    // Closing a view is not archival: no API call or native process control.
+    if (!state.authenticated || !state.tabs.includes(roomID)) return;
+    closeTab(roomID);
+    // The Room itself survives a view close, so keep the keyboard user on its
+    // sidebar row instead of letting the removed tab drop focus onto the page.
+    if (fromTab) $('room-tree')?.querySelector(`.tree-room[data-room-id="${CSS.escape(roomID)}"]`)?.focus({ preventScroll: true });
+  });
+  $('context-archive-room').addEventListener('click', () => {
+    const room = roomByID(state.contextRoomID);
+    closeRoomContextMenu(true);
+    if (room && state.authenticated && room.lifecycle !== 'archived') archiveRoom(room);
   });
   document.addEventListener('pointerdown', (event) => {
     if (state.contextRoomID && !$('room-context-menu').contains(event.target)) closeRoomContextMenu();

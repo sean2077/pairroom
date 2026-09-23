@@ -162,7 +162,9 @@
       row.title = t('workspace.ordering.help');
       const scope = () => row.closest('#room-tree') ? '#room-tree' : '#view';
       row.addEventListener('contextmenu', (event) => {
-        if (saving) return;
+        // Room actions share Management's menu; do not swallow rename/close.
+        // Projects retain their compact move menu and both keep Alt+Arrow.
+        if (saving || kind === 'room') return;
         event.preventDefault(); event.stopPropagation();
         openMenu(row, kind, id, scope());
       });
@@ -234,6 +236,18 @@
     });
     window.addEventListener('blur', cancel);
     document.addEventListener('visibilitychange', () => { if (document.hidden) cancel(); });
-    return { ordered, decorate, cancel, interacting: () => Boolean(gesture || menu) };
+    function roomMenuItems(id, scope, onChoose) {
+      const snapshot = getSnapshot();
+      if (!snapshot?.navigation_order || snapshot.navigation_order_error) return [];
+      const list = items('room', id), index = list.findIndex(item => item.id === id);
+      if (index < 0 || list.length < 2) return [];
+      return [-1, 1].map(delta => node('button', {
+        type: 'button', role: 'menuitem',
+        textContent: t(delta < 0 ? 'workspace.ordering.up' : 'workspace.ordering.down'),
+        disabled: saving || index + delta < 0 || index + delta >= list.length,
+        onClick: () => { onChoose(); step('room', id, delta, scope); },
+      }));
+    }
+    return { ordered, decorate, cancel, roomMenuItems, interacting: () => Boolean(gesture || menu) };
   } };
 })();

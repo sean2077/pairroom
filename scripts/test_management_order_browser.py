@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 from pathlib import Path
 from playwright.async_api import async_playwright, expect
 from test_management_browser import fixture_html, load_csp_fixture, wait_fixture_state
@@ -80,7 +81,7 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
 
     async def move_via_menu(scope, kind, source, label):
         await row(scope, kind, source).click(button='right')
-        await page.get_by_role('button', name=label, exact=True).click()
+        await page.get_by_role('menuitem' if kind == 'room' else 'button', name=label, exact=True).click()
 
     assert await ids('#view','project') == ['p1','p2','p3']
     assert not await page.locator('.order-handle').count(), 'drag handle buttons must be gone'
@@ -178,6 +179,96 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
     await page.evaluate("document.querySelectorAll('#toasts .toast-close').forEach(b=>b.click())")
     await page.screenshot(path=str(artifacts / 'rooms-ordered-light-en.png'), full_page=True)
 
+    # Sorted Rooms share rename, close and move actions, not two competing menus.
+    await page.evaluate("__snapshot.rooms.find(r=>r.id==='r3').host_mode='native';__snapshot.runtimes.push({room_id:'r3',phase:'active',busy:false,occupies_capacity:false})")
+    await refresh()
+    tree_room = lambda room_id: page.locator(f'#room-tree .tree-room[data-room-id="{room_id}"]')
+    tab = lambda room_id: page.locator(f'#room-tablist .room-tab[data-room-id="{room_id}"]')
+    await tree_room('r1').click()
+    await tree_room('r3').click()
+    await expect(tab('r3')).to_be_visible()
+    await page.wait_for_selector('#room-stage [data-room-id="r3"] iframe')
+    await page.evaluate("window.__keptFrame=document.querySelector('#room-stage [data-room-id=\"r3\"] iframe')")
+    writes = await page.evaluate('__writes.length')
+    moves = await page.evaluate('__moves.length')
+    await tree_room('r1').click(button='right')
+    await expect(page.locator('#room-context-menu')).to_be_visible()
+    await expect(page.locator('#context-rename-room')).to_be_visible()
+    await expect(page.locator('#context-close-room')).to_be_enabled()
+    await page.locator('#context-close-room').click()
+    await expect(tab('r1')).to_have_count(0)
+    await expect(tab('r3')).to_be_visible()
+    assert await page.evaluate('__keptFrame.isConnected'), 'closing background Room recreated the active frame'
+    await tree_room('r1').click()
+    await expect(tab('r1')).to_be_visible()
+    await tree_room('r1').click(button='right')
+    await page.locator('#context-close-room').click()
+    await wait_fixture_state(page, "location.hash==='#/rooms/r3'")
+    # location.hash changes before its handler rebuilds the tree and closes
+    # menus. Wait for the replacement active tab before opening a keyboard menu.
+    await expect(tab('r3')).to_have_class(re.compile(r"\bactive\b"))
+    await tree_room('r1').focus()
+    await page.keyboard.press('Shift+F10')
+    await expect(page.locator('#context-close-room')).to_be_disabled()
+    await page.keyboard.press('ArrowDown')
+    assert not await page.locator('#context-close-room').evaluate('el=>el===document.activeElement')
+    await page.keyboard.press('Home')
+    await expect(page.locator('#context-rename-room')).to_be_focused()
+    await page.keyboard.press('End')
+    await expect(page.locator('#context-archive-room')).to_be_focused()
+    await page.keyboard.press('Escape')
+    await expect(tree_room('r1')).to_be_focused()
+    # Focus can rest on the menu body rather than an item (the name band is not
+    # focusable); each arrow key must then enter the list from its own end.
+    await tree_room('r1').focus()
+    await page.keyboard.press('Shift+F10')
+    await page.locator('#context-room-name').click()
+    await wait_fixture_state(page, 'document.activeElement===document.body')
+    await page.keyboard.press('ArrowUp')
+    await expect(page.locator('#context-archive-room')).to_be_focused()
+    await page.keyboard.press('ArrowDown')
+    await expect(page.locator('#context-rename-room')).to_be_focused()
+    await page.keyboard.press('Escape')
+    await expect(tree_room('r1')).to_be_focused()
+    # Archive is separate and requires confirmation; Native copy never promises
+    # to stop a user-owned vendor session. Cancelling changes no durable state.
+    await tree_room('r3').click(button='right')
+    await page.locator('#context-archive-room').click()
+    await expect(page.locator('#confirm-dialog')).to_be_visible()
+    await expect(page.locator('#confirm-dialog')).to_contain_text('No agent sessions are started or interrupted')
+    # The confirmation carries the archive facts, not the Native page notice:
+    # release-gate wording and wake mechanics do not belong in a user dialog.
+    await expect(page.locator('#confirm-dialog')).to_contain_text('Archiving hides the Room from the default list')
+    assert 'release-gated' not in await page.locator('#confirm-dialog').inner_text()
+    await page.locator('#confirm-dialog [data-close-dialog]').first.click()
+    await tree_room('r3').click(button='right')
+    await page.locator('#context-close-room').click()
+    await expect(tab('r3')).to_have_count(0)
+    await wait_fixture_state(page, "location.hash==='#/overview'")
+    assert await page.evaluate('__writes.length') == writes, 'close/cancel mutated Room lifecycle'
+    assert await page.evaluate('__moves.length') == moves, 'close changed navigation order'
+    await expect(tree_room('r3')).to_be_visible()
+    await tree_room('r3').click()
+    await expect(tab('r3')).to_be_visible()
+    # Closing a Room from that tab's own menu removes the menu trigger together
+    # with the tab; focus must land on the Room's surviving sidebar row instead
+    # of being dropped onto the page, and the neighbour tab must take over.
+    await tree_room('r1').click()
+    await expect(tab('r1')).to_be_visible()
+    await tab('r1').locator('.room-tab-close').focus()
+    await page.keyboard.press('Shift+F10')
+    await page.keyboard.press('Home')
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('Enter')
+    await expect(tab('r1')).to_have_count(0)
+    await expect(tree_room('r1')).to_be_focused()
+    await expect(tab('r3')).to_have_class(re.compile(r"\bactive\b"))
+    assert await page.evaluate('location.hash') == '#/rooms/r3'
+    await tree_room('r3').click(button='right')
+    await page.screenshot(path=str(artifacts / 'room-context-actions.png'))
+    await page.locator('#context-close-room').click()
+    await wait_fixture_state(page, "location.hash==='#/overview'")
+
     # The row itself opens the Project even for a missing worktree, so maintenance
     # stays reachable; it can unregister an empty Project but not bypass Room
     # cleanup. The identity area is clicked because an unavailable Project also
@@ -209,19 +300,16 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
     summary = page.locator('.settings-content details > summary')
     await summary.click()
     assert 'Service' in await page.locator('.settings-content details').inner_text()
-    await summary.click()
-    # A switch stays a horizontal pill: the global button min-height must not
-    # stretch it back into a circle. The section switch is applied on hashchange,
-    # so sample until the layout settles instead of reading one possibly
-    # mid-replacement frame; a switch that is genuinely collapsed still fails.
-    await page.get_by_role('button', name='Interface experience', exact=True).click()
-    switches = []
-    for _ in range(50):
-        switches = await page.locator('.settings-content .toggle-switch').evaluate_all('(els)=>els.map(e=>{const r=e.getBoundingClientRect();return [r.width,r.height];})')
-        if switches and all(w > h * 1.5 for w, h in switches):
-            break
-        await page.wait_for_timeout(50)
+    # The raw-snapshot switch lives in the expanded Diagnostics summary, not
+    # Interface. Assert before navigating; sampling the outgoing view after a
+    # hashchange made this test pass or fail depending on render timing.
+    switch = page.locator('.settings-content details .toggle-switch')
+    await expect(switch).to_be_visible()
+    switches = await switch.evaluate_all('(els)=>els.map(e=>{const r=e.getBoundingClientRect();return [r.width,r.height];})')
     assert switches and all(w > h * 1.5 for w, h in switches), switches
+    await summary.click()
+    await page.get_by_role('button', name='Interface experience', exact=True).click()
+    await expect(page.locator('.settings-nav [aria-current="page"]')).to_have_text('Interface experience')
     for theme, language in [('light','en'),('dark','zh-CN')]:
         await page.evaluate("args=>{PairRoomTheme.setTheme(args[0]);PairRoomI18n.setLang(args[1]);}",[theme,language])
         await page.screenshot(path=str(artifacts / f'settings-unified-{theme}-{language}.png'),full_page=True)
@@ -234,7 +322,7 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
         assert not await page.evaluate('__cspErrors')
     assert not errors, errors
     await page.close()
-    return dict(unavailable_project_maintenance_reachable=True,project_single_rows=True,project_row_click_navigation=True,project_and_room_drag_persisted=True,ordering_no_handle_whole_row_drag=True,ordering_context_menu_and_navigation=True,ordering_failure_and_cancellation=True,ordering_poll_dom_stable=True,ordering_filtered_and_scoped=True,diagnostics_single_settings_destination=True,settings_readable_navigation=True)
+    return dict(room_context_close_and_archive_separate=True,room_context_keyboard_navigation=True,room_context_background_and_last_tab_close=True,unavailable_project_maintenance_reachable=True,project_single_rows=True,project_row_click_navigation=True,project_and_room_drag_persisted=True,ordering_no_handle_whole_row_drag=True,ordering_context_menu_and_navigation=True,ordering_failure_and_cancellation=True,ordering_poll_dom_stable=True,ordering_filtered_and_scoped=True,diagnostics_single_settings_destination=True,settings_readable_navigation=True)
 
 
 async def main(args):

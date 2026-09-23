@@ -37,19 +37,51 @@
     if(position.stick)list.scrollTop=list.scrollHeight;
     else if(position.anchor?.isConnected)list.scrollTop+=position.anchor.getBoundingClientRect().top-position.top;
   }
-  function showInspector(open) {
-    const position = readingPosition();
-    $('native-inspector').hidden = !open;
-    document.body.classList.toggle('native-details-open', open);
-    $('inspector-toggle').setAttribute('aria-expanded', String(open));
-    for (const button of $('participant-summary').children) button.setAttribute('aria-expanded', String(open));
+  const compactPanels = window.matchMedia('(max-width: 1000px)');
+  const panelNames = ['participants', 'inspector'];
+  const desktopPanels = { participants: true, inspector: true };
+  let mobilePanel = '';
+  function syncPanels() {
+    const position = readingPosition(), focused = document.activeElement;
+    for (const name of panelNames) {
+      const panel = $(`native-${name}`);
+      const open = compactPanels.matches ? mobilePanel === name : desktopPanels[name];
+      panel.hidden = !open;
+      document.body.classList.toggle(name === 'inspector' ? 'native-details-open' : 'native-participants-open', open);
+      $(`${name}-toggle`).setAttribute('aria-expanded', String(open));
+      if (!open && panel.contains(focused)) $(`${name}-toggle`).focus({preventScroll:true});
+    }
+    document.querySelector('.conversation').inert = compactPanels.matches && Boolean(mobilePanel);
+    for (const button of $('participant-summary').children) button.setAttribute('aria-expanded', String(!$('native-participants').hidden));
     restoreReadingPosition(position);
   }
-  $('inspector-toggle').addEventListener('click', () => showInspector($('native-inspector').hidden));
+  function showPanel(name, open) {
+    const wasOpen = !$(`native-${name}`).hidden;
+    if (compactPanels.matches) mobilePanel = open ? name : '';
+    else desktopPanels[name] = open;
+    syncPanels();
+    // Only a transition into view moves focus: re-opening an already visible
+    // panel (Inspect inside a narrow diagnostics list, or a participant chip)
+    // must not pull the keyboard user out of the control they just activated.
+    if (open && !wasOpen && compactPanels.matches) $(`${name}-title`).focus({preventScroll:true});
+  }
+  function showInspector(open) { showPanel('inspector', open); }
+  function showParticipants(open) { showPanel('participants', open); }
+  for (const name of panelNames) {
+    $(`${name}-toggle`).addEventListener('click', () => showPanel(name, $(`native-${name}`).hidden));
+    document.querySelector(`[data-close-panel="${name}"]`).addEventListener('click', () => {
+      showPanel(name, false); $(`${name}-toggle`).focus({preventScroll:true});
+    });
+    $(`native-${name}`).addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !document.querySelector('dialog[open]')) {
+        event.preventDefault(); event.stopPropagation();
+        showPanel(name, false); $(`${name}-toggle`).focus({preventScroll:true});
+      }
+    });
+  }
+  compactPanels.addEventListener('change', () => { mobilePanel = ''; syncPanels(); });
+  syncPanels();
   $('scroll-bottom').addEventListener('click', () => { $('messages').scrollTop = $('messages').scrollHeight; });
-  $('native-inspector').addEventListener('keydown', event => {
-    if (event.key === 'Escape') { showInspector(false); $('inspector-toggle').focus(); }
-  });
   function translations() {
     window.PairRoomI18n.apply(document);
     $('message-text').placeholder=tr('placeholder'); bindingsKey='';auditKey='';attentionKey='';pendingKey='';messageNodes.forEach(v=>{v.key='';});
@@ -66,12 +98,12 @@
       const state = tr(!b.active?'unbound':b.session_id?'bound':'pending');
       const chip = element('button', undefined, `participant-chip ${slot}`);
       chip.type = 'button'; chip.dataset.participant = slot; chip.dataset.nativeFocus = `${slot}-chip`;
-      chip.setAttribute('aria-controls', 'native-inspector');
-      chip.setAttribute('aria-expanded', String(!$('native-inspector').hidden));
+      chip.setAttribute('aria-controls', 'native-participants');
+      chip.setAttribute('aria-expanded', String(!$('native-participants').hidden));
       chip.title = tr('activityHelp');
       chip.append(element('span', String(index+1), 'participant-avatar'), element('strong', handle(slot)), element('span', state, 'muted'));
       chip.addEventListener('click', () => {
-        showInspector(true);
+        showParticipants(true);
         const binding = $('bindings').querySelector(`[data-slot="${slot}"]`);
         binding?.focus();
       });
@@ -79,8 +111,23 @@
       const card=element('article',undefined,'binding');card.dataset.slot=slot;card.tabIndex=-1;card.dataset.nativeFocus=slot;
       const top=element('div',undefined,'binding-top');top.append(element('h3',`${index+1} · ${handle(slot)}`),element('span',state,'badge'));
       if(b.active){const park=element('button',tr(b.park_enabled?'parkOn':'parkOff'));park.type='button';park.dataset.park=slot;park.dataset.nativeFocus=`${slot}-park`;park.setAttribute('aria-pressed',String(Boolean(b.park_enabled)));park.addEventListener('click',async()=>{park.disabled=true;try{await request(`api/v1/participants/${slot}/park`,{method:'POST',body:JSON.stringify({enabled:!b.park_enabled})});status(tr('controls'));await refresh();}catch(e){status(e.message,true);}finally{park.disabled=false;}});top.append(park);}
-      card.append(top);const meta=element('dl',undefined,'binding-meta');[[tr('binding'),b.bind_id||'—'],[tr('generation'),b.generation||'—'],[tr('session'),b.session_id||'—'],[tr('last'),time(b.last_activity)]].forEach(([k,v])=>meta.append(element('dt',k),element('dd',String(v))));card.append(meta);
-      const instructions=element('details');instructions.dataset.disclosure=`${slot}-commands`;instructions.open=disclosures.has(instructions.dataset.disclosure);instructions.append(element('summary',tr('commands')),element('p',tr('bindingHint'),'muted'));
+      card.append(top);
+      const label = key => window.PairRoomI18n.t(key), inherited = label('room.nativeDefault');
+      const provider = selection.provider?.source === 'cc-switch'
+        ? `CC Switch · ${selection.provider.app_type}/${selection.provider.profile_id}` : label('agent.nativeProvider');
+      const configMeta = element('dl', undefined, 'binding-meta agent-config');
+      [[label('agent.runtime'), selection.runtime || inherited], [label('agent.provider'), provider],
+        [label('agent.model'), selection.model || inherited], [label('agent.effort'), selection.effort || inherited],
+        [label('agent.permissionMode'), [selection.permission_mode, selection.approval_policy, selection.sandbox].filter(Boolean).join(' · ') || inherited],
+        [tr('last'), time(b.last_activity)]].forEach(([key, text]) => configMeta.append(element('dt', key), element('dd', text)));
+      card.append(configMeta);
+      const identity = element('details'); identity.dataset.disclosure = `${slot}-identity`;
+      identity.open = disclosures.has(identity.dataset.disclosure);
+      identity.append(element('summary', tr('binding'))); identity.firstElementChild.dataset.nativeFocus = `${slot}-identity`;
+      const meta = element('dl', undefined, 'binding-meta');
+      [[tr('binding'),b.bind_id||'—'],[tr('generation'),b.generation||'—'],[tr('session'),b.session_id||'—']].forEach(([key,text])=>meta.append(element('dt',key),element('dd',String(text))));
+      identity.append(meta); card.append(identity);
+      const instructions=element('details');instructions.dataset.disclosure=`${slot}-commands`;instructions.open=disclosures.has(instructions.dataset.disclosure);instructions.append(element('summary',tr('commands')),element('p',tr('setup.intro'),'muted'));
       instructions.firstElementChild.dataset.nativeFocus=`${slot}-commands`;
       instructions.append(element('pre',`pairroom relay install --runtime ${selection.runtime}\npairroom relay bind --room ${value.room.id} --slot ${index+1}\npairroom relay wait --room ${value.room.id} --slot ${index+1}`));card.append(instructions);
       const config=element('details');config.dataset.disclosure=`${slot}-config`;config.open=disclosures.has(config.dataset.disclosure);config.append(element('summary',tr('metadata')),element('pre',JSON.stringify(selection,null,2)));config.firstElementChild.dataset.nativeFocus=`${slot}-config`;card.append(config);return card;
@@ -210,11 +257,32 @@
     if(summary.last_user_message){const button=element('button',tr('userAttention'));button.type='button';button.addEventListener('click',()=>inspectMessage(summary.last_user_message));items.push(button);}
     $('attention').replaceChildren(...items);$('attention').hidden=items.length===0;
   }
+  let deliveryKey = '';
+  function renderDelivery(value) {
+    const key = JSON.stringify([value.summary, value.identities, language()]);
+    if (key === deliveryKey) return;
+    deliveryKey = key;
+    $('delivery-summary').replaceChildren(...['slot1', 'slot2'].map(slot => {
+      const inbox = value.summary?.inboxes?.[slot];
+      const card = element('section', undefined, 'delivery-slot');
+      card.append(element('h3', handle(slot)));
+      if (!inbox) { card.append(element('p', tr('never'), 'muted')); return card; }
+      const counts = element('dl', undefined, 'binding-meta');
+      for (const state of ['queued', 'delivering', 'unknown']) {
+        counts.append(element('dt', tr(state)), element('dd', String(inbox[state] || 0)));
+      }
+      card.append(counts);
+      if (inbox.oldest_queued_at) card.append(element('p', `${tr('oldestQueued')}: ${time(inbox.oldest_queued_at)}`, 'muted'));
+      const wake = value.summary?.last_wake?.[slot];
+      if (wake) card.append(element('p', `${tr('lastWake')}: ${wake.outcome} · ${time(wake.at)}`, 'muted'));
+      return card;
+    }));
+  }
   function renderAudit(value){const key=JSON.stringify([value.relay.audit,language()]);if(key===auditKey)return;auditKey=key;
     const names={'native.binding.updated':'changed','native.publication':'publication','native.publication.gap':'gap','native.message.updated':'updated','native.failure':'failure'};
     $('audit').replaceChildren(...(value.relay.audit||[]).slice(-80).reverse().map(a=>{const li=element('li');li.append(element('strong',tr(names[a.kind]||a.kind)),element('time',time(a.at)));if(a.detail)li.append(element('p',a.detail));return li;}));
   }
-  function render(value){snapshot=value;restoreOutbox();renderAttention(value);refreshPending().catch(e=>status(e.message,true));$('room-name').textContent=value.room.name;document.title=`${value.room.name} · PairRoom Native`;renderBindings(value);renderMessages(value);renderAudit(value);}
+  function render(value){snapshot=value;restoreOutbox();renderAttention(value);refreshPending().catch(e=>status(e.message,true));$('room-name').textContent=value.room.name;document.title=`${value.room.name} · PairRoom Native`;renderBindings(value);renderMessages(value);renderDelivery(value);renderAudit(value);}
   async function refresh(){if(refreshing){refreshAgain=true;return;}refreshing=true;try{do{refreshAgain=false;const value=await request('api/v1/snapshot?tail=1');if(!snapshot || value.relay.sequence>=snapshot.relay.sequence)render(value);}while(refreshAgain);}finally{refreshing=false;}}
   function lockComposer(){
     // The Room id scopes the recovery record, so publication stays locked until

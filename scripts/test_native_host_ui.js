@@ -27,6 +27,8 @@ class Element {
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   addEventListener(name, fn) { this.events[name] = fn; }
   setAttribute() {}
+  contains(node) { return node === this || this.children.some(child => child.contains(node)); }
+  focus() {}
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const response = (data, status = 200) => ({ ok: status < 400, status, json: async () => data });
@@ -36,7 +38,7 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
   if (!storage) { const values=new Map(); storage={getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)}; }
   const elements = new Map();
   const $ = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
-  const document = { getElementById: $, createElement: tag => new Element(tag), createTextNode: text => Object.assign(new Element("#text"), {textContent:text}), addEventListener() {}, hidden: false };
+  const document = { getElementById: $, createElement: tag => new Element(tag), createTextNode: text => Object.assign(new Element("#text"), {textContent:text}), addEventListener() {}, hidden: false, body: new Element('body'), querySelector: selector => selector === 'dialog[open]' ? null : $(selector), querySelectorAll: () => [] };
   $('target').value = 'slot2';
   const reads = [], uploads = [], sends = [], uploadGate = deferred();
   let failSend = true;
@@ -64,7 +66,7 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
     throw new Error(`unexpected request ${url}`);
   };
   const context = vm.createContext({
-    document, window: { PairRoomI18n: { t: k => k, apply() {}, lang: 'en' }, addEventListener() {} },
+    document, window: { PairRoomI18n: { t: k => k, apply() {}, lang: 'en' }, addEventListener() {}, matchMedia: () => ({matches: false, addEventListener() {}}) },
     localStorage:storage,fetch, Headers, FormData, TextEncoder, crypto: webcrypto, URLSearchParams,
     location: { hash: '', pathname: '/', search: '' }, history: { replaceState() {} },
     EventSource: class { addEventListener() {} close() {} }, setInterval: () => 1, clearInterval() {}, console

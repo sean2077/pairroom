@@ -348,3 +348,8 @@ body.management-ux-enhanced .room-workspace-maximize[aria-pressed="true"] {
   body.management-ux-enhanced .tree-room.active { outline: 2px solid Highlight; }
   body.management-ux-enhanced .room-tab-close { border: 1px solid ButtonText; }
 }
+
+/* Room context actions share one keyboard menu, including order controls. */
+#context-room-order:not(:empty) { border-block: 1px solid var(--line); margin-block: 4px; padding-block: 4px; }
+#context-room-order > button { display: block; width: 100%; text-align: start; }
+#room-context-menu button:disabled { opacity: .45; cursor: default; }
