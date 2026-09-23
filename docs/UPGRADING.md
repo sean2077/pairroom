@@ -1,113 +1,82 @@
 # Upgrading
 
-Treat an upgrade as a controlled change, not as overwriting an active binary. Release history is in [CHANGELOG](../CHANGELOG.md); this page describes the current reader and operational boundary.
+Treat upgrades as controlled changes, not overwriting active binaries. [Changelog](../CHANGELOG.md) records release history; this page owns current reader and operational boundaries. [Installation](INSTALLATION.md) owns per-channel binary replacement/uninstall.
 
 ## Supported Room formats
 
-PairRoom 5.0.0 is a clean development cutover. Readers accept only **Store schema 12/provisioning 5** with explicit immutable `host_mode`, registry checkpoint schema 3, relay state schema 2, and Agent pair profile schema 2. Schema ≤11 Rooms, schema-2 checkpoints, old relay state, and old profiles are retired without migration. An old Service data root fails closed before recovery, replay, repair, or rewrite; start a new data root and recreate Rooms and profiles. Legacy data and credential directories remain untouched for explicit human backup or removal.
+The 5.0.0 development cutover retired old formats without migration. Current readers require **Store schema 12/provisioning 5**, explicit immutable `host_mode`, registry checkpoint 3, relay state 2, and Agent pair profile storage 2. A retired Service root fails as a whole before recovery/replay/repair/rewrite. Start a new root and recreate registrations, Rooms, and profiles; moving only old Room directories cannot repair an incompatible root checkpoint.
 
-Legacy Room compatibility is removed: schema 9, provisioning 1/2, missing-metadata imports, inferred native Bindings, Service-default fallback at activation, role switching, role-bound Reviewer snapshots, and lifecycle-only archive stubs are unsupported. The import and binding-completion HTTP endpoints and UI are removed. `ordinary_reviewer_policy` is no longer a configuration field. The current `configured`, `read-only`, and `yolo` permission profiles remain independent of Lead/Executor responsibilities.
+Legacy data/credentials remain untouched for explicit human backup/removal. Never relabel schema numbers, copy selected old events into a new log, or infer old permissions/Bindings from current defaults. Preserve retired roots with their matching binaries for inspection. Previously imported external Room directories are separate backup/isolation responsibilities.
 
-**There is no automatic migration or deletion of old data.** Unsupported stores fail before Event Log replay or tail repair. Preserve them and their matching older binary for inspection. Before starting the current Service, move unsupported Room directories out of its `rooms/` discovery root after stopping all owners and making a backup. Do not edit schema numbers, relabel metadata, copy selected records into a current log, or use new defaults to infer historical permissions. Previously imported external directories are no longer discovered from the checkpoint and are never erased by this cleanup.
+Legacy imports, binding-completion endpoints, inferred selections, role switching, and Reviewer snapshot workspaces are gone. `ordinary_reviewer_policy` is removed. Current effective Embedded permission profiles are independent of Lead/Executor responsibilities; Native retains original harness permissions.
 
-Create a new Room to continue work. An explicit Existing Binding may resume a native CLI session, but prior native history remains outside the PairRoom transcript. `pairroom serve` remains a current-format standalone development/diagnostic command; it does not restore Legacy Rooms or import standalone history into the Service.
-
-An embedded Room whose entire directory is lost can still be archived and explicitly removed using its validated checkpoint identity. Missing files inside a directory, ambiguous replacement data, and unidentified archive stubs fail closed. Prepared deletion quarantine entries are restored when the checkpoint still owns them; committed current-format deletions can finish cleanup after a crash.
+A fresh Embedded Room may explicitly resume a supported existing native session, but pre-binding history is not imported. `pairroom serve` remains current-format standalone development/diagnostics, not Legacy import. Embedded checkpoint-only cleanup may handle a wholly lost Room directory; missing files inside an existing directory, unidentified archive stubs, and ambiguous replacement data still fail closed. Native archive requires valid data.
 
 ## Before upgrading
 
-1. Read the changelog, stop or archive active Rooms, and record the binary and native CLI versions.
-2. Back up the complete Service data root and verify any Room archives with the matching binary. Keep the matching binary and configuration alongside the backup.
-3. Inspect working repositories for unrecognized native side effects. Identify unsupported Room data before replacing the binary.
+Record PairRoom and selected native CLI versions, read release notes, and stop/drain the PairRoom owner. For Native, separately pause work in the original harnesses: archive/quit cannot stop them. Verify workspace side effects before replacing binaries.
+
+Preserve the entire stopped Service root, including profiles/navigation preferences, and any external Room directories. Verify Room archives with the matching binary, but do not mistake them for complete Service, repository, vendor-session, or Native workspace-credential backups. Keep the matching configuration and binary alongside the backup. See [Operations](OPERATIONS.md#backup).
 
 ## Configuration and native runtimes
 
-Service configuration is one strict JSON object: duplicate fields, trailing documents, unknown fields, and `null` runtime/policy fields are rejected. Empty policy strings request native inheritance. Move per-Room Provider/model/effort/permission choices out of runtime command arguments and into the Agent selection.
+Startup uses strict JSON: unknown/duplicate fields, trailing documents, and null runtime/policy values fail. Empty policy strings request native inheritance. For Embedded, move Provider/model/effort/permissions out of executable argument templates into Agent selections.
 
-Providers use native configuration or read-only CC Switch references. Back up the data root, configure the equivalent CC Switch profile, then replace removed top-level `providers` / `cc_connect` and per-slot Provider-name strings with structured references. Never copy credentials into Room selections. Native runtime versions and per-process credential boundaries must be rechecked after upgrade.
+Supported Provider configuration is native inheritance or read-only CC Switch references. Replace removed `providers`, `cc_connect`, and string Provider names with structured references as described in [Configuration](CONFIGURATION.md); never copy credentials into selections. Recheck compatibility and per-process isolation after runtime upgrades.
 
-Remove retired `routing_mode`, `max_agent_hops`, `--routing`, `--max-hops`, and role-target automation. Message intents are `steer` or `queue`. Only current runtime-derived exact handles route Agent relay; old control markers are ordinary text. Stable JSON slot IDs are `slot1` and `slot2`, independently of the selected Runtime; `claude` and `codex` are relay CLI input aliases only.
+Remove obsolete `routing_mode`, `max_agent_hops`, `--routing`, `--max-hops`, and role-target automation. Embedded message intents are `steer`/`queue`; Native has its own relay protocol. Exact runtime-derived handles route automatic relay, while explicit Native send uses its command target. Stable JSON actors are `slot1`/`slot2`; runtime-named relay CLI aliases are not durable identities.
 
 ## Desktop and daemon
 
-Desktop never installs a daemon implicitly. It reuses an installed daemon or owns an embedded Service when none is installed. Launch at login is an explicit native Settings operation. `make desktop-update` replaces the host and bundled CLI without changing user data or daemon configuration.
+Desktop never implicitly installs a daemon. It reuses an installed daemon or owns an embedded Service; Launch at login is separate OS registration. `make desktop-update` is for source builds and preserves data/login state without reconfiguring a daemon.
 
-Desktop and `pairroom daemon start` recover a crash-stale lock only after verifying the recorded PID is gone. A live owner fails closed. Normal stop/restart drains active native Turns; never force a second Service onto an owned data root.
+Desktop and `pairroom daemon start` recover stale locks only after verifying the recorded PID exited. A live owner fails closed. Use normal drain/stop; never force a second Service onto an owned root. Native harnesses remain separately owned.
 
 ## Verify the upgrade
 
+Verify the binary, then use an unused isolated demo root:
+
 ```bash
 pairroom version
-pairroom service --mock
+pairroom service --mock --data-root "$HOME/.pairroom-upgrade-check"
 ```
 
-Check strict configuration parsing and Project discovery, then create a Mock Room and exercise exact-handle relay, FIFO, permission changes, restart, and backup verification. Real-runtime verification is separate: start with an explicitly read-only single-Agent Turn before testing an addressed peer response. Mock success does not prove vendor authentication or model availability.
+Use the corresponding PowerShell path syntax on Windows. Check strict configuration and Project discovery, then a fresh Mock Embedded Room's relay/FIFO, permissions, restart, and backup. Do not run Mock over real Rooms or assume it verifies vendor authentication.
 
-HTTP/SSE clients must re-run their contract tests. On a stream `reset`, fetch a fresh snapshot and reconnect from its `latest_seq`; do not replay commands to repair a display gap. See [API reference](API_REFERENCE.md) and [CLI reference](CLI_REFERENCE.md) for the checked inventories.
+For real Embedded acceptance, begin with an explicitly read-only task before peer relay. For Native, inspect the existing binding with the matching CLI, verify approved hook installation, and perform a controlled addressed exchange in the original sessions. Distinguish queued/handed-off evidence from model acceptance; [Native setup](NATIVE_RELAY.md) owns the procedure. Paid/live checks require explicit consent.
+
+HTTP/SSE clients must rerun their contract tests. A stream reset requires a fresh snapshot/current cursor, not replayed commands. [API](API_REFERENCE.md) and [CLI](CLI_REFERENCE.md) own checked inventories.
 
 ## Rollback and integrity
 
-Stop/drain the Service, save its current data root, restore the complete verified pre-upgrade backup with its matching binary/configuration, then recheck Bindings and repository side effects. Do not mix old and new data files. Native session titles already changed through vendor metadata APIs require a separate native rename; binary rollback cannot undo them.
+Stop/drain all relevant owners, preserve the current root, and restore a complete verified pre-upgrade root with its matching binary/configuration. Inspect native sessions and workspace side effects separately. Do not mix old/new data files; binary rollback cannot undo native edits or metadata title changes.
 
-Do not renumber complete Event Log records to bypass verification. Only an incomplete final JSONL record in a supported store may be repaired. An ambiguous append I/O error closes the writer; reopen only after checking storage health and the verified log. Restore validates the entire archive before replacing a destination, and backup/diagnostic outputs must remain outside the source Room directory.
+Only an incomplete final JSONL record in a supported store is repairable. Never renumber complete records or skip middle corruption. Ambiguous append failure closes the writer; check storage health before reopening. Restore validates the full archive before publishing a destination. Backup/diagnostic outputs must stay outside the source Room directory, including symlink aliases.
 
 ## Native rollout and rollback
 
-Native mode is experimental until the authenticated multi-round Codex Desktop ↔ Claude Code gate in [the approved design](design/native-host-mode.md) is exercised. Official hook documentation supports the channel; synthetic Stop inputs and Mock do not prove real native acceptance, installed-version behavior, interruption coverage or token cost.
+Native remains experimental. Authenticated multi-round acceptance for the actual Claude/Codex/Grok versions and settings is separate from synthetic hooks, browser fixtures, and dated working-session reports. Consult the [design record](design/native-host-mode.md) for rationale, not a promise that current vendor acceptance has run.
 
-A pre-5.0.0 binary rejects schema-12 Rooms before replay. PairRoom 5.0.0 intentionally does not offer an in-place downgrade path: back up the whole data root before changing binaries, then use a matching binary for any inspection. Never relabel a schema, rewrite Event Log records, or copy legacy credentials into a new root.
+**Routine compatible upgrades do not require unbinding or replacing valid sessions.** Update CLI/Service together and refresh/review installed hooks/skill when their definitions change. Use idempotent bind to restore discovery without rotating generation.
 
-Before replacing a 5.0.0 binary, use the matching binary to `pairroom relay unbind --repo <project> --room <id> --slot <slot> --purge-hooks` for each native slot. After confirming that no other local native bindings use them, remove only the intentionally selected workspace `.pairroom/` data and any unused managed relay skill. The purge operation removes only PairRoom-owned hook entries; unrelated settings/hooks are retained. Archive alone does not release binding ownership or stop native processes. Keep retired data isolated for its matching reader.
+An incompatible downgrade or deliberate Native removal is different. Before replacing the working binary, stop native work, back up all relevant state, and use that matching CLI to unbind the affected slots, with `--purge-hooks` only when intentional. Remove only selected PairRoom workspace data/unused managed skills after confirming no other bindings need them. Never purge unrelated native hooks/configuration. Archive alone neither releases Binding ownership nor creates compatibility isolation.
+
+Pre-5.0.0 binaries reject schema-12 Rooms. There is no in-place format downgrade: preserve an isolated matching-version backup/root rather than relabelling schema or copying credentials between generations.
 
 ## Native binding setup
 
-Use the matching CLI and app/Service release and follow [Native setup](NATIVE_RELAY.md).
-Previously associated bindings retain their identity and need no replacement. An
-incomplete binding from an older release requires explicit `bind --replace` inside
-the intended session. For a lost response to a current bind, rerun bind for the
-same Room/slot without `--create` or `--replace` to reconcile its original
-identity; do not repeat `--create`. Native remains experimental and real vendor
-acceptance remains a separate release gate.
+Follow [Native setup](NATIVE_RELAY.md). A confirmed binding retains its identity across compatible updates. An incomplete historical binding may require intentional replacement, but a **lost response to a current bind** is recovered by rerunning the same Room/slot bind without a new `--create` or `--replace`. Creation success followed by bind failure must use the reported Room recovery command.
 
-Relay now resolves a bound session before the current directory and records a
-disposable locator for it. An associated binding from a release without locators
-still resolves from its workspace or from the Service's registered project roots
-during ordinary foreground commands, which also records the locator. A binding
-whose cwd and `CLAUDE_PROJECT_DIR` hints have both moved must be registered once
-from the original session before its Stop hooks resume publishing:
+Session-first discovery is compatible with current relay state. A binding without a locator can be rediscovered from its workspace/registered Service Projects by an ordinary foreground call. If both cwd and project hints moved, run this once in the original session:
 
 ```bash
 pairroom relay bind --repo "<original-bound-workspace>"
 ```
 
-This resumes the existing binding instead of rotating its identity. Because cwd
-is no longer the binding identity, an explicit `--repo`, `--room`, `--slot` or
-`--service-file` that disagrees with the bound session is now rejected rather
-than retargeting it, and a bound session cannot create a second Room with
-`bind --create` from another directory. A bound workspace that is deleted or
-redirected fails closed until its locator is inspected and removed; see
-[Native session workspace discovery](NATIVE_SESSION_WORKSPACE.md).
+This resumes the binding, not a new generation. Conflicting explicit workspace/Room/slot/Service selectors are rejected; a bound session cannot create another Room just by changing directories. Missing/redirected workspaces and corrupt locators fail closed until inspected. Do not copy `.pairroom` into a task worktree. See [workspace upgrade/recovery](NATIVE_SESSION_WORKSPACE.md#upgrade-and-recovery).
 
 ### Adding Grok Build to Native Rooms
 
-Update the CLI, Service and distributed relay skill together. In the intended
-Grok session, run `pairroom relay install` (or explicit `--runtime grok` for
-setup), then review the exact project hook and trust decision in Grok before
-binding. Grok Build reuses Claude Code project hooks by default, so install
-writes `.grok/hooks/pairroom.json` only when no Claude Code PairRoom Stop hook
-is present, and strips a leftover PairRoom Grok Stop hook in that case; it
-always writes the Grok skill. It does not modify native
-provider/model configuration or grant folder trust.
-See [Grok Build Native](CLI_REFERENCE.md#grok-build-native) for create/join and
-the clipped-reply/foreground-collection boundaries.
+Update CLI, Service, and distributed skill together. Install the intended Grok project's hooks, then approve its exact definition and folder trust before bind. Grok normally reuses a Claude Code project Stop hook; otherwise it uses `.grok/hooks/pairroom.json`. With Claude hook compatibility disabled, it needs its own hook. Installation preserves unrelated hooks/configuration. [Grok Native](CLI_REFERENCE.md#grok-build-native) owns clipped-output and foreground-receive limits.
 
-Existing Claude/Codex Native Rooms retain their stored selections and protocol.
-Grok uses the same current schema, but older PairRoom readers that restrict
-Native runtimes to Claude/Codex reject Grok-containing Rooms. For rollback,
-prefer a complete matching-version backup. Otherwise stop all owners and
-native work, back up the data root, use the current binary to unbind affected
-Grok Rooms, and keep **every Grok-containing Room directory** outside the older
-Service's discovery root. Archive alone is not compatibility isolation. Do not
-change stored runtime names, schemas or events to force an older reader to
-accept them. Unused PairRoom Grok hooks may be purged through the current CLI;
-leave unrelated hooks and native data alone.
+Existing Rooms retain stored selections. To change their Runtime pair, create a new Room rather than rewriting immutable metadata. Older readers that reject Grok Native selections cannot open those Rooms even when Store schema matches. Prefer a complete matching-version backup for rollback; otherwise stop work/owners, back up, unbind affected Grok Rooms with the matching CLI, and isolate **every Grok-containing Room directory** from the old Service's discovery root. Archive alone is insufficient. Never rename runtimes or rewrite events to force acceptance.

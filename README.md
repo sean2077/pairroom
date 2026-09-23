@@ -2,7 +2,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-**Two independent coding agents. One problem. Your native workflow.** PairRoom connects supported Claude Code, Codex, and Grok Build sessions for evidence-based cross-review without replacing their native coding harnesses. Review a plan together, then let the chosen agent execute normally; its tools, skills and subagents remain its business.
+**Two independent coding agents. One problem. Your native workflow.** PairRoom connects supported Claude Code, Codex, and Grok Build sessions for evidence-based cross-review without replacing their model loop, tools, skills, or subagents.
 
 <p align="center">
   <img src="docs/images/pairroom-runtime-overview.png" alt="PairRoom collaboration interface">
@@ -10,109 +10,80 @@
 
 ## Why use it?
 
-Use PairRoom when carrying proposals, objections and corrections between two existing sessions has become repetitive work. The goal is a better decision with less coordination, not another mandatory agent hierarchy.
+Use PairRoom when moving proposals, objections, and corrections between two sessions has become repetitive work. Discuss the same problem, then let the chosen Agent execute in its normal harness. Default Lead/Executor responsibilities are flexible: simple tasks stay with the addressed Agent, and review completion does not automatically authorize implementation.
 
-- **Review the same problem.** Both participants can be high-capability reviewers. Default Lead/Executor responsibilities are flexible; simple tasks stay with the addressed agent. Custom natural-language instructions need no phase compiler. Review completion does not automatically authorize implementation.
-- **Keep the interaction surface you need.** Embedded provides PairRoom controls over supported native adapters. Experimental Native keeps your own Claude Code / Codex / Grok Build sessions, including the intended Codex Desktop workflow, with approved hooks and bounded relay rather than process ownership.
-- **Keep the project's workflow.** Retain repository instructions, agent-scaffold, worktrees and PR/MR policy. Relay forwards the complete addressed reply without appending accumulated Room history. Compact byte budgets are not a guarantee of lower billed tokens or greater accuracy.
-
-| Host mode | Configuration and control | Boundary |
+| Host mode | Choose it for | Boundary |
 |---|---|---|
-| **Embedded** | Each slot independently selects a supported Runtime, Provider, model, effort and instructions; unspecified overrides inherit native configuration. Save a usual pair as an [Agent pair profile](docs/CONFIGURATION.md#agent-pair-profiles). | PairRoom schedules one participant Turn at a time and exposes its Room controls; this is not an independent Codex Desktop UI. |
-| **Native (experimental)** | Each original harness controls its Provider, model, effort, tools and permissions; PairRoom supplies bindings, durable relay and audit. | Room configuration fields do not override the native process. Automatic continuation is bounded; authenticated multi-round vendor E2E remains a release gate. |
+| **Embedded** | PairRoom's conversation and supported adapter controls; independent Runtime, Provider, model, effort, and instructions per slot | PairRoom owns adapters and schedules one native Turn at a time within the Room. Unspecified overrides inherit native configuration. |
+| **Native (experimental)** | Your original Claude Code, Codex (including the intended Desktop workflow), or Grok Build sessions | PairRoom supplies bindings, durable relay, and audit. The original harness owns configuration, permissions, and execution; Room selections are display-only. |
 
-Native harnesses already have subagents and multi-agent features. Orca also supports real same-problem collaboration, not only parallel jobs, and offers a broader workbench. Choose PairRoom for its particular cross-session review workflow, not an imaginary absence of those capabilities elsewhere.
+Either slot may use any supported Runtime, including the same Runtime twice. Retain your repository instructions, worktrees, and PR/MR policy. PairRoom does not add a mandatory phase engine or append accumulated Room history to every relay. Compact byte budgets are not guarantees of lower billed tokens or better accuracy.
 
-**[Why PairRoom](docs/WHY_PAIRROOM.md)** explains fit, costs and limits. **[Alternatives](docs/ALTERNATIVES.md)** compares Orca, native Claude Code/Codex, Cherry Studio and other options using dated primary sources. **[Review-first workflow](docs/GETTING_STARTED.md#review-first-execute-where-it-fits)** has prompts for discussing a plan and returning execution to the chosen harness.
+Read [Why PairRoom](docs/WHY_PAIRROOM.md) for fit and limits, [Alternatives](docs/ALTERNATIVES.md) for dated primary-source comparisons, and the [review-first recipe](docs/GETTING_STARTED.md#review-first-execute-where-it-fits) for practical prompts.
 
 ## Install and try
 
-Download a package from [Releases](https://github.com/sean2077/pairroom/releases/latest); on Windows, install the desktop app with `winget install PairRoom`. The [Installation guide](docs/INSTALLATION.md) covers every platform and channel: prerequisites, silent installation, per-channel upgrade/uninstall, and the one-time Windows NSIS transition.
+Download a package from [Releases](https://github.com/sean2077/pairroom/releases/latest); Windows users can install Desktop with `winget install PairRoom`. [Installation](docs/INSTALLATION.md) covers prerequisites and per-channel upgrade/uninstall. Prebuilt CLI and desktop packages do **not** require Go.
 
-Fastest CLI path on Linux, macOS, or Git Bash (review the installer before executing it):
+For the CLI on Linux, macOS, or Git Bash, review the installer before executing it:
 
 ```bash
 curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh | sh
-pairroom service --mock
+pairroom service --mock --data-root "$HOME/.pairroom-demo"
 ```
 
-**Prebuilt CLI and desktop packages do not require Go.** Start with a disposable Git repository and a fresh Mock Room. Mock does not launch vendor CLIs or consume model quota. Avoid a data-root conflict with an already-running Service; the [Getting started guide](docs/GETTING_STARTED.md) shows an isolated demo and both real-host paths.
+Use an unused demo data root and a disposable Git repository. In Management, register the repository as a Project, create an **Embedded** Room, and send a small task. Mock does not launch vendor CLIs or consume model quota; it does not demonstrate model quality. Do not share the authenticated startup URL.
 
-In Management, register the repository as a Project, create an Embedded Room, select both participants and permissions, then send a small task. For a real discussion-only test, first select native read-only restrictions where supported, then use:
-
-```text
-Review this plan with your peer against the repository. Challenge material
-assumptions and revise using evidence; exchange only useful new findings.
-Do not implement. Return the reviewed plan, unresolved decisions and remaining
-uncertainty to me. Stop without acknowledgement-only relays.
-```
-
-This is a task instruction, not an enforced approval gate. Before real use, each selected CLI must be independently installed, authenticated, and working. Keeping Codex Desktop requires the Native path below, not Embedded attachment to a live Desktop session.
+For real work, install and authenticate each selected CLI independently. Follow [Getting started](docs/GETTING_STARTED.md) for the Embedded path, or [Native setup](docs/NATIVE_RELAY.md) to retain your original sessions. A CLI version or environment check alone does not prove authentication or model availability.
 
 ## Important boundaries
 
-**New Embedded Rooms default to YOLO for both participants.** Select narrower native permissions explicitly. Native Rooms retain the original harness's permissions. Responsibilities do not restrict tool access. Embedded's single-Turn rule is not an OS sandbox or a lock against other Rooms, subagents or external writers; Native ownership is advisory.
+**New Embedded Rooms default to YOLO for both participants.** Select narrower native permissions explicitly. Native Rooms retain the original harness's permissions. Responsibilities do not restrict tool access, and neither host mode locks the repository against external writers. Native Turn ownership is advisory, not enforced scheduling.
 
-There is no automatic relay-count or cost limit. Durable recovery distinguishes safe queued work from uncertain delivery; it does not blindly replay execution after a crash. Local storage does not mean cloud-model requests stay on the machine. Read [Security](SECURITY.md), [Concepts](docs/CONCEPTS.md), and [Storage](docs/STORAGE.md).
+There is no automatic relay-count or cost limit. Durable recovery distinguishes queued work from uncertain delivery rather than blindly replaying execution after a crash. Local storage does not mean cloud-model requests stay on the machine. Read [Security](SECURITY.md), [Concepts](docs/CONCEPTS.md), and [Storage](docs/STORAGE.md).
 
 ## Native host mode (experimental)
 
-See [Native setup and usage](docs/NATIVE_RELAY.md) for installation prerequisites, project approval, joining and recovery. The guide is also available inside the browser/desktop app.
+Install and approve the project hooks once, then create and join from the Agents' own tool environments:
 
-Choose **Native** when creating a Room to keep both participants in their original Claude Code/Codex/Grok Build sessions. PairRoom supplies bindings, durable relay and audit, without spawning or interrupting processes. Install and approve the project Stop hooks, then run bind inside each session; it associates immediately from the harness's session-ID environment.
+```bash
+pairroom relay install --runtime claude,codex
+```
 
-**Highlight — native collaboration without model polling while the CLI waits.** Both sessions keep their own harness; the loop works like this:
+In the first session, load the installed skill and run `/pairroom-relay <topic>`. In the second session, ask its Agent to execute the exact join command printed by the first. Each `bind` reads the official session ID and associates immediately. No nonce echo, initial Stop, or routine status check is required. Reuse that binding for subsequent rounds; do not create another Room just to join.
 
-- Two commands to set up: `/pairroom-relay <topic>` in the first session, and the short `bind --room <id> --slot <n>` it prints in the second.
-- Your visible reply is the transport: the approved Stop hook publishes the complete addressed reply into the Room FIFO — no retelling, no summary turn, no human copy-paste. The exact peer handle returned by bind (for example `@codex`) and `@user` route it; a reply without a handle ends the relay.
-- Reachability across turns: a 30-second park window after each turn collects fast answers; in a wake-enabled Room the Service can nudge an existing Claude Code session through its captured inbox socket, or a Codex peer through `codex queue` (fixed body-free nudge, rate-limited, audited, no automatic retry). Claude inbound policy still applies; socket submission is not model acceptance. Background `relay wait` remains a fallback where the harness surfaces completion. See [Claude inbox setup and limits](docs/design/claude-inbox-wake.md). PairRoom never starts or interrupts agent sessions.
-- Waiting lives in the CLI process, not the model: HTTP polls renew internally without calling a model. Actual wake, continuation, tool and billing behavior depends on the harness; no exact turn count or cost saving is guaranteed.
-- Dated working-session evidence (2026-09-16/17, Windows; Claude Code 2.1.273 + codex-cli 0.154.0, both authenticated): two native sessions ran a full overnight loop without human relaying of message content — delegation, four adversarial design-review rounds, implementation, line-level review, merge — with zero message loss. Working-session evidence; it does not replace the release-gate vendor E2E. Wake surfaces: [verified vendor wake surfaces](docs/NATIVE_RELAY.md#verified-vendor-wake-surfaces).
+The exact peer handle returned by bind routes an automatic Stop reply; `@user` publishes for the human. **An unaddressed Native Stop reply is not copied into the Room.** Explicit `relay send` / `exchange` instead uses the command's target, regardless of body mentions. Publishing through both paths can produce two messages. See [publication rules](docs/NATIVE_RELAY.md#what-is-published).
 
-The `pairroom-relay` skill ships in `skills/` for skill installers (`npx skills add sean2077/pairroom`) and is also written by `relay install`. Once loaded, `/pairroom-relay <topic>` creates the Room and binds that session and reports the peer's join command; `pairroom relay bind` runs zero-flag inside a recognized session. Reuse that binding for follow-up reviews rather than creating a Room per round.
+Approved Stop hooks collect within a bounded park window. Outside it, a wake-enabled Room can send a fixed body-free nudge through an available Claude inbox or Codex queue; it does not start or interrupt sessions. Grok uses foreground collection, with harness-owned background wait only where completion is surfaced. CLI waiting does not call a model, but wake/continuation and billing depend on the harness. Clipped Grok replies require explicit full-text publication.
 
-[Native setup](docs/GETTING_STARTED.md#keep-codex-desktop-a-native-room) and [recovery commands](docs/CLI_REFERENCE.md#native-relay-commands) explain bounded park, foreground collection and explicit Retry. Provider/model/effort/permissions remain native-controlled. Authenticated multi-round vendor E2E is still a release gate; synthetic tests are not evidence of model acceptance.
-
-Grok uses [foreground collection](docs/CLI_REFERENCE.md#grok-build-native) to avoid clipped hook feedback; clipped outgoing replies require explicit full-text send/exchange.
+[NATIVE_RELAY.md](docs/NATIVE_RELAY.md) owns installation, file-based evidence, cwd/worktree discovery, wake limits, and recovery. The skill also ships through `npx skills add sean2077/pairroom`; skill-only installation does not install or approve hooks. Dated [vendor observations](docs/NATIVE_RELAY.md#verified-vendor-wake-surfaces) are not current release-gate certification.
 
 ### Inspect and recover without replay
 
-Native Rooms keep **Pending items** separate from recent chat. Inspect older messages,
-review Markdown/code, compare optional Git review versions, and diagnose the current
-Room without reading an entire transcript. An unconfirmed browser send survives
-refresh with its original ID; reloading checks its receipt and never resends it.
-Browser recovery stores the draft locally (not credentials); explicitly forgetting
-it does not cancel work already accepted by the Service.
+Native Rooms use participants on the left, conversation in the center, and a Work inspector on the right. Panels collapse independently on wide screens and open one at a time on compact screens. Displayed configuration and activity are observations, not control over the original process or proof of live presence.
 
-`pairroom relay doctor` explains local hook/capability and transport observations.
-`relay history --pending` pages unresolved work; `relay history --id ID` reads one
-message without claiming/retrying it. Optional `send --review` and `relay review
---id ID` identify/check the reviewed Git version, not an execution approval.
-Wake cooldown is per receiving slot while the Room keeps a shared hourly budget;
-unattempted rate-limited work is rechecked when it becomes eligible, and a
-reserved or possibly submitted wake is never automatically retried.
-See [Native recovery and review](docs/design/native-review-closure.md).
+Pending items remain separate from recent chat. Use `pairroom relay doctor`, `pairroom relay history --pending`, or `pairroom relay history --id ID` for targeted diagnosis. Optional Git review versions identify evidence, not approval to execute. Refreshing an unconfirmed browser send checks its original receipt without resending; forgetting its local draft does not cancel accepted work. `handed_off` proves CLI stdout, not model acceptance. See [Native recovery](docs/NATIVE_RELAY.md#recovery-and-review-surface).
 
 ## Desktop and source development
 
-Desktop and browser use the same Management Shell and Service. Desktop startup never installs a daemon: it reuses an installed daemon or owns an embedded Service. **Settings → Desktop → Launch at login** changes only native login registration. Closing the window hides it to the tray; quitting does not stop an external daemon. See [Operations](docs/OPERATIONS.md#desktop-lifecycle).
+Desktop and browser share the same Management Shell and Service. Desktop startup never installs a daemon: it reuses an installed daemon or owns an embedded Service. **Settings → Desktop → Launch at login** changes only native login registration. Closing the window hides it to the tray; quitting does not stop an external daemon. Closing a Room tab does not archive it or stop native work. See [Operations](docs/OPERATIONS.md).
 
-From a source checkout, with the development dependencies installed:
+With source-development dependencies installed:
 
 ```bash
-make dev            # stops an installed daemon and runs the current-tree Service
+make dev            # stops an installed daemon; runs the current-tree Service
 make docs-check
 make check
 make smoke
 ```
 
-For desktop builds and updating an existing local installation, use `make desktop-build`, `make desktop-package`, and `make desktop-update`; see [Desktop development](desktop/README.md). These are source-development commands, not prerequisites for using a release package.
+Desktop source commands are `make desktop-build`, `make desktop-package`, and `make desktop-update`. They are not prerequisites for using a release package. See [Contributing](CONTRIBUTING.md) and [Desktop development](desktop/README.md).
 
 ## Documentation and support
 
-[Documentation map](docs/README.md) · [Configuration](docs/CONFIGURATION.md) · [CLI](docs/CLI_REFERENCE.md) · [API](docs/API_REFERENCE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Upgrading](docs/UPGRADING.md) · [Contributing](CONTRIBUTING.md) · [Support](SUPPORT.md)
+[Documentation map](docs/README.md) · [Configuration](docs/CONFIGURATION.md) · [CLI](docs/CLI_REFERENCE.md) · [API](docs/API_REFERENCE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Upgrading](docs/UPGRADING.md) · [Support](SUPPORT.md)
 
-PairRoom is evolving. [Changelog](CHANGELOG.md) records release history; current behavior belongs in the reference documents. Mock and browser-fixture tests are not authenticated vendor E2E, and desktop packages are not claimed to be production-signed or notarized. The interface supports English and Simplified Chinese; maintained technical documents are in English.
+[Changelog](CHANGELOG.md) records history; current behavior belongs in the references. Native remains experimental: Mock, synthetic hooks, browser fixtures, and old working-session reports do not replace authenticated multi-round vendor E2E. No new vendor acceptance or billed-token benchmark is claimed here. Desktop packages are not claimed to be production-signed or notarized. The interface supports English and Simplified Chinese; maintained technical documents are in English.
 
 ## License
 

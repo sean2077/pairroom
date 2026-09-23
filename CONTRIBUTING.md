@@ -1,10 +1,10 @@
 # Contributing to PairRoom
 
-Read [AGENTS.md](AGENTS.md) and the [project terminology](CONTEXT.md) before changing contracts. [Architecture](docs/ARCHITECTURE.md) describes state ownership; [documentation map](docs/README.md) identifies the owner of each written contract.
+Read [AGENTS.md](AGENTS.md) and [project terminology](CONTEXT.md) before changing contracts. [Architecture](docs/ARCHITECTURE.md) describes state ownership; the [documentation map](docs/README.md) identifies each written contract's owner. Desktop has its own [nested Agent contract](desktop/AGENTS.md).
 
 ## Development setup
 
-Install Go 1.25, Node.js (CI uses 22.x), Python 3, Git, Make, and Bash. The root CLI is CGo-free; race testing additionally requires `CGO_ENABLED=1` and a Go-supported C compiler on `PATH`. On Windows, use a supported toolchain such as MSYS2 MinGW.
+Install Go 1.25, Node.js (CI uses 22.x), Python 3, Git, Make, and Bash. The root CLI is CGo-free; race testing additionally requires `CGO_ENABLED=1` and a Go-supported C compiler on PATH. On Windows, use a supported toolchain such as MSYS2 MinGW.
 
 ```bash
 git clone https://github.com/sean2077/pairroom.git
@@ -13,15 +13,15 @@ make check
 make smoke
 ```
 
-`make check` includes formatting, static/unit/race/dependency checks, JavaScript regressions, desktop-source checks, and the documentation contract. `make js-check` runs the fast JavaScript layer and fails visibly when Node.js is missing. Dependency checks reject replacements and module/version drift. `make smoke` exercises deterministic Mock collaboration and recovery, not vendor models.
+`make check` includes formatting, static/unit/race/dependency checks, JavaScript regressions, desktop-source checks, and documentation/projection/release contracts. `make js-check` fails visibly if Node is missing. Dependency checks reject replacements and module/version drift. `make smoke` exercises deterministic Mock collaboration, media, backup, restore, and diagnostics, not vendor models. `make cover` is diagnostic coverage, not a percentage release gate.
 
-The Wails desktop is a separate module with native build dependencies. Use [Desktop development](desktop/README.md) and [Desktop Agent contract](desktop/AGENTS.md) for build, packaging, and local-update verification. Do not move GUI dependencies into the root module.
+`make install` installs to `GOBIN` (default `GOPATH/bin`), reports PATH visibility, and never edits PATH. `make dev` stops an installed daemon before running the current-tree Service. The Wails desktop is a separate module; keep GUI dependencies out of the root. Build/update and `DESKTOP_INSTALL_DIR` behavior belong in [Desktop development](desktop/README.md).
 
 ## Change workflow
 
-Create a short-lived branch/worktree from current `main`, state the relevant invariants and failure boundaries, then change the minimum source and owning documentation. Add regression tests for actual state transitions. Land through a PR, not a direct push to `main`.
+Use a short-lived task branch/worktree from current `main`, respecting the assigned lifecycle owner. State the relevant invariant and failure boundary, then change the minimum source and owning documentation. Add regressions for actual state transitions. Submit a PR, not a direct push to `main`; PR handoff does not authorize merging or deleting the task worktree.
 
-Concurrency/recovery changes should cover success, cancellation, process exit, restart, late events, duplicate callbacks, and unknown native-submission outcomes. Keep verification proportional to the change, but do not replace execution evidence with another Agent's assertion.
+Concurrency/recovery changes should cover success, cancellation, process exit, restart, late events, duplicate callbacks, and unknown submission outcomes. Keep verification proportional, but never replace execution evidence with another Agent's assertion. The installed `agent-scaffold` skill's `verify --profile default --json` is the authoritative full harness check; do not hand-edit its runtime to bypass a failure.
 
 ## Browser verification
 
@@ -32,28 +32,29 @@ python3 -m venv .browser-venv
 make browser-check PYTHON=.browser-venv/bin/python
 ```
 
-On Windows use `.browser-venv/Scripts/python.exe`. Managed Linux may require Playwright's `install --with-deps chromium`; `PAIRROOM_BROWSER_EXECUTABLE` can select an installed Chromium. Results/screenshots go to `.browser-results/`.
+On Windows use `.browser-venv/Scripts/python.exe`. Managed Linux may require Playwright's `install --with-deps chromium`; `PAIRROOM_BROWSER_EXECUTABLE` selects an installed Chromium. Evidence goes to `.browser-results/`.
 
 | Layer | What it verifies | What it does not prove |
 |---|---|---|
-| JavaScript/client regressions | Parsing, state/freshness guards, duplicate actions, and deterministic client behavior | Browser layout, real network authentication, vendor execution |
-| Real-asset in-page browser fixtures | Room/Management rendering, input/drafts, focus/scroll/disclosure, SSE response handling, locale/theme/layout, approvals and configuration interactions | Real Service auth/transport or model behavior |
-| Production-CSP Management browser checks | External asset loading and naming/menu interactions under the actual CSP | Authenticated vendor execution |
-| Real-browser Mock Service smoke | Actual loopback HTTP/SSE, bootstrap cookie/CSRF, gateway, Room lifecycle/settings/permissions and restart, with no mocked fetch/EventSource | Native CLI/model correctness |
-| Authenticated native E2E | The selected real CLI/Provider/session/permission combination and task | Every vendor release or unrelated combination |
+| JavaScript regressions | Parsing, freshness guards, duplicate actions, deterministic client behavior | Browser layout, network authentication, vendor execution |
+| Real-asset in-page fixtures | Rendering, drafts, focus/scroll/disclosure, SSE response handling, locale/theme/layout | Real Service auth/transport or model behavior |
+| Production-CSP Management checks | External asset loading and interactions under the actual CSP | Authenticated vendor execution |
+| Real-browser Mock Service smoke | Loopback HTTP/SSE, bootstrap cookie/CSRF, gateway, lifecycle/settings/permissions and restart without mocked fetch/EventSource | Native CLI/model correctness |
+| Authenticated native E2E | The exercised CLI/Provider/session/permission combination and task | Every vendor version or unrelated configuration |
 
-The real-browser Service layer is `scripts/test_service_browser.py`; it builds the CLI or accepts `--binary`, uses a disposable Git repository and isolated home/data root, and removes temporary credentials/state on exit. Its evidence goes to `.browser-results/service/`.
+`scripts/test_service_browser.py` builds the CLI or accepts `--binary`, uses an isolated home/data root and disposable Git repository, and cleans temporary state. Evidence goes to `.browser-results/service/`.
 
-A browser that blocks loopback cannot run that layer. Report it unverified rather than relaxing the browser boundary or replacing HTTP with fixtures. `python3 scripts/test_management_browser.py --in-page-fixture` is a limited interaction fallback when navigation is blocked; its output explicitly does not certify CSP. `node scripts/test_management_client.js` covers client freshness/catalog/action guards without browser timing.
+If loopback is blocked, report that layer unverified rather than weakening authentication or substituting a fixture. `python3 scripts/test_management_browser.py --in-page-fixture` is an interaction fallback, not CSP certification. `node scripts/test_management_client.js` covers deterministic client guards without browser timing. Native layout fixtures likewise do not prove that a vendor model received an envelope.
 
 ## Focused allocation checks
 
 ```bash
 go test ./internal/room -run '^$' -bench 'Benchmark(TextDeltaSummaryProjection|RecentEventTail)$' -benchmem
 go test ./internal/room -run '^$' -bench BenchmarkWindowedSnapshot -benchmem
+go test ./internal/relay -run '^$' -bench BenchmarkNativeLongRoom -benchmem
 ```
 
-Compare fixed workload/window sizes and allocations, not machine-dependent pass/fail timing thresholds. These isolated operation benchmarks do not establish whole-workflow latency, model accuracy, or token-billing savings.
+Compare fixed workloads and allocations, not machine-dependent pass/fail timing. Microbenchmarks do not establish whole-workflow latency, model accuracy, or billing savings. Dated benchmark tables remain historical measurements unless rerun with a stated baseline and environment.
 
 ## Documentation changes
 
@@ -61,18 +62,30 @@ Compare fixed workload/window sizes and allocations, not machine-dependent pass/
 make docs-check
 ```
 
-The checker covers repository Markdown links/images, including root policy/support pages, nested docs, and newly added non-ignored files, plus the curated public-guide and source-derived CLI/API/config inventories. It does not test external links, all heading fragments, example commands, or the factual accuracy of competitor claims.
+The checker covers repository Markdown paths/images (including nested and newly added non-ignored files), the curated public-guide set, and source-derived CLI/API/config inventories. It does **not** verify external links, every heading fragment, example execution, or semantic accuracy. Review changed fragment links and commands separately; a passing inventory cannot detect a false statement such as applying Embedded Turn ownership to Native.
 
-Use [docs/README.md](docs/README.md) for ownership. Keep current technical documents in English and the root English/Chinese READMEs equivalent. Avoid copying detailed semantics between README, architecture, operations, and troubleshooting. Do not hard-code the current release in the product entry points.
+Keep one owner for each detailed contract and link to it from overview/recipes. Current technical documents are English; root English/Chinese READMEs must remain equivalent. Avoid release-number churn in those entry points. Scope process ownership, permissions, scheduling, identity, and recovery by host mode. Distinguish a desktop-owned embedded Service from an Embedded Room.
 
-Facts have explicit owners: CLI source/`--help` for flags; production Service/Room registrations for routes; configuration/model structs and strict parser for fields; Store/model/apply code for schemas. Breaking changes update both [Changelog](CHANGELOG.md) and [Upgrading](docs/UPGRADING.md). Preserve historical release/validation records as history, not current support guarantees.
+Use source/`--help` for flags, production registrations for routes, strict parsers/model structs for configuration, and Store/apply code for schemas. Preserve generated inventory markers and entries when only prose changes. Breaking changes update [Changelog](CHANGELOG.md) and [Upgrading](docs/UPGRADING.md); documentation corrections need neither fictional migrations nor release bumps.
 
-Why/Alternatives pages explain fit rather than specifying new behavior. Keep their review date, source revision, and distinction between source observation, inference, and measured results. Re-check primary sources when changing competitor claims; a `main` snapshot or open issue is not a published release certification. Plans and one-off audits belong in Issues/PRs until implemented.
+Preserve published release/validation evidence as dated history. Completed plans must not keep instructing Agents to start implementation or purge data; retain rationale and a historical source link, then point to current contracts. New plans and one-off audits belong in Issues/PRs unless they add a durable design decision. A small flat status/date is sufficient where history and current design could be confused; do not introduce a documentation workflow framework.
 
-Do not edit generated `CLAUDE.md`, skill, or subagent projections independently; follow their source/generator contract. Keep Markdown checks offline and dependency-light rather than adding a documentation framework for a small guide set.
+Why/Alternatives explain fit, not new product behavior. Keep their source revisions, review dates, and distinction between observations, inference, and measurements. Recheck primary sources before changing external claims; a repository snapshot or issue is not release certification.
+
+`CLAUDE.md` and project skill/subagent projections are not independent sources. Follow [AGENTS.md](AGENTS.md) for generators and the separate product relay-skill mirror. Keep checks offline and dependency-light.
+
+## Release verification
+
+`make bump-version NEW_VERSION=X.Y.Z` synchronizes root `VERSION`, `version.Current` in `internal/version/`, `desktop/build/config.yml`, and the canonical `CHANGELOG.md` release heading, moving Unreleased notes into the new section. It fails closed and does not commit or tag. The exact `vX.Y.Z` tag, binary version, and `## [vX.Y.Z] — YYYY-MM-DD` changelog heading must agree.
+
+`make release` requires a clean tree and builds/verifies the complete local payload. It does not create a tag or publish a Release. CLI CI must retain uniquely named, checksummed Linux amd64, Windows amd64, macOS arm64, and macOS amd64 artifacts, then re-download and verify the complete set.
+
+`.github/workflows/release.yml` owns publication: validate/extract changelog notes, build and verify CLI artifacts, publish the Release, then re-download/recheck its CLI payload. The desktop workflow attaches `pairroom-desktop-*` packages to the same Release on `v*` tags. Its Windows `inno` winget manifest submission to `microsoft/winget-pkgs` uses the configured `WINGET_TOKEN` (classic PAT with `public_repo`) through a fork PR, is idempotent per version, and must not rewrite the Release on failure. Desktop production signing/notarization may be claimed only after it actually runs in the release environment.
+
+Preserve these checks when changing build/release tooling. A documentation-only PR does not need to invoke publication, create tags, alter secrets, or run paid vendor acceptance.
 
 ## PR evidence
 
-Include the problem, design boundaries, user-visible changes, migration/rollback impact, actual verification commands/results, and what was not verified. Distinguish local results from CI and both from authenticated native E2E. List an unavailable dependency/environment honestly instead of claiming a test passed or weakening the test.
+Include the problem, user-visible changes, affected boundaries, migration/rollback impact, commands/results, and what was not verified. Separate local results from CI and both from authenticated native E2E. List missing dependencies or restricted environments honestly; do not mark checks passed based on inspection or a partial reconstruction.
 
-Documentation-only changes need no fictional runtime migration or release bump. A docs-checker change does need its own regression tests and an actual run against the repository. Prefer reviewable commits; do not add temporary workflows whose only purpose is exporting source or shuffling patches.
+A docs-checker change needs its own regressions and an actual repository run. Prefer reviewable commits. Do not add temporary workflows merely to export source or shuffle patches, weaken checks to pass a restricted environment, or publish private transcripts/credentials as evidence.

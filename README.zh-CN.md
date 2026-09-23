@@ -2,7 +2,7 @@
 
 [English](README.md) · **简体中文**
 
-**两个独立编程 Agent，同一个问题，保留你的原生工作流。** PairRoom 连接受支持的 Claude Code、Codex 与 Grok Build 会话，让双方基于证据交叉审查，不替换原生编程 harness。一起审好方案，再让选定的 Agent 正常执行；工具、skills 和 subagents 仍由它自己的 harness 决定。
+**两个独立编程 Agent，同一个问题，保留你的原生工作流。** PairRoom 连接受支持的 Claude Code、Codex 与 Grok Build 会话，让双方基于证据交叉审查，不替换原生模型循环、工具、skills 或 subagents。
 
 <p align="center">
   <img src="docs/images/pairroom-runtime-overview.png" alt="PairRoom 协作界面">
@@ -10,89 +10,65 @@
 
 ## 为什么使用？
 
-当你反复需要在两个已有会话之间搬运方案、异议和修正时，PairRoom 才有明确价值。目标是减少协调负担、改善决策，而不是增加一套必须遵循的 Agent 层级。
+当你反复需要在两个会话之间搬运方案、异议和修正时，PairRoom 才有明确价值。共同讨论一个问题，再让选定的 Agent 在原有 harness 中执行。默认 Lead/Executor 职责可以变通：简单任务由被指定的 Agent 直接完成，审查完成也不自动授权实现。
 
-- **共同审查一个问题。** 双方都可以是高能力审查者。默认 Lead/Executor 职责可以变通；简单任务由被指定的 Agent 直接完成。自定义自然语言规则无需阶段编译器，审查完成也不自动授权实现。
-- **保留需要的交互入口。** Embedded 通过受支持的原生适配器提供 PairRoom 界面和控制。实验性的 Native 保留你自己的 Claude Code / Codex / Grok Build 会话，包括目标中的 Codex Desktop 工作方式；依靠已批准 hooks 和有界接力，不接管原生进程。
-- **保留项目工作流。** 沿用仓库规则、agent-scaffold、worktree 和 PR/MR 流程。中继发送完整的定向回复，不追加累计 Room 历史。紧凑的字节预算不等于保证账单更低或准确率更高。
-
-| 宿主模式 | 配置与控制 | 边界 |
+| 宿主模式 | 适合的需求 | 边界 |
 |---|---|---|
-| **Embedded** | 每个槽位独立选择受支持的 Runtime、Provider、模型、effort 和指令；未指定项继承原生配置。常用组合可保存为 [Agent 组合配置](docs/CONFIGURATION.md#agent-pair-profiles)。 | PairRoom 同时只调度一位参与者的 Turn，提供 Room 控制；这不是独立的 Codex Desktop 界面。 |
-| **Native（实验性）** | 原生 harness 各自控制 Provider、模型、effort、工具和权限；PairRoom 负责绑定、持久中继和审计。 | Room 配置字段不会覆盖原生进程。自动继续有窗口限制，真实认证多轮 E2E 仍是发布验收门槛。 |
+| **Embedded** | 使用 PairRoom 对话界面及受支持的适配器控制；每个槽位独立选择 Runtime、Provider、模型、effort 和指令 | PairRoom 管理适配器，在同一 Room 内同时只调度一位参与者的原生 Turn；未指定覆盖项继承原生配置。 |
+| **Native（实验性）** | 保留原有 Claude Code、Codex（包括目标中的 Desktop 工作方式）或 Grok Build 会话 | PairRoom 负责绑定、持久中继和审计；原生 harness 管理配置、权限与执行，Room 中的选择仅作展示。 |
 
-原生 harness 已有 subagents 和多 Agent 能力。Orca 也能围绕同一问题协作，不只是并行派活，并提供更完整的工作台。选择 PairRoom 应基于它具体的跨会话审查方式，而不是假设其他工具没有这些能力。
+任一槽位都可选择任一受支持的 Runtime，也可同时使用相同 Runtime。沿用仓库指令、worktree 和 PR/MR 流程。PairRoom 不增加强制阶段机制，也不会在每次中继时追加累计 Room 历史。紧凑的字节预算不等于保证账单更低或准确率更高。
 
-**[Why PairRoom](docs/WHY_PAIRROOM.md)** 说明适用场景、成本与限制；**[替代方案比较](docs/ALTERNATIVES.md)** 基于注明日期的一手资料，对照 Orca、原生 Claude Code/Codex、Cherry Studio 等；**[先审查、再选择执行方式](docs/GETTING_STARTED.md#review-first-execute-where-it-fits)** 提供讨论方案与交回原生执行的提示词。
+[Why PairRoom](docs/WHY_PAIRROOM.md) 说明适用场景与限制，[替代方案](docs/ALTERNATIVES.md) 提供注明日期的一手资料比较，[先审查再执行](docs/GETTING_STARTED.md#review-first-execute-where-it-fits) 提供实用提示词。
 
 ## 安装与体验
 
-从 [Releases](https://github.com/sean2077/pairroom/releases/latest) 下载对应安装包；Windows 上可用 `winget install PairRoom` 安装桌面版。各平台与通道的安装前提、静默安装、按通道的升级/卸载以及 Windows NSIS 一次性迁移，见[安装指南](docs/INSTALLATION.md)。
+从 [Releases](https://github.com/sean2077/pairroom/releases/latest) 下载安装包；Windows 可使用 `winget install PairRoom` 安装桌面版。[安装指南](docs/INSTALLATION.md) 说明安装前提及各通道的升级、卸载方法。使用预编译 CLI 或桌面包**不需要 Go**。
 
-Linux、macOS 或 Git Bash 的最快 CLI 路径（执行前检查安装脚本）：
+Linux、macOS 或 Git Bash 下使用 CLI，执行前请检查安装脚本：
 
 ```bash
 curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh | sh
-pairroom service --mock
+pairroom service --mock --data-root "$HOME/.pairroom-demo"
 ```
 
-**使用预编译 CLI 或桌面包不需要 Go。** 首次建议选择可丢弃的 Git 仓库和新的 Mock Room。Mock 不启动供应商 CLI，也不消耗模型额度。避免与已运行的 Service 争用数据目录；[入门指南](docs/GETTING_STARTED.md) 提供独立演示和两种真实宿主模式的步骤。
+使用未被占用的演示数据目录和可丢弃的 Git 仓库。在 Management 中将仓库注册为 Project，创建 **Embedded** Room，再发送一个小任务。Mock 不启动供应商 CLI，也不消耗模型额度；它不能证明模型能力。不要分享带认证信息的启动 URL。
 
-在 Management 注册仓库为 Project，创建 Embedded Room，选择双方及权限，再发送小任务。测试真实的纯讨论任务前，先选择原生运行时支持的只读限制，然后使用：
-
-```text
-和对方基于仓库共同审查这个方案。质疑关键假设，依据证据修订，
-只交换有价值的新发现。不要实现。
-将审查后的方案、未解决决策和剩余不确定性交回给我。
-完成后停止，不交换纯确认消息。
-```
-
-这是任务指令，不是强制审批闸门。使用真实 Agent 前，每个所选 CLI 都应已独立安装、完成认证且能正常工作。保留 Codex Desktop 要使用下方 Native 路径，不是将 Embedded 附着到正在运行的 Desktop 会话。
+真实使用前，独立安装并认证每个所选 CLI。[入门指南](docs/GETTING_STARTED.md) 提供 Embedded 路径；保留原有会话则使用 [Native 设置](docs/NATIVE_RELAY.md)。仅有 CLI 版本或环境检查结果，不代表认证和模型访问已通过验证。
 
 ## 必须了解的边界
 
-**新 Embedded Room 的两位参与者默认均为 YOLO。** 需要更严格的原生权限时必须明确选择。Native Room 沿用原生 harness 的权限。职责不会限制工具访问；Embedded 单 Turn 规则不是操作系统沙箱，也不会锁住其他 Room、subagents 或外部进程的写入；Native 的所有权只是建议性的。
+**新 Embedded Room 的两位参与者默认均为 YOLO。** 需要更严格的原生权限时必须明确选择。Native Room 沿用原生 harness 的权限。职责不会限制工具访问，两种模式都不会锁住仓库来阻止外部写入；Native 的 Turn 所有权只是建议性的，不是强制调度。
 
-PairRoom 没有自动接力次数或费用上限。持久化恢复会区分安全排队与结果不确定的投递，不会在崩溃后盲目重放。本地保存状态不代表云端模型请求不离开本机。详见[安全说明](SECURITY.md)、[核心概念](docs/CONCEPTS.md)与[存储恢复](docs/STORAGE.md)。
+PairRoom 没有自动接力次数或费用上限。持久化恢复会区分排队任务与结果不确定的投递，不会在崩溃后盲目重放。本地保存状态不代表云端模型请求不离开本机。详见[安全说明](SECURITY.md)、[核心概念](docs/CONCEPTS.md)与[存储恢复](docs/STORAGE.md)。
 
 ## Native 宿主模式（实验性）
 
-安装前提、项目批准、加入及恢复步骤见 [Native 安装与使用](docs/NATIVE_RELAY.md)。浏览器与桌面应用中也提供同一套操作引导。
+一次性安装并批准项目 hooks，然后从 Agent 各自的工具环境中创建和加入：
 
-创建 Room 时选择 **Native**，双方保留在自己的 Claude Code / Codex / Grok Build 原生会话中；PairRoom 负责绑定、持久化中继和审计，不启动或中断原生进程。安装并批准项目级 Stop hooks，然后在各自会话内运行 bind；它会读取 harness 的会话 ID 环境变量并立即完成关联。
+```bash
+pairroom relay install --runtime claude,codex
+```
 
-**亮点——CLI 等待期间不需要模型轮询的原生协作。** 双方保留各自的 harness，循环如下工作：
+第一个会话加载已安装的技能，运行 `/pairroom-relay <topic>`；在第二个会话中，让 Agent 执行前者打印的准确加入命令。各自的 `bind` 读取官方会话 ID 并立即关联，不需要回显 nonce、等待首次 Stop 或例行查询 status。后续轮次复用绑定；加入现有 Room 时不要再次创建。
 
-- 两条命令就绪：第一个会话运行 `/pairroom-relay <topic>`，第二个会话运行它打印的简短 `bind --room <id> --slot <n>`。
-- 你的可见回复就是传输：获批的 Stop hook 把完整的寻址回复发布进 Room FIFO——无转述、无总结回合、无人工复制粘贴。bind 返回的准确 peer handle（例如 `@codex`）和 `@user` 负责路由；不带 handle 的回复即结束中继。
-- 跨回合可达性：每回合结束后的 30 秒 park 窗口收集快速回应；开启自动唤醒的 Room 中，Service 可通过绑定时捕获的 inbox socket 提醒现有 Claude Code 会话，或通过 `codex queue` 提醒 Codex。只发送固定无正文提示，限流、有审计、不自动重试；Claude 的接收权限仍然有效，socket 已提交不代表模型已读取。后台 `relay wait` 仍可作为支持完成通知的 harness 的回退路径。详见 [Claude inbox 配置与限制](docs/design/claude-inbox-wake.md)。PairRoom 不启动、恢复副本或中断原生会话。
-- 等待发生在 CLI 进程层而非模型层：HTTP 长轮询由 CLI 内部续期，不调用模型。实际唤醒、续聊、工具回合与计费行为取决于 harness，不保证固定回合数或节省比例。
-- 带日期的工作会话实证（2026-09-16/17，Windows；Claude Code 2.1.273 + codex-cli 0.154.0，均已认证）：两个原生会话通宵无人值守跑完整循环——委派、四轮对抗设计评审、实现、行级评审、合并——零消息丢失、零人工内容搬运。此为工作会话证据，不替代发布门槛的真实 vendor E2E。唤醒面详见[已验证的 vendor 唤醒面](docs/NATIVE_RELAY.md#verified-vendor-wake-surfaces)。
+bind 返回的准确 peer handle 用于路由自动 Stop 回复；`@user` 将结果发布给人类。**未点名的 Native Stop 回复不会被复制进 Room。** 显式 `relay send` / `exchange` 则由命令目标决定投递，不解析正文点名。两条路径都发布可能产生两条消息。详见[发布规则](docs/NATIVE_RELAY.md#what-is-published)。
 
-`pairroom-relay` 技能位于 `skills/`，可经技能安装器分发（`npx skills add sean2077/pairroom`），`relay install` 也写入同一份文件。加载后 `/pairroom-relay <topic>` 创建 Room、绑定当前会话并返回对方的加入命令；`pairroom relay bind` 可在识别到的原生会话内零参数运行。后续审查复用绑定，不要每轮重建 Room。
+获批 Stop hook 在有界 park 窗口内收件。窗口外，开启 wake 的 Room 可通过可用 Claude inbox 或 Codex queue 发送固定、无正文的唤醒提示，不启动或中断会话。Grok 使用前台收件；只有 harness 能呈现后台完成通知时，才使用它管理的后台 wait。CLI 等待不调用模型，但唤醒、续聊与计费取决于 harness。被截断的 Grok 输出必须显式发布完整原文。
 
-[Native 入门](docs/GETTING_STARTED.md#keep-codex-desktop-a-native-room)与[恢复命令](docs/CLI_REFERENCE.md#native-relay-commands)说明有界 park、前台取件和显式 Retry。Provider、模型、effort、权限仍由原生会话控制。真实认证后的多轮互通仍是发布验收门槛，合成测试不代表模型已接受消息。
-
-Grok 使用[前台收件](docs/CLI_REFERENCE.md#grok-build-native)避免 Hook 反馈截断；被截断的输出需要显式发送完整原文。
+[NATIVE_RELAY.md](docs/NATIVE_RELAY.md) 集中说明安装、文件证据、cwd/worktree 发现、唤醒限制和恢复。技能也可经 `npx skills add sean2077/pairroom` 分发；仅安装技能不会安装或批准 hooks。注明日期的[vendor 观察记录](docs/NATIVE_RELAY.md#verified-vendor-wake-surfaces)不等于当前版本的发布验收认证。
 
 ### Native 恢复与评审
 
-“待处理事项”独立于最近聊天，旧的排队/不确定消息不会因历史窗口截断而失去入口。
-页面支持 Markdown、代码与折叠证据；可定向查询历史、查看当前 Room 诊断，并核验可选的 Git 评审版本。
-浏览器保存未确认发送的原 ID 和不可变草稿（不保存凭据）；刷新仅查询收据，不自动重发。
-明确清除本地草稿不会取消 Service 已接受的任务。
+Native Room 左侧是参与者，中间是对话，右侧是工作检查器。宽屏可独立折叠两侧面板；窄屏一次只打开一个。展示的配置与活动是观察结果，不代表控制了原有进程，也不证明实时在线。
 
-`pairroom relay doctor` 查看实际能力和收件观察；`relay history --pending` 分页查看待处理消息，
-`relay history --id ID` 只读查看一条消息。`send --review` 可附上评审版本，
-`relay review --id ID` 比较当前工作区；版本相同并不代表批准执行。
-唤醒冷却按接收者分别计算，Room 保留总预算；尚未尝试的限流消息会到期重查，可能已提交的唤醒仍不自动重试。
-详见[原生评审与恢复](docs/design/native-review-closure.md)。
+待处理事项独立于最近聊天。使用 `pairroom relay doctor`、`pairroom relay history --pending` 或 `pairroom relay history --id ID` 定向诊断。可选 Git 评审版本标识证据，不授权执行。未确认发送在刷新后只查询原始收据，不自动重发；清除本地草稿不会取消已接受的任务。`handed_off` 仅证明 CLI 写出了 stdout，不代表模型接受。详见[Native 恢复](docs/NATIVE_RELAY.md#recovery-and-review-surface)。
 
 ## 桌面端与源码开发
 
-桌面端和浏览器共用 Management Shell 与 Service。启动桌面端不会安装 daemon：它会复用已安装的 daemon，或自行管理内嵌 Service。**设置 → 桌面端 → 开机启动** 只改变操作系统的登录启动注册。关闭窗口会隐藏到托盘；退出桌面端不会停止外部 daemon。详见[桌面生命周期](docs/OPERATIONS.md#desktop-lifecycle)。
+桌面端与浏览器共用 Management Shell 和 Service。桌面端启动不会安装 daemon：它复用已安装的 daemon，或自行管理内嵌 Service。**设置 → 桌面端 → 开机启动** 只改变操作系统的登录启动注册。关闭窗口会隐藏到托盘，退出不会停止外部 daemon。关闭 Room 标签不会归档 Room 或停止原生任务。详见[运行维护](docs/OPERATIONS.md)。
 
-从源码仓库开发，并安装开发依赖后，可运行：
+安装源码开发依赖后可运行：
 
 ```bash
 make dev            # 停止已安装的 daemon，运行当前源码的 Service
@@ -101,13 +77,13 @@ make check
 make smoke
 ```
 
-桌面构建、打包及更新现有本地安装分别使用 `make desktop-build`、`make desktop-package`、`make desktop-update`，详见[桌面开发说明](desktop/README.md)。这些是源码开发命令，不是使用 Release 安装包的前提。
+桌面源码命令为 `make desktop-build`、`make desktop-package` 和 `make desktop-update`；它们不是使用发布包的前提。详见[贡献指南](CONTRIBUTING.md)和[桌面开发](desktop/README.md)。
 
 ## 文档与支持
 
-[文档地图](docs/README.md) · [配置](docs/CONFIGURATION.md) · [CLI](docs/CLI_REFERENCE.md) · [API](docs/API_REFERENCE.md) · [故障排查](docs/TROUBLESHOOTING.md) · [升级](docs/UPGRADING.md) · [贡献指南](CONTRIBUTING.md) · [支持范围](SUPPORT.md)
+[文档地图](docs/README.md) · [配置](docs/CONFIGURATION.md) · [CLI](docs/CLI_REFERENCE.md) · [API](docs/API_REFERENCE.md) · [故障排查](docs/TROUBLESHOOTING.md) · [升级](docs/UPGRADING.md) · [支持范围](SUPPORT.md)
 
-PairRoom 仍在演进。[Changelog](CHANGELOG.md) 记录发布历史，当前行为以参考文档为准。Mock 与浏览器 fixture 测试不能代替真实供应商 E2E；桌面包也不宣称已完成生产签名或 notarization。界面支持英文和简体中文，维护中的技术文档使用英文。
+[Changelog](CHANGELOG.md) 记录历史，当前行为以参考文档为准。Native 仍是实验性功能：Mock、合成 hooks、浏览器 fixtures 及旧工作会话报告，不能替代真实认证的多轮 vendor E2E。本文不宣称新增真实 vendor 验收或计费 token 基准结果。桌面包不宣称完成生产签名或 notarization。界面支持英文和简体中文，维护中的技术文档使用英文。
 
 ## License
 
