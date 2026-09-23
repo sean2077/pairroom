@@ -31,6 +31,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22.x'
+      - name: Install pinned standalone linter
+        run: make lint-install
       - name: Verify root module lock and dependency closure
         run: |
           go mod tidy

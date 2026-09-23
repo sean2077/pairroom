@@ -1,0 +1,22 @@
+version: "2"
+run:
+  timeout: 5m
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+  settings:
+    staticcheck:
+      # Preserve upstream default style exclusions; quick-fix suggestions are
+      # not correctness gates. ST1005 remains enabled except the proper noun below.
+      checks: [all, -ST1000, -ST1003, -ST1016, -ST1020, -ST1021, -ST1022, -QF*]
+  exclusions:
+    presets: []
+    rules:
+      - linters: [staticcheck]
+        path: '^(cmd/pairroom/daemon|internal/service/management)\.go$'
+        text: 'ST1005:'
+        source: 'errors\.New\("Management Shell '
