@@ -101,12 +101,28 @@ type scheduledDelivery struct {
 	forceQueue bool
 }
 
+// Engine is the Embedded Room: one Event Log writer, one Room-owned FIFO and
+// at most one native Turn owner.
+//
+// Lock order, outermost first. Acquire only in this order and never call out
+// to an adapter while holding mu:
+//
+//	lifecycleMu -> deliveryMu[slot] (channel semaphores, slot1 before slot2)
+//	            -> routingMu -> turnMu -> mu
+//	summaryMu -> mu
+//
+// summaryMu is never held together with turnMu, and no path acquires
+// routingMu or summaryMu while holding turnMu or mu. record() takes mu itself.
 type Engine struct {
 	// lifecycleMu serializes permission-driven process replacement with Close.
 	lifecycleMu sync.Mutex
-	mu          sync.RWMutex
-	routingMu   sync.Mutex
-	turnMu      sync.Mutex
+	// mu guards snapshot and the maps below it; it is always the innermost lock.
+	mu sync.RWMutex
+	// routingMu serializes transcript admission (send, retry, final-text relay,
+	// attachment removal) so reference checks and persistence cannot interleave.
+	routingMu sync.Mutex
+	// turnMu guards native Turn ownership and the Room FIFO fields below.
+	turnMu sync.Mutex
 	// summaryMu serializes Turn summary projection and checkpoint flushes.
 	// It is acquired before mu, never while holding mu.
 	summaryMu     sync.Mutex
