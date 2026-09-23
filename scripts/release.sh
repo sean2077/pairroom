@@ -11,6 +11,7 @@ LAST_TAG=${LAST_TAG:-$(git describe --tags --abbrev=0 2>/dev/null || printf unkn
 COMMITS_SINCE_TAG=${COMMITS_SINCE_TAG:-$(git rev-list "${LAST_TAG}..HEAD" --count 2>/dev/null || printf unknown)}
 DIST=${DIST:-dist}
 PYTHON=$(pairroom_resolve_python)
+"$PYTHON" scripts/check_go_versions.py minimum go.mod
 VERSION_PKG=github.com/sean2077/pairroom/internal/version
 LDFLAGS="-s -w -X ${VERSION_PKG}.Commit=${COMMIT} -X ${VERSION_PKG}.BuildDate=${BUILD_DATE} -X ${VERSION_PKG}.LastTag=${LAST_TAG} -X ${VERSION_PKG}.CommitsSinceTag=${COMMITS_SINCE_TAG}"
 

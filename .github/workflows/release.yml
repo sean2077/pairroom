@@ -16,8 +16,11 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: stable
+          check-latest: true
           cache: true
+      - name: Verify actual Go toolchain
+        run: python scripts/check_go_versions.py minimum go.mod
       - uses: actions/setup-node@v7
         with:
           node-version: '22.x'
@@ -32,6 +35,8 @@ jobs:
             --output "${RUNNER_TEMP}/release-notes.md"
       - name: Build and verify release payload
         run: make release
+      - name: Reject vulnerable Linux release binary
+        run: make vuln-binary
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

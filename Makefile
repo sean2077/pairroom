@@ -12,6 +12,7 @@ DESKTOP_PYTHON ?= python
 else
 DESKTOP_PYTHON ?= $(PYTHON)
 endif
+GOVULNCHECK_VERSION := v1.8.0
 VERSION_PKG := github.com/sean2077/pairroom/internal/version
 LDFLAGS := -s -w -X '$(VERSION_PKG).Commit=$(COMMIT)' -X '$(VERSION_PKG).BuildDate=$(BUILD_DATE)' -X '$(VERSION_PKG).LastTag=$(LAST_TAG)' -X '$(VERSION_PKG).CommitsSinceTag=$(COMMITS_SINCE_TAG)'
 # Sources in this worktree only. `find .` would also scan sibling
@@ -24,7 +25,7 @@ ifeq ($(strip $(GOBIN)),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package desktop-update desktop-check clean docs-check browser-check js-check
+.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package desktop-update desktop-check clean docs-check browser-check js-check vuln vuln-binary
 
 build:
 	mkdir -p $(DIST)
@@ -48,6 +49,12 @@ race:
 
 vet:
 	go vet ./...
+
+vuln:
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+
+vuln-binary:
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -mode=binary "$(DIST)/pairroom-cli-v$(VERSION)-linux-amd64"
 
 fmt:
 	gofmt -w $(GO_FILES)
@@ -76,6 +83,7 @@ agent-contract:
 	@test -L CLAUDE.md && test "$$(readlink CLAUDE.md)" = AGENTS.md
 
 release-contract:
+	"$(PYTHON)" scripts/test_check_go_versions.py
 	"$(PYTHON)" scripts/test_extract_changelog.py
 	"$(PYTHON)" scripts/test_bump_version.py
 	bash scripts/test_install.sh

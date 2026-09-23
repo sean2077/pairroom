@@ -60,4 +60,11 @@ for name,digest in checks.items():
     assert actual==digest,(name,actual,digest)
 PY
 
+"$PYTHON" scripts/check_go_versions.py artifacts \
+  --provenance "$DIST/pairroom-v${VERSION}-provenance.json" \
+  "$DIST/pairroom-cli-v${VERSION}-linux-amd64" \
+  "$DIST/pairroom-cli-v${VERSION}-windows-amd64.exe" \
+  "$DIST/pairroom-cli-v${VERSION}-darwin-arm64" \
+  "$DIST/pairroom-cli-v${VERSION}-darwin-amd64"
+
 echo "release artifact verification passed"

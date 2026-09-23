@@ -1,6 +1,6 @@
 module github.com/sean2077/pairroom
 
-go 1.25.0
+go 1.27.0
 
 require modernc.org/sqlite v1.58.0
 
