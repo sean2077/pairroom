@@ -25,13 +25,13 @@ Use a short-lived task branch/worktree from current `main`, respecting the assig
 
 Concurrency/recovery changes should cover success, cancellation, process exit, restart, late events, duplicate callbacks, and unknown submission outcomes. Keep verification proportional, but never replace execution evidence with another Agent's assertion. The installed `agent-scaffold` skill's `verify --profile default --json` is the authoritative full harness check; do not hand-edit its runtime to bypass a failure.
 
-Commit subjects follow the established `type(scope): summary` form in English (`feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`, `chore`; `release: vX.Y.Z` is reserved for version bumps). Stage only the task's hunks and inspect the cached diff before committing; do not sweep in unrelated work.
+Commit subjects follow the established `type(scope): summary` form in English (`feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`, `chore`; `release: vX.Y.Z` is reserved for version bumps).
 
 ## Test design
 
 Go tests live beside their package as `*_test.go` and run through `make test`/`make race`. JavaScript `scripts/test_*.js` files are discovered by `make js-check`. Python regressions are not discovered: register a new one in its Makefile target, and register browser tests in `browser-check` and the CI browser job as well.
 
-Derive expected values from the owning contract ([Protocol](docs/PROTOCOL.md), [Storage](docs/STORAGE.md), API/CLI references) or from hand-checkable literals, not by calling the implementation under test. Assert observable state transitions and persisted facts. Inject time through existing `Now func() time.Time` seams instead of sleeping. Mock Runtime and fixtures isolate recovery and UI behavior; they are not vendor evidence. Test-first development is not required by project policy, but a changed state transition still needs a regression that fails without the change.
+Generic test-quality rules are in `.agents/conventions/testing.md`; these are PairRoom's facts. Expected values come from the owning contracts: [Protocol](docs/PROTOCOL.md), [Storage](docs/STORAGE.md), and the API/CLI references. Inject time through the existing `Now func() time.Time` seams. Mock Runtime and fixtures isolate recovery and UI behavior; they are not vendor evidence. Test-first development is not required by project policy.
 
 ## Browser verification
 
@@ -76,7 +76,7 @@ The checker covers repository Markdown paths/images (including nested and newly 
 
 Keep one owner for each detailed contract and link to it from overview/recipes. Current technical documents are English; root English/Chinese READMEs must remain equivalent. Avoid release-number churn in those entry points. Scope process ownership, permissions, scheduling, identity, and recovery by host mode. Distinguish a desktop-owned embedded Service from an Embedded Room.
 
-When revising a contract or design record, preserve exact identifiers, values, format versions, and normative strength (must/should/may), and keep open decisions visible rather than resolving them through wording. Use source/`--help` for flags, production registrations for routes, strict parsers/model structs for configuration, and Store/apply code for schemas. Preserve generated inventory markers and entries when only prose changes. Breaking changes update [Changelog](CHANGELOG.md) and [Upgrading](docs/UPGRADING.md); documentation corrections need neither fictional migrations nor release bumps.
+Use source/`--help` for flags, production registrations for routes, strict parsers/model structs for configuration, and Store/apply code for schemas. Preserve generated inventory markers and entries when only prose changes. Breaking changes update [Changelog](CHANGELOG.md) and [Upgrading](docs/UPGRADING.md); documentation corrections need neither fictional migrations nor release bumps.
 
 Preserve published release/validation evidence as dated history. Completed plans must not keep instructing Agents to start implementation or purge data; retain rationale and a historical source link, then point to current contracts. New plans and one-off audits belong in Issues/PRs unless they add a durable design decision. A small flat status/date is sufficient where history and current design could be confused; do not introduce a documentation workflow framework.
 
