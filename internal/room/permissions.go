@@ -118,9 +118,9 @@ func (e *Engine) SetPermissions(ctx context.Context, actor model.ActorID, profil
 	}
 	current.PermissionProfile = profile
 	cfg = e.configureParticipant(cfg, current)
-	factory := e.cfg.ClaudeFactory
+	factory := e.cfg.Slot1Factory
 	if actor == model.ActorSlot2 {
-		factory = e.cfg.CodexFactory
+		factory = e.cfg.Slot2Factory
 	}
 	next := factory(cfg, e.HandleRuntimeEvent)
 	if err := next.SetRole(ctx, nativePermissionRole(current)); err != nil {

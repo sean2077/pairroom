@@ -186,7 +186,7 @@ func TestPublishedSchemaTenWorkspaceStillActivatesOnLiveWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	captures := &configurationCapture{}
-	restored, err := New(Config{Repo: repo, Store: log, ClaudeFactory: captures.factory, CodexFactory: captures.factory})
+	restored, err := New(Config{Repo: repo, Store: log, Slot1Factory: captures.factory, Slot2Factory: captures.factory})
 	if err != nil {
 		_ = log.Close()
 		t.Fatal(err)

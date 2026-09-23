@@ -67,7 +67,7 @@ func TestVersionOneCollaborationSurvivesReopenWithNewDefaults(t *testing.T) {
 				t.Fatal(err)
 			}
 			captures := &configurationCapture{}
-			cfg := Config{Repo: t.TempDir(), Store: st, Collaboration: &old, ClaudeFactory: captures.factory, CodexFactory: captures.factory}
+			cfg := Config{Repo: t.TempDir(), Store: st, Collaboration: &old, Slot1Factory: captures.factory, Slot2Factory: captures.factory}
 			original, err := New(cfg)
 			if err != nil {
 				_ = st.Close()

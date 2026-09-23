@@ -132,8 +132,8 @@ func TestMissingQuoteIsRejectedBeforePersistence(t *testing.T) {
 func TestDeliveryQuoteUsesRuntimeIdentityWithoutExpandingReplyChains(t *testing.T) {
 	engine := &Engine{
 		cfg: Config{
-			ClaudeConfig: agent.Config{Runtime: model.RuntimeGrok},
-			CodexConfig:  agent.Config{Runtime: model.RuntimeGrok},
+			Slot1Config: agent.Config{Runtime: model.RuntimeGrok},
+			Slot2Config: agent.Config{Runtime: model.RuntimeGrok},
 		},
 		snapshot: model.RoomSnapshot{Messages: []model.Message{{
 			ID: "source", From: model.ActorSlot1, Text: "Immediate source only", ReplyTo: "older-message",

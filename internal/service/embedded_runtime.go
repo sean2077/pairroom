@@ -299,48 +299,48 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 		return nil, fmt.Errorf("open Room attachment store: %w", err)
 	}
 
-	claudeCfg := cfg.Claude
-	codexCfg := cfg.Codex
+	slot1Cfg := cfg.Claude
+	slot2Cfg := cfg.Codex
 	if cfg.Resolver != nil {
 		claudeSelection := durableRoom.Agents[model.ActorSlot1]
 		codexSelection := durableRoom.Agents[model.ActorSlot2]
-		claudeCfg, err = cfg.Resolver.Resolve(startCtx, model.ActorSlot1, claudeSelection, codexSelection.Runtime, project.Root, durableRoom.DataDir)
+		slot1Cfg, err = cfg.Resolver.Resolve(startCtx, model.ActorSlot1, claudeSelection, codexSelection.Runtime, project.Root, durableRoom.DataDir)
 		if err != nil {
 			return nil, fmt.Errorf("resolve Agent 1 activation: %w", err)
 		}
-		codexCfg, err = cfg.Resolver.Resolve(startCtx, model.ActorSlot2, codexSelection, claudeSelection.Runtime, project.Root, durableRoom.DataDir)
+		slot2Cfg, err = cfg.Resolver.Resolve(startCtx, model.ActorSlot2, codexSelection, claudeSelection.Runtime, project.Root, durableRoom.DataDir)
 		if err != nil {
 			return nil, fmt.Errorf("resolve Agent 2 activation: %w", err)
 		}
 	}
-	claudeFactory := agent.SlotFactory(cfg.Mock, claudeCfg.Runtime.CanonicalForSlot(model.ActorSlot1))
-	codexFactory := agent.SlotFactory(cfg.Mock, codexCfg.Runtime.CanonicalForSlot(model.ActorSlot2))
+	slot1Factory := agent.SlotFactory(cfg.Mock, slot1Cfg.Runtime.CanonicalForSlot(model.ActorSlot1))
+	slot2Factory := agent.SlotFactory(cfg.Mock, slot2Cfg.Runtime.CanonicalForSlot(model.ActorSlot2))
 	// Credentials are present only in Config.Env for the child process. Redact
 	// any accidental echo from native stderr/telemetry before the transcript
 	// boundary or Room projection can persist/publish it.
-	claudeFactory = agent.RedactingFactory(transcriptBoundaryFactory(claudeFactory))
-	codexFactory = agent.RedactingFactory(transcriptBoundaryFactory(codexFactory))
+	slot1Factory = agent.RedactingFactory(transcriptBoundaryFactory(slot1Factory))
+	slot2Factory = agent.RedactingFactory(transcriptBoundaryFactory(slot2Factory))
 	pendingBindings := make(map[model.ActorID]bool, 2)
 	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
 		binding := durableRoom.Bindings[actor]
 		pendingBindings[actor] = binding.Pending && binding.Mode == BindingNew
 	}
-	claudeCfg.ClientVersion = version.Current
-	claudeCfg.Actor = model.ActorSlot1
-	claudeCfg.Runtime = claudeCfg.Runtime.CanonicalForSlot(model.ActorSlot1)
+	slot1Cfg.ClientVersion = version.Current
+	slot1Cfg.Actor = model.ActorSlot1
+	slot1Cfg.Runtime = slot1Cfg.Runtime.CanonicalForSlot(model.ActorSlot1)
 	if !pendingBindings[model.ActorSlot1] {
-		claudeCfg.SessionID = durableRoom.Bindings[model.ActorSlot1].SessionID
+		slot1Cfg.SessionID = durableRoom.Bindings[model.ActorSlot1].SessionID
 	}
-	claudeCfg.RequireExactSession = true
-	codexCfg.ClientVersion = version.Current
-	codexCfg.Actor = model.ActorSlot2
-	codexCfg.Runtime = codexCfg.Runtime.CanonicalForSlot(model.ActorSlot2)
+	slot1Cfg.RequireExactSession = true
+	slot2Cfg.ClientVersion = version.Current
+	slot2Cfg.Actor = model.ActorSlot2
+	slot2Cfg.Runtime = slot2Cfg.Runtime.CanonicalForSlot(model.ActorSlot2)
 	if !pendingBindings[model.ActorSlot2] {
-		codexCfg.SessionID = durableRoom.Bindings[model.ActorSlot2].SessionID
+		slot2Cfg.SessionID = durableRoom.Bindings[model.ActorSlot2].SessionID
 	}
-	codexCfg.RequireExactSession = true
-	claudeCfg.PeerRuntime = codexCfg.Runtime
-	codexCfg.PeerRuntime = claudeCfg.Runtime
+	slot2Cfg.RequireExactSession = true
+	slot1Cfg.PeerRuntime = slot2Cfg.Runtime
+	slot2Cfg.PeerRuntime = slot1Cfg.Runtime
 
 	var engine *room.Engine
 	var pendingMu sync.Mutex
@@ -373,10 +373,10 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 			StallWarningSeconds: cfg.StallWarningSeconds,
 		},
 		Store:                 eventStore,
-		ClaudeFactory:         claudeFactory,
-		CodexFactory:          codexFactory,
-		ClaudeConfig:          claudeCfg,
-		CodexConfig:           codexCfg,
+		Slot1Factory:          slot1Factory,
+		Slot2Factory:          slot2Factory,
+		Slot1Config:           slot1Cfg,
+		Slot2Config:           slot2Cfg,
 		Attachments:           attachmentStore,
 		AutoStart:             cfg.AutoStart,
 		OnSessionMaterialized: onSessionMaterialized,

@@ -54,9 +54,9 @@ func newCollaborationEngine(t *testing.T, instructions string) (*Engine, *config
 	repo := t.TempDir()
 	captures := &configurationCapture{}
 	e, err := New(Config{Name: "mode-test", Repo: repo, Store: eventStore, Collaboration: &spec,
-		ClaudeConfig:  agent.Config{Runtime: model.RuntimeClaude, PermissionMode: "yolo", Model: "planning-model", AdditionalInstructions: "user extra", SessionID: "session-a", RequireExactSession: true},
-		CodexConfig:   agent.Config{Runtime: model.RuntimeCodex, ApprovalPolicy: "yolo", Model: "execution-model", SessionID: "session-b", RequireExactSession: true},
-		ClaudeFactory: captures.factory, CodexFactory: captures.factory})
+		Slot1Config:  agent.Config{Runtime: model.RuntimeClaude, PermissionMode: "yolo", Model: "planning-model", AdditionalInstructions: "user extra", SessionID: "session-a", RequireExactSession: true},
+		Slot2Config:  agent.Config{Runtime: model.RuntimeCodex, ApprovalPolicy: "yolo", Model: "execution-model", SessionID: "session-b", RequireExactSession: true},
+		Slot1Factory: captures.factory, Slot2Factory: captures.factory})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestCloseWaitsForPermissionReplacementAndStopsTheNewAdapter(t *testing.T) {
 	e, _ := newCollaborationEngine(t, "")
 	started, release := make(chan struct{}), make(chan struct{})
 	next := &fakeAdapter{actor: model.ActorSlot2, state: model.StateStopped, startStarted: started, startRelease: release, submissions: make(chan model.AgentInput, 1)}
-	e.cfg.CodexFactory = func(_ agent.Config, sink agent.EventSink) agent.Adapter { next.sink = sink; return next }
+	e.cfg.Slot2Factory = func(_ agent.Config, sink agent.EventSink) agent.Adapter { next.sink = sink; return next }
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	// Start the old adapter so a policy replacement also starts the new one.

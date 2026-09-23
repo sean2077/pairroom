@@ -537,12 +537,12 @@ func runServe(args []string) error {
 		return err
 	}
 	defaults := agentResolver.DefaultSelections()
-	claudeCfg, err := agentResolver.Resolve(context.Background(), model.ActorSlot1, defaults[model.ActorSlot1], defaults[model.ActorSlot2].Runtime, repo, dataDir)
+	slot1Cfg, err := agentResolver.Resolve(context.Background(), model.ActorSlot1, defaults[model.ActorSlot1], defaults[model.ActorSlot2].Runtime, repo, dataDir)
 	if err != nil {
 		_ = eventStore.Close()
 		return fmt.Errorf("resolve Agent 1: %w", err)
 	}
-	codexCfg, err := agentResolver.Resolve(context.Background(), model.ActorSlot2, defaults[model.ActorSlot2], defaults[model.ActorSlot1].Runtime, repo, dataDir)
+	slot2Cfg, err := agentResolver.Resolve(context.Background(), model.ActorSlot2, defaults[model.ActorSlot2], defaults[model.ActorSlot1].Runtime, repo, dataDir)
 	if err != nil {
 		_ = eventStore.Close()
 		return fmt.Errorf("resolve Agent 2: %w", err)
@@ -554,13 +554,13 @@ func runServe(args []string) error {
 		Settings: model.RoomSettings{
 			StallWarningSeconds: *stallWarningFlag,
 		},
-		Store:         eventStore,
-		ClaudeFactory: agent.SlotFactory(*mockFlag, claudeCfg.Runtime),
-		CodexFactory:  agent.SlotFactory(*mockFlag, codexCfg.Runtime),
-		ClaudeConfig:  claudeCfg,
-		CodexConfig:   codexCfg,
-		Attachments:   attachmentStore,
-		AutoStart:     *autoStartFlag,
+		Store:        eventStore,
+		Slot1Factory: agent.SlotFactory(*mockFlag, slot1Cfg.Runtime),
+		Slot2Factory: agent.SlotFactory(*mockFlag, slot2Cfg.Runtime),
+		Slot1Config:  slot1Cfg,
+		Slot2Config:  slot2Cfg,
+		Attachments:  attachmentStore,
+		AutoStart:    *autoStartFlag,
 	})
 	if err != nil {
 		_ = eventStore.Close()
@@ -679,12 +679,12 @@ func runDoctor(args []string) error {
 	fileCfg.Runtimes.Claude.Command = *claudeCommand
 	fileCfg.Runtimes.Codex.Command = *codexCommand
 	fileCfg.Runtimes.Grok.Command = *grokCommand
-	claudeCfg, codexCfg := pairSlotConfigs(fileCfg)
-	claudeCfg.Repo = repo
-	codexCfg.Repo = repo
+	slot1Cfg, slot2Cfg := pairSlotConfigs(fileCfg)
+	slot1Cfg.Repo = repo
+	slot2Cfg.Repo = repo
 	rootCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
-	for _, cfg := range []agent.Config{claudeCfg, codexCfg} {
+	for _, cfg := range []agent.Config{slot1Cfg, slot2Cfg} {
 		ctx, cancel := context.WithTimeout(rootCtx, 15*time.Second)
 		probe, probeErr := agent.ProbeRuntime(ctx, cfg)
 		cancel()

@@ -47,10 +47,10 @@ type Config struct {
 	Settings                  model.RoomSettings
 	Store                     *store.JSONLStore
 	Hub                       *bus.Hub
-	ClaudeFactory             agent.Factory
-	CodexFactory              agent.Factory
-	ClaudeConfig              agent.Config
-	CodexConfig               agent.Config
+	Slot1Factory              agent.Factory
+	Slot2Factory              agent.Factory
+	Slot1Config               agent.Config
+	Slot2Config               agent.Config
 	Attachments               AttachmentStore
 	AutoStart                 bool
 	OnSessionMaterialized     func(context.Context, model.ActorID, string) error
@@ -153,11 +153,11 @@ func New(cfg Config) (*Engine, error) {
 	if cfg.Settings.StallWarningSeconds != -1 && (cfg.Settings.StallWarningSeconds < 30 || cfg.Settings.StallWarningSeconds > 86400) {
 		return nil, errors.New("stall_warning_seconds must be -1 (disabled) or between 30 and 86400")
 	}
-	if cfg.ClaudeFactory == nil {
-		cfg.ClaudeFactory = agent.SlotFactory(false, cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorSlot1))
+	if cfg.Slot1Factory == nil {
+		cfg.Slot1Factory = agent.SlotFactory(false, cfg.Slot1Config.Runtime.CanonicalForSlot(model.ActorSlot1))
 	}
-	if cfg.CodexFactory == nil {
-		cfg.CodexFactory = agent.SlotFactory(false, cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorSlot2))
+	if cfg.Slot2Factory == nil {
+		cfg.Slot2Factory = agent.SlotFactory(false, cfg.Slot2Config.Runtime.CanonicalForSlot(model.ActorSlot2))
 	}
 
 	e := &Engine{
@@ -198,7 +198,7 @@ func (e *Engine) restore() error {
 
 	name := strings.TrimSpace(e.cfg.Name)
 	if name == "" {
-		name = defaultRoomName(e.cfg.ClaudeConfig.Runtime, e.cfg.CodexConfig.Runtime)
+		name = defaultRoomName(e.cfg.Slot1Config.Runtime, e.cfg.Slot2Config.Runtime)
 	}
 	collaboration := model.CloneCollaboration(e.cfg.Collaboration)
 	if collaboration == nil {
@@ -239,13 +239,13 @@ func (e *Engine) restore() error {
 	participants := []model.ParticipantSnapshot{
 		{
 			ID: model.ActorSlot1, DisplayName: identities[model.ActorSlot1].DisplayName, MentionHandle: identities[model.ActorSlot1].MentionHandle,
-			Role: model.RolePeer, State: model.StateStopped, Model: e.cfg.ClaudeConfig.Model,
-			RuntimeKind: e.cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorSlot1),
+			Role: model.RolePeer, State: model.StateStopped, Model: e.cfg.Slot1Config.Model,
+			RuntimeKind: e.cfg.Slot1Config.Runtime.CanonicalForSlot(model.ActorSlot1),
 		},
 		{
 			ID: model.ActorSlot2, DisplayName: identities[model.ActorSlot2].DisplayName, MentionHandle: identities[model.ActorSlot2].MentionHandle,
-			Role: model.RolePeer, State: model.StateStopped, Model: e.cfg.CodexConfig.Model,
-			RuntimeKind: e.cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorSlot2),
+			Role: model.RolePeer, State: model.StateStopped, Model: e.cfg.Slot2Config.Model,
+			RuntimeKind: e.cfg.Slot2Config.Runtime.CanonicalForSlot(model.ActorSlot2),
 		},
 	}
 	for _, participant := range participants {
@@ -411,8 +411,8 @@ func (e *Engine) Start(parent context.Context) error {
 		return nil
 	}
 	e.ctx, e.cancel = context.WithCancel(parent)
-	claudeParticipant := e.snapshot.Participants[model.ActorSlot1]
-	codexParticipant := e.snapshot.Participants[model.ActorSlot2]
+	slot1Participant := e.snapshot.Participants[model.ActorSlot1]
+	slot2Participant := e.snapshot.Participants[model.ActorSlot2]
 	repo := e.snapshot.Meta.Repo
 	roomName := e.snapshot.Meta.Name
 	roomID := e.snapshot.Meta.ID
@@ -423,41 +423,41 @@ func (e *Engine) Start(parent context.Context) error {
 		model.ActorSlot2: {Kind: "live", Path: repo},
 	}
 
-	claudeCfg := e.cfg.ClaudeConfig
-	claudeCfg.Actor = model.ActorSlot1
-	claudeCfg.Runtime = claudeCfg.Runtime.CanonicalForSlot(model.ActorSlot1)
-	claudeCfg.PeerRuntime = e.cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorSlot2)
-	claudeCfg.Repo = boundaries[model.ActorSlot1].Path
-	claudeCfg.DataDir = e.cfg.Store.Dir()
-	claudeCfg.RoomName = roomName
-	claudeCfg.RoomID = roomID
-	if !claudeCfg.RequireExactSession {
-		claudeCfg.SessionID = claudeParticipant.SessionID
+	slot1Cfg := e.cfg.Slot1Config
+	slot1Cfg.Actor = model.ActorSlot1
+	slot1Cfg.Runtime = slot1Cfg.Runtime.CanonicalForSlot(model.ActorSlot1)
+	slot1Cfg.PeerRuntime = e.cfg.Slot2Config.Runtime.CanonicalForSlot(model.ActorSlot2)
+	slot1Cfg.Repo = boundaries[model.ActorSlot1].Path
+	slot1Cfg.DataDir = e.cfg.Store.Dir()
+	slot1Cfg.RoomName = roomName
+	slot1Cfg.RoomID = roomID
+	if !slot1Cfg.RequireExactSession {
+		slot1Cfg.SessionID = slot1Participant.SessionID
 	}
-	codexCfg := e.cfg.CodexConfig
-	codexCfg.Actor = model.ActorSlot2
-	codexCfg.Runtime = codexCfg.Runtime.CanonicalForSlot(model.ActorSlot2)
-	codexCfg.PeerRuntime = e.cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorSlot1)
-	codexCfg.Repo = boundaries[model.ActorSlot2].Path
-	codexCfg.DataDir = e.cfg.Store.Dir()
-	codexCfg.RoomName = roomName
-	codexCfg.RoomID = roomID
-	if !codexCfg.RequireExactSession {
-		codexCfg.SessionID = codexParticipant.SessionID
+	slot2Cfg := e.cfg.Slot2Config
+	slot2Cfg.Actor = model.ActorSlot2
+	slot2Cfg.Runtime = slot2Cfg.Runtime.CanonicalForSlot(model.ActorSlot2)
+	slot2Cfg.PeerRuntime = e.cfg.Slot1Config.Runtime.CanonicalForSlot(model.ActorSlot1)
+	slot2Cfg.Repo = boundaries[model.ActorSlot2].Path
+	slot2Cfg.DataDir = e.cfg.Store.Dir()
+	slot2Cfg.RoomName = roomName
+	slot2Cfg.RoomID = roomID
+	if !slot2Cfg.RequireExactSession {
+		slot2Cfg.SessionID = slot2Participant.SessionID
 	}
 
-	claudeCfg = e.configureParticipant(claudeCfg, claudeParticipant)
-	codexCfg = e.configureParticipant(codexCfg, codexParticipant)
+	slot1Cfg = e.configureParticipant(slot1Cfg, slot1Participant)
+	slot2Cfg = e.configureParticipant(slot2Cfg, slot2Participant)
 	e.mu.Lock()
 	if e.closed {
 		e.mu.Unlock()
 		return errors.New("room is closed")
 	}
 	e.started = true
-	e.adapters[model.ActorSlot1] = e.cfg.ClaudeFactory(claudeCfg, e.HandleRuntimeEvent)
-	e.adapters[model.ActorSlot2] = e.cfg.CodexFactory(codexCfg, e.HandleRuntimeEvent)
-	claudeAdapter := e.adapters[model.ActorSlot1]
-	codexAdapter := e.adapters[model.ActorSlot2]
+	e.adapters[model.ActorSlot1] = e.cfg.Slot1Factory(slot1Cfg, e.HandleRuntimeEvent)
+	e.adapters[model.ActorSlot2] = e.cfg.Slot2Factory(slot2Cfg, e.HandleRuntimeEvent)
+	slot1Adapter := e.adapters[model.ActorSlot1]
+	slot2Adapter := e.adapters[model.ActorSlot2]
 	autoStart := e.cfg.AutoStart
 	now := time.Now().UTC()
 	e.lastRuntimeActivity[model.ActorSlot1] = now
@@ -475,11 +475,11 @@ func (e *Engine) Start(parent context.Context) error {
 		})
 	}
 	// Apply the stored permission profile before either native process starts.
-	if err := claudeAdapter.SetRole(parent, nativePermissionRole(claudeParticipant)); err != nil {
-		return fmt.Errorf("apply Claude permissions: %w", err)
+	if err := slot1Adapter.SetRole(parent, nativePermissionRole(slot1Participant)); err != nil {
+		return fmt.Errorf("apply slot1 permissions: %w", err)
 	}
-	if err := codexAdapter.SetRole(parent, nativePermissionRole(codexParticipant)); err != nil {
-		return fmt.Errorf("apply Codex permissions: %w", err)
+	if err := slot2Adapter.SetRole(parent, nativePermissionRole(slot2Participant)); err != nil {
+		return fmt.Errorf("apply slot2 permissions: %w", err)
 	}
 	e.resumeRestoredDeliveries(parent)
 
@@ -1076,8 +1076,8 @@ func (e *Engine) runtimeKinds() map[model.ActorID]model.RuntimeKind {
 
 func runtimeKindsForConfig(cfg Config) map[model.ActorID]model.RuntimeKind {
 	return map[model.ActorID]model.RuntimeKind{
-		model.ActorSlot1: cfg.ClaudeConfig.Runtime.CanonicalForSlot(model.ActorSlot1),
-		model.ActorSlot2: cfg.CodexConfig.Runtime.CanonicalForSlot(model.ActorSlot2),
+		model.ActorSlot1: cfg.Slot1Config.Runtime.CanonicalForSlot(model.ActorSlot1),
+		model.ActorSlot2: cfg.Slot2Config.Runtime.CanonicalForSlot(model.ActorSlot2),
 	}
 }
 
@@ -1087,9 +1087,9 @@ func (e *Engine) participantName(actor model.ActorID) string {
 
 func slotAgentConfig(cfg Config, actor model.ActorID) agent.Config {
 	if actor == model.ActorSlot2 {
-		return cfg.CodexConfig
+		return cfg.Slot2Config
 	}
-	return cfg.ClaudeConfig
+	return cfg.Slot1Config
 }
 
 func applyPermissionRuntimeProjection(participant *model.ParticipantSnapshot, actor model.ActorID, cfg Config) {
@@ -1473,18 +1473,18 @@ func (e *Engine) lockDelivery(ctx context.Context, actor model.ActorID) (func(),
 }
 
 func (e *Engine) lockAllDeliveries(ctx context.Context) (func(), error) {
-	claudeUnlock, err := e.lockDelivery(ctx, model.ActorSlot1)
+	slot1Unlock, err := e.lockDelivery(ctx, model.ActorSlot1)
 	if err != nil {
 		return nil, err
 	}
-	codexUnlock, err := e.lockDelivery(ctx, model.ActorSlot2)
+	slot2Unlock, err := e.lockDelivery(ctx, model.ActorSlot2)
 	if err != nil {
-		claudeUnlock()
+		slot1Unlock()
 		return nil, err
 	}
 	return func() {
-		codexUnlock()
-		claudeUnlock()
+		slot2Unlock()
+		slot1Unlock()
 	}, nil
 }
 
