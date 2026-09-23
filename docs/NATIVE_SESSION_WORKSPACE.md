@@ -30,6 +30,24 @@ unchanged. Finding a binding does not cause a harness to load hooks it has not
 approved, and no global hooks, directory-change hooks or vendor transcript scans
 are introduced.
 
+## Passive hook boundary
+
+Installing hooks does not bind every session in a project. A valid unbound
+Stop/StopFailure invocation returns only the neutral `{}` hook result, with no
+stderr diagnostic, state or credential writes, slot/collector lock, publication,
+collection, park wait, or Service startup. It does not read the Service endpoint
+or make HTTP requests, even when that endpoint is missing, malformed, stale, or
+points to a stopped Service. This also applies to Grok reusing the Claude hook.
+A shared or reused harness PID is not evidence that a fresh session is bound.
+
+Cold hook discovery ignores unreadable workspace candidates and refuses unsafe
+walks without using partial results; it never follows a symlink or borrows another
+session's credentials. Confirmed per-session locators, matching binding identity
+checks, and exact bound environment/session disagreements still fail closed.
+An already-bound session's Service or credential failures are not hidden, and
+explicit foreground commands retain their existing diagnostics. Recover a broken
+older binding through an explicit command, not automatic hook repair.
+
 ## Disposable locators
 
 The user configuration directory contains
