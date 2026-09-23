@@ -33,6 +33,7 @@ The distributed onboarding skill is product payload: edit `skills/pairroom-relay
 
 <!-- agent-scaffold:start — managed; keep project prose outside; upgrade refreshes this block. -->
 <!-- agent-scaffold:profile=default -->
+<!-- agent-scaffold:domains=docs,tools,testing,specs,terminology,git,release -->
 ## Agent Harness
 
 `.agents/` is the harness source; `.claude/` and `.codex/` hold generated projections. `CLAUDE.md` links to this contract.
@@ -55,11 +56,23 @@ Keep one lifecycle owner. `done --dir <absolute-wt>` merges, ff-only pushes, and
 
 Every Agent, project skill, and subagent uses the declared glossary, else root `CONTEXT-MAP.md`, then `CONTEXT.md`; read only relevant contexts before using project terms. A term and each language equivalent are equally valid names for one concept — use whichever is clearest and do not force one language. Reserve avoided names for history or compatibility. Resolve durable term changes with evidence and owner intent; update the glossary in the same change. Adopt an existing glossary; add definitions as durable concepts are resolved.
 
+### Convention guides
+
+Before the matching work, read its generic guide; project documentation and nested contracts win where they are more specific.
+
+- Documentation: `.agents/conventions/docs.md`
+- Commands and tools: `.agents/conventions/tools.md`
+- Tests: `.agents/conventions/testing.md`
+- Specifications and design records: `.agents/conventions/specs.md`
+- Glossary changes: `.agents/conventions/terminology.md`
+- Commits and delivery: `.agents/conventions/git.md`
+- Version bumps, tags, and publication: `.agents/tools/release/README.md`
+
 ### Sources and projections
 
 - Edit skills in `.agents/skills/`, then run `bash .agents/relink-skills.sh`; commit source and symlinks.
 - Edit subagents in `.agents/subagents/`, then run `python .agents/tools/generate-subagents.py`; commit source and projections.
-- Do not hand-edit host projections or scaffold runtime (`.agents/tools/**`, `.agents/relink-skills.sh`, `.agents/symlink-manager.py`); use `agent-scaffold upgrade`, then `agent-scaffold verify`.
+- Do not hand-edit host projections or scaffold runtime (`.agents/tools/**`, `.agents/conventions/**`, `.agents/relink-skills.sh`, `.agents/symlink-manager.py`); use `agent-scaffold upgrade`, then `agent-scaffold verify`.
 - **Third-party skills** follow project-owned placement and installation policy; preserve unrelated entries.
 
 For Codex, confirm project trust, agent discovery, and `/hooks` approval; re-review changed definitions. Restore symlink/hardlink targets with Git, not Claude checkpoints.
