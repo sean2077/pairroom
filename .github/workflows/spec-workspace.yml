@@ -1,0 +1,39 @@
+# Temporary, read-only workspace capture for this spec implementation.
+# Removed before the PR is marked ready. Never includes checkout credentials.
+name: Spec verification workspace
+on:
+  push:
+    branches: [fix/spec-a-stable-go]
+permissions:
+  contents: read
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache: true
+      - name: Verify actual Go toolchain
+        run: python scripts/check_go_versions.py minimum go.mod
+      - name: Capture source and public Go toolchain dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/spec-workspace"
+          git bundle create "${RUNNER_TEMP}/spec-workspace/pairroom.bundle" --all
+          go mod download
+          tar -czf "${RUNNER_TEMP}/spec-workspace/go.tar.gz" -C "$(go env GOROOT)" .
+          tar -czf "${RUNNER_TEMP}/spec-workspace/gomodcache.tar.gz" -C "$(go env GOMODCACHE)" .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: spec-verification-workspace
+          path: ${{ runner.temp }}/spec-workspace/
+          if-no-files-found: error
+          retention-days: 1
