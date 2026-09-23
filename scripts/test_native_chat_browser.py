@@ -71,6 +71,8 @@ def fixture_html(isolated: bool = False) -> str:
       __requests.push({path,method:options.method||'GET',body:options.body});
       if(path==='api/v1/session')return Response.json({csrf_token:'fixture-only'});
       if(path.startsWith('api/v1/snapshot'))return Response.json(__snapshot);
+      if(path.startsWith('api/v1/diagnostics'))return Response.json({participants:{slot1:{reason:'parked',capability:'none',next_action:'wait_for_collector_result',head_id:'m0'}},relay:{last_wake:{}}});
+      if(path.startsWith('api/v1/history'))return Response.json({messages:[]});
       if(path.startsWith('api/v1/pending')){const messages=__snapshot.relay.messages.filter(m=>['queued','delivering','unknown'].includes(m.state));return Response.json({messages:messages.slice(0,10),total:messages.length});}
       if(path.startsWith('api/v1/sends/')){const message=__snapshot.relay.messages.find(m=>m.id===path.split('/').pop());return Response.json({found:Boolean(message),message});}
       if(path==='api/v1/messages'){
@@ -233,7 +235,9 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
             await expect(page.locator('#messages .message-row')).to_have_count(3)
             for theme in ('light','dark'):
                 await page.evaluate('(theme)=>document.documentElement.dataset.theme=theme',theme)
-                for width,height in ((1440,1000),(420,900),(320,700),(740,500)):
+                # 1024 straddles the 1000px panel breakpoint: both fixed columns
+                # are still open there, so it is the tightest three-column width.
+                for width,height in ((1440,1000),(1024,800),(420,900),(320,700),(740,500)):
                     await page.set_viewport_size({'width':width,'height':height})
                     await expect(page.locator('#send')).to_be_in_viewport()
                     assert await page.locator('#messages').evaluate('el=>el.clientHeight>50'), (width,height)
@@ -255,6 +259,18 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
                         await page.locator('#participants-title').press('Escape')
                         await expect(page.locator('#participants-toggle')).to_be_focused()
                         assert not await page.locator('.conversation').evaluate('el=>el.inert')
+                        # Reopening an already visible panel must not steal focus
+                        # from the control that asked for it: inspecting a
+                        # diagnostic head keeps the operator on that button.
+                        await page.locator('#inspector-toggle').click()
+                        await expect(page.locator('#native-inspector')).to_be_visible()
+                        await page.locator('#diagnose').click()
+                        inspect = page.locator('#diagnostics button')
+                        await expect(inspect).to_have_count(1)
+                        await inspect.focus()
+                        await inspect.click()
+                        await expect(inspect).to_be_focused()
+                        await page.locator('#inspector-toggle').click()
                     if width in (1440,420):
                         await page.screenshot(path=str(artifacts/f'native-im-{theme}-{width}.png'))
             assert not errors, errors

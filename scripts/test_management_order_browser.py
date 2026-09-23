@@ -218,12 +218,28 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
     await expect(page.locator('#context-archive-room')).to_be_focused()
     await page.keyboard.press('Escape')
     await expect(tree_room('r1')).to_be_focused()
+    # Focus can rest on the menu body rather than an item (the name band is not
+    # focusable); each arrow key must then enter the list from its own end.
+    await tree_room('r1').focus()
+    await page.keyboard.press('Shift+F10')
+    await page.locator('#context-room-name').click()
+    await wait_fixture_state(page, 'document.activeElement===document.body')
+    await page.keyboard.press('ArrowUp')
+    await expect(page.locator('#context-archive-room')).to_be_focused()
+    await page.keyboard.press('ArrowDown')
+    await expect(page.locator('#context-rename-room')).to_be_focused()
+    await page.keyboard.press('Escape')
+    await expect(tree_room('r1')).to_be_focused()
     # Archive is separate and requires confirmation; Native copy never promises
     # to stop a user-owned vendor session. Cancelling changes no durable state.
     await tree_room('r3').click(button='right')
     await page.locator('#context-archive-room').click()
     await expect(page.locator('#confirm-dialog')).to_be_visible()
     await expect(page.locator('#confirm-dialog')).to_contain_text('No agent sessions are started or interrupted')
+    # The confirmation carries the archive facts, not the Native page notice:
+    # release-gate wording and wake mechanics do not belong in a user dialog.
+    await expect(page.locator('#confirm-dialog')).to_contain_text('Archiving hides the Room from the default list')
+    assert 'release-gated' not in await page.locator('#confirm-dialog').inner_text()
     await page.locator('#confirm-dialog [data-close-dialog]').first.click()
     await tree_room('r3').click(button='right')
     await page.locator('#context-close-room').click()
@@ -234,6 +250,20 @@ async def verify_ordering(browser, artifacts: Path, in_page_fixture: bool = Fals
     await expect(tree_room('r3')).to_be_visible()
     await tree_room('r3').click()
     await expect(tab('r3')).to_be_visible()
+    # Closing a Room from that tab's own menu removes the menu trigger together
+    # with the tab; focus must land on the Room's surviving sidebar row instead
+    # of being dropped onto the page, and the neighbour tab must take over.
+    await tree_room('r1').click()
+    await expect(tab('r1')).to_be_visible()
+    await tab('r1').locator('.room-tab-close').focus()
+    await page.keyboard.press('Shift+F10')
+    await page.keyboard.press('Home')
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('Enter')
+    await expect(tab('r1')).to_have_count(0)
+    await expect(tree_room('r1')).to_be_focused()
+    await expect(tab('r3')).to_have_class(re.compile(r"\bactive\b"))
+    assert await page.evaluate('location.hash') == '#/rooms/r3'
     await tree_room('r3').click(button='right')
     await page.screenshot(path=str(artifacts / 'room-context-actions.png'))
     await page.locator('#context-close-room').click()

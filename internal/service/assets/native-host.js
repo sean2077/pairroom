@@ -56,10 +56,14 @@
     restoreReadingPosition(position);
   }
   function showPanel(name, open) {
+    const wasOpen = !$(`native-${name}`).hidden;
     if (compactPanels.matches) mobilePanel = open ? name : '';
     else desktopPanels[name] = open;
     syncPanels();
-    if (open && compactPanels.matches) $(`${name}-title`).focus({preventScroll:true});
+    // Only a transition into view moves focus: re-opening an already visible
+    // panel (Inspect inside a narrow diagnostics list, or a participant chip)
+    // must not pull the keyboard user out of the control they just activated.
+    if (open && !wasOpen && compactPanels.matches) $(`${name}-title`).focus({preventScroll:true});
   }
   function showInspector(open) { showPanel('inspector', open); }
   function showParticipants(open) { showPanel('participants', open); }
