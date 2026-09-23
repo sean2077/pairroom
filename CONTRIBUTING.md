@@ -17,11 +17,21 @@ make smoke
 
 `make install` installs to `GOBIN` (default `GOPATH/bin`), reports PATH visibility, and never edits PATH. `make dev` stops an installed daemon before running the current-tree Service. The Wails desktop is a separate module; keep GUI dependencies out of the root. Build/update and `DESKTOP_INSTALL_DIR` behavior belong in [Desktop development](desktop/README.md).
 
+The `Makefile` is the command entry point; run targets from the repository root. `scripts/` holds the build, check, install, and release internals those targets and CI call, plus the `test_*.py`/`test_*.js` regressions; keep their Make/CI invocations stable. `tools/visual_smoke.py` is a standalone Playwright screenshot aid against stubbed Management data. It writes untracked `artifacts/screenshots/` and belongs to no gate.
+
 ## Change workflow
 
 Use a short-lived task branch/worktree from current `main`, respecting the assigned lifecycle owner. State the relevant invariant and failure boundary, then change the minimum source and owning documentation. Add regressions for actual state transitions. Submit a PR, not a direct push to `main`; PR handoff does not authorize merging or deleting the task worktree.
 
 Concurrency/recovery changes should cover success, cancellation, process exit, restart, late events, duplicate callbacks, and unknown submission outcomes. Keep verification proportional, but never replace execution evidence with another Agent's assertion. The installed `agent-scaffold` skill's `verify --profile default --json` is the authoritative full harness check; do not hand-edit its runtime to bypass a failure.
+
+Commit subjects follow the established `type(scope): summary` form in English (`feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`, `chore`; `release: vX.Y.Z` is reserved for version bumps). Stage only the task's hunks and inspect the cached diff before committing; do not sweep in unrelated work.
+
+## Test design
+
+Go tests live beside their package as `*_test.go` and run through `make test`/`make race`. JavaScript `scripts/test_*.js` files are discovered by `make js-check`. Python regressions are not discovered: register a new one in its Makefile target, and register browser tests in `browser-check` and the CI browser job as well.
+
+Derive expected values from the owning contract ([Protocol](docs/PROTOCOL.md), [Storage](docs/STORAGE.md), API/CLI references) or from hand-checkable literals, not by calling the implementation under test. Assert observable state transitions and persisted facts. Inject time through existing `Now func() time.Time` seams instead of sleeping. Mock Runtime and fixtures isolate recovery and UI behavior; they are not vendor evidence. Test-first development is not required by project policy, but a changed state transition still needs a regression that fails without the change.
 
 ## Browser verification
 
@@ -66,7 +76,7 @@ The checker covers repository Markdown paths/images (including nested and newly 
 
 Keep one owner for each detailed contract and link to it from overview/recipes. Current technical documents are English; root English/Chinese READMEs must remain equivalent. Avoid release-number churn in those entry points. Scope process ownership, permissions, scheduling, identity, and recovery by host mode. Distinguish a desktop-owned embedded Service from an Embedded Room.
 
-Use source/`--help` for flags, production registrations for routes, strict parsers/model structs for configuration, and Store/apply code for schemas. Preserve generated inventory markers and entries when only prose changes. Breaking changes update [Changelog](CHANGELOG.md) and [Upgrading](docs/UPGRADING.md); documentation corrections need neither fictional migrations nor release bumps.
+When revising a contract or design record, preserve exact identifiers, values, format versions, and normative strength (must/should/may), and keep open decisions visible rather than resolving them through wording. Use source/`--help` for flags, production registrations for routes, strict parsers/model structs for configuration, and Store/apply code for schemas. Preserve generated inventory markers and entries when only prose changes. Breaking changes update [Changelog](CHANGELOG.md) and [Upgrading](docs/UPGRADING.md); documentation corrections need neither fictional migrations nor release bumps.
 
 Preserve published release/validation evidence as dated history. Completed plans must not keep instructing Agents to start implementation or purge data; retain rationale and a historical source link, then point to current contracts. New plans and one-off audits belong in Issues/PRs unless they add a durable design decision. A small flat status/date is sufficient where history and current design could be confused; do not introduce a documentation workflow framework.
 
@@ -83,6 +93,8 @@ Why/Alternatives explain fit, not new product behavior. Keep their source revisi
 `.github/workflows/release.yml` owns publication: validate/extract changelog notes, build and verify CLI artifacts, publish the Release, then re-download/recheck its CLI payload. The desktop workflow attaches `pairroom-desktop-*` packages to the same Release on `v*` tags. Its Windows `inno` winget manifest submission to `microsoft/winget-pkgs` uses the configured `WINGET_TOKEN` (classic PAT with `public_repo`) through a fork PR, is idempotent per version, and must not rewrite the Release on failure. Desktop production signing/notarization may be claimed only after it actually runs in the release environment.
 
 Preserve these checks when changing build/release tooling. A documentation-only PR does not need to invoke publication, create tags, alter secrets, or run paid vendor acceptance.
+
+Releases are stable-only: `bump-version` accepts only `X.Y.Z`, and the workflow requires a non-prerelease Release. `CHANGELOG.md` is the release-note authority; CI extracts notes with the project-owned `scripts/extract-changelog.py`. The version commit is `release: vX.Y.Z` on `main`, tagged with an annotated, unsigned `vX.Y.Z` tag that is never moved. A pushed tag is not completion. Completion requires the `Release` workflow's verified GitHub Release payload, the desktop workflow's attached packages, and its winget submission; report each separately. Before any version bump, tag, or publication, also read `.agents/tools/release/README.md` for generic procedure. The project facts above take precedence.
 
 ## PR evidence
 
