@@ -1,0 +1,9 @@
+{
+  "cmd/pairroom": 40,
+  "internal/agent": 70,
+  "internal/relay": 73,
+  "internal/relayclient": 76,
+  "internal/room": 81,
+  "internal/service": 72,
+  "internal/store": 82
+}
