@@ -1,80 +1,61 @@
 # Getting started
 
-This guide takes you from a release package to a first Room. For the adoption decision, read [Why PairRoom](WHY_PAIRROOM.md); for all options, use [Configuration](CONFIGURATION.md) and the [CLI reference](CLI_REFERENCE.md).
+Choose the host mode before following commands. **Embedded** gives PairRoom control of supported adapters; **Native** retains your original sessions. Neither is an in-place conversion of the other. See [Concepts](CONCEPTS.md) for the boundary and [Native setup](NATIVE_RELAY.md) for the complete Native workflow.
 
 ## Prerequisites
 
-| Entry | Needed to use it | Needed only to build from source |
+| Entry | Required to use it | Source-development requirements |
 |---|---|---|
-| Prebuilt CLI + browser | Git, a local Git repository, and a browser | Go 1.25 and the development tools in [Contributing](../CONTRIBUTING.md) |
-| Prebuilt desktop | Git, a local Git repository, and the package's platform requirements | Go, pinned Wails, Python, and platform tools in [Desktop development](../desktop/README.md) |
-| Real Agents, either entry | Each selected native CLI installed and authenticated for its selected Provider | No additional PairRoom source build |
-| Mock, either entry | No vendor CLI or model account | None for a prebuilt package |
+| Prebuilt CLI + browser | Git, a local Git repository, and a browser | Go and tools in [Contributing](../CONTRIBUTING.md) |
+| Prebuilt Desktop | Git, a local repository, and platform package requirements | Separate Wails/native dependencies in [Desktop development](../desktop/README.md) |
+| Real Agents | Selected native CLIs installed and authenticated | No extra PairRoom source build |
+| Mock | No vendor CLI or model account | None for a prebuilt package |
 
-**Go is not required to run a prebuilt PairRoom binary.** Only install the native Runtimes you will actually select: Claude Code, Codex, and/or Grok Build. Two slots may use the same Runtime. Native host mode supports Claude Code, Codex and Grok Build; see [Grok Native](CLI_REFERENCE.md#grok-build-native) for its hook/foreground boundary.
+Prebuilt packages do **not** require Go. Install only the Runtimes you will use: Claude Code, Codex, and/or Grok Build. Both slots may use the same Runtime.
 
 ## Install a release
 
-Follow the [Installation guide](INSTALLATION.md) to choose the channel for your platform — winget, a desktop package, the CLI installer script, or a direct binary — then verify with `pairroom version` and continue here. Prebuilt packages do not require Go.
+Follow [Installation](INSTALLATION.md) for the appropriate platform/channel, then verify `pairroom version`. A Desktop installation does not by itself prove that `pairroom` is discoverable in each native Agent's tool shell; check PATH there before Native setup.
 
 ## First run without vendor calls
 
-Use a disposable Git repository and a separate PairRoom data root so the demo does not contend with an existing Service or reuse real Rooms.
-
-Linux/macOS/Git Bash:
+Use a disposable Git repository and an unused data root, separate from any real Service:
 
 ```bash
+# Linux, macOS, or Git Bash
 pairroom service --mock --data-root "$HOME/.pairroom-demo"
 ```
 
-Windows PowerShell with the downloaded CLI:
-
 ```powershell
+# Windows PowerShell with a downloaded CLI
 ./pairroom.exe service --mock --data-root "$env:USERPROFILE\.pairroom-demo"
 ```
 
-Open the Management URL printed at startup if the browser does not open automatically. The URL can contain an authentication token; do not publish it. Keep the foreground process running while using its Rooms. `Ctrl+C` requests normal shutdown.
+Open the printed Management URL if a browser does not open automatically. Do not share the authenticated URL. Keep the foreground process running; `Ctrl+C` requests normal shutdown.
 
-In Management:
+In Management, register the disposable repository's absolute path as a **Project**, then create an **Embedded Room** with two new Bindings. Inspect the Agent selections, default/custom collaboration instructions, and permissions. Send Agent 1 a small task and inspect conversation, Turn activity, and message state. Project registration does not copy files.
 
-1. Register the absolute path of the disposable Git repository as a **Project**. Registration does not copy the repository.
-2. Create an **Embedded Room** with two participants and new session Bindings. The name is optional; a generated name can be changed later.
-3. Choose default Lead/Executor instructions or custom natural-language collaboration instructions. Inspect both Agent selections and native permissions before creating the Room.
-4. Open the Room and send a small task to Agent 1. Inspect the conversation, Turn activity, message state, and participant diagnostics.
-
-Mock is deterministic control-plane verification, not a language model. It does not demonstrate coding quality or prove a real Provider/CLI combination works. Use fresh real Rooms for real execution rather than treating a Mock transcript as a native session.
+Mock is deterministic control-plane verification, not a language model or a vendor-authentication test. Use fresh real Rooms for real execution, not a Mock transcript as an existing native session.
 
 ## First real Room
 
-These steps use **Embedded**. To retain an independent Codex Desktop / Claude Code terminal, follow [Native setup](#keep-codex-desktop-a-native-room) instead; Embedded is not attachment to a live Desktop session.
+These steps are for **Embedded**. To retain an independent Claude Code terminal, Codex CLI/Desktop, or Grok Build session, use the [Native path](#keep-codex-desktop-a-native-room).
 
-Confirm that each selected CLI works independently as the same OS user and in the target repository:
+Confirm the chosen CLI works independently as the same OS user in the intended repository:
 
 ```bash
-# Run only the commands for Runtimes you intend to select.
+# Run only the version commands for Runtimes you select.
 claude --version
 codex --version
 grok --version
-
 pairroom doctor --repo /absolute/path/to/repository --json
 ```
 
-A version response or `doctor` probe is not an authenticated end-to-end coding test. Resolve missing executables, login, Provider, and policy problems in the native CLI first. PairRoom does not log in to a vendor for you.
+Version responses and ordinary `doctor` are not authenticated coding tests. Resolve executable, Provider/login, and native-policy failures in the harness first. PairRoom does not log in for you.
 
-Stop the isolated Mock Service, then start `pairroom service` without `--mock`, or open Desktop. Use a fresh Room in the normal or another explicitly chosen data root. In the Embedded creation form:
+Stop the isolated Mock Service, then start a non-Mock `pairroom service` or open Desktop without starting a competing owner. In a fresh Embedded Room, choose Runtime, Provider, model/effort, instructions, collaboration, permissions, and new/existing Bindings. Empty overrides inherit native configuration. A supported read-only CC Switch Profile reference is optional; the catalog is not a network model marketplace. See [Configuration](CONFIGURATION.md).
 
-| Choice | Meaning |
-|---|---|
-| Runtime | Native Claude Code, Codex, or Grok Build; independent for each slot |
-| Provider | Native CLI configuration, or a supported read-only CC Switch Profile reference |
-| Model / effort / additional instructions | Explicit overrides; unspecified values retain native inheritance |
-| Collaboration | Default Lead/Executor, or custom instructions; fixed at creation |
-| Permissions | Native tool policy, separate from collaboration responsibility |
-| Binding | New native session, or exact supported resumption of an existing one |
-
-The catalog reports unavailable Runtimes and unsupported Profiles; it is not a network model marketplace. Only supported CC Switch configurations can be materialized. See [Configuration](CONFIGURATION.md) for the pinned schema and unsupported authentication/proxy cases.
-
-**Both participants default to YOLO in new Embedded Rooms.** For the first real test, explicitly choose native read-only restrictions for both. Then ask Agent 1:
+**Both participants default to YOLO.** For the first real test, explicitly select supported native read-only restrictions, then send:
 
 ```text
 Explain how this repository is built and tested. Ask your peer to check the
@@ -82,110 +63,103 @@ important claims against the files, then give me a short corrected answer.
 Do not modify files. End when the answer is complete.
 ```
 
-Check that one Agent works at a time, a needed peer response appears after the native Turn boundary, and the result contains actual repository evidence. A relay requires the peer's exact displayed mention handle; an agent's unaddressed reply intentionally ends the relay. See [Concepts](CONCEPTS.md#agent-relay).
-
-Only after that smoke should you grant the permissions needed for implementation. Embedded permissions can change only at an idle boundary with no queued work or pending approvals. Runtime, Provider reference, model and saved collaboration remain creation-time selections; create another Room to change those choices.
+Check actual repository evidence, one active participant Turn at a time, and peer delivery after a reliable native Turn boundary. Relay needs the peer's exact displayed handle; an unaddressed Embedded answer remains visible but ends relay. Only then grant permissions needed for implementation. Effective permission changes require an idle Room with no queued work or pending approval; Runtime/Provider/model and saved collaboration remain creation-time selections.
 
 ## Keep Codex Desktop: a Native Room
 
-Native is experimental. It keeps the original Claude Code/Codex sessions and does not own their processes. Configure models, Providers, effort and permissions in those harnesses; the Room's selection metadata does not apply overrides. Real authenticated multi-round acceptance remains a release gate, distinct from Mock and synthetic hook tests.
+This path also applies to Claude Code and Grok Build. Native is experimental: it keeps the original sessions and does not own their processes. Provider, model, effort, and permissions remain native-controlled; displayed Room metadata does not apply overrides. Historical or synthetic evidence is not current authenticated multi-round acceptance.
 
-Start a non-Mock Service or use the one Desktop already owns. In the intended repository, install the relay hooks for the runtimes you will use. `relay install` runs from any terminal in that worktree (it does not need a native session); pass a comma-separated `--runtime` (`cc|claude`, `codex`, `grok`), or run it at a terminal without `--runtime` to pick from a multi-select. Codex and Claude Code each get a project hook; Grok Build reuses the Claude Code hook by default so you do not install two Stop commands, and native relay supports Claude Code, Codex and Grok Build:
+Start/reuse a non-Mock Service. Install the intended project's hooks and approve them in each harness, following [Native setup](NATIVE_RELAY.md#one-time-project-setup):
 
 ```bash
 pairroom relay install --runtime claude,codex
 ```
 
-Review and approve the exact project hooks in each native harness. Installation does not grant trust or bypass native approval. If using an isolated Service, follow the [CLI reference](CLI_REFERENCE.md#native-relay-commands) for its connection options rather than guessing defaults.
-
-Open the two original sessions in that repository. For skill-based creation, ensure the Service's default pair matches those runtimes. With the installed `pairroom-relay` skill loaded, ask one session:
+In the first Agent session, load the installed skill and invoke:
 
 ```text
 /pairroom-relay Log-upload plan review
 ```
 
-That session runs `pairroom relay bind --create`, which creates the Room, associates that session immediately from its harness session-ID environment variable, and prints the other session's exact join command. Paste the join command into the **other** session as a normal prompt so that session's agent runs `pairroom relay bind` as a tool call, which associates it immediately as well. Each bind must run as a tool call inside its native session so the subprocess inherits that variable; a detached terminal or Grok shell mode (`!`) does not inject it, and bind then fails closed with guidance and there is no fallback. Nothing is echoed; the approved Stop hooks then relay finished replies and re-confirm the bind-time session identity. Do not create another Room just to join the first.
+That session creates and binds one Room, then prints the peer's join command. Ask the **other Agent** to execute that command through its native tool environment. Bind reads the official session ID and is immediately ready; do not echo a nonce, wait for an initial Stop, or add a status check after every success. A detached terminal or Grok `!` shell is not the intended tool-call environment.
 
-Alternatively, create a Native Room in Management with the intended pair. **Skip the creation command above** and ask each recognized session to run `pairroom relay bind`, or use the exact Room/slot command returned by the CLI when there is ambiguity. After either setup path, check `pairroom relay status` from the bound session. Reuse the binding for later review rounds.
+Alternatively, create a Native Room with the intended pair in Management and bind to it; skip skill-based creation. Zero-flag bind works only when selection is unambiguous. Reuse the binding across review rounds. If creation succeeded but bind failed, use the printed recovery command rather than `--create` again.
 
-Only then send the review task below. Native hooks publish at response boundaries and wait for a bounded park window. Outside that window, a peer reply stays queued; in a wake-enabled Room the Service automatically wakes a deep-idle Codex session through the vendor queue surface, while other runtimes rely on the documented `relay wait` / human nudge path in the already-associated session. Inspect uncertain outcomes before explicit Retry. Do not start a duplicate session or assume that `handed_off` proves model acceptance. [Native protocol](PROTOCOL.md#native-host-protocol-v8) owns the limits and recovery semantics.
+A peer-directed Stop reply is published in full; `@user` publishes a human-facing result. Without either handle, the private reply body is **not** copied to the Room. Explicit `send`/`exchange` instead uses its command target; avoid a second peer-directed final reply after explicit publication unless duplication is intentional.
+
+Hooks receive during bounded park windows. Outside them, eligible Claude inbox and Codex queue capabilities can receive a body-free Service wake. Grok, unavailable capabilities, or restrictive inbound policies need the documented foreground `wait` / human fallback; harness-owned background completion is useful only where it is surfaced to the model. `handed_off` is stdout evidence, not model acceptance. Use [Native recovery](NATIVE_RELAY.md#recovery-and-review-surface) rather than starting a duplicate session or blindly resending.
 
 ## Review first, execute where it fits
 
-This is a task recipe, **not a new Room mode, phase machine or automatic approval gate**. Both participants can be high-capability reviewers. Use the actual peer handle provided by the Room/bootstrap; responsibilities such as Lead and Executor are not routing aliases.
+This is a task recipe, not a Room mode, phase machine, or automatic approval gate. Both participants may be high-capability reviewers. Use the actual current peer handle, not Lead/Executor as an addressing alias.
 
 ### Discuss one plan
 
-After setup, send this to either participant, followed by the concrete question, constraints and relevant file paths:
+Send the question, constraints, and relevant file paths with:
 
 ```text
 Review this problem with your peer; do not implement or modify files yet.
-Propose a solution, challenge each other's material assumptions with repository
-evidence and counterexamples, and revise only where the evidence warrants it.
-Work on the same question, not unrelated parallel tasks.
+Challenge material assumptions with repository evidence and counterexamples.
+Work on the same question, revise where evidence warrants it, and exchange
+new findings rather than the whole discussion or acknowledgements.
 
-Keep follow-ups focused on new findings, changed assumptions and necessary
-context; do not repeat the whole discussion or exchange acknowledgements.
-Use your peer's exact current handle only when its response can materially
-improve the result. When known material objections are resolved, or a product
-decision needs me, return the plan, evidence, remaining uncertainty and tests
-to me without another peer relay. Agreement is not proof. Wait for me to choose
-implementation; review completion alone is not authorization to edit.
+Use the peer's exact handle only when another response can materially improve
+the result. When known material objections are resolved or a decision needs me,
+return the plan, evidence, unresolved decisions and remaining uncertainty.
+Agreement is not proof. Wait for me to authorize implementation.
 ```
 
-Select supported read-only native permissions when that boundary matters; the text above is not a sandbox. A useful finish is “no known unresolved material objection after checking these cases,” not an unsupported claim of a flawless plan. Both agents should verify claims rather than defer to each other's model name.
+For a Native result that should appear in the Room, address `@user` rather than ending with a private unaddressed Stop reply. Supported native read-only permissions enforce the tool boundary; the recipe itself is not a sandbox. Prefer a bounded conclusion such as “no known unresolved material objection after these checks” over a claim of flawlessness.
 
 ### Keep primary-checkout sessions and a task worktree
 
-You can keep session entry points at the primary checkout while a project-owned helper manages `.worktrees/`. A session's start directory is not its authorization to edit. Before implementation or diff review, give both agents one exact task path and revision:
+Session entry and task workspace are different concerns. Before implementation or diff review, share the exact task checkout and revision:
 
 ```text
 Keep these sessions at the primary checkout. Follow this repository's existing
 agent-scaffold/worktree and PR/MR rules. The task workspace is
 C:/src/project/.worktrees/log-upload; verify that path and branch before work.
-Read, edit, test and inspect Git changes there, not in same-named files in the
-primary checkout. Use one writer at a time. Do not create another worktree for
-each review round or run a merge/push/cleanup helper without authorization.
+Read, edit, test and inspect Git changes there, not in the primary checkout.
+Use one writer at a time. Reuse this task worktree across review rounds.
+Do not merge, push or clean up through a helper without authorization.
 ```
 
-Replace the example path with the real, existing worktree. If creation is needed, let the project's normal owner create it first and share the result. PairRoom does not create an isolated worktree per participant or bypass host path restrictions. Confirm that a reviewer is looking at the writer's actual revision. Embedded's Turn rule is Room-scoped; Native has no enforced writer lock.
+Replace the example path with a real worktree created by the project's normal lifecycle owner. A shell `cd` does not change native permissions or reload host instructions. PairRoom follows the confirmed Native session binding across directory changes; it does not create/merge worktrees or grant path access. Confirm the reviewer sees the writer's actual revision. [Optional Git review versions](NATIVE_RELAY.md#recovery-and-review-surface) help identify evidence but do not approve execution.
 
 ### Assign execution only when ready
 
-In Native mode, give the chosen original session a direct instruction:
+In Native, instruct the chosen original session directly:
 
 ```text
 Implement the reviewed plan in the agreed task workspace. Use your native tools,
-skills and subagents as appropriate; do not add a separate orchestration layer.
-Follow the project's tests and PR/MR policy. Ask the peer again only for a
-material new uncertainty or when I request another review; otherwise finish
-without a peer relay. Do not merge or delete workspaces without authorization.
+skills and subagents. Follow the project's tests and PR/MR policy.
+Ask the peer only for a material new uncertainty or a requested review;
+otherwise finish without another peer relay. Do not merge or delete workspaces
+without authorization.
 ```
 
-The agent may execute without more pair turns; the other session can remain available for a later review. In Embedded, send the same instruction to the chosen participant in the Room. Before operating that same Embedded session from an external application, end/drain PairRoom's ownership and verify that runtime's supported resumption path. There is no automatic host-mode conversion or live attachment; do not run two owners of the same session.
+In Embedded, send the equivalent instruction to the chosen Room participant. Do not operate that same Embedded session from another application until ownership is drained and its supported resumption path is verified. PairRoom offers neither automatic host-mode conversion nor live attachment to a second owner.
 
-A later review can simply name the diff/revision, acceptance criteria and unresolved risks. Reuse the existing pair instead of rebuilding its context or introducing a mandatory review ceremony. Newer user instructions take precedence over the initial recipe.
+For a later review, name the diff/revision, acceptance criteria, and unresolved risks. Reuse the pair rather than rebuilding context or adding mandatory review ceremonies. Newer user instructions take precedence over the recipe.
 
 ## Native sessions and identity
 
-In Embedded, a new Binding materializes its native session as execution starts. An existing Binding must resume the exact selected session; it is not permission to silently substitute a new one. PairRoom does not import the vendor transcript from before the Binding. Native uses the bind-time environment association described above instead of spawning an adapter.
+Embedded new Bindings materialize when execution starts; existing Bindings must resume exactly. Native binds associate from the tool-call environment. Neither path imports pre-binding vendor history.
 
-Room names and native session titles help you find the same task, but IDs remain authoritative. Rename through the Room context menu or explicit control; it waits for a safe boundary and does not interrupt a Turn. Embedded title synchronization can be pending, unsupported or failed without changing the underlying session. See the [API naming contract](API_REFERENCE.md#room-names-and-native-session-correspondence).
+Rename changes Room display metadata, not its ID or Binding. Embedded title synchronization may be pending, unsupported, or failed without changing the session. Native Room rename does not reconfigure the original harness. [API naming](API_REFERENCE.md#room-names-and-native-session-correspondence) owns the details.
+
+The Room context menu separates **Close Room tab** from confirmed **Archive Room**. Closing a view does not stop, archive, or delete work. Native archive does not interrupt user-owned sessions. See [Operations](OPERATIONS.md#project-archive-delete).
 
 ## Desktop, daemon, and exit
 
-Opening Desktop **never installs a daemon**. It reuses an already-installed daemon, or owns an embedded Service when none is installed. An installed but unreachable daemon is an error to repair, not permission to create a second Service for the same data root.
+Desktop never installs a daemon on launch. It reuses an installed daemon or owns an embedded Service when none exists; an installed but unreachable daemon is an error, not permission to create a competing Service. A desktop-owned Service can host both Embedded and Native Rooms.
 
-**Settings → Desktop → Launch at login** is an explicit OS registration choice, independent of daemon installation. Close hides the window to the tray. Quit drains an owned embedded Service, but does not stop an external daemon. Closing a Room tab is not a command to stop its native work. Use explicit Room/participant lifecycle controls; [Operations](OPERATIONS.md) owns the full lifecycle, archive and shutdown rules.
-
-Install a persistent background Service only as a separate intentional action with `pairroom daemon install`. It is not a prerequisite for trying the UI.
+**Settings → Desktop → Launch at login** is separate OS registration. Close hides the window to the tray. Quit drains an owned embedded Service but does not stop an external daemon or user-owned Native harnesses. Install a persistent daemon only as a separate intentional action with `pairroom daemon install`. [Operations](OPERATIONS.md#desktop-lifecycle) owns lifecycle details.
 
 ## Source development is a separate path
 
-In a source checkout, install the dependencies from [Contributing](../CONTRIBUTING.md), then use `make dev`. This helper stops an installed daemon and runs the current-tree Service; do not use it as the next step after installing only a release binary.
+Install the dependencies in [Contributing](../CONTRIBUTING.md), then use `make dev` from a source checkout. It stops an installed daemon and runs the current-tree Service; it is not a step after installing only a release binary.
 
-For rebuilding/updating an existing desktop installation from source, use `make desktop-update` after quitting Desktop. It preserves data and login registration and does not install or reconfigure a daemon. Requirements and custom paths are in [Desktop development](../desktop/README.md#update-the-installed-desktop-from-source).
+For a local source-based desktop replacement, quit Desktop and use `make desktop-update`. It preserves user data and login registration without installing/reconfiguring a daemon. See [Desktop development](../desktop/README.md#update-the-installed-desktop-from-source).
 
-Before important work, read [Security](../SECURITY.md). For failures, start with [Troubleshooting](TROUBLESHOOTING.md); before changing versions, read [Upgrading](UPGRADING.md).
-
-Native installation prerequisites and the full create/join/recovery sequence are collected in [Native setup and usage](NATIVE_RELAY.md) and in the app’s Native setup guide.
+Read [Security](../SECURITY.md) before important work, [Troubleshooting](TROUBLESHOOTING.md) for failures, and [Upgrading](UPGRADING.md) before changing versions.

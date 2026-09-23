@@ -1,70 +1,78 @@
 # Configuration
 
-PairRoom configuration describes the local listener, Runtime policy, Runtime command templates, two default Agent slots, and optional read-only CC Switch database location. A complete runnable sample is [`examples/pairroom.example.json`](../examples/pairroom.example.json). The final interpretation of command-line flags is always `pairroom <command> --help`.
+PairRoom configuration describes listeners, runtime policy, command templates, two default Agent selections, and an optional read-only CC Switch database. A runnable sample is [`examples/pairroom.example.json`](../examples/pairroom.example.json). The matching binary's `pairroom <command> --help` is authoritative for flags.
+
+## Host-mode scope
+
+Per-process Provider/model/effort/permission projection in this page applies to **Embedded** adapters. **Native** stores selections for identity/display but does not resolve Providers or apply overrides to already-running harnesses. Configure their effective models, credentials, and permissions in the original sessions; see [Native setup](NATIVE_RELAY.md).
+
+Shared Service settings, saved pair templates, and creation-time collaboration are not permission to reconfigure a Native process. A desktop-owned embedded Service can serve either Room host mode.
 
 ## Load and override
 
-Startup applies built-in defaults first, then the JSON configuration, then explicit CLI flags for the current command. Settings that can be changed inside a Room apply only to that Room and must not be treated as a write-back of the global configuration file.
-
-The JSON decoder rejects unknown fields. Spelling mistakes are therefore not silently ignored, but you must read [Upgrading](UPGRADING.md) before a breaking release.
+Startup applies built-in defaults, then JSON configuration, then explicit flags for that command. In-Room changes affect only that Room, not the global file. The strict decoder rejects unknown/duplicate fields and malformed/null policy values. Read [Upgrading](UPGRADING.md) before breaking changes.
 
 ## Collaboration policy
 
-Collaboration routing has no configurable mode or hop limit. PairRoom always enforces one native Turn owner and one Room FIFO. An Agent response relays only when it contains the other participant's exact current runtime-derived handle; without that handle the relay ends. See [Core concepts](CONCEPTS.md) for duplicate-runtime suffixes and steer fallback semantics.
+Routing has no configurable hop limit or workflow mode. Embedded enforces one native Turn owner and one Room FIFO. Native uses per-slot FIFO with advisory ownership and user-owned execution. Automatic Agent relay requires the exact current peer handle; Native explicit send instead uses its command target. See [Concepts](CONCEPTS.md) and [Protocol](PROTOCOL.md).
 
-Collaboration **instructions** have only two creation-time modes: `default` Lead/Executor or `custom` natural-language rules (non-blank, valid UTF-8, no NUL, at most 16 KiB after trimming). This is separate from routing. The Management create form and Room creation API persist the choice; `pairroom serve --collaboration custom --collaboration-instructions "..."` supplies it for a new standalone Room. Reopening restores the stored choice; an explicitly conflicting choice fails. Mode and instructions cannot be edited later.
+Collaboration **instructions** have two creation-time choices: `default` Lead/Executor or `custom` natural-language rules (non-blank valid UTF-8, no NUL, at most 16 KiB after trimming). The Management form/API persists that choice. `pairroom serve --collaboration custom --collaboration-instructions "..."` supplies it for a new standalone Room. Reopening restores the stored instruction version; conflicting explicit choices fail. Saved mode/instructions cannot be edited in place, but newer task instructions can redirect current work.
 
-`stall_warning_seconds` only controls the “no Runtime event for a long time” reminder; silence alone does not mean the Turn has terminated.
+`stall_warning_seconds` is an Embedded no-recent-runtime-event reminder, not evidence of a terminated Turn or a Native presence detector.
 
 ## Agent slots and runtimes
 
-The top-level configuration keys `claude` and `codex` remain Agent 1 and Agent 2 default-template names for compatibility with native configuration; they are not durable ActorIDs and do not select a vendor. Durable Room slots are `slot1` and `slot2`. Each selection has a `runtime` of `claude`, `codex`, or `grok`; both slots may select the same runtime.
+Top-level `claude` and `codex` keys name the Agent 1/2 default templates; they are not durable ActorIDs and do not select vendors. Durable slots are `slot1`/`slot2`. Each selection independently uses Runtime `claude`, `codex`, or `grok`, including duplicates.
 
-Each slot supplies a default `AgentSelection`: `runtime`, a structured `provider`, optional `model`, `effort`, `instructions`, Runtime-specific permission/approval/sandbox values. A new Room snapshots both selections; changing Service configuration later does not rewrite it.
+Each default `AgentSelection` contains `runtime`, structured `provider`, optional `model`, `effort`, `instructions`, and applicable native permission/approval/sandbox values. Creation snapshots both; changing Service defaults does not rewrite an existing Room.
 
-`provider: {"source":"native"}` delegates Provider and credentials to the selected CLI's user/global configuration. Empty model, effort, and per-Agent instructions add no override. New Service defaults use Claude `permission_mode: yolo` and Codex `approval_policy: yolo` with `sandbox: danger-full-access`; Grok YOLO projects bypass and sandbox `off`. Both default-mode participants use these permissions, regardless of responsibility. Explicit narrower settings remain respected; explicitly empty permission/approval/sandbox fields inherit native configuration. When restoring a configured policy, an explicit `yolo` with no sandbox completes the full-access sandbox override; clear both fields to request native inheritance.
+For Embedded, `provider: {"source":"native"}` delegates credentials/configuration to the selected CLI. Empty model/effort/instructions add no override. New defaults use Claude `permission_mode: yolo` and Codex `approval_policy: yolo` with `sandbox: danger-full-access`; Grok YOLO projects bypass with sandbox `off`. Both participants use these defaults regardless of responsibility. Explicit narrower values remain respected; empty policy fields request native inheritance. Restoring configured `yolo` with no sandbox completes full access; clear both fields to inherit native settings.
 
-Permission controls select `configured`, `read-only`, or `yolo` at an idle boundary; the configured creation-time values themselves stay immutable.
+Effective Permission profiles (`configured`, `read-only`, `yolo`) can change only in an idle **Embedded Room** with no queued work or pending approval. Stored creation-time values remain immutable. Native Room controls do not change effective permissions.
 
-Commands are not part of a Room selection. `runtimes.claude`, `runtimes.codex`, and `runtimes.grok` each own one Service-level `command`/`args` template, preventing a Room request from selecting an executable.
+Commands are not Room selections. Service templates `runtimes.claude`, `runtimes.codex`, and `runtimes.grok` own executable `command`/`args`, preventing a Room request from choosing an executable. Arguments must not preselect model, effort, approval, permission, sandbox, or bypass values that belong to selection/policy projection.
 
-Runtime policy fields are validated per Runtime: Claude Code accepts `permission_mode` (`default`, `manual`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, or `yolo`); Codex accepts `approval_policy` (`untrusted`, `unless-trusted`, `unlessTrusted`, `on-failure`, `on-request`, `never`, or `yolo`) and `sandbox` (`read-only`, `workspace-write`, or `danger-full-access`); Grok Build accepts `permission_mode` (`default`, `ask`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, `always-approve`, or `yolo`) and `sandbox` (`read-only`, `workspace`, `strict`, or `off`). `yolo` is the Room-level bypass alias: Claude Code projects `bypassPermissions` plus `--dangerously-skip-permissions`, Codex projects `never` and full-access sandbox for default YOLO, and Grok Build projects `--always-approve` with sandbox `off`. Empty values inherit native configuration. Service runtime `args` templates must not preselect model, effort, permission, approval, sandbox, or bypass flags, because those values belong to the immutable Room selection and independent native permission projection.
+| Runtime | Accepted policy values |
+|---|---|
+| Claude Code | `permission_mode`: `default`, `manual`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, `yolo` |
+| Codex | `approval_policy`: `untrusted`, `unless-trusted`, `unlessTrusted`, `on-failure`, `on-request`, `never`, `yolo`; `sandbox`: `read-only`, `workspace-write`, `danger-full-access` |
+| Grok Build | `permission_mode`: `default`, `ask`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, `always-approve`, `yolo`; `sandbox`: `read-only`, `workspace`, `strict`, `off` |
 
-Recommendations:
+`yolo` projects Claude bypass plus `--dangerously-skip-permissions`, Codex `never` plus full-access sandbox, or Grok `--always-approve` plus sandbox `off`. These are PairRoom's supported mappings, not certification of every future CLI release. Keep secrets out of argv/logs/messages/repositories; use supported read-only/plan restrictions for untrusted review rather than relying on Lead/Executor labels. After changing executable/Provider, check deterministic behavior and separately test an authorized real read-only Turn.
 
-- Keep credentials in the vendor CLI, environment variables, or a controlled Provider profile;
-- Do not put API keys in command arguments, logs, Room messages, or the repository;
-- Use explicit read-only / plan permissions for untrusted review work; Lead / Executor responsibilities alone do not restrict tools;
-- After changing an executable or Provider, run Mock first, then a real read-only Turn;
-- Keep Grok Build prompt and instruction text out of process argv. PairRoom uses the long-lived ACP stdio protocol, projects new-session collaboration rules through `_meta.rules`, and injects a bootstrap once when exactly loading an existing session.
+Grok prompts/instructions travel over long-lived ACP, never argv. New sessions receive `_meta.rules`; exact resumption receives bootstrap once in its first PairRoom prompt without replacing the native system prompt.
 
 ## Agent pair profiles
 
-An **Agent pair profile** saves a named pair of Agent selections across Projects in the same Management Service. In **Settings → Agent pair profiles**, create, edit/rename, delete, or set/clear the default. Profile editing also works before registering a Project. In **Create Room**, select a profile or use **Service defaults (no profile)**; **Save or update this pair** saves the current controls as a new profile or explicitly updates the selected one. The shared browser and Desktop Management UI use the same storage and API.
+A named pair is reusable across Projects in one Service. In **Settings → Agent pair profiles**, create/edit/rename/delete or set/clear the default, even before registering a Project. Create Room can load a profile or **Service defaults (no profile)**; **Save or update this pair** persists the current controls explicitly. Browser and Desktop share storage/API.
 
-A profile includes each slot's Runtime/harness, Provider reference, model, effort, additional instructions, and applicable permission/approval/sandbox overrides. Both slots may use the same Runtime. Empty overrides retain native inheritance; no resolved global model, credential, command, or Runtime arguments are captured. Do not put secrets in names or instructions. Profiles do not save Projects, paths, Room names, session IDs/Bindings, or collaboration modes. A pair profile is distinct from a CC Switch Provider Profile and from a Room participant's Permission profile.
+Profiles contain each slot's Runtime, Provider reference, model, effort, additional instructions, and applicable policy values. They contain no resolved native credentials, command/args, Project/path, Room name, session/Binding, or collaboration mode. Do not place secrets in names/instructions. A pair profile is distinct from a CC Switch Provider Profile and an effective Permission profile.
 
-New Room forms fill the saved default automatically. Selecting a profile only fills the controls: changes are temporary unless explicitly saved. Room creation copies the final pair into the immutable Room selections and revalidates Provider references. Editing, renaming, or deleting a profile never changes existing Rooms. Deleting the default clears it rather than arbitrarily choosing another profile; with no default, new Rooms use Service defaults. A missing Provider stays visible and blocks creation rather than silently falling back; saved profiles remain editable while a Provider is unavailable.
+Selection fills controls without saving temporary edits. Room creation copies the final pair; Embedded additionally revalidates/materializes supported Provider references. Editing/deleting a profile never changes existing Rooms or Native processes. Deleting the default clears it rather than selecting another arbitrary profile. Missing/unsupported Providers remain visible; Embedded creation fails rather than falling back, while saved templates remain repairable.
 
-Profiles are Service user configuration in `<service data root>/agent-pair-profiles.json`, not fields in the startup JSON file and not browser local storage. The file survives restart and Registry-index rebuild. Different Service data roots have independent profiles; standalone `pairroom serve` does not read them. Up to 100 names are accepted, unique case-insensitively, non-blank, at most 160 UTF-8 bytes and without control characters. Use the [Management API](API_REFERENCE.md#agent-pair-profiles) for programmatic management.
+Profiles live in `<service data root>/agent-pair-profiles.json`, separate from startup JSON, browser storage, and the rebuildable Registry. Different roots have independent profiles; standalone `pairroom serve` does not read them. Names are non-blank, unique case-insensitively, at most 160 UTF-8 bytes without control characters; up to 100 profiles are supported. Use [Management API](API_REFERENCE.md#agent-pair-profiles) for automation.
 
 ## CC Switch Provider references
 
-PairRoom supports CC Switch v3.20.1/schema 18 through the CGo-free `modernc.org/sqlite` driver. It opens `~/.cc-switch/cc-switch.db` in SQLite read-only/query-only mode; `cc_switch.database` may override it only with an absolute path. PairRoom does not create or update this database, change `is_current`, manage Providers, or write live CLI configuration.
+The implemented Embedded integration supports CC Switch v3.20.1/schema 18 through CGo-free `modernc.org/sqlite`. It opens `~/.cc-switch/cc-switch.db` read-only/query-only; `cc_switch.database` overrides it with an absolute path. PairRoom never creates/updates that database, switches `is_current`, manages Providers, or writes live CLI configuration.
 
-A CC Switch selection has the stable form `{"source":"cc-switch","app_type":"codex","profile_id":"…"}`. PairRoom re-reads the composite `(app_type, profile_id)` at creation validation and every Runtime activation. Supported profiles are directly materializable Claude Anthropic-compatible API-key profiles, Codex API-key custom Providers using the Responses wire API, and Grok Build direct custom-model profiles. Managed OAuth, proxy/protocol conversion, failover, unsupported applications, missing credentials, and malformed profiles remain visible in the Agent catalog but are disabled with a reason. A missing/deleted Profile, locked/unreadable database, or schema mismatch fails closed without fallback to cached or current Provider state.
+A reference has the form `{"source":"cc-switch","app_type":"codex","profile_id":"…"}`. Embedded creation/activation re-reads `(app_type, profile_id)`. Supported cases are directly materializable Claude Anthropic-compatible API-key profiles, Codex API-key custom Providers using Responses, and Grok direct custom-model profiles. Managed OAuth, proxy/protocol conversion, failover, unsupported applications, missing credentials, and malformed data remain disabled with reasons. A deleted/missing Profile, database/schema failure, or unreadable configuration fails closed, never falling back to cached/current credentials.
 
-Profile secrets exist only in the target child-process environment. Safe non-secret CLI overrides may select a Provider/model. For Grok Build, PairRoom creates a permission-restricted, secret-free Runtime overlay and points only the target process at it with `GROK_CONFIG_PATH`; the API key remains in that process environment. Secrets never enter argv, temporary configuration, Room data, Event Logs, the Registry checkpoint, RuntimeInfo, HTTP responses, browser state, diagnostics, or logs. The Profile display name is not a secret: a bounded, control-character-free, credential-redacted copy is projected as `provider_name` in RuntimeInfo, snapshots, the Event Log, exports, and UI tooltips, so a browser can name a Provider without parsing its internal reference form. A Profile whose display name embeds its own credential fails closed instead of materializing. Model suggestions come only from the selected Profile and Service defaults; PairRoom performs no network model discovery.
+Secrets exist only in the selected child environment. Safe non-secret flags may select Provider/model. Grok uses a permission-restricted secret-free runtime overlay selected by `GROK_CONFIG_PATH`; the key stays in the environment. Secrets never enter argv, temporary configuration, Room/Event Log, Registry, RuntimeInfo, API, browser, diagnostics, or logs.
 
-The former PairRoom `providers`, `cc_connect`, and string-valued Agent `provider` fields are removed. Configuration loading returns a migration error with a link to [Upgrading](UPGRADING.md).
+A bounded control-character-free, credential-redacted `provider_name` may appear in projections/history to identify the Profile without exposing its internal reference. A name containing its own credential fails materialization. Suggestions come from that Profile and Service defaults; no network model discovery is performed. Native host mode does not apply these materialization steps to an existing session.
+
+Removed `providers`, `cc_connect`, and string-valued Agent `provider` fields produce an upgrade error; see [Upgrading](UPGRADING.md).
 
 ## Service runtime policy
 
-Service-level fields control the number of concurrently active Rooms, idle reclaim, reconcile, shutdown timeout, listen address, and token. They affect process lifecycle and do not change facts already committed to the Event Log. `--runtime-limit` defaults to 8, with a legal range of 1–128. Management Settings can adjust that cap while running (raising it starts queued items immediately; lowering it does not interrupt a running Turn). Idle timeout is still set by the startup flag.
+Service policy controls Embedded capacity, idle reclaim, reconciliation, shutdown, listen address, and token without changing committed Room facts. `--runtime-limit` defaults to 8 and accepts 1–128. Management can raise it to admit queued work or lower it without preempting running Turns. Idle timeout remains a startup flag.
+
+Native relay Rooms do not consume this adapter-capacity budget or become capacity-eviction victims. Their wake toggle is a per-Room Management operation at an idle boundary, not a Provider override or a relay-credential capability. Exact wake limits belong in [Protocol](PROTOCOL.md#automatic-idle-peer-wake).
 
 ## Source field inventory
 
-The following JSON names are extracted from struct tags in `internal/config/`. This is a gap-finding list, not a substitute for field semantics and samples.
+These JSON names come from configuration/model struct tags. The list identifies gaps, not field semantics.
 
 <!-- generated:config-fields -->
 - `app_type`
@@ -95,9 +103,4 @@ The following JSON names are extracted from struct tags in `internal/config/`. T
 
 ## Change checklist
 
-When configuration fields change, update all of:
-
-1. `examples/pairroom.example.json`;
-2. the field semantics in this document;
-3. `docs/UPGRADING.md` (if the change is breaking);
-4. configuration parsing tests.
+Field changes update the sample, semantics, strict parser tests, and [Upgrading](UPGRADING.md) when breaking. Keep the inventory aligned with source. Prose-only host-mode corrections do not change JSON fields or supported formats.

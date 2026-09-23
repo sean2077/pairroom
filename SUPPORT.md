@@ -2,7 +2,7 @@
 
 [Getting started](docs/GETTING_STARTED.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Security](SECURITY.md) · [Operations](docs/OPERATIONS.md)
 
-PairRoom is a local-first open-source project with best-effort support through its GitHub repository. Identify whether a problem belongs to the environment, Service/daemon, Room data, browser, Provider configuration, or native Runtime before reporting it.
+PairRoom is a local-first open-source project with best-effort support through its repository. Identify environment, Service/daemon, **Room host mode**, data, browser, Provider, and native Runtime before reporting. A desktop-owned embedded Service is not the same thing as an Embedded Room.
 
 ## Collect a minimal, safe report
 
@@ -12,9 +12,9 @@ pairroom doctor --repo /absolute/path/to/repository --json
 pairroom daemon status
 ```
 
-For daemon problems, include relevant output from `pairroom daemon logs -n 200`. For a foreground Service, retain startup/error output but remove complete Management/Room URLs and tokens. Management's Service diagnostics help with Project registration, capacity, and Registry problems; they do not replace Room diagnostics.
+For daemon problems, retain relevant `pairroom daemon logs -n 200` output. Remove complete startup URLs/tokens from foreground logs. Management **Settings → Diagnostics** owns environment checks and the separately consented live test; it does not resume an existing Room session. For an active Native Room, use its diagnostic action or `pairroom relay doctor` inside the intended session instead of assuming a fresh adapter test checks that binding.
 
-For a specific Room:
+For Room integrity:
 
 ```bash
 pairroom verify --data-dir /absolute/path/to/room --json
@@ -23,57 +23,50 @@ pairroom diagnostics \
   --output /absolute/path/outside-the-room/pairroom-diagnostics.tar.gz
 ```
 
-Diagnostics are designed to omit transcript bodies and attachment bytes, but can still contain paths, versions, structured event headers, errors, and environment details. Inspect every archive before sharing it. Do not attach the full Event Log as a default troubleshooting step.
+Room diagnostics omit transcript bodies and attachment bytes but may retain paths, versions, structured headers, errors, and environment details. Inspect every archive before sharing. Ordinary CLI JSON is not the same as Management's allowlisted safe report; do not attach a full Event Log by default.
 
-A useful report states the OS/architecture, actual binary path and install/launch method, PairRoom version/commit, selected native CLI versions, selected Runtime/Provider type, and the most recent upgrade or Binding change. Add exact steps, expected/actual result, relevant Room/Message/Turn IDs and state, and whether it reproduces in a non-sensitive repository with Mock. UI reports also need browser/viewport details and a safe screenshot or console error.
+A report should identify OS/architecture, binary path/install/launch method, PairRoom version/commit, host mode, selected CLI versions and Provider type, recent upgrade/Binding change, exact reproduction, expected/actual behavior, and relevant IDs/state. UI reports also need browser/viewport and a safe screenshot/console error. Mention whether Mock reproduces it in a disposable repository.
 
-Do not publicly submit tokens, cookies, CSRF values, complete startup URLs, credentials, private prompts/replies, source/diffs, real approval payloads, or sensitive images. Use [Security reporting](SECURITY.md#13-vulnerability-reports) for vulnerabilities rather than a public exploit report.
+Never publish tokens, cookies, CSRF/bootstrap URLs, credentials, inbox capabilities, private prompts/replies, source/diffs, approval payloads, or sensitive images. Use [vulnerability reporting](SECURITY.md#13-vulnerability-reports), not a public exploit report.
 
 ## Separate control-plane and vendor evidence
 
-Use a disposable repository and an isolated data root for a Mock reproduction:
+Use an isolated data root and disposable repository:
 
 ```bash
 pairroom service --mock --data-root /absolute/path/to/isolated-demo-data
 ```
 
-Mock helps isolate PairRoom scheduling, persistence, and UI behavior from a vendor CLI or Provider failure. It does not prove authenticated native sessions or model quality work. A successful build, unit test, browser fixture, real-browser Mock Service test, and real vendor E2E are different evidence layers; report which one you actually ran.
+Mock isolates scheduling, persistence, and UI from vendor failures; it does not prove authentication, model quality, or Native session acceptance. Builds, unit tests, in-page fixtures, real-browser Mock HTTP/SSE, synthetic hooks, and authenticated vendor E2E are separate evidence layers. State what actually ran, on which revision/environment.
 
-For a native failure, first try the selected CLI independently as the same user in the same repository. Include sanitized executable/configuration and exact native resume/permission/transport errors. Do not interpret a vendor outage as Store corruption, or a quiet native Turn as a confirmed process exit.
+For native failures, check the selected CLI independently as the same OS user. Preserve sanitized startup/resume/policy/transport errors. An outage is not Store corruption, and quiet output is not a terminal boundary. Paid/live tests require consent and may still invoke native global hooks/MCP.
 
 ## Compatibility policy
 
-Adapters track the documented native interfaces of Claude Code, Codex, and Grok Build. This is not certification of every release, interactive feature, or third-party Provider combination. There is no permanent support matrix for obsolete CLIs. After updating a native CLI, run `doctor` and a real read-only single-Agent smoke followed by an explicitly addressed peer Turn on a non-critical repository.
+Embedded adapters track supported documented Claude Code, Codex, and Grok interfaces, not every version, interactive feature, or Provider combination. After updating a CLI, check the environment and separately exercise an authorized real read-only task before peer collaboration. For Native, verify the installed/approved hook, exact binding, and addressed exchange in the original sessions rather than spawning an Embedded replacement.
 
-[Configuration](docs/CONFIGURATION.md) owns native inheritance, supported CC Switch schema/Profile mappings, immutable selections, and failure behavior. The catalog's unsupported reason is meaningful; PairRoom must not silently substitute another Provider or permission policy. [Upgrading](docs/UPGRADING.md) owns Store/provisioning compatibility and rollback. There is no separate compatibility page or product roadmap that overrides those contracts.
+[Configuration](docs/CONFIGURATION.md) owns Embedded native inheritance, supported CC Switch mappings, immutable selections, and failure behavior. Native configuration is display-only and never applies Provider overrides to the original process. [Upgrading](docs/UPGRADING.md) owns format/rollback support. There is no separate roadmap or compatibility promise overriding those contracts.
 
 ## Current support boundary
 
-Supported design: one local Service owner per data root, multiple canonical Git Projects and durable Rooms, bounded active Room Runtimes, and one human plus **two participant slots per Room**. Either slot may select Claude Code, Codex, or Grok Build, including the same Runtime twice. Project unregistration and archived Room deletion have explicit preconditions and do not imply deleting the user's repository.
+The design supports one local Service owner per data root, multiple canonical Git Projects/Rooms, and one human plus **two participant slots per Room**. Either slot may use any supported Runtime, including duplicates. Project unregister and Room deletion have explicit preconditions and never imply deleting the repository.
 
-Outside that contract: multi-user hosting/RBAC, cloud sync, direct LAN/public listeners or built-in TLS, remote workers, more than two slots in one Room, arbitrary Runtime reconfiguration inside an existing Room, container-grade isolation from responsibility labels, and a stable plugin API for arbitrary vendors.
+Embedded limits active adapter-owning Room Runtimes and serializes participant Turns within each Room, not across external writers. Native is exempt from that adapter-capacity budget, uses per-slot FIFO/advisory ownership, and cannot start or interrupt the original sessions. Neither is a repository lock or container-grade sandbox.
 
-The two participants' native Turns are serialized within a Room, not across all external writers. Creation-time rules are instructions, not enforced workflow stages. No automatic relay-count/cost ceiling or guaranteed unattended completion is provided. See [Why PairRoom](docs/WHY_PAIRROOM.md) before choosing it for a different problem.
+Outside scope are multi-user hosting/RBAC, cloud sync, direct LAN/public listeners or built-in TLS, remote workers, more than two slots, arbitrary in-place Room reconfiguration, and a stable arbitrary-vendor plugin API. Instructions are not enforced workflow phases. There is no automatic relay-count/cost ceiling or guaranteed unattended completion. See [Why PairRoom](docs/WHY_PAIRROOM.md).
 
 ## Feature requests
 
-Describe a concrete workflow, why the existing Room/collaboration/permission model is insufficient, and the smallest verifiable acceptance criteria. Explain state ownership, failure recovery, migration, security/privacy, and multi-Room impact. Say how the proposal preserves the native harness rather than replacing its capabilities.
-
-Read [Why PairRoom](docs/WHY_PAIRROOM.md), [Alternatives](docs/ALTERNATIVES.md), and [Architecture](docs/ARCHITECTURE.md) first. A proposal in an Issue or PR is not a current feature contract. Contributions should follow [Contributing](CONTRIBUTING.md).
+Describe the concrete workflow, why existing behavior is insufficient, the smallest verifiable acceptance criteria, state ownership, recovery, security/privacy, and multi-Room impact. Prefer preserving native capabilities over replacing them. Consult [Alternatives](docs/ALTERNATIVES.md) and [Architecture](docs/ARCHITECTURE.md); an Issue/PR proposal is not a shipped contract. Follow [Contributing](CONTRIBUTING.md).
 
 ## Native host verification boundary
 
-For installation prerequisites and troubleshooting, see [Native setup and usage](docs/NATIVE_RELAY.md), also available in the app.
+[Native setup](docs/NATIVE_RELAY.md) owns installation and operator recovery. Native remains experimental. Implemented boundaries include bind-time official session association, approved project hooks, durable relay, explicit send/wait/exchange, stdout acknowledgement, and bounded park. Optional Claude/Codex fixed-nudge wake depends on valid capability/inbound policy. Grok has no Service-initiated wake integration; harness-owned background completion is a separate path.
 
-Native host mode is experimental. The implementation supports the documented project Stop-hook channels for Claude Code, Codex and Grok Build, bind-time environment session association, durable relay, explicit send/wait/exchange, stdout acknowledgement and bounded park. It does not yet have authenticated Codex Desktop ↔ Claude Code multi-round acceptance evidence from this development environment. Zero-hook binding, live attach, concurrent resume injection and scheduled idle self-wake are not supported.
+Record actual CLI/Desktop versions, project trust, and approved hook definitions. Installation alone does not grant approval. Live attach, concurrent resume injection, zero-hook bind, and model-driven idle self-wake are not supported. PairRoom does not replace native permission controls.
 
-Official channel references: [Codex hooks](https://developers.openai.com/codex/hooks) and [Claude Code hooks](https://code.claude.com/docs/en/hooks). These establish the documented payload/control contract, not compatibility with an arbitrary installed version. Record actual CLI/Desktop versions, project trust and exact approved hook definitions when validating. Codex requires reviewing changed hook definitions in `/hooks`; installation alone does not grant approval.
+`make check`, `make smoke`, and `make browser-check` cover different deterministic/native-fixture/Mock layers, not authenticated model acceptance. Real multi-round testing must separately record bind/send/receive, timeout/interruption, appropriate continuation limits, resume/fork/child identity, and actual usage when available. Claude/Codex allow eight message-bearing hook blocks; Grok reserves its last gate and uses seven readiness/recovery hints. A passing historical experiment is not certification of the current release.
 
-`make check` covers deterministic Go state transitions, race checks and real HTTP/CLI synthetic-hook integration; `make smoke` covers embedded Mock regression. `make browser-check` additionally covers native Room creation, bindings, FIFO, a killed collector, explicit Retry, bilingual/responsive rendering and restart through real HTTP/SSE using synthetic hook inputs. None is vendor E2E. Before release, record real bidirectional multi-round park/timeout/interruption, the eight-block cap, StopFailure coverage and measured re-arm cost in the design's Phase 0 findings. PairRoom cannot certify model acceptance from CLI stdout.
+For relay uncertainty, start with read-only `relay doctor` / `history`; `status` or `reconcile` can reconcile a pending publication by its original sequence. Do not automatically retry unknown delivery. A late original receipt may settle it while no explicit Retry is pending. `handed_off` and wake submission never prove model acceptance. Do not share private credentials, endpoint files, pending bodies, or unreviewed logs.
 
-For relay trouble, inspect `pairroom relay status`, the Room's binding generation and last activity. Unknown pending publication is reconciled with its original sequence; unknown delivery is not automatically retried. Never share `credentials`, `relay-endpoint.json`, full pending reply bodies or unreviewed Event Logs in a public issue.
-
-Grok hook feedback carries a readiness-only prompt for foreground collection;
-clipped outgoing replies require explicit full-text publication. See
-[Grok Native](docs/CLI_REFERENCE.md#grok-build-native). Authenticated Grok
-model/tool acceptance is likewise unverified here.
+Grok clipped Stop text requires explicit complete publication; readiness feedback does not claim inbox text. See [Grok Native](docs/CLI_REFERENCE.md#grok-build-native). Current authenticated Claude/Codex/Grok acceptance and billed-cost comparison require owner-authorized runs; no such new run is asserted by this documentation refresh.

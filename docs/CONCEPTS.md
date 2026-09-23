@@ -1,77 +1,87 @@
 # Core concepts
 
-PairRoom coordinates native coding sessions. It is not a model provider, a replacement tool loop, or an enforced workflow compiler. This page defines the user-facing behavior; [Protocol](PROTOCOL.md) owns exact model-facing routing rules, and [Architecture](ARCHITECTURE.md) owns implementation invariants. Canonical terminology is in [Project language](../CONTEXT.md).
+PairRoom coordinates two coding sessions; it is not a model provider, replacement tool loop, or enforced workflow compiler. [Protocol](PROTOCOL.md) owns routing and transport contracts, [Architecture](ARCHITECTURE.md) owns implementation boundaries, and [Project language](../CONTEXT.md) defines canonical terms.
 
 ## Project, Room, and Runtime
 
-A **Project** registers a canonical local Git repository. A **Room** is a durable collaboration context belonging to a Project, containing two participant slots, messages, session Bindings, and saved collaboration instructions. A **Room Runtime** is the active set of processes and HTTP surfaces serving that Room. Suspending a Runtime does not delete the Room.
+A **Project** registers a canonical local Git workspace. A **Room** belongs to a Project and durably records two participant slots, collaboration instructions, Bindings, and messages. Neither registration nor Room creation copies the repository or creates a task worktree.
 
-A participant's **Runtime** selects Claude Code, Codex, or Grok Build. Either slot may use any supported Runtime, including the same Runtime twice. Persisted ActorIDs `slot1` and `slot2` mean Agent 1 and Agent 2; they do not require particular vendors to occupy the slots. `claude` and `codex` are relay CLI input aliases only.
+A participant's **Runtime** is Claude Code, Codex, or Grok Build. Either slot may use any supported Runtime, including the same Runtime twice. ActorIDs `slot1` and `slot2` mean Agent 1 and Agent 2, not particular vendors. Copy the displayed mention handle: unique Runtimes use `@claude`, `@codex`, or `@grok`; duplicate Runtimes use stable slot-order suffixes, such as `@codex0` and `@codex1`.
 
-Public display names and mention handles come from the selected Runtimes. Unique Runtimes use `@claude`, `@codex`, or `@grok`; duplicates use stable slot-order suffixes such as `@codex0` and `@codex1`. Copy the handle shown in the Room rather than inferring it from an ActorID or responsibility.
+A **Room Runtime** is the active PairRoom component serving a Room, not the participant's harness. Suspending it does not delete the Room. Its process ownership depends on the immutable **host mode**:
+
+| Boundary | Embedded | Native (experimental) |
+|---|---|---|
+| Vendor sessions | PairRoom starts/resumes supported adapters | Users run their original harness sessions |
+| Configuration | Stored selections supply explicit per-process overrides | Stored selections are display-only; configure the original harness |
+| Scheduling | One participant owns a native Turn at a time within the Room | Each slot has its own durable FIFO; Owner Turn is advisory |
+| Permissions and interruption | Supported adapter controls appear in PairRoom | Approvals, permissions, and interruption stay in the original harness |
+| Service capacity | Counts toward the active-runtime limit | Relay-only; exempt from the adapter-capacity budget |
+
+Host mode and collaboration mode are separate. A Room cannot switch host mode in place. An embedded Service inside the desktop application can serve both kinds of Room: “embedded Service” describes Service ownership, not a Room's host mode.
 
 ## Binding and naming
 
-A **Binding** associates a participant slot with a native session. New Bindings materialize when native execution creates the session; existing Bindings must resume their exact native identity. The Service owns Binding uniqueness, including archived Rooms. Native login/configuration and the pre-binding transcript remain owned by the native CLI; PairRoom does not import the earlier transcript.
+A **Binding** associates a slot with a native session. In Embedded, a new Binding materializes its identity on first accepted native execution; an existing Binding must resume exactly. In Native, `relay bind` runs inside the intended session and associates immediately from its official session-ID environment. The approved Stop hook confirms that identity; it does not create the association. No nonce echo or initial Stop is required.
 
-A Room name is mutable display metadata, not an ID. A missing creation name is generated once. Rename waits for a safe boundary, suspends the Runtime without interrupting the Turn, and records the new name. The next activation applies a derived native session title where supported. A desired name or failed title synchronization does not replace the native session ID. See [API reference](API_REFERENCE.md#room-names-and-native-session-correspondence).
+The Service checks native Runtime/session uniqueness across Rooms, including archived Rooms and duplicate-runtime slots. Archive does not release ownership. Native unbind/replacement revokes a binding generation but cannot undo work already handed to the original harness. Pre-binding vendor transcripts are not imported into the Room.
+
+A Room name is mutable display metadata, not an ID. Renaming preserves the Room and Binding identities. Embedded rename uses a safe suspension boundary and applies supported native title metadata at activation; failed or unsupported title synchronization never substitutes a session. Native rename does not take control of the user's session title. See [API naming](API_REFERENCE.md#room-names-and-native-session-correspondence).
 
 ## Collaboration and permissions are separate
 
-| Creation choice | Responsibility |
-|---|---|
-| `default` | The addressed Agent completes simple tasks directly. When collaboration helps, Agent 1 leads planning and review; Agent 2 handles implementation, verification, and technical feedback. |
-| `custom` | User-supplied natural-language rules replace the default responsibility instructions. |
+`default` lets the addressed Agent finish simple tasks directly. When another perspective helps, Agent 1 leads planning/review and Agent 2 implements, verifies, and contributes feedback. `custom` uses the user's natural-language rules instead. The Room saves this choice at creation; activation preserves its instruction version. Newer task instructions can redirect the current work, but do not rewrite the stored mode.
 
-The Room saves this choice at creation and restores it on activation. These instructions do not enforce a particular number or order of Turns, establish a plan-approval gate, or grant tools. A user can redirect the current task, but cannot edit the stored mode or immutable Agent selection inside an existing Room.
+These responsibilities are not tool grants, mandatory alternating turns, or a plan-approval gate. Review completion alone does not authorize implementation.
 
-Modern participants both use the live workspace. New Rooms default to **YOLO** for both; select narrower native policies explicitly. The independent Permission profile can be `configured`, `read-only`, or `yolo`, changed only when both participants are idle, the FIFO is empty, and no approval is pending. It does not switch responsibility, model, Provider reference, or native identity.
+**New Embedded Rooms default to YOLO for both participants.** Select narrower supported native policies explicitly. Their independent Permission profiles (`configured`, `read-only`, `yolo`) can change only at an idle boundary with no queued work or pending approval. Runtime, Provider reference, model, and creation-time instructions remain immutable.
 
-Retired Room formats are rejected without migration. Both participants use the live workspace; no role-bound Reviewer snapshot, role switching, or role-based addressing remains. See [Configuration](CONFIGURATION.md), [Security](../SECURITY.md), and [Upgrading](UPGRADING.md).
+**Native permissions belong to the original harness.** A Room's displayed permission, model, or Provider fields do not change that process. Both modes use the chosen live workspace; neither creates a repository lock or isolates other Rooms, editors, or native subagents. Use project-owned worktrees and an agreed writer/review revision when coordinating changes. See [Configuration](CONFIGURATION.md) and [Security](../SECURITY.md).
 
 ## One native Turn owner
 
-A native **Turn** can contain many model/tool events; it is not one chat bubble or one tool call. PairRoom permits one participant's native Turn at a time **within a Room**. Cross-Agent input waits in the Room's FIFO until a reliable terminal boundary releases ownership.
+In **Embedded**, a native **Turn** may contain many model/tool events and several steered inputs. It is not one chat bubble. Cross-Agent work waits for a reliable terminal boundary in the Room-owned FIFO. Quiet output, a diagnostic error, or an HTTP receipt does not release ownership.
 
-This is not automatic A/B/A/B rotation. The current Agent may finish all useful work and answer the user. A diagnostic error, lack of recent output, or HTTP submission receipt does not prove its native Turn has ended.
-
-The ownership rule does not create a per-Room Git worktree, lock the repository against external writers, isolate other Rooms, or disable native tool/subagent concurrency. Arrange separate checkouts/worktrees and explicit integration for independent writing tasks. Native permissions and host isolation remain separate concerns.
+In **Native**, PairRoom does not schedule or preempt those Turns. Per-slot collectors share that slot's inbox, while both original sessions may work independently. Agree on a writer rather than assuming a relay receipt locks the workspace.
 
 ## Agent relay
 
-After the current native Turn ends, an Agent's complete visible reply is relayed only when it contains the other participant's exact current handle. Code, URLs, email addresses, ambiguous duplicate handles, and self-handles do not create a peer relay under the [Protocol](PROTOCOL.md#output-routing) rules.
+An automatic relay requires the peer's exact current handle in the complete visible response. A peer handle wins over `@user`; `@user` alone returns a result or decision to the human. Code, URLs, email addresses, self-handles, and ambiguous duplicate handles do not route. Role names such as `@lead` and `@executor` are not handles.
 
-No exact peer handle means Agent relay ends. `@user` alone returns the decision to the human; an Agent handle in the same reply wins over `@user`. Neither `@lead`/`@executor` nor historical role aliases are routing handles. An unaddressed human message starts Agent 1 in a modern Room.
+The two host modes differ in what an unaddressed answer exposes:
 
-Only the current complete peer response and its attachments are forwarded, not an appended copy of all Room history. Each native session retains its own context. A peer's claim is input to verify, not proof that a command succeeded or that the user approved an action.
+| Publication | Result |
+|---|---|
+| Embedded answer without the peer handle | Visible in the Room; no peer relay |
+| Native Stop with the peer handle | Complete addressed response enters the peer's FIFO |
+| Native Stop with only `@user` | Complete response is published to the Room for the human |
+| Native Stop without either routing handle | No reply body enters the Room log or inbox; only a publication receipt is recorded |
+| Native explicit `relay send` / `exchange` | The command's target controls delivery; body mentions are ignored |
 
-There is no automatic relay-count ceiling. Agents are instructed not to continue for acknowledgement, thanks, or ceremonial turn return, but the human remains the active circuit breaker. Do not confuse these instructions with a cost budget or an unattended-completion guarantee.
+Explicit Native publication and automatic Stop publication are separate paths. Sending explicitly and then ending with another peer-directed reply can intentionally produce two messages. A same-ID receipt recovery is not permission to send again with a new ID. See [Native publication rules](NATIVE_RELAY.md#what-is-published).
+
+Relay forwards the complete addressed response and attachments, not an accumulated copy of Room history. Each harness retains its own context. Peer claims are evidence to check, not proof of successful execution or user authorization. There is no automatic relay-count or cost ceiling; omit the peer handle when no useful independent response remains.
 
 ## Human controls and receipts
 
-| Action or state | Meaning |
-|---|---|
-| Send / `steer` | Default intent. Same-target input may join the active Turn if the adapter confirms native steering. |
-| `queue` / cross-Agent input | Wait for ownership in the Room FIFO. No hidden competing adapter queue. |
-| Steering unavailable/rejected | Queue the same input once. An unknown submission result instead fails visibly for explicit recovery. |
-| Cancel while waiting | Remove that FIFO item without clearing unrelated queued input. |
-| Interrupt after native acceptance | May stop the entire active native Turn, including multiple inputs absorbed into it. |
-| Retry | Create a new auditable Message for an unsuccessful terminal target; do not mutate or blindly resubmit the old one. |
-| Native approval | Answer the actual advertised request and scope; it is not an approval for an arbitrary PairRoom plan. |
+In **Embedded**, `steer` attempts supported same-target native steering; unavailable/rejected steering queues once. Explicit `queue` and cross-Agent messages wait for Turn ownership. Unknown native submission fails visibly instead of automatically submitting again. Cancel removes waiting work; Interrupt after acceptance may affect the entire native Turn. Answer approvals only with the options and scope actually advertised by the harness.
 
-Support for steering differs by Runtime. Codex uses native Turn steering, Claude's current adapter reports it unavailable, and Grok uses its supported interjection extension. See [Architecture](ARCHITECTURE.md#native-adapters) for adapter boundaries.
+In **Native**, the browser selects the receiving slot explicitly and queues a message. There is no PairRoom Interrupt or vendor-process start control. Cancel applies only to queued messages; uncertain deliveries require inspection before explicit Retry. Read-only history, diagnostics, and optional Git review versions do not claim, acknowledge, approve, or execute work.
 
-A newer human instruction can cancel stale not-yet-started Agent relays. A send receipt means input was recorded/admitted, not that a change was made or a Turn completed. Inspect delivery/processing state, Turn summary, and actual repository/test evidence. Concurrent pending retries of the same source/participant are rejected; this is not an exactly-once guarantee. Wire details belong in [API reference](API_REFERENCE.md).
+Native `queued` means durable acceptance; `delivering` means a claim was persisted before envelope release; `handed_off` means CLI stdout was written and acknowledged, **not** that the model read or completed it. A Claude wake `submitted` or Codex wake `accepted` is also transport evidence, not model acceptance. See [Native recovery](NATIVE_RELAY.md#recovery-and-review-surface).
 
 ## What survives an interruption?
 
-The Event Log retains Room facts and auditable state. Current process connections, transient token deltas, native request IDs, and the active owner are not durable processes you can resume by replaying the UI.
+The Event Log retains durable facts; replay does not recreate a running model process.
 
-| State at restart | Recovery |
+| Host mode and state | Recovery |
 |---|---|
-| Room-owned input that never crossed native submission | Rebuild in FIFO order |
-| Input caught in `submitting` with unknown native ownership | Fail for explicit Retry after inspection |
-| Unfinished input already accepted by the native Runtime | Cancel without automatic replay |
-| Connection-local pending approval | Expire rather than reusing the response |
+| Embedded input still before native submission | Rebuild the Room FIFO |
+| Embedded submission with uncertain native ownership | Fail for explicit inspection and Retry |
+| Embedded accepted but unfinished input | Cancel without automatic replay |
+| Embedded connection-local pending approval | Expire it |
+| Native queued input | Keep it queued for the associated receiver |
+| Native interrupted delivery | Recover as `unknown`; a matching original receipt may settle it while no explicit Retry is pending |
+| Native `handed_off` input | Do not re-collect it merely because the model's response is missing |
 
-Inspect repository side effects before retrying uncertain work. A backup of Room data does not include the repository or all native session stores. [Storage](STORAGE.md) is the authority for replay/schema details; [Operations](OPERATIONS.md) covers backup and shutdown.
+Inspect workspace side effects before retrying. Closing a Room tab only closes a view; archiving a Native Room does not stop its user-owned sessions. Room backups exclude the Git repository, native session stores, and workspace relay credentials. [Storage](STORAGE.md) owns replay details; [Operations](OPERATIONS.md) owns shutdown and backup.

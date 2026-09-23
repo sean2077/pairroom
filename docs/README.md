@@ -1,64 +1,57 @@
 # Documentation map
 
-Start with the question you need answered. Each document has one primary responsibility; follow its links rather than copying its contract into every guide.
+Start with the question, not every document. **Embedded** owns vendor adapters and native Turn scheduling; **Native** relays between user-owned sessions. A desktop-owned embedded Service can host either Room type. Mode-specific behavior must not be inferred from a generic mention of “Runtime” or “Room”.
 
-## Choose, start, and operate
+## User guides
 
-| Question | Document | Owns |
+| Need | Owner |
+|---|---|
+| Product overview in English / Chinese | [README](../README.md) / [简体中文](../README.zh-CN.md) |
+| Decide whether PairRoom fits | [Why PairRoom](WHY_PAIRROOM.md) and dated [Alternatives](ALTERNATIVES.md) |
+| Install, upgrade, or uninstall a package | [Installation](INSTALLATION.md) |
+| First Mock/Embedded Room and review-first task recipes | [Getting started](GETTING_STARTED.md) |
+| Native install, create/join, publication, wake, UI, and recovery | [Native relay](NATIVE_RELAY.md) |
+| Native cwd/worktree identity and locator recovery | [Native session workspace discovery](NATIVE_SESSION_WORKSPACE.md) |
+| Host modes, Bindings, responsibilities, controls, and receipts | [Core concepts](CONCEPTS.md) |
+| Agent selections, Provider references, permissions, and saved pairs | [Configuration](CONFIGURATION.md) |
+| Service/Desktop lifecycle, capacity, archive, and backup procedure | [Operations](OPERATIONS.md) |
+| Diagnose a specific failure | [Troubleshooting](TROUBLESHOOTING.md) |
+| Supported formats and version-change recovery | [Upgrading](UPGRADING.md) |
+
+## Technical contracts
+
+| Surface | Written owner | Implementation authority |
 |---|---|---|
-| Is this useful for my workflow? | [Why PairRoom](WHY_PAIRROOM.md) | Value, use cases, costs, limits, evaluation method |
-| Why not a similar tool? | [Alternatives](ALTERNATIVES.md) | Dated primary-source comparison and selection tradeoffs |
-| How do I complete a first task? | [Getting started](GETTING_STARTED.md) | Mock demo, first real Room, desktop/daemon boundaries |
-| How do I install it on my platform? | [Installation](INSTALLATION.md) | Channel choice, platform prerequisites, per-channel upgrade/uninstall mechanics, NSIS transition |
-| What does the Room do? | [Concepts](CONCEPTS.md) | User-facing Room, Binding, Turn, relay, permission, and recovery semantics |
-| What can I configure? | [Configuration](CONFIGURATION.md) | Precedence, immutable Agent selection, Providers, supported native policy |
-| How do I run and maintain it? | [Operations](OPERATIONS.md) | Desktop/daemon ownership, capacity, archive/delete, backup, shutdown |
-| What should I check when it fails? | [Troubleshooting](TROUBLESHOOTING.md) | Symptom-to-action guidance, not a second specification |
-| What changes on upgrade? | [Upgrading](UPGRADING.md) | Compatibility boundaries, migration actions, rollback |
+| Commands and flags | [CLI reference](CLI_REFERENCE.md) | CLI source and the matching binary's `--help` |
+| HTTP/SSE and request semantics | [API reference](API_REFERENCE.md) | Production Service/Room registrations and handlers |
+| Model-facing routing/envelopes and Native delivery | [Protocol](PROTOCOL.md) | `internal/protocol/`, prompts, relay state machine, contract tests |
+| Process, state, identity, and component ownership | [Architecture](ARCHITECTURE.md) | Service, Embedded Room, Native relay, and adapter code |
+| Schemas, persistence, and replay | [Storage](STORAGE.md) | Model/Store/apply code and integrity tests |
+| Configuration fields | [Configuration](CONFIGURATION.md) | Strict parser and model structs |
 
-## Integrate and develop
+CLI/API/config inventories are source-derived gap checks, not substitutes for field semantics. Do not copy their detailed limits into every quickstart. Concepts explains what behavior means; Protocol/Storage specify exact transitions; Native relay provides the operator workflow.
 
-| Document | Owns |
+## Contributor and policy entry points
+
+| Need | Document |
 |---|---|
-| [CLI reference](CLI_REFERENCE.md) | Command responsibilities and source-derived flag inventory |
-| [API reference](API_REFERENCE.md) | HTTP/SSE contracts, receipts, errors, source-derived routes |
-| [Native relay](NATIVE_RELAY.md) | Harness-local onboarding, peer receive paths, delivery evidence and efficiency boundaries |
-| [Native session workspace](NATIVE_SESSION_WORKSPACE.md) | Session-first binding resolution across directory/worktree changes, disposable locators, upgrade recovery |
-| [Protocol](PROTOCOL.md) | Model-facing bootstrap, envelope, exact-handle relay, convergence |
-| [Architecture](ARCHITECTURE.md) | Components, state ownership, lifecycle and implementation invariants |
-| [Storage](STORAGE.md) | Durable/ephemeral state, schema, replay, recovery and archive boundaries |
-| [Contributing](../CONTRIBUTING.md) | Development setup, verification layers, PR and documentation workflow |
-| [Desktop development](../desktop/README.md) | Native build dependencies, packaging, source-based local update |
+| Repository Agent contract and harness sources | [AGENTS.md](../AGENTS.md) |
+| Canonical English/Chinese terminology | [CONTEXT.md](../CONTEXT.md) |
+| Development, test layers, PR evidence, release verification | [Contributing](../CONTRIBUTING.md) |
+| Separate desktop module and local installation update | [Desktop development](../desktop/README.md) and [nested contract](../desktop/AGENTS.md) |
+| Threat model and private-data boundaries | [Security](../SECURITY.md) |
+| Compatibility policy and safe support requests | [Support](../SUPPORT.md) |
+| Release history and its provenance | [Changelog](../CHANGELOG.md) and [History provenance](../HISTORY_PROVENANCE.md) |
+| Third-party licensing | [Third-party notices](../THIRD_PARTY_NOTICES.md) |
 
-## Repository-wide documents
+## Design and validation history
 
-The documentation set includes more than this directory.
+[Design records](design/README.md) distinguish implemented rationale from superseded plans. They are not a second setup manual. [Validation records](validation/README.md) are dated evidence tied to their recorded environment; neither old measurements nor synthetic tests certify the current vendor combination.
 
-| Source | Responsibility and authority |
-|---|---|
-| [English README](../README.md) / [Chinese README](../README.zh-CN.md) | Equivalent product entry points and quick start; only these product overviews are translated |
-| [Security](../SECURITY.md) | Threat model, authentication, permissions, privacy/data path, vulnerability reporting |
-| [Support](../SUPPORT.md) | Support and compatibility scope, safe issue-reporting evidence |
-| [Project language](../CONTEXT.md) | Canonical terms and English/Chinese equivalents |
-| [Root Agent contract](../AGENTS.md) / [Desktop Agent contract](../desktop/AGENTS.md) | Contributor instructions for their respective scopes; `CLAUDE.md` is a projection, not a separate authority |
-| [Skill boundary](../.agents/skills/README.md) / [Subagent boundary](../.agents/subagents/README.md) | Project-authored skill/subagent sources and generated projection ownership |
-| [License](../LICENSE) / [Third-party notices](../THIRD_PARTY_NOTICES.md) | Legal terms and retained third-party notices, not product guidance |
-| [Changelog](../CHANGELOG.md) | Historical release facts; older entries do not define current behavior |
-| [History provenance](../HISTORY_PROVENANCE.md) | Reconstruction history, not current build or compatibility evidence |
-| [Historical validation records](validation/README.md) | Scope and limitations of retained old JSON reports; not proof that today's source passes |
+Keep published historical evidence intact. When a completed plan is retired, preserve the decision and a pinned historical source rather than leaving future-tense instructions active. Review external comparisons against their stated date/revision, not as an undated capability guarantee.
 
-## Reading authority and status
+## Maintenance
 
-For runtime facts, inspect the implementation, tests, and current reference for the relevant version. The CLI's `--help` owns exact flag defaults; source registrations own routes; configuration structs/parser own fields; the Store and replay code own schemas. Examples illustrate these contracts rather than overriding them.
+Run `make docs-check` after edits. It checks local Markdown paths and selected inventories, not all heading fragments, external sources, example execution, or factual accuracy. Check changed anchors and user commands separately, and distinguish actual runs from source inspection in PR evidence.
 
-The Why and Alternatives pages are explanations and analysis. Their `reviewed` metadata identifies the source-review date, not a successful runtime test. A comparison of a repository's main branch is not certification of a released package. A document marked `status: historical` is retained evidence, not an active specification. Proposals and one-off audit reports belong in Issues/PRs until accepted and implemented.
-
-An older plan, transcript, validation JSON, or release note must not reintroduce removed workflow stages, role aliases, Provider fields, or security behavior. When documents disagree, correct the owning current reference against source first, then update summaries and links. Do not silently convert a future proposal into an implemented capability.
-
-## Maintenance checks
-
-Run `make docs-check` after documentation changes. It checks repository Markdown local links and images, including root support/security pages, nested guides, and newly added non-ignored files. It also preserves the curated top-level guide inventory and the source-derived flag/route/configuration inventories. Source archives without Git metadata are supported.
-
-The checker handles common inline links, reference destinations, and HTML image/link targets; it ignores fenced examples and comments. It does not make network requests, certify external claims, validate every Markdown extension or heading fragment, or execute example commands. Review those manually, including both README languages. Do not weaken a check merely to retain a stale reference.
-
-When changing a contract, update its owner and the smallest relevant summaries. Keep technical documentation in English, the two root READMEs equivalent, terminology aligned with `CONTEXT.md`, and historical records intact. Add a new page only for a distinct reader need; do not resurrect deleted one-off plans or duplicate privacy, compatibility, or troubleshooting pages.
+Maintain current technical pages in English and equivalent root English/Chinese overviews. Preserve stable entry paths/anchors where practical. Add a page only for a distinct owner; prefer links over repeated protocol, setup, or release text. See [documentation contribution rules](../CONTRIBUTING.md#documentation-changes).

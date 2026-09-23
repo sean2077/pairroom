@@ -2,92 +2,81 @@
 
 ## Runtime shapes
 
-- PairRoom Desktop: Wails v3 native Window / Tray host; reuses a daemon or starts the Service in-process;
-- `pairroom service`: the normal multi-Project / multi-Room management entry;
-- `pairroom serve`: current-format standalone Room;
-- `pairroom daemon`: manage the Service as a local background process;
-- `--mock`: deterministic verification mode that does not start vendor CLIs.
+| Entry | Ownership |
+|---|---|
+| Desktop | Native window/tray host; reuses a daemon or owns an embedded Service |
+| `pairroom service` | Multi-Project/multi-Room Management Service |
+| `pairroom serve` | Current-format standalone Room for development/diagnostics |
+| `pairroom daemon` | Explicit OS background-Service management |
+| `--mock` | Deterministic verification without vendor CLIs |
 
-From a source checkout, `make dev` stops an installed daemon, recovers a crash-stale lock only after the recorded PID is gone, starts the current-tree Management Service, and opens the Management Shell. `make stop` is the stop-only helper. Do not leave `make dev` running at the same time as a started daemon.
+A desktop-owned **embedded Service** can host both Embedded and Native Rooms. Embedded Rooms own vendor adapters; Native Rooms own only the relay/listener and retain user-owned harness processes. See [Concepts](CONCEPTS.md).
 
-All built-in listeners require numeric loopback addresses; a token does not enable LAN, wildcard, or hostname binds. For remote access, use SSH local port forwarding and keep the Service bound to loopback. Protect the forwarded endpoint and bootstrap token as access to local repositories, Agent credentials, and attachments.
+From a source checkout, `make dev` stops an installed daemon, recovers a crash-stale lock only after its recorded PID is gone, and runs the current-tree Management Service. `make stop` is stop-only. Do not run competing owners against the same data root.
+
+All listeners require numeric loopback addresses. A token does not allow LAN, wildcard, or hostname binds. Remote access uses protected SSH local forwarding; treat access to that endpoint/bootstrap token as access to repositories, Agent credentials, and attachments.
 
 ## Desktop lifecycle
 
-On startup the desktop host chooses a single Service owner in this order:
+Desktop chooses one Service owner: an explicit validated `PAIRROOM_DESKTOP_URL`, an installed daemon, or an in-process embedded Service when no daemon is installed. The URL must be authenticated numeric loopback. An installed but unreachable daemon is an error, not permission to create a competing owner. Stale-lock recovery first proves the recorded PID exited; a live owner fails closed.
 
-1. Validate that `PAIRROOM_DESKTOP_URL` points at an authenticated numeric-loopback PairRoom Service;
-2. Discover an installed daemon; recover a crash-stale lock after the recorded PID is gone, start or restart the daemon when needed, and wait for the current authenticated Management URL;
-3. If no daemon is installed, own an embedded Service in the desktop process. A bundled CLI does not authorize daemon installation. If a daemon is installed but unreachable, stay fail closed.
+Explicit data-root/configuration or Mock options select their own Service instead of an unrelated default daemon; an explicit validated URL remains the strongest external-discovery override. A bundled CLI never authorizes daemon installation. **Settings → Desktop → Launch at login** changes only OS login registration. `make desktop-update` replaces binaries without changing user data or that registration.
 
-Explicit data-root/configuration or Mock options select their own embedded Service instead of discovering an unrelated default daemon; an explicit validated Management URL remains the strongest override when external discovery is enabled. Settings → Desktop → Launch at login changes only native login registration. It does not install a daemon. `make desktop-update` replaces the host and bundled CLI without changing login registration or user data.
+| Action | Effect |
+|---|---|
+| Close desktop window | Hide to tray; do not stop Agents or Room runtimes |
+| Launch another desktop instance | Focus the existing window |
+| Quit with an external daemon | Exit the GUI; the daemon continues |
+| Quit with an owned embedded Service | Stop Management mutations, drain owned runtime work, close stores, release the Service lock |
+| `pairroom daemon stop` | Gracefully stop the confirmed installed-daemon owner; do not delete a live lock or kill an unrelated process |
+| `pairroom daemon open` | Open the Management URL recorded in the daemon's own log only after validating it as numeric loopback with a bootstrap token and probing it authenticated; a missing, unauthenticated, or non-loopback target is refused |
 
-Behavior boundaries:
+None of these controls can stop a user-owned Native harness. Windows daemon output goes to rotating logs rather than a persistent taskbar console; use `pairroom daemon logs`.
 
-- Close the main window: hide to the tray; do not stop Runtime or Agents;
-- Launch the app again: the single-instance handler focuses the existing window;
-- Quit while using an external daemon: exit only the GUI; the daemon and active Turns keep running;
-- Windows daemon: Service logs go to the rotating log file and do not keep a taskbar console; use `pairroom daemon logs` to inspect output;
-- Quit while using an embedded Service: stop accepting Management requests, wait for Runtimes to drain at a native-Turn boundary, then release the Registry and `service.lock`;
-- crash-stale lock: recover after the recorded PID is gone, then start or restart the installed daemon; a live owner still fails closed;
-
-Desktop startup recovers a crash-stale `service.lock` after confirming the recorded PID is gone, then starts or restarts the installed daemon. A live lock owner still fails closed: run `pairroom daemon status`, then `pairroom daemon stop` and wait for graceful drain if that process is the installed daemon. The desktop host will not start a competing embedded Service or kill a live owner.
-
-Desktop packages are built only for `v*` release tags (or manual `workflow_dispatch`) and attached to the same GitHub Release: CLI assets are `pairroom-cli-vX.Y.Z-…`, desktop assets are `pairroom-desktop-vX.Y.Z-…` (Windows `-setup.exe`, Linux `.deb`/`.AppImage`, macOS `.app.zip`). Pull requests and `main` only run desktop module verification. These packages remain unsigned by default. Windows code signing and Apple Developer ID signing / notarization can be claimed only after they actually run in the production release environment.
+Desktop packages are produced for release tags or manual workflow dispatch, not PR/main verification builds. They attach to the same Release as CLI assets: `pairroom-cli-vX.Y.Z-…` and `pairroom-desktop-vX.Y.Z-…` (Windows setup executable, Linux `.deb`/`.AppImage`, macOS `.app.zip`). Production signing/notarization is not implied. See [Installation](INSTALLATION.md), [Desktop development](../desktop/README.md), and [release verification](../CONTRIBUTING.md#release-verification).
 
 ## Daily checks
 
-Observe four layers of state, not only chat text:
+Inspect the Service/Room state and actual repository evidence, not only chat text. Embedded exposes participant/native Turn state, delivery/processing, tool activity, and approvals. Native instead exposes binding/generation, registered collection, queued/delivering/unknown work, and observed wake activity; it cannot infer live presence or model completion from silence or receipts.
 
-1. whether the Service / Room runtime is active;
-2. participant state and native session binding;
-3. message delivery / processing;
-4. Turn summary, tool activity, approval, and system notice.
-
-“No Runtime event for a while” is only a reminder. Long commands, compacted context, or unexposed vendor steps can be silent temporarily. An ordinary diagnostic error is not necessarily a terminal boundary.
+A quiet Runtime may be running a long command, compacting context, or performing an unexposed native step. A diagnostic error is not necessarily a terminal boundary. Native `handed_off` means stdout/ack, not completed work. Use [Native diagnostics](NATIVE_RELAY.md#recovery-and-review-surface) or [Troubleshooting](TROUBLESHOOTING.md) for the correct layer.
 
 ## Project, Archive, Delete
 
-- **Unregister Project**: remove the Management Service registration; do not delete the user's Git repository. Handle Rooms that still belong to the Project first;
-- **Archive Room**: for an Embedded Room, stop the current Agent Turn and suspend the Runtime; a Native Room has no Service-owned Runtime, so archiving only hides it from the default list and stops nothing in the user's own Claude Code, Codex or Grok Build session. Either way Room data is kept for audit or restore;
-- **Permanent delete**: delete PairRoom-managed data; confirm archive, backup, Binding, and active-runtime preconditions first;
-- **Deleting the repository** is never an implied side effect of PairRoom Project unregister / Room delete.
+The Room context menu separates rename, **Close Room tab**, ordering, and confirmed **Archive Room**. It is available from Room rows/sidebar/tabs and through keyboard context-menu access. Closing a view and archiving are deliberately different operations.
 
-Available actions are decided by the preconditions returned by the current UI / CLI / API. Automation must not ignore conflict responses.
+| Action | Boundary |
+|---|---|
+| Close Room tab | Close only the view; no archive, deletion, suspension, order change, Room event, or native interruption. Reopen from navigation. |
+| Unregister Project | Remove the Service registration, never the Git repository. Handle its remaining Rooms first. |
+| Archive Embedded Room | Stop the current Agent Turn and suspend its Runtime; retain Room data and Binding ownership. |
+| Archive Native Room | Hide it from the default list and prevent opening its surface until restored; retain data/ownership, but do not stop the original harnesses. |
+| Permanent delete | Delete PairRoom-managed data only after current archive/Binding/runtime preconditions and explicit confirmation. |
+
+Archive is not unbind, and closing a tab is not “stop work.” Follow returned UI/CLI/API preconditions; conflict responses are not permission to bypass lifecycle checks. Project unregister and Room deletion never imply deleting a repository. [API reference](API_REFERENCE.md#project-and-room-display-order) owns ordering and surface details.
 
 ## Capacity and idle reclaim
 
-The Service can limit the number of concurrently active Rooms and reclaim Runtimes by idle policy. Reclaim only stops processes and frees resources; it does not delete a durable Room. The next activation rebuilds the adapter and restores Room-owned FIFO entries that never crossed native submission; accepted or uncertain native work is left for explicit inspection and Retry.
+The active-runtime cap and idle eviction apply to **Embedded Rooms that own vendor adapters**, not durable Room count. Native relay Rooms are exempt: they do not consume a slot, queue behind Embedded capacity, or become capacity-eviction victims.
+
+Reclamation suspends processes without deleting Room history and must not preempt a native Turn merely to free capacity. Embedded activation rebuilds only Room-owned FIFO entries that never crossed submission; accepted or uncertain input needs inspection rather than automatic replay. An uncertain cleanup retains its capacity claim instead of pretending to be suspended.
 
 ## Backup
 
-Create and verify a backup before:
+Back up before incompatible upgrades, permanent deletion, data-root moves, manual integrity repair, or binding-policy changes. Stop/drain the relevant PairRoom owner. For Native consistency, also stop work explicitly in the original harnesses: archive/backup cannot do that for you.
 
-- upgrading across a breaking release;
-- permanently deleting a Room;
-- moving the PairRoom data root;
-- manually repairing an Event Log;
-- changing session / Binding policy.
+`pairroom backup` / `restore` operate on **one Room data directory**, not the multi-Room Service root. For complete rollback, preserve the entire stopped Service root separately, including Agent pair profiles and navigation preferences, plus explicitly imported Room directories outside that root. The Git repository, vendor session stores, and Native workspace credentials/capability sidecars are separate and are not included in a Room archive.
 
-`pairroom backup` and `pairroom restore` operate on **one Room data directory**, not the multi-Room Service root. For a complete Service rollback, stop/drain the Service and separately preserve its entire data root with an offline filesystem backup; also preserve any explicitly imported Room directories outside that root. Native CLI session stores and the user's Git repository are separate and are not included in a Room archive.
-
-Write backup and diagnostics bundles **outside the source Room data directory**. In-place outputs and symlink aliases into that directory are rejected to prevent replacing Event Logs or attachment data. Restore verifies the file set, hashes, and complete gzip trailer before publishing the target. Backup success is defined by verification, not by a compression command's exit code alone.
+Write backup and diagnostics outputs outside the source Room directory, including symlink aliases. Restore validates the file set, hashes, and complete gzip trailer before publishing the target. A successful compression command is not backup verification, and restored transport history does not prove external work stopped or completed. [Storage](STORAGE.md) owns integrity/replay details.
 
 ## Graceful shutdown
 
-A normal exit should stop active adapters, settle in-flight projections, close the store. After a forced kill, the next start restores only Room-owned FIFO entries that were still before native submission and fails uncertain submission windows closed; it never guesses whether an accepted native operation completed.
+For Embedded, normal exit drains owned native work, settles projections, closes stores, and releases ownership. After a forced exit, only definitely pre-submission FIFO work is automatically rebuilt; unknown submission fails and accepted unfinished input is cancelled without replay.
 
-An embedded Service used by the desktop host follows the same shutdown contract. The Wails window lifecycle cannot bypass Room Runtime drain.
+For Native, drain rejects new publications/claims while valid receipts for already released envelopes can settle. Shutdown does not terminate original sessions. Recovered unfinished delivery remains uncertain; inspect history and side effects before Retry. A hidden window or disconnected browser proves nothing about process completion.
 
 ## Logs and diagnostics
 
-Logs must not contain API keys, Authorization headers, or absolute attachment paths. When reporting a problem, include:
+Do not include API keys, Authorization headers, or absolute attachment paths in logs. Review arbitrary user/tool content before sharing any export. A useful report includes the PairRoom build, OS/entry type, **Room host mode**, selected CLI versions, relevant Room/message/Turn IDs where applicable, first error/system notices, and a redacted minimal reproduction.
 
-- PairRoom build version;
-- OS, entry type (Desktop / daemon / foreground), and versions of the selected native CLIs;
-- Room / message / Turn ID;
-- related system notices and terminal events;
-- redacted configuration;
-- a minimal Mock or read-only reproduction.
-
-Common handling is in [Troubleshooting](TROUBLESHOOTING.md).
+Management **Settings → Diagnostics** has environment checks and separately consented live runtime tests. Native Room diagnostics/`relay doctor` inspect relay observations without calling a model. These are different from a full Room diagnostics archive; [Support](../SUPPORT.md) and [Troubleshooting](TROUBLESHOOTING.md) describe safe reporting.
