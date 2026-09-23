@@ -37,7 +37,7 @@ CLI/API/config inventories are source-derived gap checks, not substitutes for fi
 |---|---|
 | Repository Agent contract and harness sources | [AGENTS.md](../AGENTS.md) |
 | Canonical English/Chinese terminology | [CONTEXT.md](../CONTEXT.md) |
-| Development, test layers, PR evidence, release verification | [Contributing](../CONTRIBUTING.md) |
+| Development commands, test layers/design, commit and PR evidence, release verification | [Contributing](../CONTRIBUTING.md) |
 | Separate desktop module and local installation update | [Desktop development](../desktop/README.md) and [nested contract](../desktop/AGENTS.md) |
 | Threat model and private-data boundaries | [Security](../SECURITY.md) |
 | Compatibility policy and safe support requests | [Support](../SUPPORT.md) |

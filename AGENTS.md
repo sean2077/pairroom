@@ -10,7 +10,7 @@ Read the applicable nested contract and [terminology](CONTEXT.md), then the owne
 
 Use a task branch/worktree and submit a PR; do not push directly to `main` or run a merge/cleanup helper without authorization. Keep changes proportional to the task. Repair owning documentation and add regression evidence for changed state transitions, not just prompt wording.
 
-`make docs-check` checks documentation contracts; `make check` covers static/unit/race/dependency/JavaScript/projection/release-contract checks; `make smoke` exercises deterministic Mock recovery. Browser, desktop, release, and environment prerequisites are in [Contributing](CONTRIBUTING.md) and [Desktop development](desktop/README.md). Report the actual commands and results, separating local checks, CI, fixtures, and authenticated vendor E2E. Never claim vendor acceptance, billed-token savings, or production signing from synthetic tests.
+`make docs-check` checks documentation contracts; `make check` covers static/unit/race/dependency/JavaScript/projection/release-contract checks; `make smoke` exercises deterministic Mock recovery. Browser, desktop, release, and environment prerequisites, plus test-design and commit conventions, are in [Contributing](CONTRIBUTING.md) and [Desktop development](desktop/README.md). Report the actual commands and results, separating local checks, CI, fixtures, and authenticated vendor E2E. Never claim vendor acceptance, billed-token savings, or production signing from synthetic tests.
 
 ## Durable invariants
 
