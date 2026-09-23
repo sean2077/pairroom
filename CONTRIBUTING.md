@@ -4,7 +4,7 @@ Read [AGENTS.md](AGENTS.md) and [project terminology](CONTEXT.md) before changin
 
 ## Development setup
 
-Install Go 1.25, Node.js (CI uses 22.x), Python 3, Git, Make, and Bash. The root CLI is CGo-free; race testing additionally requires `CGO_ENABLED=1` and a Go-supported C compiler on PATH. On Windows, use a supported toolchain such as MSYS2 MinGW.
+Install the latest stable Go release (minimum Go 1.27), Node.js (CI uses 22.x), Python 3, Git, Make, and Bash. The root CLI is CGo-free; race testing additionally requires `CGO_ENABLED=1` and a Go-supported C compiler on PATH. On Windows, use a supported toolchain such as MSYS2 MinGW.
 
 ```bash
 git clone https://github.com/sean2077/pairroom.git
@@ -16,6 +16,16 @@ make smoke
 `make check` includes formatting, static/unit/race/dependency checks, JavaScript regressions, desktop-source checks, and documentation/projection/release contracts. `make js-check` fails visibly if Node is missing. Dependency checks reject replacements and module/version drift. `make smoke` exercises deterministic Mock collaboration, media, backup, restore, and diagnostics, not vendor models. `make cover` is diagnostic coverage, not a percentage release gate.
 
 `make install` installs to `GOBIN` (default `GOPATH/bin`), reports PATH visibility, and never edits PATH. `make dev` stops an installed daemon before running the current-tree Service. The Wails desktop is a separate module; keep GUI dependencies out of the root. Build/update and `DESKTOP_INSTALL_DIR` behavior belong in [Desktop development](desktop/README.md).
+
+## Go version policy
+
+CI and release builds select the latest stable Go release with `actions/setup-go` (`go-version: stable`, `check-latest: true`), not `go-version-file`. Both modules' `go` directives declare the minimum language/toolchain version and follow the latest stable major release; do not add a `toolchain` directive. Weekly Dependabot checks cover both modules. Review Go directive updates without changing the approved dependency closure: run `go mod tidy` separately in the root and `desktop/`, inspect both module locks, and run `go run scripts/check_dependencies.go`.
+
+Local build/install/release commands preserve `GOTOOLCHAIN`. With `GOTOOLCHAIN=auto`, an older installation can download the module's required toolchain; this does not promise the newest available patch. Install the latest stable release before producing a local release. The release entry point prints the actual version and rejects a toolchain below the module minimum (including an outdated `GOTOOLCHAIN=local` installation). CI checks the actual toolchain after setup too.
+
+`make vuln` checks reachable source vulnerabilities with the fixed standalone `govulncheck` version declared in `Makefile`. It needs network access and is deliberately separate from the offline `make check` gate. The CI `vulnerabilities` job runs on PRs and weekly even without commits, and blocks downstream CLI builds. Release publication additionally requires `make vuln-binary` on the built Linux CLI. These tool dependencies must not enter either application module. Repository required-check settings are managed separately from workflow files.
+
+Every CLI artifact must report the same Go version as the release provenance's `go_version`; `scripts/verify-artifacts.sh` and CI check the actual binaries, not a hard-coded expected patch version. The release-contract regressions cover mixed toolchains and provenance mismatches. Reverting this build policy requires no Room-data migration. Version bumps, tags, and publication still require explicit authorization.
 
 ## Change workflow
 

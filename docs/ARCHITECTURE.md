@@ -35,7 +35,7 @@ Management Service ---- Project registry / Room lifecycle / user preferences
 | API/browser assets | `internal/server/`, `internal/webui/` | Authentication, HTTP/SSE and shared client projections |
 | Desktop | [separate module](../desktop/README.md) | Window/tray/login and packaging over the same Service |
 
-The root module uses Go 1.25 and the approved pinned CGo-free SQLite dependency closure. Wails/GUI dependencies stay in the separate desktop module. Desktop is not a second backend or product UI implementation.
+The root module uses the latest stable Go release and the approved pinned CGo-free SQLite dependency closure. Wails/GUI dependencies stay in the separate desktop module. Desktop is not a second backend or product UI implementation.
 
 ## Durable facts and derived state
 
