@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Security: CI and release builds now use the latest stable Go release (currently 1.27.x), with source and release-binary vulnerability gates and provenance-checked toolchain consistency across CLI artifacts. Source builds require Go 1.27 or newer, or automatic toolchain download through `GOTOOLCHAIN=auto`; both module minimums advance to 1.27 without dependency upgrades.
+
 - Keep an installed Native hook inert for a session that has not created or bound a Room: a Stop/StopFailure invocation without a confirmed association returns only the neutral `{}` result, with no diagnostic, credential or state write, slot or collector lock, publication, collection, park wait, Service endpoint read or HTTP request, including when PairRoom is stopped and for Grok reusing the Claude hook. A shared or reused harness PID is no longer session evidence — PID-only mismatch inference is removed, so a fresh session in a desktop host process can no longer inherit another session's identity error — and exact runtime/session metadata remains the only association. Cold hook discovery ignores unreadable workspace candidates and refuses an unsafe directory walk instead of trusting partial results; confirmed per-session locators, binding identity checks, exact bound environment/session disagreements, a bound session's Service or credential failures, and explicit foreground commands keep failing closed with their existing diagnostics. Recovery of an older binding whose locator is unusable stays an explicit command, not automatic hook repair.
 
 ## [v5.4.0] — 2026-09-23

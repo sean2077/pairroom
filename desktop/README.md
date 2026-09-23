@@ -22,7 +22,7 @@ The Wails layer owns only native desktop concerns:
 - explicit, native launch-at-login settings;
 - platform packaging.
 
-The root and desktop modules use Go 1.25. The root permits only the pinned CGo-free SQLite dependency closure used for read-only CC Switch access; Wails and its GUI dependencies remain confined to `desktop/go.mod`.
+The root and desktop modules use the latest stable Go release. The root permits only the pinned CGo-free SQLite dependency closure used for read-only CC Switch access; Wails and its GUI dependencies remain confined to `desktop/go.mod`.
 
 ## Launch at login
 
@@ -38,7 +38,7 @@ explicit CLI operation.
 
 ## Development
 
-Install Go 1.25 and the pinned Wails CLI:
+Install the latest stable Go release and the pinned Wails CLI:
 
 ```bash
 go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
@@ -68,7 +68,7 @@ bundled CLI together. Windows and Linux build directly without generating instal
 or Linux distribution packages; macOS builds and ad-hoc signs the complete app
 bundle. The macOS CLI lives under `Contents/Helpers/pairroom`, not beside
 `Contents/MacOS/PairRoom`, so case-insensitive volumes cannot overwrite the host.
-Go 1.25, the pinned Wails CLI, Python, and native build dependencies are
+The latest stable Go release, the pinned Wails CLI, Python, and native build dependencies are
 still required. There is no release download or automatic `git pull`.
 
 Existing Windows Inno Setup installations (and older NSIS installations) are discovered through uninstall metadata
