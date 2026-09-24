@@ -338,9 +338,17 @@ func TestWindowedSnapshotBoundsTurnsAndSummaryEvents(t *testing.T) {
 			turn.MessageIDs = []string{engine.snapshot.Messages[999].ID} // old Turn tied to a visible message
 		}
 		if i == 5 {
-			turn.CompletedAt, turn.Status = nil, "working" // old unfinished Turn
+			turn.CompletedAt, turn.Status = nil, "working" // old Turn the participant still owns
+		}
+		if i == 7 {
+			// An adapter that died before turn.completed leaves an orphaned
+			// incomplete summary; it must not be pinned into every snapshot.
+			turn.CompletedAt, turn.Status = nil, "cancelled"
 		}
 		engine.snapshot.Turns = append(engine.snapshot.Turns, turn)
+	}
+	engine.snapshot.Participants = map[model.ActorID]model.ParticipantSnapshot{
+		model.ActorSlot1: {CurrentTurn: "t5"},
 	}
 	engine.snapshot.Events = []model.Event{
 		{Seq: 1, Kind: EventTurnSummaryUpdated, Data: json.RawMessage(`{}`)},
@@ -357,7 +365,7 @@ func TestWindowedSnapshotBoundsTurnsAndSummaryEvents(t *testing.T) {
 	for _, turn := range window.Turns {
 		ids[turn.TurnID] = true
 	}
-	if !ids["t3"] || !ids["t5"] || !ids["t199"] || ids["t100"] {
+	if !ids["t3"] || !ids["t5"] || !ids["t199"] || ids["t100"] || ids["t7"] {
 		t.Fatalf("unexpected turn selection: %v", ids)
 	}
 	for _, event := range window.Events {
@@ -546,5 +554,29 @@ func TestSnapshotEventTailBoundsRuntimePayloadsWithoutMutatingEngine(t *testing.
 	}
 	if string(events[0].Data) != string(data) {
 		t.Fatal("snapshot projection mutated the engine's event")
+	}
+}
+
+func TestForcedFlushDropsStoppedParticipantBookkeeping(t *testing.T) {
+	engine, _ := newTestEngine(t, "")
+	started := time.Now().UTC().Add(-time.Hour)
+	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
+		engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: actor, Kind: model.RuntimeTurnStarted, TurnID: "open", CreatedAt: started})
+		engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: actor, Kind: model.RuntimeToolStarted, TurnID: "open", ItemID: "a", CreatedAt: started.Add(time.Second)})
+	}
+	if err := engine.StopAgent(context.Background(), model.ActorSlot1); err != nil {
+		t.Fatal(err)
+	}
+	engine.summaryMu.Lock()
+	_, slot1 := engine.turnSummaries.persistedAt["slot1:open"]
+	_, slot2 := engine.turnSummaries.persistedAt["slot2:open"]
+	dirty2 := engine.turnSummaries.dirty["slot2:open"]
+	engine.summaryMu.Unlock()
+	if slot1 || !slot2 || !dirty2 {
+		t.Fatalf("stop must drop only the stopped participant's bookkeeping: slot1=%v slot2=%v dirty2=%v", slot1, slot2, dirty2)
+	}
+	window := engine.WindowedSnapshot(250)
+	if len(window.Turns) != 2 {
+		t.Fatalf("both summaries remain available in the projection: %d", len(window.Turns))
 	}
 }

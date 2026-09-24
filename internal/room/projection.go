@@ -22,9 +22,9 @@ const snapshotTurnWindow = 40
 // WindowedSnapshot returns the newest messages while retaining current room and
 // runtime state. The authoritative in-memory/event-sourced transcript remains
 // complete; this is only a transport optimization for long-lived rooms. Turns
-// are limited to the newest snapshotTurnWindow, every unfinished Turn, and
-// Turns correlated with the returned messages; turn.summary.updated payloads
-// are omitted from the event tail because `turns` already carries them.
+// are limited to the newest snapshotTurnWindow, each participant's current
+// Turn, and Turns correlated with the returned messages; turn.summary.updated
+// payloads are omitted from the event tail because `turns` already carries them.
 func (e *Engine) WindowedSnapshot(limit int) model.RoomSnapshot {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -36,7 +36,7 @@ func (e *Engine) WindowedSnapshot(limit int) model.RoomSnapshot {
 	if total > limit {
 		view.Messages = view.Messages[total-limit:]
 	}
-	view.Turns = selectTurnsLocked(e.snapshot.Turns, view.Messages, snapshotTurnWindow)
+	view.Turns = selectTurnsLocked(e.snapshot.Turns, view.Messages, currentTurnIDsLocked(e.snapshot.Participants), snapshotTurnWindow)
 	view.Events = SnapshotEventTail(view.Events)
 	// Slice before cloning: transport cost must scale with the requested page,
 	// not with messages or Turns that will immediately be discarded.
@@ -87,10 +87,24 @@ func SnapshotEventTail(events []model.Event) []model.Event {
 	return out
 }
 
+// currentTurnIDsLocked returns the summary IDs of Turns a participant owns now.
+// Ownership, not a missing completion time, marks a live Turn: a summary whose
+// adapter died before turn.completed stays incomplete forever, while
+// CurrentTurn is cleared on stop, permission replacement and restart.
+func currentTurnIDsLocked(participants map[model.ActorID]model.ParticipantSnapshot) map[string]struct{} {
+	current := make(map[string]struct{}, len(participants))
+	for actor, participant := range participants {
+		if participant.CurrentTurn != "" {
+			current[string(actor)+":"+participant.CurrentTurn] = struct{}{}
+		}
+	}
+	return current
+}
+
 // selectTurnsLocked returns, in projection order, the union of the newest
-// `newest` Turns, unfinished Turns, and Turns correlated with messages. The
-// result shares elements with turns; callers clone before exposing it.
-func selectTurnsLocked(turns []model.TurnSummary, messages []model.Message, newest int) []model.TurnSummary {
+// `newest` Turns, currently owned Turns, and Turns correlated with messages.
+// The result shares elements with turns; callers clone before exposing it.
+func selectTurnsLocked(turns []model.TurnSummary, messages []model.Message, current map[string]struct{}, newest int) []model.TurnSummary {
 	if len(turns) <= newest {
 		return turns
 	}
@@ -110,7 +124,7 @@ func selectTurnsLocked(turns []model.TurnSummary, messages []model.Message, newe
 		related[message.ID] = struct{}{}
 	}
 	for i, turn := range turns {
-		if turn.CompletedAt == nil {
+		if _, live := current[turn.ID]; live {
 			keep[i] = true
 			continue
 		}
