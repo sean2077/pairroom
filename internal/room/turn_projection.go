@@ -270,6 +270,17 @@ func (e *Engine) flushTurnSummaries(actor model.ActorID, now time.Time) error {
 			result = errors.Join(result, fmt.Errorf("checkpoint turn summary %s: %w", summary.ID, err))
 		}
 	}
+	if now.IsZero() {
+		// A forced flush follows an adapter stop or Room close, so the stopped
+		// participant's open Turns will receive no terminal event. Drop their
+		// persisted bookkeeping; a late event simply checkpoints again.
+		for id := range tracking.persistedAt {
+			if !tracking.dirty[id] && (actor == "" || strings.HasPrefix(id, string(actor)+":")) {
+				delete(tracking.persistedAt, id)
+				delete(tracking.publishedAt, id)
+			}
+		}
+	}
 	return result
 }
 
