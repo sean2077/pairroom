@@ -119,7 +119,7 @@ func TestEnvelopeCarriesOnlyDynamicTurnContext(t *testing.T) {
 		From: model.ActorSlot1, To: model.ActorSlot2,
 		FromHandle: "@claude", SelfHandle: "@codex", PeerHandle: "@claude",
 		Text: "Inspect the race", ReplyTo: "msg-0123456789abcdef01234567",
-		Role: model.RoleReviewer, Intent: model.IntentQueue,
+		Access: model.NativeAccessReadOnly, Intent: model.IntentQueue,
 	}
 	got := Envelope(input)
 	for _, fragment := range []string{

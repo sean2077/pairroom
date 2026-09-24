@@ -62,7 +62,7 @@ type ClaudeAdapter struct {
 	runtimeInfo  model.RuntimeInfo
 	protocolSent bool
 	intentional  bool
-	role         model.ParticipantRole
+	access       model.NativeAccess
 	baseMode     string
 	approvals    map[string]claudeApprovalRequest
 	control      map[string]chan claudeControlResult
@@ -83,7 +83,7 @@ func NewClaude(cfg Config, sink EventSink) *ClaudeAdapter {
 	}
 	return &ClaudeAdapter{
 		cfg: cfg, sink: sink, state: model.StateStopped,
-		sessionID: sessionID, resume: resume, role: model.RoleDriver,
+		sessionID: sessionID, resume: resume,
 		baseMode: cfg.PermissionMode, approvals: make(map[string]claudeApprovalRequest),
 		control: make(map[string]chan claudeControlResult),
 	}
@@ -209,11 +209,11 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	}
 	args = appendClaudePermissionArgs(args, flags, c.cfg.PermissionMode)
 	c.mu.Lock()
-	role := c.role
+	access := c.access
 	c.mu.Unlock()
-	if role == model.RoleReviewer && flags["--disallowedTools"] {
+	if access == model.NativeAccessReadOnly && flags["--disallowedTools"] {
 		// Plan mode prevents direct execution, while explicit deny rules remove
-		// the native write tools and ExitPlanMode from the reviewer context. Bash
+		// the native write tools and ExitPlanMode from the read-only context. Bash
 		// remains available behind Claude's permission flow so the human can allow
 		// a genuinely read-only inspection command when useful.
 		args = append(args, "--disallowedTools", strings.Join([]string{"Edit", "Write", "NotebookEdit", "ExitPlanMode"}, ","))
@@ -1013,14 +1013,14 @@ func (c *ClaudeAdapter) handleControlRequest(line []byte, pending claudePending,
 	}
 
 	c.mu.Lock()
-	role := c.role
+	access := c.access
 	c.mu.Unlock()
-	if role == model.RoleReviewer {
+	if access == model.NativeAccessReadOnly {
 		switch envelope.Request.ToolName {
 		case "Edit", "Write", "NotebookEdit", "ExitPlanMode":
 			_ = c.writeControlResponse(envelope.RequestID, map[string]any{
 				"behavior": "deny",
-				"message":  "PairRoom reviewer role cannot use " + envelope.Request.ToolName + "; change the participant role first",
+				"message":  "PairRoom read-only access cannot use " + envelope.Request.ToolName + "; change the participant permission profile first",
 			})
 			e := runtimeEvent(c.cfg.Actor, model.RuntimeLog)
 			e.Name = "reviewer.tool.denied"
@@ -1473,32 +1473,32 @@ func validateClaudeQuestionAnswers(raw any, answers map[string]string) error {
 	return nil
 }
 
-// SetRole maps PairRoom's reviewer role to Claude Code's native plan mode.
-// Role changes are rejected while a turn or permission prompt is active; this
+// SetNativeAccess maps PairRoom read-only access to Claude Code's native plan
+// mode. Changes are rejected while a turn or permission prompt is active; this
 // avoids silently changing a harness policy midway through execution.
-func (c *ClaudeAdapter) SetRole(ctx context.Context, role model.ParticipantRole) error {
-	if !role.Valid() {
-		return fmt.Errorf("invalid Claude role %q", role)
+func (c *ClaudeAdapter) SetNativeAccess(ctx context.Context, access model.NativeAccess) error {
+	if !access.Valid() {
+		return fmt.Errorf("invalid Claude native access %q", access)
 	}
 	desiredMode := c.baseMode
-	if role == model.RoleReviewer {
+	if access == model.NativeAccessReadOnly {
 		desiredMode = "plan"
 	}
 
 	c.mu.Lock()
-	if c.role == role && c.cfg.PermissionMode == desiredMode {
+	if c.access == access && c.cfg.PermissionMode == desiredMode {
 		c.mu.Unlock()
 		return nil
 	}
 	state := c.state
 	if state == model.StateWorking || state == model.StateWaiting || state == model.StateStarting || len(c.pending) > 0 || len(c.approvals) > 0 {
 		c.mu.Unlock()
-		return errors.New("interrupt or stop Claude before changing its role")
+		return errors.New("interrupt or stop Claude before changing its native access")
 	}
 	wasRunning := c.cmd != nil && c.cmd.Process != nil
-	oldMode, oldRole := c.cfg.PermissionMode, c.role
+	oldMode, oldAccess := c.cfg.PermissionMode, c.access
 	c.cfg.PermissionMode = desiredMode
-	c.role = role
+	c.access = access
 	c.mu.Unlock()
 
 	if !wasRunning {
@@ -1506,15 +1506,15 @@ func (c *ClaudeAdapter) SetRole(ctx context.Context, role model.ParticipantRole)
 	}
 	if err := c.Stop(ctx); err != nil {
 		c.mu.Lock()
-		c.cfg.PermissionMode, c.role = oldMode, oldRole
+		c.cfg.PermissionMode, c.access = oldMode, oldAccess
 		c.mu.Unlock()
 		return err
 	}
 	if err := c.Start(ctx); err != nil {
 		c.mu.Lock()
-		c.cfg.PermissionMode, c.role = oldMode, oldRole
+		c.cfg.PermissionMode, c.access = oldMode, oldAccess
 		c.mu.Unlock()
-		return fmt.Errorf("restart Claude with %s role: %w", role, err)
+		return fmt.Errorf("restart Claude with native access %q: %w", access, err)
 	}
 	return nil
 }

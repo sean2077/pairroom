@@ -52,7 +52,7 @@ type Adapter interface {
 	Interrupt(context.Context) error
 	Stop(context.Context) error
 	ResolveApproval(context.Context, string, model.ApprovalResolution) error
-	SetRole(context.Context, model.ParticipantRole) error
+	SetNativeAccess(context.Context, model.NativeAccess) error
 	State() model.AgentState
 	SessionID() string
 }

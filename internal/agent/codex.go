@@ -67,10 +67,10 @@ type CodexAdapter struct {
 	// exit to decide whether the in-memory thread ID is safe to drop.
 	threadEngaged bool
 	intentional   bool
-	// role records the last successfully asserted participant role so the
-	// per-submission same-role SetRole assertion is a no-op instead of
-	// re-running the turn-boundary gate (and failing on stale state).
-	role       model.ParticipantRole
+	// access records the last successfully asserted native access so the
+	// per-submission same-access assertion is a no-op instead of re-running
+	// the turn-boundary gate (and failing on stale state).
+	access     model.NativeAccess
 	pending    map[int64]chan rpcReply
 	approvals  map[string]pendingApproval
 	turnInputs map[string][]model.AgentInput
@@ -548,10 +548,10 @@ func (c *CodexAdapter) turnStartParams(threadID, text string, input model.AgentI
 	if c.cfg.ApprovalPolicy != "" {
 		params["approvalPolicy"] = c.cfg.ApprovalPolicy
 	}
-	if input.Role == model.RoleReviewer {
+	if input.Access == model.NativeAccessReadOnly {
 		params["sandboxPolicy"] = map[string]any{"type": "readOnly"}
 	} else if c.cfg.Sandbox != "" {
-		params["sandboxPolicy"] = c.sandboxPolicy(input.Role)
+		params["sandboxPolicy"] = c.sandboxPolicy(input.Access)
 	}
 	if input.MessageID != "" {
 		params["clientUserMessageId"] = input.MessageID
@@ -590,8 +590,8 @@ func (c *CodexAdapter) threadSandbox() string {
 	}
 }
 
-func (c *CodexAdapter) sandboxPolicy(role model.ParticipantRole) map[string]any {
-	if role == model.RoleReviewer {
+func (c *CodexAdapter) sandboxPolicy(access model.NativeAccess) map[string]any {
+	if access == model.NativeAccessReadOnly {
 		return map[string]any{"type": "readOnly"}
 	}
 	switch strings.ToLower(c.cfg.Sandbox) {
@@ -1516,7 +1516,7 @@ func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
 
 // clearStaleApprovals answers approval requests that a terminal turn left
 // unresolved so the vendor is not left waiting on a dead request and the local
-// record can never wedge the SetRole boundary gate. It mirrors Grok's
+// record can never wedge the SetNativeAccess boundary gate. It mirrors Grok's
 // cancelPendingInteractions; the Room-side projection expires through the
 // ordinary turn-boundary handling.
 func (c *CodexAdapter) clearStaleApprovals(stale []pendingApproval) {
@@ -1653,28 +1653,28 @@ func (c *CodexAdapter) ResolveApproval(ctx context.Context, approvalID string, r
 	return nil
 }
 
-// Codex receives sandbox policy per turn, so a role change does not require an
-// app-server restart. It must still happen at a safe turn boundary: already
-// queued or in-flight inputs retain the role/policy captured when they were
+// Codex receives sandbox policy per turn, so an access change does not require
+// an app-server restart. It must still happen at a safe turn boundary: already
+// queued or in-flight inputs retain the access/policy captured when they were
 // created and must not be relabelled midway through execution.
-func (c *CodexAdapter) SetRole(_ context.Context, role model.ParticipantRole) error {
-	if !role.Valid() {
-		return fmt.Errorf("invalid Codex role %q", role)
+func (c *CodexAdapter) SetNativeAccess(_ context.Context, access model.NativeAccess) error {
+	if !access.Valid() {
+		return fmt.Errorf("invalid Codex native access %q", access)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.role == role {
-		// The submission path re-asserts the current role before every turn.
-		// A same-role assertion changes nothing and must not fail on turn
+	if c.access == access {
+		// The submission path re-asserts the current access before every turn.
+		// A same-access assertion changes nothing and must not fail on turn
 		// state or a stale approval record; only a real transition requires
 		// the safe-boundary gate below.
 		return nil
 	}
 	if c.state == model.StateStarting || c.state == model.StateWorking || c.state == model.StateWaiting ||
 		c.currentTurn != "" || c.startingInput != nil || len(c.wireInputs) > 0 || len(c.approvals) > 0 {
-		return errors.New("interrupt or stop Codex before changing its role")
+		return errors.New("interrupt or stop Codex before changing its native access")
 	}
-	c.role = role
+	c.access = access
 	return nil
 }
 

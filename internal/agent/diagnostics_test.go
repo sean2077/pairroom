@@ -68,7 +68,7 @@ func TestRuntimeDiagnosticEvidenceAndCleanup(t *testing.T) {
 						return nil
 					},
 					turn: func(_ context.Context, input model.AgentInput) error {
-						if input.Role != model.RoleReviewer {
+						if input.Access != model.NativeAccessReadOnly {
 							t.Fatal("diagnostic input must be read-only")
 						}
 						id, marker := input.MessageID, "PAIRROOM_CHECK_"+input.MessageID

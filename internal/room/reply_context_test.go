@@ -181,7 +181,7 @@ func TestUserQuoteUsesFullRoomHistoryAndRuntimeIdentity(t *testing.T) {
 		{"Claude in second slot", model.RuntimeGrok, model.RuntimeClaude, "@claude"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e := &Engine{cfg: Config{ClaudeConfig: agent.Config{Runtime: tc.first}, CodexConfig: agent.Config{Runtime: tc.second}}, snapshot: model.RoomSnapshot{Messages: []model.Message{source}}}
+			e := &Engine{cfg: Config{Slot1Config: agent.Config{Runtime: tc.first}, Slot2Config: agent.Config{Runtime: tc.second}}, snapshot: model.RoomSnapshot{Messages: []model.Message{source}}}
 			quote, _, err := e.deliveryQuote(model.Message{From: model.ActorUser, ReplyTo: source.ID, Text: "review"})
 			if err != nil || quote == nil || quote.FromHandle != tc.handle {
 				t.Fatalf("quote used slot/vendor identity instead of runtime handle: %+v, %v", quote, err)

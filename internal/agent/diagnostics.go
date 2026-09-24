@@ -136,7 +136,7 @@ func checkRuntime(parent context.Context, cfg Config, factory Factory) (checks [
 	}
 	finish(0, "pass", "started")
 	start = time.Now()
-	input := model.AgentInput{MessageID: id, From: model.ActorUser, To: cfg.Actor, Role: model.RoleReviewer, Text: "Reply with exactly " + marker + ". Do not use any tools."}
+	input := model.AgentInput{MessageID: id, From: model.ActorUser, To: cfg.Actor, Access: model.NativeAccessReadOnly, Text: "Reply with exactly " + marker + ". Do not use any tools."}
 	if err := adapter.StartTurn(ctx, input); err != nil {
 		return finish(1, "fail", diagnosticErrorCode(ctx, err.Error(), "response_failed"))
 	}

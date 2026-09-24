@@ -322,7 +322,7 @@ func (m *MockAdapter) ResolveApproval(context.Context, string, model.ApprovalRes
 	return ErrApprovalUnsupported
 }
 
-func (m *MockAdapter) SetRole(context.Context, model.ParticipantRole) error { return nil }
+func (m *MockAdapter) SetNativeAccess(context.Context, model.NativeAccess) error { return nil }
 
 func chunks(s string, n int) []string {
 	if n <= 0 || len(s) <= n {

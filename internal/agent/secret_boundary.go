@@ -214,8 +214,8 @@ func (a *redactingAdapter) Stop(ctx context.Context) error { return a.redactor.e
 func (a *redactingAdapter) ResolveApproval(ctx context.Context, id string, resolution model.ApprovalResolution) error {
 	return a.redactor.err(a.inner.ResolveApproval(ctx, id, resolution))
 }
-func (a *redactingAdapter) SetRole(ctx context.Context, role model.ParticipantRole) error {
-	return a.redactor.err(a.inner.SetRole(ctx, role))
+func (a *redactingAdapter) SetNativeAccess(ctx context.Context, access model.NativeAccess) error {
+	return a.redactor.err(a.inner.SetNativeAccess(ctx, access))
 }
 
 // Keep the compiler honest if Adapter grows a method without this boundary

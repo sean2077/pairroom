@@ -47,8 +47,8 @@ func TestConcurrentHTTPRetryReturnsOneAcceptedOneConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := room.Config{Name: "retry", Repo: repo, Store: log,
-		ClaudeFactory: agent.MockFactory, CodexFactory: agent.MockFactory,
-		CodexConfig: agent.Config{MockDelay: time.Hour}}
+		Slot1Factory: agent.MockFactory, Slot2Factory: agent.MockFactory,
+		Slot2Config: agent.Config{MockDelay: time.Hour}}
 	initial, err := room.New(config)
 	if err != nil {
 		t.Fatal(err)

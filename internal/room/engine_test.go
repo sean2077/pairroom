@@ -35,10 +35,11 @@ type fakeAdapter struct {
 	beforeReturn  func(model.AgentInput)
 	submitErr     error
 	steerOutcome  agent.SteerOutcome
-	role          model.ParticipantRole
+	access        model.NativeAccess
 	interrupts    int
 	onInterrupt   func()
 	stopErr       error
+	accessErr     error
 }
 
 func (f *fakeAdapter) Actor() model.ActorID { return f.actor }
@@ -147,11 +148,12 @@ func (f *fakeAdapter) Stop(context.Context) error {
 func (f *fakeAdapter) ResolveApproval(context.Context, string, model.ApprovalResolution) error {
 	return agent.ErrApprovalUnsupported
 }
-func (f *fakeAdapter) SetRole(_ context.Context, role model.ParticipantRole) error {
+func (f *fakeAdapter) SetNativeAccess(_ context.Context, access model.NativeAccess) error {
 	f.mu.Lock()
-	f.role = role
+	f.access = access
+	err := f.accessErr
 	f.mu.Unlock()
-	return nil
+	return err
 }
 func newTestEngine(t *testing.T, dir string) (*Engine, map[model.ActorID]*fakeAdapter) {
 	t.Helper()
@@ -173,8 +175,8 @@ func newTestEngine(t *testing.T, dir string) (*Engine, map[model.ActorID]*fakeAd
 	}
 	engine, err := New(Config{
 		Name: "test", Repo: t.TempDir(), Store: eventStore, Hub: bus.New(64),
-		Settings:      model.RoomSettings{StallWarningSeconds: 300},
-		ClaudeFactory: factory, CodexFactory: factory,
+		Settings:     model.RoomSettings{StallWarningSeconds: 300},
+		Slot1Factory: factory, Slot2Factory: factory,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -250,7 +252,7 @@ func TestSendPassesNativePermissionAndRoutingContext(t *testing.T) {
 	if input.MessageID != message.ID || input.From != model.ActorUser || input.To != model.ActorSlot1 {
 		t.Fatalf("unexpected delivery envelope: %#v", input)
 	}
-	if input.Role != model.RolePeer || input.FromHandle != "@user" || input.SelfHandle != "@claude" || input.PeerHandle != "@codex" {
+	if input.Access != model.NativeAccessDefault || input.FromHandle != "@user" || input.SelfHandle != "@claude" || input.PeerHandle != "@codex" {
 		t.Fatalf("missing room context: %#v", input)
 	}
 }
@@ -898,8 +900,8 @@ func TestExplicitMentionsHaveNoHopLimit(t *testing.T) {
 
 func TestAmbiguousDuplicateRuntimeHandleDoesNotRouteAndNamesBothChoices(t *testing.T) {
 	engine, _ := newTestEngine(t, "")
-	engine.cfg.ClaudeConfig.Runtime = model.RuntimeCodex
-	engine.cfg.CodexConfig.Runtime = model.RuntimeCodex
+	engine.cfg.Slot1Config.Runtime = model.RuntimeCodex
+	engine.cfg.Slot2Config.Runtime = model.RuntimeCodex
 	if targets := engine.agentTargets(model.ActorSlot1, "@codex continue", 1, 1); len(targets) != 0 {
 		t.Fatalf("ambiguous unsuffixed handle routed: %v", targets)
 	}
@@ -1502,8 +1504,8 @@ func newAttachmentEngine(t *testing.T, media AttachmentStore) (*Engine, map[mode
 	}
 	engine, err := New(Config{
 		Name: "media", Repo: t.TempDir(), Store: eventStore, Hub: bus.New(64),
-		Settings:      model.RoomSettings{StallWarningSeconds: 300},
-		ClaudeFactory: factory, CodexFactory: factory, Attachments: media,
+		Settings:     model.RoomSettings{StallWarningSeconds: 300},
+		Slot1Factory: factory, Slot2Factory: factory, Attachments: media,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2117,10 +2119,10 @@ func TestStrictServiceBindingOverridesStaleParticipantSessionAtAdapterBoundary(t
 	}
 	engine, err := New(Config{
 		Name: "ignored", Repo: repo, Store: reopenedStore,
-		Settings:      model.DefaultRoomSettings(),
-		ClaudeFactory: factory, CodexFactory: factory,
-		ClaudeConfig: agent.Config{SessionID: "durable-service-claude", RequireExactSession: true},
-		CodexConfig:  agent.Config{SessionID: "durable-service-codex", RequireExactSession: true},
+		Settings:     model.DefaultRoomSettings(),
+		Slot1Factory: factory, Slot2Factory: factory,
+		Slot1Config: agent.Config{SessionID: "durable-service-claude", RequireExactSession: true},
+		Slot2Config: agent.Config{SessionID: "durable-service-codex", RequireExactSession: true},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2164,9 +2166,9 @@ func TestStrictEmptyBindingStartsFreshInsteadOfRestoringStaleParticipantSession(
 	}
 	engine, err := New(Config{
 		Name: "ignored", Repo: t.TempDir(), Store: reopenedStore, Settings: model.DefaultRoomSettings(),
-		ClaudeFactory: factory, CodexFactory: factory,
-		ClaudeConfig: agent.Config{RequireExactSession: true},
-		CodexConfig:  agent.Config{RequireExactSession: true},
+		Slot1Factory: factory, Slot2Factory: factory,
+		Slot1Config: agent.Config{RequireExactSession: true},
+		Slot2Config: agent.Config{RequireExactSession: true},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2196,8 +2198,8 @@ func TestAcceptedInputMaterializesFreshNativeSession(t *testing.T) {
 	}
 	engine, err := New(Config{
 		Name: "materialize", Repo: t.TempDir(), Store: eventStore,
-		Settings:      model.RoomSettings{StallWarningSeconds: 300},
-		ClaudeFactory: factory, CodexFactory: factory,
+		Settings:     model.RoomSettings{StallWarningSeconds: 300},
+		Slot1Factory: factory, Slot2Factory: factory,
 		OnSessionMaterialized: func(_ context.Context, actor model.ActorID, sessionID string) error {
 			materialized <- struct {
 				actor     model.ActorID
@@ -2250,8 +2252,8 @@ func TestEngineCloseReportsAllResourceErrors(t *testing.T) {
 	}
 	engine, err := New(Config{
 		Name: "close-errors", Repo: t.TempDir(), Store: eventStore, Hub: bus.New(8),
-		Settings:      model.RoomSettings{StallWarningSeconds: 300},
-		ClaudeFactory: factory, CodexFactory: factory,
+		Settings:     model.RoomSettings{StallWarningSeconds: 300},
+		Slot1Factory: factory, Slot2Factory: factory,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2267,5 +2269,34 @@ func TestEngineCloseReportsAllResourceErrors(t *testing.T) {
 	}
 	if err := engine.Close(); err != nil {
 		t.Fatalf("second Close() must be idempotent, got %v", err)
+	}
+}
+
+// Slots are runtime-independent: a startup permission failure names the slot,
+// not a vendor that the slot may not be running.
+func TestStartPermissionFailureNamesSlotNotVendor(t *testing.T) {
+	eventStore, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory := func(cfg agent.Config, sink agent.EventSink) agent.Adapter {
+		adapter := &fakeAdapter{actor: cfg.Actor, sink: sink, state: model.StateStopped, submissions: make(chan model.AgentInput, 1)}
+		if cfg.Actor == model.ActorSlot2 {
+			adapter.accessErr = errors.New("policy rejected")
+		}
+		return adapter
+	}
+	engine, err := New(Config{
+		Name: "grok pair", Repo: t.TempDir(), Store: eventStore, Settings: model.RoomSettings{StallWarningSeconds: 300},
+		Slot1Factory: factory, Slot2Factory: factory,
+		Slot1Config: agent.Config{Runtime: model.RuntimeGrok}, Slot2Config: agent.Config{Runtime: model.RuntimeGrok},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+	err = engine.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "apply slot2 permissions") || strings.Contains(err.Error(), "Codex") {
+		t.Fatalf("permission failure = %v", err)
 	}
 }

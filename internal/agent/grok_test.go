@@ -237,7 +237,7 @@ func TestGrokACPLifecycleCreatesSessionAndInterjects(t *testing.T) {
 	defer cancel()
 	if err := adapter.StartTurn(ctx, model.AgentInput{
 		MessageID: "first", ThreadID: "thread", From: model.ActorUser, To: model.ActorSlot1,
-		FromHandle: "@user", SelfHandle: "@grok", PeerHandle: "@codex", Role: model.RoleDriver, Text: "begin",
+		FromHandle: "@user", SelfHandle: "@grok", PeerHandle: "@codex", Access: model.NativeAccessDefault, Text: "begin",
 		Attachments: attachments,
 	}); err != nil {
 		t.Fatal(err)
@@ -247,7 +247,7 @@ func TestGrokACPLifecycleCreatesSessionAndInterjects(t *testing.T) {
 	}
 	outcome := adapter.Steer(ctx, model.AgentInput{
 		MessageID: "steer", ThreadID: "thread", From: model.ActorUser, To: model.ActorSlot1,
-		FromHandle: "@user", SelfHandle: "@grok", PeerHandle: "@codex", Role: model.RoleDriver, Text: "change direction",
+		FromHandle: "@user", SelfHandle: "@grok", PeerHandle: "@codex", Access: model.NativeAccessDefault, Text: "change direction",
 		Attachments: attachments,
 	})
 	if outcome.State != SteerAccepted {
@@ -286,7 +286,7 @@ func TestGrokACPExactLoadFiltersReplayAndInjectsBootstrapOnce(t *testing.T) {
 	}
 	if err := adapter.StartTurn(ctx, model.AgentInput{
 		MessageID: "resume", ThreadID: "thread", From: model.ActorUser, To: model.ActorSlot2,
-		FromHandle: "@user", SelfHandle: "@grok", PeerHandle: "@claude", Role: model.RoleReviewer, Text: "continue",
+		FromHandle: "@user", SelfHandle: "@grok", PeerHandle: "@claude", Access: model.NativeAccessReadOnly, Text: "continue",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestGrokACPPermissionResolutionAndCancellation(t *testing.T) {
 			adapter := NewGrok(Config{Actor: model.ActorSlot1, Command: os.Args[0], Repo: t.TempDir()}, func(event model.RuntimeEvent) { events <- event })
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			defer cancel()
-			if err := adapter.StartTurn(ctx, model.AgentInput{MessageID: "permission", ThreadID: "thread", Role: model.RoleDriver, Text: "run"}); err != nil {
+			if err := adapter.StartTurn(ctx, model.AgentInput{MessageID: "permission", ThreadID: "thread", Access: model.NativeAccessDefault, Text: "run"}); err != nil {
 				t.Fatal(err)
 			}
 			requested := waitRuntimeEvent(t, events, model.RuntimeApprovalRequested)

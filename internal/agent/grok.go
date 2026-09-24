@@ -78,7 +78,7 @@ type GrokAdapter struct {
 	writeMu  sync.Mutex
 
 	state     model.AgentState
-	role      model.ParticipantRole
+	access    model.NativeAccess
 	sessionID string
 	// sessionEngaged distinguishes a durable/existing binding from a lazy
 	// session/new ID that was allocated before the first PairRoom prompt. The
@@ -107,7 +107,7 @@ func NewGrok(cfg Config, sink EventSink) *GrokAdapter {
 	}
 	cfg.Runtime = model.RuntimeGrok
 	return &GrokAdapter{
-		cfg: cfg, sink: sink, state: model.StateStopped, role: model.RoleDriver,
+		cfg: cfg, sink: sink, state: model.StateStopped,
 		sessionID: strings.TrimSpace(cfg.SessionID), sessionEngaged: strings.TrimSpace(cfg.SessionID) != "",
 		pending:   make(map[int64]chan grokRPCReply),
 		approvals: make(map[string]grokPendingApproval),
@@ -395,7 +395,7 @@ func (g *GrokAdapter) ensureSession(ctx context.Context) error {
 	}
 	required := strings.TrimSpace(g.sessionID)
 	repo := g.cfg.Repo
-	role := g.role
+	access := g.access
 	capabilities := g.capabilities
 	g.mu.Unlock()
 
@@ -449,7 +449,7 @@ func (g *GrokAdapter) ensureSession(ctx context.Context) error {
 	}
 	g.sessionID = required
 	g.mu.Unlock()
-	if err := g.applyRoleMode(ctx, required, role); err != nil {
+	if err := g.applyAccessMode(ctx, required, access); err != nil {
 		return err
 	}
 	g.mu.Lock()
@@ -479,9 +479,9 @@ func grokStartupHints() map[string]any {
 	return map[string]any{"nonInteractive": true, "skipGitStatus": true, "skipProjectLayout": true}
 }
 
-func (g *GrokAdapter) applyRoleMode(ctx context.Context, sessionID string, role model.ParticipantRole) error {
+func (g *GrokAdapter) applyAccessMode(ctx context.Context, sessionID string, access model.NativeAccess) error {
 	mode := "default"
-	if role == model.RoleReviewer || strings.EqualFold(g.cfg.PermissionMode, "plan") {
+	if access == model.NativeAccessReadOnly || strings.EqualFold(g.cfg.PermissionMode, "plan") {
 		mode = "plan"
 	}
 	_, err := g.call(ctx, "session/set_mode", map[string]any{"sessionId": sessionID, "modeId": mode})
@@ -979,25 +979,25 @@ func selectGrokPermissionOption(options []grokPermissionOption, decision string)
 	return selected
 }
 
-func (g *GrokAdapter) SetRole(ctx context.Context, role model.ParticipantRole) error {
-	if !role.Valid() {
-		return fmt.Errorf("invalid Grok role %q", role)
+func (g *GrokAdapter) SetNativeAccess(ctx context.Context, access model.NativeAccess) error {
+	if !access.Valid() {
+		return fmt.Errorf("invalid Grok native access %q", access)
 	}
 	g.mu.Lock()
 	if g.turn != nil {
 		g.mu.Unlock()
-		return errors.New("interrupt or stop Grok before changing its role")
+		return errors.New("interrupt or stop Grok before changing its native access")
 	}
-	oldRole := g.role
-	g.role = role
+	oldAccess := g.access
+	g.access = access
 	opened := g.sessionOpened
 	sessionID := g.sessionID
 	g.mu.Unlock()
 	if opened {
-		if err := g.applyRoleMode(ctx, sessionID, role); err != nil {
+		if err := g.applyAccessMode(ctx, sessionID, access); err != nil {
 			g.mu.Lock()
-			if g.role == role {
-				g.role = oldRole
+			if g.access == access {
+				g.access = oldAccess
 			}
 			g.mu.Unlock()
 			return err

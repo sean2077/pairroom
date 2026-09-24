@@ -44,17 +44,17 @@ func newTestServerWithOptions(t *testing.T, token, boundary, cookieName string, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	codexFactory := agent.MockFactory
+	slot2Factory := agent.MockFactory
 	if len(codexFactories) > 0 {
-		codexFactory = codexFactories[0]
+		slot2Factory = codexFactories[0]
 	}
 	engine, err := room.New(room.Config{
 		Name: "test room", Repo: repo, Store: eventStore,
-		Settings:      model.RoomSettings{StallWarningSeconds: 300},
-		ClaudeFactory: agent.MockFactory, CodexFactory: codexFactory,
-		ClaudeConfig: agent.Config{MockDelay: 5 * time.Millisecond},
-		CodexConfig:  agent.Config{MockDelay: 5 * time.Millisecond},
-		Attachments:  media,
+		Settings:     model.RoomSettings{StallWarningSeconds: 300},
+		Slot1Factory: agent.MockFactory, Slot2Factory: slot2Factory,
+		Slot1Config: agent.Config{MockDelay: 5 * time.Millisecond},
+		Slot2Config: agent.Config{MockDelay: 5 * time.Millisecond},
+		Attachments: media,
 	})
 	if err != nil {
 		t.Fatal(err)

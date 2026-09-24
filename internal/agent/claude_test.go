@@ -331,19 +331,19 @@ func TestClaudeAskUserQuestionReturnsStructuredAnswers(t *testing.T) {
 	}
 }
 
-func TestClaudeRoleMapsReviewerToPlanModeWhileStopped(t *testing.T) {
+func TestClaudeReadOnlyAccessMapsToPlanModeWhileStopped(t *testing.T) {
 	adapter := NewClaude(Config{PermissionMode: "auto"}, func(model.RuntimeEvent) {})
-	if err := adapter.SetRole(context.Background(), model.RoleReviewer); err != nil {
+	if err := adapter.SetNativeAccess(context.Background(), model.NativeAccessReadOnly); err != nil {
 		t.Fatal(err)
 	}
-	if adapter.role != model.RoleReviewer || adapter.cfg.PermissionMode != "plan" {
-		t.Fatalf("reviewer policy was not applied: role=%q mode=%q", adapter.role, adapter.cfg.PermissionMode)
+	if adapter.access != model.NativeAccessReadOnly || adapter.cfg.PermissionMode != "plan" {
+		t.Fatalf("read-only policy was not applied: access=%q mode=%q", adapter.access, adapter.cfg.PermissionMode)
 	}
-	if err := adapter.SetRole(context.Background(), model.RoleDriver); err != nil {
+	if err := adapter.SetNativeAccess(context.Background(), model.NativeAccessDefault); err != nil {
 		t.Fatal(err)
 	}
-	if adapter.role != model.RoleDriver || adapter.cfg.PermissionMode != "auto" {
-		t.Fatalf("driver policy was not restored: role=%q mode=%q", adapter.role, adapter.cfg.PermissionMode)
+	if adapter.access != model.NativeAccessDefault || adapter.cfg.PermissionMode != "auto" {
+		t.Fatalf("default policy was not restored: access=%q mode=%q", adapter.access, adapter.cfg.PermissionMode)
 	}
 }
 
@@ -352,17 +352,17 @@ func TestClaudeEmptyPermissionModeReturnsToNativeInheritance(t *testing.T) {
 	if adapter.baseMode != "" || adapter.cfg.PermissionMode != "" {
 		t.Fatalf("empty permission override was synthesized: base=%q current=%q", adapter.baseMode, adapter.cfg.PermissionMode)
 	}
-	if err := adapter.SetRole(context.Background(), model.RoleReviewer); err != nil {
+	if err := adapter.SetNativeAccess(context.Background(), model.NativeAccessReadOnly); err != nil {
 		t.Fatal(err)
 	}
 	if adapter.cfg.PermissionMode != "plan" {
-		t.Fatalf("reviewer mode = %q, want plan", adapter.cfg.PermissionMode)
+		t.Fatalf("read-only mode = %q, want plan", adapter.cfg.PermissionMode)
 	}
-	if err := adapter.SetRole(context.Background(), model.RoleDriver); err != nil {
+	if err := adapter.SetNativeAccess(context.Background(), model.NativeAccessDefault); err != nil {
 		t.Fatal(err)
 	}
 	if adapter.cfg.PermissionMode != "" {
-		t.Fatalf("driver retained a synthesized permission override: %q", adapter.cfg.PermissionMode)
+		t.Fatalf("default access retained a synthesized permission override: %q", adapter.cfg.PermissionMode)
 	}
 }
 
@@ -404,13 +404,13 @@ func TestClaudeStopClearsPendingApprovals(t *testing.T) {
 	}
 }
 
-func TestClaudeReviewerFailClosesNativeWriteRequest(t *testing.T) {
+func TestClaudeReadOnlyFailClosesNativeWriteRequest(t *testing.T) {
 	writer := &testWriteCloser{}
 	var events []model.RuntimeEvent
 	adapter := NewClaude(Config{}, func(event model.RuntimeEvent) { events = append(events, event) })
 	adapter.stdin = writer
 	adapter.state = model.StateWorking
-	adapter.role = model.RoleReviewer
+	adapter.access = model.NativeAccessReadOnly
 	adapter.handleLine([]byte(`{"type":"control_request","request_id":"reviewer-write","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"unsafe.txt","content":"no"}}}`))
 
 	if len(adapter.approvals) != 0 {
@@ -427,7 +427,7 @@ func TestClaudeReviewerFailClosesNativeWriteRequest(t *testing.T) {
 	if err := json.Unmarshal(bytes.TrimSpace(writer.Bytes()), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Response.Response.Behavior != "deny" || !strings.Contains(response.Response.Response.Message, "reviewer role") {
+	if response.Response.Response.Behavior != "deny" || !strings.Contains(response.Response.Response.Message, "read-only access") {
 		t.Fatalf("unexpected reviewer response: %#v", response)
 	}
 	foundLog := false
