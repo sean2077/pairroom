@@ -10,6 +10,8 @@
 
 - Deliver on-demand tool evidence to every open row that asks for it: a row rebuilt while its load was in flight (for example after switching the inspector's Agent filter) no longer stays on "loading". Loaded evidence is now kept least recently used first within a 2 M-character budget and only for an item's current source set, instead of for the life of the page.
 
+- Scope the ST1005 lint exemption to error strings that begin with a glossary proper noun, PairRoom, Git or the native `Stop` hook, instead of disabling the check globally. No error text changes.
+
 ## [v5.5.0] — 2026-09-24
 
 - Update the pinned CGo-free SQLite closure used for read-only CC Switch access: `modernc.org/sqlite` 1.58.0 → 1.59.0 and `modernc.org/libc` 1.75.6 → 1.75.7. The reviewed dependency allowlist and third-party notices move with it; the license text is unchanged.
