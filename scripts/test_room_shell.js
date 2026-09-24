@@ -138,6 +138,22 @@ function runAnimationFrames() {
 {
   const source = new windowObject.EventSource('/events');
   const seen = [];
+  source.addEventListener('pairroom', (event) => {
+    const value = JSON.parse(event.data);
+    seen.push(`${value.seq}:${value.kind === 'runtime.event' ? value.data.kind : value.kind}`);
+  });
+  source.emit('pairroom', envelope(0, 'runtime.event', { kind: 'tool.started' }));
+  source.emit('pairroom', envelope(0, 'turn.summary.updated', { id: 'turn-1', updated_at: '1' }));
+  assert.deepEqual(seen, [], 'live Turn summaries must batch with the telemetry that produced them');
+  source.emit('pairroom', envelope(43, 'turn.summary.updated', { id: 'turn-1', updated_at: '2' }));
+  runAnimationFrames();
+  assert.deepEqual(seen, ['0:tool.started', '0:turn.summary.updated', '43:turn.summary.updated'],
+    'a durable summary checkpoint must flush earlier live summaries first');
+}
+
+{
+  const source = new windowObject.EventSource('/events');
+  const seen = [];
   source.addEventListener('pairroom', (event) => seen.push(JSON.parse(event.data).data.kind));
   source.emit('pairroom', envelope(0, 'runtime.event', { kind: 'log', text: 'last progress' }));
   source.emit('pairroom', envelope(0, 'runtime.event', { kind: 'turn.completed' }));

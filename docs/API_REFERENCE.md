@@ -129,6 +129,10 @@ Durable events carry a monotonic sequence and can be resumed after disconnect. H
 
 `GET /api/v1/snapshot?message_limit=250` returns the newest messages and `message_window` pagination metadata while retaining current Room/runtime state. `message_limit` accepts integers from 0 to 1000; zero or omission retains the full-transcript response. Invalid values return HTTP 400. Older messages are available through `GET /api/v1/messages?before_seq={oldest_seq}&limit=100`, in chronological order and strictly before the cursor.
 
+A windowed snapshot's `turns` holds the 40 most recently updated Turn summaries, every unfinished Turn, and every Turn correlated with a returned message; `turn_window` reports `{total, loaded}`. The full-transcript response keeps every Turn. A `messages` page adds `turns` for the Turns correlated with its messages; clients merge them by `id` without replacing a newer `updated_at`. Snapshot `events` omit `turn.summary.updated`, whose current projection is `turns`, and bound each runtime event's `text` and `data` to 4 KiB (an oversized `data` becomes `{"truncated":true,"head":…}`); the in-memory tail is also bounded to 4 MiB of payload, so an older cursor receives the documented reset. `export?format=json&include_events=1` keeps the unprojected tail.
+
+A Turn item with `source_seqs` carries only a short `detail` preview. `GET /api/v1/turns/{turn}/items/{item}` (path segments URL-encoded) returns `{"evidence":[{seq,kind,name,text,data,created_at,truncated}]}` read from those durable records after verifying each belongs to that participant, Turn and item; one response is bounded to 4 MiB and marks a shortened record `truncated`. An unknown Turn or item is 404; an item without `source_seqs` returns an empty list because its evidence is inline. The Management Room gateway forwards only this read-only form. A `turn.summary.updated` SSE event with sequence 0 is a live, non-durable summary update: apply it to `turns` only, and never treat it as a durable fact or cursor.
+
 `GET /api/v1/events?since={latest_seq}` resumes after that durable sequence. A non-empty `Last-Event-ID` header takes precedence over `since` on native EventSource reconnects; malformed cursors return HTTP 400. If the cursor is ahead of the Room or older than its retained event tail, the server emits `event: reset` with `{"reason":"snapshot_required","latest_seq":...}` and closes the stream. Fetch a fresh snapshot before reconnecting; do not interpret this as a Turn completion. Transient events and reset notifications never advance the durable SSE ID.
 
 ## Explicit retries
@@ -175,6 +179,7 @@ The following method/path patterns are extracted from production HTTP registrati
 - `GET /api/v1/service`
 - `GET /api/v1/session`
 - `GET /api/v1/snapshot`
+- `GET /api/v1/turns/{turn}/items/{item}`
 - `PATCH /api/v1/agent-pair-profiles/default`
 - `PATCH /api/v1/navigation-order`
 - `PATCH /api/v1/rooms/{room}`

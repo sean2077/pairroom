@@ -49,6 +49,60 @@
       return node;
     }
 
+    // Tool evidence is loaded on demand from the item's durable source records;
+    // older summaries carry bounded evidence inline. Either way nothing is
+    // formatted for a collapsed item.
+    const evidenceCache = new Map();
+
+    function inlineEvidence(item) {
+      return [item.detail, item.data ? h.prettyJSON(item.data) : ''].filter(Boolean).join('\n\n') || item.id;
+    }
+
+    function formatLoadedEvidence(item, records) {
+      if (!records.length) return inlineEvidence(item);
+      return records.map((record) => [
+        `[${record.kind}]${record.name ? ` ${record.name}` : ''}`,
+        record.text || '',
+        record.data ? h.prettyJSON(record.data) : '',
+        record.truncated ? h.t('room.evidenceTruncated') : '',
+      ].filter(Boolean).join('\n')).join('\n\n');
+    }
+
+    function showEvidence(row) {
+      const state = row._evidence;
+      if (!state) return;
+      const { summaryID, item } = state;
+      const target = row.lastElementChild;
+      const sources = item.source_seqs || [];
+      if (!sources.length || typeof h.loadTurnItem !== 'function') {
+        text(target, inlineEvidence(item));
+        return;
+      }
+      // New source records (for example the completion) invalidate the cache.
+      const key = JSON.stringify([summaryID, item.id, sources]);
+      const cached = evidenceCache.get(key);
+      if (cached?.text !== undefined) {
+        text(target, cached.text);
+        return;
+      }
+      text(target, [item.detail, h.t('room.loadingEvidence')].filter(Boolean).join('\n\n'));
+      if (cached?.pending) return;
+      const request = { pending: true };
+      evidenceCache.set(key, request);
+      h.loadTurnItem(summaryID, item.id).then((records) => {
+        request.text = formatLoadedEvidence(item, records || []);
+      }).catch((error) => {
+        // A failure is shown, not cached, so reopening retries.
+        evidenceCache.delete(key);
+        request.error = [item.detail, h.t('room.evidenceUnavailable', { value0: error?.message || '' })].filter(Boolean).join('\n\n');
+      }).finally(() => {
+        request.pending = false;
+        const current = row._evidence;
+        if (!row.isConnected || !row.open || !current || JSON.stringify([current.summaryID, current.item.id, current.item.source_seqs || []]) !== key) return;
+        text(target, request.text ?? request.error);
+      });
+    }
+
     function updateTurn(summary, entry, scoped) {
       let card = entry.node;
       if (!card) {
@@ -95,6 +149,8 @@
           const heading = element('summary', 'turn-item-head');
           heading.append(element('span', 'turn-item-tag'), element('span', 'turn-item-text'), element('span', 'turn-item-status'));
           row.append(heading, element('pre', 'turn-item-evidence'));
+          // Evidence renders only while open; toggling open renders it once.
+          row.addEventListener('toggle', () => { if (row.open) showEvidence(row); });
           entry.items.set(key, row);
         }
         row.className = `turn-item item-${item.kind || 'event'} status-${item.status || 'unknown'}`;
@@ -102,8 +158,8 @@
         text(heading.children[0], item.kind || 'event');
         text(heading.children[1], item.name || h.truncate(item.detail, 160) || item.id);
         text(heading.children[2], h.turnStatusText(item.status));
-        // Show the full bounded inspector evidence, not only a truncated label.
-        text(row.lastElementChild, [item.detail, item.data ? h.prettyJSON(item.data) : ''].filter(Boolean).join('\n\n') || item.id);
+        row._evidence = { summaryID: summary.id, item };
+        if (row.open) showEvidence(row);
         items.push(row);
       });
       for (const key of entry.items.keys()) if (!keys.has(key)) entry.items.delete(key);

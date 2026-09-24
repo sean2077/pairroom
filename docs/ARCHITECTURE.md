@@ -39,7 +39,7 @@ The root module uses the latest stable Go release and the approved pinned CGo-fr
 
 ## Durable facts and derived state
 
-The Room Event Log is authoritative. Registry/indexes support discovery and ownership checks; snapshots, current-work counters, and Turn summaries are projections. Persist auditable transitions before publishing facts. High-frequency transient telemetry may remain off disk.
+The Room Event Log is authoritative. Registry/indexes support discovery and ownership checks; snapshots, current-work counters, and Turn summaries are projections. Persist auditable transitions before publishing facts. High-frequency transient telemetry may remain off disk, and a projection may be persisted as bounded checkpoints rather than on every input ([Storage](STORAGE.md#event-log)).
 
 Event sequences start at 1 and remain contiguous. Validate the existing published Room identity before repair or new writes; a missing/empty log is not a fresh Room. Ambiguous append failure closes the writer. Only an incomplete final record is repairable; never skip middle corruption.
 

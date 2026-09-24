@@ -412,6 +412,35 @@ async function main() {
     assert.equal(c.state.drafts.slot1.length, 700, 'full text stays in its draft projection');
   }
   {
+    const c = client();
+    c.state.snapshot.events = [{id:'evidence',kind:'runtime.event',data:{kind:'log'}}];
+    for (let i = 0; i < 700; i++) c.applyEvent({seq:0,kind:'turn.summary.updated',data:{id:'slot1:t',updated_at:`2026-09-23T00:00:${String(i % 60).padStart(2,'0')}Z`,items:[]}});
+    assert.equal(c.state.snapshot.events.length, 1, 'live Turn summaries must not displace diagnostics');
+    assert.equal(c.state.snapshot.latest_seq, 10, 'live summaries never advance the durable cursor');
+    assert.equal(c.state.snapshot.turns.length, 1, 'live summaries replace their Turn projection');
+    c.applyEvent({seq:11,kind:'turn.summary.updated',data:{id:'slot1:t',updated_at:'2026-09-23T00:01:00Z',status:'completed'}});
+    assert.equal(c.state.snapshot.turns[0].status, 'completed', 'durable checkpoints update the Turn');
+    assert.equal(c.state.snapshot.events.length, 2, 'durable checkpoints remain ordinary tail events');
+    c.applyEvent({seq:0,kind:'turn.summary.updated',data:{id:'slot1:t',updated_at:'2026-09-23T00:00:30Z',status:'working'}});
+    assert.equal(c.state.snapshot.turns[0].status, 'completed', 'an older live summary cannot regress a newer checkpoint');
+  }
+  {
+    const c = client(), request = deferred();
+    c.state.snapshot.messages = [{id: 'new', seq: 9}];
+    c.state.snapshot.message_window = {has_more: true, total: 9};
+    c.state.snapshot.turns = [{id: 'slot1:recent', updated_at: '2026-09-23T00:05:00Z', status: 'completed'}];
+    c.setAPI(() => request.promise);
+    const loading = c.loadOlderMessages();
+    request.resolve({messages: [{id: 'old', seq: 4}], total: 9, turns: [
+      {id: 'slot1:old', updated_at: '2026-09-23T00:00:00Z', message_ids: ['old'], status: 'completed'},
+      {id: 'slot1:recent', updated_at: '2026-09-23T00:01:00Z', status: 'working'},
+    ]});
+    await loading;
+    const turns = Object.fromEntries(c.state.snapshot.turns.map((turn) => [turn.id, turn.status]));
+    assert.deepEqual(turns, {'slot1:recent': 'completed', 'slot1:old': 'completed'},
+      'history pages add their Turns without regressing newer projections');
+  }
+  {
     const c = client(), older = deferred(), newer = deferred(); let reads = 0;
     c.setAPI(() => (++reads === 1 ? older.promise : newer.promise));
     c.nodes.get('staged-diff').checked = false;

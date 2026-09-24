@@ -25,7 +25,16 @@ type JSONLStore struct {
 	file    *os.File
 	lastSeq uint64
 	roomID  string
+	// offsets[seq-1] is the byte offset of each complete record and size is
+	// the durable file length. Both are rebuilt by the open-time repair scan,
+	// so ReadEvent can seek to one record without rereading the log.
+	offsets []int64
+	size    int64
 }
+
+// maxEventRecordBytes bounds a single indexed read. It is far above any
+// record the Room writes and only guards against a corrupted index.
+const maxEventRecordBytes = 64 << 20
 
 func Open(dir string) (*JSONLStore, error) {
 	return open(dir, true, "")
@@ -92,7 +101,7 @@ func open(dir string, create bool, roomID string) (*JSONLStore, error) {
 	if err := store.ensureMetadata(allowMetadataCreate); err != nil {
 		return nil, err
 	}
-	lastSeq, err := repairEventLog(path, create, roomID)
+	lastSeq, offsets, size, err := repairEventLog(path, create, roomID)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +115,7 @@ func open(dir string, create bool, roomID string) (*JSONLStore, error) {
 	}
 	// Repair already decoded and validated every complete record. Reuse its
 	// sequence instead of allocating and decoding the entire replay again.
-	store.file, store.lastSeq = file, lastSeq
+	store.file, store.lastSeq, store.offsets, store.size = file, lastSeq, offsets, size
 	return store, nil
 }
 
@@ -116,20 +125,24 @@ func open(dir string, create bool, roomID string) (*JSONLStore, error) {
 // valid event onto the broken object. We truncate only an invalid unterminated
 // final line. A valid final object without a newline is normalized by adding
 // one. Corruption before the final line remains a hard error.
-func repairEventLog(path string, create bool, roomID string) (uint64, error) {
+//
+// It returns the last sequence, each complete record's byte offset, and the
+// resulting durable file length.
+func repairEventLog(path string, create bool, roomID string) (uint64, []int64, int64, error) {
 	flags := os.O_RDWR
 	if create {
 		flags |= os.O_CREATE
 	}
 	file, err := os.OpenFile(path, flags, 0o600)
 	if err != nil {
-		return 0, fmt.Errorf("open event log for repair: %w", err)
+		return 0, nil, 0, fmt.Errorf("open event log for repair: %w", err)
 	}
 	defer file.Close()
 
 	reader := bufio.NewReaderSize(file, 128*1024)
 	var lastGood int64
 	var lastSeq uint64
+	var offsets []int64
 	for lineNo := 1; ; lineNo++ {
 		line, readErr := reader.ReadBytes('\n')
 		if len(line) > 0 {
@@ -137,38 +150,39 @@ func repairEventLog(path string, create bool, roomID string) (uint64, error) {
 			if err := json.Unmarshal(line, &event); err != nil {
 				if errors.Is(readErr, io.EOF) {
 					if roomID != "" && lastSeq == 0 {
-						return 0, errors.New("published Room has no complete identity event")
+						return 0, nil, 0, errors.New("published Room has no complete identity event")
 					}
 					if err := file.Truncate(lastGood); err != nil {
-						return 0, fmt.Errorf("truncate partial event log tail: %w", err)
+						return 0, nil, 0, fmt.Errorf("truncate partial event log tail: %w", err)
 					}
-					return lastSeq, file.Sync()
+					return lastSeq, offsets, lastGood, file.Sync()
 				}
-				return 0, fmt.Errorf("decode event log line %d during repair: %w", lineNo, err)
+				return 0, nil, 0, fmt.Errorf("decode event log line %d during repair: %w", lineNo, err)
 			}
 			if err := checkSequence(event.Seq, lastSeq); err != nil {
-				return 0, fmt.Errorf("event log line %d during repair: %w", lineNo, err)
+				return 0, nil, 0, fmt.Errorf("event log line %d during repair: %w", lineNo, err)
 			}
 			if err := checkRoomIdentity(event, roomID, lastSeq == 0); err != nil {
-				return 0, err
+				return 0, nil, 0, err
 			}
 			lastSeq = event.Seq
+			offsets = append(offsets, lastGood)
 			lastGood += int64(len(line))
 			if errors.Is(readErr, io.EOF) && line[len(line)-1] != '\n' {
 				if _, err := file.WriteAt([]byte{'\n'}, lastGood); err != nil {
-					return 0, fmt.Errorf("normalize event log newline: %w", err)
+					return 0, nil, 0, fmt.Errorf("normalize event log newline: %w", err)
 				}
-				return lastSeq, file.Sync()
+				return lastSeq, offsets, lastGood + 1, file.Sync()
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
 			if roomID != "" && lastSeq == 0 {
-				return 0, errors.New("published Room event log is empty")
+				return 0, nil, 0, errors.New("published Room event log is empty")
 			}
-			return lastSeq, nil
+			return lastSeq, offsets, lastGood, nil
 		}
 		if readErr != nil {
-			return 0, fmt.Errorf("read event log during repair: %w", readErr)
+			return 0, nil, 0, fmt.Errorf("read event log during repair: %w", readErr)
 		}
 	}
 }
@@ -234,6 +248,7 @@ func (s *JSONLStore) Append(event *model.Event) error {
 		return fmt.Errorf("marshal event: %w", err)
 	}
 	data = append(data, '\n')
+	offset := s.size
 	if _, err := s.file.Write(data); err != nil {
 		return s.failWriteLocked("append event", err)
 	}
@@ -243,7 +258,50 @@ func (s *JSONLStore) Append(event *model.Event) error {
 	// Only acknowledge a sequence after the complete record is durable. A
 	// rejected marshal must not poison a retry or create a replay-breaking gap.
 	s.lastSeq, event.Seq = candidate.Seq, candidate.Seq
+	s.offsets = append(s.offsets, offset)
+	s.size = offset + int64(len(data))
 	return nil
+}
+
+// ReadEvent returns one durable record by sequence using the open-time offset
+// index. It reads through a separate handle, so an indexed lookup never
+// rereads the log or blocks appends while it decodes a large record.
+func (s *JSONLStore) ReadEvent(seq uint64) (model.Event, error) {
+	s.mu.Lock()
+	if s.file == nil {
+		s.mu.Unlock()
+		return model.Event{}, errors.New("event store is closed")
+	}
+	if seq == 0 || seq > uint64(len(s.offsets)) {
+		s.mu.Unlock()
+		return model.Event{}, fmt.Errorf("event %d is not in the log", seq)
+	}
+	offset, limit := s.offsets[seq-1], s.size
+	if seq < uint64(len(s.offsets)) {
+		limit = s.offsets[seq]
+	}
+	path := s.path
+	s.mu.Unlock()
+	if limit-offset <= 0 || limit-offset > maxEventRecordBytes {
+		return model.Event{}, fmt.Errorf("event %d has an invalid indexed length", seq)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return model.Event{}, fmt.Errorf("open event log for reading: %w", err)
+	}
+	defer file.Close()
+	line := make([]byte, limit-offset)
+	if _, err := file.ReadAt(line, offset); err != nil {
+		return model.Event{}, fmt.Errorf("read event %d: %w", seq, err)
+	}
+	var event model.Event
+	if err := json.Unmarshal(line, &event); err != nil {
+		return model.Event{}, fmt.Errorf("decode event %d: %w", seq, err)
+	}
+	if event.Seq != seq {
+		return model.Event{}, fmt.Errorf("event index mismatch: offset for %d holds %d", seq, event.Seq)
+	}
+	return event, nil
 }
 
 func checkRoomIdentity(event model.Event, roomID string, first bool) error {

@@ -306,9 +306,11 @@
     }
     if (durable) state.snapshot.latest_seq = event.seq;
     state.snapshot.events = state.snapshot.events || [];
-    // Streaming text is accumulated in drafts. It is not diagnostic history
-    // and must not evict useful tool/approval events on every generated token.
-    if (!(event.kind === 'runtime.event' && event.data?.kind === 'text.delta')) state.snapshot.events.push(event);
+    // Streaming text is accumulated in drafts, and live (sequence-zero) Turn
+    // summaries replace `turns`. Neither is diagnostic history, so neither may
+    // evict useful tool/approval events from the bounded tail.
+    const liveSummary = !durable && event.kind === 'turn.summary.updated';
+    if (!liveSummary && !(event.kind === 'runtime.event' && event.data?.kind === 'text.delta')) state.snapshot.events.push(event);
     if (state.snapshot.events.length > 600) state.snapshot.events.splice(0, state.snapshot.events.length - 600);
     const data = event.data || {};
     let renderScope = 'full';
@@ -394,10 +396,7 @@
         break;
       }
       case 'turn.summary.updated': {
-        state.snapshot.turns = state.snapshot.turns || [];
-        const index = state.snapshot.turns.findIndex((item) => item.id === data.id);
-        if (index >= 0) state.snapshot.turns[index] = data;
-        else state.snapshot.turns.push(data);
+        mergeTurnSummaries([data]);
         renderScope = 'activity';
         break;
       }
@@ -1503,12 +1502,20 @@
       .slice(-100).reverse();
     activityView ||= window.PairRoomActivity.create($('activity-tab'), {
       t, displayName, formatTime, formatDuration, turnStatusText, activityIcon, activityLabel, activityDetail, prettyJSON, truncate,
+      loadTurnItem,
     });
     activityView.render(summaries, events, {
       scoped: Boolean(scopedMessage),
       version: JSON.stringify([window.PairRoomI18n?.lang, displayName('slot1'), displayName('slot2')]),
       emptyText: t(scopedMessage ? 'ui.thisMessageDoesNotYetHaveADurableWorkSummary' : 'ui.agentTurnsToolCallsCommandsPlansDiffsAndLogsAppearHere'),
     });
+  }
+
+  // Work inspector item evidence lives in durable runtime records and is read
+  // only when the user opens that item.
+  async function loadTurnItem(summaryID, itemID) {
+    const response = await api(`/api/v1/turns/${encodeURIComponent(summaryID)}/items/${encodeURIComponent(itemID)}`);
+    return response?.evidence || [];
   }
 
   function turnStatusText(status) {
@@ -2365,6 +2372,22 @@
     button.setAttribute('aria-label', granted ? t("ui.desktopNotificationsEnabledClickAgainToManageThem") : t("ui.enableDesktopNotifications"));
   }
 
+  // Summaries arrive from live events, checkpoints and history pages in any
+  // order. Keep the newest projection of each Turn; never regress it.
+  function mergeTurnSummaries(summaries) {
+    state.snapshot.turns = state.snapshot.turns || [];
+    for (const summary of summaries || []) {
+      if (!summary?.id) continue;
+      const index = state.snapshot.turns.findIndex((item) => item.id === summary.id);
+      if (index < 0) {
+        state.snapshot.turns.push(summary);
+        continue;
+      }
+      const current = state.snapshot.turns[index];
+      if (String(summary.updated_at || '') >= String(current.updated_at || '')) state.snapshot.turns[index] = summary;
+    }
+  }
+
   async function loadOlderMessages(button) {
     if (state.loadingOlder || !state.snapshot?.message_window?.has_more) return;
     const snapshot = state.snapshot;
@@ -2383,6 +2406,7 @@
       const existing = new Set((state.snapshot.messages || []).map((message) => message.id));
       const added = (page.messages || []).filter((message) => !existing.has(message.id));
       state.snapshot.messages = [...added, ...(state.snapshot.messages || [])].sort((a, b) => Number(a.seq) - Number(b.seq));
+      mergeTurnSummaries(page.turns);
       state.snapshot.message_window = {
         total: Math.max(Number(page.total || 0), Number(state.snapshot.message_window?.total || 0), state.snapshot.messages.length),
         loaded: state.snapshot.messages.length,

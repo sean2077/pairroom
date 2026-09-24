@@ -98,6 +98,11 @@ def fixture_html() -> str:
           await new Promise(resolve => setTimeout(resolve, __postDelay));
           __snapshot.participants[actor].permission_profile=request.profile;
           __snapshot.participants[actor].runtime.sandbox=request.profile==='read-only'?'read-only':'danger-full-access';
+        } else if (path.includes('/api/v1/turns/')) {
+          window.__evidenceRequests = (window.__evidenceRequests || []).concat(path);
+          if (window.__evidenceGate) await window.__evidenceGate;
+          if (window.__failEvidence) { status = 503; body = {error: 'fixture: evidence unavailable'}; }
+          else body = {evidence: window.__evidence || []};
         } else if (path.includes('/git/status')) body = {status: 'clean'};
         return new Response(JSON.stringify(body), {status, headers: {'content-type': 'application/json'}});
       };
@@ -377,6 +382,65 @@ async def verify_activity(browser, artifacts: Path) -> dict:
             'inspector_hidden_render_deferred':True,'inspector_scroll_anchor':True,'inspector_page_errors':errors}
 
 
+async def verify_lazy_evidence(browser, artifacts: Path) -> dict:
+    """Referenced tool evidence loads only when an item opens, once per source set."""
+    page = await browser.new_page(viewport={"width": 1440, "height": 1000}, locale="en-US")
+    page.set_default_timeout(5000)
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    snap = snapshot_fixture()
+    snap['turns'] = [{
+        'id': 'slot1:lazy', 'turn_id': 'lazy', 'agent': 'slot1', 'status': 'working',
+        'updated_at': '2026-01-01T12:00:00Z',
+        'items': [
+            {'id': 'call/1', 'kind': 'tool', 'status': 'working', 'name': 'Bash', 'detail': 'go test ./...', 'source_seqs': [7]},
+            {'id': 'legacy', 'kind': 'tool', 'status': 'completed', 'name': 'Read', 'detail': 'inline detail', 'data': {'path': 'README.md'}},
+        ]}]
+    html = fixture_html().replace(json.dumps(snapshot_fixture()).replace('</', '<\\/'), json.dumps(snap).replace('</', '<\\/'))
+    await page.set_content(html)
+    await page.wait_for_selector('[data-item-id="call/1"]')
+    assert await page.evaluate('(window.__evidenceRequests || []).length') == 0, 'collapsed items fetched evidence'
+
+    # A failed load is shown, not cached; reopening retries.
+    await page.evaluate("window.__failEvidence = true")
+    lazy = page.locator('[data-item-id="call/1"]')
+    await lazy.locator(':scope > summary').click()
+    await page.wait_for_function("() => document.querySelector('[data-item-id=\"call/1\"] pre').textContent.includes('evidence unavailable')")
+    await lazy.locator(':scope > summary').click()
+    await page.evaluate("""() => { window.__failEvidence = false;
+      window.__evidence = [{seq: 7, kind: 'tool.started', name: 'Bash', text: 'go test ./...', data: {command: 'go test ./...'}}]; }""")
+    await lazy.locator(':scope > summary').click()
+    await page.wait_for_function("() => document.querySelector('[data-item-id=\"call/1\"] pre').textContent.includes('\"command\"')")
+    requests = await page.evaluate('window.__evidenceRequests')
+    assert len(requests) == 2 and requests[-1].endswith('/api/v1/turns/slot1%3Alazy/items/call%2F1'), requests
+
+    # Re-rendering the same source set reuses the loaded evidence.
+    await page.evaluate("""() => { __snapshot.latest_seq++; const value = structuredClone(__snapshot.turns[0]);
+      value.updated_at = '2026-01-01T12:00:01Z'; __snapshot.turns[0] = value;
+      __sources.at(-1).dispatchEvent(new MessageEvent('pairroom', {data: JSON.stringify({seq: __snapshot.latest_seq, id: 'e'+__snapshot.latest_seq, kind: 'turn.summary.updated', data: value})})); }""")
+    await page.wait_for_timeout(700)
+    assert len(await page.evaluate('window.__evidenceRequests')) == 2, 'unchanged sources refetched evidence'
+
+    # A new source record (the completion) refreshes the open item once.
+    await page.evaluate("""() => { __snapshot.latest_seq++; const value = structuredClone(__snapshot.turns[0]);
+      value.items[0].status = 'completed'; value.items[0].source_seqs = [7, 9]; value.updated_at = '2026-01-01T12:00:02Z';
+      window.__evidence = window.__evidence.concat({seq: 9, kind: 'tool.completed', name: 'Bash', text: 'ok  pairroom 1.2s'});
+      __snapshot.turns[0] = value;
+      __sources.at(-1).dispatchEvent(new MessageEvent('pairroom', {data: JSON.stringify({seq: __snapshot.latest_seq, id: 'e'+__snapshot.latest_seq, kind: 'turn.summary.updated', data: value})})); }""")
+    await page.wait_for_function("() => document.querySelector('[data-item-id=\"call/1\"] pre').textContent.includes('ok  pairroom 1.2s')")
+    assert len(await page.evaluate('window.__evidenceRequests')) == 3
+
+    # Summaries written before lazy loading keep rendering their inline evidence.
+    legacy = page.locator('[data-item-id="legacy"]')
+    await legacy.locator(':scope > summary').click()
+    await page.wait_for_function("() => document.querySelector('[data-item-id=\"legacy\"] pre').textContent.includes('README.md')")
+    assert len(await page.evaluate('window.__evidenceRequests')) == 3, 'inline evidence triggered a request'
+    await page.screenshot(path=str(artifacts / 'inspector-lazy-evidence.png'))
+    assert not errors, errors
+    await page.close()
+    return {"lazy_evidence_requests": 3, "lazy_evidence_page_errors": errors}
+
+
 async def verify(browser_path: str | None, artifacts: Path) -> None:
     artifacts.mkdir(parents=True, exist_ok=True)
     results = {}
@@ -511,6 +575,7 @@ async def verify(browser_path: str | None, artifacts: Path) -> None:
         results.update(await verify_approvals(browser, artifacts))
         results.update(await verify_collaboration(browser, artifacts))
         results.update(await verify_activity(browser, artifacts))
+        results.update(await verify_lazy_evidence(browser, artifacts))
         assert not errors, errors
         results.update(ime_submissions=0, rapid_enter_submissions=1, retained_draft=True,
                        resync_reads_per_burst=1, page_errors=errors)
