@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	github.com/sean2077/pairroom v0.0.0
-	github.com/wailsapp/wails/v3 v3.0.0-beta.22
+	github.com/wailsapp/wails/v3 v3.0.0-beta.24
 )
 
 require (
