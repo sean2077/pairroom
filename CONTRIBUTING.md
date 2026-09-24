@@ -13,7 +13,7 @@ make check
 make smoke
 ```
 
-`make check` includes formatting, static/unit/race/dependency checks, JavaScript regressions, desktop-source checks, and documentation/projection/release contracts. `make js-check` fails visibly if Node is missing. Dependency checks reject replacements and module/version drift. `make smoke` exercises deterministic Mock collaboration, media, backup, restore, and diagnostics, not vendor models. `make cover` is diagnostic coverage, not a percentage release gate.
+`make check` includes formatting, static/unit/race/dependency checks, JavaScript regressions, desktop-source checks, and documentation/projection/release contracts. `make js-check` fails visibly if Node is missing. Dependency checks reject replacements and module/version drift. `make smoke` exercises deterministic Mock collaboration, media, backup, restore, and diagnostics, not vendor models. `make cover` produces a statement-coverage report. Linux CI then enforces the reviewed per-package floors; coverage is not a vendor acceptance or release-quality score.
 
 `make install` installs to `GOBIN` (default `GOPATH/bin`), reports PATH visibility, and never edits PATH. `make dev` stops an installed daemon before running the current-tree Service. The Wails desktop is a separate module; keep GUI dependencies out of the root. Build/update and `DESKTOP_INSTALL_DIR` behavior belong in [Desktop development](desktop/README.md).
 
@@ -32,6 +32,31 @@ Commit subjects follow the established `type(scope): summary` form in English (`
 Go tests live beside their package as `*_test.go` and run through `make test`/`make race`; run one with `go test -count=1 ./internal/<pkg> -run '^TestName$'`. JavaScript `scripts/test_*.js` files are discovered by `make js-check`. Python regressions are not discovered: register a new one in its Makefile target, and register browser tests in `browser-check` and the CI browser job as well.
 
 Generic test-quality rules are in `.agents/conventions/testing.md`; these are PairRoom's facts. Expected values come from the owning contracts: [Protocol](docs/PROTOCOL.md), [Storage](docs/STORAGE.md), and the API/CLI references. Inject time through the existing `Now func() time.Time` seams. Mock Runtime and fixtures isolate recovery and UI behavior; they are not vendor evidence. Test-first development is not required by project policy.
+
+## Coverage and platform checks
+
+`make cover` writes `.coverage`; `python scripts/check_coverage.py .coverage`
+checks statement-weighted package coverage against `scripts/coverage-floors.json`.
+The checker fails on malformed profiles, missing guarded packages, and unrounded
+values below the floor. `make coverage-contract` tests the checker itself and is
+part of `make check`; local `make cover` does not enforce Linux floors on another
+operating system.
+
+Floors were established after the URL/flag/version regressions from the Linux
+CI measurement for commit `9003bc12b5940e3d992cfbbf8e5804345c8c5492`
+([run 35867358397](https://github.com/sean2077/pairroom/actions/runs/35867358397)).
+Each is the measured percentage rounded down, minus one percentage point. A
+reduction requires an explanation and fresh Linux CI evidence in the same PR;
+do not lower a floor simply to pass. CI retains its profile as the
+`pairroom-linux-coverage` artifact for 14 days.
+
+PRs retain the focused Windows/macOS Native boundary suite. The nightly
+`full-platform-tests` job runs every root-module package on `windows-2025` and
+`macos-15`, with a 45-minute limit per target. It runs at 02:17 UTC and is also
+available through CI `workflow_dispatch`. The independent weekly vulnerability
+scan remains Monday 03:17 UTC; nightly runs do not build or publish artifacts.
+A configured nightly job is not evidence it has run, and root tests do not
+replace the separate desktop workflow or authenticated vendor tests.
 
 ## Browser verification
 

@@ -7,6 +7,7 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '17 3 * * 1'
+    - cron: '17 2 * * *'
 
 permissions:
   contents: read
@@ -40,6 +41,17 @@ jobs:
         run: make smoke
       - name: Coverage report
         run: make cover
+      - name: Enforce measured Linux package coverage floors
+        run: python scripts/check_coverage.py .coverage
+      - name: Retain coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pairroom-linux-coverage
+          path: .coverage
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
 
   native-boundaries:
     if: github.event_name != 'schedule'
@@ -279,6 +291,7 @@ jobs:
           retention-days: 14
 
   vulnerabilities:
+    if: github.event_name != 'schedule' || github.event.schedule == '17 3 * * 1'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -292,3 +305,24 @@ jobs:
         run: python scripts/check_go_versions.py minimum go.mod
       - name: Check reachable source vulnerabilities
         run: make vuln
+
+  full-platform-tests:
+    name: Full root tests (${{ matrix.os }})
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.event.schedule == '17 2 * * *')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-15]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache: true
+      - name: Verify actual Go toolchain
+        run: python scripts/check_go_versions.py minimum go.mod
+      - name: Test every root module package
+        run: go test -count=1 ./...
