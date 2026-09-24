@@ -1492,7 +1492,9 @@
     const summaries = (state.snapshot.turns || [])
       .filter((turn) => state.inspectorAgent === 'all' || turn.agent === state.inspectorAgent)
       .filter((turn) => !scopedMessage || (turn.message_ids || []).includes(scopedMessage.id) || turnIDs.has(turn.turn_id))
-      .sort((a, b) => String(b.updated_at || b.started_at).localeCompare(String(a.updated_at || a.started_at)))
+      .map((turn) => [summaryInstant(turn.updated_at || turn.started_at), turn])
+      .sort(([a], [b]) => (a < b) - (a > b))
+      .map(([, turn]) => turn)
       .slice(0, 40);
     const events = (state.snapshot.events || [])
       .filter((event) => event.kind === 'runtime.event')
@@ -2372,6 +2374,15 @@
     button.setAttribute('aria-label', granted ? t("ui.desktopNotificationsEnabledClickAgainToManageThem") : t("ui.enableDesktopNotifications"));
   }
 
+  // Go omits trailing zero fractions (".1Z", ".11Z", "Z"), so RFC 3339 strings
+  // do not sort as text. Compare instants in nanoseconds; unparseable is oldest.
+  function summaryInstant(value) {
+    const match = /^(.*T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/.exec(String(value || ''));
+    const millis = match ? Date.parse(match[1] + match[3]) : NaN;
+    if (!Number.isFinite(millis)) return -1n;
+    return BigInt(millis) * 1000000n + BigInt((match[2] || '').padEnd(9, '0'));
+  }
+
   // Summaries arrive from live events, checkpoints and history pages in any
   // order. Keep the newest projection of each Turn; never regress it.
   function mergeTurnSummaries(summaries) {
@@ -2384,7 +2395,8 @@
         continue;
       }
       const current = state.snapshot.turns[index];
-      if (String(summary.updated_at || '') >= String(current.updated_at || '')) state.snapshot.turns[index] = summary;
+      // An equal instant takes the later arrival, as before.
+      if (summaryInstant(summary.updated_at) >= summaryInstant(current.updated_at)) state.snapshot.turns[index] = summary;
     }
   }
 

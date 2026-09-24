@@ -424,6 +424,36 @@ async function main() {
     c.applyEvent({seq:0,kind:'turn.summary.updated',data:{id:'slot1:t',updated_at:'2026-09-23T00:00:30Z',status:'working'}});
     assert.equal(c.state.snapshot.turns[0].status, 'completed', 'an older live summary cannot regress a newer checkpoint');
   }
+  // Go omits trailing zero fractions, so equal-second timestamps of different
+  // precision must compare as instants, in either arrival order.
+  for (const [older, newer] of [
+    ['2026-09-24T00:00:00.1Z', '2026-09-24T00:00:00.11Z'],
+    ['2026-09-24T00:00:00Z', '2026-09-24T00:00:00.01Z'],
+    ['2026-09-24T00:00:00.9Z', '2026-09-24T00:00:01Z'],
+    ['2026-09-24T00:00:00.000000001Z', '2026-09-24T00:00:00.000000002Z'],
+    ['2026-09-24T02:00:00.5+02:00', '2026-09-24T00:00:00.6Z'],
+  ]) {
+    for (const reversed of [false, true]) {
+      const c = client();
+      const arrivals = [{id: 'slot1:t', updated_at: older, status: 'working'}, {id: 'slot1:t', updated_at: newer, status: 'completed'}];
+      if (reversed) arrivals.reverse();
+      for (const data of arrivals) c.applyEvent({seq: 0, kind: 'turn.summary.updated', data});
+      assert.equal(c.state.snapshot.turns[0].status, 'completed', `${newer} is newer than ${older} (reversed=${reversed})`);
+    }
+  }
+  {
+    const c = client(), request = deferred();
+    c.state.snapshot.messages = [{id: 'new', seq: 9}];
+    c.state.snapshot.message_window = {has_more: true, total: 9};
+    c.state.snapshot.turns = [{id: 'slot1:recent', updated_at: '2026-09-23T00:00:00.01Z', status: 'completed'}];
+    c.setAPI(() => request.promise);
+    const loading = c.loadOlderMessages();
+    request.resolve({messages: [{id: 'old', seq: 4}], total: 9, turns: [
+      {id: 'slot1:recent', updated_at: '2026-09-23T00:00:00Z', status: 'working'},
+    ]});
+    await loading;
+    assert.equal(c.state.snapshot.turns[0].status, 'completed', 'an older history page cannot regress a finer-precision newer Turn');
+  }
   {
     const c = client(), request = deferred();
     c.state.snapshot.messages = [{id: 'new', seq: 9}];

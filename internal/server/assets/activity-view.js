@@ -51,8 +51,32 @@
 
     // Tool evidence is loaded on demand from the item's durable source records;
     // older summaries carry bounded evidence inline. Either way nothing is
-    // formatted for a collapsed item.
-    const evidenceCache = new Map();
+    // formatted for a collapsed item. Loaded evidence is kept least recently
+    // used first within a character budget, and only for an item's current
+    // source set; the Service keeps the complete records.
+    const evidenceBudget = 2 << 20;
+    const evidenceCache = new Map(), evidenceKeys = new Map();
+    let evidenceSize = 0;
+
+    function forgetEvidence(key) {
+      const cached = evidenceCache.get(key);
+      if (!cached) return;
+      evidenceCache.delete(key);
+      evidenceSize -= cached.text?.length || 0;
+      if (evidenceKeys.get(cached.itemKey) === key) evidenceKeys.delete(cached.itemKey);
+    }
+
+    function cacheEvidence(key, itemKey, text) {
+      forgetEvidence(key);
+      evidenceCache.set(key, { itemKey, text });
+      evidenceKeys.set(itemKey, key);
+      evidenceSize += text.length;
+      // The newest entry stays even when it alone exceeds the budget.
+      for (const old of evidenceCache.keys()) {
+        if (evidenceSize <= evidenceBudget || old === key) break;
+        if (evidenceCache.get(old).text !== undefined) forgetEvidence(old);
+      }
+    }
 
     function inlineEvidence(item) {
       return [item.detail, item.data ? h.prettyJSON(item.data) : ''].filter(Boolean).join('\n\n') || item.id;
@@ -79,27 +103,41 @@
         return;
       }
       // New source records (for example the completion) invalidate the cache.
+      const itemKey = JSON.stringify([summaryID, item.id]);
       const key = JSON.stringify([summaryID, item.id, sources]);
-      const cached = evidenceCache.get(key);
+      const previous = evidenceKeys.get(itemKey);
+      if (previous !== key) {
+        if (previous !== undefined) forgetEvidence(previous);
+        evidenceKeys.set(itemKey, key);
+      }
+      let cached = evidenceCache.get(key);
       if (cached?.text !== undefined) {
+        // Refresh recency.
+        evidenceCache.delete(key);
+        evidenceCache.set(key, cached);
         text(target, cached.text);
         return;
       }
       text(target, [item.detail, h.t('room.loadingEvidence')].filter(Boolean).join('\n\n'));
-      if (cached?.pending) return;
-      const request = { pending: true };
-      evidenceCache.set(key, request);
-      h.loadTurnItem(summaryID, item.id).then((records) => {
-        request.text = formatLoadedEvidence(item, records || []);
-      }).catch((error) => {
-        // A failure is shown, not cached, so reopening retries.
-        evidenceCache.delete(key);
-        request.error = [item.detail, h.t('room.evidenceUnavailable', { value0: error?.message || '' })].filter(Boolean).join('\n\n');
-      }).finally(() => {
-        request.pending = false;
+      if (!cached) {
+        cached = { itemKey };
+        cached.request = Promise.resolve().then(() => h.loadTurnItem(summaryID, item.id)).then((records) => {
+          const value = formatLoadedEvidence(item, records || []);
+          if (evidenceCache.get(key) === cached) cacheEvidence(key, itemKey, value);
+          return value;
+        }, (error) => {
+          // A failure is shown, not cached, so reopening retries.
+          if (evidenceCache.get(key) === cached) forgetEvidence(key);
+          return [item.detail, h.t('room.evidenceUnavailable', { value0: error?.message || '' })].filter(Boolean).join('\n\n');
+        });
+        evidenceCache.set(key, cached);
+      }
+      // Every row that asks while the load is in flight receives its result,
+      // including a row rebuilt after the one that started it was removed.
+      cached.request.then((value) => {
         const current = row._evidence;
         if (!row.isConnected || !row.open || !current || JSON.stringify([current.summaryID, current.item.id, current.item.source_seqs || []]) !== key) return;
-        text(target, request.text ?? request.error);
+        text(target, value);
       });
     }
 
