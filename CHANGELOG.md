@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v5.5.0] — 2026-09-24
+
 - Update the pinned CGo-free SQLite closure used for read-only CC Switch access: `modernc.org/sqlite` 1.58.0 → 1.59.0 and `modernc.org/libc` 1.75.6 → 1.75.7. The reviewed dependency allowlist and third-party notices move with it; the license text is unchanged.
 
 - Update the desktop module and its pinned Wails CLI together from v3.0.0-beta.22 to v3.0.0-beta.24 (upstream security and Linux single-instance/custom-scheme fixes); CI, Taskfile notes and desktop setup instructions use the same version.
