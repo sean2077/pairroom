@@ -1,6 +1,6 @@
 version: '3'
 
-# Build tasks follow Wails v3.0.0-beta.22; Windows packaging is owned by Inno Setup.
+# Build tasks follow Wails v3.0.0-beta.24; Windows packaging is owned by Inno Setup.
 includes:
   common: ../Taskfile.yml
 
