@@ -399,7 +399,7 @@ func TestNativeSessionStopHookPublishesAndCollectsOutsideGit(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" || r.Header.Get("Authorization") != "Relay fixture-secret" || r.Header.Get("X-PairRoom-Session") != s.SessionID || r.Header.Get("X-PairRoom-Bind") != s.BindID {
 			t.Error("hook lost binding authentication")
-			http.Error(w, "unauthorized", 401)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		switch filepath.Base(r.URL.Path) {

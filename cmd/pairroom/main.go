@@ -1048,12 +1048,10 @@ func isLoopbackListen(address string) bool {
 }
 
 func browserURL(address, token string) string {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
-		host = address
-	} else if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
-		address = net.JoinHostPort(host, port)
+	// An unparsable address is displayed unchanged; only wildcard hosts are
+	// replaced by the numeric loopback the listener actually accepts.
+	if host, port, err := net.SplitHostPort(address); err == nil && (host == "" || host == "0.0.0.0" || host == "::") {
+		address = net.JoinHostPort("127.0.0.1", port)
 	}
 	result := url.URL{Scheme: "http", Host: address, Path: "/"}
 	if token != "" {

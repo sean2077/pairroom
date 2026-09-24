@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add a fixed-version, cross-platform static-analysis gate: `make lint` (part of `make check` and CI) runs pinned `golangci-lint` for Linux, macOS and Windows targets with `govet`, `staticcheck`, `unused` and `ineffassign`. Its findings are fixed without behavior changes: ineffective assignments and dead helpers are removed, the Linux/macOS-only stop-timeout rounding moves to a platform-tagged file, and backup verification no longer compares against the deprecated `tar.TypeRegA`, since the tar reader already normalizes legacy NUL-typeflag regular files; a regression restores such a backup. No Store, protocol, dependency or user-data change.
+
 - Add Linux CI statement-coverage floors based on measured package baselines, fail-closed checker regressions, URL/flag/version tests, and nightly full root-module tests on Windows and macOS. PRs retain focused platform checks; coverage is not vendor acceptance and the nightly workflow does not publish releases.
 
 - Security: CI and release builds now use the latest stable Go release (currently 1.27.x), with source and release-binary vulnerability gates and provenance-checked toolchain consistency across CLI artifacts. Source builds require Go 1.27 or newer, or automatic toolchain download through `GOTOOLCHAIN=auto`; both module minimums advance to 1.27 without dependency upgrades.

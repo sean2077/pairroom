@@ -13,6 +13,8 @@ else
 DESKTOP_PYTHON ?= $(PYTHON)
 endif
 GOVULNCHECK_VERSION := v1.8.0
+GOLANGCI_LINT_VERSION := v2.13.2
+GOLANGCI_LINT ?= golangci-lint
 VERSION_PKG := github.com/sean2077/pairroom/internal/version
 LDFLAGS := -s -w -X '$(VERSION_PKG).Commit=$(COMMIT)' -X '$(VERSION_PKG).BuildDate=$(BUILD_DATE)' -X '$(VERSION_PKG).LastTag=$(LAST_TAG)' -X '$(VERSION_PKG).CommitsSinceTag=$(COMMITS_SINCE_TAG)'
 # Sources in this worktree only. `find .` would also scan sibling
@@ -25,7 +27,7 @@ ifeq ($(strip $(GOBIN)),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package desktop-update desktop-check clean docs-check browser-check js-check vuln vuln-binary coverage-contract
+.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package desktop-update desktop-check clean docs-check browser-check js-check vuln vuln-binary coverage-contract lint lint-install
 
 build:
 	mkdir -p $(DIST)
@@ -50,6 +52,19 @@ race:
 vet:
 	go vet ./...
 
+# Tool-only installation; this must never enter the application module graph.
+lint-install:
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+
+lint:
+	@command -v "$(GOLANGCI_LINT)" >/dev/null 2>&1 || { printf '%s\n' 'make lint requires golangci-lint; run make lint-install and add GOBIN to PATH' >&2; exit 1; }
+	@actual="$$("$(GOLANGCI_LINT)" version | sed -n 's/^golangci-lint has version \([^ ]*\).*/\1/p')"; \
+		test "v$$actual" = "$(GOLANGCI_LINT_VERSION)" || { printf 'make lint requires %s, found %s; run make lint-install\n' "$(GOLANGCI_LINT_VERSION)" "$$actual" >&2; exit 1; }
+	@set -e; for target in linux darwin windows; do \
+		printf 'Linting GOOS=%s\n' "$$target"; \
+		GOOS="$$target" GOARCH=amd64 CGO_ENABLED=0 "$(GOLANGCI_LINT)" run ./...; \
+	done
+
 vuln:
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
@@ -66,7 +81,7 @@ cover:
 	go test -count=1 -coverprofile=.coverage ./...
 	go tool cover -func=.coverage
 
-check: coverage-contract test race vet agent-contract release-contract docs-check desktop-check js-check
+check: lint coverage-contract test race vet agent-contract release-contract docs-check desktop-check js-check
 	@test -z "$$(gofmt -l $(GO_FILES))" || { echo 'Go files are not gofmt-clean'; gofmt -l $(GO_FILES); exit 1; }
 	@go test scripts/check_dependencies.go scripts/check_dependencies_test.go
 	@go run scripts/check_dependencies.go

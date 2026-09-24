@@ -52,6 +52,10 @@ func TestNativeInspectionHistoryPendingReceiptAndDiagnosticHTTP(t *testing.T) {
 	if !strings.Contains(res.Body.String(), `"found":false`) {
 		t.Fatal("leaked peer client ID")
 	}
+	// Inspection reads and rejected queries must not append Room events.
+	if got := f.native.engine.Sequence(); got != seq {
+		t.Fatalf("inspection changed sequence %d -> %d", seq, got)
+	}
 	user, err := f.native.engine.SendUser(relay.SendRequest{ID: "user-id", Text: "user task", To: model.ActorSlot2})
 	if err != nil {
 		t.Fatal(err)

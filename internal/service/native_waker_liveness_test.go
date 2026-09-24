@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -276,7 +275,7 @@ func TestNativeWakeSuppressionDoesNotFloodAudit(t *testing.T) {
 		}
 	}
 	if n != 1 {
-		t.Fatal(fmt.Sprintf("%d duplicate suppression records", n))
+		t.Fatalf("%d duplicate suppression records", n)
 	}
 }
 
