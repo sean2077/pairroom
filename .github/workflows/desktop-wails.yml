@@ -72,7 +72,7 @@ jobs:
             libwebkitgtk-6.0-dev \
             pkg-config
       - name: Install pinned Wails CLI
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.24
       - name: Verify isolated desktop module lock
         working-directory: desktop
         run: |
@@ -114,7 +114,7 @@ jobs:
       - name: Test transactional local update
         run: python desktop/scripts/test_update_local.py
       - name: Install pinned Wails CLI for native update smoke
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.24
       - name: Build and update a native installation with a spaced path
         shell: bash
         run: |
@@ -202,7 +202,7 @@ jobs:
         shell: pwsh
         run: ./desktop/scripts/install-inno.ps1
       - name: Install pinned Wails CLI
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.24
       - name: Download isolated desktop module dependencies
         working-directory: desktop
         run: go mod download
