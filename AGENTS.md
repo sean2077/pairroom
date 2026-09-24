@@ -31,7 +31,7 @@ Use a task branch/worktree and submit a PR; do not push directly to `main` or ru
 
 The distributed onboarding skill is product payload: edit `skills/pairroom-relay/SKILL.md` (published through `.claude-plugin/plugin.json` and the skill installers), then copy it byte-identically to `internal/relayclient/skill/pairroom-relay/SKILL.md`. The freshness test enforces the embedded projection. Do not relink either into `.agents/skills/` or independently edit generated host projections.
 
-<!-- agent-scaffold:start — managed; keep project prose outside; upgrade refreshes this block. -->
+<!-- agent-scaffold:start (managed; edit outside) -->
 <!-- agent-scaffold:profile=default -->
 <!-- agent-scaffold:domains=docs,tools,testing,specs,terminology,git,release -->
 ## Agent Harness
