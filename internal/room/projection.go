@@ -37,7 +37,7 @@ func (e *Engine) WindowedSnapshot(limit int) model.RoomSnapshot {
 		view.Messages = view.Messages[total-limit:]
 	}
 	view.Turns = selectTurnsLocked(e.snapshot.Turns, view.Messages, snapshotTurnWindow)
-	view.Events = WithoutTurnSummaryEvents(view.Events)
+	view.Events = SnapshotEventTail(view.Events)
 	// Slice before cloning: transport cost must scale with the requested page,
 	// not with messages or Turns that will immediately be discarded.
 	snapshot := cloneSnapshot(view)
@@ -50,25 +50,39 @@ func (e *Engine) WindowedSnapshot(limit int) model.RoomSnapshot {
 	return snapshot
 }
 
-// WithoutTurnSummaryEvents omits summary checkpoints from a snapshot event
-// tail. A snapshot's `turns` field is their current projection, and the tail
-// is a presentation aid, not the cursor authority (latest_seq is). Forensic
-// exports use the unfiltered tail.
-func WithoutTurnSummaryEvents(events []model.Event) []model.Event {
-	kept := 0
+// snapshotEventTextLimit bounds each runtime event's text and payload in a
+// snapshot's event tail. The inspector shows at most the first 1800
+// characters of either; full records come from item evidence or the forensic
+// export.
+const snapshotEventTextLimit = 4 << 10
+
+// SnapshotEventTail projects the recent event tail for a snapshot: it omits
+// summary checkpoints (a snapshot's `turns` is their current projection) and
+// bounds each runtime event's text and payload. The tail is a presentation
+// aid, not the cursor authority (latest_seq is), and the engine's own events
+// are never modified. Forensic exports use the unprojected tail.
+func SnapshotEventTail(events []model.Event) []model.Event {
+	out := make([]model.Event, 0, len(events))
 	for _, event := range events {
-		if event.Kind != EventTurnSummaryUpdated {
-			kept++
+		if event.Kind == EventTurnSummaryUpdated {
+			continue
 		}
-	}
-	if kept == len(events) {
-		return events
-	}
-	out := make([]model.Event, 0, kept)
-	for _, event := range events {
-		if event.Kind != EventTurnSummaryUpdated {
-			out = append(out, event)
+		if event.Kind == EventRuntime && len(event.Data) > 2*snapshotEventTextLimit {
+			var runtimeEvent model.RuntimeEvent
+			if json.Unmarshal(event.Data, &runtimeEvent) == nil {
+				runtimeEvent.Text = boundedHead(runtimeEvent.Text, snapshotEventTextLimit)
+				if len(runtimeEvent.Data) > snapshotEventTextLimit {
+					runtimeEvent.Data, _ = json.Marshal(map[string]any{
+						"truncated": true,
+						"head":      boundedHead(string(runtimeEvent.Data), snapshotEventTextLimit),
+					})
+				}
+				if data, err := json.Marshal(runtimeEvent); err == nil {
+					event.Data = data
+				}
+			}
 		}
+		out = append(out, event)
 	}
 	return out
 }
@@ -267,6 +281,7 @@ func cloneTurnSummary(in model.TurnSummary) model.TurnSummary {
 		out.Items[i] = item
 		out.Items[i].Data = append(json.RawMessage(nil), item.Data...)
 		out.Items[i].CompletedAt = cloneTime(item.CompletedAt)
+		out.Items[i].SourceSeqs = append([]uint64(nil), item.SourceSeqs...)
 	}
 	return out
 }

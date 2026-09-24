@@ -98,6 +98,13 @@ func allowedSurfaceRequest(method, p string) bool {
 	switch {
 	case strings.HasPrefix(p, "/api/v1/sends/"):
 		return method == http.MethodGet || method == http.MethodHead
+	case strings.HasPrefix(p, "/api/v1/turns/"):
+		// Only the read-only Work inspector evidence route: /turns/{turn}/items/{item}.
+		turn, rest, ok := strings.Cut(strings.TrimPrefix(p, "/api/v1/turns/"), "/items/")
+		if !ok || turn == "" || rest == "" || strings.Contains(turn, "/") || strings.Contains(rest, "/") {
+			return false
+		}
+		return method == http.MethodGet || method == http.MethodHead
 	case strings.HasPrefix(p, "/api/v1/attachments/"):
 		return method == http.MethodGet || method == http.MethodHead || method == http.MethodDelete
 	case strings.HasPrefix(p, "/api/v1/messages/") && strings.HasSuffix(p, "/retry"):

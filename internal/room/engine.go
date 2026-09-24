@@ -1638,12 +1638,13 @@ func (e *Engine) HandleRuntimeEvent(runtimeEvent model.RuntimeEvent) {
 		delete(e.stallWarnedTurn, runtimeEvent.Agent)
 		e.mu.Unlock()
 	}
+	var sourceSeq uint64
 	if isTransientRuntimeKind(runtimeEvent.Kind) {
 		e.publishTransientRuntime(runtimeEvent)
-	} else {
-		_, _ = e.record(EventRuntime, runtimeEvent.Agent, runtimeEvent)
+	} else if recorded, err := e.record(EventRuntime, runtimeEvent.Agent, runtimeEvent); err == nil {
+		sourceSeq = recorded.Seq
 	}
-	e.projectTurnSummary(runtimeEvent)
+	e.projectTurnSummary(runtimeEvent, sourceSeq)
 
 	switch runtimeEvent.Kind {
 	case model.RuntimeSession:

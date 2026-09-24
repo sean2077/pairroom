@@ -81,6 +81,7 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("GET /api/v1/health", s.health)
 	mux.HandleFunc("GET /api/v1/snapshot", s.snapshot)
 	mux.HandleFunc("GET /api/v1/messages", s.messages)
+	mux.HandleFunc("GET /api/v1/turns/{turn}/items/{item}", s.turnItemEvidence)
 	mux.HandleFunc("GET /api/v1/events", s.events)
 	mux.HandleFunc("POST /api/v1/messages", s.sendMessage)
 	mux.HandleFunc("POST /api/v1/attachments", s.uploadAttachment)
@@ -186,7 +187,7 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 		snapshot = s.engine.WindowedSnapshot(limit)
 	} else {
 		snapshot = s.engine.Snapshot()
-		snapshot.Events = room.WithoutTurnSummaryEvents(snapshot.Events)
+		snapshot.Events = room.SnapshotEventTail(snapshot.Events)
 	}
 	if strings.TrimSpace(s.boundary) != "" {
 		event, err := model.NewEvent(snapshot.Meta.ID, room.EventSystemNotice, model.ActorSystem, model.SystemNotice{
@@ -216,6 +217,21 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.engine.MessagesPage(before, limit))
+}
+
+// turnItemEvidence serves a Work inspector item's durable evidence on demand,
+// so Turn summaries and snapshots carry only item metadata and a preview.
+func (s *Server) turnItemEvidence(w http.ResponseWriter, r *http.Request) {
+	evidence, err := s.engine.TurnItemEvidence(r.PathValue("turn"), r.PathValue("item"))
+	if errors.Is(err, room.ErrTurnItemNotFound) {
+		writeError(w, http.StatusNotFound, "turn item not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "turn item evidence is unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"evidence": evidence})
 }
 
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {

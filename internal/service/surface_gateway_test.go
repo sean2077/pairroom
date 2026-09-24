@@ -77,6 +77,9 @@ func TestRoomSurfaceGatewayUsesManagementSessionAndHidesRuntimeToken(t *testing.
 		case "/api/v1/snapshot":
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"ok":true}`)
+		case "/api/v1/turns/slot1:turn/items/tool-1":
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"evidence":[]}`)
 		case "/api/v1/messages":
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"accepted":true}`)
@@ -197,6 +200,13 @@ func TestRoomSurfaceGatewayUsesManagementSessionAndHidesRuntimeToken(t *testing.
 	server.Handler().ServeHTTP(snapshot, snapshotRequest)
 	if snapshot.Code != http.StatusOK || snapshot.Body.String() != `{"ok":true}` {
 		t.Fatalf("surface snapshot status=%d body=%s", snapshot.Code, snapshot.Body.String())
+	}
+	evidence := httptest.NewRecorder()
+	evidenceRequest := managementRequest(http.MethodGet, "/api/v1/rooms/"+room.ID+"/surface/api/v1/turns/slot1%3Aturn/items/tool-1", "", false)
+	evidenceRequest.AddCookie(cookie)
+	server.Handler().ServeHTTP(evidence, evidenceRequest)
+	if evidence.Code != http.StatusOK || evidence.Body.String() != `{"evidence":[]}` {
+		t.Fatalf("surface item evidence status=%d body=%s", evidence.Code, evidence.Body.String())
 	}
 	if !sawBearer {
 		t.Fatal("gateway did not inject runtime bearer")

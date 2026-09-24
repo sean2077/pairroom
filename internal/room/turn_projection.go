@@ -19,9 +19,17 @@ const (
 	// turnSummaryTransientInterval throttles live-only summary publication for
 	// high-frequency diff/usage telemetry so bursts cannot overflow SSE buffers.
 	turnSummaryTransientInterval = time.Second
-	// turnItemDataLimit bounds the per-item payload copy. The complete tool
-	// payload remains in its own durable runtime.event record.
+	// turnItemDataLimit bounds the inline payload copy kept only when an item
+	// has no durable source record (the source append failed).
 	turnItemDataLimit = 4 << 10
+	// turnItemPreviewLimit bounds the inline text preview of an item whose full
+	// evidence is loaded on demand from its source records.
+	turnItemPreviewLimit = 512
+	// turnItemSourceLimit bounds source references per item; native tools
+	// report a start and a completion, occasionally a few progress updates.
+	turnItemSourceLimit = 16
+	// turnItemEvidenceBudget bounds one on-demand evidence response.
+	turnItemEvidenceBudget = 4 << 20
 	// turnSummaryByteBudget bounds one serialized summary regardless of item
 	// count, so a single checkpoint record cannot reach hundreds of KiB.
 	turnSummaryByteBudget = 256 << 10
@@ -43,7 +51,10 @@ type turnSummaryTracking struct {
 // final text, errors and terminal states persist immediately; other updates stay
 // in memory, are published as transient (sequence-zero) events, and persist at
 // most once per checkpoint interval or when the adapter stops or the Room closes.
-func (e *Engine) projectTurnSummary(runtimeEvent model.RuntimeEvent) {
+//
+// sourceSeq is the durable sequence of runtimeEvent's own record, or zero when
+// it was not recorded (transient telemetry or a failed append).
+func (e *Engine) projectTurnSummary(runtimeEvent model.RuntimeEvent, sourceSeq uint64) {
 	// These events do not change the summary. In particular, text.delta must
 	// not scan history or clone all tool details for every generated token.
 	switch runtimeEvent.Kind {
@@ -97,9 +108,9 @@ func (e *Engine) projectTurnSummary(runtimeEvent model.RuntimeEvent) {
 		summary.Status = "working"
 		immediate = true
 	case model.RuntimeToolStarted:
-		upsertTurnItem(&summary, runtimeEvent, "tool", "working")
+		upsertTurnItem(&summary, runtimeEvent, sourceSeq, "tool", "working")
 	case model.RuntimeToolCompleted:
-		upsertTurnItem(&summary, runtimeEvent, "tool", "completed")
+		upsertTurnItem(&summary, runtimeEvent, sourceSeq, "tool", "completed")
 	case model.RuntimeCommandOutput:
 		item := findOrCreateTurnItem(&summary, runtimeEvent.ItemID, "command")
 		item.Status = "working"
@@ -320,7 +331,12 @@ func turnSummaryApproxBytes(summary model.TurnSummary) int {
 	return size
 }
 
-func upsertTurnItem(summary *model.TurnSummary, event model.RuntimeEvent, kind, status string) {
+// upsertTurnItem records a tool event. When the event has a durable record,
+// the item keeps only a short preview plus a reference to that record, so a
+// summary checkpoint no longer copies every tool payload; the inspector loads
+// the full evidence on demand. Without a source record the bounded evidence
+// stays inline, as before.
+func upsertTurnItem(summary *model.TurnSummary, event model.RuntimeEvent, sourceSeq uint64, kind, status string) {
 	item := findOrCreateTurnItem(summary, event.ItemID, kind)
 	if event.Name != "" {
 		item.Name = event.Name
@@ -329,11 +345,26 @@ func upsertTurnItem(summary *model.TurnSummary, event model.RuntimeEvent, kind, 
 	if item.StartedAt.IsZero() {
 		item.StartedAt = event.CreatedAt
 	}
-	if event.Text != "" {
-		item.Detail = boundedTail(event.Text, 12<<10)
-	}
-	if len(event.Data) > 0 {
-		item.Data = boundedRaw(event.Data, turnItemDataLimit)
+	hasEvidence := event.Text != "" || len(event.Data) > 0
+	if sourceSeq > 0 && hasEvidence {
+		if event.Text != "" {
+			item.Detail = boundedHead(event.Text, turnItemPreviewLimit)
+		}
+		item.Data = nil
+		if !containsSeq(item.SourceSeqs, sourceSeq) {
+			item.SourceSeqs = append(item.SourceSeqs, sourceSeq)
+			if len(item.SourceSeqs) > turnItemSourceLimit {
+				// Keep the first (the call) and the most recent records.
+				item.SourceSeqs = append(item.SourceSeqs[:1:1], item.SourceSeqs[len(item.SourceSeqs)-turnItemSourceLimit+1:]...)
+			}
+		}
+	} else {
+		if event.Text != "" {
+			item.Detail = boundedTail(event.Text, 12<<10)
+		}
+		if len(event.Data) > 0 {
+			item.Data = boundedRaw(event.Data, turnItemDataLimit)
+		}
 	}
 	if status == "completed" || status == "failed" || status == "cancelled" {
 		completed := event.CreatedAt
@@ -384,6 +415,97 @@ func boundedRaw(value json.RawMessage, limit int) json.RawMessage {
 		"tail":      boundedTail(string(value), limit-64),
 	})
 	return wrapped
+}
+
+func containsSeq(values []uint64, target uint64) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+// boundedHead keeps the beginning of a preview: a tool's call summary is at
+// its start, unlike streamed output whose newest tail matters most.
+func boundedHead(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	if limit < len("…") {
+		return ""
+	}
+	end := limit - len("…")
+	for end > 0 && !utf8.RuneStart(value[end]) {
+		end--
+	}
+	return value[:end] + "…"
+}
+
+// ErrTurnItemNotFound reports an unknown Turn summary or work item.
+var ErrTurnItemNotFound = errors.New("turn item not found")
+
+// TurnItemEvidence loads the durable runtime events behind one work item. It
+// verifies each record's kind, participant, Turn and item before returning it,
+// and bounds the response; an item without source records returns none (its
+// evidence is inline in the summary).
+func (e *Engine) TurnItemEvidence(summaryID, itemID string) ([]model.TurnItemEvidence, error) {
+	e.mu.RLock()
+	var summary *model.TurnSummary
+	for i := range e.snapshot.Turns {
+		if e.snapshot.Turns[i].ID == summaryID {
+			summary = &e.snapshot.Turns[i]
+			break
+		}
+	}
+	var seqs []uint64
+	var agent model.ActorID
+	var turnID string
+	found := false
+	if summary != nil {
+		agent, turnID = summary.Agent, summary.TurnID
+		for _, item := range summary.Items {
+			if item.ID == itemID {
+				seqs = append([]uint64(nil), item.SourceSeqs...)
+				found = true
+				break
+			}
+		}
+	}
+	e.mu.RUnlock()
+	if !found {
+		return nil, ErrTurnItemNotFound
+	}
+	out := make([]model.TurnItemEvidence, 0, len(seqs))
+	budget := turnItemEvidenceBudget
+	for _, seq := range seqs {
+		event, err := e.cfg.Store.ReadEvent(seq)
+		if err != nil {
+			return nil, err
+		}
+		if event.Kind != EventRuntime || event.Actor != agent {
+			return nil, fmt.Errorf("event %d is not a runtime record of %s", seq, agent)
+		}
+		var runtimeEvent model.RuntimeEvent
+		if err := json.Unmarshal(event.Data, &runtimeEvent); err != nil {
+			return nil, fmt.Errorf("decode runtime event %d: %w", seq, err)
+		}
+		if runtimeEvent.Agent != agent || runtimeEvent.TurnID != turnID || runtimeEvent.ItemID != itemID {
+			return nil, fmt.Errorf("event %d does not belong to item %s", seq, itemID)
+		}
+		evidence := model.TurnItemEvidence{
+			Seq: seq, Kind: runtimeEvent.Kind, Name: runtimeEvent.Name,
+			Text: runtimeEvent.Text, Data: runtimeEvent.Data, CreatedAt: runtimeEvent.CreatedAt,
+		}
+		if size := len(evidence.Text) + len(evidence.Data); size > budget {
+			evidence.Text = boundedHead(evidence.Text, max(0, budget))
+			evidence.Data = nil
+			evidence.Truncated = true
+		}
+		budget = max(0, budget-len(evidence.Text)-len(evidence.Data))
+		out = append(out, evidence)
+	}
+	return out, nil
 }
 
 func containsString(values []string, target string) bool {

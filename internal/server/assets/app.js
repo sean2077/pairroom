@@ -1502,12 +1502,20 @@
       .slice(-100).reverse();
     activityView ||= window.PairRoomActivity.create($('activity-tab'), {
       t, displayName, formatTime, formatDuration, turnStatusText, activityIcon, activityLabel, activityDetail, prettyJSON, truncate,
+      loadTurnItem,
     });
     activityView.render(summaries, events, {
       scoped: Boolean(scopedMessage),
       version: JSON.stringify([window.PairRoomI18n?.lang, displayName('slot1'), displayName('slot2')]),
       emptyText: t(scopedMessage ? 'ui.thisMessageDoesNotYetHaveADurableWorkSummary' : 'ui.agentTurnsToolCallsCommandsPlansDiffsAndLogsAppearHere'),
     });
+  }
+
+  // Work inspector item evidence lives in durable runtime records and is read
+  // only when the user opens that item.
+  async function loadTurnItem(summaryID, itemID) {
+    const response = await api(`/api/v1/turns/${encodeURIComponent(summaryID)}/items/${encodeURIComponent(itemID)}`);
+    return response?.evidence || [];
   }
 
   function turnStatusText(status) {

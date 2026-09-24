@@ -62,6 +62,14 @@ func TestSurfaceParticipantControlsMatchRoomAPI(t *testing.T) {
 		{http.MethodPut, "/api/v1/participants/slot2/nested/permissions", false},
 		{http.MethodPost, "/api/v1/participants//start", false},
 		{http.MethodPost, "/api/v1/participants/slot2", false},
+		{http.MethodGet, "/api/v1/turns/slot1:turn/items/tool-1", true},
+		{http.MethodHead, "/api/v1/turns/slot1:turn/items/tool-1", true},
+		{http.MethodPost, "/api/v1/turns/slot1:turn/items/tool-1", false},
+		{http.MethodGet, "/api/v1/turns/slot1:turn", false},
+		{http.MethodGet, "/api/v1/turns//items/tool-1", false},
+		{http.MethodGet, "/api/v1/turns/slot1:turn/items/", false},
+		{http.MethodGet, "/api/v1/turns/slot1:turn/items/tool-1/extra", false},
+		{http.MethodGet, "/api/v1/turns/a/b/items/tool-1", false},
 	} {
 		t.Run(test.method+" "+test.path, func(t *testing.T) {
 			if got := allowedSurfaceRequest(test.method, test.path); got != test.allowed {

@@ -28,7 +28,7 @@ func TestNonProjectingTelemetryDoesNotCloneTurnHistory(t *testing.T) {
 	before, _ := json.Marshal(e.snapshot)
 	for _, kind := range []string{model.RuntimeTextDelta, model.RuntimeState, model.RuntimeSession, model.RuntimeInfoUpdated} {
 		event := model.RuntimeEvent{Agent: model.ActorSlot1, TurnID: "active", Kind: kind, Text: "delta"}
-		if allocs := testing.AllocsPerRun(10, func() { e.projectTurnSummary(event) }); allocs != 0 {
+		if allocs := testing.AllocsPerRun(10, func() { e.projectTurnSummary(event, 0) }); allocs != 0 {
 			t.Errorf("%s allocated %v times despite not projecting a summary", kind, allocs)
 		}
 	}
@@ -100,7 +100,7 @@ func BenchmarkTextDeltaSummaryProjection(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		e.projectTurnSummary(event)
+		e.projectTurnSummary(event, 0)
 	}
 }
 

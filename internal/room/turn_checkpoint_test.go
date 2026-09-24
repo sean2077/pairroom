@@ -103,16 +103,18 @@ func TestTurnSummaryCheckpointsBoundLogGrowth(t *testing.T) {
 	if count > maxRecords {
 		t.Fatalf("summary records = %d, want <= %d", count, maxRecords)
 	}
-	if bytes > 3<<20 {
-		t.Fatalf("summary bytes = %d, want < 3 MiB", bytes)
+	// 100 items of metadata per checkpoint, not 100 copies of 8 KiB payloads.
+	if bytes > 512<<10 {
+		t.Fatalf("summary bytes = %d, want < 512 KiB", bytes)
 	}
 	got := engine.Snapshot().Turns[0]
 	if got.Status != "completed" || got.FinalText != "finished" || len(got.Items) != pairs {
 		t.Fatalf("final summary incomplete: status=%s final=%q items=%d", got.Status, got.FinalText, len(got.Items))
 	}
 	for _, item := range got.Items {
-		if len(item.Data) > turnItemDataLimit {
-			t.Fatalf("item data %d exceeds %d", len(item.Data), turnItemDataLimit)
+		// Durable tool evidence is referenced, not copied into checkpoints.
+		if item.Data != nil || len(item.SourceSeqs) != 2 || len(item.Detail) > turnItemPreviewLimit {
+			t.Fatalf("item %s kept inline evidence: data=%d seqs=%v detail=%d", item.ID, len(item.Data), item.SourceSeqs, len(item.Detail))
 		}
 	}
 	encoded, _ := json.Marshal(got)
@@ -437,5 +439,112 @@ func TestEnforceTurnSummaryBudgetShedsOldestFirst(t *testing.T) {
 	}
 	if summary.Items[0].Data != nil {
 		t.Fatal("oldest item payload should be shed first")
+	}
+}
+
+func TestTurnItemEvidenceLoadsDurableSourcesOnDemand(t *testing.T) {
+	dir := t.TempDir()
+	engine, _ := newTestEngine(t, dir)
+	started := time.Now().UTC()
+	long := strings.Repeat("line of tool output\n", 200)
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeTurnStarted, TurnID: "lazy", CreatedAt: started})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeToolStarted, TurnID: "lazy", ItemID: "call-1", Name: "Bash",
+		Text: "go test ./...", Data: json.RawMessage(`{"command":"go test ./..."}`), CreatedAt: started.Add(time.Second)})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeToolCompleted, TurnID: "lazy", ItemID: "call-1", Name: "Bash",
+		Text: long, Data: toolPayload(1), CreatedAt: started.Add(2 * time.Second)})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeToolStarted, TurnID: "lazy", ItemID: "no-evidence", Name: "Noop", CreatedAt: started.Add(3 * time.Second)})
+
+	item := engine.Snapshot().Turns[0].Items[0]
+	if item.Data != nil || len(item.SourceSeqs) != 2 || len(item.Detail) > turnItemPreviewLimit || !strings.HasSuffix(item.Detail, "…") {
+		t.Fatalf("summary item should hold a preview and two references: %#v", item)
+	}
+	evidence, err := engine.TurnItemEvidence("slot1:lazy", "call-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evidence) != 2 || evidence[0].Kind != model.RuntimeToolStarted || evidence[1].Text != long || string(evidence[1].Data) != string(toolPayload(1)) {
+		t.Fatalf("evidence incomplete: %#v", evidence)
+	}
+	if none, err := engine.TurnItemEvidence("slot1:lazy", "no-evidence"); err != nil || len(none) != 0 {
+		t.Fatalf("item without evidence = %v, %v", none, err)
+	}
+	for _, key := range [][2]string{{"slot1:lazy", "missing"}, {"slot2:lazy", "call-1"}} {
+		if _, err := engine.TurnItemEvidence(key[0], key[1]); !errors.Is(err, ErrTurnItemNotFound) {
+			t.Fatalf("%v: err = %v", key, err)
+		}
+	}
+
+	// References survive restart through the open-time offset index.
+	if err := engine.Close(); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	reopened := reopenEngine(t, dir)
+	again, err := reopened.TurnItemEvidence("slot1:lazy", "call-1")
+	if err != nil || len(again) != 2 || again[1].Text != long {
+		t.Fatalf("evidence after restart = %d records, %v", len(again), err)
+	}
+}
+
+func TestTurnItemEvidenceRejectsForeignSourceRecords(t *testing.T) {
+	engine, _ := newTestEngine(t, "")
+	started := time.Now().UTC()
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeTurnStarted, TurnID: "own", CreatedAt: started})
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeToolStarted, TurnID: "own", ItemID: "tool", Text: "x", CreatedAt: started})
+	engine.notice("info", "unrelated fact")
+	noticeSeq := engine.Snapshot().LatestSeq
+	engine.mu.Lock()
+	engine.snapshot.Turns[0].Items[0].SourceSeqs = []uint64{noticeSeq}
+	engine.mu.Unlock()
+	if _, err := engine.TurnItemEvidence("slot1:own", "tool"); err == nil {
+		t.Fatal("a reference to a non-runtime record was served")
+	}
+}
+
+func TestTurnItemEvidenceBudgetAndInlineFallback(t *testing.T) {
+	if got := boundedHead("abcdef", 2); got != "" {
+		t.Fatalf("tiny head limit = %q", got)
+	}
+	if got := boundedHead("ab€cd", 5); got != "ab…" {
+		t.Fatalf("head must not split a rune: %q", got)
+	}
+	// Without a durable source record the bounded evidence stays inline.
+	summary := model.TurnSummary{}
+	upsertTurnItem(&summary, model.RuntimeEvent{ItemID: "t", Text: "detail", Data: toolPayload(2)}, 0, "tool", "working")
+	if item := summary.Items[0]; len(item.SourceSeqs) != 0 || item.Data == nil || item.Detail != "detail" {
+		t.Fatalf("inline fallback lost evidence: %#v", item)
+	}
+	for i := uint64(1); i <= turnItemSourceLimit+5; i++ {
+		upsertTurnItem(&summary, model.RuntimeEvent{ItemID: "t", Text: "progress"}, i, "tool", "working")
+	}
+	seqs := summary.Items[0].SourceSeqs
+	if len(seqs) != turnItemSourceLimit || seqs[0] != 1 || seqs[len(seqs)-1] != turnItemSourceLimit+5 || summary.Items[0].Data != nil {
+		t.Fatalf("source references not bounded to first and newest: %v", seqs)
+	}
+}
+
+func TestSnapshotEventTailBoundsRuntimePayloadsWithoutMutatingEngine(t *testing.T) {
+	large := model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeToolCompleted, TurnID: "t", ItemID: "i",
+		Text: strings.Repeat("t", 64<<10), Data: toolPayload(3), CorrelationID: "message-1"}
+	data, _ := json.Marshal(large)
+	small, _ := json.Marshal(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeLog, Text: "short"})
+	events := []model.Event{
+		{Seq: 1, Kind: EventRuntime, Data: data},
+		{Seq: 2, Kind: EventTurnSummaryUpdated, Data: json.RawMessage(`{}`)},
+		{Seq: 3, Kind: EventRuntime, Data: small},
+	}
+	tail := SnapshotEventTail(events)
+	if len(tail) != 2 || tail[0].Seq != 1 || tail[1].Seq != 3 || string(tail[1].Data) != string(small) {
+		t.Fatalf("unexpected projected tail: %d events", len(tail))
+	}
+	var projected model.RuntimeEvent
+	if err := json.Unmarshal(tail[0].Data, &projected); err != nil {
+		t.Fatal(err)
+	}
+	if len(projected.Text) > snapshotEventTextLimit || !strings.Contains(string(projected.Data), `"truncated":true`) ||
+		projected.CorrelationID != "message-1" || projected.ItemID != "i" || projected.Kind != model.RuntimeToolCompleted {
+		t.Fatalf("projection lost routing fields or kept full payload: text=%d data=%d", len(projected.Text), len(projected.Data))
+	}
+	if string(events[0].Data) != string(data) {
+		t.Fatal("snapshot projection mutated the engine's event")
 	}
 }

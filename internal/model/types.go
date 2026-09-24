@@ -324,6 +324,22 @@ type TurnWorkItem struct {
 	Data        json.RawMessage `json:"data,omitempty"`
 	StartedAt   time.Time       `json:"started_at,omitempty"`
 	CompletedAt *time.Time      `json:"completed_at,omitempty"`
+	// SourceSeqs are the durable runtime.event records that carry this item's
+	// full text and payload. When present, Detail is a short preview and Data is
+	// omitted; clients load the evidence on demand. Older summaries carry the
+	// bounded evidence inline instead.
+	SourceSeqs []uint64 `json:"source_seqs,omitempty"`
+}
+
+// TurnItemEvidence is one durable runtime event behind a Work inspector item.
+type TurnItemEvidence struct {
+	Seq       uint64          `json:"seq"`
+	Kind      string          `json:"kind"`
+	Name      string          `json:"name,omitempty"`
+	Text      string          `json:"text,omitempty"`
+	Data      json.RawMessage `json:"data,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
+	Truncated bool            `json:"truncated,omitempty"`
 }
 
 // TurnSummary is the durable, vendor-neutral projection shown by the Work
