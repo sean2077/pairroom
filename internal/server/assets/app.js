@@ -1501,7 +1501,7 @@
       .filter((event) => !scopedMessage || event.data?.correlation_id === scopedMessage.id || turnIDs.has(event.data?.turn_id))
       .slice(-100).reverse();
     activityView ||= window.PairRoomActivity.create($('activity-tab'), {
-      t, displayName, formatTime, formatDuration, turnStatusText, activityIcon, activityLabel, activityDetail, prettyJSON, truncate,
+      t, displayName, formatTime, formatDurationMillis, turnStatusText, activityIcon, activityLabel, activityDetail, prettyJSON, truncate,
       loadTurnItem,
     });
     activityView.render(summaries, events, {
@@ -1522,7 +1522,7 @@
     return ({ working: t('ui.working694b71b'), waiting: t('ui.waiting'), completed: t('common.done'), cancelled: t('ui.cancelled'), failed: t('ui.failed') })[status] || (status || t('common.unknown'));
   }
 
-  function formatDuration(milliseconds) {
+  function formatDurationMillis(milliseconds) {
     const value = Math.max(0, Number(milliseconds) || 0);
 	const format = (number, maximumFractionDigits = 0) => window.PairRoomI18n.formatNumber(number, { maximumFractionDigits });
     if (value < 1000) return `${format(Math.round(value))} ms`;

@@ -868,7 +868,7 @@
           ),
           node('div', { className: 'hero-meta' },
             heroMeta(t("ui.runtimeCapacity"), policy.limit ? `${formatNumber(summary.runtime_capacity_used)} / ${formatNumber(policy.limit)}` : formatNumber(summary.runtime_capacity_used)),
-            heroMeta(t("ui.idleSuspend"), policy.idle_timeout_seconds ? formatDuration(policy.idle_timeout_seconds) : t("ui.determinedByStartupParameters")),
+            heroMeta(t("ui.idleSuspend"), policy.idle_timeout_seconds ? formatDurationSeconds(policy.idle_timeout_seconds) : t("ui.determinedByStartupParameters")),
             heroMeta(t("ui.operatingMode"), snapshot.healthy ? t('common.failSafe') : t('common.failClosed')),
             heroMeta(t("ui.version"), snapshot.version || t('common.development'))
           )
@@ -1219,7 +1219,7 @@
             node('progress', { className: 'progress-track', max: String(limit), value: String(summary.runtime_capacity_used), 'aria-label': t("ui.globalRuntimeCapacity") }),
             node('div', { className: 'capacity-legend' }, node('span', {}, node('i'), t('room.activeCount', { count: summary.active_runtimes })), node('span', {}, node('i', { className: 'busy' }), t('room.workingCount', { count: summary.busy_runtimes })), node('span', {}, node('i', { className: 'queued' }), t('room.queuedCount', { count: summary.queued_runtimes })))
           ),
-          statCard(t('room.idleTimeout'), policy.idle_timeout_seconds ? formatDuration(policy.idle_timeout_seconds) : '—', t("ui.countingFromLastActivity"), '◷', 'accent'),
+          statCard(t('room.idleTimeout'), policy.idle_timeout_seconds ? formatDurationSeconds(policy.idle_timeout_seconds) : '—', t("ui.countingFromLastActivity"), '◷', 'accent'),
           statCard(t('ui.queue'), summary.queued_runtimes, summary.queued_runtimes ? t("ui.fifoDisconnectingTheBrowserDoesNotCancelTheDemand") : t("ui.thereIsCurrentlyNoWaiting"), '↥', summary.queued_runtimes ? 'warn' : 'good')
         ),
         queued.length ? panel(t('room.activationQueue'), t("ui.whenAllCapacityIsOccupiedByTheWorkingRuntimeTheNewRoom"),
@@ -1315,9 +1315,9 @@
       return node('div', { className: 'view-stack' },
         settingsPanel(t("ui.effectiveRuntimePolicies"), t("ui.theNonPreemptibleSchedulingParametersActuallyUsedByTheCurrentProcess"),
           settingRow(t("ui.maxActivityRuntime"), t("ui.startingActiveStoppingAndCleaningUpUncertainFailedRuntimeAllOccupyCapacity"), runtimeLimitControl(policy)),
-          settingRow(t('room.idleTimeout'), t("ui.theCalculationOnlyStartsWhenThereIsNoActiveTurnInThe"), node('strong', { textContent: policy.idle_timeout_seconds ? formatDuration(policy.idle_timeout_seconds) : t("ui.notExposed") })),
+          settingRow(t('room.idleTimeout'), t("ui.theCalculationOnlyStartsWhenThereIsNoActiveTurnInThe"), node('strong', { textContent: policy.idle_timeout_seconds ? formatDurationSeconds(policy.idle_timeout_seconds) : t("ui.notExposed") })),
           settingRow(t('room.reconcileInterval'), t("ui.howOftenTheRuntimeManagerChecksIdleQueueAndCapacity"), node('strong', { textContent: policy.poll_interval_milliseconds ? `${window.PairRoomI18n.formatNumber(policy.poll_interval_milliseconds)} ms` : t("ui.notExposed") })),
-          settingRow(t('room.closeTimeout'), t("ui.theSingleDeadlineForSafelyShuttingDownTheRoomRuntime"), node('strong', { textContent: policy.close_timeout_seconds ? formatDuration(policy.close_timeout_seconds) : t("ui.notExposed") }))
+          settingRow(t('room.closeTimeout'), t("ui.theSingleDeadlineForSafelyShuttingDownTheRoomRuntime"), node('strong', { textContent: policy.close_timeout_seconds ? formatDurationSeconds(policy.close_timeout_seconds) : t("ui.notExposed") }))
         ),
         node('section', { className: 'panel' },
           node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: t("ui.adjustStartupParameters") }), node('p', { textContent: t("ui.policyChangesRequireAControlledRestartToAvoidDynamicReconfigurationOfRunning") }))),
@@ -3012,7 +3012,7 @@
     return formatDateTime(value);
   }
 
-  function formatDuration(seconds) {
+  function formatDurationSeconds(seconds) {
     const value = Number(seconds);
     if (!Number.isFinite(value) || value <= 0) return '—';
 	if (value % 3600 === 0) return t("ui.valueHours", { value0: formatNumber(value / 3600) });

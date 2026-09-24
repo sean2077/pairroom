@@ -126,7 +126,7 @@
       text(title.lastElementChild, `${h.displayName(summary.agent)} · ${h.truncate(summary.turn_id || summary.id, 20)}`);
       title.lastElementChild.title = fullTitle;
       text(head.lastElementChild, [
-        summary.duration_millis ? h.formatDuration(summary.duration_millis) : '',
+        summary.duration_millis ? h.formatDurationMillis(summary.duration_millis) : '',
         h.t('room.itemCount', { count: (summary.items || []).length }),
         h.formatTime(summary.updated_at || summary.started_at),
       ].filter(Boolean).join(' · '));
