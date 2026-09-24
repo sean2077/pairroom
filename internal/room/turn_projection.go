@@ -245,7 +245,8 @@ func (e *Engine) flushTurnSummaries(actor model.ActorID, now time.Time) error {
 	e.summaryMu.Lock()
 	defer e.summaryMu.Unlock()
 	tracking := e.turnSummaryTrackingLocked()
-	if len(tracking.dirty) == 0 {
+	// A forced flush still drops stopped bookkeeping when nothing is dirty.
+	if len(tracking.dirty) == 0 && !now.IsZero() {
 		return nil
 	}
 	e.mu.RLock()

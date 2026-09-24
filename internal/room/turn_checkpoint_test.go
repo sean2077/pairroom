@@ -580,3 +580,67 @@ func TestForcedFlushDropsStoppedParticipantBookkeeping(t *testing.T) {
 		t.Fatalf("both summaries remain available in the projection: %d", len(window.Turns))
 	}
 }
+
+// A stop-time checkpoint failure reaches the lifecycle caller: Stop reports it,
+// and Restart and a permission change do not launch a runtime afterwards.
+func TestStopTimeCheckpointFailureReachesLifecycleCallers(t *testing.T) {
+	for _, op := range []string{"stop", "restart", "permissions"} {
+		t.Run(op, func(t *testing.T) {
+			engine, adapters := newTestEngine(t, "")
+			started := time.Now().UTC()
+			engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeTurnStarted, TurnID: "open", CreatedAt: started})
+			engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeToolStarted, TurnID: "open", ItemID: "a", CreatedAt: started.Add(time.Second)})
+			// Permission changes require an idle participant; the Turn summary
+			// stays dirty regardless.
+			engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeState, State: model.StateIdle, CreatedAt: started.Add(2 * time.Second)})
+			old := adapters[model.ActorSlot1]
+			old.onStop = func() { _ = engine.cfg.Store.Close() }
+			var err error
+			switch op {
+			case "stop":
+				err = engine.StopAgent(context.Background(), model.ActorSlot1)
+			case "restart":
+				err = engine.RestartAgent(context.Background(), model.ActorSlot1)
+			case "permissions":
+				err = engine.SetPermissions(context.Background(), model.ActorSlot1, model.PermissionReadOnly)
+			}
+			if err == nil {
+				t.Fatal("stop-time checkpoint failure was not returned")
+			}
+			if engine.Fatal() == nil {
+				t.Fatal("checkpoint failure did not mark the Room store fatal")
+			}
+			old.mu.Lock()
+			starts := old.starts
+			old.mu.Unlock()
+			if starts != 0 || adapters[model.ActorSlot1] != old {
+				t.Fatalf("a runtime was launched or rebuilt after the failed checkpoint: starts=%d rebuilt=%v", starts, adapters[model.ActorSlot1] != old)
+			}
+		})
+	}
+}
+
+// A forced flush drops a stopped participant's bookkeeping even when its last
+// checkpoint left nothing dirty.
+func TestForcedFlushDropsBookkeepingWithoutDirtySummaries(t *testing.T) {
+	engine, _ := newTestEngine(t, "")
+	started := time.Now().UTC()
+	engine.HandleRuntimeEvent(model.RuntimeEvent{Agent: model.ActorSlot1, Kind: model.RuntimeTurnStarted, TurnID: "open", CreatedAt: started})
+	engine.summaryMu.Lock()
+	_, tracked := engine.turnSummaries.persistedAt["slot1:open"]
+	dirty := len(engine.turnSummaries.dirty)
+	engine.summaryMu.Unlock()
+	if !tracked || dirty != 0 {
+		t.Fatalf("setup needs a checkpointed, clean Turn: tracked=%v dirty=%d", tracked, dirty)
+	}
+	if err := engine.StopAgent(context.Background(), model.ActorSlot1); err != nil {
+		t.Fatal(err)
+	}
+	engine.summaryMu.Lock()
+	_, tracked = engine.turnSummaries.persistedAt["slot1:open"]
+	_, published := engine.turnSummaries.publishedAt["slot1:open"]
+	engine.summaryMu.Unlock()
+	if tracked || published {
+		t.Fatalf("stop kept bookkeeping for the stopped Turn: persisted=%v published=%v", tracked, published)
+	}
+}

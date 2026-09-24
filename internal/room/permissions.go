@@ -98,7 +98,9 @@ func (e *Engine) SetPermissions(ctx context.Context, actor model.ActorID, profil
 	if err := old.Stop(ctx); err != nil {
 		return fmt.Errorf("stop participant before permission change: %w", err)
 	}
-	_ = e.flushTurnSummaries(actor, time.Time{})
+	if err := e.flushTurnSummaries(actor, time.Time{}); err != nil {
+		return fmt.Errorf("checkpoint participant before permission change: %w", err)
+	}
 	e.expireApprovals(actor, "permissions_changed")
 	e.mu.RLock()
 	current = e.snapshot.Participants[actor]
