@@ -1,6 +1,7 @@
 package room
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,6 +34,13 @@ const (
 	// turnSummaryByteBudget bounds one serialized summary regardless of item
 	// count, so a single checkpoint record cannot reach hundreds of KiB.
 	turnSummaryByteBudget = 256 << 10
+	// turnSummaryTextBudget bounds the combined encoding of plan, diff, final
+	// text and error. Their raw limits total 128 KiB, so it binds only when
+	// escaping expands markup, and leaves room for items.
+	turnSummaryTextBudget = 160 << 10
+	// turnSummaryUsageBudget bounds the encoded usage telemetry, whose raw
+	// limit is 16 KiB; the runtime event keeps the complete value.
+	turnSummaryUsageBudget = 32 << 10
 )
 
 // turnSummaryTracking is guarded by Engine.summaryMu. It is live bookkeeping
@@ -245,7 +253,8 @@ func (e *Engine) flushTurnSummaries(actor model.ActorID, now time.Time) error {
 	e.summaryMu.Lock()
 	defer e.summaryMu.Unlock()
 	tracking := e.turnSummaryTrackingLocked()
-	if len(tracking.dirty) == 0 {
+	// A forced flush still drops stopped bookkeeping when nothing is dirty.
+	if len(tracking.dirty) == 0 && !now.IsZero() {
 		return nil
 	}
 	e.mu.RLock()
@@ -302,44 +311,160 @@ func (e *Engine) publishTransientTurnSummary(summary model.TurnSummary) {
 }
 
 // enforceTurnSummaryBudget keeps one serialized summary within
-// turnSummaryByteBudget. Plan, diff, final text and error keep their own
-// limits. Evidence is shed oldest-first — an item's payload, then its detail —
-// so the newest work stays fully inspectable; item metadata is kept, and only
-// if metadata alone still exceeds the budget are the oldest items dropped.
+// turnSummaryByteBudget. Plan, diff, final text and error keep their own raw
+// limits, and their combined encoding is bounded by turnSummaryTextBudget;
+// usage whose encoding exceeds turnSummaryUsageBudget is omitted. Evidence is
+// shed oldest-first — an item's payload, then its detail — so the newest work
+// stays fully inspectable; item metadata is kept, and only if metadata alone
+// still exceeds the budget are the oldest items dropped. Runtime events keep
+// the complete values.
 func enforceTurnSummaryBudget(summary *model.TurnSummary) {
+	boundTurnSummaryText(summary, turnSummaryTextBudget)
+	if jsonRawBytes(summary.Usage) > turnSummaryUsageBudget {
+		summary.Usage = nil
+	}
+	size := turnSummaryBaseBytes(*summary)
+	for _, item := range summary.Items {
+		size += turnItemBytes(item)
+	}
 	for i := range summary.Items {
-		if turnSummaryApproxBytes(*summary) <= turnSummaryByteBudget {
+		if size <= turnSummaryByteBudget {
 			break
 		}
+		size -= jsonRawBytes(summary.Items[i].Data)
 		summary.Items[i].Data = nil
-		if turnSummaryApproxBytes(*summary) <= turnSummaryByteBudget {
+		if size <= turnSummaryByteBudget {
 			break
 		}
+		size -= jsonStringBytes(summary.Items[i].Detail)
 		summary.Items[i].Detail = ""
 	}
-	for len(summary.Items) > 0 && turnSummaryApproxBytes(*summary) > turnSummaryByteBudget {
-		summary.Items = append([]model.TurnWorkItem(nil), summary.Items[1:]...)
+	drop := 0
+	for drop < len(summary.Items) && size > turnSummaryByteBudget {
+		size -= turnItemBytes(summary.Items[drop])
+		drop++
 	}
-	// The estimate ignores JSON escaping; confirm with the real encoding.
-	for len(summary.Items) > 0 {
+	if drop > 0 {
+		summary.Items = append([]model.TurnWorkItem(nil), summary.Items[drop:]...)
+	}
+	// Confirm with the real encoding, which also bounds a summary without items:
+	// then display text is trimmed further, and usage is dropped last.
+	for {
 		encoded, err := json.Marshal(summary)
 		if err == nil && len(encoded) <= turnSummaryByteBudget {
 			return
 		}
-		summary.Items = append([]model.TurnWorkItem(nil), summary.Items[1:]...)
+		switch {
+		case len(summary.Items) > 0:
+			summary.Items = append([]model.TurnWorkItem(nil), summary.Items[1:]...)
+		case err != nil:
+			return
+		case turnSummaryTextBytes(*summary) > 0:
+			text := turnSummaryTextBytes(*summary)
+			boundTurnSummaryText(summary, max(0, text-(len(encoded)-turnSummaryByteBudget)))
+		case summary.Usage != nil:
+			summary.Usage = nil
+		default:
+			return
+		}
 	}
 }
 
-func turnSummaryApproxBytes(summary model.TurnSummary) int {
-	const overhead = 512
-	size := overhead + len(summary.Plan) + len(summary.Diff) + len(summary.FinalText) + len(summary.Error) + len(summary.Usage)
-	for _, id := range summary.MessageIDs {
-		size += len(id) + 4
+// boundTurnSummaryText trims the longest display text field, keeping its newest
+// tail, until the fields' combined encoding fits limit.
+func boundTurnSummaryText(summary *model.TurnSummary, limit int) {
+	fields := []*string{&summary.Diff, &summary.FinalText, &summary.Plan, &summary.Error}
+	for {
+		total, longestSize := 0, 0
+		var longest *string
+		for _, field := range fields {
+			size := jsonStringBytes(*field)
+			total += size
+			if size > longestSize {
+				longest, longestSize = field, size
+			}
+		}
+		if total <= limit || longest == nil {
+			return
+		}
+		*longest = boundedEncodedTail(*longest, max(0, longestSize-(total-limit)))
 	}
-	for _, item := range summary.Items {
-		size += 160 + len(item.ID) + len(item.Kind) + len(item.Name) + len(item.Status) + len(item.Detail) + len(item.Data)
+}
+
+func turnSummaryTextBytes(summary model.TurnSummary) int {
+	return jsonStringBytes(summary.Plan) + jsonStringBytes(summary.Diff) + jsonStringBytes(summary.FinalText) + jsonStringBytes(summary.Error)
+}
+
+// turnSummaryBaseBytes and turnItemBytes estimate the encoding from above,
+// counting escapes, so shedding does not depend on a trial encoding per step.
+func turnSummaryBaseBytes(summary model.TurnSummary) int {
+	const overhead = 512
+	size := overhead + len(summary.ID) + len(summary.TurnID) + len(summary.SessionID) + len(summary.Status) +
+		turnSummaryTextBytes(summary) + jsonRawBytes(summary.Usage)
+	for _, id := range summary.MessageIDs {
+		size += jsonStringBytes(id) + 4
 	}
 	return size
+}
+
+func turnItemBytes(item model.TurnWorkItem) int {
+	return 160 + jsonStringBytes(item.ID) + jsonStringBytes(item.Kind) + jsonStringBytes(item.Name) + jsonStringBytes(item.Status) +
+		jsonStringBytes(item.Detail) + jsonRawBytes(item.Data) + 21*len(item.SourceSeqs)
+}
+
+// jsonStringBytes is the encoded size of s inside a JSON string as
+// encoding/json writes it; HTML-significant and control characters,
+// U+2028/U+2029 and invalid bytes expand to escapes of up to six bytes.
+func jsonStringBytes(s string) int {
+	size := 0
+	for i := 0; i < len(s); {
+		r, width := utf8.DecodeRuneInString(s[i:])
+		size += jsonRuneBytes(r, width)
+		i += width
+	}
+	return size
+}
+
+func jsonRuneBytes(r rune, width int) int {
+	switch {
+	case r == '<' || r == '>' || r == '&' || r == '\u2028' || r == '\u2029' || (r == utf8.RuneError && width == 1):
+		return 6
+	case r == '"' || r == '\\' || r == '\n' || r == '\r' || r == '\t':
+		return 2
+	case r < 0x20:
+		return 6
+	}
+	return width
+}
+
+// jsonRawBytes bounds the encoding of a raw value, which encoding/json
+// compacts while escaping HTML-significant characters and U+2028/U+2029.
+func jsonRawBytes(raw json.RawMessage) int {
+	return len(raw) + 5*(bytes.Count(raw, []byte("<"))+bytes.Count(raw, []byte(">"))+bytes.Count(raw, []byte("&"))) +
+		3*(bytes.Count(raw, []byte("\u2028"))+bytes.Count(raw, []byte("\u2029")))
+}
+
+// boundedEncodedTail keeps the newest whole runes of value whose encoding,
+// with the truncation marker, fits limit.
+func boundedEncodedTail(value string, limit int) string {
+	if jsonStringBytes(value) <= limit {
+		return value
+	}
+	marker := "…"
+	if limit < len(marker) {
+		return ""
+	}
+	budget, start := limit-len(marker), len(value)
+	for start > 0 {
+		r, width := utf8.DecodeLastRuneInString(value[:start])
+		cost := jsonRuneBytes(r, width)
+		if cost > budget {
+			break
+		}
+		budget -= cost
+		start -= width
+	}
+	return marker + value[start:]
 }
 
 // upsertTurnItem records a tool event. When the event has a durable record,

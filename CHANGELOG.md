@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+- Report a failed stop-time Turn summary checkpoint to the lifecycle caller. Stop Agent now returns the error instead of success, and Restart Agent and a permission change no longer start or rebuild the runtime after it; the runtime is still stopped and its in-flight work is still cancelled, and the Room store stays marked failed as before. A stop also drops the stopped participant's summary bookkeeping when nothing was left to checkpoint.
+
+- Bound a Turn summary to 256 KiB of encoded JSON rather than raw text. JSON escaping of markup (`<`, `>`, `&`) could previously expand plan, diff, final text and error to several times their raw limits, and a summary without tool items was not checked at all; these fields now keep their newest whole-rune tails within a shared encoded budget, oversized usage is omitted, and display text is trimmed before tool items are dropped. The raw runtime events keep the complete values.
+
+- Order Turn summaries by instant in the Work inspector. Go omits trailing zero fractions in timestamps (`.1Z`, `.11Z`, `Z`), so the text comparison could let an older working summary or history page replace a newer completed one within the same second, and could misorder Turns.
+
+- Deliver on-demand tool evidence to every open row that asks for it: a row rebuilt while its load was in flight (for example after switching the inspector's Agent filter) no longer stays on "loading". Loaded evidence is now kept least recently used first within a 2 M-character budget and only for an item's current source set, instead of for the life of the page.
+
+- Scope the ST1005 lint exemption to error strings that begin with a glossary proper noun, PairRoom, Git or the native `Stop` hook, instead of disabling the check globally. No error text changes.
+
 ## [v5.5.0] — 2026-09-24
 
 - Update the pinned CGo-free SQLite closure used for read-only CC Switch access: `modernc.org/sqlite` 1.58.0 → 1.59.0 and `modernc.org/libc` 1.75.6 → 1.75.7. The reviewed dependency allowlist and third-party notices move with it; the license text is unchanged.

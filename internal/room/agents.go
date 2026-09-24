@@ -48,22 +48,26 @@ func (e *Engine) StopAgent(ctx context.Context, actor model.ActorID) error {
 		return err
 	}
 	defer unlock()
-	if err := e.stopAgentLocked(ctx, actor); err != nil {
-		return err
+	stopped, err := e.stopAgentLocked(ctx, actor)
+	if stopped {
+		e.finishTurn(actor)
 	}
-	e.finishTurn(actor)
-	return nil
+	return err
 }
 
-func (e *Engine) stopAgentLocked(ctx context.Context, actor model.ActorID) error {
+// stopAgentLocked reports whether the native runtime stopped, which releases
+// its Turn even when the stop-time checkpoint then fails.
+func (e *Engine) stopAgentLocked(ctx context.Context, actor model.ActorID) (bool, error) {
 	adapter, err := e.adapter(actor)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := adapter.Stop(ctx); err != nil {
-		return err
+		return false, err
 	}
-	_ = e.flushTurnSummaries(actor, time.Time{})
+	// The runtime is already stopped, so its cleanup still runs; a checkpoint
+	// failure is returned so a restart does not relaunch into a failed store.
+	flushErr := e.flushTurnSummaries(actor, time.Time{})
 	e.cancelInFlight(actor, "native runtime was stopped")
 	e.expireApprovals(actor, "runtime_stopped")
 	e.updateParticipant(actor, func(p *model.ParticipantSnapshot) {
@@ -71,7 +75,7 @@ func (e *Engine) stopAgentLocked(ctx context.Context, actor model.ActorID) error
 		p.CurrentTurn = ""
 		p.LastActivity = time.Now().UTC()
 	})
-	return nil
+	return true, flushErr
 }
 
 func (e *Engine) RestartAgent(ctx context.Context, actor model.ActorID) error {
@@ -80,11 +84,13 @@ func (e *Engine) RestartAgent(ctx context.Context, actor model.ActorID) error {
 		return err
 	}
 	defer unlock()
-	if err := e.stopAgentLocked(ctx, actor); err != nil {
-		return err
+	stopped, err := e.stopAgentLocked(ctx, actor)
+	if err == nil {
+		err = e.startAgentLocked(ctx, actor)
 	}
-	err = e.startAgentLocked(ctx, actor)
-	e.finishTurn(actor)
+	if stopped {
+		e.finishTurn(actor)
+	}
 	return err
 }
 

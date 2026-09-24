@@ -441,6 +441,59 @@ async def verify_lazy_evidence(browser, artifacts: Path) -> dict:
     return {"lazy_evidence_requests": 3, "lazy_evidence_page_errors": errors}
 
 
+async def verify_evidence_lifecycle(browser) -> dict:
+    """An in-flight load reaches a rebuilt row, and loaded evidence stays bounded."""
+    page = await browser.new_page(viewport={"width": 1440, "height": 1000}, locale="en-US")
+    page.set_default_timeout(5000)
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    snap = snapshot_fixture()
+    snap['turns'] = [{'id': 'slot1:flight', 'turn_id': 'flight', 'agent': 'slot1', 'status': 'working', 'updated_at': '2026-01-01T12:00:00Z',
+                      'items': [{'id': 'call', 'kind': 'tool', 'status': 'working', 'name': 'Bash', 'detail': 'preview', 'source_seqs': [7]}]}]
+    html = fixture_html().replace(json.dumps(snapshot_fixture()).replace('</', '<\\/'), json.dumps(snap).replace('</', '<\\/'))
+    await page.set_content(html)
+    await page.wait_for_selector('[data-item-id="call"]')
+    await page.evaluate("""() => { window.__evidence = [{seq: 7, kind: 'tool.completed', name: 'Bash', text: 'ACTUAL_EVIDENCE'}];
+      window.__evidenceGate = new Promise(resolve => { window.__openEvidenceGate = resolve; }); }""")
+    await page.locator('[data-item-id="call"] > summary').click()
+    await page.wait_for_function("() => (window.__evidenceRequests || []).length === 1")
+    # Filtering the inspector away and back rebuilds the Turn and its row.
+    await page.evaluate("""() => { window.__oldRow = document.querySelector('[data-item-id="call"]');
+      const select = document.getElementById('inspector-agent');
+      for (const value of ['slot2', 'all']) { select.value = value; select.dispatchEvent(new Event('change')); } }""")
+    assert await page.evaluate('!__oldRow.isConnected'), 'the fixture must replace the row'
+    await page.locator('[data-item-id="call"] > summary').click()
+    await page.evaluate('window.__openEvidenceGate()')
+    await page.wait_for_function("""() => document.querySelector('[data-item-id="call"] pre').textContent.includes('ACTUAL_EVIDENCE')""")
+    assert len(await page.evaluate('window.__evidenceRequests')) == 1, 'the rebuilt row started a second load'
+
+    # Opening many large items keeps the loaded evidence within its budget: the
+    # oldest item reloads while the most recent one is still cached.
+    await page.evaluate("""() => { window.__evidenceGate = null; window.__evidenceRequests = [];
+      window.__evidence = [{seq: 1, kind: 'tool.completed', text: 'x'.repeat(256 << 10)}];
+      __snapshot.latest_seq++; const value = structuredClone(__snapshot.turns[0]);
+      value.updated_at = '2026-01-01T12:00:01Z';
+      value.items = Array.from({length: 12}, (_, i) => ({id: 'big' + i, kind: 'tool', status: 'completed', name: 'Read', detail: 'big ' + i, source_seqs: [100 + i]}));
+      __snapshot.turns[0] = value;
+      __sources.at(-1).dispatchEvent(new MessageEvent('pairroom', {data: JSON.stringify({seq: __snapshot.latest_seq, id: 'e' + __snapshot.latest_seq, kind: 'turn.summary.updated', data: value})})); }""")
+    await page.wait_for_selector('[data-item-id="big11"]')
+    for i in range(12):
+        row = page.locator(f'[data-item-id="big{i}"]')
+        await row.locator(':scope > summary').click()
+        await page.wait_for_function(f"""() => document.querySelector('[data-item-id="big{i}"] pre').textContent.length > 200000""")
+        await row.locator(':scope > summary').click()
+    assert len(await page.evaluate('window.__evidenceRequests')) == 12
+    for i, requests in [(11, 12), (0, 13)]:
+        # A closed row keeps its old text; clear it so the wait sees this open.
+        await page.evaluate(f"""() => {{ document.querySelector('[data-item-id="big{i}"] pre').textContent = ''; }}""")
+        await page.locator(f'[data-item-id="big{i}"] > summary').click()
+        await page.wait_for_function(f"""() => document.querySelector('[data-item-id="big{i}"] pre').textContent.length > 200000""")
+        assert len(await page.evaluate('window.__evidenceRequests')) == requests, f'big{i} cache state is wrong'
+    assert not errors, errors
+    await page.close()
+    return {"evidence_rebuilt_row_receives_load": True, "evidence_cache_bounded": True, "evidence_lifecycle_page_errors": errors}
+
+
 async def verify(browser_path: str | None, artifacts: Path) -> None:
     artifacts.mkdir(parents=True, exist_ok=True)
     results = {}
@@ -576,6 +629,7 @@ async def verify(browser_path: str | None, artifacts: Path) -> None:
         results.update(await verify_collaboration(browser, artifacts))
         results.update(await verify_activity(browser, artifacts))
         results.update(await verify_lazy_evidence(browser, artifacts))
+        results.update(await verify_evidence_lifecycle(browser))
         assert not errors, errors
         results.update(ime_submissions=0, rapid_enter_submissions=1, retained_draft=True,
                        resync_reads_per_burst=1, page_errors=errors)

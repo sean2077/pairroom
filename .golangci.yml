@@ -11,9 +11,14 @@ linters:
   settings:
     staticcheck:
       # Preserve upstream default style exclusions; quick-fix suggestions are
-      # not correctness gates. ST1005 is disabled because error strings begin
-      # with glossary proper nouns (Room, Service, Management Shell, Claude
-      # Code, Grok, Codex, PairRoom, ...) whose casing CONTEXT.md requires.
-      checks: [all, -ST1000, -ST1003, -ST1005, -ST1016, -ST1020, -ST1021, -ST1022, -QF*]
+      # not correctness gates.
+      checks: [all, -ST1000, -ST1003, -ST1016, -ST1020, -ST1021, -ST1022, -QF*]
   exclusions:
     presets: []
+    rules:
+      # Error strings may begin with a glossary proper noun whose casing
+      # CONTEXT.md requires, the product or Git, or the native Stop hook;
+      # any other capitalized error string still fails ST1005.
+      - linters: [staticcheck]
+        text: "ST1005:"
+        source: '(errors\.New|fmt\.Errorf)\("(Room|Service|Management Shell|Agent|Claude|Codex|Grok|PairRoom|Git|Stop) '

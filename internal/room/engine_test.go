@@ -39,6 +39,8 @@ type fakeAdapter struct {
 	interrupts    int
 	onInterrupt   func()
 	stopErr       error
+	onStop        func()
+	starts        int
 	accessErr     error
 }
 
@@ -55,6 +57,7 @@ func (f *fakeAdapter) State() model.AgentState {
 }
 func (f *fakeAdapter) Start(ctx context.Context) error {
 	f.mu.Lock()
+	f.starts++
 	started := f.startStarted
 	release := f.startRelease
 	if release != nil {
@@ -142,7 +145,11 @@ func (f *fakeAdapter) Stop(context.Context) error {
 	f.mu.Lock()
 	f.state = model.StateStopped
 	err := f.stopErr
+	onStop := f.onStop
 	f.mu.Unlock()
+	if onStop != nil {
+		onStop()
+	}
 	return err
 }
 func (f *fakeAdapter) ResolveApproval(context.Context, string, model.ApprovalResolution) error {
