@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sean2077/pairroom/internal/bus"
 	"github.com/sean2077/pairroom/internal/model"
@@ -447,6 +448,51 @@ func TestEnforceTurnSummaryBudgetShedsOldestFirst(t *testing.T) {
 	}
 	if summary.Items[0].Data != nil {
 		t.Fatal("oldest item payload should be shed first")
+	}
+}
+
+// The budget holds for the encoded summary, including JSON escaping of display
+// text and a summary without items, and text is trimmed before items are lost.
+func TestEnforceTurnSummaryBudgetBoundsEncodedText(t *testing.T) {
+	markup := strings.Repeat("<g/>", 12<<10) // 48 KiB raw, 6× under HTML escaping
+	tool := model.TurnWorkItem{ID: "tool1", Kind: "tool", Status: "completed", SourceSeqs: []uint64{1, 2}}
+	for _, tc := range []struct {
+		name  string
+		plain bool
+		in    model.TurnSummary
+	}{
+		{name: "plain text is untouched", plain: true, in: model.TurnSummary{Diff: strings.Repeat("x", 48<<10), FinalText: strings.Repeat("x", 48<<10), Plan: strings.Repeat("x", 24<<10)}},
+		{name: "escaped diff without items", in: model.TurnSummary{Diff: strings.Repeat("<", 48<<10)}},
+		{name: "escaped fields with a tool", in: model.TurnSummary{Diff: markup, FinalText: strings.Repeat("&", 48<<10), Plan: strings.Repeat(">", 24<<10), Error: strings.Repeat("\"", 8<<10), Items: []model.TurnWorkItem{tool}}},
+		{name: "escaped fields with inline evidence", in: model.TurnSummary{Diff: markup, FinalText: markup, Usage: json.RawMessage(`{"tail":"` + strings.Repeat("<", 16<<10-16) + `"}`),
+			Items: []model.TurnWorkItem{{ID: "cmd", Kind: "command", Status: "completed", Detail: strings.Repeat("&", 12<<10)}, tool}}},
+		{name: "multibyte text keeps whole runes", in: model.TurnSummary{Diff: strings.Repeat("界<", 16<<10), FinalText: strings.Repeat("é&", 24<<10)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			summary := tc.in
+			summary.ID, summary.Agent, summary.TurnID, summary.Status = "slot1:t", model.ActorSlot1, "t", "working"
+			original := cloneTurnSummary(summary)
+			enforceTurnSummaryBudget(&summary)
+			encoded, err := json.Marshal(summary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(encoded) > turnSummaryByteBudget {
+				t.Fatalf("encoded summary = %d bytes, budget %d", len(encoded), turnSummaryByteBudget)
+			}
+			if tc.plain && (summary.Diff != original.Diff || summary.FinalText != original.FinalText || summary.Plan != original.Plan) {
+				t.Fatal("text that already fits was trimmed")
+			}
+			if len(original.Items) > 0 && (len(summary.Items) == 0 || summary.Items[len(summary.Items)-1].ID != "tool1") {
+				t.Fatalf("the newest item was dropped instead of trimming display text: %d items", len(summary.Items))
+			}
+			for name, pair := range map[string][2]string{"diff": {original.Diff, summary.Diff}, "final": {original.FinalText, summary.FinalText}, "plan": {original.Plan, summary.Plan}} {
+				kept := strings.TrimPrefix(pair[1], "…")
+				if !utf8.ValidString(pair[1]) || !strings.HasSuffix(pair[0], kept) {
+					t.Fatalf("%s is not a whole-rune tail of the original", name)
+				}
+			}
+		})
 	}
 }
 

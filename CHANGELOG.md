@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Report a failed stop-time Turn summary checkpoint to the lifecycle caller. Stop Agent now returns the error instead of success, and Restart Agent and a permission change no longer start or rebuild the runtime after it; the runtime is still stopped and its in-flight work is still cancelled, and the Room store stays marked failed as before. A stop also drops the stopped participant's summary bookkeeping when nothing was left to checkpoint.
+
+- Bound a Turn summary to 256 KiB of encoded JSON rather than raw text. JSON escaping of markup (`<`, `>`, `&`) could previously expand plan, diff, final text and error to several times their raw limits, and a summary without tool items was not checked at all; these fields now keep their newest whole-rune tails within a shared encoded budget, oversized usage is omitted, and display text is trimmed before tool items are dropped. The raw runtime events keep the complete values.
+
 ## [v5.5.0] — 2026-09-24
 
 - Update the pinned CGo-free SQLite closure used for read-only CC Switch access: `modernc.org/sqlite` 1.58.0 → 1.59.0 and `modernc.org/libc` 1.75.6 → 1.75.7. The reviewed dependency allowlist and third-party notices move with it; the license text is unchanged.
