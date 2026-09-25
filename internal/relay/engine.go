@@ -46,8 +46,8 @@ type Engine struct {
 	unresolved      []string
 	counts          map[model.ActorID]InboxSummary
 	lastWake        map[model.ActorID]WakeObservation
-	lastOutbound    map[model.ActorID]string // newest message from the slot to its peer or @user
-	lastInbound     map[model.ActorID]string // newest message addressed to the slot
+	lastOutbound    map[model.ActorID]string // newest message from the slot to its peer
+	lastInbound     map[model.ActorID]string // newest message from the peer to the slot
 	inFlight        map[string]struct{} // rebuilt from message facts; never scans terminal history
 	sends           map[string]string
 	reports         map[string]Publication
@@ -742,7 +742,7 @@ func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
 			e.mu.Unlock()
 			return result, nil
 		}
-		// A Stop park only delays the native harness unless a reply is
+		// A Stop park only delays the native harness unless a peer reply is
 		// plausibly imminent. Queued or in-flight input still waits normally.
 		if park && len(e.queued[a.Slot]) == 0 && !busy && !e.replyExpectedLocked(a.Slot) {
 			e.mu.Unlock()

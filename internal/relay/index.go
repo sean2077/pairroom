@@ -29,10 +29,11 @@ func (e *Engine) initIndexes() {
 	}
 }
 
-// replyExpectedLocked reports whether a Stop park can plausibly collect a
-// reply: this slot's newest message to its peer or @user is recent, not
-// cancelled, and nothing has since been addressed to this slot. Otherwise a
-// park only delays the native harness; queued input is claimed without it.
+// replyExpectedLocked reports whether a Stop park can plausibly collect a peer
+// reply: this slot's newest message to its peer is recent, not cancelled, and
+// the peer has not addressed this slot since. A human is usually in front of
+// the harness, so an @user escalation does not hold it. Otherwise a park only
+// delays the native harness; queued input is still claimed without it.
 func (e *Engine) replyExpectedLocked(slot model.ActorID) bool {
 	id := e.lastOutbound[slot]
 	if id == "" {
@@ -89,10 +90,8 @@ func (e *Engine) putMessage(m Message) {
 	if !exists {
 		e.positions[m.ID] = len(e.order)
 		e.order = append(e.order, m.ID)
-		if m.From.ValidParticipant() {
+		if m.From.ValidParticipant() && m.To == model.OtherParticipant(m.From) {
 			e.lastOutbound[m.From] = m.ID
-		}
-		if m.To.ValidParticipant() {
 			e.lastInbound[m.To] = m.ID
 		}
 	}

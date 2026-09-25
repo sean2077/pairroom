@@ -284,31 +284,44 @@ func TestNativeParkWaitsOnlyForAnOutstandingPeerReply(t *testing.T) {
 	if !idle() {
 		t.Fatal("park kept waiting after the reply arrived")
 	}
-	// A human message to the peer is not this slot's request.
+	// Neither human input nor an @user escalation arms a park: the human is
+	// usually in front of the harness and must not wait behind a Stop hook.
 	if _, err := e.SendUser(SendRequest{ID: "human", Text: "human steer", To: model.ActorSlot2}); err != nil {
 		t.Fatal(err)
 	}
 	if !idle() {
 		t.Fatal("human input to the peer armed this slot's park")
 	}
-	// An escalation to @user parks for the human's reply, which settles it.
 	if _, err := e.Send(asker, SendRequest{ID: "ask-human", Text: "which option?", To: model.ActorUser}); err != nil {
 		t.Fatal(err)
 	}
-	if idle() {
-		t.Fatal("park did not wait for an outstanding human answer")
+	if !idle() {
+		t.Fatal("an @user escalation held the harness")
 	}
-	if _, err := e.SendUser(SendRequest{ID: "human-answer", Text: "option two", To: model.ActorSlot1}); err != nil {
+	// Human input to this slot does not settle an outstanding peer request.
+	if _, err := e.Send(asker, SendRequest{ID: "q-pending", Text: "peer question"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.SendUser(SendRequest{ID: "human-steer", Text: "also consider X", To: model.ActorSlot1}); err != nil {
 		t.Fatal(err)
 	}
 	if claim, err = e.Claim(context.Background(), asker, true); err != nil || claim == nil {
-		t.Fatalf("human answer not collected by park: %v", err)
+		t.Fatalf("human input not collected by park: %v", err)
 	}
 	if err := e.Ack(asker, claim.ID, claim.Receipt); err != nil {
 		t.Fatal(err)
 	}
-	if !idle() {
-		t.Fatal("park kept waiting after the human answered")
+	if idle() {
+		t.Fatal("human input cleared the outstanding peer request")
+	}
+	if _, err := e.Send(peer, SendRequest{ID: "a-pending", Text: "peer answer"}); err != nil {
+		t.Fatal(err)
+	}
+	if claim, err = e.Claim(context.Background(), asker, true); err != nil || claim == nil {
+		t.Fatalf("peer answer not collected by park: %v", err)
+	}
+	if err := e.Ack(asker, claim.ID, claim.Receipt); err != nil {
+		t.Fatal(err)
 	}
 	cancelled, err := e.Send(asker, SendRequest{ID: "q2", Text: "second question"})
 	if err != nil {
