@@ -48,7 +48,7 @@ type Engine struct {
 	lastWake        map[model.ActorID]WakeObservation
 	lastOutbound    map[model.ActorID]string // newest message from the slot to its peer
 	lastInbound     map[model.ActorID]string // newest message from the peer to the slot
-	inFlight        map[string]struct{} // rebuilt from message facts; never scans terminal history
+	inFlight        map[string]struct{}      // rebuilt from message facts; never scans terminal history
 	sends           map[string]string
 	reports         map[string]Publication
 	lastReport      map[string]uint64
