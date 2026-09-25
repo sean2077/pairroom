@@ -82,6 +82,24 @@ func TestCapabilityRefreshAndBoundedPrivateRead(t *testing.T) {
 		t.Fatal("temporary secret file leaked")
 	}
 	path := filepath.Join(dir, FileName)
+	// An identical capability is not rewritten on every Stop; a rotated token
+	// and a tampered file are.
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Capture(dir, testIdentity, testAddress(), testToken); err != nil {
+		t.Fatal(err)
+	}
+	if after, err := os.Stat(path); err != nil || !os.SameFile(before, after) {
+		t.Fatal("unchanged capability was rewritten")
+	}
+	if err := Capture(dir, testIdentity, testAddress(), testToken+"-rotated"); err != nil {
+		t.Fatal(err)
+	}
+	if after, err := os.Stat(path); err != nil || os.SameFile(before, after) {
+		t.Fatal("rotated capability was not rewritten")
+	}
 	for _, text := range []string{"not-json", strings.Repeat(" ", 16385)} {
 		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
 			t.Fatal(err)

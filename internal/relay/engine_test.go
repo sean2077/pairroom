@@ -199,6 +199,15 @@ func TestNativeFIFOClaimAckUnknownAndExplicitRetry(t *testing.T) {
 func TestNativeParkDisableTimeoutAndWake(t *testing.T) {
 	e, a, _ := testEngine(t)
 	receiver := a[model.ActorSlot2]
+	// With no outstanding peer message, a Stop park returns at once instead of
+	// holding the native harness for its whole window.
+	start := time.Now()
+	if claim, err := e.Claim(context.Background(), receiver, true); err != nil || claim != nil || time.Since(start) > time.Second {
+		t.Fatalf("idle park held the harness: %v %v", claim, err)
+	}
+	if _, err := e.Send(receiver, SendRequest{ID: "question", Text: "a question for the peer"}); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	if _, err := e.Claim(ctx, receiver, true); !errors.Is(err, context.DeadlineExceeded) {
@@ -212,7 +221,7 @@ func TestNativeParkDisableTimeoutAndWake(t *testing.T) {
 	if claim, err := e.Claim(context.Background(), receiver, true); err != nil || claim != nil {
 		t.Fatal("disabled park consumed message")
 	}
-	if e.Snapshot().Messages[0].State != "queued" {
+	if e.Snapshot().Messages[1].State != "queued" {
 		t.Fatal("park disable lost queued message")
 	}
 	claim, err := e.Claim(context.Background(), receiver, false)
@@ -221,6 +230,9 @@ func TestNativeParkDisableTimeoutAndWake(t *testing.T) {
 	}
 	_ = e.Ack(receiver, claim.ID, claim.Receipt)
 	if err := e.Park(receiver.Slot, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Send(receiver, SendRequest{ID: "follow-up", Text: "another question"}); err != nil {
 		t.Fatal(err)
 	}
 	result := make(chan *Claim, 1)
@@ -234,8 +246,89 @@ func TestNativeParkDisableTimeoutAndWake(t *testing.T) {
 	if c := <-result; c == nil {
 		t.Fatal("park did not wake")
 	}
-	if before != 4 {
+	if before != 5 {
 		t.Fatalf("timed-out wait persisted fake activity/delivery: seq=%d", before)
+	}
+}
+
+// A peer reply settles the expectation: the next Stop does not park again
+// until this slot addresses its peer, and a fresh request re-arms it.
+func TestNativeParkWaitsOnlyForAnOutstandingPeerReply(t *testing.T) {
+	e, a, _ := testEngine(t)
+	asker, peer := a[model.ActorSlot1], a[model.ActorSlot2]
+	idle := func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		claim, err := e.Claim(ctx, asker, true)
+		return claim == nil && err == nil
+	}
+	if !idle() {
+		t.Fatal("park waited without an outstanding request")
+	}
+	if _, err := e.Send(asker, SendRequest{ID: "q1", Text: "question"}); err != nil {
+		t.Fatal(err)
+	}
+	if idle() {
+		t.Fatal("park did not wait for an outstanding reply")
+	}
+	if _, err := e.Send(peer, SendRequest{ID: "a1", Text: "answer"}); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := e.Claim(context.Background(), asker, true)
+	if err != nil || claim == nil {
+		t.Fatalf("queued reply not collected by park: %v", err)
+	}
+	if err := e.Ack(asker, claim.ID, claim.Receipt); err != nil {
+		t.Fatal(err)
+	}
+	if !idle() {
+		t.Fatal("park kept waiting after the reply arrived")
+	}
+	// A human message to the peer is not this slot's request.
+	if _, err := e.SendUser(SendRequest{ID: "human", Text: "human steer", To: model.ActorSlot2}); err != nil {
+		t.Fatal(err)
+	}
+	if !idle() {
+		t.Fatal("human input to the peer armed this slot's park")
+	}
+	// An escalation to @user parks for the human's reply, which settles it.
+	if _, err := e.Send(asker, SendRequest{ID: "ask-human", Text: "which option?", To: model.ActorUser}); err != nil {
+		t.Fatal(err)
+	}
+	if idle() {
+		t.Fatal("park did not wait for an outstanding human answer")
+	}
+	if _, err := e.SendUser(SendRequest{ID: "human-answer", Text: "option two", To: model.ActorSlot1}); err != nil {
+		t.Fatal(err)
+	}
+	if claim, err = e.Claim(context.Background(), asker, true); err != nil || claim == nil {
+		t.Fatalf("human answer not collected by park: %v", err)
+	}
+	if err := e.Ack(asker, claim.ID, claim.Receipt); err != nil {
+		t.Fatal(err)
+	}
+	if !idle() {
+		t.Fatal("park kept waiting after the human answered")
+	}
+	cancelled, err := e.Send(asker, SendRequest{ID: "q2", Text: "second question"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Cancel(cancelled.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !idle() {
+		t.Fatal("cancelled request still armed park")
+	}
+	if _, err := e.Send(asker, SendRequest{ID: "q3", Text: "third question"}); err != nil {
+		t.Fatal(err)
+	}
+	e.cfg.Now = func() time.Time { return time.Now().UTC().Add(ReplyParkWindow + time.Minute) }
+	if !idle() {
+		t.Fatal("stale request kept arming park")
+	}
+	if ready, err := e.WaitForPending(context.Background(), asker); ready || err != nil {
+		t.Fatalf("readiness probe waited without an expected reply: %v %v", ready, err)
 	}
 }
 

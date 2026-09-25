@@ -15,6 +15,7 @@ const (
 	DefaultPark         = 30 * time.Second
 	MaxPark             = 30 * time.Second
 	DeliveryLease       = 10 * time.Second
+	ReplyParkWindow     = 10 * time.Minute
 	MaxBlocks           = 8
 	EventBinding        = "native.binding.updated"
 	EventPublication    = "native.publication"

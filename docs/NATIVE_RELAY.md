@@ -61,7 +61,7 @@ Do not publish the same report explicitly and then repeat it in a peer-directed 
 
 ## The two receive paths share one mailbox
 
-An approved Stop hook publishes first, then may park for up to 30 seconds within its installed 45-second timeout. Claude/Codex can request continuation with an actual envelope, up to eight consecutive blocks. Grok's clipped hook-feedback channel instead returns a bounded readiness instruction: the full input stays queued until foreground `wait` collects it. Grok readiness/recovery hints stop at seven to reserve its final publication gate; other hooks share the vendor budget.
+An approved Stop hook publishes first, then may park for up to 30 seconds within its installed 45-second timeout. It parks only while a reply is expected — this session recently addressed its peer or `@user` and nothing has come back yet — so an ordinary unaddressed turn ends without an idle half-minute. Claude/Codex can request continuation with an actual envelope, up to eight consecutive blocks. Grok's clipped hook-feedback channel instead returns a bounded readiness instruction: the full input stays queued until foreground `wait` collects it. Grok readiness/recovery hints stop at seven to reserve its final publication gate; other hooks share the vendor budget.
 
 For an explicit discussion, start the receiver with `pairroom relay wait`, then in the other session run:
 

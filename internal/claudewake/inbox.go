@@ -4,6 +4,7 @@
 package claudewake
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -80,6 +81,10 @@ func Capture(dir string, identity Identity, address, token string) error {
 	if err != nil || len(data) > 16384 {
 		return ErrUnavailable
 	}
+	data = append(data, '\n')
+	if unchanged(path, data) {
+		return nil // no per-Stop token rewrite or fsync for an identical capability
+	}
 	// Create with owner-only access before writing any token, including on
 	// Windows where chmod(0600) alone does not establish a private DACL.
 	f, err := privateTemp(dir)
@@ -87,7 +92,7 @@ func Capture(dir string, identity Identity, address, token string) error {
 		return ErrUnavailable
 	}
 	defer os.Remove(f.Name())
-	if _, err = f.Write(append(data, '\n')); err == nil {
+	if _, err = f.Write(data); err == nil {
 		err = f.Sync()
 	}
 	closeErr := f.Close()
@@ -98,6 +103,26 @@ func Capture(dir string, identity Identity, address, token string) error {
 		return ErrUnavailable
 	}
 	return nil
+}
+
+// unchanged accepts only the same private regular file that Prepare would
+// trust, so skipping a rewrite never preserves a replaced or exposed file.
+func unchanged(path string, data []byte) bool {
+	before, err := os.Lstat(path)
+	if err != nil || !before.Mode().IsRegular() || before.Size() != int64(len(data)) {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	after, err := f.Stat()
+	if err != nil || !os.SameFile(before, after) || !privateFile(f, after) {
+		return false
+	}
+	current, err := io.ReadAll(io.LimitReader(f, int64(len(data))+1))
+	return err == nil && bytes.Equal(current, data)
 }
 
 // Prepare reads a bounded owner-only sidecar, never the vendor registry or

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Park a Native Stop hook only while a reply is expected. Previously every Stop with an empty inbox held the native harness idle for up to 30 seconds, including ordinary turns that addressed nobody, so each response ended at least half a minute late. A hook now parks only when the slot's newest message to its peer or `@user` is at most 10 minutes old, not cancelled, and nothing has since been addressed to that slot; otherwise it returns `{}` at once. Already queued input is still collected immediately, the Grok readiness probe follows the same rule, and foreground `wait`/`exchange` are unchanged. The rule is derived from existing message facts during replay: no event, schema or protocol-version change.
+
+- Remove two redundant round trips and most local writes from every Native Stop hook. The hook no longer calls `inspect` before publishing, because `report` and `wait` already authenticate the bound session; it calls `confirm` only when the harness reports a new transcript reference, which is cached in the slot's `state.json`. The local state is written once per Stop instead of twice, and the private Claude inbox capability is no longer rewritten and fsynced when unchanged.
+
+- Keep a Native Stop reply when the Service is stopped. The hook used to fail before saving its reply because it read the Service endpoint first, and a cleanly stopped Service removes that file, so a reply addressed to the peer was lost. The hook now validates the private binding and saves the reply WAL first, still reports the stopped Service, and the next hook or `relay reconcile` publishes the reply under its original sequence.
 ## [v5.5.1] — 2026-09-24
 
 - Report a failed stop-time Turn summary checkpoint to the lifecycle caller. Stop Agent now returns the error instead of success, and Restart Agent and a permission change no longer start or rebuild the runtime after it; the runtime is still stopped and its in-flight work is still cancelled, and the Room store stays marked failed as before. A stop also drops the stopped participant's summary bookkeeping when nothing was left to checkpoint.

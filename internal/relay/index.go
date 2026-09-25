@@ -21,6 +21,29 @@ func (e *Engine) initIndexes() {
 	if e.lastWake == nil {
 		e.lastWake = map[model.ActorID]WakeObservation{}
 	}
+	if e.lastOutbound == nil {
+		e.lastOutbound = map[model.ActorID]string{}
+	}
+	if e.lastInbound == nil {
+		e.lastInbound = map[model.ActorID]string{}
+	}
+}
+
+// replyExpectedLocked reports whether a Stop park can plausibly collect a
+// reply: this slot's newest message to its peer or @user is recent, not
+// cancelled, and nothing has since been addressed to this slot. Otherwise a
+// park only delays the native harness; queued input is claimed without it.
+func (e *Engine) replyExpectedLocked(slot model.ActorID) bool {
+	id := e.lastOutbound[slot]
+	if id == "" {
+		return false
+	}
+	out := e.messages[id]
+	if out.State == "cancelled" || e.cfg.Now().Sub(out.CreatedAt) > ReplyParkWindow {
+		return false
+	}
+	in := e.lastInbound[slot]
+	return in == "" || e.positions[in] < e.positions[id]
 }
 
 func unresolvedState(state string) bool {
@@ -66,6 +89,12 @@ func (e *Engine) putMessage(m Message) {
 	if !exists {
 		e.positions[m.ID] = len(e.order)
 		e.order = append(e.order, m.ID)
+		if m.From.ValidParticipant() {
+			e.lastOutbound[m.From] = m.ID
+		}
+		if m.To.ValidParticipant() {
+			e.lastInbound[m.To] = m.ID
+		}
 	}
 	if exists {
 		e.countMessage(old, -1)
