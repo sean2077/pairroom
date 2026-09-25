@@ -78,7 +78,9 @@ Collection transitions `queued → delivering → handed_off`. `handed_off` asse
 
 Runtime draining rejects new publications and claims while allowing valid acknowledgements of already released envelopes to settle. An acknowledgement never activates a suspended Room and still requires the current binding, generation, session and receipt; closure, revocation and uncertain store writes remain fail-closed, and an expired delivery lease settles only through that receipt-matched acknowledgement.
 
-A hook publishes first, then parks up to 30 seconds within a 45-second installed hook timeout, reserving time for stdout and acknowledgement. No claim occurs while waiting. For Claude/Codex, new inbox work returns `{"decision":"block","reason":"<envelope>"}`. At most eight consecutive actual-message blocks are allowed; `stop_hook_active` with no inbox does not spend a block on empty re-arming. There is no idle wake-up promise after timeout, disabled park or the block cap: messages remain queued for the already-associated session's `relay wait`, a human nudge, or — for an eligible Claude/Codex-bound target in a wake-enabled Room — the Service-side automatic wake below. Each continued model turn may cost tokens; no real vendor token measurement is claimed.
+A hook publishes first, then parks up to 30 seconds within a 45-second installed hook timeout, reserving time for stdout and acknowledgement. No claim occurs while waiting. Already queued input is collected immediately. An empty inbox parks only while a peer reply is expected: the slot's newest message to its peer is at most 10 minutes old, not cancelled, and the peer has not addressed that slot since. Human input and `@user` escalations neither arm nor settle it, because the human normally answers in the harness itself. Otherwise the hook returns `{}` at once instead of holding the native harness idle; this derived Engine state adds no event or schema. For Claude/Codex, new inbox work returns `{"decision":"block","reason":"<envelope>"}`. At most eight consecutive actual-message blocks are allowed; `stop_hook_active` with no inbox does not spend a block on empty re-arming. There is no idle wake-up promise after timeout, disabled park, a skipped park or the block cap: messages remain queued for the already-associated session's `relay wait`, a human nudge, or — for an eligible Claude/Codex-bound target in a wake-enabled Room — the Service-side automatic wake below. Each continued model turn may cost tokens; no real vendor token measurement is claimed.
+
+The hook authenticates each relay call with the bound session, so it contacts the Service only to confirm a new transcript reference, publish and park. It saves the reply WAL before any Service call, so the first reply after the Service stops stays pending for the next hook or `relay reconcile`. The single pending slot cannot hold a later reply while that one is unresolved: another Stop before the Service returns is not retained; publish it explicitly with `relay send` if it matters.
 
 ### Optional foreground exchange
 
@@ -111,7 +113,7 @@ identity captured at bind; it cannot create or change a binding.
 Grok clips outgoing hook text and Stop feedback. A clipped reply is never
 published as complete: reconcile existing pending publication, then require
 explicit full-text send/exchange. A Grok hook park probes readiness without
-claiming an envelope and returns only a bounded instruction to run foreground
+claiming an envelope, under the same expected-reply rule as other parks, and returns only a bounded instruction to run foreground
 wait. The complete input stays queued until that tool claims, writes and
 acknowledges it. These hints share a seven-continuation cap, reserving the last
 gate before Grok skips Stop hooks after eight continuations. Other hooks share

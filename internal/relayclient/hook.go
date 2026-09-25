@@ -93,7 +93,9 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	if err != nil {
 		return err
 	}
-	c, err := load(dir)
+	// A stopped Service must not lose this reply: validate the private binding
+	// and save the WAL first; the endpoint error surfaces on the first call.
+	c, err := loadLocal(dir)
 	if err != nil {
 		release()
 		return err
@@ -113,15 +115,20 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	if err := rememberSession(c.State); err != nil {
 		_, _ = fmt.Fprintln(diagnostic, "PairRoom: session locator unavailable; use --repo for this binding until repaired.")
 	}
-	// Stamp hook activity before any HTTP so even a failed inspect/confirm
-	// leaves the locally observable last-hook marker fresh on the next
-	// persist (the reservation and Blocks writes both carry it forward).
-	c.State.LastHookAt = time.Now().UTC().Format(time.RFC3339)
-	// Reserve the reply WAL before any metadata HTTP for this invocation: a
-	// transient inspect/confirm failure then leaves a reconcilable pending
-	// publication instead of losing this Stop reply without a trace. Only a
-	// clean pending slot qualifies; an unresolved earlier publication keeps
-	// the ordinary Publish path, which reconciles it first.
+	// Local-only observability for `relay status`; never sent to the Service.
+	// Stamp it before any HTTP so a failed call still leaves it fresh, and fold
+	// it with the block reset into the reservation write when there is one.
+	next := c.State
+	next.LastHookAt = time.Now().UTC().Format(time.RFC3339)
+	if !hook.StopHookActive {
+		next.Blocks = 0
+	}
+	c.State = next
+	// Reserve the reply WAL before any HTTP for this invocation: a transient
+	// confirm failure then leaves a reconcilable pending publication instead
+	// of losing this Stop reply without a trace. Only a clean pending slot
+	// qualifies; an unresolved earlier publication keeps the ordinary Publish
+	// path, which reconciles it first.
 	reserved := hook.Event == "Stop" && hook.LastAssistantMessage != nil && !hook.Clipped &&
 		len(*hook.LastAssistantMessage) <= relay.MaxBodyBytes && c.State.Pending == nil
 	if reserved {
@@ -129,36 +136,34 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 			release()
 			return err
 		}
-	}
-	var binding relay.Binding
-	if err := c.call(ctx, "inspect", nil, &binding); err != nil {
+	} else if err := c.persist(next); err != nil {
 		release()
 		return err
-	}
-	if binding.SessionID != hook.SessionID {
-		release()
-		return relay.ErrAuth
 	}
 	if err := captureClaudeInbox(c.Dir, c.State); err != nil {
 		_, _ = fmt.Fprintln(diagnostic, "PairRoom: Claude external wake is unavailable; relay publication and collection remain available.")
 	}
-	// Opportunistically record the transcript path, which the harness environment
-	// does not carry, so `relay peer` references stay available.
-	if binding.TranscriptPath == "" && hook.TranscriptPath != "" {
-		if err := c.call(ctx, "confirm", map[string]any{"session_id": hook.SessionID, "transcript_path": hook.TranscriptPath}, &binding); err != nil {
+	// Every relay call authenticates this session, so only a new transcript
+	// reference, which the harness environment does not carry, needs a
+	// separate confirm. It is optional metadata: a rejected or unavailable
+	// confirm must not block publication, which re-authenticates on its own.
+	if hook.TranscriptPath != "" && hook.TranscriptPath != c.State.TranscriptPath {
+		var binding relay.Binding
+		err := c.call(ctx, "confirm", map[string]any{"session_id": hook.SessionID, "transcript_path": hook.TranscriptPath}, &binding)
+		if err == nil && binding.SessionID != hook.SessionID {
 			release()
-			return err
+			return relay.ErrAuth
 		}
-	}
-	next := c.State
-	if !hook.StopHookActive {
-		next.Blocks = 0
-	}
-	// Local-only observability for `relay status`; never sent to the Service.
-	next.LastHookAt = time.Now().UTC().Format(time.RFC3339)
-	if err := c.persist(next); err != nil {
-		release()
-		return err
+		if err != nil {
+			_, _ = fmt.Fprintln(diagnostic, "PairRoom: transcript reference not recorded; relay publication continues.")
+		} else {
+			next := c.State
+			next.TranscriptPath = hook.TranscriptPath
+			if err := c.persist(next); err != nil {
+				release()
+				return err
+			}
+		}
 	}
 	if hook.Event == "StopFailure" {
 		// A vendor error may contain tokens or partial reply text. Send only the

@@ -21,6 +21,30 @@ func (e *Engine) initIndexes() {
 	if e.lastWake == nil {
 		e.lastWake = map[model.ActorID]WakeObservation{}
 	}
+	if e.lastOutbound == nil {
+		e.lastOutbound = map[model.ActorID]string{}
+	}
+	if e.lastInbound == nil {
+		e.lastInbound = map[model.ActorID]string{}
+	}
+}
+
+// replyExpectedLocked reports whether a Stop park can plausibly collect a peer
+// reply: this slot's newest message to its peer is recent, not cancelled, and
+// the peer has not addressed this slot since. A human is usually in front of
+// the harness, so an @user escalation does not hold it. Otherwise a park only
+// delays the native harness; queued input is still claimed without it.
+func (e *Engine) replyExpectedLocked(slot model.ActorID) bool {
+	id := e.lastOutbound[slot]
+	if id == "" {
+		return false
+	}
+	out := e.messages[id]
+	if out.State == "cancelled" || e.cfg.Now().Sub(out.CreatedAt) > ReplyParkWindow {
+		return false
+	}
+	in := e.lastInbound[slot]
+	return in == "" || e.positions[in] < e.positions[id]
 }
 
 func unresolvedState(state string) bool {
@@ -66,6 +90,12 @@ func (e *Engine) putMessage(m Message) {
 	if !exists {
 		e.positions[m.ID] = len(e.order)
 		e.order = append(e.order, m.ID)
+		// A user-initiated Retry keeps the original sender but is not a new
+		// request or answer from that Agent.
+		if m.Source != "retry" && m.From.ValidParticipant() && m.To == model.OtherParticipant(m.From) {
+			e.lastOutbound[m.From] = m.ID
+			e.lastInbound[m.To] = m.ID
+		}
 	}
 	if exists {
 		e.countMessage(old, -1)

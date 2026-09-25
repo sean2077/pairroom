@@ -46,6 +46,9 @@ type State struct {
 	// ran for this binding, so `relay status` can distinguish "hook never
 	// fires" from "hook fires but nothing routes". Never sent to the Service.
 	LastHookAt string `json:"last_hook_at,omitempty"`
+	// TranscriptPath caches the reference last confirmed with the Service, so
+	// a Stop hook calls confirm only when the harness reports a new one.
+	TranscriptPath string `json:"transcript_path,omitempty"`
 }
 
 type credentials struct {
@@ -60,6 +63,9 @@ type Client struct {
 	Endpoint relay.Endpoint
 	HTTP     *http.Client
 	Save     func(State) error // injected only by deterministic crash-window tests
+	// endpointErr defers a missing Service endpoint to the first relay call, so
+	// a Stop hook can still save its reply WAL while the Service is stopped.
+	endpointErr error
 }
 
 func secureDir(root string, parts ...string) (string, error) {
@@ -103,6 +109,19 @@ func readPrivate(path string, value any) error {
 	return nil
 }
 func load(dir string) (*Client, error) {
+	c, err := loadLocal(dir)
+	if err != nil {
+		return nil, err
+	}
+	if c.endpointErr != nil {
+		return nil, c.endpointErr
+	}
+	return c, nil
+}
+
+// loadLocal validates the private binding without requiring a running Service.
+// Relay calls on the result fail with the endpoint error until it is readable.
+func loadLocal(dir string) (*Client, error) {
 	var state State
 	if err := readPrivate(filepath.Join(dir, "state.json"), &state); err != nil {
 		return nil, err
@@ -120,12 +139,13 @@ func load(dir string) (*Client, error) {
 	if cred.BindID != state.BindID || cred.Secret == "" {
 		return nil, errors.New("relay credential/state mismatch; recover bind explicitly")
 	}
+	c := &Client{Dir: dir, State: state, Secret: cred.Secret, HTTP: &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 40 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	c.Save = func(s State) error { return relay.AtomicJSON(filepath.Join(dir, "state.json"), s) }
 	endpoint, err := relay.ReadEndpoint(state.EndpointPath)
 	if err != nil {
-		return nil, fmt.Errorf("read current Service endpoint (is PairRoom running?): %w", err)
+		c.endpointErr = fmt.Errorf("read current Service endpoint (is PairRoom running?): %w", err)
 	}
-	c := &Client{Dir: dir, State: state, Secret: cred.Secret, Endpoint: endpoint, HTTP: &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 40 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
-	c.Save = func(s State) error { return relay.AtomicJSON(filepath.Join(dir, "state.json"), s) }
+	c.Endpoint = endpoint
 	return c, nil
 }
 func (c *Client) authHeaders(req *http.Request) {
@@ -135,6 +155,9 @@ func (c *Client) authHeaders(req *http.Request) {
 	req.Header.Set("X-PairRoom-Session", c.State.SessionID)
 }
 func (c *Client) call(ctx context.Context, action string, payload any, result any) error {
+	if c.endpointErr != nil {
+		return c.endpointErr
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return err

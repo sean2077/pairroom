@@ -11,10 +11,8 @@ import (
 )
 
 type queuedDeliveryHint struct {
-	Notice      string `json:"notice"`
-	Command     string `json:"command"`
-	WakeCommand string `json:"wake_command,omitempty"`
-	WakeNotice  string `json:"wake_notice,omitempty"`
+	Notice  string `json:"notice"`
+	Command string `json:"command"`
 }
 
 type publicationReceipt struct {
@@ -65,21 +63,22 @@ func peerWakeTemplate(ctx context.Context, c *Client) wakeTemplate {
 	return nativeWakeAdvice(peer.Runtime, peer.SessionID)
 }
 
-func queuedDeliveryHintFor(ctx context.Context, c *Client, msg relay.Message) *queuedDeliveryHint {
+// queuedDeliveryHintFor is the per-send hint, printed into the sender's model
+// context on nearly every send. Keep it short and lookup-free: the sender
+// cannot collect for its peer, and agents never run a vendor wake command.
+// status --brief carries the full wake advice for explicit inspection.
+func queuedDeliveryHintFor(c *Client, msg relay.Message) *queuedDeliveryHint {
 	if msg.State != "queued" || msg.To != peerSlot(c.State.Slot) {
 		return nil
 	}
-	wake := peerWakeTemplate(ctx, c)
 	return &queuedDeliveryHint{
-		Notice:      "Message is queued and was not handed off at this response. Eligible Claude inbox and Codex queue wakes are Service-managed; unattempted rate-limited work is deferred. Use relay doctor on uncertainty, or run this command in the peer's associated native session.",
-		Command:     waitCommand(c.State.Room, msg.To),
-		WakeCommand: wake.Command,
-		WakeNotice:  wake.Notice,
+		Notice:  "Queued for the peer; not yet collected. Wake is Service-managed; if it stays queued, use relay status --brief, or run this in the peer's session.",
+		Command: waitCommand(c.State.Room, msg.To),
 	}
 }
 
-func writeQueuedDeliveryHint(ctx context.Context, diagnostic io.Writer, c *Client, msg relay.Message) {
-	hint := queuedDeliveryHintFor(ctx, c, msg)
+func writeQueuedDeliveryHint(diagnostic io.Writer, c *Client, msg relay.Message) {
+	hint := queuedDeliveryHintFor(c, msg)
 	if hint == nil {
 		return
 	}

@@ -285,6 +285,18 @@ func TestNativeWakeCollectorExitRechecksWithoutAnotherPublication(t *testing.T) 
 	e, a, _ := wakeEngine(t, &clock)
 	w := newNativeWaker(nativeWakerConfig{Relay: e, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { calls.Add(1); return nil }})
 	defer w.Close()
+	// A readiness probe waits only for an outstanding peer reply; deliver the
+	// question so it leaves no queued head of its own to wake.
+	if _, err := e.Send(a[model.ActorSlot2], relay.SendRequest{ID: "question", Text: "question"}); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := e.Claim(context.Background(), a[model.ActorSlot1], false)
+	if err != nil || claim == nil {
+		t.Fatalf("fixture question not claimed: %v", err)
+	}
+	if err := e.Ack(a[model.ActorSlot1], claim.ID, claim.Receipt); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); _, _ = e.WaitForPending(ctx, a[model.ActorSlot2]) }()
@@ -296,7 +308,7 @@ func TestNativeWakeCollectorExitRechecksWithoutAnotherPublication(t *testing.T) 
 		time.Sleep(time.Millisecond)
 	}
 	// The pending-readiness collector exits without consuming the arriving input.
-	_, err := e.Send(a[model.ActorSlot1], relay.SendRequest{ID: "pending", Text: "fixture"})
+	_, err = e.Send(a[model.ActorSlot1], relay.SendRequest{ID: "pending", Text: "fixture"})
 	if err != nil {
 		t.Fatal(err)
 	}

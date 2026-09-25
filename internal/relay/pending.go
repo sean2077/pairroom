@@ -32,6 +32,10 @@ func (e *Engine) WaitForPending(ctx context.Context, a Auth) (bool, error) {
 			e.mu.Unlock()
 			return true, nil
 		}
+		if !ready && !busy && !e.replyExpectedLocked(a.Slot) {
+			e.mu.Unlock()
+			return false, nil
+		}
 		changed := e.changed
 		e.waiters[a.Slot]++
 		e.mu.Unlock()
