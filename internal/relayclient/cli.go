@@ -325,7 +325,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if err := writeJSON(out, receipt); err != nil {
 			return fmt.Errorf("publication %s confirmed but receipt output failed: %w; recover only with the SAME --id %s", msg.ID, err, o.id)
 		}
-		writeQueuedDeliveryHint(ctx, diagnostic, c, msg)
+		writeQueuedDeliveryHint(diagnostic, c, msg)
 		return nil
 	case "wait":
 		_, err := deliverForeground(ctx, c, o.timeout, out)

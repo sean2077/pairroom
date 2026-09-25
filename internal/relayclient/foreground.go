@@ -57,7 +57,9 @@ func finishExchange(ctx context.Context, c *Client, o options, msg relay.Message
 	}
 	// Do not echo the body, credentials or full send response into the model.
 	// Stdout remains reserved for the one incoming envelope or its file receipt.
-	receipt := publicationReceipt{Published: msg.ID, ClientID: o.id, QueuedDelivery: queuedDeliveryHintFor(ctx, c, msg)}
+	// The sender is about to collect; a peer-collection hint would only add
+	// context, and a timeout below prints its own recovery command.
+	receipt := publicationReceipt{Published: msg.ID, ClientID: o.id}
 	if err := writeJSON(diagnostic, receipt); err != nil {
 		return fmt.Errorf("publication %s confirmed but diagnostic output failed: %w; inspect relay status, do not resend", msg.ID, err)
 	}

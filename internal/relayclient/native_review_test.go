@@ -189,18 +189,27 @@ func TestSkillInstallHonorsEachNativeConfigRoot(t *testing.T) {
 }
 
 func TestOptionalWakeLookupCannotExhaustCollectionBudget(t *testing.T) {
-	f := newForegroundFixture(t, foregroundFixtureOptions{peerLookupStalled: true})
+	// Exchange no longer looks up the peer at all; status keeps the optional
+	// wake advice behind a bounded lookup that cannot stall inspection.
+	f := newForegroundFixture(t, foregroundFixtureOptions{peerLookupStalled: true, summary: &relay.Summary{Inboxes: map[model.ActorID]relay.InboxSummary{model.ActorSlot2: {Queued: 1}}}})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	var out, diagnostic bytes.Buffer
 	if err := f.run(ctx, "exchange", strings.NewReader("review"), &out, &diagnostic, "--id", "one"); err != nil {
 		t.Fatal(err)
 	}
-	if f.count("send") != 1 || f.count("peer") != 1 || f.count("wait") != 1 || f.count("ack") != 1 {
-		t.Fatal("optional hint suppressed collection or repeated publication")
+	if f.count("send") != 1 || f.count("peer") != 0 || f.count("wait") != 1 || f.count("ack") != 1 {
+		t.Fatal("exchange looked up optional metadata, suppressed collection or repeated publication")
 	}
 	if strings.Contains(diagnostic.String(), "wake_command") || !strings.Contains(out.String(), "Review finding") {
-		t.Fatal("failed metadata lookup lost input or invented a vendor wake")
+		t.Fatal("exchange lost input or invented a vendor wake")
+	}
+	out.Reset()
+	if err := f.run(ctx, "status", strings.NewReader(""), &out, io.Discard, "--brief"); err != nil {
+		t.Fatal(err)
+	}
+	if f.count("peer") != 1 || strings.Contains(out.String(), "wake_command") || !strings.Contains(out.String(), "queued_inbox_hints") {
+		t.Fatalf("stalled optional lookup changed status: %s", out.String())
 	}
 }
 

@@ -145,22 +145,24 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	}
 	// Every relay call authenticates this session, so only a new transcript
 	// reference, which the harness environment does not carry, needs a
-	// separate confirm. The Service still rejects a session mismatch.
+	// separate confirm. It is optional metadata: a rejected or unavailable
+	// confirm must not block publication, which re-authenticates on its own.
 	if hook.TranscriptPath != "" && hook.TranscriptPath != c.State.TranscriptPath {
 		var binding relay.Binding
-		if err := c.call(ctx, "confirm", map[string]any{"session_id": hook.SessionID, "transcript_path": hook.TranscriptPath}, &binding); err != nil {
-			release()
-			return err
-		}
-		if binding.SessionID != hook.SessionID {
+		err := c.call(ctx, "confirm", map[string]any{"session_id": hook.SessionID, "transcript_path": hook.TranscriptPath}, &binding)
+		if err == nil && binding.SessionID != hook.SessionID {
 			release()
 			return relay.ErrAuth
 		}
-		next := c.State
-		next.TranscriptPath = hook.TranscriptPath
-		if err := c.persist(next); err != nil {
-			release()
-			return err
+		if err != nil {
+			_, _ = fmt.Fprintln(diagnostic, "PairRoom: transcript reference not recorded; relay publication continues.")
+		} else {
+			next := c.State
+			next.TranscriptPath = hook.TranscriptPath
+			if err := c.persist(next); err != nil {
+				release()
+				return err
+			}
 		}
 	}
 	if hook.Event == "StopFailure" {

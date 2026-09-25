@@ -19,9 +19,10 @@ import (
 // hookService records relay operations for a synthetic Stop hook; it is not a
 // second relay engine or vendor E2E.
 type hookService struct {
-	mu       sync.Mutex
-	calls    []string
-	accepted map[uint64]string
+	mu          sync.Mutex
+	calls       []string
+	accepted    map[uint64]string
+	failConfirm bool
 }
 
 func (s *hookService) handler(t *testing.T) http.Handler {
@@ -37,6 +38,10 @@ func (s *hookService) handler(t *testing.T) http.Handler {
 		s.calls = append(s.calls, action)
 		switch action {
 		case "confirm":
+			if s.failConfirm {
+				http.Error(w, `{"error":"invalid official hook session metadata"}`, http.StatusConflict)
+				return
+			}
 			_ = json.NewEncoder(w).Encode(relay.Binding{BindID: "binding", Generation: 1, SessionID: "session"})
 		case "publication":
 			_, ok := s.accepted[req.Seq]
@@ -100,6 +105,19 @@ func TestHookSkipsRedundantMetadataCalls(t *testing.T) {
 	}
 	if got := strings.Join(service.take(), ","); got != "confirm,report,wait" {
 		t.Fatalf("new transcript operations = %s", got)
+	}
+	// Transcript metadata is optional: a rejected reference cannot block the
+	// reply, and is retried at the next Stop rather than cached.
+	service.failConfirm = true
+	if err := runStopHook(t, f.args[1], "@codex fourth", "/transcripts/bad.jsonl"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(service.take(), ","); got != "confirm,report,wait" || service.accepted[4] != "@codex fourth" {
+		t.Fatalf("rejected transcript blocked publication: %s", got)
+	}
+	var state State
+	if err := readPrivate(f.statePath, &state); err != nil || state.TranscriptPath != "/transcripts/two.jsonl" {
+		t.Fatalf("rejected transcript was cached: %+v %v", state, err)
 	}
 }
 
