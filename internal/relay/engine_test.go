@@ -345,6 +345,64 @@ func TestNativeParkWaitsOnlyForAnOutstandingPeerReply(t *testing.T) {
 	}
 }
 
+// A user Retry keeps the original sender, but is neither that Agent's new
+// request nor an answer to the peer's outstanding one.
+func TestNativeRetryDoesNotSettleOrArmPeerPark(t *testing.T) {
+	e, a, _ := testEngine(t)
+	idle := func(auth Auth) bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		claim, err := e.Claim(ctx, auth, true)
+		return claim == nil && err == nil
+	}
+	lost, err := e.Send(a[model.ActorSlot1], SendRequest{ID: "lost", Text: "lost delivery"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := e.Claim(context.Background(), a[model.ActorSlot2], false)
+	if err != nil || claim.ID != lost.ID {
+		t.Fatalf("claim: %v", err)
+	}
+	now := e.cfg.Now
+	e.cfg.Now = func() time.Time { return now().Add(2 * DeliveryLease) }
+	if err := e.Reap(); err != nil {
+		t.Fatal(err)
+	}
+	e.cfg.Now = now
+	if _, err := e.Send(a[model.ActorSlot2], SendRequest{ID: "question", Text: "question for slot1"}); err != nil {
+		t.Fatal(err)
+	}
+	// Collect and settle slot1's inbox so only park rules remain.
+	claim, err = e.Claim(context.Background(), a[model.ActorSlot1], false)
+	if err != nil || claim == nil {
+		t.Fatalf("question claim: %v", err)
+	}
+	if err := e.Ack(a[model.ActorSlot1], claim.ID, claim.Receipt); err != nil {
+		t.Fatal(err)
+	}
+	if !idle(a[model.ActorSlot1]) {
+		t.Fatal("slot1 parked before the Retry")
+	}
+	if _, err := e.Retry(lost.ID); err != nil {
+		t.Fatal(err)
+	}
+	// slot2 still has the retried message queued; after it is collected, slot2
+	// must keep waiting for slot1's real answer.
+	claim, err = e.Claim(context.Background(), a[model.ActorSlot2], false)
+	if err != nil || claim == nil {
+		t.Fatalf("retry claim: %v", err)
+	}
+	if err := e.Ack(a[model.ActorSlot2], claim.ID, claim.Receipt); err != nil {
+		t.Fatal(err)
+	}
+	if idle(a[model.ActorSlot2]) {
+		t.Fatal("a user Retry settled the peer's outstanding request")
+	}
+	if !idle(a[model.ActorSlot1]) {
+		t.Fatal("a user Retry armed a park for the original sender")
+	}
+}
+
 func TestNativeDrainAcknowledgementRetainsAuthentication(t *testing.T) {
 	e, auth, _ := testEngine(t)
 	receiver := auth[model.ActorSlot2]

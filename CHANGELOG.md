@@ -6,12 +6,13 @@
 
 - Remove two redundant round trips and most local writes from every Native Stop hook. The hook no longer calls `inspect` before publishing, because `report` and `wait` already authenticate the bound session; it calls `confirm` only when the harness reports a new transcript reference, which is cached in the slot's `state.json`. The local state is written once per Stop instead of twice, and the private Claude inbox capability is no longer rewritten and fsynced when unchanged.
 
-- Keep a Native Stop reply when the Service is stopped. The hook used to fail before saving its reply because it read the Service endpoint first, and a cleanly stopped Service removes that file, so a reply addressed to the peer was lost. The hook now validates the private binding and saves the reply WAL first, still reports the stopped Service, and the next hook or `relay reconcile` publishes the reply under its original sequence.
-## [v5.5.1] — 2026-09-24
+- Keep a Native Stop reply when the Service is stopped. The hook used to fail before saving its reply because it read the Service endpoint first, and a cleanly stopped Service removes that file, so a reply addressed to the peer was lost. The hook now validates the private binding and saves the reply WAL first, still reports the stopped Service, and the next hook or `relay reconcile` publishes the reply under its original sequence. The local state still holds one pending reply, so only the first Stop after the Service stops is retained; a later Stop before the Service returns is still not kept.
 
 - Shorten the Native `relay send` queued-delivery hint that lands in the sender's model context on nearly every send. It is now one short notice plus the peer `wait` command (about 250 bytes instead of about 620), without a `peer` lookup, vendor session identity or a Codex `wake_command` the agent must never run. `relay exchange` omits the hint because the sender collects next and a timeout already prints its recovery command. `status --brief` keeps the full wake advice, including the human-executable Codex fallback.
 
 - Treat the Stop hook's transcript-reference `confirm` as optional metadata: a rejected or unavailable confirm no longer aborts the hook before publication and park. The reply is still published through the authenticated `report`, and the reference is retried at the next Stop.
+
+## [v5.5.1] — 2026-09-24
 
 - Report a failed stop-time Turn summary checkpoint to the lifecycle caller. Stop Agent now returns the error instead of success, and Restart Agent and a permission change no longer start or rebuild the runtime after it; the runtime is still stopped and its in-flight work is still cancelled, and the Room store stays marked failed as before. A stop also drops the stopped participant's summary bookkeeping when nothing was left to checkpoint.
 

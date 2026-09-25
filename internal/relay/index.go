@@ -90,7 +90,9 @@ func (e *Engine) putMessage(m Message) {
 	if !exists {
 		e.positions[m.ID] = len(e.order)
 		e.order = append(e.order, m.ID)
-		if m.From.ValidParticipant() && m.To == model.OtherParticipant(m.From) {
+		// A user-initiated Retry keeps the original sender but is not a new
+		// request or answer from that Agent.
+		if m.Source != "retry" && m.From.ValidParticipant() && m.To == model.OtherParticipant(m.From) {
 			e.lastOutbound[m.From] = m.ID
 			e.lastInbound[m.To] = m.ID
 		}

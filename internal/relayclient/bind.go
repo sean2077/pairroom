@@ -167,6 +167,9 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		return errors.New("binding response identity mismatch; retry the same bind to reconcile")
 	}
 	attempt.State.Generation = result.Binding.Generation
+	// Cache only what the Service reports now, so a restored or reset Service
+	// gets the transcript reference again at the next Stop.
+	attempt.State.TranscriptPath = result.Binding.TranscriptPath
 	if staged {
 		// Journal removal is last. A crash between either promotion write can
 		// be repaired by replaying the same attempt without rotating generation.

@@ -57,7 +57,8 @@ func SlotDir(root, room, slot string) (string, error) {
 	return path, nil
 }
 
-// Capture is called only after bind/inspect confirmed the session identity.
+// Capture is called only for a Service-confirmed bind, or a Stop whose official
+// session matches that confirmed local binding; Prepare rechecks identity.
 // Missing/invalid environment clears an older capability rather than retaining
 // a stale endpoint. Errors are fixed text, never paths, tokens, or vendor output.
 func Capture(dir string, identity Identity, address, token string) error {

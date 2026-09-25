@@ -141,6 +141,15 @@ func TestHookKeepsReplyWhileServiceIsStopped(t *testing.T) {
 	if state.Pending == nil || state.Pending.Text != "@codex reply while stopped" || state.Pending.Seq != 1 {
 		t.Fatalf("reply was not retained for reconciliation: %+v", state.Pending)
 	}
+	// One pending slot holds one reply. A second Stop while still stopped
+	// cannot keep its body and never displaces or renumbers the first reply.
+	if err := runStopHook(t, f.args[1], "@codex second reply while stopped", ""); err == nil {
+		t.Fatal("stopped Service was not reported")
+	}
+	var second State
+	if err := readPrivate(f.statePath, &second); err != nil || second.Pending == nil || second.Pending.Seq != 1 || second.Pending.Text != "@codex reply while stopped" || second.LastSeq != 1 {
+		t.Fatalf("second stopped reply not accounted for: %+v %v", second, err)
+	}
 	service := &hookService{accepted: map[uint64]string{}}
 	srv := httptest.NewServer(service.handler(t))
 	defer srv.Close()

@@ -214,7 +214,7 @@ All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Norma
 
 Park defaults to 30 seconds and applies only while a peer reply is expected (see [Protocol](PROTOCOL.md#native-host-protocol-v8)); otherwise the hook returns at once and already queued input is still collected. Claude/Codex allow eight message-bearing blocks; Grok allows seven readiness/recovery hints, reserving its final publication gate. Outside this window, use foreground wait or a native human nudge. Unknown delivery must be inspected before the Room's explicit Retry. Same-turn send/exchange plus a peer-directed final reply deliberately creates two publications; omit that handle after explicit publication unless the second full reply is intended.
 
-`send` now prints only `published`, `client_id`, `state` and `to`, not the outgoing body. A reused ID with different text fails rather than reporting the old publication as a new send. Optional queued-delivery advice uses a separate short peer-metadata deadline.
+`send` now prints only `published`, `client_id`, `state` and `to`, not the outgoing body. A reused ID with different text fails rather than reporting the old publication as a new send. Its queued-delivery hint needs no extra request; `status --brief` wake advice uses a separate short peer-metadata deadline.
 
 Claude external wake is captured automatically at confirmed bind/Stop; it adds no CLI flags or manual socket command. An unavailable capture adds a body-free `wake_notice` to bind output without invalidating the binding. See [Claude inbox setup](design/claude-inbox-wake.md).
 
