@@ -237,7 +237,7 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
             try:
                 await page.locator('#message-text').fill('Cross-window exclusion')
                 await page.locator('#send').click()
-                await expect(page.locator('#status')).to_contain_text('storageFailed')
+                await expect(page.locator('#status')).to_contain_text('outboxBusy')
                 await expect(page.locator('#message-text')).to_have_value('Cross-window exclusion')
                 assert await page.evaluate("__requests.filter(r=>r.path==='api/v1/messages').length") == before
                 assert await page.evaluate("localStorage.getItem('pairroom.native.outbox.v1.native-fixture')===null")

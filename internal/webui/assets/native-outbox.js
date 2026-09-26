@@ -33,12 +33,13 @@
   // localStorage read/write/verify is not a cross-tab transaction. Mutations
   // use a same-origin Room lock, held only for synchronous storage operations.
   // Never queue an explicit send behind a hidden tab or silently fall back to
-  // an unlocked write when Web Locks are unavailable.
+  // an unlocked write when Web Locks are unavailable. A lock held by another
+  // window is transient (outbox_busy), unlike a mismatched record (conflict).
   async function mutate(room, operation) {
     const manager = globalThis.navigator?.locks;
     if (!manager || typeof manager.request !== 'function') throw new Error('outbox_unavailable');
     return manager.request(key(room), {mode: 'exclusive', ifAvailable: true}, lock => {
-      if (!lock) throw new Error('outbox_conflict');
+      if (!lock) throw new Error('outbox_busy');
       return operation();
     });
   }

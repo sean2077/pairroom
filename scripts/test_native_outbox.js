@@ -28,9 +28,10 @@ async function main() {
   // A second tab holding this Room's lock must prevent *all* mutations, without
   // delaying an explicit send in a hidden-tab lock queue or touching other Rooms.
   await manager.request('pairroom.native.outbox.v1.room-id', {mode:'exclusive',ifAvailable:true}, async()=>{
-    await assert.rejects(async()=>box.save(storage,'room-id',payload),/outbox_conflict/);
-    await assert.rejects(async()=>box.clear(storage,'room-id',payload.id),/outbox_conflict/);
-    await assert.rejects(async()=>box.forget(storage,'room-id',storage.getItem('pairroom.native.outbox.v1.room-id')),/outbox_conflict/);
+    // Busy is transient and distinct from a mismatched record (outbox_conflict).
+    await assert.rejects(async()=>box.save(storage,'room-id',payload),/outbox_busy/);
+    await assert.rejects(async()=>box.clear(storage,'room-id',payload.id),/outbox_busy/);
+    await assert.rejects(async()=>box.forget(storage,'room-id',storage.getItem('pairroom.native.outbox.v1.room-id')),/outbox_busy/);
     await box.save(storage,'another-room',payload);
     assert.equal(box.load(storage,'room-id').id,payload.id);
   });

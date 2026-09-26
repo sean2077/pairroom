@@ -167,6 +167,7 @@ async function main() {
     assert.equal(slow.sends.length,1);
     assert.equal(slow.clock.expire(30000),1,'request/body has no bounded deadline');
     await pending;
+    assert.equal(slow.$('status').textContent,'room.native.unknownSend room.native.requestTimeout','timeout exposed raw abort text');
     assert.equal(slow.$('send').disabled,false,'hung publication kept recovery locked');
     assert.equal(slow.sends.length,1,'timeout automatically repeated a publication');
     const saved = JSON.parse(slow.storage.getItem('pairroom.native.outbox.v1.room')).payload;
@@ -194,6 +195,8 @@ async function main() {
   await shared.request('pairroom.native.outbox.v1.room',{mode:'exclusive',ifAvailable:true},async()=>{
     await tabB.submit();
     assert.equal(tabB.sends.length,0,'busy cross-tab lock allowed publication');
+    assert.equal(tabB.$('status').textContent,'room.native.outboxBusy','a transient lock reported broken storage');
+    assert.equal(tabB.$('send').disabled,false,'a transient lock blocked a later attempt');
   });
   await Promise.all([tabA.submit(),tabB.submit()]);
   assert.equal(tabA.sends.length+tabB.sends.length,1,'concurrent tabs published two unconfirmed drafts');

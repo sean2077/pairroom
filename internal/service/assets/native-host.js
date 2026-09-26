@@ -9,9 +9,10 @@
   let historyNext = '', historyFilter = '', historyRequest = 0;
   const outbox = window.PairRoomNativeOutbox;
   // Local recovery failures are fixed codes, not copy: show the translated
-  // storage message and keep the raw code out of the Room status line.
+  // storage message and keep the raw code out of the Room status line. A lock
+  // held by another window is transient; it must not suggest Forget.
   const outboxCodes = new Set(['invalid_room', 'outbox_invalid', 'outbox_conflict', 'outbox_unavailable']);
-  const failureText = error => outboxCodes.has(error?.message) ? tr('storageFailed') : error?.message || '';
+  const failureText = error => error?.message === 'outbox_busy' ? tr('outboxBusy') : outboxCodes.has(error?.message) ? tr('storageFailed') : error?.message || '';
   const language = () => window.PairRoomI18n?.lang || 'en';
   const element = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
   const time = value => value ? new Intl.DateTimeFormat(language(), {dateStyle:'short',timeStyle:'medium'}).format(new Date(value)) : tr('never');
@@ -22,12 +23,17 @@
     if (csrf && options.method && options.method !== 'GET') headers.set('X-PairRoom-CSRF',csrf);
     // Bound both response headers and the JSON body. A timed-out POST remains
     // uncertain: its original outbox identity survives for explicit recovery.
+    // Only this deadline aborts the request, so report it as translated copy
+    // rather than the engine's AbortError text.
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
     try {
       const res = await fetch(path, {...options, headers, signal:controller.signal, cache:'no-store',credentials:'same-origin'});
       if (!res.ok) { let value = {}; try {value = await res.json();} catch (_) { /* not a JSON error */ } throw new Error(value.error || `${tr('error')} (${res.status})`); }
       return res.status === 204 ? null : await res.json();
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error(tr('requestTimeout'));
+      throw error;
     } finally { clearTimeout(timeout); }
   }
   function handle(slot) { return (snapshot?.identities?.[slot]?.MentionHandle || snapshot?.identities?.[slot]?.mention_handle) || (slot === 'user' ? tr('user') : slot); }
