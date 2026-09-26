@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,7 @@ type ClaudeAdapter struct {
 	sessionID string
 	resume    bool
 	cmd       *exec.Cmd
+	tree      *execx.Tree
 	stdin     io.WriteCloser
 	// procDone is closed once the process exited and waitProcess finished; it
 	// gives Stop a bounded graceful window between closing stdin and Kill.
@@ -40,11 +42,14 @@ type ClaudeAdapter struct {
 	runtimeInfo  model.RuntimeInfo
 	protocolSent bool
 	intentional  bool
-	access       model.NativeAccess
-	baseMode     string
-	approvals    map[string]claudeApprovalRequest
-	control      map[string]chan claudeControlResult
-	controlReady bool
+	// streamFailure records why the adapter killed the process after its
+	// stdout became unreadable; waitProcess reports it with the exit.
+	streamFailure string
+	access        model.NativeAccess
+	baseMode      string
+	approvals     map[string]claudeApprovalRequest
+	control       map[string]chan claudeControlResult
+	controlReady  bool
 }
 
 func NewClaude(cfg Config, sink EventSink) *ClaudeAdapter {
@@ -106,6 +111,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	}
 	c.state = model.StateStarting
 	c.intentional = false
+	c.streamFailure = ""
 	c.protocolSent = false
 	c.mu.Unlock()
 	c.controlMu.Lock()
@@ -123,9 +129,16 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 		Model: c.cfg.Model, Effort: c.cfg.Effort, PermissionMode: c.cfg.PermissionMode, ProbedAt: time.Now().UTC(),
 	}
 	flags := map[string]bool{}
+	batchLauncher := false
 	if probeErr == nil {
 		info = probe.RuntimeInfo(c.cfg)
 		flags = probe.SupportedFlags
+		batchLauncher = isBatchLauncher(goruntime.GOOS, probe.Path)
+		if batchLauncher {
+			// The session name is display metadata derived from the Room name;
+			// neutralize it rather than refusing a Room called "R&D".
+			info.SessionName = cmdSafeDisplayText(info.SessionName)
+		}
 	} else {
 		info.Warnings = []string{probeErr.Error()}
 	}
@@ -156,6 +169,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 		args = append(args, "--verbose")
 	}
 	args = appendClaudeStreamFlags(args, flags, c.cfg.RequireExactSession)
+	promptInArgv := false
 	if flags["--append-system-prompt-file"] {
 		promptPath, err := c.ensurePromptFile(systemPrompt)
 		if err != nil {
@@ -167,6 +181,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 		c.protocolSent = true
 		c.mu.Unlock()
 	} else if flags["--append-system-prompt"] {
+		promptInArgv = true
 		args = append(args, "--append-system-prompt", systemPrompt)
 		c.mu.Lock()
 		c.protocolSent = true
@@ -217,6 +232,19 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 		return err
 	}
 	c.mu.Unlock()
+	if batchLauncher {
+		if err := checkBatchLauncherArgs("Claude Code", probe.Path, args); err != nil {
+			c.setState(model.StateError, err.Error())
+			return err
+		}
+	}
+	if err := checkWindowsCommandLine(goruntime.GOOS, "Claude Code", probe.Path, args); err != nil {
+		if promptInArgv {
+			err = fmt.Errorf("%w: this Claude Code does not advertise --append-system-prompt-file, so the PairRoom system prompt would be passed as an argument; update Claude Code", err)
+		}
+		c.setState(model.StateError, err.Error())
+		return err
+	}
 
 	cmd := exec.Command(c.cfg.Command, args...)
 	execx.NoConsole(cmd)
@@ -239,7 +267,8 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 		c.setState(model.StateError, err.Error())
 		return fmt.Errorf("claude stderr: %w", err)
 	}
-	if err := cmd.Start(); err != nil {
+	tree, err := execx.StartTree(cmd)
+	if err != nil {
 		_ = stdin.Close()
 		c.setState(model.StateError, err.Error())
 		return fmt.Errorf("start claude: %w", err)
@@ -248,6 +277,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	procDone := make(chan struct{})
 	c.mu.Lock()
 	c.cmd = cmd
+	c.tree = tree
 	c.stdin = stdin
 	c.procDone = procDone
 	c.resume = true
@@ -259,7 +289,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	readers.Add(2)
 	go func() { defer readers.Done(); c.readStdout(stdout) }()
 	go func() { defer readers.Done(); c.readStderr(stderr) }()
-	go func() { readers.Wait(); c.waitProcess(cmd); close(procDone) }()
+	go func() { readers.Wait(); c.waitProcess(cmd); tree.Release(); close(procDone) }()
 
 	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	initErr := c.initializeControl(initCtx)
@@ -270,13 +300,12 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 		if c.cmd == cmd {
 			c.intentional = true
 			c.cmd = nil
+			c.tree = nil
 			c.stdin = nil
 		}
 		c.mu.Unlock()
 		_ = stdin.Close()
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
+		_ = tree.Kill()
 		c.failControlWaiters(errors.New(detail))
 		c.setState(model.StateError, detail)
 		return errors.New(detail)
@@ -357,8 +386,11 @@ func (c *ClaudeAdapter) waitProcess(cmd *exec.Cmd) {
 	c.mu.Lock()
 	active := c.cmd == cmd
 	intentional := c.intentional
+	streamFailure := c.streamFailure
 	if active {
+		c.streamFailure = ""
 		c.cmd = nil
+		c.tree = nil
 		c.stdin = nil
 	}
 	c.mu.Unlock()
@@ -375,7 +407,9 @@ func (c *ClaudeAdapter) waitProcess(cmd *exec.Cmd) {
 	c.clearApprovals()
 	pending := c.takePending()
 	detail := "Claude process exited"
-	if err != nil {
+	if streamFailure != "" {
+		detail = streamFailure
+	} else if err != nil {
 		detail += ": " + err.Error()
 	}
 	for _, item := range pending {
@@ -386,7 +420,7 @@ func (c *ClaudeAdapter) waitProcess(cmd *exec.Cmd) {
 		completed.Name = "process_exited"
 		c.sink(completed)
 	}
-	if err != nil || len(pending) > 0 {
+	if err != nil || streamFailure != "" || len(pending) > 0 {
 		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
 		e.Name = "adapter.process_exited"
 		e.Text = detail
@@ -397,25 +431,35 @@ func (c *ClaudeAdapter) waitProcess(cmd *exec.Cmd) {
 	c.setState(model.StateStopped, "")
 }
 
-func (c *ClaudeAdapter) Interrupt(context.Context) error {
+func (c *ClaudeAdapter) Interrupt(ctx context.Context) error {
 	c.mu.Lock()
 	cmd := c.cmd
+	tree := c.tree
 	stdin := c.stdin
-	c.cmd = nil
+	procDone := c.procDone
 	c.stdin = nil
 	c.intentional = true
 	c.mu.Unlock()
-	c.cancelPending("interrupted", "interrupted by user")
 	c.clearApprovals()
 	c.failControlWaiters(errors.New("Claude Code was interrupted"))
 	if stdin != nil {
 		_ = stdin.Close()
 	}
 	if cmd != nil && cmd.Process != nil {
-		if err := cmd.Process.Signal(os.Interrupt); err != nil {
-			_ = cmd.Process.Kill()
+		// Windows cannot deliver os.Interrupt to a child; go straight to the
+		// process-tree kill there instead of waiting out the graceful window.
+		if err := cmd.Process.Signal(os.Interrupt); err == nil {
+			waitGracefulExit(ctx, procDone)
 		}
+		// Settling the pending Turn releases the Room owner, so it waits for
+		// the whole vendor process tree to exit rather than for the signal to
+		// be sent.
+		if err := stopProcessTree(tree, procDone, "Claude Code"); err != nil {
+			return err
+		}
+		c.forgetProcess(cmd)
 	}
+	c.cancelPending("interrupted", "interrupted by user")
 	c.setState(model.StateStopped, "interrupted; next message resumes the Claude session")
 	return nil
 }
@@ -423,27 +467,83 @@ func (c *ClaudeAdapter) Interrupt(context.Context) error {
 func (c *ClaudeAdapter) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	cmd := c.cmd
+	tree := c.tree
 	stdin := c.stdin
 	procDone := c.procDone
-	c.cmd = nil
 	c.stdin = nil
-	c.procDone = nil
 	c.intentional = true
 	c.mu.Unlock()
-	c.cancelPending("stopped", "Claude Code was stopped")
 	c.clearApprovals()
 	c.failControlWaiters(errors.New("Claude Code was stopped"))
 	if stdin != nil {
 		_ = stdin.Close()
 	}
 	waitGracefulExit(ctx, procDone)
-	if cmd != nil && cmd.Process != nil {
-		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	if cmd != nil {
+		// The process stays recorded until its whole tree has exited, so a
+		// failed stop can be retried instead of freeing capacity while the real
+		// CLI behind a launcher shim keeps running.
+		if err := stopProcessTree(tree, procDone, "Claude Code"); err != nil {
 			return err
 		}
+		c.forgetProcess(cmd)
 	}
+	c.cancelPending("stopped", "Claude Code was stopped")
 	c.setState(model.StateStopped, "")
 	return nil
+}
+
+// failProcess stops a Claude process whose output can no longer be trusted
+// (an unreadable stream or a session other than the bound one). The exit is
+// then reported through waitProcess like any unexpected exit, so pending input
+// fails and the Turn owner is released on real exit. Later stdout records
+// from that process are ignored.
+func (c *ClaudeAdapter) failProcess(name, reason string) {
+	c.mu.Lock()
+	if c.streamFailure == "" {
+		c.streamFailure = reason
+	}
+	tree := c.tree
+	c.mu.Unlock()
+	e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
+	e.Name = name
+	e.Text = reason
+	c.sink(e)
+	_ = tree.Kill()
+}
+
+func (c *ClaudeAdapter) processFailed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.streamFailure != ""
+}
+
+// acceptReportedSession adopts the session ID Claude Code reports, except
+// under an exact binding: a different ID there means the CLI did not resume
+// the bound session (or forked it), so the binding is kept, the process is
+// stopped, and the Turn fails visibly instead of silently retargeting the
+// next resume.
+func (c *ClaudeAdapter) acceptReportedSession(reported string) bool {
+	c.mu.Lock()
+	bound := c.sessionID
+	if !c.cfg.RequireExactSession || reported == bound {
+		c.sessionID = reported
+		c.mu.Unlock()
+		return true
+	}
+	c.mu.Unlock()
+	c.failProcess("adapter.session_mismatch", fmt.Sprintf("Claude Code reported session %q instead of the bound session %q; PairRoom kept the binding and stopped the process", reported, bound))
+	return false
+}
+
+// forgetProcess clears the process record once its tree is confirmed exited;
+// waitProcess normally clears it first.
+func (c *ClaudeAdapter) forgetProcess(cmd *exec.Cmd) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cmd == cmd {
+		c.cmd, c.tree, c.stdin, c.procDone = nil, nil, nil, nil
+	}
 }
 
 // waitGracefulExit gives the vendor CLI a bounded window to flush its own

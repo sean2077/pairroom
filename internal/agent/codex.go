@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,6 +40,7 @@ type CodexAdapter struct {
 	writeMu  sync.Mutex
 	state    model.AgentState
 	cmd      *exec.Cmd
+	tree     *execx.Tree
 	stdin    io.WriteCloser
 	// procDone is closed once the process exited and waitProcess finished; it
 	// gives Stop a bounded graceful window between closing stdin and Kill.
@@ -52,6 +53,9 @@ type CodexAdapter struct {
 	// exit to decide whether the in-memory thread ID is safe to drop.
 	threadEngaged bool
 	intentional   bool
+	// streamFailure records why the adapter killed the process after its
+	// stdout became unreadable; waitProcess reports it with the exit.
+	streamFailure string
 	// access records the last successfully asserted native access so the
 	// per-submission same-access assertion is a no-op instead of re-running
 	// the turn-boundary gate (and failing on stale state).
@@ -154,6 +158,7 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	}
 	c.state = model.StateStarting
 	c.intentional = false
+	c.streamFailure = ""
 	c.mu.Unlock()
 
 	probe, probeErr := ProbeRuntime(ctx, Config{
@@ -177,6 +182,13 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 
 	args := append([]string(nil), c.cfg.CommandArgs...)
 	args = append(args, "app-server")
+	if isBatchLauncher(goruntime.GOOS, probe.Path) {
+		// CC Switch provider arguments and template args reach cmd.exe here.
+		if err := checkBatchLauncherArgs("Codex", probe.Path, args); err != nil {
+			c.setState(model.StateError, err.Error())
+			return err
+		}
+	}
 	cmd := exec.Command(c.cfg.Command, args...)
 	execx.NoConsole(cmd)
 	cmd.Dir = c.cfg.Repo
@@ -198,7 +210,8 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 		c.setState(model.StateError, err.Error())
 		return fmt.Errorf("codex stderr: %w", err)
 	}
-	if err := cmd.Start(); err != nil {
+	tree, err := execx.StartTree(cmd)
+	if err != nil {
 		_ = stdin.Close()
 		c.setState(model.StateError, err.Error())
 		return fmt.Errorf("start codex app-server: %w", err)
@@ -207,6 +220,7 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	procDone := make(chan struct{})
 	c.mu.Lock()
 	c.cmd = cmd
+	c.tree = tree
 	c.stdin = stdin
 	c.procDone = procDone
 	c.mu.Unlock()
@@ -216,7 +230,7 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	readers.Add(2)
 	go func() { defer readers.Done(); c.readStdout(stdout) }()
 	go func() { defer readers.Done(); c.readStderr(stderr) }()
-	go func() { readers.Wait(); c.waitProcess(cmd); close(procDone) }()
+	go func() { readers.Wait(); c.waitProcess(cmd); tree.Release(); close(procDone) }()
 
 	handshakeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -334,27 +348,35 @@ func (c *CodexAdapter) Interrupt(ctx context.Context) error {
 func (c *CodexAdapter) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	cmd := c.cmd
+	tree := c.tree
 	stdin := c.stdin
 	procDone := c.procDone
 	c.intentional = true
-	c.cmd = nil
 	c.stdin = nil
-	c.procDone = nil
 	c.mu.Unlock()
 	c.failPendingRPCs("Codex was stopped")
-	for _, input := range c.takeOutstandingInputs() {
-		c.emitInputTerminal("", input, model.RuntimeInputCancelled, "Codex was stopped")
-	}
 	if stdin != nil {
 		_ = stdin.Close()
 	}
 	// Bounded graceful window so app-server can flush its rollout before the
 	// hard kill; a strict resume later then still finds a complete record.
 	waitGracefulExit(ctx, procDone)
-	if cmd != nil && cmd.Process != nil {
-		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	if cmd != nil {
+		// The process stays recorded until its whole tree has exited, so a
+		// failed stop can be retried instead of freeing capacity while the real
+		// CLI behind a launcher shim keeps running. Inputs are cancelled only
+		// after that exit evidence.
+		if err := stopProcessTree(tree, procDone, "Codex app-server"); err != nil {
 			return err
 		}
+	}
+	c.mu.Lock()
+	if c.cmd == cmd {
+		c.cmd, c.tree, c.procDone = nil, nil, nil
+	}
+	c.mu.Unlock()
+	for _, input := range c.takeOutstandingInputs() {
+		c.emitInputTerminal("", input, model.RuntimeInputCancelled, "Codex was stopped")
 	}
 	c.setState(model.StateStopped, "")
 	return nil
@@ -368,6 +390,7 @@ func (c *CodexAdapter) waitProcess(cmd *exec.Cmd) {
 	var pending map[int64]chan rpcReply
 	if active {
 		c.cmd = nil
+		c.tree = nil
 		c.stdin = nil
 		pending = c.pending
 		c.pending = make(map[int64]chan rpcReply)
@@ -392,9 +415,32 @@ func (c *CodexAdapter) waitProcess(cmd *exec.Cmd) {
 	c.handleUnexpectedProcessExit(err)
 }
 
+// failStream stops an app-server whose stdout can no longer be read. The
+// exit is then reported through waitProcess like any unexpected exit, so
+// outstanding input fails and the Turn owner is released on real exit.
+func (c *CodexAdapter) failStream(reason string) {
+	c.mu.Lock()
+	if c.streamFailure == "" {
+		c.streamFailure = reason
+	}
+	tree := c.tree
+	c.mu.Unlock()
+	e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
+	e.Name = "adapter.stream_error"
+	e.Text = reason
+	c.sink(e)
+	_ = tree.Kill()
+}
+
 func (c *CodexAdapter) handleUnexpectedProcessExit(err error) {
+	c.mu.Lock()
+	streamFailure := c.streamFailure
+	c.streamFailure = ""
+	c.mu.Unlock()
 	detail := "Codex app-server exited"
-	if err != nil {
+	if streamFailure != "" {
+		detail = streamFailure
+	} else if err != nil {
 		detail += ": " + err.Error()
 	}
 	outstanding := c.takeOutstanding()
@@ -408,7 +454,7 @@ func (c *CodexAdapter) handleUnexpectedProcessExit(err error) {
 		completed.Name = "process_exited"
 		c.sink(completed)
 	}
-	if err != nil || outstanding.turnID != "" || len(outstanding.inputs) > 0 {
+	if err != nil || streamFailure != "" || outstanding.turnID != "" || len(outstanding.inputs) > 0 {
 		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
 		e.Name = "adapter.process_exited"
 		e.Text = detail

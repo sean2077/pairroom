@@ -99,7 +99,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 			}
 		} else {
 			for _, flag := range optional {
-				result.SupportedFlags[flag] = strings.Contains(help, flag)
+				result.SupportedFlags[flag] = helpAdvertisesFlag(help, flag)
 			}
 		}
 
@@ -202,6 +202,22 @@ func runProbeCommand(ctx context.Context, path string, args []string, actor mode
 		return text, fmt.Errorf("probe %s (%s): %s", actor.DisplayName(), strings.Join(args, " "), firstNonEmptyLine(text))
 	}
 	return text, nil
+}
+
+// helpAdvertisesFlag also accepts the bracketed alternative notation Claude
+// Code uses in its help prose: 2.1.x lists only `--append-system-prompt
+// <prompt>` as an option and mentions the file variant as
+// `--append-system-prompt[-file]`, which the CLI accepts.
+func helpAdvertisesFlag(help, flag string) bool {
+	if strings.Contains(help, flag) {
+		return true
+	}
+	for i := len("--") + 1; i < len(flag); i++ {
+		if flag[i] == '-' && strings.Contains(help, flag[:i]+"["+flag[i:]+"]") {
+			return true
+		}
+	}
+	return false
 }
 
 func (p ProbeResult) RuntimeInfo(cfg Config) model.RuntimeInfo {

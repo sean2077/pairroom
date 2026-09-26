@@ -53,7 +53,7 @@ Project/per-Project Room display order lives in `navigation-order.json`, not Roo
 
 A Project is a canonical Git workspace, not a copied checkout. Provisioning builds privately and publishes only when complete. `service.lock` protects one Service writer per data root, separately from Embedded Turn ownership.
 
-Native Runtime/session identity is globally unique across Bindings, including archived Rooms. Embedded deferred new Bindings materialize only on real acceptance; existing Bindings must resume exactly. Native binds associate immediately from official tool-call session metadata, with generation-scoped credentials and later hook confirmation. Checkpoint/event/uniqueness failure cannot authorize a second owner or silently substitute a session.
+Native Runtime/session identity is globally unique across Bindings, including archived Rooms. Embedded deferred new Bindings materialize only on real acceptance; existing Bindings must resume exactly, and a runtime that reports a different session during a bound Turn (for example in Claude Code `system/init` or `result`) fails that Turn and is stopped rather than replacing the bound ID. Native binds associate immediately from official tool-call session metadata, with generation-scoped credentials and later hook confirmation. Checkpoint/event/uniqueness failure cannot authorize a second owner or silently substitute a session.
 
 Durable actors are `slot1`/`slot2`; RuntimeKind independently selects Claude Code, Codex, or Grok Build. Routing, policy projection, resume, and events must use that selection, not infer a vendor from a slot. `claude`/`codex` remain relay CLI input aliases only.
 
@@ -93,6 +93,8 @@ This section describes **Embedded adapters**, not control over Native-hosted ses
 
 New Grok sessions receive `_meta.rules`; exactly loaded sessions receive current bootstrap once in their first PairRoom prompt without replacing the native system prompt. PairRoom advertises `terminal=false` to retain native tool execution; unsupported privileged reverse requests fail closed.
 
+Each adapter reads one stdout record at a time, up to 16 MiB for Codex and Grok Build and 8 MiB for Claude Code. A larger record or any other stdout read failure is fatal rather than skipped, because a dropped response or terminal cannot be recovered: the adapter reports `adapter.stream_error`, stops the vendor process tree, and its exit fails outstanding input and releases the Turn owner with that reason.
+
 Empty overrides retain native inheritance. Supported CC Switch references resolve at Embedded creation/activation without modifying the external current Profile. Secrets enter only the selected child environment, not argv, stored selections, UI/logs, or a second secret store. Failures cannot fall back to another Provider. [Configuration](CONFIGURATION.md) owns mappings; [Support](../SUPPORT.md#compatibility-policy) owns compatibility evidence.
 
 ## Permissions and approvals
@@ -114,6 +116,8 @@ Native-hosted approvals, permissions, steering, and interruption stay in the ori
 | Service shutdown | Drain owned native work before closing stores | Reject new publications/claims, permit valid released-envelope acknowledgements while draining; never stop user harnesses |
 
 Capacity limits active **Embedded** adapters, not durable Room count. Idle reclaim cannot preempt an active Turn just to free capacity, and uncertain cleanup retains its capacity claim. Native Rooms are exempt: no vendor process, no capacity queue/slot, no capacity eviction. A browser disconnect or hidden window is not completion evidence.
+
+An Embedded adapter owns its vendor process tree. On Windows each CLI runs in a kill-on-close Job Object, so stopping or interrupting a runtime launched through an npm `.cmd` shim ends the real CLI rather than only `cmd.exe`. Stop and Claude interrupt report success, and settle pending input, only after that tree has exited; a tree still holding its output pipes after a bounded wait is an uncertain stop that keeps the process recorded for a retried stop.
 
 Desktop uses an explicit validated URL, installed daemon, or embedded Service when none exists. It never installs a daemon implicitly or competes with a live lock owner; stale recovery proves PID exit first. [Operations](OPERATIONS.md) owns close/quit/login/archive and backup behavior.
 

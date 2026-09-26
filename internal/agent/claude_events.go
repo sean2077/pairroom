@@ -12,16 +12,20 @@ import (
 
 func (c *ClaudeAdapter) readStdout(reader io.Reader) {
 	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), claudeMaxStdoutLine)
 	for scanner.Scan() {
+		if c.processFailed() {
+			// Keep draining so the stopped process never blocks on a write,
+			// but do not project output from a process PairRoom rejected.
+			continue
+		}
 		line := append([]byte(nil), scanner.Bytes()...)
 		c.handleLine(line)
 	}
 	if err := scanner.Err(); err != nil {
-		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
-		e.Name = "adapter.stream_error"
-		e.Text = "read Claude stream: " + err.Error()
-		c.sink(e)
+		// Skipping the record could drop the result that settles the Turn or a
+		// control response a caller is waiting for.
+		c.failProcess("adapter.stream_error", streamFailureReason("Claude Code", claudeMaxStdoutLine, err))
 	}
 }
 
@@ -64,9 +68,9 @@ func (c *ClaudeAdapter) handleLine(line []byte) {
 		_ = json.Unmarshal(raw["subtype"], &subtype)
 		_ = json.Unmarshal(raw["session_id"], &sessionID)
 		if subtype == "init" && sessionID != "" {
-			c.mu.Lock()
-			c.sessionID = sessionID
-			c.mu.Unlock()
+			if !c.acceptReportedSession(sessionID) {
+				return
+			}
 			e := runtimeEvent(c.cfg.Actor, model.RuntimeSession)
 			e.SessionID = sessionID
 			e.Data = append(json.RawMessage(nil), line...)
@@ -119,6 +123,11 @@ func (c *ClaudeAdapter) handleLine(line []byte) {
 			Usage     json.RawMessage `json:"usage"`
 		}
 		_ = json.Unmarshal(line, &result)
+		// Check before settling anything: a result from another session must
+		// not publish a final or release the Turn; the process exit does.
+		if result.SessionID != "" && !c.acceptReportedSession(result.SessionID) {
+			return
+		}
 		item, ok, next := c.popPending()
 		c.mu.Lock()
 		streamedText := c.output.String()
@@ -142,11 +151,6 @@ func (c *ClaudeAdapter) handleLine(line []byte) {
 		}
 		if strings.TrimSpace(result.Result) == "" {
 			result.Result = fallback
-		}
-		if result.SessionID != "" {
-			c.mu.Lock()
-			c.sessionID = result.SessionID
-			c.mu.Unlock()
 		}
 		success := result.Subtype == "success" || (result.Subtype == "" && !result.IsError && result.Error == "")
 		if ok && success && strings.TrimSpace(result.Result) != "" {

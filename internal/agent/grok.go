@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,13 +48,17 @@ type GrokAdapter struct {
 	capabilities     grokCapabilities
 	runtimeInfo      model.RuntimeInfo
 	cmd              *exec.Cmd
+	tree             *execx.Tree
 	stdin            io.WriteCloser
 	done             chan struct{}
 	intentional      bool
-	pending          map[int64]chan grokRPCReply
-	approvals        map[string]grokPendingApproval
-	turn             *grokTurn
-	nextRequestID    atomic.Int64
+	// streamFailure records why the adapter killed the process after its
+	// stdout became unreadable; waitProcess reports it with the exit.
+	streamFailure string
+	pending       map[int64]chan grokRPCReply
+	approvals     map[string]grokPendingApproval
+	turn          *grokTurn
+	nextRequestID atomic.Int64
 }
 
 func NewGrok(cfg Config, sink EventSink) *GrokAdapter {
@@ -111,6 +116,7 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 	}
 	g.state = model.StateStarting
 	g.intentional = false
+	g.streamFailure = ""
 	if strings.TrimSpace(g.cfg.SessionID) == "" && !g.sessionEngaged {
 		// A previous session/new may have allocated an ID but never accepted a
 		// PairRoom prompt. It is ephemeral and must not be resumed exactly.
@@ -145,7 +151,14 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 		return probeErr
 	}
 
-	cmd := exec.Command(g.cfg.Command, g.buildACPArgs()...)
+	args := g.buildACPArgs()
+	if isBatchLauncher(goruntime.GOOS, probe.Path) {
+		if err := checkBatchLauncherArgs("Grok Build", probe.Path, args); err != nil {
+			g.setState(model.StateError, err.Error())
+			return err
+		}
+	}
+	cmd := exec.Command(g.cfg.Command, args...)
 	execx.NoConsole(cmd)
 	cmd.Dir = g.cfg.Repo
 	cmd.Env = mergeRuntimeEnv(envWithout(), g.cfg.Env)
@@ -165,7 +178,8 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 		g.setState(model.StateError, err.Error())
 		return fmt.Errorf("grok ACP stderr: %w", err)
 	}
-	if err := cmd.Start(); err != nil {
+	tree, err := execx.StartTree(cmd)
+	if err != nil {
 		g.setState(model.StateError, err.Error())
 		return fmt.Errorf("start grok ACP: %w", err)
 	}
@@ -173,6 +187,7 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 	done := make(chan struct{})
 	g.mu.Lock()
 	g.cmd = cmd
+	g.tree = tree
 	g.stdin = stdin
 	g.done = done
 	g.pending = make(map[int64]chan grokRPCReply)
@@ -184,7 +199,7 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 	readers.Add(2)
 	go func() { defer readers.Done(); g.readStdout(stdout) }()
 	go func() { defer readers.Done(); g.readStderr(stderr) }()
-	go func() { readers.Wait(); g.waitProcess(cmd, done) }()
+	go func() { readers.Wait(); g.waitProcess(cmd, tree, done) }()
 
 	clientVersion := strings.TrimSpace(g.cfg.ClientVersion)
 	if clientVersion == "" {
@@ -308,11 +323,27 @@ func selectGrokAuthMethod(raw json.RawMessage) (string, error) {
 func (g *GrokAdapter) abortStart(cmd *exec.Cmd) {
 	g.mu.Lock()
 	g.intentional = true
-	g.mu.Unlock()
-	if cmd.Process != nil {
-		_ = cmd.Process.Kill()
+	var stdin io.WriteCloser
+	var tree *execx.Tree
+	var done chan struct{}
+	if g.cmd == cmd {
+		stdin, tree, done = g.stdin, g.tree, g.done
+		g.stdin = nil
 	}
-	g.setState(model.StateError, "Grok ACP startup failed")
+	g.mu.Unlock()
+	// Close stdin first so a CLI that honors EOF exits on its own, then kill
+	// the whole tree and wait (bounded) for it, so a retried Start cannot see
+	// the aborted process as still running.
+	if stdin != nil {
+		_ = stdin.Close()
+	}
+	detail := "Grok ACP startup failed"
+	if tree != nil {
+		if err := stopProcessTree(tree, done, "Grok ACP"); err != nil {
+			detail += "; " + err.Error()
+		}
+	}
+	g.setState(model.StateError, detail)
 }
 
 func (g *GrokAdapter) buildACPArgs() []string {
@@ -391,9 +422,10 @@ func (g *GrokAdapter) Stop(ctx context.Context) error {
 	select {
 	case <-done:
 	case <-ctx.Done():
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
+		g.mu.Lock()
+		tree := g.tree
+		g.mu.Unlock()
+		_ = tree.Kill()
 		// Readers reach EOF only once every inherited descriptor holder exits;
 		// a descendant that kept the pipes open must not hang the whole
 		// shutdown chain after the direct process was killed. Report the
@@ -423,8 +455,9 @@ func (g *GrokAdapter) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, done chan struct{}) {
+func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, tree *execx.Tree, done chan struct{}) {
 	err := cmd.Wait()
+	tree.Release()
 	g.mu.Lock()
 	if g.cmd != cmd {
 		g.mu.Unlock()
@@ -433,7 +466,10 @@ func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, done chan struct{}) {
 	}
 	intentional := g.intentional
 	engaged := g.sessionEngaged
+	streamFailure := g.streamFailure
+	g.streamFailure = ""
 	g.cmd = nil
+	g.tree = nil
 	g.stdin = nil
 	g.done = nil
 	g.sessionOpened = false
@@ -449,7 +485,9 @@ func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, done chan struct{}) {
 	}
 	g.mu.Unlock()
 	detail := "Grok ACP process exited"
-	if err != nil {
+	if streamFailure != "" {
+		detail = streamFailure
+	} else if err != nil {
 		detail += ": " + err.Error()
 	}
 	failure := g.redactError(errors.New(detail))
@@ -481,6 +519,23 @@ func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, done chan struct{}) {
 		g.setState(model.StateError, detail)
 	}
 	close(done)
+}
+
+// failStream stops a Grok ACP process whose stdout can no longer be read. The
+// exit is then reported through waitProcess like any unexpected exit, so the
+// active prompt fails and the Turn owner is released on real exit.
+func (g *GrokAdapter) failStream(reason string) {
+	g.mu.Lock()
+	if g.streamFailure == "" {
+		g.streamFailure = reason
+	}
+	tree := g.tree
+	g.mu.Unlock()
+	e := runtimeEvent(g.cfg.Actor, model.RuntimeError)
+	e.Name = "adapter.stream_error"
+	e.Text = reason
+	g.sink(e)
+	_ = tree.Kill()
 }
 
 func firstNonEmpty(values ...string) string {
