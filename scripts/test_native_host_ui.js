@@ -43,7 +43,7 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
   const $ = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
   const document = { getElementById: $, createElement: tag => new Element(tag), createTextNode: text => Object.assign(new Element("#text"), {textContent:text}), addEventListener() {}, hidden: false, body: new Element('body'), querySelector: selector => selector === 'dialog[open]' ? null : $(selector), querySelectorAll: () => [] };
   $('target').value = 'slot2';
-  const reads = [], uploads = [], sends = [], uploadGate = deferred();
+  const reads = [], uploads = [], sends = [], uploadGate = deferred(), windowEvents = {};
   let failSend = true;
   const snapshot = {
     room: { id: 'room', name: 'Native', agents: { slot1: { runtime: 'codex' }, slot2: { runtime: 'claude' } } },
@@ -78,7 +78,7 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
     throw new Error(`unexpected request ${url}`);
   };
   const context = vm.createContext({
-    document, window: { PairRoomI18n: { t: k => k, apply() {}, lang: 'en' }, addEventListener() {}, matchMedia: () => ({matches: false, addEventListener() {}}) },
+    document, window: { PairRoomI18n: { t: k => k, apply() {}, lang: 'en' }, addEventListener(name, fn) { windowEvents[name] = fn; }, matchMedia: () => ({matches: false, addEventListener() {}}) },
     localStorage:storage,fetch, Headers, FormData, TextEncoder, crypto: webcrypto, URLSearchParams,
     navigator:{locks:manager}, AbortController, setTimeout:clock.setTimeout, clearTimeout:clock.clearTimeout,
     location: { hash: '', pathname: '/', search: '' }, history: { replaceState() {} },
@@ -93,7 +93,8 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
   if(draft)$('message-text').value = 'review';
   if(draft)$('attachment').files = [new File(['image bytes'], 'image.png', { type: 'image/png' })];
   const submit = () => $('composer').events.submit({ preventDefault() {} });
-  return { $, reads, uploads, sends, uploadGate, submit, storage, receipts, clock };
+  const storageEvent = () => windowEvents.storage({ key: 'pairroom.native.outbox.v1.room' });
+  return { $, reads, uploads, sends, uploadGate, submit, storage, receipts, clock, storageEvent };
 }
 
 async function main() {
@@ -200,6 +201,32 @@ async function main() {
   });
   await Promise.all([tabA.submit(),tabB.submit()]);
   assert.equal(tabA.sends.length+tabB.sends.length,1,'concurrent tabs published two unconfirmed drafts');
+  // Another window's unconfirmed send must never replace a draft typed here;
+  // its later settlement would otherwise clear this composer.
+  const owner = await fixture({draft:false});
+  const typing = await fixture({storage:owner.storage,receipts:owner.receipts,draft:false});
+  typing.$('message-text').value = 'my own draft';
+  owner.$('message-text').value = 'owner send'; await owner.submit(); // response lost: record kept
+  typing.storageEvent(); await tick();
+  assert.equal(typing.$('message-text').value, 'my own draft', 'another window replaced a typed draft');
+  assert.equal(typing.$('outbox').hidden, false, 'a pending send from another window is not signalled');
+  assert.equal(typing.$('outbox-notice').textContent, 'room.native.foreignPending');
+  await typing.submit();
+  assert.equal(typing.sends.length, 0, 'a second window published beside an unconfirmed send');
+  assert.equal(typing.$('status').textContent, 'room.native.foreignPending');
+  await owner.submit(); // explicit retry settles and clears the record
+  typing.storageEvent(); await tick();
+  assert.equal(typing.$('outbox').hidden, true);
+  assert.equal(typing.$('message-text').value, 'my own draft', 'settlement elsewhere cleared this draft');
+  await typing.submit();
+  assert.equal(typing.sends.length, 1, 'the draft can be sent once the other window settles');
+  // An idle window still adopts the record so either window can recover it.
+  const sender = await fixture({draft:false});
+  const idle = await fixture({storage:sender.storage,receipts:new Map(),draft:false});
+  sender.$('message-text').value = 'adopt me'; await sender.submit();
+  idle.storageEvent(); await tick();
+  assert.equal(idle.$('message-text').value, 'adopt me');
+  assert.equal(idle.$('send').textContent, 'room.native.retryOriginal');
   const unsupported = await fixture({manager:null});unsupported.$('attachment').files=[];
   await unsupported.submit();assert.equal(unsupported.sends.length,0,'missing Web Locks allowed unsafe send');
   console.log('Native UI: bounded reads, accurate totals, UTF-8 validation, single submission and immutable retry payload passed.');
