@@ -822,6 +822,11 @@ func followLog(ctx context.Context, writer io.Writer, path string) error {
 	if err != nil {
 		return fmt.Errorf("stat daemon log %s: %w", path, err)
 	}
+	return followLogFrom(ctx, writer, path, info)
+}
+
+// followLogFrom streams bytes appended after the already-printed state info.
+func followLogFrom(ctx context.Context, writer io.Writer, path string, info os.FileInfo) error {
 	offset := info.Size()
 	ticker := time.NewTicker(300 * time.Millisecond)
 	defer ticker.Stop()
