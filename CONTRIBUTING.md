@@ -50,6 +50,12 @@ reduction requires an explanation and fresh Linux CI evidence in the same PR;
 do not lower a floor simply to pass. CI retains its profile as the
 `pairroom-linux-coverage` artifact for 14 days.
 
+The `cmd/pairroom` floor was later raised from 40 to 87 with its CLI behavior
+tests, from a local Windows measurement of 89.8% with a wider margin because
+no Linux run preceded the change. The package has no platform-tagged files or
+GOOS-dependent test branches; re-derive the floor from the next Linux CI
+artifact.
+
 PRs retain the focused Windows/macOS Native boundary suite. The nightly
 `full-platform-tests` job runs every root-module package on `windows-2025` and
 `macos-15`, with a 45-minute limit per target. It runs at 02:17 UTC and is also

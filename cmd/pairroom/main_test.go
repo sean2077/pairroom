@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -133,5 +136,69 @@ func TestSingleDashHelpIsHelp(t *testing.T) {
 		if err := run(args); err != nil {
 			t.Fatalf("run(%q) returned %v", args, err)
 		}
+	}
+}
+
+func runMainProcess(t *testing.T, env []string, args ...string) (stdout, stderr string, exitCode int) {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(executable, args...)
+	command.Env = append(append(os.Environ(), mainEnvironment+"=1"), env...)
+	var out, errOut bytes.Buffer
+	command.Stdout, command.Stderr = &out, &errOut
+	err = command.Run()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return out.String(), errOut.String(), exitErr.ExitCode()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out.String(), errOut.String(), 0
+}
+
+func TestMainExitCodesAndErrorPrefix(t *testing.T) {
+	stdout, stderr, code := runMainProcess(t, nil, "version")
+	if code != 0 || stdout != versionSummary()+"\n" || stderr != "" {
+		t.Fatalf("version: code %d stdout %q stderr %q", code, stdout, stderr)
+	}
+	stdout, stderr, code = runMainProcess(t, nil, "no-such-command")
+	if code != 1 || stdout != "" || stderr != "pairroom: unknown command \"no-such-command\" (use pairroom help)\n" {
+		t.Fatalf("unknown command: code %d stdout %q stderr %q", code, stdout, stderr)
+	}
+}
+
+func TestMainRejectsInvalidLoggingEnvironmentBeforeRunning(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "service.log")
+	stdout, stderr, code := runMainProcess(t, []string{daemon.LogFileEnvironment + "=" + logPath, daemon.LogBackupEnvironment + "=0"}, "version")
+	if code != 1 || stdout != "" || !strings.HasPrefix(stderr, "pairroom: configure daemon logging: invalid log backup count") {
+		t.Fatalf("invalid logging env: code %d stdout %q stderr %q", code, stdout, stderr)
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("invalid logging configuration created the log: %v", err)
+	}
+}
+
+// A harness that exports PAIRROOM_LOG_FILE must still receive relay output on the
+// original stdout/stderr, while every other command writes to the log instead.
+func TestMainKeepsRelayStdoutOutOfTheDaemonLog(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "service.log")
+	env := []string{daemon.LogFileEnvironment + "=" + logPath, daemon.ConsoleDetachEnvironment + "="}
+	stdout, stderr, code := runMainProcess(t, env, "version")
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("logged version: code %d stdout %q stderr %q", code, stdout, stderr)
+	}
+	if data, err := os.ReadFile(logPath); err != nil || string(data) != versionSummary()+"\n" {
+		t.Fatalf("daemon log = %q, %v", data, err)
+	}
+	_, stderr, code = runMainProcess(t, env, "relay")
+	if code != 1 || !strings.Contains(stderr, "pairroom: use pairroom relay") {
+		t.Fatalf("relay diagnostics were redirected: code %d stderr %q", code, stderr)
+	}
+	if data, err := os.ReadFile(logPath); err != nil || strings.Contains(string(data), "relay") {
+		t.Fatalf("relay output reached the daemon log: %q, %v", data, err)
 	}
 }
