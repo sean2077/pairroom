@@ -295,7 +295,7 @@ Tests bound observable output bytes, not vendor billing or model acceptance.
 
 ### Foreground discussion loop
 
-This optional Native path borrows the active wait idea from [Orca's messaging loop](https://github.com/stablyai/orca/blob/403b62a8d8fa6e896a93acc4c15405be0f0b7dc7/skill-guides/orchestration/references/messaging-and-gates.md), not its Run/Task/Dispatch hierarchy. It reuses PairRoom's explicit send, associated bindings, inbox and acknowledgement. Install the updated CLI and relay skill; `pairroom relay exchange --help` checks command availability. An older CLI is not made compatible by installing the new skill alone.
+This optional Native path borrows the active wait idea from [Orca's messaging loop](https://github.com/stablyai/orca/blob/403b62a8d8fa6e896a93acc4c15405be0f0b7dc7/skill-guides/orchestration/references/messaging-and-gates.md), not its Run/Task/Dispatch hierarchy. It reuses PairRoom's explicit send, associated bindings, inbox and acknowledgement. Install the updated CLI and relay skill; `pairroom relay --help` lists the relay commands the installed CLI supports, and an unknown command fails even with `--help`. An older CLI is not made compatible by installing the new skill alone.
 
 After BOTH sessions are bound, tell one to receive and the other to start. Run these through the intended native agents' tools, not a third unrelated terminal:
 

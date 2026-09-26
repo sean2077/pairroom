@@ -34,7 +34,7 @@ Commands are not Room selections. Service templates `runtimes.claude`, `runtimes
 
 | Runtime | Accepted policy values |
 |---|---|
-| Claude Code | `permission_mode`: `default`, `manual`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, `yolo` |
+| Claude Code | `permission_mode`: `default`, `manual`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, `bypass`, `always-approve`, `yolo` (`bypass` and `always-approve` are accepted aliases of `bypassPermissions`) |
 | Codex | `approval_policy`: `untrusted`, `unless-trusted`, `unlessTrusted`, `on-failure`, `on-request`, `never`, `yolo`; `sandbox`: `read-only`, `workspace-write`, `danger-full-access` |
 | Grok Build | `permission_mode`: `default`, `ask`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, `always-approve`, `yolo`; `sandbox`: `read-only`, `workspace`, `strict`, `off` |
 

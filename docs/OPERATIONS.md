@@ -58,7 +58,9 @@ Archive is not unbind, and closing a tab is not “stop work.” Follow returned
 
 ## Capacity and idle reclaim
 
-The active-runtime cap and idle eviction apply to **Embedded Rooms that own vendor adapters**, not durable Room count. Native relay Rooms are exempt: they do not consume a slot, queue behind Embedded capacity, or become capacity-eviction victims.
+The active-runtime cap and capacity eviction apply to **Embedded Rooms that own vendor adapters**, not durable Room count. Native relay Rooms are exempt from capacity only: they do not consume a slot, queue behind Embedded capacity, or become capacity-eviction victims.
+
+Idle suspension applies to every active Room Runtime, Embedded or Native. After the Service idle timeout (`--idle-timeout`, default 15 minutes) without use, a Runtime that is not busy, serving an in-flight relay request, or holding a pending wake is suspended without deleting Room history. Opening the Room or a later relay call such as `send` or `wait` activates it again; read-only diagnostics such as `relay doctor` do not.
 
 Reclamation suspends processes without deleting Room history and must not preempt a native Turn merely to free capacity. Embedded activation rebuilds only Room-owned FIFO entries that never crossed submission; accepted or uncertain input needs inspection rather than automatic replay. An uncertain cleanup retains its capacity claim instead of pretending to be suspended.
 
