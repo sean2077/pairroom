@@ -63,6 +63,8 @@ Do not publish the same report explicitly and then repeat it in a peer-directed 
 
 An approved Stop hook publishes first, then may park for up to 30 seconds within its installed 45-second timeout. It parks only while a peer reply is expected — this session recently addressed its peer and the peer has not answered yet — so an ordinary or `@user` turn ends without an idle half-minute. Claude/Codex can request continuation with an actual envelope, up to eight consecutive blocks. Grok's clipped hook-feedback channel instead returns a bounded readiness instruction: the full input stays queued until foreground `wait` collects it. Grok readiness/recovery hints stop at seven to reserve its final publication gate; other hooks share the vendor budget.
 
+Within that existing hook lifetime, sender publication/reconciliation has an eight-second budget, including at most two seconds for optional transcript metadata confirmation. A slow sender request therefore leaves time for receive-side park and acknowledgement. Timeout retains the original pending publication identity; it does not authorize replay or imply that the Service rejected it.
+
 For an explicit discussion, start the receiver with `pairroom relay wait`, then in the other session run:
 
 ```bash
@@ -108,6 +110,8 @@ For an older confirmed binding without a usable locator, resume it once in the o
 | Wake `accepted` / `submitted` | Codex command acceptance / a complete Claude socket write, respectively |
 
 None proves that a model read, accepted, or finished the work. Collector death or a lost acknowledgement may become `unknown`. The original claimer's receipt-matched acknowledgement can still settle it while no explicit Retry is pending; otherwise inspect history and side effects before Retry creates a new message. Possibly executed effects are never automatically replayed.
+
+The CLI requires an affirmative `handed_off: true` acknowledgement, not merely HTTP success. An empty, malformed, or negative acknowledgement after stdout leaves the local outcome uncertain: inspect the Service's recorded state rather than repeating the message.
 
 A detached background waiter whose output never reaches the model may nevertheless be terminally `handed_off`. Another `wait` cannot re-collect it. Inspect the authorized message/history and actual workspace before deciding a fresh instruction; do not blindly duplicate the original task body.
 
@@ -156,6 +160,10 @@ Participant cards show stored Runtime/Provider/model/effort/permission metadata,
 Pending items are independent of the recent chat tail. Use `relay history --pending` for oldest-first unresolved work or `relay history --id ID` for one message. Normal history is newest-first; follow returned cursors. Reading never claims, acknowledges, or retries a message. `relay doctor` and the Native diagnostic button inspect the current Room without a model call; CLI doctor also checks local installation observations. Hook approval and model acceptance remain unknown.
 
 Browser refresh restores an unconfirmed immutable original-ID draft and checks its receipt without sending. Explicit same-ID recovery preserves payload; Forget only removes local recovery state, not an accepted/in-flight task. Same-origin localStorage may contain private text and is not encrypted archival. Do not clear it merely to dismiss uncertainty.
+
+Native browser API requests have a 30-second deadline covering both response headers and body reads; SSE is separate. A timed-out publication releases the controls but retains its original recovery record. Check the original receipt before an explicit same-ID retry. Receipt checking and Retry cannot run concurrently in the same page; neither timeout nor reload automatically posts another message.
+
+Cross-window recovery mutations use a short, per-Room Web Lock, never a lock held over network requests. Browser publication requires Web Locks and writable localStorage; unavailable or busy storage fails before publication rather than falling back to an unsafe write. Forget only removes the exact record present when its confirmation opened, so a newer record from another window survives. Reload all open Native pages after upgrading so they use the same locking protocol. Existing outbox records retain their format; do not delete them as an upgrade step.
 
 Optional review evidence can identify the revision actually discussed:
 
