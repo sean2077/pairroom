@@ -116,7 +116,10 @@ for shell in "${shells[@]}"; do
     prefix="$work/prefix-${shell// /-}"
     run_install "$shell" "$prefix" GITHUB_REPOSITORY=someone/else >"$work/out" 2>&1 ||
         fail "[$shell] install failed: $(cat "$work/out")"
-    cmp -s "$prefix/bin/pairroom" "$work/good-binary" || fail "[$shell] installed binary differs"
+    # Compare digests rather than depend on cmp, which minimal MSYS2 installs
+    # lack (a PATH fallback to another MSYS runtime cannot see this /tmp).
+    [[ "$(sha256 "$prefix/bin/pairroom")" == "$(sha256 "$work/good-binary")" ]] ||
+        fail "[$shell] installed binary differs"
     [[ -x "$prefix/bin/pairroom" ]] || fail "[$shell] installed binary is not executable"
     grep -q 'Installed PairRoom CLI v9.8.7' "$work/out" || fail "[$shell] missing success line: $(cat "$work/out")"
     if grep -q 'someone/else' "$work/curl.log"; then
