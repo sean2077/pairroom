@@ -127,3 +127,11 @@ func TestLoopbackListenAcceptsOnlyNumericLoopback(t *testing.T) {
 		}
 	}
 }
+
+func TestSingleDashHelpIsHelp(t *testing.T) {
+	for _, args := range [][]string{{"-help"}, {"daemon", "-help"}} {
+		if err := run(args); err != nil {
+			t.Fatalf("run(%q) returned %v", args, err)
+		}
+	}
+}

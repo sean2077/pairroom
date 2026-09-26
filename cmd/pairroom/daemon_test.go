@@ -422,3 +422,23 @@ func TestParseManagementAccessRejectsUnsafeOrTokenlessURLs(t *testing.T) {
 		}
 	}
 }
+
+func TestDaemonInstallHelpNeverInstalls(t *testing.T) {
+	root := t.TempDir()
+	setDaemonTestConfigDir(t, filepath.Join(root, "config"))
+	manager := &fakeDaemonManager{}
+	original := newDaemonManager
+	t.Cleanup(func() { newDaemonManager = original })
+	newDaemonManager = func() (daemon.Manager, error) { return manager, nil }
+	for _, argument := range []string{"-h", "--help", "-help"} {
+		if err := daemonInstall([]string{"--work-dir", root, argument}); err != nil {
+			t.Fatalf("daemon install %s: %v", argument, err)
+		}
+	}
+	if manager.installed != nil {
+		t.Fatalf("help installed a service: %#v", manager.installed.Args)
+	}
+	if _, err := daemon.LoadMeta(); !os.IsNotExist(err) {
+		t.Fatalf("help wrote daemon metadata: %v", err)
+	}
+}

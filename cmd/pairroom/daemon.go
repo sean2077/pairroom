@@ -48,7 +48,7 @@ func runDaemon(args []string) error {
 		return daemonLogs(args[1:])
 	case "open":
 		return daemonOpen(args[1:])
-	case "help", "--help", "-h":
+	case "help", "--help", "-help", "-h":
 		printDaemonHelp()
 		return nil
 	default:
@@ -127,7 +127,7 @@ func parseDaemonInstallArgs(args []string) (daemon.Config, bool, bool, error) {
 			break
 		}
 		switch {
-		case argument == "--help" || argument == "-h":
+		case argument == "--help" || argument == "-help" || argument == "-h":
 			return daemon.Config{}, false, true, nil
 		case argument == "--force":
 			force = true

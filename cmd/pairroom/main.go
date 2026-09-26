@@ -98,7 +98,7 @@ func run(args []string) error {
 		return runProtocol(args[1:])
 	case "version", "--version", "-v":
 		return runVersion(args[1:])
-	case "help", "--help", "-h":
+	case "help", "--help", "-help", "-h":
 		printHelp()
 		return nil
 	default:
