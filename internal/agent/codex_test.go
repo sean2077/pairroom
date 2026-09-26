@@ -9,7 +9,9 @@ import (
 	"os/exec"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/prompt"
@@ -153,29 +155,128 @@ func TestParseCodexRequestID(t *testing.T) {
 	}
 }
 
-func TestCodexEarlyTurnStartedBindsStartingInput(t *testing.T) {
+func TestCodexEarlyTurnStartedBindsStartingInputAfterClientIDEcho(t *testing.T) {
 	var events []model.RuntimeEvent
 	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) {
 		events = append(events, event)
 	})
 	input := model.AgentInput{MessageID: "msg-early", ThreadID: "thread-1"}
 	adapter.startingInput = &input
+	adapter.stageWireInput(input)
 
+	// The userMessage.clientId echo is the evidence that binds the opaque turn
+	// ID before the turn/start response; the later turn/started is then known.
+	adapter.handleItem("item/started", json.RawMessage(`{"turnId":"turn-early","item":{"id":"u1","type":"userMessage","clientId":"msg-early"}}`))
 	adapter.handleNotification("turn/started", json.RawMessage(`{"turn":{"id":"turn-early"}}`))
 
 	bound, ok := adapter.turnInputs["turn-early"]
 	if !ok || len(bound) != 1 || bound[0].MessageID != input.MessageID {
 		t.Fatalf("early turn was not correlated to starting input: %#v", bound)
 	}
-	var started *model.RuntimeEvent
-	for i := range events {
-		if events[i].Kind == model.RuntimeTurnStarted {
-			started = &events[i]
-			break
+	started := 0
+	for _, event := range events {
+		if event.Kind == model.RuntimeTurnStarted {
+			started++
+			if event.TurnID != "turn-early" || event.CorrelationID != input.MessageID {
+				t.Fatalf("unexpected early turn event: %#v", event)
+			}
 		}
 	}
-	if started == nil || started.TurnID != "turn-early" || started.CorrelationID != input.MessageID {
-		t.Fatalf("unexpected early turn event: %#v", started)
+	if started != 1 {
+		t.Fatalf("started events=%d: %#v", started, events)
+	}
+}
+
+// codexStaleTurnRecorder replays notifications from an unrelated native turn
+// while turn/start is in flight, then accepts the request as turn-new.
+type codexStaleTurnRecorder struct {
+	adapter *CodexAdapter
+}
+
+func (r *codexStaleTurnRecorder) Write(data []byte) (int, error) {
+	var request struct {
+		ID     int64  `json:"id"`
+		Method string `json:"method"`
+	}
+	if err := json.Unmarshal(data, &request); err != nil {
+		return 0, err
+	}
+	if request.Method == "turn/start" {
+		r.adapter.handleRPCLine([]byte(`{"method":"turn/started","params":{"turn":{"id":"turn-stale"}}}`))
+		r.adapter.handleRPCLine([]byte(`{"method":"item/agentMessage/delta","params":{"turnId":"turn-stale","itemId":"i","delta":"old"}}`))
+		r.adapter.handleRPCLine([]byte(`{"method":"turn/completed","params":{"turn":{"id":"turn-stale","status":"completed","items":[{"type":"agentMessage","text":"old answer"}]}}}`))
+		r.adapter.handleRPCLine([]byte(fmt.Sprintf(`{"id":%d,"result":{"turn":{"id":"turn-new"}}}`, request.ID)))
+	}
+	return len(data), nil
+}
+
+func (*codexStaleTurnRecorder) Close() error { return nil }
+
+func TestCodexStaleTurnDuringStartDoesNotSettleStagedInput(t *testing.T) {
+	var events []model.RuntimeEvent
+	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) { events = append(events, event) })
+	adapter.cmd = &exec.Cmd{Process: &os.Process{Pid: os.Getpid()}}
+	adapter.stdin = &codexStaleTurnRecorder{adapter: adapter}
+	adapter.threadID = "thread-1"
+	adapter.state = model.StateIdle
+	defer func() { adapter.cmd, adapter.stdin = nil, nil }()
+
+	if err := adapter.StartTurn(context.Background(), model.AgentInput{MessageID: "msg-new"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.TurnID == "turn-stale" {
+			t.Fatalf("stale turn surfaced while turn/start was in flight: %#v", event)
+		}
+		if event.CorrelationID == "msg-new" && (event.Kind == model.RuntimeInputCompleted || event.Kind == model.RuntimeFinal || event.Kind == model.RuntimeTurnCompleted) {
+			t.Fatalf("staged input was settled by an unrelated turn: %#v", event)
+		}
+	}
+	if adapter.currentTurn != "turn-new" || adapter.State() != model.StateWorking {
+		t.Fatalf("accepted turn lost ownership: current=%q state=%q", adapter.currentTurn, adapter.State())
+	}
+
+	events = nil
+	adapter.handleRPCLine([]byte(`{"method":"turn/completed","params":{"turn":{"id":"turn-new","status":"completed","items":[{"type":"agentMessage","text":"new answer"}]}}}`))
+	var finals []string
+	completed := 0
+	for _, event := range events {
+		if event.Kind == model.RuntimeFinal {
+			finals = append(finals, event.Text)
+			if event.CorrelationID != "msg-new" {
+				t.Fatalf("final correlation=%q", event.CorrelationID)
+			}
+		}
+		if event.Kind == model.RuntimeInputCompleted && event.CorrelationID == "msg-new" {
+			completed++
+		}
+	}
+	if !reflect.DeepEqual(finals, []string{"new answer"}) || completed != 1 {
+		t.Fatalf("real turn did not settle the input exactly once: finals=%q completed=%d", finals, completed)
+	}
+}
+
+func TestCodexEchoBoundCompletionBeforeStartResponseSettlesOnce(t *testing.T) {
+	var events []model.RuntimeEvent
+	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) { events = append(events, event) })
+	input := model.AgentInput{MessageID: "msg-echo"}
+	adapter.startingInput = &input
+	adapter.stageWireInput(input)
+
+	adapter.handleItem("item/started", json.RawMessage(`{"turnId":"turn-echo","item":{"id":"u1","type":"userMessage","clientId":"msg-echo"}}`))
+	adapter.handleTurnCompleted(json.RawMessage(`{"turn":{"id":"turn-echo","status":"completed","items":[{"type":"agentMessage","text":"answer"}]}}`))
+
+	counts := map[string]int{}
+	for _, event := range events {
+		if event.CorrelationID == "msg-echo" {
+			counts[event.Kind]++
+		}
+	}
+	if counts[model.RuntimeTurnStarted] != 1 || counts[model.RuntimeInputCompleted] != 1 || counts[model.RuntimeFinal] != 1 || counts[model.RuntimeTurnCompleted] != 1 {
+		t.Fatalf("echo-bound completion lifecycle=%v events=%#v", counts, events)
+	}
+	if _, ok := adapter.terminalTurns["turn-echo"]; !ok || adapter.currentTurn != "" || adapter.startingInput != nil {
+		t.Fatalf("echo-bound turn was not closed: current=%q starting=%v", adapter.currentTurn, adapter.startingInput)
 	}
 }
 
@@ -867,5 +968,259 @@ func TestCodexReassertingDefaultAccessMidTurnIsNoOp(t *testing.T) {
 	}
 	if err := adapter.SetNativeAccess(context.Background(), model.NativeAccessReadOnly); err == nil {
 		t.Fatal("a real access change during a turn must still be rejected")
+	}
+}
+
+// codexSteerRaceRecorder lets the active turn complete while turn/steer is in
+// flight, then answers the steer with the configured response.
+type codexSteerRaceRecorder struct {
+	adapter    *CodexAdapter
+	completion string
+	response   string
+}
+
+func (r *codexSteerRaceRecorder) Write(data []byte) (int, error) {
+	var request struct {
+		ID     int64  `json:"id"`
+		Method string `json:"method"`
+	}
+	if err := json.Unmarshal(data, &request); err != nil {
+		return 0, err
+	}
+	if request.Method == "turn/steer" {
+		r.adapter.handleRPCLine([]byte(r.completion))
+		r.adapter.handleRPCLine([]byte(fmt.Sprintf(`{"id":%d,%s}`, request.ID, r.response)))
+	}
+	return len(data), nil
+}
+
+func (*codexSteerRaceRecorder) Close() error { return nil }
+
+func TestCodexRejectedSteerAfterCompletionIsNotSettled(t *testing.T) {
+	var events []model.RuntimeEvent
+	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) { events = append(events, event) })
+	adapter.stdin = &codexSteerRaceRecorder{
+		adapter:    adapter,
+		completion: `{"method":"turn/completed","params":{"turn":{"id":"turn-a","status":"completed"}}}`,
+		response:   `"error":{"code":-32600,"message":"no active turn"}`,
+	}
+	adapter.threadID, adapter.currentTurn, adapter.state = "thread-1", "turn-a", model.StateWorking
+	adapter.turnInputs["turn-a"] = []model.AgentInput{{MessageID: "msg-first"}}
+
+	outcome := adapter.Steer(context.Background(), model.AgentInput{MessageID: "msg-steer"})
+	if outcome.State != SteerRejected {
+		t.Fatalf("steer outcome=%+v", outcome)
+	}
+	first := 0
+	for _, event := range events {
+		if event.CorrelationID == "msg-steer" && (event.Kind == model.RuntimeInputCompleted || event.Kind == model.RuntimeInputFailed || event.Kind == model.RuntimeInputCancelled) {
+			t.Fatalf("rejected steer received a native terminal event: %#v", event)
+		}
+		if event.CorrelationID == "msg-first" && event.Kind == model.RuntimeInputCompleted {
+			first++
+		}
+	}
+	if first != 1 {
+		t.Fatalf("active input completion count=%d events=%#v", first, events)
+	}
+	if len(adapter.wireInputs) != 0 {
+		t.Fatalf("steer staging leaked: %#v", adapter.wireInputs)
+	}
+}
+
+func TestCodexAcceptedSteerAfterFailedCompletionInheritsTurnOutcome(t *testing.T) {
+	var events []model.RuntimeEvent
+	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) { events = append(events, event) })
+	adapter.stdin = &codexSteerRaceRecorder{
+		adapter:    adapter,
+		completion: `{"method":"turn/completed","params":{"turn":{"id":"turn-a","status":"failed","error":{"message":"sandbox failed"}}}}`,
+		response:   `"result":{"turnId":"turn-a"}`,
+	}
+	adapter.threadID, adapter.currentTurn, adapter.state = "thread-1", "turn-a", model.StateWorking
+	adapter.turnInputs["turn-a"] = []model.AgentInput{{MessageID: "msg-first"}}
+
+	outcome := adapter.Steer(context.Background(), model.AgentInput{MessageID: "msg-steer"})
+	if outcome.State != SteerAccepted {
+		t.Fatalf("steer outcome=%+v", outcome)
+	}
+	terminal := map[string]int{}
+	for _, event := range events {
+		if event.CorrelationID == "msg-steer" {
+			terminal[event.Kind]++
+			if event.Kind == model.RuntimeInputFailed && (event.TurnID != "turn-a" || event.Text != "sandbox failed") {
+				t.Fatalf("steer failure event=%#v", event)
+			}
+		}
+	}
+	if terminal[model.RuntimeInputFailed] != 1 || terminal[model.RuntimeInputCompleted] != 0 {
+		t.Fatalf("accepted steer terminal events=%v all=%#v", terminal, events)
+	}
+}
+
+// codexRequestCapture records requests without answering them, like an
+// app-server that is slow to reply.
+type codexRequestCapture struct {
+	mu       sync.Mutex
+	requests []codexCapturedRequest
+}
+
+type codexCapturedRequest struct {
+	ID     int64  `json:"id"`
+	Method string `json:"method"`
+}
+
+func (r *codexRequestCapture) Write(data []byte) (int, error) {
+	var request codexCapturedRequest
+	if err := json.Unmarshal(data, &request); err != nil {
+		return 0, err
+	}
+	r.mu.Lock()
+	r.requests = append(r.requests, request)
+	r.mu.Unlock()
+	return len(data), nil
+}
+
+func (*codexRequestCapture) Close() error { return nil }
+
+func (r *codexRequestCapture) ids(method string) []int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var ids []int64
+	for _, request := range r.requests {
+		if request.Method == method {
+			ids = append(ids, request.ID)
+		}
+	}
+	return ids
+}
+
+func newUnansweredCodex(t *testing.T) (*CodexAdapter, *codexRequestCapture, *[]model.RuntimeEvent) {
+	t.Helper()
+	previous := codexTurnStartTimeout
+	codexTurnStartTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { codexTurnStartTimeout = previous })
+	events := &[]model.RuntimeEvent{}
+	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) { *events = append(*events, event) })
+	capture := &codexRequestCapture{}
+	adapter.cmd = &exec.Cmd{Process: &os.Process{Pid: os.Getpid()}}
+	adapter.stdin = capture
+	adapter.threadID = "thread-1"
+	adapter.state = model.StateIdle
+	t.Cleanup(func() { adapter.cmd = nil })
+	err := adapter.StartTurn(context.Background(), model.AgentInput{MessageID: "msg-late"})
+	if !errors.Is(err, ErrSubmissionUnknown) {
+		t.Fatalf("unanswered turn/start error = %v, want ErrSubmissionUnknown", err)
+	}
+	for _, event := range *events {
+		if event.CorrelationID == "msg-late" {
+			t.Fatalf("unanswered turn/start emitted %#v", event)
+		}
+	}
+	return adapter, capture, events
+}
+
+func countCorrelated(events []model.RuntimeEvent, correlationID string) map[string]int {
+	counts := map[string]int{}
+	for _, event := range events {
+		if event.CorrelationID == correlationID {
+			counts[event.Kind]++
+		}
+	}
+	return counts
+}
+
+func TestCodexUnansweredTurnStartBindsLateAcceptance(t *testing.T) {
+	adapter, capture, events := newUnansweredCodex(t)
+	if err := adapter.StartTurn(context.Background(), model.AgentInput{MessageID: "msg-next"}); err == nil || errors.Is(err, ErrSubmissionUnknown) {
+		t.Fatalf("second turn/start while the first is unanswered: %v", err)
+	}
+	ids := capture.ids("turn/start")
+	if len(ids) != 1 {
+		t.Fatalf("turn/start requests = %v; an input was resubmitted", ids)
+	}
+	adapter.handleRPCLine([]byte(fmt.Sprintf(`{"id":%d,"result":{"turn":{"id":"turn-late"}}}`, ids[0])))
+	adapter.handleRPCLine([]byte(`{"method":"turn/completed","params":{"turn":{"id":"turn-late","status":"completed","items":[{"type":"agentMessage","text":"late answer"}]}}}`))
+
+	counts := countCorrelated(*events, "msg-late")
+	if counts[model.RuntimeTurnStarted] != 1 || counts[model.RuntimeInputCompleted] != 1 || counts[model.RuntimeFinal] != 1 || counts[model.RuntimeTurnCompleted] != 1 {
+		t.Fatalf("late acceptance lifecycle = %v; events %#v", counts, *events)
+	}
+}
+
+func TestCodexLateTurnStartRejectionSettlesWithBoundary(t *testing.T) {
+	adapter, capture, events := newUnansweredCodex(t)
+	ids := capture.ids("turn/start")
+	adapter.handleRPCLine([]byte(fmt.Sprintf(`{"id":%d,"error":{"code":-32600,"message":"thread busy"}}`, ids[0])))
+
+	counts := countCorrelated(*events, "msg-late")
+	if counts[model.RuntimeInputFailed] != 1 || counts[model.RuntimeTurnCompleted] != 1 || counts[model.RuntimeInputCompleted] != 0 {
+		t.Fatalf("late rejection = %v; events %#v", counts, *events)
+	}
+	// The rejected input no longer blocks the next submission.
+	codexTurnStartTimeout = 5 * time.Millisecond
+	if err := adapter.StartTurn(context.Background(), model.AgentInput{MessageID: "msg-next"}); !errors.Is(err, ErrSubmissionUnknown) {
+		t.Fatalf("next turn/start after rejection: %v", err)
+	}
+}
+
+func TestCodexStopSettlesUnansweredTurnStart(t *testing.T) {
+	adapter, _, events := newUnansweredCodex(t)
+	adapter.cmd = nil
+	if err := adapter.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if counts := countCorrelated(*events, "msg-late"); counts[model.RuntimeInputCancelled] != 1 {
+		t.Fatalf("stop did not settle the staged input: %v", counts)
+	}
+}
+
+// codexDelayedTurnStart answers turn/start after a delay, from another
+// goroutine, like the app-server's stdout reader.
+type codexDelayedTurnStart struct {
+	adapter *CodexAdapter
+	delay   time.Duration
+}
+
+func (r *codexDelayedTurnStart) Write(data []byte) (int, error) {
+	var request codexCapturedRequest
+	if err := json.Unmarshal(data, &request); err != nil {
+		return 0, err
+	}
+	if request.Method == "turn/start" {
+		go func() {
+			time.Sleep(r.delay)
+			r.adapter.handleRPCLine([]byte(fmt.Sprintf(`{"id":%d,"result":{"turn":{"id":"turn-slow"}}}`, request.ID)))
+		}()
+	}
+	return len(data), nil
+}
+
+func (*codexDelayedTurnStart) Close() error { return nil }
+
+func TestCodexTurnStartDeadlineIsSeparateFromCallerDeadline(t *testing.T) {
+	var mu sync.Mutex
+	var events []model.RuntimeEvent
+	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+	})
+	adapter.cmd = &exec.Cmd{Process: &os.Process{Pid: os.Getpid()}}
+	adapter.stdin = &codexDelayedTurnStart{adapter: adapter, delay: 30 * time.Millisecond}
+	adapter.threadID = "thread-1"
+	adapter.state = model.StateIdle
+	defer func() { adapter.cmd = nil }()
+	// A lazy Start may consume the caller's whole deadline; turn/start still
+	// gets its own budget instead of failing immediately.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	<-ctx.Done()
+	if err := adapter.StartTurn(ctx, model.AgentInput{MessageID: "msg-slow"}); err != nil {
+		t.Fatalf("turn/start failed on the caller's exhausted deadline: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if counts := countCorrelated(events, "msg-slow"); counts[model.RuntimeTurnStarted] != 1 {
+		t.Fatalf("accepted turn was not started: %v", counts)
 	}
 }

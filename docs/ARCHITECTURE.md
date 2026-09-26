@@ -67,7 +67,7 @@ Names are display metadata. Rename preserves IDs/Bindings and uses a safe lifecy
 
 Embedded has one Room-owned coordination FIFO, not a hidden adapter queue. At most one participant owns a native Turn; another waits for a reliable terminal boundary or confirmed exit.
 
-A Message is not a Turn. Several accepted same-target inputs can share one Turn. `steer` uses typed native results: unavailable/rejected input queues once; an unknown result fails visibly rather than being treated as not submitted. Explicit `queue` and cross-Agent input wait for ownership.
+A Message is not a Turn. Several accepted same-target inputs can share one Turn. `steer` uses typed native results: unavailable/rejected input queues once; an unknown result fails visibly rather than being treated as not submitted. A Turn start whose outcome is unknown (sent but not answered) is neither failed nor resubmitted: it stays `submitting` and keeps the Turn owned until the runtime reports that input (late acceptance, rejection, completion, confirmed exit) or the participant is stopped. Explicit `queue` and cross-Agent input wait for ownership.
 
 Cancel precisely removes waiting work. Interruption after acceptance may stop the entire Turn. Newer human instructions invalidate stale not-yet-started Agent relays, not accepted side effects. Retry creates an auditable new Message; concurrent pending retries for the same source/participant are rejected.
 
@@ -88,7 +88,7 @@ This section describes **Embedded adapters**, not control over Native-hosted ses
 | Runtime | Transport and boundary |
 |---|---|
 | Claude Code | Long-lived stream-json/control transport, native initialization, tools/questions, permissions and exact session handling; steering reports unavailable rather than false acceptance |
-| Codex | Long-lived app-server; native Turn start/steer/completed and thread identity; generic errors do not release ownership |
+| Codex | Long-lived app-server; native Turn start/steer/completed and thread identity; before the `turn/start` response only the input's `clientId` echo binds a Turn, and a steered input is settled by its `turn/steer` response; an unanswered `turn/start` and generic errors do not release ownership |
 | Grok Build | ACP stdio via `grok --no-auto-update agent stdio`; supported interjection and native Turn/session operations; prompts travel over ACP, not argv/files |
 
 New Grok sessions receive `_meta.rules`; exactly loaded sessions receive current bootstrap once in their first PairRoom prompt without replacing the native system prompt. PairRoom advertises `terminal=false` to retain native tool execution; unsupported privileged reverse requests fail closed.

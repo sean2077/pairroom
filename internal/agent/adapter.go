@@ -179,6 +179,15 @@ func redactRuntimeSecrets(text string, env map[string]string) string {
 	return text
 }
 
+// ErrSubmissionUnknown marks a StartTurn failure after the input may already
+// have crossed the native boundary. It is the StartTurn counterpart of
+// SteerUnknown. An adapter returns it only while it keeps the input staged
+// and will still report reliable terminal evidence for it: native turn
+// completion, a definitive rejection followed by a Turn boundary, confirmed
+// process exit, or Stop. Callers must not resubmit the input or release Turn
+// ownership on this error alone.
+var ErrSubmissionUnknown = errors.New("native submission outcome is unknown")
+
 var ErrApprovalUnsupported = errors.New("runtime does not expose interactive approvals through this adapter")
 
 func runtimeEvent(actor model.ActorID, kind string) model.RuntimeEvent {

@@ -151,6 +151,15 @@ type Engine struct {
 	turnSubmitting      int
 	turnBoundarySeen    bool
 	restoredDeliveries  []scheduledDelivery
+	// unknownSubmissions holds Turn starts whose native outcome is unknown.
+	// Their delivery stays `submitting` and keeps the Turn owned until runtime
+	// evidence settles the input. Guarded by mu.
+	unknownSubmissions map[deliveryKey]struct{}
+}
+
+type deliveryKey struct {
+	messageID string
+	target    model.ActorID
 }
 
 func New(cfg Config) (*Engine, error) {
@@ -178,6 +187,7 @@ func New(cfg Config) (*Engine, error) {
 		adapters:            make(map[model.ActorID]agent.Adapter, 2),
 		lastRuntimeActivity: make(map[model.ActorID]time.Time, 2),
 		stallWarnedTurn:     make(map[model.ActorID]string, 2),
+		unknownSubmissions:  make(map[deliveryKey]struct{}),
 		deliveryMu: map[model.ActorID]chan struct{}{
 			model.ActorSlot1: make(chan struct{}, 1),
 			model.ActorSlot2: make(chan struct{}, 1),

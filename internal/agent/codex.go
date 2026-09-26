@@ -25,6 +25,8 @@ import (
 // the already-settled message without resurrecting the native turn.
 type codexTurnTerminal struct {
 	status   string
+	kind     string
+	detail   string
 	inputIDs map[string]struct{}
 }
 
@@ -53,10 +55,15 @@ type CodexAdapter struct {
 	// access records the last successfully asserted native access so the
 	// per-submission same-access assertion is a no-op instead of re-running
 	// the turn-boundary gate (and failing on stale state).
-	access     model.NativeAccess
-	pending    map[int64]chan rpcReply
-	approvals  map[string]pendingApproval
-	turnInputs map[string][]model.AgentInput
+	access  model.NativeAccess
+	pending map[int64]chan rpcReply
+	// replyHooks run on the stdout reader when their response arrives, so a
+	// turn/start response is applied before the turn's later notifications.
+	// abandonedCalls marks requests whose caller stopped waiting.
+	replyHooks     map[int64]codexReplyHook
+	abandonedCalls map[int64]struct{}
+	approvals      map[string]pendingApproval
+	turnInputs     map[string][]model.AgentInput
 	// wireInputs holds inputs keyed by Codex's documented
 	// clientUserMessageId while a turn/start or turn/steer request is in flight.
 	// The matching userMessage item echoes this value as clientId, allowing
@@ -66,10 +73,14 @@ type CodexAdapter struct {
 	wireInputOrder []string
 	startingInput  *model.AgentInput
 	startingTurnID string
-	turnBuffers    map[string]*strings.Builder
-	turnFinal      map[string]string
-	terminalTurns  map[string]codexTurnTerminal
-	startedTurns   map[string]struct{}
+	// steeringInput is the message ID of the turn/steer request in flight. A
+	// completion that overtakes its response must not settle it: Codex may
+	// still reject the steer, and only the response decides its terminal event.
+	steeringInput string
+	turnBuffers   map[string]*strings.Builder
+	turnFinal     map[string]string
+	terminalTurns map[string]codexTurnTerminal
+	startedTurns  map[string]struct{}
 	// pendingCompletions holds a terminal notification that arrived before the
 	// turn/start response exposed its ID. It is keyed by the opaque native turn
 	// ID and consumed only when that exact response arrives; unrelated stale
@@ -77,6 +88,12 @@ type CodexAdapter struct {
 	pendingCompletions map[string]json.RawMessage
 	nextRequestID      atomic.Int64
 }
+
+type codexReplyHook func(reply rpcReply, abandoned bool) rpcReply
+
+// codexPendingCompletionLimit bounds completions held while a turn/start
+// response is outstanding; a stale replay stream cannot grow it without limit.
+const codexPendingCompletionLimit = 64
 
 func NewCodex(cfg Config, sink EventSink) *CodexAdapter {
 	if !cfg.Actor.ValidParticipant() {
@@ -354,6 +371,8 @@ func (c *CodexAdapter) waitProcess(cmd *exec.Cmd) {
 		c.stdin = nil
 		pending = c.pending
 		c.pending = make(map[int64]chan rpcReply)
+		c.replyHooks = nil
+		c.abandonedCalls = nil
 		c.approvals = make(map[string]pendingApproval)
 	}
 	c.mu.Unlock()

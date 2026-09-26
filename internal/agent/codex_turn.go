@@ -6,10 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/prompt"
 )
+
+// codexTurnStartTimeout bounds one turn/start request. It is separate from
+// the caller's deadline, which also covers a lazy app-server Start.
+var codexTurnStartTimeout = 45 * time.Second
 
 func (c *CodexAdapter) StartTurn(ctx context.Context, input model.AgentInput) error {
 	// A Codex thread accepts one active turn. PairRoom reserves the Room owner;
@@ -26,10 +31,14 @@ func (c *CodexAdapter) StartTurn(ctx context.Context, input model.AgentInput) er
 	threadID := c.threadID
 	turnID := c.currentTurn
 	active := turnID != "" && (c.state == model.StateWorking || c.state == model.StateWaiting)
+	unanswered := c.startingInput != nil
 	c.mu.Unlock()
 
 	if active {
 		return errors.New("Codex already has an active turn")
+	}
+	if unanswered {
+		return errors.New("Codex has not answered an earlier turn/start; stop the participant before submitting again")
 	}
 
 	params := c.turnStartParams(threadID, text, input)
@@ -41,38 +50,168 @@ func (c *CodexAdapter) StartTurn(ctx context.Context, input model.AgentInput) er
 	c.startingTurnID = ""
 	c.mu.Unlock()
 	c.stageWireInput(input)
-	result, err := c.call(ctx, "turn/start", params)
-	c.unstageWireInput(input.MessageID)
-	if err != nil {
+	callCtx, cancel := codexTurnStartContext(ctx)
+	defer cancel()
+	for attempt := 0; ; attempt++ {
+		id := c.nextRequestID.Add(1)
+		ch := make(chan rpcReply, 1)
 		c.mu.Lock()
+		c.pending[id] = ch
+		if c.replyHooks == nil {
+			c.replyHooks = make(map[int64]codexReplyHook)
+		}
+		// The reader applies the response in wire order, before it handles the
+		// turn's later notifications, whether or not this call still waits.
+		c.replyHooks[id] = func(reply rpcReply, abandoned bool) rpcReply {
+			return c.applyTurnStartReply(input, reply, abandoned)
+		}
+		c.mu.Unlock()
+		if err := c.send(map[string]any{"id": id, "method": "turn/start", "params": params}); err != nil {
+			c.mu.Lock()
+			delete(c.pending, id)
+			delete(c.replyHooks, id)
+			c.mu.Unlock()
+			c.clearStagedStart(input.MessageID)
+			return err
+		}
+		var reply rpcReply
+		select {
+		case reply = <-ch:
+		case <-callCtx.Done():
+			c.mu.Lock()
+			_, waiting := c.pending[id]
+			if waiting {
+				if c.abandonedCalls == nil {
+					c.abandonedCalls = make(map[int64]struct{})
+				}
+				c.abandonedCalls[id] = struct{}{}
+			}
+			c.mu.Unlock()
+			if waiting {
+				// Keep the input staged: a late response, its clientId echo, a
+				// completion, Stop, or process exit settles it with evidence.
+				return fmt.Errorf("%w: Codex turn/start was sent but not answered (%v); it may still be accepted, so it is not resubmitted", ErrSubmissionUnknown, callCtx.Err())
+			}
+			// The reader already took the response and is applying it.
+			reply = <-ch
+		}
+		if reply.err == nil {
+			return nil
+		}
+		var rpcErr codexRPCError
+		if errors.Is(reply.err, errCodexMalformedTurnStart) {
+			return reply.err
+		}
+		if !errors.As(reply.err, &rpcErr) {
+			// Stop or process exit failed the request in flight; that path
+			// reports the staged input.
+			return fmt.Errorf("%w: %v", ErrSubmissionUnknown, reply.err)
+		}
+		if rpcErr.Code != -32001 || attempt >= 4 {
+			c.clearStagedStart(input.MessageID)
+			return reply.err
+		}
+		delay := time.Duration(100*(1<<attempt))*time.Millisecond + time.Duration(time.Now().UnixNano()%75)*time.Millisecond
+		logEvent := runtimeEvent(c.cfg.Actor, model.RuntimeLog)
+		logEvent.Name = "app-server.overloaded.retry"
+		logEvent.Text = fmt.Sprintf("turn/start rejected as overloaded; retrying in %s (attempt %d/5)", delay, attempt+2)
+		c.sink(logEvent)
+		timer := time.NewTimer(delay)
+		select {
+		case <-callCtx.Done():
+			timer.Stop()
+			c.clearStagedStart(input.MessageID)
+			return callCtx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+var errCodexMalformedTurnStart = errors.New("malformed Codex turn/start response")
+
+// codexTurnStartContext gives turn/start its own deadline while still honoring
+// explicit cancellation of the caller (for example Room shutdown).
+func codexTurnStartContext(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), codexTurnStartTimeout)
+	stop := context.AfterFunc(parent, func() {
+		if errors.Is(parent.Err(), context.Canceled) {
+			cancel()
+		}
+	})
+	return ctx, func() {
+		stop()
+		cancel()
+	}
+}
+
+// clearStagedStart forgets a turn/start that definitively did not start a
+// turn. It never clears a different input's staging.
+func (c *CodexAdapter) clearStagedStart(messageID string) {
+	c.mu.Lock()
+	if c.startingInput != nil && c.startingInput.MessageID == messageID {
 		c.startingInput = nil
 		c.startingTurnID = ""
 		c.pendingCompletions = make(map[string]json.RawMessage)
-		c.mu.Unlock()
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			// The app-server may have accepted turn/start after the deadline;
-			// the orphaned native turn is not reachable through Interrupt once
-			// local state was cleared, so the failure must tell the operator to
-			// inspect before retrying.
-			return fmt.Errorf("%w; the native turn/start may still have been accepted — inspect the Codex thread before retrying this input", err)
-		}
-		return err
 	}
+	c.mu.Unlock()
+	c.unstageWireInput(messageID)
+}
+
+// applyTurnStartReply runs on the stdout reader when a turn/start response
+// arrives. abandoned reports that StartTurn already returned
+// ErrSubmissionUnknown; the late response then settles the staged input.
+func (c *CodexAdapter) applyTurnStartReply(input model.AgentInput, reply rpcReply, abandoned bool) rpcReply {
+	c.mu.Lock()
+	staged := c.startingInput != nil && c.startingInput.MessageID == input.MessageID
+	bound := c.startingTurnID != ""
+	c.mu.Unlock()
+	if !staged {
+		// A completion, Stop, or process exit already settled the input.
+		return reply
+	}
+	if reply.err != nil {
+		if abandoned && !bound {
+			c.clearStagedStart(input.MessageID)
+			c.emitStartRejected(input, "Codex rejected turn/start after its deadline: "+reply.err.Error())
+		}
+		return reply
+	}
+	if err := c.acceptTurnStart(input, reply.result); err != nil {
+		if abandoned {
+			c.emitStartRejected(input, "Codex answered turn/start after its deadline without a usable turn: "+err.Error()+"; inspect the Codex thread before retrying")
+		}
+		reply.err = err
+	}
+	return reply
+}
+
+// emitStartRejected reports the terminal outcome of an input whose unknown
+// submission was later resolved without a native turn, with the Turn boundary
+// the Room needs to release ownership.
+func (c *CodexAdapter) emitStartRejected(input model.AgentInput, detail string) {
+	c.emitInputTerminal("", input, model.RuntimeInputFailed, detail)
+	completed := runtimeEvent(c.cfg.Actor, model.RuntimeTurnCompleted)
+	completed.CorrelationID = input.MessageID
+	completed.Name = "failed"
+	completed.Text = detail
+	c.sink(completed)
+}
+
+// acceptTurnStart applies a successful turn/start response.
+func (c *CodexAdapter) acceptTurnStart(input model.AgentInput, result json.RawMessage) error {
+	c.unstageWireInput(input.MessageID)
+	starting := input
 	var turnResult struct {
 		Turn struct {
 			ID string `json:"id"`
 		} `json:"turn"`
 	}
 	if err := json.Unmarshal(result, &turnResult); err != nil || turnResult.Turn.ID == "" {
-		c.mu.Lock()
-		c.startingInput = nil
-		c.startingTurnID = ""
-		c.pendingCompletions = make(map[string]json.RawMessage)
-		c.mu.Unlock()
+		c.clearStagedStart(input.MessageID)
 		if err == nil {
 			err = errors.New("missing turn id")
 		}
-		return fmt.Errorf("decode codex turn: %w", err)
+		return fmt.Errorf("%w: %w", errCodexMalformedTurnStart, err)
 	}
 	c.mu.Lock()
 	if _, completed := c.terminalTurns[turnResult.Turn.ID]; completed {
@@ -152,7 +291,17 @@ func (c *CodexAdapter) Steer(ctx context.Context, input model.AgentInput) SteerO
 
 	text := prompt.Envelope(input)
 	c.stageWireInput(input)
-	defer c.unstageWireInput(input.MessageID)
+	c.mu.Lock()
+	c.steeringInput = input.MessageID
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		if c.steeringInput == input.MessageID {
+			c.steeringInput = ""
+		}
+		c.mu.Unlock()
+		c.unstageWireInput(input.MessageID)
+	}()
 	result, err := c.call(ctx, "turn/steer", codexTurnSteerParams(threadID, turnID, text, input))
 	if err != nil {
 		var rpcErr codexRPCError
@@ -175,16 +324,29 @@ func (c *CodexAdapter) Steer(ctx context.Context, input model.AgentInput) SteerO
 	}
 	c.mu.Lock()
 	terminal, completed := c.terminalTurns[turnID]
+	settled := false
+	if completed {
+		_, settled = terminal.inputIDs[input.MessageID]
+		if !settled && input.MessageID != "" {
+			// Codex accepted the steer into a turn whose completion overtook this
+			// response. The completion deliberately left the input unsettled;
+			// give it that turn's terminal outcome exactly once now.
+			if terminal.inputIDs == nil {
+				terminal.inputIDs = make(map[string]struct{})
+			}
+			terminal.inputIDs[input.MessageID] = struct{}{}
+			c.terminalTurns[turnID] = terminal
+		}
+	}
 	current := c.currentTurn
 	c.mu.Unlock()
 	if completed {
-		if _, accepted := terminal.inputIDs[input.MessageID]; accepted {
-			// The completion path included this staged input and already emitted
-			// its terminal event. The RPC response arrived late; report accepted
-			// without resurrecting the turn or duplicating lifecycle events.
-			return SteerOutcome{State: SteerAccepted, Detail: "accepted by Codex turn/steer (turn completed before acknowledgement)"}
+		if !settled {
+			c.emitInputTerminal(turnID, input, terminal.kind, terminal.detail)
 		}
-		return SteerOutcome{State: SteerUnknown, Detail: "Codex turn completed before the steered input was correlated; explicit retry required"}
+		// Report accepted without resurrecting the turn or duplicating
+		// lifecycle events.
+		return SteerOutcome{State: SteerAccepted, Detail: "accepted by Codex turn/steer (turn completed before acknowledgement)"}
 	}
 	if current != turnID {
 		return SteerOutcome{State: SteerUnknown, Detail: "Codex active turn ended before steer acknowledgement; explicit retry required"}
