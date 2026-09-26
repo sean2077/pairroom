@@ -35,12 +35,8 @@ def fixture_html(isolated: bool = False) -> str:
     window.__ids = 0;
     Object.defineProperty(crypto, 'randomUUID', {value:()=>'fixture-send-'+(++__ids)});
     window.__requests = [];
-    // The about:blank presentation fixture has no persistent origin. Real
-    // localStorage/reload behavior is exercised by the separate HTTP suite.
-    const outboxStore = new Map();
-    Object.defineProperty(window, 'localStorage', {value: {
-      getItem:k=>outboxStore.get(k)??null, setItem:(k,v)=>outboxStore.set(k,v), removeItem:k=>outboxStore.delete(k)
-    }});
+    // Use the browser's real localStorage and Web Locks on the intercepted
+    // loopback origin. API/SSE remain fixtures, not authenticated transport.
     window.__snapshot = {
       room:{id:'native-fixture',name:'Native IM collaboration',agents:{slot1:{runtime:'grok'},slot2:{runtime:'grok'}}},
       identities:{slot1:{MentionHandle:'@grok0'},slot2:{MentionHandle:'@grok1'}},
@@ -106,11 +102,17 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
             options['executable_path'] = browser_path
         browser = await p.chromium.launch(**options)
         try:
-            page = await browser.new_page(viewport={'width':1440,'height':1000}, reduced_motion='reduce')
+            context = await browser.new_context(viewport={'width':1440,'height':1000}, reduced_motion='reduce')
+            # Loopback is the same trust class as the Service UI. about:blank
+            # lacks origin-backed Web Locks and cannot model publication.
+            await context.route('http://127.0.0.1/**', lambda route: route.fulfill(
+                content_type='text/html', body=fixture_html(isolated)))
+            page = await context.new_page()
             page.set_default_timeout(5000)
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
-            await page.set_content(fixture_html(isolated))
+            await page.goto('http://127.0.0.1/')
+            assert await page.evaluate('isSecureContext && typeof navigator.locks?.request === "function"')
             await expect(page.locator('#messages .message-row')).to_have_count(12)
             await expect(page.locator('#native-inspector')).to_be_visible()
             await expect(page.locator('#native-participants')).to_be_visible()
@@ -221,6 +223,31 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
             await expect(page.locator('#message-text')).to_be_enabled()
             await expect(page.locator('#message-text')).to_have_value('')
             assert await page.evaluate("__requests.filter(r=>r.path==='api/v1/messages').slice(-2).map(r=>r.body).every((v,i,a)=>v===a[0])")
+            # Independent pages share the browser's actual origin lock manager.
+            # A held Room lock cannot queue a hidden send or overwrite its WAL.
+            sibling = await context.new_page()
+            sibling.on('pageerror', lambda error: errors.append(str(error)))
+            await sibling.goto('http://127.0.0.1/')
+            await expect(sibling.locator('#send')).to_be_enabled()
+            await sibling.evaluate('''() => new Promise(ready => {
+              window.__heldLock=navigator.locks.request('pairroom.native.outbox.v1.native-fixture',
+                () => new Promise(release => {window.__releaseLock=release;ready();}));
+            })''')
+            before = await page.evaluate("__requests.filter(r=>r.path==='api/v1/messages').length")
+            try:
+                await page.locator('#message-text').fill('Cross-window exclusion')
+                await page.locator('#send').click()
+                await expect(page.locator('#status')).to_contain_text('storageFailed')
+                await expect(page.locator('#message-text')).to_have_value('Cross-window exclusion')
+                assert await page.evaluate("__requests.filter(r=>r.path==='api/v1/messages').length") == before
+                assert await page.evaluate("localStorage.getItem('pairroom.native.outbox.v1.native-fixture')===null")
+            finally:
+                await sibling.evaluate('() => {__releaseLock();return __heldLock;}')
+                await sibling.close()
+            assert await page.evaluate("__requests.filter(r=>r.path==='api/v1/messages').length") == before
+            await page.locator('#send').click()
+            await expect(page.locator('#message-text')).to_have_value('')
+            assert await page.evaluate("__requests.filter(r=>r.path==='api/v1/messages').length") == before + 1
             # Retained totals are honest and the DOM remains bounded.
             await page.evaluate("__snapshot.relay.messages=Array.from({length:305},(_,i)=>__message('tail'+i,i%3===0?'user':i%3===1?'slot1':'slot2'));__snapshot.relay.total_messages=500;__update()")
             await expect(page.locator('#messages .message-row')).to_have_count(300)
@@ -277,7 +304,7 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
             (artifacts/'results.json').write_text(json.dumps({'fixture':True,'shared_workbench':not isolated,
                 'real_vendor_e2e':False,'checks':['three-column panels and independent toggles','visible Agent metadata','delivery summary','narrow panel focus/inertness','IM alignment','duplicate runtime identities','initial and incoming scroll',
                 'history anchor','draft/node preservation','binding disclosure/focus','safe Markdown/quotes/attachments',
-                'retry confirmation/cancel','uncertain send identity','300-message bound','locale switch','responsive light/dark'],
+                'retry confirmation/cancel','uncertain send identity','real cross-window Web Locks','300-message bound','locale switch','responsive light/dark'],
                 'browser_errors':errors},indent=2)+'\n',encoding='utf-8')
             print('Native IM browser fixture passed (not vendor E2E)',flush=True)
         finally:
