@@ -76,23 +76,49 @@ func TestHookReadinessHonorsDisabledParkCancellationAndRevocation(t *testing.T) 
 
 func TestHookReadinessWakesWithoutPublicationOrClaim(t *testing.T) {
 	e, a, _ := testEngine(t)
+	receiver := a[model.ActorSlot2]
+	// The probe waits only while its slot expects a peer reply; otherwise an
+	// empty inbox returns at once. Arm that before starting the waiter so the
+	// test no longer depends on the waiter checking after Send enqueues.
+	if _, err := e.Send(receiver, SendRequest{ID: "question", Text: "peer question"}); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		ready, err := e.WaitForPending(ctx, a[model.ActorSlot2])
+		ready, err := e.WaitForPending(ctx, receiver)
 		if err == nil && !ready {
 			err = errors.New("missing readiness")
 		}
 		done <- err
 	}()
-	if _, err := e.Send(a[model.ActorSlot1], SendRequest{ID: "new", Text: "new input"}); err != nil {
+	answer, err := e.Send(a[model.ActorSlot1], SendRequest{ID: "new", Text: "new input"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if e.Snapshot().Messages[0].State != "queued" {
-		t.Fatal("probe consumed the message")
+	for _, m := range e.Snapshot().Messages {
+		if m.ID == answer.ID && m.State != "queued" {
+			t.Fatalf("probe consumed the message: %s", m.State)
+		}
+	}
+}
+
+// Without an outstanding peer request, an empty inbox must not hold the hook:
+// the probe returns immediately instead of parking.
+func TestHookReadinessDoesNotWaitWithoutExpectedReply(t *testing.T) {
+	e, a, _ := testEngine(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	ready, err := e.WaitForPending(ctx, a[model.ActorSlot2])
+	if ready || err != nil {
+		t.Fatalf("idle probe: ready=%v err=%v", ready, err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("idle probe waited %s without an expected reply", elapsed)
 	}
 }
