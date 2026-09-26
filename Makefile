@@ -3,7 +3,10 @@ DIST ?= dist
 COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || printf dev)
 LAST_TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null || printf unknown)
 COMMITS_SINCE_TAG ?= $(shell git rev-list "$(LAST_TAG)..HEAD" --count 2>/dev/null || printf unknown)
-BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+# The commit's committer date in UTC keeps rebuilds of one commit reproducible
+# and identical to CI and Desktop builds; the wall clock is only a fallback
+# outside a Git checkout. Override with BUILD_DATE=... .
+BUILD_DATE ?= $(shell TZ=UTC git show -s --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd HEAD 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
 PYTHON ?= $(shell if command -v python3 >/dev/null 2>&1; then printf python3; elif command -v python >/dev/null 2>&1; then printf python; else printf python3; fi)
 DESKTOP_DIR ?= desktop
 DESKTOP_WAILS ?= wails3

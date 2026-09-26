@@ -167,7 +167,7 @@ jobs:
         run: |
           set -euo pipefail
           version="$(tr -d '\r\n' < VERSION)"
-          build_date="$(git show -s --format=%cI "${COMMIT}")"
+          build_date="$(TZ=UTC git show -s --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd "${COMMIT}")"
           last_tag="$(git describe --tags --abbrev=0 2>/dev/null || printf unknown)"
           commits_since_tag="$(git rev-list "${last_tag}..HEAD" --count 2>/dev/null || printf unknown)"
           filename="pairroom-cli-v${version}-${TARGET_GOOS}-${TARGET_GOARCH}${TARGET_EXTENSION}"
@@ -227,7 +227,7 @@ jobs:
         run: |
           set -euo pipefail
           version="$(tr -d '\r\n' < VERSION)"
-          build_date="$(git show -s --format=%cI "${COMMIT}")"
+          build_date="$(TZ=UTC git show -s --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd "${COMMIT}")"
           expected="${RUNNER_TEMP}/expected-artifacts.txt"
           actual="${RUNNER_TEMP}/actual-artifacts.txt"
           : > "${expected}"
@@ -273,7 +273,7 @@ jobs:
         run: |
           set -euo pipefail
           version="$(tr -d '\r\n' < VERSION)"
-          build_date="$(git show -s --format=%cI "${COMMIT}")"
+          build_date="$(TZ=UTC git show -s --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd "${COMMIT}")"
           go run scripts/releasemeta.go --dist dist/ci --version "${version}" --commit "${COMMIT}" --build-date "${build_date}"
           python scripts/check_go_versions.py artifacts \
             --provenance "dist/ci/pairroom-v${version}-provenance.json" \

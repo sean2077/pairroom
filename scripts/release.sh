@@ -6,7 +6,9 @@ cd "$ROOT"
 source "$ROOT/scripts/lib/python.sh"
 VERSION=${VERSION:-$(tr -d '\r\n' < VERSION)}
 COMMIT=${COMMIT:-$(git rev-parse HEAD)}
-BUILD_DATE=${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+# Default to the release commit's committer date in UTC so the same commit
+# always reports the same build date and rebuilds are reproducible.
+BUILD_DATE=${BUILD_DATE:-$(TZ=UTC git show -s --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd "$COMMIT")}
 LAST_TAG=${LAST_TAG:-$(git describe --tags --abbrev=0 2>/dev/null || printf unknown)}
 COMMITS_SINCE_TAG=${COMMITS_SINCE_TAG:-$(git rev-list "${LAST_TAG}..HEAD" --count 2>/dev/null || printf unknown)}
 DIST=${DIST:-dist}

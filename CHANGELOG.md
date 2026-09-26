@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Report one build date per commit. `make build` and `make release` used to stamp the current wall-clock time, while CI and Desktop builds used the commit date with its local UTC offset, so the same version could show different build dates in `pairroom version` and the Management Shell, and CLI rebuilds were not byte-reproducible. Every build now embeds the commit's committer date in UTC (for example `2026-09-26T13:52:32Z`); `BUILD_DATE` still overrides it.
+
 - Publish checksums for Desktop packages. Releases now include `pairroom-desktop-vX.Y.Z-SHA256SUMS`, covering the Windows setup executable, Linux `.deb` and `.AppImage`, and both macOS `.app.zip` packages; the release workflow verifies each package against its build-time checksum before attaching it and rechecks the attached files after upload. Previously only CLI assets had published checksums, although the installation guide told users to verify every download.
 
 - Keep Desktop from exiting in the middle of a tray **Restart Service**. Quitting while the embedded Service was draining for a restart used to exit at once, cutting active Turns and leaving `service.lock` behind, and a drain that failed left the old Service running untracked. Quit now waits for that drain within the usual shutdown timeout and retries a failed one; a failed drain no longer starts a replacement Service, and the tray reports that quitting retries it. Opening the window during the drain no longer starts a second Service.

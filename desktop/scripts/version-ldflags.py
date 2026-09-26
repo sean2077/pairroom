@@ -10,6 +10,7 @@ from the repository root, then honest development defaults.
 """
 from __future__ import annotations
 
+import datetime
 import os
 import pathlib
 import subprocess
@@ -33,13 +34,20 @@ def git_output(*args: str) -> str:
     return result.stdout.strip()
 
 
+def commit_date_utc(commit: str) -> str:
+    """The committer date as YYYY-MM-DDTHH:MM:SSZ, matching `make` and CI."""
+    stamp = git_output("show", "-s", "--format=%ct", commit)
+    if not stamp:
+        return ""
+    moment = datetime.datetime.fromtimestamp(int(stamp), tz=datetime.timezone.utc)
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def version_flags() -> str:
     commit = os.environ.get("COMMIT") or git_output("rev-parse", "HEAD") or "dev"
     last_tag = git_output("describe", "--tags", "--abbrev=0") or "unknown"
     commits = git_output("rev-list", f"{last_tag}..HEAD", "--count") or "unknown"
-    build_date = os.environ.get("BUILD_DATE") or git_output(
-        "show", "-s", "--format=%cI", commit
-    )
+    build_date = os.environ.get("BUILD_DATE") or commit_date_utc(commit)
     return (
         f"-X '{VERSION_PKG}.Commit={commit}' "
         f"-X '{VERSION_PKG}.BuildDate={build_date}' "
