@@ -35,12 +35,34 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const response = (data, status = 200) => ({ ok: status < 400, status, json: async () => data });
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
 
+// The client reports caught failures (including startup exceptions) only in
+// #status, so a failed assertion alone can read `'' !== '5000'`. Record each
+// page's status history and print the newest pages (the failing step's, including
+// concurrent tabs) when the run fails.
+const pages = [];
+function watchStatus(element, page) {
+  let text = '';
+  Object.defineProperty(element, 'textContent', { get: () => text, set: value => { text = value; } });
+  element.classList = { toggle(name, on) { if (name === 'error' && on) page.errors.push(text); } };
+}
+function reportPages(limit = 3) {
+  const first = Math.max(0, pages.length - limit);
+  if (first) console.error(`(${first} earlier Native page(s) omitted)`);
+  for (const [index, page] of pages.entries()) {
+    if (index < first) continue;
+    console.error(`Native page #${index + 1} created at ${page.origin}: status ${JSON.stringify(page.$('status').textContent)}; error statuses ${JSON.stringify(page.errors)}`);
+  }
+}
+
 async function fixture({ uploadFailure = false, storage, receipts = new Map(), draft = true, manager = locks(), hang = '', receiptGate } = {}) {
   const clock = timers();
   let hangNext = hang;
   if (!storage) { const values=new Map(); storage={getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)}; }
   const elements = new Map();
   const $ = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
+  const page = { $, errors: [], origin: (new Error().stack.split('\n')[2] || '').trim().replace(/^at /, '').replace(__dirname + path.sep, '') };
+  pages.push(page);
+  watchStatus($('status'), page);
   const document = { getElementById: $, createElement: tag => new Element(tag), createTextNode: text => Object.assign(new Element("#text"), {textContent:text}), addEventListener() {}, hidden: false, body: new Element('body'), querySelector: selector => selector === 'dialog[open]' ? null : $(selector), querySelectorAll: () => [] };
   $('target').value = 'slot2';
   const reads = [], uploads = [], sends = [], uploadGate = deferred();
@@ -204,4 +226,4 @@ async function main() {
   await unsupported.submit();assert.equal(unsupported.sends.length,0,'missing Web Locks allowed unsafe send');
   console.log('Native UI: bounded reads, accurate totals, UTF-8 validation, single submission and immutable retry payload passed.');
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+main().catch(error => { console.error(error); reportPages(); process.exitCode = 1; });
