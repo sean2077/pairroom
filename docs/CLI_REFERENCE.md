@@ -207,8 +207,8 @@ All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Norma
 | `status` / `peer` | Bounded body-free delivery summary by default (`--brief=false` for history) / optional peer session and Runtime metadata |
 | `park --enabled=false` | Disable hook parking without removing the binding; foreground wait remains available |
 | `nudge` | Print collection guidance only; no promise of native input injection |
-| `reconcile` | Reconcile pending publication and return a bounded summary by default; clear accepted, supplement definite absence with same sequence, otherwise retain unknown |
-| `reconcile --resend` / `--discard` | Explicit decision on an unknown pending publication; resend retains original key, discard retains consumed sequence |
+| `reconcile` | Reconcile pending publication, then any Stop replies held behind it in sequence order, and return a bounded summary by default; clear accepted, supplement definite absence with same sequence, otherwise retain unknown and send nothing behind it |
+| `reconcile --resend` / `--discard` | Explicit decision on the unknown oldest pending publication only; resend retains original key, discard retains consumed sequence; held replies then publish in order |
 | `unbind --purge-hooks` | Revoke binding, remove slot files and remove only owned hooks when no other local slot uses them |
 | `unbind --local-only` | Offline exit: remove the local slot files without contacting the Service; the server-side binding and generation stay active (the slot remains occupied) until an explicit unbind or `bind --replace` |
 | `hook --runtime <kind>` | Official hook JSON on stdin; publishes Stop first, then bounded park; not a user-authored identity shortcut |

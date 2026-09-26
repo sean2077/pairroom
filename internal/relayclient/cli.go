@@ -400,6 +400,9 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 			local["pending_seq"] = c.State.Pending.Seq
 			local["publication_unknown"] = c.State.Pending.Unknown
 		}
+		if len(c.State.Held) > 0 {
+			local["held_publications"] = len(c.State.Held)
+		}
 		result := map[string]any{"local": local, "relay": status}
 		if action == "status" && o.brief {
 			if summary, ok := status.(*relay.Summary); ok {

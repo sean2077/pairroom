@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -26,6 +27,24 @@ type Pending struct {
 	Unknown bool      `json:"unknown,omitempty"`
 }
 
+// maxPublicationBacklog bounds the Stop replies saved locally while the
+// Service cannot settle them: the pending head plus the held replies behind it.
+const maxPublicationBacklog = 8
+
+// maxPrivateFileBytes is the read limit for private state files. A held reply
+// is refused rather than written into a state file that could not be read
+// back, leaving headroom for the small fields later writes add.
+const (
+	maxPrivateFileBytes  = 2 << 20
+	maxBacklogStateBytes = maxPrivateFileBytes - 64<<10
+)
+
+var errReplyTooLarge = errors.New("final reply exceeds bounded publication size; nothing published")
+
+// errPublicationBacklogFull reports that a reply could not be saved behind the
+// unresolved backlog; no sequence was consumed for it.
+var errPublicationBacklogFull = errors.New("local publication backlog is full; reply not retained")
+
 type State struct {
 	Schema           int               `json:"schema"`
 	Room             string            `json:"room"`
@@ -39,9 +58,13 @@ type State struct {
 	LastSeq          uint64            `json:"last_seq"`
 	LastConfirmedSeq uint64            `json:"last_confirmed_seq"`
 	Pending          *Pending          `json:"pending,omitempty"`
-	Blocks           int               `json:"blocks"`
-	HarnessPID       int               `json:"harness_pid,omitempty"`
-	HarnessName      string            `json:"harness_name,omitempty"`
+	// Held are Stop replies saved behind an unresolved Pending head, in
+	// sequence order. None has been sent: each is reported under its original
+	// sequence only after every earlier one settles.
+	Held        []Pending `json:"held,omitempty"`
+	Blocks      int       `json:"blocks"`
+	HarnessPID  int       `json:"harness_pid,omitempty"`
+	HarnessName string    `json:"harness_name,omitempty"`
 	// LastHookAt is local-only observability: when the approved Stop hook last
 	// ran for this binding, so `relay status` can distinguish "hook never
 	// fires" from "hook fires but nothing routes". Never sent to the Service.
@@ -66,6 +89,10 @@ type Client struct {
 	// endpointErr defers a missing Service endpoint to the first relay call, so
 	// a Stop hook can still save its reply WAL while the Service is stopped.
 	endpointErr error
+	// unsent is the pending head's sequence while this process knows it saved
+	// that reply and has not reported it yet. It is never persisted: a head
+	// loaded from disk may have been sent, so it is queried first.
+	unsent uint64
 }
 
 func secureDir(root string, parts ...string) (string, error) {
@@ -93,7 +120,7 @@ func readPrivate(path string, value any) error {
 	if err != nil {
 		return err
 	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > 2<<20 {
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > maxPrivateFileBytes {
 		return errors.New("relay state must be a bounded regular file")
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
@@ -131,6 +158,9 @@ func loadLocal(dir string) (*Client, error) {
 	}
 	if !state.Slot.ValidParticipant() || state.Room == "" || state.BindID == "" {
 		return nil, errors.New("invalid relay state identity")
+	}
+	if !validBacklog(state) {
+		return nil, errors.New("invalid relay publication backlog; inspect before rebind")
 	}
 	var cred credentials
 	if err := readPrivate(filepath.Join(dir, "credentials"), &cred); err != nil {
@@ -198,113 +228,155 @@ func (c *Client) persist(next State) error {
 	return nil
 }
 
-// Reconcile queries the original identity before any automatic retransmission.
-// Transport uncertainty preserves the only pending slot and never allocates a
-// new sequence. A same-sequence supplement is permitted only after a negative
-// authoritative receipt query, or an explicit operator resend decision.
+// Reconcile settles the pending head and then each held reply, strictly in
+// sequence order. A head this process saved and never reported is reported
+// directly. Any other head may already have been sent, so its original
+// identity is queried before any automatic retransmission; transport
+// uncertainty keeps it, marks it unknown and sends nothing behind it. A
+// same-sequence supplement is permitted only after a negative authoritative
+// receipt query, or an explicit operator resend decision, which applies to
+// the current head only. A held reply was never sent, so reporting it after
+// its predecessor settles is its first publication, not a replay.
 func (c *Client) Reconcile(ctx context.Context, force bool) error {
-	if c.State.Pending == nil {
-		return nil
+	if c.State.Pending != nil && c.endpointErr != nil {
+		// Nothing can be sent or queried; the backlog stays exactly as saved.
+		return c.endpointErr
 	}
-	p := *c.State.Pending
-	var receipt struct {
-		Accepted *bool `json:"accepted"`
-	}
-	err := c.call(ctx, "publication", map[string]any{"report_seq": p.Seq}, &receipt)
-	if (err != nil || receipt.Accepted == nil) && !force {
-		p.Unknown = true
-		next := c.State
-		next.Pending = &p
-		_ = c.persist(next)
-		return relay.ErrUnknown
-	}
-	if receipt.Accepted == nil || !*receipt.Accepted {
-		var accepted relay.Publication
-		if err := c.call(ctx, "report", map[string]any{"report_seq": p.Seq, "text": p.Text}, &accepted); err != nil {
-			p.Unknown = true
-			next := c.State
-			next.Pending = &p
-			_ = c.persist(next)
-			return relay.ErrUnknown
+	for c.State.Pending != nil {
+		p := *c.State.Pending
+		accepted := false
+		if p.Seq != c.unsent {
+			var receipt struct {
+				Accepted *bool `json:"accepted"`
+			}
+			err := c.call(ctx, "publication", map[string]any{"report_seq": p.Seq}, &receipt)
+			if (err != nil || receipt.Accepted == nil) && !force {
+				return c.markUnknown(p)
+			}
+			accepted = receipt.Accepted != nil && *receipt.Accepted
 		}
-		if accepted.ReportSeq != p.Seq || accepted.BindID != c.State.BindID || accepted.Generation != c.State.Generation {
-			return relay.ErrUnknown
+		if !accepted {
+			// From here an attempt may exist; only a receipt query settles it.
+			c.unsent = 0
+			var result relay.Publication
+			if err := c.call(ctx, "report", map[string]any{"report_seq": p.Seq, "text": p.Text}, &result); err != nil {
+				return c.markUnknown(p)
+			}
+			if result.ReportSeq != p.Seq || result.BindID != c.State.BindID || result.Generation != c.State.Generation {
+				return relay.ErrUnknown
+			}
 		}
+		next := c.State.advance()
+		next.LastConfirmedSeq = p.Seq
+		if err := c.persist(next); err != nil {
+			return err
+		}
+		if c.State.Pending != nil {
+			c.unsent = c.State.Pending.Seq
+		}
+		force = false
 	}
-	next := c.State
-	next.Pending = nil
-	next.LastConfirmedSeq = p.Seq
-	return c.persist(next)
+	return nil
 }
+
+// Publish settles the existing backlog first and publishes text only after
+// it is empty, so a reply that could not be saved never overtakes it.
 func (c *Client) Publish(ctx context.Context, text string) error {
 	if err := c.Reconcile(ctx, false); err != nil {
 		return err
 	}
+	if err := c.ReservePublication(text); err != nil {
+		return err
+	}
+	return c.Reconcile(ctx, false)
+}
+
+func (c *Client) markUnknown(p Pending) error {
+	p.Unknown = true
+	next := c.State
+	next.Pending = &p
+	_ = c.persist(next)
+	return relay.ErrUnknown
+}
+
+// ReservePublication claims the next report sequence and persists the reply
+// body as the WAL before any HTTP for this invocation, so a stopped Service or
+// a transient metadata failure cannot lose the reply without a trace. With no
+// pending publication the reply becomes the head; behind an unresolved head
+// it is held, never sent until everything before it settles. A full backlog
+// refuses the reply without consuming a sequence.
+func (c *Client) ReservePublication(text string) error {
 	if len(text) > relay.MaxBodyBytes {
-		return errors.New("final reply exceeds bounded publication size; nothing published")
+		return errReplyTooLarge
 	}
 	next := c.State
 	next.LastSeq++
-	next.Pending = &Pending{Seq: next.LastSeq, Text: text, At: time.Now().UTC()}
+	p := Pending{Seq: next.LastSeq, Text: text, At: time.Now().UTC()}
+	if next.Pending == nil {
+		next.Pending = &p
+	} else {
+		if 1+len(next.Held) >= maxPublicationBacklog {
+			return errPublicationBacklogFull
+		}
+		next.Held = append(slices.Clone(next.Held), p)
+		// Mirrors relay.AtomicJSON's encoding: never write a state file that
+		// the bounded reader would then refuse.
+		data, err := json.MarshalIndent(next, "", "  ")
+		if err != nil {
+			return err
+		}
+		if len(data) > maxBacklogStateBytes {
+			return errPublicationBacklogFull
+		}
+	}
 	// This one replacement is the seq claim and body WAL. No HTTP before it.
 	if err := c.persist(next); err != nil {
 		return err
 	}
-	var result relay.Publication
-	if err := c.call(ctx, "report", map[string]any{"report_seq": next.LastSeq, "text": text}, &result); err != nil {
-		return relay.ErrUnknown
+	if next.Pending.Seq == p.Seq {
+		c.unsent = p.Seq
 	}
-	if result.ReportSeq != next.LastSeq || result.BindID != next.BindID || result.Generation != next.Generation {
-		return relay.ErrUnknown
-	}
-	next = c.State
-	next.Pending = nil
-	next.LastConfirmedSeq = next.LastSeq
-	return c.persist(next)
+	return nil
 }
 
-// ReservePublication claims the next report sequence and persists the reply
-// body as the WAL before any HTTP for this invocation, so a transient
-// metadata failure cannot lose the reply without a trace. It requires an
-// empty pending slot; an unresolved earlier publication must go through the
-// ordinary Reconcile-then-Publish path instead of overwriting the only
-// pending record.
-func (c *Client) ReservePublication(text string) error {
-	if c.State.Pending != nil {
-		return errors.New("publication reservation requires a reconciled pending slot")
+// DiscardPending is the explicit decision to abandon the uncertain head. Its
+// consumed sequence is retained so a later observed jump records a gap. The
+// next held reply becomes the head without being sent.
+func (c *Client) DiscardPending() error { return c.persist(c.State.advance()) }
+
+// advance drops the pending head and promotes the next held reply, so the
+// backlog never has held replies without a head.
+func (s State) advance() State {
+	s.Pending = nil
+	if len(s.Held) > 0 {
+		head := s.Held[0]
+		s.Pending = &head
+		s.Held = slices.Clone(s.Held[1:])
+		if len(s.Held) == 0 {
+			s.Held = nil
+		}
 	}
-	if len(text) > relay.MaxBodyBytes {
-		return errors.New("final reply exceeds bounded publication size; nothing published")
-	}
-	next := c.State
-	next.LastSeq++
-	next.Pending = &Pending{Seq: next.LastSeq, Text: text, At: time.Now().UTC()}
-	// This one replacement is the seq claim and body WAL. No HTTP before it.
-	return c.persist(next)
+	return s
 }
 
-// PublishReserved reports the already-reserved pending publication. It never
-// allocates a sequence or rewrites the WAL; an ambiguous result keeps the
-// reservation for the next reconciliation.
-func (c *Client) PublishReserved(ctx context.Context) error {
-	if c.State.Pending == nil {
-		return errors.New("no reserved publication to report")
+// validBacklog accepts no pending publication, a head alone as older CLIs
+// wrote it, or a head followed by a bounded run of never-sent replies with
+// the next consecutive sequences.
+func validBacklog(s State) bool {
+	if len(s.Held) == 0 {
+		return true
 	}
-	p := *c.State.Pending
-	var result relay.Publication
-	if err := c.call(ctx, "report", map[string]any{"report_seq": p.Seq, "text": p.Text}, &result); err != nil {
-		return relay.ErrUnknown
+	if s.Pending == nil || 1+len(s.Held) > maxPublicationBacklog || s.Held[len(s.Held)-1].Seq != s.LastSeq {
+		return false
 	}
-	if result.ReportSeq != p.Seq || result.BindID != c.State.BindID || result.Generation != c.State.Generation {
-		return relay.ErrUnknown
+	for i, h := range s.Held {
+		if h.Seq != s.Pending.Seq+uint64(i)+1 || h.Unknown || len(h.Text) > relay.MaxBodyBytes {
+			return false
+		}
 	}
-	next := c.State
-	next.Pending = nil
-	next.LastConfirmedSeq = p.Seq
-	return c.persist(next)
+	return true
 }
 
-func (c *Client) DiscardPending() error { next := c.State; next.Pending = nil; return c.persist(next) }
 func cleanupAtomicTemps(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {

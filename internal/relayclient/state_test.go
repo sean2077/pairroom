@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -48,6 +49,7 @@ type publicationServer struct {
 	mu                                                  sync.Mutex
 	accepted                                            map[uint64]bool
 	reports, queries                                    int
+	reported                                            []uint64
 	dropBefore, dropAfter, queryUnknown, queryMalformed bool
 	acks                                                int
 }
@@ -77,6 +79,7 @@ func (s *publicationServer) serve(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]bool{"accepted": s.accepted[input.Seq]})
 	case "report":
 		s.reports++
+		s.reported = append(s.reported, input.Seq)
 		if s.dropBefore {
 			http.Error(w, "before acceptance", http.StatusServiceUnavailable)
 			return
@@ -108,12 +111,16 @@ func TestReservePublicationClaimsWALBeforeAnyHTTP(t *testing.T) {
 	if reports != 0 || queries != 0 {
 		t.Fatalf("reservation must be local-only: reports=%d queries=%d", reports, queries)
 	}
-	if err := c.ReservePublication("second"); err == nil {
-		t.Fatal("a second reservation must not overwrite the only pending slot")
+	// A second reservation is held behind the head, never overwriting it.
+	if err := c.ReservePublication("second"); err != nil {
+		t.Fatal(err)
+	}
+	if c.State.Pending.Seq != 1 || c.State.Pending.Text != "reply @codex" || len(c.State.Held) != 1 || c.State.Held[0].Seq != 2 || c.State.LastSeq != 2 {
+		t.Fatalf("second reservation displaced the head: %#v", c.State)
 	}
 }
 
-func TestPublishReservedFailureKeepsReservationForSameSeqReconcile(t *testing.T) {
+func TestReservedReportFailureKeepsReservationForSameSeqReconcile(t *testing.T) {
 	c, server := publicationClient(t)
 	if err := c.ReservePublication("reply @codex"); err != nil {
 		t.Fatal(err)
@@ -121,7 +128,7 @@ func TestPublishReservedFailureKeepsReservationForSameSeqReconcile(t *testing.T)
 	server.mu.Lock()
 	server.dropBefore = true
 	server.mu.Unlock()
-	if err := c.PublishReserved(context.Background()); !errors.Is(err, relay.ErrUnknown) {
+	if err := c.Reconcile(context.Background(), false); !errors.Is(err, relay.ErrUnknown) {
 		t.Fatalf("reserved report failure = %v, want ErrUnknown", err)
 	}
 	if c.State.Pending == nil || c.State.Pending.Seq != 1 {
@@ -145,22 +152,23 @@ func TestPublishReservedFailureKeepsReservationForSameSeqReconcile(t *testing.T)
 	}
 }
 
-func TestPublishReservedReportsAndClearsReservation(t *testing.T) {
+func TestReservedReportClearsReservationWithoutQuery(t *testing.T) {
 	c, server := publicationClient(t)
 	if err := c.ReservePublication("reply"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.PublishReserved(context.Background()); err != nil {
+	if err := c.Reconcile(context.Background(), false); err != nil {
 		t.Fatal(err)
 	}
 	if c.State.Pending != nil || c.State.LastConfirmedSeq != 1 {
 		t.Fatalf("state after reserved publish: %#v", c.State)
 	}
 	server.mu.Lock()
-	reports := server.reports
+	reports, queries := server.reports, server.queries
 	server.mu.Unlock()
-	if reports != 1 {
-		t.Fatalf("reports = %d, want exactly one", reports)
+	// This process saved the reservation and never sent it: no receipt query.
+	if reports != 1 || queries != 0 {
+		t.Fatalf("reports=%d queries=%d, want exactly one report", reports, queries)
 	}
 }
 
@@ -280,6 +288,204 @@ func TestExplicitPendingDiscardRetainsConsumedSequence(t *testing.T) {
 	}
 	if !server.accepted[2] || server.accepted[1] {
 		t.Fatal("explicit discard did not retain consumed seq")
+	}
+}
+
+// An attempted head with an uncertain outcome is only ever queried by its
+// original key; the held replies behind it wait and are never sent early.
+func TestUncertainHeadHoldsBacklogWithoutReplay(t *testing.T) {
+	c, server := publicationClient(t)
+	server.dropAfter = true
+	if err := c.Publish(context.Background(), "@codex accepted but response lost"); !errors.Is(err, relay.ErrUnknown) {
+		t.Fatalf("lost response = %v, want ErrUnknown", err)
+	}
+	server.dropAfter = false
+	for _, text := range []string{"@codex held two", "@codex held three"} {
+		if err := c.ReservePublication(text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server.queryUnknown = true
+	if err := c.Reconcile(context.Background(), false); !errors.Is(err, relay.ErrUnknown) {
+		t.Fatalf("unavailable receipt = %v, want ErrUnknown", err)
+	}
+	if server.reports != 1 || c.State.Pending == nil || c.State.Pending.Seq != 1 || !c.State.Pending.Unknown || len(c.State.Held) != 2 {
+		t.Fatalf("uncertain head was replayed or overtaken: reports=%d state=%+v", server.reports, c.State)
+	}
+	// A fresh process sees the same backlog; the head is still queried first.
+	fresh, err := load(c.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.queryUnknown = false
+	if err := fresh.Reconcile(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(server.reported) != "[1 2 3]" || server.queries != 2 {
+		t.Fatalf("reported=%v queries=%d; want accepted head never resent and held replies once in order", server.reported, server.queries)
+	}
+	if fresh.State.Pending != nil || fresh.State.Held != nil || fresh.State.LastConfirmedSeq != 3 || fresh.State.LastSeq != 3 {
+		t.Fatalf("backlog not settled: %+v", fresh.State)
+	}
+}
+
+// A crash after the Service accepted a promoted held reply but before the
+// local write is recovered by the original key, not by sending it again.
+func TestPromotedHeldReplyLostConfirmationIsQueriedNotResent(t *testing.T) {
+	c, server := publicationClient(t)
+	server.dropBefore = true
+	_ = c.Publish(context.Background(), "@codex one")
+	server.dropBefore = false
+	if err := c.ReservePublication("@codex two"); err != nil {
+		t.Fatal(err)
+	}
+	save := c.Save
+	c.Save = func(s State) error {
+		if s.LastConfirmedSeq == 2 {
+			return errors.New("crash clearing seq 2")
+		}
+		return save(s)
+	}
+	if c.Reconcile(context.Background(), false) == nil {
+		t.Fatal("confirmation failure ignored")
+	}
+	fresh, err := load(c.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fresh.Reconcile(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(server.reported) != "[1 1 2]" || fresh.State.LastConfirmedSeq != 2 || fresh.State.Pending != nil {
+		t.Fatalf("reported=%v state=%+v; accepted seq 2 must not be sent twice", server.reported, fresh.State)
+	}
+}
+
+func TestExplicitRecoveryAppliesToHeadOnly(t *testing.T) {
+	t.Run("discard", func(t *testing.T) {
+		c, server := publicationClient(t)
+		server.dropBefore = true
+		_ = c.Publish(context.Background(), "@codex abandoned")
+		if err := c.ReservePublication("@codex held"); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.DiscardPending(); err != nil {
+			t.Fatal(err)
+		}
+		if c.State.Pending == nil || c.State.Pending.Seq != 2 || c.State.Held != nil || c.State.LastSeq != 2 {
+			t.Fatalf("discard did not promote the held reply: %+v", c.State)
+		}
+		server.dropBefore = false
+		if err := c.Reconcile(context.Background(), false); err != nil {
+			t.Fatal(err)
+		}
+		// The discarded sequence stays consumed, so the Service observes a gap.
+		if server.accepted[1] || !server.accepted[2] || c.State.LastConfirmedSeq != 2 {
+			t.Fatalf("discard changed identity: accepted=%v state=%+v", server.accepted, c.State)
+		}
+	})
+	t.Run("resend", func(t *testing.T) {
+		c, server := publicationClient(t)
+		server.dropBefore = true
+		_ = c.Publish(context.Background(), "@codex uncertain")
+		if err := c.ReservePublication("@codex held"); err != nil {
+			t.Fatal(err)
+		}
+		server.dropBefore = false
+		server.queryUnknown = true
+		if err := c.Reconcile(context.Background(), true); err != nil {
+			t.Fatal(err)
+		}
+		if fmt.Sprint(server.reported) != "[1 1 2]" || c.State.LastConfirmedSeq != 2 || c.State.Pending != nil {
+			t.Fatalf("reported=%v state=%+v; want head supplemented under seq 1, held sent once as seq 2", server.reported, c.State)
+		}
+	})
+}
+
+func TestLoadAcceptsSinglePendingStateFromEarlierCLI(t *testing.T) {
+	c, server := publicationClient(t)
+	// The exact shape earlier schema-2 CLIs wrote: one pending, no held list.
+	legacy := fmt.Sprintf(`{"schema":2,"room":"room","slot":"slot1","runtime":"claude","workspace":%q,"endpoint_path":%q,"bind_id":"binding","generation":1,"session_id":"session","last_seq":4,"last_confirmed_seq":3,"pending":{"seq":4,"text":"@codex legacy pending","at":"2026-09-20T10:00:00Z","unknown":true},"blocks":0}`, c.State.Workspace, c.State.EndpointPath)
+	if err := os.WriteFile(filepath.Join(c.Dir, "state.json"), []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := load(c.Dir)
+	if err != nil {
+		t.Fatalf("earlier single-pending state rejected: %v", err)
+	}
+	if fresh.State.Pending == nil || fresh.State.Pending.Seq != 4 || fresh.State.Held != nil {
+		t.Fatalf("legacy pending misread: %+v", fresh.State)
+	}
+	if err := fresh.Reconcile(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if server.queries != 1 || fmt.Sprint(server.reported) != "[4]" || fresh.State.LastConfirmedSeq != 4 {
+		t.Fatalf("legacy pending not reconciled by its original key: queries=%d reported=%v", server.queries, server.reported)
+	}
+}
+
+func TestLoadRejectsMalformedPublicationBacklog(t *testing.T) {
+	held := func(seqs ...uint64) []Pending {
+		out := []Pending{}
+		for _, seq := range seqs {
+			out = append(out, Pending{Seq: seq, Text: "held"})
+		}
+		return out
+	}
+	cases := map[string]func(*State){
+		"held without head":   func(s *State) { s.Pending = nil; s.Held = held(4) },
+		"sequence gap":        func(s *State) { s.Held = held(5); s.LastSeq = 5 },
+		"reordered":           func(s *State) { s.Held = held(5, 4); s.LastSeq = 5 },
+		"stale watermark":     func(s *State) { s.Held = held(4, 5); s.LastSeq = 4 },
+		"attempted held":      func(s *State) { s.Held = []Pending{{Seq: 4, Text: "held", Unknown: true}} },
+		"beyond backlog cap":  func(s *State) { s.Held = held(4, 5, 6, 7, 8, 9, 10, 11); s.LastSeq = 11 },
+		"oversized held body": func(s *State) { s.Held = []Pending{{Seq: 4, Text: strings.Repeat("x", relay.MaxBodyBytes+1)}} },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			c, _ := publicationClient(t)
+			s := c.State
+			s.LastSeq, s.LastConfirmedSeq, s.Pending = 4, 2, &Pending{Seq: 3, Text: "head"}
+			mutate(&s)
+			if err := relay.AtomicJSON(filepath.Join(c.Dir, "state.json"), s); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := load(c.Dir); err == nil || !strings.Contains(err.Error(), "backlog") {
+				t.Fatalf("malformed backlog accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestReservePublicationRefusesBeyondBacklogBounds(t *testing.T) {
+	c, _ := publicationClient(t)
+	for i := 1; i <= maxPublicationBacklog; i++ {
+		if err := c.ReservePublication(fmt.Sprintf("reply %d", i)); err != nil {
+			t.Fatalf("reply %d within the backlog refused: %v", i, err)
+		}
+	}
+	if err := c.ReservePublication("one too many"); !errors.Is(err, errPublicationBacklogFull) || c.State.LastSeq != maxPublicationBacklog {
+		t.Fatalf("count cap = %v, last_seq %d", err, c.State.LastSeq)
+	}
+	// JSON escaping expands a control character sixfold, so a few maximal
+	// bodies exceed the reader's limit. The byte guard refuses the reply
+	// instead of writing a state file load would reject.
+	c, _ = publicationClient(t)
+	escaped := strings.Repeat(string(rune(1)), relay.MaxBodyBytes)
+	for i := 0; ; i++ {
+		err := c.ReservePublication(escaped)
+		if errors.Is(err, errPublicationBacklogFull) {
+			if i < 1 || i >= maxPublicationBacklog {
+				t.Fatalf("byte guard triggered after %d replies", i)
+			}
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := load(c.Dir); err != nil {
+		t.Fatalf("saved backlog is no longer readable: %v", err)
 	}
 }
 

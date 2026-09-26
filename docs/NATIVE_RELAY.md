@@ -144,7 +144,7 @@ Use background wait only where the harness actually surfaces its completion. Hum
 | Symptom | Action |
 |---|---|
 | `pairroom` is missing in the Agent's shell | Fix that shell's PATH and verify its CLI version, not just Desktop startup |
-| Service is unavailable | Start/reuse the intended Service; a custom data root uses `--service-file <root>/relay-endpoint.json`, never pasted file contents |
+| Service is unavailable | Start/reuse the intended Service; a custom data root uses `--service-file <root>/relay-endpoint.json`, never pasted file contents. Up to eight Stop replies given meanwhile stay saved and publish in order at the next Stop or `relay reconcile`; a reply beyond that is reported on stderr as not retained |
 | Hook missing or unapproved | Install for the intended Runtime and review the exact native definition |
 | Missing/conflicting session identity | Run bind as the Agent's tool call in the intended session; do not fabricate metadata |
 | Binding not found after a directory change | Follow [workspace recovery](NATIVE_SESSION_WORKSPACE.md#upgrade-and-recovery), not another workspace's credentials |

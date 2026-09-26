@@ -131,21 +131,27 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		next.Blocks = 0
 	}
 	c.State = next
-	// Reserve the reply WAL before any HTTP for this invocation: a transient
-	// confirm failure then leaves a reconcilable pending publication instead
-	// of losing this Stop reply without a trace. Only a clean pending slot
-	// qualifies; an unresolved earlier publication keeps the ordinary Publish
-	// path, which reconciles it first.
-	reserved := hook.Event == "Stop" && hook.LastAssistantMessage != nil && !hook.Clipped &&
-		len(*hook.LastAssistantMessage) <= relay.MaxBodyBytes && c.State.Pending == nil
-	if reserved {
-		if err := c.ReservePublication(*hook.LastAssistantMessage); err != nil {
+	// Reserve the reply WAL before any HTTP for this invocation: a stopped
+	// Service or a transient confirm failure then leaves a reconcilable
+	// publication instead of losing this Stop reply without a trace. Behind an
+	// unresolved publication the reply is held in order; only a full backlog
+	// falls back to Publish, which reconciles first and never overtakes it.
+	eligible := hook.Event == "Stop" && hook.LastAssistantMessage != nil && !hook.Clipped &&
+		len(*hook.LastAssistantMessage) <= relay.MaxBodyBytes
+	reserved := false
+	if eligible {
+		err := c.ReservePublication(*hook.LastAssistantMessage)
+		if err != nil && !errors.Is(err, errPublicationBacklogFull) {
 			release()
 			return err
 		}
-	} else if err := c.persist(next); err != nil {
-		release()
-		return err
+		reserved = err == nil
+	}
+	if !reserved {
+		if err := c.persist(next); err != nil {
+			release()
+			return err
+		}
 	}
 	if err := captureClaudeInbox(c.Dir, c.State); err != nil {
 		_, _ = fmt.Fprintln(diagnostic, "PairRoom: Claude external wake is unavailable; relay publication and collection remain available.")
@@ -208,14 +214,27 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		}
 		return grokContinuation(ctx, c, grokClippedReplyNotice, out)
 	}
+	lastSeq := c.State.LastSeq
 	if reserved {
-		err = c.PublishReserved(publicationCtx)
+		err = c.Reconcile(publicationCtx, false)
 	} else {
 		err = c.Publish(publicationCtx, *hook.LastAssistantMessage)
+		// Partial progress may have made room behind a still-unresolved head.
+		if err != nil && eligible && c.State.LastSeq == lastSeq && c.ReservePublication(*hook.LastAssistantMessage) == nil {
+			reserved = true
+		}
 	}
 	cancelPublication()
 	release()
-	if err != nil {
+	if err != nil && eligible && !reserved && c.State.LastSeq == lastSeq {
+		// No sequence was consumed, so this reply is saved nowhere. Say so
+		// plainly instead of dropping it silently.
+		backlog := ""
+		if c.State.Pending != nil {
+			backlog = fmt.Sprintf(" behind %d unpublished earlier replies (local backlog full)", 1+len(c.State.Held))
+		}
+		_, _ = fmt.Fprintf(diagnostic, "PairRoom: this reply was NOT retained%s. Run pairroom relay reconcile once the Service is available, then publish this reply explicitly with pairroom relay send if it matters.\n", backlog)
+	} else if err != nil {
 		// Spec §6 decoupling: a failed or uncertain publication retains its
 		// pending state for the next hook's reconciliation and must not
 		// suppress this hook's receive-side park. The diagnostic goes to

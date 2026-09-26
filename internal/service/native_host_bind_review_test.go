@@ -11,6 +11,7 @@ import (
 
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
+	"github.com/sean2077/pairroom/internal/relayclient"
 )
 
 // Synthetic vendor inputs through the actual CLI/HTTP/Registry/Engine path.
@@ -46,6 +47,52 @@ func TestNativeRejectedCLIBindKeepsOriginalRelayUsable(t *testing.T) {
 	out, err := f.hook(t, a, "current contribution complete", false)
 	if err != nil || !strings.Contains(string(out), "original collection survives") {
 		t.Fatalf("original hook stopped collecting: %s %v", out, err)
+	}
+}
+
+// Stop replies saved while the endpoint file is absent reach the real Engine
+// in order under their original sequences, with no gap and no duplicate.
+func TestNativeStopBacklogPublishesInOrderAfterServiceReturns(t *testing.T) {
+	f := nativeHTTP(t)
+	a := associateCLI(t, f, model.ActorSlot1)
+	associateCLI(t, f, model.ActorSlot2)
+	endpoint, err := os.ReadFile(f.endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(f.endpoint); err != nil {
+		t.Fatal(err)
+	}
+	stopped := []string{"@codex first while stopped", "private unaddressed reply", "@codex third while stopped"}
+	for _, text := range stopped {
+		if _, err := f.hook(t, a, text, false); err == nil || !strings.Contains(err.Error(), "is PairRoom running") {
+			t.Fatalf("stopped Service not reported: %v", err)
+		}
+	}
+	if err := os.WriteFile(f.endpoint, endpoint, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run(t, []string{"reconcile", "--room", f.room.ID, "--slot", "1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var peer []string
+	for seq := uint64(1); seq <= 3; seq++ {
+		p, ok, err := f.native.engine.Publication(a, seq)
+		if err != nil || !ok || p.GapFrom != 0 {
+			t.Fatalf("seq %d not published exactly: %+v ok=%v err=%v", seq, p, ok, err)
+		}
+		if p.Message != nil {
+			peer = append(peer, p.Message.Text)
+		}
+	}
+	// The unaddressed reply records only its receipt; routed bodies keep order.
+	if got := strings.Join(peer, "|"); got != stopped[0]+"|"+stopped[2] {
+		t.Fatalf("peer messages = %q", got)
+	}
+	var local relayclient.State
+	data, err := os.ReadFile(filepath.Join(f.project.Root, ".pairroom", "rooms", f.room.ID, "slots", "slot1", "state.json"))
+	if err != nil || json.Unmarshal(data, &local) != nil || local.Pending != nil || local.Held != nil || local.LastConfirmedSeq != 3 {
+		t.Fatalf("local backlog not settled: %+v %v", local, err)
 	}
 }
 
