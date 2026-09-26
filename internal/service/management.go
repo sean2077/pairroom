@@ -956,9 +956,10 @@ func (s *ManagementServer) lockRoom(roomID string) func() {
 
 // scopedRelaySetupRoute lists the exact Management operations the relay CLI
 // performs with the relay-endpoint.json token: read-only service/profile/
-// catalog discovery, Project registration, native Room creation, and the
-// native binding lifecycle. Everything else — including browser session
-// bootstrap — requires the full Management token or a browser session.
+// catalog discovery, Project registration, native Room creation, and native
+// bind (POST only; unbind is not admitted). Everything else — including
+// browser session bootstrap — requires the full Management token or a browser
+// session. Keep SECURITY.md's route list in sync.
 func scopedRelaySetupRoute(method, path string) bool {
 	switch {
 	case method == http.MethodGet && (path == "/api/v1/service" || path == "/api/v1/agent-pair-profiles" || path == "/api/v1/agent-catalog"):
