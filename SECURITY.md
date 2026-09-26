@@ -90,7 +90,7 @@ Data directories/files use conservative permissions where supported. Auditable e
 
 The Registry can be rebuilt from authoritative Room records. Checkpoint failure blocks mutations when consistency cannot be proven. One Service owns a data root. Recover a crash-stale lock only after proving its recorded PID is gone; do not delete a live owner's lock.
 
-Backup/restore validates paths, links, duplicates, declared files, bounds, hashes, and archive integrity. Outputs must be outside the source Room directory, including symlink aliases. A Room archive excludes the user's repository and native session stores; a full Service rollback needs a separate offline data-root backup. [Storage](docs/STORAGE.md) and [Operations](docs/OPERATIONS.md#backup) own the procedures.
+Backup/restore validates paths, links, duplicates, declared files, bounds, hashes, and archive integrity. Restore accepts only the Room file set (`events.jsonl`, `metadata.json`, and each attachment manifest with the one content file it names) and rejects any other name, including alternate data streams, Windows device names, and names ending in a dot or space. Outputs must be outside the source Room directory, including symlink aliases. A Room archive excludes the user's repository and native session stores; a full Service rollback needs a separate offline data-root backup. [Storage](docs/STORAGE.md) and [Operations](docs/OPERATIONS.md#backup) own the procedures.
 
 Recovery does not re-execute uncertain or accepted native work automatically. The Event Log is not an exactly-once side-effect mechanism or a tamper-proof compliance ledger. Do not hand-edit sequence/schema/Binding/image identity fields to bypass verification.
 

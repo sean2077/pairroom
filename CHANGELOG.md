@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Restore only the Room file set from a backup. `pairroom restore` accepted any extra path declared in a crafted archive's manifest, including Windows alternate data streams and unrelated files, and placed it in the restored Room directory. Restore now accepts only `events.jsonl`, `metadata.json` and verified attachment manifests with the content file each names, and rejects device names and names ending in a dot or space. Backups made by PairRoom are unaffected.
+
 - Stop an open in-app Room tab from stalling Service shutdown. The Room event stream proxied through the Management listener never ended by itself, so graceful shutdown waited the full `--shutdown-timeout` (10 minutes by default) and then force-closed in-flight requests. Shutdown now ends those streams first; other in-flight requests still drain normally.
 
 - Prevent Native relay traffic from reactivating a Room while it is being archived or renamed. A relay request arriving between runtime suspension and the lifecycle commit could restart the runtime, leaving an archived Room with a live runtime and two writers on one Event Log; the resulting duplicate sequence made the Room fail to reopen. Archive and rename now hold an activation barrier across that window (activation returns 409 `room_lifecycle_in_progress`), and a lifecycle append refuses while any runtime still owns the Room's Event Log.
