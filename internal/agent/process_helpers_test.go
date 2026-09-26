@@ -43,6 +43,10 @@ func runClaudeScriptHelper(mode string, args []string) int {
 		return 0
 	}
 	writeHelperPID()
+	if path := os.Getenv("PAIRROOM_HELPER_ARGS_FILE"); path != "" {
+		raw, _ := json.Marshal(args)
+		_ = os.WriteFile(path, raw, 0o600)
+	}
 	defer holdAfterEOF()
 	out := bufio.NewWriter(os.Stdout)
 	emit := func(line string) {

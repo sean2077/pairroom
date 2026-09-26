@@ -32,6 +32,8 @@ Effective Permission profiles (`configured`, `read-only`, `yolo`) can change onl
 
 Commands are not Room selections. Service templates `runtimes.claude`, `runtimes.codex`, and `runtimes.grok` own executable `command`/`args`, preventing a Room request from choosing an executable. Arguments must not preselect model, effort, approval, permission, sandbox, or bypass values that belong to selection/policy projection.
 
+On Windows, a command that resolves to a `.cmd`/`.bat` launcher (the npm shim form) runs through `cmd.exe`, which re-parses the command line. Embedded startup therefore fails closed when any argument for such a launcher, including model, effort, template args, and CC Switch provider arguments, contains `&`, `|`, `<`, `>`, `^`, `%`, `!`, or a control character; the error names the value. The Claude session name, which is display metadata derived from the Room name, is neutralized instead, with those characters and `"` replaced by their full-width forms. To use such a value, point the template command at the CLI executable rather than its shim.
+
 | Runtime | Accepted policy values |
 |---|---|
 | Claude Code | `permission_mode`: `default`, `manual`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, `yolo` |

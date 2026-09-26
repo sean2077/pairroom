@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"time"
@@ -128,9 +129,16 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 		Model: c.cfg.Model, Effort: c.cfg.Effort, PermissionMode: c.cfg.PermissionMode, ProbedAt: time.Now().UTC(),
 	}
 	flags := map[string]bool{}
+	batchLauncher := false
 	if probeErr == nil {
 		info = probe.RuntimeInfo(c.cfg)
 		flags = probe.SupportedFlags
+		batchLauncher = isBatchLauncher(goruntime.GOOS, probe.Path)
+		if batchLauncher {
+			// The session name is display metadata derived from the Room name;
+			// neutralize it rather than refusing a Room called "R&D".
+			info.SessionName = cmdSafeDisplayText(info.SessionName)
+		}
 	} else {
 		info.Warnings = []string{probeErr.Error()}
 	}
@@ -222,6 +230,12 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 		return err
 	}
 	c.mu.Unlock()
+	if batchLauncher {
+		if err := checkBatchLauncherArgs("Claude Code", probe.Path, args); err != nil {
+			c.setState(model.StateError, err.Error())
+			return err
+		}
+	}
 
 	cmd := exec.Command(c.cfg.Command, args...)
 	execx.NoConsole(cmd)

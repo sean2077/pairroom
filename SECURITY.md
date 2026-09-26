@@ -58,6 +58,8 @@ The API/transcript carries verified metadata, not an absolute host attachment pa
 
 ## 5. Runtime and approvals
 
+Embedded runtimes are started without a shell. On Windows a `.cmd`/`.bat` launcher is the exception, because `cmd.exe` re-parses its command line: arguments containing `cmd.exe` metacharacters fail closed, and the Room-derived Claude session name is neutralized, so Room names and selection values cannot run commands. [Configuration](docs/CONFIGURATION.md#agent-slots-and-runtimes) lists the rejected characters.
+
 ### 5.1 Claude
 
 Native control initialize must succeed. Unknown control requests error; native tool/question requests enter the Room approval lifecycle. A read-only profile uses plan permissions and blocked write tools, with another fail-closed control check for write requests that still arrive.

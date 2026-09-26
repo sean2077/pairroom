@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -164,6 +165,13 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 
 	args := append([]string(nil), c.cfg.CommandArgs...)
 	args = append(args, "app-server")
+	if isBatchLauncher(goruntime.GOOS, probe.Path) {
+		// CC Switch provider arguments and template args reach cmd.exe here.
+		if err := checkBatchLauncherArgs("Codex", probe.Path, args); err != nil {
+			c.setState(model.StateError, err.Error())
+			return err
+		}
+	}
 	cmd := exec.Command(c.cfg.Command, args...)
 	execx.NoConsole(cmd)
 	cmd.Dir = c.cfg.Repo

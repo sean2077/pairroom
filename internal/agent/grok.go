@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -150,7 +151,14 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 		return probeErr
 	}
 
-	cmd := exec.Command(g.cfg.Command, g.buildACPArgs()...)
+	args := g.buildACPArgs()
+	if isBatchLauncher(goruntime.GOOS, probe.Path) {
+		if err := checkBatchLauncherArgs("Grok Build", probe.Path, args); err != nil {
+			g.setState(model.StateError, err.Error())
+			return err
+		}
+	}
+	cmd := exec.Command(g.cfg.Command, args...)
 	execx.NoConsole(cmd)
 	cmd.Dir = g.cfg.Repo
 	cmd.Env = mergeRuntimeEnv(envWithout(), g.cfg.Env)
