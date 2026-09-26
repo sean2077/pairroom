@@ -196,6 +196,41 @@ func TestHookKeepsRepliesWhileServiceIsStopped(t *testing.T) {
 	}
 }
 
+// relay status reconciles before reporting, so it publishes the whole saved
+// backlog in order; the docs promise this side effect, and doctor/history as
+// the read-only alternatives.
+func TestStatusPublishesSavedBacklog(t *testing.T) {
+	isolateCaller(t)
+	f := newForegroundFixture(t, foregroundFixtureOptions{})
+	c, err := load(filepath.Dir(f.statePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(c.State.EndpointPath); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"@codex one", "@codex two", "@codex three"} {
+		_ = runStopHook(t, f.args[1], text, "")
+	}
+	service := &hookService{accepted: map[uint64]string{}}
+	srv := httptest.NewServer(service.handler(t))
+	defer srv.Close()
+	if err := relay.AtomicJSON(c.State.EndpointPath, relay.Endpoint{URL: srv.URL, Token: "management-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := Run(context.Background(), append([]string{"status"}, f.args...), strings.NewReader(""), &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(service.reported); got != "[1 2 3]" {
+		t.Fatalf("status did not publish the saved backlog in order: %s", got)
+	}
+	var settled State
+	if err := readPrivate(f.statePath, &settled); err != nil || settled.Pending != nil || settled.Held != nil || settled.LastConfirmedSeq != 3 {
+		t.Fatalf("status left the backlog unsettled: %+v %v", settled, err)
+	}
+}
+
 func TestHookBacklogCapReportsUnretainedReply(t *testing.T) {
 	isolateCaller(t)
 	f := newForegroundFixture(t, foregroundFixtureOptions{})
