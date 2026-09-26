@@ -122,10 +122,13 @@ type RuntimeStatus struct {
 	WakePending      bool         `json:"native_wake_pending,omitempty"`
 	HTTPInUse        bool         `json:"http_in_use,omitempty"`
 	OccupiesCapacity bool         `json:"occupies_capacity"`
-	URL              string       `json:"url,omitempty"`
-	LastUsedAt       time.Time    `json:"last_used_at,omitempty"`
-	QueuedAt         time.Time    `json:"queued_at,omitempty"`
-	LastError        string       `json:"last_error,omitempty"`
+	// URL is the direct Room View address and carries the Room runtime bearer
+	// in its fragment. It stays server-side (activation readiness, the
+	// explicit open-browser action) and is never serialized to any client.
+	URL        string    `json:"-"`
+	LastUsedAt time.Time `json:"last_used_at,omitempty"`
+	QueuedAt   time.Time `json:"queued_at,omitempty"`
+	LastError  string    `json:"last_error,omitempty"`
 }
 
 type runtimeEntry struct {

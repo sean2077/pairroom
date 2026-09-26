@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Stop returning Room runtime bearers from the Management API. Runtime entries in `GET /api/v1/service` and the activation response carried each active Room's direct View URL, including its bearer token, so any caller allowed to read the Service snapshot, including the scoped relay-setup token from `relay-endpoint.json`, could obtain full access to every active Room. The field is no longer serialized; opening a Room in the system browser still works through the explicit open-browser action, and in-app Room tabs are unaffected.
+
 ## [v5.6.0] — 2026-09-26
 
 - Offer to put the bundled `pairroom` CLI on PATH on macOS. The CLI ships inside `PairRoom.app/Contents/Helpers`, off PATH, so Native relay hooks and Agent tool shells could not run it. After the Service first starts, Desktop now asks once whether to link `/usr/local/bin/pairroom` to that CLI, using the standard macOS administrator prompt; **Not Now** is remembered in a Desktop preference directory separate from the Service data root, and the menu bar item **Install Command Line Tool…** (or **Update…** after the app moved) remains available. The link targets the bundle, so replacing `PairRoom.app` keeps it current. Desktop never replaces an existing `/usr/local/bin/pairroom` it did not create, and nothing changes without the user's action. Windows and Linux are unchanged.

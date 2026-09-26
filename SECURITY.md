@@ -30,7 +30,7 @@ The bootstrap token is cleared from page memory/input after exchange. Neither to
 
 A Service-managed Room has an independent token; standalone `serve` may configure one. When token authentication is enabled, the browser exchanges a fragment credential for a 12-hour sliding-expiry `HttpOnly`, `SameSite=Strict` session cookie and uses per-session CSRF for writes. Tokens and CSRF do not enter query strings or Web Storage. REST, SSE, and attachments do not accept a query token as authorization.
 
-Room A's token/session/CSRF, event cursor, and attachment authorization cannot authorize Room B. The Management same-origin Room gateway is not permission to transfer Room identities or reuse stale actions against a different embedded surface.
+Room tokens are never returned by Management APIs: Service snapshots and activation responses omit the direct Room URL, and only the explicit open-browser action hands it to the system browser. Room A's token/session/CSRF, event cursor, and attachment authorization cannot authorize Room B. The Management same-origin Room gateway is not permission to transfer Room identities or reuse stale actions against a different embedded surface.
 
 ### 2.4 HTTP protections
 

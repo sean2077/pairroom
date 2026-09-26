@@ -327,3 +327,79 @@ func TestRuntimePolicyMutationAndArchivedExternalOpen(t *testing.T) {
 		t.Fatalf("archived open-browser status=%d body=%s", archived.Code, archived.Body.String())
 	}
 }
+
+// The Service snapshot is readable by the relay-setup token and by every
+// Management client. It must never carry a Room runtime bearer, whose URL
+// fragment would otherwise grant full Room View authority to that caller.
+func TestServiceSnapshotNeverCarriesRoomRuntimeBearer(t *testing.T) {
+	registry, project := testRegistry(t, testGitRepo(t))
+	room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+		ProjectID: project.ID, Name: "Bearer Room", Bindings: specs(BindingNew, BindingNew, "bearer"),
+	}, SyntheticProvisioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory := &loopbackProxyFactory{base: "http://127.0.0.1:1/", token: "room-runtime-bearer"}
+	manager, err := NewRuntimeManager(registry, factory.open, RuntimeManagerConfig{
+		Limit: 2, IdleTimeout: time.Hour, PollInterval: 5 * time.Millisecond, CloseTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = manager.Shutdown(ctx)
+	})
+	server, err := NewManagementServer(ManagementServerConfig{
+		Registry: registry, Runtimes: manager, Provisioner: SyntheticProvisioner{}, Token: "management-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activateRuntime(t, manager, room.ID)
+
+	for name, bearer := range map[string]string{"scoped relay-setup token": server.cliToken, "full Management token": server.Token()} {
+		t.Run(name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := managementRequest(http.MethodGet, "/api/v1/service", "", false)
+			request.Header.Set("Authorization", "Bearer "+bearer)
+			server.Handler().ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("service read status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			body := recorder.Body.String()
+			if strings.Contains(body, "room-runtime-bearer") || strings.Contains(body, "#token=") {
+				t.Fatalf("service snapshot leaked a Room runtime bearer: %s", body)
+			}
+			var snapshot struct {
+				Runtimes []map[string]any `json:"runtimes"`
+			}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &snapshot); err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, runtime := range snapshot.Runtimes {
+				if runtime["room_id"] != room.ID {
+					continue
+				}
+				found = true
+				if runtime["phase"] != string(RuntimeActive) {
+					t.Fatalf("runtime was not reported active: %#v", runtime)
+				}
+				if _, ok := runtime["url"]; ok {
+					t.Fatalf("runtime status exposed a url field: %#v", runtime)
+				}
+			}
+			if !found {
+				t.Fatalf("active Room missing from snapshot: %s", body)
+			}
+		})
+	}
+
+	activate := httptest.NewRecorder()
+	server.Handler().ServeHTTP(activate, managementRequest(http.MethodPost, "/api/v1/rooms/"+room.ID+"/activate", "", true))
+	if activate.Code != http.StatusOK || strings.Contains(activate.Body.String(), "room-runtime-bearer") {
+		t.Fatalf("activation response status=%d leaked or regressed: %s", activate.Code, activate.Body.String())
+	}
+}

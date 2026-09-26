@@ -38,6 +38,8 @@ The created Room returns the immutable `agents` map. There is no Agent-reconfigu
 
 ## Project and Room display order
 
+`GET /api/v1/service` runtime entries report phase, queue, busy/in-use, capacity and error state only; they never include a Room View URL or Runtime bearer. The direct Room address stays server-side and is used only by the explicit `open-browser` action and the same-origin surface gateway.
+
 `GET /api/v1/service` includes `navigation_order` with `{"schema":1,"projects":[],"rooms":{}}` when no preference has been saved. Ranked IDs come first; newly discovered items retain Registry creation order. Active and archived Rooms remain separate display groups. All Management clients of the same Service share the order.
 
 `PATCH /api/v1/navigation-order` uses normal Management bearer or browser-session/CSRF authentication. Submit a single anchored move, not a replacement array:
