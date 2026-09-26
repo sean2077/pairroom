@@ -34,7 +34,22 @@ const (
 	MaxTotalImageBytes  int64 = 20 << 20
 	MaxImageDimension         = 8_000
 	MaxImagePixels      int64 = 64_000_000
+
+	// ReclaimGrace is the minimum age of an upload before reclamation may
+	// consider it. An upload normally reaches a message within seconds, but
+	// a Native browser keeps an unconfirmed draft with its attachment IDs and
+	// may retry it much later; a week leaves that recovery window intact.
+	ReclaimGrace = 7 * 24 * time.Hour
+	// ReclaimBatch bounds the removals of one pass so the caller's admission
+	// lock is held only briefly; a large backlog drains over later passes.
+	ReclaimBatch = 32
+	// maxManifestBytes bounds manifest reads during a reclamation scan.
+	maxManifestBytes = 64 << 10
 )
+
+// ErrUnknown reports that no attachment is stored under an ID, for example
+// because an upload no message referenced was reclaimed.
+var ErrUnknown = errors.New("unknown attachment")
 
 var (
 	attachmentIDPattern = regexp.MustCompile(`^att-[a-f0-9]{24}$`)
@@ -318,7 +333,7 @@ func (s *Store) load(id string) (model.Attachment, string, error) {
 	manifestInfo, err := os.Lstat(manifestPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return model.Attachment{}, "", fmt.Errorf("unknown attachment %q", id)
+			return model.Attachment{}, "", fmt.Errorf("%w %q", ErrUnknown, id)
 		}
 		return model.Attachment{}, "", fmt.Errorf("inspect attachment metadata: %w", err)
 	}
@@ -328,7 +343,7 @@ func (s *Store) load(id string) (model.Attachment, string, error) {
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return model.Attachment{}, "", fmt.Errorf("unknown attachment %q", id)
+			return model.Attachment{}, "", fmt.Errorf("%w %q", ErrUnknown, id)
 		}
 		return model.Attachment{}, "", fmt.Errorf("read attachment metadata: %w", err)
 	}

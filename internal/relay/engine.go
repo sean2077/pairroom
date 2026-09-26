@@ -597,7 +597,7 @@ func (e *Engine) sendLocked(from, to model.ActorID, req SendRequest, key string)
 			values, err = e.cfg.Media.ResolveMany(req.AttachmentIDs)
 		}
 		if err != nil {
-			return Message{}, err
+			return Message{}, unavailableAttachment(err)
 		}
 		m.Attachments = values
 	}
