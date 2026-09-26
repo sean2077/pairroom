@@ -117,7 +117,7 @@ The CLI requires an affirmative `handed_off: true` acknowledgement, not merely H
 
 A detached background waiter whose output never reaches the model may nevertheless be terminally `handed_off`. Another `wait` cannot re-collect it. Inspect the authorized message/history and actual workspace before deciding a fresh instruction; do not blindly duplicate the original task body.
 
-Same-client-ID recovery requires the same body, target, attachments, quote, and optional review version. Changed content under the same ID fails. A new ID is a new publication, even for identical text. `status` / `reconcile` default to bounded body-free summaries, but **can reconcile a pending Stop publication**; use `history` or `doctor` for read-only inspection. Full history/export is explicit and may contain private material.
+Same-client-ID recovery requires the same body, target, attachments, quote, and optional review version. Rerunning `send --attach` re-uploads each image under a new attachment ID; the Service still returns the original receipt when every image has the same bytes (SHA-256 and size), media type and file name in the same order. Changed content under the same ID fails with a definite "already used for a different message" error: nothing new was published, so inspect the original instead of retrying that ID. A new ID is a new publication, even for identical text. `status` / `reconcile` default to bounded body-free summaries, but **can reconcile a pending Stop publication**; use `history` or `doctor` for read-only inspection. Full history/export is explicit and may contain private material.
 
 ## Claude external wake
 

@@ -316,6 +316,10 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		}
 		var msg relay.Message
 		err = c.call(ctx, "send", map[string]any{"id": o.id, "text": text, "to": to, "attachment_ids": attachments, "review": anchor}, &msg)
+		if relayErrorCode(err) == relay.SendPayloadConflictCode {
+			// Settled, not uncertain: this ID already names an accepted message.
+			return fmt.Errorf("--id %s was already used for a different message (body, target, attachments, quote or review); nothing new was published. Check relay history for the original; send new content with a new --id", o.id)
+		}
 		if err != nil {
 			return fmt.Errorf("%w; publication uncertain: retry with the SAME --id %s, not a new ID", err, o.id)
 		}

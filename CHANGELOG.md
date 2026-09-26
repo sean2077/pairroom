@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Let a same-ID `relay send --attach` retry recover the original publication. Rerunning the command after an uncertain send re-uploads each image under a new attachment ID, so the Service used to reject every such retry as a payload conflict. A same-ID retry now returns the original receipt when each re-uploaded image has the same SHA-256, size, media type and file name at the same position; different bytes, names, order or image count still fail, and nothing new is published. That conflict is now reported as definite ("`--id` was already used for a different message; nothing new was published") instead of carrying a misleading "publication uncertain: retry with the SAME --id" suffix; the relay API marks it with error code `send_payload_conflict`. The browser Native outbox is unaffected: it saves the uploaded attachment ID and reuses it on Retry. No Event Log, Store or protocol-version change.
+
 ## [v5.6.0] — 2026-09-26
 
 - Offer to put the bundled `pairroom` CLI on PATH on macOS. The CLI ships inside `PairRoom.app/Contents/Helpers`, off PATH, so Native relay hooks and Agent tool shells could not run it. After the Service first starts, Desktop now asks once whether to link `/usr/local/bin/pairroom` to that CLI, using the standard macOS administrator prompt; **Not Now** is remembered in a Desktop preference directory separate from the Service data root, and the menu bar item **Install Command Line Tool…** (or **Update…** after the app moved) remains available. The link targets the bundle, so replacing `PairRoom.app` keeps it current. Desktop never replaces an existing `/usr/local/bin/pairroom` it did not create, and nothing changes without the user's action. Windows and Linux are unchanged.

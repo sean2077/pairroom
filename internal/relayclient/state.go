@@ -177,12 +177,13 @@ func (c *Client) call(ctx context.Context, action string, payload any, result an
 		// Never echo raw HTML or vendor/provider errors into the model context.
 		var failure struct {
 			Error string `json:"error"`
+			Code  string `json:"code"`
 		}
 		_ = json.NewDecoder(io.LimitReader(res.Body, 4096)).Decode(&failure)
 		if failure.Error == "" {
 			failure.Error = http.StatusText(res.StatusCode)
 		}
-		return fmt.Errorf("relay %s: %s", action, failure.Error)
+		return &relayError{action: action, message: failure.Error, code: failure.Code}
 	}
 	if result == nil {
 		_, err = io.Copy(io.Discard, io.LimitReader(res.Body, 2<<20))
@@ -190,6 +191,23 @@ func (c *Client) call(ctx context.Context, action string, payload any, result an
 	}
 	return json.NewDecoder(io.LimitReader(res.Body, 16<<20)).Decode(result)
 }
+
+// relayError is a definite Service rejection. Its stable code, when present,
+// lets callers tell a settled answer from transport uncertainty.
+type relayError struct {
+	action, message, code string
+}
+
+func (e *relayError) Error() string { return fmt.Sprintf("relay %s: %s", e.action, e.message) }
+
+func relayErrorCode(err error) string {
+	var failure *relayError
+	if errors.As(err, &failure) {
+		return failure.code
+	}
+	return ""
+}
+
 func (c *Client) persist(next State) error {
 	if err := c.Save(next); err != nil {
 		return err
