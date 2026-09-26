@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -15,7 +16,10 @@ const (
 	roomSurfacePrefix     = "/api/v1/rooms/"
 	roomSurfaceMarker     = "/surface"
 	surfaceFrameAncestors = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'"
-	maxSurfaceBodyBytes   = attachment.MaxImageBytes + (1 << 20)
+	// directRoomPolicy is the same policy for a Room listener reached directly
+	// (open-browser). Only the Management same-origin surface may be framed.
+	directRoomPolicy    = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+	maxSurfaceBodyBytes = attachment.MaxImageBytes + (1 << 20)
 )
 
 var surfaceStaticFiles = map[string]struct{}{
@@ -181,6 +185,15 @@ func (s *ManagementServer) roomSurface(w http.ResponseWriter, r *http.Request) {
 
 	if r.Body != nil && r.ContentLength != 0 {
 		r.Body = http.MaxBytesReader(w, r.Body, maxSurfaceBodyBytes)
+	}
+	if remainder == "/api/v1/events" {
+		// The Room event stream never ends on its own. Tie it to Service
+		// shutdown so an open Room tab does not stall graceful shutdown.
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		stop := context.AfterFunc(s.streams, cancel)
+		defer stop()
+		r = r.WithContext(ctx)
 	}
 
 	proxy := &httputil.ReverseProxy{

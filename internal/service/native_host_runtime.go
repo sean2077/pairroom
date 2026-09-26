@@ -179,7 +179,10 @@ func (n *nativeHostRuntime) boundary(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cache-Control", "no-store")
-		applySurfaceFrameHeaders(w.Header())
+		// Direct access is unframeable; the Management surface gateway rewrites
+		// these headers to frame-ancestors 'self' for in-app Room tabs.
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", directRoomPolicy)
 		if !strings.HasPrefix(r.URL.Path, "/api/") {
 			next.ServeHTTP(w, r)
 			return

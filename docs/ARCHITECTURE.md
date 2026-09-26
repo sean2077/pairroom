@@ -137,7 +137,7 @@ Project-name links navigate to Project pages; disclosure expands Rooms separatel
 
 ## Native host mode
 
-`internal/relay/` serializes durable appends before publishing projections. Each slot has its own FIFO; different original sessions may run independently. Binding generation authenticates publication/collection; unbind/replacement revokes old credentials without stopping accepted native work. Archive retains ownership and fails closed on missing Native data.
+`internal/relay/` serializes durable appends before publishing projections. Each slot has its own FIFO; different original sessions may run independently. Binding generation authenticates publication/collection; unbind/replacement revokes old credentials without stopping accepted native work. Archive retains ownership and fails closed on missing Native data. Archive and rename hold a Runtime admission barrier from suspension through their lifecycle commit, so relay traffic cannot reactivate the Room in between, and a Service lifecycle append refuses while any Runtime still owns the Room's Event Log.
 
 `internal/relayclient/` associates from `CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`, or `GROK_SESSION_ID` at bind. Approved hooks re-confirm that identity and may record a transcript reference, but never parse vendor transcripts or implicitly rebind. Session/workspace hints grant neither trust nor file access. Private unconfirmed attempts cannot overwrite active credentials before confirmation. Same-user process access is outside the isolation claim.
 

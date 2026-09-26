@@ -617,3 +617,28 @@ func TestNativeArchiveMissingDataFailsClosed(t *testing.T) {
 		t.Fatal("failed native archive changed lifecycle")
 	}
 }
+
+// The direct Native Room listener is opened top-level (open-browser); only the
+// Management same-origin surface may be framed. Its own responses must stay
+// unframeable, while the surface gateway still rewrites them to 'self'.
+func TestNativeDirectListenerIsUnframeable(t *testing.T) {
+	f := nativeHTTP(t)
+	for _, path := range []string{"/", "/api/v1/snapshot"} {
+		req, _ := http.NewRequest(http.MethodGet, f.native.baseURL+path, nil)
+		req.Header.Set("Authorization", "Bearer "+f.native.token)
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		csp := response.Header.Get("Content-Security-Policy")
+		if response.Header.Get("X-Frame-Options") != "DENY" || !strings.Contains(csp, "frame-ancestors 'none'") || strings.Contains(csp, "frame-ancestors 'self'") {
+			t.Fatalf("direct Native %s framing headers: X-Frame-Options=%q CSP=%q", path, response.Header.Get("X-Frame-Options"), csp)
+		}
+		for _, directive := range []string{"object-src 'none'", "form-action 'self'", "base-uri 'none'"} {
+			if !strings.Contains(csp, directive) {
+				t.Fatalf("direct Native %s CSP lacks %s: %q", path, directive, csp)
+			}
+		}
+	}
+}

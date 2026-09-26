@@ -70,8 +70,11 @@ Back up before incompatible upgrades, permanent deletion, data-root moves, manua
 Verification warns about each stored attachment no message references. Active Rooms reclaim such uploads after seven days ([Storage](STORAGE.md#attachment)), so these warnings normally describe recent unsent uploads; the backup still includes them.
 
 Write backup and diagnostics outputs outside the source Room directory, including symlink aliases. Restore validates the file set, hashes, and complete gzip trailer before publishing the target. A successful compression command is not backup verification, and restored transport history does not prove external work stopped or completed. [Storage](STORAGE.md) owns integrity/replay details.
+Write backup and diagnostics outputs outside the source Room directory, including symlink aliases. Restore validates the file set, hashes, and complete gzip trailer before publishing the target; any file outside the Room layout (events, metadata, attachment manifests and their content) is rejected rather than restored. A successful compression command is not backup verification, and restored transport history does not prove external work stopped or completed. [Storage](STORAGE.md) owns integrity/replay details.
 
 ## Graceful shutdown
+
+The Management listener first ends open Room event streams (in-app Room tabs reconnect after restart), then waits for in-flight requests up to `--shutdown-timeout` before draining Runtimes.
 
 For Embedded, normal exit drains owned native work, settles projections, closes stores, and releases ownership. After a forced exit, only definitely pre-submission FIFO work is automatically rebuilt; unknown submission fails and accepted unfinished input is cancelled without replay.
 

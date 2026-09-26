@@ -696,6 +696,9 @@ func TestScopedRelaySetupRoute(t *testing.T) {
 		{http.MethodPost, "/api/v1/projects/proj/rooms/extra"},
 		{http.MethodPost, "/api/v1/rooms/room1/activate"},
 		{http.MethodPost, "/api/v1/rooms/room1/native-bindings/slot3"},
+		{http.MethodDelete, "/api/v1/rooms/room1/native-bindings/slot1"},
+		{http.MethodPost, "/api/v1/rooms/room1/archive"},
+		{http.MethodGet, "/api/v1/rooms/room1/surface/"},
 		{http.MethodPatch, "/api/v1/runtime-policy"},
 	}
 	for _, route := range deny {
