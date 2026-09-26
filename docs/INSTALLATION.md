@@ -57,7 +57,7 @@ Back up the Service data folder (available from the tray), quit Desktop and remo
 
 ## macOS desktop
 
-Download `pairroom-desktop-vX.Y.Z-darwin-arm64.app.zip` (Apple silicon) or `-darwin-amd64.app.zip` (Intel), unzip, and move `PairRoom.app` to Applications. The bundle carries the CLI at `Contents/Helpers/pairroom` and the host at `Contents/MacOS/PairRoom`. Because the bundle is unsigned and un-notarized, Gatekeeper requires an explicit first-launch approval (right-click → Open, or allow it in System Settings → Privacy & Security).
+Download `pairroom-desktop-vX.Y.Z-darwin-arm64.app.zip` (Apple silicon) or `-darwin-amd64.app.zip` (Intel), unzip, and move `PairRoom.app` to Applications. Desktop requires macOS 12.3 or later, the first release whose WebView provides the Web Locks that Native Room publication needs. The bundle carries the CLI at `Contents/Helpers/pairroom` and the host at `Contents/MacOS/PairRoom`. Because the bundle is unsigned and un-notarized, Gatekeeper requires an explicit first-launch approval (right-click → Open, or allow it in System Settings → Privacy & Security).
 
 ## Linux desktop
 

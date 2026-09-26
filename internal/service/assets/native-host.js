@@ -9,9 +9,10 @@
   let historyNext = '', historyFilter = '', historyRequest = 0;
   const outbox = window.PairRoomNativeOutbox;
   // Local recovery failures are fixed codes, not copy: show the translated
-  // storage message and keep the raw code out of the Room status line.
+  // storage message and keep the raw code out of the Room status line. A lock
+  // held by another window is transient; it must not suggest Forget.
   const outboxCodes = new Set(['invalid_room', 'outbox_invalid', 'outbox_conflict', 'outbox_unavailable']);
-  const failureText = error => outboxCodes.has(error?.message) ? tr('storageFailed') : error?.message || '';
+  const failureText = error => error?.message === 'outbox_busy' ? tr('outboxBusy') : outboxCodes.has(error?.message) ? tr('storageFailed') : error?.message || '';
   const language = () => window.PairRoomI18n?.lang || 'en';
   const element = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
   const time = value => value ? new Intl.DateTimeFormat(language(), {dateStyle:'short',timeStyle:'medium'}).format(new Date(value)) : tr('never');
@@ -20,9 +21,20 @@
     const headers = new Headers(options.headers || {});
     if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type','application/json');
     if (csrf && options.method && options.method !== 'GET') headers.set('X-PairRoom-CSRF',csrf);
-    const res = await fetch(path, {...options, headers, cache:'no-store',credentials:'same-origin'});
-    if (!res.ok) { let value = {}; try {value = await res.json();} catch (_) { /* not a JSON error */ } throw new Error(value.error || `${tr('error')} (${res.status})`); }
-    return res.status === 204 ? null : res.json();
+    // Bound both response headers and the JSON body. A timed-out POST remains
+    // uncertain: its original outbox identity survives for explicit recovery.
+    // Only this deadline aborts the request, so report it as translated copy
+    // rather than the engine's AbortError text.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    try {
+      const res = await fetch(path, {...options, headers, signal:controller.signal, cache:'no-store',credentials:'same-origin'});
+      if (!res.ok) { let value = {}; try {value = await res.json();} catch (_) { /* not a JSON error */ } throw new Error(value.error || `${tr('error')} (${res.status})`); }
+      return res.status === 204 ? null : await res.json();
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error(tr('requestTimeout'));
+      throw error;
+    } finally { clearTimeout(timeout); }
   }
   function handle(slot) { return (snapshot?.identities?.[slot]?.MentionHandle || snapshot?.identities?.[slot]?.mention_handle) || (slot === 'user' ? tr('user') : slot); }
   function readingPosition() {
@@ -311,18 +323,27 @@
   async function checkOriginal(){
     if(!pendingSend||sending)return;
     const original=pendingSend;
-    const receipt=await request(`api/v1/sends/${encodeURIComponent(original.id)}`);
-    if(pendingSend!==original)return;
-    if(!receipt.found){status(tr('notFoundReceipt'));return;}
-    if(!outbox.matches(original,receipt.message)){outboxBroken=true;renderOutbox();throw new Error(tr('receiptConflict'));}
-    outbox.clear(localStorage,outboxRoom,original.id);
-    pendingSend=null;$('message-text').value='';$('attachment').value='';$('review-anchor').checked=false;
-    renderOutbox();status(tr('receiptRecovered'));await refresh();
+    // Reconciliation is read-only on the server, but owns the same local state
+    // as Retry. Keep them mutually exclusive across every asynchronous boundary.
+    sending=true;lockComposer();
+    try{
+      const receipt=await request(`api/v1/sends/${encodeURIComponent(original.id)}`);
+      if(!receipt.found){status(tr('notFoundReceipt'));return;}
+      if(!outbox.matches(original,receipt.message)){outboxBroken=true;throw new Error(tr('receiptConflict'));}
+      await outbox.clear(localStorage,outboxRoom,original.id);
+      pendingSend=null;$('message-text').value='';$('attachment').value='';$('review-anchor').checked=false;
+      status(tr('receiptRecovered'));await refresh();
+    }finally{sending=false;renderOutbox();}
   }
   $('outbox-check').addEventListener('click',()=>checkOriginal().catch(e=>status(failureText(e),true)));
   $('outbox-forget').addEventListener('click',async()=>{
-    if(sending||!await confirmAction('forgetTitle','forgetBody'))return;
-    try{outbox.forget(localStorage,outboxRoom);pendingSend=null;outboxBroken=false;$('message-text').value='';$('attachment').value='';renderOutbox();status(tr('forgotten'));}catch(_){status(tr('storageFailed'),true);}
+    if(sending)return;
+    let observed;
+    try{observed=outbox.capture(localStorage,outboxRoom);}catch(_){status(tr('storageFailed'),true);return;}
+    if(!await confirmAction('forgetTitle','forgetBody')||sending)return;
+    sending=true;lockComposer();
+    try{await outbox.forget(localStorage,outboxRoom,observed);pendingSend=null;outboxBroken=false;$('message-text').value='';$('attachment').value='';$('review-anchor').checked=false;status(tr('forgotten'));}
+    catch(e){status(failureText(e),true);}finally{sending=false;renderOutbox();}
   });
   $('composer').addEventListener('submit',async event=>{
     event.preventDefault();if(sending||outboxBroken||!outboxRoom)return;
@@ -338,13 +359,14 @@
         if(file){const body=new FormData();body.append('file',file);const a=await request('api/v1/attachments',{method:'POST',body});attachmentIDs=[a.id];}
         const draft={id:crypto.randomUUID(),text,to:$('target').value,attachment_ids:attachmentIDs};if(review)draft.review=review;
         // A storage failure prevents publication. The draft remains editable.
-        outbox.save(localStorage,outboxRoom,draft);pendingSend=draft;
+        await outbox.save(localStorage,outboxRoom,draft);pendingSend=draft;
       }else{
-        outbox.save(localStorage,outboxRoom,pendingSend); // Detect another tab changing the recovery record.
+        await outbox.save(localStorage,outboxRoom,pendingSend); // Detect another tab changing the recovery record.
       }
-      const accepted=await request('api/v1/messages',{method:'POST',body:JSON.stringify(pendingSend)});
-      if(!outbox.matches(pendingSend,accepted))throw new Error(tr('receiptConflict'));
-      outbox.clear(localStorage,outboxRoom,pendingSend.id);
+      const original=pendingSend;
+      const accepted=await request('api/v1/messages',{method:'POST',body:JSON.stringify(original)});
+      if(!outbox.matches(original,accepted))throw new Error(tr('receiptConflict'));
+      await outbox.clear(localStorage,outboxRoom,original.id);
       pendingSend=null;$('message-text').value='';$('attachment').value='';$('review-anchor').checked=false;status(tr('sent'));await refresh();
     }catch(e){status(pendingSend?`${tr('unknownSend')} ${failureText(e)}`:failureText(e),true);}finally{sending=false;renderOutbox();}
   });

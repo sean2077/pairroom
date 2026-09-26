@@ -252,13 +252,16 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 		// Do not add one suppressed audit fact per later message.
 		return nil
 	}
-	if reason := nativeWakeSuppression(candidate); reason != "" {
-		return w.record("suppressed", reason, candidate.Target)
-	}
+	// Suppression records need the same single-worker boundary as vendor
+	// effects. Otherwise concurrent sends can all miss record's dedup cache
+	// before its first durable append finishes and grow identical audit facts.
 	if !w.begin(candidate.Target) {
 		return nil
 	}
 	defer w.end(candidate.Target)
+	if reason := nativeWakeSuppression(candidate); reason != "" {
+		return w.record("suppressed", reason, candidate.Target)
+	}
 	target := candidate.Target
 	if err := w.wait(ctx, w.grace); err != nil {
 		// Runtime shutdown/cancellation must not manufacture a vendor attempt.

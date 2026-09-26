@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { webcrypto } = require('node:crypto');
+const {locks, timers} = require('./native_browser_test_helpers');
 
 class Element {
   constructor(tagName = "div") {
@@ -34,7 +35,9 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const response = (data, status = 200) => ({ ok: status < 400, status, json: async () => data });
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
 
-async function fixture({ uploadFailure = false, storage, receipts = new Map(), draft = true } = {}) {
+async function fixture({ uploadFailure = false, storage, receipts = new Map(), draft = true, manager = locks(), hang = '', receiptGate } = {}) {
+  const clock = timers();
+  let hangNext = hang;
   if (!storage) { const values=new Map(); storage={getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)}; }
   const elements = new Map();
   const $ = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
@@ -51,7 +54,7 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
     if (url === 'api/v1/session') return response({ csrf_token: 'csrf' });
     if (url.startsWith('api/v1/snapshot')) { reads.push(url); return response(snapshot); }
     if (url.startsWith('api/v1/pending')) return response({messages:[],total:0});
-    if (url.startsWith('api/v1/sends/')) {const m=receipts.get(decodeURIComponent(url.split('/').pop()));return response({found:Boolean(m),message:m});}
+    if (url.startsWith('api/v1/sends/')) {if(receiptGate)await receiptGate.promise;const m=receipts.get(decodeURIComponent(url.split('/').pop()));return response({found:Boolean(m),message:m});}
     assert.equal(options.headers.get('X-PairRoom-CSRF'), 'csrf');
     if (url === 'api/v1/attachments') {
       uploads.push(options.body); await uploadGate.promise;
@@ -60,6 +63,15 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
     if (url === 'api/v1/messages') {
       const payload=JSON.parse(options.body); sends.push(payload);
       receipts.set(payload.id,{from:'user',text:payload.text,to:payload.to,attachments:payload.attachment_ids.map(id=>({id})),review:payload.review});
+      if (hangNext) {
+        const stage = hangNext; hangNext = ''; failSend = false;
+        const stalled = () => new Promise((_, reject) => {
+          if (options.signal?.aborted) reject(Error('request aborted'));
+          else options.signal?.addEventListener('abort', () => reject(Error('request aborted')), {once:true});
+        });
+        if (stage === 'headers') return stalled();
+        return {ok:true, status:200, json:stalled};
+      }
       if (failSend) { failSend = false; throw new Error('lost acceptance response'); }
       return response(receipts.get(payload.id));
     }
@@ -68,6 +80,7 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
   const context = vm.createContext({
     document, window: { PairRoomI18n: { t: k => k, apply() {}, lang: 'en' }, addEventListener() {}, matchMedia: () => ({matches: false, addEventListener() {}}) },
     localStorage:storage,fetch, Headers, FormData, TextEncoder, crypto: webcrypto, URLSearchParams,
+    navigator:{locks:manager}, AbortController, setTimeout:clock.setTimeout, clearTimeout:clock.clearTimeout,
     location: { hash: '', pathname: '/', search: '' }, history: { replaceState() {} },
     EventSource: class { addEventListener() {} close() {} }, setInterval: () => 1, clearInterval() {}, console
   });
@@ -80,7 +93,7 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
   if(draft)$('message-text').value = 'review';
   if(draft)$('attachment').files = [new File(['image bytes'], 'image.png', { type: 'image/png' })];
   const submit = () => $('composer').events.submit({ preventDefault() {} });
-  return { $, reads, uploads, sends, uploadGate, submit, storage, receipts };
+  return { $, reads, uploads, sends, uploadGate, submit, storage, receipts, clock };
 }
 
 async function main() {
@@ -146,6 +159,49 @@ async function main() {
   const noStorage=await fixture({storage:{getItem:()=>null,setItem(){throw Error('quota');},removeItem(){}}});noStorage.uploadGate.resolve();await noStorage.submit();
   assert.equal(noStorage.sends.length,0,'publication preceded durable browser draft');
   assert.equal(noStorage.$('message-text').disabled,false);
+  // A hung response (including headers received but JSON body stalled) keeps
+  // exactly the original durable payload and releases the composer on timeout.
+  for (const stage of ['headers', 'body']) {
+    const slow = await fixture({hang:stage}); slow.$('attachment').files=[];
+    const pending = slow.submit(); await tick();
+    assert.equal(slow.sends.length,1);
+    assert.equal(slow.clock.expire(30000),1,'request/body has no bounded deadline');
+    await pending;
+    assert.equal(slow.$('status').textContent,'room.native.unknownSend room.native.requestTimeout','timeout exposed raw abort text');
+    assert.equal(slow.$('send').disabled,false,'hung publication kept recovery locked');
+    assert.equal(slow.sends.length,1,'timeout automatically repeated a publication');
+    const saved = JSON.parse(slow.storage.getItem('pairroom.native.outbox.v1.room')).payload;
+    assert.deepEqual(saved,slow.sends[0]);
+    await slow.submit();
+    assert.deepEqual(slow.sends[1],slow.sends[0],'explicit retry changed timed-out identity');
+    assert.equal(slow.clock.size,0,'completed request leaked its timer');
+  }
+  // Read-only reconciliation and explicit Retry must not clear each other's
+  // same-tab state while either operation is awaiting a response.
+  const gate = deferred();
+  const checking = await fixture({storage:interrupted.storage,receipts:interrupted.receipts,draft:false,receiptGate:gate});
+  // The previous reload settled that record, so create a fresh interrupted send.
+  checking.$('message-text').value='second';await checking.submit();
+  const check = checking.$('outbox-check').events.click();await tick();
+  assert.equal(checking.$('send').disabled,true,'receipt lookup races an enabled Retry');
+  await checking.submit();assert.equal(checking.sends.length,1);
+  gate.resolve();await check;await tick();
+  assert.equal(checking.$('outbox').hidden,true);
+  assert.equal(checking.sends.length,1,'receipt check published instead of only reading');
+
+  const shared = locks();
+  const tabA = await fixture({manager:shared});tabA.$('attachment').files=[];
+  const tabB = await fixture({manager:shared,storage:tabA.storage});tabB.$('attachment').files=[];
+  await shared.request('pairroom.native.outbox.v1.room',{mode:'exclusive',ifAvailable:true},async()=>{
+    await tabB.submit();
+    assert.equal(tabB.sends.length,0,'busy cross-tab lock allowed publication');
+    assert.equal(tabB.$('status').textContent,'room.native.outboxBusy','a transient lock reported broken storage');
+    assert.equal(tabB.$('send').disabled,false,'a transient lock blocked a later attempt');
+  });
+  await Promise.all([tabA.submit(),tabB.submit()]);
+  assert.equal(tabA.sends.length+tabB.sends.length,1,'concurrent tabs published two unconfirmed drafts');
+  const unsupported = await fixture({manager:null});unsupported.$('attachment').files=[];
+  await unsupported.submit();assert.equal(unsupported.sends.length,0,'missing Web Locks allowed unsafe send');
   console.log('Native UI: bounded reads, accurate totals, UTF-8 validation, single submission and immutable retry payload passed.');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
