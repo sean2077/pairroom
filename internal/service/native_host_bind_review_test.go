@@ -96,6 +96,65 @@ func TestNativeStopBacklogPublishesInOrderAfterServiceReturns(t *testing.T) {
 	}
 }
 
+// bind --replace starts a fresh local State; it must refuse while Stop replies
+// are saved but unpublished, before revoking the generation that can still
+// publish them, and succeed once the backlog is explicitly settled.
+func TestNativeReplaceRefusesUnpublishedStopBacklog(t *testing.T) {
+	f := nativeHTTP(t)
+	a := associateCLI(t, f, model.ActorSlot1)
+	associateCLI(t, f, model.ActorSlot2)
+	statePath := filepath.Join(f.project.Root, ".pairroom", "rooms", f.room.ID, "slots", "slot1", "state.json")
+	endpoint, err := os.ReadFile(f.endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(f.endpoint); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"@codex saved head", "@codex saved held"} {
+		if _, err := f.hook(t, a, text, false); err == nil {
+			t.Fatal("stopped Service not reported")
+		}
+	}
+	if err := os.WriteFile(f.endpoint, endpoint, 0600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replace := []string{"bind", "--room", f.room.ID, "--slot", "1", "--service-file", f.endpoint, "--replace"}
+	out, err := f.runAs(t, model.RuntimeClaude, a.SessionID, replace, nil)
+	if err == nil || !strings.Contains(err.Error(), "2 unpublished Stop replies") || !strings.Contains(err.Error(), "relay reconcile") || len(out) != 0 {
+		t.Fatalf("replace discarded or hid the backlog: %s %v", out, err)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("refused replace rewrote local state: %v", err)
+	}
+	if got := f.native.engine.Snapshot().Bindings[a.Slot]; got.Generation != a.Generation {
+		t.Fatalf("refused replace rotated the binding: %+v", got)
+	}
+	if _, ok, _ := f.native.engine.Publication(a, 1); ok {
+		t.Fatal("refused replace published as a side effect")
+	}
+	if _, err := f.run(t, []string{"reconcile", "--room", f.room.ID, "--slot", "1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for seq := uint64(1); seq <= 2; seq++ {
+		if _, ok, err := f.native.engine.Publication(a, seq); err != nil || !ok {
+			t.Fatalf("seq %d not published before replacement: %v", seq, err)
+		}
+	}
+	out, err = f.runAs(t, model.RuntimeClaude, a.SessionID, replace, nil)
+	if err != nil {
+		t.Fatalf("replace after settling the backlog: %s %v", out, err)
+	}
+	if got := f.native.engine.Snapshot().Bindings[a.Slot]; got.Generation != a.Generation+1 {
+		t.Fatalf("replacement did not rotate generation: %+v", got)
+	}
+}
+
 func TestNativeRejectedReplaceKeepsOldLocalBinding(t *testing.T) {
 	f := nativeHTTP(t)
 	a := associateCLI(t, f, model.ActorSlot1)

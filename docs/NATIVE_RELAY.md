@@ -42,7 +42,7 @@ Alternatively, create a **Native** Room in Management and bind the two sessions 
 
 Each bind associates immediately from the official tool-call environment: `CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`, or `GROK_SESSION_ID`. Run it **inside the intended Agent session**, not a detached terminal or Grok's user shell mode (`!`). Missing or conflicting identity fails closed; do not manufacture an environment value. Bind also checks the installed hook. No nonce echo, initial Stop, or status check is needed to unlock confirmed relay. Reuse the existing binding for later reviews.
 
-If creation succeeded but bind failed, finish the printed recovery command for that Room instead of creating another. If the bind response was lost, rerun bind for the same Room/slot without `--create` or a new `--replace`. Explicit replacement is for an intentional session change and cannot stop work in the old harness.
+If creation succeeded but bind failed, finish the printed recovery command for that Room instead of creating another. If the bind response was lost, rerun bind for the same Room/slot without `--create` or a new `--replace`. Explicit replacement is for an intentional session change and cannot stop work in the old harness. It is refused while the slot still holds unpublished Stop replies; run `relay reconcile` to publish them (or `reconcile --discard` to drop each explicitly) before replacing.
 
 ## What is published
 

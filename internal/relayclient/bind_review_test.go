@@ -233,6 +233,36 @@ func TestHookExactSessionSurvivesSharedHarnessProcess(t *testing.T) {
 	}
 }
 
+func TestBindReplaceRequiresExplicitBacklogDecision(t *testing.T) {
+	dir := t.TempDir()
+	s := State{Schema: 2, Room: "room", Slot: model.ActorSlot1, Runtime: model.RuntimeClaude, Workspace: "/project", BindID: "bind", Generation: 1, SessionID: "session", LastSeq: 5, LastConfirmedSeq: 3,
+		Pending: &Pending{Seq: 4, Text: "uncertain head", Unknown: true}, Held: []Pending{{Seq: 5, Text: "held"}}}
+	if err := relay.AtomicJSON(filepath.Join(dir, "state.json"), s); err != nil {
+		t.Fatal(err)
+	}
+	if err := relay.AtomicJSON(filepath.Join(dir, "credentials"), credentials{BindID: "bind", Secret: "private-test-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	replace := options{room: "room", replace: true}
+	for _, want := range []string{"2 unpublished Stop replies (oldest seq 4)", "1 unpublished Stop replies (oldest seq 5)"} {
+		if _, _, err := prepareBindAttempt(dir, "/project", "endpoint", replace, s.Slot, s.Runtime, s.SessionID); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("replace error = %v, want %q", err, want)
+		}
+		// Each explicit discard drops only the head; the next reply is still guarded.
+		c, err := loadLocal(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.DiscardPending(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	next, staged, err := prepareBindAttempt(dir, "/project", "endpoint", replace, s.Slot, s.Runtime, s.SessionID)
+	if err != nil || !staged || next.State.BindID == s.BindID {
+		t.Fatalf("replace after explicit discards: staged=%v err=%v", staged, err)
+	}
+}
+
 func TestBindAttemptRetryAndExplicitReplacementHaveSeparateIntent(t *testing.T) {
 	dir := t.TempDir()
 	s := State{Schema: 2, Room: "room", Slot: model.ActorSlot1, Runtime: model.RuntimeClaude, Workspace: "/project", BindID: "old-attempt", SessionID: "session"}
