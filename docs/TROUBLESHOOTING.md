@@ -72,7 +72,7 @@ Fix PATH for the harness itself, then restart that harness session. A running se
 
 Start or reuse the one Service that owns the intended data root; see [Desktop, daemon, and service.lock conflict](#desktop-daemon-and-servicelock-conflict). The first bind to a custom data root needs `--service-file <root>/relay-endpoint.json` as a path. If you stop the Service mid-session, each Stop hook saves its reply before contacting it, up to eight replies in order; `relay status` shows the extra ones as `held_publications`. The next hook or `pairroom relay reconcile` publishes them in order under their original sequences. A ninth reply is refused with `PairRoom: this reply was NOT retained ...`; run `relay reconcile` once the Service is back, then send that reply explicitly with `relay send` if it matters.
 
-After a Service restart, a Native Room stays suspended until a relay call or opening it in Management activates it. Until then, `relay doctor` fails with `room runtime is not active: the Native Room is suspended ... and doctor never activates it. Run pairroom relay status --brief --room <room> --slot <slot>, which activates it, ...`. Run that command, then rerun doctor.
+After a Service restart or `--idle-timeout` (15 minutes by default) of inactivity, a Native Room stays suspended until a relay call or opening it in Management activates it. Until then, `relay doctor` fails with `room runtime is not active: the Native Room is suspended ... and doctor never activates it. Run pairroom relay status --brief --room <room> --slot <slot>, which activates it, ...`. Run that command, then rerun doctor.
 
 ### Bind reports a missing session identity
 
@@ -138,7 +138,7 @@ The one-hour default is a PairRoom budget; the harness's own tool timeout can en
 
 - Preflight `service.version_match: false` with `The Service runs a different PairRoom version from this CLI. ...`. This only warns and does not block `ready`.
 - `relay doctor` `local.service_version_match` or `protocol_match` is `false`.
-- Any relay command: `PairRoom: the Service runs release <x> but this CLI is <y>; run pairroom relay preflight ...`, or after a 400/401/404 or no-binding failure `PairRoom: this failure may come from a release mismatch: ...`. Services older than this hint do not report their release on every response, so they stay silent except through bind or preflight.
+- Any relay command: `PairRoom: the Service runs release <x> but this CLI is <y>; run pairroom relay preflight ...`, or after a 400/401/404 or no-binding failure `PairRoom: this failure may come from a release mismatch: ...`. A Service older than this hint does not stamp every response; the CLI then learns its release only from the Service snapshot that bind and session discovery read, or from one probe after such a failure. Preflight reports a mismatch in its JSON rather than on stderr.
 - Grok hook: `Grok hook received a claim instead of readiness; update CLI and Service together; acknowledgement withheld`
 
 Use the CLI from the Service's release, such as the one bundled with Desktop, and restart the harness sessions. Update CLI, Service, and the relay skill together; see [Upgrading](UPGRADING.md).
