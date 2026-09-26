@@ -117,7 +117,7 @@ The desktop host accepts these optional environment variables:
 - `PAIRROOM_DESKTOP_CONFIG`: PairRoom JSON configuration for an explicitly embedded Service;
 - `PAIRROOM_DESKTOP_DATA_ROOT`: absolute Service data root for an explicitly embedded Service.
 
-Quit never stops an external daemon. Startup may restart an installed daemon only after recovering a crash-stale lock whose recorded PID is gone. An embedded Service is shut down in the existing safe order: stop Management admission, drain Room runtimes without interrupting active native Turns, then release `service.lock`.
+Quit never stops an external daemon. Startup may restart an installed daemon only after recovering a crash-stale lock whose recorded PID is gone. An embedded Service is shut down in the existing safe order: stop Management admission, drain Room runtimes without interrupting active native Turns, then release `service.lock`. The tray **Restart Service** item runs the same drain before starting a replacement; a Quit during that drain waits for it (within the same shutdown timeout), and a drain that fails keeps `service.lock`, starts no replacement, and is retried on Quit.
 
 ## Packages
 
