@@ -11,7 +11,7 @@ This guide owns the installation facts: which channel fits which platform, prere
 
 Neither entry requires Go. Both need Git and a local Git repository; for real Agents, each selected native CLI (Claude Code, Codex, Grok Build) must be independently installed and authenticated. The full readiness table is in [Getting started](GETTING_STARTED.md#prerequisites).
 
-Release packages are unsigned development artifacts until Windows code signing and Apple Developer ID signing/notarization actually run. [Releases](https://github.com/sean2077/pairroom/releases/latest) distinguish `pairroom-cli-…` from `pairroom-desktop-…` assets; verify downloads against the checksums published with each release.
+Release packages are unsigned development artifacts until Windows code signing and Apple Developer ID signing/notarization actually run. [Releases](https://github.com/sean2077/pairroom/releases/latest) distinguish `pairroom-cli-…` from `pairroom-desktop-…` assets. Verify downloads against the checksums published with each release: CLI assets, `install.sh`, and source archives are listed in `SHA256SUMS`, and desktop packages in `pairroom-desktop-vX.Y.Z-SHA256SUMS` (for example `sha256sum -c --ignore-missing pairroom-desktop-vX.Y.Z-SHA256SUMS` next to the downloaded package; on Windows compare `Get-FileHash` output with the listed digest). The checksums detect corrupted or substituted downloads relative to that Release page; they are not a code signature.
 
 ## Windows desktop
 

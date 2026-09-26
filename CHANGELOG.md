@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Publish checksums for Desktop packages. Releases now include `pairroom-desktop-vX.Y.Z-SHA256SUMS`, covering the Windows setup executable, Linux `.deb` and `.AppImage`, and both macOS `.app.zip` packages; the release workflow verifies each package against its build-time checksum before attaching it and rechecks the attached files after upload. Previously only CLI assets had published checksums, although the installation guide told users to verify every download.
+
 - Keep Desktop from exiting in the middle of a tray **Restart Service**. Quitting while the embedded Service was draining for a restart used to exit at once, cutting active Turns and leaving `service.lock` behind, and a drain that failed left the old Service running untracked. Quit now waits for that drain within the usual shutdown timeout and retries a failed one; a failed drain no longer starts a replacement Service, and the tray reports that quitting retries it. Opening the window during the drain no longer starts a second Service.
 
 - Make the CLI `install.sh` a POSIX `sh` script. The documented `curl … | sh` and `sh install-pairroom.sh` commands failed on systems whose `sh` is dash (Debian, Ubuntu) with `[[: not found` and "could not resolve the latest PairRoom release tag", because the script used bash-only syntax. It now runs under dash, busybox `sh` and bash, still verifies the release `SHA256SUMS` before installing and still removes its temporary files, including on interrupt. The release repository is now overridden only by `PAIRROOM_REPOSITORY`; the generic `GITHUB_REPOSITORY` is ignored, so running the installer inside another project's GitHub Actions job no longer downloads from that project.

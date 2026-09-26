@@ -34,7 +34,7 @@ Explicit data-root/configuration or Mock options select their own Service instea
 
 None of these controls can stop a user-owned Native harness. Windows daemon output goes to rotating logs rather than a persistent taskbar console; use `pairroom daemon logs`.
 
-Desktop packages are produced for release tags or manual workflow dispatch, not PR/main verification builds. They attach to the same Release as CLI assets: `pairroom-cli-vX.Y.Z-…` and `pairroom-desktop-vX.Y.Z-…` (Windows setup executable, Linux `.deb`/`.AppImage`, macOS `.app.zip`). Production signing/notarization is not implied. See [Installation](INSTALLATION.md), [Desktop development](../desktop/README.md), and [release verification](../CONTRIBUTING.md#release-verification).
+Desktop packages are produced for release tags or manual workflow dispatch, not PR/main verification builds. They attach to the same Release as CLI assets: `pairroom-cli-vX.Y.Z-…` and `pairroom-desktop-vX.Y.Z-…` (Windows setup executable, Linux `.deb`/`.AppImage`, macOS `.app.zip`, and `pairroom-desktop-vX.Y.Z-SHA256SUMS`). Production signing/notarization is not implied. See [Installation](INSTALLATION.md), [Desktop development](../desktop/README.md), and [release verification](../CONTRIBUTING.md#release-verification).
 
 ## Daily checks
 

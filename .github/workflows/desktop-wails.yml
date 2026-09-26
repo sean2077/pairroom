@@ -248,10 +248,15 @@ jobs:
       contents: write
     timeout-minutes: 20
     steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
           pattern: pairroom-desktop-*
           path: desktop-dist
+      - name: Verify and merge per-platform desktop checksums
+        run: python3 desktop/scripts/merge-checksums.py --root desktop-dist --version "${GITHUB_REF_NAME}" --output-dir desktop-checksums
       - name: Wait for GitHub Release and upload desktop packages
         env:
           GH_TOKEN: ${{ github.token }}
@@ -271,6 +276,9 @@ jobs:
           done
           mapfile -t files < <(find desktop-dist -type f -name 'pairroom-desktop-*')
           test "${#files[@]}" -gt 0
+          sums="desktop-checksums/pairroom-desktop-v${version}-SHA256SUMS"
+          test -s "${sums}"
+          files+=("${sums}")
           gh release upload "${tag}" "${files[@]}" --repo "${GITHUB_REPOSITORY}"
           published="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
           for required in \
@@ -278,11 +286,18 @@ jobs:
             "pairroom-desktop-v${version}-linux-amd64.AppImage" \
             "pairroom-desktop-v${version}-linux-amd64.deb" \
             "pairroom-desktop-v${version}-darwin-arm64.app.zip" \
-            "pairroom-desktop-v${version}-darwin-amd64.app.zip"
+            "pairroom-desktop-v${version}-darwin-amd64.app.zip" \
+            "pairroom-desktop-v${version}-SHA256SUMS"
           do
             printf '%s\n' "${published}" | grep -Fxq "${required}"
           done
-          echo "attached ${#files[@]} desktop package(s) to ${tag}"
+          # Re-download the attached desktop assets and check them against the
+          # published checksum list, as a user would.
+          downloaded="${RUNNER_TEMP}/published-desktop"
+          mkdir -p "${downloaded}"
+          gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" --pattern 'pairroom-desktop-*' --dir "${downloaded}"
+          (cd "${downloaded}" && sha256sum -c "pairroom-desktop-v${version}-SHA256SUMS")
+          echo "attached ${#files[@]} desktop file(s) to ${tag}"
 
   winget:
     name: Submit the winget manifest for the Windows installer
