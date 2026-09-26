@@ -82,7 +82,7 @@ pairroom version
 pairroom doctor
 ```
 
-Command boundaries are documented in the [CLI reference](CLI_REFERENCE.md). For the desktop, launch PairRoom and open the Management URL it prints; the URL can contain an authentication token, so do not publish it.
+Command boundaries are documented in the [CLI reference](CLI_REFERENCE.md). [Agent-assisted setup](AGENT_SETUP.md) sequences these checks, including PATH in each Agent's tool shell, for a coding Agent to run with the user. For the desktop, launch PairRoom and open the Management URL it prints; the URL can contain an authentication token, so do not publish it.
 
 ## Upgrade and uninstall mechanics
 

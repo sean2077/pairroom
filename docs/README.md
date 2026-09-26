@@ -9,6 +9,7 @@ Start with the question, not every document. **Embedded** owns vendor adapters a
 | Product overview in English / Chinese | [README](../README.md) / [简体中文](../README.zh-CN.md) |
 | Decide whether PairRoom fits | [Why PairRoom](WHY_PAIRROOM.md) and dated [Alternatives](ALTERNATIVES.md) |
 | Install, upgrade, or uninstall a package | [Installation](INSTALLATION.md) |
+| Let a coding Agent install and check the environment step by step | [Agent-assisted setup](AGENT_SETUP.md) |
 | First Mock/Embedded Room and review-first task recipes | [Getting started](GETTING_STARTED.md) |
 | Native install, create/join, publication, wake, UI, and recovery | [Native relay](NATIVE_RELAY.md) |
 | Native cwd/worktree identity and locator recovery | [Native session workspace discovery](NATIVE_SESSION_WORKSPACE.md) |

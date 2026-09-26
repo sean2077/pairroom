@@ -34,7 +34,14 @@ pairroom service --mock --data-root "$HOME/.pairroom-demo"
 
 Use an unused demo data root and a disposable Git repository. In Management, register the repository as a Project, create an **Embedded** Room, and send a small task. Mock does not launch vendor CLIs or consume model quota; it does not demonstrate model quality. Do not share the authenticated startup URL.
 
-For real work, install and authenticate each selected CLI independently. Follow [Getting started](docs/GETTING_STARTED.md) for the Embedded path, or [Native setup](docs/NATIVE_RELAY.md) to retain your original sessions. A CLI version or environment check alone does not prove authentication or model availability.
+For real work, install and authenticate each selected CLI independently. Start with an **Embedded** Room ([Getting started](docs/GETTING_STARTED.md)); move to **Native** ([Native setup](docs/NATIVE_RELAY.md)) to keep your original sessions for daily work. A CLI version or environment check alone does not prove authentication or model availability.
+
+To have your coding Agent guide installation and environment checks, ask it to read [Agent-assisted setup](docs/AGENT_SETUP.md):
+
+```text
+Read https://raw.githubusercontent.com/sean2077/pairroom/main/docs/AGENT_SETUP.md
+and help me install PairRoom and check my environment. Ask before each change.
+```
 
 ## Important boundaries
 
