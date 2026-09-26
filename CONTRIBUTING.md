@@ -4,7 +4,7 @@ Read [AGENTS.md](AGENTS.md) and [project terminology](CONTEXT.md) before changin
 
 ## Development setup
 
-Install the latest stable Go release (minimum Go 1.27), Node.js (CI uses 22.x), Python 3, Git, Make, and Bash. The root CLI is CGo-free; race testing additionally requires `CGO_ENABLED=1` and a Go-supported C compiler on PATH. On Windows, use a supported toolchain such as MSYS2 MinGW.
+Install the latest stable Go release (minimum Go 1.27), Node.js (CI uses 22.x), Python 3, Git, GNU Make (4 or newer on Windows), and Bash. The root CLI is CGo-free; race testing additionally requires `CGO_ENABLED=1` and a Go-supported C compiler on PATH. On Windows, use a supported toolchain such as MSYS2 MinGW and read [Windows development](#windows-development).
 
 ```bash
 git clone https://github.com/sean2077/pairroom.git
@@ -18,6 +18,19 @@ make smoke
 `make install` installs to `GOBIN` (default `GOPATH/bin`), reports PATH visibility, and never edits PATH. `make dev` stops an installed daemon before running the current-tree Service. The Wails desktop is a separate module; keep GUI dependencies out of the root. Build/update and `DESKTOP_INSTALL_DIR` behavior belong in [Desktop development](desktop/README.md).
 
 The `Makefile` is the command entry point; run targets from the repository root. `scripts/` holds the build, check, install, and release internals those targets and CI call, plus the `test_*.py`/`test_*.js` regressions; keep their Make/CI invocations stable. `tools/visual_smoke.py` is a standalone Playwright screenshot aid against stubbed Management data. It writes untracked `artifacts/screenshots/` and belongs to no gate.
+
+`make env-check` is a read-only report of `make check` prerequisites for the current platform: GNU Make version, Go toolchain against `go.mod`, Go cache paths, CGO and C compiler for `make race`, the `PYTHON`/`DESKTOP_PYTHON` commands, Node.js, the pinned `golangci-lint`, CRLF Go files in the working tree, and on Windows the profile and temporary-directory variables. It prints `PASS`/`WARN`/`FAIL` lines with a fix for each problem and exits nonzero only on `FAIL`. It changes nothing (it asks Go with `GOPROXY=off` so a missing toolchain is reported, not downloaded) and is not part of `make check`; `make env-check-contract` tests its rules and is.
+
+### Windows development
+
+Run `make env-check` first; each item below is one of its checks.
+
+- **GNU Make 4 or newer.** GnuWin32 Make 3.81, a common Windows default, truncates long recipes, so `make check` fails in its gofmt step with a shell syntax error such as `unexpected end of file`. MSYS2 `make` (`pacman -S make`, `C:/msys64/usr/bin/make.exe`) works.
+- **Race detector.** `make race` needs `CGO_ENABLED=1` and a Go-supported C compiler on PATH, such as MSYS2 UCRT64 gcc (`pacman -S mingw-w64-ucrt-x86_64-gcc`, then add `C:/msys64/ucrt64/bin`). A `CGO_ENABLED=0` persisted in `go env GOENV` applies until you export `CGO_ENABLED=1` or rewrite it with `go env -w`.
+- **Python.** `python`/`python3` may resolve to the `WindowsApps` aliases of the Microsoft Store or Python install manager. Run from an environment without `LOCALAPPDATA`, the install manager deploys a `Python/` directory into the current directory and dirties the tree. Pass a real interpreter as a make variable: `make check PYTHON=C:/path/to/python.exe DESKTOP_PYTHON=C:/path/to/python.exe` (`DESKTOP_PYTHON` defaults to `python` on Windows).
+- **Environment across MSYS runtimes.** Git Bash and MSYS2 are separate MSYS runtimes. Starting MSYS2 `make` from Git Bash passes it almost no environment: `USERPROFILE`, `LOCALAPPDATA`, `APPDATA`, `TMP`, `TEMP`, `GOPATH`, `CGO_ENABLED`, and an exported `PYTHON` are dropped, so Go reports `module cache not found` and desktop checks cannot find the home directory. Start it from PowerShell or `cmd` (which keeps the environment), and pass `PYTHON` on the make command line rather than in the environment.
+- **Temporary directory.** Go on Windows uses `TMP`, then `TEMP`, and ignores `TMPDIR`. An empty or drive-relative `TMP` makes `t.TempDir()` return a path such as `\TestX\001`, which Service tests reject as a data root. If you set them yourself, use absolute Windows paths; with neither set, Go falls back to `USERPROFILE` or the Windows directory.
+- **Line endings.** `.gitattributes` checks text out as LF, but a checkout created before it can keep CRLF Go files that `git status` does not show and gofmt reports. For each file shown as `w/crlf` by `git ls-files --eol -- '*.go'`, delete it and `git restore` it; a plain `git restore` skips it.
 
 ## Change workflow
 
