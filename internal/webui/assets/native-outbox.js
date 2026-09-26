@@ -30,26 +30,55 @@
     if (!plain(value) || value.schema !== 1 || value.room !== room || !valid(value.payload)) throw new Error('outbox_invalid');
     return value.payload;
   }
-  function save(storage, room, payload) {
+  // localStorage read/write/verify is not a cross-tab transaction. Mutations
+  // use a same-origin Room lock, held only for synchronous storage operations.
+  // Never queue an explicit send behind a hidden tab or silently fall back to
+  // an unlocked write when Web Locks are unavailable.
+  async function mutate(room, operation) {
+    const manager = globalThis.navigator?.locks;
+    if (!manager || typeof manager.request !== 'function') throw new Error('outbox_unavailable');
+    return manager.request(key(room), {mode: 'exclusive', ifAvailable: true}, lock => {
+      if (!lock) throw new Error('outbox_conflict');
+      return operation();
+    });
+  }
+  async function save(storage, room, payload) {
     if (!valid(payload)) throw new Error('outbox_invalid');
-    const old = load(storage, room);
-    if (old && JSON.stringify(old) !== JSON.stringify(payload)) throw new Error('outbox_conflict');
+    // Freeze the bytes before awaiting lock acquisition; a caller's mutable
+    // object must not change the identity or body reserved by this operation.
+    const body = JSON.stringify(payload);
     const raw = JSON.stringify({schema: 1, room, payload});
     if (raw.length > MAX_BYTES) throw new Error('outbox_invalid');
-    storage.setItem(key(room), raw); // Must succeed BEFORE publication.
-    if (storage.getItem(key(room)) !== raw) throw new Error('outbox_unavailable');
+    return mutate(room, () => {
+      const old = load(storage, room);
+      if (old && JSON.stringify(old) !== body) throw new Error('outbox_conflict');
+      storage.setItem(key(room), raw); // Must succeed BEFORE publication.
+      if (storage.getItem(key(room)) !== raw) throw new Error('outbox_unavailable');
+    });
   }
-  function clear(storage, room, expectedID) {
-    const old = load(storage, room);
-    if (old && old.id !== expectedID) throw new Error('outbox_conflict');
-    storage.removeItem(key(room));
-    if (storage.getItem(key(room)) !== null) throw new Error('outbox_unavailable');
+  async function clear(storage, room, expectedID) {
+    return mutate(room, () => {
+      const old = load(storage, room);
+      if (old && old.id !== expectedID) throw new Error('outbox_conflict');
+      storage.removeItem(key(room));
+      if (storage.getItem(key(room)) !== null) throw new Error('outbox_unavailable');
+    });
   }
-  function forget(storage, room) { storage.removeItem(key(room)); if (storage.getItem(key(room)) !== null) throw new Error('outbox_unavailable'); }
+  function capture(storage, room) { return storage.getItem(key(room)); }
+  async function forget(storage, room, expected) {
+    if (expected !== null && typeof expected !== 'string') throw new Error('outbox_conflict');
+    return mutate(room, () => {
+      // The confirmation dialog may outlive another tab's recovery/new draft.
+      // Corrupt records are removable, but only the exact bytes confirmed.
+      if (capture(storage, room) !== expected) throw new Error('outbox_conflict');
+      storage.removeItem(key(room));
+      if (capture(storage, room) !== null) throw new Error('outbox_unavailable');
+    });
+  }
   function matches(payload, message) {
     return Boolean(message) && message.from === 'user' && message.text === payload.text && message.to === payload.to &&
       JSON.stringify((message.attachments || []).map(a => a.id).sort()) === JSON.stringify([...payload.attachment_ids].sort()) &&
       JSON.stringify(message.review || null) === JSON.stringify(payload.review || null);
   }
-  window.PairRoomNativeOutbox = {load, save, clear, forget, matches};
+  window.PairRoomNativeOutbox = {load, save, clear, capture, forget, matches};
 })();
