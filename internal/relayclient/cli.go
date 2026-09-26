@@ -49,7 +49,30 @@ type stringsFlag []string
 
 func (s *stringsFlag) String() string     { return strings.Join(*s, ",") }
 func (s *stringsFlag) Set(v string) error { *s = append(*s, v); return nil }
+
+// Run executes one relay subcommand. Afterwards it prints at most one stderr
+// line when a Service response named a release other than this CLI's; stdout
+// stays the machine-readable handoff channel. Preflight reports the release
+// itself.
 func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Writer) error {
+	ctx, observed := withServiceObservation(ctx)
+	err := run(ctx, args, in, out, diagnostic)
+	if len(args) == 0 || args[0] == "preflight" {
+		return err
+	}
+	// A skew-shaped failure may happen before any Service contact, such as a
+	// binding the older CLI cannot find. Only then, and never in the Stop hook,
+	// spend one bounded read to learn the release.
+	if args[0] != "hook" && observed.needsProbe(err) {
+		probeServiceRelease(ctx, observed.endpointPath())
+	}
+	if hint := observed.hint(err); hint != "" {
+		_, _ = fmt.Fprintln(diagnostic, hint)
+	}
+	return err
+}
+
+func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Writer) error {
 	if len(args) == 0 {
 		return errors.New("use pairroom relay install|preflight|bind|hook|send|exchange|wait|status|history|doctor|review|peer|park|nudge|reconcile|unbind (see docs/CLI_REFERENCE.md)")
 	}
@@ -194,6 +217,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		*runtimeFlag.value = string(kind)
 	}
 	o.slot = normalizeSlot(o.slot)
+	noteServiceEndpoint(ctx, o.endpoint)
 	if action == "hook" {
 		return runHook(ctx, o, in, out, diagnostic)
 	}
@@ -239,6 +263,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		release()
 		return err
 	}
+	noteServiceEndpoint(ctx, c.State.EndpointPath)
 	if err := validateCommandCaller(c); err != nil {
 		release()
 		return err
@@ -565,6 +590,7 @@ func management(ctx context.Context, endpoint relay.Endpoint, method, path strin
 		return errors.New("Service unavailable; verify current endpoint file")
 	}
 	defer res.Body.Close()
+	observeServiceResponse(ctx, res)
 	if res.StatusCode != 200 && res.StatusCode != 201 {
 		var e struct {
 			Error string `json:"error"`
@@ -575,7 +601,22 @@ func management(ctx context.Context, endpoint relay.Endpoint, method, path strin
 		}
 		return fmt.Errorf("Service rejected request: %s", e.Error)
 	}
-	return json.NewDecoder(io.LimitReader(res.Body, 16<<20)).Decode(result)
+	if method != http.MethodGet || path != "/api/v1/service" {
+		return json.NewDecoder(io.LimitReader(res.Body, 16<<20)).Decode(result)
+	}
+	// The snapshot's display version also names a Service that predates the
+	// release response header.
+	body, err := io.ReadAll(io.LimitReader(res.Body, 16<<20))
+	if err != nil {
+		return err
+	}
+	var snapshot struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(body, &snapshot) == nil {
+		observeServiceSnapshotVersion(ctx, snapshot.Version)
+	}
+	return json.Unmarshal(body, result)
 }
 
 // Commands are pasted into the native PowerShell (Windows) or POSIX shell.
@@ -787,7 +828,7 @@ func resolveSlotDefaults(root string, o *options) error {
 		all = append(all, candidate{room: s.Room, slot: s.Slot, harnessPID: s.HarnessPID, harness: s.HarnessName})
 	}
 	if len(all) == 0 {
-		return errors.New("no relay binding in this workspace; run pairroom relay bind first")
+		return errNoWorkspaceBinding
 	}
 	matched := all
 	if pid, name, ok := harnessAncestor(); ok {
@@ -934,6 +975,7 @@ func (c *Client) upload(ctx context.Context, path string) (string, error) {
 		return "", errors.New("relay attachment upload unavailable")
 	}
 	defer res.Body.Close()
+	observeServiceResponse(ctx, res)
 	if res.StatusCode != 200 && res.StatusCode != 201 {
 		return "", errors.New("attachment rejected by Room validation")
 	}

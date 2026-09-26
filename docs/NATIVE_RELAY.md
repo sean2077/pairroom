@@ -26,6 +26,8 @@ Review and approve the exact installed definitions in the harness: Codex `/hooks
 
 Before binding, run `pairroom relay preflight` in each Agent session (or any shell in the Project). It checks, without changing anything, that the bare `pairroom` command resolves on that shell's PATH, the Service is reachable and from the same release, and the Stop hook is installed, then prints ordered `next_steps` and exits nonzero until setup is ready. It cannot see approval; the first finished turn's `last_hook_at` in `relay doctor` confirms that.
 
+After setup, relay commands and hooks print one stderr line suggesting `pairroom relay preflight` whenever the Service reports a different release than the CLI, including beside errors that version skew can cause, such as "no matching binding". It uses responses the command already receives and never writes to stdout. See [CLI reference](CLI_REFERENCE.md#native-relay-commands).
+
 Installation also writes the relay skill. Skill roots honor `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and `GROK_HOME`; project hooks stay project-local. The optional `npx skills add sean2077/pairroom` route installs the skill, **not** the hooks or their approval. That route needs Node's package runner; the Go relay CLI does not.
 
 ## Create, join, collaborate
@@ -144,6 +146,7 @@ Use background wait only where the harness actually surfaces its completion. Hum
 | Symptom | Action |
 |---|---|
 | `pairroom` is missing in the Agent's shell | Fix that shell's PATH and verify its CLI version, not just Desktop startup |
+| stderr says the Service runs a different release | Run `pairroom relay preflight` and use the CLI from the Service's release (for example the one bundled with Desktop) before other recovery |
 | Service is unavailable | Start/reuse the intended Service; a custom data root uses `--service-file <root>/relay-endpoint.json`, never pasted file contents |
 | Hook missing or unapproved | Install for the intended Runtime and review the exact native definition |
 | Missing/conflicting session identity | Run bind as the Agent's tool call in the intended session; do not fabricate metadata |

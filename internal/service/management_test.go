@@ -816,3 +816,30 @@ func TestManagementRuntimeControlErrorsUseConflict(t *testing.T) {
 		})
 	}
 }
+
+// Relay commands name a CLI/Service release mismatch from this header without
+// an extra request, including on relay calls rejected before authentication.
+func TestManagementAPIResponsesCarryServiceRelease(t *testing.T) {
+	registry, _ := testRegistry(t, testGitRepo(t))
+	server, _ := newManagementTestServer(t, registry, SyntheticProvisioner{})
+	for _, tc := range []struct {
+		method, path string
+		authorized   bool
+		status       int
+	}{
+		{http.MethodGet, "/api/v1/service", true, http.StatusOK},
+		{http.MethodGet, "/api/v1/service", false, http.StatusUnauthorized},
+		{http.MethodPost, "/api/v1/relay/missing/slot1/report", false, http.StatusUnauthorized},
+	} {
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, managementRequest(tc.method, tc.path, `{}`, tc.authorized))
+		if response.Code != tc.status || response.Header().Get(relay.VersionHeader) != version.Current {
+			t.Fatalf("%s %s: status=%d release header=%q", tc.method, tc.path, response.Code, response.Header().Get(relay.VersionHeader))
+		}
+	}
+	shell := httptest.NewRecorder()
+	server.Handler().ServeHTTP(shell, managementRequest(http.MethodGet, "/", "", false))
+	if shell.Header().Get(relay.VersionHeader) != "" {
+		t.Fatal("release header is scoped to the API, not the Management Shell document")
+	}
+}

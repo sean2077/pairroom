@@ -15,6 +15,11 @@ import (
 
 const EndpointFile = "relay-endpoint.json"
 
+// VersionHeader carries the Service release (no build metadata) on every
+// Management API response, so relay commands can name a CLI/Service release
+// mismatch without an extra request.
+const VersionHeader = "X-PairRoom-Version"
+
 // Endpoint is owner-only local CLI discovery, never a Room or browser payload.
 type Endpoint struct {
 	URL   string `json:"url"`
