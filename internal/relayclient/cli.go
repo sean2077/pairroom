@@ -341,6 +341,10 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		}
 		var msg relay.Message
 		err = c.call(ctx, "send", map[string]any{"id": o.id, "text": text, "to": to, "attachment_ids": attachments, "review": anchor}, &msg)
+		if relayErrorCode(err) == relay.SendPayloadConflictCode {
+			// Settled, not uncertain: this ID already names an accepted message.
+			return fmt.Errorf("--id %s was already used for a different message (body, target, attachments, quote or review); nothing new was published. Check relay history for the original; send new content with a new --id", o.id)
+		}
 		if err != nil {
 			return fmt.Errorf("%w; publication uncertain: retry with the SAME --id %s, not a new ID", err, o.id)
 		}
@@ -385,13 +389,22 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	case "doctor":
 		var report map[string]any
 		if err := c.call(ctx, "doctor", nil, &report); err != nil {
+			if relayErrorCode(err) == "runtime_not_ready" {
+				// Doctor deliberately never activates a Room: activation resumes
+				// Service-managed wake, which a read-only diagnosis must not start.
+				return fmt.Errorf("%w: the Native Room is suspended (for example after a Service restart or idle timeout) and doctor never activates it. Run pairroom relay status --brief --room %s --slot %s, which activates it, or open the Room in Management, then rerun doctor", err, o.room, o.slot)
+			}
 			return err
 		}
 		hook := "installed"
 		if installed(root, c.State.Runtime) != nil {
 			hook = "missing_or_disabled"
 		}
-		report["local"] = map[string]any{"cli_version": version.Current, "protocol": protocol.NativeVersion, "protocol_match": report["protocol"] == protocol.NativeVersion, "service_version_match": report["service_version"] == version.Current, "workspace_match": root == c.State.Workspace, "hook_installation": hook, "hook_approval": "unknown", "last_hook_at": c.State.LastHookAt}
+		local := map[string]any{"cli_version": version.Current, "protocol": protocol.NativeVersion, "protocol_match": report["protocol"] == protocol.NativeVersion, "service_version_match": report["service_version"] == version.Current, "workspace_match": root == c.State.Workspace, "hook_installation": hook, "hook_approval": "unknown", "last_hook_at": c.State.LastHookAt}
+		if hint := hookNotRunHint(c.State); hint != "" {
+			local["hook_hint"] = hint
+		}
+		report["local"] = local
 		return writeJSON(out, report)
 	case "peer":
 		var peer relay.Binding
@@ -420,6 +433,8 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		local := map[string]any{"last_confirmed_seq": c.State.LastConfirmedSeq, "last_seq": c.State.LastSeq, "publication_unknown": errors.Is(err, relay.ErrUnknown), "binding_workspace": c.State.Workspace}
 		if c.State.LastHookAt != "" {
 			local["last_hook_at"] = c.State.LastHookAt
+		} else {
+			local["hook_hint"] = hookNotRunHint(c.State)
 		}
 		if c.State.Pending != nil {
 			local["pending_seq"] = c.State.Pending.Seq

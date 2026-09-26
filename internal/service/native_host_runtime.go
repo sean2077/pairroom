@@ -356,6 +356,12 @@ func nativeResult(w http.ResponseWriter, value any, err error) {
 		if errors.Is(err, relay.ErrAuth) {
 			status = 401
 		}
+		if errors.Is(err, relay.ErrSendPayloadConflict) {
+			// A settled answer, unlike transport uncertainty: the CLI must not
+			// advise retrying this ID.
+			writeManagementJSON(w, status, map[string]string{"error": err.Error(), "code": relay.SendPayloadConflictCode})
+			return
+		}
 		writeManagementError(w, status, err.Error())
 		return
 	}

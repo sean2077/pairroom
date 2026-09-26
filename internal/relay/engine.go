@@ -590,7 +590,14 @@ func (e *Engine) sendLocked(from, to model.ActorID, req SendRequest, key string)
 		var values []model.Attachment
 		var err error
 		if retry {
-			values, err = acceptedAttachments(original, req.AttachmentIDs)
+			var resolve func(string) (model.Attachment, error)
+			if e.cfg.Media != nil {
+				resolve = func(id string) (model.Attachment, error) {
+					a, _, err := e.cfg.Media.Resolve(id)
+					return a, err
+				}
+			}
+			values, err = acceptedAttachments(original, req.AttachmentIDs, resolve)
 		} else if e.cfg.Media == nil {
 			return Message{}, errors.New("attachment store unavailable")
 		} else {
@@ -632,7 +639,7 @@ func (e *Engine) sendLocked(from, to model.ActorID, req SendRequest, key string)
 	}
 	if retry {
 		if !sameMessagePayload(original, m) {
-			return Message{}, errSendPayloadConflict
+			return Message{}, ErrSendPayloadConflict
 		}
 		return cloneMessage(original), nil
 	}
