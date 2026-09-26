@@ -165,6 +165,8 @@ func (c *CodexAdapter) handleRPCLine(line []byte) {
 	delete(c.pending, id)
 	hook := c.replyHooks[id]
 	delete(c.replyHooks, id)
+	_, abandoned := c.abandonedCalls[id]
+	delete(c.abandonedCalls, id)
 	c.mu.Unlock()
 	if ch == nil {
 		return
@@ -174,7 +176,7 @@ func (c *CodexAdapter) handleRPCLine(line []byte) {
 		reply = rpcReply{err: *envelope.Error}
 	}
 	if hook != nil {
-		reply = hook(reply)
+		reply = hook(reply, abandoned)
 	}
 	ch <- reply
 }
@@ -193,6 +195,7 @@ func (c *CodexAdapter) failPendingRPCs(detail string) {
 	pending := c.pending
 	c.pending = make(map[int64]chan rpcReply)
 	c.replyHooks = nil
+	c.abandonedCalls = nil
 	c.approvals = make(map[string]pendingApproval)
 	c.mu.Unlock()
 

@@ -485,6 +485,9 @@ func (e *Engine) processing(messageID string, target model.ActorID, state model.
 	e.mu.Unlock()
 	if err == nil {
 		e.cfg.Hub.Publish(event)
+		if state != model.ProcessingWaiting {
+			e.resolveUnknownSubmission(messageID, target)
+		}
 	}
 }
 

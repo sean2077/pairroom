@@ -59,9 +59,11 @@ type CodexAdapter struct {
 	pending map[int64]chan rpcReply
 	// replyHooks run on the stdout reader when their response arrives, so a
 	// turn/start response is applied before the turn's later notifications.
-	replyHooks map[int64]codexReplyHook
-	approvals  map[string]pendingApproval
-	turnInputs map[string][]model.AgentInput
+	// abandonedCalls marks requests whose caller stopped waiting.
+	replyHooks     map[int64]codexReplyHook
+	abandonedCalls map[int64]struct{}
+	approvals      map[string]pendingApproval
+	turnInputs     map[string][]model.AgentInput
 	// wireInputs holds inputs keyed by Codex's documented
 	// clientUserMessageId while a turn/start or turn/steer request is in flight.
 	// The matching userMessage item echoes this value as clientId, allowing
@@ -87,7 +89,7 @@ type CodexAdapter struct {
 	nextRequestID      atomic.Int64
 }
 
-type codexReplyHook func(reply rpcReply) rpcReply
+type codexReplyHook func(reply rpcReply, abandoned bool) rpcReply
 
 // codexPendingCompletionLimit bounds completions held while a turn/start
 // response is outstanding; a stale replay stream cannot grow it without limit.
@@ -370,6 +372,7 @@ func (c *CodexAdapter) waitProcess(cmd *exec.Cmd) {
 		pending = c.pending
 		c.pending = make(map[int64]chan rpcReply)
 		c.replyHooks = nil
+		c.abandonedCalls = nil
 		c.approvals = make(map[string]pendingApproval)
 	}
 	c.mu.Unlock()

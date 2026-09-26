@@ -9,7 +9,9 @@ import (
 	"os/exec"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/prompt"
@@ -1052,5 +1054,173 @@ func TestCodexAcceptedSteerAfterFailedCompletionInheritsTurnOutcome(t *testing.T
 	}
 	if terminal[model.RuntimeInputFailed] != 1 || terminal[model.RuntimeInputCompleted] != 0 {
 		t.Fatalf("accepted steer terminal events=%v all=%#v", terminal, events)
+	}
+}
+
+// codexRequestCapture records requests without answering them, like an
+// app-server that is slow to reply.
+type codexRequestCapture struct {
+	mu       sync.Mutex
+	requests []codexCapturedRequest
+}
+
+type codexCapturedRequest struct {
+	ID     int64  `json:"id"`
+	Method string `json:"method"`
+}
+
+func (r *codexRequestCapture) Write(data []byte) (int, error) {
+	var request codexCapturedRequest
+	if err := json.Unmarshal(data, &request); err != nil {
+		return 0, err
+	}
+	r.mu.Lock()
+	r.requests = append(r.requests, request)
+	r.mu.Unlock()
+	return len(data), nil
+}
+
+func (*codexRequestCapture) Close() error { return nil }
+
+func (r *codexRequestCapture) ids(method string) []int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var ids []int64
+	for _, request := range r.requests {
+		if request.Method == method {
+			ids = append(ids, request.ID)
+		}
+	}
+	return ids
+}
+
+func newUnansweredCodex(t *testing.T) (*CodexAdapter, *codexRequestCapture, *[]model.RuntimeEvent) {
+	t.Helper()
+	previous := codexTurnStartTimeout
+	codexTurnStartTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { codexTurnStartTimeout = previous })
+	events := &[]model.RuntimeEvent{}
+	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) { *events = append(*events, event) })
+	capture := &codexRequestCapture{}
+	adapter.cmd = &exec.Cmd{Process: &os.Process{Pid: os.Getpid()}}
+	adapter.stdin = capture
+	adapter.threadID = "thread-1"
+	adapter.state = model.StateIdle
+	t.Cleanup(func() { adapter.cmd = nil })
+	err := adapter.StartTurn(context.Background(), model.AgentInput{MessageID: "msg-late"})
+	if !errors.Is(err, ErrSubmissionUnknown) {
+		t.Fatalf("unanswered turn/start error = %v, want ErrSubmissionUnknown", err)
+	}
+	for _, event := range *events {
+		if event.CorrelationID == "msg-late" {
+			t.Fatalf("unanswered turn/start emitted %#v", event)
+		}
+	}
+	return adapter, capture, events
+}
+
+func countCorrelated(events []model.RuntimeEvent, correlationID string) map[string]int {
+	counts := map[string]int{}
+	for _, event := range events {
+		if event.CorrelationID == correlationID {
+			counts[event.Kind]++
+		}
+	}
+	return counts
+}
+
+func TestCodexUnansweredTurnStartBindsLateAcceptance(t *testing.T) {
+	adapter, capture, events := newUnansweredCodex(t)
+	if err := adapter.StartTurn(context.Background(), model.AgentInput{MessageID: "msg-next"}); err == nil || errors.Is(err, ErrSubmissionUnknown) {
+		t.Fatalf("second turn/start while the first is unanswered: %v", err)
+	}
+	ids := capture.ids("turn/start")
+	if len(ids) != 1 {
+		t.Fatalf("turn/start requests = %v; an input was resubmitted", ids)
+	}
+	adapter.handleRPCLine([]byte(fmt.Sprintf(`{"id":%d,"result":{"turn":{"id":"turn-late"}}}`, ids[0])))
+	adapter.handleRPCLine([]byte(`{"method":"turn/completed","params":{"turn":{"id":"turn-late","status":"completed","items":[{"type":"agentMessage","text":"late answer"}]}}}`))
+
+	counts := countCorrelated(*events, "msg-late")
+	if counts[model.RuntimeTurnStarted] != 1 || counts[model.RuntimeInputCompleted] != 1 || counts[model.RuntimeFinal] != 1 || counts[model.RuntimeTurnCompleted] != 1 {
+		t.Fatalf("late acceptance lifecycle = %v; events %#v", counts, *events)
+	}
+}
+
+func TestCodexLateTurnStartRejectionSettlesWithBoundary(t *testing.T) {
+	adapter, capture, events := newUnansweredCodex(t)
+	ids := capture.ids("turn/start")
+	adapter.handleRPCLine([]byte(fmt.Sprintf(`{"id":%d,"error":{"code":-32600,"message":"thread busy"}}`, ids[0])))
+
+	counts := countCorrelated(*events, "msg-late")
+	if counts[model.RuntimeInputFailed] != 1 || counts[model.RuntimeTurnCompleted] != 1 || counts[model.RuntimeInputCompleted] != 0 {
+		t.Fatalf("late rejection = %v; events %#v", counts, *events)
+	}
+	// The rejected input no longer blocks the next submission.
+	codexTurnStartTimeout = 5 * time.Millisecond
+	if err := adapter.StartTurn(context.Background(), model.AgentInput{MessageID: "msg-next"}); !errors.Is(err, ErrSubmissionUnknown) {
+		t.Fatalf("next turn/start after rejection: %v", err)
+	}
+}
+
+func TestCodexStopSettlesUnansweredTurnStart(t *testing.T) {
+	adapter, _, events := newUnansweredCodex(t)
+	adapter.cmd = nil
+	if err := adapter.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if counts := countCorrelated(*events, "msg-late"); counts[model.RuntimeInputCancelled] != 1 {
+		t.Fatalf("stop did not settle the staged input: %v", counts)
+	}
+}
+
+// codexDelayedTurnStart answers turn/start after a delay, from another
+// goroutine, like the app-server's stdout reader.
+type codexDelayedTurnStart struct {
+	adapter *CodexAdapter
+	delay   time.Duration
+}
+
+func (r *codexDelayedTurnStart) Write(data []byte) (int, error) {
+	var request codexCapturedRequest
+	if err := json.Unmarshal(data, &request); err != nil {
+		return 0, err
+	}
+	if request.Method == "turn/start" {
+		go func() {
+			time.Sleep(r.delay)
+			r.adapter.handleRPCLine([]byte(fmt.Sprintf(`{"id":%d,"result":{"turn":{"id":"turn-slow"}}}`, request.ID)))
+		}()
+	}
+	return len(data), nil
+}
+
+func (*codexDelayedTurnStart) Close() error { return nil }
+
+func TestCodexTurnStartDeadlineIsSeparateFromCallerDeadline(t *testing.T) {
+	var mu sync.Mutex
+	var events []model.RuntimeEvent
+	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+	})
+	adapter.cmd = &exec.Cmd{Process: &os.Process{Pid: os.Getpid()}}
+	adapter.stdin = &codexDelayedTurnStart{adapter: adapter, delay: 30 * time.Millisecond}
+	adapter.threadID = "thread-1"
+	adapter.state = model.StateIdle
+	defer func() { adapter.cmd = nil }()
+	// A lazy Start may consume the caller's whole deadline; turn/start still
+	// gets its own budget instead of failing immediately.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	<-ctx.Done()
+	if err := adapter.StartTurn(ctx, model.AgentInput{MessageID: "msg-slow"}); err != nil {
+		t.Fatalf("turn/start failed on the caller's exhausted deadline: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if counts := countCorrelated(events, "msg-slow"); counts[model.RuntimeTurnStarted] != 1 {
+		t.Fatalf("accepted turn was not started: %v", counts)
 	}
 }

@@ -12,6 +12,10 @@ import (
 	"github.com/sean2077/pairroom/internal/prompt"
 )
 
+// codexTurnStartTimeout bounds one turn/start request. It is separate from
+// the caller's deadline, which also covers a lazy app-server Start.
+var codexTurnStartTimeout = 45 * time.Second
+
 func (c *CodexAdapter) StartTurn(ctx context.Context, input model.AgentInput) error {
 	// A Codex thread accepts one active turn. PairRoom reserves the Room owner;
 	// this lock closes the smaller native start/steer observation race.
@@ -27,10 +31,14 @@ func (c *CodexAdapter) StartTurn(ctx context.Context, input model.AgentInput) er
 	threadID := c.threadID
 	turnID := c.currentTurn
 	active := turnID != "" && (c.state == model.StateWorking || c.state == model.StateWaiting)
+	unanswered := c.startingInput != nil
 	c.mu.Unlock()
 
 	if active {
 		return errors.New("Codex already has an active turn")
+	}
+	if unanswered {
+		return errors.New("Codex has not answered an earlier turn/start; stop the participant before submitting again")
 	}
 
 	params := c.turnStartParams(threadID, text, input)
@@ -42,30 +50,8 @@ func (c *CodexAdapter) StartTurn(ctx context.Context, input model.AgentInput) er
 	c.startingTurnID = ""
 	c.mu.Unlock()
 	c.stageWireInput(input)
-	if err := c.callTurnStart(ctx, input, params); err != nil {
-		c.mu.Lock()
-		c.startingInput = nil
-		c.startingTurnID = ""
-		c.pendingCompletions = make(map[string]json.RawMessage)
-		c.mu.Unlock()
-		c.unstageWireInput(input.MessageID)
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			// The app-server may have accepted turn/start after the deadline;
-			// the orphaned native turn is not reachable through Interrupt once
-			// local state was cleared, so the failure must tell the operator to
-			// inspect before retrying.
-			return fmt.Errorf("%w; the native turn/start may still have been accepted — inspect the Codex thread before retrying this input", err)
-		}
-		return err
-	}
-	return nil
-}
-
-// callTurnStart sends turn/start and applies a successful response on the
-// stdout reader, in wire order, before the reader handles the turn's later
-// notifications. Applying it on the waiting goroutine instead would race the
-// turn's own turn/completed and could settle it without its correlation.
-func (c *CodexAdapter) callTurnStart(ctx context.Context, input model.AgentInput, params map[string]any) error {
+	callCtx, cancel := codexTurnStartContext(ctx)
+	defer cancel()
 	for attempt := 0; ; attempt++ {
 		id := c.nextRequestID.Add(1)
 		ch := make(chan rpcReply, 1)
@@ -74,13 +60,10 @@ func (c *CodexAdapter) callTurnStart(ctx context.Context, input model.AgentInput
 		if c.replyHooks == nil {
 			c.replyHooks = make(map[int64]codexReplyHook)
 		}
-		c.replyHooks[id] = func(reply rpcReply) rpcReply {
-			if reply.err == nil {
-				if err := c.acceptTurnStart(input, reply.result); err != nil {
-					reply.err = err
-				}
-			}
-			return reply
+		// The reader applies the response in wire order, before it handles the
+		// turn's later notifications, whether or not this call still waits.
+		c.replyHooks[id] = func(reply rpcReply, abandoned bool) rpcReply {
+			return c.applyTurnStartReply(input, reply, abandoned)
 		}
 		c.mu.Unlock()
 		if err := c.send(map[string]any{"id": id, "method": "turn/start", "params": params}); err != nil {
@@ -88,25 +71,44 @@ func (c *CodexAdapter) callTurnStart(ctx context.Context, input model.AgentInput
 			delete(c.pending, id)
 			delete(c.replyHooks, id)
 			c.mu.Unlock()
+			c.clearStagedStart(input.MessageID)
 			return err
 		}
 		var reply rpcReply
 		select {
 		case reply = <-ch:
-		case <-ctx.Done():
+		case <-callCtx.Done():
 			c.mu.Lock()
 			_, waiting := c.pending[id]
-			delete(c.pending, id)
-			delete(c.replyHooks, id)
+			if waiting {
+				if c.abandonedCalls == nil {
+					c.abandonedCalls = make(map[int64]struct{})
+				}
+				c.abandonedCalls[id] = struct{}{}
+			}
 			c.mu.Unlock()
 			if waiting {
-				return ctx.Err()
+				// Keep the input staged: a late response, its clientId echo, a
+				// completion, Stop, or process exit settles it with evidence.
+				return fmt.Errorf("%w: Codex turn/start was sent but not answered (%v); it may still be accepted, so it is not resubmitted", ErrSubmissionUnknown, callCtx.Err())
 			}
 			// The reader already took the response and is applying it.
 			reply = <-ch
 		}
+		if reply.err == nil {
+			return nil
+		}
 		var rpcErr codexRPCError
-		if reply.err == nil || !errors.As(reply.err, &rpcErr) || rpcErr.Code != -32001 || attempt >= 4 {
+		if errors.Is(reply.err, errCodexMalformedTurnStart) {
+			return reply.err
+		}
+		if !errors.As(reply.err, &rpcErr) {
+			// Stop or process exit failed the request in flight; that path
+			// reports the staged input.
+			return fmt.Errorf("%w: %v", ErrSubmissionUnknown, reply.err)
+		}
+		if rpcErr.Code != -32001 || attempt >= 4 {
+			c.clearStagedStart(input.MessageID)
 			return reply.err
 		}
 		delay := time.Duration(100*(1<<attempt))*time.Millisecond + time.Duration(time.Now().UnixNano()%75)*time.Millisecond
@@ -116,15 +118,86 @@ func (c *CodexAdapter) callTurnStart(ctx context.Context, input model.AgentInput
 		c.sink(logEvent)
 		timer := time.NewTimer(delay)
 		select {
-		case <-ctx.Done():
+		case <-callCtx.Done():
 			timer.Stop()
-			return ctx.Err()
+			c.clearStagedStart(input.MessageID)
+			return callCtx.Err()
 		case <-timer.C:
 		}
 	}
 }
 
-// acceptTurnStart applies a successful turn/start response on the reader.
+var errCodexMalformedTurnStart = errors.New("malformed Codex turn/start response")
+
+// codexTurnStartContext gives turn/start its own deadline while still honoring
+// explicit cancellation of the caller (for example Room shutdown).
+func codexTurnStartContext(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), codexTurnStartTimeout)
+	stop := context.AfterFunc(parent, func() {
+		if errors.Is(parent.Err(), context.Canceled) {
+			cancel()
+		}
+	})
+	return ctx, func() {
+		stop()
+		cancel()
+	}
+}
+
+// clearStagedStart forgets a turn/start that definitively did not start a
+// turn. It never clears a different input's staging.
+func (c *CodexAdapter) clearStagedStart(messageID string) {
+	c.mu.Lock()
+	if c.startingInput != nil && c.startingInput.MessageID == messageID {
+		c.startingInput = nil
+		c.startingTurnID = ""
+		c.pendingCompletions = make(map[string]json.RawMessage)
+	}
+	c.mu.Unlock()
+	c.unstageWireInput(messageID)
+}
+
+// applyTurnStartReply runs on the stdout reader when a turn/start response
+// arrives. abandoned reports that StartTurn already returned
+// ErrSubmissionUnknown; the late response then settles the staged input.
+func (c *CodexAdapter) applyTurnStartReply(input model.AgentInput, reply rpcReply, abandoned bool) rpcReply {
+	c.mu.Lock()
+	staged := c.startingInput != nil && c.startingInput.MessageID == input.MessageID
+	bound := c.startingTurnID != ""
+	c.mu.Unlock()
+	if !staged {
+		// A completion, Stop, or process exit already settled the input.
+		return reply
+	}
+	if reply.err != nil {
+		if abandoned && !bound {
+			c.clearStagedStart(input.MessageID)
+			c.emitStartRejected(input, "Codex rejected turn/start after its deadline: "+reply.err.Error())
+		}
+		return reply
+	}
+	if err := c.acceptTurnStart(input, reply.result); err != nil {
+		if abandoned {
+			c.emitStartRejected(input, "Codex answered turn/start after its deadline without a usable turn: "+err.Error()+"; inspect the Codex thread before retrying")
+		}
+		reply.err = err
+	}
+	return reply
+}
+
+// emitStartRejected reports the terminal outcome of an input whose unknown
+// submission was later resolved without a native turn, with the Turn boundary
+// the Room needs to release ownership.
+func (c *CodexAdapter) emitStartRejected(input model.AgentInput, detail string) {
+	c.emitInputTerminal("", input, model.RuntimeInputFailed, detail)
+	completed := runtimeEvent(c.cfg.Actor, model.RuntimeTurnCompleted)
+	completed.CorrelationID = input.MessageID
+	completed.Name = "failed"
+	completed.Text = detail
+	c.sink(completed)
+}
+
+// acceptTurnStart applies a successful turn/start response.
 func (c *CodexAdapter) acceptTurnStart(input model.AgentInput, result json.RawMessage) error {
 	c.unstageWireInput(input.MessageID)
 	starting := input
@@ -134,15 +207,11 @@ func (c *CodexAdapter) acceptTurnStart(input model.AgentInput, result json.RawMe
 		} `json:"turn"`
 	}
 	if err := json.Unmarshal(result, &turnResult); err != nil || turnResult.Turn.ID == "" {
-		c.mu.Lock()
-		c.startingInput = nil
-		c.startingTurnID = ""
-		c.pendingCompletions = make(map[string]json.RawMessage)
-		c.mu.Unlock()
+		c.clearStagedStart(input.MessageID)
 		if err == nil {
 			err = errors.New("missing turn id")
 		}
-		return fmt.Errorf("decode codex turn: %w", err)
+		return fmt.Errorf("%w: %w", errCodexMalformedTurnStart, err)
 	}
 	c.mu.Lock()
 	if _, completed := c.terminalTurns[turnResult.Turn.ID]; completed {

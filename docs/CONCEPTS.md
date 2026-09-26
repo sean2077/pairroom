@@ -64,7 +64,7 @@ Relay forwards the complete addressed response and attachments, not an accumulat
 
 ## Human controls and receipts
 
-In **Embedded**, `steer` attempts supported same-target native steering; unavailable/rejected steering queues once. Explicit `queue` and cross-Agent messages wait for Turn ownership. Unknown native submission fails visibly instead of automatically submitting again. Cancel removes waiting work; Interrupt after acceptance may affect the entire native Turn. Answer approvals only with the options and scope actually advertised by the harness.
+In **Embedded**, `steer` attempts supported same-target native steering; unavailable/rejected steering queues once. Explicit `queue` and cross-Agent messages wait for Turn ownership. Unknown native submission is never submitted again automatically: an unknown steer fails visibly, and an unknown Turn start keeps the participant's Turn until its runtime reports the input or the participant is stopped. Cancel removes waiting work; Interrupt after acceptance may affect the entire native Turn. Answer approvals only with the options and scope actually advertised by the harness.
 
 In **Native**, the browser selects the receiving slot explicitly and queues a message. There is no PairRoom Interrupt or vendor-process start control. Cancel applies only to queued messages; uncertain deliveries require inspection before explicit Retry. Read-only history, diagnostics, and optional Git review versions do not claim, acknowledge, approve, or execute work.
 
