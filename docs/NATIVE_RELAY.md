@@ -24,7 +24,7 @@ Codex uses `.codex/hooks.json`; Claude Code uses `.claude/settings.json`. Grok B
 
 Review and approve the exact installed definitions in the harness: Codex `/hooks`, Claude project hook consent, and Grok hook approval plus folder trust. Follow native trust/restart guidance; PairRoom never grants consent for you.
 
-Before binding, run `pairroom relay preflight` in each Agent session (or any shell in the Project). It checks, without changing anything, that the bare `pairroom` command resolves on that shell's PATH, the Service is reachable and from the same release, and the Stop hook is installed, then prints ordered `next_steps` and exits nonzero until setup is ready. It cannot see approval, and neither can bind: bind rejects only a missing or disabled hook, so an installed but unapproved hook lets bind succeed while Stop replies never publish. The first finished turn's `last_hook_at` in `relay doctor` confirms approval; until the hook has run, `doctor` and `status` show a local `hook_hint`.
+Before binding, run `pairroom relay preflight` in each Agent session (or any shell in the Project). It checks, without changing anything, that the bare `pairroom` command resolves on that shell's PATH, the Service is reachable and from the same release, and the Stop hook is installed, then prints ordered `next_steps` and exits nonzero until setup is ready. A Service version mismatch, or a `pairroom` on PATH that is not the running binary, only warns: read `next_steps` even when `ready` is `true`. It cannot see approval, and neither can bind: bind rejects only a missing or disabled hook, so an installed but unapproved hook lets bind succeed while Stop replies never publish. The first finished turn's `last_hook_at` in `relay doctor` confirms approval; until the hook has run, `doctor` and `status` show a local `hook_hint`.
 
 After setup, relay commands and hooks print one stderr line suggesting `pairroom relay preflight` whenever the Service reports a different release than the CLI, including beside errors that version skew can cause, such as "no matching binding". It uses responses the command already receives and never writes to stdout. See [CLI reference](CLI_REFERENCE.md#native-relay-commands).
 
@@ -142,6 +142,8 @@ These are **repository-recorded experiments from 2026-09-16 and 2026-09-18**, no
 Use background wait only where the harness actually surfaces its completion. Human-only Codex wake templates may include vendor session identity in local process arguments; do not copy that identity, task text, or extra shell fragments into wake audits/messages. These observations are not proof that every unattended workflow completes or uses fewer billed tokens.
 
 ## Troubleshooting
+
+[Native relay errors](TROUBLESHOOTING.md#native-relay-errors) indexes the exact CLI and hook messages, with the first command to run for each.
 
 | Symptom | Action |
 |---|---|

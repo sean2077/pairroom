@@ -112,7 +112,7 @@ It writes `.claude/settings.json` for Claude Code (Grok Build reuses it by defau
 
 **b. Stop for approval.** The user reviews and approves the exact hook in each harness: Codex `/hooks`; Claude Code project hook consent; Grok `/hooks`, press `r` to reload, then folder trust. Follow each harness's reload or restart guidance so the hook and skill are loaded. Continue only after the user confirms.
 
-**c. Preflight.** In each Agent session, run `pairroom relay preflight`. It changes nothing and reports as JSON whether the bare `pairroom` command the hooks run is on this shell's PATH, whether the Service is reachable and from the same release, and whether this runtime's Stop hook is installed. Continue when `ready` is `true`; otherwise follow `next_steps` in order and rerun it. It cannot see hook approval.
+**c. Preflight.** In each Agent session, run `pairroom relay preflight`. It changes nothing and reports as JSON whether the bare `pairroom` command the hooks run is on this shell's PATH, whether the Service is reachable and from the same release, and whether this runtime's Stop hook is installed. Continue when `ready` is `true`; otherwise follow `next_steps` in order and rerun it. A Service version mismatch only warns and still reports `ready`, so read `next_steps` either way. It cannot see hook approval.
 
 **d. Create and join.** In the first session, run `/pairroom-relay <topic>`, or `pairroom relay bind --create --name "<topic>"` as a tool call. It prints `peer_join_local` and `peer_join`; the user gives one to the second session, whose Agent runs it as a tool call. Bind must run as the Agent's own tool call: it reads the official session ID and fails closed in a detached terminal or in Grok's `!` shell mode. If creation succeeded but bind failed, follow the printed recovery command instead of repeating `--create`.
 
@@ -132,7 +132,7 @@ It writes `.claude/settings.json` for Claude Code (Grok Build reuses it by defau
 | `relay doctor` reports a version mismatch | Use the CLI from the Service's release (step 2) |
 | `last_hook_at` stays empty after a finished turn | The hook is not approved or not loaded: review it again in the harness and reload |
 
-Deeper diagnosis: [Troubleshooting](TROUBLESHOOTING.md) and [Native relay troubleshooting](NATIVE_RELAY.md#troubleshooting).
+Deeper diagnosis: [Native relay errors](TROUBLESHOOTING.md#native-relay-errors), indexed by exact message, and [Native relay troubleshooting](NATIVE_RELAY.md#troubleshooting).
 
 ## Report back
 
