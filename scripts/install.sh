@@ -4,9 +4,12 @@
 # Usage:
 #   curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh | sh
 #   PAIRROOM_VERSION=v1.2.0 PREFIX="$HOME/.local" sh install.sh
+# PAIRROOM_REPOSITORY overrides the owner/name of the release repository (for
+# forks); the generic GITHUB_REPOSITORY is deliberately ignored because every
+# GitHub Actions job sets it to the calling repository.
 set -eu
 
-REPO="${GITHUB_REPOSITORY:-sean2077/pairroom}"
+REPO="${PAIRROOM_REPOSITORY:-sean2077/pairroom}"
 PREFIX="${PREFIX:-}"
 REQUESTED_VERSION="${PAIRROOM_VERSION:-}"
 

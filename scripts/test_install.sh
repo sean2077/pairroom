@@ -111,25 +111,30 @@ for shell in "${shells[@]}"; do
         fail "[$shell] linux arm64 must be rejected"
     fi
 
-    # Latest-tag resolution, checksum verification, and installation.
+    # Latest-tag resolution, checksum verification, and installation. The
+    # GitHub Actions GITHUB_REPOSITORY of a caller must not redirect the source.
     prefix="$work/prefix-${shell// /-}"
-    run_install "$shell" "$prefix" >"$work/out" 2>&1 ||
+    run_install "$shell" "$prefix" GITHUB_REPOSITORY=someone/else >"$work/out" 2>&1 ||
         fail "[$shell] install failed: $(cat "$work/out")"
     cmp -s "$prefix/bin/pairroom" "$work/good-binary" || fail "[$shell] installed binary differs"
     [[ -x "$prefix/bin/pairroom" ]] || fail "[$shell] installed binary is not executable"
     grep -q 'Installed PairRoom CLI v9.8.7' "$work/out" || fail "[$shell] missing success line: $(cat "$work/out")"
+    if grep -q 'someone/else' "$work/curl.log"; then
+        fail "[$shell] GITHUB_REPOSITORY leaked into download URLs"
+    fi
 
-    # A checksum mismatch installs nothing.
+    # PAIRROOM_REPOSITORY selects a fork, and a checksum mismatch installs nothing.
     prefix="$work/fork-${shell// /-}"
-    if run_install "$shell" "$prefix" GITHUB_REPOSITORY=example/fork PAIRROOM_VERSION=1.0.0 >"$work/out" 2>&1; then
+    if run_install "$shell" "$prefix" PAIRROOM_REPOSITORY=example/fork PAIRROOM_VERSION=1.0.0 >"$work/out" 2>&1; then
         fail "[$shell] checksum mismatch must fail"
     fi
     grep -q 'checksum mismatch' "$work/out" || fail "[$shell] unexpected mismatch output: $(cat "$work/out")"
     [[ ! -e "$prefix/bin/pairroom" ]] || fail "[$shell] mismatched binary was installed"
+    grep -q '^https://github.com/example/fork/' "$work/curl.log" || fail "[$shell] PAIRROOM_REPOSITORY ignored"
 
     # An unreachable release API fails with the resolution message.
     prefix="$work/offline-${shell// /-}"
-    if run_install "$shell" "$prefix" GITHUB_REPOSITORY=missing/repo >"$work/out" 2>&1; then
+    if run_install "$shell" "$prefix" PAIRROOM_REPOSITORY=missing/repo >"$work/out" 2>&1; then
         fail "[$shell] unresolved latest tag must fail"
     fi
     grep -q 'could not resolve the latest PairRoom release tag' "$work/out" ||
