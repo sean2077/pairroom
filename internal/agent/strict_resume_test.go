@@ -185,6 +185,9 @@ func runCodexStrictResumeHelper(args []string) int {
 			_ = encoder.Encode(map[string]any{"id": id, "result": map[string]any{"thread": map[string]any{"id": "thread-new"}}})
 		case "turn/start":
 			_ = encoder.Encode(map[string]any{"id": id, "result": map[string]any{"turn": map[string]any{"id": "turn-1"}}})
+			if os.Getenv("PAIRROOM_CODEX_HELPER_MODE") == "oversized" {
+				fmt.Println(oversizedStdoutRecord())
+			}
 		default:
 			_ = encoder.Encode(map[string]any{"id": id, "error": map[string]any{"code": -32601, "message": fmt.Sprintf("unsupported %s", request.Method)}})
 		}
@@ -256,6 +259,10 @@ func runGrokACPHelper(args []string) int {
 			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{}})
 		case "session/prompt":
 			promptID = id
+			if mode == "oversized" {
+				fmt.Println(oversizedStdoutRecord())
+				continue
+			}
 			promptText := ""
 			if blocks, ok := request.Params["prompt"].([]any); ok && len(blocks) > 0 {
 				if block, ok := blocks[0].(map[string]any); ok {

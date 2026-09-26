@@ -93,6 +93,8 @@ This section describes **Embedded adapters**, not control over Native-hosted ses
 
 New Grok sessions receive `_meta.rules`; exactly loaded sessions receive current bootstrap once in their first PairRoom prompt without replacing the native system prompt. PairRoom advertises `terminal=false` to retain native tool execution; unsupported privileged reverse requests fail closed.
 
+Each adapter reads one stdout record at a time, up to 16 MiB for Codex and Grok Build and 8 MiB for Claude Code. A larger record or any other stdout read failure is fatal rather than skipped, because a dropped response or terminal cannot be recovered: the adapter reports `adapter.stream_error`, stops the vendor process tree, and its exit fails outstanding input and releases the Turn owner with that reason.
+
 Empty overrides retain native inheritance. Supported CC Switch references resolve at Embedded creation/activation without modifying the external current Profile. Secrets enter only the selected child environment, not argv, stored selections, UI/logs, or a second secret store. Failures cannot fall back to another Provider. [Configuration](CONFIGURATION.md) owns mappings; [Support](../SUPPORT.md#compatibility-policy) owns compatibility evidence.
 
 ## Permissions and approvals

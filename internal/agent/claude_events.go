@@ -12,16 +12,15 @@ import (
 
 func (c *ClaudeAdapter) readStdout(reader io.Reader) {
 	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), claudeMaxStdoutLine)
 	for scanner.Scan() {
 		line := append([]byte(nil), scanner.Bytes()...)
 		c.handleLine(line)
 	}
 	if err := scanner.Err(); err != nil {
-		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
-		e.Name = "adapter.stream_error"
-		e.Text = "read Claude stream: " + err.Error()
-		c.sink(e)
+		// Skipping the record could drop the result that settles the Turn or a
+		// control response a caller is waiting for.
+		c.failStream(streamFailureReason("Claude Code", claudeMaxStdoutLine, err))
 	}
 }
 

@@ -102,16 +102,16 @@ func (c *CodexAdapter) send(value any) error {
 
 func (c *CodexAdapter) readStdout(reader io.Reader) {
 	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), codexMaxStdoutLine)
 	for scanner.Scan() {
 		line := append([]byte(nil), scanner.Bytes()...)
 		c.handleRPCLine(line)
 	}
 	if err := scanner.Err(); err != nil {
-		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
-		e.Name = "adapter.stream_error"
-		e.Text = "read Codex stream: " + err.Error()
-		c.sink(e)
+		// A dropped JSON-RPC response would hang its call and a dropped
+		// notification could lose the Turn terminal, so skipping the line is
+		// not protocol-safe.
+		c.failStream(streamFailureReason("Codex app-server", codexMaxStdoutLine, err))
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -63,6 +64,8 @@ func runClaudeScriptHelper(mode string, args []string) int {
 			session := fmt.Sprint(request["session_id"])
 			switch mode {
 			case "hang":
+			case "oversized":
+				emit(oversizedStdoutRecord())
 			default:
 				emit(`{"type":"system","subtype":"init","session_id":"` + session + `"}`)
 				emit(`{"type":"result","subtype":"success","result":"ok","session_id":"` + session + `"}`)
@@ -70,4 +73,9 @@ func runClaudeScriptHelper(mode string, args []string) int {
 		}
 	}
 	return 0
+}
+
+// oversizedStdoutRecord exceeds every adapter's stdout record limit.
+func oversizedStdoutRecord() string {
+	return `{"type":"assistant","padding":"` + strings.Repeat("x", 17<<20) + `"}`
 }

@@ -1,11 +1,33 @@
 package agent
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/sean2077/pairroom/internal/execx"
 )
+
+// Maximum stdout record sizes. A vendor line beyond the limit cannot be
+// parsed, and dropping it could strand a JSON-RPC call or a Turn terminal, so
+// the adapter treats it as a fatal stream failure (see streamFailureReason).
+const (
+	codexMaxStdoutLine  = 16 << 20
+	claudeMaxStdoutLine = 8 << 20
+	grokMaxStdoutLine   = 16 << 20
+)
+
+// streamFailureReason describes why the adapter stopped a vendor process whose
+// stdout could no longer be read. Once the reader stops, the vendor would block
+// writing and never report a terminal, so the adapter kills the process tree
+// and its normal exit path settles outstanding input with this reason.
+func streamFailureReason(runtime string, limit int, err error) string {
+	if errors.Is(err, bufio.ErrTooLong) {
+		return fmt.Sprintf("%s wrote a stdout record larger than %d MiB; PairRoom stopped the process because the rest of the stream cannot be parsed reliably", runtime, limit>>20)
+	}
+	return fmt.Sprintf("read %s stream: %v; PairRoom stopped the process", runtime, err)
+}
 
 // processTreeExitTimeout bounds how long a stop or interrupt waits for a
 // killed vendor process tree to release its output pipes.

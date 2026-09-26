@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Stop an Embedded runtime whose stdout record exceeds the adapter limit instead of hanging. A Codex or Grok Build record over 16 MiB, or a Claude Code record over 8 MiB (for example a huge command output), stopped the adapter's reader while the vendor process kept running and then blocked writing, so the Turn never completed and the Room owner stayed held until a manual stop. The adapter now reports the stream error, stops the process, and fails the accepted input with the size reason, which releases the Turn.
+
 - Stop the whole vendor process tree on Windows. An Embedded Claude Code, Codex or Grok Build CLI installed through npm runs behind a `.cmd` shim, and stopping it used to kill only `cmd.exe`: the real CLI kept running and held the output pipes, yet Stop reported success and freed the runtime's capacity, and Claude interrupt settled the Turn before the CLI had exited. Each CLI now runs in a kill-on-close Job Object; Stop and Claude interrupt terminate that job and report success, and release pending input, only once the tree has exited, and a tree that is still alive after a bounded wait is reported as an uncertain stop that keeps its capacity. An aborted Grok Build start now also closes stdin and waits for the process to exit. macOS and Linux still stop the CLI process itself, as before.
 
 ## [v5.6.0] — 2026-09-26

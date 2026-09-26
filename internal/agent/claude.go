@@ -41,11 +41,14 @@ type ClaudeAdapter struct {
 	runtimeInfo  model.RuntimeInfo
 	protocolSent bool
 	intentional  bool
-	access       model.NativeAccess
-	baseMode     string
-	approvals    map[string]claudeApprovalRequest
-	control      map[string]chan claudeControlResult
-	controlReady bool
+	// streamFailure records why the adapter killed the process after its
+	// stdout became unreadable; waitProcess reports it with the exit.
+	streamFailure string
+	access        model.NativeAccess
+	baseMode      string
+	approvals     map[string]claudeApprovalRequest
+	control       map[string]chan claudeControlResult
+	controlReady  bool
 }
 
 func NewClaude(cfg Config, sink EventSink) *ClaudeAdapter {
@@ -107,6 +110,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	}
 	c.state = model.StateStarting
 	c.intentional = false
+	c.streamFailure = ""
 	c.protocolSent = false
 	c.mu.Unlock()
 	c.controlMu.Lock()
@@ -359,7 +363,9 @@ func (c *ClaudeAdapter) waitProcess(cmd *exec.Cmd) {
 	c.mu.Lock()
 	active := c.cmd == cmd
 	intentional := c.intentional
+	streamFailure := c.streamFailure
 	if active {
+		c.streamFailure = ""
 		c.cmd = nil
 		c.tree = nil
 		c.stdin = nil
@@ -378,7 +384,9 @@ func (c *ClaudeAdapter) waitProcess(cmd *exec.Cmd) {
 	c.clearApprovals()
 	pending := c.takePending()
 	detail := "Claude process exited"
-	if err != nil {
+	if streamFailure != "" {
+		detail = streamFailure
+	} else if err != nil {
 		detail += ": " + err.Error()
 	}
 	for _, item := range pending {
@@ -389,7 +397,7 @@ func (c *ClaudeAdapter) waitProcess(cmd *exec.Cmd) {
 		completed.Name = "process_exited"
 		c.sink(completed)
 	}
-	if err != nil || len(pending) > 0 {
+	if err != nil || streamFailure != "" || len(pending) > 0 {
 		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
 		e.Name = "adapter.process_exited"
 		e.Text = detail
@@ -460,6 +468,23 @@ func (c *ClaudeAdapter) Stop(ctx context.Context) error {
 	c.cancelPending("stopped", "Claude Code was stopped")
 	c.setState(model.StateStopped, "")
 	return nil
+}
+
+// failStream stops a Claude process whose stdout can no longer be read. The
+// exit is then reported through waitProcess like any unexpected exit, so
+// pending input fails and the Turn owner is released on real exit.
+func (c *ClaudeAdapter) failStream(reason string) {
+	c.mu.Lock()
+	if c.streamFailure == "" {
+		c.streamFailure = reason
+	}
+	tree := c.tree
+	c.mu.Unlock()
+	e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
+	e.Name = "adapter.stream_error"
+	e.Text = reason
+	c.sink(e)
+	_ = tree.Kill()
 }
 
 // forgetProcess clears the process record once its tree is confirmed exited;

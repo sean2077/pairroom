@@ -107,15 +107,14 @@ func (g *GrokAdapter) send(value any) error {
 
 func (g *GrokAdapter) readStdout(reader io.Reader) {
 	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), grokMaxStdoutLine)
 	for scanner.Scan() {
 		g.handleRPCLine(append([]byte(nil), scanner.Bytes()...))
 	}
 	if err := scanner.Err(); err != nil {
-		e := runtimeEvent(g.cfg.Actor, model.RuntimeError)
-		e.Name = "adapter.stream_error"
-		e.Text = "read Grok ACP stream: " + err.Error()
-		g.sink(e)
+		// A dropped ACP response would strand its call, including the
+		// session/prompt result that ends the Turn.
+		g.failStream(streamFailureReason("Grok ACP", grokMaxStdoutLine, err))
 	}
 }
 

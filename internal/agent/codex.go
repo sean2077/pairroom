@@ -50,6 +50,9 @@ type CodexAdapter struct {
 	// exit to decide whether the in-memory thread ID is safe to drop.
 	threadEngaged bool
 	intentional   bool
+	// streamFailure records why the adapter killed the process after its
+	// stdout became unreadable; waitProcess reports it with the exit.
+	streamFailure string
 	// access records the last successfully asserted native access so the
 	// per-submission same-access assertion is a no-op instead of re-running
 	// the turn-boundary gate (and failing on stale state).
@@ -137,6 +140,7 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	}
 	c.state = model.StateStarting
 	c.intentional = false
+	c.streamFailure = ""
 	c.mu.Unlock()
 
 	probe, probeErr := ProbeRuntime(ctx, Config{
@@ -384,9 +388,32 @@ func (c *CodexAdapter) waitProcess(cmd *exec.Cmd) {
 	c.handleUnexpectedProcessExit(err)
 }
 
+// failStream stops an app-server whose stdout can no longer be read. The
+// exit is then reported through waitProcess like any unexpected exit, so
+// outstanding input fails and the Turn owner is released on real exit.
+func (c *CodexAdapter) failStream(reason string) {
+	c.mu.Lock()
+	if c.streamFailure == "" {
+		c.streamFailure = reason
+	}
+	tree := c.tree
+	c.mu.Unlock()
+	e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
+	e.Name = "adapter.stream_error"
+	e.Text = reason
+	c.sink(e)
+	_ = tree.Kill()
+}
+
 func (c *CodexAdapter) handleUnexpectedProcessExit(err error) {
+	c.mu.Lock()
+	streamFailure := c.streamFailure
+	c.streamFailure = ""
+	c.mu.Unlock()
 	detail := "Codex app-server exited"
-	if err != nil {
+	if streamFailure != "" {
+		detail = streamFailure
+	} else if err != nil {
 		detail += ": " + err.Error()
 	}
 	outstanding := c.takeOutstanding()
@@ -400,7 +427,7 @@ func (c *CodexAdapter) handleUnexpectedProcessExit(err error) {
 		completed.Name = "process_exited"
 		c.sink(completed)
 	}
-	if err != nil || outstanding.turnID != "" || len(outstanding.inputs) > 0 {
+	if err != nil || streamFailure != "" || outstanding.turnID != "" || len(outstanding.inputs) > 0 {
 		e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
 		e.Name = "adapter.process_exited"
 		e.Text = detail

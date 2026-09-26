@@ -51,10 +51,13 @@ type GrokAdapter struct {
 	stdin            io.WriteCloser
 	done             chan struct{}
 	intentional      bool
-	pending          map[int64]chan grokRPCReply
-	approvals        map[string]grokPendingApproval
-	turn             *grokTurn
-	nextRequestID    atomic.Int64
+	// streamFailure records why the adapter killed the process after its
+	// stdout became unreadable; waitProcess reports it with the exit.
+	streamFailure string
+	pending       map[int64]chan grokRPCReply
+	approvals     map[string]grokPendingApproval
+	turn          *grokTurn
+	nextRequestID atomic.Int64
 }
 
 func NewGrok(cfg Config, sink EventSink) *GrokAdapter {
@@ -112,6 +115,7 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 	}
 	g.state = model.StateStarting
 	g.intentional = false
+	g.streamFailure = ""
 	if strings.TrimSpace(g.cfg.SessionID) == "" && !g.sessionEngaged {
 		// A previous session/new may have allocated an ID but never accepted a
 		// PairRoom prompt. It is ephemeral and must not be resumed exactly.
@@ -454,6 +458,8 @@ func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, tree *execx.Tree, done chan str
 	}
 	intentional := g.intentional
 	engaged := g.sessionEngaged
+	streamFailure := g.streamFailure
+	g.streamFailure = ""
 	g.cmd = nil
 	g.tree = nil
 	g.stdin = nil
@@ -471,7 +477,9 @@ func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, tree *execx.Tree, done chan str
 	}
 	g.mu.Unlock()
 	detail := "Grok ACP process exited"
-	if err != nil {
+	if streamFailure != "" {
+		detail = streamFailure
+	} else if err != nil {
 		detail += ": " + err.Error()
 	}
 	failure := g.redactError(errors.New(detail))
@@ -503,6 +511,23 @@ func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, tree *execx.Tree, done chan str
 		g.setState(model.StateError, detail)
 	}
 	close(done)
+}
+
+// failStream stops a Grok ACP process whose stdout can no longer be read. The
+// exit is then reported through waitProcess like any unexpected exit, so the
+// active prompt fails and the Turn owner is released on real exit.
+func (g *GrokAdapter) failStream(reason string) {
+	g.mu.Lock()
+	if g.streamFailure == "" {
+		g.streamFailure = reason
+	}
+	tree := g.tree
+	g.mu.Unlock()
+	e := runtimeEvent(g.cfg.Actor, model.RuntimeError)
+	e.Name = "adapter.stream_error"
+	e.Text = reason
+	g.sink(e)
+	_ = tree.Kill()
 }
 
 func firstNonEmpty(values ...string) string {
