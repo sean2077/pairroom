@@ -56,6 +56,24 @@ function Assert-Payload {
     }
 }
 
+# Only this installation's bin entry may differ from the original machine PATH,
+# and the user PATH must never change.
+function Assert-CliPath([bool]$Expected) {
+    $cli = Join-Path $target 'bin'
+    $current = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $count = @($current -split ';' | Where-Object { $_.TrimEnd('\') -eq $cli }).Count
+    if ($Expected) {
+        if ($count -ne 1) { throw "Machine PATH must contain the CLI directory once; found $count." }
+        $restored = @($current -split ';' | Where-Object { $_.TrimEnd('\') -ne $cli }) -join ';'
+        if ($restored.TrimEnd(';') -ne $machinePath.TrimEnd(';')) { throw 'Installer changed other machine PATH entries.' }
+    } elseif ($current -ne $machinePath) {
+        throw 'Machine PATH was not restored to its original value.'
+    }
+    if ($userPath -ne [Environment]::GetEnvironmentVariable('Path', 'User')) {
+        throw 'Installer unexpectedly changed the user PATH.'
+    }
+}
+
 try {
     # Build an older metadata version of the same fixture to test a real version upgrade.
     & $env:PAIRROOM_ISCC /Qp /DPairRoomVersion=0.0.1 /DPairRoomArch=amd64 "/O$base" /Fprior-version `
@@ -63,6 +81,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Could not compile prior-version fixture.' }
     Invoke-Installer (Join-Path $base 'prior-version.exe') @("/DIR=`"$target`"") 'fresh-install'
     if ((Get-ItemProperty $registry).DisplayVersion -ne '0.0.1') { throw 'Prior version was not installed.' }
+    Assert-CliPath $true
     $sentinel = Join-Path $target 'user-owned.keep'
     Set-Content $sentinel 'must survive upgrade and uninstall'
     New-Item -Path $runKey -Force | Out-Null
@@ -72,12 +91,23 @@ try {
     # No /DIR on upgrade: Inno must recover the existing custom installation path.
     Invoke-Installer $Installer @() 'version-upgrade'
     Assert-Payload
+    Assert-CliPath $true
     if ((Get-Item $runKey).GetValue('PairRoom') -ne "`"$target\PairRoom.exe`"") {
         throw 'Upgrade changed the startup setting.'
     }
     Invoke-Installer $Installer @() 'repeat-install'
     Assert-Payload
+    Assert-CliPath $true
     if (-not (Test-Path $sentinel)) { throw 'Upgrade removed an unrelated file.' }
+
+    # Opting out removes the entry, a later plain upgrade keeps the opt-out, and
+    # opting back in restores exactly one entry.
+    Invoke-Installer $Installer @('/MERGETASKS="!addtopath"') 'path-opt-out'
+    Assert-CliPath $false
+    Invoke-Installer $Installer @() 'path-opt-out-remembered'
+    Assert-CliPath $false
+    Invoke-Installer $Installer @('/MERGETASKS="addtopath"') 'path-opt-in'
+    Assert-CliPath $true
 
     $uninstaller = Join-Path $target 'unins000.exe'
     $lock = [IO.File]::Open((Join-Path $target 'bin\pairroom.exe'), 'Open', 'Read', 'None')
@@ -86,6 +116,7 @@ try {
         Invoke-Installer $uninstaller @() 'locked-uninstall' $false 'files are in use or not writable'
     } finally { $lock.Dispose() }
     Assert-Payload
+    Assert-CliPath $true
 
     Invoke-Installer $uninstaller @() 'uninstall'
     foreach ($relative in @('PairRoom.exe', 'bin\pairroom.exe', 'LICENSE.txt')) {
@@ -96,6 +127,7 @@ try {
     }
     if ($null -ne (Get-Item $runKey).GetValue('PairRoom')) { throw 'Owned startup entry was not removed.' }
     $startupOwned = $false
+    Assert-CliPath $false
 
     # No old uninstaller is executed and no installation files are written.
     New-Item -Path $legacy -Force | Out-Null
@@ -106,10 +138,7 @@ try {
     if ((Test-Path $blocked) -or -not (Test-Path $legacy)) {
         throw 'Legacy guard modified the prior installation or wrote a second copy.'
     }
-    if ($machinePath -ne [Environment]::GetEnvironmentVariable('Path', 'Machine') -or
-        $userPath -ne [Environment]::GetEnvironmentVariable('Path', 'User')) {
-        throw 'Installer unexpectedly changed PATH.'
-    }
+    Assert-CliPath $false
     Write-Host 'All Windows installer smoke checks passed.'
 } finally {
     if (Test-Path $legacy) { Remove-Item -LiteralPath $legacy -Recurse -Force }

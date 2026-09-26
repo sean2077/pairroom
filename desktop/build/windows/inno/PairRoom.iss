@@ -48,7 +48,13 @@ SetupLogging=yes
 ; PairRoom must drain active Turns itself, not be closed by Restart Manager.
 CloseApplications=no
 RestartApplications=no
-ChangesEnvironment=no
+; Broadcast the machine PATH change so newly started shells find pairroom.
+ChangesEnvironment=yes
+
+[Tasks]
+; Native relay hooks and Agent tool shells run the bare `pairroom` command.
+; Default-on; opt out with /MERGETASKS=!addtopath. Inno remembers the choice.
+Name: addtopath; Description: "Add the pairroom command-line tool to the system PATH"
 
 [Files]
 Source: "{#DesktopRoot}\bin\PairRoom.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -68,6 +74,7 @@ const
   InnoKey = '{#PairRoomId}_is1';
   WebViewKey = 'Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
   RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
+  EnvironmentKey = 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment';
   { Unattended provisioning budget: silent runs never wait indefinitely on the
     Evergreen download (winget validation starves it and times the install out). }
   WebView2SilentWaitMs = 300000;
@@ -239,13 +246,116 @@ begin
     RegDeleteValue(Hive, RunKey, 'PairRoom');
 end;
 
+function CliDir: String;
+begin
+  Result := ExpandConstant('{app}\bin');
+end;
+
+function IsCliDirEntry(Entry: String): Boolean;
+begin
+  Entry := Trim(Entry);
+  if Length(Entry) >= 2 then
+    if (Entry[1] = '"') and (Entry[Length(Entry)] = '"') then
+      Entry := Copy(Entry, 2, Length(Entry) - 2);
+  Result := SameText(RemoveBackslashUnlessRoot(Entry), RemoveBackslashUnlessRoot(CliDir));
+end;
+
+{ Drop only entries naming this installation's CLI directory. Every other entry,
+  including empty ones, keeps its text and order. }
+function WithoutCliDir(const Path: String; var Found: Boolean): String;
+var
+  Rest, Entry: String;
+  Separator: Integer;
+  Kept: Boolean;
+begin
+  Result := '';
+  Found := False;
+  Kept := False;
+  Rest := Path;
+  while True do
+  begin
+    Separator := Pos(';', Rest);
+    if Separator = 0 then
+      Entry := Rest
+    else
+      Entry := Copy(Rest, 1, Separator - 1);
+    if IsCliDirEntry(Entry) then
+      Found := True
+    else
+    begin
+      if Kept then
+        Result := Result + ';';
+      Result := Result + Entry;
+      Kept := True;
+    end;
+    if Separator = 0 then
+      break;
+    Rest := Copy(Rest, Separator + 1, Length(Rest));
+  end;
+end;
+
+procedure AddCliToPath;
+var
+  Path, Unused: String;
+  Found: Boolean;
+begin
+  { Read the raw REG_EXPAND_SZ text so %SystemRoot%-style entries stay unexpanded. }
+  if not RegQueryStringValue(HKLM, EnvironmentKey, 'Path', Path) then
+    Path := '';
+  Unused := WithoutCliDir(Path, Found);
+  if Found then
+    exit;
+  { Append so existing entries keep precedence. A trailing separator moves after
+    the new entry, so removal restores the original text exactly. }
+  if Path = '' then
+    Path := CliDir
+  else if Path[Length(Path)] = ';' then
+    Path := Path + CliDir + ';'
+  else
+    Path := Path + ';' + CliDir;
+  if RegWriteExpandStringValue(HKLM, EnvironmentKey, 'Path', Path) then
+    Log('Added ' + CliDir + ' to the machine PATH.')
+  else
+    Log('Could not add ' + CliDir + ' to the machine PATH.');
+end;
+
+procedure RemoveCliFromPath;
+var
+  Path, Remaining: String;
+  Found: Boolean;
+begin
+  if not RegQueryStringValue(HKLM, EnvironmentKey, 'Path', Path) then
+    exit;
+  Remaining := WithoutCliDir(Path, Found);
+  if not Found then
+    exit;
+  if RegWriteExpandStringValue(HKLM, EnvironmentKey, 'Path', Remaining) then
+    Log('Removed ' + CliDir + ' from the machine PATH.')
+  else
+    Log('Could not remove ' + CliDir + ' from the machine PATH.');
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    { Clearing the task on a later install removes the entry it added. }
+    if WizardIsTaskSelected('addtopath') then
+      AddCliToPath
+    else
+      RemoveCliFromPath;
+  end;
+end;
+
 procedure CurUninstallStepChanged(Step: TUninstallStep);
 begin
   if Step = usPostUninstall then
   begin
     RemoveOwnedStartupEntry(HKCU64);
     RemoveOwnedStartupEntry(HKCU32);
+    RemoveCliFromPath;
   end;
-  { No recursive directory deletion, data purge, PATH edits, or daemon commands.
-    Inno removes only logged payload files/shortcuts; unrelated files survive. }
+  { No recursive directory deletion, data purge, daemon commands, or PATH edits
+    beyond this installation's own bin entry. Inno removes only logged payload
+    files/shortcuts; unrelated files survive. }
 end;
