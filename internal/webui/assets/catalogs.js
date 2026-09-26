@@ -2855,7 +2855,8 @@ Object.assign(window.PairRoomLocales["en"].translation, {
   "desktop.noResponse": "Desktop startup settings did not respond. Reopen Settings to read the system state.",
   "desktop.statusUnavailable": "Desktop startup status is unavailable",
   "desktop.invalidSetting": "Startup setting must be on or off",
-  "ui.codeBlock": "code"
+  "ui.codeBlock": "code",
+  "ui.approvalStillPending": "The decision was sent, but the request is still pending. Check the Agent before deciding again."
 });
 
 Object.assign(window.PairRoomLocales["zh-CN"].translation, {
@@ -2893,5 +2894,6 @@ Object.assign(window.PairRoomLocales["zh-CN"].translation, {
   "desktop.noResponse": "桌面启动设置未响应。请重新打开设置以读取系统状态。",
   "desktop.statusUnavailable": "无法获取桌面启动状态",
   "desktop.invalidSetting": "启动设置只能为开或关",
-  "ui.codeBlock": "代码"
+  "ui.codeBlock": "代码",
+  "ui.approvalStillPending": "决定已发送，但请求仍在等待。再次决定前请先检查 Agent。"
 });

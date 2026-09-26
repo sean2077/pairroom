@@ -61,7 +61,7 @@ function client() {
       updateComposerAvailability, removePendingAttachment, clearReply, setPermissions,
       saveSettings, renderSettings, editSettings, participantAction, retryMessage, cancelMessage,
       refreshDiff, readGitStatus: refreshGitStatus, processingTransitionAllowed,
-      initializeRoomLocalState, persistComposerDraft, scheduleReconnect, loadOlderMessages,
+      initializeRoomLocalState, persistComposerDraft, scheduleReconnect, loadOlderMessages, resolveApproval, mergeTurnSummaries,
       setAPI(callback) { api = callback; }};
     render = (force) => renders.push(force);
     toast = (message) => notices.push(message);
@@ -283,6 +283,70 @@ async function main() {
     request.resolve(c.snapshot());
     await refreshing;
     assert.ok(c.state.snapshot.messages.some((message) => message.id === 'held-message'), 'held durable event must be replayed onto the fresh snapshot');
+  }
+  {
+    // Streaming deltas held during a refresh must not exhaust the durable
+    // hold and drop a committed event (which forced a spurious resync).
+    const c = client();
+    c.setAPI(async () => c.snapshot());
+    await c.loadSnapshot();
+    const request = deferred(); let reads = 0;
+    c.setAPI(() => { reads++; return request.promise; });
+    const refreshing = c.loadSnapshot({ keepStream: true });
+    for (let i = 0; i < 600; i++) c.state.source.emit('pairroom', { seq: 0, kind: 'runtime.event', data: { agent: 'slot1', kind: 'text.delta', text: 'a' } });
+    c.state.source.emit('pairroom', { seq: 11, kind: 'message.created', data: { id: 'after-deltas', from: 'user', text: 'kept' } });
+    request.resolve(c.snapshot()); await refreshing;
+    assert.ok(c.state.snapshot.messages.some((message) => message.id === 'after-deltas'), 'deltas displaced a durable held event');
+    assert.equal(reads, 1, 'held deltas forced a resync');
+  }
+  {
+    // A write's refresh keeps the live preview of a Turn that is still running.
+    const c = client();
+    c.setAPI(async () => c.snapshot());
+    await c.loadSnapshot();
+    c.applyEvent({ kind: 'runtime.event', data: { agent: 'slot1', kind: 'turn.started', correlation_id: 'm1' } });
+    c.applyEvent({ kind: 'runtime.event', data: { agent: 'slot1', kind: 'text.delta', correlation_id: 'm1', text: 'partial' } });
+    c.applyEvent({ kind: 'runtime.event', data: { agent: 'slot2', kind: 'text.delta', correlation_id: 'm2', text: 'finished turn' } });
+    c.setAPI(async () => { const fresh = c.snapshot(); fresh.participants = { slot1: { current_turn: 't1' }, slot2: {} }; return fresh; });
+    await c.loadSnapshot({ keepStream: true });
+    assert.equal(c.state.drafts.slot1, 'partial', 'a write refresh wiped an active streaming preview');
+    assert.equal(c.state.draftCorrelation.slot1, 'm1');
+    assert.equal(c.state.drafts.slot2, '', 'a finished Turn keeps no stale preview');
+    c.setAPI(async () => { const fresh = c.snapshot(); fresh.participants = { slot1: { current_turn: 't1' } }; fresh.messages = [{ id: 'r', from: 'slot1', reply_to: 'm1' }]; return fresh; });
+    await c.loadSnapshot({ keepStream: true });
+    assert.equal(c.state.drafts.slot1, '', 'a published reply ends its preview');
+  }
+  {
+    // A decision accepted by the server but still pending must not leave the
+    // controls disabled forever.
+    const c = client();
+    c.state.snapshot.approvals = [{ id: 'a1', status: 'pending', agent: 'slot1' }];
+    c.setAPI(async () => ({}));
+    const button = { closest() { return null; } };
+    const before = c.timers.size;
+    await c.resolveApproval('a1', 'accept', button);
+    assert.equal(typeof c.state.approvalSubmissions.get('a1')?.submittedAt, 'number');
+    assert.equal(c.timers.size, before + 1, 'no bounded confirmation wait');
+    const [id, release] = [...c.timers.entries()].at(-1); c.timers.delete(id); release();
+    assert.equal(c.state.approvalSubmissions.has('a1'), false, 'pending approval stayed locked');
+    assert.ok(c.notices.includes('ui.approvalStillPending'));
+    await c.resolveApproval('a1', 'accept', button);
+    c.setAPI(async () => { const fresh = c.snapshot(); fresh.approvals = [{ id: 'a1', status: 'pending', agent: 'slot1' }]; return fresh; });
+    await c.loadSnapshot({ keepStream: true });
+    assert.equal(c.state.approvalSubmissions.has('a1'), false, 'a later snapshot still pending releases the controls');
+    c.applyEvent({ seq: 11, kind: 'approval.updated', data: { id: 'a1', status: 'resolved' } });
+    assert.equal(c.state.snapshot.approvals.length, 0, 'resolved approvals accumulate');
+  }
+  {
+    const c = client();
+    c.state.snapshot.participants = { slot1: { current_turn: 'live' } };
+    c.state.snapshot.messages = [{ id: 'm-old', seq: 1 }];
+    const at = (i) => `2026-09-23T00:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}Z`;
+    c.mergeTurnSummaries([{ id: 'slot1:live', updated_at: at(0) }, { id: 'slot2:linked', updated_at: at(1), message_ids: ['m-old'] }]);
+    for (let i = 2; i < 400; i++) c.applyEvent({ seq: 0, kind: 'turn.summary.updated', data: { id: `slot2:t${i}`, updated_at: at(i) } });
+    const ids = new Set(c.state.snapshot.turns.map((turn) => turn.id));
+    assert.ok(ids.size <= 82, `live Turn summaries grow without bound (${ids.size})`);
+    assert.ok(ids.has('slot1:live') && ids.has('slot2:linked') && ids.has('slot2:t399'), 'current, correlated and newest Turns stay');
   }
   {
     const c = client();
