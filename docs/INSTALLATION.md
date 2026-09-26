@@ -77,6 +77,8 @@ sh install-pairroom.sh
 pairroom version
 ```
 
+The installer is POSIX `sh` (it runs under dash, busybox `sh`, and bash), so `curl … | sh` also works. It installs the latest release unless `PAIRROOM_VERSION` names a tag, into `$PREFIX/bin` when `PREFIX` is set. It refuses to install a binary whose SHA-256 does not match the release `SHA256SUMS`.
+
 Alternatively, download the matching `pairroom-cli-…` asset directly, verify it against the release checksums, make it executable where required, and put it on `PATH`. In Windows PowerShell, use `./pairroom.exe` when running a downloaded binary in the current directory.
 
 ## From source

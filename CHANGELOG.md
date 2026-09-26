@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Make the CLI `install.sh` a POSIX `sh` script. The documented `curl … | sh` and `sh install-pairroom.sh` commands failed on systems whose `sh` is dash (Debian, Ubuntu) with `[[: not found` and "could not resolve the latest PairRoom release tag", because the script used bash-only syntax. It now runs under dash, busybox `sh` and bash, still verifies the release `SHA256SUMS` before installing and still removes its temporary files, including on interrupt.
+
 ## [v5.6.0] — 2026-09-26
 
 - Offer to put the bundled `pairroom` CLI on PATH on macOS. The CLI ships inside `PairRoom.app/Contents/Helpers`, off PATH, so Native relay hooks and Agent tool shells could not run it. After the Service first starts, Desktop now asks once whether to link `/usr/local/bin/pairroom` to that CLI, using the standard macOS administrator prompt; **Not Now** is remembered in a Desktop preference directory separate from the Service data root, and the menu bar item **Install Command Line Tool…** (or **Update…** after the app moved) remains available. The link targets the bundle, so replacing `PairRoom.app` keeps it current. Desktop never replaces an existing `/usr/local/bin/pairroom` it did not create, and nothing changes without the user's action. Windows and Linux are unchanged.
