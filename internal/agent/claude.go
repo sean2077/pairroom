@@ -29,6 +29,7 @@ type ClaudeAdapter struct {
 	sessionID string
 	resume    bool
 	cmd       *exec.Cmd
+	tree      *execx.Tree
 	stdin     io.WriteCloser
 	// procDone is closed once the process exited and waitProcess finished; it
 	// gives Stop a bounded graceful window between closing stdin and Kill.
@@ -239,7 +240,8 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 		c.setState(model.StateError, err.Error())
 		return fmt.Errorf("claude stderr: %w", err)
 	}
-	if err := cmd.Start(); err != nil {
+	tree, err := execx.StartTree(cmd)
+	if err != nil {
 		_ = stdin.Close()
 		c.setState(model.StateError, err.Error())
 		return fmt.Errorf("start claude: %w", err)
@@ -248,6 +250,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	procDone := make(chan struct{})
 	c.mu.Lock()
 	c.cmd = cmd
+	c.tree = tree
 	c.stdin = stdin
 	c.procDone = procDone
 	c.resume = true
@@ -259,7 +262,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	readers.Add(2)
 	go func() { defer readers.Done(); c.readStdout(stdout) }()
 	go func() { defer readers.Done(); c.readStderr(stderr) }()
-	go func() { readers.Wait(); c.waitProcess(cmd); close(procDone) }()
+	go func() { readers.Wait(); c.waitProcess(cmd); tree.Release(); close(procDone) }()
 
 	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	initErr := c.initializeControl(initCtx)
@@ -270,13 +273,12 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 		if c.cmd == cmd {
 			c.intentional = true
 			c.cmd = nil
+			c.tree = nil
 			c.stdin = nil
 		}
 		c.mu.Unlock()
 		_ = stdin.Close()
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
+		_ = tree.Kill()
 		c.failControlWaiters(errors.New(detail))
 		c.setState(model.StateError, detail)
 		return errors.New(detail)
@@ -359,6 +361,7 @@ func (c *ClaudeAdapter) waitProcess(cmd *exec.Cmd) {
 	intentional := c.intentional
 	if active {
 		c.cmd = nil
+		c.tree = nil
 		c.stdin = nil
 	}
 	c.mu.Unlock()
@@ -397,25 +400,35 @@ func (c *ClaudeAdapter) waitProcess(cmd *exec.Cmd) {
 	c.setState(model.StateStopped, "")
 }
 
-func (c *ClaudeAdapter) Interrupt(context.Context) error {
+func (c *ClaudeAdapter) Interrupt(ctx context.Context) error {
 	c.mu.Lock()
 	cmd := c.cmd
+	tree := c.tree
 	stdin := c.stdin
-	c.cmd = nil
+	procDone := c.procDone
 	c.stdin = nil
 	c.intentional = true
 	c.mu.Unlock()
-	c.cancelPending("interrupted", "interrupted by user")
 	c.clearApprovals()
 	c.failControlWaiters(errors.New("Claude Code was interrupted"))
 	if stdin != nil {
 		_ = stdin.Close()
 	}
 	if cmd != nil && cmd.Process != nil {
-		if err := cmd.Process.Signal(os.Interrupt); err != nil {
-			_ = cmd.Process.Kill()
+		// Windows cannot deliver os.Interrupt to a child; go straight to the
+		// process-tree kill there instead of waiting out the graceful window.
+		if err := cmd.Process.Signal(os.Interrupt); err == nil {
+			waitGracefulExit(ctx, procDone)
 		}
+		// Settling the pending Turn releases the Room owner, so it waits for
+		// the whole vendor process tree to exit rather than for the signal to
+		// be sent.
+		if err := stopProcessTree(tree, procDone, "Claude Code"); err != nil {
+			return err
+		}
+		c.forgetProcess(cmd)
 	}
+	c.cancelPending("interrupted", "interrupted by user")
 	c.setState(model.StateStopped, "interrupted; next message resumes the Claude session")
 	return nil
 }
@@ -423,27 +436,40 @@ func (c *ClaudeAdapter) Interrupt(context.Context) error {
 func (c *ClaudeAdapter) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	cmd := c.cmd
+	tree := c.tree
 	stdin := c.stdin
 	procDone := c.procDone
-	c.cmd = nil
 	c.stdin = nil
-	c.procDone = nil
 	c.intentional = true
 	c.mu.Unlock()
-	c.cancelPending("stopped", "Claude Code was stopped")
 	c.clearApprovals()
 	c.failControlWaiters(errors.New("Claude Code was stopped"))
 	if stdin != nil {
 		_ = stdin.Close()
 	}
 	waitGracefulExit(ctx, procDone)
-	if cmd != nil && cmd.Process != nil {
-		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	if cmd != nil {
+		// The process stays recorded until its whole tree has exited, so a
+		// failed stop can be retried instead of freeing capacity while the real
+		// CLI behind a launcher shim keeps running.
+		if err := stopProcessTree(tree, procDone, "Claude Code"); err != nil {
 			return err
 		}
+		c.forgetProcess(cmd)
 	}
+	c.cancelPending("stopped", "Claude Code was stopped")
 	c.setState(model.StateStopped, "")
 	return nil
+}
+
+// forgetProcess clears the process record once its tree is confirmed exited;
+// waitProcess normally clears it first.
+func (c *ClaudeAdapter) forgetProcess(cmd *exec.Cmd) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cmd == cmd {
+		c.cmd, c.tree, c.stdin, c.procDone = nil, nil, nil, nil
+	}
 }
 
 // waitGracefulExit gives the vendor CLI a bounded window to flush its own

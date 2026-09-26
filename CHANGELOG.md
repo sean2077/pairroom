@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Stop the whole vendor process tree on Windows. An Embedded Claude Code, Codex or Grok Build CLI installed through npm runs behind a `.cmd` shim, and stopping it used to kill only `cmd.exe`: the real CLI kept running and held the output pipes, yet Stop reported success and freed the runtime's capacity, and Claude interrupt settled the Turn before the CLI had exited. Each CLI now runs in a kill-on-close Job Object; Stop and Claude interrupt terminate that job and report success, and release pending input, only once the tree has exited, and a tree that is still alive after a bounded wait is reported as an uncertain stop that keeps its capacity. An aborted Grok Build start now also closes stdin and waits for the process to exit. macOS and Linux still stop the CLI process itself, as before.
+
 ## [v5.6.0] — 2026-09-26
 
 - Offer to put the bundled `pairroom` CLI on PATH on macOS. The CLI ships inside `PairRoom.app/Contents/Helpers`, off PATH, so Native relay hooks and Agent tool shells could not run it. After the Service first starts, Desktop now asks once whether to link `/usr/local/bin/pairroom` to that CLI, using the standard macOS administrator prompt; **Not Now** is remembered in a Desktop preference directory separate from the Service data root, and the menu bar item **Install Command Line Tool…** (or **Update…** after the app moved) remains available. The link targets the bundle, so replacing `PairRoom.app` keeps it current. Desktop never replaces an existing `/usr/local/bin/pairroom` it did not create, and nothing changes without the user's action. Windows and Linux are unchanged.

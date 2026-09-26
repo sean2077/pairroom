@@ -115,6 +115,8 @@ Native-hosted approvals, permissions, steering, and interruption stay in the ori
 
 Capacity limits active **Embedded** adapters, not durable Room count. Idle reclaim cannot preempt an active Turn just to free capacity, and uncertain cleanup retains its capacity claim. Native Rooms are exempt: no vendor process, no capacity queue/slot, no capacity eviction. A browser disconnect or hidden window is not completion evidence.
 
+An Embedded adapter owns its vendor process tree. On Windows each CLI runs in a kill-on-close Job Object, so stopping or interrupting a runtime launched through an npm `.cmd` shim ends the real CLI rather than only `cmd.exe`. Stop and Claude interrupt report success, and settle pending input, only after that tree has exited; a tree still holding its output pipes after a bounded wait is an uncertain stop that keeps the process recorded for a retried stop.
+
 Desktop uses an explicit validated URL, installed daemon, or embedded Service when none exists. It never installs a daemon implicitly or competes with a live lock owner; stale recovery proves PID exit first. [Operations](OPERATIONS.md) owns close/quit/login/archive and backup behavior.
 
 ## HTTP, browser, and privacy boundaries

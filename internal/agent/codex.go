@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -38,6 +37,7 @@ type CodexAdapter struct {
 	writeMu  sync.Mutex
 	state    model.AgentState
 	cmd      *exec.Cmd
+	tree     *execx.Tree
 	stdin    io.WriteCloser
 	// procDone is closed once the process exited and waitProcess finished; it
 	// gives Stop a bounded graceful window between closing stdin and Kill.
@@ -181,7 +181,8 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 		c.setState(model.StateError, err.Error())
 		return fmt.Errorf("codex stderr: %w", err)
 	}
-	if err := cmd.Start(); err != nil {
+	tree, err := execx.StartTree(cmd)
+	if err != nil {
 		_ = stdin.Close()
 		c.setState(model.StateError, err.Error())
 		return fmt.Errorf("start codex app-server: %w", err)
@@ -190,6 +191,7 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	procDone := make(chan struct{})
 	c.mu.Lock()
 	c.cmd = cmd
+	c.tree = tree
 	c.stdin = stdin
 	c.procDone = procDone
 	c.mu.Unlock()
@@ -199,7 +201,7 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	readers.Add(2)
 	go func() { defer readers.Done(); c.readStdout(stdout) }()
 	go func() { defer readers.Done(); c.readStderr(stderr) }()
-	go func() { readers.Wait(); c.waitProcess(cmd); close(procDone) }()
+	go func() { readers.Wait(); c.waitProcess(cmd); tree.Release(); close(procDone) }()
 
 	handshakeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -317,27 +319,35 @@ func (c *CodexAdapter) Interrupt(ctx context.Context) error {
 func (c *CodexAdapter) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	cmd := c.cmd
+	tree := c.tree
 	stdin := c.stdin
 	procDone := c.procDone
 	c.intentional = true
-	c.cmd = nil
 	c.stdin = nil
-	c.procDone = nil
 	c.mu.Unlock()
 	c.failPendingRPCs("Codex was stopped")
-	for _, input := range c.takeOutstandingInputs() {
-		c.emitInputTerminal("", input, model.RuntimeInputCancelled, "Codex was stopped")
-	}
 	if stdin != nil {
 		_ = stdin.Close()
 	}
 	// Bounded graceful window so app-server can flush its rollout before the
 	// hard kill; a strict resume later then still finds a complete record.
 	waitGracefulExit(ctx, procDone)
-	if cmd != nil && cmd.Process != nil {
-		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	if cmd != nil {
+		// The process stays recorded until its whole tree has exited, so a
+		// failed stop can be retried instead of freeing capacity while the real
+		// CLI behind a launcher shim keeps running. Inputs are cancelled only
+		// after that exit evidence.
+		if err := stopProcessTree(tree, procDone, "Codex app-server"); err != nil {
 			return err
 		}
+	}
+	c.mu.Lock()
+	if c.cmd == cmd {
+		c.cmd, c.tree, c.procDone = nil, nil, nil
+	}
+	c.mu.Unlock()
+	for _, input := range c.takeOutstandingInputs() {
+		c.emitInputTerminal("", input, model.RuntimeInputCancelled, "Codex was stopped")
 	}
 	c.setState(model.StateStopped, "")
 	return nil
@@ -351,6 +361,7 @@ func (c *CodexAdapter) waitProcess(cmd *exec.Cmd) {
 	var pending map[int64]chan rpcReply
 	if active {
 		c.cmd = nil
+		c.tree = nil
 		c.stdin = nil
 		pending = c.pending
 		c.pending = make(map[int64]chan rpcReply)
