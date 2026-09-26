@@ -104,6 +104,18 @@ Local build/install/release commands preserve `GOTOOLCHAIN`. With `GOTOOLCHAIN=a
 
 Every CLI artifact must report the same Go version as the release provenance's `go_version`; `scripts/verify-artifacts.sh` and CI check the actual binaries, not a hard-coded expected patch version. The release-contract regressions cover mixed toolchains and provenance mismatches. Reverting this build policy requires no Room-data migration. Version bumps, tags, and publication still require explicit authorization.
 
+## Dependency updates
+
+Weekly Dependabot PRs update the root and `desktop/` modules separately. The root dependency allowlist in `scripts/check_dependencies.go` is a human review gate: CI never approves a version, so a root PR that moves any module in the SQLite closure fails `make check` until a maintainer approves it. Because `desktop/` requires the root module through `replace ..`, the same PR also fails the desktop lock check until `desktop/go.sum` is tidied.
+
+To land a root Dependabot PR, check out its branch and:
+
+1. Review the upstream changes for every module that moved (the failing `dependency check:` lines list each `resolved to <new>; want <old>`).
+2. Run `make deps-sync`. It tidies both module locks, then rewrites only version changes of already-approved modules in the allowlist and the matching `THIRD_PARTY_NOTICES.md` link, version cell, and heading. It downloads both versions and reports whether each module's license files are unchanged; a `REVIEW` line needs a manual check of the license and notice text. An added, removed, or replaced module still fails closed and requires a deliberate allowlist edit.
+3. Add a `CHANGELOG.md` entry naming the old and new versions and whether license text changed, then commit on the PR branch (for example `build(deps): approve <module> <version> in the pinned closure`).
+
+A `desktop/` Dependabot PR needs no follow-up for the Wails CLI: CI and [Desktop development](desktop/README.md#development) install the `wails3` version resolved from `desktop/go.mod`, and a desktop contract test rejects hard-coded copies. Still validate Wails bumps on Windows, macOS, and Linux and review the platform Taskfiles as [desktop/AGENTS.md](desktop/AGENTS.md) requires, and add a `CHANGELOG.md` entry.
+
 ## Focused allocation checks
 
 ```bash

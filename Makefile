@@ -28,6 +28,7 @@ GOBIN := $(shell go env GOPATH)/bin
 endif
 
 .PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package desktop-update desktop-check clean docs-check env-check env-check-contract browser-check js-check vuln vuln-binary coverage-contract lint lint-install
+.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package desktop-update desktop-check clean deps-sync docs-check browser-check js-check vuln vuln-binary coverage-contract lint lint-install
 
 build:
 	mkdir -p $(DIST)
@@ -153,6 +154,14 @@ desktop-update:
 clean:
 	@test "$(DIST)" = dist || { echo 'clean only accepts the default DIST=dist' >&2; exit 1; }
 	rm -rf -- "$(CURDIR)/dist" "$(CURDIR)/.coverage"
+
+# Maintainer-run after reviewing a dependency update; CI never approves versions.
+# Tidies both module locks, then records version-only changes of the approved
+# closure in the allowlist and notices; module-set changes still fail closed.
+deps-sync:
+	go mod tidy
+	cd "$(DESKTOP_DIR)" && go mod tidy
+	go run scripts/check_dependencies.go -write
 
 docs-check:
 	"$(PYTHON)" scripts/test_docs_check.py

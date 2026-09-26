@@ -66,10 +66,11 @@ hides the notice and stops requests. A missing or malformed file means off.
 
 ## Development
 
-Install the latest stable Go release and the pinned Wails CLI:
+Install the latest stable Go release and the Wails CLI pinned by `desktop/go.mod`
+(from the repository root; CI resolves the version the same way):
 
 ```bash
-go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.24
+go install "github.com/wailsapp/wails/v3/cmd/wails3@$(go -C desktop list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
 ```
 
 Prepare generated packaging assets and build the host platform:
