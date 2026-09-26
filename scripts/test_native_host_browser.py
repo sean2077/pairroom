@@ -148,7 +148,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 snapshot = await wait_snapshot(context,snapshot_url,lambda s:len(s['relay']['messages']) == 2)
                 assert snapshot['relay']['messages'][1]['to']=='slot2'
                 await asyncio.to_thread(cli,['send','--room',room_id,'--slot','slot1','--id','explicit-fixture','--text','@user is body text: explicit send still targets the peer'])
-                await asyncio.to_thread(cli,['send','--room',room_id,'--slot','slot1','--id','explicit-fixture','--text','changed body must not reuse the ID'], expect_error='already refers to a different body')
+                await asyncio.to_thread(cli,['send','--room',room_id,'--slot','slot1','--id','explicit-fixture','--text','changed body must not reuse the ID'], expect_error='was already used for a different message')
                 assert len((await read_json(context,snapshot_url))['relay']['messages']) == 2
                 await asyncio.to_thread(cli,['wait','--room',room_id,'--slot','slot2','--timeout','1'])
 
