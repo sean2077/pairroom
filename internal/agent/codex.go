@@ -53,8 +53,11 @@ type CodexAdapter struct {
 	// access records the last successfully asserted native access so the
 	// per-submission same-access assertion is a no-op instead of re-running
 	// the turn-boundary gate (and failing on stale state).
-	access     model.NativeAccess
-	pending    map[int64]chan rpcReply
+	access  model.NativeAccess
+	pending map[int64]chan rpcReply
+	// replyHooks run on the stdout reader when their response arrives, so a
+	// turn/start response is applied before the turn's later notifications.
+	replyHooks map[int64]codexReplyHook
 	approvals  map[string]pendingApproval
 	turnInputs map[string][]model.AgentInput
 	// wireInputs holds inputs keyed by Codex's documented
@@ -77,6 +80,12 @@ type CodexAdapter struct {
 	pendingCompletions map[string]json.RawMessage
 	nextRequestID      atomic.Int64
 }
+
+type codexReplyHook func(reply rpcReply) rpcReply
+
+// codexPendingCompletionLimit bounds completions held while a turn/start
+// response is outstanding; a stale replay stream cannot grow it without limit.
+const codexPendingCompletionLimit = 64
 
 func NewCodex(cfg Config, sink EventSink) *CodexAdapter {
 	if !cfg.Actor.ValidParticipant() {
@@ -354,6 +363,7 @@ func (c *CodexAdapter) waitProcess(cmd *exec.Cmd) {
 		c.stdin = nil
 		pending = c.pending
 		c.pending = make(map[int64]chan rpcReply)
+		c.replyHooks = nil
 		c.approvals = make(map[string]pendingApproval)
 	}
 	c.mu.Unlock()

@@ -163,15 +163,20 @@ func (c *CodexAdapter) handleRPCLine(line []byte) {
 	c.mu.Lock()
 	ch := c.pending[id]
 	delete(c.pending, id)
+	hook := c.replyHooks[id]
+	delete(c.replyHooks, id)
 	c.mu.Unlock()
 	if ch == nil {
 		return
 	}
+	reply := rpcReply{result: envelope.Result}
 	if envelope.Error != nil {
-		ch <- rpcReply{err: *envelope.Error}
-	} else {
-		ch <- rpcReply{result: envelope.Result}
+		reply = rpcReply{err: *envelope.Error}
 	}
+	if hook != nil {
+		reply = hook(reply)
+	}
+	ch <- reply
 }
 
 func (c *CodexAdapter) sendRawResponse(id json.RawMessage, result any, rpcErr *codexRPCError) error {
@@ -187,6 +192,7 @@ func (c *CodexAdapter) failPendingRPCs(detail string) {
 	c.mu.Lock()
 	pending := c.pending
 	c.pending = make(map[int64]chan rpcReply)
+	c.replyHooks = nil
 	c.approvals = make(map[string]pendingApproval)
 	c.mu.Unlock()
 

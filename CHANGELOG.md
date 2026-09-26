@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Stop an unrelated Codex turn from answering a new Embedded message. While Codex had not yet acknowledged a new turn, any turn completion on the thread (for example a stale turn from a resumed session) was taken as the new message's turn: its old final text was relayed as the answer, the message was marked completed, the real turn's output was then dropped, and the next queued message failed with "Codex already has an active turn". Until Codex returns the new turn's ID, only its echo of that exact message now binds a turn; other turn start and completion notifications are ignored.
+
 ## [v5.6.0] — 2026-09-26
 
 - Offer to put the bundled `pairroom` CLI on PATH on macOS. The CLI ships inside `PairRoom.app/Contents/Helpers`, off PATH, so Native relay hooks and Agent tool shells could not run it. After the Service first starts, Desktop now asks once whether to link `/usr/local/bin/pairroom` to that CLI, using the standard macOS administrator prompt; **Not Now** is remembered in a Desktop preference directory separate from the Service data root, and the menu bar item **Install Command Line Tool…** (or **Update…** after the app moved) remains available. The link targets the bundle, so replacing `PairRoom.app` keeps it current. Desktop never replaces an existing `/usr/local/bin/pairroom` it did not create, and nothing changes without the user's action. Windows and Linux are unchanged.

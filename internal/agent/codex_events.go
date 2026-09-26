@@ -29,17 +29,12 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 			return
 		}
 		// A notification for an unrelated/resumed native turn must never take
-		// ownership of the Room. Only the turn/start request currently staged by
-		// PairRoom, or the already-recorded current turn, is admissible.
-		if c.currentTurn != "" && c.currentTurn != p.Turn.ID {
-			c.mu.Unlock()
-			return
-		}
-		if c.startingTurnID != "" && c.startingTurnID != p.Turn.ID {
-			c.mu.Unlock()
-			return
-		}
-		if c.currentTurn == "" && c.startingInput == nil {
+		// ownership of the Room. Only the already-recorded current turn, or the
+		// turn that the staged turn/start input was bound to by its exact
+		// userMessage.clientId echo, is admissible. While turn/start is in
+		// flight and no echo has bound a turn, an arbitrary turn/started may be
+		// stale; the turn/start response (or the echo) supplies the start event.
+		if c.currentTurn != p.Turn.ID && c.startingTurnID != p.Turn.ID {
 			c.mu.Unlock()
 			return
 		}
@@ -49,16 +44,12 @@ func (c *CodexAdapter) handleNotification(method string, params json.RawMessage)
 		}
 		c.currentTurn = p.Turn.ID
 		c.threadEngaged = true
-		if c.startingInput != nil && c.startingTurnID == "" {
-			c.startingTurnID = p.Turn.ID
-		}
 		if c.turnBuffers[p.Turn.ID] == nil {
 			c.turnBuffers[p.Turn.ID] = &strings.Builder{}
 		}
-		if len(c.turnInputs[p.Turn.ID]) == 0 && c.startingInput != nil {
-			// App-server may notify turn/started before replying to turn/start.
-			// Bind the in-flight input now so Inspector and final events keep the
-			// same room-message correlation regardless of wire ordering.
+		if len(c.turnInputs[p.Turn.ID]) == 0 && c.startingInput != nil && c.startingTurnID == p.Turn.ID {
+			// The staged input is already correlated to this exact turn; keep the
+			// Inspector and final events on the same room-message correlation.
 			c.turnInputs[p.Turn.ID] = append(c.turnInputs[p.Turn.ID], *c.startingInput)
 			newlyBound = true
 		}
@@ -300,7 +291,31 @@ func (c *CodexAdapter) handleItem(method string, params json.RawMessage) {
 				return
 			}
 			input, ok := c.wireInputs[p.Item.ClientID]
+			// The echo of the staged turn/start input is the exact evidence that
+			// binds an opaque turn ID before the turn/start response arrives.
+			adopt := ok && c.startingInput != nil && c.startingInput.MessageID == p.Item.ClientID &&
+				c.startingTurnID == "" && c.currentTurn == ""
+			emitStarted := false
+			if adopt {
+				c.startingTurnID = p.TurnID
+				c.currentTurn = p.TurnID
+				c.threadEngaged = true
+				if c.turnBuffers[p.TurnID] == nil {
+					c.turnBuffers[p.TurnID] = &strings.Builder{}
+				}
+				if _, already := c.startedTurns[p.TurnID]; !already {
+					c.startedTurns[p.TurnID] = struct{}{}
+					emitStarted = true
+				}
+			}
 			c.mu.Unlock()
+			if emitStarted {
+				c.setState(model.StateWorking, "")
+				started := runtimeEvent(c.cfg.Actor, model.RuntimeTurnStarted)
+				started.TurnID = p.TurnID
+				started.CorrelationID = input.MessageID
+				c.sink(started)
+			}
 			if ok && c.bindTurnInput(p.TurnID, input) {
 				c.emitInputProcessing(p.TurnID, input, "acknowledged by Codex app-server")
 			}
@@ -378,19 +393,22 @@ func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
 		c.mu.Unlock()
 		return
 	}
-	knownTurn := wasCurrent || len(inputs) > 0
-	if !knownTurn && c.startingInput != nil {
-		knownTurn = c.startingTurnID == "" || c.startingTurnID == p.Turn.ID
-	}
+	// While turn/start is in flight, only its exact response or clientId echo
+	// can bind an opaque turn ID. A completion for any other turn may be stale
+	// and must never settle the staged input or relay its final text.
+	startingTurn := c.startingInput != nil && c.startingTurnID == p.Turn.ID
+	knownTurn := wasCurrent || len(inputs) > 0 || startingTurn
 	if !knownTurn {
 		if c.startingInput != nil && c.startingTurnID == "" {
 			// We cannot correlate an arbitrary completion to the in-flight
-			// turn/start until its response reveals the ID. Hold it briefly and let
+			// turn/start until its response reveals the ID. Hold it and let
 			// StartTurn consume only an exact ID match.
 			if c.pendingCompletions == nil {
 				c.pendingCompletions = make(map[string]json.RawMessage)
 			}
-			c.pendingCompletions[p.Turn.ID] = append(json.RawMessage(nil), params...)
+			if len(c.pendingCompletions) < codexPendingCompletionLimit {
+				c.pendingCompletions[p.Turn.ID] = append(json.RawMessage(nil), params...)
+			}
 		}
 		// A connection can receive a late notification for a turn that this
 		// adapter never owned (for example, a stale subscription event). Do not
@@ -418,7 +436,7 @@ func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
 	// is still staged for that request, plus any turn/steer input whose
 	// userMessage echo has not arrived yet, so every accepted message is
 	// settled exactly once.
-	if c.currentTurn == p.Turn.ID || (c.currentTurn == "" && c.startingInput != nil && (c.startingTurnID == "" || c.startingTurnID == p.Turn.ID)) {
+	if wasCurrent || startingTurn {
 		if c.startingInput != nil {
 			addInput(*c.startingInput)
 		}
@@ -482,7 +500,7 @@ func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
 			}
 		}
 	}
-	if wasCurrent {
+	if wasCurrent || startingTurn {
 		c.startingInput = nil
 		c.startingTurnID = ""
 		c.wireInputs = make(map[string]model.AgentInput)

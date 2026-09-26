@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/prompt"
@@ -41,14 +42,13 @@ func (c *CodexAdapter) StartTurn(ctx context.Context, input model.AgentInput) er
 	c.startingTurnID = ""
 	c.mu.Unlock()
 	c.stageWireInput(input)
-	result, err := c.call(ctx, "turn/start", params)
-	c.unstageWireInput(input.MessageID)
-	if err != nil {
+	if err := c.callTurnStart(ctx, input, params); err != nil {
 		c.mu.Lock()
 		c.startingInput = nil
 		c.startingTurnID = ""
 		c.pendingCompletions = make(map[string]json.RawMessage)
 		c.mu.Unlock()
+		c.unstageWireInput(input.MessageID)
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			// The app-server may have accepted turn/start after the deadline;
 			// the orphaned native turn is not reachable through Interrupt once
@@ -58,6 +58,76 @@ func (c *CodexAdapter) StartTurn(ctx context.Context, input model.AgentInput) er
 		}
 		return err
 	}
+	return nil
+}
+
+// callTurnStart sends turn/start and applies a successful response on the
+// stdout reader, in wire order, before the reader handles the turn's later
+// notifications. Applying it on the waiting goroutine instead would race the
+// turn's own turn/completed and could settle it without its correlation.
+func (c *CodexAdapter) callTurnStart(ctx context.Context, input model.AgentInput, params map[string]any) error {
+	for attempt := 0; ; attempt++ {
+		id := c.nextRequestID.Add(1)
+		ch := make(chan rpcReply, 1)
+		c.mu.Lock()
+		c.pending[id] = ch
+		if c.replyHooks == nil {
+			c.replyHooks = make(map[int64]codexReplyHook)
+		}
+		c.replyHooks[id] = func(reply rpcReply) rpcReply {
+			if reply.err == nil {
+				if err := c.acceptTurnStart(input, reply.result); err != nil {
+					reply.err = err
+				}
+			}
+			return reply
+		}
+		c.mu.Unlock()
+		if err := c.send(map[string]any{"id": id, "method": "turn/start", "params": params}); err != nil {
+			c.mu.Lock()
+			delete(c.pending, id)
+			delete(c.replyHooks, id)
+			c.mu.Unlock()
+			return err
+		}
+		var reply rpcReply
+		select {
+		case reply = <-ch:
+		case <-ctx.Done():
+			c.mu.Lock()
+			_, waiting := c.pending[id]
+			delete(c.pending, id)
+			delete(c.replyHooks, id)
+			c.mu.Unlock()
+			if waiting {
+				return ctx.Err()
+			}
+			// The reader already took the response and is applying it.
+			reply = <-ch
+		}
+		var rpcErr codexRPCError
+		if reply.err == nil || !errors.As(reply.err, &rpcErr) || rpcErr.Code != -32001 || attempt >= 4 {
+			return reply.err
+		}
+		delay := time.Duration(100*(1<<attempt))*time.Millisecond + time.Duration(time.Now().UnixNano()%75)*time.Millisecond
+		logEvent := runtimeEvent(c.cfg.Actor, model.RuntimeLog)
+		logEvent.Name = "app-server.overloaded.retry"
+		logEvent.Text = fmt.Sprintf("turn/start rejected as overloaded; retrying in %s (attempt %d/5)", delay, attempt+2)
+		c.sink(logEvent)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+// acceptTurnStart applies a successful turn/start response on the reader.
+func (c *CodexAdapter) acceptTurnStart(input model.AgentInput, result json.RawMessage) error {
+	c.unstageWireInput(input.MessageID)
+	starting := input
 	var turnResult struct {
 		Turn struct {
 			ID string `json:"id"`
