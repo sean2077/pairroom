@@ -60,6 +60,7 @@
     selectedRoomIDs: new Set(),
 	settingsSection: 'interface',
  desktopStartup: {enabled: null, pending: false, error: ''},
+ desktopUpdates: {status: null, pending: false, checking: false, error: '', checkError: ''},
 	agentCatalog: null,
 	agentCatalogPromise: null,
     showRawSnapshot: false,
@@ -1287,7 +1288,7 @@
     if (window.PairRoomDesktop) sections.splice(1, 0, ['desktop', t('desktop.settings')]);
     const nav = node('nav', { className: 'panel settings-nav', 'aria-label': t("ui.setUpPartitions") }, ...sections.map(([key, label]) => {
       const active = state.settingsSection === key;
-      const button = actionButton(label, () => { if (key === 'pair-profiles') refreshPairProfileSettings(); if (key === 'desktop') updateDesktopStartup(); navigate(`#/settings/${key === 'service' ? 'diagnostics' : key}`); }, active ? 'active' : '');
+      const button = actionButton(label, () => { if (key === 'pair-profiles') refreshPairProfileSettings(); if (key === 'desktop') { updateDesktopStartup(); updateDesktopUpdates(); } navigate(`#/settings/${key === 'service' ? 'diagnostics' : key}`); }, active ? 'active' : '');
       button.dataset.settingsSection = key;
       if (active) button.setAttribute('aria-current', 'page');
       button.setAttribute('aria-pressed', String(active));
@@ -1450,6 +1451,58 @@
     }
   }
 
+  // Reads or changes the opt-in update check. Only an explicit Check now
+  // contacts GitHub from this page, and only its failure is shown.
+  async function updateDesktopUpdates(action = 'get', enabled) {
+    const setting = state.desktopUpdates;
+    if (!window.PairRoomDesktop?.readUpdates || setting.pending) return;
+    setting.pending = true;
+    setting.checking = action === 'check';
+    setting.error = '';
+    if (action !== 'get') setting.checkError = '';
+    try {
+      setting.status = await (action === 'set' ? window.PairRoomDesktop.setUpdates(enabled)
+        : action === 'check' ? window.PairRoomDesktop.checkUpdates() : window.PairRoomDesktop.readUpdates());
+    } catch (error) {
+      if (error.status) setting.status = error.status;
+      if (action === 'check') setting.checkError = error.message;
+      else setting.error = error.message;
+    } finally {
+      setting.pending = false;
+      setting.checking = false;
+      if (state.route.name === 'settings' && state.settingsSection === 'desktop') renderSettings();
+    }
+  }
+
+  function renderDesktopUpdateRows() {
+    const setting = state.desktopUpdates;
+    const status = setting.status;
+    if (!window.PairRoomDesktop?.readUpdates) return [];
+    const enabled = status?.enabled === true;
+    const toggle = toggleButton(enabled, (value) => updateDesktopUpdates('set', value), t('desktop.checkForUpdates'));
+    toggle.disabled = setting.pending || typeof status?.enabled !== 'boolean';
+    const rows = [settingRow(t('desktop.checkForUpdates'), t('desktop.checkForUpdatesHelp'), toggle)];
+    if (enabled) {
+      const checked = status.checkedAt ? t('desktop.lastChecked', {value: formatDateTime(status.checkedAt)}) : t('desktop.neverChecked');
+      const check = actionButton(setting.checking ? t('desktop.checkingForUpdates') : t('desktop.checkNow'), () => updateDesktopUpdates('check'), 'secondary-button', setting.pending);
+      rows.push(settingRow(t('desktop.currentVersion', {value: status.current || '—'}), checked, check));
+    }
+    if (status?.latest && status.url) {
+      rows.push(node('div', {className: 'callout boundary', role: 'status'},
+        node('strong', {textContent: t('desktop.updateAvailable', {value: status.latest})}),
+        node('span', {textContent: t('desktop.updateAvailableHelp')}),
+        actionButton(t('desktop.openReleasePage'), () => window.PairRoomDesktop.openExternal(status.url), 'secondary-button compact-button')));
+    } else if (enabled && status.checkedAt && !setting.checkError && !setting.checking) {
+      rows.push(node('p', {role: 'status', textContent: t('desktop.upToDate')}));
+    }
+    if (setting.checkError) rows.push(node('div', {className: 'callout warning', role: 'alert'},
+      node('strong', {textContent: t('desktop.checkFailed')}), node('span', {textContent: setting.checkError})));
+    if (setting.error) rows.push(node('div', {className: 'callout danger', role: 'alert'},
+      node('span', {textContent: setting.error}),
+      actionButton(t('ui.retryNow'), () => { updateDesktopUpdates(); renderSettings(); }, 'secondary-button')));
+    return rows;
+  }
+
   function renderDesktopSettings() {
     const setting = state.desktopStartup;
     const toggle = toggleButton(setting.enabled === true, updateDesktopStartup, t('desktop.launchAtLogin'));
@@ -1459,7 +1512,10 @@
     if (setting.error) rows.push(node('div', {className: 'callout danger', role: 'alert'},
       node('span', {textContent: setting.error}),
       actionButton(t('ui.retryNow'), () => { updateDesktopStartup(); renderSettings(); }, 'secondary-button')));
-    return settingsPanel(t('desktop.settings'), t('desktop.systemSetting'), ...rows);
+    const updateRows = renderDesktopUpdateRows();
+    return node('div', {className: 'view-stack'},
+      settingsPanel(t('desktop.settings'), t('desktop.systemSetting'), ...rows),
+      updateRows.length ? settingsPanel(t('desktop.updates'), t('desktop.updatesSetting'), ...updateRows) : null);
   }
 
   function settingsPanel(title, subtitle, ...rows) {

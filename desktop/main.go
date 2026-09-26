@@ -15,8 +15,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sean2077/pairroom/desktop/internal/clilink"
 	"github.com/sean2077/pairroom/desktop/internal/host"
 	"github.com/sean2077/pairroom/desktop/internal/startup"
+	"github.com/sean2077/pairroom/desktop/internal/updatecheck"
+	"github.com/sean2077/pairroom/internal/version"
 	"github.com/sean2077/pairroom/internal/webui"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -296,6 +299,7 @@ func main() {
 	windowGate := &desktopWindowGate{}
 	var startDesktop func()
 	var startupSettings *startup.Settings
+	var updates *updatecheck.Checker
 	var openBrowser func(string) error
 
 	app := application.New(application.Options{
@@ -318,7 +322,15 @@ func main() {
 			if response, ok := startupSettings.Handle(message); ok {
 				encoded, _ := json.Marshal(response)
 				window.ExecJS("window.PairRoomDesktop?.receive(" + string(encoded) + ");")
+				return
 			}
+			// An explicit check waits for GitHub, so keep it off the message thread.
+			go func() {
+				if response, ok := updates.Handle(context.Background(), message); ok {
+					encoded, _ := json.Marshal(response)
+					window.ExecJS("window.PairRoomDesktop?.receive(" + string(encoded) + ");")
+				}
+			}()
 		},
 		Name:        "PairRoom",
 		Description: "Claude Code and Codex local collaboration control plane",
@@ -354,6 +366,12 @@ func main() {
 	// Reading or rendering Settings never opts a user into autostart.
 	startupSettings = startup.New(app.Autostart)
 	openBrowser = app.Browser.OpenURL
+	// The update check shares the Desktop preference directory with the CLI
+	// link offer, outside the Service data root. It is off until enabled.
+	updates = &updatecheck.Checker{Current: version.Current}
+	if dir, err := clilink.StateDir(); err == nil {
+		updates.Dir = dir
+	}
 
 	window = app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:      "pairroom-main",
@@ -469,6 +487,25 @@ func main() {
 	})
 	cliLink := newCLILinkOffer(app)
 	cliLink.addMenuItem(menu)
+	// Shown only after an enabled check found a newer stable release. It opens
+	// the release page; Desktop never downloads or installs anything.
+	var releaseURL atomic.Value
+	updateItem := menu.Add("Update Available…").SetHidden(true).OnClick(func(*application.Context) {
+		if target, _ := releaseURL.Load().(string); target != "" {
+			if err := openBrowser(target); err != nil {
+				app.Logger.Error("could not open the release page in the default browser", "error", err)
+			}
+		}
+	})
+	showUpdate := func(status updatecheck.Status) {
+		releaseURL.Store(status.URL)
+		application.InvokeAsync(func() {
+			updateItem.SetLabel("PairRoom " + status.Latest + " Available…").
+				SetTooltip("Opens the release page. Upgrade with the installer or package manager you used.").
+				SetHidden(status.URL == "")
+		})
+	}
+	updates.OnChange = showUpdate
 	menu.AddSeparator()
 	menu.Add("Quit PairRoom").OnClick(func(*application.Context) {
 		requestQuit(app, controller)
@@ -521,11 +558,18 @@ func main() {
 			},
 		)
 	}
+	updateCtx, stopUpdates := context.WithCancel(context.Background())
+	defer stopUpdates()
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
 		startDesktop()
+		if status, err := updates.Status(); err == nil {
+			showUpdate(status)
+		}
+		go updates.Run(updateCtx, time.Hour)
 	})
 
 	runErr := app.Run()
+	stopUpdates()
 	controller.quitting.Store(true)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), desktopShutdownTimeout)
 	shutdownErr := controller.shutdown(shutdownCtx)
