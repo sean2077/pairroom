@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Make the Native bind missing-hook error accurate. It said "zero approved relay-hook setup is unsupported", but bind checks only that the Stop hook is installed; PairRoom cannot see approval. It now says no PairRoom Stop hook is installed for the runtime, names the install command and where to approve the hook, and warns that an unapproved hook never publishes Stop replies. `relay doctor` and `relay status` also add a local `hook_hint` while `last_hook_at` is empty, so an installed but unapproved hook is visible after the first finished turn. The hint reads only the slot's local state: no extra Service call, and the Stop hook path is unchanged.
+
 - Let a same-ID `relay send --attach` retry recover the original publication. Rerunning the command after an uncertain send re-uploads each image under a new attachment ID, so the Service used to reject every such retry as a payload conflict. A same-ID retry now returns the original receipt when each re-uploaded image has the same SHA-256, size, media type and file name at the same position; different bytes, names, order or image count still fail, and nothing new is published. That conflict is now reported as definite ("`--id` was already used for a different message; nothing new was published") instead of carrying a misleading "publication uncertain: retry with the SAME --id" suffix; the relay API marks it with error code `send_payload_conflict`. The browser Native outbox is unaffected: it saves the uploaded attachment ID and reuses it on Retry. No Event Log, Store or protocol-version change.
 
 ## [v5.6.0] — 2026-09-26

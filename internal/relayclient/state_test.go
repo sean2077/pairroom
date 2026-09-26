@@ -388,3 +388,18 @@ func TestHookInstallPreservesUnrelatedSettingsAndRejectsMissingHooks(t *testing.
 		t.Fatal("purge damaged unrelated hooks")
 	}
 }
+
+// Bind can only see installation. Its rejection must not claim an approval
+// check, and must still send the user to the harness approval step.
+func TestMissingHookErrorDoesNotClaimApprovalCheck(t *testing.T) {
+	for _, kind := range []model.RuntimeKind{model.RuntimeCodex, model.RuntimeClaude, model.RuntimeGrok} {
+		err := installed(t.TempDir(), kind)
+		if err == nil {
+			t.Fatalf("%s: missing hook accepted", kind)
+		}
+		message := err.Error()
+		if strings.Contains(message, "approved relay-hook") || !strings.Contains(message, "no PairRoom Stop hook is installed") || !strings.Contains(message, "approve it") || !strings.Contains(message, "relay install --runtime "+string(kind)) {
+			t.Fatalf("%s: %s", kind, message)
+		}
+	}
+}

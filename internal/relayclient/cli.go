@@ -370,7 +370,11 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if installed(root, c.State.Runtime) != nil {
 			hook = "missing_or_disabled"
 		}
-		report["local"] = map[string]any{"cli_version": version.Current, "protocol": protocol.NativeVersion, "protocol_match": report["protocol"] == protocol.NativeVersion, "service_version_match": report["service_version"] == version.Current, "workspace_match": root == c.State.Workspace, "hook_installation": hook, "hook_approval": "unknown", "last_hook_at": c.State.LastHookAt}
+		local := map[string]any{"cli_version": version.Current, "protocol": protocol.NativeVersion, "protocol_match": report["protocol"] == protocol.NativeVersion, "service_version_match": report["service_version"] == version.Current, "workspace_match": root == c.State.Workspace, "hook_installation": hook, "hook_approval": "unknown", "last_hook_at": c.State.LastHookAt}
+		if hint := hookNotRunHint(c.State); hint != "" {
+			local["hook_hint"] = hint
+		}
+		report["local"] = local
 		return writeJSON(out, report)
 	case "peer":
 		var peer relay.Binding
@@ -399,6 +403,8 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		local := map[string]any{"last_confirmed_seq": c.State.LastConfirmedSeq, "last_seq": c.State.LastSeq, "publication_unknown": errors.Is(err, relay.ErrUnknown), "binding_workspace": c.State.Workspace}
 		if c.State.LastHookAt != "" {
 			local["last_hook_at"] = c.State.LastHookAt
+		} else {
+			local["hook_hint"] = hookNotRunHint(c.State)
 		}
 		if c.State.Pending != nil {
 			local["pending_seq"] = c.State.Pending.Seq
