@@ -189,7 +189,14 @@
   }
 
   function trimOuterPipes(line) {
-    return line.trim().replace(/^\|/, '').replace(/\|$/, '');
+    let body = line.trim().replace(/^\|/, '');
+    if (body.endsWith('|')) {
+      let slashes = 0;
+      for (let index = body.length - 2; index >= 0 && body[index] === '\\'; index -= 1) slashes += 1;
+      // An escaped trailing pipe is cell content, not an outer delimiter.
+      if (slashes % 2 === 0) body = body.slice(0, -1);
+    }
+    return body;
   }
 
   function splitTableRow(line) {
@@ -199,6 +206,9 @@
     let escaped = false;
     for (const char of body) {
       if (escaped) {
+        // Table syntax consumes only the slash before an escaped pipe.
+        // Keep paths, regexes and inline-code backslashes byte-for-byte.
+        if (char !== '|') current += '\\';
         current += char;
         escaped = false;
       } else if (char === '\\') {
@@ -210,6 +220,7 @@
         current += char;
       }
     }
+    if (escaped) current += '\\';
     cells.push(current.trim());
     return cells;
   }
@@ -256,7 +267,9 @@
     const patterns = [
       { type: 'image', regex: bracketScanner(true), match: null, done: false },
       { type: 'link', regex: bracketScanner(false), match: null, done: false },
-      { type: 'autolink', regex: /<(https?:\/\/[^>\s]+|mailto:[^>\s]+)>/gi, match: null, done: false },
+      // A new '<' ends an unclosed candidate. Otherwise each opener can
+      // rescan every later opener and freeze rendering on a bounded body.
+      { type: 'autolink', regex: /<(https?:\/\/[^<>\s]+|mailto:[^<>\s]+)>/gi, match: null, done: false },
       { type: 'bare-url', regex: /https?:\/\/[^\s<>()]+[^\s<>().,;:!?]/gi, match: null, done: false },
       { type: 'code', regex: /`([^`\n]+)`/g, match: null, done: false },
       { type: 'strong', regex: /(?:\*\*|__)(.+?)(?:\*\*|__)/g, match: null, done: false },

@@ -36,12 +36,47 @@ printf '%s\n' "$url" >>"$FAKE_CURL_LOG"
 key="$(printf '%s' "$url" | sed 's#[^A-Za-z0-9._-]#_#g')"
 [ -f "$FAKE_CURL_DIR/$key" ] || exit 22
 if [ -n "$out" ]; then
+    printf '%s\n' "$out" >>"$FAKE_CURL_OUTPUT_LOG"
     cat "$FAKE_CURL_DIR/$key" >"$out"
 else
     cat "$FAKE_CURL_DIR/$key"
 fi
 EOF
 chmod +x "$work/bin/curl"
+
+# Faults are injected at ordinary process boundaries, not production-only
+# hooks. Record temp paths so cleanup is checked even before any HTTP call.
+real_mktemp="$(command -v mktemp)"
+real_mv="$(command -v mv)"
+cat >"$work/bin/mktemp" <<'EOF'
+#!/bin/sh
+count="$(cat "$FAKE_MKTEMP_COUNT")"
+count=$((count + 1))
+printf '%s\n' "$count" >"$FAKE_MKTEMP_COUNT"
+if [ "$count" = "${FAKE_MKTEMP_FAIL_AT:-}" ]; then
+    printf 'injected mktemp failure\n' >&2
+    exit 1
+fi
+path="$("$REAL_MKTEMP" "$@")" || exit 1
+printf '%s\n' "$path" >>"$FAKE_MKTEMP_LOG"
+printf '%s\n' "$path"
+EOF
+cat >"$work/bin/mv" <<'EOF'
+#!/bin/sh
+if [ "${FAKE_MV_FAIL:-}" = 1 ]; then
+    printf 'injected replacement failure\n' >&2
+    exit 1
+fi
+exec "$REAL_MV" "$@"
+EOF
+chmod +x "$work/bin/mktemp" "$work/bin/mv"
+
+assert_temps_removed() {
+    local path
+    while IFS= read -r path; do
+        [[ ! -e "$path" ]] || fail "temporary file leaked: $path"
+    done <"$work/mktemp.log"
+}
 
 fixture() {
     local key
@@ -69,8 +104,14 @@ run_install() {
     local shell="$1" prefix="$2"
     shift 2
     : >"$work/curl.log"
+    : >"$work/curl-output.log"
+    : >"$work/mktemp.log"
+    printf '0\n' >"$work/mktemp-count"
     # shellcheck disable=SC2086
     env PATH="$work/bin:$PATH" FAKE_CURL_DIR="$work/fixtures" FAKE_CURL_LOG="$work/curl.log" \
+        FAKE_CURL_OUTPUT_LOG="$work/curl-output.log" \
+        REAL_MKTEMP="$real_mktemp" REAL_MV="$real_mv" FAKE_MKTEMP_LOG="$work/mktemp.log" \
+        FAKE_MKTEMP_COUNT="$work/mktemp-count" \
         PAIRROOM_TEST_OS=Linux PAIRROOM_TEST_ARCH=x86_64 PREFIX="$prefix" "$@" \
         $shell "$INSTALL"
 }
@@ -126,6 +167,14 @@ for shell in "${shells[@]}"; do
         fail "[$shell] GITHUB_REPOSITORY leaked into download URLs"
     fi
 
+    # Staging must be on the destination filesystem: mv from /tmp may turn
+    # into a copy/unlink and truncate a previously installed CLI on failure.
+    staged="$(head -n 1 "$work/curl-output.log")"
+    [[ "$(dirname "$staged")" == "$prefix/bin" ]] ||
+        fail "[$shell] binary was not staged beside its destination: $staged"
+    [[ ! -e "$staged" ]] || fail "[$shell] staging file was not removed"
+    assert_temps_removed
+
     # PAIRROOM_REPOSITORY selects a fork, and a checksum mismatch installs nothing.
     prefix="$work/fork-${shell// /-}"
     if run_install "$shell" "$prefix" PAIRROOM_REPOSITORY=example/fork PAIRROOM_VERSION=1.0.0 >"$work/out" 2>&1; then
@@ -134,6 +183,47 @@ for shell in "${shells[@]}"; do
     grep -q 'checksum mismatch' "$work/out" || fail "[$shell] unexpected mismatch output: $(cat "$work/out")"
     [[ ! -e "$prefix/bin/pairroom" ]] || fail "[$shell] mismatched binary was installed"
     grep -q '^https://github.com/example/fork/' "$work/curl.log" || fail "[$shell] PAIRROOM_REPOSITORY ignored"
+
+    # Failed upgrades keep the previously installed CLI, emit no success,
+    # and remove every allocated temporary file, including partial setup.
+    prefix="$work/existing CLI-${shell// /-}"
+    mkdir -p "$prefix/bin"
+    printf '#!/bin/sh\necho previous pairroom\n' >"$prefix/bin/pairroom"
+    chmod +x "$prefix/bin/pairroom"
+    old_digest="$(sha256 "$prefix/bin/pairroom")"
+    for fault in checksum allocate replace; do
+        case "$fault" in
+            checksum) faults=(PAIRROOM_REPOSITORY=example/fork PAIRROOM_VERSION=1.0.0); reason='checksum mismatch' ;;
+            allocate) faults=(FAKE_MKTEMP_FAIL_AT=2); reason='injected mktemp failure' ;;
+            replace) faults=(FAKE_MV_FAIL=1); reason='injected replacement failure' ;;
+        esac
+        if run_install "$shell" "$prefix" "${faults[@]}" >"$work/out" 2>&1; then
+            fail "[$shell] $fault failure must not succeed"
+        fi
+        grep -q "$reason" "$work/out" || fail "[$shell] unexpected $fault failure: $(cat "$work/out")"
+        [[ "$(sha256 "$prefix/bin/pairroom")" == "$old_digest" ]] ||
+            fail "[$shell] $fault failure damaged the existing CLI"
+        [[ -x "$prefix/bin/pairroom" ]] || fail "[$shell] $fault failure lost the executable CLI"
+        if grep -q 'Installed PairRoom CLI' "$work/out"; then
+            fail "[$shell] $fault failure reported success"
+        fi
+        assert_temps_removed
+    done
+    run_install "$shell" "$prefix" >"$work/out" 2>&1 || fail "[$shell] upgrade failed: $(cat "$work/out")"
+    [[ "$(sha256 "$prefix/bin/pairroom")" == "$(sha256 "$work/good-binary")" ]] ||
+        fail "[$shell] upgrade did not replace the existing CLI"
+    assert_temps_removed
+
+    # A directory at the executable path must not turn mv into a successful
+    # move *inside* that directory, followed by a false installation receipt.
+    prefix="$work/directory-${shell// /-}"
+    mkdir -p "$prefix/bin/pairroom"
+    if run_install "$shell" "$prefix" >"$work/out" 2>&1; then
+        fail "[$shell] a directory at the CLI path must not report successful installation"
+    fi
+    [[ -z "$(find "$prefix/bin/pairroom" -type f -print)" ]] ||
+        fail "[$shell] a directory at the CLI path was modified"
+    assert_temps_removed
 
     # An unreachable release API fails with the resolution message.
     prefix="$work/offline-${shell// /-}"
