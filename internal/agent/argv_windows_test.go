@@ -23,8 +23,13 @@ func startClaudeThroughShim(t *testing.T, cfg Config) ([]string, error) {
 	t.Setenv("PAIRROOM_CLAUDE_SCRIPT_HELP", claudeHelpWithNameAndModel)
 	t.Setenv("PAIRROOM_HELPER_ARGS_FILE", argsFile)
 	cfg.Command = writeBatchShim(t, "claude")
+	// The shim re-executes this test binary, which can be slow to start while
+	// the rest of the module's tests run in parallel.
+	saved := probeCommandTimeout
+	probeCommandTimeout = 30 * time.Second
+	t.Cleanup(func() { probeCommandTimeout = saved })
 	adapter := NewClaude(cfg, func(model.RuntimeEvent) {})
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	err := adapter.Start(ctx)
 	defer stopWithin(adapter, 10*time.Second)
@@ -82,7 +87,7 @@ func TestCodexProviderArgumentWithCmdMetacharacterFailsClosedThroughBatchShim(t 
 		CommandArgs: []string{"-c", `model_providers.p.base_url="https://proxy.invalid/v1?a=1&b=2"`},
 	}, func(model.RuntimeEvent) {})
 	defer stopWithin(adapter, 10*time.Second)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	err := adapter.Start(ctx)
 	if err == nil || !strings.Contains(err.Error(), "batch file") {
@@ -95,7 +100,7 @@ func TestClaudeArgvSystemPromptOverWindowsLimitFailsClearly(t *testing.T) {
 	t.Setenv("PAIRROOM_CLAUDE_SCRIPT_HELP", "--input-format --output-format --session-id --resume --verbose --append-system-prompt")
 	adapter := NewClaude(Config{Command: os.Args[0], Repo: t.TempDir(), DataDir: t.TempDir(), SystemPrompt: strings.Repeat("p", 40000)}, func(model.RuntimeEvent) {})
 	defer stopWithin(adapter, 10*time.Second)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	err := adapter.Start(ctx)
 	if err == nil || !strings.Contains(err.Error(), "--append-system-prompt-file") || !strings.Contains(err.Error(), "Windows limit") {
