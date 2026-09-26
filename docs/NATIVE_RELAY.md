@@ -24,6 +24,8 @@ Codex uses `.codex/hooks.json`; Claude Code uses `.claude/settings.json`. Grok B
 
 Review and approve the exact installed definitions in the harness: Codex `/hooks`, Claude project hook consent, and Grok hook approval plus folder trust. Follow native trust/restart guidance; PairRoom never grants consent for you.
 
+Before binding, run `pairroom relay preflight` in each Agent session (or any shell in the Project). It checks, without changing anything, that the bare `pairroom` command resolves on that shell's PATH, the Service is reachable and from the same release, and the Stop hook is installed, then prints ordered `next_steps` and exits nonzero until setup is ready. It cannot see approval; the first finished turn's `last_hook_at` in `relay doctor` confirms that.
+
 Installation also writes the relay skill. Skill roots honor `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and `GROK_HOME`; project hooks stay project-local. The optional `npx skills add sean2077/pairroom` route installs the skill, **not** the hooks or their approval. That route needs Node's package runner; the Go relay CLI does not.
 
 ## Create, join, collaborate

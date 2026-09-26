@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add `pairroom relay preflight`, a read-only Native setup check that works before any binding exists, from any shell. It reports as JSON whether the bare `pairroom` command the relay hooks run resolves on this shell's PATH (and whether it is the running binary), the Git workspace, the caller's native session identity, the running Service's reachability and release match with active native Rooms for this Project, and the project Stop hook for the relevant runtime (including Grok's reuse of the Claude Code hook), then ends with ordered `next_steps` and exits nonzero unless `ready`. It creates no relay state, Project, Room or hook, contacts no model, and uses the endpoint token only for one scoped read without printing it; hook approval stays `unknown`. `relay doctor` still needs a binding. `docs/AGENT_SETUP.md` and the Native guide now run preflight before bind.
+
 - Give Native Stop-hook publication its own time budget. A slow `report`, reconciliation or `failure` call could previously use the whole hook lifetime and leave no time to collect a queued peer reply. Publication now has 8 seconds within the unchanged hook timeout, including at most 2 seconds for the optional transcript `confirm`, so the receive-side park and acknowledgement still run. A timed-out publication keeps its original pending sequence for the next reconciliation and is never replayed under a new identity.
 
 - Require an affirmative `{"handed_off": true}` acknowledgement after a Native delivery is written to stdout. Any HTTP success used to count as a handoff; an empty, malformed or negative body now leaves the outcome uncertain, and the CLI asks the operator to inspect Room delivery state rather than repeat the message.
