@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sean2077/pairroom/internal/atomicfile"
 	"github.com/sean2077/pairroom/internal/model"
 )
 
@@ -529,7 +530,7 @@ func atomicText(path, text string, mode os.FileMode) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(tmp.Name(), path)
+	return atomicfile.Replace(tmp.Name(), path)
 }
 func ignoreWorkspace(root string) error {
 	path := filepath.Join(root, ".gitignore")

@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/sean2077/pairroom/internal/atomicfile"
 )
 
 const FileName = "claude-inbox.json"
@@ -100,7 +102,7 @@ func Capture(dir string, identity Identity, address, token string) error {
 	if err != nil || closeErr != nil {
 		return ErrUnavailable
 	}
-	if os.Rename(f.Name(), path) != nil {
+	if atomicfile.Replace(f.Name(), path) != nil {
 		return ErrUnavailable
 	}
 	return nil
@@ -113,7 +115,7 @@ func unchanged(path string, data []byte) bool {
 	if err != nil || !before.Mode().IsRegular() || before.Size() != int64(len(data)) {
 		return false
 	}
-	f, err := os.Open(path)
+	f, err := atomicfile.Open(path)
 	if err != nil {
 		return false
 	}
@@ -134,7 +136,7 @@ func Prepare(dir string, identity Identity) (Send, error) {
 	if err != nil || !before.Mode().IsRegular() || before.Size() > 16384 {
 		return nil, ErrUnavailable
 	}
-	f, err := os.Open(path)
+	f, err := atomicfile.Open(path)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
