@@ -15,20 +15,15 @@
   // reading or changing launch at login.
   function request(lane, payload, timeoutMs, settle) {
     for (const entry of pending.values()) {
-      if (entry.lane === lane) return Promise.reject(new Error('A desktop setting request is already pending'));
+      if (entry.lane === lane) return Promise.reject(new Error(text('requestPending', 'A desktop setting request is already pending')));
     }
-  function request(action, enabled) {
-    if (pending.size) return Promise.reject(new Error(text('requestPending', 'A desktop setting request is already pending')));
     return new Promise((resolve, reject) => {
       const id = `${prefix}:${++sequence}`;
       const timer = setTimeout(() => {
         pending.delete(id);
-        reject(new Error('Desktop settings did not respond. Reopen Settings to read the system state.'));
+        reject(new Error(text('noResponse', 'Desktop settings did not respond. Reopen Settings to read the system state.')));
       }, timeoutMs);
       pending.set(id, {lane, settle, resolve, reject, timer});
-        reject(new Error(text('noResponse', 'Desktop startup settings did not respond. Reopen Settings to read the system state.')));
-      }, 10000);
-      pending.set(id, {resolve, reject, timer});
       try {
         transport.postMessage(JSON.stringify({kind: lane, id, ...payload}));
       } catch (error) {
@@ -43,14 +38,14 @@
         if (typeof response.enabled === 'boolean') error.enabled = response.enabled;
         throw error;
       }
-      if (typeof response.enabled !== 'boolean') throw new Error('Desktop startup status is unavailable');
+      if (typeof response.enabled !== 'boolean') throw new Error(text('statusUnavailable', 'Desktop startup status is unavailable'));
       return response.enabled;
     });
   }
   function updateStatus(response) {
-    const text = (value) => typeof value === 'string' ? value : '';
-    return {enabled: response.enabled, current: text(response.current), latest: text(response.latest),
-      url: text(response.url), checkedAt: text(response.checked_at)};
+    const string = (value) => typeof value === 'string' ? value : '';
+    return {enabled: response.enabled, current: string(response.current), latest: string(response.latest),
+      url: string(response.url), checkedAt: string(response.checked_at)};
   }
   function updates(action, enabled) {
     // The native request timeout is shorter, so a manual check reports its own failure.
@@ -64,7 +59,7 @@
   window.PairRoomDesktop = Object.freeze({
     readStartup: () => startup('get'),
     setStartup(enabled) {
-      if (typeof enabled !== 'boolean') return Promise.reject(new TypeError('Startup setting must be a boolean'));
+      if (typeof enabled !== 'boolean') return Promise.reject(new TypeError(text('invalidSetting', 'Startup setting must be a boolean')));
       return startup('set', enabled);
     },
     readUpdates: () => updates('get'),
@@ -76,8 +71,6 @@
     // Uses the same native link path as Ctrl+click; the host accepts only http(s).
     openExternal(url) {
       transport.postMessage(JSON.stringify({kind: 'pairroom.desktop.browser', url: String(url)}));
-      if (typeof enabled !== 'boolean') return Promise.reject(new TypeError(text('invalidSetting', 'Startup setting must be a boolean')));
-      return request('set', enabled);
     },
     receive(response) {
       const entry = pending.get(response?.id);
@@ -87,10 +80,6 @@
         entry.resolve(entry.settle(response));
       } catch (error) {
         entry.reject(error);
-      } else if (typeof response.enabled !== 'boolean') {
-        entry.reject(new Error(text('statusUnavailable', 'Desktop startup status is unavailable')));
-      } else {
-        entry.resolve(response.enabled);
       }
     },
   });

@@ -30,8 +30,7 @@ ifeq ($(strip $(GOBIN)),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package desktop-update desktop-check clean docs-check env-check env-check-contract browser-check js-check vuln vuln-binary coverage-contract lint lint-install
-.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package desktop-update desktop-check clean deps-sync docs-check browser-check js-check vuln vuln-binary coverage-contract lint lint-install
+.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package desktop-update desktop-check clean docs-check env-check env-check-contract browser-check js-check vuln vuln-binary coverage-contract lint lint-install deps-sync
 
 build:
 	mkdir -p $(DIST)
