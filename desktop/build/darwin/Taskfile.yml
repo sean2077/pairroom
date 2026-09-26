@@ -27,9 +27,9 @@ tasks:
       GOOS: darwin
       CGO_ENABLED: 1
       GOARCH: '{{.ARCH | default ARCH}}'
-      CGO_CFLAGS: "-mmacosx-version-min=12.0"
-      CGO_LDFLAGS: "-mmacosx-version-min=12.0"
-      MACOSX_DEPLOYMENT_TARGET: "12.0"
+      CGO_CFLAGS: "-mmacosx-version-min=12.3"
+      CGO_LDFLAGS: "-mmacosx-version-min=12.3"
+      MACOSX_DEPLOYMENT_TARGET: "12.3"
       PRODUCTION: '{{.PRODUCTION | default "false"}}'
 
   build:universal:

@@ -10,10 +10,14 @@ import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 REPOSITORY = ROOT.parent
+# WKWebView gained Web Locks in macOS 12.3 (Safari 15.4). Native Room publication
+# fails closed without them, so the bundle must not claim Wails' 12.0 default.
+# Keep this in step with the deployment target in build/darwin/Taskfile.yml.
+MACOS_MINIMUM_VERSION = "12.3.0"
 
 
-def allow_macos_local_networking() -> None:
-    """Keep the production WKWebView allowed to reach PairRoom's loopback HTTP service."""
+def configure_macos_bundle() -> None:
+    """Allow loopback HTTP from the production WKWebView and require Web Locks support."""
     plist_path = ROOT / "build" / "darwin" / "Info.plist"
     if not plist_path.is_file():
         raise SystemExit(f"Wails did not generate the macOS plist: {plist_path}")
@@ -27,6 +31,7 @@ def allow_macos_local_networking() -> None:
     payload = plistlib.loads(contents)
     transport = payload.setdefault("NSAppTransportSecurity", {})
     transport["NSAllowsLocalNetworking"] = True
+    payload["LSMinimumSystemVersion"] = MACOS_MINIMUM_VERSION
     with plist_path.open("wb") as target:
         plistlib.dump(payload, target, fmt=plistlib.FMT_XML, sort_keys=False)
 
@@ -86,7 +91,7 @@ def main() -> int:
         check=True,
     )
     remove_unused_windows_packaging()
-    allow_macos_local_networking()
+    configure_macos_bundle()
     include_pairroom_in_linux_package()
     print(f"prepared Wails v3 build assets for PairRoom {version}")
     return 0

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import plistlib
 import struct
 import subprocess
 import tempfile
@@ -152,6 +153,27 @@ class WindowsPackagingTests(unittest.TestCase):
             prepare.remove_unused_windows_packaging()
         self.assertFalse(nsis.exists())
         self.assertTrue((self.root / "build/windows/inno/PairRoom.iss").is_file())
+
+    def test_prepare_requires_macos_with_webview_web_locks(self):
+        darwin = self.root / "build/darwin"
+        darwin.mkdir(parents=True)
+        plist = darwin / "Info.plist"
+        # The DOCTYPE-first form and 12.0.0 default that Wails generates.
+        plist.write_bytes(b'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+                          b'"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+                          b'<plist version="1.0"><dict><key>LSMinimumSystemVersion</key>'
+                          b'<string>12.0.0</string></dict></plist>\n')
+        with mock.patch.object(prepare, "ROOT", self.root):
+            prepare.configure_macos_bundle()
+            prepare.configure_macos_bundle()
+        payload = plistlib.loads(plist.read_bytes())
+        # macOS 12.3 is the first WKWebView release with navigator.locks.
+        self.assertEqual(payload["LSMinimumSystemVersion"], "12.3.0")
+        self.assertIs(payload["NSAppTransportSecurity"]["NSAllowsLocalNetworking"], True)
+        taskfile = (SCRIPTS.parent / "build/darwin/Taskfile.yml").read_text(encoding="utf-8")
+        for setting in ('-mmacosx-version-min=12.3"', 'MACOSX_DEPLOYMENT_TARGET: "12.3"'):
+            self.assertIn(setting, taskfile)
+        self.assertNotIn("12.0", taskfile)
 
     def test_installer_preserves_process_and_data_boundaries(self):
         source = (SCRIPTS.parent / "build/windows/inno/PairRoom.iss").read_text(encoding="utf-8")
