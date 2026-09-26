@@ -419,7 +419,7 @@ func TestNativeSessionStopHookPublishesAndCollectsOutsideGit(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"claim": relay.Claim{ID: "message", Receipt: "receipt", Envelope: "peer reply"}})
 		case "ack":
 			acks.Add(1)
-			_, _ = io.WriteString(w, `{}`)
+			_, _ = io.WriteString(w, `{"handed_off":true}`)
 		default:
 			t.Errorf("unexpected hook operation: %s", r.URL.Path)
 		}
