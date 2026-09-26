@@ -89,3 +89,16 @@ func TestCodexProviderArgumentWithCmdMetacharacterFailsClosedThroughBatchShim(t 
 		t.Fatalf("CC Switch argument with a cmd.exe metacharacter was not rejected: %v", err)
 	}
 }
+
+func TestClaudeArgvSystemPromptOverWindowsLimitFailsClearly(t *testing.T) {
+	t.Setenv("PAIRROOM_CLAUDE_SCRIPT", "default")
+	t.Setenv("PAIRROOM_CLAUDE_SCRIPT_HELP", "--input-format --output-format --session-id --resume --verbose --append-system-prompt")
+	adapter := NewClaude(Config{Command: os.Args[0], Repo: t.TempDir(), DataDir: t.TempDir(), SystemPrompt: strings.Repeat("p", 40000)}, func(model.RuntimeEvent) {})
+	defer stopWithin(adapter, 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	err := adapter.Start(ctx)
+	if err == nil || !strings.Contains(err.Error(), "--append-system-prompt-file") || !strings.Contains(err.Error(), "Windows limit") {
+		t.Fatalf("over-long argv prompt did not fail with a clear error: %v", err)
+	}
+}

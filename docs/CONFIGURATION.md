@@ -44,6 +44,8 @@ On Windows, a command that resolves to a `.cmd`/`.bat` launcher (the npm shim fo
 
 Grok prompts/instructions travel over long-lived ACP, never argv. New sessions receive `_meta.rules`; exact resumption receives bootstrap once in its first PairRoom prompt without replacing the native system prompt.
 
+Claude Code receives the PairRoom system prompt through `--append-system-prompt-file` (a private file under the Room data directory) whenever `claude --help` advertises it, including the `--append-system-prompt[-file]` notation current releases use. Only a CLI that advertises just `--append-system-prompt` gets the prompt as an argument; on Windows, startup then fails with a clear error if the command line would exceed the operating-system limit (32,767 characters, or 8,191 through a `.cmd` launcher).
+
 ## Agent pair profiles
 
 A named pair is reusable across Projects in one Service. In **Settings → Agent pair profiles**, create/edit/rename/delete or set/clear the default, even before registering a Project. Create Room can load a profile or **Service defaults (no profile)**; **Save or update this pair** persists the current controls explicitly. Browser and Desktop share storage/API.

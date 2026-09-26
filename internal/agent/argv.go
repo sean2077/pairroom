@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -72,4 +73,48 @@ func cmdSafeDisplayText(value string) string {
 		}
 		return r
 	}, value)
+}
+
+// Windows command-line limits in UTF-16 code units: CreateProcess accepts
+// 32,767 and cmd.exe (batch launchers) 8,191.
+const (
+	windowsCommandLineLimit = 32767
+	cmdCommandLineLimit     = 8191
+)
+
+// backslash is escaped by Go's Windows argument quoting before a quote.
+const backslash = 0x5c
+
+// windowsCommandLineLength returns a conservative upper bound of the command
+// line Go builds for path and args: every quote and backslash may be escaped,
+// and every argument may be quoted and separated.
+func windowsCommandLineLength(path string, args []string) int {
+	total := 0
+	for _, value := range append([]string{path}, args...) {
+		for _, r := range value {
+			total += utf16.RuneLen(r)
+			if r == '"' || r == backslash {
+				total++
+			}
+		}
+		total += 3
+	}
+	return total
+}
+
+// checkWindowsCommandLine turns an over-long Windows command line into a
+// clear configuration error instead of the operating system's "filename or
+// extension is too long".
+func checkWindowsCommandLine(goos, runtime, path string, args []string) error {
+	if goos != "windows" {
+		return nil
+	}
+	limit := windowsCommandLineLimit
+	if isBatchLauncher(goos, path) {
+		limit = cmdCommandLineLimit
+	}
+	if length := windowsCommandLineLength(path, args); length > limit {
+		return fmt.Errorf("%s command line would be about %d characters, over the Windows limit of %d", runtime, length, limit)
+	}
+	return nil
 }

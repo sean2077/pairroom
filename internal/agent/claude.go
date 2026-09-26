@@ -169,6 +169,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 		args = append(args, "--verbose")
 	}
 	args = appendClaudeStreamFlags(args, flags, c.cfg.RequireExactSession)
+	promptInArgv := false
 	if flags["--append-system-prompt-file"] {
 		promptPath, err := c.ensurePromptFile(systemPrompt)
 		if err != nil {
@@ -180,6 +181,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 		c.protocolSent = true
 		c.mu.Unlock()
 	} else if flags["--append-system-prompt"] {
+		promptInArgv = true
 		args = append(args, "--append-system-prompt", systemPrompt)
 		c.mu.Lock()
 		c.protocolSent = true
@@ -235,6 +237,13 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 			c.setState(model.StateError, err.Error())
 			return err
 		}
+	}
+	if err := checkWindowsCommandLine(goruntime.GOOS, "Claude Code", probe.Path, args); err != nil {
+		if promptInArgv {
+			err = fmt.Errorf("%w: this Claude Code does not advertise --append-system-prompt-file, so the PairRoom system prompt would be passed as an argument; update Claude Code", err)
+		}
+		c.setState(model.StateError, err.Error())
+		return err
 	}
 
 	cmd := exec.Command(c.cfg.Command, args...)

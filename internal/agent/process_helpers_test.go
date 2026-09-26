@@ -36,6 +36,13 @@ func runClaudeScriptHelper(mode string, args []string) int {
 	}
 	if len(args) == 1 && args[0] == "--help" {
 		help := os.Getenv("PAIRROOM_CLAUDE_SCRIPT_HELP")
+		if path := os.Getenv("PAIRROOM_CLAUDE_SCRIPT_HELP_FILE"); path != "" {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return 93
+			}
+			help = string(raw)
+		}
 		if help == "" {
 			help = "--input-format --output-format --session-id --resume --verbose"
 		}
