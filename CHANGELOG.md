@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Run a Codex steering message that Codex rejects after its turn ended. When the active turn finished while a same-participant message was being steered into it, the message was already marked completed, so after Codex rejected the steer ("no active turn") it never ran and stayed stuck in `submitting`. A steered message is now settled only by Codex's steer response: if accepted it takes the finished turn's outcome, and if rejected it falls back once to the Room queue and runs as the next turn.
 - Stop an unrelated Codex turn from answering a new Embedded message. While Codex had not yet acknowledged a new turn, any turn completion on the thread (for example a stale turn from a resumed session) was taken as the new message's turn: its old final text was relayed as the answer, the message was marked completed, the real turn's output was then dropped, and the next queued message failed with "Codex already has an active turn". Until Codex returns the new turn's ID, only its echo of that exact message now binds a turn; other turn start and completion notifications are ignored.
 
 ## [v5.6.0] — 2026-09-26

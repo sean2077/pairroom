@@ -195,3 +195,32 @@ func TestCodexStaleTurnDuringStartDoesNotAnswerTheRoomMessage(t *testing.T) {
 		return m.ReplyTo == second.ID && m.Text == "fresh answer 2"
 	})
 }
+
+func TestCodexSteerRejectedAfterTurnCompletionRunsAsNextTurn(t *testing.T) {
+	engine := newFakeCodexEngine(t, "steer-race")
+	first, err := engine.Send(context.Background(), SendRequest{Text: "first", To: []model.ActorID{model.ActorSlot2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForMessage(t, engine, "first started", func(m model.Message) bool {
+		return m.ID == first.ID && m.Delivery[model.ActorSlot2] == model.DeliveryStarted
+	})
+	second, err := engine.Send(context.Background(), SendRequest{Text: "second", To: []model.ActorID{model.ActorSlot2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The rejected steer falls back to the Room FIFO once and then runs as its
+	// own native Turn, instead of being reported completed by turn-1.
+	waitForMessage(t, engine, "second answer", func(m model.Message) bool {
+		return m.ReplyTo == second.ID && m.Text == "fresh answer 2"
+	})
+	done := waitForMessage(t, engine, "second settled", func(m model.Message) bool {
+		return m.ID == second.ID && m.Processing[model.ActorSlot2].Terminal()
+	})
+	if done.Processing[model.ActorSlot2] != model.ProcessingCompleted || done.ProcessingTurn[model.ActorSlot2] != "turn-2" || done.Delivery[model.ActorSlot2] != model.DeliveryStarted {
+		t.Fatalf("second message = delivery %s processing %s turn %q", done.Delivery[model.ActorSlot2], done.Processing[model.ActorSlot2], done.ProcessingTurn[model.ActorSlot2])
+	}
+	if got := slot2Replies(engine, first.ID); len(got) != 1 || got[0] != "fresh answer 1" {
+		t.Fatalf("replies to the first message = %q", got)
+	}
+}

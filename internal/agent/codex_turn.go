@@ -222,7 +222,17 @@ func (c *CodexAdapter) Steer(ctx context.Context, input model.AgentInput) SteerO
 
 	text := prompt.Envelope(input)
 	c.stageWireInput(input)
-	defer c.unstageWireInput(input.MessageID)
+	c.mu.Lock()
+	c.steeringInput = input.MessageID
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		if c.steeringInput == input.MessageID {
+			c.steeringInput = ""
+		}
+		c.mu.Unlock()
+		c.unstageWireInput(input.MessageID)
+	}()
 	result, err := c.call(ctx, "turn/steer", codexTurnSteerParams(threadID, turnID, text, input))
 	if err != nil {
 		var rpcErr codexRPCError
@@ -245,16 +255,29 @@ func (c *CodexAdapter) Steer(ctx context.Context, input model.AgentInput) SteerO
 	}
 	c.mu.Lock()
 	terminal, completed := c.terminalTurns[turnID]
+	settled := false
+	if completed {
+		_, settled = terminal.inputIDs[input.MessageID]
+		if !settled && input.MessageID != "" {
+			// Codex accepted the steer into a turn whose completion overtook this
+			// response. The completion deliberately left the input unsettled;
+			// give it that turn's terminal outcome exactly once now.
+			if terminal.inputIDs == nil {
+				terminal.inputIDs = make(map[string]struct{})
+			}
+			terminal.inputIDs[input.MessageID] = struct{}{}
+			c.terminalTurns[turnID] = terminal
+		}
+	}
 	current := c.currentTurn
 	c.mu.Unlock()
 	if completed {
-		if _, accepted := terminal.inputIDs[input.MessageID]; accepted {
-			// The completion path included this staged input and already emitted
-			// its terminal event. The RPC response arrived late; report accepted
-			// without resurrecting the turn or duplicating lifecycle events.
-			return SteerOutcome{State: SteerAccepted, Detail: "accepted by Codex turn/steer (turn completed before acknowledgement)"}
+		if !settled {
+			c.emitInputTerminal(turnID, input, terminal.kind, terminal.detail)
 		}
-		return SteerOutcome{State: SteerUnknown, Detail: "Codex turn completed before the steered input was correlated; explicit retry required"}
+		// Report accepted without resurrecting the turn or duplicating
+		// lifecycle events.
+		return SteerOutcome{State: SteerAccepted, Detail: "accepted by Codex turn/steer (turn completed before acknowledgement)"}
 	}
 	if current != turnID {
 		return SteerOutcome{State: SteerUnknown, Detail: "Codex active turn ended before steer acknowledgement; explicit retry required"}

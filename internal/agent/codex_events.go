@@ -433,14 +433,18 @@ func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
 		inputs = append(inputs, value)
 	}
 	// A completion can overtake the turn/start response. Include the input that
-	// is still staged for that request, plus any turn/steer input whose
-	// userMessage echo has not arrived yet, so every accepted message is
-	// settled exactly once.
+	// is still staged for that request so it is settled exactly once. A
+	// turn/steer input whose userMessage echo has not arrived is not yet
+	// accepted: Steer settles it from the RPC response (accepted inputs get
+	// this turn's terminal event; rejected inputs get none and fall back).
 	if wasCurrent || startingTurn {
 		if c.startingInput != nil {
 			addInput(*c.startingInput)
 		}
 		for _, messageID := range c.wireInputOrder {
+			if messageID == c.steeringInput {
+				continue
+			}
 			if value, ok := c.wireInputs[messageID]; ok {
 				addInput(value)
 			}
@@ -488,7 +492,7 @@ func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
 			inputIDs[value.MessageID] = struct{}{}
 		}
 	}
-	c.terminalTurns[p.Turn.ID] = codexTurnTerminal{status: p.Turn.Status, inputIDs: inputIDs}
+	c.terminalTurns[p.Turn.ID] = codexTurnTerminal{status: p.Turn.Status, kind: terminalKind, detail: detail, inputIDs: inputIDs}
 	if len(c.terminalTurns) > 256 {
 		// Turn IDs are opaque and unique. Evicting an arbitrary old tombstone
 		// only bounds memory; late responses are expected within the current
@@ -503,8 +507,15 @@ func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
 	if wasCurrent || startingTurn {
 		c.startingInput = nil
 		c.startingTurnID = ""
+		steering, steeringStaged := c.wireInputs[c.steeringInput]
 		c.wireInputs = make(map[string]model.AgentInput)
 		c.wireInputOrder = nil
+		if steeringStaged {
+			// Keep the unsettled steer staged so a process exit before its
+			// response still reports it as an outstanding input.
+			c.wireInputs[c.steeringInput] = steering
+			c.wireInputOrder = []string{c.steeringInput}
+		}
 	}
 	staleApprovals := make([]pendingApproval, 0, len(c.approvals))
 	for id, pending := range c.approvals {

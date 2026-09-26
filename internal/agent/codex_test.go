@@ -968,3 +968,89 @@ func TestCodexReassertingDefaultAccessMidTurnIsNoOp(t *testing.T) {
 		t.Fatal("a real access change during a turn must still be rejected")
 	}
 }
+
+// codexSteerRaceRecorder lets the active turn complete while turn/steer is in
+// flight, then answers the steer with the configured response.
+type codexSteerRaceRecorder struct {
+	adapter    *CodexAdapter
+	completion string
+	response   string
+}
+
+func (r *codexSteerRaceRecorder) Write(data []byte) (int, error) {
+	var request struct {
+		ID     int64  `json:"id"`
+		Method string `json:"method"`
+	}
+	if err := json.Unmarshal(data, &request); err != nil {
+		return 0, err
+	}
+	if request.Method == "turn/steer" {
+		r.adapter.handleRPCLine([]byte(r.completion))
+		r.adapter.handleRPCLine([]byte(fmt.Sprintf(`{"id":%d,%s}`, request.ID, r.response)))
+	}
+	return len(data), nil
+}
+
+func (*codexSteerRaceRecorder) Close() error { return nil }
+
+func TestCodexRejectedSteerAfterCompletionIsNotSettled(t *testing.T) {
+	var events []model.RuntimeEvent
+	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) { events = append(events, event) })
+	adapter.stdin = &codexSteerRaceRecorder{
+		adapter:    adapter,
+		completion: `{"method":"turn/completed","params":{"turn":{"id":"turn-a","status":"completed"}}}`,
+		response:   `"error":{"code":-32600,"message":"no active turn"}`,
+	}
+	adapter.threadID, adapter.currentTurn, adapter.state = "thread-1", "turn-a", model.StateWorking
+	adapter.turnInputs["turn-a"] = []model.AgentInput{{MessageID: "msg-first"}}
+
+	outcome := adapter.Steer(context.Background(), model.AgentInput{MessageID: "msg-steer"})
+	if outcome.State != SteerRejected {
+		t.Fatalf("steer outcome=%+v", outcome)
+	}
+	first := 0
+	for _, event := range events {
+		if event.CorrelationID == "msg-steer" && (event.Kind == model.RuntimeInputCompleted || event.Kind == model.RuntimeInputFailed || event.Kind == model.RuntimeInputCancelled) {
+			t.Fatalf("rejected steer received a native terminal event: %#v", event)
+		}
+		if event.CorrelationID == "msg-first" && event.Kind == model.RuntimeInputCompleted {
+			first++
+		}
+	}
+	if first != 1 {
+		t.Fatalf("active input completion count=%d events=%#v", first, events)
+	}
+	if len(adapter.wireInputs) != 0 {
+		t.Fatalf("steer staging leaked: %#v", adapter.wireInputs)
+	}
+}
+
+func TestCodexAcceptedSteerAfterFailedCompletionInheritsTurnOutcome(t *testing.T) {
+	var events []model.RuntimeEvent
+	adapter := NewCodex(Config{}, func(event model.RuntimeEvent) { events = append(events, event) })
+	adapter.stdin = &codexSteerRaceRecorder{
+		adapter:    adapter,
+		completion: `{"method":"turn/completed","params":{"turn":{"id":"turn-a","status":"failed","error":{"message":"sandbox failed"}}}}`,
+		response:   `"result":{"turnId":"turn-a"}`,
+	}
+	adapter.threadID, adapter.currentTurn, adapter.state = "thread-1", "turn-a", model.StateWorking
+	adapter.turnInputs["turn-a"] = []model.AgentInput{{MessageID: "msg-first"}}
+
+	outcome := adapter.Steer(context.Background(), model.AgentInput{MessageID: "msg-steer"})
+	if outcome.State != SteerAccepted {
+		t.Fatalf("steer outcome=%+v", outcome)
+	}
+	terminal := map[string]int{}
+	for _, event := range events {
+		if event.CorrelationID == "msg-steer" {
+			terminal[event.Kind]++
+			if event.Kind == model.RuntimeInputFailed && (event.TurnID != "turn-a" || event.Text != "sandbox failed") {
+				t.Fatalf("steer failure event=%#v", event)
+			}
+		}
+	}
+	if terminal[model.RuntimeInputFailed] != 1 || terminal[model.RuntimeInputCompleted] != 0 {
+		t.Fatalf("accepted steer terminal events=%v all=%#v", terminal, events)
+	}
+}

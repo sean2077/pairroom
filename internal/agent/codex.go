@@ -25,6 +25,8 @@ import (
 // the already-settled message without resurrecting the native turn.
 type codexTurnTerminal struct {
 	status   string
+	kind     string
+	detail   string
 	inputIDs map[string]struct{}
 }
 
@@ -69,10 +71,14 @@ type CodexAdapter struct {
 	wireInputOrder []string
 	startingInput  *model.AgentInput
 	startingTurnID string
-	turnBuffers    map[string]*strings.Builder
-	turnFinal      map[string]string
-	terminalTurns  map[string]codexTurnTerminal
-	startedTurns   map[string]struct{}
+	// steeringInput is the message ID of the turn/steer request in flight. A
+	// completion that overtakes its response must not settle it: Codex may
+	// still reject the steer, and only the response decides its terminal event.
+	steeringInput string
+	turnBuffers   map[string]*strings.Builder
+	turnFinal     map[string]string
+	terminalTurns map[string]codexTurnTerminal
+	startedTurns  map[string]struct{}
 	// pendingCompletions holds a terminal notification that arrived before the
 	// turn/start response exposed its ID. It is keyed by the opaque native turn
 	// ID and consumed only when that exact response arrives; unrelated stale
