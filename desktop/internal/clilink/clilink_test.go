@@ -204,3 +204,55 @@ func TestAppleScriptQuotesPathsSafely(t *testing.T) {
 		t.Fatalf("shell quoting: %s", shell)
 	}
 }
+
+func TestScriptRechecksOwnershipBeforeReplacing(t *testing.T) {
+	shell := Script("/Applications/PairRoom.app/Contents/Helpers/pairroom", "/usr/local/bin/pairroom")
+	check := strings.Index(shell, "*.app/Contents/Helpers/pairroom)")
+	link := strings.Index(shell, "/bin/ln -sfn")
+	if check < 0 || link < 0 || check > link {
+		t.Fatalf("the privileged script must recheck ownership before ln: %s", shell)
+	}
+	for _, want := range []string{"[ ! -L '/usr/local/bin/pairroom' ]", "/usr/bin/readlink '/usr/local/bin/pairroom'", "exit 3", foreignMarker} {
+		if !strings.Contains(shell, want) {
+			t.Fatalf("privileged script lacks %q: %s", want, shell)
+		}
+	}
+}
+
+func TestInstallRefusesAForeignEntryThatAppearsDuringThePrompt(t *testing.T) {
+	requireSymlinks(t)
+	dir := t.TempDir()
+	_, cli := bundle(t, dir, "PairRoom")
+	link := filepath.Join(dir, "bin", "pairroom")
+	for name, appear := range map[string]func() error{
+		"file": func() error { return os.WriteFile(link, []byte("user tool"), 0o755) },
+		"link": func() error { return os.Symlink(filepath.Join(dir, "elsewhere", "pairroom"), link) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			_ = os.Remove(link)
+			stubOSAScript(t, func(string) ([]byte, error) {
+				// The entry appears after Install's unprivileged check, while the
+				// administrator prompt is open.
+				if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := appear(); err != nil {
+					t.Fatal(err)
+				}
+				out, err := exec.Command("/bin/sh", "-c", Script(cli, link)).CombinedOutput()
+				var exit *exec.ExitError
+				if !errors.As(err, &exit) || exit.ExitCode() != foreignExitCode {
+					t.Fatalf("privileged script exit = %v, want %d: %s", err, foreignExitCode, out)
+				}
+				return out, err
+			})
+			err := Install(cli, link)
+			if err == nil || !strings.Contains(err.Error(), "appeared while waiting for authorization") {
+				t.Fatalf("Install = %v, want a foreign-entry refusal", err)
+			}
+			if Inspect(cli, link) != StateForeign {
+				t.Fatalf("foreign entry was replaced: state=%s", Inspect(cli, link))
+			}
+		})
+	}
+}
