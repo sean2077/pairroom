@@ -29,7 +29,7 @@
         continue;
       }
 
-      const fence = line.match(/^\s{0,3}(```+|~~~+)\s*([^`]*)$/);
+      const fence = fenceMatch(line);
       if (fence) {
         const marker = fence[1][0];
         const minLength = fence[1].length;
@@ -46,7 +46,7 @@
         continue;
       }
 
-      const heading = line.match(/^\s{0,3}(#{1,4})\s+(.+?)\s*#*\s*$/);
+      const heading = headingMatch(line);
       if (heading) {
         const node = document.createElement(`h${heading[1].length}`);
         parseInline(node, heading[2], options);
@@ -135,6 +135,37 @@
       parseInline(p, paragraph.join('\n'), options);
       parent.appendChild(p);
     }
+  }
+
+  // Separate prefixes from suffixes. Overlapping whitespace/marker groups
+  // backtracked over the entire tail on long headings or malformed fences.
+  function fenceMatch(line) {
+    const prefix = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+    if (!prefix) return null;
+    const info = line.slice(prefix[0].length);
+    if (info.includes('`')) return null;
+    return [line, prefix[1], info];
+  }
+
+  function headingMatch(line) {
+    const prefix = line.match(/^\s{0,3}(#{1,4})(\s+)/);
+    if (!prefix) return null;
+    let body = line.slice(prefix[0].length).trimEnd();
+    if (!body) {
+      // The old matcher retained one whitespace character after the required
+      // separator in a whitespace-only heading. Preserve that edge case.
+      for (let i = prefix[2].length - 1; i > 0; i -= 1) {
+        if (!/[\r\n\u2028\u2029]/.test(prefix[2][i])) return [line, prefix[1], prefix[2][i]];
+      }
+      return null;
+    }
+    // Keep at least one character, matching the existing hash-only heading
+    // rule. Neither loop can rescan an already examined part of the body.
+    let end = body.length;
+    while (end > 1 && body[end - 1] === '#') end -= 1;
+    body = body.slice(0, end).trimEnd();
+    if (/[\u2028\u2029]/.test(body)) return null;
+    return [line, prefix[1], body];
   }
 
   function listMatch(line) {
@@ -256,7 +287,7 @@
     const patterns = [
       { type: 'image', regex: bracketScanner(true), match: null, done: false },
       { type: 'link', regex: bracketScanner(false), match: null, done: false },
-      { type: 'autolink', regex: /<(https?:\/\/[^>\s]+|mailto:[^>\s]+)>/gi, match: null, done: false },
+      { type: 'autolink', regex: /<(https?:\/\/[^<>\s]+|mailto:[^<>\s]+)>/gi, match: null, done: false },
       { type: 'bare-url', regex: /https?:\/\/[^\s<>()]+[^\s<>().,;:!?]/gi, match: null, done: false },
       { type: 'code', regex: /`([^`\n]+)`/g, match: null, done: false },
       { type: 'strong', regex: /(?:\*\*|__)(.+?)(?:\*\*|__)/g, match: null, done: false },
