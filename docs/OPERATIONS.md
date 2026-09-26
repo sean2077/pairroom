@@ -71,6 +71,8 @@ Write backup and diagnostics outputs outside the source Room directory, includin
 
 ## Graceful shutdown
 
+The Management listener first ends open Room event streams (in-app Room tabs reconnect after restart), then waits for in-flight requests up to `--shutdown-timeout` before draining Runtimes.
+
 For Embedded, normal exit drains owned native work, settles projections, closes stores, and releases ownership. After a forced exit, only definitely pre-submission FIFO work is automatically rebuilt; unknown submission fails and accepted unfinished input is cancelled without replay.
 
 For Native, drain rejects new publications/claims while valid receipts for already released envelopes can settle. Shutdown does not terminate original sessions. Recovered unfinished delivery remains uncertain; inspect history and side effects before Retry. A hidden window or disconnected browser proves nothing about process completion.

@@ -58,6 +58,11 @@ type ManagementServer struct {
 	http          *http.Server
 	roomLocks     roomLockSet
 	diagnosticsMu sync.Mutex
+	// streams is cancelled when Shutdown begins. Long-lived proxied Room event
+	// streams derive from it so an open Room tab cannot hold graceful shutdown
+	// for its whole deadline; ordinary requests keep draining normally.
+	streams      context.Context
+	cancelStream context.CancelFunc
 }
 
 type managementAuthMode uint8
@@ -160,6 +165,7 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 		registry: cfg.Registry, runtimes: cfg.Runtimes,
 		provisioner: cfg.Provisioner, token: token, cliToken: cliToken, sessions: sessions, agentResolver: cfg.AgentResolver,
 	}
+	server.streams, server.cancelStream = context.WithCancel(context.Background())
 	if server.agentResolver == nil {
 		if native, ok := cfg.Provisioner.(*NativeProvisioner); ok {
 			server.agentResolver = native.cfg.Resolver
@@ -226,6 +232,9 @@ func (s *ManagementServer) Serve(listener net.Listener) error {
 }
 
 func (s *ManagementServer) Shutdown(ctx context.Context) error {
+	// End open event streams first: http.Server.Shutdown waits for every
+	// active handler, and a Room tab's SSE never finishes on its own.
+	s.cancelStream()
 	err := s.http.Shutdown(ctx)
 	if err == nil {
 		// A cleanly stopped Service must not leave its bearer token sitting in

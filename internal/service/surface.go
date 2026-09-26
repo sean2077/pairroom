@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -181,6 +182,15 @@ func (s *ManagementServer) roomSurface(w http.ResponseWriter, r *http.Request) {
 
 	if r.Body != nil && r.ContentLength != 0 {
 		r.Body = http.MaxBytesReader(w, r.Body, maxSurfaceBodyBytes)
+	}
+	if remainder == "/api/v1/events" {
+		// The Room event stream never ends on its own. Tie it to Service
+		// shutdown so an open Room tab does not stall graceful shutdown.
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		stop := context.AfterFunc(s.streams, cancel)
+		defer stop()
+		r = r.WithContext(ctx)
 	}
 
 	proxy := &httputil.ReverseProxy{
