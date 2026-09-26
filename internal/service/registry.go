@@ -57,6 +57,17 @@ type Registry struct {
 
 	roomDeletionFS                roomDeletionFS
 	roomDeletionCleanupDiagnostic string
+
+	// eventLogOwned, when set by the RuntimeManager, reports whether a Room
+	// runtime owns that Room's Event Log writer. Lifecycle appends refuse then
+	// instead of opening a second writer on the same log.
+	eventLogOwned func(roomID string) bool
+}
+
+func (r *Registry) setEventLogOwnerCheck(check func(roomID string) bool) {
+	r.provisionMu.Lock()
+	defer r.provisionMu.Unlock()
+	r.eventLogOwned = check
 }
 
 func DefaultRoot() (string, error) {

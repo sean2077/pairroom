@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Prevent Native relay traffic from reactivating a Room while it is being archived or renamed. A relay request arriving between runtime suspension and the lifecycle commit could restart the runtime, leaving an archived Room with a live runtime and two writers on one Event Log; the resulting duplicate sequence made the Room fail to reopen. Archive and rename now hold an activation barrier across that window (activation returns 409 `room_lifecycle_in_progress`), and a lifecycle append refuses while any runtime still owns the Room's Event Log.
+
 - Stop returning Room runtime bearers from the Management API. Runtime entries in `GET /api/v1/service` and the activation response carried each active Room's direct View URL, including its bearer token, so any caller allowed to read the Service snapshot, including the scoped relay-setup token from `relay-endpoint.json`, could obtain full access to every active Room. The field is no longer serialized; opening a Room in the system browser still works through the explicit open-browser action, and in-app Room tabs are unaffected.
 
 ## [v5.6.0] — 2026-09-26

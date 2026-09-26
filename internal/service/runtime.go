@@ -24,6 +24,12 @@ var (
 	ErrRuntimeCloseUncertain = errors.New("room runtime close state is uncertain")
 	ErrRuntimeRoomDeleting   = errors.New("room is being permanently removed")
 	ErrRuntimeNotReady       = errors.New("room runtime is not active")
+	// ErrRuntimeLifecycleInProgress rejects activation while archive or rename
+	// holds the Room between runtime suspension and its lifecycle commit.
+	ErrRuntimeLifecycleInProgress = errors.New("room lifecycle change is in progress")
+	// ErrRoomLogOwnedByRuntime refuses a Service lifecycle append while a Room
+	// runtime still owns (or may open) that Room's Event Log writer.
+	ErrRoomLogOwnedByRuntime = errors.New("room event log is owned by an active runtime")
 )
 
 type RuntimePhase string
@@ -150,11 +156,15 @@ type runtimeEntry struct {
 type RuntimeManager struct {
 	mu sync.Mutex
 
-	registry    *Registry
-	factory     RuntimeFactory
-	cfg         RuntimeManagerConfig
-	entries     map[string]*runtimeEntry
-	deleting    map[string]struct{}
+	registry *Registry
+	factory  RuntimeFactory
+	cfg      RuntimeManagerConfig
+	entries  map[string]*runtimeEntry
+	deleting map[string]struct{}
+	// lifecycle holds Rooms between runtime suspension and a Service lifecycle
+	// commit (archive, rename). Like deleting, it is an admission barrier: no
+	// activation may reopen the Room's Event Log writer inside that window.
+	lifecycle   map[string]struct{}
 	queue       []string
 	changed     chan struct{}
 	closed      bool
@@ -192,9 +202,10 @@ func NewRuntimeManager(registry *Registry, factory RuntimeFactory, cfg RuntimeMa
 	ctx, cancel := context.WithCancel(context.Background())
 	manager := &RuntimeManager{
 		registry: registry, factory: factory, cfg: cfg,
-		entries: make(map[string]*runtimeEntry), deleting: make(map[string]struct{}), changed: make(chan struct{}),
+		entries: make(map[string]*runtimeEntry), deleting: make(map[string]struct{}), lifecycle: make(map[string]struct{}), changed: make(chan struct{}),
 		ctx: ctx, cancel: cancel,
 	}
+	registry.setEventLogOwnerCheck(manager.ownsEventLog)
 	manager.wg.Add(1)
 	go manager.loop()
 	return manager, nil
@@ -208,6 +219,9 @@ func (m *RuntimeManager) RequestActivation(roomID string) (RuntimeStatus, error)
 	}
 	if _, deleting := m.deleting[roomID]; deleting {
 		return RuntimeStatus{}, ErrRuntimeRoomDeleting
+	}
+	if _, changing := m.lifecycle[roomID]; changing {
+		return RuntimeStatus{}, ErrRuntimeLifecycleInProgress
 	}
 	// Keep the manager lock through the Registry read. dispatchLocked follows
 	// the same lock order, and permanent deletion uses this boundary to ensure
@@ -286,6 +300,10 @@ func (m *RuntimeManager) Activate(ctx context.Context, roomID string) (RoomRunti
 		if m.closed {
 			m.mu.Unlock()
 			return nil, RuntimeStatus{}, ErrRuntimeManagerClosed
+		}
+		if _, changing := m.lifecycle[roomID]; changing {
+			m.mu.Unlock()
+			return nil, RuntimeStatus{}, ErrRuntimeLifecycleInProgress
 		}
 		entry := m.entries[roomID]
 		if entry == nil {
@@ -443,6 +461,69 @@ func (m *RuntimeManager) Suspend(ctx context.Context, roomID string) error {
 	err := runtime.Close(ctx)
 	m.finishStop(roomID, generation, err)
 	return err
+}
+
+// BeginLifecycleChange suspends the Room runtime behind an admission barrier
+// and returns a release function. Until release is called, RequestActivation,
+// Activate, and dispatch refuse the Room, so a native relay request cannot
+// restart the runtime between suspension and the caller's lifecycle commit.
+// interruptActive selects the archive behavior (InterruptAndSuspend) over the
+// rename behavior (WaitAndSuspend). On error the barrier is already released.
+func (m *RuntimeManager) BeginLifecycleChange(ctx context.Context, roomID string, interruptActive bool) (func(), error) {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil, ErrRuntimeManagerClosed
+	}
+	if _, deleting := m.deleting[roomID]; deleting {
+		m.mu.Unlock()
+		return nil, ErrRuntimeRoomDeleting
+	}
+	if _, changing := m.lifecycle[roomID]; changing {
+		m.mu.Unlock()
+		return nil, ErrRuntimeLifecycleInProgress
+	}
+	m.lifecycle[roomID] = struct{}{}
+	if entry := m.entries[roomID]; entry != nil {
+		entry.requested = false
+	}
+	m.signalLocked()
+	m.mu.Unlock()
+
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			delete(m.lifecycle, roomID)
+			m.dispatchLocked()
+			m.signalLocked()
+		})
+	}
+	if err := m.drainAndSuspend(ctx, roomID, interruptActive); err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
+}
+
+// ownsEventLog reports whether a runtime for roomID holds, or may be about to
+// open, the Room's Event Log writer. Service lifecycle appends refuse then.
+func (m *RuntimeManager) ownsEventLog(roomID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry := m.entries[roomID]
+	if entry == nil {
+		return false
+	}
+	switch entry.phase {
+	case RuntimeSuspended:
+		return false
+	case RuntimeFailed:
+		return entry.runtime != nil
+	default:
+		return true
+	}
 }
 
 // WaitAndSuspend is used by control-plane mutations (rename, binding
@@ -785,7 +866,7 @@ func (m *RuntimeManager) dispatchLocked() {
 		if entry == nil || entry.phase != RuntimeQueued {
 			continue
 		}
-		if _, deleting := m.deleting[roomID]; deleting {
+		if m.admissionBlockedLocked(roomID) {
 			entry.phase = RuntimeSuspended
 			entry.requested = false
 			continue
@@ -820,7 +901,7 @@ func (m *RuntimeManager) nextDispatchIndexLocked() int {
 		if entry == nil || entry.phase != RuntimeQueued {
 			return i
 		}
-		if _, deleting := m.deleting[roomID]; deleting {
+		if m.admissionBlockedLocked(roomID) {
 			return i
 		}
 		if !atCapacity || m.nativeExemptLocked(roomID) {
@@ -911,7 +992,7 @@ func (m *RuntimeManager) finishStop(roomID string, generation uint64, err error)
 	entry.drainRequested = false
 	entry.fatalStop = false
 	entry.lastError = ""
-	if entry.requested && !m.closed {
+	if entry.requested && !m.closed && !m.admissionBlockedLocked(roomID) {
 		entry.phase = RuntimeQueued
 		entry.queuedAt = m.cfg.Now()
 		entry.requested = true
@@ -922,6 +1003,16 @@ func (m *RuntimeManager) finishStop(roomID string, generation uint64, err error)
 	}
 	m.dispatchLocked()
 	m.signalLocked()
+}
+
+// admissionBlockedLocked reports whether deletion or a lifecycle change holds
+// the Room's admission barrier.
+func (m *RuntimeManager) admissionBlockedLocked(roomID string) bool {
+	if _, deleting := m.deleting[roomID]; deleting {
+		return true
+	}
+	_, changing := m.lifecycle[roomID]
+	return changing
 }
 
 // nativeExemptLocked reports whether the room is native-hosted. Native

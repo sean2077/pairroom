@@ -646,11 +646,15 @@ func (s *ManagementServer) renameRoom(w http.ResponseWriter, r *http.Request) {
 	}
 	// Keeping control-plane appends outside an active Engine avoids introducing
 	// a second live projection of the same append-only log. Active work is never
-	// interrupted; this request waits for the safe Turn boundary.
-	if err := s.runtimes.WaitAndSuspend(r.Context(), roomID); err != nil {
+	// interrupted; this request waits for the safe Turn boundary. The lifecycle
+	// barrier keeps unlocked native relay requests from reactivating the
+	// runtime before the rename event commits.
+	release, err := s.runtimes.BeginLifecycleChange(r.Context(), roomID, false)
+	if err != nil {
 		s.writeError(w, err)
 		return
 	}
+	defer release()
 	room, err := s.registry.RenameRoom(r.Context(), roomID, request.Name)
 	if err != nil {
 		s.writeError(w, err)
@@ -795,10 +799,14 @@ func (s *ManagementServer) archiveRoomByID(ctx context.Context, roomID string) (
 	// Archive stops active work by default: it closes the Room mutation gate,
 	// interrupts the current Agent Turn so the operator does not have to stop
 	// it from inside the Room first, waits for the runtime to settle, and only
-	// then suspends it before the lifecycle event is appended.
-	if err := s.runtimes.InterruptAndSuspend(ctx, roomID); err != nil {
+	// then suspends it before the lifecycle event is appended. The lifecycle
+	// barrier spans suspend through commit: native relay requests do not take
+	// the Room lock and must not reopen the Event Log inside that window.
+	release, err := s.runtimes.BeginLifecycleChange(ctx, roomID, true)
+	if err != nil {
 		return Room{}, false, err
 	}
+	defer release()
 	archived, err := s.registry.ArchiveRoom(ctx, roomID)
 	if err != nil {
 		return Room{}, false, err
@@ -1124,6 +1132,7 @@ func (s *ManagementServer) writeError(w http.ResponseWriter, err error) {
 		code = http.StatusServiceUnavailable
 	case errors.Is(err, ErrRuntimeBusy), errors.Is(err, ErrRuntimeCloseUncertain), errors.Is(err, ErrRuntimeDrainAborted),
 		errors.Is(err, ErrRuntimeRoomDeleting), errors.Is(err, ErrRoomNotArchived), errors.Is(err, ErrRuntimeNotReady),
+		errors.Is(err, ErrRuntimeLifecycleInProgress), errors.Is(err, ErrRoomLogOwnedByRuntime),
 		errors.Is(err, relay.ErrWakeRoomBusy):
 		code = http.StatusConflict
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
@@ -1171,6 +1180,10 @@ func managementErrorCode(err error, fallback string) string {
 		return "room_deletion_in_progress"
 	case errors.Is(err, ErrRuntimeNotReady):
 		return "runtime_not_ready"
+	case errors.Is(err, ErrRuntimeLifecycleInProgress):
+		return "room_lifecycle_in_progress"
+	case errors.Is(err, ErrRoomLogOwnedByRuntime):
+		return "room_log_owned_by_runtime"
 	case errors.Is(err, ErrRoomNotArchived):
 		return "room_not_archived"
 	case errors.Is(err, context.Canceled):
