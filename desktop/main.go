@@ -467,6 +467,8 @@ func main() {
 			app.Logger.Error("could not open the Service data folder", "error", err)
 		}
 	})
+	cliLink := newCLILinkOffer(app)
+	cliLink.addMenuItem(menu)
 	menu.AddSeparator()
 	menu.Add("Quit PairRoom").OnClick(func(*application.Context) {
 		requestQuit(app, controller)
@@ -508,6 +510,9 @@ func main() {
 			func(value *host.Host) {
 				windowGate.submit(func() { navigateWindow(window, value.URL()) })
 				syncTray()
+				// Offer the CLI link only once the Service is up. The modal waits for
+				// the user, so keep it off the window gate's drain loop.
+				go cliLink.offerOnce()
 			},
 			func(err error) {
 				windowGate.submit(func() { showStartupError(window, err) })
