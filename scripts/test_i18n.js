@@ -78,10 +78,24 @@ for (const uiRoot of uiRoots) {
       for (const pattern of directPatterns) {
         for (const match of text.matchAll(pattern)) if (humanCopy(match[2])) untranslated.push(`${rel}: untranslated JavaScript literal ${JSON.stringify(match[2])}`);
       }
+      // An English fallback after `||` in visible copy (catalog keys excepted).
+      for (const match of text.matchAll(/(?:textContent|\.title|placeholder|aria-label['"],)[^;\n]*?\|\|\s*(['"])([^'"\n]+)\1/g)) {
+        if (humanCopy(match[2]) && !en[match[2]]) untranslated.push(`${rel}: untranslated JavaScript fallback ${JSON.stringify(match[2])}`);
+      }
     }
   }
 }
 for (const key of referenced) if (!en[key]) throw new Error(`UI references missing i18n key: ${key}`);
+
+// Native wake audit values are a fixed server vocabulary shown in the Room.
+const relayTypes = fs.readFileSync(path.join(root, 'internal/relay/types.go'), 'utf8');
+for (const [name, prefix] of [['wakeOutcomes', 'wakeOutcome'], ['wakeReasons', 'wakeReason']]) {
+  const body = relayTypes.match(new RegExp(`var ${name} = map\\[string\\]bool\\{([^}]*)\\}`))?.[1];
+  if (!body) throw new Error(`relay ${name} vocabulary not found`);
+  for (const [, value] of body.matchAll(/"([a-z_]+)"\s*:/g)) {
+    if (!en[`room.native.${prefix}_${value}`]) throw new Error(`Native ${prefix} ${value} has no catalog entry`);
+  }
+}
 if (untranslated.length) throw new Error(`untranslated UI copy:\n${untranslated.join('\n')}`);
 
 const managementUX = fs.readFileSync(path.join(root, 'internal/service/assets/management-ux.js'), 'utf8');

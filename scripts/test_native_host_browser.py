@@ -35,7 +35,10 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
         subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '--allow-empty', '-qm', 'Initial review fixture'], check=True)
         service = Service(binary, root)
         env = os.environ.copy()
-        env.update(HOME=str(root/'home'), USERPROFILE=str(root/'home'), XDG_CONFIG_HOME=str(root/'home'/'.config'))
+        # os.UserConfigDir reads APPDATA on Windows and HOME/Library on macOS; keep
+        # relay session locators out of the real profile on every platform.
+        env.update(HOME=str(root/'home'), USERPROFILE=str(root/'home'), XDG_CONFIG_HOME=str(root/'home'/'.config'),
+                   APPDATA=str(root/'home'/'AppData'/'Roaming'), LOCALAPPDATA=str(root/'home'/'AppData'/'Local'))
         env['PATH'] = str(binary.parent) + os.pathsep + env.get('PATH', '')
         # bind associates from the official session id the harness exposes to its
         # tool-call subprocess. Expose exactly one per invocation (clearing the
@@ -45,7 +48,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
         # Never inherit the surrounding (real) harness session into the fixture;
         # cli() exposes exactly one synthetic id per bind, and direct subprocess
         # calls then run with no session metadata so explicit flags win.
-        for key in (*session_vars, 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'GROK_HOME'):
+        for key in (*session_vars, 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'GROK_HOME', 'CLAUDECODE', 'PAIRROOM_LOG_FILE'):
             env[key] = ''
         errors = []
 

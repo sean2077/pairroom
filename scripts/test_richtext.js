@@ -40,4 +40,18 @@ const started = Date.now();
 render(long);
 const elapsed = Date.now() - started;
 assert.ok(elapsed < 2000, `256 KiB body must render in bounded time (took ${elapsed} ms)`);
+
+// Unmatched link/image brackets restarted a label scan at every '[' (seconds
+// for 128 Ki brackets). The scanner must stay linear and keep link rules.
+for (const [label, body] of [['[', '['.repeat(128 * 1024)], ['![', '!['.repeat(64 * 1024)],
+  ['[a](', '[a]('.repeat(32 * 1024)], ['[a](b "', '[a](b "'.repeat(16 * 1024)]]) {
+  const begin = Date.now();
+  const output = render(body);
+  const took = Date.now() - begin;
+  assert.ok(took < 300, `${JSON.stringify(label)} x many must render in linear time (took ${took} ms)`);
+  assert.equal(output.textContent, body, 'unmatched brackets remain visible text');
+}
+const links = flatten(render('[a](https://e.x) ![i](x.png "t") [x](javascript:1) [](https://e.x) [t](#h \'T\') [s](https://e.x "q")'));
+assert.deepEqual(links.filter(node => node.tagName === 'a').map(node => [node.href, node.textContent, node.title]),
+  [['https://e.x', 'a', ''], ['https://e.x', 'https://e.x', ''], ['#h', 't', 'T'], ['https://e.x', 's', 'q']], 'safe-link rules and titles are unchanged');
 console.log(`richtext safety, bounded nesting and linear inline scan (${elapsed} ms): ok`);
