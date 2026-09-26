@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Read `--config` the same way every other flag is read. `service`, `serve`, `doctor` and `providers` load the configuration file before parsing flags, but that early read recognized only the double-dash spelling and kept the first occurrence, while the flag parser accepts `-config` and keeps the last. `-config file.json` was therefore accepted but silently ignored for defaults such as `listen`, and a repeated `--config` loaded defaults from a different file than the one reported as parsed. `daemon install` had the same gap: it did not absolutize a single-dash `-config` or `-data-root` and did not reject a persisted `-recover-stale-lock` or `-daemon-control-file`.
+
 ## [v5.6.0] — 2026-09-26
 
 - Offer to put the bundled `pairroom` CLI on PATH on macOS. The CLI ships inside `PairRoom.app/Contents/Helpers`, off PATH, so Native relay hooks and Agent tool shells could not run it. After the Service first starts, Desktop now asks once whether to link `/usr/local/bin/pairroom` to that CLI, using the standard macOS administrator prompt; **Not Now** is remembered in a Desktop preference directory separate from the Service data root, and the menu bar item **Install Command Line Tool…** (or **Update…** after the app moved) remains available. The link targets the bundle, so replacing `PairRoom.app` keeps it current. Desktop never replaces an existing `/usr/local/bin/pairroom` it did not create, and nothing changes without the user's action. Windows and Linux are unchanged.

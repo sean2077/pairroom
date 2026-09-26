@@ -214,10 +214,10 @@ func normalizeDaemonServiceArgs(cfg *daemon.Config) error {
 		if argument == "service" {
 			return errors.New("daemon install accepts service options, not a second service command")
 		}
-		if argument == "--daemon-control-file" || strings.HasPrefix(argument, "--daemon-control-file=") {
+		if _, _, ok := flagArgument(argument, "daemon-control-file"); ok {
 			return errors.New("daemon-control-file is managed internally")
 		}
-		if argument == "--recover-stale-lock" || strings.HasPrefix(argument, "--recover-stale-lock=") {
+		if _, _, ok := flagArgument(argument, "recover-stale-lock"); ok {
 			return errors.New("recover-stale-lock is a one-shot daemon start option and cannot be persisted in the installed service")
 		}
 	}
@@ -253,25 +253,25 @@ func normalizeDaemonServiceArgs(cfg *daemon.Config) error {
 func absolutizeServiceFlag(args []string, name, base string) ([]string, error) {
 	result := append([]string(nil), args...)
 	for index := 0; index < len(result); index++ {
-		argument := result[index]
-		if argument == name {
+		value, inline, ok := flagArgument(result[index], name)
+		if !ok {
+			continue
+		}
+		if !inline {
 			if index+1 >= len(result) {
 				return nil, fmt.Errorf("missing value for %s", name)
 			}
-			absolute, err := absoluteDaemonArgument(base, result[index+1])
-			if err != nil {
-				return nil, err
-			}
-			result[index+1] = absolute
 			index++
-			continue
+			value = result[index]
 		}
-		if strings.HasPrefix(argument, name+"=") {
-			absolute, err := absoluteDaemonArgument(base, strings.TrimPrefix(argument, name+"="))
-			if err != nil {
-				return nil, err
-			}
+		absolute, err := absoluteDaemonArgument(base, value)
+		if err != nil {
+			return nil, err
+		}
+		if inline {
 			result[index] = name + "=" + absolute
+		} else {
+			result[index] = absolute
 		}
 	}
 	return result, nil
@@ -291,17 +291,35 @@ func absoluteDaemonArgument(base, value string) (string, error) {
 	return filepath.Clean(absolute), nil
 }
 
+// flagValue returns the value the flag package selects for a string flag:
+// either dash spelling, separate or inline value, last occurrence wins.
 func flagValue(args []string, name string) string {
 	value := ""
-	for index, argument := range args {
-		if argument == name && index+1 < len(args) {
-			value = args[index+1]
-		}
-		if strings.HasPrefix(argument, name+"=") {
-			value = strings.TrimPrefix(argument, name+"=")
+	for index := 0; index < len(args); index++ {
+		inlineValue, inline, ok := flagArgument(args[index], name)
+		switch {
+		case ok && inline:
+			value = inlineValue
+		case ok && index+1 < len(args):
+			index++
+			value = args[index]
 		}
 	}
 	return value
+}
+
+// flagArgument reports whether argument spells the named flag in a form the
+// flag package accepts (-name or --name) and returns any inline =value.
+func flagArgument(argument, name string) (value string, inline, ok bool) {
+	trimmed, found := strings.CutPrefix(argument, "--")
+	if !found {
+		trimmed, found = strings.CutPrefix(argument, "-")
+	}
+	if !found {
+		return "", false, false
+	}
+	key, value, inline := strings.Cut(trimmed, "=")
+	return value, inline, key == strings.TrimLeft(name, "-")
 }
 
 func daemonUninstall(args []string) error {
