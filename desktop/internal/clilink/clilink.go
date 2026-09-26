@@ -97,10 +97,11 @@ func sameFile(a, b string) bool {
 
 // Script is the shell command run with administrator privileges. It creates
 // the directory and replaces only a missing or PairRoom-owned link; a foreign
-// entry must be refused before this is called.
+// entry must be refused before this is called. `-n` (not BSD-only `-h`) keeps
+// ln from following an existing link and works with both BSD and GNU ln.
 func Script(cli, linkPath string) string {
 	return "/bin/mkdir -p " + shellQuote(filepath.Dir(linkPath)) +
-		" && /bin/ln -sfh " + shellQuote(cli) + " " + shellQuote(linkPath)
+		" && /bin/ln -sfn " + shellQuote(cli) + " " + shellQuote(linkPath)
 }
 
 // AppleScript wraps Script in `do shell script ... with administrator
