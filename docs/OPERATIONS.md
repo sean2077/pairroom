@@ -67,6 +67,8 @@ Back up before incompatible upgrades, permanent deletion, data-root moves, manua
 
 `pairroom backup` / `restore` operate on **one Room data directory**, not the multi-Room Service root. For complete rollback, preserve the entire stopped Service root separately, including Agent pair profiles and navigation preferences, plus explicitly imported Room directories outside that root. The Git repository, vendor session stores, and Native workspace credentials/capability sidecars are separate and are not included in a Room archive.
 
+Verification warns about each stored attachment no message references. Active Rooms reclaim such uploads after seven days ([Storage](STORAGE.md#attachment)), so these warnings normally describe recent unsent uploads; the backup still includes them.
+
 Write backup and diagnostics outputs outside the source Room directory, including symlink aliases. Restore validates the file set, hashes, and complete gzip trailer before publishing the target. A successful compression command is not backup verification, and restored transport history does not prove external work stopped or completed. [Storage](STORAGE.md) owns integrity/replay details.
 
 ## Graceful shutdown

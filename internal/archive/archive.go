@@ -201,6 +201,14 @@ func Verify(dataDir string) VerifyReport {
 						}
 					}
 				}
+				if ids, ok, err := nativeAttachmentReferences(event); ok {
+					if err != nil {
+						report.Errors = append(report.Errors, fmt.Sprintf("native message event at line %d: %v", lineNo, err))
+					}
+					for _, id := range ids {
+						referenced[id] = struct{}{}
+					}
+				}
 			}
 			if errors.Is(readErr, io.EOF) {
 				break
@@ -224,6 +232,46 @@ func Verify(dataDir string) VerifyReport {
 		}
 	}
 	return finishReport(report)
+}
+
+// nativeAttachmentReferences returns the attachment IDs a Native message fact
+// carries. Explicit sends and retries are native.message.updated facts; routed
+// Stop publications embed their message. Quoted images are already merged
+// into the quoting message. The field names mirror internal/relay, which this
+// dependency-free package does not import. ok is false for other kinds.
+func nativeAttachmentReferences(event model.Event) (ids []string, ok bool, err error) {
+	type native struct {
+		Attachments []model.Attachment `json:"attachments"`
+	}
+	var messages []native
+	switch event.Kind {
+	case "native.message.updated":
+		var value native
+		if err := json.Unmarshal(event.Data, &value); err != nil {
+			return nil, true, err
+		}
+		messages = append(messages, value)
+	case "native.publication", "native.publication.gap":
+		var value struct {
+			Message *native `json:"message"`
+		}
+		if err := json.Unmarshal(event.Data, &value); err != nil {
+			return nil, true, err
+		}
+		if value.Message != nil {
+			messages = append(messages, *value.Message)
+		}
+	default:
+		return nil, false, nil
+	}
+	for _, message := range messages {
+		for _, attachment := range message.Attachments {
+			if attachment.ID != "" {
+				ids = append(ids, attachment.ID)
+			}
+		}
+	}
+	return ids, true, nil
 }
 
 func finishReport(report VerifyReport) VerifyReport {

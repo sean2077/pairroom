@@ -52,7 +52,7 @@ The Binding's `agent` is the stable slot (`claude`/`codex`), not an assumption a
 
 Only verified PNG, JPEG, GIF, and WebP images are accepted. SVG, HTML, scripts, and arbitrary binaries are rejected. Content signatures, not filename/MIME alone, determine acceptance. Limits cover count, individual/combined size, edge length, and pixel count.
 
-Attachments and manifests use opaque IDs and conservative permissions. Resolve checks size, regular-file/non-symlink status, dimensions, and SHA-256 again. Accepted Message image identity cannot be silently changed. Repository image import enforces canonical path/symlink boundaries; remote URLs are not automatically imported. Committed transcript attachments cannot be removed through the attachment DELETE API.
+Attachments and manifests use opaque IDs and conservative permissions. Resolve checks size, regular-file/non-symlink status, dimensions, and SHA-256 again. Accepted Message image identity cannot be silently changed. Repository image import enforces canonical path/symlink boundaries; remote URLs are not automatically imported. Committed transcript attachments cannot be removed through the attachment DELETE API, and automatic reclamation removes only uploads older than seven days that no message references.
 
 The API/transcript carries verified metadata, not an absolute host attachment path. Adapter-local resolution occurs only at the native boundary. Browser object URLs are transient, not persistent public links. Image validation cannot detect whether a screenshot visibly contains a secret; inspect content before sending or sharing.
 

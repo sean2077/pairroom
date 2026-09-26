@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sean2077/pairroom/internal/attachment"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/prompt"
 )
@@ -27,6 +28,73 @@ func (e *Engine) RemoveAttachment(id string) error {
 		return errors.New("attachment storage is unavailable")
 	}
 	return e.cfg.Attachments.Remove(id)
+}
+
+// attachmentReclaimer is the optional listing/removal surface of a real
+// attachment store; test doubles and stores without it skip reclamation.
+type attachmentReclaimer interface {
+	ReclaimCandidates(cutoff time.Time) ([]string, error)
+	Discard(id string) (bool, error)
+}
+
+// ReclaimAttachments removes up to attachment.ReclaimBatch uploads older than
+// attachment.ReclaimGrace that no message in the complete replayed transcript
+// references, for example an image removed from a composer whose tab closed
+// before its DELETE. Like RemoveAttachment it holds routingMu, which every
+// new transcript reference (send, retry, final-text relay and its repository
+// image import) holds from resolution through persistence. It returns the
+// number removed and touches only the attachment directory.
+func (e *Engine) ReclaimAttachments() (int, error) {
+	return e.reclaimAttachmentsBefore(time.Now().UTC().Add(-attachment.ReclaimGrace))
+}
+
+func (e *Engine) reclaimAttachmentsBefore(cutoff time.Time) (int, error) {
+	reclaimer, ok := e.cfg.Attachments.(attachmentReclaimer)
+	if !ok {
+		return 0, nil
+	}
+	// Listing stays outside routingMu; each ID is rechecked under it.
+	candidates, err := reclaimer.ReclaimCandidates(cutoff)
+	if err != nil || len(candidates) == 0 {
+		return 0, err
+	}
+	return e.discardUnreferenced(reclaimer, candidates)
+}
+
+func (e *Engine) discardUnreferenced(reclaimer attachmentReclaimer, candidates []string) (int, error) {
+	e.routingMu.Lock()
+	defer e.routingMu.Unlock()
+	referenced := make(map[string]bool)
+	e.mu.RLock()
+	// A failed append may have left a reference the projection never applied.
+	if e.storeFatal != nil || e.closed {
+		e.mu.RUnlock()
+		return 0, errors.New("room event log is unavailable")
+	}
+	for _, message := range e.snapshot.Messages {
+		for _, value := range message.Attachments {
+			referenced[value.ID] = true
+		}
+	}
+	e.mu.RUnlock()
+	removed := 0
+	var result error
+	for _, id := range candidates {
+		if removed >= attachment.ReclaimBatch {
+			break
+		}
+		if referenced[id] {
+			continue
+		}
+		ok, err := reclaimer.Discard(id)
+		if ok {
+			removed++
+		}
+		if err != nil {
+			result = errors.Join(result, err)
+		}
+	}
+	return removed, result
 }
 
 func (e *Engine) AttachmentReferenced(id string) bool {

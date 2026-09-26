@@ -26,20 +26,21 @@ import (
 )
 
 type nativeHostRuntime struct {
-	room     Room
-	project  Project
-	engine   *relay.Engine
-	media    *attachment.Store
-	token    string
-	baseURL  string
-	sessions *websession.Store
-	http     *http.Server
-	cancel   context.CancelFunc
-	wakeCtx  context.Context
-	waker    *nativeWaker
-	done     chan struct{}
-	active   atomic.Int64
-	last     atomic.Int64
+	room      Room
+	project   Project
+	engine    *relay.Engine
+	media     *attachment.Store
+	token     string
+	baseURL   string
+	sessions  *websession.Store
+	http      *http.Server
+	cancel    context.CancelFunc
+	wakeCtx   context.Context
+	waker     *nativeWaker
+	done      chan struct{}
+	reclaimed chan struct{}
+	active    atomic.Int64
+	last      atomic.Int64
 	// serveFatal records an unexpected Room listener failure so Fatal can
 	// surface it instead of leaving a silently dead HTTP surface behind.
 	serveFatal atomic.Pointer[error]
@@ -100,7 +101,7 @@ func startNativeHostRuntime(ctx context.Context, registry *Registry, project Pro
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
 	wakeConfig.Relay = engine
-	n := &nativeHostRuntime{room: durable, project: project, engine: engine, media: media, token: token, baseURL: "http://" + listener.Addr().String(), sessions: sessions, cancel: cancel, wakeCtx: runCtx, waker: newNativeWaker(wakeConfig), done: make(chan struct{})}
+	n := &nativeHostRuntime{room: durable, project: project, engine: engine, media: media, token: token, baseURL: "http://" + listener.Addr().String(), sessions: sessions, cancel: cancel, wakeCtx: runCtx, waker: newNativeWaker(wakeConfig), done: make(chan struct{}), reclaimed: make(chan struct{})}
 	mux := http.NewServeMux()
 	webui.Mount(mux)
 	mux.HandleFunc("/", n.serve)
@@ -125,6 +126,7 @@ func startNativeHostRuntime(ctx context.Context, registry *Registry, project Pro
 			}
 		}
 	}()
+	go runAttachmentReclaim(runCtx, n.reclaimed, durable.ID, attachmentReclaimDelay, attachmentReclaimInterval, engine.ReclaimAttachments)
 	n.last.Store(time.Now().UnixNano())
 	return n, nil
 }
@@ -161,6 +163,7 @@ func (n *nativeHostRuntime) Close(ctx context.Context) error {
 		n.engine.SetDraining(true)
 		n.cancel()
 		<-n.done
+		<-n.reclaimed
 		n.waker.Close()
 		n.closeErr = errors.Join(n.http.Shutdown(ctx), n.engine.Close())
 		if n.closeErr != nil {
