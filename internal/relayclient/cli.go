@@ -364,6 +364,11 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	case "doctor":
 		var report map[string]any
 		if err := c.call(ctx, "doctor", nil, &report); err != nil {
+			if relayErrorCode(err) == "runtime_not_ready" {
+				// Doctor deliberately never activates a Room: activation resumes
+				// Service-managed wake, which a read-only diagnosis must not start.
+				return fmt.Errorf("%w: the Native Room is suspended (for example after a Service restart or idle timeout) and doctor never activates it. Run pairroom relay status --brief --room %s --slot %s, which activates it, or open the Room in Management, then rerun doctor", err, o.room, o.slot)
+			}
 			return err
 		}
 		hook := "installed"
