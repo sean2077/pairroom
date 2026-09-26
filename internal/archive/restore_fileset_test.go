@@ -137,3 +137,14 @@ func TestRestoreAcceptsOnlyTheRoomBackupFileSet(t *testing.T) {
 		})
 	}
 }
+
+func TestRestorableRoomPathAdmitsEveryStoreContentName(t *testing.T) {
+	// extensionForType in the attachment store falls back to .bin; a backup of
+	// such a Room must stay restorable.
+	for _, ext := range []string{"json", "png", "jpg", "gif", "webp", "bin"} {
+		name := "attachments/att-0123456789abcdef01234567." + ext
+		if err := restorableRoomPath(name); err != nil {
+			t.Fatalf("store-written name %q rejected: %v", name, err)
+		}
+	}
+}

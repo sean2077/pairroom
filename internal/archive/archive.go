@@ -755,7 +755,7 @@ func hashFile(path string) (string, int64, error) {
 
 // restorableAttachmentName matches an attachment manifest or its content file
 // as written by the attachment store: an opaque ID plus a fixed extension.
-var restorableAttachmentName = regexp.MustCompile(`^att-[a-f0-9]{24}\.(json|png|jpg|gif|webp)$`)
+var restorableAttachmentName = regexp.MustCompile(`^att-[a-f0-9]{24}\.(json|png|jpg|gif|webp|bin)$`)
 
 // restorableRoomPath admits only the fixed Room backup layout. It rejects
 // every other name before any byte is written, including NTFS alternate data
