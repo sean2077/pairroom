@@ -35,7 +35,7 @@ Otherwise choose a channel with the user. [Installation](INSTALLATION.md) owns t
 | Platform | Channel | Where the CLI ends up |
 |---|---|---|
 | Windows | `winget install PairRoom` (Desktop; machine-scoped, so Windows may ask the user for elevation) | `C:\Program Files\PairRoom contributors\PairRoom\bin\pairroom.exe` by default. Setup adds that `bin` directory to the machine PATH unless the user opted out; releases before this change did not. |
-| macOS | Desktop `.app.zip` from Releases | `PairRoom.app/Contents/Helpers/pairroom`, not on PATH |
+| macOS | Desktop `.app.zip` from Releases | `PairRoom.app/Contents/Helpers/pairroom`. Desktop offers to link `/usr/local/bin/pairroom` to it on first start, or later from the menu bar item **Install Command Line Tool…**; the user enters the administrator password. |
 | Linux (Debian/Ubuntu) | Desktop `.deb` | `/usr/local/bin/pairroom` |
 | Linux AppImage | Desktop AppImage | The CLI is not exposed on PATH; install the matching CLI separately with `install.sh` |
 | Linux, macOS, Git Bash | CLI `install.sh` | `/usr/local/bin` when writable, otherwise `~/.local/bin`; `PREFIX` overrides |

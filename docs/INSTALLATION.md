@@ -59,6 +59,8 @@ Back up the Service data folder (available from the tray), quit Desktop and remo
 
 Download `pairroom-desktop-vX.Y.Z-darwin-arm64.app.zip` (Apple silicon) or `-darwin-amd64.app.zip` (Intel), unzip, and move `PairRoom.app` to Applications. Desktop requires macOS 12.3 or later, the first release whose WebView provides the Web Locks that Native Room publication needs. The bundle carries the CLI at `Contents/Helpers/pairroom` and the host at `Contents/MacOS/PairRoom`. Because the bundle is unsigned and un-notarized, Gatekeeper requires an explicit first-launch approval (right-click → Open, or allow it in System Settings → Privacy & Security).
 
+The bundled CLI is not on PATH by itself. After the Service starts for the first time, Desktop offers to link `/usr/local/bin/pairroom` to it; macOS asks for an administrator password. **Not Now** stops the offer, and the menu bar item **Install Command Line Tool…** does it later. The link points into the bundle, so replacing `PairRoom.app` in place keeps it current; after moving the app, use **Update Command Line Tool…**. Desktop never replaces an existing `/usr/local/bin/pairroom` it did not create. Restart Agent sessions opened before the link existed. To remove it, delete `/usr/local/bin/pairroom`.
+
 ## Linux desktop
 
 - `.deb` (amd64): install with your package manager, e.g. `sudo apt install ./pairroom-desktop-vX.Y.Z-linux-amd64.deb`. It includes the CLI at `/usr/local/bin/pairroom`.
