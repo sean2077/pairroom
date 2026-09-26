@@ -118,6 +118,8 @@ Supported CC Switch references are read-only and re-resolved at creation/activat
 
 PairRoom does not automatically load remote Markdown images. Opening an ordinary external link deliberately sends the browser to that site; the site then receives a normal network request. Review remote content and native tools with the same trust assumptions as other project inputs.
 
+Desktop's **Check for updates** setting is off by default. Only after the user enables it does Desktop send an unauthenticated `GET` to the GitHub latest-release API for `sean2077/pairroom`, at most once a day plus explicit checks, with a short timeout and a `PairRoom-Desktop/<version>` User-Agent as its only identifying value. GitHub sees the request's IP address and time. The response selects no URL, file, or command: Desktop parses only a stable version tag, opens a release page built from it only when the user asks, and never downloads or installs updates. The setting lives in the Desktop preference directory, not the Service data root. See [Desktop development](desktop/README.md#check-for-updates).
+
 ## 12. Recommended practice
 
 Use trusted repositories and explicit native permissions; do not mistake responsibilities or natural-language “plan first” for enforcement. Keep unnecessary secrets out of the execution environment, review approval scope and screenshots, protect tokens/data/backups, and verify native CLI upgrades on a disposable read-only task before important work. Maintain normal shutdown and verified backups. Use controlled isolation for untrusted execution and keep the listener on numeric loopback.

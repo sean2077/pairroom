@@ -20,7 +20,7 @@ All listeners require numeric loopback addresses. A token does not allow LAN, wi
 
 Desktop chooses one Service owner: an explicit validated `PAIRROOM_DESKTOP_URL`, an installed daemon, or an in-process embedded Service when no daemon is installed. The URL must be authenticated numeric loopback. An installed but unreachable daemon is an error, not permission to create a competing owner. Stale-lock recovery first proves the recorded PID exited; a live owner fails closed.
 
-Explicit data-root/configuration or Mock options select their own Service instead of an unrelated default daemon; an explicit validated URL remains the strongest external-discovery override. A bundled CLI never authorizes daemon installation. **Settings → Desktop → Launch at login** changes only OS login registration. `make desktop-update` replaces binaries without changing user data or that registration.
+Explicit data-root/configuration or Mock options select their own Service instead of an unrelated default daemon; an explicit validated URL remains the strongest external-discovery override. A bundled CLI never authorizes daemon installation. **Settings → Desktop → Launch at login** changes only OS login registration. `make desktop-update` replaces binaries without changing user data or that registration. The opt-in **Check for updates** setting, off by default, only reads the latest GitHub release and shows a notice; it never downloads or installs anything ([details](../desktop/README.md#check-for-updates)).
 
 | Action | Effect |
 |---|---|
