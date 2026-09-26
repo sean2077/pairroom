@@ -46,7 +46,7 @@ Projects use absolute paths explicitly entered by the user, canonicalized throug
 
 Room provisioning is private until atomically published. The Service enforces Binding uniqueness by durable slot and native session ID; archive does not release ownership. An existing Binding must resume exactly. A deferred new Binding materializes only after real native input acceptance. Event/checkpoint/uniqueness failures fail closed rather than creating another owner.
 
-The Binding's `agent` is the stable slot (`claude`/`codex`), not an assumption about its selected Runtime. PairRoom does not import the vendor transcript from before the Binding.
+The Binding's `agent` is the stable slot (`slot1`/`slot2`), not an assumption about its selected Runtime. PairRoom does not import the vendor transcript from before the Binding.
 
 ## 4. Attachment safety
 
