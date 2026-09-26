@@ -34,7 +34,14 @@ pairroom service --mock --data-root "$HOME/.pairroom-demo"
 
 使用未被占用的演示数据目录和可丢弃的 Git 仓库。在 Management 中将仓库注册为 Project，创建 **Embedded** Room，再发送一个小任务。Mock 不启动供应商 CLI，也不消耗模型额度；它不能证明模型能力。不要分享带认证信息的启动 URL。
 
-真实使用前，独立安装并认证每个所选 CLI。[入门指南](docs/GETTING_STARTED.md) 提供 Embedded 路径；保留原有会话则使用 [Native 设置](docs/NATIVE_RELAY.md)。仅有 CLI 版本或环境检查结果，不代表认证和模型访问已通过验证。
+真实使用前，独立安装并认证每个所选 CLI。先从 **Embedded** Room 入门（[入门指南](docs/GETTING_STARTED.md)）；日常工作需要保留原有会话时，再转到 **Native**（[Native 设置](docs/NATIVE_RELAY.md)）。仅有 CLI 版本或环境检查结果，不代表认证和模型访问已通过验证。
+
+如需让你的编程 Agent 引导安装和环境检查，请让它阅读 [Agent 协助安装](docs/AGENT_SETUP.md)：
+
+```text
+Read https://raw.githubusercontent.com/sean2077/pairroom/main/docs/AGENT_SETUP.md
+and help me install PairRoom and check my environment. Ask before each change.
+```
 
 ## 必须了解的边界
 
