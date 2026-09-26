@@ -41,7 +41,7 @@ func TestLoopbackListenAddressBoundaries(t *testing.T) {
 	}
 }
 
-func TestPreparseFlagValueForms(t *testing.T) {
+func TestFlagValueForms(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -51,11 +51,16 @@ func TestPreparseFlagValueForms(t *testing.T) {
 		{"equals", []string{"--listen=[::1]:7332"}, "[::1]:7332"},
 		{"trailing", []string{"--listen"}, ""}, {"empty", []string{"--listen="}, ""},
 		{"other", []string{"--listening=wrong", "--other", "x"}, ""},
-		{"first wins", []string{"--listen=first", "--listen=second"}, "first"},
+		// The flag package keeps the last occurrence; a pre-parse that kept the
+		// first would load defaults from a different file than the one parsed.
+		{"last wins", []string{"--listen=first", "--listen=second"}, "second"},
+		{"single dash", []string{"-listen", "[::1]:7332"}, "[::1]:7332"},
+		{"value may look like a flag", []string{"--listen", "--listen", "x"}, "--listen"},
+		{"triple dash", []string{"---listen=x"}, ""},
 		{"retains equals", []string{"--listen=contains=equals"}, "contains=equals"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := preparseValue(tc.args, "--listen"); got != tc.want {
+			if got := flagValue(tc.args, "--listen"); got != tc.want {
 				t.Fatalf("got %q, want %q", got, tc.want)
 			}
 		})

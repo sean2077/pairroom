@@ -4,7 +4,7 @@ Read [AGENTS.md](AGENTS.md) and [project terminology](CONTEXT.md) before changin
 
 ## Development setup
 
-Install the latest stable Go release (minimum Go 1.27), Node.js (CI uses 22.x), Python 3, Git, Make, and Bash. The root CLI is CGo-free; race testing additionally requires `CGO_ENABLED=1` and a Go-supported C compiler on PATH. On Windows, use a supported toolchain such as MSYS2 MinGW.
+Install the latest stable Go release (minimum Go 1.27), Node.js (CI uses 22.x), Python 3, Git, GNU Make (4 or newer on Windows), and Bash. The root CLI is CGo-free; race testing additionally requires `CGO_ENABLED=1` and a Go-supported C compiler on PATH. On Windows, use a supported toolchain such as MSYS2 MinGW and read [Windows development](#windows-development).
 
 ```bash
 git clone https://github.com/sean2077/pairroom.git
@@ -18,6 +18,19 @@ make smoke
 `make install` installs to `GOBIN` (default `GOPATH/bin`), reports PATH visibility, and never edits PATH. `make dev` stops an installed daemon before running the current-tree Service. The Wails desktop is a separate module; keep GUI dependencies out of the root. Build/update and `DESKTOP_INSTALL_DIR` behavior belong in [Desktop development](desktop/README.md).
 
 The `Makefile` is the command entry point; run targets from the repository root. `scripts/` holds the build, check, install, and release internals those targets and CI call, plus the `test_*.py`/`test_*.js` regressions; keep their Make/CI invocations stable. `tools/visual_smoke.py` is a standalone Playwright screenshot aid against stubbed Management data. It writes untracked `artifacts/screenshots/` and belongs to no gate.
+
+`make env-check` is a read-only report of `make check` prerequisites for the current platform: GNU Make version, Go toolchain against `go.mod`, Go cache paths, CGO and C compiler for `make race`, the `PYTHON`/`DESKTOP_PYTHON` commands, Node.js, the pinned `golangci-lint`, CRLF Go files in the working tree, and on Windows the profile and temporary-directory variables. It prints `PASS`/`WARN`/`FAIL` lines with a fix for each problem and exits nonzero only on `FAIL`. It changes nothing (it asks Go with `GOPROXY=off` so a missing toolchain is reported, not downloaded) and is not part of `make check`; `make env-check-contract` tests its rules and is.
+
+### Windows development
+
+Run `make env-check` first; each item below is one of its checks.
+
+- **GNU Make 4 or newer.** GnuWin32 Make 3.81, a common Windows default, truncates long recipes, so `make check` fails in its gofmt step with a shell syntax error such as `unexpected end of file`. MSYS2 `make` (`pacman -S make`, `C:/msys64/usr/bin/make.exe`) works.
+- **Race detector.** `make race` needs `CGO_ENABLED=1` and a Go-supported C compiler on PATH, such as MSYS2 UCRT64 gcc (`pacman -S mingw-w64-ucrt-x86_64-gcc`, then add `C:/msys64/ucrt64/bin`). A `CGO_ENABLED=0` persisted in `go env GOENV` applies until you export `CGO_ENABLED=1` or rewrite it with `go env -w`.
+- **Python.** `python`/`python3` may resolve to the `WindowsApps` aliases of the Microsoft Store or Python install manager. Run from an environment without `LOCALAPPDATA`, the install manager deploys a `Python/` directory into the current directory and dirties the tree. Pass a real interpreter as a make variable: `make check PYTHON=C:/path/to/python.exe DESKTOP_PYTHON=C:/path/to/python.exe` (`DESKTOP_PYTHON` defaults to `python` on Windows).
+- **Environment across MSYS runtimes.** Git Bash and MSYS2 are separate MSYS runtimes. Starting MSYS2 `make` from Git Bash passes it almost no environment: `USERPROFILE`, `LOCALAPPDATA`, `APPDATA`, `TMP`, `TEMP`, `GOPATH`, `CGO_ENABLED`, and an exported `PYTHON` are dropped, so Go reports `module cache not found` and desktop checks cannot find the home directory. Start it from PowerShell or `cmd` (which keeps the environment), and pass `PYTHON` on the make command line rather than in the environment.
+- **Temporary directory.** Go on Windows uses `TMP`, then `TEMP`, and ignores `TMPDIR`. An empty or drive-relative `TMP` makes `t.TempDir()` return a path such as `\TestX\001`, which Service tests reject as a data root. If you set them yourself, use absolute Windows paths; with neither set, Go falls back to `USERPROFILE` or the Windows directory.
+- **Line endings.** `.gitattributes` checks text out as LF, but a checkout created before it can keep CRLF Go files that `git status` does not show and gofmt reports. For each file shown as `w/crlf` by `git ls-files --eol -- '*.go'`, delete it and `git restore` it; a plain `git restore` skips it.
 
 ## Change workflow
 
@@ -49,6 +62,12 @@ Each is the measured percentage rounded down, minus one percentage point. A
 reduction requires an explanation and fresh Linux CI evidence in the same PR;
 do not lower a floor simply to pass. CI retains its profile as the
 `pairroom-linux-coverage` artifact for 14 days.
+
+The `cmd/pairroom` floor was later raised from 40 to 87 with its CLI behavior
+tests, from a local Windows measurement of 89.8% with a wider margin because
+no Linux run preceded the change. The package has no platform-tagged files or
+GOOS-dependent test branches; re-derive the floor from the next Linux CI
+artifact.
 
 PRs retain the focused Windows/macOS Native boundary suite. The nightly
 `full-platform-tests` job runs every root-module package on `windows-2025` and
@@ -83,13 +102,25 @@ If loopback is blocked, report that layer unverified rather than weakening authe
 
 ## Go version policy
 
-CI and release builds select the latest stable Go release with `actions/setup-go` (`go-version: stable`, `check-latest: true`), not `go-version-file`. Both modules' `go` directives declare the minimum language/toolchain version and follow the latest stable major release; do not add a `toolchain` directive. Weekly Dependabot checks cover both modules. Review Go directive updates without changing the approved dependency closure: run `go mod tidy` separately in the root and `desktop/`, inspect both module locks, and run `go run scripts/check_dependencies.go`.
+CI and release builds select the latest stable Go release with `actions/setup-go` (`go-version: stable`, `check-latest: true`), not `go-version-file`. Both modules' `go` directives declare the minimum language/toolchain version and follow the latest stable major release; do not add a `toolchain` directive. Weekly Dependabot checks cover both modules and the workflow actions. Workflows pin every action to a full commit SHA with a trailing `# vX.Y.Z` comment; Dependabot updates the SHA and the comment together, so review the upstream release before merging. Review Go directive updates without changing the approved dependency closure: run `go mod tidy` separately in the root and `desktop/`, inspect both module locks, and run `go run scripts/check_dependencies.go`.
 
 Local build/install/release commands preserve `GOTOOLCHAIN`. With `GOTOOLCHAIN=auto`, an older installation can download the module's required toolchain; this does not promise the newest available patch. Install the latest stable release before producing a local release. The release entry point prints the actual version and rejects a toolchain below the module minimum (including an outdated `GOTOOLCHAIN=local` installation). CI checks the actual toolchain after setup too.
 
 `make vuln` checks reachable source vulnerabilities with the fixed standalone `govulncheck` version declared in `Makefile`. It needs network access and is deliberately separate from the offline `make check` gate. The CI `vulnerabilities` job runs on PRs and weekly even without commits, and blocks downstream CLI builds. Release publication additionally requires `make vuln-binary` on the built Linux CLI. These tool dependencies must not enter either application module. Repository required-check settings are managed separately from workflow files.
 
 Every CLI artifact must report the same Go version as the release provenance's `go_version`; `scripts/verify-artifacts.sh` and CI check the actual binaries, not a hard-coded expected patch version. The release-contract regressions cover mixed toolchains and provenance mismatches. Reverting this build policy requires no Room-data migration. Version bumps, tags, and publication still require explicit authorization.
+
+## Dependency updates
+
+Weekly Dependabot PRs update the root and `desktop/` modules separately. The root dependency allowlist in `scripts/check_dependencies.go` is a human review gate: CI never approves a version, so a root PR that moves any module in the SQLite closure fails `make check` until a maintainer approves it. Because `desktop/` requires the root module through `replace ..`, the same PR also fails the desktop lock check until `desktop/go.sum` is tidied.
+
+To land a root Dependabot PR, check out its branch and:
+
+1. Review the upstream changes for every module that moved (the failing `dependency check:` lines list each `resolved to <new>; want <old>`).
+2. Run `make deps-sync`. It tidies both module locks, then rewrites only version changes of already-approved modules in the allowlist and the matching `THIRD_PARTY_NOTICES.md` link, version cell, and heading. It downloads both versions and reports whether each module's license files are unchanged; a `REVIEW` line needs a manual check of the license and notice text. An added, removed, or replaced module still fails closed and requires a deliberate allowlist edit.
+3. Add a `CHANGELOG.md` entry naming the old and new versions and whether license text changed, then commit on the PR branch (for example `build(deps): approve <module> <version> in the pinned closure`).
+
+A `desktop/` Dependabot PR needs no follow-up for the Wails CLI: CI and [Desktop development](desktop/README.md#development) install the `wails3` version resolved from `desktop/go.mod`, and a desktop contract test rejects hard-coded copies. Still validate Wails bumps on Windows, macOS, and Linux and review the platform Taskfiles as [desktop/AGENTS.md](desktop/AGENTS.md) requires, and add a `CHANGELOG.md` entry.
 
 ## Focused allocation checks
 
@@ -123,9 +154,9 @@ Why/Alternatives explain fit, not new product behavior. Keep their source revisi
 
 `make bump-version NEW_VERSION=X.Y.Z` synchronizes root `VERSION`, `version.Current` in `internal/version/`, `desktop/build/config.yml`, and the canonical `CHANGELOG.md` release heading, moving Unreleased notes into the new section. It fails closed and does not commit or tag. The exact `vX.Y.Z` tag, binary version, and `## [vX.Y.Z] — YYYY-MM-DD` changelog heading must agree.
 
-`make release` requires a clean tree and builds/verifies the complete local payload. It does not create a tag or publish a Release. CLI CI must retain uniquely named, checksummed Linux amd64, Windows amd64, macOS arm64, and macOS amd64 artifacts, then re-download and verify the complete set.
+`make release` requires a clean tree and builds/verifies the complete local payload. `make build`, `make release`, CI artifacts, and Desktop builds embed the commit's committer date in UTC (`YYYY-MM-DDTHH:MM:SSZ`) as the build date, so one commit always reports one build date and CLI rebuilds are reproducible; set `BUILD_DATE` to override it. It does not create a tag or publish a Release. CLI CI must retain uniquely named, checksummed Linux amd64, Windows amd64, macOS arm64, and macOS amd64 artifacts, then re-download and verify the complete set.
 
-`.github/workflows/release.yml` owns publication: validate/extract changelog notes, build and verify CLI artifacts, publish the Release, then re-download/recheck its CLI payload. The desktop workflow attaches `pairroom-desktop-*` packages to the same Release on `v*` tags. Its Windows `inno` winget manifest submission to `microsoft/winget-pkgs` uses the configured `WINGET_TOKEN` (classic PAT with `public_repo`) through a fork PR, is idempotent per version, and must not rewrite the Release on failure. Desktop production signing/notarization may be claimed only after it actually runs in the release environment.
+`.github/workflows/release.yml` owns publication: a read-only `build` job validates/extracts changelog notes and builds and verifies the CLI artifacts; a separate `publish` job, the only one granted `contents: write`, runs no project code, rechecks the transferred payload against `SHA256SUMS`, publishes the Release, then re-downloads/rechecks its CLI payload. The desktop workflow attaches `pairroom-desktop-*` packages and their merged `pairroom-desktop-vX.Y.Z-SHA256SUMS` to the same Release on `v*` tags, then re-downloads and checks them against that list. Its Windows `inno` winget manifest submission to `microsoft/winget-pkgs` uses the configured `WINGET_TOKEN` (classic PAT with `public_repo`) through a fork PR, is idempotent per version, and must not rewrite the Release on failure. Desktop production signing/notarization may be claimed only after it actually runs in the release environment.
 
 Preserve these checks when changing build/release tooling. A documentation-only PR does not need to invoke publication, create tags, alter secrets, or run paid vendor acceptance.
 

@@ -1,16 +1,13 @@
 package agent
 
 import (
-	"bufio"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
-	"strconv"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,51 +15,13 @@ import (
 
 	"github.com/sean2077/pairroom/internal/execx"
 	"github.com/sean2077/pairroom/internal/model"
-	"github.com/sean2077/pairroom/internal/prompt"
 	"github.com/sean2077/pairroom/internal/version"
 )
-
-type grokRPCReply struct {
-	result json.RawMessage
-	err    error
-}
-
-type grokRPCError struct {
-	Code    int             `json:"code"`
-	Message string          `json:"message"`
-	Data    json.RawMessage `json:"data,omitempty"`
-}
-
-func (e grokRPCError) Error() string {
-	if e.Code == 0 {
-		return e.Message
-	}
-	return fmt.Sprintf("grok ACP error %d: %s", e.Code, e.Message)
-}
-
-type grokTurn struct {
-	turnID string
-	inputs []model.AgentInput
-	final  strings.Builder
-}
 
 type grokCapabilities struct {
 	loadSession bool
 	close       bool
 	promptImage bool
-}
-
-type grokPermissionOption struct {
-	ID   string `json:"optionId"`
-	Name string `json:"name"`
-	Kind string `json:"kind"`
-}
-
-type grokPendingApproval struct {
-	rawID    json.RawMessage
-	kind     string
-	options  []grokPermissionOption
-	approval model.Approval
 }
 
 // GrokAdapter hosts one long-lived official Grok Build ACP process. PairRoom
@@ -89,13 +48,17 @@ type GrokAdapter struct {
 	capabilities     grokCapabilities
 	runtimeInfo      model.RuntimeInfo
 	cmd              *exec.Cmd
+	tree             *execx.Tree
 	stdin            io.WriteCloser
 	done             chan struct{}
 	intentional      bool
-	pending          map[int64]chan grokRPCReply
-	approvals        map[string]grokPendingApproval
-	turn             *grokTurn
-	nextRequestID    atomic.Int64
+	// streamFailure records why the adapter killed the process after its
+	// stdout became unreadable; waitProcess reports it with the exit.
+	streamFailure string
+	pending       map[int64]chan grokRPCReply
+	approvals     map[string]grokPendingApproval
+	turn          *grokTurn
+	nextRequestID atomic.Int64
 }
 
 func NewGrok(cfg Config, sink EventSink) *GrokAdapter {
@@ -153,6 +116,7 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 	}
 	g.state = model.StateStarting
 	g.intentional = false
+	g.streamFailure = ""
 	if strings.TrimSpace(g.cfg.SessionID) == "" && !g.sessionEngaged {
 		// A previous session/new may have allocated an ID but never accepted a
 		// PairRoom prompt. It is ephemeral and must not be resumed exactly.
@@ -187,7 +151,14 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 		return probeErr
 	}
 
-	cmd := exec.Command(g.cfg.Command, g.buildACPArgs()...)
+	args := g.buildACPArgs()
+	if isBatchLauncher(goruntime.GOOS, probe.Path) {
+		if err := checkBatchLauncherArgs("Grok Build", probe.Path, args); err != nil {
+			g.setState(model.StateError, err.Error())
+			return err
+		}
+	}
+	cmd := exec.Command(g.cfg.Command, args...)
 	execx.NoConsole(cmd)
 	cmd.Dir = g.cfg.Repo
 	cmd.Env = mergeRuntimeEnv(envWithout(), g.cfg.Env)
@@ -207,7 +178,8 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 		g.setState(model.StateError, err.Error())
 		return fmt.Errorf("grok ACP stderr: %w", err)
 	}
-	if err := cmd.Start(); err != nil {
+	tree, err := execx.StartTree(cmd)
+	if err != nil {
 		g.setState(model.StateError, err.Error())
 		return fmt.Errorf("start grok ACP: %w", err)
 	}
@@ -215,6 +187,7 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 	done := make(chan struct{})
 	g.mu.Lock()
 	g.cmd = cmd
+	g.tree = tree
 	g.stdin = stdin
 	g.done = done
 	g.pending = make(map[int64]chan grokRPCReply)
@@ -226,7 +199,7 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 	readers.Add(2)
 	go func() { defer readers.Done(); g.readStdout(stdout) }()
 	go func() { defer readers.Done(); g.readStderr(stderr) }()
-	go func() { readers.Wait(); g.waitProcess(cmd, done) }()
+	go func() { readers.Wait(); g.waitProcess(cmd, tree, done) }()
 
 	clientVersion := strings.TrimSpace(g.cfg.ClientVersion)
 	if clientVersion == "" {
@@ -350,11 +323,27 @@ func selectGrokAuthMethod(raw json.RawMessage) (string, error) {
 func (g *GrokAdapter) abortStart(cmd *exec.Cmd) {
 	g.mu.Lock()
 	g.intentional = true
-	g.mu.Unlock()
-	if cmd.Process != nil {
-		_ = cmd.Process.Kill()
+	var stdin io.WriteCloser
+	var tree *execx.Tree
+	var done chan struct{}
+	if g.cmd == cmd {
+		stdin, tree, done = g.stdin, g.tree, g.done
+		g.stdin = nil
 	}
-	g.setState(model.StateError, "Grok ACP startup failed")
+	g.mu.Unlock()
+	// Close stdin first so a CLI that honors EOF exits on its own, then kill
+	// the whole tree and wait (bounded) for it, so a retried Start cannot see
+	// the aborted process as still running.
+	if stdin != nil {
+		_ = stdin.Close()
+	}
+	detail := "Grok ACP startup failed"
+	if tree != nil {
+		if err := stopProcessTree(tree, done, "Grok ACP"); err != nil {
+			detail += "; " + err.Error()
+		}
+	}
+	g.setState(model.StateError, detail)
 }
 
 func (g *GrokAdapter) buildACPArgs() []string {
@@ -374,418 +363,6 @@ func (g *GrokAdapter) buildACPArgs() []string {
 		args = append(args, "--sandbox", value)
 	}
 	return append(args, "agent", "stdio")
-}
-
-func grokPermissionArgs(mode string) []string {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "auto", "yolo", "bypass", "bypasspermissions", "always-approve", "always_approve":
-		return []string{"--always-approve"}
-	case "":
-		return nil
-	default:
-		return []string{"--permission-mode", mode}
-	}
-}
-
-func (g *GrokAdapter) ensureSession(ctx context.Context) error {
-	g.mu.Lock()
-	if g.sessionOpened {
-		g.mu.Unlock()
-		return nil
-	}
-	required := strings.TrimSpace(g.sessionID)
-	repo := g.cfg.Repo
-	access := g.access
-	capabilities := g.capabilities
-	g.mu.Unlock()
-
-	loaded := required != "" && (strings.TrimSpace(g.cfg.SessionID) != "" || g.sessionEngaged)
-	if !loaded {
-		required = ""
-	}
-	if loaded {
-		if !capabilities.loadSession {
-			return fmt.Errorf("load exact Grok session %q: runtime did not advertise session/load", required)
-		}
-		result, err := g.call(ctx, "session/load", map[string]any{
-			"sessionId": required, "cwd": repo, "mcpServers": []any{},
-			"_meta": map[string]any{"noReplay": true, "startupHints": grokStartupHints()},
-		})
-		if err != nil {
-			return fmt.Errorf("load exact Grok session %q: %w", required, err)
-		}
-		var response struct {
-			SessionID string `json:"sessionId"`
-		}
-		if err := json.Unmarshal(result, &response); err == nil && strings.TrimSpace(response.SessionID) != "" && strings.TrimSpace(response.SessionID) != required {
-			return fmt.Errorf("Grok session/load returned %q instead of required session %q", response.SessionID, required)
-		}
-	} else {
-		result, err := g.call(ctx, "session/new", map[string]any{
-			"cwd": repo, "mcpServers": []any{},
-			"_meta": map[string]any{"rules": collaborationPrompt(g.cfg), "sessionKind": "headless", "startupHints": grokStartupHints()},
-		})
-		if err != nil {
-			return fmt.Errorf("create Grok session: %w", err)
-		}
-		var response struct {
-			SessionID string `json:"sessionId"`
-		}
-		if err := json.Unmarshal(result, &response); err != nil || strings.TrimSpace(response.SessionID) == "" {
-			if err == nil {
-				err = errors.New("missing sessionId")
-			}
-			return fmt.Errorf("decode Grok session: %w", err)
-		}
-		required = strings.TrimSpace(response.SessionID)
-	}
-
-	// Retain a newly allocated ID across a recoverable setup failure, but do not
-	// publish or mark the session open until its role mode is accepted.
-	g.mu.Lock()
-	if g.sessionOpened {
-		g.mu.Unlock()
-		return nil
-	}
-	g.sessionID = required
-	g.mu.Unlock()
-	if err := g.applyAccessMode(ctx, required, access); err != nil {
-		return err
-	}
-	g.mu.Lock()
-	if g.sessionOpened {
-		g.mu.Unlock()
-		return nil
-	}
-	g.sessionOpened = true
-	g.bootstrapPending = loaded
-	info := g.runtimeInfo
-	g.mu.Unlock()
-	if info.SessionName != "" {
-		info = g.syncSessionName(ctx, info, required)
-		g.mu.Lock()
-		g.runtimeInfo = info
-		g.mu.Unlock()
-		emitRuntimeInfo(g.sink, g.cfg.Actor, info)
-	}
-
-	session := runtimeEvent(g.cfg.Actor, model.RuntimeSession)
-	session.SessionID = required
-	g.sink(session)
-	return nil
-}
-
-func grokStartupHints() map[string]any {
-	return map[string]any{"nonInteractive": true, "skipGitStatus": true, "skipProjectLayout": true}
-}
-
-func (g *GrokAdapter) applyAccessMode(ctx context.Context, sessionID string, access model.NativeAccess) error {
-	mode := "default"
-	if access == model.NativeAccessReadOnly || strings.EqualFold(g.cfg.PermissionMode, "plan") {
-		mode = "plan"
-	}
-	_, err := g.call(ctx, "session/set_mode", map[string]any{"sessionId": sessionID, "modeId": mode})
-	if err != nil {
-		return fmt.Errorf("set Grok session mode %s: %w", mode, err)
-	}
-	return nil
-}
-
-func (g *GrokAdapter) StartTurn(ctx context.Context, input model.AgentInput) error {
-	g.submitMu.Lock()
-	defer g.submitMu.Unlock()
-	g.mu.Lock()
-	state := g.state
-	running := g.cmd != nil && g.stdin != nil
-	g.mu.Unlock()
-	if !running || state == model.StateStopped || state == model.StateError {
-		if err := g.Start(ctx); err != nil {
-			return err
-		}
-	}
-	if err := g.ensureSession(ctx); err != nil {
-		return err
-	}
-
-	g.mu.Lock()
-	if g.turn != nil {
-		g.mu.Unlock()
-		return errors.New("Grok Build already has an active prompt")
-	}
-	sessionID := g.sessionID
-	bootstrap := g.bootstrapPending
-	g.mu.Unlock()
-
-	text := prompt.Envelope(input)
-	if bootstrap {
-		text = collaborationPrompt(g.cfg) + "\n\n" + text
-	}
-	g.mu.Lock()
-	promptImage := g.capabilities.promptImage
-	g.mu.Unlock()
-	content, err := grokContent(text, input.Attachments, promptImage)
-	if err != nil {
-		return err
-	}
-	requestID := g.nextRequestID.Add(1)
-	reply := make(chan grokRPCReply, 1)
-	turn := &grokTurn{
-		turnID: model.NewID("grok-turn"), inputs: []model.AgentInput{input},
-	}
-	g.mu.Lock()
-	g.pending[requestID] = reply
-	g.turn = turn
-	g.mu.Unlock()
-	if err := g.send(map[string]any{
-		"jsonrpc": "2.0", "id": requestID, "method": "session/prompt",
-		"params": map[string]any{"sessionId": sessionID, "prompt": content, "_meta": map[string]any{"screenMode": "headless"}},
-	}); err != nil {
-		g.mu.Lock()
-		delete(g.pending, requestID)
-		if g.turn == turn {
-			g.turn = nil
-		}
-		g.mu.Unlock()
-		return err
-	}
-	// The prompt request has crossed the native ACP boundary. If this is a
-	// newly allocated binding, retain its session ID across a later process
-	// restart; before this point the ID was only an uncommitted session/new
-	// allocation and may safely be discarded.
-	g.mu.Lock()
-	g.sessionEngaged = true
-	g.mu.Unlock()
-	if bootstrap {
-		g.mu.Lock()
-		g.bootstrapPending = false
-		g.mu.Unlock()
-	}
-
-	g.setState(model.StateWorking, "")
-	started := runtimeEvent(g.cfg.Actor, model.RuntimeTurnStarted)
-	started.TurnID = turn.turnID
-	started.CorrelationID = input.MessageID
-	g.sink(started)
-	processing := runtimeEvent(g.cfg.Actor, model.RuntimeInputProcessing)
-	processing.TurnID = turn.turnID
-	processing.CorrelationID = input.MessageID
-	processing.Name = string(model.ProcessingWorking)
-	processing.Text = "accepted by Grok ACP"
-	g.sink(processing)
-	go g.awaitPrompt(turn, reply)
-	return nil
-}
-
-func grokContent(text string, attachments []model.AgentAttachment, allowImages bool) ([]map[string]any, error) {
-	content := []map[string]any{{"type": "text", "text": text}}
-	for _, attachment := range attachments {
-		if attachment.Kind != "image" || !strings.HasPrefix(strings.ToLower(attachment.MediaType), "image/") {
-			return nil, fmt.Errorf("attachment %q is not a Grok image", attachment.Name)
-		}
-		data, err := os.ReadFile(attachment.Path)
-		if err != nil {
-			return nil, fmt.Errorf("read Grok image %q: %w", attachment.Name, err)
-		}
-		if len(data) == 0 || (attachment.Size > 0 && int64(len(data)) != attachment.Size) {
-			return nil, fmt.Errorf("Grok image %q changed after attachment validation", attachment.Name)
-		}
-		if !allowImages {
-			continue
-		}
-		content = append(content, map[string]any{
-			"type": "image", "data": base64.StdEncoding.EncodeToString(data), "mimeType": attachment.MediaType,
-		})
-	}
-	if !allowImages && len(attachments) > 0 {
-		// The envelope retains the verified local paths. Do not send unsupported
-		// binary blocks or reject the complete message because of optional media.
-		content = append(content, map[string]any{"type": "text", "text": "[PairRoom attachment notice]\nGrok Build does not support image input over ACP. The images were not sent as visual content; their names and local paths are listed in the message. Use an available native image-reading tool if supported and permitted. If you cannot inspect them, state that limitation and ask @user for the needed details; do not infer image contents from filenames."})
-	}
-	return content, nil
-}
-
-func (g *GrokAdapter) Steer(ctx context.Context, input model.AgentInput) SteerOutcome {
-	g.submitMu.Lock()
-	defer g.submitMu.Unlock()
-	g.mu.Lock()
-	turn := g.turn
-	sessionID := g.sessionID
-	g.mu.Unlock()
-	if turn == nil || sessionID == "" {
-		return SteerOutcome{State: SteerUnavailable, Detail: "Grok Build has no active prompt"}
-	}
-	text := prompt.Envelope(input)
-	g.mu.Lock()
-	promptImage := g.capabilities.promptImage
-	g.mu.Unlock()
-	content, err := grokContent(text, input.Attachments, promptImage)
-	if err != nil {
-		return SteerOutcome{State: SteerRejected, Detail: err.Error()}
-	}
-	interjectParams := map[string]any{
-		"sessionId": sessionID, "text": text, "interjectionId": input.MessageID, "content": content,
-	}
-	interjectMethod, acknowledgement, err := g.callGrokInterject(ctx, interjectParams)
-	if err != nil {
-		var rpcErr grokRPCError
-		if errors.As(err, &rpcErr) {
-			if rpcErr.Code == -32601 {
-				return SteerOutcome{State: SteerUnavailable, Detail: "Grok Build does not expose an interject extension: " + err.Error()}
-			}
-			return SteerOutcome{State: SteerRejected, Detail: err.Error()}
-		}
-		return SteerOutcome{State: SteerUnknown, Detail: err.Error()}
-	}
-	ackState, ackDetail := classifyGrokInterjectAcknowledgement(acknowledgement)
-	if ackState != SteerAccepted {
-		return SteerOutcome{State: ackState, Detail: ackDetail}
-	}
-	g.mu.Lock()
-	if g.turn != turn {
-		g.mu.Unlock()
-		// A successful ACP extension response is the native acceptance receipt;
-		// the prompt may legitimately finish before this client observes the
-		// acknowledgement. Do not downgrade that receipt to an automatic FIFO
-		// retry, which could execute the same interjection twice.
-		return SteerOutcome{State: SteerAccepted, Detail: "accepted by Grok " + interjectMethod + " before the prompt completed"}
-	}
-	turn.inputs = append(turn.inputs, input)
-	g.mu.Unlock()
-	processing := runtimeEvent(g.cfg.Actor, model.RuntimeInputProcessing)
-	processing.TurnID = turn.turnID
-	processing.CorrelationID = input.MessageID
-	processing.Name = string(model.ProcessingWorking)
-	processing.Text = "injected through Grok " + interjectMethod
-	g.sink(processing)
-	return SteerOutcome{State: SteerAccepted, Detail: "accepted by Grok " + interjectMethod}
-}
-
-// callGrokInterject handles the extension spelling transition in Grok Build.
-// The private `_x.ai/interject` spelling is retained as the first attempt for
-// the PairRoom v5 wire contract. A method-not-found response is the only case
-// that permits trying the current public `x.ai/interject` spelling: all other
-// failures are returned unchanged so an uncertain native write is never
-// silently duplicated.
-func (g *GrokAdapter) callGrokInterject(ctx context.Context, params map[string]any) (string, json.RawMessage, error) {
-	methods := []string{"_x.ai/interject", "x.ai/interject"}
-	var last error
-	for index, method := range methods {
-		result, err := g.call(ctx, method, params)
-		if err == nil {
-			return method, result, nil
-		}
-		last = err
-		var rpcErr grokRPCError
-		if !errors.As(err, &rpcErr) || rpcErr.Code != -32601 || index == len(methods)-1 {
-			return method, nil, err
-		}
-	}
-	return methods[len(methods)-1], nil, last
-}
-
-func classifyGrokInterjectAcknowledgement(raw json.RawMessage) (SteerState, string) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return SteerUnknown, "Grok interject returned no acknowledgement; explicit retry required"
-	}
-	var response struct {
-		Status string `json:"status"`
-		Error  string `json:"error"`
-		Reason string `json:"reason"`
-	}
-	if err := json.Unmarshal(raw, &response); err != nil {
-		return SteerUnknown, "decode Grok interject acknowledgement: " + err.Error()
-	}
-	status := strings.ToLower(strings.TrimSpace(response.Status))
-	detail := firstNonEmpty(response.Reason, response.Error, status)
-	switch status {
-	case "queued", "accepted", "ok", "success", "pending":
-		return SteerAccepted, "Grok interject acknowledged as " + status
-	case "unsupported", "unavailable", "not_supported", "not-supported":
-		return SteerUnavailable, "Grok interject is unavailable: " + detail
-	case "rejected", "denied", "declined", "cancelled", "canceled", "failed", "error":
-		return SteerRejected, "Grok interject was rejected: " + detail
-	default:
-		return SteerUnknown, "Grok interject returned unknown status " + detail + "; explicit retry required"
-	}
-}
-
-func (g *GrokAdapter) awaitPrompt(turn *grokTurn, reply <-chan grokRPCReply) {
-	result := <-reply
-
-	// Serialize turn finalization with StartTurn/Steer. ACP may deliver the
-	// session/prompt response and a queued interject acknowledgement back to
-	// back; holding submitMu lets a steer that crossed the wire first append its
-	// input before we snapshot the completed turn's correlation list.
-	g.submitMu.Lock()
-	g.mu.Lock()
-	if g.turn != turn {
-		g.mu.Unlock()
-		g.submitMu.Unlock()
-		return
-	}
-	g.turn = nil
-	inputs := append([]model.AgentInput(nil), turn.inputs...)
-	text := turn.final.String()
-	sessionID := g.sessionID
-	g.mu.Unlock()
-	g.submitMu.Unlock()
-
-	correlationID := ""
-	if len(inputs) > 0 {
-		correlationID = inputs[len(inputs)-1].MessageID
-	}
-	terminalKind := model.RuntimeInputCompleted
-	terminalState := model.ProcessingCompleted
-	var status string
-	detail := "completed by Grok ACP"
-	if result.err != nil {
-		terminalKind = model.RuntimeInputFailed
-		terminalState = model.ProcessingFailed
-		status = "failed"
-		detail = result.err.Error()
-		errorEvent := runtimeEvent(g.cfg.Actor, model.RuntimeError)
-		errorEvent.TurnID = turn.turnID
-		errorEvent.CorrelationID = correlationID
-		errorEvent.Text = detail
-		g.sink(errorEvent)
-		g.setState(model.StateError, detail)
-	} else {
-		var response struct {
-			StopReason string `json:"stopReason"`
-		}
-		_ = json.Unmarshal(result.result, &response)
-		status = strings.TrimSpace(response.StopReason)
-		if status == "" {
-			status = "completed"
-		}
-		if status == "cancelled" || status == "canceled" || status == "interrupted" {
-			terminalKind = model.RuntimeInputCancelled
-			terminalState = model.ProcessingCancelled
-			detail = "Grok prompt was " + status
-		}
-		g.setState(model.StateIdle, "")
-	}
-	if result.err == nil && terminalKind == model.RuntimeInputCompleted && strings.TrimSpace(text) != "" {
-		final := runtimeEvent(g.cfg.Actor, model.RuntimeFinal)
-		final.TurnID = turn.turnID
-		final.CorrelationID = correlationID
-		final.Text = text
-		g.sink(final)
-	}
-	for _, input := range inputs {
-		event := runtimeEvent(g.cfg.Actor, terminalKind)
-		event.TurnID = turn.turnID
-		event.CorrelationID = input.MessageID
-		event.Name = string(terminalState)
-		event.Text = detail
-		g.sink(event)
-	}
-	completed := runtimeEvent(g.cfg.Actor, model.RuntimeTurnCompleted)
-	completed.TurnID = turn.turnID
-	completed.CorrelationID = correlationID
-	completed.SessionID = sessionID
-	completed.Name = status
-	g.sink(completed)
 }
 
 func (g *GrokAdapter) Interrupt(ctx context.Context) error {
@@ -845,9 +422,10 @@ func (g *GrokAdapter) Stop(ctx context.Context) error {
 	select {
 	case <-done:
 	case <-ctx.Done():
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
+		g.mu.Lock()
+		tree := g.tree
+		g.mu.Unlock()
+		_ = tree.Kill()
 		// Readers reach EOF only once every inherited descriptor holder exits;
 		// a descendant that kept the pipes open must not hang the whole
 		// shutdown chain after the direct process was killed. Report the
@@ -877,449 +455,9 @@ func (g *GrokAdapter) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (g *GrokAdapter) ResolveApproval(ctx context.Context, approvalID string, resolution model.ApprovalResolution) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	g.mu.Lock()
-	pending, ok := g.approvals[approvalID]
-	if !ok {
-		g.mu.Unlock()
-		return fmt.Errorf("unknown Grok approval %q", approvalID)
-	}
-	result, err := grokApprovalResult(pending, resolution.Decision)
-	if err != nil {
-		g.mu.Unlock()
-		return err // Invalid input must not consume a still-answerable request.
-	}
-	delete(g.approvals, approvalID)
-	g.mu.Unlock()
-	// Consume before writing: concurrent requests cannot answer the same native
-	// RPC twice, and a transport failure is not safe for automatic replay.
-	if err := g.sendRawResponse(pending.rawID, result, nil); err != nil {
-		return err
-	}
-	g.setState(model.StateWorking, "")
-	return nil
-}
-
-func grokApprovalResult(pending grokPendingApproval, decision string) (any, error) {
-	if pending.kind == "plan" {
-		switch decision {
-		case "accept":
-			return map[string]any{"outcome": "approved"}, nil
-		case "decline", "cancel":
-			return map[string]any{"outcome": "cancelled"}, nil
-		default:
-			return nil, fmt.Errorf("unsupported Grok plan decision %q", decision)
-		}
-	}
-	cancelled := map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}
-	if decision == "cancel" {
-		return cancelled, nil
-	}
-	optionID := selectGrokPermissionOption(pending.options, decision)
-	if optionID == "" {
-		if decision == "decline" {
-			return cancelled, nil // Never turn one rejection into reject_always.
-		}
-		return nil, fmt.Errorf("Grok permission decision %q has no unambiguous native option", decision)
-	}
-	return map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": optionID}}, nil
-}
-
-func (g *GrokAdapter) cancelPendingInteractions() error {
-	g.mu.Lock()
-	pending := make([]grokPendingApproval, 0, len(g.approvals))
-	for id, approval := range g.approvals {
-		pending = append(pending, approval)
-		delete(g.approvals, id)
-	}
-	g.mu.Unlock()
-	var result error
-	for _, approval := range pending {
-		response := any(map[string]any{"outcome": map[string]any{"outcome": "cancelled"}})
-		if approval.kind == "plan" {
-			response = map[string]any{"outcome": "cancelled"}
-		}
-		if err := g.sendRawResponse(approval.rawID, response, nil); err != nil {
-			result = errors.Join(result, err)
-		}
-	}
-	return result
-}
-
-func selectGrokPermissionOption(options []grokPermissionOption, decision string) string {
-	id, explicit := strings.CutPrefix(decision, "option:")
-	kind := map[string]string{"accept": "allow_once", "acceptForSession": "allow_always", "decline": "reject_once"}[decision]
-	if (!explicit && kind == "") || (explicit && id == "") {
-		return ""
-	}
-	selected := ""
-	for _, option := range options {
-		if option.ID == "" || (explicit && option.ID != id) || (!explicit && option.Kind != kind) {
-			continue
-		}
-		if selected != "" {
-			return "" // Do not guess between semantically different native choices.
-		}
-		selected = option.ID
-	}
-	if selected != "" {
-		matches := 0
-		for _, option := range options {
-			if option.ID == selected {
-				matches++
-			}
-		}
-		if matches != 1 {
-			return ""
-		}
-	}
-	return selected
-}
-
-func (g *GrokAdapter) SetNativeAccess(ctx context.Context, access model.NativeAccess) error {
-	if !access.Valid() {
-		return fmt.Errorf("invalid Grok native access %q", access)
-	}
-	g.mu.Lock()
-	if g.turn != nil {
-		g.mu.Unlock()
-		return errors.New("interrupt or stop Grok before changing its native access")
-	}
-	oldAccess := g.access
-	g.access = access
-	opened := g.sessionOpened
-	sessionID := g.sessionID
-	g.mu.Unlock()
-	if opened {
-		if err := g.applyAccessMode(ctx, sessionID, access); err != nil {
-			g.mu.Lock()
-			if g.access == access {
-				g.access = oldAccess
-			}
-			g.mu.Unlock()
-			return err
-		}
-	}
-	return nil
-}
-
-func (g *GrokAdapter) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	id := g.nextRequestID.Add(1)
-	reply := make(chan grokRPCReply, 1)
-	g.mu.Lock()
-	g.pending[id] = reply
-	g.mu.Unlock()
-	if err := g.send(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}); err != nil {
-		g.mu.Lock()
-		delete(g.pending, id)
-		g.mu.Unlock()
-		return nil, err
-	}
-	select {
-	case response := <-reply:
-		return response.result, g.redactError(response.err)
-	case <-ctx.Done():
-		g.mu.Lock()
-		delete(g.pending, id)
-		g.mu.Unlock()
-		return nil, ctx.Err()
-	}
-}
-
-func (g *GrokAdapter) redactError(err error) error {
-	if err == nil {
-		return nil
-	}
-	var rpcErr grokRPCError
-	if errors.As(err, &rpcErr) {
-		rpcErr.Message = redactRuntimeSecrets(rpcErr.Message, g.cfg.Env)
-		return rpcErr
-	}
-	return errors.New(redactRuntimeSecrets(err.Error(), g.cfg.Env))
-}
-
-func (g *GrokAdapter) redactRaw(raw json.RawMessage) json.RawMessage {
-	if len(raw) == 0 {
-		return nil
-	}
-	return json.RawMessage(redactRuntimeSecrets(string(raw), g.cfg.Env))
-}
-
-func (g *GrokAdapter) sendNotification(method string, params any) error {
-	return g.send(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
-}
-
-func (g *GrokAdapter) sendRawResponse(id json.RawMessage, result any, rpcErr *grokRPCError) error {
-	return g.send(struct {
-		JSONRPC string          `json:"jsonrpc"`
-		ID      json.RawMessage `json:"id"`
-		Result  any             `json:"result,omitempty"`
-		Error   *grokRPCError   `json:"error,omitempty"`
-	}{JSONRPC: "2.0", ID: id, Result: result, Error: rpcErr})
-}
-
-func (g *GrokAdapter) send(value any) error {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return fmt.Errorf("encode Grok ACP message: %w", err)
-	}
-	g.writeMu.Lock()
-	defer g.writeMu.Unlock()
-	g.mu.Lock()
-	stdin := g.stdin
-	g.mu.Unlock()
-	if stdin == nil {
-		return errors.New("Grok ACP stdin is not available")
-	}
-	if _, err := stdin.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("write Grok ACP message: %w", err)
-	}
-	return nil
-}
-
-func (g *GrokAdapter) readStdout(reader io.Reader) {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	for scanner.Scan() {
-		g.handleRPCLine(append([]byte(nil), scanner.Bytes()...))
-	}
-	if err := scanner.Err(); err != nil {
-		e := runtimeEvent(g.cfg.Actor, model.RuntimeError)
-		e.Name = "adapter.stream_error"
-		e.Text = "read Grok ACP stream: " + err.Error()
-		g.sink(e)
-	}
-}
-
-func (g *GrokAdapter) readStderr(reader io.Reader) {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 16*1024), 1024*1024)
-	for scanner.Scan() {
-		text := strings.TrimSpace(scanner.Text())
-		if text == "" {
-			continue
-		}
-		e := runtimeEvent(g.cfg.Actor, model.RuntimeLog)
-		e.Name = "grok.stderr"
-		e.Text = redactRuntimeSecrets(text, g.cfg.Env)
-		g.sink(e)
-	}
-}
-
-func (g *GrokAdapter) handleRPCLine(line []byte) {
-	var envelope struct {
-		ID     json.RawMessage `json:"id"`
-		Method string          `json:"method"`
-		Params json.RawMessage `json:"params"`
-		Result json.RawMessage `json:"result"`
-		Error  *grokRPCError   `json:"error"`
-	}
-	if err := json.Unmarshal(line, &envelope); err != nil {
-		e := runtimeEvent(g.cfg.Actor, model.RuntimeLog)
-		e.Name = "grok.stdout"
-		e.Text = redactRuntimeSecrets(string(line), g.cfg.Env)
-		g.sink(e)
-		return
-	}
-	if envelope.Method != "" {
-		if len(envelope.ID) > 0 && string(envelope.ID) != "null" {
-			g.handleServerRequest(envelope.ID, envelope.Method, envelope.Params)
-			return
-		}
-		g.handleNotification(envelope.Method, envelope.Params)
-		return
-	}
-	id, err := strconv.ParseInt(strings.Trim(string(envelope.ID), `"`), 10, 64)
-	if err != nil {
-		return
-	}
-	g.mu.Lock()
-	reply := g.pending[id]
-	delete(g.pending, id)
-	g.mu.Unlock()
-	if reply == nil {
-		return
-	}
-	if envelope.Error != nil {
-		reply <- grokRPCReply{err: *envelope.Error}
-	} else {
-		reply <- grokRPCReply{result: append(json.RawMessage(nil), envelope.Result...)}
-	}
-}
-
-func (g *GrokAdapter) handleNotification(method string, params json.RawMessage) {
-	switch method {
-	case "session/update", "prompt/update":
-		g.handleSessionUpdate(params)
-	default:
-		e := runtimeEvent(g.cfg.Actor, model.RuntimeLog)
-		e.Name = method
-		e.Data = g.redactRaw(params)
-		g.sink(e)
-	}
-}
-
-func (g *GrokAdapter) handleSessionUpdate(raw json.RawMessage) {
-	var params struct {
-		SessionID string `json:"sessionId"`
-		Update    struct {
-			Kind    string `json:"sessionUpdate"`
-			Content struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-			ToolCallID string `json:"toolCallId"`
-			Title      string `json:"title"`
-			Status     string `json:"status"`
-		} `json:"update"`
-	}
-	if err := json.Unmarshal(raw, &params); err != nil {
-		return
-	}
-	g.mu.Lock()
-	turn := g.turn
-	rootSession := g.sessionID
-	if turn == nil || params.SessionID != rootSession {
-		g.mu.Unlock()
-		return
-	}
-	turnID := turn.turnID
-	correlationID := turn.inputs[len(turn.inputs)-1].MessageID
-	if params.Update.Kind == "agent_message_chunk" && params.Update.Content.Type == "text" {
-		turn.final.WriteString(redactRuntimeSecrets(params.Update.Content.Text, g.cfg.Env))
-	}
-	g.mu.Unlock()
-
-	event := runtimeEvent(g.cfg.Actor, model.RuntimeLog)
-	event.TurnID = turnID
-	event.CorrelationID = correlationID
-	event.Name = params.Update.Kind
-	event.Data = g.redactRaw(raw)
-	switch params.Update.Kind {
-	case "agent_message_chunk":
-		if params.Update.Content.Type != "text" || params.Update.Content.Text == "" {
-			return
-		}
-		event.Kind = model.RuntimeTextDelta
-		event.Text = redactRuntimeSecrets(params.Update.Content.Text, g.cfg.Env)
-	case "tool_call":
-		event.Kind = model.RuntimeToolStarted
-		event.ItemID = params.Update.ToolCallID
-		event.Name = params.Update.Title
-	case "tool_call_update":
-		event.Kind = model.RuntimeToolCompleted
-		event.ItemID = params.Update.ToolCallID
-		event.Name = params.Update.Status
-	case "plan":
-		event.Kind = model.RuntimePlanUpdated
-	default:
-		if strings.Contains(params.Update.Kind, "usage") {
-			event.Kind = model.RuntimeUsageUpdated
-		}
-	}
-	g.sink(event)
-}
-
-func (g *GrokAdapter) handleServerRequest(id json.RawMessage, method string, params json.RawMessage) {
-	switch method {
-	case "session/request_permission":
-		g.handlePermissionRequest(id, params)
-	case "x.ai/exit_plan_mode", "_x.ai/exit_plan_mode":
-		g.handlePlanExitRequest(id, params)
-	case "x.ai/ask_user_question", "_x.ai/ask_user_question":
-		e := runtimeEvent(g.cfg.Actor, model.RuntimeLog)
-		e.Name = "server_request.unsupported"
-		e.Text = method
-		e.Data = g.redactRaw(unwrapGrokExtParams(params))
-		g.attachCurrentTurn(&e)
-		g.sink(e)
-		_ = g.sendRawResponse(id, nil, &grokRPCError{Code: -32000, Message: "question surfaced in PairRoom"})
-	default:
-		e := runtimeEvent(g.cfg.Actor, model.RuntimeLog)
-		e.Name = "server_request.unsupported"
-		e.Text = method
-		e.Data = g.redactRaw(params)
-		g.attachCurrentTurn(&e)
-		g.sink(e)
-		_ = g.sendRawResponse(id, nil, &grokRPCError{Code: -32601, Message: "method not supported by PairRoom"})
-	}
-}
-
-func unwrapGrokExtParams(raw json.RawMessage) json.RawMessage {
-	var wrapped struct {
-		Params json.RawMessage `json:"params"`
-	}
-	if json.Unmarshal(raw, &wrapped) == nil && len(wrapped.Params) > 0 {
-		return append(json.RawMessage(nil), wrapped.Params...)
-	}
-	return append(json.RawMessage(nil), raw...)
-}
-
-func (g *GrokAdapter) handlePermissionRequest(id json.RawMessage, raw json.RawMessage) {
-	var params struct {
-		Options  []grokPermissionOption `json:"options"`
-		ToolCall struct {
-			ToolCallID string `json:"toolCallId"`
-			Title      string `json:"title"`
-			Kind       string `json:"kind"`
-		} `json:"toolCall"`
-	}
-	if err := json.Unmarshal(raw, &params); err != nil {
-		_ = g.sendRawResponse(id, nil, &grokRPCError{Code: -32602, Message: "invalid permission request"})
-		return
-	}
-	detail := map[string]any{}
-	_ = json.Unmarshal(raw, &detail)
-	detailRaw, _ := json.Marshal(detail)
-	detailRaw = g.redactRaw(detailRaw)
-	approval := model.Approval{
-		ID: model.NewID("approval"), Agent: g.cfg.Actor, Kind: "grok.permission",
-		Title:  firstNonEmpty(params.ToolCall.Title, params.ToolCall.Kind, configuredParticipantName(g.cfg)+" permission request"),
-		Detail: detailRaw, Status: "pending", RequestedAt: time.Now().UTC(),
-	}
-	pending := grokPendingApproval{rawID: append(json.RawMessage(nil), id...), options: params.Options, approval: approval}
-	g.mu.Lock()
-	g.approvals[approval.ID] = pending
-	g.mu.Unlock()
-	e := runtimeEvent(g.cfg.Actor, model.RuntimeApprovalRequested)
-	e.Approval = &approval
-	g.attachCurrentTurn(&e)
-	g.sink(e)
-	g.setState(model.StateWaiting, "")
-}
-
-func (g *GrokAdapter) handlePlanExitRequest(id json.RawMessage, raw json.RawMessage) {
-	detail := g.redactRaw(unwrapGrokExtParams(raw))
-	approval := model.Approval{
-		ID: model.NewID("approval"), Agent: g.cfg.Actor, Kind: "grok.planExit",
-		Title: configuredParticipantName(g.cfg) + " requests permission to leave plan mode", Detail: detail,
-		Status: "pending", RequestedAt: time.Now().UTC(),
-	}
-	g.mu.Lock()
-	g.approvals[approval.ID] = grokPendingApproval{rawID: append(json.RawMessage(nil), id...), kind: "plan", approval: approval}
-	g.mu.Unlock()
-	e := runtimeEvent(g.cfg.Actor, model.RuntimeApprovalRequested)
-	e.Approval = &approval
-	g.attachCurrentTurn(&e)
-	g.sink(e)
-	g.setState(model.StateWaiting, "")
-}
-
-func (g *GrokAdapter) attachCurrentTurn(event *model.RuntimeEvent) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.turn == nil {
-		return
-	}
-	event.TurnID = g.turn.turnID
-	event.CorrelationID = g.turn.inputs[len(g.turn.inputs)-1].MessageID
-}
-
-func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, done chan struct{}) {
+func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, tree *execx.Tree, done chan struct{}) {
 	err := cmd.Wait()
+	tree.Release()
 	g.mu.Lock()
 	if g.cmd != cmd {
 		g.mu.Unlock()
@@ -1328,7 +466,10 @@ func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, done chan struct{}) {
 	}
 	intentional := g.intentional
 	engaged := g.sessionEngaged
+	streamFailure := g.streamFailure
+	g.streamFailure = ""
 	g.cmd = nil
+	g.tree = nil
 	g.stdin = nil
 	g.done = nil
 	g.sessionOpened = false
@@ -1344,7 +485,9 @@ func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, done chan struct{}) {
 	}
 	g.mu.Unlock()
 	detail := "Grok ACP process exited"
-	if err != nil {
+	if streamFailure != "" {
+		detail = streamFailure
+	} else if err != nil {
 		detail += ": " + err.Error()
 	}
 	failure := g.redactError(errors.New(detail))
@@ -1378,11 +521,21 @@ func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, done chan struct{}) {
 	close(done)
 }
 
-func lastGrokInputID(inputs []model.AgentInput) string {
-	if len(inputs) == 0 {
-		return ""
+// failStream stops a Grok ACP process whose stdout can no longer be read. The
+// exit is then reported through waitProcess like any unexpected exit, so the
+// active prompt fails and the Turn owner is released on real exit.
+func (g *GrokAdapter) failStream(reason string) {
+	g.mu.Lock()
+	if g.streamFailure == "" {
+		g.streamFailure = reason
 	}
-	return inputs[len(inputs)-1].MessageID
+	tree := g.tree
+	g.mu.Unlock()
+	e := runtimeEvent(g.cfg.Actor, model.RuntimeError)
+	e.Name = "adapter.stream_error"
+	e.Text = reason
+	g.sink(e)
+	_ = tree.Kill()
 }
 
 func firstNonEmpty(values ...string) string {

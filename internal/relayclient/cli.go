@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -49,11 +50,49 @@ type stringsFlag []string
 
 func (s *stringsFlag) String() string     { return strings.Join(*s, ",") }
 func (s *stringsFlag) Set(v string) error { *s = append(*s, v); return nil }
+
+// relayActions lists every relay operation Run accepts, in usage order.
+var relayActions = []string{"install", "preflight", "bind", "hook", "send", "exchange", "wait", "status", "history", "doctor", "review", "peer", "park", "nudge", "reconcile", "unbind"}
+
+func relayUsage() string {
+	return "use pairroom relay " + strings.Join(relayActions, "|") + " (see docs/CLI_REFERENCE.md)"
+}
+
+// Run executes one relay subcommand. Afterwards it prints at most one stderr
+// line when a Service response named a release other than this CLI's; stdout
+// stays the machine-readable handoff channel. Preflight reports the release
+// itself.
 func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Writer) error {
+	ctx, observed := withServiceObservation(ctx)
+	err := run(ctx, args, in, out, diagnostic)
+	if len(args) == 0 || args[0] == "preflight" {
+		return err
+	}
+	// A skew-shaped failure may happen before any Service contact, such as a
+	// binding the older CLI cannot find. Only then, and never in the Stop hook,
+	// spend one bounded read to learn the release.
+	if args[0] != "hook" && observed.needsProbe(err) {
+		probeServiceRelease(ctx, observed.endpointPath())
+	}
+	if hint := observed.hint(err); hint != "" {
+		_, _ = fmt.Fprintln(diagnostic, hint)
+	}
+	return err
+}
+
+func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("use pairroom relay install|preflight|bind|hook|send|exchange|wait|status|history|doctor|review|peer|park|nudge|reconcile|unbind (see docs/CLI_REFERENCE.md)")
+		return errors.New(relayUsage())
 	}
 	action := args[0]
+	switch action {
+	case "help", "--help", "-h":
+		_, err := fmt.Fprintf(out, "usage: pairroom relay <command> [flags]\ncommands: %s\nrun pairroom relay <command> --help for flags; see docs/CLI_REFERENCE.md\n", strings.Join(relayActions, ", "))
+		return err
+	}
+	if !slices.Contains(relayActions, action) {
+		return fmt.Errorf("unknown relay operation %q; %s", action, relayUsage())
+	}
 	o := options{}
 	flags := flag.NewFlagSet("pairroom relay "+action, flag.ContinueOnError)
 	flags.SetOutput(diagnostic)
@@ -194,6 +233,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		*runtimeFlag.value = string(kind)
 	}
 	o.slot = normalizeSlot(o.slot)
+	noteServiceEndpoint(ctx, o.endpoint)
 	if action == "hook" {
 		return runHook(ctx, o, in, out, diagnostic)
 	}
@@ -239,6 +279,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		release()
 		return err
 	}
+	noteServiceEndpoint(ctx, c.State.EndpointPath)
 	if err := validateCommandCaller(c); err != nil {
 		release()
 		return err
@@ -316,6 +357,10 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		}
 		var msg relay.Message
 		err = c.call(ctx, "send", map[string]any{"id": o.id, "text": text, "to": to, "attachment_ids": attachments, "review": anchor}, &msg)
+		if relayErrorCode(err) == relay.SendPayloadConflictCode {
+			// Settled, not uncertain: this ID already names an accepted message.
+			return fmt.Errorf("--id %s was already used for a different message (body, target, attachments, quote or review); nothing new was published. Check relay history for the original; send new content with a new --id", o.id)
+		}
 		if err != nil {
 			return fmt.Errorf("%w; publication uncertain: retry with the SAME --id %s, not a new ID", err, o.id)
 		}
@@ -360,13 +405,22 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	case "doctor":
 		var report map[string]any
 		if err := c.call(ctx, "doctor", nil, &report); err != nil {
+			if relayErrorCode(err) == "runtime_not_ready" {
+				// Doctor deliberately never activates a Room: activation resumes
+				// Service-managed wake, which a read-only diagnosis must not start.
+				return fmt.Errorf("%w: the Native Room is suspended (for example after a Service restart or idle timeout) and doctor never activates it. Run pairroom relay status --brief --room %s --slot %s, which activates it, or open the Room in Management, then rerun doctor", err, o.room, o.slot)
+			}
 			return err
 		}
 		hook := "installed"
 		if installed(root, c.State.Runtime) != nil {
 			hook = "missing_or_disabled"
 		}
-		report["local"] = map[string]any{"cli_version": version.Current, "protocol": protocol.NativeVersion, "protocol_match": report["protocol"] == protocol.NativeVersion, "service_version_match": report["service_version"] == version.Current, "workspace_match": root == c.State.Workspace, "hook_installation": hook, "hook_approval": "unknown", "last_hook_at": c.State.LastHookAt}
+		local := map[string]any{"cli_version": version.Current, "protocol": protocol.NativeVersion, "protocol_match": report["protocol"] == protocol.NativeVersion, "service_version_match": report["service_version"] == version.Current, "workspace_match": root == c.State.Workspace, "hook_installation": hook, "hook_approval": "unknown", "last_hook_at": c.State.LastHookAt}
+		if hint := hookNotRunHint(c.State); hint != "" {
+			local["hook_hint"] = hint
+		}
+		report["local"] = local
 		return writeJSON(out, report)
 	case "peer":
 		var peer relay.Binding
@@ -395,10 +449,15 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		local := map[string]any{"last_confirmed_seq": c.State.LastConfirmedSeq, "last_seq": c.State.LastSeq, "publication_unknown": errors.Is(err, relay.ErrUnknown), "binding_workspace": c.State.Workspace}
 		if c.State.LastHookAt != "" {
 			local["last_hook_at"] = c.State.LastHookAt
+		} else {
+			local["hook_hint"] = hookNotRunHint(c.State)
 		}
 		if c.State.Pending != nil {
 			local["pending_seq"] = c.State.Pending.Seq
 			local["publication_unknown"] = c.State.Pending.Unknown
+		}
+		if len(c.State.Held) > 0 {
+			local["held_publications"] = len(c.State.Held)
 		}
 		result := map[string]any{"local": local, "relay": status}
 		if action == "status" && o.brief {
@@ -565,6 +624,7 @@ func management(ctx context.Context, endpoint relay.Endpoint, method, path strin
 		return errors.New("Service unavailable; verify current endpoint file")
 	}
 	defer res.Body.Close()
+	observeServiceResponse(ctx, res)
 	if res.StatusCode != 200 && res.StatusCode != 201 {
 		var e struct {
 			Error string `json:"error"`
@@ -575,7 +635,22 @@ func management(ctx context.Context, endpoint relay.Endpoint, method, path strin
 		}
 		return fmt.Errorf("Service rejected request: %s", e.Error)
 	}
-	return json.NewDecoder(io.LimitReader(res.Body, 16<<20)).Decode(result)
+	if method != http.MethodGet || path != "/api/v1/service" {
+		return json.NewDecoder(io.LimitReader(res.Body, 16<<20)).Decode(result)
+	}
+	// The snapshot's display version also names a Service that predates the
+	// release response header.
+	body, err := io.ReadAll(io.LimitReader(res.Body, 16<<20))
+	if err != nil {
+		return err
+	}
+	var snapshot struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(body, &snapshot) == nil {
+		observeServiceSnapshotVersion(ctx, snapshot.Version)
+	}
+	return json.Unmarshal(body, result)
 }
 
 // Commands are pasted into the native PowerShell (Windows) or POSIX shell.
@@ -787,7 +862,7 @@ func resolveSlotDefaults(root string, o *options) error {
 		all = append(all, candidate{room: s.Room, slot: s.Slot, harnessPID: s.HarnessPID, harness: s.HarnessName})
 	}
 	if len(all) == 0 {
-		return errors.New("no relay binding in this workspace; run pairroom relay bind first")
+		return errNoWorkspaceBinding
 	}
 	matched := all
 	if pid, name, ok := harnessAncestor(); ok {
@@ -934,6 +1009,7 @@ func (c *Client) upload(ctx context.Context, path string) (string, error) {
 		return "", errors.New("relay attachment upload unavailable")
 	}
 	defer res.Body.Close()
+	observeServiceResponse(ctx, res)
 	if res.StatusCode != 200 && res.StatusCode != 201 {
 		return "", errors.New("attachment rejected by Room validation")
 	}

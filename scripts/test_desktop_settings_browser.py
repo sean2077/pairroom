@@ -22,11 +22,25 @@ async def verify(executable: str | None, artifacts: Path) -> None:
         page.on('pageerror', lambda error: errors.append(str(error)))
         await page.add_init_script('''
           window.__startupEnabled = false; window.__startupFailure = false; window.__startupWrites = 0;
+          window.__updates = {enabled: false, offline: false, checked: ''};
           window.chrome = window.chrome || {};
           window.chrome.webview = {postMessage(message) {
             const request = JSON.parse(message);
             if (request.kind === 'pairroom.desktop.browser') {
               (window.__browserLinks ||= []).push(request.url);
+              return;
+            }
+            if (request.kind === 'pairroom.desktop.updates') {
+              (window.__updateRequests ||= []).push(request.action);
+              if (request.action === 'set') __updates.enabled = request.enabled;
+              const response = {id: request.id, enabled: __updates.enabled, current: '5.6.0'};
+              if (request.action === 'check' && __updates.offline) response.error = 'Fixture: GitHub unreachable';
+              else if (request.action === 'check') __updates.checked = '2026-09-27T12:00:00Z';
+              if (__updates.enabled && __updates.checked) {
+                response.checked_at = __updates.checked;
+                if (!__updates.offline) Object.assign(response, {latest: '5.7.0', url: 'https://github.com/sean2077/pairroom/releases/tag/v5.7.0'});
+              }
+              queueMicrotask(() => window.PairRoomDesktop.receive(response));
               return;
             }
             const reply = () => {
@@ -75,6 +89,23 @@ async def verify(executable: str | None, artifacts: Path) -> None:
         await expect(toggle).to_be_enabled()
         await expect(toggle).to_have_attribute('aria-checked', 'false')
         assert await page.evaluate('__startupWrites') == 0, 'viewing settings implicitly enabled startup'
+        updates = page.get_by_role('switch', name='Check for updates', exact=True)
+        await expect(updates).to_be_enabled()
+        await expect(updates).to_have_attribute('aria-checked', 'false')
+        await expect(page.get_by_role('button', name='Check now', exact=True)).to_have_count(0)
+        assert await page.evaluate('__updateRequests') == ['get'], 'viewing settings must not check or enable updates'
+        await updates.click()
+        await expect(updates).to_have_attribute('aria-checked', 'true')
+        await page.evaluate('__updates.offline = true')
+        await page.get_by_role('button', name='Check now', exact=True).click()
+        await expect(page.get_by_role('alert').filter(has_text='Fixture: GitHub unreachable')).to_be_visible()
+        await page.evaluate('__updates.offline = false')
+        await page.get_by_role('button', name='Check now', exact=True).click()
+        await expect(page.get_by_text('PairRoom 5.7.0 is available')).to_be_visible()
+        await expect(page.get_by_role('alert')).to_have_count(0)
+        await page.get_by_role('button', name='Open release page', exact=True).click()
+        assert await page.evaluate('__browserLinks.at(-1)') == 'https://github.com/sean2077/pairroom/releases/tag/v5.7.0'
+        assert await page.evaluate('__updateRequests') == ['get', 'set', 'check', 'check']
         await page.evaluate("__startupHold = true")
         await toggle.click()
         await expect(toggle).to_be_disabled()
@@ -92,7 +123,10 @@ async def verify(executable: str | None, artifacts: Path) -> None:
         await expect(toggle).to_have_attribute('aria-checked', 'false')
         await page.evaluate("PairRoomI18n.setLang('zh-CN')")
         await expect(page.get_by_role('switch', name='开机启动', exact=True)).to_be_visible()
+        await expect(page.get_by_text('PairRoom 5.7.0 已发布')).to_be_visible()
         await page.screenshot(path=str(artifacts / 'desktop-settings-zh.png'))
+        await page.get_by_role('switch', name='检查更新', exact=True).click()
+        await expect(page.get_by_text('PairRoom 5.7.0 已发布')).to_have_count(0)
         assert not errors, errors
         assert not await page.evaluate('__cspErrors'), 'desktop integration violates Management CSP'
         ordinary = await browser.new_page(locale='en-US')
@@ -101,7 +135,7 @@ async def verify(executable: str | None, artifacts: Path) -> None:
         await expect(ordinary.locator('.settings-nav')).to_be_visible()
         assert await ordinary.get_by_role('button', name='Desktop', exact=True).count() == 0
         await browser.close()
-        print('desktop Settings browser/CSP/locale/opt-in/failure-state contracts: ok (native IPC fixture)')
+        print('desktop Settings browser/CSP/locale/opt-in/failure-state/update-check contracts: ok (native IPC fixture)')
 
 
 if __name__ == '__main__':

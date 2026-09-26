@@ -13,6 +13,7 @@ on:
       - 'go.mod'
       - 'go.sum'
       - 'internal/**'
+      - 'cmd/**'
   push:
     branches: [main]
     paths:
@@ -26,6 +27,7 @@ on:
       - 'go.mod'
       - 'go.sum'
       - 'internal/**'
+      - 'cmd/**'
     tags: ['v*']
   workflow_dispatch:
 
@@ -42,8 +44,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
           check-latest: true
@@ -72,12 +74,17 @@ jobs:
             libwebkitgtk-6.0-dev \
             pkg-config
       - name: Install pinned Wails CLI
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.24
+        # desktop/go.mod is the only Wails pin; a Wails bump needs no workflow edit.
+        shell: bash
+        run: go install "github.com/wailsapp/wails/v3/cmd/wails3@$(go -C desktop list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
       - name: Verify isolated desktop module lock
         working-directory: desktop
         run: |
           go mod tidy
-          git diff --exit-code -- go.mod go.sum
+          git diff --exit-code -- go.mod go.sum || {
+            echo "::error::desktop/go.mod or go.sum is not tidy. The desktop module pins the root module's closure through its local replace; after a root dependency update run 'make deps-sync' (see CONTRIBUTING.md#dependency-updates)."
+            exit 1
+          }
       - name: Test desktop host and embedded PairRoom Service
         working-directory: desktop
         run: go test -count=1 ./...
@@ -99,8 +106,8 @@ jobs:
       matrix:
         os: [windows-2025, macos-15]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
           check-latest: true
@@ -114,7 +121,8 @@ jobs:
       - name: Test transactional local update
         run: python desktop/scripts/test_update_local.py
       - name: Install pinned Wails CLI for native update smoke
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.24
+        shell: bash
+        run: go install "github.com/wailsapp/wails/v3/cmd/wails3@$(go -C desktop list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
       - name: Build and update a native installation with a spaced path
         shell: bash
         run: |
@@ -135,7 +143,7 @@ jobs:
           ./scripts/test_windows_installer.ps1 -Installer ./bin/PairRoom-amd64-installer.exe
       - name: Upload Windows installer smoke logs
         if: always() && runner.os == 'Windows'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-installer-smoke-logs
           path: ${{ runner.temp }}/pairroom-installer-smoke-*/**/*.log
@@ -171,8 +179,8 @@ jobs:
             platform: darwin
             arch: amd64
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
           check-latest: true
@@ -202,7 +210,8 @@ jobs:
         shell: pwsh
         run: ./desktop/scripts/install-inno.ps1
       - name: Install pinned Wails CLI
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.24
+        shell: bash
+        run: go install "github.com/wailsapp/wails/v3/cmd/wails3@$(go -C desktop list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
       - name: Download isolated desktop module dependencies
         working-directory: desktop
         run: go mod download
@@ -231,7 +240,7 @@ jobs:
         working-directory: desktop
         run: python scripts/collect-artifacts.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --label ${{ matrix.label }}
       - name: Upload desktop packages
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pairroom-desktop-${{ matrix.label }}
           path: desktop/dist/${{ matrix.label }}/
@@ -248,10 +257,15 @@ jobs:
       contents: write
     timeout-minutes: 20
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: pairroom-desktop-*
           path: desktop-dist
+      - name: Verify and merge per-platform desktop checksums
+        run: python3 desktop/scripts/merge-checksums.py --root desktop-dist --version "${GITHUB_REF_NAME}" --output-dir desktop-checksums
       - name: Wait for GitHub Release and upload desktop packages
         env:
           GH_TOKEN: ${{ github.token }}
@@ -271,6 +285,9 @@ jobs:
           done
           mapfile -t files < <(find desktop-dist -type f -name 'pairroom-desktop-*')
           test "${#files[@]}" -gt 0
+          sums="desktop-checksums/pairroom-desktop-v${version}-SHA256SUMS"
+          test -s "${sums}"
+          files+=("${sums}")
           gh release upload "${tag}" "${files[@]}" --repo "${GITHUB_REPOSITORY}"
           published="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
           for required in \
@@ -278,11 +295,18 @@ jobs:
             "pairroom-desktop-v${version}-linux-amd64.AppImage" \
             "pairroom-desktop-v${version}-linux-amd64.deb" \
             "pairroom-desktop-v${version}-darwin-arm64.app.zip" \
-            "pairroom-desktop-v${version}-darwin-amd64.app.zip"
+            "pairroom-desktop-v${version}-darwin-amd64.app.zip" \
+            "pairroom-desktop-v${version}-SHA256SUMS"
           do
             printf '%s\n' "${published}" | grep -Fxq "${required}"
           done
-          echo "attached ${#files[@]} desktop package(s) to ${tag}"
+          # Re-download the attached desktop assets and check them against the
+          # published checksum list, as a user would.
+          downloaded="${RUNNER_TEMP}/published-desktop"
+          mkdir -p "${downloaded}"
+          gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" --pattern 'pairroom-desktop-*' --dir "${downloaded}"
+          (cd "${downloaded}" && sha256sum -c "pairroom-desktop-v${version}-SHA256SUMS")
+          echo "attached ${#files[@]} desktop file(s) to ${tag}"
 
   winget:
     name: Submit the winget manifest for the Windows installer
@@ -294,8 +318,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: pairroom-desktop-windows-amd64
           path: desktop-dist/windows-amd64

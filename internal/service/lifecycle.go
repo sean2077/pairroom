@@ -71,6 +71,11 @@ func (r *Registry) mutateRoom(ctx context.Context, roomID, eventKind string, pay
 	if eventKind == EventRoomRenamed && room.Name == payload.(roomRenamedPayload).Name {
 		return cloneRoom(room), nil
 	}
+	// Lock order: provisionMu before the RuntimeManager lock. The manager never
+	// acquires provisionMu while holding its own lock.
+	if r.eventLogOwned != nil && r.eventLogOwned(roomID) {
+		return Room{}, fmt.Errorf("%w: Room %s", ErrRoomLogOwnedByRuntime, roomID)
+	}
 	eventCommitted := true
 	if err := appendServiceEvent(room, eventKind, payload); err != nil {
 		// Archive is the mandatory safety gate before permanent removal. If the

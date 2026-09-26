@@ -85,6 +85,11 @@ func TestConfigureProcessLoggingFromEnvironment(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		for _, key := range []string{LogFileEnvironment, LogSizeEnvironment, LogBackupEnvironment, ConsoleDetachEnvironment} {
+			if _, ok := os.LookupEnv(key); ok {
+				_, _ = os.Stdout.WriteString("inherited " + key + "\n")
+			}
+		}
 		_, _ = os.Stdout.WriteString("stdout marker\n")
 		_, _ = os.Stderr.WriteString("stderr marker\n")
 		slog.Info("slog marker")
@@ -113,5 +118,9 @@ func TestConfigureProcessLoggingFromEnvironment(t *testing.T) {
 		if !strings.Contains(string(data), marker) {
 			t.Fatalf("daemon log missing %q: %s", marker, data)
 		}
+	}
+	// Agent processes started by the daemon must not inherit the redirection.
+	if strings.Contains(string(data), "inherited ") {
+		t.Fatalf("daemon logging environment remains inheritable: %s", data)
 	}
 }

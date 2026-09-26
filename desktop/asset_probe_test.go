@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -103,5 +105,105 @@ func TestDesktopControllerCancelsStartupBeforeItPublishesAHost(t *testing.T) {
 	case <-ready:
 		t.Fatal("startup published a host after shutdown")
 	default:
+	}
+}
+
+type fakeDrainHost struct {
+	mu      sync.Mutex
+	calls   int
+	entered chan struct{}
+	release chan struct{}
+	errs    []error
+}
+
+func (f *fakeDrainHost) Shutdown(ctx context.Context) error {
+	f.mu.Lock()
+	f.calls++
+	call := f.calls
+	f.mu.Unlock()
+	if call == 1 && f.entered != nil {
+		close(f.entered)
+	}
+	if call == 1 && f.release != nil {
+		select {
+		case <-f.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if call <= len(f.errs) {
+		return f.errs[call-1]
+	}
+	return nil
+}
+
+func (f *fakeDrainHost) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+func TestDesktopControllerQuitWaitsForRestartDrain(t *testing.T) {
+	controller := &desktopController{}
+	fake := &fakeDrainHost{entered: make(chan struct{}), release: make(chan struct{})}
+	drained := make(chan error, 1)
+	controller.hostMu.Lock()
+	controller.beginDrainLocked(fake, func(err error) { drained <- err })
+	controller.hostMu.Unlock()
+	<-fake.entered
+
+	// A second bootstrap must not race the draining Service for its lock.
+	started := false
+	controller.start(context.Background(), nil,
+		func(context.Context) (*host.Host, error) { started = true; return nil, nil }, nil, nil)
+	if started {
+		t.Fatal("startup ran while a restart drain was pending")
+	}
+
+	short, cancelShort := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancelShort()
+	if err := controller.shutdown(short); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("shutdown during drain = %v, want it to keep waiting", err)
+	}
+
+	close(fake.release)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := controller.shutdown(ctx); err != nil {
+		t.Fatalf("shutdown after drain = %v", err)
+	}
+	if err := <-drained; err != nil {
+		t.Fatalf("drain callback = %v", err)
+	}
+	if got := fake.callCount(); got != 1 {
+		t.Fatalf("Shutdown calls = %d, want 1 for a clean drain", got)
+	}
+}
+
+func TestDesktopControllerQuitRetriesFailedRestartDrain(t *testing.T) {
+	controller := &desktopController{}
+	fake := &fakeDrainHost{errs: []error{errors.New("drain timed out")}}
+	drained := make(chan error, 1)
+	controller.hostMu.Lock()
+	controller.beginDrainLocked(fake, func(err error) { drained <- err })
+	controller.hostMu.Unlock()
+	if err := <-drained; err == nil {
+		t.Fatal("first drain unexpectedly succeeded")
+	}
+
+	controller.hostMu.Lock()
+	pending := controller.drainPendingLocked()
+	controller.hostMu.Unlock()
+	if !pending {
+		t.Fatal("failed drain was not retained for retry")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := controller.shutdown(ctx); err != nil {
+		t.Fatalf("shutdown = %v, want the retried drain to succeed", err)
+	}
+	if got := fake.callCount(); got != 2 {
+		t.Fatalf("Shutdown calls = %d, want the failed drain retried once", got)
 	}
 }

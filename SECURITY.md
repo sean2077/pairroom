@@ -30,13 +30,13 @@ The bootstrap token is cleared from page memory/input after exchange. Neither to
 
 A Service-managed Room has an independent token; standalone `serve` may configure one. When token authentication is enabled, the browser exchanges a fragment credential for a 12-hour sliding-expiry `HttpOnly`, `SameSite=Strict` session cookie and uses per-session CSRF for writes. Tokens and CSRF do not enter query strings or Web Storage. REST, SSE, and attachments do not accept a query token as authorization.
 
-Room A's token/session/CSRF, event cursor, and attachment authorization cannot authorize Room B. The Management same-origin Room gateway is not permission to transfer Room identities or reuse stale actions against a different embedded surface.
+Room tokens are never returned by Management APIs: Service snapshots and activation responses omit the direct Room URL, and only the explicit open-browser action hands it to the system browser. Room A's token/session/CSRF, event cursor, and attachment authorization cannot authorize Room B. The Management same-origin Room gateway is not permission to transfer Room identities or reuse stale actions against a different embedded surface.
 
 ### 2.4 HTTP protections
 
 Management mutations check origin/fetch-site context; cookie-authenticated writes additionally require CSRF. Room requests perform Host and same-origin checks, with CSRF for enabled browser sessions. Room rate limiting reduces local abuse and accidental request loops; it is not an Agent spending budget.
 
-Both surfaces set CSP, no-referrer, no-sniff, and default `frame-ancestors 'none'`. Only the Management same-origin Room surface uses `frame-ancestors 'self'`; a direct Runtime URL remains unframeable. Attachments require the relevant authentication and use no-sniff, ETag, and inline disposition.
+Both surfaces set CSP (including `object-src 'none'`, `base-uri 'none'` and `form-action 'self'`), no-referrer, no-sniff, and default `frame-ancestors 'none'`. Only the Management same-origin Room surface uses `frame-ancestors 'self'`; a direct Embedded or Native Runtime URL remains unframeable. Attachments require the relevant authentication and use no-sniff, ETag, and inline disposition.
 
 URL fragments are not sent as HTTP requests/Referer, but can leak through screen sharing, copied startup output, or browser extensions. Do not publish a complete Management or Room URL.
 
@@ -46,17 +46,19 @@ Projects use absolute paths explicitly entered by the user, canonicalized throug
 
 Room provisioning is private until atomically published. The Service enforces Binding uniqueness by durable slot and native session ID; archive does not release ownership. An existing Binding must resume exactly. A deferred new Binding materializes only after real native input acceptance. Event/checkpoint/uniqueness failures fail closed rather than creating another owner.
 
-The Binding's `agent` is the stable slot (`claude`/`codex`), not an assumption about its selected Runtime. PairRoom does not import the vendor transcript from before the Binding.
+The Binding's `agent` is the stable slot (`slot1`/`slot2`), not an assumption about its selected Runtime. PairRoom does not import the vendor transcript from before the Binding.
 
 ## 4. Attachment safety
 
 Only verified PNG, JPEG, GIF, and WebP images are accepted. SVG, HTML, scripts, and arbitrary binaries are rejected. Content signatures, not filename/MIME alone, determine acceptance. Limits cover count, individual/combined size, edge length, and pixel count.
 
-Attachments and manifests use opaque IDs and conservative permissions. Resolve checks size, regular-file/non-symlink status, dimensions, and SHA-256 again. Accepted Message image identity cannot be silently changed. Repository image import enforces canonical path/symlink boundaries; remote URLs are not automatically imported. Committed transcript attachments cannot be removed through the attachment DELETE API.
+Attachments and manifests use opaque IDs and conservative permissions. Resolve checks size, regular-file/non-symlink status, dimensions, and SHA-256 again. Accepted Message image identity cannot be silently changed. Repository image import enforces canonical path/symlink boundaries; remote URLs are not automatically imported. Committed transcript attachments cannot be removed through the attachment DELETE API, and automatic reclamation removes only uploads older than seven days that no message references.
 
 The API/transcript carries verified metadata, not an absolute host attachment path. Adapter-local resolution occurs only at the native boundary. Browser object URLs are transient, not persistent public links. Image validation cannot detect whether a screenshot visibly contains a secret; inspect content before sending or sharing.
 
 ## 5. Runtime and approvals
+
+Embedded runtimes are started without a shell. On Windows a `.cmd`/`.bat` launcher is the exception, because `cmd.exe` re-parses its command line: arguments containing `cmd.exe` metacharacters fail closed, and the Room-derived Claude session name is neutralized, so Room names and selection values cannot run commands. [Configuration](docs/CONFIGURATION.md#agent-slots-and-runtimes) lists the rejected characters.
 
 ### 5.1 Claude
 
@@ -90,7 +92,7 @@ Data directories/files use conservative permissions where supported. Auditable e
 
 The Registry can be rebuilt from authoritative Room records. Checkpoint failure blocks mutations when consistency cannot be proven. One Service owns a data root. Recover a crash-stale lock only after proving its recorded PID is gone; do not delete a live owner's lock.
 
-Backup/restore validates paths, links, duplicates, declared files, bounds, hashes, and archive integrity. Outputs must be outside the source Room directory, including symlink aliases. A Room archive excludes the user's repository and native session stores; a full Service rollback needs a separate offline data-root backup. [Storage](docs/STORAGE.md) and [Operations](docs/OPERATIONS.md#backup) own the procedures.
+Backup/restore validates paths, links, duplicates, declared files, bounds, hashes, and archive integrity. Restore accepts only the Room file set (`events.jsonl`, `metadata.json`, and each attachment manifest with the one content file it names) and rejects any other name, including alternate data streams, Windows device names, and names ending in a dot or space. Outputs must be outside the source Room directory, including symlink aliases. A Room archive excludes the user's repository and native session stores; a full Service rollback needs a separate offline data-root backup. [Storage](docs/STORAGE.md) and [Operations](docs/OPERATIONS.md#backup) own the procedures.
 
 Recovery does not re-execute uncertain or accepted native work automatically. The Event Log is not an exactly-once side-effect mechanism or a tamper-proof compliance ledger. Do not hand-edit sequence/schema/Binding/image identity fields to bypass verification.
 
@@ -118,6 +120,8 @@ Supported CC Switch references are read-only and re-resolved at creation/activat
 
 PairRoom does not automatically load remote Markdown images. Opening an ordinary external link deliberately sends the browser to that site; the site then receives a normal network request. Review remote content and native tools with the same trust assumptions as other project inputs.
 
+Desktop's **Check for updates** setting is off by default. Only after the user enables it does Desktop send an unauthenticated `GET` to the GitHub latest-release API for `sean2077/pairroom`, at most once a day plus explicit checks, with a short timeout and a `PairRoom-Desktop/<version>` User-Agent as its only identifying value. GitHub sees the request's IP address and time. The response selects no URL, file, or command: Desktop parses only a stable version tag, opens a release page built from it only when the user asks, and never downloads or installs updates. The setting lives in the Desktop preference directory, not the Service data root. See [Desktop development](desktop/README.md#check-for-updates).
+
 ## 12. Recommended practice
 
 Use trusted repositories and explicit native permissions; do not mistake responsibilities or natural-language “plan first” for enforcement. Keep unnecessary secrets out of the execution environment, review approval scope and screenshots, protect tokens/data/backups, and verify native CLI upgrades on a disposable read-only task before important work. Maintain normal shutdown and verified backups. Use controlled isolation for untrusted execution and keep the listener on numeric loopback.
@@ -132,7 +136,7 @@ If no private channel is available, first open a public Issue without exploit de
 
 Native hosting never owns or interrupts the user's vendor processes. Project hook installation is explicit; PairRoom does not grant project trust or approve its own hook. Association captures the official session ID from the harness environment at bind, run inside the native session; the approved Stop hook re-confirms the same identity before publication or collection and fails closed on mismatch. Relay authorization requires the slot's secret, generation and associated native identity together; management/browser credentials do not authorize that channel. Replacement revokes old credentials but cannot stop work already running.
 
-Relay secrets remain in owner-only workspace `credentials` files; their hashes, not secrets, are persisted for service authentication. The Service's owner-only `relay-endpoint.json` contains current local endpoint discovery and a scoped relay-setup token — not the full Management bearer — and must not be exported. Both files are sensitive. The owner-only `bind-attempt.json` also contains relay credentials and must never be exported. Intentional session-environment overrides by the same OS user are outside this isolation claim. Model-visible bind output carries only public identifiers. This protects against accidental cross-binding and stale ownership; it does not claim isolation from arbitrary file reads by another process running as the same OS user. POSIX 0600 checks are not a Windows ACL isolation claim.
+Relay secrets remain in owner-only workspace `credentials` files; their hashes, not secrets, are persisted for service authentication. The Service's owner-only `relay-endpoint.json` contains current local endpoint discovery and a scoped relay-setup token — not the full Management bearer — and must not be exported. That token admits exactly `GET /api/v1/service`, `GET /api/v1/agent-pair-profiles`, `GET /api/v1/agent-catalog`, `POST /api/v1/projects`, `POST /api/v1/projects/{project}/rooms` for Native Rooms only, and `POST /api/v1/rooms/{room}/native-bindings/{slot1|slot2}`. It cannot unbind, activate, archive, delete, open a surface, change policy, or bootstrap a browser session. The Service snapshot it can read includes Project roots, Room metadata and the data-root path, but no Room or Management bearer. Both files are sensitive. The owner-only `bind-attempt.json` also contains relay credentials and must never be exported. Intentional session-environment overrides by the same OS user are outside this isolation claim. Model-visible bind output carries only public identifiers. This protects against accidental cross-binding and stale ownership; it does not claim isolation from arbitrary file reads by another process running as the same OS user. POSIX 0600 checks are not a Windows ACL isolation claim.
 
 Claude external wake additionally stores `claude-inbox.json` (and any crash-left `.claude-inbox-*` temporary files) in the bound workspace slot directory. It contains the official local inbox address/token and exact binding identity; never export or paste it. Bind and confirmed Stop refresh it; missing/invalid environment removes stale capability, and generation matching prevents reuse after replacement. The Service reads only a bounded regular private file, not vendor registries/transcripts. Unix checks owner-only files/directories and an owned non-world-writable socket; Windows creates and verifies a protected owner-only DACL and accepts only local named pipes owned by the same OS user with anonymous SQOS. This does not isolate hostile processes running as the same OS user. Credentials never enter Event Log, API/browser projections, command arguments or diagnostics. Socket submission is not vendor acceptance; `crossSessionInbound` remains authoritative and is never rewritten.
 

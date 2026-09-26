@@ -1,6 +1,6 @@
 version: '3'
 
-# Synchronized with Wails v3.0.0-beta.24. Update with the pinned dependency.
+# Synchronized with the Wails version pinned in desktop/go.mod; review on each Wails bump.
 includes:
   common: ../Taskfile.yml
 

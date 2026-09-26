@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -201,6 +202,14 @@ func Verify(dataDir string) VerifyReport {
 						}
 					}
 				}
+				if ids, ok, err := nativeAttachmentReferences(event); ok {
+					if err != nil {
+						report.Errors = append(report.Errors, fmt.Sprintf("native message event at line %d: %v", lineNo, err))
+					}
+					for _, id := range ids {
+						referenced[id] = struct{}{}
+					}
+				}
 			}
 			if errors.Is(readErr, io.EOF) {
 				break
@@ -224,6 +233,46 @@ func Verify(dataDir string) VerifyReport {
 		}
 	}
 	return finishReport(report)
+}
+
+// nativeAttachmentReferences returns the attachment IDs a Native message fact
+// carries. Explicit sends and retries are native.message.updated facts; routed
+// Stop publications embed their message. Quoted images are already merged
+// into the quoting message. The field names mirror internal/relay, which this
+// dependency-free package does not import. ok is false for other kinds.
+func nativeAttachmentReferences(event model.Event) (ids []string, ok bool, err error) {
+	type native struct {
+		Attachments []model.Attachment `json:"attachments"`
+	}
+	var messages []native
+	switch event.Kind {
+	case "native.message.updated":
+		var value native
+		if err := json.Unmarshal(event.Data, &value); err != nil {
+			return nil, true, err
+		}
+		messages = append(messages, value)
+	case "native.publication", "native.publication.gap":
+		var value struct {
+			Message *native `json:"message"`
+		}
+		if err := json.Unmarshal(event.Data, &value); err != nil {
+			return nil, true, err
+		}
+		if value.Message != nil {
+			messages = append(messages, *value.Message)
+		}
+	default:
+		return nil, false, nil
+	}
+	for _, message := range messages {
+		for _, attachment := range message.Attachments {
+			if attachment.ID != "" {
+				ids = append(ids, attachment.ID)
+			}
+		}
+	}
+	return ids, true, nil
 }
 
 func finishReport(report VerifyReport) VerifyReport {
@@ -516,6 +565,9 @@ func Restore(input, target string, force bool) (VerifyReport, error) {
 			}
 			continue
 		}
+		if err := restorableRoomPath(rel); err != nil {
+			return VerifyReport{}, err
+		}
 		if _, ok := seen[rel]; ok {
 			return VerifyReport{}, fmt.Errorf("duplicate backup entry %q", rel)
 		}
@@ -557,6 +609,9 @@ func Restore(input, target string, force bool) (VerifyReport, error) {
 		if err != nil || rel == "manifest.json" {
 			return VerifyReport{}, fmt.Errorf("invalid manifest path %q", entry.Path)
 		}
+		if err := restorableRoomPath(rel); err != nil {
+			return VerifyReport{}, err
+		}
 		if _, ok := declared[rel]; ok {
 			return VerifyReport{}, fmt.Errorf("duplicate manifest path %q", rel)
 		}
@@ -578,6 +633,22 @@ func Restore(input, target string, force bool) (VerifyReport, error) {
 	report := Verify(tmp)
 	if !report.OK {
 		return report, fmt.Errorf("restored data failed verification: %s", strings.Join(report.Errors, "; "))
+	}
+	// The restored tree must be exactly what Backup would collect from it:
+	// the two Room files plus each attachment manifest and the one content
+	// file it names. Anything else (orphan content) is not Room data.
+	expected, err := collectBackupFiles(tmp)
+	if err != nil {
+		return VerifyReport{}, fmt.Errorf("restored data failed verification: %w", err)
+	}
+	collected := make(map[string]struct{}, len(expected))
+	for _, entry := range expected {
+		collected[entry.Path] = struct{}{}
+	}
+	for rel := range declared {
+		if _, ok := collected[rel]; !ok {
+			return VerifyReport{}, fmt.Errorf("backup file %q is not part of a Room backup", rel)
+		}
 	}
 
 	if info, statErr := os.Stat(target); statErr == nil {
@@ -728,6 +799,49 @@ func hashFile(path string) (string, int64, error) {
 		return "", 0, err
 	}
 	return hex.EncodeToString(hash.Sum(nil)), size, nil
+}
+
+// restorableAttachmentName matches an attachment manifest or its content file
+// as written by the attachment store: an opaque ID plus a fixed extension.
+var restorableAttachmentName = regexp.MustCompile(`^att-[a-f0-9]{24}\.(json|png|jpg|gif|webp|bin)$`)
+
+// restorableRoomPath admits only the fixed Room backup layout. It rejects
+// every other name before any byte is written, including NTFS alternate data
+// streams, Windows device names, and names Windows would silently rewrite.
+func restorableRoomPath(rel string) error {
+	for _, component := range strings.Split(rel, "/") {
+		if !portableComponent(component) {
+			return fmt.Errorf("backup file %q is not part of a Room backup", rel)
+		}
+	}
+	switch rel {
+	case "events.jsonl", "metadata.json":
+		return nil
+	}
+	if name, ok := strings.CutPrefix(rel, "attachments/"); ok && restorableAttachmentName.MatchString(name) {
+		return nil
+	}
+	return fmt.Errorf("backup file %q is not part of a Room backup", rel)
+}
+
+func portableComponent(name string) bool {
+	if name == "" || strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f || strings.ContainsRune(`:<>"|?*\`, r) {
+			return false
+		}
+	}
+	base, _, _ := strings.Cut(strings.ToUpper(name), ".")
+	switch base {
+	case "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$":
+		return false
+	}
+	if len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) && base[3] >= '0' && base[3] <= '9' {
+		return false
+	}
+	return true
 }
 
 func safeArchivePath(name string) (string, error) {

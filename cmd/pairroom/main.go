@@ -98,7 +98,7 @@ func run(args []string) error {
 		return runProtocol(args[1:])
 	case "version", "--version", "-v":
 		return runVersion(args[1:])
-	case "help", "--help", "-h":
+	case "help", "--help", "-help", "-h":
 		printHelp()
 		return nil
 	default:
@@ -107,7 +107,7 @@ func run(args []string) error {
 }
 
 func runProviders(args []string) error {
-	configPath := preparseValue(args, "--config")
+	configPath := flagValue(args, "--config")
 	flags := flag.NewFlagSet("pairroom providers", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	configFlag := flags.String("config", configPath, "PairRoom JSON configuration file")
@@ -243,7 +243,7 @@ func configuredAgentResolver(fileCfg config.File, mock bool) (*service.AgentReso
 // runService starts the process-wide Management Shell. Room runtimes are
 // activated lazily and remain isolated behind their own loopback listeners.
 func runService(args []string) (resultErr error) {
-	configPath := preparseValue(args, "--config")
+	configPath := flagValue(args, "--config")
 	fileCfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -431,7 +431,7 @@ func watchDaemonControlFile(ctx context.Context, path string, stop context.Cance
 }
 
 func runServe(args []string) error {
-	configPath := preparseValue(args, "--config")
+	configPath := flagValue(args, "--config")
 	fileCfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -639,7 +639,7 @@ type doctorReport struct {
 }
 
 func runDoctor(args []string) error {
-	configPath := preparseValue(args, "--config")
+	configPath := flagValue(args, "--config")
 	fileCfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -1060,18 +1060,6 @@ func browserURL(address, token string) string {
 		result.Fragment = fragment.Encode()
 	}
 	return result.String()
-}
-
-func preparseValue(args []string, name string) string {
-	for i, arg := range args {
-		if arg == name && i+1 < len(args) {
-			return args[i+1]
-		}
-		if strings.HasPrefix(arg, name+"=") {
-			return strings.TrimPrefix(arg, name+"=")
-		}
-	}
-	return ""
 }
 
 func firstLine(value string) string {

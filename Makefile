@@ -3,7 +3,10 @@ DIST ?= dist
 COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || printf dev)
 LAST_TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null || printf unknown)
 COMMITS_SINCE_TAG ?= $(shell git rev-list "$(LAST_TAG)..HEAD" --count 2>/dev/null || printf unknown)
-BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+# The commit's committer date in UTC keeps rebuilds of one commit reproducible
+# and identical to CI and Desktop builds; the wall clock is only a fallback
+# outside a Git checkout. Override with BUILD_DATE=... .
+BUILD_DATE ?= $(shell TZ=UTC git show -s --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd HEAD 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
 PYTHON ?= $(shell if command -v python3 >/dev/null 2>&1; then printf python3; elif command -v python >/dev/null 2>&1; then printf python; else printf python3; fi)
 DESKTOP_DIR ?= desktop
 DESKTOP_WAILS ?= wails3
@@ -27,7 +30,7 @@ ifeq ($(strip $(GOBIN)),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package desktop-update desktop-check clean docs-check browser-check js-check vuln vuln-binary coverage-contract lint lint-install
+.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package desktop-update desktop-check clean docs-check env-check env-check-contract browser-check js-check vuln vuln-binary coverage-contract lint lint-install deps-sync
 
 build:
 	mkdir -p $(DIST)
@@ -77,11 +80,14 @@ fmt:
 coverage-contract:
 	"$(PYTHON)" scripts/test_check_coverage.py
 
+env-check-contract:
+	"$(PYTHON)" scripts/test_env_check.py
+
 cover:
 	go test -count=1 -coverprofile=.coverage ./...
 	go tool cover -func=.coverage
 
-check: lint coverage-contract test race vet agent-contract release-contract docs-check desktop-check js-check
+check: lint coverage-contract env-check-contract test race vet agent-contract release-contract docs-check desktop-check js-check
 	@test -z "$$(gofmt -l $(GO_FILES))" || { echo 'Go files are not gofmt-clean'; gofmt -l $(GO_FILES); exit 1; }
 	@go test scripts/check_dependencies.go scripts/check_dependencies_test.go
 	@go run scripts/check_dependencies.go
@@ -151,9 +157,21 @@ clean:
 	@test "$(DIST)" = dist || { echo 'clean only accepts the default DIST=dist' >&2; exit 1; }
 	rm -rf -- "$(CURDIR)/dist" "$(CURDIR)/.coverage"
 
+# Maintainer-run after reviewing a dependency update; CI never approves versions.
+# Tidies both module locks, then records version-only changes of the approved
+# closure in the allowlist and notices; module-set changes still fail closed.
+deps-sync:
+	go mod tidy
+	cd "$(DESKTOP_DIR)" && go mod tidy
+	go run scripts/check_dependencies.go -write
+
 docs-check:
 	"$(PYTHON)" scripts/test_docs_check.py
 	"$(PYTHON)" scripts/docs-check.py
+
+# Read-only report of `make check` prerequisites; keep the recipe one short line.
+env-check:
+	"$(PYTHON)" scripts/env-check.py --make-version "$(MAKE_VERSION)" --python "$(PYTHON)" --desktop-python "$(DESKTOP_PYTHON)" --golangci-lint "$(GOLANGCI_LINT)" --golangci-lint-version "$(GOLANGCI_LINT_VERSION)"
 
 # Development-only: install scripts/requirements-browser.txt and its Chromium first.
 browser-check:

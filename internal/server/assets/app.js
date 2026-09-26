@@ -77,6 +77,7 @@
     runtimeRenderQueued: false,
     runtimeRenderScopes: new Set(),
     runtimeMessageRenderIDs: new Set(),
+    evictedMessageIDs: new Set(),
     csrfToken: '',
   };
 
@@ -191,7 +192,9 @@
     }
     state.snapshotPromise = (async () => {
       const limit = Math.min(1000, Math.max(250, state.snapshot?.messages?.length || 0));
+      const requestedAt = Date.now();
       state.snapshot = await api(`/api/v1/snapshot?message_limit=${limit}`);
+      state.snapshot.approvals = (state.snapshot.approvals || []).filter((item) => item.status === 'pending');
       // Replay events held during the fetch; applyEvent's sequence
       // deduplication drops anything the fresh snapshot already contains and
       // applies only what was committed after the server-side read.
@@ -200,8 +203,15 @@
       for (const heldEvent of held) {
         try { applyEvent(heldEvent); } catch { /* one malformed held event must not abort the replay */ }
       }
-      state.drafts = { slot1: '', slot2: '' };
-      state.draftCorrelation = { slot1: '', slot2: '' };
+      // A read-after-write keeps the live stream, so a Turn that is still
+      // running keeps its streaming preview; a resync starts clean.
+      for (const actor of ['slot1', 'slot2']) {
+        if (!keepStream || !draftStillStreaming(actor)) {
+          state.drafts[actor] = '';
+          state.draftCorrelation[actor] = '';
+        }
+      }
+      releaseStaleApprovalSubmissions(requestedAt);
       initializeRoomLocalState();
       if (state.snapshot?.meta?.id) document.body.dataset.roomId = state.snapshot.meta.id;
       render(initial);
@@ -213,6 +223,12 @@
       throw error;
     }).finally(() => { state.snapshotPromise = null; });
     return state.snapshotPromise;
+  }
+
+  function draftStillStreaming(actor) {
+    if (!state.drafts[actor] || !state.snapshot?.participants?.[actor]?.current_turn) return false;
+    const correlation = state.draftCorrelation[actor];
+    return !correlation || !(state.snapshot.messages || []).some((message) => message.from === actor && message.reply_to === correlation);
   }
 
   function closeEvents() {
@@ -275,8 +291,17 @@
           // incoming events so anything the server committed after its
           // snapshot read is replayed onto the fresh state instead of being
           // silently rolled back (the stream is never re-subscribed here).
+          // Order is preserved, but only durable events count against the
+          // durable cap: dropping one forces a (correct) resync through the
+          // sequence gap. Streaming deltas and other sequence-zero events have
+          // their own cap; losing some only shortens a transient preview.
           state.streamHold = state.streamHold || [];
-          if (state.streamHold.length < 500) state.streamHold.push(event);
+          state.streamHoldCounts = state.streamHold.length ? state.streamHoldCounts : { durable: 0, transient: 0 };
+          const bucket = Number(event.seq || 0) > 0 ? 'durable' : 'transient';
+          if (state.streamHoldCounts[bucket] < (bucket === 'durable' ? 500 : 5000)) {
+            state.streamHoldCounts[bucket] += 1;
+            state.streamHold.push(event);
+          }
           return;
         }
         applyEvent(event);
@@ -339,7 +364,8 @@
           // the "load older" page, which the window fields now advertise.
           let evicted = false;
           if (state.snapshot.messages.length > 1000) {
-            state.snapshot.messages.splice(0, state.snapshot.messages.length - 1000);
+            for (const removed of state.snapshot.messages.splice(0, state.snapshot.messages.length - 1000)) state.evictedMessageIDs.add(removed.id);
+            if (state.evictedMessageIDs.size > 1000) queueRender(); // e.g. while the timeline is detached
             evicted = true;
           }
           if (state.snapshot.message_window) {
@@ -403,7 +429,10 @@
       case 'approval.updated': {
         state.snapshot.approvals = state.snapshot.approvals || [];
         const index = state.snapshot.approvals.findIndex((item) => item.id === data.id);
-        if (index >= 0) state.snapshot.approvals[index] = data;
+        // Only pending requests are shown or acted on; settled ones leave the
+        // projection so a long session does not accumulate them.
+        if (data.status !== 'pending') { if (index >= 0) state.snapshot.approvals.splice(index, 1); }
+        else if (index >= 0) state.snapshot.approvals[index] = data;
         else state.snapshot.approvals.push(data);
         updateUnreadUI();
         renderScope = 'approvals';
@@ -517,7 +546,7 @@
     $('room-collaboration-label').textContent = t(collaboration.mode === 'default' ? 'room.collaboration.default' : 'room.collaboration.custom');
     $('room-collaboration-instructions').textContent = collaboration.instructions;
 	const chatDescription = $('chat-description');
-	if (chatDescription) chatDescription.textContent = ['You', displayName('slot1'), displayName('slot2')].join(' · ');
+	if (chatDescription) chatDescription.textContent = [t('common.you'), displayName('slot1'), displayName('slot2')].join(' · ');
     renderParticipants();
     updateDeliveryHint();
     renderTurnOwnerBar();
@@ -875,6 +904,7 @@
     }
 
     const nearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 140;
+    removeEvictedRows();
     const empty = timeline.querySelector('.timeline-empty');
     if (empty) empty.remove();
     const firstStreaming = timeline.querySelector('.message-row.streaming');
@@ -895,7 +925,22 @@
     if (nearBottom) requestAnimationFrame(scrollBottom);
   }
 
+  // Incremental appends mirror the in-memory cap: rows for evicted messages
+  // leave the DOM too, with any date separator they no longer follow.
+  function removeEvictedRows() {
+    if (!state.evictedMessageIDs.size) return;
+    for (const row of timeline.querySelectorAll('.message-row[data-message-id]')) {
+      if (state.evictedMessageIDs.has(row.dataset.messageId)) row.remove();
+    }
+    state.evictedMessageIDs.clear();
+    for (const separator of timeline.querySelectorAll('.timeline-date')) {
+      const next = separator.nextElementSibling;
+      if (!next || next.classList.contains('timeline-date')) separator.remove();
+    }
+  }
+
   function renderTimeline() {
+    state.evictedMessageIDs.clear();
     timeline.replaceChildren();
     renderTimelineScope();
     const items = [];
@@ -1184,6 +1229,9 @@
   function draftNode(actor, text, correlation) {
     const row = document.createElement('article');
     row.className = `message-row ${actor} streaming`;
+    // The timeline is a live log; a preview rewritten every 50 ms would be
+    // re-announced continuously. Only the final message.created row speaks.
+    row.setAttribute('aria-hidden', 'true');
     row.dataset.streamingActor = actor;
     row.dataset.streamingCorrelation = correlation || '';
     const avatar = document.createElement('div');
@@ -1290,12 +1338,13 @@
   // the oldest entries that no rendered <img> still references, so a visible
   // image can never lose its source.
   const MAX_MEDIA_OBJECT_URLS = 96;
-  function pruneMediaObjectURLs() {
+  function pruneMediaObjectURLs(keep) {
     const map = state.mediaObjectURLs;
     if (map.size <= MAX_MEDIA_OBJECT_URLS) return;
     for (const [key, value] of map) {
       if (map.size <= MAX_MEDIA_OBJECT_URLS) break;
-      if (typeof value !== 'string') continue;
+      // The URL just resolved is not in an <img> yet; its caller assigns it.
+      if (key === keep || typeof value !== 'string') continue;
       let inUse = false;
       for (const img of document.querySelectorAll('img')) {
         if (img.src === value) { inUse = true; break; }
@@ -1329,22 +1378,31 @@
     caption.append(name, meta);
     card.append(stage, caption);
 
-    loadAttachmentURL(attachment).then((url) => {
+    const showFailure = (message) => {
+      stage.replaceChildren();
+      const failed = document.createElement('span');
+      failed.className = 'image-loading image-error';
+      failed.textContent = t("ui.imageFailedToLoadValue", { value0: message });
+      stage.appendChild(failed);
+    };
+    const show = (retried) => loadAttachmentURL(attachment).then((url) => {
       if (!stage.isConnected && !card.isConnected) return;
       stage.replaceChildren();
       const image = document.createElement('img');
+      // A cached URL can be revoked by eviction before this image adopts it;
+      // drop that entry and fetch once more instead of showing a broken image.
+      image.addEventListener('error', () => {
+        if (state.mediaObjectURLs.get(attachment.id) === url) { state.mediaObjectURLs.delete(attachment.id); URL.revokeObjectURL(url); }
+        if (!retried) show(true);
+        else showFailure(attachment.name || t('ui.image'));
+      }, { once: true });
       image.src = url;
       image.alt = options.alt || attachment.name;
       image.loading = 'lazy';
       image.decoding = 'async';
       stage.appendChild(image);
-    }).catch((error) => {
-      stage.replaceChildren();
-      const failed = document.createElement('span');
-      failed.className = 'image-loading image-error';
-      failed.textContent = t("ui.imageFailedToLoadValue", { value0: (error.message) });
-      stage.appendChild(failed);
-    });
+    }).catch((error) => showFailure(error.message));
+    show(false);
     return card;
   }
 
@@ -1355,8 +1413,10 @@
     const pending = apiBlob(`/api/v1/attachments/${encodeURIComponent(attachment.id)}`)
       .then((blob) => {
         const url = URL.createObjectURL(blob);
+        // Re-insert so the Map's order ranks this entry newest for eviction.
+        state.mediaObjectURLs.delete(attachment.id);
         state.mediaObjectURLs.set(attachment.id, url);
-        pruneMediaObjectURLs();
+        pruneMediaObjectURLs(attachment.id);
         return url;
       })
       .catch((error) => {
@@ -1392,7 +1452,7 @@
     image.removeAttribute('src');
     image.alt = attachment.name;
     $('lightbox-title').textContent = attachment.name;
-    $('lightbox-meta').textContent = `${attachment.media_type || 'image'} · ${imageMeta(attachment)}`;
+    $('lightbox-meta').textContent = `${attachment.media_type || t('ui.image')} · ${imageMeta(attachment)}`;
     $('lightbox-counter').textContent = state.lightboxItems.length > 1
       ? `${state.lightboxIndex + 1} / ${state.lightboxItems.length}` : '';
     $('lightbox-prev').disabled = state.lightboxItems.length < 2;
@@ -1842,7 +1902,7 @@
     renderAttachmentStrip();
     updateComposerAvailability();
     const form = new FormData();
-    form.append('file', item.file, item.file.name || 'image');
+    form.append('file', item.file, item.file.name || 'image'); // multipart filename, not UI copy
     try {
       const attachment = await api('/api/v1/attachments', { method: 'POST', body: form, signal: item.controller.signal });
       if (item.removed || !state.pendingAttachments.includes(item)) {
@@ -1879,7 +1939,7 @@
       const status = item.status === 'uploading' ? t("ui.uploading")
         : item.status === 'error' ? t("ui.failedValue", { value0: (truncate(item.error, 48)) })
           : `${item.attachment?.width && item.attachment?.height ? `${item.attachment.width}×${item.attachment.height} · ` : ''}${formatBytes(item.attachment?.size || item.file.size)}`;
-      meta.textContent = `${item.file.name || 'image'} · ${status}`;
+      meta.textContent = `${item.file.name || t('ui.image')} · ${status}`;
       meta.title = item.error || item.file.name || '';
       const remove = document.createElement('button');
       remove.type = 'button';
@@ -2124,6 +2184,22 @@
     finally { state.permissionSubmitting.delete(actor); renderParticipants(); }
   }
 
+  const APPROVAL_CONFIRM_MS = 15000;
+  function releaseApprovalSubmission(id) {
+    if (typeof state.approvalSubmissions.get(id)?.submittedAt !== 'number') return;
+    state.approvalSubmissions.delete(id);
+    if (!(state.snapshot?.approvals || []).some((item) => item.id === id && item.status === 'pending')) return;
+    toast(t('ui.approvalStillPending'), 'error');
+    queueRuntimeRender(['approvals', 'composer']);
+  }
+
+  // A snapshot requested after the decision was accepted is authoritative.
+  function releaseStaleApprovalSubmissions(requestedAt) {
+    for (const [id, submission] of state.approvalSubmissions) {
+      if (typeof submission?.submittedAt === 'number' && submission.submittedAt <= requestedAt) releaseApprovalSubmission(id);
+    }
+  }
+
   async function resolveApproval(id, decision, button, extra = {}) {
     if (state.approvalSubmissions.has(id)) return;
     const approval = (state.snapshot?.approvals || []).find((item) => item.id === id);
@@ -2135,8 +2211,12 @@
         method: 'POST',
         body: JSON.stringify({ decision, ...extra }),
       });
-      // Remain disabled until durable SSE/snapshot state removes this request.
-      if (state.approvalSubmissions.has(id)) state.approvalSubmissions.set(id, 'submitted');
+      // Remain disabled until durable SSE/snapshot state removes this request,
+      // but not forever: a missed event must not strand the controls.
+      if (state.approvalSubmissions.has(id)) {
+        state.approvalSubmissions.set(id, { submittedAt: Date.now() });
+        setTimeout(() => releaseApprovalSubmission(id), APPROVAL_CONFIRM_MS);
+      }
       toast(decision === 'decline' || decision === 'cancel' ? t("ui.nativeRequestRejected") : t("ui.approvalSubmitted"), 'success');
     } catch (error) {
       state.approvalSubmissions.delete(id);
@@ -2398,6 +2478,24 @@
       // An equal instant takes the later arrival, as before.
       if (summaryInstant(summary.updated_at) >= summaryInstant(current.updated_at)) state.snapshot.turns[index] = summary;
     }
+    pruneTurnSummaries();
+  }
+
+  // Mirror the server snapshot window: the newest Turns, each participant's
+  // current Turn, and Turns correlated with loaded messages. Prune with slack
+  // so live summaries do not re-sort on every update.
+  const TURN_WINDOW = 40;
+  function pruneTurnSummaries() {
+    const turns = state.snapshot.turns;
+    if (turns.length <= TURN_WINDOW * 2) return;
+    const related = new Set((state.snapshot.messages || []).map((message) => message.id));
+    const current = new Set(Object.entries(state.snapshot.participants || {})
+      .filter(([, participant]) => participant?.current_turn).map(([actor, participant]) => `${actor}:${participant.current_turn}`));
+    const pinned = (turn) => current.has(turn.id) || (turn.message_ids || []).some((id) => related.has(id));
+    if (turns.filter((turn) => !pinned(turn)).length <= TURN_WINDOW * 2) return;
+    const newest = new Set(turns.map((turn) => [summaryInstant(turn.updated_at || turn.started_at), turn])
+      .sort(([a], [b]) => (a < b) - (a > b)).slice(0, TURN_WINDOW).map(([, turn]) => turn));
+    state.snapshot.turns = turns.filter((turn) => newest.has(turn) || pinned(turn));
   }
 
   async function loadOlderMessages(button) {

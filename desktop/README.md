@@ -20,6 +20,7 @@ The Wails layer owns only native desktop concerns:
 - hide-to-tray behavior, with a tray menu that opens the window, opens the authenticated Management Shell in the default browser, reports Service ownership, restarts only the Desktop-owned embedded Service, and reveals the Service data folder;
 - explicit native quit;
 - explicit, native launch-at-login settings;
+- an opt-in, read-only check for new releases;
 - platform packaging.
 
 The root and desktop modules use the latest stable Go release. The root permits only the pinned CGo-free SQLite dependency closure used for read-only CC Switch access; Wails and its GUI dependencies remain confined to `desktop/go.mod`.
@@ -36,12 +37,40 @@ The setting is unavailable in ordinary browsers. It does not remove or
 reconfigure a daemon installed previously; daemon administration remains an
 explicit CLI operation.
 
+## Check for updates
+
+**Settings → Desktop → Updates → Check for updates** is off by default. When
+you turn it on, Desktop sends at most one automatic request a day, plus one for
+each explicit **Check now**, to
+`https://api.github.com/repos/sean2077/pairroom/releases/latest`. The request
+has a 10-second timeout, no credentials, cookies, or installation identifier,
+and only a `PairRoom-Desktop/<version>` User-Agent. Desktop accepts only a
+non-draft, non-prerelease `vX.Y.Z` tag and compares it numerically with the
+running version. Automatic failures stay quiet; only **Check now** reports that
+it could not check.
+
+When a newer stable release exists, Settings shows a notice and the tray menu
+gains **PairRoom X.Y.Z Available…**. Both open that version's GitHub release
+page in the default browser, with a URL built from the verified version, not
+taken from the response. Desktop never downloads or installs anything: upgrade
+through the channel you installed with (see
+[Installation](../docs/INSTALLATION.md#upgrade-and-uninstall-mechanics)).
+Package-managed installations such as winget show the same notice; upgrade with
+the package manager.
+
+The choice, the last check time, and the newest version seen are stored in
+`update-check.json` in the Desktop preference directory (`PairRoom Desktop`
+under the OS user configuration directory, beside the macOS command-line tool
+offer), not in the Service data root or Room events. Turning the check off
+hides the notice and stops requests. A missing or malformed file means off.
+
 ## Development
 
-Install the latest stable Go release and the pinned Wails CLI:
+Install the latest stable Go release and the Wails CLI pinned by `desktop/go.mod`
+(from the repository root; CI resolves the version the same way):
 
 ```bash
-go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.24
+go install "github.com/wailsapp/wails/v3/cmd/wails3@$(go -C desktop list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
 ```
 
 Prepare generated packaging assets and build the host platform:
@@ -117,7 +146,7 @@ The desktop host accepts these optional environment variables:
 - `PAIRROOM_DESKTOP_CONFIG`: PairRoom JSON configuration for an explicitly embedded Service;
 - `PAIRROOM_DESKTOP_DATA_ROOT`: absolute Service data root for an explicitly embedded Service.
 
-Quit never stops an external daemon. Startup may restart an installed daemon only after recovering a crash-stale lock whose recorded PID is gone. An embedded Service is shut down in the existing safe order: stop Management admission, drain Room runtimes without interrupting active native Turns, then release `service.lock`.
+Quit never stops an external daemon. Startup may restart an installed daemon only after recovering a crash-stale lock whose recorded PID is gone. An embedded Service is shut down in the existing safe order: stop Management admission, drain Room runtimes without interrupting active native Turns, then release `service.lock`. The tray **Restart Service** item runs the same drain before starting a replacement; a Quit during that drain waits for it (within the same shutdown timeout), and a drain that fails keeps `service.lock`, starts no replacement, and is retried on Quit.
 
 ## Packages
 
@@ -126,7 +155,8 @@ Quit never stops an external daemon. Startup may restart an installed daemon onl
 - Linux amd64: AppImage and Debian package (the `.deb` includes `/usr/local/bin/pairroom`);
 - Windows amd64: Inno Setup installer (`pairroom-desktop-vX.Y.Z-windows-amd64-setup.exe`) that installs `PairRoom.exe` and `bin\pairroom.exe`, and by default appends that `bin` directory to the machine PATH (`addtopath` task);
 - macOS arm64: `.app.zip` with the CLI at `Contents/Helpers/pairroom` and host at `Contents/MacOS/PairRoom`; Desktop can link `/usr/local/bin/pairroom` to that CLI on request (`internal/clilink`);
-- macOS amd64: `.app.zip` with the CLI at `Contents/Helpers/pairroom` and host at `Contents/MacOS/PairRoom`.
+- macOS amd64: `.app.zip` with the CLI at `Contents/Helpers/pairroom` and host at `Contents/MacOS/PairRoom`;
+- `pairroom-desktop-vX.Y.Z-SHA256SUMS`: SHA-256 of every package above. `scripts/collect-artifacts.py` writes a per-platform `SHA256SUMS` beside each package set; the publish job re-verifies every package against it with `scripts/merge-checksums.py`, attaches the merged list, then re-downloads the attached desktop assets and checks them against it.
 
 Release packages are unsigned development artifacts until Windows code signing and Apple Developer ID signing/notarization actually run.
 

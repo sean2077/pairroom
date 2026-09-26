@@ -1,11 +1,15 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Install the PairRoom CLI from GitHub Releases.
+# POSIX sh: this script must run under dash, busybox sh, and bash alike.
 # Usage:
 #   curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh | sh
 #   PAIRROOM_VERSION=v1.2.0 PREFIX="$HOME/.local" sh install.sh
-set -euo pipefail
+# PAIRROOM_REPOSITORY overrides the owner/name of the release repository (for
+# forks); the generic GITHUB_REPOSITORY is deliberately ignored because every
+# GitHub Actions job sets it to the calling repository.
+set -eu
 
-REPO="${GITHUB_REPOSITORY:-sean2077/pairroom}"
+REPO="${PAIRROOM_REPOSITORY:-sean2077/pairroom}"
 PREFIX="${PREFIX:-}"
 REQUESTED_VERSION="${PAIRROOM_VERSION:-}"
 
@@ -15,57 +19,57 @@ die() {
 }
 
 cli_os() {
-    local os
-    os="${PAIRROOM_TEST_OS:-$(uname -s)}"
-    os="$(printf '%s' "$os" | tr '[:upper:]' '[:lower:]')"
-    case "$os" in
+    _os="${PAIRROOM_TEST_OS:-$(uname -s)}"
+    _os="$(printf '%s' "$_os" | tr '[:upper:]' '[:lower:]')"
+    case "$_os" in
         linux) printf 'linux\n' ;;
         darwin) printf 'darwin\n' ;;
         mingw*|msys*|cygwin*) printf 'windows\n' ;;
-        *) die "unsupported OS: $os (need linux, darwin, or Windows)" ;;
+        *) die "unsupported OS: $_os (need linux, darwin, or Windows)" ;;
     esac
 }
 
 cli_arch() {
-    local arch
-    arch="${PAIRROOM_TEST_ARCH:-$(uname -m)}"
-    case "$arch" in
+    _arch="${PAIRROOM_TEST_ARCH:-$(uname -m)}"
+    case "$_arch" in
         x86_64 | amd64) printf 'amd64\n' ;;
         arm64 | aarch64) printf 'arm64\n' ;;
-        *) die "unsupported architecture: $arch" ;;
+        *) die "unsupported architecture: $_arch" ;;
     esac
 }
 
 asset_name() {
-    local os="$1" arch="$2" tag="$3"
-    local name="pairroom-cli-${tag}-${os}-${arch}"
-    if [[ "$os" == windows ]]; then
-        name="${name}.exe"
+    _name="pairroom-cli-${3}-${1}-${2}"
+    if [ "$1" = windows ]; then
+        _name="${_name}.exe"
     fi
-    printf '%s\n' "$name"
+    printf '%s\n' "$_name"
 }
 
 resolve_tag() {
-    local tag="$REQUESTED_VERSION"
-    if [[ -n "$tag" ]]; then
-        case "$tag" in
-            v*) printf '%s\n' "$tag" ;;
-            *) printf 'v%s\n' "$tag" ;;
+    if [ -n "$REQUESTED_VERSION" ]; then
+        case "$REQUESTED_VERSION" in
+            v*) printf '%s\n' "$REQUESTED_VERSION" ;;
+            *) printf 'v%s\n' "$REQUESTED_VERSION" ;;
         esac
         return 0
     fi
-    tag="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" |
+    # No pipefail in POSIX sh: fetch first so a failed request is not masked
+    # by the status of the parsing pipeline.
+    _json="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")" ||
+        die "could not resolve the latest PairRoom release tag"
+    _tag="$(printf '%s\n' "$_json" |
         sed -n 's/.*"tag_name":[[:space:]]*"\(v[^"]*\)".*/\1/p' | head -n 1)"
-    [[ -n "$tag" ]] || die "could not resolve the latest PairRoom release tag"
-    printf '%s\n' "$tag"
+    [ -n "$_tag" ] || die "could not resolve the latest PairRoom release tag"
+    printf '%s\n' "$_tag"
 }
 
 install_dir() {
-    if [[ -n "$PREFIX" ]]; then
+    if [ -n "$PREFIX" ]; then
         printf '%s/bin\n' "${PREFIX%/}"
         return 0
     fi
-    if [[ -w /usr/local/bin ]] || [[ "$(id -u)" -eq 0 ]]; then
+    if [ -w /usr/local/bin ] || [ "$(id -u)" -eq 0 ]; then
         printf '/usr/local/bin\n'
         return 0
     fi
@@ -74,16 +78,16 @@ install_dir() {
 
 OS="$(cli_os)"
 ARCH="$(cli_arch)"
-if [[ "$OS" == linux && "$ARCH" != amd64 ]]; then
+if [ "$OS" = linux ] && [ "$ARCH" != amd64 ]; then
     die "Linux CLI releases are amd64 only (this host is ${ARCH})"
 fi
-if [[ "$OS" == windows && "$ARCH" != amd64 ]]; then
+if [ "$OS" = windows ] && [ "$ARCH" != amd64 ]; then
     die "Windows CLI releases are amd64 only (this host is ${ARCH})"
 fi
 
 TAG="$(resolve_tag)"
 ASSET="$(asset_name "$OS" "$ARCH" "$TAG")"
-if [[ "${1:-}" == "--print-asset" ]]; then
+if [ "${1:-}" = "--print-asset" ]; then
     printf '%s\n' "$ASSET"
     exit 0
 fi
@@ -92,14 +96,19 @@ URL="https://github.com/${REPO}/releases/download/${TAG}/${ASSET}"
 DEST_DIR="$(install_dir)"
 mkdir -p "$DEST_DIR"
 DEST="${DEST_DIR}/pairroom"
-if [[ "$OS" == windows ]]; then
+if [ "$OS" = windows ]; then
     DEST="${DEST}.exe"
 fi
 
 tmp="$(mktemp)"
 tmp_sums="$(mktemp)"
 trap 'rm -f "$tmp" "$tmp_sums"' EXIT
-curl -fsSL "$URL" -o "$tmp"
+# POSIX shells do not run the EXIT trap on a fatal signal; exit explicitly so
+# an interrupted download still removes its temporary files.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+curl -fsSL "$URL" -o "$tmp" || die "could not download ${ASSET} for ${TAG}"
 
 # Verify the published release checksum before installing: a truncated or
 # tampered download must never become the pairroom binary on PATH.
@@ -107,7 +116,7 @@ SUMS_URL="https://github.com/${REPO}/releases/download/${TAG}/SHA256SUMS"
 curl -fsSL "$SUMS_URL" -o "$tmp_sums" ||
     die "could not download SHA256SUMS for ${TAG}; refusing to install an unverified binary"
 expected="$(awk -v name="$ASSET" '$2 == name { print $1 }' "$tmp_sums" | head -n 1)"
-[[ -n "$expected" ]] || die "SHA256SUMS for ${TAG} has no entry for ${ASSET}"
+[ -n "$expected" ] || die "SHA256SUMS for ${TAG} has no entry for ${ASSET}"
 if command -v sha256sum >/dev/null 2>&1; then
     actual="$(sha256sum "$tmp" | awk '{ print $1 }')"
 elif command -v shasum >/dev/null 2>&1; then
@@ -115,12 +124,13 @@ elif command -v shasum >/dev/null 2>&1; then
 else
     die "neither sha256sum nor shasum is available; cannot verify the downloaded binary"
 fi
-[[ "$actual" == "$expected" ]] || die "checksum mismatch for ${ASSET}: expected ${expected}, got ${actual}"
+[ -n "$actual" ] && [ "$actual" = "$expected" ] ||
+    die "checksum mismatch for ${ASSET}: expected ${expected}, got ${actual}"
 
 chmod +x "$tmp"
 mv "$tmp" "$DEST"
 rm -f "$tmp_sums"
-trap - EXIT
+trap - EXIT HUP INT TERM
 
 printf 'Installed PairRoom CLI %s to %s\n' "$TAG" "$DEST"
 case ":$PATH:" in

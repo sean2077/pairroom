@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -325,5 +326,178 @@ func TestRuntimePolicyMutationAndArchivedExternalOpen(t *testing.T) {
 	server.Handler().ServeHTTP(archived, managementRequest(http.MethodPost, "/api/v1/rooms/"+room.ID+"/open-browser", "", true))
 	if archived.Code != http.StatusConflict || !strings.Contains(archived.Body.String(), "room_archived") {
 		t.Fatalf("archived open-browser status=%d body=%s", archived.Code, archived.Body.String())
+	}
+}
+
+// The Service snapshot is readable by the relay-setup token and by every
+// Management client. It must never carry a Room runtime bearer, whose URL
+// fragment would otherwise grant full Room View authority to that caller.
+func TestServiceSnapshotNeverCarriesRoomRuntimeBearer(t *testing.T) {
+	registry, project := testRegistry(t, testGitRepo(t))
+	room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+		ProjectID: project.ID, Name: "Bearer Room", Bindings: specs(BindingNew, BindingNew, "bearer"),
+	}, SyntheticProvisioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory := &loopbackProxyFactory{base: "http://127.0.0.1:1/", token: "room-runtime-bearer"}
+	manager, err := NewRuntimeManager(registry, factory.open, RuntimeManagerConfig{
+		Limit: 2, IdleTimeout: time.Hour, PollInterval: 5 * time.Millisecond, CloseTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = manager.Shutdown(ctx)
+	})
+	server, err := NewManagementServer(ManagementServerConfig{
+		Registry: registry, Runtimes: manager, Provisioner: SyntheticProvisioner{}, Token: "management-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activateRuntime(t, manager, room.ID)
+
+	for name, bearer := range map[string]string{"scoped relay-setup token": server.cliToken, "full Management token": server.Token()} {
+		t.Run(name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := managementRequest(http.MethodGet, "/api/v1/service", "", false)
+			request.Header.Set("Authorization", "Bearer "+bearer)
+			server.Handler().ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("service read status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			body := recorder.Body.String()
+			if strings.Contains(body, "room-runtime-bearer") || strings.Contains(body, "#token=") {
+				t.Fatalf("service snapshot leaked a Room runtime bearer: %s", body)
+			}
+			var snapshot struct {
+				Runtimes []map[string]any `json:"runtimes"`
+			}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &snapshot); err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, runtime := range snapshot.Runtimes {
+				if runtime["room_id"] != room.ID {
+					continue
+				}
+				found = true
+				if runtime["phase"] != string(RuntimeActive) {
+					t.Fatalf("runtime was not reported active: %#v", runtime)
+				}
+				if _, ok := runtime["url"]; ok {
+					t.Fatalf("runtime status exposed a url field: %#v", runtime)
+				}
+			}
+			if !found {
+				t.Fatalf("active Room missing from snapshot: %s", body)
+			}
+		})
+	}
+
+	activate := httptest.NewRecorder()
+	server.Handler().ServeHTTP(activate, managementRequest(http.MethodPost, "/api/v1/rooms/"+room.ID+"/activate", "", true))
+	if activate.Code != http.StatusOK || strings.Contains(activate.Body.String(), "room-runtime-bearer") {
+		t.Fatalf("activation response status=%d leaked or regressed: %s", activate.Code, activate.Body.String())
+	}
+}
+
+// An open Room tab keeps a proxied SSE stream on the Management listener.
+// Graceful shutdown must end that stream promptly instead of waiting for the
+// whole shutdown deadline, while ordinary requests still drain.
+func TestManagementShutdownEndsProxiedRoomEventStream(t *testing.T) {
+	streamOpen := make(chan struct{})
+	var openOnce sync.Once
+	roomServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/events" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, ": ready\n\n")
+		w.(http.Flusher).Flush()
+		openOnce.Do(func() { close(streamOpen) })
+		<-r.Context().Done()
+	}))
+	defer roomServer.Close()
+
+	registry, project := testRegistry(t, testGitRepo(t))
+	room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+		ProjectID: project.ID, Name: "Stream Room", Bindings: specs(BindingNew, BindingNew, "stream"),
+	}, SyntheticProvisioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory := &loopbackProxyFactory{base: roomServer.URL + "/", token: "runtime-secret"}
+	manager, err := NewRuntimeManager(registry, factory.open, RuntimeManagerConfig{
+		Limit: 2, IdleTimeout: time.Hour, PollInterval: 5 * time.Millisecond, CloseTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = manager.Shutdown(ctx)
+	})
+	server, err := NewManagementServer(ManagementServerConfig{
+		Registry: registry, Runtimes: manager, Provisioner: SyntheticProvisioner{}, Token: "management-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activateRuntime(t, manager, room.ID)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(listener) }()
+
+	request, err := http.NewRequest(http.MethodGet, "http://"+listener.Addr().String()+"/api/v1/rooms/"+room.ID+"/surface/api/v1/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer management-secret")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("proxied event stream status=%d", response.StatusCode)
+	}
+	select {
+	case <-streamOpen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("proxied event stream did not open")
+	}
+	streamDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, response.Body)
+		close(streamDone)
+	}()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("Shutdown with an open Room event stream err=%v, want a prompt graceful stop", err)
+	}
+	select {
+	case <-streamDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("proxied event stream stayed open after Shutdown")
+	}
+	select {
+	case err := <-serveDone:
+		if err != nil {
+			t.Fatalf("Serve error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not return after Shutdown")
 	}
 }

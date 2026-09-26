@@ -31,7 +31,7 @@ Management Service ---- Project registry / Room lifecycle / user preferences
 | Wake and review evidence | `internal/claudewake/`, `internal/review/` | Private Claude inbox transport and bounded opt-in Git observations; neither grants execution authority |
 | Protocol and prompts | `internal/protocol/`, `internal/prompt/` | Versioned contracts, stable instructions, dynamic envelopes |
 | Configuration | `internal/config/`, `internal/model/`, `internal/ccswitch/` | Strict selection/configuration and read-only supported Provider resolution |
-| Persistence/media | `internal/store/`, `internal/attachment/`, `internal/archive/` | JSONL integrity/replay, verified attachments and bounded backup/restore |
+| Persistence/media | `internal/store/`, `internal/attachment/`, `internal/archive/`, `internal/atomicfile/` | JSONL integrity/replay, verified attachments and bounded backup/restore |
 | API/browser assets | `internal/server/`, `internal/webui/` | Authentication, HTTP/SSE and shared client projections |
 | Desktop | [separate module](../desktop/README.md) | Window/tray/login and packaging over the same Service |
 
@@ -53,7 +53,7 @@ Project/per-Project Room display order lives in `navigation-order.json`, not Roo
 
 A Project is a canonical Git workspace, not a copied checkout. Provisioning builds privately and publishes only when complete. `service.lock` protects one Service writer per data root, separately from Embedded Turn ownership.
 
-Native Runtime/session identity is globally unique across Bindings, including archived Rooms. Embedded deferred new Bindings materialize only on real acceptance; existing Bindings must resume exactly. Native binds associate immediately from official tool-call session metadata, with generation-scoped credentials and later hook confirmation. Checkpoint/event/uniqueness failure cannot authorize a second owner or silently substitute a session.
+Native Runtime/session identity is globally unique across Bindings, including archived Rooms. Embedded deferred new Bindings materialize only on real acceptance; existing Bindings must resume exactly, and a runtime that reports a different session during a bound Turn (for example in Claude Code `system/init` or `result`) fails that Turn and is stopped rather than replacing the bound ID. Native binds associate immediately from official tool-call session metadata, with generation-scoped credentials and later hook confirmation. Checkpoint/event/uniqueness failure cannot authorize a second owner or silently substitute a session.
 
 Durable actors are `slot1`/`slot2`; RuntimeKind independently selects Claude Code, Codex, or Grok Build. Routing, policy projection, resume, and events must use that selection, not infer a vendor from a slot. `claude`/`codex` remain relay CLI input aliases only.
 
@@ -67,7 +67,7 @@ Names are display metadata. Rename preserves IDs/Bindings and uses a safe lifecy
 
 Embedded has one Room-owned coordination FIFO, not a hidden adapter queue. At most one participant owns a native Turn; another waits for a reliable terminal boundary or confirmed exit.
 
-A Message is not a Turn. Several accepted same-target inputs can share one Turn. `steer` uses typed native results: unavailable/rejected input queues once; an unknown result fails visibly rather than being treated as not submitted. Explicit `queue` and cross-Agent input wait for ownership.
+A Message is not a Turn. Several accepted same-target inputs can share one Turn. `steer` uses typed native results: unavailable/rejected input queues once; an unknown result fails visibly rather than being treated as not submitted. A Turn start whose outcome is unknown (sent but not answered) is neither failed nor resubmitted: it stays `submitting` and keeps the Turn owned until the runtime reports that input (late acceptance, rejection, completion, confirmed exit) or the participant is stopped. Explicit `queue` and cross-Agent input wait for ownership.
 
 Cancel precisely removes waiting work. Interruption after acceptance may stop the entire Turn. Newer human instructions invalidate stale not-yet-started Agent relays, not accepted side effects. Retry creates an auditable new Message; concurrent pending retries for the same source/participant are rejected.
 
@@ -88,10 +88,12 @@ This section describes **Embedded adapters**, not control over Native-hosted ses
 | Runtime | Transport and boundary |
 |---|---|
 | Claude Code | Long-lived stream-json/control transport, native initialization, tools/questions, permissions and exact session handling; steering reports unavailable rather than false acceptance |
-| Codex | Long-lived app-server; native Turn start/steer/completed and thread identity; generic errors do not release ownership |
+| Codex | Long-lived app-server; native Turn start/steer/completed and thread identity; before the `turn/start` response only the input's `clientId` echo binds a Turn, and a steered input is settled by its `turn/steer` response; an unanswered `turn/start` and generic errors do not release ownership |
 | Grok Build | ACP stdio via `grok --no-auto-update agent stdio`; supported interjection and native Turn/session operations; prompts travel over ACP, not argv/files |
 
 New Grok sessions receive `_meta.rules`; exactly loaded sessions receive current bootstrap once in their first PairRoom prompt without replacing the native system prompt. PairRoom advertises `terminal=false` to retain native tool execution; unsupported privileged reverse requests fail closed.
+
+Each adapter reads one stdout record at a time, up to 16 MiB for Codex and Grok Build and 8 MiB for Claude Code. A larger record or any other stdout read failure is fatal rather than skipped, because a dropped response or terminal cannot be recovered: the adapter reports `adapter.stream_error`, stops the vendor process tree, and its exit fails outstanding input and releases the Turn owner with that reason.
 
 Empty overrides retain native inheritance. Supported CC Switch references resolve at Embedded creation/activation without modifying the external current Profile. Secrets enter only the selected child environment, not argv, stored selections, UI/logs, or a second secret store. Failures cannot fall back to another Provider. [Configuration](CONFIGURATION.md) owns mappings; [Support](../SUPPORT.md#compatibility-policy) owns compatibility evidence.
 
@@ -115,6 +117,8 @@ Native-hosted approvals, permissions, steering, and interruption stay in the ori
 
 Capacity limits active **Embedded** adapters, not durable Room count. Idle reclaim cannot preempt an active Turn just to free capacity, and uncertain cleanup retains its capacity claim. Native Rooms are exempt: no vendor process, no capacity queue/slot, no capacity eviction. A browser disconnect or hidden window is not completion evidence.
 
+An Embedded adapter owns its vendor process tree. On Windows each CLI runs in a kill-on-close Job Object, so stopping or interrupting a runtime launched through an npm `.cmd` shim ends the real CLI rather than only `cmd.exe`. Stop and Claude interrupt report success, and settle pending input, only after that tree has exited; a tree still holding its output pipes after a bounded wait is an uncertain stop that keeps the process recorded for a retried stop.
+
 Desktop uses an explicit validated URL, installed daemon, or embedded Service when none exists. It never installs a daemon implicitly or competes with a live lock owner; stale recovery proves PID exit first. [Operations](OPERATIONS.md) owns close/quit/login/archive and backup behavior.
 
 ## HTTP, browser, and privacy boundaries
@@ -137,7 +141,7 @@ Project-name links navigate to Project pages; disclosure expands Rooms separatel
 
 ## Native host mode
 
-`internal/relay/` serializes durable appends before publishing projections. Each slot has its own FIFO; different original sessions may run independently. Binding generation authenticates publication/collection; unbind/replacement revokes old credentials without stopping accepted native work. Archive retains ownership and fails closed on missing Native data.
+`internal/relay/` serializes durable appends before publishing projections. Each slot has its own FIFO; different original sessions may run independently. Binding generation authenticates publication/collection; unbind/replacement revokes old credentials without stopping accepted native work. Archive retains ownership and fails closed on missing Native data. Archive and rename hold a Runtime admission barrier from suspension through their lifecycle commit, so relay traffic cannot reactivate the Room in between, and a Service lifecycle append refuses while any Runtime still owns the Room's Event Log.
 
 `internal/relayclient/` associates from `CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`, or `GROK_SESSION_ID` at bind. Approved hooks re-confirm that identity and may record a transcript reference, but never parse vendor transcripts or implicitly rebind. Session/workspace hints grant neither trust nor file access. Private unconfirmed attempts cannot overwrite active credentials before confirmation. Same-user process access is outside the isolation claim.
 

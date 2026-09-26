@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sean2077/pairroom/internal/atomicfile"
 	"github.com/sean2077/pairroom/internal/model"
 )
 
@@ -300,9 +301,19 @@ func installed(root string, kind model.RuntimeKind) error {
 		if present {
 			return nil
 		}
-		return errors.New("zero approved relay-hook setup is unsupported: run pairroom relay install --runtime grok, or install --runtime claude so Grok can reuse that project hook, review the project hooks in your harness, then bind again")
+		return fmt.Errorf("no PairRoom Stop hook is installed for grok: run pairroom relay install --runtime grok, or install --runtime claude so Grok can reuse that project hook, approve it (%s), then bind again. Bind checks installation only; an unapproved hook never publishes Stop replies", approvalPlace(kind))
 	}
-	return fmt.Errorf("zero approved relay-hook setup is unsupported: run pairroom relay install --runtime %s, review the project hooks in your harness, then bind again", kind)
+	return fmt.Errorf("no PairRoom Stop hook is installed for %s: run pairroom relay install --runtime %s, approve it (%s), then bind again. Bind checks installation only; an unapproved hook never publishes Stop replies", kind, kind, approvalPlace(kind))
+}
+
+// hookNotRunHint is local-only evidence for status/doctor: PairRoom cannot see
+// approval, but a binding whose Stop hook never ran after a finished turn is
+// the visible symptom of an unapproved or unloaded hook. No extra round trip.
+func hookNotRunHint(s State) string {
+	if s.LastHookAt != "" {
+		return ""
+	}
+	return fmt.Sprintf("No Stop hook has run for this binding yet. Expected until a turn finishes after bind; if one has, the hook is probably not approved or not loaded: review it (%s).", approvalPlace(s.Runtime))
 }
 
 // editHooks changes only exact PairRoom hook commands, preserving other hooks
@@ -529,7 +540,7 @@ func atomicText(path, text string, mode os.FileMode) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(tmp.Name(), path)
+	return atomicfile.Replace(tmp.Name(), path)
 }
 func ignoreWorkspace(root string) error {
 	path := filepath.Join(root, ".gitignore")

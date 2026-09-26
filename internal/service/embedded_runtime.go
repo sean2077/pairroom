@@ -228,6 +228,10 @@ type embeddedRuntime struct {
 	token   string
 	engine  *room.Engine
 	cancel  context.CancelFunc
+	// stopReclaim ends attachment reclamation; reclaimed closes once it has
+	// returned, so no pass outlives the Room store.
+	stopReclaim context.CancelFunc
+	reclaimed   chan struct{}
 
 	http      *http.Server
 	listener  net.Listener
@@ -421,7 +425,11 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 		listener:  listener,
 		serveDone: make(chan error, 1),
 		poll:      cfg.DrainPollInterval,
+		reclaimed: make(chan struct{}),
 	}
+	var reclaimCtx context.Context
+	reclaimCtx, runtime.stopReclaim = context.WithCancel(runtimeCtx)
+	go runAttachmentReclaim(reclaimCtx, runtime.reclaimed, durableRoom.ID, attachmentReclaimDelay, attachmentReclaimInterval, engine.ReclaimAttachments)
 	runtime.lastActivity.Store(time.Now().UTC().UnixNano())
 	runtime.token = token
 	runtime.baseURL = roomViewBaseURL(listener.Addr())
@@ -647,6 +655,10 @@ func (r *embeddedRuntime) close(ctx context.Context) (error, bool) {
 			// left to be uncertain about.
 			result = errors.Join(result, fmt.Errorf("serve Room View: %w", err))
 		}
+	}
+	if r.stopReclaim != nil {
+		r.stopReclaim()
+		<-r.reclaimed
 	}
 	if r.engine != nil {
 		if err := r.engine.Close(); err != nil {

@@ -66,8 +66,44 @@ async function main() {
     await assert.rejects(b.api.readStartup(), /transport failed/);
     assert.equal(b.timers.size, 0);
   }
+  {
+    const b = bridge();
+    assert.equal(b.sent.length, 0, 'script load must not read or enable update checks');
+    const read = b.api.readUpdates();
+    const get = b.sent.at(-1);
+    assert.deepEqual({kind: get.kind, action: get.action, enabled: get.enabled}, {kind: 'pairroom.desktop.updates', action: 'get', enabled: undefined});
+    // A slow update request must not block the launch-at-login lane.
+    const startup = b.api.readStartup();
+    b.api.receive({id: b.sent.at(-1).id, enabled: true});
+    assert.equal(await startup, true);
+    await assert.rejects(b.api.checkUpdates(), /already pending/);
+    b.api.receive({id: get.id, enabled: false, current: '5.6.0'});
+    assert.deepEqual({...await read}, {enabled: false, current: '5.6.0', latest: '', url: '', checkedAt: ''});
+    const write = b.api.setUpdates(true);
+    assert.deepEqual({action: b.sent.at(-1).action, enabled: b.sent.at(-1).enabled}, {action: 'set', enabled: true});
+    b.api.receive({id: b.sent.at(-1).id, enabled: true, current: '5.6.0'});
+    assert.equal((await write).enabled, true);
+    await assert.rejects(b.api.setUpdates('true'), /boolean/);
+    const check = b.api.checkUpdates();
+    const checkRequest = b.sent.at(-1);
+    assert.equal(checkRequest.action, 'check'); assert.equal(checkRequest.enabled, undefined);
+    b.api.receive({id: checkRequest.id, enabled: true, current: '5.6.0', latest: '5.7.0',
+      url: 'https://github.com/sean2077/pairroom/releases/tag/v5.7.0', checked_at: '2026-09-27T12:00:00Z'});
+    assert.deepEqual({...await check}, {enabled: true, current: '5.6.0', latest: '5.7.0',
+      url: 'https://github.com/sean2077/pairroom/releases/tag/v5.7.0', checkedAt: '2026-09-27T12:00:00Z'});
+    const failed = b.api.checkUpdates();
+    b.api.receive({id: b.sent.at(-1).id, enabled: true, current: '5.6.0', latest: '5.7.0', error: 'offline'});
+    await assert.rejects(failed, (error) => error.message === 'offline' && error.status.latest === '5.7.0');
+    const broken = b.api.readUpdates();
+    b.api.receive({id: b.sent.at(-1).id, error: 'preference directory unavailable'});
+    await assert.rejects(broken, /preference directory unavailable/);
+    const before = b.sent.length;
+    b.api.openExternal('https://github.com/sean2077/pairroom/releases/tag/v5.7.0');
+    assert.deepEqual(b.sent.slice(before), [{kind: 'pairroom.desktop.browser', url: 'https://github.com/sean2077/pairroom/releases/tag/v5.7.0'}]);
+    assert.equal(b.timers.size, 0);
+  }
   const html = fs.readFileSync('internal/service/assets/index.html', 'utf8');
   assert.ok(html.indexOf('/_pairroom/desktop.js') < html.indexOf('/management.js'), 'install native bridge before rendering Settings');
-  console.log('desktop settings native transport, isolation, timeout, and error contracts: ok');
+  console.log('desktop settings native transport, isolation, timeout, error, and update-check contracts: ok');
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

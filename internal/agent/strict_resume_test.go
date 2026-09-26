@@ -20,6 +20,9 @@ func TestMain(m *testing.M) {
 	if os.Getenv("PAIRROOM_CLAUDE_HELPER") == "1" {
 		os.Exit(runClaudeStrictResumeHelper(os.Args[1:]))
 	}
+	if mode := os.Getenv("PAIRROOM_CLAUDE_SCRIPT"); mode != "" {
+		os.Exit(runClaudeScriptHelper(mode, os.Args[1:]))
+	}
 	if os.Getenv("PAIRROOM_CODEX_HELPER") == "1" {
 		os.Exit(runCodexStrictResumeHelper(os.Args[1:]))
 	}
@@ -144,6 +147,8 @@ func runCodexStrictResumeHelper(args []string) int {
 	if len(args) == 0 || args[0] != "app-server" {
 		return 97
 	}
+	writeHelperPID()
+	defer holdAfterEOF()
 	scanner := bufio.NewScanner(os.Stdin)
 	encoder := json.NewEncoder(os.Stdout)
 	for scanner.Scan() {
@@ -175,6 +180,13 @@ func runCodexStrictResumeHelper(args []string) int {
 				_ = encoder.Encode(map[string]any{"id": id, "result": map[string]any{"thread": map[string]any{"id": "different-thread"}}})
 			default:
 				_ = encoder.Encode(map[string]any{"id": id, "result": map[string]any{"thread": map[string]any{"id": request.Params.ThreadID}}})
+			}
+		case "thread/start":
+			_ = encoder.Encode(map[string]any{"id": id, "result": map[string]any{"thread": map[string]any{"id": "thread-new"}}})
+		case "turn/start":
+			_ = encoder.Encode(map[string]any{"id": id, "result": map[string]any{"turn": map[string]any{"id": "turn-1"}}})
+			if os.Getenv("PAIRROOM_CODEX_HELPER_MODE") == "oversized" {
+				fmt.Println(oversizedStdoutRecord())
 			}
 		default:
 			_ = encoder.Encode(map[string]any{"id": id, "error": map[string]any{"code": -32601, "message": fmt.Sprintf("unsupported %s", request.Method)}})
@@ -247,6 +259,10 @@ func runGrokACPHelper(args []string) int {
 			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{}})
 		case "session/prompt":
 			promptID = id
+			if mode == "oversized" {
+				fmt.Println(oversizedStdoutRecord())
+				continue
+			}
 			promptText := ""
 			if blocks, ok := request.Params["prompt"].([]any); ok && len(blocks) > 0 {
 				if block, ok := blocks[0].(map[string]any); ok {

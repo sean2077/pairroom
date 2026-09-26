@@ -32,15 +32,19 @@ Effective Permission profiles (`configured`, `read-only`, `yolo`) can change onl
 
 Commands are not Room selections. Service templates `runtimes.claude`, `runtimes.codex`, and `runtimes.grok` own executable `command`/`args`, preventing a Room request from choosing an executable. Arguments must not preselect model, effort, approval, permission, sandbox, or bypass values that belong to selection/policy projection.
 
+On Windows, a command that resolves to a `.cmd`/`.bat` launcher (the npm shim form) runs through `cmd.exe`, which re-parses the command line. Embedded startup therefore fails closed when any argument for such a launcher, including model, effort, template args, and CC Switch provider arguments, contains `&`, `|`, `<`, `>`, `^`, `%`, `!`, or a control character; the error names the value. The Claude session name, which is display metadata derived from the Room name, is neutralized instead, with those characters and `"` replaced by their full-width forms. To use such a value, point the template command at the CLI executable rather than its shim.
+
 | Runtime | Accepted policy values |
 |---|---|
-| Claude Code | `permission_mode`: `default`, `manual`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, `yolo` |
+| Claude Code | `permission_mode`: `default`, `manual`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, `bypass`, `always-approve`, `yolo` (`bypass` and `always-approve` are accepted aliases of `bypassPermissions`) |
 | Codex | `approval_policy`: `untrusted`, `unless-trusted`, `unlessTrusted`, `on-failure`, `on-request`, `never`, `yolo`; `sandbox`: `read-only`, `workspace-write`, `danger-full-access` |
 | Grok Build | `permission_mode`: `default`, `ask`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, `always-approve`, `yolo`; `sandbox`: `read-only`, `workspace`, `strict`, `off` |
 
 `yolo` projects Claude bypass plus `--dangerously-skip-permissions`, Codex `never` plus full-access sandbox, or Grok `--always-approve` plus sandbox `off`. These are PairRoom's supported mappings, not certification of every future CLI release. Keep secrets out of argv/logs/messages/repositories; use supported read-only/plan restrictions for untrusted review rather than relying on Lead/Executor labels. After changing executable/Provider, check deterministic behavior and separately test an authorized real read-only Turn.
 
 Grok prompts/instructions travel over long-lived ACP, never argv. New sessions receive `_meta.rules`; exact resumption receives bootstrap once in its first PairRoom prompt without replacing the native system prompt.
+
+Claude Code receives the PairRoom system prompt through `--append-system-prompt-file` (a private file under the Room data directory) whenever `claude --help` advertises it, including the `--append-system-prompt[-file]` notation current releases use. Only a CLI that advertises just `--append-system-prompt` gets the prompt as an argument; on Windows, startup then fails with a clear error if the command line would exceed the operating-system limit (32,767 characters, or 8,191 through a `.cmd` launcher).
 
 ## Agent pair profiles
 

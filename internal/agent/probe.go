@@ -39,6 +39,10 @@ var semanticVersionPattern = regexp.MustCompile(`\bv?(\d+)\.(\d+)\.(\d+)(?:[-+][
 // It never authenticates, creates a vendor conversation, or reads repository
 // files. A short timeout keeps room startup responsive when a wrapper command
 // is broken.
+// probeCommandTimeout bounds each --version/--help probe. Tests that launch
+// the probe through a batch shim re-executing the test binary raise it.
+var probeCommandTimeout = 6 * time.Second
+
 func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 	actor := cfg.Actor
 	kind := cfg.Runtime.CanonicalForSlot(actor)
@@ -51,7 +55,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 		return ProbeResult{}, fmt.Errorf("locate %s runtime %q: %w", kind.DisplayName(), command, err)
 	}
 
-	ctx, cancel := context.WithTimeout(parent, 6*time.Second)
+	ctx, cancel := context.WithTimeout(parent, probeCommandTimeout)
 	defer cancel()
 	versionLine, err := runProbeCommand(ctx, path, []string{"--version"}, actor, kind)
 	if err != nil {
@@ -66,7 +70,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 	case model.RuntimeClaude:
 		result.Protocol = "claude-stream-json"
 		result.SupportedFlags = make(map[string]bool)
-		helpCtx, helpCancel := context.WithTimeout(parent, 6*time.Second)
+		helpCtx, helpCancel := context.WithTimeout(parent, probeCommandTimeout)
 		help, helpErr := runProbeCommand(helpCtx, path, []string{"--help"}, actor, kind)
 		helpCancel()
 
@@ -99,7 +103,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 			}
 		} else {
 			for _, flag := range optional {
-				result.SupportedFlags[flag] = strings.Contains(help, flag)
+				result.SupportedFlags[flag] = helpAdvertisesFlag(help, flag)
 			}
 		}
 
@@ -132,7 +136,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 		}
 	case model.RuntimeCodex:
 		result.Protocol = "codex-app-server-jsonrpc"
-		helpCtx, helpCancel := context.WithTimeout(parent, 6*time.Second)
+		helpCtx, helpCancel := context.WithTimeout(parent, probeCommandTimeout)
 		defer helpCancel()
 		if _, err := runProbeCommand(helpCtx, path, []string{"app-server", "--help"}, actor, kind); err != nil {
 			return ProbeResult{}, fmt.Errorf("verify Codex app-server: %w", err)
@@ -143,7 +147,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 		}
 	case model.RuntimeGrok:
 		result.Protocol = "grok-acp-v1"
-		helpCtx, helpCancel := context.WithTimeout(parent, 6*time.Second)
+		helpCtx, helpCancel := context.WithTimeout(parent, probeCommandTimeout)
 		help, helpErr := runProbeCommand(helpCtx, path, []string{"--help"}, actor, kind)
 		helpCancel()
 		result.SupportedFlags = map[string]bool{
@@ -202,6 +206,22 @@ func runProbeCommand(ctx context.Context, path string, args []string, actor mode
 		return text, fmt.Errorf("probe %s (%s): %s", actor.DisplayName(), strings.Join(args, " "), firstNonEmptyLine(text))
 	}
 	return text, nil
+}
+
+// helpAdvertisesFlag also accepts the bracketed alternative notation Claude
+// Code uses in its help prose: 2.1.x lists only `--append-system-prompt
+// <prompt>` as an option and mentions the file variant as
+// `--append-system-prompt[-file]`, which the CLI accepts.
+func helpAdvertisesFlag(help, flag string) bool {
+	if strings.Contains(help, flag) {
+		return true
+	}
+	for i := len("--") + 1; i < len(flag); i++ {
+		if flag[i] == '-' && strings.Contains(help, flag[:i]+"["+flag[i:]+"]") {
+			return true
+		}
+	}
+	return false
 }
 
 func (p ProbeResult) RuntimeInfo(cfg Config) model.RuntimeInfo {

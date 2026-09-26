@@ -2,7 +2,7 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const tr = key => window.PairRoomI18n.t(`room.native.${key}`);
-  let csrf = '', snapshot = null, stream = null, pendingSend = null, refreshing = false, refreshAgain = false, sending = false;
+  let csrf = '', snapshot = null, stream = null, pendingSend = null, foreignSend = null, refreshing = false, refreshAgain = false, sending = false;
   const messageNodes = new Map();
   let bindingsKey = '', auditKey = '', attentionKey = '', activityTimer = null, messagesRendered = false;
   let outboxRoom = '', outboxBroken = false, pendingCursor = '', pendingNext = '', pendingKey = '', pendingRequest = 0;
@@ -16,6 +16,10 @@
   const language = () => window.PairRoomI18n?.lang || 'en';
   const element = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
   const time = value => value ? new Intl.DateTimeFormat(language(), {dateStyle:'short',timeStyle:'medium'}).format(new Date(value)) : tr('never');
+  // Wake outcomes/reasons are a fixed server vocabulary; unknown future values
+  // stay visible verbatim rather than as a missing catalog key.
+  const vocabulary = (prefix, value) => value ? window.PairRoomI18n.t(`room.native.${prefix}_${value}`, {defaultValue: value}) : '';
+  const wakeText = wake => [vocabulary('wakeOutcome', wake.outcome), vocabulary('wakeReason', wake.reason)].filter(Boolean).join(' / ');
   function status(message, error = false) { $('status').textContent = message; $('status').classList.toggle('error', error); }
   async function request(path, options = {}) {
     const headers = new Headers(options.headers || {});
@@ -29,7 +33,7 @@
     const timeout = setTimeout(() => controller.abort(), 30000);
     try {
       const res = await fetch(path, {...options, headers, signal:controller.signal, cache:'no-store',credentials:'same-origin'});
-      if (!res.ok) { let value = {}; try {value = await res.json();} catch (_) { /* not a JSON error */ } throw new Error(value.error || `${tr('error')} (${res.status})`); }
+      if (!res.ok) { let value = {}; try {value = await res.json();} catch (_) { /* not a JSON error */ } throw new Error(window.PairRoomI18n.errorMessage?.(value) || value.error || `${tr('error')} (${res.status})`); }
       return res.status === 204 ? null : await res.json();
     } catch (error) {
       if (controller.signal.aborted) throw new Error(tr('requestTimeout'));
@@ -248,7 +252,7 @@
       $('diagnostics').replaceChildren(element('p',tr('diagnosticBoundary'),'muted'),...Object.entries(report.participants).map(([slot,d])=>{
         const card=element('section');card.append(element('h3',handle(slot)),element('p',`${tr(`reason_${d.reason}`)} · ${tr(`cap_${d.capability}`)}`),element('p',tr(`next_${d.next_action}`)));
         if(d.next_eligible_at)card.append(element('p',`${tr('nextEligible')} ${time(d.next_eligible_at)}`));
-        const wake=report.relay.last_wake?.[slot];if(wake)card.append(element('p',`${tr('lastWake')}: ${wake.outcome} / ${wake.reason||'—'} · ${time(wake.at)}`));
+        const wake=report.relay.last_wake?.[slot];if(wake)card.append(element('p',`${tr('lastWake')}: ${wakeText(wake)} · ${time(wake.at)}`));
         if(d.head_id){const inspect=element('button',tr('inspect'));inspect.type='button';inspect.addEventListener('click',()=>inspectMessage(d.head_id));card.append(inspect);}
         return card;
       }));
@@ -265,7 +269,7 @@
       if(inbox.unknown)items.push(element('span',`${handle(slot)}: ${inbox.unknown} ${tr('unknown')}`,'badge'));
       if(inbox.oldest_queued_at)items.push(element('span',`${handle(slot)} · ${tr('oldestQueued')} ${time(inbox.oldest_queued_at)}`,'muted'));
     }
-    for(const [slot,wake] of Object.entries(summary.last_wake||{}))if(wake.outcome==='failed')items.push(element('span',`${handle(slot)} · ${tr('wakeFailed')}: ${wake.reason}`,'badge'));
+    for(const [slot,wake] of Object.entries(summary.last_wake||{}))if(wake.outcome==='failed')items.push(element('span',`${handle(slot)} · ${tr('wakeFailed')}: ${vocabulary('wakeReason',wake.reason)}`,'badge'));
     if(summary.last_user_message){const button=element('button',tr('userAttention'));button.type='button';button.addEventListener('click',()=>inspectMessage(summary.last_user_message));items.push(button);}
     $('attention').replaceChildren(...items);$('attention').hidden=items.length===0;
   }
@@ -286,16 +290,30 @@
       card.append(counts);
       if (inbox.oldest_queued_at) card.append(element('p', `${tr('oldestQueued')}: ${time(inbox.oldest_queued_at)}`, 'muted'));
       const wake = value.summary?.last_wake?.[slot];
-      if (wake) card.append(element('p', `${tr('lastWake')}: ${wake.outcome} · ${time(wake.at)}`, 'muted'));
+      if (wake) card.append(element('p', `${tr('lastWake')}: ${wakeText(wake)} · ${time(wake.at)}`, 'muted'));
       return card;
     }));
   }
+  // Audit details are fixed English server phrases except failure text, which
+  // is recorded evidence and stays verbatim.
+  const auditNames={'native.binding.updated':'changed','native.publication':'publication','native.publication.gap':'gap','native.message.updated':'updated','native.failure':'failure','native.wake.updated':'wakeUpdated','native.wake.reserved':'wakeReserved','native.wake.attempted':'wakeAttempted'};
+  function auditDetail(a){
+    const detail=a.detail||'';let match;
+    if(a.kind==='native.wake.updated'&&/^wake (enabled|disabled)$/.test(detail))return tr(detail==='wake enabled'?'wakeEnabled':'wakeDisabled');
+    if(a.kind==='native.wake.reserved'&&detail==='wake reserved')return '';
+    if(a.kind==='native.wake.attempted'&&(match=/^wake ([a-z_]+)(?: \(([a-z_]+)\))?$/.exec(detail)))return wakeText({outcome:match[1],reason:match[2]});
+    if(a.kind==='native.publication.gap'&&(match=/^publication gap: (\d+)–(\d+)$/.exec(detail)))return window.PairRoomI18n.t('room.native.gapRange',{from:match[1],to:match[2]});
+    return detail;
+  }
   function renderAudit(value){const key=JSON.stringify([value.relay.audit,language()]);if(key===auditKey)return;auditKey=key;
-    const names={'native.binding.updated':'changed','native.publication':'publication','native.publication.gap':'gap','native.message.updated':'updated','native.failure':'failure'};
-    $('audit').replaceChildren(...(value.relay.audit||[]).slice(-80).reverse().map(a=>{const li=element('li');li.append(element('strong',tr(names[a.kind]||a.kind)),element('time',time(a.at)));if(a.detail)li.append(element('p',a.detail));return li;}));
+    $('audit').replaceChildren(...(value.relay.audit||[]).slice(-80).reverse().map(a=>{const li=element('li');li.append(element('strong',auditNames[a.kind]?tr(auditNames[a.kind]):a.kind),element('time',time(a.at)));const detail=auditDetail(a);if(detail)li.append(element('p',detail));return li;}));
   }
   function render(value){snapshot=value;restoreOutbox();renderAttention(value);refreshPending().catch(e=>status(e.message,true));$('room-name').textContent=value.room.name;document.title=`${value.room.name} · PairRoom Native`;renderBindings(value);renderMessages(value);renderDelivery(value);renderAudit(value);}
   async function refresh(){if(refreshing){refreshAgain=true;return;}refreshing=true;try{do{refreshAgain=false;const value=await request('api/v1/snapshot?tail=1');if(!snapshot || value.relay.sequence>=snapshot.relay.sequence)render(value);}while(refreshAgain);}finally{refreshing=false;}}
+  // Reconnects and a return to a visible tab can follow missed SSE nudges.
+  let refreshTimer=null;
+  function scheduleRefresh(){if(refreshTimer)return;refreshTimer=setTimeout(()=>{refreshTimer=null;refresh().catch(e=>status(e.message,true));},250);}
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&csrf)scheduleRefresh();});
   function lockComposer(){
     // The Room id scopes the recovery record, so publication stays locked until
     // the first snapshot identifies it; a click can never be silently dropped.
@@ -303,23 +321,35 @@
     for(const id of ['message-text','target','attachment','review-anchor'])$(id).disabled=sending||pendingSend!==null||outboxBroken;
     $('send').disabled=!outboxRoom||sending||outboxBroken;
     $('send').textContent=pendingSend?tr('retryOriginal'):tr('send');
-    $('outbox-check').disabled=sending||outboxBroken;
+    $('outbox-check').disabled=sending||outboxBroken||!pendingSend;
     $('outbox-forget').disabled=sending;
   }
   function renderOutbox(){
-    $('outbox').hidden=!pendingSend&&!outboxBroken;
-    $('outbox-notice').textContent=tr(outboxBroken?'storageFailed':'savedDraft');
+    $('outbox').hidden=!pendingSend&&!outboxBroken&&!foreignSend;
+    $('outbox-notice').textContent=tr(outboxBroken?'storageFailed':pendingSend?'savedDraft':'foreignPending');
     lockComposer();
+  }
+  // Unsent local input that is not the recovery record itself.
+  function localDraft(record){
+    const text=$('message-text').value;
+    return Boolean($('attachment').files?.length)||(text.trim()!==''&&text!==record?.text);
   }
   function restoreOutbox(){
     if(outboxRoom===snapshot.room.id)return;
     outboxRoom=snapshot.room.id;
-    try{pendingSend=outbox.load(localStorage,outboxRoom);}catch(_){outboxBroken=true;}
+    let record=null;
+    try{record=outbox.load(localStorage,outboxRoom);}catch(_){outboxBroken=true;}
+    // Another window's unconfirmed send never replaces text typed here: its
+    // settlement would clear the composer and lose this draft. The record's
+    // lock still prevents a second publication from this window.
+    if(record&&localDraft(record)){foreignSend=record;pendingSend=null;renderOutbox();return;}
+    foreignSend=null;pendingSend=record;
     if(pendingSend){$('message-text').value=pendingSend.text;$('target').value=pendingSend.to;$('review-anchor').checked=Boolean(pendingSend.review);}
     renderOutbox();
     // Read-only reconciliation is safe; loading never posts a message.
     if(pendingSend)checkOriginal().catch(e=>status(failureText(e),true));
   }
+  function readoptOutbox(){outboxRoom='';restoreOutbox();}
   async function checkOriginal(){
     if(!pendingSend||sending)return;
     const original=pendingSend;
@@ -342,13 +372,14 @@
     try{observed=outbox.capture(localStorage,outboxRoom);}catch(_){status(tr('storageFailed'),true);return;}
     if(!await confirmAction('forgetTitle','forgetBody')||sending)return;
     sending=true;lockComposer();
-    try{await outbox.forget(localStorage,outboxRoom,observed);pendingSend=null;outboxBroken=false;$('message-text').value='';$('attachment').value='';$('review-anchor').checked=false;status(tr('forgotten'));}
+    try{await outbox.forget(localStorage,outboxRoom,observed);const adopted=pendingSend!==null;pendingSend=null;foreignSend=null;outboxBroken=false;if(adopted){$('message-text').value='';$('attachment').value='';$('review-anchor').checked=false;}status(tr('forgotten'));}
     catch(e){status(failureText(e),true);}finally{sending=false;renderOutbox();}
   });
   $('composer').addEventListener('submit',async event=>{
     event.preventDefault();if(sending||outboxBroken||!outboxRoom)return;
     const text=$('message-text').value.trim();const file=$('attachment').files[0];
     if(!pendingSend&&!text&&!file){status(tr('inputRequired'),true);return;}
+    if(!pendingSend&&foreignSend){status(tr('foreignPending'),true);return;}
     if(!pendingSend && new TextEncoder().encode(text).byteLength>MAX_MESSAGE_BYTES){status(`${window.PairRoomI18n.t('errors.request_too_large')} (256 KiB UTF-8)`,true);return;}
     sending=true;lockComposer();
     try{
@@ -371,15 +402,17 @@
     }catch(e){status(pendingSend?`${tr('unknownSend')} ${failureText(e)}`:failureText(e),true);}finally{sending=false;renderOutbox();}
   });
   window.addEventListener('storage',event=>{
-    if(event.key===`pairroom.native.outbox.v1.${outboxRoom}`&&!sending){if(pendingSend){checkOriginal().catch(e=>status(failureText(e),true));}else{outboxRoom='';restoreOutbox();}}
+    if(event.key===`pairroom.native.outbox.v1.${outboxRoom}`&&!sending){if(pendingSend){checkOriginal().catch(e=>status(failureText(e),true));}else readoptOutbox();}
   });
+  // Clearing the local draft hands recovery of another window's send to this one.
+  $('message-text').addEventListener('input',()=>{if(foreignSend&&!sending&&!localDraft(foreignSend))readoptOutbox();});
   document.addEventListener('pairroom:lang',translations);
   async function start(){
     translations();lockComposer();try{
       const token=new URLSearchParams(location.hash.slice(1)).get('token');
       if(token){const session=await request('api/v1/session',{method:'POST',headers:{Authorization:`Bearer ${token}`}});csrf=session.csrf_token;history.replaceState(null,'',location.pathname+location.search);}
       else{const session=await request('api/v1/session');csrf=session.csrf_token;}
-      await refresh();stream=new EventSource('api/v1/events');stream.addEventListener('native',()=>{refresh().catch(e=>status(e.message,true));});activityTimer=setInterval(()=>{if(!document.hidden)refresh().catch(()=>{});},15000);stream.onopen=()=>{$('connection').textContent=tr('connected');};stream.onerror=()=>{$('connection').textContent=tr('reconnecting');};
+      await refresh();stream=new EventSource('api/v1/events');stream.addEventListener('native',()=>{refresh().catch(e=>status(e.message,true));});activityTimer=setInterval(()=>{if(!document.hidden)refresh().catch(()=>{});},15000);stream.onopen=()=>{$('connection').textContent=tr('connected');scheduleRefresh();};stream.onerror=()=>{$('connection').textContent=tr('reconnecting');};
     }catch(e){status(e.message,true);}
   }
   window.addEventListener('pagehide',()=>{stream?.close();clearInterval(activityTimer);});window.addEventListener('pageshow',event=>{if(event.persisted)start();});start();

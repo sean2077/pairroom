@@ -617,7 +617,7 @@
         close?.addEventListener('dragstart', (event) => event.preventDefault());
       }
 
-      const label = target.querySelector('.room-tab-label')?.textContent?.trim() || roomID || 'Room';
+      const label = target.querySelector('.room-tab-label')?.textContent?.trim() || roomID || t('common.room');
       const token = roomDOMToken(roomID);
       const panel = findRoomPanel(roomID);
       target.id = `room-tab-${token}`;

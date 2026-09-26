@@ -11,7 +11,7 @@ This guide owns the installation facts: which channel fits which platform, prere
 
 Neither entry requires Go. Both need Git and a local Git repository; for real Agents, each selected native CLI (Claude Code, Codex, Grok Build) must be independently installed and authenticated. The full readiness table is in [Getting started](GETTING_STARTED.md#prerequisites).
 
-Release packages are unsigned development artifacts until Windows code signing and Apple Developer ID signing/notarization actually run. [Releases](https://github.com/sean2077/pairroom/releases/latest) distinguish `pairroom-cli-…` from `pairroom-desktop-…` assets; verify downloads against the checksums published with each release.
+Release packages are unsigned development artifacts until Windows code signing and Apple Developer ID signing/notarization actually run. [Releases](https://github.com/sean2077/pairroom/releases/latest) distinguish `pairroom-cli-…` from `pairroom-desktop-…` assets. Verify downloads against the checksums published with each release: CLI assets, `install.sh`, and source archives are listed in `SHA256SUMS`, and desktop packages in `pairroom-desktop-vX.Y.Z-SHA256SUMS` (for example `sha256sum -c --ignore-missing pairroom-desktop-vX.Y.Z-SHA256SUMS` next to the downloaded package; on Windows compare `Get-FileHash` output with the listed digest). The checksums detect corrupted or substituted downloads relative to that Release page; they are not a code signature.
 
 ## Windows desktop
 
@@ -77,6 +77,8 @@ sh install-pairroom.sh
 pairroom version
 ```
 
+The installer is POSIX `sh` (it runs under dash, busybox `sh`, and bash), so `curl … | sh` also works. It installs the latest release unless `PAIRROOM_VERSION` names a tag, into `$PREFIX/bin` when `PREFIX` is set, and downloads from `sean2077/pairroom` unless `PAIRROOM_REPOSITORY` names another `owner/name` (for a fork); it ignores the generic `GITHUB_REPOSITORY` that GitHub Actions sets for the calling repository. It refuses to install a binary whose SHA-256 does not match the release `SHA256SUMS`.
+
 Alternatively, download the matching `pairroom-cli-…` asset directly, verify it against the release checksums, make it executable where required, and put it on `PATH`. In Windows PowerShell, use `./pairroom.exe` when running a downloaded binary in the current directory.
 
 ## From source
@@ -105,5 +107,7 @@ Read [Upgrading](UPGRADING.md) before changing versions; it owns backup, compati
 | Linux `.AppImage` | Replace the file | Delete the file | Preserved |
 | CLI `install.sh` | Re-run the installer | Remove the binary from `PATH` | Preserved |
 | Source (`make desktop-update` / `make install`) | Re-run the target | Replace or remove the built binaries | Preserved |
+
+No channel updates itself. Desktop can optionally tell you when a newer stable release exists: turn on **Settings → Desktop → Updates → Check for updates** (off by default). It links to the release page and never downloads or installs anything, so upgrade with the channel above; see [Desktop development](../desktop/README.md#check-for-updates) for the exact request.
 
 No channel removes the Service data root, Room archives, or native CLI credentials. Quit Desktop and gracefully stop any installed daemon before upgrade or removal; the Windows installer never terminates active work.

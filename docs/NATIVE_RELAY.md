@@ -24,7 +24,9 @@ Codex uses `.codex/hooks.json`; Claude Code uses `.claude/settings.json`. Grok B
 
 Review and approve the exact installed definitions in the harness: Codex `/hooks`, Claude project hook consent, and Grok hook approval plus folder trust. Follow native trust/restart guidance; PairRoom never grants consent for you.
 
-Before binding, run `pairroom relay preflight` in each Agent session (or any shell in the Project). It checks, without changing anything, that the bare `pairroom` command resolves on that shell's PATH, the Service is reachable and from the same release, and the Stop hook is installed, then prints ordered `next_steps` and exits nonzero until setup is ready. It cannot see approval; the first finished turn's `last_hook_at` in `relay doctor` confirms that.
+Before binding, run `pairroom relay preflight` in each Agent session (or any shell in the Project). It checks, without changing anything, that the bare `pairroom` command resolves on that shell's PATH, the Service is reachable and from the same release, and the Stop hook is installed, then prints ordered `next_steps` and exits nonzero until setup is ready. A Service version mismatch, or a `pairroom` on PATH that is not the running binary, only warns: read `next_steps` even when `ready` is `true`. It cannot see approval, and neither can bind: bind rejects only a missing or disabled hook, so an installed but unapproved hook lets bind succeed while Stop replies never publish. The first finished turn's `last_hook_at` in `relay doctor` confirms approval; until the hook has run, `doctor` and `status` show a local `hook_hint`.
+
+After setup, relay commands and hooks print one stderr line suggesting `pairroom relay preflight` whenever the Service reports a different release than the CLI, including beside errors that version skew can cause, such as "no matching binding". It uses responses the command already receives and never writes to stdout. See [CLI reference](CLI_REFERENCE.md#native-relay-commands).
 
 Installation also writes the relay skill. Skill roots honor `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and `GROK_HOME`; project hooks stay project-local. The optional `npx skills add sean2077/pairroom` route installs the skill, **not** the hooks or their approval. That route needs Node's package runner; the Go relay CLI does not.
 
@@ -42,7 +44,7 @@ Alternatively, create a **Native** Room in Management and bind the two sessions 
 
 Each bind associates immediately from the official tool-call environment: `CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`, or `GROK_SESSION_ID`. Run it **inside the intended Agent session**, not a detached terminal or Grok's user shell mode (`!`). Missing or conflicting identity fails closed; do not manufacture an environment value. Bind also checks the installed hook. No nonce echo, initial Stop, or status check is needed to unlock confirmed relay. Reuse the existing binding for later reviews.
 
-If creation succeeded but bind failed, finish the printed recovery command for that Room instead of creating another. If the bind response was lost, rerun bind for the same Room/slot without `--create` or a new `--replace`. Explicit replacement is for an intentional session change and cannot stop work in the old harness.
+If creation succeeded but bind failed, finish the printed recovery command for that Room instead of creating another. If the bind response was lost, rerun bind for the same Room/slot without `--create` or a new `--replace`. Explicit replacement is for an intentional session change and cannot stop work in the old harness. It is refused while the slot still holds unpublished Stop replies; run `relay reconcile` to publish them (or `reconcile --discard` to drop each explicitly) before replacing.
 
 ## What is published
 
@@ -117,7 +119,7 @@ The CLI requires an affirmative `handed_off: true` acknowledgement, not merely H
 
 A detached background waiter whose output never reaches the model may nevertheless be terminally `handed_off`. Another `wait` cannot re-collect it. Inspect the authorized message/history and actual workspace before deciding a fresh instruction; do not blindly duplicate the original task body.
 
-Same-client-ID recovery requires the same body, target, attachments, quote, and optional review version. Changed content under the same ID fails. A new ID is a new publication, even for identical text. `status` / `reconcile` default to bounded body-free summaries, but **can reconcile a pending Stop publication**; use `history` or `doctor` for read-only inspection. Full history/export is explicit and may contain private material.
+Same-client-ID recovery requires the same body, target, attachments, quote, and optional review version. Rerunning `send --attach` re-uploads each image under a new attachment ID; the Service still returns the original receipt when every image has the same bytes (SHA-256 and size), media type and file name in the same order. Changed content under the same ID fails with a definite "already used for a different message" error: nothing new was published, so inspect the original instead of retrying that ID. A new ID is a new publication, even for identical text. `status` / `reconcile` default to bounded body-free summaries, but **can reconcile a pending Stop publication**; use `history` or `doctor` for read-only inspection. Full history/export is explicit and may contain private material.
 
 ## Claude external wake
 
@@ -141,10 +143,13 @@ Use background wait only where the harness actually surfaces its completion. Hum
 
 ## Troubleshooting
 
+[Native relay errors](TROUBLESHOOTING.md#native-relay-errors) indexes the exact CLI and hook messages, with the first command to run for each.
+
 | Symptom | Action |
 |---|---|
 | `pairroom` is missing in the Agent's shell | Fix that shell's PATH and verify its CLI version, not just Desktop startup |
-| Service is unavailable | Start/reuse the intended Service; a custom data root uses `--service-file <root>/relay-endpoint.json`, never pasted file contents |
+| Service is unavailable | Start/reuse the intended Service; a custom data root uses `--service-file <root>/relay-endpoint.json`, never pasted file contents. Up to eight Stop replies given meanwhile (fewer only when they are very long: the saved state stays under about 1.9 MiB) stay saved and publish in order at the next Stop, `relay status` or `relay reconcile` (`status` publishes them too; use `relay doctor` or `history` to inspect without publishing); a reply beyond that is reported on stderr as not retained |
+| stderr says the Service runs a different release | Run `pairroom relay preflight` and use the CLI from the Service's release (for example the one bundled with Desktop) before other recovery |
 | Hook missing or unapproved | Install for the intended Runtime and review the exact native definition |
 | Missing/conflicting session identity | Run bind as the Agent's tool call in the intended session; do not fabricate metadata |
 | Binding not found after a directory change | Follow [workspace recovery](NATIVE_SESSION_WORKSPACE.md#upgrade-and-recovery), not another workspace's credentials |
@@ -159,13 +164,13 @@ The Native Room uses three columns on wide viewports: **Participants** on the le
 
 Participant cards show stored Runtime/Provider/model/effort/permission metadata, observed binding state, and last activity. These are display-only and not live presence. The inspector shows per-slot queued/delivering/unknown totals, oldest queued input, last wake observation, Pending items, history, diagnostics, and audit. It provides no process-start or Interrupt control.
 
-Pending items are independent of the recent chat tail. Use `relay history --pending` for oldest-first unresolved work or `relay history --id ID` for one message. Normal history is newest-first; follow returned cursors. Reading never claims, acknowledges, or retries a message. `relay doctor` and the Native diagnostic button inspect the current Room without a model call; CLI doctor also checks local installation observations. Hook approval and model acceptance remain unknown.
+Pending items are independent of the recent chat tail. Use `relay history --pending` for oldest-first unresolved work or `relay history --id ID` for one message. Normal history is newest-first; follow returned cursors. Reading never claims, acknowledges, or retries a message. `relay doctor` and the Native diagnostic button inspect the current Room without a model call; CLI doctor also checks local installation observations. Doctor never activates a suspended Room, such as one not yet reopened after a Service restart; its error names `relay status --brief`, which activates the Room. Hook approval and model acceptance remain unknown.
 
 Browser refresh restores an unconfirmed immutable original-ID draft and checks its receipt without sending. Explicit same-ID recovery preserves payload; Forget only removes local recovery state, not an accepted/in-flight task. Same-origin localStorage may contain private text and is not encrypted archival. Do not clear it merely to dismiss uncertainty.
 
 Native browser API requests have a 30-second deadline covering both response headers and body reads; SSE is separate. A timed-out publication releases the controls but retains its original recovery record. Check the original receipt before an explicit same-ID retry. Receipt checking and Retry cannot run concurrently in the same page; neither timeout nor reload automatically posts another message.
 
-Cross-window recovery mutations use a short, per-Room Web Lock, never a lock held over network requests. Browser publication requires Web Locks and writable localStorage; unavailable storage fails before publication rather than falling back to an unsafe write. A lock held by another window reports a transient status; retry after that window finishes rather than forgetting the draft. Forget only removes the exact record present when its confirmation opened, so a newer record from another window survives. Reload all open Native pages after upgrading so they use the same locking protocol. Existing outbox records retain their format; do not delete them as an upgrade step.
+Cross-window recovery mutations use a short, per-Room Web Lock, never a lock held over network requests. Browser publication requires Web Locks and writable localStorage; unavailable storage fails before publication rather than falling back to an unsafe write. A lock held by another window reports a transient status; retry after that window finishes rather than forgetting the draft. Forget only removes the exact record present when its confirmation opened, so a newer record from another window survives. A window with its own unsent typed draft does not adopt another window's record into its composer; it shows that window's pending send and blocks Send until the record is settled, and clearing the draft adopts it for recovery. Reload all open Native pages after upgrading so they use the same locking protocol. Existing outbox records retain their format; do not delete them as an upgrade step.
 
 Optional review evidence can identify the revision actually discussed:
 

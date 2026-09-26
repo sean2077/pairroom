@@ -150,5 +150,5 @@ func applyCallerDefaults(root, action string, o *options) error {
 		// selections, then associate from the harness session id at bind.
 		return nil
 	}
-	return errors.New("this native session has no matching associated binding in this workspace; run pairroom relay bind here first (do not consume another session's inbox)")
+	return errNoAssociatedBinding
 }

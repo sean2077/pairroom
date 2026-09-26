@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,9 +12,16 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/sean2077/pairroom/internal/atomicfile"
 )
 
 const EndpointFile = "relay-endpoint.json"
+
+// VersionHeader carries the Service release (no build metadata) on every
+// Management API response, so relay commands can name a CLI/Service release
+// mismatch without an extra request.
+const VersionHeader = "X-PairRoom-Version"
 
 // Endpoint is owner-only local CLI discovery, never a Room or browser payload.
 type Endpoint struct {
@@ -48,7 +56,7 @@ func ReadEndpoint(path string) (Endpoint, error) {
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
 		return e, errors.New("Service endpoint permissions must be 0600")
 	}
-	data, err := os.ReadFile(path)
+	data, err := atomicfile.ReadFile(path)
 	if err != nil {
 		return e, err
 	}
@@ -70,14 +78,27 @@ func WriteEndpoint(root string, e Endpoint) error {
 	return AtomicJSON(filepath.Join(root, EndpointFile), e)
 }
 
+// EncodeJSONFile is the exact byte encoding AtomicJSON writes: indented,
+// newline-terminated, and without HTML escaping, so `<`, `>` and `&` in reply
+// bodies take one byte instead of six. Size checks must use it too.
+func EncodeJSONFile(value any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(value); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 // AtomicJSON consumes no sequence until the caller's entire next state is
 // atomically replaced. Publication callers must not perform network I/O first.
 func AtomicJSON(path string, value any) error {
-	data, err := json.MarshalIndent(value, "", "  ")
+	data, err := EncodeJSONFile(value)
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
 	if info, err := os.Lstat(path); err == nil && (!info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0) {
 		return errors.New("refusing to replace a non-regular state file")
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -104,7 +125,7 @@ func AtomicJSON(path string, value any) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(name, path); err != nil {
+	if err := atomicfile.Replace(name, path); err != nil {
 		return fmt.Errorf("atomic state replacement: %w", err)
 	}
 	if runtime.GOOS == "windows" {

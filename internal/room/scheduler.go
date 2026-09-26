@@ -2,6 +2,7 @@ package room
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -397,6 +398,10 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 			return ""
 		}
 	} else if err := adapter.StartTurn(deliveryCtx, input); err != nil {
+		if errors.Is(err, agent.ErrSubmissionUnknown) {
+			e.awaitUnknownSubmission(message.ID, target, err)
+			return ""
+		}
 		e.delivery(message.ID, target, model.DeliveryFailed, err.Error())
 		e.processing(message.ID, target, model.ProcessingFailed, "runtime did not accept input: "+err.Error(), "")
 		e.updateParticipant(target, func(p *model.ParticipantSnapshot) {
@@ -407,21 +412,11 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 		return ""
 	}
 	e.delivery(message.ID, target, state, "")
-	if state == model.DeliveryStarted && e.cfg.OnSessionMaterialized != nil {
-		// StartTurn's deadline governs native input acceptance. Once accepted, the
-		// binding commit follows the Engine lifetime so a nearly exhausted delivery
-		// deadline cannot discard a vendor identity that already owns real input.
-		if err := e.cfg.OnSessionMaterialized(ctx, target, adapter.SessionID()); err != nil {
-			_ = adapter.Interrupt(context.Background())
-			detail := "native input was accepted but its durable binding could not be materialized: " + err.Error()
-			e.processing(message.ID, target, model.ProcessingFailed, detail, "")
-			e.updateParticipant(target, func(p *model.ParticipantSnapshot) {
-				p.State = model.StateError
-				p.LastError = detail
-				p.LastActivity = time.Now().UTC()
-			})
-			return ""
-		}
+	// StartTurn's deadline governs native input acceptance. Once accepted, the
+	// binding commit follows the Engine lifetime so a nearly exhausted delivery
+	// deadline cannot discard a vendor identity that already owns real input.
+	if state == model.DeliveryStarted && !e.materializeAcceptedSession(ctx, message.ID, target, adapter) {
+		return ""
 	}
 	// Third-party adapters are only required to return a delivery disposition;
 	// the richer processing events are optional. Project a conservative fallback
@@ -438,4 +433,80 @@ func (e *Engine) deliver(ctx context.Context, message model.Message, target mode
 		e.processing(message.ID, target, model.ProcessingCancelled, "runtime skipped the input before execution", "")
 	}
 	return ""
+}
+
+// materializeAcceptedSession commits a pending new Binding once native input
+// was accepted. It reports false after failing the input when the commit fails.
+func (e *Engine) materializeAcceptedSession(ctx context.Context, messageID string, target model.ActorID, adapter agent.Adapter) bool {
+	if e.cfg.OnSessionMaterialized == nil {
+		return true
+	}
+	if err := e.cfg.OnSessionMaterialized(ctx, target, adapter.SessionID()); err != nil {
+		_ = adapter.Interrupt(context.Background())
+		detail := "native input was accepted but its durable binding could not be materialized: " + err.Error()
+		e.processing(messageID, target, model.ProcessingFailed, detail, "")
+		e.updateParticipant(target, func(p *model.ParticipantSnapshot) {
+			p.State = model.StateError
+			p.LastError = detail
+			p.LastActivity = time.Now().UTC()
+		})
+		return false
+	}
+	return true
+}
+
+// awaitUnknownSubmission handles a Turn start that may have crossed the native
+// boundary. The input is neither failed (which would make it retryable) nor
+// resubmitted: delivery stays `submitting`, which keeps the Turn owned, until
+// the runtime reports the input (acceptance, rejection, exit, or stop).
+func (e *Engine) awaitUnknownSubmission(messageID string, target model.ActorID, cause error) {
+	e.mu.Lock()
+	e.unknownSubmissions[deliveryKey{messageID: messageID, target: target}] = struct{}{}
+	e.mu.Unlock()
+	detail := "native submission outcome is unknown; " + e.participantName(target) +
+		" keeps the Turn until its runtime reports this input, and it is not resubmitted automatically: " + cause.Error()
+	e.processing(messageID, target, model.ProcessingWaiting, detail, "")
+	e.updateParticipant(target, func(p *model.ParticipantSnapshot) {
+		p.LastError = cause.Error()
+		p.LastActivity = time.Now().UTC()
+	})
+	// Runtime evidence may already have arrived while StartTurn was returning.
+	e.resolveUnknownSubmission(messageID, target)
+}
+
+// resolveUnknownSubmission records how an unknown Turn start was settled once
+// runtime evidence moved its processing state.
+func (e *Engine) resolveUnknownSubmission(messageID string, target model.ActorID) {
+	key := deliveryKey{messageID: messageID, target: target}
+	e.mu.Lock()
+	if _, pending := e.unknownSubmissions[key]; !pending {
+		e.mu.Unlock()
+		return
+	}
+	message, found := e.findMessageLocked(messageID)
+	state := message.Processing[target]
+	if found && (state == "" || state == model.ProcessingWaiting) {
+		e.mu.Unlock()
+		return
+	}
+	delete(e.unknownSubmissions, key)
+	detail := message.ProcessingDetail[target]
+	e.mu.Unlock()
+	if !found {
+		return
+	}
+	switch state {
+	case model.ProcessingWorking, model.ProcessingCompleted:
+		if e.delivery(messageID, target, model.DeliveryStarted, "native runtime reported the input after its submission outcome was unknown") {
+			// Runtime events arrive on the adapter's reader; committing the
+			// Binding (and interrupting on failure) must not block it.
+			go func() {
+				if adapter, err := e.adapter(target); err == nil {
+					e.materializeAcceptedSession(e.runtimeContext(context.Background()), messageID, target, adapter)
+				}
+			}()
+		}
+	default:
+		e.delivery(messageID, target, model.DeliveryFailed, "native runtime settled the input after its submission outcome was unknown: "+detail)
+	}
 }

@@ -8,9 +8,9 @@ import (
 )
 
 // ProxyTarget returns the verified loopback Room HTTP origin and the runtime
-// bearer used by the Management surface gateway. The token never appears as a
-// bare RuntimeStatus field, but RuntimeStatus.URL carries the same bearer in
-// its fragment: treat both as secret and never log or persist them.
+// bearer used by the Management surface gateway. RuntimeStatus.URL carries the
+// same bearer in its fragment and is therefore never serialized: treat both as
+// secret and never log, persist, or return them to a client.
 func (m *RuntimeManager) ProxyTarget(roomID string) (baseURL string, token string, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

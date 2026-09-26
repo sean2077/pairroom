@@ -263,6 +263,12 @@ func prepareBindAttempt(dir, root, endpoint string, o options, slot model.ActorI
 	if pendingErr == nil && !o.replace {
 		return bindAttempt{}, false, relay.ErrOccupied
 	}
+	// A replacement starts a fresh State. Never let it silently drop Stop
+	// replies the current binding saved but has not published: refuse before
+	// any Service call, while the current binding can still reconcile them.
+	if prior == nil && o.replace && current.Pending != nil {
+		return bindAttempt{}, false, fmt.Errorf("this slot has %d unpublished Stop replies (oldest seq %d) that --replace would discard; run pairroom relay reconcile --room %s --slot %s in the original session or a terminal outside any agent session to publish them, or explicitly drop each with reconcile --discard, then retry --replace", 1+len(current.Held), current.Pending.Seq, o.room, slot)
+	}
 	id, err := relay.RandomID()
 	if err != nil {
 		return bindAttempt{}, false, err
