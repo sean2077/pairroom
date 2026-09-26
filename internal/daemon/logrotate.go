@@ -175,11 +175,18 @@ func ConfigureProcessLoggingFromEnvironment() (func() error, error) {
 		detachOwnedWindowsConsole()
 	}
 	path := strings.TrimSpace(os.Getenv(LogFileEnvironment))
+	sizeValue, backupValue := os.Getenv(LogSizeEnvironment), os.Getenv(LogBackupEnvironment)
+	// These settings address this process only. Agents and their tool shells
+	// must not inherit them: a nested pairroom command would otherwise send
+	// its output to the daemon log and write the file from a second process.
+	for _, key := range []string{LogFileEnvironment, LogSizeEnvironment, LogBackupEnvironment, ConsoleDetachEnvironment} {
+		_ = os.Unsetenv(key)
+	}
 	if path == "" {
 		return func() error { return nil }, nil
 	}
 	maxSize := int64(DefaultLogMaxSize)
-	if value := os.Getenv(LogSizeEnvironment); value != "" {
+	if value := sizeValue; value != "" {
 		parsed, err := ParseLogSize(value)
 		if err != nil {
 			return nil, err
@@ -187,7 +194,7 @@ func ConfigureProcessLoggingFromEnvironment() (func() error, error) {
 		maxSize = parsed
 	}
 	maxBackups := DefaultLogMaxBackups
-	if value := os.Getenv(LogBackupEnvironment); value != "" {
+	if value := backupValue; value != "" {
 		parsed, err := ParseLogBackups(value)
 		if err != nil {
 			return nil, err
