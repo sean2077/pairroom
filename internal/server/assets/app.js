@@ -517,7 +517,7 @@
     $('room-collaboration-label').textContent = t(collaboration.mode === 'default' ? 'room.collaboration.default' : 'room.collaboration.custom');
     $('room-collaboration-instructions').textContent = collaboration.instructions;
 	const chatDescription = $('chat-description');
-	if (chatDescription) chatDescription.textContent = ['You', displayName('slot1'), displayName('slot2')].join(' · ');
+	if (chatDescription) chatDescription.textContent = [t('common.you'), displayName('slot1'), displayName('slot2')].join(' · ');
     renderParticipants();
     updateDeliveryHint();
     renderTurnOwnerBar();
@@ -1392,7 +1392,7 @@
     image.removeAttribute('src');
     image.alt = attachment.name;
     $('lightbox-title').textContent = attachment.name;
-    $('lightbox-meta').textContent = `${attachment.media_type || 'image'} · ${imageMeta(attachment)}`;
+    $('lightbox-meta').textContent = `${attachment.media_type || t('ui.image')} · ${imageMeta(attachment)}`;
     $('lightbox-counter').textContent = state.lightboxItems.length > 1
       ? `${state.lightboxIndex + 1} / ${state.lightboxItems.length}` : '';
     $('lightbox-prev').disabled = state.lightboxItems.length < 2;
@@ -1842,7 +1842,7 @@
     renderAttachmentStrip();
     updateComposerAvailability();
     const form = new FormData();
-    form.append('file', item.file, item.file.name || 'image');
+    form.append('file', item.file, item.file.name || 'image'); // multipart filename, not UI copy
     try {
       const attachment = await api('/api/v1/attachments', { method: 'POST', body: form, signal: item.controller.signal });
       if (item.removed || !state.pendingAttachments.includes(item)) {
@@ -1879,7 +1879,7 @@
       const status = item.status === 'uploading' ? t("ui.uploading")
         : item.status === 'error' ? t("ui.failedValue", { value0: (truncate(item.error, 48)) })
           : `${item.attachment?.width && item.attachment?.height ? `${item.attachment.width}×${item.attachment.height} · ` : ''}${formatBytes(item.attachment?.size || item.file.size)}`;
-      meta.textContent = `${item.file.name || 'image'} · ${status}`;
+      meta.textContent = `${item.file.name || t('ui.image')} · ${status}`;
       meta.title = item.error || item.file.name || '';
       const remove = document.createElement('button');
       remove.type = 'button';

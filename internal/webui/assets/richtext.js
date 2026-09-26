@@ -220,7 +220,7 @@
     const head = document.createElement('div');
     head.className = 'code-block-head';
     const label = document.createElement('span');
-    label.textContent = language || 'code';
+    label.textContent = language || t('ui.codeBlock');
     const copy = document.createElement('button');
     copy.type = 'button';
     copy.className = 'code-copy';
