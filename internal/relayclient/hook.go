@@ -14,6 +14,11 @@ import (
 	"github.com/sean2077/pairroom/internal/relay"
 )
 
+const (
+	hookPublicationBudget = 8 * time.Second
+	hookMetadataBudget    = 2 * time.Second
+)
+
 func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Writer) error {
 	// Keep sender reconciliation outside the park duration. The project hook has
 	// 45 seconds; reserve acknowledgement/output time rather than using its edge.
@@ -143,13 +148,20 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	if err := captureClaudeInbox(c.Dir, c.State); err != nil {
 		_, _ = fmt.Fprintln(diagnostic, "PairRoom: Claude external wake is unavailable; relay publication and collection remain available.")
 	}
+	// Publication and collection need separate time budgets, not just separate
+	// control flow. A stalled report must leave room for park and stdout/ack.
+	// Timing out preserves the original WAL identity; it never permits replay.
+	publicationCtx, cancelPublication := context.WithTimeout(ctx, hookPublicationBudget)
+	defer cancelPublication()
 	// Every relay call authenticates this session, so only a new transcript
 	// reference, which the harness environment does not carry, needs a
 	// separate confirm. It is optional metadata: a rejected or unavailable
 	// confirm must not block publication, which re-authenticates on its own.
 	if hook.TranscriptPath != "" && hook.TranscriptPath != c.State.TranscriptPath {
 		var binding relay.Binding
-		err := c.call(ctx, "confirm", map[string]any{"session_id": hook.SessionID, "transcript_path": hook.TranscriptPath}, &binding)
+		metadataCtx, cancelMetadata := context.WithTimeout(publicationCtx, hookMetadataBudget)
+		err := c.call(metadataCtx, "confirm", map[string]any{"session_id": hook.SessionID, "transcript_path": hook.TranscriptPath}, &binding)
+		cancelMetadata()
 		if err == nil && binding.SessionID != hook.SessionID {
 			release()
 			return relay.ErrAuth
@@ -172,7 +184,7 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		if kind == model.RuntimeGrok {
 			category = hook.Error
 		}
-		err = c.call(ctx, "failure", map[string]string{"error": category}, nil)
+		err = c.call(publicationCtx, "failure", map[string]string{"error": category}, nil)
 		release()
 		if err != nil {
 			return err
@@ -186,7 +198,8 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	if hook.Clipped {
 		// Never publish Grok's truncated prefix as a full response. Older pending
 		// publication keeps its identity and is reconciled before recovery.
-		err = c.Reconcile(ctx, false)
+		err = c.Reconcile(publicationCtx, false)
+		cancelPublication()
 		release()
 		if err != nil {
 			return err
@@ -194,10 +207,11 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		return grokContinuation(ctx, c, grokClippedReplyNotice, out)
 	}
 	if reserved {
-		err = c.PublishReserved(ctx)
+		err = c.PublishReserved(publicationCtx)
 	} else {
-		err = c.Publish(ctx, *hook.LastAssistantMessage)
+		err = c.Publish(publicationCtx, *hook.LastAssistantMessage)
 	}
+	cancelPublication()
 	release()
 	if err != nil {
 		// Spec §6 decoupling: a failed or uncertain publication retains its
@@ -317,7 +331,10 @@ func deliverOnce(ctx context.Context, c *Client, hook bool, seconds int, out io.
 			return false, err
 		}
 	}
-	if err := c.call(ctx, "ack", map[string]string{"id": claim.ID, "receipt": claim.Receipt}, nil); err != nil {
+	var acknowledged struct {
+		HandedOff bool `json:"handed_off"`
+	}
+	if err := c.call(ctx, "ack", map[string]string{"id": claim.ID, "receipt": claim.Receipt}, &acknowledged); err != nil || !acknowledged.HandedOff {
 		return false, errors.New("stdout written but acknowledgement unavailable; inspect Room delivery state, never automatically replay")
 	}
 	return true, nil
