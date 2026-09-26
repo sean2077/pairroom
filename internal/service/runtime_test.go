@@ -26,13 +26,17 @@ type fakeRuntime struct {
 	// runtimes settle asynchronously; tests that need archive to keep waiting
 	// for the Turn (for example shutdown deadline coverage) leave it false.
 	interruptSettles bool
-	closeOnce        sync.Once
-	closed           chan struct{}
-	closeErr         error
+	// interrupted is closed on the first InterruptActive call, so a test can
+	// wait until archive is inside InterruptAndSuspend instead of sleeping.
+	interrupted     chan struct{}
+	interruptedOnce sync.Once
+	closeOnce       sync.Once
+	closed          chan struct{}
+	closeErr        error
 }
 
 func newFakeRuntime(id string, busy bool, activity time.Time) *fakeRuntime {
-	runtime := &fakeRuntime{id: id, closed: make(chan struct{}), interruptSettles: true}
+	runtime := &fakeRuntime{id: id, closed: make(chan struct{}), interrupted: make(chan struct{}), interruptSettles: true}
 	runtime.busy.Store(busy)
 	if !activity.IsZero() {
 		runtime.activity.Store(activity.UnixNano())
@@ -59,6 +63,7 @@ func (r *fakeRuntime) LastActivity() time.Time {
 }
 func (r *fakeRuntime) InterruptActive(context.Context) error {
 	r.interruptCount.Add(1)
+	r.interruptedOnce.Do(func() { close(r.interrupted) })
 	if r.interruptSettles {
 		r.busy.Store(false)
 	}

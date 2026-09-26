@@ -546,8 +546,15 @@ func TestManagementShutdownForceClosesActiveHandlerAfterDeadline(t *testing.T) {
 	}()
 
 	// The busy Runtime keeps archive inside InterruptAndSuspend, proving
-	// Shutdown has an active mutating handler to drain.
-	time.Sleep(40 * time.Millisecond)
+	// Shutdown has an active mutating handler to drain. Wait for the handler
+	// to reach the interrupt rather than assuming a fixed delay suffices.
+	select {
+	case <-runtime.interrupted:
+	case err := <-requestDone:
+		t.Fatalf("archive request ended before interrupting the Runtime: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("archive request never reached InterruptAndSuspend")
+	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	shutdownErr := server.Shutdown(shutdownCtx)
 	cancel()
