@@ -72,12 +72,17 @@ jobs:
             libwebkitgtk-6.0-dev \
             pkg-config
       - name: Install pinned Wails CLI
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.24
+        # desktop/go.mod is the only Wails pin; a Wails bump needs no workflow edit.
+        shell: bash
+        run: go install "github.com/wailsapp/wails/v3/cmd/wails3@$(go -C desktop list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
       - name: Verify isolated desktop module lock
         working-directory: desktop
         run: |
           go mod tidy
-          git diff --exit-code -- go.mod go.sum
+          git diff --exit-code -- go.mod go.sum || {
+            echo "::error::desktop/go.mod or go.sum is not tidy. The desktop module pins the root module's closure through its local replace; after a root dependency update run 'make deps-sync' (see CONTRIBUTING.md#dependency-updates)."
+            exit 1
+          }
       - name: Test desktop host and embedded PairRoom Service
         working-directory: desktop
         run: go test -count=1 ./...
@@ -114,7 +119,8 @@ jobs:
       - name: Test transactional local update
         run: python desktop/scripts/test_update_local.py
       - name: Install pinned Wails CLI for native update smoke
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.24
+        shell: bash
+        run: go install "github.com/wailsapp/wails/v3/cmd/wails3@$(go -C desktop list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
       - name: Build and update a native installation with a spaced path
         shell: bash
         run: |
@@ -202,7 +208,8 @@ jobs:
         shell: pwsh
         run: ./desktop/scripts/install-inno.ps1
       - name: Install pinned Wails CLI
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.24
+        shell: bash
+        run: go install "github.com/wailsapp/wails/v3/cmd/wails3@$(go -C desktop list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
       - name: Download isolated desktop module dependencies
         working-directory: desktop
         run: go mod download

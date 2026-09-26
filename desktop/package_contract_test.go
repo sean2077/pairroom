@@ -103,3 +103,27 @@ func TestTrayMenuExposesServiceControls(t *testing.T) {
 		t.Fatal("tray menu must not add checkbox controls; autostart stays in native Settings")
 	}
 }
+
+// desktop/go.mod is the single Wails pin. Copies of the version elsewhere drift
+// on every Dependabot bump, so CI and setup docs derive it from the module.
+func TestWailsCLIVersionIsDerivedFromGoMod(t *testing.T) {
+	const derived = `wails3@$(go -C desktop list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)`
+	for _, path := range []string{
+		filepath.Join("..", ".github", "workflows", "desktop-wails.yml"),
+		"README.md",
+		filepath.Join("build", "darwin", "Taskfile.yml"),
+		filepath.Join("build", "linux", "Taskfile.yml"),
+		filepath.Join("build", "windows", "Taskfile.yml"),
+	} {
+		text, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(text), "v3.0.0-") {
+			t.Fatalf("%s hard-codes a Wails version; derive it from desktop/go.mod", path)
+		}
+		if installs := strings.Count(string(text), "cmd/wails3@"); installs != strings.Count(string(text), derived) {
+			t.Fatalf("%s installs the Wails CLI without the go.mod-derived version", path)
+		}
+	}
+}
