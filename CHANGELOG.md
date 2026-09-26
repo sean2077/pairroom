@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Make Dependabot updates a single reviewed step. Desktop CI and setup instructions now install the `wails3` CLI version resolved from `desktop/go.mod` instead of repeating it, so a Wails bump no longer needs workflow, README, or Taskfile edits; a contract test rejects new hard-coded copies. `make deps-sync` (maintainer-run, never CI) tidies both module locks and records version-only changes of the already-approved SQLite closure in the dependency allowlist and third-party notices, with a license-file comparison against the approved versions. Added, removed, or replaced modules still fail closed. The dependency check and desktop lock check now point to the procedure in `CONTRIBUTING.md`.
+
 ## [v5.6.0] — 2026-09-26
 
 - Offer to put the bundled `pairroom` CLI on PATH on macOS. The CLI ships inside `PairRoom.app/Contents/Helpers`, off PATH, so Native relay hooks and Agent tool shells could not run it. After the Service first starts, Desktop now asks once whether to link `/usr/local/bin/pairroom` to that CLI, using the standard macOS administrator prompt; **Not Now** is remembered in a Desktop preference directory separate from the Service data root, and the menu bar item **Install Command Line Tool…** (or **Update…** after the app moved) remains available. The link targets the bundle, so replacing `PairRoom.app` keeps it current. Desktop never replaces an existing `/usr/local/bin/pairroom` it did not create, and nothing changes without the user's action. Windows and Linux are unchanged.
