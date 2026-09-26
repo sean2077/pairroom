@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sean2077/pairroom/internal/atomicfile"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
 )
@@ -126,7 +127,9 @@ func readPrivate(path string, value any) error {
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
 		return errors.New("relay state and credential permissions must be 0600")
 	}
-	data, err := os.ReadFile(path)
+	// Peer-slot hooks scan this file without the slot lock; on Windows the
+	// shared-delete open keeps that scan from failing the owner's replace.
+	data, err := atomicfile.ReadFile(path)
 	if err != nil {
 		return err
 	}

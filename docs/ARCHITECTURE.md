@@ -31,7 +31,7 @@ Management Service ---- Project registry / Room lifecycle / user preferences
 | Wake and review evidence | `internal/claudewake/`, `internal/review/` | Private Claude inbox transport and bounded opt-in Git observations; neither grants execution authority |
 | Protocol and prompts | `internal/protocol/`, `internal/prompt/` | Versioned contracts, stable instructions, dynamic envelopes |
 | Configuration | `internal/config/`, `internal/model/`, `internal/ccswitch/` | Strict selection/configuration and read-only supported Provider resolution |
-| Persistence/media | `internal/store/`, `internal/attachment/`, `internal/archive/` | JSONL integrity/replay, verified attachments and bounded backup/restore |
+| Persistence/media | `internal/store/`, `internal/attachment/`, `internal/archive/`, `internal/atomicfile/` | JSONL integrity/replay, verified attachments and bounded backup/restore |
 | API/browser assets | `internal/server/`, `internal/webui/` | Authentication, HTTP/SSE and shared client projections |
 | Desktop | [separate module](../desktop/README.md) | Window/tray/login and packaging over the same Service |
 

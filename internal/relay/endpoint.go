@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/sean2077/pairroom/internal/atomicfile"
 )
 
 const EndpointFile = "relay-endpoint.json"
@@ -54,7 +56,7 @@ func ReadEndpoint(path string) (Endpoint, error) {
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
 		return e, errors.New("Service endpoint permissions must be 0600")
 	}
-	data, err := os.ReadFile(path)
+	data, err := atomicfile.ReadFile(path)
 	if err != nil {
 		return e, err
 	}
@@ -123,7 +125,7 @@ func AtomicJSON(path string, value any) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(name, path); err != nil {
+	if err := atomicfile.Replace(name, path); err != nil {
 		return fmt.Errorf("atomic state replacement: %w", err)
 	}
 	if runtime.GOOS == "windows" {
