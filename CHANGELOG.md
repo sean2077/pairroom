@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v5.6.0] — 2026-09-26
+
 - Offer to put the bundled `pairroom` CLI on PATH on macOS. The CLI ships inside `PairRoom.app/Contents/Helpers`, off PATH, so Native relay hooks and Agent tool shells could not run it. After the Service first starts, Desktop now asks once whether to link `/usr/local/bin/pairroom` to that CLI, using the standard macOS administrator prompt; **Not Now** is remembered in a Desktop preference directory separate from the Service data root, and the menu bar item **Install Command Line Tool…** (or **Update…** after the app moved) remains available. The link targets the bundle, so replacing `PairRoom.app` keeps it current. Desktop never replaces an existing `/usr/local/bin/pairroom` it did not create, and nothing changes without the user's action. Windows and Linux are unchanged.
 
 - Add `pairroom relay preflight`, a read-only Native setup check that works before any binding exists, from any shell. It reports as JSON whether the bare `pairroom` command the relay hooks run resolves on this shell's PATH (and whether it is the running binary), the Git workspace, the caller's native session identity, the running Service's reachability and release match with active native Rooms for this Project, and the project Stop hook for the relevant runtime (including Grok's reuse of the Claude Code hook), then ends with ordered `next_steps` and exits nonzero unless `ready`. It creates no relay state, Project, Room or hook, contacts no model, and uses the endpoint token only for one scoped read without printing it; hook approval stays `unknown`. `relay doctor` still needs a binding. `docs/AGENT_SETUP.md` and the Native guide now run preflight before bind.
