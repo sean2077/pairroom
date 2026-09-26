@@ -250,9 +250,12 @@
     // cached match that still starts at or after the cursor is reused instead of
     // rescanning the tail once per earlier token, which keeps a long body linear
     // rather than quadratic in its length.
+    // Links and images use a bracket scanner instead of a regular expression:
+    // `\[([^\]]+)\]\(` restarts its label scan at every '[' and was quadratic
+    // on a body of unmatched brackets.
     const patterns = [
-      { type: 'image', regex: /!\[([^\]]*)\]\(([^\s)]+)(?:\s+["']([^"']*)["'])?\)/g, match: null, done: false },
-      { type: 'link', regex: /\[([^\]]+)\]\(([^\s)]+)(?:\s+["']([^"']*)["'])?\)/g, match: null, done: false },
+      { type: 'image', regex: bracketScanner(true), match: null, done: false },
+      { type: 'link', regex: bracketScanner(false), match: null, done: false },
       { type: 'autolink', regex: /<(https?:\/\/[^>\s]+|mailto:[^>\s]+)>/gi, match: null, done: false },
       { type: 'bare-url', regex: /https?:\/\/[^\s<>()]+[^\s<>().,;:!?]/gi, match: null, done: false },
       { type: 'code', regex: /`([^`\n]+)`/g, match: null, done: false },
@@ -333,9 +336,75 @@
   }
 
   function parseImageOnly(value) {
-    const match = value.match(/^!\[([^\]]*)\]\(([^\s)]+)(?:\s+["']([^"']*)["'])?\)$/);
-    if (!match) return null;
+    if (!value.startsWith('![')) return null;
+    const match = bracketAt(value, 0, true, memoSearch(value));
+    if (!match || match[0].length !== value.length) return null;
     return { alt: match[1], href: match[2], title: match[3] || '' };
+  }
+
+  // Memoized forward search. A result r for a query q answers every later query
+  // i with q <= i <= r (nothing matches in between), so the monotone queries of
+  // one scan cost linear time in total instead of one tail scan per '['.
+  function memoSearch(source) {
+    const make = (regex) => {
+      let from = -1, found = -1;
+      return (index) => {
+        if (from >= 0 && index >= from && (found < 0 || index <= found)) return found;
+        regex.lastIndex = index;
+        const match = regex.exec(source);
+        from = index;
+        found = match ? match.index : -1;
+        return found;
+      };
+    };
+    return { close: make(/\]/g), stop: make(/[\s)]/g), text: make(/\S/g), quote: make(/["']/g) };
+  }
+
+  // Exactly the former `!?\[([^\]]*|[^\]]+)\]\(([^\s)]+)(?:\s+["']([^"']*)["'])?\)`
+  // match anchored at `start`, which is deterministic: each greedy class ends at
+  // the one character the next token requires, so no backtracking can succeed.
+  function bracketAt(source, start, image, search) {
+    const open = image ? start + 1 : start;
+    const close = search.close(open + 1);
+    if (close < 0) return null;
+    if ((!image && close === open + 1) || source[close + 1] !== '(') return null;
+    const hrefStart = close + 2;
+    const stop = search.stop(hrefStart);
+    if (stop <= hrefStart) return null;
+    let end = -1, title;
+    if (source[stop] === ')') {
+      end = stop + 1;
+    } else {
+      const quote = search.text(stop);
+      if (quote < 0 || (source[quote] !== '"' && source[quote] !== "'")) return null;
+      const closing = search.quote(quote + 1);
+      if (closing < 0 || source[closing + 1] !== ')') return null;
+      title = source.slice(quote + 1, closing);
+      end = closing + 2;
+    }
+    const match = [source.slice(start, end), source.slice(open + 1, close), source.slice(hrefStart, stop), title];
+    match.index = start;
+    return match;
+  }
+
+  // A RegExp-like `exec`/`lastIndex` adapter so parseInline's forward-only match
+  // cache treats the scanner like its other patterns.
+  function bracketScanner(image) {
+    let search = null, source = null;
+    return {
+      lastIndex: 0,
+      exec(value) {
+        if (value !== source) { source = value; search = memoSearch(value); }
+        const marker = image ? '![' : '[';
+        for (let index = value.indexOf(marker, this.lastIndex); index >= 0; index = value.indexOf(marker, index + 1)) {
+          // Without a later ']' no bracket at or after this one can match.
+          if (search.close(index + (image ? 2 : 1)) < 0) return null;
+          const match = bracketAt(value, index, image, search);
+          if (match) return match;
+        }
+        return null;
+      },
+    };
   }
 
   function safeLink(value) {
