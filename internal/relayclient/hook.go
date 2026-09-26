@@ -14,7 +14,9 @@ import (
 	"github.com/sean2077/pairroom/internal/relay"
 )
 
-const (
+// Sender publication and its optional metadata budgets inside the Stop hook.
+// Variables so tests can exercise the deadlines without waiting them out.
+var (
 	hookPublicationBudget = 8 * time.Second
 	hookMetadataBudget    = 2 * time.Second
 )

@@ -20,6 +20,11 @@ import (
 // Real CLI, private WAL and HTTP boundaries; a stalled local Service response,
 // not a vendor/model E2E. Synchronization uses request cancellation, not sleeps.
 func TestHookSlowSenderStillCollects(t *testing.T) {
+	// Shrink both budgets; the invariant is that they bound the sender, not
+	// their production magnitudes. Keep metadata inside publication as shipped.
+	publication, metadata := hookPublicationBudget, hookMetadataBudget
+	hookPublicationBudget, hookMetadataBudget = 400*time.Millisecond, 100*time.Millisecond
+	t.Cleanup(func() { hookPublicationBudget, hookMetadataBudget = publication, metadata })
 	for _, stalled := range []string{"confirm", "report"} {
 		t.Run(stalled, func(t *testing.T) {
 			isolateCaller(t)
