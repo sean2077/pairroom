@@ -1063,6 +1063,11 @@ func (s *ManagementServer) securityHeaders(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/" || r.URL.Path == "/index.html" {
 			w.Header().Set("Cache-Control", "no-store")
 		}
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			// Set before authentication so a rejected relay call still names the
+			// release; the static-asset ETag already exposes the same value.
+			w.Header().Set(relay.VersionHeader, version.Current)
+		}
 		next.ServeHTTP(w, r)
 	})
 }

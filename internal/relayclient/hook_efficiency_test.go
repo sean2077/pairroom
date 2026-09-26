@@ -26,6 +26,8 @@ type hookService struct {
 	reported    []uint64
 	failConfirm bool
 	failReport  uint64
+	rejectWait  bool
+	release     string
 }
 
 func (s *hookService) handler(t *testing.T) http.Handler {
@@ -39,6 +41,9 @@ func (s *hookService) handler(t *testing.T) http.Handler {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.calls = append(s.calls, action)
+		if s.release != "" {
+			w.Header().Set(relay.VersionHeader, s.release)
+		}
 		switch action {
 		case "confirm":
 			if s.failConfirm {
@@ -58,6 +63,10 @@ func (s *hookService) handler(t *testing.T) http.Handler {
 			s.accepted[req.Seq] = req.Text
 			_ = json.NewEncoder(w).Encode(relay.Publication{BindID: "binding", Generation: 1, ReportSeq: req.Seq})
 		case "wait":
+			if s.rejectWait {
+				http.Error(w, `{"error":"unknown relay operation"}`, http.StatusNotFound)
+				return
+			}
 			_, _ = io.WriteString(w, `{"claim":null}`)
 		case "summary":
 			_ = json.NewEncoder(w).Encode(relay.Summary{})

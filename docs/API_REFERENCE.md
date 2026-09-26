@@ -221,6 +221,8 @@ The following method/path patterns are extracted from production HTTP registrati
 4. Do not treat a transient event as a durable receipt;
 5. Read [Upgrading](UPGRADING.md) before a release upgrade.
 
+Every Management `/api/…` response, including relay and rejected requests, carries `X-PairRoom-Version` with the Service release (for example `5.6.0`, without build metadata). The relay CLI uses it to name a CLI/Service release mismatch without an extra request; the version is not an authorization or compatibility negotiation.
+
 ## Explicit Service diagnostics
 
 `POST /api/v1/diagnostics` is protected by the existing Management authentication, same-origin, and browser CSRF checks. There is no GET-triggered probe. An environment request is `{"mode":"environment"}`; an actual model check requires `{"mode":"runtime","actor":"slot2","confirm":true}`; a read-only Native Room report requires `{"mode":"native","room_id":"<room>"}`. `actor` is the stable slot (`slot1` or `slot2`), not a Runtime kind; numeric `1`/`2` are parse-time aliases. The environment and runtime modes optionally accept `room_id`; otherwise the saved default Agent pair profile or Service defaults are used. Native mode requires `room_id` and reports an already active Native Room without activating a suspended runtime; an inactive or non-Native Room returns 409. A Room's stored selections never follow later default changes. Invalid Room selections are rejected rather than replaced with Service defaults.

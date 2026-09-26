@@ -203,6 +203,7 @@ func (c *Client) call(ctx context.Context, action string, payload any, result an
 		return fmt.Errorf("relay %s transport unavailable", action)
 	}
 	defer res.Body.Close()
+	observeServiceResponse(ctx, res)
 	if res.StatusCode != http.StatusOK {
 		// Never echo raw HTML or vendor/provider errors into the model context.
 		var failure struct {

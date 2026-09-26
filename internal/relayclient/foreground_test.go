@@ -24,6 +24,8 @@ import (
 // synthetic service replies, not vendor/model E2E or a second relay engine.
 type foregroundFixtureOptions struct {
 	failAction        string
+	failStatus        int
+	release           string
 	peerLookupStalled bool
 	emptyInbox        bool
 	invalidReceipt    bool
@@ -80,8 +82,15 @@ func newForegroundFixture(t *testing.T, opts foregroundFixtureOptions) *foregrou
 		f.mu.Lock()
 		f.calls[action]++
 		f.mu.Unlock()
+		if opts.release != "" {
+			w.Header().Set(relay.VersionHeader, opts.release)
+		}
 		if opts.failAction == action {
-			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			status := opts.failStatus
+			if status == 0 {
+				status = http.StatusServiceUnavailable
+			}
+			http.Error(w, "unavailable", status)
 			return
 		}
 		switch action {
