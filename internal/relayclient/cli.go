@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -49,11 +50,27 @@ type stringsFlag []string
 
 func (s *stringsFlag) String() string     { return strings.Join(*s, ",") }
 func (s *stringsFlag) Set(v string) error { *s = append(*s, v); return nil }
+
+// relayActions lists every relay operation Run accepts, in usage order.
+var relayActions = []string{"install", "preflight", "bind", "hook", "send", "exchange", "wait", "status", "history", "doctor", "review", "peer", "park", "nudge", "reconcile", "unbind"}
+
+func relayUsage() string {
+	return "use pairroom relay " + strings.Join(relayActions, "|") + " (see docs/CLI_REFERENCE.md)"
+}
+
 func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("use pairroom relay install|preflight|bind|hook|send|exchange|wait|status|history|doctor|review|peer|park|nudge|reconcile|unbind (see docs/CLI_REFERENCE.md)")
+		return errors.New(relayUsage())
 	}
 	action := args[0]
+	switch action {
+	case "help", "--help", "-h":
+		_, err := fmt.Fprintf(out, "usage: pairroom relay <command> [flags]\ncommands: %s\nrun pairroom relay <command> --help for flags; see docs/CLI_REFERENCE.md\n", strings.Join(relayActions, ", "))
+		return err
+	}
+	if !slices.Contains(relayActions, action) {
+		return fmt.Errorf("unknown relay operation %q; %s", action, relayUsage())
+	}
 	o := options{}
 	flags := flag.NewFlagSet("pairroom relay "+action, flag.ContinueOnError)
 	flags.SetOutput(diagnostic)

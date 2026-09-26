@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Make `pairroom relay` help discoverable and strict. `pairroom relay --help` (also `-h` or `help`) now prints the relay command list and exits 0 instead of failing with "no matching associated binding". An unknown relay command now fails with the list of valid commands before flag parsing, so `pairroom relay <typo> --help` no longer prints the shared flag list and exits 0. `pairroom relay <command> --help` for a known command is unchanged.
+
 ## [v5.6.0] — 2026-09-26
 
 - Offer to put the bundled `pairroom` CLI on PATH on macOS. The CLI ships inside `PairRoom.app/Contents/Helpers`, off PATH, so Native relay hooks and Agent tool shells could not run it. After the Service first starts, Desktop now asks once whether to link `/usr/local/bin/pairroom` to that CLI, using the standard macOS administrator prompt; **Not Now** is remembered in a Desktop preference directory separate from the Service data root, and the menu bar item **Install Command Line Tool…** (or **Update…** after the app moved) remains available. The link targets the bundle, so replacing `PairRoom.app` keeps it current. Desktop never replaces an existing `/usr/local/bin/pairroom` it did not create, and nothing changes without the user's action. Windows and Linux are unchanged.
