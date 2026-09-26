@@ -34,7 +34,7 @@ Otherwise choose a channel with the user. [Installation](INSTALLATION.md) owns t
 
 | Platform | Channel | Where the CLI ends up |
 |---|---|---|
-| Windows | `winget install PairRoom` (Desktop; machine-scoped, so Windows may ask the user for elevation) | `C:\Program Files\PairRoom contributors\PairRoom\bin\pairroom.exe` by default. The installer does **not** change PATH. |
+| Windows | `winget install PairRoom` (Desktop; machine-scoped, so Windows may ask the user for elevation) | `C:\Program Files\PairRoom contributors\PairRoom\bin\pairroom.exe` by default. Setup adds that `bin` directory to the machine PATH unless the user opted out; releases before this change did not. |
 | macOS | Desktop `.app.zip` from Releases | `PairRoom.app/Contents/Helpers/pairroom`, not on PATH |
 | Linux (Debian/Ubuntu) | Desktop `.deb` | `/usr/local/bin/pairroom` |
 | Linux AppImage | Desktop AppImage | The CLI is not exposed on PATH; install the matching CLI separately with `install.sh` |
@@ -47,7 +47,7 @@ curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install
 sh install-pairroom.sh
 ```
 
-If the CLI is installed but not found, propose adding its directory to the user's PATH and wait for confirmation. A running harness usually keeps its old environment, so ask the user to restart it, then run `pairroom version` again in the new session. For Native, repeat this check in **both** harnesses; Codex Desktop and a terminal can see different PATHs.
+If the CLI is installed but not found, first ask the user to restart the harness: a running harness keeps the environment it started with, including after a Windows Setup that just added the PATH entry. If it is still missing, propose adding its directory to the user's PATH and wait for confirmation, then run `pairroom version` again in a new session. For Native, repeat this check in **both** harnesses; Codex Desktop and a terminal can see different PATHs.
 
 Use one release: the CLI that Native sessions run must come from the same release as the running Service. With Desktop, prefer its bundled CLI over a separately installed copy.
 
