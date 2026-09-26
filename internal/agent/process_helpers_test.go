@@ -77,6 +77,10 @@ func runClaudeScriptHelper(mode string, args []string) int {
 			case "hang":
 			case "oversized":
 				emit(oversizedStdoutRecord())
+			case "session-mismatch":
+				// A CLI that ignored --resume and continued in a new session.
+				emit(`{"type":"system","subtype":"init","session_id":"other-session"}`)
+				emit(`{"type":"result","subtype":"success","result":"answer from the wrong session","session_id":"other-session"}`)
 			default:
 				emit(`{"type":"system","subtype":"init","session_id":"` + session + `"}`)
 				emit(`{"type":"result","subtype":"success","result":"ok","session_id":"` + session + `"}`)

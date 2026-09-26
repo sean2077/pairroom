@@ -53,7 +53,7 @@ Project/per-Project Room display order lives in `navigation-order.json`, not Roo
 
 A Project is a canonical Git workspace, not a copied checkout. Provisioning builds privately and publishes only when complete. `service.lock` protects one Service writer per data root, separately from Embedded Turn ownership.
 
-Native Runtime/session identity is globally unique across Bindings, including archived Rooms. Embedded deferred new Bindings materialize only on real acceptance; existing Bindings must resume exactly. Native binds associate immediately from official tool-call session metadata, with generation-scoped credentials and later hook confirmation. Checkpoint/event/uniqueness failure cannot authorize a second owner or silently substitute a session.
+Native Runtime/session identity is globally unique across Bindings, including archived Rooms. Embedded deferred new Bindings materialize only on real acceptance; existing Bindings must resume exactly, and a runtime that reports a different session during a bound Turn (for example in Claude Code `system/init` or `result`) fails that Turn and is stopped rather than replacing the bound ID. Native binds associate immediately from official tool-call session metadata, with generation-scoped credentials and later hook confirmation. Checkpoint/event/uniqueness failure cannot authorize a second owner or silently substitute a session.
 
 Durable actors are `slot1`/`slot2`; RuntimeKind independently selects Claude Code, Codex, or Grok Build. Routing, policy projection, resume, and events must use that selection, not infer a vendor from a slot. `claude`/`codex` remain relay CLI input aliases only.
 

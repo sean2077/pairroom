@@ -493,10 +493,12 @@ func (c *ClaudeAdapter) Stop(ctx context.Context) error {
 	return nil
 }
 
-// failStream stops a Claude process whose stdout can no longer be read. The
-// exit is then reported through waitProcess like any unexpected exit, so
-// pending input fails and the Turn owner is released on real exit.
-func (c *ClaudeAdapter) failStream(reason string) {
+// failProcess stops a Claude process whose output can no longer be trusted
+// (an unreadable stream or a session other than the bound one). The exit is
+// then reported through waitProcess like any unexpected exit, so pending input
+// fails and the Turn owner is released on real exit. Later stdout records
+// from that process are ignored.
+func (c *ClaudeAdapter) failProcess(name, reason string) {
 	c.mu.Lock()
 	if c.streamFailure == "" {
 		c.streamFailure = reason
@@ -504,10 +506,34 @@ func (c *ClaudeAdapter) failStream(reason string) {
 	tree := c.tree
 	c.mu.Unlock()
 	e := runtimeEvent(c.cfg.Actor, model.RuntimeError)
-	e.Name = "adapter.stream_error"
+	e.Name = name
 	e.Text = reason
 	c.sink(e)
 	_ = tree.Kill()
+}
+
+func (c *ClaudeAdapter) processFailed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.streamFailure != ""
+}
+
+// acceptReportedSession adopts the session ID Claude Code reports, except
+// under an exact binding: a different ID there means the CLI did not resume
+// the bound session (or forked it), so the binding is kept, the process is
+// stopped, and the Turn fails visibly instead of silently retargeting the
+// next resume.
+func (c *ClaudeAdapter) acceptReportedSession(reported string) bool {
+	c.mu.Lock()
+	bound := c.sessionID
+	if !c.cfg.RequireExactSession || reported == bound {
+		c.sessionID = reported
+		c.mu.Unlock()
+		return true
+	}
+	c.mu.Unlock()
+	c.failProcess("adapter.session_mismatch", fmt.Sprintf("Claude Code reported session %q instead of the bound session %q; PairRoom kept the binding and stopped the process", reported, bound))
+	return false
 }
 
 // forgetProcess clears the process record once its tree is confirmed exited;
