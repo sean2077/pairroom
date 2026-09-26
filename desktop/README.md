@@ -20,6 +20,7 @@ The Wails layer owns only native desktop concerns:
 - hide-to-tray behavior, with a tray menu that opens the window, opens the authenticated Management Shell in the default browser, reports Service ownership, restarts only the Desktop-owned embedded Service, and reveals the Service data folder;
 - explicit native quit;
 - explicit, native launch-at-login settings;
+- an opt-in, read-only check for new releases;
 - platform packaging.
 
 The root and desktop modules use the latest stable Go release. The root permits only the pinned CGo-free SQLite dependency closure used for read-only CC Switch access; Wails and its GUI dependencies remain confined to `desktop/go.mod`.
@@ -35,6 +36,33 @@ again when opening this settings section, and failed changes remain visible.
 The setting is unavailable in ordinary browsers. It does not remove or
 reconfigure a daemon installed previously; daemon administration remains an
 explicit CLI operation.
+
+## Check for updates
+
+**Settings → Desktop → Updates → Check for updates** is off by default. When
+you turn it on, Desktop sends at most one automatic request a day, plus one for
+each explicit **Check now**, to
+`https://api.github.com/repos/sean2077/pairroom/releases/latest`. The request
+has a 10-second timeout, no credentials, cookies, or installation identifier,
+and only a `PairRoom-Desktop/<version>` User-Agent. Desktop accepts only a
+non-draft, non-prerelease `vX.Y.Z` tag and compares it numerically with the
+running version. Automatic failures stay quiet; only **Check now** reports that
+it could not check.
+
+When a newer stable release exists, Settings shows a notice and the tray menu
+gains **PairRoom X.Y.Z Available…**. Both open that version's GitHub release
+page in the default browser, with a URL built from the verified version, not
+taken from the response. Desktop never downloads or installs anything: upgrade
+through the channel you installed with (see
+[Installation](../docs/INSTALLATION.md#upgrade-and-uninstall-mechanics)).
+Package-managed installations such as winget show the same notice; upgrade with
+the package manager.
+
+The choice, the last check time, and the newest version seen are stored in
+`update-check.json` in the Desktop preference directory (`PairRoom Desktop`
+under the OS user configuration directory, beside the macOS command-line tool
+offer), not in the Service data root or Room events. Turning the check off
+hides the notice and stops requests. A missing or malformed file means off.
 
 ## Development
 

@@ -106,4 +106,6 @@ Read [Upgrading](UPGRADING.md) before changing versions; it owns backup, compati
 | CLI `install.sh` | Re-run the installer | Remove the binary from `PATH` | Preserved |
 | Source (`make desktop-update` / `make install`) | Re-run the target | Replace or remove the built binaries | Preserved |
 
+No channel updates itself. Desktop can optionally tell you when a newer stable release exists: turn on **Settings → Desktop → Updates → Check for updates** (off by default). It links to the release page and never downloads or installs anything, so upgrade with the channel above; see [Desktop development](../desktop/README.md#check-for-updates) for the exact request.
+
 No channel removes the Service data root, Room archives, or native CLI credentials. Quit Desktop and gracefully stop any installed daemon before upgrade or removal; the Windows installer never terminates active work.
