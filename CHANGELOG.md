@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Stop Agents started by an installed daemon from inheriting its log redirection. The daemon's `PAIRROOM_LOG_FILE` (with its size, backup and console-detach settings) reached Embedded Agents and their tool shells, so a `pairroom` command run there, other than `relay`, wrote its output and errors into the daemon log and printed nothing, and a second process appended to the rotating log file. The Service now clears these variables after reading them at startup; its own logging is unchanged.
+
 ## [v5.6.0] — 2026-09-26
 
 - Offer to put the bundled `pairroom` CLI on PATH on macOS. The CLI ships inside `PairRoom.app/Contents/Helpers`, off PATH, so Native relay hooks and Agent tool shells could not run it. After the Service first starts, Desktop now asks once whether to link `/usr/local/bin/pairroom` to that CLI, using the standard macOS administrator prompt; **Not Now** is remembered in a Desktop preference directory separate from the Service data root, and the menu bar item **Install Command Line Tool…** (or **Update…** after the app moved) remains available. The link targets the bundle, so replacing `PairRoom.app` keeps it current. Desktop never replaces an existing `/usr/local/bin/pairroom` it did not create, and nothing changes without the user's action. Windows and Linux are unchanged.
