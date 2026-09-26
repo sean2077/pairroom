@@ -16,7 +16,10 @@ const (
 	roomSurfacePrefix     = "/api/v1/rooms/"
 	roomSurfaceMarker     = "/surface"
 	surfaceFrameAncestors = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'"
-	maxSurfaceBodyBytes   = attachment.MaxImageBytes + (1 << 20)
+	// directRoomPolicy is the same policy for a Room listener reached directly
+	// (open-browser). Only the Management same-origin surface may be framed.
+	directRoomPolicy    = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+	maxSurfaceBodyBytes = attachment.MaxImageBytes + (1 << 20)
 )
 
 var surfaceStaticFiles = map[string]struct{}{

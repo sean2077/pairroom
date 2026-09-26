@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Tighten Room page security headers. The standalone and Embedded Room listener's Content Security Policy now also blocks plugin objects and restricts form targets, matching the Management Shell. A Native Room opened directly in the system browser is now unframeable, as documented; in-app Room tabs, which are served through the Management Shell, are unchanged.
+
 - Restore only the Room file set from a backup. `pairroom restore` accepted any extra path declared in a crafted archive's manifest, including Windows alternate data streams and unrelated files, and placed it in the restored Room directory. Restore now accepts only `events.jsonl`, `metadata.json` and verified attachment manifests with the content file each names, and rejects device names and names ending in a dot or space. Backups made by PairRoom are unaffected.
 
 - Stop an open in-app Room tab from stalling Service shutdown. The Room event stream proxied through the Management listener never ended by itself, so graceful shutdown waited the full `--shutdown-timeout` (10 minutes by default) and then force-closed in-flight requests. Shutdown now ends those streams first; other in-flight requests still drain normally.

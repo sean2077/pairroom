@@ -36,7 +36,7 @@ Room tokens are never returned by Management APIs: Service snapshots and activat
 
 Management mutations check origin/fetch-site context; cookie-authenticated writes additionally require CSRF. Room requests perform Host and same-origin checks, with CSRF for enabled browser sessions. Room rate limiting reduces local abuse and accidental request loops; it is not an Agent spending budget.
 
-Both surfaces set CSP, no-referrer, no-sniff, and default `frame-ancestors 'none'`. Only the Management same-origin Room surface uses `frame-ancestors 'self'`; a direct Runtime URL remains unframeable. Attachments require the relevant authentication and use no-sniff, ETag, and inline disposition.
+Both surfaces set CSP (including `object-src 'none'`, `base-uri 'none'` and `form-action 'self'`), no-referrer, no-sniff, and default `frame-ancestors 'none'`. Only the Management same-origin Room surface uses `frame-ancestors 'self'`; a direct Embedded or Native Runtime URL remains unframeable. Attachments require the relevant authentication and use no-sniff, ETag, and inline disposition.
 
 URL fragments are not sent as HTTP requests/Referer, but can leak through screen sharing, copied startup output, or browser extensions. Do not publish a complete Management or Room URL.
 

@@ -744,6 +744,11 @@ func TestAttachmentUploadRejectsNonImageAndSecurityHeadersAllowBlobPreview(t *te
 	if !strings.Contains(csp, "img-src 'self' data: blob:") {
 		t.Fatalf("CSP does not allow authenticated blob previews: %q", csp)
 	}
+	for _, directive := range []string{"object-src 'none'", "form-action 'self'", "frame-ancestors 'none'", "base-uri 'none'"} {
+		if !strings.Contains(csp, directive) {
+			t.Fatalf("Room CSP lacks %s: %q", directive, csp)
+		}
+	}
 
 	traversal := httptest.NewRecorder()
 	server.Handler().ServeHTTP(traversal, localRequest(http.MethodGet, "/api/v1/attachments/../../etc/passwd", nil))
