@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -188,6 +189,11 @@ func TestStopHookVersionHintAddsNoRequest(t *testing.T) {
 	// counted rather than silently find no Service.
 	defaultPath, err := defaultEndpoint()
 	if err != nil {
+		t.Fatal(err)
+	}
+	// The config root (for example macOS Library/Application Support) may not
+	// exist under an isolated home; secureDir creates only its last element.
+	if err := os.MkdirAll(filepath.Dir(filepath.Dir(defaultPath)), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := secureDir(filepath.Dir(filepath.Dir(defaultPath)), filepath.Base(filepath.Dir(defaultPath))); err != nil {
