@@ -41,7 +41,13 @@ Silent install/upgrade and uninstall work without launching the desktop:
 & 'C:\Program Files\PairRoom contributors\PairRoom\unins000.exe' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 ```
 
-Quit Desktop from the tray before upgrading or removing it. If an explicitly installed daemon uses the bundled CLI, gracefully stop it first, or run `pairroom daemon uninstall` before removal. The installer never kills a process, installs/removes a daemon, changes PATH, or opts into launch at login. Inno removes only its logged files and shortcuts, preserving Service data and unrelated files. Uninstall removes the current user's native `PairRoom` Run entry only when it points exactly at this installation; it does not edit other users' registrations.
+Quit Desktop from the tray before upgrading or removing it. If an explicitly installed daemon uses the bundled CLI, gracefully stop it first, or run `pairroom daemon uninstall` before removal. The installer never kills a process, installs/removes a daemon, or opts into launch at login. Inno removes only its logged files and shortcuts, preserving Service data and unrelated files. Uninstall removes the current user's native `PairRoom` Run entry only when it points exactly at this installation; it does not edit other users' registrations.
+
+### The `pairroom` command on PATH
+
+By default Setup appends `<install dir>\bin` to the **machine** PATH, so Native relay hooks and each Agent's tool shell can run the bare `pairroom` command. Only shells and harnesses started afterwards see it; restart an Agent session that was already running. Machine PATH entries precede user entries, so this bundled CLI, which matches the Desktop's Service, takes precedence over a copy installed per user.
+
+Opt out with the **Add the pairroom command-line tool to the system PATH** task, or `/MERGETASKS="!addtopath"` for a silent run. The choice is remembered: a later upgrade keeps it, and running Setup with the task cleared removes the entry it added. Setup adds the entry only once, appends it without reordering other entries, and never edits the user PATH. Uninstall removes only that entry.
 
 ### First transition from NSIS
 

@@ -159,10 +159,13 @@ class WindowsPackagingTests(unittest.TestCase):
                          "WizardStyle=modern dynamic windows11", "CloseApplications=no",
                          "RestartApplications=no", "skipifsilent", "function InitializeUninstall",
                          "function PrepareToInstall", "HKLM32, WebViewKey", "NativeInt",
-                         "WebView2SilentWaitMs", "WizardSilent"):
+                         "WebView2SilentWaitMs", "WizardSilent", "ChangesEnvironment=yes",
+                         "Name: addtopath", "WizardIsTaskSelected('addtopath')",
+                         "RemoveCliFromPath;", "RegWriteExpandStringValue(HKLM, EnvironmentKey"):
             self.assertIn(contract, source)
         for forbidden in ("[InstallDelete]", "[UninstallDelete]", "[UninstallRun]",
-                          "restartreplace", "taskkill", 'Flags: recursesubdirs'):
+                          "restartreplace", "taskkill", 'Flags: recursesubdirs',
+                          "HKCU, EnvironmentKey", "Root: HKLM; Subkey:", "Flags: unchecked"):
             self.assertNotIn(forbidden, source)
 
 
