@@ -27,7 +27,7 @@ ifeq ($(strip $(GOBIN)),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package desktop-update desktop-check clean docs-check browser-check js-check vuln vuln-binary coverage-contract lint lint-install
+.PHONY: build install test race vet fmt check agent-contract release-contract cover stop dev run demo smoke release package desktop-build desktop-package desktop-update desktop-check clean docs-check env-check env-check-contract browser-check js-check vuln vuln-binary coverage-contract lint lint-install
 
 build:
 	mkdir -p $(DIST)
@@ -77,11 +77,14 @@ fmt:
 coverage-contract:
 	"$(PYTHON)" scripts/test_check_coverage.py
 
+env-check-contract:
+	"$(PYTHON)" scripts/test_env_check.py
+
 cover:
 	go test -count=1 -coverprofile=.coverage ./...
 	go tool cover -func=.coverage
 
-check: lint coverage-contract test race vet agent-contract release-contract docs-check desktop-check js-check
+check: lint coverage-contract env-check-contract test race vet agent-contract release-contract docs-check desktop-check js-check
 	@test -z "$$(gofmt -l $(GO_FILES))" || { echo 'Go files are not gofmt-clean'; gofmt -l $(GO_FILES); exit 1; }
 	@go test scripts/check_dependencies.go scripts/check_dependencies_test.go
 	@go run scripts/check_dependencies.go
@@ -154,6 +157,10 @@ clean:
 docs-check:
 	"$(PYTHON)" scripts/test_docs_check.py
 	"$(PYTHON)" scripts/docs-check.py
+
+# Read-only report of `make check` prerequisites; keep the recipe one short line.
+env-check:
+	"$(PYTHON)" scripts/env-check.py --make-version "$(MAKE_VERSION)" --python "$(PYTHON)" --desktop-python "$(DESKTOP_PYTHON)" --golangci-lint "$(GOLANGCI_LINT)" --golangci-lint-version "$(GOLANGCI_LINT_VERSION)"
 
 # Development-only: install scripts/requirements-browser.txt and its Chromium first.
 browser-check:

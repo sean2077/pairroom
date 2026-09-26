@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add `make env-check`, a read-only report of `make check` prerequisites (GNU Make version, Go toolchain and caches, CGO and C compiler for `make race`, the configured Python commands, Node.js, pinned `golangci-lint`, CRLF Go files, and Windows profile and temporary-directory variables) with an actionable `PASS`/`WARN`/`FAIL` line for each. `make check` runs its rule tests; CONTRIBUTING.md gains a Windows development section. The Native UI regression now prints each page's `#status` history when it fails, so a startup exception is no longer hidden behind an unrelated assertion. Contributor tooling only; no product change.
+
 ## [v5.6.0] — 2026-09-26
 
 - Offer to put the bundled `pairroom` CLI on PATH on macOS. The CLI ships inside `PairRoom.app/Contents/Helpers`, off PATH, so Native relay hooks and Agent tool shells could not run it. After the Service first starts, Desktop now asks once whether to link `/usr/local/bin/pairroom` to that CLI, using the standard macOS administrator prompt; **Not Now** is remembered in a Desktop preference directory separate from the Service data root, and the menu bar item **Install Command Line Tool…** (or **Update…** after the app moved) remains available. The link targets the bundle, so replacing `PairRoom.app` keeps it current. Desktop never replaces an existing `/usr/local/bin/pairroom` it did not create, and nothing changes without the user's action. Windows and Linux are unchanged.
