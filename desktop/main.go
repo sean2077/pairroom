@@ -43,6 +43,12 @@ const desktopShutdownTimeout = 11 * time.Minute
 type desktopController struct {
 	hostMu sync.Mutex
 	host   *host.Host
+	// drain is the embedded host a tray restart detached from host and is
+	// still draining (or failed to drain). Quit must join it rather than exit
+	// mid-drain, and must retry a failed drain instead of orphaning it with
+	// service.lock held. Guarded by hostMu so detaching and registering are
+	// atomic with respect to performShutdown.
+	drain *desktopHostDrain
 
 	quitting atomic.Bool
 
@@ -55,6 +61,18 @@ type desktopController struct {
 	shutdownDone    chan struct{}
 	shutdownErr     error
 	shutdownStarted bool
+}
+
+// desktopHostShutdowner is the part of *host.Host a restart drain needs; tests
+// substitute a fake.
+type desktopHostShutdowner interface {
+	Shutdown(context.Context) error
+}
+
+type desktopHostDrain struct {
+	value desktopHostShutdowner
+	done  chan struct{}
+	err   error // written before done is closed
 }
 
 // desktopWindowGate prevents the asynchronous Service bootstrap from trying
@@ -153,8 +171,10 @@ func (c *desktopController) start(
 	onReady func(*host.Host),
 	onError func(error),
 ) {
+	// A pending restart drain still owns service.lock; its completion callback
+	// starts the replacement, and Quit joins or retries it.
 	c.hostMu.Lock()
-	hasHost := c.host != nil
+	hasHost := c.host != nil || c.drainPendingLocked()
 	c.hostMu.Unlock()
 	if hasHost {
 		if cancel != nil {
@@ -174,7 +194,7 @@ func (c *desktopController) start(
 	// between the fast host check above and this lock acquisition; starting a
 	// second bootstrap in that window would defeat the single-UI lifecycle.
 	c.hostMu.Lock()
-	hasHost = c.host != nil
+	hasHost = c.host != nil || c.drainPendingLocked()
 	c.hostMu.Unlock()
 	if hasHost {
 		c.startupMu.Unlock()
@@ -233,6 +253,53 @@ func (c *desktopController) setHost(value *host.Host) bool {
 	return true
 }
 
+// restartEmbedded detaches the current embedded host and drains it in the
+// background, then calls onDrained with the drain result. It reports false
+// (and does nothing) when there is no embedded host, the controller is
+// quitting, or an earlier restart drain is unfinished or failed: a failed
+// drain still owns service.lock and stays registered so Quit can retry it.
+func (c *desktopController) restartEmbedded(onDrained func(error)) bool {
+	c.hostMu.Lock()
+	defer c.hostMu.Unlock()
+	value := c.host
+	if value.Mode() != host.ModeEmbedded || c.quitting.Load() || c.drainPendingLocked() {
+		return false
+	}
+	c.host = nil
+	c.beginDrainLocked(value, onDrained)
+	return true
+}
+
+// drainPendingLocked reports whether a registered restart drain is still
+// running or ended with an error. The caller holds hostMu.
+func (c *desktopController) drainPendingLocked() bool {
+	if c.drain == nil {
+		return false
+	}
+	select {
+	case <-c.drain.done:
+		return c.drain.err != nil
+	default:
+		return true
+	}
+}
+
+// beginDrainLocked registers value as the pending restart drain and starts
+// shutting it down. The caller holds hostMu.
+func (c *desktopController) beginDrainLocked(value desktopHostShutdowner, onDrained func(error)) {
+	drain := &desktopHostDrain{value: value, done: make(chan struct{})}
+	c.drain = drain
+	go func() {
+		drainCtx, cancel := context.WithTimeout(context.Background(), desktopShutdownTimeout)
+		drain.err = value.Shutdown(drainCtx)
+		cancel()
+		close(drain.done)
+		if onDrained != nil {
+			onDrained(drain.err)
+		}
+	}()
+}
+
 func (c *desktopController) shutdown(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -282,9 +349,24 @@ func (c *desktopController) performShutdown(done chan struct{}) {
 	c.hostMu.Lock()
 	value := c.host
 	c.host = nil
+	drain := c.drain
 	c.hostMu.Unlock()
 	if value != nil {
 		result = errors.Join(result, value.Shutdown(cleanupCtx))
+	}
+	// Join a tray-restart drain still in progress, bounded by the same
+	// deadline, and retry it if it failed: Host.Shutdown supports retrying with
+	// a fresh context, and exiting instead would cut active Turns and leave
+	// service.lock behind.
+	if drain != nil {
+		select {
+		case <-drain.done:
+			if drain.err != nil {
+				result = errors.Join(result, drain.value.Shutdown(cleanupCtx))
+			}
+		case <-cleanupCtx.Done():
+			result = errors.Join(result, cleanupCtx.Err())
+		}
 	}
 
 	c.shutdownMu.Lock()
@@ -452,29 +534,26 @@ func main() {
 	restartItem := menu.Add("Restart Service").
 		SetTooltip("Drains active Turns and restarts the Service this Desktop owns. An installed daemon is restarted with `pairroom daemon restart`.").
 		OnClick(func(*application.Context) {
-			controller.hostMu.Lock()
-			value := controller.host
-			embedded := value.Mode() == host.ModeEmbedded
-			if embedded {
-				controller.host = nil
-			}
-			controller.hostMu.Unlock()
-			if !embedded {
-				return
-			}
-			setServiceStatus("Service: restarting…")
-			syncTray()
-			go func() {
-				drainCtx, cancel := context.WithTimeout(context.Background(), desktopShutdownTimeout)
-				err := value.Shutdown(drainCtx)
-				cancel()
+			// The controller tracks the detached host until it has drained, so
+			// a Quit during the restart waits for (or retries) the drain.
+			restarting := controller.restartEmbedded(func(err error) {
 				if err != nil {
+					// The old Service still holds service.lock; starting another
+					// would fail closed. Quit retries the drain.
 					app.Logger.Error("embedded Service did not drain cleanly before tray restart", "error", err)
+					setServiceStatus("Service: restart failed; quit PairRoom to retry the drain")
+					syncTray()
+					return
 				}
 				if startDesktop != nil {
 					startDesktop()
 				}
-			}()
+			})
+			if !restarting {
+				return
+			}
+			setServiceStatus("Service: restarting…")
+			syncTray()
 		})
 	dataFolderItem := menu.Add("Open Service Data Folder").OnClick(func(*application.Context) {
 		root := currentHost().DataRoot()

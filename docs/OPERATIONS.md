@@ -28,12 +28,13 @@ Explicit data-root/configuration or Mock options select their own Service instea
 | Launch another desktop instance | Focus the existing window |
 | Quit with an external daemon | Exit the GUI; the daemon continues |
 | Quit with an owned embedded Service | Stop Management mutations, drain owned runtime work, close stores, release the Service lock |
+| Tray **Restart Service** (embedded only) | Drain the owned Service as on Quit, then start a replacement; Quit during the drain waits for it, and a failed drain keeps the lock and is retried by Quit instead of starting a competing Service |
 | `pairroom daemon stop` | Gracefully stop the confirmed installed-daemon owner; do not delete a live lock or kill an unrelated process |
 | `pairroom daemon open` | Open the Management URL recorded in the daemon's own log only after validating it as numeric loopback with a bootstrap token and probing it authenticated; a missing, unauthenticated, or non-loopback target is refused |
 
 None of these controls can stop a user-owned Native harness. Windows daemon output goes to rotating logs rather than a persistent taskbar console; use `pairroom daemon logs`.
 
-Desktop packages are produced for release tags or manual workflow dispatch, not PR/main verification builds. They attach to the same Release as CLI assets: `pairroom-cli-vX.Y.Z-…` and `pairroom-desktop-vX.Y.Z-…` (Windows setup executable, Linux `.deb`/`.AppImage`, macOS `.app.zip`). Production signing/notarization is not implied. See [Installation](INSTALLATION.md), [Desktop development](../desktop/README.md), and [release verification](../CONTRIBUTING.md#release-verification).
+Desktop packages are produced for release tags or manual workflow dispatch, not PR/main verification builds. They attach to the same Release as CLI assets: `pairroom-cli-vX.Y.Z-…` and `pairroom-desktop-vX.Y.Z-…` (Windows setup executable, Linux `.deb`/`.AppImage`, macOS `.app.zip`, and `pairroom-desktop-vX.Y.Z-SHA256SUMS`). Production signing/notarization is not implied. See [Installation](INSTALLATION.md), [Desktop development](../desktop/README.md), and [release verification](../CONTRIBUTING.md#release-verification).
 
 ## Daily checks
 

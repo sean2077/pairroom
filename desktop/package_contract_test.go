@@ -66,6 +66,10 @@ func TestWindowsInstallerShipsPairroomCLI(t *testing.T) {
 	if strings.Contains(string(workflow), "--clobber") {
 		t.Fatal("published installer URLs must retain immutable content")
 	}
+	if !strings.Contains(string(workflow), "scripts/merge-checksums.py") ||
+		!strings.Contains(string(workflow), `"pairroom-desktop-v${version}-SHA256SUMS"`) {
+		t.Fatal("desktop packages must be published with a verified pairroom-desktop-vX.Y.Z-SHA256SUMS asset")
+	}
 	if !strings.Contains(script, "pairroom-desktop-v") {
 		t.Fatal("published desktop files must use the pairroom-desktop- prefix")
 	}

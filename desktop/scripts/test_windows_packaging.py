@@ -24,6 +24,7 @@ def load(name: str):
 packaging = load("package-windows")
 collector = load("collect-artifacts")
 prepare = load("prepare-build")
+checksums = load("merge-checksums")
 
 
 def pe(machine: int) -> bytes:
@@ -189,6 +190,50 @@ class WindowsPackagingTests(unittest.TestCase):
                           "restartreplace", "taskkill", 'Flags: recursesubdirs',
                           "HKCU, EnvironmentKey", "Root: HKLM; Subkey:", "Flags: unchecked"):
             self.assertNotIn(forbidden, source)
+
+
+class DesktopChecksumMergeTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="pairroom checksums ")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+
+    def write_platform(self, label: str, names: list[str]) -> None:
+        directory = self.root / f"pairroom-desktop-{label}"
+        directory.mkdir()
+        lines = []
+        for name in names:
+            (directory / name).write_bytes(name.encode())
+            lines.append(f"{checksums.digest(directory / name)}  {name}")
+        (directory / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def write_all(self) -> None:
+        names = checksums.required_packages("5.0.1")
+        self.write_platform("windows-amd64", [names[0]])
+        self.write_platform("linux-amd64", [names[1], names[2]])
+        self.write_platform("macos-arm64", [names[3]])
+        self.write_platform("macos-amd64", [names[4]])
+
+    def test_merges_verified_platform_lists_in_name_order(self):
+        self.write_all()
+        lines = checksums.merge(self.root, "v5.0.1")
+        names = [line.split("  ", 1)[1] for line in lines]
+        self.assertEqual(names, sorted(checksums.required_packages("5.0.1")))
+        self.assertEqual(checksums.output_name("v5.0.1"), "pairroom-desktop-v5.0.1-SHA256SUMS")
+
+    def test_rejects_a_package_that_does_not_match_its_list(self):
+        self.write_all()
+        package = self.root / "pairroom-desktop-windows-amd64" / checksums.required_packages("5.0.1")[0]
+        package.write_bytes(b"tampered")
+        with self.assertRaisesRegex(SystemExit, "checksum mismatch"):
+            checksums.merge(self.root, "5.0.1")
+
+    def test_rejects_a_missing_platform(self):
+        self.write_all()
+        for path in (self.root / "pairroom-desktop-macos-amd64").iterdir():
+            path.unlink()
+        with self.assertRaisesRegex(SystemExit, "missing required packages"):
+            checksums.merge(self.root, "5.0.1")
 
 
 class BootstrapperVerificationTests(unittest.TestCase):

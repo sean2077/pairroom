@@ -95,13 +95,28 @@ func sameFile(a, b string) bool {
 	return errA == nil && errB == nil && os.SameFile(infoA, infoB)
 }
 
+// foreignExitCode and foreignMarker identify the privileged script's refusal
+// to replace an entry it does not own.
+const (
+	foreignExitCode = 3
+	foreignMarker   = "pairroom-clilink: refusing to replace a foreign entry"
+)
+
 // Script is the shell command run with administrator privileges. It creates
-// the directory and replaces only a missing or PairRoom-owned link; a foreign
-// entry must be refused before this is called. `-n` (not BSD-only `-h`) keeps
-// ln from following an existing link and works with both BSD and GNU ln.
+// the directory and replaces only a missing or PairRoom-owned link. Install
+// refuses a foreign entry before prompting, but the prompt can stay open while
+// something else appears at linkPath, so the script repeats the ownership
+// check (the same rule as ownedTarget) immediately before ln and exits with
+// foreignExitCode instead of force-replacing it. `-n` (not BSD-only `-h`)
+// keeps ln from following an existing link and works with both BSD and GNU ln.
 func Script(cli, linkPath string) string {
+	link := shellQuote(linkPath)
+	refuse := "echo " + shellQuote(foreignMarker) + " >&2; exit " + fmt.Sprint(foreignExitCode)
 	return "/bin/mkdir -p " + shellQuote(filepath.Dir(linkPath)) +
-		" && /bin/ln -sfn " + shellQuote(cli) + " " + shellQuote(linkPath)
+		" && if [ -e " + link + " ] || [ -L " + link + " ]; then" +
+		" if [ ! -L " + link + " ]; then " + refuse + "; fi;" +
+		" case \"$(/usr/bin/readlink " + link + ")\" in *.app/Contents/Helpers/pairroom) ;; *) " + refuse + ";; esac;" +
+		" fi && /bin/ln -sfn " + shellQuote(cli) + " " + link
 }
 
 // AppleScript wraps Script in `do shell script ... with administrator
@@ -134,6 +149,9 @@ func Install(cli, linkPath string) error {
 		// osascript reports a dismissed prompt as error -128.
 		if strings.Contains(string(output), "-128") {
 			return ErrCancelled
+		}
+		if strings.Contains(string(output), foreignMarker) {
+			return fmt.Errorf("%s appeared while waiting for authorization and is not a PairRoom link; it was left unchanged", linkPath)
 		}
 		return fmt.Errorf("could not create %s: %s", linkPath, strings.TrimSpace(string(output)))
 	}

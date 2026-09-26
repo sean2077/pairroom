@@ -146,7 +146,7 @@ The desktop host accepts these optional environment variables:
 - `PAIRROOM_DESKTOP_CONFIG`: PairRoom JSON configuration for an explicitly embedded Service;
 - `PAIRROOM_DESKTOP_DATA_ROOT`: absolute Service data root for an explicitly embedded Service.
 
-Quit never stops an external daemon. Startup may restart an installed daemon only after recovering a crash-stale lock whose recorded PID is gone. An embedded Service is shut down in the existing safe order: stop Management admission, drain Room runtimes without interrupting active native Turns, then release `service.lock`.
+Quit never stops an external daemon. Startup may restart an installed daemon only after recovering a crash-stale lock whose recorded PID is gone. An embedded Service is shut down in the existing safe order: stop Management admission, drain Room runtimes without interrupting active native Turns, then release `service.lock`. The tray **Restart Service** item runs the same drain before starting a replacement; a Quit during that drain waits for it (within the same shutdown timeout), and a drain that fails keeps `service.lock`, starts no replacement, and is retried on Quit.
 
 ## Packages
 
@@ -155,7 +155,8 @@ Quit never stops an external daemon. Startup may restart an installed daemon onl
 - Linux amd64: AppImage and Debian package (the `.deb` includes `/usr/local/bin/pairroom`);
 - Windows amd64: Inno Setup installer (`pairroom-desktop-vX.Y.Z-windows-amd64-setup.exe`) that installs `PairRoom.exe` and `bin\pairroom.exe`, and by default appends that `bin` directory to the machine PATH (`addtopath` task);
 - macOS arm64: `.app.zip` with the CLI at `Contents/Helpers/pairroom` and host at `Contents/MacOS/PairRoom`; Desktop can link `/usr/local/bin/pairroom` to that CLI on request (`internal/clilink`);
-- macOS amd64: `.app.zip` with the CLI at `Contents/Helpers/pairroom` and host at `Contents/MacOS/PairRoom`.
+- macOS amd64: `.app.zip` with the CLI at `Contents/Helpers/pairroom` and host at `Contents/MacOS/PairRoom`;
+- `pairroom-desktop-vX.Y.Z-SHA256SUMS`: SHA-256 of every package above. `scripts/collect-artifacts.py` writes a per-platform `SHA256SUMS` beside each package set; the publish job re-verifies every package against it with `scripts/merge-checksums.py`, attaches the merged list, then re-downloads the attached desktop assets and checks them against it.
 
 Release packages are unsigned development artifacts until Windows code signing and Apple Developer ID signing/notarization actually run.
 
