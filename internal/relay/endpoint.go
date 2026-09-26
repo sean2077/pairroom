@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -70,14 +71,27 @@ func WriteEndpoint(root string, e Endpoint) error {
 	return AtomicJSON(filepath.Join(root, EndpointFile), e)
 }
 
+// EncodeJSONFile is the exact byte encoding AtomicJSON writes: indented,
+// newline-terminated, and without HTML escaping, so `<`, `>` and `&` in reply
+// bodies take one byte instead of six. Size checks must use it too.
+func EncodeJSONFile(value any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(value); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 // AtomicJSON consumes no sequence until the caller's entire next state is
 // atomically replaced. Publication callers must not perform network I/O first.
 func AtomicJSON(path string, value any) error {
-	data, err := json.MarshalIndent(value, "", "  ")
+	data, err := EncodeJSONFile(value)
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
 	if info, err := os.Lstat(path); err == nil && (!info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0) {
 		return errors.New("refusing to replace a non-regular state file")
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {

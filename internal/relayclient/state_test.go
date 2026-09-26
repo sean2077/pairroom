@@ -489,6 +489,37 @@ func TestReservePublicationRefusesBeyondBacklogBounds(t *testing.T) {
 	}
 }
 
+// Code replies are full of `<`, `>` and `&`. The state file stores them as
+// one byte each, so the byte bound, not HTML escaping, limits the backlog:
+// the 2 MiB state file holds seven maximal markup replies (1.75 MiB), and
+// with HTML escaping even the second maximal reply exceeded it.
+func TestBacklogByteBoundCountsMarkupAsWritten(t *testing.T) {
+	c, _ := publicationClient(t)
+	markup := strings.Repeat("<a&b>", relay.MaxBodyBytes/5)
+	for i := 1; i <= 7; i++ {
+		if err := c.ReservePublication(markup); err != nil {
+			t.Fatalf("maximal markup reply %d refused: %v", i, err)
+		}
+	}
+	if err := c.ReservePublication(markup); !errors.Is(err, errPublicationBacklogFull) || c.State.LastSeq != 7 {
+		t.Fatalf("eighth maximal reply = %v, last_seq %d; want refusal without a sequence", err, c.State.LastSeq)
+	}
+	data, err := os.ReadFile(filepath.Join(c.Dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(`\u003c`)) || !bytes.Contains(data, []byte("<a&b>")) {
+		t.Fatal("state.json escaped markup instead of storing it literally")
+	}
+	fresh, err := load(c.Dir)
+	if err != nil {
+		t.Fatalf("saved backlog is no longer readable: %v", err)
+	}
+	if len(fresh.State.Held) != 6 || fresh.State.Held[5].Text != markup {
+		t.Fatalf("markup backlog changed on reload: %d held", len(fresh.State.Held))
+	}
+}
+
 type brokenWriter struct{}
 
 func (brokenWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }

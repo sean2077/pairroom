@@ -319,9 +319,9 @@ func (c *Client) ReservePublication(text string) error {
 			return errPublicationBacklogFull
 		}
 		next.Held = append(slices.Clone(next.Held), p)
-		// Mirrors relay.AtomicJSON's encoding: never write a state file that
-		// the bounded reader would then refuse.
-		data, err := json.MarshalIndent(next, "", "  ")
+		// Measure the exact bytes relay.AtomicJSON writes: never write a state
+		// file that the bounded reader would then refuse.
+		data, err := relay.EncodeJSONFile(next)
 		if err != nil {
 			return err
 		}
