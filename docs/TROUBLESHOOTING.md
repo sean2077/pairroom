@@ -145,7 +145,7 @@ Use the CLI from the Service's release, such as the one bundled with Desktop, an
 
 ## pairroom prints nothing inside an Agent session
 
-If `pairroom version` or another non-relay command exits without output, the shell may have inherited `PAIRROOM_LOG_FILE`. An installed daemon sets it, and Embedded Agents it starts pass it on to their tool shells. Every subcommand except `pairroom relay` then sends its stdout and stderr, errors included, to that log file; the exit code is unchanged. Relay is exempt so hook decisions and envelopes stay on stdout. Remove the variable for that command:
+If `pairroom version` or another non-relay command exits without output, the shell may have inherited `PAIRROOM_LOG_FILE`. An installed daemon sets it for the Service; releases before the fix in the [Changelog](../CHANGELOG.md) also passed it on to Embedded Agents and their tool shells, and a manually exported value has the same effect. Every subcommand except `pairroom relay` then sends its stdout and stderr, errors included, to that log file; the exit code is unchanged. Relay is exempt so hook decisions and envelopes stay on stdout. Remove the variable for that command:
 
 ```bash
 env -u PAIRROOM_LOG_FILE pairroom version
