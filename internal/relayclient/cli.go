@@ -51,7 +51,7 @@ func (s *stringsFlag) String() string     { return strings.Join(*s, ",") }
 func (s *stringsFlag) Set(v string) error { *s = append(*s, v); return nil }
 func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("use pairroom relay install|bind|hook|send|exchange|wait|status|history|doctor|review|peer|park|nudge|reconcile|unbind (see docs/CLI_REFERENCE.md)")
+		return errors.New("use pairroom relay install|preflight|bind|hook|send|exchange|wait|status|history|doctor|review|peer|park|nudge|reconcile|unbind (see docs/CLI_REFERENCE.md)")
 	}
 	action := args[0]
 	o := options{}
@@ -196,6 +196,10 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	o.slot = normalizeSlot(o.slot)
 	if action == "hook" {
 		return runHook(ctx, o, in, out, diagnostic)
+	}
+	// Preflight runs before binding exists, so it must not use session routing.
+	if action == "preflight" {
+		return runPreflight(ctx, o, out)
 	}
 	root, err := resolveCommandWorkspace(ctx, action, &o)
 	if err != nil {

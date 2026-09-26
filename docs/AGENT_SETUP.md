@@ -112,9 +112,11 @@ It writes `.claude/settings.json` for Claude Code (Grok Build reuses it by defau
 
 **b. Stop for approval.** The user reviews and approves the exact hook in each harness: Codex `/hooks`; Claude Code project hook consent; Grok `/hooks`, press `r` to reload, then folder trust. Follow each harness's reload or restart guidance so the hook and skill are loaded. Continue only after the user confirms.
 
-**c. Create and join.** In the first session, run `/pairroom-relay <topic>`, or `pairroom relay bind --create --name "<topic>"` as a tool call. It prints `peer_join_local` and `peer_join`; the user gives one to the second session, whose Agent runs it as a tool call. Bind must run as the Agent's own tool call: it reads the official session ID and fails closed in a detached terminal or in Grok's `!` shell mode. If creation succeeded but bind failed, follow the printed recovery command instead of repeating `--create`.
+**c. Preflight.** In each Agent session, run `pairroom relay preflight`. It changes nothing and reports as JSON whether the bare `pairroom` command the hooks run is on this shell's PATH, whether the Service is reachable and from the same release, and whether this runtime's Stop hook is installed. Continue when `ready` is `true`; otherwise follow `next_steps` in order and rerun it. It cannot see hook approval.
 
-**d. Verify.** After a bound session has finished at least one turn, run `pairroom relay doctor` in it. In `local`, expect `protocol_match` and `service_version_match` to be `true`, `hook_installation` to be `installed`, and `last_hook_at` to be recent. That timestamp is written only when the installed Stop hook actually ran for this binding, so it is the practical sign that approval took effect. `hook_approval` is always reported as `unknown`, and model acceptance is not reported. Day-to-day relay use then belongs to the `pairroom-relay` skill.
+**d. Create and join.** In the first session, run `/pairroom-relay <topic>`, or `pairroom relay bind --create --name "<topic>"` as a tool call. It prints `peer_join_local` and `peer_join`; the user gives one to the second session, whose Agent runs it as a tool call. Bind must run as the Agent's own tool call: it reads the official session ID and fails closed in a detached terminal or in Grok's `!` shell mode. If creation succeeded but bind failed, follow the printed recovery command instead of repeating `--create`.
+
+**e. Verify.** After a bound session has finished at least one turn, run `pairroom relay doctor` in it. In `local`, expect `protocol_match` and `service_version_match` to be `true`, `hook_installation` to be `installed`, and `last_hook_at` to be recent. That timestamp is written only when the installed Stop hook actually ran for this binding, so it is the practical sign that approval took effect. `hook_approval` is always reported as `unknown`, and model acceptance is not reported. Day-to-day relay use then belongs to the `pairroom-relay` skill.
 
 ## When a check fails
 
@@ -122,7 +124,8 @@ It writes `.claude/settings.json` for Claude Code (Grok Build reuses it by defau
 |---|---|
 | `pairroom` not found in the tool shell | Step 2: fix PATH, restart the harness, check again |
 | A `doctor` Runtime entry fails | Install or update that CLI, or pass its `--*-command` path |
-| `relay doctor` reports no matching binding | Expected before step 6c: it inspects a bound session, so use steps 3–4 until then |
+| `relay preflight` is not `ready` | Follow its `next_steps` in order, then rerun it |
+| `relay doctor` reports no matching binding | Expected before step 6d: it inspects a bound session, so use `relay preflight` until then |
 | Bind cannot reach the Service | Step 4. A custom data root uses `--service-file <root>/relay-endpoint.json`, as a path |
 | Bind rejects a missing or disabled hook | Steps 6a and 6b for that Runtime |
 | Bind reports missing session identity | Run it as the Agent's tool call inside the intended session |
@@ -143,6 +146,7 @@ PairRoom setup report
 - Agent 2:        <runtime> <version>                     [pass|fail]
 - Login/model:    confirmed by user | live check passed   [needs-user|pass]
 - Service:        Desktop | daemon | foreground | none    [pass|needs-user]
+- Native preflight: ready | not ready (<first next step>)  [pass|fail]
 - Native hooks:   installed for <runtimes>; approval seen via last_hook_at  [pass|needs-user]
 - Next step:      <the one thing the user should do now>
 ```
