@@ -104,6 +104,28 @@ func Capture(parent context.Context, workspace, base string) (Anchor, error) {
 	if err != nil {
 		return Anchor{}, err
 	}
+	// A parent diff records only a submodule commit and a generic "-dirty"
+	// marker, not the changed contents. Never turn that marker into a claim
+	// that two different dirty submodule worktrees are unchanged.
+	raw, err = git(ctx, root, "--no-optional-locks", "status", "--porcelain=v2", "-z", "--no-renames", "--untracked-files=normal", "--ignore-submodules=none")
+	if err != nil {
+		return Anchor{}, err
+	}
+	for _, entry := range bytes.Split(raw, []byte{0}) {
+		if len(entry) == 0 || (entry[0] != '1' && entry[0] != 'u') {
+			continue
+		}
+		// With renames disabled, each NUL record owns one path. Inspect only
+		// the fixed metadata prefix; whitespace in a filename is not syntax.
+		fields := bytes.SplitN(entry, []byte(" "), 4)
+		if len(fields) != 4 || len(fields[2]) != 4 {
+			return Anchor{}, ErrUnavailable
+		}
+		sub := fields[2]
+		if sub[0] == 'S' && (sub[2] != '.' || sub[3] != '.') {
+			return Anchor{}, fmt.Errorf("%w: dirty submodule contents require review in that checkout", ErrUnavailable)
+		}
+	}
 	h := sha256.New()
 	used := 0
 	add := func(label string, data []byte) error {
@@ -116,7 +138,7 @@ func Capture(parent context.Context, workspace, base string) (Anchor, error) {
 		return nil
 	}
 	for _, cached := range []bool{false, true} {
-		args := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--full-index", "--binary"}
+		args := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--full-index", "--binary", "--ignore-submodules=none", "--submodule=short"}
 		if cached {
 			args = append(args, "--cached")
 		}
