@@ -54,4 +54,54 @@ for (const [label, body] of [['[', '['.repeat(128 * 1024)], ['![', '!['.repeat(6
 const links = flatten(render('[a](https://e.x) ![i](x.png "t") [x](javascript:1) [](https://e.x) [t](#h \'T\') [s](https://e.x "q")'));
 assert.deepEqual(links.filter(node => node.tagName === 'a').map(node => [node.href, node.textContent, node.title]),
   [['https://e.x', 'a', ''], ['https://e.x', 'https://e.x', ''], ['#h', 't', 'T'], ['https://e.x', 's', 'q']], 'safe-link rules and titles are unchanged');
-console.log(`richtext safety, bounded nesting and linear inline scan (${elapsed} ms): ok`);
+
+// Tables must preserve the same command/path text as ordinary inline code.
+// Only a backslash escaping a table pipe belongs to the table syntax.
+const table = flatten(render([
+  '| Example | Literal |',
+  '| --- | --- |',
+  '| Windows | `C:\\repo\\file.go` |',
+  '| Regex | `\\d+\\.\\d+` |',
+  '| UNC | `\\\\server\\share` |',
+  '| Pipe | `left\\|right` |',
+  '| Final | C:\\repo\\',
+  '| Escaped final pipe | left\\|',
+  '| Even slashes | `two\\\\` |',
+  '| Odd slashes | `two\\\\\\|pipe` |',
+].join('\n')));
+assert.deepEqual(table.filter(node => node.tagName === 'td').map(node => node.textContent), [
+  'Windows', String.raw`C:\repo\file.go`,
+  'Regex', String.raw`\d+\.\d+`,
+  'UNC', String.raw`\\server\share`,
+  'Pipe', 'left|right',
+  'Final', 'C:\\repo\\',
+  'Escaped final pipe', 'left|',
+  'Even slashes', String.raw`two\\`,
+  'Odd slashes', String.raw`two\\|pipe`,
+], 'table parsing must not silently corrupt Windows paths, regexes or trailing escapes');
+const even = flatten(render('Name | Value\n--- | ---\nend\\\\|cell'));
+assert.deepEqual(even.filter(node => node.tagName === 'td').map(node => node.textContent),
+  ['end\\\\', 'cell'], 'an even backslash run must not escape a cell separator');
+
+// Autolinks must stop at a later '<', not scan the entire remaining tail
+// once per opener. Use the full message budget and bound the VM execution so
+// a regression fails promptly instead of hanging the test process/browser.
+for (const unit of ['<https://', '<mailto:']) {
+  const body = unit.repeat(Math.floor((256 * 1024) / unit.length));
+  let output;
+  assert.doesNotThrow(() => {
+    output = vm.runInNewContext('render(body)', {render, body}, {timeout: 2000});
+  }, `${unit} repeated to 256 KiB must not block the transcript main thread`);
+  assert.equal(output.textContent, body, 'unclosed autolinks remain complete visible text');
+}
+const autolinks = flatten(render('<https://e.x/path?q=1> <http://e.x> <mailto:user@example.com>'));
+assert.deepEqual(autolinks.filter(node => node.tagName === 'a').map(node => [node.href, node.textContent]), [
+  ['https://e.x/path?q=1', 'https://e.x/path?q=1'],
+  ['http://e.x', 'http://e.x'],
+  ['mailto:user@example.com', 'user@example.com'],
+], 'HTTP, HTTPS and mailto autolinks keep their existing presentation');
+const nestedLinks = flatten(render('<mailto:broken<mailto:valid@example.com>'));
+assert.deepEqual(nestedLinks.filter(node => node.tagName === 'a').map(node => node.href),
+  ['mailto:valid@example.com'], 'an earlier unmatched opener cannot swallow a later valid autolink');
+
+console.log(`richtext safety, table fidelity, bounded nesting and inline scans (${elapsed} ms dense body): ok`);
