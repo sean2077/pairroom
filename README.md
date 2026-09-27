@@ -92,6 +92,10 @@ Desktop source commands are `make desktop-build`, `make desktop-package`, and `m
 
 [Changelog](CHANGELOG.md) records history; current behavior belongs in the references. Native remains experimental: Mock, synthetic hooks, browser fixtures, and old working-session reports do not replace authenticated multi-round vendor E2E. No new vendor acceptance or billed-token benchmark is claimed here. Desktop packages are not claimed to be production-signed or notarized. The interface supports English and Simplified Chinese; maintained technical documents are in English.
 
+## Friends
+
+- [LINUX DO](https://linux.do) — a technical community for sincere sharing and friendly discussion, where PairRoom's own discussion and feedback are also published
+
 ## License
 
 [MIT](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md)

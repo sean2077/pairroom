@@ -100,14 +100,20 @@ if [ "$OS" = windows ]; then
     DEST="${DEST}.exe"
 fi
 
-tmp="$(mktemp)"
-tmp_sums="$(mktemp)"
+tmp=""
+tmp_sums=""
 trap 'rm -f "$tmp" "$tmp_sums"' EXIT
 # POSIX shells do not run the EXIT trap on a fatal signal; exit explicitly so
 # an interrupted download still removes its temporary files.
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# Stage the binary beside its destination. A cross-filesystem mv from /tmp
+# can become a non-atomic copy that damages an installed CLI on failure.
+# Install cleanup before either allocation, including a failed second mktemp.
+tmp="$(mktemp "${DEST_DIR}/.pairroom-install.XXXXXX")" ||
+    die "could not create a staging file in ${DEST_DIR}"
+tmp_sums="$(mktemp)" || die "could not create a temporary checksum file"
 curl -fsSL "$URL" -o "$tmp" || die "could not download ${ASSET} for ${TAG}"
 
 # Verify the published release checksum before installing: a truncated or
@@ -128,6 +134,9 @@ fi
     die "checksum mismatch for ${ASSET}: expected ${expected}, got ${actual}"
 
 chmod +x "$tmp"
+# Without this check mv would install *inside* a directory (or its symlink)
+# named pairroom and then falsely report a working executable at DEST.
+[ ! -d "$DEST" ] || die "destination is a directory: ${DEST}"
 mv "$tmp" "$DEST"
 rm -f "$tmp_sums"
 trap - EXIT HUP INT TERM
