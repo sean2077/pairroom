@@ -45,22 +45,11 @@ EOF
 chmod +x "$work/bin/curl"
 
 # Faults are injected at ordinary process boundaries, not production-only
-# hooks. Record temp paths so cleanup is checked even before any HTTP call.
-real_mktemp="$(command -v mktemp)"
+# hooks. An unusable TMPDIR makes the real second mktemp fail under every
+# shell. A mv shim injects a replacement failure; some busybox builds
+# (FEATURE_SH_STANDALONE) run their own applets before searching PATH, so
+# that case runs only where the shell actually honours the shim.
 real_mv="$(command -v mv)"
-cat >"$work/bin/mktemp" <<'EOF'
-#!/bin/sh
-count="$(cat "$FAKE_MKTEMP_COUNT")"
-count=$((count + 1))
-printf '%s\n' "$count" >"$FAKE_MKTEMP_COUNT"
-if [ "$count" = "${FAKE_MKTEMP_FAIL_AT:-}" ]; then
-    printf 'injected mktemp failure\n' >&2
-    exit 1
-fi
-path="$("$REAL_MKTEMP" "$@")" || exit 1
-printf '%s\n' "$path" >>"$FAKE_MKTEMP_LOG"
-printf '%s\n' "$path"
-EOF
 cat >"$work/bin/mv" <<'EOF'
 #!/bin/sh
 if [ "${FAKE_MV_FAIL:-}" = 1 ]; then
@@ -69,13 +58,23 @@ if [ "${FAKE_MV_FAIL:-}" = 1 ]; then
 fi
 exec "$REAL_MV" "$@"
 EOF
-chmod +x "$work/bin/mktemp" "$work/bin/mv"
+chmod +x "$work/bin/mv"
+mkdir -p "$work/probe"
+printf '#!/bin/sh\necho shim\n' >"$work/probe/mv"
+chmod +x "$work/probe/mv"
 
+honours_path_shims() {
+    # shellcheck disable=SC2086 # "busybox sh" is intentionally split.
+    [[ "$(env PATH="$work/probe:$PATH" $1 -c 'mv' 2>/dev/null)" == shim ]]
+}
+
+# Every run gets an empty TMPDIR; leftovers there or beside the destination
+# are leaked temporary files, whichever shell or mktemp produced them.
 assert_temps_removed() {
-    local path
-    while IFS= read -r path; do
-        [[ ! -e "$path" ]] || fail "temporary file leaked: $path"
-    done <"$work/mktemp.log"
+    local prefix="$1" leaked
+    leaked="$(find "$work/tmp" "$prefix/bin" -name '.pairroom-install.*' -print 2>/dev/null)"
+    leaked="$leaked$(find "$work/tmp" -mindepth 1 -print 2>/dev/null)"
+    [[ -z "$leaked" ]] || fail "temporary file leaked: $leaked"
 }
 
 fixture() {
@@ -105,13 +104,11 @@ run_install() {
     shift 2
     : >"$work/curl.log"
     : >"$work/curl-output.log"
-    : >"$work/mktemp.log"
-    printf '0\n' >"$work/mktemp-count"
+    rm -rf "$work/tmp"
+    mkdir -p "$work/tmp"
     # shellcheck disable=SC2086
     env PATH="$work/bin:$PATH" FAKE_CURL_DIR="$work/fixtures" FAKE_CURL_LOG="$work/curl.log" \
-        FAKE_CURL_OUTPUT_LOG="$work/curl-output.log" \
-        REAL_MKTEMP="$real_mktemp" REAL_MV="$real_mv" FAKE_MKTEMP_LOG="$work/mktemp.log" \
-        FAKE_MKTEMP_COUNT="$work/mktemp-count" \
+        FAKE_CURL_OUTPUT_LOG="$work/curl-output.log" REAL_MV="$real_mv" TMPDIR="$work/tmp" \
         PAIRROOM_TEST_OS=Linux PAIRROOM_TEST_ARCH=x86_64 PREFIX="$prefix" "$@" \
         $shell "$INSTALL"
 }
@@ -173,7 +170,7 @@ for shell in "${shells[@]}"; do
     [[ "$(dirname "$staged")" == "$prefix/bin" ]] ||
         fail "[$shell] binary was not staged beside its destination: $staged"
     [[ ! -e "$staged" ]] || fail "[$shell] staging file was not removed"
-    assert_temps_removed
+    assert_temps_removed "$prefix"
 
     # PAIRROOM_REPOSITORY selects a fork, and a checksum mismatch installs nothing.
     prefix="$work/fork-${shell// /-}"
@@ -191,10 +188,17 @@ for shell in "${shells[@]}"; do
     printf '#!/bin/sh\necho previous pairroom\n' >"$prefix/bin/pairroom"
     chmod +x "$prefix/bin/pairroom"
     old_digest="$(sha256 "$prefix/bin/pairroom")"
-    for fault in checksum allocate replace; do
+    faults_to_run=(checksum allocate)
+    if honours_path_shims "$shell"; then
+        faults_to_run+=(replace)
+    else
+        printf 'note: [%s] runs applets before PATH; replacement-failure case skipped\n' "$shell"
+    fi
+    for fault in "${faults_to_run[@]}"; do
         case "$fault" in
             checksum) faults=(PAIRROOM_REPOSITORY=example/fork PAIRROOM_VERSION=1.0.0); reason='checksum mismatch' ;;
-            allocate) faults=(FAKE_MKTEMP_FAIL_AT=2); reason='injected mktemp failure' ;;
+            # The first mktemp stages beside DEST; only the second uses TMPDIR.
+            allocate) faults=(TMPDIR="$work/missing-tmp"); reason='could not create a temporary checksum file' ;;
             replace) faults=(FAKE_MV_FAIL=1); reason='injected replacement failure' ;;
         esac
         if run_install "$shell" "$prefix" "${faults[@]}" >"$work/out" 2>&1; then
@@ -207,12 +211,12 @@ for shell in "${shells[@]}"; do
         if grep -q 'Installed PairRoom CLI' "$work/out"; then
             fail "[$shell] $fault failure reported success"
         fi
-        assert_temps_removed
+        assert_temps_removed "$prefix"
     done
     run_install "$shell" "$prefix" >"$work/out" 2>&1 || fail "[$shell] upgrade failed: $(cat "$work/out")"
     [[ "$(sha256 "$prefix/bin/pairroom")" == "$(sha256 "$work/good-binary")" ]] ||
         fail "[$shell] upgrade did not replace the existing CLI"
-    assert_temps_removed
+    assert_temps_removed "$prefix"
 
     # A directory at the executable path must not turn mv into a successful
     # move *inside* that directory, followed by a false installation receipt.
@@ -223,7 +227,7 @@ for shell in "${shells[@]}"; do
     fi
     [[ -z "$(find "$prefix/bin/pairroom" -type f -print)" ]] ||
         fail "[$shell] a directory at the CLI path was modified"
-    assert_temps_removed
+    assert_temps_removed "$prefix"
 
     # An unreachable release API fails with the resolution message.
     prefix="$work/offline-${shell// /-}"
