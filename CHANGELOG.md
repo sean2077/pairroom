@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Update the desktop module and its pinned Wails CLI from v3.0.0-beta.24 to v3.0.0-beta.25. The upstream change stops `wails3 dev` and its background processes when the primary application exits; the Wails license text is unchanged and PairRoom's maintained build configuration needs no edit.
+
 - Keep transcript rendering responsive on malformed autolinks. Repeated unclosed `<https://` or `<mailto:` candidates let each opener rescan the rest of the message, so a 256 KiB body could block the page for seconds. A later `<` now ends an unclosed candidate; valid autolinks and the full visible text of malformed input are unchanged.
 
 - Preserve backslashes in Markdown table cells. Table parsing consumed every backslash, so `C:\repo\file.go` rendered as `C:repofile.go` and `\d+\.\d+` as `d+.d+`, even inside inline code. Only the backslash escaping a table pipe is now consumed, backslash parity is honored, and an escaped final pipe stays cell content.
