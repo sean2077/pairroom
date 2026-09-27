@@ -92,6 +92,10 @@ make smoke
 
 [Changelog](CHANGELOG.md) 记录历史，当前行为以参考文档为准。Native 仍是实验性功能：Mock、合成 hooks、浏览器 fixtures 及旧工作会话报告，不能替代真实认证的多轮 vendor E2E。本文不宣称新增真实 vendor 验收或计费 token 基准结果。桌面包不宣称完成生产签名或 notarization。界面支持英文和简体中文，维护中的技术文档使用英文。
 
+## 友情链接
+
+- [LINUX DO](https://linux.do) — 真诚分享、友好讨论的技术社区，本项目的交流与反馈也发布于此
+
 ## License
 
 [MIT](LICENSE) · [第三方许可声明](THIRD_PARTY_NOTICES.md)
