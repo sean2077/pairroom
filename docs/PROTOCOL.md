@@ -142,5 +142,12 @@ review sends add that metadata to an envelope; ordinary bootstrap/envelope budge
 and routing are unchanged. The workspace in a received anchor is data, not authority
 to read another path. Comparison uses the operator-selected trusted checkout.
 
+Review capture records clean submodule commit changes even when Git is configured
+to ignore submodules. Dirty submodule worktrees (tracked, staged or untracked
+contents) cannot be represented by the parent's commit-plus-dirty marker: capture
+returns an unavailable-evidence error and comparison returns `unverified`. Review
+that checkout separately rather than treating a lossy summary as unchanged.
+This remains a bounded observation, not an atomic snapshot or review approval.
+
 Unattempted rate-limited wake heads are deferred and rechecked even without a new
 publication; reserved wake effects remain no-auto-retry. See [auto-wake](design/auto-wake.md).

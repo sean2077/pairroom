@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Keep transcript rendering responsive on long Markdown headings and malformed code fences. A heading with a long internal whitespace run, or a fence line with long whitespace or tilde runs followed by a backtick, made the block regular expressions backtrack over the rest of the line and could block the page for seconds. Heading and fence prefixes are now recognized separately from their suffixes; rendered text, heading levels and code language labels are unchanged.
+
+- Stop review evidence from calling a dirty submodule unchanged. A parent diff records only a submodule commit and a generic dirty marker, so two different edits inside the same dirty submodule produced identical evidence, and `submodule.<name>.ignore=all` or `diff.ignoreSubmodules=all` could hide the change entirely. `relay send --review` now refuses to capture evidence while a submodule has tracked, staged or untracked changes, and a later check reports `unverified` instead of `unchanged_observation`; clean submodule commit changes are still captured regardless of ignore settings.
+
 - Update the desktop module and its pinned Wails CLI from v3.0.0-beta.24 to v3.0.0-beta.25. The upstream change stops `wails3 dev` and its background processes when the primary application exits; the Wails license text is unchanged and PairRoom's maintained build configuration needs no edit.
 
 - Keep transcript rendering responsive on malformed autolinks. Repeated unclosed `<https://` or `<mailto:` candidates let each opener rescan the rest of the message, so a 256 KiB body could block the page for seconds. A later `<` now ends an unclosed candidate; valid autolinks and the full visible text of malformed input are unchanged.
