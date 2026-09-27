@@ -4,7 +4,7 @@ info:
   companyName: "PairRoom contributors"
   productName: "PairRoom"
   productIdentifier: "com.sean2077.pairroom.desktop"
-  description: "Claude Code and Codex local collaboration control plane"
+  description: "A local collaboration control plane for Claude Code, Codex, and Grok Build sessions"
   copyright: "(c) 2026 PairRoom contributors"
   comments: "Wails v3 desktop host for PairRoom"
   version: "5.7.0"
