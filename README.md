@@ -10,14 +10,22 @@
 
 ## Why use it?
 
-Use PairRoom when moving proposals, objections, and corrections between two sessions has become repetitive work. Discuss the same problem, then let the chosen Agent execute in its normal harness. Default Lead/Executor responsibilities are flexible: simple tasks stay with the addressed Agent, and review completion does not automatically authorize implementation.
+Having Claude Code draft a plan, copying it to Codex for review, and pasting the review back gets tiring when it repeats. PairRoom lets the two Agents talk directly: one proposes, the other challenges, supplements, or executes. You see the whole exchange and can step in at any time.
 
-| Host mode | Choose it for | Boundary |
-|---|---|---|
-| **Embedded** | PairRoom's conversation and supported adapter controls; independent Runtime, Provider, model, effort, and instructions per slot | PairRoom owns adapters and schedules one native Turn at a time within the Room. Unspecified overrides inherit native configuration. |
-| **Native (experimental)** | Your original Claude Code, Codex (including the intended Desktop workflow), or Grok Build sessions | PairRoom supplies bindings, durable relay, and audit. The original harness owns configuration, permissions, and execution; Room selections are display-only. |
+- **Exactly two Agents.** Two participants can cover each other's gaps over the shortest communication path. More Agents add coordination and token overhead that this job rarely repays.
+- **Official harnesses, not another one.** Claude Code, Codex, and Grok Build keep their own model loop, tools, skills, and subagents. The official harnesses are more stable and complete, and their models are tuned for them.
+- **Two host modes.** Either slot may use any supported Runtime, including the same Runtime twice.
 
-Either slot may use any supported Runtime, including the same Runtime twice. Retain your repository instructions, worktrees, and PR/MR policy. PairRoom does not add a mandatory phase engine or append accumulated Room history to every relay. Compact byte budgets are not guarantees of lower billed tokens or better accuracy.
+  | Host mode | Choose it for | Boundary |
+  |---|---|---|
+  | **Native** (recommended for daily work; experimental) | Your original Claude Code, Codex (including Codex Desktop), or Grok Build sessions, so you keep working in your usual terminal (such as WezTerm) or client instead of moving into another IDE or ADE | PairRoom supplies bindings, durable relay, and audit. The original harness owns configuration, permissions, and execution; Room selections are display-only. |
+  | **Embedded** | PairRoom's desktop or browser conversation and supported adapter controls; independent Runtime, Provider, model, effort, and instructions per slot | PairRoom owns adapters and schedules one native Turn at a time within the Room. Unspecified overrides inherit native configuration. |
+
+- **Customizable responsibilities.** By default one Agent plans and reviews while the other implements and supplements. A custom Room can instead ask them to discuss a plan together, each execute a part, then review the other's work. Responsibilities are not permissions or mandatory phases: simple tasks stay with the addressed Agent, and review completion does not automatically authorize implementation.
+- **Transparent and interruptible.** Messages between the Agents are visible in the Room. In Native, each side's work also stays visible in its own terminal or client, so you can stop or correct it as soon as it drifts.
+- **Only the pair's collaboration.** General Agent workbenches such as Orca provide broad workspaces and task orchestration. PairRoom relays directly between two Agents without another coordinating model or orchestration layer; task decomposition and subagents stay with each native harness. Less coordination is model-visible, but that is a mechanism, not a measured token or cost saving.
+
+Retain your repository instructions, worktrees, and PR/MR policy. PairRoom does not add a mandatory phase engine or append accumulated Room history to every relay. Compact byte budgets are not guarantees of lower billed tokens or better accuracy.
 
 Read [Why PairRoom](docs/WHY_PAIRROOM.md) for fit and limits, [Alternatives](docs/ALTERNATIVES.md) for dated primary-source comparisons, and the [review-first recipe](docs/GETTING_STARTED.md#review-first-execute-where-it-fits) for practical prompts.
 
@@ -34,7 +42,7 @@ pairroom service --mock --data-root "$HOME/.pairroom-demo"
 
 Use an unused demo data root and a disposable Git repository. In Management, register the repository as a Project, create an **Embedded** Room, and send a small task. Mock does not launch vendor CLIs or consume model quota; it does not demonstrate model quality. Do not share the authenticated startup URL.
 
-For real work, install and authenticate each selected CLI independently. Start with an **Embedded** Room ([Getting started](docs/GETTING_STARTED.md)); move to **Native** ([Native setup](docs/NATIVE_RELAY.md)) to keep your original sessions for daily work. A CLI version or environment check alone does not prove authentication or model availability.
+For real work, install and authenticate each selected CLI independently. For daily work, use **Native** ([Native setup](docs/NATIVE_RELAY.md)) to keep your original sessions; it remains experimental. **Embedded** ([Getting started](docs/GETTING_STARTED.md)) is the quickest first trial and the mode for independent per-slot Provider selection. A CLI version or environment check alone does not prove authentication or model availability.
 
 To have your coding Agent guide installation and environment checks, ask it to read [Agent-assisted setup](docs/AGENT_SETUP.md):
 

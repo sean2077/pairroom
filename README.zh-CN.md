@@ -10,14 +10,22 @@
 
 ## 为什么使用？
 
-当你反复需要在两个会话之间搬运方案、异议和修正时，PairRoom 才有明确价值。共同讨论一个问题，再让选定的 Agent 在原有 harness 中执行。默认 Lead/Executor 职责可以变通：简单任务由被指定的 Agent 直接完成，审查完成也不自动授权实现。
+平时让 Claude Code 出方案、再把方案复制给 Codex 审，审完再贴回去……这种来回搬运做多了很累。PairRoom 让两个 Agent 直接对话：一个提方案，另一个挑刺、补充、执行，全程你都看得到，也随时可以插话。
 
-| 宿主模式 | 适合的需求 | 边界 |
-|---|---|---|
-| **Embedded** | 使用 PairRoom 对话界面及受支持的适配器控制；每个槽位独立选择 Runtime、Provider、模型、effort 和指令 | PairRoom 管理适配器，在同一 Room 内同时只调度一位参与者的原生 Turn；未指定覆盖项继承原生配置。 |
-| **Native（实验性）** | 保留原有 Claude Code、Codex（包括目标中的 Desktop 工作方式）或 Grok Build 会话 | PairRoom 负责绑定、持久中继和审计；原生 harness 管理配置、权限与执行，Room 中的选择仅作展示。 |
+- **只做两个 Agent**：两个 Agent 刚好能互相查漏补缺，沟通链路也最短。再加 Agent，协调成本和 token 消耗都会上去，这类工作很少值得。
+- **复用官方 harness，不重新造轮子**：Claude Code、Codex、Grok Build 保留各自的模型循环、工具、skills 和 subagents。官方 harness 更稳定、功能更全，模型也针对它做过优化。
+- **两种宿主模式**：任一槽位都可选择任一受支持的 Runtime，也可同时使用相同 Runtime。
 
-任一槽位都可选择任一受支持的 Runtime，也可同时使用相同 Runtime。沿用仓库指令、worktree 和 PR/MR 流程。PairRoom 不增加强制阶段机制，也不会在每次中继时追加累计 Room 历史。紧凑的字节预算不等于保证账单更低或准确率更高。
+  | 宿主模式 | 适合的需求 | 边界 |
+  |---|---|---|
+  | **Native**（日常工作推荐；实验性） | 保留原有 Claude Code、Codex（包括 Codex Desktop）或 Grok Build 会话，继续在熟悉的终端（如 WezTerm）或客户端里交互，不用换到另一个 IDE/ADE | PairRoom 负责绑定、持久中继和审计；原生 harness 管理配置、权限与执行，Room 中的选择仅作展示。 |
+  | **Embedded** | 使用 PairRoom 桌面端或网页端对话界面及受支持的适配器控制；每个槽位独立选择 Runtime、Provider、模型、effort 和指令 | PairRoom 管理适配器，在同一 Room 内同时只调度一位参与者的原生 Turn；未指定覆盖项继承原生配置。 |
+
+- **职责可以自定义**：默认一个负责规划和审核，另一个负责执行和补充。也可以用自定义 Room 改成「先一起讨论方案，再各自执行一部分，最后互审」。职责不是权限，也不是必经阶段：简单任务由被指定的 Agent 直接完成，审查完成也不自动授权实现。
+- **过程透明，随时介入**：双方交流的内容都在 Room 中可见。Native 下两边的工作过程还能直接在各自的终端或客户端里看，发现方向不对可以马上叫停或纠正。
+- **只管「两个 Agent 怎么协作」**：Orca 这类通用 Agent 工作台定位是工作区和任务编排，PairRoom 只做两个 Agent 之间的直接中继，不额外引入协调模型或编排层；每个 Agent 内部怎么拆任务、怎么调 subagent，交给它自己的原生 harness。模型需要看到的协调内容因此更少，但这是机制描述，不是实测的 token 或成本节省。
+
+沿用仓库指令、worktree 和 PR/MR 流程。PairRoom 不增加强制阶段机制，也不会在每次中继时追加累计 Room 历史。紧凑的字节预算不等于保证账单更低或准确率更高。
 
 [Why PairRoom](docs/WHY_PAIRROOM.md) 说明适用场景与限制，[替代方案](docs/ALTERNATIVES.md) 提供注明日期的一手资料比较，[先审查再执行](docs/GETTING_STARTED.md#review-first-execute-where-it-fits) 提供实用提示词。
 
@@ -34,7 +42,7 @@ pairroom service --mock --data-root "$HOME/.pairroom-demo"
 
 使用未被占用的演示数据目录和可丢弃的 Git 仓库。在 Management 中将仓库注册为 Project，创建 **Embedded** Room，再发送一个小任务。Mock 不启动供应商 CLI，也不消耗模型额度；它不能证明模型能力。不要分享带认证信息的启动 URL。
 
-真实使用前，独立安装并认证每个所选 CLI。先从 **Embedded** Room 入门（[入门指南](docs/GETTING_STARTED.md)）；日常工作需要保留原有会话时，再转到 **Native**（[Native 设置](docs/NATIVE_RELAY.md)）。仅有 CLI 版本或环境检查结果，不代表认证和模型访问已通过验证。
+真实使用前，独立安装并认证每个所选 CLI。日常工作推荐使用 **Native**（[Native 设置](docs/NATIVE_RELAY.md)）保留原有会话，它仍处于实验阶段；**Embedded**（[入门指南](docs/GETTING_STARTED.md)）是最快的初次体验方式，也是每个槽位独立选择 Provider 的模式。仅有 CLI 版本或环境检查结果，不代表认证和模型访问已通过验证。
 
 如需让你的编程 Agent 引导安装和环境检查，请让它阅读 [Agent 协助安装](docs/AGENT_SETUP.md)：
 

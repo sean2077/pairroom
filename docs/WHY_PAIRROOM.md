@@ -16,19 +16,23 @@ This is a selection guide, not evidence that two agents are always more accurate
 
 The recurring work is between two agents: carrying a proposal to the other session, returning a concrete objection, checking the revision against repository evidence, and knowing when another opinion is no longer useful. The point is not to maximize agent count or divide every task into parallel jobs. It is to improve one decision without making the human a message courier.
 
+Two is a deliberate limit. Two participants can cover each other's gaps over the shortest communication path; more agents add coordination and token overhead that this job rarely repays. Both remain official harnesses (Claude Code, Codex or Grok Build) rather than a new agent framework, because those harnesses are more stable and complete and their models are tuned for them.
+
 PairRoom relays an explicitly addressed complete response at the native Turn boundary, keeps the sessions' identities, and records delivery state. It does not make agents agree, prove a plan correct, or replace human product decisions. An independent review must add evidence, a counterexample, or a meaningful correction; agreement alone is not verification.
 
 ## Keep the harness, and choose the interaction surface
 
 Keeping a native harness and keeping its original desktop/terminal UI are different promises. Choose the Room's immutable host mode accordingly:
 
-| Need | Embedded Room | Native Room (experimental) |
+| Need | Embedded Room | Native Room (recommended for daily work; experimental) |
 |---|---|---|
 | Where you interact | PairRoom's conversation and controls; adapters drive the supported native harness interfaces | Your own Claude Code / Codex / Grok Build sessions, including the intended Codex Desktop workflow; approved hooks bind them to the relay |
 | Who owns execution | PairRoom schedules the two participants' Turns; each harness still runs its own tools and subagents | The original harness owns its process, tools, permissions, input and interruption; PairRoom does not launch or interrupt it |
 | Provider / model / effort | Each slot independently selects supported overrides or inherits native configuration | Configured in each original harness; Room selection fields are metadata, not applied overrides |
 | Delivery and control | Single Room Turn owner, FIFO, supported steering, queue, cancel, interrupt and explicit retry | Durable per-slot FIFO and binding audit; advisory Turn ownership, no process lock or Interrupt control |
 | Important limit | Native tool execution does not expose every interactive vendor feature or preserve an independent Desktop UI | Automatic continuation is bounded by park; authenticated multi-round vendor E2E remains a release gate |
+
+Native is the recommended mode for daily work: you keep interacting in your usual terminal or client, each side's work stays visible there, and you can stop or correct it directly. It remains experimental under the limits below. Embedded is the quickest first trial, including Mock, and the mode for independent per-slot Provider selection. In both modes the exchange between the Agents is visible in the Room.
 
 A requirement to keep **Codex Desktop** is a reason to evaluate Native, not to claim Embedded is a transparent attachment to that application. Native supports Claude Code, Codex and Grok Build. Grok uses bounded Hook readiness hints and foreground collection to avoid clipped inputs; clipped Stop replies require explicit full-text publication. See [Grok Native](CLI_REFERENCE.md#grok-build-native). A Native Room's hook parks for up to 30 seconds, with a cap of eight consecutive actual-message blocks. Outside that window/cap, messages stay queued for collection or a human nudge. Neither `handed_off` nor synthetic hook tests prove model acceptance. See [Protocol](PROTOCOL.md#native-host-protocol-v8) and [Support](../SUPPORT.md).
 
@@ -87,7 +91,7 @@ The target is **accuracy, efficiency and acceptable total cost together**. Bette
 
 Orca combines terminals, workspaces, notifications, review tools and an experimental structured orchestration layer. Its explicit messages, blocking ask/reply and existing-terminal reuse can support repeated review of the **same** problem, not just independent parallel jobs. It also supports externally created worktrees. Calling it “parallel only” would be incorrect. [Alternatives](ALTERNATIVES.md#orca-workbench-and-supervised-coordination-versus-a-pair-relay) documents the evidence and Provider distinction.
 
-The fit question is whether you want that workbench and supervised task lifecycle. If you need two original sessions to review one proposal and then let a native harness execute normally, another Run/Task/Dispatch layer may add little value. That is a workflow preference, not proof that Orca is intrinsically slow, token-heavy or unable to collaborate.
+The fit question is whether you want that workbench and supervised task lifecycle. If you need two original sessions to review one proposal and then let a native harness execute normally, another Run/Task/Dispatch layer may add little value. PairRoom relays directly between the two Agents without another coordinating model, so less coordination is model-visible; that is a mechanism, not a measured token or cost saving. That is a workflow preference, not proof that Orca is intrinsically slow, token-heavy or unable to collaborate.
 
 Adopting Orca's terminal/notification surface does not require adopting its orchestration or moving worktree ownership. Conversely, PairRoom Embedded sessions do not automatically become Orca-controlled terminal panes. Native can be evaluated with a compatible terminal host, but hook coexistence and recovery need real testing. Do not let two coordinators drive the same pair simultaneously.
 
