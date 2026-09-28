@@ -166,3 +166,5 @@ body.workbench-native.native-chat{height:100vh;height:100dvh;overflow:hidden}
 @media(max-width:420px) and (max-height:760px){.native-chat .eyebrow,.native-chat #room-subtitle,.native-chat .section-header .muted{display:none}.workbench-native.native-chat .composer textarea{min-height:52px;height:52px}.native-chat .participant-summary{padding-top:6px;padding-bottom:6px}.native-chat .attention-bar{max-height:64px;padding:4px 12px}}
 
 .native-chat .native-inspector .message-heading{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;color:var(--muted);font-size:11px}
+
+.delivery-evidence{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;font-size:11px;color:var(--muted);min-width:0}.delivery-evidence details{min-width:0;max-width:100%}.delivery-evidence summary{cursor:pointer}.delivery-evidence p{margin:4px 0;overflow-wrap:anywhere}.delivery-latency{font-variant-numeric:tabular-nums}

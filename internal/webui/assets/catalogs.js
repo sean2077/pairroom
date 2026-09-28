@@ -2955,3 +2955,25 @@ Object.assign(window.PairRoomLocales["zh-CN"].translation, {
   "ui.codeBlock": "代码",
   "ui.approvalStillPending": "决定已发送，但请求仍在等待。再次决定前请先检查 Agent。"
 });
+
+// Native message delivery observations remain body-free and conservative.
+Object.assign(window.PairRoomLocales["en"].translation, {
+  "room.native.queueClaimTime": "Queued → claimed: {{seconds}} s",
+  "room.native.queueClaimBoundary": "Time to the collector's claim, not model acceptance. Missing or negative intervals are not measured.",
+  "room.native.messageWakeReserved": "Wake reservation recorded",
+  "room.native.messageWakeUnreserved": "No message wake reservation recorded",
+  "room.native.wakeInferredResult": "Result inferred from slot order: {{result}}",
+  "room.native.wakeInferenceBoundary": "Outcome events have no message ID. This association follows slot event order; submitted/accepted does not prove a model turn.",
+  "room.native.slotWakeWhileQueued": "Slot observations while queued (not message-specific attempts)",
+  "room.native.slotWakeWindow": "Showing {{shown}} of {{total}} slot observations."
+});
+Object.assign(window.PairRoomLocales["zh-CN"].translation, {
+  "room.native.queueClaimTime": "排队 → 领取：{{seconds}} 秒",
+  "room.native.queueClaimBoundary": "截至收集器领取的耗时，不代表模型已接受。时间缺失或倒退时不计量。",
+  "room.native.messageWakeReserved": "已记录本消息的唤醒预约",
+  "room.native.messageWakeUnreserved": "未记录本消息的唤醒预约",
+  "room.native.wakeInferredResult": "按槽位事件顺序推定的结果：{{result}}",
+  "room.native.wakeInferenceBoundary": "结果事件不含消息 ID；此关联按槽位事件顺序推定。已提交／已接受不代表模型已启动回合。",
+  "room.native.slotWakeWhileQueued": "排队期间的槽位观察（不等于本消息的唤醒尝试）",
+  "room.native.slotWakeWindow": "显示 {{total}} 条槽位观察中的 {{shown}} 条。"
+});

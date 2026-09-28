@@ -54,7 +54,7 @@ function reportPages(limit = 3) {
   }
 }
 
-async function fixture({ uploadFailure = false, storage, receipts = new Map(), draft = true, manager = locks(), hang = '', receiptGate } = {}) {
+async function fixture({ uploadFailure = false, storage, receipts = new Map(), draft = true, manager = locks(), hang = '', receiptGate, transport } = {}) {
   const clock = timers();
   let hangNext = hang;
   if (!storage) { const values=new Map(); storage={getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)}; }
@@ -65,13 +65,14 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
   watchStatus($('status'), page);
   const document = { getElementById: $, createElement: tag => new Element(tag), createTextNode: text => Object.assign(new Element("#text"), {textContent:text}), addEventListener() {}, hidden: false, body: new Element('body'), querySelector: selector => selector === 'dialog[open]' ? null : $(selector), querySelectorAll: () => [] };
   $('target').value = 'slot2';
-  const reads = [], uploads = [], sends = [], uploadGate = deferred(), windowEvents = {};
+  const reads = [], uploads = [], sends = [], uploadGate = deferred(), windowEvents = {}, streamEvents = {};
   let failSend = true;
   const snapshot = {
     room: { id: 'room', name: 'Native', agents: { slot1: { runtime: 'codex' }, slot2: { runtime: 'claude' } } },
     relay: { sequence: 3, bindings: {}, audit: [], total_messages: 5000,
       messages: [{ id: 'last', state: 'human', from: 'slot1', to: 'user', text: 'complete reply' }] }
   };
+  if(transport)Object.assign(snapshot.relay,transport);
   const fetch = async (url, options) => {
     if (url === 'api/v1/session') return response({ csrf_token: 'csrf' });
     if (url.startsWith('api/v1/snapshot')) { reads.push(url); return response(snapshot); }
@@ -100,11 +101,11 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
     throw new Error(`unexpected request ${url}`);
   };
   const context = vm.createContext({
-    document, window: { PairRoomI18n: { t: k => k, apply() {}, lang: 'en' }, addEventListener(name, fn) { windowEvents[name] = fn; }, matchMedia: () => ({matches: false, addEventListener() {}}) },
+    document, window: { PairRoomI18n: { t: (k, values) => values ? k + JSON.stringify(values) : k, apply() {}, lang: 'en' }, addEventListener(name, fn) { windowEvents[name] = fn; }, matchMedia: () => ({matches: false, addEventListener() {}}) },
     localStorage:storage,fetch, Headers, FormData, TextEncoder, crypto: webcrypto, URLSearchParams,
     navigator:{locks:manager}, AbortController, setTimeout:clock.setTimeout, clearTimeout:clock.clearTimeout,
     location: { hash: '', pathname: '/', search: '' }, history: { replaceState() {} },
-    EventSource: class { addEventListener() {} close() {} }, setInterval: () => 1, clearInterval() {}, console
+    EventSource: class { addEventListener(name, callback) { streamEvents[name]=callback; } close() {} }, setInterval: () => 1, clearInterval() {}, console
   });
   for (const source of ['../internal/webui/assets/native-outbox.js','../internal/webui/assets/richtext.js','../internal/service/assets/native-host.js'])
     vm.runInContext(fs.readFileSync(path.join(__dirname,source),'utf8'),context);
@@ -116,10 +117,27 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
   if(draft)$('attachment').files = [new File(['image bytes'], 'image.png', { type: 'image/png' })];
   const submit = () => $('composer').events.submit({ preventDefault() {} });
   const storageEvent = () => windowEvents.storage({ key: 'pairroom.native.outbox.v1.room' });
-  return { $, reads, uploads, sends, uploadGate, submit, storage, receipts, clock, storageEvent };
+  return { $, reads, uploads, sends, uploadGate, submit, storage, receipts, clock, storageEvent, async updateDelivery(delivery) { snapshot.relay.delivery=delivery; snapshot.relay.sequence++; streamEvents.native(); clock.expire(250); await tick(); } };
 }
 
 async function main() {
+  const textTree = node => [node.textContent, ...node.children.map(textTree)].join(' ');
+  const peerMessage = {id:'last',from:'slot1',to:'slot2',state:'unknown',text:'body',created_at:'2026-09-28T00:00:00Z'};
+  const delivery = {queue_wait_ms:1250,reserved_at:'2026-09-28T00:00:00Z',inferred_outcome:{outcome:'submitted',at:'2026-09-28T00:00:01Z'},slot_observations:[{outcome:'suppressed',reason:'minimum_interval',at:'2026-09-28T00:00:00Z'}],slot_observation_count:5};
+  const measured = await fixture({draft:false,transport:{messages:[peerMessage],delivery:{last:delivery}}});
+  let visible = textTree(measured.$('messages'));
+  assert.match(visible,/queueClaimTime.*1.25/,'unknown preserves queue-to-claim timing');
+  assert.match(visible,/wakeInferredResult/,'slot-order association must be marked inferred');
+  assert.match(visible,/wakeInferenceBoundary/,'result is not model acceptance');
+  assert.match(visible,/slotWakeWhileQueued/,'suppression must stay a slot observation');
+  assert.match(visible,/slotWakeWindow/,'truncated observation history must be visible');
+  await measured.updateDelivery({last:{...delivery,queue_wait_ms:2000}});
+  assert.match(textTree(measured.$('messages')),/queueClaimTime.*2/,'projection-only updates must rerender');
+  for (const ms of [-1, null]) {
+    await measured.updateDelivery({last:{queue_wait_ms:ms}});
+    assert.doesNotMatch(textTree(measured.$('messages')),/queueClaimTime/,'invalid timing must not become a zero-second claim');
+  }
+
   // HTML maxlength counts UTF-16 code units; the relay budget counts UTF-8 bytes.
   for (const text of ['x'.repeat(262145), '界'.repeat(87382), '😀'.repeat(65537)]) {
     const invalid = await fixture();

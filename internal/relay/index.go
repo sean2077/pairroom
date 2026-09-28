@@ -87,6 +87,7 @@ func (e *Engine) countMessage(m Message, delta int) {
 func (e *Engine) putMessage(m Message) {
 	e.initIndexes()
 	old, exists := e.messages[m.ID]
+	e.indexDeliveryMessage(m, exists)
 	if !exists {
 		e.positions[m.ID] = len(e.order)
 		e.order = append(e.order, m.ID)
