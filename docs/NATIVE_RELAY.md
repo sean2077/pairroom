@@ -141,6 +141,18 @@ These are **repository-recorded experiments from 2026-09-16 and 2026-09-18**, no
 
 Use background wait only where the harness actually surfaces its completion. Human-only Codex wake templates may include vendor session identity in local process arguments; do not copy that identity, task text, or extra shell fragments into wake audits/messages. These observations are not proof that every unattended workflow completes or uses fewer billed tokens.
 
+## Long unattended runs by Runtime
+
+A long collaboration without a human keeps moving only while each idle receiver has some way to start its next turn. The Runtimes differ:
+
+| Runtime | Continues within a Stop chain | Restarts an idle session | Unattended fit |
+|---|---|---|---|
+| Claude Code | Up to eight consecutive message blocks | Service inbox wake (rate-limited, fail-closed on inbound policy or a stale capability), or a harness-tracked background `wait` | Good when wake or a background wait is available |
+| Codex | Up to eight consecutive message blocks | Service `codex queue` wake (rate-limited), or tracked background work | Good when wake is available |
+| Grok Build | At most **seven** readiness continuations; Grok skips Stop hooks after eight, and other hooks share that budget | **No Service wake.** Only a harness-owned background `wait` whose completion wakes the session (4/4 in the recorded experiment above) | Limited: depends entirely on keeping one background wait alive |
+
+After Grok's seventh continuation the chain ends and the session goes idle. Queued input then waits until that session's background wait returns it, the human nudges it, or the session's next turn collects it; nothing on the Service side can restart it. Grok also clips Stop replies over 32,768 characters, so a long reply needs explicit `send`/`exchange --text-file` or it is not relayed. For a long unattended run, prefer Claude Code or Codex for any slot that must recover from idleness on its own. Grok works when its session keeps exactly one long background `relay wait` (see the relay skill's *Stay reachable* rule) and sends long results explicitly. Treat the Grok slot as the first place to check when such a run stalls. These are integration boundaries, not authenticated multi-round acceptance results.
+
 ## Troubleshooting
 
 [Native relay errors](TROUBLESHOOTING.md#native-relay-errors) indexes the exact CLI and hook messages, with the first command to run for each.

@@ -369,6 +369,9 @@ PairRoom requests at most seven Grok continuations: the vendor skips the final
 Stop hook after eight, so reserving one gate avoids losing the last reply from
 PairRoom's own continuation chain. Other hooks share that vendor budget. For
 long discussions, use foreground exchange rather than additional Stop rounds.
+Once the cap is reached the Grok session goes idle, and no Service wake exists
+for Grok, so an unattended run depends on that session holding one background
+`relay wait`; see [long unattended runs](NATIVE_RELAY.md#long-unattended-runs-by-runtime).
 
 A Grok Stop with queued input returns only a small instruction to run foreground
 `relay wait`: the input remains queued, with no claim/ack, until that command
