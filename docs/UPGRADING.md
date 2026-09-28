@@ -73,7 +73,7 @@ Session-first discovery is compatible with current relay state. A binding withou
 pairroom relay bind --repo "<original-bound-workspace>"
 ```
 
-This resumes the binding, not a new generation. Conflicting explicit workspace/Room/slot/Service selectors are rejected; a bound session cannot create another Room just by changing directories. Missing/redirected workspaces and corrupt locators fail closed until inspected. Do not copy `.pairroom` into a task worktree. See [workspace upgrade/recovery](NATIVE_SESSION_WORKSPACE.md#upgrade-and-recovery).
+This resumes the binding, not a new generation. Conflicting explicit workspace/Room/slot/Service selectors are rejected; a bound session cannot create another Room just by changing directories. Redirected workspaces and corrupt locators fail closed until inspected; a deleted bound workspace is skipped without blocking the session's other bindings. Do not copy `.pairroom` into a task worktree. See [workspace upgrade/recovery](NATIVE_SESSION_WORKSPACE.md#upgrade-and-recovery).
 
 ### Adding Grok Build to Native Rooms
 

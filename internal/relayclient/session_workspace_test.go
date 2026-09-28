@@ -192,7 +192,7 @@ func TestNativeSessionLocatorRevalidatesStateAndGeneration(t *testing.T) {
 }
 
 func TestNativeSessionLocatorMissingAndUnsafePathsFailClosed(t *testing.T) {
-	for _, mode := range []string{"missing-workspace", "symlink-index", "symlink-state", "malformed-index"} {
+	for _, mode := range []string{"symlink-index", "symlink-state", "malformed-index"} {
 		t.Run(mode, func(t *testing.T) {
 			isolateCaller(t)
 			root := sessionGitRoot(t)
@@ -207,10 +207,6 @@ func TestNativeSessionLocatorMissingAndUnsafePathsFailClosed(t *testing.T) {
 			}
 			path := filepath.Join(dir, locatorFilename(s))
 			switch mode {
-			case "missing-workspace":
-				if err := os.RemoveAll(root); err != nil {
-					t.Fatal(err)
-				}
 			case "malformed-index":
 				if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
 					t.Fatal(err)
@@ -446,5 +442,27 @@ func TestNativeSessionStopHookPublishesAndCollectsOutsideGit(t *testing.T) {
 	}
 	if reports.Load() != 1 || acks.Load() != 1 || !strings.Contains(out.String(), `"decision":"block"`) || !strings.Contains(out.String(), "peer reply") {
 		t.Fatalf("hook became inert after cd: reports=%d acks=%d output=%s", reports.Load(), acks.Load(), out.String())
+	}
+}
+
+// Deleting a task worktree must not strand the same session's other Rooms:
+// the removed workspace took its credentials with it, so its locator is inert.
+func TestDeletedBoundWorkspaceDoesNotBlockOtherBindings(t *testing.T) {
+	isolateCaller(t)
+	kept := sessionGitRoot(t)
+	removed := sessionGitRoot(t)
+	live := callerState(t, kept, "kept", "session", model.ActorSlot1, model.RuntimeClaude)
+	gone := callerState(t, removed, "gone", "session", model.ActorSlot2, model.RuntimeClaude)
+	for _, s := range []State{live, gone} {
+		if err := rememberSession(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.RemoveAll(removed); err != nil {
+		t.Fatal(err)
+	}
+	got, err := indexedSessions(nativeCaller{runtime: model.RuntimeClaude, session: "session"})
+	if err != nil || len(got) != 1 || got[0].Room != "kept" {
+		t.Fatalf("deleted workspace blocked the live binding: %+v %v", got, err)
 	}
 }
