@@ -22,7 +22,7 @@ func TestNativeBootstrapBudgetAndBoundaries(t *testing.T) {
 						t.Fatalf("native bootstrap + collaboration v%d %s/%s/%s = %d bytes", version, slot, a, b, len(full))
 					}
 				}
-				for _, fragment := range []string{NativeVersion, "advisory", "relay send", "Send plus Stop can duplicate", "Never read or print relay credentials"} {
+				for _, fragment := range []string{NativeVersion, "advisory", "relay send", "only when another reply is needed", "Send plus Stop can duplicate", "Never read or print relay credentials"} {
 					if !strings.Contains(text, fragment) {
 						t.Fatalf("missing %q", fragment)
 					}

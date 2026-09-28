@@ -32,6 +32,7 @@ func TestNativeSkillCostAndCompleteOutput(t *testing.T) {
 		"rehang-until-unbind-or-human":     "rehang after expiry unless unbound or the human stops it",
 		"quiet-not-stop":                   "A quiet Room alone is not a stop request",
 		"poll-only-no-idle-collector":      "In a poll-only harness, do not keep a background wait or poll merely to stay reachable",
+		"poll-only-end-turn-path":          "End the turn: bounded Stop park or Service wake in a wake-enabled Room may deliver queued input next turn",
 		"invisible-stdout-suppresses-wake": "unseen stdout can consume input and suppress Service wake",
 		"active-task-foreground":           "During active work, an imminent reply warrants one foreground wait/exchange within the harness tool limit",
 		"end-after-empty":                  "after an empty timeout, end the turn",

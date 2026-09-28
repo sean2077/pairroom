@@ -193,7 +193,7 @@ func TestPublishedSkillMatchesEmbeddedProjection(t *testing.T) {
 		"skip-first-or-resume":      "Skip the announcement on resume or when binding first",
 		"grok-consent":              "approve /hooks, reload with r; folder trust belongs to the human",
 		"grok-no-wake-and-cap":      "No Service wake and at most seven Stop continuations",
-		"grok-unattended-condition": "unattended runs require supported tracked-wait completion",
+		"grok-unattended-condition": "long unattended runs need supported tracked completion: keep one background wait in Grok and send long results explicitly, or input stays queued",
 		"grok-no-duplicate-hook":    "Reuse a compatible project hook; do not add a duplicate",
 		"grok-readiness":            "Readiness means run wait for full input",
 		"grok-full-clipped-reply":   "Publish clipped replies in full via explicit send/exchange, never a truncated prefix or already-confirmed resend",

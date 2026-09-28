@@ -61,7 +61,7 @@ func (s *ManagementServer) bindNative(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bootstrap := protocol.NativeBootstrap(slot, runtime.room.Agents[slot].Runtime, runtime.room.Agents[model.OtherParticipant(slot)].Runtime)
-	nativeResult(w, map[string]any{"binding": binding, "replaced": replaced, "bootstrap": bootstrap, "collaboration": protocol.CollaborationInstructions(slot, runtime.room.Collaboration), "workspace": runtime.project.Root, "runtime": runtime.room.Agents[slot].Runtime, "notice": "Native settings are display-only. Binding is ready; hooks recheck identity. Replace cannot stop native work."}, nil)
+	nativeResult(w, map[string]any{"binding": binding, "replaced": replaced, "bootstrap": bootstrap, "collaboration": protocol.CollaborationInstructions(slot, runtime.room.Collaboration), "workspace": runtime.project.Root, "runtime": runtime.room.Agents[slot].Runtime, "notice": "Native settings are display-only. Hooks recheck identity. Replace cannot stop native work."}, nil)
 }
 func (s *ManagementServer) unbindNative(w http.ResponseWriter, r *http.Request) {
 	runtime, err := s.nativeRuntime(r.Context(), r.PathValue("room"))
