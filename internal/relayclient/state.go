@@ -203,7 +203,7 @@ func (c *Client) call(ctx context.Context, action string, payload any, result an
 	c.authHeaders(req)
 	res, err := c.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("relay %s transport unavailable", action)
+		return fmt.Errorf("relay %s %w", action, errTransportUnavailable)
 	}
 	defer res.Body.Close()
 	observeServiceResponse(ctx, res)
@@ -225,6 +225,9 @@ func (c *Client) call(ctx context.Context, action string, payload any, result an
 	}
 	return json.NewDecoder(io.LimitReader(res.Body, 16<<20)).Decode(result)
 }
+
+// errTransportUnavailable marks a request that received no HTTP response.
+var errTransportUnavailable = errors.New("transport unavailable")
 
 // relayError is a definite Service rejection. Its stable code, when present,
 // lets callers tell a settled answer from transport uncertainty.

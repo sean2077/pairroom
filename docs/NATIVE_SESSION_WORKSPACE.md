@@ -72,8 +72,11 @@ source of binding truth and cannot restore removed credentials.
 
 There is no shared mutable index file or cross-session map lock. Each binding
 owns a separate atomic locator file. Discovery is bounded to at most 128 directory
-entries per session. Missing/redirected indexed workspaces, malformed records,
-unsafe paths and ambiguous matches fail rather than falling through to cwd.
+entries per session. Redirected indexed workspaces, malformed records,
+unsafe paths and ambiguous matches fail rather than falling through to cwd. A
+bound workspace that no longer exists (for example a removed task worktree) is
+skipped like a removed slot directory: its credentials went with it, and the
+session's other bindings remain usable.
 
 ## Upgrade and recovery
 
@@ -96,14 +99,18 @@ An indexed session needs no Management discovery HTTP or Git subprocess merely
 to find its workspace. Stop hooks never query Management to discover an unbound
 session: old hooks without a locator use their cwd/project hints; a foreground
 call can rebuild a locator when both hints have moved. Unbound hooks are inert,
-including outside Git. Hook environment/session disagreement remains an error,
+including outside Git: stdout is `{}`, the exit code is zero and nothing is
+written or sent. When the workspace has a confirmed binding for the same Runtime
+that belongs to another session (typically after Claude `/clear`/resume or a new
+Codex thread), the hook adds one stderr line naming that Room and slot and the
+explicit `bind --replace` decision, without session identities or reply text; it
+never rebinds. Hook environment/session disagreement remains an error,
 not an invitation to associate another identity.
 
 A corrupted disposable locator fails closed; the reported error names the exact
 locator file, which must be inspected or removed before recovering through an
 explicit original workspace. Explicit `--repo` does not bypass a locator that
-cannot resolve, and a bound workspace that no longer exists blocks that session's
-relay commands until the locator is removed. Do not remove workspace
+cannot resolve. Do not remove workspace
 credentials or copy `.pairroom` into a task worktree as a path workaround.
 
 ## File and permission boundaries

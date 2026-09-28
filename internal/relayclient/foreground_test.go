@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
@@ -526,5 +527,47 @@ func TestExchangeTextArgumentUsesTheSamePublicationPath(t *testing.T) {
 	defer f.mu.Unlock()
 	if f.messages["review-1"].Text != "explicit proposal" || len(f.messages) != 1 {
 		t.Fatal("exchange lost explicit body")
+	}
+}
+
+// An orphaned long wait would keep claiming input into output nobody reads,
+// hold the collector lock and suppress wake. Harness exit ends it before any
+// claim; a live harness or a plain terminal keeps waiting.
+func TestLongWaitStopsWhenItsHarnessExits(t *testing.T) {
+	entered := make(chan struct{})
+	f := newForegroundFixture(t, foregroundFixtureOptions{waitEntered: entered})
+	interval := harnessWatchInterval
+	gone := harnessGone
+	harnessWatchInterval = 10 * time.Millisecond
+	var exited atomic.Bool
+	harnessGone = func(pid int) bool { return pid == 4242 && exited.Load() }
+	harnessAncestor = func() (int, string, bool) { return 4242, "claude", true }
+	t.Cleanup(func() { harnessWatchInterval, harnessGone = interval, gone })
+	done := make(chan error, 1)
+	var out bytes.Buffer
+	go func() { done <- f.run(context.Background(), "wait", nil, &out, io.Discard, "--timeout", "0") }()
+	<-entered
+	exited.Store(true)
+	select {
+	case err := <-done:
+		if !errors.Is(err, errHarnessExited) {
+			t.Fatalf("orphaned wait ended with %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("orphaned wait kept running after its harness exited")
+	}
+	if out.Len() != 0 || f.count("ack") != 0 {
+		t.Fatalf("orphaned wait claimed input: stdout=%q acks=%d", out.String(), f.count("ack"))
+	}
+}
+
+func TestLongWaitWithoutHarnessAncestorIgnoresLiveness(t *testing.T) {
+	gone := harnessGone
+	harnessGone = func(int) bool { t.Error("liveness probed without a recorded harness"); return true }
+	t.Cleanup(func() { harnessGone = gone })
+	f := newForegroundFixture(t, foregroundFixtureOptions{})
+	var out bytes.Buffer
+	if err := f.run(context.Background(), "wait", nil, &out, io.Discard, "--timeout", "60"); err != nil || f.count("ack") != 1 {
+		t.Fatalf("terminal wait failed: %v", err)
 	}
 }

@@ -11,8 +11,10 @@ import (
 
 var (
 	mentionPattern = regexp.MustCompile(`(?i)(?:^|[^[:alnum:]_])@([[:alnum:]_]+)\b`)
-	urlPattern     = regexp.MustCompile(`(?i)\b(?:[a-z][a-z0-9+.-]*://|www\.)\S+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?::[0-9]+)?(?:[/?#]\S*)?|\b(?:localhost|(?:[0-9]{1,3}\.){3}[0-9]{1,3})(?::[0-9]+)?(?:[/?#]\S*)?|\[[0-9a-f:]+\](?::[0-9]+)?(?:[/?#]\S*)?`)
-	emailPattern   = regexp.MustCompile(`(?i)\b[[:alnum:]._%+\-]+@[[:alnum:].\-]+\.[[:alpha:]]{2,}\b`)
+	// URL tails stop at the first non-ASCII rune: CJK prose attaches full-width
+	// punctuation directly to a link, and `\S` would swallow the next handle.
+	urlPattern   = regexp.MustCompile(`(?i)\b(?:[a-z][a-z0-9+.-]*://|www\.)[\x21-\x7E]+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?::[0-9]+)?(?:[/?#][\x21-\x7E]*)?|\b(?:localhost|(?:[0-9]{1,3}\.){3}[0-9]{1,3})(?::[0-9]+)?(?:[/?#][\x21-\x7E]*)?|\[[0-9a-f:]+\](?::[0-9]+)?(?:[/?#][\x21-\x7E]*)?`)
+	emailPattern = regexp.MustCompile(`(?i)\b[[:alnum:]._%+\-]+@[[:alnum:].\-]+\.[[:alpha:]]{2,}\b`)
 )
 
 type MentionResult struct {
@@ -118,6 +120,7 @@ func stripMarkdownCodeAndURLs(text string) string {
 		}
 		width := run
 		end := i + width
+		closed := false
 		for end < len(bytes) {
 			matched := true
 			for n := 0; n < width; n++ {
@@ -128,9 +131,17 @@ func stripMarkdownCodeAndURLs(text string) string {
 			}
 			if matched {
 				end += width
+				closed = true
 				break
 			}
 			end++
+		}
+		if !closed && run < 3 {
+			// An unmatched one- or two-backtick run is literal text, not an
+			// inline code span; masking to the end would hide a later handle.
+			// Unclosed fences (three or more) still run to the end, as in Markdown.
+			i += run
+			continue
 		}
 		if end > len(bytes) {
 			end = len(bytes)
@@ -144,20 +155,29 @@ func stripMarkdownCodeAndURLs(text string) string {
 	}
 	// Markdown also treats a tab or four leading spaces as an indented code
 	// block. Mask those lines after fenced-code handling so a literal handle in
-	// generated help/output cannot become a relay request.
+	// generated help/output cannot become a relay request. Inside a list, the
+	// same indentation is a nested item or continuation paragraph instead.
+	inList := false
 	for start := 0; start < len(out); {
 		end := start
 		for end < len(out) && out[end] != '\n' && out[end] != '\r' {
 			end++
 		}
 		line := bytes[start:end]
-		indent := indentedCodeLine(line)
-		if indent {
-			for n := start; n < end; n++ {
-				if out[n] != '\n' && out[n] != '\r' {
-					out[n] = ' '
+		switch {
+		case listItemLine(line):
+			inList = true
+		case strings.TrimSpace(string(line)) == "":
+		case indentedCodeLine(line):
+			if !inList {
+				for n := start; n < end; n++ {
+					if out[n] != '\n' && out[n] != '\r' {
+						out[n] = ' '
+					}
 				}
 			}
+		default:
+			inList = false
 		}
 		if end >= len(out) {
 			break
@@ -172,9 +192,34 @@ func stripMarkdownCodeAndURLs(text string) string {
 }
 
 func isMentionContinuation(value byte) bool {
-	return value == '.' || value == '-' || value == '_' ||
+	return value == '_' ||
 		(value >= '0' && value <= '9') ||
 		(value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z')
+}
+
+// unspacedScript reports runes from scripts written without spaces between
+// words. Handles are ASCII, so such a neighbor is a token boundary (`请@codex审查`),
+// unlike a Latin letter that would extend the word (`@codexé`).
+func unspacedScript(r rune) bool {
+	return unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana)
+}
+
+// listItemLine reports a Markdown bullet or ordered list marker indented by at
+// most three spaces, after which four-space indentation continues the list.
+func listItemLine(line []byte) bool {
+	offset := 0
+	for offset < len(line) && offset < 3 && line[offset] == ' ' {
+		offset++
+	}
+	rest := line[offset:]
+	if len(rest) >= 2 && (rest[0] == '-' || rest[0] == '*' || rest[0] == '+') && (rest[1] == ' ' || rest[1] == '\t') {
+		return true
+	}
+	digits := 0
+	for digits < len(rest) && digits < 9 && rest[digits] >= '0' && rest[digits] <= '9' {
+		digits++
+	}
+	return digits > 0 && len(rest) > digits+1 && (rest[digits] == '.' || rest[digits] == ')') && (rest[digits+1] == ' ' || rest[digits+1] == '\t')
 }
 
 func mentionHasPrefixContinuation(text string, at int) bool {
@@ -200,6 +245,9 @@ func mentionHasPrefixContinuation(text string, at int) bool {
 	}
 	if size == 1 && r == utf8.RuneError {
 		return true
+	}
+	if unspacedScript(r) {
+		return false
 	}
 	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r)
 }
@@ -242,6 +290,14 @@ func mentionHasContinuation(text string, index int) bool {
 		// A malformed byte immediately after a handle is not a trustworthy
 		// token boundary; fail closed instead of routing a corrupted string.
 		return true
+	}
+	if r == '.' || r == '-' {
+		// `@codex.dev` and `@codex-build` name something else, but sentence
+		// punctuation (`review @codex.`, `@codex...`) ends the handle.
+		return index+1 < len(text) && isMentionContinuation(text[index+1])
+	}
+	if unspacedScript(r) {
+		return false
 	}
 	return isMentionContinuation(text[index]) || unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r)
 }

@@ -130,8 +130,8 @@ func (e *Engine) InspectTransport() (Summary, map[model.ActorID]Binding, []WakeC
 	heads := []WakeCandidate{}
 	for _, slot := range model.SlotActors() {
 		bindings[slot] = e.bindings[slot].Binding
-		if ids := e.queued[slot]; len(ids) > 0 {
-			if c, ok := e.wakeCandidateLocked(ids[0]); ok {
+		if id := e.wakeHeadLocked(slot); id != "" {
+			if c, ok := e.wakeCandidateLocked(id); ok {
 				heads = append(heads, c)
 			}
 		}

@@ -69,7 +69,7 @@ pairroom relay install --runtime claude,codex
 
 bind 返回的准确 peer handle 用于路由自动 Stop 回复；`@user` 将结果发布给人类。**未点名的 Native Stop 回复不会被复制进 Room。** 显式 `relay send` / `exchange` 则由命令目标决定投递，不解析正文点名。两条路径都发布可能产生两条消息。详见[发布规则](docs/NATIVE_RELAY.md#what-is-published)。
 
-获批 Stop hook 在有界 park 窗口内收件。窗口外，开启 wake 的 Room 可通过可用 Claude inbox 或 Codex queue 发送固定、无正文的唤醒提示，不启动或中断会话。Grok 使用前台收件；只有 harness 能呈现后台完成通知时，才使用它管理的后台 wait。CLI 等待不调用模型，但唤醒、续聊与计费取决于 harness。被截断的 Grok 输出必须显式发布完整原文。
+获批 Stop hook 在有界 park 窗口内收件。窗口外，开启 wake 的 Room 可通过可用 Claude inbox 或 Codex queue 发送固定、无正文的唤醒提示，不启动或中断会话。Grok 使用前台收件；只有 harness 能呈现后台完成通知时，才使用它管理的后台 wait。CLI 等待不调用模型，但唤醒、续聊与计费取决于 harness。被截断的 Grok 输出必须显式发布完整原文。Grok 没有 Service 唤醒，Stop 续聊最多七次，因此最不适合长时间无人值守的协作；见[按 Runtime 区分的长程无人值守](docs/NATIVE_RELAY.md#long-unattended-runs-by-runtime)。
 
 [NATIVE_RELAY.md](docs/NATIVE_RELAY.md) 集中说明安装、文件证据、cwd/worktree 发现、唤醒限制和恢复。技能也可经 `npx skills add sean2077/pairroom` 分发；仅安装技能不会安装或批准 hooks。注明日期的[vendor 观察记录](docs/NATIVE_RELAY.md#verified-vendor-wake-surfaces)不等于当前版本的发布验收认证。
 

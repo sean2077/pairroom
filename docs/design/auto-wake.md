@@ -60,7 +60,12 @@ suppression observations are coalesced instead of appending audit every second.
 
 A durable reservation means a possibly attempted effect, including a crash before
 the result could be recorded. Such heads are never automatically retried. A mere
-rate suppression has no reservation and may be reconsidered. Runtime shutdown
+rate suppression has no reservation and may be reconsidered. An attempt can be
+accepted or submitted without producing a native turn, so the message queued
+right after the newest attempted one owns a new burst once that attempt is
+`WakeRenewAfter` (10 minutes) old; before then a busy target is not nudged twice.
+Renewal reserves the new message ID under the same limits and never re-reserves
+an attempted message. Runtime shutdown
 cancels and joins wake workers before closing the event writer. Reservations replay into the rate-limit history, so a
 Service restart cannot repeat a possibly successful effect. Missing capability,
 missing CLI, failed transport or native `hold`/`refuse` leaves the receive-only

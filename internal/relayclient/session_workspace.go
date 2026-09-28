@@ -158,6 +158,12 @@ func indexedSessions(caller nativeCaller) ([]State, error) {
 			return nil, fmt.Errorf("invalid native session locator %s; inspect or remove it before retrying", path)
 		}
 		canonical, err := filepath.EvalSymlinks(loc.Workspace)
+		if errors.Is(err, os.ErrNotExist) {
+			// A deleted workspace (for example a removed task worktree) took its
+			// credentials with it, exactly like a removed slot directory below.
+			// Skipping it keeps this session's other bindings usable.
+			continue
+		}
 		if err != nil || !sameWorkspace(canonical, loc.Workspace) {
 			return nil, fmt.Errorf("bound relay workspace %s is unavailable or redirected; restore it or remove the locator %s before retrying", loc.Workspace, path)
 		}

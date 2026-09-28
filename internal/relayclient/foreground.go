@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
@@ -21,13 +22,77 @@ func deliverForeground(ctx context.Context, c *Client, seconds int, out io.Write
 	if seconds > 0 && seconds <= 30 {
 		return deliverOnce(ctx, c, false, seconds, out)
 	}
+	ctx, orphaned := watchHarness(ctx)
 	budget := time.Duration(seconds) * time.Second
-	return waitForInbox(ctx, budget, 30*time.Second, func(ctx context.Context, span time.Duration) (bool, error) {
+	delivered, err := waitForInbox(ctx, budget, 30*time.Second, func(ctx context.Context, span time.Duration) (bool, error) {
 		// The wire API accepts whole seconds. Round a finite last window up,
 		// by less than one second, rather than silently dropping its remainder.
 		pollSeconds := int((span + time.Second - 1) / time.Second)
 		return deliverOnce(ctx, c, false, pollSeconds, out)
 	})
+	if orphaned() {
+		return delivered, errHarnessExited
+	}
+	return delivered, err
+}
+
+var errHarnessExited = errors.New("the native harness that started this collector has exited; collection stopped so input stays queued for the live session")
+
+// harnessWatchInterval bounds how long an orphaned collector can keep claiming.
+var harnessWatchInterval = 2 * time.Second
+
+// watchHarness cancels a long foreground collection once the native harness
+// that launched it is gone. A background wait can outlive its harness (a
+// grandchild is not always killed with the tool shell); left running, it would
+// keep claiming input into output nobody reads, hold the collector lock that
+// Stop parking needs, and suppress automatic wake as a live collector.
+// Lineage is only a liveness observation: no ancestor at start (a plain
+// terminal) or an unreadable process table never stops a wait. Cancellation
+// usually lands in the Service's blocking wait, before any claim; if it races
+// a just-released envelope, the delivery settles as unknown for inspection
+// rather than as a handoff into output nobody reads.
+func watchHarness(parent context.Context) (context.Context, func() bool) {
+	pid, _, ok := harnessAncestor()
+	if !ok {
+		return parent, func() bool { return false }
+	}
+	ctx, cancel := context.WithCancelCause(parent)
+	go func() {
+		ticker := time.NewTicker(harnessWatchInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if harnessGone(pid) {
+					cancel(errHarnessExited)
+					return
+				}
+			}
+		}
+	}()
+	return ctx, func() bool {
+		orphaned := errors.Is(context.Cause(ctx), errHarnessExited)
+		cancel(nil)
+		return orphaned
+	}
+}
+
+// harnessGone reports that the recorded harness process no longer exists
+// under a harness name. An intermediate shell exiting does not count: the
+// harness itself may still be reading this collector's output.
+var harnessGone = func(pid int) bool {
+	table, err := processTable()
+	if err != nil || len(table) == 0 {
+		return false
+	}
+	entry, ok := table[pid]
+	if !ok {
+		return true
+	}
+	_, isHarness := harnessRuntimes[strings.TrimSuffix(strings.ToLower(entry.name), ".exe")]
+	return !isHarness
 }
 
 // validatePublicationReceipt checks identity and idempotency without reflecting the body.
