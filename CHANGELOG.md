@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v5.8.0] — 2026-09-28
+
 - Show a non-blocking Management banner for a stable mismatch between the running Service and the last authenticated stamped CLI. Existing requests carry the bounded build token; no process, disk scan, network update check or extra hook request is added. Invalid/unstamped observations stay quiet, and alternating CLI builds restart the 30-second stability window. Restart guidance is explicit and never executes a command.
 
 - Show Native peer-message queue-to-claim timing and expandable wake evidence in chat and history. Reservations are associated by message ID; outcome associations are marked as inferred from slot order, and slot observations remain separate. The bounded, body-free response projection replays from existing facts without changing stored events or claiming model acceptance.
