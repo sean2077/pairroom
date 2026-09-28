@@ -215,3 +215,39 @@ func (e *Engine) WakeHeads() []WakeCandidate {
 	}
 	return result
 }
+
+// HasWakeWork replays a suspended Room's events read-only and reports whether
+// activating it would give its waker something to consider: wake is enabled and
+// a slot bound to an active session has queued input that has not yet had a
+// wake attempt. It opens no writer and applies no restore transition (a
+// recovered delivering message is not turned unknown here), so a Service can
+// decide to resume the Room without appending anything. The waker itself still
+// applies every suppression, reservation and rate rule after activation.
+func HasWakeWork(roomID string, events []model.Event, runtimes map[model.ActorID]model.RuntimeKind) (bool, error) {
+	e := &Engine{cfg: Config{RoomID: roomID, Runtimes: runtimes}, bindings: map[model.ActorID]bindingFact{}, seenBinds: map[string]bool{}, messages: map[string]Message{}, inFlight: map[string]struct{}{}, sends: map[string]string{}, reports: map[string]Publication{}, lastReport: map[string]uint64{}, wakeEnabled: true, wakeReserved: map[string]bool{}, waiters: map[model.ActorID]int{}}
+	for _, ev := range events {
+		if ev.RoomID != roomID {
+			return false, errors.New("native relay Room identity mismatch")
+		}
+		if err := e.apply(ev); err != nil {
+			return false, err
+		}
+	}
+	if !e.wakeEnabled {
+		return false, nil
+	}
+	for _, slot := range model.SlotActors() {
+		b := e.bindings[slot]
+		if !b.Active || b.SessionID == "" {
+			continue
+		}
+		// Unattempted queued input for the current generation, including
+		// input behind an attempted head that will own a renewal later.
+		for _, id := range e.queued[slot] {
+			if !e.wakeReserved[id] && e.messages[id].TargetGeneration == b.Generation {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}

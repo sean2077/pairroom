@@ -72,6 +72,8 @@ Removed `providers`, `cc_connect`, and string-valued Agent `provider` fields pro
 
 Service policy controls Embedded capacity, idle reclaim, reconciliation, shutdown, listen address, and token without changing committed Room facts. `--runtime-limit` defaults to 8 and accepts 1–128. Management can raise it to admit queued work or lower it without preempting running Turns. Idle timeout remains a startup flag.
 
+`resume_pending` (default `true`; flag `--resume-pending`) makes a starting Service request activation, once, for suspended Rooms whose Event Log shows work only an active Room Runtime can move: an Embedded Room-owned FIFO input that never crossed native submission, or a wake-enabled Native slot with unattempted queued input for its bound session. Detection replays each log read-only and appends nothing; activation then applies the ordinary restore rules, so accepted or uncertain input is never replayed and wake keeps its reservation and rate limits. Embedded resumes still queue behind the capacity limit. Set it to `false` to leave every Room suspended until it is opened or called.
+
 Native relay Rooms do not consume this adapter-capacity budget or become capacity-eviction victims. Their wake toggle is a per-Room Management operation at an idle boundary, not a Provider override or a relay-credential capability. Exact wake limits belong in [Protocol](PROTOCOL.md#automatic-idle-peer-wake).
 
 ## Source field inventory
@@ -96,6 +98,7 @@ These JSON names come from configuration/model struct tags. The list identifies 
 - `permission_mode`
 - `profile_id`
 - `provider`
+- `resume_pending`
 - `room_name`
 - `runtime`
 - `runtimes`

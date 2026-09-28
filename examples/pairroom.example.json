@@ -3,6 +3,7 @@
   "room_name": "PairRoom",
   "stall_warning_seconds": 300,
   "auto_start": true,
+  "resume_pending": true,
   "cc_switch": {
     "database": ""
   },

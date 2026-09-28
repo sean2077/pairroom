@@ -385,6 +385,9 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 		time.Sleep(50 * time.Millisecond)
 	}
 	cleanupLock = false
+	if fileConfig.ResumePending {
+		go service.ResumePendingRooms(context.Background(), registry, runtimes)
+	}
 	return host, nil
 }
 

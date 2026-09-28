@@ -78,6 +78,7 @@ type File struct {
 	RoomName            string           `json:"room_name,omitempty"`
 	StallWarningSeconds int              `json:"stall_warning_seconds"`
 	AutoStart           bool             `json:"auto_start"`
+	ResumePending       bool             `json:"resume_pending"`
 	Token               string           `json:"token,omitempty"`
 	CCSwitch            CCSwitch         `json:"cc_switch,omitempty"`
 	Runtimes            RuntimeTemplates `json:"runtimes"`
@@ -93,6 +94,7 @@ func Defaults() File {
 		// claiming a fixed vendor combination.
 		StallWarningSeconds: 300,
 		AutoStart:           true,
+		ResumePending:       true,
 		Runtimes: RuntimeTemplates{
 			Claude: RuntimeTemplate{Command: "claude"},
 			Codex:  RuntimeTemplate{Command: "codex"},
