@@ -228,7 +228,7 @@ Every Management `/api/…` response, including relay and rejected requests, car
 
 ## Attention notifications
 
-`GET /api/v1/notifications` returns `{"notifications":[...]}`: body-free observations that a Room may need a human, oldest first. Each item has `seq`, `room_id`, `room_name`, `host_mode`, `kind`, optional `slot` and `at`; it never carries message text, tool input, approval detail, session identity, receipts or vendor output. `?after=<seq>` returns only newer items and `?wait=<1-30>` long-polls until one arrives. Reading never acknowledges, clears or changes Room state.
+`GET /api/v1/notifications` returns `{"notifications":[...],"epoch":"...","latest_seq":0,"reset":false}`: body-free observations that a Room may need a human, oldest first. Each item has `seq`, `room_id`, `room_name`, `host_mode`, `kind`, optional `slot` and `at`; it never carries message text, tool input, approval detail, session identity, receipts or vendor output. `?after=<seq>&epoch=<epoch>` returns only newer items and `?wait=<1-30>` long-polls until one arrives. The opaque epoch changes when the notifier restarts. An old epoch or a cursor ahead of `latest_seq` returns `reset:true` immediately with the current retained list; clients replace their epoch and cursor with the returned values, including when the list is empty. Reading never acknowledges, clears or changes Room state.
 
 | `kind` | Raised when |
 |---|---|

@@ -72,6 +72,9 @@ type Notifier struct {
 	queue   chan Notification
 	done    chan struct{}
 	closed  bool
+	epoch   string
+	ctx     context.Context
+	cancel  context.CancelFunc
 }
 
 func NewNotifier(cfg NotifierConfig) *Notifier {
@@ -81,7 +84,8 @@ func NewNotifier(cfg NotifierConfig) *Notifier {
 	if cfg.Run == nil {
 		cfg.Run = runNotifyCommand
 	}
-	n := &Notifier{cfg: cfg, seen: map[string]bool{}, last: map[string]time.Time{}, changed: make(chan struct{}), queue: make(chan Notification, 64), done: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	n := &Notifier{cfg: cfg, seen: map[string]bool{}, last: map[string]time.Time{}, changed: make(chan struct{}), queue: make(chan Notification, 64), done: make(chan struct{}), epoch: model.NewID("notifications"), ctx: ctx, cancel: cancel}
 	go n.deliver()
 	return n
 }
@@ -95,11 +99,14 @@ func (n *Notifier) Notify(room Room, kind string, slot model.ActorID, key string
 	}
 	now := n.cfg.Now()
 	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.closed {
+		return false
+	}
 	dedupe := room.ID + "/" + kind + "/" + key
 	burst := room.ID + "/" + kind
-	if n.closed || n.seen[dedupe] || now.Sub(n.last[burst]) < notificationCooldown {
+	if n.seen[dedupe] || now.Sub(n.last[burst]) < notificationCooldown {
 		n.seen[dedupe] = true
-		n.mu.Unlock()
 		return false
 	}
 	n.seen[dedupe] = true
@@ -115,7 +122,8 @@ func (n *Notifier) Notify(room Room, kind string, slot model.ActorID, key string
 	}
 	close(n.changed)
 	n.changed = make(chan struct{})
-	n.mu.Unlock()
+	// Enqueue and Close share admission. A nonblocking send on a closed
+	// channel still panics, even when the select has a default case.
 	if len(n.cfg.Command) > 0 {
 		select {
 		case n.queue <- item:
@@ -128,12 +136,29 @@ func (n *Notifier) Notify(room Room, kind string, slot model.ActorID, key string
 // Since returns notifications newer than seq, oldest first, and a channel that
 // closes on the next change.
 func (n *Notifier) Since(seq uint64) ([]Notification, <-chan struct{}) {
+	page, changed := n.page(seq, "")
+	return page.Notifications, changed
+}
+
+type notificationPage struct {
+	Notifications []Notification `json:"notifications"`
+	Epoch         string         `json:"epoch"`
+	LatestSeq     uint64         `json:"latest_seq"`
+	Reset         bool           `json:"reset"`
+}
+
+// Cursor and items are sampled together. A restarted Service must not hide
+// new alerts behind the previous process's larger sequence number.
+func (n *Notifier) page(after uint64, epoch string) (notificationPage, <-chan struct{}) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	var out []Notification
+	out := notificationPage{Notifications: []Notification{}, Epoch: n.epoch, LatestSeq: n.seq, Reset: (epoch != "" && epoch != n.epoch) || after > n.seq}
+	if out.Reset {
+		after = 0
+	}
 	for _, item := range n.items {
-		if item.Seq > seq {
-			out = append(out, item)
+		if item.Seq > after {
+			out.Notifications = append(out.Notifications, item)
 		}
 	}
 	return out, n.changed
@@ -144,12 +169,12 @@ func (n *Notifier) Close() {
 		return
 	}
 	n.mu.Lock()
-	if n.closed {
-		n.mu.Unlock()
-		return
+	if !n.closed {
+		n.closed = true
+		n.cancel()
+		close(n.queue)
+		close(n.changed)
 	}
-	n.closed = true
-	close(n.queue)
 	n.mu.Unlock()
 	<-n.done
 }
@@ -157,11 +182,14 @@ func (n *Notifier) Close() {
 func (n *Notifier) deliver() {
 	defer close(n.done)
 	for item := range n.queue {
+		if n.ctx.Err() != nil {
+			return // Best-effort pending commands do not extend shutdown.
+		}
 		data, err := json.Marshal(item)
 		if err != nil {
 			continue
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), notifyCommandTimeout)
+		ctx, cancel := context.WithTimeout(n.ctx, notifyCommandTimeout)
 		_ = n.cfg.Run(ctx, n.cfg.Command, data)
 		cancel()
 	}
@@ -198,23 +226,22 @@ func (s *ManagementServer) readNotifications(w http.ResponseWriter, r *http.Requ
 		}
 		wait = parsed
 	}
-	items := []Notification{}
+	page := notificationPage{Notifications: []Notification{}}
 	if s.notifier != nil {
-		found, changed := s.notifier.Since(after)
-		if len(found) == 0 && wait > 0 {
+		epoch := r.URL.Query().Get("epoch")
+		var changed <-chan struct{}
+		page, changed = s.notifier.page(after, epoch)
+		if len(page.Notifications) == 0 && !page.Reset && wait > 0 {
 			timer := time.NewTimer(time.Duration(wait) * time.Second)
 			select {
 			case <-changed:
-				found, _ = s.notifier.Since(after)
+				page, _ = s.notifier.page(after, epoch)
 			case <-timer.C:
 			case <-r.Context().Done():
 			case <-s.streams.Done():
 			}
 			timer.Stop()
 		}
-		if found != nil {
-			items = found
-		}
 	}
-	writeManagementJSON(w, http.StatusOK, map[string]any{"notifications": items})
+	writeManagementJSON(w, http.StatusOK, page)
 }
