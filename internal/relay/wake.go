@@ -2,6 +2,7 @@ package relay
 
 import (
 	"errors"
+	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
 )
@@ -133,23 +134,81 @@ func (e *Engine) wakeCandidateLocked(messageID string) (WakeCandidate, bool) {
 		candidate.BindID = b.BindID
 		candidate.Generation = b.Generation
 	}
-	ids := e.queued[m.To]
-	candidate.QueueStart = len(ids) > 0 && ids[0] == m.ID
+	owner, _ := e.wakeOwnerLocked(m.To)
+	candidate.QueueStart = owner == m.ID
 	candidate.Delivering = e.counts[m.To].Delivering > 0
 	candidate.Reserved = e.wakeReserved[m.ID]
 	candidate.WaiterActive = e.waiters[m.To] > 0
 	return candidate, true
 }
 
-// WakeHeads examines at most two queue heads, regardless of terminal history.
-// Reserved heads remain visible to diagnostics but never earn an automatic retry.
+// WakeRenewAfter is how long an attempted wake may stay uncollected before
+// input queued behind it starts its own burst. A wake can be accepted without
+// producing a native turn (a stale inbox socket, a held inbound policy, or a
+// nudge dropped by the vendor); without renewal every later message would sit
+// behind that head forever. The delay keeps a busy target that will still
+// consume the first nudge from collecting a second one immediately.
+const WakeRenewAfter = 10 * time.Minute
+
+// wakeOwnerLocked returns the queued message that owns the target's next wake
+// decision: the queue head when no queued message has an attempted wake, or
+// the oldest message queued after the newest attempted one once that attempt
+// is older than WakeRenewAfter. The attempted message itself is never offered
+// again. attempted names that newest attempted message, for diagnostics.
+func (e *Engine) wakeOwnerLocked(slot model.ActorID) (owner, attempted string) {
+	ids := e.queued[slot]
+	last := -1
+	for i, id := range ids {
+		if e.wakeReserved[id] {
+			last = i
+		}
+	}
+	if last < 0 {
+		if len(ids) == 0 {
+			return "", ""
+		}
+		return ids[0], ""
+	}
+	attempted = ids[last]
+	if last+1 >= len(ids) {
+		return "", attempted
+	}
+	at, ok := e.wakeReservedAtLocked(attempted)
+	if ok && e.cfg.Now().Before(at.Add(WakeRenewAfter)) {
+		return "", attempted
+	}
+	return ids[last+1], attempted
+}
+
+func (e *Engine) wakeReservedAtLocked(messageID string) (time.Time, bool) {
+	for i := len(e.wakeReservations) - 1; i >= 0; i-- {
+		if e.wakeReservations[i].MessageID == messageID {
+			return e.wakeReservations[i].At, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// wakeHeadLocked is the candidate maintenance and diagnostics inspect: the
+// current owner, else the newest attempted message still waiting.
+func (e *Engine) wakeHeadLocked(slot model.ActorID) string {
+	owner, attempted := e.wakeOwnerLocked(slot)
+	if owner != "" {
+		return owner
+	}
+	return attempted
+}
+
+// WakeHeads examines at most one candidate per slot, regardless of terminal
+// history. Attempted heads remain visible to diagnostics but never earn an
+// automatic retry; only input queued behind them can start a new burst.
 func (e *Engine) WakeHeads() []WakeCandidate {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	result := make([]WakeCandidate, 0, 2)
 	for _, slot := range model.SlotActors() {
-		if ids := e.queued[slot]; len(ids) > 0 {
-			if candidate, ok := e.wakeCandidateLocked(ids[0]); ok {
+		if id := e.wakeHeadLocked(slot); id != "" {
+			if candidate, ok := e.wakeCandidateLocked(id); ok {
 				result = append(result, candidate)
 			}
 		}

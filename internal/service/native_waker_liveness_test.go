@@ -349,3 +349,57 @@ func TestNativeDeferredWakeRetainsLeaseWithoutInventingHTTPActivity(t *testing.T
 	now.Add(int64(2 * time.Minute))
 	waitRuntimeStatus(t, manager, rooms[0].ID, func(s RuntimeStatus) bool { return s.Phase == RuntimeSuspended })
 }
+
+// A wake can be accepted without producing a native turn. Its head is never
+// retried, but input queued behind it must not wait behind that head forever:
+// after WakeRenewAfter the next queued message owns a new, separately reserved
+// wake. Before that delay a busy target is not nudged twice.
+func TestNativeWakeRenewsForInputBehindAnUncollectedAttempt(t *testing.T) {
+	var clock, calls atomic.Int64
+	clock.Store(1800000000)
+	e, a, _ := wakeEngine(t, &clock)
+	w := newNativeWaker(nativeWakerConfig{Relay: e, Now: func() time.Time { return time.Unix(clock.Load(), 0).UTC() }, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { calls.Add(1); return nil }})
+	defer w.Close()
+	reconcile := func() { w.Reconcile(context.Background()); w.workers.Wait() }
+	send := func(id string) relay.Message {
+		m, err := e.Send(a[model.ActorSlot1], relay.SendRequest{ID: id, Text: "fixture"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	first := send("first")
+	reconcile()
+	if calls.Load() != 1 {
+		t.Fatal("head was not woken", calls.Load())
+	}
+	// The nudge was accepted but no turn collected it. A follow-up arrives.
+	clock.Add(120)
+	second := send("second")
+	w.Wake(context.Background(), second.ID)
+	reconcile()
+	if calls.Load() != 1 {
+		t.Fatal("busy target nudged again before the renewal delay", calls.Load())
+	}
+	clock.Add(int64(relay.WakeRenewAfter / time.Second))
+	reconcile()
+	if calls.Load() != 2 {
+		t.Fatal("input behind an uncollected wake stayed stranded", calls.Load())
+	}
+	reservations := e.WakeReservations()
+	if len(reservations) != 2 || reservations[0].MessageID != first.ID || reservations[1].MessageID != second.ID {
+		t.Fatalf("renewal must reserve the new message, never re-reserve the head: %+v", reservations)
+	}
+	// Neither attempted message is ever offered again, even much later.
+	clock.Add(3 * 3600)
+	reconcile()
+	if calls.Load() != 2 {
+		t.Fatal("attempted wake retried", calls.Load())
+	}
+	for _, id := range []string{first.ID, second.ID} {
+		page, _ := e.History(relay.HistoryQuery{ID: id})
+		if page.Messages[0].State != "queued" {
+			t.Fatal("wake consumed a body")
+		}
+	}
+}
