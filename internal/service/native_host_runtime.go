@@ -81,16 +81,12 @@ func startNativeHostRuntime(ctx context.Context, registry *Registry, project Pro
 	for actor, selection := range durable.Agents {
 		kinds[actor] = selection.Runtime
 	}
-	var onAppend func(model.Event)
+	var onAttention func(relay.Attention)
 	if notifier != nil {
-		// Runs under the relay lock: classify and record only, never block.
-		onAppend = func(ev model.Event) {
-			if a, ok := relay.AttentionFromEvent(ev); ok {
-				notifier.Notify(durable, a.Kind, a.Slot, a.Key)
-			}
-		}
+		// Runs under the relay lock: record only, never block.
+		onAttention = func(a relay.Attention) { notifier.Notify(durable, a.Kind, a.Slot, a.Key) }
 	}
-	engine, err := relay.Open(relay.Config{RoomID: durable.ID, Store: log, Runtimes: kinds, Media: media, OnAppend: onAppend, CommitBinding: func(b relay.Binding, appendFact func() error) error {
+	engine, err := relay.Open(relay.Config{RoomID: durable.ID, Store: log, Runtimes: kinds, Media: media, OnAttention: onAttention, CommitBinding: func(b relay.Binding, appendFact func() error) error {
 		return registry.commitNativeBinding(durable.ID, b, appendFact)
 	}})
 	if err != nil {

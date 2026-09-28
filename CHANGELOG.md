@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Show a replacing session what happened to the previous one's input. `bind --replace` silently cancelled the old generation's queued input and turned a claimed, unacknowledged delivery into `unknown`, and a new session had no sign that earlier input had even reached the old one. The bind result now includes `replaced` with the body-free IDs it cancelled or made unknown and a bounded list of the newest handed-off IDs, to inspect with `relay history --id`; nothing is requeued. A delivery made unknown by a replacement or unbind now also raises the `delivery_uncertain` attention notification, which was only raised for lease expiry.
+
 - Serialize Native idle-close admission with wake reservation leases, HTTP use and delivery claims so an idle decision cannot cancel a newly admitted wake. Record known outcomes of already reserved effects while draining, including cancellation, before closing the Event Log; new reservations remain blocked and reserved effects are never automatically retried.
 
 - Make attention notification shutdown safe against concurrent publication, cancel the in-flight notification command and discard pending commands. Notification responses now carry a process epoch and cursor-reset information, and Management clears its cursor on login, so restarting the Service cannot hide new alerts behind an old sequence number.

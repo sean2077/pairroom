@@ -237,18 +237,36 @@ func TestNativeRebindSameSessionIsIdempotent(t *testing.T) {
 func TestNativeReplaceRotatesGeneration(t *testing.T) {
 	f := nativeHTTP(t)
 	a := f.bind(t, model.ActorSlot1)
+	// Input the old generation already collected is reported to the new
+	// session by ID; it is neither requeued nor treated as invalidated.
+	handed, err := f.native.engine.SendUser(relay.SendRequest{ID: "before-replace", To: a.Slot, Text: "earlier task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := f.native.engine.Claim(context.Background(), a, false)
+	if err != nil || claim == nil || f.native.engine.Ack(a, claim.ID, claim.Receipt) != nil {
+		t.Fatalf("handoff failed: %+v %v", claim, err)
+	}
 	out, err := f.runAs(t, model.RuntimeClaude, a.SessionID, []string{"bind", "--room", f.room.ID, "--slot", "claude", "--service-file", f.endpoint, "--replace"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var replacement struct {
-		Binding relay.Binding `json:"binding"`
+		Binding  relay.Binding   `json:"binding"`
+		Replaced *relay.Replaced `json:"replaced"`
+		Notice   string          `json:"replaced_notice"`
 	}
 	if err := json.Unmarshal(out, &replacement); err != nil {
 		t.Fatal(err)
 	}
 	if replacement.Binding.Generation != a.Generation+1 || replacement.Binding.SessionID != a.SessionID {
 		t.Fatalf("replacement did not rotate generation: %+v", replacement.Binding)
+	}
+	if r := replacement.Replaced; r == nil || r.Generation != a.Generation || len(r.HandedOff) != 1 || r.HandedOff[0] != handed.ID || len(r.Cancelled)+len(r.Unknown) != 0 || !strings.Contains(replacement.Notice, "history --id") {
+		t.Fatalf("replaced report = %+v %q", r, replacement.Notice)
+	}
+	if strings.Contains(string(out), "earlier task") || strings.Contains(string(out), claim.Receipt) {
+		t.Fatal("bind output carried a message body or receipt")
 	}
 	// The revoked generation no longer authenticates.
 	if _, err := f.native.engine.Inspect(a); !errors.Is(err, relay.ErrAuth) {

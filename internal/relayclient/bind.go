@@ -153,7 +153,8 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		}
 	}
 	var result struct {
-		Binding                          relay.Binding `json:"binding"`
+		Binding                          relay.Binding   `json:"binding"`
+		Replaced                         *relay.Replaced `json:"replaced"`
 		Bootstrap, Collaboration, Notice string
 	}
 	request := relay.BindRequest{BindID: attempt.State.BindID, CredentialHash: relay.Digest(attempt.Credentials.Secret), SessionID: session, Replace: attempt.Replace}
@@ -195,6 +196,11 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 	}
 	wakeErr := captureClaudeInbox(dir, attempt.State)
 	payload := map[string]any{"binding": result.Binding, "bootstrap": result.Bootstrap, "collaboration": result.Collaboration, "notice": result.Notice + " Added .pairroom/ to .gitignore. This session is ready to relay."}
+	if result.Replaced != nil {
+		// Body-free IDs only; the new session decides whether any matter.
+		payload["replaced"] = result.Replaced
+		payload["replaced_notice"] = "The replaced session's inbox work: cancelled/unknown were invalidated; handed_off reached the old session and may have run. Inspect with pairroom relay history --id <id>. Nothing is requeued; resend only what still matters."
+	}
 	if wakeErr != nil {
 		payload["wake_notice"] = "Claude external wake is unavailable; relay remains ready. Use relay wait or rebind in the intended session."
 	}
