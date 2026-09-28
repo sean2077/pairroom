@@ -32,8 +32,8 @@ func TestMentionsUseRuntimeHandlesOnly(t *testing.T) {
 		{name: "indented code ignored", text: "example:\n    @codex", sender: model.ActorUser},
 		{name: "quoted indented code ignored", text: ">     @codex", sender: model.ActorUser},
 		{name: "escaped and doubled handles ignored", text: `\@codex @@codex`, sender: model.ActorUser},
-		{name: "unicode word prefix ignored", text: "中文@codex", sender: model.ActorUser},
-		{name: "non exact suffix ignored", text: "@codex-build @codex.dev @codex界 @codexé", sender: model.ActorUser},
+		{name: "latin word prefix ignored", text: "abc@codex über@codex", sender: model.ActorUser},
+		{name: "non exact suffix ignored", text: "@codex-build @codex.dev @codex_x @codexé", sender: model.ActorUser},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -53,6 +53,44 @@ func TestMentionsUseRuntimeHandlesOnly(t *testing.T) {
 				t.Fatalf("removed aliases = %v, want %d", got.RemovedAliases, tt.removed)
 			}
 		})
+	}
+}
+
+func TestMentionsRouteEverydayProseBoundaries(t *testing.T) {
+	// Each reply addresses the peer in ordinary prose. Before this regression
+	// suite, every one was silently unrouted and a Native Stop reply ended relay.
+	runtimes := map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: model.RuntimeCodex}
+	for _, text := range []string{
+		"Please review @codex.",
+		"Over to you @codex.\n",
+		"@codex...",
+		"请@codex 审查",
+		"交给@codex。",
+		"@codex请审查",
+		"中文@codex",
+		"Use `x and then @codex please review",
+		"- item\n    - nested @codex review",
+		"1. step\n\n    @codex please check step 1",
+		"PR：github.com/sean2077/pairroom/pull/9，@codex 请审查",
+		"见 http://127.0.0.1:8080/x，@codex 请审查",
+	} {
+		t.Run(text, func(t *testing.T) {
+			got := ParseMentions(text, model.ActorSlot1, runtimes)
+			if len(got.Targets) != 1 || got.Targets[0] != model.ActorSlot2 {
+				t.Fatalf("targets = %v, want [slot2]", got.Targets)
+			}
+		})
+	}
+	for _, text := range []string{"Need @user.", "请@user决定"} {
+		if !MentionsHuman(text) || !ParseMentions(text, model.ActorSlot1, runtimes).Human {
+			t.Fatalf("%q must escalate to the human", text)
+		}
+	}
+	// The same boundaries must not reopen code/URL exclusions.
+	for _, text := range []string{"```\n@codex\n``", "`@codex`.", "example:\n\n    @codex", "https://example.test/@codex。"} {
+		if got := ParseMentions(text, model.ActorSlot1, runtimes); len(got.Targets) != 0 {
+			t.Fatalf("%q routed to %v", text, got.Targets)
+		}
 	}
 }
 

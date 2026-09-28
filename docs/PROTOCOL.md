@@ -36,7 +36,7 @@ In embedded Rooms, ordinary Agent answers are always visible to the user. After 
 - unique runtime: `@claude`, `@codex`, or `@grok`;
 - duplicated runtime: stable slot-order handles such as `@claude0` and `@claude1`.
 
-Matching is case-insensitive. An unsuffixed duplicated-runtime handle is ambiguous, produces a visible warning, and does not route. Mentions inside fenced code, inline code, URLs, and email addresses are ignored. A self-handle does not route.
+Matching is case-insensitive. An unsuffixed duplicated-runtime handle is ambiguous, produces a visible warning, and does not route. Mentions inside fenced code, inline code, URLs, and email addresses are ignored. A self-handle does not route. A handle ends at whitespace, punctuation, or an adjacent Han/Kana character, so `review @codex.` and `请@codex审查` route; an adjacent Latin letter, digit, `_`, or a `.`/`-` followed by one (`@codex.dev`, `@codex-build`) is a different token. An unmatched single or double backtick is literal text, a four-space indented line inside a list continues that list rather than starting a code block, and URL tails stop at the first non-ASCII character.
 
 An exact Agent handle in the same response wins over `@user`. `@user` alone returns the decision to the human. Without the exact peer handle, Agent relay ends and either Agent's answer may be the final result.
 
