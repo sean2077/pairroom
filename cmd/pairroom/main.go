@@ -349,10 +349,13 @@ func runService(args []string) (resultErr error) {
 	if *mockFlag {
 		provisioner = service.SyntheticProvisioner{}
 	}
+	notifier := service.NewNotifier(service.NotifierConfig{Command: fileCfg.NotifyCommand})
+	defer notifier.Close()
 	factory := service.EmbeddedRuntimeFactory(registry, service.EmbeddedRuntimeConfig{
 		ListenHost: "127.0.0.1", Mock: *mockFlag, AutoStart: *autoStartFlag,
 		StallWarningSeconds: *stallWarningFlag,
 		Resolver:            agentResolver,
+		Notifier:            notifier,
 	})
 	runtimes, err := service.NewRuntimeManager(registry, factory, service.RuntimeManagerConfig{
 		Limit: *limitFlag, IdleTimeout: *idleFlag,
@@ -361,7 +364,7 @@ func runService(args []string) (resultErr error) {
 		return err
 	}
 	management, err := service.NewManagementServer(service.ManagementServerConfig{
-		Registry: registry, Runtimes: runtimes, Provisioner: provisioner, Token: *tokenFlag, AgentResolver: agentResolver,
+		Registry: registry, Runtimes: runtimes, Provisioner: provisioner, Token: *tokenFlag, AgentResolver: agentResolver, Notifier: notifier,
 	})
 	if err != nil {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

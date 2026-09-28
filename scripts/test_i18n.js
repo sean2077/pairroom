@@ -96,6 +96,13 @@ for (const [name, prefix] of [['wakeOutcomes', 'wakeOutcome'], ['wakeReasons', '
     if (!en[`room.native.${prefix}_${value}`]) throw new Error(`Native ${prefix} ${value} has no catalog entry`);
   }
 }
+// Service notification kinds are a fixed server vocabulary shown as alerts.
+const notifySource = fs.readFileSync(path.join(root, 'internal/service/notify.go'), 'utf8');
+const notifyKinds = notifySource.match(/var notificationKinds = map\[string\]bool\{([^}]*)\}/)?.[1];
+if (!notifyKinds) throw new Error('notification kind vocabulary not found');
+for (const [, value] of notifyKinds.matchAll(/"([a-z_]+)"\s*:/g)) {
+  if (!en[`ui.notification.${value}`]) throw new Error(`notification kind ${value} has no catalog entry`);
+}
 if (untranslated.length) throw new Error(`untranslated UI copy:\n${untranslated.join('\n')}`);
 
 const managementUX = fs.readFileSync(path.join(root, 'internal/service/assets/management-ux.js'), 'utf8');

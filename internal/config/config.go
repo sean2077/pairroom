@@ -79,6 +79,7 @@ type File struct {
 	StallWarningSeconds int              `json:"stall_warning_seconds"`
 	AutoStart           bool             `json:"auto_start"`
 	ResumePending       bool             `json:"resume_pending"`
+	NotifyCommand       []string         `json:"notify_command,omitempty"`
 	Token               string           `json:"token,omitempty"`
 	CCSwitch            CCSwitch         `json:"cc_switch,omitempty"`
 	Runtimes            RuntimeTemplates `json:"runtimes"`
@@ -302,6 +303,17 @@ func (c File) Validate() error {
 	}
 	if c.StallWarningSeconds != -1 && (c.StallWarningSeconds < 30 || c.StallWarningSeconds > 86400) {
 		return errors.New("stall_warning_seconds must be -1 (disabled) or between 30 and 86400")
+	}
+	if len(c.NotifyCommand) > 0 {
+		// An argv, never a shell string: the first element is the executable.
+		if strings.TrimSpace(c.NotifyCommand[0]) == "" {
+			return errors.New("notify_command[0] must name an executable")
+		}
+		for _, arg := range c.NotifyCommand {
+			if strings.ContainsRune(arg, '\x00') {
+				return errors.New("notify_command contains a NUL byte")
+			}
+		}
 	}
 	for _, kind := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok} {
 		template := c.Runtimes.For(kind)

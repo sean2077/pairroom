@@ -31,6 +31,9 @@ type Config struct {
 	// CommitBinding serializes global native identity ownership with the active
 	// Room writer. It must call appendFact exactly once or return an error.
 	CommitBinding func(Binding, func() error) error
+	// OnAppend observes each durably appended fact after it is applied. It runs
+	// under the Engine lock and must not block or call back into the Engine.
+	OnAppend func(model.Event)
 }
 
 type Engine struct {
@@ -177,6 +180,9 @@ func (e *Engine) append(kind string, actor model.ActorID, payload any) error {
 		return err
 	}
 	e.signal()
+	if e.cfg.OnAppend != nil {
+		e.cfg.OnAppend(ev)
+	}
 	return nil
 }
 func (e *Engine) apply(ev model.Event) error {

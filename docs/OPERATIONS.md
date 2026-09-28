@@ -82,6 +82,10 @@ For Embedded, normal exit drains owned native work, settles projections, closes 
 
 For Native, drain rejects new publications/claims while valid receipts for already released envelopes can settle. Shutdown does not terminate original sessions. Recovered unfinished delivery remains uncertain; inspect history and side effects before Retry. A hidden window or disconnected browser proves nothing about process completion.
 
+## Attention notifications
+
+When nobody is watching, the Service reports body-free attention notifications: an answer or `@user` publication for the human, a pending Embedded approval, a failed turn, a stall warning, uncertain Native delivery, a failed wake, or Native input left uncollected. They appear as toasts and optional system notifications in Management and Desktop, through `GET /api/v1/notifications`, and through an optional `notify_command` ([API](API_REFERENCE.md#attention-notifications)). A notification is a prompt to inspect, not a delivery, approval or completion record.
+
 ## Logs and diagnostics
 
 Do not include API keys, Authorization headers, or absolute attachment paths in logs. Review arbitrary user/tool content before sharing any export. A useful report includes the PairRoom build, OS/entry type, **Room host mode**, selected CLI versions, relevant Room/message/Turn IDs where applicable, first error/system notices, and a redacted minimal reproduction.

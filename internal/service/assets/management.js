@@ -215,6 +215,42 @@
     $('login-screen').hidden = true;
     app.hidden = false;
     hideFormError('login-error');
+    startNotificationWatch();
+  }
+
+  // Service notifications are body-free "a human may be needed" observations.
+  // One long poll per page; it only reads, never acknowledges Room work.
+  const notificationWatch = { running: false, after: null };
+  async function startNotificationWatch() {
+    if (notificationWatch.running) return;
+    notificationWatch.running = true;
+    while (state.authenticated) {
+      try {
+        const first = notificationWatch.after === null;
+        const query = first ? '' : `?after=${notificationWatch.after}&wait=25`;
+        const payload = await api(`/api/v1/notifications${query}`);
+        const items = payload.notifications || [];
+        if (items.length) notificationWatch.after = items[items.length - 1].seq;
+        else if (first) notificationWatch.after = 0;
+        // Notifications raised before this page opened are history, not new alerts.
+        if (!first) items.forEach(showServiceNotification);
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+      }
+    }
+    notificationWatch.running = false;
+  }
+
+  function showServiceNotification(item) {
+    const title = t(`ui.notification.${item.kind}`, { defaultValue: t('ui.notification.generic') });
+    const body = t('ui.notification.body', { room: item.room_name || item.room_id });
+    toast(title, body, 'warning');
+    if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        const notice = new Notification(`${title} · PairRoom`, { body, tag: `pairroom-${item.room_id}-${item.kind}` });
+        notice.onclick = () => { window.focus(); openRoom(item.room_id); notice.close(); };
+      } catch { /* Some webviews expose the API but refuse construction. */ }
+    }
   }
 
   async function submitCredentialLogin(event) {
@@ -1426,6 +1462,7 @@
         ], state.preferences.density, (value) => { state.preferences.density = value; applyPreferences(); renderSettings(); }, t("ui.informationDensity")))
       ),
       settingsPanel(t("ui.refreshAndNavigation"), t("ui.controlsHowTheCurrentPagePollsTheServiceSidebarClickToAlways"),
+        settingRow(t('ui.notification.settingTitle'), t('ui.notification.settingHelp'), notificationPermissionControl()),
         settingRow(t("ui.autoRefresh"), t("ui.automaticallyPausesWhenThePageIsHiddenAndSyncsImmediatelyWhenIt"), selectControl([
           ['0', t("ui.off")], ['5000', t("ui.5Seconds")], ['10000', t("ui.10Seconds")], ['30000', t("ui.30Seconds")], ['60000', t("ui.60Seconds")],
         ], String(state.preferences.refreshMs), (value) => { state.preferences.refreshMs = Number(value); scheduleRefresh(); }, t("ui.autoRefreshInterval")))
@@ -1544,6 +1581,16 @@
       },
     });
     return input;
+  }
+
+  function notificationPermissionControl() {
+    if (!('Notification' in window)) return statusBadge(t('ui.notification.unsupported'), 'warn');
+    if (Notification.permission === 'granted') return statusBadge(t('ui.notification.enabled'), 'good');
+    if (Notification.permission === 'denied') return statusBadge(t('ui.notification.blocked'), 'warn');
+    return actionButton(t('ui.notification.enable'), async () => {
+      try { await Notification.requestPermission(); } catch { /* ignored */ }
+      renderSettings();
+    }, 'secondary-button compact-button');
   }
 
   function settingRow(title, description, control) {

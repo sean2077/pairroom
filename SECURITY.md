@@ -106,6 +106,8 @@ Forced termination can leave native side effects, stale locks, and pending state
 
 Room data can contain prompts, replies, source/diffs, filenames, command/tool output, errors, approval details, session IDs, and screenshots/customer material. Treat Event Logs, attachments, backups, and exports as private code assets.
 
+Attention notifications (`GET /api/v1/notifications` and the optional `notify_command`) carry only Room ID/name, host mode, a fixed kind, slot and time, never message text, approval detail, session identity or credentials. `notify_command` is an operator-configured argv that runs with the Service's environment; configure only trusted programs.
+
 Ordinary transcript export excludes the verbose Inspector tail. Diagnostics are designed to omit transcript bodies and attachment bytes, but can retain structured errors, paths, and environment facts. Neither is a blanket redaction guarantee for arbitrary user/Agent content. Inspect files before sharing them.
 
 ## 10. Vendor data path and custom configuration

@@ -48,7 +48,7 @@ type nativeHostRuntime struct {
 	closeErr   error
 }
 
-func startNativeHostRuntime(ctx context.Context, registry *Registry, project Project, durable Room, host string, wakeConfig nativeWakerConfig) (_ RoomRuntime, resultErr error) {
+func startNativeHostRuntime(ctx context.Context, registry *Registry, project Project, durable Room, host string, wakeConfig nativeWakerConfig, notifier *Notifier) (_ RoomRuntime, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -81,7 +81,16 @@ func startNativeHostRuntime(ctx context.Context, registry *Registry, project Pro
 	for actor, selection := range durable.Agents {
 		kinds[actor] = selection.Runtime
 	}
-	engine, err := relay.Open(relay.Config{RoomID: durable.ID, Store: log, Runtimes: kinds, Media: media, CommitBinding: func(b relay.Binding, appendFact func() error) error {
+	var onAppend func(model.Event)
+	if notifier != nil {
+		// Runs under the relay lock: classify and record only, never block.
+		onAppend = func(ev model.Event) {
+			if a, ok := relay.AttentionFromEvent(ev); ok {
+				notifier.Notify(durable, a.Kind, a.Slot, a.Key)
+			}
+		}
+	}
+	engine, err := relay.Open(relay.Config{RoomID: durable.ID, Store: log, Runtimes: kinds, Media: media, OnAppend: onAppend, CommitBinding: func(b relay.Binding, appendFact func() error) error {
 		return registry.commitNativeBinding(durable.ID, b, appendFact)
 	}})
 	if err != nil {
@@ -123,6 +132,7 @@ func startNativeHostRuntime(ctx context.Context, registry *Registry, project Pro
 			case <-ticker.C:
 				_ = engine.Reap()
 				n.waker.Reconcile(runCtx)
+				notifyWaitingInput(notifier, durable, engine)
 			}
 		}
 	}()
@@ -445,4 +455,21 @@ func parseRelayAuth(r *http.Request, slot model.ActorID) (relay.Auth, error) {
 	}
 	auth.Generation = g
 	return auth, nil
+}
+
+// notifyWaitingInput reports a slot whose oldest queued input has waited past
+// inputWaitingThreshold: the receiver has not collected it, and neither park nor
+// wake has moved it. The key is the oldest queued time, so one stuck head alerts
+// once and a later head alerts again.
+func notifyWaitingInput(notifier *Notifier, durable Room, engine *relay.Engine) {
+	if notifier == nil {
+		return
+	}
+	summary := engine.Summary()
+	for _, slot := range model.SlotActors() {
+		oldest := summary.Inboxes[slot].OldestQueuedAt
+		if oldest != nil && time.Since(*oldest) >= inputWaitingThreshold {
+			notifier.Notify(durable, relay.AttentionInputWaiting, slot, oldest.UTC().Format(time.RFC3339Nano))
+		}
+	}
 }
