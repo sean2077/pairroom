@@ -219,6 +219,21 @@ func TestEnvelopeFileReceiptDoesNotEchoBody(t *testing.T) {
 	if _, err := writer.Write(body); err == nil {
 		t.Fatal("accepted a second envelope for the same output file")
 	}
+	if strings.Contains(receipt.Notice, "--inline-max") {
+		t.Fatal("a large saved envelope must not suggest inlining")
+	}
+	// A small saved envelope suggests the flag once it would have helped.
+	var small bytes.Buffer
+	w2, err := newEnvelopeFileWriter(filepath.Join(t.TempDir(), "small.txt"), &small)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w2.Write([]byte("short\n")); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(small.String(), "--inline-max 8192") {
+		t.Fatalf("small receipt lacks the inline hint: %s", small.String())
+	}
 }
 
 type shortFileReceiptWriter struct{}
@@ -281,5 +296,53 @@ func TestEnvelopeFilePreflightRequiresWritableParent(t *testing.T) {
 	}
 	if _, err := newEnvelopeFileWriter(filepath.Join(parent, "incoming.txt"), io.Discard); err == nil {
 		t.Fatal("accepted an unwritable output parent")
+	}
+}
+
+// --inline-max prints a small envelope directly and creates no file; a larger
+// one is still saved with its receipt. Either way one envelope is accepted.
+func TestEnvelopeFileInlinesOnlySmallEnvelopes(t *testing.T) {
+	small := []byte("[PairRoom message]\nfrom: @codex\n\nshort reply\n")
+	large := bytes.Repeat([]byte("x"), 4097)
+	for _, tc := range []struct {
+		name   string
+		body   []byte
+		inline bool
+	}{{"small", small, true}, {"at limit", large[:4096], true}, {"large", large, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "incoming.txt")
+			var out bytes.Buffer
+			writer, err := newEnvelopeFileWriter(path, &out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writer.inlineMax = 4096
+			if n, err := writer.Write(tc.body); err != nil || n != len(tc.body) {
+				t.Fatalf("write: %d, %v", n, err)
+			}
+			_, statErr := os.Stat(path)
+			if tc.inline {
+				if !bytes.Equal(out.Bytes(), tc.body) || !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatalf("inline envelope: out=%q file=%v", out.String(), statErr)
+				}
+			} else {
+				var receipt envelopeFileReceipt
+				if statErr != nil || json.Unmarshal(out.Bytes(), &receipt) != nil || receipt.Bytes != len(tc.body) {
+					t.Fatalf("saved envelope: out=%q file=%v", out.String(), statErr)
+				}
+			}
+			if _, err := writer.Write(tc.body); err == nil {
+				t.Fatal("accepted a second envelope")
+			}
+		})
+	}
+	// An inline short write fails so the caller withholds acknowledgement.
+	writer, err := newEnvelopeFileWriter(filepath.Join(t.TempDir(), "incoming.txt"), shortFileReceiptWriter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.inlineMax = 4096
+	if _, err := writer.Write(small); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("inline short write: %v", err)
 	}
 }

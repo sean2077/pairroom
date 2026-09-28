@@ -166,7 +166,15 @@ type envelopeFileWriter struct {
 	path string
 	out  io.Writer
 	used bool
+	// inlineMax lets an envelope of at most this many bytes go straight to out
+	// without creating the file, so a small reply costs no extra read. The
+	// preflight still ran; the path stays unused for the next collection.
+	inlineMax int
 }
+
+// inlineHintBytes is the saved-envelope size below which the receipt suggests
+// --inline-max; it matches the value the hint recommends.
+const inlineHintBytes = 8192
 
 type envelopeFileReceipt struct {
 	EnvelopeFile string `json:"envelope_file"`
@@ -226,16 +234,34 @@ func (w *envelopeFileWriter) Write(data []byte) (int, error) {
 	if w.used {
 		return 0, errors.New("--output-file accepts one complete envelope only")
 	}
+	if len(data) <= w.inlineMax {
+		// Same stdout-before-ack contract as ordinary collection: a short or
+		// failed write is returned and acknowledgement is withheld.
+		n, err := w.out.Write(data)
+		if err == nil && n != len(data) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			return 0, err
+		}
+		w.used = true
+		return len(data), nil
+	}
 	if err := persistEnvelopeFile(w.path, data); err != nil {
 		return 0, err
 	}
 	w.used = true
 	digest := sha256.Sum256(data)
+	notice := "Read envelope_file before acting."
+	if w.inlineMax == 0 && len(data) <= inlineHintBytes {
+		// Learned where it applies, instead of costing every skill load.
+		notice += " Small replies can print directly with --inline-max 8192."
+	}
 	receipt, err := json.Marshal(envelopeFileReceipt{
 		EnvelopeFile: w.path,
 		Bytes:        len(data),
 		SHA256:       hex.EncodeToString(digest[:]),
-		Notice:       "Read envelope_file before acting.",
+		Notice:       notice,
 	})
 	if err == nil {
 		receipt = append(receipt, '\n')

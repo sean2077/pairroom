@@ -1,7 +1,9 @@
 package relayclient
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -63,4 +65,26 @@ func TestNativeFileWorkflowSkillGuidance(t *testing.T) {
 		"evidence-not-approval":    "An observation is neither an atomic snapshot nor approval",
 		"independent-review":       "Inspect independently; report unresolved disagreements",
 	})
+}
+
+// A real wait with --inline-max prints a small envelope on stdout, creates no
+// file and acknowledges it; the flag is rejected without --output-file.
+func TestWaitInlinesSmallEnvelopeWithOutputFile(t *testing.T) {
+	f := newForegroundFixture(t, foregroundFixtureOptions{})
+	path := filepath.Join(t.TempDir(), "incoming.txt")
+	var out, diagnostic bytes.Buffer
+	if err := f.run(context.Background(), "wait", nil, &out, &diagnostic, "--timeout", "1", "--output-file", path, "--inline-max", "8192"); err != nil {
+		t.Fatalf("wait: %v; %s", err, diagnostic.String())
+	}
+	if !strings.Contains(out.String(), "Review finding") || f.count("ack") != 1 {
+		t.Fatalf("stdout=%q acks=%d", out.String(), f.count("ack"))
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("an inlined envelope must not create the output file")
+	}
+	for _, args := range [][]string{{"--inline-max", "10"}, {"--output-file", filepath.Join(t.TempDir(), "x"), "--inline-max", "-1"}} {
+		if err := f.run(context.Background(), "wait", nil, io.Discard, io.Discard, append([]string{"--timeout", "1"}, args...)...); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
 }
