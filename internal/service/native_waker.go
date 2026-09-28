@@ -32,6 +32,7 @@ type nativeWakeRelay interface {
 	WakeCandidate(messageID string) (relay.WakeCandidate, bool)
 	ReserveWake(messageID string, target model.ActorID) error
 	RecordWake(outcome, reason string, target model.ActorID) error
+	RecordWakeAttempt(messageID, outcome, reason string, target model.ActorID) error
 	WakeReservations() []relay.WakeReservation
 }
 
@@ -72,8 +73,8 @@ type nativeWaker struct {
 	wait         nativeWakeWait
 	attempts     []relay.WakeReservation
 	pending      map[model.ActorID]struct{}
-	// attempting marks a target whose wake is already durably reserved, so a
-	// possibly submitted vendor effect never runs through a runtime suspend.
+	// attempting covers reservation admission through outcome recording, so a
+	// possibly submitted vendor effect never runs through an idle suspend.
 	// Capability probes and the pre-reservation grace delay deliberately do not
 	// appear here: they hold no effect and must not pin an idle runtime.
 	attempting   map[model.ActorID]struct{}
@@ -207,7 +208,7 @@ func (w *nativeWaker) Reconcile(ctx context.Context) {
 
 // A deferred rate-limited head holds the Native runtime lease until it can be
 // reconsidered (the Room hourly budget may exceed the ordinary idle timeout), and
-// a reserved wake holds it until its vendor command settles. Unsupported, unbound
+// a wake's reservation admission holds it until its outcome settles. Unsupported, unbound
 // or capability-missing sessions never pin idle runtimes: their periodic probe
 // carries no reservation and no pending vendor effect.
 func (w *nativeWaker) InUse() bool {
@@ -216,6 +217,10 @@ func (w *nativeWaker) InUse() bool {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	return w.inUseLocked()
+}
+
+func (w *nativeWaker) inUseLocked() bool {
 	if len(w.attempting) > 0 {
 		return true
 	}
@@ -230,6 +235,9 @@ func (w *nativeWaker) InUse() bool {
 func (w *nativeWaker) deferCandidate(c relay.WakeCandidate, at time.Time, reason string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.closing {
+		return
+	}
 	w.deferred[c.Target] = nativeWakeDeferred{MessageID: c.MessageID, At: at, Reason: reason}
 }
 
@@ -293,6 +301,12 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 	if ctx.Err() != nil {
 		return nil
 	}
+	// Take the short effect lease BEFORE the durable reservation. Idle close
+	// either closes admission first or observes this lease and leaves us running.
+	if !w.beginAttempt(candidate.Target) {
+		return nil
+	}
+	defer w.endAttempt(candidate.Target)
 	now := w.now().UTC()
 	reservation := relay.WakeReservation{MessageID: candidate.MessageID, Target: candidate.Target, At: now}
 	if reason, at := w.reserveRate(reservation); reason != "" {
@@ -309,15 +323,12 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 		}
 		return errNativeWakeAudit
 	}
-	w.beginAttempt(candidate.Target)
-	defer w.endAttempt(candidate.Target)
-
 	commandCtx, cancel := context.WithTimeout(ctx, w.timeout)
 	if claudeSend != nil {
 		err := claudeSend(commandCtx, nativeWakeNudge)
 		cancel()
 		if err == nil {
-			return w.record("submitted", "", candidate.Target)
+			return w.recordAttempt(candidate, "submitted", "")
 		}
 		reason := "socket_failed"
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -325,15 +336,15 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 		} else if errors.Is(err, context.Canceled) {
 			reason = "socket_cancelled"
 		}
-		return w.record("failed", reason, candidate.Target)
+		return w.recordAttempt(candidate, "failed", reason)
 	}
 	err := w.run(commandCtx, "codex", "queue", "--thread", candidate.SessionID, "--message", nativeWakeNudge)
 	commandContextErr := commandCtx.Err()
 	cancel()
 	if err == nil {
-		return w.record("accepted", "", candidate.Target)
+		return w.recordAttempt(candidate, "accepted", "")
 	}
-	return w.record("failed", classifyNativeWakeFailure(err, commandContextErr), candidate.Target)
+	return w.recordAttempt(candidate, "failed", classifyNativeWakeFailure(err, commandContextErr))
 }
 
 func nativeWakeSuppression(candidate relay.WakeCandidate) string {
@@ -370,13 +381,29 @@ func (w *nativeWaker) end(target model.ActorID) {
 	w.mu.Unlock()
 }
 
-// beginAttempt/endAttempt bracket the window between the durable reservation and
-// the settled vendor outcome, which is the only span where a suspend could
-// interrupt an effect that the audit must not replay.
-func (w *nativeWaker) beginAttempt(target model.ActorID) {
+// beginAttempt/endAttempt bracket reservation admission through outcome audit.
+// Never hold w.mu while appending/fsyncing or running the vendor effect.
+func (w *nativeWaker) beginAttempt(target model.ActorID) bool {
 	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closing {
+		return false
+	}
 	w.attempting[target] = struct{}{}
-	w.mu.Unlock()
+	return true
+}
+
+// tryBeginIdleClose shares the effect admission lock. The callback must check
+// HTTP/delivery activity and set drain atomically with their admission. Lock
+// order is waker -> Engine; no Engine callback may acquire the waker lock.
+func (w *nativeWaker) tryBeginIdleClose(admit func() bool) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closing || w.inUseLocked() || !admit() {
+		return false
+	}
+	w.closing = true
+	return true
 }
 
 func (w *nativeWaker) endAttempt(target model.ActorID) {
@@ -470,6 +497,16 @@ func (w *nativeWaker) record(outcome, reason string, target model.ActorID) error
 	}
 	w.mu.Lock()
 	w.lastRecorded[target] = key
+	w.mu.Unlock()
+	return nil
+}
+
+func (w *nativeWaker) recordAttempt(candidate relay.WakeCandidate, outcome, reason string) error {
+	if w.relay.RecordWakeAttempt(candidate.MessageID, outcome, reason, candidate.Target) != nil {
+		return errNativeWakeAudit
+	}
+	w.mu.Lock()
+	w.lastRecorded[candidate.Target] = outcome + "/" + reason
 	w.mu.Unlock()
 	return nil
 }

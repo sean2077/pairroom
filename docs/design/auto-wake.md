@@ -40,6 +40,10 @@ integrated; its tracked background-collector completion remains available.
 
 ## Races and recovery
 
+The Native Runtime's final idle-close admission shares the waker mutex with reservation-lease acquisition and HTTP use registration, then checks delivery admission under the Engine lock before setting drain. The lock order is waker then Engine; Engine append observers never reenter the waker. A short lease begins before reservation and ends after outcome audit, including on a rejected reservation. Persistent appends and vendor effects run without holding the waker mutex. This closes both the reservation-to-lease gap and the manager's stale idle observation: an admitted lease refuses idle close, while admitted idle close rejects a later lease without spending a reservation. Grace and capability checks remain outside the lease so unavailable peers do not pin a Runtime.
+
+Shutdown may cancel an already reserved attempt, but its known result can still be appended while draining, after matching the transport message ID and target against the durable reservation. Suppression observations and fresh reservations require normal admission; writer closure or uncertain persistence remains fail-closed. No new event format or automatic retry is introduced.
+
 `WakeCandidate` observes the current queue, binding generation, active collectors
 and in-flight delivery. `ReserveWake` rechecks them under the Engine lock before
 appending a durable effect reservation. Collection, cancellation, replacement

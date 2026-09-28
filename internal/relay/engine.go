@@ -908,6 +908,24 @@ func (e *Engine) SetDraining(value bool) {
 	e.draining = value
 	e.signal()
 }
+
+// TryBeginIdleClose checks delivery admission and closes it under the same
+// lock as Claim. Service wake/HTTP leases are serialized by the caller.
+func (e *Engine) TryBeginIdleClose() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.healthy() != nil || len(e.inFlight) > 0 {
+		return false
+	}
+	for _, count := range e.waiters {
+		if count > 0 {
+			return false
+		}
+	}
+	e.draining = true
+	e.signal()
+	return true
+}
 func (e *Engine) Busy() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()

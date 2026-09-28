@@ -164,9 +164,29 @@ func (n *nativeHostRuntime) scheduleWake(messageID string) {
 	n.waker.Schedule(n.wakeCtx, messageID)
 }
 func (n *nativeHostRuntime) acquire() func() {
+	if n.waker != nil {
+		n.waker.mu.Lock()
+		defer n.waker.mu.Unlock()
+	}
 	n.active.Add(1)
 	n.last.Store(time.Now().UnixNano())
-	return func() { n.active.Add(-1); n.last.Store(time.Now().UnixNano()) }
+	return func() {
+		if n.waker != nil {
+			n.waker.mu.Lock()
+			defer n.waker.mu.Unlock()
+		}
+		n.last.Store(time.Now().UnixNano())
+		n.active.Add(-1)
+	}
+}
+
+func (n *nativeHostRuntime) TryBeginIdleClose(idleBefore time.Time) bool {
+	return n.waker.tryBeginIdleClose(func() bool {
+		if n.active.Load() > 0 || n.LastActivity().After(idleBefore) {
+			return false
+		}
+		return n.engine.TryBeginIdleClose()
+	})
 }
 func (n *nativeHostRuntime) Close(ctx context.Context) error {
 	n.closeOnce.Do(func() {

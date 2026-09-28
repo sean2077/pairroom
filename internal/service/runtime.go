@@ -67,6 +67,12 @@ type RuntimeLease interface {
 	InUse() bool
 }
 
+// RuntimeIdleClose atomically rechecks recent use and closes new-work admission
+// before the manager commits an idle stop. False leaves the runtime active.
+type RuntimeIdleClose interface {
+	TryBeginIdleClose(idleBefore time.Time) bool
+}
+
 // RuntimeDrainControl is an optional admission-control capability. The manager
 // uses it while archiving or shutting down so no new Room mutation can race the
 // idle boundary. Implementations must still admit approval, cancel, and
@@ -814,6 +820,9 @@ func (m *RuntimeManager) reconcile() {
 			continue
 		}
 		if now.Sub(entry.lastUsed) < m.cfg.IdleTimeout {
+			continue
+		}
+		if admission, ok := entry.runtime.(RuntimeIdleClose); ok && !admission.TryBeginIdleClose(now.Add(-m.cfg.IdleTimeout)) {
 			continue
 		}
 		runtime := entry.runtime

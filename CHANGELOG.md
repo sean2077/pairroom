@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Serialize Native idle-close admission with wake reservation leases, HTTP use and delivery claims so an idle decision cannot cancel a newly admitted wake. Record known outcomes of already reserved effects while draining, including cancellation, before closing the Event Log; new reservations remain blocked and reserved effects are never automatically retried.
+
 - Make attention notification shutdown safe against concurrent publication, cancel the in-flight notification command and discard pending commands. Notification responses now carry a process epoch and cursor-reset information, and Management clears its cursor on login, so restarting the Service cannot hide new alerts behind an old sequence number.
 
 - Resume suspended Rooms with pending work when the Service starts. A restarted Service left Embedded Room-owned FIFO input and wake-eligible Native input idle until someone opened the Room or a relay call arrived. The Service now requests activation, once, for Rooms whose Event Log shows such work: Embedded input that never crossed native submission, or a wake-enabled Native slot with unattempted queued input for its bound session. Detection replays each log read-only and appends nothing; activation applies the existing restore rules, so accepted or uncertain input is never replayed and wake keeps its reservation and rate limits. Embedded resumes still queue behind the capacity limit. Controlled by `resume_pending` (default `true`) or `pairroom service --resume-pending=false`.

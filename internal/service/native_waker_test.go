@@ -67,6 +67,21 @@ func (f *fakeNativeWakeRelay) RecordWake(outcome, reason string, target model.Ac
 	return nil
 }
 
+func (f *fakeNativeWakeRelay) RecordWakeAttempt(messageID, outcome, reason string, target model.ActorID) error {
+	f.mu.Lock()
+	reserved := false
+	for _, r := range f.reservations {
+		if r.MessageID == messageID && r.Target == target {
+			reserved = true
+		}
+	}
+	f.mu.Unlock()
+	if !reserved || outcome == "suppressed" {
+		return errors.New("outcome without reservation")
+	}
+	return f.RecordWake(outcome, reason, target)
+}
+
 func (f *fakeNativeWakeRelay) WakeReservations() []relay.WakeReservation {
 	f.mu.Lock()
 	defer f.mu.Unlock()

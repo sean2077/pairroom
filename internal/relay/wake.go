@@ -76,6 +76,25 @@ func (e *Engine) RecordWake(outcome, reason string, target model.ActorID) error 
 	if err := e.healthy(); err != nil {
 		return err
 	}
+	return e.recordWakeLocked(outcome, reason, target)
+}
+
+// RecordWakeAttempt completes only an already reserved effect. Drain rejects
+// new work, but must not discard an outcome known by its admitted worker.
+func (e *Engine) RecordWakeAttempt(messageID, outcome, reason string, target model.ActorID) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err := e.available(); err != nil {
+		return err
+	}
+	m, ok := e.messages[messageID]
+	if !ok || !e.wakeReserved[messageID] || m.To != target || outcome == "suppressed" {
+		return errors.New("wake outcome requires a matching reserved effect")
+	}
+	return e.recordWakeLocked(outcome, reason, target)
+}
+
+func (e *Engine) recordWakeLocked(outcome, reason string, target model.ActorID) error {
 	if !wakeOutcomes[outcome] || !target.ValidParticipant() {
 		return errors.New("invalid wake outcome")
 	}
