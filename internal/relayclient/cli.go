@@ -416,7 +416,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if installed(root, c.State.Runtime) != nil {
 			hook = "missing_or_disabled"
 		}
-		local := map[string]any{"cli_version": version.Current, "protocol": protocol.NativeVersion, "protocol_match": report["protocol"] == protocol.NativeVersion, "service_version_match": report["service_version"] == version.Current, "workspace_match": root == c.State.Workspace, "hook_installation": hook, "hook_approval": "unknown", "last_hook_at": c.State.LastHookAt}
+		local := map[string]any{"cli_version": version.Current, "protocol": protocol.NativeVersion, "protocol_match": report["protocol"] == protocol.NativeVersion, "service_version_match": report["service_version"] == version.Current, "workspace_match": root == c.State.Workspace, "hook_installation": hook, "hook_approval": "unknown", "last_hook_at": c.State.LastHookAt, "skill": skillStatus(c.State.Runtime)}
 		if hint := hookNotRunHint(c.State); hint != "" {
 			local["hook_hint"] = hint
 		}

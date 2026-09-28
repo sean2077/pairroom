@@ -32,6 +32,13 @@ func newPreflightFixture(t *testing.T, serviceVersion string, rooms []map[string
 	stubLineage(t, 4242, "claude", true)
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "preflight-session")
 	t.Setenv("GROK_CLAUDE_HOOKS_ENABLED", "")
+	// Skill freshness reads the host skill directory; never the developer's.
+	for _, key := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME"} {
+		t.Setenv(key, t.TempDir())
+		if err := installSkill(map[string]model.RuntimeKind{"CLAUDE_CONFIG_DIR": model.RuntimeClaude, "CODEX_HOME": model.RuntimeCodex, "GROK_HOME": model.RuntimeGrok}[key]); err != nil {
+			t.Fatal(err)
+		}
+	}
 	binary := filepath.Join(t.TempDir(), "pairroom.exe")
 	if err := os.WriteFile(binary, []byte("cli"), 0o700); err != nil {
 		t.Fatal(err)
@@ -280,4 +287,78 @@ func preflightTree(t *testing.T, root string) []string {
 	}
 	sort.Strings(entries)
 	return entries
+}
+
+// A stale or missing product skill is an advisory next step, never a blocker;
+// unrelated content is reported but neither judged nor overwritten.
+func TestPreflightReportsSkillFreshness(t *testing.T) {
+	f := newPreflightFixture(t, "v"+version.Current, activeNativeRoom())
+	if err := editHooks(f.root, model.RuntimeClaude, false); err != nil {
+		t.Fatal(err)
+	}
+	skill := filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "skills", "pairroom-relay", "SKILL.md")
+	for _, tc := range []struct {
+		name, content, want string
+		step                bool
+	}{
+		{"current", skillContent, "current", false},
+		{"stale", "# PairRoom relay\nolder rules\n", "stale", true},
+		{"external", "# someone else's skill\n", "external", false},
+		{"missing", "", "missing", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_ = os.Remove(skill)
+			if tc.content != "" {
+				if err := os.WriteFile(skill, []byte(tc.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, _ := os.ReadFile(skill)
+			report, raw, err := runPreflightJSON(t, options{repo: f.root, endpoint: f.endpoint})
+			if err != nil || !report.Ready || report.Hooks["claude"].Skill != tc.want {
+				t.Fatalf("err=%v report=%s", err, raw)
+			}
+			if got := strings.Contains(raw, "relay install --runtime claude"); got != tc.step {
+				t.Fatalf("refresh step = %v, want %v: %s", got, tc.step, raw)
+			}
+			if after, _ := os.ReadFile(skill); !bytes.Equal(before, after) {
+				t.Fatal("preflight rewrote the installed skill")
+			}
+		})
+	}
+}
+
+// Different stamped development builds of one release hint without failing;
+// an unstamped build cannot be compared and is not reported.
+func TestPreflightHintsDevelopmentBuildSkew(t *testing.T) {
+	for _, tc := range []struct {
+		name, cliCommit, service string
+		match                    bool
+	}{
+		{"same build", "abc1234", "", true},
+		{"other build", "abc1234", "v" + version.Current + "+2.def5678", false},
+		{"unstamped service", "abc1234", "v" + version.Current, true},
+		{"unstamped cli", "dev", "v" + version.Current + "+2.def5678", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			commit, since := version.Commit, version.CommitsSinceTag
+			version.Commit, version.CommitsSinceTag = tc.cliCommit, "9"
+			t.Cleanup(func() { version.Commit, version.CommitsSinceTag = commit, since })
+			service := tc.service
+			if service == "" {
+				service = version.Describe()
+			}
+			f := newPreflightFixture(t, service, activeNativeRoom())
+			if err := editHooks(f.root, model.RuntimeClaude, false); err != nil {
+				t.Fatal(err)
+			}
+			report, raw, err := runPreflightJSON(t, options{repo: f.root, endpoint: f.endpoint})
+			if err != nil || !report.Ready || !report.Service.VersionMatch || report.Service.BuildMatch != tc.match {
+				t.Fatalf("err=%v report=%s", err, raw)
+			}
+			if hinted := strings.Contains(raw, "differs from this CLI build"); hinted == tc.match {
+				t.Fatalf("build hint = %v: %s", hinted, raw)
+			}
+		})
+	}
 }

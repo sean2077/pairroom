@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Show a replacing session what happened to the previous one's input. `bind --replace` silently cancelled the old generation's queued input and turned a claimed, unacknowledged delivery into `unknown`, and a new session had no sign that earlier input had even reached the old one. The bind result now includes `replaced` with bounded, exactly counted body-free ID lists: input this bind cancelled or made unknown, input already unknown, and the newest input written to the previous collector's stdout, to inspect with `relay history --id`; nothing is requeued. A delivery made unknown by a replacement or unbind now also raises the `delivery_uncertain` attention notification, which was only raised for lease expiry.
+
+- Report a stale relay skill and mismatched development builds. After an upgrade the installed `pairroom-relay` skill kept its older operating rules with no warning. `relay preflight` and `relay doctor` now report it as `current`, `stale`, `missing` or `external` and suggest `relay install` when stale or missing, without rewriting it or changing readiness. Preflight also hints when the CLI and Service are different stamped builds of the same release, which `version_match` does not distinguish.
+
 - Serialize Native idle-close admission with wake reservation leases, HTTP use and delivery claims so an idle decision cannot cancel a newly admitted wake. Record known outcomes of already reserved effects while draining, including cancellation, before closing the Event Log; new reservations remain blocked and reserved effects are never automatically retried.
 
 - Make attention notification shutdown safe against concurrent publication, cancel the in-flight notification command and discard pending commands. Notification responses now carry a process epoch and cursor-reset information, and Management clears its cursor on login, so restarting the Service cannot hide new alerts behind an old sequence number.

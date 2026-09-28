@@ -34,6 +34,11 @@ type Config struct {
 	// OnAppend observes each durably appended fact after it is applied. It runs
 	// under the Engine lock and must not block or call back into the Engine.
 	OnAppend func(model.Event)
+	// OnAttention receives each body-free attention observation of a durable
+	// append, including transitions a binding fact derives atomically (an
+	// old-generation delivery becoming unknown), which no standalone message
+	// fact records. Same constraints as OnAppend.
+	OnAttention func(Attention)
 }
 
 type Engine struct {
@@ -69,6 +74,8 @@ type Engine struct {
 	wakeReservations []WakeReservation
 	wakeReserved     map[string]bool
 	waiters          map[model.ActorID]int
+	// derived holds attention transitions applied by the current append only.
+	derived []Attention
 }
 
 func Open(cfg Config) (*Engine, error) {
@@ -94,6 +101,7 @@ func Open(cfg Config) (*Engine, error) {
 			return nil, fmt.Errorf("native replay at event %d: %w", ev.Seq, err)
 		}
 	}
+	e.derived = nil // replayed history is not new attention
 	// A previous writer cannot prove whether a claimed envelope reached stdout.
 	// Preserve queued work; no delivery recovery is an automatic replay.
 	// Use the same transition as lease expiry/close, including its private
@@ -169,6 +177,7 @@ func (e *Engine) append(kind string, actor model.ActorID, payload any) error {
 		return err
 	}
 	ev.CreatedAt = e.cfg.Now()
+	e.derived = nil
 	if err := e.cfg.Store.Append(&ev); err != nil {
 		e.fatal = err
 		e.signal()
@@ -182,6 +191,16 @@ func (e *Engine) append(kind string, actor model.ActorID, payload any) error {
 	e.signal()
 	if e.cfg.OnAppend != nil {
 		e.cfg.OnAppend(ev)
+	}
+	derived := e.derived
+	e.derived = nil
+	if e.cfg.OnAttention != nil {
+		if a, ok := AttentionFromEvent(ev); ok {
+			e.cfg.OnAttention(a)
+		}
+		for _, a := range derived {
+			e.cfg.OnAttention(a)
+		}
 	}
 	return nil
 }
@@ -218,6 +237,8 @@ func (e *Engine) apply(ev model.Event) error {
 					m.State = "unknown"
 					m.UpdatedAt = ev.CreatedAt
 					e.putMessage(m)
+					// Replay discards this list at Open; only live appends report it.
+					e.derived = append(e.derived, Attention{Kind: AttentionDeliveryUncertain, Slot: m.To, Key: m.ID})
 				}
 			}
 		}
@@ -333,9 +354,95 @@ func (e *Engine) commitBinding(b bindingFact) error {
 	return appendFact()
 }
 
+// Bind associates a slot. See BindReport for the replaced generation's work.
 func (e *Engine) Bind(slot model.ActorID, req BindRequest) (Binding, error) {
+	b, _, err := e.BindReport(slot, req)
+	return b, err
+}
+
+// maxReplacedIDs bounds each ID list a replacement reports; maxPreviousScan
+// bounds how much retained history the handed-off lookup inspects.
+const (
+	maxReplacedIDs  = 8
+	maxPreviousScan = 5000
+)
+
+// ReplacedIDs is a bounded, oldest-first (handed-off: newest-first) sample of
+// message IDs with the exact number it was taken from.
+type ReplacedIDs struct {
+	IDs   []string `json:"ids"`
+	Count int      `json:"count"`
+}
+
+func (r *ReplacedIDs) add(id string) {
+	r.Count++
+	if len(r.IDs) < maxReplacedIDs {
+		r.IDs = append(r.IDs, id)
+	}
+}
+
+// Replaced lists body-free transport IDs of a replaced generation's inbox so
+// the new session can inspect them with history --id. Nothing is requeued or
+// retried, and no state here proves model acceptance.
+//
+// Cancelled (was queued) and Unknown (was claimed, unacknowledged) are what
+// this bind invalidated; AlreadyUnknown were unknown before it. Their counts are
+// exact. HandedOff were written to the previous collector's stdout, may have
+// run and were not invalidated; they come from the newest retained history,
+// so HandedOff.Count is exact only when ScanComplete.
+type Replaced struct {
+	Generation     uint64      `json:"generation"`
+	Cancelled      ReplacedIDs `json:"cancelled"`
+	Unknown        ReplacedIDs `json:"unknown"`
+	AlreadyUnknown ReplacedIDs `json:"already_unknown"`
+	HandedOff      ReplacedIDs `json:"handed_off"`
+	ScanComplete   bool        `json:"scan_complete"`
+}
+
+// BindReport is Bind plus, for an explicit replacement of an active binding,
+// what happened to that binding's inbox. Idempotent recovery reports nothing.
+func (e *Engine) BindReport(slot model.ActorID, req BindRequest) (Binding, *Replaced, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	old := e.bindings[slot]
+	r := &Replaced{Generation: old.Generation, ScanComplete: true}
+	// Classify the current work set before this bind invalidates it; it is
+	// bounded by unresolved work, never by terminal history.
+	for _, id := range e.unresolved {
+		m := e.messages[id]
+		if m.To != slot || m.TargetGeneration != old.Generation {
+			continue
+		}
+		switch m.State {
+		case "queued":
+			r.Cancelled.add(id)
+		case "delivering":
+			r.Unknown.add(id)
+		case "unknown":
+			r.AlreadyUnknown.add(id)
+		}
+	}
+	b, err := e.bindLocked(slot, req)
+	if err != nil || !old.Active || b.Generation == old.Generation {
+		return b, nil, err
+	}
+	for i, scanned := len(e.order)-1, 0; i >= 0; i-- {
+		if scanned == maxPreviousScan {
+			r.ScanComplete = false
+			break
+		}
+		scanned++
+		if m := e.messages[e.order[i]]; m.To == slot && m.TargetGeneration == old.Generation && m.State == "handed_off" {
+			r.HandedOff.add(m.ID)
+		}
+	}
+	if r.Cancelled.Count+r.Unknown.Count+r.AlreadyUnknown.Count+r.HandedOff.Count == 0 && r.ScanComplete {
+		return b, nil, nil
+	}
+	return b, r, nil
+}
+
+func (e *Engine) bindLocked(slot model.ActorID, req BindRequest) (Binding, error) {
 	if err := e.healthy(); err != nil {
 		return Binding{}, err
 	}
