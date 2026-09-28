@@ -50,5 +50,6 @@ func (e *Engine) snapshotRangeLocked(messageStart, auditStart int) Snapshot {
 	for _, id := range e.order[messageStart:] {
 		s.Messages = append(s.Messages, cloneMessage(e.messages[id]))
 	}
+	s.Delivery = e.deliveryForMessagesLocked(s.Messages)
 	return s
 }

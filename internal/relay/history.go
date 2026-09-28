@@ -23,12 +23,13 @@ type HistoryQuery struct {
 }
 
 type HistoryPage struct {
-	Messages   []Message `json:"messages"`
-	NextCursor string    `json:"next_cursor,omitempty"`
-	HasMore    bool      `json:"has_more"`
-	Sequence   uint64    `json:"sequence"`
-	Total      int       `json:"total"`
-	Notice     string    `json:"notice"`
+	Delivery   map[string]MessageDelivery `json:"delivery,omitempty"`
+	Messages   []Message                  `json:"messages"`
+	NextCursor string                     `json:"next_cursor,omitempty"`
+	HasMore    bool                       `json:"has_more"`
+	Sequence   uint64                     `json:"sequence"`
+	Total      int                        `json:"total"`
+	Notice     string                     `json:"notice"`
 }
 
 func (e *Engine) History(q HistoryQuery) (HistoryPage, error) {
@@ -64,6 +65,7 @@ func (e *Engine) historyLocked(q HistoryQuery) (HistoryPage, error) {
 		if m, ok := e.messages[q.ID]; ok {
 			result.Messages = append(result.Messages, cloneMessage(m))
 		}
+		result.Delivery = e.deliveryForMessagesLocked(result.Messages)
 		return result, nil
 	}
 	prefix := "history:"
@@ -117,6 +119,7 @@ func (e *Engine) historyLocked(q HistoryQuery) (HistoryPage, error) {
 		at += step
 	}
 	result.HasMore = at >= 0 && at < len(ids)
+	result.Delivery = e.deliveryForMessagesLocked(result.Messages)
 	if result.HasMore && last >= 0 {
 		result.NextCursor = fmt.Sprintf("%s%d", prefix, last)
 	}

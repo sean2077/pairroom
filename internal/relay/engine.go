@@ -75,7 +75,8 @@ type Engine struct {
 	wakeReserved     map[string]bool
 	waiters          map[model.ActorID]int
 	// derived holds attention transitions applied by the current append only.
-	derived []Attention
+	derived  []Attention
+	delivery *deliveryProjection
 }
 
 func Open(cfg Config) (*Engine, error) {
@@ -306,6 +307,7 @@ func (e *Engine) apply(ev model.Event) error {
 		r.At = ev.CreatedAt
 		e.wakeReserved[r.MessageID] = true
 		e.wakeReservations = append(e.wakeReservations, r)
+		e.indexWakeReservation(r)
 		detail = "wake reserved"
 	case EventWakeAttempted:
 		var p struct {
@@ -326,6 +328,7 @@ func (e *Engine) apply(ev model.Event) error {
 			return errors.New("native wake attempt reason does not match outcome")
 		}
 		e.lastWake[p.Target] = WakeObservation{Outcome: p.Outcome, Reason: p.Reason, At: ev.CreatedAt}
+		e.indexWakeObservation(p.Target, e.lastWake[p.Target])
 		detail = "wake " + p.Outcome
 		if p.Reason != "" {
 			detail += " (" + p.Reason + ")"

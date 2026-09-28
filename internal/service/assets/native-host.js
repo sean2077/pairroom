@@ -172,7 +172,8 @@
     if(!all.length){list.append(element('div',tr('empty'),'empty'));messagesRendered=false;return;}
     if(total>messages.length){list.prepend(element('div',`${tr('showingLatest')} ${messages.length} / ${total}`,'muted truncated-note'));}
     for(const m of messages){
-      const key=JSON.stringify([m,language(),handle(m.from),handle(m.to)]);
+      const delivery=value.relay.delivery?.[m.id];
+      const key=JSON.stringify([m,delivery,language(),handle(m.from),handle(m.to)]);
       let entry=messageNodes.get(m.id);
       if(!entry){entry={node:element('article'),key:''};messageNodes.set(m.id,entry);list.append(entry.node);}
       if(key===entry.key)continue;
@@ -180,12 +181,34 @@
       const node=entry.node;
       const actor=['user','slot1','slot2'].includes(m.from)?m.from:'other';
       node.className=`message message-row ${actor} state-${m.state}`;node.dataset.messageId=m.id;
-      fillMessage(node,m,'chat');
+      fillMessage(node,m,'chat',delivery);
     }
     messagesRendered=true;
     restoreReadingPosition(position);
   }
-  function fillMessage(node,m,view){
+  function deliveryEvidence(m,delivery){
+    if(!delivery)return null;
+    const section=element('div',undefined,'delivery-evidence');
+    if(['handed_off','unknown'].includes(m.state)&&Number.isFinite(delivery.queue_wait_ms)&&delivery.queue_wait_ms>=0){
+      const seconds=new Intl.NumberFormat(language(),{maximumFractionDigits:2}).format(delivery.queue_wait_ms/1000);
+      const latency=element('span',window.PairRoomI18n.t('room.native.queueClaimTime',{seconds}),'delivery-latency');
+      latency.title=tr('queueClaimBoundary');section.append(latency);
+    }
+    const detail=element('details',undefined,'wake-evidence');
+    detail.append(element('summary',tr(delivery.reserved_at?'messageWakeReserved':'messageWakeUnreserved')));
+    if(delivery.reserved_at)detail.append(element('p',`${tr('wakeReserved')}: ${time(delivery.reserved_at)}`));
+    if(delivery.inferred_outcome){
+      const result=element('p',window.PairRoomI18n.t('room.native.wakeInferredResult',{result:wakeText(delivery.inferred_outcome)}));
+      detail.append(result,element('p',tr('wakeInferenceBoundary'),'muted'));
+    }
+    if(delivery.slot_observations?.length){
+      detail.append(element('p',tr('slotWakeWhileQueued'),'muted'));
+      for(const observation of delivery.slot_observations)detail.append(element('p',`${wakeText(observation)} · ${time(observation.at)}`));
+      if(delivery.slot_observation_count>delivery.slot_observations.length)detail.append(element('p',window.PairRoomI18n.t('room.native.slotWakeWindow',{shown:delivery.slot_observations.length,total:delivery.slot_observation_count}),'muted'));
+    }
+    section.append(detail);return section;
+  }
+  function fillMessage(node,m,view,delivery){
     const chat=view==='chat', actor=['user','slot1','slot2'].includes(m.from)?m.from:'other';
     const head=element('div',undefined,chat?'message-meta':'message-heading');
     const stamp=element('time',time(m.created_at));stamp.dateTime=m.created_at;
@@ -206,6 +229,7 @@
     }
     for(const a of m.attachments||[]){const img=element('img');img.alt=a.name||tr('attach');img.loading='lazy';img.src=`api/v1/attachments/${encodeURIComponent(a.id)}`;bubble.append(img);}
     const footer=element('div',undefined,'message-footer');footer.append(element('span',tr(m.state),'badge'));
+    const transport=deliveryEvidence(m,delivery);if(transport)footer.append(transport);
     const inspect=element('button',tr('inspect'),'message-action');inspect.type='button';inspect.addEventListener('click',()=>inspectMessage(m.id));footer.append(inspect);
     if(m.state==='queued'||m.state==='unknown'){
       const action=m.state==='queued'?'cancel':'retry';const button=element('button',tr(action),'message-action');button.type='button';button.dataset.action=action;
@@ -216,8 +240,8 @@
       const content=element('div',undefined,'message-content');content.append(head,bubble,footer);node.replaceChildren(avatar,content);
     }else node.replaceChildren(head,bubble,footer);
   }
-  function pageMessages(container,messages,view){
-    container.replaceChildren(...messages.map(m=>{const node=element('article',undefined,`message state-${m.state}`);node.dataset[view==='pending'?'pendingId':'historyId']=m.id;fillMessage(node,m,view);return node;}));
+  function pageMessages(container,messages,view,delivery){
+    container.replaceChildren(...messages.map(m=>{const node=element('article',undefined,`message state-${m.state}`);node.dataset[view==='pending'?'pendingId':'historyId']=m.id;fillMessage(node,m,view,delivery?.[m.id]);return node;}));
     if(!messages.length)container.append(element('p',tr('noItems'),'muted'));
   }
   async function refreshPending(){
@@ -227,7 +251,7 @@
       const page=await request(`api/v1/pending?limit=10${pendingCursor?`&cursor=${encodeURIComponent(pendingCursor)}`:''}`);
       if(serial!==pendingRequest)return;
       pendingNext=page.next_cursor||'';$('pending-count').textContent=String(page.total);$('pending-next').disabled=!pendingNext;$('pending-first').disabled=!pendingCursor;
-      pageMessages($('pending-items'),page.messages,'pending');
+      pageMessages($('pending-items'),page.messages,'pending',page.delivery);
     }catch(e){if(serial===pendingRequest)pendingKey='';throw e;}
   }
   $('pending-first').addEventListener('click',()=>{pendingCursor='';pendingKey='';refreshPending().catch(e=>status(e.message,true));});
@@ -236,7 +260,7 @@
     const serial=++historyRequest;
     const page=await request(`api/v1/history?limit=20${historyFilter}${cursor?`&cursor=${encodeURIComponent(cursor)}`:''}`);
     if(serial!==historyRequest)return;
-    historyNext=page.next_cursor||'';$('history-next').hidden=!historyNext;pageMessages($('history-items'),page.messages,'history');
+    historyNext=page.next_cursor||'';$('history-next').hidden=!historyNext;pageMessages($('history-items'),page.messages,'history',page.delivery);
   }
   function inspectMessage(id){showInspector(true);$('history-panel').open=true;$('history-id').value=id;$('history-since').value='';historyFilter=`&id=${encodeURIComponent(id)}`;loadHistory().then(()=>$('history-panel').scrollIntoView({block:'nearest'})).catch(e=>status(e.message,true));}
   $('history-form').addEventListener('submit',event=>{

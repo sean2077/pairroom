@@ -189,11 +189,12 @@ type Audit struct {
 }
 
 type Snapshot struct {
-	HostMode model.HostMode            `json:"host_mode"`
-	RoomID   string                    `json:"room_id"`
-	Bindings map[model.ActorID]Binding `json:"bindings"`
-	Messages []Message                 `json:"messages"`
-	Audit    []Audit                   `json:"audit"`
-	Sequence uint64                    `json:"sequence"`
-	Notice   string                    `json:"notice"`
+	Delivery map[string]MessageDelivery `json:"delivery,omitempty"`
+	HostMode model.HostMode             `json:"host_mode"`
+	RoomID   string                     `json:"room_id"`
+	Bindings map[model.ActorID]Binding  `json:"bindings"`
+	Messages []Message                  `json:"messages"`
+	Audit    []Audit                    `json:"audit"`
+	Sequence uint64                     `json:"sequence"`
+	Notice   string                     `json:"notice"`
 }

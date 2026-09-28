@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Show Native peer-message queue-to-claim timing and expandable wake evidence in chat and history. Reservations are associated by message ID; outcome associations are marked as inferred from slot order, and slot observations remain separate. The bounded, body-free response projection replays from existing facts without changing stored events or claiming model acceptance.
+
 - Say what is waiting when a session resumes, and who is reachable at a glance. Re-running `relay bind` in a bound session gave no sign that input was already queued for it, so an Agent waited for a wake instead of collecting. The bind result now reports `inbox_queued` and the `relay wait` command when input is waiting. `relay status --brief` adds one `presence` line per slot — bound or not, whether a collector is waiting now, the last relay call, queued/unknown counts and the last wake — restating transport facts only, never whether a model is working.
 
 - Let `relay wait`/`exchange --output-file` print small replies directly. A collector that saved every envelope to a file cost the Agent an extra read even for a one-line reply. `--inline-max N` now prints an envelope of at most N bytes on stdout, exactly like a wait without `--output-file`, and creates no file; a larger one is still saved with its receipt. Acknowledgement still follows the complete stdout or file write, and the default (0) keeps the previous behavior.
