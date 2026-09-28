@@ -172,9 +172,40 @@ func TestPublishedSkillMatchesEmbeddedProjection(t *testing.T) {
 	if string(published) != skillContent {
 		t.Fatal("skills/pairroom-relay/SKILL.md drifted from the embedded projection; edit the published skills/pairroom-relay/SKILL.md, then copy it over internal/relayclient/skill/pairroom-relay/SKILL.md")
 	}
-	if !strings.Contains(skillContent, "name: pairroom-relay") || !strings.Contains(skillContent, "bind --create --name") || !strings.Contains(skillContent, "announce it with one fire-and-forget") || !strings.Contains(skillContent, "prefer staying reachable whenever bound") || !strings.Contains(skillContent, "In a poll-only harness, stay reachable only while a joint task is active; do not keep a background relay wait") || !strings.Contains(skillContent, "can suppress automatic wake") || !strings.Contains(skillContent, "Grok shell mode (`!`)") || !strings.Contains(skillContent, "does not set `GROK_SESSION_ID`") {
-		t.Fatal("skill lost its identity, create flow, join announcement, free-wake reachability default, poll-only/Codex reachability cost discipline, or Grok shell-mode bind guidance")
-	}
+	assertSkillRules(t, map[string]string{
+		"skill-identity":            "name: pairroom-relay",
+		"agent-tool-entry":          "Use this session's agent tools",
+		"preflight":                 "Before first bind or setup failure, run pairroom relay preflight",
+		"ready-next-steps":          "follow next_steps until ready (read-only)",
+		"cwd-not-binding":           "do not rebind on cwd changes",
+		"reuse-collaboration":       "Reuse the Room and follow its collaboration rules",
+		"create-command":            "pairroom relay bind --create --name",
+		"explicit-peer":             "parse leading claude|cc|codex|grok as --peer-runtime",
+		"narrow-inference":          "infer only one clearly named peer distinct from self, or omit it",
+		"explicit-slot-only":        "set --slot only if requested",
+		"narrow-create-retry":       "Retry creation once with the intended peer only when preflight explicitly says no Room was created and no peer runtime was passed",
+		"no-recreate":               "otherwise follow recovery, never repeat --create",
+		"returned-join-command":     "Share returned peer_join_local (same workspace) or peer_join unchanged",
+		"numeric-slots":             "Slots are 1|2, not runtimes",
+		"immediate-bind":            "Bind is immediately usable; no nonce, extra turn/status check or provider setup",
+		"join-announcement":         "When newly joining an already-bound peer, announce with one fire-and-forget relay send",
+		"announcement-no-wait":      "without waiting or a final peer handle",
+		"skip-first-or-resume":      "Skip the announcement on resume or when binding first",
+		"grok-consent":              "approve /hooks, reload with r; folder trust belongs to the human",
+		"grok-no-wake-and-cap":      "No Service wake and at most seven Stop continuations",
+		"grok-unattended-condition": "unattended runs require supported tracked-wait completion",
+		"grok-no-duplicate-hook":    "Reuse a compatible project hook; do not add a duplicate",
+		"grok-readiness":            "Readiness means run wait for full input",
+		"grok-full-clipped-reply":   "Publish clipped replies in full via explicit send/exchange, never a truncated prefix or already-confirmed resend",
+		"grok-shell-identity":       "Grok shell mode (!) lacks GROK_SESSION_ID and skips Stop",
+		"grok-tool-command":         "run relay through the agent's terminal tool",
+		"grok-human-shell-recovery": "If the human used !, rerun the command yourself; never ask for a session ID",
+		"daemon-consent":            "install the daemon only with confirmation",
+		"inspection-only":           "Inspection never requeues work or proves model acceptance",
+		"no-private-state":          "Recover through the CLI, not private state",
+		"no-approval-bypass":        "never bypass approvals",
+		"explicit-replacement":      "Session changes require explicit bind --replace",
+	})
 }
 
 func TestResolveNativeRoomIgnoresArchived(t *testing.T) {

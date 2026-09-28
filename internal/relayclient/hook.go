@@ -353,7 +353,7 @@ func deliverOnce(ctx context.Context, c *Client, hook bool, seconds int, out io.
 		}
 		// This is readiness, not delivery. No receipt or inbox content has
 		// left the Service. The native tool will collect the full envelope.
-		return false, grokContinuation(ctx, c, "PairRoom has pending input. In the bound Room workspace, run pairroom relay wait and process its full result. This notice contains no peer reply.", out)
+		return false, grokContinuation(ctx, c, "PairRoom input queued. Run pairroom relay wait in the bound workspace; read the full reply. This hint is not the reply.", out)
 	}
 	if strings.TrimSpace(string(result.Claim)) == "null" {
 		if hook {

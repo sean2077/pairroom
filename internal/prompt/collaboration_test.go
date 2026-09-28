@@ -27,7 +27,7 @@ func TestVersionedDefaultCollaborationFitsEveryRuntimePair(t *testing.T) {
 						if len(got) > MaxBootstrapBytes {
 							t.Fatalf("bootstrap plus collaboration = %d bytes, budget = %d", len(got), MaxBootstrapBytes)
 						}
-						if !strings.Contains(got, "Your responsibility: "+spec.Responsibility(actor)) {
+						if !strings.Contains(got, "Responsibility: "+spec.Responsibility(actor)) {
 							t.Fatal("lost stable slot responsibility")
 						}
 					})
@@ -43,7 +43,7 @@ func TestCustomCollaborationDoesNotInheritAdaptiveDefaults(t *testing.T) {
 		spec := model.Collaboration{Version: version, Mode: model.CollaborationCustom, Instructions: policy}
 		for _, actor := range model.SlotActors() {
 			got := protocol.CollaborationInstructions(actor, &spec)
-			if !strings.Contains(got, policy) || !strings.Contains(got, "Your responsibility: participant") {
+			if !strings.Contains(got, policy) || !strings.Contains(got, "Responsibility: participant") {
 				t.Fatalf("custom policy changed: %s", got)
 			}
 			for _, unwanted := range []string{model.DefaultCollaborationInstructions, "Lead", "Executor", "without delegation or peer review"} {

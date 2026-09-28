@@ -584,18 +584,18 @@ func atomicText(path, text string, mode os.FileMode) error {
 	}
 	return atomicfile.Replace(tmp.Name(), path)
 }
-func ignoreWorkspace(root string) error {
+func ignoreWorkspace(root string) (bool, error) {
 	path := filepath.Join(root, ".gitignore")
 	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
-		return errors.New(".gitignore must be a regular file")
+		return false, errors.New(".gitignore must be a regular file")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+		return false, err
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.TrimSpace(line) == ".pairroom/" || strings.TrimSpace(line) == "/.pairroom/" {
-			return nil
+			return false, nil
 		}
 	}
 	text := string(data)
@@ -603,5 +603,8 @@ func ignoreWorkspace(root string) error {
 		text += "\n"
 	}
 	text += ".pairroom/\n"
-	return atomicText(path, text, 0644)
+	if err := atomicText(path, text, 0644); err != nil {
+		return false, err
+	}
+	return true, nil
 }
