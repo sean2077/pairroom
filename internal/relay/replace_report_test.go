@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -54,6 +55,20 @@ func TestReplaceReportsPreviousGenerationWork(t *testing.T) {
 	if c := claim(); e.Ack(target, c.ID, c.Receipt) != nil {
 		t.Fatal("ack failed")
 	}
+	// A delivery that was already unknown before the bind is reported apart
+	// from the one this bind invalidates.
+	expired := send("expired")
+	claim()
+	e.mu.Lock()
+	e.cfg.Lease = time.Nanosecond
+	e.mu.Unlock()
+	time.Sleep(time.Millisecond)
+	if err := e.Reap(); err != nil {
+		t.Fatal(err)
+	}
+	e.mu.Lock()
+	e.cfg.Lease = time.Hour
+	e.mu.Unlock()
 	delivering := send("delivering")
 	claim()
 	queued := send("queued")
@@ -67,10 +82,11 @@ func TestReplaceReportsPreviousGenerationWork(t *testing.T) {
 	if err != nil || b.Generation != target.Generation+1 {
 		t.Fatalf("replace = %+v, %v", b, err)
 	}
-	if replaced == nil || replaced.Generation != target.Generation ||
-		!slices.Equal(replaced.Cancelled, []string{queued.ID}) ||
-		!slices.Equal(replaced.Unknown, []string{delivering.ID}) ||
-		!slices.Equal(replaced.HandedOff, []string{handed.ID}) || replaced.HandedOffTotal != 1 || replaced.Truncated {
+	if replaced == nil || replaced.Generation != target.Generation || !replaced.ScanComplete ||
+		!slices.Equal(replaced.Cancelled.IDs, []string{queued.ID}) || replaced.Cancelled.Count != 1 ||
+		!slices.Equal(replaced.Unknown.IDs, []string{delivering.ID}) || replaced.Unknown.Count != 1 ||
+		!slices.Equal(replaced.AlreadyUnknown.IDs, []string{expired.ID}) || replaced.AlreadyUnknown.Count != 1 ||
+		!slices.Equal(replaced.HandedOff.IDs, []string{handed.ID}) || replaced.HandedOff.Count != 1 {
 		t.Fatalf("replaced = %+v", replaced)
 	}
 	if len(attention) != 1 || attention[0] != (Attention{Kind: AttentionDeliveryUncertain, Slot: model.ActorSlot2, Key: delivering.ID}) {
@@ -95,14 +111,14 @@ func TestReplaceReportsPreviousGenerationWork(t *testing.T) {
 	}
 }
 
-// Handed-off IDs are bounded, newest first, with the full count and a flag.
+// Each list is bounded with an exact count; handed-off IDs are newest first.
 func TestReplaceReportBoundsHandedOff(t *testing.T) {
 	e, a, _ := testEngine(t)
 	sender, target := a[model.ActorSlot1], a[model.ActorSlot2]
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var ids []string
-	for i := range maxPreviousHandedOff + 2 {
+	for i := range maxReplacedIDs + 2 {
 		m, err := e.Send(sender, SendRequest{ID: "m" + string(rune('a'+i)), Text: "x"})
 		if err != nil {
 			t.Fatal(err)
@@ -118,7 +134,30 @@ func TestReplaceReportBoundsHandedOff(t *testing.T) {
 		t.Fatalf("replace = %+v, %v", replaced, err)
 	}
 	slices.Reverse(ids)
-	if !slices.Equal(replaced.HandedOff, ids[:maxPreviousHandedOff]) || replaced.HandedOffTotal != len(ids) || !replaced.Truncated {
+	if !slices.Equal(replaced.HandedOff.IDs, ids[:maxReplacedIDs]) || replaced.HandedOff.Count != len(ids) || !replaced.ScanComplete {
 		t.Fatalf("replaced = %+v", replaced)
+	}
+}
+
+// Beyond the handed-off scan window the count is a lower bound and says so;
+// work this bind invalidates is still counted exactly from the unresolved set.
+func TestReplaceReportMarksIncompleteHandedOffScan(t *testing.T) {
+	e, a, _ := testEngine(t)
+	queued, err := e.Send(a[model.ActorSlot1], SendRequest{ID: "early-queued", Text: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Retained history directly, as the long-Room benchmark does: the property
+	// is the bounded projection, not storage admission.
+	for i := range maxPreviousScan + 1 {
+		e.putMessage(Message{ID: fmt.Sprintf("old-%d", i), To: model.ActorSlot2, State: "handed_off", TargetGeneration: a[model.ActorSlot2].Generation})
+	}
+	_, r, err := e.BindReport(model.ActorSlot2, BindRequest{BindID: "new", CredentialHash: Digest("x"), SessionID: "new-session", Replace: true})
+	if err != nil || r == nil {
+		t.Fatalf("replace = %+v, %v", r, err)
+	}
+	if r.ScanComplete || r.HandedOff.Count != maxPreviousScan || len(r.HandedOff.IDs) != maxReplacedIDs ||
+		r.Cancelled.Count != 1 || r.Cancelled.IDs[0] != queued.ID {
+		t.Fatalf("replaced = %+v", r)
 	}
 }

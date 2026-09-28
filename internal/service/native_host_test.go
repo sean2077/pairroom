@@ -262,7 +262,7 @@ func TestNativeReplaceRotatesGeneration(t *testing.T) {
 	if replacement.Binding.Generation != a.Generation+1 || replacement.Binding.SessionID != a.SessionID {
 		t.Fatalf("replacement did not rotate generation: %+v", replacement.Binding)
 	}
-	if r := replacement.Replaced; r == nil || r.Generation != a.Generation || len(r.HandedOff) != 1 || r.HandedOff[0] != handed.ID || len(r.Cancelled)+len(r.Unknown) != 0 || !strings.Contains(replacement.Notice, "history --id") {
+	if r := replacement.Replaced; r == nil || r.Generation != a.Generation || r.HandedOff.Count != 1 || r.HandedOff.IDs[0] != handed.ID || r.Cancelled.Count+r.Unknown.Count+r.AlreadyUnknown.Count != 0 || !strings.Contains(replacement.Notice, "history --id") {
 		t.Fatalf("replaced report = %+v %q", r, replacement.Notice)
 	}
 	if strings.Contains(string(out), "earlier task") || strings.Contains(string(out), claim.Receipt) {

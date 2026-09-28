@@ -360,25 +360,43 @@ func (e *Engine) Bind(slot model.ActorID, req BindRequest) (Binding, error) {
 	return b, err
 }
 
-// maxPreviousHandedOff bounds the replaced generation's handed-off IDs a bind
-// reports; maxPreviousScan bounds how much retained history it inspects.
+// maxReplacedIDs bounds each ID list a replacement reports; maxPreviousScan
+// bounds how much retained history the handed-off lookup inspects.
 const (
-	maxPreviousHandedOff = 8
-	maxPreviousScan      = 5000
+	maxReplacedIDs  = 8
+	maxPreviousScan = 5000
 )
 
+// ReplacedIDs is a bounded, oldest-first (handed-off: newest-first) sample of
+// message IDs with the exact number it was taken from.
+type ReplacedIDs struct {
+	IDs   []string `json:"ids"`
+	Count int      `json:"count"`
+}
+
+func (r *ReplacedIDs) add(id string) {
+	r.Count++
+	if len(r.IDs) < maxReplacedIDs {
+		r.IDs = append(r.IDs, id)
+	}
+}
+
 // Replaced lists body-free transport IDs of a replaced generation's inbox so
-// the new session can inspect them with history --id. Cancelled and Unknown
-// were invalidated by this bind; HandedOff (newest first, bounded) was already
-// written to the old collector's stdout — not invalidated, possibly executed,
-// never proof of model acceptance. Nothing here is requeued or retried.
+// the new session can inspect them with history --id. Nothing is requeued or
+// retried, and no state here proves model acceptance.
+//
+// Cancelled (was queued) and Unknown (was claimed, unacknowledged) are what
+// this bind invalidated; AlreadyUnknown were unknown before it. Their counts are
+// exact. HandedOff were written to the previous collector's stdout, may have
+// run and were not invalidated; they come from the newest retained history,
+// so HandedOff.Count is exact only when ScanComplete.
 type Replaced struct {
-	Generation     uint64   `json:"generation"`
-	Cancelled      []string `json:"cancelled,omitempty"`
-	Unknown        []string `json:"unknown,omitempty"`
-	HandedOff      []string `json:"handed_off,omitempty"`
-	HandedOffTotal int      `json:"handed_off_total,omitempty"`
-	Truncated      bool     `json:"truncated,omitempty"`
+	Generation     uint64      `json:"generation"`
+	Cancelled      ReplacedIDs `json:"cancelled"`
+	Unknown        ReplacedIDs `json:"unknown"`
+	AlreadyUnknown ReplacedIDs `json:"already_unknown"`
+	HandedOff      ReplacedIDs `json:"handed_off"`
+	ScanComplete   bool        `json:"scan_complete"`
 }
 
 // BindReport is Bind plus, for an explicit replacement of an active binding,
@@ -387,41 +405,38 @@ func (e *Engine) BindReport(slot model.ActorID, req BindRequest) (Binding, *Repl
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	old := e.bindings[slot]
-	// Queued old-generation input this bind is about to cancel.
-	wasQueued := map[string]bool{}
-	for _, id := range e.queued[slot] {
-		wasQueued[id] = true
+	r := &Replaced{Generation: old.Generation, ScanComplete: true}
+	// Classify the current work set before this bind invalidates it; it is
+	// bounded by unresolved work, never by terminal history.
+	for _, id := range e.unresolved {
+		m := e.messages[id]
+		if m.To != slot || m.TargetGeneration != old.Generation {
+			continue
+		}
+		switch m.State {
+		case "queued":
+			r.Cancelled.add(id)
+		case "delivering":
+			r.Unknown.add(id)
+		case "unknown":
+			r.AlreadyUnknown.add(id)
+		}
 	}
 	b, err := e.bindLocked(slot, req)
 	if err != nil || !old.Active || b.Generation == old.Generation {
 		return b, nil, err
 	}
-	r := &Replaced{Generation: old.Generation}
 	for i, scanned := len(e.order)-1, 0; i >= 0; i-- {
 		if scanned == maxPreviousScan {
-			r.Truncated = true
+			r.ScanComplete = false
 			break
 		}
 		scanned++
-		m := e.messages[e.order[i]]
-		if m.To != slot || m.TargetGeneration != old.Generation {
-			continue
-		}
-		switch {
-		case m.State == "cancelled" && wasQueued[m.ID]:
-			r.Cancelled = append(r.Cancelled, m.ID)
-		case m.State == "unknown":
-			r.Unknown = append(r.Unknown, m.ID)
-		case m.State == "handed_off":
-			r.HandedOffTotal++
-			if len(r.HandedOff) < maxPreviousHandedOff {
-				r.HandedOff = append(r.HandedOff, m.ID)
-			} else {
-				r.Truncated = true
-			}
+		if m := e.messages[e.order[i]]; m.To == slot && m.TargetGeneration == old.Generation && m.State == "handed_off" {
+			r.HandedOff.add(m.ID)
 		}
 	}
-	if len(r.Cancelled)+len(r.Unknown)+r.HandedOffTotal == 0 && !r.Truncated {
+	if r.Cancelled.Count+r.Unknown.Count+r.AlreadyUnknown.Count+r.HandedOff.Count == 0 && r.ScanComplete {
 		return b, nil, nil
 	}
 	return b, r, nil
