@@ -43,6 +43,7 @@ type options struct {
 	create, brief                                  bool
 	repoExplicit                                   bool
 	timeout                                        int
+	inlineMax                                      int
 	attachments                                    stringsFlag
 	preparedAgents                                 map[model.ActorID]model.AgentSelection
 }
@@ -105,6 +106,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.StringVar(&o.textFile, "text-file", "", "send/exchange: read UTF-8 body from a file, or - for stdin")
 	flags.Var(&o.references, "ref", "send/exchange: local file reference with path, size and SHA-256, not an upload (repeatable)")
 	flags.StringVar(&o.outputFile, "output-file", "", "wait/exchange: save the incoming envelope to a new private file and print only its receipt; parent must exist and be writable")
+	flags.IntVar(&o.inlineMax, "inline-max", 0, "wait/exchange with --output-file: print an envelope of at most this many bytes directly instead of saving it (0 always saves)")
 	flags.StringVar(&o.id, "id", "", "stable client message ID (required for exchange); reuse on uncertain send")
 	flags.StringVar(&o.to, "to", "", "explicit send target: @user, or empty for peer")
 	flags.BoolVar(&o.create, "create", false, "bind only: register the project when missing, create a native Room, then bind this session")
@@ -185,6 +187,14 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 			return errors.New("--text-file requires a nonempty path, or - for stdin")
 		}
 	}
+	if provided["inline-max"] {
+		if !provided["output-file"] {
+			return errors.New("--inline-max requires --output-file")
+		}
+		if o.inlineMax < 0 || o.inlineMax > relay.MaxBodyBytes {
+			return fmt.Errorf("--inline-max must be 0–%d bytes", relay.MaxBodyBytes)
+		}
+	}
 	if provided["output-file"] {
 		if action != "wait" && action != "exchange" {
 			return errors.New("--output-file applies only to wait or exchange")
@@ -194,6 +204,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if err != nil {
 			return err
 		}
+		writer.inlineMax = o.inlineMax
 		o.outputFile = writer.path
 		out = writer
 	}

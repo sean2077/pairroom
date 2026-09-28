@@ -136,6 +136,9 @@ func finishExchange(ctx context.Context, c *Client, o options, msg relay.Message
 		command := foregroundWaitCommand(c, o.timeout)
 		if o.outputFile != "" {
 			command += " --output-file " + quoteShellPath(o.outputFile)
+			if o.inlineMax > 0 {
+				command += fmt.Sprintf(" --inline-max %d", o.inlineMax)
+			}
 		}
 		return fmt.Errorf("publication %s confirmed; %w; continue with %s, not another send/exchange", msg.ID, errExchangeWaiting, command)
 	}

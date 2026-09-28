@@ -124,6 +124,7 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--name`
 - `--no-browser`
 - `--output-file`
+- `--inline-max`
 - `--output`
 - `--peer-runtime`
 - `--pending`
@@ -197,7 +198,7 @@ All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Norma
 | `send --id <client-id> --text <body>` | Explicit message to peer; `--text-file PATH` reads UTF-8 from a file (`-` is stdin) and repeatable `--ref PATH` appends a local path/size/SHA-256 pointer without uploading contents; requires the bind-time association like every collection call; repeat the same ID after an uncertain response, never deduplicate by body. If that ID already names different content, send fails with "already used for a different message"; that answer is definite, not uncertain, and nothing new was published. A queued peer receipt prints a short body-free diagnostic and the peer `wait` command on stderr, without an extra lookup or vendor session identity; `exchange` omits it because the sender collects next. In a wake-enabled Room the Service nudges an eligible Claude inbox or idle Codex-bound target automatically; `status --brief` shows the human-executable Codex fallback |
 | `send --to @user --attach <image>` | Human escalation with optional repeatable image paths; stdin supplies text when `--text`, `--text-file` and `--ref` are absent. A same-ID retry re-uploads the images and still matches the original when each image is byte-identical with the same file name and order |
 | `exchange --id <client-id> --text <body>` | One explicit peer send, then the next FIFO input; accepts `--text-file`, `--ref` and `--output-file`; defaults to a 3,600-second wait, supports `--timeout 0` for no PairRoom total deadline, and finite values up to 21,600 seconds; not a correlated request/reply transaction |
-| `wait --timeout 0` | Foreground collection for an associated session; default 3,600 seconds, `0` means no PairRoom total deadline, finite values may be 1–21,600 seconds; renews only successful empty HTTP polls; stdout precedes ack; `--output-file NEW_PATH` persists the envelope and prints a locator |
+| `wait --timeout 0` | Foreground collection for an associated session; default 3,600 seconds, `0` means no PairRoom total deadline, finite values may be 1–21,600 seconds; renews only successful empty HTTP polls; stdout precedes ack; `--output-file NEW_PATH` persists the envelope and prints a locator, and `--inline-max N` prints envelopes up to N bytes directly instead |
 | `preflight [--runtime claude\|codex\|grok] [--repo PATH] [--service-file PATH]` | Read-only setup check before a Native bind, runnable from any shell and before any binding exists. Reports as JSON whether the bare `pairroom` command the hooks run resolves on this shell's PATH (and whether it is the running binary), the Git workspace, the caller's native session identity, the running Service's reachability and release match plus active native Rooms for this Project, and the project Stop hook for the caller's runtime, `--runtime`, or every runtime when neither is known (Grok reuse of the Claude Code hook is reported). Each hook entry also reports the installed `pairroom-relay` product skill as `current`, `stale`, `missing` or `external` (content PairRoom did not write) against the skill this CLI embeds; stale or missing adds an advisory refresh step without affecting `ready`. `build_match` is false only when both sides carry different build metadata within one release, which adds a restart hint. It ends with ordered `next_steps` and exits nonzero unless `ready`. It creates no state, contacts no model and never prints the endpoint token; hook approval stays `unknown`. |
 | `doctor` | Read-only current Native Room diagnostics plus local hook installation, installed product skill freshness (`local.skill`), CLI/protocol version match and last hook observation. Until the Stop hook first runs for this binding, `local.hook_hint` says so; after a finished turn that usually means the hook is not approved or not loaded. Reports an already active Native Room; a suspended Room (for example after a Service restart) fails instead of being activated, because activation resumes Service-managed wake. That error names `relay status --brief`, which activates the Room; rerun doctor afterwards. Contacts no model; approval and model acceptance remain unknown. |
 | `history --id ID` | Read exactly one published message as evidence, never collect or replay it. |
@@ -279,6 +280,11 @@ so use a private directory.
 The receipt confirms delivery to local storage/tool output, not model comprehension.
 Read the envelope before acting and clean up only after it is no longer needed.
 Stop-hook output is unchanged; file output is an explicit foreground choice.
+`--inline-max N` (with `--output-file`, 0–262,144, default 0) prints an envelope of
+at most N bytes directly on stdout instead, exactly like a wait without
+`--output-file`, and creates no file; a larger one is still saved with its
+receipt. The same stdout-before-ack rule applies to both, and the printed
+receive-only recovery command keeps the flag. A saved receipt for an envelope of at most 8 KiB suggests the flag; the skill does not repeat it.
 
 A receipt-output failure retains the complete local file but withholds ack;
 file-write failures also withhold ack. Inspect delivery state before any explicit
