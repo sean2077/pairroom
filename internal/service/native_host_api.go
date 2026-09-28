@@ -113,6 +113,7 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 		nativeResult(w, nil, relay.ErrAuth)
 		return
 	}
+	s.observeCLIBuild(r)
 	var runtime *nativeHostRuntime
 	if r.PathValue("action") == "ack" || r.PathValue("action") == "doctor" {
 		var active RoomRuntime

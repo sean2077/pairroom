@@ -23,6 +23,9 @@ const EndpointFile = "relay-endpoint.json"
 // mismatch without an extra request.
 const VersionHeader = "X-PairRoom-Version"
 
+// CLIBuildHeader reports the invoking CLI's stamped build on existing requests.
+const CLIBuildHeader = "X-PairRoom-CLI-Build"
+
 // Endpoint is owner-only local CLI discovery, never a Room or browser payload.
 type Endpoint struct {
 	URL   string `json:"url"`

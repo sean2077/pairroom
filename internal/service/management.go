@@ -57,6 +57,7 @@ type ManagementServer struct {
 	cliToken      string
 	agentResolver *AgentResolver
 	notifier      *Notifier
+	cliBuild      *cliBuildObserver
 	sessions      *websession.Store
 	http          *http.Server
 	roomLocks     roomLockSet
@@ -112,6 +113,7 @@ type ServiceCapabilities struct {
 }
 
 type ServiceSnapshot struct {
+	CLIBuildMismatch     *CLIBuildMismatch       `json:"cli_build_mismatch,omitempty"`
 	NavigationOrder      *NavigationOrder        `json:"navigation_order,omitempty"`
 	NavigationOrderError bool                    `json:"navigation_order_error,omitempty"`
 	Version              string                  `json:"version"`
@@ -165,6 +167,7 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 		return nil, err
 	}
 	server := &ManagementServer{
+		cliBuild: newCLIBuildObserver(version.Describe()),
 		registry: cfg.Registry, runtimes: cfg.Runtimes,
 		provisioner: cfg.Provisioner, token: token, cliToken: cliToken, sessions: sessions, agentResolver: cfg.AgentResolver, notifier: cfg.Notifier,
 	}
@@ -306,7 +309,8 @@ func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
 	}
 	healthErr := s.registry.Healthy()
 	payload := ServiceSnapshot{
-		Version: version.Describe(), Commit: version.Commit, BuildDate: version.BuildDate,
+		CLIBuildMismatch: s.cliBuild.snapshot(),
+		Version:          version.Describe(), Commit: version.Commit, BuildDate: version.BuildDate,
 		StoreSchema: version.StoreSchema, RepositoryURL: version.RepositoryURL,
 		DataRoot: s.registry.Root(), GeneratedAt: time.Now().UTC(),
 		Projects: registry.Projects, Rooms: registry.Rooms, Runtimes: runtimes,
@@ -1001,6 +1005,7 @@ func (s *ManagementServer) authenticate(next http.Handler) http.Handler {
 		if strings.HasPrefix(authorization, prefix) {
 			presented := []byte(strings.TrimSpace(strings.TrimPrefix(authorization, prefix)))
 			if subtle.ConstantTimeCompare(presented, []byte(s.token)) == 1 {
+				s.observeCLIBuild(r)
 				next.ServeHTTP(w, withManagementAuth(r, managementRequestAuth{Mode: managementAuthBearer}))
 				return
 			}
@@ -1009,6 +1014,7 @@ func (s *ManagementServer) authenticate(next http.Handler) http.Handler {
 					writeManagementError(w, http.StatusForbidden, "the relay setup token from relay-endpoint.json is scoped to service discovery, project registration, native Room creation, pair defaults, and native bindings")
 					return
 				}
+				s.observeCLIBuild(r)
 				next.ServeHTTP(w, withManagementAuth(r, managementRequestAuth{Mode: managementAuthBearer, Scoped: true}))
 				return
 			}

@@ -633,6 +633,7 @@ func management(ctx context.Context, endpoint relay.Endpoint, method, path strin
 		return errors.New("invalid Service request")
 	}
 	req.Header.Set("Authorization", "Bearer "+endpoint.Token)
+	attachCLIBuild(req)
 	req.Header.Set("Content-Type", "application/json")
 	client := http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	res, err := client.Do(req)

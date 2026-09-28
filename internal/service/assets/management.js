@@ -172,6 +172,7 @@
   }
 
   function showCredentialLogin(message = '') {
+    const buildBanner = $('cli-build-banner'); if (buildBanner) buildBanner.hidden = true;
     notificationWatch.after = null;
     notificationWatch.epoch = '';
     notificationWatch.generation++;
@@ -468,7 +469,17 @@
     location.hash = route;
   }
 
+  function renderCLIBuildBanner() {
+    const banner = $('cli-build-banner');
+    if (!banner) return;
+    const build = state.snapshot?.cli_build_mismatch;
+    const visible = state.authenticated && state.connected && typeof build?.cli === 'string' && typeof build?.service === 'string' && build.cli && build.service && build.cli !== build.service;
+    banner.hidden = !visible;
+    if (visible) setRenderedText('cli-build-message', t('ui.cliBuildMismatchBody', {cli:build.cli,service:build.service}));
+  }
+
   function updateChrome() {
+    renderCLIBuildBanner();
     const snapshot = state.snapshot;
     const summary = serviceSummary(snapshot);
     const healthy = Boolean(snapshot?.healthy);
@@ -2930,6 +2941,7 @@
 
   function diagnosticSnapshot() {
     const clone = JSON.parse(JSON.stringify(state.snapshot || {}));
+    delete clone.cli_build_mismatch; // Ephemeral client-reported observation, not diagnostics.
     (clone.runtimes || []).forEach((runtime) => {
       if (runtime.url) runtime.url = '[redacted local runtime URL]';
     });

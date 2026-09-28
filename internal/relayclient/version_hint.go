@@ -21,6 +21,12 @@ import (
 // release still unknown, spends one bounded read to learn it.
 type serviceObservationKey struct{}
 
+func attachCLIBuild(req *http.Request) {
+	if token := version.StampedToken(version.Describe()); token != "" {
+		req.Header.Set(relay.CLIBuildHeader, token)
+	}
+}
+
 type serviceObservation struct {
 	mu       sync.Mutex
 	release  string

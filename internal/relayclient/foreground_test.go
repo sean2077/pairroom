@@ -24,6 +24,7 @@ import (
 // Real CLI parsing, workspace discovery, private state and HTTP transport;
 // synthetic service replies, not vendor/model E2E or a second relay engine.
 type foregroundFixtureOptions struct {
+	onRequest         func(*http.Request)
 	failAction        string
 	failStatus        int
 	release           string
@@ -70,6 +71,9 @@ func newForegroundFixture(t *testing.T, opts foregroundFixtureOptions) *foregrou
 		peer = &relay.Binding{Slot: model.ActorSlot2, Runtime: model.RuntimeCodex, SessionID: "peer-session"}
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if opts.onRequest != nil {
+			opts.onRequest(r)
+		}
 		if r.Method != http.MethodPost || !strings.HasPrefix(r.URL.Path, "/api/v1/relay/room/slot1/") ||
 			r.Header.Get("Authorization") != "Relay private-long-lived-secret" ||
 			r.Header.Get("X-PairRoom-Bind") != "binding" ||

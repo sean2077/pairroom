@@ -228,6 +228,8 @@ Every Management `/api/…` response, including relay and rejected requests, car
 
 ## Attention notifications
 
+Existing authenticated CLI requests may carry `X-PairRoom-CLI-Build`, a bounded stamped version token. The Service accepts observations only after bearer/relay authentication, ignores invalid or unstamped values, and never persists them in Room events. When a differing build has met the stability window described in [Operations](OPERATIONS.md#attention-notifications), `GET /api/v1/service` includes `cli_build_mismatch: {service, cli}`; otherwise the field is absent. This is the last stable valid CLI observation, not the version of a file scanned on disk. The in-memory observation resets on Service restart and is omitted from browser diagnostic exports. Reporting it adds no CLI or hook request.
+
 `GET /api/v1/notifications` returns `{"notifications":[...],"epoch":"...","latest_seq":0,"reset":false}`: body-free observations that a Room may need a human, oldest first. Each item has `seq`, `room_id`, `room_name`, `host_mode`, `kind`, optional `slot` and `at`; it never carries message text, tool input, approval detail, session identity, receipts or vendor output. `?after=<seq>&epoch=<epoch>` returns only newer items and `?wait=<1-30>` long-polls until one arrives. The opaque epoch changes when the notifier restarts. An old epoch or a cursor ahead of `latest_seq` returns `reset:true` immediately with the current retained list; clients replace their epoch and cursor with the returned values, including when the list is empty. Reading never acknowledges, clears or changes Room state.
 
 | `kind` | Raised when |
