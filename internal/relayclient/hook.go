@@ -255,7 +255,15 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		return err
 	}
 	defer releaseCollector()
-	return deliver(ctx, c, true, 30, out)
+	err = deliver(ctx, c, true, 30, out)
+	if errors.Is(err, errAckUncertain) {
+		// The block decision is already on stdout. A nonzero exit would make the
+		// harness ignore it, so the model would never see an envelope the Service
+		// will mark unknown. Keep the decision; report the uncertainty on stderr.
+		_, _ = fmt.Fprintln(diagnostic, "PairRoom: input delivered to this turn, but its acknowledgement was not recorded; the Room may show it as unknown. Do not resend it.")
+		return nil
+	}
+	return err
 }
 
 // deliver makes a single claim and writes one complete stdout record before ack.
@@ -355,8 +363,34 @@ func deliverOnce(ctx context.Context, c *Client, hook bool, seconds int, out io.
 	var acknowledged struct {
 		HandedOff bool `json:"handed_off"`
 	}
-	if err := c.call(ctx, "ack", map[string]string{"id": claim.ID, "receipt": claim.Receipt}, &acknowledged); err != nil || !acknowledged.HandedOff {
-		return false, errors.New("stdout written but acknowledgement unavailable; inspect Room delivery state, never automatically replay")
+	if err := acknowledge(ctx, c, claim, &acknowledged); err != nil || !acknowledged.HandedOff {
+		return false, errAckUncertain
 	}
 	return true, nil
+}
+
+var errAckUncertain = errors.New("stdout written but acknowledgement unavailable; inspect Room delivery state, never automatically replay")
+
+// acknowledge repeats only requests that received no HTTP response. The
+// receipt-matched ack is idempotent in the Service (handed_off stays
+// handed_off, and a lease-expired unknown settles once), so resending it cannot
+// duplicate delivery. Any Service answer, even a malformed one, is final.
+func acknowledge(ctx context.Context, c *Client, claim relay.Claim, result any) error {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			timer := time.NewTimer(time.Duration(attempt) * 200 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return err
+			case <-timer.C:
+			}
+		}
+		err = c.call(ctx, "ack", map[string]string{"id": claim.ID, "receipt": claim.Receipt}, result)
+		if !errors.Is(err, errTransportUnavailable) || ctx.Err() != nil {
+			return err
+		}
+	}
+	return err
 }
