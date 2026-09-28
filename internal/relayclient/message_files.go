@@ -94,7 +94,7 @@ func readPublicationInput(input publicationInput, in io.Reader, limit int64) (st
 		if text != "" {
 			text += "\n\n"
 		}
-		text += "Local file references (not uploaded; verify SHA-256 and read only needed sections):\n" + string(data)
+		text += "Local files, not uploaded: verify SHA-256; read needed sections.\n" + string(data)
 	}
 	if int64(len(text)) > limit {
 		return "", fmt.Errorf("message with file references exceeds %d KiB", limit>>10)

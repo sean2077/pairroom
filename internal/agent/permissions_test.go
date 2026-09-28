@@ -79,7 +79,7 @@ func TestCollaborationInstructionsAreStableAndOutsideEnvelopes(t *testing.T) {
 			for _, actor := range model.SlotActors() {
 				cfg := Config{Actor: actor, Runtime: self, PeerRuntime: peer, Collaboration: &d}
 				got := collaborationPrompt(cfg)
-				if strings.Count(got, d.Instructions) != 1 || !strings.Contains(got, "Your responsibility: "+d.Responsibility(actor)) {
+				if strings.Count(got, d.Instructions) != 1 || !strings.Contains(got, "Responsibility: "+d.Responsibility(actor)) {
 					t.Fatalf("instructions=%s", got)
 				}
 				if len(got) > prompt.MaxBootstrapBytes {

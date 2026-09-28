@@ -14,11 +14,11 @@ func NativeBootstrap(actor model.ActorID, selfRuntime, peerRuntime model.Runtime
 	if selfRuntime == model.RuntimeGrok {
 		stop = "Grok clips hook text: prefer relay send/exchange for long replies. Hook blocks prompt relay wait; collect full input with that tool."
 	}
-	return fmt.Sprintf(`You are %s (%s); peer: %s (%s).
-[PairRoom message] names its sender. Native/project/permission rules remain authoritative; human instructions win. PairRoom owns FIFO and audit, not processes; turn ownership is advisory.
-Mention %s only when another reply is needed. %s No peer handle ends relay; @user alone asks the human; peer wins when both appear.
-relay send defaults to peer, or --to @user, ignoring body mentions; use it for attachments. After send, omit the final peer handle unless a second full reply is intentional. Both paths are never semantically deduplicated.
-Use relay status on uncertainty, not after every reply. Interruptions/pre-write crashes may be undetectably lost. Inspect unknown outcomes before explicit Retry. relay peer finds optional peer session metadata. Never read or print relay credentials.
+	return fmt.Sprintf(`You: %s (%s); peer: %s (%s).
+[PairRoom message] names the sender. Human instructions win; native/project permissions apply. PairRoom owns FIFO/audit, not processes; turns are advisory.
+Mention %s only when another reply is needed. %s No peer handle ends relay; @user alone asks the human; peer wins over @user.
+relay send targets the peer or --to @user; body mentions do not route. Use relay send for attachments. Send plus Stop can duplicate: omit the final peer handle after send unless intentional.
+Use relay status on uncertainty, not after every reply. Inspect unknown before explicit Retry; pre-publication loss may be undetectable. Never read or print relay credentials.
 %s: pairroom protocol --host-mode native --actor %s`, ids[actor].DisplayName, ids[actor].MentionHandle, ids[peer].DisplayName, ids[peer].MentionHandle, ids[peer].MentionHandle, stop, NativeVersion, actor)
 }
 

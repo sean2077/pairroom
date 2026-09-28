@@ -167,5 +167,5 @@ func (n *nativeHostRuntime) nativeDiagnostics() map[string]any {
 		}
 		slots[slot] = d
 	}
-	return map[string]any{"schema": 1, "scope": "native_room", "service_version": version.Current, "protocol": protocol.NativeVersion, "generated_at": time.Now().UTC(), "relay": summary, "participants": slots, "notice": "Transport observations only. Captured capability/available executable is not proof of native policy, live presence or model acceptance. In-session relay doctor checks local hook installation; approvals remain unknown."}
+	return map[string]any{"schema": 1, "scope": "native_room", "service_version": version.Current, "protocol": protocol.NativeVersion, "generated_at": time.Now().UTC(), "relay": summary, "participants": slots, "notice": "Transport only. Capability is not live presence or model acceptance; hook approval is unknown. Check local hooks with relay doctor."}
 }

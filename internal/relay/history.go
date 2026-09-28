@@ -50,7 +50,7 @@ func (e *Engine) AuthHistory(a Auth, q HistoryQuery) (HistoryPage, error) {
 }
 
 func (e *Engine) historyLocked(q HistoryQuery) (HistoryPage, error) {
-	result := HistoryPage{Messages: []Message{}, Sequence: e.sequence, Total: len(e.order), Notice: "Historical evidence only; reading does not claim, acknowledge, retry or authorize repeating work."}
+	result := HistoryPage{Messages: []Message{}, Sequence: e.sequence, Total: len(e.order), Notice: "History only: no claim, ack, replay or permission to repeat work."}
 	if q.Limit < 0 || q.Limit > HistoryPageLimit {
 		return result, errors.New("history limit must be 1–100")
 	}

@@ -86,5 +86,5 @@ func CollaborationInstructions(actor model.ActorID, c *model.Collaboration) stri
 	if c == nil {
 		return ""
 	}
-	return fmt.Sprintf("Room collaboration (fixed at creation; %s):\n%s\nYour responsibility: %s.", c.Mode, c.Instructions, c.Responsibility(actor))
+	return fmt.Sprintf("Room policy (fixed; %s):\n%s\nResponsibility: %s.", c.Mode, c.Instructions, c.Responsibility(actor))
 }

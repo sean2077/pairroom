@@ -144,7 +144,8 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		attempt.State.HarnessPID, attempt.State.HarnessName = pid, name
 	}
 	attempt.State.EndpointPath = endpointPath
-	if err := ignoreWorkspace(root); err != nil {
+	ignoreChanged, err := ignoreWorkspace(root)
+	if err != nil {
 		return err
 	}
 	if staged {
@@ -195,11 +196,15 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		}
 	}
 	wakeErr := captureClaudeInbox(dir, attempt.State)
-	payload := map[string]any{"binding": result.Binding, "bootstrap": result.Bootstrap, "collaboration": result.Collaboration, "notice": result.Notice + " Added .pairroom/ to .gitignore. This session is ready to relay."}
+	notice := result.Notice + " Relay ready."
+	if ignoreChanged {
+		notice += " Added .pairroom/ to .gitignore."
+	}
+	payload := map[string]any{"binding": result.Binding, "bootstrap": result.Bootstrap, "collaboration": result.Collaboration, "notice": notice}
 	if result.Replaced != nil {
 		// Body-free IDs only; the new session decides whether any matter.
 		payload["replaced"] = result.Replaced
-		payload["replaced_notice"] = "Input for the replaced session: this bind cancelled queued input and made claimed, unacknowledged input unknown; handed_off was written to the previous collector's stdout and may have run. Each list shows up to 8 IDs and an exact count (handed_off only when scan_complete). Inspect with pairroom relay history --id <id>; nothing is requeued."
+		payload["replaced_notice"] = "Previous-generation IDs only; nothing requeued. handed_off = collector stdout, not acceptance. Lists cap at 8; handed_off count is exact only if scan_complete. Inspect relay history --id."
 	}
 	if wakeErr != nil {
 		payload["wake_notice"] = "Claude external wake is unavailable; relay remains ready. Use relay wait or rebind in the intended session."

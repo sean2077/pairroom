@@ -93,7 +93,7 @@ func (e *Engine) AuthSummary(a Auth) (Summary, error) {
 func (e *Engine) summaryLocked() Summary {
 	s := Summary{LastUserMessage: e.lastUserMessage, HostMode: model.HostNative, RoomID: e.cfg.RoomID, Sequence: e.sequence, WakeEnabled: e.wakeEnabled,
 		Bindings: map[model.ActorID]BindingSummary{}, Inboxes: map[model.ActorID]InboxSummary{}, LastWake: map[model.ActorID]WakeObservation{},
-		Notice: "Transport state only; handed_off is stdout, not model acceptance. Inspect one message with relay history --id; --pending pages unresolved work without replay."}
+		Notice: "handed_off = CLI stdout, not model acceptance. Inspect history --id or --pending; never auto-replay."}
 
 	for slot, b := range e.bindings {
 		s.Bindings[slot] = BindingSummary{Active: b.Active, Associated: b.SessionID != "", ParkEnabled: b.ParkEnabled, CollectorActive: e.waiters[slot] > 0, LastActivity: b.LastActivity}

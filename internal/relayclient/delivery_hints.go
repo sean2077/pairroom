@@ -33,7 +33,7 @@ type queuedInboxHint struct {
 }
 
 const codexWakeNudge = "PairRoom inbox has messages for you. Run: pairroom relay wait"
-const codexWakeNotice = "Human fallback wake; fixed body-free nudge. In an enabled Room the Service runs the equivalent automatically for an idle Codex peer."
+const codexWakeNotice = "Human-only, body-free fallback; enabled Rooms manage wake automatically. Agents must not run this command."
 
 type wakeTemplate struct {
 	Command string
@@ -72,7 +72,7 @@ func queuedDeliveryHintFor(c *Client, msg relay.Message) *queuedDeliveryHint {
 		return nil
 	}
 	return &queuedDeliveryHint{
-		Notice:  "Queued for the peer; not yet collected. Wake is Service-managed; if it stays queued, use relay status --brief, or run this in the peer's session.",
+		Notice:  "Queued, not collected. Service-managed wake; if stalled, use relay status --brief. Peer-session command:",
 		Command: waitCommand(c.State.Room, msg.To),
 	}
 }
@@ -94,9 +94,9 @@ func queuedInboxHints(ctx context.Context, c *Client, summary *relay.Summary) []
 		if queued == 0 {
 			continue
 		}
-		notice := "Peer inbox has queued input at this status snapshot. Eligible Claude/Codex external wake is Service-managed. relay doctor explains capability, policy and cooldown; run this command in the peer's associated native session to collect it."
+		notice := "Peer inbox queued; snapshot only. Peer runs the command below. Wake details: relay doctor."
 		if slot == c.State.Slot {
-			notice = "This associated inbox has queued input at this status snapshot. Eligible Claude/Codex external wake is Service-managed. relay doctor explains capability, policy and cooldown; run this command to collect it."
+			notice = "Input queued; snapshot only. Run the command below. Wake details: relay doctor."
 		}
 		wake := wakeTemplate{}
 		if slot == c.State.Slot {
@@ -124,9 +124,9 @@ func nativeWakeAdvice(kind model.RuntimeKind, session string) wakeTemplate {
 	}
 	switch kind.Canonical() {
 	case model.RuntimeClaude:
-		return wakeTemplate{Notice: "Claude external wake requires a captured local inbox capability and native inbound permission. No raw socket command is printed; use relay doctor or receive-only wait."}
+		return wakeTemplate{Notice: "Claude wake needs a captured inbox and inbound permission. Use relay doctor or receive-only wait; no raw socket command."}
 	case model.RuntimeGrok:
-		return wakeTemplate{Notice: "Grok external wake is not integrated. Use a harness-tracked background wait only when its completion reaches the model, or receive-only foreground wait."}
+		return wakeTemplate{Notice: "No Service wake. Use tracked background wait only if completion reaches the model; otherwise foreground wait."}
 	}
 	return wakeTemplate{}
 }

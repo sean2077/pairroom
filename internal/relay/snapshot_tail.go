@@ -43,7 +43,7 @@ func (e *Engine) SnapshotTail() TailSnapshot {
 }
 
 func (e *Engine) snapshotRangeLocked(messageStart, auditStart int) Snapshot {
-	s := Snapshot{HostMode: model.HostNative, RoomID: e.cfg.RoomID, Bindings: map[model.ActorID]Binding{}, Messages: make([]Message, 0, len(e.order)-messageStart), Audit: append([]Audit(nil), e.audit[auditStart:]...), Sequence: e.sequence, Notice: "handed_off means CLI stdout was written, not native acceptance. Interrupted replies and crashes before atomic publication may be undetectably lost. Park is bounded; queue and nudge/wait outside its window. Native work remains user-owned."}
+	s := Snapshot{HostMode: model.HostNative, RoomID: e.cfg.RoomID, Bindings: map[model.ActorID]Binding{}, Messages: make([]Message, 0, len(e.order)-messageStart), Audit: append([]Audit(nil), e.audit[auditStart:]...), Sequence: e.sequence, Notice: "handed_off = CLI stdout, not acceptance. Pre-publication loss may be undetectable. Park is bounded; native work remains user-owned."}
 	for slot, b := range e.bindings {
 		s.Bindings[slot] = b.Binding
 	}

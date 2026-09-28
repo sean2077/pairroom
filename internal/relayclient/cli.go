@@ -401,7 +401,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if workspace == "" {
 			workspace = root
 		}
-		return writeJSON(out, map[string]any{"id": o.id, "review": page.Messages[0].Review, "status": review.Check(ctx, workspace, *page.Messages[0].Review), "notice": "Observation only; unchanged evidence is not approval. Ignored files require explicit --ref evidence."})
+		return writeJSON(out, map[string]any{"id": o.id, "review": page.Messages[0].Review, "status": review.Check(ctx, workspace, *page.Messages[0].Review), "notice": "Evidence is not approval. Supply ignored-file evidence with --ref."})
 	case "doctor":
 		var report map[string]any
 		if err := c.call(ctx, "doctor", nil, &report); err != nil {
