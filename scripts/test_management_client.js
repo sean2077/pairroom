@@ -51,6 +51,7 @@ function client() {
   const hook = `
     globalThis.management = {state, api, refresh, loadAgentCatalog, loadAgentPairProfiles, mutateAgentPairProfiles, withBusy, scheduleRefresh,
       syncConfirmRequirement, submitConfirm, resetConfirmState, createBrowserSession, showCredentialLogin,
+      notificationWatch, startNotificationWatch,
       invalidateSessionReads, openRoomInBrowserAction, connect, updateDesktopStartup,
       setDesktop(value) { window.PairRoomDesktop = value; },
       setAPI(callback) { api = callback; }, setCanRender(value) { canRenderNow = () => value; }};
@@ -75,6 +76,33 @@ function client() {
 async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
 
 async function main() {
+  {
+    const c = client(), reads = [], pending = [];
+    c.setAPI((path) => { reads.push(path); const next = deferred(); pending.push(next); return next.promise; });
+    const watch = c.startNotificationWatch();
+    pending[0].resolve({epoch: 'old', latest_seq: 100, notifications: [{seq: 100, kind: 'human_turn'}]});
+    await flush();
+    assert.equal(c.notices.length, 0, 'initial history is not a new alert');
+    assert.match(reads[1], /after=100&epoch=old/);
+    pending[1].resolve({epoch: 'new', latest_seq: 1, reset: true, notifications: [{seq: 1, kind: 'wake_failed'}]});
+    await flush();
+    assert.equal(c.notices.length, 1, 'new epoch alerts survive an old high cursor');
+    assert.match(reads[2], /after=1&epoch=new/);
+    c.showCredentialLogin();
+    assert.equal(c.notificationWatch.after, null);
+    assert.equal(c.notificationWatch.epoch, '');
+    pending[2].resolve({epoch: 'new', latest_seq: 2, notifications: [{seq: 2, kind: 'wake_failed'}]});
+    await watch;
+    assert.equal(c.notificationWatch.after, null, 'an obsolete poll cannot restore the cursor after logout');
+    assert.equal(c.notices.length, 1);
+    c.state.authenticated = true;
+    const restarted = c.startNotificationWatch();
+    assert.equal(reads[3], '/api/v1/notifications');
+    pending[3].resolve({epoch: 'next', latest_seq: 0, notifications: []});
+    await flush();
+    assert.match(reads[4], /after=0&epoch=next/);
+    c.state.authenticated = false; pending[4].resolve({notifications: []}); await restarted;
+  }
   // The browser must use v5's current profile generation for both reads and
   // writes. Invalid/retired responses never replace a usable catalog.
   for (const mutation of [false, true]) {

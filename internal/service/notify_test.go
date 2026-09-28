@@ -19,6 +19,7 @@ func TestNotifierDeduplicatesFoldsBurstsAndStaysBodyFree(t *testing.T) {
 	clock.Store(1800000000)
 	var mu sync.Mutex
 	var runs [][]byte
+	delivered := make(chan struct{}, 3)
 	n := NewNotifier(NotifierConfig{
 		Command: []string{"notify-fixture"},
 		Now:     func() time.Time { return time.Unix(clock.Load(), 0).UTC() },
@@ -29,6 +30,7 @@ func TestNotifierDeduplicatesFoldsBurstsAndStaysBodyFree(t *testing.T) {
 			mu.Lock()
 			runs = append(runs, stdin)
 			mu.Unlock()
+			delivered <- struct{}{}
 			return nil
 		},
 	})
@@ -58,6 +60,13 @@ func TestNotifierDeduplicatesFoldsBurstsAndStaysBodyFree(t *testing.T) {
 	}
 	if later, _ := n.Since(items[1].Seq); len(later) != 1 || later[0].Kind != "human_turn" {
 		t.Fatalf("Since cursor = %+v", later)
+	}
+	for range 3 {
+		select {
+		case <-delivered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("notification command did not run")
+		}
 	}
 	n.Close()
 	mu.Lock()

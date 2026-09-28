@@ -172,6 +172,9 @@
   }
 
   function showCredentialLogin(message = '') {
+    notificationWatch.after = null;
+    notificationWatch.epoch = '';
+    notificationWatch.generation++;
     closeRoomContextMenu();
     invalidateSessionReads();
     state.authenticated = false;
@@ -220,22 +223,28 @@
 
   // Service notifications are body-free "a human may be needed" observations.
   // One long poll per page; it only reads, never acknowledges Room work.
-  const notificationWatch = { running: false, after: null };
+  const notificationWatch = { running: false, after: null, epoch: '', generation: 0 };
   async function startNotificationWatch() {
     if (notificationWatch.running) return;
     notificationWatch.running = true;
     while (state.authenticated) {
       try {
         const first = notificationWatch.after === null;
-        const query = first ? '' : `?after=${notificationWatch.after}&wait=25`;
+        const generation = notificationWatch.generation;
+        const query = first ? '' : `?after=${notificationWatch.after}&epoch=${encodeURIComponent(notificationWatch.epoch)}&wait=25`;
         const payload = await api(`/api/v1/notifications${query}`);
+        if (!state.authenticated || generation !== notificationWatch.generation) continue;
         const items = payload.notifications || [];
-        if (items.length) notificationWatch.after = items[items.length - 1].seq;
+        // A reset response already includes the new epoch's retained items.
+        // Use its cursor even when empty, rather than keeping the old high-water mark.
+        notificationWatch.epoch = payload.epoch || '';
+        if (Number.isSafeInteger(payload.latest_seq)) notificationWatch.after = payload.latest_seq;
+        else if (items.length) notificationWatch.after = items[items.length - 1].seq;
         else if (first) notificationWatch.after = 0;
         // Notifications raised before this page opened are history, not new alerts.
         if (!first) items.forEach(showServiceNotification);
       } catch {
-        await new Promise((resolve) => setTimeout(resolve, 5000));
+        if (state.authenticated) await new Promise((resolve) => setTimeout(resolve, 5000));
       }
     }
     notificationWatch.running = false;
