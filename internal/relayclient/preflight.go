@@ -59,6 +59,7 @@ type preflightService struct {
 	EndpointPath      string `json:"endpoint_path,omitempty"`
 	Version           string `json:"version,omitempty"`
 	VersionMatch      bool   `json:"version_match"`
+	BuildMatch        bool   `json:"build_match"`
 	ProjectRegistered bool   `json:"project_registered"`
 	ActiveNativeRooms int    `json:"active_native_rooms"`
 	Hint              string `json:"hint,omitempty"`
@@ -69,6 +70,7 @@ type preflightHook struct {
 	File     string `json:"file,omitempty"`
 	Approval string `json:"approval"`
 	Detail   string `json:"detail,omitempty"`
+	Skill    string `json:"skill"`
 	Hint     string `json:"hint,omitempty"`
 }
 
@@ -133,6 +135,13 @@ func runPreflight(ctx context.Context, o options, out io.Writer) error {
 	}
 	if report.Caller.Hint != "" {
 		report.NextSteps = append(report.NextSteps, report.Caller.Hint)
+	}
+	// A stale or missing product skill is advisory: relay works, but the Agent
+	// follows older operating rules. Never blocks readiness or rewrites it.
+	for _, kind := range selected {
+		if hook, ok := report.Hooks[string(kind)]; ok && (hook.Skill == "stale" || hook.Skill == "missing") {
+			report.NextSteps = append(report.NextSteps, fmt.Sprintf("The %s pairroom-relay skill is %s; refresh it with pairroom relay install --runtime %s (or your skill installer), then restart the session.", kind, hook.Skill, kind))
+		}
 	}
 	if report.Ready && !report.Caller.Bound {
 		if report.Service.ActiveNativeRooms == 0 {
@@ -259,6 +268,14 @@ func preflightServiceState(ctx context.Context, endpointPath, root string) prefl
 		result.Status = checkWarn
 		result.Hint = "The Service runs a different PairRoom version from this CLI. Use the CLI from the Service's release, for example the one bundled with Desktop."
 	}
+	// Same release, different development builds: behavior between them can
+	// differ, so hint without failing. Release builds describe identically;
+	// an unstamped build (no "+" metadata) cannot be compared and matches.
+	cli := version.Describe()
+	result.BuildMatch = snapshot.Version == cli || !strings.Contains(snapshot.Version, "+") || !strings.Contains(cli, "+")
+	if result.VersionMatch && !result.BuildMatch && result.Hint == "" {
+		result.Hint = fmt.Sprintf("The Service build %s differs from this CLI build %s within the same release. If relay behaves unexpectedly, restart the Service from this build.", snapshot.Version, cli)
+	}
 	if root == "" {
 		return result
 	}
@@ -277,7 +294,7 @@ func preflightServiceState(ctx context.Context, endpointPath, root string) prefl
 }
 
 func preflightHookState(root string, kind model.RuntimeKind) preflightHook {
-	hook := preflightHook{Approval: "unknown"}
+	hook := preflightHook{Approval: "unknown", Skill: skillStatus(kind)}
 	if path, err := hookPath(root, kind); err == nil {
 		hook.File = path
 	}

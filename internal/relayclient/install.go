@@ -418,6 +418,48 @@ func ownedSkill(data []byte) bool {
 	return false
 }
 
+// skillHome resolves the host's skill directory the same way installSkill
+// writes it, without creating anything.
+func skillHome(kind model.RuntimeKind) (string, error) {
+	homeVar := map[model.RuntimeKind]string{
+		model.RuntimeClaude: "CLAUDE_CONFIG_DIR",
+		model.RuntimeCodex:  "CODEX_HOME",
+		model.RuntimeGrok:   "GROK_HOME",
+	}[kind]
+	if homeVar == "" {
+		return "", errors.New("unsupported native skill runtime")
+	}
+	if home := os.Getenv(homeVar); home != "" {
+		return filepath.Join(home, "skills", "pairroom-relay"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "."+string(kind), "skills", "pairroom-relay"), nil
+}
+
+// skillStatus compares the installed product skill with the one this CLI
+// embeds, read-only: current, stale (an older PairRoom copy), missing, or
+// external (content PairRoom did not write; never judged or overwritten).
+func skillStatus(kind model.RuntimeKind) string {
+	dir, err := skillHome(kind)
+	if err != nil {
+		return "missing"
+	}
+	data, err := atomicfile.ReadFile(filepath.Join(dir, "SKILL.md"))
+	switch {
+	case err != nil:
+		return "missing"
+	case !ownedSkill(data):
+		return "external"
+	case string(data) == skillContent:
+		return "current"
+	default:
+		return "stale"
+	}
+}
+
 func installSkill(kind model.RuntimeKind) error {
 	// Product skill discovery follows the selected host, not .agents/ SSOT.
 	homeVar := map[model.RuntimeKind]string{
