@@ -60,7 +60,7 @@ Archive is not unbind, and closing a tab is not “stop work.” Follow returned
 
 The active-runtime cap and capacity eviction apply to **Embedded Rooms that own vendor adapters**, not durable Room count. Native relay Rooms are exempt from capacity only: they do not consume a slot, queue behind Embedded capacity, or become capacity-eviction victims.
 
-Idle suspension applies to every active Room Runtime, Embedded or Native. After the Service idle timeout (`--idle-timeout`, default 15 minutes) without use, a Runtime that is not busy, serving an in-flight relay request, or holding a pending wake is suspended without deleting Room history. Opening the Room or a later relay call such as `send` or `wait` activates it again; read-only diagnostics such as `relay doctor` do not.
+Idle suspension applies to every active Room Runtime, Embedded or Native. After the Service idle timeout (`--idle-timeout`, default 15 minutes) without use, a Runtime that is not busy, serving an in-flight relay request, or holding a pending wake is suspended without deleting Room history. Opening the Room or a later relay call such as `send` or `wait` activates it again; read-only diagnostics such as `relay doctor` do not. A starting Service also requests activation for suspended Rooms with pending work unless `resume_pending` is `false` ([Configuration](CONFIGURATION.md#service-runtime-policy)); a resumed Room that stays idle is suspended again after the idle timeout.
 
 Reclamation suspends processes without deleting Room history and must not preempt a native Turn merely to free capacity. Embedded activation rebuilds only Room-owned FIFO entries that never crossed submission; accepted or uncertain input needs inspection rather than automatic replay. An uncertain cleanup retains its capacity claim instead of pretending to be suspended.
 
@@ -81,6 +81,10 @@ The Management listener first ends open Room event streams (in-app Room tabs rec
 For Embedded, normal exit drains owned native work, settles projections, closes stores, and releases ownership. After a forced exit, only definitely pre-submission FIFO work is automatically rebuilt; unknown submission fails and accepted unfinished input is cancelled without replay.
 
 For Native, drain rejects new publications/claims while valid receipts for already released envelopes can settle. Shutdown does not terminate original sessions. Recovered unfinished delivery remains uncertain; inspect history and side effects before Retry. A hidden window or disconnected browser proves nothing about process completion.
+
+## Attention notifications
+
+When nobody is watching, the Service reports body-free attention notifications: an answer or `@user` publication for the human, a pending Embedded approval, a failed turn, a stall warning, uncertain Native delivery, a failed wake, or Native input left uncollected. They appear as toasts and optional system notifications in Management and Desktop, through `GET /api/v1/notifications`, and through an optional `notify_command` ([API](API_REFERENCE.md#attention-notifications)). A notification is a prompt to inspect, not a delivery, approval or completion record.
 
 ## Logs and diagnostics
 

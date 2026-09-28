@@ -37,6 +37,9 @@ type EmbeddedRuntimeConfig struct {
 	Codex               agent.Config
 	Resolver            *AgentResolver
 	DrainPollInterval   time.Duration
+	// Notifier receives body-free "a human may be needed" observations from
+	// every Room Runtime this factory starts. Nil disables them.
+	Notifier *Notifier
 	// nativeWake is test-only dependency injection for the Service-side native
 	// waker. Production leaves it zero-valued and uses the real vendor command.
 	nativeWake nativeWakerConfig
@@ -175,7 +178,7 @@ func EmbeddedRuntimeFactory(registry *Registry, cfg EmbeddedRuntimeConfig) Runti
 					}
 				}
 			}
-			return startNativeHostRuntime(ctx, registry, project, durableRoom, cfg.ListenHost, wake)
+			return startNativeHostRuntime(ctx, registry, project, durableRoom, cfg.ListenHost, wake, cfg.Notifier)
 		}
 		return startEmbeddedRuntime(ctx, registry, project, durableRoom, cfg)
 	}
@@ -430,6 +433,30 @@ func startEmbeddedRuntime(startCtx context.Context, registry *Registry, project 
 	var reclaimCtx context.Context
 	reclaimCtx, runtime.stopReclaim = context.WithCancel(runtimeCtx)
 	go runAttachmentReclaim(reclaimCtx, runtime.reclaimed, durableRoom.ID, attachmentReclaimDelay, attachmentReclaimInterval, engine.ReclaimAttachments)
+	if cfg.Notifier != nil {
+		go func() {
+			// The Hub drops a lagging subscriber by closing its channel;
+			// resubscribe so one burst does not end notifications for the Room.
+			for runtimeCtx.Err() == nil {
+				events, unsubscribe := engine.Subscribe()
+				for open := true; open; {
+					select {
+					case <-runtimeCtx.Done():
+						open = false
+					case ev, ok := <-events:
+						if !ok {
+							open = false
+							break
+						}
+						if a, ok := room.AttentionFromEvent(ev); ok {
+							cfg.Notifier.Notify(durableRoom, a.Kind, a.Slot, a.Key)
+						}
+					}
+				}
+				unsubscribe()
+			}
+		}()
+	}
 	runtime.lastActivity.Store(time.Now().UTC().UnixNano())
 	runtime.token = token
 	runtime.baseURL = roomViewBaseURL(listener.Addr())

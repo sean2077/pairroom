@@ -48,6 +48,7 @@ type Host struct {
 
 	management *service.ManagementServer
 	runtimes   *service.RuntimeManager
+	notifier   *service.Notifier
 	lock       *service.ServiceLock
 	cancel     context.CancelFunc
 	serveDone  chan error
@@ -296,12 +297,14 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 		provisioner = service.SyntheticProvisioner{}
 	}
 
+	notifier := service.NewNotifier(service.NotifierConfig{Command: fileConfig.NotifyCommand})
 	factory := service.EmbeddedRuntimeFactory(registry, service.EmbeddedRuntimeConfig{
 		ListenHost:          "127.0.0.1",
 		Mock:                options.Mock,
 		AutoStart:           fileConfig.AutoStart,
 		StallWarningSeconds: fileConfig.StallWarningSeconds,
 		Resolver:            agentResolver,
+		Notifier:            notifier,
 	})
 	limit := options.RuntimeLimit
 	if limit < 1 {
@@ -337,6 +340,7 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 		Provisioner:   provisioner,
 		Token:         fileConfig.Token,
 		AgentResolver: agentResolver,
+		Notifier:      notifier,
 	})
 	if err != nil {
 		cleanupErr := cleanupRuntimes()
@@ -363,6 +367,7 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 		dataRoot:   lock.Root(),
 		management: management,
 		runtimes:   runtimes,
+		notifier:   notifier,
 		lock:       lock,
 		cancel:     cancel,
 		serveDone:  make(chan error, 1),
@@ -385,6 +390,9 @@ func startEmbedded(ctx context.Context, options Options) (_ *Host, resultErr err
 		time.Sleep(50 * time.Millisecond)
 	}
 	cleanupLock = false
+	if fileConfig.ResumePending {
+		go service.ResumePendingRooms(context.Background(), registry, runtimes)
+	}
 	return host, nil
 }
 
@@ -443,6 +451,9 @@ func (h *Host) Shutdown(ctx context.Context) error {
 	}
 	if h.runtimes != nil {
 		result = errors.Join(result, h.runtimes.Shutdown(ctx))
+	}
+	if result == nil && h.notifier != nil {
+		h.notifier.Close()
 	}
 	if h.cancel != nil {
 		h.cancel()

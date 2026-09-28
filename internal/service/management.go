@@ -45,6 +45,8 @@ type ManagementServerConfig struct {
 	Provisioner   BindingProvisioner
 	Token         string
 	AgentResolver *AgentResolver
+	// Notifier backs GET /api/v1/notifications. Nil serves an empty list.
+	Notifier *Notifier
 }
 
 type ManagementServer struct {
@@ -54,6 +56,7 @@ type ManagementServer struct {
 	token         string
 	cliToken      string
 	agentResolver *AgentResolver
+	notifier      *Notifier
 	sessions      *websession.Store
 	http          *http.Server
 	roomLocks     roomLockSet
@@ -163,7 +166,7 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	}
 	server := &ManagementServer{
 		registry: cfg.Registry, runtimes: cfg.Runtimes,
-		provisioner: cfg.Provisioner, token: token, cliToken: cliToken, sessions: sessions, agentResolver: cfg.AgentResolver,
+		provisioner: cfg.Provisioner, token: token, cliToken: cliToken, sessions: sessions, agentResolver: cfg.AgentResolver, notifier: cfg.Notifier,
 	}
 	server.streams, server.cancelStream = context.WithCancel(context.Background())
 	if server.agentResolver == nil {
@@ -181,6 +184,7 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	mux.HandleFunc("GET /api/v1/session", server.readBrowserSession)
 	mux.HandleFunc("DELETE /api/v1/session", server.deleteBrowserSession)
 	mux.HandleFunc("GET /api/v1/service", server.readService)
+	mux.HandleFunc("GET /api/v1/notifications", server.readNotifications)
 	mux.HandleFunc("GET "+agentCatalogPath, server.readAgentCatalog)
 	mux.HandleFunc("POST "+agentCatalogRefreshPath, server.readAgentCatalog)
 	mux.HandleFunc("POST /api/v1/projects", server.registerProject)

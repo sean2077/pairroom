@@ -160,13 +160,13 @@ PairRoom passes that exact, unique `optionId` to ACP. `cancel` returns ACP's can
 The following method/path patterns are extracted from production HTTP registrations in `internal/server/` and `internal/service/`, including named constants. Test URLs, query examples, and rejected path-traversal inputs are not API routes. Patterns without a method are the same-origin surface gateway; their allowed operations are enforced by its handler.
 
 <!-- generated:routes -->
-- `/api/v1/rooms/{room}/surface`
 - `/api/v1/rooms/{room}/surface/{path...}`
+- `/api/v1/rooms/{room}/surface`
 - `DELETE /api/v1/agent-pair-profiles/{profile}`
 - `DELETE /api/v1/attachments/{id}`
 - `DELETE /api/v1/projects/{project}`
-- `DELETE /api/v1/rooms/{room}`
 - `DELETE /api/v1/rooms/{room}/native-bindings/{slot}`
+- `DELETE /api/v1/rooms/{room}`
 - `DELETE /api/v1/session`
 - `GET /api/v1/agent-catalog`
 - `GET /api/v1/agent-pair-profiles`
@@ -177,6 +177,7 @@ The following method/path patterns are extracted from production HTTP registrati
 - `GET /api/v1/git/status`
 - `GET /api/v1/health`
 - `GET /api/v1/messages`
+- `GET /api/v1/notifications`
 - `GET /api/v1/rooms/{room}/wake-config`
 - `GET /api/v1/service`
 - `GET /api/v1/session`
@@ -192,13 +193,13 @@ The following method/path patterns are extracted from production HTTP registrati
 - `POST /api/v1/attachments`
 - `POST /api/v1/diagnostics`
 - `POST /api/v1/maintenance/room-deletions/retry`
-- `POST /api/v1/messages`
 - `POST /api/v1/messages/{id}/cancel`
 - `POST /api/v1/messages/{id}/retry`
+- `POST /api/v1/messages`
 - `POST /api/v1/participants/{actor}/{action}`
-- `POST /api/v1/projects`
 - `POST /api/v1/projects/{project}/refresh`
 - `POST /api/v1/projects/{project}/rooms`
+- `POST /api/v1/projects`
 - `POST /api/v1/relay/{room}/{slot}/{action}`
 - `POST /api/v1/rooms/batch-archive`
 - `POST /api/v1/rooms/batch-delete`
@@ -224,6 +225,22 @@ The following method/path patterns are extracted from production HTTP registrati
 5. Read [Upgrading](UPGRADING.md) before a release upgrade.
 
 Every Management `/api/…` response, including relay and rejected requests, carries `X-PairRoom-Version` with the Service release (for example `5.6.0`, without build metadata). The relay CLI uses it to name a CLI/Service release mismatch without an extra request; the version is not an authorization or compatibility negotiation.
+
+## Attention notifications
+
+`GET /api/v1/notifications` returns `{"notifications":[...]}`: body-free observations that a Room may need a human, oldest first. Each item has `seq`, `room_id`, `room_name`, `host_mode`, `kind`, optional `slot` and `at`; it never carries message text, tool input, approval detail, session identity, receipts or vendor output. `?after=<seq>` returns only newer items and `?wait=<1-30>` long-polls until one arrives. Reading never acknowledges, clears or changes Room state.
+
+| `kind` | Raised when |
+|---|---|
+| `human_turn` | An Agent answer addressed only the human (Embedded) or an `@user` publication/`send --to @user` (Native) |
+| `approval_requested` | An Embedded native approval or question is pending |
+| `agent_failed` | An Embedded input failed, or a Native StopFailure category was recorded |
+| `stall_warning` | The Embedded stall warning fired |
+| `delivery_uncertain` | A Native delivery became `unknown` |
+| `wake_failed` | A Native automatic wake attempt failed |
+| `input_waiting` | A Native slot's oldest queued input has waited 10 minutes while its Room Runtime is active |
+
+The Service keeps the latest 200 in memory; a restart starts a new list. The same fact is reported once, and repeated reports of one kind for one Room within 30 seconds are folded into the first. Management shows new items as toasts and, once allowed in **Settings → Interface**, as system notifications while the window is hidden. The optional `notify_command` receives the same JSON ([Configuration](CONFIGURATION.md#service-runtime-policy)).
 
 ## Explicit Service diagnostics
 

@@ -262,6 +262,7 @@ func runService(args []string) (resultErr error) {
 	mockFlag := flags.Bool("mock", false, "run deterministic mock agents instead of vendor CLIs")
 	noBrowserFlag := flags.Bool("no-browser", false, "do not open the Management Shell in a browser")
 	autoStartFlag := flags.Bool("auto-start", fileCfg.AutoStart, "start both agents when a Room runtime activates")
+	resumeFlag := flags.Bool("resume-pending", fileCfg.ResumePending, "activate suspended Rooms with pending work at startup (queued Embedded FIFO input or wake-eligible Native input)")
 	stallWarningFlag := flags.Int("stall-warning-seconds", fileCfg.StallWarningSeconds, "warn when a working agent emits no runtime event; -1 disables")
 	claudeRuntime := flags.String("claude-runtime", fileCfg.Claude.Runtime, "Agent 1 runtime: claude, codex, or grok")
 	claudeCommand := flags.String("claude-command", fileCfg.Runtimes.Claude.Command, "Claude Code executable template")
@@ -348,10 +349,13 @@ func runService(args []string) (resultErr error) {
 	if *mockFlag {
 		provisioner = service.SyntheticProvisioner{}
 	}
+	notifier := service.NewNotifier(service.NotifierConfig{Command: fileCfg.NotifyCommand})
+	defer notifier.Close()
 	factory := service.EmbeddedRuntimeFactory(registry, service.EmbeddedRuntimeConfig{
 		ListenHost: "127.0.0.1", Mock: *mockFlag, AutoStart: *autoStartFlag,
 		StallWarningSeconds: *stallWarningFlag,
 		Resolver:            agentResolver,
+		Notifier:            notifier,
 	})
 	runtimes, err := service.NewRuntimeManager(registry, factory, service.RuntimeManagerConfig{
 		Limit: *limitFlag, IdleTimeout: *idleFlag,
@@ -360,7 +364,7 @@ func runService(args []string) (resultErr error) {
 		return err
 	}
 	management, err := service.NewManagementServer(service.ManagementServerConfig{
-		Registry: registry, Runtimes: runtimes, Provisioner: provisioner, Token: *tokenFlag, AgentResolver: agentResolver,
+		Registry: registry, Runtimes: runtimes, Provisioner: provisioner, Token: *tokenFlag, AgentResolver: agentResolver, Notifier: notifier,
 	})
 	if err != nil {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -388,6 +392,15 @@ func runService(args []string) (resultErr error) {
 
 	serverErrors := make(chan error, 1)
 	go func() { serverErrors <- management.Serve(listener) }()
+	if *resumeFlag {
+		// After the listener and endpoint file exist, so a resumed Native Room's
+		// collectors can reach the Service immediately.
+		go func() {
+			if result := service.ResumePendingRooms(rootCtx, registry, runtimes); len(result.Requested) > 0 {
+				fmt.Printf("  resumed:    %d Room(s) with pending work\n", len(result.Requested))
+			}
+		}()
+	}
 	if !*noBrowserFlag {
 		go func() {
 			time.Sleep(180 * time.Millisecond)

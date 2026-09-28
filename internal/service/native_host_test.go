@@ -36,6 +36,16 @@ func nativeHTTP(t *testing.T) *nativeFixture {
 
 func nativeHTTPWithWake(t *testing.T, wakeConfig nativeWakerConfig) *nativeFixture {
 	t.Helper()
+	return nativeHTTPWith(t, wakeConfig, nil)
+}
+
+func nativeHTTPWithNotifier(t *testing.T, notifier *Notifier) *nativeFixture {
+	t.Helper()
+	return nativeHTTPWith(t, nativeWakerConfig{Wait: func(context.Context, time.Duration) error { return context.Canceled }}, notifier)
+}
+
+func nativeHTTPWith(t *testing.T, wakeConfig nativeWakerConfig, notifier *Notifier) *nativeFixture {
+	t.Helper()
 	relayclient.IsolateNativeCaller(t)
 	registry, project := testRegistry(t, testGitRepo(t))
 	noSpawn := ProvisionerFunc(func(context.Context, Project, model.ActorID, BindingSpec, string) (Binding, func(context.Context) error, error) {
@@ -46,12 +56,12 @@ func nativeHTTPWithWake(t *testing.T, wakeConfig nativeWakerConfig) *nativeFixtu
 	if err != nil {
 		t.Fatal(err)
 	}
-	factory := EmbeddedRuntimeFactory(registry, EmbeddedRuntimeConfig{Claude: agent.Config{Command: "missing-do-not-spawn-claude"}, Codex: agent.Config{Command: "missing-do-not-spawn-codex"}, nativeWake: wakeConfig})
+	factory := EmbeddedRuntimeFactory(registry, EmbeddedRuntimeConfig{Claude: agent.Config{Command: "missing-do-not-spawn-claude"}, Codex: agent.Config{Command: "missing-do-not-spawn-codex"}, nativeWake: wakeConfig, Notifier: notifier})
 	manager, err := NewRuntimeManager(registry, factory, RuntimeManagerConfig{Limit: 5, IdleTimeout: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
-	management, err := NewManagementServer(ManagementServerConfig{Registry: registry, Runtimes: manager, Provisioner: noSpawn, Token: "management-secret"})
+	management, err := NewManagementServer(ManagementServerConfig{Registry: registry, Runtimes: manager, Provisioner: noSpawn, Token: "management-secret", Notifier: notifier})
 	if err != nil {
 		t.Fatal(err)
 	}

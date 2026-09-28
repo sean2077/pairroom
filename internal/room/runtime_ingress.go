@@ -606,7 +606,7 @@ func (e *Engine) monitorStalledTurns() {
 			}
 			e.mu.Unlock()
 			for _, item := range warnings {
-				detail := fmt.Sprintf("%s has produced no runtime event for %s", e.participantName(item.actor), item.age.Round(time.Second))
+				detail := fmt.Sprintf("%s %s %s", e.participantName(item.actor), stallNoticeMarker, item.age.Round(time.Second))
 				if item.turn != "" {
 					detail += " during turn " + item.turn
 				}
