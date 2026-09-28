@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
@@ -213,7 +214,31 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		payload["peer_join"] = bindCommand(root, endpointPath, o.room, peerSlot(slot))
 		payload["peer_join_local"] = localBindCommand(endpointPath, o.room, peerSlot(slot))
 	}
+	if !created {
+		// A resumed session may already have input waiting. Name it once so the
+		// Agent collects instead of waiting for a wake; a failed read adds nothing.
+		if queued := boundInboxQueued(ctx, dir, slot); queued > 0 {
+			payload["inbox_queued"] = queued
+			payload["inbox_notice"] = fmt.Sprintf("%d message(s) already queued for this session; collect with %s.", queued, waitCommand(o.room, slot))
+		}
+	}
 	return writeJSON(out, payload)
+}
+
+// boundInboxQueued is one short, read-only summary read with the binding just
+// committed. Any failure reports zero: bind has already succeeded.
+func boundInboxQueued(ctx context.Context, dir string, slot model.ActorID) int {
+	c, err := load(dir)
+	if err != nil {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var summary relay.Summary
+	if c.call(ctx, "summary", nil, &summary) != nil {
+		return 0
+	}
+	return summary.Inboxes[slot].Queued
 }
 
 // Called under the slot lock. An attempt for another session never replaces a

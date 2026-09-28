@@ -471,6 +471,11 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 			local["held_publications"] = len(c.State.Held)
 		}
 		result := map[string]any{"local": local, "relay": status}
+		if o.brief {
+			if summary, ok := status.(*relay.Summary); ok {
+				result["presence"] = presenceLine(summary, c.State.Slot, time.Now())
+			}
+		}
 		if action == "status" && o.brief {
 			if summary, ok := status.(*relay.Summary); ok {
 				if hints := queuedInboxHints(ctx, c, summary); len(hints) > 0 {
