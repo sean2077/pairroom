@@ -34,7 +34,7 @@ Native activity is observational. Inspect the original harness and relay diagnos
 
 Embedded Waiting is expected while another participant owns the Turn. Native `queued` instead needs the bound receiver to collect: check park/foreground wait, capability/inbound policy, and wake observations. A queued message does not prove that a model has been awakened.
 
-Automatic relay needs the exact current peer handle (`@claude`, `@codex`, `@grok`, or the displayed duplicate-runtime suffix). Role aliases and control markers do not route. A peer handle wins over `@user`; do not include one merely to acknowledge a final answer.
+Automatic relay needs the exact current peer handle (`@claude`, `@codex`, `@grok`, or the displayed duplicate-runtime suffix). Role aliases and control markers do not route. A handle may end a sentence (`@codex.`) or touch Chinese/Japanese text (`请@codex审查`), but a directly attached Latin letter, digit or `_`, or a `.`/`-` followed by one (`@codex.dev`), makes a different token; [Protocol](PROTOCOL.md#output-routing) owns the exact rules. A peer handle wins over `@user`; do not include one merely to acknowledge a final answer.
 
 An unaddressed Embedded answer remains visible in the Room. An unaddressed **Native Stop** records only a publication receipt, not its private body. Use `@user` for a Native result intended for the Room/human. Explicit `send`/`exchange` uses its command target rather than body mentions; explicit send followed by peer-directed Stop may produce two messages. [Native publication rules](NATIVE_RELAY.md#what-is-published) explain this distinction.
 
@@ -99,6 +99,7 @@ Service-side rejections are prefixed with `Service rejected request:` (or `relay
 | Message contains | Meaning and fix |
 |---|---|
 | `this native session has no matching associated binding in this workspace; ...` | This session was never bound, or another session replaced its slot. Run `pairroom relay bind` in it; preflight's `caller.bound` shows the state |
+| Stop hook stderr: `PairRoom: this <runtime> session is not bound here; Room <id> slot <n> belongs to another <runtime> session, so this reply was not relayed. ...` | The harness started a new session (for example after `/clear` or resume), so the old binding no longer matches and replies stop relaying. If the new session should take over, run the printed `bind --replace` in it; otherwise return to the original session |
 | `no relay binding in this workspace; ...` / `no unique relay binding matches this caller; pass one explicitly: ...` | A plain terminal cannot pick a binding. Run inside the bound session, or pass one printed `--room`/`--slot` pair to inspect it |
 | `no active native Room exists for this workspace; ...` / `multiple active native Rooms match this workspace; pass --room explicitly: <ids>` | Create with `bind --create`, or pass `--room`; archived Rooms are never candidates |
 | `the "<runtime>" harness does not match exactly one slot of Room <id> (...); pass --slot 1\|2` | Both slots or neither use this Runtime; pass the intended slot |

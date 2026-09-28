@@ -64,6 +64,7 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		return err
 	}
 	if root == "" {
+		noteUnboundSession(ctx, o.repo, kind, sharedGrok, diagnostic)
 		return writeJSON(out, map[string]any{})
 	}
 	if sharedGrok {
@@ -264,6 +265,47 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		return nil
 	}
 	return err
+}
+
+// noteUnboundSession explains an otherwise silent inert Stop. When the native
+// harness moves to a new session (Claude /clear or resume, a restarted Codex
+// thread), the old binding no longer matches and replies stop relaying with no
+// visible sign. The hook never rebinds and stdout/exit stay inert; it only names
+// the explicit decision on stderr when a confirmed binding for the same Runtime
+// exists in this workspace. It reads local state only: no Service call, process
+// lookup or file write, and unreadable state stays silent.
+func noteUnboundSession(ctx context.Context, dir string, kind model.RuntimeKind, sharedGrok bool, diagnostic io.Writer) {
+	root, err := workspace(ctx, dir)
+	if err != nil {
+		return
+	}
+	if sharedGrok {
+		// Grok's own hook file handles this Stop and reports it once.
+		if present, _, err := ownRelayStopHook(root, model.RuntimeGrok); err != nil || present {
+			return
+		}
+	}
+	paths, err := statePaths(root)
+	if err != nil {
+		return
+	}
+	var bound []State
+	for _, path := range paths {
+		var s State
+		if readPrivate(path, &s) != nil || s.Schema != 2 || s.Runtime != kind || s.Generation == 0 || s.SessionID == "" {
+			continue
+		}
+		bound = append(bound, s)
+	}
+	switch len(bound) {
+	case 0:
+		return
+	case 1:
+		s := bound[0]
+		_, _ = fmt.Fprintf(diagnostic, "PairRoom: this %s session is not bound here; Room %s slot %d belongs to another %s session, so this reply was not relayed. If this session intentionally replaced it (for example after /clear or resume), run pairroom relay bind --replace --room %s --slot %d in this session.\n", kind.DisplayName(), s.Room, slotNumber(s.Slot), kind.DisplayName(), s.Room, slotNumber(s.Slot))
+	default:
+		_, _ = fmt.Fprintf(diagnostic, "PairRoom: this %s session is not bound here; %d bindings in this workspace belong to other %s sessions, so this reply was not relayed. If this session intentionally replaced one, run pairroom relay bind --replace --room <room> --slot <1|2> in this session.\n", kind.DisplayName(), len(bound), kind.DisplayName())
+	}
 }
 
 // deliver makes a single claim and writes one complete stdout record before ack.

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -238,8 +239,17 @@ func TestUnboundNativeHooksAreInert(t *testing.T) {
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
 					err = Run(ctx, args, bytes.NewReader(inertHookPayload(t, host.kind, event, "unbound-session", root)), &out, &diagnostic)
-					if err != nil || strings.TrimSpace(out.String()) != "{}" || diagnostic.Len() != 0 {
+					if err != nil || strings.TrimSpace(out.String()) != "{}" {
 						t.Fatalf("unbound hook was visible: err=%v stdout=%q stderr=%q", err, out.String(), diagnostic.String())
+					}
+					// Only a readable confirmed binding of the same Runtime explains
+					// the inert Stop, on stderr alone; everything else stays silent.
+					noticed := map[string]bool{"other": true, "shared-pid": true, "shared-pid-many": true, "replaced": true, "permissions": runtime.GOOS == "windows"}[tc.state]
+					if got := strings.Contains(diagnostic.String(), "is not bound here") && strings.Contains(diagnostic.String(), "bind --replace"); got != noticed || (!noticed && diagnostic.Len() != 0) {
+						t.Fatalf("unbound hook notice = %q, want notice=%v", diagnostic.String(), noticed)
+					}
+					if strings.Contains(diagnostic.String(), "other-session") || strings.Contains(diagnostic.String(), "replacement-session") || strings.Contains(diagnostic.String(), "private") {
+						t.Fatalf("notice leaked session identity or reply text: %q", diagnostic.String())
 					}
 					if requests.Load() != 0 || processLookups != 0 {
 						t.Fatalf("unbound hook performed discovery effects: HTTP=%d process lookups=%d", requests.Load(), processLookups)
