@@ -1161,3 +1161,5 @@ body.navigation-dragging .project-list-row { cursor: grabbing; }
 }
 
 [data-order-kind].order-menu-open { z-index: 25; }
+
+.cli-build-banner{flex:none;margin:10px 20px;padding:10px 14px;border:1px solid var(--warning,var(--line));border-radius:8px;background:var(--soft);color:var(--ink);font-size:12px;overflow-wrap:anywhere}.cli-build-banner[hidden]{display:none}.cli-build-banner p{margin:4px 0 0}.cli-build-banner strong{font-size:13px}@media(max-width:600px){.cli-build-banner{margin:8px 12px}}

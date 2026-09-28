@@ -51,7 +51,7 @@ function client() {
   const hook = `
     globalThis.management = {state, api, refresh, loadAgentCatalog, loadAgentPairProfiles, mutateAgentPairProfiles, withBusy, scheduleRefresh,
       syncConfirmRequirement, submitConfirm, resetConfirmState, createBrowserSession, showCredentialLogin,
-      notificationWatch, startNotificationWatch,
+      notificationWatch, startNotificationWatch, renderCLIBuildBanner, diagnosticSnapshot,
       invalidateSessionReads, openRoomInBrowserAction, connect, updateDesktopStartup,
       setDesktop(value) { window.PairRoomDesktop = value; },
       setAPI(callback) { api = callback; }, setCanRender(value) { canRenderNow = () => value; }};
@@ -76,6 +76,29 @@ function client() {
 async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
 
 async function main() {
+  {
+    const c=client();
+    c.state.connected=true;
+    c.state.snapshot.cli_build_mismatch={service:'v5.7.1+abcdef0',cli:'v5.8.0+1234567'};
+    c.renderCLIBuildBanner();
+    assert.equal(c.getNode('cli-build-banner').hidden,false,'stable observation must be visible without blocking navigation');
+    assert.equal(c.getNode('cli-build-message').textContent,'ui.cliBuildMismatchBody');
+    assert.equal(c.diagnosticSnapshot().cli_build_mismatch,undefined,'client-reported metadata is not exported as diagnostics');
+    c.state.snapshot.cli_build_mismatch=null;
+    c.renderCLIBuildBanner();
+    assert.equal(c.getNode('cli-build-banner').hidden,true,'cleared observation hides banner');
+    c.state.snapshot.cli_build_mismatch={service:'v5.7.1+abcdef0',cli:'v5.7.1+abcdef0'};
+    c.renderCLIBuildBanner();
+    assert.equal(c.getNode('cli-build-banner').hidden,true,'same build stays quiet');
+    c.state.snapshot.cli_build_mismatch={service:'v5.7.1+abcdef0',cli:'v5.8.0+1234567'};
+    c.state.connected=false;
+    c.renderCLIBuildBanner();
+    assert.equal(c.getNode('cli-build-banner').hidden,true,'disconnected page must not assert a current comparison');
+    c.state.connected=true;c.renderCLIBuildBanner();
+    c.showCredentialLogin();
+    assert.equal(c.getNode('cli-build-banner').hidden,true,'logout must hide previous-session observation');
+  }
+
   {
     const c = client(), reads = [], pending = [];
     c.setAPI((path) => { reads.push(path); const next = deferred(); pending.push(next); return next.promise; });

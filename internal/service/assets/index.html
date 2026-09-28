@@ -96,6 +96,12 @@
         </div>
       </header>
 
+      <section id="cli-build-banner" class="cli-build-banner" role="status" aria-live="polite" hidden="">
+        <strong data-i18n="ui.cliBuildMismatchTitle">The last observed CLI build differs</strong>
+        <p id="cli-build-message"></p>
+        <p data-i18n="ui.cliBuildRestartHint">Restart Desktop if it owns this Service. For a daemon, run pairroom daemon restart; otherwise restart the Service's owning process.</p>
+      </section>
+
       <div id="room-tabstrip" class="room-tabstrip" hidden="">
         <div id="room-tablist" class="room-tablist" role="tablist" aria-label="Open Rooms" data-i18n-aria-label="ui.openRooms"></div>
         <button class="icon-button" type="button" data-theme-cycle aria-label="Choose theme" title="Choose theme" data-i18n-aria-label="theme.choose" data-i18n-title="theme.choose">◐</button>

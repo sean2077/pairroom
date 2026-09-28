@@ -182,6 +182,7 @@ func loadLocal(dir string) (*Client, error) {
 	return c, nil
 }
 func (c *Client) authHeaders(req *http.Request) {
+	attachCLIBuild(req)
 	req.Header.Set("Authorization", "Relay "+c.Secret)
 	req.Header.Set("X-PairRoom-Bind", c.State.BindID)
 	req.Header.Set("X-PairRoom-Generation", fmt.Sprint(c.State.Generation))

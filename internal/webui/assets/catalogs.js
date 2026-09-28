@@ -2977,3 +2977,15 @@ Object.assign(window.PairRoomLocales["zh-CN"].translation, {
   "room.native.slotWakeWhileQueued": "排队期间的槽位观察（不等于本消息的唤醒尝试）",
   "room.native.slotWakeWindow": "显示 {{total}} 条槽位观察中的 {{shown}} 条。"
 });
+
+// Authenticated CLI build observations are advisory, never an install scan.
+Object.assign(window.PairRoomLocales["en"].translation, {
+  "ui.cliBuildMismatchTitle": "The last observed CLI build differs",
+  "ui.cliBuildMismatchBody": "Last authenticated stamped CLI: {{cli}}; Service: {{service}}. This is a request observation, not a scan of installed files.",
+  "ui.cliBuildRestartHint": "Restart Desktop if it owns this Service. For a daemon, run pairroom daemon restart; otherwise restart the Service's owning process."
+});
+Object.assign(window.PairRoomLocales["zh-CN"].translation, {
+  "ui.cliBuildMismatchTitle": "最近连接的 CLI 构建与 Service 不同",
+  "ui.cliBuildMismatchBody": "最近通过认证且带构建标记的 CLI：{{cli}}；Service：{{service}}。这是请求中观察到的构建信息，并未扫描已安装文件。",
+  "ui.cliBuildRestartHint": "若 Service 由 Desktop 托管，请重启 Desktop；若由守护进程托管，请运行 pairroom daemon restart；其他情况请重启托管该 Service 的进程。"
+});

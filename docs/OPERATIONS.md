@@ -84,6 +84,8 @@ For Native, drain rejects new publications/claims while valid receipts for alrea
 
 ## Attention notifications
 
+Management may show a non-blocking build banner when the last authenticated stamped CLI differs from the running Service. It uses metadata on existing CLI/hook requests, not a disk inventory or a network update check. Both builds must carry valid stamps; one isolated report stays quiet. The same differing build must be observed again at least 30 seconds later without another valid build intervening. A matching build clears the banner; alternating CLI builds restart the stability window. Restart the owning Service explicitly: restart Desktop for a Desktop-owned Service, use `pairroom daemon restart` for an installed daemon, or restart the process that owns a standalone Service. No command is run by the banner.
+
 When nobody is watching, the Service reports body-free attention notifications: an answer or `@user` publication for the human, a pending Embedded approval, a failed turn, a stall warning, uncertain Native delivery, a failed wake, or Native input left uncollected. They appear as toasts and optional system notifications in Management and Desktop, through `GET /api/v1/notifications`, and through an optional `notify_command` ([API](API_REFERENCE.md#attention-notifications)). A notification is a prompt to inspect, not a delivery, approval or completion record.
 
 ## Logs and diagnostics
