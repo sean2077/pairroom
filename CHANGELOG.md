@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v5.9.0] — 2026-09-29
+
 - Choose a folder when registering a Project in Desktop. Registering a Project meant typing an absolute path from memory, so the Desktop window now offers **Choose folder…** beside that field and fills it with the folder picked in the operating system's own dialog (Windows folder picker, macOS `NSOpenPanel`, GTK chooser on Linux); a cancelled dialog leaves the typed value alone. The host returns exactly one absolute path and rejects anything else, the Service still canonicalizes and validates the Git worktree, no directory listing crosses the bridge, and an ordinary browser — which cannot produce a real path — never shows the button.
 
 ## [v5.8.0] — 2026-09-28
