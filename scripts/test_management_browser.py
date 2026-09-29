@@ -742,6 +742,21 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
         assert await page.evaluate('__writes.length') == writes, 'invalid provider selection reached room creation'
         results['unavailable_provider_requires_explicit_choice'] = True
         await provider.select_option(label='Native / Runtime default')
+        diagnostic = page.locator('#slot1-provider-diagnostic')
+        await page.evaluate("__catalog.provider_error={code:'cc_switch_database_missing', error:'CC Switch database was not found'}")
+        await page.locator('#agent-catalog-refresh').click()
+        await page.wait_for_function("document.getElementById('agent-catalog-refresh').getAttribute('aria-busy')==='false'")
+        assert await diagnostic.inner_text() == '', 'absent optional CC Switch was reported for a native Provider'
+        assert not await diagnostic.evaluate("node=>node.classList.contains('runtime-unavailable')")
+        await page.evaluate("__catalog.provider_error={code:'cc_switch_database_unreadable', error:'CC Switch database could not be read'}")
+        await page.locator('#agent-catalog-refresh').click()
+        await page.wait_for_function("document.getElementById('agent-catalog-refresh').getAttribute('aria-busy')==='false'")
+        assert 'could not be read' in await diagnostic.inner_text(), 'unreadable CC Switch database was hidden'
+        assert await diagnostic.evaluate("node=>node.classList.contains('runtime-unavailable')")
+        await page.evaluate("delete __catalog.provider_error")
+        await page.locator('#agent-catalog-refresh').click()
+        await page.wait_for_function("document.getElementById('agent-catalog-refresh').getAttribute('aria-busy')==='false'")
+        results['absent_cc_switch_quiet_for_native'] = True
         await page.locator('#slot1-model').fill('model-before-submit')
         await page.screenshot(path=str(artifacts / 'management-room-config-light.png'))
         await page.locator('#room-submit').click()

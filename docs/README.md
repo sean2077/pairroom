@@ -2,6 +2,19 @@
 
 Start with the question, not every document. **Embedded** owns vendor adapters and native Turn scheduling; **Native** relays between user-owned sessions. A desktop-owned embedded Service can host either Room type. Mode-specific behavior must not be inferred from a generic mention of “Runtime” or “Room”.
 
+Documentation on `main` tracks development, which may be ahead of the package you installed. Check `pairroom version`, read the matching release tag, and trust that binary's `pairroom <command> --help` for flags. The CLI and the running Service can still differ in version; [Native setup](AGENT_SETUP.md#6-native-bind-two-existing-sessions) checks for that.
+
+## Suggested reading paths
+
+| Starting point | Read in this order | Where you end up |
+|---|---|---|
+| New to PairRoom or the tool names | [Overview](../README.md) → [Core concepts](CONCEPTS.md) → [Why PairRoom](WHY_PAIRROOM.md) | Knowing whether Native or Embedded suits you |
+| Try the interface without a model account | [Installation](INSTALLATION.md) → [Getting started](GETTING_STARTED.md) | A throwaway Mock Room in Embedded mode (no real model involved) |
+| Connect two existing coding sessions | [Agent-assisted setup](AGENT_SETUP.md) → [Native relay](NATIVE_RELAY.md) | Both sessions bound, and a Stop hook seen running in each |
+| Change versions or investigate stalled work | [Upgrading](UPGRADING.md) or [Troubleshooting](TROUBLESHOOTING.md) → [Operations](OPERATIONS.md) | A specific recovery step that keeps state and does not replay work |
+
+None of these paths requires reading the technical contracts below.
+
 ## User guides
 
 | Need | Owner |
@@ -13,7 +26,7 @@ Start with the question, not every document. **Embedded** owns vendor adapters a
 | First Mock/Embedded Room and review-first task recipes | [Getting started](GETTING_STARTED.md) |
 | Native install, create/join, publication, wake, UI, and recovery | [Native relay](NATIVE_RELAY.md) |
 | Native cwd/worktree identity and locator recovery | [Native session workspace discovery](NATIVE_SESSION_WORKSPACE.md) |
-| Host modes, Bindings, responsibilities, controls, and receipts | [Core concepts](CONCEPTS.md) |
+| Tool names, host modes, Bindings, responsibilities, controls, and receipts | [Core concepts](CONCEPTS.md) |
 | Agent selections, Provider references, permissions, and saved pairs | [Configuration](CONFIGURATION.md) |
 | Service/Desktop lifecycle, capacity, archive, and backup procedure | [Operations](OPERATIONS.md) |
 | Diagnose a specific failure | [Troubleshooting](TROUBLESHOOTING.md) |
@@ -54,5 +67,7 @@ Keep published historical evidence intact. When a completed plan is retired, pre
 ## Maintenance
 
 Run `make docs-check` after edits. It checks local Markdown paths and selected inventories, not all heading fragments, external sources, example execution, or factual accuracy. Check changed anchors and user commands separately, and distinguish actual runs from source inspection in PR evidence.
+
+Link an external product to its official documentation or repository where a page first discusses it, and say what role it plays: supported Runtime, optional integration, example terminal, or comparison project. Fixing a link or rewording a comparison does not refresh its review date.
 
 Maintain current technical pages in English and equivalent root English/Chinese overviews. Preserve stable entry paths/anchors where practical. Add a page only for a distinct owner; prefer links over repeated protocol, setup, or release text. See [documentation contribution rules](../CONTRIBUTING.md#documentation-changes).

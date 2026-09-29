@@ -34,8 +34,10 @@ are introduced.
 
 Installing hooks does not bind every session in a project. A valid unbound
 Stop/StopFailure invocation returns only the neutral `{}` hook result, with no
-stderr diagnostic, state or credential writes, slot/collector lock, publication,
-collection, park wait, or Service startup. It does not read the Service endpoint
+state or credential writes, slot/collector lock, publication,
+collection, park wait, or Service startup. It writes one stderr line only when
+this workspace holds a confirmed binding for the same Runtime that belongs to
+another session (see [upgrade and recovery](#upgrade-and-recovery)). It does not read the Service endpoint
 or make HTTP requests, even when that endpoint is missing, malformed, stale, or
 points to a stopped Service. This also applies to Grok reusing the Claude hook.
 A shared or reused harness PID is not evidence that a fresh session is bound.

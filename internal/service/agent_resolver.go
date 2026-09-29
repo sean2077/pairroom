@@ -43,6 +43,7 @@ type AgentCatalog struct {
 	Runtimes             []RuntimeCatalogEntry                  `json:"runtimes"`
 	Profiles             []ccswitch.ProfileSummary              `json:"profiles"`
 	ProviderError        *SafeCatalogError                      `json:"provider_error,omitempty"`
+	ProviderWarning      *SafeCatalogError                      `json:"provider_warning,omitempty"`
 	Defaults             map[model.ActorID]model.AgentSelection `json:"defaults"`
 }
 
@@ -312,6 +313,13 @@ func (r *AgentResolver) Catalog(ctx context.Context) AgentCatalog {
 		result.ProviderError = safeCatalogError(err)
 	} else {
 		result.Profiles = ccCatalog.Profiles
+		if !ccCatalog.SchemaVerified {
+			result.ProviderWarning = &SafeCatalogError{
+				Code:   ccswitch.CodeSchemaUnverified,
+				Error:  fmt.Sprintf("CC Switch schema %d is newer than the verified schema %d; profiles passed structural checks", ccCatalog.Schema, ccswitch.SupportedSchemaVersion),
+				Params: map[string]string{"actual": strconv.Itoa(ccCatalog.Schema), "supported": strconv.Itoa(ccswitch.SupportedSchemaVersion)},
+			}
+		}
 	}
 	modelsByRuntime := make(map[model.RuntimeKind][]string)
 	for _, selection := range result.Defaults {

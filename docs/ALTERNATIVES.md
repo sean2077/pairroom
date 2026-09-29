@@ -8,11 +8,13 @@ reviewed: 2026-09-12
 
 This comparison asks **which coordination problem a tool solves**, not which product has the most checkmarks. [Why PairRoom](WHY_PAIRROOM.md) explains the narrower goal: two independent native sessions cross-reviewing one problem without taking over the executing harness's workflow.
 
+Product names link to their upstream projects. None of them is a PairRoom prerequisite or integration.
+
 ## Research scope
 
-PairRoom and Orca were reviewed on **2026-09-12**. PairRoom baseline: `d76c089161180cd06baa1f53f22e93413e4266bf`; Orca source baseline: `403b62a8d8fa6e896a93acc4c15405be0f0b7dc7`. These are repository snapshots, not certification that an installed release contains every observed capability. Orca's online documentation is a dated, mutable source.
+PairRoom and [Orca](https://github.com/stablyai/orca) were reviewed on **2026-09-12**. PairRoom baseline: [`d76c089161180cd06baa1f53f22e93413e4266bf`](https://github.com/sean2077/pairroom/tree/d76c089161180cd06baa1f53f22e93413e4266bf); Orca source baseline: [`403b62a8d8fa6e896a93acc4c15405be0f0b7dc7`](https://github.com/stablyai/orca/tree/403b62a8d8fa6e896a93acc4c15405be0f0b7dc7). These are repository snapshots, not certification that an installed release contains every observed capability. Orca's online documentation is a dated, mutable source.
 
-The other product entries retain the **2026-09-08** review and sources; they were not all re-audited on September 12. Cherry Studio's repository-specific observations use `e131f495a9af593ec873bea34b935e97d644f586`.
+The other product entries retain the **2026-09-08** review and sources; they were not all re-audited on September 12. Cherry Studio's repository-specific observations use [`e131f495a9af593ec873bea34b935e97d644f586`](https://github.com/CherryHQ/cherry-studio/tree/e131f495a9af593ec873bea34b935e97d644f586).
 
 “Documented” means a primary source describes a capability. “Fit” is our interpretation. No comparative hands-on benchmark, authenticated vendor E2E, price survey, or token measurement was performed for this document. Proposed issues, stars and marketing superlatives are not evidence of superiority. Check your installed release and chosen harness/Provider combination.
 
@@ -20,12 +22,12 @@ The other product entries retain the **2026-09-08** review and sources; they wer
 
 | Option | Documented focus / relevant capability | When to start there | PairRoom's narrower reason to choose it instead |
 |---|---|---|---|
-| **Orca** | Agent workbench, notifications, external worktrees, and experimental supervised tasks/messages/ask-reply [O1][O2][O4] | You want the integrated workbench or need explicit task/worker lifecycle management | Repeated cross-review between two chosen sessions, particularly original-host interaction through experimental Native, without requiring a second execution hierarchy |
-| **Native Claude Code / Codex** | Native subagents; Claude also documents teams and direct teammate messaging [N1][N2] | Native delegation/review already meets the need | You want two independently configured supported top-level sessions connected across their harness boundaries |
-| **Cherry Studio** | Broad desktop AI workstation with Agent execution and documented cross-Session delivery [C1][C2] | General assistant/knowledge work and Agent tools belong in one product | Your priority is a two-participant local relay, not the broader workstation |
-| **Aider** | Architect proposals and editor-model file changes [A1] | You need a two-model reasoning/editing split | You need native sessions and their tools, not just two model requests |
-| **Vibe Kanban** | Task workspaces, Git worktrees, multiple repositories/sessions, browser preview, and diff review [V1] | Independent changes and integrated review dominate | Sequential peer review of the same decision is the recurring activity |
-| **Conductor** | Reviewed official site describes cloud agents, isolated microVMs, and collaboration across people [D1] | Cloud/team execution is a requirement | A local, single-user pair workflow is the intended deployment |
+| **[Orca](https://github.com/stablyai/orca)** | Agent workbench, notifications, external worktrees, and experimental supervised tasks/messages/ask-reply [O1], [O2], [O4] | You want the integrated workbench or need explicit task/worker lifecycle management | Repeated cross-review between two chosen sessions, particularly original-host interaction through experimental Native, without requiring a second execution hierarchy |
+| **Native [Claude Code][N2] / [Codex][N1]** | Native subagents; Claude also documents teams and direct teammate messaging [N1], [N2] | Native delegation/review already meets the need | You want two independently configured supported top-level sessions connected across their harness boundaries |
+| **[Cherry Studio](https://github.com/CherryHQ/cherry-studio)** | Broad desktop AI workstation with Agent execution and documented cross-Session delivery [C1], [C2] | General assistant/knowledge work and Agent tools belong in one product | Your priority is a two-participant local relay, not the broader workstation |
+| **[Aider][A1]** | Architect proposals and editor-model file changes [A1] | You need a two-model reasoning/editing split | You need native sessions and their tools, not just two model requests |
+| **[Vibe Kanban][V1]** | Task workspaces, Git worktrees, multiple repositories/sessions, browser preview, and diff review [V1] | Independent changes and integrated review dominate | Sequential peer review of the same decision is the recurring activity |
+| **[Conductor][D1]** | Reviewed official site describes cloud agents, isolated microVMs, and collaboration across people [D1] | Cloud/team execution is a requirement | A local, single-user pair workflow is the intended deployment |
 | **Manual relay** | The developer carries context between existing sessions | Second opinions are occasional | Repeated message carrying and recovery inspection justify a small dedicated layer |
 
 This describes fit, not a proof that alternatives cannot reproduce a similar workflow. Feature overlap is substantial. PairRoom's Embedded controls and Native preservation of original UI must not be presented as one undifferentiated feature set.
@@ -44,7 +46,7 @@ The workbench is useful independently of that layer: notifications and an Agents
 
 | Dimension | Orca, reviewed sources | PairRoom |
 |---|---|---|
-| Primary interaction surface | Agents in Orca terminal/workspace surfaces; optional Chat UI [O2][O4] | Embedded has PairRoom controls; experimental Native keeps user-owned Claude Code/Codex/Grok Build sessions, including the intended Codex Desktop path |
+| Primary interaction surface | Agents in Orca terminal/workspace surfaces; optional Chat UI [O2], [O4] | Embedded has PairRoom controls; experimental Native keeps user-owned Claude Code/Codex/Grok Build sessions, including the intended Codex Desktop path |
 | Same-problem collaboration | Explicit messaging, blocking questions, supervised review Tasks and terminal reuse [O1] | Exact peer handle at the Turn boundary relays the full visible response; Native also has explicit send |
 | Model-visible coordination | New Dispatch preambles teach reports, heartbeat, ask, check and completion ownership [O1] | Stable bootstrap plus small dynamic envelopes; no model-managed Run/Task/Dispatch lifecycle |
 | Native subagents | Can coexist with Orca supervision; that extra layer serves a different lifecycle scope [O1] | Decomposition and native subagents stay with the executing harness; no new worker hierarchy is required |
@@ -136,3 +138,4 @@ The labels refer to sources, not feature scores. Re-review affected sources and 
 [A1]: https://aider.chat/docs/usage/modes.html
 [V1]: https://vibekanban.com/docs/workspaces
 [D1]: https://www.conductor.build/
+[P1]: https://github.com/sean2077/pairroom/tree/d76c089161180cd06baa1f53f22e93413e4266bf

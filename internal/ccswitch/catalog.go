@@ -24,15 +24,35 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// CC Switch bumps user_version for any table change, including tables PairRoom
+// never reads. Verified schemas were checked against upstream migrations for the
+// providers columns and settings_config/meta semantics PairRoom depends on. A
+// newer schema is accepted only when the providers table still has every
+// required column, and the catalog marks it unverified; older schemas predate
+// the pinned contract and fail closed.
 const (
-	SupportedCCSwitchVersion = "v3.20.1"
-	SupportedSchemaVersion   = 18
+	SupportedCCSwitchVersion = "v3.20.4"
+	SupportedSchemaVersion   = 19
+	MinimumSchemaVersion     = 18
 )
+
+// VerifiedSchemaVersions maps each verified schema to the newest CC Switch
+// release checked for it.
+var VerifiedSchemaVersions = map[int]string{18: "v3.20.1", 19: "v3.20.4"}
+
+// SchemaVerified reports whether schema was checked against upstream
+// migrations rather than accepted by structural validation alone.
+func SchemaVerified(schema int) bool {
+	_, ok := VerifiedSchemaVersions[schema]
+	return ok
+}
 
 const (
 	CodeDatabaseMissing      = "cc_switch_database_missing"
 	CodeDatabaseUnreadable   = "cc_switch_database_unreadable"
 	CodeSchemaMismatch       = "cc_switch_schema_mismatch"
+	CodeSchemaUnverified     = "cc_switch_schema_unverified"
+	CodeSchemaIncompatible   = "cc_switch_schema_incompatible"
 	CodeProfileMissing       = "cc_switch_profile_missing"
 	CodeProfileUnsupported   = "cc_switch_profile_unsupported"
 	CodeProfileInvalid       = "cc_switch_profile_invalid"
@@ -81,6 +101,7 @@ type ProfileSummary struct {
 type Catalog struct {
 	CCSwitchVersion string           `json:"cc_switch_version"`
 	Schema          int              `json:"schema"`
+	SchemaVerified  bool             `json:"schema_verified"`
 	Profiles        []ProfileSummary `json:"profiles"`
 }
 
@@ -149,7 +170,7 @@ func (r *Reader) Catalog(ctx context.Context) (Catalog, error) {
 		return Catalog{}, dbError(CodeDatabaseUnreadable, "read CC Switch profiles", err)
 	}
 	defer rows.Close()
-	result := Catalog{CCSwitchVersion: SupportedCCSwitchVersion, Schema: schema}
+	result := Catalog{CCSwitchVersion: VerifiedSchemaVersions[schema], Schema: schema, SchemaVerified: SchemaVerified(schema)}
 	for rows.Next() {
 		profile, err := scanProfile(rows)
 		if err != nil {
@@ -254,16 +275,16 @@ func (r *Reader) open(ctx context.Context) (*sql.DB, int, error) {
 	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&schema); err != nil {
 		return closeFailure(dbError(CodeDatabaseUnreadable, "read the CC Switch schema version", err))
 	}
-	if schema != SupportedSchemaVersion {
-		return closeFailure(&Error{Code: CodeSchemaMismatch, Params: map[string]string{"actual": strconv.Itoa(schema), "supported": strconv.Itoa(SupportedSchemaVersion)}, Detail: fmt.Sprintf("CC Switch schema %d is unsupported; PairRoom supports CC Switch %s schema %d", schema, SupportedCCSwitchVersion, SupportedSchemaVersion)})
+	if schema < MinimumSchemaVersion {
+		return closeFailure(&Error{Code: CodeSchemaMismatch, Params: map[string]string{"actual": strconv.Itoa(schema), "supported": strconv.Itoa(MinimumSchemaVersion)}, Detail: fmt.Sprintf("CC Switch schema %d is unsupported; PairRoom requires schema %d or newer (verified through CC Switch %s schema %d); upgrade CC Switch", schema, MinimumSchemaVersion, SupportedCCSwitchVersion, SupportedSchemaVersion)})
 	}
-	if err := validateProviderTable(ctx, db); err != nil {
+	if err := validateProviderTable(ctx, db, schema); err != nil {
 		return closeFailure(err)
 	}
 	return db, schema, nil
 }
 
-func validateProviderTable(ctx context.Context, db *sql.DB) error {
+func validateProviderTable(ctx context.Context, db *sql.DB, schema int) error {
 	rows, err := db.QueryContext(ctx, "PRAGMA table_info(providers)")
 	if err != nil {
 		return dbError(CodeDatabaseUnreadable, "inspect the CC Switch providers table", err)
@@ -283,7 +304,7 @@ func validateProviderTable(ctx context.Context, db *sql.DB) error {
 	}
 	for name, present := range want {
 		if !present {
-			return &Error{Code: CodeSchemaMismatch, Params: map[string]string{"actual": strconv.Itoa(SupportedSchemaVersion), "supported": strconv.Itoa(SupportedSchemaVersion)}, Detail: "CC Switch schema 18 is missing required providers." + name}
+			return &Error{Code: CodeSchemaIncompatible, Params: map[string]string{"actual": strconv.Itoa(schema), "column": name}, Detail: fmt.Sprintf("CC Switch schema %d is missing required providers.%s", schema, name)}
 		}
 	}
 	return nil

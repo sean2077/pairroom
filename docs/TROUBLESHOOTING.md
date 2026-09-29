@@ -62,7 +62,7 @@ CLI failures print on stderr as `pairroom: <message>`, and Stop-hook notes as `P
 - Preflight `cli.hint`: `The bare pairroom command is not on this shell's PATH, but the relay hooks run exactly that. ...`, or `The pairroom on PATH is a different file from the one running now. ...`
 - In a bound session, `last_hook_at` stays empty after a finished turn because the Stop hook could not run `pairroom relay hook`.
 
-Fix PATH for the harness itself, then restart that harness session. A running session keeps the environment it started with. On Windows, Desktop Setup adds `<install dir>\bin` to the machine PATH through its default-on `addtopath` task. If you opted out, or installed before v5.6.0, run Setup again with the task selected. On macOS, use **Install Command Line Tool…** in the menu bar (or **Update Command Line Tool…** after moving the app) to link `/usr/local/bin/pairroom`. The Linux AppImage needs a separately installed matching CLI. See [Installation](INSTALLATION.md#the-pairroom-command-on-path) and [the macOS section](INSTALLATION.md#macos-desktop).
+Fix PATH for the harness itself, then restart that harness session. A running session keeps the environment it started with. On Windows, Desktop Setup adds `<install dir>\bin` to the machine PATH through its default-on `addtopath` task. If you opted out, or installed before v5.6.0, run Setup again with the task selected. On macOS, use **Install Command Line Tool…** in the menu bar (or **Update Command Line Tool…** after moving the app) to link `/usr/local/bin/pairroom`. The Linux AppImage does not include the CLI; install a matching one with `install.sh`. See [Installation](INSTALLATION.md#the-pairroom-command-on-path) and [the macOS section](INSTALLATION.md#macos-desktop).
 
 ### Service unavailable or stopped
 
@@ -115,7 +115,7 @@ For a workspace that moved, was deleted, or has a broken locator, follow [worksp
 ### Uncertain send or delivery
 
 - Send: `<error>; publication uncertain: retry with the SAME --id <id>, not a new ID`, or `publication receipt invalid; ...`
-- Same `--id` with a changed payload: `--id <id> was already used for a different message (body, target, attachments, quote or review); nothing new was published. ...`. The original was accepted, so do not send it again.
+- Same `--id` with a changed payload: `--id <id> was already used for a different message (body, target, attachments, quote or review); nothing new was published. ...`. The CLI's own receipt check reports the same case as `--id <id> already refers to a different body; no new message was published; inspect relay status`. The original was accepted, so do not send it again.
 - Collection: `stdout written but acknowledgement unavailable; inspect Room delivery state, never automatically replay`. The acknowledgement was missing or was not `handed_off: true`.
 - Collection: `wait response missing claim; outcome uncertain, collection stopped`, or `publication <id> confirmed; collection failed: ...`
 

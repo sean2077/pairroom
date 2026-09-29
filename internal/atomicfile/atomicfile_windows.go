@@ -6,11 +6,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
-const errorSharingViolation syscall.Errno = 32 // ERROR_SHARING_VIOLATION
+const errorSharingViolation = windows.ERROR_SHARING_VIOLATION
 
 // replaceBudget bounds how long a save waits for a foreign reader that opened
 // the target without FILE_SHARE_DELETE. Hooks and deliveries have seconds of
@@ -51,20 +52,20 @@ func Replace(tmp, path string) error {
 }
 
 func transient(err error) bool {
-	return errors.Is(err, syscall.ERROR_ACCESS_DENIED) || errors.Is(err, errorSharingViolation)
+	return errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, errorSharingViolation)
 }
 
 // Open opens path read-only with read, write and delete sharing so that an
 // atomic Replace of the same name is never blocked by this handle. It follows
 // the same links os.Open does; callers keep their own Lstat/type checks.
 func Open(path string) (*os.File, error) {
-	p, err := syscall.UTF16PtrFromString(path)
+	p, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
-	h, err := syscall.CreateFile(p, syscall.GENERIC_READ,
-		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
-		nil, syscall.OPEN_EXISTING, syscall.FILE_ATTRIBUTE_NORMAL, 0)
+	h, err := windows.CreateFile(p, windows.GENERIC_READ,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
