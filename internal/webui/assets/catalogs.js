@@ -324,6 +324,7 @@
       "ui.checkTheProjectIdentityRoomAndRunningStatus": "Check the project identity, room and running status.",
       "ui.choose": "choose",
       "ui.chooseAnActiveRoomToOpenInAnApplicationTab": "Choose an active Room to open in an application tab.",
+      "ui.chooseDirectory": "Choose folder…",
       "ui.chooseRefreshDiffToInspectWorkspaceChanges": "Choose Refresh diff to inspect workspace changes.",
       "ui.agentBindingsCompletedAtomicVerification": "Both Agent Bindings have completed atomic verification.",
       "ui.claudeAskedAnInteractiveQuestionWithoutAParseableListItCanOnly": "Claude asked an interactive question without a parseable list; it can only be rejected.",
@@ -376,6 +377,7 @@
       "ui.couldNotCopyImageValue": "Could not copy image: {{value0}}",
       "ui.couldNotLoadMessageHistoryValue": "Could not load message history: {{value0}}",
       "ui.couldNotOpenInBrowser": "Could not open in browser",
+      "ui.couldNotOpenTheFolderDialog": "Could not open the folder dialog.",
       "ui.couldNotOpenTheSystemBrowser": "Could not open the system browser",
       "ui.couldNotParseEventValue": "Could not parse event: {{value0}}",
       "ui.couldNotUpdateCapacity": "Could not update capacity",
@@ -1600,6 +1602,7 @@
       "ui.checkTheProjectIdentityRoomAndRunningStatus": "查看项目身份、Room 与运行状态。",
       "ui.choose": "选择",
       "ui.chooseAnActiveRoomToOpenInAnApplicationTab": "选择一个活动 Room，在应用内标签中打开。",
+      "ui.chooseDirectory": "选择目录…",
       "ui.chooseRefreshDiffToInspectWorkspaceChanges": "选择“刷新 Diff”查看工作区改动。",
       "ui.agentBindingsCompletedAtomicVerification": "两侧 Agent Binding 已完成原子验证。",
       "ui.claudeAskedAnInteractiveQuestionWithoutAParseableListItCanOnly": "Claude 发出了交互问题，但请求中没有可解析的问题列表。为安全起见只能拒绝。",
@@ -1652,6 +1655,7 @@
       "ui.couldNotCopyImageValue": "复制图片失败：{{value0}}",
       "ui.couldNotLoadMessageHistoryValue": "加载历史消息失败：{{value0}}",
       "ui.couldNotOpenInBrowser": "无法在浏览器中打开",
+      "ui.couldNotOpenTheFolderDialog": "无法打开目录选择器。",
       "ui.couldNotOpenTheSystemBrowser": "无法打开系统浏览器",
       "ui.couldNotParseEventValue": "事件解析失败：{{value0}}",
       "ui.couldNotUpdateCapacity": "无法更新容量",
@@ -2913,6 +2917,8 @@ Object.assign(window.PairRoomLocales["en"].translation, {
   "desktop.noResponse": "Desktop settings did not respond. Reopen Settings to read the system state.",
   "desktop.statusUnavailable": "Desktop startup status is unavailable",
   "desktop.invalidSetting": "Startup setting must be on or off",
+  "desktop.folderUnavailable": "The folder dialog did not return a path",
+  "desktop.folderTimeout": "The folder dialog did not respond. Choose the folder again.",
   "ui.codeBlock": "code",
   "ui.approvalStillPending": "The decision was sent, but the request is still pending. Check the Agent before deciding again."
 });
@@ -2952,6 +2958,8 @@ Object.assign(window.PairRoomLocales["zh-CN"].translation, {
   "desktop.noResponse": "桌面设置未响应。请重新打开设置以读取系统状态。",
   "desktop.statusUnavailable": "无法获取桌面启动状态",
   "desktop.invalidSetting": "启动设置只能为开或关",
+  "desktop.folderUnavailable": "目录选择器没有返回路径",
+  "desktop.folderTimeout": "目录选择器未响应，请重新选择目录。",
   "ui.codeBlock": "代码",
   "ui.approvalStillPending": "决定已发送，但请求仍在等待。再次决定前请先检查 Agent。"
 });

@@ -23,11 +23,22 @@ async def verify(executable: str | None, artifacts: Path) -> None:
         await page.add_init_script('''
           window.__startupEnabled = false; window.__startupFailure = false; window.__startupWrites = 0;
           window.__updates = {enabled: false, offline: false, checked: ''};
+          window.__folderRequests = []; window.__folderPath = 'C:/work/pairroom';
+          window.__folderFailure = false; window.__folderCancelled = false;
           window.chrome = window.chrome || {};
           window.chrome.webview = {postMessage(message) {
             const request = JSON.parse(message);
             if (request.kind === 'pairroom.desktop.browser') {
               (window.__browserLinks ||= []).push(request.url);
+              return;
+            }
+            if (request.kind === 'pairroom.desktop.folder') {
+              __folderRequests.push(request.kind);
+              const response = {id: request.id};
+              if (__folderFailure) response.error = 'Fixture: no folder dialog';
+              else if (__folderCancelled) response.cancelled = true;
+              else response.path = __folderPath;
+              queueMicrotask(() => window.PairRoomDesktop.receive(response));
               return;
             }
             if (request.kind === 'pairroom.desktop.updates') {
@@ -127,6 +138,29 @@ async def verify(executable: str | None, artifacts: Path) -> None:
         await page.screenshot(path=str(artifacts / 'desktop-settings-zh.png'))
         await page.get_by_role('switch', name='检查更新', exact=True).click()
         await expect(page.get_by_text('PairRoom 5.7.0 已发布')).to_have_count(0)
+        # Register Project uses the operating system's own folder dialog through
+        # the host: the page fills the field with the chosen path and never
+        # browses directories itself.
+        await page.evaluate("location.hash = '#/projects'")
+        await page.locator('#add-project-button').click()
+        browse = page.locator('#project-path-browse')
+        await expect(browse).to_be_visible()
+        await expect(page.get_by_role('button', name='选择目录…', exact=True)).to_be_visible()
+        await page.wait_for_timeout(250)  # let the modal's open animation settle before capturing evidence
+        await page.screenshot(path=str(artifacts / 'desktop-register-project-picker-zh.png'))
+        await browse.click()
+        await expect(page.locator('#project-path')).to_have_value('C:/work/pairroom')
+        await page.evaluate("__folderFailure = true")
+        await page.locator('#project-path').fill('')
+        await browse.click()
+        await expect(page.locator('#project-form-error')).to_have_text('Fixture: no folder dialog')
+        await page.evaluate("__folderFailure = false; __folderCancelled = true")
+        await page.locator('#project-path').fill('/typed/worktree')
+        await browse.click()
+        await expect(page.locator('#project-path')).to_have_value('/typed/worktree')
+        await expect(page.locator('#project-form-error')).to_be_hidden()
+        assert await page.evaluate('__folderRequests') == ['pairroom.desktop.folder'] * 3
+        await page.locator('#project-dialog [data-close-dialog="project-dialog"]').last.click()
         assert not errors, errors
         assert not await page.evaluate('__cspErrors'), 'desktop integration violates Management CSP'
         ordinary = await browser.new_page(locale='en-US')
@@ -134,8 +168,11 @@ async def verify(executable: str | None, artifacts: Path) -> None:
         await ordinary.goto('http://127.0.0.1:7332/?desktop=1#/settings')
         await expect(ordinary.locator('.settings-nav')).to_be_visible()
         assert await ordinary.get_by_role('button', name='Desktop', exact=True).count() == 0
+        await ordinary.locator('#add-project-button').click()
+        await expect(ordinary.locator('#project-path')).to_be_visible()
+        assert await ordinary.locator('#project-path-browse').is_hidden(), 'a page without the host bridge must not offer the native folder dialog'
         await browser.close()
-        print('desktop Settings browser/CSP/locale/opt-in/failure-state/update-check contracts: ok (native IPC fixture)')
+        print('desktop Settings browser/CSP/locale/opt-in/failure-state/update-check/folder-picker contracts: ok (native IPC fixture)')
 
 
 if __name__ == '__main__':

@@ -42,7 +42,7 @@ URL fragments are not sent as HTTP requests/Referer, but can leak through screen
 
 ## 3. Project, Room, and Binding
 
-Projects use absolute paths explicitly entered by the user, canonicalized through symlink and Git worktree-root resolution. PairRoom does not discover repositories by scanning common development directories or provide a general server filesystem browser.
+Projects use absolute paths explicitly entered by the user, canonicalized through symlink and Git worktree-root resolution. PairRoom does not discover repositories by scanning common development directories or provide a general server filesystem browser. The Desktop host may offer the operating system's own folder dialog and fill the field with the chosen path, but the choice stays the user's, the path is validated as an absolute path before it is returned, and the Service still receives only that explicitly chosen path.
 
 Room provisioning is private until atomically published. The Service enforces Binding uniqueness by durable slot and native session ID; archive does not release ownership. An existing Binding must resume exactly. A deferred new Binding materializes only after real native input acceptance. Event/checkpoint/uniqueness failures fail closed rather than creating another owner.
 

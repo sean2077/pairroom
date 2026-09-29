@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Choose a folder when registering a Project in Desktop. Registering a Project meant typing an absolute path from memory, so the Desktop window now offers **Choose folder…** beside that field and fills it with the folder picked in the operating system's own dialog (Windows folder picker, macOS `NSOpenPanel`, GTK chooser on Linux); a cancelled dialog leaves the typed value alone. The host returns exactly one absolute path and rejects anything else, the Service still canonicalizes and validates the Git worktree, no directory listing crosses the bridge, and an ordinary browser — which cannot produce a real path — never shows the button.
+
 ## [v5.8.0] — 2026-09-28
 
 - Show a non-blocking Management banner for a stable mismatch between the running Service and the last authenticated stamped CLI. Existing requests carry the bounded build token; no process, disk scan, network update check or extra hook request is added. Invalid/unstamped observations stay quiet, and alternating CLI builds restart the 30-second stability window. Restart guidance is explicit and never executes a command.

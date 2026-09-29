@@ -11,9 +11,12 @@
   const pending = new Map();
   const prefix = window.crypto.randomUUID();
   let sequence = 0;
+  // A folder dialog stays open until the user answers; its lane is bounded by
+  // this instead of the settings timeouts, and a late answer is still ignored.
+  const folderTimeoutMs = 10 * 60 * 1000;
   // Each setting has one request lane, so a slow update check never blocks
   // reading or changing launch at login.
-  function request(lane, payload, timeoutMs, settle) {
+  function request(lane, payload, timeoutMs, settle, timeoutMessage) {
     for (const entry of pending.values()) {
       if (entry.lane === lane) return Promise.reject(new Error(text('requestPending', 'A desktop setting request is already pending')));
     }
@@ -21,7 +24,7 @@
       const id = `${prefix}:${++sequence}`;
       const timer = setTimeout(() => {
         pending.delete(id);
-        reject(new Error(text('noResponse', 'Desktop settings did not respond. Reopen Settings to read the system state.')));
+        reject(new Error(timeoutMessage || text('noResponse', 'Desktop settings did not respond. Reopen Settings to read the system state.')));
       }, timeoutMs);
       pending.set(id, {lane, settle, resolve, reject, timer});
       try {
@@ -68,6 +71,17 @@
       return updates('set', enabled);
     },
     checkUpdates: () => updates('check'),
+    // Desktop-only convenience for the Register Project form. It resolves with
+    // the absolute path chosen in the native dialog, or an empty string when
+    // the user cancelled; the Service still validates the canonical worktree.
+    pickFolder() {
+      return request('pairroom.desktop.folder', {}, folderTimeoutMs, (response) => {
+        if (response.error) throw new Error(response.error);
+        if (response.cancelled === true) return '';
+        if (typeof response.path !== 'string' || !response.path) throw new Error(text('folderUnavailable', 'The folder dialog did not return a path'));
+        return response.path;
+      }, text('folderTimeout', 'The folder dialog did not respond. Choose the folder again.'));
+    },
     // Uses the same native link path as Ctrl+click; the host accepts only http(s).
     openExternal(url) {
       transport.postMessage(JSON.stringify({kind: 'pairroom.desktop.browser', url: String(url)}));

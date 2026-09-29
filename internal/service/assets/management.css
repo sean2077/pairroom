@@ -175,6 +175,11 @@ code, pre, kbd { font-family: var(--font-mono); }
 .login-spinner { width: 18px; height: 18px; border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
 .login-form { display: grid; gap: 14px; margin-top: 24px; }
 .login-form .field-label { margin: 0 0 -7px; }
+/* The Register Project path row keeps the typed field usable and grows the
+   Desktop-only folder picker to its localized label. */
+.path-field { display: flex; align-items: stretch; gap: 8px; }
+.path-field input { flex: 1 1 auto; width: auto; min-width: 0; font-family: var(--font-mono); }
+.path-field-browse { flex: 0 0 auto; white-space: nowrap; }
 .credential-field { position: relative; display: block; }
 .credential-field input { padding-right: 72px; font-family: var(--font-mono); }
 .credential-toggle {
