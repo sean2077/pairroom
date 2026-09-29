@@ -153,6 +153,8 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--token`
 <!-- /generated:flags -->
 
+`pairroom daemon install` parses `--binary`, `--work-dir`, `--log-max-size`, `--log-max-backups`, and `--` itself, so they are not in this inventory; see `pairroom daemon --help`.
+
 ## Installation versus runtime availability
 
 `pairroom doctor` is a Git / CLI protocol-metadata check, not an authentication or inference test. It checks the two configured slots, including Grok Build when selected; executable overrides are `--claude-command`, `--codex-command`, and `--grok-command` and follow the Runtime kind rather than the durable slot name. If it finds legacy workspace relay directories named `claude` or `codex`, it reports only their count, never opens credentials or state, and tells the user to re-bind canonical slots.
@@ -217,7 +219,7 @@ All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Norma
 
 Every relay subcommand except `preflight` prints one stderr line suggesting `pairroom relay preflight` when a Service response named a release other than the CLI's (build metadata such as `+8.a5cb253` is ignored). It reads the release from responses the command already receives, so it never changes stdout or adds a Stop-hook request. When a failure looks like version skew (a rejected route or request shape, an authentication rejection, or no matching binding), the line says the mismatch may explain it; if such a failure happened before any Service contact, a foreground command, never the hook, makes one short read-only Service request to learn the release. An unknown or matching release prints nothing.
 
-Park defaults to 30 seconds and applies only while a peer reply is expected (see [Protocol](PROTOCOL.md#native-host-protocol-v8)); otherwise the hook returns at once and already queued input is still collected. Claude/Codex allow eight message-bearing blocks; Grok allows seven readiness/recovery hints, reserving its final publication gate. Outside this window, use foreground wait or a native human nudge. Unknown delivery must be inspected before the Room's explicit Retry. Same-turn send/exchange plus a peer-directed final reply deliberately creates two publications; omit that handle after explicit publication unless the second full reply is intended.
+Park lasts at most 30 seconds (fixed; `--timeout` does not change it, and it shortens to fit the 45-second hook timeout) and applies only while a peer reply is expected (see [Protocol](PROTOCOL.md#native-host-protocol-v8)); otherwise the hook returns at once and already queued input is still collected. Claude/Codex allow eight message-bearing blocks; Grok allows seven readiness/recovery hints, reserving its final publication gate. Outside this window, use foreground wait or a native human nudge. Unknown delivery must be inspected before the Room's explicit Retry. Same-turn send/exchange plus a peer-directed final reply deliberately creates two publications; omit that handle after explicit publication unless the second full reply is intended.
 
 `send` now prints only `published`, `client_id`, `state` and `to`, not the outgoing body. A reused ID with different text fails rather than reporting the old publication as a new send. Its queued-delivery hint needs no extra request; `status --brief` wake advice uses a separate short peer-metadata deadline.
 

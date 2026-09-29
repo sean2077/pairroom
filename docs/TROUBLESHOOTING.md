@@ -115,7 +115,7 @@ For a workspace that moved, was deleted, or has a broken locator, follow [worksp
 ### Uncertain send or delivery
 
 - Send: `<error>; publication uncertain: retry with the SAME --id <id>, not a new ID`, or `publication receipt invalid; ...`
-- Same `--id` with a changed payload: `--id <id> was already used for a different message (body, target, attachments, quote or review); nothing new was published. ...`. The original was accepted, so do not send it again.
+- Same `--id` with a changed payload: `--id <id> was already used for a different message (body, target, attachments, quote or review); nothing new was published. ...`. The CLI's own receipt check reports the same case as `--id <id> already refers to a different body; no new message was published; inspect relay status`. The original was accepted, so do not send it again.
 - Collection: `stdout written but acknowledgement unavailable; inspect Room delivery state, never automatically replay`. The acknowledgement was missing or was not `handed_off: true`.
 - Collection: `wait response missing claim; outcome uncertain, collection stopped`, or `publication <id> confirmed; collection failed: ...`
 
