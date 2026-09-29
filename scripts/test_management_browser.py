@@ -790,6 +790,14 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
             await page.screenshot(path=str(artifacts / f'management-mobile-{theme}-{language}.png'))
             await page.set_viewport_size({'width': 1440, 'height': 1000})
         results['responsive_header_and_locale_identity'] = True
+        # A browser cannot hand a real absolute path to the Service, so the
+        # Register Project form keeps the typed path as its only input. The
+        # native folder dialog belongs to the Desktop host.
+        await page.locator('#add-project-button').click()
+        assert await page.locator('#project-path').is_visible()
+        assert await page.locator('#project-path-browse').is_hidden(), 'the browser surface must not offer a native folder dialog'
+        await page.locator('#project-dialog [data-close-dialog="project-dialog"]').last.click()
+        results['browser_project_dialog_is_typed_path_only'] = True
         assert not errors, errors
         from test_management_order_browser import verify_ordering
         results.update(await verify_ordering(browser, artifacts, in_page_fixture))

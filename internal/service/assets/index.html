@@ -132,7 +132,10 @@
       </header>
       <div class="modal-body">
         <label class="field-label" for="project-path" data-i18n="ui.absolutePath">Absolute path</label>
-        <input id="project-path" name="path" type="text" required="" placeholder="/absolute/path/to/git/worktree" autocomplete="off" spellcheck="false">
+        <span class="path-field">
+          <input id="project-path" name="path" type="text" required="" placeholder="/absolute/path/to/git/worktree" autocomplete="off" spellcheck="false">
+          <button id="project-path-browse" class="secondary-button path-field-browse" type="button" hidden="" data-i18n="ui.chooseDirectory" data-i18n-title="ui.chooseDirectory" data-i18n-aria-label="ui.chooseDirectory">Choose folder…</button>
+        </span>
         <div id="project-path-help" class="callout neutral">
           <strong data-i18n="ui.explicitPathBoundary">Explicit path boundary</strong>
           <span data-i18n="ui.onlyAbsolutePathsAreAcceptedRootPathsSubdirectoriesAndSymlinksResolveTo">Only absolute paths are accepted. Root paths, subdirectories, and symlinks resolve to the same canonical Git worktree; the Service does not scan development directories.</span>

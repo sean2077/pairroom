@@ -11,11 +11,13 @@ import (
 	"net/url"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/sean2077/pairroom/desktop/internal/clilink"
+	"github.com/sean2077/pairroom/desktop/internal/folderdialog"
 	"github.com/sean2077/pairroom/desktop/internal/host"
 	"github.com/sean2077/pairroom/desktop/internal/startup"
 	"github.com/sean2077/pairroom/desktop/internal/updatecheck"
@@ -382,11 +384,12 @@ func main() {
 	var startDesktop func()
 	var startupSettings *startup.Settings
 	var updates *updatecheck.Checker
+	var folderPicker *folderdialog.Picker
 	var openBrowser func(string) error
 
 	app := application.New(application.Options{
 		RawMessageHandler: func(sender application.Window, message string, origin *application.OriginInfo) {
-			if window == nil || sender != window || origin == nil || startupSettings == nil {
+			if window == nil || sender != window || origin == nil || startupSettings == nil || folderPicker == nil {
 				return
 			}
 			controller.hostMu.Lock()
@@ -399,6 +402,15 @@ func main() {
 				if err := openBrowser(target); err != nil {
 					window.ExecJS("window.alert('Could not open the default browser.');")
 				}
+				return
+			}
+			if request, ok := folderPicker.Parse(message); ok {
+				// The folder dialog is window-modal and answers only when the
+				// user does, so it never occupies the message thread.
+				folderPicker.Respond(request, func(response folderdialog.Response) {
+					encoded, _ := json.Marshal(response)
+					window.ExecJS("window.PairRoomDesktop?.receive(" + string(encoded) + ");")
+				})
 				return
 			}
 			if response, ok := startupSettings.Handle(message); ok {
@@ -473,6 +485,7 @@ func main() {
 	window.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) {
 		windowGate.markReady()
 	})
+	folderPicker = folderdialog.New(wailsFolderChooser{app: app, window: window})
 	if runtime.GOOS == "windows" {
 		// Wails v3's Windows backend only turns WebviewWindowOptions.JS into a
 		// document-created script when HTML (rather than URL) is supplied. The
@@ -678,6 +691,33 @@ func requestQuit(app *application.App, controller *desktopController) {
 		}
 		app.Quit()
 	}()
+}
+
+// wailsFolderChooser shows the native folder dialog owned by the main window.
+// Wails reports a cancelled Windows dialog as an error, while macOS and Linux
+// return an empty path; both mean "no selection", which the picker reports as a
+// cancelled request rather than a failure.
+type wailsFolderChooser struct {
+	app    *application.App
+	window *application.WebviewWindow
+}
+
+// wailsCancelledByUser is the upstream Windows dialog cancellation message.
+const wailsCancelledByUser = "cancelled by user"
+
+func (c wailsFolderChooser) ChooseFolder(title string) (string, error) {
+	path, err := c.app.Dialog.OpenFileWithOptions(&application.OpenFileDialogOptions{
+		CanChooseDirectories: true,
+		Title:                title,
+		Window:               c.window,
+	}).PromptForSingleSelection()
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), wailsCancelledByUser) {
+			return "", nil
+		}
+		return "", err
+	}
+	return path, nil
 }
 
 // openLocalFolder reveals a Service data directory with the platform file

@@ -21,6 +21,7 @@ The Wails layer owns only native desktop concerns:
 - explicit native quit;
 - explicit, native launch-at-login settings;
 - an opt-in, read-only check for new releases;
+- the operating system's own folder dialog for Project registration;
 - platform packaging.
 
 The root and desktop modules use the latest stable Go release. The root permits only the pinned CGo-free SQLite dependency closure used for read-only CC Switch access; Wails and its GUI dependencies remain confined to `desktop/go.mod`.
@@ -63,6 +64,19 @@ The choice, the last check time, and the newest version seen are stored in
 under the OS user configuration directory, beside the macOS command-line tool
 offer), not in the Service data root or Room events. Turning the check off
 hides the notice and stops requests. A missing or malformed file means off.
+
+## Register a Project
+
+**Register Project** in the Desktop window offers **Choose folder…** beside the
+absolute path field. It opens the operating system's own folder dialog — the
+Windows folder picker, `NSOpenPanel` on macOS, or the GTK chooser on Linux — and
+fills the field with the folder you selected; you still review and confirm it.
+Cancelling leaves the field as you typed it, so a hand-entered path keeps
+working. Nothing lists your directories: the host returns one absolute path,
+rejects anything that is not absolute, and the Service canonicalizes the Git
+worktree exactly as for a typed path. An ordinary browser cannot produce a real
+path, so it never shows this button. See
+[Security](../SECURITY.md#3-project-room-and-binding).
 
 ## Development
 

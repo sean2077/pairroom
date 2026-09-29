@@ -1816,6 +1816,32 @@
     queueMicrotask(() => $('project-path').focus());
   }
 
+  // Only the Desktop host owns an operating-system folder dialog; a browser
+  // keeps the typed absolute path as the only way to register a Project, and
+  // either way the Service canonicalizes and validates the Git worktree.
+  function installProjectFolderPicker() {
+    const button = $('project-path-browse');
+    if (!button || typeof window.PairRoomDesktop?.pickFolder !== 'function') return;
+    button.hidden = false;
+    button.addEventListener('click', chooseProjectPath);
+  }
+
+  async function chooseProjectPath() {
+    const button = $('project-path-browse');
+    if (button.disabled) return;
+    button.disabled = true;
+    hideFormError('project-form-error');
+    try {
+      const path = await window.PairRoomDesktop.pickFolder();
+      if (!path) return; // Cancelling keeps whatever the user already typed.
+      $('project-path').value = path;
+    } catch (error) {
+      showFormError('project-form-error', error?.message || t("ui.couldNotOpenTheFolderDialog"));
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   async function submitProject(event) {
     event.preventDefault();
     const path = $('project-path').value.trim();
@@ -3301,6 +3327,7 @@
   $('logout-button').addEventListener('click', logoutBrowserSession);
   $('retry-button').addEventListener('click', () => connect({ notify: true, forceRender: true }));
   $('add-project-button').addEventListener('click', () => openProjectDialog());
+  installProjectFolderPicker();
   $('global-search').addEventListener('input', (event) => {
     state.search = event.target.value;
     if (state.route.name !== 'projects' && state.search) navigate('#/projects');

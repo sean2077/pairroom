@@ -13,7 +13,13 @@ function bridge({native = true, platform = 'windows', top = true, search = '?des
   if (native && platform !== 'windows') window.webkit = {messageHandlers: {external: transport}};
   vm.runInNewContext(fs.readFileSync('internal/webui/assets/desktop.js', 'utf8'), {
     window, URLSearchParams,
-    setTimeout(callback) { timers.set(++sequence, callback); return sequence; },
+    // A real timer spends itself when it fires; the stub does too, so a fired
+    // callback cannot look like a request that is still waiting.
+    setTimeout(callback, delay) {
+      const id = ++sequence;
+      timers.set(id, {delay, callback() { timers.delete(id); callback(); }});
+      return id;
+    },
     clearTimeout(id) { timers.delete(id); },
   });
   return {api: window.PairRoomDesktop, sent, timers, transport};
@@ -54,7 +60,7 @@ async function main() {
   }
   {
     const b = bridge(), read = b.api.readStartup();
-    b.timers.values().next().value();
+    b.timers.values().next().value.callback();
     await assert.rejects(read, /did not respond/);
     const next = b.api.readStartup();
     b.api.receive({id: b.sent.at(-1).id, enabled: true});
@@ -102,8 +108,53 @@ async function main() {
     assert.deepEqual(b.sent.slice(before), [{kind: 'pairroom.desktop.browser', url: 'https://github.com/sean2077/pairroom/releases/tag/v5.7.0'}]);
     assert.equal(b.timers.size, 0);
   }
+  {
+    // The Register Project form asks the host for a folder and receives the
+    // path the user chose in the operating system's own dialog.
+    const b = bridge();
+    const picked = b.api.pickFolder();
+    const folder = b.sent.at(-1);
+    assert.equal(folder.kind, 'pairroom.desktop.folder');
+    assert.deepEqual(Object.keys(folder).sort(), ['id', 'kind'], 'the folder request carries no extra fields');
+    // The dialog stays open until the user answers, so this lane must not
+    // expire on the settings clock.
+    const timer = [...b.timers.values()].at(-1);
+    assert.ok(timer.delay >= 60000, `folder lane must outlive a settings timeout, got ${timer.delay}`);
+    await assert.rejects(b.api.pickFolder(), /already pending/);
+    b.api.receive({id: folder.id, path: 'C:\\work\\pairroom'});
+    assert.equal(await picked, 'C:\\work\\pairroom');
+    const cancelled = b.api.pickFolder();
+    b.api.receive({id: b.sent.at(-1).id, cancelled: true});
+    assert.equal(await cancelled, '', 'a cancelled dialog must resolve without a path');
+    const failed = b.api.pickFolder();
+    b.api.receive({id: b.sent.at(-1).id, error: 'The native folder dialog is unavailable'});
+    await assert.rejects(failed, /folder dialog is unavailable/);
+    const empty = b.api.pickFolder();
+    b.api.receive({id: b.sent.at(-1).id});
+    await assert.rejects(empty, /did not return a path/);
+    const stalled = b.api.pickFolder();
+    const stale = b.sent.at(-1).id;
+    [...b.timers.values()].at(-1).callback();
+    await assert.rejects(stalled, /Choose the folder again/);
+    const next = b.api.pickFolder();
+    b.api.receive({id: stale, path: '/obsolete'});
+    b.api.receive({id: b.sent.at(-1).id, cancelled: true});
+    assert.equal(await next, '', 'an expired request must not settle its successor');
+    assert.equal(b.timers.size, 0);
+    // A pending folder request must not settle on another lane's response.
+    const pending = b.api.pickFolder();
+    const startup = b.api.readStartup();
+    const startupRequest = b.sent.at(-1);
+    const folderRequest = b.sent.at(-2);
+    b.api.receive({id: startupRequest.id, enabled: true});
+    assert.equal(await startup, true);
+    assert.equal(b.timers.size, 1, 'the folder lane must still be waiting');
+    b.api.receive({id: folderRequest.id, path: '/worktree'});
+    assert.equal(await pending, '/worktree');
+    assert.equal(b.timers.size, 0);
+  }
   const html = fs.readFileSync('internal/service/assets/index.html', 'utf8');
   assert.ok(html.indexOf('/_pairroom/desktop.js') < html.indexOf('/management.js'), 'install native bridge before rendering Settings');
-  console.log('desktop settings native transport, isolation, timeout, error, and update-check contracts: ok');
+  console.log('desktop settings native transport, isolation, timeout, error, update-check, and folder-picker contracts: ok');
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });
