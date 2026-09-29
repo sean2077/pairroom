@@ -358,13 +358,56 @@ func TestReaderFailsClosedForMissingAndMismatchedSchema(t *testing.T) {
 	if !errors.As(err, &typed) || typed.Code != CodeDatabaseMissing {
 		t.Fatalf("missing error = %v", err)
 	}
-	for _, schema := range []int{17, 19} {
+	for _, schema := range []int{0, 17} {
 		path := writeFixture(t, schema)
 		reader, _ := NewReader(path)
 		_, err := reader.Catalog(context.Background())
-		if !errors.As(err, &typed) || typed.Code != CodeSchemaMismatch {
+		if !errors.As(err, &typed) || typed.Code != CodeSchemaMismatch || typed.Params["actual"] != strconv.Itoa(schema) {
 			t.Fatalf("schema %d error = %v", schema, err)
 		}
+	}
+}
+
+func TestReaderAcceptsVerifiedAndStructurallyCompatibleNewerSchemas(t *testing.T) {
+	const secret = "schema-fixture-secret"
+	for _, test := range []struct {
+		schema   int
+		verified bool
+		version  string
+	}{{18, true, "v3.20.1"}, {19, true, "v3.20.4"}, {20, false, ""}, {42, false, ""}} {
+		path := writeFixture(t, test.schema, fixtureProfile{"c", "claude", "Claude direct", `{"env":{"ANTHROPIC_AUTH_TOKEN":"` + secret + `","ANTHROPIC_MODEL":"claude-test"}}`, `{}`, 1, 0})
+		reader, _ := NewReader(path)
+		catalog, err := reader.Catalog(context.Background())
+		if err != nil {
+			t.Fatalf("schema %d catalog: %v", test.schema, err)
+		}
+		if catalog.Schema != test.schema || catalog.SchemaVerified != test.verified || catalog.CCSwitchVersion != test.version || len(catalog.Profiles) != 1 || !catalog.Profiles[0].Supported {
+			t.Fatalf("schema %d catalog = %#v", test.schema, catalog)
+		}
+		materialized, err := reader.Resolve(context.Background(), model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "claude", ProfileID: "c"}, model.RuntimeClaude)
+		if err != nil || materialized.Env["ANTHROPIC_AUTH_TOKEN"] != secret {
+			t.Fatalf("schema %d resolve error = %v", test.schema, err)
+		}
+	}
+}
+
+func TestReaderRejectsNewerSchemaMissingRequiredProviderColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cc-switch.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE providers (id TEXT NOT NULL, app_type TEXT NOT NULL, name TEXT NOT NULL, settings_config TEXT NOT NULL, meta TEXT NOT NULL DEFAULT '{}', sort_index INTEGER, is_current BOOLEAN NOT NULL DEFAULT 0); PRAGMA user_version = 20;`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reader, _ := NewReader(path)
+	_, err = reader.Catalog(context.Background())
+	var typed *Error
+	if !errors.As(err, &typed) || typed.Code != CodeSchemaIncompatible || typed.Params["column"] != "in_failover_queue" || typed.Params["actual"] != "20" {
+		t.Fatalf("missing column error = %v", err)
 	}
 }
 
