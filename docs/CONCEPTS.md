@@ -2,6 +2,16 @@
 
 PairRoom coordinates two coding sessions; it is not a model provider, replacement tool loop, or enforced workflow compiler. [Protocol](PROTOCOL.md) owns routing and transport contracts, [Architecture](ARCHITECTURE.md) owns implementation boundaries, and [Project language](../CONTEXT.md) defines canonical terms.
 
+## Tool names and configuration layers
+
+A **harness** is the coding application that owns a session's model/tool loop, native instructions, and permissions. The supported participant Runtimes are [Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), and [Grok Build](https://x.ai/news/grok-build-cli). “Grok” in a Runtime selector names Grok Build, not just a Grok model. PairRoom does not install or authenticate these applications for you.
+
+A **model** is the selected model identifier; a **Provider** supplies its account or API endpoint configuration. Choosing a Runtime is not choosing a model or proving account access. [CC Switch](https://github.com/farion1231/cc-switch) is an optional external configuration manager: Embedded can read supported Provider references from it without switching its active Profile. It is not required when inheriting native configuration. Native Room selections never reconfigure the original session. See [Configuration](CONFIGURATION.md#cc-switch-provider-references).
+
+A **terminal**, such as [WezTerm](https://wezterm.org/), displays the original coding application; it is not a model Provider. [Orca](https://github.com/stablyai/orca) is a separate Agent workbench discussed in [Alternatives](ALTERNATIVES.md), not a PairRoom dependency. Neither tool is required to follow these guides.
+
+A **skill** supplies instructions for the Agent; a **hook** is a callback executed by its harness at a lifecycle event. Installing the `pairroom-relay` skill alone does not install or approve its Stop hooks. A **Service** is PairRoom's local backend; a **daemon** is an operating-system-managed way to run it. These terms do not select a Room's host mode. [Native relay](NATIVE_RELAY.md) and [Operations](OPERATIONS.md) own the respective setup procedures.
+
 ## Project, Room, and Runtime
 
 A **Project** registers a canonical local Git workspace. A **Room** belongs to a Project and durably records two participant slots, collaboration instructions, Bindings, and messages. Neither registration nor Room creation copies the repository or creates a task worktree.
@@ -34,7 +44,7 @@ A Room name is mutable display metadata, not an ID. Renaming preserves the Room 
 
 These responsibilities are not tool grants, mandatory alternating turns, or a plan-approval gate. Review completion alone does not authorize implementation.
 
-**New Embedded Rooms default to YOLO for both participants.** Select narrower supported native policies explicitly. Their independent Permission profiles (`configured`, `read-only`, `yolo`) can change only at an idle boundary with no queued work or pending approval. Runtime, Provider reference, model, and creation-time instructions remain immutable.
+**New Embedded Rooms default to YOLO for both participants:** the most permissive supported native permission profile, not a review-only mode. Select narrower supported native policies explicitly. Their independent Permission profiles (`configured`, `read-only`, `yolo`) can change only at an idle boundary with no queued work or pending approval. Runtime, Provider reference, model, and creation-time instructions remain immutable.
 
 **Native permissions belong to the original harness.** A Room's displayed permission, model, or Provider fields do not change that process. Both modes use the chosen live workspace; neither creates a repository lock or isolates other Rooms, editors, or native subagents. Use project-owned worktrees and an agreed writer/review revision when coordinating changes. See [Configuration](CONFIGURATION.md) and [Security](../SECURITY.md).
 
