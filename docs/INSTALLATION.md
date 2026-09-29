@@ -6,10 +6,10 @@ This guide owns the installation facts: which channel fits which platform, prere
 
 | Entry | You get | Choose it for |
 |---|---|---|
-| Desktop package | Desktop application plus a bundled `pairroom` CLI | Daily use: tray, embedded Service, native Settings |
+| Desktop package | Desktop application plus a bundled `pairroom` CLI (except the Linux AppImage) | Daily use: tray, embedded Service, native Settings |
 | CLI only | The `pairroom` binary | Headless or SSH-forwarded hosts, daemon-only machines, browser-driven use |
 
-Neither entry requires Go. Both need Git and a local Git repository; for real Agents, each selected native CLI ([Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), [Grok Build](https://x.ai/news/grok-build-cli)) must be independently installed and authenticated. These are coding applications, not model names. The full readiness table is in [Getting started](GETTING_STARTED.md#prerequisites).
+Neither entry requires Go. Both need Git and a local Git repository; for real Agents, each selected native CLI ([Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), [Grok Build](https://docs.x.ai/build/overview)) must be installed and signed in separately. The full readiness table is in [Getting started](GETTING_STARTED.md#prerequisites).
 
 Release packages are unsigned development artifacts until Windows code signing and Apple Developer ID signing/notarization actually run. [Releases](https://github.com/sean2077/pairroom/releases/latest) distinguish `pairroom-cli-…` from `pairroom-desktop-…` assets. Verify downloads against the checksums published with each release: CLI assets, `install.sh`, and source archives are listed in `SHA256SUMS`, and desktop packages in `pairroom-desktop-vX.Y.Z-SHA256SUMS` (for example `sha256sum -c --ignore-missing pairroom-desktop-vX.Y.Z-SHA256SUMS` next to the downloaded package; on Windows compare `Get-FileHash` output with the listed digest). The checksums detect corrupted or substituted downloads relative to that Release page; they are not a code signature.
 
@@ -64,28 +64,32 @@ The bundled CLI is not on PATH by itself. After the Service starts for the first
 ## Linux desktop
 
 - `.deb` (amd64): install with your package manager, e.g. `sudo apt install ./pairroom-desktop-vX.Y.Z-linux-amd64.deb`. It includes the CLI at `/usr/local/bin/pairroom`.
-- `.AppImage` (amd64): make the file executable and run it directly; no system installation. It does not expose the bundled CLI on PATH, so install a matching CLI separately before using Native hooks.
+- `.AppImage` (amd64): make the file executable and run it directly; no system installation. It contains only the Desktop application, not the `pairroom` CLI; install a matching CLI with `install.sh` before using Native hooks.
 
 ## CLI on any platform
 
-Published CLI targets are Linux amd64, Windows amd64, and macOS amd64/arm64. `amd64` means x86-64, including Intel and AMD processors; macOS arm64 is Apple silicon. The installer rejects other Linux/Windows architectures rather than silently selecting a different binary. A source build is a separate path, not a claim that an unlisted release asset exists.
+Release CLI binaries exist for Linux amd64, Windows amd64, and macOS amd64 and arm64 (Apple silicon); `amd64` is x86-64. The installer exits with an error on any other Linux or Windows architecture. On other platforms, [build from source](#from-source).
 
-For Linux, macOS, or Git Bash, use a scratch directory and download the CLI installer:
+On Linux, macOS, or Git Bash, download the installer:
 
 ```bash
 curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh -o install-pairroom.sh
 ```
 
-After the download succeeds, inspect the file in your editor. Only then execute it:
+Read it, then run it:
 
 ```bash
 sh install-pairroom.sh
 pairroom version
 ```
 
-The installer is POSIX `sh` (it runs under dash, busybox `sh`, and bash), and needs `curl` plus either `sha256sum` or `shasum`. It refuses installation without a checksum tool or when the binary's SHA-256 does not match the release `SHA256SUMS`. Downloading before execution also avoids treating a failed download in a shell pipeline as a successful installation.
+The installer is POSIX `sh` (dash, busybox `sh`, and bash all work) and needs `curl` plus `sha256sum` or `shasum`. It stops without installing if neither checksum tool is present or if the binary does not match the release `SHA256SUMS`. `curl … | sh` also works, but saving the file first lets you read it and keeps a truncated download from running.
 
-It installs the latest release unless `PAIRROOM_VERSION` names a tag. The destination is `$PREFIX/bin` when `PREFIX` is set; otherwise it uses `/usr/local/bin` when writable (or running as root), then `~/.local/bin`. It downloads from `sean2077/pairroom` unless `PAIRROOM_REPOSITORY` names another `owner/name` for a fork; it ignores the generic `GITHUB_REPOSITORY` that GitHub Actions sets for the calling repository. These variables affect the CLI installer, not a running Desktop or Service.
+Environment variables adjust it:
+
+- `PAIRROOM_VERSION` installs a specific tag instead of the latest release.
+- `PREFIX` installs into `$PREFIX/bin`. Without it, the installer uses `/usr/local/bin` if writable (or when run as root), otherwise `~/.local/bin`.
+- `PAIRROOM_REPOSITORY` downloads from another `owner/name`, such as a fork. The generic `GITHUB_REPOSITORY` that GitHub Actions sets is ignored.
 
 Alternatively, download the matching `pairroom-cli-…` asset directly, verify it against the release checksums, make it executable where required, and put it on `PATH`. In Windows PowerShell, use `./pairroom.exe` when running a downloaded binary in the current directory.
 
@@ -102,11 +106,11 @@ pairroom version
 pairroom doctor --repo . --json
 ```
 
-`version` confirms which CLI release this shell runs. Ordinary `doctor` checks executable/version/protocol availability without calling a model; its default pair is Claude Code and Codex. For another pair, retain the appropriate `--config` and command-path overrides described in [Agent-assisted setup](AGENT_SETUP.md#3-check-git-and-the-runtimes). Installation is not authentication.
+`version` shows which CLI release this shell runs. `doctor` checks Git and the Runtime executables without calling a model, and checks Claude Code plus Codex unless you pass `--config` for another pair; see [Agent-assisted setup](AGENT_SETUP.md#3-check-git-and-the-runtimes). Neither command checks that you are signed in.
 
-For Native, repeat the PATH check in both Agents' tool shells, use the same CLI release as the Service, and run `pairroom relay preflight` before binding. Use `pairroom relay doctor` only after binding to inspect the session and evidence of hook execution. Neither command proves model acceptance; live model checks need separate consent. [Agent-assisted setup](AGENT_SETUP.md#6-native-bind-two-existing-sessions) owns the sequence and [CLI reference](CLI_REFERENCE.md) owns the command contracts.
+For Native, run `pairroom version` in both Agents' tool shells as well, and use the CLI from the same release as the Service. Run `pairroom relay preflight` before binding and `pairroom relay doctor` after. [Agent-assisted setup](AGENT_SETUP.md#6-native-bind-two-existing-sessions) gives the full sequence; [CLI reference](CLI_REFERENCE.md) documents each command.
 
-For the desktop, launch PairRoom and open Management in its window. For a foreground CLI Service, use its printed Management URL; the URL can contain an authentication token, so do not publish it.
+Desktop opens Management in its own window. A CLI Service prints a Management URL instead; it contains a login token, so don't share it.
 
 ## Upgrade and uninstall mechanics
 

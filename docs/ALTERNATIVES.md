@@ -8,7 +8,7 @@ reviewed: 2026-09-12
 
 This comparison asks **which coordination problem a tool solves**, not which product has the most checkmarks. [Why PairRoom](WHY_PAIRROOM.md) explains the narrower goal: two independent native sessions cross-reviewing one problem without taking over the executing harness's workflow.
 
-Product names below link to their upstream projects or primary documentation. These alternatives are not installation prerequisites or claims of built-in PairRoom integrations. For the supported coding applications and optional configuration tools, start with [Core concepts](CONCEPTS.md#tool-names-and-configuration-layers).
+Product names link to their upstream projects. None of them is a PairRoom prerequisite or integration.
 
 ## Research scope
 
@@ -16,7 +16,7 @@ PairRoom and [Orca](https://github.com/stablyai/orca) were reviewed on **2026-09
 
 The other product entries retain the **2026-09-08** review and sources; they were not all re-audited on September 12. Cherry Studio's repository-specific observations use [`e131f495a9af593ec873bea34b935e97d644f586`](https://github.com/CherryHQ/cherry-studio/tree/e131f495a9af593ec873bea34b935e97d644f586).
 
-“Documented” means a primary source describes a capability. “Fit” is our interpretation. No comparative hands-on benchmark, authenticated vendor E2E, price survey, or token measurement was performed for this document. Proposed issues, stars and marketing superlatives are not evidence of superiority. Check your installed release and chosen harness/Provider combination. Link and navigation maintenance does not refresh these capability-review dates; current PairRoom setup belongs to the [user guides](README.md#user-guides).
+“Documented” means a primary source describes a capability. “Fit” is our interpretation. No comparative hands-on benchmark, authenticated vendor E2E, price survey, or token measurement was performed for this document. Proposed issues, stars and marketing superlatives are not evidence of superiority. Check your installed release and chosen harness/Provider combination.
 
 ## Start with the job, not the label “multi-agent”
 

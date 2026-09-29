@@ -1,6 +1,6 @@
 # Getting started
 
-Choose the host mode before following commands. **Embedded** gives PairRoom control of supported adapters and is the quickest first trial; **Native** retains your original sessions and is recommended for daily work, while remaining experimental. Neither is an in-place conversion of the other. See [Concepts](CONCEPTS.md) for the boundary and [Native setup](NATIVE_RELAY.md) for the complete Native workflow.
+Choose the host mode before following commands. **Embedded** lets PairRoom drive the adapters and is the quickest first trial; **Native** keeps your original sessions and is recommended for daily work, though still experimental. Neither is an in-place conversion of the other. See [Concepts](CONCEPTS.md) for the boundary and [Native setup](NATIVE_RELAY.md) for the complete Native workflow.
 
 ## Prerequisites
 
@@ -11,11 +11,11 @@ Choose the host mode before following commands. **Embedded** gives PairRoom cont
 | Real Agents | Selected native CLIs installed and authenticated | No extra PairRoom source build |
 | Mock | No vendor CLI or model account | None for a prebuilt package |
 
-Prebuilt packages do **not** require Go. Install only the Runtimes you will use: [Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), and/or [Grok Build](https://x.ai/news/grok-build-cli). Both slots may use the same Runtime. A Runtime is the coding application, not its model or Provider; [Core concepts](CONCEPTS.md#tool-names-and-configuration-layers) explains the difference.
+Prebuilt packages do **not** require Go. Install only the Runtimes you will use: [Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), and/or [Grok Build](https://docs.x.ai/build/overview). Both slots may use the same Runtime. [Core concepts](CONCEPTS.md#tool-names-and-configuration-layers) explains how Runtime, model, and Provider differ.
 
 ## Install a release
 
-Follow [Installation](INSTALLATION.md) for the appropriate platform/channel, then verify `pairroom version`. A Desktop installation does not by itself prove that `pairroom` is discoverable in each native Agent's tool shell; check PATH there before Native setup. Use the CLI from the same release as the Service, and prefer that release tag's documentation when `main` describes newer behavior.
+Follow [Installation](INSTALLATION.md) for the appropriate platform/channel, then verify `pairroom version`. A Desktop installation does not by itself prove that `pairroom` is discoverable in each native Agent's tool shell; check PATH there before Native setup, and use the CLI from the same release as the Service.
 
 ## First run without vendor calls
 
@@ -51,11 +51,11 @@ grok --version
 pairroom doctor --repo /absolute/path/to/repository --json
 ```
 
-Ordinary `doctor` defaults to a Claude Code/Codex pair. For another pair, pass its `--config` and any command-path overrides; [Agent-assisted setup](AGENT_SETUP.md#3-check-git-and-the-runtimes) shows a custom-pair example and how to preserve it in an optional live check. Version responses and ordinary `doctor` are not authenticated coding tests. Resolve executable, Provider/login, and native-policy failures in the harness first. PairRoom does not log in for you.
+`doctor` checks Claude Code plus Codex unless you pass `--config` for another pair; [Agent-assisted setup](AGENT_SETUP.md#3-check-git-and-the-runtimes) has an example, including the optional live check. Neither version output nor `doctor` checks that you are signed in. Resolve executable, Provider/login, and native-policy failures in the harness first. PairRoom does not log in for you.
 
-Stop the isolated Mock Service, then start a non-Mock `pairroom service` or open Desktop without starting a competing owner. In a fresh Embedded Room, choose Runtime, Provider, model/effort, instructions, collaboration, permissions, and new/existing Bindings. Empty overrides inherit native configuration. A supported read-only [CC Switch](https://github.com/farion1231/cc-switch) Profile reference is optional; this external configuration manager is not required when inheriting native settings, and its catalog is not a network model marketplace. See [Configuration](CONFIGURATION.md).
+Stop the isolated Mock Service, then start a non-Mock `pairroom service` or open Desktop without starting a competing owner. In a fresh Embedded Room, choose Runtime, Provider, model/effort, instructions, collaboration, permissions, and new/existing Bindings. Empty overrides inherit native configuration. A read-only [CC Switch](https://github.com/farion1231/cc-switch) Profile reference is optional; its catalog lists your local Profiles, not models for sale. See [Configuration](CONFIGURATION.md).
 
-**Both participants default to YOLO, the most permissive supported native permission profile.** For the first real test, explicitly select supported native read-only restrictions, then send:
+**Both participants default to YOLO, the most permissive native permission setting.** For the first real test, explicitly select supported native read-only restrictions, then send:
 
 ```text
 Explain how this repository is built and tested. Ask your peer to check the
@@ -75,7 +75,7 @@ Start/reuse a non-Mock Service. Install the intended project's hooks and approve
 pairroom relay install --runtime claude,codex
 ```
 
-Reload or restart each harness as required, then run `pairroom relay preflight` in both intended sessions. Read `next_steps` even when `ready` is true: version skew can be a warning. This is a read-only setup check, not proof of hook approval or model access. [Agent-assisted setup](AGENT_SETUP.md#6-native-bind-two-existing-sessions) covers the exact sequence.
+Reload each harness if it requires that, then run `pairroom relay preflight` in both sessions. Read its `next_steps` even when `ready` is `true`, because a CLI/Service version mismatch is only a warning. Preflight cannot see hook approval. [Agent-assisted setup](AGENT_SETUP.md#6-native-bind-two-existing-sessions) has the full sequence.
 
 In the first Agent session, load the installed skill and invoke:
 
@@ -87,7 +87,7 @@ That session creates and binds one Room, then prints the peer's join command. As
 
 Alternatively, create a Native Room with the intended pair in Management and bind to it; skip skill-based creation. Zero-flag bind works only when selection is unambiguous. Reuse the binding across review rounds. If creation succeeded but bind failed, use the printed recovery command rather than `--create` again.
 
-For the initial setup verification, let each bound session finish a turn, then inspect `pairroom relay doctor` for a recent `last_hook_at`. This records that the hook ran for the binding; `hook_approval` remains unknown. It is not a requirement to poll after every conversation round.
+To confirm setup once, let each bound session finish a turn and check that `pairroom relay doctor` shows a recent `last_hook_at`, which means the Stop hook ran. There is no need to repeat this every round.
 
 A peer-directed Stop reply is published in full; `@user` publishes a human-facing result. Without either handle, the private reply body is **not** copied to the Room. Explicit `send`/`exchange` instead uses its command target; avoid a second peer-directed final reply after explicit publication unless duplication is intentional.
 
@@ -128,7 +128,7 @@ Use one writer at a time. Reuse this task worktree across review rounds.
 Do not merge, push or clean up through a helper without authorization.
 ```
 
-Replace the example path with a real worktree created by the project's normal lifecycle owner. No particular scaffold or worktree helper is required by PairRoom. A shell `cd` does not change native permissions or reload host instructions. PairRoom follows the confirmed Native session binding across directory changes; it does not create/merge worktrees or grant path access. Confirm the reviewer sees the writer's actual revision. [Optional Git review versions](NATIVE_RELAY.md#recovery-and-review-surface) help identify evidence but do not approve execution.
+Replace the example path with a real worktree created the way your project normally creates them; PairRoom does not require any particular worktree tool. A shell `cd` does not change native permissions or reload host instructions. PairRoom follows the confirmed Native session binding across directory changes; it does not create/merge worktrees or grant path access. Confirm the reviewer sees the writer's actual revision. [Optional Git review versions](NATIVE_RELAY.md#recovery-and-review-surface) help identify evidence but do not approve execution.
 
 ### Assign execution only when ready
 

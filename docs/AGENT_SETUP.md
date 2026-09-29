@@ -1,6 +1,6 @@
 # Agent-assisted setup
 
-This page is written for a coding Agent ([Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), or [Grok Build](https://x.ai/news/grok-build-cli)) that a user has asked to install PairRoom and check the environment; a human can follow it the same way. It sequences checks and routes to the owning guides instead of restating them. When this page and the installed binary disagree, that binary's `pairroom <command> --help` wins. Relative links resolve against `https://github.com/sean2077/pairroom/blob/main/docs/`; for an installed release, prefer the matching tag's documentation when behavior differs.
+This page is written for a coding Agent ([Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), or [Grok Build](https://docs.x.ai/build/overview)) that a user has asked to install PairRoom and check the environment; a human can follow it the same way. It sequences checks and routes to the owning guides instead of restating them. When this page and the installed binary disagree, that binary's `pairroom <command> --help` wins. Relative links resolve against `https://github.com/sean2077/pairroom/blob/main/docs/`; if the user already has a release installed, that tag's documentation matches it more closely.
 
 A user can start with:
 
@@ -24,7 +24,7 @@ and help me install PairRoom and check my environment. Ask before each change.
 | **Embedded** — start here | First use: PairRoom's conversation UI, with Runtime, Provider, model and effort chosen per slot | 2–4, then 5 |
 | **Native** — daily work (experimental) | Keeping the user's own Claude Code, Codex (including Desktop) or Grok Build sessions | 2–4, then 6 |
 
-Ask which Runtime each of the two slots will use. Both slots may use the same Runtime and still differ in Provider and model, for example one session for planning/review and another independently configured session for implementation. Embedded selects this per slot through a read-only [CC Switch Provider reference](CONFIGURATION.md#cc-switch-provider-references); Native uses whatever each original session is already configured with. [CC Switch](https://github.com/farion1231/cc-switch) is an optional external configuration manager, not a prerequisite when inheriting native configuration. Tool-loop quality with third-party Providers varies, so verify the chosen combination on a small task. [Core concepts](CONCEPTS.md#tool-names-and-configuration-layers) distinguishes these layers.
+Ask which Runtime each of the two slots will use. Both slots may use the same Runtime and still differ in Provider and model, for example one session for planning/review and another independently configured session for implementation. Embedded selects this per slot through a read-only [CC Switch Provider reference](CONFIGURATION.md#cc-switch-provider-references); Native uses whatever each original session is already configured with. [CC Switch](https://github.com/farion1231/cc-switch) is needed only for per-slot Providers in Embedded. Tool-loop quality with third-party Providers varies, so try the chosen combination on a small task first.
 
 ## 2. Make `pairroom` available in this tool shell
 
@@ -37,22 +37,22 @@ Otherwise choose a channel with the user. [Installation](INSTALLATION.md) owns t
 | Windows | `winget install PairRoom` (Desktop; machine-scoped, so Windows may ask the user for elevation) | `C:\Program Files\PairRoom contributors\PairRoom\bin\pairroom.exe` by default. Setup adds that `bin` directory to the machine PATH unless the user opted out; releases before this change did not. |
 | macOS | Desktop `.app.zip` from Releases | `PairRoom.app/Contents/Helpers/pairroom`. Desktop offers to link `/usr/local/bin/pairroom` to it on first start, or later from the menu bar item **Install Command Line Tool…**; the user enters the administrator password. |
 | Linux (Debian/Ubuntu) | Desktop `.deb` | `/usr/local/bin/pairroom` |
-| Linux AppImage | Desktop AppImage | The CLI is not exposed on PATH; install the matching CLI separately with `install.sh` |
+| Linux AppImage | Desktop AppImage | Not included; install the matching CLI separately with `install.sh` |
 | Linux, macOS, Git Bash | CLI `install.sh` | `/usr/local/bin` when writable, otherwise `~/.local/bin`; `PREFIX` overrides |
 
-For `install.sh`, first download into a scratch directory:
+For `install.sh`, download it first:
 
 ```bash
 curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh -o install-pairroom.sh
 ```
 
-Wait for a successful download and let the user inspect the file before executing the separate installation step:
+Let the user read the file, then run it:
 
 ```bash
 sh install-pairroom.sh
 ```
 
-The installer verifies the release checksum before installing and warns when the destination is not on PATH. [CLI installation](INSTALLATION.md#cli-on-any-platform) lists supported architectures, checksum tools, and version/destination overrides.
+The installer verifies the release checksum and warns when the destination is not on PATH. [CLI installation](INSTALLATION.md#cli-on-any-platform) lists supported architectures and the version and destination overrides.
 
 If the CLI is installed but not found, first ask the user to restart the harness: a running harness keeps the environment it started with, including after a Windows Setup that just added the PATH entry. If it is still missing, propose adding its directory to the user's PATH and wait for confirmation, then run `pairroom version` again in a new session. For Native, repeat this check in **both** harnesses; Codex Desktop and a terminal can see different PATHs.
 
@@ -77,15 +77,15 @@ By default `doctor` probes Agent 1 as Claude Code and Agent 2 as Codex: executab
 pairroom doctor --config /absolute/path/doctor-pair.json --repo . --json
 ```
 
-In configuration files, the `claude` and `codex` objects are the historical keys for Agent 1 and Agent 2, not Runtime choices; `runtime` selects the harness. A failed Runtime means installing or updating that official CLI, or pointing `--claude-command`, `--codex-command` or `--grok-command` at it (the flag follows the Runtime, not the slot). Use the official links at the top of this page for upstream setup, then ask the user to confirm that each selected CLI is logged in and answers a trivial prompt on its own. PairRoom never logs in.
+In configuration files, the `claude` and `codex` objects are the historical keys for Agent 1 and Agent 2, not Runtime choices; `runtime` selects the harness. A failed Runtime means installing or updating that official CLI, or pointing `--claude-command`, `--codex-command` or `--grok-command` at it (the flag follows the Runtime, not the slot). The links at the top of this page lead to each vendor's setup instructions. Then ask the user to confirm that each selected CLI is logged in and answers a trivial prompt on its own. PairRoom never logs in.
 
-Only with explicit consent, because it consumes quota: add `--live` to the **same selected-pair command**, keeping its `--config`, repository, and command-path overrides. For the custom pair above:
+Only with explicit consent, because it uses quota: add `--live` to the same command, keeping its `--config` and command-path overrides so the same pair is tested. For the custom pair above:
 
 ```bash
 pairroom doctor --config /absolute/path/doctor-pair.json --repo . --live --json
 ```
 
-For the default pair, `pairroom doctor --repo . --live --json` is sufficient. Omitting a custom `--config` would check the default pair instead. The live check starts a fresh native session per slot in a disposable Git workspace and requires a nonce reply, which proves authentication and a model response for that tested configuration, not production task quality or Native hook readiness. See [CLI reference](CLI_REFERENCE.md#installation-versus-runtime-availability).
+For the default pair, `pairroom doctor --repo . --live --json` is enough. The live check starts a fresh native session per slot in a disposable Git workspace and requires a nonce reply, which proves sign-in and a model response for that configuration. It says nothing about Native hooks. See [CLI reference](CLI_REFERENCE.md#installation-versus-runtime-availability).
 
 For Embedded per-slot Providers, `pairroom providers --json` lists CC Switch Profiles read-only and redacted, including why an unsupported Profile is disabled. It never changes CC Switch's current Profile.
 
@@ -164,4 +164,4 @@ PairRoom setup report
 - Next step:      <the one thing the user should do now>
 ```
 
-A hook timestamp records execution, not a machine-readable approval grant or model acceptance. This report contains local paths. Before sharing it publicly, remove them, or use the safe report from **Settings → Diagnostics** instead.
+`last_hook_at` shows the hook ran; PairRoom has no way to read the approval itself. This report contains local paths. Before sharing it publicly, remove them, or use the safe report from **Settings → Diagnostics** instead.
