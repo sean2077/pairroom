@@ -86,6 +86,12 @@ for (const uiRoot of uiRoots) {
   }
 }
 for (const key of referenced) if (!en[key]) throw new Error(`UI references missing i18n key: ${key}`);
+// The desktop bridge prefixes its own keys; i18next returns a missing key
+// verbatim, so its English fallback would never be shown.
+const desktopBridge = fs.readFileSync(path.join(root, 'internal/webui/assets/desktop.js'), 'utf8');
+for (const [, key] of desktopBridge.matchAll(/\btext\(\s*'([^']+)'/g)) {
+  if (!en[`desktop.${key}`]) throw new Error(`desktop bridge references missing i18n key: desktop.${key}`);
+}
 
 // Native wake audit values are a fixed server vocabulary shown in the Room.
 const relayTypes = fs.readFileSync(path.join(root, 'internal/relay/types.go'), 'utf8');

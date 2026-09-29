@@ -10,6 +10,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 )
 
 const MessageKind = "pairroom.desktop.folder"
@@ -46,10 +47,12 @@ type Response struct {
 	Error     string `json:"error,omitempty"`
 }
 
-// Picker validates bridge requests and normalizes chooser outcomes. It keeps no
-// state: one dialog never blocks, reorders, or cancels another.
+// Picker validates bridge requests and normalizes chooser outcomes. At most one
+// dialog is open at a time: the page lane can expire while the window-modal
+// dialog is still showing, and a second request must not stack another dialog.
 type Picker struct {
 	chooser Chooser
+	open    atomic.Bool
 }
 
 func New(chooser Chooser) *Picker { return &Picker{chooser: chooser} }
@@ -83,15 +86,20 @@ func (p *Picker) Respond(request Request, deliver func(Response)) {
 	go func() { deliver(p.Pick(request)) }()
 }
 
-// Pick shows the dialog and reports the outcome. A missing chooser, a failed
-// dialog, and a non-absolute answer all fail closed; a cancelled dialog is a
-// normal outcome, not an error.
+// Pick shows the dialog and reports the outcome. A missing chooser, an already
+// open dialog, a failed dialog, and a non-absolute answer all fail closed; a
+// cancelled dialog is a normal outcome, not an error.
 func (p *Picker) Pick(request Request) Response {
 	response := Response{ID: request.ID}
 	if p.chooser == nil {
 		response.Error = "The native folder dialog is unavailable"
 		return response
 	}
+	if !p.open.CompareAndSwap(false, true) {
+		response.Error = "A folder dialog is already open"
+		return response
+	}
+	defer p.open.Store(false)
 	path, err := p.chooser.ChooseFolder(DefaultTitle)
 	if err != nil {
 		response.Error = err.Error()

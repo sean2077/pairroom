@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -129,6 +130,40 @@ func TestRespondNeverBlocksTheBridgeCaller(t *testing.T) {
 	}
 	if len(responses) != 0 {
 		t.Fatal("the dialog delivered more than one response")
+	}
+}
+
+func TestPickRefusesASecondDialogWhileOneIsOpen(t *testing.T) {
+	// The page lane expires before a patient user answers, so a retry can reach
+	// the host while the first dialog is still showing; it must not stack.
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	chosen := filepath.Join(t.TempDir(), "worktree")
+	var calls atomic.Int32
+	picker := New(chooserFunc(func(string) (string, error) {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+		return chosen, nil
+	}))
+	first := make(chan Response, 1)
+	go func() { first <- picker.Pick(Request{ID: "abc:1"}) }()
+	<-entered
+	second := picker.Pick(Request{ID: "abc:2"})
+	close(release)
+	if second.ID != "abc:2" || second.Error == "" || second.Path != "" || second.Cancelled {
+		t.Fatalf("a concurrent request must fail closed: %+v", second)
+	}
+	if response := <-first; response.ID != "abc:1" || response.Path != chosen {
+		t.Fatalf("the open dialog must still answer its own request: %+v", response)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("chooser opened %d dialogs, want 1", calls.Load())
+	}
+	// Closing the dialog frees the picker for the next request.
+	if response := picker.Pick(Request{ID: "abc:3"}); response.Path != chosen {
+		t.Fatalf("the picker stayed busy after the dialog closed: %+v", response)
 	}
 }
 
