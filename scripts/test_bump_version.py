@@ -56,6 +56,19 @@ class BumpVersionTests(unittest.TestCase):
             self.assertIn("## [Unreleased]\n\n## [v1.3.0] — 2026-09-17\n\n- pending note\n\n## [v1.2.3] — 2026-09-01", changelog)
             self.assertTrue(any("VERSION: 1.2.3 -> 1.3.0" in line for line in report))
 
+    def test_moves_grouped_unreleased_notes_verbatim(self) -> None:
+        # Group headings carry their section into the release unchanged, and
+        # the whole Unreleased body moves in its existing order.
+        grouped = "### Added\n\n- new capability\n\n### Fixed\n\n- repaired thing\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_fixture(root, unreleased_body=grouped)
+            bumper.apply_bump(root, "1.3.0", "2026-09-17")
+            changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+            self.assertIn("## [v1.3.0] — 2026-09-17\n\n" + grouped, changelog)
+            self.assertLess(changelog.index("## [v1.3.0]"), changelog.index("## [v1.2.3]"))
+            self.assertEqual(changelog.count("### Added"), 1)
+
     def test_empty_unreleased_warns_and_keeps_old_sections(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
