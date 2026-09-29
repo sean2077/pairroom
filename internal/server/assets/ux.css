@@ -252,7 +252,6 @@ body.ux-enhanced #scroll-bottom.ux-attention::after {
 }
 .ux-menu-header > div { display: grid; gap: 2px; }
 .ux-menu-header strong { font-size: var(--text-title); }
-.ux-menu-header span { color: var(--faint); font-size: var(--text-xs); }
 .ux-menu-close {
   width: 30px;
   height: 30px;
@@ -364,7 +363,6 @@ body.ux-density-compact .tab-content { padding: 9px; }
     --ux-panel-gap: 8px;
   }
   body.ux-enhanced .chat-toolbar > div:first-child { min-width: 0; }
-  body.ux-enhanced .chat-description { display: none; }
   body.ux-enhanced .toolbar-actions > :where(button, select, .search-box) { flex: 0 0 auto; white-space: nowrap; }
   body.ux-enhanced #export-markdown { display: none; }
 }
@@ -461,7 +459,6 @@ body.ux-density-compact .tab-content { padding: 9px; }
   body.ux-enhanced .topbar { padding-inline: 10px; }
   body.ux-enhanced .brand { gap: 8px; }
   body.ux-enhanced .brand-mark { width: 32px; height: 32px; }
-  body.ux-enhanced .brand-tagline { display: none; }
   body.ux-enhanced .topbar-actions { gap: 5px; }
   body.ux-enhanced .topbar-actions .icon-button { width: 31px; height: 31px; }
   body.ux-enhanced #notification-button { display: none; }
@@ -471,7 +468,6 @@ body.ux-density-compact .tab-content { padding: 9px; }
     min-height: 58px;
     padding-inline: 12px;
   }
-  body.ux-enhanced .chat-description { display: none; }
   body.ux-enhanced .toolbar-actions {
     flex-wrap: nowrap;
     max-width: 66%;
@@ -518,7 +514,6 @@ body.ux-density-compact .tab-content { padding: 9px; }
   body.ux-enhanced #export-markdown { display: none; }
   body.ux-enhanced .toolbar-actions { max-width: 72%; }
   body.ux-enhanced .message-content { max-width: 93%; }
-  body.ux-enhanced .composer-footnote #delivery-hint { display: none; }
   .ux-shortcuts { grid-template-columns: 1fr; }
 }
 

@@ -59,20 +59,20 @@
       const environment = actionButton(t('diagnostics.checkEnvironment'), () => run('environment'), 'secondary-button', busy);
       environment.id = 'diagnostic-environment';
       const controls = node('section', { className: 'panel diagnostic-controls', 'aria-labelledby': 'diagnostic-controls-title' },
-        node('div', {}, node('p', { className: 'eyebrow', textContent: t('diagnostics.eyebrow') }), node('h2', { id: 'diagnostic-controls-title', className: 'flush-heading', textContent: t('diagnostics.startTitle') }), node('p', { className: 'muted', textContent: t('diagnostics.intro') })),
+        node('div', {}, node('h2', { id: 'diagnostic-controls-title', className: 'flush-heading', textContent: t('diagnostics.startTitle') })),
         node('div', { className: 'diagnostic-fields' },
           node('label', { for: 'diagnostic-scope' }, node('span', { textContent: t('diagnostics.scope') }), scopeSelect),
           node('label', { for: 'diagnostic-actor' }, node('span', { textContent: t('diagnostics.agent') }), actorSelect)
         ),
-        node('div', { className: 'section-actions' }, environment, live, busy ? actionButton(t('diagnostics.cancel'), () => cancel(true), 'text-button') : null),
-        node('p', { className: 'diagnostic-note', textContent: t('diagnostics.liveDisclosure') })
+        node('div', { className: 'section-actions' }, environment, live, busy ? actionButton(t('diagnostics.cancel'), () => cancel(true), 'text-button') : null)
       );
       const content = node('div', { className: 'view-stack diagnostic-page' }, controls);
-      const notice = node('div', { id: 'diagnostic-status', className: `callout ${error ? 'danger' : 'boundary'}`, role: error ? 'alert' : 'status', 'aria-live': 'polite' },
-        node('strong', { textContent: t(error ? `diagnostics.error.${error}` : (busy ? 'diagnostics.running' : 'diagnostics.passiveBoundary')) }),
+      // The idle page states nothing extra: the Runtime test confirmation owns
+      // the cost and native-configuration boundary.
+      if (busy || error) content.append(node('div', { id: 'diagnostic-status', className: `callout ${error ? 'danger' : 'boundary'}`, role: error ? 'alert' : 'status', 'aria-live': 'polite' },
+        node('strong', { textContent: t(error ? `diagnostics.error.${error}` : 'diagnostics.running') }),
         node('span', { textContent: t(busy ? 'diagnostics.runningHelp' : 'diagnostics.nativeBoundary') })
-      );
-      content.append(notice);
+      ));
       if (report) {
         const failed = report.checks.filter((check) => check.status === 'fail').length;
         const warned = report.checks.filter((check) => check.status === 'warn').length;
@@ -93,10 +93,6 @@
           )))
         );
         content.append(summary, node('p', { className: 'muted diagnostic-note', textContent: t('diagnostics.exportBoundary') }));
-      } else if (!busy && !error) {
-        content.append(node('section', { className: 'diagnostic-guide' },
-          ...['environment', 'startup', 'response'].map((step, index) => node('article', {}, node('span', { className: 'diagnostic-step', textContent: `0${index + 1}` }), node('h3', { textContent: t(`diagnostics.guide.${step}`) }), node('p', { className: 'muted', textContent: t(`diagnostics.guide.${step}Help`) })))
-        ));
       }
       host.replaceChildren(content);
       if (focusID) host.querySelector(`#${focusID}`)?.focus({ preventScroll: true });

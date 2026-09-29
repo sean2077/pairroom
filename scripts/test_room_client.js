@@ -66,7 +66,7 @@ function client() {
     render = (force) => renders.push(force);
     toast = (message) => notices.push(message);
     renderAttachmentStrip = refreshGitStatus = postSurfaceState =
-      renderMessage = renderParticipants = renderTimeline = queueRender = scrollBottom = setConnection = updateDeliveryHint = updateNotificationButton = recomputeUnread = () => {};
+      renderMessage = renderParticipants = renderTimeline = queueRender = scrollBottom = setConnection = updateNotificationButton = recomputeUnread = () => {};
   `;
   assert.ok(source.endsWith('  bootRoom();\n})();\n'), 'keep unit-test boot interception explicit');
   vm.runInNewContext(source.replace(/  bootRoom\(\);\n\}\)\(\);\n$/, hook + '\n})();\n'), sandbox);

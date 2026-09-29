@@ -515,15 +515,15 @@
     const snapshot = state.snapshot;
     switch (state.route.name) {
       case 'projects':
-        return { title: t('ui.projectsAndRooms'), subtitle: t("ui.manageCanonicalGitWorktreesAndCollaborationRoomsThatAreIsolatedFromEach") };
+        return { title: t('ui.projectsAndRooms'), subtitle: '' };
       case 'project': {
         const project = snapshot?.projects?.find((item) => item.id === state.route.projectID);
-        return { title: projectName(project) || t('common.project'), subtitle: project?.root || t("ui.checkTheProjectIdentityRoomAndRunningStatus") };
+        return { title: projectName(project) || t('common.project'), subtitle: project?.root || '' };
       }
       case 'runtimes':
-        return { title: t('room.roomRuntimes'), subtitle: t("ui.viewCapacityQueuesActiveTurnAndIdlePendingStatus") };
+        return { title: t('room.roomRuntimes'), subtitle: '' };
       case 'settings':
-        return { title: t("ui.settings"), subtitle: t("ui.adjustTheCurrentAdminPageExperienceAndCheckServiceStartupPoliciesAnd") };
+        return { title: t("ui.settings"), subtitle: '' };
       case 'room': {
         const room = roomByID(state.route.roomID);
         const runtime = getRuntime(state.route.roomID);
@@ -533,7 +533,7 @@
         };
       }
       default:
-        return { title: t("ui.overview"), subtitle: t("ui.multiProjectLocalCollaborationControlSurfaceForSupportedRuntimes") };
+        return { title: t("ui.overview"), subtitle: '' };
     }
   }
 
@@ -785,7 +785,6 @@
     const title = phase === 'queued' ? t("ui.queuedValue", { value0: (runtime.queue_position || '?') }) : (phase === 'starting' ? t("ui.startingRuntime") : (phase === 'failed' ? t("ui.runtimeFailed") : t("ui.runtimeHasHung")));
     const detail = runtime.last_error || t("ui.switchingBackToThisTabWillAutomaticallyReRequestActivationTheBackground");
     return node('div', { className: 'room-placeholder' },
-      node('p', { className: 'eyebrow', textContent: t('common.roomSurfaceUpper') }),
       node('h2', { textContent: room?.name || t('common.room') }),
       node('p', { textContent: `${title} · ${detail}` }),
       actionButton(t("ui.reactivate"), () => activateRoomRuntime(room.id), 'primary-button')
@@ -905,9 +904,7 @@
     const heroTitle = projects.length
       ? t("ui.valueActiveRoomsAcrossValueProjects", { value0: (summary.active_rooms), value1: (summary.projects) })
       : t("ui.startTheControlPlaneWithYourFirstGitProject");
-    const heroText = projects.length
-      ? t("ui.eachRoomHasExclusiveNativeSessionsSwitchingManagementViews")
-      : t("ui.explicitlyRegisterTheCanonicalGitWorktreeAndThenCreateIsolatedAgentRooms");
+    const heroText = projects.length ? '' : t("ui.explicitlyRegisterTheCanonicalGitWorktreeAndThenCreateIsolatedAgentRooms");
 
     const heroActions = [
       actionButton(t("ui.registerProject"), () => openProjectDialog(), 'primary-button'),
@@ -918,15 +915,13 @@
       node('div', { className: 'view-stack' },
         node('section', { className: 'panel hero-panel' },
           node('div', { className: 'hero-copy' },
-            node('p', { className: 'eyebrow', textContent: t('common.localPairingControlPlaneUpper') }),
             node('h2', { textContent: heroTitle }),
-            node('p', { textContent: heroText }),
+            heroText ? node('p', { textContent: heroText }) : null,
             node('div', { className: 'hero-actions' }, ...heroActions)
           ),
           node('div', { className: 'hero-meta' },
             heroMeta(t("ui.runtimeCapacity"), policy.limit ? `${formatNumber(summary.runtime_capacity_used)} / ${formatNumber(policy.limit)}` : formatNumber(summary.runtime_capacity_used)),
             heroMeta(t("ui.idleSuspend"), policy.idle_timeout_seconds ? formatDurationSeconds(policy.idle_timeout_seconds) : t("ui.determinedByStartupParameters")),
-            heroMeta(t("ui.operatingMode"), snapshot.healthy ? t('common.failSafe') : t('common.failClosed')),
             heroMeta(t("ui.version"), snapshot.version || t('common.development'))
           )
         ),
@@ -934,28 +929,24 @@
           statCard(t('common.projects'), summary.projects, t("ui.valueUnavailable", { value0: (summary.unavailable_projects) }), '⌂', 'accent', () => navigate('#/projects')),
           statCard(t("ui.activityRoom"), summary.active_rooms, t("ui.valueArchived", { value0: (summary.archived_rooms) }), '◇', 'good', () => navigate('#/projects')),
           statCard(t("ui.working"), summary.busy_runtimes, t("ui.valueQueued", { value0: (summary.queued_runtimes) }), '◎', summary.queued_runtimes ? 'warn' : '', () => navigate('#/runtimes')),
-          statCard(t("ui.needAttention"), summary.attention_items, summary.attention_items ? t("ui.bindingRuntimePathOrCleanupDiagnostics") : t("ui.thereAreCurrentlyNoBlocks"), '!', summary.attention_items ? 'danger' : 'good')
+          statCard(t("ui.needAttention"), summary.attention_items, summary.attention_items ? t("ui.bindingRuntimePathOrCleanupDiagnostics") : '', '!', summary.attention_items ? 'danger' : 'good')
         ),
         node('section', { className: 'two-panel-grid' },
-          panel(t("ui.needAttention"), t("ui.blockActivationOrProjectsThatRequireManualProcessing"),
+          panel(t("ui.needAttention"), '',
             attention.length ? node('div', { className: 'list' }, ...attention.slice(0, 8).map(renderAttentionItem))
-              : emptyState('✓', t("ui.everythingIsFine"), t("ui.thereAreCurrentlyNoUnavailableProjectsFailedRuntimesBindingsToBeCompleted"), true),
+              : emptyState('✓', t("ui.everythingIsFine"), '', true),
             attention.length > 8 ? t("ui.valueItemsHidden", { value0: (attention.length - 8) }) : ''
           ),
-          panel(t("ui.runInRealTime"), t("ui.activeWorkingAndQueuedRooms"),
+          panel(t("ui.runInRealTime"), '',
             live.length ? node('div', { className: 'list' }, ...live.slice(0, 8).map(renderLiveItem))
               : emptyState('◎', t("ui.thereIsCurrentlyNoActiveRuntime"), t("ui.afterOpeningARoomTheRuntimeWillStartLazilyBasedOnCapacity"), true)
           )
         ),
-        panel(t('common.projects'), t("ui.overviewOfRecentlyRegisteredWorkspacesAndRooms"),
+        panel(t('common.projects'), '',
           projects.length ? node('div', { className: 'list' }, ...projects.slice(0, 6).map(renderProjectOverviewItem))
-            : emptyState('⌂', t("ui.notYetRegisteredProject"), t("ui.onlyAbsolutePathsEnteredExplicitlyByTheUserAreAcceptedAndDevelopment"), true, actionButton(t("ui.registerYourFirstProject"), () => openProjectDialog(), 'primary-button compact-button')),
+            : emptyState('⌂', t("ui.notYetRegisteredProject"), '', true, actionButton(t("ui.registerYourFirstProject"), () => openProjectDialog(), 'primary-button compact-button')),
           projects.length > 6 ? t("ui.viewAllWorkspacesOnTheProjectsPage") : '',
           projects.length > 6 ? actionButton(t("ui.viewAll"), () => navigate('#/projects'), 'text-button') : null
-        ),
-        node('aside', { className: 'callout boundary' },
-          node('strong', { textContent: t('common.transcriptBoundary') }),
-          node('span', { textContent: t("ui.reusingExistingSessionThreadOnlyRestoresTheVendorContextThePublicTimeline") })
         )
       )
     );
@@ -972,12 +963,6 @@
 
     view.replaceChildren(
       node('div', { className: 'view-stack' },
-        node('section', { className: 'section-header' },
-          node('div', {}, node('h2', { textContent: t("ui.workspaceManagement") }), node('p', { textContent: t("ui.aProjectCorrespondsToACanonicalGitWorktreeEachProjectCanHave") })),
-          node('div', { className: 'section-actions' },
-            actionButton(t("ui.registerProject"), () => openProjectDialog(), 'primary-button')
-          )
-        ),
         node('section', { className: 'panel panel-body toolbar' },
           node('label', { className: 'search-field' },
             node('span', { textContent: '⌕', 'aria-hidden': 'true' }),
@@ -995,11 +980,7 @@
           ? node('section', { className: 'project-grid' }, ...projectModels.map(renderProjectCard))
           : emptyState('⌕', t("ui.noMatchingProject"), state.search ? t("ui.adjustYourSearchTermsOrFilters") : t("ui.registerAGitWorktreeToGetStarted"), false,
             state.search ? actionButton(t("ui.clearFilters"), () => { state.search = ''; $('global-search').value = ''; state.filters.projectAvailability = 'all'; renderProjects(); }, 'secondary-button')
-              : actionButton(t("ui.registerProject9c99cf3"), () => openProjectDialog(), 'primary-button')),
-        node('aside', { className: 'callout neutral' },
-          node('strong', { textContent: t('room.projectIdentity') }),
-          node('span', { textContent: t("ui.theServiceResolvesSymbolicLinksAndPerformsGitWorktreeRootNormalizationEquivalent") })
-        )
+              : actionButton(t("ui.registerProject9c99cf3"), () => openProjectDialog(), 'primary-button'))
       )
     );
   }
@@ -1102,15 +1083,15 @@
         node('section', { className: 'stats-grid' },
           statCard(t("workspace.activeRooms"), activeRooms, t("ui.valueArchivedc521841", { value0: (rooms.length - activeRooms) }), '◇', 'accent'),
           statCard(t("workspace.working"), runtimeCounts.busy, t('room.activeCount', { count: runtimeCounts.active }), '◎', runtimeCounts.busy ? 'warn' : ''),
-          statCard(t("workspace.queued"), runtimeCounts.queued, runtimeCounts.queued ? t("ui.waitingForGlobalCapacity") : t("ui.thereIsCurrentlyNoWaiting"), '↥', runtimeCounts.queued ? 'warn' : 'good'),
-          statCard(t("workspace.failed"), runtimeCounts.failed, runtimeCounts.failed ? t("ui.viewRuntimeDiagnostics") : t("ui.noFailureRuntime"), '!', runtimeCounts.failed ? 'danger' : 'good')
+          statCard(t("workspace.queued"), runtimeCounts.queued, runtimeCounts.queued ? t("ui.waitingForGlobalCapacity") : '', '↥', runtimeCounts.queued ? 'warn' : 'good'),
+          statCard(t("workspace.failed"), runtimeCounts.failed, runtimeCounts.failed ? t("ui.viewRuntimeDiagnostics") : '', '!', runtimeCounts.failed ? 'danger' : 'good')
         ),
         node('section', { className: 'project-room-section' },
-          panel(t('common.rooms'), t("ui.publicTimelinesAttachmentsApprovalsAndAgentBindingsAreAllIsolatedByRoom"),
+          panel(t('common.rooms'), '',
             node('div', {},
               node('div', { className: 'project-room-tools' }, search, phase, node('span', { className: 'muted', role: 'status', textContent: t('workspace.results', { count: visibleRooms.length }) })),
               visibleRooms.length ? node('div', { className: 'room-list' }, ...visibleRooms.map((room) => renderRoomRow(room, runtimeByRoom.get(room.id))))
-              : emptyState('◇', t(filter.search || filter.phase !== 'all' ? 'workspace.noMatches' : 'ui.noVisibleRoom'), t('workspace.emptyHelp'), true, actionButton(t('workspace.clearFilters'), () => { filter.search = ''; filter.phase = 'all'; renderProjectDetail(projectID); }, 'secondary-button'))
+              : emptyState('◇', t(filter.search || filter.phase !== 'all' ? 'workspace.noMatches' : 'ui.noVisibleRoom'), '', true, actionButton(t('workspace.clearFilters'), () => { filter.search = ''; filter.phase = 'all'; renderProjectDetail(projectID); }, 'secondary-button'))
             ),
             '',
             node('div', { className: 'section-actions' },
@@ -1124,17 +1105,17 @@
         ),
         node('details', { className: 'project-details panel' },
           node('summary', { textContent: t('workspace.projectDetails') }),
-          panel(t('room.projectIdentity'), t("ui.canonicalWorktreeRecordsInTheRegistry"),
+          panel(t('room.projectIdentity'), '',
             node('div', { className: 'key-value-grid' },
               keyValue(t('room.projectId'), project.id, true),
               keyValue(t("ui.creationTime"), formatDateTime(project.created_at)),
               keyValue(t('room.canonicalRoot'), project.root, true),
               keyValue(t("ui.availability"), project.available ? t('common.available') : t('common.unavailable'))
             ),
-            project.diagnostic || t("ui.serviceDoesNotImplicitlySwitchProjectFromTheCurrentWorkingDirectory")
+            project.diagnostic || ''
           ),
         state.snapshot?.capabilities?.project_refresh || state.snapshot?.capabilities?.project_removal
-          ? panel(t('room.projectMaintenance'), t("ui.recheckTheCanonicalPathOrSafelyLogOutOfTheEmptyProject"),
+          ? panel(t('room.projectMaintenance'), '',
             node('div', { className: 'section-actions' },
               state.snapshot?.capabilities?.project_refresh
                 ? actionButton(t("ui.recheckPath"), () => refreshProject(project), 'secondary-button')
@@ -1220,7 +1201,7 @@
       node('span', { className: 'room-meta-label', textContent: actor === 'slot1' ? t('agent.agent1') : t('agent.agent2') }),
       node('div', { className: 'room-meta-lines' },
         node('span', { className: 'room-meta-line', textContent: runtimeDisplayName(selection?.runtime) }),
-        node('span', { className: `badge plain binding-chip ${bindingTone(binding)}`.trim(), textContent: bindingText(binding) }),
+        node('span', { className: `badge plain binding-chip ${bindingTone(binding)}`.trim(), textContent: bindingText(binding), title: binding?.pending && binding.mode === 'new' ? t(NEW_BINDING_HINT_KEY) : '' }),
         selection ? node('span', { className: 'room-meta-line', textContent: selection.model || t('room.nativeDefault'), title: t('agent.model') }) : null,
         selection ? node('span', { className: 'room-meta-line', textContent: providerDisplayName(selection.provider), title: providerTooltip(selection.provider) }) : null,
       ));
@@ -1266,27 +1247,24 @@
 
     view.replaceChildren(
       node('div', { className: 'view-stack' },
-        node('section', { className: 'section-header' },
-          node('div', {}, node('h2', { textContent: t('room.runtimeOrchestration') }), node('p', { textContent: t("ui.onlyIdleRuntimeIsRecycledActiveTurnsAreNeverPreemptedDueTo") })),
-          node('div', { className: 'section-actions' }, phaseSelect, actionButton(t("ui.refreshStatus"), () => refresh({ notify: true, forceRender: true }), 'secondary-button'))
-        ),
+        node('div', { className: 'section-actions runtime-toolbar' }, phaseSelect, actionButton(t("ui.refreshStatus"), () => refresh({ notify: true, forceRender: true }), 'secondary-button')),
         node('section', { className: 'three-panel-grid' },
           node('article', { className: 'panel capacity-card' },
             node('div', { className: 'capacity-heading' }, node('div', {}, node('div', { className: 'stat-label', textContent: t("ui.globalRuntimeCapacity") }), node('div', { className: 'capacity-value' }, formatNumber(summary.runtime_capacity_used), node('small', { textContent: ` / ${policy.limit ? formatNumber(policy.limit) : '—'}` }))), statusBadge(percent >= 100 ? 'full' : 'available', percent >= 100 ? 'warn' : 'good')),
             node('progress', { className: 'progress-track', max: String(limit), value: String(summary.runtime_capacity_used), 'aria-label': t("ui.globalRuntimeCapacity") }),
             node('div', { className: 'capacity-legend' }, node('span', {}, node('i'), t('room.activeCount', { count: summary.active_runtimes })), node('span', {}, node('i', { className: 'busy' }), t('room.workingCount', { count: summary.busy_runtimes })), node('span', {}, node('i', { className: 'queued' }), t('room.queuedCount', { count: summary.queued_runtimes })))
           ),
-          statCard(t('room.idleTimeout'), policy.idle_timeout_seconds ? formatDurationSeconds(policy.idle_timeout_seconds) : '—', t("ui.countingFromLastActivity"), '◷', 'accent'),
-          statCard(t('ui.queue'), summary.queued_runtimes, summary.queued_runtimes ? t("ui.fifoDisconnectingTheBrowserDoesNotCancelTheDemand") : t("ui.thereIsCurrentlyNoWaiting"), '↥', summary.queued_runtimes ? 'warn' : 'good')
+          statCard(t('room.idleTimeout'), policy.idle_timeout_seconds ? formatDurationSeconds(policy.idle_timeout_seconds) : '—', t("ui.theCalculationOnlyStartsWhenThereIsNoActiveTurnInThe"), '◷', 'accent'),
+          statCard(t('ui.queue'), summary.queued_runtimes, summary.queued_runtimes ? t("ui.fifoDisconnectingTheBrowserDoesNotCancelTheDemand") : '', '↥', summary.queued_runtimes ? 'warn' : 'good')
         ),
         queued.length ? panel(t('room.activationQueue'), t("ui.whenAllCapacityIsOccupiedByTheWorkingRuntimeTheNewRoom"),
           node('div', { className: 'list' }, ...queued.map((item) => renderQueueItem(item)))
         ) : null,
         panel(t("ui.allRoomRuntime"), t("ui.valueRoomsSortedByWorkPriority", { value0: (models.length) }),
           models.length ? runtimeTable(models) : emptyState('◎', t("ui.noMatchingRuntime"), t("ui.adjustStatusFilter"), true),
-          t("ui.failedAndStillOccupyingCapacityMeansThatTheCleanupStatusIsUncertain")
+          models.some((item) => item.runtime.phase === 'failed') ? t("ui.failedAndStillOccupyingCapacityMeansThatTheCleanupStatusIsUncertain") : ''
         ),
-        node('aside', { className: 'callout warning' },
+        node('aside', { className: 'callout neutral' },
           node('strong', { textContent: t('room.nonPreemptivePolicy') }),
           node('span', { textContent: t("ui.suspendOnlyTakesEffectForIdleQueuedOrRuntimesThatCanBe") })
         )
@@ -1353,9 +1331,6 @@
     const content = node('section', { className: 'settings-content' }, renderSettingsSection());
     view.replaceChildren(
       node('div', { className: 'view-stack' },
-        node('section', { className: 'section-header' },
-          node('div', {}, node('h2', { textContent: t('room.managementSettings') }), node('p', { textContent: t("ui.interfacePreferencesOnlyApplyToTheCurrentTabServicePoliciesAreDetermined") }))
-        ),
         node('div', { className: 'settings-grid' }, nav, content)
       )
     );
@@ -1370,11 +1345,11 @@
     if (state.settingsSection === 'runtime') {
       const command = runtimeCommand(policy);
       return node('div', { className: 'view-stack' },
-        settingsPanel(t("ui.effectiveRuntimePolicies"), t("ui.theNonPreemptibleSchedulingParametersActuallyUsedByTheCurrentProcess"),
+        settingsPanel(t("ui.effectiveRuntimePolicies"), '',
           settingRow(t("ui.maxActivityRuntime"), t("ui.startingActiveStoppingAndCleaningUpUncertainFailedRuntimeAllOccupyCapacity"), runtimeLimitControl(policy)),
           settingRow(t('room.idleTimeout'), t("ui.theCalculationOnlyStartsWhenThereIsNoActiveTurnInThe"), node('strong', { textContent: policy.idle_timeout_seconds ? formatDurationSeconds(policy.idle_timeout_seconds) : t("ui.notExposed") })),
-          settingRow(t('room.reconcileInterval'), t("ui.howOftenTheRuntimeManagerChecksIdleQueueAndCapacity"), node('strong', { textContent: policy.poll_interval_milliseconds ? `${window.PairRoomI18n.formatNumber(policy.poll_interval_milliseconds)} ms` : t("ui.notExposed") })),
-          settingRow(t('room.closeTimeout'), t("ui.theSingleDeadlineForSafelyShuttingDownTheRoomRuntime"), node('strong', { textContent: policy.close_timeout_seconds ? formatDurationSeconds(policy.close_timeout_seconds) : t("ui.notExposed") }))
+          settingRow(t('room.reconcileInterval'), '', node('strong', { textContent: policy.poll_interval_milliseconds ? `${window.PairRoomI18n.formatNumber(policy.poll_interval_milliseconds)} ms` : t("ui.notExposed") })),
+          settingRow(t('room.closeTimeout'), '', node('strong', { textContent: policy.close_timeout_seconds ? formatDurationSeconds(policy.close_timeout_seconds) : t("ui.notExposed") }))
         ),
         node('section', { className: 'panel' },
           node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: t("ui.adjustStartupParameters") }), node('p', { textContent: t("ui.policyChangesRequireAControlledRestartToAvoidDynamicReconfigurationOfRunning") }))),
@@ -1382,37 +1357,35 @@
             node('div', { className: 'command-box' }, node('code', { textContent: command }), actionButton(t("ui.copy"), () => copyText(command, t("ui.theStartupCommandHasBeenCopied")), 'secondary-button compact-button'))
           ),
           node('footer', { className: 'panel-footer', textContent: t("ui.thisFrontEndExampleOnlyCoversTheRuntimeParametersPleaseRetainOther") })
-        ),
-        node('aside', { className: 'callout warning' }, node('strong', { textContent: t("ui.capacityAndIdle") }), node('span', { textContent: t("ui.capacityCanBeAdjustedImmediatelyOnThisPageLoweringTheLimitWill") }))
+        )
       );
     }
     if (state.settingsSection === 'operations') {
       const daemonInstall = daemonInstallCommand(policy);
       return node('div', { className: 'view-stack' },
         settingsPanel(t("ui.daemonShortcutCommand"), t("ui.pairroomWebShellDoesNotDirectlyStopOrRestartTheHostProcess"),
-          settingRow(t("ui.openManagementShell"), t("ui.parseAndVerifyTheCompleteAuthenticationAddressOfTheCurrentDaemonAnd"), inlineCommand('pairroom daemon open', t("ui.daemonOpenCommandCopied"))),
-          settingRow(t("ui.checkStatus"), t("ui.displaysInstallationStatusPlatformPidLogsAndRotationMetadata"), inlineCommand('pairroom daemon status', t("ui.daemonStatusCommandHasBeenCopied"))),
-          settingRow(t("ui.followTheLog"), t("ui.readTheMergedStdoutStderrLogManagedByTheDaemon"), inlineCommand('pairroom daemon logs -f', t("ui.daemonLogsCommandHasBeenCopied"))),
+          settingRow(t("ui.openManagementShell"), '', inlineCommand('pairroom daemon open', t("ui.daemonOpenCommandCopied"))),
+          settingRow(t("ui.checkStatus"), '', inlineCommand('pairroom daemon status', t("ui.daemonStatusCommandHasBeenCopied"))),
+          settingRow(t("ui.followTheLog"), '', inlineCommand('pairroom daemon logs -f', t("ui.daemonLogsCommandHasBeenCopied"))),
           settingRow(t("ui.controlledRestart"), t("ui.inheritTheCompleteInstalledServiceDefinitionAndWaitForTheActiveTurn"), inlineCommand('pairroom daemon restart', t("ui.theDaemonRestartCommandHasBeenCopied")))
         ),
         node('section', { className: 'panel' },
           node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: t("ui.updateInstalledRuntimeParameters") }), node('p', { textContent: t("ui.daemonRestartDoesNotAcceptNewServiceParametersTheCompleteInstallationDefinition") }))),
           node('div', { className: 'panel-body command-stack' },
             node('div', { className: 'command-example' },
-              node('div', { className: 'command-example-heading' }, node('strong', { textContent: t("ui.defaultParameterExample") }), node('span', { textContent: t("ui.verifyExistingDaemonDefinitionsBeforeCopying") })),
+              node('div', { className: 'command-example-heading' }, node('strong', { textContent: t("ui.defaultParameterExample") })),
               node('div', { className: 'command-box' }, node('code', { textContent: daemonInstall }), actionButton(t("ui.copyExample"), () => copyText(daemonInstall, t("ui.daemonInstallExampleCopied")), 'secondary-button compact-button'))
             )
           ),
           node('footer', { className: 'panel-footer', textContent: t("ui.forceReplacesTheServiceDefinitionIfYouAreCurrentlyUsingCustomConfig") })
         ),
-        node('aside', { className: 'callout boundary' }, node('strong', { textContent: t('room.daemonBoundary') }), node('span', { textContent: t("ui.theDaemonOnlyProjectsThePairroomServiceToSystemdLaunchdOrWindows") })),
         node('aside', { className: 'callout warning' }, node('strong', { textContent: t('room.crashStaleServiceLock') }), node('span', { textContent: t("ui.onlyAfterConfirmingThatTheOldProcessHasDisappearedCanYouExplicitly") }))
       );
     }
     if (state.settingsSection === 'about') {
       return node('div', { className: 'view-stack' },
         node('section', { className: 'panel' },
-          node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: t('ui.about') }), node('p', { textContent: t('ui.buildAndRepositoryIdentity') }))),
+          node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: t('ui.about') }))),
           node('div', { className: 'key-value-grid' },
             keyValue(t('ui.version'), snapshot.version || t('common.development')),
             keyValue(t('room.commit'), snapshot.commit || t('room.notEmbedded'), true),
@@ -1432,16 +1405,16 @@
         node('details', { className: 'project-details panel service-support' },
           node('summary', { textContent: t('workspace.ordering.serviceSummary') }),
         node('section', { className: 'panel' },
-          node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: t('room.serviceIdentity') }), node('p', { textContent: t("ui.buildInformationAndStableDataRoots") }))),
+          node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: t('room.serviceIdentity') }))),
           node('div', { className: 'key-value-grid' },
             keyValue(t('room.generatedAt'), formatDateTime(snapshot.generated_at)),
             keyValue(t('room.registryHealth'), snapshot.healthy ? t('common.healthy') : t('common.failClosed'))
           )
         ),
         settingsPanel(t("ui.diagnosticTools"), t("ui.exportingContentRemovesTheRoomRuntimeUrlLocalPathsAndBusinessMetadata"),
-          settingRow(t("ui.copyServiceSummary"), t("ui.suitableForPastingIntoALocalIssueOrDebuggingSession"), actionButton(t("ui.copyJson"), () => copyText(JSON.stringify(safe, null, 2), t("ui.desensitizationDiagnosticsHaveBeenReproduced")), 'secondary-button')),
+          settingRow(t("ui.copyServiceSummary"), '', actionButton(t("ui.copyJson"), () => copyText(JSON.stringify(safe, null, 2), t("ui.desensitizationDiagnosticsHaveBeenReproduced")), 'secondary-button')),
           settingRow(t("ui.downloadDiagnosticFiles"), t("ui.filesAreOnlyGeneratedLocallyInTheBrowserAndAreNotUploaded"), actionButton(t("ui.downloadJson"), downloadDiagnosticSnapshot, 'secondary-button')),
-          settingRow(t("ui.viewOriginalStructure"), t("ui.expandTheDesensitizedServiceSnapshotOnThePage"), toggleButton(state.showRawSnapshot, (value) => { state.showRawSnapshot = value; renderSettings(); }, t("ui.switchSnapshotDisplay")))
+          settingRow(t("ui.viewOriginalStructure"), '', toggleButton(state.showRawSnapshot, (value) => { state.showRawSnapshot = value; renderSettings(); }, t("ui.switchSnapshotDisplay")))
         ),
         state.showRawSnapshot ? node('pre', { className: 'raw-snapshot', textContent: JSON.stringify(safe, null, 2) }) : null),
         snapshot.maintenance?.pending_cleanup || snapshot.maintenance?.diagnostic
@@ -1459,13 +1432,13 @@
     if (state.settingsSection === 'boundaries') {
       const caps = snapshot.capabilities || {};
       return node('div', { className: 'view-stack' },
-        settingsPanel(t('room.controlPlaneCapabilities'), t("ui.theInterfaceOnlyPresentsControlCapabilitiesThatAreExplicitlySupportedByThe"),
+        settingsPanel(t('room.controlPlaneCapabilities'), '',
           capabilityRow(t("ui.registerCanonicalProject"), true, t("ui.explicitAbsolutePathServerSideDirectoryBrowsingIsNotProvided")),
-          capabilityRow(t("ui.manuallySuspendIdleRuntime"), caps.runtime_suspend === true, t("ui.busyRuntimeWillRejectTheOperation")),
-          capabilityRow(t("ui.hotUpdateRuntimeCapacity"), caps.runtime_policy_mutation === true, t("ui.theMaximumNumberOfSimultaneousActiveRoomRuntimesCanBeAdjustedIn")),
+          capabilityRow(t("ui.manuallySuspendIdleRuntime"), caps.runtime_suspend === true, ''),
+          capabilityRow(t("ui.hotUpdateRuntimeCapacity"), caps.runtime_policy_mutation === true, ''),
           capabilityRow(t("ui.inAppRoomSurface"), caps.room_surface === true, t("ui.theManagementSameOriginGatewayCarriesInApplicationTagsAndDoesNot")),
-          capabilityRow(t("ui.roomLifeCycleManagement"), caps.room_deletion === true, t("ui.supportsBatchArchivingAndBatchPermanentCleaningOfUpTo100Rooms")),
-          capabilityRow(t("ui.serverPathBrowser"), caps.server_path_browser === true, t("ui.avoidExpandingNativeFileSystemExposure"))
+          capabilityRow(t("ui.roomLifeCycleManagement"), caps.room_deletion === true, ''),
+          capabilityRow(t("ui.serverPathBrowser"), caps.server_path_browser === true, '')
         ),
         node('aside', { className: 'callout boundary' }, node('strong', { textContent: t('common.transcriptBoundary') }), node('span', { textContent: t("ui.vendorTranscriptAndPairroomRoomEventLogAreDifferentRecordsExistingBinding") })),
         node('aside', { className: 'callout warning' }, node('strong', { textContent: t('room.bindingIdentity') }), node('span', { textContent: t("ui.agentVendorSessionIdExclusiveWithinTheEntireServiceIncludingArchivedRooms") })),
@@ -1474,20 +1447,19 @@
     }
     return node('div', { className: 'view-stack' },
       settingsPanel(t("ui.appearance"), t("ui.themeIsSharedAndPersistedWithTheEmbeddedRoomOtherPreferencesOnly"),
-        settingRow(t("ui.theme"), t("ui.followTheSystemOrTemporarilyFixLightDarkColors"), segmented([
+        settingRow(t("ui.theme"), '', segmented([
           ['system', t("ui.followTheSystem")], ['light', t("ui.lightColor")], ['dark', t("ui.dark")],
         ], state.preferences.theme, (value) => { state.preferences.theme = value; persistTheme(value); applyPreferences(); renderSettings(); }, t("ui.theme"))),
-        settingRow(t("ui.informationDensity"), t("ui.compactShrinksListTableAndPanelSpacing"), segmented([
+        settingRow(t("ui.informationDensity"), '', segmented([
           ['comfortable', t("ui.comfortable")], ['compact', t("ui.compact")],
         ], state.preferences.density, (value) => { state.preferences.density = value; applyPreferences(); renderSettings(); }, t("ui.informationDensity")))
       ),
-      settingsPanel(t("ui.refreshAndNavigation"), t("ui.controlsHowTheCurrentPagePollsTheServiceSidebarClickToAlways"),
+      settingsPanel(t("ui.refreshAndNavigation"), '',
         settingRow(t('ui.notification.settingTitle'), t('ui.notification.settingHelp'), notificationPermissionControl()),
-        settingRow(t("ui.autoRefresh"), t("ui.automaticallyPausesWhenThePageIsHiddenAndSyncsImmediatelyWhenIt"), selectControl([
+        settingRow(t("ui.autoRefresh"), '', selectControl([
           ['0', t("ui.off")], ['5000', t("ui.5Seconds")], ['10000', t("ui.10Seconds")], ['30000', t("ui.30Seconds")], ['60000', t("ui.60Seconds")],
         ], String(state.preferences.refreshMs), (value) => { state.preferences.refreshMs = Number(value); scheduleRefresh(); }, t("ui.autoRefreshInterval")))
-      ),
-      node('aside', { className: 'callout neutral' }, node('strong', { textContent: t("ui.noImplicitPersistence") }), node('span', { textContent: t("ui.theseInterfaceOptionsDoNotWriteToTheServiceRegistryAndDo") }))
+      )
     );
   }
 
@@ -1571,13 +1543,13 @@
       actionButton(t('ui.retryNow'), () => { updateDesktopStartup(); renderSettings(); }, 'secondary-button')));
     const updateRows = renderDesktopUpdateRows();
     return node('div', {className: 'view-stack'},
-      settingsPanel(t('desktop.settings'), t('desktop.systemSetting'), ...rows),
-      updateRows.length ? settingsPanel(t('desktop.updates'), t('desktop.updatesSetting'), ...updateRows) : null);
+      settingsPanel(t('desktop.settings'), '', ...rows),
+      updateRows.length ? settingsPanel(t('desktop.updates'), '', ...updateRows) : null);
   }
 
   function settingsPanel(title, subtitle, ...rows) {
     return node('section', { className: 'panel' },
-      node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: title }), node('p', { textContent: subtitle }))),
+      node('header', { className: 'panel-header' }, node('div', { className: 'panel-header-copy' }, node('h2', { textContent: title }), subtitle ? node('p', { textContent: subtitle }) : null)),
       node('div', { className: 'setting-list' }, ...rows)
     );
   }
@@ -1614,7 +1586,7 @@
   }
 
   function settingRow(title, description, control) {
-    return node('div', { className: 'setting-row' }, node('div', { className: 'setting-copy' }, node('strong', { textContent: title }), node('p', { textContent: description })), node('div', { className: 'setting-control' }, control));
+    return node('div', { className: 'setting-row' }, node('div', { className: 'setting-copy' }, node('strong', { textContent: title }), description ? node('p', { textContent: description }) : null), node('div', { className: 'setting-control' }, control));
   }
 
   function capabilityRow(title, enabled, description) {
@@ -1788,7 +1760,7 @@
 
   function bindingText(binding) {
     if (!binding) return t('common.missing');
-    if (binding.pending && binding.mode === 'new') return `${t('common.new')} · ${t(NEW_BINDING_HINT_KEY)}`;
+    if (binding.pending && binding.mode === 'new') return t('common.new');
     const id = String(binding.session_id || '');
     const compact = id.length > 24 ? `${id.slice(0, 10)}…${id.slice(-8)}` : id;
 	const mode = binding.mode === 'new' ? t('common.new') : binding.mode === 'existing' ? t('common.existing') : (binding.mode || t('common.existing'));
@@ -2257,9 +2229,10 @@
 
   function syncPairProfileDialogLabels() {
     if (state.pairProfileMode) setRenderedText('room-dialog-title', t(state.pairProfileID ? 'agent.pairProfile.edit' : 'agent.pairProfile.new'));
-    setRenderedText('pair-profile-help', t(state.pairProfileMode ? 'agent.pairProfile.editorHelp' : 'agent.pairProfile.templateHelp'));
+    setRenderedText('pair-profile-help', state.pairProfileMode ? t('agent.pairProfile.editorHelp') : '');
+    $('pair-profile-help').hidden = !state.pairProfileMode;
     if (!state.pairProfileBusy && !state.busyButtons.has($('room-submit'))) {
-      setRenderedText('room-submit', t(state.pairProfileMode ? 'agent.pairProfile.save' : 'ui.createRoomAtomically'));
+      setRenderedText('room-submit', t(state.pairProfileMode ? 'agent.pairProfile.save' : 'ui.createRooma1cda23'));
     }
   }
 
@@ -2456,7 +2429,6 @@
       return;
     }
     openConfirm({
-      eyebrow: t('room.wake.eyebrow'),
       title: t('room.wake.title'),
       message: current ? t('room.wake.enabledMessage') : t('room.wake.disabledMessage'),
       detail: t('room.wake.detail'),
@@ -2475,7 +2447,6 @@
     // Turn/Runtime promise would be wrong here. Use the Native archive facts
     // instead of the whole Native page notice.
     openConfirm({
-      eyebrow: t('room.archiveRoomUpper'),
       title: t("ui.archiveValue", { value0: (room.name) }),
       message: t(room.host_mode === 'native' ? 'room.native.archiveMessage' : 'ui.theActiveTurnStopsFirstThenTheRuntimeIsSuspendedAndThe'),
       detail: t("room.archivePreservesState"),
@@ -2606,7 +2577,6 @@
       return;
     }
     openConfirm({
-      eyebrow: t('room.unregisterProjectUpper'),
       title: t("ui.unregisterValue", { value0: (projectName(project)) }),
       message: t("ui.unregisterThisEmptyProjectFromTheServiceRegistry"),
       detail: t("ui.gitWorktreeOrVendorSessionThreadWillNotBeDeletedTheBackend"),
@@ -2638,7 +2608,6 @@
     const preview = window.PairRoomI18n.formatList(rooms.slice(0, 6).map((room) => room.name));
     const remaining = rooms.length > 6 ? t("ui.plusValueMore", { value0: (rooms.length - 6) }) : '';
     openConfirm({
-      eyebrow: rooms.length === 1 ? t('room.archiveRoomUpper') : t('room.batchArchiveRoomsUpper'),
       title: rooms.length === 1 ? t("ui.archiveValue", { value0: (rooms[0].name) }) : t("ui.archiveValueRooms", { value0: (rooms.length) }),
       message: t("ui.valueValueArchivedRoomsCanBeRestoredOrPermanentlyDeletedInA", { value0: (preview), value1: (remaining) }),
       detail: t("ui.archivingPreservesTheEventLogAttachmentsAndAgentBindingsBatchRequestsRun"),
@@ -2690,7 +2659,6 @@
     const preview = window.PairRoomI18n.formatList(rooms.slice(0, 6).map((room) => room.name));
     const remaining = rooms.length > 6 ? t("ui.plusValueMore", { value0: (rooms.length - 6) }) : '';
     openConfirm({
-      eyebrow: rooms.length === 1 ? t('room.permanentlyRemoveRoomUpper') : t('room.batchRemoveRoomsUpper'),
       title: rooms.length === 1 ? t("ui.permanentlyDeleteValue", { value0: (rooms[0].name) }) : t("ui.permanentlyDeleteValueRooms", { value0: (rooms.length) }),
       message: t("ui.valueValueThisActionCannotBeUndone", { value0: (preview), value1: (remaining) }),
       detail: t("ui.pairroomManagedEventLogsAttachmentsAndRoomDataAreDeletedGitWorktrees"),
@@ -2763,7 +2731,6 @@
   function suspendRoom(room, runtime) {
     const queued = runtime.phase === 'queued';
     openConfirm({
-      eyebrow: queued ? t('room.cancelActivationUpper') : t('room.suspendRuntimeUpper'),
       title: queued ? t("ui.cancelActivationQueueForValue", { value0: (room.name) }) : t("ui.suspendTheRuntimeForValue", { value0: (room.name) }),
       message: queued ? t("ui.theRoomReturnsToSuspendedAndCanReEnterTheQueueThe") : t("ui.onlyRuntimesWithNoActiveTurnWillShutDownTheVendorProcess"),
       detail: queued ? '' : t("ui.ifRoomIsWorkingTheBackendWillReturnAConflictAndWill"),
@@ -2869,12 +2836,11 @@
     acknowledgement.setCustomValidity(acknowledged ? '' : t("ui.pleaseMakeSureYouUnderstandThatThisOperationIsNotReversible"));
     submit.disabled = state.busyButtons.has(submit) || !matches || !acknowledged;
   }
-  function openConfirm({ eyebrow = t('common.confirmUpper'), title, message, detail = '', label = t("ui.confirm"), tone = 'danger', confirmation = '', confirmationLabel = t("ui.enterTheFullIdToConfirm"), acknowledgement = '', action }) {
+  function openConfirm({ title, message, detail = '', label = t("ui.confirm"), tone = 'danger', confirmation = '', confirmationLabel = t("ui.enterTheFullIdToConfirm"), acknowledgement = '', action }) {
     resetConfirmState();
     state.confirmAction = action;
     state.confirmRequirement = confirmation;
     state.confirmAcknowledgementRequired = Boolean(acknowledgement);
-    setRenderedText('confirm-eyebrow', eyebrow);
     setRenderedText('confirm-title', title);
     $('confirm-message').textContent = message;
     const detailNode = $('confirm-detail');
@@ -3086,7 +3052,7 @@
       node('div', { className: 'stat-top' }, node('span', { className: 'stat-label', textContent: label }), node('span', { className: 'stat-icon', textContent: symbol, 'aria-hidden': 'true' })),
 	  node('div', {}, node('div', { className: 'stat-value', textContent: displayedValue }), node('div', { className: 'stat-hint', textContent: hint }))
     );
-	if (onClick) card.setAttribute('aria-label', `${label}: ${displayedValue}. ${hint}`);
+	if (onClick) card.setAttribute('aria-label', hint ? `${label}: ${displayedValue}. ${hint}` : `${label}: ${displayedValue}`);
     return card;
   }
 
@@ -3099,7 +3065,7 @@
   }
 
   function emptyState(symbol, title, description, compact = false, action = null) {
-    return node('div', { className: `empty-state ${compact ? 'compact' : ''}` }, node('div', {}, node('div', { className: 'empty-symbol', textContent: symbol, 'aria-hidden': 'true' }), node('h3', { textContent: title }), node('p', { textContent: description }), action));
+    return node('div', { className: `empty-state ${compact ? 'compact' : ''}` }, node('div', {}, node('div', { className: 'empty-symbol', textContent: symbol, 'aria-hidden': 'true' }), node('h3', { textContent: title }), description ? node('p', { textContent: description }) : null, action));
   }
 
   function heroMeta(label, value) {

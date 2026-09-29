@@ -238,8 +238,11 @@ async def verify_collaboration(browser, artifacts: Path) -> dict:
     assert await page.locator("#room-collaboration-instructions").text_content() == collaboration_fixture()["instructions"]
     assert await page.locator("[data-permission-actor=slot2]").evaluate("node=>{const s=getComputedStyle(node); return parseFloat(s.borderTopLeftRadius)>0 && parseFloat(s.paddingLeft)>=8;}"), "permission control lost shared form styling"
     assert await page.locator('.runtime-session-name').evaluate_all('nodes=>nodes.map(n=>n.textContent)') == ['Example workspace · @claude · 123456789abc', 'Example workspace · @codex · 123456789abc']
-    statuses = await page.locator('.runtime-name-status').evaluate_all('nodes=>nodes.map(n=>n.textContent)')
+    # Routine rename states are tooltip detail on the name; only states that need
+    # action (unsupported/failed) render a visible line.
+    statuses = await page.locator('.runtime-session-name').evaluate_all("nodes=>nodes.map(n=>n.title.split(String.fromCharCode(10)).pop())")
     assert len(set(statuses)) == 2, 'configured CLI label falsely rendered as an acknowledged sync'
+    assert await page.locator('.runtime-name-status').count() == 0
     assert 'fixture-slot1' in await page.locator('#participants').inner_text() or await page.locator('#participants [title="fixture-slot1"]').count() > 0, 'native ID lost behind the display name'
     # A CC Switch Provider is named by its redacted Profile display name; the
     # internal reference label stays reachable as a tooltip instead of vanishing.

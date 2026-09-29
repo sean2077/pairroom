@@ -170,7 +170,7 @@
       if (pending.has('approvals')) renderApprovals();
       if (pending.has('created')) messageIDs.forEach(renderCreatedMessage);
       if (pending.has('messages')) messageIDs.forEach(renderMessage);
-      if (pending.has('delivery')) { updateDeliveryHint(); renderTurnOwnerBar(); }
+      if (pending.has('delivery')) renderTurnOwnerBar();
       if (pending.has('composer')) updateComposerAvailability();
     });
   }
@@ -545,10 +545,7 @@
     const collaboration = state.snapshot.meta.collaboration;
     $('room-collaboration-label').textContent = t(collaboration.mode === 'default' ? 'room.collaboration.default' : 'room.collaboration.custom');
     $('room-collaboration-instructions').textContent = collaboration.instructions;
-	const chatDescription = $('chat-description');
-	if (chatDescription) chatDescription.textContent = [t('common.you'), displayName('slot1'), displayName('slot2')].join(' · ');
     renderParticipants();
-    updateDeliveryHint();
     renderTurnOwnerBar();
     renderSettings();
     renderAttachmentStrip();
@@ -678,11 +675,13 @@
       }
       main.appendChild(copy);
 
+      const runtimeDetail = [[runtime.version ? `v${runtime.version}` : '', runtime.protocol].filter(Boolean).join(' · ') || runtime.command, runtime.path, ...(runtime.capabilities || [])].filter(Boolean).join('\n');
       const meta = document.createElement('div');
       meta.className = 'participant-meta';
       const status = document.createElement('span');
       status.className = `state-badge state-${p.state}`;
       status.textContent = stateText(p.state);
+      if (runtimeDetail) status.title = runtimeDetail;
       meta.appendChild(status);
       const providerText = providerDisplay(runtime);
       const providerChip = document.createElement('span');
@@ -730,15 +729,21 @@
           pending: 'room.runtimeNamePending', configured: 'room.runtimeNameConfigured', synced: 'room.runtimeNameSynced',
           unsupported: 'room.runtimeNameUnsupported', failed: 'room.runtimeNameFailed', simulated: 'room.runtimeNameSimulated',
         };
-        nameStatus.textContent = t(statuses[runtime.session_name_status] || 'room.runtimeNamePending');
-        main.appendChild(nameStatus);
+        // Routine rename states are hover detail; unsupported/failed stay visible
+        // because they tell the user to fall back to the session ID.
+        const nameState = t(statuses[runtime.session_name_status] || 'room.runtimeNamePending');
+        nameLine.title += `\n${nameState}`;
+        if (['unsupported', 'failed'].includes(runtime.session_name_status)) {
+          nameStatus.textContent = nameState;
+          main.appendChild(nameStatus);
+        }
       }
-      if (runtime.protocol || runtime.version || runtime.path || runtime.command) {
+      // Version/protocol detail lives on the state badge; unavailability stays visible.
+      if (runtime.available === false) {
         const runtimeLine = document.createElement('div');
-        runtimeLine.className = 'runtime-line';
-        const pieces = [runtime.version ? `v${runtime.version}` : '', runtime.protocol, runtime.available === false ? t('agent.unavailable') : ''].filter(Boolean);
-        runtimeLine.textContent = pieces.join(' · ') || runtime.command || t('room.runtimeDetected');
-        runtimeLine.title = [runtime.path, ...(runtime.capabilities || [])].filter(Boolean).join('\n');
+        runtimeLine.className = 'runtime-line runtime-warning';
+        runtimeLine.textContent = t('agent.unavailable');
+        runtimeLine.title = runtimeDetail;
         main.appendChild(runtimeLine);
       }
       if (stalled) {
@@ -766,14 +771,6 @@
         main.appendChild(policyLine);
       }
 
-      const workspace = p.workspace || {};
-      if (workspace.path) {
-        const workspaceLine = document.createElement('div');
-        workspaceLine.className = 'workspace-boundary';
-        workspaceLine.textContent = t("ui.liveWorkspace");
-        workspaceLine.title = workspace.path;
-        main.appendChild(workspaceLine);
-      }
 
         const permission = document.createElement('select');
       permission.className = 'permission-select';
@@ -983,7 +980,7 @@
     for (const item of items) {
       if (item.type === 'notice') {
         const visible = !state.threadFilter && (!query || String(item.value.text || '').toLocaleLowerCase().includes(query));
-        if (visible) appendVisible(noticeNode(item.value), item.createdAt);
+        if (visible) appendVisible(noticeNode(item.value, item.seq), item.createdAt);
         continue;
       }
       const filterVisible = state.conversationFilter === 'all'
@@ -1261,12 +1258,17 @@
     return row;
   }
 
-  function noticeNode(notice) {
+  function noticeNode(notice, seq) {
     const row = document.createElement('div');
     row.className = 'system-message';
     const chip = document.createElement('div');
     chip.className = `system-chip ${notice.level || 'info'}`;
-    chip.textContent = notice.text || t('room.pairroomEvent');
+    // Sequence 0 is the presentation-only transcript boundary: show a short
+    // localized line and keep the Service's full wording reachable.
+    if (seq === 0 && notice.text) {
+      chip.textContent = t('room.transcriptBoundaryShort');
+      chip.title = notice.text;
+    } else chip.textContent = notice.text || t('room.pairroomEvent');
     row.appendChild(chip);
     return row;
   }
@@ -2304,10 +2306,6 @@
     return ['slot1', 'slot2'].includes(target) ? [target] : ['slot1'];
   }
 
-  function updateDeliveryHint() {
-    $('delivery-hint').textContent = t('ui.sendOnlyToValue', { value0: displayName(state.selectedTarget) });
-  }
-
   function setTarget(target) {
     if (!['slot1', 'slot2'].includes(target)) target = 'slot1';
     state.selectedTarget = target;
@@ -2316,7 +2314,6 @@
       button.classList.toggle('active', active);
       button.setAttribute('aria-pressed', String(active));
     });
-    updateDeliveryHint();
     persistComposerDraft();
     messageInput.focus();
   }
