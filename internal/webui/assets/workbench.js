@@ -201,6 +201,9 @@
     if (!document.body.classList.contains('workbench')) return;
     compactRoomTools();
     installWorkspaceNavigation();
+    if (document.body.classList.contains('workbench-management') && !window.PairRoomDesktop) {
+      void import('/_pairroom/updates.js').catch(() => { /* Optional chrome must not block Rooms. */ });
+    }
     const icons = {
       '[data-nav="overview"] .nav-icon': 'overview',
       '[data-nav="projects"] .nav-icon': 'folder',

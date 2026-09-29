@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/sean2077/pairroom/internal/updatecheck"
 	"github.com/sean2077/pairroom/internal/version"
 )
 
@@ -14,6 +15,9 @@ const Prefix = "/_pairroom/"
 
 //go:embed assets/*
 var assets embed.FS
+
+// Shared by views in this process; construction does not contact GitHub.
+var releaseChecker = updatecheck.New(version.Current)
 
 func Handler() http.Handler {
 	root, err := fs.Sub(assets, "assets")
@@ -25,6 +29,9 @@ func Handler() http.Handler {
 
 func Mount(mux *http.ServeMux) {
 	mux.Handle(Prefix, Handler())
+	// Keep release metadata under the host API authentication, never the public
+	// asset prefix. Ordinary Room pages do not initiate update checks.
+	mux.Handle(updatecheck.Endpoint, releaseChecker.Handler())
 }
 
 // WithAssetETag adds a version-keyed weak validator for embedded static
