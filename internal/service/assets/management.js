@@ -2119,11 +2119,15 @@
       $(`${actor}-sandbox`).value = runtime === 'codex' ? 'danger-full-access' : runtime === 'grok' ? 'off' : '';
     }
 	const providerDiagnostic = $(`${actor}-provider-diagnostic`);
-	const providerNotice = state.agentCatalog?.provider_error || state.agentCatalog?.provider_warning;
+	// CC Switch is optional: an absent database is only worth reporting when this
+	// slot actually references a CC Switch Profile. Other failures stay visible.
+	const catalogError = state.agentCatalog?.provider_error;
+	const providerError = catalogError?.code === 'cc_switch_database_missing' && selected.source !== 'cc-switch' ? null : catalogError;
+	const providerNotice = providerError || state.agentCatalog?.provider_warning;
 	providerDiagnostic.textContent = provider.validationMessage || (providerNotice
 	  ? (window.PairRoomI18n?.errorMessage(providerNotice) || providerNotice.error || '')
 	  : '');
-	providerDiagnostic.classList.toggle('runtime-unavailable', Boolean(provider.validationMessage || state.agentCatalog?.provider_error));
+	providerDiagnostic.classList.toggle('runtime-unavailable', Boolean(provider.validationMessage || providerError));
 	syncAgentPolicy(actor);
   }
 
