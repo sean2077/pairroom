@@ -4,6 +4,10 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+### Fixed
+
+- Tidy the Native Room participant cards. In the narrow participants column the handle broke mid-word (`@claud` / `e0`) around the state badge and park control, the configuration labels wrapped, and the raw configuration disclosure repeated the panel's own "Display-only configuration" heading. Each card now shows the slot number as an avatar beside a single-line handle with a status dot, keeps the park control aligned on the right, lists configuration in an auto-width label column, groups the disclosures with dividers, and names the raw disclosure **Raw selection JSON**. The participants column widens from 236 to 264 px; displayed data and controls are unchanged.
+
 ## [v5.9.0] — 2026-09-29
 
 - Choose a folder when registering a Project in Desktop. Registering a Project meant typing an absolute path from memory, so the Desktop window now offers **Choose folder…** beside that field and fills it with the folder picked in the operating system's own dialog (Windows folder picker, macOS `NSOpenPanel`, GTK chooser on Linux); a cancelled dialog leaves the typed value alone. The host returns exactly one absolute path and rejects anything else, the Service still canonicalizes and validates the Git worktree, no directory listing crosses the bridge, and an ordinary browser — which cannot produce a real path — never shows the button.

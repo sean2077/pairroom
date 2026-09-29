@@ -124,9 +124,11 @@
         binding?.focus();
       });
       chips.push(chip);
-      const card=element('article',undefined,'binding');card.dataset.slot=slot;card.tabIndex=-1;card.dataset.nativeFocus=slot;
-      const top=element('div',undefined,'binding-top');top.append(element('h3',`${index+1} · ${handle(slot)}`),element('span',state,'badge'));
-      if(b.active){const park=element('button',tr(b.park_enabled?'parkOn':'parkOff'));park.type='button';park.dataset.park=slot;park.dataset.nativeFocus=`${slot}-park`;park.setAttribute('aria-pressed',String(Boolean(b.park_enabled)));park.addEventListener('click',async()=>{park.disabled=true;try{await request(`api/v1/participants/${slot}/park`,{method:'POST',body:JSON.stringify({enabled:!b.park_enabled})});status(tr('controls'));await refresh();}catch(e){status(e.message,true);}finally{park.disabled=false;}});top.append(park);}
+      const card=element('article',undefined,`binding ${slot}`);card.dataset.slot=slot;card.tabIndex=-1;card.dataset.nativeFocus=slot;
+      const top=element('div',undefined,'binding-top'),who=element('div',undefined,'binding-identity'),name=element('h3',handle(slot));name.title=handle(slot);
+      who.append(name,element('span',state,`binding-state ${!b.active?'unbound':b.session_id?'bound':'pending'}`));
+      top.append(element('span',String(index+1),'participant-avatar'),who);
+      if(b.active){const park=element('button',tr(b.park_enabled?'parkOn':'parkOff'),'binding-park');park.type='button';park.dataset.park=slot;park.dataset.nativeFocus=`${slot}-park`;park.setAttribute('aria-pressed',String(Boolean(b.park_enabled)));park.addEventListener('click',async()=>{park.disabled=true;try{await request(`api/v1/participants/${slot}/park`,{method:'POST',body:JSON.stringify({enabled:!b.park_enabled})});status(tr('controls'));await refresh();}catch(e){status(e.message,true);}finally{park.disabled=false;}});top.append(park);}
       card.append(top);
       const label = key => window.PairRoomI18n.t(key), inherited = label('room.nativeDefault');
       const provider = selection.provider?.source === 'cc-switch'
@@ -146,7 +148,7 @@
       const instructions=element('details');instructions.dataset.disclosure=`${slot}-commands`;instructions.open=disclosures.has(instructions.dataset.disclosure);instructions.append(element('summary',tr('commands')),element('p',tr('setup.intro'),'muted'));
       instructions.firstElementChild.dataset.nativeFocus=`${slot}-commands`;
       instructions.append(element('pre',`pairroom relay install --runtime ${selection.runtime}\npairroom relay bind --room ${value.room.id} --slot ${index+1}\npairroom relay wait --room ${value.room.id} --slot ${index+1}`));card.append(instructions);
-      const config=element('details');config.dataset.disclosure=`${slot}-config`;config.open=disclosures.has(config.dataset.disclosure);config.append(element('summary',tr('metadata')),element('pre',JSON.stringify(selection,null,2)));config.firstElementChild.dataset.nativeFocus=`${slot}-config`;card.append(config);return card;
+      const config=element('details');config.dataset.disclosure=`${slot}-config`;config.open=disclosures.has(config.dataset.disclosure);config.append(element('summary',tr('rawSelection')),element('pre',JSON.stringify(selection,null,2)));config.firstElementChild.dataset.nativeFocus=`${slot}-config`;card.append(config);return card;
     });$('bindings').replaceChildren(...nodes);
     $('participant-summary').replaceChildren(...chips);
     for(const option of $('target').options) option.textContent=handle(option.value);

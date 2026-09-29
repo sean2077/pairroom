@@ -64,9 +64,9 @@ body.workbench-native.native-chat{height:100vh;height:100dvh;overflow:hidden}
 .native-chat .header-actions{flex-shrink:0;gap:6px}
 .native-chat .header-actions button{white-space:nowrap}
 .workbench-native.native-chat .content-grid{position:relative;display:grid;grid-template-columns:minmax(0,1fr);gap:0;flex:1;min-height:0}
-.workbench-native.native-chat.native-participants-open .content-grid{grid-template-columns:236px minmax(0,1fr)}
+.workbench-native.native-chat.native-participants-open .content-grid{grid-template-columns:264px minmax(0,1fr)}
 .workbench-native.native-chat.native-details-open .content-grid{grid-template-columns:minmax(0,1fr) 300px}
-.workbench-native.native-chat.native-participants-open.native-details-open .content-grid{grid-template-columns:236px minmax(0,1fr) 300px}
+.workbench-native.native-chat.native-participants-open.native-details-open .content-grid{grid-template-columns:264px minmax(0,1fr) 300px}
 .workbench-native.native-chat .conversation{display:flex;flex-direction:column;min-height:0;min-width:0;border:0;border-radius:0;background:var(--bg);overflow:hidden}
 .workbench-native.native-chat .section-header{flex:none;padding:10px 20px;border-bottom:1px solid var(--line);background:var(--wb-panel,var(--panel))}
 .native-chat .toolbar-actions{flex-shrink:0;gap:8px}
@@ -113,10 +113,24 @@ body.workbench-native.native-chat{height:100vh;height:100dvh;overflow:hidden}
 .native-chat :is(.native-inspector,.native-participants)>.section-header{padding:0 0 10px;gap:6px}
 .native-chat [data-close-panel]{font-size:18px;padding:0 8px;min-width:30px;line-height:1}
 .native-chat .panel-description{font-size:11px;margin:10px 0}
-.native-chat .binding-top{flex-wrap:wrap;gap:8px}
-.native-chat .agent-config{grid-template-columns:64px minmax(0,1fr);gap:6px 8px;margin:12px 0}
+.native-chat .binding-top{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px}
+.native-chat .binding-identity{display:grid;min-width:0}
+.native-chat .binding-identity h3{font-size:13px;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal}
+.native-chat .binding-state{display:flex;align-items:flex-start;gap:5px;min-width:0;color:var(--muted);font-size:11px;line-height:1.4}
+.native-chat .binding-state::before{content:"";flex:none;width:6px;height:6px;margin-top:5px;border-radius:50%;background:var(--muted)}
+.native-chat .binding-state.bound::before{background:var(--wb-green,#1f6743)}
+.native-chat .binding-state.pending::before{background:var(--wb-amber,#7d5309)}
+.native-chat .binding .participant-avatar{width:28px;height:28px;flex-basis:28px;font-size:12px}
+.native-chat .binding-park{min-height:26px;padding:2px 8px;font-size:11px;white-space:nowrap}
+.native-chat .agent-config{grid-template-columns:max-content minmax(0,1fr);gap:5px 12px;margin:12px 0 0;padding-top:10px;border-top:1px solid var(--line)}
+.native-chat .agent-config dt{white-space:nowrap}
 .native-chat .agent-config dd{margin:0}
 .native-chat .binding-meta dd{overflow-wrap:anywhere}
+.native-chat .binding>details{margin:0;border-top:1px solid var(--line)}
+.native-chat .binding>details:first-of-type{margin-top:10px}
+.native-chat .binding>details>summary{padding:7px 0;color:var(--muted);font-size:11px;font-weight:500}
+.native-chat .binding>details>summary:hover,.native-chat .binding>details[open]>summary{color:var(--ink)}
+.native-chat .binding>details>:not(summary){margin-bottom:8px}
 .native-chat .delivery-slot{padding-block:10px;border-top:1px solid var(--line)}
 .native-chat .delivery-slot:first-child{border-top:0}
 .native-chat .delivery-slot h3{font-size:12px;margin-bottom:8px}
