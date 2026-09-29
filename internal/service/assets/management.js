@@ -2119,8 +2119,9 @@
       $(`${actor}-sandbox`).value = runtime === 'codex' ? 'danger-full-access' : runtime === 'grok' ? 'off' : '';
     }
 	const providerDiagnostic = $(`${actor}-provider-diagnostic`);
-	providerDiagnostic.textContent = provider.validationMessage || (state.agentCatalog?.provider_error
-	  ? (window.PairRoomI18n?.errorMessage(state.agentCatalog.provider_error) || state.agentCatalog.provider_error.error || '')
+	const providerNotice = state.agentCatalog?.provider_error || state.agentCatalog?.provider_warning;
+	providerDiagnostic.textContent = provider.validationMessage || (providerNotice
+	  ? (window.PairRoomI18n?.errorMessage(providerNotice) || providerNotice.error || '')
 	  : '');
 	providerDiagnostic.classList.toggle('runtime-unavailable', Boolean(provider.validationMessage || state.agentCatalog?.provider_error));
 	syncAgentPolicy(actor);

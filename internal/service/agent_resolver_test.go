@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -144,5 +145,47 @@ func TestAgentResolverIsolatesConcurrentProfilesAndRefreshesOnlyOnResolve(t *tes
 	}
 	if fresh.Env["PAIRROOM_CC_SWITCH_GROK_API_KEY"] != "secret-a-new" {
 		t.Fatal("profile edit was not applied on the next resolution")
+	}
+}
+
+func TestAgentCatalogWarnsOnlyForUnverifiedCCSwitchSchema(t *testing.T) {
+	for _, test := range []struct {
+		schema int
+		warned bool
+	}{{18, false}, {ccswitch.SupportedSchemaVersion, false}, {ccswitch.SupportedSchemaVersion + 1, true}} {
+		database := filepath.Join(t.TempDir(), "cc-switch.db")
+		db, err := sql.Open("sqlite", database)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`CREATE TABLE providers (
+			id TEXT NOT NULL, app_type TEXT NOT NULL, name TEXT NOT NULL,
+			settings_config TEXT NOT NULL, meta TEXT NOT NULL DEFAULT '{}', sort_index INTEGER,
+			is_current BOOLEAN NOT NULL DEFAULT 0, in_failover_queue BOOLEAN NOT NULL DEFAULT 0,
+			PRIMARY KEY (id, app_type)); PRAGMA user_version = ` + strconv.Itoa(test.schema) + `;`); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		reader, err := ccswitch.NewReader(database)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := config.Defaults()
+		resolver, err := NewAgentResolver(AgentResolverConfig{Defaults: cfg.DefaultSelections(), Runtimes: cfg.Runtimes, CCSwitch: reader, Mock: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		catalog := resolver.Catalog(context.Background())
+		if catalog.ProviderError != nil {
+			t.Fatalf("schema %d provider error = %#v", test.schema, catalog.ProviderError)
+		}
+		if got := catalog.ProviderWarning != nil; got != test.warned {
+			t.Fatalf("schema %d provider warning = %#v", test.schema, catalog.ProviderWarning)
+		}
+		if test.warned && (catalog.ProviderWarning.Code != ccswitch.CodeSchemaUnverified || catalog.ProviderWarning.Params["actual"] != strconv.Itoa(test.schema)) {
+			t.Fatalf("schema %d provider warning = %#v", test.schema, catalog.ProviderWarning)
+		}
 	}
 }
