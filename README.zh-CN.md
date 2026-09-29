@@ -5,7 +5,7 @@
 **两个独立编程 Agent，同一个问题，保留你的原生工作流。** PairRoom 连接受支持的 Claude Code、Codex 与 Grok Build 会话，让双方基于证据交叉审查，不替换原生模型循环、工具、skills 或 subagents。
 
 <p align="center">
-  <img src="docs/images/pairroom-runtime-overview.png" alt="PairRoom 协作界面">
+  <img src="docs/images/pairroom-native-room-zh.png" alt="Native Room 在你自己的 Claude Code 与 Codex 会话之间中继">
 </p>
 
 ## 为什么使用？
@@ -28,6 +28,22 @@
 沿用仓库指令、worktree 和 PR/MR 流程。PairRoom 不增加强制阶段机制，也不会在每次中继时追加累计 Room 历史。紧凑的字节预算不等于保证账单更低或准确率更高。
 
 [Why PairRoom](docs/WHY_PAIRROOM.md) 说明适用场景与限制，[替代方案](docs/ALTERNATIVES.md) 提供注明日期的一手资料比较，[先审查再执行](docs/GETTING_STARTED.md#review-first-execute-where-it-fits) 提供实用提示词。
+
+## 界面一览
+
+截图使用合成的演示对话，并非真实模型输出。
+
+**Embedded Room**：由 PairRoom 托管两个 Agent，工作检查器中查看 Turn 摘要、Diff 与审批。
+
+![Claude Code 主导、Codex 执行的 Embedded Room](docs/images/pairroom-embedded-room-zh.png)
+
+**管理界面**：在同一个本地控制台里管理项目、两种宿主模式的 Room 与运行时容量。
+
+![列出 Embedded 与 Native Room 的项目详情](docs/images/pairroom-management-zh.png)
+
+**创建 Room**：选择宿主模式、协作方式以及每个槽位的运行时。
+
+![创建 Room 对话框](docs/images/pairroom-create-room-zh.png)
 
 ## 安装与体验
 

@@ -5,7 +5,7 @@
 **Two independent coding agents. One problem. Your native workflow.** PairRoom connects supported Claude Code, Codex, and Grok Build sessions for evidence-based cross-review without replacing their model loop, tools, skills, or subagents.
 
 <p align="center">
-  <img src="docs/images/pairroom-runtime-overview.png" alt="PairRoom collaboration interface">
+  <img src="docs/images/pairroom-native-room.png" alt="A Native Room relaying between your own Claude Code and Codex sessions">
 </p>
 
 ## Why use it?
@@ -28,6 +28,22 @@ Having Claude Code draft a plan, copying it to Codex for review, and pasting the
 Retain your repository instructions, worktrees, and PR/MR policy. PairRoom does not add a mandatory phase engine or append accumulated Room history to every relay. Compact byte budgets are not guarantees of lower billed tokens or better accuracy.
 
 Read [Why PairRoom](docs/WHY_PAIRROOM.md) for fit and limits, [Alternatives](docs/ALTERNATIVES.md) for dated primary-source comparisons, and the [review-first recipe](docs/GETTING_STARTED.md#review-first-execute-where-it-fits) for practical prompts.
+
+## A look around
+
+Screenshots use synthetic demo conversations; they do not show model output.
+
+**Embedded Room** — PairRoom hosts both Agents; turn summaries, diffs and approvals sit in the work inspector.
+
+![Embedded Room with a Claude Code lead and a Codex executor](docs/images/pairroom-embedded-room.png)
+
+**Management** — Projects, Rooms in either host mode, and runtime capacity in one local shell.
+
+![Project detail listing Embedded and Native Rooms](docs/images/pairroom-management.png)
+
+**Create a Room** — choose the host mode, collaboration style and each slot's Runtime.
+
+![Create Room dialog](docs/images/pairroom-create-room.png)
 
 ## Install and try
 
