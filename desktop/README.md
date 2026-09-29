@@ -166,10 +166,9 @@ Quit never stops an external daemon. Startup may restart an installed daemon onl
 
 `.github/workflows/desktop-wails.yml` verifies the desktop module on pull requests and `main`. PR checks also rebuild and update temporary native installations. Release installer/app-bundle artifact collection runs only for `v*` tags (and manual `workflow_dispatch`), then attaches the tag artifacts to the GitHub Release as `pairroom-desktop-vX.Y.Z-…`:
 
-- Linux amd64: AppImage and Debian package (the `.deb` includes `/usr/local/bin/pairroom`);
+- Linux amd64: AppImage (Desktop host only, no CLI) and Debian package (the `.deb` includes `/usr/local/bin/pairroom`);
 - Windows amd64: Inno Setup installer (`pairroom-desktop-vX.Y.Z-windows-amd64-setup.exe`) that installs `PairRoom.exe` and `bin\pairroom.exe`, and by default appends that `bin` directory to the machine PATH (`addtopath` task);
-- macOS arm64: `.app.zip` with the CLI at `Contents/Helpers/pairroom` and host at `Contents/MacOS/PairRoom`; Desktop can link `/usr/local/bin/pairroom` to that CLI on request (`internal/clilink`);
-- macOS amd64: `.app.zip` with the CLI at `Contents/Helpers/pairroom` and host at `Contents/MacOS/PairRoom`;
+- macOS arm64 and amd64: `.app.zip` with the CLI at `Contents/Helpers/pairroom` and host at `Contents/MacOS/PairRoom`; Desktop can link `/usr/local/bin/pairroom` to that CLI on request (`internal/clilink`);
 - `pairroom-desktop-vX.Y.Z-SHA256SUMS`: SHA-256 of every package above. `scripts/collect-artifacts.py` writes a per-platform `SHA256SUMS` beside each package set; the publish job re-verifies every package against it with `scripts/merge-checksums.py`, attaches the merged list, then re-downloads the attached desktop assets and checks them against it.
 
 Release packages are unsigned development artifacts until Windows code signing and Apple Developer ID signing/notarization actually run.
