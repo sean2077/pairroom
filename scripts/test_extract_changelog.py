@@ -61,6 +61,47 @@ class ExtractChangelogTests(unittest.TestCase):
                 with self.assertRaises(extractor.ExtractionError):
                     extractor.extract_notes(text, "v1.2.0")
 
+    def test_keeps_group_headings_and_their_entries(self) -> None:
+        text = """## [v1.2.0] — 2026-08-14
+
+### Added
+
+- one
+
+- two
+
+### Changed
+
+#### Detail
+
+- nested
+
+### Fixed
+
+- three
+"""
+        self.assertEqual(
+            extractor.extract_notes(text, "v1.2.0"),
+            "### Added\n\n- one\n\n- two\n\n### Changed\n\n#### Detail\n\n- nested\n\n### Fixed\n\n- three\n",
+        )
+
+    def test_rejects_a_group_heading_left_without_entries(self) -> None:
+        # An empty group would publish a bare heading in the release notes.
+        cases = {
+            "trailing": "## [v1.2.0] — 2026-08-14\n\n### Added\n\n- kept\n\n### Fixed\n",
+            "middle": "## [v1.2.0] — 2026-08-14\n\n### Added\n\n### Changed\n\n- kept\n",
+            "only": "## [v1.2.0] — 2026-08-14\n\n### Added\n",
+        }
+        for name, text in cases.items():
+            with self.subTest(name=name):
+                with self.assertRaises(extractor.ExtractionError):
+                    extractor.extract_notes(text, "v1.2.0")
+
+    def test_counts_fenced_code_as_a_group_entry(self) -> None:
+        # A heading-like line inside a fence is entry content, not a new group.
+        text = "## [v1.2.0] — 2026-08-14\n\n### Added\n\n```\n### Fixed\n```\n"
+        self.assertEqual(extractor.extract_notes(text, "v1.2.0"), "### Added\n\n```\n### Fixed\n```\n")
+
     def test_failed_write_preserves_existing_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

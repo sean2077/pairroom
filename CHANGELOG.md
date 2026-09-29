@@ -1,5 +1,7 @@
 # Changelog
 
+Release sections group their entries under `### Added`, `### Fixed`, and `### Changed`; see [Contributing](CONTRIBUTING.md#release-verification). Sections released before this convention stay flat as history.
+
 ## [Unreleased]
 
 ## [v5.9.0] — 2026-09-29

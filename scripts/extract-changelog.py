@@ -17,6 +17,7 @@ CANONICAL_HEADING_RE = re.compile(
     r"^ — (?P<date>\d{4}-\d{2}-\d{2})[ \t]*$"
 )
 H2_RE = re.compile(r"^##(?:[ \t]+|$)")
+H3_RE = re.compile(r"^###(?:[ \t]+|$)")
 FENCE_OPEN_RE = re.compile(r"^[ ]{0,3}(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
 
 
@@ -62,6 +63,34 @@ def scan_lines(text: str) -> List[LineRecord]:
     return records
 
 
+def empty_groups(body: str) -> List[str]:
+    """Return the level-three group headings that no entry follows.
+
+    A release section groups entries under headings such as '### Added'. A
+    heading left behind after its last entry moved away is an unfinished note,
+    not a note about nothing, so it must fail closed before publication. Deeper
+    headings, fenced code, and prose all count as an entry.
+    """
+
+    empties: List[str] = []
+    group: Optional[str] = None
+    filled = False
+
+    for _, _, line, outside_fence in scan_lines(body):
+        if outside_fence and (H3_RE.match(line) or H2_RE.match(line)):
+            if group is not None and not filled:
+                empties.append(group)
+            group = line.rstrip() if H3_RE.match(line) else None
+            filled = False
+            continue
+        if group is not None and line.strip():
+            filled = True
+
+    if group is not None and not filled:
+        empties.append(group)
+    return empties
+
+
 def extract_notes(text: str, exact_tag: str) -> str:
     """Return the target heading's trimmed body, excluding the heading itself."""
 
@@ -103,6 +132,12 @@ def extract_notes(text: str, exact_tag: str) -> str:
     body = text[body_start:body_end].strip()
     if not body:
         raise ExtractionError(f"changelog section for exact tag {exact_tag!r} is empty")
+    unfinished = empty_groups(body)
+    if unfinished:
+        raise ExtractionError(
+            f"changelog section for exact tag {exact_tag!r} leaves {unfinished[0]!r} empty; "
+            "remove the group or write its entries before releasing"
+        )
     return body + "\n"
 
 
