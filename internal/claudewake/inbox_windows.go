@@ -15,23 +15,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// These entry points are used only by the existing Windows pipe-server tests.
-// Production event and overlapped I/O calls use the typed windows APIs below.
-var (
-	kernel              = windows.NewLazySystemDLL("kernel32.dll")
-	createEvent         = kernel.NewProc("CreateEventW")
-	getOverlappedResult = kernel.NewProc("GetOverlappedResult")
-)
-
-// x/sys does not export GetKernelObjectSecurity or an error-returning SDDL
-// formatter restricted to owner and DACL. Keep these exact operations and load
-// their entry points only from System32.
-var (
-	advapi            = windows.NewLazySystemDLL("advapi32.dll")
-	securityToString  = advapi.NewProc("ConvertSecurityDescriptorToStringSecurityDescriptorW")
-	getObjectSecurity = advapi.NewProc("GetKernelObjectSecurity")
-)
-
 func validAddress(address string) bool {
 	const prefix = `\\.\pipe\`
 	return len(address) > len(prefix) && strings.EqualFold(address[:len(prefix)], prefix) && !strings.ContainsAny(address[len(prefix):], "/:\x00\r\n")
@@ -42,17 +25,6 @@ func validAddress(address string) bool {
 func privateDirectory(_ os.FileInfo) bool { return true }
 
 const ownerAndDACL = windows.OWNER_SECURITY_INFORMATION | windows.DACL_SECURITY_INFORMATION
-
-func securityString(sd *byte) (string, error) {
-	var text *uint16
-	var length uint32
-	ok, _, _ := securityToString.Call(uintptr(unsafe.Pointer(sd)), 1, uintptr(ownerAndDACL), uintptr(unsafe.Pointer(&text)), uintptr(unsafe.Pointer(&length)))
-	if ok == 0 {
-		return "", ErrUnavailable
-	}
-	defer windows.LocalFree(windows.Handle(unsafe.Pointer(text)))
-	return windows.UTF16ToString(unsafe.Slice(text, int(length))), nil
-}
 
 func ownerSecurity() (*windows.SECURITY_DESCRIPTOR, error) {
 	var token windows.Token
@@ -99,26 +71,18 @@ func privateTemp(dir string) (*os.File, error) {
 }
 
 func privateFile(f *os.File, _ os.FileInfo) bool {
-	sd, err := ownerSecurity()
+	expected, err := ownerSecurity()
 	if err != nil {
 		return false
 	}
-	want, err := securityString((*byte)(unsafe.Pointer(sd)))
-	if err != nil {
+	actual, err := windows.GetSecurityInfo(windows.Handle(f.Fd()), windows.SE_FILE_OBJECT, ownerAndDACL)
+	if err != nil || actual == nil {
 		return false
 	}
-	var size uint32
-	getObjectSecurity.Call(f.Fd(), uintptr(ownerAndDACL), 0, 0, uintptr(unsafe.Pointer(&size)))
-	if size == 0 || size > 65536 {
-		return false
-	}
-	buffer := make([]byte, size)
-	ok, _, _ := getObjectSecurity.Call(f.Fd(), uintptr(ownerAndDACL), uintptr(unsafe.Pointer(&buffer[0])), uintptr(size), uintptr(unsafe.Pointer(&size)))
-	if ok == 0 {
-		return false
-	}
-	got, err := securityString(&buffer[0])
-	return err == nil && got == want
+	// Both descriptors hold only owner and DACL. String reports conversion
+	// failure as an empty string, which must not compare equal.
+	want := expected.String()
+	return want != "" && actual.String() == want
 }
 
 func writeInbox(ctx context.Context, address string, frame []byte) error {

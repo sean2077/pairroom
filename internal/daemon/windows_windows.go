@@ -9,8 +9,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
+
+	"golang.org/x/sys/windows"
 
 	"github.com/sean2077/pairroom/internal/execx"
 )
@@ -300,10 +301,10 @@ func buildWindowsTaskScript(cfg Config) string {
 
 func windowsCommandLine(binaryPath string, args []string) string {
 	var builder strings.Builder
-	builder.WriteString(syscall.EscapeArg(binaryPath))
+	builder.WriteString(windows.EscapeArg(binaryPath))
 	for _, argument := range args {
 		builder.WriteByte(' ')
-		builder.WriteString(syscall.EscapeArg(argument))
+		builder.WriteString(windows.EscapeArg(argument))
 	}
 	return builder.String()
 }

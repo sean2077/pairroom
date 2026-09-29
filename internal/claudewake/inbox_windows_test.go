@@ -7,62 +7,60 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 	"time"
-	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
-var createNamedPipe = kernel.NewProc("CreateNamedPipeW")
-var connectNamedPipe = kernel.NewProc("ConnectNamedPipe")
-
-func newTestPipe(t *testing.T) (string, syscall.Handle) {
+func newTestPipe(t *testing.T) (string, windows.Handle) {
 	t.Helper()
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		t.Fatal(err)
 	}
 	address := `\\.\pipe\pairroom-wake-test-` + hex.EncodeToString(nonce)
-	path, _ := syscall.UTF16PtrFromString(address)
+	path, _ := windows.UTF16PtrFromString(address)
 	// Inbound byte-mode local pipe; a small buffer lets the cancellation test
 	// force a pending write without any installed Claude or vendor credentials.
-	h, _, err := createNamedPipe.Call(uintptr(unsafe.Pointer(path)), 1|syscall.FILE_FLAG_OVERLAPPED, 0x8, 1, 1024, 1024, 0, 0)
-	if syscall.Handle(h) == syscall.InvalidHandle {
+	h, err := windows.CreateNamedPipe(path, windows.PIPE_ACCESS_INBOUND|windows.FILE_FLAG_OVERLAPPED, windows.PIPE_REJECT_REMOTE_CLIENTS, 1, 1024, 1024, 0, nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = syscall.CloseHandle(syscall.Handle(h)) })
-	return address, syscall.Handle(h)
+	t.Cleanup(func() { _ = windows.CloseHandle(h) })
+	return address, h
 }
 
-func pipeIO(ctx context.Context, h syscall.Handle, start func(*syscall.Overlapped, *uint32) error) (uint32, error) {
-	event, _, _ := createEvent.Call(0, 1, 0, 0)
-	if event == 0 {
+func pipeIO(ctx context.Context, h windows.Handle, start func(*windows.Overlapped, *uint32) error) (uint32, error) {
+	event, err := windows.CreateEvent(nil, 1, 0, nil)
+	if err != nil {
 		return 0, ErrSend
 	}
-	defer syscall.CloseHandle(syscall.Handle(event))
-	ov := syscall.Overlapped{HEvent: syscall.Handle(event)}
+	defer windows.CloseHandle(event)
+	ov := windows.Overlapped{HEvent: event}
 	var count uint32
-	err := start(&ov, &count)
-	if err != syscall.ERROR_IO_PENDING {
+	err = start(&ov, &count)
+	if err != windows.ERROR_IO_PENDING {
 		return count, err
 	}
 	cancelled := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() { _ = syscall.CancelIoEx(h, &ov); close(cancelled) })
-	ok, _, _ := getOverlappedResult.Call(uintptr(h), uintptr(unsafe.Pointer(&ov)), uintptr(unsafe.Pointer(&count)), 1)
+	stop := context.AfterFunc(ctx, func() { _ = windows.CancelIoEx(h, &ov); close(cancelled) })
+	err = windows.GetOverlappedResult(h, &ov, &count, true)
 	if !stop() {
 		<-cancelled
 	}
-	if ok == 0 {
+	if err != nil {
 		return count, ErrSend
 	}
 	return count, nil
 }
-func connectPipe(ctx context.Context, h syscall.Handle) error {
-	_, err := pipeIO(ctx, h, func(ov *syscall.Overlapped, _ *uint32) error {
-		ok, _, err := connectNamedPipe.Call(uintptr(h), uintptr(unsafe.Pointer(ov)))
-		if ok != 0 || err == syscall.Errno(535) {
+func connectPipe(ctx context.Context, h windows.Handle) error {
+	_, err := pipeIO(ctx, h, func(ov *windows.Overlapped, _ *uint32) error {
+		err := windows.ConnectNamedPipe(h, ov)
+		if errors.Is(err, windows.ERROR_PIPE_CONNECTED) {
 			return nil
 		}
 		return err
@@ -85,7 +83,7 @@ func testInbox(t *testing.T) (string, <-chan []byte) {
 		data := []byte{}
 		for bytes.Count(data, []byte{'\n'}) < 2 && len(data) < 16384 {
 			buf := make([]byte, 16384)
-			n, err := pipeIO(ctx, h, func(ov *syscall.Overlapped, n *uint32) error { return syscall.ReadFile(h, buf, n, ov) })
+			n, err := pipeIO(ctx, h, func(ov *windows.Overlapped, n *uint32) error { return windows.ReadFile(h, buf, n, ov) })
 			data = append(data, buf[:n]...)
 			if err != nil {
 				break

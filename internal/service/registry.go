@@ -575,7 +575,7 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 	materializedBindings := make(map[model.ActorID]Binding, 2)
 	nativeBindings := make(map[model.ActorID]relay.Binding, 2)
 	var meta model.RoomMeta
-	var lifecycle RoomLifecycle = RoomActive
+	var lifecycle = RoomActive
 	var renamed string
 	var updatedAt time.Time
 	createdSeen := false
