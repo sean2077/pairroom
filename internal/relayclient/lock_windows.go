@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
-	"unsafe"
+
+	"golang.org/x/sys/windows"
 
 	"github.com/sean2077/pairroom/internal/relay"
 )
@@ -17,28 +17,28 @@ import (
 // A named, process-owned kernel mutex has no filesystem footprint and remains
 // stable when credentials/state are atomically replaced. Abandoned is acquired.
 func lockSlot(ctx context.Context, dir string) (func(), error) {
-	kernel := syscall.NewLazyDLL("kernel32.dll")
-	name, err := syscall.UTF16PtrFromString("Local\\PairRoomRelay-" + relay.Digest(strings.ToLower(filepath.Clean(dir))))
+	name, err := windows.UTF16PtrFromString("Local\\PairRoomRelay-" + relay.Digest(strings.ToLower(filepath.Clean(dir))))
 	if err != nil {
 		return nil, err
 	}
 	runtime.LockOSThread()
-	handle, _, callErr := kernel.NewProc("CreateMutexW").Call(0, 0, uintptr(unsafe.Pointer(name)))
-	if handle == 0 {
+	handle, err := windows.CreateMutex(nil, false, name)
+	// ERROR_ALREADY_EXISTS accompanies a valid handle for an existing mutex.
+	if err != nil && err != windows.ERROR_ALREADY_EXISTS {
 		runtime.UnlockOSThread()
-		return nil, callErr
+		return nil, err
 	}
-	closeHandle := func() { _, _, _ = kernel.NewProc("CloseHandle").Call(handle); runtime.UnlockOSThread() }
+	closeHandle := func() { _ = windows.CloseHandle(handle); runtime.UnlockOSThread() }
 	for {
-		result, _, callErr := kernel.NewProc("WaitForSingleObject").Call(handle, 10)
+		result, err := windows.WaitForSingleObject(handle, 10)
 		switch result {
-		case 0, 0x80:
-			return func() { _, _, _ = kernel.NewProc("ReleaseMutex").Call(handle); closeHandle() }, nil
-		case 0x102:
+		case windows.WAIT_OBJECT_0, windows.WAIT_ABANDONED:
+			return func() { _ = windows.ReleaseMutex(handle); closeHandle() }, nil
+		case uint32(windows.WAIT_TIMEOUT):
 		default:
 			closeHandle()
-			if callErr != syscall.Errno(0) {
-				return nil, callErr
+			if err != nil {
+				return nil, err
 			}
 			return nil, errors.New("relay mutex wait failed")
 		}

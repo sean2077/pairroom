@@ -3,51 +3,32 @@
 package relayclient
 
 import (
-	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
-// platformProcessTable enumerates processes through a Toolhelp32 snapshot
-// using only the standard library, keeping the frozen dependency closure
-// intact.
+// platformProcessTable enumerates processes through a Toolhelp32 snapshot.
 func platformProcessTable() (map[int]procInfo, error) {
-	kernel32 := syscall.NewLazyDLL("kernel32.dll")
-	create := kernel32.NewProc("CreateToolhelp32Snapshot")
-	first := kernel32.NewProc("Process32FirstW")
-	next := kernel32.NewProc("Process32NextW")
-	const th32csSnapProcess = 0x00000002
-	handle, _, err := create.Call(th32csSnapProcess, 0)
-	if handle == ^uintptr(0) {
+	handle, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
 		return nil, err
 	}
-	defer syscall.CloseHandle(syscall.Handle(handle))
+	defer windows.CloseHandle(handle)
 	// PROCESSENTRY32W; size must be set before the first call.
-	var entry struct {
-		size          uint32
-		usage         uint32
-		processID     uint32
-		defaultHeapID uintptr
-		moduleID      uint32
-		threads       uint32
-		parentPID     uint32
-		priClassBase  int32
-		priDelta      uint32
-		exeFile       [260]uint16
-	}
-	entry.size = uint32(unsafe.Sizeof(entry))
+	var entry windows.ProcessEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
 	table := make(map[int]procInfo)
-	ok, _, _ := first.Call(handle, uintptr(unsafe.Pointer(&entry)))
-	if ok == 0 {
+	if err := windows.Process32First(handle, &entry); err != nil {
 		// An empty snapshot is not fatal; callers treat it as "no lineage".
 		return table, nil
 	}
-	table[int(entry.processID)] = procInfo{ppid: int(entry.parentPID), name: syscall.UTF16ToString(entry.exeFile[:])}
+	table[int(entry.ProcessID)] = procInfo{ppid: int(entry.ParentProcessID), name: windows.UTF16ToString(entry.ExeFile[:])}
 	for {
-		ok, _, _ := next.Call(handle, uintptr(unsafe.Pointer(&entry)))
-		if ok == 0 {
+		if err := windows.Process32Next(handle, &entry); err != nil {
 			break
 		}
-		table[int(entry.processID)] = procInfo{ppid: int(entry.parentPID), name: syscall.UTF16ToString(entry.exeFile[:])}
+		table[int(entry.ProcessID)] = procInfo{ppid: int(entry.ParentProcessID), name: windows.UTF16ToString(entry.ExeFile[:])}
 	}
 	return table, nil
 }
