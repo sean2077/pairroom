@@ -127,7 +127,22 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
             await page.evaluate("__snapshot.room.agents.slot1.model='fixture-model';__snapshot.room.agents.slot1.effort='high';__snapshot.summary={inboxes:{slot1:{queued:2,delivering:1,unknown:3},slot2:{queued:0,delivering:0,unknown:0}}};__update()")
             await expect(page.locator('[data-slot=slot1] .agent-config')).to_contain_text('fixture-model')
             await expect(page.locator('[data-slot=slot1] .agent-config')).to_contain_text('high')
+            # The card header keeps the handle on one line beside the state and
+            # park control; a narrow column must not break the handle mid-word.
+            assert await page.evaluate('''() => [...document.querySelectorAll('#bindings .binding')].every(card => {
+              const name=card.querySelector('.binding-identity h3'),park=card.querySelector('.binding-park');
+              const line=parseFloat(getComputedStyle(name).lineHeight);
+              return name.getBoundingClientRect().height<line*1.5
+                && card.querySelector('.binding-state.bound') && (!park || park.getBoundingClientRect().left>=name.getBoundingClientRect().right);
+            })''')
             await expect(page.locator('#delivery-summary .delivery-slot').first.locator('dd')).to_have_text(['2','1','3'])
+            # A single pending page shows no pager; the hidden file input still
+            # reports the chosen image beside its button.
+            await expect(page.locator('#pending-pager')).to_be_hidden()
+            await page.locator('#attachment').set_input_files({'name':'layout.png','mimeType':'image/png','buffer':b'png'})
+            await expect(page.locator('#attachment-name')).to_have_text('layout.png')
+            await page.locator('#attachment').set_input_files([])
+            await expect(page.locator('#attachment-name')).to_have_text('')
             await expect(page.locator('#messages')).to_have_attribute('role','log')
             assert await page.get_by_role('button', name='Interrupt', exact=False).count() == 0
             await expect(page.locator('.participant-chip')).to_have_count(2)
@@ -170,6 +185,11 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
             await at_end()
             # The drawer cannot eat drafts/disclosures or strand keyboard focus
             # during a normal last-activity refresh.
+            # The chip row is the collapsed form of the participants column.
+            await expect(page.locator('#participant-summary')).to_be_hidden()
+            await page.locator('#participants-toggle').click()
+            await expect(page.locator('#native-participants')).to_be_hidden()
+            await expect(page.locator('#participant-summary')).to_be_visible()
             await page.locator('.participant-chip.slot1').click()
             await expect(page.locator('#native-participants')).to_be_visible()
             await expect(page.locator('[data-slot="slot1"]')).to_be_focused()
@@ -302,7 +322,7 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
                         await page.screenshot(path=str(artifacts/f'native-im-{theme}-{width}.png'))
             assert not errors, errors
             (artifacts/'results.json').write_text(json.dumps({'fixture':True,'shared_workbench':not isolated,
-                'real_vendor_e2e':False,'checks':['three-column panels and independent toggles','visible Agent metadata','delivery summary','narrow panel focus/inertness','IM alignment','duplicate runtime identities','initial and incoming scroll',
+                'real_vendor_e2e':False,'checks':['three-column panels and independent toggles','visible Agent metadata','single-line participant card header','chip row only while participants are collapsed','pager/attachment affordances','delivery summary','narrow panel focus/inertness','IM alignment','duplicate runtime identities','initial and incoming scroll',
                 'history anchor','draft/node preservation','binding disclosure/focus','safe Markdown/quotes/attachments',
                 'retry confirmation/cancel','uncertain send identity','real cross-window Web Locks','300-message bound','locale switch','responsive light/dark'],
                 'browser_errors':errors},indent=2)+'\n',encoding='utf-8')

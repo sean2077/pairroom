@@ -16,7 +16,6 @@
         <div class="brand-mark" aria-hidden="true"><span></span><span></span></div>
         <div>
           <div class="brand-name">PairRoom</div>
-          <div class="brand-tagline" data-i18n="room.nativeAgentCollaboration">Native Agent collaboration</div>
         </div>
       </div>
       <div class="room-heading">
@@ -42,16 +41,14 @@
         <div class="human-card participant-card">
           <div class="avatar avatar-human">Y</div>
           <div class="participant-main">
-            <div class="participant-title"><strong data-i18n="common.you">You</strong><span class="authority-badge" data-i18n="common.owner">Owner</span></div>
-            <div class="participant-subtitle" data-i18n="ui.intervenePauseOrRedirectAtAnyTime">Intervene, pause, or redirect at any time</div>
+            <div class="participant-title"><strong data-i18n="common.you">You</strong></div>
           </div>
         </div>
         <div id="participants"></div>
 
         <div class="divider"></div>
         <section class="room-controls">
-          <div class="section-title" data-i18n="ui.turnPolicy">Turn policy</div>
-          <div class="strategy-note" data-i18n="room.exactMentionRelayRule">Only the exact current Agent handle requests another Turn; without a handle the Agent response ends the relay.</div>
+          <div class="section-title" data-i18n="ui.turnPolicy" title="Only the exact current Agent handle requests another Turn; without a handle the Agent response ends the relay." data-i18n-title="room.exactMentionRelayRule">Turn policy</div>
           <label class="field-label" for="stall-warning" data-i18n="ui.stallWarningSeconds">Stall warning (seconds)</label>
           <div class="number-row">
             <input id="stall-warning" type="number" min="30" max="86400" step="30" value="300">
@@ -70,10 +67,6 @@
 
       <section class="chat-panel panel">
         <div class="chat-toolbar">
-          <div>
-            <div class="chat-title" data-i18n="room.sharedRoom">Shared Room</div>
-            <div id="chat-description" class="chat-description" data-i18n="ui.sharedTimelineForYouAndBothAgents">Shared timeline for you and both agents</div>
-          </div>
           <div class="toolbar-actions">
             <select id="conversation-filter" class="mini-select" title="Filter timeline" data-i18n-title="ui.filterTimeline">
               <option value="all" data-i18n="ui.allMessages">All messages</option>
@@ -115,13 +108,11 @@
             </button>
           </div>
           <div class="composer-footnote">
-            <label class="intent-picker"><span data-i18n="ui.sendMode">Send mode
-              </span><select id="message-intent" class="mini-select">
+            <label class="intent-picker"><select id="message-intent" class="mini-select" title="Send mode" aria-label="Send mode" data-i18n-title="ui.sendMode" data-i18n-aria-label="ui.sendMode">
                 <option value="steer" data-i18n="ui.trySteeringTheCurrentTurn">Try steering the current Turn</option>
                 <option value="queue" data-i18n="ui.queueForTheNextTurn">Queue for the next Turn</option>
               </select>
             </label>
-            <span id="delivery-hint" data-i18n="ui.sendToTheCurrentDriver">Send to the current Driver</span>
           </div>
           <div id="drop-overlay" class="drop-overlay hidden" data-i18n="ui.dropImagesToAttachThem">Drop images to attach them</div>
         </div>
@@ -129,10 +120,7 @@
 
       <aside class="inspector-panel panel">
         <div class="inspector-header">
-          <div>
-            <div class="panel-heading compact" data-i18n="ui.workInspector">Work inspector</div>
-            <div class="inspector-subtitle" data-i18n="ui.inspectToolsCommandsDiffsAndApprovals">Inspect tools, commands, diffs, and approvals</div>
-          </div>
+          <div class="panel-heading compact" data-i18n="ui.workInspector">Work inspector</div>
           <select id="inspector-agent" class="mini-select">
             <option value="all" data-i18n="ui.allAgents">All agents</option>
             <option value="slot1" data-i18n="agent.agent1">Agent 1</option>
@@ -154,7 +142,7 @@
             <button id="refresh-diff" class="secondary-button" data-i18n="ui.refreshDiff">Refresh diff</button>
             <label class="checkbox-label"><input id="staged-diff" type="checkbox"> <span data-i18n="common.staged">Staged</span></label>
           </div>
-          <pre id="diff-output" class="diff-output" data-i18n="ui.chooseRefreshDiffToInspectWorkspaceChanges">Choose Refresh diff to inspect workspace changes.</pre>
+          <pre id="diff-output" class="diff-output"></pre>
         </div>
         <div id="approvals-tab" class="tab-content"></div>
       </aside>

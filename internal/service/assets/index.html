@@ -19,10 +19,9 @@
     <section class="login-card">
       <div class="login-brand" aria-hidden="true">
         <span class="brand-mark"><span>P</span><span>R</span></span>
-        <span><strong>PairRoom</strong><small data-i18n="common.controlPlaneUpper">CONTROL PLANE</small></span>
+        <span><strong>PairRoom</strong></span>
       </div>
       <div class="login-copy">
-        <p class="eyebrow" data-i18n="common.managementAuthenticationUpper">MANAGEMENT AUTHENTICATION</p>
         <h1 id="login-title" data-i18n="ui.signInToTheLocalControlPlane">Sign in to the local control plane</h1>
         <p><span data-i18n="ui.enterTheServiceTokenOrPaste">Enter the Service Token, or paste </span><code>#token=…</code><span data-i18n="ui.inTheFullManagementUrl">  in the full Management URL.</span></p>
       </div>
@@ -54,7 +53,7 @@
         </button>
         <a class="brand" href="#/overview" aria-label="PairRoom overview" data-i18n-aria-label="ui.pairroomOverview">
           <span class="brand-mark" aria-hidden="true"><span>P</span><span>R</span></span>
-          <span class="brand-copy"><strong>PairRoom</strong><small data-i18n="common.controlPlaneUpper">CONTROL PLANE</small></span>
+          <span class="brand-copy"><strong>PairRoom</strong></span>
         </a>
       </div>
       <nav class="primary-nav">
@@ -119,7 +118,6 @@
       </div>
       <footer class="workspace-footer">
         <span id="last-updated" data-i18n="ui.notSynchronizedYet">Not synchronized yet</span>
-        <span data-i18n="ui.localControlPlaneSwitchingRoomsDoesNotInterruptActiveTurns">Local control plane · switching Rooms does not interrupt active Turns</span>
       </footer>
     </div>
   </div>
@@ -127,7 +125,7 @@
   <dialog id="project-dialog" class="modal modal-medium" aria-labelledby="project-dialog-title">
     <form id="project-form" method="dialog" novalidate="">
       <header class="modal-header">
-        <div><p class="eyebrow" data-i18n="common.workspaceUpper">WORKSPACE</p><h2 id="project-dialog-title" data-i18n="ui.registerProject9c99cf3">Register Project</h2><p id="project-dialog-subtitle" class="muted" data-i18n="ui.addACanonicalGitWorktree">Add a canonical Git worktree.</p></div>
+        <div><h2 id="project-dialog-title" data-i18n="ui.registerProject9c99cf3">Register Project</h2></div>
         <button class="icon-button modal-close" type="button" data-close-dialog="project-dialog" aria-label="Close" data-i18n-aria-label="common.close">×</button>
       </header>
       <div class="modal-body">
@@ -136,10 +134,7 @@
           <input id="project-path" name="path" type="text" required="" placeholder="/absolute/path/to/git/worktree" autocomplete="off" spellcheck="false">
           <button id="project-path-browse" class="secondary-button path-field-browse" type="button" hidden="" data-i18n="ui.chooseDirectory" data-i18n-title="ui.chooseDirectory" data-i18n-aria-label="ui.chooseDirectory">Choose folder…</button>
         </span>
-        <div id="project-path-help" class="callout neutral">
-          <strong data-i18n="ui.explicitPathBoundary">Explicit path boundary</strong>
-          <span data-i18n="ui.onlyAbsolutePathsAreAcceptedRootPathsSubdirectoriesAndSymlinksResolveTo">Only absolute paths are accepted. Root paths, subdirectories, and symlinks resolve to the same canonical Git worktree; the Service does not scan development directories.</span>
-        </div>
+        <p id="project-path-help" class="field-help" data-i18n="ui.onlyAbsolutePathsAreAcceptedRootPathsSubdirectoriesAndSymlinksResolveTo">Absolute path; subfolders and symlinks resolve to the same worktree.</p>
         <p id="project-form-error" class="form-error" role="alert" hidden=""></p>
       </div>
       <footer class="modal-footer">
@@ -152,13 +147,13 @@
   <dialog id="room-dialog" class="modal modal-large" aria-labelledby="room-dialog-title">
     <form id="room-form" method="dialog" novalidate="">
       <header class="modal-header">
-        <div><p data-room-only class="eyebrow" data-i18n="common.newRoomUpper">NEW ROOM</p><h2 id="room-dialog-title" data-i18n="ui.createRooma1cda23">Create Room</h2><p data-room-only class="muted" data-i18n="ui.aProjectCanContainMultipleIsolatedCollaborationRooms">A Project can contain multiple isolated collaboration Rooms.</p></div>
+        <div><h2 id="room-dialog-title" data-i18n="ui.createRooma1cda23">Create Room</h2></div>
         <button class="icon-button modal-close" type="button" data-close-dialog="room-dialog" aria-label="Close" data-i18n-aria-label="common.close">×</button>
       </header>
       <div class="modal-body room-form-body">
         <div class="form-grid two-columns" data-room-only>
           <label><span class="field-label" data-i18n="common.project">Project</span><select id="room-project-id" required=""></select></label>
-          <label><span class="field-label" data-i18n="ui.roomName">Room name</span><input id="room-name" type="text" maxlength="160" aria-describedby="room-name-hint" autocomplete="off" placeholder="For example: Auth refactor review" data-i18n-placeholder="ui.forExampleAuthRefactorReview"><span id="room-name-hint" class="field-hint" data-i18n="room.temporaryNameHint">Optional. Leave blank for a temporary name; right-click a Room to rename it later.</span></label>
+          <label><span class="field-label" data-i18n="ui.roomName">Room name</span><input id="room-name" type="text" maxlength="160" aria-describedby="room-name-hint" autocomplete="off" placeholder="For example: Auth refactor review" data-i18n-placeholder="ui.forExampleAuthRefactorReview"><span id="room-name-hint" class="field-hint" data-i18n="room.temporaryNameHint">Optional.</span></label>
         </div>
         <section class="collaboration-config" data-room-only>
           <label><span class="field-label" data-i18n="ui.native.hostMode">Host mode</span><select id="room-host-mode"><option value="embedded" data-i18n="ui.native.embedded">Embedded · PairRoom manages sessions</option><option value="native" data-i18n="ui.native.native">Native · relay between your native sessions (experimental)</option></select></label>
@@ -172,13 +167,12 @@
           <p id="collaboration-help" class="field-help"></p>
           <details id="collaboration-default-details"><summary data-i18n="room.collaboration.viewInstructions">View native instructions</summary><pre id="collaboration-default-instructions" class="collaboration-instructions"></pre></details>
           <label id="collaboration-custom-field" hidden><span class="field-label" data-i18n="room.collaboration.instructions">Collaboration instructions</span><textarea id="room-collaboration-instructions" rows="4" maxlength="16384" data-i18n-placeholder="room.collaboration.placeholder" placeholder="Describe how Agent 1 and Agent 2 should collaborate…"></textarea></label>
-          <p class="field-help" data-i18n="room.collaboration.immutable">Fixed at creation; instructions guide collaboration, not tool permissions.</p>
         </section>
         <p data-room-only class="callout warning compact-callout" data-i18n="room.collaboration.yoloWarning">New Rooms default to YOLO. Both Agents may modify files and run commands without routine approval. Use trusted workspaces, or choose a narrower native policy below.</p>
 
         <section class="pair-profile-controls" aria-label="Agent pair profiles" data-i18n-aria-label="agent.pairProfile.title">
-          <label id="pair-profile-picker"><span class="field-label" data-i18n="agent.pairProfile.singular">Agent pair profile</span><select id="room-pair-profile"><option value="" data-i18n="agent.pairProfile.serviceDefaults">Service defaults (no profile)</option></select></label>
-          <p id="pair-profile-help" class="field-help" data-i18n="agent.pairProfile.templateHelp">Fills both Agents. Changes here affect only this Room unless you save the profile.</p>
+          <label id="pair-profile-picker" title="Fills both Agents. Changes here affect only this Room unless you save the profile." data-i18n-title="agent.pairProfile.templateHelp"><span class="field-label" data-i18n="agent.pairProfile.singular">Agent pair profile</span><select id="room-pair-profile"><option value="" data-i18n="agent.pairProfile.serviceDefaults">Service defaults (no profile)</option></select></label>
+          <p id="pair-profile-help" class="field-help" hidden></p>
           <details id="pair-profile-save-options">
             <summary data-i18n="agent.pairProfile.saveOptions">Save or update this pair</summary>
             <div class="pair-profile-metadata">
@@ -191,10 +185,10 @@
             </div>
           </details>
         </section>
-        <div class="section-label-row"><div><span class="field-label" data-i18n="room.agentConfiguration">Agent configuration</span><p data-room-only class="field-help" data-i18n="room.agentConfigurationImmutable">This configuration is fixed for the lifetime of the Room.</p></div><button id="agent-catalog-refresh" class="secondary-button compact-button" type="button" data-i18n="agent.refreshCatalog">Refresh Agent catalog</button></div>
+        <div class="section-label-row"><div><span class="field-label" data-i18n="room.agentConfiguration">Agent configuration</span><p data-room-only class="field-help" data-i18n="room.agentConfigurationImmutable">Fixed once the Room is created.</p></div><button id="agent-catalog-refresh" class="secondary-button compact-button" type="button" data-i18n="agent.refreshCatalog">Refresh Agent catalog</button></div>
         <div class="binding-grid">
           <fieldset class="binding-card" data-actor="slot1">
-            <legend><span class="agent-avatar slot1">1</span><span><strong id="slot1-responsibility-label" data-i18n="room.collaboration.leadSlot">Agent 1 · Lead</strong><small data-room-only data-i18n="agent.runtimeAndBinding">Runtime + Binding</small></span></legend>
+            <legend><span class="agent-avatar slot1">1</span><span><strong id="slot1-responsibility-label" data-i18n="room.collaboration.leadSlot">Agent 1 · Lead</strong></span></legend>
             <div class="agent-selection-grid">
               <label><span class="field-label" data-i18n="agent.runtime">Runtime</span><select id="slot1-runtime" required></select><small id="slot1-runtime-diagnostic" class="field-help"></small></label>
               <label><span class="field-label" data-i18n="agent.provider">Provider</span><select id="slot1-provider" required></select><small id="slot1-provider-diagnostic" class="field-help"></small></label>
@@ -209,12 +203,12 @@
                 <label class="agent-instructions"><span class="field-label" data-i18n="agent.instructions">Additional instructions</span><textarea id="slot1-instructions" rows="3" maxlength="65536"></textarea></label>
               </div>
             </details>
-            <label data-room-only class="choice-card"><input type="radio" name="slot1-mode" value="new" checked=""><span><strong data-i18n="ui.createSession">Create Session</strong><small data-i18n="ui.theIdentityIsMaterializedAfterTheCliAcceptsTheFirstRealTurn">The Identity is materialized after the CLI accepts the first real Turn</small></span></label>
-            <label data-room-only class="choice-card"><input type="radio" name="slot1-mode" value="existing"><span><strong data-i18n="ui.reuseExisting">Reuse Existing</strong><small data-i18n="ui.resumeTheExactExistingVendorContext">Resume the exact existing vendor context</small></span></label>
+            <label data-room-only class="choice-card" title="The Identity is materialized after the CLI accepts the first real Turn" data-i18n-title="ui.theIdentityIsMaterializedAfterTheCliAcceptsTheFirstRealTurn"><input type="radio" name="slot1-mode" value="new" checked=""><span><strong data-i18n="ui.createSession">Create Session</strong></span></label>
+            <label data-room-only class="choice-card"><input type="radio" name="slot1-mode" value="existing"><span><strong data-i18n="ui.reuseExisting">Reuse Existing</strong></span></label>
             <label data-room-only class="session-field" for="slot1-session-id"><span id="slot1-binding-label" data-i18n="agent.sessionOrThreadId">Session / Thread ID</span><input id="slot1-session-id" type="text" placeholder="Paste Session ID" autocomplete="off" spellcheck="false" disabled="" data-i18n-placeholder="ui.pasteSessionId"></label>
           </fieldset>
           <fieldset class="binding-card" data-actor="slot2">
-            <legend><span class="agent-avatar slot2">2</span><span><strong id="slot2-responsibility-label" data-i18n="room.collaboration.executorSlot">Agent 2 · Executor</strong><small data-room-only data-i18n="agent.runtimeAndBinding">Runtime + Binding</small></span></legend>
+            <legend><span class="agent-avatar slot2">2</span><span><strong id="slot2-responsibility-label" data-i18n="room.collaboration.executorSlot">Agent 2 · Executor</strong></span></legend>
             <div class="agent-selection-grid">
               <label><span class="field-label" data-i18n="agent.runtime">Runtime</span><select id="slot2-runtime" required></select><small id="slot2-runtime-diagnostic" class="field-help"></small></label>
               <label><span class="field-label" data-i18n="agent.provider">Provider</span><select id="slot2-provider" required></select><small id="slot2-provider-diagnostic" class="field-help"></small></label>
@@ -229,15 +223,15 @@
                 <label class="agent-instructions"><span class="field-label" data-i18n="agent.instructions">Additional instructions</span><textarea id="slot2-instructions" rows="3" maxlength="65536"></textarea></label>
               </div>
             </details>
-            <label data-room-only class="choice-card"><input type="radio" name="slot2-mode" value="new" checked=""><span><strong data-i18n="ui.createThread">Create Thread</strong><small data-i18n="ui.theIdentityIsMaterializedAfterTheCliAcceptsTheFirstRealTurn">The Identity is materialized after the CLI accepts the first real Turn</small></span></label>
-            <label data-room-only class="choice-card"><input type="radio" name="slot2-mode" value="existing"><span><strong data-i18n="ui.reuseExisting">Reuse Existing</strong><small data-i18n="ui.resumeTheExactExistingVendorContext">Resume the exact existing vendor context</small></span></label>
+            <label data-room-only class="choice-card" title="The Identity is materialized after the CLI accepts the first real Turn" data-i18n-title="ui.theIdentityIsMaterializedAfterTheCliAcceptsTheFirstRealTurn"><input type="radio" name="slot2-mode" value="new" checked=""><span><strong data-i18n="ui.createThread">Create Thread</strong></span></label>
+            <label data-room-only class="choice-card"><input type="radio" name="slot2-mode" value="existing"><span><strong data-i18n="ui.reuseExisting">Reuse Existing</strong></span></label>
             <label data-room-only class="session-field" for="slot2-session-id"><span id="slot2-binding-label" data-i18n="agent.sessionOrThreadId">Session / Thread ID</span><input id="slot2-session-id" type="text" placeholder="Paste Thread ID" autocomplete="off" spellcheck="false" disabled="" data-i18n-placeholder="ui.pasteThreadId"></label>
           </fieldset>
         </div>
         <div data-room-only class="callout boundary"><strong data-i18n="common.transcriptBoundary">Transcript Boundary</strong><span data-i18n="ui.existingResumesOnlyVendorContextPairroomDoesNotImportCopySummarizeOr">Existing resumes only vendor context; PairRoom does not import, copy, summarize, or display the pre-binding transcript.</span></div>
         <p id="room-form-error" class="form-error" role="alert" hidden=""></p>
       </div>
-      <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="room-dialog" data-i18n="ui.cancel">Cancel</button><button id="room-submit" class="primary-button" type="submit" data-i18n="ui.createRoomAtomically">Create Room atomically</button></footer>
+      <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="room-dialog" data-i18n="ui.cancel">Cancel</button><button id="room-submit" class="primary-button" type="submit" data-i18n="ui.createRooma1cda23">Create Room</button></footer>
     </form>
   </dialog>
 
@@ -251,7 +245,7 @@
 
   <dialog id="rename-dialog" class="modal modal-small" aria-labelledby="rename-dialog-title">
     <form id="rename-form" method="dialog" novalidate="">
-      <header class="modal-header"><div><p class="eyebrow" data-i18n="common.roomUpper">ROOM</p><h2 id="rename-dialog-title" data-i18n="ui.renameRoom">Rename Room</h2><p class="muted" data-i18n="ui.theOperationWaitsForASafeTurnBoundaryAndDoesNotInterrupt">The operation waits for a safe Turn boundary and does not interrupt active work.</p></div><button class="icon-button modal-close" type="button" data-close-dialog="rename-dialog" aria-label="Close" data-i18n-aria-label="common.close">×</button></header>
+      <header class="modal-header"><div><h2 id="rename-dialog-title" data-i18n="ui.renameRoom">Rename Room</h2></div><button class="icon-button modal-close" type="button" data-close-dialog="rename-dialog" aria-label="Close" data-i18n-aria-label="common.close">×</button></header>
       <div class="modal-body"><input id="rename-room-id" type="hidden"><label><span class="field-label" data-i18n="ui.newName">New name</span><input id="rename-room-name" type="text" required="" maxlength="160" autocomplete="off"></label><p id="rename-form-error" class="form-error" role="alert" hidden=""></p></div>
       <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="rename-dialog" data-i18n="ui.cancel">Cancel</button><button class="primary-button" type="submit" data-i18n="ui.saveName">Save name</button></footer>
     </form>
@@ -259,7 +253,7 @@
 
   <dialog id="confirm-dialog" class="modal modal-small" aria-labelledby="confirm-title">
     <form id="confirm-form" method="dialog">
-      <header class="modal-header"><div><p id="confirm-eyebrow" class="eyebrow" data-i18n="common.confirmUpper">CONFIRM</p><h2 id="confirm-title" data-i18n="ui.confirmAction">Confirm action</h2></div><button class="icon-button modal-close" type="button" data-close-dialog="confirm-dialog" aria-label="Close" data-i18n-aria-label="common.close">×</button></header>
+      <header class="modal-header"><div><h2 id="confirm-title" data-i18n="ui.confirmAction">Confirm action</h2></div><button class="icon-button modal-close" type="button" data-close-dialog="confirm-dialog" aria-label="Close" data-i18n-aria-label="common.close">×</button></header>
       <div class="modal-body">
         <p id="confirm-message" class="confirm-message"></p>
         <div id="confirm-detail" class="callout neutral" hidden=""></div>
@@ -270,7 +264,7 @@
         </label>
         <label id="confirm-ack-wrap" class="choice-card" hidden="">
           <input id="confirm-ack" type="checkbox">
-          <span><strong id="confirm-ack-label" data-i18n="ui.iUnderstandThisActionCannotBeUndone">I understand this action cannot be undone.</strong><small data-i18n="ui.permanentDeletionIsEnabledOnlyAfterAcknowledgement">Permanent deletion is enabled only after acknowledgement.</small></span>
+          <span><strong id="confirm-ack-label" data-i18n="ui.iUnderstandThisActionCannotBeUndone">I understand this action cannot be undone.</strong></span>
         </label>
       </div>
       <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="confirm-dialog" data-i18n="ui.cancel">Cancel</button><button id="confirm-submit" class="danger-button" type="submit" data-i18n="ui.confirm">Confirm</button></footer>
@@ -280,7 +274,7 @@
   <dialog id="room-picker-dialog" class="modal modal-medium" aria-labelledby="room-picker-title">
     <form id="room-picker-form" method="dialog">
       <header class="modal-header">
-        <div><p class="eyebrow" data-i18n="common.roomsUpper">ROOMS</p><h2 id="room-picker-title" data-i18n="ui.openRoom">Open Room</h2><p class="muted" data-i18n="ui.chooseAnActiveRoomToOpenInAnApplicationTab">Choose an active Room to open in an application tab.</p></div>
+        <div><h2 id="room-picker-title" data-i18n="ui.openRoom">Open Room</h2></div>
         <button class="icon-button modal-close" type="button" data-close-dialog="room-picker-dialog" aria-label="Close" data-i18n-aria-label="common.close">×</button>
       </header>
       <div class="modal-body">

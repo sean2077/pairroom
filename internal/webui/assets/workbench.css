@@ -29,7 +29,7 @@
   --wb-amber: #7d5309;
   --wb-red: #a82c3c;
   --wb-blue: #315c9f;
-  /* Filled user bubble, as in docs/images/pairroom-runtime-overview.png. */
+  /* Filled user bubble, as in docs/images/pairroom-embedded-room.png. */
   --wb-user-bubble: #5b54c7;
   --wb-user-bubble-line: #7a73dd;
   --wb-user-bubble-ink: #ffffff;
@@ -148,7 +148,6 @@ body.workbench-management .sidebar { background: var(--wb-chrome); backdrop-filt
 body.workbench-management .sidebar-top { min-height: 46px; padding-block: 6px; border-bottom-color: transparent; }
 body.workbench-management .brand-mark { width: 24px; height: 24px; flex-basis: 24px; border-radius: 6px; background: var(--wb-primary); color: var(--wb-on-primary); }
 body.workbench-management .brand-copy strong { font-size: 14px; font-weight: 650; letter-spacing: -.02em; }
-body.workbench-management .brand-copy small { display: none; }
 body.workbench-management .primary-nav { padding: 8px 8px 6px; gap: 2px; }
 body.workbench-management .primary-nav a { min-height: 34px; padding: 6px 10px; gap: 10px; border: 0; border-radius: 6px; font-size: 13px; font-weight: 500; }
 body.workbench-management .primary-nav a:hover { translate: none; }
@@ -280,7 +279,7 @@ body.workbench-room .search-box:focus-within { border-color: var(--wb-focus); bo
 body.workbench-room .room-collaboration { padding-block: 7px; background: var(--wb-panel); }
 body.workbench-room.ux-enhanced .timeline { padding-block: 20px 24px; }
 body.workbench-room .message-meta strong { font-weight: 600; }
-/* Room messages keep the bubble language of docs/images/pairroom-runtime-overview.png:
+/* Room messages keep the bubble language of docs/images/pairroom-embedded-room.png:
    Agent messages are raised cards over the canvas carrying their slot accent edge,
    user messages a filled accent bubble, so authorship reads without the meta row. */
 body.workbench-room.ux-enhanced .message-bubble { border: 1px solid var(--wb-line); background: var(--wb-panel); border-radius: var(--radius-lg); padding: 12px 14px; box-shadow: 0 2px 10px rgb(0 0 0 / .10); }

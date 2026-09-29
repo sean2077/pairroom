@@ -5,7 +5,7 @@
 **Two independent coding agents. One problem. Your native workflow.** PairRoom connects [Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), and [Grok Build](https://docs.x.ai/build/overview) sessions so they can review each other's work against the repository, without replacing their model loop, tools, skills, or subagents.
 
 <p align="center">
-  <img src="docs/images/pairroom-runtime-overview.png" alt="PairRoom collaboration interface">
+  <img src="docs/images/pairroom-native-room.png" alt="A Native Room relaying between your own Claude Code and Codex sessions">
 </p>
 
 ## Why use it?
@@ -28,6 +28,22 @@ Having Claude Code draft a plan, copying it to Codex for review, and pasting the
 PairRoom works inside your existing repository instructions, worktrees, and PR/MR policy. It adds no mandatory phases and does not append accumulated Room history to each relay.
 
 [Why PairRoom](docs/WHY_PAIRROOM.md) covers fit and limits, [Alternatives](docs/ALTERNATIVES.md) compares similar tools using dated sources, and [Core concepts](docs/CONCEPTS.md) defines Runtime, Provider, slot, and Binding. For ready-made prompts, see the [review-first recipe](docs/GETTING_STARTED.md#review-first-execute-where-it-fits).
+
+## A look around
+
+Screenshots use synthetic demo conversations; they do not show model output.
+
+**Embedded Room** — PairRoom hosts both Agents; turn summaries, diffs and approvals sit in the work inspector.
+
+![Embedded Room with a Claude Code lead and a Codex executor](docs/images/pairroom-embedded-room.png)
+
+**Management** — Projects, Rooms in either host mode, and runtime capacity in one local shell.
+
+![Project detail listing Embedded and Native Rooms](docs/images/pairroom-management.png)
+
+**Create a Room** — choose the host mode, collaboration style and each slot's Runtime.
+
+![Create Room dialog](docs/images/pairroom-create-room.png)
 
 ## Install and try
 

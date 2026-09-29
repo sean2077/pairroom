@@ -124,14 +124,17 @@
         binding?.focus();
       });
       chips.push(chip);
-      const card=element('article',undefined,'binding');card.dataset.slot=slot;card.tabIndex=-1;card.dataset.nativeFocus=slot;
-      const top=element('div',undefined,'binding-top');top.append(element('h3',`${index+1} · ${handle(slot)}`),element('span',state,'badge'));
-      if(b.active){const park=element('button',tr(b.park_enabled?'parkOn':'parkOff'));park.type='button';park.dataset.park=slot;park.dataset.nativeFocus=`${slot}-park`;park.setAttribute('aria-pressed',String(Boolean(b.park_enabled)));park.addEventListener('click',async()=>{park.disabled=true;try{await request(`api/v1/participants/${slot}/park`,{method:'POST',body:JSON.stringify({enabled:!b.park_enabled})});status(tr('controls'));await refresh();}catch(e){status(e.message,true);}finally{park.disabled=false;}});top.append(park);}
+      const card=element('article',undefined,`binding ${slot}`);card.dataset.slot=slot;card.tabIndex=-1;card.dataset.nativeFocus=slot;
+      const top=element('div',undefined,'binding-top'),who=element('div',undefined,'binding-identity'),name=element('h3',handle(slot));name.title=handle(slot);
+      const observed=element('span',state,`binding-state ${!b.active?'unbound':b.session_id?'bound':'pending'}`);observed.title=tr('activityHelp');
+      who.append(name,observed);
+      top.append(element('span',String(index+1),'participant-avatar'),who);
+      if(b.active){const park=element('button',tr(b.park_enabled?'parkOn':'parkOff'),'binding-park');park.type='button';park.dataset.park=slot;park.dataset.nativeFocus=`${slot}-park`;park.setAttribute('aria-pressed',String(Boolean(b.park_enabled)));park.addEventListener('click',async()=>{park.disabled=true;try{await request(`api/v1/participants/${slot}/park`,{method:'POST',body:JSON.stringify({enabled:!b.park_enabled})});status(tr('controls'));await refresh();}catch(e){status(e.message,true);}finally{park.disabled=false;}});top.append(park);}
       card.append(top);
       const label = key => window.PairRoomI18n.t(key), inherited = label('room.nativeDefault');
       const provider = selection.provider?.source === 'cc-switch'
         ? `CC Switch · ${selection.provider.app_type}/${selection.provider.profile_id}` : label('agent.nativeProvider');
-      const configMeta = element('dl', undefined, 'binding-meta agent-config');
+      const configMeta = element('dl', undefined, 'binding-meta agent-config'); configMeta.title = tr('metadata');
       [[label('agent.runtime'), selection.runtime || inherited], [label('agent.provider'), provider],
         [label('agent.model'), selection.model || inherited], [label('agent.effort'), selection.effort || inherited],
         [label('agent.permissionMode'), [selection.permission_mode, selection.approval_policy, selection.sandbox].filter(Boolean).join(' · ') || inherited],
@@ -146,7 +149,7 @@
       const instructions=element('details');instructions.dataset.disclosure=`${slot}-commands`;instructions.open=disclosures.has(instructions.dataset.disclosure);instructions.append(element('summary',tr('commands')),element('p',tr('setup.intro'),'muted'));
       instructions.firstElementChild.dataset.nativeFocus=`${slot}-commands`;
       instructions.append(element('pre',`pairroom relay install --runtime ${selection.runtime}\npairroom relay bind --room ${value.room.id} --slot ${index+1}\npairroom relay wait --room ${value.room.id} --slot ${index+1}`));card.append(instructions);
-      const config=element('details');config.dataset.disclosure=`${slot}-config`;config.open=disclosures.has(config.dataset.disclosure);config.append(element('summary',tr('metadata')),element('pre',JSON.stringify(selection,null,2)));config.firstElementChild.dataset.nativeFocus=`${slot}-config`;card.append(config);return card;
+      const config=element('details');config.dataset.disclosure=`${slot}-config`;config.open=disclosures.has(config.dataset.disclosure);config.append(element('summary',tr('rawSelection')),element('pre',JSON.stringify(selection,null,2)));config.firstElementChild.dataset.nativeFocus=`${slot}-config`;card.append(config);return card;
     });$('bindings').replaceChildren(...nodes);
     $('participant-summary').replaceChildren(...chips);
     for(const option of $('target').options) option.textContent=handle(option.value);
@@ -188,12 +191,13 @@
   }
   function deliveryEvidence(m,delivery){
     if(!delivery)return null;
-    const section=element('div',undefined,'delivery-evidence');
+    const section=element('div',undefined,'delivery-evidence');let measured=false;
     if(['handed_off','unknown'].includes(m.state)&&Number.isFinite(delivery.queue_wait_ms)&&delivery.queue_wait_ms>=0){
       const seconds=new Intl.NumberFormat(language(),{maximumFractionDigits:2}).format(delivery.queue_wait_ms/1000);
       const latency=element('span',window.PairRoomI18n.t('room.native.queueClaimTime',{seconds}),'delivery-latency');
-      latency.title=tr('queueClaimBoundary');section.append(latency);
+      latency.title=tr('queueClaimBoundary');section.append(latency);measured=true;
     }
+    if(!delivery.reserved_at&&!delivery.inferred_outcome&&!delivery.slot_observations?.length)return measured?section:null;
     const detail=element('details',undefined,'wake-evidence');
     detail.append(element('summary',tr(delivery.reserved_at?'messageWakeReserved':'messageWakeUnreserved')));
     if(delivery.reserved_at)detail.append(element('p',`${tr('wakeReserved')}: ${time(delivery.reserved_at)}`));
@@ -236,7 +240,7 @@
       button.addEventListener('click',async()=>{if(action==='retry'&&!await confirmRetry())return;button.disabled=true;try{await request(`api/v1/messages/${encodeURIComponent(m.id)}/${action}`,{method:'POST',body:'{}'});pendingKey='';await refresh();}catch(e){status(e.message,true);}finally{button.disabled=false;}});footer.append(button);
     }
     if(chat){
-      const avatar=element('div',actor==='user'?'Y':actor==='slot1'?'1':actor==='slot2'?'2':'·','message-avatar');avatar.setAttribute('aria-hidden','true');
+      const avatar=element('div',actor==='user'?Array.from(tr('user'))[0]:actor==='slot1'?'1':actor==='slot2'?'2':'·','message-avatar');avatar.setAttribute('aria-hidden','true');
       const content=element('div',undefined,'message-content');content.append(head,bubble,footer);node.replaceChildren(avatar,content);
     }else node.replaceChildren(head,bubble,footer);
   }
@@ -250,7 +254,7 @@
     try{
       const page=await request(`api/v1/pending?limit=10${pendingCursor?`&cursor=${encodeURIComponent(pendingCursor)}`:''}`);
       if(serial!==pendingRequest)return;
-      pendingNext=page.next_cursor||'';$('pending-count').textContent=String(page.total);$('pending-next').disabled=!pendingNext;$('pending-first').disabled=!pendingCursor;
+      pendingNext=page.next_cursor||'';$('pending-count').textContent=String(page.total);$('pending-next').disabled=!pendingNext;$('pending-first').disabled=!pendingCursor;$('pending-pager').hidden=!pendingNext&&!pendingCursor;
       pageMessages($('pending-items'),page.messages,'pending',page.delivery);
     }catch(e){if(serial===pendingRequest)pendingKey='';throw e;}
   }
@@ -290,10 +294,10 @@
     const pending=Object.values(summary.inboxes||{}).reduce((n,i)=>n+(i.queued||0)+(i.delivering||0)+(i.unknown||0),0);
     if(pending){const button=element('button',`${tr('pendingTitle')} (${pending})`);button.type='button';button.dataset.pendingOpen='';button.addEventListener('click',()=>{showInspector(true);$('pending-title').scrollIntoView({block:'nearest'});});items.push(button);}
     for(const [slot,inbox] of Object.entries(summary.inboxes||{})){
-      if(inbox.unknown)items.push(element('span',`${handle(slot)}: ${inbox.unknown} ${tr('unknown')}`,'badge'));
-      if(inbox.oldest_queued_at)items.push(element('span',`${handle(slot)} · ${tr('oldestQueued')} ${time(inbox.oldest_queued_at)}`,'muted'));
+      if(inbox.unknown)items.push(element('span',`${handle(slot)}: ${inbox.unknown} ${tr('unknown')}`,'badge warn'));
+      if(inbox.oldest_queued_at)items.push(element('span',`${handle(slot)} · ${tr('oldestQueued')} ${time(inbox.oldest_queued_at)}`,'attention-note'));
     }
-    for(const [slot,wake] of Object.entries(summary.last_wake||{}))if(wake.outcome==='failed')items.push(element('span',`${handle(slot)} · ${tr('wakeFailed')}: ${vocabulary('wakeReason',wake.reason)}`,'badge'));
+    for(const [slot,wake] of Object.entries(summary.last_wake||{}))if(wake.outcome==='failed')items.push(element('span',`${handle(slot)} · ${tr('wakeFailed')}: ${vocabulary('wakeReason',wake.reason)}`,'badge warn'));
     if(summary.last_user_message){const button=element('button',tr('userAttention'));button.type='button';button.addEventListener('click',()=>inspectMessage(summary.last_user_message));items.push(button);}
     $('attention').replaceChildren(...items);$('attention').hidden=items.length===0;
   }
@@ -311,10 +315,10 @@
       for (const state of ['queued', 'delivering', 'unknown']) {
         counts.append(element('dt', tr(state)), element('dd', String(inbox[state] || 0)));
       }
-      card.append(counts);
-      if (inbox.oldest_queued_at) card.append(element('p', `${tr('oldestQueued')}: ${time(inbox.oldest_queued_at)}`, 'muted'));
+      if (inbox.oldest_queued_at) counts.append(element('dt', tr('oldestQueued')), element('dd', time(inbox.oldest_queued_at)));
       const wake = value.summary?.last_wake?.[slot];
-      if (wake) card.append(element('p', `${tr('lastWake')}: ${wakeText(wake)} · ${time(wake.at)}`, 'muted'));
+      if (wake) counts.append(element('dt', tr('lastWake')), element('dd', `${wakeText(wake)} · ${time(wake.at)}`));
+      card.append(counts);
       return card;
     }));
   }
@@ -347,6 +351,7 @@
     $('send').textContent=pendingSend?tr('retryOriginal'):tr('send');
     $('outbox-check').disabled=sending||outboxBroken||!pendingSend;
     $('outbox-forget').disabled=sending;
+    $('attachment-name').textContent=$('attachment').files?.[0]?.name||'';
   }
   function renderOutbox(){
     $('outbox').hidden=!pendingSend&&!outboxBroken&&!foreignSend;
@@ -430,13 +435,14 @@
   });
   // Clearing the local draft hands recovery of another window's send to this one.
   $('message-text').addEventListener('input',()=>{if(foreignSend&&!sending&&!localDraft(foreignSend))readoptOutbox();});
+  $('attachment').addEventListener('change',lockComposer);
   document.addEventListener('pairroom:lang',translations);
   async function start(){
     translations();lockComposer();try{
       const token=new URLSearchParams(location.hash.slice(1)).get('token');
       if(token){const session=await request('api/v1/session',{method:'POST',headers:{Authorization:`Bearer ${token}`}});csrf=session.csrf_token;history.replaceState(null,'',location.pathname+location.search);}
       else{const session=await request('api/v1/session');csrf=session.csrf_token;}
-      await refresh();stream=new EventSource('api/v1/events');stream.addEventListener('native',()=>{refresh().catch(e=>status(e.message,true));});activityTimer=setInterval(()=>{if(!document.hidden)refresh().catch(()=>{});},15000);stream.onopen=()=>{$('connection').textContent=tr('connected');scheduleRefresh();};stream.onerror=()=>{$('connection').textContent=tr('reconnecting');};
+      await refresh();stream=new EventSource('api/v1/events');stream.addEventListener('native',()=>{refresh().catch(e=>status(e.message,true));});activityTimer=setInterval(()=>{if(!document.hidden)refresh().catch(()=>{});},15000);stream.onopen=()=>{$('connection').textContent=tr('connected');$('connection').dataset.state='connected';scheduleRefresh();};stream.onerror=()=>{$('connection').textContent=tr('reconnecting');$('connection').dataset.state='reconnecting';};
     }catch(e){status(e.message,true);}
   }
   window.addEventListener('pagehide',()=>{stream?.close();clearInterval(activityTimer);});window.addEventListener('pageshow',event=>{if(event.persisted)start();});start();
