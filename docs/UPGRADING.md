@@ -2,6 +2,16 @@
 
 Treat upgrades as controlled changes, not overwriting active binaries. [Changelog](../CHANGELOG.md) records release history; this page owns current reader and operational boundaries. [Installation](INSTALLATION.md) owns per-channel binary replacement/uninstall.
 
+## Update reminders
+
+In the browser Management Shell, click the version at the bottom of the sidebar to open **Software updates**. **Check for updates** performs a one-time check; **Automatically check for updates** enables non-blocking reminders while a signed-in view is open. Automatic checks are off by default. A new-version banner links to release notes/downloads and offers **Ignore this version**; a later version can still be announced. Turning automatic checks off hides the banner but leaves manual checks available. Preferences are local to the browser origin, not Room state; blocked storage falls back to the current page's memory.
+
+Desktop retains its existing opt-in native checker and Settings/tray notices. The browser checker does not run inside a native Desktop WebView or a Room frame, so it cannot override Desktop consent or issue duplicate release checks. Neither path downloads, installs, restarts, or modifies native sessions automatically. Follow the existing [installation channel](INSTALLATION.md) and the controlled-upgrade steps below.
+
+Browser checks use `GET /api/v1/updates` through the host's normal API authentication; the scoped relay setup token is not admitted. `?refresh=1` requests a manual refresh. The response names the canonical `current_version` and a `status` of `available`, `current`, `unavailable`, or `unsupported`, with `latest_version`, a validated `release_url`, `checked_at`, and `next_check_at` when applicable. `current` means no newer stable release, not that a development checkout equals the release tag.
+
+The host requests only the fixed public GitHub latest-release endpoint, without forwarding browser tokens, cookies, workspace paths, or conversation content. It coalesces concurrent checks, caches successful results for six hours, backs off ordinary failures for fifteen minutes, and limits manual network requests to at most one per minute. GitHub rate-limit responses can extend the cooldown. Checks time out after five seconds; unavailable/malformed responses are not reported as up to date. Closing the view or signing out cancels its interest, and failures never change Service health or Room work.
+
 ## Supported Room formats
 
 The 5.0.0 development cutover retired old formats without migration. Current readers require **Store schema 12/provisioning 5**, explicit immutable `host_mode`, registry checkpoint 3, relay state 2, and Agent pair profile storage 2. A retired Service root fails as a whole before recovery/replay/repair/rewrite. Start a new root and recreate registrations, Rooms, and profiles; moving only old Room directories cannot repair an incompatible root checkpoint.
