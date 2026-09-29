@@ -6,6 +6,7 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ### Fixed
 
+- Stop flagging an absent CC Switch as an error for native Providers. Room creation showed a red "CC Switch database was not found" under both slots on machines without CC Switch, although native-inheritance selections never read it. That notice now appears only when a slot references a CC Switch Profile; unreadable or incompatible databases are still reported.
 - Keep CC Switch Provider references working after a CC Switch upgrade. The reader accepted exactly schema 18, so upgrading CC Switch to v3.20.4 (schema 19, which only added a column to its MCP and skills tables) made every Embedded CC Switch reference fail with an unsupported-schema error. Schemas 18 and 19 are now verified, and a newer schema is accepted when the `providers` table still has every required column, reported as `schema_verified: false` with a Management notice; per-Profile credential, OAuth, proxy and failover checks still fail closed. Older schemas and missing required columns are still rejected, now with the detected schema and missing column in the message.
 
 ### Changed
