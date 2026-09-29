@@ -2,7 +2,7 @@
 
 [English](README.md) · **简体中文**
 
-**两个独立编程 Agent，同一个问题，保留你的原生工作流。** PairRoom 连接受支持的 Claude Code、Codex 与 Grok Build 会话，让双方基于证据交叉审查，不替换原生模型循环、工具、skills 或 subagents。
+**两个独立编程 Agent，同一个问题，保留你的原生工作流。** PairRoom 连接受支持的 [Claude Code](https://code.claude.com/docs/en/overview)、[Codex](https://github.com/openai/codex) 与 [Grok Build](https://x.ai/news/grok-build-cli) 会话，让双方基于证据交叉审查，不替换原生模型循环、工具、skills 或 subagents。
 
 <p align="center">
   <img src="docs/images/pairroom-runtime-overview.png" alt="PairRoom 协作界面">
@@ -13,34 +13,46 @@
 平时让 Claude Code 出方案、再把方案复制给 Codex 审，审完再贴回去……这种来回搬运做多了很累。PairRoom 让两个 Agent 直接对话：一个提方案，另一个挑刺、补充、执行，全程你都看得到，也随时可以插话。
 
 - **只做两个 Agent**：两个 Agent 刚好能互相查漏补缺，沟通链路也最短。再加 Agent，协调成本和 token 消耗都会上去，这类工作很少值得。
-- **复用官方 harness，不重新造轮子**：Claude Code、Codex、Grok Build 保留各自的模型循环、工具、skills 和 subagents。官方 harness 更稳定、功能更全，模型也针对它做过优化。
+- **复用官方 harness，不重新造轮子**：Claude Code、Codex、Grok Build 保留各自的模型循环、工具、skills 和 subagents。PairRoom 连接这些编程环境，而不是重新实现一套执行循环。
 - **两种宿主模式**：任一槽位都可选择任一受支持的 Runtime，也可同时使用相同 Runtime。
 
   | 宿主模式 | 适合的需求 | 边界 |
   |---|---|---|
-  | **Native**（日常工作推荐；实验性） | 保留原有 Claude Code、Codex（包括 Codex Desktop）或 Grok Build 会话，继续在熟悉的终端（如 WezTerm）或客户端里交互，不用换到另一个 IDE/ADE | PairRoom 负责绑定、持久中继和审计；原生 harness 管理配置、权限与执行，Room 中的选择仅作展示。 |
+  | **Native**（日常工作推荐；实验性） | 保留原有 Claude Code、Codex（包括 Codex Desktop）或 Grok Build 会话，继续在熟悉的终端（如 [WezTerm](https://wezterm.org/)）或客户端里交互，不用换到另一个编辑器或 Agent 工作台 | PairRoom 负责绑定、持久中继和审计；原生 harness 管理配置、权限与执行，Room 中的选择仅作展示。 |
   | **Embedded** | 使用 PairRoom 桌面端或网页端对话界面及受支持的适配器控制；每个槽位独立选择 Runtime、Provider、模型、effort 和指令 | PairRoom 管理适配器，在同一 Room 内同时只调度一位参与者的原生 Turn；未指定覆盖项继承原生配置。 |
 
 - **职责可以自定义**：默认一个负责规划和审核，另一个负责执行和补充。也可以用自定义 Room 改成「先一起讨论方案，再各自执行一部分，最后互审」。职责不是权限，也不是必经阶段：简单任务由被指定的 Agent 直接完成，审查完成也不自动授权实现。
 - **过程透明，随时介入**：双方交流的内容都在 Room 中可见。Native 下两边的工作过程还能直接在各自的终端或客户端里看，发现方向不对可以马上叫停或纠正。
-- **只管「两个 Agent 怎么协作」**：Orca 这类通用 Agent 工作台定位是工作区和任务编排，PairRoom 只做两个 Agent 之间的直接中继，不额外引入协调模型或编排层；每个 Agent 内部怎么拆任务、怎么调 subagent，交给它自己的原生 harness。模型需要看到的协调内容因此更少，但这是机制描述，不是实测的 token 或成本节省。
+- **只管「两个 Agent 怎么协作」**：[Orca](https://github.com/stablyai/orca) 这类通用 Agent 工作台定位是工作区和任务编排。Orca 是这里用于比较的独立项目，不是 PairRoom 的依赖。PairRoom 只做两个 Agent 之间的直接中继，不额外引入协调模型或编排层；每个 Agent 内部怎么拆任务、怎么调 subagent，交给它自己的原生 harness。模型需要看到的协调内容因此更少，但这是机制描述，不是实测的 token 或成本节省。
 
 沿用仓库指令、worktree 和 PR/MR 流程。PairRoom 不增加强制阶段机制，也不会在每次中继时追加累计 Room 历史。紧凑的字节预算不等于保证账单更低或准确率更高。
 
-[Why PairRoom](docs/WHY_PAIRROOM.md) 说明适用场景与限制，[替代方案](docs/ALTERNATIVES.md) 提供注明日期的一手资料比较，[先审查再执行](docs/GETTING_STARTED.md#review-first-execute-where-it-fits) 提供实用提示词。
+[Why PairRoom](docs/WHY_PAIRROOM.md) 说明适用场景与限制，[替代方案](docs/ALTERNATIVES.md) 提供注明日期的一手资料比较，[先审查再执行](docs/GETTING_STARTED.md#review-first-execute-where-it-fits) 提供实用提示词。[核心概念](docs/CONCEPTS.md) 解释 Runtime、Provider、槽位和 Binding 等术语。
 
 ## 安装与体验
 
 从 [Releases](https://github.com/sean2077/pairroom/releases/latest) 下载安装包；Windows 可使用 `winget install PairRoom` 安装桌面版。[安装指南](docs/INSTALLATION.md) 说明安装前提及各通道的升级、卸载方法。使用预编译 CLI 或桌面包**不需要 Go**。
 
-Linux、macOS 或 Git Bash 下使用 CLI，执行前请检查安装脚本：
+Linux、macOS 或 Git Bash 下使用 CLI，先在临时工作目录中下载安装脚本：
 
 ```bash
-curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/sean2077/pairroom/releases/latest/download/install.sh -o install-pairroom.sh
+```
+
+下载成功后，用编辑器检查 `install-pairroom.sh`，确认后再执行：
+
+```bash
+sh install-pairroom.sh
+pairroom version
+```
+
+不访问模型的初次体验可启动前台演示 Service：
+
+```bash
 pairroom service --mock --data-root "$HOME/.pairroom-demo"
 ```
 
-使用未被占用的演示数据目录和可丢弃的 Git 仓库。在 Management 中将仓库注册为 Project，创建 **Embedded** Room，再发送一个小任务。Mock 不启动供应商 CLI，也不消耗模型额度；它不能证明模型能力。不要分享带认证信息的启动 URL。
+保持此终端打开，`Ctrl+C` 可停止演示。使用未被占用的演示数据目录和可丢弃的 Git 仓库。在 Management 中将仓库注册为 Project，创建 **Embedded** Room，再发送一个小任务。Mock 不启动供应商 CLI，也不消耗模型额度；它不能证明模型能力。不要分享带认证信息的启动 URL。
 
 真实使用前，独立安装并认证每个所选 CLI。日常工作推荐使用 **Native**（[Native 设置](docs/NATIVE_RELAY.md)）保留原有会话，它仍处于实验阶段；**Embedded**（[入门指南](docs/GETTING_STARTED.md)）是最快的初次体验方式，也是每个槽位独立选择 Provider 的模式。仅有 CLI 版本或环境检查结果，不代表认证和模型访问已通过验证。
 
@@ -53,17 +65,19 @@ and help me install PairRoom and check my environment. Ask before each change.
 
 ## 必须了解的边界
 
-**新 Embedded Room 的两位参与者默认均为 YOLO。** 需要更严格的原生权限时必须明确选择。Native Room 沿用原生 harness 的权限。职责不会限制工具访问，两种模式都不会锁住仓库来阻止外部写入；Native 的 Turn 所有权只是建议性的，不是强制调度。
+**新 Embedded Room 的两位参与者默认均为 YOLO：这是受支持的最宽松原生权限配置，不是只读审查模式。** 需要更严格的原生权限时必须明确选择，具体见[配置说明](docs/CONFIGURATION.md)。Native Room 沿用原生 harness 的权限。职责不会限制工具访问，两种模式都不会锁住仓库来阻止外部写入；Native 的 Turn 所有权只是建议性的，不是强制调度。
 
 PairRoom 没有自动接力次数或费用上限。持久化恢复会区分排队任务与结果不确定的投递，不会在崩溃后盲目重放。本地保存状态不代表云端模型请求不离开本机。详见[安全说明](SECURITY.md)、[核心概念](docs/CONCEPTS.md)与[存储恢复](docs/STORAGE.md)。
 
 ## Native 宿主模式（实验性）
 
-一次性安装并批准项目 hooks，然后从 Agent 各自的工具环境中创建和加入：
+先确保两个 Agent 的工具 shell 都能运行 `pairroom`，且所选数据目录已有一个非 Mock Service。[Agent 协助安装](docs/AGENT_SETUP.md#6-native-bind-two-existing-sessions) 说明这些前提和授权步骤。从项目 worktree 中为实际使用的 Runtime 安装 hooks：
 
 ```bash
 pairroom relay install --runtime claude,codex
 ```
+
+在每个 harness 中审阅并批准 hooks，按其要求重新加载或重启。在两个目标会话中分别运行 `pairroom relay preflight` 做只读检查；它不证明 hook 已获批准，也不证明模型可访问。
 
 第一个会话加载已安装的技能，运行 `/pairroom-relay <topic>`；在第二个会话中，让 Agent 执行前者打印的准确加入命令。各自的 `bind` 读取官方会话 ID 并立即关联，不需要回显 nonce、等待首次 Stop 或例行查询 status。后续轮次复用绑定；加入现有 Room 时不要再次创建。
 
@@ -98,7 +112,7 @@ make smoke
 
 [文档地图](docs/README.md) · [配置](docs/CONFIGURATION.md) · [CLI](docs/CLI_REFERENCE.md) · [API](docs/API_REFERENCE.md) · [故障排查](docs/TROUBLESHOOTING.md) · [升级](docs/UPGRADING.md) · [支持范围](SUPPORT.md)
 
-[Changelog](CHANGELOG.md) 记录历史，当前行为以参考文档为准。Native 仍是实验性功能：Mock、合成 hooks、浏览器 fixtures 及旧工作会话报告，不能替代真实认证的多轮 vendor E2E。本文不宣称新增真实 vendor 验收或计费 token 基准结果。桌面包不宣称完成生产签名或 notarization。界面支持英文和简体中文，维护中的技术文档使用英文。
+`main` 上的文档跟随开发；使用已发布版本时，如命令存在差异，应查看对应 tag 的文档及该二进制的 `--help`。[Changelog](CHANGELOG.md) 记录历史，当前行为以参考文档为准。Native 仍是实验性功能：Mock、合成 hooks、浏览器 fixtures 及旧工作会话报告，不能替代真实认证的多轮 vendor E2E。本文不宣称新增真实 vendor 验收或计费 token 基准结果。桌面包不宣称完成生产签名或 notarization。界面支持英文和简体中文，维护中的技术文档使用英文。
 
 ## 友情链接
 
