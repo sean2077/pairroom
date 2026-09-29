@@ -126,14 +126,15 @@
       chips.push(chip);
       const card=element('article',undefined,`binding ${slot}`);card.dataset.slot=slot;card.tabIndex=-1;card.dataset.nativeFocus=slot;
       const top=element('div',undefined,'binding-top'),who=element('div',undefined,'binding-identity'),name=element('h3',handle(slot));name.title=handle(slot);
-      who.append(name,element('span',state,`binding-state ${!b.active?'unbound':b.session_id?'bound':'pending'}`));
+      const observed=element('span',state,`binding-state ${!b.active?'unbound':b.session_id?'bound':'pending'}`);observed.title=tr('activityHelp');
+      who.append(name,observed);
       top.append(element('span',String(index+1),'participant-avatar'),who);
       if(b.active){const park=element('button',tr(b.park_enabled?'parkOn':'parkOff'),'binding-park');park.type='button';park.dataset.park=slot;park.dataset.nativeFocus=`${slot}-park`;park.setAttribute('aria-pressed',String(Boolean(b.park_enabled)));park.addEventListener('click',async()=>{park.disabled=true;try{await request(`api/v1/participants/${slot}/park`,{method:'POST',body:JSON.stringify({enabled:!b.park_enabled})});status(tr('controls'));await refresh();}catch(e){status(e.message,true);}finally{park.disabled=false;}});top.append(park);}
       card.append(top);
       const label = key => window.PairRoomI18n.t(key), inherited = label('room.nativeDefault');
       const provider = selection.provider?.source === 'cc-switch'
         ? `CC Switch · ${selection.provider.app_type}/${selection.provider.profile_id}` : label('agent.nativeProvider');
-      const configMeta = element('dl', undefined, 'binding-meta agent-config');
+      const configMeta = element('dl', undefined, 'binding-meta agent-config'); configMeta.title = tr('metadata');
       [[label('agent.runtime'), selection.runtime || inherited], [label('agent.provider'), provider],
         [label('agent.model'), selection.model || inherited], [label('agent.effort'), selection.effort || inherited],
         [label('agent.permissionMode'), [selection.permission_mode, selection.approval_policy, selection.sandbox].filter(Boolean).join(' · ') || inherited],
@@ -190,12 +191,13 @@
   }
   function deliveryEvidence(m,delivery){
     if(!delivery)return null;
-    const section=element('div',undefined,'delivery-evidence');
+    const section=element('div',undefined,'delivery-evidence');let measured=false;
     if(['handed_off','unknown'].includes(m.state)&&Number.isFinite(delivery.queue_wait_ms)&&delivery.queue_wait_ms>=0){
       const seconds=new Intl.NumberFormat(language(),{maximumFractionDigits:2}).format(delivery.queue_wait_ms/1000);
       const latency=element('span',window.PairRoomI18n.t('room.native.queueClaimTime',{seconds}),'delivery-latency');
-      latency.title=tr('queueClaimBoundary');section.append(latency);
+      latency.title=tr('queueClaimBoundary');section.append(latency);measured=true;
     }
+    if(!delivery.reserved_at&&!delivery.inferred_outcome&&!delivery.slot_observations?.length)return measured?section:null;
     const detail=element('details',undefined,'wake-evidence');
     detail.append(element('summary',tr(delivery.reserved_at?'messageWakeReserved':'messageWakeUnreserved')));
     if(delivery.reserved_at)detail.append(element('p',`${tr('wakeReserved')}: ${time(delivery.reserved_at)}`));
