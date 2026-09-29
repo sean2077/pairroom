@@ -238,7 +238,7 @@
       button.addEventListener('click',async()=>{if(action==='retry'&&!await confirmRetry())return;button.disabled=true;try{await request(`api/v1/messages/${encodeURIComponent(m.id)}/${action}`,{method:'POST',body:'{}'});pendingKey='';await refresh();}catch(e){status(e.message,true);}finally{button.disabled=false;}});footer.append(button);
     }
     if(chat){
-      const avatar=element('div',actor==='user'?'Y':actor==='slot1'?'1':actor==='slot2'?'2':'·','message-avatar');avatar.setAttribute('aria-hidden','true');
+      const avatar=element('div',actor==='user'?Array.from(tr('user'))[0]:actor==='slot1'?'1':actor==='slot2'?'2':'·','message-avatar');avatar.setAttribute('aria-hidden','true');
       const content=element('div',undefined,'message-content');content.append(head,bubble,footer);node.replaceChildren(avatar,content);
     }else node.replaceChildren(head,bubble,footer);
   }
@@ -252,7 +252,7 @@
     try{
       const page=await request(`api/v1/pending?limit=10${pendingCursor?`&cursor=${encodeURIComponent(pendingCursor)}`:''}`);
       if(serial!==pendingRequest)return;
-      pendingNext=page.next_cursor||'';$('pending-count').textContent=String(page.total);$('pending-next').disabled=!pendingNext;$('pending-first').disabled=!pendingCursor;
+      pendingNext=page.next_cursor||'';$('pending-count').textContent=String(page.total);$('pending-next').disabled=!pendingNext;$('pending-first').disabled=!pendingCursor;$('pending-pager').hidden=!pendingNext&&!pendingCursor;
       pageMessages($('pending-items'),page.messages,'pending',page.delivery);
     }catch(e){if(serial===pendingRequest)pendingKey='';throw e;}
   }
@@ -292,10 +292,10 @@
     const pending=Object.values(summary.inboxes||{}).reduce((n,i)=>n+(i.queued||0)+(i.delivering||0)+(i.unknown||0),0);
     if(pending){const button=element('button',`${tr('pendingTitle')} (${pending})`);button.type='button';button.dataset.pendingOpen='';button.addEventListener('click',()=>{showInspector(true);$('pending-title').scrollIntoView({block:'nearest'});});items.push(button);}
     for(const [slot,inbox] of Object.entries(summary.inboxes||{})){
-      if(inbox.unknown)items.push(element('span',`${handle(slot)}: ${inbox.unknown} ${tr('unknown')}`,'badge'));
-      if(inbox.oldest_queued_at)items.push(element('span',`${handle(slot)} · ${tr('oldestQueued')} ${time(inbox.oldest_queued_at)}`,'muted'));
+      if(inbox.unknown)items.push(element('span',`${handle(slot)}: ${inbox.unknown} ${tr('unknown')}`,'badge warn'));
+      if(inbox.oldest_queued_at)items.push(element('span',`${handle(slot)} · ${tr('oldestQueued')} ${time(inbox.oldest_queued_at)}`,'attention-note'));
     }
-    for(const [slot,wake] of Object.entries(summary.last_wake||{}))if(wake.outcome==='failed')items.push(element('span',`${handle(slot)} · ${tr('wakeFailed')}: ${vocabulary('wakeReason',wake.reason)}`,'badge'));
+    for(const [slot,wake] of Object.entries(summary.last_wake||{}))if(wake.outcome==='failed')items.push(element('span',`${handle(slot)} · ${tr('wakeFailed')}: ${vocabulary('wakeReason',wake.reason)}`,'badge warn'));
     if(summary.last_user_message){const button=element('button',tr('userAttention'));button.type='button';button.addEventListener('click',()=>inspectMessage(summary.last_user_message));items.push(button);}
     $('attention').replaceChildren(...items);$('attention').hidden=items.length===0;
   }
@@ -313,10 +313,10 @@
       for (const state of ['queued', 'delivering', 'unknown']) {
         counts.append(element('dt', tr(state)), element('dd', String(inbox[state] || 0)));
       }
-      card.append(counts);
-      if (inbox.oldest_queued_at) card.append(element('p', `${tr('oldestQueued')}: ${time(inbox.oldest_queued_at)}`, 'muted'));
+      if (inbox.oldest_queued_at) counts.append(element('dt', tr('oldestQueued')), element('dd', time(inbox.oldest_queued_at)));
       const wake = value.summary?.last_wake?.[slot];
-      if (wake) card.append(element('p', `${tr('lastWake')}: ${wakeText(wake)} · ${time(wake.at)}`, 'muted'));
+      if (wake) counts.append(element('dt', tr('lastWake')), element('dd', `${wakeText(wake)} · ${time(wake.at)}`));
+      card.append(counts);
       return card;
     }));
   }
@@ -349,6 +349,7 @@
     $('send').textContent=pendingSend?tr('retryOriginal'):tr('send');
     $('outbox-check').disabled=sending||outboxBroken||!pendingSend;
     $('outbox-forget').disabled=sending;
+    $('attachment-name').textContent=$('attachment').files?.[0]?.name||'';
   }
   function renderOutbox(){
     $('outbox').hidden=!pendingSend&&!outboxBroken&&!foreignSend;
@@ -432,13 +433,14 @@
   });
   // Clearing the local draft hands recovery of another window's send to this one.
   $('message-text').addEventListener('input',()=>{if(foreignSend&&!sending&&!localDraft(foreignSend))readoptOutbox();});
+  $('attachment').addEventListener('change',lockComposer);
   document.addEventListener('pairroom:lang',translations);
   async function start(){
     translations();lockComposer();try{
       const token=new URLSearchParams(location.hash.slice(1)).get('token');
       if(token){const session=await request('api/v1/session',{method:'POST',headers:{Authorization:`Bearer ${token}`}});csrf=session.csrf_token;history.replaceState(null,'',location.pathname+location.search);}
       else{const session=await request('api/v1/session');csrf=session.csrf_token;}
-      await refresh();stream=new EventSource('api/v1/events');stream.addEventListener('native',()=>{refresh().catch(e=>status(e.message,true));});activityTimer=setInterval(()=>{if(!document.hidden)refresh().catch(()=>{});},15000);stream.onopen=()=>{$('connection').textContent=tr('connected');scheduleRefresh();};stream.onerror=()=>{$('connection').textContent=tr('reconnecting');};
+      await refresh();stream=new EventSource('api/v1/events');stream.addEventListener('native',()=>{refresh().catch(e=>status(e.message,true));});activityTimer=setInterval(()=>{if(!document.hidden)refresh().catch(()=>{});},15000);stream.onopen=()=>{$('connection').textContent=tr('connected');$('connection').dataset.state='connected';scheduleRefresh();};stream.onerror=()=>{$('connection').textContent=tr('reconnecting');$('connection').dataset.state='reconnecting';};
     }catch(e){status(e.message,true);}
   }
   window.addEventListener('pagehide',()=>{stream?.close();clearInterval(activityTimer);});window.addEventListener('pageshow',event=>{if(event.persisted)start();});start();
