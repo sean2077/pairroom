@@ -449,7 +449,7 @@ func TestProvidersFailsClosedOnMissingRelativeOrUnsupportedDatabase(t *testing.T
 		t.Fatalf("missing database error = %v", err)
 	}
 	requireErrorContains(t, run([]string{"providers", "--database", "relative.db"}), "absolute path")
-	err = run([]string{"providers", "--database", writeCCSwitchFixture(t, ccswitch.SupportedSchemaVersion+1)})
+	err = run([]string{"providers", "--database", writeCCSwitchFixture(t, ccswitch.MinimumSchemaVersion-1)})
 	if !errors.As(err, &ccErr) || ccErr.Code != ccswitch.CodeSchemaMismatch {
 		t.Fatalf("unsupported schema error = %v", err)
 	}

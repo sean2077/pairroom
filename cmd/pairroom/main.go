@@ -143,7 +143,11 @@ func runProviders(args []string) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(report)
 	}
-	fmt.Printf("PairRoom CC Switch profiles (%s, schema %d)\n", report.CCSwitchVersion, report.Schema)
+	if report.SchemaVerified {
+		fmt.Printf("PairRoom CC Switch profiles (%s, schema %d)\n", report.CCSwitchVersion, report.Schema)
+	} else {
+		fmt.Printf("PairRoom CC Switch profiles (schema %d, unverified; newest verified schema %d)\n", report.Schema, ccswitch.SupportedSchemaVersion)
+	}
 	if len(report.Profiles) == 0 {
 		fmt.Println("  no profiles found")
 	}
