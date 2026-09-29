@@ -2,13 +2,15 @@
 
 package daemon
 
-import "syscall"
+import "golang.org/x/sys/windows"
 
-const swHide = 0
+const swHide = windows.SW_HIDE
 
+// x/sys does not wrap these console/window entry points. Resolve them only
+// from System32, rather than searching the current directory for DLLs.
 var (
-	kernel32             = syscall.NewLazyDLL("kernel32.dll")
-	user32               = syscall.NewLazyDLL("user32.dll")
+	kernel32             = windows.NewLazySystemDLL("kernel32.dll")
+	user32               = windows.NewLazySystemDLL("user32.dll")
 	procGetConsoleWindow = kernel32.NewProc("GetConsoleWindow")
 	procFreeConsole      = kernel32.NewProc("FreeConsole")
 	procShowWindow       = user32.NewProc("ShowWindow")

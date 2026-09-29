@@ -5,6 +5,7 @@ PairRoom embeds or links the following pinned third-party software. The authorit
 | Component | Version | License | Use |
 |---|---:|---|---|
 | [i18next](https://github.com/i18next/i18next/tree/v26.4.2) | 26.4.2 | MIT | Embedded browser UMD runtime |
+| [golang.org/x/sys](https://pkg.go.dev/golang.org/x/sys@v0.47.0) | v0.47.0 | BSD-3-Clause | Direct Windows system-call bindings; already in the pinned SQLite dependency closure |
 | [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite@v1.59.0) | 1.59.0 | BSD-3-Clause | CGo-free, read-only CC Switch database access |
 
 The modernc SQLite dependency closure also includes the pinned modules listed by `scripts/check_dependencies.go`. Their source distributions and license files are retained by the Go module ecosystem; the release SBOM enumerates every selected module.

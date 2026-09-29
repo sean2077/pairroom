@@ -6,9 +6,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 func writeFixture(t *testing.T, path, text string) {
@@ -39,7 +40,7 @@ func TestReplaceRetriesWhileForeignReaderHoldsTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reader.Close()
-	if err := os.Rename(tmp, path); !errors.Is(err, syscall.ERROR_ACCESS_DENIED) {
+	if err := os.Rename(tmp, path); !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
 		t.Fatalf("precondition: plain rename over a held file = %v, want access denied", err)
 	}
 	sleeps := 0
@@ -79,7 +80,7 @@ func TestReplaceGivesUpAfterBoundedBudget(t *testing.T) {
 	t.Cleanup(func() { sleep = time.Sleep })
 	start := time.Now()
 	err = Replace(tmp, path)
-	if !errors.Is(err, syscall.ERROR_ACCESS_DENIED) {
+	if !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
 		t.Fatalf("Replace under a persistent foreign reader = %v, want access denied", err)
 	}
 	if elapsed := time.Since(start); elapsed > 3*replaceBudget {

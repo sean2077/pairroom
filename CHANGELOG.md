@@ -8,6 +8,10 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 - Keep CC Switch Provider references working after a CC Switch upgrade. The reader accepted exactly schema 18, so upgrading CC Switch to v3.20.4 (schema 19, which only added a column to its MCP and skills tables) made every Embedded CC Switch reference fail with an unsupported-schema error. Schemas 18 and 19 are now verified, and a newer schema is accepted when the `providers` table still has every required column, reported as `schema_verified: false` with a Management notice; per-Profile credential, OAuth, proxy and failover checks still fail closed. Older schemas and missing required columns are still rejected, now with the detected schema and missing column in the message.
 
+### Changed
+
+- Use `golang.org/x/sys/windows` for Windows system calls. The root module already selected `golang.org/x/sys` v0.47.0 through the pinned SQLite closure; it is now a direct dependency with no module or version change. Handwritten kernel32/advapi32 bindings and ABI structures are replaced by typed wrappers, and the three console entry points x/sys does not wrap now load only from System32.
+
 ## [v5.9.0] — 2026-09-29
 
 - Choose a folder when registering a Project in Desktop. Registering a Project meant typing an absolute path from memory, so the Desktop window now offers **Choose folder…** beside that field and fills it with the folder picked in the operating system's own dialog (Windows folder picker, macOS `NSOpenPanel`, GTK chooser on Linux); a cancelled dialog leaves the typed value alone. The host returns exactly one absolute path and rejects anything else, the Service still canonicalizes and validates the Git worktree, no directory listing crosses the bridge, and an ordinary browser — which cannot produce a real path — never shows the button.

@@ -10,9 +10,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 
 	"github.com/sean2077/pairroom/internal/model"
 )
@@ -34,13 +35,13 @@ func writeBatchShim(t *testing.T, name string) string {
 // before the process object is signaled; the short grace absorbs that, while
 // a CLI that was never killed stays alive far longer.
 func windowsProcessSurvives(pid int, grace time.Duration) bool {
-	handle, err := syscall.OpenProcess(syscall.SYNCHRONIZE, false, uint32(pid))
+	handle, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
 	if err != nil {
 		return false
 	}
-	defer syscall.CloseHandle(handle)
-	state, err := syscall.WaitForSingleObject(handle, uint32(grace/time.Millisecond))
-	return err == nil && state == syscall.WAIT_TIMEOUT
+	defer windows.CloseHandle(handle)
+	state, err := windows.WaitForSingleObject(handle, uint32(grace/time.Millisecond))
+	return err == nil && state == uint32(windows.WAIT_TIMEOUT)
 }
 
 func killLeftover(t *testing.T, pid int) {
