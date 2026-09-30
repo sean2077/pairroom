@@ -35,6 +35,17 @@ func wakeEngine(t *testing.T, clock *atomic.Int64) (*relay.Engine, map[model.Act
 	return e, a, dir
 }
 
+// endTurn is a Stop hook park with nothing to deliver: the Service's observed
+// Turn end. A nudge attempted after it is consumed by the next relay call, so
+// the rate-limit tests below reach their deferrals instead of nudge_pending.
+func endTurn(t *testing.T, e *relay.Engine, a relay.Auth) {
+	t.Helper()
+	claim, err := e.Claim(context.Background(), a, true)
+	if err != nil || claim != nil {
+		t.Fatalf("Turn-end park = %+v, %v", claim, err)
+	}
+}
+
 func TestNativeWakeDeferredHeadsProgressWithoutNewTraffic(t *testing.T) {
 	var clock, calls atomic.Int64
 	clock.Store(1800000000)
@@ -60,11 +71,15 @@ func TestNativeWakeDeferredHeadsProgressWithoutNewTraffic(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	endTurn(t, e, a[model.ActorSlot1])
+	endTurn(t, e, a[model.ActorSlot2])
 	send(model.ActorSlot1, "first")
 	reconcile()
+	clock.Add(1)
 	collect(model.ActorSlot2)
 	send(model.ActorSlot2, "reply")
 	reconcile()
+	clock.Add(1)
 	collect(model.ActorSlot1)
 	if calls.Load() != 2 {
 		t.Fatal("opposite slots share cooldown", calls.Load())
@@ -102,8 +117,14 @@ func TestNativeWakeHourlyDeferralSurvivesReplay(t *testing.T) {
 	e, a, dir := wakeEngine(t, &clock)
 	config := nativeWakerConfig{Relay: e, HourlyLimit: 1, Now: func() time.Time { return time.Unix(clock.Load(), 0).UTC() }, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { calls.Add(1); return nil }}
 	w := newNativeWaker(config)
+	endTurn(t, e, a[model.ActorSlot2])
 	first, _ := e.Send(a[model.ActorSlot1], relay.SendRequest{ID: "one", Text: "one"})
 	if err := w.Wake(context.Background(), first.ID); err != nil {
+		t.Fatal(err)
+	}
+	// The idle target's next relay call consumes that nudge.
+	clock.Add(1)
+	if _, err := e.Inspect(a[model.ActorSlot2]); err != nil {
 		t.Fatal(err)
 	}
 	_ = e.Cancel(first.ID)
@@ -148,6 +169,7 @@ func TestNativeWakeRechecksCancelledHeadAndDisabledRoom(t *testing.T) {
 	var clock, calls atomic.Int64
 	clock.Store(1800000000)
 	e, a, _ := wakeEngine(t, &clock)
+	endTurn(t, e, a[model.ActorSlot2])
 	first, _ := e.Send(a[model.ActorSlot1], relay.SendRequest{ID: "one", Text: "one"})
 	e.Send(a[model.ActorSlot1], relay.SendRequest{ID: "two", Text: "two"})
 	var firstGrace atomic.Bool
@@ -163,6 +185,10 @@ func TestNativeWakeRechecksCancelledHeadAndDisabledRoom(t *testing.T) {
 	w.workers.Wait()
 	if calls.Load() != 1 {
 		t.Fatal("new head lost grace ownership")
+	}
+	clock.Add(1)
+	if _, err := e.Inspect(a[model.ActorSlot2]); err != nil {
+		t.Fatal(err)
 	}
 	heads := e.WakeHeads()
 	_ = e.Cancel(heads[0].MessageID)

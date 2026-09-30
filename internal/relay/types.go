@@ -62,6 +62,7 @@ var wakeReasons = map[string]bool{
 	"socket_failed":          true,
 	"socket_timeout":         true,
 	"socket_cancelled":       true,
+	"nudge_pending":          true,
 }
 
 // WakeReservation is the durable pre-command fact for one wake attempt,
@@ -78,7 +79,8 @@ type WakeReservation struct {
 // began a fresh pending burst for the target; WaiterActive means a
 // foreground or park collector is blocked in Claim for the target right
 // now; Delivering means an unacknowledged delivery to the target is in
-// flight. The waker maps these facts onto its suppression vocabulary; the
+// flight; NudgePending means an earlier nudge may still wait in the target's
+// native queue. The waker maps these facts onto its suppression vocabulary; the
 // Engine never decides policy.
 type WakeCandidate struct {
 	BindID       string            `json:"-"`
@@ -92,6 +94,7 @@ type WakeCandidate struct {
 	QueueStart   bool              `json:"queue_start"`
 	WaiterActive bool              `json:"waiter_active"`
 	Delivering   bool              `json:"delivering"`
+	NudgePending bool              `json:"nudge_pending"`
 }
 
 type Binding struct {

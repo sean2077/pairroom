@@ -69,7 +69,31 @@ accepted or submitted without producing a native turn, so the message queued
 right after the newest attempted one owns a new burst once that attempt is
 `WakeRenewAfter` (10 minutes) old; before then a busy target is not nudged twice.
 Renewal reserves the new message ID under the same limits and never re-reserves
-an attempted message. Runtime shutdown
+an attempted message.
+
+Collection is not consumption. `codex queue` holds a nudge until the current
+native Turn ends and offers no list or dedupe API, so a target that collects its
+burst mid-Turn with `relay wait` would otherwise receive a second queued nudge
+for its next burst, each later spawning a Turn. The Engine therefore infers an
+outstanding nudge from Turn boundaries it already observes: the time of the
+target's last authenticated relay call, and the last Turn end — an
+authenticated Stop park that releases no envelope, or `StopFailure`. A park that
+delivers input continues the Turn and is not a Turn end. At a reservation the
+target is idle when its last relay call precedes the last Turn end; an idle
+target consumes the nudge with its next relay call, a mid-Turn target only with
+a relay call after a later Turn end. `accepted`, `submitted` and outcome-less
+reservations count; a definite `failed` does not. While a nudge is outstanding
+the new head is suppressed as `nudge_pending` without a reservation, so it stays
+an unattempted head that the maintenance tick rechecks. Like a rate deferral it
+holds the Runtime lease, for at most `WakeRenewAfter` after the attempt, so a
+short idle timeout cannot strand it. Replacement, unbind or session change
+clears the state. It is an in-memory projection: reservations and outcomes
+replay from existing facts, Turn ends do not, so a replayed nudge takes the
+mid-Turn rule. Sessions whose Stop hook is unapproved or skipped (for example a
+held foreground collector) produce no Turn end and fall back to the same
+10-minute bound. No Event Log field or format changes. The rule applies to Codex targets only:
+Claude inbox delivery timing during a Turn is unverified, and wrongly holding
+an idle Claude target could delay its input by up to 10 minutes. Runtime shutdown
 cancels and joins wake workers before closing the event writer. Reservations replay into the rate-limit history, so a
 Service restart cannot repeat a possibly successful effect. Missing capability,
 missing CLI, failed transport or native `hold`/`refuse` leaves the receive-only

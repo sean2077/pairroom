@@ -158,6 +158,9 @@ func (n *nativeHostRuntime) nativeDiagnostics() map[string]any {
 		case head.MessageID != "" && (d.Capability == "unavailable" || d.Capability == "tracked_wait_only"):
 			d.Reason = "capability_unavailable"
 			d.NextAction = "rebind_or_collect_in_native_session"
+		case head.MessageID != "" && head.NudgePending:
+			d.Reason = "nudge_pending"
+			d.NextAction = "wait_for_eligible_time"
 		case head.MessageID != "" && d.NextEligibleAt != nil:
 			d.Reason = "wake_deferred"
 			d.NextAction = "wait_for_eligible_time"
