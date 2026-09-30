@@ -2265,6 +2265,14 @@ func TestEngineCloseReportsAllResourceErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		for _, adapter := range adapters {
+			adapter.mu.Lock()
+			adapter.stopErr = nil
+			adapter.mu.Unlock()
+		}
+		_ = engine.Close()
+	})
 	if err := engine.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -2274,8 +2282,19 @@ func TestEngineCloseReportsAllResourceErrors(t *testing.T) {
 			t.Fatalf("Close() error %v does not contain %v", closeErr, expected)
 		}
 	}
+	if err := engine.Close(); !errors.Is(err, ErrClosePending) || !errors.Is(err, stopClaude) || !errors.Is(err, stopCodex) {
+		t.Fatalf("second Close() must retain unresolved failures, got %v", err)
+	}
+	for _, adapter := range adapters {
+		adapter.mu.Lock()
+		adapter.stopErr = nil
+		adapter.mu.Unlock()
+	}
 	if err := engine.Close(); err != nil {
-		t.Fatalf("second Close() must be idempotent, got %v", err)
+		t.Fatalf("Close after both adapters stop: %v", err)
+	}
+	if err := engine.Close(); err != nil {
+		t.Fatalf("completed Close must be idempotent: %v", err)
 	}
 }
 

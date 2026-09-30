@@ -782,12 +782,14 @@
 
   function roomPlaceholder(room, runtime) {
     const phase = runtime.phase || 'suspended';
-    const title = phase === 'queued' ? t("ui.queuedValue", { value0: (runtime.queue_position || '?') }) : (phase === 'starting' ? t("ui.startingRuntime") : (phase === 'failed' ? t("ui.runtimeFailed") : t("ui.runtimeHasHung")));
+    const stopping = phase === 'stopping';
+    const cleanupBlocked = phase === 'failed' && runtime.occupies_capacity && !runtime.cleanup_retryable;
+    const title = stopping ? t('common.stopping') : (phase === 'queued' ? t("ui.queuedValue", { value0: (runtime.queue_position || '?') }) : (phase === 'starting' ? t("ui.startingRuntime") : (phase === 'failed' ? t("ui.runtimeFailed") : t("ui.runtimeHasHung"))));
     const detail = runtime.last_error || t("ui.switchingBackToThisTabWillAutomaticallyReRequestActivationTheBackground");
     return node('div', { className: 'room-placeholder' },
       node('h2', { textContent: room?.name || t('common.room') }),
       node('p', { textContent: `${title} · ${detail}` }),
-      actionButton(t("ui.reactivate"), () => activateRoomRuntime(room.id), 'primary-button')
+      actionButton(stopping ? t('common.stopping') : (cleanupBlocked ? t('ui.requiresControlledRestart') : t("ui.reactivate")), () => activateRoomRuntime(room.id), 'primary-button', stopping || cleanupBlocked)
     );
   }
 
@@ -1177,8 +1179,10 @@
         actions.append(actionButton(t("ui.permanentlyDelete"), () => confirmRoomRemoval([room]), 'danger-button outline compact-button room-action-control'));
       }
     } else {
-      actions.append(actionButton(runtime.phase === 'queued' ? t("ui.queuedValue", { value0: (runtime.queue_position || '?') }) : t("ui.open"), () => openRoom(room.id), 'primary-button compact-button room-action-control'));
-      actions.append(actionButton(t("ui.browserOpens"), () => openRoomInBrowserAction(room.id), 'secondary-button compact-button room-action-control'));
+      const stopping = runtime.phase === 'stopping';
+      const cleanupBlocked = runtime.phase === 'failed' && runtime.occupies_capacity && !runtime.cleanup_retryable;
+      actions.append(actionButton(stopping ? t('common.stopping') : (cleanupBlocked ? t('ui.requiresControlledRestart') : (runtime.phase === 'queued' ? t("ui.queuedValue", { value0: (runtime.queue_position || '?') }) : t("ui.open"))), () => openRoom(room.id), 'primary-button compact-button room-action-control', stopping || cleanupBlocked));
+      actions.append(actionButton(t("ui.browserOpens"), () => openRoomInBrowserAction(room.id), 'secondary-button compact-button room-action-control', stopping || cleanupBlocked));
       actions.append(actionButton(t("ui.rename"), () => openRenameDialog(room), 'secondary-button compact-button room-action-control'));
       if (room.host_mode === 'native') actions.append(actionButton(t('room.wake.button'), () => openWakeConfig(room), 'secondary-button compact-button room-action-control'));
       actions.append(actionButton(t("ui.archive"), () => archiveRoom(room), 'danger-button outline compact-button room-action-control'));
@@ -1279,13 +1283,15 @@
     models.forEach(({ room, project, runtime }) => {
       const actionCell = node('div', { className: 'runtime-actions' });
       const cleanupUncertain = runtime.phase === 'failed' && runtime.occupies_capacity;
+      const retryCleanup = runtime.phase === 'failed' && runtime.cleanup_retryable;
+      const stopping = runtime.phase === 'stopping';
       if (room.agents?.slot1 && room.agents?.slot2) actionCell.append(actionButton(t('diagnostics.title'), () => navigate(`#/settings/diagnostics/${encodeURIComponent(room.id)}`), 'secondary-button compact-button'));
       if (room.lifecycle !== 'archived') {
         actionCell.append(actionButton(
-          cleanupUncertain ? t("ui.requiresControlledRestart") : (runtime.phase === 'active' ? t("ui.open") : t("ui.activate")),
-          () => openRoom(room.id),
+          stopping ? t('common.stopping') : (retryCleanup ? t('ui.retryCleanup') : (cleanupUncertain ? t("ui.requiresControlledRestart") : (runtime.phase === 'active' ? t("ui.open") : t("ui.activate")))),
+          () => retryCleanup ? suspendRoom(room, runtime) : openRoom(room.id),
           'secondary-button compact-button',
-          cleanupUncertain,
+          stopping || (cleanupUncertain && !retryCleanup),
         ));
       }
       if (['active', 'queued', 'starting'].includes(runtime.phase)) {

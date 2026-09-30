@@ -125,6 +125,12 @@ func (e *Engine) Send(ctx context.Context, req SendRequest) (model.Message, erro
 	}
 	e.routingMu.Lock()
 	defer e.routingMu.Unlock()
+	e.mu.RLock()
+	closed := e.closed
+	e.mu.RUnlock()
+	if closed {
+		return model.Message{}, errors.New("room is closed")
+	}
 	attachments, err := e.canonicalAttachments(req.Attachments)
 	if err != nil {
 		return model.Message{}, err
@@ -358,6 +364,10 @@ func (e *Engine) Retry(ctx context.Context, messageID string, req RetryRequest) 
 	defer e.routingMu.Unlock()
 
 	e.mu.RLock()
+	if e.closed {
+		e.mu.RUnlock()
+		return model.Message{}, errors.New("room is closed")
+	}
 	original, found := e.findMessageLocked(messageID)
 	if found {
 		original = cloneMessage(original) // Late native receipts may still update lifecycle maps.

@@ -22,6 +22,9 @@ var (
 	ErrRuntimeBusy           = errors.New("room runtime has active work")
 	ErrRuntimeDrainAborted   = errors.New("room runtime drain ended before shutdown")
 	ErrRuntimeCloseUncertain = errors.New("room runtime close state is uncertain")
+	// ErrRuntimeCleanupPending is returned only by runtimes whose incomplete
+	// cleanup can safely be retried without restarting or resubmitting work.
+	ErrRuntimeCleanupPending = errors.New("room runtime cleanup is pending")
 	ErrRuntimeRoomDeleting   = errors.New("room is being permanently removed")
 	ErrRuntimeNotReady       = errors.New("room runtime is not active")
 	// ErrRuntimeLifecycleInProgress rejects activation while archive or rename
@@ -134,6 +137,7 @@ type RuntimeStatus struct {
 	WakePending      bool         `json:"native_wake_pending,omitempty"`
 	HTTPInUse        bool         `json:"http_in_use,omitempty"`
 	OccupiesCapacity bool         `json:"occupies_capacity"`
+	CleanupRetryable bool         `json:"cleanup_retryable,omitempty"`
 	// URL is the direct Room View address and carries the Room runtime bearer
 	// in its fragment. It stays server-side (activation readiness, the
 	// explicit open-browser action) and is never serialized to any client.
@@ -155,8 +159,12 @@ type runtimeEntry struct {
 	// finishStop must not resurrect such a runtime through the retryable
 	// drain-aborted path, or the room oscillates between Active and Stopping
 	// and the fatal reason intermittently disappears from Status.
-	fatalStop  bool
-	generation uint64
+	fatalStop       bool
+	generation      uint64
+	cleanupRetry    bool
+	cleanupAttempts int
+	nextCleanup     time.Time
+	closeError      error
 }
 
 type RuntimeManager struct {
@@ -170,14 +178,13 @@ type RuntimeManager struct {
 	// lifecycle holds Rooms between runtime suspension and a Service lifecycle
 	// commit (archive, rename). Like deleting, it is an admission barrier: no
 	// activation may reopen the Room's Event Log writer inside that window.
-	lifecycle   map[string]struct{}
-	queue       []string
-	changed     chan struct{}
-	closed      bool
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
-	closeErrors []error
+	lifecycle map[string]struct{}
+	queue     []string
+	changed   chan struct{}
+	closed    bool
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
 }
 
 func NewRuntimeManager(registry *Registry, factory RuntimeFactory, cfg RuntimeManagerConfig) (*RuntimeManager, error) {
@@ -261,7 +268,12 @@ func (m *RuntimeManager) RequestActivation(roomID string) (RuntimeStatus, error)
 		m.queue = appendUnique(m.queue, roomID)
 	case RuntimeFailed:
 		if entry.runtime != nil {
-			return RuntimeStatus{}, fmt.Errorf("%w for Room %s: %s", ErrRuntimeCloseUncertain, roomID, entry.lastError)
+			if !entry.cleanupRetry {
+				return RuntimeStatus{}, fmt.Errorf("%w for Room %s: %s", ErrRuntimeCloseUncertain, roomID, entry.lastError)
+			}
+			entry.requested = true // explicit demand, including a fatal Runtime
+			m.retryCleanupLocked(roomID, entry)
+			break
 		}
 		entry.drainRequested = false
 		entry.phase = RuntimeQueued
@@ -326,8 +338,16 @@ func (m *RuntimeManager) Activate(ctx context.Context, roomID string) (RoomRunti
 		if entry.phase == RuntimeFailed {
 			status := m.statusLocked(roomID, entry)
 			err := errors.New(entry.lastError)
+			if entry.runtime != nil {
+				err = fmt.Errorf("%w for Room %s: %s", ErrRuntimeCloseUncertain, roomID, entry.lastError)
+			}
 			m.mu.Unlock()
 			return nil, status, err
+		}
+		if entry.phase == RuntimeSuspended {
+			status := m.statusLocked(roomID, entry)
+			m.mu.Unlock()
+			return nil, status, ErrRuntimeNotReady
 		}
 		changed := m.changed
 		m.mu.Unlock()
@@ -434,16 +454,21 @@ func (m *RuntimeManager) Suspend(ctx context.Context, roomID string) error {
 	}
 	if entry.phase == RuntimeFailed {
 		if entry.runtime != nil {
-			err := fmt.Errorf("%w for Room %s: %s", ErrRuntimeCloseUncertain, roomID, entry.lastError)
+			if !entry.cleanupRetry {
+				err := fmt.Errorf("%w for Room %s: %s", ErrRuntimeCloseUncertain, roomID, entry.lastError)
+				m.mu.Unlock()
+				return err
+			}
+			// Reuse the normal close boundary below, bypassing Busy only for
+			// cleanup already classified as safe to retry.
+		} else {
+			entry.phase = RuntimeSuspended
+			m.signalLocked()
 			m.mu.Unlock()
-			return err
+			return nil
 		}
-		entry.phase = RuntimeSuspended
-		m.signalLocked()
-		m.mu.Unlock()
-		return nil
 	}
-	if entry.phase != RuntimeActive || entry.runtime == nil {
+	if (entry.phase != RuntimeActive && entry.phase != RuntimeFailed) || entry.runtime == nil {
 		changed := m.changed
 		m.mu.Unlock()
 		select {
@@ -453,19 +478,29 @@ func (m *RuntimeManager) Suspend(ctx context.Context, roomID string) error {
 			return m.Suspend(ctx, roomID)
 		}
 	}
-	if entry.runtime.Busy() {
+	if entry.phase == RuntimeActive && entry.runtime.Busy() {
 		m.mu.Unlock()
 		return ErrRuntimeBusy
 	}
 	runtime := entry.runtime
+	retrying := entry.phase == RuntimeFailed
 	entry.phase = RuntimeStopping
 	entry.generation++
 	generation := entry.generation
 	m.signalLocked()
 	m.mu.Unlock()
 
-	err := runtime.Close(ctx)
+	closeCtx := ctx
+	cancel := func() {}
+	if retrying {
+		closeCtx, cancel = context.WithTimeout(ctx, m.cfg.CloseTimeout)
+	}
+	err := runtime.Close(closeCtx)
+	cancel()
 	m.finishStop(roomID, generation, err)
+	if errors.Is(err, ErrRuntimeCleanupPending) {
+		return errors.Join(ErrRuntimeCloseUncertain, err)
+	}
 	return err
 }
 
@@ -563,10 +598,15 @@ func (m *RuntimeManager) drainAndSuspend(ctx context.Context, roomID string, int
 
 	ticker := time.NewTicker(m.cfg.PollInterval)
 	defer ticker.Stop()
+	cleanupRetried := false
 	for {
 		err := m.Suspend(ctx, roomID)
 		if err == nil {
 			return nil
+		}
+		if errors.Is(err, ErrRuntimeCleanupPending) && !cleanupRetried {
+			cleanupRetried = true
+			continue
 		}
 		if !errors.Is(err, ErrRuntimeBusy) && !errors.Is(err, ErrRuntimeDrainAborted) {
 			return err
@@ -699,6 +739,8 @@ func (m *RuntimeManager) Shutdown(ctx context.Context) error {
 		m.queue = nil
 		for _, entry := range m.entries {
 			entry.requested = false
+			entry.cleanupAttempts = 0
+			entry.nextCleanup = time.Time{}
 			entry.drainRequested = true
 			if control, ok := entry.runtime.(RuntimeDrainControl); ok {
 				control.SetDraining(true)
@@ -714,10 +756,15 @@ func (m *RuntimeManager) Shutdown(ctx context.Context) error {
 	ticker := time.NewTicker(m.cfg.PollInterval)
 	defer ticker.Stop()
 	var result error
+	cleanupTried := make(map[string]bool)
 	for {
 		m.mu.Lock()
 		pending := false
 		for roomID, entry := range m.entries {
+			if entry.phase == RuntimeFailed && entry.runtime != nil && entry.cleanupRetry && !cleanupTried[roomID] {
+				cleanupTried[roomID] = true
+				m.retryCleanupLocked(roomID, entry)
+			}
 			switch entry.phase {
 			case RuntimeStarting, RuntimeStopping:
 				pending = true
@@ -749,8 +796,8 @@ func (m *RuntimeManager) Shutdown(ctx context.Context) error {
 			m.mu.Unlock()
 			m.wg.Wait()
 			m.mu.Lock()
-			for _, closeErr := range m.closeErrors {
-				result = errors.Join(result, closeErr)
+			for _, entry := range m.entries {
+				result = errors.Join(result, entry.closeError)
 			}
 			m.mu.Unlock()
 			return result
@@ -790,6 +837,11 @@ func (m *RuntimeManager) reconcile() {
 	now := m.cfg.Now()
 	for roomID, entry := range m.entries {
 		m.refreshUsageLocked(entry)
+		if entry.phase == RuntimeFailed && entry.runtime != nil && entry.cleanupRetry && !now.Before(entry.nextCleanup) {
+			entry.requested = false
+			m.retryCleanupLocked(roomID, entry)
+			continue
+		}
 		if entry.phase == RuntimeActive && entry.runtime != nil {
 			if health, ok := entry.runtime.(RuntimeHealth); ok {
 				if err := health.Fatal(); err != nil {
@@ -939,7 +991,8 @@ func (m *RuntimeManager) finishStart(roomID string, generation uint64, runtime R
 		entry.lastError = err.Error()
 		entry.runtime = runtime
 		if runtime != nil {
-			m.closeErrors = append(m.closeErrors, fmt.Errorf("start Room %s left runtime cleanup uncertain: %w", roomID, err))
+			entry.closeError = fmt.Errorf("start Room %s left runtime cleanup uncertain: %w", roomID, err)
+			m.recordCleanupFailureLocked(entry, err)
 		}
 	} else {
 		entry.phase = RuntimeActive
@@ -972,6 +1025,8 @@ func (m *RuntimeManager) finishStop(roomID string, generation uint64, err error)
 				// started for the same durable bindings.
 				entry.phase = RuntimeFailed
 				entry.requested = false
+				m.recordCleanupFailureLocked(entry, err)
+				entry.closeError = err
 				m.dispatchLocked()
 				m.signalLocked()
 				return
@@ -992,15 +1047,23 @@ func (m *RuntimeManager) finishStop(roomID string, generation uint64, err error)
 		entry.phase = RuntimeFailed
 		entry.requested = false
 		entry.lastError = err.Error()
-		m.closeErrors = append(m.closeErrors, fmt.Errorf("close Room %s runtime: %w", roomID, err))
+		entry.closeError = fmt.Errorf("close Room %s runtime: %w", roomID, err)
+		m.recordCleanupFailureLocked(entry, err)
 		m.dispatchLocked()
 		m.signalLocked()
 		return
 	}
 	entry.runtime = nil
+	entry.cleanupRetry = false
+	entry.cleanupAttempts = 0
+	entry.nextCleanup = time.Time{}
+	entry.closeError = nil
 	entry.drainRequested = false
 	entry.fatalStop = false
 	entry.lastError = ""
+	if room, ok := m.registry.Room(roomID); !ok || room.Archived() {
+		entry.requested = false
+	}
 	if entry.requested && !m.closed && !m.admissionBlockedLocked(roomID) {
 		entry.phase = RuntimeQueued
 		entry.queuedAt = m.cfg.Now()
@@ -1011,6 +1074,45 @@ func (m *RuntimeManager) finishStop(roomID string, generation uint64, err error)
 		entry.requested = false
 	}
 	m.dispatchLocked()
+	m.signalLocked()
+}
+
+func (m *RuntimeManager) recordCleanupFailureLocked(entry *runtimeEntry, err error) {
+	entry.cleanupRetry = errors.Is(err, ErrRuntimeCleanupPending) || (entry.fatalStop && errors.Is(err, ErrRuntimeDrainAborted))
+	if !entry.cleanupRetry {
+		return
+	}
+	if m.closed {
+		entry.cleanupAttempts = 0
+		entry.nextCleanup = time.Time{}
+		return
+	}
+	entry.cleanupAttempts++
+	delay := time.Second
+	for i := 1; i < entry.cleanupAttempts && delay < time.Minute; i++ {
+		delay *= 2
+	}
+	if delay > time.Minute {
+		delay = time.Minute
+	}
+	entry.nextCleanup = m.cfg.Now().Add(delay)
+}
+
+// retryCleanupLocked reserves one generation before releasing the manager
+// lock. Retried cleanup never starts an adapter or resubmits a Turn.
+func (m *RuntimeManager) retryCleanupLocked(roomID string, entry *runtimeEntry) {
+	runtime := entry.runtime
+	entry.phase = RuntimeStopping
+	entry.generation++
+	generation := entry.generation
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), m.cfg.CloseTimeout)
+		err := runtime.Close(ctx)
+		cancel()
+		m.finishStop(roomID, generation, err)
+	}()
 	m.signalLocked()
 }
 
@@ -1113,6 +1215,7 @@ func (m *RuntimeManager) statusLocked(roomID string, entry *runtimeEntry) Runtim
 	status := RuntimeStatus{
 		RoomID: roomID, Phase: entry.phase, LastUsedAt: entry.lastUsed,
 		QueuedAt: entry.queuedAt, LastError: entry.lastError,
+		CleanupRetryable: entry.cleanupRetry && entry.runtime != nil,
 		OccupiesCapacity: !m.nativeExemptLocked(roomID) &&
 			(entry.phase == RuntimeStarting || entry.phase == RuntimeActive ||
 				entry.phase == RuntimeStopping || (entry.phase == RuntimeFailed && entry.runtime != nil)),
