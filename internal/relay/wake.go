@@ -158,7 +158,9 @@ func (e *Engine) wakeCandidateLocked(messageID string) (WakeCandidate, bool) {
 	candidate.Delivering = e.counts[m.To].Delivering > 0
 	candidate.Reserved = e.wakeReserved[m.ID]
 	candidate.WaiterActive = e.waiters[m.To] > 0
-	candidate.NudgePending = e.wakeNudgePendingLocked(m.To)
+	// Only `codex queue` is known to hold a nudge until the current Turn ends;
+	// Claude inbox timing is unverified, so Claude keeps the burst rule alone.
+	candidate.NudgePending = candidate.Runtime.Canonical() == model.RuntimeCodex && e.wakeNudgePendingLocked(m.To)
 	return candidate, true
 }
 

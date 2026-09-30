@@ -364,3 +364,35 @@ func TestReserveWakeRejectsHeadWhileNudgePending(t *testing.T) {
 		t.Fatalf("replayed candidate = %#v, %v; want conservative pending", c, ok)
 	}
 }
+
+func TestClaudeWakeTargetIgnoresOutstandingNudge(t *testing.T) {
+	e, a, _ := testEngine(t)
+	first, err := e.Send(a[model.ActorSlot2], SendRequest{ID: "claude-1", Text: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReserveWake(first.ID, model.ActorSlot1); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.RecordWakeAttempt(first.ID, "submitted", "", model.ActorSlot1); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Cancel(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	next, err := e.Send(a[model.ActorSlot2], SendRequest{ID: "claude-2", Text: "next"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mid-Turn activity would hold a Codex nudge; Claude inbox timing is
+	// unverified, so its next burst stays governed by the burst rule only.
+	if _, err := e.Inspect(a[model.ActorSlot1]); err != nil {
+		t.Fatal(err)
+	}
+	if c, ok := e.WakeCandidate(next.ID); !ok || !c.QueueStart || c.NudgePending {
+		t.Fatalf("Claude candidate = %#v, %v; want no nudge_pending", c, ok)
+	}
+	if err := e.ReserveWake(next.ID, model.ActorSlot1); err != nil {
+		t.Fatalf("Claude reservation = %v", err)
+	}
+}
