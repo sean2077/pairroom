@@ -47,7 +47,7 @@ PairRoom 沿用你仓库现有的指令、worktree 和 PR/MR 流程，不加强�
 
 ## 安装与体验
 
-从 [Releases](https://github.com/sean2077/pairroom/releases/latest) 下载安装包；Windows 上也可以用 `winget install PairRoom` 安装桌面版。预编译包**不需要 Go**。各平台的安装、升级和卸载见[安装指南](docs/INSTALLATION.md)。
+从 [Releases](https://github.com/sean2077/pairroom/releases/latest) 下载安装包。Windows 请使用桌面版 `setup.exe`；[WinGet 收录仍在等待批准](docs/INSTALLATION.md#winget)，官方源暂时无法安装。预编译包**不需要 Go**。各平台的安装、升级和卸载见[安装指南](docs/INSTALLATION.md)。
 
 在 Linux、macOS 或 Git Bash 下只装 CLI，先下载安装脚本：
 

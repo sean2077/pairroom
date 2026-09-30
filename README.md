@@ -47,7 +47,7 @@ Screenshots use synthetic demo conversations; they do not show model output.
 
 ## Install and try
 
-Download a package from [Releases](https://github.com/sean2077/pairroom/releases/latest), or run `winget install PairRoom` on Windows for Desktop. Prebuilt packages do **not** need Go. [Installation](docs/INSTALLATION.md) covers each platform, upgrades, and uninstalling.
+Download a package from [Releases](https://github.com/sean2077/pairroom/releases/latest). On Windows, use the desktop `setup.exe`; the [WinGet submission is still pending](docs/INSTALLATION.md#winget), so the package is not yet available from the official source. Prebuilt packages do **not** need Go. [Installation](docs/INSTALLATION.md) covers each platform, upgrades, and uninstalling.
 
 To install only the CLI on Linux, macOS, or Git Bash, download the installer first:
 

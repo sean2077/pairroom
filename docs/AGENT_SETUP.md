@@ -34,7 +34,7 @@ Otherwise choose a channel with the user. [Installation](INSTALLATION.md) owns t
 
 | Platform | Channel | Where the CLI ends up |
 |---|---|---|
-| Windows | `winget install PairRoom` (Desktop; machine-scoped, so Windows may ask the user for elevation) | `C:\Program Files\PairRoom contributors\PairRoom\bin\pairroom.exe` by default. Setup adds that `bin` directory to the machine PATH unless the user opted out; releases before this change did not. |
+| Windows | Desktop `setup.exe` from [Releases](https://github.com/sean2077/pairroom/releases/latest) (machine-scoped, so Windows may ask the user for elevation); [WinGet is not yet available](INSTALLATION.md#winget) | `C:\Program Files\PairRoom contributors\PairRoom\bin\pairroom.exe` by default. Setup adds that `bin` directory to the machine PATH unless the user opted out; releases before this change did not. |
 | macOS | Desktop `.app.zip` from Releases | `PairRoom.app/Contents/Helpers/pairroom`. Desktop offers to link `/usr/local/bin/pairroom` to it on first start, or later from the menu bar item **Install Command Line Tool…**; the user enters the administrator password. |
 | Linux (Debian/Ubuntu) | Desktop `.deb` | `/usr/local/bin/pairroom` |
 | Linux AppImage | Desktop AppImage | Not included; install the matching CLI separately with `install.sh` |
