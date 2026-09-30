@@ -219,6 +219,11 @@ func failedEmbeddedStart(roomID string, engine *room.Engine, cancel context.Canc
 	}
 	if closeErr := engine.Close(); closeErr != nil {
 		combined := errors.Join(startErr, fmt.Errorf("clean up failed Room runtime: %w", closeErr))
+		if errors.Is(closeErr, room.ErrClosePending) {
+			// Keep the actual Engine and writer for staged cleanup instead of
+			// replacing them with an immutable error-only placeholder.
+			return &embeddedRuntime{roomID: roomID, engine: engine, admissionClosed: true, transportClosed: true}, errors.Join(ErrRuntimeCleanupPending, combined)
+		}
 		return &uncertainRuntime{roomID: roomID, cause: combined}, combined
 	}
 	return nil, startErr
@@ -249,12 +254,14 @@ type embeddedRuntime struct {
 	admissionClosed bool
 	activeMutations int
 
-	closeMu      sync.Mutex
-	closeAttempt chan struct{}
-	closed       bool
-	closeErr     error
-	poll         time.Duration
-	lastActivity atomic.Int64
+	closeMu           sync.Mutex
+	closeAttempt      chan struct{}
+	closed            bool
+	closeErr          error
+	transportClosed   bool
+	transportCloseErr error
+	poll              time.Duration
+	lastActivity      atomic.Int64
 	// activeHTTP counts in-flight Room HTTP requests, including long-lived
 	// connections such as the /api/v1/events SSE stream. InUse reports that
 	// lease so idle suspend cannot close a runtime a browser is still reading.
@@ -599,6 +606,12 @@ func (r *embeddedRuntime) Close(ctx context.Context) error {
 			r.closeMu.Unlock()
 			select {
 			case <-ctx.Done():
+				r.requestMu.Lock()
+				irreversible := r.admissionClosed
+				r.requestMu.Unlock()
+				if irreversible {
+					return errors.Join(ErrRuntimeCleanupPending, ctx.Err())
+				}
 				return errors.Join(ErrRuntimeDrainAborted, ctx.Err())
 			case <-attempt:
 				continue
@@ -629,10 +642,7 @@ func (r *embeddedRuntime) Close(ctx context.Context) error {
 // not interrupt the native runtime.
 func (r *embeddedRuntime) close(ctx context.Context) (error, bool) {
 	r.requestMu.Lock()
-	if r.admissionClosed {
-		r.requestMu.Unlock()
-		return nil, true
-	}
+	alreadyDrained := r.admissionClosed
 	r.closeDraining = true
 	r.requestMu.Unlock()
 
@@ -642,7 +652,7 @@ func (r *embeddedRuntime) close(ctx context.Context) (error, bool) {
 	}
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
-	for {
+	for !alreadyDrained {
 		r.requestMu.Lock()
 		if r.activeMutations == 0 && !r.Busy() {
 			// From this point no approval/cancel/interrupt handler may enter. HTTP
@@ -664,32 +674,40 @@ func (r *embeddedRuntime) close(ctx context.Context) (error, bool) {
 	}
 
 	var result error
-	if r.http != nil {
-		if err := r.http.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-			result = errors.Join(result, fmt.Errorf("close Room HTTP server: %w", err))
+	if !r.transportClosed {
+		if r.http != nil {
+			if err := r.http.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+				result = errors.Join(result, fmt.Errorf("close Room HTTP server: %w", err))
+			}
+		} else if r.listener != nil {
+			if err := r.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				result = errors.Join(result, fmt.Errorf("close Room listener: %w", err))
+			}
 		}
-	} else if r.listener != nil {
-		if err := r.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			result = errors.Join(result, fmt.Errorf("close Room listener: %w", err))
+		if r.serveDone != nil {
+			if err := <-r.serveDone; err != nil && r.serveFatal.Load() == nil {
+				// A failure already recorded in serveFatal was surfaced through
+				// Fatal(); joining it again here would turn a diagnosed dead
+				// listener into an "uncertain" close that pins the capacity slot
+				// until a Service restart even though nothing vendor-owned is
+				// left to be uncertain about.
+				result = errors.Join(result, fmt.Errorf("serve Room View: %w", err))
+			}
 		}
-	}
-	if r.serveDone != nil {
-		if err := <-r.serveDone; err != nil && r.serveFatal.Load() == nil {
-			// A failure already recorded in serveFatal was surfaced through
-			// Fatal(); joining it again here would turn a diagnosed dead
-			// listener into an "uncertain" close that pins the capacity slot
-			// until a Service restart even though nothing vendor-owned is
-			// left to be uncertain about.
-			result = errors.Join(result, fmt.Errorf("serve Room View: %w", err))
+		if r.stopReclaim != nil {
+			r.stopReclaim()
+			<-r.reclaimed
 		}
+		r.transportClosed = true
+		r.transportCloseErr = result
 	}
-	if r.stopReclaim != nil {
-		r.stopReclaim()
-		<-r.reclaimed
-	}
+	result = r.transportCloseErr
 	if r.engine != nil {
-		if err := r.engine.Close(); err != nil {
+		if err := r.engine.CloseContext(ctx); err != nil {
 			result = errors.Join(result, err)
+			if errors.Is(err, room.ErrClosePending) {
+				return errors.Join(ErrRuntimeCleanupPending, result), false
+			}
 		}
 	}
 	if r.cancel != nil {

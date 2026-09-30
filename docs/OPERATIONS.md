@@ -64,6 +64,10 @@ Idle suspension applies to every active Room Runtime, Embedded or Native. After 
 
 Reclamation suspends processes without deleting Room history and must not preempt a native Turn merely to free capacity. Embedded activation rebuilds only Room-owned FIFO entries that never crossed submission; accepted or uncertain input needs inspection rather than automatic replay. An uncertain cleanup retains its capacity claim instead of pretending to be suspended.
 
+Embedded cleanup closes new-work admission before stopping adapters. If adapter termination remains unproven, the Runtime stays Failed with its original error, capacity claim, and Event Log ownership. Its Store remains open for late process evidence. Only explicitly retryable cleanup is retried: archive/rename retries it once within that operation, suspend and activation can request a fresh bounded attempt, and the Service rechecks it with exponential backoff from one second to one minute. These attempts only stop remaining adapters; they never replay a Turn or restart an adapter. Successful cleanup releases ownership and capacity; an explicit activation may then start a new Runtime, including after a fatal failure, while background cleanup leaves the Room suspended.
+
+In **Runtimes**, a retryable failure offers **Retry cleanup**; an attempt in progress shows **Stopping** and disables duplicate open actions. A persistent failure still blocks archive, rename, and deletion. Check the displayed error and residual work before restarting the Service. Summary append/sync failures and Store-close errors are not automatically replayed: after process cleanup, their terminal error is retained across repeated closes, including when the Store is already closed. Repair the storage problem and follow Service recovery rather than forcing a lifecycle write across uncertain persistence.
+
 ## Backup
 
 Back up before incompatible upgrades, permanent deletion, data-root moves, manual integrity repair, or binding-policy changes. Stop/drain the relevant PairRoom owner. For Native consistency, also stop work explicitly in the original harnesses: archive/backup cannot do that for you.
@@ -79,6 +83,8 @@ Write backup and diagnostics outputs outside the source Room directory, includin
 The Management listener first ends open Room event streams (in-app Room tabs reconnect after restart), then waits for in-flight requests up to `--shutdown-timeout` before draining Runtimes.
 
 For Embedded, normal exit drains owned native work, settles projections, closes stores, and releases ownership. After a forced exit, only definitely pre-submission FIFO work is automatically rebuilt; unknown submission fails and accepted unfinished input is cancelled without replay.
+
+Shutdown also makes one fresh cleanup attempt for an explicitly retryable Failed Runtime, with no concurrent duplicate close. It reports unresolved cleanup errors; a previously recovered failure does not make a later shutdown fail.
 
 For Native, drain rejects new publications/claims while valid receipts for already released envelopes can settle. Shutdown does not terminate original sessions. Recovered unfinished delivery remains uncertain; inspect history and side effects before Retry. A hidden window or disconnected browser proves nothing about process completion.
 

@@ -137,6 +137,10 @@ type Engine struct {
 	cancel   context.CancelFunc
 	started  bool
 	closed   bool
+	// Close progress is serialized by lifecycleMu, independently of admission.
+	closePending  map[model.ActorID]agent.Adapter
+	closeFinished bool
+	closeErr      error
 	// storeFatal records the first durable-store failure. The Event Log writer
 	// closes itself on any append/sync error; from that point the Room must not
 	// pretend mutations are recorded. Guarded by mu.
@@ -527,31 +531,48 @@ func (e *Engine) Subscribe() (<-chan model.Event, func()) { return e.cfg.Hub.Sub
 
 var ErrAttachmentReferenced = errors.New("attachment is already part of the durable room transcript")
 
+// ErrClosePending means adapter termination is not yet proven. CloseContext
+// may retry only the remaining adapters; the Event Log writer stays owned.
+var ErrClosePending = errors.New("room adapter cleanup is pending")
+
 func (e *Engine) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return e.CloseContext(ctx)
+}
+
+func (e *Engine) CloseContext(ctx context.Context) error {
 	e.lifecycleMu.Lock()
 	defer e.lifecycleMu.Unlock()
+	if e.closeFinished {
+		return e.closeErr
+	}
 	e.mu.Lock()
-	if e.closed {
-		e.mu.Unlock()
-		return nil
-	}
-	e.closed = true
-	if e.cancel != nil {
-		e.cancel()
-	}
-	adapters := make([]agent.Adapter, 0, len(e.adapters))
-	for _, adapter := range e.adapters {
-		adapters = append(adapters, adapter)
+	if !e.closed {
+		e.closed = true
+		if e.cancel != nil {
+			e.cancel()
+		}
+		e.closePending = make(map[model.ActorID]agent.Adapter, len(e.adapters))
+		for actor, adapter := range e.adapters {
+			e.closePending[actor] = adapter
+		}
 	}
 	e.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	var result error
-	for _, adapter := range adapters {
+	for actor, adapter := range e.closePending {
 		if err := adapter.Stop(ctx); err != nil {
 			result = errors.Join(result, fmt.Errorf("stop %s adapter: %w", adapter.Actor(), err))
+		} else {
+			delete(e.closePending, actor)
 		}
+	}
+	if result != nil {
+		// Admission is closed, but surviving adapters still own accepted work
+		// and may publish final evidence through HandleRuntimeEvent/record.
+		// Keep their writer open until every Stop proves completion.
+		return errors.Join(ErrClosePending, result)
 	}
 	// Persist in-progress summary checkpoints after adapters can no longer
 	// report, and before the writer closes.
@@ -562,6 +583,11 @@ func (e *Engine) Close() error {
 	if err := e.cfg.Store.Close(); err != nil {
 		result = errors.Join(result, fmt.Errorf("close Room event store: %w", err))
 	}
+	// Append/sync and close errors are terminal evidence failures, not safe
+	// retry requests. Never replay summaries against a closed/ambiguous writer
+	// or let a second Close's no-op turn their error into success.
+	e.closeFinished = true
+	e.closeErr = result
 	return result
 }
 

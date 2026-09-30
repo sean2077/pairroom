@@ -6,7 +6,9 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ### Fixed
 
-- Treat a normally exited Embedded Claude Code or Codex process as stopped on Windows. Killing its released process handle could return `invalid argument` after stdin EOF, causing archive or suspension to fail and retain an uncertain Runtime. Released Trees now skip duplicate termination, and either Kill outcome waits within the same bound for that process's reader/wait completion evidence. Genuine termination failures retain their original cause on timeout or when completion evidence is unavailable; already failed Runtime cleanup still requires Service recovery.
+- Recover explicitly retryable Embedded Runtime cleanup without requiring a Service restart. Failed adapter stops retain the Event Log writer and capacity; later archive, rename, suspend, activation, deletion, shutdown, or a bounded background retry can finish only the pending cleanup. Completed adapter stops and transport teardown are not repeated, summary/Store failures retain their terminal error, and uncertain input is never replayed. Management offers Retry cleanup and disables open actions while stopping; terminal failures keep their concrete diagnostics and recovery guidance.
+
+- Treat a normally exited Embedded Claude Code or Codex process as stopped on Windows. Killing its released process handle could return `invalid argument` after stdin EOF, causing archive or suspension to fail and retain an uncertain Runtime. Released Trees now skip duplicate termination, and either Kill outcome waits within the same bound for that process's reader/wait completion evidence. Genuine termination failures retain their original cause on timeout or when completion evidence is unavailable.
 
 ## [v5.10.0] — 2026-09-29
 

@@ -419,6 +419,40 @@ async def verify_names(browser, artifacts: Path, in_page_fixture: bool = False) 
                 context_menu_mobile_clamped=True, names_page_errors=errors)
 
 
+async def verify_cleanup_controls(browser, artifacts: Path, in_page_fixture: bool = False) -> dict:
+    from playwright.async_api import expect
+    context = await browser.new_context(viewport={'width': 1440, 'height': 1000}, locale='en-US', reduced_motion='reduce')
+    page = await context.new_page()
+    try:
+        if in_page_fixture:
+            await page.set_content(fixture_html())
+        else:
+            await load_csp_fixture(page)
+        await expect(page.locator('#project-room-search')).to_be_visible()
+        await page.evaluate("""() => {
+          __snapshot.runtimes[0] = {room_id:'r1',phase:'failed',occupies_capacity:true,cleanup_retryable:true,last_error:'process still owns pipes'};
+          __snapshot.runtimes[1] = {room_id:'r2',phase:'failed',occupies_capacity:true,last_error:'terminal store error'};
+          __snapshot.rooms.push({...structuredClone(__snapshot.rooms[0]), id:'r3',name:'Cleanup in progress'});
+          __snapshot.runtimes.push({room_id:'r3',phase:'stopping',occupies_capacity:true,last_error:'process still owns pipes'});
+          location.hash='#/runtimes';
+        }""")
+        await page.locator('#refresh-button').click()
+        for language, retry, restart, stopping in [('en', 'Retry cleanup', 'Requires controlled restart', 'Stopping'), ('zh-CN', '重试清理', '需受控重启', '停止中')]:
+            await page.evaluate('(language) => PairRoomI18n.setLang(language)', language)
+            await expect(page.get_by_role('button', name=retry, exact=True)).to_be_enabled()
+            await expect(page.get_by_role('button', name=restart, exact=True)).to_be_disabled()
+            await expect(page.get_by_role('button', name=stopping, exact=True)).to_be_disabled()
+            await page.screenshot(path=str(artifacts / f'runtime-cleanup-{language}.png'))
+        await page.get_by_role('button', name='重试清理', exact=True).click()
+        await page.locator('#confirm-submit').click()
+        await expect(page.locator('#confirm-dialog')).not_to_be_visible()
+        assert await page.evaluate("__writes.filter(w=>w.path==='/api/v1/rooms/r1/suspend').length") == 1, 'cleanup action must issue exactly one suspend'
+        assert await page.evaluate("__writes.filter(w=>w.path.endsWith('/archive') || w.path.endsWith('/messages')).length") == 0, 'cleanup must not submit work or archive implicitly'
+        return {'runtime_cleanup_controls_and_locales': True}
+    finally:
+        await context.close()
+
+
 async def verify_activation(browser) -> dict:
     page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
     try:
@@ -819,6 +853,7 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
         results.update(await verify_diagnostics(browser, artifacts, in_page_fixture))
         results.update(await verify_names(browser, artifacts, in_page_fixture))
         results.update(await verify_activation(browser))
+        results.update(await verify_cleanup_controls(browser, artifacts, in_page_fixture))
         results.update(await verify_pair_profiles(browser, artifacts, in_page_fixture))
         results['page_errors'] = errors
         (artifacts / 'results.json').write_text(json.dumps(results, indent=2) + '\n', encoding='utf-8')
