@@ -2,6 +2,7 @@ package relay
 
 import (
 	"sort"
+	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
 )
@@ -26,6 +27,12 @@ func (e *Engine) initIndexes() {
 	}
 	if e.lastInbound == nil {
 		e.lastInbound = map[model.ActorID]string{}
+	}
+	if e.wakeNudges == nil {
+		e.wakeNudges = map[model.ActorID]wakeNudge{}
+	}
+	if e.turnEnded == nil {
+		e.turnEnded = map[model.ActorID]time.Time{}
 	}
 }
 

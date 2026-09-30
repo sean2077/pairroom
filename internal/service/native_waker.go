@@ -169,7 +169,8 @@ type nativeWakeHeadSource interface{ WakeHeads() []relay.WakeCandidate }
 // Reconcile is transport maintenance, not a model poll. It examines at most two
 // heads, including after restart, queue-head changes and a collector's exit.
 // A reserved head is NEVER retried. A rate-suppressed (unattempted) head becomes
-// eligible when its deadline passes even if no further messages arrive.
+// eligible when its deadline passes even if no further messages arrive; a
+// nudge_pending head once the earlier nudge is consumed or expires.
 func (w *nativeWaker) Reconcile(ctx context.Context) {
 	if w == nil || ctx.Err() != nil {
 		return
@@ -185,7 +186,7 @@ func (w *nativeWaker) Reconcile(ctx context.Context) {
 		live[c.Target] = true
 		w.mu.Lock()
 		next := w.deferred[c.Target]
-		if next.MessageID != c.MessageID || c.Reserved || !c.Enabled {
+		if next.MessageID != c.MessageID || c.Reserved || !c.Enabled || (next.Reason == "nudge_pending" && !c.NudgePending) {
 			delete(w.deferred, c.Target)
 			next = nativeWakeDeferred{}
 		}
@@ -207,7 +208,8 @@ func (w *nativeWaker) Reconcile(ctx context.Context) {
 }
 
 // A deferred rate-limited head holds the Native runtime lease until it can be
-// reconsidered (the Room hourly budget may exceed the ordinary idle timeout), and
+// reconsidered (the Room hourly budget may exceed the ordinary idle timeout), as
+// does a nudge_pending head for at most WakeRenewAfter, and
 // a wake's reservation admission holds it until its outcome settles. Unsupported, unbound
 // or capability-missing sessions never pin idle runtimes: their periodic probe
 // carries no reservation and no pending vendor effect.
@@ -225,7 +227,7 @@ func (w *nativeWaker) inUseLocked() bool {
 		return true
 	}
 	for _, d := range w.deferred {
-		if d.Reason == "minimum_interval" || d.Reason == "hourly_limit" {
+		if d.Reason == "minimum_interval" || d.Reason == "hourly_limit" || d.Reason == "nudge_pending" {
 			return true
 		}
 	}
@@ -268,7 +270,7 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 	}
 	defer w.end(candidate.Target)
 	if reason := nativeWakeSuppression(candidate); reason != "" {
-		return w.record("suppressed", reason, candidate.Target)
+		return w.suppress(candidate, reason)
 	}
 	target := candidate.Target
 	if err := w.wait(ctx, w.grace); err != nil {
@@ -283,7 +285,7 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 		return w.record("suppressed", "burst", candidate.Target)
 	}
 	if reason := nativeWakeSuppression(candidate); reason != "" {
-		return w.record("suppressed", reason, candidate.Target)
+		return w.suppress(candidate, reason)
 	}
 	var claudeSend claudewake.Send
 	if candidate.Runtime.Canonical() == model.RuntimeClaude {
@@ -357,9 +359,23 @@ func nativeWakeSuppression(candidate relay.WakeCandidate) string {
 		return "unbound"
 	case candidate.Runtime.Canonical() != model.RuntimeCodex && candidate.Runtime.Canonical() != model.RuntimeClaude:
 		return "unsupported_runtime"
+	case candidate.NudgePending:
+		// An earlier nudge may still wait in the native queue. No reservation:
+		// the head stays unattempted until that nudge is consumed or expires.
+		return "nudge_pending"
 	default:
 		return ""
 	}
+}
+
+// suppress records a no-effect decision. A nudge_pending head is deferred for
+// recheck on every maintenance tick: it can become eligible at any relay call,
+// and its bounded WakeRenewAfter window must not be cut by an idle suspend.
+func (w *nativeWaker) suppress(candidate relay.WakeCandidate, reason string) error {
+	if reason == "nudge_pending" {
+		w.deferCandidate(candidate, w.now(), reason)
+	}
+	return w.record("suppressed", reason, candidate.Target)
 }
 
 func (w *nativeWaker) begin(target model.ActorID) bool {

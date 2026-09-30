@@ -74,6 +74,13 @@ type Engine struct {
 	wakeReservations []WakeReservation
 	wakeReserved     map[string]bool
 	waiters          map[model.ActorID]int
+	// wakeNudges and turnEnded are in-memory projections for the outstanding
+	// nudge rule: the newest possibly delivered nudge per target and the last
+	// observed Turn end (a Stop park that released nothing, or StopFailure).
+	// Replay rebuilds nudges from reservation/outcome facts; Turn ends are
+	// process-local, so a replayed nudge conservatively counts as mid-Turn.
+	wakeNudges map[model.ActorID]wakeNudge
+	turnEnded  map[model.ActorID]time.Time
 	// derived holds attention transitions applied by the current append only.
 	derived  []Attention
 	delivery *deliveryProjection
@@ -222,6 +229,12 @@ func (e *Engine) apply(ev model.Event) error {
 		if b.Generation < old.Generation || (b.Generation == old.Generation && old.BindID != "" && b.BindID != old.BindID) {
 			return errors.New("native binding generation regressed")
 		}
+		if !b.Active || b.Generation != old.Generation || b.SessionID != old.SessionID {
+			// A replaced, unbound or re-associated session cannot consume a
+			// nudge queued for its predecessor, nor end its Turn.
+			delete(e.wakeNudges, b.Slot)
+			delete(e.turnEnded, b.Slot)
+		}
 		e.bindings[b.Slot] = b
 		e.seenBinds[b.BindID] = true
 		// Revocation is atomic with invalidating old-generation inbox work. Work
@@ -308,6 +321,7 @@ func (e *Engine) apply(ev model.Event) error {
 		e.wakeReserved[r.MessageID] = true
 		e.wakeReservations = append(e.wakeReservations, r)
 		e.indexWakeReservation(r)
+		e.noteWakeNudgeLocked(r)
 		detail = "wake reserved"
 	case EventWakeAttempted:
 		var p struct {
@@ -326,6 +340,12 @@ func (e *Engine) apply(ev model.Event) error {
 		}
 		if (p.Outcome == "accepted" || p.Outcome == "submitted") != (p.Reason == "") {
 			return errors.New("native wake attempt reason does not match outcome")
+		}
+		if n, ok := e.wakeNudges[p.Target]; ok && !n.Settled && p.Outcome != "suppressed" {
+			// The single wake worker per target appends a reservation's outcome
+			// next for that target; a definite failure delivered no nudge.
+			n.Settled, n.Failed = true, p.Outcome == "failed"
+			e.wakeNudges[p.Target] = n
 		}
 		e.lastWake[p.Target] = WakeObservation{Outcome: p.Outcome, Reason: p.Reason, At: ev.CreatedAt}
 		e.indexWakeObservation(p.Target, e.lastWake[p.Target])
@@ -775,6 +795,8 @@ func (e *Engine) Failure(a Auth, category string) error {
 	}
 	// Do not echo vendor error_details/last_assistant_message: those may include
 	// provider secrets or a partial response. Failure is visibility, not relay.
+	// StopFailure also ends the native Turn without a continuation.
+	e.observeTurnEndLocked(a.Slot)
 	allowed := map[string]bool{"rate_limit": true, "overloaded": true, "authentication_failed": true, "server_error": true, "invalid_request": true, "model_not_found": true, "max_output_tokens": true}
 	if !allowed[category] {
 		category = "unknown"
@@ -810,6 +832,8 @@ func (e *Engine) envelope(m Message) (string, error) {
 
 // Claim waits without claiming. Only the final, non-cancelled stage appends a
 // delivering fact before releasing the envelope. A timeout never consumes FIFO.
+// A Stop park that releases no envelope is the Service's Turn-end observation:
+// the harness stops without a continuation.
 func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
 	for {
 		e.mu.Lock()
@@ -819,10 +843,14 @@ func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
 			return nil, err
 		}
 		if err := ctx.Err(); err != nil {
+			if park {
+				e.observeTurnEndLocked(a.Slot)
+			}
 			e.mu.Unlock()
 			return nil, err
 		}
 		if park && !b.ParkEnabled {
+			e.observeTurnEndLocked(a.Slot)
 			e.mu.Unlock()
 			return nil, nil
 		}
@@ -868,6 +896,7 @@ func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
 		// A Stop park only delays the native harness unless a peer reply is
 		// plausibly imminent. Queued or in-flight input still waits normally.
 		if park && len(e.queued[a.Slot]) == 0 && !busy && !e.replyExpectedLocked(a.Slot) {
+			e.observeTurnEndLocked(a.Slot)
 			e.mu.Unlock()
 			return nil, nil
 		}
@@ -881,6 +910,9 @@ func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
 		case <-ctx.Done():
 			e.mu.Lock()
 			e.waiters[a.Slot]--
+			if park {
+				e.observeTurnEndLocked(a.Slot)
+			}
 			e.mu.Unlock()
 			return nil, ctx.Err()
 		case <-changed:

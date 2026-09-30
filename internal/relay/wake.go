@@ -58,7 +58,7 @@ func (e *Engine) ReserveWake(messageID string, target model.ActorID) error {
 		return ErrWakeReserved
 	}
 	candidate, ok := e.wakeCandidateLocked(messageID)
-	if !ok || candidate.Target != target || !candidate.Enabled || !candidate.QueueStart || candidate.SessionID == "" || candidate.WaiterActive || candidate.Delivering {
+	if !ok || candidate.Target != target || !candidate.Enabled || !candidate.QueueStart || candidate.SessionID == "" || candidate.WaiterActive || candidate.Delivering || candidate.NudgePending {
 		return ErrWakeIneligible
 	}
 	// Replacement cancels queued work for the old generation; the candidate
@@ -158,7 +158,66 @@ func (e *Engine) wakeCandidateLocked(messageID string) (WakeCandidate, bool) {
 	candidate.Delivering = e.counts[m.To].Delivering > 0
 	candidate.Reserved = e.wakeReserved[m.ID]
 	candidate.WaiterActive = e.waiters[m.To] > 0
+	candidate.NudgePending = e.wakeNudgePendingLocked(m.To)
 	return candidate, true
+}
+
+// wakeNudge is the newest reserved nudge for one target. Settled means its
+// outcome was recorded; Failed means that outcome proved no delivery. A
+// reservation without an outcome may have reached the native queue.
+type wakeNudge struct {
+	At      time.Time
+	MidTurn bool
+	Settled bool
+	Failed  bool
+}
+
+// noteWakeNudgeLocked starts outstanding-nudge tracking at a reservation. The
+// target counts as mid-Turn unless its last relay call precedes an observed
+// Turn end. Replay has no Turn-end observations, so a replayed nudge takes the
+// stricter mid-Turn rule until WakeRenewAfter bounds it.
+func (e *Engine) noteWakeNudgeLocked(r WakeReservation) {
+	ended := e.turnEnded[r.Target]
+	midTurn := ended.IsZero() || e.bindings[r.Target].LastActivity.After(ended)
+	e.wakeNudges[r.Target] = wakeNudge{At: r.At, MidTurn: midTurn}
+}
+
+// observeTurnEndLocked records an authenticated Turn end. A nudge already
+// consumed under the previous observation is settled first, so a later Turn
+// end without activity cannot make it outstanding again.
+func (e *Engine) observeTurnEndLocked(slot model.ActorID) {
+	e.initIndexes()
+	if n, ok := e.wakeNudges[slot]; ok && e.wakeNudgeConsumedLocked(slot, n) {
+		delete(e.wakeNudges, slot)
+	}
+	e.turnEnded[slot] = e.cfg.Now()
+}
+
+// wakeNudgeConsumedLocked infers delivery of a queued native nudge from Turn
+// boundaries; no vendor queue can be listed. An idle target consumes it with
+// its next relay call. A busy native queue holds it until the current Turn
+// ends, so relay calls within that Turn do not count: only a call after a
+// later Turn end does.
+func (e *Engine) wakeNudgeConsumedLocked(slot model.ActorID, n wakeNudge) bool {
+	activity := e.bindings[slot].LastActivity
+	if !n.MidTurn {
+		return activity.After(n.At)
+	}
+	ended := e.turnEnded[slot]
+	return ended.After(n.At) && activity.After(ended)
+}
+
+// wakeNudgePendingLocked reports whether the target's newest possibly
+// delivered nudge may still wait in its native queue. A new burst for that
+// target is then not nudged again; its head stays unattempted. The state
+// expires WakeRenewAfter after the reservation, so a deleted nudge, missing
+// Stop hook or crashed session cannot strand queued input.
+func (e *Engine) wakeNudgePendingLocked(slot model.ActorID) bool {
+	n, ok := e.wakeNudges[slot]
+	if !ok || n.Failed || !e.cfg.Now().Before(n.At.Add(WakeRenewAfter)) {
+		return false
+	}
+	return !e.wakeNudgeConsumedLocked(slot, n)
 }
 
 // WakeRenewAfter is how long an attempted wake may stay uncollected before
