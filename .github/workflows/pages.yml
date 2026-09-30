@@ -2,10 +2,10 @@ name: Website
 
 on:
   pull_request:
-    paths: ['website/**', 'docs/images/**', 'scripts/*website*.py', 'scripts/requirements-browser.txt', '.github/workflows/pages.yml']
+    paths: ['website/**', 'docs/images/**', 'desktop/assets/icon.png', 'scripts/*website*.py', 'scripts/requirements-browser.txt', '.github/workflows/pages.yml']
   push:
     branches: [main]
-    paths: ['website/**', 'docs/images/**', 'scripts/*website*.py', 'scripts/requirements-browser.txt', '.github/workflows/pages.yml']
+    paths: ['website/**', 'docs/images/**', 'desktop/assets/icon.png', 'scripts/*website*.py', 'scripts/requirements-browser.txt', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 permissions:

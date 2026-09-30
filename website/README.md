@@ -4,7 +4,7 @@ The bilingual static landing page is published with GitHub Pages. Product facts 
 
 ## Local development and verification
 
-From the repository root, run `python scripts/check_website.py`, then `python scripts/build_website.py --output dist/website`. The output directory must be new; the packager never deletes an existing directory. It includes only the five public website files, `.nojekyll`, and six screenshots copied from their canonical `docs/images/` sources. Edit those images at their source instead of keeping duplicate website copies.
+From the repository root, run `python scripts/check_website.py`, then `python scripts/build_website.py --output dist/website`. The output directory must be new; the packager never deletes an existing directory. It includes only the four public website files, `.nojekyll`, the desktop application's `desktop/assets/icon.png` copied byte-identically as `favicon.png`, and six screenshots copied from their canonical `docs/images/` sources. The same desktop icon appears in the header, footer, and browser tab. Edit images at their source instead of keeping duplicate website copies.
 
 Preview the packaged page with `python -m http.server 8000 --bind 127.0.0.1 --directory dist`, then open `http://127.0.0.1:8000/website/`. Resource references are relative so the same files work under the deployed `/pairroom/` path.
 

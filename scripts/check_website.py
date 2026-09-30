@@ -43,10 +43,11 @@ def check():
     with tempfile.TemporaryDirectory(prefix="pairroom-website-check-") as directory:
         output = Path(directory) / "pairroom"
         build(output)
-        expected = set(PUBLIC_FILES) | {".nojekyll"} | {
+        expected = set(PUBLIC_FILES) | {".nojekyll", "favicon.png"} | {
             f"images/{screen}{suffix}.png" for screen in SCREENS for suffix in ("", "-zh")}
         actual = {path.relative_to(output).as_posix() for path in output.rglob("*") if path.is_file()}
         assert actual == expected, f"Unexpected deployed files: {actual ^ expected}"
+        assert (output / "favicon.png").read_bytes() == (ROOT / "desktop/assets/icon.png").read_bytes(), "Desktop icon drift"
         for reference in page.references:
             url = urlsplit(reference)
             if url.scheme:
