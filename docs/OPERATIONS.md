@@ -44,6 +44,8 @@ A quiet Runtime may be running a long command, compacting context, or performing
 
 ## Project, Archive, Delete
 
+Management uses the desktop application icon in navigation and sign-in. The Project/Room list fills the sidebar above Service status and scrolls independently when it overflows. Primary actions use green buttons in light and dark themes across Management and Room views.
+
 The Room context menu separates rename, **Close Room tab**, ordering, and confirmed **Archive Room**. It is available from Room rows/sidebar/tabs and through keyboard context-menu access. Closing a view and archiving are deliberately different operations.
 
 | Action | Boundary |

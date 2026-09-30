@@ -20,8 +20,8 @@
   --wb-line-strong: #c6c3ba;
   --wb-ink: #1c1b18;
   --wb-muted: #5f5d56;
-  --wb-primary: #1c1b18;
-  --wb-primary-hover: #34322c;
+  --wb-primary: #1f6743;
+  --wb-primary-hover: #185235;
   --wb-on-primary: #ffffff;
   --wb-focus: #3869c8;
   --wb-ring: 0 0 0 3px color-mix(in srgb, var(--wb-focus) 16%, transparent);
@@ -110,8 +110,8 @@
   --wb-line-strong: #4a4f5c;
   --wb-ink: #e9eaee;
   --wb-muted: #a6abb7;
-  --wb-primary: #e9eaee;
-  --wb-primary-hover: #ffffff;
+  --wb-primary: #7bcca1;
+  --wb-primary-hover: #94d8b3;
   --wb-on-primary: #17181d;
   --wb-focus: #9dbdff;
   --wb-ring: 0 0 0 3px color-mix(in srgb, var(--wb-focus) 22%, transparent);
@@ -146,7 +146,7 @@
 /* Management: quiet navigation, compact headers and aligned document rows. */
 body.workbench-management .sidebar { background: var(--wb-chrome); backdrop-filter: none; }
 body.workbench-management .sidebar-top { min-height: 46px; padding-block: 6px; border-bottom-color: transparent; }
-body.workbench-management .brand-mark { width: 24px; height: 24px; flex-basis: 24px; border-radius: 6px; background: var(--wb-primary); color: var(--wb-on-primary); }
+body.workbench-management .brand-mark { width: 24px; height: 24px; flex-basis: 24px; }
 body.workbench-management .brand-copy strong { font-size: 14px; font-weight: 650; letter-spacing: -.02em; }
 body.workbench-management .primary-nav { padding: 8px 8px 6px; gap: 2px; }
 body.workbench-management .primary-nav a { min-height: 34px; padding: 6px 10px; gap: 10px; border: 0; border-radius: 6px; font-size: 13px; font-weight: 500; }

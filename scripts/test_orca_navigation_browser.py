@@ -26,6 +26,35 @@ async def verify_navigation(browser, artifacts: Path, *, fixture=None) -> None:
         launcher = page.locator('#management-command-button')
         await expect(separator).to_be_visible()
         await expect(page.locator('#sidebar #management-command-button')).to_be_visible()
+        # The Project/Room list must reach Service status even when content
+        # overflows; an empty flex sibling used to reserve half this space.
+        icon = page.locator('.brand img.brand-mark')
+        await expect(icon).to_have_attribute('src', '/app-icon.png')
+        assert await icon.evaluate('el => el.complete && el.naturalWidth > 0')
+        assert (Path(__file__).resolve().parents[1] / 'internal/service/assets/app-icon.png').read_bytes() == (Path(__file__).resolve().parents[1] / 'desktop/assets/icon.png').read_bytes()
+        await page.evaluate("""() => {
+          window.__navigationSnapshot = structuredClone(__snapshot);
+          __snapshot.projects.push(...Array.from({length:24}, (_,i) =>
+            ({id:`layout-${i}`,root:`/workspace/layout-${i}`,available:true})));
+          document.getElementById('refresh-button').click();
+        }""")
+        await expect(page.locator('.tree-project')).to_have_count(25)
+        for height in [1000, 650]:
+            await page.set_viewport_size({'width':1440, 'height':height})
+            bounds = await page.locator('#room-tree').evaluate("""el => ({
+              bottom:el.getBoundingClientRect().bottom,
+              footer:document.querySelector('.sidebar-service').getBoundingClientRect().top,
+              client:el.clientHeight, scroll:el.scrollHeight
+            })""")
+            assert abs(bounds['bottom'] - bounds['footer']) <= 1, bounds
+            assert bounds['scroll'] > bounds['client'], bounds
+            await page.locator('.tree-project-link[href="#/projects/layout-23"]').scroll_into_view_if_needed()
+            assert await page.locator('#room-tree').evaluate('el => el.scrollTop > 0')
+            await expect(page.locator('.sidebar-service')).to_be_in_viewport()
+        await page.set_viewport_size({'width':1440, 'height':1000})
+        await page.screenshot(path=str(artifacts / 'sidebar-full-height.png'))
+        await page.evaluate("__snapshot=__navigationSnapshot; document.getElementById('refresh-button').click()")
+        await expect(page.locator('.tree-project')).to_have_count(1)
         await page.evaluate("""() => {
           window.__sidebarNode = document.getElementById('sidebar');
           window.__commandNode = document.getElementById('management-command-button');
@@ -134,6 +163,7 @@ async def verify_navigation(browser, artifacts: Path, *, fixture=None) -> None:
             'one_cssom_rule': True, 'launcher_identity_and_focus': True,
             'collapsed_and_mobile_navigation': True, 'tab_local_width': True,
             'production_csp': fixture is None, 'page_errors': errors,
+            'full_height_scrollable_tree': True, 'desktop_icon': True,
         }, indent=2) + '\n', encoding='utf-8')
     finally:
         await page.close()
