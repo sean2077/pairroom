@@ -141,6 +141,10 @@ type Engine struct {
 	closePending  map[model.ActorID]agent.Adapter
 	closeFinished bool
 	closeErr      error
+	// Guarded by mu. Closing admission forbids new registrations before
+	// CloseContext waits for the already admitted native starts to return.
+	startsInFlight int
+	startsDone     chan struct{}
 	// storeFatal records the first durable-store failure. The Event Log writer
 	// closes itself on any append/sync error; from that point the Room must not
 	// pretend mutations are recorded. Guarded by mu.
@@ -519,7 +523,16 @@ func (e *Engine) Start(parent context.Context) error {
 				ctx, cancel := context.WithTimeout(e.ctx, 30*time.Second)
 				defer cancel()
 				if err := e.StartAgent(ctx, actor); err != nil {
-					e.notice("error", fmt.Sprintf("%s failed to start: %v", e.participantName(actor), err))
+					// A cancelled startup may return while Close finishes. Do
+					// not append its extra diagnostic after the writer closes.
+					e.lifecycleMu.Lock()
+					e.mu.RLock()
+					closed := e.closed
+					e.mu.RUnlock()
+					if !closed {
+						e.notice("error", fmt.Sprintf("%s failed to start: %v", e.participantName(actor), err))
+					}
+					e.lifecycleMu.Unlock()
 				}
 			}()
 		}
@@ -558,9 +571,20 @@ func (e *Engine) CloseContext(ctx context.Context) error {
 			e.closePending[actor] = adapter
 		}
 	}
+	var startsDone <-chan struct{}
+	if e.startsInFlight > 0 {
+		startsDone = e.startsDone
+	}
 	e.mu.Unlock()
 
 	var result error
+	if startsDone != nil {
+		select {
+		case <-startsDone:
+		case <-ctx.Done():
+			return errors.Join(ErrClosePending, fmt.Errorf("wait for admitted adapter starts: %w", ctx.Err()))
+		}
+	}
 	for actor, adapter := range e.closePending {
 		if err := adapter.Stop(ctx); err != nil {
 			result = errors.Join(result, fmt.Errorf("stop %s adapter: %w", adapter.Actor(), err))

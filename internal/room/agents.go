@@ -26,6 +26,24 @@ func (e *Engine) startAgentLocked(ctx context.Context, actor model.ActorID) erro
 	if err != nil {
 		return err
 	}
+	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return errors.New("room is closed")
+	}
+	if e.startsInFlight == 0 {
+		e.startsDone = make(chan struct{})
+	}
+	e.startsInFlight++
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		e.startsInFlight--
+		if e.startsInFlight == 0 {
+			close(e.startsDone)
+		}
+		e.mu.Unlock()
+	}()
 	e.updateParticipant(actor, func(p *model.ParticipantSnapshot) {
 		p.State = model.StateStarting
 		p.LastError = ""
@@ -79,6 +97,12 @@ func (e *Engine) stopAgentLocked(ctx context.Context, actor model.ActorID) (bool
 }
 
 func (e *Engine) RestartAgent(ctx context.Context, actor model.ActorID) error {
+	e.mu.RLock()
+	closed := e.closed
+	e.mu.RUnlock()
+	if closed {
+		return errors.New("room is closed")
+	}
 	unlock, err := e.lockDelivery(ctx, actor)
 	if err != nil {
 		return err
