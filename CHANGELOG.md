@@ -4,6 +4,10 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+### Fixed
+
+- Treat a normally exited Embedded Claude Code or Codex process as stopped on Windows. Killing its released process handle could return `invalid argument` after stdin EOF, causing archive or suspension to fail and retain an uncertain Runtime. Released Trees now skip duplicate termination, and either Kill outcome waits within the same bound for that process's reader/wait completion evidence. Genuine termination failures retain their original cause on timeout or when completion evidence is unavailable; already failed Runtime cleanup still requires Service recovery.
+
 ## [v5.10.0] — 2026-09-29
 
 ### Added

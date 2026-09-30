@@ -21,7 +21,8 @@ type Tree struct {
 }
 
 // StartTree starts cmd and binds its process tree to the returned Tree. The
-// caller must call Release once cmd.Wait has returned.
+// caller must call Release only after cmd.Wait has returned and the direct
+// child has been reaped. Release does not certify that every descendant exited.
 //
 // On Windows the child is assigned to its Job Object immediately after
 // CreateProcess returns. os/exec cannot start a process suspended, so a
@@ -39,14 +40,19 @@ func StartTree(cmd *exec.Cmd) (*Tree, error) {
 	return tree, nil
 }
 
-// Kill terminates the whole process tree. It is safe to call repeatedly and
-// after the process has exited.
+// Kill requests termination of the Job, or the direct child without a Job.
+// After Release it is a no-op; before Release, OS termination errors may still
+// be returned even if the direct child has exited.
 func (t *Tree) Kill() error {
 	if t == nil || t.cmd == nil || t.cmd.Process == nil {
 		return nil
 	}
 	t.mu.Lock()
-	terminated := !t.released && t.job != 0 && terminateJob(t.job) == nil
+	if t.released {
+		t.mu.Unlock()
+		return nil
+	}
+	terminated := t.job != 0 && terminateJob(t.job) == nil
 	t.mu.Unlock()
 	if terminated {
 		// The job owned the direct child too. Terminating an already-exiting
@@ -62,8 +68,10 @@ func (t *Tree) Kill() error {
 	return nil
 }
 
-// Release frees the tree's operating-system resources. Closing the Windows
-// job also terminates any descendant that outlived the direct child.
+// Release frees the tree's operating-system resources. Call it only after
+// cmd.Wait returned and the direct child was reaped. Closing the Windows Job
+// requests termination of remaining Job members; it is not descendant exit
+// evidence, and descendants outside the Job are not covered.
 func (t *Tree) Release() {
 	if t == nil {
 		return

@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/sean2077/pairroom/internal/execx"
 )
 
 // Maximum stdout record sizes. A vendor line beyond the limit cannot be
@@ -30,7 +28,7 @@ func streamFailureReason(runtime string, limit int, err error) string {
 }
 
 // processTreeExitTimeout bounds how long a stop or interrupt waits for a
-// killed vendor process tree to release its output pipes.
+// vendor process tree to finish its reader/wait goroutines after a Kill attempt.
 const processTreeExitTimeout = 5 * time.Second
 
 // stopProcessTree kills the vendor process tree and reports success only once
@@ -38,19 +36,26 @@ const processTreeExitTimeout = 5 * time.Second
 // that is still holding the output pipes after the bound is reported as an
 // uncertain stop, so callers keep the capacity claim instead of treating the
 // runtime as gone.
-func stopProcessTree(tree *execx.Tree, procDone <-chan struct{}, runtime string) error {
-	if err := tree.Kill(); err != nil {
-		return fmt.Errorf("kill %s: %w", runtime, err)
-	}
+func stopProcessTree(tree interface{ Kill() error }, procDone <-chan struct{}, runtime string) error {
+	killErr := tree.Kill()
 	if procDone == nil {
+		if killErr != nil {
+			return fmt.Errorf("kill %s: %w", runtime, killErr)
+		}
 		return nil
 	}
+	// A Kill error may race the reader/wait goroutines' final completion.
+	// Use the same bound for either Kill outcome; only this process's
+	// completion evidence can settle the error, never its OS error code.
 	timer := time.NewTimer(processTreeExitTimeout)
 	defer timer.Stop()
 	select {
 	case <-procDone:
 		return nil
 	case <-timer.C:
+		if killErr != nil {
+			return fmt.Errorf("kill %s: %w", runtime, killErr)
+		}
 		return fmt.Errorf("%s was killed but its process tree has not exited (a descendant may still hold its output pipes); stop state is uncertain", runtime)
 	}
 }
