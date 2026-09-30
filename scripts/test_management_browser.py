@@ -106,7 +106,7 @@ async def load_csp_fixture(page) -> None:
             if not asset.is_file():
                 await request.fulfill(status=404, body='Fixture resource not found')
                 return
-            content_type = {'.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'}.get(asset.suffix, 'text/plain')
+            content_type = {'.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml','.png':'image/png'}.get(asset.suffix, 'text/plain')
             await request.fulfill(status=200, content_type=content_type, body=asset.read_bytes())
 
     await page.route('http://127.0.0.1:7332/**', route)

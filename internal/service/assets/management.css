@@ -248,22 +248,12 @@ code, pre, kbd { font-family: var(--font-mono); }
   padding: 0 4px 0 2px;
 }
 .brand-mark {
-  position: relative;
   width: 38px;
   height: 38px;
   flex: 0 0 38px;
-  display: grid;
-  place-items: center;
-  border-radius: 12px;
-  background: linear-gradient(145deg, var(--accent), #7a72ef 54%, #3d8dde);
-  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 24%, transparent);
-  color: white;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: -.08em;
+  display: block;
+  object-fit: contain;
 }
-.brand-mark span:first-child { transform: translate(-3px, -2px); }
-.brand-mark span:last-child { position: absolute; transform: translate(5px, 5px); opacity: .72; }
 .brand-copy { min-width: 0; display: grid; line-height: 1.15; }
 .brand-copy strong { color: var(--text-strong); font-size: 17px; letter-spacing: -.025em; }
 .primary-nav { padding: 16px 12px; display: grid; gap: 5px; }
@@ -294,7 +284,7 @@ code, pre, kbd { font-family: var(--font-mono); }
   font-weight: 700;
 }
 .primary-nav a.active .nav-count { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
-.sidebar-spacer { flex: 1; }
+/* The tree owns all space above Service status, including when it overflows. */
 .room-tree {
   flex: 1;
   min-height: 0;
@@ -416,6 +406,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 .room-picker-item { width: 100%; }
 .sidebar-service {
   position: relative;
+  flex-shrink: 0;
   min-height: 77px;
   display: flex;
   align-items: center;

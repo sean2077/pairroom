@@ -94,6 +94,7 @@ async def verify(browser_path: str | None, artifacts: Path) -> None:
                     primary = page.locator('#add-project-button' if surface == 'management' else '#send-button')
                     ratio = await contrast(primary)
                     assert ratio >= 4.5, (surface, theme, ratio)
+                    assert await primary.evaluate('el=>getComputedStyle(el).backgroundColor') == ('rgb(31, 103, 67)' if theme == 'light' else 'rgb(123, 204, 161)')
                     if surface == 'room':
                         await expect(field).to_have_value('Keep this draft while changing appearance.')
                         assert await field.evaluate('el=>el===window.__draftNode'), 'appearance replaced the composer'

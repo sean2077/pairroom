@@ -4,6 +4,10 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+### Fixed
+
+- Use the desktop application icon in Management navigation and sign-in, let the Project/Room tree use all available space above Service status instead of reserving an empty spacer beneath a prematurely scrolling list, and use green primary action buttons across Management and Room surfaces in both themes.
+
 ## [v5.11.0] — 2026-09-30
 
 ### Added
