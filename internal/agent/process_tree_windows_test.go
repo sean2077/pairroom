@@ -4,12 +4,15 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -17,6 +20,54 @@ import (
 
 	"github.com/sean2077/pairroom/internal/model"
 )
+
+func TestWindowsStopProcessTreeKillFailureRequiresCompletion(t *testing.T) {
+	cmd := exec.Command(os.Getenv("COMSPEC"), "/c", "exit", "0")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	// A waited Windows Process gives a real Kill failure, independently of
+	// Tree's Job fallback or released-state guard.
+	if err := cmd.Process.Kill(); !errors.Is(err, syscall.EINVAL) {
+		t.Fatalf("expected released Windows process Kill failure, got %v", err)
+	}
+	done := make(chan struct{})
+	if err := stopProcessTree(cmd.Process, done, "helper"); !errors.Is(err, syscall.EINVAL) {
+		t.Fatalf("Kill failure without completion was not preserved: %v", err)
+	}
+	if err := stopProcessTree(cmd.Process, nil, "helper"); !errors.Is(err, syscall.EINVAL) {
+		t.Fatalf("missing completion evidence swallowed Kill failure: %v", err)
+	}
+	close(done)
+	if err := stopProcessTree(cmd.Process, done, "helper"); err != nil {
+		t.Fatalf("completed process remained uncertain after Kill failure: %v", err)
+	}
+}
+
+func TestWindowsAdaptersStopAfterStdinEOF(t *testing.T) {
+	for _, runtime := range []string{"claude", "codex"} {
+		t.Run(runtime, func(t *testing.T) {
+			t.Setenv("PAIRROOM_HELPER_IGNORE_EOF", "")
+			var adapter Adapter
+			if runtime == "claude" {
+				t.Setenv("PAIRROOM_CLAUDE_SCRIPT", "default")
+				adapter = NewClaude(Config{Command: os.Args[0], Repo: t.TempDir(), DataDir: t.TempDir()}, func(model.RuntimeEvent) {})
+			} else {
+				t.Setenv("PAIRROOM_CODEX_HELPER", "1")
+				adapter = NewCodex(Config{Command: os.Args[0], Repo: t.TempDir()}, func(model.RuntimeEvent) {})
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			if err := adapter.Start(ctx); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = adapter.Stop(context.Background()) })
+			if err := adapter.Stop(ctx); err != nil {
+				t.Fatalf("Stop after stdin EOF: %v", err)
+			}
+		})
+	}
+}
 
 // writeBatchShim reproduces the npm launcher shape: a .cmd file that runs the
 // real CLI (here the test binary) as a grandchild of PairRoom.

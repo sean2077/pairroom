@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/sean2077/pairroom/internal/execx"
 )
 
 // Maximum stdout record sizes. A vendor line beyond the limit cannot be
@@ -38,8 +36,15 @@ const processTreeExitTimeout = 5 * time.Second
 // that is still holding the output pipes after the bound is reported as an
 // uncertain stop, so callers keep the capacity claim instead of treating the
 // runtime as gone.
-func stopProcessTree(tree *execx.Tree, procDone <-chan struct{}, runtime string) error {
+func stopProcessTree(tree interface{ Kill() error }, procDone <-chan struct{}, runtime string) error {
 	if err := tree.Kill(); err != nil {
+		// Exit may have completed between the Kill request and its error.
+		// Only this process's reader/wait completion can settle that race.
+		select {
+		case <-procDone:
+			return nil
+		default:
+		}
 		return fmt.Errorf("kill %s: %w", runtime, err)
 	}
 	if procDone == nil {
