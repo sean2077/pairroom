@@ -4,7 +4,15 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+## [v5.11.0] — 2026-09-30
+
+### Added
+
+- Publish an English and Simplified Chinese product website with shareable language links, existing demo screenshots, Native/Embedded comparisons, platform-specific installation guidance, and command copying. The responsive static site is deployed through GitHub Pages after website checks and reuses the desktop application icon for its header, footer, and favicon; it adds no backend, model calls, analytics, or measured cost claims.
+
 ### Fixed
+
+- Correct Windows installation guidance in both READMEs, the installation and Agent-assisted setup guides, and both website languages. WinGet manifest validation and submission were presented as a published installation channel although the initial submission remains unmerged. Windows users now download the desktop setup.exe from Releases; the website no longer offers an unavailable WinGet command, and the guide requires an official-source availability check before restoring that channel.
 
 - Recover explicitly retryable Embedded Runtime cleanup without requiring a Service restart. In-flight startup and failed adapter stops retain the Event Log writer and capacity; later archive, rename, suspend, activation, deletion, shutdown, or a bounded background retry can finish only the pending cleanup. Closed admission rejects new starts/restarts, and cleanup waits for previously admitted starts before stopping their processes. Completed adapter stops and transport teardown are not repeated, summary/Store failures retain their terminal error, and uncertain input is never replayed. Management offers Retry cleanup and disables open actions while stopping; terminal failures keep their concrete diagnostics and recovery guidance.
 
