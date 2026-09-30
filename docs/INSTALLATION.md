@@ -17,15 +17,11 @@ Release packages are unsigned development artifacts until Windows code signing a
 
 ### winget
 
-The desktop package is published to [WinGet](https://learn.microsoft.com/en-us/windows/package-manager/winget/), Microsoft's Windows package manager, as `sean2077.PairRoom` (moniker `pairroom`):
+**Not yet available from the official WinGet source.** As checked on 2026-09-30, the [5.10.0 submission](https://github.com/microsoft/winget-pkgs/pull/443238) has passed manifest validation but remains open awaiting moderator approval. Validation and PR submission do not mean the package has been published. Install the [Windows setup.exe from Releases](#setupexe-from-releases) for now.
 
-```powershell
-winget install PairRoom
-winget upgrade PairRoom
-winget uninstall PairRoom
-```
+The proposed package identifier is `sean2077.PairRoom` (moniker `pairroom`). After upstream approval and source indexing, check availability with `winget show --id sean2077.PairRoom --exact --source winget` before using that channel. If no package is found, continue with the release installer.
 
-The manifest is machine-scoped and declares the Microsoft Edge WebView2 Runtime as a package dependency, so winget provisions the runtime before the installer runs.
+The submitted manifest is machine-scoped and declares Microsoft Edge WebView2 Runtime as a dependency. The release installer itself also provisions a missing runtime; see below. Restore WinGet installation and upgrade instructions only after verifying availability from the official source.
 
 ### Setup.exe from Releases
 
@@ -118,7 +114,6 @@ Read [Upgrading](UPGRADING.md) before changing versions; it owns backup, compati
 
 | Channel | Upgrade | Uninstall | Service data |
 |---|---|---|---|
-| winget | `winget upgrade PairRoom` | `winget uninstall PairRoom` | Preserved |
 | Windows setup.exe | Run the newer installer | `unins000.exe` (quiet flags above) | Preserved |
 | macOS `.app` | Replace the app bundle | Delete `PairRoom.app` | Preserved |
 | Linux `.deb` | Install the newer package | Remove via package manager | Preserved |

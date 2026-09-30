@@ -37,7 +37,9 @@ def check():
     assert set(chinese) == page.keys | {"pageTitle", "pageDescription"}, "Translation keys differ from the page"
     assert all(isinstance(value, str) and value.strip() for value in chinese.values()), "Empty translation"
     subprocess.run(["node", "--check", str(ROOT / "website/app.js")], check=True)
-    for command in ("winget install PairRoom", "sh install-pairroom.sh", "pairroom version",
+    assert "winget install" not in source.lower(), "Unavailable WinGet installation advertised"
+    assert 'data-windows-download href="https://github.com/sean2077/pairroom/releases/latest"' in source, "Missing Windows release download"
+    for command in ("sh install-pairroom.sh", "pairroom version",
                     'pairroom service --mock --data-root "$HOME/.pairroom-demo"'):
         assert command in source and command in (ROOT / "README.md").read_text(encoding="utf-8"), command
     with tempfile.TemporaryDirectory(prefix="pairroom-website-check-") as directory:

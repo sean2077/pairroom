@@ -42,9 +42,13 @@ def test(browser_path, output):
                 page.keyboard.press("Space")
                 assert page.locator('[data-install="linux"]').is_visible()
                 page.locator('[data-platform="windows"]').click()
-                page.locator('[data-copy="windows-command"]').click()
+                windows = page.locator('[data-install="windows"]')
+                assert windows.locator('[data-copy]').count() == 0
+                assert windows.locator('[data-windows-download]').get_attribute('href') == 'https://github.com/sean2077/pairroom/releases/latest'
+                assert 'Not yet available via WinGet' in windows.inner_text()
+                page.locator('[data-copy="mock-command"]').click()
                 page.get_by_role("status").filter(has_text="Command copied.").wait_for()
-                assert page.evaluate("navigator.clipboard.readText()") == "winget install PairRoom"
+                assert page.evaluate("navigator.clipboard.readText()") == 'pairroom service --mock --data-root "$HOME/.pairroom-demo"'
                 for platform in ("macos", "linux", "windows"):
                     page.locator(f'[data-platform="{platform}"]').click()
                     assert page.locator(f'[data-install="{platform}"]').is_visible()
@@ -58,6 +62,8 @@ def test(browser_path, output):
                 page.wait_for_function("document.documentElement.lang === 'zh-CN'")
                 assert "lang=zh-CN" in page.url and "两位 Agent" in page.title()
                 assert "开始使用" in page.locator('.hero .primary').inner_text()
+                assert 'WinGet 官方源尚未收录' in windows.inner_text()
+                assert windows.locator('[data-windows-download]').get_attribute('href') == 'https://github.com/sean2077/pairroom/releases/latest'
                 for view in ("embedded", "management", "native"):
                     page.locator(f'[data-view="{view}"]').click()
                     image = page.locator(f'[data-shot="{view}"] img')
@@ -71,9 +77,9 @@ def test(browser_path, output):
                 assert page.locator('.faq-list details').first.get_attribute('open') is not None
                 # A denied clipboard must never announce success, and must select the actual command.
                 page.evaluate("Object.defineProperty(navigator, 'clipboard', {configurable:true, value:{writeText:async()=>{throw new Error('Denied')}}})")
-                page.locator('[data-copy="windows-command"]').click()
+                page.locator('[data-copy="mock-command"]').click()
                 page.get_by_role("status").filter(has_text="Could not copy.").wait_for()
-                assert page.evaluate("getSelection().toString()") == "winget install PairRoom"
+                assert page.evaluate("getSelection().toString()") == 'pairroom service --mock --data-root "$HOME/.pairroom-demo"'
                 for lang in ("en", "zh-CN"):
                     page.goto(origin + f"/pairroom/?lang={lang}")
                     page.wait_for_function("lang => document.documentElement.lang === lang", arg=lang)
