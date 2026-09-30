@@ -79,6 +79,8 @@ replace the separate desktop workflow or authenticated vendor tests.
 
 ## Browser verification
 
+The public landing page lives in `website/`, separately from the Service and Desktop interfaces. See [website development and publishing](website/README.md) for its static packaging, bilingual content, browser checks, and GitHub Pages workflow. Website PRs validate without deploying; publishing runs from `main` after the normal PR process.
+
 ```bash
 python3 -m venv .browser-venv
 .browser-venv/bin/python -m pip install -r scripts/requirements-browser.txt
