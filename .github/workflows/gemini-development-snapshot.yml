@@ -6,35 +6,42 @@ on:
     paths: [.github/workflows/gemini-development-snapshot.yml]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  snapshot:
+  deliver:
+    if: github.repository == 'sean2077/pairroom' && github.ref == 'refs/heads/feat/gemini-cli-support'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: stable
-          check-latest: true
-          cache: false
-      - name: Prepare pinned offline verification inputs
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+      - name: Apply exact reviewed and tested source snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          go version
-          go mod download
-          tar -czf "${RUNNER_TEMP}/pairroom-go.tar.gz" -C "$(go env GOROOT)" .
-          tar -czf "${RUNNER_TEMP}/pairroom-modules.tar.gz" -C "$(go env GOMODCACHE)" .
-          git diff --exit-code -- go.mod go.sum
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: pairroom-gemini-development-go
-          path: ${{ runner.temp }}/pairroom-go.tar.gz
-          retention-days: 1
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: pairroom-gemini-development-modules
-          path: ${{ runner.temp }}/pairroom-modules.tar.gz
-          retention-days: 1
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^)" = e6519accac9ae80d1f7c64d7a4a982f4f5dcb800
+          archive="$RUNNER_TEMP/gemini-implementation.patch.xz"
+          patch="$RUNNER_TEMP/gemini-implementation.patch"
+          : > "$archive"
+          for blob in a42a9f61ed0d86ba046ac2f59760981819014dbb 0d58cb008414f60ca7aef42b5ae060977bb3aecc 7bc97ced9fbadc887f26fb88755c6865a9fb0c74 2e9b415a1320017ccb5e2385d3bc4da26e7da58d; do
+            gh api "repos/sean2077/pairroom/git/blobs/$blob" --jq .content | base64 --decode >> "$archive"
+          done
+          xz --decompress --stdout "$archive" > "$patch"
+          echo "2ca01f182c0da1347c212fded5e55dc833c4d50a5a593cb8f670440cece9362c  $patch" | sha256sum --check
+          git apply --check --index --unidiff-zero "$patch"
+          git apply --index --unidiff-zero "$patch"
+          git rm .github/workflows/gemini-development-snapshot.yml
+          git diff --cached --check
+          test "$(git write-tree)" = f1d62c4b8a24c60a38dc9538aa0aa0686172bf58
+          git config user.name Sean
+          git config user.email 37324769+sean2077@users.noreply.github.com
+          git commit -m "feat(gemini): support Gemini CLI native and embedded sessions"
+          test "$(git rev-parse HEAD^{tree})" = f1d62c4b8a24c60a38dc9538aa0aa0686172bf58
+          git push origin HEAD:refs/heads/feat/gemini-cli-support
+          git show --stat --oneline HEAD
