@@ -1,0 +1,25 @@
+name: Gemini development snapshot
+
+on:
+  push:
+    branches: [feat/gemini-cli-support]
+    paths: [.github/workflows/gemini-development-snapshot.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Archive tracked development sources only
+        run: git archive --format=tar.gz --output="${RUNNER_TEMP}/pairroom-source.tar.gz" HEAD
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pairroom-gemini-development-source
+          path: ${{ runner.temp }}/pairroom-source.tar.gz
+          retention-days: 1
