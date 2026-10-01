@@ -7,8 +7,10 @@ const path = require('node:path');
 const { test } = require('node:test');
 const { probe } = require('./probe_gemini_no_auth');
 
-function fixture(t, mode = 'success') {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pairroom probe fixture '));
+function fixture(t, mode = 'success', temporaryParent = os.tmpdir()) {
+  // macOS resolves /var to /private/var in the child cwd. Canonicalize before
+  // spawning so containment and cleanup compare the same physical directory.
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(temporaryParent, 'pairroom probe fixture ')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const packageDir = path.join(root, 'package');
   const record = path.join(root, 'wire.jsonl');
@@ -117,6 +119,25 @@ test('isolated subprocesses send initialize only and retain redacted evidence', 
     assert.equal(invocation.settings.telemetry.enabled, false);
     assert.equal(invocation.settings.general.enableAutoUpdate, false);
     assert.ok(!fs.existsSync(invocation.cwd), 'temporary project must be removed after reaping child');
+    assert.ok(!fs.existsSync(invocation.env.HOME), 'temporary home must be removed');
+  }
+});
+
+test('symlinked temporary parents preserve strict cwd containment and cleanup', async (t) => {
+  const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pairroom linked temp ')));
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const target = path.join(parent, 'real');
+  const alias = path.join(parent, 'alias');
+  fs.mkdirSync(target);
+  fs.symlinkSync(target, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const f = fixture(t, 'success', alias);
+  const report = await probe(f.packageDir, { temporaryParent: f.root });
+  assert.equal(report.status, 'passed');
+  assertInitializeOnly(f.records());
+  for (const invocation of f.records().filter((record) => record.args)) {
+    assert.ok(invocation.cwd.startsWith(f.root + path.sep));
+    assert.ok(invocation.cwd.startsWith(target + path.sep));
+    assert.ok(!fs.existsSync(invocation.cwd), 'canonical temporary project must be removed');
     assert.ok(!fs.existsSync(invocation.env.HOME), 'temporary home must be removed');
   }
 });
