@@ -145,7 +145,46 @@ without authorization.
 
 In Embedded, send the equivalent instruction to the chosen Room participant. Do not operate that same Embedded session from another application until ownership is drained and its supported resumption path is verified. PairRoom offers neither automatic host-mode conversion nor live attachment to a second owner.
 
-For a later review, name the diff/revision, acceptance criteria, and unresolved risks. Reuse the pair rather than rebuilding context or adding mandatory review ceremonies. Newer user instructions take precedence over the recipe.
+### Implementation cross-review
+
+Use this opt-in recipe when the human requests review of an implementation. Reuse the existing pair and task worktree; simple tasks still need no review round. The installed `pairroom-relay` skill carries the compact recipe. It adds no review state, mandatory phases, approval gate, or permission to edit, push, merge, or release. Newer human instructions and the Room's collaboration rules take precedence.
+
+**Pin the question and evidence.** Name the authorized task checkout, acceptance criteria, intended base commit and actual head commit, and whether staged, unstaged or untracked changes are included. Resolve branch names to full SHAs before handoff; choose the base that represents the intended change (for a PR this may be its merge-base), not an unrelated moving branch. Pause the writer during a dirty-worktree review or use an immutable commit/artifact. A commit SHA alone does not identify uncommitted changes. Record ignored/generated inputs separately when relevant; never send credentials as evidence.
+
+In Native, use the existing [Git review observation](NATIVE_RELAY.md#recovery-and-review-surface). From the bound session, with a prepared request file outside the reviewed worktree:
+
+```bash
+pairroom relay send --id impl-review-v1 --text-file /absolute/evidence/request.md \
+  --review --review-repo /absolute/task-worktree --review-base <full-base-sha>
+pairroom relay review --id <published-message-id> --review-repo /absolute/task-worktree
+```
+
+The second command uses the returned `published` message ID, not the client ID `impl-review-v1`. Both participants select their own authorized checkout; an incoming path grants no access. Check that the captured base/head match the request, retain its dirty hash, and inspect the actual diff and files independently. `unchanged_observation` only means the bounded observation still matches; it is not a review result. A `stale`, `different_workspace` or `unverified` result blocks reliance on that observation: resolve the scope/access/evidence first. Use a new publication ID for changed evidence. In Embedded, share the same pinned scope and evidence in messages; Native relay commands do not apply.
+
+**Ask for actionable findings.** Adapt this prompt to the change:
+
+```text
+Review the implementation at <authorized checkout>, base <SHA>, head <SHA>,
+including <clean tree or specified dirty evidence>. Check <acceptance criteria>.
+Review independently; do not edit files. Report material findings with a stable
+ID, severity, path/line at that revision, reproduction or concrete code evidence,
+expected versus observed behavior, and impact. Separate hypotheses and missing
+coverage from demonstrated defects. Say which checks you actually ran and their
+results; identify blocked or unrun checks. No finding is also a valid result.
+```
+
+**Dispose of each finding with evidence.** Keep short updates in the existing conversation, keyed by finding ID; no separate tracker or schema is required:
+
+- `open`: a substantiated issue or a hypothesis still requiring evidence; identify the next check or decision
+- `resolved`: name the fix revision and actual retest result; the reviewer checks the relevant change and evidence before treating it as resolved. A proposed fix or the writer's agreement alone is insufficient
+- `not reproducible`: record the attempted command/input, revision, environment and result. This is a qualified outcome, not proof the report is false; say what evidence is still missing
+- `disagreed`: retain both positions and their evidence, explain the material consequence, and ask the human if the remaining tradeoff or acceptance decision belongs to them
+
+Only the authorized writer implements fixes. Exchange new evidence or a targeted question, not repeated acknowledgements or whole transcripts. Do not seek automatic consensus or keep looping without a useful next check. If access or a human decision blocks progress, report it explicitly. After a fix or any scope change, publish the new revision and review the relevant delta; do not carry a prior conclusion onto an unchecked revision.
+
+**Close with a compact handoff.** Recheck the observation before the final summary (or independently verify the immutable evidence). State the reviewed base/head and dirty evidence, findings and dispositions, commands/results and checks not run, remaining risks, and exact human decisions needed. “No known unresolved material finding in this scope after these checks” is a bounded conclusion; agreement is not validation or merge authorization. In Native, send the result explicitly to `@user` (or use the human-directed Stop reply described above); avoid adding a final peer handle that would start another round.
+
+These are instructions, not model-quality guarantees. Offline tests can check skill projection, evidence transport and stale-revision detection; authenticated model review effectiveness remains separate validation.
 
 ## Native sessions and identity
 

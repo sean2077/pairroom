@@ -222,6 +222,8 @@ pairroom relay send --id review-v1 --text "Review this revision; do not implemen
 pairroom relay review --id <published-message-id> --review-repo /absolute/task-worktree
 ```
 
+For a lightweight, opt-in implementation review using this evidence, see [Implementation cross-review](GETTING_STARTED.md#implementation-cross-review).
+
 An unchanged observation is neither an atomic snapshot nor approval. Use the operator-selected trusted checkout; an incoming anchor path grants no access. Keep edits stable or use immutable commits/artifacts for consequential review. [Review design and historical measurements](design/native-review-closure.md) explain bounds and verification categories.
 
 The browser's tail snapshot is bounded to recent complete messages and audit entries; retained totals still describe full history. It is not a total JSON-byte cap, and full export remains complete. [Protocol](PROTOCOL.md#native-observation-and-review-extensions) and [Storage](STORAGE.md#native-current-work-and-browser-recovery-projections) own the paging/recovery contracts.
