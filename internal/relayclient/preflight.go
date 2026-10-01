@@ -46,13 +46,13 @@ type preflightWorkspace struct {
 }
 
 type preflightCaller struct {
-	Status     string `json:"status"`
-	Runtime    string `json:"runtime,omitempty"`
-	SessionEnv string `json:"session_env,omitempty"`
+	Status        string `json:"status"`
+	Runtime       string `json:"runtime,omitempty"`
+	SessionEnv    string `json:"session_env,omitempty"`
 	SessionSource string `json:"session_source,omitempty"`
-	InSession  bool   `json:"in_session"`
-	Bound      bool   `json:"bound"`
-	Hint       string `json:"hint,omitempty"`
+	InSession     bool   `json:"in_session"`
+	Bound         bool   `json:"bound"`
+	Hint          string `json:"hint,omitempty"`
 }
 
 type preflightService struct {
@@ -207,7 +207,9 @@ func preflightNativeCaller(root string) preflightCaller {
 	result := preflightCaller{Status: checkPass, Runtime: string(caller.runtime), InSession: caller.session != ""}
 	if caller.runtime != "" {
 		result.SessionEnv = sessionEnvVars[caller.runtime]
-		if caller.runtime == model.RuntimeGemini { result.SessionSource = "approved BeforeTool hook" }
+		if caller.runtime == model.RuntimeGemini {
+			result.SessionSource = "approved BeforeTool hook"
+		}
 	}
 	if !result.InSession {
 		result.Status = checkWarn

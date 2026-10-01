@@ -95,7 +95,7 @@ func TestMentionsRouteEverydayProseBoundaries(t *testing.T) {
 }
 
 func TestDuplicateRuntimeRequiresSuffixedHandle(t *testing.T) {
-	for _, runtimeKind := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok} {
+	for _, runtimeKind := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok, model.RuntimeGemini} {
 		t.Run(string(runtimeKind), func(t *testing.T) {
 			runtimes := map[model.ActorID]model.RuntimeKind{
 				model.ActorSlot1: runtimeKind,

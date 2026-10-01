@@ -29,7 +29,7 @@ PairRoom 沿用你仓库现有的指令、worktree 和 PR/MR 流程，不加强�
 
 [Why PairRoom](docs/WHY_PAIRROOM.md) 讲适用场景和限制，[替代方案](docs/ALTERNATIVES.md) 用注明日期的资料比较同类工具，[核心概念](docs/CONCEPTS.md) 解释 Runtime、Provider、槽位、Binding 等术语。现成的提示词见[先审查再执行](docs/GETTING_STARTED.md#review-first-execute-where-it-fits)。
 
-Gemini CLI 支持两种模式，同一 Room 也可以绑定两个 Gemini 会话。其 hooks、原生认证和当前能力边界见 [Gemini 接入说明](docs/NATIVE_RELAY.md#gemini-cli)。
+Gemini CLI 支持两种模式，同一 Room 也可以绑定两个 Gemini 会话。Embedded 当前仅支持新建会话；已接受输入的会话在进程退出后会阻止恢复，避免将历史回复重新发布。其 hooks、原生认证和当前能力边界见 [Gemini 接入说明](docs/NATIVE_RELAY.md#gemini-cli)。
 
 ## 界面一览
 

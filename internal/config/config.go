@@ -375,7 +375,10 @@ func validateRuntimeTemplateArgs(kind model.RuntimeKind, args []string) error {
 				}
 			}
 		case model.RuntimeGemini:
-			forbidden = matchesOption(arg, "--model", "-m", "--approval-mode", "--yolo", "-y", "--sandbox", "-s", "--prompt", "-p", "--prompt-interactive", "-i", "--resume", "-r", "--acp", "--experimental-acp", "--output-format")
+			// Gemini uses yargs boolean negation, so --no-sandbox and
+			// --no-yolo are policy overrides too. Session selectors and
+			// transport aliases must remain owned by the Room adapter.
+			forbidden = matchesOption(arg, "--model", "-m", "--approval-mode", "--yolo", "--no-yolo", "-y", "--sandbox", "--no-sandbox", "-s", "--prompt", "-p", "--prompt-interactive", "-i", "--resume", "-r", "--session-file", "--session-id", "--delete-session", "--list-sessions", "--worktree", "-w", "--acp", "--no-acp", "--experimental-acp", "--no-experimental-acp", "--output-format", "-o")
 		case model.RuntimeGrok:
 			forbidden = matchesOption(arg, "--model", "-m", "--effort", "--permission-mode", "--always-approve", "--yolo", "--sandbox")
 		}

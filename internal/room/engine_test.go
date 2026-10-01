@@ -906,31 +906,42 @@ func TestExplicitMentionsHaveNoHopLimit(t *testing.T) {
 }
 
 func TestAmbiguousDuplicateRuntimeHandleDoesNotRouteAndNamesBothChoices(t *testing.T) {
-	engine, _ := newTestEngine(t, "")
-	engine.cfg.Slot1Config.Runtime = model.RuntimeCodex
-	engine.cfg.Slot2Config.Runtime = model.RuntimeCodex
-	if targets := engine.agentTargets(model.ActorSlot1, "@codex continue", 1, 1); len(targets) != 0 {
-		t.Fatalf("ambiguous unsuffixed handle routed: %v", targets)
-	}
-	events := engine.Snapshot().Events
-	var notice model.SystemNotice
-	found := false
-	for index := len(events) - 1; index >= 0; index-- {
-		if events[index].Kind != EventSystemNotice {
-			continue
-		}
-		if err := json.Unmarshal(events[index].Data, &notice); err != nil {
-			t.Fatal(err)
-		}
-		found = true
-		break
-	}
-	if !found {
-		t.Fatal("ambiguous handle did not produce a notice")
-	}
-	text := notice.Text
-	if !strings.Contains(text, "@codex0") || !strings.Contains(text, "@codex1") || !strings.Contains(strings.ToLower(text), "ambiguous") {
-		t.Fatalf("ambiguous handle notice = %q", text)
+	for _, kind := range []model.RuntimeKind{model.RuntimeCodex, model.RuntimeGemini} {
+		t.Run(string(kind), func(t *testing.T) {
+			base := "@" + string(kind)
+			engine, _ := newTestEngine(t, "")
+			engine.cfg.Slot1Config.Runtime = kind
+			engine.cfg.Slot2Config.Runtime = kind
+			if targets, err := engine.resolveUserTargets(base+" review", nil, ""); err == nil || !strings.Contains(err.Error(), "ambiguous") || len(targets) != 0 {
+				t.Fatalf("ambiguous user handle defaulted to a slot: targets=%v err=%v", targets, err)
+			}
+			if targets, err := engine.resolveUserTargets(base+"1 review", nil, ""); err != nil || len(targets) != 1 || targets[0] != model.ActorSlot2 {
+				t.Fatalf("suffixed user handle failed: targets=%v err=%v", targets, err)
+			}
+			if targets := engine.agentTargets(model.ActorSlot1, base+" continue", 1, 1); len(targets) != 0 {
+				t.Fatalf("ambiguous unsuffixed handle routed: %v", targets)
+			}
+			events := engine.Snapshot().Events
+			var notice model.SystemNotice
+			found := false
+			for index := len(events) - 1; index >= 0; index-- {
+				if events[index].Kind != EventSystemNotice {
+					continue
+				}
+				if err := json.Unmarshal(events[index].Data, &notice); err != nil {
+					t.Fatal(err)
+				}
+				found = true
+				break
+			}
+			if !found {
+				t.Fatal("ambiguous handle did not produce a notice")
+			}
+			text := notice.Text
+			if !strings.Contains(text, base+"0") || !strings.Contains(text, base+"1") || !strings.Contains(strings.ToLower(text), "ambiguous") {
+				t.Fatalf("ambiguous handle notice = %q", text)
+			}
+		})
 	}
 }
 

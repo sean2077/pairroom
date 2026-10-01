@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -132,5 +133,121 @@ func TestGeminiNativePairFullReplyDeliveryAndReceipt(t *testing.T) {
 	f.native = rt.(*nativeHostRuntime)
 	if binding, err := f.native.engine.Inspect(first); err != nil || binding.SessionID != first.SessionID {
 		t.Fatalf("lost durable Gemini identity: %+v %v", binding, err)
+	}
+}
+
+func TestGeminiNativeContinuationPublishesOnlyNewResponse(t *testing.T) {
+	f := geminiNativeHTTP(t)
+	first := bindGeminiFixture(t, f, model.ActorSlot1)
+	second := bindGeminiFixture(t, f, model.ActorSlot2)
+	if _, err := geminiHook(t, f, second, "@gemini0 queued input"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.native.engine.Park(first.Slot, true); err != nil {
+		t.Fatal(err)
+	}
+	addressed := "@gemini1 full response 🌟"
+	output, err := geminiHook(t, f, first, addressed)
+	if err != nil || !strings.Contains(string(output), `"decision":"block"`) {
+		t.Fatalf("initial continuation: %s %v", output, err)
+	}
+	if err := f.native.engine.Park(first.Slot, false); err != nil {
+		t.Fatal(err)
+	}
+	continued := func(text string) error {
+		_, err := f.run(t, []string{"hook", "--runtime", "gemini"}, map[string]any{
+			"hook_event_name": "AfterAgent", "session_id": first.SessionID, "cwd": f.project.Root,
+			"prompt_response": text, "stop_hook_active": true,
+		})
+		return err
+	}
+	// Upstream v0.62.0 retains the original response when it invokes the hook
+	// after a block. Its old handle must not route the new unaddressed reply.
+	cumulative := addressed + "\nprivate follow-up"
+	if err := continued(cumulative); err != nil {
+		t.Fatal(err)
+	}
+	if messages := f.native.engine.Snapshot().Messages; len(messages) != 2 {
+		t.Fatalf("old handle routed private continuation: %+v", messages)
+	}
+	cumulative += "\n" + addressed
+	if err := continued(cumulative); err != nil {
+		t.Fatal(err)
+	}
+	// Identical addressed text in a fresh turn must also publish again.
+	if _, err := geminiHook(t, f, first, addressed); err != nil {
+		t.Fatal(err)
+	}
+	messages := f.native.engine.Snapshot().Messages
+	if len(messages) != 4 || messages[2].Text != addressed || messages[3].Text != addressed {
+		t.Fatalf("repeated legitimate responses lost or cumulative text leaked: %+v", messages)
+	}
+	output, err = f.run(t, []string{"hook", "--runtime", "gemini"}, map[string]any{
+		"hook_event_name": "AfterAgent", "session_id": first.SessionID, "cwd": f.project.Root,
+		"prompt_response": "@gemini1 mismatching cumulative history", "stop_hook_active": true,
+	})
+	if err != nil || !strings.Contains(string(output), `"continue":false`) {
+		t.Fatalf("unverifiable continuation did not stop the native turn: %s %v", output, err)
+	}
+	if len(f.native.engine.Snapshot().Messages) != 4 {
+		t.Fatal("failed continuation changed Room messages")
+	}
+}
+
+func TestGeminiNativeAmbiguousEmptyMarkerNeverCollects(t *testing.T) {
+	f := geminiNativeHTTP(t)
+	first := bindGeminiFixture(t, f, model.ActorSlot1)
+	second := bindGeminiFixture(t, f, model.ActorSlot2)
+	if _, err := geminiHook(t, f, second, "@gemini0 pending input"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.native.engine.Park(first.Slot, true); err != nil {
+		t.Fatal(err)
+	}
+	// Official synthetic fallback and an identical literal model reply are
+	// indistinguishable. Both retain an ordinary unaddressed receipt, while
+	// refusing to claim input that could lead to ambiguous prefix removal.
+	for i := 0; i < 2; i++ {
+		output, err := geminiHook(t, f, first, "[no response text]")
+		if err != nil || !strings.Contains(string(output), `"continue":false`) {
+			t.Fatalf("ambiguous boundary did not stop: %s %v", output, err)
+		}
+	}
+	output, err := f.run(t, []string{"hook", "--runtime", "gemini"}, map[string]any{
+		"hook_event_name": "AfterAgent", "session_id": first.SessionID, "cwd": f.project.Root,
+		"prompt_response": "[no response text]\n@gemini1 legitimate literal-prefixed response", "stop_hook_active": true,
+	})
+	if err != nil || !strings.Contains(string(output), `"continue":false`) {
+		t.Fatalf("ambiguous continuation was guessed: %s %v", output, err)
+	}
+	messages := f.native.engine.Snapshot().Messages
+	if len(messages) != 1 || messages[0].State != "queued" {
+		t.Fatalf("ambiguous hook consumed or published text: %+v", messages)
+	}
+	path := filepath.Join(f.project.Root, ".pairroom", "rooms", f.room.ID, "slots", string(first.Slot), "state.json")
+	raw, err := os.ReadFile(path)
+	var state relayclient.State
+	if err != nil || json.Unmarshal(raw, &state) != nil || state.LastSeq != 2 || state.LastConfirmedSeq != 2 {
+		t.Fatalf("unaddressed marker receipts were not retained: %+v %v", state, err)
+	}
+}
+
+func TestGeminiNativeOversizedReplyStopsBeforeCollection(t *testing.T) {
+	f := geminiNativeHTTP(t)
+	first := bindGeminiFixture(t, f, model.ActorSlot1)
+	second := bindGeminiFixture(t, f, model.ActorSlot2)
+	if _, err := geminiHook(t, f, second, "@gemini0 pending input"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.native.engine.Park(first.Slot, true); err != nil {
+		t.Fatal(err)
+	}
+	output, err := geminiHook(t, f, first, "@gemini1 "+strings.Repeat("x", relay.MaxBodyBytes))
+	if err != nil || !strings.Contains(string(output), `"continue":false`) {
+		t.Fatalf("oversized boundary did not stop: %s %v", output, err)
+	}
+	messages := f.native.engine.Snapshot().Messages
+	if len(messages) != 1 || messages[0].State != "queued" {
+		t.Fatalf("oversized reply consumed or published input: %+v", messages)
 	}
 }

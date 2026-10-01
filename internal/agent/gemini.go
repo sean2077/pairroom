@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"strings"
 	"time"
 
@@ -9,8 +10,13 @@ import (
 
 var geminiSetupTimeout = 20 * time.Second
 
+const geminiResumeWarning = "cannot safely resume Gemini CLI ACP: no supported replay-completion boundary; the existing session is preserved. Continue in Gemini's native CLI"
+
+var errGeminiExactResume = errors.New(geminiResumeWarning)
+
 // NewGemini uses Gemini CLI's official ACP transport. Authentication remains
-// native: session/new and session/load reuse Gemini settings and credentials.
+// native: session/new reuses Gemini settings and credentials. Exact resume is
+// blocked until Gemini offers a reliable boundary for session/load replay.
 // In particular, do not call authenticate: that RPC rewrites user settings.
 func NewGemini(cfg Config, sink EventSink) *ACPAdapter {
 	cfg.Runtime = model.RuntimeGemini
@@ -49,4 +55,18 @@ func geminiACPArgs(cfg Config, probe ProbeResult) []string {
 		args = append(args, "--sandbox=false")
 	}
 	return args
+}
+
+func geminiACPEnv(env []string, cfg Config) []string {
+	// Gemini gives GEMINI_SANDBOX precedence over --sandbox and native settings.
+	// Project explicit slot choices into the child only; an empty choice retains
+	// the native environment, including a selected sandbox implementation.
+	switch cfg.Sandbox {
+	case "on":
+		return mergeRuntimeEnv(env, map[string]string{"GEMINI_SANDBOX": "true"})
+	case "off":
+		return mergeRuntimeEnv(env, map[string]string{"GEMINI_SANDBOX": "false"})
+	default:
+		return env
+	}
 }

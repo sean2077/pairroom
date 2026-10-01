@@ -216,9 +216,37 @@ func pairSlotConfigs(fileCfg config.File) (agent.Config, agent.Config) {
 	return claude, codex
 }
 
-func applySlotCLI(cfg *config.Agent, runtime, modelName, effort, permission, approval, sandbox, instructions string) {
+func explicitSlotFlags(flags *flag.FlagSet, prefix string) map[string]bool {
+	explicit := make(map[string]bool)
+	flags.Visit(func(f *flag.Flag) {
+		if name, ok := strings.CutPrefix(f.Name, prefix+"-"); ok {
+			explicit[name] = true
+		}
+	})
+	return explicit
+}
+
+func applySlotCLI(cfg *config.Agent, runtime, modelName, effort, permission, approval, sandbox, instructions string, explicit map[string]bool) {
+	kind := model.ParseRuntimeKind(runtime)
+	if kind == model.RuntimeGemini && kind != model.ParseRuntimeKind(cfg.Runtime) {
+		// Flag defaults still describe the previous Runtime. Rebase inherited
+		// policy fields before applying an explicit Gemini selection, while
+		// preserving explicit CLI overrides for ordinary validation below.
+		if !explicit["effort"] {
+			effort = ""
+		}
+		if !explicit["permission-mode"] {
+			permission = "yolo"
+		}
+		if !explicit["approval-policy"] {
+			approval = ""
+		}
+		if !explicit["sandbox"] {
+			sandbox = ""
+		}
+	}
 	if runtime != "" {
-		cfg.Runtime = string(model.ParseRuntimeKind(runtime))
+		cfg.Runtime = string(kind)
 	}
 	cfg.Model = modelName
 	cfg.Effort = effort
@@ -231,7 +259,7 @@ func applySlotCLI(cfg *config.Agent, runtime, modelName, effort, permission, app
 		cfg.ApprovalPolicy, cfg.Sandbox = "", ""
 	case model.RuntimeCodex:
 		cfg.PermissionMode = ""
-	case model.RuntimeGrok, model.RuntimeGemini:
+	case model.RuntimeGrok:
 		cfg.ApprovalPolicy = ""
 	}
 }
@@ -340,8 +368,8 @@ func runService(args []string) (resultErr error) {
 	fileCfg.Runtimes.Grok.Command = *grokCommand
 	fileCfg.Runtimes.Gemini.Command = *geminiCommand
 	fileCfg.CCSwitch.Database = *ccSwitchDatabase
-	applySlotCLI(&fileCfg.Claude, *claudeRuntime, *claudeModel, *claudeEffort, *claudePermission, fileCfg.Claude.ApprovalPolicy, fileCfg.Claude.Sandbox, *claudeInstructions)
-	applySlotCLI(&fileCfg.Codex, *codexRuntime, *codexModel, *codexEffort, fileCfg.Codex.PermissionMode, *codexApproval, *codexSandbox, *codexInstructions)
+	applySlotCLI(&fileCfg.Claude, *claudeRuntime, *claudeModel, *claudeEffort, *claudePermission, fileCfg.Claude.ApprovalPolicy, fileCfg.Claude.Sandbox, *claudeInstructions, explicitSlotFlags(flags, "claude"))
+	applySlotCLI(&fileCfg.Codex, *codexRuntime, *codexModel, *codexEffort, fileCfg.Codex.PermissionMode, *codexApproval, *codexSandbox, *codexInstructions, explicitSlotFlags(flags, "codex"))
 	if err := fileCfg.Validate(); err != nil {
 		return err
 	}
@@ -546,8 +574,8 @@ func runServe(args []string) error {
 	fileCfg.Runtimes.Grok.Command = *grokCommand
 	fileCfg.Runtimes.Gemini.Command = *geminiCommand
 	fileCfg.CCSwitch.Database = *ccSwitchDatabase
-	applySlotCLI(&fileCfg.Claude, *claudeRuntime, *claudeModel, *claudeEffort, *claudePermission, fileCfg.Claude.ApprovalPolicy, fileCfg.Claude.Sandbox, *claudeInstructions)
-	applySlotCLI(&fileCfg.Codex, *codexRuntime, *codexModel, *codexEffort, fileCfg.Codex.PermissionMode, *codexApproval, *codexSandbox, *codexInstructions)
+	applySlotCLI(&fileCfg.Claude, *claudeRuntime, *claudeModel, *claudeEffort, *claudePermission, fileCfg.Claude.ApprovalPolicy, fileCfg.Claude.Sandbox, *claudeInstructions, explicitSlotFlags(flags, "claude"))
+	applySlotCLI(&fileCfg.Codex, *codexRuntime, *codexModel, *codexEffort, fileCfg.Codex.PermissionMode, *codexApproval, *codexSandbox, *codexInstructions, explicitSlotFlags(flags, "codex"))
 	if err := fileCfg.Validate(); err != nil {
 		_ = eventStore.Close()
 		return err

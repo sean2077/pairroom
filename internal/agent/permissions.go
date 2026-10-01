@@ -35,7 +35,7 @@ func PermissionConfig(cfg Config, profile model.PermissionProfile) Config {
 	if kind == model.RuntimeCodex && cfg.ApprovalPolicy == "yolo" && cfg.Sandbox == "" {
 		cfg.Sandbox = "danger-full-access"
 	}
-	if kind == model.RuntimeGrok && cfg.PermissionMode == "yolo" && cfg.Sandbox == "" {
+	if (kind == model.RuntimeGrok || kind == model.RuntimeGemini) && cfg.PermissionMode == "yolo" && cfg.Sandbox == "" {
 		cfg.Sandbox = "off"
 	}
 	return cfg

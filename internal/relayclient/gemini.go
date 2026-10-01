@@ -1,6 +1,8 @@
 package relayclient
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +17,54 @@ import (
 
 	"github.com/sean2077/pairroom/internal/model"
 )
+
+// Gemini v0.62.0 keeps prompt_response cumulative when an AfterAgent hook
+// requests continuation (core/client.ts, sendMessageStream/processTurn). Keep
+// only a digest and byte offset of the already-retained prefix, never another
+// copy of a private response. This cursor shares the publication's atomic WAL.
+type GeminiResponseCursor struct {
+	Bytes  int    `json:"bytes"`
+	SHA256 string `json:"sha256"`
+}
+
+const geminiEmptyResponse = "[no response text]"
+
+func geminiResponse(hook HookInput, previous *GeminiResponseCursor) (string, *GeminiResponseCursor, error) {
+	if hook.LastAssistantMessage == nil {
+		return "", nil, errors.New("Gemini AfterAgent payload has no prompt_response")
+	}
+	full := *hook.LastAssistantMessage
+	// Upstream synthesizes this marker when its cumulative buffer is empty,
+	// but a model can also emit the same literal. There is no official field
+	// that distinguishes them. Do not deliver a continuation whose prefix
+	// would require guessing which happened; foreground wait remains usable.
+	if hook.StopHookActive && ambiguousGeminiResponse(previous) {
+		return "", nil, errors.New("Gemini empty-response marker is ambiguous; start a fresh user turn and use foreground relay wait")
+	}
+	text := full
+	if hook.StopHookActive {
+		if previous == nil || previous.Bytes < 0 || previous.Bytes > len(full) || geminiResponseDigest(full[:previous.Bytes]) != previous.SHA256 {
+			return "", nil, errors.New("cannot isolate Gemini continuation from its retained response; publish the complete new reply explicitly with relay send, then start a fresh user turn")
+		}
+		text = full[previous.Bytes:]
+		if text != "" && previous.Bytes > 0 {
+			if !strings.HasPrefix(text, "\n") {
+				return "", nil, errors.New("Gemini continuation is missing its response separator; no publication attempted")
+			}
+			text = text[1:]
+		}
+	}
+	return text, &GeminiResponseCursor{Bytes: len(full), SHA256: geminiResponseDigest(full)}, nil
+}
+
+func ambiguousGeminiResponse(cursor *GeminiResponseCursor) bool {
+	return cursor != nil && cursor.Bytes == len(geminiEmptyResponse) && cursor.SHA256 == geminiResponseDigest(geminiEmptyResponse)
+}
+
+func geminiResponseDigest(text string) string {
+	digest := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(digest[:])
+}
 
 // Gemini exposes session_id to hooks, not run_shell_command's environment.
 // Its approved BeforeTool hook records only that official identity, scoped to

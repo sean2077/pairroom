@@ -90,7 +90,7 @@ This section describes **Embedded adapters**, not control over Native-hosted ses
 | Claude Code | Long-lived stream-json/control transport, native initialization, tools/questions, permissions and exact session handling; steering reports unavailable rather than false acceptance |
 | Codex | Long-lived app-server; native Turn start/steer/completed and thread identity; before the `turn/start` response only the input's `clientId` echo binds a Turn, and a steered input is settled by its `turn/steer` response; an unanswered `turn/start` and generic errors do not release ownership |
 | Grok Build | ACP stdio via `grok --no-auto-update agent stdio`; supported interjection and native Turn/session operations; prompts travel over ACP, not argv/files |
-| Gemini CLI | Official ACP stdio (`--acp`, or advertised `--experimental-acp`); exact session/load, native tools, approvals and cancellation; no Grok extensions or global authentication writes |
+| Gemini CLI | Official ACP stdio (`--acp`, or advertised `--experimental-acp`); new sessions, native tools, approvals and cancellation; exact resume fails closed without a supported replay-completion boundary; no Grok extensions or global authentication writes |
 
 New Grok sessions receive `_meta.rules`; exactly loaded sessions receive current bootstrap once in their first PairRoom prompt without replacing the native system prompt. PairRoom advertises `terminal=false` to retain native tool execution; unsupported privileged reverse requests fail closed.
 

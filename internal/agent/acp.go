@@ -124,6 +124,11 @@ func (g *ACPAdapter) Start(ctx context.Context) error {
 		g.mu.Unlock()
 		return nil
 	}
+	if g.cfg.Runtime == model.RuntimeGemini && strings.TrimSpace(g.sessionID) != "" && (strings.TrimSpace(g.cfg.SessionID) != "" || g.sessionEngaged) {
+		g.mu.Unlock()
+		g.setState(model.StateError, geminiResumeWarning)
+		return errGeminiExactResume
+	}
 	g.state = model.StateStarting
 	g.intentional = false
 	g.streamFailure = ""
@@ -182,6 +187,8 @@ func (g *ACPAdapter) Start(ctx context.Context) error {
 	cmd.Env = mergeRuntimeEnv(envWithout(), g.cfg.Env)
 	if g.cfg.Runtime == model.RuntimeGrok {
 		cmd.Env = mergeRuntimeEnv(cmd.Env, map[string]string{"GROK_DISABLE_AUTOUPDATER": "1"})
+	} else if g.cfg.Runtime == model.RuntimeGemini {
+		cmd.Env = geminiACPEnv(cmd.Env, g.cfg)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -249,7 +256,7 @@ func (g *ACPAdapter) Start(ctx context.Context) error {
 	if g.cfg.Runtime == model.RuntimeGrok {
 		method, err = selectGrokAuthMethod(result)
 	}
-	// Gemini session/new and session/load inherit native credentials. Its
+	// Gemini session/new inherits native credentials. Its
 	// authenticate RPC writes user settings, so PairRoom must not call it.
 	if err != nil {
 		g.abortStart(cmd)
@@ -274,6 +281,11 @@ func (g *ACPAdapter) Start(ctx context.Context) error {
 	if err != nil {
 		g.abortStart(cmd)
 		return err
+	}
+	if g.cfg.Runtime == model.RuntimeGemini {
+		// Gemini v0.62.0 advertises loadSession but streams history after the
+		// response without a completion marker. It is not safe exact resume.
+		capabilities.loadSession = false
 	}
 	g.mu.Lock()
 	g.capabilities = capabilities

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/relay"
 )
 
 func geminiCallerFixture(t *testing.T) int {
@@ -275,4 +277,311 @@ func TestGeminiStaleIdentityCannotFallBackToAnOuterHarness(t *testing.T) {
 	if caller, err := currentNativeCaller(); err == nil || caller.runtime != model.RuntimeGemini || caller.session != "" {
 		t.Fatalf("unsafe fallback: %+v %v", caller, err)
 	}
+}
+
+func TestGeminiCumulativeResponseBoundaries(t *testing.T) {
+	var cursor *GeminiResponseCursor
+	for _, test := range []struct {
+		full, want string
+		active     bool
+	}{
+		{"@codex first 🌟", "@codex first 🌟", false},
+		{"@codex first 🌟\nprivate follow-up", "private follow-up", true},
+		{"@codex first 🌟\nprivate follow-up\nprivate follow-up", "private follow-up", true},
+		{"@codex first 🌟\nprivate follow-up\nprivate follow-up", "", true},
+		// A new user turn is a new publication even if its entire text equals
+		// the prior turn. Never implement body-based deduplication here.
+		{"@codex first 🌟", "@codex first 🌟", false},
+		{"@codex first 🌟", "@codex first 🌟", false},
+		{"", "", false},
+		{"@codex after empty", "@codex after empty", true},
+	} {
+		hook := HookInput{LastAssistantMessage: &test.full, StopHookActive: test.active}
+		text, next, err := geminiResponse(hook, cursor)
+		if err != nil || text != test.want {
+			t.Fatalf("full=%q active=%t: text=%q want=%q err=%v", test.full, test.active, text, test.want, err)
+		}
+		cursor = next
+	}
+	full := "@codex old"
+	_, cursor, err := geminiResponse(HookInput{LastAssistantMessage: &full}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, full := range []string{"short", "@codex new", "@codex oldno separator"} {
+		if _, _, err := geminiResponse(HookInput{LastAssistantMessage: &full, StopHookActive: true}, cursor); err == nil {
+			t.Fatalf("accepted unverifiable continuation %q", full)
+		}
+	}
+	if _, _, err := geminiResponse(HookInput{LastAssistantMessage: &full, StopHookActive: true}, nil); err == nil {
+		t.Fatal("accepted continuation with no retained prefix")
+	}
+}
+
+func TestGeminiCursorSharesPublicationWAL(t *testing.T) {
+	full := "@codex first"
+	text, first, err := geminiResponse(HookInput{LastAssistantMessage: &full}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved State
+	writes := 0
+	c := &Client{State: State{Schema: 2, Runtime: model.RuntimeGemini}, Save: func(next State) error {
+		writes++
+		saved = next
+		if next.GeminiResponse == nil || next.Pending == nil || next.Pending.Text != text {
+			t.Fatalf("cursor and response were not written together: %+v", next)
+		}
+		return nil
+	}}
+	if err := c.reservePublication(text, first); err != nil || writes != 1 {
+		t.Fatalf("reservation: writes=%d err=%v", writes, err)
+	}
+	raw, _ := json.Marshal(saved)
+	var restored State
+	if err := json.Unmarshal(raw, &restored); err != nil {
+		t.Fatal(err)
+	}
+	c.State = restored
+	full += "\nunaddressed"
+	text, next, err := geminiResponse(HookInput{LastAssistantMessage: &full, StopHookActive: true}, restored.GeminiResponse)
+	if err != nil || text != "unaddressed" {
+		t.Fatalf("restored cursor: %q %v", text, err)
+	}
+	c.Save = func(State) error { return errors.New("injected failed write") }
+	if err := c.reservePublication(text, next); err == nil {
+		t.Fatal("failed cursor/WAL write succeeded")
+	}
+	if c.State.LastSeq != 1 || *c.State.GeminiResponse != *first || len(c.State.Held) != 0 {
+		t.Fatalf("failed write advanced cursor or publication: %+v", c.State)
+	}
+	c.Save = func(State) error { t.Fatal("full backlog wrote a cursor"); return nil }
+	for i := 0; i < maxPublicationBacklog-1; i++ {
+		c.State.Held = append(c.State.Held, Pending{Seq: uint64(i + 2)})
+	}
+	if err := c.reservePublication(text, next); !errors.Is(err, errPublicationBacklogFull) || *c.State.GeminiResponse != *first {
+		t.Fatalf("full backlog advanced cursor: %+v %v", c.State, err)
+	}
+	if err := c.reservePublication(strings.Repeat("x", relay.MaxBodyBytes+1), next); !errors.Is(err, errReplyTooLarge) || *c.State.GeminiResponse != *first {
+		t.Fatalf("oversized reply advanced cursor: %+v %v", c.State, err)
+	}
+}
+
+func TestGeminiCursorSurvivesUnknownPublicationAndRestart(t *testing.T) {
+	c, server := publicationClient(t)
+	c.State.Runtime = model.RuntimeGemini
+	full := "@codex first"
+	text, first, err := geminiResponse(HookInput{LastAssistantMessage: &full}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.reservePublication(text, first); err != nil {
+		t.Fatal(err)
+	}
+	server.mu.Lock()
+	server.dropAfter = true
+	server.mu.Unlock()
+	if err := c.Reconcile(context.Background(), false); !errors.Is(err, relay.ErrUnknown) {
+		t.Fatalf("lost acknowledgement: %v", err)
+	}
+	c, err = load(c.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full += "\nprivate follow-up"
+	text, next, err := geminiResponse(HookInput{LastAssistantMessage: &full, StopHookActive: true}, c.State.GeminiResponse)
+	if err != nil || text != "private follow-up" {
+		t.Fatalf("restart reused old response: %q %v", text, err)
+	}
+	if err := c.reservePublication(text, next); err != nil {
+		t.Fatal(err)
+	}
+	if c.State.Pending.Text != "@codex first" || len(c.State.Held) != 1 || c.State.Held[0].Text != "private follow-up" {
+		t.Fatalf("original unknown publication was overwritten: %+v", c.State)
+	}
+	server.mu.Lock()
+	server.dropAfter = false
+	server.mu.Unlock()
+	if err := c.Reconcile(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.reports != 2 || server.queries != 1 || c.State.Pending != nil || *c.State.GeminiResponse != *next {
+		t.Fatalf("uncertain publication replayed or cursor lost: reports=%d queries=%d state=%+v", server.reports, server.queries, c.State)
+	}
+}
+
+func TestGeminiBoundedCumulativeHookInput(t *testing.T) {
+	IsolateNativeCaller(t)
+	root := sessionGitRoot(t)
+	// '<' expands to six bytes in JSON. Nine maximal replies represent the
+	// initial reply plus every supported hook continuation, not one oversize
+	// new response. The old generic 2 MiB raw-input cap rejected this payload.
+	reply := strings.Repeat("<", relay.MaxBodyBytes)
+	previous := strings.TrimSuffix(strings.Repeat(reply+"\n", relay.MaxBlocks), "\n")
+	full := previous + "\n" + reply
+	payload, err := json.Marshal(map[string]any{
+		"hook_event_name": "AfterAgent", "session_id": "unbound-session", "cwd": root,
+		"prompt_response": full, "stop_hook_active": true,
+	})
+	if err != nil || len(payload) <= 2<<20 || len(payload) >= maxGeminiHookBytes {
+		t.Fatalf("invalid cumulative fixture: bytes=%d err=%v", len(payload), err)
+	}
+	var out, diagnostic bytes.Buffer
+	if err := Run(context.Background(), []string{"hook", "--runtime", "gemini"}, bytes.NewReader(payload), &out, &diagnostic); err != nil || strings.TrimSpace(out.String()) != "{}" {
+		t.Fatalf("bounded cumulative payload rejected: %v %s", err, diagnostic.String())
+	}
+	hook, err := decodeGeminiHook(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cursor, err := geminiResponse(HookInput{LastAssistantMessage: &previous}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _, err := geminiResponse(hook, cursor)
+	if err != nil || text != reply {
+		t.Fatalf("large cumulative payload did not isolate the complete new reply: bytes=%d err=%v", len(text), err)
+	}
+	for _, test := range []struct {
+		kind  string
+		limit int
+	}{{"gemini", maxGeminiHookBytes}, {"claude", 2 << 20}} {
+		input := strings.NewReader(strings.Repeat(" ", test.limit+4096))
+		out.Reset()
+		err := Run(context.Background(), []string{"hook", "--runtime", test.kind}, input, &out, &diagnostic)
+		if err == nil || !strings.Contains(err.Error(), "payload exceeds limit") || input.Len() != 4095 || out.Len() != 0 {
+			t.Fatalf("%s exceeded its bounded read: unread=%d err=%v", test.kind, input.Len(), err)
+		}
+	}
+}
+
+func TestGeminiKnownStateWriteFailureStopsNativeContinuation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX directory write-permission failure")
+	}
+	for _, oversized := range []bool{false, true} {
+		t.Run(map[bool]string{false: "reservation", true: "cursor-invalidation"}[oversized], func(t *testing.T) {
+			f := newForegroundFixture(t, foregroundFixtureOptions{})
+			dir := filepath.Dir(f.statePath)
+			c, err := load(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			previous := "retained prior response"
+			_, cursor, err := geminiResponse(HookInput{LastAssistantMessage: &previous}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			next := c.State
+			next.Runtime, next.GeminiResponse = model.RuntimeGemini, cursor
+			next.LastSeq, next.LastConfirmedSeq = 1, 1
+			if err := c.persist(next); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(dir, 0500); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
+			if probe, err := os.CreateTemp(dir, "permission-probe"); err == nil {
+				_ = probe.Close()
+				_ = os.Remove(probe.Name())
+				t.Skip("current user bypasses directory write permissions")
+			}
+			newText := "@codex response that cannot be saved"
+			if oversized {
+				newText += strings.Repeat("x", relay.MaxBodyBytes)
+			}
+			payload, _ := json.Marshal(map[string]any{
+				"hook_event_name": "AfterAgent", "session_id": "session", "cwd": f.args[1],
+				"prompt_response": previous + "\n" + newText, "stop_hook_active": true,
+			})
+			var out, diagnostic bytes.Buffer
+			err = Run(context.Background(), []string{"hook", "--runtime", "gemini"}, bytes.NewReader(payload), &out, &diagnostic)
+			var decision struct {
+				Continue   *bool  `json:"continue"`
+				StopReason string `json:"stopReason"`
+			}
+			if err != nil || json.Unmarshal(out.Bytes(), &decision) != nil || decision.Continue == nil || *decision.Continue || decision.StopReason == "" {
+				t.Fatalf("failed write became Gemini's nonblocking exit warning: %s %v", out.String(), err)
+			}
+			if f.count("wait") != 0 || f.count("report") != 0 || diagnostic.Len() == 0 || strings.Contains(out.String(), newText) {
+				t.Fatalf("failed write collected, published or exposed text: %s %s", out.String(), diagnostic.String())
+			}
+			var saved State
+			if err := readPrivate(f.statePath, &saved); err != nil || saved.LastSeq != 1 || saved.GeminiResponse == nil || *saved.GeminiResponse != *cursor {
+				t.Fatalf("failed write changed prior retained identity: %+v %v", saved, err)
+			}
+		})
+	}
+}
+
+func TestGeminiSessionLookupFailureStopsNativeContinuation(t *testing.T) {
+	f := newForegroundFixture(t, foregroundFixtureOptions{})
+	c, err := load(filepath.Dir(f.statePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := c.State
+	next.Runtime = model.RuntimeGemini
+	if err := c.persist(next); err != nil {
+		t.Fatal(err)
+	}
+	if err := rememberSession(c.State); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := locatorDirectory(nativeCaller{runtime: model.RuntimeGemini, session: c.State.SessionID}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, locatorFilename(c.State)), []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"hook_event_name": "AfterAgent", "session_id": "session", "cwd": f.args[1],
+		"prompt_response": "@codex response behind a corrupt own-session locator",
+	})
+	var out, diagnostic bytes.Buffer
+	err = Run(context.Background(), []string{"hook", "--runtime", "gemini"}, bytes.NewReader(payload), &out, &diagnostic)
+	if err != nil || !strings.Contains(out.String(), `"continue":false`) || !strings.Contains(diagnostic.String(), "session locator") || f.count("wait") != 0 || f.count("report") != 0 {
+		t.Fatalf("lookup failure did not stop before publication/collection: %s %s %v", out.String(), diagnostic.String(), err)
+	}
+}
+
+// Use the actual installed Node process and /proc ancestry, not an invented
+// process-table row. Node 24+ may expose comm=MainThread while title=node.
+// This exercises official-shaped hook metadata, not authenticated vendor E2E.
+func TestGeminiLiveNodeCaller(t *testing.T) {
+	if os.Getenv("PAIRROOM_GEMINI_CALLER_HELPER") == "1" {
+		payload := `{"hook_event_name":"BeforeTool","session_id":"live-node-session","tool_name":"run_shell_command","tool_input":{"command":"pairroom relay preflight"}}`
+		var out, diagnostic bytes.Buffer
+		if err := Run(context.Background(), []string{"hook", "--runtime", "gemini"}, strings.NewReader(payload), &out, &diagnostic); err != nil || diagnostic.Len() != 0 {
+			t.Fatalf("BeforeTool: %v %s", err, diagnostic.String())
+		}
+		caller, err := currentNativeCaller()
+		if err != nil || caller.runtime != model.RuntimeGemini || caller.session != "live-node-session" {
+			t.Fatalf("real Node caller: %+v %v", caller, err)
+		}
+		return
+	}
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux /proc regression")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("Node is not installed")
+	}
+	IsolateNativeCaller(t)
+	t.Setenv("PAIRROOM_GEMINI_CALLER_HELPER", "1")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := `const cp = require('node:child_process'); const fs = require('node:fs'); console.log(JSON.stringify({title:process.title,comm:fs.readFileSync('/proc/self/comm','utf8')})); const r=cp.spawnSync(process.argv[1],['-test.run=^TestGeminiLiveNodeCaller$','-test.v'],{encoding:'utf8'}); process.stdout.write(r.stdout||''); process.stderr.write(r.stderr||''); process.exit(r.status === null ? 1 : r.status);`
+	output, err := exec.Command(node, "-e", script, exe).CombinedOutput()
+	if err != nil {
+		t.Fatalf("live Node ancestry: %v\n%s", err, output)
+	}
+	t.Log(string(output))
 }

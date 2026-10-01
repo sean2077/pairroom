@@ -21,21 +21,42 @@ var (
 	hookMetadataBudget    = 2 * time.Second
 )
 
-func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Writer) error {
+// Nine maximal responses (the initial reply plus eight continuations) can
+// expand sixfold in Gemini's cumulative JSON, with room for prompt/metadata.
+// The normalized individual reply still has the ordinary 256 KiB body bound.
+const maxGeminiHookBytes = 16 << 20
+
+func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Writer) (resultErr error) {
+	// PairRoom's ordinary exit 1 is a non-blocking Gemini hook error. Once an
+	// official response identity is decoded, a known lookup/retention failure must stop
+	// the native turn successfully: otherwise another hook can continue and
+	// a later cumulative payload can merge this lost reply with private text.
+	// Disarm before any normal stdout write, especially claim delivery.
+	stopGeminiOnError := false
+	defer func() {
+		if stopGeminiOnError && resultErr != nil {
+			_, _ = fmt.Fprintln(diagnostic, "PairRoom: Gemini response boundary stopped:", resultErr)
+			resultErr = writeJSON(out, map[string]any{"continue": false, "stopReason": "PairRoom stopped automatic continuation to keep this response boundary safe. Inspect relay status; publish any missing new reply explicitly with relay send, then start a fresh user turn or use foreground relay wait. Unclaimed inbox messages remain queued."})
+		}
+	}()
 	// Keep sender reconciliation outside the park duration. The project hook has
 	// 45 seconds; reserve acknowledgement/output time rather than using its edge.
 	ctx, cancel := context.WithTimeout(ctx, 42*time.Second)
 	defer cancel()
-	data, err := io.ReadAll(io.LimitReader(in, (2<<20)+1))
-	if err != nil {
-		return err
-	}
-	if len(data) > 2<<20 {
-		return errors.New("official hook payload exceeds limit")
-	}
 	kind := model.RuntimeKind(o.kind)
 	if !kind.Valid() {
 		return errors.New("hook requires --runtime claude|codex|grok|gemini")
+	}
+	inputLimit := int64(2 << 20)
+	if kind == model.RuntimeGemini {
+		inputLimit = maxGeminiHookBytes
+	}
+	data, err := io.ReadAll(io.LimitReader(in, inputLimit+1))
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) > inputLimit {
+		return errors.New("official hook payload exceeds limit")
 	}
 	requested := kind
 	if kind == model.RuntimeGemini {
@@ -67,12 +88,14 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	if !o.repoExplicit {
 		o.repo = hook.CWD
 	}
+	stopGeminiOnError = kind == model.RuntimeGemini
 	root, err := resolveSessionWorkspace(ctx, "hook", &o, nativeCaller{runtime: kind, session: hook.SessionID})
 	if err != nil {
 		return err
 	}
 	if root == "" {
 		noteUnboundSession(ctx, o.repo, kind, sharedGrok, diagnostic)
+		stopGeminiOnError = false
 		return writeJSON(out, map[string]any{})
 	}
 	if sharedGrok {
@@ -99,6 +122,7 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		return err
 	}
 	if len(candidates) == 0 {
+		stopGeminiOnError = false
 		return writeJSON(out, map[string]any{})
 	}
 	if len(candidates) != 1 {
@@ -128,6 +152,15 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		release()
 		return errors.New("bind confirmation missing; use bind --replace explicitly")
 	}
+	var geminiCursor *GeminiResponseCursor
+	if kind == model.RuntimeGemini {
+		text, cursor, err := geminiResponse(hook, c.State.GeminiResponse)
+		if err != nil {
+			release()
+			return err
+		}
+		hook.LastAssistantMessage, geminiCursor = &text, cursor
+	}
 	if err := rememberSession(c.State); err != nil {
 		_, _ = fmt.Fprintln(diagnostic, "PairRoom: session locator unavailable; use --repo for this binding until repaired.")
 	}
@@ -149,7 +182,7 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		len(*hook.LastAssistantMessage) <= relay.MaxBodyBytes
 	reserved := false
 	if eligible {
-		err := c.ReservePublication(*hook.LastAssistantMessage)
+		err := c.reservePublication(*hook.LastAssistantMessage, geminiCursor)
 		if err != nil && !errors.Is(err, errPublicationBacklogFull) {
 			release()
 			return err
@@ -157,6 +190,12 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		reserved = err == nil
 	}
 	if !reserved {
+		// A lost Gemini boundary must not let a later cumulative payload merge
+		// an unretained reply with a new, possibly private, response. Invalidate
+		// the cursor; only a successful WAL reservation below restores it.
+		if kind == model.RuntimeGemini {
+			next.GeminiResponse = nil
+		}
 		if err := c.persist(next); err != nil {
 			release()
 			return err
@@ -227,9 +266,9 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	if reserved {
 		err = c.Reconcile(publicationCtx, false)
 	} else {
-		err = c.Publish(publicationCtx, *hook.LastAssistantMessage)
+		err = c.publish(publicationCtx, *hook.LastAssistantMessage, geminiCursor)
 		// Partial progress may have made room behind a still-unresolved head.
-		if err != nil && eligible && c.State.LastSeq == lastSeq && c.ReservePublication(*hook.LastAssistantMessage) == nil {
+		if err != nil && eligible && c.State.LastSeq == lastSeq && c.reservePublication(*hook.LastAssistantMessage, geminiCursor) == nil {
 			reserved = true
 		}
 	}
@@ -251,19 +290,28 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		// harness still honors any block below.
 		_, _ = fmt.Fprintln(diagnostic, "PairRoom: publication pending or unknown; inspect relay status. No new-ID replay was attempted.")
 	}
+	if kind == model.RuntimeGemini && err != nil && !reserved && c.State.LastSeq == lastSeq {
+		return err // includes oversized replies: no retained boundary, no claim
+	}
+	if kind == model.RuntimeGemini && ambiguousGeminiResponse(geminiCursor) {
+		return errors.New("Gemini empty-response marker is ambiguous; its receipt was retained, but automatic collection is unsafe. Use foreground relay wait in a fresh user turn")
+	}
 	if hook.StopHookActive && c.State.Blocks >= hookBlockLimit(kind) {
+		stopGeminiOnError = false
 		return writeJSON(out, map[string]any{})
 	}
 	// Publishing remains independent of collection. A foreground tool may be
 	// waiting through the native Stop boundary; never steal its next input.
 	releaseCollector, err := acquireCollector(ctx, c.Dir)
 	if errors.Is(err, errCollectorBusy) {
+		stopGeminiOnError = false
 		return writeJSON(out, map[string]any{})
 	}
 	if err != nil {
 		return err
 	}
 	defer releaseCollector()
+	stopGeminiOnError = false
 	err = deliver(ctx, c, true, 30, out)
 	if errors.Is(err, errAckUncertain) {
 		// The block decision is already on stdout. A nonzero exit would make the

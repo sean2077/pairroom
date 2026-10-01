@@ -29,7 +29,7 @@ PairRoom works inside your existing repository instructions, worktrees, and PR/M
 
 [Why PairRoom](docs/WHY_PAIRROOM.md) covers fit and limits, [Alternatives](docs/ALTERNATIVES.md) compares similar tools using dated sources, and [Core concepts](docs/CONCEPTS.md) defines Runtime, Provider, slot, and Binding. For ready-made prompts, see the [review-first recipe](docs/GETTING_STARTED.md#review-first-execute-where-it-fits).
 
-Gemini CLI works in both modes, including two Gemini sessions in one Room. See [Gemini setup and boundaries](docs/NATIVE_RELAY.md#gemini-cli) for its hooks, native authentication, and current limits.
+Gemini CLI works in both modes, including two Gemini sessions in one Room. Embedded currently supports new sessions only; restoring an accepted session after its process exits is blocked to prevent replaying old replies. See [Gemini setup and boundaries](docs/NATIVE_RELAY.md#gemini-cli) for its hooks, native authentication, and current limits.
 
 ## A look around
 

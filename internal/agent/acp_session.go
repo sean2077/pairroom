@@ -31,6 +31,9 @@ func (g *ACPAdapter) ensureSession(ctx context.Context) error {
 	if !loaded {
 		required = ""
 	}
+	if loaded && g.cfg.Runtime == model.RuntimeGemini {
+		return errGeminiExactResume
+	}
 	if loaded {
 		if !capabilities.loadSession {
 			return fmt.Errorf("load exact ACP session %q: runtime did not advertise session/load", required)

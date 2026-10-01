@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"net"
 	"os"
 	"path/filepath"
@@ -170,7 +171,7 @@ func TestApplySlotCLIKeepsOnlyTheRuntimesPolicyFields(t *testing.T) {
 		{"grok_build", "grok", "plan", "", "read-only"},
 	} {
 		cfg := config.Agent{Runtime: "claude", PermissionMode: "old", ApprovalPolicy: "old", Sandbox: "old", Instructions: "old"}
-		applySlotCLI(&cfg, tc.runtime, "model-x", "high", "plan", "on-request", "read-only", "  be brief \n")
+		applySlotCLI(&cfg, tc.runtime, "model-x", "high", "plan", "on-request", "read-only", "  be brief \n", nil)
 		if cfg.Runtime != tc.wantRuntime || cfg.Model != "model-x" || cfg.Effort != "high" || cfg.Instructions != "be brief" {
 			t.Fatalf("%s: selection = %+v", tc.runtime, cfg)
 		}
@@ -179,9 +180,71 @@ func TestApplySlotCLIKeepsOnlyTheRuntimesPolicyFields(t *testing.T) {
 		}
 	}
 	cfg := config.Agent{Runtime: "codex"}
-	applySlotCLI(&cfg, "", "", "", "", "", "", "")
+	applySlotCLI(&cfg, "", "", "", "", "", "", "", nil)
 	if cfg.Runtime != "codex" {
 		t.Fatalf("empty runtime flag replaced the configured runtime: %+v", cfg)
+	}
+}
+
+func TestApplySlotCLIGeminiRebasesInheritedCodexPolicy(t *testing.T) {
+	cfg := config.Defaults()
+	a := cfg.Codex
+	applySlotCLI(&cfg.Codex, "gemini", a.Model, a.Effort, a.PermissionMode, a.ApprovalPolicy, a.Sandbox, a.Instructions, nil)
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("CLI Runtime switch inherited an incompatible policy: %v", err)
+	}
+	if cfg.Codex.PermissionMode != "yolo" || cfg.Codex.Sandbox != "" {
+		t.Fatalf("Gemini defaults = %+v", cfg.Codex)
+	}
+}
+
+func TestApplySlotCLIGeminiPreservesExplicitPolicyFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		args                []string
+		wantError           string
+		permission, sandbox string
+	}{
+		{name: "sandbox on", args: []string{"--codex-sandbox", "on"}, permission: "yolo", sandbox: "on"},
+		{name: "sandbox native", args: []string{"--codex-sandbox="}, permission: "yolo"},
+		{name: "old sandbox explicitly requested", args: []string{"--codex-sandbox", "danger-full-access"}, wantError: "invalid Gemini CLI sandbox"},
+		{name: "effort explicitly requested", args: []string{"--codex-effort", "high"}, wantError: "do not support approval_policy or effort"},
+		{name: "approval explicitly requested", args: []string{"--codex-approval-policy", "yolo"}, wantError: "do not support approval_policy or effort"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Defaults()
+			a := cfg.Codex
+			flags := flag.NewFlagSet("Gemini selection", flag.ContinueOnError)
+			runtime := flags.String("codex-runtime", a.Runtime, "")
+			effort := flags.String("codex-effort", a.Effort, "")
+			approval := flags.String("codex-approval-policy", a.ApprovalPolicy, "")
+			sandbox := flags.String("codex-sandbox", a.Sandbox, "")
+			if err := flags.Parse(append([]string{"--codex-runtime", "gemini-cli"}, tc.args...)); err != nil {
+				t.Fatal(err)
+			}
+			applySlotCLI(&cfg.Codex, *runtime, a.Model, *effort, a.PermissionMode, *approval, *sandbox, a.Instructions, explicitSlotFlags(flags, "codex"))
+			err := cfg.Validate()
+			if tc.wantError != "" {
+				requireErrorContains(t, err, tc.wantError)
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Codex.PermissionMode != tc.permission || cfg.Codex.Sandbox != tc.sandbox {
+				t.Fatalf("explicit Gemini policy lost: %+v", cfg.Codex)
+			}
+		})
+	}
+}
+
+func TestApplySlotCLIGeminiKeepsConfiguredNativeInheritance(t *testing.T) {
+	for _, permission := range []string{"", "plan"} {
+		cfg := config.Agent{Runtime: "gemini-cli", PermissionMode: permission, Sandbox: "on"}
+		applySlotCLI(&cfg, "gemini", "", "", cfg.PermissionMode, cfg.ApprovalPolicy, cfg.Sandbox, "", nil)
+		if cfg.PermissionMode != permission || cfg.Sandbox != "on" {
+			t.Fatalf("unchanged Gemini Runtime lost configured policy: %+v", cfg)
+		}
 	}
 }
 

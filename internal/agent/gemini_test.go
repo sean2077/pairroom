@@ -36,6 +36,10 @@ func runGeminiACPHelper(args []string) int {
 	if len(args) == 0 || (args[0] != "--acp" && args[0] != "--experimental-acp") {
 		return 97
 	}
+	if expected, ok := os.LookupEnv("PAIRROOM_GEMINI_EXPECT_SANDBOX_ENV"); ok && os.Getenv("GEMINI_SANDBOX") != expected {
+		fmt.Fprintln(os.Stderr, "unexpected Gemini sandbox environment")
+		return 86
+	}
 	encoder := json.NewEncoder(os.Stdout)
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 65536), 4<<20)
@@ -88,7 +92,9 @@ func runGeminiACPHelper(args []string) int {
 			reply(req.ID, map[string]any{"sessionId": session, "modes": map[string]any{"currentModeId": "auto_edit"}})
 		case "session/load":
 			session, _ = req.Params["sessionId"].(string)
-			text("PRIVATE_REPLAY")
+			if mode != "late-replay" {
+				text("PRIVATE_REPLAY")
+			}
 			if mode == "wrong-session" {
 				reply(req.ID, map[string]any{"sessionId": "different-session"})
 				continue
@@ -106,6 +112,12 @@ func runGeminiACPHelper(args []string) int {
 		case "session/prompt":
 			prompts++
 			active = req.ID
+			if mode == "late-replay" {
+				// Gemini v0.62.0 AcpSessionManager.loadSession does not await
+				// streamHistory. With stdout backpressure, replay continues even
+				// after session/set_mode and the next prompt have crossed the wire.
+				text("PRIVATE_REPLAY @codex do the old task\n")
+			}
 			blocks, _ := req.Params["prompt"].([]any)
 			if len(blocks) == 0 {
 				return 91
@@ -184,19 +196,15 @@ func geminiEvent(t *testing.T, ctx context.Context, events <-chan model.RuntimeE
 	}
 }
 
-func TestGeminiACPNewAndExactResume(t *testing.T) {
-	for _, mode := range []string{"new", "resume", "legacy"} {
+func TestGeminiACPNewSessionAndLegacyTransport(t *testing.T) {
+	for _, mode := range []string{"new", "legacy"} {
 		t.Run(mode, func(t *testing.T) {
 			cfg := Config{}
-			if mode == "resume" {
-				cfg.SessionID = "exact-gemini-session"
-				cfg.RequireExactSession = true
-			}
 			adapter, events, ctx := geminiTestAdapter(t, mode, cfg)
 			if err := adapter.Start(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if mode != "resume" && adapter.SessionID() != "" {
+			if adapter.SessionID() != "" {
 				t.Fatal("new session materialized before a real Turn")
 			}
 			for round := 1; round <= 2; round++ {
@@ -214,9 +222,6 @@ func TestGeminiACPNewAndExactResume(t *testing.T) {
 				}
 			}
 			expected := "gemini-new-session"
-			if mode == "resume" {
-				expected = cfg.SessionID
-			}
 			if adapter.SessionID() != expected {
 				t.Fatalf("session replaced: %s", adapter.SessionID())
 			}
@@ -257,17 +262,59 @@ func TestGeminiACPApprovalAndCancel(t *testing.T) {
 	}
 }
 
-func TestGeminiACPRejectsUnavailableOrWrongIdentity(t *testing.T) {
-	for _, mode := range []string{"no-acp", "wrong-version", "no-load", "wrong-session"} {
+func TestGeminiACPRejectsUnavailableProtocol(t *testing.T) {
+	for _, mode := range []string{"no-acp", "wrong-version"} {
 		t.Run(mode, func(t *testing.T) {
-			adapter, _, ctx := geminiTestAdapter(t, mode, Config{SessionID: "required-session", RequireExactSession: true})
+			adapter, _, ctx := geminiTestAdapter(t, mode, Config{})
 			if err := adapter.Start(ctx); err == nil {
 				t.Fatal("unsupported protocol or different session accepted")
 			}
-			if adapter.SessionID() != "required-session" {
-				t.Fatal("failed resume replaced the exact ID")
+			if adapter.SessionID() != "" {
+				t.Fatal("failed startup allocated a session")
 			}
 		})
+	}
+}
+
+func TestGeminiACPBlocksReplayWithoutCompletionBoundary(t *testing.T) {
+	adapter, events, ctx := geminiTestAdapter(t, "late-replay", Config{SessionID: "exact-gemini-session", RequireExactSession: true})
+	if err := adapter.Start(ctx); !errors.Is(err, errGeminiExactResume) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Retain the vendor-shaped late-history fixture: without the guard,
+		// the prior private reply is published as part of the new Turn.
+		if err := adapter.StartTurn(ctx, model.AgentInput{MessageID: "new-task", Text: "BODY 🌟"}); err != nil {
+			t.Fatal(err)
+		}
+		final := geminiEvent(t, ctx, events, model.RuntimeFinal)
+		t.Fatalf("unsafe resume published replay as a current answer: %q", final.Text)
+	}
+	if adapter.SessionID() != "exact-gemini-session" || adapter.cmd != nil || adapter.sessionOpened {
+		t.Fatal("blocked resume changed the binding or launched a runtime")
+	}
+	if err := adapter.ensureSession(ctx); !errors.Is(err, errGeminiExactResume) {
+		t.Fatalf("session setup bypassed the resume boundary: %v", err)
+	}
+}
+
+func TestGeminiACPBlocksEngagedSessionRestart(t *testing.T) {
+	adapter, events, ctx := geminiTestAdapter(t, "new", Config{})
+	if err := adapter.StartTurn(ctx, model.AgentInput{MessageID: "first", Text: "BODY 🌟"}); err != nil {
+		t.Fatal(err)
+	}
+	geminiEvent(t, ctx, events, model.RuntimeTurnCompleted)
+	if err := adapter.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// A missing command proves that the restore guard runs before even probing
+	// a new process, independently of what the vendor advertises at initialize.
+	adapter.cfg.Command = t.TempDir() + "/must-not-run"
+	if err := adapter.Start(ctx); !errors.Is(err, errGeminiExactResume) {
+		t.Fatalf("restart did not fail at the safe boundary: %v", err)
+	}
+	if adapter.SessionID() != "gemini-new-session" || adapter.cmd != nil || adapter.sessionOpened {
+		t.Fatal("blocked restart discarded the accepted session")
 	}
 }
 
@@ -307,6 +354,41 @@ func TestGeminiArgsAndPermissionInheritance(t *testing.T) {
 	readOnly := PermissionConfig(Config{Runtime: model.RuntimeGemini, Sandbox: "on"}, model.PermissionReadOnly)
 	if readOnly.PermissionMode != "plan" || readOnly.Sandbox != "on" {
 		t.Fatalf("read-only widened sandbox: %+v", readOnly)
+	}
+}
+
+func TestGeminiExplicitSandboxOverridesNativeEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		name, inherited, configured, expected string
+	}{
+		{"enable", "false", "on", "true"},
+		{"disable", "true", "off", "false"},
+		{"inherit", "podman", "", "podman"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GEMINI_SANDBOX", tc.inherited)
+			t.Setenv("PAIRROOM_GEMINI_EXPECT_SANDBOX_ENV", tc.expected)
+			adapter, events, ctx := geminiTestAdapter(t, "new", Config{Sandbox: tc.configured})
+			if err := adapter.StartTurn(ctx, model.AgentInput{MessageID: "sandbox", Text: "BODY 🌟"}); err != nil {
+				t.Fatal(err)
+			}
+			geminiEvent(t, ctx, events, model.RuntimeTurnCompleted)
+			if got := os.Getenv("GEMINI_SANDBOX"); got != tc.inherited {
+				t.Fatalf("changed Service sandbox environment: %q", got)
+			}
+		})
+	}
+}
+
+func TestGeminiConfiguredYOLOCompletesSandboxOverride(t *testing.T) {
+	for _, tc := range []struct{ configured, expected string }{{"", "off"}, {"on", "on"}, {"off", "off"}} {
+		cfg := PermissionConfig(Config{Runtime: model.RuntimeGemini, PermissionMode: "yolo", Sandbox: tc.configured}, model.PermissionConfigured)
+		if cfg.Sandbox != tc.expected {
+			t.Fatalf("configured sandbox %q: got %q, want %q", tc.configured, cfg.Sandbox, tc.expected)
+		}
+	}
+	if cfg := PermissionConfig(Config{Runtime: model.RuntimeGemini}, model.PermissionConfigured); cfg.Sandbox != "" {
+		t.Fatal("empty policy no longer inherits native sandbox")
 	}
 }
 

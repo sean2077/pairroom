@@ -73,6 +73,9 @@ type State struct {
 	// TranscriptPath caches the reference last confirmed with the Service, so
 	// a Stop hook calls confirm only when the harness reports a new one.
 	TranscriptPath string `json:"transcript_path,omitempty"`
+	// GeminiResponse is the cumulative AfterAgent prefix already retained in
+	// the publication WAL. Fresh user turns reset it, even for identical text.
+	GeminiResponse *GeminiResponseCursor `json:"gemini_response,omitempty"`
 }
 
 type credentials struct {
@@ -308,10 +311,14 @@ func (c *Client) Reconcile(ctx context.Context, force bool) error {
 // Publish settles the existing backlog first and publishes text only after
 // it is empty, so a reply that could not be saved never overtakes it.
 func (c *Client) Publish(ctx context.Context, text string) error {
+	return c.publish(ctx, text, nil)
+}
+
+func (c *Client) publish(ctx context.Context, text string, cursor *GeminiResponseCursor) error {
 	if err := c.Reconcile(ctx, false); err != nil {
 		return err
 	}
-	if err := c.ReservePublication(text); err != nil {
+	if err := c.reservePublication(text, cursor); err != nil {
 		return err
 	}
 	return c.Reconcile(ctx, false)
@@ -332,10 +339,17 @@ func (c *Client) markUnknown(p Pending) error {
 // it is held, never sent until everything before it settles. A full backlog
 // refuses the reply without consuming a sequence.
 func (c *Client) ReservePublication(text string) error {
+	return c.reservePublication(text, nil)
+}
+
+func (c *Client) reservePublication(text string, cursor *GeminiResponseCursor) error {
 	if len(text) > relay.MaxBodyBytes {
 		return errReplyTooLarge
 	}
 	next := c.State
+	if cursor != nil {
+		next.GeminiResponse = cursor
+	}
 	next.LastSeq++
 	p := Pending{Seq: next.LastSeq, Text: text, At: time.Now().UTC()}
 	if next.Pending == nil {

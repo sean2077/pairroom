@@ -24,7 +24,7 @@ func TestGeminiTemplatesAndSameRuntimeSlots(t *testing.T) {
 	if cfg.Claude.PermissionMode != "" || cfg.Claude.Sandbox != "" || cfg.Codex.ApprovalPolicy != "" || cfg.Codex.Sandbox != "on" {
 		t.Fatal("runtime change inherited another vendor's defaults")
 	}
-	for _, arg := range []string{"--acp", "--experimental-acp", "--model=other", "-m", "--approval-mode=yolo", "--sandbox=false", "--resume", "--prompt=task"} {
+	for _, arg := range []string{"--acp", "--experimental-acp", "--model=other", "-m", "--approval-mode=yolo", "--sandbox=false", "--no-sandbox", "--no-yolo", "--no-acp", "--no-experimental-acp", "--session-file=saved.json", "--session-id=other", "--delete-session=1", "--list-sessions", "--worktree=other", "-w", "-o=json", "--resume", "--prompt=task"} {
 		cfg := Defaults()
 		cfg.Runtimes.Gemini.Args = []string{arg}
 		if err := cfg.Validate(); err == nil {

@@ -50,7 +50,19 @@ func procTableFromProc() (map[int]procInfo, error) {
 		if ppidErr != nil {
 			continue
 		}
-		table[pid] = procInfo{ppid: ppid, name: text[openIdx+1 : closeIdx]}
+		name := text[openIdx+1 : closeIdx]
+		// Recent Node releases name their main thread "MainThread" in comm,
+		// although the executable and process.title are still node. Resolve
+		// this ambiguous thread label through the kernel's executable link;
+		// never recognize an arbitrary MainThread as a Gemini host.
+		if name == "MainThread" {
+			if executable, err := os.Readlink(filepath.Join("/proc", entry.Name(), "exe")); err == nil {
+				if base := filepath.Base(executable); geminiHostName(base) {
+					name = base
+				}
+			}
+		}
+		table[pid] = procInfo{ppid: ppid, name: name}
 	}
 	return table, nil
 }

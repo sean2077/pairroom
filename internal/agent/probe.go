@@ -158,6 +158,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 			return ProbeResult{}, fmt.Errorf("Gemini CLI does not advertise ACP; update gemini before using an Embedded Room")
 		}
 		result.Capabilities = []string{"acp-stdio", "session-prompt", "session-cancel", "permission-approval", "native-auth-inheritance"}
+		result.Warnings = append(result.Warnings, geminiResumeWarning)
 	case model.RuntimeGrok:
 		result.Protocol = "grok-acp-v1"
 		helpCtx, helpCancel := context.WithTimeout(parent, probeCommandTimeout)
