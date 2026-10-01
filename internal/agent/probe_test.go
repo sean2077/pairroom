@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/sean2077/pairroom/internal/model"
@@ -32,6 +33,10 @@ func TestVersionAtLeast(t *testing.T) {
 	}{
 		{"2.1.211", 2, 1, 211, true},
 		{"2.1.231", 2, 1, 211, true},
+		{"2.1.211-rc.1", 2, 1, 211, false},
+		{"2.1.211+build-1", 2, 1, 211, true},
+		{"2.1.211-rc.1+build.2", 2, 1, 211, false},
+		{"2.1.212-rc.1", 2, 1, 211, true},
 		{"2.1.210", 2, 1, 211, false},
 		{"3.0.0", 2, 9, 9, true},
 		{"unknown", 2, 1, 211, false},
@@ -148,4 +153,62 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestHelpAdvertisesOnlyCompleteFlags(t *testing.T) {
+	for _, tc := range []struct {
+		help, flag string
+		want       bool
+	}{
+		{"--acp-debug --acp_version --acp2 --acp.extra", "--acp", false},
+		{"--resume-session --resume_legacy --resume2", "--resume", false},
+		{"prefix--acp --acpé", "--acp", false},
+		{"--acp-debug, --acp=<value>", "--acp", true},
+		{"[--resume]", "--resume", true},
+		{"--append-system-prompt[-file]-debug", "--append-system-prompt-file", false},
+		{"(--append-system-prompt[-file]),", "--append-system-prompt-file", true},
+	} {
+		if got := helpAdvertisesFlag(tc.help, tc.flag); got != tc.want {
+			t.Errorf("helpAdvertisesFlag(%q, %q) = %v, want %v", tc.help, tc.flag, got, tc.want)
+		}
+	}
+}
+
+func TestProbeGeminiRejectsACPFlagPrefixes(t *testing.T) {
+	t.Setenv("PAIRROOM_GEMINI_HELPER", "1")
+	t.Setenv("PAIRROOM_GEMINI_MODE", "acp-prefix")
+	_, err := ProbeRuntime(context.Background(), Config{Actor: model.ActorSlot2, Runtime: model.RuntimeGemini, Command: os.Args[0]})
+	if err == nil || !strings.Contains(err.Error(), "does not advertise ACP") {
+		t.Fatalf("similar option passed ACP preflight: %v", err)
+	}
+}
+
+func TestProbeClaudeResumeEvidencePreservesExistingSession(t *testing.T) {
+	t.Setenv("PAIRROOM_CLAUDE_SCRIPT", "success")
+	t.Setenv("PAIRROOM_CLAUDE_SCRIPT_HELP", "--input-format --output-format --resume-session --session-id --verbose")
+	pidFile := filepath.Join(t.TempDir(), "runtime.pid")
+	t.Setenv("PAIRROOM_HELPER_PID_FILE", pidFile)
+	cfg := Config{Actor: model.ActorSlot1, Runtime: model.RuntimeClaude, Command: os.Args[0], Repo: t.TempDir(), DataDir: t.TempDir(), SessionID: "retained-session", RequireExactSession: true}
+	probe, err := ProbeRuntime(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probe.Verification != "cli_metadata_only" || probe.SupportedFlags["--resume"] || containsString(probe.Capabilities, "session-resume") {
+		t.Fatalf("invalid resume evidence: %+v", probe)
+	}
+	warnings := strings.Join(probe.Warnings, "\n")
+	if !strings.Contains(warnings, "existing sessions are preserved") || strings.Contains(warnings, "fresh session") {
+		t.Fatalf("unsafe restore guidance: %s", warnings)
+	}
+	adapter := NewClaude(cfg, func(model.RuntimeEvent) {})
+	t.Cleanup(func() { _ = adapter.Stop(context.Background()) })
+	if err := adapter.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "cannot resume required session") {
+		t.Fatalf("similar option passed exact-resume guard: %v", err)
+	}
+	if adapter.SessionID() != "retained-session" {
+		t.Fatal("failed restore changed the session identity")
+	}
+	if _, err := os.Stat(pidFile); !os.IsNotExist(err) {
+		t.Fatalf("failed restore started a vendor process: %v", err)
+	}
 }

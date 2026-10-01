@@ -95,7 +95,7 @@ func runPreflight(ctx context.Context, o options, out io.Writer) error {
 	report := preflightReport{Hooks: map[string]preflightHook{}, Notice: "Read-only setup check. Contacts no model and changes nothing. Hook approval is decided in each harness and stays unknown here; after binding, relay doctor shows last_hook_at."}
 	report.CLI = preflightCommandLine()
 	report.Workspace = preflightGitWorkspace(ctx, o.repo)
-	report.Caller = preflightNativeCaller(report.Workspace.Root)
+	report.Caller = preflightNativeCaller(report.Workspace.Root, model.RuntimeKind(o.kind))
 	report.Service = preflightServiceState(ctx, o.endpoint, report.Workspace.Root)
 
 	var selected []model.RuntimeKind
@@ -199,7 +199,7 @@ func preflightGitWorkspace(ctx context.Context, repo string) preflightWorkspace 
 	return preflightWorkspace{Status: checkPass, Root: root}
 }
 
-func preflightNativeCaller(root string) preflightCaller {
+func preflightNativeCaller(root string, selected model.RuntimeKind) preflightCaller {
 	caller, err := currentNativeCaller()
 	if err != nil {
 		return preflightCaller{Status: checkFail, Hint: err.Error()}
@@ -210,6 +210,13 @@ func preflightNativeCaller(root string) preflightCaller {
 		if caller.runtime == model.RuntimeGemini {
 			result.SessionSource = "approved BeforeTool hook"
 		}
+	}
+	// Use the same caller boundary as bind. Inspecting another Runtime's
+	// installed hook must not turn a conflicting bind into a ready result.
+	if selected != "" && caller.runtime != "" && selected != caller.runtime {
+		result.Status = checkFail
+		result.Hint = fmt.Sprintf("--runtime %s conflicts with the calling native harness %s. Omit --runtime to check this session, or rerun preflight inside the intended %s session.", selected, caller.runtime, selected)
+		return result
 	}
 	if !result.InSession {
 		result.Status = checkWarn

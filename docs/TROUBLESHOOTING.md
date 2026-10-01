@@ -82,7 +82,7 @@ After a Service restart or `--idle-timeout` (15 minutes by default) of inactivit
 - `conflicting native session metadata; run the command in the intended native session without inherited outer-session variables`
 - Hook: `PairRoom: this bound harness reported a different session identity; no reply was published or collected. ...`
 
-Ask the Agent to run the command as its own tool call inside the intended session. In Grok, paste the command as a normal prompt; `!` shell mode receives no `GROK_SESSION_ID` and does not run the Stop hook. Never set or copy a session variable by hand. Preflight's `caller` shows which harness and session it detected. See [Grok Build Native](CLI_REFERENCE.md#grok-build-native).
+Ask the Agent to run the command as its own tool call inside the intended session. In Grok, paste the command as a normal prompt; `!` shell mode receives no `GROK_SESSION_ID` and does not run the Stop hook. Never set or copy a session variable by hand. Preflight's `caller` shows which harness and session it detected. If an explicit `--runtime` disagrees with that harness, preflight fails with an actionable `caller.hint` even when that Runtime's hook is installed. Omit `--runtime` to check this session, or rerun preflight from the intended harness; do not copy session variables to force a match. See [Grok Build Native](CLI_REFERENCE.md#grok-build-native).
 
 ### Bind rejected because the Stop hook is missing
 

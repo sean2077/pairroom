@@ -7,6 +7,7 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 ### Fixed
 
 - Recover open Native Room views after temporary startup/session/snapshot failures and offline/online transitions without reloading or resending messages. Connection status describes the Service connection, drafts and original-ID recovery records survive, coalesced reads finish before controls unlock, and late startup/snapshot results cannot recreate streams or polling after leaving or restoring a page.
+- Match complete CLI options during Runtime probing so similarly named flags cannot satisfy Gemini ACP or Claude exact-resume requirements, and do not treat a threshold prerelease as its stable release. Doctor labels probe capabilities as unverified metadata and correctly explains that missing Claude resume support preserves the existing session and blocks restore. Native preflight now rejects an explicit Runtime that conflicts with the calling harness, with read-only recovery guidance.
 
 ## [v5.11.1] — 2026-09-30
 

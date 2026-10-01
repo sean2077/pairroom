@@ -28,6 +28,7 @@ type ProbeResult struct {
 	Version        string            `json:"version,omitempty"`
 	VersionLine    string            `json:"version_line,omitempty"`
 	Protocol       string            `json:"protocol"`
+	Verification   string            `json:"verification"`
 	Capabilities   []string          `json:"capabilities,omitempty"`
 	Warnings       []string          `json:"warnings,omitempty"`
 	SupportedFlags map[string]bool   `json:"-"`
@@ -62,7 +63,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 		return ProbeResult{}, err
 	}
 	result := ProbeResult{
-		Actor: actor, Runtime: kind, Command: command, Path: path,
+		Actor: actor, Runtime: kind, Command: command, Path: path, Verification: "cli_metadata_only",
 		Version: extractSemanticVersion(versionLine), VersionLine: firstNonEmptyLine(versionLine),
 	}
 
@@ -111,7 +112,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 		if result.SupportedFlags["--resume"] {
 			result.Capabilities = append(result.Capabilities, "session-resume")
 		} else {
-			result.Warnings = append(result.Warnings, "Claude Code does not advertise --resume; native session recovery will start a fresh session")
+			result.Warnings = append(result.Warnings, "Claude Code does not advertise --resume; existing sessions are preserved and Embedded recovery is blocked. Update Claude Code or continue in the original native session")
 		}
 		if result.SupportedFlags["--add-dir"] {
 			result.Capabilities = append(result.Capabilities, "additional-directories")
@@ -227,11 +228,17 @@ func runProbeCommand(ctx context.Context, path string, args []string, actor mode
 // <prompt>` as an option and mentions the file variant as
 // `--append-system-prompt[-file]`, which the CLI accepts.
 func helpAdvertisesFlag(help, flag string) bool {
-	if strings.Contains(help, flag) {
+	// Option names must match completely: --acp-debug is not --acp, and
+	// --resume-session is not the exact-resume switch PairRoom will execute.
+	contains := func(option string) bool {
+		pattern := `(?:^|[^\pL\pN_.-])` + regexp.QuoteMeta(option) + `(?:$|[^\pL\pN_.-])`
+		return regexp.MustCompile(pattern).MatchString(help)
+	}
+	if contains(flag) {
 		return true
 	}
 	for i := len("--") + 1; i < len(flag); i++ {
-		if flag[i] == '-' && strings.Contains(help, flag[:i]+"["+flag[i:]+"]") {
+		if flag[i] == '-' && contains(flag[:i]+"["+flag[i:]+"]") {
 			return true
 		}
 	}
@@ -386,7 +393,10 @@ func versionAtLeast(value string, major, minor, patch int) bool {
 			return false
 		}
 	}
-	return true
+	// A prerelease at the threshold is older than that stable release. Build
+	// metadata has no ordering effect (including a hyphen inside metadata).
+	core, _, _ := strings.Cut(match[0], "+")
+	return !strings.Contains(core, "-")
 }
 
 func firstNonEmptyLine(value string) string {

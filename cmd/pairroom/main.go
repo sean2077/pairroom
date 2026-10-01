@@ -1031,8 +1031,9 @@ func printDoctorReport(report doctorReport) {
 		}
 		fmt.Printf("%-16s ✓ %s (%s)\n", label, versionText, probe.Path)
 		fmt.Printf("%-16s   protocol: %s\n", "", probe.Protocol)
+		fmt.Printf("%-16s   probe evidence: CLI metadata only\n", "")
 		if len(probe.Capabilities) > 0 {
-			fmt.Printf("%-16s   capabilities: %s\n", "", strings.Join(probe.Capabilities, ", "))
+			fmt.Printf("%-16s   adapter capabilities (unverified): %s\n", "", strings.Join(probe.Capabilities, ", "))
 		}
 		if len(entry.Checks) == 0 {
 			fmt.Printf("%-16s   model response: not checked (use doctor --live; may consume quota)\n", "")

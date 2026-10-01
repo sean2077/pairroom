@@ -24,6 +24,8 @@ func runGeminiACPHelper(args []string) int {
 	}
 	if len(args) == 1 && args[0] == "--help" {
 		switch mode {
+		case "acp-prefix":
+			fmt.Println("--acp-debug --experimental-acp-debug --model")
 		case "no-acp":
 			fmt.Println("--model")
 		case "legacy":

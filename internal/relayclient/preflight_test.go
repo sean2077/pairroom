@@ -201,6 +201,8 @@ func TestPreflightWarnsOnVersionMismatchWithoutBlocking(t *testing.T) {
 
 func TestPreflightGrokReusesClaudeProjectHook(t *testing.T) {
 	f := newPreflightFixture(t, "v"+version.Current, nil)
+	stubLineage(t, 4242, "grok", true)
+	t.Setenv("GROK_SESSION_ID", "preflight-grok-session")
 	if err := editHooks(f.root, model.RuntimeClaude, false); err != nil {
 		t.Fatal(err)
 	}
@@ -360,5 +362,53 @@ func TestPreflightHintsDevelopmentBuildSkew(t *testing.T) {
 				t.Fatalf("build hint = %v: %s", hinted, raw)
 			}
 		})
+	}
+}
+
+func TestPreflightCallerRuntimeSelection(t *testing.T) {
+	for _, tc := range []struct{ name, harness, session, selected, status string }{
+		{"detected", "claude", "session", "", checkPass},
+		{"matching", "claude", "session", "claude", checkPass},
+		{"conflicting", "claude", "session", "codex", checkFail},
+		{"identified without session", "claude", "", "codex", checkFail},
+		{"plain terminal", "", "", "codex", checkWarn},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stubLineage(t, 4242, tc.harness, tc.harness != "")
+			t.Setenv("CLAUDE_CODE_SESSION_ID", tc.session)
+			root := t.TempDir()
+			before := preflightTree(t, root)
+			caller := preflightNativeCaller(root, model.RuntimeKind(tc.selected))
+			if caller.Status != tc.status {
+				t.Fatalf("caller=%+v, want %s", caller, tc.status)
+			}
+			if tc.status == checkFail && (!strings.Contains(caller.Hint, "conflicts with the calling native harness") || caller.Bound) {
+				t.Fatalf("conflict lacks actionable evidence: %+v", caller)
+			}
+			if after := preflightTree(t, root); strings.Join(before, "\n") != strings.Join(after, "\n") {
+				t.Fatal("caller check changed the workspace")
+			}
+		})
+	}
+}
+
+func TestPreflightRejectsExplicitRuntimeConflictWithoutMutation(t *testing.T) {
+	f := newPreflightFixture(t, "v"+version.Current, activeNativeRoom())
+	if err := editHooks(f.root, model.RuntimeCodex, false); err != nil {
+		t.Fatal(err)
+	}
+	before := preflightTree(t, f.root)
+	report, raw, err := runPreflightJSON(t, options{repo: f.root, endpoint: f.endpoint, kind: "codex"})
+	if !errors.Is(err, errPreflightNotReady) || report.Ready || report.Caller.Status != checkFail || report.Hooks["codex"].Status != "installed" {
+		t.Fatalf("installed hook hid caller conflict: err=%v report=%s", err, raw)
+	}
+	if !strings.Contains(strings.Join(report.NextSteps, "\n"), "Omit --runtime") || strings.Contains(raw, "preflight-secret-token") {
+		t.Fatalf("bad conflict guidance: %s", raw)
+	}
+	if after := preflightTree(t, f.root); strings.Join(before, "\n") != strings.Join(after, "\n") {
+		t.Fatal("conflicting preflight changed the workspace")
+	}
+	if *f.requests != 1 {
+		t.Fatalf("preflight made %d requests, want one read", *f.requests)
 	}
 }
