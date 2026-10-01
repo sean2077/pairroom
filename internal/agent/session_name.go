@@ -33,7 +33,7 @@ func syncSessionName(parent context.Context, info model.RuntimeInfo, rename func
 	if err != nil {
 		info.SessionNameStatus = "failed"
 		var codexErr codexRPCError
-		var grokErr grokRPCError
+		var grokErr acpRPCError
 		if (errors.As(err, &codexErr) && codexErr.Code == -32601) || (errors.As(err, &grokErr) && grokErr.Code == -32601) {
 			info.SessionNameStatus = "unsupported"
 		}
@@ -48,11 +48,11 @@ func (c *CodexAdapter) syncSessionName(ctx context.Context, info model.RuntimeIn
 	})
 }
 
-func (g *GrokAdapter) syncSessionName(ctx context.Context, info model.RuntimeInfo, sessionID string) model.RuntimeInfo {
+func (g *ACPAdapter) syncSessionName(ctx context.Context, info model.RuntimeInfo, sessionID string) model.RuntimeInfo {
 	return syncSessionName(ctx, info, func(ctx context.Context, name string) error {
 		params := map[string]any{"sessionId": sessionID, "title": name, "cwd": g.cfg.Repo}
 		result, err := g.call(ctx, "x.ai/session/rename", params)
-		var rpcErr grokRPCError
+		var rpcErr acpRPCError
 		if errors.As(err, &rpcErr) && rpcErr.Code == -32601 {
 			result, err = g.call(ctx, "_x.ai/session/rename", params)
 		}

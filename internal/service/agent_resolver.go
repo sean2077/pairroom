@@ -334,8 +334,8 @@ func (r *AgentResolver) Catalog(ctx context.Context) AgentCatalog {
 		entry RuntimeCatalogEntry
 		index int
 	}
-	ch := make(chan probeResult, 3)
-	for index, kind := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok} {
+	ch := make(chan probeResult, 4)
+	for index, kind := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok, model.RuntimeGemini} {
 		go func(index int, kind model.RuntimeKind) {
 			entry := RuntimeCatalogEntry{Runtime: kind, DisplayName: kind.DisplayName(), DefaultModels: uniqueCatalogStrings(modelsByRuntime[kind])}
 			if r.mock {
@@ -355,7 +355,7 @@ func (r *AgentResolver) Catalog(ctx context.Context) AgentCatalog {
 			ch <- probeResult{entry, index}
 		}(index, kind)
 	}
-	entries := make([]RuntimeCatalogEntry, 3)
+	entries := make([]RuntimeCatalogEntry, 4)
 	for range entries {
 		probe := <-ch
 		entries[probe.index] = probe.entry

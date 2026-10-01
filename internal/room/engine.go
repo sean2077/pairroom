@@ -654,6 +654,8 @@ func defaultRoomName(a, b model.RuntimeKind) string {
 			return "Claude"
 		case model.RuntimeCodex:
 			return "Codex"
+		case model.RuntimeGemini:
+			return "Gemini"
 		case model.RuntimeGrok:
 			return "Grok"
 		default:

@@ -51,7 +51,7 @@ func TestNativeSessionNameSyncIsOptionalBoundedMetadata(t *testing.T) {
 		err        error
 	}{
 		{"success", "synced", nil}, {"unsupported Codex", "unsupported", codexRPCError{Code: -32601}},
-		{"unsupported Grok", "unsupported", grokRPCError{Code: -32601}}, {"invalid", "failed", errors.New("vendor diagnostic")},
+		{"unsupported Grok", "unsupported", acpRPCError{Code: -32601}}, {"invalid", "failed", errors.New("vendor diagnostic")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			info := syncSessionName(context.Background(), nameInfo(), func(ctx context.Context, name string) error {

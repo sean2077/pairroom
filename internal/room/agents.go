@@ -289,6 +289,13 @@ func applyPermissionRuntimeProjection(participant *model.ParticipantSnapshot, ac
 			participant.Runtime.ApprovalPolicy = slot.ApprovalPolicy
 			participant.Runtime.Sandbox = slot.Sandbox
 		}
+	case model.RuntimeGemini:
+		participant.Runtime.Sandbox = slot.Sandbox
+		if readOnly {
+			participant.Runtime.PermissionMode = "plan"
+		} else {
+			participant.Runtime.PermissionMode = slot.PermissionMode
+		}
 	case model.RuntimeGrok:
 		if readOnly {
 			participant.Runtime.PermissionMode = "plan"

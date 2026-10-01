@@ -83,7 +83,7 @@ func ParseMentions(text string, sender model.ActorID, runtimes map[model.ActorID
 		}
 	}
 	result.Targets = model.NormalizeActors(targets)
-	for _, name := range []string{"@claude", "@codex", "@grok"} {
+	for _, name := range []string{"@claude", "@codex", "@grok", "@gemini"} {
 		if _, ok := ambiguous[name]; ok {
 			result.Ambiguous = append(result.Ambiguous, name)
 		}

@@ -103,6 +103,8 @@ func FactoryFor(kind model.RuntimeKind) Factory {
 	switch kind.Canonical() {
 	case model.RuntimeCodex:
 		return CodexFactory
+	case model.RuntimeGemini:
+		return GeminiFactory
 	case model.RuntimeGrok:
 		return GrokFactory
 	default:

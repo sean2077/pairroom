@@ -11,6 +11,9 @@ func NativeBootstrap(actor model.ActorID, selfRuntime, peerRuntime model.Runtime
 	peer := model.OtherParticipant(actor)
 	ids := model.ParticipantIdentities(map[model.ActorID]model.RuntimeKind{actor: selfRuntime, peer: peerRuntime})
 	stop := "Stop relays your full visible reply."
+	if selfRuntime == model.RuntimeGemini {
+		stop = "Gemini AfterAgent relays your full visible reply; bind discovery uses its approved BeforeTool hook."
+	}
 	if selfRuntime == model.RuntimeGrok {
 		stop = "Grok clips hook text: prefer relay send/exchange for long replies. Hook blocks prompt relay wait; collect full input with that tool."
 	}

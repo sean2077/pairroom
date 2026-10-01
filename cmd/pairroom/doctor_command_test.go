@@ -172,3 +172,20 @@ func TestDoctorLiveReportsFailedModelChecksAsFailure(t *testing.T) {
 		}
 	}
 }
+
+func TestDoctorGeminiExecutableTemplateAndBothSlots(t *testing.T) {
+	_, _, _ = fakeDoctorTools(t)
+	gemini := fakeExecutable(t, t.TempDir(), "gemini")
+	configPath := filepath.Join(t.TempDir(), "gemini.json")
+	writeTestFile(t, configPath, `{"claude":{"runtime":"gemini"},"codex":{"runtime":"gemini"}}`)
+	report, err := runDoctorJSON(t, "--config", configPath, "--repo", t.TempDir(), "--gemini-command", gemini)
+	if err != nil || !report.OK {
+		t.Fatalf("Gemini doctor failed: %+v %v", report, err)
+	}
+	for _, actor := range []string{"slot1", "slot2"} {
+		entry := report.Runtimes[actor]
+		if entry.Probe == nil || entry.Probe.Runtime != "gemini" || entry.Probe.Protocol != "gemini-acp-v1" {
+			t.Fatalf("lost Gemini probe: %+v", entry)
+		}
+	}
+}

@@ -23,6 +23,7 @@ var harnessRuntimes = map[string]model.RuntimeKind{
 	"claude": model.RuntimeClaude,
 	"codex":  model.RuntimeCodex,
 	"grok":   model.RuntimeGrok,
+	"gemini": model.RuntimeGemini,
 }
 
 // sessionEnvVars maps a native runtime to the environment variable its official
@@ -67,6 +68,9 @@ func findHarnessAncestor() (int, string, bool) {
 			return 0, "", false
 		}
 		name := strings.TrimSuffix(strings.ToLower(entry.name), ".exe")
+		if _, observed := geminiRecordForProcess(pid, name); observed {
+			return pid, "gemini", true
+		}
 		if _, isHarness := harnessRuntimes[name]; isHarness {
 			return pid, name, true
 		}

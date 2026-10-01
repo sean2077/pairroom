@@ -2,7 +2,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-**Two independent coding agents. One problem. Your native workflow.** PairRoom connects [Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), and [Grok Build](https://docs.x.ai/build/overview) sessions so they can review each other's work against the repository, without replacing their model loop, tools, skills, or subagents.
+**Two independent coding agents. One problem. Your native workflow.** PairRoom connects [Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), [Grok Build](https://docs.x.ai/build/overview), and [Gemini CLI](https://github.com/google-gemini/gemini-cli) sessions so they can review each other's work against the repository, without replacing their model loop, tools, skills, or subagents.
 
 <p align="center">
   <img src="docs/images/pairroom-native-room.png" alt="A Native Room relaying between your own Claude Code and Codex sessions">
@@ -13,12 +13,12 @@
 Having Claude Code draft a plan, copying it to Codex for review, and pasting the review back gets tiring when it repeats. PairRoom lets the two Agents talk directly: one proposes, the other challenges, supplements, or executes. You see the whole exchange and can step in at any time.
 
 - **Exactly two Agents.** Two participants can cover each other's gaps over the shortest communication path. More Agents add coordination and token overhead that this kind of work rarely repays.
-- **The official harnesses do the work.** Claude Code, Codex, and Grok Build keep their own model loop, tools, skills, and subagents. PairRoom carries messages between them; it does not ship another execution loop.
+- **The official harnesses do the work.** Claude Code, Codex, Grok Build, and Gemini CLI keep their own model loop, tools, skills, and subagents. PairRoom carries messages between them; it does not ship another execution loop.
 - **Two host modes.** Each slot can use any supported Runtime, including the same one twice.
 
   | Host mode | Choose it for | Boundary |
   |---|---|---|
-  | **Native** (recommended for daily work; experimental) | Keeping your own Claude Code, Codex (including Codex Desktop), or Grok Build sessions in your usual terminal (such as [WezTerm](https://wezterm.org/)) or client, instead of moving into another editor or Agent workbench | PairRoom supplies bindings, durable relay, and audit. The original harness owns configuration, permissions, and execution; Room selections are display-only. |
+  | **Native** (recommended for daily work; experimental) | Keeping your own Claude Code, Codex (including Codex Desktop), Grok Build, or Gemini CLI sessions in your usual terminal (such as [WezTerm](https://wezterm.org/)) or client, instead of moving into another editor or Agent workbench | PairRoom supplies bindings, durable relay, and audit. The original harness owns configuration, permissions, and execution; Room selections are display-only. |
   | **Embedded** | PairRoom's desktop or browser conversation and adapter controls, with Runtime, Provider, model, effort, and instructions chosen per slot | PairRoom owns the adapters and runs one native Turn at a time per Room. Anything you leave unset inherits native configuration. |
 
 - **Customizable responsibilities.** By default one Agent plans and reviews while the other implements and supplements. A custom Room can instead ask them to discuss a plan together, each execute a part, then review the other's work. Responsibilities are not permissions or mandatory phases: simple tasks stay with the addressed Agent, and a finished review does not by itself authorize implementation.
@@ -28,6 +28,8 @@ Having Claude Code draft a plan, copying it to Codex for review, and pasting the
 PairRoom works inside your existing repository instructions, worktrees, and PR/MR policy. It adds no mandatory phases and does not append accumulated Room history to each relay.
 
 [Why PairRoom](docs/WHY_PAIRROOM.md) covers fit and limits, [Alternatives](docs/ALTERNATIVES.md) compares similar tools using dated sources, and [Core concepts](docs/CONCEPTS.md) defines Runtime, Provider, slot, and Binding. For ready-made prompts, see the [review-first recipe](docs/GETTING_STARTED.md#review-first-execute-where-it-fits).
+
+Gemini CLI works in both modes, including two Gemini sessions in one Room. Embedded currently supports new sessions only; restoring an accepted session after its process exits is blocked to prevent replaying old replies. See [Gemini setup and boundaries](docs/NATIVE_RELAY.md#gemini-cli) for its hooks, native authentication, and current limits.
 
 ## A look around
 

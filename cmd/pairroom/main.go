@@ -216,9 +216,37 @@ func pairSlotConfigs(fileCfg config.File) (agent.Config, agent.Config) {
 	return claude, codex
 }
 
-func applySlotCLI(cfg *config.Agent, runtime, modelName, effort, permission, approval, sandbox, instructions string) {
+func explicitSlotFlags(flags *flag.FlagSet, prefix string) map[string]bool {
+	explicit := make(map[string]bool)
+	flags.Visit(func(f *flag.Flag) {
+		if name, ok := strings.CutPrefix(f.Name, prefix+"-"); ok {
+			explicit[name] = true
+		}
+	})
+	return explicit
+}
+
+func applySlotCLI(cfg *config.Agent, runtime, modelName, effort, permission, approval, sandbox, instructions string, explicit map[string]bool) {
+	kind := model.ParseRuntimeKind(runtime)
+	if kind == model.RuntimeGemini && kind != model.ParseRuntimeKind(cfg.Runtime) {
+		// Flag defaults still describe the previous Runtime. Rebase inherited
+		// policy fields before applying an explicit Gemini selection, while
+		// preserving explicit CLI overrides for ordinary validation below.
+		if !explicit["effort"] {
+			effort = ""
+		}
+		if !explicit["permission-mode"] {
+			permission = "yolo"
+		}
+		if !explicit["approval-policy"] {
+			approval = ""
+		}
+		if !explicit["sandbox"] {
+			sandbox = ""
+		}
+	}
 	if runtime != "" {
-		cfg.Runtime = string(model.ParseRuntimeKind(runtime))
+		cfg.Runtime = string(kind)
 	}
 	cfg.Model = modelName
 	cfg.Effort = effort
@@ -268,15 +296,16 @@ func runService(args []string) (resultErr error) {
 	autoStartFlag := flags.Bool("auto-start", fileCfg.AutoStart, "start both agents when a Room runtime activates")
 	resumeFlag := flags.Bool("resume-pending", fileCfg.ResumePending, "activate suspended Rooms with pending work at startup (queued Embedded FIFO input or wake-eligible Native input)")
 	stallWarningFlag := flags.Int("stall-warning-seconds", fileCfg.StallWarningSeconds, "warn when a working agent emits no runtime event; -1 disables")
-	claudeRuntime := flags.String("claude-runtime", fileCfg.Claude.Runtime, "Agent 1 runtime: claude, codex, or grok")
+	claudeRuntime := flags.String("claude-runtime", fileCfg.Claude.Runtime, "Agent 1 runtime: claude, codex, grok, or gemini")
 	claudeCommand := flags.String("claude-command", fileCfg.Runtimes.Claude.Command, "Claude Code executable template")
 	claudeModel := flags.String("claude-model", fileCfg.Claude.Model, "Agent 1 model override")
 	claudeEffort := flags.String("claude-effort", fileCfg.Claude.Effort, "Agent 1 reasoning-effort override")
 	claudePermission := flags.String("claude-permission-mode", fileCfg.Claude.PermissionMode, "Agent 1 permission mode")
 	claudeInstructions := flags.String("claude-instructions", fileCfg.Claude.Instructions, "Agent 1 additional instructions")
-	codexRuntime := flags.String("codex-runtime", fileCfg.Codex.Runtime, "Agent 2 runtime: claude, codex, or grok")
+	codexRuntime := flags.String("codex-runtime", fileCfg.Codex.Runtime, "Agent 2 runtime: claude, codex, grok, or gemini")
 	codexCommand := flags.String("codex-command", fileCfg.Runtimes.Codex.Command, "Codex executable template")
 	grokCommand := flags.String("grok-command", fileCfg.Runtimes.Grok.Command, "Grok Build executable template")
+	geminiCommand := flags.String("gemini-command", fileCfg.Runtimes.Gemini.Command, "Gemini CLI executable template")
 	codexModel := flags.String("codex-model", fileCfg.Codex.Model, "Agent 2 model override")
 	codexEffort := flags.String("codex-effort", fileCfg.Codex.Effort, "Agent 2 reasoning-effort override")
 	codexApproval := flags.String("codex-approval-policy", fileCfg.Codex.ApprovalPolicy, "Agent 2 approval policy")
@@ -337,9 +366,10 @@ func runService(args []string) (resultErr error) {
 	fileCfg.Runtimes.Claude.Command = *claudeCommand
 	fileCfg.Runtimes.Codex.Command = *codexCommand
 	fileCfg.Runtimes.Grok.Command = *grokCommand
+	fileCfg.Runtimes.Gemini.Command = *geminiCommand
 	fileCfg.CCSwitch.Database = *ccSwitchDatabase
-	applySlotCLI(&fileCfg.Claude, *claudeRuntime, *claudeModel, *claudeEffort, *claudePermission, fileCfg.Claude.ApprovalPolicy, fileCfg.Claude.Sandbox, *claudeInstructions)
-	applySlotCLI(&fileCfg.Codex, *codexRuntime, *codexModel, *codexEffort, fileCfg.Codex.PermissionMode, *codexApproval, *codexSandbox, *codexInstructions)
+	applySlotCLI(&fileCfg.Claude, *claudeRuntime, *claudeModel, *claudeEffort, *claudePermission, fileCfg.Claude.ApprovalPolicy, fileCfg.Claude.Sandbox, *claudeInstructions, explicitSlotFlags(flags, "claude"))
+	applySlotCLI(&fileCfg.Codex, *codexRuntime, *codexModel, *codexEffort, fileCfg.Codex.PermissionMode, *codexApproval, *codexSandbox, *codexInstructions, explicitSlotFlags(flags, "codex"))
 	if err := fileCfg.Validate(); err != nil {
 		return err
 	}
@@ -468,15 +498,16 @@ func runServe(args []string) error {
 	noBrowserFlag := flags.Bool("no-browser", false, "do not open the room in a browser")
 	autoStartFlag := flags.Bool("auto-start", fileCfg.AutoStart, "start both agents when the room opens")
 	stallWarningFlag := flags.Int("stall-warning-seconds", fileCfg.StallWarningSeconds, "warn when a working agent emits no runtime event; -1 disables")
-	claudeRuntime := flags.String("claude-runtime", fileCfg.Claude.Runtime, "Agent 1 runtime: claude, codex, or grok")
+	claudeRuntime := flags.String("claude-runtime", fileCfg.Claude.Runtime, "Agent 1 runtime: claude, codex, grok, or gemini")
 	claudeCommand := flags.String("claude-command", fileCfg.Runtimes.Claude.Command, "Claude Code executable template")
 	claudeModel := flags.String("claude-model", fileCfg.Claude.Model, "Agent 1 model override")
 	claudeEffort := flags.String("claude-effort", fileCfg.Claude.Effort, "Agent 1 reasoning-effort override")
 	claudePermission := flags.String("claude-permission-mode", fileCfg.Claude.PermissionMode, "Agent 1 permission mode")
 	claudeInstructions := flags.String("claude-instructions", fileCfg.Claude.Instructions, "Agent 1 additional instructions")
-	codexRuntime := flags.String("codex-runtime", fileCfg.Codex.Runtime, "Agent 2 runtime: claude, codex, or grok")
+	codexRuntime := flags.String("codex-runtime", fileCfg.Codex.Runtime, "Agent 2 runtime: claude, codex, grok, or gemini")
 	codexCommand := flags.String("codex-command", fileCfg.Runtimes.Codex.Command, "Codex executable template")
 	grokCommand := flags.String("grok-command", fileCfg.Runtimes.Grok.Command, "Grok Build executable template")
+	geminiCommand := flags.String("gemini-command", fileCfg.Runtimes.Gemini.Command, "Gemini CLI executable template")
 	codexModel := flags.String("codex-model", fileCfg.Codex.Model, "Agent 2 model override")
 	codexEffort := flags.String("codex-effort", fileCfg.Codex.Effort, "Agent 2 reasoning-effort override")
 	codexApproval := flags.String("codex-approval-policy", fileCfg.Codex.ApprovalPolicy, "Agent 2 approval policy")
@@ -541,9 +572,10 @@ func runServe(args []string) error {
 	fileCfg.Runtimes.Claude.Command = *claudeCommand
 	fileCfg.Runtimes.Codex.Command = *codexCommand
 	fileCfg.Runtimes.Grok.Command = *grokCommand
+	fileCfg.Runtimes.Gemini.Command = *geminiCommand
 	fileCfg.CCSwitch.Database = *ccSwitchDatabase
-	applySlotCLI(&fileCfg.Claude, *claudeRuntime, *claudeModel, *claudeEffort, *claudePermission, fileCfg.Claude.ApprovalPolicy, fileCfg.Claude.Sandbox, *claudeInstructions)
-	applySlotCLI(&fileCfg.Codex, *codexRuntime, *codexModel, *codexEffort, fileCfg.Codex.PermissionMode, *codexApproval, *codexSandbox, *codexInstructions)
+	applySlotCLI(&fileCfg.Claude, *claudeRuntime, *claudeModel, *claudeEffort, *claudePermission, fileCfg.Claude.ApprovalPolicy, fileCfg.Claude.Sandbox, *claudeInstructions, explicitSlotFlags(flags, "claude"))
+	applySlotCLI(&fileCfg.Codex, *codexRuntime, *codexModel, *codexEffort, fileCfg.Codex.PermissionMode, *codexApproval, *codexSandbox, *codexInstructions, explicitSlotFlags(flags, "codex"))
 	if err := fileCfg.Validate(); err != nil {
 		_ = eventStore.Close()
 		return err
@@ -668,6 +700,7 @@ func runDoctor(args []string) error {
 	claudeCommand := flags.String("claude-command", fileCfg.Runtimes.Claude.Command, "Claude Code executable")
 	codexCommand := flags.String("codex-command", fileCfg.Runtimes.Codex.Command, "Codex executable")
 	grokCommand := flags.String("grok-command", fileCfg.Runtimes.Grok.Command, "Grok Build executable")
+	geminiCommand := flags.String("gemini-command", fileCfg.Runtimes.Gemini.Command, "Gemini CLI executable")
 	liveFlag := flags.Bool("live", false, "explicitly test real model responses in temporary workspaces (may consume provider quota)")
 	jsonFlag := flags.Bool("json", false, "emit a machine-readable report")
 	if err := flags.Parse(args); err != nil {
@@ -696,6 +729,7 @@ func runDoctor(args []string) error {
 	fileCfg.Runtimes.Claude.Command = *claudeCommand
 	fileCfg.Runtimes.Codex.Command = *codexCommand
 	fileCfg.Runtimes.Grok.Command = *grokCommand
+	fileCfg.Runtimes.Gemini.Command = *geminiCommand
 	slot1Cfg, slot2Cfg := pairSlotConfigs(fileCfg)
 	slot1Cfg.Repo = repo
 	slot2Cfg.Repo = repo

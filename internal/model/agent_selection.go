@@ -41,6 +41,9 @@ func (r ProviderRef) ValidateForRuntime(runtime RuntimeKind) error {
 			return errors.New("native provider reference must not include app_type or profile_id")
 		}
 	case ProviderCCSwitch:
+		if runtime.Canonical() == RuntimeGemini {
+			return errors.New("Gemini CLI currently uses native Provider configuration; CC Switch overrides are not supported")
+		}
 		if strings.TrimSpace(r.AppType) == "" || strings.TrimSpace(r.ProfileID) == "" {
 			return errors.New("cc-switch provider reference requires app_type and profile_id")
 		}
@@ -98,7 +101,7 @@ func (s AgentSelection) Validate(actor ActorID) error {
 	}
 	s = s.Normalized(actor)
 	if !s.Runtime.Valid() {
-		return fmt.Errorf("invalid runtime %q: use claude, codex, or grok", s.Runtime)
+		return fmt.Errorf("invalid runtime %q: use claude, codex, grok, or gemini", s.Runtime)
 	}
 	if err := s.Provider.ValidateForRuntime(s.Runtime); err != nil {
 		return err
@@ -120,6 +123,16 @@ func (s AgentSelection) Validate(actor ActorID) error {
 		}
 		if s.Sandbox != "" && !oneOf(s.Sandbox, "read-only", "workspace-write", "danger-full-access") {
 			return fmt.Errorf("invalid Codex sandbox %q", s.Sandbox)
+		}
+	case RuntimeGemini:
+		if s.ApprovalPolicy != "" || s.Effort != "" {
+			return errors.New("Gemini CLI selections do not support approval_policy or effort overrides")
+		}
+		if s.PermissionMode != "" && !oneOf(s.PermissionMode, "default", "auto_edit", "plan", "yolo") {
+			return fmt.Errorf("invalid Gemini CLI permission_mode %q", s.PermissionMode)
+		}
+		if s.Sandbox != "" && !oneOf(s.Sandbox, "on", "off") {
+			return fmt.Errorf("invalid Gemini CLI sandbox %q", s.Sandbox)
 		}
 	case RuntimeGrok:
 		if s.ApprovalPolicy != "" {

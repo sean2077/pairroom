@@ -13,27 +13,27 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 )
 
-type grokRPCReply struct {
+type acpRPCReply struct {
 	result json.RawMessage
 	err    error
 }
 
-type grokRPCError struct {
+type acpRPCError struct {
 	Code    int             `json:"code"`
 	Message string          `json:"message"`
 	Data    json.RawMessage `json:"data,omitempty"`
 }
 
-func (e grokRPCError) Error() string {
+func (e acpRPCError) Error() string {
 	if e.Code == 0 {
 		return e.Message
 	}
-	return fmt.Sprintf("grok ACP error %d: %s", e.Code, e.Message)
+	return fmt.Sprintf("ACP error %d: %s", e.Code, e.Message)
 }
 
-func (g *GrokAdapter) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+func (g *ACPAdapter) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	id := g.nextRequestID.Add(1)
-	reply := make(chan grokRPCReply, 1)
+	reply := make(chan acpRPCReply, 1)
 	g.mu.Lock()
 	g.pending[id] = reply
 	g.mu.Unlock()
@@ -54,11 +54,11 @@ func (g *GrokAdapter) call(ctx context.Context, method string, params any) (json
 	}
 }
 
-func (g *GrokAdapter) redactError(err error) error {
+func (g *ACPAdapter) redactError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var rpcErr grokRPCError
+	var rpcErr acpRPCError
 	if errors.As(err, &rpcErr) {
 		rpcErr.Message = redactRuntimeSecrets(rpcErr.Message, g.cfg.Env)
 		return rpcErr
@@ -66,30 +66,30 @@ func (g *GrokAdapter) redactError(err error) error {
 	return errors.New(redactRuntimeSecrets(err.Error(), g.cfg.Env))
 }
 
-func (g *GrokAdapter) redactRaw(raw json.RawMessage) json.RawMessage {
+func (g *ACPAdapter) redactRaw(raw json.RawMessage) json.RawMessage {
 	if len(raw) == 0 {
 		return nil
 	}
 	return json.RawMessage(redactRuntimeSecrets(string(raw), g.cfg.Env))
 }
 
-func (g *GrokAdapter) sendNotification(method string, params any) error {
+func (g *ACPAdapter) sendNotification(method string, params any) error {
 	return g.send(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
 }
 
-func (g *GrokAdapter) sendRawResponse(id json.RawMessage, result any, rpcErr *grokRPCError) error {
+func (g *ACPAdapter) sendRawResponse(id json.RawMessage, result any, rpcErr *acpRPCError) error {
 	return g.send(struct {
 		JSONRPC string          `json:"jsonrpc"`
 		ID      json.RawMessage `json:"id"`
 		Result  any             `json:"result,omitempty"`
-		Error   *grokRPCError   `json:"error,omitempty"`
+		Error   *acpRPCError    `json:"error,omitempty"`
 	}{JSONRPC: "2.0", ID: id, Result: result, Error: rpcErr})
 }
 
-func (g *GrokAdapter) send(value any) error {
+func (g *ACPAdapter) send(value any) error {
 	data, err := json.Marshal(value)
 	if err != nil {
-		return fmt.Errorf("encode Grok ACP message: %w", err)
+		return fmt.Errorf("encode ACP message: %w", err)
 	}
 	g.writeMu.Lock()
 	defer g.writeMu.Unlock()
@@ -97,15 +97,23 @@ func (g *GrokAdapter) send(value any) error {
 	stdin := g.stdin
 	g.mu.Unlock()
 	if stdin == nil {
-		return errors.New("Grok ACP stdin is not available")
+		return errors.New("ACP stdin is not available")
 	}
-	if _, err := stdin.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("write Grok ACP message: %w", err)
+	frame := append(data, '\n')
+	n, err := stdin.Write(frame)
+	if err == nil && n != len(frame) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		if n > 0 {
+			return fmt.Errorf("%w: write ACP message: %v", ErrSubmissionUnknown, err)
+		}
+		return fmt.Errorf("write ACP message: %w", err)
 	}
 	return nil
 }
 
-func (g *GrokAdapter) readStdout(reader io.Reader) {
+func (g *ACPAdapter) readStdout(reader io.Reader) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64*1024), grokMaxStdoutLine)
 	for scanner.Scan() {
@@ -114,11 +122,11 @@ func (g *GrokAdapter) readStdout(reader io.Reader) {
 	if err := scanner.Err(); err != nil {
 		// A dropped ACP response would strand its call, including the
 		// session/prompt result that ends the Turn.
-		g.failStream(streamFailureReason("Grok ACP", grokMaxStdoutLine, err))
+		g.failStream(streamFailureReason("ACP", grokMaxStdoutLine, err))
 	}
 }
 
-func (g *GrokAdapter) readStderr(reader io.Reader) {
+func (g *ACPAdapter) readStderr(reader io.Reader) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 16*1024), 1024*1024)
 	for scanner.Scan() {
@@ -127,23 +135,23 @@ func (g *GrokAdapter) readStderr(reader io.Reader) {
 			continue
 		}
 		e := runtimeEvent(g.cfg.Actor, model.RuntimeLog)
-		e.Name = "grok.stderr"
+		e.Name = string(g.cfg.Runtime) + ".stderr"
 		e.Text = redactRuntimeSecrets(text, g.cfg.Env)
 		g.sink(e)
 	}
 }
 
-func (g *GrokAdapter) handleRPCLine(line []byte) {
+func (g *ACPAdapter) handleRPCLine(line []byte) {
 	var envelope struct {
 		ID     json.RawMessage `json:"id"`
 		Method string          `json:"method"`
 		Params json.RawMessage `json:"params"`
 		Result json.RawMessage `json:"result"`
-		Error  *grokRPCError   `json:"error"`
+		Error  *acpRPCError    `json:"error"`
 	}
 	if err := json.Unmarshal(line, &envelope); err != nil {
 		e := runtimeEvent(g.cfg.Actor, model.RuntimeLog)
-		e.Name = "grok.stdout"
+		e.Name = string(g.cfg.Runtime) + ".stdout"
 		e.Text = redactRuntimeSecrets(string(line), g.cfg.Env)
 		g.sink(e)
 		return
@@ -168,9 +176,9 @@ func (g *GrokAdapter) handleRPCLine(line []byte) {
 		return
 	}
 	if envelope.Error != nil {
-		reply <- grokRPCReply{err: *envelope.Error}
+		reply <- acpRPCReply{err: *envelope.Error}
 	} else {
-		reply <- grokRPCReply{result: append(json.RawMessage(nil), envelope.Result...)}
+		reply <- acpRPCReply{result: append(json.RawMessage(nil), envelope.Result...)}
 	}
 }
 

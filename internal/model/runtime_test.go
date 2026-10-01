@@ -39,6 +39,18 @@ func TestParticipantIdentitiesUseRuntimeHandlesAndStableDuplicateSuffixes(t *tes
 			wantFirst:  ParticipantIdentity{DisplayName: "Grok Build 0", MentionHandle: "@grok0"},
 			wantSecond: ParticipantIdentity{DisplayName: "Grok Build 1", MentionHandle: "@grok1"},
 		},
+		{
+			name:       "unique Gemini and Codex",
+			runtimes:   map[ActorID]RuntimeKind{ActorSlot1: RuntimeGemini, ActorSlot2: RuntimeCodex},
+			wantFirst:  ParticipantIdentity{DisplayName: "Gemini CLI", MentionHandle: "@gemini"},
+			wantSecond: ParticipantIdentity{DisplayName: "Codex", MentionHandle: "@codex"},
+		},
+		{
+			name:       "duplicate Gemini",
+			runtimes:   map[ActorID]RuntimeKind{ActorSlot1: RuntimeGemini, ActorSlot2: RuntimeGemini},
+			wantFirst:  ParticipantIdentity{DisplayName: "Gemini CLI 0", MentionHandle: "@gemini0"},
+			wantSecond: ParticipantIdentity{DisplayName: "Gemini CLI 1", MentionHandle: "@gemini1"},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got := ParticipantIdentities(test.runtimes)

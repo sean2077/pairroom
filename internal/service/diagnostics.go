@@ -193,7 +193,7 @@ func (s *ManagementServer) runDiagnostics(w http.ResponseWriter, r *http.Request
 	if request.Mode == "environment" {
 		// Probe concurrently, preserve display order, and bound the whole metadata
 		// phase. This does not authenticate or run a model turn.
-		kinds := []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok}
+		kinds := []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok, model.RuntimeGemini}
 		results := make(chan agent.DiagnosticCheck, len(kinds))
 		for _, kind := range kinds {
 			go func(kind model.RuntimeKind) {

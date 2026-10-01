@@ -223,7 +223,7 @@ func TestPreflightPlainTerminalChecksEveryRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	report, _, err := runPreflightJSON(t, options{repo: f.root, endpoint: f.endpoint})
-	if err != nil || !report.Ready || len(report.Hooks) != 3 || report.Caller.Status != checkWarn || report.Caller.InSession {
+	if err != nil || !report.Ready || len(report.Hooks) != 4 || report.Caller.Status != checkWarn || report.Caller.InSession {
 		t.Fatalf("plain terminal: err=%v caller=%+v hooks=%+v", err, report.Caller, report.Hooks)
 	}
 	if !strings.Contains(strings.Join(report.NextSteps, "\n"), "tool call") {

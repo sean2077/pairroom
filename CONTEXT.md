@@ -23,7 +23,7 @@ The association between a Room participant and an exact native Runtime/session i
 _Equivalent (zh-CN)_: 会话绑定
 
 **Runtime**:
-The Claude Code, Codex, or Grok Build harness selected for a participant.
+The Claude Code, Codex, Grok Build, or Gemini CLI harness selected for a participant.
 _Equivalent (zh-CN)_: 原生运行时
 
 **Room Runtime**:

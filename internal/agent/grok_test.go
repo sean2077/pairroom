@@ -25,7 +25,7 @@ func TestGrokContentImageCapabilityFallback(t *testing.T) {
 	input := model.AgentInput{Text: "  inspect devices\n\n", FromHandle: "@codex", Attachments: []model.AgentAttachment{attachment}}
 	envelope := prompt.Envelope(input)
 	for _, images := range []bool{false, true} {
-		content, err := grokContent(envelope, input.Attachments, images)
+		content, err := acpContent(envelope, input.Attachments, images)
 		if err != nil || len(content) != 2 {
 			t.Fatalf("images=%v content=%v err=%v", images, content, err)
 		}
@@ -39,23 +39,23 @@ func TestGrokContentImageCapabilityFallback(t *testing.T) {
 		} else if content[1]["type"] != "text" || !strings.Contains(content[1]["text"].(string), "not sent as visual content") {
 			t.Fatalf("missing explicit image limitation: %v", content)
 		}
-		plain, err := grokContent("text only", nil, images)
+		plain, err := acpContent("text only", nil, images)
 		if err != nil || len(plain) != 1 || plain[0]["text"] != "text only" {
 			t.Fatalf("plain text changed: %v %v", plain, err)
 		}
 		invalid := attachment
 		invalid.Kind = "file"
-		if _, err := grokContent(envelope, []model.AgentAttachment{invalid}, images); err == nil {
+		if _, err := acpContent(envelope, []model.AgentAttachment{invalid}, images); err == nil {
 			t.Fatal("unsupported attachment accepted")
 		}
 		invalid = attachment
 		invalid.Size++
-		if _, err := grokContent(envelope, []model.AgentAttachment{invalid}, images); err == nil {
+		if _, err := acpContent(envelope, []model.AgentAttachment{invalid}, images); err == nil {
 			t.Fatal("changed attachment accepted")
 		}
 		invalid = attachment
 		invalid.Path += ".missing"
-		if _, err := grokContent(envelope, []model.AgentAttachment{invalid}, images); err == nil {
+		if _, err := acpContent(envelope, []model.AgentAttachment{invalid}, images); err == nil {
 			t.Fatal("missing attachment accepted")
 		}
 	}
@@ -115,14 +115,14 @@ func TestSelectGrokAuthMethodUsesAdvertisedDefault(t *testing.T) {
 }
 
 func TestParseGrokCapabilitiesPinsLifecycleAndImageSupport(t *testing.T) {
-	capabilities, err := parseGrokCapabilities(json.RawMessage(`{"agentCapabilities":{"loadSession":true,"promptCapabilities":{"image":true},"sessionCapabilities":{"close":{}}}}`))
+	capabilities, err := parseACPCapabilities(json.RawMessage(`{"agentCapabilities":{"loadSession":true,"promptCapabilities":{"image":true},"sessionCapabilities":{"close":{}}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !capabilities.loadSession || !capabilities.close || !capabilities.promptImage {
 		t.Fatalf("unexpected capabilities: %+v", capabilities)
 	}
-	withoutClose, err := parseGrokCapabilities(json.RawMessage(`{"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"close":false}}}`))
+	withoutClose, err := parseACPCapabilities(json.RawMessage(`{"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"close":false}}}`))
 	if err != nil || withoutClose.close {
 		t.Fatalf("false close capability must not be treated as supported: %+v err=%v", withoutClose, err)
 	}
@@ -131,7 +131,7 @@ func TestParseGrokCapabilitiesPinsLifecycleAndImageSupport(t *testing.T) {
 func TestGrokSessionUpdateProjectsRootAgentText(t *testing.T) {
 	var events []model.RuntimeEvent
 	adapter := NewGrok(Config{Actor: model.ActorSlot2}, func(event model.RuntimeEvent) { events = append(events, event) })
-	turn := &grokTurn{turnID: "turn-1", inputs: []model.AgentInput{{MessageID: "msg-1"}}}
+	turn := &acpTurn{turnID: "turn-1", inputs: []model.AgentInput{{MessageID: "msg-1"}}}
 	adapter.sessionID = "session-1"
 	adapter.turn = turn
 	adapter.handleSessionUpdate(json.RawMessage(`{"sessionId":"session-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}}`))
@@ -146,7 +146,7 @@ func TestGrokSessionUpdateProjectsRootAgentText(t *testing.T) {
 
 type grokRPCRecorder struct {
 	mu      sync.Mutex
-	adapter *GrokAdapter
+	adapter *ACPAdapter
 	lines   [][]byte
 	reject  bool
 }
@@ -182,7 +182,7 @@ func TestGrokSteerUsesInterjectAndClassifiesMethodMissing(t *testing.T) {
 	recorder := &grokRPCRecorder{adapter: adapter}
 	adapter.stdin = recorder
 	adapter.sessionID = "session-1"
-	adapter.turn = &grokTurn{turnID: "turn-1", inputs: []model.AgentInput{{MessageID: "initial"}}}
+	adapter.turn = &acpTurn{turnID: "turn-1", inputs: []model.AgentInput{{MessageID: "initial"}}}
 	outcome := adapter.Steer(context.Background(), model.AgentInput{MessageID: "steer-1", Text: "focus"})
 	if outcome.State != SteerAccepted || len(adapter.turn.inputs) != 2 {
 		t.Fatalf("accepted steer = %+v inputs=%d", outcome, len(adapter.turn.inputs))

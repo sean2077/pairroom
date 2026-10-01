@@ -100,7 +100,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.StringVar(&o.repo, "repo", ".", "Room project path; defaults to this native session's binding, then workspace discovery")
 	flags.StringVar(&o.room, "room", "", "Room ID")
 	flags.StringVar(&o.slot, "slot", "", "Agent slot: 1 or 2 (bind --create defaults to 1); claude/codex are CLI input aliases only. Never a runtime name")
-	flags.StringVar(&o.kind, "runtime", "", "native harness: claude (cc), codex or grok; install accepts a comma-separated list")
+	flags.StringVar(&o.kind, "runtime", "", "native harness: claude (cc), codex, grok or gemini; install accepts a comma-separated list")
 	flags.StringVar(&o.endpoint, "service-file", "", "owner-only relay-endpoint.json path for a custom Service data root")
 	flags.StringVar(&o.text, "text", "", "message body; otherwise read stdin unless --text-file or --ref is used")
 	flags.StringVar(&o.textFile, "text-file", "", "send/exchange: read UTF-8 body from a file, or - for stdin")
@@ -111,7 +111,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.StringVar(&o.to, "to", "", "explicit send target: @user, or empty for peer")
 	flags.BoolVar(&o.create, "create", false, "bind only: register the project when missing, create a native Room, then bind this session")
 	flags.StringVar(&o.name, "name", "", "optional Room display name for bind --create")
-	flags.StringVar(&o.peer, "peer-runtime", "", "peer slot runtime claude|codex|grok for bind --create")
+	flags.StringVar(&o.peer, "peer-runtime", "", "peer slot runtime claude|codex|grok|gemini for bind --create")
 	flags.BoolVar(&o.replace, "replace", false, "explicitly revoke occupied binding; does not stop native work")
 	flags.BoolVar(&o.purge, "purge-hooks", false, "remove this runtime's relay hooks when no other local binding uses them")
 	flags.BoolVar(&o.enabled, "enabled", true, "park enabled")
@@ -239,7 +239,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		}
 		kind, ok := parseRuntimeToken(*runtimeFlag.value)
 		if !ok {
-			return fmt.Errorf("invalid %s; choose claude (cc), codex, or grok", runtimeFlag.name)
+			return fmt.Errorf("invalid %s; choose claude (cc), codex, grok, or gemini", runtimeFlag.name)
 		}
 		*runtimeFlag.value = string(kind)
 	}
@@ -706,7 +706,7 @@ func createRetryCommand(root, endpoint string, o options) string {
 	if name := strings.TrimSpace(o.name); name != "" {
 		command += " --name " + quoteShellPath(name)
 	}
-	command += " --peer-runtime <claude|codex|grok>"
+	command += " --peer-runtime <claude|codex|grok|gemini>"
 	return command + " --service-file " + quoteShellPath(endpoint) + " --repo " + quoteShellPath(root)
 }
 
@@ -829,14 +829,14 @@ func resolveSlotForRoom(room serviceRoom, rt model.RuntimeKind) (model.ActorID, 
 
 // errCreateSlotUnresolved is returned when a creator slot cannot be known
 // before the Room exists. It never authorizes a guess.
-var errCreateSlotUnresolved = errors.New("bind --create requires --slot 1|2 unless run inside a recognized claude/codex/grok session (or with --runtime claude|codex|grok)")
+var errCreateSlotUnresolved = errors.New("bind --create requires --slot 1|2 unless run inside a recognized claude/codex/grok/gemini session (or with --runtime claude|codex|grok|gemini)")
 
 // inferCreateSlot defaults every recognized creator to Agent 1. Service pair
 // selections are oriented to that slot before creation; an explicit --slot is
 // handled by the caller and never inferred from a runtime name.
 func inferCreateSlot(o options) (model.ActorID, error) {
 	switch callerRuntime(o) {
-	case model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok:
+	case model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok, model.RuntimeGemini:
 		return model.ActorSlot1, nil
 	}
 	return "", errCreateSlotUnresolved
@@ -970,8 +970,8 @@ func createAgents(o options, slot model.ActorID) (map[model.ActorID]model.AgentS
 		}
 	}
 	for _, kind := range []model.RuntimeKind{own, peer} {
-		if kind != model.RuntimeClaude && kind != model.RuntimeCodex && kind != model.RuntimeGrok {
-			return nil, errors.New("native Rooms support --runtime/--peer-runtime claude, codex or grok")
+		if !kind.Valid() {
+			return nil, errors.New("native Rooms support --runtime/--peer-runtime claude, codex, grok or gemini")
 		}
 	}
 	return map[model.ActorID]model.AgentSelection{

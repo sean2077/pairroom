@@ -19,6 +19,10 @@
     "grok": {
       "command": "grok",
       "args": []
+    },
+    "gemini": {
+      "command": "gemini",
+      "args": []
     }
   },
   "claude": {

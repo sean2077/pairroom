@@ -105,7 +105,7 @@ func TestAgentCatalogReturnsAllRuntimesAndSafeProviderFailure(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &catalog); err != nil {
 		t.Fatal(err)
 	}
-	if len(catalog.Runtimes) != 3 || catalog.ProviderError == nil || catalog.ProviderError.Code != ccswitch.CodeDatabaseMissing {
+	if len(catalog.Runtimes) != 4 || catalog.ProviderError == nil || catalog.ProviderError.Code != ccswitch.CodeDatabaseMissing {
 		t.Fatalf("catalog = %#v", catalog)
 	}
 	for _, runtime := range catalog.Runtimes {

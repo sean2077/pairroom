@@ -46,12 +46,13 @@ type preflightWorkspace struct {
 }
 
 type preflightCaller struct {
-	Status     string `json:"status"`
-	Runtime    string `json:"runtime,omitempty"`
-	SessionEnv string `json:"session_env,omitempty"`
-	InSession  bool   `json:"in_session"`
-	Bound      bool   `json:"bound"`
-	Hint       string `json:"hint,omitempty"`
+	Status        string `json:"status"`
+	Runtime       string `json:"runtime,omitempty"`
+	SessionEnv    string `json:"session_env,omitempty"`
+	SessionSource string `json:"session_source,omitempty"`
+	InSession     bool   `json:"in_session"`
+	Bound         bool   `json:"bound"`
+	Hint          string `json:"hint,omitempty"`
 }
 
 type preflightService struct {
@@ -104,7 +105,7 @@ func runPreflight(ctx context.Context, o options, out io.Writer) error {
 	case report.Caller.Runtime != "":
 		selected = []model.RuntimeKind{model.RuntimeKind(report.Caller.Runtime)}
 	default:
-		selected = []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok}
+		selected = []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok, model.RuntimeGemini}
 	}
 	// A chosen runtime needs its own hook; with none chosen, any one installed
 	// harness is enough to proceed.
@@ -206,10 +207,13 @@ func preflightNativeCaller(root string) preflightCaller {
 	result := preflightCaller{Status: checkPass, Runtime: string(caller.runtime), InSession: caller.session != ""}
 	if caller.runtime != "" {
 		result.SessionEnv = sessionEnvVars[caller.runtime]
+		if caller.runtime == model.RuntimeGemini {
+			result.SessionSource = "approved BeforeTool hook"
+		}
 	}
 	if !result.InSession {
 		result.Status = checkWarn
-		result.Hint = "No native session identity here. That is fine for preflight, but bind must run as the Agent's own tool call inside its Claude Code, Codex or Grok Build session (not a plain terminal or Grok's ! shell)."
+		result.Hint = "No native session identity here. That is fine for preflight, but bind must run as the Agent's own tool call inside its Claude Code, Codex, Grok Build or Gemini CLI session (not a plain terminal or Grok's ! shell)."
 		return result
 	}
 	if root == "" {
@@ -329,6 +333,8 @@ func approvalPlace(kind model.RuntimeKind) string {
 	switch kind {
 	case model.RuntimeCodex:
 		return "Codex: /hooks"
+	case model.RuntimeGemini:
+		return "Gemini CLI: /hooks and trusted workspace; enable BeforeTool and AfterAgent"
 	case model.RuntimeGrok:
 		return "Grok: /hooks, press r to reload, then folder trust"
 	default:

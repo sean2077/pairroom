@@ -86,7 +86,7 @@ func TestBindCreateSlotRuntimeMismatchFailsBeforeCreation(t *testing.T) {
 	}
 	var out bytes.Buffer
 	err := bind(context.Background(), root, options{slot: "claude", create: true, endpoint: endpoint}, &out)
-	if err == nil || *created != 0 || !strings.Contains(err.Error(), "matches no slot") || !strings.Contains(err.Error(), "no Room was created") || !strings.Contains(err.Error(), "--peer-runtime <claude|codex|grok>") || strings.Contains(err.Error(), "--slot") || out.Len() != 0 {
+	if err == nil || *created != 0 || !strings.Contains(err.Error(), "matches no slot") || !strings.Contains(err.Error(), "no Room was created") || !strings.Contains(err.Error(), "--peer-runtime <claude|codex|grok|gemini>") || strings.Contains(err.Error(), "--slot") || out.Len() != 0 {
 		t.Fatalf("creator-slot preflight did not fail before provisioning: created=%d err=%v", *created, err)
 	}
 }
@@ -241,7 +241,7 @@ func TestCreateNativeRoomReusesRegisteredProjectWithServerDefaults(t *testing.T)
 
 func TestCreateNativeRoomRejectsUnsupportedRuntimeBeforeAnyRequest(t *testing.T) {
 	_, err := createNativeRoom(context.Background(), relay.Endpoint{URL: "http://127.0.0.1:0"}, "/ws", options{peer: "unsupported"}, model.ActorSlot1)
-	if err == nil || !strings.Contains(err.Error(), "claude, codex or grok") {
+	if err == nil || !strings.Contains(err.Error(), "claude, codex, grok or gemini") {
 		t.Fatalf("err = %v", err)
 	}
 }
