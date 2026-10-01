@@ -69,13 +69,87 @@ no Linux run preceded the change. The package has no platform-tagged files or
 GOOS-dependent test branches; re-derive the floor from the next Linux CI
 artifact.
 
-PRs retain the focused Windows/macOS Native boundary suite. The nightly
+PRs retain the focused Windows/macOS Native boundary suite, including all
+Agent adapter tests, fixture-backed CLI doctor tests, and no-auth probe safety
+regressions. Shell-only probe fixtures still explicitly skip on Windows; the
+portable process-backed adapter fixtures run there. The nightly
 `full-platform-tests` job runs every root-module package on `windows-2025` and
 `macos-15`, with a 45-minute limit per target. It runs at 02:17 UTC and is also
 available through CI `workflow_dispatch`. The independent weekly vulnerability
 scan remains Monday 03:17 UTC; nightly runs do not build or publish artifacts.
 A configured nightly job is not evidence it has run, and root tests do not
 replace the separate desktop workflow or authenticated vendor tests.
+
+## Optional real-CLI transport probe
+
+CI `workflow_dispatch` has an opt-in `gemini_no_auth` input, off by default.
+It installs the official `@google/gemini-cli@0.62.0` package
+([upstream source](https://github.com/google-gemini/gemini-cli/tree/v0.62.0))
+with lifecycle scripts disabled and runs Node 24.19.0 on Linux and Windows. Ordinary PR,
+push, and scheduled jobs never install or run that real CLI. They test the
+probe's safety boundaries with disposable executable fixtures instead.
+
+The standalone entry point, from the repository root, is:
+
+```bash
+node scripts/probe_gemini_no_auth.js /path/to/node_modules/@google/gemini-cli /path/to/probe.json
+```
+
+Install the pinned official package in a disposable directory first; the script
+never installs packages and rejects other package names, versions, or entry
+points. It uses the published package's `bundle/gemini.js` via the current Node
+executable on both platforms. This exercises real Windows process/ACP transport,
+but does not test the npm `.cmd` launcher or PairRoom's full adapter lifecycle.
+
+The only CLI invocations are `--version`, `--help`, and the advertised ACP flag.
+The only protocol request is ACP v1 `initialize`; authentication, session
+creation/load, prompts, login, and model calls are outside this probe. Each run
+creates a disposable home and empty project, blocks ancestor `.env` discovery,
+redirects user/system configuration, disables updates/telemetry, and builds the
+child environment from an allowlist without inherited keys, tokens, proxy
+settings, or Node injection options. ACP response, running-process error,
+output overflow, and timeout trigger process-tree termination. Successful
+`--version`/`--help` wait for normal direct-child exit; all paths wait for that
+child's stdio to close before removing temporary state. This is configuration
+isolation, not an operating-system/network sandbox or a guarantee against
+arbitrary detached descendants: run only the trusted pinned package, preferably
+on the disposable hosted CI runners.
+
+Artifacts retain selected version/protocol/boolean capability fields, the bundle
+SHA-256, and the npm dependency lock for that run. Raw stdout/stderr, auth details,
+paths, user configuration, and transcripts are not recorded in the probe report.
+Transitive dependencies are resolved at installation time; retain the generated
+lock to reproduce that dependency set. A reported `loadSession` capability is
+only the CLI's advertisement; PairRoom still refuses Gemini exact resume without
+a reliable replay-completion boundary. A passing initialize probe is not
+credential validation, authenticated vendor E2E, or compatibility certification.
+Report each platform's actual CI run separately; adding a job is not run evidence.
+
+### Owner-authorized authenticated acceptance
+
+Do not run this checklist as part of the no-auth workflow. Obtain approval for
+account use and any model cost first, using disposable workspaces and the user's
+selected CLI/Provider configuration. Record the PairRoom commit, OS, CLI version,
+Provider/model and permission profile, with redacted outcomes and limitations:
+
+1. Embedded: create a new Binding, submit a small approved task, observe native
+   acceptance and terminal completion, send a second input, and exercise
+   cancellation/process exit and Service reopen. Check FIFO/unknown-submission
+   handling without automatically retrying uncertain work. For Gemini, verify
+   that reopening an existing native session fails closed and preserves its ID;
+   do not claim exact resume from advertised `loadSession` alone.
+2. Native: bind the two real user-owned sessions using official session metadata,
+   approve the installed hooks, exchange addressed replies in both directions
+   across multiple turns, and observe full publication and delivery receipts.
+   Include idle wake where supported, session exit/reopen, Service restart, and
+   an uncertain delivery followed by inspection before any explicit Retry.
+   `handed_off` proves stdout delivery only; confirm receipt in the actual native
+   session separately. PairRoom does not start/stop those user-owned processes.
+3. In both modes: check human approval/input boundaries, duplicate-click/late
+   response behavior, and interrupted recovery for the exercised combination.
+   Distinguish skipped, failed, and passed cases; publish no credentials or private
+   transcripts. Synthetic fixtures, the no-auth probe, and authenticated runs are
+   separate evidence categories, with no implied billed-token savings.
 
 ## Browser verification
 
