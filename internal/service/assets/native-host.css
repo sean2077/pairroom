@@ -187,7 +187,7 @@ body.workbench-native.native-chat{height:100vh;height:100dvh;overflow:hidden}
 .native-chat #connection{gap:6px}
 .native-chat #connection::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--muted)}
 .native-chat #connection[data-state=connected]::before{background:var(--wb-green,#1f6743)}
-.native-chat #connection[data-state=reconnecting]::before{background:var(--wb-amber,#7d5309)}
+.native-chat #connection[data-state=connecting]::before,.native-chat #connection[data-state=reconnecting]::before{background:var(--wb-amber,#7d5309)}
 .native-chat .header-actions button[aria-expanded=true]{background:var(--soft);border-color:var(--wb-line-strong,var(--line))}
 .native-chat .toolbar-actions button{min-height:28px;padding:3px 10px}
 /* The open participants column already shows each slot; the chip row is its collapsed form. */

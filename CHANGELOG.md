@@ -4,6 +4,10 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+### Fixed
+
+- Recover open Native Room views after temporary startup/session/snapshot failures and offline/online transitions without reloading or resending messages. Connection status describes the Service connection, drafts and original-ID recovery records survive, coalesced reads finish before controls unlock, and late startup/snapshot results cannot recreate streams or polling after leaving or restoring a page.
+
 ## [v5.11.1] — 2026-09-30
 
 ### Fixed
