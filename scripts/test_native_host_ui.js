@@ -54,7 +54,7 @@ function reportPages(limit = 3) {
   }
 }
 
-async function fixture({ uploadFailure = false, storage, receipts = new Map(), draft = true, manager = locks(), hang = '', receiptGate, transport } = {}) {
+async function fixture({ uploadFailure = false, storage, receipts = new Map(), draft = true, manager = locks(), hang = '', receiptGate, transport, sessionFailures = 0, snapshotFailures = 0, sessionGate, snapshotGate, expectReady = true } = {}) {
   const clock = timers();
   let hangNext = hang;
   if (!storage) { const values=new Map(); storage={getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)}; }
@@ -65,7 +65,8 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
   watchStatus($('status'), page);
   const document = { getElementById: $, createElement: tag => new Element(tag), createTextNode: text => Object.assign(new Element("#text"), {textContent:text}), addEventListener() {}, hidden: false, body: new Element('body'), querySelector: selector => selector === 'dialog[open]' ? null : $(selector), querySelectorAll: () => [] };
   $('target').value = 'slot2';
-  const reads = [], uploads = [], sends = [], uploadGate = deferred(), windowEvents = {}, streamEvents = {};
+  const reads = [], uploads = [], sends = [], uploadGate = deferred(), windowEvents = {}, streamEvents = {}, streams = [], intervals = new Map();
+  const sessions = []; let intervalID = 0, csrfToken = 'csrf';
   let failSend = true;
   const snapshot = {
     room: { id: 'room', name: 'Native', agents: { slot1: { runtime: 'codex' }, slot2: { runtime: 'claude' } } },
@@ -74,11 +75,11 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
   };
   if(transport)Object.assign(snapshot.relay,transport);
   const fetch = async (url, options) => {
-    if (url === 'api/v1/session') return response({ csrf_token: 'csrf' });
-    if (url.startsWith('api/v1/snapshot')) { reads.push(url); return response(snapshot); }
+    if (url === 'api/v1/session') { sessions.push(url); if (sessionGate) { const gate=sessionGate; sessionGate=null; await gate.promise; } if (sessionFailures-- > 0) throw Error('service unavailable'); return response({ csrf_token: csrfToken }); }
+    if (url.startsWith('api/v1/snapshot')) { reads.push(url); if (snapshotGate) { const gate=snapshotGate; snapshotGate=null; await gate.promise; } if (snapshotFailures-- > 0) throw Error('snapshot unavailable'); return response(snapshot); }
     if (url.startsWith('api/v1/pending')) return response({messages:[],total:0});
     if (url.startsWith('api/v1/sends/')) {if(receiptGate)await receiptGate.promise;const m=receipts.get(decodeURIComponent(url.split('/').pop()));return response({found:Boolean(m),message:m});}
-    assert.equal(options.headers.get('X-PairRoom-CSRF'), 'csrf');
+    assert.equal(options.headers.get('X-PairRoom-CSRF'), csrfToken);
     if (url === 'api/v1/attachments') {
       uploads.push(options.body); await uploadGate.promise;
       return response(uploadFailure ? { error: 'invalid image' } : { id: 'image' }, uploadFailure ? 400 : 200);
@@ -105,22 +106,133 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
     localStorage:storage,fetch, Headers, FormData, TextEncoder, crypto: webcrypto, URLSearchParams,
     navigator:{locks:manager}, AbortController, setTimeout:clock.setTimeout, clearTimeout:clock.clearTimeout,
     location: { hash: '', pathname: '/', search: '' }, history: { replaceState() {} },
-    EventSource: class { addEventListener(name, callback) { streamEvents[name]=callback; } close() {} }, setInterval: () => 1, clearInterval() {}, console
+    EventSource: class { constructor() { this.events={}; streams.push(this); } addEventListener(name, callback) { this.events[name]=callback; streamEvents[name]=callback; } close() { this.closed=true; } emit(name) { if (name === 'open') this.onopen?.(); else if (name === 'error') this.onerror?.(); else this.events[name]?.(); } },
+    setInterval: callback => { const id=++intervalID; intervals.set(id,callback); return id; }, clearInterval: id => intervals.delete(id), console
   });
   for (const source of ['../internal/webui/assets/native-outbox.js','../internal/webui/assets/richtext.js','../internal/service/assets/native-host.js'])
     vm.runInContext(fs.readFileSync(path.join(__dirname,source),'utf8'),context);
   await tick();
-  assert.ok(reads.length >= 1 && reads.every(p => p === 'api/v1/snapshot?tail=1'), 'unbounded history loaded during refresh');
-  assert.equal($('message-count').textContent, '5000');
-  assert.match($('messages').querySelector('.truncated-note').textContent, /1 \/ 5000$/);
+  if (expectReady) {
+    assert.ok(reads.length >= 1 && reads.every(p => p === 'api/v1/snapshot?tail=1'), 'unbounded history loaded during refresh');
+    assert.equal($('message-count').textContent, '5000');
+    assert.match($('messages').querySelector('.truncated-note').textContent, /1 \/ 5000$/);
+  }
   if(draft)$('message-text').value = 'review';
   if(draft)$('attachment').files = [new File(['image bytes'], 'image.png', { type: 'image/png' })];
   const submit = () => $('composer').events.submit({ preventDefault() {} });
   const storageEvent = () => windowEvents.storage({ key: 'pairroom.native.outbox.v1.room' });
-  return { $, reads, uploads, sends, uploadGate, submit, storage, receipts, clock, storageEvent, async updateDelivery(delivery) { snapshot.relay.delivery=delivery; snapshot.relay.sequence++; streamEvents.native(); clock.expire(250); await tick(); } };
+  return { $, reads, uploads, sends, sessions, streams, intervals, windowEvents, navigator:context.navigator,
+    rotateSession() { csrfToken = 'csrf-recovered'; },
+    failSnapshots(count=1) { snapshotFailures=count; }, blockSnapshot(gate) { snapshotGate=gate; }, poll() { for (const callback of intervals.values()) callback(); }, uploadGate, submit, storage, receipts, clock, storageEvent, async updateDelivery(delivery) { snapshot.relay.delivery=delivery; snapshot.relay.sequence++; streamEvents.native(); clock.expire(250); await tick(); } };
 }
 
 async function main() {
+  // Temporary startup/restart failures recover through read-only requests.
+  for (const failure of ['sessionFailures', 'snapshotFailures']) {
+    const page = await fixture({[failure]:1,expectReady:false,draft:false});
+    page.$('message-text').value = 'keep my draft';
+    assert.equal(page.$('connection').dataset.state, 'reconnecting');
+    assert.equal(page.clock.expire(500), 1, 'a failed first read must schedule recovery');
+    await tick();
+    assert.equal(page.streams.length, 1, 'startup did not recover without reload');
+    page.streams[0].emit('open');
+    assert.equal(page.$('connection').dataset.state, 'connected');
+    assert.equal(page.$('message-text').value, 'keep my draft');
+    assert.equal(page.sends.length, 0, 'reconnection must never publish');
+  }
+  // A late session/snapshot completion after leaving cannot resurrect the page.
+  for (const blocked of ['sessionGate', 'snapshotGate']) {
+    const gate = deferred();
+    const page = await fixture({[blocked]:gate,expectReady:false,draft:false});
+    page.windowEvents.pagehide({persisted:true});
+    await tick();
+    assert.equal(page.streams.length, 0, 'late startup created a stream after pagehide');
+    assert.equal(page.intervals.size, 0, 'late startup created a polling timer after pagehide');
+    page.windowEvents.pageshow({persisted:true});
+    page.windowEvents.pageshow({persisted:true});
+    await tick();
+    assert.equal(page.streams.length, 1, 'repeated restore created duplicate streams');
+    assert.equal(page.intervals.size, 1);
+    page.streams[0].emit('open');
+    gate.resolve(); await tick();
+    assert.equal(page.streams.length, 1, 'obsolete startup completed after the newer page');
+    assert.equal(page.$('connection').dataset.state, 'connected');
+  }
+  {
+    const page = await fixture({draft:false});
+    const first = page.streams[0]; first.emit('open');
+    page.failSnapshots(); page.poll(); await tick();
+    assert.equal(first.closed, true, 'failed fallback read retained a misleading live stream');
+    assert.equal(page.$('connection').dataset.state, 'reconnecting');
+    assert.equal(page.clock.expire(500), 1); await tick();
+    assert.equal(page.streams.length, 2);
+    page.streams[1].emit('open');
+    first.emit('error');
+    assert.equal(page.$('connection').dataset.state, 'connected', 'obsolete stream changed current state');
+    assert.equal(page.intervals.size, 1, 'reconnect leaked the old polling timer');
+    assert.equal(page.sends.length, 0);
+    page.windowEvents.pagehide({persisted:true});
+    assert.equal(page.clock.size, 0, 'leaving retained a refresh/reconnect/deadline timer');
+    assert.equal(page.intervals.size, 0);
+  }
+  {
+    const page = await fixture({sessionFailures:20,expectReady:false,draft:false});
+    for (const delay of [500,1000,2000,4000,8000,15000,15000]) {
+      assert.equal(page.clock.expire(delay), 1, 'connection recovery must use one bounded backoff');
+      await tick();
+      assert.equal(page.clock.size, 1, 'recovery scheduled duplicate timers');
+    }
+    page.windowEvents.pagehide({persisted:false});
+    assert.equal(page.clock.size, 0, 'leaving a failed startup retained recovery');
+  }
+  {
+    const page = await fixture({draft:false});
+    page.streams[0].emit('open');
+    page.navigator.onLine = false; page.windowEvents.offline();
+    assert.equal(page.$('connection').dataset.state, 'offline');
+    assert.equal(page.intervals.size, 0);
+    page.$('message-text').value = 'offline draft';
+    page.navigator.onLine = true;
+    page.windowEvents.online(); page.windowEvents.online(); await tick();
+    assert.equal(page.streams.length, 2, 'online events created duplicate streams');
+    page.streams[1].emit('open');
+    assert.equal(page.$('connection').dataset.state, 'connected');
+    assert.equal(page.$('message-text').value, 'offline draft');
+    assert.equal(page.sends.length, 0);
+  }
+  {
+    // A successful publication waits for the in-flight refresh and its
+    // follow-up snapshot instead of unlocking controls against stale state.
+    const page = await fixture({draft:false});
+    page.$('message-text').value = 'original'; await page.submit(); // response lost
+    const gate = deferred(); page.blockSnapshot(gate); page.poll();
+    const recovering = page.submit(); await tick();
+    assert.equal(page.$('send').disabled, true, 'shared refresh returned before its snapshot');
+    const reads = page.reads.length;
+    gate.resolve(); await recovering;
+    assert.equal(page.reads.length, reads + 1, 'acceptance requested a follow-up snapshot');
+    assert.equal(page.$('send').disabled, false);
+    assert.equal(page.sends.length, 2, 'only the explicit original-ID retry may publish');
+  }
+  {
+    const page = await fixture({draft:false});
+    page.$('message-text').value = 'uncertain original'; await page.submit();
+    const original = JSON.stringify(page.sends[0]);
+    page.rotateSession();
+    page.streams[0].emit('error');
+    assert.equal(page.clock.expire(500), 1); await tick();
+    page.windowEvents.online(); page.windowEvents.pageshow({persisted:true}); await tick();
+    assert.equal(page.sessions.length, 2, 'recovery must reacquire the browser session once');
+    assert.equal(page.streams.length, 2);
+    assert.equal(page.intervals.size, 1);
+    assert.equal(page.sends.length, 1, 'session refresh replayed an uncertain publication');
+    assert.equal(page.$('message-text').value, 'uncertain original');
+    assert.equal(page.$('outbox').hidden, false);
+    await page.submit(); // Explicit retry must use the renewed CSRF token.
+    assert.equal(page.sends.length, 2);
+    assert.equal(JSON.stringify(page.sends[1]), original, 'renewing session changed original-ID recovery');
+    assert.equal(page.$('outbox').hidden, true);
+  }
   const textTree = node => [node.textContent, ...node.children.map(textTree)].join(' ');
   const peerMessage = {id:'last',from:'slot1',to:'slot2',state:'unknown',text:'body',created_at:'2026-09-28T00:00:00Z'};
   const delivery = {queue_wait_ms:1250,reserved_at:'2026-09-28T00:00:00Z',inferred_outcome:{outcome:'submitted',at:'2026-09-28T00:00:01Z'},slot_observations:[{outcome:'suppressed',reason:'minimum_interval',at:'2026-09-28T00:00:00Z'}],slot_observation_count:5};
@@ -269,6 +381,6 @@ async function main() {
   assert.equal(idle.$('send').textContent, 'room.native.retryOriginal');
   const unsupported = await fixture({manager:null});unsupported.$('attachment').files=[];
   await unsupported.submit();assert.equal(unsupported.sends.length,0,'missing Web Locks allowed unsafe send');
-  console.log('Native UI: bounded reads, accurate totals, UTF-8 validation, single submission and immutable retry payload passed.');
+  console.log('Native UI: lifecycle recovery, bounded reads, accurate totals, UTF-8 validation, single submission and immutable retry payload passed.');
 }
 main().catch(error => { console.error(error); reportPages(); process.exitCode = 1; });

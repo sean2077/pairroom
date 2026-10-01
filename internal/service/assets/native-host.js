@@ -2,8 +2,13 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const tr = key => window.PairRoomI18n.t(`room.native.${key}`);
-  let csrf = '', snapshot = null, stream = null, pendingSend = null, foreignSend = null, refreshing = false, refreshAgain = false, sending = false;
+  let csrf = '', snapshot = null, stream = null, pendingSend = null, foreignSend = null, sending = false;
   const messageNodes = new Map();
+  let pageActive = true, pageEpoch = 0, startJob = null, refreshJob = null;
+  let reconnectTimer = null, reconnectAttempt = 0, refreshTimer = null, connectionState = 'connecting', connectionError = '';
+  const readControllers = new Set();
+  const currentPage = epoch => pageActive && epoch === pageEpoch;
+
   let bindingsKey = '', auditKey = '', attentionKey = '', activityTimer = null, messagesRendered = false;
   let outboxRoom = '', outboxBroken = false, pendingCursor = '', pendingNext = '', pendingKey = '', pendingRequest = 0;
   let historyNext = '', historyFilter = '', historyRequest = 0;
@@ -27,18 +32,21 @@
     if (csrf && options.method && options.method !== 'GET') headers.set('X-PairRoom-CSRF',csrf);
     // Bound both response headers and the JSON body. A timed-out POST remains
     // uncertain: its original outbox identity survives for explicit recovery.
-    // Only this deadline aborts the request, so report it as translated copy
-    // rather than the engine's AbortError text.
+    // Report the deadline as translated copy. Page teardown can separately
+    // abort observation reads; generation checks discard those completions.
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
+    const readOnly = !options.method || options.method === 'GET' || path === 'api/v1/session';
+    if (readOnly) readControllers.add(controller);
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 30000);
     try {
       const res = await fetch(path, {...options, headers, signal:controller.signal, cache:'no-store',credentials:'same-origin'});
       if (!res.ok) { let value = {}; try {value = await res.json();} catch (_) { /* not a JSON error */ } throw new Error(window.PairRoomI18n.errorMessage?.(value) || value.error || `${tr('error')} (${res.status})`); }
       return res.status === 204 ? null : await res.json();
     } catch (error) {
-      if (controller.signal.aborted) throw new Error(tr('requestTimeout'));
+      if (timedOut) throw new Error(tr('requestTimeout'));
       throw error;
-    } finally { clearTimeout(timeout); }
+    } finally { clearTimeout(timeout); readControllers.delete(controller); }
   }
   function handle(slot) { return (snapshot?.identities?.[slot]?.MentionHandle || snapshot?.identities?.[slot]?.mention_handle) || (slot === 'user' ? tr('user') : slot); }
   function readingPosition() {
@@ -100,6 +108,7 @@
   $('scroll-bottom').addEventListener('click', () => { $('messages').scrollTop = $('messages').scrollHeight; });
   function translations() {
     window.PairRoomI18n.apply(document);
+    renderConnection(connectionState);
     $('message-text').placeholder=tr('placeholder'); bindingsKey='';auditKey='';attentionKey='';pendingKey='';messageNodes.forEach(v=>{v.key='';});
     if (snapshot) { render(snapshot); renderOutbox(); }
   }
@@ -250,20 +259,20 @@
   }
   async function refreshPending(){
     const key=JSON.stringify([snapshot?.relay.sequence,pendingCursor,language()]);if(key===pendingKey)return;pendingKey=key;
-    const serial=++pendingRequest;
+    const serial=++pendingRequest, epoch=pageEpoch;
     try{
       const page=await request(`api/v1/pending?limit=10${pendingCursor?`&cursor=${encodeURIComponent(pendingCursor)}`:''}`);
-      if(serial!==pendingRequest)return;
+      if(!currentPage(epoch)||serial!==pendingRequest)return;
       pendingNext=page.next_cursor||'';$('pending-count').textContent=String(page.total);$('pending-next').disabled=!pendingNext;$('pending-first').disabled=!pendingCursor;$('pending-pager').hidden=!pendingNext&&!pendingCursor;
       pageMessages($('pending-items'),page.messages,'pending',page.delivery);
-    }catch(e){if(serial===pendingRequest)pendingKey='';throw e;}
+    }catch(e){if(!currentPage(epoch)||serial!==pendingRequest)return;pendingKey='';throw e;}
   }
   $('pending-first').addEventListener('click',()=>{pendingCursor='';pendingKey='';refreshPending().catch(e=>status(e.message,true));});
   $('pending-next').addEventListener('click',()=>{pendingCursor=pendingNext;refreshPending().catch(e=>status(e.message,true));});
   async function loadHistory(cursor=''){
-    const serial=++historyRequest;
+    const serial=++historyRequest, epoch=pageEpoch;
     const page=await request(`api/v1/history?limit=20${historyFilter}${cursor?`&cursor=${encodeURIComponent(cursor)}`:''}`);
-    if(serial!==historyRequest)return;
+    if(!currentPage(epoch)||serial!==historyRequest)return;
     historyNext=page.next_cursor||'';$('history-next').hidden=!historyNext;pageMessages($('history-items'),page.messages,'history',page.delivery);
   }
   function inspectMessage(id){showInspector(true);$('history-panel').open=true;$('history-id').value=id;$('history-since').value='';historyFilter=`&id=${encodeURIComponent(id)}`;loadHistory().then(()=>$('history-panel').scrollIntoView({block:'nearest'})).catch(e=>status(e.message,true));}
@@ -337,11 +346,79 @@
     $('audit').replaceChildren(...(value.relay.audit||[]).slice(-80).reverse().map(a=>{const li=element('li');li.append(element('strong',auditNames[a.kind]?tr(auditNames[a.kind]):a.kind),element('time',time(a.at)));const detail=auditDetail(a);if(detail)li.append(element('p',detail));return li;}));
   }
   function render(value){snapshot=value;restoreOutbox();renderAttention(value);refreshPending().catch(e=>status(e.message,true));$('room-name').textContent=value.room.name;document.title=`${value.room.name} · PairRoom Native`;renderBindings(value);renderMessages(value);renderDelivery(value);renderAudit(value);}
-  async function refresh(){if(refreshing){refreshAgain=true;return;}refreshing=true;try{do{refreshAgain=false;const value=await request('api/v1/snapshot?tail=1');if(!snapshot || value.relay.sequence>=snapshot.relay.sequence)render(value);}while(refreshAgain);}finally{refreshing=false;}}
+  function renderConnection(value) {
+    connectionState = value;
+    $('connection').textContent = tr(value);
+    $('connection').dataset.state = value;
+    $('connection').title = tr('connectionHelp');
+  }
+  function closeConnection() {
+    stream?.close(); stream = null;
+    if (activityTimer !== null) clearInterval(activityTimer);
+    activityTimer = null;
+    if (refreshTimer !== null) clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
+  function clearReconnect() {
+    if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  function scheduleReconnect() {
+    if (!pageActive) return;
+    if (navigator.onLine === false) { renderConnection('offline'); return; }
+    renderConnection('reconnecting');
+    if (reconnectTimer !== null) return;
+    const epoch = pageEpoch;
+    const delay = Math.min(15000, 500 * (2 ** Math.min(reconnectAttempt++, 5)));
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (currentPage(epoch)) void start();
+    }, delay);
+  }
+  function connectionFailed(error) {
+    closeConnection();
+    connectionError = error.message;
+    status(connectionError, true);
+    scheduleReconnect();
+  }
+  function refresh() {
+    if (!pageActive) return Promise.resolve();
+    // Every caller waits for the coalesced read, including a follow-up read
+    // requested during an in-flight snapshot. Controls must not unlock early.
+    if (refreshJob?.epoch === pageEpoch) { refreshJob.again = true; return refreshJob.promise; }
+    const job = { epoch: pageEpoch, again: false, promise: null };
+    refreshJob = job;
+    job.promise = (async () => {
+      try {
+        do {
+          job.again = false;
+          const value = await request('api/v1/snapshot?tail=1');
+          if (!currentPage(job.epoch)) return;
+          if (!snapshot || value.relay.sequence >= snapshot.relay.sequence) render(value);
+        } while (job.again);
+      } catch (error) {
+        if (!currentPage(job.epoch)) return;
+        connectionFailed(error);
+        throw error;
+      } finally { if (refreshJob === job) refreshJob = null; }
+    })();
+    return job.promise;
+  }
   // Reconnects and a return to a visible tab can follow missed SSE nudges.
-  let refreshTimer=null;
-  function scheduleRefresh(){if(refreshTimer)return;refreshTimer=setTimeout(()=>{refreshTimer=null;refresh().catch(e=>status(e.message,true));},250);}
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&csrf)scheduleRefresh();});
+  function scheduleRefresh() {
+    if (!pageActive || refreshTimer !== null) return;
+    const epoch = pageEpoch;
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null;
+      if (currentPage(epoch)) refresh().catch(() => {});
+    }, 250);
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && pageActive) {
+      if (stream) scheduleRefresh();
+      else void start();
+    }
+  });
   function lockComposer(){
     // The Room id scopes the recovery record, so publication stays locked until
     // the first snapshot identifies it; a click can never be silently dropped.
@@ -437,13 +514,60 @@
   $('message-text').addEventListener('input',()=>{if(foreignSend&&!sending&&!localDraft(foreignSend))readoptOutbox();});
   $('attachment').addEventListener('change',lockComposer);
   document.addEventListener('pairroom:lang',translations);
-  async function start(){
-    translations();lockComposer();try{
-      const token=new URLSearchParams(location.hash.slice(1)).get('token');
-      if(token){const session=await request('api/v1/session',{method:'POST',headers:{Authorization:`Bearer ${token}`}});csrf=session.csrf_token;history.replaceState(null,'',location.pathname+location.search);}
-      else{const session=await request('api/v1/session');csrf=session.csrf_token;}
-      await refresh();stream=new EventSource('api/v1/events');stream.addEventListener('native',()=>{refresh().catch(e=>status(e.message,true));});activityTimer=setInterval(()=>{if(!document.hidden)refresh().catch(()=>{});},15000);stream.onopen=()=>{$('connection').textContent=tr('connected');$('connection').dataset.state='connected';scheduleRefresh();};stream.onerror=()=>{$('connection').textContent=tr('reconnecting');$('connection').dataset.state='reconnecting';};
-    }catch(e){status(e.message,true);}
+  function start() {
+    if (!pageActive) return Promise.resolve();
+    if (navigator.onLine === false) { renderConnection('offline'); return Promise.resolve(); }
+    if (startJob?.epoch === pageEpoch) return startJob.promise;
+    // Repeated visibility/pageshow events reuse the existing connection.
+    if (stream) { scheduleRefresh(); return Promise.resolve(); }
+    clearReconnect();
+    closeConnection();
+    renderConnection(snapshot || reconnectAttempt ? 'reconnecting' : 'connecting');
+    const job = { epoch: pageEpoch, promise: null };
+    startJob = job;
+    job.promise = (async () => {
+      try {
+        const token = new URLSearchParams(location.hash.slice(1)).get('token');
+        const session = await request('api/v1/session', token ? {method:'POST',headers:{Authorization:`Bearer ${token}`}} : {});
+        if (!currentPage(job.epoch)) return;
+        csrf = session.csrf_token;
+        if (token) history.replaceState(null, '', location.pathname + location.search);
+        await refresh();
+        if (!currentPage(job.epoch) || navigator.onLine === false) return;
+        const source = new EventSource('api/v1/events');
+        stream = source;
+        const current = () => currentPage(job.epoch) && stream === source;
+        source.addEventListener('native', () => { if (current()) scheduleRefresh(); });
+        source.onopen = () => {
+          if (!current()) return;
+          reconnectAttempt = 0;
+          renderConnection('connected');
+          if (connectionError && $('status').textContent === connectionError) status('');
+          connectionError = '';
+          scheduleRefresh();
+        };
+        source.onerror = () => { if (current()) { closeConnection(); scheduleReconnect(); } };
+        activityTimer = setInterval(() => { if (current() && !document.hidden) refresh().catch(() => {}); }, 15000);
+      } catch (error) { if (currentPage(job.epoch)) connectionFailed(error); }
+      finally { if (startJob === job) startJob = null; }
+    })();
+    return job.promise;
   }
-  window.addEventListener('pagehide',()=>{stream?.close();clearInterval(activityTimer);});window.addEventListener('pageshow',event=>{if(event.persisted)start();});start();
+  window.addEventListener('offline', () => { closeConnection(); clearReconnect(); renderConnection('offline'); });
+  window.addEventListener('online', () => { if (pageActive) void start(); });
+  window.addEventListener('pagehide', () => {
+    pageActive = false; ++pageEpoch;
+    closeConnection(); clearReconnect();
+    // Only observations are aborted. An in-flight publication keeps its
+    // original outbox identity and is never replayed by connection recovery.
+    for (const controller of readControllers) controller.abort();
+    readControllers.clear();
+    ++pendingRequest; ++historyRequest; pendingKey = '';
+  });
+  window.addEventListener('pageshow', event => {
+    if (!event.persisted) return;
+    pageActive = true;
+    void start();
+  });
+  translations(); lockComposer(); void start();
 })();
