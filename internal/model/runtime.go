@@ -14,6 +14,7 @@ const (
 	RuntimeClaude RuntimeKind = "claude"
 	RuntimeCodex  RuntimeKind = "codex"
 	RuntimeGrok   RuntimeKind = "grok"
+	RuntimeGemini RuntimeKind = "gemini"
 )
 
 func ParseRuntimeKind(value string) RuntimeKind {
@@ -24,6 +25,8 @@ func ParseRuntimeKind(value string) RuntimeKind {
 		return RuntimeCodex
 	case "grok", "grok-build", "grok_build", "grokbuild":
 		return RuntimeGrok
+	case "gemini", "gemini-cli", "gemini_cli", "geminicli":
+		return RuntimeGemini
 	case "":
 		return ""
 	default:
@@ -33,7 +36,7 @@ func ParseRuntimeKind(value string) RuntimeKind {
 
 func (k RuntimeKind) Valid() bool {
 	switch k.Canonical() {
-	case RuntimeClaude, RuntimeCodex, RuntimeGrok:
+	case RuntimeClaude, RuntimeCodex, RuntimeGrok, RuntimeGemini:
 		return true
 	default:
 		return false
@@ -62,6 +65,8 @@ func (k RuntimeKind) DefaultCommand() string {
 		return "codex"
 	case RuntimeGrok:
 		return "grok"
+	case RuntimeGemini:
+		return "gemini"
 	default:
 		return "claude"
 	}
@@ -73,6 +78,8 @@ func (k RuntimeKind) DisplayName() string {
 		return "Codex"
 	case RuntimeGrok:
 		return "Grok Build"
+	case RuntimeGemini:
+		return "Gemini CLI"
 	default:
 		return "Claude Code"
 	}
@@ -84,6 +91,8 @@ func (k RuntimeKind) ProviderAgentType() string {
 		return "codex"
 	case RuntimeGrok:
 		return "grok"
+	case RuntimeGemini:
+		return "gemini"
 	default:
 		return "claudecode"
 	}

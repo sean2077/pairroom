@@ -104,7 +104,7 @@ func runPreflight(ctx context.Context, o options, out io.Writer) error {
 	case report.Caller.Runtime != "":
 		selected = []model.RuntimeKind{model.RuntimeKind(report.Caller.Runtime)}
 	default:
-		selected = []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok}
+		selected = []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok, model.RuntimeGemini}
 	}
 	// A chosen runtime needs its own hook; with none chosen, any one installed
 	// harness is enough to proceed.
@@ -209,7 +209,10 @@ func preflightNativeCaller(root string) preflightCaller {
 	}
 	if !result.InSession {
 		result.Status = checkWarn
-		result.Hint = "No native session identity here. That is fine for preflight, but bind must run as the Agent's own tool call inside its Claude Code, Codex or Grok Build session (not a plain terminal or Grok's ! shell)."
+		result.Hint = "No native session identity here. That is fine for preflight, but bind must run as the Agent's own tool call inside its Claude Code, Codex, Grok Build or Gemini CLI session (not a plain terminal or Grok's ! shell)."
+		if caller.runtime == model.RuntimeGemini {
+			result.Hint = "Gemini bind needs its approved BeforeTool hook: install --runtime gemini, review /hooks panel and project trust, restart, then ask the agent to run a direct pairroom relay command (no cd or shell wrapper). Never set a session ID manually."
+		}
 		return result
 	}
 	if root == "" {
@@ -285,7 +288,7 @@ func preflightServiceState(ctx context.Context, endpointPath, root string) prefl
 		}
 		result.ProjectRegistered = true
 		for _, room := range snapshot.Rooms {
-			if room.ProjectID == project.ID && room.HostMode == model.HostNative && room.Lifecycle == roomLifecycleActive {
+			if room.ProjectID == project.ID && room.Lifecycle == roomLifecycleActive && room.HostMode == model.HostNative {
 				result.ActiveNativeRooms++
 			}
 		}
@@ -322,11 +325,19 @@ func preflightHookState(root string, kind model.RuntimeKind) preflightHook {
 		hook.Status = "missing"
 		hook.Hint = install
 	}
+	if kind == model.RuntimeGemini {
+		hook.Detail = "BeforeTool identity bridge and AfterAgent relay, each with a 45000 ms timeout"
+		if disabled {
+			hook.Hint = "Gemini relay hooks are disabled; review hooksConfig.enabled and hooksConfig.disabled in /hooks panel. PairRoom does not enable hooks or grant trust."
+		}
+	}
 	return hook
 }
 
 func approvalPlace(kind model.RuntimeKind) string {
 	switch kind {
+	case model.RuntimeGemini:
+		return "Gemini CLI: /hooks panel and project trust; restart after installation"
 	case model.RuntimeCodex:
 		return "Codex: /hooks"
 	case model.RuntimeGrok:

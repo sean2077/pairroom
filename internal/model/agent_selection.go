@@ -98,12 +98,16 @@ func (s AgentSelection) Validate(actor ActorID) error {
 	}
 	s = s.Normalized(actor)
 	if !s.Runtime.Valid() {
-		return fmt.Errorf("invalid runtime %q: use claude, codex, or grok", s.Runtime)
+		return fmt.Errorf("invalid runtime %q: use claude, codex, grok, or gemini (Native only)", s.Runtime)
 	}
 	if err := s.Provider.ValidateForRuntime(s.Runtime); err != nil {
 		return err
 	}
 	switch s.Runtime.Canonical() {
+	case RuntimeGemini:
+		if s.Provider.Source != ProviderNative || s.PermissionMode != "" || s.ApprovalPolicy != "" || s.Sandbox != "" {
+			return errors.New("Gemini CLI is Native-only: configure providers and permissions in the user-owned Gemini session")
+		}
 	case RuntimeClaude:
 		if s.ApprovalPolicy != "" || s.Sandbox != "" {
 			return errors.New("Claude Code selections support permission_mode but not approval_policy or sandbox")

@@ -101,6 +101,8 @@ func MockFactory(cfg Config, sink EventSink) Adapter {
 
 func FactoryFor(kind model.RuntimeKind) Factory {
 	switch kind.Canonical() {
+	case model.RuntimeGemini:
+		return nativeOnlyFactory
 	case model.RuntimeCodex:
 		return CodexFactory
 	case model.RuntimeGrok:

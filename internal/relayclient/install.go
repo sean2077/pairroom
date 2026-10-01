@@ -26,6 +26,7 @@ var installRuntimeChoices = []struct {
 	{model.RuntimeCodex, "Codex"},
 	{model.RuntimeClaude, "Claude Code (cc)"},
 	{model.RuntimeGrok, "Grok Build"},
+	{model.RuntimeGemini, "Gemini CLI (Native only)"},
 }
 
 func parseRuntimeToken(token string) (model.RuntimeKind, bool) {
@@ -36,6 +37,8 @@ func parseRuntimeToken(token string) (model.RuntimeKind, bool) {
 		return model.RuntimeCodex, true
 	case "grok", "grok-build", "grokbuild":
 		return model.RuntimeGrok, true
+	case "gemini", "gemini-cli", "gemini_cli", "geminicli":
+		return model.RuntimeGemini, true
 	}
 	return "", false
 }
@@ -49,7 +52,7 @@ func parseRuntimeList(value string) ([]model.RuntimeKind, error) {
 	for _, field := range fields {
 		kind, ok := parseRuntimeToken(field)
 		if !ok {
-			return nil, fmt.Errorf("unknown --runtime %q; choose claude (cc), codex, or grok", field)
+			return nil, fmt.Errorf("unknown --runtime %q; choose claude (cc), codex, grok, or gemini", field)
 		}
 		if !seen[kind] {
 			seen[kind] = true
@@ -95,10 +98,10 @@ func promptInstallRuntimes(in io.Reader, diagnostic io.Writer) ([]model.RuntimeK
 	fmt.Fprint(diagnostic, "Select: ")
 	line, err := readLine(in)
 	if err != nil {
-		return nil, errors.New("could not read the selection; rerun pairroom relay install or pass --runtime claude|codex|grok")
+		return nil, errors.New("could not read the selection; rerun pairroom relay install or pass --runtime claude|codex|grok|gemini")
 	}
 	if strings.TrimSpace(line) == "" {
-		return nil, errors.New("no harness selected; rerun pairroom relay install or pass --runtime claude|codex|grok")
+		return nil, errors.New("no harness selected; rerun pairroom relay install or pass --runtime claude|codex|grok|gemini")
 	}
 	var resolved []string
 	for _, token := range strings.FieldsFunc(line, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
@@ -119,15 +122,17 @@ func selectInstallRuntimes(flagValue string, in io.Reader, diagnostic io.Writer)
 	if strings.TrimSpace(flagValue) != "" {
 		return parseRuntimeList(flagValue)
 	}
-	if _, name, ok := harnessAncestor(); ok {
-		if kind, isHarness := harnessRuntimes[name]; isHarness {
-			return []model.RuntimeKind{kind}, nil
-		}
+	caller, err := currentNativeCaller()
+	if err != nil {
+		return nil, err
+	}
+	if caller.runtime != "" {
+		return []model.RuntimeKind{caller.runtime}, nil
 	}
 	if stdinIsTTY(in) {
 		return promptInstallRuntimes(in, diagnostic)
 	}
-	return nil, errors.New("install needs --runtime claude|codex|grok (comma-separated) when run non-interactively outside a native session; inside a terminal it prompts, and inside a recognized session it infers the harness")
+	return nil, errors.New("install needs --runtime claude|codex|grok|gemini (comma-separated) when run non-interactively outside a native session; inside a terminal it prompts, and inside a recognized session it infers the harness")
 }
 
 const grokSharesClaudeHooksNotice = "Grok Build reuses Claude Code project hooks by default, so PairRoom does not write a second Grok hook file when a Claude Code PairRoom Stop hook is present or being installed, and it removes PairRoom's extra Grok Stop hook if that leftover file is still there. Review the Claude Code project hook; Grok's /hooks (press r to reload) still shows that reused definition, and folder trust remains a human decision. If Claude-hook compatibility is disabled ([compat.claude] hooks = false or GROK_CLAUDE_HOOKS_ENABLED=false), install Grok with that compatibility off so PairRoom writes .grok/hooks/pairroom.json."
@@ -192,7 +197,7 @@ func runInstall(root string, kinds []model.RuntimeKind, _ io.Reader, out, _ io.W
 			removed = append(removed, string(model.RuntimeGrok))
 		}
 	}
-	notice := "Review and approve the exact project hook in each harness (Codex: /hooks; Grok: /hooks, press r to reload, then review project folder trust; Claude Code: project hook consent). This command does not grant native trust. Keep pairroom on PATH. Real authenticated bidirectional E2E remains release-gated."
+	notice := "Review and approve the exact project hook in each harness (Codex: /hooks; Grok: /hooks, press r to reload, then review project folder trust; Claude Code: project hook consent; Gemini CLI: /hooks panel and project trust, restart after installation). This command does not grant native trust. Keep pairroom on PATH. Real authenticated bidirectional E2E remains release-gated."
 	if len(skipped) > 0 || len(removed) > 0 {
 		notice = grokSharesClaudeHooksNotice + " " + notice
 	}
@@ -225,8 +230,10 @@ func hookPath(root string, kind model.RuntimeKind) (string, error) {
 		return filepath.Join(root, ".codex", "hooks.json"), nil
 	case model.RuntimeGrok:
 		return filepath.Join(root, ".grok", "hooks", "pairroom.json"), nil
+	case model.RuntimeGemini:
+		return filepath.Join(root, ".gemini", "settings.json"), nil
 	default:
-		return "", errors.New("native relay supports Claude Code, Codex and Grok Build")
+		return "", errors.New("native relay supports Claude Code, Codex, Grok Build and Gemini CLI")
 	}
 }
 func readHooks(path string) (map[string]any, error) {
@@ -259,6 +266,9 @@ func ownRelayStopHook(root string, kind model.RuntimeKind) (present, disabled bo
 	if err != nil {
 		return false, false, err
 	}
+	if kind == model.RuntimeGemini {
+		return geminiHooksPresent(config)
+	}
 	if disabled, _ := config["disableAllHooks"].(bool); disabled {
 		return false, true, nil
 	}
@@ -283,6 +293,9 @@ func installed(root string, kind model.RuntimeKind) error {
 	present, disabled, err := ownRelayStopHook(root, kind)
 	if err != nil {
 		return err
+	}
+	if kind == model.RuntimeGemini && (disabled || !present) {
+		return errors.New("Gemini relay needs enabled BeforeTool and AfterAgent hooks: run pairroom relay install --runtime gemini, review /hooks panel and project trust, then restart Gemini; installation never grants approval")
 	}
 	if disabled {
 		return errors.New("hooks are disabled; native association requires an approved Stop hook")
@@ -313,6 +326,9 @@ func hookNotRunHint(s State) string {
 	if s.LastHookAt != "" {
 		return ""
 	}
+	if s.Runtime == model.RuntimeGemini {
+		return "No AfterAgent hook has run for this binding yet. After a completed turn, check Gemini /hooks panel, project trust, and restart after installing hooks."
+	}
 	return fmt.Sprintf("No Stop hook has run for this binding yet. Expected until a turn finishes after bind; if one has, the hook is probably not approved or not loaded: review it (%s).", approvalPlace(s.Runtime))
 }
 
@@ -342,6 +358,9 @@ func editHooks(root string, kind model.RuntimeKind, remove bool) error {
 		hooks = map[string]any{}
 	}
 	events := []string{"Stop"}
+	if kind == model.RuntimeGemini {
+		events = []string{"BeforeTool", "AfterAgent"}
+	}
 	if kind == model.RuntimeClaude || kind == model.RuntimeGrok {
 		events = append(events, "StopFailure")
 	}
@@ -373,7 +392,11 @@ func editHooks(root string, kind model.RuntimeKind, remove bool) error {
 			}
 		}
 		if !remove {
-			kept = append(kept, map[string]any{"hooks": []any{map[string]any{"type": "command", "command": hookCommand(kind), "timeout": 45}}})
+			group := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": hookCommand(kind), "timeout": 45}}}
+			if kind == model.RuntimeGemini {
+				group = geminiHookGroup(event)
+			}
+			kept = append(kept, group)
 		}
 		if len(kept) == 0 {
 			delete(hooks, event)
@@ -425,11 +448,15 @@ func skillHome(kind model.RuntimeKind) (string, error) {
 		model.RuntimeClaude: "CLAUDE_CONFIG_DIR",
 		model.RuntimeCodex:  "CODEX_HOME",
 		model.RuntimeGrok:   "GROK_HOME",
+		model.RuntimeGemini: "GEMINI_CLI_HOME",
 	}[kind]
 	if homeVar == "" {
 		return "", errors.New("unsupported native skill runtime")
 	}
 	if home := os.Getenv(homeVar); home != "" {
+		if kind == model.RuntimeGemini {
+			home = filepath.Join(home, ".gemini")
+		}
 		return filepath.Join(home, "skills", "pairroom-relay"), nil
 	}
 	home, err := os.UserHomeDir()
@@ -466,6 +493,7 @@ func installSkill(kind model.RuntimeKind) error {
 		model.RuntimeClaude: "CLAUDE_CONFIG_DIR",
 		model.RuntimeCodex:  "CODEX_HOME",
 		model.RuntimeGrok:   "GROK_HOME",
+		model.RuntimeGemini: "GEMINI_CLI_HOME",
 	}[kind]
 	if homeVar == "" {
 		return errors.New("unsupported native skill runtime")
@@ -480,6 +508,10 @@ func installSkill(kind model.RuntimeKind) error {
 		}
 		parts = append([]string{"." + string(kind)}, parts...)
 	} else {
+		if kind == model.RuntimeGemini {
+			// GEMINI_CLI_HOME overrides HOME, not the .gemini directory.
+			parts = append([]string{".gemini"}, parts...)
+		}
 		home, err = filepath.Abs(home)
 		if err != nil {
 			return err

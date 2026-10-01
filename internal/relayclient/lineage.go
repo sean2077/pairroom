@@ -23,6 +23,7 @@ var harnessRuntimes = map[string]model.RuntimeKind{
 	"claude": model.RuntimeClaude,
 	"codex":  model.RuntimeCodex,
 	"grok":   model.RuntimeGrok,
+	"gemini": model.RuntimeGemini,
 }
 
 // sessionEnvVars maps a native runtime to the environment variable its official
@@ -31,11 +32,14 @@ var harnessRuntimes = map[string]model.RuntimeKind{
 // (openai/codex codex-rs/core/src/exec_env.rs); Grok sets GROK_SESSION_ID.
 // bind reads it to associate the official session immediately, without the
 // former nonce echo round-trip. The approved Stop hook later reports the same
-// id, which the Service re-checks.
+// id, which the Service re-checks. Gemini only exposes its session ID to
+// hooks; the approved BeforeTool hook forwards it to direct relay tool calls
+// through geminiSessionEnv. Never use transcript or workspace-global discovery.
 var sessionEnvVars = map[model.RuntimeKind]string{
 	model.RuntimeClaude: "CLAUDE_CODE_SESSION_ID",
 	model.RuntimeCodex:  "CODEX_SESSION_ID",
 	model.RuntimeGrok:   "GROK_SESSION_ID",
+	model.RuntimeGemini: geminiSessionEnv,
 }
 
 // sessionIDFromEnv returns the official session id the harness exposed to this

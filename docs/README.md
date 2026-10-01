@@ -10,7 +10,7 @@ Documentation on `main` tracks development, which may be ahead of the package yo
 |---|---|---|
 | New to PairRoom or the tool names | [Overview](../README.md) → [Core concepts](CONCEPTS.md) → [Why PairRoom](WHY_PAIRROOM.md) | Knowing whether Native or Embedded suits you |
 | Try the interface without a model account | [Installation](INSTALLATION.md) → [Getting started](GETTING_STARTED.md) | A throwaway Mock Room in Embedded mode (no real model involved) |
-| Connect two existing coding sessions | [Agent-assisted setup](AGENT_SETUP.md) → [Native relay](NATIVE_RELAY.md) | Both sessions bound, and a Stop hook seen running in each |
+| Connect two existing coding sessions | [Agent-assisted setup](AGENT_SETUP.md) → [Native relay](NATIVE_RELAY.md) | Both sessions bound, and a turn-end hook seen running in each (Gemini: AfterAgent) |
 | Change versions or investigate stalled work | [Upgrading](UPGRADING.md) or [Troubleshooting](TROUBLESHOOTING.md) → [Operations](OPERATIONS.md) | A specific recovery step that keeps state and does not replay work |
 
 None of these paths requires reading the technical contracts below.
@@ -25,6 +25,7 @@ None of these paths requires reading the technical contracts below.
 | Let a coding Agent install and check the environment step by step | [Agent-assisted setup](AGENT_SETUP.md) |
 | First Mock/Embedded Room and review-first task recipes | [Getting started](GETTING_STARTED.md) |
 | Native install, create/join, publication, wake, UI, and recovery | [Native relay](NATIVE_RELAY.md) |
+| Gemini CLI hook identity, AfterAgent continuation, and Native-only limits | [Gemini CLI integration](GEMINI_NATIVE.md) |
 | Native cwd/worktree identity and locator recovery | [Native session workspace discovery](NATIVE_SESSION_WORKSPACE.md) |
 | Tool names, host modes, Bindings, responsibilities, controls, and receipts | [Core concepts](CONCEPTS.md) |
 | Agent selections, Provider references, permissions, and saved pairs | [Configuration](CONFIGURATION.md) |
@@ -60,7 +61,7 @@ CLI/API/config inventories are source-derived gap checks, not substitutes for fi
 
 ## Design and validation history
 
-[Design records](design/README.md) distinguish implemented rationale from superseded plans. They are not a second setup manual. [Validation records](validation/README.md) are dated evidence tied to their recorded environment; neither old measurements nor synthetic tests certify the current vendor combination.
+[Design records](design/README.md) distinguish implemented rationale from superseded plans. [Validation records](validation/README.md) are dated evidence tied to their recorded environment; neither old measurements nor synthetic tests certify the current vendor combination.
 
 Keep published historical evidence intact. When a completed plan is retired, preserve the decision and a pinned historical source rather than leaving future-tense instructions active. Review external comparisons against their stated date/revision, not as an undated capability guarantee.
 

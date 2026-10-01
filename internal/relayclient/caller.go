@@ -24,7 +24,7 @@ type nativeCallerTest interface {
 // tests can install an exact caller fixture. Production code never calls this.
 func IsolateNativeCaller(t nativeCallerTest) {
 	t.Helper()
-	for _, key := range []string{"CLAUDE_PROJECT_DIR", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "GROK_SESSION_ID", "CLAUDECODE", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME"} {
+	for _, key := range []string{"CLAUDE_PROJECT_DIR", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "GROK_SESSION_ID", "CLAUDECODE", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME", "GEMINI_CLI", "GEMINI_SESSION_ID", "GEMINI_CLI_HOME", geminiSessionEnv} {
 		t.Setenv(key, "")
 	}
 	// os.UserConfigDir uses these platform-specific anchors. Isolate locators
@@ -55,12 +55,24 @@ func currentNativeCaller() (nativeCaller, error) {
 		{model.RuntimeClaude, "CLAUDE_CODE_SESSION_ID"},
 		{model.RuntimeCodex, "CODEX_SESSION_ID"},
 		{model.RuntimeGrok, "GROK_SESSION_ID"},
+		{model.RuntimeGemini, geminiSessionEnv},
 	}
 	// Prefer the nearest recognized harness over inherited outer-harness
 	// variables. Never choose arbitrarily between multiple unscoped hints.
 	var nearest model.RuntimeKind
 	if _, name, ok := harnessAncestor(); ok {
 		nearest = harnessRuntimes[name]
+	}
+	// Gemini is normally a Node process, so GEMINI_CLI is its official shell
+	// marker. A conflicting recognized ancestor is ambiguous; never bind an
+	// outer Claude/Codex session using metadata inherited by Gemini (or vice versa).
+	if os.Getenv("GEMINI_CLI") == "1" {
+		if nearest != "" && nearest != model.RuntimeGemini {
+			return nativeCaller{}, errors.New("conflicting Gemini and ancestor harness metadata; run relay commands in separate native sessions")
+		}
+		nearest = model.RuntimeGemini
+	} else if os.Getenv(geminiSessionEnv) != "" {
+		return nativeCaller{}, errors.New("Gemini relay metadata requires the official GEMINI_CLI shell environment")
 	}
 	caller := nativeCaller{runtime: nearest}
 	for _, v := range vars {

@@ -14,6 +14,9 @@ func NativeBootstrap(actor model.ActorID, selfRuntime, peerRuntime model.Runtime
 	if selfRuntime == model.RuntimeGrok {
 		stop = "Grok clips hook text: prefer relay send/exchange for long replies. Hook blocks prompt relay wait; collect full input with that tool."
 	}
+	if selfRuntime == model.RuntimeGemini {
+		stop = "AfterAgent relays your full visible reply. Use direct pairroom relay commands in run_shell_command; BeforeTool supplies session identity. No external wake: collect with foreground wait when needed."
+	}
 	return fmt.Sprintf(`You: %s (%s); peer: %s (%s).
 [PairRoom message] names the sender. Human instructions win; native/project permissions apply. PairRoom owns FIFO/audit, not processes; turns are advisory.
 Mention %s only when another reply is needed. %s No peer handle ends relay; @user alone asks the human; peer wins over @user.
@@ -33,7 +36,7 @@ func ResolveNative(selection Selection) (Contract, error) {
 		case "delivery.single-turn":
 			c.Rules[i].Text = "Native hosting does not own processes. Single Owner Turn is advisory; per-slot durable FIFO, binding uniqueness and append-only audit are enforced."
 		case "output.verbatim":
-			c.Rules[i].Text = "Stop hooks publish complete visible responses for relay or @user; clipped Grok replies require explicit send/exchange. No vendor transcript is parsed or mirrored."
+			c.Rules[i].Text = "Stop hooks (Gemini: AfterAgent) publish complete visible responses for relay or @user; clipped Grok replies require explicit send/exchange. No vendor transcript is parsed or mirrored."
 		case "observability.inspector":
 			c.Rules[i].Text = "The Room records relay, bindings, failures, publication gaps and lifecycle, not full native tool activity."
 		}

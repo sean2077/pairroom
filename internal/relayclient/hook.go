@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -34,11 +35,20 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		return errors.New("official hook payload exceeds limit")
 	}
 	kind := model.RuntimeKind(o.kind)
-	if kind != model.RuntimeClaude && kind != model.RuntimeCodex && kind != model.RuntimeGrok {
-		return errors.New("hook requires --runtime claude|codex|grok")
+	if kind != model.RuntimeClaude && kind != model.RuntimeCodex && kind != model.RuntimeGrok && kind != model.RuntimeGemini {
+		return errors.New("hook requires --runtime claude|codex|grok|gemini")
 	}
 	requested := kind
-	hook, err := decodeNativeHook(data, kind == model.RuntimeGrok)
+	var hook HookInput
+	if kind == model.RuntimeGemini {
+		var immediate map[string]any
+		hook, immediate, err = decodeGeminiHook(data, runtime.GOOS == "windows")
+		if err == nil && immediate != nil {
+			return writeJSON(out, immediate)
+		}
+	} else {
+		hook, err = decodeNativeHook(data, kind == model.RuntimeGrok)
+	}
 	if err != nil {
 		return err
 	}
@@ -389,7 +399,11 @@ func deliverOnce(ctx context.Context, c *Client, hook bool, seconds int, out io.
 		if err != nil {
 			return false, err
 		}
-		if err := writeJSON(out, map[string]string{"decision": "block", "reason": claim.Envelope}); err != nil {
+		decision := "block"
+		if c.State.Runtime == model.RuntimeGemini {
+			decision = "deny" // Gemini AfterAgent continuation; not external wake.
+		}
+		if err := writeJSON(out, map[string]string{"decision": decision, "reason": claim.Envelope}); err != nil {
 			return false, err
 		}
 	} else {
