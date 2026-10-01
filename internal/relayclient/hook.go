@@ -34,11 +34,19 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		return errors.New("official hook payload exceeds limit")
 	}
 	kind := model.RuntimeKind(o.kind)
-	if kind != model.RuntimeClaude && kind != model.RuntimeCodex && kind != model.RuntimeGrok {
-		return errors.New("hook requires --runtime claude|codex|grok")
+	if !kind.Valid() {
+		return errors.New("hook requires --runtime claude|codex|grok|gemini")
 	}
 	requested := kind
+	if kind == model.RuntimeGemini {
+		if handled, err := geminiBeforeTool(data, out, diagnostic); handled {
+			return err
+		}
+	}
 	hook, err := decodeNativeHook(data, kind == model.RuntimeGrok)
+	if kind == model.RuntimeGemini {
+		hook, err = decodeGeminiHook(data)
+	}
 	if err != nil {
 		return err
 	}

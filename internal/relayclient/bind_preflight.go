@@ -21,6 +21,13 @@ func (e *defaultPairRuntimeMismatchError) Error() string {
 }
 
 func requireSessionID(kind model.RuntimeKind) (string, error) {
+	if kind == model.RuntimeGemini {
+		caller, err := currentNativeCaller()
+		if err == nil && caller.runtime == kind && caller.session != "" {
+			return caller.session, nil
+		}
+		return "", errors.New("Gemini BeforeTool session metadata is missing or stale; install --runtime gemini, approve/reload its hooks, then run bind as a standalone run_shell_command tool call in Gemini CLI")
+	}
 	name, ok := sessionEnvVars[kind]
 	if !ok {
 		return "", errors.New("run bind as a tool call inside your native session; use --runtime when the harness cannot be identified")
@@ -80,7 +87,7 @@ func prepareNativeCreation(ctx context.Context, endpoint relay.Endpoint, root st
 		if err := selection.Validate(actor); err != nil {
 			return o, slot, err
 		}
-		if _, supported := sessionEnvVars[selection.Runtime]; !supported {
+		if !selection.Runtime.Valid() {
 			return o, slot, fmt.Errorf("the default pair includes %s, which does not support native hosting", selection.Runtime)
 		}
 		agents[actor] = selection

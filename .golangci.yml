@@ -21,4 +21,4 @@ linters:
       # any other capitalized error string still fails ST1005.
       - linters: [staticcheck]
         text: "ST1005:"
-        source: '(errors\.New|fmt\.Errorf)\("(Room|Service|Management Shell|Agent|Claude|Codex|Grok|PairRoom|Git|Stop) '
+        source: '(errors\.New|fmt\.Errorf)\("(Room|Service|Management Shell|Agent|Claude|Codex|Grok|Gemini|PairRoom|Git|Stop) '

@@ -16,7 +16,7 @@ A **skill** supplies instructions for the Agent; a **hook** is a callback execut
 
 A **Project** registers a canonical local Git workspace. A **Room** belongs to a Project and durably records two participant slots, collaboration instructions, Bindings, and messages. Neither registration nor Room creation copies the repository or creates a task worktree.
 
-A participant's **Runtime** is Claude Code, Codex, or Grok Build. Either slot may use any supported Runtime, including the same Runtime twice. ActorIDs `slot1` and `slot2` mean Agent 1 and Agent 2, not particular vendors. Copy the displayed mention handle: unique Runtimes use `@claude`, `@codex`, or `@grok`; duplicate Runtimes use stable slot-order suffixes, such as `@codex0` and `@codex1`.
+A participant's **Runtime** is Claude Code, Codex, Grok Build, or Gemini CLI. Either slot may use any supported Runtime, including the same Runtime twice. ActorIDs `slot1` and `slot2` mean Agent 1 and Agent 2, not particular vendors. Copy the displayed mention handle: unique Runtimes use `@claude`, `@codex`, or `@grok`; duplicate Runtimes use stable slot-order suffixes, such as `@codex0` and `@codex1`.
 
 A **Room Runtime** is the active PairRoom component serving a Room, not the participant's harness. Suspending it does not delete the Room. Its process ownership depends on the immutable **host mode**:
 

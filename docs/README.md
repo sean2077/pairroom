@@ -10,7 +10,7 @@ Documentation on `main` tracks development, which may be ahead of the package yo
 |---|---|---|
 | New to PairRoom or the tool names | [Overview](../README.md) → [Core concepts](CONCEPTS.md) → [Why PairRoom](WHY_PAIRROOM.md) | Knowing whether Native or Embedded suits you |
 | Try the interface without a model account | [Installation](INSTALLATION.md) → [Getting started](GETTING_STARTED.md) | A throwaway Mock Room in Embedded mode (no real model involved) |
-| Connect two existing coding sessions | [Agent-assisted setup](AGENT_SETUP.md) → [Native relay](NATIVE_RELAY.md) | Both sessions bound, and a Stop hook seen running in each |
+| Connect two existing coding sessions | [Agent-assisted setup](AGENT_SETUP.md) → [Native relay, including Gemini CLI](NATIVE_RELAY.md) | Both sessions bound, and a Stop hook seen running in each |
 | Change versions or investigate stalled work | [Upgrading](UPGRADING.md) or [Troubleshooting](TROUBLESHOOTING.md) → [Operations](OPERATIONS.md) | A specific recovery step that keeps state and does not replay work |
 
 None of these paths requires reading the technical contracts below.
@@ -24,7 +24,7 @@ None of these paths requires reading the technical contracts below.
 | Install, upgrade, or uninstall a package | [Installation](INSTALLATION.md) |
 | Let a coding Agent install and check the environment step by step | [Agent-assisted setup](AGENT_SETUP.md) |
 | First Mock/Embedded Room and review-first task recipes | [Getting started](GETTING_STARTED.md) |
-| Native install, create/join, publication, wake, UI, and recovery | [Native relay](NATIVE_RELAY.md) |
+| Native install, create/join, publication, wake, UI, and recovery | [Native relay, including Gemini CLI](NATIVE_RELAY.md) |
 | Native cwd/worktree identity and locator recovery | [Native session workspace discovery](NATIVE_SESSION_WORKSPACE.md) |
 | Tool names, host modes, Bindings, responsibilities, controls, and receipts | [Core concepts](CONCEPTS.md) |
 | Agent selections, Provider references, permissions, and saved pairs | [Configuration](CONFIGURATION.md) |

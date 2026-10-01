@@ -2094,7 +2094,7 @@
       syncAgentPolicy(actor);
       $(`${actor}-permission-mode`).value = runtime === 'codex' ? '' : 'yolo';
       $(`${actor}-approval-policy`).value = runtime === 'codex' ? 'yolo' : '';
-      $(`${actor}-sandbox`).value = runtime === 'codex' ? 'danger-full-access' : runtime === 'grok' ? 'off' : '';
+      $(`${actor}-sandbox`).value = runtime === 'codex' ? 'danger-full-access' : ['grok', 'gemini'].includes(runtime) ? 'off' : '';
     }
 	const providerDiagnostic = $(`${actor}-provider-diagnostic`);
 	// CC Switch is optional: an absent database is only worth reporting when this
@@ -2116,8 +2116,10 @@
 	});
 	const permission = $(`${actor}-permission-mode`);
 	const previousPermission = permission.value;
+	if (runtime === 'gemini') $(`${actor}-effort`).value = '';
 	const permissionValues = runtime === 'claude'
 	  ? ['default', 'manual', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions', 'bypass', 'always-approve', 'yolo']
+	  : runtime === 'gemini' ? ['default', 'auto_edit', 'plan', 'yolo']
 	  : runtime === 'grok' ? ['default', 'ask', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions', 'always-approve', 'yolo'] : [];
 	permission.replaceChildren(
 	  node('option', { value: '', textContent: t('common.inherit') }),
@@ -2128,6 +2130,7 @@
 	const previousSandbox = sandbox.value;
 	const sandboxValues = runtime === 'codex'
 	  ? ['read-only', 'workspace-write', 'danger-full-access']
+	  : runtime === 'gemini' ? ['on', 'off']
 	  : runtime === 'grok' ? ['read-only', 'workspace', 'strict', 'off'] : [];
 	sandbox.replaceChildren(
 	  node('option', { value: '', textContent: t('common.inherit') }),
@@ -2268,8 +2271,8 @@
       if (native) document.querySelector(`input[name="${actor}-mode"][value="new"]`).checked = true;
       document.querySelectorAll(`input[name="${actor}-mode"]`).forEach(input => { input.disabled = native; });
       const select = $(`${actor}-runtime`);
-      for (const option of select.options) option.disabled = native ? !['claude', 'codex', 'grok'].includes(option.value) : !runtimeCatalogEntry(option.value)?.available;
-      if (native && !['claude', 'codex', 'grok'].includes(select.value)) select.value = actor === 'slot1' ? 'claude' : 'codex';
+      for (const option of select.options) option.disabled = native ? !['claude', 'codex', 'grok', 'gemini'].includes(option.value) : !runtimeCatalogEntry(option.value)?.available;
+      if (native && !['claude', 'codex', 'grok', 'gemini'].includes(select.value)) select.value = actor === 'slot1' ? 'claude' : 'codex';
       select.setCustomValidity(native || runtimeCatalogEntry(select.value)?.available ? '' : t('agent.unavailable'));
     }
     syncBindingInputs();
@@ -2304,7 +2307,7 @@
     const bindings = {};
     for (const actor of ['slot1', 'slot2']) {
       if (!nativeCreation() && (!$(`${actor}-runtime`).reportValidity() || !$(`${actor}-provider`).reportValidity())) return;
-      if (nativeCreation() && !['claude', 'codex', 'grok'].includes($(`${actor}-runtime`).value)) { showFormError('room-form-error', t('ui.native.supported')); return; }
+      if (nativeCreation() && !['claude', 'codex', 'grok', 'gemini'].includes($(`${actor}-runtime`).value)) { showFormError('room-form-error', t('ui.native.supported')); return; }
       const mode = document.querySelector(`input[name="${actor}-mode"]:checked`)?.value || 'new';
       const sessionID = $(`${actor}-session-id`).value.trim();
       if (mode === 'existing' && !sessionID) {

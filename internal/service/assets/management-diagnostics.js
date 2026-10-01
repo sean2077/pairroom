@@ -8,7 +8,7 @@
     const codes = new Set(['cleanup_failed', 'installed', 'cli_unavailable', 'timeout', 'started', 'responded', 'not_checked', 'workspace_unavailable', 'startup_failed', 'response_failed', 'output_limit', 'interaction_required', 'unexpected_response', 'cancelled', 'authentication_failed', 'quota_or_rate_limit', 'model_unavailable', 'network_failed', 'profile_unavailable', 'application_unavailable', 'application_available', 'registry_unhealthy', 'registry_healthy', 'storage_writable', 'storage_unwritable', 'git_unavailable', 'git_available', 'project_unavailable', 'projects_available', 'room_failed', 'rooms_healthy', 'capacity_queued', 'capacity_available', 'resolver_unavailable', 'provider_unavailable', 'selection_valid', 'mock']);
     const ids = new Set(['cleanup', 'installation', 'startup', 'response', 'selection', 'application', 'registry', 'storage', 'git', 'projects', 'rooms', 'capacity']);
     const statuses = new Set(['pass', 'warn', 'fail', 'skipped']);
-    const runtimes = new Set(['claude', 'codex', 'grok']);
+    const runtimes = new Set(['claude', 'codex', 'grok', 'gemini']);
 
     // A second allowlist at the download boundary also rejects malformed API
     // responses. Never export the Service snapshot or form/Room metadata.

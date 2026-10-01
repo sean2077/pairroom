@@ -180,7 +180,7 @@ func TestPublishedSkillMatchesEmbeddedProjection(t *testing.T) {
 		"cwd-not-binding":           "do not rebind on cwd changes",
 		"reuse-collaboration":       "Reuse the Room and follow its collaboration rules",
 		"create-command":            "pairroom relay bind --create --name",
-		"explicit-peer":             "parse leading claude|cc|codex|grok as --peer-runtime",
+		"explicit-peer":             "parse leading claude|cc|codex|grok|gemini as --peer-runtime",
 		"narrow-inference":          "infer only one clearly named peer distinct from self, or omit it",
 		"explicit-slot-only":        "set --slot only if requested",
 		"narrow-create-retry":       "Retry creation once with the intended peer only when preflight explicitly says no Room was created and no peer runtime was passed",

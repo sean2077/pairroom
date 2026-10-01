@@ -94,8 +94,8 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--codex-model`
 - `--codex-runtime`
 - `--codex-sandbox`
-- `--collaboration-instructions`
 - `--collaboration`
+- `--collaboration-instructions`
 - `--config`
 - `--create`
 - `--cursor`
@@ -108,10 +108,12 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--f`
 - `--follow`
 - `--force`
+- `--gemini-command`
 - `--grok-command`
 - `--host-mode`
 - `--id`
 - `--idle-timeout`
+- `--inline-max`
 - `--input`
 - `--json`
 - `--limit`
@@ -123,9 +125,8 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--n`
 - `--name`
 - `--no-browser`
-- `--output-file`
-- `--inline-max`
 - `--output`
+- `--output-file`
 - `--peer-runtime`
 - `--pending`
 - `--purge-hooks`
@@ -135,19 +136,19 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--repo`
 - `--resend`
 - `--resume-pending`
+- `--review`
 - `--review-base`
 - `--review-repo`
-- `--review`
 - `--room`
-- `--runtime-limit`
 - `--runtime`
+- `--runtime-limit`
 - `--service-file`
 - `--shutdown-timeout`
 - `--since`
 - `--slot`
 - `--stall-warning-seconds`
-- `--text-file`
 - `--text`
+- `--text-file`
 - `--timeout`
 - `--to`
 - `--token`
@@ -335,7 +336,11 @@ Long foreground waits keep the existing HTTP window at most 30 seconds and renew
 
 Hook installation/approval and official session association remain required. `--timeout 0` does not guarantee a vendor tool can stay pending forever; native harness/tool cancellation remains authoritative. Model acceptance, uninterrupted long-running native tool calls and lower billed token usage require real vendor testing; synthetic transport tests do not establish them. No new Room mode, protocol version, schema, stage compiler, background model worker or process ownership is introduced. Existing send/wait and automatic Stop relay remain usable independently.
 
-### Grok Build Native
+### Gemini CLI Native
+
+Use `pairroom relay install --runtime gemini` to merge the BeforeTool/AfterAgent definitions and install its native skill. Run bind through Gemini run_shell_command after approving/reloading both hooks. Session identity comes from official BeforeTool metadata; `GEMINI_SESSION_ID` is not a shell-tool identity source. See [Gemini setup and limitations](NATIVE_RELAY.md#gemini-cli).
+
+## Grok Build Native
 
 Run setup and binding through the existing Grok session's own terminal tool.
 `pairroom relay install` infers Grok where the native session/lineage is visible;
@@ -356,7 +361,7 @@ pairroom relay bind --create --name "Joint review" --peer-runtime codex
 pairroom relay bind
 ```
 
-Choose `--peer-runtime claude|codex|grok` when creating a specific pair. The
+Choose `--peer-runtime claude|codex|grok|gemini` when creating a specific pair. The
 calling Grok runtime is inferred; no vendor-named third slot is created. Without
 pair overrides the Service's saved default pair still applies and must contain
 the intended runtimes. Two Grok sessions use two distinct slots; the printed

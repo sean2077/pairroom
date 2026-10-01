@@ -18,16 +18,16 @@ import (
 	"github.com/sean2077/pairroom/internal/version"
 )
 
-type grokCapabilities struct {
+type acpCapabilities struct {
 	loadSession bool
 	close       bool
 	promptImage bool
 }
 
-// GrokAdapter hosts one long-lived official Grok Build ACP process. PairRoom
+// ACPAdapter hosts one long-lived official Grok Build or Gemini CLI ACP process. PairRoom
 // owns message queuing; this adapter owns only the active native prompt and
 // request/response correlation on its stdio connection.
-type GrokAdapter struct {
+type ACPAdapter struct {
 	cfg  Config
 	sink EventSink
 
@@ -45,7 +45,8 @@ type GrokAdapter struct {
 	sessionEngaged   bool
 	sessionOpened    bool
 	bootstrapPending bool
-	capabilities     grokCapabilities
+	nativeMode       string
+	capabilities     acpCapabilities
 	runtimeInfo      model.RuntimeInfo
 	cmd              *exec.Cmd
 	tree             *execx.Tree
@@ -55,43 +56,47 @@ type GrokAdapter struct {
 	// streamFailure records why the adapter killed the process after its
 	// stdout became unreadable; waitProcess reports it with the exit.
 	streamFailure string
-	pending       map[int64]chan grokRPCReply
-	approvals     map[string]grokPendingApproval
-	turn          *grokTurn
+	pending       map[int64]chan acpRPCReply
+	approvals     map[string]acpPendingApproval
+	turn          *acpTurn
 	nextRequestID atomic.Int64
 }
 
-func NewGrok(cfg Config, sink EventSink) *GrokAdapter {
+func NewGrok(cfg Config, sink EventSink) *ACPAdapter {
+	cfg.Runtime = model.RuntimeGrok
+	return newACP(cfg, sink)
+}
+
+func newACP(cfg Config, sink EventSink) *ACPAdapter {
 	if !cfg.Actor.ValidParticipant() {
 		cfg.Actor = model.ActorSlot1
 	}
 	if cfg.Command == "" {
-		cfg.Command = model.RuntimeGrok.DefaultCommand()
+		cfg.Command = cfg.Runtime.DefaultCommand()
 	}
-	cfg.Runtime = model.RuntimeGrok
-	return &GrokAdapter{
+	return &ACPAdapter{
 		cfg: cfg, sink: sink, state: model.StateStopped,
 		sessionID: strings.TrimSpace(cfg.SessionID), sessionEngaged: strings.TrimSpace(cfg.SessionID) != "",
-		pending:   make(map[int64]chan grokRPCReply),
-		approvals: make(map[string]grokPendingApproval),
+		pending:   make(map[int64]chan acpRPCReply),
+		approvals: make(map[string]acpPendingApproval),
 	}
 }
 
-func (g *GrokAdapter) Actor() model.ActorID { return g.cfg.Actor }
+func (g *ACPAdapter) Actor() model.ActorID { return g.cfg.Actor }
 
-func (g *GrokAdapter) State() model.AgentState {
+func (g *ACPAdapter) State() model.AgentState {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.state
 }
 
-func (g *GrokAdapter) SessionID() string {
+func (g *ACPAdapter) SessionID() string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.sessionID
 }
 
-func (g *GrokAdapter) setState(state model.AgentState, detail string) {
+func (g *ACPAdapter) setState(state model.AgentState, detail string) {
 	g.mu.Lock()
 	changed := g.state != state
 	g.state = state
@@ -105,7 +110,12 @@ func (g *GrokAdapter) setState(state model.AgentState, detail string) {
 	g.sink(e)
 }
 
-func (g *GrokAdapter) Start(ctx context.Context) error {
+func (g *ACPAdapter) Start(ctx context.Context) error {
+	if g.cfg.Runtime == model.RuntimeGemini {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, geminiSetupTimeout)
+		defer cancel()
+	}
 	g.startMu.Lock()
 	defer g.startMu.Unlock()
 
@@ -126,19 +136,24 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 
 	probe, probeErr := ProbeRuntime(ctx, g.cfg)
 	info := model.RuntimeInfo{
-		Available: false, Command: g.cfg.Command, Protocol: "grok-acp-v1", RuntimeKind: model.RuntimeGrok,
+		Available: false, Command: g.cfg.Command, Protocol: g.acpProtocol(), RuntimeKind: g.cfg.Runtime,
 		Provider: g.cfg.Provider, ProviderName: g.cfg.ProviderName, Model: g.cfg.Model, Effort: g.cfg.Effort,
 		PermissionMode: g.cfg.PermissionMode, Sandbox: g.cfg.Sandbox, ProbedAt: time.Now().UTC(),
 	}
 	if probeErr == nil {
 		info = probe.RuntimeInfo(g.cfg)
-		info.Protocol = "grok-acp-v1"
+		info.Protocol = g.acpProtocol()
 		// Grok Build shipped the interjection extension under the private
 		// `_x.ai/interject` name in earlier ACP builds and under the public
 		// `x.ai/interject` name in current builds. Keep both in the diagnostic
 		// projection; Steer probes the private spelling first for the protocol
 		// contract and falls back only when the server reports method-not-found.
-		info.Capabilities = append(info.Capabilities, "session/prompt", "session/cancel", "session/request_permission", "_x.ai/interject", "x.ai/interject")
+		info.Capabilities = append(info.Capabilities, "session/prompt", "session/cancel", "session/request_permission")
+		if g.cfg.Runtime == model.RuntimeGrok {
+			info.Capabilities = append(info.Capabilities, "_x.ai/interject", "x.ai/interject")
+		} else {
+			info.SessionNameStatus = "unsupported"
+		}
 	} else {
 		info.Warnings = []string{probeErr.Error()}
 	}
@@ -152,8 +167,11 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 	}
 
 	args := g.buildACPArgs()
+	if g.cfg.Runtime == model.RuntimeGemini {
+		args = geminiACPArgs(g.cfg, probe)
+	}
 	if isBatchLauncher(goruntime.GOOS, probe.Path) {
-		if err := checkBatchLauncherArgs("Grok Build", probe.Path, args); err != nil {
+		if err := checkBatchLauncherArgs(g.cfg.Runtime.DisplayName(), probe.Path, args); err != nil {
 			g.setState(model.StateError, err.Error())
 			return err
 		}
@@ -162,26 +180,28 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 	execx.NoConsole(cmd)
 	cmd.Dir = g.cfg.Repo
 	cmd.Env = mergeRuntimeEnv(envWithout(), g.cfg.Env)
-	cmd.Env = mergeRuntimeEnv(cmd.Env, map[string]string{"GROK_DISABLE_AUTOUPDATER": "1"})
+	if g.cfg.Runtime == model.RuntimeGrok {
+		cmd.Env = mergeRuntimeEnv(cmd.Env, map[string]string{"GROK_DISABLE_AUTOUPDATER": "1"})
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		g.setState(model.StateError, err.Error())
-		return fmt.Errorf("grok ACP stdin: %w", err)
+		return fmt.Errorf("ACP stdin: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		g.setState(model.StateError, err.Error())
-		return fmt.Errorf("grok ACP stdout: %w", err)
+		return fmt.Errorf("ACP stdout: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		g.setState(model.StateError, err.Error())
-		return fmt.Errorf("grok ACP stderr: %w", err)
+		return fmt.Errorf("ACP stderr: %w", err)
 	}
 	tree, err := execx.StartTree(cmd)
 	if err != nil {
 		g.setState(model.StateError, err.Error())
-		return fmt.Errorf("start grok ACP: %w", err)
+		return fmt.Errorf("start ACP: %w", err)
 	}
 
 	done := make(chan struct{})
@@ -190,8 +210,8 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 	g.tree = tree
 	g.stdin = stdin
 	g.done = done
-	g.pending = make(map[int64]chan grokRPCReply)
-	g.approvals = make(map[string]grokPendingApproval)
+	g.pending = make(map[int64]chan acpRPCReply)
+	g.approvals = make(map[string]acpPendingApproval)
 	g.mu.Unlock()
 	// cmd.Wait closes the pipes; both readers must finish draining before Wait
 	// so a final stdout record is never lost to the race.
@@ -217,12 +237,20 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 			"startupHints": map[string]any{"nonInteractive": true, "skipGitStatus": true, "skipProjectLayout": true},
 		},
 	}
+	if g.cfg.Runtime == model.RuntimeGemini {
+		delete(initParams, "_meta")
+	}
 	result, err := g.call(ctx, "initialize", initParams)
 	if err != nil {
 		g.abortStart(cmd)
-		return fmt.Errorf("initialize grok ACP: %w", err)
+		return fmt.Errorf("initialize ACP: %w", err)
 	}
-	method, err := selectGrokAuthMethod(result)
+	method := ""
+	if g.cfg.Runtime == model.RuntimeGrok {
+		method, err = selectGrokAuthMethod(result)
+	}
+	// Gemini session/new and session/load inherit native credentials. Its
+	// authenticate RPC writes user settings, so PairRoom must not call it.
 	if err != nil {
 		g.abortStart(cmd)
 		return err
@@ -233,7 +261,16 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 			return fmt.Errorf("authenticate grok ACP: %w", err)
 		}
 	}
-	capabilities, err := parseGrokCapabilities(result)
+	if g.cfg.Runtime == model.RuntimeGemini {
+		var reply struct {
+			Version int `json:"protocolVersion"`
+		}
+		if json.Unmarshal(result, &reply) != nil || reply.Version != 1 {
+			g.abortStart(cmd)
+			return errors.New("Gemini CLI did not negotiate ACP protocol version 1")
+		}
+	}
+	capabilities, err := parseACPCapabilities(result)
 	if err != nil {
 		g.abortStart(cmd)
 		return err
@@ -255,7 +292,7 @@ func (g *GrokAdapter) Start(ctx context.Context) error {
 	return nil
 }
 
-func parseGrokCapabilities(raw json.RawMessage) (grokCapabilities, error) {
+func parseACPCapabilities(raw json.RawMessage) (acpCapabilities, error) {
 	var response struct {
 		AgentCapabilities struct {
 			LoadSession        bool `json:"loadSession"`
@@ -268,9 +305,9 @@ func parseGrokCapabilities(raw json.RawMessage) (grokCapabilities, error) {
 		} `json:"agentCapabilities"`
 	}
 	if err := json.Unmarshal(raw, &response); err != nil {
-		return grokCapabilities{}, fmt.Errorf("decode Grok ACP capabilities: %w", err)
+		return acpCapabilities{}, fmt.Errorf("decode ACP capabilities: %w", err)
 	}
-	return grokCapabilities{
+	return acpCapabilities{
 		loadSession: response.AgentCapabilities.LoadSession,
 		close:       grokCapabilityEnabled(response.AgentCapabilities.SessionCapabilities.Close),
 		promptImage: response.AgentCapabilities.PromptCapabilities.Image,
@@ -320,7 +357,7 @@ func selectGrokAuthMethod(raw json.RawMessage) (string, error) {
 	return "", errors.New("Grok Build has no non-interactive authentication method; run `grok login` or set XAI_API_KEY")
 }
 
-func (g *GrokAdapter) abortStart(cmd *exec.Cmd) {
+func (g *ACPAdapter) abortStart(cmd *exec.Cmd) {
 	g.mu.Lock()
 	g.intentional = true
 	var stdin io.WriteCloser
@@ -337,16 +374,16 @@ func (g *GrokAdapter) abortStart(cmd *exec.Cmd) {
 	if stdin != nil {
 		_ = stdin.Close()
 	}
-	detail := "Grok ACP startup failed"
+	detail := "ACP startup failed"
 	if tree != nil {
-		if err := stopProcessTree(tree, done, "Grok ACP"); err != nil {
+		if err := stopProcessTree(tree, done, "ACP"); err != nil {
 			detail += "; " + err.Error()
 		}
 	}
 	g.setState(model.StateError, detail)
 }
 
-func (g *GrokAdapter) buildACPArgs() []string {
+func (g *ACPAdapter) buildACPArgs() []string {
 	args := append([]string(nil), g.cfg.CommandArgs...)
 	args = append(args, "--no-auto-update")
 	if repo := strings.TrimSpace(g.cfg.Repo); repo != "" {
@@ -365,7 +402,7 @@ func (g *GrokAdapter) buildACPArgs() []string {
 	return append(args, "agent", "stdio")
 }
 
-func (g *GrokAdapter) Interrupt(ctx context.Context) error {
+func (g *ACPAdapter) Interrupt(ctx context.Context) error {
 	g.mu.Lock()
 	active := g.turn != nil
 	sessionID := g.sessionID
@@ -380,7 +417,7 @@ func (g *GrokAdapter) Interrupt(ctx context.Context) error {
 	return result
 }
 
-func (g *GrokAdapter) Stop(ctx context.Context) error {
+func (g *ACPAdapter) Stop(ctx context.Context) error {
 	g.startMu.Lock()
 	defer g.startMu.Unlock()
 	g.mu.Lock()
@@ -399,10 +436,10 @@ func (g *GrokAdapter) Stop(ctx context.Context) error {
 		}
 		g.sessionOpened = false
 		g.bootstrapPending = false
-		g.capabilities = grokCapabilities{}
+		g.capabilities = acpCapabilities{}
 		g.turn = nil
-		g.pending = make(map[int64]chan grokRPCReply)
-		g.approvals = make(map[string]grokPendingApproval)
+		g.pending = make(map[int64]chan acpRPCReply)
+		g.approvals = make(map[string]acpPendingApproval)
 		g.mu.Unlock()
 		g.setState(model.StateStopped, "")
 		return nil
@@ -436,7 +473,7 @@ func (g *GrokAdapter) Stop(ctx context.Context) error {
 			killWait.Stop()
 		case <-killWait.C:
 			g.setState(model.StateStopped, "")
-			return errors.New("Grok process was killed but its output pipes remain open (a descendant may hold them); close state is uncertain")
+			return errors.New("ACP process was killed but its output pipes remain open (a descendant may hold them); close state is uncertain")
 		}
 	}
 	g.mu.Lock()
@@ -445,7 +482,7 @@ func (g *GrokAdapter) Stop(ctx context.Context) error {
 	}
 	g.sessionOpened = false
 	g.bootstrapPending = false
-	g.capabilities = grokCapabilities{}
+	g.capabilities = acpCapabilities{}
 	g.turn = nil
 	g.mu.Unlock()
 	g.setState(model.StateStopped, "")
@@ -455,7 +492,7 @@ func (g *GrokAdapter) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, tree *execx.Tree, done chan struct{}) {
+func (g *ACPAdapter) waitProcess(cmd *exec.Cmd, tree *execx.Tree, done chan struct{}) {
 	err := cmd.Wait()
 	tree.Release()
 	g.mu.Lock()
@@ -473,18 +510,18 @@ func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, tree *execx.Tree, done chan str
 	g.stdin = nil
 	g.done = nil
 	g.sessionOpened = false
-	g.capabilities = grokCapabilities{}
+	g.capabilities = acpCapabilities{}
 	activeTurn := g.turn
 	g.turn = nil
 	sessionID := g.sessionID
 	pending := g.pending
-	g.pending = make(map[int64]chan grokRPCReply)
-	g.approvals = make(map[string]grokPendingApproval)
+	g.pending = make(map[int64]chan acpRPCReply)
+	g.approvals = make(map[string]acpPendingApproval)
 	if strings.TrimSpace(g.cfg.SessionID) == "" && !engaged {
 		g.sessionID = ""
 	}
 	g.mu.Unlock()
-	detail := "Grok ACP process exited"
+	detail := "ACP process exited"
 	if streamFailure != "" {
 		detail = streamFailure
 	} else if err != nil {
@@ -493,7 +530,7 @@ func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, tree *execx.Tree, done chan str
 	failure := g.redactError(errors.New(detail))
 	detail = failure.Error()
 	for _, reply := range pending {
-		reply <- grokRPCReply{err: failure}
+		reply <- acpRPCReply{err: failure}
 	}
 	if !intentional {
 		if activeTurn != nil {
@@ -507,7 +544,7 @@ func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, tree *execx.Tree, done chan str
 			}
 			completed := runtimeEvent(g.cfg.Actor, model.RuntimeTurnCompleted)
 			completed.TurnID = activeTurn.turnID
-			completed.CorrelationID = lastGrokInputID(activeTurn.inputs)
+			completed.CorrelationID = lastACPInputID(activeTurn.inputs)
 			completed.SessionID = sessionID
 			completed.Name = "process_exited"
 			g.sink(completed)
@@ -521,10 +558,10 @@ func (g *GrokAdapter) waitProcess(cmd *exec.Cmd, tree *execx.Tree, done chan str
 	close(done)
 }
 
-// failStream stops a Grok ACP process whose stdout can no longer be read. The
+// failStream stops an ACP process whose stdout can no longer be read. The
 // exit is then reported through waitProcess like any unexpected exit, so the
 // active prompt fails and the Turn owner is released on real exit.
-func (g *GrokAdapter) failStream(reason string) {
+func (g *ACPAdapter) failStream(reason string) {
 	g.mu.Lock()
 	if g.streamFailure == "" {
 		g.streamFailure = reason

@@ -24,7 +24,7 @@ type nativeCallerTest interface {
 // tests can install an exact caller fixture. Production code never calls this.
 func IsolateNativeCaller(t nativeCallerTest) {
 	t.Helper()
-	for _, key := range []string{"CLAUDE_PROJECT_DIR", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "GROK_SESSION_ID", "CLAUDECODE", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME"} {
+	for _, key := range []string{"CLAUDE_PROJECT_DIR", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "GROK_SESSION_ID", "GEMINI_SESSION_ID", "CLAUDECODE", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME", "GEMINI_CLI_HOME"} {
 		t.Setenv(key, "")
 	}
 	// os.UserConfigDir uses these platform-specific anchors. Isolate locators
@@ -59,8 +59,15 @@ func currentNativeCaller() (nativeCaller, error) {
 	// Prefer the nearest recognized harness over inherited outer-harness
 	// variables. Never choose arbitrarily between multiple unscoped hints.
 	var nearest model.RuntimeKind
-	if _, name, ok := harnessAncestor(); ok {
+	if pid, name, ok := harnessAncestor(); ok {
 		nearest = harnessRuntimes[name]
+		if nearest == model.RuntimeGemini {
+			session := geminiCallerForProcess(pid, "gemini")
+			if session == "" {
+				return nativeCaller{runtime: nearest}, errors.New("Gemini BeforeTool session metadata is stale or missing; run relay as a fresh standalone run_shell_command tool call")
+			}
+			return nativeCaller{runtime: nearest, session: session}, nil
+		}
 	}
 	caller := nativeCaller{runtime: nearest}
 	for _, v := range vars {

@@ -49,12 +49,15 @@ type RuntimeTemplates struct {
 	Claude RuntimeTemplate `json:"claude"`
 	Codex  RuntimeTemplate `json:"codex"`
 	Grok   RuntimeTemplate `json:"grok"`
+	Gemini RuntimeTemplate `json:"gemini"`
 }
 
 func (r RuntimeTemplates) For(kind model.RuntimeKind) RuntimeTemplate {
 	switch kind.Canonical() {
 	case model.RuntimeCodex:
 		return cloneRuntimeTemplate(r.Codex)
+	case model.RuntimeGemini:
+		return cloneRuntimeTemplate(r.Gemini)
 	case model.RuntimeGrok:
 		return cloneRuntimeTemplate(r.Grok)
 	default:
@@ -100,6 +103,7 @@ func Defaults() File {
 			Claude: RuntimeTemplate{Command: "claude"},
 			Codex:  RuntimeTemplate{Command: "codex"},
 			Grok:   RuntimeTemplate{Command: "grok"},
+			Gemini: RuntimeTemplate{Command: "gemini"},
 		},
 		Claude: Agent{Runtime: string(model.RuntimeClaude), Provider: model.NativeProviderRef(), PermissionMode: "yolo"},
 		Codex:  Agent{Runtime: string(model.RuntimeCodex), Provider: model.NativeProviderRef(), ApprovalPolicy: "yolo", Sandbox: "danger-full-access"},
@@ -315,7 +319,7 @@ func (c File) Validate() error {
 			}
 		}
 	}
-	for _, kind := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok} {
+	for _, kind := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok, model.RuntimeGemini} {
 		template := c.Runtimes.For(kind)
 		if strings.TrimSpace(template.Command) == "" {
 			return fmt.Errorf("runtimes.%s.command is required", kind)
@@ -370,6 +374,8 @@ func validateRuntimeTemplateArgs(kind model.RuntimeKind, args []string) error {
 					}
 				}
 			}
+		case model.RuntimeGemini:
+			forbidden = matchesOption(arg, "--model", "-m", "--approval-mode", "--yolo", "-y", "--sandbox", "-s", "--prompt", "-p", "--prompt-interactive", "-i", "--resume", "-r", "--acp", "--experimental-acp", "--output-format")
 		case model.RuntimeGrok:
 			forbidden = matchesOption(arg, "--model", "-m", "--effort", "--permission-mode", "--always-approve", "--yolo", "--sandbox")
 		}

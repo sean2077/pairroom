@@ -42,7 +42,7 @@ func runFakeRuntime(args []string) int {
 		}
 		return 0
 	case "--help":
-		fmt.Println("--resume --add-dir --include-partial-messages --model --permission-mode")
+		fmt.Println("--resume --add-dir --include-partial-messages --model --permission-mode --acp")
 		return 0
 	case "app-server --help":
 		fmt.Println("Usage: fake app-server")

@@ -1,12 +1,12 @@
 # Native relay: setup, usage and reliability
 
-Native hosting connects two sessions you already run. PairRoom does not launch, configure, or interrupt their processes. This guide owns the user workflow; [CLI reference](CLI_REFERENCE.md#native-relay-commands) owns command options, [Protocol](PROTOCOL.md#native-host-protocol-v8) owns the transport contract, and [session workspace discovery](NATIVE_SESSION_WORKSPACE.md) owns cwd/worktree resolution. The app includes a Native setup guide as well.
+Native hosting connects two sessions you already run. In generic response-boundary descriptions below, “Stop” includes Gemini's AfterAgent unless a vendor is named. PairRoom does not launch, configure, or interrupt their processes. This guide owns the user workflow; [CLI reference](CLI_REFERENCE.md#native-relay-commands) owns command options, [Protocol](PROTOCOL.md#native-host-protocol-v8) owns the transport contract, and [session workspace discovery](NATIVE_SESSION_WORKSPACE.md) owns cwd/worktree resolution. The app includes a Native setup guide as well.
 
 ## Before starting
 
 Install PairRoom and Git. Open Desktop or run `pairroom service`, but do not start a second Service over the same data directory. In **each Agent's tool shell**, verify `pairroom version` and `git --version`. Opening Desktop alone does not prove that its CLI is on that shell's PATH. Use the CLI from the same PairRoom release as the running Service; see [Installation](INSTALLATION.md). Restart existing shells after changing PATH.
 
-Install and authenticate the harnesses you intend to use: Claude Code, Codex, or Grok Build. Either slot can use any supported Runtime, including the same Runtime twice. Configure Provider, model, effort, tools, and permissions in the original harnesses; Native Room selections do not override those processes.
+Install and authenticate the harnesses you intend to use: Claude Code, Codex, Grok Build, or Gemini CLI. Either slot can use any supported Runtime, including the same Runtime twice. Configure Provider, model, effort, tools, and permissions in the original harnesses; Native Room selections do not override those processes.
 
 ## One-time project setup
 
@@ -14,8 +14,8 @@ Run `relay install` from any terminal in the Project's worktree; installation it
 
 ```bash
 pairroom relay install --runtime claude,codex
-# Select only the runtimes you use; all three are also supported:
-pairroom relay install --runtime claude,codex,grok
+# Select only the runtimes you use; all four are also supported:
+pairroom relay install --runtime claude,codex,grok,gemini
 ```
 
 Without `--runtime`, a recognized session supplies its Runtime; an interactive terminal prompts a multi-select, and non-interactive use fails with guidance rather than waiting. `cc` is accepted as a Claude installation alias.
@@ -28,7 +28,31 @@ Before binding, run `pairroom relay preflight` in each Agent session (or any she
 
 After setup, relay commands and hooks print one stderr line suggesting `pairroom relay preflight` whenever the Service reports a different release than the CLI, including beside errors that version skew can cause, such as "no matching binding". It uses responses the command already receives and never writes to stdout. See [CLI reference](CLI_REFERENCE.md#native-relay-commands).
 
-Installation also writes the relay skill. Skill roots honor `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and `GROK_HOME`; project hooks stay project-local. The optional `npx skills add sean2077/pairroom` route installs the skill, **not** the hooks or their approval. That route needs Node's package runner; the Go relay CLI does not.
+Installation also writes the relay skill. Skill roots honor `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`, and Gemini's `GEMINI_CLI_HOME`; project hooks stay project-local. The optional `npx skills add sean2077/pairroom` route installs the skill, **not** the hooks or their approval. That route needs Node's package runner; the Go relay CLI does not.
+
+## Gemini CLI
+
+[Gemini CLI](https://github.com/google-gemini/gemini-cli) supports both **Native** and **Embedded**, including two Gemini slots (`@gemini0` / `@gemini1`; a unique Gemini slot uses `@gemini`). This integration was checked against the official **v0.62.0** source released on September 29, 2026. Protocol fixtures are not authenticated live-vendor acceptance.
+
+### Native setup
+
+In the Project worktree run `pairroom relay install --runtime gemini`. It merges **BeforeTool** (matching `run_shell_command`) and **AfterAgent** into `.gemini/settings.json`, preserving unrelated settings and hooks. Gemini measures hook timeouts in **milliseconds**; both definitions use **45000**, not 45. Review and enable the exact hooks in Gemini's `/hooks`, follow its workspace-trust/reload instructions, then run `pairroom relay preflight` as an Agent tool call. Installation never enables trust, changes authentication, or bypasses tool approval.
+
+Ask Gemini's Agent to run `pairroom relay bind --create --name "Review" --peer-runtime codex`, or run the join command from the other Agent. Omit the peer override when using the Service's selected pair. Commands must run through Gemini's **`run_shell_command`**, not a detached terminal or a manually manufactured session variable.
+
+Gemini exposes `session_id` to hooks, not to shell-tool subprocesses as `GEMINI_SESSION_ID`. The approved BeforeTool hook records only the official session ID, observation time, and live host process birth identity in a private user-config `pairroom/relay-callers/gemini/<pid>.json` record. No prompt, shell command, credential, or transcript content is retained. A record must be fresh (two minutes) and match the live process instance; bind fails rather than guessing when metadata is unavailable. Use a standalone relay tool call instead of placing bind after a long-running command in one shell script. Every subsequent relay tool call refreshes the observation. Cwd/worktree changes continue to use the ordinary exact-session Binding/locator rules.
+
+AfterAgent publishes the complete `prompt_response` under the same durable sequence/receipt checks as other response hooks. Its official `session_id` must equal the bound session. Unaddressed replies stay private, and an unbound session does not contact the Service or print errors merely because the Service is stopped. A pending inbox can request continuation using Gemini's supported block decision/reason. PairRoom limits consecutive continuations; an open hook window is not an indefinite wake guarantee.
+
+Gemini has **no PairRoom Service idle-wake integration**. Use foreground `wait` / `exchange`, or one tracked background wait only when that harness actually surfaces its completion. An idle Gemini session may need a human nudge. Do not execute a guessed vendor wake/resume command. The installed skill lives under `~/.gemini/skills/pairroom-relay`; `GEMINI_CLI_HOME` selects an alternative home containing `.gemini`.
+
+### Embedded boundary
+
+Select Gemini CLI in either slot. PairRoom probes the installed command for `--acp` (or the older advertised `--experimental-acp`) and negotiates ACP v1. The shared ACP transport keeps Grok-only initialization, authentication, interject, and naming extensions out of Gemini requests. New sessions remain lazy until real input; existing Bindings require exact `session/load`, never a replacement new session. Replayed history and thought chunks are not forwarded as the Agent's final reply. Collaboration instructions are included once in the first PairRoom prompt after new/load, without rewriting Gemini's native system instructions.
+
+Authenticate/configure Gemini **in its own CLI first**. Session creation/loading inherits native authentication. Startup/session setup has a 20-second deadline; a failed new-session setup closes the process before returning native-login guidance. This is not a time limit on an accepted model/tool Turn. PairRoom deliberately does not invoke Gemini's ACP `authenticate`, which writes the user's selected authentication type and can clear prior cached credentials. Model selection, `permission_mode` (`default`, `auto_edit`, `plan`, `yolo`), and boolean `sandbox` (`on`, `off`) are supported. Empty overrides inherit the native values; unsupported effort, Codex approval policy, and CC Switch Profile overrides fail validation rather than silently doing something else. Native tool approvals map to the returned exact option IDs; cancellation uses `session/cancel`. Steering and native session renaming are not advertised.
+
+Official references: [hooks and payloads](https://github.com/google-gemini/gemini-cli/tree/v0.62.0/docs/hooks), [ACP dispatcher/authentication](https://github.com/google-gemini/gemini-cli/blob/v0.62.0/packages/cli/src/acp/acpRpcDispatcher.ts), [new/load session behavior](https://github.com/google-gemini/gemini-cli/blob/v0.62.0/packages/cli/src/acp/acpSessionManager.ts), and [hook-provided environment](https://github.com/google-gemini/gemini-cli/blob/v0.62.0/packages/core/src/hooks/hookRunner.ts).
 
 ## Create, join, collaborate
 
@@ -42,13 +66,13 @@ Pass the printed `peer_join_local` command to the other session using the same S
 
 Alternatively, create a **Native** Room in Management and bind the two sessions to it. Do not also run `--create`. When exactly one matching active Room/slot is available, `pairroom relay bind` needs no selectors; otherwise follow the candidate list. Slots are Agent 1/2 (`--slot 1|2`), not vendor names. The creating session becomes Agent 1 by default; existing Rooms are not reordered. Creation uses the detected caller and the Service's selected pair; `--peer-runtime` is available when an explicit peer choice is needed.
 
-Each bind associates immediately from the official tool-call environment: `CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`, or `GROK_SESSION_ID`. Run it **inside the intended Agent session**, not a detached terminal or Grok's user shell mode (`!`). Missing or conflicting identity fails closed; do not manufacture an environment value. Bind also checks the installed hook. No nonce echo, initial Stop, or status check is needed to unlock confirmed relay. Reuse the existing binding for later reviews.
+Each bind associates immediately from the official tool-call environment: `CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`, or `GROK_SESSION_ID`; Gemini instead uses approved BeforeTool metadata described below. Run it **inside the intended Agent session**, not a detached terminal or Grok's user shell mode (`!`). Missing or conflicting identity fails closed; do not manufacture an environment value. Bind also checks the installed hook. No nonce echo, initial Stop, or status check is needed to unlock confirmed relay. Reuse the existing binding for later reviews.
 
 If creation succeeded but bind failed, finish the printed recovery command for that Room instead of creating another. If the bind response was lost, rerun bind for the same Room/slot without `--create` or a new `--replace`. Explicit replacement is for an intentional session change and cannot stop work in the old harness. It is refused while the slot still holds unpublished Stop replies; run `relay reconcile` to publish them (or `reconcile --discard` to drop each explicitly) before replacing.
 
 ## What is published
 
-Automatic Stop publication and explicit CLI publication have different routing rules:
+Automatic response-hook publication (Stop, or Gemini AfterAgent) and explicit CLI publication have different routing rules:
 
 | Path | Routing and visibility |
 |---|---|
@@ -65,7 +89,7 @@ Do not publish the same report explicitly and then repeat it in a peer-directed 
 
 ## The two receive paths share one mailbox
 
-An approved Stop hook publishes first, then may park for up to 30 seconds within its installed 45-second timeout. It parks only while a peer reply is expected — this session recently addressed its peer and the peer has not answered yet — so an ordinary or `@user` turn ends without an idle half-minute. Claude/Codex can request continuation with an actual envelope, up to eight consecutive blocks. Grok's clipped hook-feedback channel instead returns a bounded readiness instruction: the full input stays queued until foreground `wait` collects it. Grok readiness/recovery hints stop at seven to reserve its final publication gate; other hooks share the vendor budget.
+An approved Stop hook publishes first, then may park for up to 30 seconds within its installed 45-second timeout. It parks only while a peer reply is expected — this session recently addressed its peer and the peer has not answered yet — so an ordinary or `@user` turn ends without an idle half-minute. Claude/Codex/Gemini can request continuation with an actual envelope, up to eight consecutive blocks. Grok's clipped hook-feedback channel instead returns a bounded readiness instruction: the full input stays queued until foreground `wait` collects it. Grok readiness/recovery hints stop at seven to reserve its final publication gate; other hooks share the vendor budget.
 
 Within that existing hook lifetime, sender publication/reconciliation has an eight-second budget, including at most two seconds for optional transcript metadata confirmation. A slow sender request therefore leaves time for receive-side park and acknowledgement. Timeout retains the original pending publication identity; it does not authorize replay or imply that the Service rejected it.
 

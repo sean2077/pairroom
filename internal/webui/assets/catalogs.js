@@ -2350,12 +2350,12 @@
 Object.assign(window.PairRoomLocales.en.translation, {
   'ui.native.hostMode': 'Host mode', 'ui.native.embedded': 'Embedded · PairRoom manages sessions', 'ui.native.native': 'Native · relay between your native sessions (experimental)',
   'ui.native.help': 'PairRoom relays between your own sessions and never starts or interrupts them. Settings below are display-only.',
-  'ui.native.supported': 'Native hosting supports Claude Code, Codex and Grok Build.', 'ui.native.pending': 'Native Room created. Bind both sessions; each associates from its harness environment, and the approved Stop hooks relay replies.'
+  'ui.native.supported': 'Native hosting supports Claude Code, Codex, Grok Build and Gemini CLI.', 'ui.native.pending': 'Native Room created. Bind both sessions; each associates from official tool-call metadata, and approved response hooks relay replies.'
 });
 Object.assign(window.PairRoomLocales['zh-CN'].translation, {
   'ui.native.hostMode': '宿主模式', 'ui.native.embedded': 'Embedded · PairRoom 管理会话', 'ui.native.native': 'Native · 中继原生会话（实验性）',
   'ui.native.help': 'PairRoom 仅在你自己的会话间中继，不会启动或中断它们；下方配置仅作展示。',
-  'ui.native.supported': 'Native 宿主模式支持 Claude Code、Codex 和 Grok Build。', 'ui.native.pending': 'Native Room 已创建，请在两个原生会话内分别 bind；各自从 harness 环境即时关联，已批准的 Stop hook 负责中继回复。'
+  'ui.native.supported': 'Native 宿主模式支持 Claude Code、Codex、Grok Build 和 Gemini CLI。', 'ui.native.pending': 'Native Room 已创建，请在两个原生会话内分别 bind；各自从官方工具调用元数据即时关联，已批准的回复 hook 负责中继回复。'
 });
 
 Object.assign(window.PairRoomLocales["en"].translation, {
@@ -2502,9 +2502,9 @@ Object.assign(window.PairRoomLocales["en"].translation, {
   "room.native.setup.title": "Native setup & usage",
   "room.native.setup.intro": "Connect two sessions you already run. Setup is performed through their tools; the app does not start or configure them.",
   "room.native.setup.prerequisites": "Check the prerequisites",
-  "room.native.setup.prerequisitesBody": "Install PairRoom and Git, then open the desktop app or start pairroom service (not a second Service). Verify the commands below in each agent’s tool shell. The CLI and app/Service should be from the same release. Sign in to the selected harnesses and open both sessions in the same Git project. Current Native support: Claude Code, Codex and Grok Build.",
+  "room.native.setup.prerequisitesBody": "Install PairRoom and Git, then open the desktop app or start pairroom service (not a second Service). Verify the commands below in each agent’s tool shell. The CLI and app/Service should be from the same release. Sign in to the selected harnesses and open both sessions in the same Git project. Current Native support: Claude Code, Codex, Grok Build and Gemini CLI.",
   "room.native.setup.install": "Install and approve the project hooks",
-  "room.native.setup.installBody": "Run the install command in each selected runtime’s session, once per project. When identification is unavailable, add --runtime claude, --runtime codex or --runtime grok as appropriate. Grok Build reuses Claude Code project hooks by default, so a Claude Code + Grok install writes only the Claude Code hook and removes a leftover PairRoom Grok Stop hook. Review and approve the exact hooks in the harness (Codex: /hooks; Grok: /hooks and project folder trust, including a reused Claude Code hook); installation does not grant trust. Restart or re-review changed definitions as directed. Install also writes the optional relay skill; installing only a skill does not install the hooks.",
+  "room.native.setup.installBody": "Run the install command in each selected runtime’s session, once per project. When identification is unavailable, add --runtime claude, --runtime codex, --runtime grok or --runtime gemini as appropriate. Gemini installs BeforeTool (caller identity) and AfterAgent (reply relay); approve/reload both in /hooks. Grok Build reuses Claude Code project hooks by default, so a Claude Code + Grok install writes only the Claude Code hook and removes a leftover PairRoom Grok Stop hook. Review and approve the exact hooks in the harness (Codex: /hooks; Grok: /hooks and project folder trust, including a reused Claude Code hook); installation does not grant trust. Restart or re-review changed definitions as directed. Install also writes the optional relay skill; installing only a skill does not install the hooks.",
   "room.native.setup.connect": "Create once, then join",
   "room.native.setup.connectBody": "In the first session, use /pairroom-relay TOPIC or the creation command below. Give the returned peer_join command to the other session. A unique matching Room can also be joined with bind. If you created a Native Room in the app, both sessions join that Room instead: do not also use --create. Follow candidate guidance when Room/slot selection is ambiguous.",
   "room.native.setup.use": "Verify and collaborate",
@@ -2518,9 +2518,9 @@ Object.assign(window.PairRoomLocales["zh-CN"].translation, {
   "room.native.setup.title": "Native 安装与使用",
   "room.native.setup.intro": "关联两个你自行运行的会话。请通过各自的工具完成设置；应用不会启动或配置这些会话。",
   "room.native.setup.prerequisites": "检查安装前提",
-  "room.native.setup.prerequisitesBody": "安装 PairRoom 与 Git，打开桌面应用或启动 pairroom service，不要重复启动同一数据目录的 Service。在每个 agent 的工具终端中验证下列命令；CLI 与应用/Service 应使用同一发布版本。登录所选 harness，并在同一个 Git 项目中打开双方会话。当前 Native 支持 Claude Code、Codex 和 Grok Build。",
+  "room.native.setup.prerequisitesBody": "安装 PairRoom 与 Git，打开桌面应用或启动 pairroom service，不要重复启动同一数据目录的 Service。在每个 agent 的工具终端中验证下列命令；CLI 与应用/Service 应使用同一发布版本。登录所选 harness，并在同一个 Git 项目中打开双方会话。当前 Native 支持 Claude Code、Codex、Grok Build 和 Gemini CLI。",
   "room.native.setup.install": "安装并批准项目 hook",
-  "room.native.setup.installBody": "在每个所选 runtime 的会话中运行安装命令，每个项目安装一次。无法识别时，按实际 runtime 添加 --runtime claude、--runtime codex 或 --runtime grok。Grok Build 默认复用 Claude Code 的项目 hook，因此同时安装 Claude Code 与 Grok 时只写入 Claude Code hook，并清掉多余的 PairRoom Grok Stop hook。在 harness 内审阅并批准准确的 hook 定义（Codex：/hooks；Grok：/hooks 与项目文件夹信任，包括复用的 Claude Code hook）；安装不等于授予信任。定义变更后按提示重新审阅或重启。安装也会写入可选的 relay skill；仅安装 skill 并不会安装 hook。",
+  "room.native.setup.installBody": "在每个所选 runtime 的会话中运行安装命令，每个项目安装一次。无法识别时，按实际 runtime 添加 --runtime claude、--runtime codex、--runtime grok 或 --runtime gemini。Gemini 安装 BeforeTool（会话识别）与 AfterAgent（回复中继），需在 /hooks 中批准并重新加载两者。Grok Build 默认复用 Claude Code 的项目 hook，因此同时安装 Claude Code 与 Grok 时只写入 Claude Code hook，并清掉多余的 PairRoom Grok Stop hook。在 harness 内审阅并批准准确的 hook 定义（Codex：/hooks；Grok：/hooks 与项目文件夹信任，包括复用的 Claude Code hook）；安装不等于授予信任。定义变更后按提示重新审阅或重启。安装也会写入可选的 relay skill；仅安装 skill 并不会安装 hook。",
   "room.native.setup.connect": "只建一次房，再加入",
   "room.native.setup.connectBody": "在第一个会话中调用 /pairroom-relay TOPIC 或运行下列建房命令，把输出的 peer_join 命令交给另一会话执行。只有一个匹配的 Room 时，也可直接运行 bind 加入。若已在应用中创建 Native Room，双方直接加入该房间，不要再执行 --create。Room 或槽位不明确时，按候选提示选择。",
   "room.native.setup.use": "验证并开始协作",

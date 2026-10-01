@@ -125,7 +125,7 @@ func nativeWakeAdvice(kind model.RuntimeKind, session string) wakeTemplate {
 	switch kind.Canonical() {
 	case model.RuntimeClaude:
 		return wakeTemplate{Notice: "Claude wake needs a captured inbox and inbound permission. Use relay doctor or receive-only wait; no raw socket command."}
-	case model.RuntimeGrok:
+	case model.RuntimeGrok, model.RuntimeGemini:
 		return wakeTemplate{Notice: "No Service wake. Use tracked background wait only if completion reaches the model; otherwise foreground wait."}
 	}
 	return wakeTemplate{}

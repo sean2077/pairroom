@@ -149,7 +149,7 @@ func TestServeRejectsInvalidAgentSelectionFlags(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"--claude-runtime", "gemini"}, "Agent 1 default"},
+		{[]string{"--claude-runtime", "unsupported"}, "Agent 1 default"},
 		{[]string{"--codex-sandbox", "everything"}, "Agent 2 default"},
 		{[]string{"--cc-switch-db", "relative.db"}, "cc_switch.database must be an absolute path"},
 		{[]string{"--claude-command", " "}, "runtimes.claude.command is required"},
@@ -198,7 +198,7 @@ func TestServiceListenFailureReleasesTheDataRoot(t *testing.T) {
 func TestServiceRejectsInvalidAgentSelectionAfterClaimingThenReleasingTheRoot(t *testing.T) {
 	isolateUserDirs(t)
 	root := filepath.Join(t.TempDir(), "service-root")
-	err := run([]string{"service", "--data-root", root, "--listen", "127.0.0.1:0", "--mock", "--no-browser", "--codex-runtime", "gemini"})
+	err := run([]string{"service", "--data-root", root, "--listen", "127.0.0.1:0", "--mock", "--no-browser", "--codex-runtime", "unsupported"})
 	requireErrorContains(t, err, "Agent 2 default")
 	assertNotExist(t, filepath.Join(root, "service.lock"))
 }

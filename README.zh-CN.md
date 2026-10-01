@@ -2,7 +2,7 @@
 
 [English](README.md) · **简体中文**
 
-**两个独立编程 Agent，同一个问题，保留你的原生工作流。** PairRoom 把 [Claude Code](https://code.claude.com/docs/en/overview)、[Codex](https://github.com/openai/codex) 和 [Grok Build](https://docs.x.ai/build/overview) 会话连起来，让它们对照仓库互相审查，原有的模型循环、工具、skills 和 subagents 都不替换。
+**两个独立编程 Agent，同一个问题，保留你的原生工作流。** PairRoom 把 [Claude Code](https://code.claude.com/docs/en/overview)、[Codex](https://github.com/openai/codex)、[Grok Build](https://docs.x.ai/build/overview) 和 [Gemini CLI](https://github.com/google-gemini/gemini-cli) 会话连起来，让它们对照仓库互相审查，原有的模型循环、工具、skills 和 subagents 都不替换。
 
 <p align="center">
   <img src="docs/images/pairroom-native-room-zh.png" alt="Native Room 在你自己的 Claude Code 与 Codex 会话之间中继">
@@ -13,12 +13,12 @@
 平时让 Claude Code 出方案、再把方案复制给 Codex 审，审完再贴回去……这种来回搬运做多了很累。PairRoom 让两个 Agent 直接对话：一个提方案，另一个挑刺、补充、执行，全程你都看得到，也随时可以插话。
 
 - **只做两个 Agent**：两个 Agent 刚好能互相查漏补缺，沟通链路也最短。再加 Agent，协调成本和 token 消耗都会上去，这类工作很少值得。
-- **干活的还是官方 harness**：Claude Code、Codex、Grok Build 保留各自的模型循环、工具、skills 和 subagents。PairRoom 只负责在它们之间传话，不另造一套执行循环。
+- **干活的还是官方 harness**：Claude Code、Codex、Grok Build、Gemini CLI 保留各自的模型循环、工具、skills 和 subagents。PairRoom 只负责在它们之间传话，不另造一套执行循环。
 - **两种宿主模式**：每个槽位都能选任一受支持的 Runtime，两边用同一个也可以。
 
   | 宿主模式 | 适合的需求 | 边界 |
   |---|---|---|
-  | **Native**（日常工作推荐；实验性） | 继续用自己的 Claude Code、Codex（包括 Codex Desktop）或 Grok Build 会话，留在熟悉的终端（如 [WezTerm](https://wezterm.org/)）或客户端里，不用换到另一个编辑器或 Agent 工作台 | PairRoom 负责绑定、持久中继和审计；配置、权限和执行归原生 harness 管，Room 里的选择只作展示。 |
+  | **Native**（日常工作推荐；实验性） | 继续用自己的 Claude Code、Codex（包括 Codex Desktop）、Grok Build 或 Gemini CLI 会话，留在熟悉的终端（如 [WezTerm](https://wezterm.org/)）或客户端里，不用换到另一个编辑器或 Agent 工作台 | PairRoom 负责绑定、持久中继和审计；配置、权限和执行归原生 harness 管，Room 里的选择只作展示。 |
   | **Embedded** | 使用 PairRoom 桌面端或网页端的对话界面和适配器控制，每个槽位单独选 Runtime、Provider、模型、effort 和指令 | 适配器由 PairRoom 管理，同一 Room 同一时间只运行一个原生 Turn；没设置的项继承原生配置。 |
 
 - **职责可以自定义**：默认一个负责规划和审核，另一个负责执行和补充。也可以用自定义 Room 改成「先一起讨论方案，再各自执行一部分，最后互审」。职责不是权限，也不是必经阶段：简单任务由被点名的 Agent 直接完成，审查结束也不等于允许动手实现。
@@ -28,6 +28,8 @@
 PairRoom 沿用你仓库现有的指令、worktree 和 PR/MR 流程，不加强制阶段，也不会在每次中继时附上累计的 Room 历史。
 
 [Why PairRoom](docs/WHY_PAIRROOM.md) 讲适用场景和限制，[替代方案](docs/ALTERNATIVES.md) 用注明日期的资料比较同类工具，[核心概念](docs/CONCEPTS.md) 解释 Runtime、Provider、槽位、Binding 等术语。现成的提示词见[先审查再执行](docs/GETTING_STARTED.md#review-first-execute-where-it-fits)。
+
+Gemini CLI 支持两种模式，同一 Room 也可以绑定两个 Gemini 会话。其 hooks、原生认证和当前能力边界见 [Gemini 接入说明](docs/NATIVE_RELAY.md#gemini-cli)。
 
 ## 界面一览
 

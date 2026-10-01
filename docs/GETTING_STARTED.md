@@ -11,7 +11,7 @@ Choose the host mode before following commands. **Embedded** lets PairRoom drive
 | Real Agents | Selected native CLIs installed and authenticated | No extra PairRoom source build |
 | Mock | No vendor CLI or model account | None for a prebuilt package |
 
-Prebuilt packages do **not** require Go. Install only the Runtimes you will use: [Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), and/or [Grok Build](https://docs.x.ai/build/overview). Both slots may use the same Runtime. [Core concepts](CONCEPTS.md#tool-names-and-configuration-layers) explains how Runtime, model, and Provider differ.
+Prebuilt packages do **not** require Go. Install only the Runtimes you will use: [Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), [Grok Build](https://docs.x.ai/build/overview), and/or [Gemini CLI](https://github.com/google-gemini/gemini-cli). Both slots may use the same Runtime. [Core concepts](CONCEPTS.md#tool-names-and-configuration-layers) explains how Runtime, model, and Provider differ.
 
 ## Install a release
 
@@ -39,7 +39,7 @@ Mock is deterministic control-plane verification, not a language model or a vend
 
 ## First real Room
 
-These steps are for **Embedded**. To retain an independent Claude Code terminal, Codex CLI/Desktop, or Grok Build session, use the [Native path](#keep-codex-desktop-a-native-room).
+These steps are for **Embedded**. To retain an independent Claude Code terminal, Codex CLI/Desktop, Grok Build, or Gemini CLI session, use the [Native path](#keep-codex-desktop-a-native-room).
 
 Confirm the chosen CLI works independently as the same OS user in the intended repository:
 
@@ -48,6 +48,7 @@ Confirm the chosen CLI works independently as the same OS user in the intended r
 claude --version
 codex --version
 grok --version
+gemini --version
 pairroom doctor --repo /absolute/path/to/repository --json
 ```
 
@@ -67,7 +68,7 @@ Check actual repository evidence, one active participant Turn at a time, and pee
 
 ## Keep Codex Desktop: a Native Room
 
-This path also applies to Claude Code and Grok Build. Native is experimental: it keeps the original sessions and does not own their processes. Provider, model, effort, and permissions remain native-controlled; displayed Room metadata does not apply overrides. Historical or synthetic evidence is not current authenticated multi-round acceptance.
+This path also applies to Claude Code, Grok Build, and Gemini CLI. Native is experimental: it keeps the original sessions and does not own their processes. Provider, model, effort, and permissions remain native-controlled; displayed Room metadata does not apply overrides. Historical or synthetic evidence is not current authenticated multi-round acceptance.
 
 Start/reuse a non-Mock Service. Install the intended project's hooks and approve them in each harness, following [Native setup](NATIVE_RELAY.md#one-time-project-setup):
 
@@ -83,7 +84,7 @@ In the first Agent session, load the installed skill and invoke:
 /pairroom-relay Log-upload plan review
 ```
 
-That session creates and binds one Room, then prints the peer's join command. Ask the **other Agent** to execute that command through its native tool environment. Bind reads the official session ID and is immediately ready; do not echo a nonce, wait for an initial Stop, or add a status check after every success. A detached terminal or Grok `!` shell is not the intended tool-call environment.
+That session creates and binds one Room, then prints the peer's join command. Ask the **other Agent** to execute that command through its native tool environment. Bind reads official tool-call session metadata (Gemini uses its approved BeforeTool hook; see [Gemini setup](NATIVE_RELAY.md#gemini-cli)) and is immediately ready; do not echo a nonce, wait for an initial Stop, or add a status check after every success. A detached terminal or Grok `!` shell is not the intended tool-call environment.
 
 Alternatively, create a Native Room with the intended pair in Management and bind to it; skip skill-based creation. Zero-flag bind works only when selection is unambiguous. Reuse the binding across review rounds. If creation succeeded but bind failed, use the printed recovery command rather than `--create` again.
 
@@ -91,7 +92,7 @@ To confirm setup once, let each bound session finish a turn and check that `pair
 
 A peer-directed Stop reply is published in full; `@user` publishes a human-facing result. Without either handle, the private reply body is **not** copied to the Room. Explicit `send`/`exchange` instead uses its command target; avoid a second peer-directed final reply after explicit publication unless duplication is intentional.
 
-Hooks receive during bounded park windows. Outside them, eligible Claude inbox and Codex queue capabilities can receive a body-free Service wake. Grok, unavailable capabilities, or restrictive inbound policies need the documented foreground `wait` / human fallback; harness-owned background completion is useful only where it is surfaced to the model. `handed_off` is stdout evidence, not model acceptance. Use [Native recovery](NATIVE_RELAY.md#recovery-and-review-surface) rather than starting a duplicate session or blindly resending.
+Hooks receive during bounded park windows. Outside them, eligible Claude inbox and Codex queue capabilities can receive a body-free Service wake. Grok/Gemini, unavailable capabilities, or restrictive inbound policies need the documented foreground `wait` / human fallback; harness-owned background completion is useful only where it is surfaced to the model. `handed_off` is stdout evidence, not model acceptance. Use [Native recovery](NATIVE_RELAY.md#recovery-and-review-surface) rather than starting a duplicate session or blindly resending.
 
 ## Review first, execute where it fits
 

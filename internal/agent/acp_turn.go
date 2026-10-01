@@ -13,13 +13,13 @@ import (
 	"github.com/sean2077/pairroom/internal/prompt"
 )
 
-type grokTurn struct {
+type acpTurn struct {
 	turnID string
 	inputs []model.AgentInput
 	final  strings.Builder
 }
 
-func (g *GrokAdapter) StartTurn(ctx context.Context, input model.AgentInput) error {
+func (g *ACPAdapter) StartTurn(ctx context.Context, input model.AgentInput) error {
 	g.submitMu.Lock()
 	defer g.submitMu.Unlock()
 	g.mu.Lock()
@@ -32,13 +32,20 @@ func (g *GrokAdapter) StartTurn(ctx context.Context, input model.AgentInput) err
 		}
 	}
 	if err := g.ensureSession(ctx); err != nil {
+		if g.cfg.Runtime == model.RuntimeGemini {
+			g.mu.Lock()
+			cmd := g.cmd
+			g.mu.Unlock()
+			g.abortStart(cmd)
+			return fmt.Errorf("Gemini session setup failed; authenticate/configure gemini in its native CLI first: %w", err)
+		}
 		return err
 	}
 
 	g.mu.Lock()
 	if g.turn != nil {
 		g.mu.Unlock()
-		return errors.New("Grok Build already has an active prompt")
+		return errors.New("ACP runtime already has an active prompt")
 	}
 	sessionID := g.sessionID
 	bootstrap := g.bootstrapPending
@@ -51,24 +58,34 @@ func (g *GrokAdapter) StartTurn(ctx context.Context, input model.AgentInput) err
 	g.mu.Lock()
 	promptImage := g.capabilities.promptImage
 	g.mu.Unlock()
-	content, err := grokContent(text, input.Attachments, promptImage)
+	content, err := acpContent(text, input.Attachments, promptImage)
 	if err != nil {
 		return err
 	}
 	requestID := g.nextRequestID.Add(1)
-	reply := make(chan grokRPCReply, 1)
-	turn := &grokTurn{
-		turnID: model.NewID("grok-turn"), inputs: []model.AgentInput{input},
+	reply := make(chan acpRPCReply, 1)
+	turn := &acpTurn{
+		turnID: model.NewID(string(g.cfg.Runtime) + "-turn"), inputs: []model.AgentInput{input},
 	}
 	g.mu.Lock()
 	g.pending[requestID] = reply
 	g.turn = turn
 	g.mu.Unlock()
+	params := map[string]any{"sessionId": sessionID, "prompt": content}
+	if g.cfg.Runtime == model.RuntimeGrok {
+		params["_meta"] = map[string]any{"screenMode": "headless"}
+	}
 	if err := g.send(map[string]any{
 		"jsonrpc": "2.0", "id": requestID, "method": "session/prompt",
-		"params": map[string]any{"sessionId": sessionID, "prompt": content, "_meta": map[string]any{"screenMode": "headless"}},
+		"params": params,
 	}); err != nil {
 		g.mu.Lock()
+		if errors.Is(err, ErrSubmissionUnknown) {
+			g.sessionEngaged = true
+			g.mu.Unlock()
+			g.failStream("ACP prompt submission is uncertain; stopping transport before releasing the Turn")
+			return err
+		}
 		delete(g.pending, requestID)
 		if g.turn == turn {
 			g.turn = nil
@@ -98,24 +115,24 @@ func (g *GrokAdapter) StartTurn(ctx context.Context, input model.AgentInput) err
 	processing.TurnID = turn.turnID
 	processing.CorrelationID = input.MessageID
 	processing.Name = string(model.ProcessingWorking)
-	processing.Text = "accepted by Grok ACP"
+	processing.Text = "accepted by ACP"
 	g.sink(processing)
 	go g.awaitPrompt(turn, reply)
 	return nil
 }
 
-func grokContent(text string, attachments []model.AgentAttachment, allowImages bool) ([]map[string]any, error) {
+func acpContent(text string, attachments []model.AgentAttachment, allowImages bool) ([]map[string]any, error) {
 	content := []map[string]any{{"type": "text", "text": text}}
 	for _, attachment := range attachments {
 		if attachment.Kind != "image" || !strings.HasPrefix(strings.ToLower(attachment.MediaType), "image/") {
-			return nil, fmt.Errorf("attachment %q is not a Grok image", attachment.Name)
+			return nil, fmt.Errorf("attachment %q is not an ACP image", attachment.Name)
 		}
 		data, err := os.ReadFile(attachment.Path)
 		if err != nil {
-			return nil, fmt.Errorf("read Grok image %q: %w", attachment.Name, err)
+			return nil, fmt.Errorf("read ACP image %q: %w", attachment.Name, err)
 		}
 		if len(data) == 0 || (attachment.Size > 0 && int64(len(data)) != attachment.Size) {
-			return nil, fmt.Errorf("Grok image %q changed after attachment validation", attachment.Name)
+			return nil, fmt.Errorf("ACP image %q changed after attachment validation", attachment.Name)
 		}
 		if !allowImages {
 			continue
@@ -127,12 +144,15 @@ func grokContent(text string, attachments []model.AgentAttachment, allowImages b
 	if !allowImages && len(attachments) > 0 {
 		// The envelope retains the verified local paths. Do not send unsupported
 		// binary blocks or reject the complete message because of optional media.
-		content = append(content, map[string]any{"type": "text", "text": "[PairRoom attachment notice]\nGrok Build does not support image input over ACP. The images were not sent as visual content; their names and local paths are listed in the message. Use an available native image-reading tool if supported and permitted. If you cannot inspect them, state that limitation and ask @user for the needed details; do not infer image contents from filenames."})
+		content = append(content, map[string]any{"type": "text", "text": "[PairRoom attachment notice]\nThis runtime does not support image input over ACP. The images were not sent as visual content; their names and local paths are listed in the message. Use an available native image-reading tool if supported and permitted. If you cannot inspect them, state that limitation and ask @user for the needed details; do not infer image contents from filenames."})
 	}
 	return content, nil
 }
 
-func (g *GrokAdapter) Steer(ctx context.Context, input model.AgentInput) SteerOutcome {
+func (g *ACPAdapter) Steer(ctx context.Context, input model.AgentInput) SteerOutcome {
+	if g.cfg.Runtime == model.RuntimeGemini {
+		return SteerOutcome{State: SteerUnavailable, Detail: "Gemini CLI does not support in-flight steering"}
+	}
 	g.submitMu.Lock()
 	defer g.submitMu.Unlock()
 	g.mu.Lock()
@@ -146,7 +166,7 @@ func (g *GrokAdapter) Steer(ctx context.Context, input model.AgentInput) SteerOu
 	g.mu.Lock()
 	promptImage := g.capabilities.promptImage
 	g.mu.Unlock()
-	content, err := grokContent(text, input.Attachments, promptImage)
+	content, err := acpContent(text, input.Attachments, promptImage)
 	if err != nil {
 		return SteerOutcome{State: SteerRejected, Detail: err.Error()}
 	}
@@ -155,7 +175,7 @@ func (g *GrokAdapter) Steer(ctx context.Context, input model.AgentInput) SteerOu
 	}
 	interjectMethod, acknowledgement, err := g.callGrokInterject(ctx, interjectParams)
 	if err != nil {
-		var rpcErr grokRPCError
+		var rpcErr acpRPCError
 		if errors.As(err, &rpcErr) {
 			if rpcErr.Code == -32601 {
 				return SteerOutcome{State: SteerUnavailable, Detail: "Grok Build does not expose an interject extension: " + err.Error()}
@@ -194,7 +214,7 @@ func (g *GrokAdapter) Steer(ctx context.Context, input model.AgentInput) SteerOu
 // that permits trying the current public `x.ai/interject` spelling: all other
 // failures are returned unchanged so an uncertain native write is never
 // silently duplicated.
-func (g *GrokAdapter) callGrokInterject(ctx context.Context, params map[string]any) (string, json.RawMessage, error) {
+func (g *ACPAdapter) callGrokInterject(ctx context.Context, params map[string]any) (string, json.RawMessage, error) {
 	methods := []string{"_x.ai/interject", "x.ai/interject"}
 	var last error
 	for index, method := range methods {
@@ -203,7 +223,7 @@ func (g *GrokAdapter) callGrokInterject(ctx context.Context, params map[string]a
 			return method, result, nil
 		}
 		last = err
-		var rpcErr grokRPCError
+		var rpcErr acpRPCError
 		if !errors.As(err, &rpcErr) || rpcErr.Code != -32601 || index == len(methods)-1 {
 			return method, nil, err
 		}
@@ -237,8 +257,20 @@ func classifyGrokInterjectAcknowledgement(raw json.RawMessage) (SteerState, stri
 	}
 }
 
-func (g *GrokAdapter) awaitPrompt(turn *grokTurn, reply <-chan grokRPCReply) {
+func (g *ACPAdapter) awaitPrompt(turn *acpTurn, reply <-chan acpRPCReply) {
 	result := <-reply
+	if result.err == nil && g.cfg.Runtime == model.RuntimeGemini {
+		var terminal struct {
+			StopReason string `json:"stopReason"`
+		}
+		err := json.Unmarshal(result.result, &terminal)
+		switch terminal.StopReason {
+		case "end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled":
+		default:
+			err = errors.New("Gemini ACP returned an invalid terminal stopReason")
+		}
+		result.err = err
+	}
 
 	// Serialize turn finalization with StartTurn/Steer. ACP may deliver the
 	// session/prompt response and a queued interject acknowledgement back to
@@ -265,7 +297,7 @@ func (g *GrokAdapter) awaitPrompt(turn *grokTurn, reply <-chan grokRPCReply) {
 	terminalKind := model.RuntimeInputCompleted
 	terminalState := model.ProcessingCompleted
 	var status string
-	detail := "completed by Grok ACP"
+	detail := "completed by ACP"
 	if result.err != nil {
 		terminalKind = model.RuntimeInputFailed
 		terminalState = model.ProcessingFailed
@@ -289,7 +321,7 @@ func (g *GrokAdapter) awaitPrompt(turn *grokTurn, reply <-chan grokRPCReply) {
 		if status == "cancelled" || status == "canceled" || status == "interrupted" {
 			terminalKind = model.RuntimeInputCancelled
 			terminalState = model.ProcessingCancelled
-			detail = "Grok prompt was " + status
+			detail = "ACP prompt was " + status
 		}
 		g.setState(model.StateIdle, "")
 	}
@@ -316,7 +348,7 @@ func (g *GrokAdapter) awaitPrompt(turn *grokTurn, reply <-chan grokRPCReply) {
 	g.sink(completed)
 }
 
-func (g *GrokAdapter) attachCurrentTurn(event *model.RuntimeEvent) {
+func (g *ACPAdapter) attachCurrentTurn(event *model.RuntimeEvent) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.turn == nil {
@@ -326,7 +358,7 @@ func (g *GrokAdapter) attachCurrentTurn(event *model.RuntimeEvent) {
 	event.CorrelationID = g.turn.inputs[len(g.turn.inputs)-1].MessageID
 }
 
-func lastGrokInputID(inputs []model.AgentInput) string {
+func lastACPInputID(inputs []model.AgentInput) string {
 	if len(inputs) == 0 {
 		return ""
 	}

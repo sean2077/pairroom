@@ -26,6 +26,7 @@ var installRuntimeChoices = []struct {
 	{model.RuntimeCodex, "Codex"},
 	{model.RuntimeClaude, "Claude Code (cc)"},
 	{model.RuntimeGrok, "Grok Build"},
+	{model.RuntimeGemini, "Gemini CLI"},
 }
 
 func parseRuntimeToken(token string) (model.RuntimeKind, bool) {
@@ -34,6 +35,8 @@ func parseRuntimeToken(token string) (model.RuntimeKind, bool) {
 		return model.RuntimeClaude, true
 	case "codex":
 		return model.RuntimeCodex, true
+	case "gemini", "gemini-cli", "geminicli":
+		return model.RuntimeGemini, true
 	case "grok", "grok-build", "grokbuild":
 		return model.RuntimeGrok, true
 	}
@@ -49,7 +52,7 @@ func parseRuntimeList(value string) ([]model.RuntimeKind, error) {
 	for _, field := range fields {
 		kind, ok := parseRuntimeToken(field)
 		if !ok {
-			return nil, fmt.Errorf("unknown --runtime %q; choose claude (cc), codex, or grok", field)
+			return nil, fmt.Errorf("unknown --runtime %q; choose claude (cc), codex, grok, or gemini", field)
 		}
 		if !seen[kind] {
 			seen[kind] = true
@@ -95,10 +98,10 @@ func promptInstallRuntimes(in io.Reader, diagnostic io.Writer) ([]model.RuntimeK
 	fmt.Fprint(diagnostic, "Select: ")
 	line, err := readLine(in)
 	if err != nil {
-		return nil, errors.New("could not read the selection; rerun pairroom relay install or pass --runtime claude|codex|grok")
+		return nil, errors.New("could not read the selection; rerun pairroom relay install or pass --runtime claude|codex|grok|gemini")
 	}
 	if strings.TrimSpace(line) == "" {
-		return nil, errors.New("no harness selected; rerun pairroom relay install or pass --runtime claude|codex|grok")
+		return nil, errors.New("no harness selected; rerun pairroom relay install or pass --runtime claude|codex|grok|gemini")
 	}
 	var resolved []string
 	for _, token := range strings.FieldsFunc(line, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
@@ -127,7 +130,7 @@ func selectInstallRuntimes(flagValue string, in io.Reader, diagnostic io.Writer)
 	if stdinIsTTY(in) {
 		return promptInstallRuntimes(in, diagnostic)
 	}
-	return nil, errors.New("install needs --runtime claude|codex|grok (comma-separated) when run non-interactively outside a native session; inside a terminal it prompts, and inside a recognized session it infers the harness")
+	return nil, errors.New("install needs --runtime claude|codex|grok|gemini (comma-separated) when run non-interactively outside a native session; inside a terminal it prompts, and inside a recognized session it infers the harness")
 }
 
 const grokSharesClaudeHooksNotice = "Grok Build reuses Claude Code project hooks by default, so PairRoom does not write a second Grok hook file when a Claude Code PairRoom Stop hook is present or being installed, and it removes PairRoom's extra Grok Stop hook if that leftover file is still there. Review the Claude Code project hook; Grok's /hooks (press r to reload) still shows that reused definition, and folder trust remains a human decision. If Claude-hook compatibility is disabled ([compat.claude] hooks = false or GROK_CLAUDE_HOOKS_ENABLED=false), install Grok with that compatibility off so PairRoom writes .grok/hooks/pairroom.json."
@@ -192,7 +195,7 @@ func runInstall(root string, kinds []model.RuntimeKind, _ io.Reader, out, _ io.W
 			removed = append(removed, string(model.RuntimeGrok))
 		}
 	}
-	notice := "Review and approve the exact project hook in each harness (Codex: /hooks; Grok: /hooks, press r to reload, then review project folder trust; Claude Code: project hook consent). This command does not grant native trust. Keep pairroom on PATH. Real authenticated bidirectional E2E remains release-gated."
+	notice := "Review and approve the exact project hook in each harness (Codex: /hooks; Grok: /hooks, press r to reload, then review project folder trust; Claude Code: project hook consent; Gemini CLI: /hooks, approve BeforeTool and AfterAgent in the trusted workspace). This command does not grant native trust. Keep pairroom on PATH. Real authenticated bidirectional E2E remains release-gated."
 	if len(skipped) > 0 || len(removed) > 0 {
 		notice = grokSharesClaudeHooksNotice + " " + notice
 	}
@@ -223,10 +226,12 @@ func hookPath(root string, kind model.RuntimeKind) (string, error) {
 		return filepath.Join(root, ".claude", "settings.json"), nil
 	case model.RuntimeCodex:
 		return filepath.Join(root, ".codex", "hooks.json"), nil
+	case model.RuntimeGemini:
+		return filepath.Join(root, ".gemini", "settings.json"), nil
 	case model.RuntimeGrok:
 		return filepath.Join(root, ".grok", "hooks", "pairroom.json"), nil
 	default:
-		return "", errors.New("native relay supports Claude Code, Codex and Grok Build")
+		return "", errors.New("native relay supports Claude Code, Codex, Grok Build and Gemini CLI")
 	}
 }
 func readHooks(path string) (map[string]any, error) {
@@ -263,7 +268,21 @@ func ownRelayStopHook(root string, kind model.RuntimeKind) (present, disabled bo
 		return false, true, nil
 	}
 	hooks, _ := config["hooks"].(map[string]any)
-	groups, _ := hooks["Stop"].([]any)
+	if kind == model.RuntimeGemini {
+		if enabled, ok := hooks["enabled"].(bool); ok && !enabled {
+			return false, true, nil
+		}
+		tools, _ := config["tools"].(map[string]any)
+		if enabled, ok := tools["enableHooks"].(bool); ok && !enabled {
+			return false, true, nil
+		}
+	}
+	event := "Stop"
+	minTimeout := float64(45)
+	if kind == model.RuntimeGemini {
+		event, minTimeout = "AfterAgent", 45000
+	}
+	groups, _ := hooks[event].([]any)
 	for _, raw := range groups {
 		group, _ := raw.(map[string]any)
 		entries, _ := group["hooks"].([]any)
@@ -271,7 +290,10 @@ func ownRelayStopHook(root string, kind model.RuntimeKind) (present, disabled bo
 			entry, _ := raw.(map[string]any)
 			async, _ := entry["async"].(bool)
 			timeout, _ := entry["timeout"].(float64)
-			if entry["type"] == "command" && entry["command"] == hookCommand(kind) && !async && timeout >= 45 {
+			if entry["type"] == "command" && entry["command"] == hookCommand(kind) && !async && timeout >= minTimeout {
+				if kind == model.RuntimeGemini && !hasGeminiBeforeTool(hooks) {
+					return false, false, nil
+				}
 				return true, false, nil
 			}
 		}
@@ -285,7 +307,7 @@ func installed(root string, kind model.RuntimeKind) error {
 		return err
 	}
 	if disabled {
-		return errors.New("hooks are disabled; native association requires an approved Stop hook")
+		return errors.New("hooks are disabled; native association requires approved response hooks")
 	}
 	if present {
 		return nil
@@ -302,6 +324,9 @@ func installed(root string, kind model.RuntimeKind) error {
 			return nil
 		}
 		return fmt.Errorf("no PairRoom Stop hook is installed for grok: run pairroom relay install --runtime grok, or install --runtime claude so Grok can reuse that project hook, approve it (%s), then bind again. Bind checks installation only; an unapproved hook never publishes Stop replies", approvalPlace(kind))
+	}
+	if kind == model.RuntimeGemini {
+		return errors.New("Gemini BeforeTool and AfterAgent hooks are required: run pairroom relay install --runtime gemini, approve/reload both in /hooks, then bind again")
 	}
 	return fmt.Errorf("no PairRoom Stop hook is installed for %s: run pairroom relay install --runtime %s, approve it (%s), then bind again. Bind checks installation only; an unapproved hook never publishes Stop replies", kind, kind, approvalPlace(kind))
 }
@@ -342,6 +367,9 @@ func editHooks(root string, kind model.RuntimeKind, remove bool) error {
 		hooks = map[string]any{}
 	}
 	events := []string{"Stop"}
+	if kind == model.RuntimeGemini {
+		events = []string{"BeforeTool", "AfterAgent"}
+	}
 	if kind == model.RuntimeClaude || kind == model.RuntimeGrok {
 		events = append(events, "StopFailure")
 	}
@@ -373,7 +401,15 @@ func editHooks(root string, kind model.RuntimeKind, remove bool) error {
 			}
 		}
 		if !remove {
-			kept = append(kept, map[string]any{"hooks": []any{map[string]any{"type": "command", "command": hookCommand(kind), "timeout": 45}}})
+			timeout := 45
+			if kind == model.RuntimeGemini {
+				timeout = 45000
+			}
+			group := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": hookCommand(kind), "timeout": timeout}}}
+			if kind == model.RuntimeGemini && event == "BeforeTool" {
+				group["matcher"] = "run_shell_command"
+			}
+			kept = append(kept, group)
 		}
 		if len(kept) == 0 {
 			delete(hooks, event)
@@ -421,6 +457,17 @@ func ownedSkill(data []byte) bool {
 // skillHome resolves the host's skill directory the same way installSkill
 // writes it, without creating anything.
 func skillHome(kind model.RuntimeKind) (string, error) {
+	if kind == model.RuntimeGemini {
+		home := os.Getenv("GEMINI_CLI_HOME")
+		if home == "" {
+			var err error
+			home, err = os.UserHomeDir()
+			if err != nil {
+				return "", err
+			}
+		}
+		return filepath.Join(home, ".gemini", "skills", "pairroom-relay"), nil
+	}
 	homeVar := map[model.RuntimeKind]string{
 		model.RuntimeClaude: "CLAUDE_CONFIG_DIR",
 		model.RuntimeCodex:  "CODEX_HOME",
@@ -461,6 +508,27 @@ func skillStatus(kind model.RuntimeKind) string {
 }
 
 func installSkill(kind model.RuntimeKind) error {
+	if kind == model.RuntimeGemini {
+		path, err := skillHome(kind)
+		if err != nil {
+			return err
+		}
+		home := filepath.Dir(filepath.Dir(filepath.Dir(path)))
+		if !filepath.IsAbs(home) {
+			return errors.New("GEMINI_CLI_HOME must be absolute")
+		}
+		if err := os.MkdirAll(home, 0700); err != nil {
+			return err
+		}
+		if st, err := os.Lstat(home); err != nil || !st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
+			return errors.New("Gemini home must be a real directory")
+		}
+		parent, err := secureDir(home, ".gemini", "skills")
+		if err != nil {
+			return err
+		}
+		return installSkillLeaf(parent, "pairroom-relay")
+	}
 	// Product skill discovery follows the selected host, not .agents/ SSOT.
 	homeVar := map[model.RuntimeKind]string{
 		model.RuntimeClaude: "CLAUDE_CONFIG_DIR",

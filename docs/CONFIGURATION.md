@@ -38,13 +38,16 @@ On Windows, a command that resolves to a `.cmd`/`.bat` launcher (the npm shim fo
 |---|---|
 | Claude Code | `permission_mode`: `default`, `manual`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, `bypass`, `always-approve`, `yolo` (`bypass` and `always-approve` are accepted aliases of `bypassPermissions`) |
 | Codex | `approval_policy`: `untrusted`, `unless-trusted`, `unlessTrusted`, `on-failure`, `on-request`, `never`, `yolo`; `sandbox`: `read-only`, `workspace-write`, `danger-full-access` |
+| Gemini CLI | `permission_mode`: `default`, `auto_edit`, `plan`, `yolo`; `sandbox`: `on`, `off`; no effort or approval-policy override, native Provider only |
 | Grok Build | `permission_mode`: `default`, `ask`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, `always-approve`, `yolo`; `sandbox`: `read-only`, `workspace`, `strict`, `off` |
 
-`yolo` projects Claude bypass plus `--dangerously-skip-permissions`, Codex `never` plus full-access sandbox, or Grok `--always-approve` plus sandbox `off`. These are PairRoom's supported mappings, not certification of every future CLI release. Keep secrets out of argv/logs/messages/repositories; use supported read-only/plan restrictions for untrusted review rather than relying on Lead/Executor labels. After changing executable/Provider, check deterministic behavior and separately test an authorized real read-only Turn.
+`yolo` projects Claude bypass plus `--dangerously-skip-permissions`, Codex `never` plus full-access sandbox, Grok `--always-approve` plus sandbox `off`, or Gemini `--approval-mode yolo` plus boolean sandbox `false`. These are PairRoom's supported mappings, not certification of every future CLI release. Keep secrets out of argv/logs/messages/repositories; use supported read-only/plan restrictions for untrusted review rather than relying on Lead/Executor labels. After changing executable/Provider, check deterministic behavior and separately test an authorized real read-only Turn.
 
 Grok prompts/instructions travel over long-lived ACP, never argv. New sessions receive `_meta.rules`; exact resumption receives bootstrap once in its first PairRoom prompt without replacing the native system prompt.
 
 Claude Code receives the PairRoom system prompt through `--append-system-prompt-file` (a private file under the Room data directory) whenever `claude --help` advertises it, including the `--append-system-prompt[-file]` notation current releases use. Only a CLI that advertises just `--append-system-prompt` gets the prompt as an argument; on Windows, startup then fails with a clear error if the command line would exceed the operating-system limit (32,767 characters, or 8,191 through a `.cmd` launcher).
+
+Gemini uses official ACP without calling the state-changing `authenticate` RPC. Configure/login through its native CLI before Embedded activation. Empty policy overrides preserve the reported native mode; `plan` does not disable an inherited sandbox. Unsupported effort and CC Switch references are rejected. See [Gemini boundaries](NATIVE_RELAY.md#gemini-cli).
 
 ## Agent pair profiles
 
@@ -93,6 +96,7 @@ These JSON names come from configuration/model struct tags. The list identifies 
 - `command`
 - `database`
 - `effort`
+- `gemini`
 - `grok`
 - `instructions`
 - `listen`

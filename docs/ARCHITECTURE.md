@@ -10,7 +10,7 @@ Desktop or browser
 Management Service ---- Project registry / Room lifecycle / user preferences
         |
         +---- Embedded Room HTTP/SSE ---- Room Engine ---- native adapters
-        |                                      |          Claude / Codex / Grok
+        |                                      |          Claude / Codex / Grok / Gemini
         |                                Room Event Log
         |
         +---- Native HTTP/SSE ---- relay Engine ---- per-slot inboxes
@@ -55,7 +55,7 @@ A Project is a canonical Git workspace, not a copied checkout. Provisioning buil
 
 Native Runtime/session identity is globally unique across Bindings, including archived Rooms. Embedded deferred new Bindings materialize only on real acceptance; existing Bindings must resume exactly, and a runtime that reports a different session during a bound Turn (for example in Claude Code `system/init` or `result`) fails that Turn and is stopped rather than replacing the bound ID. Native binds associate immediately from official tool-call session metadata, with generation-scoped credentials and later hook confirmation. Checkpoint/event/uniqueness failure cannot authorize a second owner or silently substitute a session.
 
-Durable actors are `slot1`/`slot2`; RuntimeKind independently selects Claude Code, Codex, or Grok Build. Routing, policy projection, resume, and events must use that selection, not infer a vendor from a slot. `claude`/`codex` remain relay CLI input aliases only.
+Durable actors are `slot1`/`slot2`; RuntimeKind independently selects Claude Code, Codex, Grok Build, or Gemini CLI. Routing, policy projection, resume, and events must use that selection, not infer a vendor from a slot. `claude`/`codex` remain relay CLI input aliases only.
 
 Neither host mode creates a task worktree or locks the repository against external editors, other Rooms, or native subagents. Native discovery follows the confirmed session binding across cwd changes; current tool paths and task checkout remain distinct. [Workspace discovery](NATIVE_SESSION_WORKSPACE.md) owns locators, cold lookup, conflict handling, and relative file paths.
 
@@ -90,10 +90,11 @@ This section describes **Embedded adapters**, not control over Native-hosted ses
 | Claude Code | Long-lived stream-json/control transport, native initialization, tools/questions, permissions and exact session handling; steering reports unavailable rather than false acceptance |
 | Codex | Long-lived app-server; native Turn start/steer/completed and thread identity; before the `turn/start` response only the input's `clientId` echo binds a Turn, and a steered input is settled by its `turn/steer` response; an unanswered `turn/start` and generic errors do not release ownership |
 | Grok Build | ACP stdio via `grok --no-auto-update agent stdio`; supported interjection and native Turn/session operations; prompts travel over ACP, not argv/files |
+| Gemini CLI | Official ACP stdio (`--acp`, or advertised `--experimental-acp`); exact session/load, native tools, approvals and cancellation; no Grok extensions or global authentication writes |
 
 New Grok sessions receive `_meta.rules`; exactly loaded sessions receive current bootstrap once in their first PairRoom prompt without replacing the native system prompt. PairRoom advertises `terminal=false` to retain native tool execution; unsupported privileged reverse requests fail closed.
 
-Each adapter reads one stdout record at a time, up to 16 MiB for Codex and Grok Build and 8 MiB for Claude Code. A larger record or any other stdout read failure is fatal rather than skipped, because a dropped response or terminal cannot be recovered: the adapter reports `adapter.stream_error`, stops the vendor process tree, and its exit fails outstanding input and releases the Turn owner with that reason.
+Each adapter reads one stdout record at a time, up to 16 MiB for Codex, Grok Build, and Gemini CLI and 8 MiB for Claude Code. A larger record or any other stdout read failure is fatal rather than skipped, because a dropped response or terminal cannot be recovered: the adapter reports `adapter.stream_error`, stops the vendor process tree, and its exit fails outstanding input and releases the Turn owner with that reason.
 
 Empty overrides retain native inheritance. Supported CC Switch references resolve at Embedded creation/activation without modifying the external current Profile. Secrets enter only the selected child environment, not argv, stored selections, UI/logs, or a second secret store. Failures cannot fall back to another Provider. [Configuration](CONFIGURATION.md) owns mappings; [Support](../SUPPORT.md#compatibility-policy) owns compatibility evidence.
 
@@ -155,4 +156,4 @@ Optional wake is Service-authorized, body-free, rate-limited, durably reserved b
 
 ## Verification and change discipline
 
-Use state-transition tests for successful, rejected, ambiguous, cancelled, restarted, and late-callback paths. Inventories must match source registrations/fields. [Contributing](../CONTRIBUTING.md) defines commands and evidence layers. Native remains experimental: historical plans, UI fixtures, synthetic hooks, and Mock cannot establish current authenticated Claude/Codex/Grok multi-round acceptance or billed-token savings.
+Use state-transition tests for successful, rejected, ambiguous, cancelled, restarted, and late-callback paths. Inventories must match source registrations/fields. [Contributing](../CONTRIBUTING.md) defines commands and evidence layers. Native remains experimental: historical plans, UI fixtures, synthetic hooks, and Mock cannot establish current authenticated Claude/Codex/Grok/Gemini multi-round acceptance or billed-token savings.

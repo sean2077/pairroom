@@ -130,7 +130,7 @@ func (n *nativeHostRuntime) nativeDiagnostics() map[string]any {
 					d.Capability = "claude_inbox_captured"
 				}
 			}
-		case model.RuntimeGrok:
+		case model.RuntimeGrok, model.RuntimeGemini:
 			d.Capability = "tracked_wait_only"
 		}
 		if reason, due := n.waker.RateWindow(slot); reason != "" {

@@ -105,3 +105,6 @@ assert.deepEqual(nestedLinks.filter(node => node.tagName === 'a').map(node => no
   ['mailto:valid@example.com'], 'an earlier unmatched opener cannot swallow a later valid autolink');
 
 console.log(`richtext safety, table fidelity, bounded nesting and inline scans (${elapsed} ms dense body): ok`);
+
+const geminiMentions = flatten(render('@gemini @gemini0 @gemini1'));
+assert.deepEqual(geminiMentions.filter(node => node.className === 'mention').map(node => node.textContent), ['@gemini', '@gemini0', '@gemini1']);

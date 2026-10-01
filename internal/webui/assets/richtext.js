@@ -310,7 +310,7 @@
       // boundary. The backend remains authoritative for routing, but a
       // suffix such as `@codex-build` or a Unicode continuation must not look
       // like a routable handle in the transcript.
-      { type: 'mention', regex: /@(?:(?:claude|codex|grok)(?:0|1)?|user)(?![\p{L}\p{N}\p{M}._-])/giu, match: null, done: false },
+      { type: 'mention', regex: /@(?:(?:claude|codex|grok|gemini)(?:0|1)?|user)(?![\p{L}\p{N}\p{M}._-])/giu, match: null, done: false },
     ];
     let cursor = 0;
     while (cursor < source.length) {

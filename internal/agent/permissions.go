@@ -13,6 +13,8 @@ func PermissionConfig(cfg Config, profile model.PermissionProfile) Config {
 			cfg.PermissionMode, cfg.ApprovalPolicy, cfg.Sandbox = "plan", "", ""
 		case model.RuntimeCodex:
 			cfg.PermissionMode, cfg.ApprovalPolicy, cfg.Sandbox = "", "on-request", "read-only"
+		case model.RuntimeGemini:
+			cfg.PermissionMode, cfg.ApprovalPolicy = "plan", ""
 		case model.RuntimeGrok:
 			cfg.PermissionMode, cfg.ApprovalPolicy, cfg.Sandbox = "plan", "", "read-only"
 		}
@@ -22,6 +24,8 @@ func PermissionConfig(cfg Config, profile model.PermissionProfile) Config {
 			cfg.PermissionMode, cfg.ApprovalPolicy, cfg.Sandbox = "yolo", "", ""
 		case model.RuntimeCodex:
 			cfg.PermissionMode, cfg.ApprovalPolicy, cfg.Sandbox = "", "yolo", "danger-full-access"
+		case model.RuntimeGemini:
+			cfg.PermissionMode, cfg.ApprovalPolicy, cfg.Sandbox = "yolo", "", "off"
 		case model.RuntimeGrok:
 			cfg.PermissionMode, cfg.ApprovalPolicy, cfg.Sandbox = "yolo", "", "off"
 		}

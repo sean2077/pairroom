@@ -11,16 +11,16 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 )
 
-type grokPermissionOption struct {
+type acpPermissionOption struct {
 	ID   string `json:"optionId"`
 	Name string `json:"name"`
 	Kind string `json:"kind"`
 }
 
-type grokPendingApproval struct {
+type acpPendingApproval struct {
 	rawID    json.RawMessage
 	kind     string
-	options  []grokPermissionOption
+	options  []acpPermissionOption
 	approval model.Approval
 }
 
@@ -35,19 +35,30 @@ func grokPermissionArgs(mode string) []string {
 	}
 }
 
-func (g *GrokAdapter) applyAccessMode(ctx context.Context, sessionID string, access model.NativeAccess) error {
+func (g *ACPAdapter) applyAccessMode(ctx context.Context, sessionID string, access model.NativeAccess) error {
 	mode := "default"
+	if g.cfg.Runtime == model.RuntimeGemini {
+		mode = g.cfg.PermissionMode
+		if mode == "" {
+			g.mu.Lock()
+			mode = g.nativeMode
+			g.mu.Unlock()
+		}
+	}
 	if access == model.NativeAccessReadOnly || strings.EqualFold(g.cfg.PermissionMode, "plan") {
 		mode = "plan"
 	}
+	if mode == "" {
+		return errors.New("ACP session did not report its native permission mode; refusing to guess")
+	}
 	_, err := g.call(ctx, "session/set_mode", map[string]any{"sessionId": sessionID, "modeId": mode})
 	if err != nil {
-		return fmt.Errorf("set Grok session mode %s: %w", mode, err)
+		return fmt.Errorf("set ACP session mode %s: %w", mode, err)
 	}
 	return nil
 }
 
-func (g *GrokAdapter) ResolveApproval(ctx context.Context, approvalID string, resolution model.ApprovalResolution) error {
+func (g *ACPAdapter) ResolveApproval(ctx context.Context, approvalID string, resolution model.ApprovalResolution) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -55,9 +66,9 @@ func (g *GrokAdapter) ResolveApproval(ctx context.Context, approvalID string, re
 	pending, ok := g.approvals[approvalID]
 	if !ok {
 		g.mu.Unlock()
-		return fmt.Errorf("unknown Grok approval %q", approvalID)
+		return fmt.Errorf("unknown ACP approval %q", approvalID)
 	}
-	result, err := grokApprovalResult(pending, resolution.Decision)
+	result, err := acpApprovalResult(pending, resolution.Decision)
 	if err != nil {
 		g.mu.Unlock()
 		return err // Invalid input must not consume a still-answerable request.
@@ -73,7 +84,7 @@ func (g *GrokAdapter) ResolveApproval(ctx context.Context, approvalID string, re
 	return nil
 }
 
-func grokApprovalResult(pending grokPendingApproval, decision string) (any, error) {
+func acpApprovalResult(pending acpPendingApproval, decision string) (any, error) {
 	if pending.kind == "plan" {
 		switch decision {
 		case "accept":
@@ -81,26 +92,26 @@ func grokApprovalResult(pending grokPendingApproval, decision string) (any, erro
 		case "decline", "cancel":
 			return map[string]any{"outcome": "cancelled"}, nil
 		default:
-			return nil, fmt.Errorf("unsupported Grok plan decision %q", decision)
+			return nil, fmt.Errorf("unsupported ACP plan decision %q", decision)
 		}
 	}
 	cancelled := map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}
 	if decision == "cancel" {
 		return cancelled, nil
 	}
-	optionID := selectGrokPermissionOption(pending.options, decision)
+	optionID := selectACPPermissionOption(pending.options, decision)
 	if optionID == "" {
 		if decision == "decline" {
 			return cancelled, nil // Never turn one rejection into reject_always.
 		}
-		return nil, fmt.Errorf("Grok permission decision %q has no unambiguous native option", decision)
+		return nil, fmt.Errorf("ACP permission decision %q has no unambiguous native option", decision)
 	}
 	return map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": optionID}}, nil
 }
 
-func (g *GrokAdapter) cancelPendingInteractions() error {
+func (g *ACPAdapter) cancelPendingInteractions() error {
 	g.mu.Lock()
-	pending := make([]grokPendingApproval, 0, len(g.approvals))
+	pending := make([]acpPendingApproval, 0, len(g.approvals))
 	for id, approval := range g.approvals {
 		pending = append(pending, approval)
 		delete(g.approvals, id)
@@ -119,7 +130,7 @@ func (g *GrokAdapter) cancelPendingInteractions() error {
 	return result
 }
 
-func selectGrokPermissionOption(options []grokPermissionOption, decision string) string {
+func selectACPPermissionOption(options []acpPermissionOption, decision string) string {
 	id, explicit := strings.CutPrefix(decision, "option:")
 	kind := map[string]string{"accept": "allow_once", "acceptForSession": "allow_always", "decline": "reject_once"}[decision]
 	if (!explicit && kind == "") || (explicit && id == "") {
@@ -149,14 +160,14 @@ func selectGrokPermissionOption(options []grokPermissionOption, decision string)
 	return selected
 }
 
-func (g *GrokAdapter) SetNativeAccess(ctx context.Context, access model.NativeAccess) error {
+func (g *ACPAdapter) SetNativeAccess(ctx context.Context, access model.NativeAccess) error {
 	if !access.Valid() {
-		return fmt.Errorf("invalid Grok native access %q", access)
+		return fmt.Errorf("invalid ACP native access %q", access)
 	}
 	g.mu.Lock()
 	if g.turn != nil {
 		g.mu.Unlock()
-		return errors.New("interrupt or stop Grok before changing its native access")
+		return errors.New("interrupt or stop the ACP runtime before changing its native access")
 	}
 	oldAccess := g.access
 	g.access = access
@@ -176,7 +187,11 @@ func (g *GrokAdapter) SetNativeAccess(ctx context.Context, access model.NativeAc
 	return nil
 }
 
-func (g *GrokAdapter) handleServerRequest(id json.RawMessage, method string, params json.RawMessage) {
+func (g *ACPAdapter) handleServerRequest(id json.RawMessage, method string, params json.RawMessage) {
+	if g.cfg.Runtime == model.RuntimeGemini && method != "session/request_permission" {
+		_ = g.sendRawResponse(id, nil, &acpRPCError{Code: -32601, Message: "method not supported by PairRoom"})
+		return
+	}
 	switch method {
 	case "session/request_permission":
 		g.handlePermissionRequest(id, params)
@@ -189,7 +204,7 @@ func (g *GrokAdapter) handleServerRequest(id json.RawMessage, method string, par
 		e.Data = g.redactRaw(unwrapGrokExtParams(params))
 		g.attachCurrentTurn(&e)
 		g.sink(e)
-		_ = g.sendRawResponse(id, nil, &grokRPCError{Code: -32000, Message: "question surfaced in PairRoom"})
+		_ = g.sendRawResponse(id, nil, &acpRPCError{Code: -32000, Message: "question surfaced in PairRoom"})
 	default:
 		e := runtimeEvent(g.cfg.Actor, model.RuntimeLog)
 		e.Name = "server_request.unsupported"
@@ -197,33 +212,43 @@ func (g *GrokAdapter) handleServerRequest(id json.RawMessage, method string, par
 		e.Data = g.redactRaw(params)
 		g.attachCurrentTurn(&e)
 		g.sink(e)
-		_ = g.sendRawResponse(id, nil, &grokRPCError{Code: -32601, Message: "method not supported by PairRoom"})
+		_ = g.sendRawResponse(id, nil, &acpRPCError{Code: -32601, Message: "method not supported by PairRoom"})
 	}
 }
 
-func (g *GrokAdapter) handlePermissionRequest(id json.RawMessage, raw json.RawMessage) {
+func (g *ACPAdapter) handlePermissionRequest(id json.RawMessage, raw json.RawMessage) {
 	var params struct {
-		Options  []grokPermissionOption `json:"options"`
-		ToolCall struct {
+		SessionID string                `json:"sessionId"`
+		Options   []acpPermissionOption `json:"options"`
+		ToolCall  struct {
 			ToolCallID string `json:"toolCallId"`
 			Title      string `json:"title"`
 			Kind       string `json:"kind"`
 		} `json:"toolCall"`
 	}
 	if err := json.Unmarshal(raw, &params); err != nil {
-		_ = g.sendRawResponse(id, nil, &grokRPCError{Code: -32602, Message: "invalid permission request"})
+		_ = g.sendRawResponse(id, nil, &acpRPCError{Code: -32602, Message: "invalid permission request"})
 		return
+	}
+	if g.cfg.Runtime == model.RuntimeGemini {
+		g.mu.Lock()
+		active := g.turn != nil && params.SessionID == g.sessionID && params.ToolCall.ToolCallID != ""
+		g.mu.Unlock()
+		if !active {
+			_ = g.sendRawResponse(id, map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}, nil)
+			return
+		}
 	}
 	detail := map[string]any{}
 	_ = json.Unmarshal(raw, &detail)
 	detailRaw, _ := json.Marshal(detail)
 	detailRaw = g.redactRaw(detailRaw)
 	approval := model.Approval{
-		ID: model.NewID("approval"), Agent: g.cfg.Actor, Kind: "grok.permission",
+		ID: model.NewID("approval"), Agent: g.cfg.Actor, Kind: string(g.cfg.Runtime) + ".permission",
 		Title:  firstNonEmpty(params.ToolCall.Title, params.ToolCall.Kind, configuredParticipantName(g.cfg)+" permission request"),
 		Detail: detailRaw, Status: "pending", RequestedAt: time.Now().UTC(),
 	}
-	pending := grokPendingApproval{rawID: append(json.RawMessage(nil), id...), options: params.Options, approval: approval}
+	pending := acpPendingApproval{rawID: append(json.RawMessage(nil), id...), options: params.Options, approval: approval}
 	g.mu.Lock()
 	g.approvals[approval.ID] = pending
 	g.mu.Unlock()
@@ -234,7 +259,7 @@ func (g *GrokAdapter) handlePermissionRequest(id json.RawMessage, raw json.RawMe
 	g.setState(model.StateWaiting, "")
 }
 
-func (g *GrokAdapter) handlePlanExitRequest(id json.RawMessage, raw json.RawMessage) {
+func (g *ACPAdapter) handlePlanExitRequest(id json.RawMessage, raw json.RawMessage) {
 	detail := g.redactRaw(unwrapGrokExtParams(raw))
 	approval := model.Approval{
 		ID: model.NewID("approval"), Agent: g.cfg.Actor, Kind: "grok.planExit",
@@ -242,7 +267,7 @@ func (g *GrokAdapter) handlePlanExitRequest(id json.RawMessage, raw json.RawMess
 		Status: "pending", RequestedAt: time.Now().UTC(),
 	}
 	g.mu.Lock()
-	g.approvals[approval.ID] = grokPendingApproval{rawID: append(json.RawMessage(nil), id...), kind: "plan", approval: approval}
+	g.approvals[approval.ID] = acpPendingApproval{rawID: append(json.RawMessage(nil), id...), kind: "plan", approval: approval}
 	g.mu.Unlock()
 	e := runtimeEvent(g.cfg.Actor, model.RuntimeApprovalRequested)
 	e.Approval = &approval

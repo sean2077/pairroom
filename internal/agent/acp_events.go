@@ -7,7 +7,7 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 )
 
-func (g *GrokAdapter) handleNotification(method string, params json.RawMessage) {
+func (g *ACPAdapter) handleNotification(method string, params json.RawMessage) {
 	switch method {
 	case "session/update", "prompt/update":
 		g.handleSessionUpdate(params)
@@ -19,7 +19,7 @@ func (g *GrokAdapter) handleNotification(method string, params json.RawMessage) 
 	}
 }
 
-func (g *GrokAdapter) handleSessionUpdate(raw json.RawMessage) {
+func (g *ACPAdapter) handleSessionUpdate(raw json.RawMessage) {
 	var params struct {
 		SessionID string `json:"sessionId"`
 		Update    struct {
@@ -67,7 +67,9 @@ func (g *GrokAdapter) handleSessionUpdate(raw json.RawMessage) {
 		event.ItemID = params.Update.ToolCallID
 		event.Name = params.Update.Title
 	case "tool_call_update":
-		event.Kind = model.RuntimeToolCompleted
+		if params.Update.Status == "completed" || params.Update.Status == "failed" {
+			event.Kind = model.RuntimeToolCompleted
+		}
 		event.ItemID = params.Update.ToolCallID
 		event.Name = params.Update.Status
 	case "plan":
