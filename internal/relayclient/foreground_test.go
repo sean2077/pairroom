@@ -111,11 +111,7 @@ func newForegroundFixture(t *testing.T, opts foregroundFixtureOptions) *foregrou
 				if state == "" {
 					state = "queued"
 				}
-				to := req.To
-				if to == "" {
-					to = model.ActorSlot2
-				}
-				msg = relay.Message{ID: "outgoing-" + req.ID, From: model.ActorSlot1, To: to, Text: req.Text, State: state, Review: req.Review}
+				msg = relay.Message{ID: "outgoing-" + req.ID, From: model.ActorSlot1, To: model.ActorSlot2, Text: req.Text, State: state}
 				f.messages[req.ID] = msg
 			}
 			f.mu.Unlock()
@@ -124,20 +120,6 @@ func newForegroundFixture(t *testing.T, opts foregroundFixtureOptions) *foregrou
 				return
 			}
 			_ = json.NewEncoder(w).Encode(msg)
-		case "history":
-			var query relay.HistoryQuery
-			if err := json.NewDecoder(r.Body).Decode(&query); err != nil {
-				t.Error(err)
-			}
-			page := relay.HistoryPage{}
-			f.mu.Lock()
-			for _, msg := range f.messages {
-				if msg.ID == query.ID {
-					page.Messages = append(page.Messages, msg)
-				}
-			}
-			f.mu.Unlock()
-			_ = json.NewEncoder(w).Encode(page)
 		case "wait":
 			var req struct {
 				Park    bool `json:"park"`
