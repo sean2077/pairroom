@@ -4,6 +4,10 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+### Added
+
+- Add an opt-in implementation cross-review recipe to the installed Native relay skill and Getting started guide: pin the reviewed revision, report actionable evidence, track finding dispositions, and finish with actual test evidence, remaining risks and human decisions. It reuses existing Git review observations and messages without new workflow state or automatic approval.
+
 ### Fixed
 
 - Recover open Native Room views after temporary startup/session/snapshot failures and offline/online transitions without reloading or resending messages. Connection status describes the Service connection, drafts and original-ID recovery records survive, coalesced reads finish before controls unlock, and late startup/snapshot results cannot recreate streams or polling after leaving or restoring a page.
