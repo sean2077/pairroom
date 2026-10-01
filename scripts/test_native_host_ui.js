@@ -54,7 +54,7 @@ function reportPages(limit = 3) {
   }
 }
 
-async function fixture({ uploadFailure = false, storage, receipts = new Map(), draft = true, manager = locks(), hang = '', receiptGate, transport, sessionFailures = 0, snapshotFailures = 0, sessionGate, snapshotGate, expectReady = true } = {}) {
+async function fixture({ uploadFailure = false, storage, receipts = new Map(), draft = true, manager = locks(), hang = '', receiptGate, transport, sessionFailures = 0, snapshotFailures = 0, sessionGate, snapshotGate, historyHang = false, historyFailures = 0, expectReady = true } = {}) {
   const clock = timers();
   let hangNext = hang;
   if (!storage) { const values=new Map(); storage={getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)}; }
@@ -77,6 +77,14 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
   const fetch = async (url, options) => {
     if (url === 'api/v1/session') { sessions.push(url); if (sessionGate) { const gate=sessionGate; sessionGate=null; await gate.promise; } if (sessionFailures-- > 0) throw Error('service unavailable'); return response({ csrf_token: csrfToken }); }
     if (url.startsWith('api/v1/snapshot')) { reads.push(url); if (snapshotGate) { const gate=snapshotGate; snapshotGate=null; await gate.promise; } if (snapshotFailures-- > 0) throw Error('snapshot unavailable'); return response(snapshot); }
+    if (url.startsWith('api/v1/history')) {
+      if (historyHang) {
+        historyHang = false;
+        return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')), {once:true}));
+      }
+      if (historyFailures-- > 0) return response({error:'history unavailable'}, 503);
+      return response({messages:[]});
+    }
     if (url.startsWith('api/v1/pending')) return response({messages:[],total:0});
     if (url.startsWith('api/v1/sends/')) {if(receiptGate)await receiptGate.promise;const m=receipts.get(decodeURIComponent(url.split('/').pop()));return response({found:Boolean(m),message:m});}
     assert.equal(options.headers.get('X-PairRoom-CSRF'), csrfToken);
@@ -232,6 +240,67 @@ async function main() {
     assert.equal(page.sends.length, 2);
     assert.equal(JSON.stringify(page.sends[1]), original, 'renewing session changed original-ID recovery');
     assert.equal(page.$('outbox').hidden, true);
+  }
+  {
+    const page = await fixture({draft:false,historyHang:true,historyFailures:1});
+    page.streams[0].emit('open');
+    const obsolete = page.$('history-next').events.click();
+    page.windowEvents.pagehide({persisted:true});
+    // Restore before the abort rejection is delivered: pageActive alone is
+    // insufficient to identify the obsolete request's error completion.
+    page.windowEvents.pageshow({persisted:true}); await tick();
+    page.streams[1].emit('open'); await obsolete;
+    assert.equal(page.$('connection').dataset.state, 'connected');
+    assert.equal(page.$('status').textContent, '', 'obsolete history abort leaked into the restored page');
+    await page.$('history-next').events.click();
+    assert.equal(page.$('status').textContent, 'history unavailable', 'current history failures must remain visible');
+    assert.equal(page.sends.length, 0);
+  }
+  {
+    const page = await fixture({draft:false});
+    page.$('message-text').value = 'original'; await page.submit(); // response lost
+    const first = deferred(); page.blockSnapshot(first); page.poll();
+    const recovering = page.submit(); await tick();
+    const required = deferred(); page.blockSnapshot(required); first.resolve(); await tick();
+    // A newer background nudge needs another snapshot but cannot extend this
+    // accepted send's barrier beyond its own required follow-up snapshot.
+    page.poll();
+    const newer = deferred(); page.blockSnapshot(newer); required.resolve(); await tick();
+    assert.equal(page.$('send').disabled, false, 'newer reads starved a completed send');
+    const readCount = page.reads.length;
+    assert.equal(readCount, 4, 'the newer requested snapshot was dropped');
+    assert.equal(page.sends.length, 2, 'read recovery republished a task');
+    newer.resolve(); await recovering; await tick();
+    assert.equal(page.reads.length, readCount, 'the snapshot queue repeated completed work');
+  }
+  {
+    const page = await fixture({draft:false});
+    page.$('message-text').value = 'original'; await page.submit();
+    const old = deferred(); page.blockSnapshot(old); page.poll();
+    const recovering = page.submit(); await tick(); // Awaiting a queued snapshot.
+    page.windowEvents.pagehide({persisted:true});
+    page.windowEvents.pageshow({persisted:true}); await tick();
+    await recovering;
+    assert.equal(page.$('send').disabled, false, 'old snapshot barriers retained restored controls');
+    const reads = page.reads.length;
+    old.resolve(); await tick();
+    assert.equal(page.reads.length, reads, 'pagehide started an obsolete queued snapshot');
+    assert.equal(page.streams.length, 2, 'an obsolete snapshot finalizer changed the restored connection');
+    assert.equal(page.intervals.size, 1);
+    assert.equal(page.sends.length, 2);
+  }
+  {
+    const page = await fixture({draft:false});
+    page.$('message-text').value = 'original'; await page.submit();
+    const held = deferred(); page.blockSnapshot(held); page.poll();
+    const recovering = page.submit(); await tick();
+    const reads = page.reads.length;
+    page.failSnapshots(); held.resolve(); await recovering;
+    assert.equal(page.$('send').disabled, false, 'failed read did not retire its queued waiter');
+    assert.equal(page.reads.length, reads, 'failed read immediately ran its queued follow-up');
+    assert.equal(page.clock.expire(500), 1, 'failed reads must recover through bounded backoff');
+    await tick();
+    assert.equal(page.sends.length, 2, 'read failure replayed an accepted original');
   }
   const textTree = node => [node.textContent, ...node.children.map(textTree)].join(' ');
   const peerMessage = {id:'last',from:'slot1',to:'slot2',state:'unknown',text:'body',created_at:'2026-09-28T00:00:00Z'};

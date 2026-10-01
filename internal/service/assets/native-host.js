@@ -271,9 +271,11 @@
   $('pending-next').addEventListener('click',()=>{pendingCursor=pendingNext;refreshPending().catch(e=>status(e.message,true));});
   async function loadHistory(cursor=''){
     const serial=++historyRequest, epoch=pageEpoch;
-    const page=await request(`api/v1/history?limit=20${historyFilter}${cursor?`&cursor=${encodeURIComponent(cursor)}`:''}`);
-    if(!currentPage(epoch)||serial!==historyRequest)return;
-    historyNext=page.next_cursor||'';$('history-next').hidden=!historyNext;pageMessages($('history-items'),page.messages,'history',page.delivery);
+    try{
+      const page=await request(`api/v1/history?limit=20${historyFilter}${cursor?`&cursor=${encodeURIComponent(cursor)}`:''}`);
+      if(!currentPage(epoch)||serial!==historyRequest)return;
+      historyNext=page.next_cursor||'';$('history-next').hidden=!historyNext;pageMessages($('history-items'),page.messages,'history',page.delivery);
+    }catch(e){if(!currentPage(epoch)||serial!==historyRequest)return;throw e;}
   }
   function inspectMessage(id){showInspector(true);$('history-panel').open=true;$('history-id').value=id;$('history-since').value='';historyFilter=`&id=${encodeURIComponent(id)}`;loadHistory().then(()=>$('history-panel').scrollIntoView({block:'nearest'})).catch(e=>status(e.message,true));}
   $('history-form').addEventListener('submit',event=>{
@@ -381,27 +383,42 @@
     status(connectionError, true);
     scheduleReconnect();
   }
+  function snapshotJob() {
+    let resolve, reject;
+    const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+    return { epoch: pageEpoch, promise, resolve, reject, next: null };
+  }
+  async function readSnapshot(job) {
+    let failure = null;
+    try {
+      const value = await request('api/v1/snapshot?tail=1');
+      if (currentPage(job.epoch) && (!snapshot || value.relay.sequence >= snapshot.relay.sequence)) render(value);
+    } catch (error) {
+      if (currentPage(job.epoch)) { failure = error; connectionFailed(error); }
+    } finally {
+      const next = job.next;
+      const advance = refreshJob === job && currentPage(job.epoch) && !failure && next;
+      if (refreshJob === job) refreshJob = advance ? next : null;
+      if (failure) { job.reject(failure); next?.reject(failure); }
+      else {
+        job.resolve();
+        if (advance) void readSnapshot(next);
+        else next?.resolve();
+      }
+    }
+  }
   function refresh() {
     if (!pageActive) return Promise.resolve();
-    // Every caller waits for the coalesced read, including a follow-up read
-    // requested during an in-flight snapshot. Controls must not unlock early.
-    if (refreshJob?.epoch === pageEpoch) { refreshJob.again = true; return refreshJob.promise; }
-    const job = { epoch: pageEpoch, again: false, promise: null };
+    // One active read and one queued follow-up. An overlapping caller waits
+    // for a snapshot started after its request, but later SSE/poll nudges
+    // cannot extend its barrier indefinitely or keep accepted Send locked.
+    if (refreshJob?.epoch === pageEpoch) {
+      if (!refreshJob.next) refreshJob.next = snapshotJob();
+      return refreshJob.next.promise;
+    }
+    const job = snapshotJob();
     refreshJob = job;
-    job.promise = (async () => {
-      try {
-        do {
-          job.again = false;
-          const value = await request('api/v1/snapshot?tail=1');
-          if (!currentPage(job.epoch)) return;
-          if (!snapshot || value.relay.sequence >= snapshot.relay.sequence) render(value);
-        } while (job.again);
-      } catch (error) {
-        if (!currentPage(job.epoch)) return;
-        connectionFailed(error);
-        throw error;
-      } finally { if (refreshJob === job) refreshJob = null; }
-    })();
+    void readSnapshot(job);
     return job.promise;
   }
   // Reconnects and a return to a visible tab can follow missed SSE nudges.
@@ -558,6 +575,11 @@
   window.addEventListener('pagehide', () => {
     pageActive = false; ++pageEpoch;
     closeConnection(); clearReconnect();
+    // Retire both barriers immediately. Even a late abort-insensitive read
+    // cannot keep a restored page locked or start its obsolete queued read.
+    const retired = refreshJob;
+    refreshJob = null;
+    retired?.resolve(); retired?.next?.resolve();
     // Only observations are aborted. An in-flight publication keeps its
     // original outbox identity and is never replayed by connection recovery.
     for (const controller of readControllers) controller.abort();
