@@ -214,7 +214,40 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 assert not any(m['id']==interrupted_id for m in tail['relay']['messages'])
                 pending=await read_json(context,surface+'/api/v1/pending?limit=10')
                 assert any(m['id']==interrupted_id and m['state']=='unknown' for m in pending['messages'])
+                # A failed first snapshot must recover in this same open page.
+                # Transport interception introduces the interruption only; the
+                # session, snapshots, SSE and stored receipts remain real.
+                recovery_reads = 0
+                recovery_posts = []
+                allow_recovery = asyncio.Event()
+                async def fail_first_snapshot(route):
+                    nonlocal recovery_reads
+                    recovery_reads += 1
+                    if recovery_reads == 1:
+                        await route.fulfill(status=503, content_type='application/json', body=json.dumps({'error':'Temporary fixture interruption'}))
+                    else:
+                        await allow_recovery.wait()
+                        await route.continue_()
+                def note_recovery_request(request):
+                    if request.method == 'POST':
+                        recovery_posts.append(request.url.split('/surface/', 1)[-1])
+                page.on('request', note_recovery_request)
+                await page.route('**/api/v1/snapshot?tail=1', fail_first_snapshot)
                 await page.goto(surface+'/')
+                await expect(page.locator('#connection')).to_have_attribute('data-state', 'reconnecting')
+                await page.locator('#message-text').fill('Draft survives temporary disconnection')
+                allow_recovery.set()
+                await expect(page.locator('#connection')).to_have_attribute('data-state', 'connected')
+                assert recovery_reads >= 2, 'the failed initial snapshot was not retried'
+                await page.unroute('**/api/v1/snapshot?tail=1', fail_first_snapshot)
+                await context.set_offline(True)
+                await expect(page.locator('#connection')).to_have_attribute('data-state', 'offline')
+                await context.set_offline(False)
+                await expect(page.locator('#connection')).to_have_attribute('data-state', 'connected')
+                await expect(page.locator('#message-text')).to_have_value('Draft survives temporary disconnection')
+                assert not recovery_posts, f'connection recovery replayed a mutation: {recovery_posts}'
+                page.remove_listener('request', note_recovery_request)
+                await page.locator('#message-text').fill('')
                 await page.locator('[data-pending-open]').click()
                 await expect(page.locator(f'[data-pending-id="{interrupted_id}"]')).to_be_visible()
                 await page.locator(f'[data-pending-id="{interrupted_id}"] .message-action').first.click()
@@ -291,6 +324,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     'fifo_stdout_ack':True,'idempotent_explicit_send':True,'conflicting_send_id_rejected':True,'three_bidirectional_rounds':True,
                     'pending_outside_tail':True,'refresh_receipt_recovery_without_resend':True,'review_anchor_staleness':True,'safe_native_markdown':True,'killed_cli_unknown':True,'explicit_retry_confirmation':True,'cancel_only_queued':True,
                     'checkpoint_schema_3_canonical':True,'restart_queue_and_bindings':True,
+                    'initial_snapshot_recovery':True,'offline_recovery_preserves_draft_without_send':True,
                     'english_chinese_light_dark_responsive':True,'browser_errors':errors,
                 },indent=2)+'\n',encoding='utf-8')
                 print('Native host real-transport browser checks passed (vendor E2E unverified)',flush=True)
