@@ -4,6 +4,10 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+### Fixed
+
+- Match complete CLI options during Runtime probing so similarly named flags cannot satisfy Gemini ACP or Claude exact-resume requirements, and do not treat a threshold prerelease as its stable release. Doctor labels probe capabilities as unverified metadata and correctly explains that missing Claude resume support preserves the existing session and blocks restore. Native preflight now rejects an explicit Runtime that conflicts with the calling harness, with read-only recovery guidance.
+
 ## [v5.11.1] — 2026-09-30
 
 ### Fixed

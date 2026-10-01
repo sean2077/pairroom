@@ -21,9 +21,10 @@ type doctorJSON struct {
 			Status string `json:"status"`
 		} `json:"checks"`
 		Probe *struct {
-			Runtime  string `json:"runtime"`
-			Version  string `json:"version"`
-			Protocol string `json:"protocol"`
+			Runtime      string `json:"runtime"`
+			Version      string `json:"version"`
+			Protocol     string `json:"protocol"`
+			Verification string `json:"verification"`
 		} `json:"probe"`
 		Error string `json:"error"`
 	} `json:"runtimes"`
@@ -63,7 +64,7 @@ func TestDoctorPassesWhenGitAndBothRuntimesProbe(t *testing.T) {
 	}
 	for actor, want := range map[string]string{"slot1": "claude", "slot2": "codex"} {
 		entry := report.Runtimes[actor]
-		if entry.Error != "" || entry.Probe == nil || entry.Probe.Runtime != want || entry.Probe.Version != "2.1.300" || len(entry.Checks) != 0 {
+		if entry.Error != "" || entry.Probe == nil || entry.Probe.Runtime != want || entry.Probe.Version != "2.1.300" || entry.Probe.Verification != "cli_metadata_only" || len(entry.Checks) != 0 {
 			t.Fatalf("%s runtime = %+v", actor, entry)
 		}
 	}
@@ -79,6 +80,8 @@ func TestDoctorPassesWhenGitAndBothRuntimesProbe(t *testing.T) {
 		"Claude Code      ✓ 2.1.300 (" + claude + ")\n",
 		"Codex            ✓ 2.1.300 (" + codex + ")\n",
 		"protocol: claude-stream-json\n",
+		"probe evidence: CLI metadata only\n",
+		"adapter capabilities (unverified):",
 		"protocol: codex-app-server-jsonrpc\n",
 		"model response: not checked (use doctor --live; may consume quota)\n",
 	} {
@@ -187,5 +190,17 @@ func TestDoctorGeminiExecutableTemplateAndBothSlots(t *testing.T) {
 		if entry.Probe == nil || entry.Probe.Runtime != "gemini" || entry.Probe.Protocol != "gemini-acp-v1" {
 			t.Fatalf("lost Gemini probe: %+v", entry)
 		}
+	}
+}
+
+func TestDoctorLiveTextScopesProbeEvidence(t *testing.T) {
+	claude, codex, _ := fakeDoctorTools(t)
+	output, err := captureRun(t, "doctor", "--live", "--repo", t.TempDir(), "--claude-command", claude, "--codex-command", codex)
+	requireErrorContains(t, err, "runtime checks failed")
+	if !strings.Contains(output, "probe evidence: CLI metadata only") || !strings.Contains(output, "startup: fail") {
+		t.Fatalf("missing separate metadata and live evidence: %s", output)
+	}
+	if strings.Contains(output, "runtime methods not checked") || strings.Contains(output, "model response: not checked") {
+		t.Fatalf("live check presented as metadata-only execution: %s", output)
 	}
 }
