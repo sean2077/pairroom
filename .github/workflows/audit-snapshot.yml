@@ -1,0 +1,46 @@
+name: Temporary audit snapshot
+
+on:
+  push:
+    branches: ['audit/post-v5.11.1-20261002']
+    paths: ['.github/workflows/audit-snapshot.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bundle public review revisions without checkout credentials
+        run: |
+          git fetch origin refs/pull/129/head:refs/heads/audit-pr129 refs/pull/130/head:refs/heads/audit-pr130
+          git bundle create "$RUNNER_TEMP/pairroom-audit.bundle" --all
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pairroom-audit-source
+          path: ${{ runner.temp }}/pairroom-audit.bundle
+          retention-days: 1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+          cache: false
+      - name: Package public pinned root dependencies and toolchain for offline checks
+        run: |
+          go version
+          go mod download
+          tar -C "$(go env GOROOT)" -czf "$RUNNER_TEMP/pairroom-audit-go.tar.gz" .
+          tar -C "$(go env GOMODCACHE)" -czf "$RUNNER_TEMP/pairroom-audit-modules.tar.gz" .
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pairroom-audit-offline-go
+          path: |
+            ${{ runner.temp }}/pairroom-audit-go.tar.gz
+            ${{ runner.temp }}/pairroom-audit-modules.tar.gz
+          retention-days: 1
