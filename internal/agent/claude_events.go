@@ -116,6 +116,8 @@ func (c *ClaudeAdapter) handleLine(line []byte) {
 		c.emitClaudeToolResults(line, pending, hasPending)
 
 	case "result":
+		c.turnBoundaryMu.Lock()
+		defer c.turnBoundaryMu.Unlock()
 		var result struct {
 			Subtype   string          `json:"subtype"`
 			Result    string          `json:"result"`

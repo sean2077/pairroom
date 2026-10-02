@@ -21,17 +21,18 @@ type ClaudeAdapter struct {
 	cfg  Config
 	sink EventSink
 
-	startMu   sync.Mutex
-	submitMu  sync.Mutex
-	mu        sync.Mutex
-	writer    nativeStdinWriter
-	controlMu sync.Mutex
-	state     model.AgentState
-	sessionID string
-	resume    bool
-	cmd       *exec.Cmd
-	tree      *execx.Tree
-	stdin     io.WriteCloser
+	startMu        sync.Mutex
+	submitMu       sync.Mutex
+	turnBoundaryMu sync.Mutex
+	mu             sync.Mutex
+	writer         nativeStdinWriter
+	controlMu      sync.Mutex
+	state          model.AgentState
+	sessionID      string
+	resume         bool
+	cmd            *exec.Cmd
+	tree           *execx.Tree
+	stdin          io.WriteCloser
 	// procDone is closed once the process exited and waitProcess finished; it
 	// gives Stop a bounded graceful window between closing stdin and Kill.
 	procDone     chan struct{}
@@ -383,6 +384,8 @@ func (c *ClaudeAdapter) ensurePromptFile(content string) (string, error) {
 
 func (c *ClaudeAdapter) waitProcess(cmd *exec.Cmd) {
 	err := cmd.Wait()
+	c.turnBoundaryMu.Lock()
+	defer c.turnBoundaryMu.Unlock()
 	c.mu.Lock()
 	active := c.cmd == cmd
 	intentional := c.intentional

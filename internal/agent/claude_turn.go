@@ -61,6 +61,7 @@ func (c *ClaudeAdapter) StartTurn(ctx context.Context, input model.AgentInput) e
 	entry := claudePending{input: input, turnID: model.NewID("claude-turn")}
 	c.mu.Lock()
 	c.pending = append(c.pending, entry)
+	cmd := c.cmd
 	c.mu.Unlock()
 
 	if err := c.writePayloadContext(ctx, payload, "Claude input"); err != nil {
@@ -73,10 +74,21 @@ func (c *ClaudeAdapter) StartTurn(ctx context.Context, input model.AgentInput) e
 		return err
 	}
 
-	if !protocolSent {
-		c.mu.Lock()
-		c.protocolSent = true
+	// A result or process exit can settle the staged input before Write returns.
+	// Keep late acceptance/state events behind the same terminal boundary.
+	c.turnBoundaryMu.Lock()
+	defer c.turnBoundaryMu.Unlock()
+	c.mu.Lock()
+	if c.cmd != cmd || c.cmd == nil || c.intentional || c.streamFailure != "" {
 		c.mu.Unlock()
+		return fmt.Errorf("%w: Claude process stopped while the prompt was being submitted", ErrSubmissionUnknown)
+	}
+	c.protocolSent = true
+	active := len(c.pending) > 0 && c.pending[0].turnID == entry.turnID
+	c.mu.Unlock()
+	if !active {
+		// A correlated result already proves acceptance and owns the final state.
+		return nil
 	}
 
 	c.emitTurnStarted(entry)

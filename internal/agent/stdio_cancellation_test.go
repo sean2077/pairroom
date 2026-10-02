@@ -256,3 +256,72 @@ func TestNativeStderrReadFailureIsFatal(t *testing.T) {
 		})
 	}
 }
+
+type terminalBeforeWriteReturns struct {
+	io.WriteCloser
+	complete func()
+}
+
+func (w terminalBeforeWriteReturns) Write(data []byte) (int, error) {
+	n, err := w.WriteCloser.Write(data)
+	w.complete()
+	return n, err
+}
+
+// A completed result or process exit can be observed before the parent's Write
+// returns. Neither permits that late completion to resurrect a Working Turn.
+func TestClaudePromptWriteCannotResurrectTerminalTurn(t *testing.T) {
+	for _, mode := range []string{"exit", "success"} {
+		t.Run(mode, func(t *testing.T) {
+			childMode := mode
+			if mode == "success" {
+				childMode = "hang"
+			}
+			t.Setenv("PAIRROOM_CLAUDE_SCRIPT", childMode)
+			events := newEventLog()
+			adapter := NewClaude(Config{Command: os.Args[0], Repo: t.TempDir(), DataDir: t.TempDir(), SessionID: "bound-session", RequireExactSession: true}, events.add)
+			t.Cleanup(func() { stopWithin(adapter, 10*time.Second) })
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			if err := adapter.Start(ctx); err != nil {
+				t.Fatal(err)
+			}
+			adapter.mu.Lock()
+			if mode == "exit" {
+				adapter.stdin = exitBeforeWriteReturns{adapter.stdin, adapter.procDone}
+			} else {
+				// Deliver a complete native record synchronously at the observed
+				// write boundary, so the final state cannot race the assertion.
+				adapter.stdin = terminalBeforeWriteReturns{adapter.stdin, func() {
+					adapter.handleLine([]byte(`{"type":"result","subtype":"success","result":"ok","session_id":"bound-session"}`))
+				}}
+			}
+			adapter.mu.Unlock()
+			err := adapter.StartTurn(ctx, model.AgentInput{MessageID: "late-write", Text: "hello"})
+			if mode == "exit" && !errors.Is(err, ErrSubmissionUnknown) {
+				t.Errorf("exit submission: %v", err)
+			}
+			if mode == "success" && err != nil {
+				t.Errorf("completed submission: %v", err)
+			}
+			if adapter.State() == model.StateWorking {
+				t.Fatal("late write completion resurrected the terminal Turn")
+			}
+			if adapter.SessionID() != "bound-session" {
+				t.Fatal("terminal lost exact Binding")
+			}
+			sawTerminal := false
+			for _, event := range events.snapshot() {
+				if event.Kind == model.RuntimeTurnCompleted && event.CorrelationID == "late-write" {
+					sawTerminal = true
+				}
+				if sawTerminal && (event.Kind == model.RuntimeTurnStarted || event.Kind == model.RuntimeInputProcessing) {
+					t.Fatalf("late event: %+v", event)
+				}
+			}
+			if !sawTerminal {
+				t.Fatal("missing terminal evidence")
+			}
+		})
+	}
+}

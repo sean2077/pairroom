@@ -74,6 +74,8 @@ func runClaudeScriptHelper(mode string, args []string) int {
 		case "user":
 			session := fmt.Sprint(request["session_id"])
 			switch mode {
+			case "exit":
+				return 0
 			case "hang":
 			case "oversized":
 				emit(oversizedStdoutRecord())
