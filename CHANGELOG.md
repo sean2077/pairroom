@@ -4,6 +4,10 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+### Added
+
+- Add optional implementation-review guidance to the existing relay skill and Getting started guide: identify the reviewed revision and dirty evidence, report actionable findings, verify fixes, and state tests not run and unresolved disagreements. Finding IDs and outcome labels are optional examples; no new workflow state or approval gate is introduced.
+
 ### Fixed
 
 - Recover open Native Room views after temporary startup/session/snapshot failures and offline/online transitions without reloading or resending messages. Connection status describes the Service connection, drafts and original-ID recovery records survive, coalesced reads finish before controls unlock, and late startup/snapshot results cannot recreate streams or polling after leaving or restoring a page.

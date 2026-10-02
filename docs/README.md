@@ -23,7 +23,7 @@ None of these paths requires reading the technical contracts below.
 | Decide whether PairRoom fits | [Why PairRoom](WHY_PAIRROOM.md) and dated [Alternatives](ALTERNATIVES.md) |
 | Install, upgrade, or uninstall a package | [Installation](INSTALLATION.md) |
 | Let a coding Agent install and check the environment step by step | [Agent-assisted setup](AGENT_SETUP.md) |
-| First Mock/Embedded Room and review-first task recipes | [Getting started](GETTING_STARTED.md) |
+| First Mock/Embedded Room and optional plan/implementation review guidance | [Getting started](GETTING_STARTED.md) |
 | Native install, create/join, publication, wake, UI, and recovery | [Native relay, including Gemini CLI](NATIVE_RELAY.md) |
 | Native cwd/worktree identity and locator recovery | [Native session workspace discovery](NATIVE_SESSION_WORKSPACE.md) |
 | Tool names, host modes, Bindings, responsibilities, controls, and receipts | [Core concepts](CONCEPTS.md) |
