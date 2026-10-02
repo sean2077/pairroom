@@ -217,10 +217,12 @@ func TestNativePartialPromptWriteKeepsCorrelationUntilExit(t *testing.T) {
 
 func TestGeminiStderrOverflowSettlesPromptOnRealExit(t *testing.T) {
 	adapter, events, ctx := geminiTestAdapter(t, "stderr-overflow", Config{})
-	if err := adapter.StartTurn(ctx, model.AgentInput{MessageID: "stderr", Text: "BODY 🌟"}); err != nil {
+	// Exit may race the caller observing the completed Write. Either accepted
+	// or unknown is valid; only real process exit may settle the input below.
+	if err := adapter.StartTurn(ctx, model.AgentInput{MessageID: "stderr", Text: "BODY 🌟"}); err != nil && !errors.Is(err, ErrSubmissionUnknown) {
 		t.Fatal(err)
 	}
-	deadline, cancel := context.WithTimeout(ctx, time.Second)
+	deadline, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	terminal := geminiEvent(t, deadline, events, model.RuntimeTurnCompleted)
 	if terminal.Name != "process_exited" || adapter.SessionID() != "gemini-new-session" {

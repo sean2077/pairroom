@@ -77,10 +77,6 @@ func (c *CodexAdapter) callOnce(ctx context.Context, method string, params any) 
 	}
 }
 
-func (c *CodexAdapter) send(value any) error {
-	return c.sendContext(context.Background(), value)
-}
-
 func (c *CodexAdapter) sendContext(ctx context.Context, value any) error {
 	data, err := json.Marshal(value)
 	if err != nil {
