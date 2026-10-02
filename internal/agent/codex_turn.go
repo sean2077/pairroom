@@ -66,7 +66,12 @@ func (c *CodexAdapter) StartTurn(ctx context.Context, input model.AgentInput) er
 			return c.applyTurnStartReply(input, reply, abandoned)
 		}
 		c.mu.Unlock()
-		if err := c.send(map[string]any{"id": id, "method": "turn/start", "params": params}); err != nil {
+		if err := c.sendContext(callCtx, map[string]any{"id": id, "method": "turn/start", "params": params}); err != nil {
+			if errors.Is(err, ErrSubmissionUnknown) {
+				// Keep staged correlation until the actual process exit settles it.
+				c.failStream("Codex prompt submission is uncertain; stopping transport before releasing the Turn")
+				return err
+			}
 			c.mu.Lock()
 			delete(c.pending, id)
 			delete(c.replyHooks, id)

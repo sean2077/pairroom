@@ -24,7 +24,7 @@ type ClaudeAdapter struct {
 	startMu   sync.Mutex
 	submitMu  sync.Mutex
 	mu        sync.Mutex
-	writeMu   sync.Mutex
+	writer    nativeStdinWriter
 	controlMu sync.Mutex
 	state     model.AgentState
 	sessionID string

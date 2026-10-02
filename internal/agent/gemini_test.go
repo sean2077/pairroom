@@ -130,6 +130,10 @@ func runGeminiACPHelper(args []string) int {
 			if (prompts == 1 && bootstraps != 1) || (prompts > 1 && bootstraps != 0) || !strings.Contains(body, "BODY 🌟") {
 				return 90
 			}
+			if mode == "stderr-overflow" {
+				fmt.Fprint(os.Stderr, strings.Repeat("x", 2<<20))
+				return 89
+			}
 			if mode == "exit" {
 				return 89
 			}

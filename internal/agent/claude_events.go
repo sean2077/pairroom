@@ -42,6 +42,10 @@ func (c *ClaudeAdapter) readStderr(reader io.Reader) {
 		e.Text = text
 		c.sink(e)
 	}
+	// Abandoning stderr can leave the child blocked on a full pipe forever.
+	if err := scanner.Err(); err != nil {
+		c.failProcess("adapter.stream_error", streamFailureReason("Claude Code stderr", 1024*1024, err))
+	}
 }
 
 func (c *ClaudeAdapter) handleLine(line []byte) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/sean2077/pairroom/internal/model"
@@ -73,7 +74,7 @@ func (c *ClaudeAdapter) sendControlRequest(ctx context.Context, request map[stri
 		"request_id": requestID,
 		"request":    request,
 	}
-	if err := c.writePayload(payload, "Claude control request"); err != nil {
+	if err := c.writePayloadContext(ctx, payload, "Claude control request"); err != nil {
 		c.controlMu.Lock()
 		delete(c.control, requestID)
 		c.controlMu.Unlock()
@@ -147,7 +148,11 @@ func (c *ClaudeAdapter) failControlWaiters(err error) {
 }
 
 func (c *ClaudeAdapter) writeControlResponse(requestID string, result map[string]any) error {
-	return c.writePayload(map[string]any{
+	return c.writeControlResponseContext(context.Background(), requestID, result)
+}
+
+func (c *ClaudeAdapter) writeControlResponseContext(ctx context.Context, requestID string, result map[string]any) error {
+	return c.writePayloadContext(ctx, map[string]any{
 		"type": "control_response",
 		"response": map[string]any{
 			"subtype":    "success",
@@ -169,19 +174,19 @@ func (c *ClaudeAdapter) writeControlError(requestID, detail string) error {
 }
 
 func (c *ClaudeAdapter) writePayload(payload any, label string) error {
+	return c.writePayloadContext(context.Background(), payload, label)
+}
+
+func (c *ClaudeAdapter) writePayloadContext(ctx context.Context, payload any, label string) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", label, err)
 	}
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	c.mu.Lock()
-	stdin := c.stdin
-	c.mu.Unlock()
-	if stdin == nil {
-		return errors.New("Claude stdin is not available")
-	}
-	if _, err := stdin.Write(append(data, '\n')); err != nil {
+	if err := c.writer.write(ctx, func() io.WriteCloser {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.stdin
+	}, append(data, '\n')); err != nil {
 		return fmt.Errorf("send %s: %w", label, err)
 	}
 	return nil

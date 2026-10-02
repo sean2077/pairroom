@@ -77,7 +77,7 @@ func (g *ACPAdapter) ResolveApproval(ctx context.Context, approvalID string, res
 	g.mu.Unlock()
 	// Consume before writing: concurrent requests cannot answer the same native
 	// RPC twice, and a transport failure is not safe for automatic replay.
-	if err := g.sendRawResponse(pending.rawID, result, nil); err != nil {
+	if err := g.sendRawResponseContext(ctx, pending.rawID, result, nil); err != nil {
 		return err
 	}
 	g.setState(model.StateWorking, "")
@@ -109,7 +109,7 @@ func acpApprovalResult(pending acpPendingApproval, decision string) (any, error)
 	return map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": optionID}}, nil
 }
 
-func (g *ACPAdapter) cancelPendingInteractions() error {
+func (g *ACPAdapter) cancelPendingInteractions(ctx context.Context) error {
 	g.mu.Lock()
 	pending := make([]acpPendingApproval, 0, len(g.approvals))
 	for id, approval := range g.approvals {
@@ -123,7 +123,7 @@ func (g *ACPAdapter) cancelPendingInteractions() error {
 		if approval.kind == "plan" {
 			response = map[string]any{"outcome": "cancelled"}
 		}
-		if err := g.sendRawResponse(approval.rawID, response, nil); err != nil {
+		if err := g.sendRawResponseContext(ctx, approval.rawID, response, nil); err != nil {
 			result = errors.Join(result, err)
 		}
 	}

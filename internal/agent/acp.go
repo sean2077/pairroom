@@ -34,7 +34,9 @@ type ACPAdapter struct {
 	startMu  sync.Mutex
 	submitMu sync.Mutex
 	mu       sync.Mutex
-	writeMu  sync.Mutex
+	writer   nativeStdinWriter
+	// Orders post-write acceptance and terminal events against process exit.
+	turnBoundaryMu sync.Mutex
 
 	state     model.AgentState
 	access    model.NativeAccess
@@ -422,9 +424,9 @@ func (g *ACPAdapter) Interrupt(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	result := g.cancelPendingInteractions()
+	result := g.cancelPendingInteractions(ctx)
 	if active && sessionID != "" {
-		result = errors.Join(result, g.sendNotification("session/cancel", map[string]any{"sessionId": sessionID}))
+		result = errors.Join(result, g.sendContext(ctx, map[string]any{"jsonrpc": "2.0", "method": "session/cancel", "params": map[string]any{"sessionId": sessionID}}))
 	}
 	return result
 }
@@ -438,7 +440,7 @@ func (g *ACPAdapter) Stop(ctx context.Context) error {
 	sessionID := g.sessionID
 	opened := g.sessionOpened
 	canClose := g.capabilities.close
-	engaged := g.sessionEngaged
+	engaged := g.sessionEngaged || g.turn != nil
 	g.intentional = true
 	g.mu.Unlock()
 	if cmd == nil {
@@ -456,7 +458,7 @@ func (g *ACPAdapter) Stop(ctx context.Context) error {
 		g.setState(model.StateStopped, "")
 		return nil
 	}
-	_ = g.cancelPendingInteractions()
+	_ = g.cancelPendingInteractions(ctx)
 	if opened && sessionID != "" && canClose {
 		closeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		_, _ = g.call(closeCtx, "session/close", map[string]any{"sessionId": sessionID})
@@ -507,6 +509,8 @@ func (g *ACPAdapter) Stop(ctx context.Context) error {
 func (g *ACPAdapter) waitProcess(cmd *exec.Cmd, tree *execx.Tree, done chan struct{}) {
 	err := cmd.Wait()
 	tree.Release()
+	g.turnBoundaryMu.Lock()
+	defer g.turnBoundaryMu.Unlock()
 	g.mu.Lock()
 	if g.cmd != cmd {
 		g.mu.Unlock()
@@ -514,7 +518,10 @@ func (g *ACPAdapter) waitProcess(cmd *exec.Cmd, tree *execx.Tree, done chan stru
 		return
 	}
 	intentional := g.intentional
-	engaged := g.sessionEngaged
+	engaged := g.sessionEngaged || g.turn != nil
+	// The peer can consume a prompt and exit before Write returns. A staged
+	// prompt is then possibly accepted, never a disposable lazy session.
+	g.sessionEngaged = engaged
 	streamFailure := g.streamFailure
 	g.streamFailure = ""
 	g.cmd = nil

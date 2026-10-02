@@ -37,7 +37,7 @@ type CodexAdapter struct {
 	startMu  sync.Mutex
 	submitMu sync.Mutex
 	mu       sync.Mutex
-	writeMu  sync.Mutex
+	writer   nativeStdinWriter
 	state    model.AgentState
 	cmd      *exec.Cmd
 	tree     *execx.Tree
@@ -248,7 +248,7 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 		return fmt.Errorf("initialize codex app-server: %w", err)
 	}
 	runtimeInfo := c.emitInitializeRuntimeInfo(initializeResult, probe, probeErr)
-	if err := c.notify("initialized", map[string]any{}); err != nil {
+	if err := c.sendContext(ctx, map[string]any{"method": "initialized", "params": map[string]any{}}); err != nil {
 		_ = c.Stop(context.Background())
 		return fmt.Errorf("acknowledge codex initialization: %w", err)
 	}

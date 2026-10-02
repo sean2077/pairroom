@@ -60,7 +60,7 @@ func (c *CodexAdapter) callOnce(ctx context.Context, method string, params any) 
 	c.mu.Lock()
 	c.pending[id] = ch
 	c.mu.Unlock()
-	if err := c.send(map[string]any{"id": id, "method": method, "params": params}); err != nil {
+	if err := c.sendContext(ctx, map[string]any{"id": id, "method": method, "params": params}); err != nil {
 		c.mu.Lock()
 		delete(c.pending, id)
 		c.mu.Unlock()
@@ -77,24 +77,20 @@ func (c *CodexAdapter) callOnce(ctx context.Context, method string, params any) 
 	}
 }
 
-func (c *CodexAdapter) notify(method string, params any) error {
-	return c.send(map[string]any{"method": method, "params": params})
+func (c *CodexAdapter) send(value any) error {
+	return c.sendContext(context.Background(), value)
 }
 
-func (c *CodexAdapter) send(value any) error {
+func (c *CodexAdapter) sendContext(ctx context.Context, value any) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("encode codex rpc message: %w", err)
 	}
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	c.mu.Lock()
-	stdin := c.stdin
-	c.mu.Unlock()
-	if stdin == nil {
-		return errors.New("codex stdin is not available")
-	}
-	if _, err := stdin.Write(append(data, '\n')); err != nil {
+	if err := c.writer.write(ctx, func() io.WriteCloser {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.stdin
+	}, append(data, '\n')); err != nil {
 		return fmt.Errorf("write codex rpc message: %w", err)
 	}
 	return nil
@@ -127,6 +123,10 @@ func (c *CodexAdapter) readStderr(reader io.Reader) {
 		e.Name = "stderr"
 		e.Text = text
 		c.sink(e)
+	}
+	// Abandoning stderr can leave the child blocked on a full pipe forever.
+	if err := scanner.Err(); err != nil {
+		c.failStream(streamFailureReason("Codex app-server stderr", 1024*1024, err))
 	}
 }
 
@@ -182,12 +182,16 @@ func (c *CodexAdapter) handleRPCLine(line []byte) {
 }
 
 func (c *CodexAdapter) sendRawResponse(id json.RawMessage, result any, rpcErr *codexRPCError) error {
+	return c.sendRawResponseContext(context.Background(), id, result, rpcErr)
+}
+
+func (c *CodexAdapter) sendRawResponseContext(ctx context.Context, id json.RawMessage, result any, rpcErr *codexRPCError) error {
 	message := struct {
 		ID     json.RawMessage `json:"id"`
 		Result any             `json:"result,omitempty"`
 		Error  *codexRPCError  `json:"error,omitempty"`
 	}{ID: id, Result: result, Error: rpcErr}
-	return c.send(message)
+	return c.sendContext(ctx, message)
 }
 
 func (c *CodexAdapter) failPendingRPCs(detail string) {

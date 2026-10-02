@@ -229,7 +229,7 @@ func (c *ClaudeAdapter) ResolveApproval(ctx context.Context, approvalID string, 
 		return fmt.Errorf("unsupported approval decision %q", decision)
 	}
 
-	if err := c.writeControlResponse(pending.requestID, result); err != nil {
+	if err := c.writeControlResponseContext(ctx, pending.requestID, result); err != nil {
 		return err
 	}
 	c.mu.Lock()

@@ -198,7 +198,9 @@ func (c *CodexAdapter) clearStaleApprovals(stale []pendingApproval) {
 }
 
 func (c *CodexAdapter) ResolveApproval(ctx context.Context, approvalID string, resolution model.ApprovalResolution) error {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	decision := resolution.Decision
 	allowed := map[string]bool{
 		"accept": true, "acceptForSession": true, "decline": true, "cancel": true,
@@ -216,7 +218,7 @@ func (c *CodexAdapter) ResolveApproval(ctx context.Context, approvalID string, r
 	if err != nil {
 		return err
 	}
-	if err := c.sendRawResponse(pending.rawID, result, nil); err != nil {
+	if err := c.sendRawResponseContext(ctx, pending.rawID, result, nil); err != nil {
 		return err
 	}
 	c.mu.Lock()

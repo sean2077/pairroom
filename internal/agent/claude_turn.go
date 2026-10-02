@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -58,32 +57,22 @@ func (c *ClaudeAdapter) StartTurn(ctx context.Context, input model.AgentInput) e
 		},
 		"parent_tool_use_id": nil,
 	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("encode claude input: %w", err)
-	}
 
 	entry := claudePending{input: input, turnID: model.NewID("claude-turn")}
 	c.mu.Lock()
 	c.pending = append(c.pending, entry)
 	c.mu.Unlock()
 
-	c.writeMu.Lock()
-	c.mu.Lock()
-	stdin := c.stdin
-	c.mu.Unlock()
-	if stdin == nil {
-		c.writeMu.Unlock()
-		c.removePending(input.MessageID)
-		return errors.New("claude stdin is not available")
-	}
-	_, err = stdin.Write(append(data, '\n'))
-	c.writeMu.Unlock()
-	if err != nil {
+	if err := c.writePayloadContext(ctx, payload, "Claude input"); err != nil {
+		if errors.Is(err, ErrSubmissionUnknown) {
+			c.failProcess("adapter.stdin_error", "Claude prompt submission is uncertain; stopping transport before releasing the Turn")
+			return err
+		}
 		c.removePending(input.MessageID)
 		c.setState(model.StateError, err.Error())
-		return fmt.Errorf("send claude input: %w", err)
+		return err
 	}
+
 	if !protocolSent {
 		c.mu.Lock()
 		c.protocolSent = true
