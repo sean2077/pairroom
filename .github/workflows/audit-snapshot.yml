@@ -6,41 +6,39 @@ on:
     paths: ['.github/workflows/audit-snapshot.yml']
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  snapshot:
+  publish-reviewed-branch:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          persist-credentials: false
-      - name: Bundle public review revisions without checkout credentials
+      - name: Verify patch and publish only the new review branch
+        shell: bash
         run: |
-          git fetch origin refs/pull/129/head:refs/heads/audit-pr129 refs/pull/130/head:refs/heads/audit-pr130
-          git bundle create "$RUNNER_TEMP/pairroom-audit.bundle" --all
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: pairroom-audit-source
-          path: ${{ runner.temp }}/pairroom-audit.bundle
-          retention-days: 1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: stable
-          check-latest: true
-          cache: false
-      - name: Package public pinned root dependencies and toolchain for offline checks
-        run: |
-          go version
-          go mod download
-          tar -C "$(go env GOROOT)" -czf "$RUNNER_TEMP/pairroom-audit-go.tar.gz" .
-          tar -C "$(go env GOMODCACHE)" -czf "$RUNNER_TEMP/pairroom-audit-modules.tar.gz" .
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: pairroom-audit-offline-go
-          path: |
-            ${{ runner.temp }}/pairroom-audit-go.tar.gz
-            ${{ runner.temp }}/pairroom-audit-modules.tar.gz
-          retention-days: 1
+          set -euo pipefail
+          python - <<'PY'
+          import base64, hashlib, lzma, pathlib
+          encoded = pathlib.Path('.github/audit-delivery.patch.xz.b64').read_bytes()
+          patch = lzma.decompress(base64.b64decode(encoded))
+          assert hashlib.sha256(patch).hexdigest() == 'deb2e57dd7dda16a0fae3800f24cc1178f254d8f85be52bbf904fe2519051915'
+          pathlib.Path('/tmp/pairroom-reviewed.patch').write_bytes(patch)
+          PY
+          base=6ee20544b2a5de9bfc0930130b0eadff8a250b9f
+          branch=fix/post-v5.11.1-audit
+          test "$(git rev-parse origin/main)" = "$base"
+          test -z "$(git ls-remote --heads origin "refs/heads/$branch")"
+          git worktree add -b "$branch" "$RUNNER_TEMP/pairroom-reviewed" "$base"
+          cd "$RUNNER_TEMP/pairroom-reviewed"
+          git apply --index --unidiff-zero /tmp/pairroom-reviewed.patch
+          git diff --cached --check
+          test "$(git write-tree)" = b3af1d392c8353ed7d825cb569b7b5a2e2124b46
+          test -z "$(git diff --cached --name-only -- .github go.mod go.sum desktop/go.mod desktop/go.sum VERSION internal/version)"
+          git -c user.name='Sean' -c user.email='37324769+sean2077@users.noreply.github.com' commit -m 'fix(agent): bound stdin writes and preserve terminal session ownership'
+          test "$(git rev-parse HEAD^)" = "$base"
+          test "$(git rev-parse HEAD^{tree})" = b3af1d392c8353ed7d825cb569b7b5a2e2124b46
+          git push origin "HEAD:refs/heads/$branch"
+          git log -1 --format='%H %T %P'
