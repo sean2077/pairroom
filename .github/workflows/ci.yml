@@ -89,8 +89,8 @@ jobs:
           node-version: '24.19.0'
       - name: Test no-auth probe isolation and fail-closed wire boundaries (fixtures)
         run: node scripts/test_probe_gemini_no_auth.js
-      - name: Test Agent pair profile persistence and API boundaries
-        run: go test -count=1 ./internal/service -run 'Test(AgentPairProfile|ManagementAgentPairProfile|Native)'
+      - name: Test Service profiles, Native runtime, and startup ownership boundaries
+        run: go test -count=1 ./internal/service -run 'Test(AgentPairProfile|ManagementAgentPairProfile|Native|.*ServiceLock|ServiceRootGuard|RegistryRejects|RegistryStill|ProvisioningPreflight)'
 
   gemini-no-auth:
     if: github.event_name == 'workflow_dispatch' && inputs.gemini_no_auth
