@@ -165,6 +165,14 @@ func runCodexStrictResumeHelper(args []string) int {
 		if err := json.Unmarshal(scanner.Bytes(), &request); err != nil {
 			continue
 		}
+		if path := os.Getenv("PAIRROOM_HELPER_REQUESTS_FILE"); path != "" {
+			file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+			if err != nil {
+				return 92
+			}
+			_, _ = file.Write(append(append([]byte(nil), scanner.Bytes()...), '\n'))
+			_ = file.Close()
+		}
 		if len(request.ID) == 0 || string(request.ID) == "null" {
 			continue
 		}
@@ -186,7 +194,25 @@ func runCodexStrictResumeHelper(args []string) int {
 			}
 		case "thread/start":
 			_ = encoder.Encode(map[string]any{"id": id, "result": map[string]any{"thread": map[string]any{"id": "thread-new"}}})
+			if os.Getenv("PAIRROOM_CODEX_HELPER_MODE") == "stdin-block" {
+				time.Sleep(time.Minute) // Parent cancellation must terminate this child.
+			}
 		case "turn/start":
+			switch os.Getenv("PAIRROOM_CODEX_HELPER_MODE") {
+			case "malformed-turn-ack":
+				_ = encoder.Encode(map[string]any{"id": id, "result": map[string]any{}})
+				continue
+			case "invalid-turn-id":
+				_ = encoder.Encode(map[string]any{"id": id, "result": map[string]any{"turn": map[string]any{"id": 17}}})
+				continue
+			}
+			if os.Getenv("PAIRROOM_CODEX_HELPER_MODE") == "exit-before-turn-ack" {
+				return 89
+			}
+			if os.Getenv("PAIRROOM_CODEX_HELPER_MODE") == "reject-before-exit" {
+				_ = encoder.Encode(map[string]any{"id": id, "error": map[string]any{"code": -32000, "message": "turn rejected"}})
+				return 89
+			}
 			_ = encoder.Encode(map[string]any{"id": id, "result": map[string]any{"turn": map[string]any{"id": "turn-1"}}})
 			if os.Getenv("PAIRROOM_CODEX_HELPER_MODE") == "oversized" {
 				fmt.Println(oversizedStdoutRecord())

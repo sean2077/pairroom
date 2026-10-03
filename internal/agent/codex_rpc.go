@@ -78,6 +78,14 @@ func (c *CodexAdapter) callOnce(ctx context.Context, method string, params any) 
 }
 
 func (c *CodexAdapter) sendContext(ctx context.Context, value any) error {
+	return c.writeMessage(ctx, value, false)
+}
+
+func (c *CodexAdapter) sendTurnStart(ctx context.Context, value any) error {
+	return c.writeMessage(ctx, value, true)
+}
+
+func (c *CodexAdapter) writeMessage(ctx context.Context, value any, startsTurn bool) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("encode codex rpc message: %w", err)
@@ -85,6 +93,12 @@ func (c *CodexAdapter) sendContext(ctx context.Context, value any) error {
 	if err := c.writer.write(ctx, func() io.WriteCloser {
 		c.mu.Lock()
 		defer c.mu.Unlock()
+		// The writer evaluates this only after encoding, acquiring its slot,
+		// and checking cancellation. With a live endpoint captured, the prompt
+		// can now cross the wire even if exit overtakes Write's return.
+		if c.stdin != nil && startsTurn {
+			c.startingWriteBegun = true
+		}
 		return c.stdin
 	}, append(data, '\n')); err != nil {
 		return fmt.Errorf("write codex rpc message: %w", err)

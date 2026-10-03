@@ -29,10 +29,13 @@ func (w observedPipeWriter) Write(data []byte) (int, error) {
 func TestNativeControlCancellationUnblocksStdin(t *testing.T) {
 	for _, runtime := range []string{"claude", "codex", "grok", "gemini"} {
 		t.Run(runtime, func(t *testing.T) {
-			reader, writer, err := os.Pipe()
+			cmd := &exec.Cmd{}
+			writer, releaseChild, err := nativeStdinPipe(cmd)
 			if err != nil {
 				t.Fatal(err)
 			}
+			reader := cmd.Stdin.(*os.File)
+			defer releaseChild()
 			defer reader.Close()
 			defer writer.Close()
 			started := make(chan struct{})
@@ -70,10 +73,17 @@ func TestNativeControlCancellationUnblocksStdin(t *testing.T) {
 				if !errors.Is(err, context.Canceled) {
 					t.Fatalf("cancellation lost: %v", err)
 				}
+				if !errors.Is(err, ErrSubmissionUnknown) {
+					t.Fatalf("in-flight cancellation lost submission uncertainty: %v", err)
+				}
 			case <-time.After(time.Second):
 				// Unblock and join the old implementation before failing the test.
-				_ = writer.Close()
-				<-done
+				_ = reader.Close()
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					t.Fatal("failed cancellation left its writer unjoined")
+				}
 				t.Fatal("cancellation did not unblock the native stdin write")
 			}
 		})

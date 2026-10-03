@@ -247,6 +247,7 @@ func TestClaudeControlRequestCreatesApprovalAndReturnsAllowResponse(t *testing.T
 		events = append(events, event)
 	})
 	adapter.stdin = writer
+	adapter.cmd = &exec.Cmd{} // Live transport sentinel; this test never signals it.
 	adapter.state = model.StateWorking
 	adapter.pending = []claudePending{{input: model.AgentInput{MessageID: "msg-approval"}, turnID: "turn-approval"}}
 

@@ -38,10 +38,12 @@ type CodexAdapter struct {
 	submitMu sync.Mutex
 	mu       sync.Mutex
 	writer   nativeStdinWriter
-	state    model.AgentState
-	cmd      *exec.Cmd
-	tree     *execx.Tree
-	stdin    io.WriteCloser
+	// Orders approval state publication against terminal records and exit.
+	turnBoundaryMu sync.Mutex
+	state          model.AgentState
+	cmd            *exec.Cmd
+	tree           *execx.Tree
+	stdin          io.WriteCloser
 	// procDone is closed once the process exited and waitProcess finished; it
 	// gives Stop a bounded graceful window between closing stdin and Kill.
 	procDone    chan struct{}
@@ -77,6 +79,9 @@ type CodexAdapter struct {
 	wireInputOrder []string
 	startingInput  *model.AgentInput
 	startingTurnID string
+	// A captured prompt write may reach the peer before any acceptance receipt.
+	// Definite pre-write failures and native rejections clear this staging.
+	startingWriteBegun bool
 	// steeringInput is the message ID of the turn/steer request in flight. A
 	// completion that overtakes its response must not settle it: Codex may
 	// still reject the steer, and only the response decides its terminal event.
@@ -193,11 +198,12 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	execx.NoConsole(cmd)
 	cmd.Dir = c.cfg.Repo
 	cmd.Env = mergeRuntimeEnv(envWithout("CODEX_INTERNAL_ORIGINATOR"), c.cfg.Env)
-	stdin, err := cmd.StdinPipe()
+	stdin, releaseChildStdin, err := nativeStdinPipe(cmd)
 	if err != nil {
 		c.setState(model.StateError, err.Error())
 		return fmt.Errorf("codex stdin: %w", err)
 	}
+	defer releaseChildStdin()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		_ = stdin.Close()
@@ -216,6 +222,7 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 		c.setState(model.StateError, err.Error())
 		return fmt.Errorf("start codex app-server: %w", err)
 	}
+	releaseChildStdin()
 
 	procDone := make(chan struct{})
 	c.mu.Lock()
@@ -230,7 +237,7 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 	readers.Add(2)
 	go func() { defer readers.Done(); c.readStdout(stdout) }()
 	go func() { defer readers.Done(); c.readStderr(stderr) }()
-	go func() { readers.Wait(); c.waitProcess(cmd); tree.Release(); close(procDone) }()
+	go func() { readers.Wait(); c.waitProcess(cmd, stdin); tree.Release(); close(procDone) }()
 
 	handshakeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -263,7 +270,7 @@ func (c *CodexAdapter) Start(ctx context.Context) error {
 		result, err = c.call(handshakeCtx, "thread/resume", c.threadResumeParams(existingThread))
 		if err != nil {
 			_ = c.Stop(context.Background())
-			return fmt.Errorf("resume required Codex thread %q: %w", requiredThread, err)
+			return fmt.Errorf("resume required Codex thread %q: %w; inspect this thread in Codex's native CLI and Room history before explicitly retrying or creating a new Room; PairRoom will not replace it automatically", requiredThread, err)
 		}
 	}
 	if existingThread == "" {
@@ -382,7 +389,8 @@ func (c *CodexAdapter) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (c *CodexAdapter) waitProcess(cmd *exec.Cmd) {
+func (c *CodexAdapter) waitProcess(cmd *exec.Cmd, stdin io.WriteCloser) {
+	defer stdin.Close()
 	err := cmd.Wait()
 	c.mu.Lock()
 	active := c.cmd == cmd
@@ -409,6 +417,8 @@ func (c *CodexAdapter) waitProcess(cmd *exec.Cmd) {
 		return
 	}
 	if intentional {
+		c.turnBoundaryMu.Lock()
+		defer c.turnBoundaryMu.Unlock()
 		c.setState(model.StateStopped, "")
 		return
 	}
@@ -433,6 +443,8 @@ func (c *CodexAdapter) failStream(reason string) {
 }
 
 func (c *CodexAdapter) handleUnexpectedProcessExit(err error) {
+	c.turnBoundaryMu.Lock()
+	defer c.turnBoundaryMu.Unlock()
 	c.mu.Lock()
 	streamFailure := c.streamFailure
 	c.streamFailure = ""

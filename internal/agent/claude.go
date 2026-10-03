@@ -251,11 +251,12 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	execx.NoConsole(cmd)
 	cmd.Dir = c.cfg.Repo
 	cmd.Env = mergeRuntimeEnv(envWithout("CLAUDECODE"), c.cfg.Env)
-	stdin, err := cmd.StdinPipe()
+	stdin, releaseChildStdin, err := nativeStdinPipe(cmd)
 	if err != nil {
 		c.setState(model.StateError, err.Error())
 		return fmt.Errorf("claude stdin: %w", err)
 	}
+	defer releaseChildStdin()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		_ = stdin.Close()
@@ -274,6 +275,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 		c.setState(model.StateError, err.Error())
 		return fmt.Errorf("start claude: %w", err)
 	}
+	releaseChildStdin()
 
 	procDone := make(chan struct{})
 	c.mu.Lock()
@@ -290,7 +292,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	readers.Add(2)
 	go func() { defer readers.Done(); c.readStdout(stdout) }()
 	go func() { defer readers.Done(); c.readStderr(stderr) }()
-	go func() { readers.Wait(); c.waitProcess(cmd); tree.Release(); close(procDone) }()
+	go func() { readers.Wait(); c.waitProcess(cmd, stdin); tree.Release(); close(procDone) }()
 
 	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	initErr := c.initializeControl(initCtx)
@@ -382,7 +384,8 @@ func (c *ClaudeAdapter) ensurePromptFile(content string) (string, error) {
 	return path, nil
 }
 
-func (c *ClaudeAdapter) waitProcess(cmd *exec.Cmd) {
+func (c *ClaudeAdapter) waitProcess(cmd *exec.Cmd, stdin io.WriteCloser) {
+	defer stdin.Close()
 	err := cmd.Wait()
 	c.turnBoundaryMu.Lock()
 	defer c.turnBoundaryMu.Unlock()

@@ -64,6 +64,7 @@ func (g *ACPAdapter) ResolveApproval(ctx context.Context, approvalID string, res
 	}
 	g.mu.Lock()
 	pending, ok := g.approvals[approvalID]
+	turn, cmd := g.turn, g.cmd
 	if !ok {
 		g.mu.Unlock()
 		return fmt.Errorf("unknown ACP approval %q", approvalID)
@@ -80,7 +81,14 @@ func (g *ACPAdapter) ResolveApproval(ctx context.Context, approvalID string, res
 	if err := g.sendRawResponseContext(ctx, pending.rawID, result, nil); err != nil {
 		return err
 	}
-	g.setState(model.StateWorking, "")
+	g.turnBoundaryMu.Lock()
+	defer g.turnBoundaryMu.Unlock()
+	g.mu.Lock()
+	active := turn != nil && g.turn == turn && cmd != nil && g.cmd == cmd && !g.intentional && g.streamFailure == ""
+	g.mu.Unlock()
+	if active {
+		g.setState(model.StateWorking, "")
+	}
 	return nil
 }
 

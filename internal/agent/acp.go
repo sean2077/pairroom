@@ -192,11 +192,12 @@ func (g *ACPAdapter) Start(ctx context.Context) error {
 	} else if g.cfg.Runtime == model.RuntimeGemini {
 		cmd.Env = geminiACPEnv(cmd.Env, g.cfg)
 	}
-	stdin, err := cmd.StdinPipe()
+	stdin, releaseChildStdin, err := nativeStdinPipe(cmd)
 	if err != nil {
 		g.setState(model.StateError, err.Error())
 		return fmt.Errorf("ACP stdin: %w", err)
 	}
+	defer releaseChildStdin()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		g.setState(model.StateError, err.Error())
@@ -212,6 +213,7 @@ func (g *ACPAdapter) Start(ctx context.Context) error {
 		g.setState(model.StateError, err.Error())
 		return fmt.Errorf("start ACP: %w", err)
 	}
+	releaseChildStdin()
 
 	done := make(chan struct{})
 	g.mu.Lock()
@@ -228,7 +230,7 @@ func (g *ACPAdapter) Start(ctx context.Context) error {
 	readers.Add(2)
 	go func() { defer readers.Done(); g.readStdout(stdout) }()
 	go func() { defer readers.Done(); g.readStderr(stderr) }()
-	go func() { readers.Wait(); g.waitProcess(cmd, tree, done) }()
+	go func() { readers.Wait(); g.waitProcess(cmd, tree, done, stdin) }()
 
 	clientVersion := strings.TrimSpace(g.cfg.ClientVersion)
 	if clientVersion == "" {
@@ -506,7 +508,8 @@ func (g *ACPAdapter) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (g *ACPAdapter) waitProcess(cmd *exec.Cmd, tree *execx.Tree, done chan struct{}) {
+func (g *ACPAdapter) waitProcess(cmd *exec.Cmd, tree *execx.Tree, done chan struct{}, stdin io.WriteCloser) {
+	defer stdin.Close()
 	err := cmd.Wait()
 	tree.Release()
 	g.turnBoundaryMu.Lock()

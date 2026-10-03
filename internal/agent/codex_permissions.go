@@ -145,6 +145,8 @@ func (c *CodexAdapter) handleServerRequestResolved(params json.RawMessage) {
 		return
 	}
 	canonical := strings.TrimSpace(string(payload.RequestID))
+	c.turnBoundaryMu.Lock()
+	defer c.turnBoundaryMu.Unlock()
 	var cleared *model.Approval
 	var turnID, correlationID string
 	c.mu.Lock()
@@ -172,12 +174,10 @@ func (c *CodexAdapter) handleServerRequestResolved(params json.RawMessage) {
 		e.Data = append(json.RawMessage(nil), params...)
 		c.sink(e)
 		c.mu.Lock()
-		active := c.currentTurn != ""
+		active := c.currentTurn != "" && c.currentTurn == turnID && !c.intentional && c.streamFailure == ""
 		c.mu.Unlock()
 		if active {
 			c.setState(model.StateWorking, "")
-		} else {
-			c.setState(model.StateIdle, "")
 		}
 	}
 }
@@ -210,6 +210,11 @@ func (c *CodexAdapter) ResolveApproval(ctx context.Context, approvalID string, r
 	}
 	c.mu.Lock()
 	pending, ok := c.approvals[approvalID]
+	cmd := c.cmd
+	turnID := pending.turnID
+	if turnID == "" {
+		turnID = c.currentTurn
+	}
 	c.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("unknown approval %q", approvalID)
@@ -221,9 +226,11 @@ func (c *CodexAdapter) ResolveApproval(ctx context.Context, approvalID string, r
 	if err := c.sendRawResponseContext(ctx, pending.rawID, result, nil); err != nil {
 		return err
 	}
+	c.turnBoundaryMu.Lock()
+	defer c.turnBoundaryMu.Unlock()
 	c.mu.Lock()
 	delete(c.approvals, approvalID)
-	active := c.currentTurn != ""
+	active := cmd != nil && c.cmd == cmd && c.currentTurn != "" && (turnID == "" || c.currentTurn == turnID) && !c.intentional && c.streamFailure == ""
 	c.mu.Unlock()
 	// The room engine owns the user-facing approval projection after this call
 	// succeeds. serverRequest/resolved remains available for server-side clears.

@@ -354,6 +354,8 @@ func (c *CodexAdapter) handleItem(method string, params json.RawMessage) {
 }
 
 func (c *CodexAdapter) handleTurnCompleted(params json.RawMessage) {
+	c.turnBoundaryMu.Lock()
+	defer c.turnBoundaryMu.Unlock()
 	var p struct {
 		Turn struct {
 			ID     string `json:"id"`

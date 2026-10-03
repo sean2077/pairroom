@@ -39,9 +39,10 @@ func (w *nativeStdinWriter) write(parent context.Context, source func() io.Write
 		return errors.New("native stdin is not available")
 	}
 
-	// os.File pipes (including Windows pipes) and io.Pipe support Close during
-	// Write. Close the captured endpoint, never a later replacement process's
-	// stdin. Join a started callback before releasing the slot.
+	// Owned stdin is pollable (an overlapped parent handle on Windows), and
+	// io.Pipe supports Close during Write. Synchronous Windows os.Pipe handles
+	// do not satisfy this boundary. Close only the captured endpoint and join
+	// the callback before releasing its write slot.
 	closed := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() {
 		_ = stdin.Close()
@@ -59,7 +60,10 @@ func (w *nativeStdinWriter) write(parent context.Context, source func() io.Write
 		if ctx.Err() != nil {
 			err = errors.Join(ctx.Err(), err)
 		}
-		if n > 0 {
+		// Once I/O began, cancellation can race a peer consuming bytes even
+		// when the OS reports zero transferred. Only pre-I/O cancellation is
+		// a definite no-send outcome.
+		if n > 0 || ctx.Err() != nil {
 			return fmt.Errorf("%w: %w", ErrSubmissionUnknown, err)
 		}
 		return err

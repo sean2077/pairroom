@@ -48,6 +48,7 @@ func (c *CodexAdapter) StartTurn(ctx context.Context, input model.AgentInput) er
 	c.mu.Lock()
 	c.startingInput = &starting
 	c.startingTurnID = ""
+	c.startingWriteBegun = false
 	c.mu.Unlock()
 	c.stageWireInput(input)
 	callCtx, cancel := codexTurnStartContext(ctx)
@@ -66,7 +67,7 @@ func (c *CodexAdapter) StartTurn(ctx context.Context, input model.AgentInput) er
 			return c.applyTurnStartReply(input, reply, abandoned)
 		}
 		c.mu.Unlock()
-		if err := c.sendContext(callCtx, map[string]any{"id": id, "method": "turn/start", "params": params}); err != nil {
+		if err := c.sendTurnStart(callCtx, map[string]any{"id": id, "method": "turn/start", "params": params}); err != nil {
 			if errors.Is(err, ErrSubmissionUnknown) {
 				// Keep staged correlation until the actual process exit settles it.
 				c.failStream("Codex prompt submission is uncertain; stopping transport before releasing the Turn")
@@ -138,6 +139,11 @@ var errCodexMalformedTurnStart = errors.New("malformed Codex turn/start response
 // explicit cancellation of the caller (for example Room shutdown).
 func codexTurnStartContext(parent context.Context) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), codexTurnStartTimeout)
+	// AfterFunc dispatches asynchronously, so an already-cancelled parent must
+	// close the submission gate before a writer can acquire its slot.
+	if errors.Is(parent.Err(), context.Canceled) {
+		cancel()
+	}
 	stop := context.AfterFunc(parent, func() {
 		if errors.Is(parent.Err(), context.Canceled) {
 			cancel()
@@ -156,6 +162,7 @@ func (c *CodexAdapter) clearStagedStart(messageID string) {
 	if c.startingInput != nil && c.startingInput.MessageID == messageID {
 		c.startingInput = nil
 		c.startingTurnID = ""
+		c.startingWriteBegun = false
 		c.pendingCompletions = make(map[string]json.RawMessage)
 	}
 	c.mu.Unlock()
@@ -175,6 +182,12 @@ func (c *CodexAdapter) applyTurnStartReply(input model.AgentInput, reply rpcRepl
 		return reply
 	}
 	if reply.err != nil {
+		var rpcErr codexRPCError
+		if errors.As(reply.err, &rpcErr) {
+			c.mu.Lock()
+			c.startingWriteBegun = false // The native rejection proves no acceptance.
+			c.mu.Unlock()
+		}
 		if abandoned && !bound {
 			c.clearStagedStart(input.MessageID)
 			c.emitStartRejected(input, "Codex rejected turn/start after its deadline: "+reply.err.Error())
@@ -182,7 +195,9 @@ func (c *CodexAdapter) applyTurnStartReply(input model.AgentInput, reply rpcRepl
 		return reply
 	}
 	if err := c.acceptTurnStart(input, reply.result); err != nil {
-		if abandoned {
+		if errors.Is(err, ErrSubmissionUnknown) {
+			c.failStream("Codex turn/start acknowledgement is invalid; stopping transport before releasing the Turn")
+		} else if abandoned {
 			c.emitStartRejected(input, "Codex answered turn/start after its deadline without a usable turn: "+err.Error()+"; inspect the Codex thread before retrying")
 		}
 		reply.err = err
@@ -204,7 +219,6 @@ func (c *CodexAdapter) emitStartRejected(input model.AgentInput, detail string) 
 
 // acceptTurnStart applies a successful turn/start response.
 func (c *CodexAdapter) acceptTurnStart(input model.AgentInput, result json.RawMessage) error {
-	c.unstageWireInput(input.MessageID)
 	starting := input
 	var turnResult struct {
 		Turn struct {
@@ -212,12 +226,14 @@ func (c *CodexAdapter) acceptTurnStart(input model.AgentInput, result json.RawMe
 		} `json:"turn"`
 	}
 	if err := json.Unmarshal(result, &turnResult); err != nil || turnResult.Turn.ID == "" {
-		c.clearStagedStart(input.MessageID)
 		if err == nil {
 			err = errors.New("missing turn id")
 		}
-		return fmt.Errorf("%w: %w", errCodexMalformedTurnStart, err)
+		// No usable acceptance receipt is not a native rejection. The prompt
+		// crossed the wire; retain correlation until actual transport exit.
+		return fmt.Errorf("%w: %w: %v", ErrSubmissionUnknown, errCodexMalformedTurnStart, err)
 	}
+	c.unstageWireInput(input.MessageID)
 	c.mu.Lock()
 	if _, completed := c.terminalTurns[turnResult.Turn.ID]; completed {
 		c.startingInput = nil
@@ -543,6 +559,11 @@ type codexOutstanding struct {
 func (c *CodexAdapter) takeOutstanding() codexOutstanding {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Exit cannot prove an in-flight prompt was unaccepted. Retain this exact
+	// process-local identity; an unknown submission does not materialize a
+	// durable Binding. A thread/start-only allocation remains disposable.
+	c.threadEngaged = c.threadEngaged || c.startingWriteBegun
+	c.startingWriteBegun = false
 	result := codexOutstanding{turnID: c.currentTurn, inputTurns: make(map[string]string)}
 	if input := c.latestTurnInputLocked(c.currentTurn); input.MessageID != "" {
 		result.correlationID = input.MessageID
