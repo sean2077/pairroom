@@ -12,16 +12,33 @@ const (
 // Totals describe retained history; omitted messages have not been deleted.
 type TailSnapshot struct {
 	Snapshot
-	TotalMessages int `json:"total_messages"`
-	TotalAudit    int `json:"total_audit"`
+	TotalMessages int  `json:"total_messages"`
+	TotalAudit    int  `json:"total_audit"`
+	TailUnchanged bool `json:"tail_unchanged,omitempty"`
 }
 
 // SnapshotTail copies only the recent window, with complete message/quote text.
 // Budget the text as well as the count: 300 maximum-sized replies are not a
 // small response. Always retain the newest message; never clip its content.
 func (e *Engine) SnapshotTail() TailSnapshot {
+	return e.SnapshotTailSince(nil)
+}
+
+// SnapshotTailSince omits message/audit payloads only when the caller already
+// holds this exact durable sequence. Bindings still include transient activity;
+// the caller must also refresh Summary, whose collectors can change without an
+// Event Log append. A missing or different sequence always gets the whole tail.
+func (e *Engine) SnapshotTailSince(knownSequence *uint64) TailSnapshot {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if knownSequence != nil && *knownSequence == e.sequence {
+		return TailSnapshot{
+			Snapshot:      e.snapshotRangeLocked(len(e.order), len(e.audit)),
+			TotalMessages: len(e.order),
+			TotalAudit:    len(e.audit),
+			TailUnchanged: true,
+		}
+	}
 	start, textBytes := len(e.order), 0
 	for start > 0 && len(e.order)-start < SnapshotMessageLimit {
 		m := e.messages[e.order[start-1]]

@@ -51,6 +51,53 @@ func TestNativeBrowserTailPreservesFullExportAndAuthentication(t *testing.T) {
 	}
 }
 
+func TestNativeBrowserConditionalTailRefresh(t *testing.T) {
+	f := nativeHTTP(t)
+	for i := 0; i < 4; i++ {
+		if _, err := f.native.engine.SendUser(relay.SendRequest{ID: fmt.Sprintf("large-%d", i), To: model.ActorSlot1, Text: strings.Repeat("x", relay.MaxBodyBytes)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sequence := f.native.engine.Sequence()
+	query := fmt.Sprintf("?tail=1&known_sequence=%d", sequence)
+	res := inspectionRequest(t, f, "/api/v1/snapshot"+query)
+	var value struct {
+		Relay   relay.TailSnapshot `json:"relay"`
+		Summary relay.Summary      `json:"summary"`
+	}
+	if res.Code != http.StatusOK || json.Unmarshal(res.Body.Bytes(), &value) != nil || !value.Relay.TailUnchanged || len(value.Relay.Messages) != 0 || value.Relay.TotalMessages != 4 || value.Summary.Inboxes[model.ActorSlot1].Queued != 4 || res.Body.Len() > 8192 {
+		t.Fatalf("conditional snapshot did not omit repeated evidence: %d, %d bytes", res.Code, res.Body.Len())
+	}
+	if f.native.engine.Sequence() != sequence {
+		t.Fatal("conditional read changed the log")
+	}
+	if _, err := f.native.engine.SendUser(relay.SendRequest{ID: "new", To: model.ActorSlot1, Text: "new complete evidence"}); err != nil {
+		t.Fatal(err)
+	}
+	res = inspectionRequest(t, f, "/api/v1/snapshot"+query)
+	value.Relay = relay.TailSnapshot{}
+	if res.Code != http.StatusOK || json.Unmarshal(res.Body.Bytes(), &value) != nil || value.Relay.TailUnchanged || len(value.Relay.Messages) == 0 || value.Relay.Messages[len(value.Relay.Messages)-1].Text != "new complete evidence" || value.Relay.TotalMessages != 5 {
+		t.Fatal("a changed sequence did not refresh the bounded window")
+	}
+	for _, path := range []string{"/api/v1/export" + query, "/api/v1/snapshot"} {
+		res = inspectionRequest(t, f, path)
+		value.Relay = relay.TailSnapshot{}
+		if res.Code != http.StatusOK || json.Unmarshal(res.Body.Bytes(), &value) != nil || value.Relay.TailUnchanged || len(value.Relay.Messages) != 5 {
+			t.Fatal("conditional read changed complete export or default snapshot")
+		}
+	}
+	for _, bad := range []string{"", "-1", "abc", "18446744073709551616", "1&known_sequence=2"} {
+		if res := inspectionRequest(t, f, "/api/v1/snapshot?tail=1&known_sequence="+bad); res.Code != http.StatusBadRequest {
+			t.Fatalf("accepted invalid sequence %q: %d", bad, res.Code)
+		}
+	}
+	res = httptest.NewRecorder()
+	f.native.http.Handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/v1/snapshot"+query, nil))
+	if res.Code != http.StatusUnauthorized {
+		t.Fatal("conditional tail bypassed authentication")
+	}
+}
+
 func TestNativeEventStreamExitsOnFatalWriter(t *testing.T) {
 	log, err := store.Open(t.TempDir())
 	if err != nil {
