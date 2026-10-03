@@ -86,9 +86,10 @@ func ServiceLockOwnerRunning(info ServiceLockInfo) (bool, error) {
 	return true, nil
 }
 
-// ServiceLock is a cooperative process lock for one service data root. The
-// on-disk nonce prevents a delayed Close from deleting a replacement owner's
-// lock. Crash-stale locks are recovered only after the recorded PID is
+// ServiceLock is a cooperative process lock for one service data root. A
+// root-scoped kernel guard serializes metadata acquisition, recovery and release;
+// the on-disk nonce also prevents a delayed Close from deleting a replacement
+// owner's lock. Crash-stale locks are recovered only after the recorded PID is
 // confirmed gone; PairRoom never guesses that another process is dead.
 type ServiceLock struct {
 	root  string
@@ -124,9 +125,14 @@ func AcquireServiceLock(input string, recoverStale bool) (*ServiceLock, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("create service data root: %w", err)
 	}
+	unlock, err := lockServiceRoot(root)
+	if err != nil {
+		return nil, fmt.Errorf("serialize Service lock acquisition: %w", err)
+	}
+	defer unlock()
 	path := filepath.Join(root, "service.lock")
 	if recoverStale {
-		if err := RecoverServiceLock(root); err != nil {
+		if err := recoverServiceLock(root); err != nil {
 			return nil, err
 		}
 	}
@@ -295,6 +301,22 @@ func RecoverServiceLock(input string) error {
 	if err != nil {
 		return err
 	}
+	unlock, err := lockServiceRoot(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("serialize Service lock recovery: %w", err)
+	}
+	defer unlock()
+	return recoverServiceLock(root)
+}
+
+// recoverServiceLock requires the root's kernel guard. Keep it across both
+// recovery and publication in AcquireServiceLock: checking a stale nonce after
+// moving the path cannot prevent a concurrent caller from moving a newer lock
+// and exposing a temporary vacancy to a third Service.
+func recoverServiceLock(root string) error {
 	path := filepath.Join(root, "service.lock")
 	metadata, found, inspectErr := readServiceLockMetadata(path)
 	if inspectErr != nil {
@@ -422,6 +444,15 @@ func (l *ServiceLock) Close() error {
 		return nil
 	}
 	l.once.Do(func() {
+		unlock, err := lockServiceRoot(l.root)
+		if errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		if err != nil {
+			l.err = fmt.Errorf("serialize Service lock release: %w", err)
+			return
+		}
+		defer unlock()
 		data, err := os.ReadFile(l.path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {

@@ -305,7 +305,20 @@ func (n *nativeHostRuntime) serve(w http.ResponseWriter, r *http.Request) {
 			// Browser refreshes request a bounded window; export and the
 			// unparameterized API keep complete history for explicit inspection.
 			if p == "/api/v1/snapshot" && r.URL.Query().Get("tail") == "1" {
-				writeManagementJSON(w, 200, n.snapshotWithRelay(n.engine.SnapshotTail()))
+				var knownSequence *uint64
+				if values, ok := r.URL.Query()["known_sequence"]; ok {
+					if len(values) != 1 || values[0] == "" {
+						writeManagementError(w, http.StatusBadRequest, "invalid known sequence")
+						return
+					}
+					sequence, err := strconv.ParseUint(values[0], 10, 64)
+					if err != nil {
+						writeManagementError(w, http.StatusBadRequest, "invalid known sequence")
+						return
+					}
+					knownSequence = &sequence
+				}
+				writeManagementJSON(w, 200, n.snapshotWithRelay(n.engine.SnapshotTailSince(knownSequence)))
 				return
 			}
 			writeManagementJSON(w, 200, n.snapshot())

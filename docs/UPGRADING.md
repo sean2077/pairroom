@@ -16,11 +16,15 @@ The host requests only the fixed public GitHub latest-release endpoint, without 
 
 The 5.0.0 development cutover retired old formats without migration. Current readers require **Store schema 12/provisioning 5**, explicit immutable `host_mode`, registry checkpoint 3, relay state 2, and Agent pair profile storage 2. A retired Service root fails as a whole before recovery/replay/repair/rewrite. Start a new root and recreate registrations, Rooms, and profiles; moving only old Room directories cannot repair an incompatible root checkpoint.
 
+A newer checkpoint, Agent pair profile, or Room Store/provisioning schema also rejects the whole root before startup cleanup, including staged and quarantined Rooms. Provisioning compatibility is checked from the two initial creation records; incomplete staging can still be cleaned after a crash. Use a matching or newer binary; do not downgrade format numbers to make an older reader accept the data.
+
 Legacy data/credentials remain untouched for explicit human backup/removal. Never relabel schema numbers, copy selected old events into a new log, or infer old permissions/Bindings from current defaults. Preserve retired roots with their matching binaries for inspection. Previously imported external Room directories are separate backup/isolation responsibilities.
 
 Legacy imports, binding-completion endpoints, inferred selections, role switching, and Reviewer snapshot workspaces are gone. `ordinary_reviewer_policy` is removed. Current effective Embedded permission profiles are independent of Lead/Executor responsibilities; Native retains original harness permissions.
 
 A fresh Embedded Room may explicitly resume a supported existing native session, but pre-binding history is not imported. `pairroom serve` remains current-format standalone development/diagnostics, not Legacy import. Embedded checkpoint-only cleanup may handle a wholly lost Room directory; missing files inside an existing directory, unidentified archive stubs, and ambiguous replacement data still fail closed. Native archive requires valid data.
+
+Startup preserves known Room identities: an absent active Room directory, or a present published directory with missing, empty, or partial-only Event Log identity, rejects startup rather than rewriting the checkpoint without that Room. A wholly missing archived directory retains its existing checkpoint-only cleanup path.
 
 ## Before upgrading
 

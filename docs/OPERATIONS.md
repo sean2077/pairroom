@@ -14,6 +14,8 @@ A desktop-owned **embedded Service** can host both Embedded and Native Rooms. Em
 
 From a source checkout, `make dev` stops an installed daemon, recovers a crash-stale lock only after its recorded PID is gone, and runs the current-tree Management Service. `make stop` is stop-only. Do not run competing owners against the same data root.
 
+Service lock acquisition, stale recovery, and release are serialized across current processes by a root-scoped kernel guard. The PID/nonce file remains the ownership record, and an exited process releases the guard automatically. Older binaries do not honor this guard: stop previous owners and avoid concurrent mixed-version launches or recovery during upgrades.
+
 All listeners require numeric loopback addresses. A token does not allow LAN, wildcard, or hostname binds. Remote access uses protected SSH local forwarding; treat access to that endpoint/bootstrap token as access to repositories, Agent credentials, and attachments.
 
 ## Desktop lifecycle

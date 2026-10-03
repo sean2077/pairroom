@@ -347,7 +347,7 @@
   function renderAudit(value){const key=JSON.stringify([value.relay.audit,language()]);if(key===auditKey)return;auditKey=key;
     $('audit').replaceChildren(...(value.relay.audit||[]).slice(-80).reverse().map(a=>{const li=element('li');li.append(element('strong',auditNames[a.kind]?tr(auditNames[a.kind]):a.kind),element('time',time(a.at)));const detail=auditDetail(a);if(detail)li.append(element('p',detail));return li;}));
   }
-  function render(value){snapshot=value;restoreOutbox();renderAttention(value);refreshPending().catch(e=>status(e.message,true));$('room-name').textContent=value.room.name;document.title=`${value.room.name} · PairRoom Native`;renderBindings(value);renderMessages(value);renderDelivery(value);renderAudit(value);}
+  function render(value, unchangedTail = false){snapshot=value;restoreOutbox();renderAttention(value);refreshPending().catch(e=>status(e.message,true));$('room-name').textContent=value.room.name;document.title=`${value.room.name} · PairRoom Native`;renderBindings(value);if(!unchangedTail)renderMessages(value);renderDelivery(value);if(!unchangedTail)renderAudit(value);}
   function renderConnection(value) {
     connectionState = value;
     $('connection').textContent = tr(value);
@@ -383,16 +383,39 @@
     status(connectionError, true);
     scheduleReconnect();
   }
-  function snapshotJob() {
+  function snapshotJob(full = false) {
     let resolve, reject;
     const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
-    return { epoch: pageEpoch, promise, resolve, reject, next: null };
+    return { epoch: pageEpoch, promise, resolve, reject, next: null, full };
+  }
+  function resetInspection() {
+    // Recovery can replace the retained log at the same/lower sequence. Old
+    // pages and cursors are not evidence for the reconnected Service; retire
+    // in-flight replies too. Keep the user's typed history filters intact.
+    ++pendingRequest; ++historyRequest;
+    pendingKey = ''; pendingCursor = ''; pendingNext = ''; historyNext = '';
+    $('pending-items').replaceChildren(); $('pending-count').textContent = '';
+    $('pending-next').disabled = true; $('pending-first').disabled = true; $('pending-pager').hidden = true;
+    $('history-items').replaceChildren(); $('history-next').hidden = true;
   }
   async function readSnapshot(job) {
     let failure = null;
     try {
-      const value = await request('api/v1/snapshot?tail=1');
-      if (currentPage(job.epoch) && (!snapshot || value.relay.sequence >= snapshot.relay.sequence)) render(value);
+      const previous = snapshot;
+      const known = previous && !job.full ? `&known_sequence=${previous.relay.sequence}` : '';
+      const value = await request(`api/v1/snapshot?tail=1${known}`);
+      if (!currentPage(job.epoch)) return;
+      if (value.relay.tail_unchanged) {
+        if (!known || value.room.id !== previous.room.id || value.relay.sequence !== previous.relay.sequence) throw new Error(tr('error'));
+        // Refresh bindings/summary even without a durable event: collector
+        // registration and native activity are deliberately transient.
+        value.relay = {...value.relay, messages:previous.relay.messages, audit:previous.relay.audit, delivery:previous.relay.delivery};
+      }
+      if (job.full || !snapshot || value.relay.sequence >= snapshot.relay.sequence) {
+        if (job.full) resetInspection();
+        render(value, Boolean(value.relay.tail_unchanged));
+        if (job.full && previous && $('history-panel').open) loadHistory().catch(e=>status(e.message,true));
+      }
     } catch (error) {
       if (currentPage(job.epoch)) { failure = error; connectionFailed(error); }
     } finally {
@@ -407,16 +430,17 @@
       }
     }
   }
-  function refresh() {
+  function refresh(full = false) {
     if (!pageActive) return Promise.resolve();
     // One active read and one queued follow-up. An overlapping caller waits
     // for a snapshot started after its request, but later SSE/poll nudges
     // cannot extend its barrier indefinitely or keep accepted Send locked.
     if (refreshJob?.epoch === pageEpoch) {
-      if (!refreshJob.next) refreshJob.next = snapshotJob();
+      if (!refreshJob.next) refreshJob.next = snapshotJob(full);
+      else if (full) refreshJob.next.full = true;
       return refreshJob.next.promise;
     }
-    const job = snapshotJob();
+    const job = snapshotJob(full);
     refreshJob = job;
     void readSnapshot(job);
     return job.promise;
@@ -549,7 +573,9 @@
         if (!currentPage(job.epoch)) return;
         csrf = session.csrf_token;
         if (token) history.replaceState(null, '', location.pathname + location.search);
-        await refresh();
+        // A restarted/restored Service can have an earlier sequence; never
+        // reuse the old connection's tail as evidence for this session.
+        await refresh(true);
         if (!currentPage(job.epoch) || navigator.onLine === false) return;
         const source = new EventSource('api/v1/events');
         stream = source;

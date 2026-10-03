@@ -215,7 +215,7 @@ func TestCodexSteerRejectedAfterTurnCompletionRunsAsNextTurn(t *testing.T) {
 		return m.ReplyTo == second.ID && m.Text == "fresh answer 2"
 	})
 	done := waitForMessage(t, engine, "second settled", func(m model.Message) bool {
-		return m.ID == second.ID && m.Processing[model.ActorSlot2].Terminal()
+		return m.ID == second.ID && m.Processing[model.ActorSlot2].Terminal() && m.Delivery[model.ActorSlot2] != model.DeliverySubmitting
 	})
 	if done.Processing[model.ActorSlot2] != model.ProcessingCompleted || done.ProcessingTurn[model.ActorSlot2] != "turn-2" || done.Delivery[model.ActorSlot2] != model.DeliveryStarted {
 		t.Fatalf("second message = delivery %s processing %s turn %q", done.Delivery[model.ActorSlot2], done.Processing[model.ActorSlot2], done.ProcessingTurn[model.ActorSlot2])
