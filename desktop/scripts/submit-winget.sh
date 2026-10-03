@@ -121,7 +121,7 @@ fi
 body="$(cat <<EOF
 ## 📖 Description
 
-${change} for **PairRoom ${VERSION}** — a local collaboration control plane for Claude Code, Codex, and Grok Build sessions.
+${change} for **PairRoom ${VERSION}** — a local collaboration control plane for Claude Code, Codex, Grok Build, and Gemini CLI sessions.
 
 - Source repository: https://github.com/sean2077/pairroom (MIT)
 - Installer: Inno Setup package attached to the GitHub Release for tag [\`v${VERSION}\`](https://github.com/sean2077/pairroom/releases/tag/v${VERSION})

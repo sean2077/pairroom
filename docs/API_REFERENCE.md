@@ -258,7 +258,7 @@ Diagnostics create no durable Room events, do not activate/suspend/resume existi
 
 ## Native host mode
 
-`POST /api/v1/projects/{project}/rooms` accepts immutable `host_mode: "embedded" | "native"` (default embedded). New Rooms use Store 12/provisioning 5 in both modes. Native creation retains two Agent selections but does not apply providers/models/effort/permissions or spawn adapters; Claude Code, Codex and Grok Build are supported. Existing adapter-session Binding requests are rejected. The native surface uses the same scoped Management gateway but a relay-specific snapshot/UI.
+`POST /api/v1/projects/{project}/rooms` accepts immutable `host_mode: "embedded" | "native"` (default embedded). New Rooms use Store 12/provisioning 5 in both modes. Native creation retains two Agent selections but does not apply providers/models/effort/permissions or spawn adapters; Claude Code, Codex, Grok Build and Gemini CLI are supported. Existing adapter-session Binding requests are rejected. The native surface uses the same scoped Management gateway but a relay-specific snapshot/UI.
 
 Management-authenticated `POST /api/v1/rooms/{room}/native-bindings/{slot}` accepts a public bind ID, credential hash, the official session ID captured from the harness environment, and explicit replacement intent; association is immediate. `DELETE` revokes the binding without claiming to stop native work. The response contains public metadata and bootstrap instructions, never credentials; a replacement of an active generation with inbox work adds `replaced` (body-free message IDs, see [CLI reference](CLI_REFERENCE.md)). Model-facing long-lived secrets are not part of this API.
 
