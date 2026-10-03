@@ -4,16 +4,18 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+## [v5.12.1] — 2026-10-03
+
 ### Fixed
 
 - Keep third-party notice links, version cells, and headings synchronized when a reviewed dependency version includes its `v` prefix.
 - Keep Embedded message cancellation's initial processing-state read under the projection lock, avoiding a data race with native submission or runtime updates while preserving the existing cancellation boundary.
 - Serialize Service lock acquisition, crash-stale recovery, and release across processes, so simultaneous startup cannot move a newer owner's lock and admit a competing Service. Keep the existing PID/nonce format and fail-closed live-owner checks; older binaries still require a stopped, controlled upgrade. Reject newer Agent pair profile and incompatible Room Store/provisioning schemas before any startup cleanup or checkpoint rewrite, including staged Room data, while retaining cleanup of incomplete provisioning after a crash.
 - Refuse startup when a published Room loses its Event Log or complete identity, instead of silently dropping the Room and its Binding reservations from the rebuilt checkpoint. Preserve interrupted provisioning cleanup and the existing explicit cleanup path for wholly missing archived Room directories.
-- Avoid retransmitting and re-rendering unchanged Native browser message/audit tails on periodic refresh. Conditional reads still refresh transient binding and collector activity; initial load and reconnection fetch a complete bounded window, including after a Service restore with an earlier sequence. Recovery also refreshes pending/history cursors and ignores their obsolete replies. Full history/export and relay delivery semantics are unchanged.
 
 ### Changed
 
+- Avoid retransmitting and re-rendering unchanged Native browser message/audit tails on periodic refresh. Conditional reads still refresh transient binding and collector activity; initial load and reconnection fetch a complete bounded window, including after a Service restore with an earlier sequence. Recovery also refreshes pending/history cursors and ignores their obsolete replies. Full history/export and relay delivery semantics are unchanged.
 - Update Desktop Wails from v3.0.0-beta.25 to v3.0.0-beta.26, including bounded WebView2 process-failure recovery. The pinned framework's license text is unchanged; platform build and packaging templates remain compatible.
 - Update the approved `golang.org/x/sys` dependency from v0.47.0 to v0.48.0 and synchronize the root and Desktop module locks; license and patent texts are unchanged.
 
