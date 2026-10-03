@@ -4,6 +4,10 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+### Changed
+
+- Update Desktop Wails from v3.0.0-beta.25 to v3.0.0-beta.26, including bounded WebView2 process-failure recovery. The pinned framework's license text is unchanged; platform build and packaging templates remain compatible.
+
 ## [v5.12.0] — 2026-10-03
 
 ### Added
