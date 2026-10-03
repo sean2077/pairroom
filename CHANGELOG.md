@@ -4,6 +4,14 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep third-party notice links, version cells, and headings synchronized when a reviewed dependency version includes its `v` prefix.
+
+### Changed
+
+- Update the approved `golang.org/x/sys` dependency from v0.47.0 to v0.48.0 and synchronize the root and Desktop module locks; license and patent texts are unchanged.
+
 ## [v5.12.0] — 2026-10-03
 
 ### Added

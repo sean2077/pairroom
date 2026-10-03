@@ -82,3 +82,12 @@ func TestRewriteNoticesMovesLinkCellAndHeading(t *testing.T) {
 		t.Fatalf("got %q touched %v", got, touched)
 	}
 }
+
+func TestRewriteNoticesPreservesVersionPrefix(t *testing.T) {
+	source := "| [golang.org/x/sys](https://pkg.go.dev/golang.org/x/sys@v0.47.0) | v0.47.0 | BSD |\n\n## golang.org/x/sys v0.47.0\n\n## other v0.47.0\n"
+	got, touched := rewriteNotices(source, []versionChange{{"golang.org/x/sys", "v0.47.0", "v0.48.0"}})
+	want := "| [golang.org/x/sys](https://pkg.go.dev/golang.org/x/sys@v0.48.0) | v0.48.0 | BSD |\n\n## golang.org/x/sys v0.48.0\n\n## other v0.47.0\n"
+	if got != want || len(touched) != 1 || touched[0] != "golang.org/x/sys" {
+		t.Fatalf("got %q touched %v", got, touched)
+	}
+}

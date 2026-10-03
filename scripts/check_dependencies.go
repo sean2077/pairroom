@@ -43,7 +43,7 @@ var allowed = map[string]string{
 	"github.com/remyoudompheng/bigfft":   "v0.0.0-20230129092748-24d4a6f8daec",
 	"golang.org/x/mod":                   "v0.38.0",
 	"golang.org/x/sync":                  "v0.22.0",
-	"golang.org/x/sys":                   "v0.47.0",
+	"golang.org/x/sys":                   "v0.48.0",
 	"golang.org/x/tools":                 "v0.48.0",
 	"modernc.org/cc/v4":                  "v4.29.2",
 	"modernc.org/ccgo/v4":                "v4.35.0",
@@ -172,10 +172,14 @@ func rewriteNotices(source string, changes []versionChange) (string, []string) {
 			switch {
 			case strings.Contains(line, change.Path+"@"+change.Old):
 				line = strings.ReplaceAll(line, change.Path+"@"+change.Old, change.Path+"@"+change.New)
+				line = strings.ReplaceAll(line, "| "+change.Old+" |", "| "+change.New+" |")
 				lines[i] = strings.ReplaceAll(line, "| "+oldPlain+" |", "| "+newPlain+" |")
 				hit = true
 			case line == "## "+change.Path+" "+oldPlain:
 				lines[i] = "## " + change.Path + " " + newPlain
+				hit = true
+			case line == "## "+change.Path+" "+change.Old:
+				lines[i] = "## " + change.Path + " " + change.New
 				hit = true
 			}
 		}
