@@ -42,7 +42,9 @@ var semanticVersionPattern = regexp.MustCompile(`\bv?(\d+)\.(\d+)\.(\d+)(?:[-+][
 // is broken.
 // probeCommandTimeout bounds each --version/--help probe. Tests that launch
 // the probe through a batch shim re-executing the test binary raise it.
-var probeCommandTimeout = 6 * time.Second
+// Codex app-server's first launch can take longer than lightweight CLI tools,
+// especially when initializing dependencies or in constrained environments.
+var probeCommandTimeout = 15 * time.Second
 
 func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 	actor := cfg.Actor
