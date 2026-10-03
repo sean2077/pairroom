@@ -7,6 +7,9 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 ### Fixed
 
 - Keep third-party notice links, version cells, and headings synchronized when a reviewed dependency version includes its `v` prefix.
+- Keep Embedded message cancellation's initial processing-state read under the projection lock, avoiding a data race with native submission or runtime updates while preserving the existing cancellation boundary.
+- Serialize Service lock acquisition, crash-stale recovery, and release across processes, so simultaneous startup cannot move a newer owner's lock and admit a competing Service. Keep the existing PID/nonce format and fail-closed live-owner checks; older binaries still require a stopped, controlled upgrade. Reject newer Agent pair profile and incompatible Room Store/provisioning schemas before any startup cleanup or checkpoint rewrite, including staged Room data, while retaining cleanup of incomplete provisioning after a crash.
+- Refuse startup when a published Room loses its Event Log or complete identity, instead of silently dropping the Room and its Binding reservations from the rebuilt checkpoint. Preserve interrupted provisioning cleanup and the existing explicit cleanup path for wholly missing archived Room directories.
 
 ### Changed
 

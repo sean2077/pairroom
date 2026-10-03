@@ -245,11 +245,11 @@ func (e *Engine) CancelMessage(ctx context.Context, messageID string, target mod
 	}
 	e.mu.RLock()
 	message, found := e.findMessageLocked(messageID)
+	state := message.Processing[target]
 	e.mu.RUnlock()
 	if !found {
 		return fmt.Errorf("unknown message %q", messageID)
 	}
-	state := message.Processing[target]
 	if state != model.ProcessingWaiting && state != model.ProcessingWorking {
 		return fmt.Errorf("message is not in flight for %s", e.participantName(target))
 	}
@@ -621,6 +621,8 @@ func (e *Engine) threadForReply(replyTo string) string {
 	return model.NewID("thread")
 }
 
+// findMessageLocked returns a shallow copy. Read lifecycle maps under mu, or
+// clone the message before releasing the lock if they are needed afterward.
 func (e *Engine) findMessageLocked(id string) (model.Message, bool) {
 	if id == "" {
 		return model.Message{}, false
