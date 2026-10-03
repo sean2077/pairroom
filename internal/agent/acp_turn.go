@@ -75,7 +75,7 @@ func (g *ACPAdapter) StartTurn(ctx context.Context, input model.AgentInput) erro
 	if g.cfg.Runtime == model.RuntimeGrok {
 		params["_meta"] = map[string]any{"screenMode": "headless"}
 	}
-	if err := g.send(map[string]any{
+	if err := g.sendContext(ctx, map[string]any{
 		"jsonrpc": "2.0", "id": requestID, "method": "session/prompt",
 		"params": params,
 	}); err != nil {
@@ -93,18 +93,20 @@ func (g *ACPAdapter) StartTurn(ctx context.Context, input model.AgentInput) erro
 		g.mu.Unlock()
 		return err
 	}
-	// The prompt request has crossed the native ACP boundary. If this is a
-	// newly allocated binding, retain its session ID across a later process
-	// restart; before this point the ID was only an uncommitted session/new
-	// allocation and may safely be discarded.
+	// Serialize the acceptance publication with process-exit terminal events.
+	// A successful Write can return after the peer has already exited.
+	g.turnBoundaryMu.Lock()
+	defer g.turnBoundaryMu.Unlock()
 	g.mu.Lock()
 	g.sessionEngaged = true
-	g.mu.Unlock()
-	if bootstrap {
-		g.mu.Lock()
-		g.bootstrapPending = false
+	if g.turn != turn || g.cmd == nil {
 		g.mu.Unlock()
+		return fmt.Errorf("%w: ACP process exited while the prompt was being submitted", ErrSubmissionUnknown)
 	}
+	if bootstrap {
+		g.bootstrapPending = false
+	}
+	g.mu.Unlock()
 
 	g.setState(model.StateWorking, "")
 	started := runtimeEvent(g.cfg.Actor, model.RuntimeTurnStarted)
@@ -277,6 +279,8 @@ func (g *ACPAdapter) awaitPrompt(turn *acpTurn, reply <-chan acpRPCReply) {
 	// back; holding submitMu lets a steer that crossed the wire first append its
 	// input before we snapshot the completed turn's correlation list.
 	g.submitMu.Lock()
+	g.turnBoundaryMu.Lock()
+	defer g.turnBoundaryMu.Unlock()
 	g.mu.Lock()
 	if g.turn != turn {
 		g.mu.Unlock()

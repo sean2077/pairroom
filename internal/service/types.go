@@ -225,7 +225,7 @@ func (r Room) Validate() error {
 	if r.HostMode == model.HostNative {
 		for actor, selection := range r.Agents {
 			if !selection.Runtime.Valid() {
-				return errors.New("native hosting supports Claude Code, Codex and Grok Build")
+				return errors.New("native hosting supports Claude Code, Codex, Grok Build and Gemini CLI")
 			}
 			if r.Bindings[actor].Mode != BindingNew {
 				return errors.New("native bindings require hook association, not existing adapter sessions")
@@ -307,7 +307,7 @@ func (r ProvisionRequest) Validate() error {
 		}
 		for _, selection := range r.Agents {
 			if !selection.Runtime.Valid() {
-				return errors.New("native hosting supports Claude Code, Codex and Grok Build")
+				return errors.New("native hosting supports Claude Code, Codex, Grok Build and Gemini CLI")
 			}
 		}
 	}

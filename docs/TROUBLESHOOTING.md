@@ -2,6 +2,14 @@
 
 Identify the Service, Room **host mode**, native Runtime, and browser layer before acting. Preserve the first error and relevant IDs. Embedded owns adapters and Turns; Native does not start or interrupt the original sessions. Use [Operations](OPERATIONS.md) for lifecycle and [Support](../SUPPORT.md) for safe reports.
 
+## Embedded Runtime transport stalls
+
+A stalled native stdin write now stops waiting when its caller is cancelled or after a 30-second transport-write ceiling. This is separate from a model/tool Turn's duration and does not truncate a long-running answer. If a prompt write began and was partially written or cancelled, PairRoom treats its submission as uncertain and retains correlation until the damaged process actually exits; do not assume the task did not execute or blindly resend it. Inspect the native session and Room history before explicitly retrying.
+
+An oversized or unreadable stderr record also stops the native process, rather than leaving it blocked behind an abandoned pipe. The stderr record limit is 1 MiB. A process-exit error is not proof that an earlier tool had no effect. For Gemini Embedded, the original session binding remains preserved and exact resume stays blocked as described in [Gemini's Embedded boundary](NATIVE_RELAY.md#embedded-boundary).
+
+A Codex prompt acknowledgement with a missing or malformed Turn ID remains an unknown submission until the damaged transport exits; it is not a definite rejection. A new Codex thread whose first prompt may have crossed the write boundary keeps its exact ID in the current adapter, even when the process exits before acknowledging it. The next start attempts thread/resume; if Codex reports that no rollout exists, inspect that ID in Codex's native CLI and Room history before explicitly retrying or creating a new Room. PairRoom never substitutes thread/start automatically. This preservation is process-local: unknown submission does not materialize a durable Binding, and after Service restart a new Binding remains pending.
+
 ## Start with Diagnostics
 
 Open **Settings → Diagnostics** (older Diagnostics links redirect there). **Check environment** makes no model call. **Test runtime** starts a fresh native test session and can consume Provider quota; confirm the charge and native-hook implications first. Selecting a Room uses its stored selections, not necessarily the current default pair. The test does not resume or prove the health of an already-running Native binding.

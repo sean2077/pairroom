@@ -156,7 +156,7 @@ func (m *systemdManager) buildUnit(cfg Config) string {
 	}
 	var builder strings.Builder
 	builder.WriteString("[Unit]\n")
-	builder.WriteString("Description=PairRoom local coordination service for Claude Code, Codex, and Grok Build\n")
+	builder.WriteString("Description=PairRoom local coordination service for Claude Code, Codex, Grok Build, and Gemini CLI\n")
 	builder.WriteString("After=network-online.target\n")
 	builder.WriteString("Wants=network-online.target\n\n")
 	builder.WriteString("[Service]\n")

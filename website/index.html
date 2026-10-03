@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#101210">
-  <meta name="description" content="Connect two independent coding agents in your existing workflow. PairRoom brings Claude Code, Codex, and Grok Build together for visible, local collaboration.">
+  <meta name="description" content="Connect two independent coding agents in your existing workflow. PairRoom brings Claude Code, Codex, Grok Build, and Gemini CLI together for visible, local collaboration.">
   <title>PairRoom — Two agents. One problem.</title>
   <link rel="icon" href="./favicon.png" type="image/png">
   <link rel="stylesheet" href="./style.css">
@@ -40,7 +40,7 @@
         <p class="art-foot" data-i18n="artFoot">One possible pair. Choose either runtime for either slot.</p>
       </div>
     </section>
-    <div class="runtime-strip wrap"><span data-i18n="runtimeIntro">BRING YOUR AGENTS</span><span>Claude Code</span><span>Codex</span><span>Grok Build</span><span class="runtime-end" data-i18n="sameRuntime">Same runtime twice? That works too.</span></div>
+    <div class="runtime-strip wrap"><span data-i18n="runtimeIntro">BRING YOUR AGENTS</span><span>Claude Code</span><span>Codex</span><span>Grok Build</span><span>Gemini CLI</span><span class="runtime-end" data-i18n="sameRuntime">Same runtime twice? That works too.</span></div>
 
     <section id="how" class="section wrap">
       <div class="section-heading"><p class="eyebrow" data-i18n="howEyebrow">LESS COPY–PASTE. MORE COLLABORATION.</p><h2 data-i18n="howTitle">A second perspective.<br>A shorter path forward.</h2><p data-i18n="howDescription">A plan moves to review. Feedback comes back. The work improves. PairRoom carries the conversation so you don't have to.</p></div>
@@ -69,7 +69,7 @@
     <section id="modes" class="section wrap">
       <div class="section-heading"><p class="eyebrow" data-i18n="modesEyebrow">TWO WAYS TO WORK</p><h2 data-i18n="modesTitle">Your sessions, or a shared interface.</h2><p data-i18n="modesDescription">Choose the host mode when you create a Room. Each of its two slots can use any supported runtime.</p></div>
       <div class="mode-grid">
-        <article class="mode-card native-card"><div class="card-header"><h3>Native</h3><span class="badge" data-i18n="experimental">Experimental</span></div><p class="mode-tagline" data-i18n="nativeTagline">Keep your everyday workflow.</p><p data-i18n="nativeBody">Connect existing Claude Code, Codex (including Codex Desktop), or Grok Build sessions. PairRoom supplies bindings, durable relay, and an audit trail.</p><ul><li data-i18n="nativePoint1">Your original harness keeps execution, settings, and permissions.</li><li data-i18n="nativePoint2">Room selections describe the session; they don't reconfigure it.</li><li data-i18n="nativePoint3">Recommended for daily work, with experimental boundaries.</li></ul><a class="text-link" href="https://github.com/sean2077/pairroom/blob/main/docs/NATIVE_RELAY.md" data-i18n="nativeSetup">Connect your sessions ↗</a></article>
+        <article class="mode-card native-card"><div class="card-header"><h3>Native</h3><span class="badge" data-i18n="experimental">Experimental</span></div><p class="mode-tagline" data-i18n="nativeTagline">Keep your everyday workflow.</p><p data-i18n="nativeBody">Connect existing Claude Code, Codex (including Codex Desktop), Grok Build, or Gemini CLI sessions. PairRoom supplies bindings, durable relay, and an audit trail.</p><ul><li data-i18n="nativePoint1">Your original harness keeps execution, settings, and permissions.</li><li data-i18n="nativePoint2">Room selections describe the session; they don't reconfigure it.</li><li data-i18n="nativePoint3">Recommended for daily work, with experimental boundaries.</li></ul><a class="text-link" href="https://github.com/sean2077/pairroom/blob/main/docs/NATIVE_RELAY.md" data-i18n="nativeSetup">Connect your sessions ↗</a></article>
         <article class="mode-card"><div class="card-header"><h3>Embedded</h3><span class="badge neutral" data-i18n="sharedInterface">Shared interface</span></div><p class="mode-tagline" data-i18n="embeddedTagline">Bring the pair into PairRoom.</p><p data-i18n="embeddedBody">Use the desktop or browser conversation with per-slot runtime, Provider, model, effort, and instructions. Unset choices inherit native configuration.</p><ul><li data-i18n="embeddedPoint1">PairRoom owns adapters; one native Turn runs at a time per Room.</li><li data-i18n="embeddedPoint2">New Rooms default to YOLO permissions. Choose narrower settings explicitly.</li><li data-i18n="embeddedPoint3">The quickest first trial, including a model-free Mock demo.</li></ul><a class="text-link" href="https://github.com/sean2077/pairroom/blob/main/docs/GETTING_STARTED.md" data-i18n="embeddedSetup">Explore Embedded ↗</a></article>
       </div>
     </section>
@@ -90,7 +90,7 @@ pairroom version</code></pre><button type="button" class="copy" data-copy="linux
     </div></section>
 
     <section class="section wrap faq-layout" id="faq"><div class="section-heading"><p class="eyebrow" data-i18n="faqEyebrow">BEFORE YOU START</p><h2 data-i18n="faqTitle">A few useful details.</h2><a class="text-link" href="https://github.com/sean2077/pairroom/blob/main/docs/WHY_PAIRROOM.md" data-i18n="fitLink">Is PairRoom a fit? ↗</a></div><div class="faq-list">
-      <details><summary data-i18n="faq1Title">Does PairRoom replace my coding agents?</summary><p data-i18n="faq1Body">No. Claude Code, Codex, and Grok Build keep their own model loop, tools, skills, credentials, and sessions. PairRoom coordinates the pair's conversation.</p></details>
+      <details><summary data-i18n="faq1Title">Does PairRoom replace my coding agents?</summary><p data-i18n="faq1Body">No. Claude Code, Codex, Grok Build, and Gemini CLI keep their own model loop, tools, skills, credentials, and sessions. PairRoom coordinates the pair's conversation.</p></details>
       <details><summary data-i18n="faq2Title">What accounts and tools do I need?</summary><p data-i18n="faq2Body">For real work, install and sign in to each native CLI you select. You also need Git and a local repository. Mock lets you explore the interface without a model account; it does not demonstrate model quality.</p></details>
       <details><summary data-i18n="faq3Title">Is everything local?</summary><p data-i18n="faq3Body">PairRoom stores its state locally. Model requests still go to the Provider used by each harness. Local coordination does not mean local model inference.</p></details>
       <details><summary data-i18n="faq4Title">Does this save tokens or cap costs?</summary><p data-i18n="faq4Body">There is no measured token or cost saving, and no automatic cap on relay rounds or spending. PairRoom avoids a separate coordinating model and does not append accumulated Room history to every relay.</p></details>

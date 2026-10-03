@@ -176,6 +176,11 @@ func (c *ClaudeAdapter) ResolveApproval(ctx context.Context, approvalID string, 
 	decision := strings.TrimSpace(resolution.Decision)
 	c.mu.Lock()
 	pending, ok := c.approvals[approvalID]
+	cmd := c.cmd
+	turnID := ""
+	if len(c.pending) > 0 {
+		turnID = c.pending[0].turnID
+	}
 	c.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("unknown approval %q", approvalID)
@@ -229,17 +234,17 @@ func (c *ClaudeAdapter) ResolveApproval(ctx context.Context, approvalID string, 
 		return fmt.Errorf("unsupported approval decision %q", decision)
 	}
 
-	if err := c.writeControlResponse(pending.requestID, result); err != nil {
+	if err := c.writeControlResponseContext(ctx, pending.requestID, result); err != nil {
 		return err
 	}
+	c.turnBoundaryMu.Lock()
+	defer c.turnBoundaryMu.Unlock()
 	c.mu.Lock()
 	delete(c.approvals, approvalID)
-	active := len(c.pending) > 0
+	active := cmd != nil && c.cmd == cmd && len(c.pending) > 0 && c.pending[0].turnID == turnID && !c.intentional && c.streamFailure == ""
 	c.mu.Unlock()
 	if active {
 		c.setState(model.StateWorking, "")
-	} else {
-		c.setState(model.StateIdle, "")
 	}
 	return nil
 }

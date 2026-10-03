@@ -60,6 +60,8 @@ The API/transcript carries verified metadata, not an absolute host attachment pa
 
 Embedded runtimes are started without a shell. On Windows a `.cmd`/`.bat` launcher is the exception, because `cmd.exe` re-parses its command line: arguments containing `cmd.exe` metacharacters fail closed, and the Room-derived Claude session name is neutralized, so Room names and selection values cannot run commands. [Configuration](docs/CONFIGURATION.md#agent-slots-and-runtimes) lists the rejected characters.
 
+Windows Embedded stdin uses a random-named local byte pipe with one instance, first-instance protection, remote clients rejected, and a protected DACL granting only the current user SID. The parent writer uses cancellable overlapped I/O; the child receives synchronous stdin through exec's explicit inherited-handle list. Failed startup and process exit close the captured handles. This transport does not expose an endpoint to model context or take control of Native-hosted user sessions.
+
 ### 5.1 Claude
 
 Native control initialize must succeed. Unknown control requests error; native tool/question requests enter the Room approval lifecycle. A read-only profile uses plan permissions and blocked write tools, with another fail-closed control check for write requests that still arrive.

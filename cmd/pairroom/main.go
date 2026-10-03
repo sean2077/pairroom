@@ -421,7 +421,7 @@ func runService(args []string) (resultErr error) {
 	if *mockFlag {
 		fmt.Println("  mode:       mock")
 	} else {
-		fmt.Println("  mode:       native Claude Code / Codex / Grok Build slots")
+		fmt.Println("  mode:       native Claude Code / Codex / Grok Build / Gemini CLI slots")
 	}
 
 	serverErrors := make(chan error, 1)
@@ -635,7 +635,7 @@ func runServe(args []string) error {
 	if *mockFlag {
 		fmt.Println("  mode: mock")
 	} else {
-		fmt.Println("  mode: native Claude Code / Codex / Grok Build slots")
+		fmt.Println("  mode: native Claude Code / Codex / Grok Build / Gemini CLI slots")
 	}
 
 	serverErrors := make(chan error, 1)
@@ -1125,7 +1125,7 @@ func firstLine(value string) string {
 }
 
 func printHelp() {
-	fmt.Print(`PairRoom — native Claude Code, Codex, and Grok Build collaboration service
+	fmt.Print(`PairRoom — native Claude Code, Codex, Grok Build, and Gemini CLI collaboration service
 
 Usage:
   pairroom daemon <command>      Install and manage pairroom service in the OS service manager

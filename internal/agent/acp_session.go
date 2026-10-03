@@ -25,9 +25,10 @@ func (g *ACPAdapter) ensureSession(ctx context.Context) error {
 	repo := g.cfg.Repo
 	access := g.access
 	capabilities := g.capabilities
+	engaged := g.sessionEngaged
 	g.mu.Unlock()
 
-	loaded := required != "" && (strings.TrimSpace(g.cfg.SessionID) != "" || g.sessionEngaged)
+	loaded := required != "" && (strings.TrimSpace(g.cfg.SessionID) != "" || engaged)
 	if !loaded {
 		required = ""
 	}

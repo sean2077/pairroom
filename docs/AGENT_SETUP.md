@@ -1,6 +1,6 @@
 # Agent-assisted setup
 
-This page is written for a coding Agent ([Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), or [Grok Build](https://docs.x.ai/build/overview)) that a user has asked to install PairRoom and check the environment; a human can follow it the same way. It sequences checks and routes to the owning guides instead of restating them. When this page and the installed binary disagree, that binary's `pairroom <command> --help` wins. Relative links resolve against `https://github.com/sean2077/pairroom/blob/main/docs/`; if the user already has a release installed, that tag's documentation matches it more closely.
+This page is written for a coding Agent ([Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), [Grok Build](https://docs.x.ai/build/overview), or [Gemini CLI](https://github.com/google-gemini/gemini-cli)) that a user has asked to install PairRoom and check the environment; a human can follow it the same way. It sequences checks and routes to the owning guides instead of restating them. When this page and the installed binary disagree, that binary's `pairroom <command> --help` wins. Relative links resolve against `https://github.com/sean2077/pairroom/blob/main/docs/`; if the user already has a release installed, that tag's documentation matches it more closely.
 
 A user can start with:
 
@@ -22,9 +22,9 @@ and help me install PairRoom and check my environment. Ask before each change.
 | Path | Use it for | Steps |
 |---|---|---|
 | **Embedded** — start here | First use: PairRoom's conversation UI, with Runtime, Provider, model and effort chosen per slot | 2–4, then 5 |
-| **Native** — daily work (experimental) | Keeping the user's own Claude Code, Codex (including Desktop) or Grok Build sessions | 2–4, then 6 |
+| **Native** — daily work (experimental) | Keeping the user's own Claude Code, Codex (including Desktop), Grok Build, or Gemini CLI sessions | 2–4, then 6 |
 
-Ask which Runtime each of the two slots will use. Both slots may use the same Runtime and still differ in Provider and model, for example one session for planning/review and another independently configured session for implementation. Embedded selects this per slot through a read-only [CC Switch Provider reference](CONFIGURATION.md#cc-switch-provider-references); Native uses whatever each original session is already configured with. [CC Switch](https://github.com/farion1231/cc-switch) is needed only for per-slot Providers in Embedded. Tool-loop quality with third-party Providers varies, so try the chosen combination on a small task first.
+Ask which Runtime each of the two slots will use. Both slots may use the same Runtime and still differ in Provider and model, for example one session for planning/review and another independently configured session for implementation. Embedded selects this per slot through a read-only [CC Switch Provider reference](CONFIGURATION.md#cc-switch-provider-references); Native uses whatever each original session is already configured with. [CC Switch](https://github.com/farion1231/cc-switch) is needed only for per-slot Providers in Embedded. Gemini Embedded uses native authentication only: CC Switch and effort overrides are unsupported, and exact resume after an accepted session's process exits is blocked rather than replaced. Prefer Native for Gemini sessions that must survive suspension or Service restart; see [Gemini boundaries](NATIVE_RELAY.md#gemini-cli). Tool-loop quality with third-party Providers varies, so try the chosen combination on a small task first.
 
 ## 2. Make `pairroom` available in this tool shell
 
@@ -77,7 +77,7 @@ By default `doctor` probes Agent 1 as Claude Code and Agent 2 as Codex: executab
 pairroom doctor --config /absolute/path/doctor-pair.json --repo . --json
 ```
 
-In configuration files, the `claude` and `codex` objects are the historical keys for Agent 1 and Agent 2, not Runtime choices; `runtime` selects the harness. A failed Runtime means installing or updating that official CLI, or pointing `--claude-command`, `--codex-command` or `--grok-command` at it (the flag follows the Runtime, not the slot). The links at the top of this page lead to each vendor's setup instructions. Then ask the user to confirm that each selected CLI is logged in and answers a trivial prompt on its own. PairRoom never logs in.
+In configuration files, the `claude` and `codex` objects are the historical keys for Agent 1 and Agent 2, not Runtime choices; `runtime` selects the harness. A failed Runtime means installing or updating that official CLI, or pointing `--claude-command`, `--codex-command`, `--grok-command` or `--gemini-command` at it (the flag follows the Runtime, not the slot). The links at the top of this page lead to each vendor's setup instructions. Then ask the user to confirm that each selected CLI is logged in and answers a trivial prompt on its own. PairRoom never logs in.
 
 Only with explicit consent, because it uses quota: add `--live` to the same command, keeping its `--config` and command-path overrides so the same pair is tested. For the custom pair above:
 
@@ -105,7 +105,7 @@ The Agent cannot operate Management, so give the user this checklist:
 
 1. Open Management (the Desktop window, or `pairroom daemon open`).
 2. Register the repository's absolute path as a **Project**.
-3. Create an **Embedded** Room. For each Agent choose Runtime, an optional Provider reference, model and effort; empty fields inherit native configuration.
+3. Create an **Embedded** Room. For each Agent choose Runtime, supported optional Provider, model and effort fields; empty fields inherit native configuration. Gemini uses native Provider settings and does not support effort overrides.
 4. Both participants default to **YOLO**. For the first test, select read-only native permissions explicitly.
 5. Send the first task from [Getting started](GETTING_STARTED.md#first-real-room).
 
@@ -118,16 +118,16 @@ Continue only when steps 2–4 pass in each harness's tool shell and a non-Mock 
 **a. Install the hooks.** This writes project files, so confirm first. From the project worktree:
 
 ```bash
-pairroom relay install --runtime claude,codex   # any of: claude (cc), codex, grok
+pairroom relay install --runtime claude,codex   # any of: claude (cc), codex, grok, gemini
 ```
 
-It writes `.claude/settings.json` for Claude Code (Grok Build reuses it by default) and `.codex/hooks.json` for Codex, preserving unrelated entries, and installs the `pairroom-relay` skill into each harness's skill root. Show the user the resulting diff; committing the hook files is their decision.
+It writes `.claude/settings.json` for Claude Code (Grok Build reuses it by default) and `.codex/hooks.json` for Codex, preserving unrelated entries, and installs the `pairroom-relay` skill into each harness's skill root. Gemini instead installs BeforeTool and AfterAgent in `.gemini/settings.json`; its official session identity comes from the approved BeforeTool hook, not a manufactured `GEMINI_SESSION_ID`. Show the user the resulting diff; committing the hook files is their decision.
 
-**b. Stop for approval.** The user reviews and approves the exact hook in each harness: Codex `/hooks`; Claude Code project hook consent; Grok `/hooks`, press `r` to reload, then folder trust. Follow each harness's reload or restart guidance so the hook and skill are loaded. Continue only after the user confirms.
+**b. Stop for approval.** The user reviews and approves the exact hook in each harness: Codex `/hooks`; Claude Code project hook consent; Grok `/hooks`, press `r` to reload, then folder trust; Gemini `/hooks` and trusted workspace, approving/reloading both BeforeTool and AfterAgent. Follow each harness's reload or restart guidance so the hook and skill are loaded. Continue only after the user confirms.
 
-**c. Preflight.** In each Agent session, run `pairroom relay preflight`. It changes nothing and reports as JSON whether the bare `pairroom` command the hooks run is on this shell's PATH, whether the Service is reachable and from the same release, and whether this runtime's Stop hook is installed. Continue when `ready` is `true`; otherwise follow `next_steps` in order and rerun it. A Service version mismatch only warns and still reports `ready`, so read `next_steps` either way. It cannot see hook approval.
+**c. Preflight.** In each Agent session, run `pairroom relay preflight`. It changes nothing and reports as JSON whether the bare `pairroom` command the hooks run is on this shell's PATH, whether the Service is reachable and from the same release, and whether this runtime's required response hooks are installed. Continue when `ready` is `true`; otherwise follow `next_steps` in order and rerun it. A Service version mismatch only warns and still reports `ready`, so read `next_steps` either way. It cannot see hook approval.
 
-**d. Create and join.** In the first session, run `/pairroom-relay <topic>`, or `pairroom relay bind --create --name "<topic>"` as a tool call. It prints `peer_join_local` and `peer_join`; the user gives one to the second session, whose Agent runs it as a tool call. Bind must run as the Agent's own tool call: it reads the official session ID and fails closed in a detached terminal or in Grok's `!` shell mode. If creation succeeded but bind failed, follow the printed recovery command instead of repeating `--create`.
+**d. Create and join.** In the first session, run `/pairroom-relay <topic>`, or `pairroom relay bind --create --name "<topic>"` as a tool call. It prints `peer_join_local` and `peer_join`; the user gives one to the second session, whose Agent runs it as a tool call. Bind must run as the Agent's own tool call: it reads the official session ID and fails closed in a detached terminal or in Grok's `!` shell mode. Gemini must use a fresh standalone `run_shell_command` tool call so its BeforeTool identity observation is still valid. If creation succeeded but bind failed, follow the printed recovery command instead of repeating `--create`.
 
 **e. Verify.** After a bound session has finished at least one turn, run `pairroom relay doctor` in it. In `local`, expect `protocol_match` and `service_version_match` to be `true`, `hook_installation` to be `installed`, and `last_hook_at` to be recent. That timestamp is written only when the installed Stop hook actually ran for this binding, so it is the practical sign that approval took effect. `hook_approval` is always reported as `unknown`, and model acceptance is not reported. While `last_hook_at` is empty, `local.hook_hint` restates this check. Day-to-day relay use then belongs to the `pairroom-relay` skill.
 

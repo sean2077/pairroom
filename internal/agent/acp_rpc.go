@@ -37,7 +37,7 @@ func (g *ACPAdapter) call(ctx context.Context, method string, params any) (json.
 	g.mu.Lock()
 	g.pending[id] = reply
 	g.mu.Unlock()
-	if err := g.send(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}); err != nil {
+	if err := g.sendContext(ctx, map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}); err != nil {
 		g.mu.Lock()
 		delete(g.pending, id)
 		g.mu.Unlock()
@@ -73,12 +73,12 @@ func (g *ACPAdapter) redactRaw(raw json.RawMessage) json.RawMessage {
 	return json.RawMessage(redactRuntimeSecrets(string(raw), g.cfg.Env))
 }
 
-func (g *ACPAdapter) sendNotification(method string, params any) error {
-	return g.send(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
+func (g *ACPAdapter) sendRawResponse(id json.RawMessage, result any, rpcErr *acpRPCError) error {
+	return g.sendRawResponseContext(context.Background(), id, result, rpcErr)
 }
 
-func (g *ACPAdapter) sendRawResponse(id json.RawMessage, result any, rpcErr *acpRPCError) error {
-	return g.send(struct {
+func (g *ACPAdapter) sendRawResponseContext(ctx context.Context, id json.RawMessage, result any, rpcErr *acpRPCError) error {
+	return g.sendContext(ctx, struct {
 		JSONRPC string          `json:"jsonrpc"`
 		ID      json.RawMessage `json:"id"`
 		Result  any             `json:"result,omitempty"`
@@ -87,27 +87,19 @@ func (g *ACPAdapter) sendRawResponse(id json.RawMessage, result any, rpcErr *acp
 }
 
 func (g *ACPAdapter) send(value any) error {
+	return g.sendContext(context.Background(), value)
+}
+
+func (g *ACPAdapter) sendContext(ctx context.Context, value any) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("encode ACP message: %w", err)
 	}
-	g.writeMu.Lock()
-	defer g.writeMu.Unlock()
-	g.mu.Lock()
-	stdin := g.stdin
-	g.mu.Unlock()
-	if stdin == nil {
-		return errors.New("ACP stdin is not available")
-	}
-	frame := append(data, '\n')
-	n, err := stdin.Write(frame)
-	if err == nil && n != len(frame) {
-		err = io.ErrShortWrite
-	}
-	if err != nil {
-		if n > 0 {
-			return fmt.Errorf("%w: write ACP message: %v", ErrSubmissionUnknown, err)
-		}
+	if err := g.writer.write(ctx, func() io.WriteCloser {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		return g.stdin
+	}, append(data, '\n')); err != nil {
 		return fmt.Errorf("write ACP message: %w", err)
 	}
 	return nil
@@ -138,6 +130,10 @@ func (g *ACPAdapter) readStderr(reader io.Reader) {
 		e.Name = string(g.cfg.Runtime) + ".stderr"
 		e.Text = redactRuntimeSecrets(text, g.cfg.Env)
 		g.sink(e)
+	}
+	// Abandoning stderr can leave the child blocked on a full pipe forever.
+	if err := scanner.Err(); err != nil {
+		g.failStream(streamFailureReason("ACP stderr", 1024*1024, err))
 	}
 }
 

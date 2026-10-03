@@ -427,7 +427,7 @@ func main() {
 			}()
 		},
 		Name:        "PairRoom",
-		Description: "A local collaboration control plane for Claude Code, Codex, and Grok Build sessions",
+		Description: "A local collaboration control plane for Claude Code, Codex, Grok Build, and Gemini CLI sessions",
 		Assets: application.AssetOptions{
 			// BundledAssetFileServer provides the Wails runtime at
 			// /wails/runtime.js as well as the embedded startup assets. The
