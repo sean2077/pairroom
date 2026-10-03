@@ -310,6 +310,8 @@ func preflightRegistryRoot(root string) error {
 		return fmt.Errorf("inspect Agent pair profiles before recovery: %w", err)
 	} else if exists && schema < 2 {
 		return fmt.Errorf("retired Service data root (Agent pair profile schema %d); start with a new data root and recreate Rooms and profiles; legacy data was not modified", schema)
+	} else if exists && schema > 2 {
+		return fmt.Errorf("Service data root was written by a newer PairRoom (Agent pair profile schema %d > 2); upgrade this installation before starting it; data was not modified", schema)
 	}
 	return preflightRoomSchemas(filepath.Join(root, "rooms"))
 }
@@ -366,8 +368,73 @@ func preflightRoomSchemas(roomsRoot string) error {
 		if schema < version.StoreSchema {
 			return fmt.Errorf("retired Service data root (Room store schema %d); start with a new data root and recreate Rooms and profiles; legacy data was not modified", schema)
 		}
-		return nil
+		if schema > version.StoreSchema {
+			return fmt.Errorf("Service data root was written by a newer PairRoom (Room store schema %d > %d); upgrade this installation before starting it; data was not modified", schema, version.StoreSchema)
+		}
+		return preflightRoomProvisioning(filepath.Dir(path))
 	})
+}
+
+// writeInitialRoomLog always writes room.created followed by the provisioning
+// fact. Inspect only that prefix, not the full log a second time. Each read is
+// bounded by the same 64 MiB ceiling used by indexed Event Log reads.
+// Missing/partial initial records are possible in interrupted staging; later
+// discovery still owns full published-Room validation.
+func preflightRoomProvisioning(dir string) error {
+	path := filepath.Join(dir, "events.jsonl")
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect Room provisioning prefix: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("Room provisioning Event Log must be a regular file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("read Room provisioning prefix: %w", err)
+	}
+	defer file.Close()
+	const maxRecordBytes = 64 << 20
+	reader := bufio.NewReader(io.LimitReader(file, 2*maxRecordBytes+1))
+	for range 2 {
+		line, readErr := reader.ReadBytes('\n')
+		if len(line) > maxRecordBytes {
+			return errors.New("Room provisioning prefix record exceeds 64 MiB")
+		}
+		if len(line) > 0 {
+			var event model.Event
+			if err := json.Unmarshal(line, &event); err != nil {
+				if errors.Is(readErr, io.EOF) {
+					return nil // preserve cleanup of a crash-partial staging tail
+				}
+				return fmt.Errorf("decode Room provisioning prefix: %w", err)
+			}
+			if event.Kind == EventRoomProvisioned {
+				var header struct {
+					Schema int `json:"schema"`
+				}
+				if err := json.Unmarshal(event.Data, &header); err != nil {
+					return fmt.Errorf("decode Room provisioning schema: %w", err)
+				}
+				if header.Schema < 5 {
+					return fmt.Errorf("retired room provisioning schema %d; recreate the Room; data was not modified", header.Schema)
+				}
+				if header.Schema > 5 {
+					return fmt.Errorf("unsupported room provisioning schema %d; use a newer PairRoom; data was not modified", header.Schema)
+				}
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			return nil
+		}
+		if readErr != nil {
+			return fmt.Errorf("read Room provisioning prefix: %w", readErr)
+		}
+	}
+	return nil
 }
 
 func readStoreSchemaHeader(path string) (int, bool, error) {
@@ -501,9 +568,59 @@ func (r *Registry) loadCheckpointProjects() error {
 	if err != nil || !exists {
 		return err
 	}
+	for _, room := range snapshot.Rooms {
+		if err := validateCheckpointRoomStore(room); err != nil {
+			return fmt.Errorf("checkpoint Room %s: %w", room.ID, err)
+		}
+	}
 	for _, project := range snapshot.Projects {
 		r.projects[project.ID] = project
 		r.projectByRoot[project.Root] = project.ID
+	}
+	return nil
+}
+
+// A checkpoint must not forget a published Room (and its Binding ownership)
+// merely because its Event Log was lost. Validate the first identity record
+// before startup cleanup; full read-only replay remains discovery's job.
+func validateCheckpointRoomStore(room Room) error {
+	info, err := os.Lstat(room.DataDir)
+	if errors.Is(err, os.ErrNotExist) && room.Archived() {
+		// Includes interrupted deletion: quarantine recovery runs next. A wholly
+		// lost archived directory retains its checkpoint-only cleanup identity.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect published Room data directory: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("published Room data directory is not a direct directory")
+	}
+	if _, err := readRoomStoreSchema(room.DataDir); err != nil {
+		return err
+	}
+	path := filepath.Join(room.DataDir, "events.jsonl")
+	info, err = os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("inspect published Room Event Log: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() == 0 {
+		return errors.New("published Room Event Log must be a nonempty regular file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("read published Room identity: %w", err)
+	}
+	defer file.Close()
+	var event model.Event
+	if err := json.NewDecoder(io.LimitReader(file, 64<<20)).Decode(&event); err != nil {
+		return fmt.Errorf("published Room has no complete identity event: %w", err)
+	}
+	var meta struct {
+		ID string `json:"id"`
+	}
+	if event.Seq != 1 || event.Kind != "room.created" || event.Actor != model.ActorSystem || event.RoomID != room.ID || json.Unmarshal(event.Data, &meta) != nil || meta.ID != room.ID {
+		return errors.New("published Room identity does not match its checkpoint")
 	}
 	return nil
 }
@@ -553,7 +670,7 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 	}
 	eventPath := filepath.Join(dir, "events.jsonl")
 	if _, err := os.Stat(eventPath); errors.Is(err, os.ErrNotExist) {
-		return Room{}, Project{}, false, nil
+		return Room{}, Project{}, false, errors.New("published Room Event Log is missing")
 	} else if err != nil {
 		return Room{}, Project{}, false, err
 	}
@@ -568,7 +685,7 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 		return Room{}, Project{}, false, err
 	}
 	if len(events) == 0 {
-		return Room{}, Project{}, false, nil
+		return Room{}, Project{}, false, errors.New("published Room has no complete identity event")
 	}
 
 	var provisioned *roomProvisionedPayload
