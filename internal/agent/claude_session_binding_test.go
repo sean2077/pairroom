@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -11,6 +12,15 @@ import (
 )
 
 func TestClaudeExactBindingRejectsReportedSessionChange(t *testing.T) {
+	testClaudeExactBindingRejectsReportedSessionChange(t, false)
+}
+
+func TestClaudeSessionMismatchBeforeWriteReturns(t *testing.T) {
+	testClaudeExactBindingRejectsReportedSessionChange(t, true)
+}
+
+func testClaudeExactBindingRejectsReportedSessionChange(t *testing.T, exitBeforeReturn bool) {
+	t.Helper()
 	t.Setenv("PAIRROOM_CLAUDE_SCRIPT", "session-mismatch")
 	events := newEventLog()
 	adapter := NewClaude(Config{
@@ -20,7 +30,15 @@ func TestClaudeExactBindingRejectsReportedSessionChange(t *testing.T) {
 	t.Cleanup(func() { stopWithin(adapter, 10*time.Second) })
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if err := adapter.StartTurn(ctx, model.AgentInput{MessageID: "m1", Text: "hello"}); err != nil {
+	if exitBeforeReturn {
+		if err := adapter.Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		adapter.mu.Lock()
+		adapter.stdin = exitBeforeWriteReturns{adapter.stdin, adapter.procDone}
+		adapter.mu.Unlock()
+	}
+	if err := adapter.StartTurn(ctx, model.AgentInput{MessageID: "m1", Text: "hello"}); err != nil && !errors.Is(err, ErrSubmissionUnknown) {
 		t.Fatal(err)
 	}
 	events.waitFor(t, 20*time.Second, func(e model.RuntimeEvent) bool {

@@ -4,6 +4,8 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+## [v5.12.0] — 2026-10-03
+
 ### Added
 
 - Support Gemini CLI in Native Rooms and new Embedded ACP sessions, including duplicate-runtime pairs. Native setup uses approved BeforeTool/AfterAgent hooks; Embedded inherits native authentication and deliberately blocks exact resume until a reliable replay-completion boundary is supported. No Gemini CC Switch or effort override is implied.
@@ -19,6 +21,10 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 - Preserve ACP session identity and terminal ordering when the process consumes a prompt and exits before its write returns; Gemini cannot silently replace that accepted session or appear Working again after exit. Treat stderr reader failures as fatal transport errors so oversized diagnostic records cannot strand a live Turn.
 - Recover open Native Room views after temporary startup/session/snapshot failures and offline/online transitions without reloading or resending messages. Connection status describes the Service connection, drafts and original-ID recovery records survive, coalesced reads finish before controls unlock, and late startup/snapshot results cannot recreate streams or polling after leaving or restoring a page.
 - Match complete CLI options during Runtime probing so similarly named flags cannot satisfy Gemini ACP or Claude exact-resume requirements, and do not treat a threshold prerelease as its stable release. Doctor labels probe capabilities as unverified metadata and correctly explains that missing Claude resume support preserves the existing session and blocks restore. Native preflight now rejects an explicit Runtime that conflicts with the calling harness, with read-only recovery guidance.
+
+### Changed
+
+- Keep the exact-binding regression stable when Claude exits before a prompt write returns: accept the conservative unknown submission while still requiring actual exit, the preserved binding, mismatch diagnostics, and no output from the wrong session.
 
 ## [v5.11.1] — 2026-09-30
 
