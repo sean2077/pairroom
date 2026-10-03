@@ -15,9 +15,6 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 ### Changed
 
 - Update Desktop Wails from v3.0.0-beta.25 to v3.0.0-beta.26, including bounded WebView2 process-failure recovery. The pinned framework's license text is unchanged; platform build and packaging templates remain compatible.
-
-### Changed
-
 - Update the approved `golang.org/x/sys` dependency from v0.47.0 to v0.48.0 and synchronize the root and Desktop module locks; license and patent texts are unchanged.
 
 ## [v5.12.0] — 2026-10-03
