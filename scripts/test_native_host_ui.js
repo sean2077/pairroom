@@ -54,7 +54,7 @@ function reportPages(limit = 3) {
   }
 }
 
-async function fixture({ uploadFailure = false, storage, receipts = new Map(), draft = true, manager = locks(), hang = '', receiptGate, transport, sessionFailures = 0, snapshotFailures = 0, sessionGate, snapshotGate, historyHang = false, historyFailures = 0, expectReady = true } = {}) {
+async function fixture({ uploadFailure = false, storage, receipts = new Map(), draft = true, manager = locks(), hang = '', receiptGate, transport, sessionFailures = 0, snapshotFailures = 0, sessionGate, snapshotGate, historyHang = false, historyFailures = 0, expectReady = true, conditional = true } = {}) {
   const clock = timers();
   let hangNext = hang;
   if (!storage) { const values=new Map(); storage={getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)}; }
@@ -65,7 +65,9 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
   watchStatus($('status'), page);
   const document = { getElementById: $, createElement: tag => new Element(tag), createTextNode: text => Object.assign(new Element("#text"), {textContent:text}), addEventListener() {}, hidden: false, body: new Element('body'), querySelector: selector => selector === 'dialog[open]' ? null : $(selector), querySelectorAll: () => [] };
   $('target').value = 'slot2';
-  const reads = [], uploads = [], sends = [], uploadGate = deferred(), windowEvents = {}, streamEvents = {}, streams = [], intervals = new Map();
+  const reads = [], snapshotPayloads = [], uploads = [], sends = [], uploadGate = deferred(), windowEvents = {}, streamEvents = {}, streams = [], intervals = new Map(), documentEvents = {};
+  document.addEventListener = (name, callback) => { documentEvents[name] = callback; };
+  const inspection = {pending:{messages:[],total:0},history:{messages:[]},pendingReads:[],historyReads:[]};
   const sessions = []; let intervalID = 0, csrfToken = 'csrf';
   let failSend = true;
   const snapshot = {
@@ -76,16 +78,38 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
   if(transport)Object.assign(snapshot.relay,transport);
   const fetch = async (url, options) => {
     if (url === 'api/v1/session') { sessions.push(url); if (sessionGate) { const gate=sessionGate; sessionGate=null; await gate.promise; } if (sessionFailures-- > 0) throw Error('service unavailable'); return response({ csrf_token: csrfToken }); }
-    if (url.startsWith('api/v1/snapshot')) { reads.push(url); if (snapshotGate) { const gate=snapshotGate; snapshotGate=null; await gate.promise; } if (snapshotFailures-- > 0) throw Error('snapshot unavailable'); return response(snapshot); }
+    if (url.startsWith('api/v1/snapshot')) {
+      reads.push(url);
+      if (snapshotGate) { const gate=snapshotGate; snapshotGate=null; await gate.promise; }
+      if (snapshotFailures-- > 0) throw Error('snapshot unavailable');
+      const value = JSON.parse(JSON.stringify(snapshot));
+      const query = new URLSearchParams(url.split('?')[1]);
+      if (conditional && query.get('known_sequence') === String(value.relay.sequence)) {
+        value.relay.tail_unchanged = true;
+        value.relay.messages = []; value.relay.audit = null; delete value.relay.delivery;
+      }
+      snapshotPayloads.push(JSON.stringify(value));
+      return response(value);
+    }
     if (url.startsWith('api/v1/history')) {
+      inspection.historyReads.push(url);
       if (historyHang) {
         historyHang = false;
         return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')), {once:true}));
       }
       if (historyFailures-- > 0) return response({error:'history unavailable'}, 503);
-      return response({messages:[]});
+      const value = JSON.parse(JSON.stringify(inspection.history));
+      const gate = inspection.historyGate; inspection.historyGate = null;
+      if (gate) await gate.promise;
+      return response(value);
     }
-    if (url.startsWith('api/v1/pending')) return response({messages:[],total:0});
+    if (url.startsWith('api/v1/pending')) {
+      inspection.pendingReads.push(url);
+      const value = JSON.parse(JSON.stringify(inspection.pending));
+      const gate = inspection.pendingGate; inspection.pendingGate = null;
+      if (gate) await gate.promise;
+      return response(value);
+    }
     if (url.startsWith('api/v1/sends/')) {if(receiptGate)await receiptGate.promise;const m=receipts.get(decodeURIComponent(url.split('/').pop()));return response({found:Boolean(m),message:m});}
     assert.equal(options.headers.get('X-PairRoom-CSRF'), csrfToken);
     if (url === 'api/v1/attachments') {
@@ -121,7 +145,7 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
     vm.runInContext(fs.readFileSync(path.join(__dirname,source),'utf8'),context);
   await tick();
   if (expectReady) {
-    assert.ok(reads.length >= 1 && reads.every(p => p === 'api/v1/snapshot?tail=1'), 'unbounded history loaded during refresh');
+    assert.ok(reads.length >= 1 && reads.every(p => /^api\/v1\/snapshot\?tail=1(?:&known_sequence=\d+)?$/.test(p)), 'unbounded history loaded during refresh');
     assert.equal($('message-count').textContent, '5000');
     assert.match($('messages').querySelector('.truncated-note').textContent, /1 \/ 5000$/);
   }
@@ -129,7 +153,7 @@ async function fixture({ uploadFailure = false, storage, receipts = new Map(), d
   if(draft)$('attachment').files = [new File(['image bytes'], 'image.png', { type: 'image/png' })];
   const submit = () => $('composer').events.submit({ preventDefault() {} });
   const storageEvent = () => windowEvents.storage({ key: 'pairroom.native.outbox.v1.room' });
-  return { $, reads, uploads, sends, sessions, streams, intervals, windowEvents, navigator:context.navigator,
+  return { $, reads, snapshotPayloads, snapshot, inspection, uploads, sends, sessions, streams, intervals, windowEvents, documentEvents, document, navigator:context.navigator,
     rotateSession() { csrfToken = 'csrf-recovered'; },
     failSnapshots(count=1) { snapshotFailures=count; }, blockSnapshot(gate) { snapshotGate=gate; }, poll() { for (const callback of intervals.values()) callback(); }, uploadGate, submit, storage, receipts, clock, storageEvent, async updateDelivery(delivery) { snapshot.relay.delivery=delivery; snapshot.relay.sequence++; streamEvents.native(); clock.expire(250); await tick(); } };
 }
@@ -303,6 +327,113 @@ async function main() {
     assert.equal(page.sends.length, 2, 'read failure replayed an accepted original');
   }
   const textTree = node => [node.textContent, ...node.children.map(textTree)].join(' ');
+  {
+    const page = await fixture({draft:false,transport:{messages:[{id:'last',state:'human',from:'slot1',to:'user',text:'large-evidence-'.repeat(16000)}]}});
+    const message = page.$('messages').querySelector('.message');
+    const children = page.$('messages').children.slice();
+    assert.ok(page.snapshotPayloads[0].length > 200000);
+    page.snapshot.summary = {bindings:{slot1:{collector_active:true}},inboxes:{slot1:{queued:2}},last_wake:{}};
+    page.snapshot.relay.bindings.slot1 = {active:true,session_id:'session',last_activity:'2026-10-02T01:00:00Z'};
+    page.poll(); await tick();
+    assert.equal(page.reads.at(-1), 'api/v1/snapshot?tail=1&known_sequence=3');
+    assert.ok(page.snapshotPayloads.at(-1).length < 4096, 'idle refresh repeated a large unchanged message');
+    assert.equal(page.$('messages').querySelector('.message'), message, 'unchanged tail replaced an evidence node');
+    assert.deepEqual(page.$('messages').children, children, 'unchanged tail still rebuilt the chat window');
+    assert.match(textTree(page.$('bindings')), /bound/,'transient binding activity did not refresh');
+    assert.match(textTree(page.$('delivery-summary')), /2/,'unchanged history hid current inbox state');
+    page.document.hidden = true; const reads = page.reads.length;
+    page.poll(); await tick(); assert.equal(page.reads.length, reads, 'hidden tab polled');
+    page.snapshot.relay.sequence++;
+    page.snapshot.relay.messages = [{id:'new',state:'human',from:'slot2',to:'user',text:'new tail after visibility'}];
+    page.document.hidden = false; page.documentEvents.visibilitychange(); page.clock.expire(250); await tick();
+    assert.match(textTree(page.$('messages')), /new tail after visibility/);
+    assert.equal(message.parent.children.includes(message), false, 'old tail entry survived a new window');
+    assert.doesNotMatch(page.snapshotPayloads.at(-1), /tail_unchanged/);
+  }
+  {
+    // An older Service ignores the optional query and returns its full tail.
+    const page = await fixture({draft:false,conditional:false});
+    page.poll(); await tick();
+    assert.match(textTree(page.$('messages')), /complete reply/);
+    assert.equal(page.$('status').textContent, '');
+  }
+  {
+    // Reconnection must not accept an old sequence as evidence for a restored
+    // Service, even if it is equal or lower than the browser's cached tail.
+    for (const sequence of [3, 1]) {
+      const page = await fixture({draft:false});
+      page.snapshot.relay.sequence = sequence;
+      page.snapshot.relay.messages = [{id:'restored',state:'human',from:'slot1',to:'user',text:'restored evidence'}];
+      page.streams[0].emit('error'); page.clock.expire(500); await tick();
+      assert.equal(page.reads.at(-1), 'api/v1/snapshot?tail=1');
+      assert.match(textTree(page.$('messages')), /restored evidence/);
+      assert.doesNotMatch(textTree(page.$('messages')), /complete reply/);
+      assert.equal(page.sends.length, 0);
+    }
+  }
+  for (const sequence of [3, 1]) {
+    // A reconnect must promote an already-queued conditional read to a full
+    // read, rather than trusting a sequence from the previous connection.
+    const page = await fixture({draft:false});
+    const held = deferred(); page.blockSnapshot(held); page.poll(); page.poll();
+    page.snapshot.relay.sequence = sequence;
+    page.snapshot.relay.messages = [{id:'restored',state:'human',from:'slot1',to:'user',text:'restored coalesced evidence'}];
+    page.streams[0].emit('error'); page.clock.expire(500); await tick();
+    held.resolve(); await tick();
+    assert.equal(page.reads.at(-1), 'api/v1/snapshot?tail=1');
+    assert.match(textTree(page.$('messages')), /restored coalesced evidence/);
+    assert.equal(page.streams.length, 2);
+    assert.equal(page.intervals.size, 1);
+  }
+  for (const sequence of [3, 1]) {
+    // Inspector pages belong to the old log too. Cursor reuse after restore
+    // can reject or skip pending work; equal sequences can hide it indefinitely.
+    const page = await fixture({draft:false});
+    const message = text => ({id:text,state:'queued',from:'user',to:'slot1',text});
+    page.inspection.pending = {messages:[message('obsolete pending evidence')],total:20,next_cursor:'pending:100'};
+    page.$('pending-first').events.click(); await tick();
+    page.$('pending-next').events.click(); await tick();
+    page.inspection.history = {messages:[message('obsolete history evidence')],next_cursor:'history:100'};
+    page.$('history-panel').open = true;
+    page.$('history-since').value = '2026-10-01T00:00';
+    page.$('history-form').events.submit({preventDefault(){}}); await tick();
+    const filteredFirstPage = page.inspection.historyReads.at(-1);
+    const oldPending = deferred(), oldHistory = deferred();
+    page.inspection.pendingGate = oldPending; page.inspection.historyGate = oldHistory;
+    page.$('pending-next').events.click(); page.$('history-next').events.click(); await tick();
+    assert.match(page.inspection.pendingReads.at(-1), /cursor=pending%3A100/);
+    assert.match(page.inspection.historyReads.at(-1), /cursor=history%3A100/);
+    page.inspection.pending = {messages:[message('current pending evidence')],total:1};
+    page.inspection.history = {messages:[message('current history evidence')]};
+    page.snapshot.relay.sequence = sequence;
+    page.streams[0].emit('error'); page.clock.expire(500); await tick();
+    assert.equal(page.inspection.pendingReads.at(-1), 'api/v1/pending?limit=10');
+    assert.equal(page.inspection.historyReads.at(-1), filteredFirstPage);
+    assert.equal(page.$('history-since').value, '2026-10-01T00:00');
+    oldPending.resolve(); oldHistory.resolve(); await tick();
+    assert.equal(page.$('pending-count').textContent, '1');
+    assert.match(textTree(page.$('pending-items')), /current pending evidence/);
+    assert.match(textTree(page.$('history-items')), /current history evidence/);
+    assert.doesNotMatch(textTree(page.$('pending-items')), /obsolete/);
+    assert.doesNotMatch(textTree(page.$('history-items')), /obsolete/);
+    assert.equal(page.$('pending-pager').hidden, true);
+    assert.equal(page.$('history-next').hidden, true);
+    assert.equal(page.sends.length, 0);
+  }
+  {
+    // A closed history panel is cleared without an extra read, and its held
+    // reply cannot recreate evidence or a cursor after the new full snapshot.
+    const page = await fixture({draft:false});
+    page.inspection.history = {messages:[{id:'old',state:'human',from:'slot1',to:'user',text:'obsolete evidence'}],next_cursor:'history:100'};
+    const oldHistory = deferred(); page.inspection.historyGate = oldHistory;
+    page.$('history-next').events.click(); await tick();
+    const reads = page.inspection.historyReads.length;
+    page.streams[0].emit('error'); page.clock.expire(500); await tick();
+    oldHistory.resolve(); await tick();
+    assert.equal(page.inspection.historyReads.length, reads);
+    assert.equal(page.$('history-items').children.length, 0);
+    assert.equal(page.$('history-next').hidden, true);
+  }
   const peerMessage = {id:'last',from:'slot1',to:'slot2',state:'unknown',text:'body',created_at:'2026-09-28T00:00:00Z'};
   const delivery = {queue_wait_ms:1250,reserved_at:'2026-09-28T00:00:00Z',inferred_outcome:{outcome:'submitted',at:'2026-09-28T00:00:01Z'},slot_observations:[{outcome:'suppressed',reason:'minimum_interval',at:'2026-09-28T00:00:00Z'}],slot_observation_count:5};
   const measured = await fixture({draft:false,transport:{messages:[peerMessage],delivery:{last:delivery}}});

@@ -72,6 +72,35 @@ func TestNativeSnapshotTailBudgetsQuoteAndMessageTextWithoutClipping(t *testing.
 	}
 }
 
+func TestNativeConditionalTailRetainsFreshMetadataWithoutCopyingHistory(t *testing.T) {
+	e := historyFixture(5000)
+	e.sequence = 5000
+	known := e.sequence
+	stamp := time.Date(2026, 10, 2, 1, 0, 0, 0, time.UTC)
+	e.bindings[model.ActorSlot1] = bindingFact{Binding: Binding{Active: true, LastActivity: stamp}}
+	e.waiters = map[model.ActorID]int{model.ActorSlot1: 1}
+	conditional := e.SnapshotTailSince(&known)
+	if !conditional.TailUnchanged || len(conditional.Messages) != 0 || len(conditional.Audit) != 0 || len(conditional.Delivery) != 0 || conditional.TotalMessages != 5000 || conditional.TotalAudit != 5000 {
+		t.Fatal("matching sequence copied history or lost retained totals")
+	}
+	if !conditional.Bindings[model.ActorSlot1].LastActivity.Equal(stamp) || !e.Summary().Bindings[model.ActorSlot1].CollectorActive {
+		t.Fatal("conditional history hid transient native activity")
+	}
+	data, err := json.Marshal(conditional)
+	if err != nil || len(data) > 2048 || strings.Contains(string(data), "private-claim") || strings.Contains(string(data), "m-4999") {
+		t.Fatalf("conditional tail is not bounded and body-free: %d bytes, %v", len(data), err)
+	}
+	for _, sequence := range []uint64{known - 1, known + 1} {
+		full := e.SnapshotTailSince(&sequence)
+		if full.TailUnchanged || len(full.Messages) != SnapshotMessageLimit || len(full.Audit) != SnapshotAuditLimit {
+			t.Fatal("a different sequence did not get the full current window")
+		}
+	}
+	if full := e.SnapshotTail(); full.TailUnchanged || len(full.Messages) != SnapshotMessageLimit {
+		t.Fatal("unconditional tail contract changed")
+	}
+}
+
 func TestNativeInFlightIndexTracksAllTerminalTransitions(t *testing.T) {
 	for _, finish := range []string{"ack", "expire", "replace", "close"} {
 		t.Run(finish, func(t *testing.T) {
