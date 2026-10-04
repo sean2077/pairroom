@@ -22,6 +22,8 @@ An installed executable is not proof of authentication, model access, or tool co
 
 In **Embedded**, run the selected CLI directly as the same OS user in the same repository. Check executable, login/Provider, working directory, policy, Runtime info, and first error:
 
+Startup metadata checks run `--version` and help, without authenticating or creating a conversation. Codex gets up to 15 seconds per `--version` / `app-server --help` command; other Runtimes retain 6 seconds. Caller deadlines can end either sooner. A `probe Agent N (<command>): context deadline exceeded` error identifies this metadata phase, not the later Codex JSON-RPC initialization. If it happens after a CLI upgrade, record CLI/Service versions and the resolved executable/wrapper path, then run the reported command as the same OS user; restart recovery alone does not establish which upgrade step caused the failure. Keep required session identities and inspect accepted work before any explicit Retry.
+
 ```bash
 pairroom doctor --repo /absolute/path/to/repository --json
 ```
