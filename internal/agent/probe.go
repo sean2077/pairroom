@@ -42,13 +42,19 @@ var semanticVersionPattern = regexp.MustCompile(`\bv?(\d+)\.(\d+)\.(\d+)(?:[-+][
 // is broken.
 // probeCommandTimeout bounds each --version/--help probe. Tests that launch
 // the probe through a batch shim re-executing the test binary raise it.
-// Codex app-server's first launch can take longer than lightweight CLI tools,
-// especially when initializing dependencies or in constrained environments.
-var probeCommandTimeout = 15 * time.Second
+var probeCommandTimeout = 6 * time.Second
+
+// Codex metadata commands can incur a cold wrapper/CLI startup. This budget
+// only covers --version and app-server --help, not the JSON-RPC handshake.
+var codexProbeCommandTimeout = 15 * time.Second
 
 func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 	actor := cfg.Actor
 	kind := cfg.Runtime.CanonicalForSlot(actor)
+	commandTimeout := probeCommandTimeout
+	if kind == model.RuntimeCodex {
+		commandTimeout = codexProbeCommandTimeout
+	}
 	command := strings.TrimSpace(cfg.Command)
 	if command == "" {
 		command = kind.DefaultCommand()
@@ -58,7 +64,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 		return ProbeResult{}, fmt.Errorf("locate %s runtime %q: %w", kind.DisplayName(), command, err)
 	}
 
-	ctx, cancel := context.WithTimeout(parent, probeCommandTimeout)
+	ctx, cancel := context.WithTimeout(parent, commandTimeout)
 	defer cancel()
 	versionLine, err := runProbeCommand(ctx, path, []string{"--version"}, actor, kind)
 	if err != nil {
@@ -73,7 +79,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 	case model.RuntimeClaude:
 		result.Protocol = "claude-stream-json"
 		result.SupportedFlags = make(map[string]bool)
-		helpCtx, helpCancel := context.WithTimeout(parent, probeCommandTimeout)
+		helpCtx, helpCancel := context.WithTimeout(parent, commandTimeout)
 		help, helpErr := runProbeCommand(helpCtx, path, []string{"--help"}, actor, kind)
 		helpCancel()
 
@@ -139,7 +145,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 		}
 	case model.RuntimeCodex:
 		result.Protocol = "codex-app-server-jsonrpc"
-		helpCtx, helpCancel := context.WithTimeout(parent, probeCommandTimeout)
+		helpCtx, helpCancel := context.WithTimeout(parent, commandTimeout)
 		defer helpCancel()
 		if _, err := runProbeCommand(helpCtx, path, []string{"app-server", "--help"}, actor, kind); err != nil {
 			return ProbeResult{}, fmt.Errorf("verify Codex app-server: %w", err)
@@ -150,7 +156,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 		}
 	case model.RuntimeGemini:
 		result.Protocol = "gemini-acp-v1"
-		helpCtx, helpCancel := context.WithTimeout(parent, probeCommandTimeout)
+		helpCtx, helpCancel := context.WithTimeout(parent, commandTimeout)
 		help, helpErr := runProbeCommand(helpCtx, path, []string{"--help"}, actor, kind)
 		helpCancel()
 		if helpErr != nil {
@@ -164,7 +170,7 @@ func ProbeRuntime(parent context.Context, cfg Config) (ProbeResult, error) {
 		result.Warnings = append(result.Warnings, geminiResumeWarning)
 	case model.RuntimeGrok:
 		result.Protocol = "grok-acp-v1"
-		helpCtx, helpCancel := context.WithTimeout(parent, probeCommandTimeout)
+		helpCtx, helpCancel := context.WithTimeout(parent, commandTimeout)
 		help, helpErr := runProbeCommand(helpCtx, path, []string{"--help"}, actor, kind)
 		helpCancel()
 		result.SupportedFlags = map[string]bool{
@@ -214,7 +220,7 @@ func runProbeCommand(ctx context.Context, path string, args []string, actor mode
 		return "", fmt.Errorf("probe %s exceeded output limit", actor.DisplayName())
 	}
 	if ctx.Err() != nil {
-		return text, fmt.Errorf("probe %s: %w", actor.DisplayName(), ctx.Err())
+		return text, fmt.Errorf("probe %s (%s): %w", actor.DisplayName(), strings.Join(args, " "), ctx.Err())
 	}
 	if err != nil {
 		if text == "" {

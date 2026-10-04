@@ -139,6 +139,24 @@ func TestCodexResumeNeverReplacesRequiredThread(t *testing.T) {
 }
 
 func runCodexStrictResumeHelper(args []string) int {
+	phase := ""
+	if len(args) == 1 && args[0] == "--version" {
+		phase = "version"
+	} else if len(args) >= 2 && args[0] == "app-server" && args[1] == "--help" {
+		phase = "help"
+	}
+	if phase != "" && phase == os.Getenv("PAIRROOM_CODEX_PROBE_DELAY_PHASE") {
+		if path := os.Getenv("PAIRROOM_CODEX_PROBE_PHASE_FILE"); path != "" {
+			if err := os.WriteFile(path, []byte(phase), 0o600); err != nil {
+				return 96
+			}
+		}
+		delay, err := time.ParseDuration(os.Getenv("PAIRROOM_CODEX_PROBE_DELAY"))
+		if err != nil {
+			return 96
+		}
+		time.Sleep(delay) // model a CLI wrapper's cold metadata startup
+	}
 	if len(args) == 1 && args[0] == "--version" {
 		fmt.Println("codex-cli 1.2.3")
 		return 0

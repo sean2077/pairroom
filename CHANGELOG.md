@@ -4,6 +4,10 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+### Fixed
+
+- Allow up to 15 seconds per Codex metadata command (`--version` and `app-server --help`) so a slow CLI/wrapper does not block Embedded startup at the previous 6-second limit. Preserve the shorter 6-second budget for other Runtimes and caller cancellation/deadlines; report the exact metadata command on timeout. This does not change Codex JSON-RPC initialization or establish authentication/model readiness.
+
 ## [v5.12.1] — 2026-10-03
 
 ### Fixed
