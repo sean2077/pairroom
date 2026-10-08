@@ -97,9 +97,20 @@ done
 master="$(gh api "repos/${UPSTREAM}/git/refs/heads/master" --jq '.object.sha')" \
   || fail "could not read ${UPSTREAM} master"
 gh api "repos/${fork}/git/refs/heads/${branch}" -X DELETE >/dev/null 2>&1 || true
-gh api "repos/${fork}/git/refs" \
-  -f "ref=refs/heads/${branch}" -f "sha=${master}" >/dev/null \
-  || fail "could not create branch ${branch} on ${fork}"
+if ! gh api "repos/${fork}/git/refs" \
+  -f "ref=refs/heads/${branch}" -f "sha=${master}" >/dev/null 2>&1; then
+  # A fork that is behind upstream, or detached from the upstream object store,
+  # cannot resolve the upstream commit and rejects it with 404 (syncing it is
+  # not always possible: `merge-upstream` is refused without the workflow scope
+  # that winget-pkgs needs). Fall back to the fork's own master, which is an
+  # ancestor of upstream master, so the pull request still adds only manifest
+  # files.
+  master="$(gh api "repos/${fork}/git/refs/heads/master" --jq '.object.sha')" \
+    || fail "could not read ${fork} master"
+  gh api "repos/${fork}/git/refs" \
+    -f "ref=refs/heads/${branch}" -f "sha=${master}" >/dev/null \
+    || fail "could not create branch ${branch} on ${fork}"
+fi
 
 for file in "$render_dir"/*.yaml; do
   name="$(basename "$file")"
