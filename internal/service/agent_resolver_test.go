@@ -189,3 +189,81 @@ func TestAgentCatalogWarnsOnlyForUnverifiedCCSwitchSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentResolverCCSwitchV4DefaultsAndSlotOverrides(t *testing.T) {
+	database := filepath.Join(t.TempDir(), "cc-switch.db")
+	db, err := sql.Open("sqlite", database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE providers (
+		id TEXT NOT NULL, app_type TEXT NOT NULL, name TEXT NOT NULL,
+		settings_config TEXT NOT NULL, meta TEXT NOT NULL DEFAULT '{}', sort_index INTEGER,
+		is_current BOOLEAN NOT NULL DEFAULT 0, in_failover_queue BOOLEAN NOT NULL DEFAULT 0,
+		PRIMARY KEY (id, app_type)); PRAGMA user_version = 20;`); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"alpha", "beta"} {
+		settings, err := json.Marshal(map[string]any{
+			"auth": map[string]string{},
+			"config": "model_provider = 'custom'\nmodel = '" + id + "-model'\nmodel_reasoning_effort = 'high'\n" +
+				"review_model = 'review-v4'\nmodel_context_window = 262144\n" +
+				"[model_providers.custom]\nname = 'Direct'\nwire_api = 'responses'\n" +
+				"base_url = 'https://" + id + ".invalid/v1'\nexperimental_bearer_token = 'fixture-key-" + id + "'\n",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO providers (id, app_type, name, settings_config) VALUES (?, 'codex', ?, ?)`, id, id, string(settings)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reader, err := ccswitch.NewReader(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults := config.Defaults()
+	resolver, err := NewAgentResolver(AgentResolverConfig{Defaults: defaults.DefaultSelections(), Runtimes: defaults.Runtimes, CCSwitch: reader})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selections := map[model.ActorID]model.AgentSelection{
+		model.ActorSlot1: {Runtime: model.RuntimeCodex, Provider: model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "codex", ProfileID: "alpha"}},
+		model.ActorSlot2: {Runtime: model.RuntimeCodex, Provider: model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "codex", ProfileID: "beta"}, Model: "slot-model", Effort: "low"},
+	}
+	validated, err := resolver.ValidateSelections(context.Background(), selections)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validated[model.ActorSlot1].Model != "" || validated[model.ActorSlot1].Effort != "" {
+		t.Fatal("resolved profile defaults were written into the immutable Room selection")
+	}
+	for _, test := range []struct {
+		actor         model.ActorID
+		id, wantModel string
+		wantEffort    string
+	}{
+		{model.ActorSlot1, "alpha", "alpha-model", "high"},
+		{model.ActorSlot2, "beta", "slot-model", "low"},
+	} {
+		cfg, err := resolver.Resolve(context.Background(), test.actor, validated[test.actor], model.RuntimeCodex, t.TempDir(), t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Model != test.wantModel || cfg.Effort != test.wantEffort || cfg.Env["PAIRROOM_CC_SWITCH_CODEX_API_KEY"] != "fixture-key-"+test.id {
+			t.Fatal("slot configuration did not retain its selected credential and model/effort precedence")
+		}
+		args := strings.Join(cfg.CommandArgs, " ")
+		if !strings.Contains(args, "https://"+test.id+".invalid/v1") || !strings.Contains(args, `review_model="review-v4"`) || !strings.Contains(args, "model_context_window=262144") {
+			t.Fatal("profile-owned endpoint and model options were not projected")
+		}
+		if strings.Contains(args, "fixture-key-") {
+			t.Fatal("inline bearer credential escaped into argv")
+		}
+	}
+	native, err := resolver.Resolve(context.Background(), model.ActorSlot1, model.AgentSelection{Runtime: model.RuntimeCodex, Provider: model.NativeProviderRef()}, model.RuntimeCodex, t.TempDir(), t.TempDir())
+	if err != nil || native.Model != "" || native.Effort != "" || len(native.Env) != 0 {
+		t.Fatal("native inheritance was changed by CC Switch defaults")
+	}
+}
