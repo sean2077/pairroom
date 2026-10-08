@@ -6,7 +6,13 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ### Fixed
 
+- Restore Embedded CC Switch Profile compatibility through v4.0.4/schema 20 while retaining schemas 18/19. Honor Codex credential-source precedence, inline bearer tokens, quoted TOML, Profile model/effort defaults, and provider-owned options; include Codex model catalogs and Claude aggregation model IDs in suggestions. Keep independently usable queue members selectable and reject managed authentication, routing placeholders, and unsupported request configuration. Isolate selected Claude Provider variables and compatibility switches from inherited settings, requiring Claude Code 2.1.222 or newer for CC Switch selections. Credentials remain in the selected child environment; CC Switch and native configuration files remain untouched.
+- Stop stacking Native wake nudges on busy Claude sessions. Claude Code's cross-session inbox behaves like `codex queue`, holding messages until the current Turn ends rather than delivering them mid-Turn. The existing `nudge_pending` suppression now applies to both Claude and Codex targets, preventing redundant wake attempts when a session is actively processing. This eliminates the accumulation of "PairRoom inbox has messages for you" steering messages in Claude's context during pair work. The rule remains: while a possibly delivered nudge is outstanding, new bursts record one coalesced `suppressed/nudge_pending` without a reservation and are rechecked by maintenance until the Turn ends or 10 minutes pass. Event formats are unchanged.
 - Allow up to 15 seconds per Codex metadata command (`--version` and `app-server --help`) so a slow CLI/wrapper does not block Embedded startup at the previous 6-second limit. Preserve the shorter 6-second budget for other Runtimes and caller cancellation/deadlines; report the exact metadata command on timeout. This does not change Codex JSON-RPC initialization or establish authentication/model readiness.
+
+### Changed
+
+- Refine the bilingual landing page with a paper-and-ink palette, clearer typography, and real product screenshots immediately after the introduction. Replace repeated marketing copy with concrete review scenarios, simplify installation with an optional Mock walkthrough, and clarify runtime-specific controls and Gemini limitations.
 
 ## [v5.12.1] — 2026-10-03
 

@@ -123,6 +123,9 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 		Actor: c.cfg.Actor, Command: c.cfg.Command, Model: c.cfg.Model,
 		Runtime: c.cfg.Runtime, PermissionMode: c.cfg.PermissionMode,
 	})
+	if probeErr == nil {
+		probeErr = validateClaudeProviderVersion(c.cfg, probe.Version)
+	}
 	info := model.RuntimeInfo{
 		Available: false, Command: c.cfg.Command, Protocol: "claude-stream-json",
 		RuntimeKind: c.cfg.Runtime.CanonicalForSlot(c.cfg.Actor),
@@ -250,7 +253,7 @@ func (c *ClaudeAdapter) Start(ctx context.Context) error {
 	cmd := exec.Command(c.cfg.Command, args...)
 	execx.NoConsole(cmd)
 	cmd.Dir = c.cfg.Repo
-	cmd.Env = mergeRuntimeEnv(envWithout("CLAUDECODE"), c.cfg.Env)
+	cmd.Env = claudeRuntimeEnv(envWithout("CLAUDECODE"), c.cfg)
 	stdin, releaseChildStdin, err := nativeStdinPipe(cmd)
 	if err != nil {
 		c.setState(model.StateError, err.Error())
