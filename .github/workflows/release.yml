@@ -107,7 +107,12 @@ jobs:
           published="${RUNNER_TEMP}/published"
           mkdir -p "${published}"
           gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --dir "${published}"
+          # The Desktop workflow attaches its `pairroom-desktop-*` packages to
+          # this same Release on the same tag, so they can already be present
+          # when this step runs; that workflow re-downloads and checks them
+          # against its own merged checksum list. This step owns the CLI/source
+          # payload, so compare only the assets it published.
           diff -u \
             <(find dist -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort) \
-            <(find "${published}" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+            <(find "${published}" -maxdepth 1 -type f ! -name 'pairroom-desktop-*' -printf '%f\n' | LC_ALL=C sort)
           (cd "${published}" && sha256sum -c SHA256SUMS)
