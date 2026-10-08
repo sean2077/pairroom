@@ -6,7 +6,7 @@ PairRoom embeds or links the following pinned third-party software. The authorit
 |---|---:|---|---|
 | [i18next](https://github.com/i18next/i18next/tree/v26.4.2) | 26.4.2 | MIT | Embedded browser UMD runtime |
 | [golang.org/x/sys](https://pkg.go.dev/golang.org/x/sys@v0.48.0) | v0.48.0 | BSD-3-Clause | Direct Windows system-call bindings; already in the pinned SQLite dependency closure |
-| [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite@v1.59.0) | 1.59.0 | BSD-3-Clause | CGo-free, read-only CC Switch database access |
+| [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite@v1.60.1) | 1.60.1 | BSD-3-Clause | CGo-free, read-only CC Switch database access |
 
 The modernc SQLite dependency closure also includes the pinned modules listed by `scripts/check_dependencies.go`. Their source distributions and license files are retained by the Go module ecosystem; the release SBOM enumerates every selected module.
 
@@ -22,7 +22,7 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-## modernc.org/sqlite 1.59.0
+## modernc.org/sqlite 1.60.1
 
 Copyright (c) 2017 The Sqlite Authors. All rights reserved.
 
