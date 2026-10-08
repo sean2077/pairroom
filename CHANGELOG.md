@@ -13,6 +13,7 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 ### Changed
 
 - Refine the bilingual landing page with a paper-and-ink palette, clearer typography, and real product screenshots immediately after the introduction. Replace repeated marketing copy with concrete review scenarios, simplify installation with an optional Mock walkthrough, and clarify runtime-specific controls and Gemini limitations.
+- Update the pinned CGo-free SQLite closure used for read-only CC Switch access: `modernc.org/sqlite` 1.59.0 → 1.60.1, `modernc.org/libc` 1.75.7 → 1.77.1, `modernc.org/cc/v4` 4.29.2 → 4.29.7, `modernc.org/ccgo/v4` 4.35.0 → 4.36.1, and the `golang.org/x/mod`, `x/sync`, `x/tools` module-graph entries. The reviewed allowlist, third-party notices, and both module locks move with it, and the module set is unchanged. Every retained license text is byte-identical (BSD-3-Clause); upstream additionally ships a generated `LICENSE-3RD-PARTY.md` inventory whose only copyleft-adjacent entry (MPL-2.0) stays outside the linked code. The embedded SQLite engine remains 3.53.4, `mode=ro` plus `query_only` still governs read-only access, and no PairRoom configuration changes.
 
 ## [v5.12.1] — 2026-10-03
 
