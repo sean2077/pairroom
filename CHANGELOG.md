@@ -4,6 +4,8 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+## [v5.13.0] — 2026-10-08
+
 ### Added
 
 - Refine the bilingual landing page with a paper-and-ink palette, clearer typography, and real product screenshots immediately after the introduction. Replace repeated marketing copy with concrete review scenarios, simplify installation with an optional Mock walkthrough, and clarify runtime-specific controls and Gemini limitations.
