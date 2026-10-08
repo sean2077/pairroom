@@ -17,6 +17,28 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         pass
 
 
+def check_selection(page, button_attribute, panel_attribute, value):
+    button = page.locator(f'[data-{button_attribute}="{value}"]')
+    panel = page.locator(f'[data-{panel_attribute}="{value}"]')
+    assert button.get_attribute('aria-controls') == panel.get_attribute('id')
+    assert button.get_attribute('aria-pressed') == 'true'
+    assert page.locator(f'[data-{button_attribute}][aria-pressed="true"]').count() == 1
+    assert page.locator(f'[data-{button_attribute}][aria-pressed="false"]').count() == page.locator(f'[data-{button_attribute}]').count() - 1
+    assert panel.is_visible() and page.locator(f'[data-{panel_attribute}]:visible').count() == 1
+
+
+def open_mock_demo(page):
+    disclosure = page.locator('#mock-demo')
+    if disclosure.get_attribute('open') is None:
+        disclosure.locator('summary').click()
+    assert page.locator('[data-copy="mock-command"]').is_visible()
+
+
+def check_layout(page, label):
+    overflow = page.evaluate("[...document.querySelectorAll('body *')].filter(e => e.getBoundingClientRect().right > innerWidth + 1).map(e => e.tagName + '.' + e.className).slice(0,20)")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"Overflow: {label}: {overflow}"
+
+
 def test(browser_path, output):
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="pairroom-website-browser-") as directory:
@@ -35,65 +57,90 @@ def test(browser_path, output):
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.on("response", lambda response: errors.append(f"HTTP {response.status}: {response.url}") if response.status >= 400 else None)
                 page.goto(origin + "/pairroom/")
-                page.locator("h1").filter(has_text="Two agents.").wait_for()
+                page.locator('h1').wait_for()
+                english_heading = page.locator('h1').inner_text()
+                english_title = page.title()
+                primary = page.locator('.hero .primary')
+                english_cta = primary.inner_text()
+                assert english_heading.strip() and english_title.strip() and english_cta.strip()
+                assert page.locator('html').get_attribute('lang') == 'en'
+                assert primary.is_visible() and primary.get_attribute('href') == '#start'
                 page.keyboard.press("Tab")
                 assert page.locator('.skip-link').evaluate("element => element === document.activeElement")
                 page.locator('[data-platform="linux"]').focus()
                 page.keyboard.press("Space")
-                assert page.locator('[data-install="linux"]').is_visible()
+                check_selection(page, 'platform', 'install', 'linux')
                 page.locator('[data-platform="windows"]').click()
                 windows = page.locator('[data-install="windows"]')
                 assert windows.locator('[data-copy]').count() == 0
                 assert windows.locator('[data-windows-download]').get_attribute('href') == 'https://github.com/sean2077/pairroom/releases/latest'
                 assert 'Not yet available via WinGet' in windows.inner_text()
+                open_mock_demo(page)
                 page.locator('[data-copy="mock-command"]').click()
                 page.get_by_role("status").filter(has_text="Command copied.").wait_for()
                 assert page.evaluate("navigator.clipboard.readText()") == 'pairroom service --mock --data-root "$HOME/.pairroom-demo"'
                 for platform in ("macos", "linux", "windows"):
                     page.locator(f'[data-platform="{platform}"]').click()
-                    assert page.locator(f'[data-install="{platform}"]').is_visible()
-                    assert page.locator('[data-install]:visible').count() == 1
+                    check_selection(page, 'platform', 'install', platform)
                 for view in ("embedded", "management", "native"):
                     page.locator(f'[data-view="{view}"]').click()
                     image = page.locator(f'[data-shot="{view}"] img')
                     page.wait_for_function("img => img.complete && img.naturalWidth > 0", arg=image.element_handle())
-                    assert page.locator('[data-shot]:visible').count() == 1
+                    check_selection(page, 'view', 'shot', view)
                 page.locator('#language').click()
                 page.wait_for_function("document.documentElement.lang === 'zh-CN'")
-                assert "lang=zh-CN" in page.url and "两位 Agent" in page.title()
-                assert "开始使用" in page.locator('.hero .primary').inner_text()
+                assert "lang=zh-CN" in page.url
+                assert page.locator('h1').inner_text().strip() and page.locator('h1').inner_text() != english_heading
+                assert page.title().strip() and page.title() != english_title
+                assert primary.is_visible() and primary.get_attribute('href') == '#start'
+                assert primary.inner_text().strip() and primary.inner_text() != english_cta
                 assert 'WinGet 官方源尚未收录' in windows.inner_text()
                 assert windows.locator('[data-windows-download]').get_attribute('href') == 'https://github.com/sean2077/pairroom/releases/latest'
                 for view in ("embedded", "management", "native"):
                     page.locator(f'[data-view="{view}"]').click()
                     image = page.locator(f'[data-shot="{view}"] img')
                     page.wait_for_function("img => img.complete && img.naturalWidth > 0", arg=image.element_handle())
+                    check_selection(page, 'view', 'shot', view)
                     assert "-zh.png" in image.get_attribute("src")
                 page.reload()
                 page.wait_for_function("document.documentElement.lang === 'zh-CN'")
                 page.locator('#language').click()
                 page.wait_for_function("document.documentElement.lang === 'en'")
+                assert page.locator('h1').inner_text() == english_heading and page.title() == english_title
+                assert primary.inner_text() == english_cta and primary.get_attribute('href') == '#start'
                 page.locator('.faq-list summary').first.click()
                 assert page.locator('.faq-list details').first.get_attribute('open') is not None
                 # A denied clipboard must never announce success, and must select the actual command.
                 page.evaluate("Object.defineProperty(navigator, 'clipboard', {configurable:true, value:{writeText:async()=>{throw new Error('Denied')}}})")
+                open_mock_demo(page)
                 page.locator('[data-copy="mock-command"]').click()
                 page.get_by_role("status").filter(has_text="Could not copy.").wait_for()
                 assert page.evaluate("getSelection().toString()") == 'pairroom service --mock --data-root "$HOME/.pairroom-demo"'
                 for lang in ("en", "zh-CN"):
                     page.goto(origin + f"/pairroom/?lang={lang}")
                     page.wait_for_function("lang => document.documentElement.lang === lang", arg=lang)
+                    open_mock_demo(page)
                     for width in (1440, 768, 390, 320):
                         page.set_viewport_size({"width": width, "height": 1000})
-                        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"Overflow: {lang}/{width}"
+                        for platform in ("macos", "linux", "windows"):
+                            page.locator(f'[data-platform="{platform}"]').click()
+                            check_layout(page, f"{lang}/{width}/{platform}")
+                    page.locator('#mock-demo summary').click()
                     page.set_viewport_size({"width": 1440, "height": 1000})
+                    page.mouse.move(0, 0)
+                    page.evaluate('scrollTo(0, 0)')
                     page.screenshot(path=str(output / f"hero-{lang}.png"))
                     page.screenshot(path=str(output / f"desktop-{lang}.png"), full_page=True)
                     page.set_viewport_size({"width": 390, "height": 844})
+                    page.screenshot(path=str(output / f"mobile-hero-{lang}.png"))
                     page.screenshot(path=str(output / f"mobile-{lang}.png"), full_page=True)
+                    open_mock_demo(page)
                     page.evaluate("document.documentElement.style.fontSize = '200%'")
-                    overflow = page.evaluate("[...document.querySelectorAll('body *')].filter(e => e.getBoundingClientRect().right > innerWidth + 1).map(e => e.tagName + '.' + e.className).slice(0,20)")
-                    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"200% text overflow: {lang}: {overflow}"
+                    for width in (390, 320):
+                        page.set_viewport_size({"width": width, "height": 844})
+                        for platform in ("macos", "linux", "windows"):
+                            page.locator(f'[data-platform="{platform}"]').click()
+                            check_layout(page, f"{lang}/{width}/{platform}/200% text")
                 # Back/forward query navigation must update the language without reloading.
                 page.goto(origin + "/pairroom/?lang=en")
                 page.evaluate("history.pushState(null, '', '?lang=zh-CN'); dispatchEvent(new PopStateEvent('popstate'))")

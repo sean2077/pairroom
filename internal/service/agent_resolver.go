@@ -169,6 +169,9 @@ func (r *AgentResolver) Resolve(ctx context.Context, actor model.ActorID, select
 	if cfg.Model == "" {
 		cfg.Model = materialized.DefaultModel
 	}
+	if cfg.Effort == "" {
+		cfg.Effort = materialized.DefaultEffort
+	}
 	if selection.Runtime.Canonical() == model.RuntimeGrok {
 		overlay, effectiveModel, err := ccswitch.RenderGrokOverlay(materialized.Grok, selection.Model)
 		if err != nil {

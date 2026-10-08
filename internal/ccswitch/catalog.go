@@ -31,14 +31,14 @@ import (
 // required column, and the catalog marks it unverified; older schemas predate
 // the pinned contract and fail closed.
 const (
-	SupportedCCSwitchVersion = "v3.20.4"
-	SupportedSchemaVersion   = 19
+	SupportedCCSwitchVersion = "v4.0.4"
+	SupportedSchemaVersion   = 20
 	MinimumSchemaVersion     = 18
 )
 
 // VerifiedSchemaVersions maps each verified schema to the newest CC Switch
 // release checked for it.
-var VerifiedSchemaVersions = map[int]string{18: "v3.20.1", 19: "v3.20.4"}
+var VerifiedSchemaVersions = map[int]string{18: "v3.20.1", 19: "v3.20.4", 20: "v4.0.4"}
 
 // SchemaVerified reports whether schema was checked against upstream
 // migrations rather than accepted by structural validation alone.
@@ -60,7 +60,6 @@ const (
 	ReasonUnsupportedApp     = "unsupported_app_type"
 	ReasonManagedOAuth       = "managed_oauth"
 	ReasonProxyConversion    = "proxy_conversion"
-	ReasonFailover           = "failover_profile"
 	ReasonMissingCredential  = "missing_api_key"
 	ReasonUnsupportedWireAPI = "unsupported_wire_api"
 	ReasonInvalidConfig      = "invalid_profile_config"
@@ -114,6 +113,7 @@ type Materialization struct {
 	Args          []string          `json:"-"`
 	Models        []string          `json:"models,omitempty"`
 	DefaultModel  string            `json:"default_model,omitempty"`
+	DefaultEffort string            `json:"default_effort,omitempty"`
 	Grok          *GrokProfile      `json:"-"`
 }
 
@@ -207,7 +207,7 @@ func (r *Reader) Resolve(ctx context.Context, ref model.ProviderRef, runtime mod
 		return Materialization{}, &Error{Code: CodeRuntimeMismatch, Params: safeRefParams(ref), Detail: fmt.Sprintf("CC Switch profile %s/%s is for %s, not %s", profile.AppType, profile.ID, summary.Runtime, runtime)}
 	}
 	if !summary.Supported {
-		return Materialization{}, &Error{Code: CodeProfileUnsupported, Params: map[string]string{"app_type": profile.AppType, "profile_id": profile.ID, "reason": summary.ReasonCode}, Detail: summary.DisabledReason}
+		return Materialization{}, &Error{Code: CodeProfileUnsupported, Params: map[string]string{"app_type": summary.ProviderRef.AppType, "profile_id": summary.ProviderRef.ProfileID, "reason": summary.ReasonCode}, Detail: summary.DisabledReason}
 	}
 	materialized, mapErr := materialize(profile, runtime)
 	if mapErr != nil {
@@ -290,7 +290,7 @@ func validateProviderTable(ctx context.Context, db *sql.DB, schema int) error {
 		return dbError(CodeDatabaseUnreadable, "inspect the CC Switch providers table", err)
 	}
 	defer rows.Close()
-	want := map[string]bool{"id": false, "app_type": false, "name": false, "settings_config": false, "meta": false, "is_current": false, "in_failover_queue": false}
+	want := map[string]bool{"id": false, "app_type": false, "name": false, "settings_config": false, "meta": false, "sort_index": false, "is_current": false, "in_failover_queue": false}
 	for rows.Next() {
 		var cid, notNull, pk int
 		var name, kind string
@@ -301,6 +301,9 @@ func validateProviderTable(ctx context.Context, db *sql.DB, schema int) error {
 		if _, ok := want[name]; ok {
 			want[name] = true
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return dbError(CodeDatabaseUnreadable, "inspect the CC Switch providers table", err)
 	}
 	for name, present := range want {
 		if !present {
@@ -318,8 +321,18 @@ func summarize(p profileRow) ProfileSummary {
 	}
 	settings, meta, err := decodeProfileJSON(p)
 	if err != nil {
-		s.ReasonCode, s.DisabledReason = ReasonInvalidConfig, "Profile configuration is invalid and cannot be materialized safely."
-		return s
+		return uninspectableSummary(s)
+	}
+	if runtime == model.RuntimeClaude && claudeOpaqueSettings(settings) {
+		return uninspectableSummary(s)
+	}
+	if config, ok := settings["config"].(string); ok {
+		doc := parseTOML(config)
+		if doc.Invalid || doc.UnsafeCredentials {
+			// An opaque or malformed credential declaration cannot be redacted
+			// reliably. Withhold row-authored metadata as well as materialization.
+			return uninspectableSummary(s)
+		}
 	}
 	// Derive credential candidates only for in-process redaction checks. A
 	// malformed or malicious profile must not smuggle a token into a model
@@ -331,7 +344,7 @@ func summarize(p profileRow) ProfileSummary {
 	s.Name = redactSecrets(sanitizeProviderName(p.Name), secrets)
 	s.ProviderRef.AppType = redactSecrets(s.ProviderRef.AppType, secrets)
 	s.ProviderRef.ProfileID = redactSecrets(s.ProviderRef.ProfileID, secrets)
-	for _, candidate := range modelSuggestions(settings) {
+	for _, candidate := range profileModels(runtime, settings, meta) {
 		if containsAnySecret(candidate, secrets) {
 			s.ReasonCode, s.DisabledReason = ReasonInvalidConfig, "Profile configuration is invalid and cannot be materialized safely."
 			return s
@@ -342,10 +355,9 @@ func summarize(p profileRow) ProfileSummary {
 		s.ReasonCode, s.DisabledReason = ReasonUnsupportedApp, "This CC Switch application type is not supported by PairRoom."
 		return s
 	}
-	if p.Failover {
-		s.ReasonCode, s.DisabledReason = ReasonFailover, "Failover queue profiles cannot be selected directly."
-		return s
-	}
+	// Queue membership is not a credential or routing mode. A direct API-key
+	// provider can also participate in CC Switch failover or aggregation; this
+	// reference still selects only that provider, without either routing policy.
 	if profileHasManagedOAuth(settings) || profileMetaManagedOAuth(meta) {
 		s.ReasonCode, s.DisabledReason = ReasonManagedOAuth, "Managed OAuth profiles remain owned by CC Switch and cannot be materialized independently."
 		return s
@@ -368,6 +380,18 @@ func summarize(p profileRow) ProfileSummary {
 	// rather than from arbitrary nested JSON values.
 	s.Models = append([]string(nil), materialized.Models...)
 	s.Supported = true
+	return s
+}
+
+func uninspectableSummary(s ProfileSummary) ProfileSummary {
+	s.Name = "Invalid CC Switch profile"
+	s.ProviderRef.ProfileID = ""
+	if s.Runtime.Valid() {
+		s.ProviderRef.AppType = canonicalAppType(string(s.Runtime))
+	} else {
+		s.ProviderRef.AppType = ""
+	}
+	s.ReasonCode, s.DisabledReason = ReasonInvalidConfig, "Profile configuration cannot be inspected safely; repair it in CC Switch."
 	return s
 }
 
@@ -404,22 +428,29 @@ func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta 
 	// against the full profile secret set rather than only the materialized
 	// environment, so a credential in a field PairRoom never copies into Env
 	// still cannot survive in the display name.
-	providerName := redactSecrets(sanitizeProviderName(p.Name), profileSecretValues(settings, meta))
+	secrets := profileSecretValues(settings, meta)
+	providerName := redactSecrets(sanitizeProviderName(p.Name), secrets)
 	switch runtime.Canonical() {
 	case model.RuntimeClaude:
 		env := stringMap(settings["env"])
+		if err := validateClaudeProfile(p, settings, env); err != nil {
+			return Materialization{}, err
+		}
 		secret := firstNonEmpty(env["ANTHROPIC_AUTH_TOKEN"], env["ANTHROPIC_API_KEY"])
 		if secret == "" {
 			return Materialization{}, profileError(p, ReasonMissingCredential, "Claude profile has no API key and cannot be activated independently.")
 		}
+		if isProxyCredential(secret) {
+			return Materialization{}, profileError(p, ReasonProxyConversion, "CC Switch routing credentials cannot be activated as a direct profile.")
+		}
 		allowed := make(map[string]string)
 		for key, value := range env {
-			if key == "ANTHROPIC_AUTH_TOKEN" || key == "ANTHROPIC_API_KEY" || key == "ANTHROPIC_BASE_URL" || key == "ANTHROPIC_MODEL" || (strings.HasPrefix(key, "ANTHROPIC_DEFAULT_") && (strings.HasSuffix(key, "_MODEL") || strings.HasSuffix(key, "_MODEL_NAME"))) {
+			if claudeDirectEnvKey(key) {
 				allowed[key] = value
 			}
 		}
-		models := modelSuggestions(settings)
-		return finishMaterialization(p, Materialization{ProviderLabel: label, ProviderName: providerName, Env: allowed, Models: models, DefaultModel: firstNonEmpty(env["ANTHROPIC_MODEL"], first(models))})
+		models := profileModels(runtime, settings, meta)
+		return finishMaterialization(p, Materialization{ProviderLabel: label, ProviderName: providerName, Env: allowed, Args: claudeCompatibilityArgs(allowed), Models: models, DefaultModel: firstNonEmpty(env["ANTHROPIC_MODEL"], stringValue(settings["model"]))}, secrets)
 	case model.RuntimeCodex:
 		auth := stringMap(settings["auth"])
 		if profileHasManagedOAuth(settings) {
@@ -427,11 +458,10 @@ func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta 
 		}
 		configText, _ := settings["config"].(string)
 		parsed := parseTOML(configText)
-		providerID := strings.TrimSpace(parsed.Root["model_provider"])
-		if providerID == "" {
-			return Materialization{}, profileError(p, ReasonInvalidConfig, "Codex profile does not select a custom model provider.")
+		section, err := codexProviderSection(p, parsed)
+		if err != nil {
+			return Materialization{}, err
 		}
-		section := parsed.Sections["model_providers."+providerID]
 		wire := strings.ToLower(firstNonEmpty(section["wire_api"], stringValue(meta["apiFormat"])))
 		if wire == "response" {
 			wire = "responses"
@@ -446,12 +476,17 @@ func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta 
 		if err := validateEndpoint(baseURL); err != nil {
 			return Materialization{}, profileError(p, ReasonInvalidConfig, "Codex profile base URL cannot be materialized safely: "+err.Error())
 		}
-		key := strings.TrimSpace(auth["OPENAI_API_KEY"])
-		if key == "" {
-			key = credentialFromEnvironment(section["env_key"])
+		key := firstNonEmpty(auth["OPENAI_API_KEY"], section["experimental_bearer_token"], parsed.Root["experimental_bearer_token"])
+		if envName, declared := section["env_key"]; declared {
+			// CC Switch 4 keeps an explicit credential source authoritative. An
+			// unavailable env_key must not fall back to a stale auth.json snapshot.
+			key = credentialFromEnvironment(envName)
 		}
 		if key == "" {
 			return Materialization{}, profileError(p, ReasonMissingCredential, "Codex profile has no available API key and cannot be activated independently.")
+		}
+		if isProxyCredential(key) {
+			return Materialization{}, profileError(p, ReasonProxyConversion, "CC Switch routing credentials cannot be activated as a direct profile.")
 		}
 		const envKey = "PAIRROOM_CC_SWITCH_CODEX_API_KEY"
 		id := "pairroom_ccswitch_" + shortID(p.AppType+"\x00"+p.ID)
@@ -461,14 +496,23 @@ func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta 
 			"-c", "model_providers." + id + ".wire_api=\"responses\"",
 			"-c", "model_providers." + id + ".env_key=" + tomlQuote(envKey),
 			"-c", "model_providers." + id + ".base_url=" + tomlQuote(baseURL),
+			"-c", "model_providers." + id + ".requires_openai_auth=false",
 		}
-		models := modelSuggestions(settings)
-		return finishMaterialization(p, Materialization{ProviderLabel: label, ProviderName: providerName, Env: map[string]string{envKey: key}, Args: args, Models: models, DefaultModel: firstNonEmpty(parsed.Root["model"], first(models))})
+		options, err := codexProfileOptions(p, parsed, section, id)
+		if err != nil {
+			return Materialization{}, err
+		}
+		args = append(args, options...)
+		models := profileModels(runtime, settings, meta)
+		return finishMaterialization(p, Materialization{ProviderLabel: label, ProviderName: providerName, Env: map[string]string{envKey: key}, Args: args, Models: models, DefaultModel: parsed.Root["model"], DefaultEffort: parsed.Root["model_reasoning_effort"]}, secrets)
 	case model.RuntimeGrok:
 		configText, _ := settings["config"].(string)
 		parsed := parseTOML(configText)
 		selected := strings.TrimSpace(parsed.Sections["models"]["default"])
 		section := grokModelSection(parsed, selected)
+		if parsed.Invalid || unsupportedTOMLPrefix(parsed, "models.default") || unsupportedTOMLPrefix(parsed, "model."+tomlKey(selected)) {
+			return Materialization{}, profileError(p, ReasonInvalidConfig, "Grok Build profile contains unsupported provider configuration syntax.")
+		}
 		if selected == "" || len(section) == 0 {
 			return Materialization{}, profileError(p, ReasonInvalidConfig, "Grok Build profile does not contain the selected [model.<name>] table.")
 		}
@@ -478,6 +522,9 @@ func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta 
 		}
 		if key == "" {
 			return Materialization{}, profileError(p, ReasonMissingCredential, "Grok Build profile has no available direct API key.")
+		}
+		if isProxyCredential(key) {
+			return Materialization{}, profileError(p, ReasonProxyConversion, "CC Switch routing credentials cannot be activated as a direct profile.")
 		}
 		backend := strings.ToLower(strings.TrimSpace(section["api_backend"]))
 		if backend == "" {
@@ -511,7 +558,7 @@ func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta 
 				ProfileModel: selected, UpstreamModel: upstreamModel, BaseURL: baseURL,
 				Name: name, APIBackend: backend, ContextWindow: contextWindow,
 			},
-		})
+		}, secrets)
 	default:
 		return Materialization{}, profileError(p, ReasonUnsupportedApp, "This CC Switch application type is not supported by PairRoom.")
 	}
@@ -522,9 +569,20 @@ func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta 
 // every value that can reach argv, a temporary overlay, RuntimeInfo, or a
 // catalog is checked against the credential values. The error deliberately
 // contains no profile payload or credential.
-func finishMaterialization(profile profileRow, value Materialization) (Materialization, error) {
-	secrets := materializationSecrets(value.Env)
-	values := append([]string{profile.ID, profile.AppType, profile.Name, value.ProviderLabel, value.ProviderName, value.DefaultModel}, value.Args...)
+func finishMaterialization(profile profileRow, value Materialization, profileSecrets []string) (Materialization, error) {
+	if len(value.DefaultModel) > 512 || len(value.DefaultEffort) > 128 ||
+		strings.ContainsFunc(value.DefaultModel+value.DefaultEffort, unicode.IsControl) {
+		return Materialization{}, profileError(profile, ReasonInvalidConfig, "CC Switch profile contains an invalid model or effort value.")
+	}
+	secrets := append(materializationSecrets(value.Env), profileSecrets...)
+	values := append([]string{profile.ID, profile.AppType, profile.Name, value.ProviderLabel, value.ProviderName, value.DefaultModel, value.DefaultEffort}, value.Args...)
+	// Inspect the raw provider options as well as their serialized arguments.
+	// JSON escaping can otherwise conceal a credential copied into --settings.
+	for key, item := range value.Env {
+		if !credentialEnvironmentName(key) {
+			values = append(values, item)
+		}
+	}
 	values = append(values, value.Models...)
 	if value.Grok != nil {
 		values = append(values, value.Grok.ProfileModel, value.Grok.UpstreamModel, value.Grok.BaseURL, value.Grok.Name, value.Grok.APIBackend)
@@ -618,10 +676,13 @@ func tomlDocumentMap(doc tomlDocument) map[string]any {
 }
 
 func credentialFieldName(value string) bool {
+	if offset := strings.LastIndexByte(value, '.'); offset >= 0 {
+		value = strings.Trim(value[offset+1:], `"'`)
+	}
 	if value == "env_key" || value == "env-key" {
 		return false
 	}
-	return value == "api_key" || value == "apikey" || value == "auth_token" ||
+	return value == "api_key" || value == "apikey" || value == "auth_token" || value == "token" || value == "authorization" ||
 		value == "access_token" || value == "refresh_token" || value == "credential" ||
 		value == "password" || value == "secret" || strings.HasSuffix(value, "_api_key") ||
 		strings.HasSuffix(value, "_token") || strings.HasSuffix(value, "_secret")
@@ -771,12 +832,15 @@ func profileHasManagedOAuth(settings map[string]any) bool {
 
 func profileMetaManagedOAuth(meta map[string]any) bool {
 	providerType := strings.ToLower(firstNonEmpty(stringValue(meta["providerType"]), stringValue(meta["provider_type"])))
-	return strings.Contains(providerType, "oauth") || boolValue(meta["requiresOAuth"]) || boolValue(meta["requires_oauth"])
+	binding, _ := meta["authBinding"].(map[string]any)
+	return strings.Contains(providerType, "oauth") || providerType == "github_copilot" ||
+		stringValue(binding["source"]) == "managed_account" ||
+		boolValue(meta["requiresOAuth"]) || boolValue(meta["requires_oauth"])
 }
 
 func profileRequiresConversion(runtime model.RuntimeKind, meta map[string]any) bool {
 	mode := strings.ToLower(stringValue(meta["mode"]))
-	if mode == "proxy" || boolValue(meta["requiresProxy"]) || boolValue(meta["requires_proxy"]) {
+	if mode == "proxy" || mode == "routing" || mode == "aggregation" || boolValue(meta["isFullUrl"]) || boolValue(meta["requiresProxy"]) || boolValue(meta["requires_proxy"]) {
 		return true
 	}
 	format := strings.ToLower(firstNonEmpty(stringValue(meta["apiFormat"]), stringValue(meta["api_format"])))
@@ -842,12 +906,7 @@ func validateEndpoint(value string) error {
 }
 
 func grokModelSection(parsed tomlDocument, selected string) map[string]string {
-	for _, name := range []string{"model." + selected, "model." + strconv.Quote(selected)} {
-		if section := parsed.Sections[name]; len(section) > 0 {
-			return section
-		}
-	}
-	return nil
+	return parsed.Sections["model."+tomlKey(selected)]
 }
 
 // RenderGrokOverlay creates a non-secret per-process overlay for one CC Switch
@@ -896,42 +955,6 @@ func stringValue(value any) string {
 	return strings.TrimSpace(text)
 }
 
-func modelSuggestions(settings map[string]any) []string {
-	var candidates []string
-	var walk func(string, any)
-	walk = func(key string, value any) {
-		switch typed := value.(type) {
-		case string:
-			lower := strings.ToLower(key)
-			if lower == "config" {
-				parsed := parseTOML(typed)
-				candidates = append(candidates, parsed.Root["model"])
-				for _, section := range parsed.Sections {
-					candidates = append(candidates, section["model"])
-				}
-			} else if lower == "model" || strings.HasSuffix(lower, "_model") {
-				candidates = append(candidates, typed)
-			}
-		case []any:
-			if strings.Contains(strings.ToLower(key), "model") {
-				for _, item := range typed {
-					if text, ok := item.(string); ok {
-						candidates = append(candidates, text)
-					}
-				}
-			}
-		case map[string]any:
-			for child, item := range typed {
-				walk(child, item)
-			}
-		}
-	}
-	for key, value := range settings {
-		walk(key, value)
-	}
-	return uniqueStrings(candidates)
-}
-
 func uniqueStrings(values []string) []string {
 	seen := make(map[string]struct{})
 	result := make([]string, 0, len(values))
@@ -954,99 +977,12 @@ func uniqueStrings(values []string) []string {
 	return result
 }
 
-type tomlDocument struct {
-	Root     map[string]string
-	Sections map[string]map[string]string
-}
-
-// parseTOML intentionally recognizes only the scalar subset emitted by CC
-// Switch for the three supported provider shapes. Unknown syntax is ignored;
-// materialization then fails closed if a required scalar is absent.
-func parseTOML(input string) tomlDocument {
-	doc := tomlDocument{Root: make(map[string]string), Sections: make(map[string]map[string]string)}
-	current := doc.Root
-	for _, raw := range strings.Split(input, "\n") {
-		line := strings.TrimSpace(stripComment(raw))
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") && !strings.HasPrefix(line, "[[") {
-			name := strings.TrimSpace(line[1 : len(line)-1])
-			if name == "" {
-				current = doc.Root
-				continue
-			}
-			if doc.Sections[name] == nil {
-				doc.Sections[name] = make(map[string]string)
-			}
-			current = doc.Sections[name]
-			continue
-		}
-		key, rawValue, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		key = strings.Trim(strings.TrimSpace(key), "\"")
-		if key == "" {
-			continue
-		}
-		if value, ok := tomlScalar(strings.TrimSpace(rawValue)); ok {
-			current[key] = value
-		}
-	}
-	return doc
-}
-
-func stripComment(line string) string {
-	quoted, escaped := false, false
-	for i, r := range line {
-		if escaped {
-			escaped = false
-			continue
-		}
-		if r == '\\' && quoted {
-			escaped = true
-			continue
-		}
-		if r == '"' {
-			quoted = !quoted
-			continue
-		}
-		if r == '#' && !quoted {
-			return line[:i]
-		}
-	}
-	return line
-}
-
-func tomlScalar(value string) (string, bool) {
-	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
-		unquoted, err := strconv.Unquote(value)
-		return unquoted, err == nil
-	}
-	if value == "true" || value == "false" {
-		return value, true
-	}
-	for _, r := range value {
-		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("-._:/", r)) {
-			return "", false
-		}
-	}
-	return value, value != ""
-}
-
 func shortID(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:6])
 }
 
 func tomlQuote(value string) string { return strconv.Quote(value) }
-func first(values []string) string {
-	if len(values) == 0 {
-		return ""
-	}
-	return values[0]
-}
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {

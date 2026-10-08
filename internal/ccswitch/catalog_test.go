@@ -86,7 +86,7 @@ func TestCatalogAndResolveSupportedProfilesWithoutSecretOutput(t *testing.T) {
 			reasons[profile.ReasonCode] = true
 		}
 	}
-	if supported != 3 || !reasons[ReasonManagedOAuth] || !reasons[ReasonProxyConversion] || !reasons[ReasonFailover] {
+	if supported != 4 || !reasons[ReasonManagedOAuth] || !reasons[ReasonProxyConversion] {
 		t.Fatalf("profile classification = %#v", catalog.Profiles)
 	}
 	encoded, err := json.Marshal(catalog)
@@ -374,7 +374,7 @@ func TestReaderAcceptsVerifiedAndStructurallyCompatibleNewerSchemas(t *testing.T
 		schema   int
 		verified bool
 		version  string
-	}{{18, true, "v3.20.1"}, {19, true, "v3.20.4"}, {20, false, ""}, {42, false, ""}} {
+	}{{18, true, "v3.20.1"}, {19, true, "v3.20.4"}, {20, true, "v4.0.4"}, {21, false, ""}, {42, false, ""}} {
 		path := writeFixture(t, test.schema, fixtureProfile{"c", "claude", "Claude direct", `{"env":{"ANTHROPIC_AUTH_TOKEN":"` + secret + `","ANTHROPIC_MODEL":"claude-test"}}`, `{}`, 1, 0})
 		reader, _ := NewReader(path)
 		catalog, err := reader.Catalog(context.Background())
