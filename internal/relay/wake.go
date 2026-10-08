@@ -158,9 +158,10 @@ func (e *Engine) wakeCandidateLocked(messageID string) (WakeCandidate, bool) {
 	candidate.Delivering = e.counts[m.To].Delivering > 0
 	candidate.Reserved = e.wakeReserved[m.ID]
 	candidate.WaiterActive = e.waiters[m.To] > 0
-	// Only `codex queue` is known to hold a nudge until the current Turn ends;
-	// Claude inbox timing is unverified, so Claude keeps the burst rule alone.
-	candidate.NudgePending = candidate.Runtime.Canonical() == model.RuntimeCodex && e.wakeNudgePendingLocked(m.To)
+	// Both codex queue and Claude inbox hold nudges until the current Turn ends.
+	// Verified 2026-10: Claude Code cross-session inbox behaves like codex queue,
+	// delivering queued messages only at Turn boundaries, not mid-Turn.
+	candidate.NudgePending = e.wakeNudgePendingLocked(m.To)
 	return candidate, true
 }
 

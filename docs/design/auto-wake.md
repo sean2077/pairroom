@@ -91,9 +91,10 @@ clears the state. It is an in-memory projection: reservations and outcomes
 replay from existing facts, Turn ends do not, so a replayed nudge takes the
 mid-Turn rule. Sessions whose Stop hook is unapproved or skipped (for example a
 held foreground collector) produce no Turn end and fall back to the same
-10-minute bound. No Event Log field or format changes. The rule applies to Codex targets only:
-Claude inbox delivery timing during a Turn is unverified, and wrongly holding
-an idle Claude target could delay its input by up to 10 minutes. Runtime shutdown
+10-minute bound. No Event Log field or format changes. The rule applies to both
+Claude and Codex targets: verification in October 2026 confirmed that Claude Code's
+cross-session inbox behaves like codex queue, holding messages until the current
+Turn ends rather than delivering them mid-Turn. Runtime shutdown
 cancels and joins wake workers before closing the event writer. Reservations replay into the rate-limit history, so a
 Service restart cannot repeat a possibly successful effect. Missing capability,
 missing CLI, failed transport or native `hold`/`refuse` leaves the receive-only
