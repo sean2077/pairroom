@@ -4,6 +4,10 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+### Added
+
+- Refine the bilingual landing page with a paper-and-ink palette, clearer typography, and real product screenshots immediately after the introduction. Replace repeated marketing copy with concrete review scenarios, simplify installation with an optional Mock walkthrough, and clarify runtime-specific controls and Gemini limitations.
+
 ### Fixed
 
 - Restore Embedded CC Switch Profile compatibility through v4.0.4/schema 20 while retaining schemas 18/19. Honor Codex credential-source precedence, inline bearer tokens, quoted TOML, Profile model/effort defaults, and provider-owned options; include Codex model catalogs and Claude aggregation model IDs in suggestions. Keep independently usable queue members selectable and reject managed authentication, routing placeholders, and unsupported request configuration. Isolate selected Claude Provider variables and compatibility switches from inherited settings, requiring Claude Code 2.1.222 or newer for CC Switch selections. Credentials remain in the selected child environment; CC Switch and native configuration files remain untouched.
@@ -12,7 +16,6 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ### Changed
 
-- Refine the bilingual landing page with a paper-and-ink palette, clearer typography, and real product screenshots immediately after the introduction. Replace repeated marketing copy with concrete review scenarios, simplify installation with an optional Mock walkthrough, and clarify runtime-specific controls and Gemini limitations.
 - Update Desktop Wails from v3.0.0-beta.26 to v3.0.0-beta.27, which honors the `Permissions` option for macOS media capture instead of ignoring it. The pinned framework's license text and module requirements are unchanged, and platform build and packaging templates remain compatible. CI exercised the desktop module plus the Windows and macOS desktop tests; Linux packaging is covered by the `v*` release workflow.
 - Update the pinned CGo-free SQLite closure used for read-only CC Switch access: `modernc.org/sqlite` 1.59.0 → 1.60.1, `modernc.org/libc` 1.75.7 → 1.77.1, `modernc.org/cc/v4` 4.29.2 → 4.29.7, `modernc.org/ccgo/v4` 4.35.0 → 4.36.1, and the `golang.org/x/mod`, `x/sync`, `x/tools` module-graph entries. The reviewed allowlist, third-party notices, and both module locks move with it, and the module set is unchanged. Every retained license text is byte-identical (BSD-3-Clause); upstream additionally ships a generated `LICENSE-3RD-PARTY.md` inventory whose only copyleft-adjacent entry (MPL-2.0) stays outside the linked code. The embedded SQLite engine remains 3.53.4, `mode=ro` plus `query_only` still governs read-only access, and no PairRoom configuration changes.
 
