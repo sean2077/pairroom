@@ -13,6 +13,7 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 ### Changed
 
 - Refine the bilingual landing page with a paper-and-ink palette, clearer typography, and real product screenshots immediately after the introduction. Replace repeated marketing copy with concrete review scenarios, simplify installation with an optional Mock walkthrough, and clarify runtime-specific controls and Gemini limitations.
+- Update Desktop Wails from v3.0.0-beta.26 to v3.0.0-beta.27, which honors the `Permissions` option for macOS media capture instead of ignoring it. The pinned framework's license text and module requirements are unchanged, and platform build and packaging templates remain compatible. CI exercised the desktop module plus the Windows and macOS desktop tests; Linux packaging is covered by the `v*` release workflow.
 
 ## [v5.12.1] — 2026-10-03
 
