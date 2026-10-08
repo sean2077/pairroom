@@ -8,6 +8,10 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 - Allow up to 15 seconds per Codex metadata command (`--version` and `app-server --help`) so a slow CLI/wrapper does not block Embedded startup at the previous 6-second limit. Preserve the shorter 6-second budget for other Runtimes and caller cancellation/deadlines; report the exact metadata command on timeout. This does not change Codex JSON-RPC initialization or establish authentication/model readiness.
 
+### Changed
+
+- Refine the bilingual landing page with a paper-and-ink palette, clearer typography, and real product screenshots immediately after the introduction. Replace repeated marketing copy with concrete review scenarios, simplify installation with an optional Mock walkthrough, and clarify runtime-specific controls and Gemini limitations.
+
 ## [v5.12.1] — 2026-10-03
 
 ### Fixed
