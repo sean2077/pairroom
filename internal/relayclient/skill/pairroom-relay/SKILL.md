@@ -7,7 +7,7 @@ description: Collaborate across native sessions through PairRoom.
 
 Use this session's agent tools. Before first bind or on setup failure, run read-only pairroom relay preflight; follow next_steps until ready. Bindings follow sessions across cwd/worktrees: --repo is for initial selection/ambiguity, not rebinding on cwd changes. Reuse the Room; follow its collaboration rules. Gemini: approve BeforeTool/AfterAgent; run standalone run_shell_command. No Service wake.
 
-**Create** (/pairroom-relay [peer] <topic>): leading claude|cc|codex|grok|gemini sets --peer-runtime; otherwise infer only one clearly named non-self peer, or omit. pairroom relay bind --create --name "<topic>". Default slot 1; --slot only on request. Retry creation once with the intended peer only if preflight explicitly says no Room was created and no peer runtime was passed; otherwise recover, never repeat --create. Share peer_join_local (same workspace) or peer_join unchanged.
+**Create** (/pairroom-relay [peer] <topic>): leading claude|cc|codex|grok|gemini sets --peer-runtime; otherwise infer only one clearly named non-self peer, or omit. pairroom relay bind --create --name "<topic>". Default slot 1; --slot only on request. Retry creation once with the intended peer only if preflight explicitly says no Room was created and no peer runtime was passed; otherwise recover, never repeat --create. Display peer_join_local (same workspace) or peer_join unchanged to the user.
 
 **Join/resume**: pairroom relay bind; select only on ambiguity. Slots: 1|2, not runtimes. Bind is usable immediately; no nonce, turn/status check or provider setup. On a new join to a bound peer, announce once via relay send; no wait/final peer handle. Skip on resume or binding first.
 
