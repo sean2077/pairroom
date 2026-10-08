@@ -6,6 +6,7 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ### Fixed
 
+- Stop stacking Native wake nudges on busy Claude sessions. Claude Code's cross-session inbox behaves like `codex queue`, holding messages until the current Turn ends rather than delivering them mid-Turn. The existing `nudge_pending` suppression now applies to both Claude and Codex targets, preventing redundant wake attempts when a session is actively processing. This eliminates the accumulation of "PairRoom inbox has messages for you" steering messages in Claude's context during pair work. The rule remains: while a possibly delivered nudge is outstanding, new bursts record one coalesced `suppressed/nudge_pending` without a reservation and are rechecked by maintenance until the Turn ends or 10 minutes pass. Event formats are unchanged.
 - Allow up to 15 seconds per Codex metadata command (`--version` and `app-server --help`) so a slow CLI/wrapper does not block Embedded startup at the previous 6-second limit. Preserve the shorter 6-second budget for other Runtimes and caller cancellation/deadlines; report the exact metadata command on timeout. This does not change Codex JSON-RPC initialization or establish authentication/model readiness.
 
 ## [v5.12.1] — 2026-10-03
