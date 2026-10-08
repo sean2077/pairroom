@@ -175,7 +175,7 @@ func TestPublishedSkillMatchesEmbeddedProjection(t *testing.T) {
 	assertSkillRules(t, map[string]string{
 		"skill-identity":            "name: pairroom-relay",
 		"agent-tool-entry":          "Use this session's agent tools",
-		"preflight":                 "Before first bind or on setup failure, run read-only pairroom relay preflight",
+		"preflight":                 "Before first bind or on failure, run read-only pairroom relay preflight",
 		"ready-next-steps":          "follow next_steps until ready",
 		"cwd-not-binding":           "not rebinding on cwd changes",
 		"reuse-collaboration":       "Reuse the Room; follow its collaboration rules",
@@ -185,7 +185,7 @@ func TestPublishedSkillMatchesEmbeddedProjection(t *testing.T) {
 		"explicit-slot-only":        "--slot only on request",
 		"narrow-create-retry":       "Retry creation once with the intended peer only if preflight explicitly says no Room was created and no peer runtime was passed",
 		"no-recreate":               "otherwise recover, never repeat --create",
-		"returned-join-command":     "Share peer_join_local (same workspace) or peer_join unchanged",
+		"returned-join-command":     "Display peer_join_local or peer_join for the user to share with their peer",
 		"numeric-slots":             "Slots: 1|2, not runtimes",
 		"immediate-bind":            "Bind is usable immediately; no nonce, turn/status check or provider setup",
 		"join-announcement":         "On a new join to a bound peer, announce once via relay send",
