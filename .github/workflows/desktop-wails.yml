@@ -60,6 +60,7 @@ jobs:
           python desktop/scripts/test_update_local.py
           python desktop/scripts/test_windows_packaging.py
           python desktop/scripts/test_winget_manifest.py
+          python desktop/scripts/test_winget_submission.py
           node scripts/test_desktop_settings.js
       - name: Install Linux webview dependencies
         run: |

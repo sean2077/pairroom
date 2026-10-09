@@ -96,19 +96,39 @@ done
 
 master="$(gh api "repos/${UPSTREAM}/git/refs/heads/master" --jq '.object.sha')" \
   || fail "could not read ${UPSTREAM} master"
+[[ "$master" =~ ^[0-9a-f]{40}$ ]] || fail "${UPSTREAM} master did not resolve to a commit SHA"
 gh api "repos/${fork}/git/refs/heads/${branch}" -X DELETE >/dev/null 2>&1 || true
 if ! gh api "repos/${fork}/git/refs" \
   -f "ref=refs/heads/${branch}" -f "sha=${master}" >/dev/null 2>&1; then
   # A fork that is behind upstream, or detached from the upstream object store,
   # cannot resolve the upstream commit and rejects it with 404 (syncing it is
   # not always possible: `merge-upstream` is refused without the workflow scope
-  # that winget-pkgs needs). Fall back to the fork's own master, which is an
-  # ancestor of upstream master, so the pull request still adds only manifest
-  # files.
-  master="$(gh api "repos/${fork}/git/refs/heads/master" --jq '.object.sha')" \
+  # that winget-pkgs needs). A fallback is safe only when the fork's master is
+  # contained in upstream master; otherwise the PR would include fork changes.
+  fork_master="$(gh api "repos/${fork}/git/refs/heads/master" --jq '.object.sha')" \
     || fail "could not read ${fork} master"
+  [[ "$fork_master" =~ ^[0-9a-f]{40}$ ]] || fail "${fork} master did not resolve to a commit SHA"
+  # Pin both sides of the comparison. With upstream as BASE and the fork as
+  # HEAD, only behind/identical may pass, and the merge base must be the fork.
+  comparison="$(gh api "repos/${UPSTREAM}/compare/${master}...${FORK_OWNER}:${fork_master}?per_page=1")" \
+    || fail "could not verify ${fork} master against ${UPSTREAM} master"
+  if ! "$PYTHON" -c '
+import json, sys
+try:
+    comparison = json.load(sys.stdin)
+    verified = (
+        comparison["base_commit"]["sha"] == sys.argv[1]
+        and comparison["merge_base_commit"]["sha"] == sys.argv[2]
+        and comparison["status"] in ("behind", "identical")
+    )
+except (ValueError, KeyError, TypeError):
+    verified = False
+sys.exit(0 if verified else 1)
+' "$master" "$fork_master" <<< "$comparison"; then
+    fail "${fork} master is not a verified ancestor of ${UPSTREAM} master; repair the fork before retrying"
+  fi
   gh api "repos/${fork}/git/refs" \
-    -f "ref=refs/heads/${branch}" -f "sha=${master}" >/dev/null \
+    -f "ref=refs/heads/${branch}" -f "sha=${fork_master}" >/dev/null \
     || fail "could not create branch ${branch} on ${fork}"
 fi
 
