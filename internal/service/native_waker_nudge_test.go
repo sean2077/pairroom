@@ -165,6 +165,26 @@ func (f *nudgeFixture) expect(runs, reservations int) {
 	}
 }
 
+func TestNativeWakeMissingTransportHandlerDoesNotReserve(t *testing.T) {
+	f := newNudgeFixtureForRuntime(t, model.RuntimeGrok)
+	prepares := 0
+	f.waker.claude = func(relay.WakeCandidate) (claudewake.Send, error) {
+		prepares++
+		return nil, errors.New("wrong transport capability")
+	}
+	id := f.send("unsupported-transport")
+	f.expect(0, 0)
+	if prepares != 0 || f.waker.InUse() || len(f.waker.attempts) != 0 {
+		t.Fatal("missing handler read another transport's capability or spent a wake lease/budget")
+	}
+	if f.audits("wake suppressed (unsupported_runtime)") != 1 {
+		t.Fatalf("missing-handler audit = %#v", f.engine.Snapshot().Audit)
+	}
+	if c, ok := f.engine.WakeCandidate(id); !ok || !c.QueueStart || c.Reserved {
+		t.Fatalf("missing handler changed queued input = %#v, %v", c, ok)
+	}
+}
+
 // startBusyTurn makes slot2 observably mid-Turn: a previous Turn ended and a
 // relay call has happened since.
 func (f *nudgeFixture) startBusyTurn() {

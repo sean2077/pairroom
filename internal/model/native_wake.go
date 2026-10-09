@@ -10,8 +10,8 @@ const (
 	NativeWakeCodexQueue
 )
 
-// Supported is the dispatch allowlist. A future nonzero transport does not
-// gain an external effect until its handler is deliberately supported here.
+// Supported reports transports enabled by runtime policy. The Service must
+// still select an implemented handler before reserving an external effect.
 func (t NativeWakeTransport) Supported() bool {
 	return t == NativeWakeClaudeInbox || t == NativeWakeCodexQueue
 }

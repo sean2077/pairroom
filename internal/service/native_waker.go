@@ -295,21 +295,45 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 	if reason := nativeWakeSuppression(candidate); reason != "" {
 		return w.suppress(candidate, reason)
 	}
-	var claudeSend claudewake.Send
-	transport := candidate.Runtime.NativeWakePolicy().Transport
-	// Suppression admits only the two transports in Supported; ReserveWake
-	// rechecks that same allowlist under the Engine lock before either effect.
-	if transport == model.NativeWakeClaudeInbox {
+	// Select a concrete effect before reserving it. A runtime policy may learn
+	// a new transport before the Service has its handler; it must never inherit
+	// another vendor's command merely because Supported admits it.
+	var attempt func(context.Context) (outcome, reason string)
+	switch candidate.Runtime.NativeWakePolicy().Transport {
+	case model.NativeWakeClaudeInbox:
 		if w.claude == nil {
 			w.deferCandidate(candidate, w.now().Add(30*time.Second), "capability_unavailable")
 			return w.record("suppressed", "capability_unavailable", candidate.Target)
 		}
-		var err error
-		claudeSend, err = w.claude(candidate)
+		claudeSend, err := w.claude(candidate)
 		if err != nil || claudeSend == nil {
 			w.deferCandidate(candidate, w.now().Add(30*time.Second), "capability_unavailable")
 			return w.record("suppressed", "capability_unavailable", candidate.Target)
 		}
+		attempt = func(ctx context.Context) (string, string) {
+			err := claudeSend(ctx, nativeWakeNudge)
+			if err == nil {
+				return "submitted", ""
+			}
+			reason := "socket_failed"
+			if errors.Is(err, context.DeadlineExceeded) {
+				reason = "socket_timeout"
+			} else if errors.Is(err, context.Canceled) {
+				reason = "socket_cancelled"
+			}
+			return "failed", reason
+		}
+	case model.NativeWakeCodexQueue:
+		attempt = func(ctx context.Context) (string, string) {
+			err := w.run(ctx, "codex", "queue", "--thread", candidate.SessionID, "--message", nativeWakeNudge)
+			commandContextErr := ctx.Err()
+			if err == nil {
+				return "accepted", ""
+			}
+			return "failed", classifyNativeWakeFailure(err, commandContextErr)
+		}
+	default:
+		return w.record("suppressed", "unsupported_runtime", candidate.Target)
 	}
 	if ctx.Err() != nil {
 		return nil
@@ -337,27 +361,9 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 		return errNativeWakeAudit
 	}
 	commandCtx, cancel := context.WithTimeout(ctx, w.timeout)
-	if transport == model.NativeWakeClaudeInbox {
-		err := claudeSend(commandCtx, nativeWakeNudge)
-		cancel()
-		if err == nil {
-			return w.recordAttempt(candidate, "submitted", "")
-		}
-		reason := "socket_failed"
-		if errors.Is(err, context.DeadlineExceeded) {
-			reason = "socket_timeout"
-		} else if errors.Is(err, context.Canceled) {
-			reason = "socket_cancelled"
-		}
-		return w.recordAttempt(candidate, "failed", reason)
-	}
-	err := w.run(commandCtx, "codex", "queue", "--thread", candidate.SessionID, "--message", nativeWakeNudge)
-	commandContextErr := commandCtx.Err()
+	outcome, reason := attempt(commandCtx)
 	cancel()
-	if err == nil {
-		return w.recordAttempt(candidate, "accepted", "")
-	}
-	return w.recordAttempt(candidate, "failed", classifyNativeWakeFailure(err, commandContextErr))
+	return w.recordAttempt(candidate, outcome, reason)
 }
 
 func nativeWakeSuppression(candidate relay.WakeCandidate) string {
