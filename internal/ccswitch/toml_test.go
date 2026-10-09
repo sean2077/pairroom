@@ -285,8 +285,6 @@ func TestTOMLDeclaredScalarShapesCannotBecomeNativeDefaults(t *testing.T) {
 		{"table-websockets", "", "[model_providers.custom.supports_websockets]\nenabled = true\n"},
 		{"numeric-model", "model = 123\n", ""},
 		{"boolean-effort", "model_reasoning_effort = false\n", ""},
-		{"string-context", "model_context_window = '262144'\n", ""},
-		{"string-boolean", "disable_response_storage = 'false'\n", ""},
 		{"numeric-env-key", "", "env_key = 123\n"},
 		{"boolean-bearer", "", "experimental_bearer_token = false\n"},
 	} {
@@ -313,7 +311,260 @@ base_url = "https://selected-toml.invalid/v1"
 	}
 }
 
+func TestTOMLUnselectedCredentialNamesDoNotDisableProvider(t *testing.T) {
+	for _, suffix := range []string{
+		"[model_providers.other.env_key]\nname = 'UNRELATED_ENV'\n",
+		"[mcp_servers.secret]\ncommand = 'unrelated-tool'\n",
+	} {
+		t.Run(strings.SplitN(suffix, "\n", 2)[0], func(t *testing.T) {
+			reader := tomlCodexReader(t, "Selected provider", tomlDirectCodexConfig+suffix)
+			catalog, err := reader.Catalog(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := reader.Resolve(context.Background(), tomlCodexRef(), model.RuntimeCodex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(catalog.Profiles) != 1 || !catalog.Profiles[0].Supported || resolved.Env["PAIRROOM_CC_SWITCH_CODEX_API_KEY"] != tomlDirectKey {
+				t.Fatal("unrelated table changed selected Provider support or credentials")
+			}
+			if strings.Contains(strings.Join(resolved.Args, "\x00"), "unrelated") {
+				t.Fatal("unrelated table entered the selected Provider arguments")
+			}
+			v4AssertPublicSecretFree(t, catalog, resolved, tomlDirectKey)
+		})
+	}
+}
+
+func TestTOMLUnselectedSecretsStillProtectPublicMetadata(t *testing.T) {
+	const (
+		apiKey = "toml-unselected-api-fixture-key"
+		token  = "toml-unselected-token-fixture"
+		envKey = "toml-unselected-env-fixture-key"
+	)
+	t.Setenv("PAIRROOM_TOML_UNSELECTED_KEY", envKey)
+	for _, layout := range []string{"table", "dotted"} {
+		for _, collision := range []string{"none", "name", "id", "model"} {
+			t.Run(layout+"/"+collision, func(t *testing.T) {
+				config := tomlDirectCodexConfig + "[model_providers.other.env_key]\nname = 'UNRELATED_ENV'\n[mcp_servers.secret]\ncommand = 'unrelated-tool'\n"
+				fields := []string{"api_key = '" + apiKey + "'", "token = '" + token + "'", "env_key = 'PAIRROOM_TOML_UNSELECTED_KEY'"}
+				if layout == "table" {
+					config += "[model_providers.spare]\n" + strings.Join(fields, "\n") + "\n"
+				} else {
+					config = "model_providers.spare." + strings.Join(fields, "\nmodel_providers.spare.") + "\n" + config
+				}
+				id, name := "unselected-secret", "Selected provider"
+				switch collision {
+				case "name":
+					name += " " + apiKey
+				case "id":
+					id += "-" + envKey
+				case "model":
+					config = strings.Replace(config, `model = "codex-safe"`, `model = "`+token+`"`, 1)
+				}
+				reader := v4FixtureReader(t, fixtureProfile{
+					id: id, appType: "codex", name: name,
+					settings: v4JSON(t, map[string]any{"auth": map[string]string{"OPENAI_API_KEY": tomlDirectKey}, "config": config}), meta: `{}`,
+				})
+				catalog, err := reader.Catalog(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				resolved, err := reader.Resolve(context.Background(), model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "codex", ProfileID: id}, model.RuntimeCodex)
+				if len(catalog.Profiles) != 1 || catalog.Profiles[0].Supported != (collision == "none") {
+					t.Fatal("unselected credential values changed support without a public-field collision, or a collision remained selectable")
+				}
+				if collision == "none" {
+					if err != nil || resolved.Env["PAIRROOM_CC_SWITCH_CODEX_API_KEY"] != tomlDirectKey {
+						t.Fatal("unselected credentials replaced or disabled the selected key")
+					}
+				} else {
+					v4AssertUnsupported(t, err, ReasonInvalidConfig, apiKey, token, envKey, tomlDirectKey)
+					if len(resolved.Env) != 0 || len(resolved.Args) != 0 {
+						t.Fatal("public credential collision produced a partial materialization")
+					}
+				}
+				v4AssertPublicSecretFree(t, catalog, resolved, apiKey, token, envKey, tomlDirectKey)
+			})
+		}
+	}
+}
+
+func TestTOMLSelectedOpaqueCredentialsWithholdMetadataAndDirectErrors(t *testing.T) {
+	const hiddenKey = "toml-selected-opaque-fixture-key"
+	for _, test := range []struct {
+		name, app, config string
+		runtime           model.RuntimeKind
+	}{
+		{"codex-env-heading", "codex", tomlDirectCodexConfig + "[model_providers.custom.env_key]\nvalue = '" + hiddenKey + "'\n", model.RuntimeCodex},
+		{"codex-env-dotted", "codex", tomlDirectCodexConfig + "env_key.value = '" + hiddenKey + "'\n", model.RuntimeCodex},
+		{"codex-bearer-heading", "codex", tomlDirectCodexConfig + "[model_providers.custom.experimental_bearer_token]\nvalue = '" + hiddenKey + "'\n", model.RuntimeCodex},
+		{"codex-root-bearer", "codex", tomlDirectCodexConfig + "[experimental_bearer_token]\nvalue = '" + hiddenKey + "'\n", model.RuntimeCodex},
+		{"grok-api-heading", "grokbuild", strings.Replace(tomlDirectGrokConfig, "api_key = 'grok-private-fixture-key'\n", "", 1) + "[model.direct.api_key]\nvalue = '" + hiddenKey + "'\n", model.RuntimeGrok},
+		{"grok-env-dotted", "grokbuild", tomlDirectGrokConfig + "env_key.value = '" + hiddenKey + "'\n", model.RuntimeGrok},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p := profileRow{
+				ID: "opaque-" + hiddenKey, AppType: test.app, Name: "Provider " + hiddenKey,
+				Settings: v4JSON(t, map[string]any{"auth": map[string]string{"OPENAI_API_KEY": tomlDirectKey}, "config": test.config}), Meta: `{}`,
+			}
+			reader := v4FixtureReader(t, fixtureProfile{id: p.ID, appType: p.AppType, name: p.Name, settings: p.Settings, meta: p.Meta})
+			catalog, err := reader.Catalog(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(catalog.Profiles) != 1 || catalog.Profiles[0].Supported || catalog.Profiles[0].ProviderRef.ProfileID != "" || len(catalog.Profiles[0].Models) != 0 {
+				t.Fatal("opaque selected credentials left row metadata or a selectable reference")
+			}
+			resolved, err := reader.Resolve(context.Background(), model.ProviderRef{Source: model.ProviderCCSwitch, AppType: p.AppType, ProfileID: p.ID}, test.runtime)
+			v4AssertUnsupported(t, err, ReasonInvalidConfig, hiddenKey, tomlDirectKey)
+			v4AssertPublicSecretFree(t, catalog, resolved, hiddenKey, tomlDirectKey)
+			direct, err := materialize(p, test.runtime)
+			v4AssertUnsupported(t, err, ReasonInvalidConfig, hiddenKey, tomlDirectKey)
+			if len(direct.Env) != 0 || len(direct.Args) != 0 || direct.Grok != nil {
+				t.Fatal("direct mapper bypassed selected credential inspection")
+			}
+		})
+	}
+}
+
+func TestTOMLQuotedScalarOptionsRemainCompatible(t *testing.T) {
+	for _, test := range []struct{ name, prefix, suffix, want string }{
+		{"storage", "disable_response_storage = 'false'\n", "", "disable_response_storage=false"},
+		{"summaries", "model_supports_reasoning_summaries = 'true'\n", "", "model_supports_reasoning_summaries=true"},
+		{"context", "model_context_window = '262144'\n", "", "model_context_window=262144"},
+		{"compaction", "model_auto_compact_token_limit = '200000'\n", "", "model_auto_compact_token_limit=200000"},
+		{"websockets", "", "supports_websockets = 'false'\n", ".supports_websockets=false"},
+		{"ignored-auth", "", "requires_openai_auth = 'ignored'\n", ".requires_openai_auth=false"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reader := tomlCodexReader(t, "Scalar compatibility", test.prefix+tomlDirectCodexConfig+test.suffix)
+			resolved, err := reader.Resolve(context.Background(), tomlCodexRef(), model.RuntimeCodex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := slices.Contains(resolved.Args, test.want)
+			if strings.HasPrefix(test.want, ".") {
+				found = slices.ContainsFunc(resolved.Args, func(arg string) bool { return strings.HasSuffix(arg, test.want) })
+			}
+			if !found {
+				t.Fatalf("missing canonical option %q", test.want)
+			}
+		})
+	}
+}
+
+func TestTOMLInvalidQuotedScalarOptionsRemainRejected(t *testing.T) {
+	for _, option := range []string{
+		"disable_response_storage = 'FALSE'\n",
+		"model_context_window = '262144.0'\n",
+		"model_context_window = '9223372036854775808'\n",
+		"model_context_window = '0'\n",
+		"model_auto_compact_token_limit = '-1'\n",
+	} {
+		t.Run(strings.TrimSpace(option), func(t *testing.T) {
+			tomlAssertRejected(t, tomlCodexReader(t, "Invalid scalar option", option+tomlDirectCodexConfig))
+		})
+	}
+}
+
+func TestTOMLGrokDottedIdentityAndCredentialsRequireStrings(t *testing.T) {
+	for _, test := range []struct{ name, selector, alias, field, value string }{
+		{"numeric-selector", "123", "123", "", ""},
+		{"boolean-selector", "true", "true", "", ""},
+		{"numeric-model", "'direct'", "direct", "model", "123"},
+		{"boolean-name", "'direct'", "direct", "name", "true"},
+		{"boolean-credential", "'direct'", "direct", "api_key", "true"},
+		{"numeric-credential", "'direct'", "direct", "api_key", "123"},
+		{"boolean-env-key", "'direct'", "direct", "env_key", "true"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fields := map[string]string{
+				"model": "'grok-upstream'", "name": "'Grok direct'", "base_url": "'https://grok.invalid/v1'",
+				"api_key": "'grok-private-fixture-key'", "env_key": "''", "context_window": "262144",
+			}
+			if test.field != "" {
+				fields[test.field] = test.value
+			}
+			prefix := "model." + test.alias + "."
+			config := "models.default = " + test.selector + "\n"
+			for _, key := range []string{"model", "name", "base_url", "api_key", "env_key", "context_window"} {
+				config += prefix + key + " = " + fields[key] + "\n"
+			}
+			reader := v4FixtureReader(t, fixtureProfile{
+				id: "grok-types", appType: "grokbuild", name: "Grok scalar types",
+				settings: v4JSON(t, map[string]any{"config": config}), meta: `{}`,
+			})
+			catalog, err := reader.Catalog(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := reader.Resolve(context.Background(), model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "grokbuild", ProfileID: "grok-types"}, model.RuntimeGrok)
+			v4AssertUnsupported(t, err, ReasonInvalidConfig, "grok-private-fixture-key")
+			if len(catalog.Profiles) != 1 || catalog.Profiles[0].Supported || len(resolved.Env) != 0 || resolved.Grok != nil {
+				t.Fatal("non-string identity or credential reached Grok materialization")
+			}
+			if test.field == "" && len(catalog.Profiles[0].Models) != 0 {
+				t.Fatal("non-string selector became a catalog model suggestion")
+			}
+			v4AssertPublicSecretFree(t, catalog, resolved, "grok-private-fixture-key")
+		})
+	}
+}
+
+func TestTOMLGrokDottedAndTableProfilesPreserveValues(t *testing.T) {
+	const envKey = "grok-environment-fixture-key"
+	t.Setenv("PAIRROOM_TOML_GROK_KEY", envKey)
+	for _, layout := range []string{"table", "dotted"} {
+		for _, source := range []string{"api_key", "env_key"} {
+			t.Run(layout+"/"+source, func(t *testing.T) {
+				key, wantKey := "grok-private-fixture-key", "grok-private-fixture-key"
+				if source == "env_key" {
+					key, wantKey = "", envKey
+				}
+				fields := []string{
+					"model = 'grok-upstream'", "name = 'Grok direct'", "base_url = 'https://grok.invalid/v1'",
+					"api_key = '" + key + "'", "env_key = 'PAIRROOM_TOML_GROK_KEY'", "context_window = ' 262144 '",
+				}
+				// A numeric-looking alias remains valid when the selector is a
+				// string. Grok also historically trims a quoted context window.
+				config := "[models]\ndefault = '123'\n[model.123]\n" + strings.Join(fields, "\n") + "\n"
+				if layout == "dotted" {
+					config = "models.default = '123'\nmodel.123." + strings.Join(fields, "\nmodel.123.") + "\n"
+				}
+				reader := v4FixtureReader(t, fixtureProfile{
+					id: "grok-valid", appType: "grokbuild", name: "Grok scalar compatibility",
+					settings: v4JSON(t, map[string]any{"config": config}), meta: `{}`,
+				})
+				catalog, err := reader.Catalog(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				resolved, err := reader.Resolve(context.Background(), model.ProviderRef{Source: model.ProviderCCSwitch, AppType: "grokbuild", ProfileID: "grok-valid"}, model.RuntimeGrok)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(catalog.Profiles) != 1 || !catalog.Profiles[0].Supported || resolved.DefaultModel != "123" || resolved.Grok == nil || resolved.Grok.ContextWindow != 262144 || resolved.Grok.UpstreamModel != "grok-upstream" || resolved.Env["PAIRROOM_CC_SWITCH_GROK_API_KEY"] != wantKey {
+					t.Fatal("equivalent Grok declarations changed the model, context window, or credential priority")
+				}
+				v4AssertPublicSecretFree(t, catalog, resolved, "grok-private-fixture-key", envKey)
+			})
+		}
+	}
+}
+
 const tomlDirectKey = "toml-direct-api-fixture-key"
+
+const tomlDirectGrokConfig = `[models]
+default = 'direct'
+[model.direct]
+model = 'grok-upstream'
+name = 'Grok direct'
+base_url = 'https://grok.invalid/v1'
+api_key = 'grok-private-fixture-key'
+context_window = 262144
+`
 
 const tomlDirectCodexConfig = `model_provider = "custom"
 model = "codex-safe"

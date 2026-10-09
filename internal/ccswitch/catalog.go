@@ -328,7 +328,7 @@ func summarize(p profileRow) ProfileSummary {
 	}
 	if config, ok := settings["config"].(string); ok {
 		doc := parseTOML(config)
-		if doc.Invalid || doc.UnsafeCredentials {
+		if uninspectableTOMLCredentials(doc, runtime) {
 			// An opaque or malformed credential declaration cannot be redacted
 			// reliably. Withhold row-authored metadata as well as materialization.
 			return uninspectableSummary(s)
@@ -418,6 +418,14 @@ func decodeProfileJSON(p profileRow) (map[string]any, map[string]any, error) {
 }
 
 func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta map[string]any) (Materialization, error) {
+	configText, _ := settings["config"].(string)
+	parsed := parseTOML(configText)
+	if uninspectableTOMLCredentials(parsed, runtime) {
+		// Direct mapper calls share the catalog's inspection boundary. Even the
+		// row ID can contain an opaque credential, so do not copy it into Params.
+		summary := uninspectableSummary(ProfileSummary{Runtime: runtime.Canonical()})
+		return Materialization{}, profileError(profileRow{AppType: summary.ProviderRef.AppType}, summary.ReasonCode, summary.DisabledReason)
+	}
 	label := "cc-switch:" + p.AppType + "/" + p.ID
 	// The Profile display name travels with the internal reference label so a UI
 	// can show a human-readable Provider without parsing the reference form. It
@@ -456,8 +464,6 @@ func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta 
 		if profileHasManagedOAuth(settings) {
 			return Materialization{}, profileError(p, ReasonManagedOAuth, "Managed OAuth profiles remain owned by CC Switch and cannot be materialized independently.")
 		}
-		configText, _ := settings["config"].(string)
-		parsed := parseTOML(configText)
 		section, err := codexProviderSection(p, parsed)
 		if err != nil {
 			return Materialization{}, err
@@ -498,7 +504,7 @@ func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta 
 			"-c", "model_providers." + id + ".base_url=" + tomlQuote(baseURL),
 			"-c", "model_providers." + id + ".requires_openai_auth=false",
 		}
-		options, err := codexProfileOptions(p, parsed, section, id)
+		options, err := codexProfileOptions(p, parsed, id)
 		if err != nil {
 			return Materialization{}, err
 		}
@@ -506,11 +512,18 @@ func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta 
 		models := profileModels(runtime, settings, meta)
 		return finishMaterialization(p, Materialization{ProviderLabel: label, ProviderName: providerName, Env: map[string]string{envKey: key}, Args: args, Models: models, DefaultModel: parsed.Root["model"], DefaultEffort: parsed.Root["model_reasoning_effort"]}, secrets)
 	case model.RuntimeGrok:
-		configText, _ := settings["config"].(string)
-		parsed := parseTOML(configText)
 		selected := strings.TrimSpace(parsed.Sections["models"]["default"])
+		sectionName := "model." + tomlKey(selected)
+		for _, path := range []string{
+			"models.default", sectionName + ".model", sectionName + ".name",
+			sectionName + ".base_url", sectionName + ".api_backend",
+		} {
+			if !supportedTOMLScalar(parsed, path, tomlString) {
+				return Materialization{}, profileError(p, ReasonInvalidConfig, "Grok Build profile contains an invalid model or credential declaration.")
+			}
+		}
 		section := grokModelSection(parsed, selected)
-		if parsed.Invalid || unsupportedTOMLPrefix(parsed, "models.default") || unsupportedTOMLPrefix(parsed, "model."+tomlKey(selected)) {
+		if unsupportedTOMLPrefix(parsed, sectionName) {
 			return Materialization{}, profileError(p, ReasonInvalidConfig, "Grok Build profile contains unsupported provider configuration syntax.")
 		}
 		if selected == "" || len(section) == 0 {

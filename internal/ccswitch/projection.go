@@ -136,17 +136,45 @@ func isProxyCredential(value string) bool {
 	return strings.EqualFold(strings.TrimSpace(value), "PROXY_MANAGED")
 }
 
+// These are the credential fields the selected Runtime actually reads. Their
+// malformed containers cannot be redacted as scalar secrets. Unrelated table
+// names such as mcp_servers.secret do not declare this Provider's credentials;
+// known credential values elsewhere still pass through global redaction.
+func uninspectableTOMLCredentials(doc tomlDocument, runtime model.RuntimeKind) bool {
+	if doc.Invalid || doc.UnsafeCredentials {
+		return true
+	}
+	var paths []string
+	switch runtime.Canonical() {
+	case model.RuntimeCodex:
+		prefix := "model_providers." + tomlKey(strings.TrimSpace(doc.Root["model_provider"]))
+		paths = []string{"experimental_bearer_token", prefix + ".env_key", prefix + ".experimental_bearer_token"}
+	case model.RuntimeGrok:
+		prefix := "model." + tomlKey(strings.TrimSpace(doc.Sections["models"]["default"]))
+		paths = []string{prefix + ".api_key", prefix + ".env_key"}
+	}
+	for _, path := range paths {
+		if !supportedTOMLScalar(doc, path, tomlString) {
+			return true
+		}
+	}
+	return false
+}
+
 func codexProviderSection(p profileRow, doc tomlDocument) (map[string]string, error) {
 	if doc.Invalid {
 		return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains invalid TOML.")
 	}
-	for _, key := range []string{"model_provider", "openai_base_url", "experimental_bearer_token"} {
-		if !supportedTOMLScalar(doc, key, tomlString) {
+	id := strings.TrimSpace(doc.Root["model_provider"])
+	sectionName := "model_providers." + tomlKey(id)
+	for _, path := range []string{
+		"model_provider", "openai_base_url",
+		sectionName + ".name", sectionName + ".base_url", sectionName + ".wire_api",
+	} {
+		if !supportedTOMLScalar(doc, path, tomlString) {
 			return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains an invalid provider or credential declaration.")
 		}
 	}
-	id := strings.TrimSpace(doc.Root["model_provider"])
-	sectionName := "model_providers." + tomlKey(id)
 	section, tablePresent := doc.Sections[sectionName]
 	if unsupportedTOMLPrefix(doc, sectionName) {
 		return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains unsupported provider configuration syntax.")
@@ -159,16 +187,8 @@ func codexProviderSection(p profileRow, doc tomlDocument) (map[string]string, er
 	if len(section) == 0 {
 		return nil, profileError(p, ReasonInvalidConfig, "Codex profile does not select a materializable custom model provider.")
 	}
-	for _, key := range []string{"name", "base_url", "wire_api", "env_key", "experimental_bearer_token"} {
-		if !supportedTOMLScalar(doc, sectionName+"."+key, tomlString) {
-			return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains an invalid provider or credential declaration.")
-		}
-	}
-	for _, key := range []string{"requires_openai_auth", "supports_websockets"} {
-		if !supportedTOMLScalar(doc, sectionName+"."+key, tomlBoolean) {
-			return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains an invalid boolean provider option.")
-		}
-	}
+	// requires_openai_auth is deliberately ignored: the child projection fixes
+	// it to false and uses only its own environment-key authentication.
 	for _, key := range []string{"auth", "aws", "http_headers", "env_http_headers", "query_params"} {
 		_, present := section[key]
 		_, tableDeclared := doc.Sections[sectionName+"."+key]
@@ -187,66 +207,48 @@ func codexProviderSection(p profileRow, doc tomlDocument) (map[string]string, er
 
 // Only explicitly owned scalar options are projected. In particular, no
 // hooks, MCP definitions, permission settings, or arbitrary TOML are copied.
-func codexProfileOptions(p profileRow, doc tomlDocument, section map[string]string, id string) ([]string, error) {
-	for _, path := range []string{
-		"model_provider", "openai_base_url", "model", "model_reasoning_effort", "review_model",
-		"plan_mode_reasoning_effort", "web_search", "model_verbosity",
-		"agents.default_subagent_model", "agents.default_subagent_reasoning_effort",
-		"memories.extract_model", "memories.consolidation_model",
-	} {
-		if !supportedTOMLScalar(doc, path, tomlString) {
-			return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains an unsupported model or provider option.")
-		}
-	}
-	for _, key := range []string{"disable_response_storage", "model_supports_reasoning_summaries"} {
-		if !supportedTOMLScalar(doc, key, tomlBoolean) {
-			return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains an invalid boolean provider option.")
-		}
-	}
-	for _, key := range []string{"model_context_window", "model_auto_compact_token_limit"} {
-		if !supportedTOMLScalar(doc, key, tomlInteger) {
-			return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains an invalid context-window option.")
-		}
-	}
+func codexProfileOptions(p profileRow, doc tomlDocument, id string) ([]string, error) {
+	sectionName := "model_providers." + tomlKey(strings.TrimSpace(doc.Root["model_provider"]))
 	var args []string
-	add := func(key, value string) { args = append(args, "-c", key+"="+value) }
-	for _, key := range []string{"review_model", "plan_mode_reasoning_effort", "web_search", "model_verbosity"} {
-		if value, ok := doc.Root[key]; ok {
-			add(key, tomlQuote(value))
-		}
-	}
 	for _, field := range []struct {
-		values map[string]string
-		key    string
-		target string
+		path, target string
+		kind         tomlScalarKind
 	}{
-		{doc.Root, "disable_response_storage", "disable_response_storage"},
-		{doc.Root, "model_supports_reasoning_summaries", "model_supports_reasoning_summaries"},
-		{section, "supports_websockets", "model_providers." + id + ".supports_websockets"},
+		// Model and effort are defaults passed separately by AgentResolver.
+		{"model", "", tomlString}, {"model_reasoning_effort", "", tomlString},
+		{"review_model", "review_model", tomlString},
+		{"plan_mode_reasoning_effort", "plan_mode_reasoning_effort", tomlString},
+		{"web_search", "web_search", tomlString},
+		{"model_verbosity", "model_verbosity", tomlString},
+		{"disable_response_storage", "disable_response_storage", tomlBoolean},
+		{"model_supports_reasoning_summaries", "model_supports_reasoning_summaries", tomlBoolean},
+		{sectionName + ".supports_websockets", "model_providers." + id + ".supports_websockets", tomlBoolean},
+		{"model_context_window", "model_context_window", tomlInteger},
+		{"model_auto_compact_token_limit", "model_auto_compact_token_limit", tomlInteger},
+		{"agents.default_subagent_model", "agents.default_subagent_model", tomlString},
+		{"agents.default_subagent_reasoning_effort", "agents.default_subagent_reasoning_effort", tomlString},
+		{"memories.extract_model", "memories.extract_model", tomlString},
+		{"memories.consolidation_model", "memories.consolidation_model", tomlString},
 	} {
-		if value, ok := field.values[field.key]; ok {
-			if value != "true" && value != "false" {
-				return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains an invalid boolean provider option.")
-			}
-			add(field.target, value)
+		if !supportedTOMLScalar(doc, field.path, field.kind) {
+			return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains an invalid scalar model or provider option.")
 		}
-	}
-	for _, key := range []string{"model_context_window", "model_auto_compact_token_limit"} {
-		if value, ok := doc.Root[key]; ok {
-			number, err := strconv.ParseInt(value, 10, 64)
-			if err != nil || number <= 0 {
+		if _, present := doc.ScalarKinds[field.path]; !present || field.target == "" {
+			continue
+		}
+		value := tomlScalarValue(doc, field.path)
+		switch field.kind {
+		case tomlString:
+			value = tomlQuote(value)
+		case tomlInteger:
+			// The scalar check validated both integer and quoted-integer input.
+			number, _ := strconv.ParseInt(value, 10, 64)
+			if number <= 0 {
 				return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains an invalid context-window option.")
 			}
-			add(key, strconv.FormatInt(number, 10))
+			value = strconv.FormatInt(number, 10)
 		}
-	}
-	for _, field := range []struct{ table, key string }{
-		{"agents", "default_subagent_model"}, {"agents", "default_subagent_reasoning_effort"},
-		{"memories", "extract_model"}, {"memories", "consolidation_model"},
-	} {
-		if value, ok := doc.Sections[field.table][field.key]; ok {
-			add(field.table+"."+field.key, tomlQuote(value))
-		}
+		args = append(args, "-c", field.target+"="+value)
 	}
 	return args, nil
 }
@@ -282,7 +284,10 @@ func profileModels(runtime model.RuntimeKind, settings, meta map[string]any) []s
 		}
 	case model.RuntimeCodex:
 		config, _ := settings["config"].(string)
-		models = append(models, parseTOML(config).Root["model"])
+		doc := parseTOML(config)
+		if doc.ScalarKinds["model"] == tomlString {
+			models = append(models, doc.Root["model"])
+		}
 		catalog, _ := settings["modelCatalog"].(map[string]any)
 		if entries, ok := catalog["models"].([]any); ok {
 			for _, entry := range entries {
@@ -293,8 +298,13 @@ func profileModels(runtime model.RuntimeKind, settings, meta map[string]any) []s
 	case model.RuntimeGrok:
 		config, _ := settings["config"].(string)
 		doc := parseTOML(config)
-		selected := doc.Sections["models"]["default"]
-		models = append(models, selected, grokModelSection(doc, selected)["model"])
+		if doc.ScalarKinds["models.default"] == tomlString {
+			selected := strings.TrimSpace(doc.Sections["models"]["default"])
+			models = append(models, selected)
+			if doc.ScalarKinds["model."+tomlKey(selected)+".model"] == tomlString {
+				models = append(models, grokModelSection(doc, selected)["model"])
+			}
+		}
 	}
 	return uniqueStrings(models)
 }

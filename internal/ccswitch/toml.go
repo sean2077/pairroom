@@ -61,7 +61,7 @@ func parseTOML(input string) tomlDocument {
 				continue
 			}
 			currentPath = name
-			if tomlAuthContainer(name) || tomlCredentialContainer(name) {
+			if tomlAuthContainer(name) {
 				doc.UnsafeCredentials = true
 			}
 			if tomlHasAncestor(keys, name) || keys[name] || dottedTables[name] {
@@ -125,11 +125,12 @@ func parseTOML(input string) tomlDocument {
 				dottedTables[parent] = true
 			}
 		}
-		if tomlAuthContainer(path) || tomlCredentialContainer(tomlParent(path)) || current == nil && tomlOpaqueCredential(path) {
+		if tomlAuthContainer(path) || current == nil && tomlOpaqueCredential(path) {
 			doc.UnsafeCredentials = true
 		}
 		value := strings.TrimSpace(rawValue)
-		scalar, supported := "", false
+		var scalar string
+		var kind tomlScalarKind
 		if strings.HasPrefix(value, "[") || strings.HasPrefix(value, "{") || strings.HasPrefix(value, `"""`) || strings.HasPrefix(value, "'''") {
 			var closed bool
 			index, closed = skipTOMLValue(lines, index, value)
@@ -138,12 +139,12 @@ func parseTOML(input string) tomlDocument {
 			}
 		} else {
 			value = strings.TrimSpace(stripComment(value))
-			scalar, supported = tomlScalar(value)
-			if value == "" || !supported && (strings.HasPrefix(value, `"`) || strings.HasPrefix(value, "'")) {
+			scalar, kind = tomlScalar(value)
+			if value == "" || kind == 0 && (strings.HasPrefix(value, `"`) || strings.HasPrefix(value, "'")) {
 				doc.Invalid = true
 			}
 		}
-		if !supported {
+		if kind == 0 {
 			doc.Unsupported[path] = true
 			if tomlOpaqueCredential(path) {
 				doc.UnsafeCredentials = true
@@ -153,13 +154,7 @@ func parseTOML(input string) tomlDocument {
 			// A present but invalid declaration must not enable fallback to an
 			// unrelated credential or an earlier duplicate value.
 			storeTOMLScalar(&doc, path, scalar)
-			if supported {
-				kind := tomlInteger
-				if strings.HasPrefix(value, `"`) || strings.HasPrefix(value, "'") {
-					kind = tomlString
-				} else if value == "true" || value == "false" {
-					kind = tomlBoolean
-				}
+			if kind != 0 {
 				doc.ScalarKinds[path] = kind
 			}
 		}
@@ -174,7 +169,11 @@ func parseTOML(input string) tomlDocument {
 // each scalar by that path, rather than by the physical table where it was
 // written; otherwise a supported Provider option can silently disappear.
 func storeTOMLScalar(doc *tomlDocument, path, value string) {
-	parts, _ := tomlPathParts(path)
+	parts, ok := tomlPathParts(path)
+	if !ok || len(parts) == 0 {
+		doc.Invalid = true
+		return
+	}
 	key := tomlKey(parts[len(parts)-1])
 	parent := tomlParent(path)
 	if parent == "" {
@@ -188,21 +187,36 @@ func storeTOMLScalar(doc *tomlDocument, path, value string) {
 }
 
 func tomlParent(path string) string {
-	parts, _ := tomlPathParts(path)
-	if len(parts) <= 1 {
+	parents := tomlParents(path)
+	if len(parents) == 0 {
 		return ""
 	}
-	for i, part := range parts[:len(parts)-1] {
-		parts[i] = tomlKey(part)
+	return parents[len(parents)-1]
+}
+
+func tomlScalarValue(doc tomlDocument, path string) string {
+	parent := tomlParent(path)
+	if parent == "" {
+		return doc.Root[path]
 	}
-	return strings.Join(parts[:len(parts)-1], ".")
+	return doc.Sections[parent][strings.TrimPrefix(path, parent+".")]
 }
 
 // An absent option inherits native configuration. A table, opaque ancestor,
 // composite value, or scalar of the wrong type is a declaration, not absence.
 func supportedTOMLScalar(doc tomlDocument, path string, want tomlScalarKind) bool {
 	if kind, present := doc.ScalarKinds[path]; present {
-		return kind == want
+		if kind == want {
+			return true
+		}
+		// Older Profiles store some boolean/integer options as strings. The
+		// mapper emits their canonical scalar values; retain that compatibility
+		// without coercing a number or boolean into a model or credential.
+		if kind == tomlString && want != tomlString {
+			_, parsed := tomlScalar(tomlScalarValue(doc, path))
+			return parsed == want
+		}
+		return false
 	}
 	for _, parent := range tomlParents(path) {
 		if _, present := doc.ScalarKinds[parent]; present {
@@ -265,9 +279,9 @@ func tomlPathParts(path string) ([]string, bool) {
 	for i, part := range parts {
 		part = strings.TrimSpace(part)
 		if strings.HasPrefix(part, `"`) || strings.HasPrefix(part, "'") {
-			var ok bool
-			part, ok = tomlScalar(part)
-			if !ok {
+			var kind tomlScalarKind
+			part, kind = tomlScalar(part)
+			if kind != tomlString {
 				return nil, false
 			}
 		} else if !bareTOMLKey(part) {
@@ -315,22 +329,6 @@ func tomlAuthContainer(path string) bool {
 		}
 		switch strings.ToLower(part) {
 		case "auth", "aws", "headers", "http_headers", "env_http_headers", "query_params", "credentials":
-			return true
-		}
-	}
-	return false
-}
-
-// A credential-shaped table has arbitrary descendants that cannot safely be
-// treated as a missing scalar or inspected as a single redaction candidate.
-func tomlCredentialContainer(path string) bool {
-	parts, _ := tomlPathParts(path)
-	for i, part := range parts {
-		if i == 1 && (parts[0] == "model_providers" || parts[0] == "model") {
-			continue
-		}
-		part = strings.ToLower(part)
-		if credentialFieldName(part) || part == "env_key" || part == "env-key" {
 			return true
 		}
 	}
@@ -486,19 +484,22 @@ func stripComment(line string) string {
 	return line
 }
 
-func tomlScalar(value string) (string, bool) {
+func tomlScalar(value string) (string, tomlScalarKind) {
 	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
 		unquoted, err := strconv.Unquote(value)
-		return unquoted, err == nil
+		if err == nil {
+			return unquoted, tomlString
+		}
+		return "", 0
 	}
 	if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' && !strings.Contains(value[1:len(value)-1], "'") {
-		return value[1 : len(value)-1], true
+		return value[1 : len(value)-1], tomlString
 	}
 	if value == "true" || value == "false" {
-		return value, true
+		return value, tomlBoolean
 	}
 	if _, err := strconv.ParseInt(value, 10, 64); err == nil {
-		return value, true
+		return value, tomlInteger
 	}
-	return "", false
+	return "", 0
 }
