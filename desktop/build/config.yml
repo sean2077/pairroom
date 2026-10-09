@@ -7,7 +7,7 @@ info:
   description: "A local collaboration control plane for Claude Code, Codex, Grok Build, and Gemini CLI sessions"
   copyright: "(c) 2026 PairRoom contributors"
   comments: "Wails v3 desktop host for PairRoom"
-  version: "5.13.0"
+  version: "5.13.1"
 
 dev_mode:
   root_path: .

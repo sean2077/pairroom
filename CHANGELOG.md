@@ -4,6 +4,8 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+## [v5.13.1] — 2026-10-09
+
 ### Fixed
 
 - Restore timely Native Claude wake after acknowledged collection while retaining `nudge_pending` suppression for outstanding wake needs, including after queued input is cancelled. Claude can receive inbox messages between tool calls during an active Turn, contrary to the v5.13.0 notes; PairRoom now requires a receipt-matched handoff of input claimed after the reservation, rather than treating ordinary relay activity as consumption. Expose unattempted FIFO successors to audited, leased maintenance even when an attempted message remains queued, including after restart or a failed wake. Preserve the ten-minute renewal bound, shared Room limits, no automatic retry, and Codex Turn-boundary rules. Select an implemented transport handler before reservation so an unsupported transport cannot inherit another Runtime's command. Restore startup recovery and waiting-input notifications for Grok and Gemini without granting an external wake capability or idle lease.
