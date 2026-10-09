@@ -4,6 +4,16 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+### Fixed
+
+- Restore timely Native Claude wake after a collected burst. Claude can receive inbox messages between tool calls during an active Turn, so it must not inherit Codex's Turn-end `nudge_pending` rule; the contrary statement in the v5.13.0 notes was incorrect. Keep per-burst reservations, collector checks, rate limits, and replay protection, including existing Claude suppression audit facts.
+- Preserve CC Switch Codex Provider options expressed with dotted TOML keys, including subagent and memory-model selections. Reject credential and model options declared as tables, composite values, or scalars of the wrong type instead of silently discarding them or falling back to a stored API key.
+- Verify that a winget fork's fallback commit is an ancestor of the pinned upstream commit before using it for a manifest submission. Reject divergent or unverifiable fallback bases before uploading manifests or opening a pull request, and cover the complete submission script with offline regressions.
+
+### Changed
+
+- Remove the nonfunctional manual Claude inbox probe and its unsupported verification claims. Document the upstream delivery contract separately from local relay tests and authenticated vendor acceptance.
+
 ## [v5.13.0] — 2026-10-08
 
 ### Added
