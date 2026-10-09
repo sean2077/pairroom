@@ -81,7 +81,7 @@ func parseTOML(input string) tomlDocument {
 				tomlMarkParents(parents, name)
 				parents[name] = true
 				markUnsupportedTOML(&doc, name)
-				if tomlOpaqueCredential(name) {
+				if tomlOpaqueCredential(name, true) {
 					doc.UnsafeCredentials = true
 				}
 				continue
@@ -136,7 +136,7 @@ func parseTOML(input string) tomlDocument {
 				dottedTables[parent] = true
 			}
 		}
-		if tomlAuthContainer(path) || current == nil && tomlOpaqueCredential(path) {
+		if tomlAuthContainer(path) {
 			doc.UnsafeCredentials = true
 		}
 		value := strings.TrimSpace(rawValue)
@@ -157,9 +157,11 @@ func parseTOML(input string) tomlDocument {
 		}
 		if kind == 0 {
 			markUnsupportedTOML(&doc, path)
-			if tomlOpaqueCredential(path) {
-				doc.UnsafeCredentials = true
-			}
+		}
+		// A direct credential assignment remains unsafe when its value is
+		// opaque; only ancestor namespaces need the stronger container evidence.
+		if (kind == 0 || current == nil) && tomlOpaqueCredential(path, false) {
+			doc.UnsafeCredentials = true
 		}
 		if current != nil {
 			// A present but invalid declaration must not enable fallback to an
@@ -347,26 +349,30 @@ func tomlAuthContainer(path string) bool {
 	return false
 }
 
-func tomlOpaqueCredential(path string) bool {
+func tomlOpaqueCredential(path string, container bool) bool {
 	parts, ok := tomlPathParts(path)
 	if !ok {
 		return true
 	}
-	return tomlAuthContainer(path) || tomlCredentialField(path) != "" ||
+	return tomlAuthContainer(path) || tomlCredentialField(path, container) != "" ||
 		len(parts) <= 2 && (parts[0] == "model_providers" || parts[0] == "model")
 }
 
 // Credential ancestry matters even when a key is expressed as a table. Named
 // Providers and MCP servers are data keys, not credential-container declarations.
-func tomlCredentialField(path string) string {
+func tomlCredentialField(path string, container bool) string {
 	parts, _ := tomlPathParts(path)
 	var credential string
 	for i, part := range parts {
-		if i == 1 && (parts[0] == "model_providers" || parts[0] == "model" || parts[0] == "mcp_servers") {
+		if i == 1 && credentialDataCollection(parts[0]) {
 			continue
 		}
 		field := strings.ToLower(part)
-		if credentialFieldName(field) || field == "env_key" || field == "env-key" {
+		parent := ""
+		if i > 0 && !(i == 2 && credentialDataCollection(parts[0])) {
+			parent = strings.ToLower(parts[i-1])
+		}
+		if credentialFieldName(field, parent, container || i+1 < len(parts)) {
 			credential = field
 		}
 	}

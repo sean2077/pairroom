@@ -627,26 +627,20 @@ func profileSecretValues(settings, meta map[string]any, parsed tomlDocument) ([]
 	values := make([]string, 0, 4)
 	unsafeCredentials := false
 	configText, _ := settings["config"].(string)
-	var collect func(any, string)
-	collect = func(value any, credential string) {
+	var collect func(any, []string)
+	collect = func(value any, path []string) {
 		switch typed := value.(type) {
 		case string:
-			if credential != "" {
+			if credential := jsonCredentialField(path); credential != "" {
 				appendCredentialValue(typed, credential, &values)
 			}
 		case []any:
 			for _, item := range typed {
-				collect(item, credential)
+				collect(item, path)
 			}
 		case map[string]any:
 			for key, item := range typed {
 				field := strings.ToLower(strings.TrimSpace(key))
-				inherited := credential
-				// The nearest credential field selects literal versus environment
-				// interpretation; a nested env_key must still resolve its value.
-				if credentialJSONFieldName(field) || field == "env_key" || field == "env-key" {
-					inherited = field
-				}
 				if field == "config" {
 					if text, ok := item.(string); ok {
 						// Reuse the row's parsed configuration. An additional nested
@@ -662,18 +656,33 @@ func profileSecretValues(settings, meta map[string]any, parsed tomlDocument) ([]
 						collectTOMLCredentialValues(doc, &values)
 					}
 				}
-				collect(item, inherited)
+				collect(item, append(path, field))
 			}
 		}
 	}
-	collect(settings, "")
-	collect(meta, "")
+	collect(settings, nil)
+	collect(meta, nil)
 	return uniqueSecrets(values), unsafeCredentials
+}
+
+func jsonCredentialField(path []string) string {
+	var credential string
+	var parent string
+	for i, field := range path {
+		if credentialJSONFieldName(field, parent, i+1 < len(path)) {
+			credential = field
+		}
+		if parent != "" {
+			parent += "."
+		}
+		parent += field
+	}
+	return credential
 }
 
 func collectTOMLCredentialValues(doc tomlDocument, values *[]string) {
 	for path := range doc.ScalarKinds {
-		if field := tomlCredentialField(path); field != "" {
+		if field := tomlCredentialField(path, false); field != "" {
 			appendCredentialValue(tomlScalarValue(doc, path), field, values)
 		}
 	}
@@ -690,21 +699,56 @@ func appendCredentialValue(value, field string, values *[]string) {
 
 // Some JSON snapshots have flattened credential keys. Keep their historical
 // redaction, but do not reinterpret a quoted TOML component as a dotted path.
-func credentialJSONFieldName(value string) bool {
+func credentialJSONFieldName(value, parent string, container bool) bool {
 	if offset := strings.LastIndexByte(value, '.'); offset >= 0 {
+		if parent != "" {
+			parent += "."
+		}
+		parent += value[:offset]
 		value = strings.Trim(value[offset+1:], `"'`)
+		// Preserve the legacy flattened-field redaction rule. A plain env_key
+		// is a reference, but a literal dotted JSON key was never one.
+		if value == "env_key" || value == "env-key" {
+			return false
+		}
 	}
-	return credentialFieldName(value)
+	// A data name never reopens a collection. A server named model must keep
+	// the env map below it in its environment role.
+	dataName := false
+	for _, part := range strings.Split(parent, ".") {
+		parent = strings.Trim(part, `"'`)
+		if dataName {
+			parent = ""
+			dataName = false
+			continue
+		}
+		collection := parent
+		if collection == "mcpservers" {
+			collection = "mcp_servers" // JSON uses a camel-case spelling.
+		}
+		dataName = credentialDataCollection(collection)
+	}
+	return credentialFieldName(value, parent, container)
 }
 
-func credentialFieldName(value string) bool {
+func credentialDataCollection(value string) bool {
+	return value == "model_providers" || value == "model" || value == "mcp_servers"
+}
+
+// Exact credential names establish container semantics. Suffix matching is a
+// leaf heuristic, except in env/auth maps where the key names a credential
+// variable. A namespace such as my_token.command is not itself a secret source.
+func credentialFieldName(value, parent string, container bool) bool {
 	if value == "env_key" || value == "env-key" {
-		return false
+		return true
 	}
-	return value == "api_key" || value == "apikey" || value == "auth_token" || value == "token" || value == "authorization" ||
+	if value == "api_key" || value == "apikey" || value == "auth_token" || value == "token" || value == "authorization" ||
 		value == "access_token" || value == "refresh_token" || value == "credential" ||
-		value == "password" || value == "secret" || strings.HasSuffix(value, "_api_key") ||
-		strings.HasSuffix(value, "_token") || strings.HasSuffix(value, "_secret")
+		value == "password" || value == "secret" || value == "experimental_bearer_token" {
+		return true
+	}
+	return (!container || parent == "env" || parent == "auth") && (strings.HasSuffix(value, "_api_key") ||
+		strings.HasSuffix(value, "_token") || strings.HasSuffix(value, "_secret"))
 }
 
 func uniqueSecrets(values []string) []string {
