@@ -288,7 +288,9 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 		return w.suppress(candidate, reason)
 	}
 	var claudeSend claudewake.Send
-	if candidate.Runtime.Canonical() == model.RuntimeClaude {
+	transport := candidate.Runtime.NativeWakePolicy().Transport
+	switch transport {
+	case model.NativeWakeClaudeInbox:
 		if w.claude == nil {
 			w.deferCandidate(candidate, w.now().Add(30*time.Second), "capability_unavailable")
 			return w.record("suppressed", "capability_unavailable", candidate.Target)
@@ -299,6 +301,10 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 			w.deferCandidate(candidate, w.now().Add(30*time.Second), "capability_unavailable")
 			return w.record("suppressed", "capability_unavailable", candidate.Target)
 		}
+	case model.NativeWakeCodexQueue:
+		// The configured Codex command is invoked only after reservation.
+	default:
+		return w.record("suppressed", "unsupported_runtime", candidate.Target)
 	}
 	if ctx.Err() != nil {
 		return nil
@@ -326,7 +332,7 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 		return errNativeWakeAudit
 	}
 	commandCtx, cancel := context.WithTimeout(ctx, w.timeout)
-	if claudeSend != nil {
+	if transport == model.NativeWakeClaudeInbox {
 		err := claudeSend(commandCtx, nativeWakeNudge)
 		cancel()
 		if err == nil {
@@ -357,7 +363,7 @@ func nativeWakeSuppression(candidate relay.WakeCandidate) string {
 		return "waiter_active"
 	case strings.TrimSpace(candidate.SessionID) == "":
 		return "unbound"
-	case candidate.Runtime.Canonical() != model.RuntimeCodex && candidate.Runtime.Canonical() != model.RuntimeClaude:
+	case candidate.Runtime.NativeWakePolicy().Transport == model.NativeWakeUnavailable:
 		return "unsupported_runtime"
 	case candidate.NudgePending:
 		// An earlier nudge may still wait in the native queue. No reservation:

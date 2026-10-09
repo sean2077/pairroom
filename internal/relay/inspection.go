@@ -129,7 +129,11 @@ func (e *Engine) InspectTransport() (Summary, map[model.ActorID]Binding, []WakeC
 	bindings := map[model.ActorID]Binding{}
 	heads := []WakeCandidate{}
 	for _, slot := range model.SlotActors() {
-		bindings[slot] = e.bindings[slot].Binding
+		binding := e.bindings[slot].Binding
+		// Return the same immutable runtime identity used by wake admission,
+		// including its recorded-binding fallback for older callers.
+		binding.Runtime = e.wakeRuntimeLocked(slot)
+		bindings[slot] = binding
 		if id := e.wakeHeadLocked(slot); id != "" {
 			if c, ok := e.wakeCandidateLocked(id); ok {
 				heads = append(heads, c)

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -54,7 +55,11 @@ func (f *nudgeFixture) open() {
 		f.t.Fatal(err)
 	}
 	clock := func() time.Time { return f.now }
-	engine, err := relay.Open(relay.Config{RoomID: "room", Store: log, Now: clock, Runtimes: map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: f.targetRuntime}})
+	runtimes := map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: f.targetRuntime}
+	if f.targetRuntime == model.RuntimeClaude {
+		runtimes[model.ActorSlot1] = model.RuntimeCodex
+	}
+	engine, err := relay.Open(relay.Config{RoomID: "room", Store: log, Now: clock, Runtimes: runtimes})
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -384,4 +389,71 @@ func TestNativeClaudeWakeAfterMidTurnConsumptionAndTurnEnd(t *testing.T) {
 	f.advance(nativeWakeMinimumInterval + time.Second)
 	f.send("m2")
 	f.expect(2, 2)
+}
+
+func TestNativeClaudeWakeUnconsumedNudgePreservesRoomBudget(t *testing.T) {
+	f := newNudgeFixtureForRuntime(t, model.RuntimeClaude)
+	f.startBusyTurn()
+	// No target relay call follows the nudge. An inbound hold or a long-running
+	// tool can leave it unconsumed. Management cancellation removes each queued
+	// head without proving anything about the native inbox; otherwise the
+	// attempted head itself would already suppress renewal for ten minutes.
+	for i := 0; i < nativeWakeHourlyLimit; i++ {
+		id := f.send(fmt.Sprintf("cancelled-burst-%d", i))
+		if err := f.engine.Cancel(id); err != nil {
+			t.Fatal(err)
+		}
+		if i+1 < nativeWakeHourlyLimit {
+			f.advance(nativeWakeMinimumInterval)
+		}
+	}
+	if f.runs != 1 || f.reservations() != 1 {
+		t.Errorf("unconsumed Claude nudge: vendor runs=%d reservations=%d, want 1/1", f.runs, f.reservations())
+	}
+	// The budget belongs to the whole Room. Claude's canceled input must not
+	// prevent this independent Codex peer from receiving its first nudge.
+	peer, err := f.engine.Send(f.auth[model.ActorSlot2], relay.SendRequest{ID: "codex-peer", Text: "peer task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.waker.Wake(context.Background(), peer.ID); err != nil {
+		t.Fatal(err)
+	}
+	if f.audits("wake accepted") != 1 || f.audits("wake suppressed (hourly_limit)") != 0 {
+		t.Errorf("Codex peer accepted=%d hourly-limit suppressions=%d, want 1/0", f.audits("wake accepted"), f.audits("wake suppressed (hourly_limit)"))
+	}
+	if f.runs != 2 || f.reservations() != 2 {
+		t.Errorf("both peers: vendor runs=%d reservations=%d, want 2/2", f.runs, f.reservations())
+	}
+}
+
+func TestNativeClaudeWakeUnconsumedNudgeRenewsAfterTenMinutes(t *testing.T) {
+	for _, cancelHead := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancelled_head=%t", cancelHead), func(t *testing.T) {
+			f := newNudgeFixtureForRuntime(t, model.RuntimeClaude)
+			f.startBusyTurn()
+			first := f.send("first")
+			if cancelHead {
+				if err := f.engine.Cancel(first); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.advance(relay.WakeRenewAfter - time.Second)
+			next := f.send("next")
+			f.expect(1, 1)
+			f.advance(time.Second)
+			f.waker.Reconcile(context.Background())
+			f.waker.workers.Wait()
+			f.expect(2, 2)
+			if got := f.engine.WakeReservations()[1].MessageID; got != next {
+				t.Fatalf("renewal reserved %s; want new message %s", got, next)
+			}
+			// Renewing the successor never authorizes a retry of either effect.
+			f.restart()
+			f.advance(2 * time.Hour)
+			f.waker.Reconcile(context.Background())
+			f.waker.workers.Wait()
+			f.expect(2, 2)
+		})
+	}
 }

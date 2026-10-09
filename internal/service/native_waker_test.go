@@ -172,6 +172,11 @@ func TestNativeWakerSuppressesIneligibleCandidates(t *testing.T) {
 		{"delivering", func(v *relay.WakeCandidate) { v.Delivering = true }, "waiter_active"},
 		{"unbound", func(v *relay.WakeCandidate) { v.SessionID = "" }, "unbound"},
 		{"other runtime", func(v *relay.WakeCandidate) { v.Runtime = model.RuntimeGrok }, "unsupported_runtime"},
+		{"Gemini runtime", func(v *relay.WakeCandidate) { v.Runtime = model.RuntimeGemini }, "unsupported_runtime"},
+		{"unknown runtime", func(v *relay.WakeCandidate) { v.Runtime = "future-runtime" }, "unsupported_runtime"},
+		{"empty runtime", func(v *relay.WakeCandidate) { v.Runtime = "" }, "unsupported_runtime"},
+		{"Codex outstanding nudge", func(v *relay.WakeCandidate) { v.NudgePending = true }, "nudge_pending"},
+		{"Claude outstanding nudge", func(v *relay.WakeCandidate) { v.Runtime = model.RuntimeClaude; v.NudgePending = true }, "nudge_pending"},
 		{"Claude without capability", func(v *relay.WakeCandidate) { v.Runtime = model.RuntimeClaude }, "capability_unavailable"},
 	}
 	for _, tc := range cases {
@@ -187,9 +192,9 @@ func TestNativeWakerSuppressesIneligibleCandidates(t *testing.T) {
 			if err := waker.Wake(context.Background(), candidate.MessageID); err != nil {
 				t.Fatal(err)
 			}
-			_, records := state.snapshot()
-			if calls != 0 || len(records) != 1 || records[0].outcome != "suppressed" || records[0].reason != tc.reason {
-				t.Fatalf("calls=%d records=%#v", calls, records)
+			reservations, records := state.snapshot()
+			if calls != 0 || len(reservations) != 0 || len(records) != 1 || records[0].outcome != "suppressed" || records[0].reason != tc.reason {
+				t.Fatalf("calls=%d reservations=%#v records=%#v", calls, reservations, records)
 			}
 		})
 	}

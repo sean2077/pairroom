@@ -109,11 +109,11 @@ func (n *nativeHostRuntime) nativeDiagnostics() map[string]any {
 	for _, slot := range model.SlotActors() {
 		binding := bindings[slot]
 		state := summary.Bindings[slot]
-		kind := n.room.Agents[slot].Runtime
+		kind := binding.Runtime
 		head := heads[slot]
 		d := nativeReachability{Runtime: kind, Capability: "unavailable", HookApproval: "unknown", ModelAcceptance: "unknown", CollectorActive: state.CollectorActive, HeadID: head.MessageID, WakeReserved: head.Reserved, Reason: "no_pending_input", NextAction: "none"}
-		switch kind.Canonical() {
-		case model.RuntimeCodex:
+		switch kind.NativeWakePolicy().Transport {
+		case model.NativeWakeCodexQueue:
 			command := n.waker.codexCommand
 			if command == "" {
 				command = "codex"
@@ -123,15 +123,17 @@ func (n *nativeHostRuntime) nativeDiagnostics() map[string]any {
 					d.Capability = "codex_queue_unverified"
 				}
 			}
-		case model.RuntimeClaude:
+		case model.NativeWakeClaudeInbox:
 			c := relay.WakeCandidate{Target: slot, Runtime: kind, BindID: binding.BindID, Generation: binding.Generation, SessionID: binding.SessionID}
 			if n.waker.claude != nil {
 				if send, err := n.waker.claude(c); err == nil && send != nil {
 					d.Capability = "claude_inbox_captured"
 				}
 			}
-		case model.RuntimeGrok, model.RuntimeGemini:
-			d.Capability = "tracked_wait_only"
+		case model.NativeWakeUnavailable:
+			if kind.Canonical() == model.RuntimeGrok || kind.Canonical() == model.RuntimeGemini {
+				d.Capability = "tracked_wait_only"
+			}
 		}
 		if reason, due := n.waker.RateWindow(slot); reason != "" {
 			d.NextEligibleAt = &due

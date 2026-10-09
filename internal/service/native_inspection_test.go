@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
@@ -155,4 +156,31 @@ func TestNativeInspectionGatewayAndManagementMode(t *testing.T) {
 		}
 	}
 
+}
+
+func TestNativeDiagnosticsReportsOutstandingClaudeNudge(t *testing.T) {
+	f := newNudgeFixtureForRuntime(t, model.RuntimeClaude)
+	f.startBusyTurn()
+	first := f.send("first")
+	if err := f.engine.Cancel(first); err != nil {
+		t.Fatal(err)
+	}
+	f.advance(nativeWakeMinimumInterval + time.Second)
+	head := f.send("next")
+	f.expect(1, 1)
+	n := &nativeHostRuntime{engine: f.engine, waker: f.waker}
+	before := f.engine.Sequence()
+	d := n.nativeDiagnostics()["participants"].(map[model.ActorID]nativeReachability)[model.ActorSlot2]
+	if d.Reason != "nudge_pending" || d.NextAction != "wait_for_eligible_time" || d.Capability != "claude_inbox_captured" || d.HeadID != head || d.WakeReserved {
+		t.Fatalf("Claude diagnostic = %#v", d)
+	}
+	if c, ok := f.engine.WakeCandidate(head); !ok || !c.NudgePending || f.engine.Sequence() != before {
+		t.Fatal("Management diagnostics consumed the nudge or wrote an event")
+	}
+	f.advance(time.Second)
+	f.activity()
+	d = n.nativeDiagnostics()["participants"].(map[model.ActorID]nativeReachability)[model.ActorSlot2]
+	if d.Reason != "wake_eligible" || d.WakeReserved {
+		t.Fatalf("Claude diagnostic after authenticated activity = %#v", d)
+	}
 }
