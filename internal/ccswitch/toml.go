@@ -6,12 +6,14 @@ import (
 )
 
 type tomlDocument struct {
-	Root              map[string]string
-	Sections          map[string]map[string]string
-	ScalarKinds       map[string]tomlScalarKind
-	Unsupported       map[string]bool
-	Invalid           bool
-	UnsafeCredentials bool
+	Root               map[string]string
+	Sections           map[string]map[string]string
+	ScalarKinds        map[string]tomlScalarKind
+	Unsupported        map[string]bool
+	UnsupportedParents map[string]bool
+	Tables             map[string]bool
+	Invalid            bool
+	UnsafeCredentials  bool
 }
 
 type tomlScalarKind uint8
@@ -20,6 +22,9 @@ const (
 	tomlString tomlScalarKind = iota + 1
 	tomlBoolean
 	tomlInteger
+	// A string-valued option historically accepts every supported scalar and
+	// emits its text in quotes. Identity, routing, and credentials use tomlString.
+	tomlScalarText
 )
 
 // parseTOML reads the scalar provider subset, including quoted table keys and
@@ -31,12 +36,13 @@ func parseTOML(input string) tomlDocument {
 	doc := tomlDocument{
 		Root: make(map[string]string), Sections: make(map[string]map[string]string),
 		ScalarKinds: make(map[string]tomlScalarKind), Unsupported: make(map[string]bool),
+		UnsupportedParents: make(map[string]bool), Tables: make(map[string]bool),
 	}
 	current := doc.Root
 	currentPath := ""
 	keys, tables, arrayTables := make(map[string]bool), make(map[string]bool), make(map[string]bool)
 	dottedTables := make(map[string]bool)
-	parents := make(map[string]bool)
+	parents := doc.Tables
 	lines := strings.Split(input, "\n")
 	for index := 0; index < len(lines); index++ {
 		line := strings.TrimSpace(lines[index])
@@ -73,7 +79,11 @@ func parseTOML(input string) tomlDocument {
 				}
 				arrayTables[name] = true
 				tomlMarkParents(parents, name)
-				doc.Unsupported[name] = true
+				parents[name] = true
+				markUnsupportedTOML(&doc, name)
+				if tomlOpaqueCredential(name) {
+					doc.UnsafeCredentials = true
+				}
 				continue
 			}
 			if arrayTables[name] {
@@ -89,6 +99,7 @@ func parseTOML(input string) tomlDocument {
 			}
 			tables[name] = true
 			tomlMarkParents(parents, name)
+			parents[name] = true
 			if doc.Sections[name] == nil {
 				doc.Sections[name] = make(map[string]string)
 			}
@@ -145,7 +156,7 @@ func parseTOML(input string) tomlDocument {
 			}
 		}
 		if kind == 0 {
-			doc.Unsupported[path] = true
+			markUnsupportedTOML(&doc, path)
 			if tomlOpaqueCredential(path) {
 				doc.UnsafeCredentials = true
 			}
@@ -159,9 +170,9 @@ func parseTOML(input string) tomlDocument {
 			}
 		}
 	}
-	// Malformed syntax prevents reliable credential inspection as well as
-	// materialization. Callers must withhold its uninspectable public metadata.
-	doc.UnsafeCredentials = doc.UnsafeCredentials || doc.Invalid
+	// Keep generic syntax errors separate from explicit unsafe credential data.
+	// The active config rejects either; an unused metadata snapshot may contain
+	// ordinary non-TOML text, while opaque credential declarations still matter.
 	return doc
 }
 
@@ -206,7 +217,7 @@ func tomlScalarValue(doc tomlDocument, path string) string {
 // composite value, or scalar of the wrong type is a declaration, not absence.
 func supportedTOMLScalar(doc tomlDocument, path string, want tomlScalarKind) bool {
 	if kind, present := doc.ScalarKinds[path]; present {
-		if kind == want {
+		if kind == want || want == tomlScalarText {
 			return true
 		}
 		// Older Profiles store some boolean/integer options as strings. The
@@ -223,17 +234,18 @@ func supportedTOMLScalar(doc tomlDocument, path string, want tomlScalarKind) boo
 			return false
 		}
 	}
-	for unsupported := range doc.Unsupported {
-		if unsupported == path || strings.HasPrefix(unsupported, path+".") || strings.HasPrefix(path, unsupported+".") {
-			return false
-		}
-	}
-	for table := range doc.Sections {
-		if table == path || strings.HasPrefix(table, path+".") {
-			return false
-		}
-	}
-	return true
+	return !unsupportedTOMLPrefix(doc, path) && !doc.Tables[path]
+}
+
+// Index unsupported descendants while parsing. All declaration checks then use
+// these same canonical paths, without rescanning the document for each option.
+func markUnsupportedTOML(doc *tomlDocument, path string) {
+	doc.Unsupported[path] = true
+	tomlMarkParents(doc.UnsupportedParents, path)
+}
+
+func unsupportedTOMLPrefix(doc tomlDocument, path string) bool {
+	return doc.Unsupported[path] || doc.UnsupportedParents[path] || tomlHasAncestor(doc.Unsupported, path)
 }
 
 func normalizeTOMLPath(path string) string {
@@ -340,9 +352,25 @@ func tomlOpaqueCredential(path string) bool {
 	if !ok {
 		return true
 	}
-	last := strings.ToLower(parts[len(parts)-1])
-	return tomlAuthContainer(path) || credentialFieldName(last) || last == "env_key" ||
+	return tomlAuthContainer(path) || tomlCredentialField(path) != "" ||
 		len(parts) <= 2 && (parts[0] == "model_providers" || parts[0] == "model")
+}
+
+// Credential ancestry matters even when a key is expressed as a table. Named
+// Providers and MCP servers are data keys, not credential-container declarations.
+func tomlCredentialField(path string) string {
+	parts, _ := tomlPathParts(path)
+	var credential string
+	for i, part := range parts {
+		if i == 1 && (parts[0] == "model_providers" || parts[0] == "model" || parts[0] == "mcp_servers") {
+			continue
+		}
+		field := strings.ToLower(part)
+		if credentialFieldName(field) || field == "env_key" || field == "env-key" {
+			credential = field
+		}
+	}
+	return credential
 }
 
 func splitTOMLAssignment(line string) (string, string, bool) {

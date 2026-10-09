@@ -162,46 +162,39 @@ func uninspectableTOMLCredentials(doc tomlDocument, runtime model.RuntimeKind) b
 }
 
 func codexProviderSection(p profileRow, doc tomlDocument) (map[string]string, error) {
-	if doc.Invalid {
-		return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains invalid TOML.")
-	}
 	id := strings.TrimSpace(doc.Root["model_provider"])
 	sectionName := "model_providers." + tomlKey(id)
-	for _, path := range []string{
-		"model_provider", "openai_base_url",
-		sectionName + ".name", sectionName + ".base_url", sectionName + ".wire_api",
+	for _, field := range []struct {
+		path string
+		kind tomlScalarKind
+	}{
+		{"model_provider", tomlString}, {"openai_base_url", tomlString},
+		{sectionName + ".name", tomlScalarText}, {sectionName + ".base_url", tomlString}, {sectionName + ".wire_api", tomlString},
 	} {
-		if !supportedTOMLScalar(doc, path, tomlString) {
+		if !supportedTOMLScalar(doc, field.path, field.kind) {
 			return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains an invalid provider or credential declaration.")
 		}
 	}
-	section, tablePresent := doc.Sections[sectionName]
+	section := doc.Sections[sectionName]
 	if unsupportedTOMLPrefix(doc, sectionName) {
 		return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains unsupported provider configuration syntax.")
 	}
-	if !tablePresent && (id == "" || id == "openai") && doc.Root["openai_base_url"] != "" {
+	if (id == "" || id == "openai") && doc.Root["openai_base_url"] != "" {
 		// CC Switch 4 normalizes this older explicit API endpoint into a custom
-		// provider. It still needs its own key; native login is never a fallback.
-		section = map[string]string{"base_url": doc.Root["openai_base_url"], "name": "Custom", "wire_api": "responses"}
+		// provider. Merge its defaults regardless of whether selected options used
+		// headings or dotted keys. Every explicit value, including empty values,
+		// remains authoritative; native login is never a credential fallback.
+		merged := map[string]string{"base_url": doc.Root["openai_base_url"], "name": "Custom", "wire_api": "responses"}
+		for key, value := range section {
+			merged[key] = value
+		}
+		section = merged
 	}
 	if len(section) == 0 {
 		return nil, profileError(p, ReasonInvalidConfig, "Codex profile does not select a materializable custom model provider.")
 	}
 	// requires_openai_auth is deliberately ignored: the child projection fixes
 	// it to false and uses only its own environment-key authentication.
-	for _, key := range []string{"auth", "aws", "http_headers", "env_http_headers", "query_params"} {
-		_, present := section[key]
-		_, tableDeclared := doc.Sections[sectionName+"."+key]
-		for table := range doc.Sections {
-			tableDeclared = tableDeclared || strings.HasPrefix(table, sectionName+"."+key+".")
-		}
-		for field := range section {
-			present = present || strings.HasPrefix(field, key+".")
-		}
-		if present || tableDeclared {
-			return nil, profileError(p, ReasonInvalidConfig, "Codex profile declares unsupported provider authentication or request fields.")
-		}
-	}
 	return section, nil
 }
 
@@ -216,19 +209,19 @@ func codexProfileOptions(p profileRow, doc tomlDocument, id string) ([]string, e
 	}{
 		// Model and effort are defaults passed separately by AgentResolver.
 		{"model", "", tomlString}, {"model_reasoning_effort", "", tomlString},
-		{"review_model", "review_model", tomlString},
-		{"plan_mode_reasoning_effort", "plan_mode_reasoning_effort", tomlString},
-		{"web_search", "web_search", tomlString},
-		{"model_verbosity", "model_verbosity", tomlString},
+		{"review_model", "review_model", tomlScalarText},
+		{"plan_mode_reasoning_effort", "plan_mode_reasoning_effort", tomlScalarText},
+		{"web_search", "web_search", tomlScalarText},
+		{"model_verbosity", "model_verbosity", tomlScalarText},
 		{"disable_response_storage", "disable_response_storage", tomlBoolean},
 		{"model_supports_reasoning_summaries", "model_supports_reasoning_summaries", tomlBoolean},
 		{sectionName + ".supports_websockets", "model_providers." + id + ".supports_websockets", tomlBoolean},
 		{"model_context_window", "model_context_window", tomlInteger},
 		{"model_auto_compact_token_limit", "model_auto_compact_token_limit", tomlInteger},
-		{"agents.default_subagent_model", "agents.default_subagent_model", tomlString},
-		{"agents.default_subagent_reasoning_effort", "agents.default_subagent_reasoning_effort", tomlString},
-		{"memories.extract_model", "memories.extract_model", tomlString},
-		{"memories.consolidation_model", "memories.consolidation_model", tomlString},
+		{"agents.default_subagent_model", "agents.default_subagent_model", tomlScalarText},
+		{"agents.default_subagent_reasoning_effort", "agents.default_subagent_reasoning_effort", tomlScalarText},
+		{"memories.extract_model", "memories.extract_model", tomlScalarText},
+		{"memories.consolidation_model", "memories.consolidation_model", tomlScalarText},
 	} {
 		if !supportedTOMLScalar(doc, field.path, field.kind) {
 			return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains an invalid scalar model or provider option.")
@@ -238,7 +231,7 @@ func codexProfileOptions(p profileRow, doc tomlDocument, id string) ([]string, e
 		}
 		value := tomlScalarValue(doc, field.path)
 		switch field.kind {
-		case tomlString:
+		case tomlString, tomlScalarText:
 			value = tomlQuote(value)
 		case tomlInteger:
 			// The scalar check validated both integer and quoted-integer input.
@@ -253,16 +246,7 @@ func codexProfileOptions(p profileRow, doc tomlDocument, id string) ([]string, e
 	return args, nil
 }
 
-func unsupportedTOMLPrefix(doc tomlDocument, prefix string) bool {
-	for path := range doc.Unsupported {
-		if path == prefix || strings.HasPrefix(path, prefix+".") {
-			return true
-		}
-	}
-	return false
-}
-
-func profileModels(runtime model.RuntimeKind, settings, meta map[string]any) []string {
+func profileModels(runtime model.RuntimeKind, settings, meta map[string]any, doc tomlDocument) []string {
 	var models []string
 	switch runtime.Canonical() {
 	case model.RuntimeClaude:
@@ -283,8 +267,6 @@ func profileModels(runtime model.RuntimeKind, settings, meta map[string]any) []s
 			}
 		}
 	case model.RuntimeCodex:
-		config, _ := settings["config"].(string)
-		doc := parseTOML(config)
 		if doc.ScalarKinds["model"] == tomlString {
 			models = append(models, doc.Root["model"])
 		}
@@ -296,8 +278,6 @@ func profileModels(runtime model.RuntimeKind, settings, meta map[string]any) []s
 			}
 		}
 	case model.RuntimeGrok:
-		config, _ := settings["config"].(string)
-		doc := parseTOML(config)
 		if doc.ScalarKinds["models.default"] == tomlString {
 			selected := strings.TrimSpace(doc.Sections["models"]["default"])
 			models = append(models, selected)

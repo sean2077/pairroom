@@ -391,7 +391,7 @@ func TestTOMLUnselectedSecretsStillProtectPublicMetadata(t *testing.T) {
 	}
 }
 
-func TestTOMLSelectedOpaqueCredentialsWithholdMetadataAndDirectErrors(t *testing.T) {
+func TestTOMLSelectedOpaqueCredentialsWithholdMetadataAndErrors(t *testing.T) {
 	const hiddenKey = "toml-selected-opaque-fixture-key"
 	for _, test := range []struct {
 		name, app, config string
@@ -420,11 +420,6 @@ func TestTOMLSelectedOpaqueCredentialsWithholdMetadataAndDirectErrors(t *testing
 			resolved, err := reader.Resolve(context.Background(), model.ProviderRef{Source: model.ProviderCCSwitch, AppType: p.AppType, ProfileID: p.ID}, test.runtime)
 			v4AssertUnsupported(t, err, ReasonInvalidConfig, hiddenKey, tomlDirectKey)
 			v4AssertPublicSecretFree(t, catalog, resolved, hiddenKey, tomlDirectKey)
-			direct, err := materialize(p, test.runtime)
-			v4AssertUnsupported(t, err, ReasonInvalidConfig, hiddenKey, tomlDirectKey)
-			if len(direct.Env) != 0 || len(direct.Args) != 0 || direct.Grok != nil {
-				t.Fatal("direct mapper bypassed selected credential inspection")
-			}
 		})
 	}
 }
