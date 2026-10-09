@@ -10,14 +10,21 @@ const (
 	NativeWakeCodexQueue
 )
 
-// NativeWakeConsumption identifies the relay observation used to infer that
-// an outstanding nudge was consumed. Neither observation proves vendor/model
-// acceptance; absence of the observation is bounded by the wake renewal delay.
+// Supported is the dispatch allowlist. A future nonzero transport does not
+// gain an external effect until its handler is deliberately supported here.
+func (t NativeWakeTransport) Supported() bool {
+	return t == NativeWakeClaudeInbox || t == NativeWakeCodexQueue
+}
+
+// NativeWakeConsumption identifies the relay observation that releases an
+// outstanding wake. A handoff supersedes the need for the nudge; a Turn boundary
+// infers consumption. Neither proves vendor/model acceptance. Without either
+// observation, the wake renewal delay bounds suppression.
 type NativeWakeConsumption uint8
 
 const (
 	NativeWakeUnobserved NativeWakeConsumption = iota
-	NativeWakeAfterRelayCall
+	NativeWakeAfterHandoff
 	NativeWakeAfterTurnEnd
 )
 
@@ -32,7 +39,7 @@ type NativeWakePolicy struct {
 func (k RuntimeKind) NativeWakePolicy() NativeWakePolicy {
 	switch k.Canonical() {
 	case RuntimeClaude:
-		return NativeWakePolicy{Transport: NativeWakeClaudeInbox, Consumption: NativeWakeAfterRelayCall}
+		return NativeWakePolicy{Transport: NativeWakeClaudeInbox, Consumption: NativeWakeAfterHandoff}
 	case RuntimeCodex:
 		return NativeWakePolicy{Transport: NativeWakeCodexQueue, Consumption: NativeWakeAfterTurnEnd}
 	default:

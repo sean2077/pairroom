@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -325,12 +326,14 @@ func TestNativeWakeRestartKeepsReplayedNudgeConservative(t *testing.T) {
 	f.advance(time.Minute + time.Second)
 	f.send("m2")
 	f.expect(1, 1)
-	if f.audits("wake suppressed (nudge_pending)") != 1 {
+	// The successor is now visible and audited before the restart as well as
+	// once in the new waker, whose local suppression cache starts empty.
+	if f.audits("wake suppressed (nudge_pending)") != 2 {
 		t.Fatalf("audit = %#v", f.engine.Snapshot().Audit)
 	}
 	// Replay accepts the new reason, and the fallback bound still releases input.
 	f.restart()
-	if f.audits("wake suppressed (nudge_pending)") != 1 {
+	if f.audits("wake suppressed (nudge_pending)") != 2 {
 		t.Fatalf("replayed audit = %#v", f.engine.Snapshot().Audit)
 	}
 	f.advance(relay.WakeRenewAfter)
@@ -339,9 +342,9 @@ func TestNativeWakeRestartKeepsReplayedNudgeConservative(t *testing.T) {
 	f.expect(2, 2)
 }
 
-// Claude's documented inbox delivery occurs between tool calls, so a nudge
-// may already be consumed before the Turn ends. These fixtures exercise the
-// resulting relay transitions; they do not run or certify a vendor session.
+// Acknowledged inbox progress can supersede Claude's wake need before Turn end.
+// These fixtures establish relay transitions, not physical nudge consumption
+// or an authenticated vendor session.
 func TestNativeClaudeWakeCollectedBurstRechecksAtMinimumInterval(t *testing.T) {
 	f := newNudgeFixtureForRuntime(t, model.RuntimeClaude)
 	f.startBusyTurn()
@@ -376,7 +379,7 @@ func TestNativeClaudeWakeCollectedBurstRechecksAtMinimumInterval(t *testing.T) {
 	f.expect(2, 2)
 }
 
-func TestNativeClaudeWakeAfterMidTurnConsumptionAndTurnEnd(t *testing.T) {
+func TestNativeClaudeWakeAfterMidTurnHandoffAndTurnEnd(t *testing.T) {
 	f := newNudgeFixtureForRuntime(t, model.RuntimeClaude)
 	f.startBusyTurn()
 	f.send("m1")
@@ -384,8 +387,8 @@ func TestNativeClaudeWakeAfterMidTurnConsumptionAndTurnEnd(t *testing.T) {
 	f.collect()
 	f.advance(time.Second)
 	f.stop()
-	// The original nudge was consumed between tool calls, so it cannot start
-	// another Turn now. Fresh input must be able to wake this idle session.
+	// The handoff superseded the earlier wake need. Turn end must not reinstate
+	// it and delay fresh input; a held physical nudge may still arrive later.
 	f.advance(nativeWakeMinimumInterval + time.Second)
 	f.send("m2")
 	f.expect(2, 2)
@@ -394,11 +397,24 @@ func TestNativeClaudeWakeAfterMidTurnConsumptionAndTurnEnd(t *testing.T) {
 func TestNativeClaudeWakeUnconsumedNudgePreservesRoomBudget(t *testing.T) {
 	f := newNudgeFixtureForRuntime(t, model.RuntimeClaude)
 	f.startBusyTurn()
-	// No target relay call follows the nudge. An inbound hold or a long-running
-	// tool can leave it unconsumed. Management cancellation removes each queued
-	// head without proving anything about the native inbox; otherwise the
-	// attempted head itself would already suppress renewal for ten minutes.
+	// An inbound hold can leave the nudge undelivered while the target uses
+	// other relay operations. Neither those calls nor Management cancellation
+	// of the queued input prove that the wake reached the native session.
 	for i := 0; i < nativeWakeHourlyLimit; i++ {
+		if i > 0 {
+			switch i % 3 {
+			case 0:
+				f.activity()
+			case 1:
+				if _, err := f.engine.Peer(f.auth[model.ActorSlot2]); err != nil {
+					t.Fatal(err)
+				}
+			case 2:
+				if _, err := f.engine.Send(f.auth[model.ActorSlot2], relay.SendRequest{ID: fmt.Sprintf("own-send-%d", i), Text: "update", To: model.ActorUser}); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
 		id := f.send(fmt.Sprintf("cancelled-burst-%d", i))
 		if err := f.engine.Cancel(id); err != nil {
 			t.Fatal(err)
@@ -439,8 +455,12 @@ func TestNativeClaudeWakeUnconsumedNudgeRenewsAfterTenMinutes(t *testing.T) {
 				}
 			}
 			f.advance(relay.WakeRenewAfter - time.Second)
+			f.activity()
 			next := f.send("next")
 			f.expect(1, 1)
+			if !f.waker.InUse() {
+				t.Fatal("unattempted successor lost its lease before renewal")
+			}
 			f.advance(time.Second)
 			f.waker.Reconcile(context.Background())
 			f.waker.workers.Wait()
@@ -455,5 +475,146 @@ func TestNativeClaudeWakeUnconsumedNudgeRenewsAfterTenMinutes(t *testing.T) {
 			f.waker.workers.Wait()
 			f.expect(2, 2)
 		})
+	}
+}
+
+func TestNativeWakeNextHeadRechecksAfterFailureOrConsumption(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		runtime model.RuntimeKind
+		failed  bool
+	}{
+		{"Claude failure", model.RuntimeClaude, true},
+		{"Codex failure", model.RuntimeCodex, true},
+		{"idle Codex activity", model.RuntimeCodex, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newNudgeFixtureForRuntime(t, tc.runtime)
+			f.stop()
+			f.advance(time.Second)
+			if tc.failed {
+				f.runErr = errors.New("fixture wake failure")
+			}
+			first := f.send("first")
+			f.runErr = nil
+			f.advance(time.Second)
+			if !tc.failed {
+				f.activity()
+			}
+			next := f.send("next")
+			f.expect(1, 1)
+			if f.audits("wake suppressed (minimum_interval)") != 1 || !f.waker.InUse() {
+				t.Fatal("unattempted successor was neither rate-deferred nor leased")
+			}
+			f.advance(nativeWakeMinimumInterval - time.Second)
+			f.waker.Reconcile(context.Background())
+			f.waker.workers.Wait()
+			f.expect(2, 2)
+			if got := f.engine.WakeReservations()[1].MessageID; got != next {
+				t.Fatalf("reservation = %s; want unattempted successor %s", got, next)
+			}
+			// Wake ownership must not change FIFO delivery or retry the first ID.
+			if claim := f.claim(false); claim == nil || claim.ID != first {
+				t.Fatalf("FIFO first claim = %#v; want %s", claim, first)
+			}
+		})
+	}
+}
+
+func TestNativeWakeMaintenanceLeasesOutstandingSuccessorAfterRestart(t *testing.T) {
+	f := newNudgeFixtureForRuntime(t, model.RuntimeClaude)
+	f.startBusyTurn()
+	first := f.send("first")
+	f.advance(time.Minute)
+	// Queue without running the publication callback. Maintenance must discover
+	// the successor independently, including after the Service loses its maps.
+	next, err := f.engine.Send(f.auth[model.ActorSlot1], relay.SendRequest{ID: "next", Text: "next"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.restart()
+	for i := 0; i < 3; i++ {
+		f.waker.Reconcile(context.Background())
+		f.waker.workers.Wait()
+	}
+	f.expect(1, 1)
+	if f.audits("wake suppressed (nudge_pending)") != 1 || !f.waker.InUse() {
+		t.Fatal("maintenance did not coalesce and lease the pending successor")
+	}
+	if heads := f.engine.WakeHeads(); len(heads) != 1 || heads[0].MessageID != next.ID || heads[0].Reserved {
+		t.Fatalf("maintenance heads = %#v; want unattempted successor", heads)
+	}
+	if err := f.engine.Cancel(next.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.waker.Reconcile(context.Background())
+	f.waker.workers.Wait()
+	if f.waker.InUse() {
+		t.Fatal("cancelled successor retained a runtime lease")
+	}
+	if heads := f.engine.WakeHeads(); len(heads) != 1 || heads[0].MessageID != first || !heads[0].Reserved {
+		t.Fatalf("attempted head = %#v", heads)
+	}
+	f.expect(1, 1)
+}
+
+type blockedNudgeCandidate struct {
+	*relay.Engine
+	entered, release chan struct{}
+	once             sync.Once
+}
+
+func (r *blockedNudgeCandidate) WakeCandidate(id string) (relay.WakeCandidate, bool) {
+	r.once.Do(func() { close(r.entered) })
+	<-r.release
+	return r.Engine.WakeCandidate(id)
+}
+
+func TestNativeWakeMaintenanceLeasesBeforeSuppressionWorkerStarts(t *testing.T) {
+	f := newNudgeFixtureForRuntime(t, model.RuntimeClaude)
+	f.startBusyTurn()
+	f.send("first")
+	if _, err := f.engine.Send(f.auth[model.ActorSlot1], relay.SendRequest{ID: "next", Text: "next"}); err != nil {
+		t.Fatal(err)
+	}
+	r := &blockedNudgeCandidate{Engine: f.engine, entered: make(chan struct{}), release: make(chan struct{})}
+	f.waker.relay = r
+	t.Cleanup(func() { close(r.release); f.waker.workers.Wait() })
+	f.waker.Reconcile(context.Background())
+	select {
+	case <-r.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("maintenance did not launch suppression observation")
+	}
+	// The worker has not observed its candidate or registered a deferral yet.
+	// Maintenance's synchronous lease alone must exclude an idle close.
+	if !f.waker.InUse() || f.waker.tryBeginIdleClose(func() bool { return true }) {
+		t.Fatal("idle close passed before the suppression worker acquired its lease")
+	}
+}
+
+func TestNativeWakeMaintenanceAuditsPendingAfterPriorWorkerFinishes(t *testing.T) {
+	f := newNudgeFixtureForRuntime(t, model.RuntimeClaude)
+	f.startBusyTurn()
+	f.send("first")
+	if _, err := f.engine.Send(f.auth[model.ActorSlot1], relay.SendRequest{ID: "next", Text: "next"}); err != nil {
+		t.Fatal(err)
+	}
+	// Admission is held by an older target worker while maintenance discovers
+	// the new head. Registering its lease must not mark the audit as completed.
+	if !f.waker.begin(model.ActorSlot2) {
+		t.Fatal("could not hold target worker admission")
+	}
+	f.waker.Reconcile(context.Background())
+	if !f.waker.InUse() || f.audits("wake suppressed (nudge_pending)") != 0 {
+		t.Fatal("maintenance lost the lease or audited without worker admission")
+	}
+	f.waker.end(model.ActorSlot2)
+	for i := 0; i < 3; i++ {
+		f.waker.Reconcile(context.Background())
+		f.waker.workers.Wait()
+	}
+	if f.audits("wake suppressed (nudge_pending)") != 1 || !f.waker.InUse() {
+		t.Fatal("pending audit was lost or duplicated after the older worker ended")
 	}
 }

@@ -79,8 +79,8 @@ type WakeReservation struct {
 // began a fresh pending burst for the target; WaiterActive means a
 // foreground or park collector is blocked in Claim for the target right
 // now; Delivering means an unacknowledged delivery to the target is in
-// flight; NudgePending means an earlier nudge has no consumption observation
-// under the runtime's NativeWakePolicy and has not expired. The Engine applies
+// flight; NudgePending means an earlier wake has no qualifying progress or
+// consumption observation under NativeWakePolicy and has not expired. The Engine applies
 // that policy again at reservation admission; the waker adds transport
 // capability checks, grace and rate limits before submitting an effect.
 type WakeCandidate struct {

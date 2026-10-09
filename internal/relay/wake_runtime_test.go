@@ -10,30 +10,22 @@ import (
 func TestWakeAdmissionRequiresKnownRuntime(t *testing.T) {
 	for _, tc := range []struct {
 		name               string
-		configured, bound  model.RuntimeKind
+		configured         model.RuntimeKind
 		wantRuntime        model.RuntimeKind
 		wantWakeCapability bool
 	}{
-		{"Claude", model.RuntimeClaude, "", model.RuntimeClaude, true},
-		{"Codex", model.RuntimeCodex, "", model.RuntimeCodex, true},
-		{"canonical alias", " CLAUDE-CODE ", "", model.RuntimeClaude, true},
-		{"binding fallback", "", model.RuntimeClaude, model.RuntimeClaude, true},
-		{"Room identity wins", model.RuntimeCodex, model.RuntimeClaude, model.RuntimeCodex, true},
-		{"unknown Room identity cannot fall back", "future-runtime", model.RuntimeClaude, "future-runtime", false},
-		{"empty identity", "", "", "", false},
-		{"unknown binding", "", "future-runtime", "future-runtime", false},
-		{"Grok", model.RuntimeGrok, "", model.RuntimeGrok, false},
-		{"Gemini", model.RuntimeGemini, "", model.RuntimeGemini, false},
+		{"Claude", model.RuntimeClaude, model.RuntimeClaude, true},
+		{"Codex", model.RuntimeCodex, model.RuntimeCodex, true},
+		{"canonical alias", " CLAUDE-CODE ", model.RuntimeClaude, true},
+		{"unknown Room identity", "future-runtime", "future-runtime", false},
+		{"empty identity", "", "", false},
+		{"Grok", model.RuntimeGrok, model.RuntimeGrok, false},
+		{"Gemini", model.RuntimeGemini, model.RuntimeGemini, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e, auth, _ := testEngine(t)
 			target := model.ActorSlot2
 			e.cfg.Runtimes[target] = tc.configured
-			b := e.bindings[target]
-			b.Runtime = tc.bound
-			if err := e.commitBinding(b); err != nil {
-				t.Fatal(err)
-			}
 			m, err := e.Send(auth[model.ActorSlot1], SendRequest{ID: "wake", Text: "task"})
 			if err != nil {
 				t.Fatal(err)
@@ -49,8 +41,10 @@ func TestWakeAdmissionRequiresKnownRuntime(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got, err := HasWakeWork("room", events, e.cfg.Runtimes); err != nil || got != tc.wantWakeCapability {
-				t.Fatalf("startup wake probe = %v, %v; want %v", got, err, tc.wantWakeCapability)
+			// Startup must still restore waiting-input maintenance for runtimes
+			// without an external wake transport. Admission remains separate.
+			if got, err := HasWakeWork("room", events, e.cfg.Runtimes); err != nil || !got {
+				t.Fatalf("startup pending-input probe = %v, %v; want true", got, err)
 			}
 			before := e.Sequence()
 			err = e.ReserveWake(m.ID, target)

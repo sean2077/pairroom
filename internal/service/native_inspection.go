@@ -157,7 +157,10 @@ func (n *nativeHostRuntime) nativeDiagnostics() map[string]any {
 		case head.MessageID != "" && !summary.WakeEnabled:
 			d.Reason = "wake_disabled"
 			d.NextAction = "collect_in_native_session"
-		case head.MessageID != "" && (d.Capability == "unavailable" || d.Capability == "tracked_wait_only"):
+		case head.MessageID != "" && !kind.NativeWakePolicy().Transport.Supported():
+			d.Reason = "capability_unavailable"
+			d.NextAction = "collect_in_native_session"
+		case head.MessageID != "" && d.Capability == "unavailable":
 			d.Reason = "capability_unavailable"
 			d.NextAction = "rebind_or_collect_in_native_session"
 		case head.MessageID != "" && head.NudgePending:

@@ -130,8 +130,8 @@ func (e *Engine) InspectTransport() (Summary, map[model.ActorID]Binding, []WakeC
 	heads := []WakeCandidate{}
 	for _, slot := range model.SlotActors() {
 		binding := e.bindings[slot].Binding
-		// Return the same immutable runtime identity used by wake admission,
-		// including its recorded-binding fallback for older callers.
+		// Runtime is an inspection projection of the same immutable Room
+		// selection used by wake admission, not a fallback stored by Bind.
 		binding.Runtime = e.wakeRuntimeLocked(slot)
 		bindings[slot] = binding
 		if id := e.wakeHeadLocked(slot); id != "" {
