@@ -333,6 +333,10 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 			return "failed", classifyNativeWakeFailure(err, commandContextErr)
 		}
 	default:
+		// Fail closed for a transport the runtime policy admits but this Service
+		// has no handler for. Unreachable while Supported() names exactly the two
+		// transports dispatched above; it exists so a future supported transport
+		// cannot inherit another vendor's command before its handler is added.
 		return w.record("suppressed", "unsupported_runtime", candidate.Target)
 	}
 	if ctx.Err() != nil {

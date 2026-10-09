@@ -165,7 +165,12 @@ func (f *nudgeFixture) expect(runs, reservations int) {
 	}
 }
 
-func TestNativeWakeMissingTransportHandlerDoesNotReserve(t *testing.T) {
+// TestNativeWakeUnsupportedRuntimeTransportDoesNotReserve covers the policy gate:
+// Grok's NativeWakePolicy yields no supported transport, so nativeWakeSuppression
+// rejects the burst before any capability lookup, wake lease, or reservation. It
+// does not reach Wake's dispatch guard, which stays unreachable while Supported()
+// names exactly the handled transports.
+func TestNativeWakeUnsupportedRuntimeTransportDoesNotReserve(t *testing.T) {
 	f := newNudgeFixtureForRuntime(t, model.RuntimeGrok)
 	prepares := 0
 	f.waker.claude = func(relay.WakeCandidate) (claudewake.Send, error) {
@@ -175,13 +180,13 @@ func TestNativeWakeMissingTransportHandlerDoesNotReserve(t *testing.T) {
 	id := f.send("unsupported-transport")
 	f.expect(0, 0)
 	if prepares != 0 || f.waker.InUse() || len(f.waker.attempts) != 0 {
-		t.Fatal("missing handler read another transport's capability or spent a wake lease/budget")
+		t.Fatal("unsupported runtime read another transport's capability or spent a wake lease/budget")
 	}
 	if f.audits("wake suppressed (unsupported_runtime)") != 1 {
-		t.Fatalf("missing-handler audit = %#v", f.engine.Snapshot().Audit)
+		t.Fatalf("unsupported-runtime audit = %#v", f.engine.Snapshot().Audit)
 	}
 	if c, ok := f.engine.WakeCandidate(id); !ok || !c.QueueStart || c.Reserved {
-		t.Fatalf("missing handler changed queued input = %#v, %v", c, ok)
+		t.Fatalf("unsupported runtime changed queued input = %#v, %v", c, ok)
 	}
 }
 

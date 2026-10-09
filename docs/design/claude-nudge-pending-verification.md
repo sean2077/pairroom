@@ -8,8 +8,10 @@
 > and fixture behavior, with no captured real-session timing result. Providing a
 > manual verification script does not establish that it was run or what a real
 > session observed. The script reference below belongs to that historical
-> revision, not the current verification workflow. Those assertions must not be
-> used as the current operating contract.
+> revision, not the current verification workflow: `scripts/verify_claude_inbox_timing.sh`
+> was removed from the repository with the 2026-10-09 correction, so that path
+> does not exist in the current tree. Those assertions must not be used as the
+> current operating contract.
 >
 > [Anthropic's delivery and inbound-control documentation](https://code.claude.com/docs/en/cross-session-messaging#message-delivery),
 > checked 2026-10-09, permits delivery during an active Turn and also permits a
