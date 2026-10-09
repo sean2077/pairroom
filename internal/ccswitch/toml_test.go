@@ -2,6 +2,7 @@ package ccswitch
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -167,6 +168,147 @@ func TestTOMLInvalidProviderDocumentDoesNotMaterializeValidPrefix(t *testing.T) 
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			tomlAssertRejected(t, tomlCodexReader(t, "Invalid provider document", tomlDirectCodexConfig+test.suffix))
+		})
+	}
+}
+
+func TestTOMLDottedProviderOptionsPreserveTheirMeaning(t *testing.T) {
+	for _, declarations := range []string{
+		`agents.default_subagent_model = "codex-subagent"
+agents.default_subagent_reasoning_effort = "low"
+memories.extract_model = "codex-extract"
+memories.consolidation_model = "codex-consolidate"
+`,
+		`[agents]
+default_subagent_model = "codex-subagent"
+default_subagent_reasoning_effort = "low"
+[memories]
+extract_model = "codex-extract"
+consolidation_model = "codex-consolidate"
+`,
+	} {
+		t.Run(strings.SplitN(declarations, "\n", 2)[0], func(t *testing.T) {
+			// Keep top-level dotted assignments before the first table header.
+			config := "model_provider = \"custom\"\nmodel = \"codex-safe\"\n" + declarations +
+				"[model_providers.custom]\nwire_api = \"responses\"\nbase_url = \"https://selected-toml.invalid/v1\"\n"
+			reader := tomlCodexReader(t, "Provider-owned nested options", config)
+			resolved, err := reader.Resolve(context.Background(), tomlCodexRef(), model.RuntimeCodex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{
+				`agents.default_subagent_model="codex-subagent"`,
+				`agents.default_subagent_reasoning_effort="low"`,
+				`memories.extract_model="codex-extract"`,
+				`memories.consolidation_model="codex-consolidate"`,
+			} {
+				if !slices.Contains(resolved.Args, want) {
+					t.Fatalf("provider-owned option %q was silently discarded", want)
+				}
+			}
+		})
+	}
+}
+
+func TestTOMLTableCredentialDeclarationCannotFallBackToStoredKey(t *testing.T) {
+	for _, declaration := range []string{
+		"[model_providers.custom.env_key]\nname = 'PAIRROOM_TOML_MISSING_KEY'\n",
+		"env_key.name = 'PAIRROOM_TOML_MISSING_KEY'\n",
+	} {
+		t.Run(strings.SplitN(declaration, "\n", 2)[0], func(t *testing.T) {
+			tomlAssertRejected(t, tomlCodexReader(t, "Invalid credential declaration", tomlDirectCodexConfig+declaration))
+		})
+	}
+}
+
+func TestTOMLDottedProviderRouteKeepsCredentialsPrivate(t *testing.T) {
+	const credential = "toml-dotted-environment-fixture-key"
+	t.Setenv("PAIRROOM_TOML_DOTTED_KEY", credential)
+	for _, test := range []struct{ name, config string }{
+		{"root", `model_provider = "vendor.route"
+model_providers."vendor.route".name = "Dotted provider"
+model_providers."vendor.route".wire_api = "responses"
+model_providers."vendor.route".base_url = "https://dotted-toml.invalid/v1"
+model_providers."vendor.route".env_key = "PAIRROOM_TOML_DOTTED_KEY"
+`},
+		{"parent-table", `model_provider = "vendor.route"
+[model_providers]
+"vendor.route".name = "Dotted provider"
+"vendor.route".wire_api = "responses"
+"vendor.route".base_url = "https://dotted-toml.invalid/v1"
+"vendor.route".env_key = "PAIRROOM_TOML_DOTTED_KEY"
+`},
+		{"implicit-provider-table", `model_provider = "vendor.route"
+[model_providers."vendor.route".shared]
+ignored = true
+[model_providers]
+"vendor.route".name = "Dotted provider"
+"vendor.route".wire_api = "responses"
+"vendor.route".base_url = "https://dotted-toml.invalid/v1"
+"vendor.route".env_key = "PAIRROOM_TOML_DOTTED_KEY"
+`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reader := tomlCodexReader(t, "Dotted provider", test.config)
+			catalog, err := reader.Catalog(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := reader.Resolve(context.Background(), tomlCodexRef(), model.RuntimeCodex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolved.Env["PAIRROOM_CC_SWITCH_CODEX_API_KEY"] != credential ||
+				!strings.Contains(strings.Join(resolved.Args, "\x00"), `base_url="https://dotted-toml.invalid/v1"`) {
+				t.Fatal("dotted route did not preserve its endpoint and authoritative credential source")
+			}
+			v4AssertPublicSecretFree(t, catalog, resolved, credential, tomlDirectKey)
+			redacted, err := tomlCodexReader(t, "Provider "+credential, test.config).Catalog(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			v4AssertPublicSecretFree(t, redacted, Materialization{}, credential, tomlDirectKey)
+		})
+	}
+}
+
+func TestTOMLDeclaredScalarShapesCannotBecomeNativeDefaults(t *testing.T) {
+	for _, test := range []struct{ name, prefix, suffix string }{
+		{"inline-agents", "agents = { default_subagent_model = 'codex-subagent' }\n", ""},
+		{"inline-memories", "memories = { extract_model = 'codex-extract' }\n", ""},
+		{"scalar-agents", "agents = false\n", ""},
+		{"scalar-memories", "memories = 123\n", ""},
+		{"table-model", "", "[model]\nname = 'codex-unsupported'\n"},
+		{"table-effort", "", "[model_reasoning_effort]\nlevel = 'low'\n"},
+		{"table-subagent", "", "[agents.default_subagent_model]\nname = 'codex-subagent'\n"},
+		{"table-bearer", "", "[model_providers.custom.experimental_bearer_token]\nvalue = 'nested-secret'\n"},
+		{"table-websockets", "", "[model_providers.custom.supports_websockets]\nenabled = true\n"},
+		{"numeric-model", "model = 123\n", ""},
+		{"boolean-effort", "model_reasoning_effort = false\n", ""},
+		{"string-context", "model_context_window = '262144'\n", ""},
+		{"string-boolean", "disable_response_storage = 'false'\n", ""},
+		{"numeric-env-key", "", "env_key = 123\n"},
+		{"boolean-bearer", "", "experimental_bearer_token = false\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base := strings.Replace(tomlDirectCodexConfig, "model = \"codex-safe\"\n", "", 1)
+			tomlAssertRejected(t, tomlCodexReader(t, "Invalid scalar declaration", test.prefix+base+test.suffix))
+		})
+	}
+}
+
+func TestTOMLDottedTableCannotBeRedefined(t *testing.T) {
+	for _, test := range []struct{ name, config string }{
+		{"dotted-then-heading", `model_provider = "custom"
+model_providers.custom.name = "Dotted provider"
+[model_providers.custom]
+wire_api = "responses"
+base_url = "https://selected-toml.invalid/v1"
+`},
+		{"heading-then-dotted", tomlDirectCodexConfig + "[model_providers]\ncustom.name = 'Redefined provider'\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tomlAssertRejected(t, tomlCodexReader(t, "Redefined dotted table", test.config))
 		})
 	}
 }

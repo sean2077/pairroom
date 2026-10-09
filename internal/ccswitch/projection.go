@@ -140,6 +140,11 @@ func codexProviderSection(p profileRow, doc tomlDocument) (map[string]string, er
 	if doc.Invalid {
 		return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains invalid TOML.")
 	}
+	for _, key := range []string{"model_provider", "openai_base_url", "experimental_bearer_token"} {
+		if !supportedTOMLScalar(doc, key, tomlString) {
+			return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains an invalid provider or credential declaration.")
+		}
+	}
 	id := strings.TrimSpace(doc.Root["model_provider"])
 	sectionName := "model_providers." + tomlKey(id)
 	section, tablePresent := doc.Sections[sectionName]
@@ -153,6 +158,16 @@ func codexProviderSection(p profileRow, doc tomlDocument) (map[string]string, er
 	}
 	if len(section) == 0 {
 		return nil, profileError(p, ReasonInvalidConfig, "Codex profile does not select a materializable custom model provider.")
+	}
+	for _, key := range []string{"name", "base_url", "wire_api", "env_key", "experimental_bearer_token"} {
+		if !supportedTOMLScalar(doc, sectionName+"."+key, tomlString) {
+			return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains an invalid provider or credential declaration.")
+		}
+	}
+	for _, key := range []string{"requires_openai_auth", "supports_websockets"} {
+		if !supportedTOMLScalar(doc, sectionName+"."+key, tomlBoolean) {
+			return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains an invalid boolean provider option.")
+		}
 	}
 	for _, key := range []string{"auth", "aws", "http_headers", "env_http_headers", "query_params"} {
 		_, present := section[key]
@@ -175,13 +190,22 @@ func codexProviderSection(p profileRow, doc tomlDocument) (map[string]string, er
 func codexProfileOptions(p profileRow, doc tomlDocument, section map[string]string, id string) ([]string, error) {
 	for _, path := range []string{
 		"model_provider", "openai_base_url", "model", "model_reasoning_effort", "review_model",
-		"plan_mode_reasoning_effort", "web_search", "model_verbosity", "disable_response_storage",
-		"model_supports_reasoning_summaries", "model_context_window", "model_auto_compact_token_limit",
+		"plan_mode_reasoning_effort", "web_search", "model_verbosity",
 		"agents.default_subagent_model", "agents.default_subagent_reasoning_effort",
 		"memories.extract_model", "memories.consolidation_model",
 	} {
-		if unsupportedTOMLPrefix(doc, path) {
+		if !supportedTOMLScalar(doc, path, tomlString) {
 			return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains an unsupported model or provider option.")
+		}
+	}
+	for _, key := range []string{"disable_response_storage", "model_supports_reasoning_summaries"} {
+		if !supportedTOMLScalar(doc, key, tomlBoolean) {
+			return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains an invalid boolean provider option.")
+		}
+	}
+	for _, key := range []string{"model_context_window", "model_auto_compact_token_limit"} {
+		if !supportedTOMLScalar(doc, key, tomlInteger) {
+			return nil, profileError(p, ReasonInvalidConfig, "Codex profile contains an invalid context-window option.")
 		}
 	}
 	var args []string
