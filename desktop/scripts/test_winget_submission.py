@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the winget submission script offline against a recording GitHub CLI fixture."""
+"""Exercise the Linux release submission script offline with a recording gh fixture."""
 from __future__ import annotations
 
 import base64
@@ -49,8 +49,12 @@ if args[:2] == ["pr", "create"]:
 if args[0] == "api":
     endpoint = args[1]
     if endpoint == "repos/microsoft/winget-pkgs/git/refs/heads/master":
+        if fixture.get("master_error") == "upstream":
+            raise SystemExit(1)
         reply(fixture["upstream"])
     if endpoint == "repos/fixture-owner/winget-pkgs/git/refs/heads/master":
+        if fixture.get("master_error") == "fork":
+            raise SystemExit(1)
         reply(fixture["fork"])
     if endpoint == "repos/fixture-owner/winget-pkgs/git/refs":
         attempts = sum(json.loads(line)[:2] == args[:2]
@@ -77,8 +81,16 @@ raise SystemExit(2)
 '''
 
 
-@unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "submission runs on a Linux release runner")
+@unittest.skipUnless(sys.platform.startswith("linux"),
+                     "Linux release-runner fixture (GNU coreutils); no native macOS/Windows coverage")
 class SubmissionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        bash = shutil.which("bash")
+        if bash is None:
+            raise RuntimeError("Linux winget submission tests require Bash")
+        cls.bash = str(Path(bash).resolve())
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="pairroom winget submission ")
         self.addCleanup(temporary.cleanup)
@@ -113,7 +125,7 @@ class SubmissionTests(unittest.TestCase):
             "PAIRROOM_WINGET_TEST_ROOT": str(self.root),
         })
         result = subprocess.run(
-            ["bash", str(SCRIPTS / "submit-winget.sh"), "--version", VERSION,
+            [self.bash, str(SCRIPTS / "submit-winget.sh"), "--version", VERSION,
              "--installer", str(self.installer), "--python", sys.executable],
             env=environment, text=True, capture_output=True, timeout=15,
         )
@@ -149,6 +161,14 @@ class SubmissionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_submission([UPSTREAM_SHA])
         self.assertFalse(any("/compare/" in call[1] for call in self.calls))
+
+    def test_fixture_path_cannot_replace_bash(self):
+        shadow = self.root / "bin" / "bash"
+        shadow.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
+        shadow.chmod(0o755)
+        result = self.run_submission(fallback=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_submission([UPSTREAM_SHA])
 
     def test_behind_fork_is_checked_before_creating_fallback(self):
         result = self.run_submission()
@@ -186,8 +206,19 @@ class SubmissionTests(unittest.TestCase):
             with self.subTest(response=response):
                 self.assert_rejected_before_fallback_writes(self.run_submission(**response))
 
-    def test_invalid_fork_sha_is_rejected(self):
-        self.assert_rejected_before_fallback_writes(self.run_submission(fork="null"))
+    def test_invalid_or_unreadable_master_shas_are_rejected(self):
+        for repository in ("upstream", "fork"):
+            for overrides in ({repository: "null"}, {"master_error": repository}):
+                with self.subTest(repository=repository, overrides=overrides):
+                    result = self.run_submission(**overrides)
+                    if repository == "fork":
+                        self.assert_rejected_before_fallback_writes(result)
+                    else:
+                        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                        self.assertFalse(self.ref_creations(), self.calls)
+                        self.assertFalse(any("DELETE" in call or "PUT" in call or call[:2] == ["pr", "create"]
+                                             for call in self.calls), self.calls)
+                    self.assertFalse(any("/compare/" in call[1] for call in self.calls))
 
     def test_existing_pr_stops_before_repository_mutations(self):
         result = self.run_submission(existing="https://example.invalid/winget/pull/existing")

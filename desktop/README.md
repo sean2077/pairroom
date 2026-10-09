@@ -220,6 +220,12 @@ Release. Submission prefers upstream `master`. If the fork cannot create a
 branch at that commit, its own `master` is eligible only after a fixed-SHA
 comparison verifies that it is identical to or an ancestor of upstream. A
 diverged, ahead, or unverifiable fork fails before uploading manifests or
-opening a PR. `python scripts/test_winget_submission.py` exercises these paths
-and the idempotent rerun offline with a recording `gh` fixture; it does not
-submit to GitHub or establish upstream acceptance.
+opening a PR. The submission script targets the Linux release runner and
+requires Bash and GNU coreutils (`sha256sum` and `base64 -w0`).
+`python scripts/test_winget_submission.py` exercises these paths and the
+idempotent rerun offline with a recording `gh` fixture, using the resolved
+absolute Bash path. This suite runs on Linux; on macOS and Windows it explicitly
+reports skipped tests, which provide no submission coverage. Linux without
+Bash fails the suite. The separate native desktop host tests retain their
+platform coverage. This fixture does not submit to GitHub or establish upstream
+acceptance.
