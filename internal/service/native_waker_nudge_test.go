@@ -6,28 +6,35 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sean2077/pairroom/internal/claudewake"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
 	"github.com/sean2077/pairroom/internal/store"
 )
 
 // nudgeFixture drives a real relay Engine and waker on one controlled clock.
-// slot2 is a Codex target; its relay calls, Stop parks and collections are the
-// Turn-boundary signals the outstanding-nudge rule infers from.
+// slot2 defaults to a Codex target; its relay calls, Stop parks and collections
+// are the Turn-boundary signals the outstanding-nudge rule infers from.
 type nudgeFixture struct {
-	t      *testing.T
-	dir    string
-	now    time.Time
-	engine *relay.Engine
-	waker  *nativeWaker
-	auth   map[model.ActorID]relay.Auth
-	runs   int
-	runErr error
+	t             *testing.T
+	dir           string
+	now           time.Time
+	targetRuntime model.RuntimeKind
+	engine        *relay.Engine
+	waker         *nativeWaker
+	auth          map[model.ActorID]relay.Auth
+	runs          int
+	runErr        error
 }
 
 func newNudgeFixture(t *testing.T) *nudgeFixture {
 	t.Helper()
-	f := &nudgeFixture{t: t, dir: t.TempDir(), now: time.Date(2026, time.September, 30, 5, 0, 0, 0, time.UTC), auth: map[model.ActorID]relay.Auth{}}
+	return newNudgeFixtureForRuntime(t, model.RuntimeCodex)
+}
+
+func newNudgeFixtureForRuntime(t *testing.T, targetRuntime model.RuntimeKind) *nudgeFixture {
+	t.Helper()
+	f := &nudgeFixture{t: t, dir: t.TempDir(), now: time.Date(2026, time.September, 30, 5, 0, 0, 0, time.UTC), targetRuntime: targetRuntime, auth: map[model.ActorID]relay.Auth{}}
 	f.open()
 	for _, slot := range model.SlotActors() {
 		secret, session := "secret-"+string(slot), "session-"+string(slot)
@@ -47,7 +54,7 @@ func (f *nudgeFixture) open() {
 		f.t.Fatal(err)
 	}
 	clock := func() time.Time { return f.now }
-	engine, err := relay.Open(relay.Config{RoomID: "room", Store: log, Now: clock, Runtimes: map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: model.RuntimeCodex}})
+	engine, err := relay.Open(relay.Config{RoomID: "room", Store: log, Now: clock, Runtimes: map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: f.targetRuntime}})
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -60,6 +67,12 @@ func (f *nudgeFixture) open() {
 		Run: func(context.Context, string, ...string) error {
 			f.runs++
 			return f.runErr
+		},
+		Claude: func(relay.WakeCandidate) (claudewake.Send, error) {
+			return func(context.Context, string) error {
+				f.runs++
+				return f.runErr
+			}, nil
 		},
 	})
 }
@@ -318,5 +331,57 @@ func TestNativeWakeRestartKeepsReplayedNudgeConservative(t *testing.T) {
 	f.advance(relay.WakeRenewAfter)
 	f.waker.Reconcile(context.Background())
 	f.waker.workers.Wait()
+	f.expect(2, 2)
+}
+
+// Claude's documented inbox delivery occurs between tool calls, so a nudge
+// may already be consumed before the Turn ends. These fixtures exercise the
+// resulting relay transitions; they do not run or certify a vendor session.
+func TestNativeClaudeWakeCollectedBurstRechecksAtMinimumInterval(t *testing.T) {
+	f := newNudgeFixtureForRuntime(t, model.RuntimeClaude)
+	f.startBusyTurn()
+	first := f.send("m1")
+	f.expect(1, 1)
+	f.advance(time.Second)
+	f.collect()
+	f.advance(30 * time.Second)
+	head := f.send("m2")
+	f.expect(1, 1)
+	if f.audits("wake suppressed (minimum_interval)") != 1 || f.audits("wake suppressed (nudge_pending)") != 0 {
+		t.Fatalf("Claude's new burst must use the rate limit, not Codex Turn-end tracking: %#v", f.engine.Snapshot().Audit)
+	}
+	// No Stop has occurred. Maintenance should wake this new burst at the
+	// existing rate deadline, without waiting for the ten-minute fallback.
+	f.advance(nativeWakeMinimumInterval - 31*time.Second)
+	f.waker.Reconcile(context.Background())
+	f.waker.workers.Wait()
+	f.expect(2, 2)
+	if f.audits("wake submitted") != 2 {
+		t.Fatalf("Claude outcomes = %#v; want two submitted effects", f.engine.Snapshot().Audit)
+	}
+	reservations := f.engine.WakeReservations()
+	if reservations[0].MessageID != first || reservations[1].MessageID != head {
+		t.Fatalf("wake reservations = %#v; want each burst reserved once", reservations)
+	}
+	// Replaying the still-queued second burst must never re-submit its effect.
+	f.restart()
+	f.advance(2 * time.Hour)
+	f.waker.Reconcile(context.Background())
+	f.waker.workers.Wait()
+	f.expect(2, 2)
+}
+
+func TestNativeClaudeWakeAfterMidTurnConsumptionAndTurnEnd(t *testing.T) {
+	f := newNudgeFixtureForRuntime(t, model.RuntimeClaude)
+	f.startBusyTurn()
+	f.send("m1")
+	f.advance(time.Second)
+	f.collect()
+	f.advance(time.Second)
+	f.stop()
+	// The original nudge was consumed between tool calls, so it cannot start
+	// another Turn now. Fresh input must be able to wake this idle session.
+	f.advance(nativeWakeMinimumInterval + time.Second)
+	f.send("m2")
 	f.expect(2, 2)
 }

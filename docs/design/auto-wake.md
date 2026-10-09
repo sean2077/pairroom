@@ -71,7 +71,7 @@ right after the newest attempted one owns a new burst once that attempt is
 Renewal reserves the new message ID under the same limits and never re-reserves
 an attempted message.
 
-Collection is not consumption. `codex queue` holds a nudge until the current
+For Codex, collection is not consumption. `codex queue` holds a nudge until the current
 native Turn ends and offers no list or dedupe API, so a target that collects its
 burst mid-Turn with `relay wait` would otherwise receive a second queued nudge
 for its next burst, each later spawning a Turn. The Engine therefore infers an
@@ -81,7 +81,7 @@ authenticated Stop park that releases no envelope, or `StopFailure`. A park that
 delivers input continues the Turn and is not a Turn end. At a reservation the
 target is idle when its last relay call precedes the last Turn end; an idle
 target consumes the nudge with its next relay call, a mid-Turn target only with
-a relay call after a later Turn end. `accepted`, `submitted` and outcome-less
+a relay call after a later Turn end. `accepted` and outcome-less
 reservations count; a definite `failed` does not. While a nudge is outstanding
 the new head is suppressed as `nudge_pending` without a reservation, so it stays
 an unattempted head that the maintenance tick rechecks. Like a rate deferral it
@@ -91,11 +91,21 @@ clears the state. It is an in-memory projection: reservations and outcomes
 replay from existing facts, Turn ends do not, so a replayed nudge takes the
 mid-Turn rule. Sessions whose Stop hook is unapproved or skipped (for example a
 held foreground collector) produce no Turn end and fall back to the same
-10-minute bound. No Event Log field or format changes. The rule applies to both
-Claude and Codex targets: verification in October 2026 confirmed that Claude Code's
-cross-session inbox behaves like codex queue, holding messages until the current
-Turn ends rather than delivering them mid-Turn. Runtime shutdown
-cancels and joins wake workers before closing the event writer. Reservations replay into the rate-limit history, so a
+10-minute bound. No Event Log field or format changes.
+
+Claude uses a different delivery boundary. Anthropic's
+[message-delivery contract](https://code.claude.com/docs/en/cross-session-messaging#message-delivery),
+reviewed 2026-10-09, says the receiving Claude reads messages between tool calls
+during an active Turn; a running tool is not interrupted. An idle session starts
+a new Turn. Applying Codex's consumption rule to Claude can therefore keep an
+already-consumed nudge pending and delay fresh work until the ten-minute bound,
+even after that Turn finishes. Claude keeps the common burst, collector,
+reservation and rate rules without Codex's `nudge_pending` suppression. Historical
+Claude suppression facts remain valid audit vocabulary on replay. This is a
+documented upstream contract, not an authenticated PairRoom vendor-test result.
+
+Runtime shutdown cancels and joins wake workers before closing the event writer.
+Reservations replay into the rate-limit history, so a
 Service restart cannot repeat a possibly successful effect. Missing capability,
 missing CLI, failed transport or native `hold`/`refuse` leaves the receive-only
 `relay wait`/human path available. Do not resend task content to recover wake.
