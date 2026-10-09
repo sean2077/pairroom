@@ -2,6 +2,8 @@
 # Submit the rendered winget manifest to microsoft/winget-pkgs through a fork
 # pull request. Runs in the desktop workflow after the Windows installer is
 # attached to the GitHub Release, so the download URL is already stable.
+# Targets the Linux release runner with Bash and GNU coreutils (sha256sum,
+# base64 -w0).
 #
 # Requires GH_TOKEN set to a classic PAT with public_repo scope for the fork
 # owner (repository secret WINGET_TOKEN); the token never appears in argv.
@@ -21,6 +23,14 @@ EOF
 fail() {
   printf '%s\n' "submit-winget: $*" >&2
   exit 1
+}
+
+master_sha() {
+  local repository="$1" sha
+  sha="$(gh api "repos/${repository}/git/refs/heads/master" --jq '.object.sha')" \
+    || fail "could not read ${repository} master"
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "${repository} master did not resolve to a commit SHA"
+  printf '%s\n' "$sha"
 }
 
 UPSTREAM="microsoft/winget-pkgs"
@@ -94,21 +104,37 @@ for _ in $(seq 1 24); do
 done
 [ -n "$ready" ] || fail "fork $fork is not ready after waiting"
 
-master="$(gh api "repos/${UPSTREAM}/git/refs/heads/master" --jq '.object.sha')" \
-  || fail "could not read ${UPSTREAM} master"
+master="$(master_sha "$UPSTREAM")"
 gh api "repos/${fork}/git/refs/heads/${branch}" -X DELETE >/dev/null 2>&1 || true
 if ! gh api "repos/${fork}/git/refs" \
   -f "ref=refs/heads/${branch}" -f "sha=${master}" >/dev/null 2>&1; then
   # A fork that is behind upstream, or detached from the upstream object store,
   # cannot resolve the upstream commit and rejects it with 404 (syncing it is
   # not always possible: `merge-upstream` is refused without the workflow scope
-  # that winget-pkgs needs). Fall back to the fork's own master, which is an
-  # ancestor of upstream master, so the pull request still adds only manifest
-  # files.
-  master="$(gh api "repos/${fork}/git/refs/heads/master" --jq '.object.sha')" \
-    || fail "could not read ${fork} master"
+  # that winget-pkgs needs). A fallback is safe only when the fork's master is
+  # contained in upstream master; otherwise the PR would include fork changes.
+  fork_master="$(master_sha "$fork")"
+  # Pin both sides of the comparison. With upstream as BASE and the fork as
+  # HEAD, only behind/identical may pass, and the merge base must be the fork.
+  comparison="$(gh api "repos/${UPSTREAM}/compare/${master}...${FORK_OWNER}:${fork_master}?per_page=1")" \
+    || fail "could not verify ${fork} master against ${UPSTREAM} master"
+  if ! "$PYTHON" -c '
+import json, sys
+try:
+    comparison = json.load(sys.stdin)
+    verified = (
+        comparison["base_commit"]["sha"] == sys.argv[1]
+        and comparison["merge_base_commit"]["sha"] == sys.argv[2]
+        and comparison["status"] in ("behind", "identical")
+    )
+except (ValueError, KeyError, TypeError):
+    verified = False
+sys.exit(0 if verified else 1)
+' "$master" "$fork_master" <<< "$comparison"; then
+    fail "${fork} master is not a verified ancestor of ${UPSTREAM} master; repair the fork before retrying"
+  fi
   gh api "repos/${fork}/git/refs" \
-    -f "ref=refs/heads/${branch}" -f "sha=${master}" >/dev/null \
+    -f "ref=refs/heads/${branch}" -f "sha=${fork_master}" >/dev/null \
     || fail "could not create branch ${branch} on ${fork}"
 fi
 

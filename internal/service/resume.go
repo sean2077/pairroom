@@ -18,11 +18,12 @@ type ResumeResult struct {
 }
 
 // ResumePendingRooms requests activation for suspended Rooms whose durable
-// facts show work that only an active Room Runtime can move: an Embedded
+// facts show work that needs an active Room Runtime: an Embedded
 // Room-owned FIFO input that never crossed native submission, or a wake-enabled
 // Native slot with unattempted queued input for its bound session. Without this
-// a restarted Service leaves that work idle until someone opens the Room or a
-// relay call arrives.
+// a restarted Service leaves both wake and waiting-input notifications idle
+// until someone opens the Room or a relay call arrives. Native input does not
+// require a supported external wake transport to qualify for startup recovery.
 //
 // Detection replays each Event Log read-only; nothing is appended before
 // activation. Activation itself applies the existing restore rules: accepted or

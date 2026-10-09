@@ -176,7 +176,8 @@ func (r *Reader) Catalog(ctx context.Context) (Catalog, error) {
 		if err != nil {
 			return Catalog{}, dbError(CodeDatabaseUnreadable, "decode a CC Switch profile row", err)
 		}
-		result.Profiles = append(result.Profiles, summarize(profile))
+		summary, _ := inspectProfile(profile)
+		result.Profiles = append(result.Profiles, summary)
 	}
 	if err := rows.Err(); err != nil {
 		return Catalog{}, dbError(CodeDatabaseUnreadable, "read CC Switch profile rows", err)
@@ -202,16 +203,12 @@ func (r *Reader) Resolve(ctx context.Context, ref model.ProviderRef, runtime mod
 	if err != nil {
 		return Materialization{}, dbError(CodeDatabaseUnreadable, "read the selected CC Switch profile", err)
 	}
-	summary := summarize(profile)
+	summary, materialized := inspectProfile(profile)
 	if summary.Runtime != runtime {
 		return Materialization{}, &Error{Code: CodeRuntimeMismatch, Params: safeRefParams(ref), Detail: fmt.Sprintf("CC Switch profile %s/%s is for %s, not %s", profile.AppType, profile.ID, summary.Runtime, runtime)}
 	}
 	if !summary.Supported {
 		return Materialization{}, &Error{Code: CodeProfileUnsupported, Params: map[string]string{"app_type": summary.ProviderRef.AppType, "profile_id": summary.ProviderRef.ProfileID, "reason": summary.ReasonCode}, Detail: summary.DisabledReason}
-	}
-	materialized, mapErr := materialize(profile, runtime)
-	if mapErr != nil {
-		return Materialization{}, mapErr
 	}
 	return materialized, nil
 }
@@ -313,7 +310,9 @@ func validateProviderTable(ctx context.Context, db *sql.DB, schema int) error {
 	return nil
 }
 
-func summarize(p profileRow) ProfileSummary {
+// inspectProfile owns one fresh row snapshot. Catalog and Resolve share its
+// validation and materialization, but never cache it across database reads.
+func inspectProfile(p profileRow) (ProfileSummary, Materialization) {
 	runtime := runtimeForAppType(p.AppType)
 	s := ProfileSummary{
 		ProviderRef: model.ProviderRef{Source: model.ProviderCCSwitch, AppType: p.AppType, ProfileID: p.ID},
@@ -321,52 +320,55 @@ func summarize(p profileRow) ProfileSummary {
 	}
 	settings, meta, err := decodeProfileJSON(p)
 	if err != nil {
-		return uninspectableSummary(s)
+		return uninspectableSummary(s), Materialization{}
 	}
 	if runtime == model.RuntimeClaude && claudeOpaqueSettings(settings) {
-		return uninspectableSummary(s)
+		return uninspectableSummary(s), Materialization{}
 	}
-	if config, ok := settings["config"].(string); ok {
-		doc := parseTOML(config)
-		if doc.Invalid || doc.UnsafeCredentials {
-			// An opaque or malformed credential declaration cannot be redacted
-			// reliably. Withhold row-authored metadata as well as materialization.
-			return uninspectableSummary(s)
-		}
+	configText, _ := settings["config"].(string)
+	parsed := parseTOML(configText)
+	if uninspectableTOMLCredentials(parsed, runtime) {
+		// An opaque or malformed credential declaration cannot be redacted
+		// reliably. Withhold row-authored metadata as well as materialization.
+		return uninspectableSummary(s), Materialization{}
 	}
 	// Derive credential candidates only for in-process redaction checks. A
 	// malformed or malicious profile must not smuggle a token into a model
 	// suggestion, display name, or ProviderRef even when it is later disabled.
-	secrets := profileSecretValues(settings, meta)
+	secrets, unsafeCredentials := profileSecretValues(settings, meta, parsed)
+	if unsafeCredentials {
+		return uninspectableSummary(s), Materialization{}
+	}
 	// Sanitize before redacting: stripping control characters first would
 	// otherwise rejoin a credential that was split across them, producing a value
 	// the redaction pass can no longer recognize.
 	s.Name = redactSecrets(sanitizeProviderName(p.Name), secrets)
 	s.ProviderRef.AppType = redactSecrets(s.ProviderRef.AppType, secrets)
 	s.ProviderRef.ProfileID = redactSecrets(s.ProviderRef.ProfileID, secrets)
-	for _, candidate := range profileModels(runtime, settings, meta) {
+	models := profileModels(runtime, settings, meta, parsed)
+	for _, candidate := range models {
 		if containsAnySecret(candidate, secrets) {
 			s.ReasonCode, s.DisabledReason = ReasonInvalidConfig, "Profile configuration is invalid and cannot be materialized safely."
-			return s
+			return s, Materialization{}
 		}
 		s.Models = append(s.Models, candidate)
 	}
 	if !runtime.Valid() {
 		s.ReasonCode, s.DisabledReason = ReasonUnsupportedApp, "This CC Switch application type is not supported by PairRoom."
-		return s
+		return s, Materialization{}
 	}
 	// Queue membership is not a credential or routing mode. A direct API-key
 	// provider can also participate in CC Switch failover or aggregation; this
 	// reference still selects only that provider, without either routing policy.
 	if profileHasManagedOAuth(settings) || profileMetaManagedOAuth(meta) {
 		s.ReasonCode, s.DisabledReason = ReasonManagedOAuth, "Managed OAuth profiles remain owned by CC Switch and cannot be materialized independently."
-		return s
+		return s, Materialization{}
 	}
 	if profileRequiresConversion(runtime, meta) {
 		s.ReasonCode, s.DisabledReason = ReasonProxyConversion, "Proxy or protocol-conversion profiles require CC Switch global state and cannot be selected."
-		return s
+		return s, Materialization{}
 	}
-	materialized, err := materializeDecoded(p, runtime, settings, meta)
+	materialized, err := materializeSnapshot(p, runtime, profileSnapshot{settings: settings, meta: meta, config: parsed, secrets: secrets, models: models})
 	if err != nil {
 		if mapped, ok := err.(*Error); ok {
 			s.ReasonCode = mapped.Params["reason"]
@@ -374,13 +376,13 @@ func summarize(p profileRow) ProfileSummary {
 		} else {
 			s.ReasonCode, s.DisabledReason = ReasonInvalidConfig, "Profile configuration is invalid and cannot be materialized safely."
 		}
-		return s
+		return s, Materialization{}
 	}
 	// Keep the catalog's model list sourced from the exact safe materialization
 	// rather than from arbitrary nested JSON values.
 	s.Models = append([]string(nil), materialized.Models...)
 	s.Supported = true
-	return s
+	return s, materialized
 }
 
 func uninspectableSummary(s ProfileSummary) ProfileSummary {
@@ -393,14 +395,6 @@ func uninspectableSummary(s ProfileSummary) ProfileSummary {
 	}
 	s.ReasonCode, s.DisabledReason = ReasonInvalidConfig, "Profile configuration cannot be inspected safely; repair it in CC Switch."
 	return s
-}
-
-func materialize(p profileRow, runtime model.RuntimeKind) (Materialization, error) {
-	settings, meta, err := decodeProfileJSON(p)
-	if err != nil {
-		return Materialization{}, profileError(p, ReasonInvalidConfig, "CC Switch profile configuration is invalid")
-	}
-	return materializeDecoded(p, runtime, settings, meta)
 }
 
 func decodeProfileJSON(p profileRow) (map[string]any, map[string]any, error) {
@@ -417,7 +411,16 @@ func decodeProfileJSON(p profileRow) (map[string]any, map[string]any, error) {
 	return settings, meta, nil
 }
 
-func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta map[string]any) (Materialization, error) {
+// profileSnapshot is private to one inspectProfile call. Its parsed TOML,
+// model suggestions, and credential set are reused by every projection check.
+type profileSnapshot struct {
+	settings, meta  map[string]any
+	config          tomlDocument
+	secrets, models []string
+}
+
+func materializeSnapshot(p profileRow, runtime model.RuntimeKind, snapshot profileSnapshot) (Materialization, error) {
+	settings, meta, parsed := snapshot.settings, snapshot.meta, snapshot.config
 	label := "cc-switch:" + p.AppType + "/" + p.ID
 	// The Profile display name travels with the internal reference label so a UI
 	// can show a human-readable Provider without parsing the reference form. It
@@ -428,7 +431,7 @@ func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta 
 	// against the full profile secret set rather than only the materialized
 	// environment, so a credential in a field PairRoom never copies into Env
 	// still cannot survive in the display name.
-	secrets := profileSecretValues(settings, meta)
+	secrets := snapshot.secrets
 	providerName := redactSecrets(sanitizeProviderName(p.Name), secrets)
 	switch runtime.Canonical() {
 	case model.RuntimeClaude:
@@ -449,15 +452,9 @@ func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta 
 				allowed[key] = value
 			}
 		}
-		models := profileModels(runtime, settings, meta)
-		return finishMaterialization(p, Materialization{ProviderLabel: label, ProviderName: providerName, Env: allowed, Args: claudeCompatibilityArgs(allowed), Models: models, DefaultModel: firstNonEmpty(env["ANTHROPIC_MODEL"], stringValue(settings["model"]))}, secrets)
+		return finishMaterialization(p, Materialization{ProviderLabel: label, ProviderName: providerName, Env: allowed, Args: claudeCompatibilityArgs(allowed), Models: snapshot.models, DefaultModel: firstNonEmpty(env["ANTHROPIC_MODEL"], stringValue(settings["model"]))}, secrets)
 	case model.RuntimeCodex:
 		auth := stringMap(settings["auth"])
-		if profileHasManagedOAuth(settings) {
-			return Materialization{}, profileError(p, ReasonManagedOAuth, "Managed OAuth profiles remain owned by CC Switch and cannot be materialized independently.")
-		}
-		configText, _ := settings["config"].(string)
-		parsed := parseTOML(configText)
 		section, err := codexProviderSection(p, parsed)
 		if err != nil {
 			return Materialization{}, err
@@ -498,19 +495,25 @@ func materializeDecoded(p profileRow, runtime model.RuntimeKind, settings, meta 
 			"-c", "model_providers." + id + ".base_url=" + tomlQuote(baseURL),
 			"-c", "model_providers." + id + ".requires_openai_auth=false",
 		}
-		options, err := codexProfileOptions(p, parsed, section, id)
+		options, err := codexProfileOptions(p, parsed, id)
 		if err != nil {
 			return Materialization{}, err
 		}
 		args = append(args, options...)
-		models := profileModels(runtime, settings, meta)
-		return finishMaterialization(p, Materialization{ProviderLabel: label, ProviderName: providerName, Env: map[string]string{envKey: key}, Args: args, Models: models, DefaultModel: parsed.Root["model"], DefaultEffort: parsed.Root["model_reasoning_effort"]}, secrets)
+		return finishMaterialization(p, Materialization{ProviderLabel: label, ProviderName: providerName, Env: map[string]string{envKey: key}, Args: args, Models: snapshot.models, DefaultModel: parsed.Root["model"], DefaultEffort: parsed.Root["model_reasoning_effort"]}, secrets)
 	case model.RuntimeGrok:
-		configText, _ := settings["config"].(string)
-		parsed := parseTOML(configText)
 		selected := strings.TrimSpace(parsed.Sections["models"]["default"])
+		sectionName := "model." + tomlKey(selected)
+		for _, path := range []string{
+			"models.default", sectionName + ".model", sectionName + ".name",
+			sectionName + ".base_url", sectionName + ".api_backend",
+		} {
+			if !supportedTOMLScalar(parsed, path, tomlString) {
+				return Materialization{}, profileError(p, ReasonInvalidConfig, "Grok Build profile contains an invalid model or credential declaration.")
+			}
+		}
 		section := grokModelSection(parsed, selected)
-		if parsed.Invalid || unsupportedTOMLPrefix(parsed, "models.default") || unsupportedTOMLPrefix(parsed, "model."+tomlKey(selected)) {
+		if unsupportedTOMLPrefix(parsed, sectionName) {
 			return Materialization{}, profileError(p, ReasonInvalidConfig, "Grok Build profile contains unsupported provider configuration syntax.")
 		}
 		if selected == "" || len(section) == 0 {
@@ -620,72 +623,132 @@ func credentialEnvironmentName(value string) bool {
 // and failover rows. env_key values are variable names, so the corresponding
 // process environment value is resolved for the safety check but the name
 // itself is never treated as a secret.
-func profileSecretValues(settings, meta map[string]any) []string {
+func profileSecretValues(settings, meta map[string]any, parsed tomlDocument) ([]string, bool) {
 	values := make([]string, 0, 4)
-	collectCredentialValues(settings, &values)
-	collectCredentialValues(meta, &values)
-	return uniqueSecrets(values)
-}
-
-func collectCredentialValues(value any, values *[]string) {
-	switch typed := value.(type) {
-	case string:
-		return
-	case []any:
-		for _, item := range typed {
-			collectCredentialValues(item, values)
-		}
-	case map[string]any:
-		for key, item := range typed {
-			lower := strings.ToLower(strings.TrimSpace(key))
-			if lower == "env_key" || lower == "env-key" {
-				if name, ok := item.(string); ok {
-					if secret := credentialFromEnvironment(name); secret != "" {
-						*values = append(*values, secret)
+	unsafeCredentials := false
+	configText, _ := settings["config"].(string)
+	var collect func(any, []string)
+	collect = func(value any, path []string) {
+		switch typed := value.(type) {
+		case string:
+			if credential := jsonCredentialField(path); credential != "" {
+				appendCredentialValue(typed, credential, &values)
+			}
+		case []any:
+			for _, item := range typed {
+				collect(item, path)
+			}
+		case map[string]any:
+			for key, item := range typed {
+				field := strings.ToLower(strings.TrimSpace(key))
+				if field == "config" {
+					if text, ok := item.(string); ok {
+						// Reuse the row's parsed configuration. An additional nested
+						// snapshot, if present, still receives credential inspection.
+						doc := parsed
+						if text != configText {
+							doc = parseTOML(text)
+						}
+						// A credential-shaped opaque value cannot be redacted.
+						// Generic malformed text in unused metadata is not an
+						// active provider declaration and does not disable it.
+						unsafeCredentials = unsafeCredentials || doc.UnsafeCredentials
+						collectTOMLCredentialValues(doc, &values)
 					}
 				}
-			} else if credentialFieldName(lower) {
-				if secret, ok := item.(string); ok && strings.TrimSpace(secret) != "" {
-					*values = append(*values, strings.TrimSpace(secret))
-				}
+				collect(item, append(path, field))
 			}
-			if lower == "config" {
-				if configText, ok := item.(string); ok {
-					doc := parseTOML(configText)
-					collectCredentialValues(tomlDocumentMap(doc), values)
-				}
-			}
-			collectCredentialValues(item, values)
+		}
+	}
+	collect(settings, nil)
+	collect(meta, nil)
+	return uniqueSecrets(values), unsafeCredentials
+}
+
+func jsonCredentialField(path []string) string {
+	var credential string
+	var parent string
+	for i, field := range path {
+		if credentialJSONFieldName(field, parent, i+1 < len(path)) {
+			credential = field
+		}
+		if parent != "" {
+			parent += "."
+		}
+		parent += field
+	}
+	return credential
+}
+
+func collectTOMLCredentialValues(doc tomlDocument, values *[]string) {
+	for path := range doc.ScalarKinds {
+		if field := tomlCredentialField(path, false); field != "" {
+			appendCredentialValue(tomlScalarValue(doc, path), field, values)
 		}
 	}
 }
 
-func tomlDocumentMap(doc tomlDocument) map[string]any {
-	result := make(map[string]any, len(doc.Root)+len(doc.Sections))
-	for key, value := range doc.Root {
-		result[key] = value
+func appendCredentialValue(value, field string, values *[]string) {
+	if field == "env_key" || field == "env-key" {
+		value = credentialFromEnvironment(value)
 	}
-	for name, section := range doc.Sections {
-		items := make(map[string]any, len(section))
-		for key, value := range section {
-			items[key] = value
-		}
-		result[name] = items
+	if value = strings.TrimSpace(value); value != "" {
+		*values = append(*values, value)
 	}
-	return result
 }
 
-func credentialFieldName(value string) bool {
+// Some JSON snapshots have flattened credential keys. Keep their historical
+// redaction, but do not reinterpret a quoted TOML component as a dotted path.
+func credentialJSONFieldName(value, parent string, container bool) bool {
 	if offset := strings.LastIndexByte(value, '.'); offset >= 0 {
+		if parent != "" {
+			parent += "."
+		}
+		parent += value[:offset]
 		value = strings.Trim(value[offset+1:], `"'`)
+		// Preserve the legacy flattened-field redaction rule. A plain env_key
+		// is a reference, but a literal dotted JSON key was never one.
+		if value == "env_key" || value == "env-key" {
+			return false
+		}
 	}
+	// A data name never reopens a collection. A server named model must keep
+	// the env map below it in its environment role.
+	dataName := false
+	for _, part := range strings.Split(parent, ".") {
+		parent = strings.Trim(part, `"'`)
+		if dataName {
+			parent = ""
+			dataName = false
+			continue
+		}
+		collection := parent
+		if collection == "mcpservers" {
+			collection = "mcp_servers" // JSON uses a camel-case spelling.
+		}
+		dataName = credentialDataCollection(collection)
+	}
+	return credentialFieldName(value, parent, container)
+}
+
+func credentialDataCollection(value string) bool {
+	return value == "model_providers" || value == "model" || value == "mcp_servers"
+}
+
+// Exact credential names establish container semantics. Suffix matching is a
+// leaf heuristic, except in env/auth maps where the key names a credential
+// variable. A namespace such as my_token.command is not itself a secret source.
+func credentialFieldName(value, parent string, container bool) bool {
 	if value == "env_key" || value == "env-key" {
-		return false
+		return true
 	}
-	return value == "api_key" || value == "apikey" || value == "auth_token" || value == "token" || value == "authorization" ||
+	if value == "api_key" || value == "apikey" || value == "auth_token" || value == "token" || value == "authorization" ||
 		value == "access_token" || value == "refresh_token" || value == "credential" ||
-		value == "password" || value == "secret" || strings.HasSuffix(value, "_api_key") ||
-		strings.HasSuffix(value, "_token") || strings.HasSuffix(value, "_secret")
+		value == "password" || value == "secret" || value == "experimental_bearer_token" {
+		return true
+	}
+	return (!container || parent == "env" || parent == "auth") && (strings.HasSuffix(value, "_api_key") ||
+		strings.HasSuffix(value, "_token") || strings.HasSuffix(value, "_secret"))
 }
 
 func uniqueSecrets(values []string) []string {

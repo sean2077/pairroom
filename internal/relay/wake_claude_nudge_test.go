@@ -1,181 +1,231 @@
 package relay
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
 )
 
-// TestClaudeNudgePendingAssumption verifies that Claude targets now receive
-// nudge_pending protection, preventing redundant wake attempts during active Turns.
-// This was enabled after verification confirmed that Claude Code's cross-session
-// inbox behaves like codex queue, holding messages until Turn end.
-func TestClaudeNudgePendingAssumption(t *testing.T) {
-	e, a, _ := testEngine(t)
-
-	// Bind both slots with their respective runtimes
-	first, err := e.Send(a[model.ActorSlot2], SendRequest{ID: "claude-1", Text: "first"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Reserve and submit a wake to Claude (slot1)
-	if err := e.ReserveWake(first.ID, model.ActorSlot1); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.RecordWakeAttempt(first.ID, "submitted", "", model.ActorSlot1); err != nil {
-		t.Fatal(err)
-	}
-
-	// Simulate mid-Turn activity (Claude made a relay call but Turn hasn't ended)
-	if _, err := e.Inspect(a[model.ActorSlot1]); err != nil {
-		t.Fatal(err)
-	}
-
-	// Send another message while Claude is "mid-Turn"
-	next, err := e.Send(a[model.ActorSlot2], SendRequest{ID: "claude-2", Text: "next"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// CURRENT BEHAVIOR (after verification): Claude IS protected by nudge_pending
-	c, ok := e.WakeCandidate(next.ID)
-	if !ok {
-		t.Fatal("expected valid wake candidate")
-	}
-
-	if !c.NudgePending {
-		t.Error("Claude candidate should have NudgePending=true after verification")
-	}
-
-	// Reservation should fail due to outstanding nudge
-	if err := e.ReserveWake(next.ID, model.ActorSlot1); err != ErrWakeIneligible {
-		t.Errorf("Claude reservation = %v; want ErrWakeIneligible due to nudge_pending", err)
-	}
-}
-
-// TestCodexNudgePendingWorksAsExpected verifies that Codex targets DO get
-// nudge_pending protection (this is the current working behavior).
-func TestCodexNudgePendingWorksAsExpected(t *testing.T) {
-	e, a, _ := testEngine(t)
-
-	// Send to Codex (slot2)
-	first, err := e.Send(a[model.ActorSlot1], SendRequest{ID: "codex-1", Text: "first"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Reserve and accept wake
-	if err := e.ReserveWake(first.ID, model.ActorSlot2); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.RecordWakeAttempt(first.ID, "accepted", "", model.ActorSlot2); err != nil {
-		t.Fatal(err)
-	}
-
-	// Simulate mid-Turn activity
-	if _, err := e.Inspect(a[model.ActorSlot2]); err != nil {
-		t.Fatal(err)
-	}
-
-	// Send another message
-	next, err := e.Send(a[model.ActorSlot1], SendRequest{ID: "codex-2", Text: "next"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Codex SHOULD have nudge_pending protection
-	c, ok := e.WakeCandidate(next.ID)
-	if !ok {
-		t.Fatal("expected valid wake candidate")
-	}
-
-	if !c.NudgePending {
-		t.Error("Codex candidate should have NudgePending=true")
-	}
-
-	// Reservation should fail due to outstanding nudge
-	if err := e.ReserveWake(next.ID, model.ActorSlot2); err != ErrWakeIneligible {
-		t.Errorf("Codex reservation = %v; want ErrWakeIneligible due to nudge_pending", err)
-	}
-}
-
-// TestClaudeAndCodexSymmetry documents the asymmetry we want to investigate.
-// This test captures the current state and can guide the verification.
-func TestClaudeAndCodexWakeSymmetry(t *testing.T) {
-	e, a, _ := testEngine(t)
-
-	type testCase struct {
-		name            string
-		targetSlot      model.ActorID
-		senderSlot      model.ActorID
-		expectProtected bool // whether nudge_pending should protect
-	}
-
-	cases := []testCase{
-		{
-			name:            "Codex target gets nudge_pending",
-			targetSlot:      model.ActorSlot2, // Codex
-			senderSlot:      model.ActorSlot1,
-			expectProtected: true, // CURRENT: works
-		},
-		{
-			name:            "Claude target has nudge_pending",
-			targetSlot:      model.ActorSlot1, // Claude
-			senderSlot:      model.ActorSlot2,
-			expectProtected: true, // After verification: Claude inbox behaves like codex queue
-		},
-	}
-
-	for _, tc := range cases {
+func TestClaudeWakeNewBurstDoesNotRequireAnotherTurn(t *testing.T) {
+	for _, tc := range []struct {
+		name, outcome string
+		replay        bool
+	}{
+		{name: "submitted", outcome: "submitted"},
+		{name: "reserved without outcome"},
+		{name: "replayed Claude suppression", outcome: "submitted", replay: true},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// Send first message
-			first, err := e.Send(a[tc.senderSlot], SendRequest{ID: tc.name + "-1", Text: "first"})
+			e, auth, dir := testEngine(t)
+			target := auth[model.ActorSlot1]
+			now := e.bindings[target.Slot].LastActivity.Add(time.Second)
+			e.cfg.Now = func() time.Time { return now }
+			first, err := e.Send(auth[model.ActorSlot2], SendRequest{ID: "claude-1", Text: "first"})
 			if err != nil {
 				t.Fatal(err)
 			}
-
-			// Wake it
-			if err := e.ReserveWake(first.ID, tc.targetSlot); err != nil {
+			if err := e.ReserveWake(first.ID, target.Slot); err != nil {
 				t.Fatal(err)
 			}
-			outcome := "accepted"
-			if e.cfg.Runtimes[tc.targetSlot] == model.RuntimeClaude {
-				outcome = "submitted"
+			if tc.outcome != "" {
+				if err := e.RecordWakeAttempt(first.ID, tc.outcome, "", target.Slot); err != nil {
+					t.Fatal(err)
+				}
 			}
-			if err := e.RecordWakeAttempt(first.ID, outcome, "", tc.targetSlot); err != nil {
+			// A receipt-matched handoff supersedes the wake need without waiting
+			// for Turn end. It does not prove the native nudge itself arrived.
+			now = now.Add(time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			claim, err := e.Claim(ctx, target, false)
+			if err != nil || claim == nil || claim.ID != first.ID {
+				t.Fatalf("first claim = %#v, %v", claim, err)
+			}
+			if err := e.Ack(target, claim.ID, claim.Receipt); err != nil {
 				t.Fatal(err)
 			}
-
-			// Mid-Turn activity
-			if _, err := e.Inspect(a[tc.targetSlot]); err != nil {
-				t.Fatal(err)
-			}
-
-			// Send second message
-			second, err := e.Send(a[tc.senderSlot], SendRequest{ID: tc.name + "-2", Text: "second"})
+			next, err := e.Send(auth[model.ActorSlot2], SendRequest{ID: "claude-2", Text: "next"})
 			if err != nil {
 				t.Fatal(err)
 			}
-
-			c, ok := e.WakeCandidate(second.ID)
-			if !ok {
-				t.Fatal("no candidate")
-			}
-
-			if c.NudgePending != tc.expectProtected {
-				t.Errorf("NudgePending = %v; want %v (current design)", c.NudgePending, tc.expectProtected)
-			}
-
-			reserveErr := e.ReserveWake(second.ID, tc.targetSlot)
-			if tc.expectProtected {
-				if reserveErr != ErrWakeIneligible {
-					t.Errorf("protected target reservation = %v; want ErrWakeIneligible", reserveErr)
+			if tc.replay {
+				// Keep reading the audit vocabulary emitted by the prior binary;
+				// that observation must not reserve the new queue head. The actual
+				// handoff is durable and must supersede the wake after replay too.
+				if err := e.RecordWake("suppressed", "nudge_pending", target.Slot); err != nil {
+					t.Fatal(err)
 				}
-			} else {
-				if reserveErr != nil {
-					t.Errorf("unprotected target reservation failed: %v", reserveErr)
+				if err := e.Close(); err != nil {
+					t.Fatal(err)
 				}
+				e = reopenEngine(t, dir)
+				e.cfg.Now = func() time.Time { return now }
+				if c, ok := e.WakeCandidate(next.ID); !ok || c.NudgePending || c.Reserved {
+					t.Fatalf("replayed Claude candidate = %#v, %v; want acknowledged progress", c, ok)
+				}
+			}
+			if c, ok := e.WakeCandidate(next.ID); !ok || !c.QueueStart || c.Reserved || c.NudgePending {
+				t.Fatalf("Claude candidate = %#v, %v; want an unattempted new burst", c, ok)
+			}
+			if err := e.ReserveWake(first.ID, target.Slot); !errors.Is(err, ErrWakeReserved) {
+				t.Fatalf("original wake reservation = %v; want ErrWakeReserved", err)
+			}
+			if err := e.ReserveWake(next.ID, target.Slot); err != nil {
+				t.Fatalf("new burst reservation = %v", err)
+			}
+		})
+	}
+}
+
+func TestClaudeWakePendingRequiresAcknowledgedCollection(t *testing.T) {
+	for _, tc := range []struct {
+		name, outcome string
+		replay        bool
+	}{
+		{name: "submitted", outcome: "submitted"},
+		{name: "unknown outcome"},
+		{name: "replayed submitted", outcome: "submitted", replay: true},
+		{name: "replayed unknown outcome", replay: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, auth, dir := testEngine(t)
+			target := auth[model.ActorSlot1]
+			now := e.bindings[target.Slot].LastActivity.Add(time.Second)
+			e.cfg.Now = func() time.Time { return now }
+			first, err := e.Send(auth[model.ActorSlot2], SendRequest{ID: "first", Text: "first"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := e.ReserveWake(first.ID, target.Slot); err != nil {
+				t.Fatal(err)
+			}
+			if tc.outcome != "" {
+				if err := e.RecordWakeAttempt(first.ID, tc.outcome, "", target.Slot); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := e.Cancel(first.ID); err != nil {
+				t.Fatal(err)
+			}
+			now = now.Add(time.Minute)
+			next, err := e.Send(auth[model.ActorSlot2], SendRequest{ID: "next", Text: "next"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// All these calls authenticate, but none retrieves an envelope. A
+			// held native nudge can remain outstanding throughout them. Include
+			// a real binding append so replay also sees a later LastActivity.
+			if _, err := e.AuthSummary(target); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.Peer(target); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.Send(target, SendRequest{ID: "own-send", Text: "update", To: model.ActorUser}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.ConfirmSession(target, target.SessionID, "/updated/transcript"); err != nil {
+				t.Fatal(err)
+			}
+			e.InspectTransport()
+			bad := target
+			bad.Secret = "wrong"
+			if _, err := e.Inspect(bad); !errors.Is(err, ErrAuth) {
+				t.Fatalf("invalid authentication = %v", err)
+			}
+			if tc.replay {
+				if err := e.Close(); err != nil {
+					t.Fatal(err)
+				}
+				e = reopenEngine(t, dir)
+				e.cfg.Now = func() time.Time { return now }
+			}
+			if c, ok := e.WakeCandidate(next.ID); !ok || !c.QueueStart || !c.NudgePending || c.Reserved {
+				t.Fatalf("non-collection activity released Claude nudge = %#v, %v", c, ok)
+			}
+			if err := e.ReserveWake(next.ID, target.Slot); !errors.Is(err, ErrWakeIneligible) {
+				t.Fatalf("pending admission = %v; want ErrWakeIneligible", err)
+			}
+			now = now.Add(time.Second)
+			claim, err := e.Claim(context.Background(), target, false)
+			if err != nil || claim == nil || claim.ID != next.ID {
+				t.Fatalf("claim = %#v, %v", claim, err)
+			}
+			last, err := e.Send(auth[model.ActorSlot2], SendRequest{ID: "last", Text: "last"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := e.Ack(target, claim.ID, "wrong-receipt"); !errors.Is(err, ErrAuth) {
+				t.Fatalf("wrong acknowledgement = %v", err)
+			}
+			if c, ok := e.WakeCandidate(last.ID); !ok || !c.NudgePending || !c.Delivering {
+				t.Fatalf("claim or invalid Ack consumed nudge = %#v, %v", c, ok)
+			}
+			if err := e.Ack(target, claim.ID, claim.Receipt); err != nil {
+				t.Fatal(err)
+			}
+			if c, ok := e.WakeCandidate(last.ID); !ok || c.NudgePending || c.Delivering {
+				t.Fatalf("acknowledged collection did not supersede wake = %#v, %v", c, ok)
+			}
+			if err := e.ReserveWake(last.ID, target.Slot); err != nil {
+				t.Fatalf("new burst admission = %v", err)
+			}
+			now = now.Add(time.Second)
+			if err := e.Ack(target, claim.ID, claim.Receipt); err != nil {
+				t.Fatal(err)
+			}
+			if c, ok := e.WakeCandidate(last.ID); !ok || !c.NudgePending {
+				t.Fatalf("duplicate old Ack released a newer nudge = %#v, %v", c, ok)
+			}
+			if err := e.ReserveWake(first.ID, target.Slot); !errors.Is(err, ErrWakeReserved) {
+				t.Fatalf("attempted message admission = %v; want ErrWakeReserved", err)
+			}
+		})
+	}
+}
+
+func TestClaudeWakeOldOrSimultaneousClaimCannotSupersedeNudge(t *testing.T) {
+	for _, equal := range []bool{false, true} {
+		t.Run(map[bool]string{false: "late Ack of earlier claim", true: "claim at reservation time"}[equal], func(t *testing.T) {
+			e, auth, _ := testEngine(t)
+			target := auth[model.ActorSlot1]
+			now := e.bindings[target.Slot].LastActivity.Add(time.Second)
+			e.cfg.Now = func() time.Time { return now }
+			first, err := e.Send(auth[model.ActorSlot2], SendRequest{ID: "first", Text: "first"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if equal {
+				if err := e.ReserveWake(first.ID, target.Slot); err != nil {
+					t.Fatal(err)
+				}
+			}
+			claim, err := e.Claim(context.Background(), target, false)
+			if err != nil || claim == nil {
+				t.Fatalf("claim = %#v, %v", claim, err)
+			}
+			now = now.Add(DeliveryLease + time.Second)
+			if err := e.Reap(); err != nil {
+				t.Fatal(err)
+			}
+			next, err := e.Send(auth[model.ActorSlot2], SendRequest{ID: "next", Text: "next"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !equal {
+				if err := e.ReserveWake(next.ID, target.Slot); err != nil {
+					t.Fatal(err)
+				}
+			}
+			now = now.Add(time.Second)
+			if err := e.Ack(target, claim.ID, claim.Receipt); err != nil {
+				t.Fatal(err)
+			}
+			if c, ok := e.WakeCandidate(next.ID); !ok || !c.NudgePending {
+				t.Fatalf("old claim released newer nudge = %#v, %v", c, ok)
 			}
 		})
 	}

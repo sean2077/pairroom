@@ -16,7 +16,7 @@ else
 DESKTOP_PYTHON ?= $(PYTHON)
 endif
 GOVULNCHECK_VERSION := v1.8.0
-GOLANGCI_LINT_VERSION := v2.13.2
+GOLANGCI_LINT_VERSION := v2.14.0
 GOLANGCI_LINT ?= golangci-lint
 VERSION_PKG := github.com/sean2077/pairroom/internal/version
 LDFLAGS := -s -w -X '$(VERSION_PKG).Commit=$(COMMIT)' -X '$(VERSION_PKG).BuildDate=$(BUILD_DATE)' -X '$(VERSION_PKG).LastTag=$(LAST_TAG)' -X '$(VERSION_PKG).CommitsSinceTag=$(COMMITS_SINCE_TAG)'
@@ -148,6 +148,7 @@ desktop-package:
 desktop-check:
 	"$(DESKTOP_PYTHON)" "$(DESKTOP_DIR)/scripts/test_update_local.py"
 	"$(DESKTOP_PYTHON)" "$(DESKTOP_DIR)/scripts/test_winget_manifest.py"
+	"$(DESKTOP_PYTHON)" "$(DESKTOP_DIR)/scripts/test_winget_submission.py"
 
 # Rebuild and replace the local host + bundled CLI without changing daemon state.
 desktop-update:

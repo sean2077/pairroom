@@ -58,7 +58,7 @@ func (e *Engine) ReserveWake(messageID string, target model.ActorID) error {
 		return ErrWakeReserved
 	}
 	candidate, ok := e.wakeCandidateLocked(messageID)
-	if !ok || candidate.Target != target || !candidate.Enabled || !candidate.QueueStart || candidate.SessionID == "" || candidate.WaiterActive || candidate.Delivering || candidate.NudgePending {
+	if !ok || candidate.Target != target || !candidate.Enabled || !candidate.QueueStart || candidate.SessionID == "" || !candidate.Runtime.NativeWakePolicy().Transport.Supported() || candidate.WaiterActive || candidate.Delivering || candidate.NudgePending {
 		return ErrWakeIneligible
 	}
 	// Replacement cancels queued work for the old generation; the candidate
@@ -144,11 +144,8 @@ func (e *Engine) wakeCandidateLocked(messageID string) (WakeCandidate, bool) {
 		return WakeCandidate{}, false
 	}
 	candidate := WakeCandidate{MessageID: m.ID, Target: m.To, Enabled: e.wakeEnabled}
-	candidate.Runtime = e.cfg.Runtimes[m.To]
+	candidate.Runtime = e.wakeRuntimeLocked(m.To)
 	if b := e.bindings[m.To]; b.Active && b.Generation == m.TargetGeneration {
-		if candidate.Runtime == "" {
-			candidate.Runtime = b.Runtime
-		}
 		candidate.SessionID = b.SessionID
 		candidate.BindID = b.BindID
 		candidate.Generation = b.Generation
@@ -158,36 +155,66 @@ func (e *Engine) wakeCandidateLocked(messageID string) (WakeCandidate, bool) {
 	candidate.Delivering = e.counts[m.To].Delivering > 0
 	candidate.Reserved = e.wakeReserved[m.ID]
 	candidate.WaiterActive = e.waiters[m.To] > 0
-	// Both codex queue and Claude inbox hold nudges until the current Turn ends.
-	// Verified 2026-10: Claude Code cross-session inbox behaves like codex queue,
-	// delivering queued messages only at Turn boundaries, not mid-Turn.
-	candidate.NudgePending = e.wakeNudgePendingLocked(m.To)
+	candidate.NudgePending = candidate.Runtime.NativeWakePolicy().Transport.Supported() && e.wakeNudgePendingLocked(m.To)
 	return candidate, true
+}
+
+// Only the immutable Room selection identifies the runtime. Binding.Runtime is
+// an inspection projection, not a durable runtime source. An absent/unknown
+// selection never gains a slot default or a vendor wake capability.
+func (e *Engine) wakeRuntimeLocked(slot model.ActorID) model.RuntimeKind {
+	return e.cfg.Runtimes[slot].Canonical()
 }
 
 // wakeNudge is the newest reserved nudge for one target. Settled means its
 // outcome was recorded; Failed means that outcome proved no delivery. A
 // reservation without an outcome may have reached the native queue.
 type wakeNudge struct {
-	At      time.Time
-	MidTurn bool
-	Settled bool
-	Failed  bool
+	At          time.Time
+	Consumption model.NativeWakeConsumption
+	MidTurn     bool
+	Settled     bool
+	Failed      bool
+	HandedOff   bool
 }
 
-// noteWakeNudgeLocked starts outstanding-nudge tracking at a reservation. The
-// target counts as mid-Turn unless its last relay call precedes an observed
-// Turn end. Replay has no Turn-end observations, so a replayed nudge takes the
-// stricter mid-Turn rule until WakeRenewAfter bounds it.
+// noteWakeNudgeLocked starts outstanding-nudge tracking at a reservation. Claude
+// can make progress within a Turn, but an ordinary relay call says nothing
+// about its inbox: only an acknowledged collection supersedes the wake need.
+// Codex holds a busy target's queue until Turn end; replay has no Turn-end
+// observations and keeps that stricter rule.
 func (e *Engine) noteWakeNudgeLocked(r WakeReservation) {
-	ended := e.turnEnded[r.Target]
-	midTurn := ended.IsZero() || e.bindings[r.Target].LastActivity.After(ended)
-	e.wakeNudges[r.Target] = wakeNudge{At: r.At, MidTurn: midTurn}
+	policy := e.wakeRuntimeLocked(r.Target).NativeWakePolicy()
+	if !policy.Transport.Supported() {
+		return
+	}
+	midTurn := false
+	if policy.Consumption == model.NativeWakeAfterTurnEnd {
+		ended := e.turnEnded[r.Target]
+		midTurn = ended.IsZero() || e.bindings[r.Target].LastActivity.After(ended)
+	}
+	e.wakeNudges[r.Target] = wakeNudge{At: r.At, Consumption: policy.Consumption, MidTurn: midTurn}
 }
 
-// observeTurnEndLocked records an authenticated Turn end. A nudge already
-// consumed under the previous observation is settled first, so a later Turn
-// end without activity cannot make it outstanding again.
+// observeWakeHandoffLocked derives progress from the same durable message fact
+// produced by receipt-matched Ack. The input must have been claimed strictly
+// after this reservation by the current binding generation. A late/duplicate
+// acknowledgement of an older claim cannot release a newer outstanding wake.
+// This supersedes the wake need, not the physical native inbox entry: a held
+// nudge may still arrive later. Replay reconstructs this observation from facts.
+func (e *Engine) observeWakeHandoffLocked(m Message) {
+	n, ok := e.wakeNudges[m.To]
+	b := e.bindings[m.To]
+	if !ok || n.Consumption != model.NativeWakeAfterHandoff || m.State != "handed_off" || !b.Active || m.TargetGeneration != b.Generation || !m.ClaimedAt.After(n.At) {
+		return
+	}
+	n.HandedOff = true
+	e.wakeNudges[m.To] = n
+}
+
+// observeTurnEndLocked records an authenticated Turn end. A wake already
+// released by an earlier progress/consumption observation is settled first,
+// so a later Turn end without activity cannot make it outstanding again.
 func (e *Engine) observeTurnEndLocked(slot model.ActorID) {
 	e.initIndexes()
 	if n, ok := e.wakeNudges[slot]; ok && e.wakeNudgeConsumedLocked(slot, n) {
@@ -196,13 +223,20 @@ func (e *Engine) observeTurnEndLocked(slot model.ActorID) {
 	e.turnEnded[slot] = e.cfg.Now()
 }
 
-// wakeNudgeConsumedLocked infers delivery of a queued native nudge from Turn
-// boundaries; no vendor queue can be listed. An idle target consumes it with
-// its next relay call. A busy native queue holds it until the current Turn
-// ends, so relay calls within that Turn do not count: only a call after a
-// later Turn end does.
+// wakeNudgeConsumedLocked applies the runtime's observation, not a vendor
+// acknowledgement. Claude requires acknowledged inbox progress; an idle Codex
+// target uses a later relay call, and a busy Codex target requires a call after
+// a later Turn end. Management cancellation/inspection updates neither signal.
 func (e *Engine) wakeNudgeConsumedLocked(slot model.ActorID, n wakeNudge) bool {
 	activity := e.bindings[slot].LastActivity
+	switch n.Consumption {
+	case model.NativeWakeAfterHandoff:
+		return n.HandedOff
+	case model.NativeWakeAfterTurnEnd:
+		// A declared Turn-end boundary may still observe an idle Codex target.
+	default:
+		return false
+	}
 	if !n.MidTurn {
 		return activity.After(n.At)
 	}
@@ -210,9 +244,9 @@ func (e *Engine) wakeNudgeConsumedLocked(slot model.ActorID, n wakeNudge) bool {
 	return ended.After(n.At) && activity.After(ended)
 }
 
-// wakeNudgePendingLocked reports whether the target's newest possibly
-// delivered nudge may still wait in its native queue. A new burst for that
-// target is then not nudged again; its head stays unattempted. The state
+// wakeNudgePendingLocked reports whether the target's newest possibly delivered
+// nudge remains outstanding independently of its FIFO message. A new burst for
+// that target is then not nudged again; its head stays unattempted. The state
 // expires WakeRenewAfter after the reservation, so a deleted nudge, missing
 // Stop hook or crashed session cannot strand queued input.
 func (e *Engine) wakeNudgePendingLocked(slot model.ActorID) bool {
@@ -223,19 +257,20 @@ func (e *Engine) wakeNudgePendingLocked(slot model.ActorID) bool {
 	return !e.wakeNudgeConsumedLocked(slot, n)
 }
 
-// WakeRenewAfter is how long an attempted wake may stay uncollected before
-// input queued behind it starts its own burst. A wake can be accepted without
-// producing a native turn (a stale inbox socket, a held inbound policy, or a
+// WakeRenewAfter is how long an outstanding wake suppresses a fresh head in
+// the absence of a qualifying progress observation. A wake can be accepted
+// without producing a native turn (a stale inbox socket, a held inbound policy, or a
 // nudge dropped by the vendor); without renewal every later message would sit
 // behind that head forever. The delay keeps a busy target that will still
 // consume the first nudge from collecting a second one immediately.
 const WakeRenewAfter = 10 * time.Minute
 
 // wakeOwnerLocked returns the queued message that owns the target's next wake
-// decision: the queue head when no queued message has an attempted wake, or
-// the oldest message queued after the newest attempted one once that attempt
-// is older than WakeRenewAfter. The attempted message itself is never offered
-// again. attempted names that newest attempted message, for diagnostics.
+// decision: the queue head when no queued message has an attempted wake, or the
+// oldest message queued after the newest attempted one. Outstanding-nudge and
+// rate suppression defer that unattempted owner; an old reservation must not
+// hide it from maintenance, auditing or the runtime lease. The attempted ID is
+// never offered again and remains available only for diagnostics.
 func (e *Engine) wakeOwnerLocked(slot model.ActorID) (owner, attempted string) {
 	ids := e.queued[slot]
 	last := -1
@@ -254,20 +289,7 @@ func (e *Engine) wakeOwnerLocked(slot model.ActorID) (owner, attempted string) {
 	if last+1 >= len(ids) {
 		return "", attempted
 	}
-	at, ok := e.wakeReservedAtLocked(attempted)
-	if ok && e.cfg.Now().Before(at.Add(WakeRenewAfter)) {
-		return "", attempted
-	}
 	return ids[last+1], attempted
-}
-
-func (e *Engine) wakeReservedAtLocked(messageID string) (time.Time, bool) {
-	for i := len(e.wakeReservations) - 1; i >= 0; i-- {
-		if e.wakeReservations[i].MessageID == messageID {
-			return e.wakeReservations[i].At, true
-		}
-	}
-	return time.Time{}, false
 }
 
 // wakeHeadLocked is the candidate maintenance and diagnostics inspect: the
@@ -298,12 +320,13 @@ func (e *Engine) WakeHeads() []WakeCandidate {
 }
 
 // HasWakeWork replays a suspended Room's events read-only and reports whether
-// activating it would give its waker something to consider: wake is enabled and
-// a slot bound to an active session has queued input that has not yet had a
-// wake attempt. It opens no writer and applies no restore transition (a
-// recovered delivering message is not turned unknown here), so a Service can
-// decide to resume the Room without appending anything. The waker itself still
-// applies every suppression, reservation and rate rule after activation.
+// wake is enabled and a slot bound to an active session has queued input that
+// has not yet had a wake attempt. This startup probe does not require an
+// external wake transport: an active Runtime also reports waiting input for
+// Grok and Gemini. It opens no writer and applies no restore transition (a
+// recovered delivering message is not turned unknown here). After activation,
+// the waker still applies runtime capability, suppression, reservation and rate
+// rules; this predicate does not grant an external effect or an idle lease.
 func HasWakeWork(roomID string, events []model.Event, runtimes map[model.ActorID]model.RuntimeKind) (bool, error) {
 	e := &Engine{cfg: Config{RoomID: roomID, Runtimes: runtimes}, bindings: map[model.ActorID]bindingFact{}, seenBinds: map[string]bool{}, messages: map[string]Message{}, inFlight: map[string]struct{}{}, sends: map[string]string{}, reports: map[string]Publication{}, lastReport: map[string]uint64{}, wakeEnabled: true, wakeReserved: map[string]bool{}, waiters: map[model.ActorID]int{}}
 	for _, ev := range events {

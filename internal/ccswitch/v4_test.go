@@ -406,8 +406,9 @@ func v4AssertUnsupported(t *testing.T, err error, reason string, secrets ...stri
 	if reason != "" && typed.Params["reason"] != reason {
 		t.Fatalf("error reason = %q, want %q", typed.Params["reason"], reason)
 	}
+	public := err.Error() + v4JSON(t, err)
 	for _, secret := range secrets {
-		if strings.Contains(err.Error(), secret) {
+		if strings.Contains(public, secret) {
 			t.Fatal("profile rejection disclosed a fixture credential")
 		}
 	}

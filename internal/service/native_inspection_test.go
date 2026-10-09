@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
@@ -155,4 +156,61 @@ func TestNativeInspectionGatewayAndManagementMode(t *testing.T) {
 		}
 	}
 
+}
+
+func TestNativeDiagnosticsReportsOutstandingClaudeNudge(t *testing.T) {
+	f := newNudgeFixtureForRuntime(t, model.RuntimeClaude)
+	f.startBusyTurn()
+	first := f.send("first")
+	if err := f.engine.Cancel(first); err != nil {
+		t.Fatal(err)
+	}
+	f.advance(nativeWakeMinimumInterval + time.Second)
+	head := f.send("next")
+	f.expect(1, 1)
+	n := &nativeHostRuntime{engine: f.engine, waker: f.waker}
+	before := f.engine.Sequence()
+	d := n.nativeDiagnostics()["participants"].(map[model.ActorID]nativeReachability)[model.ActorSlot2]
+	if d.Reason != "nudge_pending" || d.NextAction != "wait_for_eligible_time" || d.Capability != "claude_inbox_captured" || d.HeadID != head || d.WakeReserved {
+		t.Fatalf("Claude diagnostic = %#v", d)
+	}
+	if c, ok := f.engine.WakeCandidate(head); !ok || !c.NudgePending || f.engine.Sequence() != before {
+		t.Fatal("Management diagnostics consumed the nudge or wrote an event")
+	}
+	f.advance(time.Second)
+	f.activity()
+	d = n.nativeDiagnostics()["participants"].(map[model.ActorID]nativeReachability)[model.ActorSlot2]
+	if d.Reason != "nudge_pending" || d.WakeReserved {
+		t.Fatalf("Claude diagnostic after status without collection = %#v", d)
+	}
+	f.advance(time.Second)
+	f.collect()
+	next, err := f.engine.Send(f.auth[model.ActorSlot1], relay.SendRequest{ID: "after-handoff", Text: "new input"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d = n.nativeDiagnostics()["participants"].(map[model.ActorID]nativeReachability)[model.ActorSlot2]
+	if d.Reason != "wake_eligible" || d.WakeReserved || d.HeadID != next.ID {
+		t.Fatalf("Claude diagnostic after receipt-matched handoff = %#v", d)
+	}
+}
+
+func TestNativeDiagnosticsUnavailableRuntimeDoesNotSuggestRebinding(t *testing.T) {
+	// Missing/unknown identities exercise the read-only failure boundary, not
+	// creation of a valid durable Room with an unsupported Agent selection.
+	for _, kind := range []model.RuntimeKind{model.RuntimeGrok, model.RuntimeGemini, "", "future-runtime"} {
+		t.Run(string(kind), func(t *testing.T) {
+			f := newNudgeFixtureForRuntime(t, kind)
+			head := f.send("input")
+			n := &nativeHostRuntime{engine: f.engine, waker: f.waker}
+			before := f.engine.Sequence()
+			d := n.nativeDiagnostics()["participants"].(map[model.ActorID]nativeReachability)[model.ActorSlot2]
+			if d.Runtime != kind || d.Reason != "capability_unavailable" || d.NextAction != "collect_in_native_session" || d.HeadID != head || d.WakeReserved {
+				t.Fatalf("unavailable-runtime diagnostic = %#v", d)
+			}
+			if f.engine.Sequence() != before || f.runs != 0 || f.reservations() != 0 {
+				t.Fatal("diagnostics wrote a fact or submitted a wake")
+			}
+		})
+	}
 }

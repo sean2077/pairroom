@@ -77,8 +77,10 @@ type Engine struct {
 	// wakeNudges and turnEnded are in-memory projections for the outstanding
 	// nudge rule: the newest possibly delivered nudge per target and the last
 	// observed Turn end (a Stop park that released nothing, or StopFailure).
-	// Replay rebuilds nudges from reservation/outcome facts; Turn ends are
-	// process-local, so a replayed nudge conservatively counts as mid-Turn.
+	// Replay rebuilds reservations/outcomes and Claude handoff progress from
+	// durable facts. Turn ends are process-local, so replayed Codex nudges use
+	// the conservative mid-Turn rule; later binding activity alone never clears
+	// a Claude wake.
 	wakeNudges map[model.ActorID]wakeNudge
 	turnEnded  map[model.ActorID]time.Time
 	// derived holds attention transitions applied by the current append only.
@@ -266,6 +268,7 @@ func (e *Engine) apply(ev model.Event) error {
 		}
 		fact.Message.Receipt = fact.Receipt
 		e.putMessage(fact.Message)
+		e.observeWakeHandoffLocked(fact.Message)
 		if fact.ClientKey != "" {
 			e.sends[fact.ClientKey] = fact.ID
 		}

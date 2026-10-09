@@ -1,5 +1,29 @@
 # Verify Claude inbox nudge_pending behavior
 
+> **Superseded historical record — reviewed 2026-10-09.** The original text
+> below is preserved from
+> [commit e50daaf (2026-10-08)](https://github.com/sean2077/pairroom/commit/e50daaf99770d98dbe54d7c5bff544306bc4f7fa).
+> Its “hypothesis confirmed” and “sufficient evidence” assertions are not
+> authenticated vendor findings: the listed evidence consists of PairRoom code
+> and fixture behavior, with no captured real-session timing result. Providing a
+> manual verification script does not establish that it was run or what a real
+> session observed. The script reference below belongs to that historical
+> revision, not the current verification workflow: `scripts/verify_claude_inbox_timing.sh`
+> was removed from the repository with the 2026-10-09 correction, so that path
+> does not exist in the current tree. Those assertions must not be used as the
+> current operating contract.
+>
+> [Anthropic's delivery and inbound-control documentation](https://code.claude.com/docs/en/cross-session-messaging#message-delivery),
+> checked 2026-10-09, permits delivery during an active Turn and also permits a
+> nudge to be held undelivered. Neither a universal Turn-end requirement nor
+> consumption after an arbitrary relay call follows from that documentation.
+> [Protocol: Automatic idle-peer wake](../PROTOCOL.md#automatic-idle-peer-wake)
+> owns the current rules; [the design rationale](auto-wake.md#races-and-recovery)
+> explains the observable PairRoom boundaries and their limits. The original
+> assertions below remain for auditability, not as release acceptance evidence.
+
+---
+
 Status: **implemented** — hypothesis confirmed, nudge_pending enabled for Claude
 
 ## Problem
@@ -54,4 +78,3 @@ Observable symptom: Claude/Codex desktop sessions in active pair work see multip
 ## Future work
 
 The manual verification script in `scripts/verify_claude_inbox_timing.sh` remains available for additional real-session validation if needed, though the test coverage and observed symmetry provide sufficient evidence for the fix.
-

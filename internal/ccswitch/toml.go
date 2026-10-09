@@ -6,12 +6,26 @@ import (
 )
 
 type tomlDocument struct {
-	Root              map[string]string
-	Sections          map[string]map[string]string
-	Unsupported       map[string]bool
-	Invalid           bool
-	UnsafeCredentials bool
+	Root               map[string]string
+	Sections           map[string]map[string]string
+	ScalarKinds        map[string]tomlScalarKind
+	Unsupported        map[string]bool
+	UnsupportedParents map[string]bool
+	Tables             map[string]bool
+	Invalid            bool
+	UnsafeCredentials  bool
 }
+
+type tomlScalarKind uint8
+
+const (
+	tomlString tomlScalarKind = iota + 1
+	tomlBoolean
+	tomlInteger
+	// A string-valued option historically accepts every supported scalar and
+	// emits its text in quotes. Identity, routing, and credentials use tomlString.
+	tomlScalarText
+)
 
 // parseTOML reads the scalar provider subset, including quoted table keys and
 // literal strings emitted by CC Switch. Composite values are retained only as
@@ -21,12 +35,14 @@ type tomlDocument struct {
 func parseTOML(input string) tomlDocument {
 	doc := tomlDocument{
 		Root: make(map[string]string), Sections: make(map[string]map[string]string),
-		Unsupported: make(map[string]bool),
+		ScalarKinds: make(map[string]tomlScalarKind), Unsupported: make(map[string]bool),
+		UnsupportedParents: make(map[string]bool), Tables: make(map[string]bool),
 	}
 	current := doc.Root
 	currentPath := ""
 	keys, tables, arrayTables := make(map[string]bool), make(map[string]bool), make(map[string]bool)
-	parents := make(map[string]bool)
+	dottedTables := make(map[string]bool)
+	parents := doc.Tables
 	lines := strings.Split(input, "\n")
 	for index := 0; index < len(lines); index++ {
 		line := strings.TrimSpace(lines[index])
@@ -54,7 +70,7 @@ func parseTOML(input string) tomlDocument {
 			if tomlAuthContainer(name) {
 				doc.UnsafeCredentials = true
 			}
-			if tomlHasAncestor(keys, name) || keys[name] {
+			if tomlHasAncestor(keys, name) || keys[name] || dottedTables[name] {
 				doc.Invalid = true
 			}
 			if array {
@@ -63,7 +79,11 @@ func parseTOML(input string) tomlDocument {
 				}
 				arrayTables[name] = true
 				tomlMarkParents(parents, name)
-				doc.Unsupported[name] = true
+				parents[name] = true
+				markUnsupportedTOML(&doc, name)
+				if tomlOpaqueCredential(name, true) {
+					doc.UnsafeCredentials = true
+				}
 				continue
 			}
 			if arrayTables[name] {
@@ -79,6 +99,7 @@ func parseTOML(input string) tomlDocument {
 			}
 			tables[name] = true
 			tomlMarkParents(parents, name)
+			parents[name] = true
 			if doc.Sections[name] == nil {
 				doc.Sections[name] = make(map[string]string)
 			}
@@ -105,12 +126,22 @@ func parseTOML(input string) tomlDocument {
 			}
 			keys[path] = true
 			tomlMarkParents(parents, path)
+			for _, parent := range tomlParents(key) {
+				if currentPath != "" {
+					parent = currentPath + "." + parent
+				}
+				if tables[parent] || arrayTables[parent] {
+					doc.Invalid = true
+				}
+				dottedTables[parent] = true
+			}
 		}
-		if tomlAuthContainer(path) || current == nil && tomlOpaqueCredential(path) {
+		if tomlAuthContainer(path) {
 			doc.UnsafeCredentials = true
 		}
 		value := strings.TrimSpace(rawValue)
-		scalar, supported := "", false
+		var scalar string
+		var kind tomlScalarKind
 		if strings.HasPrefix(value, "[") || strings.HasPrefix(value, "{") || strings.HasPrefix(value, `"""`) || strings.HasPrefix(value, "'''") {
 			var closed bool
 			index, closed = skipTOMLValue(lines, index, value)
@@ -119,27 +150,104 @@ func parseTOML(input string) tomlDocument {
 			}
 		} else {
 			value = strings.TrimSpace(stripComment(value))
-			scalar, supported = tomlScalar(value)
-			if value == "" || !supported && (strings.HasPrefix(value, `"`) || strings.HasPrefix(value, "'")) {
+			scalar, kind = tomlScalar(value)
+			if value == "" || kind == 0 && (strings.HasPrefix(value, `"`) || strings.HasPrefix(value, "'")) {
 				doc.Invalid = true
 			}
 		}
-		if !supported {
-			doc.Unsupported[path] = true
-			if tomlOpaqueCredential(path) {
-				doc.UnsafeCredentials = true
-			}
+		if kind == 0 {
+			markUnsupportedTOML(&doc, path)
+		}
+		// A direct credential assignment remains unsafe when its value is
+		// opaque; only ancestor namespaces need the stronger container evidence.
+		if (kind == 0 || current == nil) && tomlOpaqueCredential(path, false) {
+			doc.UnsafeCredentials = true
 		}
 		if current != nil {
 			// A present but invalid declaration must not enable fallback to an
 			// unrelated credential or an earlier duplicate value.
-			current[key] = scalar
+			storeTOMLScalar(&doc, path, scalar)
+			if kind != 0 {
+				doc.ScalarKinds[path] = kind
+			}
 		}
 	}
-	// Malformed syntax prevents reliable credential inspection as well as
-	// materialization. Callers must withhold its uninspectable public metadata.
-	doc.UnsafeCredentials = doc.UnsafeCredentials || doc.Invalid
+	// Keep generic syntax errors separate from explicit unsafe credential data.
+	// The active config rejects either; an unused metadata snapshot may contain
+	// ordinary non-TOML text, while opaque credential declarations still matter.
 	return doc
+}
+
+// Dotted assignments and table headings describe the same TOML paths. Store
+// each scalar by that path, rather than by the physical table where it was
+// written; otherwise a supported Provider option can silently disappear.
+func storeTOMLScalar(doc *tomlDocument, path, value string) {
+	parts, ok := tomlPathParts(path)
+	if !ok || len(parts) == 0 {
+		doc.Invalid = true
+		return
+	}
+	key := tomlKey(parts[len(parts)-1])
+	parent := tomlParent(path)
+	if parent == "" {
+		doc.Root[key] = value
+		return
+	}
+	if doc.Sections[parent] == nil {
+		doc.Sections[parent] = make(map[string]string)
+	}
+	doc.Sections[parent][key] = value
+}
+
+func tomlParent(path string) string {
+	parents := tomlParents(path)
+	if len(parents) == 0 {
+		return ""
+	}
+	return parents[len(parents)-1]
+}
+
+func tomlScalarValue(doc tomlDocument, path string) string {
+	parent := tomlParent(path)
+	if parent == "" {
+		return doc.Root[path]
+	}
+	return doc.Sections[parent][strings.TrimPrefix(path, parent+".")]
+}
+
+// An absent option inherits native configuration. A table, opaque ancestor,
+// composite value, or scalar of the wrong type is a declaration, not absence.
+func supportedTOMLScalar(doc tomlDocument, path string, want tomlScalarKind) bool {
+	if kind, present := doc.ScalarKinds[path]; present {
+		if kind == want || want == tomlScalarText {
+			return true
+		}
+		// Older Profiles store some boolean/integer options as strings. The
+		// mapper emits their canonical scalar values; retain that compatibility
+		// without coercing a number or boolean into a model or credential.
+		if kind == tomlString && want != tomlString {
+			_, parsed := tomlScalar(tomlScalarValue(doc, path))
+			return parsed == want
+		}
+		return false
+	}
+	for _, parent := range tomlParents(path) {
+		if _, present := doc.ScalarKinds[parent]; present {
+			return false
+		}
+	}
+	return !unsupportedTOMLPrefix(doc, path) && !doc.Tables[path]
+}
+
+// Index unsupported descendants while parsing. All declaration checks then use
+// these same canonical paths, without rescanning the document for each option.
+func markUnsupportedTOML(doc *tomlDocument, path string) {
+	doc.Unsupported[path] = true
+	tomlMarkParents(doc.UnsupportedParents, path)
+}
+
+func unsupportedTOMLPrefix(doc tomlDocument, path string) bool {
+	return doc.Unsupported[path] || doc.UnsupportedParents[path] || tomlHasAncestor(doc.Unsupported, path)
 }
 
 func normalizeTOMLPath(path string) string {
@@ -185,9 +293,9 @@ func tomlPathParts(path string) ([]string, bool) {
 	for i, part := range parts {
 		part = strings.TrimSpace(part)
 		if strings.HasPrefix(part, `"`) || strings.HasPrefix(part, "'") {
-			var ok bool
-			part, ok = tomlScalar(part)
-			if !ok {
+			var kind tomlScalarKind
+			part, kind = tomlScalar(part)
+			if kind != tomlString {
 				return nil, false
 			}
 		} else if !bareTOMLKey(part) {
@@ -241,14 +349,34 @@ func tomlAuthContainer(path string) bool {
 	return false
 }
 
-func tomlOpaqueCredential(path string) bool {
+func tomlOpaqueCredential(path string, container bool) bool {
 	parts, ok := tomlPathParts(path)
 	if !ok {
 		return true
 	}
-	last := strings.ToLower(parts[len(parts)-1])
-	return tomlAuthContainer(path) || credentialFieldName(last) || last == "env_key" ||
+	return tomlAuthContainer(path) || tomlCredentialField(path, container) != "" ||
 		len(parts) <= 2 && (parts[0] == "model_providers" || parts[0] == "model")
+}
+
+// Credential ancestry matters even when a key is expressed as a table. Named
+// Providers and MCP servers are data keys, not credential-container declarations.
+func tomlCredentialField(path string, container bool) string {
+	parts, _ := tomlPathParts(path)
+	var credential string
+	for i, part := range parts {
+		if i == 1 && credentialDataCollection(parts[0]) {
+			continue
+		}
+		field := strings.ToLower(part)
+		parent := ""
+		if i > 0 && !(i == 2 && credentialDataCollection(parts[0])) {
+			parent = strings.ToLower(parts[i-1])
+		}
+		if credentialFieldName(field, parent, container || i+1 < len(parts)) {
+			credential = field
+		}
+	}
+	return credential
 }
 
 func splitTOMLAssignment(line string) (string, string, bool) {
@@ -390,19 +518,22 @@ func stripComment(line string) string {
 	return line
 }
 
-func tomlScalar(value string) (string, bool) {
+func tomlScalar(value string) (string, tomlScalarKind) {
 	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
 		unquoted, err := strconv.Unquote(value)
-		return unquoted, err == nil
+		if err == nil {
+			return unquoted, tomlString
+		}
+		return "", 0
 	}
 	if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' && !strings.Contains(value[1:len(value)-1], "'") {
-		return value[1 : len(value)-1], true
+		return value[1 : len(value)-1], tomlString
 	}
 	if value == "true" || value == "false" {
-		return value, true
+		return value, tomlBoolean
 	}
 	if _, err := strconv.ParseInt(value, 10, 64); err == nil {
-		return value, true
+		return value, tomlInteger
 	}
-	return "", false
+	return "", 0
 }

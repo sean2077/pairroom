@@ -184,6 +184,7 @@ func (w *nativeWaker) Reconcile(ctx context.Context) {
 	live := map[model.ActorID]bool{}
 	for _, c := range heads {
 		live[c.Target] = true
+		reason := nativeWakeSuppression(c)
 		w.mu.Lock()
 		next := w.deferred[c.Target]
 		if next.MessageID != c.MessageID || c.Reserved || !c.Enabled || (next.Reason == "nudge_pending" && !c.NudgePending) {
@@ -192,8 +193,15 @@ func (w *nativeWaker) Reconcile(ctx context.Context) {
 		}
 		_, pending := w.pending[c.Target]
 		closed := w.closing
+		pendingAudited := w.lastRecorded[c.Target] == "suppressed/nudge_pending"
+		if !closed && !c.Reserved && reason == "nudge_pending" && next.Reason != "nudge_pending" {
+			// Install the lease before launching a worker. Idle close must not
+			// pass through the gap between discovering pending work after replay
+			// and the asynchronous suppression audit acquiring its own lock.
+			w.deferred[c.Target] = nativeWakeDeferred{MessageID: c.MessageID, At: now, Reason: reason}
+		}
 		w.mu.Unlock()
-		if closed || pending || c.Reserved || nativeWakeSuppression(c) != "" || (!next.At.IsZero() && now.Before(next.At)) {
+		if closed || pending || c.Reserved || (reason != "" && reason != "nudge_pending") || (reason == "nudge_pending" && pendingAudited) || (reason != "nudge_pending" && !next.At.IsZero() && now.Before(next.At)) {
 			continue
 		}
 		w.Schedule(ctx, c.MessageID)
@@ -287,18 +295,49 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 	if reason := nativeWakeSuppression(candidate); reason != "" {
 		return w.suppress(candidate, reason)
 	}
-	var claudeSend claudewake.Send
-	if candidate.Runtime.Canonical() == model.RuntimeClaude {
+	// Select a concrete effect before reserving it. A runtime policy may learn
+	// a new transport before the Service has its handler; it must never inherit
+	// another vendor's command merely because Supported admits it.
+	var attempt func(context.Context) (outcome, reason string)
+	switch candidate.Runtime.NativeWakePolicy().Transport {
+	case model.NativeWakeClaudeInbox:
 		if w.claude == nil {
 			w.deferCandidate(candidate, w.now().Add(30*time.Second), "capability_unavailable")
 			return w.record("suppressed", "capability_unavailable", candidate.Target)
 		}
-		var err error
-		claudeSend, err = w.claude(candidate)
+		claudeSend, err := w.claude(candidate)
 		if err != nil || claudeSend == nil {
 			w.deferCandidate(candidate, w.now().Add(30*time.Second), "capability_unavailable")
 			return w.record("suppressed", "capability_unavailable", candidate.Target)
 		}
+		attempt = func(ctx context.Context) (string, string) {
+			err := claudeSend(ctx, nativeWakeNudge)
+			if err == nil {
+				return "submitted", ""
+			}
+			reason := "socket_failed"
+			if errors.Is(err, context.DeadlineExceeded) {
+				reason = "socket_timeout"
+			} else if errors.Is(err, context.Canceled) {
+				reason = "socket_cancelled"
+			}
+			return "failed", reason
+		}
+	case model.NativeWakeCodexQueue:
+		attempt = func(ctx context.Context) (string, string) {
+			err := w.run(ctx, "codex", "queue", "--thread", candidate.SessionID, "--message", nativeWakeNudge)
+			commandContextErr := ctx.Err()
+			if err == nil {
+				return "accepted", ""
+			}
+			return "failed", classifyNativeWakeFailure(err, commandContextErr)
+		}
+	default:
+		// Fail closed for a transport the runtime policy admits but this Service
+		// has no handler for. Unreachable while Supported() names exactly the two
+		// transports dispatched above; it exists so a future supported transport
+		// cannot inherit another vendor's command before its handler is added.
+		return w.record("suppressed", "unsupported_runtime", candidate.Target)
 	}
 	if ctx.Err() != nil {
 		return nil
@@ -326,27 +365,9 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 		return errNativeWakeAudit
 	}
 	commandCtx, cancel := context.WithTimeout(ctx, w.timeout)
-	if claudeSend != nil {
-		err := claudeSend(commandCtx, nativeWakeNudge)
-		cancel()
-		if err == nil {
-			return w.recordAttempt(candidate, "submitted", "")
-		}
-		reason := "socket_failed"
-		if errors.Is(err, context.DeadlineExceeded) {
-			reason = "socket_timeout"
-		} else if errors.Is(err, context.Canceled) {
-			reason = "socket_cancelled"
-		}
-		return w.recordAttempt(candidate, "failed", reason)
-	}
-	err := w.run(commandCtx, "codex", "queue", "--thread", candidate.SessionID, "--message", nativeWakeNudge)
-	commandContextErr := commandCtx.Err()
+	outcome, reason := attempt(commandCtx)
 	cancel()
-	if err == nil {
-		return w.recordAttempt(candidate, "accepted", "")
-	}
-	return w.recordAttempt(candidate, "failed", classifyNativeWakeFailure(err, commandContextErr))
+	return w.recordAttempt(candidate, outcome, reason)
 }
 
 func nativeWakeSuppression(candidate relay.WakeCandidate) string {
@@ -357,11 +378,11 @@ func nativeWakeSuppression(candidate relay.WakeCandidate) string {
 		return "waiter_active"
 	case strings.TrimSpace(candidate.SessionID) == "":
 		return "unbound"
-	case candidate.Runtime.Canonical() != model.RuntimeCodex && candidate.Runtime.Canonical() != model.RuntimeClaude:
+	case !candidate.Runtime.NativeWakePolicy().Transport.Supported():
 		return "unsupported_runtime"
 	case candidate.NudgePending:
-		// An earlier nudge may still wait in the native queue. No reservation:
-		// the head stays unattempted until that nudge is consumed or expires.
+		// An earlier nudge remains outstanding independently of its FIFO input.
+		// The new head stays unattempted until progress or expiry releases it.
 		return "nudge_pending"
 	default:
 		return ""
@@ -369,8 +390,8 @@ func nativeWakeSuppression(candidate relay.WakeCandidate) string {
 }
 
 // suppress records a no-effect decision. A nudge_pending head is deferred for
-// recheck on every maintenance tick: it can become eligible at any relay call,
-// and its bounded WakeRenewAfter window must not be cut by an idle suspend.
+// recheck on maintenance: a qualifying handoff/Turn observation or expiry can
+// release it, and its WakeRenewAfter window must not be cut by idle suspension.
 func (w *nativeWaker) suppress(candidate relay.WakeCandidate, reason string) error {
 	if reason == "nudge_pending" {
 		w.deferCandidate(candidate, w.now(), reason)
