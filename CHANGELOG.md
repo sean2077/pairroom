@@ -12,6 +12,7 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ### Changed
 
+- Update the standalone golangci-lint pin from v2.13.2 to v2.14.0 so static checks can read Go 1.27.2 export-data V5. Keep the latest-stable Go policy, enabled checks, and application-module dependency closure unchanged.
 - Remove the nonfunctional manual Claude inbox probe and its unsupported verification claims. Document the upstream delivery contract separately from local relay tests and authenticated vendor acceptance.
 
 ## [v5.13.0] — 2026-10-08
