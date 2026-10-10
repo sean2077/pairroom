@@ -9,6 +9,7 @@ import (
 
 	"github.com/sean2077/pairroom/internal/lanclient"
 	"github.com/sean2077/pairroom/internal/lanshare"
+	"github.com/sean2077/pairroom/internal/nativeidentity"
 	"github.com/sean2077/pairroom/internal/privatefile"
 	"github.com/sean2077/pairroom/internal/relay"
 )
@@ -93,12 +94,23 @@ func unbindLANLocalOnly(ctx context.Context, root string, o options, out io.Writ
 					return errors.New("direct LAN workspace identity changed; inspect before local detach")
 				}
 				return unbindLocalOnly(ctx, root, slotDir, o, out)
+			} else if errors.Is(err, privatefile.ErrPrivate) {
+				// The binding lost its owner-only boundary (restored from a
+				// backup, copied from another machine, an inherited Windows
+				// DACL). The offline recovery there retires it locally instead of
+				// failing this documented escape forever.
+				return unbindLocalOnly(ctx, root, slotDir, o, out)
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
 		}
 	}
-	if err := client.Detach(ctx, relay.Auth{Slot: meta.Slot, BindID: meta.BindID, Generation: meta.Generation, SessionID: caller.session, Secret: attempt.Credentials.Secret}); err != nil {
+	if err := client.Detach(ctx, relay.Auth{Slot: meta.Slot, BindID: meta.BindID, Generation: meta.Generation, SessionID: caller.session, Secret: attempt.Credentials.Secret}); err != nil && !errors.Is(err, nativeidentity.ErrOwned) {
+		// A record this machine already retired keeps nothing to release: its
+		// exact (runtime, session) claim now serves a replacement binding, which
+		// this offline path must not disturb. Finishing the local cleanup still
+		// tells the truth — the membership is already detached — instead of
+		// failing an idempotent command and skipping the notice and --purge.
 		return err
 	}
 	result := map[string]any{"unbound": "local-only", "room": meta.ID, "notice": "Direct LAN admission detached locally without contacting the host. The original request and key are retained; ask the host owner to revoke any pending or accepted membership. This native session is free for another Room and will not reconnect automatically."}

@@ -1,6 +1,7 @@
 package relayclient
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -110,5 +111,46 @@ func TestLANWorkspacePrivacyRecognitionKeepsOrdinaryProjectNames(t *testing.T) {
 				t.Fatalf("ordinary local Room inherited LAN directory rules from the checkout name: %v", err)
 			}
 		})
+	}
+}
+
+// The offline recovery reader exists for bindings whose owner-only boundary was
+// lost: a workspace restored from a backup, copied from another machine, or an
+// inherited Windows DACL. It keeps the structural bounds and refuses anything
+// that is not a plain bounded file.
+func TestOfflineRecoveryReadsLostBoundaryButNotUnsafeFiles(t *testing.T) {
+	dir := t.TempDir()
+	state := State{Schema: 3, Room: "lan_room", Slot: model.ActorSlot2, Runtime: model.RuntimeCodex, BindID: "binding", Generation: 1, SessionID: "native-session", LAN: &LANTransport{ClientID: "lan_room", Endpoint: "https://192.168.1.2:8877", HostPin: strings.Repeat("a", 64), RoomID: "shared"}}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "state.json")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var strict State
+	if err := readPrivate(path, &strict); err == nil {
+		t.Fatal("strict private read accepted a state file without the owner-only boundary")
+	}
+	var recovered State
+	if err := readPrivateRecovery(path, &recovered); err != nil || recovered.BindID != state.BindID || recovered.LAN == nil {
+		t.Fatalf("recovery read: %+v, %v", recovered, err)
+	}
+	link := filepath.Join(dir, "linked.json")
+	if err := os.Symlink(path, link); err == nil {
+		if err := readPrivateRecovery(link, &recovered); err == nil {
+			t.Fatal("recovery followed a symlink")
+		}
+	}
+	big := filepath.Join(dir, "big.json")
+	if err := os.WriteFile(big, make([]byte, maxPrivateFileBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := readPrivateRecovery(big, &recovered); err == nil {
+		t.Fatal("recovery accepted an oversized file")
 	}
 }

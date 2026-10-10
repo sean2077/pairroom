@@ -138,3 +138,34 @@ func TestWaitClaimDeadlineIsAnEmptyPollNotHostUnreachability(t *testing.T) {
 		t.Fatalf("claim ran past its wait window: %+v", result)
 	}
 }
+
+// A wait the caller cancels is an empty poll, not a host outage: the caller
+// ended the wait and the pinned host answered.
+func TestCancelledWaitIsAnEmptyPollNotAnOutage(t *testing.T) {
+	ctx := context.Background()
+	s, f := newStore(t), newRemote(t)
+	c, auth, _ := f.join(t, s)
+	started := make(chan struct{})
+	f.setHandler(func(w http.ResponseWriter, r *http.Request, action string, _ []byte) {
+		switch action {
+		case "head":
+			close(started)
+			<-r.Context().Done()
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	cancelled, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		<-started
+		cancel()
+	}()
+	var result collectResult
+	if err := c.Relay(cancelled, auth, "wait", relayRequest{TimeoutSeconds: 30}, &result); err != nil {
+		t.Fatalf("cancelled wait reported a host outage: %v", err)
+	}
+	if result.Claim != nil {
+		t.Fatalf("cancelled wait claimed work: %+v", result.Claim)
+	}
+}

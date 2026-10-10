@@ -354,6 +354,10 @@ func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
 	}
 	if healthErr != nil {
 		payload.Diagnostic = healthErr.Error()
+	} else if lanDiag := s.lanGuests.diagnostic(); lanDiag != "" {
+		// Host Rooms stay usable; the operator is told why joined-Room surfaces
+		// are not.
+		payload.Diagnostic = lanDiag
 	}
 	writeManagementJSON(w, http.StatusOK, payload)
 }

@@ -128,15 +128,23 @@ func archiveLANWorkspaceState(root, slotDir string, state State) error {
 		return err
 	}
 	var cred credentials
-	if err := privatefile.ReadJSON(filepath.Join(slotDir, "credentials"), maxPrivateFileBytes, &cred); err == nil {
+	readErr := privatefile.ReadJSON(filepath.Join(slotDir, "credentials"), maxPrivateFileBytes, &cred)
+	if errors.Is(readErr, privatefile.ErrPrivate) {
+		// A workspace whose owner-only boundary was lost is still archived: the
+		// copy lands in the private retired directory, and the offline recovery
+		// path exists for exactly this state.
+		readErr = readPrivateRecovery(filepath.Join(slotDir, "credentials"), &cred)
+	}
+	switch {
+	case readErr == nil:
 		if cred.BindID != state.BindID {
 			return errors.New("retired LAN credential differs from its workspace binding")
 		}
 		if err := privatefile.WriteJSON(filepath.Join(dir, "credentials"), cred); err != nil {
 			return err
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+	case !errors.Is(readErr, os.ErrNotExist):
+		return readErr
 	}
 	return nil
 }

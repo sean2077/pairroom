@@ -60,7 +60,9 @@ func (c *Client) collect(ctx context.Context, req relayRequest, auth relay.Auth)
 		}
 		var head lanshare.HeadResponse
 		if err := c.call(ctx, r, "head", lanshare.HeadRequest{Park: req.Park, TimeoutSeconds: seconds}, &head); err != nil {
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			// A cancelled or expired wait window is an empty poll, not a host
+			// outage: the pinned host answered, and the caller ended the wait.
+			if ctx.Err() != nil {
 				return collectResult{}, nil
 			}
 			return collectResult{}, safeError(err)
@@ -96,12 +98,13 @@ func (c *Client) collect(ctx context.Context, req relayRequest, auth relay.Auth)
 		}
 		var response lanshare.ClaimResponse
 		if err := c.call(ctx, r, "claim", lanshare.ClaimRequest{ID: m.ID, Digest: head.Head.Digest, Generation: auth.Generation, Park: req.Park}, &response); err != nil {
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				// The wait window ended while the claim was in flight. The pinned
-				// host answered, so this is not a network outage: a claim it
-				// committed and never handed over surfaces later as unknown in
-				// history --pending, exactly as the head deadline above returns an
-				// empty poll rather than claiming the host was unreachable.
+			if ctx.Err() != nil {
+				// The wait window ended — or the caller cancelled — while the
+				// claim was in flight. The pinned host answered, so this is not a
+				// network outage: a claim it committed and never handed over
+				// surfaces later as unknown in history --pending, exactly as a
+				// cancelled or expired head returns an empty poll rather than
+				// claiming the host was unreachable.
 				return collectResult{}, nil
 			}
 			return collectResult{}, safeError(err)

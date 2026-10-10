@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -377,5 +378,62 @@ func TestParkAppendsItsFactWithoutRunningTheCommitBindingHook(t *testing.T) {
 	}
 	if member := restarted.bindings[model.ActorSlot2]; member.ParkEnabled || !member.Active || member.RemoteKey == "" {
 		t.Fatalf("member park fact was not durable: %+v", member)
+	}
+}
+
+// A key that retries join (new request IDs while its invitation stays live) must
+// not fill the derived request projection or block another colleague, and a
+// superseded member must read the retirement answer rather than a pending
+// expiry no retry can resolve. Revocation also frees the peer Runtime selection
+// for its successor.
+func TestLANJoinRetriesStayBoundedAndRevocationFreesTheRuntime(t *testing.T) {
+	e, _, _ := lanEngine(t, nil)
+	invite, err := e.CreateLANInvite()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stuck := Digest("stuck-peer")
+	for i := 0; i < 64; i++ {
+		if _, status, err := e.RequestLANJoin(LANJoinRequest{InviteID: invite.ID, RequestID: fmt.Sprintf("stuck-request-%d", i), Key: stuck, Runtime: model.RuntimeCodex}); err != nil || status != "pending" {
+			t.Fatalf("retry %d: %q %v", i, status, err)
+		}
+	}
+	if len(e.lanRequests) != 1 {
+		t.Fatalf("one key's retries kept %d requests", len(e.lanRequests))
+	}
+	// A different colleague can still request against the same live invitation.
+	second := Digest("second-peer")
+	if _, status, err := e.RequestLANJoin(LANJoinRequest{InviteID: invite.ID, RequestID: "second-request", Key: second, Runtime: model.RuntimeClaude}); err != nil || status != "pending" {
+		t.Fatalf("second key after retries: %q %v", status, err)
+	}
+	if _, err := e.AcceptLANJoin("stuck-request-63", stuck); err != nil {
+		t.Fatal(err)
+	}
+	if kind := e.Runtimes()[model.ActorSlot2]; kind != model.RuntimeCodex {
+		t.Fatalf("admitted runtime = %s", kind)
+	}
+	if err := e.RevokeLANMember(); err != nil {
+		t.Fatal(err)
+	}
+	if kind := e.Runtimes()[model.ActorSlot2]; kind != model.RuntimeAwaitingPeer {
+		t.Fatalf("revoked slot kept a runtime: %s", kind)
+	}
+	// The successor selects its own runtime from a fresh invitation.
+	next, err := e.CreateLANInvite()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, status, err := e.RequestLANJoin(LANJoinRequest{InviteID: next.ID, RequestID: "successor-request", Key: second, Runtime: model.RuntimeGrok}); err != nil || status != "pending" {
+		t.Fatalf("successor request: %q %v", status, err)
+	}
+	if _, err := e.AcceptLANJoin("successor-request", second); err != nil {
+		t.Fatalf("successor admission: %v", err)
+	}
+	if kind := e.Runtimes()[model.ActorSlot2]; kind != model.RuntimeGrok {
+		t.Fatalf("successor runtime = %s", kind)
+	}
+	// The superseded member's own request reads the explicit retirement answer.
+	if _, status, err := e.LANJoinStatus("stuck-request-63", stuck); err != nil || status != "revoked" {
+		t.Fatalf("superseded member status = %q %v", status, err)
 	}
 }

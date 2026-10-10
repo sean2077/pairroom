@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/privatefile"
 	"github.com/sean2077/pairroom/internal/relay"
 )
 
@@ -115,7 +116,14 @@ func forgetSession(s State) error {
 	return err
 }
 
-func indexedSessions(caller nativeCaller) ([]State, error) {
+func indexedSessions(caller nativeCaller) ([]State, error) { return indexedSessionsWith(caller, false) }
+
+// indexedSessionsWith is indexedSessions with the offline-recovery reading of
+// the documented `unbind --local-only` escape: a binding that lost its
+// owner-only boundary (restored from a backup, copied from another machine, an
+// inherited Windows DACL) must still be identifiable so it can be retired
+// locally. Every operation on it still reloads strictly and fails closed.
+func indexedSessionsWith(caller nativeCaller, recovery bool) ([]State, error) {
 	if caller.session == "" {
 		return nil, nil
 	}
@@ -175,7 +183,7 @@ func indexedSessions(caller nativeCaller) ([]State, error) {
 			return nil, err
 		}
 		var s State
-		if err := readPrivate(filepath.Join(stateDir, "state.json"), &s); errors.Is(err, os.ErrNotExist) {
+		if err := readDiscoveryState(filepath.Join(stateDir, "state.json"), &s, recovery); errors.Is(err, os.ErrNotExist) {
 			continue
 		} else if err != nil {
 			return nil, err
@@ -205,9 +213,20 @@ func sameWorkspace(a, b string) bool {
 	return a == b || runtime.GOOS == "windows" && strings.EqualFold(a, b)
 }
 
-// Strict discovery for foreground commands and cold locator recovery: every
-// candidate must be readable and valid, and any other session's broken record is
-// an error the caller must repair.
+// readDiscoveryState reads one binding during session discovery. Only the
+// offline unbind escape may identify a binding whose owner-only boundary was
+// lost; the strict verdict stays for every other action.
+func readDiscoveryState(path string, value *State, recovery bool) error {
+	err := readPrivate(path, value)
+	if err == nil || !recovery || !errors.Is(err, privatefile.ErrPrivate) {
+		return err
+	}
+	return readPrivateRecovery(path, value)
+}
+
+// matchingSessions is strict discovery for foreground commands and cold locator
+// recovery: every candidate must be readable and valid, and any other session's
+// broken record is an error the caller must repair.
 func matchingSessions(root string, caller nativeCaller) ([]State, error) {
 	return scanMatchingSessions(root, caller, false)
 }
@@ -216,6 +235,12 @@ func matchingSessions(root string, caller nativeCaller) ([]State, error) {
 // workspace candidates must not turn another session's broken state into a hook
 // failure. Exact indexed bindings and explicit commands remain strict.
 func scanMatchingSessions(root string, caller nativeCaller, passive bool) ([]State, error) {
+	return scanMatchingSessionsWith(root, caller, passive, false)
+}
+
+// scanMatchingSessionsWith is scanMatchingSessions with the same offline
+// recovery reading as indexedSessionsWith.
+func scanMatchingSessionsWith(root string, caller nativeCaller, passive, recovery bool) ([]State, error) {
 	if caller.session == "" {
 		return nil, nil
 	}
@@ -229,7 +254,7 @@ func scanMatchingSessions(root string, caller nativeCaller, passive bool) ([]Sta
 	var states []State
 	for _, path := range paths {
 		var s State
-		if err := readPrivate(path, &s); err != nil {
+		if err := readDiscoveryState(path, &s, recovery); err != nil {
 			if passive {
 				continue // no verified session identity; do not read credentials
 			}
@@ -360,6 +385,9 @@ func selectSessionWorkspace(ctx context.Context, states []State, action string, 
 // cwd is a cold discovery hint, never the identity of an already-bound caller.
 // It never chdirs: file arguments remain relative to the actual tool-call cwd.
 func resolveSessionWorkspace(ctx context.Context, action string, o *options, caller nativeCaller) (string, error) {
+	// Only the documented offline escape may identify a binding that lost its
+	// owner-only boundary; every other action keeps strict discovery.
+	recovery := action == "unbind" && o.localOnly
 	if action == "hook" {
 		if session := sessionIDFromEnv(caller.runtime); session != "" && session != caller.session {
 			known, err := indexedSessions(nativeCaller{runtime: caller.runtime, session: session})
@@ -371,7 +399,7 @@ func resolveSessionWorkspace(ctx context.Context, action string, o *options, cal
 			}
 		}
 	}
-	states, err := indexedSessions(caller)
+	states, err := indexedSessionsWith(caller, recovery)
 	if err != nil {
 		return "", err
 	}
@@ -399,7 +427,7 @@ func resolveSessionWorkspace(ctx context.Context, action string, o *options, cal
 		addRoot(os.Getenv("CLAUDE_PROJECT_DIR"))
 	}
 	for _, root := range roots {
-		matches, err := scanMatchingSessions(root, caller, action == "hook")
+		matches, err := scanMatchingSessionsWith(root, caller, action == "hook", recovery)
 		if err != nil {
 			return "", err
 		}

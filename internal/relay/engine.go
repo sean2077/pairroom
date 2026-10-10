@@ -48,6 +48,7 @@ type Engine struct {
 	lanWakeResults  map[string]string
 	lanInvites      map[string]LANInvite
 	lanRequests     map[string]LANJoinRequest
+	lanAdmitted     map[string]bool
 	lanMember       *LANMember
 	lanTransfers    lanTransferSet
 	lastUserMessage string

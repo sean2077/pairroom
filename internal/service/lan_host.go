@@ -303,6 +303,12 @@ func (s *ManagementServer) lanOwnerAction(w http.ResponseWriter, r *http.Request
 		}
 		b, err := n.engine.AcceptLANJoin(receipt.RequestID, receipt.Fingerprint, owner...)
 		if err != nil {
+			// A stale or unrecognized receipt is an input the operator can fix;
+			// reporting it as 401 would end the browser session.
+			if errors.Is(err, relay.ErrAuth) {
+				writeManagementJSON(w, 400, map[string]string{"error": "no live join request matches this exact receipt; request a fresh invitation and retry with the receipt for that request", "code": "lan_receipt_stale"})
+				return
+			}
 			nativeResult(w, nil, err)
 			return
 		}
@@ -419,7 +425,19 @@ func (h *lanHostServer) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	n, err := h.authorizedRuntime(r, room, action, key)
 	if err != nil {
-		writeManagementError(w, 403, "shared Room unavailable or membership does not authorize this operation")
+		if errors.Is(err, relay.ErrAuth) {
+			writeManagementError(w, 403, "shared Room unavailable or membership does not authorize this operation")
+			return
+		}
+		if errors.Is(err, errLANHostSuspended) {
+			writeManagementJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the hosting Room is suspended; a member command such as relay status activates it — retry doctor afterwards", "code": lanshare.HostUnavailableCode})
+			return
+		}
+		// The certificate is admitted but the hosting Service cannot serve the
+		// Room right now (a Runtime that failed to start, a suspended Room, an
+		// unhealthy Registry). Reporting that as an authorization failure would
+		// tell a correctly admitted member its admission was revoked.
+		writeManagementJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the hosting Room is unavailable on this Service right now; the membership stays valid — retry after the host resolves it", "code": lanshare.HostUnavailableCode})
 		return
 	}
 	release := n.acquire()

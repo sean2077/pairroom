@@ -46,10 +46,11 @@ func TestNativeSkillCostAndCompleteOutput(t *testing.T) {
 		"no-agent-vendor-wake":             "Never execute printed vendor wake commands",
 	})
 	// Restoring the file-workflow review guidance that the rewrite dropped
-	// (findings need location/evidence/impact; retest fixes at the new revision
-	// and report unrun tests) costs about 165 bytes, so the compact operating
-	// rules are held to 5200 rather than deleting another safety clause.
-	if len(skillContent) > 5200 {
-		t.Fatalf("skill grew to %d bytes; compact operating rules should fit in 5200", len(skillContent))
+	// (findings need location/evidence/impact; pin base/head SHAs and the dirty
+	// hash; retest fixes at the new revision and report unrun tests) costs about
+	// 220 bytes, so the compact operating rules are held to 5250 rather than
+	// deleting another safety clause.
+	if len(skillContent) > 5250 {
+		t.Fatalf("skill grew to %d bytes; compact operating rules should fit in 5250", len(skillContent))
 	}
 }

@@ -35,7 +35,7 @@ func (g *lanGuestManager) maintain() {
 			return
 		case <-ticker.C:
 		}
-		snapshots, err := g.store.List(g.ctx)
+		snapshots, err := g.list(g.ctx)
 		if err != nil {
 			continue
 		}

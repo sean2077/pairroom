@@ -166,7 +166,9 @@ func readPrivate(path string, value any) error {
 		return errors.New("relay state must be a bounded regular file")
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
-		return errors.New("relay state and credential permissions must be 0600")
+		// Uniform with the Windows DACL verdict: both mean the owner-only
+		// boundary was lost, which the offline recovery path may repair.
+		return fmt.Errorf("%w: relay state and credential permissions must be 0600", privatefile.ErrPrivate)
 	}
 	// Peer-slot hooks scan this file without the slot lock; on Windows the
 	// shared-delete open keeps that scan from failing the owner's replace.
@@ -195,11 +197,46 @@ func load(dir string) (*Client, error) {
 	return c, nil
 }
 
+// readPrivateRecovery reads one local binding file for an explicit offline
+// retirement. It keeps the regular-file and size bounds, but a lost owner-only
+// boundary — a workspace restored from a backup, copied from another machine,
+// or an inherited Windows DACL — must not make the documented offline escape
+// impossible. The bytes authorize only this local retirement and are removed
+// with it; they never authorize a host operation.
+func readPrivateRecovery(path string, value any) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > maxPrivateFileBytes {
+		return errors.New("relay state must be a bounded regular file")
+	}
+	data, err := atomicfile.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if json.Unmarshal(data, value) != nil || strings.TrimSpace(string(data)) == "" {
+		return errors.New("invalid relay state; inspect before rebind")
+	}
+	return nil
+}
+
+func loadLocal(dir string) (*Client, error) { return loadLocalWith(dir, false) }
+
+// loadLocalRecovery is loadLocal for the explicit offline retirement path: the
+// owner-only boundary is not re-checked, because the binding is being removed
+// rather than used, and a damaged boundary must not block its removal.
+func loadLocalRecovery(dir string) (*Client, error) { return loadLocalWith(dir, true) }
+
 // loadLocal validates the private binding without requiring a running Service.
 // Relay calls on the result fail with the endpoint error until it is readable.
-func loadLocal(dir string) (*Client, error) {
+func loadLocalWith(dir string, recovery bool) (*Client, error) {
 	var state State
-	if err := readPrivate(filepath.Join(dir, "state.json"), &state); err != nil {
+	read := readPrivate
+	if recovery {
+		read = readPrivateRecovery
+	}
+	if err := read(filepath.Join(dir, "state.json"), &state); err != nil {
 		return nil, err
 	}
 	if !validStateFormat(state) {
@@ -212,8 +249,8 @@ func loadLocal(dir string) (*Client, error) {
 		return nil, errors.New("invalid relay publication backlog; inspect before rebind")
 	}
 	var cred credentials
-	readCredential := readPrivate
-	if state.LAN != nil {
+	readCredential := read
+	if state.LAN != nil && !recovery {
 		readCredential = func(path string, value any) error { return privatefile.ReadJSON(path, maxPrivateFileBytes, value) }
 	}
 	if err := readCredential(filepath.Join(dir, "credentials"), &cred); err != nil {

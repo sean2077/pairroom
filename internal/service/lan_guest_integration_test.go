@@ -221,10 +221,10 @@ func TestLANOptionalServiceProjectsTheDirectClientAndSharedOwnerEvidence(t *test
 	if status := f.host.localCall(t, "/api/v1/rooms/"+f.host.room.ID+"/lan/revoke", nil, nil, f.host.management.Token()); status != http.StatusOK {
 		t.Fatal("host revoke failed")
 	}
-	if status, _ := f.get(t, path+"attachments/"+attachment.ID, token); status != http.StatusUnauthorized {
+	if status, _ := f.get(t, path+"attachments/"+attachment.ID, token); status != http.StatusForbidden {
 		t.Fatalf("cached evidence survived revocation: HTTP %d", status)
 	}
-	if status := f.local.localCall(t, path+"history", nil, nil, token); status != http.StatusUnauthorized {
+	if status := f.local.localCall(t, path+"history", nil, nil, token); status != http.StatusForbidden {
 		t.Fatalf("cached membership hid revocation: HTTP %d", status)
 	}
 	if status := f.local.localCall(t, path+"leave", nil, nil, token); status != http.StatusOK {

@@ -29,6 +29,10 @@ func validateAttachment(a model.Attachment) error {
 	return nil
 }
 
+// cachedEvidence returns this machine's verified copy, holding the
+// evidence-directory lock only for local cache operations. The remote download
+// runs outside the lock: a slow host transfer must not block another caller's
+// import, browser request or CLI collection.
 func (c *Client) cachedEvidence(ctx context.Context, r record, expected model.Attachment) (model.Attachment, string, error) {
 	if err := validateAttachment(expected); err != nil {
 		return model.Attachment{}, "", err
@@ -37,54 +41,93 @@ func (c *Client) cachedEvidence(ctx context.Context, r record, expected model.At
 	if err := privatefile.Mkdir(dir); err != nil {
 		return model.Attachment{}, "", err
 	}
-	unlock, err := privatelock.Lock(ctx, dir)
+	// withCache holds the cross-process evidence lock for one local operation.
+	withCache := func(work func(media *attachment.Store) error) error {
+		unlock, err := privatelock.Lock(ctx, dir)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		media, err := attachment.Open(dir, r.Workspace)
+		if err != nil {
+			return errors.New("LAN evidence cache is unavailable")
+		}
+		return work(media)
+	}
+	var metadata model.Attachment
+	var localPath string
+	if err := withCache(func(media *attachment.Store) error {
+		if existing, path, err := media.Resolve(expected.ID); err == nil && existing == expected {
+			metadata, localPath = existing, path
+		}
+		return nil
+	}); err != nil {
+		return model.Attachment{}, "", err
+	}
+	if localPath != "" {
+		return metadata, localPath, nil
+	}
+	data, err := c.downloadEvidence(ctx, r, expected)
 	if err != nil {
 		return model.Attachment{}, "", err
 	}
-	defer unlock()
-	media, err := attachment.Open(dir, r.Workspace)
+	err = withCache(func(media *attachment.Store) error {
+		// Another caller may have imported the same bytes while this one waited.
+		if existing, path, err := media.Resolve(expected.ID); err == nil && existing == expected {
+			metadata, localPath = existing, path
+			return nil
+		}
+		if _, err := media.ImportVerified(expected, bytes.NewReader(data)); err != nil {
+			if errors.Is(err, attachment.ErrSharedQuota) {
+				return joinedRoomQuotaError{}
+			}
+			if errors.Is(err, attachment.ErrTemporaryQuota) {
+				return err
+			}
+			return errors.New("LAN evidence failed content verification")
+		}
+		existing, path, err := media.Resolve(expected.ID)
+		if err != nil || existing != expected {
+			return errors.New("LAN attachment does not match accepted message")
+		}
+		metadata, localPath = existing, path
+		return nil
+	})
 	if err != nil {
-		return model.Attachment{}, "", errors.New("LAN evidence cache is unavailable")
+		return model.Attachment{}, "", err
 	}
-	metadata, localPath, err := media.Resolve(expected.ID)
-	if err == nil && metadata == expected {
-		return metadata, localPath, nil
-	}
+	return metadata, localPath, nil
+}
+
+// downloadEvidence fetches one host-authorized artifact into memory. The caller
+// verifies it against the accepted manifest before it is stored.
+func (c *Client) downloadEvidence(ctx context.Context, r record, expected model.Attachment) ([]byte, error) {
 	client, err := c.httpFor(r)
 	if err != nil {
-		return model.Attachment{}, "", safeError(err)
+		return nil, safeError(err)
 	}
 	body, _ := json.Marshal(map[string]string{"id": expected.ID})
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, r.Invite.Endpoint+"/lan/v1/rooms/"+r.Invite.RoomID+"/download", bytes.NewReader(body))
 	if err != nil {
-		return model.Attachment{}, "", safeError(err)
+		return nil, safeError(err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(request)
 	if err != nil {
-		return model.Attachment{}, "", safeError(err)
+		return nil, safeError(err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return model.Attachment{}, "", safeError(&lanshare.Error{Status: response.StatusCode})
+		return nil, safeError(&lanshare.Error{Status: response.StatusCode})
 	}
 	if response.ContentLength > expected.Size {
-		return model.Attachment{}, "", errors.New("LAN evidence exceeds its manifest")
+		return nil, errors.New("LAN evidence exceeds its manifest")
 	}
-	if _, err := media.ImportVerified(expected, io.LimitReader(response.Body, expected.Size+1)); err != nil {
-		if errors.Is(err, attachment.ErrSharedQuota) {
-			return model.Attachment{}, "", joinedRoomQuotaError{}
-		}
-		if errors.Is(err, attachment.ErrTemporaryQuota) {
-			return model.Attachment{}, "", err
-		}
-		return model.Attachment{}, "", errors.New("LAN evidence failed content verification")
+	data, err := io.ReadAll(io.LimitReader(response.Body, expected.Size+1))
+	if err != nil || int64(len(data)) != expected.Size {
+		return nil, errors.New("LAN evidence does not match its manifest")
 	}
-	metadata, localPath, err = media.Resolve(expected.ID)
-	if err != nil || metadata != expected {
-		return model.Attachment{}, "", errors.New("LAN attachment does not match accepted message")
-	}
-	return metadata, localPath, nil
+	return data, nil
 }
 
 // joinedRoomQuotaError names this machine's verified-evidence cache as the

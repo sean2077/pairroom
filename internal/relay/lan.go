@@ -16,6 +16,10 @@ const (
 	EventLANInvite = "native.lan.invite"
 	EventLANJoin   = "native.lan.join"
 	EventLANMember = "native.lan.member"
+	// lanInviteLifetime bounds a new invitation and, together with it, how long
+	// the newest attempt per key keeps answering "expired" before the derived
+	// projection drops it.
+	lanInviteLifetime = 10 * time.Minute
 )
 
 // LAN records contain only public key fingerprints and Room transport IDs.
@@ -60,6 +64,44 @@ func (e *Engine) initLAN() {
 	if e.lanRequests == nil {
 		e.lanRequests = make(map[string]LANJoinRequest)
 	}
+	if e.lanAdmitted == nil {
+		e.lanAdmitted = make(map[string]bool)
+	}
+}
+
+// pruneLANRequestsLocked bounds the derived request projection. Join facts
+// accumulate in the Event Log for every attempt, but only the newest attempt of
+// each key can still be answered: "pending" while its invitation lives,
+// "expired" for one invitation window afterwards, and "revoked" once that key
+// was admitted. Superseded attempts of the same key and keys whose invitation
+// expired beyond that window are dropped here, so retries cannot fill the
+// projection and permanently refuse a fresh invitation. Admitted attempts stay
+// for the retirement answer; they grow only with owner approvals.
+func (e *Engine) pruneLANRequestsLocked() {
+	if len(e.lanRequests) == 0 {
+		return
+	}
+	newest := make(map[string]string, len(e.lanRequests))
+	newestAt := make(map[string]time.Time, len(e.lanRequests))
+	for id, j := range e.lanRequests {
+		if at, ok := newestAt[j.Key]; !ok || j.CreatedAt.After(at) {
+			newest[j.Key], newestAt[j.Key] = id, j.CreatedAt
+		}
+	}
+	now := e.cfg.Now()
+	for id, j := range e.lanRequests {
+		if e.lanAdmitted[id] || e.lanMember != nil && e.lanMember.RequestID == id {
+			continue
+		}
+		if newest[j.Key] != id {
+			delete(e.lanRequests, id)
+			continue
+		}
+		v, ok := e.lanInvites[j.InviteID]
+		if !ok || now.After(v.ExpiresAt.Add(lanInviteLifetime)) {
+			delete(e.lanRequests, id)
+		}
+	}
 }
 func (e *Engine) applyLAN(ev model.Event) error {
 	e.initLAN()
@@ -89,6 +131,7 @@ func (e *Engine) applyLAN(ev model.Event) error {
 			return errors.New("duplicate LAN join request")
 		}
 		e.lanRequests[j.RequestID] = j
+		e.pruneLANRequestsLocked()
 	case EventLANMember:
 		var m LANMember
 		if json.Unmarshal(ev.Data, &m) != nil {
@@ -111,16 +154,24 @@ func (e *Engine) applyLAN(ev model.Event) error {
 		if !continuing && !ev.CreatedAt.Before(v.ExpiresAt) {
 			return errors.New("LAN membership accepted after invitation expiry")
 		}
-		if old.RemoteKey != "" && old.Runtime != b.Runtime {
-			return errors.New("LAN runtime selection is immutable after admission")
+		if old.Active && old.RemoteKey != "" && old.Runtime != b.Runtime {
+			return errors.New("LAN runtime selection is immutable while the member is admitted")
 		}
 		if err := e.applyBinding(ev, bindingFact{Binding: b}); err != nil {
 			return err
 		}
 		v.Consumed = true
 		e.lanInvites[m.InviteID] = v
-		e.cfg.Runtimes[b.Slot] = b.Runtime
+		e.lanAdmitted[m.RequestID] = true
+		if b.Active {
+			e.cfg.Runtimes[b.Slot] = b.Runtime
+		} else {
+			// A revoked member leaves no admitted peer: the slot awaits the next
+			// admission, which may select a different runtime.
+			e.cfg.Runtimes[b.Slot] = model.RuntimeAwaitingPeer
+		}
 		e.lanMember = &m
+		e.pruneLANRequestsLocked()
 	default:
 		return errors.New("unsupported LAN fact")
 	}
@@ -167,7 +218,7 @@ func (e *Engine) CreateLANInvite(owner ...Auth) (LANInvite, error) {
 	if err != nil {
 		return LANInvite{}, err
 	}
-	v := LANInvite{ID: id, ExpiresAt: e.cfg.Now().Add(10 * time.Minute)}
+	v := LANInvite{ID: id, ExpiresAt: e.cfg.Now().Add(lanInviteLifetime)}
 	return v, e.append(EventLANInvite, model.ActorSystem, v)
 }
 func (e *Engine) RequestLANJoin(j LANJoinRequest) (LANJoinRequest, string, error) {
@@ -177,6 +228,7 @@ func (e *Engine) RequestLANJoin(j LANJoinRequest) (LANJoinRequest, string, error
 	if err := e.healthy(); err != nil {
 		return LANJoinRequest{}, "", err
 	}
+	e.pruneLANRequestsLocked()
 	if !validID(j.RequestID) || !validHash(j.Key) || !j.Runtime.Valid() || len(j.Label) > 128 || !utf8.ValidString(j.Label) || strings.ContainsFunc(j.Label, unicode.IsControl) {
 		return LANJoinRequest{}, "", errors.New("invalid join request")
 	}
@@ -193,9 +245,11 @@ func (e *Engine) RequestLANJoin(j LANJoinRequest) (LANJoinRequest, string, error
 	if len(e.lanRequests) >= 4096 {
 		return LANJoinRequest{}, "", errors.New("Room join history limit reached")
 	}
+	// The projection keeps at most one pending attempt per key, so this bounds
+	// distinct keys waiting on one invitation rather than one client's retries.
 	pending := 0
-	for _, p := range e.lanRequests {
-		if p.InviteID == v.ID {
+	for id, p := range e.lanRequests {
+		if p.InviteID == v.ID && !e.lanAdmitted[id] {
 			pending++
 		}
 	}
@@ -213,6 +267,12 @@ func (e *Engine) joinStatusLocked(j LANJoinRequest) string {
 		if e.lanMember.Binding.Active {
 			return "accepted"
 		}
+		return "revoked"
+	}
+	if e.lanAdmitted[j.RequestID] {
+		// A superseded membership: the successor's admission does not resurrect
+		// this request, and its guest needs the explicit retirement answer
+		// instead of a pending expiry that no retry can resolve.
 		return "revoked"
 	}
 	v := e.lanInvites[j.InviteID]
@@ -257,9 +317,10 @@ func (e *Engine) AcceptLANJoin(requestID, key string, owner ...Auth) (Binding, e
 	if old.Active {
 		return Binding{}, ErrOccupied
 	}
-	if kind := e.cfg.Runtimes[e.cfg.SharedSlot]; kind.Valid() && kind != j.Runtime {
-		return Binding{}, errors.New("peer runtime selection is immutable; create another shared Room for a different runtime")
-	}
+	// No immutability check here: an active member already returned ErrOccupied
+	// above, and a revoked member leaves the slot awaiting a successor, which may
+	// select a different Runtime. applyLAN still rejects a runtime change while
+	// the member is admitted.
 	id, err := RandomID()
 	if err != nil {
 		return Binding{}, err

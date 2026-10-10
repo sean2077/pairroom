@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"sync"
@@ -19,12 +20,21 @@ type lanGuestManager struct {
 	mu     sync.Mutex
 	server *ManagementServer
 	store  *lanclient.Store
-	guests map[string]*lanGuest
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	closed bool
+	// storeErr is set when the per-user catalog could not be opened. It keeps
+	// the Service running: host Rooms, hooks and this root's LAN host identity
+	// do not depend on the machine-wide joined-Room catalog.
+	storeErr error
+	guests   map[string]*lanGuest
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	closed   bool
 }
+
+// errLANStoreUnavailable reports a per-user joined-Room catalog this build
+// cannot use. Every guest surface reports it; nothing regenerates or discards
+// the catalog automatically.
+var errLANStoreUnavailable = errors.New("the local LAN client store is unusable; joined-Room views and the optional wake observer are unavailable until it is repaired or removed by hand")
 
 type lanGuest struct {
 	mu       sync.Mutex
@@ -56,20 +66,75 @@ func lanGuestPrivateDir(root string, parts ...string) (string, error) {
 }
 
 func initLANGuests(s *ManagementServer) error {
-	store, err := lanclient.Open()
-	if err != nil {
-		return err
-	}
-	if _, err := store.List(s.streams); err != nil {
-		store.Close()
-		return err
+	// An unusable per-user catalog must not stop the Service: this root's Rooms,
+	// hooks and LAN host identity are independent of it, and the catalog's owner
+	// validates it on use. The failure is reported through diagnostic() and on
+	// every guest surface.
+	store, storeErr := lanclient.Open()
+	if storeErr != nil {
+		store = nil
 	}
 	ctx, cancel := context.WithCancel(s.streams)
-	g := &lanGuestManager{server: s, store: store, guests: make(map[string]*lanGuest), ctx: ctx, cancel: cancel}
+	g := &lanGuestManager{server: s, store: store, storeErr: storeErr, guests: make(map[string]*lanGuest), ctx: ctx, cancel: cancel}
 	s.lanGuests = g
 	g.wg.Add(1)
 	go g.maintain()
 	return nil
+}
+
+// storeFailure reports why the per-user joined-Room catalog cannot be used.
+func (g *lanGuestManager) storeFailure() error {
+	if g == nil {
+		return errLANStoreUnavailable
+	}
+	if g.store == nil {
+		if g.storeErr != nil {
+			return fmt.Errorf("%w: %v", errLANStoreUnavailable, g.storeErr)
+		}
+		return errLANStoreUnavailable
+	}
+	return nil
+}
+
+// withStore returns the per-user store, or the reason it is unusable.
+func (g *lanGuestManager) withStore() (*lanclient.Store, error) {
+	if err := g.storeFailure(); err != nil {
+		return nil, err
+	}
+	return g.store, nil
+}
+
+// list returns the joined-Room snapshots or the catalog failure.
+func (g *lanGuestManager) list(ctx context.Context) ([]lanclient.Snapshot, error) {
+	store, err := g.withStore()
+	if err != nil {
+		return nil, err
+	}
+	return store.List(ctx)
+}
+
+// room returns one joined client for a local browser action.
+func (g *lanGuestManager) room(ctx context.Context, id string) (*lanclient.Client, error) {
+	store, err := g.withStore()
+	if err != nil {
+		return nil, err
+	}
+	return store.Get(ctx, id)
+}
+
+// diagnostic names an unusable per-user catalog so the operator can repair it,
+// without marking the whole Service unhealthy.
+func (g *lanGuestManager) diagnostic() string {
+	if g == nil {
+		return ""
+	}
+	if err := g.storeFailure(); err != nil {
+		return err.Error()
+	}
+	if _, err := g.store.List(g.ctx); err != nil {
+		return fmt.Sprintf("%s: %v", errLANStoreUnavailable, err)
+	}
+	return ""
 }
 
 func (g *lanGuestManager) close() {
@@ -88,7 +153,9 @@ func (g *lanGuestManager) close() {
 			guest.waker.Close()
 		}
 	}
-	g.store.Close()
+	if g.store != nil {
+		g.store.Close()
+	}
 }
 
 func (g *lanGuestManager) get(id string) *lanGuest {
@@ -97,7 +164,7 @@ func (g *lanGuestManager) get(id string) *lanGuest {
 	}
 	ctx, cancel := context.WithTimeout(g.ctx, 3*time.Second)
 	defer cancel()
-	client, err := g.store.Get(ctx, id)
+	client, err := g.room(ctx, id)
 	if err != nil {
 		return nil
 	}
@@ -120,7 +187,7 @@ func (g *lanGuestManager) summaries() []lanGuestSummary {
 	}
 	ctx, cancel := context.WithTimeout(g.ctx, 3*time.Second)
 	defer cancel()
-	result, err := g.store.List(ctx)
+	result, err := g.list(ctx)
 	if err != nil {
 		return nil
 	}
@@ -134,7 +201,7 @@ func (s *ManagementServer) mountLANGuests(mux *http.ServeMux) {
 }
 
 func (s *ManagementServer) listLANJoinedRooms(w http.ResponseWriter, r *http.Request) {
-	rooms, err := s.lanGuests.store.List(r.Context())
+	rooms, err := s.lanGuests.list(r.Context())
 	if err != nil {
 		writeLANBridgeError(w, err)
 		return

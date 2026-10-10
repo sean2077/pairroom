@@ -217,8 +217,8 @@ func TestLANHostRequiresExactAdmissionAndScopedMembership(t *testing.T) {
 		t.Fatal(err)
 	}
 	receipt.Fingerprint = relay.Digest("wrong-key")
-	if status := f.localCall(t, "/api/v1/rooms/"+f.room.ID+"/lan/accept", map[string]string{"receipt": lanshare.EncodeReceipt(receipt)}, nil, f.management.Token()); status < 400 {
-		t.Fatal("wrong receipt admitted")
+	if status := f.localCall(t, "/api/v1/rooms/"+f.room.ID+"/lan/accept", map[string]string{"receipt": lanshare.EncodeReceipt(receipt)}, nil, f.management.Token()); status != http.StatusBadRequest {
+		t.Fatal("wrong receipt was not a validation failure")
 	}
 	admitted := f.accept(t, client, pending)
 	if admitted.Room.Runtimes[model.ActorSlot2] != model.RuntimeCodex {

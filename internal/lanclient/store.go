@@ -23,14 +23,24 @@ const maxClients = 1024
 const maxDeliveries = 4096
 const maxWakeReservations = 4096
 
+// DefaultRoot is the per-user joined-Room catalog below the operating system's
+// user configuration directory.
+func DefaultRoot() (string, error) {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "pairroom", "lan-clients"), nil
+}
+
 // Open and OpenAt are read-only constructors. Discovery of an absent client
 // store creates no directories, certificate, admission or identity claim.
 func Open() (*Store, error) {
-	base, err := os.UserConfigDir()
+	root, err := DefaultRoot()
 	if err != nil {
 		return nil, err
 	}
-	return OpenAt(filepath.Join(base, "pairroom", "lan-clients"))
+	return OpenAt(root)
 }
 
 func OpenAt(root string) (*Store, error) {
@@ -338,8 +348,10 @@ func (c *Client) authenticated(ctx context.Context, auth relay.Auth, leaving boo
 }
 
 // Detach is an explicit local-only retirement. It does not claim that the host
-// received a leave request. Both foreground routing and optional observers
-// become inactive before the exact local identity reservation is released.
+// received a leave request. The exact local identity reservation is released
+// before the record is retired, so a failure that must be reported — including
+// a claim now held by a replacement binding — leaves the accepted/pending
+// record intact instead of reporting failure for a half-retired binding.
 func (c *Client) Detach(ctx context.Context, auth relay.Auth) error {
 	return c.detach(ctx, &auth)
 }
@@ -351,16 +363,17 @@ func (c *Client) detach(ctx context.Context, auth *relay.Auth) error {
 				return err
 			}
 		}
-		r.Status = "detached"
-		if err := privatefile.WriteJSON(filepath.Join(c.dir, "client.json"), *r); err != nil {
-			return err
-		}
 		// Repair only a pending-to-admitted interruption for this exact local
 		// binding before releasing it; a different owner remains protected.
 		if err := c.store.identities.Reserve(ctx, reservation(*r)); err != nil {
 			return err
 		}
-		return c.store.identities.Release(ctx, reservation(*r))
+		if err := c.store.identities.Release(ctx, reservation(*r)); err != nil {
+			return err
+		}
+		// withRecord persists the retired status after this callback succeeds.
+		r.Status = "detached"
+		return nil
 	})
 	return err
 }

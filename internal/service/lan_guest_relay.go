@@ -25,8 +25,12 @@ type lanGuestOwnerRequest struct {
 }
 
 func (s *ManagementServer) lanGuestOwnerAction(w http.ResponseWriter, r *http.Request) {
-	client, err := s.lanGuests.store.Get(r.Context(), r.PathValue("room"))
+	client, err := s.lanGuests.room(r.Context(), r.PathValue("room"))
 	if err != nil {
+		if errors.Is(err, errLANStoreUnavailable) {
+			writeLANBridgeError(w, err)
+			return
+		}
 		writeManagementError(w, http.StatusNotFound, "joined Room not found")
 		return
 	}
@@ -65,8 +69,12 @@ func (s *ManagementServer) lanGuestOwnerAction(w http.ResponseWriter, r *http.Re
 }
 
 func (s *ManagementServer) lanGuestAttachment(w http.ResponseWriter, r *http.Request) {
-	client, err := s.lanGuests.store.Get(r.Context(), r.PathValue("room"))
+	client, err := s.lanGuests.room(r.Context(), r.PathValue("room"))
 	if err != nil {
+		if errors.Is(err, errLANStoreUnavailable) {
+			writeLANBridgeError(w, err)
+			return
+		}
 		writeManagementError(w, http.StatusNotFound, "joined Room not found")
 		return
 	}
@@ -101,11 +109,23 @@ func writeLANBridgeError(w http.ResponseWriter, err error) {
 		if status < 400 || status >= 600 {
 			status = http.StatusBadGateway
 		}
+		if status == http.StatusUnauthorized {
+			// The hosting Room rejected the member credential; this browser
+			// session belongs to the Service and stays valid.
+			status = http.StatusForbidden
+		}
 		writeManagementJSON(w, status, map[string]string{"error": failure.Message, "code": failure.Code})
 		return
 	}
+	if errors.Is(err, errLANStoreUnavailable) {
+		writeManagementError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
 	if errors.Is(err, relay.ErrAuth) || errors.Is(err, lanclient.ErrInactive) {
-		nativeResult(w, nil, relay.ErrAuth)
+		// A remote membership refusal is not a Service-session expiry: the
+		// dashboard treats any 401 on these paths as an expired browser session
+		// and demands the Service token again.
+		writeManagementJSON(w, http.StatusForbidden, map[string]string{"error": "the hosting Room refused this operation: the membership is revoked, inactive or no longer authorized there", "code": "lan_membership_denied"})
 		return
 	}
 	writeManagementError(w, http.StatusBadGateway, "Joined Room operation is unavailable; inspect its original client state before retrying")

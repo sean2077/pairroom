@@ -109,6 +109,11 @@ func safeError(err error) error {
 		if failure.Code == relay.WakeIneligibleCode {
 			return relay.ErrWakeIneligible
 		}
+		if failure.Code == lanshare.HostUnavailableCode {
+			// The host answered but cannot serve the Room right now; the
+			// admission is intact, so this must not read as an auth failure.
+			return &Error{Status: failure.Status, Code: failure.Code, Message: "the hosting Room is unavailable right now and the membership stays valid; retry after the host resolves it"}
+		}
 		return &Error{Status: failure.Status, Message: ErrUnavailable.Error()}
 	}
 	var transportFailure *url.Error

@@ -339,3 +339,57 @@ func TestUploadAndOwnerCacheRequireExactBytesAndFreshRoomAuthorization(t *testin
 		t.Fatal("unsupported owner action reached remote")
 	}
 }
+
+// A slow remote download must not hold the evidence-directory lock: another
+// caller's own download completes while the first one is still in flight.
+func TestSlowEvidenceDownloadDoesNotBlockAnotherCaller(t *testing.T) {
+	ctx := context.Background()
+	s, f := newStore(t), newRemote(t)
+	c, _, _ := f.join(t, s)
+	message, content, _ := incomingFile(t)
+	first := message.Attachments[0]
+	second := first
+	second.ID = "att-" + strings.Repeat("2", 24)
+	started, release := make(chan struct{}), make(chan struct{})
+	f.setHandler(func(w http.ResponseWriter, _ *http.Request, action string, data []byte) {
+		var request map[string]string
+		_ = json.Unmarshal(data, &request)
+		switch action {
+		case "attachment":
+			if request["id"] == second.ID {
+				reply(w, second)
+				return
+			}
+			reply(w, first)
+		case "download":
+			if request["id"] == first.ID {
+				close(started)
+				<-release
+			}
+			_, _ = io.WriteString(w, content)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := c.Download(ctx, first.ID)
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first download never started")
+	}
+	secondCtx, cancelSecond := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelSecond()
+	if _, path, err := c.Download(secondCtx, second.ID); err != nil {
+		t.Fatalf("second download blocked behind the in-flight one: %v", err)
+	} else if _, err := os.Stat(path); err != nil {
+		t.Fatalf("second download did not store verified evidence: %v", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("first download: %v", err)
+	}
+}

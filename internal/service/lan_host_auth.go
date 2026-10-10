@@ -142,6 +142,11 @@ func (r *Registry) observeLANAuthorization(event model.Event) {
 	}
 }
 
+// errLANHostSuspended distinguishes a suspended hosting Room from an
+// authorization refusal: doctor must not activate it, and the member is told
+// how to.
+var errLANHostSuspended = errors.New("hosting Room is suspended")
+
 // A pending or unknown certificate cannot consume Runtime capacity or force a
 // full history replay just by naming a suspended Room. No request path below
 // opens an Event Log; only a proven invitation or membership can activate it.
@@ -158,8 +163,15 @@ func (h *lanHostServer) authorizedRuntime(r *http.Request, roomID, action, key s
 		}
 		return n, nil
 	}
-	if action == "doctor" || !errors.Is(err, ErrRuntimeNotReady) {
-		return nil, relay.ErrAuth
+	if err != nil && !errors.Is(err, ErrRuntimeNotReady) {
+		// A host-side failure (unhealthy Registry, closed manager) is not the
+		// member's authorization: report it as an unavailable Room instead.
+		return nil, err
+	}
+	if action == "doctor" {
+		// Doctor never activates a suspended Room. The member must learn that the
+		// Room is suspended, not that its admission failed.
+		return nil, errLANHostSuspended
 	}
 	var join lanshare.JoinRequest
 	var status lanshare.JoinStatusRequest

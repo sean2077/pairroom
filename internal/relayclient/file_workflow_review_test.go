@@ -65,6 +65,7 @@ func TestNativeFileWorkflowSkillGuidance(t *testing.T) {
 		"review-checkout":          "--review-repo <task-checkout> for another checkout",
 		"evidence-not-approval":    "Observations are not atomic or approval",
 		"independent-review":       "Inspect independently; report unresolved disagreements",
+		"review-revision-pinning":  "Pin base/head SHAs and dirty hash; recheck before closure",
 		"review-findings":          "Findings need location, evidence and impact; label hypotheses",
 		"review-retest":            "Verify fixes at the new revision with a retest; report tests not run",
 	})

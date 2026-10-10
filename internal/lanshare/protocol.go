@@ -26,6 +26,11 @@ import (
 const Version = 1
 const MaxResponseBytes = 8 << 20
 
+// HostUnavailableCode marks a host-side refusal the member cannot fix: the
+// Room's runtime cannot be served right now, while the admission itself stays
+// valid. It must not be reported as an authentication failure.
+const HostUnavailableCode = "lan_host_unavailable"
+
 // EndpointForAddress preserves a numeric listener address while escaping an
 // IPv6 interface zone as required by a URL. The address itself still passes
 // ValidateEndpoint before any connection or listener is admitted.

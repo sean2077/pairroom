@@ -22,6 +22,7 @@ import (
 
 	"github.com/sean2077/pairroom/internal/claudewake"
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/privatefile"
 	"github.com/sean2077/pairroom/internal/protocol"
 	"github.com/sean2077/pairroom/internal/relay"
 	"github.com/sean2077/pairroom/internal/review"
@@ -618,8 +619,19 @@ func unbindLocalOnly(ctx context.Context, root, dir string, o options, out io.Wr
 	defer release()
 	cleanupAtomicTemps(dir)
 	var state State
+	recovery := false
 	if err := readPrivate(filepath.Join(dir, "state.json"), &state); err != nil {
-		return fmt.Errorf("read local binding state: %w", err)
+		if !errors.Is(err, privatefile.ErrPrivate) {
+			return fmt.Errorf("read local binding state: %w", err)
+		}
+		// A binding whose owner-only boundary was lost (restored from a backup,
+		// copied from another machine, an inherited Windows DACL) must still be
+		// retirable through this documented offline escape. The recovered bytes
+		// authorize only this local retirement and are removed with it.
+		if recoveryErr := readPrivateRecovery(filepath.Join(dir, "state.json"), &state); recoveryErr != nil {
+			return fmt.Errorf("read local binding state: %w", err)
+		}
+		recovery = true
 	}
 	if err := validateCommandCaller(&Client{State: state}); err != nil {
 		return err
@@ -628,7 +640,11 @@ func unbindLocalOnly(ctx context.Context, root, dir string, o options, out io.Wr
 		return errors.New("invalid local relay state identity")
 	}
 	if state.LAN != nil {
-		client, err := load(dir)
+		loader := loadLocal
+		if recovery {
+			loader = loadLocalRecovery
+		}
+		client, err := loader(dir)
 		if err != nil {
 			return err
 		}
@@ -654,6 +670,9 @@ func unbindLocalOnly(ctx context.Context, root, dir string, o options, out io.Wr
 	}
 	if state.LAN != nil {
 		result["notice"] = "Direct LAN client detached locally without contacting the host. Its remote membership still occupies the slot; ask the host owner to revoke that admission. It will not reconnect automatically."
+	}
+	if recovery {
+		result["warning"] = "the local binding files were not owner-only; they were read only to retire this binding locally and have been removed with it"
 	}
 	if o.purge {
 		states, err := statePaths(root)

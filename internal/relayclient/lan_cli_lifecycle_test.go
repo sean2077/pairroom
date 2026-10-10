@@ -382,3 +382,56 @@ func TestLANCLIDetachesInstalledReplacementBeforeWorkspacePromotionOffline(t *te
 		t.Fatalf("offline cutover did not release the exact candidate: %v", err)
 	}
 }
+
+// Repeating the documented offline detach after another binding adopted the same
+// (runtime, session) identity must still finish the local cleanup: the record is
+// already retired, the replacement claim is not this command's to release, and
+// failing an idempotent command would skip the notice and --purge.
+func TestLANCLIOfflineDetachConvergesAfterItsIdentityIsReused(t *testing.T) {
+	f := newLANCLIWire(t)
+	_, original := f.bind(t, "shared-native-session")
+	f.server.Close()
+	t.Chdir(sessionGitRoot(t))
+	if output, err := f.run(t, "shared-native-session", false, "unbind", "--local-only", "--room", original.Room); err != nil || !bytes.Contains(output, []byte("local-only")) {
+		t.Fatalf("first offline detach: %s, %v", output, err)
+	}
+	identities, err := nativeidentity.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := nativeidentity.Claim{Runtime: original.Runtime, SessionID: "shared-native-session", Association: nativeidentity.Hosted(f.root, "local-room", model.ActorSlot1), BindID: "replacement-binding"}
+	if err := identities.Reserve(context.Background(), claim); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := f.run(t, "shared-native-session", false, "unbind", "--local-only", "--room", original.Room); err != nil || !bytes.Contains(output, []byte("local-only")) {
+		t.Fatalf("repeated offline detach: %s, %v", output, err)
+	}
+	if err := identities.Check(context.Background(), claim); err != nil {
+		t.Fatalf("repeated offline detach disturbed the replacement identity: %v", err)
+	}
+}
+
+// A joined workspace restored from a backup or copied from another machine can
+// lose the owner-only boundary of its state and credential files. The documented
+// offline escape must still retire that binding locally and remove the files,
+// instead of failing forever with a permission error and no repair path.
+func TestLANCLIOfflineDetachRetiresBindingWithLostOwnerBoundary(t *testing.T) {
+	f := newLANCLIWire(t)
+	invite, _ := f.bind(t, "damaged-boundary-session")
+	f.server.Close()
+	slotDir := filepath.Join(f.root, ".pairroom", "rooms", lanRoutingID(invite), "slots", "slot2")
+	for _, name := range []string{"state.json", "credentials"} {
+		breakOwnerBoundary(t, filepath.Join(slotDir, name))
+	}
+	t.Chdir(sessionGitRoot(t))
+	output, err := f.run(t, "damaged-boundary-session", false, "unbind", "--local-only", "--room", lanRoutingID(invite))
+	if err != nil || !bytes.Contains(output, []byte("local-only")) || !bytes.Contains(output, []byte("not owner-only")) {
+		t.Fatalf("damaged-boundary offline detach: %s, %v", output, err)
+	}
+	if _, err := os.Stat(filepath.Join(slotDir, "state.json")); !os.IsNotExist(err) {
+		t.Fatalf("retired binding files survived: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(slotDir, "credentials")); !os.IsNotExist(err) {
+		t.Fatalf("retired credential file survived: %v", err)
+	}
+}

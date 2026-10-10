@@ -42,6 +42,12 @@ func writeProtocol(args []string, stdout, stderr io.Writer) error {
 	if !host.Valid() {
 		return fmt.Errorf("invalid host-mode %q", host)
 	}
+	explicitHostMode := false
+	flags.Visit(func(value *flag.Flag) {
+		if value.Name == "host-mode" {
+			explicitHostMode = true
+		}
+	})
 	resolve := protocol.Resolve
 	if host == model.HostNative {
 		resolve = protocol.ResolveNative
@@ -55,7 +61,16 @@ func writeProtocol(args []string, stdout, stderr io.Writer) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(contract)
 	}
-	_, err = io.WriteString(stdout, contract.Text())
+	if _, err := io.WriteString(stdout, contract.Text()); err != nil {
+		return err
+	}
+	if !explicitHostMode {
+		// A bootstrap written by an older release prints this command without a
+		// host mode, and the default flipped from embedded to native. Name the
+		// assumed contract, so an Embedded Room's agent is never handed the
+		// Native rules silently.
+		_, err = io.WriteString(stdout, "\nNote: --host-mode was not given, so this is PairRoom's current Native default. An Embedded Room created by an older release should rerun this command with --host-mode embedded.\n")
+	}
 	return err
 }
 
