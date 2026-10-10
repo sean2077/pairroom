@@ -215,7 +215,7 @@ Keep the original data. Inspect the first identity/schema/replay error:
 pairroom verify --data-dir /absolute/path/to/room --json
 ```
 
-Readers accept existing local Store 12/provisioning 5 and new Store 13/provisioning 6 with explicit host mode; earlier formats are retired before replay/repair. Never change metadata to make unsupported data appear valid. Missing/empty/gapped/replaced logs are not fresh Rooms. Restore a verified matching backup rather than renumbering history.
+Readers accept existing local Store 12/provisioning 5 and new Store 13/provisioning 6 with explicit host mode. New Rooms write 13/6; new Registry checkpoints use 4 and existing local checkpoint 3 remains readable. Earlier and future formats fail before replay/repair. Never change metadata to make unsupported data appear valid. Missing/empty/gapped/replaced logs are not fresh Rooms. Restore a verified matching backup rather than renumbering history.
 
 Backup/diagnostic outputs must stay outside the source Room directory, including symlink aliases. A Room backup excludes the Service root's user configuration, repository, vendor stores, and Native workspace credentials. Archive cannot stop Native work. Follow [Storage](STORAGE.md), [backup procedure](OPERATIONS.md#backup), and [Upgrading](UPGRADING.md).
 

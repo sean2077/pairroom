@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -53,9 +52,99 @@ func allowedLANAction(action string) bool {
 	}
 }
 
-// A pending/unknown certificate must not consume Runtime capacity just by
-// naming a Room. Suspended Room admission reads public authorization facts
-// without opening a writer; every effect reauthenticates in the live Engine.
+// The Registry builds this compact projection from validated Room facts on
+// startup and updates it after each durable LAN append. It is only an early
+// admission filter: every effect reauthenticates in the live Engine.
+type lanRoomAuthorization struct {
+	invites  map[string]relay.LANInvite
+	requests map[string]relay.LANJoinRequest
+	member   *relay.LANMember
+	invalid  bool
+}
+
+func newLANRoomAuthorization() *lanRoomAuthorization {
+	return &lanRoomAuthorization{invites: make(map[string]relay.LANInvite), requests: make(map[string]relay.LANJoinRequest)}
+}
+
+func (p *lanRoomAuthorization) apply(event model.Event) error {
+	switch event.Kind {
+	case relay.EventLANInvite:
+		var v relay.LANInvite
+		if json.Unmarshal(event.Data, &v) != nil || !lanshare.ValidID(v.ID) || v.ExpiresAt.IsZero() {
+			return errors.New("invalid LAN invitation authorization fact")
+		}
+		// The writer issues a new invitation only after prior invitations have
+		// expired. Old requests retain their exact invitation ID separately.
+		for id, prior := range p.invites {
+			if prior.Consumed || !event.CreatedAt.Before(prior.ExpiresAt) {
+				delete(p.invites, id)
+			}
+		}
+		p.invites[v.ID] = v
+	case relay.EventLANJoin:
+		var j relay.LANJoinRequest
+		if json.Unmarshal(event.Data, &j) != nil || !lanshare.ValidID(j.RequestID) || !lanshare.ValidID(j.InviteID) || !lanshare.ValidFingerprint(j.Key) || !j.Runtime.Valid() {
+			return errors.New("invalid LAN join authorization fact")
+		}
+		p.requests[j.RequestID] = j
+	case relay.EventLANMember:
+		var member relay.LANMember
+		if json.Unmarshal(event.Data, &member) != nil {
+			return errors.New("invalid LAN member authorization fact")
+		}
+		if _, err := relay.LANBindingFromEvent(event); err != nil {
+			return err
+		}
+		p.member = &member
+		if invite, ok := p.invites[member.InviteID]; ok {
+			invite.Consumed = true
+			p.invites[member.InviteID] = invite
+		}
+	}
+	return nil
+}
+
+func (r *Registry) resetLANAuthorization(room Room, events []model.Event) error {
+	if room.Sharing != "lan" {
+		return nil
+	}
+	projection := newLANRoomAuthorization()
+	for _, event := range events {
+		if err := projection.apply(event); err != nil {
+			return err
+		}
+	}
+	r.lanAuthMu.Lock()
+	defer r.lanAuthMu.Unlock()
+	if r.lanAuth == nil {
+		r.lanAuth = make(map[string]*lanRoomAuthorization)
+	}
+	r.lanAuth[room.ID] = projection
+	return nil
+}
+
+func (r *Registry) observeLANAuthorization(event model.Event) {
+	if event.Kind != relay.EventLANInvite && event.Kind != relay.EventLANJoin && event.Kind != relay.EventLANMember {
+		return
+	}
+	r.lanAuthMu.Lock()
+	defer r.lanAuthMu.Unlock()
+	if r.lanAuth == nil {
+		r.lanAuth = make(map[string]*lanRoomAuthorization)
+	}
+	projection := r.lanAuth[event.RoomID]
+	if projection == nil {
+		projection = newLANRoomAuthorization()
+		r.lanAuth[event.RoomID] = projection
+	}
+	if err := projection.apply(event); err != nil {
+		projection.invalid = true
+	}
+}
+
+// A pending or unknown certificate cannot consume Runtime capacity or force a
+// full history replay just by naming a suspended Room. No request path below
+// opens an Event Log; only a proven invitation or membership can activate it.
 func (h *lanHostServer) authorizedRuntime(r *http.Request, roomID, action, key string) (*nativeHostRuntime, error) {
 	room, ok := h.owner.registry.Room(roomID)
 	if !ok || room.HostMode != model.HostNative || room.Sharing != "lan" || room.Archived() {
@@ -72,39 +161,8 @@ func (h *lanHostServer) authorizedRuntime(r *http.Request, roomID, action, key s
 	if action == "doctor" || !errors.Is(err, ErrRuntimeNotReady) {
 		return nil, relay.ErrAuth
 	}
-	events, err := readEventsReadOnly(filepath.Join(room.DataDir, "events.jsonl"))
-	if err != nil {
-		return nil, relay.ErrAuth
-	}
-	invites := map[string]relay.LANInvite{}
-	requests := map[string]relay.LANJoinRequest{}
-	var member *relay.LANMember
-	for _, event := range events {
-		switch event.Kind {
-		case relay.EventLANInvite:
-			var v relay.LANInvite
-			if json.Unmarshal(event.Data, &v) != nil {
-				return nil, relay.ErrAuth
-			}
-			invites[v.ID] = v
-		case relay.EventLANJoin:
-			var j relay.LANJoinRequest
-			if json.Unmarshal(event.Data, &j) != nil {
-				return nil, relay.ErrAuth
-			}
-			requests[j.RequestID] = j
-		case relay.EventLANMember:
-			var m relay.LANMember
-			if json.Unmarshal(event.Data, &m) != nil {
-				return nil, relay.ErrAuth
-			}
-			member = &m
-			v := invites[m.InviteID]
-			v.Consumed = true
-			invites[m.InviteID] = v
-		}
-	}
-	allowed := false
+	var join lanshare.JoinRequest
+	var status lanshare.JoinStatusRequest
 	if action == "join" || action == "join-status" {
 		data, err := io.ReadAll(io.LimitReader(r.Body, 4097))
 		_ = r.Body.Close()
@@ -112,28 +170,33 @@ func (h *lanHostServer) authorizedRuntime(r *http.Request, roomID, action, key s
 			return nil, relay.ErrAuth
 		}
 		r.Body = io.NopCloser(bytes.NewReader(data))
-		if action == "join" {
-			var j lanshare.JoinRequest
-			if json.Unmarshal(data, &j) != nil {
-				return nil, relay.ErrAuth
-			}
-			v, found := invites[j.InviteID]
-			allowed = found && !v.Consumed && time.Now().Before(v.ExpiresAt)
-			if old, found := requests[j.RequestID]; found {
-				allowed = old.Key == key && old.InviteID == j.InviteID && old.Runtime == j.Runtime
-			}
-		} else {
-			var j lanshare.JoinStatusRequest
-			if json.Unmarshal(data, &j) != nil {
-				return nil, relay.ErrAuth
-			}
-			old, found := requests[j.RequestID]
-			allowed = found && old.Key == key
+		if action == "join" && json.Unmarshal(data, &join) != nil || action == "join-status" && json.Unmarshal(data, &status) != nil {
+			return nil, relay.ErrAuth
 		}
-	} else if member != nil {
-		generation, err := strconv.ParseUint(r.Header.Get("X-PairRoom-LAN-Generation"), 10, 64)
-		allowed = err == nil && member.Binding.Active && member.Binding.RemoteKey == key && member.Binding.BindID == r.Header.Get("X-PairRoom-LAN-Bind") && member.Binding.Generation == generation
 	}
+	h.owner.registry.lanAuthMu.RLock()
+	projection := h.owner.registry.lanAuth[roomID]
+	allowed := false
+	if projection != nil && !projection.invalid {
+		switch action {
+		case "join":
+			v, found := projection.invites[join.InviteID]
+			allowed = found && !v.Consumed && time.Now().Before(v.ExpiresAt) && lanshare.ValidID(join.RequestID) && join.Runtime.Valid()
+			if old, found := projection.requests[join.RequestID]; found {
+				allowed = old.Key == key && old.InviteID == join.InviteID && old.Runtime == join.Runtime
+			}
+		case "join-status":
+			old, found := projection.requests[status.RequestID]
+			allowed = found && old.Key == key
+		default:
+			if member := projection.member; member != nil {
+				generation, err := strconv.ParseUint(r.Header.Get("X-PairRoom-LAN-Generation"), 10, 64)
+				binding := room.Bindings[model.OtherParticipant(room.OwnerSlot)]
+				allowed = err == nil && !binding.Pending && binding.RemoteKey == key && member.Binding.Active && member.Binding.RemoteKey == key && member.Binding.BindID == r.Header.Get("X-PairRoom-LAN-Bind") && member.Binding.Generation == generation
+			}
+		}
+	}
+	h.owner.registry.lanAuthMu.RUnlock()
 	if !allowed {
 		return nil, relay.ErrAuth
 	}

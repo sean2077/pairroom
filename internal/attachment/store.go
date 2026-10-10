@@ -100,15 +100,20 @@ func Open(dataDir, repo string) (*Store, error) {
 func (s *Store) Root() string { return s.root }
 
 func (s *Store) SaveImage(name string, reader io.Reader, source string) (model.Attachment, error) {
-	return s.saveImage(name, reader, source, false)
+	return s.saveImage(name, reader, source)
 }
 
 // SaveSharedImage adds the bounded Room storage quota required at LAN ingress.
 func (s *Store) SaveSharedImage(name string, reader io.Reader, source string) (model.Attachment, error) {
-	return s.saveImage(name, reader, source, true)
+	staged, err := s.StageShared("image", name, reader, source)
+	if err != nil {
+		return model.Attachment{}, err
+	}
+	defer staged.Close()
+	return staged.Commit()
 }
 
-func (s *Store) saveImage(name string, reader io.Reader, source string, shared bool) (model.Attachment, error) {
+func (s *Store) saveImage(name string, reader io.Reader, source string) (model.Attachment, error) {
 	if reader == nil {
 		return model.Attachment{}, errors.New("image reader is required")
 	}
@@ -144,12 +149,6 @@ func (s *Store) saveImage(name string, reader io.Reader, source string, shared b
 	if size > MaxImageBytes {
 		_ = tmp.Close()
 		return model.Attachment{}, fmt.Errorf("image exceeds %d MiB limit", MaxImageBytes>>20)
-	}
-	if shared {
-		if err := s.checkSharedQuota(size); err != nil {
-			_ = tmp.Close()
-			return model.Attachment{}, err
-		}
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()

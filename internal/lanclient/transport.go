@@ -19,6 +19,7 @@ type memberTransport struct {
 	base       http.RoundTripper
 	bindID     string
 	generation uint64
+	contact    func(bool)
 }
 
 func (t memberTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -26,7 +27,11 @@ func (t memberTransport) RoundTrip(request *http.Request) (*http.Response, error
 	if t.bindID != "" {
 		lanshare.SetMemberHeaders(copy, t.bindID, t.generation)
 	}
-	return t.base.RoundTrip(copy)
+	response, err := t.base.RoundTrip(copy)
+	if t.contact != nil {
+		t.contact(response != nil)
+	}
+	return response, err
 }
 
 func (c *Client) httpFor(r record) (*http.Client, error) {
@@ -44,7 +49,7 @@ func (c *Client) httpFor(r record) (*http.Client, error) {
 		c.http, c.transportKey = client, key
 	}
 	client := *c.http
-	transport := memberTransport{base: client.Transport}
+	transport := memberTransport{base: client.Transport, contact: c.observeContact}
 	if r.Room != nil {
 		transport.bindID, transport.generation = r.Room.BindID, r.Room.Generation
 	}
@@ -52,11 +57,13 @@ func (c *Client) httpFor(r record) (*http.Client, error) {
 	return &client, nil
 }
 
-func (c *Client) observe(err error) {
+// A pinned HTTP response proves contact even when Room admission is denied.
+// Keep reachability independent of operation success and membership status.
+func (c *Client) observeContact(connected bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.connected = err == nil
-	if err == nil {
+	c.connected = connected
+	if connected {
 		c.lastSeen = time.Now().UTC()
 	}
 }
@@ -66,9 +73,7 @@ func (c *Client) call(ctx context.Context, r record, action string, payload, res
 	if err != nil {
 		return err
 	}
-	err = lanshare.Call(ctx, client, r.Invite, action, payload, result)
-	c.observe(err)
-	return err
+	return lanshare.Call(ctx, client, r.Invite, action, payload, result)
 }
 
 func membershipDenied(err error) bool {

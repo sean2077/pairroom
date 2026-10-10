@@ -109,6 +109,24 @@ PairRoom never executes them, extracts archives, or overwrites a working file.
 Only select content that the colleague and hosting Service may read. Image
 attachments continue to use `--attach`.
 
+Shared evidence has two separate storage budgets on the host and in the guest's
+download cache:
+
+| Budget | What counts |
+|---|---|
+| **100 MiB per Room** | Committed attachment content and its manifest metadata. Each message still allows at most eight attachments and 20 MiB of content. |
+| **An additional 32 MiB of temporary storage** | Active upload reservations and temporary files left by interrupted uploads or cache writes. Even empty leftover files consume budget, and reopening the Room or restarting the CLI does not reset it. |
+
+Temporary capacity is reserved before reading an upload. A successful upload
+moves its content into committed storage; normal cancellation or failure
+cleanup releases temporary capacity. If interrupted writes exhaust the budget,
+further staging is refused with a request to inspect the leftover uploads.
+Reaching a limit does not
+silently delete valid attachments, cached evidence, or uncertain delivery
+records to make space. See [attachment storage](STORAGE.md#attachment) for
+the existing reclamation rule for host uploads that no message references.
+Uploads to local-only Rooms do not inherit these LAN storage quotas.
+
 `--ref` retains its existing meaning: it sends a path, size, and SHA-256 pointer,
 not file contents. A reference to a host-local path is not automatically readable
 on the colleague's computer. `--text-file` reads an existing file into the
@@ -154,6 +172,18 @@ different hosts cannot collide. Let native session discovery select it instead
 of copying IDs manually. Changing cwd or a local Service configuration never
 retargets that binding.
 
+For a direct LAN binding, `pairroom relay status --brief=false` returns a recent
+window of at most **300 complete messages and 80 audit entries**. Encoded JSON
+size limits can shorten that window so the response stays below the LAN
+protocol's **8 MiB** response cap. Included message bodies, quotes and evidence
+metadata stay complete. `total_messages` and `total_audit` retain the exact
+counts for the Room's retained history; omitted entries have not been deleted.
+Use paginated `pairroom relay history` with its returned cursors, or
+`history --id ID`, to inspect older evidence. As with brief status, this command
+can reconcile pending Stop publications; history and doctor are the read-only
+inspection paths. A local binding's `status --brief=false` retains its full
+snapshot behavior.
+
 | Observation | Meaning and recovery |
 |---|---|
 | `pending` | A join request exists without membership. Verify the exact receipt and accept it on the host. |
@@ -168,11 +198,15 @@ retargets that binding.
 | Evidence hash or metadata mismatch | Collection fails before claim. Inspect the original evidence and publish changed content with a new ID. |
 | Revoked or archived membership | New reads, writes, claims, wake reservations and downloads fail. Explicitly leave locally before reusing that native session elsewhere. Previously downloaded content cannot be recalled. |
 
-The optional dashboard reports its latest contact with the host. Saved
-membership, recent network contact, an active collector, native hook approval,
-and model acceptance are distinct observations. Without a live observer, a
-saved timestamp is not proof of current reachability. `relay doctor` checks
-the current local native capability and remote transport without sending a
+The optional dashboard reports its latest contact with the host. An HTTP
+response over the pinned connection counts as successful contact even when
+the host denies the requested operation because membership was revoked or the
+Room was archived. Contact and membership status therefore describe separate
+facts: a reachable host can refuse access. An active collector, native hook
+approval and model acceptance are also separate observations. A contact
+timestamp does not prove continuous reachability or that either Agent is
+online or working. `relay doctor` checks the current local native capability
+and remote transport without sending a
 wake; a suspended host Room must be activated with `status` before doctor can
 inspect it.
 

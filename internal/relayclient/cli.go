@@ -118,7 +118,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.BoolVar(&o.replace, "replace", false, "explicitly replace a binding; LAN join requires a fresh invitation after the previous membership is retired")
 	flags.BoolVar(&o.purge, "purge-hooks", false, "remove this runtime's relay hooks when no other local binding uses them")
 	flags.BoolVar(&o.enabled, "enabled", true, "park enabled")
-	flags.BoolVar(&o.brief, "brief", action == "status" || action == "reconcile", "status/reconcile: bounded transport summary; --brief=false includes full history")
+	flags.BoolVar(&o.brief, "brief", action == "status" || action == "reconcile", "status/reconcile: bounded transport summary; --brief=false includes local history or a bounded LAN history window")
 	flags.BoolVar(&o.discard, "discard", false, "explicitly discard uncertain pending publication, retaining its consumed sequence")
 	flags.BoolVar(&o.resend, "resend", false, "explicitly supplement uncertain pending with its ORIGINAL sequence")
 	flags.BoolVar(&o.localOnly, "local-only", false, "unbind: detach local binding without contacting the Room host; remote membership remains active until revoked")
@@ -517,6 +517,9 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		return writeJSON(out, map[string]string{"notice": notice, "command": fmt.Sprintf("pairroom relay wait --room %s --slot %s", o.room, o.slot)})
 	case "status", "reconcile":
 		var status any = &relay.Snapshot{}
+		if c.State.LAN != nil {
+			status = &relay.TailSnapshot{}
+		}
 		operation := "status"
 		if o.brief {
 			status = &relay.Summary{}

@@ -143,7 +143,7 @@ func TestSharedAttachmentRoomQuotaAndReclamation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta, err := s.SaveEvidence("log.txt", strings.NewReader("evidence"), "upload")
+	meta, err := s.SaveSharedEvidence("log.txt", strings.NewReader("evidence"), "upload")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestSharedAttachmentRoomQuotaAndReclamation(t *testing.T) {
 	if err := filler.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.SaveEvidence("log.txt", strings.NewReader("evidence"), "upload"); err == nil {
+	if _, err := s.SaveSharedEvidence("log.txt", strings.NewReader("evidence"), "upload"); err == nil {
 		t.Fatal("Room evidence quota was ignored")
 	}
 	if _, err := s.SaveSharedImage("screen.png", bytes.NewReader(pngBytes(t)), "upload"); err == nil {

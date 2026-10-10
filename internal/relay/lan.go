@@ -337,6 +337,7 @@ func (e *Engine) Runtimes() map[model.ActorID]model.RuntimeKind {
 // ClaimPrepared starts the delivery lease. It rechecks the same membership on
 // every wake and never returns a host-local attachment path or native session.
 func (e *Engine) PrepareHead(ctx context.Context, a Auth, park bool) (*Prepared, error) {
+	observed := false
 	for {
 		e.mu.Lock()
 		b, err := e.auth(a, false)
@@ -350,6 +351,10 @@ func (e *Engine) PrepareHead(ctx context.Context, a Auth, park bool) (*Prepared,
 			}
 			e.mu.Unlock()
 			return nil, err
+		}
+		if !observed {
+			e.noteLANActivityLocked(a)
+			observed = true
 		}
 		if park && !b.ParkEnabled {
 			e.observeTurnEndLocked(a.Slot)
@@ -431,6 +436,7 @@ func (e *Engine) ClaimPrepared(ctx context.Context, a Auth, id, digest string, p
 	if err = e.append(EventMessage, a.Slot, messageFact{Message: m, Receipt: receipt}); err != nil {
 		return nil, err
 	}
+	e.noteLANActivityLocked(a)
 	return &StructuredClaim{ID: m.ID, Receipt: receipt, Message: cloneMessage(m)}, nil
 }
 

@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -56,8 +55,11 @@ func (h *lanHostServer) serveMember(w http.ResponseWriter, r *http.Request, n *n
 	}
 	send := relay.SendRequest{Review: req.Review, ID: req.ID, Text: req.Text, To: req.To, AttachmentIDs: req.AttachmentIDs, QuoteID: req.QuoteID}
 	switch action {
-	case "inspect", "confirm":
+	case "inspect":
 		b, err := n.engine.Inspect(a)
+		nativeResult(w, publicLANBinding(b), err)
+	case "confirm":
+		b, err := n.engine.ConfirmLAN(a)
 		nativeResult(w, publicLANBinding(b), err)
 	case "room":
 		b, err := n.engine.Inspect(a)
@@ -116,10 +118,7 @@ func (h *lanHostServer) serveMember(w http.ResponseWriter, r *http.Request, n *n
 	case "ack":
 		nativeResult(w, map[string]bool{"handed_off": true}, n.engine.Ack(a, req.ID, req.Receipt))
 	case "status":
-		snapshot, err := n.engine.AuthSnapshot(a)
-		for slot, b := range snapshot.Bindings {
-			snapshot.Bindings[slot] = publicLANBinding(b)
-		}
+		snapshot, err := n.engine.AuthSnapshotTail(a)
 		nativeResult(w, snapshot, err)
 	case "doctor":
 		summary, err := n.engine.AuthSummary(a)
@@ -162,16 +161,32 @@ func (h *lanHostServer) serveMember(w http.ResponseWriter, r *http.Request, n *n
 	}
 }
 func (h *lanHostServer) upload(w http.ResponseWriter, r *http.Request, n *nativeHostRuntime, a relay.Auth) {
+	release, ok := h.acquireTransfer(n.room.ID)
+	if !ok {
+		writeManagementError(w, 429, "LAN attachment transfer capacity reached")
+		return
+	}
+	defer release()
 	kind := r.Header.Get("X-PairRoom-Attachment-Kind")
 	if kind != "" && kind != "image" && kind != "file" {
 		writeManagementError(w, 400, "unsupported attachment kind")
 		return
+	}
+	if kind == "" {
+		kind = "image"
 	}
 	limit := int64(attachment.MaxImageBytes)
 	if kind == "file" {
 		limit = attachment.MaxEvidenceBytes
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, limit+(64<<10))
+	transfer, reset, err := beginLANHTTPTransfer(w, r, n, a)
+	if err != nil {
+		nativeResult(w, nil, err)
+		return
+	}
+	defer reset()
+	defer transfer.Close()
 	parts, err := r.MultipartReader()
 	if err != nil {
 		writeManagementError(w, 400, "multipart attachment required")
@@ -183,29 +198,58 @@ func (h *lanHostServer) upload(w http.ResponseWriter, r *http.Request, n *native
 		return
 	}
 	defer part.Close()
-	name := part.FileName()
-	data, err := io.ReadAll(io.LimitReader(part, limit+1))
-	if err != nil || int64(len(data)) > limit {
-		writeManagementError(w, 400, "attachment exceeds sharing limit")
+	staged, err := n.media.StageShared(kind, part.FileName(), part, "lan")
+	if err != nil {
+		nativeResult(w, nil, lanAttachmentError(err, kind))
 		return
 	}
+	defer staged.Close()
 	if _, err = parts.NextPart(); !errors.Is(err, io.EOF) {
 		writeManagementError(w, 400, "upload exactly one attachment")
 		return
 	}
 	var value model.Attachment
 	err = n.engine.AuthorizedLANEffect(a, func() error {
-		var saveErr error
-		if kind == "file" {
-			value, saveErr = n.media.SaveEvidence(name, bytes.NewReader(data), "lan")
-		} else {
-			value, saveErr = n.media.SaveSharedImage(name, bytes.NewReader(data), "lan")
+		if err := transfer.Context().Err(); err != nil {
+			return err
 		}
+		var saveErr error
+		value, saveErr = staged.Commit()
 		return saveErr
 	})
-	nativeResult(w, value, err)
+	nativeResult(w, value, lanAttachmentError(err, kind))
 }
+
+// Storage errors may contain the host's private data root. Expose only fixed
+// actionable quota/authentication errors or validation guidance on LAN.
+func lanAttachmentError(err error, kind string) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, relay.ErrAuth):
+		return relay.ErrAuth
+	case errors.Is(err, relay.ErrClosed):
+		return relay.ErrClosed
+	case errors.Is(err, context.Canceled):
+		return context.Canceled
+	case errors.Is(err, attachment.ErrSharedQuota):
+		return attachment.ErrSharedQuota
+	case errors.Is(err, attachment.ErrTemporaryQuota):
+		return attachment.ErrTemporaryQuota
+	case kind == "file":
+		return errors.New("cannot store attachment: use a UTF-8 text file without NUL bytes, 1 byte–5 MiB, with a valid filename; ask the host owner to check attachment storage if it still fails")
+	default:
+		return errors.New("cannot store attachment: use a PNG, JPEG, GIF or WebP image, 1 byte–5 MiB, at most 8000 pixels per side and 64 million pixels; ask the host owner to check attachment storage if it still fails")
+	}
+}
+
 func (h *lanHostServer) download(w http.ResponseWriter, r *http.Request, n *nativeHostRuntime, a relay.Auth, id string) {
+	release, ok := h.acquireTransfer(n.room.ID)
+	if !ok {
+		writeManagementError(w, 429, "LAN attachment transfer capacity reached")
+		return
+	}
+	defer release()
 	accepted, err := n.engine.SharedAttachment(a, id)
 	if err != nil {
 		nativeResult(w, nil, err)
@@ -218,32 +262,40 @@ func (h *lanHostServer) download(w http.ResponseWriter, r *http.Request, n *nati
 	}
 	_, f, err := n.media.OpenFile(id)
 	if err != nil {
-		nativeResult(w, nil, err)
+		writeManagementError(w, 409, "shared attachment integrity check failed")
 		return
 	}
 	defer f.Close()
+	transfer, reset, err := beginLANHTTPTransfer(w, r, n, a)
+	if err != nil {
+		nativeResult(w, nil, err)
+		return
+	}
+	defer reset()
+	defer transfer.Close()
 	w.Header().Set("Content-Type", value.MediaType)
 	w.Header().Set("Content-Length", fmt.Sprint(value.Size))
 	w.Header().Set("Content-Disposition", "attachment")
 	rc := http.NewResponseController(w)
-	defer func() { _ = rc.SetWriteDeadline(time.Time{}) }()
 	buf := make([]byte, 32<<10)
 	for {
-		if r.Context().Err() != nil {
+		if transfer.Context().Err() != nil {
 			return
 		}
 		count, readErr := f.Read(buf)
 		if count > 0 {
-			// Serialize each bounded network effect with revocation. A blocked
-			// peer can delay that boundary for at most two seconds; after the
-			// revoke fact commits no further byte is released to it.
-			err = n.engine.AuthorizedLANEffect(a, func() error {
-				if err := r.Context().Err(); err != nil {
-					return err
-				}
+			// Revalidate each network effect without retaining the Room lock.
+			// Revocation interrupts and joins this independent transfer before
+			// its fact commits, so no subsequent byte crosses that boundary.
+			err = transfer.Effect(func() error {
 				_ = rc.SetWriteDeadline(time.Now().Add(2 * time.Second))
 				_, err := w.Write(buf[:count])
-				return err
+				if err != nil {
+					return err
+				}
+				// Flush inside the transfer barrier too: buffered final bytes
+				// must not be emitted by net/http after Close releases it.
+				return rc.Flush()
 			})
 			if err != nil {
 				return

@@ -68,7 +68,7 @@ Keep published historical evidence intact. When a completed plan is retired, pre
 
 ## Maintenance
 
-Run `make docs-check` after edits. It checks local Markdown paths and selected inventories, not all heading fragments, external sources, example execution, or factual accuracy. Check changed anchors and user commands separately, and distinguish actual runs from source inspection in PR evidence.
+Run `make docs-check` after edits. It checks local Markdown paths, selected inventories, and the current storage format window against source declarations; it does not check all heading fragments, external sources, example execution, or factual accuracy. Check changed anchors and user commands separately, and distinguish actual runs from source inspection in PR evidence.
 
 Link an external product to its official documentation or repository where a page first discusses it, and say what role it plays: supported Runtime, optional integration, example terminal, or comparison project. Fixing a link or rewording a comparison does not refresh its review date.
 

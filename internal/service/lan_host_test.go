@@ -316,20 +316,38 @@ type lanBlockedWriter struct {
 	header           http.Header
 	started, release chan struct{}
 	writes           atomic.Int32
+	flushes          atomic.Int32
+	blockFlush       bool
 	deadline         time.Time
 }
 
 func (w *lanBlockedWriter) Header() http.Header                { return w.header }
 func (w *lanBlockedWriter) WriteHeader(int)                    {}
 func (w *lanBlockedWriter) SetWriteDeadline(t time.Time) error { w.deadline = t; return nil }
+func (w *lanBlockedWriter) Flush() {
+	if w.flushes.Add(1) == 1 && w.blockFlush {
+		close(w.started)
+		<-w.release
+	}
+}
 func (w *lanBlockedWriter) Write(data []byte) (int, error) {
-	if w.writes.Add(1) == 1 {
+	if w.writes.Add(1) == 1 && !w.blockFlush {
 		close(w.started)
 		<-w.release
 	}
 	return len(data), nil
 }
 func TestLANDownloadRevocationSerializesBoundedWrites(t *testing.T) {
+	for _, blockFlush := range []bool{false, true} {
+		name := "write"
+		if blockFlush {
+			name = "flush"
+		}
+		t.Run(name, func(t *testing.T) { testLANDownloadRevocation(t, blockFlush) })
+	}
+}
+func testLANDownloadRevocation(t *testing.T, blockFlush bool) {
+	t.Helper()
 	relayclient.IsolateNativeCaller(t)
 	f := newLANHostFixture(t)
 	client, pending, identity := f.join(t)
@@ -349,7 +367,7 @@ func TestLANDownloadRevocationSerializesBoundedWrites(t *testing.T) {
 	if _, err = f.native.engine.Send(f.owner, relay.SendRequest{ID: "large", Text: "evidence", AttachmentIDs: []string{object.ID}}); err != nil {
 		t.Fatal(err)
 	}
-	w := &lanBlockedWriter{header: make(http.Header), started: make(chan struct{}), release: make(chan struct{})}
+	w := &lanBlockedWriter{header: make(http.Header), started: make(chan struct{}), release: make(chan struct{}), blockFlush: blockFlush}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -358,6 +376,23 @@ func TestLANDownloadRevocationSerializesBoundedWrites(t *testing.T) {
 	<-w.started
 	if w.deadline.IsZero() || time.Until(w.deadline) > 2*time.Second {
 		t.Fatal("download write lacks bounded deadline")
+	}
+	observed := make(chan error, 1)
+	go func() {
+		_, err := f.native.engine.AuthSummary(f.owner)
+		observed <- err
+	}()
+	select {
+	case err := <-observed:
+		if err != nil {
+			close(w.release)
+			<-done
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		close(w.release)
+		<-done
+		t.Fatal("slow network write retained the Room lock and blocked its owner")
 	}
 	revoked := make(chan error, 1)
 	go func() { revoked <- f.native.engine.RevokeLANMember() }()

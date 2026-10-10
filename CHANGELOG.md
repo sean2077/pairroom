@@ -4,6 +4,17 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+### Added
+
+- Add Native collaboration over a LAN with one hosting Service per Room. Guests join and communicate directly through the CLI and approved hooks without a local Service, listener, or daemon. Different native sessions on one machine can host local Rooms and join several remote hosts concurrently, each retaining its own pinned host and Room identity. Short-lived invitations permit requests only; the host admits an exact guest-key receipt received through a trusted colleague channel.
+- Share explicit UTF-8 text evidence with `relay send/exchange --file`, including logs, scripts, and patches. Verify downloaded metadata, size, and content hash before claiming a message; received files remain inert. Keep private credentials, native session metadata, and unselected workspace contents outside LAN messages and public projections.
+- Recover direct participants with their original admission and delivery receipts across restarts and interrupted connections. Explicit `join --replace` requires confirmed retirement and fresh receipt approval, retaining old publication state without replay. `unbind --local-only` can abandon pending or accepted associations offline; the optional Joined Rooms dashboard offers local detach, human messages, history, and evidence downloads. Supported idle wake requires a live optional local observer; otherwise messages remain queued at the host until a collector or approved hook runs.
+
+### Changed
+
+- Make Native the default and recommended host mode and remove its experimental label. Embedded remains an explicitly selected secondary mode for local PairRoom-owned adapters, with Native recommendations in setup and configuration surfaces. Existing Rooms retain their immutable host mode.
+- Write new Rooms as Store schema 13/provisioning 6 and new Registry checkpoints as 4, while retaining bounded reads of existing local Store 12/provisioning 5/checkpoint 3 without rewriting Room facts. LAN facts require 13/6. Local relay state remains schema 2; direct LAN bindings use schema 3 and private per-user client/identity stores. Retired or future formats fail closed, and rollback requires a complete backup with its matching binary rather than relabelling schemas.
+
 ## [v5.13.1] — 2026-10-09
 
 ### Fixed

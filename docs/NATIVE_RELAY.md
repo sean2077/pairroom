@@ -147,7 +147,14 @@ The CLI requires an affirmative `handed_off: true` acknowledgement, not merely H
 
 A detached background waiter whose output never reaches the model may nevertheless be terminally `handed_off`. Another `wait` cannot re-collect it. Inspect the authorized message/history and actual workspace before deciding a fresh instruction; do not blindly duplicate the original task body.
 
-Same-client-ID recovery requires the same body, target, attachments, quote, and optional review version. Rerunning `send --attach` re-uploads each image under a new attachment ID; the Service still returns the original receipt when every image has the same bytes (SHA-256 and size), media type and file name in the same order. Changed content under the same ID fails with a definite "already used for a different message" error: nothing new was published, so inspect the original instead of retrying that ID. A new ID is a new publication, even for identical text. `status` / `reconcile` default to bounded body-free summaries, but **can reconcile a pending Stop publication**; use `history` or `doctor` for read-only inspection. Full history/export is explicit and may contain private material.
+Same-client-ID recovery requires the same body, target, attachments, quote, and optional review version. Rerunning `send --attach` re-uploads each image under a new attachment ID; the Service still returns the original receipt when every image has the same bytes (SHA-256 and size), media type and file name in the same order. Changed content under the same ID fails with a definite "already used for a different message" error: nothing new was published, so inspect the original instead of retrying that ID. A new ID is a new publication, even for identical text. `status` / `reconcile` default to bounded body-free summaries, but **can reconcile a pending Stop publication**; use `history` or `doctor` for read-only inspection.
+
+For a local binding, `status --brief=false` returns the full snapshot. Direct LAN
+bindings instead return a bounded recent window of complete messages and audit
+entries, with exact retained totals. Read older evidence through paginated
+`history` or `history --id ID`; see [LAN status and recovery](LAN_NATIVE.md#observe-and-recover)
+for the count and encoded response limits. Explicit history/export may contain
+private material.
 
 ## Claude external wake
 
@@ -234,6 +241,6 @@ For a lightweight review using this evidence, see [Implementation review](GETTIN
 
 An unchanged observation is neither an atomic snapshot nor approval. Use the operator-selected trusted checkout; an incoming anchor path grants no access. Keep edits stable or use immutable commits/artifacts for consequential review. [Review design and historical measurements](design/native-review-closure.md) explain bounds and verification categories.
 
-The browser's tail snapshot is bounded to recent complete messages and audit entries; retained totals still describe full history. It is not a total JSON-byte cap, and full export remains complete. [Protocol](PROTOCOL.md#native-observation-and-review-extensions) and [Storage](STORAGE.md#native-current-work-and-browser-recovery-projections) own the paging/recovery contracts.
+The local Native browser's tail snapshot is bounded to recent complete messages and audit entries; retained totals still describe full history. That browser text budget is not a total JSON-byte cap, and full local export remains complete. The separate [direct LAN status window](LAN_NATIVE.md#observe-and-recover) also bounds encoded JSON below the LAN response cap and points to history pages for older evidence. [Protocol](PROTOCOL.md#native-observation-and-review-extensions) and [Storage](STORAGE.md#native-current-work-and-browser-recovery-projections) own the paging/recovery contracts.
 
 Authenticated multi-round Claude Code/Codex/Grok acceptance, resume/fork behavior, and comparative billing require separate owner-authorized testing. Synthetic hooks, Mock, browser fixtures, and historical reports do not establish current vendor-model acceptance. Do not publish private transcripts or run paid benchmarks without consent.

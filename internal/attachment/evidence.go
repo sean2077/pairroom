@@ -23,6 +23,9 @@ const (
 	MaxRoomSharedBytes int64 = 100 << 20
 )
 
+// ErrSharedQuota reports local capacity without leaking private file paths.
+var ErrSharedQuota = errors.New("Room attachment storage exceeds 100 MiB; start a new Room for more evidence")
+
 // SaveEvidence explicitly uploads a text artifact. References in message text
 // never call this method. Scripts remain inert private data, without executable
 // permission, automatic extraction, or a write into either user's workspace.
@@ -56,10 +59,18 @@ func (s *Store) SaveEvidence(name string, reader io.Reader, source string) (mode
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.checkSharedQuota(meta.Size); err != nil {
+	return s.commitVerified(meta, data)
+}
+
+// SaveSharedEvidence applies the LAN Room quota to an explicit text upload.
+// Local Rooms use SaveEvidence and retain their existing storage behavior.
+func (s *Store) SaveSharedEvidence(name string, reader io.Reader, source string) (model.Attachment, error) {
+	staged, err := s.StageShared("file", name, reader, source)
+	if err != nil {
 		return model.Attachment{}, err
 	}
-	return s.commitVerified(meta, data)
+	defer staged.Close()
+	return staged.Commit()
 }
 
 // ImportVerified installs the authoritative manifest and bytes into an owner's
@@ -116,7 +127,19 @@ func (s *Store) ImportVerified(expected model.Attachment, reader io.Reader) (mod
 	} else if !errors.Is(err, ErrUnknown) {
 		return model.Attachment{}, err
 	}
-	if err := s.checkSharedQuota(expected.Size); err != nil {
+	m, manifestBytes, err := importedManifest(expected)
+	if err != nil {
+		return model.Attachment{}, err
+	}
+	if recovered, err := s.recoverImportedContent(m, manifestBytes); err != nil {
+		return model.Attachment{}, err
+	} else if recovered {
+		return expected, nil
+	}
+	if err := s.checkSharedQuota(expected.Size + manifestBytes); err != nil {
+		return model.Attachment{}, err
+	}
+	if err := s.checkTemporaryQuota(expected.Size + manifestBytes); err != nil {
 		return model.Attachment{}, err
 	}
 	return s.commitVerified(expected, data)
@@ -163,7 +186,7 @@ func (s *Store) checkSharedQuota(additional int64) error {
 		}
 		total += info.Size()
 		if total > MaxRoomSharedBytes {
-			return errors.New("Room attachment storage exceeds 100 MiB; start a new Room for more evidence")
+			return ErrSharedQuota
 		}
 	}
 	return nil
@@ -171,15 +194,6 @@ func (s *Store) checkSharedQuota(additional int64) error {
 
 // commitVerified is called with mu held and fully verified, bounded bytes.
 func (s *Store) commitVerified(meta model.Attachment, data []byte) (model.Attachment, error) {
-	ext := extensionForType(meta.MediaType)
-	if meta.Kind == "file" {
-		ext = ".data"
-	}
-	filename := meta.ID + ext
-	path := filepath.Join(s.root, filename)
-	if _, err := os.Lstat(path); err == nil || !errors.Is(err, os.ErrNotExist) {
-		return model.Attachment{}, errors.New("attachment content already exists; inspect the cache before retrying")
-	}
 	tmp, err := os.CreateTemp(s.root, ".attachment-*.tmp")
 	if err != nil {
 		return model.Attachment{}, err
@@ -200,7 +214,21 @@ func (s *Store) commitVerified(meta model.Attachment, data []byte) (model.Attach
 	if err := tmp.Close(); err != nil {
 		return model.Attachment{}, err
 	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
+	return s.commitFile(meta, tmp.Name())
+}
+
+// commitFile publishes already-verified private bytes while mu is held.
+func (s *Store) commitFile(meta model.Attachment, temporary string) (model.Attachment, error) {
+	ext := extensionForType(meta.MediaType)
+	if meta.Kind == "file" {
+		ext = ".data"
+	}
+	filename := meta.ID + ext
+	path := filepath.Join(s.root, filename)
+	if _, err := os.Lstat(path); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return model.Attachment{}, errors.New("attachment content already exists; inspect the cache before retrying")
+	}
+	if err := os.Rename(temporary, path); err != nil {
 		return model.Attachment{}, err
 	}
 	if err := writeManifest(filepath.Join(s.root, meta.ID+".json"), manifest{Attachment: meta, Filename: filename}); err != nil {

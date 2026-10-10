@@ -77,13 +77,7 @@ func startNativeHostRuntime(ctx context.Context, registry *Registry, project Pro
 	if err != nil {
 		return nil, err
 	}
-	kinds := map[model.ActorID]model.RuntimeKind{}
-	for actor, selection := range durable.Agents {
-		kinds[actor] = selection.Runtime
-		if selection.AwaitingPeer {
-			kinds[actor] = model.RuntimeAwaitingPeer
-		}
-	}
+	kinds := selectionsRuntimeKinds(durable.Agents)
 	var onAttention func(relay.Attention)
 	if notifier != nil {
 		// Runs under the relay lock: record only, never block.
@@ -93,7 +87,7 @@ func startNativeHostRuntime(ctx context.Context, registry *Registry, project Pro
 	if durable.Sharing == "lan" {
 		sharedSlot = model.OtherParticipant(durable.OwnerSlot)
 	}
-	engine, err := relay.Open(relay.Config{SharedSlot: sharedSlot, RoomID: durable.ID, Store: log, Runtimes: kinds, Media: media, OnAttention: onAttention, CommitBinding: func(b relay.Binding, appendFact func() error) error {
+	engine, err := relay.Open(relay.Config{SharedSlot: sharedSlot, RoomID: durable.ID, Store: log, Runtimes: kinds, Media: media, OnAttention: onAttention, OnAppend: registry.observeLANAuthorization, CommitBinding: func(b relay.Binding, appendFact func() error) error {
 		return registry.commitNativeBinding(durable.ID, b, appendFact)
 	}})
 	if err != nil {
@@ -268,7 +262,15 @@ func (n *nativeHostRuntime) snapshot() map[string]any {
 	return n.snapshotWithRelay(n.engine.Snapshot())
 }
 func (n *nativeHostRuntime) snapshotWithRelay(projection any) map[string]any {
-	return map[string]any{"room": n.room, "relay": projection, "protocol": protocol.NativeVersion, "config_notice": "Provider, model, effort, instructions and permissions are display-only here; configure them in the native harness.", "summary": n.engine.Summary(), "identities": model.ParticipantIdentities(map[model.ActorID]model.RuntimeKind{model.ActorSlot1: n.room.Agents[model.ActorSlot1].Runtime, model.ActorSlot2: n.room.Agents[model.ActorSlot2].Runtime})}
+	kinds := n.engine.Runtimes()
+	room := cloneRoom(n.room)
+	for slot, kind := range kinds {
+		if room.Agents[slot].AwaitingPeer && kind.Valid() {
+			room.Agents[slot] = model.AgentSelection{Runtime: kind, Provider: model.NativeProviderRef()}
+		}
+	}
+	room = cloneRoom(room)
+	return map[string]any{"room": room, "relay": projection, "protocol": protocol.NativeVersion, "config_notice": "Provider, model, effort, instructions and permissions are display-only here; configure them in the native harness.", "summary": n.engine.Summary(), "identities": model.ParticipantIdentities(kinds)}
 }
 func (n *nativeHostRuntime) serve(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
@@ -439,6 +441,8 @@ func (n *nativeHostRuntime) upload(w http.ResponseWriter, r *http.Request) {
 	defer part.Close()
 	var value model.Attachment
 	switch {
+	case kind == "file" && n.room.Sharing == "lan":
+		value, err = n.media.SaveSharedEvidence(part.FileName(), part, "native-relay")
 	case kind == "file":
 		value, err = n.media.SaveEvidence(part.FileName(), part, "native-relay")
 	case n.room.Sharing == "lan":

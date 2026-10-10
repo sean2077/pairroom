@@ -124,7 +124,7 @@ func (c *Client) Relay(ctx context.Context, auth relay.Auth, action string, payl
 		}
 		return assignResult(result, map[string]bool{"handed_off": true})
 	case "status":
-		value = &relay.Snapshot{}
+		value = &relay.TailSnapshot{}
 	case "summary":
 		value = &relay.Summary{}
 	case "history":
@@ -185,7 +185,7 @@ func (c *Client) Relay(ctx context.Context, auth relay.Auth, action string, payl
 			}
 			v.Publication.BindID = r.BindID
 		}
-	case *relay.Snapshot:
+	case *relay.TailSnapshot:
 		v.RoomID = r.ID
 		for slot, b := range v.Bindings {
 			b.SessionID, b.TranscriptPath = "", ""

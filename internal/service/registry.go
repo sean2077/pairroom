@@ -63,6 +63,11 @@ type Registry struct {
 	identities    *nativeidentity.Store
 	nativeClaims  map[string]nativeidentity.Claim
 	nativeRetired map[nativeidentity.Claim]struct{}
+	// Cold LAN admission uses only this compact projection, never a request-
+	// triggered Event Log scan. Its own lock permits Engine OnAppend updates
+	// while CommitBinding already holds the Registry projection lock.
+	lanAuthMu sync.RWMutex
+	lanAuth   map[string]*lanRoomAuthorization
 
 	roomDeletionFS                roomDeletionFS
 	roomDeletionCleanupDiagnostic string
@@ -1047,6 +1052,9 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 			}
 		}
 	}
+	if err := r.resetLANAuthorization(room, events); err != nil {
+		return Room{}, Project{}, false, err
+	}
 	return room, payload.Project, true, nil
 }
 
@@ -1287,8 +1295,8 @@ func validateCheckpointRoom(room Room) error {
 		return errors.New("checkpoint Room must contain exactly two canonical runtime_names")
 	}
 	for _, actor := range model.SlotActors() {
-		name := strings.TrimSpace(room.RuntimeNames[actor])
-		if name == "" {
+		name, present := room.RuntimeNames[actor]
+		if !present || strings.TrimSpace(name) == "" && !room.Agents[actor].AwaitingPeer {
 			return fmt.Errorf("checkpoint Room runtime_names is missing %s", actor)
 		}
 	}
@@ -1305,8 +1313,9 @@ func cloneRoom(room Room) Room {
 	room.Bindings = cloneBindings(room.Bindings)
 	room.Agents = cloneAgentSelections(room.Agents)
 	room.RuntimeNames = make(map[model.ActorID]string, 2)
+	kinds := selectionsRuntimeKinds(room.Agents)
 	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
-		room.RuntimeNames[actor] = model.NativeSessionName(room.ID, room.Name, actor, room.Agents[actor].Runtime, room.Agents[model.OtherParticipant(actor)].Runtime)
+		room.RuntimeNames[actor] = model.NativeSessionName(room.ID, room.Name, actor, kinds[actor], kinds[model.OtherParticipant(actor)])
 	}
 	return room
 }

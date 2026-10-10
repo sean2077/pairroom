@@ -283,7 +283,7 @@ func (c *Client) Snapshot(ctx context.Context) (Snapshot, error) {
 	c.mu.Lock()
 	connected, lastSeen := c.connected, c.lastSeen
 	c.mu.Unlock()
-	s := Snapshot{ID: r.ID, RemoteRoomID: r.Invite.RoomID, Workspace: r.Workspace, Runtime: r.Runtime, Status: r.Status, Connected: connected && r.Status == "accepted", LastSeen: lastSeen, HostPin: r.Invite.HostPin, Endpoint: r.Invite.Endpoint}
+	s := Snapshot{ID: r.ID, RemoteRoomID: r.Invite.RoomID, Workspace: r.Workspace, Runtime: r.Runtime, Status: r.Status, Connected: connected, LastSeen: lastSeen, HostPin: r.Invite.HostPin, Endpoint: r.Invite.Endpoint}
 	if r.Room != nil {
 		s.Name, s.Slot, s.Generation = r.Room.Name, r.Room.Slot, r.Room.Generation
 	}

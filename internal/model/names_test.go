@@ -57,3 +57,17 @@ func TestNativeSessionNameUnicodeAndLimit(t *testing.T) {
 		t.Fatalf("unsafe legacy projection %q", legacy)
 	}
 }
+
+func TestNativeSessionNameDoesNotInventAnUnadmittedPeer(t *testing.T) {
+	for _, slot := range SlotActors() {
+		for _, kind := range []RuntimeKind{RuntimeClaude, RuntimeCodex, RuntimeGrok, RuntimeGemini} {
+			name := NativeSessionName("room-lan-test", "Shared work", slot, kind, RuntimeAwaitingPeer)
+			if name != "Shared work · @"+string(kind)+" · lan-test" {
+				t.Fatalf("known owner was omitted or renumbered: %s %s %q", slot, kind, name)
+			}
+			if name := NativeSessionName("room-lan-test", "Shared work", OtherParticipant(slot), RuntimeAwaitingPeer, kind); name != "" {
+				t.Fatalf("unadmitted peer acquired a native session name: %q", name)
+			}
+		}
+	}
+}

@@ -43,7 +43,7 @@ The Room Event Log is authoritative. Registry/indexes support discovery and owne
 
 Event sequences start at 1 and remain contiguous. Validate the existing published Room identity before repair or new writes; a missing/empty log is not a fresh Room. Ambiguous append failure closes the writer. Only an incomplete final record is repairable; never skip middle corruption.
 
-Current readers require Store schema 12/provisioning 5 with immutable explicit `host_mode`. Registry checkpoint 3 requires canonical slots and host mode. Retired Service roots fail before recovery, replay, repair, or rewrite; do not infer missing Bindings, selections, or collaboration from current defaults. [Storage](STORAGE.md) owns formats and [Upgrading](UPGRADING.md) owns retirement/rollback.
+New Rooms write Store schema 13/provisioning 6 with immutable explicit `host_mode`; current readers also accept existing local Store schema 12/provisioning 5 without rewriting Room facts. New Registry checkpoints use 4; existing local checkpoint 3 remains readable. Both require canonical slots and host mode. LAN facts require 13/6. Retired and future Service formats fail before recovery, replay, repair, or rewrite; do not infer missing Bindings, selections, or collaboration from current defaults. [Storage](STORAGE.md) owns formats and [Upgrading](UPGRADING.md) owns retirement/rollback.
 
 Agent pair profiles and default ID live in `agent-pair-profiles.json`, separately from the rebuildable `service-registry.json`. Creation copies the pair; later profile edits/deletion do not mutate Rooms. Native selections remain display-only; Embedded Provider materialization retains its validation boundary.
 

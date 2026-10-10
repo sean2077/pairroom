@@ -62,7 +62,6 @@ func (c *Client) cachedEvidence(ctx context.Context, r record, expected model.At
 	request.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(request)
 	if err != nil {
-		c.observe(err)
 		return model.Attachment{}, "", safeError(err)
 	}
 	defer response.Body.Close()
@@ -73,13 +72,15 @@ func (c *Client) cachedEvidence(ctx context.Context, r record, expected model.At
 		return model.Attachment{}, "", errors.New("LAN evidence exceeds its manifest")
 	}
 	if _, err := media.ImportVerified(expected, io.LimitReader(response.Body, expected.Size+1)); err != nil {
+		if errors.Is(err, attachment.ErrSharedQuota) || errors.Is(err, attachment.ErrTemporaryQuota) {
+			return model.Attachment{}, "", err
+		}
 		return model.Attachment{}, "", errors.New("LAN evidence failed content verification")
 	}
 	metadata, localPath, err = media.Resolve(expected.ID)
 	if err != nil || metadata != expected {
 		return model.Attachment{}, "", errors.New("LAN attachment does not match accepted message")
 	}
-	c.observe(nil)
 	return metadata, localPath, nil
 }
 
@@ -151,7 +152,6 @@ func (c *Client) Upload(ctx context.Context, auth relay.Auth, kind, name string,
 	request.Header.Set("X-PairRoom-Attachment-Kind", kind)
 	response, err := client.Do(request)
 	if err != nil {
-		c.observe(err)
 		return model.Attachment{}, safeError(err)
 	}
 	defer response.Body.Close()
@@ -167,6 +167,5 @@ func (c *Client) Upload(ctx context.Context, auth relay.Auth, kind, name string,
 	if metadata.Kind != kind || metadata.Size != int64(len(data)) || metadata.SHA256 != hex.EncodeToString(sum[:]) {
 		return model.Attachment{}, errors.New("LAN attachment receipt does not match uploaded bytes")
 	}
-	c.observe(nil)
 	return metadata, nil
 }

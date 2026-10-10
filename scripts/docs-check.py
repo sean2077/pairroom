@@ -166,6 +166,67 @@ def generated_values(path: Path, marker: str, prefix: str = "") -> list[str]:
     return sorted(set(re.findall(r'`' + re.escape(prefix) + r'([^`]+)`', match.group(1))))
 
 
+def storage_format_window(root: Path) -> tuple[tuple[int, int], tuple[int, int], int, int]:
+    """Read the actual writer and explicit pre-LAN compatibility declarations."""
+    version = (root / "internal/version/version.go").read_text(encoding="utf-8")
+    registry = (root / "internal/service/registry.go").read_text(encoding="utf-8")
+    provision = (root / "internal/service/provision.go").read_text(encoding="utf-8")
+
+    def number(source: str, pattern: str, label: str) -> int:
+        matches = set(re.findall(pattern, source, re.M))
+        if len(matches) != 1:
+            raise ValueError(f"cannot identify {label}; update the source-derived storage check")
+        return int(matches.pop())
+
+    current = number(version, r'^\s*StoreSchema\s*=\s*(\d+)\b', "Store writer schema")
+    local = number(version, r'^\s*LocalStoreSchema\s*=\s*(\d+)\b', "existing local Store schema")
+    written = number(provision, r'roomProvisionedPayload\s*\{\s*Schema:\s*(\d+)\b', "provisioning writer schema")
+    # The replay guard rejects mismatched pairs, so matching a reader lower
+    # bound alone would wrongly document unsupported combinations such as 12/6.
+    pairs = {(int(store), int(schema)) for schema, store in re.findall(
+        r'payload\.Schema\s*==\s*(\d+)\s*&&\s*storeSchema\s*!=\s*(\d+)', registry)}
+    if len(pairs) != 2 or {store for store, _ in pairs} != {current, local} or (current, written) not in pairs:
+        raise ValueError("Store/provisioning writer and explicit reader declarations disagree; inspect their format window")
+    existing = next(pair for pair in pairs if pair[0] == local)
+    checkpoint = number(registry, r'^const registryCheckpointSchema\s*=\s*(\d+)\b', "Registry checkpoint writer")
+    old_checkpoint = number(registry, r'^const localRegistryCheckpointSchema\s*=\s*(\d+)\b', "existing local Registry checkpoint")
+    return (current, written), existing, checkpoint, old_checkpoint
+
+
+def check_storage_formats(root: Path) -> list[str]:
+    """Guard current format summaries, without rewriting historical releases."""
+    failures: list[str] = []
+    try:
+        current, existing, checkpoint, old_checkpoint = storage_format_window(root)
+    except (OSError, ValueError) as exc:
+        return [f"storage format declarations: {exc}"]
+    required_pairs = {current, existing}
+    required_checkpoints = {checkpoint, old_checkpoint}
+    for name in ("STORAGE.md", "ARCHITECTURE.md", "TROUBLESHOOTING.md", "UPGRADING.md"):
+        path = root / "docs" / name
+        # Inline formatting is immaterial, while fenced examples and comments
+        # cannot supply a missing current contract.
+        text = prose(path.read_text(encoding="utf-8")).replace("**", "").replace("`", "")
+        pairs = {(int(store), int(schema)) for store, schema in re.findall(
+            r'\bStore(?:\s+schema)?\s+(\d+)\s*/\s*provisioning\s+(\d+)\b', text)}
+        if pairs != required_pairs:
+            failures.append(f"docs/{name}: document current Store/provisioning {current[0]}/{current[1]} and existing local {existing[0]}/{existing[1]} only; found {sorted(pairs)}")
+        checkpoints = {int(value) for value in re.findall(
+            r'\bcheckpoints?(?:\s+schema)?(?:\s+use)?\s+(\d+)\b', text)}
+        if checkpoints != required_checkpoints:
+            failures.append(f"docs/{name}: document new checkpoint {checkpoint} and readable existing local checkpoint {old_checkpoint}; found {sorted(checkpoints)}")
+        if name == "STORAGE.md":
+            # The owning table labels writer versus existing-reader authority;
+            # merely mentioning both numbers would not catch swapped columns.
+            rows = re.findall(r'^\|\s*Room Store / provisioning\s*\|\s*(\d+)\s*/\s*(\d+)\s*\|\s*(\d+)\s*/\s*(\d+)\s*\|\s*$', text, re.M)
+            if rows != [tuple(map(str, (*current, *existing)))]:
+                failures.append("docs/STORAGE.md: Store/provisioning table must distinguish current writes from existing local reads")
+            rows = re.findall(r'^\|\s*Registry checkpoint\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*$', text, re.M)
+            if rows != [(str(checkpoint), str(old_checkpoint))]:
+                failures.append("docs/STORAGE.md: checkpoint table must distinguish current writes from existing local reads")
+    return failures
+
+
 def main() -> None:
     ERRORS.clear()
     actual_docs = {p.name for p in (ROOT / "docs").glob("*.md")}
@@ -195,6 +256,7 @@ def main() -> None:
         error("docs/API_REFERENCE.md: generated route inventory is stale")
     if generated_values(ROOT / "docs" / "CONFIGURATION.md", "config-fields") != extract_config_fields():
         error("docs/CONFIGURATION.md: generated config field inventory is stale")
+    ERRORS.extend(check_storage_formats(ROOT))
 
     main_source = (ROOT / "cmd" / "pairroom" / "main.go").read_text(encoding="utf-8")
     cli_doc = (ROOT / "docs" / "CLI_REFERENCE.md").read_text(encoding="utf-8")

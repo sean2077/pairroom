@@ -48,6 +48,7 @@ type Engine struct {
 	lanInvites      map[string]LANInvite
 	lanRequests     map[string]LANJoinRequest
 	lanMember       *LANMember
+	lanTransfers    lanTransferSet
 	lastUserMessage string
 	mu              sync.Mutex
 	cfg             Config
@@ -407,6 +408,9 @@ func validMessageState(s string) bool {
 	return false
 }
 func (e *Engine) commitBinding(b bindingFact) error {
+	if err := e.quiesceLANTransfersLocked(b); err != nil {
+		return err
+	}
 	appendFact := func() error {
 		if b.RemoteKey != "" {
 			return e.appendLANBinding(b)
@@ -690,6 +694,7 @@ func (e *Engine) Report(a Auth, seq uint64, text string) (Publication, error) {
 	}
 	key := reportKey(a.BindID, a.Generation, seq)
 	if existing, ok := e.reports[key]; ok {
+		e.noteLANActivityLocked(a)
 		return clonePublication(existing), nil
 	}
 	last := e.lastReport[bindingKey(a.BindID, a.Generation)]
@@ -719,6 +724,7 @@ func (e *Engine) Report(a Auth, seq uint64, text string) (Publication, error) {
 	if err := e.append(kind, a.Slot, p); err != nil {
 		return Publication{}, err
 	}
+	e.noteLANActivityLocked(a)
 	return clonePublication(p), nil
 }
 func (e *Engine) Publication(a Auth, seq uint64) (Publication, bool, error) {
@@ -742,7 +748,11 @@ func (e *Engine) Send(a Auth, req SendRequest) (Message, error) {
 	} else if req.To != "" && req.To != to {
 		return Message{}, errors.New("explicit relay targets only the peer or @user")
 	}
-	return e.sendLocked(a.Slot, to, req, bindingKey(a.BindID, a.Generation)+"/send/"+req.ID)
+	m, err := e.sendLocked(a.Slot, to, req, bindingKey(a.BindID, a.Generation)+"/send/"+req.ID)
+	if err == nil {
+		e.noteLANActivityLocked(a)
+	}
+	return m, err
 }
 func (e *Engine) SendUser(req SendRequest) (Message, error) {
 	e.mu.Lock()
@@ -854,6 +864,7 @@ func (e *Engine) Failure(a Auth, category string) error {
 	// Do not echo vendor error_details/last_assistant_message: those may include
 	// provider secrets or a partial response. Failure is visibility, not relay.
 	// StopFailure also ends the native Turn without a continuation.
+	e.noteLANActivityLocked(a)
 	e.observeTurnEndLocked(a.Slot)
 	allowed := map[string]bool{"rate_limit": true, "overloaded": true, "authentication_failed": true, "server_error": true, "invalid_request": true, "model_not_found": true, "max_output_tokens": true}
 	if !allowed[category] {
@@ -901,6 +912,7 @@ func (e *Engine) envelope(m Message) (string, error) {
 // A Stop park that releases no envelope is the Service's Turn-end observation:
 // the harness stops without a continuation.
 func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
+	observed := false
 	for {
 		e.mu.Lock()
 		b, err := e.auth(a, false)
@@ -914,6 +926,10 @@ func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
 			}
 			e.mu.Unlock()
 			return nil, err
+		}
+		if !observed {
+			e.noteLANActivityLocked(a)
+			observed = true
 		}
 		if park && !b.ParkEnabled {
 			e.observeTurnEndLocked(a.Slot)

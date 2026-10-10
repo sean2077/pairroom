@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -81,16 +82,18 @@ type lanRateWindow struct {
 	Count int
 }
 type lanHostServer struct {
-	mu         sync.Mutex
-	owner      *ManagementServer
-	path       string
-	config     lanHostConfig
-	http       *http.Server
-	listener   net.Listener
-	endpoint   string
-	diagnostic string
-	rates      map[string]lanRateWindow
-	concurrent chan struct{}
+	mu            sync.Mutex
+	owner         *ManagementServer
+	path          string
+	config        lanHostConfig
+	http          *http.Server
+	listener      net.Listener
+	endpoint      string
+	diagnostic    string
+	rates         map[string]lanRateWindow
+	concurrent    chan struct{}
+	transfers     int
+	roomTransfers map[string]int
 }
 
 func initLANHost(s *ManagementServer) error {
@@ -317,22 +320,33 @@ func (h *lanHostServer) admitRequest(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	host = ip.Unmap().String()
 	now := time.Now()
-	if len(h.rates) > 1024 {
+	v, known := h.rates[host]
+	if !known && len(h.rates) >= 1024 {
 		for k, v := range h.rates {
-			if now.Sub(v.At) > time.Minute {
+			if now.Sub(v.At) >= time.Minute {
 				delete(h.rates, k)
 			}
 		}
-		if len(h.rates) > 1024 {
+		// Table pressure rejects only untracked sources. An existing source
+		// retains its own rate budget; a burst of other addresses cannot turn
+		// this bounded table into a global one-minute denial of service.
+		if len(h.rates) >= 1024 {
 			return false
 		}
 	}
-	v := h.rates[host]
 	if now.Sub(v.At) >= time.Minute {
 		v = lanRateWindow{At: now}
 	}
 	v.Count++
+	if h.rates == nil {
+		h.rates = make(map[string]lanRateWindow)
+	}
 	h.rates[host] = v
 	return v.Count <= 240
 }
