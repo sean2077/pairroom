@@ -32,7 +32,7 @@ type options struct {
 	review                                         bool
 	reviewRepo, reviewBase                         string
 	repo, room, slot, kind, endpoint, text, id, to string
-	name, peer                                     string
+	name, peer, share, invitation, receipt         string
 	textFile, outputFile                           string
 	cursor, since                                  string
 	limit                                          int
@@ -44,7 +44,7 @@ type options struct {
 	repoExplicit                                   bool
 	timeout                                        int
 	inlineMax                                      int
-	attachments                                    stringsFlag
+	attachments, files                             stringsFlag
 	preparedAgents                                 map[model.ActorID]model.AgentSelection
 }
 type stringsFlag []string
@@ -53,7 +53,7 @@ func (s *stringsFlag) String() string     { return strings.Join(*s, ",") }
 func (s *stringsFlag) Set(v string) error { *s = append(*s, v); return nil }
 
 // relayActions lists every relay operation Run accepts, in usage order.
-var relayActions = []string{"install", "preflight", "bind", "hook", "send", "exchange", "wait", "status", "history", "doctor", "review", "peer", "park", "nudge", "reconcile", "unbind"}
+var relayActions = []string{"install", "preflight", "bind", "join", "invite", "accept", "revoke", "hook", "send", "exchange", "wait", "status", "history", "doctor", "review", "peer", "park", "nudge", "reconcile", "unbind"}
 
 func relayUsage() string {
 	return "use pairroom relay " + strings.Join(relayActions, "|") + " (see docs/CLI_REFERENCE.md)"
@@ -111,7 +111,8 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.StringVar(&o.to, "to", "", "explicit send target: @user, or empty for peer")
 	flags.BoolVar(&o.create, "create", false, "bind only: register the project when missing, create a native Room, then bind this session")
 	flags.StringVar(&o.name, "name", "", "optional Room display name for bind --create")
-	flags.StringVar(&o.peer, "peer-runtime", "", "peer slot runtime claude|codex|grok|gemini for bind --create")
+	flags.StringVar(&o.peer, "peer-runtime", "", "peer slot runtime claude|codex|grok|gemini for local bind --create")
+	flags.StringVar(&o.share, "share", "", "bind --create: lan creates a Native Room awaiting a remote peer")
 	flags.BoolVar(&o.replace, "replace", false, "explicitly revoke occupied binding; does not stop native work")
 	flags.BoolVar(&o.purge, "purge-hooks", false, "remove this runtime's relay hooks when no other local binding uses them")
 	flags.BoolVar(&o.enabled, "enabled", true, "park enabled")
@@ -125,6 +126,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	}
 	flags.IntVar(&o.timeout, "timeout", defaultTimeout, "foreground wait seconds (0 or 1–21600); 0 waits until cancellation; hook park remains at most 30 seconds")
 	flags.Var(&o.attachments, "attach", "image attachment path (repeatable)")
+	flags.Var(&o.files, "file", "send/exchange: explicitly upload a UTF-8 text evidence file, at most 5 MiB (repeatable)")
 	flags.BoolVar(&o.review, "review", false, "send/exchange: attach a bounded Git review observation")
 	flags.StringVar(&o.reviewRepo, "review-repo", "", "review evidence checkout; defaults to the bound Room workspace (does not rebind)")
 	flags.StringVar(&o.reviewBase, "review-base", "", "send/exchange --review: base commit/ref, default HEAD")
@@ -132,17 +134,42 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.StringVar(&o.since, "since", "", "history: minimum publication time (RFC3339)")
 	flags.IntVar(&o.limit, "limit", 50, "history: page size (1–100; also text-budgeted)")
 	flags.BoolVar(&o.pending, "pending", false, "history: oldest unresolved messages, independently of recent chat")
-	if err := flags.Parse(args[1:]); err != nil {
+	flagArgs := args[1:]
+	if (action == "join" || action == "accept") && len(flagArgs) > 1 && !strings.HasPrefix(flagArgs[0], "-") {
+		flagArgs = append(append([]string{}, flagArgs[1:]...), flagArgs[0])
+	}
+	if err := flags.Parse(flagArgs); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if flags.NArg() != 0 {
+	if action == "join" || action == "accept" {
+		if flags.NArg() != 1 {
+			return fmt.Errorf("relay %s requires one quoted public %s", action, map[string]string{"join": "invitation", "accept": "join receipt"}[action])
+		}
+		if action == "join" {
+			o.invitation = flags.Arg(0)
+		} else {
+			o.receipt = flags.Arg(0)
+		}
+	} else if flags.NArg() != 0 {
 		return errors.New("unexpected relay arguments")
 	}
 	provided := make(map[string]bool)
 	flags.Visit(func(f *flag.Flag) { provided[f.Name] = true })
+	if provided["share"] && (action != "bind" || !o.create || o.share != "lan") {
+		return errors.New("--share accepts lan only with bind --create")
+	}
+	if o.share == "lan" && o.peer != "" {
+		return errors.New("LAN peer runtime is established at admission; omit --peer-runtime")
+	}
+	if provided["file"] && action != "send" && action != "exchange" {
+		return errors.New("--file applies only to send/exchange")
+	}
+	if action == "join" && (o.create || o.room != "" || o.slot != "" || o.replace || o.share != "" || o.peer != "") {
+		return errors.New("join derives its Room and slot from the invitation and host admission; use --repo for the local workspace")
+	}
 	if (provided["review"] || provided["review-base"]) && (action != "send" && action != "exchange") {
 		return errors.New("--review/--review-base apply only to send/exchange")
 	}
@@ -269,6 +296,9 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	if action == "bind" {
 		return bind(ctx, root, o, out)
 	}
+	if action == "join" {
+		return joinLAN(ctx, root, o, out)
+	}
 	if err := resolveSlotDefaults(root, &o); err != nil {
 		return err
 	}
@@ -323,6 +353,16 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		defer releaseCollector()
 	}
 	switch action {
+	case "invite", "accept", "revoke":
+		var result map[string]any
+		var request any
+		if action == "accept" {
+			request = map[string]string{"receipt": o.receipt}
+		}
+		if err := c.call(ctx, action, request, &result); err != nil {
+			return err
+		}
+		return writeJSON(out, result)
 	case "send", "exchange":
 		text, err := readPublicationInput(publicationInput{
 			text:       o.text,
@@ -349,6 +389,13 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		attachments := []string{}
 		for _, path := range o.attachments {
 			id, err := c.upload(ctx, path)
+			if err != nil {
+				return err
+			}
+			attachments = append(attachments, id)
+		}
+		for _, path := range o.files {
+			id, err := c.uploadFile(ctx, path, "file")
 			if err != nil {
 				return err
 			}
@@ -931,6 +978,10 @@ func createNativeRoom(ctx context.Context, endpoint relay.Endpoint, root string,
 		project = registered.ID
 	}
 	request := map[string]any{"host_mode": string(model.HostNative)}
+	if o.share == "lan" {
+		request["sharing"] = "lan"
+		request["owner_slot"] = slot
+	}
 	if name := strings.TrimSpace(o.name); name != "" {
 		request["name"] = name
 	}
@@ -994,14 +1045,26 @@ func defaultRuntimeFor(slot model.ActorID) model.RuntimeKind {
 	return model.RuntimeClaude
 }
 func (c *Client) upload(ctx context.Context, path string) (string, error) {
+	return c.uploadFile(ctx, path, "image")
+}
+
+func (c *Client) uploadFile(ctx context.Context, path, kind string) (string, error) {
+	info, err := os.Lstat(path)
+	limit := int64(10 << 20)
+	if kind == "file" {
+		limit = 5 << 20
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Size() > limit {
+		return "", errors.New("attachment must be a regular file within the selected kind's size limit")
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > 10<<20 {
-		return "", errors.New("attachment must be a regular image, at most 10 MiB")
+	opened, err := f.Stat()
+	if err != nil || !os.SameFile(info, opened) || !opened.Mode().IsRegular() || opened.Size() > limit {
+		return "", errors.New("attachment changed while opening")
 	}
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -1009,7 +1072,7 @@ func (c *Client) upload(ctx context.Context, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err = io.Copy(part, io.LimitReader(f, (10<<20)+1)); err != nil {
+	if _, err = io.Copy(part, io.LimitReader(f, limit+1)); err != nil {
 		return "", err
 	}
 	if err = writer.Close(); err != nil {
@@ -1020,6 +1083,7 @@ func (c *Client) upload(ctx context.Context, path string) (string, error) {
 		return "", err
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-PairRoom-Attachment-Kind", kind)
 	c.authHeaders(req)
 	res, err := c.HTTP.Do(req)
 	if err != nil {

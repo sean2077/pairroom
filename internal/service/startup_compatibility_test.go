@@ -73,7 +73,7 @@ func TestRegistryRejectsFutureFormatsBeforeRecovery(t *testing.T) {
 }
 
 func TestRegistryRejectsIncompatibleProvisioningBeforeRecovery(t *testing.T) {
-	for _, schema := range []int{1, 2, 6} {
+	for _, schema := range []int{1, 2, 7} {
 		for _, location := range []string{"published", "staged", "quarantined"} {
 			t.Run(fmt.Sprintf("%s-schema-%d", location, schema), func(t *testing.T) {
 				registry, project := testRegistry(t, testGitRepo(t))
@@ -211,7 +211,7 @@ func TestRegistryRejectsLostPublishedHistory(t *testing.T) {
 			}
 			t.Run(fmt.Sprintf("archived-%v/%s", archived, loss), func(t *testing.T) {
 				registry, project := testRegistry(t, testGitRepo(t))
-				created, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: project.ID, Name: "Published", Bindings: specs(BindingExisting, BindingExisting, "published")}, SyntheticProvisioner{})
+				created, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded, ProjectID: project.ID, Name: "Published", Bindings: specs(BindingExisting, BindingExisting, "published")}, SyntheticProvisioner{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -283,7 +283,7 @@ func TestRegistryRejectsLostLogDuringCheckpointRebuild(t *testing.T) {
 	for _, contents := range []string{"missing", "", `{"seq":1,`} {
 		t.Run(contents, func(t *testing.T) {
 			registry, project := testRegistry(t, testGitRepo(t))
-			created, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: project.ID, Name: "Published", Bindings: specs(BindingExisting, BindingExisting, "rebuild")}, SyntheticProvisioner{})
+			created, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded, ProjectID: project.ID, Name: "Published", Bindings: specs(BindingExisting, BindingExisting, "rebuild")}, SyntheticProvisioner{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -311,7 +311,7 @@ func TestRegistryRejectsLostLogDuringCheckpointRebuild(t *testing.T) {
 
 func TestRegistryStillRecoversWhollyMissingArchivedDirectory(t *testing.T) {
 	registry, project := testRegistry(t, testGitRepo(t))
-	created, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: project.ID, Name: "Archived", Bindings: specs(BindingExisting, BindingExisting, "archived")}, SyntheticProvisioner{})
+	created, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded, ProjectID: project.ID, Name: "Archived", Bindings: specs(BindingExisting, BindingExisting, "archived")}, SyntheticProvisioner{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -56,6 +56,14 @@ func prepareNativeCreation(ctx context.Context, endpoint relay.Endpoint, root st
 	if err := installed(root, caller); err != nil {
 		return o, slot, err
 	}
+	if o.share == "lan" {
+		if slot == "" {
+			slot = model.ActorSlot1
+		}
+		o.slot = string(slot)
+		o.preparedAgents = map[model.ActorID]model.AgentSelection{slot: {Runtime: caller}}
+		return o, slot, nil
+	}
 	defaultSlot := slot == ""
 	if defaultSlot {
 		var err error

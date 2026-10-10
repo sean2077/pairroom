@@ -434,7 +434,7 @@ func resolveCommandWorkspace(ctx context.Context, action string, o *options) (st
 		return "", errors.New("choose --create or --room, not both")
 	}
 	// Installation is an explicit project setup operation, not session routing.
-	if action == "install" {
+	if action == "install" || action == "join" {
 		return workspace(ctx, o.repo)
 	}
 	caller, err := currentNativeCaller()

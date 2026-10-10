@@ -195,7 +195,7 @@ func TestProjectResolverCanonicalizesRootSubdirectoryAndSymlink(t *testing.T) {
 func TestPendingNewBindingMaterializesAfterNativeInputAcceptance(t *testing.T) {
 	repo := testGitRepo(t)
 	registry, project := testRegistry(t, repo)
-	created, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+	created, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID,
 		Name:      "Deferred native binding",
 		Bindings:  specs(BindingNew, BindingNew, "deferred"),
@@ -262,7 +262,7 @@ func TestPendingNewBindingMaterializesAfterNativeInputAcceptance(t *testing.T) {
 
 func TestMixedNewAndExistingBindingsRebuildAfterMaterialization(t *testing.T) {
 	registry, project := testRegistry(t, testGitRepo(t))
-	selected, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+	selected, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID, Name: "Mixed bindings",
 		Bindings: map[model.ActorID]BindingSpec{
 			model.ActorSlot1: {Mode: BindingNew},
@@ -338,7 +338,7 @@ func TestProvisionRoomSupportsAllBindingCombinations(t *testing.T) {
 	provisioner := &recordingProvisioner{}
 	modes := [][2]BindingMode{{BindingNew, BindingNew}, {BindingNew, BindingExisting}, {BindingExisting, BindingNew}, {BindingExisting, BindingExisting}}
 	for index, mode := range modes {
-		room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+		room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded,
 			ProjectID: project.ID,
 			Name:      fmt.Sprintf("Room %d", index+1),
 			Bindings:  specs(mode[0], mode[1], fmt.Sprint(index)),
@@ -388,7 +388,7 @@ func TestProvisionRoomRejectsInvalidPendingBindingIdentity(t *testing.T) {
 		}, func(context.Context) error { return nil }, nil
 	})
 
-	_, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+	_, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID, Name: "Resolved bindings", Bindings: specs(BindingNew, BindingNew, "pending"),
 	}, provisioner)
 	if err == nil || !strings.Contains(err.Error(), "only a new binding without a session ID may be deferred") {
@@ -403,7 +403,7 @@ func TestProvisionFailureLeavesNoVisibleRoomBindingOrDirectory(t *testing.T) {
 	repo := testGitRepo(t)
 	registry, project := testRegistry(t, repo)
 	provisioner := &recordingProvisioner{failActor: model.ActorSlot2}
-	_, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+	_, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID, Name: "Must roll back", Bindings: specs(BindingNew, BindingExisting, "rollback"),
 	}, provisioner)
 	if err == nil || !strings.Contains(err.Error(), "synthetic vendor") {
@@ -437,14 +437,14 @@ func TestBindingIdentityIsExclusiveAcrossArchivedAndConcurrentRooms(t *testing.T
 		model.ActorSlot1: {Mode: BindingExisting, SessionID: "shared-claude"},
 		model.ActorSlot2: {Mode: BindingNew},
 	}
-	first, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: project.ID, Name: "First", Bindings: shared}, SyntheticProvisioner{})
+	first, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded, ProjectID: project.ID, Name: "First", Bindings: shared}, SyntheticProvisioner{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := registry.ArchiveRoom(context.Background(), first.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: project.ID, Name: "Second", Bindings: shared}, SyntheticProvisioner{}); !errors.Is(err, ErrBindingOwned) {
+	if _, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded, ProjectID: project.ID, Name: "Second", Bindings: shared}, SyntheticProvisioner{}); !errors.Is(err, ErrBindingOwned) {
 		t.Fatalf("archived binding was reusable: %v", err)
 	}
 
@@ -458,7 +458,7 @@ func TestBindingIdentityIsExclusiveAcrossArchivedAndConcurrentRooms(t *testing.T
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
-			_, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: project.ID, Name: fmt.Sprintf("Concurrent %d", index), Bindings: concurrent}, SyntheticProvisioner{})
+			_, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded, ProjectID: project.ID, Name: fmt.Sprintf("Concurrent %d", index), Bindings: concurrent}, SyntheticProvisioner{})
 			results <- err
 		}(i)
 	}
@@ -491,7 +491,7 @@ func TestRegistryRebuildsRoomsLifecycleAndBindingsFromEventLogs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: project.ID, Name: "Before", Bindings: specs(BindingExisting, BindingExisting, "rebuild")}, SyntheticProvisioner{})
+	room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded, ProjectID: project.ID, Name: "Before", Bindings: specs(BindingExisting, BindingExisting, "rebuild")}, SyntheticProvisioner{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,7 +523,7 @@ func TestRegistryRebuildsRoomsLifecycleAndBindingsFromEventLogs(t *testing.T) {
 }
 
 func TestRegistryRejectsStandaloneRoomWithoutChangingFiles(t *testing.T) {
-	for _, schema := range []int{version.StoreSchema - 1, version.StoreSchema} {
+	for _, schema := range []int{version.LocalStoreSchema - 1, version.LocalStoreSchema, version.StoreSchema} {
 		t.Run(fmt.Sprintf("schema-%d", schema), func(t *testing.T) {
 			root := t.TempDir()
 			dir := filepath.Join(root, "rooms", "unsupported-room")
@@ -544,7 +544,7 @@ func TestRegistryRejectsStandaloneRoomWithoutChangingFiles(t *testing.T) {
 			}
 			_, err := OpenRegistry(context.Background(), RegistryConfig{Root: root})
 			want := "standalone"
-			if schema < version.StoreSchema {
+			if schema < version.LocalStoreSchema {
 				want = "retired Service data root"
 			}
 			if err == nil || !strings.Contains(err.Error(), want) {
@@ -564,7 +564,7 @@ func TestRegistryRejectsStandaloneRoomWithoutChangingFiles(t *testing.T) {
 
 func TestRegistryDoesNotFollowExternalCheckpointRooms(t *testing.T) {
 	owner, project := testRegistry(t, testGitRepo(t))
-	external, err := owner.ProvisionRoom(context.Background(), ProvisionRequest{
+	external, err := owner.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID, Name: "External", Bindings: specs(BindingExisting, BindingExisting, "external"),
 	}, SyntheticProvisioner{})
 	if err != nil {
@@ -1073,7 +1073,7 @@ func TestRegistryRequiresCurrentProvisioningAndExplicitSelections(t *testing.T) 
 	}{
 		{"schema-1", func(p *roomProvisionedPayload) { p.Schema = 1 }, "retired room provisioning schema"},
 		{"schema-2", func(p *roomProvisionedPayload) { p.Schema = 2 }, "retired room provisioning schema"},
-		{"future-schema", func(p *roomProvisionedPayload) { p.Schema = 6 }, "unsupported room provisioning schema"},
+		{"future-schema", func(p *roomProvisionedPayload) { p.Schema = 7 }, "unsupported room provisioning schema"},
 		{"missing-collaboration", func(p *roomProvisionedPayload) { p.Collaboration = nil }, "requires collaboration"},
 		{"missing-agents", func(p *roomProvisionedPayload) { p.Agents = nil }, "Agent selections"},
 		{"missing-agent-2", func(p *roomProvisionedPayload) { delete(p.Agents, model.ActorSlot2) }, "Agent selections"},
@@ -1234,7 +1234,7 @@ func TestCanceledProvisionAndLifecycleDoNotCommit(t *testing.T) {
 		}
 		return Binding{Agent: actor, Mode: spec.Mode, SessionID: id, BoundAt: time.Now().UTC()}, func(context.Context) error { return nil }, nil
 	})
-	_, err := registry.ProvisionRoom(ctx, ProvisionRequest{
+	_, err := registry.ProvisionRoom(ctx, ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID, Name: "Canceled", Bindings: specs(BindingNew, BindingNew, "canceled"),
 	}, provisioner)
 	if !errors.Is(err, context.Canceled) {
@@ -1251,7 +1251,7 @@ func TestCanceledProvisionAndLifecycleDoNotCommit(t *testing.T) {
 		t.Fatalf("canceled provisioning left data directories: %v", entries)
 	}
 
-	room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+	room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID, Name: "Durable", Bindings: specs(BindingNew, BindingNew, "durable"),
 	}, SyntheticProvisioner{})
 	if err != nil {

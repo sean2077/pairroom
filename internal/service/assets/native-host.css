@@ -90,6 +90,7 @@ body.workbench-native.native-chat{height:100vh;height:100dvh;overflow:hidden}
 .native-chat .message-meta time{font-size:10px}
 .native-chat .message-row.user .message-meta,.native-chat .message-row.user .message-footer{justify-content:flex-end}
 .native-chat .message-bubble{padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--wb-panel,var(--panel));box-shadow:0 2px 10px rgb(0 0 0 / .06)}
+.native-chat .attachment-file{display:block;margin-top:10px;padding:8px 10px;border:1px solid currentColor;border-radius:6px;overflow-wrap:anywhere;font-size:12px}
 .native-chat .slot1 .message-bubble{border-left-color:rgba(224,139,91,.6)}
 .native-chat .slot2 .message-bubble{border-left-color:rgba(86,185,159,.6)}
 .native-chat .user .message-bubble{background:var(--wb-user-bubble,#5b54c7);border-color:var(--wb-user-bubble-line,#7a73dd);color:var(--wb-user-bubble-ink,#fff)}
@@ -149,7 +150,6 @@ body.workbench-native.native-chat{height:100vh;height:100dvh;overflow:hidden}
   .native-chat .room-heading{width:100%}
   .native-chat .header-actions{width:100%;justify-content:flex-end;max-width:none}
   .native-chat .header-actions #connection{margin-right:auto}
-  .native-chat .experimental{display:none}
   .workbench-native.native-chat .section-header{padding:10px 12px;gap:8px;flex-wrap:wrap}
   .native-chat .participant-summary{padding:8px 12px;gap:6px}
   .native-chat .participant-chip{flex:1;flex-wrap:wrap}

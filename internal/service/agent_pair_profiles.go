@@ -122,6 +122,11 @@ func (r *Registry) readAgentPairProfilesLocked() (AgentPairProfileCatalog, error
 				return AgentPairProfileCatalog{}, errAgentPairProfilesCorrupt
 			}
 		}
+		for _, selection := range profile.Agents {
+			if selection.AwaitingPeer {
+				return AgentPairProfileCatalog{}, errAgentPairProfilesCorrupt
+			}
+		}
 		agents, err := validateAgentSelections(profile.Agents)
 		if err != nil {
 			return AgentPairProfileCatalog{}, fmt.Errorf("%w: %v", errAgentPairProfilesCorrupt, err)
@@ -200,6 +205,11 @@ func (r *Registry) SaveAgentPairProfile(ctx context.Context, id string, input Ag
 	normalizedInput, err := normalizeAgentSelectionsInput(input.Agents)
 	if err != nil {
 		return AgentPairProfileCatalog{}, fmt.Errorf("%w: %v", errInvalidAgentPairProfile, err)
+	}
+	for _, selection := range normalizedInput {
+		if selection.AwaitingPeer {
+			return AgentPairProfileCatalog{}, errors.New("Agent pair profiles require two selected runtimes")
+		}
 	}
 	agents, err := validateAgentSelections(normalizedInput)
 	if err != nil {

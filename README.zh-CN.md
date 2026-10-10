@@ -18,8 +18,8 @@
 
   | 宿主模式 | 适合的需求 | 边界 |
   |---|---|---|
-  | **Native**（日常工作推荐；实验性） | 继续用自己的 Claude Code、Codex（包括 Codex Desktop）、Grok Build 或 Gemini CLI 会话，留在熟悉的终端（如 [WezTerm](https://wezterm.org/)）或客户端里，不用换到另一个编辑器或 Agent 工作台 | PairRoom 负责绑定、持久中继和审计；配置、权限和执行归原生 harness 管，Room 里的选择只作展示。 |
-  | **Embedded** | 使用 PairRoom 桌面端或网页端的对话界面和适配器控制，每个槽位单独选 Runtime、Provider、模型、effort 和指令 | 适配器由 PairRoom 管理，同一 Room 同一时间只运行一个原生 Turn；没设置的项继承原生配置。 |
+  | **Native**（默认并推荐） | 继续用自己的 Claude Code、Codex（包括 Codex Desktop）、Grok Build 或 Gemini CLI 会话，留在熟悉的终端（如 [WezTerm](https://wezterm.org/)）或客户端里，不用换到另一个编辑器或 Agent 工作台 | PairRoom 负责绑定、持久中继和审计；配置、权限和执行归原生 harness 管，Room 里的选择只作展示。 |
+  | **Embedded**（可选） | 使用 PairRoom 桌面端或网页端的对话界面和适配器控制，每个槽位单独选 Runtime、Provider、模型、effort 和指令 | 适配器由 PairRoom 管理，同一 Room 同一时间只运行一个原生 Turn；没设置的项继承原生配置。 |
 
 - **职责可以自定义**：默认一个负责规划和审核，另一个负责执行和补充。也可以用自定义 Room 改成「先一起讨论方案，再各自执行一部分，最后互审」。职责不是权限，也不是必经阶段：简单任务由被点名的 Agent 直接完成，审查结束也不等于允许动手实现。
 - **过程透明，随时介入**：双方交流的内容都在 Room 中可见。Native 下两边的工作过程还能直接在各自的终端或客户端里看，发现方向不对可以马上叫停或纠正。
@@ -64,15 +64,17 @@ sh install-pairroom.sh
 pairroom version
 ```
 
-没有模型账号也能先看看：在前台启动一个演示 Service：
+日常工作中，先安装并登录所需的原生 CLI，打开 Desktop 或运行 `pairroom service`，然后按 [Native 设置](#native-宿主模式) 连接会话。**Native 是默认并推荐的 Room 模式。** Management 创建新 Room，以及未指定 `host_mode` 的创建请求，都会选择 Native；已有 Room 保留原来的模式。`pairroom version` 和 `pairroom doctor` 只能确认工具装好了，不能确认你已经登录。
+
+也可以先体验不需要模型账号的演示，在前台启动一个 Mock Service：
 
 ```bash
 pairroom service --mock --data-root "$HOME/.pairroom-demo"
 ```
 
-在 Management 中把一个可丢弃的 Git 仓库注册为 Project，创建 **Embedded** Room，发一个小任务。Mock 不会启动任何供应商 CLI，也不消耗额度，所以它展示的是流程，不是模型能力。`Ctrl+C` 可停止。启动 URL 带有登录令牌，不要分享。
+在 Management 中把一个可丢弃的 Git 仓库注册为 Project，创建 Room 时显式选择 **Embedded**，发一个小任务。Mock 不会启动任何供应商 CLI，也不消耗额度，所以它展示的是流程，不是模型能力。`Ctrl+C` 可停止。启动 URL 带有登录令牌，不要分享。
 
-真正使用前，先安装并登录你要用的每个 CLI。**Native**（[Native 设置](docs/NATIVE_RELAY.md)）保留你现有的会话，是推荐的日常模式，但仍属实验性；**Embedded**（[入门指南](docs/GETTING_STARTED.md)）上手最快，也是按槽位选择 Provider 的模式。`pairroom version` 和 `pairroom doctor` 只能确认工具装好了，不能确认你已经登录。
+需要 PairRoom 管理会话和适配器，或按槽位覆盖 Provider 配置时，可选择 **Embedded**（[入门指南](docs/GETTING_STARTED.md)）。它的创建表单和 Room 页面也会提示推荐的 Native 设置入口。
 
 想让编程 Agent 带你完成安装和检查，就让它读 [Agent 协助安装](docs/AGENT_SETUP.md)：
 
@@ -91,7 +93,7 @@ and help me install PairRoom and check my environment. Ask before each change.
 
 详见[安全说明](SECURITY.md)、[核心概念](docs/CONCEPTS.md)和[存储恢复](docs/STORAGE.md)。
 
-## Native 宿主模式（实验性）
+## Native 宿主模式
 
 开始前，确认两个 Agent 的工具 shell 都能运行 `pairroom`，并且你的数据目录有一个正在运行的非 Mock Service。[Agent 协助安装](docs/AGENT_SETUP.md#6-native-bind-two-existing-sessions) 会带你完成这两步。然后在项目 worktree 中为实际用到的 Runtime 安装 hooks：
 
@@ -114,6 +116,10 @@ pairroom relay install --runtime claude,codex
 一轮结束后，Stop hook 会短暂等待对方回复。超过这个窗口，开启了 wake 的 Room 可以通过 inbox 或 queue 向空闲的 Claude Code 或 Codex 会话发一条内容固定、不含正文的提醒；PairRoom 从不启动或中断会话。CLI 等待期间不调用模型，但 harness 多久被唤醒一次、花多少费用，取决于 harness 本身。Grok Build 没有 Service 唤醒，Stop 续聊最多七次，所以最不适合长时间无人值守；Grok 的回复被截断时，要用 `send`/`exchange` 重新发送完整内容。见[按 Runtime 区分的长程无人值守](docs/NATIVE_RELAY.md#long-unattended-runs-by-runtime)。
 
 [Native relay](docs/NATIVE_RELAY.md) 集中说明安装、文件证据、cwd/worktree 发现、唤醒限制和恢复。技能也可以通过 `npx skills add sean2077/pairroom` 安装；只装技能不会安装或批准 hooks。[vendor 唤醒观察记录](docs/NATIVE_RELAY.md#verified-vendor-wake-surfaces)注明了日期，不会随每个版本重新认证。
+
+### 与局域网同事协作
+
+双方各自运行本机 Service 和原生会话。先在**设置 → 局域网协作**开启一次托管，再创建 Native Room 并选择**通过局域网邀请同事**，或执行 `pairroom relay bind --create --share lan`。把返回的加入命令交给同事，让对方 Agent 在自己的会话里申请加入；你通过已有的可信沟通渠道收到准确回执后接受它。双方的 Service 都能为其他 Room 当房主。两位用户都能查看共享对话和发消息，而凭据、原生会话、工作区和工具权限仍保留在各自机器上。具体步骤、显式上传证据、重连和撤销访问见[局域网 Native 协作](docs/LAN_NATIVE.md)。
 
 ### Native 恢复与评审
 
@@ -140,7 +146,7 @@ make smoke
 
 [文档地图](docs/README.md) · [配置](docs/CONFIGURATION.md) · [CLI](docs/CLI_REFERENCE.md) · [API](docs/API_REFERENCE.md) · [故障排查](docs/TROUBLESHOOTING.md) · [升级](docs/UPGRADING.md) · [支持范围](SUPPORT.md)
 
-`main` 上的文档跟随开发进度。使用已发布版本时，请看对应 tag 的文档；文档和二进制的 `--help` 不一致时，以 `--help` 为准。[Changelog](CHANGELOG.md) 记录历史，参考文档描述当前行为。Native 仍是实验性功能：Mock、合成 hooks、浏览器 fixtures 和旧的工作会话报告，都不能替代真实认证的多轮 vendor 测试；这里也不宣称任何 vendor 验收或计费 token 基准结果。桌面包未做生产签名或 notarization。界面支持英文和简体中文，技术文档使用英文。
+`main` 上的文档跟随开发进度。使用已发布版本时，请看对应 tag 的文档；文档和二进制的 `--help` 不一致时，以 `--help` 为准。[Changelog](CHANGELOG.md) 记录历史，参考文档描述当前行为。Mock、合成 hooks、浏览器 fixtures 和旧的工作会话报告，都不能替代真实认证的多轮 vendor 测试；这里也不宣称任何 vendor 验收或计费 token 基准结果。桌面包未做生产签名或 notarization。界面支持英文和简体中文，技术文档使用英文。
 
 ## 友情链接
 

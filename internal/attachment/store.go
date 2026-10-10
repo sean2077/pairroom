@@ -77,6 +77,9 @@ func Open(dataDir, repo string) (*Store, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("create attachment directory: %w", err)
 	}
+	if info, err := os.Lstat(root); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, errors.New("attachment directory must be a direct directory")
+	}
 	if err := os.Chmod(root, 0o700); err != nil {
 		return nil, fmt.Errorf("secure attachment directory: %w", err)
 	}
@@ -97,6 +100,15 @@ func Open(dataDir, repo string) (*Store, error) {
 func (s *Store) Root() string { return s.root }
 
 func (s *Store) SaveImage(name string, reader io.Reader, source string) (model.Attachment, error) {
+	return s.saveImage(name, reader, source, false)
+}
+
+// SaveSharedImage adds the bounded Room storage quota required at LAN ingress.
+func (s *Store) SaveSharedImage(name string, reader io.Reader, source string) (model.Attachment, error) {
+	return s.saveImage(name, reader, source, true)
+}
+
+func (s *Store) saveImage(name string, reader io.Reader, source string, shared bool) (model.Attachment, error) {
 	if reader == nil {
 		return model.Attachment{}, errors.New("image reader is required")
 	}
@@ -132,6 +144,12 @@ func (s *Store) SaveImage(name string, reader io.Reader, source string) (model.A
 	if size > MaxImageBytes {
 		_ = tmp.Close()
 		return model.Attachment{}, fmt.Errorf("image exceeds %d MiB limit", MaxImageBytes>>20)
+	}
+	if shared {
+		if err := s.checkSharedQuota(size); err != nil {
+			_ = tmp.Close()
+			return model.Attachment{}, err
+		}
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
@@ -224,7 +242,7 @@ func (s *Store) ResolveMany(ids []string) ([]model.Attachment, error) {
 		}
 		seen[id] = struct{}{}
 		if len(result) >= MaxImagesPerMessage {
-			return nil, fmt.Errorf("a message can include at most %d images", MaxImagesPerMessage)
+			return nil, fmt.Errorf("a message can include at most %d attachments", MaxImagesPerMessage)
 		}
 		meta, _, err := s.Resolve(id)
 		if err != nil {
@@ -232,7 +250,7 @@ func (s *Store) ResolveMany(ids []string) ([]model.Attachment, error) {
 		}
 		total += meta.Size
 		if total > MaxTotalImageBytes {
-			return nil, fmt.Errorf("message images exceed %d MiB total limit", MaxTotalImageBytes>>20)
+			return nil, fmt.Errorf("message attachments exceed %d MiB total limit", MaxTotalImageBytes>>20)
 		}
 		result = append(result, meta)
 	}
@@ -337,7 +355,7 @@ func (s *Store) load(id string) (model.Attachment, string, error) {
 		}
 		return model.Attachment{}, "", fmt.Errorf("inspect attachment metadata: %w", err)
 	}
-	if !manifestInfo.Mode().IsRegular() {
+	if !manifestInfo.Mode().IsRegular() || manifestInfo.Size() > maxManifestBytes {
 		return model.Attachment{}, "", errors.New("attachment metadata is not a regular file")
 	}
 	data, err := os.ReadFile(manifestPath)
@@ -351,7 +369,13 @@ func (s *Store) load(id string) (model.Attachment, string, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return model.Attachment{}, "", fmt.Errorf("decode attachment metadata: %w", err)
 	}
-	if m.Attachment.ID != id || m.Attachment.Kind != "image" || canonicalImageType(m.Attachment.MediaType) == "" || filepath.Base(m.Filename) != m.Filename || m.Filename == "" {
+	isImage := m.Attachment.Kind == "image" && canonicalImageType(m.Attachment.MediaType) != ""
+	isEvidence := m.Attachment.Kind == "file" && m.Attachment.MediaType == "text/plain" && m.Attachment.Width == 0 && m.Attachment.Height == 0
+	expectedFilename := id + extensionForType(m.Attachment.MediaType)
+	if isEvidence {
+		expectedFilename = id + ".data"
+	}
+	if m.Attachment.ID != id || (!isImage && !isEvidence) || m.Filename != expectedFilename {
 		return model.Attachment{}, "", errors.New("invalid attachment metadata")
 	}
 	path := filepath.Join(s.root, m.Filename)
@@ -362,8 +386,10 @@ func (s *Store) load(id string) (model.Attachment, string, error) {
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() != m.Attachment.Size || info.Size() <= 0 || info.Size() > MaxImageBytes {
 		return model.Attachment{}, "", errors.New("attachment content is invalid")
 	}
-	if err := validateImageDimensions(m.Attachment.Width, m.Attachment.Height); err != nil {
-		return model.Attachment{}, "", fmt.Errorf("attachment metadata is invalid: %w", err)
+	if isImage {
+		if err := validateImageDimensions(m.Attachment.Width, m.Attachment.Height); err != nil {
+			return model.Attachment{}, "", fmt.Errorf("attachment metadata is invalid: %w", err)
+		}
 	}
 	// Attachments are immutable transcript artifacts. Verify the content hash on
 	// every boundary crossing so a same-size local modification cannot silently

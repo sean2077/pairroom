@@ -22,10 +22,10 @@ func writeProtocol(args []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	actorFlag := flags.String("actor", "", "limit actor-specific rules to slot1 or slot2; 1/2 and claude/codex are CLI aliases")
 
-	hostFlag := flags.String("host-mode", "embedded", "Room host mode: embedded or native")
+	hostFlag := flags.String("host-mode", "native", "Room host mode: native (recommended) or embedded")
 	jsonFlag := flags.Bool("json", false, "emit the contract as JSON")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "usage: pairroom protocol [--actor slot1|slot2] [--json]")
+		fmt.Fprintln(stderr, "usage: pairroom protocol [--host-mode native|embedded] [--actor slot1|slot2] [--json]")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {

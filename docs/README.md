@@ -1,6 +1,6 @@
 # Documentation map
 
-Start with the question, not every document. **Embedded** owns vendor adapters and native Turn scheduling; **Native** relays between user-owned sessions. A desktop-owned embedded Service can host either Room type. Mode-specific behavior must not be inferred from a generic mention of “Runtime” or “Room”.
+Start with the question, not every document. **Native** is the default and recommended mode, relaying between user-owned sessions. **Embedded** is an optional mode that owns vendor adapters and native Turn scheduling. A desktop-owned embedded Service can host either Room type. Mode-specific behavior must not be inferred from a generic mention of “Runtime” or “Room”.
 
 Documentation on `main` tracks development, which may be ahead of the package you installed. Check `pairroom version`, read the matching release tag, and trust that binary's `pairroom <command> --help` for flags. The CLI and the running Service can still differ in version; [Native setup](AGENT_SETUP.md#6-native-bind-two-existing-sessions) checks for that.
 
@@ -9,8 +9,9 @@ Documentation on `main` tracks development, which may be ahead of the package yo
 | Starting point | Read in this order | Where you end up |
 |---|---|---|
 | New to PairRoom or the tool names | [Overview](../README.md) → [Core concepts](CONCEPTS.md) → [Why PairRoom](WHY_PAIRROOM.md) | Knowing whether Native or Embedded suits you |
-| Try the interface without a model account | [Installation](INSTALLATION.md) → [Getting started](GETTING_STARTED.md) | A throwaway Mock Room in Embedded mode (no real model involved) |
 | Connect two existing coding sessions | [Agent-assisted setup](AGENT_SETUP.md) → [Native relay, including Gemini CLI](NATIVE_RELAY.md) | Both sessions bound, and a Stop hook seen running in each |
+| Collaborate with a teammate on the LAN | [Native LAN collaboration](LAN_NATIVE.md) → [Security boundary](../SECURITY.md) | One shared Room with an accepted teammate and independent local native permissions |
+| Try the interface without a model account | [Installation](INSTALLATION.md) → [Getting started](GETTING_STARTED.md) | A throwaway Mock Room with Embedded explicitly selected (no real model involved) |
 | Change versions or investigate stalled work | [Upgrading](UPGRADING.md) or [Troubleshooting](TROUBLESHOOTING.md) → [Operations](OPERATIONS.md) | A specific recovery step that keeps state and does not replay work |
 
 None of these paths requires reading the technical contracts below.
@@ -25,6 +26,7 @@ None of these paths requires reading the technical contracts below.
 | Let a coding Agent install and check the environment step by step | [Agent-assisted setup](AGENT_SETUP.md) |
 | First Mock/Embedded Room and optional plan/implementation review guidance | [Getting started](GETTING_STARTED.md) |
 | Native install, create/join, publication, wake, UI, and recovery | [Native relay, including Gemini CLI](NATIVE_RELAY.md) |
+| Invite a colleague, accept their receipt, share evidence, or leave | [Native LAN collaboration](LAN_NATIVE.md) |
 | Native cwd/worktree identity and locator recovery | [Native session workspace discovery](NATIVE_SESSION_WORKSPACE.md) |
 | Tool names, host modes, Bindings, responsibilities, controls, and receipts | [Core concepts](CONCEPTS.md) |
 | Agent selections, Provider references, permissions, and saved pairs | [Configuration](CONFIGURATION.md) |

@@ -9,6 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/sean2077/pairroom/internal/lanshare"
 	"github.com/sean2077/pairroom/internal/model"
 )
 
@@ -70,6 +71,7 @@ func (s BindingSpec) Validate() error {
 }
 
 type Binding struct {
+	RemoteKey string        `json:"remote_key,omitempty"`
 	Agent     model.ActorID `json:"agent"`
 	Mode      BindingMode   `json:"mode"`
 	SessionID string        `json:"session_id,omitempty"`
@@ -98,6 +100,12 @@ func (b Binding) Validate() error {
 	}
 	if !b.Mode.Valid() {
 		return fmt.Errorf("invalid binding mode %q", b.Mode)
+	}
+	if b.RemoteKey != "" && !b.Pending {
+		if b.Mode != BindingNew || b.SessionID != "" || b.BoundAt.IsZero() {
+			return errors.New("invalid remote binding")
+		}
+		return nil
 	}
 	if b.Pending {
 		if b.Mode != BindingNew {
@@ -145,6 +153,8 @@ type Project struct {
 }
 
 type Room struct {
+	Sharing                  string                                 `json:"sharing,omitempty"`
+	OwnerSlot                model.ActorID                          `json:"owner_slot,omitempty"`
 	HostMode                 model.HostMode                         `json:"host_mode,omitempty"`
 	RuntimeNames             map[model.ActorID]string               `json:"runtime_names,omitempty"`
 	Collaboration            *model.Collaboration                   `json:"collaboration,omitempty"`
@@ -212,6 +222,9 @@ func (r Room) Validate() error {
 		if !ok {
 			return fmt.Errorf("room is missing %s binding", actor)
 		}
+		if binding.RemoteKey != "" && (r.Sharing != "lan" || actor != model.OtherParticipant(r.OwnerSlot) || !lanshare.ValidFingerprint(binding.RemoteKey)) {
+			return errors.New("remote binding requires its LAN peer slot")
+		}
 		if binding.Agent != actor {
 			return fmt.Errorf("%s binding identifies agent %s", actor, binding.Agent)
 		}
@@ -219,12 +232,15 @@ func (r Room) Validate() error {
 			return fmt.Errorf("%s binding: %w", actor, err)
 		}
 	}
+	if err := validateLANSelections(r.HostMode, r.Sharing, r.OwnerSlot, r.Agents); err != nil {
+		return err
+	}
 	if _, err := validateAgentSelections(r.Agents); err != nil {
 		return fmt.Errorf("Room Agent selections: %w", err)
 	}
 	if r.HostMode == model.HostNative {
 		for actor, selection := range r.Agents {
-			if !selection.Runtime.Valid() {
+			if !selection.Runtime.Valid() && !selection.AwaitingPeer {
 				return errors.New("native hosting supports Claude Code, Codex, Grok Build and Gemini CLI")
 			}
 			if r.Bindings[actor].Mode != BindingNew {
@@ -236,6 +252,8 @@ func (r Room) Validate() error {
 }
 
 type ProvisionRequest struct {
+	Sharing            string                                 `json:"sharing,omitempty"`
+	OwnerSlot          model.ActorID                          `json:"owner_slot,omitempty"`
 	HostMode           model.HostMode                         `json:"host_mode,omitempty"`
 	AgentPairProfileID string                                 `json:"agent_pair_profile_id,omitempty"`
 	Collaboration      *model.Collaboration                   `json:"collaboration,omitempty"`
@@ -296,6 +314,9 @@ func normalizeAgentSelectionsInput(input map[model.ActorID]model.AgentSelection)
 }
 
 func (r ProvisionRequest) Validate() error {
+	if err := validateLANSelections(r.HostMode.ForCreation(), r.Sharing, r.OwnerSlot, r.Agents); err != nil {
+		return err
+	}
 	if !r.HostMode.ForCreation().Valid() {
 		return fmt.Errorf("invalid host_mode %q", r.HostMode)
 	}
@@ -306,7 +327,7 @@ func (r ProvisionRequest) Validate() error {
 			}
 		}
 		for _, selection := range r.Agents {
-			if !selection.Runtime.Valid() {
+			if !selection.Runtime.Valid() && !selection.AwaitingPeer {
 				return errors.New("native hosting supports Claude Code, Codex, Grok Build and Gemini CLI")
 			}
 		}
@@ -349,6 +370,8 @@ func (r ProvisionRequest) Validate() error {
 }
 
 type roomProvisionedPayload struct {
+	Sharing                  string                                 `json:"sharing,omitempty"`
+	OwnerSlot                model.ActorID                          `json:"owner_slot,omitempty"`
 	HostMode                 model.HostMode                         `json:"host_mode,omitempty"`
 	Collaboration            *model.Collaboration                   `json:"collaboration,omitempty"`
 	Schema                   int                                    `json:"schema"`

@@ -1,6 +1,6 @@
 # Native host mode
 
-Status: implemented, experimental. This records design rationale, not a setup sequence or pending phase plan. Current contracts live in [Architecture](../ARCHITECTURE.md), [Protocol](../PROTOCOL.md#native-host-protocol-v8), and [Storage](../STORAGE.md#native-relay-state). [Native relay](../NATIVE_RELAY.md) owns the operator workflow.
+Status: implemented; Native is the default and recommended host mode. This records design rationale, not a setup sequence or pending phase plan. Current contracts live in [Architecture](../ARCHITECTURE.md), [Protocol](../PROTOCOL.md#native-host-protocol-v8), and [Storage](../STORAGE.md#native-relay-state). [Native relay](../NATIVE_RELAY.md) owns the operator workflow.
 
 ## Decisions
 

@@ -598,6 +598,7 @@ func TestManagementShutdownForceClosesActiveHandlerAfterDeadline(t *testing.T) {
 func TestManagementSnapshotIncludesSummaryPolicyAndCapabilities(t *testing.T) {
 	registry, project := testRegistry(t, testGitRepo(t))
 	room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+		HostMode:  model.HostEmbedded,
 		ProjectID: project.ID,
 		Name:      "Dashboard Room",
 		Bindings:  specs(BindingNew, BindingNew, "dashboard"),
@@ -739,7 +740,7 @@ func TestRelaySetupTokenIsScopedToNativeSetupRoutes(t *testing.T) {
 	}
 
 	embedded := httptest.NewRecorder()
-	embeddedReq := managementRequest(http.MethodPost, "/api/v1/projects/"+project.ID+"/rooms", `{"name":"embedded from setup token"}`, false)
+	embeddedReq := managementRequest(http.MethodPost, "/api/v1/projects/"+project.ID+"/rooms", `{"host_mode":"embedded","name":"embedded from setup token"}`, false)
 	embeddedReq.Header.Set("Authorization", "Bearer "+server.cliToken)
 	server.Handler().ServeHTTP(embedded, embeddedReq)
 	if embedded.Code != http.StatusForbidden {
@@ -747,7 +748,7 @@ func TestRelaySetupTokenIsScopedToNativeSetupRoutes(t *testing.T) {
 	}
 
 	native := httptest.NewRecorder()
-	nativeReq := managementRequest(http.MethodPost, "/api/v1/projects/"+project.ID+"/rooms", `{"host_mode":"native","name":"native from setup token"}`, false)
+	nativeReq := managementRequest(http.MethodPost, "/api/v1/projects/"+project.ID+"/rooms", `{"name":"native from setup token"}`, false)
 	nativeReq.Header.Set("Authorization", "Bearer "+server.cliToken)
 	server.Handler().ServeHTTP(native, nativeReq)
 	if native.Code != http.StatusCreated {

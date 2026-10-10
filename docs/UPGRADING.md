@@ -14,7 +14,7 @@ The host requests only the fixed public GitHub latest-release endpoint, without 
 
 ## Supported Room formats
 
-The 5.0.0 development cutover retired old formats without migration. Current readers require **Store schema 12/provisioning 5**, explicit immutable `host_mode`, registry checkpoint 3, relay state 2, and Agent pair profile storage 2. A retired Service root fails as a whole before recovery/replay/repair/rewrite. Start a new root and recreate registrations, Rooms, and profiles; moving only old Room directories cannot repair an incompatible root checkpoint.
+The 5.0.0 development cutover retired old formats without migration. Current readers support existing local **Store schema 12/provisioning 5** and new **Store schema 13/provisioning 6**, with explicit immutable `host_mode`. Registry checkpoint 3 remains readable and new checkpoints use 4; relay state 2 and Agent pair profile storage 2 retain their existing contracts. Existing current local Rooms do not need to be recreated. LAN facts and awaiting-peer selections require the new 13/6 format; old Room logs and metadata are not rewritten. A retired Service root fails as a whole before recovery/replay/repair/rewrite. Start a new root and recreate registrations, Rooms, and profiles; moving only old Room directories cannot repair an incompatible root checkpoint.
 
 A newer checkpoint, Agent pair profile, or Room Store/provisioning schema also rejects the whole root before startup cleanup, including staged and quarantined Rooms. Provisioning compatibility is checked from the two initial creation records; incomplete staging can still be cleaned after a crash. Use a matching or newer binary; do not downgrade format numbers to make an older reader accept the data.
 
@@ -69,13 +69,13 @@ Only an incomplete final JSONL record in a supported store is repairable. Never 
 
 ## Native rollout and rollback
 
-Native remains experimental. Authenticated multi-round acceptance for the actual Claude/Codex/Grok versions and settings is separate from synthetic hooks, browser fixtures, and dated working-session reports. Consult the [design record](design/native-host-mode.md) for rationale, not a promise that current vendor acceptance has run.
+Native is the default and recommended Room host mode; Embedded remains available when PairRoom should own the adapter processes. Authenticated multi-round acceptance for the actual Claude/Codex/Grok versions and settings is separate from synthetic hooks, browser fixtures, and dated working-session reports. Consult the [design record](design/native-host-mode.md) for rationale, not a promise that current vendor acceptance has run.
 
 **Routine compatible upgrades do not require unbinding or replacing valid sessions.** Update CLI/Service together and refresh/review installed hooks/skill when their definitions change. Use idempotent bind to restore discovery without rotating generation.
 
 An incompatible downgrade or deliberate Native removal is different. Before replacing the working binary, stop native work, back up all relevant state, and use that matching CLI to unbind the affected slots, with `--purge-hooks` only when intentional. Remove only selected PairRoom workspace data/unused managed skills after confirming no other bindings need them. Never purge unrelated native hooks/configuration. Archive alone neither releases Binding ownership nor creates compatibility isolation.
 
-Pre-5.0.0 binaries reject schema-12 Rooms. There is no in-place format downgrade: preserve an isolated matching-version backup/root rather than relabelling schema or copying credentials between generations.
+Pre-5.0.0 binaries reject schema-12 Rooms. Pre-LAN binaries reject schema-13 Rooms and checkpoint 4 before startup cleanup. Preserve a complete pre-upgrade root with its matching binary if rollback is required; a new derived checkpoint also prevents an older Service from opening that root. There is no in-place format downgrade: preserve an isolated matching-version backup/root rather than relabelling schema or copying credentials between generations.
 
 ## Native binding setup
 

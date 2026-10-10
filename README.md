@@ -18,8 +18,8 @@ Having Claude Code draft a plan, copying it to Codex for review, and pasting the
 
   | Host mode | Choose it for | Boundary |
   |---|---|---|
-  | **Native** (recommended for daily work; experimental) | Keeping your own Claude Code, Codex (including Codex Desktop), Grok Build, or Gemini CLI sessions in your usual terminal (such as [WezTerm](https://wezterm.org/)) or client, instead of moving into another editor or Agent workbench | PairRoom supplies bindings, durable relay, and audit. The original harness owns configuration, permissions, and execution; Room selections are display-only. |
-  | **Embedded** | PairRoom's desktop or browser conversation and adapter controls, with Runtime, Provider, model, effort, and instructions chosen per slot | PairRoom owns the adapters and runs one native Turn at a time per Room. Anything you leave unset inherits native configuration. |
+  | **Native** (default and recommended) | Keeping your own Claude Code, Codex (including Codex Desktop), Grok Build, or Gemini CLI sessions in your usual terminal (such as [WezTerm](https://wezterm.org/)) or client, instead of moving into another editor or Agent workbench | PairRoom supplies bindings, durable relay, and audit. The original harness owns configuration, permissions, and execution; Room selections are display-only. |
+  | **Embedded** (optional) | PairRoom's desktop or browser conversation and adapter controls, with Runtime, Provider, model, effort, and instructions chosen per slot | PairRoom owns the adapters and runs one native Turn at a time per Room. Anything you leave unset inherits native configuration. |
 
 - **Customizable responsibilities.** By default one Agent plans and reviews while the other implements and supplements. A custom Room can instead ask them to discuss a plan together, each execute a part, then review the other's work. Responsibilities are not permissions or mandatory phases: simple tasks stay with the addressed Agent, and a finished review does not by itself authorize implementation.
 - **Transparent and interruptible.** Messages between the Agents are visible in the Room. In Native, each side's work also stays visible in its own terminal or client, so you can stop or correct it as soon as it drifts.
@@ -64,15 +64,17 @@ sh install-pairroom.sh
 pairroom version
 ```
 
-To look around without a model account, start a demo Service in the foreground:
+For daily work, install and sign in to the native CLIs you will use, open Desktop or run `pairroom service`, then follow [Native setup](#native-host-mode). **Native is the default and recommended Room mode.** New Rooms in Management and creation requests that omit `host_mode` select Native; existing Rooms keep their stored mode. `pairroom version` and `pairroom doctor` confirm the tools are installed, not that you are signed in.
+
+For an optional demonstration without a model account, start a demo Service in the foreground:
 
 ```bash
 pairroom service --mock --data-root "$HOME/.pairroom-demo"
 ```
 
-In Management, register a throwaway Git repository as a Project, create an **Embedded** Room, and send a small task. Mock never launches a vendor CLI or uses quota, so it shows the workflow, not model quality. `Ctrl+C` stops it. The startup URL carries a login token; don't share it.
+In Management, register a throwaway Git repository as a Project, explicitly select **Embedded** when creating the Room, and send a small task. Mock never launches a vendor CLI or uses quota, so it shows the workflow, not model quality. `Ctrl+C` stops it. The startup URL carries a login token; don't share it.
 
-For real work, install and sign in to each CLI you plan to use. **Native** ([Native setup](docs/NATIVE_RELAY.md)) keeps your existing sessions and is the recommended daily mode, though still experimental. **Embedded** ([Getting started](docs/GETTING_STARTED.md)) is the quickest first trial and the mode for choosing a Provider per slot. `pairroom version` and `pairroom doctor` confirm the tools are installed, not that you are signed in.
+Choose **Embedded** ([Getting started](docs/GETTING_STARTED.md)) when you need PairRoom-owned sessions and adapter controls or per-slot Provider overrides. Its creation form and Room view link back to the recommended Native setup.
 
 To have your coding Agent walk you through installation and checks, point it at [Agent-assisted setup](docs/AGENT_SETUP.md):
 
@@ -91,7 +93,7 @@ and help me install PairRoom and check my environment. Ask before each change.
 
 See [Security](SECURITY.md), [Concepts](docs/CONCEPTS.md), and [Storage](docs/STORAGE.md).
 
-## Native host mode (experimental)
+## Native host mode
 
 Before you start, make sure `pairroom` runs in both Agents' tool shells and one non-Mock Service is running for your data root. [Agent-assisted setup](docs/AGENT_SETUP.md#6-native-bind-two-existing-sessions) walks through both. Then, from the project worktree, install hooks for the Runtimes you use:
 
@@ -114,6 +116,10 @@ See [publication rules](docs/NATIVE_RELAY.md#what-is-published).
 After a turn ends, the Stop hook waits briefly for the peer's answer. Beyond that window, a wake-enabled Room can nudge an idle Claude Code or Codex session through its inbox or queue with a fixed, content-free message; PairRoom never starts or interrupts sessions. Waiting in the CLI makes no model calls, but how often a harness wakes, and what that costs, is up to the harness. Grok Build has no Service wake and at most seven Stop continuations, which makes it the weakest choice for long unattended runs, and a clipped Grok reply must be re-sent in full through `send`/`exchange`. See [long unattended runs](docs/NATIVE_RELAY.md#long-unattended-runs-by-runtime).
 
 [Native relay](docs/NATIVE_RELAY.md) covers installation, file-based evidence, cwd/worktree discovery, wake limits, and recovery. The skill is also available through `npx skills add sean2077/pairroom`; installing the skill alone does not install or approve hooks. The [vendor wake observations](docs/NATIVE_RELAY.md#verified-vendor-wake-surfaces) are dated and not re-certified for each release.
+
+### Work with a teammate on the LAN
+
+Each colleague runs their own local Service and native session. Enable hosting once in **Settings → LAN collaboration**, then create a Native Room with **Invite a teammate over LAN**, or run `pairroom relay bind --create --share lan`. Send the returned join command to the colleague. Their Agent requests access from its own session; you accept the exact receipt they return through your existing trusted channel. Either Service can host a different Room. Both owners can read the shared conversation and send messages, while credentials, native sessions, workspaces, and tool permissions remain local. See [Native LAN collaboration](docs/LAN_NATIVE.md) for the short workflow, explicit evidence uploads, reconnection, and revocation.
 
 ### Inspect and recover without replay
 
@@ -140,7 +146,7 @@ Desktop source builds use `make desktop-build`, `make desktop-package`, and `mak
 
 [Documentation map](docs/README.md) · [Configuration](docs/CONFIGURATION.md) · [CLI](docs/CLI_REFERENCE.md) · [API](docs/API_REFERENCE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Upgrading](docs/UPGRADING.md) · [Support](SUPPORT.md)
 
-Documentation on `main` tracks development. For an installed release, read that tag's documentation, and trust the binary's `--help` when the two differ. The [Changelog](CHANGELOG.md) records history; the reference pages describe current behavior. Native is still experimental: Mock runs, synthetic hooks, browser fixtures, and older working-session reports do not replace authenticated multi-round vendor testing, and no vendor acceptance or billed-token benchmark is claimed here. Desktop packages are not production-signed or notarized. The interface is available in English and Simplified Chinese; technical documents are in English.
+Documentation on `main` tracks development. For an installed release, read that tag's documentation, and trust the binary's `--help` when the two differ. The [Changelog](CHANGELOG.md) records history; the reference pages describe current behavior. Mock runs, synthetic hooks, browser fixtures, and older working-session reports do not replace authenticated multi-round vendor testing, and no vendor acceptance or billed-token benchmark is claimed here. Desktop packages are not production-signed or notarized. The interface is available in English and Simplified Chinese; technical documents are in English.
 
 ## Friends
 

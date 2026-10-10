@@ -145,6 +145,9 @@ func applyCallerDefaults(root, action string, o *options) error {
 		return errors.New("native session matches multiple relay bindings; inspect them and pass --room/--slot explicitly")
 	}
 	if len(matches) == 1 {
+		if action == "join" {
+			return nil // join validates the exact host-scoped Room before reuse
+		}
 		s := matches[0]
 		o.room, o.slot = s.Room, string(s.Slot)
 		if action == "bind" && o.endpoint == "" {
@@ -152,7 +155,7 @@ func applyCallerDefaults(root, action string, o *options) error {
 		}
 		return nil
 	}
-	if action == "bind" {
+	if action == "bind" || action == "join" {
 		// New bindings still resolve against the Service's active Room and pair
 		// selections, then associate from the harness session id at bind.
 		return nil

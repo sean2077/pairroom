@@ -514,6 +514,9 @@ async def verify_pair_profiles(browser, artifacts: Path, in_page_fixture: bool =
         await page.evaluate("location.hash='#/projects/p1'")
         await page.get_by_role('button', name='+ Create Room', exact=True).first.click()
         await wait_state("!document.getElementById('room-submit').disabled")
+        # These cases verify applied Provider overrides and their fail-closed
+        # validation, which belong to explicit Embedded creation.
+        await page.locator('#room-host-mode').select_option('embedded')
 
     async def close_dialog():
         await page.locator('#room-dialog [data-close-dialog="room-dialog"]').first.click()
@@ -734,6 +737,8 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
         await page.wait_for_timeout(100)
         await page.get_by_role('button', name='+ Create Room', exact=True).first.click()
         await page.wait_for_function("!document.getElementById('room-submit').disabled")
+        await expect(page.locator('#room-host-mode')).to_have_value('native')
+        await page.locator('#room-host-mode').select_option('embedded')
         assert await page.locator('#room-collaboration-mode option').evaluate_all('nodes=>nodes.map(n=>n.value)') == ['default', 'custom']
         assert await page.locator('#room-collaboration-mode').input_value() == 'default'
         assert 'Lead' in await page.locator('#slot1-responsibility-label').inner_text()
@@ -855,6 +860,8 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
         results.update(await verify_activation(browser))
         results.update(await verify_cleanup_controls(browser, artifacts, in_page_fixture))
         results.update(await verify_pair_profiles(browser, artifacts, in_page_fixture))
+        from test_management_lan_browser import verify_lan
+        results.update(await verify_lan(browser, artifacts, in_page_fixture))
         results['page_errors'] = errors
         (artifacts / 'results.json').write_text(json.dumps(results, indent=2) + '\n', encoding='utf-8')
         print(json.dumps(results, indent=2))

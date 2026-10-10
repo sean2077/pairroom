@@ -661,6 +661,8 @@ html[data-embed="1"] .session-copy {
 
 /* Collaboration is a read-only instruction summary, not a role switch. */
 .room-collaboration { flex: 0 0 auto; padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.embedded-mode-note { flex: 0 0 auto; margin: 0; padding: 7px 16px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.5; }
+.embedded-mode-note a { color: var(--accent); }
 .room-collaboration summary { cursor: pointer; color: var(--muted); }
 .room-collaboration pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; font: inherit; line-height: 1.6; margin: 10px 0 2px; }
 .permission-select { appearance: auto; width: 100%; min-height: 36px; margin-top: 8px; padding: 6px 8px; font-size: var(--text-control); }

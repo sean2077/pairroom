@@ -182,7 +182,9 @@ Native Participants/Details panels are independent on wide screens and mutually 
 
 ## Port, hostname, or token failure
 
-Built-in listeners accept **numeric loopback only**. LAN/public addresses, wildcards, `localhost`, and other hostnames are rejected even with a token. Use protected SSH local forwarding for remote access.
+Management, standalone and direct Room listeners accept **numeric loopback only**. LAN/public addresses, wildcards, `localhost`, and other hostnames are rejected on those surfaces even with a token. Use protected SSH local forwarding for deliberate access to the full local interface.
+
+For colleague collaboration, enable the separate **LAN sharing** listener in Service Settings and create a Native LAN Room. Select an assigned numeric private interface and allow its port through the intended network's firewall; the guest connects through its own local Service. A pending join needs acceptance of the exact request/key receipt. A changed TLS pin must not be bypassed, and a stale or revoked membership must not be recreated automatically. See [Native LAN collaboration](LAN_NATIVE.md#observe-and-recover) for connectivity, invitation, evidence and delivery recovery.
 
 For an occupied port, identify its owner; do not create another Service over the same root. Reopen the current authenticated Management URL after a restart invalidates browser sessions. Never share bootstrap URLs, cookies, or tokens. A custom Native Service uses `--service-file <root>/relay-endpoint.json` as a path, not pasted endpoint credentials. See [Security](../SECURITY.md).
 

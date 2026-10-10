@@ -4,8 +4,8 @@ PairRoom's browser UI uses a local HTTP API and SSE. CLI / UI is the preferred e
 
 ## Safety boundary
 
-- Every built-in listener accepts numeric loopback addresses only. Wildcard, LAN, and hostname binds are rejected, not enabled by setting a token;
-- For remote access, use SSH local port forwarding to the loopback listener and retain the normal browser-session or bearer authentication;
+- Management and ordinary Room listeners accept numeric loopback addresses only. The optional Native LAN listener binds a specific local private interface and exposes only the membership-scoped relay protocol;
+- For remote Management access, use SSH local port forwarding to the loopback listener and retain the normal browser-session or bearer authentication. A LAN invitation or member key grants no Management access;
 - The API must not return Provider secrets or absolute host paths of attachments;
 - A destructive request must name the Project / Room identity and obey archive, active Turn, and Binding preconditions.
 
@@ -21,7 +21,7 @@ Management Runtime status includes `cleanup_retryable:true` only when retained c
 
 `GET /api/v1/agent-catalog` and `POST /api/v1/agent-catalog/refresh` return all three Runtime entries with availability diagnostics, sanitized CC Switch Profile summaries, local model suggestions, disabled reasons, the current two Service defaults, and canonical `collaboration_default` instructions for the creation preview. The response never contains raw Profile configuration, endpoints, headers, tokens, API keys, or Runtime arguments. Refresh is explicit, and Room creation still re-resolves the selected Profile server-side instead of trusting the catalog returned to the browser.
 
-`POST /api/v1/projects/{project}/rooms` accepts an optional `name` and complete two-slot `bindings` map plus an optional complete `agents` map keyed by canonical ActorIDs `slot1` and `slot2`. HTTP accepts numeric `1`/`2` input aliases only at request parsing; legacy runtime-named strings are rejected. Omitting `agents` snapshots the saved default Agent pair profile, falling back to both current Service defaults only when no default profile exists. An optional `agent_pair_profile_id` explicitly selects a saved pair. Supplying both a non-empty profile ID and `agents` is rejected, as are missing profile IDs and partial/null `agents`. A complete explicit `agents` map bypasses the saved default; this is how the browser sends temporary overrides. A selection has this shape:
+`POST /api/v1/projects/{project}/rooms` accepts an optional `name` and complete two-slot `bindings` map plus an optional complete `agents` map keyed by canonical ActorIDs `slot1` and `slot2`. Native is the creation default; send `host_mode:"embedded"` for adapter-owned sessions. HTTP accepts numeric `1`/`2` input aliases only at request parsing; legacy runtime-named strings are rejected. For a local Room, omitting `agents` snapshots the saved default Agent pair profile, falling back to both current Service defaults only when no default profile exists. An optional `agent_pair_profile_id` explicitly selects a saved pair. Supplying both a non-empty profile ID and `agents` is rejected, as are missing profile IDs and partial/null `agents`. A complete explicit `agents` map bypasses the saved default; this is how the browser sends temporary overrides. Shared Native creation has the explicit one-owner selection contract described under [Native LAN collaboration](#native-lan-collaboration). A selection has this shape:
 
 ```json
 {
@@ -75,7 +75,7 @@ Saving validates the selection structure without materializing Providers or prob
 To create an embedded Room using a saved pair, omit `agents` and include:
 
 ```json
-{"agent_pair_profile_id":"pair-id","bindings":{"slot1":{"mode":"new"},"slot2":{"mode":"new"}}}
+{"host_mode":"embedded","agent_pair_profile_id":"pair-id","bindings":{"slot1":{"mode":"new"},"slot2":{"mode":"new"}}}
 ```
 
 Omit both `agents` and `agent_pair_profile_id` to use the saved default or Service defaults. Explicit full `agents` always wins by being the only selection source; do not send a profile ID alongside it. Profile contents are copied once, not linked to the Room.
@@ -111,7 +111,7 @@ Room creation also accepts optional `collaboration`. Omission or `{"mode":"defau
 {"collaboration":{"mode":"custom","instructions":"Agent 2 plans. Agent 1 implements. Both challenge unsupported assumptions."}}
 ```
 
-The server trims outer whitespace and requires non-blank UTF-8 without NUL, at most 16 KiB. Only `default` and `custom` are accepted. Default prose cannot be overwritten; choose custom instead. The response includes `{version, mode, instructions}` and the same record is stored in `room.created` and provisioning schema 5. PATCH does not accept mode or instruction changes. Retired Store/provisioning formats are rejected, not migrated implicitly; see [Protocol](PROTOCOL.md).
+The server trims outer whitespace and requires non-blank UTF-8 without NUL, at most 16 KiB. Only `default` and `custom` are accepted. Default prose cannot be overwritten; choose custom instead. The response includes `{version, mode, instructions}` and the same record is stored in `room.created` and the provisioning document. PATCH does not accept mode or instruction changes. See [Storage](STORAGE.md) and [Upgrading](UPGRADING.md) for current writer formats and the explicit previous-local-format read boundary.
 
 Participant snapshots add `responsibility` (`lead`, `executor`, or generic `participant`) and `permission_profile`. Modern `role` remains `peer` solely for old response readers; it is not a collaboration selector. Runtime policy fields describe the effective native policy.
 
@@ -162,13 +162,13 @@ PairRoom passes that exact, unique `optionId` to ACP. `cancel` returns ACP's can
 The following method/path patterns are extracted from production HTTP registrations in `internal/server/` and `internal/service/`, including named constants. Test URLs, query examples, and rejected path-traversal inputs are not API routes. Patterns without a method are the same-origin surface gateway; their allowed operations are enforced by its handler.
 
 <!-- generated:routes -->
-- `/api/v1/rooms/{room}/surface/{path...}`
 - `/api/v1/rooms/{room}/surface`
+- `/api/v1/rooms/{room}/surface/{path...}`
 - `DELETE /api/v1/agent-pair-profiles/{profile}`
 - `DELETE /api/v1/attachments/{id}`
 - `DELETE /api/v1/projects/{project}`
-- `DELETE /api/v1/rooms/{room}/native-bindings/{slot}`
 - `DELETE /api/v1/rooms/{room}`
+- `DELETE /api/v1/rooms/{room}/native-bindings/{slot}`
 - `DELETE /api/v1/session`
 - `GET /api/v1/agent-catalog`
 - `GET /api/v1/agent-pair-profiles`
@@ -178,8 +178,12 @@ The following method/path patterns are extracted from production HTTP registrati
 - `GET /api/v1/git/diff`
 - `GET /api/v1/git/status`
 - `GET /api/v1/health`
+- `GET /api/v1/lan`
+- `GET /api/v1/lan/joined`
+- `GET /api/v1/lan/joined/{room}/attachments/{attachment}`
 - `GET /api/v1/messages`
 - `GET /api/v1/notifications`
+- `GET /api/v1/rooms/{room}/lan`
 - `GET /api/v1/rooms/{room}/wake-config`
 - `GET /api/v1/service`
 - `GET /api/v1/session`
@@ -194,19 +198,22 @@ The following method/path patterns are extracted from production HTTP registrati
 - `POST /api/v1/approvals/{id}`
 - `POST /api/v1/attachments`
 - `POST /api/v1/diagnostics`
+- `POST /api/v1/lan/join`
+- `POST /api/v1/lan/joined/{room}/{action}`
 - `POST /api/v1/maintenance/room-deletions/retry`
+- `POST /api/v1/messages`
 - `POST /api/v1/messages/{id}/cancel`
 - `POST /api/v1/messages/{id}/retry`
-- `POST /api/v1/messages`
 - `POST /api/v1/participants/{actor}/{action}`
+- `POST /api/v1/projects`
 - `POST /api/v1/projects/{project}/refresh`
 - `POST /api/v1/projects/{project}/rooms`
-- `POST /api/v1/projects`
 - `POST /api/v1/relay/{room}/{slot}/{action}`
 - `POST /api/v1/rooms/batch-archive`
 - `POST /api/v1/rooms/batch-delete`
 - `POST /api/v1/rooms/{room}/activate`
 - `POST /api/v1/rooms/{room}/archive`
+- `POST /api/v1/rooms/{room}/lan/{action}`
 - `POST /api/v1/rooms/{room}/native-bindings/{slot}`
 - `POST /api/v1/rooms/{room}/open-browser`
 - `POST /api/v1/rooms/{room}/restore`
@@ -214,6 +221,7 @@ The following method/path patterns are extracted from production HTTP registrati
 - `POST /api/v1/rooms/{room}/wake-config`
 - `POST /api/v1/session`
 - `PUT /api/v1/agent-pair-profiles/{profile}`
+- `PUT /api/v1/lan`
 - `PUT /api/v1/participants/{actor}/permissions`
 - `PUT /api/v1/settings`
 <!-- /generated:routes -->
@@ -258,13 +266,13 @@ Diagnostics create no durable Room events, do not activate/suspend/resume existi
 
 ## Native host mode
 
-`POST /api/v1/projects/{project}/rooms` accepts immutable `host_mode: "embedded" | "native"` (default embedded). New Rooms use Store 12/provisioning 5 in both modes. Native creation retains two Agent selections but does not apply providers/models/effort/permissions or spawn adapters; Claude Code, Codex, Grok Build and Gemini CLI are supported. Existing adapter-session Binding requests are rejected. The native surface uses the same scoped Management gateway but a relay-specific snapshot/UI.
+`POST /api/v1/projects/{project}/rooms` accepts immutable `host_mode: "embedded" | "native"` (default native; choose embedded explicitly). New Rooms use Store 13/provisioning 6 in both modes; existing local Room modes remain unchanged. Local Native creation retains two Agent selections but does not apply providers/models/effort/permissions or spawn adapters; Claude Code, Codex, Grok Build and Gemini CLI are supported. Existing adapter-session Binding requests are rejected. The native surface uses the same scoped Management gateway but a relay-specific snapshot/UI.
 
 Management-authenticated `POST /api/v1/rooms/{room}/native-bindings/{slot}` accepts a public bind ID, credential hash, the official session ID captured from the harness environment, and explicit replacement intent; association is immediate. `DELETE` revokes the binding without claiming to stop native work. The response contains public metadata and bootstrap instructions, never credentials; a replacement of an active generation with inbox work adds `replaced` (body-free message IDs, see [CLI reference](CLI_REFERENCE.md)). Model-facing long-lived secrets are not part of this API.
 
 `POST /api/v1/relay/{room}/{slot}/{action}` has separate relay authentication, not browser-cookie or management-token authority. It requires `Authorization: Relay <secret>` and the CLI's binding/generation/official-session headers; credentials are loaded from an owner-only file, not command arguments. Actions are `inspect`, `confirm`, `report`, `publication`, `send`, `wait`, `ack`, `status`, `summary`, `history`, `doctor`, `peer`, `failure`, `park`, `unbind`, and `upload`. `history` is a read-only evidence page and `doctor` is a read-only capability/cooldown report for an already active Room; neither claims work, requeues it, activates a suspended runtime, or contacts a model. `summary` is the body-free transport inspection used by `relay status --brief` / `relay reconcile --brief`: inbox counts and at most eight unknown-delivery recovery IDs, without message bodies, native session/transcript references, or the audit log. Relay actions require a live binding; an incomplete pre-upgrade binding permits only inspection/revocation and this body-free summary, and requires explicit replacement; `confirm` re-checks the hook's official session identity against the bind-time capture. Every operation rechecks the live generation. A same-ID `send` whose delivered payload differs from the accepted original returns HTTP 409 with `code:"send_payload_conflict"`; nothing new is published. Body limit is 256 KiB UTF-8 before JSON escaping; HTTP JSON is bounded to 2 MiB. Wait is bounded to 30 seconds and performs no claim while idle. With `park: true`, an empty inbox returns `{"claim":null}` at once unless a peer reply to this slot is expected ([Protocol](PROTOCOL.md#native-host-protocol-v8)). For Grok with `park: true`, wait instead probes readiness without claiming: `{"claim":null,"foreground_required":true}` means run a foreground wait, not delivery or acknowledgement. This leaves the full FIFO input queued and avoids Grok's clipped hook feedback. Only foreground collection or a non-Grok hook acknowledges after writing the full envelope to stdout.
 
-Within a native Room surface, `GET api/v1/snapshot` returns `{room, relay, protocol, config_notice, summary, identities}`. `relay` contains public bindings, ordered messages, audit entries and a sequence cursor. `GET api/v1/events` emits `native` SSE invalidations; clients refresh snapshots, never replay commands. `POST api/v1/messages` accepts `{id,to,text,attachment_ids,quote_id}`. Quoted messages must belong to the same Room. `POST api/v1/messages/{id}/cancel` is queued-only; `/retry` requires an unknown source and generates a new ID. `POST api/v1/participants/{slot}/park` accepts `{enabled}`. Uploads return the attachment object directly; downloads retain existing authenticated image validation. There is no native Interrupt/start/restart/permission control.
+Within a native Room surface, `GET api/v1/snapshot` returns `{room, relay, protocol, config_notice, summary, identities}`. `relay` contains public bindings, ordered messages, audit entries and a sequence cursor. `GET api/v1/events` emits `native` SSE invalidations; clients refresh snapshots, never replay commands. `POST api/v1/messages` accepts `{id,to,text,attachment_ids,quote_id}`. Quoted messages must belong to the same Room. `POST api/v1/messages/{id}/cancel` is queued-only; `/retry` requires an unknown source and generates a new ID. `POST api/v1/participants/{slot}/park` accepts `{enabled}`. Uploads return the attachment object directly. Downloads authenticate and validate the stored attachment kind, media type, size and bytes; explicit text evidence uses `kind:"file"` and a download link rather than an image preview. There is no native Interrupt/start/restart/permission control.
 
 For routine display, `GET api/v1/snapshot?tail=1` returns at most 300 complete recent messages and 80 recent audit entries, with `relay.total_messages` and `relay.total_audit` describing the full retained history. Message and quote text share a 1 MiB budget; the newest message is always retained intact. This bounds text, not total JSON bytes including metadata. Unparameterized snapshots and `GET api/v1/export` remain complete; export ignores `tail=1`. The bounded view is not an inbox, an audit-retention limit, or evidence that older pending work disappeared.
 
@@ -300,3 +308,35 @@ Relay credentials use POST `history`/`doctor` through the existing relay API.
 History, inspection and review do not grant native execution/approval control.
 The Native snapshot additionally exposes a body-free `summary`; its sequence
 identifies the observation independently of the bounded chat snapshot.
+
+## Native LAN collaboration
+
+The local Management API owns listener settings, explicit shared-Room creation, and the human owner's controls. All routes in the following tables retain local Management bearer or browser-session/CSRF authentication. A relay setup credential may request a local guest join or create a Native Room through its existing scoped setup path; it cannot change the LAN listener or operate the joined human view. The workflow is documented in [Native LAN collaboration](LAN_NATIVE.md).
+
+| Method/path | Request and result |
+|---|---|
+| `GET /api/v1/lan` | Read `{enabled,address,endpoint?,host_pin?,diagnostic?}`; reading does not enable hosting |
+| `PUT /api/v1/lan` | Explicitly save `{enabled,address}` and bind or stop the LAN listener; return the current status |
+| `GET /api/v1/rooms/{room}/lan` | Read public `{invites,pending,member?}`; pending entries expose request ID, public key fingerprint, runtime and optional unverified label |
+| `POST /api/v1/rooms/{room}/lan/invite` | `{}` returns `{invite,expires_at}`; recover the current unconsumed invitation on a repeated request |
+| `POST /api/v1/rooms/{room}/lan/accept` | `{receipt}` accepts the exact receipt received through the owners' trusted channel; names and network addresses are insufficient |
+| `POST /api/v1/rooms/{room}/lan/revoke` | `{}` revokes further member access; it cannot recall downloaded content or stop a native process |
+
+LAN hosting is disabled initially. The address must be numeric with an explicit port: an assigned private/link-local interface, or numeric loopback for local verification. Wildcard, public and hostname addresses are rejected. Invalid requests return 400. A bind failure is reported as 400 with the saved configuration's diagnostic available on the next GET; do not infer that a failed response reverted the saved preference.
+
+Shared creation adds `sharing:"lan"`, `owner_slot:"slot1"|"slot2"`, and only that owner's `agents` entry to a Native create request. The peer is stored as `{awaiting_peer:true}` with no fabricated Runtime/session. A saved pair profile cannot select the remote agent. Admission records the peer's actual Runtime. Host mode, sharing, and owner slot are immutable; existing local Rooms cannot be converted to shared history. A public invitation grants only the right to request membership. Before exact-receipt acceptance, the guest cannot read Room content or claim work.
+
+| Method/path | Request and result |
+|---|---|
+| `POST /api/v1/lan/join` | Native CLI setup request carrying the public invitation and local binding metadata; returns a pending receipt or confirmed local association |
+| `GET /api/v1/lan/joined` | `{rooms:[...]}` local guest registrations; the same summaries appear in `GET /api/v1/service` as `joined_rooms` |
+| `POST /api/v1/lan/joined/{room}/summary` | `{}` returns the remote Room's body-free relay summary |
+| `POST /api/v1/lan/joined/{room}/history` | `{id?,cursor?,limit?,pending?,since?}` returns a bounded relay history page |
+| `POST /api/v1/lan/joined/{room}/send` | `{id,to,text,attachment_ids?,quote_id?}` publishes as the authenticated joined human; the host derives author provenance |
+| `POST /api/v1/lan/joined/{room}/receipt` | `{id}` returns `{accepted,message?}` for the original joined-human publication ID |
+| `GET /api/v1/lan/joined/{room}/attachments/{attachment}` | Authorize against the host and validate shared metadata/bytes before downloading, including cached files |
+| `POST /api/v1/lan/joined/{room}/leave` | `{}` ends membership and clears its local active registration after the host response; already denied membership can also be left locally |
+
+Guest route IDs are local opaque identifiers derived from host identity and remote Room ID, not a second authoritative Room. Summaries carry `{id,remote_room_id,name,workspace,slot,runtime,status,connected,last_seen,host_pin,endpoint,generation}` without private keys, relay credentials, or native transcript/session paths. The workspace is the guest's own local path. `connected` describes transport observation, not native collector presence or model acceptance. A lost human publication response retains the original ID and immutable payload; checking its receipt does not publish again. An identical explicit retry returns the original receipt, while changed content under that ID is rejected.
+
+The separate TLS listener implements only the fixed Native membership protocol; use the CLI/local Service bridge rather than opening it in a browser. Invitations pin the host key. A per-Room client certificate identifies the guest, and each admitted operation rechecks its bound slot, public key, bind ID and generation. It exposes no Management, workspace browsing, provider, process, approval or arbitrary proxy route. Shared human messages carry `author:"host_owner"` or `author:"lan:<fingerprint>"`; both owners can see `@user` publications. Native session IDs/transcript paths remain local. Evidence messages contain attachment IDs, filenames, media types, lengths and hashes; the receiver explicitly downloads bytes without treating them as permission to run a script.

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
@@ -43,6 +44,9 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		if _, err := requireSessionID(callerRuntime(o)); err != nil {
 			return err
 		}
+	}
+	if !o.create && strings.HasPrefix(o.room, "lan_") {
+		return resumeLANBinding(ctx, root, o, out)
 	}
 	if o.endpoint == "" {
 		var err error
@@ -210,7 +214,25 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 	if wakeErr != nil {
 		payload["wake_notice"] = "Claude external wake is unavailable; relay remains ready. Use relay wait or rebind in the intended session."
 	}
-	if created {
+	if created && o.share == "lan" {
+		client, err := load(dir)
+		if err != nil {
+			return err
+		}
+		var invitation struct {
+			Invite    string    `json:"invite"`
+			ExpiresAt time.Time `json:"expires_at"`
+		}
+		if err := client.call(ctx, "invite", nil, &invitation); err != nil {
+			return fmt.Errorf("LAN Room is bound but invitation was not confirmed: %w; run pairroom relay invite --room %s", err, o.room)
+		}
+		payload["invite"] = invitation.Invite
+		payload["expires_at"] = invitation.ExpiresAt
+		payload["peer_join"] = "pairroom relay join " + quoteShellPath(invitation.Invite)
+		payload["sharing"] = "lan"
+		payload["peer_status"] = "awaiting_peer"
+		payload["admission_notice"] = "The invitation permits a join request only. Confirm the exact request receipt from your colleague before relay accept."
+	} else if created {
 		payload["peer_join"] = bindCommand(root, endpointPath, o.room, peerSlot(slot))
 		payload["peer_join_local"] = localBindCommand(endpointPath, o.room, peerSlot(slot))
 	}

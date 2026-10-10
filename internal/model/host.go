@@ -1,7 +1,7 @@
 package model
 
-// HostMode is immutable for a Room. Empty is accepted only at creation (the
-// embedded default) or when reading the versioned provisioning-3 contract.
+// HostMode is immutable for a Room. Empty is accepted only at creation and
+// selects Native. Persisted Rooms always require an explicit host mode.
 type HostMode string
 
 const (
@@ -12,7 +12,7 @@ const (
 func (m HostMode) Valid() bool { return m == HostEmbedded || m == HostNative }
 func (m HostMode) ForCreation() HostMode {
 	if m == "" {
-		return HostEmbedded
+		return HostNative
 	}
 	return m
 }

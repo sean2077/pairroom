@@ -17,7 +17,7 @@ func TestEmbeddedRuntimeArchiveInterruptsActiveTurnAndClosesRuntime(t *testing.T
 	repoPath := testGitRepo(t)
 	commitArchiveTestRepository(t, repoPath)
 	registry, project := testRegistry(t, repoPath)
-	durable, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+	durable, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID,
 		Name:      "Active archive Room",
 		Bindings:  specs(BindingNew, BindingNew, "active-archive"),

@@ -50,6 +50,8 @@ type ManagementServerConfig struct {
 }
 
 type ManagementServer struct {
+	lanHost       *lanHostServer
+	lanGuests     *lanGuestManager
 	registry      *Registry
 	runtimes      *RuntimeManager
 	provisioner   BindingProvisioner
@@ -125,6 +127,7 @@ type ServiceSnapshot struct {
 	GeneratedAt          time.Time               `json:"generated_at"`
 	Projects             []Project               `json:"projects"`
 	Rooms                []Room                  `json:"rooms"`
+	JoinedRooms          []lanGuestSummary       `json:"joined_rooms,omitempty"`
 	Runtimes             []RuntimeStatus         `json:"runtimes"`
 	RuntimePolicy        RuntimePolicy           `json:"runtime_policy"`
 	Summary              ServiceSummary          `json:"summary"`
@@ -177,11 +180,22 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 			server.agentResolver = native.cfg.Resolver
 		}
 	}
+	if err := initLANGuests(server); err != nil {
+		server.cancelStream()
+		return nil, err
+	}
+	if err := initLANHost(server); err != nil {
+		server.lanGuests.close()
+		server.cancelStream()
+		return nil, err
+	}
 	mux := http.NewServeMux()
 	webui.Mount(mux)
 	server.mountAgentPairProfiles(mux)
 	server.mountNavigationOrder(mux)
 	server.mountNativeRelay(mux)
+	server.mountLANHost(mux)
+	server.mountLANGuests(mux)
 	mux.HandleFunc("POST "+diagnosticsPath, server.runDiagnostics)
 	mux.HandleFunc("POST /api/v1/session", server.createBrowserSession)
 	mux.HandleFunc("GET /api/v1/session", server.readBrowserSession)
@@ -242,6 +256,8 @@ func (s *ManagementServer) Shutdown(ctx context.Context) error {
 	// End open event streams first: http.Server.Shutdown waits for every
 	// active handler, and a Room tab's SSE never finishes on its own.
 	s.cancelStream()
+	s.lanHost.close()
+	s.lanGuests.close()
 	err := s.http.Shutdown(ctx)
 	if err == nil {
 		// A cleanly stopped Service must not leave its bearer token sitting in
@@ -309,6 +325,7 @@ func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
 	}
 	healthErr := s.registry.Healthy()
 	payload := ServiceSnapshot{
+		JoinedRooms:      s.lanGuests.summaries(),
 		CLIBuildMismatch: s.cliBuild.snapshot(),
 		Version:          version.Describe(), Commit: version.Commit, BuildDate: version.BuildDate,
 		StoreSchema: version.StoreSchema, RepositoryURL: version.RepositoryURL,
@@ -436,6 +453,8 @@ func (s *ManagementServer) removeProject(w http.ResponseWriter, r *http.Request)
 
 func (s *ManagementServer) provisionRoom(w http.ResponseWriter, r *http.Request) {
 	var request struct {
+		Sharing            string                        `json:"sharing,omitempty"`
+		OwnerSlot          model.ActorID                 `json:"owner_slot,omitempty"`
 		HostMode           model.HostMode                `json:"host_mode"`
 		AgentPairProfileID string                        `json:"agent_pair_profile_id"`
 		Collaboration      *model.Collaboration          `json:"collaboration"`
@@ -475,6 +494,22 @@ func (s *ManagementServer) provisionRoom(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
+	if request.Sharing == "lan" {
+		if request.AgentPairProfileID != "" {
+			writeManagementError(w, 400, "LAN creation selects only its local owner runtime")
+			return
+		}
+		if s.lanHost.status().Endpoint == "" {
+			writeManagementError(w, 409, "Enable LAN sharing in Service Settings first")
+			return
+		}
+		var err error
+		agents, err = prepareLANSelections(request.OwnerSlot, agents)
+		if err != nil {
+			writeManagementError(w, 400, err.Error())
+			return
+		}
+	}
 	// Native rooms revalidate selections at creation like embedded rooms: the
 	// persisted AgentSelection is a durable fact and a CC Switch ProviderRef
 	// must be re-read at creation validation. Display-only native semantics
@@ -488,7 +523,7 @@ func (s *ManagementServer) provisionRoom(w http.ResponseWriter, r *http.Request)
 		agents = validated
 	}
 	room, err := s.registry.ProvisionRoom(r.Context(), ProvisionRequest{
-		HostMode:      request.HostMode,
+		HostMode: request.HostMode, Sharing: request.Sharing, OwnerSlot: request.OwnerSlot,
 		Collaboration: request.Collaboration,
 		ProjectID:     r.PathValue("project"), Name: request.Name, Bindings: request.Bindings, Agents: agents,
 	}, s.provisioner)
@@ -813,6 +848,18 @@ func (s *ManagementServer) archiveRoomByID(ctx context.Context, roomID string) (
 	if room.Archived() {
 		return room, true, nil
 	}
+	if room.Sharing == "lan" {
+		n, err := s.sharedNativeRuntime(ctx, roomID)
+		if err != nil {
+			return Room{}, false, err
+		}
+		release := n.acquire()
+		err = n.engine.RevokeLANMember()
+		release()
+		if err != nil {
+			return Room{}, false, err
+		}
+	}
 	// Archive stops active work by default: it closes the Room mutation gate,
 	// interrupts the current Agent Turn so the operator does not have to stop
 	// it from inside the Room first, waits for the runtime to settle, and only
@@ -972,7 +1019,7 @@ func scopedRelaySetupRoute(method, path string) bool {
 	switch {
 	case method == http.MethodGet && (path == "/api/v1/service" || path == "/api/v1/agent-pair-profiles" || path == "/api/v1/agent-catalog"):
 		return true
-	case method == http.MethodPost && path == "/api/v1/projects":
+	case method == http.MethodPost && (path == "/api/v1/projects" || path == "/api/v1/lan/join"):
 		return true
 	}
 	if rest, ok := strings.CutPrefix(path, "/api/v1/projects/"); ok && method == http.MethodPost {

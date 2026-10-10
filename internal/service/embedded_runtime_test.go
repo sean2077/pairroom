@@ -31,7 +31,7 @@ func TestEmbeddedRuntimesIsolateRoomStateBindingsAndHTTPAuth(t *testing.T) {
 		t.Fatalf("create test HEAD: %v: %s", err, output)
 	}
 	registry, project := testRegistry(t, repo)
-	roomA, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+	roomA, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID,
 		Name:      "Room A",
 		Bindings:  specs(BindingNew, BindingNew, "room-a"),
@@ -39,7 +39,7 @@ func TestEmbeddedRuntimesIsolateRoomStateBindingsAndHTTPAuth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	roomB, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+	roomB, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID,
 		Name:      "Room B",
 		Bindings:  specs(BindingNew, BindingNew, "room-b"),
@@ -601,7 +601,7 @@ func TestEmbeddedRuntimeCloseTimeoutIsRetryableAndDoesNotInterruptTurn(t *testin
 		t.Fatalf("create test HEAD: %v: %s", err, output)
 	}
 	registry, project := testRegistry(t, repo)
-	durable, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+	durable, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID,
 		Name:      "Drain Race Room",
 		Bindings:  specs(BindingNew, BindingNew, "drain-race"),

@@ -82,6 +82,10 @@
 
   const ordering = window.PairRoomOrder.create({ t, node, getSnapshot: () => state.snapshot, api, refresh, render, toast,
     isCurrent: () => { const generation = state.sessionGeneration; return () => generation === state.sessionGeneration && state.authenticated; } });
+  const lan = window.PairRoomLAN.create({ t, node, actionButton, api: (path, options) => api(path, options), settingsPanel, settingRow, copyText,
+    showDialog, closeDialog, confirm: openConfirm, refresh, renderSettings, getSnapshot: () => state.snapshot,
+    isSettings: () => state.route.name === 'settings' && state.settingsSection === 'lan',
+    isCurrent: () => { const generation = state.sessionGeneration; return () => generation === state.sessionGeneration && state.authenticated; } });
 
   // Startup translation is declarative; a rendered state/operation takes over
   // its label so later global localization cannot restore misleading defaults.
@@ -157,6 +161,7 @@
   function invalidateSessionReads() {
     diagnostics.reset();
     ordering.cancel();
+    lan.reset();
     state.projectFilters.clear();
     state.sessionGeneration += 1;
     state.refreshPromise = null;
@@ -452,7 +457,7 @@
     }
     if (parts[0] === 'settings') {
       const section = parts[1] === 'diagnostics' ? 'service' : parts[1];
-      const known = ['interface', 'pair-profiles', 'runtime', 'operations', 'service', 'boundaries', 'about', ...(window.PairRoomDesktop ? ['desktop'] : [])];
+      const known = ['interface', 'lan', 'pair-profiles', 'runtime', 'operations', 'service', 'boundaries', 'about', ...(window.PairRoomDesktop ? ['desktop'] : [])];
       return { name: 'settings', section: section && (known.includes(section) ? section : 'interface'), roomID: section === 'service' ? parts[2] || '' : '' };
     }
     if (parts[0] === 'rooms' && parts[1]) return { name: 'room', roomID: parts[1] };
@@ -944,6 +949,7 @@
               : emptyState('◎', t("ui.thereIsCurrentlyNoActiveRuntime"), t("ui.afterOpeningARoomTheRuntimeWillStartLazilyBasedOnCapacity"), true)
           )
         ),
+        lan.joinedList(),
         panel(t('common.projects'), '',
           projects.length ? node('div', { className: 'list' }, ...projects.slice(0, 6).map(renderProjectOverviewItem))
             : emptyState('⌂', t("ui.notYetRegisteredProject"), '', true, actionButton(t("ui.registerYourFirstProject"), () => openProjectDialog(), 'primary-button compact-button')),
@@ -1185,6 +1191,7 @@
       actions.append(actionButton(t("ui.browserOpens"), () => openRoomInBrowserAction(room.id), 'secondary-button compact-button room-action-control', stopping || cleanupBlocked));
       actions.append(actionButton(t("ui.rename"), () => openRenameDialog(room), 'secondary-button compact-button room-action-control'));
       if (room.host_mode === 'native') actions.append(actionButton(t('room.wake.button'), () => openWakeConfig(room), 'secondary-button compact-button room-action-control'));
+      if (room.sharing === 'lan') actions.append(actionButton(t('room.lan.roomAccess'), () => lan.openRoom(room), 'secondary-button compact-button room-action-control'));
       actions.append(actionButton(t("ui.archive"), () => archiveRoom(room), 'danger-button outline compact-button room-action-control'));
     }
     return ordering.decorate(node('article', { className: 'room-row', 'data-room-id': room.id }, node('div', { className: 'room-row-main' }, title, meta), actions), 'room', room.id);
@@ -1195,6 +1202,9 @@
   function roomAgentGroup(actor, room) {
     const selection = room.agents?.[actor];
     const binding = room.bindings?.[actor];
+    if (selection?.awaiting_peer) return node('div', { className: 'room-meta-group', 'data-slot': actor },
+      node('span', { className: 'room-meta-label', textContent: actor === 'slot1' ? t('agent.agent1') : t('agent.agent2') }),
+      node('span', { className: 'room-meta-line', textContent: t('room.lan.awaitingPeer') }));
     const runtimeName = room.runtime_names?.[actor] || '';
     const title = [
       runtimeName,
@@ -1323,7 +1333,7 @@
   function renderSettings() {
     if (state.settingsSection === 'pair-profiles' && !state.agentPairProfiles && !state.agentPairProfilesPromise && !state.agentPairProfilesError) refreshPairProfileSettings();
     const sections = [
-      ['interface', t("ui.interfaceExperience")], ['pair-profiles', t('agent.pairProfile.title')], ['runtime', t("ui.runtimeStrategy")], ['operations', t("ui.daemonOperationAndMaintenance")], ['service', t('diagnostics.title')], ['boundaries', t("ui.securityBoundary")], ['about', t("ui.about")],
+      ['interface', t("ui.interfaceExperience")], ['lan', t('room.lan.settings')], ['pair-profiles', t('agent.pairProfile.title')], ['runtime', t("ui.runtimeStrategy")], ['operations', t("ui.daemonOperationAndMaintenance")], ['service', t('diagnostics.title')], ['boundaries', t("ui.securityBoundary")], ['about', t("ui.about")],
     ];
     if (window.PairRoomDesktop) sections.splice(1, 0, ['desktop', t('desktop.settings')]);
     const nav = node('nav', { className: 'panel settings-nav', 'aria-label': t("ui.setUpPartitions") }, ...sections.map(([key, label]) => {
@@ -1346,6 +1356,7 @@
   function renderSettingsSection() {
     const snapshot = state.snapshot;
     const policy = runtimePolicy(snapshot);
+    if (state.settingsSection === 'lan') return lan.settings();
     if (state.settingsSection === 'pair-profiles') return renderPairProfileSettings();
     if (state.settingsSection === 'desktop' && window.PairRoomDesktop) return renderDesktopSettings();
     if (state.settingsSection === 'runtime') {
@@ -2200,7 +2211,9 @@
     select.replaceChildren(...projects.map((project) => node('option', { value: project.id, textContent: `${projectName(project)} — ${project.root}` })));
     select.value = projects.some((project) => project.id === projectID) ? projectID : (projects[0]?.id || '');
     $('room-name').value = '';
-    $('room-host-mode').value = 'embedded';
+    $('room-host-mode').value = 'native';
+    $('room-share-lan').checked = false;
+    $('room-lan-owner-slot').value = 'slot1';
     $('room-collaboration-mode').value = 'default';
     $('room-collaboration-instructions').value = '';
     document.querySelectorAll('#room-dialog [data-room-only]').forEach((element) => { element.hidden = editor; });
@@ -2262,12 +2275,23 @@
   }
 
   function nativeCreation() { return !state.pairProfileMode && $('room-host-mode').value === 'native'; }
+  function lanCreation() { return nativeCreation() && $('room-share-lan').checked; }
   function syncHostMode() {
     const native = nativeCreation();
+    const shared = lanCreation();
     $('room-native-help').hidden = !native;
+    $('room-embedded-help').hidden = native || state.pairProfileMode;
+    $('room-lan-choice').hidden = !native;
+    $('room-lan-fields').hidden = !shared;
+    $('room-lan-peer').hidden = !shared;
+    $('room-pair-profile-controls').hidden = shared;
     const warning = document.querySelector('[data-i18n="room.collaboration.yoloWarning"]');
     if (warning) warning.hidden = native || state.pairProfileMode;
     for (const actor of ['slot1', 'slot2']) {
+      const peer = shared && actor !== $('room-lan-owner-slot').value;
+      const card = document.querySelector(`fieldset[data-actor="${actor}"]`);
+      card.hidden = peer;
+      card.disabled = peer;
       if (native) document.querySelector(`input[name="${actor}-mode"][value="new"]`).checked = true;
       document.querySelectorAll(`input[name="${actor}-mode"]`).forEach(input => { input.disabled = native; });
       const select = $(`${actor}-runtime`);
@@ -2294,6 +2318,8 @@
     if (state.pairProfileBusy || $('room-submit').disabled) return;
     const projectID = $('room-project-id').value;
     const name = $('room-name').value.trim();
+    const shared = lanCreation();
+    const ownerSlot = $('room-lan-owner-slot').value;
     if (!validRoomName($('room-name').value, true)) {
       showFormError('room-form-error', t('room.invalidName'));
       return;
@@ -2306,6 +2332,7 @@
     const collaboration = { mode, ...(mode === 'custom' ? { instructions } : {}) };
     const bindings = {};
     for (const actor of ['slot1', 'slot2']) {
+      if (shared && actor !== ownerSlot) { bindings[actor] = { mode: 'new' }; continue; }
       if (!nativeCreation() && (!$(`${actor}-runtime`).reportValidity() || !$(`${actor}-provider`).reportValidity())) return;
       if (nativeCreation() && !['claude', 'codex', 'grok', 'gemini'].includes($(`${actor}-runtime`).value)) { showFormError('room-form-error', t('ui.native.supported')); return; }
       const mode = document.querySelector(`input[name="${actor}-mode"]:checked`)?.value || 'new';
@@ -2316,15 +2343,18 @@
       }
 	  bindings[actor] = mode === 'existing' ? { mode, session_id: sessionID } : { mode };
 	}
-	const agents = { slot1: readAgentSelection('slot1'), slot2: readAgentSelection('slot2') };
+	const agents = shared ? { [ownerSlot]: readAgentSelection(ownerSlot) }
+      : { slot1: readAgentSelection('slot1'), slot2: readAgentSelection('slot2') };
     await withBusy($('room-submit'), async () => {
       try {
         hideFormError('room-form-error');
-		await api(`/api/v1/projects/${encodeURIComponent(projectID)}/rooms`, { method: 'POST', body: JSON.stringify({ name, bindings, agents, collaboration, host_mode: $('room-host-mode').value }) });
+        if (shared) await lan.ensureEnabled();
+		const created = await api(`/api/v1/projects/${encodeURIComponent(projectID)}/rooms`, { method: 'POST', body: JSON.stringify({ name, bindings, agents, collaboration, host_mode: $('room-host-mode').value, ...(shared ? { sharing: 'lan', owner_slot: ownerSlot } : {}) }) });
         closeDialog('room-dialog');
-        toast(t("ui.roomCreated"), t(nativeCreation() ? "ui.native.pending" : "ui.agentBindingsCompletedAtomicVerification"), 'success');
+        toast(t("ui.roomCreated"), t(shared ? "room.lan.created" : nativeCreation() ? "ui.native.pending" : "ui.agentBindingsCompletedAtomicVerification"), 'success');
         await refresh({ forceRender: true, fresh: true });
         navigate(`#/projects/${encodeURIComponent(projectID)}`);
+        if (shared) await lan.openRoom(created);
       } catch (error) {
         showFormError('room-form-error', error.message);
       }
@@ -2379,6 +2409,7 @@
     $('context-room-name').textContent = room.name;
     $('context-close-room').disabled = !state.tabs.includes(room.id);
     $('context-archive-room').disabled = room.lifecycle === 'archived';
+    $('context-lan-room').hidden = room.sharing !== 'lan' || room.lifecycle === 'archived';
     const scope = trigger.closest('#room-tree') ? '#room-tree' : '#view';
     // A Room alone in its Project/lifecycle group has nowhere to move; keep the
     // named group out of the menu instead of announcing an empty one.
@@ -3242,6 +3273,9 @@
   $('project-form').addEventListener('submit', submitProject);
   $('room-collaboration-mode').addEventListener('change', syncCollaborationControls);
   $('room-host-mode').addEventListener('change', syncHostMode);
+  $('room-share-lan').addEventListener('change', syncHostMode);
+  $('room-lan-owner-slot').addEventListener('change', syncHostMode);
+  $('room-lan-settings').addEventListener('click', () => closeDialog('room-dialog'));
   $('room-form').addEventListener('submit', createRoom);
   $('rename-form').addEventListener('submit', submitRename);
   document.addEventListener('contextmenu', (event) => openRoomContextMenu(event));
@@ -3252,7 +3286,7 @@
       event.preventDefault(); closeRoomContextMenu(true);
     } else if (state.contextRoomID && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
       event.preventDefault();
-      const items = [...$('room-context-menu').querySelectorAll('[role="menuitem"]:not(:disabled)')];
+      const items = [...$('room-context-menu').querySelectorAll('[role="menuitem"]:not(:disabled):not([hidden])')];
       const index = items.indexOf(document.activeElement);
       const step = event.key === 'ArrowUp' ? -1 : 1;
       // Focus may sit on the menu body (its name band or the order group's
@@ -3268,6 +3302,11 @@
     const room = roomByID(state.contextRoomID);
     closeRoomContextMenu(true);
     if (room && state.authenticated) openRenameDialog(room);
+  });
+  $('context-lan-room').addEventListener('click', () => {
+    const room = roomByID(state.contextRoomID);
+    closeRoomContextMenu(true);
+    if (room?.sharing === 'lan' && state.authenticated) lan.openRoom(room);
   });
   $('context-close-room').addEventListener('click', () => {
     const roomID = state.contextRoomID;
@@ -3351,6 +3390,11 @@
     if (!roomID || (data.roomId && data.roomId !== roomID)) return;
     if (data.action === 'close-tab') {
       closeTab(roomID);
+      return;
+    }
+    if (data.action === 'lan-access') {
+      const room = roomByID(roomID);
+      if (room?.sharing === 'lan' && state.authenticated) lan.openRoom(room);
       return;
     }
     if (!data.roomId) return;

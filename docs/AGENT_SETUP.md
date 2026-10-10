@@ -21,8 +21,8 @@ and help me install PairRoom and check my environment. Ask before each change.
 
 | Path | Use it for | Steps |
 |---|---|---|
-| **Embedded** — start here | First use: PairRoom's conversation UI, with Runtime, Provider, model and effort chosen per slot | 2–4, then 5 |
-| **Native** — daily work (experimental) | Keeping the user's own Claude Code, Codex (including Desktop), Grok Build, or Gemini CLI sessions | 2–4, then 6 |
+| **Native** — default and recommended | Keeping the user's own Claude Code, Codex (including Desktop), Grok Build, or Gemini CLI sessions | 2–4, then 6 |
+| **Embedded** — optional | PairRoom-owned adapters and conversation controls, per-slot Provider overrides, or a Mock demonstration | 2–4, then 5 |
 
 Ask which Runtime each of the two slots will use. Both slots may use the same Runtime and still differ in Provider and model, for example one session for planning/review and another independently configured session for implementation. Embedded selects this per slot through a read-only [CC Switch Provider reference](CONFIGURATION.md#cc-switch-provider-references); Native uses whatever each original session is already configured with. [CC Switch](https://github.com/farion1231/cc-switch) is needed only for per-slot Providers in Embedded. Gemini Embedded uses native authentication only: CC Switch and effort overrides are unsupported, and exact resume after an accepted session's process exits is blocked rather than replaced. Prefer Native for Gemini sessions that must survive suspension or Service restart; see [Gemini boundaries](NATIVE_RELAY.md#gemini-cli). Tool-loop quality with third-party Providers varies, so try the chosen combination on a small task first.
 
@@ -105,7 +105,7 @@ The Agent cannot operate Management, so give the user this checklist:
 
 1. Open Management (the Desktop window, or `pairroom daemon open`).
 2. Register the repository's absolute path as a **Project**.
-3. Create an **Embedded** Room. For each Agent choose Runtime, supported optional Provider, model and effort fields; empty fields inherit native configuration. Gemini uses native Provider settings and does not support effort overrides.
+3. Change the default Native selection to **Embedded** when creating the Room. For each Agent choose Runtime, supported optional Provider, model and effort fields; empty fields inherit native configuration. Gemini uses native Provider settings and does not support effort overrides.
 4. Both participants default to **YOLO**. For the first test, select read-only native permissions explicitly.
 5. Send the first task from [Getting started](GETTING_STARTED.md#first-real-room).
 

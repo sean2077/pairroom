@@ -10,6 +10,11 @@ import (
 
 func nativeRegistryBinding(b relay.Binding) Binding {
 	result := Binding{Agent: b.Slot, Mode: BindingNew, Pending: true, BoundAt: b.LastActivity}
+	if b.RemoteKey != "" {
+		result.RemoteKey = b.RemoteKey
+		result.Pending = !b.Active
+		return result
+	}
 	if b.Active && b.SessionID != "" {
 		result.Pending = false
 		result.SessionID = b.SessionID
@@ -25,6 +30,11 @@ func (r *Registry) checkNativeIdentityLocked(candidate Room, slot model.ActorID,
 		return nil
 	}
 	runtime := candidate.Agents[slot].Runtime.CanonicalForSlot(slot)
+	if r.joinedIdentityCheck != nil {
+		if err := r.joinedIdentityCheck(candidate.ID, slot, runtime, session); err != nil {
+			return err
+		}
+	}
 	check := func(other Room) error {
 		if candidate.HostMode != model.HostNative && other.HostMode != model.HostNative {
 			return nil
@@ -73,6 +83,9 @@ func (r *Registry) commitNativeBinding(roomID string, b relay.Binding, appendFac
 	}
 	room = cloneRoom(room)
 	room.Bindings[b.Slot] = nativeRegistryBinding(b)
+	if b.RemoteKey != "" {
+		room.Agents[b.Slot] = model.AgentSelection{Runtime: b.Runtime, Provider: model.NativeProviderRef()}
+	}
 	room.UpdatedAt = r.now()
 	r.rooms[roomID] = room
 	if _, err := r.writeCheckpointLocked(); err != nil {

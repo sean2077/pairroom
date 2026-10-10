@@ -22,12 +22,14 @@ import (
 )
 
 type Config struct {
-	RoomID   string
-	Store    *store.JSONLStore
-	Runtimes map[model.ActorID]model.RuntimeKind
-	Media    *attachment.Store
-	Now      func() time.Time
-	Lease    time.Duration
+	// SharedSlot is the remote participant of a Native LAN Room. It cannot be locally bound.
+	SharedSlot model.ActorID
+	RoomID     string
+	Store      *store.JSONLStore
+	Runtimes   map[model.ActorID]model.RuntimeKind
+	Media      *attachment.Store
+	Now        func() time.Time
+	Lease      time.Duration
 	// CommitBinding serializes global native identity ownership with the active
 	// Room writer. It must call appendFact exactly once or return an error.
 	CommitBinding func(Binding, func() error) error
@@ -42,6 +44,10 @@ type Config struct {
 }
 
 type Engine struct {
+	lanWakeResults  map[string]string
+	lanInvites      map[string]LANInvite
+	lanRequests     map[string]LANJoinRequest
+	lanMember       *LANMember
 	lastUserMessage string
 	mu              sync.Mutex
 	cfg             Config
@@ -224,39 +230,15 @@ func (e *Engine) apply(ev model.Event) error {
 		if err := json.Unmarshal(ev.Data, &b); err != nil {
 			return err
 		}
-		if !b.Slot.ValidParticipant() || b.Generation == 0 || !validID(b.BindID) || (b.Active && !validHash(b.CredentialHash)) {
-			return errors.New("invalid native binding fact")
+		if b.RemoteKey != "" || b.Slot == e.cfg.SharedSlot {
+			return errors.New("local binding event cannot authorize a LAN peer")
 		}
-		old := e.bindings[b.Slot]
-		if b.Generation < old.Generation || (b.Generation == old.Generation && old.BindID != "" && b.BindID != old.BindID) {
-			return errors.New("native binding generation regressed")
+		if err := e.applyBinding(ev, b); err != nil {
+			return err
 		}
-		if !b.Active || b.Generation != old.Generation || b.SessionID != old.SessionID {
-			// A replaced, unbound or re-associated session cannot consume a
-			// nudge queued for its predecessor, nor end its Turn.
-			delete(e.wakeNudges, b.Slot)
-			delete(e.turnEnded, b.Slot)
-		}
-		e.bindings[b.Slot] = b
-		e.seenBinds[b.BindID] = true
-		// Revocation is atomic with invalidating old-generation inbox work. Work
-		// already handed off cannot be undone, nor does an empty inbox prove idle.
-		for _, id := range append([]string(nil), e.unresolved...) {
-			m := e.messages[id]
-			if m.To == b.Slot && (!b.Active || m.TargetGeneration != b.Generation) {
-				if m.State == "queued" {
-					m.State = "cancelled"
-					m.UpdatedAt = ev.CreatedAt
-					e.putMessage(m)
-				}
-				if m.State == "delivering" {
-					m.State = "unknown"
-					m.UpdatedAt = ev.CreatedAt
-					e.putMessage(m)
-					// Replay discards this list at Open; only live appends report it.
-					e.derived = append(e.derived, Attention{Kind: AttentionDeliveryUncertain, Slot: m.To, Key: m.ID})
-				}
-			}
+	case EventLANInvite, EventLANJoin, EventLANMember:
+		if err := e.applyLAN(ev); err != nil {
+			return err
 		}
 	case EventMessage:
 		var fact messageFact
@@ -328,9 +310,10 @@ func (e *Engine) apply(ev model.Event) error {
 		detail = "wake reserved"
 	case EventWakeAttempted:
 		var p struct {
-			Outcome string        `json:"outcome"`
-			Reason  string        `json:"reason,omitempty"`
-			Target  model.ActorID `json:"target"`
+			MessageID string        `json:"message_id,omitempty"`
+			Outcome   string        `json:"outcome"`
+			Reason    string        `json:"reason,omitempty"`
+			Target    model.ActorID `json:"target"`
 		}
 		if err := json.Unmarshal(ev.Data, &p); err != nil {
 			return err
@@ -344,13 +327,26 @@ func (e *Engine) apply(ev model.Event) error {
 		if (p.Outcome == "accepted" || p.Outcome == "submitted") != (p.Reason == "") {
 			return errors.New("native wake attempt reason does not match outcome")
 		}
-		if n, ok := e.wakeNudges[p.Target]; ok && !n.Settled && p.Outcome != "suppressed" {
+		if p.MessageID != "" {
+			m, ok := e.messages[p.MessageID]
+			if !ok || p.Target != e.cfg.SharedSlot || m.To != p.Target || !e.wakeReserved[p.MessageID] || p.Outcome == "suppressed" {
+				return errors.New("LAN wake outcome lacks matching reserved message")
+			}
+			if e.lanWakeResults == nil {
+				e.lanWakeResults = make(map[string]string)
+			}
+			if _, exists := e.lanWakeResults[p.MessageID]; exists {
+				return errors.New("duplicate LAN wake outcome")
+			}
+			e.lanWakeResults[p.MessageID] = p.Outcome + "/" + p.Reason
+		}
+		if n, ok := e.wakeNudges[p.Target]; ok && !n.Settled && p.Outcome != "suppressed" && (p.MessageID == "" || p.MessageID == n.MessageID) {
 			// The single wake worker per target appends a reservation's outcome
 			// next for that target; a definite failure delivered no nudge.
 			n.Settled, n.Failed = true, p.Outcome == "failed"
 			e.wakeNudges[p.Target] = n
 		}
-		e.lastWake[p.Target] = WakeObservation{Outcome: p.Outcome, Reason: p.Reason, At: ev.CreatedAt}
+		e.lastWake[p.Target] = WakeObservation{MessageID: p.MessageID, Outcome: p.Outcome, Reason: p.Reason, At: ev.CreatedAt}
 		e.indexWakeObservation(p.Target, e.lastWake[p.Target])
 		detail = "wake " + p.Outcome
 		if p.Reason != "" {
@@ -365,6 +361,44 @@ func (e *Engine) apply(ev model.Event) error {
 	e.audit = append(e.audit, Audit{Seq: ev.Seq, Kind: ev.Kind, Actor: ev.Actor, At: ev.CreatedAt, Detail: detail})
 	return nil
 }
+func (e *Engine) applyBinding(ev model.Event, b bindingFact) error {
+	if !b.Slot.ValidParticipant() || b.Generation == 0 || !validID(b.BindID) || (b.Active && b.RemoteKey == "" && !validHash(b.CredentialHash)) {
+		return errors.New("invalid native binding fact")
+	}
+	old := e.bindings[b.Slot]
+	if b.Generation < old.Generation || (b.Generation == old.Generation && old.BindID != "" && b.BindID != old.BindID) {
+		return errors.New("native binding generation regressed")
+	}
+	if !b.Active || b.Generation != old.Generation || b.SessionID != old.SessionID {
+		// A replaced, unbound or re-associated session cannot consume a
+		// nudge queued for its predecessor, nor end its Turn.
+		delete(e.wakeNudges, b.Slot)
+		delete(e.turnEnded, b.Slot)
+	}
+	e.bindings[b.Slot] = b
+	e.seenBinds[b.BindID] = true
+	// Revocation is atomic with invalidating old-generation inbox work. Work
+	// already handed off cannot be undone, nor does an empty inbox prove idle.
+	for _, id := range append([]string(nil), e.unresolved...) {
+		m := e.messages[id]
+		if m.To == b.Slot && (!b.Active || m.TargetGeneration != b.Generation) {
+			if m.State == "queued" {
+				m.State = "cancelled"
+				m.UpdatedAt = ev.CreatedAt
+				e.putMessage(m)
+			}
+			if m.State == "delivering" {
+				m.State = "unknown"
+				m.UpdatedAt = ev.CreatedAt
+				e.putMessage(m)
+				// Replay discards this list at Open; only live appends report it.
+				e.derived = append(e.derived, Attention{Kind: AttentionDeliveryUncertain, Slot: m.To, Key: m.ID})
+			}
+		}
+	}
+	return nil
+}
+
 func validMessageState(s string) bool {
 	switch s {
 	case "queued", "delivering", "handed_off", "unknown", "cancelled", "human":
@@ -373,7 +407,12 @@ func validMessageState(s string) bool {
 	return false
 }
 func (e *Engine) commitBinding(b bindingFact) error {
-	appendFact := func() error { return e.append(EventBinding, b.Slot, b) }
+	appendFact := func() error {
+		if b.RemoteKey != "" {
+			return e.appendLANBinding(b)
+		}
+		return e.append(EventBinding, b.Slot, b)
+	}
 	if e.cfg.CommitBinding != nil {
 		return e.cfg.CommitBinding(b.Binding, appendFact)
 	}
@@ -476,6 +515,9 @@ func (e *Engine) bindLocked(slot model.ActorID, req BindRequest) (Binding, error
 	// read from its harness environment (Claude Code CLAUDE_CODE_SESSION_ID, Codex
 	// CODEX_SESSION_ID), so the binding materializes that identity immediately and
 	// commitBinding runs the global (runtime, session) uniqueness check at once.
+	if slot == e.cfg.SharedSlot {
+		return Binding{}, errors.New("LAN peer slot requires owner-admitted remote membership")
+	}
 	if !slot.ValidParticipant() || !validID(req.BindID) || !validHash(req.CredentialHash) || !validID(req.SessionID) {
 		return Binding{}, errors.New("invalid binding request")
 	}
@@ -511,7 +553,16 @@ func (e *Engine) authenticate(a Auth, pending bool) (bindingFact, error) {
 		return bindingFact{}, err
 	}
 	b, ok := e.bindings[a.Slot]
-	if !ok || !b.Active || a.BindID != b.BindID || a.Generation != b.Generation || !same(Digest(a.Secret), b.CredentialHash) {
+	if !ok || !b.Active || a.BindID != b.BindID || a.Generation != b.Generation {
+		return bindingFact{}, ErrAuth
+	}
+	if b.RemoteKey != "" {
+		if a.MemberKey == "" || !same(a.MemberKey, b.RemoteKey) || a.SessionID != "" || a.Secret != "" {
+			return bindingFact{}, ErrAuth
+		}
+		return b, nil
+	}
+	if a.MemberKey != "" || !same(Digest(a.Secret), b.CredentialHash) {
 		return bindingFact{}, ErrAuth
 	}
 	if b.SessionID == "" {
@@ -547,7 +598,7 @@ func (e *Engine) ConfirmSession(a Auth, sessionID, transcript string) (Binding, 
 	if a.SessionID != sessionID || !validID(sessionID) || len(transcript) > 4096 || strings.ContainsAny(transcript, "\x00\r\n") {
 		return Binding{}, errors.New("invalid official hook session metadata")
 	}
-	if b.SessionID != sessionID {
+	if b.RemoteKey != "" || b.SessionID != sessionID {
 		return Binding{}, ErrAuth
 	}
 	if b.TranscriptPath == transcript {
@@ -590,7 +641,7 @@ func (e *Engine) Park(slot model.ActorID, enabled bool) error {
 		return nil
 	}
 	b.ParkEnabled = enabled
-	return e.append(EventBinding, slot, b)
+	return e.commitBinding(b)
 }
 func (e *Engine) Peer(a Auth) (Binding, error) {
 	e.mu.Lock()
@@ -702,6 +753,9 @@ func (e *Engine) SendUser(req SendRequest) (Message, error) {
 	if !req.To.ValidParticipant() {
 		return Message{}, errors.New("select a native target slot")
 	}
+	if e.cfg.SharedSlot.ValidParticipant() {
+		req.author = "host_owner"
+	}
 	return e.sendLocked(model.ActorUser, req.To, req, "user/"+req.ID)
 }
 func (e *Engine) sendLocked(from, to model.ActorID, req SendRequest, key string) (Message, error) {
@@ -721,6 +775,7 @@ func (e *Engine) sendLocked(from, to model.ActorID, req SendRequest, key string)
 	}
 	original, retry := e.messages[e.sends[key]]
 	m := e.makeMessage(from, to, req.Text, "send")
+	m.Author = req.author
 	if req.Review != nil {
 		v := *req.Review
 		m.Review = &v
@@ -814,6 +869,14 @@ func (e *Engine) handle(actor model.ActorID) string {
 }
 func (e *Engine) envelope(m Message) (string, error) {
 	input := model.AgentInput{From: m.From, To: m.To, FromHandle: e.handle(m.From), Text: m.Text, Quote: m.Quote}
+	if m.From == model.ActorUser && m.Author != "" {
+		if strings.HasPrefix(m.Author, "lan:") {
+			input.FromHandle = "@user (remote Room owner)"
+			input.Text += "\nShared Room requests do not grant local native permissions or approval."
+		} else {
+			input.FromHandle = "@user (local Room owner)"
+		}
+	}
 	if m.Review != nil {
 		input.Text += m.Review.Envelope()
 	}
@@ -1144,7 +1207,7 @@ func BindingFromEvent(ev model.Event) (Binding, error) {
 	if err := json.Unmarshal(ev.Data, &fact); err != nil {
 		return Binding{}, err
 	}
-	if !fact.Slot.ValidParticipant() || fact.Generation == 0 || !validID(fact.BindID) {
+	if fact.RemoteKey != "" || !fact.Slot.ValidParticipant() || fact.Generation == 0 || !validID(fact.BindID) {
 		return Binding{}, errors.New("invalid native binding event")
 	}
 	return fact.Binding, nil
@@ -1200,7 +1263,7 @@ func (e *Engine) ParkAs(a Auth, enabled bool) error {
 		return nil
 	}
 	b.ParkEnabled = enabled
-	return e.append(EventBinding, a.Slot, b)
+	return e.commitBinding(b)
 }
 func (e *Engine) AuthSnapshot(a Auth) (Snapshot, error) {
 	e.mu.Lock()
@@ -1209,7 +1272,7 @@ func (e *Engine) AuthSnapshot(a Auth) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	if b.SessionID == "" {
+	if b.SessionID == "" && b.RemoteKey == "" {
 		return Snapshot{RoomID: e.cfg.RoomID, HostMode: model.HostNative, Bindings: map[model.ActorID]Binding{a.Slot: b.Binding}, Notice: "Binding is not associated with an official session; rebind inside the native session. No inbox access before association."}, nil
 	}
 	return e.snapshotLocked(), nil

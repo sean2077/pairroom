@@ -40,7 +40,7 @@ func Bootstrap(actor model.ActorID, selfRuntime, peerRuntime model.RuntimeKind) 
 [PairRoom message] is current input; from names its sender. Native harness, project, permission, sandbox, and safety rules remain authoritative. Human instructions win. PairRoom owns the single active turn and transcript.
 Complete useful work before replying. Include %s only when the peer must respond to finish the request, never for acknowledgement or ceremonial turn return. A response without %s ends Agent relay. Any Agent may deliver the final result. No fixed relay packet exists.
 @user alone returns the decision to the human; with both handles the Agent handle wins. Keep conclusions and evidence in chat, tool detail in Inspector.
-%s: pairroom protocol --actor %s`, selfSlot, self.DisplayName, self.MentionHandle, peerSlot, other.DisplayName, other.MentionHandle, other.MentionHandle, other.MentionHandle, Version, actor)
+%s: pairroom protocol --host-mode embedded --actor %s`, selfSlot, self.DisplayName, self.MentionHandle, peerSlot, other.DisplayName, other.MentionHandle, other.MentionHandle, other.MentionHandle, Version, actor)
 }
 
 var baseRules = []Rule{

@@ -1,6 +1,6 @@
 # Native relay: setup, usage and reliability
 
-Native hosting connects two sessions you already run. In generic response-boundary descriptions below, “Stop” includes Gemini's AfterAgent unless a vendor is named. PairRoom does not launch, configure, or interrupt their processes. This guide owns the user workflow; [CLI reference](CLI_REFERENCE.md#native-relay-commands) owns command options, [Protocol](PROTOCOL.md#native-host-protocol-v8) owns the transport contract, and [session workspace discovery](NATIVE_SESSION_WORKSPACE.md) owns cwd/worktree resolution. The app includes a Native setup guide as well.
+Native is the default and recommended host mode. It connects two sessions you already run. In generic response-boundary descriptions below, “Stop” includes Gemini's AfterAgent unless a vendor is named. PairRoom does not launch, configure, or interrupt their processes. This guide owns the user workflow; [CLI reference](CLI_REFERENCE.md#native-relay-commands) owns command options, [Protocol](PROTOCOL.md#native-host-protocol-v8) owns the transport contract, and [session workspace discovery](NATIVE_SESSION_WORKSPACE.md) owns cwd/worktree resolution. The app includes a Native setup guide as well.
 
 ## Before starting
 
@@ -228,4 +228,4 @@ An unchanged observation is neither an atomic snapshot nor approval. Use the ope
 
 The browser's tail snapshot is bounded to recent complete messages and audit entries; retained totals still describe full history. It is not a total JSON-byte cap, and full export remains complete. [Protocol](PROTOCOL.md#native-observation-and-review-extensions) and [Storage](STORAGE.md#native-current-work-and-browser-recovery-projections) own the paging/recovery contracts.
 
-Native remains experimental. Authenticated multi-round Claude Code/Codex/Grok acceptance, resume/fork behavior, and comparative billing require separate owner-authorized testing. Synthetic hooks, Mock, browser fixtures, and historical reports do not establish current vendor-model acceptance. Do not publish private transcripts or run paid benchmarks without consent.
+Authenticated multi-round Claude Code/Codex/Grok acceptance, resume/fork behavior, and comparative billing require separate owner-authorized testing. Synthetic hooks, Mock, browser fixtures, and historical reports do not establish current vendor-model acceptance. Do not publish private transcripts or run paid benchmarks without consent.

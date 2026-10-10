@@ -81,6 +81,15 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 			request.Agents = defaultAgentSelections()
 		}
 	}
+	if request.Sharing == "lan" {
+		if request.AgentPairProfileID != "" {
+			return Room{}, errors.New("LAN creation selects only its local owner runtime")
+		}
+		request.Agents, err = prepareLANSelections(request.OwnerSlot, request.Agents)
+		if err != nil {
+			return Room{}, err
+		}
+	}
 	selections, err := validateAgentSelections(request.Agents)
 	if err != nil {
 		return Room{}, err
@@ -232,15 +241,15 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 
 	now := r.now()
 	room := Room{
-		HostMode: request.HostMode,
-		ID:       roomID, ProjectID: project.ID, Name: strings.TrimSpace(request.Name),
+		HostMode: request.HostMode, Sharing: request.Sharing, OwnerSlot: request.OwnerSlot,
+		ID: roomID, ProjectID: project.ID, Name: strings.TrimSpace(request.Name),
 		Collaboration: model.CloneCollaboration(request.Collaboration),
 		Lifecycle:     RoomActive, Bindings: bindings, Agents: cloneAgentSelections(request.Agents),
 		TranscriptBoundaryNotice: TranscriptBoundaryNotice,
 		CreatedAt:                now, UpdatedAt: now,
 	}
 	payload := roomProvisionedPayload{
-		Schema: 5, HostMode: room.HostMode, Collaboration: model.CloneCollaboration(room.Collaboration), Project: project, RoomID: room.ID, Name: room.Name,
+		Schema: 6, HostMode: room.HostMode, Sharing: room.Sharing, OwnerSlot: room.OwnerSlot, Collaboration: model.CloneCollaboration(room.Collaboration), Project: project, RoomID: room.ID, Name: room.Name,
 		Lifecycle: room.Lifecycle, Bindings: cloneBindings(room.Bindings),
 		Agents:                   cloneAgentSelections(room.Agents),
 		TranscriptBoundaryNotice: room.TranscriptBoundaryNotice, CreatedAt: room.CreatedAt,

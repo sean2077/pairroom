@@ -58,7 +58,7 @@
       </div>
       <figure class="product-shot" id="shot-native" data-shot="native">
         <a href="./images/pairroom-native-room.png" data-full-image><img src="./images/pairroom-native-room.png" data-screen="pairroom-native-room" alt="Native Room with two participants, shared replies, and delivery inspector" data-i18n="nativeAlt" data-i18n-attr="alt" width="2880" height="1800" fetchpriority="high"></a>
-        <figcaption><span data-i18n="nativeCaption">Native — work in your own sessions, follow shared replies here.</span><span class="badge" data-i18n="experimental">Experimental</span></figcaption>
+        <figcaption><span data-i18n="nativeCaption">Native — work in your own sessions, follow shared replies here.</span><span class="badge" data-i18n="nativeBadge">Default · Recommended</span></figcaption>
       </figure>
       <figure class="product-shot" id="shot-embedded" data-shot="embedded" hidden>
         <a href="./images/pairroom-embedded-room.png" data-full-image><img src="./images/pairroom-embedded-room.png" data-screen="pairroom-embedded-room" alt="Embedded Room with conversation, turn summaries, and work inspector" data-i18n="embeddedAlt" data-i18n-attr="alt" width="2880" height="1800" loading="lazy"></a>
@@ -94,18 +94,18 @@
     <section id="modes" class="section modes-section wrap" aria-labelledby="modes-title">
       <div class="section-heading modes-heading">
         <div><p class="eyebrow" data-i18n="modesEyebrow">Choose your workspace</p><h2 id="modes-title" data-i18n="modesTitle">Where you work is up to you.</h2></div>
-        <p data-i18n="modesDescription">Choose a host mode when you create a Room. Pick either agent's runtime independently.</p>
+        <p data-i18n="modesDescription">Native is the default and recommended mode. Choose Embedded when you need PairRoom-owned sessions. Pick either agent's runtime independently.</p>
       </div>
       <div class="mode-grid">
         <article class="mode-card native-card">
-          <div class="card-header"><h3>Native</h3><span class="badge" data-i18n="nativeBadge">Recommended · Experimental</span></div>
+          <div class="card-header"><h3>Native</h3><span class="badge" data-i18n="nativeBadge">Default · Recommended</span></div>
           <p class="mode-tagline" data-i18n="nativeTagline">In the sessions you already use.</p>
-          <p data-i18n="nativeBody">Connect your terminal or client sessions, including Codex Desktop. PairRoom records and relays the messages you share, while work continues in each original client.</p>
+          <p data-i18n="nativeBody">Connect your terminal or client sessions, including Codex Desktop. Invite a colleague over the LAN through their own local Service. PairRoom records shared messages; work, credentials, and permissions stay in each original client.</p>
           <ul><li data-i18n="nativePoint1">Tools, permissions, Provider, and model stay with your harness.</li><li data-i18n="nativePoint2">Stop or steer each agent in its original session.</li></ul>
           <a class="text-link" href="https://github.com/sean2077/pairroom/blob/main/docs/NATIVE_RELAY.md" data-i18n="nativeSetup">Connect existing sessions ↗</a>
         </article>
         <article class="mode-card">
-          <div class="card-header"><h3>Embedded</h3><span class="mode-label" data-i18n="sharedInterface">Desktop & browser</span></div>
+          <div class="card-header"><h3>Embedded</h3><span class="mode-label" data-i18n="sharedInterface">Optional</span></div>
           <p class="mode-tagline" data-i18n="embeddedTagline">In the PairRoom interface.</p>
           <p data-i18n="embeddedBody">Work with both agents from one interface. Choose each runtime and the Provider, model, and effort controls it supports. Unset options inherit native configuration.</p>
           <ul><li data-i18n="embeddedPoint1">One agent Turn runs at a time in each Room.</li><li data-i18n="embeddedPoint2">New Rooms use YOLO permissions. Select narrower permissions when needed.</li></ul>
@@ -178,7 +178,7 @@ pairroom version</code></pre><button type="button" class="copy" data-copy="linux
         <details><summary data-i18n="faq2Title">What accounts do I need?</summary><p data-i18n="faq2Body">For real work, install and sign in to each native CLI you select. You also need Git and a local repository. Mock lets you explore the interface without a model account.</p></details>
         <details><summary data-i18n="faq3Title">Where does my data go?</summary><p data-i18n="faq3Body">PairRoom stores its state locally. Model requests still go to the Provider configured in each harness. Your choice of Provider determines where inference runs.</p></details>
         <details><summary data-i18n="faq4Title">What about tokens and cost?</summary><p data-i18n="faq4Body">PairRoom adds no coordinating model and does not append accumulated Room history to every relay. Token and cost savings have not been measured. There is no automatic cap on relay rounds or spending.</p></details>
-        <details><summary data-i18n="faq5Title">Can the agents keep working unattended?</summary><p data-i18n="faq5Body">Continuation depends on the runtime. PairRoom can nudge eligible idle Claude Code and Codex sessions; Grok Build and Gemini CLI have no Service wake. Native remains experimental. Use the original client to stop or steer an agent, and keep an eye on long-running work.</p><a class="text-link" href="https://github.com/sean2077/pairroom/blob/main/docs/NATIVE_RELAY.md#long-unattended-runs-by-runtime" data-i18n="wakeDetails">Runtime continuation limits ↗</a></details>
+        <details><summary data-i18n="faq5Title">Can the agents keep working unattended?</summary><p data-i18n="faq5Body">Continuation depends on the runtime. PairRoom can nudge eligible idle Claude Code and Codex sessions; Grok Build and Gemini CLI have no Service wake. Use the original client to stop or steer an agent, and keep an eye on long-running work.</p><a class="text-link" href="https://github.com/sean2077/pairroom/blob/main/docs/NATIVE_RELAY.md#long-unattended-runs-by-runtime" data-i18n="wakeDetails">Runtime continuation limits ↗</a></details>
         <details><summary data-i18n="faq6Title">How do I connect two existing sessions?</summary><p data-i18n="faq6Body">Start a non-Mock Service, install and approve the hooks for your runtimes, and load the pairroom-relay skill in the first session. Create a Room, then ask the second agent to run the exact join command.</p><a class="text-link" href="https://github.com/sean2077/pairroom/blob/main/docs/NATIVE_RELAY.md" data-i18n="nativeSetup">Connect existing sessions ↗</a></details>
       </div>
     </section>

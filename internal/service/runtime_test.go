@@ -114,7 +114,7 @@ func provisionRuntimeRooms(t *testing.T, count int) (*Registry, []Room) {
 	registry, project := testRegistry(t, testGitRepo(t))
 	rooms := make([]Room, 0, count)
 	for index := 0; index < count; index++ {
-		room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+		room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded,
 			ProjectID: project.ID,
 			Name:      fmt.Sprintf("Runtime Room %d", index+1),
 			Bindings:  specs(BindingNew, BindingNew, fmt.Sprint(index)),
@@ -172,7 +172,7 @@ func shutdownRuntimeManager(t *testing.T, manager *RuntimeManager, factory *fake
 func TestRuntimeManagerActivatesPendingNewBindings(t *testing.T) {
 	repo := testGitRepo(t)
 	registry, project := testRegistry(t, repo)
-	pendingNew, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+	pendingNew, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID,
 		Name:      "Pending new runtime",
 		Bindings:  specs(BindingNew, BindingNew, "pending-new"),
@@ -307,7 +307,7 @@ func TestRuntimeManagerEvictsIdleLRUAtCapacity(t *testing.T) {
 
 func TestNativeRoomsAreExemptFromRuntimeCapacity(t *testing.T) {
 	registry, project := testRegistry(t, testGitRepo(t))
-	embeddedRoom, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+	embeddedRoom, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID,
 		Name:      "Embedded capacity",
 		Bindings:  specs(BindingNew, BindingNew, "cap-embedded"),
@@ -343,7 +343,7 @@ func TestNativeRoomsAreExemptFromRuntimeCapacity(t *testing.T) {
 		t.Fatalf("embedded runtime stopped occupying capacity: %#v", status)
 	}
 	// A second embedded Room must still queue behind the limit.
-	embedded2, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+	embedded2, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID,
 		Name:      "Embedded queued",
 		Bindings:  specs(BindingNew, BindingNew, "cap-embedded2"),
@@ -362,7 +362,7 @@ func TestNativeRoomsAreExemptFromRuntimeCapacity(t *testing.T) {
 
 func TestNativeRoomsSkipQueuedEmbeddedAtCapacity(t *testing.T) {
 	registry, project := testRegistry(t, testGitRepo(t))
-	embeddedBusy, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+	embeddedBusy, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID,
 		Name:      "Embedded busy",
 		Bindings:  specs(BindingNew, BindingNew, "cap-busy"),
@@ -370,7 +370,7 @@ func TestNativeRoomsSkipQueuedEmbeddedAtCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	embeddedQueued, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+	embeddedQueued, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID,
 		Name:      "Embedded queued ahead",
 		Bindings:  specs(BindingNew, BindingNew, "cap-queued"),

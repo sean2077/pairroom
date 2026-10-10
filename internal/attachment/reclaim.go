@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// contentExtensions are the only content names SaveImage writes.
-var contentExtensions = []string{".png", ".jpg", ".gif", ".webp"}
+// contentExtensions are the only content names the Store writes.
+var contentExtensions = []string{".png", ".jpg", ".gif", ".webp", ".data"}
 
 // ReclaimCandidates lists, oldest first, every attachment ID last written
 // before cutoff. A manifest counts by the later of its recorded creation time

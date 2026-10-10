@@ -80,13 +80,20 @@ func startNativeHostRuntime(ctx context.Context, registry *Registry, project Pro
 	kinds := map[model.ActorID]model.RuntimeKind{}
 	for actor, selection := range durable.Agents {
 		kinds[actor] = selection.Runtime
+		if selection.AwaitingPeer {
+			kinds[actor] = model.RuntimeAwaitingPeer
+		}
 	}
 	var onAttention func(relay.Attention)
 	if notifier != nil {
 		// Runs under the relay lock: record only, never block.
 		onAttention = func(a relay.Attention) { notifier.Notify(durable, a.Kind, a.Slot, a.Key) }
 	}
-	engine, err := relay.Open(relay.Config{RoomID: durable.ID, Store: log, Runtimes: kinds, Media: media, OnAttention: onAttention, CommitBinding: func(b relay.Binding, appendFact func() error) error {
+	var sharedSlot model.ActorID
+	if durable.Sharing == "lan" {
+		sharedSlot = model.OtherParticipant(durable.OwnerSlot)
+	}
+	engine, err := relay.Open(relay.Config{SharedSlot: sharedSlot, RoomID: durable.ID, Store: log, Runtimes: kinds, Media: media, OnAttention: onAttention, CommitBinding: func(b relay.Binding, appendFact func() error) error {
 		return registry.commitNativeBinding(durable.ID, b, appendFact)
 	}})
 	if err != nil {
@@ -413,20 +420,40 @@ func nativeResult(w http.ResponseWriter, value any, err error) {
 	writeManagementJSON(w, 200, value)
 }
 func (n *nativeHostRuntime) upload(w http.ResponseWriter, r *http.Request) {
+	kind := r.Header.Get("X-PairRoom-Attachment-Kind")
+	if kind != "" && kind != "image" && kind != "file" {
+		writeManagementError(w, 400, "attachment kind must be image or file")
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, attachment.MaxImageBytes+(1<<20))
 	reader, err := r.MultipartReader()
 	if err != nil {
-		writeManagementError(w, 400, "multipart image required")
+		writeManagementError(w, 400, "multipart attachment required")
 		return
 	}
 	part, err := reader.NextPart()
 	if err != nil {
-		writeManagementError(w, 400, "image part required")
+		writeManagementError(w, 400, "attachment part required")
 		return
 	}
 	defer part.Close()
-	image, err := n.media.SaveImage(part.FileName(), part, "native-relay")
-	nativeResult(w, image, err)
+	var value model.Attachment
+	switch {
+	case kind == "file":
+		value, err = n.media.SaveEvidence(part.FileName(), part, "native-relay")
+	case n.room.Sharing == "lan":
+		value, err = n.media.SaveSharedImage(part.FileName(), part, "native-relay")
+	default:
+		value, err = n.media.SaveImage(part.FileName(), part, "native-relay")
+	}
+	if err == nil {
+		if _, extraErr := reader.NextPart(); !errors.Is(extraErr, io.EOF) {
+			_ = n.media.Remove(value.ID)
+			writeManagementError(w, 400, "upload requires exactly one attachment part")
+			return
+		}
+	}
+	nativeResult(w, value, err)
 }
 func (n *nativeHostRuntime) events(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)

@@ -2,7 +2,7 @@
 
 The bilingual static landing page is published with GitHub Pages. Product facts remain owned by the root README and the [documentation map](../docs/README.md); update this page alongside relevant product changes. The English HTML remains readable without JavaScript. Chinese, platform and screenshot switching, and clipboard feedback require JavaScript; `?lang=en` and `?lang=zh-CN` select the language.
 
-The page leads with the existing-session use case and real product screenshots, then covers review examples, host-mode selection, installation, and practical questions. Keep copy concrete and the two languages equivalent. Use the existing paper/ink palette, system fonts, and simple ruled sections; the Chinese headings use upright sans-serif type. Screenshots stay uncropped and explicitly identify their synthetic demo conversations. Native's experimental status and runtime-specific limits belong beside the relevant choices. The optional Mock walkthrough uses a native disclosure so installation stays easy to scan.
+The page leads with the existing-session use case and real product screenshots, then covers review examples, host-mode selection, installation, and practical questions. Keep copy concrete and the two languages equivalent. Use the existing paper/ink palette, system fonts, and simple ruled sections; the Chinese headings use upright sans-serif type. Screenshots stay uncropped and explicitly identify their synthetic demo conversations. Present Native as the default and recommended mode, Embedded as optional, and place runtime-specific limits beside the relevant choices. The optional Mock walkthrough uses a native disclosure so installation stays easy to scan.
 
 ## Local development and verification
 

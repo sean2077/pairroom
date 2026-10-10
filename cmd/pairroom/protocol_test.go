@@ -10,9 +10,9 @@ import (
 	"github.com/sean2077/pairroom/internal/protocol"
 )
 
-func TestWriteProtocolText(t *testing.T) {
+func TestWriteEmbeddedProtocolText(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	err := writeProtocol([]string{"--actor", "codex"}, &stdout, &stderr)
+	err := writeProtocol([]string{"--host-mode", "embedded", "--actor", "codex"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestWriteProtocolText(t *testing.T) {
 	}
 }
 
-func TestWriteProtocolJSON(t *testing.T) {
+func TestWriteProtocolDefaultsToNative(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if err := writeProtocol([]string{"--actor=claude", "--json"}, &stdout, &stderr); err != nil {
 		t.Fatal(err)
@@ -45,7 +45,7 @@ func TestWriteProtocolJSON(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &contract); err != nil {
 		t.Fatalf("decode JSON: %v\n%s", err, stdout.String())
 	}
-	if contract.Version != protocol.Version || contract.Actor != model.ActorSlot1 || len(contract.Rules) == 0 {
+	if contract.Version != protocol.NativeVersion || contract.Actor != model.ActorSlot1 || len(contract.Rules) == 0 {
 		t.Fatalf("unexpected contract: %+v", contract)
 	}
 }

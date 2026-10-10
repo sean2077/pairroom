@@ -847,6 +847,23 @@ select { appearance: auto; }
 .section-label-row { display: flex; align-items: start; justify-content: space-between; gap: 14px; }
 .step-chip { padding: 3px 8px; border: 1px solid var(--line); border-radius: 99px; background: var(--bg-soft); color: var(--muted); font-size: 9px; font-weight: 700; white-space: nowrap; }
 .binding-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.binding-grid:has(.binding-card[hidden]) { grid-template-columns: minmax(0, 1fr); }
+.binding-card[hidden] { display: none; }
+#room-lan-fields { display: grid; gap: 8px; margin-top: 10px; }
+#room-lan-fields[hidden] { display: none; }
+#lan-room-body { display: grid; gap: 20px; }
+.lan-dialog-section { min-width: 0; display: grid; gap: 10px; }
+.lan-dialog-section h3 { margin: 0; }
+.lan-dialog-section textarea { width: 100%; min-width: 0; resize: vertical; }
+.lan-dialog-section button { justify-self: start; }
+.lan-identifier { overflow-wrap: anywhere; white-space: pre-wrap; }
+.lan-settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 0; }
+.lan-settings-actions .field-help { margin: 0; }
+.lan-pending-request, .lan-shared-message { border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
+.lan-shared-history { display: grid; gap: 10px; max-height: 55vh; overflow: auto; }
+.lan-shared-message header { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.lan-shared-message pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; }
+.lan-artifact { display: block; overflow-wrap: anywhere; margin-top: 8px; text-decoration: underline; text-underline-offset: 3px; }
 .binding-card { min-width: 0; display: grid; gap: 9px; margin: 0; padding: 13px; border: 1px solid var(--line); border-radius: 13px; }
 .binding-card legend { display: flex; align-items: center; gap: 8px; padding: 0 5px; }
 .binding-card legend > span:last-child { display: grid; }

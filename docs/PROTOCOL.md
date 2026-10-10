@@ -1,9 +1,9 @@
 # Agent protocol
 
-This document defines the minimum collaboration contract the model must understand. Scheduling, permissions, persistence, and cancellation are enforced by code, not by prompt self-discipline. The embedded machine-readable contract is `pairroom-protocol/v7` and is printed by:
+This document defines the minimum collaboration contract the model must understand. Scheduling, permissions, persistence, and cancellation are enforced by code, not by prompt self-discipline. The default machine-readable contract is Native `pairroom-protocol/v8`. Embedded uses `pairroom-protocol/v7` and is printed explicitly with:
 
 ```bash
-pairroom protocol --json
+pairroom protocol --host-mode embedded --json
 ```
 
 ## Bootstrap
@@ -68,7 +68,7 @@ user decision
 
 ## Native host protocol v8
 
-`pairroom protocol --host-mode native --json` prints `pairroom-protocol/v8`; embedded mode prints `pairroom-protocol/v7`. The compact native bootstrap plus stored default collaboration stays within 1,800 UTF-8 bytes; the ordinary envelope overhead remains at most 128 bytes. Native session/transcript references are queried with `relay peer`, never included in an envelope. Missing or inaccessible peer history does not block relay.
+`pairroom protocol --json` (or `--host-mode native`) prints `pairroom-protocol/v8`; `--host-mode embedded` prints `pairroom-protocol/v7`. The compact native bootstrap plus stored default collaboration stays within 1,800 UTF-8 bytes; the ordinary envelope overhead remains at most 128 bytes. Native session/transcript references are queried with `relay peer`, never included in an envelope. Missing or inaccessible peer history does not block relay.
 
 Association is captured at bind from the official `session_id` the harness exposes to its tool-call environment (Claude Code `CLAUDE_CODE_SESSION_ID`, Codex `CODEX_SESSION_ID`, Grok `GROK_SESSION_ID`); there is no nonce echo, and a bind run outside that environment fails closed. An approved Stop hook then supplies the same official `session_id` and `last_assistant_message` at each response boundary (Gemini uses BeforeTool identity and AfterAgent `prompt_response`; see below), re-confirming that identity (a mismatch fails closed) and recording the transcript path the environment does not carry; PairRoom does not parse vendor transcripts. Exact current peer handles use the same case-insensitive parser and code/URL exclusions as embedded mode. A peer handle wins over `@user`; only `@user` creates a human escalation; no peer/user handle ends relay without recording the private reply body. Minimal publication receipts still make sequence reconciliation possible. User interruption may produce no Stop and no publication. Claude/Grok StopFailure records only an allowlisted failure category, never the partial reply.
 

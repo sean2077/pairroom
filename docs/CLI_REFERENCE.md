@@ -2,7 +2,7 @@
 
 CLI Reference describes command responsibilities and how to discover flags. It does not copy the full `--help` output of every subcommand. Exact defaults, allowed values, and platform differences always come from the current binary.
 
-New standalone Rooms support `pairroom serve --collaboration default` (the default) or `--collaboration custom --collaboration-instructions "..."`. An existing current-schema Room restores its saved instructions; conflicting explicit flags fail. `pairroom protocol` prints embedded v7 or native v8 mechanics; the removed `--role` flag no longer selects a collaboration mode.
+The standalone `serve` command is Embedded-only; Native is the recommended default through `pairroom service` and `pairroom relay bind --create`. New standalone Rooms support `pairroom serve --collaboration default` (the default) or `--collaboration custom --collaboration-instructions "..."`. An existing current-schema Room restores its saved instructions; conflicting explicit flags fail. `pairroom protocol` prints native v8 mechanics by default, or embedded v7 with `--host-mode embedded`; the removed `--role` flag no longer selects a collaboration mode.
 
 ## Top-level commands
 
@@ -10,7 +10,7 @@ New standalone Rooms support `pairroom serve --collaboration default` (the defau
 |---|---|
 | `pairroom daemon` | Install and manage pairroom service in the OS service manager |
 | `pairroom service` | Start the multi-Project / multi-Room Management Shell |
-| `pairroom serve` | Start a current-format standalone Room |
+| `pairroom serve` | Start a current-format standalone Embedded Room |
 | `pairroom doctor` | Validate Git and vendor CLI installation |
 | `pairroom providers` | Read and validate the sanitized CC Switch Profile catalog without changing current state |
 | `pairroom verify` | Strictly validate room data integrity |
@@ -18,7 +18,7 @@ New standalone Rooms support `pairroom serve --collaboration default` (the defau
 | `pairroom restore` | Restore and verify a room-data backup |
 | `pairroom diagnostics` | Generate a redacted diagnostics bundle |
 | `pairroom relay` | Install approved project hooks, bind user-owned sessions, and publish/collect native relay messages |
-| `pairroom protocol` | Print embedded v7 or `--host-mode native` v8 collaboration contracts |
+| `pairroom protocol` | Print Native v8 (default) or `--host-mode embedded` v7 collaboration contracts |
 | `pairroom version` | Print the build version |
 
 Start every command with:
@@ -106,6 +106,7 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--discard`
 - `--enabled`
 - `--f`
+- `--file`
 - `--follow`
 - `--force`
 - `--gemini-command`
@@ -143,6 +144,7 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--runtime`
 - `--runtime-limit`
 - `--service-file`
+- `--share`
 - `--shutdown-timeout`
 - `--since`
 - `--slot`
@@ -200,6 +202,10 @@ All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Norma
 | `bind` (zero-flag) | Inside a recognized native session: resolve the workspace's sole active native Room and the slot whose runtime matches the caller's harness; archived Rooms are never candidates and ambiguity fails with candidates |
 | `bind --replace` | Explicitly revoke an occupied generation and rebind the current session; cannot stop old native work. Refused while the slot has unpublished Stop replies: publish them with `reconcile` or drop each with `reconcile --discard` first |
 | `bind --create [--name <display-name>] [--runtime claude\|codex\|grok] [--peer-runtime claude\|codex\|grok]` | Without `--room`: register the workspace Project when missing, create a native Room through the same validated Management path the browser uses, bind this session, and print canonical `peer_join` plus same-machine/data-root/workspace `peer_join_local`. The creator runtime, actual slot, session identity and installed hook are validated before creating anything. If the current runtime matches no Service-default slot, the preflight says no Room was created and prints a one-time `--peer-runtime <claude\|codex\|grok>` retry template; existing-Room slot mismatches never offer that retry. A default pair is read from the Service and pinned for that creation; an unrecognized caller must run inside the native session and explicitly identify its runtime. Omitted runtimes copy the Service default pair after a read-only preflight, before any Project/Room creation; explicit runtimes stay empty-field selections that inherit native configuration |
+| `bind --create --share lan [--name NAME]` | Create a Native Room explicitly for a LAN peer after the local host has enabled LAN sharing. The creator's actual Runtime is the only selection; the peer stays `awaiting_peer` until exact-key admission. Omit `--peer-runtime`. Returns a public `invite` and `peer_join`, never private credentials. |
+| `join '<public-invitation>' [--repo LOCAL_PATH] [--service-file LOCAL_FILE]` | Request LAN membership through this machine's local Service, using this native session and workspace. Returns a public pending receipt; repeat the same command after host acceptance or an uncertain response. The private Room key, original request and local relay credential are retained. `bind` resumes an accepted join. |
+| `invite` / `accept '<exact-join-receipt>'` / `revoke` | Bound local owner operations for a shared Native Room: issue a short-lived request-only invitation, admit the exact request/key receipt supplied through the trusted colleague channel, or revoke the member. An ordinary LAN member cannot call owner operations. |
+| `send/exchange --file PATH` | Explicitly upload repeatable UTF-8 text evidence files, up to 5 MiB each, as verified downloadable objects. Received scripts remain inert private files. `--ref` remains a path/hash pointer and does not upload bytes. |
 | `send --id <client-id> --text <body>` | Explicit message to peer; `--text-file PATH` reads UTF-8 from a file (`-` is stdin) and repeatable `--ref PATH` appends a local path/size/SHA-256 pointer without uploading contents; requires the bind-time association like every collection call; repeat the same ID after an uncertain response, never deduplicate by body. If that ID already names different content, send fails with "already used for a different message"; that answer is definite, not uncertain, and nothing new was published. A queued peer receipt prints a short body-free diagnostic and the peer `wait` command on stderr, without an extra lookup or vendor session identity; `exchange` omits it because the sender collects next. In a wake-enabled Room the Service nudges an eligible Claude inbox or idle Codex-bound target automatically; `status --brief` shows the human-executable Codex fallback |
 | `send --to @user --attach <image>` | Human escalation with optional repeatable image paths; stdin supplies text when `--text`, `--text-file` and `--ref` are absent. A same-ID retry re-uploads the images and still matches the original when each image is byte-identical with the same file name and order |
 | `exchange --id <client-id> --text <body>` | One explicit peer send, then the next FIFO input; accepts `--text-file`, `--ref` and `--output-file`; defaults to a 3,600-second wait, supports `--timeout 0` for no PairRoom total deadline, and finite values up to 21,600 seconds; not a correlated request/reply transaction |
@@ -219,6 +225,8 @@ All per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Norma
 | `unbind --purge-hooks` | Revoke binding, remove slot files and remove only owned hooks when no other local slot uses them |
 | `unbind --local-only` | Offline exit: remove the local slot files without contacting the Service; the server-side binding and generation stay active (the slot remains occupied) until an explicit unbind or `bind --replace` |
 | `hook --runtime <kind>` | Official hook JSON on stdin; publishes Stop first, then bounded park; not a user-authored identity shortcut |
+
+LAN setup, human author provenance, verified local evidence paths, and reconnect recovery are described in [Native collaboration on a LAN](LAN_NATIVE.md). The guest uses its own local Service endpoint and workspace; the returned invitation never carries the host's private Service file or native session identity.
 
 Every relay subcommand except `preflight` prints one stderr line suggesting `pairroom relay preflight` when a Service response named a release other than the CLI's (build metadata such as `+8.a5cb253` is ignored). It reads the release from responses the command already receives, so it never changes stdout or adds a Stop-hook request. When a failure looks like version skew (a rejected route or request shape, an authentication rejection, or no matching binding), the line says the mismatch may explain it; if such a failure happened before any Service contact, a foreground command, never the hook, makes one short read-only Service request to learn the release. An unknown or matching release prints nothing.
 

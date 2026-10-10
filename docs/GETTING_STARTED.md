@@ -1,6 +1,6 @@
 # Getting started
 
-Choose the host mode before following commands. **Embedded** lets PairRoom drive the adapters and is the quickest first trial; **Native** keeps your original sessions and is recommended for daily work, though still experimental. Neither is an in-place conversion of the other. See [Concepts](CONCEPTS.md) for the boundary and [Native setup](NATIVE_RELAY.md) for the complete Native workflow.
+**Native is the default and recommended host mode.** Start with the [Native path](#keep-codex-desktop-a-native-room) to connect your original sessions. **Embedded** is an optional mode for PairRoom-owned adapters, per-slot Provider overrides, or a Mock demonstration. Select Embedded explicitly when following the Embedded examples below. Neither mode is an in-place conversion of the other. See [Concepts](CONCEPTS.md) for the boundary and [Native setup](NATIVE_RELAY.md) for the complete Native workflow.
 
 ## Prerequisites
 
@@ -33,7 +33,7 @@ pairroom service --mock --data-root "$HOME/.pairroom-demo"
 
 Open the printed Management URL if a browser does not open automatically. Do not share the authenticated URL. Keep the foreground process running; `Ctrl+C` requests normal shutdown.
 
-In Management, register the disposable repository's absolute path as a **Project**, then create an **Embedded Room** with two new Bindings. Inspect the Agent selections, default/custom collaboration instructions, and permissions. Send Agent 1 a small task and inspect conversation, Turn activity, and message state. Project registration does not copy files.
+In Management, register the disposable repository's absolute path as a **Project**, then change the default Native selection to **Embedded** and create the Room with two new Bindings. Inspect the Agent selections, default/custom collaboration instructions, and permissions. Send Agent 1 a small task and inspect conversation, Turn activity, and message state. Project registration does not copy files.
 
 Mock is deterministic control-plane verification, not a language model or a vendor-authentication test. Use fresh real Rooms for real execution, not a Mock transcript as an existing native session.
 
@@ -68,7 +68,7 @@ Check actual repository evidence, one active participant Turn at a time, and pee
 
 ## Keep Codex Desktop: a Native Room
 
-This path also applies to Claude Code, Grok Build, and Gemini CLI. Native is experimental: it keeps the original sessions and does not own their processes. Provider, model, effort, and permissions remain native-controlled; displayed Room metadata does not apply overrides. Historical or synthetic evidence is not current authenticated multi-round acceptance.
+This path also applies to Claude Code, Grok Build, and Gemini CLI. Native keeps the original sessions and does not own their processes. Provider, model, effort, and permissions remain native-controlled; displayed Room metadata does not apply overrides. Historical or synthetic evidence is not current authenticated multi-round acceptance.
 
 Start/reuse a non-Mock Service. Install the intended project's hooks and approve them in each harness, following [Native setup](NATIVE_RELAY.md#one-time-project-setup):
 

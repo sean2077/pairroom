@@ -60,9 +60,10 @@ type Summary struct {
 }
 
 type WakeObservation struct {
-	Outcome string    `json:"outcome"`
-	Reason  string    `json:"reason,omitempty"`
-	At      time.Time `json:"at"`
+	MessageID string    `json:"message_id,omitempty"`
+	Outcome   string    `json:"outcome"`
+	Reason    string    `json:"reason,omitempty"`
+	At        time.Time `json:"at"`
 }
 
 func (e *Engine) Summary() Summary {
@@ -78,7 +79,7 @@ func (e *Engine) AuthSummary(a Auth) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
-	if b.SessionID == "" {
+	if b.SessionID == "" && b.RemoteKey == "" {
 		// A replayed pre-upgrade binding has no confirmed official session yet, so
 		// it keeps the documented body-free projection: no inbox counts, recovery
 		// IDs, wake state or sequence, and no inbox access before association.
@@ -96,7 +97,7 @@ func (e *Engine) summaryLocked() Summary {
 		Notice: "handed_off = CLI stdout, not model acceptance. Inspect history --id or --pending; never auto-replay."}
 
 	for slot, b := range e.bindings {
-		s.Bindings[slot] = BindingSummary{Active: b.Active, Associated: b.SessionID != "", ParkEnabled: b.ParkEnabled, CollectorActive: e.waiters[slot] > 0, LastActivity: b.LastActivity}
+		s.Bindings[slot] = BindingSummary{Active: b.Active, Associated: b.SessionID != "" || b.RemoteKey != "", ParkEnabled: b.ParkEnabled, CollectorActive: e.waiters[slot] > 0, LastActivity: b.LastActivity}
 	}
 	for _, slot := range model.SlotActors() {
 		counts := e.counts[slot]

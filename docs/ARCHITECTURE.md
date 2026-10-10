@@ -132,7 +132,7 @@ Desktop uses an explicit validated URL, installed daemon, or embedded Service wh
 
 ## HTTP, browser, and privacy boundaries
 
-Validate numeric-loopback-only listeners before opening state. Bearer tokens do not allow LAN/hostname binds. Browser bootstrap exchanges credentials for scoped sessions; mutations retain same-origin/CSRF protection. The Management gateway does not expose another Room's credentials or identity.
+Validate numeric-loopback Management, direct Room and standalone listeners before opening state. Bearer tokens do not allow LAN/hostname binds on those surfaces. The separately enabled Native LAN listener accepts only a selected numeric private interface, uses pinned TLS and per-Room certificate admission, and exposes a fixed Room-operation allowlist. Browser bootstrap exchanges credentials for scoped sessions; mutations retain same-origin/CSRF protection. The Management gateway does not expose another Room's credentials or identity. See [Native LAN collaboration](LAN_NATIVE.md) and [Security](../SECURITY.md#25-native-lan-membership).
 
 SSE is a projection stream, not an execution queue. Reconnect from the actual cursor and refresh after a bounded-tail reset; never replay commands to repair a display gap. Incremental rendering preserves drafts, focus, disclosure, and reading position. Stale responses cannot overwrite newer mutations or target another Room.
 
@@ -160,4 +160,4 @@ Optional wake is Service-authorized, body-free, rate-limited, durably reserved b
 
 ## Verification and change discipline
 
-Use state-transition tests for successful, rejected, ambiguous, cancelled, restarted, and late-callback paths. Inventories must match source registrations/fields. [Contributing](../CONTRIBUTING.md) defines commands and evidence layers. Native remains experimental: historical plans, UI fixtures, synthetic hooks, and Mock cannot establish current authenticated Claude/Codex/Grok/Gemini multi-round acceptance or billed-token savings.
+Use state-transition tests for successful, rejected, ambiguous, cancelled, restarted, and late-callback paths. Inventories must match source registrations/fields. [Contributing](../CONTRIBUTING.md) defines commands and evidence layers. Historical plans, UI fixtures, synthetic hooks, and Mock cannot establish current authenticated Claude/Codex/Grok/Gemini multi-round acceptance or billed-token savings.

@@ -53,6 +53,13 @@ func (e *Engine) indexWakeReservation(r WakeReservation) {
 func (e *Engine) indexWakeObservation(slot model.ActorID, observation WakeObservation) {
 	d := e.deliveryIndex()
 	d.slots[slot] = append(d.slots[slot], wakeTimelineEntry{sequence: e.sequence, observation: observation})
+	if observation.MessageID != "" {
+		d.inferred[observation.MessageID] = observation
+		if d.pending[slot] == observation.MessageID {
+			delete(d.pending, slot)
+		}
+		return
+	}
 	if observation.Outcome != "suppressed" {
 		if id := d.pending[slot]; id != "" {
 			d.inferred[id] = observation
