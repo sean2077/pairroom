@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -99,5 +100,62 @@ func TestLANTransferRequestCancellationAndCloseAreIdempotent(t *testing.T) {
 	}
 	if err := e.RevokeLANMember(owner); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLANTransferNormalCloseDoesNotInterruptConnection(t *testing.T) {
+	e, owner, _ := lanEngine(t, nil)
+	a := admitLAN(t, e, Digest("completed peer"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var interrupts atomic.Int32
+	transfer, err := e.BeginLANTransfer(ctx, a, func() { interrupts.Add(1) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transfer.Effect(func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	transfer.Close()
+	// net/http cancels the completed request context before serving the next
+	// request on this same connection. A saved revocation callback can also
+	// reach an already completed transfer; neither may interrupt that reuse.
+	cancel()
+	transfer.stop()
+	if interrupts.Load() != 0 {
+		t.Fatal("normal transfer completion interrupted a reusable connection")
+	}
+	if err := transfer.Effect(func() error { t.Error("closed transfer still ran an effect"); return nil }); !errors.Is(err, context.Canceled) {
+		t.Fatal("completed transfer retained effect authority")
+	}
+	if err := e.RevokeLANMember(owner); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLANTransferCloseJoinsStartedContextInterruption(t *testing.T) {
+	e, _, _ := lanEngine(t, nil)
+	a := admitLAN(t, e, Digest("interrupted peer"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started, release, closed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	transfer, err := e.BeginLANTransfer(ctx, a, func() { close(started); <-release })
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	<-started
+	go func() { transfer.Close(); close(closed) }()
+	select {
+	case <-closed:
+		close(release)
+		t.Fatal("Close returned while a request callback could still change connection deadlines")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not join the completed interruption")
 	}
 }

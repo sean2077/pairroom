@@ -91,10 +91,15 @@ func (t *LANTransfer) stop() {
 
 func (t *LANTransfer) Close() {
 	t.closeOnce.Do(func() {
-		t.stop()
 		t.stopWatch()
 		t.mu.Lock()
 		defer t.mu.Unlock()
+		// Completion has no remaining network effect to interrupt. Setting an
+		// expired deadline here can permanently cancel net/http's background
+		// read and poison the keepalive connection for the following claim.
+		// Claim the shared once without interrupting, or join a cancellation
+		// callback that already started, before the handler resets deadlines.
+		t.stopOnce.Do(t.cancel)
 		t.engine.mu.Lock()
 		delete(t.engine.lanTransfers.active, t)
 		close(t.done)

@@ -65,8 +65,17 @@ func TestLANDirectCLIStatusPreservesBoundedTailAndExactTotals(t *testing.T) {
 		t.Fatalf("direct full-status JSON failed: %s, %v", output, err)
 	}
 	tail := result.Relay
-	if tail.RoomID != guest.room || result.Local.Workspace != guest.root {
-		t.Fatal("status did not preserve this binding's direct route and local workspace")
+	if tail.RoomID != guest.room {
+		t.Fatalf("status Room route = %q; want %q", tail.RoomID, guest.room)
+	}
+	// Native bindings store the canonical workspace. TempDir may pass through
+	// a directory alias, including macOS /var or an explicit symlink root.
+	wantWorkspace, err := filepath.EvalSymlinks(guest.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Local.Workspace != wantWorkspace {
+		t.Fatalf("status workspace = %q; want canonical %q for input %q", result.Local.Workspace, wantWorkspace, guest.root)
 	}
 	if tail.TotalMessages != count || tail.TotalAudit != wantAudit || tail.Sequence != canonical.Sequence {
 		t.Fatalf("CLI dropped or changed the exact retained totals: messages=%d audit=%d sequence=%d; want %d/%d/%d", tail.TotalMessages, tail.TotalAudit, tail.Sequence, count, wantAudit, canonical.Sequence)
