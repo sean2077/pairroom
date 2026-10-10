@@ -94,13 +94,17 @@ func (s *Store) List(ctx context.Context) ([]Snapshot, error) {
 	}
 	var result []Snapshot
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".") {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") || !lanshare.ValidID(name) || !strings.HasPrefix(name, "lan_") {
+			// Only an entry that names a LAN client can be a joined-Room record.
+			// Unrelated files in this private catalog (OS or sync metadata such
+			// as Thumbs.db) must not fail every LAN surface.
 			continue
 		}
 		if !e.IsDir() || e.Type()&os.ModeSymlink != 0 {
 			return nil, ErrInvalidState
 		}
-		c, err := s.client(e.Name())
+		c, err := s.client(name)
 		if err != nil {
 			return nil, err
 		}
@@ -283,7 +287,8 @@ func (c *Client) Snapshot(ctx context.Context) (Snapshot, error) {
 	c.mu.Lock()
 	connected, lastSeen := c.connected, c.lastSeen
 	c.mu.Unlock()
-	s := Snapshot{ID: r.ID, RemoteRoomID: r.Invite.RoomID, Workspace: r.Workspace, Runtime: r.Runtime, Status: r.Status, Connected: connected, LastSeen: lastSeen, HostPin: r.Invite.HostPin, Endpoint: r.Invite.Endpoint}
+	ownerKey, _ := r.Identity.Fingerprint()
+	s := Snapshot{ID: r.ID, RemoteRoomID: r.Invite.RoomID, Workspace: r.Workspace, Runtime: r.Runtime, Status: r.Status, Connected: connected, LastSeen: lastSeen, HostPin: r.Invite.HostPin, Endpoint: r.Invite.Endpoint, OwnerKey: ownerKey}
 	if r.Room != nil {
 		s.Name, s.Slot, s.Generation = r.Room.Name, r.Room.Slot, r.Room.Generation
 	}

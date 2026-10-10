@@ -154,9 +154,14 @@
         section(t('room.lan.invite'), node('p', { className: 'field-help', textContent: t('room.lan.inviteHelp') }), invite, inviteOutput, copy),
         memberSection, notice, actionButton(t('ui.refresh'), () => openRoom(room), 'secondary-button'));
     }
-    function messageAuthor(message) {
+    function messageAuthor(room, message) {
       if (message.from !== 'user') return message.from === 'slot1' ? t('agent.agent1') : t('agent.agent2');
-      return message.author?.startsWith('lan:') ? t('room.lan.remoteHuman') : t('room.lan.hostHuman');
+      if (message.author === 'host_owner') return t('room.lan.hostHuman');
+      // This dialog is the joined member's own view: a "lan:" author names this
+      // member's identity, so compare the pinned key instead of assuming the
+      // other side wrote it. An author this view cannot attribute stays neutral.
+      if (room.owner_key && message.author === `lan:${room.owner_key}`) return t('room.lan.localHuman');
+      return t('room.lan.remoteHuman');
     }
     function messageCard(room, message) {
       const attachments = (message.attachments || []).map(item => node('a', {
@@ -164,7 +169,7 @@
         download: item.name || item.id, className: 'lan-artifact', textContent: `${item.name || item.id} · ${item.size || 0} B`,
       }));
       return node('article', { className: 'lan-shared-message', 'data-message-id': message.id },
-        node('header', {}, node('strong', { textContent: messageAuthor(message) }),
+        node('header', {}, node('strong', { textContent: messageAuthor(room, message) }),
           node('span', { textContent: ` → ${message.to === 'user' ? '@user' : message.to === 'slot1' ? t('agent.agent1') : t('agent.agent2')}` }),
           node('span', { className: 'badge plain', textContent: t(`room.native.${message.state}`) })),
         message.quote ? node('blockquote', { textContent: message.quote.text || '' }) : null,

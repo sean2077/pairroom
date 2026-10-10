@@ -1,6 +1,8 @@
 package relayclient
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,5 +55,39 @@ func TestDirectStateRequiresExplicitSchemaAndExactHostScopedRoute(t *testing.T) 
 	other := lanshare.Invite{HostPin: lanJoinTestInvite(t).HostPin, RoomID: invite.RoomID}
 	if lanRoutingID(other) == id {
 		t.Fatal("equal Room IDs on different hosts share a local route")
+	}
+}
+
+// LAN workspace directories hold transport credentials. Whichever CLI path
+// reaches them first must create them owner-private, so a later LAN slot lock
+// and private state write cannot fail forever on a directory this CLI made.
+func TestLANWorkspaceDirectoriesAreCreatedOwnerPrivate(t *testing.T) {
+	root := t.TempDir()
+	for _, parts := range [][]string{
+		{".pairroom", "rooms", "lan_fixture", "slots", "slot1"},
+		{".pairroom", "lan-joins", "lan_fixture"},
+	} {
+		dir, err := secureDir(root, parts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := privatefile.CheckDirectory(dir); err != nil {
+			t.Fatalf("LAN state directory %v was not owner-private: %v", parts, err)
+		}
+	}
+	if _, err := secureDir(root, ".pairroom", "rooms", "room-1", "slots", "slot1"); err != nil {
+		t.Fatalf("ordinary slot directory: %v", err)
+	}
+	// A pre-existing shared LAN directory fails closed instead of being silently
+	// re-owner-ed.
+	shared := filepath.Join(root, ".pairroom", "rooms", "lan_shared", "slots", "slot1")
+	if err := os.MkdirAll(shared, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(shared, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := secureDir(root, ".pairroom", "rooms", "lan_shared", "slots", "slot1"); !errors.Is(err, privatefile.ErrPrivate) {
+		t.Fatalf("shared LAN directory was accepted: %v", err)
 	}
 }

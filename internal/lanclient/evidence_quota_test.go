@@ -63,8 +63,12 @@ func TestEvidenceQuotaIsActionableAndCannotStartAClaim(t *testing.T) {
 				}
 			})
 			var result collectResult
-			if err := c.Relay(ctx, auth, "wait", nil, &result); !errors.Is(err, expected) || strings.Contains(err.Error(), dir) {
+			err = c.Relay(ctx, auth, "wait", nil, &result)
+			if !errors.Is(err, expected) || strings.Contains(err.Error(), dir) {
 				t.Fatalf("capacity failure lost its safe actionable reason: %v", err)
+			}
+			if budget == "committed" && (!strings.Contains(err.Error(), "verified-evidence cache") || strings.Contains(err.Error(), "new Room")) {
+				t.Fatalf("guest cache exhaustion did not name this machine's cache instead of a host-only remedy: %v", err)
 			}
 			if claims.Load() != 0 || result.Claim != nil {
 				t.Fatal("quota failure crossed the delivery claim boundary")

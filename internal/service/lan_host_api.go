@@ -150,7 +150,11 @@ func (h *lanHostServer) serveMember(w http.ResponseWriter, r *http.Request, n *n
 	case "wake-reserve":
 		err := n.engine.ReserveLANWake(a, req.ID)
 		if errors.Is(err, relay.ErrWakeReserved) {
-			writeManagementJSON(w, 409, map[string]string{"error": "wake is already reserved; no automatic retry", "code": "wake_reserved"})
+			writeManagementJSON(w, 409, map[string]string{"error": err.Error(), "code": relay.WakeReservedCode})
+			return
+		}
+		if errors.Is(err, relay.ErrWakeIneligible) {
+			writeManagementJSON(w, 409, map[string]string{"error": err.Error(), "code": relay.WakeIneligibleCode})
 			return
 		}
 		nativeResult(w, map[string]bool{"reserved": true}, err)

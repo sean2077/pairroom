@@ -849,14 +849,19 @@ func (s *ManagementServer) archiveRoomByID(ctx context.Context, roomID string) (
 		return room, true, nil
 	}
 	if room.Sharing == "lan" {
+		// Retire the admitted member before the lifecycle barrier when the Room's
+		// Runtime can be opened. A Runtime that cannot start (for example a
+		// missing Project) must not block archiving — and therefore deleting —
+		// the Room: the archive itself closes every LAN surface for it.
 		n, err := s.sharedNativeRuntime(ctx, roomID)
-		if err != nil {
-			return Room{}, false, err
-		}
-		release := n.acquire()
-		err = n.engine.RevokeLANMember()
-		release()
-		if err != nil {
+		if err == nil {
+			release := n.acquire()
+			revokeErr := n.engine.RevokeLANMember()
+			release()
+			if revokeErr != nil {
+				return Room{}, false, revokeErr
+			}
+		} else if !lanRevokeUnavailable(s.runtimes.Status(roomID).Phase, err) {
 			return Room{}, false, err
 		}
 	}
@@ -876,6 +881,15 @@ func (s *ManagementServer) archiveRoomByID(ctx context.Context, roomID string) (
 		return Room{}, false, err
 	}
 	return archived, false, nil
+}
+
+// lanRevokeUnavailable reports whether a LAN Room's member revoke was skipped
+// because its Runtime could not be opened: the Runtime failed to start, or it
+// was never activated. The archive then proceeds without a live revoke; every
+// LAN request for an archived Room is rejected independently of the membership
+// fact, so an unavailable Runtime must not make the Room unarchivable.
+func lanRevokeUnavailable(phase RuntimePhase, err error) bool {
+	return phase == RuntimeFailed || errors.Is(err, ErrRuntimeNotReady)
 }
 
 func (s *ManagementServer) removeRoom(w http.ResponseWriter, r *http.Request) {

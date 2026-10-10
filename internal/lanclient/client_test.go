@@ -441,3 +441,28 @@ func TestRejectedCrossHostSessionDoesNotPoisonTargetRoom(t *testing.T) {
 		t.Fatal("rejected session contacted the host")
 	}
 }
+
+// The private catalog must not fail every LAN surface because of an unrelated
+// file (OS or sync metadata) in it. Only an entry that names a LAN client is
+// still held to the client-record boundary.
+func TestListIgnoresUnrelatedCatalogEntriesAndKeepsClientShapedOnesStrict(t *testing.T) {
+	ctx := context.Background()
+	s, f := newStore(t), newRemote(t)
+	c, _, _ := f.join(t, s)
+	for name, contents := range map[string]string{"Thumbs.db": "junk", "desktop.ini": "[.ShellClassInfo]"} {
+		if err := os.WriteFile(filepath.Join(s.Root(), name), []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshots, err := s.List(ctx)
+	if err != nil || len(snapshots) != 1 || snapshots[0].ID != c.id {
+		t.Fatalf("unrelated catalog entries broke List: %+v %v", snapshots, err)
+	}
+	// An entry whose name does claim to be a client is a client record or nothing.
+	if err := os.WriteFile(filepath.Join(s.Root(), "lan_"+strings.Repeat("a", 32)), []byte("junk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.List(ctx); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("client-shaped file was not rejected: %v", err)
+	}
+}

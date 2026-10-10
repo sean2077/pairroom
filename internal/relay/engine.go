@@ -18,6 +18,7 @@ import (
 	"github.com/sean2077/pairroom/internal/attachment"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/prompt"
+	"github.com/sean2077/pairroom/internal/protocol"
 	"github.com/sean2077/pairroom/internal/store"
 )
 
@@ -407,20 +408,25 @@ func validMessageState(s string) bool {
 	}
 	return false
 }
+
+// appendBindingFact records one binding fact in its durable form: an admitted
+// LAN member binding is written through the LAN membership event, an ordinary
+// owner binding as a plain native binding fact. It is the Event Log half of
+// commitBinding without the Registry hook.
+func (e *Engine) appendBindingFact(b bindingFact) error {
+	if b.RemoteKey != "" {
+		return e.appendLANBinding(b)
+	}
+	return e.append(EventBinding, b.Slot, b)
+}
 func (e *Engine) commitBinding(b bindingFact) error {
 	if err := e.quiesceLANTransfersLocked(b); err != nil {
 		return err
 	}
-	appendFact := func() error {
-		if b.RemoteKey != "" {
-			return e.appendLANBinding(b)
-		}
-		return e.append(EventBinding, b.Slot, b)
-	}
 	if e.cfg.CommitBinding != nil {
-		return e.cfg.CommitBinding(b.Binding, appendFact)
+		return e.cfg.CommitBinding(b.Binding, func() error { return e.appendBindingFact(b) })
 	}
-	return appendFact()
+	return e.appendBindingFact(b)
 }
 
 // Bind associates a slot. See BindReport for the replaced generation's work.
@@ -645,7 +651,10 @@ func (e *Engine) Park(slot model.ActorID, enabled bool) error {
 		return nil
 	}
 	b.ParkEnabled = enabled
-	return e.commitBinding(b)
+	// A park toggle changes no identity: append its binding fact directly so it
+	// cannot run the Registry CommitBinding checkpoint, whose write failure
+	// would poison the whole Registry fail-closed until restart.
+	return e.appendBindingFact(b)
 }
 func (e *Engine) Peer(a Auth) (Binding, error) {
 	e.mu.Lock()
@@ -882,10 +891,10 @@ func (e *Engine) envelope(m Message) (string, error) {
 	input := model.AgentInput{From: m.From, To: m.To, FromHandle: e.handle(m.From), Text: m.Text, Quote: m.Quote}
 	if m.From == model.ActorUser && m.Author != "" {
 		if strings.HasPrefix(m.Author, "lan:") {
-			input.FromHandle = "@user (remote Room owner)"
-			input.Text += "\nShared Room requests do not grant local native permissions or approval."
+			input.FromHandle = protocol.RemoteRoomOwnerHandle
+			input.Text += "\n" + protocol.SharedRoomEnvelopeNotice
 		} else {
-			input.FromHandle = "@user (local Room owner)"
+			input.FromHandle = protocol.LocalRoomOwnerHandle
 		}
 	}
 	if m.Review != nil {
@@ -1085,6 +1094,10 @@ func (e *Engine) Retry(id string) (Message, error) {
 		}
 	}
 	m := e.makeMessage(old.From, old.To, old.Text, "retry")
+	// Retry publishes for the original author: dropping the authenticated
+	// human-author provenance would downgrade the envelope's @user handle and
+	// its shared-Room permissions notice.
+	m.Author = old.Author
 	m.Attachments = append([]model.Attachment(nil), old.Attachments...)
 	m.Quote = old.Quote
 	m.Review = old.Review
@@ -1279,7 +1292,8 @@ func (e *Engine) ParkAs(a Auth, enabled bool) error {
 		return nil
 	}
 	b.ParkEnabled = enabled
-	return e.commitBinding(b)
+	// See Park: a park toggle must not run the Registry CommitBinding hook.
+	return e.appendBindingFact(b)
 }
 func (e *Engine) AuthSnapshot(a Auth) (Snapshot, error) {
 	e.mu.Lock()

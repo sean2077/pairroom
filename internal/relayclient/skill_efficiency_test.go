@@ -45,7 +45,11 @@ func TestNativeSkillCostAndCompleteOutput(t *testing.T) {
 		"failed-wake-queued":               "Failed wake leaves input queued for collection or a human nudge",
 		"no-agent-vendor-wake":             "Never execute printed vendor wake commands",
 	})
-	if len(skillContent) > 5000 {
-		t.Fatalf("skill grew to %d bytes; compact operating rules should fit in 5000", len(skillContent))
+	// Restoring the file-workflow review guidance that the rewrite dropped
+	// (findings need location/evidence/impact; retest fixes at the new revision
+	// and report unrun tests) costs about 165 bytes, so the compact operating
+	// rules are held to 5200 rather than deleting another safety clause.
+	if len(skillContent) > 5200 {
+		t.Fatalf("skill grew to %d bytes; compact operating rules should fit in 5200", len(skillContent))
 	}
 }

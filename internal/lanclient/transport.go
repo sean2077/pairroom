@@ -103,8 +103,11 @@ func safeError(err error) error {
 		if failure.Code == relay.SendPayloadConflictCode {
 			return relay.ErrSendPayloadConflict
 		}
-		if failure.Code == "wake_reserved" {
+		if failure.Code == relay.WakeReservedCode {
 			return relay.ErrWakeReserved
+		}
+		if failure.Code == relay.WakeIneligibleCode {
+			return relay.ErrWakeIneligible
 		}
 		return &Error{Status: failure.Status, Message: ErrUnavailable.Error()}
 	}

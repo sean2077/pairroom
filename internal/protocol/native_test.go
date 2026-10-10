@@ -21,6 +21,11 @@ func TestNativeBootstrapBudgetAndBoundaries(t *testing.T) {
 					if len(full) > 1800 {
 						t.Fatalf("native bootstrap + collaboration v%d %s/%s/%s = %d bytes", version, slot, a, b, len(full))
 					}
+					// A shared Room delivers its notice with the same bootstrap, so
+					// the LAN variant is held to the same budget.
+					if lan := full + "\n" + SharedRoomBootstrapNotice; len(lan) > 1800 {
+						t.Fatalf("LAN bootstrap + collaboration v%d %s/%s/%s = %d bytes", version, slot, a, b, len(lan))
+					}
 				}
 				for _, fragment := range []string{NativeVersion, "advisory", "relay send", "only when another reply is needed", "Send plus Stop can duplicate", "Never read or print relay credentials"} {
 					if !strings.Contains(text, fragment) {

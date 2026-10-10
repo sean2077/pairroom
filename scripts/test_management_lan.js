@@ -137,6 +137,18 @@ async function main() {
     assert.deepEqual(sends[1].body, sends[0].body, 'an explicit retry retains the exact client ID, body and target');
     assert.equal(f.storage.size, 0);
   }
-  console.log('LAN UI: explicit trusted receipts, single invite issuance, safe descriptors, session isolation, pending local detach and original-ID publication recovery: ok');
+  {
+    const f = fixture(), selfKey = 'a'.repeat(64);
+    f.setHandler(request => request.path.endsWith('/history') ? { messages: [
+      { id: 'host-message', from: 'user', to: 'slot2', state: 'human', text: 'from the hosting human', author: 'host_owner' },
+      { id: 'own-message', from: 'user', to: 'slot1', state: 'human', text: 'from my own human', author: `lan:${selfKey}` },
+    ] } : {});
+    f.client.openJoined({ id: 'lan_fixture', name: 'Remote Room', status: 'accepted', connected: true, owner_key: selfKey, endpoint: 'https://192.168.1.2:8877' });
+    await flush();
+    const authors = f.all().filter(item => item.tag === 'article')
+      .map(card => card.children.find(child => child?.tag === 'header')?.children.find(child => child?.tag === 'strong')?.textContent);
+    assert.deepEqual(authors, ['room.lan.hostHuman', 'room.lan.localHuman'], 'the joined view must attribute its own human by the pinned key, not label them as the other side');
+  }
+  console.log('LAN UI: explicit trusted receipts, single invite issuance, safe descriptors, session isolation, pending local detach, original-ID publication recovery and own-human attribution: ok');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

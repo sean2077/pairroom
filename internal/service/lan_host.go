@@ -81,6 +81,15 @@ type lanRateWindow struct {
 	At    time.Time
 	Count int
 }
+
+// maxLANConcurrent bounds every in-flight LAN request. The per-key share keeps
+// one certified member (one long-poller or transfer) from occupying the whole
+// listener and starving the members of other Rooms hosted here.
+const (
+	maxLANConcurrent       = 64
+	maxLANConcurrentPerKey = 16
+)
+
 type lanHostServer struct {
 	mu            sync.Mutex
 	owner         *ManagementServer
@@ -91,7 +100,8 @@ type lanHostServer struct {
 	endpoint      string
 	diagnostic    string
 	rates         map[string]lanRateWindow
-	concurrent    chan struct{}
+	inflight      map[string]int
+	inflightTotal int
 	transfers     int
 	roomTransfers map[string]int
 }
@@ -101,7 +111,7 @@ func initLANHost(s *ManagementServer) error {
 	if err != nil {
 		return err
 	}
-	h := &lanHostServer{owner: s, path: filepath.Join(dir, "host.json"), config: lanHostConfig{Schema: 1}, rates: make(map[string]lanRateWindow), concurrent: make(chan struct{}, 64)}
+	h := &lanHostServer{owner: s, path: filepath.Join(dir, "host.json"), config: lanHostConfig{Schema: 1}, rates: make(map[string]lanRateWindow), inflight: make(map[string]int)}
 	info, err := os.Lstat(h.path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -310,6 +320,36 @@ func (s *ManagementServer) lanRoomInfo(n *nativeHostRuntime, b relay.Binding) *l
 	}
 	return &lanshare.RoomInfo{RoomID: n.room.ID, Name: name, Slot: b.Slot, Generation: b.Generation, BindID: b.BindID, Runtimes: n.engine.Runtimes(), Collaboration: model.CloneCollaboration(n.room.Collaboration)}
 }
+
+// enter takes one in-flight capacity slot for a certified key. It refuses when
+// the listener is saturated or that key already holds its per-key share.
+func (h *lanHostServer) enter(key string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.inflightTotal >= maxLANConcurrent || h.inflight[key] >= maxLANConcurrentPerKey {
+		return false
+	}
+	if h.inflight == nil {
+		h.inflight = make(map[string]int)
+	}
+	h.inflight[key]++
+	h.inflightTotal++
+	return true
+}
+
+// leave releases the slot held by enter, keeping the per-key map bounded by the
+// in-flight requests themselves.
+func (h *lanHostServer) leave(key string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if count := h.inflight[key]; count > 1 {
+		h.inflight[key] = count - 1
+	} else {
+		delete(h.inflight, key)
+	}
+	h.inflightTotal--
+}
+
 func (h *lanHostServer) admitRequest(r *http.Request) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -357,13 +397,16 @@ func (h *lanHostServer) serve(w http.ResponseWriter, r *http.Request) {
 		writeManagementError(w, 403, "LAN client certificate request required")
 		return
 	}
-	select {
-	case h.concurrent <- struct{}{}:
-		defer func() { <-h.concurrent }()
-	default:
+	key := lanshare.Fingerprint(r.TLS.PeerCertificates[0])
+	// Take the capacity slot after the cheap request checks, so only a
+	// certificate-authenticated operation can hold one, and bound it per
+	// certified key: parked long-polls and transfers must not consume every
+	// slot and reject other members with "capacity reached".
+	if !h.enter(key) {
 		writeManagementError(w, 429, "LAN request capacity reached")
 		return
 	}
+	defer h.leave(key)
 	if !h.admitRequest(r) {
 		writeManagementError(w, 429, "LAN request limit reached")
 		return
@@ -374,7 +417,6 @@ func (h *lanHostServer) serve(w http.ResponseWriter, r *http.Request) {
 		writeManagementError(w, 404, "unknown LAN route")
 		return
 	}
-	key := lanshare.Fingerprint(r.TLS.PeerCertificates[0])
 	n, err := h.authorizedRuntime(r, room, action, key)
 	if err != nil {
 		writeManagementError(w, 403, "shared Room unavailable or membership does not authorize this operation")

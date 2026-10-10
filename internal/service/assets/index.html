@@ -159,10 +159,10 @@
           <p id="room-native-help" class="field-help" data-i18n="ui.native.help" hidden>Approve project Stop hooks, then bind both native sessions. PairRoom does not start or interrupt them. Provider, model, effort, instructions and permission settings below are display-only.</p>
           <p id="room-embedded-help" class="field-help" data-i18n="ui.native.embeddedHelp" hidden>Native is recommended for new Rooms. Choose Embedded when you need PairRoom-owned sessions and adapter controls, or a Mock demonstration.</p>
           <div data-native-setup data-native-source="room-native-help" hidden></div>
-          <label id="room-lan-choice" class="checkbox-label"><input id="room-share-lan" type="checkbox"><span data-i18n="room.lan.share">Invite a teammate over LAN</span></label>
+          <label id="room-lan-choice" class="checkbox-label"><input id="room-share-lan" type="checkbox"><span data-i18n="room.lan.share">Invite the other side over LAN</span></label>
           <div id="room-lan-fields" hidden>
             <label><span class="field-label" data-i18n="room.lan.ownerSlot">My Agent's slot</span><select id="room-lan-owner-slot"><option value="slot1" data-i18n="agent.agent1">Agent 1</option><option value="slot2" data-i18n="agent.agent2">Agent 2</option></select></label>
-            <p class="field-help" data-i18n="room.lan.createHelp">Only this Room's host needs a Service. Your teammate joins directly with CLI/hooks; their actual Runtime is recorded when you accept their join receipt.</p>
+            <p class="field-help" data-i18n="room.lan.createHelp">Only this Room's host needs a Service. The other side joins directly with CLI/hooks; their actual Runtime is recorded when you accept their join receipt.</p>
             <a href="#/settings/lan" id="room-lan-settings" data-i18n="room.lan.openSettings">Configure this Service's LAN listener</a>
           </div>
         </section>
@@ -192,7 +192,7 @@
           </details>
         </section>
         <div class="section-label-row"><div><span class="field-label" data-i18n="room.agentConfiguration">Agent configuration</span><p data-room-only class="field-help" data-i18n="room.agentConfigurationImmutable">Fixed once the Room is created.</p></div><button id="agent-catalog-refresh" class="secondary-button compact-button" type="button" data-i18n="agent.refreshCatalog">Refresh Agent catalog</button></div>
-        <p id="room-lan-peer" class="field-help" data-i18n="room.lan.awaitingPeerHelp" hidden>Other slot: awaiting teammate. No Runtime or native session is selected for them.</p>
+        <p id="room-lan-peer" class="field-help" data-i18n="room.lan.awaitingPeerHelp" hidden>Other slot: awaiting the other side. No Runtime or native session is selected for them.</p>
         <div class="binding-grid">
           <fieldset class="binding-card" data-actor="slot1">
             <legend><span class="agent-avatar slot1">1</span><span><strong id="slot1-responsibility-label" data-i18n="room.collaboration.leadSlot">Agent 1 · Lead</strong></span></legend>

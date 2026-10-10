@@ -27,10 +27,14 @@ type lanGuestManager struct {
 }
 
 type lanGuest struct {
-	mu      sync.Mutex
-	client  *lanclient.Client
-	waker   *nativeWaker
-	polling bool
+	mu       sync.Mutex
+	client   *lanclient.Client
+	waker    *nativeWaker
+	polling  bool
+	nextPoll time.Time
+	// pollDelay is the current backoff after a failed observation pass; it grows
+	// to observerMaxBackoff and clears on the next successful pass.
+	pollDelay time.Duration
 }
 
 type lanGuestSummary = lanclient.Snapshot

@@ -14,6 +14,7 @@ import (
 	"github.com/sean2077/pairroom/internal/privatefile"
 	"github.com/sean2077/pairroom/internal/privatelock"
 	"github.com/sean2077/pairroom/internal/prompt"
+	"github.com/sean2077/pairroom/internal/protocol"
 	"github.com/sean2077/pairroom/internal/relay"
 )
 
@@ -95,6 +96,14 @@ func (c *Client) collect(ctx context.Context, req relayRequest, auth relay.Auth)
 		}
 		var response lanshare.ClaimResponse
 		if err := c.call(ctx, r, "claim", lanshare.ClaimRequest{ID: m.ID, Digest: head.Head.Digest, Generation: auth.Generation, Park: req.Park}, &response); err != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				// The wait window ended while the claim was in flight. The pinned
+				// host answered, so this is not a network outage: a claim it
+				// committed and never handed over surfaces later as unknown in
+				// history --pending, exactly as the head deadline above returns an
+				// empty poll rather than claiming the host was unreachable.
+				return collectResult{}, nil
+			}
 			return collectResult{}, safeError(err)
 		}
 		if response.Claim == nil {
@@ -129,13 +138,17 @@ func (c *Client) prepareEnvelope(ctx context.Context, r record, m relay.Message)
 	localKey, _ := r.Identity.Fingerprint()
 	var handle string
 	if m.From == model.ActorUser {
+		// Human provenance is authenticated on the host: the hosting human
+		// ("host_owner") or this client's own human round-tripped through the
+		// host ("lan:<own key>"). Anything else cannot be attributed, so it
+		// fails closed instead of inventing a participant handle.
 		switch m.Author {
 		case "host_owner":
-			handle = "@user (room host owner)"
+			handle = protocol.RemoteRoomOwnerHandle
 		case "lan:" + localKey:
-			handle = "@user (local owner)"
+			handle = protocol.LocalRoomOwnerHandle
 		default:
-			handle = "@user (room participant)"
+			return "", errors.New("LAN user message has no authenticated author provenance")
 		}
 	} else {
 		handle = model.ParticipantIdentities(r.Room.Runtimes)[m.From].MentionHandle

@@ -88,6 +88,11 @@ type Snapshot struct {
 	HostPin      string            `json:"host_pin"`
 	Endpoint     string            `json:"endpoint"`
 	Generation   uint64            `json:"generation,omitempty"`
+	// OwnerKey is this client's own public certificate fingerprint (the key the
+	// host admits and prefixes with "lan:" on this member's human messages). A
+	// joined view needs it to attribute its own human without mislabeling them
+	// as the other side; it is a public identity, never a private key.
+	OwnerKey string `json:"owner_key,omitempty"`
 }
 
 type Store struct {

@@ -301,3 +301,81 @@ func TestLANConditionalClaimCannotConsumeUnpreparedSuccessor(t *testing.T) {
 		t.Fatal("successor was not left queued")
 	}
 }
+
+// Retry republishes for the original author. Dropping the authenticated human
+// provenance would downgrade the rebuilt envelope's @user handle and silently
+// remove the shared-Room permissions notice.
+func TestLANRetryKeepsAuthenticatedHumanProvenance(t *testing.T) {
+	now := time.Now().UTC()
+	e, owner, _ := lanEngine(t, func() time.Time { return now })
+	a := admitLAN(t, e, Digest("peer"))
+	sent, err := e.SendLANUser(a, SendRequest{ID: "remote-human", To: model.ActorSlot1, Text: "remote request"})
+	if err != nil || sent.Author != "lan:"+a.MemberKey {
+		t.Fatalf("remote human send: %+v %v", sent, err)
+	}
+	claim, err := e.Claim(context.Background(), owner, false)
+	if err != nil || claim == nil || !strings.Contains(claim.Envelope, "remote Room owner") {
+		t.Fatalf("first claim lost remote provenance: %+v %v", claim, err)
+	}
+	now = now.Add(e.cfg.Lease + time.Second)
+	if err := e.Reap(); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := e.Retry(sent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried.Author != sent.Author || retried.RetryOf != sent.ID {
+		t.Fatalf("retry lost the authenticated author: %+v", retried)
+	}
+	claim, err = e.Claim(context.Background(), owner, false)
+	if err != nil || claim == nil || !strings.Contains(claim.Envelope, "remote Room owner") || !strings.Contains(claim.Envelope, "do not grant local native permissions") {
+		t.Fatalf("retried envelope lost shared-Room provenance: %+v %v", claim, err)
+	}
+}
+
+// A park toggle appends its binding fact directly. Running the Registry
+// CommitBinding hook for it would let one checkpoint write failure poison the
+// whole Registry fail-closed, although a park toggle changes no binding
+// identity.
+func TestParkAppendsItsFactWithoutRunningTheCommitBindingHook(t *testing.T) {
+	log, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimes := map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: model.RuntimeAwaitingPeer}
+	calls := 0
+	e, err := Open(Config{RoomID: "room", Store: log, SharedSlot: model.ActorSlot2, Runtimes: runtimes, CommitBinding: func(_ Binding, appendFact func() error) error {
+		calls++
+		return appendFact()
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := e.Bind(model.ActorSlot1, BindRequest{BindID: "local-bind", CredentialHash: Digest("local-secret"), SessionID: "official-local-session"})
+	if err != nil || calls != 1 {
+		t.Fatalf("bind hook calls=%d: %+v %v", calls, b, err)
+	}
+	a := admitLAN(t, e, Digest("peer"))
+	before := calls
+	if err := e.Park(model.ActorSlot1, false); err != nil || calls != before {
+		t.Fatalf("owner park ran the commit hook (calls=%d): %v", calls, err)
+	}
+	if err := e.ParkAs(a, false); err != nil || calls != before {
+		t.Fatalf("member park ran the commit hook (calls=%d): %v", calls, err)
+	}
+	if err := e.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := Open(Config{RoomID: "room", Store: log, SharedSlot: model.ActorSlot2, Runtimes: runtimes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	if owner := restarted.bindings[model.ActorSlot1]; owner.ParkEnabled || !owner.Active {
+		t.Fatalf("owner park fact was not durable: %+v", owner)
+	}
+	if member := restarted.bindings[model.ActorSlot2]; member.ParkEnabled || !member.Active || member.RemoteKey == "" {
+		t.Fatalf("member park fact was not durable: %+v", member)
+	}
+}

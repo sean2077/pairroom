@@ -11,9 +11,21 @@ import (
 
 // Only an optional running Service performs background readiness observation.
 // Direct client operation itself starts no worker or listener.
+//
+// The observer shares the host's per-source request budget with the user's own
+// foreground commands, so an accepted or pending Room is polled on a schedule
+// that grows with the number of joined Rooms and backs off after a failed
+// pass instead of spending the whole budget on a fixed two-second ticker.
+const (
+	// observerPollInterval is the per-Room polling period with one joined Room.
+	observerPollInterval = 2 * time.Second
+	// observerMaxBackoff bounds one guest's delay after repeated failures.
+	observerMaxBackoff = 60 * time.Second
+)
+
 func (g *lanGuestManager) maintain() {
 	defer g.wg.Done()
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(observerPollInterval)
 	defer ticker.Stop()
 	workers := make(chan struct{}, 8)
 	for {
@@ -26,6 +38,8 @@ func (g *lanGuestManager) maintain() {
 		if err != nil {
 			continue
 		}
+		interval := observerInterval(len(snapshots))
+		now := time.Now()
 		for _, snapshot := range snapshots {
 			if snapshot.Status != "pending" && snapshot.Status != "accepted" {
 				continue
@@ -35,7 +49,7 @@ func (g *lanGuestManager) maintain() {
 				continue
 			}
 			guest.mu.Lock()
-			eligible := !guest.polling
+			eligible := !guest.polling && !now.Before(guest.nextPoll)
 			if eligible {
 				select {
 				case workers <- struct{}{}:
@@ -52,21 +66,61 @@ func (g *lanGuestManager) maintain() {
 			go func() {
 				defer g.wg.Done()
 				defer func() { guest.mu.Lock(); guest.polling = false; guest.mu.Unlock(); <-workers }()
-				g.refresh(guest)
+				if err := g.refresh(guest); err != nil {
+					guest.backoff(interval)
+					return
+				}
+				guest.schedule(interval)
 			}()
 		}
 	}
 }
 
-func (g *lanGuestManager) refresh(guest *lanGuest) {
+// observerInterval spreads the observer's aggregate request rate across the
+// joined Rooms: one Room polls at the base period, and every additional Room
+// lengthens the per-Room period so the total stays near that of a single Room.
+func observerInterval(rooms int) time.Duration {
+	if rooms < 1 {
+		rooms = 1
+	}
+	return observerPollInterval * time.Duration(rooms)
+}
+
+// schedule records the next poll after a successful pass and clears any backoff.
+func (guest *lanGuest) schedule(delay time.Duration) {
+	guest.mu.Lock()
+	defer guest.mu.Unlock()
+	guest.pollDelay = 0
+	guest.nextPoll = time.Now().Add(delay)
+}
+
+// backoff lengthens the next poll after a failed pass, bounded by
+// observerMaxBackoff, so a rate-limited or unreachable host is not retried on
+// every tick while the membership lasts.
+func (guest *lanGuest) backoff(base time.Duration) {
+	guest.mu.Lock()
+	defer guest.mu.Unlock()
+	if guest.pollDelay < base {
+		guest.pollDelay = base
+	} else {
+		guest.pollDelay = min(2*guest.pollDelay, observerMaxBackoff)
+	}
+	guest.nextPoll = time.Now().Add(guest.pollDelay)
+}
+
+func (g *lanGuestManager) refresh(guest *lanGuest) error {
 	ctx, cancel := context.WithTimeout(g.ctx, 10*time.Second)
 	defer cancel()
 	if err := guest.client.Maintenance(ctx); err != nil {
-		return
+		return err
 	}
 	metadata, err := guest.client.Metadata(ctx)
-	if err != nil || metadata.Status != "accepted" {
-		return
+	if err != nil {
+		return err
+	}
+	if metadata.Status != "accepted" {
+		// A pending membership is not a failure; it is rechecked on schedule.
+		return nil
 	}
 	guest.mu.Lock()
 	waker := guest.waker
@@ -90,6 +144,7 @@ func (g *lanGuestManager) refresh(guest *lanGuest) {
 		guest.mu.Unlock()
 	}
 	waker.Reconcile(g.ctx)
+	return nil
 }
 
 // Client owns both the original host reservation and the durable local spent

@@ -8,7 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/sean2077/pairroom/internal/lanshare"
+	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
 )
 
@@ -89,5 +92,49 @@ func TestDeniedUploadAndRetiredMembershipStillReportHostContact(t *testing.T) {
 	got, err := pending.Snapshot(ctx)
 	if err != nil || !got.Connected || got.Status != "pending" || result.Binding != nil {
 		t.Fatalf("contact manufactured admission: %+v %v", got, err)
+	}
+}
+
+// A refusal the host can name must survive the LAN client's error boundary: a
+// named wake refusal is a settled answer, not transport unavailability.
+func TestSafeErrorPreservesNamedWakeRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		code string
+		want error
+	}{
+		{code: relay.WakeReservedCode, want: relay.ErrWakeReserved},
+		{code: relay.WakeIneligibleCode, want: relay.ErrWakeIneligible},
+	} {
+		err := safeError(&lanshare.Error{Status: http.StatusConflict, Code: tc.code, Message: "untrusted peer text"})
+		if !errors.Is(err, tc.want) || strings.Contains(err.Error(), "untrusted") {
+			t.Fatalf("code %q mapped to %v", tc.code, err)
+		}
+	}
+}
+
+// A wait window that ends while its claim is in flight is an empty poll: the
+// pinned host answered, and anything it committed surfaces later as unknown in
+// history --pending rather than as host unreachability.
+func TestWaitClaimDeadlineIsAnEmptyPollNotHostUnreachability(t *testing.T) {
+	ctx := context.Background()
+	s, f := newStore(t), newRemote(t)
+	c, auth, _ := f.join(t, s)
+	f.setHandler(func(w http.ResponseWriter, _ *http.Request, action string, _ []byte) {
+		switch action {
+		case "head":
+			reply(w, lanshare.HeadResponse{Head: &lanshare.Head{Digest: strings.Repeat("a", 64), Message: relay.Message{ID: "message-one", From: model.ActorSlot1, To: auth.Slot, TargetGeneration: auth.Generation, State: "queued", Text: "late head"}}})
+		case "claim":
+			time.Sleep(1500 * time.Millisecond)
+			reply(w, lanshare.ClaimResponse{})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	var result collectResult
+	if err := c.Relay(ctx, auth, "wait", relayRequest{TimeoutSeconds: 1}, &result); err != nil {
+		t.Fatalf("expired claim window reported as an outage: %v", err)
+	}
+	if result.Claim != nil || result.ForegroundRequired {
+		t.Fatalf("claim ran past its wait window: %+v", result)
 	}
 }

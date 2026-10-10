@@ -72,7 +72,10 @@ func (c *Client) cachedEvidence(ctx context.Context, r record, expected model.At
 		return model.Attachment{}, "", errors.New("LAN evidence exceeds its manifest")
 	}
 	if _, err := media.ImportVerified(expected, io.LimitReader(response.Body, expected.Size+1)); err != nil {
-		if errors.Is(err, attachment.ErrSharedQuota) || errors.Is(err, attachment.ErrTemporaryQuota) {
+		if errors.Is(err, attachment.ErrSharedQuota) {
+			return model.Attachment{}, "", joinedRoomQuotaError{}
+		}
+		if errors.Is(err, attachment.ErrTemporaryQuota) {
 			return model.Attachment{}, "", err
 		}
 		return model.Attachment{}, "", errors.New("LAN evidence failed content verification")
@@ -83,6 +86,20 @@ func (c *Client) cachedEvidence(ctx context.Context, r record, expected model.At
 	}
 	return metadata, localPath, nil
 }
+
+// joinedRoomQuotaError names this machine's verified-evidence cache as the
+// exhausted store. It keeps the shared-quota identity for callers, but gives the
+// guest an actionable local remedy instead of the host-only "start a new Room"
+// advice, and it deliberately carries no private cache path. The hosting Room
+// still owns the authoritative bytes and re-verifies every download, so removed
+// files are simply fetched again.
+type joinedRoomQuotaError struct{}
+
+func (joinedRoomQuotaError) Error() string {
+	return "the joined Room's verified-evidence cache on this machine reached the 100 MiB bound; inspect and remove cached evidence you no longer need, then retry (the hosting Room's own storage is separate)"
+}
+
+func (joinedRoomQuotaError) Is(target error) bool { return target == attachment.ErrSharedQuota }
 
 // Download serves only a host-authorized attachment in this Room. A cache hit
 // still performs the fresh remote ACL check; possession of an opaque ID never

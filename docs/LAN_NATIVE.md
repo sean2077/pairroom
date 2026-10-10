@@ -127,6 +127,12 @@ records to make space. See [attachment storage](STORAGE.md#attachment) for
 the existing reclamation rule for host uploads that no message references.
 Uploads to local-only Rooms do not inherit these LAN storage quotas.
 
+The guest's copies live in that joined client's `evidence` directory under the
+user configuration directory's `pairroom/lan-clients/<lan-id>`. A download
+refused at the bound names that directory; freeing it is a deliberate operator
+action, and any removed file is fetched and re-verified again on the next
+access.
+
 `--ref` retains its existing meaning: it sends a path, size, and SHA-256 pointer,
 not file contents. A reference to a host-local path is not automatically readable
 on the colleague's computer. `--text-file` reads an existing file into the
@@ -196,6 +202,7 @@ snapshot behavior.
 | Collector stdout written | `handed_off` means delivery to CLI/hook stdout, not model acceptance, execution, or success. |
 | Claim or acknowledgement uncertain | Inspect `history --pending` / `history --id ID`. Never automatically replay `unknown`. If the local collector already reported successful stdout, a later bind/resume or receive opportunity can settle only that original ACK after reconnection; a claim alone never authorizes acknowledgement. |
 | Evidence hash or metadata mismatch | Collection fails before claim. Inspect the original evidence and publish changed content with a new ID. |
+| Evidence cache at its bound | The receiver's 100 MiB bound covers this machine's verified copies, not the hosting Room's storage. Inspect `evidence` in that joined client's directory under the user configuration directory's `pairroom/lan-clients/<lan-id>`, move or delete cached files you no longer need, then retry the download; the hosting Room still owns and re-verifies the bytes, so a later access downloads them again. Nothing removes cached evidence silently. |
 | Revoked or archived membership | New reads, writes, claims, wake reservations and downloads fail. Explicitly leave locally before reusing that native session elsewhere. Previously downloaded content cannot be recalled. |
 
 The optional dashboard reports its latest contact with the host. An HTTP

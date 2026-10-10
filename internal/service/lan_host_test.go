@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net"
@@ -736,5 +737,57 @@ func TestLANUnauthorizedRequestsCannotActivateSuspendedRooms(t *testing.T) {
 	var old lanshare.JoinResponse
 	if err = lanshare.Call(ctx, client, f.invite, "join-status", lanshare.JoinStatusRequest{RequestID: "remote-request"}, &old); err != nil || old.Status != "revoked" {
 		t.Fatalf("archive membership revocation was not durable: %+v %v", old, err)
+	}
+}
+
+// The listener's capacity is shared, not first-come: one certified key that
+// parks long-polls or transfers must not consume every slot and reject the
+// members of other hosted Rooms with a capacity error.
+func TestLANCapacityKeepsEveryCertifiedKeyWithinItsShare(t *testing.T) {
+	h := &lanHostServer{inflight: make(map[string]int)}
+	for i := 0; i < maxLANConcurrentPerKey; i++ {
+		if !h.enter("member-a") {
+			t.Fatalf("share refused at request %d", i)
+		}
+	}
+	if h.enter("member-a") {
+		t.Fatal("one certified key occupied more than its share")
+	}
+	if !h.enter("member-b") {
+		t.Fatal("a saturated key rejected another member's request")
+	}
+	for i := 0; i < maxLANConcurrentPerKey; i++ {
+		h.leave("member-a")
+	}
+	if h.inflight["member-a"] != 0 {
+		t.Fatalf("released key stayed in the map: %d", h.inflight["member-a"])
+	}
+	for i := 0; h.inflightTotal < maxLANConcurrent; i++ {
+		if !h.enter(fmt.Sprintf("member-%d", i)) {
+			t.Fatalf("global capacity refused request %d", i)
+		}
+	}
+	if h.enter("member-late") {
+		t.Fatal("over-subscribed listener admitted another request")
+	}
+	if h.inflightTotal != maxLANConcurrent {
+		t.Fatalf("in-flight total = %d, want %d", h.inflightTotal, maxLANConcurrent)
+	}
+}
+
+// A LAN Room whose Runtime cannot be opened is still archivable: only an
+// unopenable Runtime may skip the member revoke, never a fail-closed Registry
+// or a lifecycle conflict.
+func TestLANRevokeUnavailableToleratesOnlyUnopenableRuntimes(t *testing.T) {
+	if !lanRevokeUnavailable(RuntimeFailed, errors.New("project unavailable")) {
+		t.Fatal("failed runtime blocked the archive")
+	}
+	if !lanRevokeUnavailable(RuntimeSuspended, ErrRuntimeNotReady) {
+		t.Fatal("suspended runtime blocked the archive")
+	}
+	for _, err := range []error{ErrRegistryFailClosed, ErrRuntimeLifecycleInProgress, ErrRoomNotFound} {
+		if lanRevokeUnavailable(RuntimeActive, err) {
+			t.Fatalf("archive ignored %v", err)
+		}
 	}
 }

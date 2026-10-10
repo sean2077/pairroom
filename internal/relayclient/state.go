@@ -136,7 +136,15 @@ func secureDir(root string, parts ...string) (string, error) {
 			return "", errors.New("invalid relay state path component")
 		}
 		path = filepath.Join(path, part)
-		if err := os.Mkdir(path, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+		if lanPrivateStatePath(path) {
+			// LAN transport directories hold credentials: create them with the
+			// owner-private boundary the LAN slot lock and privatefile.WriteJSON
+			// require, not with an inherited Windows DACL that would make the
+			// directory permanently unusable.
+			if err := privatefile.Mkdir(path); err != nil {
+				return "", err
+			}
+		} else if err := os.Mkdir(path, 0700); err != nil && !errors.Is(err, os.ErrExist) {
 			return "", err
 		}
 		info, err := os.Lstat(path)
@@ -479,7 +487,7 @@ func cleanupAtomicTemps(dir string) {
 		return
 	}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".state.json-") || strings.HasPrefix(entry.Name(), ".credentials-") || strings.HasPrefix(entry.Name(), ".bind-attempt.json-") || strings.HasPrefix(entry.Name(), ".claude-inbox-") {
+		if strings.HasPrefix(entry.Name(), ".state.json-") || strings.HasPrefix(entry.Name(), ".credentials-") || strings.HasPrefix(entry.Name(), ".bind-attempt.json-") || strings.HasPrefix(entry.Name(), ".claude-inbox-") || strings.HasPrefix(entry.Name(), ".identity-") {
 			if entry.Type().IsRegular() {
 				_ = os.Remove(filepath.Join(dir, entry.Name()))
 			}

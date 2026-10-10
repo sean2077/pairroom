@@ -289,3 +289,38 @@ func TestLANGuestReadinessRefreshKeepsLocalWakerAndDoesNotConsumeInbox(t *testin
 		t.Fatal("readiness reserved or acknowledged inbox work")
 	}
 }
+
+// The optional observer shares the host's per-source request budget with the
+// user's own commands: its period grows with the number of joined Rooms, and a
+// failed pass backs off instead of retrying on every tick.
+func TestObserverSpreadAndBackoffKeepTheForegroundBudgetUsable(t *testing.T) {
+	if got := observerInterval(0); got != observerPollInterval {
+		t.Fatalf("no joined Rooms = %s", got)
+	}
+	if got := observerInterval(4); got != 4*observerPollInterval {
+		t.Fatalf("four joined Rooms = %s", got)
+	}
+	guest := &lanGuest{}
+	guest.schedule(observerPollInterval)
+	if guest.pollDelay != 0 || guest.nextPoll.IsZero() {
+		t.Fatalf("successful pass kept a delay: %+v", guest)
+	}
+	guest.backoff(observerPollInterval)
+	if guest.pollDelay != observerPollInterval {
+		t.Fatalf("first failure = %s", guest.pollDelay)
+	}
+	guest.backoff(observerPollInterval)
+	if guest.pollDelay != 2*observerPollInterval {
+		t.Fatalf("second failure = %s", guest.pollDelay)
+	}
+	for i := 0; i < 10; i++ {
+		guest.backoff(observerPollInterval)
+	}
+	if guest.pollDelay != observerMaxBackoff {
+		t.Fatalf("repeated failures = %s, want %s", guest.pollDelay, observerMaxBackoff)
+	}
+	guest.schedule(observerPollInterval)
+	if guest.pollDelay != 0 {
+		t.Fatalf("recovered pass kept a delay: %s", guest.pollDelay)
+	}
+}

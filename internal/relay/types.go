@@ -36,6 +36,14 @@ var (
 	ErrWakeRoomBusy = errors.New("resolve delivering or unknown deliveries before changing wake configuration")
 )
 
+// WakeReservedCode and WakeIneligibleCode are the stable wire codes of the two
+// named wake-reservation refusals. A refusal the host can name must not be
+// collapsed into transport unavailability on the way back to the client.
+const (
+	WakeReservedCode   = "wake_reserved"
+	WakeIneligibleCode = "wake_ineligible"
+)
+
 // Wake outcomes and reasons are a fixed redaction vocabulary. They never carry
 // vendor thread identity, message bodies, or command output; RecordWake
 // rejects anything outside these sets so a caller cannot leak them into the
