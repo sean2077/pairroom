@@ -160,6 +160,10 @@ async def verify_diagnostics(browser, artifacts: Path, in_page_fixture: bool = F
       };
     }""")
     await page.locator('#refresh-button').click()
+    # Manual refresh deliberately replaces the view. Finish that request before
+    # navigating or typing: Playwright fill focuses/selects before inserting text,
+    # so a pending forced render can detach its target between those operations.
+    await expect(page.locator('#refresh-button')).not_to_have_class(re.compile(r'\bspinning\b'))
     await page.evaluate("location.hash='#/overview'")
     project_link = page.locator('.tree-project-link[href="#/projects/p1"]')
     await project_link.click()
@@ -170,11 +174,13 @@ async def verify_diagnostics(browser, artifacts: Path, in_page_fixture: bool = F
     await expect(disclosure).to_have_attribute('aria-expanded', 'false')
     assert await page.evaluate('location.hash') == '#/projects/p1', 'disclosure navigated'
     await page.locator('#refresh-button').click()
+    await expect(page.locator('#refresh-button')).not_to_have_class(re.compile(r'\bspinning\b'))
     await expect(disclosure).to_have_attribute('aria-expanded', 'false')
     await disclosure.focus()
     await page.keyboard.press('Enter')
     await expect(disclosure).to_have_attribute('aria-expanded', 'true')
     await page.locator('#project-room-search').fill('Implementation')
+    await expect(page.locator('#project-room-search')).to_have_value('Implementation')
     await expect(page.locator('#view .room-row')).to_have_count(1)
     await page.evaluate("location.hash='#/overview'")
     await project_link.click()
