@@ -68,7 +68,7 @@ func lanGuestPrivateDir(root string, parts ...string) (string, error) {
 func initLANGuests(s *ManagementServer) error {
 	// An unusable per-user catalog must not stop the Service: this root's Rooms,
 	// hooks and LAN host identity are independent of it, and the catalog's owner
-	// validates it on use. The failure is reported through diagnostic() and on
+	// validates it on use. The failure is reported in the Service snapshot and on
 	// every guest surface.
 	store, storeErr := lanclient.Open()
 	if storeErr != nil {
@@ -122,21 +122,6 @@ func (g *lanGuestManager) room(ctx context.Context, id string) (*lanclient.Clien
 	return store.Get(ctx, id)
 }
 
-// diagnostic names an unusable per-user catalog so the operator can repair it,
-// without marking the whole Service unhealthy.
-func (g *lanGuestManager) diagnostic() string {
-	if g == nil {
-		return ""
-	}
-	if err := g.storeFailure(); err != nil {
-		return err.Error()
-	}
-	if _, err := g.store.List(g.ctx); err != nil {
-		return fmt.Sprintf("%s: %v", errLANStoreUnavailable, err)
-	}
-	return ""
-}
-
 func (g *lanGuestManager) close() {
 	if g == nil {
 		return
@@ -181,17 +166,19 @@ func (g *lanGuestManager) get(id string) *lanGuest {
 	return guest
 }
 
-func (g *lanGuestManager) summaries() []lanGuestSummary {
+// summaries reads the optional catalog once within the caller's lifetime and
+// the snapshot budget. A blocked client lock cannot stall hosted Room views.
+func (g *lanGuestManager) summaries(ctx context.Context) ([]lanGuestSummary, string) {
 	if g == nil {
-		return nil
+		return nil, ""
 	}
-	ctx, cancel := context.WithTimeout(g.ctx, 3*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	result, err := g.list(ctx)
 	if err != nil {
-		return nil
+		return nil, fmt.Sprintf("%s: %v", errLANStoreUnavailable, err)
 	}
-	return result
+	return result, ""
 }
 
 func (s *ManagementServer) mountLANGuests(mux *http.ServeMux) {

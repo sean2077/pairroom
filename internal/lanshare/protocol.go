@@ -222,26 +222,15 @@ func Call(ctx context.Context, client *http.Client, invite Invite, action string
 		return fmt.Errorf("LAN Room is offline or peer identity failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return ReadResponseError(resp)
+	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBytes+1))
 	if err != nil {
 		return err
 	}
 	if len(data) > MaxResponseBytes {
 		return errors.New("LAN response exceeds limit")
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		var failure struct {
-			Error string `json:"error"`
-			Code  string `json:"code"`
-		}
-		_ = json.Unmarshal(data, &failure)
-		if len(failure.Error) > 1024 {
-			failure.Error = ""
-		}
-		if failure.Error == "" {
-			failure.Error = resp.Status
-		}
-		return &Error{Status: resp.StatusCode, Code: failure.Code, Message: failure.Error}
 	}
 	if result == nil {
 		return nil

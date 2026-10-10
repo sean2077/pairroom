@@ -89,6 +89,15 @@ func directSessionMetadata(ctx context.Context, caller nativeCaller) (*lanclient
 	return found, nil
 }
 
+// Recovered workspace bytes are never authority for a direct association. Match
+// the complete immutable route and native identity against its protected record.
+func matchesDirectMetadata(state State, meta lanclient.Metadata) bool {
+	return validStateFormat(state) && state.LAN != nil && state.Room == meta.ID && state.Slot == meta.Slot &&
+		state.BindID == meta.BindID && state.Generation == meta.Generation && state.Runtime == meta.Runtime &&
+		state.SessionID == meta.SessionID && sameWorkspace(state.Workspace, meta.Workspace) &&
+		state.LAN.Endpoint == meta.Invite.Endpoint && state.LAN.HostPin == meta.Invite.HostPin && state.LAN.RoomID == meta.Invite.RoomID
+}
+
 func directMetadataState(meta lanclient.Metadata) (*State, error) {
 	var state State
 	if meta.Generation == 0 || !meta.Slot.ValidParticipant() {
@@ -100,7 +109,7 @@ func directMetadataState(meta lanclient.Metadata) (*State, error) {
 	} else if err != nil {
 		return nil, err
 	}
-	if !validStateFormat(state) || state.LAN == nil || state.Room != meta.ID || state.BindID != meta.BindID || state.Generation != meta.Generation || state.Runtime != meta.Runtime || state.SessionID != meta.SessionID || !sameWorkspace(state.Workspace, meta.Workspace) || state.LAN.Endpoint != meta.Invite.Endpoint || state.LAN.HostPin != meta.Invite.HostPin || state.LAN.RoomID != meta.Invite.RoomID {
+	if !matchesDirectMetadata(state, meta) {
 		return nil, errors.New("direct LAN workspace binding differs from its private client record; inspect the original association")
 	}
 	return &state, nil
@@ -147,10 +156,7 @@ func (c *Client) loadLAN() error {
 		client.Close()
 		return err
 	}
-	v := c.State.LAN
-	if meta.ID != v.ClientID || meta.Invite.Endpoint != v.Endpoint || meta.Invite.HostPin != v.HostPin || meta.Invite.RoomID != v.RoomID ||
-		!sameWorkspace(meta.Workspace, c.State.Workspace) || meta.Runtime != c.State.Runtime || meta.SessionID != c.State.SessionID ||
-		meta.BindID != c.State.BindID || meta.Generation != c.State.Generation || meta.Slot != c.State.Slot {
+	if !matchesDirectMetadata(c.State, meta) {
 		client.Close()
 		return errors.New("direct LAN client identity or route changed; inspect the original association before recovery")
 	}

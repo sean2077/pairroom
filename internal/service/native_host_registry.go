@@ -25,6 +25,15 @@ func nativeRegistryBinding(b relay.Binding) Binding {
 	return result
 }
 
+// nativeLANSelection projects the current admitted peer without carrying a
+// retired member's Runtime into the next awaiting-peer state.
+func nativeLANSelection(kind model.RuntimeKind, active bool) model.AgentSelection {
+	if !active {
+		return model.AgentSelection{AwaitingPeer: true}
+	}
+	return model.AgentSelection{Runtime: kind, Provider: model.NativeProviderRef()}
+}
+
 // checkNativeIdentityLocked checks runtime identity, not historical slot labels.
 // Existing embedded indexing stays compatible, while either side of a native /
 // embedded collision must fail closed, including duplicate-runtime slots.
@@ -99,7 +108,7 @@ func (r *Registry) commitNativeBinding(roomID string, b relay.Binding, appendFac
 		room = cloneRoom(room)
 		room.Bindings[b.Slot] = nativeRegistryBinding(b)
 		if b.RemoteKey != "" {
-			room.Agents[b.Slot] = model.AgentSelection{Runtime: b.Runtime, Provider: model.NativeProviderRef()}
+			room.Agents[b.Slot] = nativeLANSelection(b.Runtime, b.Active)
 		}
 		room.UpdatedAt = r.now()
 		r.rooms[roomID] = room

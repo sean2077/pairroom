@@ -1031,7 +1031,7 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 	for actor, binding := range nativeBindings {
 		room.Bindings[actor] = nativeRegistryBinding(binding)
 		if binding.RemoteKey != "" {
-			room.Agents[actor] = model.AgentSelection{Runtime: binding.Runtime, Provider: model.NativeProviderRef()}
+			room.Agents[actor] = nativeLANSelection(binding.Runtime, binding.Active)
 		}
 	}
 	if room.UpdatedAt.IsZero() {

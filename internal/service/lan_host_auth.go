@@ -58,12 +58,17 @@ func allowedLANAction(action string) bool {
 type lanRoomAuthorization struct {
 	invites  map[string]relay.LANInvite
 	requests map[string]relay.LANJoinRequest
+	admitted map[string]bool
 	member   *relay.LANMember
 	invalid  bool
 }
 
 func newLANRoomAuthorization() *lanRoomAuthorization {
-	return &lanRoomAuthorization{invites: make(map[string]relay.LANInvite), requests: make(map[string]relay.LANJoinRequest)}
+	return &lanRoomAuthorization{
+		invites:  make(map[string]relay.LANInvite),
+		requests: make(map[string]relay.LANJoinRequest),
+		admitted: make(map[string]bool),
+	}
 }
 
 func (p *lanRoomAuthorization) apply(event model.Event) error {
@@ -72,13 +77,6 @@ func (p *lanRoomAuthorization) apply(event model.Event) error {
 		var v relay.LANInvite
 		if json.Unmarshal(event.Data, &v) != nil || !lanshare.ValidID(v.ID) || v.ExpiresAt.IsZero() {
 			return errors.New("invalid LAN invitation authorization fact")
-		}
-		// The writer issues a new invitation only after prior invitations have
-		// expired. Old requests retain their exact invitation ID separately.
-		for id, prior := range p.invites {
-			if prior.Consumed || !event.CreatedAt.Before(prior.ExpiresAt) {
-				delete(p.invites, id)
-			}
 		}
 		p.invites[v.ID] = v
 	case relay.EventLANJoin:
@@ -96,12 +94,31 @@ func (p *lanRoomAuthorization) apply(event model.Event) error {
 			return err
 		}
 		p.member = &member
+		p.admitted[member.RequestID] = true
 		if invite, ok := p.invites[member.InviteID]; ok {
 			invite.Consumed = true
 			p.invites[member.InviteID] = invite
 		}
 	}
 	return nil
+}
+
+// Prune only after a complete replay or a live append. During replay a later
+// membership fact may still need an earlier request that has expired today.
+func (p *lanRoomAuthorization) prune(now time.Time) {
+	relay.PruneLANRequests(p.requests, p.invites, p.admitted, p.member, now)
+	referenced := make(map[string]bool, len(p.requests))
+	for _, request := range p.requests {
+		referenced[request.InviteID] = true
+	}
+	if p.member != nil {
+		referenced[p.member.InviteID] = true
+	}
+	for id, invite := range p.invites {
+		if !referenced[id] && (invite.Consumed || !now.Before(invite.ExpiresAt)) {
+			delete(p.invites, id)
+		}
+	}
 }
 
 func (r *Registry) resetLANAuthorization(room Room, events []model.Event) error {
@@ -114,6 +131,7 @@ func (r *Registry) resetLANAuthorization(room Room, events []model.Event) error 
 			return err
 		}
 	}
+	projection.prune(time.Now())
 	r.lanAuthMu.Lock()
 	defer r.lanAuthMu.Unlock()
 	if r.lanAuth == nil {
@@ -139,7 +157,9 @@ func (r *Registry) observeLANAuthorization(event model.Event) {
 	}
 	if err := projection.apply(event); err != nil {
 		projection.invalid = true
+		return
 	}
+	projection.prune(time.Now())
 }
 
 // errLANHostSuspended distinguishes a suspended hosting Room from an
@@ -155,23 +175,13 @@ func (h *lanHostServer) authorizedRuntime(r *http.Request, roomID, action, key s
 	if !ok || room.HostMode != model.HostNative || room.Sharing != "lan" || room.Archived() {
 		return nil, relay.ErrAuth
 	}
-	active, err := h.owner.runtimes.runtimeForCompletion(roomID)
-	if err == nil {
+	active, runtimeErr := h.owner.runtimes.runtimeForCompletion(roomID)
+	if runtimeErr == nil {
 		n, ok := active.(*nativeHostRuntime)
 		if !ok {
 			return nil, relay.ErrAuth
 		}
 		return n, nil
-	}
-	if err != nil && !errors.Is(err, ErrRuntimeNotReady) {
-		// A host-side failure (unhealthy Registry, closed manager) is not the
-		// member's authorization: report it as an unavailable Room instead.
-		return nil, err
-	}
-	if action == "doctor" {
-		// Doctor never activates a suspended Room. The member must learn that the
-		// Room is suspended, not that its admission failed.
-		return nil, errLANHostSuspended
 	}
 	var join lanshare.JoinRequest
 	var status lanshare.JoinStatusRequest
@@ -186,14 +196,18 @@ func (h *lanHostServer) authorizedRuntime(r *http.Request, roomID, action, key s
 			return nil, relay.ErrAuth
 		}
 	}
-	h.owner.registry.lanAuthMu.RLock()
+	h.owner.registry.lanAuthMu.Lock()
+	now := time.Now()
 	projection := h.owner.registry.lanAuth[roomID]
 	allowed := false
 	if projection != nil && !projection.invalid {
+		// A quiet Room may outlive the pending request retention window with
+		// no further append. Forgotten requests must not activate its Runtime.
+		projection.prune(now)
 		switch action {
 		case "join":
 			v, found := projection.invites[join.InviteID]
-			allowed = found && !v.Consumed && time.Now().Before(v.ExpiresAt) && lanshare.ValidID(join.RequestID) && join.Runtime.Valid()
+			allowed = found && !v.Consumed && now.Before(v.ExpiresAt) && lanshare.ValidID(join.RequestID) && join.Runtime.Valid()
 			if old, found := projection.requests[join.RequestID]; found {
 				allowed = old.Key == key && old.InviteID == join.InviteID && old.Runtime == join.Runtime
 			}
@@ -208,9 +222,17 @@ func (h *lanHostServer) authorizedRuntime(r *http.Request, roomID, action, key s
 			}
 		}
 	}
-	h.owner.registry.lanAuthMu.RUnlock()
+	h.owner.registry.lanAuthMu.Unlock()
 	if !allowed {
 		return nil, relay.ErrAuth
+	}
+	if !errors.Is(runtimeErr, ErrRuntimeNotReady) {
+		// Only proven members or invitation requests receive host diagnostics.
+		return nil, runtimeErr
+	}
+	if action == "doctor" {
+		// Doctor authenticates the exact membership but never activates it.
+		return nil, errLANHostSuspended
 	}
 	return h.owner.nativeRuntime(r.Context(), roomID)
 }

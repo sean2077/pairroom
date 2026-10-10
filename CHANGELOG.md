@@ -4,6 +4,12 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep LAN upload disk commits outside the Room engine lock while preserving the transfer barrier that serializes them with member revocation.
+- Preserve Native LAN admission and revocation history when a Room reopens after its invitation expires. Keep the Engine and cold authorization projections bounded without rewriting historical facts, and update Room selections when a revoked peer is replaced by another Runtime.
+- Make local LAN detach persist retirement before releasing the native session. Validate copied or restored bindings against their original identity and pinned route, support isolated state or credential permission damage, and retain publication evidence before cleanup. Bound optional joined-catalog diagnostics, preserve unsupported-format startup checks across damaged entries, and distinguish cancelled evidence downloads and host failures from membership refusals.
+
 ### Added
 
 - Add Native collaboration over a LAN with one hosting Service per Room. Guests join and communicate directly through the CLI and approved hooks without a local Service, listener, or daemon. Different native sessions on one machine can host local Rooms and join several remote hosts concurrently, each retaining its own pinned host and Room identity. Short-lived invitations permit requests only; the host admits an exact guest-key receipt received through a trusted colleague channel.

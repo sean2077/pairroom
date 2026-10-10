@@ -239,7 +239,7 @@ func TestLANOptionalServiceProjectsTheDirectClientAndSharedOwnerEvidence(t *test
 func TestLANOptionalServiceDiscoversLaterJoinAndStopsAtLocalDetach(t *testing.T) {
 	relayclient.IsolateNativeCaller(t)
 	service, project := lanGuestTestService(t)
-	if list := service.lanGuests.summaries(); len(list) != 0 {
+	if list, diagnostic := service.lanGuests.summaries(context.Background()); len(list) != 0 || diagnostic != "" {
 		t.Fatal("fresh observer invented a membership")
 	}
 	store, client, auth := lanAcceptedClient(t, project.Root, model.RuntimeGrok, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
@@ -247,7 +247,7 @@ func TestLANOptionalServiceDiscoversLaterJoinAndStopsAtLocalDetach(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if list := service.lanGuests.summaries(); len(list) != 1 || list[0].ID != metadata.ID {
+	if list, diagnostic := service.lanGuests.summaries(context.Background()); len(list) != 1 || list[0].ID != metadata.ID || diagnostic != "" {
 		t.Fatal("running optional Service failed to discover later direct join")
 	}
 	observed := service.lanGuests.get(metadata.ID)
@@ -261,7 +261,7 @@ func TestLANOptionalServiceDiscoversLaterJoinAndStopsAtLocalDetach(t *testing.T)
 		t.Fatal(err)
 	}
 	service.lanGuests.refresh(observed)
-	if list := service.lanGuests.summaries(); len(list) != 1 || list[0].Status != "detached" {
+	if list, diagnostic := service.lanGuests.summaries(context.Background()); len(list) != 1 || list[0].Status != "detached" || diagnostic != "" {
 		t.Fatal("optional Service did not observe explicit detach")
 	}
 	if observed.waker != nil {

@@ -25,7 +25,7 @@ func preflightLANState(root string) error {
 	clients, openErr := lanclient.Open()
 	if openErr == nil {
 		defer clients.Close()
-		if _, err := clients.List(context.Background()); err != nil && !errors.Is(err, privatefile.ErrPrivate) {
+		if err := clients.PreflightCatalog(context.Background()); err != nil && !errors.Is(err, privatefile.ErrPrivate) {
 			return fmt.Errorf("unsupported or invalid LAN client identity under %s; data was not modified: back it up, then repair or remove that per-user joined-Room catalog by hand (PairRoom never regenerates it automatically)", clients.Root())
 		}
 	} else {

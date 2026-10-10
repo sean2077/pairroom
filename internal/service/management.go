@@ -309,7 +309,7 @@ func (s *ManagementServer) deleteBrowserSession(w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
+func (s *ManagementServer) readService(w http.ResponseWriter, r *http.Request) {
 	registry := s.registry.Snapshot(true)
 	statuses := make(map[string]RuntimeStatus, len(registry.Rooms))
 	for _, status := range s.runtimes.Statuses() {
@@ -324,8 +324,9 @@ func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
 		runtimes = append(runtimes, status)
 	}
 	healthErr := s.registry.Healthy()
+	joinedRooms, lanDiagnostic := s.lanGuests.summaries(r.Context())
 	payload := ServiceSnapshot{
-		JoinedRooms:      s.lanGuests.summaries(),
+		JoinedRooms:      joinedRooms,
 		CLIBuildMismatch: s.cliBuild.snapshot(),
 		Version:          version.Describe(), Commit: version.Commit, BuildDate: version.BuildDate,
 		StoreSchema: version.StoreSchema, RepositoryURL: version.RepositoryURL,
@@ -354,10 +355,10 @@ func (s *ManagementServer) readService(w http.ResponseWriter, _ *http.Request) {
 	}
 	if healthErr != nil {
 		payload.Diagnostic = healthErr.Error()
-	} else if lanDiag := s.lanGuests.diagnostic(); lanDiag != "" {
+	} else if lanDiagnostic != "" {
 		// Host Rooms stay usable; the operator is told why joined-Room surfaces
 		// are not.
-		payload.Diagnostic = lanDiag
+		payload.Diagnostic = lanDiagnostic
 	}
 	writeManagementJSON(w, http.StatusOK, payload)
 }

@@ -9,7 +9,6 @@ import (
 
 	"github.com/sean2077/pairroom/internal/lanclient"
 	"github.com/sean2077/pairroom/internal/lanshare"
-	"github.com/sean2077/pairroom/internal/nativeidentity"
 	"github.com/sean2077/pairroom/internal/privatefile"
 	"github.com/sean2077/pairroom/internal/relay"
 )
@@ -88,29 +87,17 @@ func unbindLANLocalOnly(ctx context.Context, root string, o options, out io.Writ
 			return err
 		}
 		if err == nil {
-			var state State
-			if err := readPrivate(filepath.Join(slotDir, "state.json"), &state); err == nil {
-				if !validStateFormat(state) || state.LAN == nil || state.Room != meta.ID || state.BindID != meta.BindID || state.Generation != meta.Generation {
-					return errors.New("direct LAN workspace identity changed; inspect before local detach")
-				}
-				return unbindLocalOnly(ctx, root, slotDir, o, out)
-			} else if errors.Is(err, privatefile.ErrPrivate) {
-				// The binding lost its owner-only boundary (restored from a
-				// backup, copied from another machine, an inherited Windows
-				// DACL). The offline recovery there retires it locally instead of
-				// failing this documented escape forever.
-				return unbindLocalOnly(ctx, root, slotDir, o, out)
+			// Existence only selects the workspace cleanup path. Its locked
+			// reader validates all bytes, including recovered ones, against the
+			// protected client identity before any retirement or file removal.
+			if _, err := os.Lstat(filepath.Join(slotDir, "state.json")); err == nil {
+				return unbindLocalOnlyWithMetadata(ctx, root, slotDir, o, &meta, out)
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
 		}
 	}
-	if err := client.Detach(ctx, relay.Auth{Slot: meta.Slot, BindID: meta.BindID, Generation: meta.Generation, SessionID: caller.session, Secret: attempt.Credentials.Secret}); err != nil && !errors.Is(err, nativeidentity.ErrOwned) {
-		// A record this machine already retired keeps nothing to release: its
-		// exact (runtime, session) claim now serves a replacement binding, which
-		// this offline path must not disturb. Finishing the local cleanup still
-		// tells the truth — the membership is already detached — instead of
-		// failing an idempotent command and skipping the notice and --purge.
+	if err := client.Detach(ctx, relay.Auth{Slot: meta.Slot, BindID: meta.BindID, Generation: meta.Generation, SessionID: caller.session, Secret: attempt.Credentials.Secret}); err != nil {
 		return err
 	}
 	result := map[string]any{"unbound": "local-only", "room": meta.ID, "notice": "Direct LAN admission detached locally without contacting the host. The original request and key are retained; ask the host owner to revoke any pending or accepted membership. This native session is free for another Room and will not reconnect automatically."}

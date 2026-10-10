@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/claudewake"
+	"github.com/sean2077/pairroom/internal/lanclient"
 	"github.com/sean2077/pairroom/internal/model"
-	"github.com/sean2077/pairroom/internal/privatefile"
 	"github.com/sean2077/pairroom/internal/protocol"
 	"github.com/sean2077/pairroom/internal/relay"
 	"github.com/sean2077/pairroom/internal/review"
@@ -612,26 +612,19 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 // slot stays occupied and only loses its local credentials — until an explicit
 // `pairroom relay unbind` or a `bind --replace` from the intended session.
 func unbindLocalOnly(ctx context.Context, root, dir string, o options, out io.Writer) error {
+	return unbindLocalOnlyWithMetadata(ctx, root, dir, o, nil, out)
+}
+
+func unbindLocalOnlyWithMetadata(ctx context.Context, root, dir string, o options, expected *lanclient.Metadata, out io.Writer) error {
 	release, err := lockSlot(ctx, dir)
 	if err != nil {
 		return err
 	}
 	defer release()
-	cleanupAtomicTemps(dir)
 	var state State
-	recovery := false
-	if err := readPrivate(filepath.Join(dir, "state.json"), &state); err != nil {
-		if !errors.Is(err, privatefile.ErrPrivate) {
-			return fmt.Errorf("read local binding state: %w", err)
-		}
-		// A binding whose owner-only boundary was lost (restored from a backup,
-		// copied from another machine, an inherited Windows DACL) must still be
-		// retirable through this documented offline escape. The recovered bytes
-		// authorize only this local retirement and are removed with it.
-		if recoveryErr := readPrivateRecovery(filepath.Join(dir, "state.json"), &state); recoveryErr != nil {
-			return fmt.Errorf("read local binding state: %w", err)
-		}
-		recovery = true
+	recovery, err := readBindingFile(filepath.Join(dir, "state.json"), &state, readPrivate, true)
+	if err != nil {
+		return fmt.Errorf("read local binding state: %w", err)
 	}
 	if err := validateCommandCaller(&Client{State: state}); err != nil {
 		return err
@@ -639,16 +632,30 @@ func unbindLocalOnly(ctx context.Context, root, dir string, o options, out io.Wr
 	if !validStateFormat(state) || !state.Slot.ValidParticipant() {
 		return errors.New("invalid local relay state identity")
 	}
-	if state.LAN != nil {
-		loader := loadLocal
-		if recovery {
-			loader = loadLocalRecovery
+	if expected != nil {
+		if !matchesDirectMetadata(state, *expected) {
+			return errors.New("direct LAN workspace identity changed; inspect before local detach")
 		}
-		client, err := loader(dir)
+	} else if state.LAN != nil || lanPrivateStatePath(dir) {
+		return errors.New("direct LAN local detach requires its original private client record")
+	}
+	if state.LAN != nil {
+		client, filesRecovered, err := loadLocalRecovery(dir, *expected)
 		if err != nil {
 			return err
 		}
 		defer client.close()
+		if client.endpointErr != nil {
+			return client.endpointErr
+		}
+		if client.LAN == nil {
+			return errors.New("direct LAN binding has no client transport")
+		}
+		if err := validateCommandCaller(client); err != nil {
+			return err
+		}
+		state = client.State
+		recovery = recovery || filesRecovered
 		if err := client.LAN.Detach(ctx, client.localAuth()); err != nil {
 			return err
 		}
@@ -656,6 +663,7 @@ func unbindLocalOnly(ctx context.Context, root, dir string, o options, out io.Wr
 			return err
 		}
 	}
+	cleanupAtomicTemps(dir)
 	for _, name := range []string{"state.json", "credentials", "bootstrap", bindAttemptFile, claudewake.FileName} {
 		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err

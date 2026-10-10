@@ -14,7 +14,13 @@ import (
 	"github.com/sean2077/pairroom/internal/atomicfile"
 )
 
+// ErrPrivate identifies an owner or permission boundary that cannot be trusted.
 var ErrPrivate = errors.New("transport identity requires an owner-private regular file and direct directory")
+
+// ErrInvalid identifies an unsafe file shape or an input outside its read bound.
+// Callers may tolerate a damaged permission boundary, but must not mistake an
+// uninterpretable identity for an intact private record.
+var ErrInvalid = errors.New("transport identity is not a bounded regular file or direct directory")
 
 // Mkdir creates exactly one private directory, or checks an existing one. It
 // never changes the permissions of an existing shared or redirected directory.
@@ -32,7 +38,10 @@ func CheckDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !privateDirectory(path, info) {
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return ErrInvalid
+	}
+	if !privateDirectory(path, info) {
 		return ErrPrivate
 	}
 	return nil
@@ -44,7 +53,7 @@ func ReadJSON(path string, limit int64, value any) error {
 		return err
 	}
 	if limit <= 0 || !before.Mode().IsRegular() || before.Size() > limit {
-		return ErrPrivate
+		return ErrInvalid
 	}
 	f, err := atomicfile.Open(path)
 	if err != nil {
@@ -52,7 +61,13 @@ func ReadJSON(path string, limit int64, value any) error {
 	}
 	defer f.Close()
 	after, err := f.Stat()
-	if err != nil || !os.SameFile(before, after) || !privateFile(f, after) {
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(before, after) {
+		return ErrInvalid
+	}
+	if !privateFile(f, after) {
 		return ErrPrivate
 	}
 	data, err := io.ReadAll(io.LimitReader(f, limit+1))
@@ -60,7 +75,7 @@ func ReadJSON(path string, limit int64, value any) error {
 		return err
 	}
 	if int64(len(data)) > limit {
-		return ErrPrivate
+		return ErrInvalid
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -76,11 +91,14 @@ func ReadJSON(path string, limit int64, value any) error {
 func WriteJSON(path string, value any) error {
 	dir := filepath.Dir(path)
 	info, err := os.Lstat(dir)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !privateDirectory(dir, info) {
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return ErrInvalid
+	}
+	if !privateDirectory(dir, info) {
 		return ErrPrivate
 	}
 	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
-		return ErrPrivate
+		return ErrInvalid
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}

@@ -378,8 +378,8 @@ func TestCrossHostSessionOwnershipAndOfflineDetach(t *testing.T) {
 	if err != nil || joined.Status != "accepted" || other.id == c.id {
 		t.Fatalf("explicit detach did not release exact local association: %+v %v", joined, err)
 	}
-	if err := c.Detach(ctx, auth); !errors.Is(err, nativeidentity.ErrOwned) {
-		t.Fatalf("stale detach did not protect replacement: %v", err)
+	if err := c.Detach(ctx, auth); err != nil {
+		t.Fatalf("durable retirement did not converge with a replacement owner: %v", err)
 	}
 	r, _ := other.read(ctx)
 	if err := s.identities.Check(ctx, reservation(r)); err != nil {

@@ -69,38 +69,39 @@ func (e *Engine) initLAN() {
 	}
 }
 
-// pruneLANRequestsLocked bounds the derived request projection. Join facts
-// accumulate in the Event Log for every attempt, but only the newest attempt of
-// each key can still be answered: "pending" while its invitation lives,
-// "expired" for one invitation window afterwards, and "revoked" once that key
-// was admitted. Superseded attempts of the same key and keys whose invitation
-// expired beyond that window are dropped here, so retries cannot fill the
-// projection and permanently refuse a fresh invitation. Admitted attempts stay
-// for the retirement answer; they grow only with owner approvals.
-func (e *Engine) pruneLANRequestsLocked() {
-	if len(e.lanRequests) == 0 {
+// PruneLANRequests bounds the derived request projection shared by the Engine
+// and the Service's cold authorization index. Callers must finish replay before
+// pruning: a later membership fact can protect an earlier admitted request.
+// Only requests are removed; the Event Log and admitted history stay intact.
+func PruneLANRequests(requests map[string]LANJoinRequest, invites map[string]LANInvite, admitted map[string]bool, member *LANMember, now time.Time) {
+	if len(requests) == 0 {
 		return
 	}
-	newest := make(map[string]string, len(e.lanRequests))
-	newestAt := make(map[string]time.Time, len(e.lanRequests))
-	for id, j := range e.lanRequests {
-		if at, ok := newestAt[j.Key]; !ok || j.CreatedAt.After(at) {
+	newest := make(map[string]string, len(requests))
+	newestAt := make(map[string]time.Time, len(requests))
+	for id, j := range requests {
+		if at, ok := newestAt[j.Key]; !ok || j.CreatedAt.After(at) || j.CreatedAt.Equal(at) && id > newest[j.Key] {
 			newest[j.Key], newestAt[j.Key] = id, j.CreatedAt
 		}
 	}
-	now := e.cfg.Now()
-	for id, j := range e.lanRequests {
-		if e.lanAdmitted[id] || e.lanMember != nil && e.lanMember.RequestID == id {
+	for id, j := range requests {
+		if admitted[id] || member != nil && member.RequestID == id {
 			continue
 		}
 		if newest[j.Key] != id {
-			delete(e.lanRequests, id)
+			delete(requests, id)
 			continue
 		}
-		v, ok := e.lanInvites[j.InviteID]
+		v, ok := invites[j.InviteID]
 		if !ok || now.After(v.ExpiresAt.Add(lanInviteLifetime)) {
-			delete(e.lanRequests, id)
+			delete(requests, id)
 		}
+	}
+}
+
+func (e *Engine) pruneLANRequestsLocked() {
+	if !e.replaying {
+		PruneLANRequests(e.lanRequests, e.lanInvites, e.lanAdmitted, e.lanMember, e.cfg.Now())
 	}
 }
 func (e *Engine) applyLAN(ev model.Event) error {
@@ -127,9 +128,12 @@ func (e *Engine) applyLAN(ev model.Event) error {
 		if !ok || v.Consumed || !j.CreatedAt.Before(v.ExpiresAt) {
 			return errors.New("LAN join request lacks a live invitation")
 		}
-		if _, ok := e.lanRequests[j.RequestID]; ok {
+		if _, ok := e.lanRequests[j.RequestID]; ok && (!e.replaying || e.lanAdmitted[j.RequestID]) {
 			return errors.New("duplicate LAN join request")
 		}
+		// A pending request ID can be reused after live projection pruning.
+		// Replay retains those earlier facts until all admissions are known;
+		// the later unadmitted attempt replaces them, never an admitted one.
 		e.lanRequests[j.RequestID] = j
 		e.pruneLANRequestsLocked()
 	case EventLANMember:
@@ -287,6 +291,7 @@ func (e *Engine) LANJoinStatus(requestID, key string) (LANJoinRequest, string, e
 	if err := e.healthy(); err != nil {
 		return LANJoinRequest{}, "", err
 	}
+	e.pruneLANRequestsLocked()
 	j, ok := e.lanRequests[requestID]
 	if !ok || !same(j.Key, key) {
 		return LANJoinRequest{}, "", ErrAuth

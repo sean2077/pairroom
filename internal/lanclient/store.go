@@ -234,11 +234,11 @@ func readRecord(dir, id string) (record, error) {
 	return r, validateRecord(r)
 }
 
-// withRecord holds the stable directory lock, rereads the latest disk state,
-// and writes only an actual change. Callbacks must not perform network I/O.
-// Lock order is client record, then nativeidentity; neither acquires the other
-// in reverse. Evidence and collector locks are separate from this short lock.
-func (c *Client) withRecord(ctx context.Context, update func(*record) error) (record, error) {
+// withLockedRecord holds the stable directory lock and rereads the latest
+// disk state. Callbacks own any durable writes and must not perform network
+// I/O. Lock order is client record, then nativeidentity; neither acquires the
+// other in reverse. Evidence and collector locks are separate from this lock.
+func (c *Client) withLockedRecord(ctx context.Context, update func(record) (record, error)) (record, error) {
 	var r record
 	if err := privatefile.CheckDirectory(c.store.root); err != nil {
 		return r, err
@@ -255,24 +255,36 @@ func (c *Client) withRecord(ctx context.Context, update func(*record) error) (re
 	if err != nil || update == nil {
 		return r, err
 	}
-	before, err := json.Marshal(r)
-	if err != nil {
+	return update(r)
+}
+
+// withRecord writes only an actual change after a bounded local mutation.
+// Retirement uses withLockedRecord directly so its one record write remains
+// inside the native identity transaction, before ownership can be released.
+func (c *Client) withRecord(ctx context.Context, update func(*record) error) (record, error) {
+	return c.withLockedRecord(ctx, func(r record) (record, error) {
+		if update == nil {
+			return r, nil
+		}
+		before, err := json.Marshal(r)
+		if err != nil {
+			return r, err
+		}
+		if err := update(&r); err != nil {
+			return r, err
+		}
+		if err := validateRecord(r); err != nil {
+			return r, err
+		}
+		after, err := json.Marshal(r)
+		if err != nil {
+			return r, err
+		}
+		if !bytes.Equal(before, after) {
+			err = privatefile.WriteJSON(filepath.Join(c.dir, "client.json"), r)
+		}
 		return r, err
-	}
-	if err := update(&r); err != nil {
-		return r, err
-	}
-	if err := validateRecord(r); err != nil {
-		return r, err
-	}
-	after, err := json.Marshal(r)
-	if err != nil {
-		return r, err
-	}
-	if !bytes.Equal(before, after) {
-		err = privatefile.WriteJSON(filepath.Join(c.dir, "client.json"), r)
-	}
-	return r, err
+	})
 }
 
 func (c *Client) read(ctx context.Context) (record, error) { return c.withRecord(ctx, nil) }
@@ -348,32 +360,65 @@ func (c *Client) authenticated(ctx context.Context, auth relay.Auth, leaving boo
 }
 
 // Detach is an explicit local-only retirement. It does not claim that the host
-// received a leave request. The exact local identity reservation is released
-// before the record is retired, so a failure that must be reported — including
-// a claim now held by a replacement binding — leaves the accepted/pending
-// record intact instead of reporting failure for a half-retired binding.
+// received a leave request. The retired record is durable before its exact
+// native session reservation can be released. A failed release can therefore
+// be retried without reactivating the client or touching a replacement owner.
 func (c *Client) Detach(ctx context.Context, auth relay.Auth) error {
 	return c.detach(ctx, &auth)
 }
 
 func (c *Client) detach(ctx context.Context, auth *relay.Auth) error {
-	_, err := c.withRecord(ctx, func(r *record) error {
+	_, err := c.withLockedRecord(ctx, func(r record) (record, error) {
 		if auth != nil {
-			if err := authenticate(*r, *auth, true); err != nil {
-				return err
+			if err := authenticate(r, *auth, true); err != nil {
+				return r, err
 			}
 		}
-		// Repair only a pending-to-admitted interruption for this exact local
-		// binding before releasing it; a different owner remains protected.
-		if err := c.store.identities.Reserve(ctx, reservation(*r)); err != nil {
-			return err
-		}
-		if err := c.store.identities.Release(ctx, reservation(*r)); err != nil {
-			return err
-		}
-		// withRecord persists the retired status after this callback succeeds.
-		r.Status = "detached"
-		return nil
+		return c.detachLocked(ctx, r)
 	})
 	return err
+}
+
+// detachLocked runs with the client record lock held. Commit retains the exact
+// identity lock across the record write and release: no other association can
+// acquire this session while the durable client still appears active.
+func (c *Client) detachLocked(ctx context.Context, r record) (record, error) {
+	retired := r
+	retired.Status = "detached"
+	claim := reservation(r)
+	if r.Status == "accepted" || r.Status == "pending" {
+		// Repair only this binding's pending-to-admitted interruption. A
+		// different owner is a conflict, before any retirement is written.
+		if err := c.store.identities.Reserve(ctx, claim); err != nil {
+			return r, err
+		}
+		err := c.store.identities.Commit(ctx, &claim, nil, func() error {
+			if err := privatefile.WriteJSON(filepath.Join(c.dir, "client.json"), retired); err != nil {
+				return err
+			}
+			r = retired
+			return nil
+		})
+		return r, err
+	}
+	// A terminal record already proves local retirement. Never Reserve here:
+	// the original claim may have been released and adopted by another Room.
+	if r.Status != retired.Status {
+		if err := privatefile.WriteJSON(filepath.Join(c.dir, "client.json"), retired); err != nil {
+			return r, err
+		}
+		r = retired
+	}
+	if _, err := c.store.identities.ReleaseIfHeld(ctx, claim); err != nil {
+		return r, err
+	}
+	if claim.Generation != 0 {
+		// An admission fact may precede promotion of its local reservation.
+		// Reconcile only generation zero of this same original binding.
+		claim.Generation = 0
+		if _, err := c.store.identities.ReleaseIfHeld(ctx, claim); err != nil {
+			return r, err
+		}
+	}
+	return r, nil
 }

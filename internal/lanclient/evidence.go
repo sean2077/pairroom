@@ -114,16 +114,22 @@ func (c *Client) downloadEvidence(ctx context.Context, r record, expected model.
 	request.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(request)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, safeError(err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, safeError(&lanshare.Error{Status: response.StatusCode})
+		return nil, safeError(lanshare.ReadResponseError(response))
 	}
 	if response.ContentLength > expected.Size {
 		return nil, errors.New("LAN evidence exceeds its manifest")
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, expected.Size+1))
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if err != nil || int64(len(data)) != expected.Size {
 		return nil, errors.New("LAN evidence does not match its manifest")
 	}
@@ -216,7 +222,7 @@ func (c *Client) Upload(ctx context.Context, auth relay.Auth, kind, name string,
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusCreated {
-		return model.Attachment{}, safeError(&lanshare.Error{Status: response.StatusCode})
+		return model.Attachment{}, safeError(lanshare.ReadResponseError(response))
 	}
 	var metadata model.Attachment
 	decoder := json.NewDecoder(io.LimitReader(response.Body, 16<<10))

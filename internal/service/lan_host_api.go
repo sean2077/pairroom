@@ -213,10 +213,9 @@ func (h *lanHostServer) upload(w http.ResponseWriter, r *http.Request, n *native
 		return
 	}
 	var value model.Attachment
-	err = n.engine.AuthorizedLANEffect(a, func() error {
-		if err := transfer.Context().Err(); err != nil {
-			return err
-		}
+	// The transfer barrier joins this disk commit before revocation, without
+	// holding the Room lock while the attachment store writes and syncs.
+	err = transfer.Effect(func() error {
 		var saveErr error
 		value, saveErr = staged.Commit()
 		return saveErr

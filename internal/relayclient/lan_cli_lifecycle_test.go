@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,10 +31,12 @@ import (
 // These tests exercise CLI/private-workspace cutovers; the Service package's
 // separate end-to-end tests verify the actual host router and evidence API.
 type lanCLIWire struct {
-	engine    *relay.Engine
-	server    *httptest.Server
-	root, pin string
-	policy    model.Collaboration
+	engine      *relay.Engine
+	server      *httptest.Server
+	root, pin   string
+	policy      model.Collaboration
+	requests    atomic.Int64
+	connections atomic.Int64
 }
 
 func newLANCLIWire(t *testing.T) *lanCLIWire {
@@ -62,6 +67,7 @@ func newLANCLIWire(t *testing.T) *lanCLIWire {
 		t.Fatal(err)
 	}
 	f.server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.requests.Add(1)
 		if r.TLS == nil || len(r.TLS.PeerCertificates) != 1 {
 			w.WriteHeader(http.StatusForbidden)
 			return
@@ -128,6 +134,11 @@ func newLANCLIWire(t *testing.T) *lanCLIWire {
 	f.server.TLS, err = lanshare.ServerTLS(identity)
 	if err != nil {
 		t.Fatal(err)
+	}
+	f.server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			f.connections.Add(1)
+		}
 	}
 	f.server.StartTLS()
 	t.Cleanup(f.server.Close)
@@ -411,27 +422,254 @@ func TestLANCLIOfflineDetachConvergesAfterItsIdentityIsReused(t *testing.T) {
 	}
 }
 
-// A joined workspace restored from a backup or copied from another machine can
-// lose the owner-only boundary of its state and credential files. The documented
-// offline escape must still retire that binding locally and remove the files,
-// instead of failing forever with a permission error and no repair path.
+// Either private workspace file can independently lose its owner boundary.
+// The offline escape retires only the matching protected client identity and
+// preserves the original publication WAL in a private archive.
 func TestLANCLIOfflineDetachRetiresBindingWithLostOwnerBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files []string
+	}{
+		{"state-only", []string{"state.json"}},
+		{"credentials-only", []string{"credentials"}},
+		{"both", []string{"state.json", "credentials"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLANCLIWire(t)
+			invite, original := f.bind(t, "damaged-boundary-session")
+			slotDir := filepath.Join(f.root, ".pairroom", "rooms", original.Room, "slots", string(original.Slot))
+			original.Pending = &Pending{Seq: 7, Text: "@claude original pending reply", Unknown: true}
+			original.Held = []Pending{{Seq: 8, Text: "@claude retained next reply"}}
+			original.LastSeq = 8
+			if err := privatefile.WriteJSON(filepath.Join(slotDir, "state.json"), original); err != nil {
+				t.Fatal(err)
+			}
+			var cred credentials
+			if err := privatefile.ReadJSON(filepath.Join(slotDir, "credentials"), maxPrivateFileBytes, &cred); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range tc.files {
+				breakOwnerBoundary(t, filepath.Join(slotDir, name))
+			}
+			t.Chdir(sessionGitRoot(t))
+			requests, connections := f.requests.Load(), f.connections.Load()
+			// Ordinary commands keep strict file ownership even when this
+			// same session is eligible for the explicit offline escape.
+			if _, err := f.run(t, original.SessionID, false, "status"); err == nil {
+				t.Fatal("ordinary status accepted a damaged owner boundary")
+			}
+			output, err := f.run(t, original.SessionID, false, "unbind", "--local-only", "--room", original.Room)
+			if err != nil || !bytes.Contains(output, []byte("local-only")) || !bytes.Contains(output, []byte("not owner-only")) {
+				t.Fatalf("damaged-boundary offline detach: %s, %v", output, err)
+			}
+			if got := f.requests.Load(); got != requests || f.connections.Load() != connections {
+				t.Fatalf("offline retirement contacted the host: requests=%d connections=%d", got-requests, f.connections.Load()-connections)
+			}
+			for _, name := range []string{"state.json", "credentials"} {
+				if _, err := os.Stat(filepath.Join(slotDir, name)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("retired %s survived: %v", name, err)
+				}
+			}
+			archiveDir := filepath.Join(f.root, ".pairroom", "retired", original.BindID)
+			var archived State
+			if err := privatefile.ReadJSON(filepath.Join(archiveDir, "state.json"), maxPrivateFileBytes, &archived); err != nil || !reflect.DeepEqual(archived, original) {
+				t.Fatalf("offline retirement did not privately preserve the complete original WAL: %v", err)
+			}
+			var archivedCredential credentials
+			if err := privatefile.ReadJSON(filepath.Join(archiveDir, "credentials"), maxPrivateFileBytes, &archivedCredential); err != nil || archivedCredential != cred {
+				t.Fatalf("offline retirement did not privately preserve the original credential: %v", err)
+			}
+			clients, err := lanclient.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer clients.Close()
+			client, err := clients.Get(context.Background(), original.Room)
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta, err := client.Metadata(context.Background())
+			if err != nil || meta.Status != "detached" || meta.BindID != original.BindID {
+				t.Fatalf("offline retirement did not durably retire the exact admission: %+v, %v", meta, err)
+			}
+			identities, err := nativeidentity.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			claim := nativeidentity.Claim{Runtime: original.Runtime, SessionID: original.SessionID, Association: nativeidentity.Remote(invite.HostPin, invite.RoomID), BindID: original.BindID, Generation: original.Generation}
+			if err := identities.Check(context.Background(), claim); !errors.Is(err, nativeidentity.ErrUnowned) {
+				t.Fatalf("offline retirement did not release its exact native identity: %v", err)
+			}
+		})
+	}
+}
+
+// A stale or mislabelled workspace file can still be found from the protected
+// client catalog after cwd changes. Lost file permissions must not turn those
+// bytes into authority to detach, drop the WAL, or purge the runtime's hooks.
+func TestLANCLIOfflineRecoveryRejectsStateThatDiffersFromClientRecord(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*State)
+	}{
+		{"stale-generation", func(s *State) { s.Generation++ }},
+		{"disguised-local-state", func(s *State) { s.Schema, s.LAN = 2, nil }},
+		{"different-host-route", func(s *State) { s.LAN.Endpoint = "https://192.168.1.99:8877" }},
+		{"different-native-session", func(s *State) { s.SessionID = "another-native-session" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLANCLIWire(t)
+			invite, original := f.bind(t, "stale-boundary-session")
+			slotDir := filepath.Join(f.root, ".pairroom", "rooms", original.Room, "slots", string(original.Slot))
+			statePath := filepath.Join(slotDir, "state.json")
+			stale := original
+			route := *original.LAN
+			stale.LAN = &route
+			stale.Pending = &Pending{Seq: 4, Text: "@claude uncertain original publication", Unknown: true}
+			stale.Held = []Pending{{Seq: 5, Text: "@claude retained follow-up"}}
+			stale.LastSeq = 5
+			tc.change(&stale)
+			_, localConnections := directTransportLocalTrap(t)
+			if stale.LAN == nil {
+				endpoint, err := defaultEndpoint()
+				if err != nil {
+					t.Fatal(err)
+				}
+				stale.EndpointPath = endpoint
+			}
+			if err := privatefile.WriteJSON(statePath, stale); err != nil {
+				t.Fatal(err)
+			}
+			if stale.LAN == nil {
+				// A LAN directory cannot become a local Service binding even
+				// before its otherwise valid state's owner boundary is lost.
+				if output, err := f.run(t, original.SessionID, true, "status"); err == nil {
+					t.Fatalf("disguised direct state became a local Service binding: %s", output)
+				}
+				if localConnections.Load() != 0 {
+					t.Fatal("disguised direct state contacted the local Service")
+				}
+			}
+			breakOwnerBoundary(t, statePath)
+			temporary := filepath.Join(slotDir, ".state.json-interrupted")
+			if err := privatefile.WriteJSON(temporary, map[string]string{"pending": "original crash evidence"}); err != nil {
+				t.Fatal(err)
+			}
+			clientRoot, err := lanclient.DefaultRoot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			locatorDir, err := locatorDirectory(nativeCaller{runtime: original.Runtime, session: original.SessionID}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hooks, err := hookPath(f.root, original.Runtime)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := make(map[string][]byte)
+			for _, path := range []string{
+				statePath,
+				filepath.Join(slotDir, "credentials"),
+				filepath.Join(clientRoot, original.Room, "client.json"),
+				filepath.Join(f.root, ".pairroom", "lan-joins", original.Room, "join-attempt.json"),
+				filepath.Join(locatorDir, locatorFilename(original)),
+				hooks,
+				temporary,
+			} {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before[path] = data
+			}
+			t.Chdir(sessionGitRoot(t))
+			requests, connections := f.requests.Load(), f.connections.Load()
+			output, err := f.run(t, original.SessionID, false, "unbind", "--local-only", "--room", original.Room, "--purge-hooks")
+			if err == nil || bytes.Contains(output, []byte("local-only")) {
+				t.Fatalf("mismatched recovery was not rejected: %s, %v", output, err)
+			}
+			if got := f.requests.Load(); got != requests || f.connections.Load() != connections {
+				t.Fatalf("mismatched offline recovery contacted the host: requests=%d connections=%d", got-requests, f.connections.Load()-connections)
+			}
+			if localConnections.Load() != 0 {
+				t.Fatal("mismatched offline recovery contacted the local Service")
+			}
+			for path, want := range before {
+				got, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("rejected recovery changed %s: %v", filepath.Base(path), err)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(f.root, ".pairroom", "retired", original.BindID)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("rejected recovery created a retirement archive: %v", err)
+			}
+			identities, err := nativeidentity.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			claim := nativeidentity.Claim{Runtime: original.Runtime, SessionID: original.SessionID, Association: nativeidentity.Remote(invite.HostPin, invite.RoomID), BindID: original.BindID, Generation: original.Generation}
+			if err := identities.Check(context.Background(), claim); err != nil {
+				t.Fatalf("rejected recovery disturbed the original native identity: %v", err)
+			}
+		})
+	}
+}
+
+// Older detach ordering could release the claim before persisting retirement.
+// A still-active record must not be reported detached after another binding
+// owns that native session, even when its disposable slot state is gone.
+func TestLANCLIOfflineDetachDoesNotHideActiveIdentityConflict(t *testing.T) {
 	f := newLANCLIWire(t)
-	invite, _ := f.bind(t, "damaged-boundary-session")
-	f.server.Close()
-	slotDir := filepath.Join(f.root, ".pairroom", "rooms", lanRoutingID(invite), "slots", "slot2")
-	for _, name := range []string{"state.json", "credentials"} {
-		breakOwnerBoundary(t, filepath.Join(slotDir, name))
+	invite, original := f.bind(t, "conflicted-native-session")
+	identities, err := nativeidentity.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalClaim := nativeidentity.Claim{Runtime: original.Runtime, SessionID: original.SessionID, Association: nativeidentity.Remote(invite.HostPin, invite.RoomID), BindID: original.BindID, Generation: original.Generation}
+	if err := identities.Release(context.Background(), originalClaim); err != nil {
+		t.Fatal(err)
+	}
+	replacement := nativeidentity.Claim{Runtime: original.Runtime, SessionID: original.SessionID, Association: nativeidentity.Hosted(f.root, "replacement-room", model.ActorSlot1), BindID: "newer-binding"}
+	if err := identities.Reserve(context.Background(), replacement); err != nil {
+		t.Fatal(err)
+	}
+	slotDir := filepath.Join(f.root, ".pairroom", "rooms", original.Room, "slots", string(original.Slot))
+	if err := os.Remove(filepath.Join(slotDir, "state.json")); err != nil {
+		t.Fatal(err)
+	}
+	clientRoot, err := lanclient.DefaultRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks, err := hookPath(f.root, original.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := make(map[string][]byte)
+	for _, path := range []string{filepath.Join(clientRoot, original.Room, "client.json"), filepath.Join(slotDir, "credentials"), hooks} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[path] = data
 	}
 	t.Chdir(sessionGitRoot(t))
-	output, err := f.run(t, "damaged-boundary-session", false, "unbind", "--local-only", "--room", lanRoutingID(invite))
-	if err != nil || !bytes.Contains(output, []byte("local-only")) || !bytes.Contains(output, []byte("not owner-only")) {
-		t.Fatalf("damaged-boundary offline detach: %s, %v", output, err)
+	requests, connections := f.requests.Load(), f.connections.Load()
+	output, err := f.run(t, original.SessionID, false, "unbind", "--local-only", "--room", original.Room, "--purge-hooks")
+	if !errors.Is(err, nativeidentity.ErrOwned) || bytes.Contains(output, []byte("local-only")) {
+		t.Fatalf("active ownership conflict was reported as retired: %s, %v", output, err)
 	}
-	if _, err := os.Stat(filepath.Join(slotDir, "state.json")); !os.IsNotExist(err) {
-		t.Fatalf("retired binding files survived: %v", err)
+	if got := f.requests.Load(); got != requests || f.connections.Load() != connections {
+		t.Fatalf("conflicted offline detach contacted the host: requests=%d connections=%d", got-requests, f.connections.Load()-connections)
 	}
-	if _, err := os.Stat(filepath.Join(slotDir, "credentials")); !os.IsNotExist(err) {
-		t.Fatalf("retired credential file survived: %v", err)
+	for path, want := range before {
+		got, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("failed detach changed %s: %v", filepath.Base(path), err)
+		}
+	}
+	if err := identities.Check(context.Background(), replacement); err != nil {
+		t.Fatalf("failed detach disturbed the newer native owner: %v", err)
 	}
 }

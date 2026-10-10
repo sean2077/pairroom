@@ -8,7 +8,7 @@ import (
 )
 
 // LAN transfers hold their own effect lock, never the Room lock, while doing
-// network I/O. A binding change first cancels and joins its old transfers, then
+// disk or network I/O. A binding change cancels and joins its old transfers, then
 // commits the revocation fact. No old transfer can release bytes after that
 // durable boundary, and an unrelated Room operation can proceed during I/O.
 type lanTransferSet struct {
@@ -57,8 +57,8 @@ func (e *Engine) BeginLANTransfer(ctx context.Context, a Auth, interrupt func())
 func (t *LANTransfer) Context() context.Context { return t.ctx }
 
 // Effect revalidates the original certificate, binding and generation before
-// each network write. The independent transfer barrier joins an already
-// admitted write before allowing its membership to be revoked.
+// each attachment commit or network write. The independent transfer barrier
+// joins an admitted effect before allowing its membership to be revoked.
 func (t *LANTransfer) Effect(effect func() error) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()

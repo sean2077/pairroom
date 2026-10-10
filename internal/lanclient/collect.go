@@ -83,11 +83,20 @@ func (c *Client) collect(ctx context.Context, req relayRequest, auth relay.Auth)
 		// Download and verify every byte before the remote claim lease starts.
 		// Slow or failed evidence retrieval has no inbox consumption effect.
 		envelope, err := c.prepareEnvelope(ctx, r, m)
+		if ctx.Err() != nil {
+			// Preparation has no claim lease or output receipt. Ending the
+			// wait during headers, body, or cache verification is an empty
+			// poll; retained unknown deliveries remain untouched.
+			return collectResult{}, nil
+		}
 		if err != nil {
 			return collectResult{}, err
 		}
 		r, err = c.authenticated(ctx, auth, false)
 		if err != nil {
+			if ctx.Err() != nil {
+				return collectResult{}, nil
+			}
 			return collectResult{}, err
 		}
 		if err := deliveryCapacity(r); err != nil {

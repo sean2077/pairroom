@@ -86,6 +86,14 @@ Native Room backups do not stop user-owned processes and do not include workspac
 
 ### Direct LAN client state
 
+LAN join and membership facts replay completely before either the Engine or the
+Service's cold authorization index prunes its derived request projection.
+Invitation expiry never invalidates an earlier approved membership during
+replay. These projections retain the newest unadmitted attempt per key for one
+invitation window after expiry, plus admitted requests for retirement answers;
+pruning never rewrites the Event Log. A never-admitted request ID may recur after
+its earlier attempt was forgotten, but an admitted request ID cannot be reassigned.
+
 Existing local workspace bindings keep relay state schema **2**. A direct LAN
 binding uses schema **3** and an explicit reference to its private per-user
 client identity. It does not reinterpret `endpoint_path` as a remote URL or
@@ -106,6 +114,13 @@ authoritative Room inbox, and stopping the observer does not stop direct
 commands. Distinct native sessions can concurrently use locally hosted Rooms
 and several remote hosts without changing a global endpoint.
 
+Service preflight checks every safely readable catalog entry before Registry
+cleanup. Owner-only boundary damage can be reported without stopping local
+hosting, but it cannot hide another entry's unsupported format; non-regular,
+oversized or uninterpretable identity files remain fatal to preflight. Runtime
+catalog diagnostics share the bounded Management snapshot read and cannot wait
+indefinitely for a joined-client lock.
+
 The separate `pairroom/native-identities` directory under the same user
 configuration directory retains each exact Runtime/session's local ownership
 reservation: association, bind ID and generation. Pending LAN admissions also
@@ -115,6 +130,12 @@ processes, so a second association cannot acquire the same native session.
 These records are durable authority for local exclusion, unlike disposable
 session locators. Removing them is not a routing repair, and possessing one
 does not grant remote Room permission.
+
+Local detach holds the exact identity lock while durably retiring the client
+record, then releases the reservation. An interrupted retirement keeps either
+the original exclusion or durable proof that the association is inactive.
+Retrying a retired association releases only its own remaining reservation and
+never takes ownership back from a replacement.
 
 Before releasing an incoming envelope, the client verifies/downloads evidence,
 acquires the host's claim and saves its original delivery receipt. Successful

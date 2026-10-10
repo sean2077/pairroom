@@ -71,6 +71,7 @@ type Engine struct {
 	lastReport      map[string]uint64
 	audit           []Audit
 	sequence        uint64
+	replaying       bool
 	changed         chan struct{}
 	closed          bool
 	draining        bool
@@ -112,6 +113,7 @@ func Open(cfg Config) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
+	e.replaying = true
 	for _, ev := range events {
 		if ev.RoomID != cfg.RoomID {
 			return nil, errors.New("native relay Room identity mismatch")
@@ -120,6 +122,8 @@ func Open(cfg Config) (*Engine, error) {
 			return nil, fmt.Errorf("native replay at event %d: %w", ev.Seq, err)
 		}
 	}
+	e.replaying = false
+	e.pruneLANRequestsLocked()
 	e.derived = nil // replayed history is not new attention
 	// A previous writer cannot prove whether a claimed envelope reached stdout.
 	// Preserve queued work; no delivery recovery is an automatic replay.

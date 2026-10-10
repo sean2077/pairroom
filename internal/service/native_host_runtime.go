@@ -265,8 +265,8 @@ func (n *nativeHostRuntime) snapshotWithRelay(projection any) map[string]any {
 	kinds := n.engine.Runtimes()
 	room := cloneRoom(n.room)
 	for slot, kind := range kinds {
-		if room.Agents[slot].AwaitingPeer && kind.Valid() {
-			room.Agents[slot] = model.AgentSelection{Runtime: kind, Provider: model.NativeProviderRef()}
+		if room.Sharing == "lan" && slot != room.OwnerSlot {
+			room.Agents[slot] = nativeLANSelection(kind, kind.Valid())
 		}
 	}
 	room = cloneRoom(room)

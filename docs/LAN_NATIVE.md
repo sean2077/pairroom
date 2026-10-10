@@ -209,6 +209,7 @@ snapshot behavior.
 | Collector stdout written | `handed_off` means delivery to CLI/hook stdout, not model acceptance, execution, or success. |
 | Claim or acknowledgement uncertain | Inspect `history --pending` / `history --id ID`. Never automatically replay `unknown`. If the local collector already reported successful stdout, a later bind/resume or receive opportunity can settle only that original ACK after reconnection; a claim alone never authorizes acknowledgement. |
 | Evidence hash or metadata mismatch | Collection fails before claim. Inspect the original evidence and publish changed content with a new ID. |
+| Receive window ends during evidence download | Cancellation or timeout returns an empty poll, with the message still unclaimed. A later receive opportunity can download and verify it again. |
 | Evidence cache at its bound | This machine's verified copies reached 100 MiB. Stop collection and any optional observer, then move the complete joined-client `evidence` subdirectory, content and manifests together, to a backup. Preserve the parent private client record and all delivery/publication journals. A later access downloads and verifies a fresh copy only if the host still authorizes access and retains it. Keep the backup for needed or uncertain-delivery evidence; no automatic removal occurs. |
 | Revoked or archived membership | New reads, writes, claims, wake reservations and downloads fail. Explicitly leave locally before reusing that native session elsewhere. Previously downloaded content cannot be recalled. |
 
@@ -254,6 +255,14 @@ dashboard offers the same explicit **Detach locally** action. Neither path
 reconnects that association automatically. The original session can omit
 `--room` when its client catalog resolves a single association, including a
 pending admission after changing directories.
+
+If a copied or restored workspace binding has lost owner-only permissions on
+its state or credentials, this offline command can read the affected file solely
+to retire the original association. It first checks the recovered LAN format,
+binding, native session and pinned host route against the private client record.
+It refuses mismatched or uninterpretable state and preserves it for inspection.
+Recovered credentials never authorize a network request; successful retirement
+retains the original publication state and credentials in the private archive.
 
 Changing the native session for the **same** remote Room requires a fresh
 invitation and an explicit replacement after the host confirms the old

@@ -154,3 +154,35 @@ func TestOfflineRecoveryReadsLostBoundaryButNotUnsafeFiles(t *testing.T) {
 		t.Fatal("recovery accepted an oversized file")
 	}
 }
+
+// Owner-boundary recovery must not relax the direct format decoder: an unknown
+// publication or credential field may belong to a newer writer and is retained
+// for inspection rather than silently discarded by local retirement.
+func TestOfflineRecoveryKeepsStrictBindingFileFormat(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		data  string
+		value any
+	}{
+		{"state.json", `{"schema":3,"future_publication":"retain for inspection"}`, &State{}},
+		{"credentials", `{"bind_id":"original","secret":"fixture","future_capability":"retain for inspection"}`, &credentials{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tc.name)
+			if err := os.WriteFile(path, []byte(tc.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			breakOwnerBoundary(t, path)
+			strict := readPrivate
+			if tc.name == "credentials" {
+				strict = func(path string, value any) error { return privatefile.ReadJSON(path, maxPrivateFileBytes, value) }
+			}
+			if _, err := readBindingFile(path, tc.value, strict, true); err == nil {
+				t.Fatal("owner-boundary recovery accepted an unknown binding field")
+			}
+			if data, err := os.ReadFile(path); err != nil || string(data) != tc.data {
+				t.Fatalf("rejected binding data changed: %v", err)
+			}
+		})
+	}
+}
