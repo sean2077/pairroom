@@ -59,10 +59,10 @@ func TestNativeFileWorkflowSkillGuidance(t *testing.T) {
 		"existing-writable-parent": "Parent must exist and be writable",
 		"no-overwrite":             "no overwrite, retry with a fresh path",
 		"tool-cwd":                 "Paths use the tool cwd",
-		"current-cli":              "these flags need the current CLI",
-		"review-anchor":            "use --review and verify with review --id <published-id>",
-		"review-checkout":          "pass --review-repo <task-checkout> on each for a different checkout",
-		"evidence-not-approval":    "An observation is neither an atomic snapshot nor approval",
+		"direct-join":              "CLI/hooks need no local Service or --service-file",
+		"review-anchor":            "--review; review --id <published-id>",
+		"review-checkout":          "--review-repo <task-checkout> for another checkout",
+		"evidence-not-approval":    "Observations are not atomic or approval",
 		"independent-review":       "Inspect independently; report unresolved disagreements",
 	})
 }

@@ -47,7 +47,7 @@
   "modesDescription": "Native 是默认并推荐的模式。需要 PairRoom 管理会话时，可选择 Embedded。两位 Agent 的原生运行时可以独立选择。",
   "nativeBadge": "默认 · 推荐",
   "nativeTagline": "继续使用现有会话。",
-  "nativeBody": "连接原来的终端或客户端会话，包括 Codex Desktop；也能通过局域网邀请同事，从对方的本机 Service 加入。PairRoom 记录共享消息，工作、凭据和权限保留在各自的客户端中。",
+  "nativeBody": "连接原来的终端或客户端会话，包括 Codex Desktop。只有 Room 的房主需要 Service，同事用 CLI/hooks 直接加入。同一台机器可以同时托管自己的 Room、加入其他房主的 Room。工作、凭据和权限保留在各自的客户端中。",
   "nativePoint1": "工具、权限、Provider 与模型仍由原始工具管理。",
   "nativePoint2": "在原始会话中停止或引导各自的 Agent。",
   "nativeSetup": "连接已有会话 ↗",
@@ -99,7 +99,7 @@
   "faq5Body": "取决于原生运行时。PairRoom 可以唤醒符合条件的空闲 Claude Code 和 Codex 会话；Grok Build 与 Gemini CLI 暂无 Service 唤醒。请在原始客户端中停止或引导 Agent，并留意长时间运行的工作。",
   "wakeDetails": "查看各工具的持续运行限制 ↗",
   "faq6Title": "如何连接两个已有会话？",
-  "faq6Body": "启动非 Mock Service，为所选原生运行时安装并批准 hooks，在第一个会话加载 pairroom-relay 技能。创建协作房间后，请另一位 Agent 执行原样的加入命令。",
+  "faq6Body": "房主启动非 Mock Service，双方在各自会话中安装并批准 hooks，加载 pairroom-relay 技能。创建协作房间后，分享原样的加入命令。受邀的局域网参与者直接使用 CLI/hooks，无需本机 Service；房主批准对方的准确回执。",
   "footerLine": "两个编码 Agent 的本地协作工具。",
   "footerNavigation": "页脚导航",
   "support": "支持 ↗"

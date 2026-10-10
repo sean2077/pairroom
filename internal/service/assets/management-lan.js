@@ -1,4 +1,4 @@
-/* Local-owner LAN controls. Invitations/receipts are public; private keys stay in the Service. */
+/* Local-owner LAN controls. Joined Rooms project CLI-owned state; private keys never enter the browser. */
 (() => {
   'use strict';
   function create({ t, node, actionButton, api, settingsPanel, settingRow, copyText, showDialog, closeDialog,
@@ -82,6 +82,10 @@
     function dialogTicket() {
       const value = ++dialogRevision, active = isCurrent();
       return () => value === dialogRevision && active() && $('lan-room-dialog').open;
+    }
+    function lastContact(room) {
+      const observed = Date.parse(room.last_seen || '');
+      return Number.isFinite(observed) && observed > 0 ? new Date(observed).toISOString() : t('room.lan.notObserved');
     }
     function section(title, ...content) {
       return node('section', { className: 'lan-dialog-section' }, node('h3', { textContent: title }), ...content);
@@ -243,15 +247,21 @@
         finally { reading = false; if (active()) next.disabled = false; }
       }
       const connected = t(room.connected ? 'room.lan.connected' : 'room.lan.disconnected');
+      const leave = actionButton(t('room.lan.leave'), () => confirm({ title: t('room.lan.leave'), message: t('room.lan.leaveHelp'), label: t('room.lan.leave'), tone: 'danger',
+        action: async () => { await call(`${prefix}/leave`, 'POST', {}); if (active()) closeDialog('lan-room-dialog'); await refresh({ forceRender: true, fresh: true }); } }), 'danger-button outline');
+      leave.hidden = !['accepted', 'revoked'].includes(room.status);
+      const detach = actionButton(t('room.lan.detach'), () => confirm({ title: t('room.lan.detach'), message: t('room.lan.detachHelp'), label: t('room.lan.detach'), tone: 'danger',
+        action: async () => { await call(`${prefix}/detach`, 'POST', {}); if (active()) closeDialog('lan-room-dialog'); await refresh({ forceRender: true, fresh: true }); } }), 'secondary-button');
+      detach.hidden = ['left', 'detached'].includes(room.status);
       $('lan-room-body').replaceChildren(
         section(t('room.lan.joinedRoom'), node('p', { className: 'field-help', textContent: `${t(`room.lan.status.${room.status}`)} · ${connected}` }),
           node('p', { className: 'field-help', textContent: t('room.lan.connectionBoundary') }),
+          field(t('room.lan.lastContact'), lastContact(room)),
           field(t('room.roomId'), room.id), field(t('room.lan.endpoint'), room.endpoint), field(t('room.lan.hostPin'), room.host_pin)),
         section(t('room.native.messages'), history, node('div', { className: 'lan-settings-actions' },
           actionButton(t('ui.refresh'), () => { cursor = ''; return loadHistory(); }, 'secondary-button'), next)),
         section(t('room.native.message'), target, text, pendingNotice, node('div', { className: 'lan-settings-actions' }, send, check, forget), notice),
-        actionButton(t('room.lan.leave'), () => confirm({ title: t('room.lan.leave'), message: t('room.lan.leaveHelp'), label: t('room.lan.leave'), tone: 'danger',
-          action: async () => { await call(`${prefix}/leave`, 'POST', {}); if (active()) closeDialog('lan-room-dialog'); await refresh({ forceRender: true, fresh: true }); } }), 'danger-button outline'));
+        node('div', { className: 'lan-settings-actions' }, leave, detach));
       loadDraft();
       if (room.status === 'accepted') loadHistory();
     }

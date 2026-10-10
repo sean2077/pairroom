@@ -9,12 +9,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sean2077/pairroom/internal/lanclient"
 	"github.com/sean2077/pairroom/internal/lanshare"
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/nativeidentity"
 	"github.com/sean2077/pairroom/internal/privatefile"
+	"github.com/sean2077/pairroom/internal/relay"
+	"github.com/sean2077/pairroom/internal/relayclient"
 )
 
 func TestLANUpgradePreservesRealPreLANLocalRooms(t *testing.T) {
+	relayclient.IsolateNativeCaller(t)
 	root, workspace := t.TempDir(), testGitRepo(t)
 	fixture := filepath.Join("testdata", "pre-lan-local")
 	readFixture := func(name string) []byte {
@@ -101,8 +106,10 @@ func TestLANUpgradePreservesRealPreLANLocalRooms(t *testing.T) {
 }
 
 func TestFutureLANIdentitiesFailBeforeRegistryCleanup(t *testing.T) {
-	for _, kind := range []string{"host", "guest"} {
+	relayclient.IsolateNativeCaller(t)
+	for _, kind := range []string{"host", "guest", "native"} {
 		t.Run(kind, func(t *testing.T) {
+			relayclient.IsolateNativeCaller(t)
 			root := t.TempDir()
 			dir := filepath.Join(root, "lan")
 			if err := privatefile.Mkdir(dir); err != nil {
@@ -110,13 +117,37 @@ func TestFutureLANIdentitiesFailBeforeRegistryCleanup(t *testing.T) {
 			}
 			path := filepath.Join(dir, "host.json")
 			if kind == "guest" {
-				for _, part := range []string{"guests", "future_guest"} {
-					dir = filepath.Join(dir, part)
-					if err := privatefile.Mkdir(dir); err != nil {
-						t.Fatal(err)
-					}
+				clients, err := lanclient.Open()
+				if err != nil {
+					t.Fatal(err)
 				}
-				path = filepath.Join(dir, "guest.json")
+				defer clients.Close()
+				if err := os.MkdirAll(filepath.Dir(clients.Root()), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := privatefile.Mkdir(clients.Root()); err != nil {
+					t.Fatal(err)
+				}
+				dir = filepath.Join(clients.Root(), "lan_"+strings.Repeat("a", 32))
+				if err := privatefile.Mkdir(dir); err != nil {
+					t.Fatal(err)
+				}
+				path = filepath.Join(dir, "client.json")
+			}
+			if kind == "native" {
+				identities, err := nativeidentity.Open()
+				if err != nil {
+					t.Fatal(err)
+				}
+				claim := nativeidentity.Claim{Runtime: model.RuntimeCodex, SessionID: "future-native", Association: nativeidentity.Remote("peer", "room"), BindID: "pending"}
+				if err := identities.Reserve(context.Background(), claim); err != nil {
+					t.Fatal(err)
+				}
+				base, err := os.UserConfigDir()
+				if err != nil {
+					t.Fatal(err)
+				}
+				path = filepath.Join(base, "pairroom", "native-identities", relay.Digest(string(claim.Runtime)+"\x00"+claim.SessionID), "claim.json")
 			}
 			if err := privatefile.WriteJSON(path, map[string]int{"schema": 2}); err != nil {
 				t.Fatal(err)
@@ -146,6 +177,7 @@ func TestFutureLANIdentitiesFailBeforeRegistryCleanup(t *testing.T) {
 }
 
 func TestLANPreflightPreservesIPv6ZoneIdentity(t *testing.T) {
+	relayclient.IsolateNativeCaller(t)
 	root := t.TempDir()
 	dir := filepath.Join(root, "lan")
 	if err := privatefile.Mkdir(dir); err != nil {
@@ -172,6 +204,7 @@ func TestLANPreflightPreservesIPv6ZoneIdentity(t *testing.T) {
 }
 
 func TestLANFormatMismatchFailsBeforeRootCleanup(t *testing.T) {
+	relayclient.IsolateNativeCaller(t)
 	for _, payload := range []string{
 		`{"schema":6}`, // new provisioning may not be smuggled into Store 12
 		`{"schema":5,"sharing":"lan","owner_slot":"slot1"}`,

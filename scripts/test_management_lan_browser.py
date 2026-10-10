@@ -6,6 +6,7 @@ not TLS admission, native process delivery, or real vendor model acceptance.
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from playwright.async_api import expect
 
@@ -57,6 +58,11 @@ async def verify_lan(browser, artifacts: Path, in_page_fixture: bool = False) ->
           return Response.json(__lanState);
         }
         if(path.startsWith('/api/v1/lan/joined/guest-local/')) {
+          if(path.endsWith('/detach')) {
+            __lanWrites.push({path,input});
+            __snapshot.joined_rooms.find(room=>room.id==='guest-local').status='detached';
+            return Response.json({detached:true});
+          }
           if(path.endsWith('/history')) return Response.json({messages:__lanMessages,has_more:false});
           if(path.endsWith('/send')) {
             __lanWrites.push({path,input});
@@ -82,6 +88,15 @@ async def verify_lan(browser, artifacts: Path, in_page_fixture: bool = False) ->
     await page.get_by_role('button', name='+ Create Room', exact=True).first.click()
     await expect(page.locator('#room-submit')).to_be_enabled()
     await expect(page.locator('#room-host-mode')).to_have_value('native')
+    setup = page.locator('#room-dialog .native-setup')
+    await setup.locator('summary').click()
+    await expect(setup.locator('code').filter(has_text='pairroom relay preflight --join')).to_be_visible()
+    await expect(setup).to_contain_text('without a local Service or --service-file')
+    await page.set_viewport_size({'width':390,'height':1000})
+    assert not await setup.evaluate('node=>node.scrollWidth>node.clientWidth'), 'Native LAN setup overflow'
+    await page.screenshot(path=str(artifacts / 'management-native-lan-setup-mobile.png'))
+    await setup.locator('summary').click()
+    await page.set_viewport_size({'width':1440,'height':1000})
     await page.locator('#room-share-lan').check()
     await page.locator('#room-lan-owner-slot').select_option('slot2')
     await expect(page.locator('fieldset[data-actor="slot1"]')).to_be_hidden()
@@ -113,12 +128,16 @@ async def verify_lan(browser, artifacts: Path, in_page_fixture: bool = False) ->
 
     await page.evaluate("""() => {
       __snapshot.joined_rooms=[{id:'guest-local',remote_room_id:'host-room',name:'Teammate bug room',workspace:'/local/project',
-        slot:'slot2',runtime:'codex',status:'accepted',connected:true,host_pin:'a'.repeat(64),endpoint:'https://192.168.1.23:8877',generation:1}];
+        slot:'slot2',runtime:'codex',status:'accepted',connected:false,last_seen:'0001-01-01T00:00:00Z',
+        host_pin:'a'.repeat(64),endpoint:'https://192.168.1.23:8877',generation:1}];
       location.hash='#/settings/lan';
     }""")
     await page.locator('#refresh-button').click()
     joined = page.locator('#view .setting-row').filter(has=page.get_by_text('Teammate bug room', exact=True))
+    await expect(joined).to_contain_text('Host contact not confirmed')
     await joined.get_by_role('button', name='Open', exact=True).click()
+    contact = page.locator('#lan-room-body p').filter(has=page.get_by_text('Last successful host contact:', exact=True))
+    await expect(contact.locator('code')).to_have_text('Not observed')
     evidence = page.locator('#lan-room-body a.lan-artifact')
     await expect(evidence).to_have_attribute('href','/api/v1/lan/joined/guest-local/attachments/evidence-id')
     await expect(evidence).to_contain_text('repro <img onerror=alert(1)>.txt')
@@ -142,8 +161,26 @@ async def verify_lan(browser, artifacts: Path, in_page_fixture: bool = False) ->
     await page.set_viewport_size({'width':390,'height':1000})
     assert not await page.locator('#lan-room-dialog').evaluate('node=>node.scrollWidth>node.clientWidth'), 'joined-room dialog overflow'
     await page.screenshot(path=str(artifacts / 'management-lan-joined-mobile.png'))
+    await page.locator('#lan-room-dialog [data-close-dialog]').last.click()
+    await page.set_viewport_size({'width':1440,'height':1000})
+    await page.evaluate("__snapshot.joined_rooms[0].status='pending'")
+    await page.locator('#refresh-button').click()
+    await expect(page.locator('#refresh-button')).not_to_have_class(re.compile(r'\bspinning\b'))
+    await expect(joined).to_contain_text('Awaiting host acceptance')
+    await joined.get_by_role('button', name='Open', exact=True).click()
+    await expect(page.get_by_role('button', name='Leave this Room', exact=True)).to_be_hidden()
+    await page.get_by_role('button', name='Detach locally', exact=True).click()
+    await expect(page.locator('#confirm-message')).to_contain_text('No request is sent to the host')
+    assert await page.evaluate("__lanWrites.filter(w=>w.path.endsWith('/detach')).length") == 0, 'opening confirmation retired the local association'
+    await page.locator('#confirm-submit').click()
+    await expect(page.locator('#lan-room-dialog')).to_be_hidden()
+    await expect(joined).to_contain_text('Detached locally')
+    assert await page.evaluate("__lanWrites.filter(w=>w.path.endsWith('/detach'))") == [{'path':'/api/v1/lan/joined/guest-local/detach','input':{}}]
+    assert await page.evaluate("__lanWrites.filter(w=>w.path.endsWith('/leave')).length") == 0, 'local detach attempted a remote leave'
     assert not errors, errors
     await page.close()
     return {'lan_owner_explicit_configuration':True, 'lan_native_owner_slot_only':True,
             'lan_receipt_explicit':True, 'lan_evidence_safe_download':True,
-            'lan_publication_receipt_recovery':not in_page_fixture, 'lan_responsive':True}
+            'lan_publication_receipt_recovery':not in_page_fixture, 'lan_responsive':True,
+            'lan_direct_client_setup':True, 'lan_membership_without_contact':True,
+            'lan_pending_local_detach':True}

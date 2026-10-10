@@ -106,7 +106,7 @@ Adopting Orca's terminal/notification surface does not require adopting its orch
 | An architect/editor model split without two preserved native sessions | [Aider](https://aider.chat/docs/usage/modes.html) |
 | Cloud/team execution or enforced workflow budgets and gates | A product with those explicit deployment and control guarantees |
 
-PairRoom adds its own Service, bindings, storage and compatibility maintenance. It is not zero setup, a generic agent graph, a full editor, cloud sync, or a replacement for every native session feature. Native supports one colleague per shared Room over the LAN, with separate local Services and explicit membership approval. Management and Room views stay on loopback; the optional TLS listener serves only the shared Native relay. The selected models may still receive code through their Providers. See [LAN collaboration](LAN_NATIVE.md) and [Security](../SECURITY.md).
+PairRoom adds a hosting Service, bindings, storage and compatibility maintenance. It is not zero setup, a generic agent graph, a full editor, cloud sync, or a replacement for every native session feature. Native supports one colleague per shared Room over the LAN with explicit membership approval. Only the Room's host needs a Service; the guest uses CLI/hooks directly. Different native sessions on one machine can host local Rooms and join Rooms on other hosts concurrently. Management and Room views stay on loopback; the optional TLS listener serves only the shared Native relay. The selected models may still receive code through their Providers. See [LAN collaboration](LAN_NATIVE.md) and [Security](../SECURITY.md).
 
 ## Expose uncertainty instead of silently repeating work
 

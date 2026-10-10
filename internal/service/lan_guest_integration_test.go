@@ -4,183 +4,21 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
+	"github.com/sean2077/pairroom/internal/lanclient"
 	"github.com/sean2077/pairroom/internal/lanshare"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
 	"github.com/sean2077/pairroom/internal/relayclient"
 )
-
-type lanRecordedRequest struct {
-	Action  string
-	ID      string
-	Receipt string
-}
-
-// Lose an answer only after the real remote handler committed its effect.
-// This never substitutes a successful response for the Service implementation.
-type lanLostResponseTransport struct {
-	base    http.RoundTripper
-	mu      sync.Mutex
-	drop    string
-	dropped bool
-	seen    []lanRecordedRequest
-}
-
-func (tr *lanLostResponseTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	observed := lanRecordedRequest{Action: filepath.Base(r.URL.Path)}
-	if r.GetBody != nil && observed.Action == "ack" {
-		body, err := r.GetBody()
-		if err != nil {
-			return nil, err
-		}
-		var req struct{ ID, Receipt string }
-		err = json.NewDecoder(body).Decode(&req)
-		_ = body.Close()
-		if err != nil {
-			return nil, err
-		}
-		observed.ID, observed.Receipt = req.ID, req.Receipt
-	}
-	tr.mu.Lock()
-	tr.seen = append(tr.seen, observed)
-	tr.mu.Unlock()
-	response, err := tr.base.RoundTrip(r)
-	if err != nil {
-		return response, err
-	}
-	tr.mu.Lock()
-	lose := observed.Action == tr.drop && !tr.dropped && response.StatusCode == http.StatusOK
-	if lose {
-		tr.dropped = true
-	}
-	tr.mu.Unlock()
-	if lose {
-		_ = response.Body.Close()
-		return nil, errors.New("fixture dropped a committed LAN response")
-	}
-	return response, nil
-}
-
-func (tr *lanLostResponseTransport) CloseIdleConnections() {
-	if base, ok := tr.base.(interface{ CloseIdleConnections() }); ok {
-		base.CloseIdleConnections()
-	}
-}
-
-type lanBridgeFixture struct {
-	local, host *lanHostFixture
-	project     Project
-	endpoint    string
-	session     string
-	id          string
-	guest       *lanGuest
-	auth        relay.Auth
-}
-
-func (f *lanBridgeFixture) run(t *testing.T, output io.Writer, args ...string) error {
-	t.Helper()
-	clearNativeSessionEnv(t)
-	t.Setenv("GROK_SESSION_ID", f.session)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	args = append(args, "--repo", f.project.Root, "--service-file", f.endpoint)
-	return relayclient.Run(ctx, args, strings.NewReader(""), output, io.Discard)
-}
-
-func (f *lanBridgeFixture) cli(t *testing.T, args ...string) ([]byte, error) {
-	t.Helper()
-	var output bytes.Buffer
-	err := f.run(t, &output, args...)
-	return output.Bytes(), err
-}
-
-func joinLANBridgeFixture(t *testing.T, local, host *lanHostFixture, name string) *lanBridgeFixture {
-	t.Helper()
-	project, ok := local.management.registry.Project(local.room.ProjectID)
-	if !ok {
-		t.Fatal("local project not found")
-	}
-	f := &lanBridgeFixture{local: local, host: host, project: project, endpoint: filepath.Join(local.management.registry.Root(), relay.EndpointFile), session: "official-guest-" + name, id: lanGuestID(host.invite)}
-	if err := relay.WriteEndpoint(local.management.registry.Root(), relay.Endpoint{URL: local.local.URL, Token: local.management.cliToken}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.cli(t, "install", "--runtime", "grok"); err != nil {
-		t.Fatal(err)
-	}
-	invitation := lanshare.EncodeInvite(host.invite)
-	data, err := f.cli(t, "join", invitation)
-	var pending struct{ Status, Receipt, Room string }
-	if err != nil || json.Unmarshal(data, &pending) != nil || pending.Status != "pending" || pending.Room != f.id {
-		t.Fatalf("real CLI pending join: %s, %v", data, err)
-	}
-	f.guest = local.management.lanGuests.get(f.id)
-	if f.guest == nil {
-		t.Fatal("local Service did not retain pending identity")
-	}
-	// Deterministic fault injection below controls refresh explicitly. The two
-	// Services and both TLS handlers remain real and independent throughout.
-	local.management.lanGuests.cancel()
-	if err := f.guest.call(context.Background(), "history", nil, new(relay.HistoryPage)); err == nil {
-		t.Fatal("pending guest read host history")
-	}
-	statePath := filepath.Join(project.Root, ".pairroom", "rooms", f.id, "slots", "slot2", "state.json")
-	if _, err := os.Stat(statePath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("pending CLI promoted active native discovery")
-	}
-	var accepted lanshare.JoinResponse
-	if status := host.localCall(t, "/api/v1/rooms/"+host.room.ID+"/lan/accept", map[string]string{"receipt": pending.Receipt}, &accepted, host.management.Token()); status != http.StatusOK {
-		t.Fatalf("host owner admission: %d", status)
-	}
-	loss := &lanLostResponseTransport{base: f.guest.client.Transport, drop: "join"}
-	f.guest.client.Transport = loss
-	if output, err := f.cli(t, "join", invitation); err == nil || len(output) != 0 {
-		t.Fatal("lost accepted join response was reported as success")
-	}
-	data, err = f.cli(t, "join", invitation)
-	var joined struct {
-		Status  string        `json:"status"`
-		Room    string        `json:"room"`
-		Binding relay.Binding `json:"binding"`
-	}
-	if err != nil || json.Unmarshal(data, &joined) != nil || joined.Status != "accepted" || joined.Room != f.id || joined.Binding.Runtime != model.RuntimeGrok || joined.Binding.SessionID != f.session || joined.Binding.Generation != accepted.Room.Generation {
-		t.Fatalf("same request/key admission recovery: %s, %v", data, err)
-	}
-	credentialsPath := filepath.Join(project.Root, ".pairroom", "rooms", f.id, "slots", "slot2", "credentials")
-	credentials, err := os.ReadFile(credentialsPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var credential struct{ BindID, Secret string }
-	if err := json.Unmarshal(credentials, &credential); err != nil {
-		t.Fatal(err)
-	}
-	f.auth = relay.Auth{Slot: model.ActorSlot2, BindID: joined.Binding.BindID, Generation: joined.Binding.Generation, SessionID: f.session, Secret: credential.Secret}
-	if f.guest.authenticate(f.auth) != nil || !loss.dropped || f.guest.record.Receipt != pending.Receipt {
-		t.Fatal("accepted guest changed its original receipt or private identity")
-	}
-	for _, private := range []string{credential.Secret, local.management.Token(), host.management.Token(), f.guest.record.Identity.PrivateKeyPEM, host.owner.SessionID, host.room.DataDir} {
-		encoded, err := json.Marshal(private)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if bytes.Contains(data, []byte(private)) || bytes.Contains(data, encoded[1:len(encoded)-1]) {
-			t.Fatalf("join output exposed private peer identity or credentials: %q", private)
-		}
-	}
-	return f
-}
 
 func lanLocalRelayCall(t *testing.T, fixture *lanHostFixture, room string, auth relay.Auth, action string, payload, result any) int {
 	t.Helper()
@@ -214,319 +52,265 @@ func lanLocalRelayCall(t *testing.T, fixture *lanHostFixture, room string, auth 
 	return response.StatusCode
 }
 
-func lanGuestOwnerGet(t *testing.T, f *lanBridgeFixture, path string) (int, []byte) {
+type lanFailedStdout struct{}
+
+func (lanFailedStdout) Write([]byte) (int, error) { return 0, io.ErrShortWrite }
+
+type lanViewFixture struct {
+	host   *lanHostFixture
+	local  *lanHostFixture
+	store  *lanclient.Store
+	client *lanclient.Client
+	auth   relay.Auth
+	id     string
+}
+
+func newLANViewFixture(t *testing.T) *lanViewFixture {
+	t.Helper()
+	relayclient.IsolateNativeCaller(t)
+	host := newLANHostFixture(t)
+	// The host and client represent different users/machines. Only the client
+	// directory is later shared with the optional dashboard Service.
+	clientHome := t.TempDir()
+	for _, key := range []string{"HOME", "XDG_CONFIG_HOME", "AppData"} {
+		t.Setenv(key, clientHome)
+	}
+	workspace, err := filepath.EvalSymlinks(testGitRepo(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := lanclient.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	client, pending, err := store.Join(context.Background(), lanclient.JoinOptions{Invite: lanshare.EncodeInvite(host.invite), Workspace: workspace, Runtime: model.RuntimeGrok, SessionID: "facade-native-session", BindID: "facade-local-binding", CredentialHash: relay.Digest("facade-local-secret")})
+	if err != nil || pending.Status != "pending" || pending.Binding != nil {
+		t.Fatalf("direct pending join: %+v %v", pending, err)
+	}
+	if status := host.localCall(t, "/api/v1/rooms/"+host.room.ID+"/lan/accept", map[string]string{"receipt": pending.Receipt}, nil, host.management.Token()); status != http.StatusOK {
+		t.Fatalf("owner admission HTTP %d", status)
+	}
+	admitted, err := client.Resume(context.Background())
+	if err != nil || admitted.Status != "accepted" || admitted.Binding == nil || admitted.Receipt != pending.Receipt {
+		t.Fatalf("direct admission recovery: %+v %v", admitted, err)
+	}
+	auth := relay.Auth{Slot: admitted.Binding.Slot, BindID: admitted.Binding.BindID, Generation: admitted.Binding.Generation, SessionID: "facade-native-session", Secret: "facade-local-secret"}
+	if err := client.Relay(context.Background(), auth, "confirm", map[string]string{"session_id": auth.SessionID}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Construct the dashboard only after joining and confirming without one.
+	service, _ := lanGuestTestService(t)
+	local := httptest.NewServer(service.Handler())
+	t.Cleanup(local.Close)
+	return &lanViewFixture{host: host, local: &lanHostFixture{management: service, local: local}, store: store, client: client, auth: auth, id: admitted.ID}
+}
+
+func (f *lanViewFixture) get(t *testing.T, path, token string) (int, []byte) {
 	t.Helper()
 	request, err := http.NewRequest(http.MethodGet, f.local.local.URL+path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("Authorization", "Bearer "+f.local.management.Token())
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(response.Body)
+	data, err := io.ReadAll(response.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return response.StatusCode, body
+	return response.StatusCode, data
 }
 
-type lanStdoutObserver struct {
-	bytes.Buffer
-	before func()
-}
-
-func (w *lanStdoutObserver) Write(data []byte) (int, error) {
-	w.before()
-	return w.Buffer.Write(data)
-}
-
-func TestLANTwoServicesCLIAndSharedOwnerEvidence(t *testing.T) {
-	relayclient.IsolateNativeCaller(t)
-	left, right := newLANHostFixture(t), newLANHostFixture(t)
-	bridges := []*lanBridgeFixture{joinLANBridgeFixture(t, right, left, "right"), joinLANBridgeFixture(t, left, right, "left")}
-	if bridges[0].id == bridges[1].id || bridges[0].project.Root == bridges[1].project.Root {
-		t.Fatal("two machines shared a routing identity or workspace")
-	}
-	for i, f := range bridges {
-		t.Run(fmt.Sprintf("direction_%d", i), func(t *testing.T) {
-			body := "#!/bin/sh\nprintf 'review evidence, never execute automatically\\n'\n"
-			file := filepath.Join(f.project.Root, "repro.sh")
-			if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			loss := &lanLostResponseTransport{base: f.guest.client.Transport, drop: "send"}
-			f.guest.client.Transport = loss
-			args := []string{"send", "--id", "bug-evidence", "--text", "Please inspect the explicit reproduction artifact.", "--file", file}
-			if output, err := f.cli(t, args...); err == nil || len(output) != 0 {
-				t.Fatal("lost send response did not preserve uncertainty")
-			}
-			data, err := f.cli(t, args...)
-			var publication struct{ Published, ClientID, State string }
-			if err != nil || json.Unmarshal(data, &publication) != nil || publication.Published == "" || !loss.dropped {
-				t.Fatalf("same-ID evidence publication recovery: %s, %v", data, err)
-			}
-			history, err := f.host.native.engine.History(relay.HistoryQuery{ID: publication.Published})
-			if err != nil || len(history.Messages) != 1 || len(history.Messages[0].Attachments) != 1 {
-				t.Fatal("real host did not retain one canonical publication")
-			}
-			accepted := history.Messages[0]
-			var hostDelivery struct{ Claim *relay.Claim }
-			if status := lanLocalRelayCall(t, f.host, f.host.room.ID, f.host.owner, "wait", map[string]int{"timeout_seconds": 1}, &hostDelivery); status != 200 || hostDelivery.Claim == nil || hostDelivery.Claim.ID != accepted.ID {
-				t.Fatalf("host local collector did not receive the guest evidence: %d", status)
-			}
-			metadata, hostPath, err := f.host.native.media.Resolve(accepted.Attachments[0].ID)
-			if err != nil || metadata.Kind != "file" || metadata.SHA256 != relay.Digest(body) || !lanEnvelopeHasLocalPath(hostDelivery.Claim.Envelope, hostPath) || lanEnvelopeHasPathPrefix(hostDelivery.Claim.Envelope, f.project.Root) {
-				t.Fatal("host received a guest filesystem path instead of a verified local artifact")
-			}
-			hostBytes, err := os.ReadFile(hostPath)
-			if err != nil || string(hostBytes) != body {
-				t.Fatal("host evidence bytes changed across the LAN")
-			}
-			if status := lanLocalRelayCall(t, f.host, f.host.room.ID, f.host.owner, "ack", map[string]string{"id": hostDelivery.Claim.ID, "receipt": hostDelivery.Claim.Receipt}, nil); status != 200 {
-				t.Fatal("host stdout receipt failed")
-			}
-			var reply relay.Message
-			if status := lanLocalRelayCall(t, f.host, f.host.room.ID, f.host.owner, "send", relay.SendRequest{ID: "verified-reply", Text: "I reproduced the bug; please review this same artifact.", AttachmentIDs: []string{metadata.ID}}, &reply); status != 200 {
-				t.Fatal("host could not reply through its local binding")
-			}
-			ackLoss := &lanLostResponseTransport{base: f.guest.client.Transport, drop: "ack"}
-			f.guest.client.Transport = ackLoss
-			stdout := &lanStdoutObserver{before: func() {
-				page, err := f.host.native.engine.History(relay.HistoryQuery{ID: reply.ID})
-				if err != nil || len(page.Messages) != 1 || page.Messages[0].State != "delivering" {
-					t.Error("delivery was acknowledged before actual CLI stdout")
-				}
-				f.guest.mu.Lock()
-				defer f.guest.mu.Unlock()
-				if len(f.guest.record.Deliveries) != 1 || f.guest.record.Deliveries[0].State != "claimed" {
-					t.Error("original claim receipt was not durably retained before stdout")
-				}
-			}}
-			if err := f.run(t, stdout, "wait", "--timeout", "1"); err == nil || !strings.Contains(err.Error(), "stdout written") {
-				t.Fatalf("lost ACK response did not distinguish delivered stdout: %v", err)
-			}
-			guestMetadata, guestPath, err := f.guest.media.Resolve(metadata.ID)
-			if err != nil || guestMetadata != metadata || !lanEnvelopeHasLocalPath(stdout.String(), guestPath) || lanEnvelopeHasPathPrefix(stdout.String(), f.host.room.DataDir) || strings.Contains(stdout.String(), body) {
-				t.Fatal("guest stdout did not carry its verified inert local artifact")
-			}
-			bytesOnDisk, err := os.ReadFile(guestPath)
-			if err != nil || string(bytesOnDisk) != body {
-				t.Fatal("guest evidence bytes changed across the LAN")
-			}
-			original := f.guest.record.Deliveries[0]
-			key, _ := f.guest.record.Identity.Fingerprint()
-			if original.ID != reply.ID || original.State != "stdout" || !ackLoss.dropped {
-				t.Fatal("lost acknowledgement discarded the original stdout receipt")
-			}
-			f.local.management.lanGuests.close()
-			if err := initLANGuests(f.local.management); err != nil {
-				t.Fatal(err)
-			}
-			f.local.management.lanGuests.cancel()
-			f.guest = f.local.management.lanGuests.get(f.id)
-			recovery := &lanLostResponseTransport{base: f.guest.client.Transport}
-			f.guest.client.Transport = recovery
-			f.guest.reconcileDeliveryReceipts(context.Background())
-			f.guest.reconcileDeliveryReceipts(context.Background())
-			againKey, _ := f.guest.record.Identity.Fingerprint()
-			if againKey != key || len(recovery.seen) != 1 || recovery.seen[0] != (lanRecordedRequest{Action: "ack", ID: original.ID, Receipt: original.Receipt}) || f.guest.record.Deliveries[0].State != "acknowledged" {
-				t.Fatal("restart did not recover exactly the original receipt without claim/body replay")
-			}
-			if _, err := f.cli(t, "bind"); err != nil {
-				t.Fatalf("admitted CLI could not resume after Service restart: %v", err)
-			}
-			for _, action := range []string{"status", "doctor", "history"} {
-				if output, err := f.cli(t, action); err != nil || len(output) == 0 {
-					t.Fatalf("joined CLI %s: %s, %v", action, output, err)
-				}
-			}
-			// Automatic Stop publication receipts still use the local binding
-			// identity even though the canonical publication belongs to the host.
-			var automatic relay.Publication
-			if status := lanLocalRelayCall(t, f.local, f.id, f.auth, "report", map[string]any{"report_seq": 1, "text": "A private unaddressed final reply"}, &automatic); status != 200 || automatic.BindID != f.auth.BindID {
-				t.Fatal("remote publication receipt could not reconcile the local outbox")
-			}
-			var receipt lanGuestPublicationReceipt
-			if status := lanLocalRelayCall(t, f.local, f.id, f.auth, "publication", map[string]uint64{"report_seq": 1}, &receipt); status != 200 || !receipt.Accepted || receipt.Publication.BindID != f.auth.BindID {
-				t.Fatal("original Stop receipt was not recoverable through local identity")
-			}
-			lanExerciseSharedOwner(t, f, metadata, body)
-			bad := f.auth
-			bad.Generation++
-			if status := lanLocalRelayCall(t, f.local, f.id, bad, "status", nil, nil); status != http.StatusUnauthorized {
-				t.Fatal("stale local generation inherited joined membership")
-			}
-			if status := lanLocalRelayCall(t, f.local, f.id, f.auth, "accept", map[string]string{"receipt": f.guest.record.Receipt}, nil); status != http.StatusNotFound {
-				t.Fatal("guest local relay forwarded host administration")
-			}
-			if status := f.host.localCall(t, "/api/v1/rooms/"+f.host.room.ID+"/lan/revoke", nil, nil, f.host.management.Token()); status != 200 {
-				t.Fatal("host could not revoke admitted peer")
-			}
-			if status := lanLocalRelayCall(t, f.local, f.id, f.auth, "ack", map[string]string{"id": original.ID, "receipt": original.Receipt}, nil); status != http.StatusUnauthorized {
-				t.Fatal("cached local receipt hid remote revocation")
-			}
-			if status, _ := lanGuestOwnerGet(t, f, "/api/v1/lan/joined/"+f.id+"/attachments/"+metadata.ID); status != http.StatusUnauthorized {
-				t.Fatal("revocation left cached evidence publicly downloadable")
-			}
-			if i == 0 {
-				if status := f.local.localCall(t, "/api/v1/lan/joined/"+f.id+"/leave", nil, nil, f.local.management.Token()); status != 200 {
-					t.Fatal("owner could not explicitly leave revoked membership")
-				}
-			} else if status := lanLocalRelayCall(t, f.local, f.id, f.auth, "unbind", nil, nil); status != 200 {
-				t.Fatal("agent could not explicitly unbind revoked membership")
-			}
-		})
-	}
-}
-
-func lanExerciseSharedOwner(t *testing.T, f *lanBridgeFixture, metadata model.Attachment, body string) {
-	t.Helper()
+func TestLANOptionalServiceProjectsTheDirectClientAndSharedOwnerEvidence(t *testing.T) {
+	f := newLANViewFixture(t)
 	path := "/api/v1/lan/joined/" + f.id + "/"
-	loss := &lanLostResponseTransport{base: f.guest.client.Transport, drop: "user-send"}
-	f.guest.client.Transport = loss
-	request := relay.SendRequest{ID: "human-owner-note", Text: "Review this shared evidence; local tool approval remains separate.", To: model.ActorSlot2, AttachmentIDs: []string{metadata.ID}}
-	if status := f.local.localCall(t, path+"send", request, nil, f.local.management.Token()); status != 502 {
-		t.Fatal("owner UI did not expose a lost shared send answer")
+	token := f.local.management.Token()
+	if status, data := f.get(t, "/api/v1/lan/joined", token); status != http.StatusOK || !bytes.Contains(data, []byte(f.id)) {
+		t.Fatalf("shared client projection: HTTP %d %s", status, data)
+	}
+	if rooms := f.local.management.registry.Snapshot(false).Rooms; len(rooms) != 0 {
+		t.Fatal("optional Service created a second authoritative Room")
+	}
+	if _, err := os.Stat(filepath.Join(f.local.management.registry.Root(), "lan", "guests")); !os.IsNotExist(err) {
+		t.Fatal("Service owns duplicate guest state")
+	}
+	if status := lanLocalRelayCall(t, f.local, f.id, f.auth, "status", nil, nil); status != http.StatusUnauthorized {
+		t.Fatalf("optional Service accepted joined agent relay credentials: HTTP %d", status)
+	}
+	if status := f.local.localCall(t, "/api/v1/lan/join", map[string]string{"invite": lanshare.EncodeInvite(f.host.invite)}, nil, token); status != http.StatusNotFound {
+		t.Fatalf("removed local join route still exists: HTTP %d", status)
+	}
+
+	const evidence = "#!/bin/sh\nprintf 'explicit evidence; do not execute automatically\\n'\n"
+	attachment, err := f.client.Upload(context.Background(), f.auth, "file", "repro.sh", strings.NewReader(evidence))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published relay.Message
+	if err := f.client.Relay(context.Background(), f.auth, "send", relay.SendRequest{ID: "client-evidence", Text: "Please inspect the shared reproduction.", AttachmentIDs: []string{attachment.ID}}, &published); err != nil {
+		t.Fatal(err)
+	}
+	var history relay.HistoryPage
+	if status := f.local.localCall(t, path+"history", nil, &history, token); status != http.StatusOK || len(history.Messages) != 1 || history.Messages[0].ID != published.ID {
+		t.Fatal("dashboard and direct CLI did not share host history")
+	}
+	if status, data := f.get(t, path+"attachments/"+attachment.ID, token); status != http.StatusOK || string(data) != evidence {
+		t.Fatalf("verified shared evidence: HTTP %d", status)
+	}
+	if status, _ := f.get(t, path+"attachments/"+attachment.ID, ""); status != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated local owner downloaded evidence: HTTP %d", status)
+	}
+
+	human := relay.SendRequest{ID: "owner-note", Text: "Review this shared evidence; tool approval remains local.", To: model.ActorSlot2, AttachmentIDs: []string{attachment.ID}}
+	var first, again relay.Message
+	if status := f.local.localCall(t, path+"send", human, &first, token); status != http.StatusOK || first.From != model.ActorUser || !strings.HasPrefix(first.Author, "lan:") {
+		t.Fatal("shared human note lost membership provenance")
+	}
+	if status := f.local.localCall(t, path+"send", human, &again, token); status != http.StatusOK || again.ID != first.ID {
+		t.Fatal("owner retry created duplicate publication")
 	}
 	var receipt struct {
-		Accepted bool          `json:"accepted"`
-		Message  relay.Message `json:"message"`
+		Accepted bool           `json:"accepted"`
+		Message  *relay.Message `json:"message"`
 	}
-	if status := f.local.localCall(t, path+"receipt", map[string]string{"id": request.ID}, &receipt, f.local.management.Token()); status != 200 || !receipt.Accepted || receipt.Message.From != model.ActorUser || !strings.HasPrefix(receipt.Message.Author, "lan:") {
-		t.Fatal("owner publication recovery lost authenticated human provenance")
+	if status := f.local.localCall(t, path+"receipt", map[string]string{"id": human.ID}, &receipt, token); status != http.StatusOK || !receipt.Accepted || receipt.Message == nil || receipt.Message.ID != first.ID {
+		t.Fatal("owner could not recover original publication receipt")
 	}
-	var again relay.Message
-	if status := f.local.localCall(t, path+"send", request, &again, f.local.management.Token()); status != 200 || again.ID != receipt.Message.ID {
-		t.Fatal("same-ID owner send produced another publication")
+	var summary relay.Summary
+	if status := f.local.localCall(t, path+"summary", nil, &summary, token); status != http.StatusOK {
+		t.Fatal("owner summary unavailable")
 	}
-	output, err := f.cli(t, "wait", "--timeout", "1")
-	if err != nil || !strings.Contains(string(output), "@user (local owner)") {
-		t.Fatalf("local human provenance was not rendered: %s, %v", output, err)
-	}
-	if output, err = f.cli(t, "send", "--id", "shared-escalation", "--to", "@user", "--text", "Please decide the remaining behavior."); err != nil {
-		t.Fatalf("shared @user escalation: %s, %v", output, err)
-	}
-	var page relay.HistoryPage
-	if status := f.local.localCall(t, path+"history", nil, &page, f.local.management.Token()); status != 200 {
-		t.Fatal("joined owner could not read shared history")
-	}
-	found := false
-	for _, message := range page.Messages {
-		if message.To == model.ActorUser && message.Text == "Please decide the remaining behavior." {
-			found = true
+	for _, forbidden := range []string{"accept", "revoke", "wake-reserve", "confirm", "bind", "upload"} {
+		if status := f.local.localCall(t, path+forbidden, nil, nil, token); status != http.StatusNotFound {
+			t.Fatalf("owner facade forwarded %s: HTTP %d", forbidden, status)
 		}
 	}
-	if !found {
-		t.Fatal("guest owner view omitted the shared @user escalation")
+	if status := f.local.localCall(t, path+"send", map[string]any{"text": "attempt", "session_id": "foreign"}, nil, token); status != http.StatusBadRequest {
+		t.Fatalf("facade accepted a private relay field: HTTP %d", status)
 	}
-	if status := f.local.localCall(t, path+"summary", nil, new(relay.Summary), f.local.management.Token()); status != 200 {
-		t.Fatal("joined owner could not inspect shared reachability")
+
+	// A second private Store sees the same authoritative client association;
+	// the optional Service captures that path, regardless of later ambient env.
+	other, err := lanclient.OpenAt(f.store.Root())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if status, data := lanGuestOwnerGet(t, f, "/api/v1/lan/joined"); status != 200 || !bytes.Contains(data, []byte(f.id)) {
-		t.Fatal("local Service did not expose its joined Room projection")
+	defer other.Close()
+	if _, err := other.Get(context.Background(), f.id); err != nil {
+		t.Fatal(err)
 	}
-	if status, data := lanGuestOwnerGet(t, f, path+"attachments/"+metadata.ID); status != 200 || string(data) != body {
-		t.Fatal("joined owner could not download verified shared evidence")
+	for _, key := range []string{"HOME", "XDG_CONFIG_HOME", "AppData"} {
+		t.Setenv(key, t.TempDir())
 	}
-	for _, enabled := range []bool{false, true} {
-		if status := lanLocalRelayCall(t, f.local, f.id, f.auth, "park", map[string]bool{"enabled": enabled}, nil); status != 200 || f.guest.record.ParkEnabled != enabled {
-			t.Fatal("local hook parking did not retain its own preference")
+	if status, data := f.get(t, "/api/v1/lan/joined", token); status != http.StatusOK || !bytes.Contains(data, []byte(f.id)) {
+		t.Fatal("ambient config change retargeted an existing observer")
+	}
+	for _, private := range []string{f.auth.SessionID, f.auth.Secret, f.host.owner.SessionID, f.host.room.DataDir} {
+		data, _ := json.Marshal([]any{history, first, receipt, summary})
+		if bytes.Contains(data, []byte(private)) {
+			t.Fatalf("shared view exposed private identity %q", private)
 		}
 	}
-	if status := lanLocalRelayCall(t, f.local, f.id, f.auth, "failure", map[string]string{"error": "fixture hook diagnostic"}, nil); status != 200 {
-		t.Fatal("joined hook failure was not recorded")
+
+	if status := f.host.localCall(t, "/api/v1/rooms/"+f.host.room.ID+"/lan/revoke", nil, nil, f.host.management.Token()); status != http.StatusOK {
+		t.Fatal("host revoke failed")
+	}
+	if status, _ := f.get(t, path+"attachments/"+attachment.ID, token); status != http.StatusUnauthorized {
+		t.Fatalf("cached evidence survived revocation: HTTP %d", status)
+	}
+	if status := f.local.localCall(t, path+"history", nil, nil, token); status != http.StatusUnauthorized {
+		t.Fatalf("cached membership hid revocation: HTTP %d", status)
+	}
+	if status := f.local.localCall(t, path+"leave", nil, nil, token); status != http.StatusOK {
+		t.Fatalf("owner could not leave revoked association: HTTP %d", status)
+	}
+	metadata, err := f.client.Metadata(context.Background())
+	if err != nil || metadata.Status != "left" {
+		t.Fatalf("owner leave did not retire direct client state: %+v %v", metadata, err)
 	}
 }
 
-type lanFailedStdout struct{}
-
-func (lanFailedStdout) Write([]byte) (int, error) { return 0, io.ErrShortWrite }
-
-func TestLANGuestShortStdoutNeverAcknowledgesAndExplicitRetryKeepsNewID(t *testing.T) {
+func TestLANOptionalServiceDiscoversLaterJoinAndStopsAtLocalDetach(t *testing.T) {
 	relayclient.IsolateNativeCaller(t)
-	host, local := newLANHostFixture(t), newLANHostFixture(t)
-	f := joinLANBridgeFixture(t, local, host, "stdout-failure")
-	message, err := host.native.engine.Send(host.owner, relay.SendRequest{ID: "stdout-failure", Text: "The original collector has not written this input."})
+	service, project := lanGuestTestService(t)
+	if list := service.lanGuests.summaries(); len(list) != 0 {
+		t.Fatal("fresh observer invented a membership")
+	}
+	store, client, auth := lanAcceptedClient(t, project.Root, model.RuntimeGrok, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
+	metadata, err := client.Metadata(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	transport := &lanLostResponseTransport{base: f.guest.client.Transport}
-	f.guest.client.Transport = transport
-	if err := f.run(t, lanFailedStdout{}, "wait", "--timeout", "1"); !errors.Is(err, io.ErrShortWrite) {
-		t.Fatalf("short stdout was not a failed collection: %v", err)
+	if list := service.lanGuests.summaries(); len(list) != 1 || list[0].ID != metadata.ID {
+		t.Fatal("running optional Service failed to discover later direct join")
 	}
-	if len(f.guest.record.Deliveries) != 1 || f.guest.record.Deliveries[0].ID != message.ID || f.guest.record.Deliveries[0].State != "claimed" {
-		t.Fatal("failed stdout became an acknowledgement fact")
+	observed := service.lanGuests.get(metadata.ID)
+	if observed == nil || service.lanGuests.get(metadata.ID) != observed {
+		t.Fatal("optional observer did not reuse local wake owner")
 	}
-	originalReceipt := f.guest.record.Deliveries[0].Receipt
-	f.guest.reconcileDeliveryReceipts(context.Background())
-	for _, request := range transport.seen {
-		if request.Action == "ack" {
-			t.Fatal("network receipt alone acknowledged a failed collector")
-		}
+	if observed.client == client || service.lanGuests.store.Root() != store.Root() {
+		t.Fatal("fixture did not use independent client pools over one store")
 	}
-	// Closing and reopening the real host runtime conservatively settles its
-	// unacknowledged lease as unknown, without waiting for a wall-clock lease.
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := host.native.Close(ctx); err != nil {
+	if err := client.Detach(context.Background(), auth); err != nil {
 		t.Fatal(err)
 	}
-	if err := host.management.runtimes.Suspend(ctx, host.room.ID); err != nil {
-		t.Fatal(err)
+	service.lanGuests.refresh(observed)
+	if list := service.lanGuests.summaries(); len(list) != 1 || list[0].Status != "detached" {
+		t.Fatal("optional Service did not observe explicit detach")
 	}
-	host.native, err = host.management.sharedNativeRuntime(ctx, host.room.ID)
-	if err != nil {
-		t.Fatal(err)
+	if observed.waker != nil {
+		t.Fatal("detached membership acquired a wake worker")
 	}
-	page, err := host.native.engine.History(relay.HistoryQuery{ID: message.ID})
-	if err != nil || len(page.Messages) != 1 || page.Messages[0].State != "unknown" {
-		t.Fatal("host restart silently replayed an unacknowledged delivery")
-	}
-	retry, err := host.native.engine.Retry(message.ID)
-	if err != nil || retry.ID == message.ID || retry.RetryOf != message.ID {
-		t.Fatalf("explicit owner Retry did not create its own delivery identity: %+v, %v", retry, err)
-	}
-	output, err := f.cli(t, "wait", "--timeout", "1")
-	if err != nil || !strings.Contains(string(output), message.Text) || strings.Count(string(output), message.Text) != 1 {
-		t.Fatalf("explicit Retry was not collectable exactly once: %s, %v", output, err)
-	}
-	if len(f.guest.record.Deliveries) != 2 || f.guest.record.Deliveries[0].State != "claimed" || f.guest.record.Deliveries[1].ID != retry.ID || f.guest.record.Deliveries[1].Receipt == originalReceipt || f.guest.record.Deliveries[1].State != "acknowledged" {
-		t.Fatal("explicit Retry replaced the original uncertain receipt")
-	}
-	page, err = host.native.engine.History(relay.HistoryQuery{ID: message.ID})
-	if err != nil || len(page.Messages) != 1 || page.Messages[0].State != "unknown" {
-		t.Fatal("Retry acknowledgement changed the original unknown delivery")
+	if service.lanGuests.get("lan_nonexistent") != nil {
+		t.Fatal("unknown client projection existed")
 	}
 }
 
-func TestLANGuestLostClaimResponseCannotAcknowledgeOrReplay(t *testing.T) {
+func TestLANOptionalServiceDetachesPendingClientWithoutHostApproval(t *testing.T) {
 	relayclient.IsolateNativeCaller(t)
-	host, local := newLANHostFixture(t), newLANHostFixture(t)
-	f := joinLANBridgeFixture(t, local, host, "claim-loss")
-	message, err := host.native.engine.Send(host.owner, relay.SendRequest{ID: "lost-claim", Text: "A network response is not collector stdout."})
+	host := newLANHostFixture(t)
+	clientHome := t.TempDir()
+	for _, key := range []string{"HOME", "XDG_CONFIG_HOME", "AppData"} {
+		t.Setenv(key, clientHome)
+	}
+	service, project := lanGuestTestService(t)
+	local := httptest.NewServer(service.Handler())
+	defer local.Close()
+	fixture := &lanHostFixture{management: service, local: local}
+	store, err := lanclient.Open()
 	if err != nil {
 		t.Fatal(err)
 	}
-	loss := &lanLostResponseTransport{base: f.guest.client.Transport, drop: "claim"}
-	f.guest.client.Transport = loss
-	if output, err := f.cli(t, "wait", "--timeout", "1"); err == nil || len(output) != 0 || !loss.dropped {
-		t.Fatal("lost remote claim response reached model stdout")
+	defer store.Close()
+	client, pending, err := store.Join(context.Background(), lanclient.JoinOptions{
+		Invite: lanshare.EncodeInvite(host.invite), Workspace: project.Root,
+		Runtime: model.RuntimeGrok, SessionID: "pending-dashboard-session", BindID: "pending-dashboard-binding", CredentialHash: relay.Digest("pending-dashboard-secret"),
+	})
+	if err != nil || pending.Status != "pending" || pending.Binding != nil {
+		t.Fatalf("pending direct join: %+v %v", pending, err)
 	}
-	f.guest.reconcileDeliveryReceipts(context.Background())
-	if len(f.guest.record.Deliveries) != 0 {
-		t.Fatal("unknown network claim invented an original receipt")
+	path := "/api/v1/lan/joined/" + pending.ID + "/detach"
+	if status := fixture.localCall(t, path, nil, nil, ""); status != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated dashboard detached a pending client: HTTP %d", status)
 	}
-	for _, request := range loss.seen {
-		if request.Action == "ack" {
-			t.Fatal("lost claim was acknowledged without local stdout")
-		}
+	// Detach must retire only local state even if the host is unavailable and
+	// has never approved the request. No remote generation exists yet.
+	host.remote.Close()
+	var result map[string]bool
+	if status := fixture.localCall(t, path, nil, &result, service.Token()); status != http.StatusOK || !result["detached"] {
+		t.Fatalf("local pending detach: HTTP %d, %+v", status, result)
 	}
-	page, err := host.native.engine.History(relay.HistoryQuery{ID: message.ID})
-	if err != nil || len(page.Messages) != 1 || page.Messages[0].State != "delivering" {
-		t.Fatal("lost claim response replayed or acknowledged canonical work")
+	metadata, err := client.Metadata(context.Background())
+	if err != nil || metadata.Status != "detached" || metadata.Generation != 0 {
+		t.Fatalf("dashboard did not retire the same pending client state: %+v, %v", metadata, err)
+	}
+	if _, err := client.Resume(context.Background()); err == nil {
+		t.Fatal("detached pending request resumed admission")
 	}
 }

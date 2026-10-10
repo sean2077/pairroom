@@ -95,7 +95,7 @@ and help me install PairRoom and check my environment. Ask before each change.
 
 ## Native 宿主模式
 
-开始前，确认两个 Agent 的工具 shell 都能运行 `pairroom`，并且你的数据目录有一个正在运行的非 Mock Service。[Agent 协助安装](docs/AGENT_SETUP.md#6-native-bind-two-existing-sessions) 会带你完成这两步。然后在项目 worktree 中为实际用到的 Runtime 安装 hooks：
+在本机托管 Room 时，确认两个 Agent 的工具 shell 都能运行 `pairroom`，并且你的数据目录有一个正在运行的非 Mock Service。[Agent 协助安装](docs/AGENT_SETUP.md#6-native-bind-two-existing-sessions) 会带你完成这两步。加入同事的局域网 Room 时，本机只需 CLI 和 hooks，按[局域网流程](docs/LAN_NATIVE.md)操作即可。在项目 worktree 中为实际用到的 Runtime 安装 hooks：
 
 ```bash
 pairroom relay install --runtime claude,codex
@@ -119,7 +119,9 @@ pairroom relay install --runtime claude,codex
 
 ### 与局域网同事协作
 
-双方各自运行本机 Service 和原生会话。先在**设置 → 局域网协作**开启一次托管，再创建 Native Room 并选择**通过局域网邀请同事**，或执行 `pairroom relay bind --create --share lan`。把返回的加入命令交给同事，让对方 Agent 在自己的会话里申请加入；你通过已有的可信沟通渠道收到准确回执后接受它。双方的 Service 都能为其他 Room 当房主。两位用户都能查看共享对话和发消息，而凭据、原生会话、工作区和工具权限仍保留在各自机器上。具体步骤、显式上传证据、重连和撤销访问见[局域网 Native 协作](docs/LAN_NATIVE.md)。
+只有 Room 的房主需要运行 Service。先在**设置 → 局域网协作**开启一次托管，再创建 Native Room 并选择**通过局域网邀请同事**，或执行 `pairroom relay bind --create --share lan`。把返回的加入命令交给同事，让对方 Agent 用自己的 CLI/hooks 和原生会话直接连接；你通过已有的可信沟通渠道收到准确回执后接受它。同一台机器可以用不同的原生会话，同时托管自己的 Room、加入其他房主的 Room。每个绑定保留自己的房主目标，无需全局切换服务器。
+
+两位用户都能检查共享历史；参与方也可以选择运行本机 Service，使用**已加入的 Room**界面查看对话和发送用户消息。参与方 Agent 的 `send`、`wait`、`exchange` 和 hooks 不依赖这项服务。凭据、原生会话、工作区和工具权限仍留在本机。没有正在运行的收件命令、hook 或可选的本机唤醒观察者时，新消息保留在房主队列中。安装步骤、显式上传证据、重连和撤销访问见[局域网 Native 协作](docs/LAN_NATIVE.md)。
 
 ### Native 恢复与评审
 

@@ -57,6 +57,7 @@ type preflightCaller struct {
 
 type preflightService struct {
 	Status            string `json:"status"`
+	Transport         string `json:"transport,omitempty"`
 	EndpointPath      string `json:"endpoint_path,omitempty"`
 	Version           string `json:"version,omitempty"`
 	VersionMatch      bool   `json:"version_match"`
@@ -77,6 +78,7 @@ type preflightHook struct {
 
 type preflightReport struct {
 	Ready     bool                     `json:"ready"`
+	Mode      string                   `json:"mode"`
 	CLI       preflightCLI             `json:"cli"`
 	Workspace preflightWorkspace       `json:"workspace"`
 	Caller    preflightCaller          `json:"caller"`
@@ -95,8 +97,31 @@ func runPreflight(ctx context.Context, o options, out io.Writer) error {
 	report := preflightReport{Hooks: map[string]preflightHook{}, Notice: "Read-only setup check. Contacts no model and changes nothing. Hook approval is decided in each harness and stays unknown here; after binding, relay doctor shows last_hook_at."}
 	report.CLI = preflightCommandLine()
 	report.Workspace = preflightGitWorkspace(ctx, o.repo)
+	binding, bindingErr := preflightBoundState(ctx, o, report.Workspace.Root)
+	if binding != nil {
+		report.Workspace = preflightWorkspace{Status: checkPass, Root: binding.Workspace}
+	}
 	report.Caller = preflightNativeCaller(report.Workspace.Root, model.RuntimeKind(o.kind))
-	report.Service = preflightServiceState(ctx, o.endpoint, report.Workspace.Root)
+	switch {
+	case bindingErr != nil:
+		report.Mode = "unresolved"
+		report.Service = preflightService{Status: checkFail, Hint: bindingErr.Error()}
+	case binding != nil && binding.LAN != nil:
+		report.Mode = "lan_direct"
+		report.Service = preflightLANState(ctx, *binding)
+	case binding != nil && o.joinCheck:
+		report.Mode = "lan_join"
+		report.Service = preflightService{Status: checkFail, Transport: "lan_direct", Hint: "This native session already belongs to a locally hosted Room. Use a separate native session to join a remote Room while keeping the local association."}
+	case binding != nil:
+		report.Mode = "local"
+		report.Service = preflightServiceState(ctx, binding.EndpointPath, report.Workspace.Root)
+	case o.joinCheck:
+		report.Mode = "lan_join"
+		report.Service = preflightService{Status: "not_required", Transport: "lan_direct"}
+	default:
+		report.Mode = "local"
+		report.Service = preflightServiceState(ctx, o.endpoint, report.Workspace.Root)
+	}
 
 	var selected []model.RuntimeKind
 	switch {
@@ -145,7 +170,9 @@ func runPreflight(ctx context.Context, o options, out io.Writer) error {
 		}
 	}
 	if report.Ready && !report.Caller.Bound {
-		if report.Service.ActiveNativeRooms == 0 {
+		if report.Mode == "lan_join" {
+			report.NextSteps = append(report.NextSteps, "Join from inside the Agent session: pairroom relay join '<invitation>'. Only the host needs a Service. Share the returned public receipt with the host, then repeat the same join after acceptance.")
+		} else if report.Service.ActiveNativeRooms == 0 {
 			report.NextSteps = append(report.NextSteps, `Create and bind from inside the first Agent session: pairroom relay bind --create --name "<topic>" (skill: /pairroom-relay <topic>)`)
 		} else {
 			report.NextSteps = append(report.NextSteps, "Join from inside the Agent session with pairroom relay bind (pass --room when several native Rooms are active), or create another Room with bind --create")
@@ -232,7 +259,15 @@ func preflightNativeCaller(root string, selected model.RuntimeKind) preflightCal
 	}
 	for _, path := range paths {
 		var s State
-		if readPrivate(path, &s) == nil && s.Schema == 2 && s.Generation != 0 && s.SessionID == caller.session && s.Runtime == caller.runtime {
+		if readPrivate(path, &s) == nil && validStateFormat(s) && s.Generation != 0 && s.SessionID == caller.session && s.Runtime == caller.runtime {
+			current, err := currentDirectBinding(s)
+			if err != nil {
+				result.Status, result.Hint = checkFail, err.Error()
+				return result
+			}
+			if !current {
+				continue
+			}
 			result.Bound = true
 			result.Hint = "This session is already bound; use pairroom relay doctor instead of binding again."
 			break
@@ -242,7 +277,7 @@ func preflightNativeCaller(root string, selected model.RuntimeKind) preflightCal
 }
 
 func preflightServiceState(ctx context.Context, endpointPath, root string) preflightService {
-	result := preflightService{Status: checkFail}
+	result := preflightService{Status: checkFail, Transport: "local"}
 	if endpointPath == "" {
 		var err error
 		if endpointPath, err = defaultEndpoint(); err != nil {

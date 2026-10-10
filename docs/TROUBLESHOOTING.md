@@ -76,6 +76,13 @@ Fix PATH for the harness itself, then restart that harness session. A running se
 
 ### Service unavailable or stopped
 
+The endpoint-file errors below apply to locally hosted bindings. An invited LAN
+participant uses `preflight --join` before admission; an already-bound remote
+session's ordinary preflight checks its saved host directly. It needs no local
+Service or `--service-file`. If the remote host is unreachable or denies the
+saved membership, check with its owner and follow [LAN recovery](LAN_NATIVE.md#observe-and-recover);
+starting a local Service does not repair that binding.
+
 - Bind/Management: `Service unavailable; verify current endpoint file`, or an OS error that names the missing `relay-endpoint.json`.
 - Bound commands: `read current Service endpoint (is PairRoom running?): <error>` or `relay <action> transport unavailable`.
 - Preflight `service.hint`: `No running Service found. ...` or `The endpoint file exists but the Service did not answer; it may have stopped uncleanly. ...`
@@ -105,6 +112,12 @@ Bind checks only that the hook is **installed**; PairRoom cannot see approval. R
 ### No matching binding, or an ambiguous Room or slot
 
 Service-side rejections are prefixed with `Service rejected request:` (or `relay <action>:`), and bind adds a retry note.
+
+The local setup/replacement remedies below apply to locally hosted bindings.
+For an admitted LAN binding, `bind` only resumes its original association;
+replacement requires a fresh invitation with explicit `join --replace`,
+confirmed retirement of the old membership, and fresh owner-approved admission.
+Revocation or archive never triggers automatic rejoin.
 
 | Message contains | Meaning and fix |
 |---|---|
@@ -184,7 +197,7 @@ Native Participants/Details panels are independent on wide screens and mutually 
 
 Management, standalone and direct Room listeners accept **numeric loopback only**. LAN/public addresses, wildcards, `localhost`, and other hostnames are rejected on those surfaces even with a token. Use protected SSH local forwarding for deliberate access to the full local interface.
 
-For colleague collaboration, enable the separate **LAN sharing** listener in Service Settings and create a Native LAN Room. Select an assigned numeric private interface and allow its port through the intended network's firewall; the guest connects through its own local Service. A pending join needs acceptance of the exact request/key receipt. A changed TLS pin must not be bypassed, and a stale or revoked membership must not be recreated automatically. See [Native LAN collaboration](LAN_NATIVE.md#observe-and-recover) for connectivity, invitation, evidence and delivery recovery.
+For colleague collaboration, only the Room's host enables the separate **LAN sharing** listener in Service Settings. Select an assigned numeric private interface and allow its port through the intended network's firewall. The guest connects directly with CLI/hooks; use `pairroom relay preflight --join` before joining, without starting a local Service or passing `--service-file`. Once bound, ordinary preflight checks that binding's host. A pending join needs acceptance of the exact request/key receipt. A changed TLS pin must not be bypassed, and stale, revoked or archived membership must not be recreated automatically. No live collector, hook, or optional wake observer means input stays queued at the host. See [Native LAN collaboration](LAN_NATIVE.md#observe-and-recover) for connectivity, invitation, evidence and delivery recovery.
 
 For an occupied port, identify its owner; do not create another Service over the same root. Reopen the current authenticated Management URL after a restart invalidates browser sessions. Never share bootstrap URLs, cookies, or tokens. A custom Native Service uses `--service-file <root>/relay-endpoint.json` as a path, not pasted endpoint credentials. See [Security](../SECURITY.md).
 
@@ -202,7 +215,7 @@ Keep the original data. Inspect the first identity/schema/replay error:
 pairroom verify --data-dir /absolute/path/to/room --json
 ```
 
-Readers accept Store schema 12 with explicit host mode; earlier formats are retired before replay/repair. Never change metadata to make unsupported data appear valid. Missing/empty/gapped/replaced logs are not fresh Rooms. Restore a verified matching backup rather than renumbering history.
+Readers accept existing local Store 12/provisioning 5 and new Store 13/provisioning 6 with explicit host mode; earlier formats are retired before replay/repair. Never change metadata to make unsupported data appear valid. Missing/empty/gapped/replaced logs are not fresh Rooms. Restore a verified matching backup rather than renumbering history.
 
 Backup/diagnostic outputs must stay outside the source Room directory, including symlink aliases. A Room backup excludes the Service root's user configuration, repository, vendor stores, and Native workspace credentials. Archive cannot stop Native work. Follow [Storage](STORAGE.md), [backup procedure](OPERATIONS.md#backup), and [Upgrading](UPGRADING.md).
 

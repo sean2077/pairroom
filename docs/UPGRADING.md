@@ -14,7 +14,7 @@ The host requests only the fixed public GitHub latest-release endpoint, without 
 
 ## Supported Room formats
 
-The 5.0.0 development cutover retired old formats without migration. Current readers support existing local **Store schema 12/provisioning 5** and new **Store schema 13/provisioning 6**, with explicit immutable `host_mode`. Registry checkpoint 3 remains readable and new checkpoints use 4; relay state 2 and Agent pair profile storage 2 retain their existing contracts. Existing current local Rooms do not need to be recreated. LAN facts and awaiting-peer selections require the new 13/6 format; old Room logs and metadata are not rewritten. A retired Service root fails as a whole before recovery/replay/repair/rewrite. Start a new root and recreate registrations, Rooms, and profiles; moving only old Room directories cannot repair an incompatible root checkpoint.
+The 5.0.0 development cutover retired old formats without migration. Current readers support existing local **Store schema 12/provisioning 5** and new **Store schema 13/provisioning 6**, with explicit immutable `host_mode`. Registry checkpoint 3 remains readable and new checkpoints use 4. Local relay state 2 and Agent pair profile storage 2 retain their existing contracts; direct LAN client bindings use relay state 3 with a private per-user client store separate from Service roots. Existing current local Rooms and bindings do not need to be recreated or rewritten. LAN facts and awaiting-peer selections require the new 13/6 Room format; old Room logs and metadata are not rewritten. A retired Service root fails as a whole before recovery/replay/repair/rewrite. Start a new root and recreate registrations, Rooms, and profiles; moving only old Room directories cannot repair an incompatible root checkpoint.
 
 A newer checkpoint, Agent pair profile, or Room Store/provisioning schema also rejects the whole root before startup cleanup, including staged and quarantined Rooms. Provisioning compatibility is checked from the two initial creation records; incomplete staging can still be cleaned after a crash. Use a matching or newer binary; do not downgrade format numbers to make an older reader accept the data.
 
@@ -30,7 +30,7 @@ Startup preserves known Room identities: an absent active Room directory, or a p
 
 Record PairRoom and selected native CLI versions, read release notes, and stop/drain the PairRoom owner. For Native, separately pause work in the original harnesses: archive/quit cannot stop them. Verify workspace side effects before replacing binaries.
 
-Preserve the entire stopped Service root, including profiles/navigation preferences, and any external Room directories. Verify Room archives with the matching binary, but do not mistake them for complete Service, repository, vendor-session, or Native workspace-credential backups. Keep the matching configuration and binary alongside the backup. See [Operations](OPERATIONS.md#backup).
+Preserve the entire stopped Service root, including profiles/navigation preferences, and any external Room directories. For direct LAN participants, also preserve both per-user stores (`pairroom/lan-clients` and `pairroom/native-identities`) and matching workspace binding state while their CLI/hooks and optional observer are stopped; these are outside the Service-root backup. Verify Room archives with the matching binary, but do not mistake them for complete Service, repository, vendor-session, or Native workspace-credential backups. Keep the matching configuration and binary alongside the backup. See [Operations](OPERATIONS.md#backup).
 
 ## Configuration and native runtimes
 
@@ -73,6 +73,17 @@ Native is the default and recommended Room host mode; Embedded remains available
 
 **Routine compatible upgrades do not require unbinding or replacing valid sessions.** Update CLI/Service together and refresh/review installed hooks/skill when their definitions change. Use idempotent bind to restore discovery without rotating generation.
 
+For a direct LAN participant, update the CLI to match the Room's hosting Service;
+there is no required guest Service to upgrade. Existing local relay state 2 stays
+local, and direct state 3 retains its original host identity. Use
+`preflight --join` before a first invitation, or ordinary `preflight` from a
+bound remote session. Changing the default local Service or opening Desktop
+does not move that binding. For a replacement native session in the same
+remote Room, use a fresh invitation with explicit `join --replace` in the
+original workspace after the host confirms the old membership ended. Fresh
+receipt approval is required; previous receipts and publication state are
+retained without replay. Revocation or archive never permits automatic rejoin.
+
 An incompatible downgrade or deliberate Native removal is different. Before replacing the working binary, stop native work, back up all relevant state, and use that matching CLI to unbind the affected slots, with `--purge-hooks` only when intentional. Remove only selected PairRoom workspace data/unused managed skills after confirming no other bindings need them. Never purge unrelated native hooks/configuration. Archive alone neither releases Binding ownership nor creates compatibility isolation.
 
 Pre-5.0.0 binaries reject schema-12 Rooms. Pre-LAN binaries reject schema-13 Rooms and checkpoint 4 before startup cleanup. Preserve a complete pre-upgrade root with its matching binary if rollback is required; a new derived checkpoint also prevents an older Service from opening that root. There is no in-place format downgrade: preserve an isolated matching-version backup/root rather than relabelling schema or copying credentials between generations.
@@ -81,7 +92,7 @@ Pre-5.0.0 binaries reject schema-12 Rooms. Pre-LAN binaries reject schema-13 Roo
 
 Follow [Native setup](NATIVE_RELAY.md). A confirmed binding retains its identity across compatible updates. An incomplete historical binding may require intentional replacement, but a **lost response to a current bind** is recovered by rerunning the same Room/slot bind without a new `--create` or `--replace`. Creation success followed by bind failure must use the reported Room recovery command.
 
-Session-first discovery is compatible with current relay state. A binding without a locator can be rediscovered from its workspace/registered Service Projects by an ordinary foreground call. If both cwd and project hints moved, run this once in the original session:
+Session-first discovery is compatible with current relay state. A direct LAN binding without a locator is resolved from the same-user private client catalog before any local Service lookup, including after cwd changes. A local binding can be rediscovered from its workspace/registered Service Projects by an ordinary foreground call. For a local binding whose cwd and project hints moved, run this once in the original session:
 
 ```bash
 pairroom relay bind --repo "<original-bound-workspace>"

@@ -1,11 +1,17 @@
 # Native collaboration on a LAN
 
 Native is PairRoom's default and recommended mode. It supports a shared Room
-between two colleagues' existing coding sessions. Each colleague keeps a local
-PairRoom Service, native harness, workspace, credentials, and tool permissions.
-One Service hosts the Room's shared event log; the other connects outward to it.
-Either colleague can host a different Room. Embedded Rooms remain a local,
-optional mode and do not support LAN membership.
+between two colleagues' existing coding sessions. **Only the Room's host needs
+a PairRoom Service.** The other participant connects directly with the PairRoom
+CLI and approved hooks, keeping its native harness, workspace, credentials, and
+tool permissions on its own machine. The host owns the shared event log and
+inboxes. Joining requires no local Service, inbound listener, or second daemon.
+
+One machine can host its own Rooms and join Rooms on other hosts concurrently
+through different native sessions. Each confirmed binding retains its own
+host endpoint, public-key pin, Room, slot and generation; there is no global
+server switch. Embedded Rooms remain a local, optional mode without LAN
+membership.
 
 For local hook installation and runtime requirements, start with
 [Native relay](NATIVE_RELAY.md). The [CLI reference](CLI_REFERENCE.md) owns flag
@@ -30,18 +36,23 @@ semantics; [Security](../SECURITY.md) owns the trust and network boundaries.
    credential. The creator occupies Agent 1 unless `--slot 2` was explicitly
    requested. The other slot is `awaiting_peer`; omit `--peer-runtime` because
    the joining native session establishes its actual Runtime at admission.
-3. On the guest machine, start its local PairRoom Service and install/approve
-   hooks in the intended workspace. The guest agent runs the received command
-   as a tool call inside its own native session:
+3. On the guest machine, make the CLI available in the Agent's tool shell and
+   install/approve hooks for its Runtime in the intended workspace. Check the
+   guest setup, then run the received command as a tool call inside that native
+   session:
 
    ```bash
+   pairroom relay preflight --join
    pairroom relay join 'pairroom://join/<public-descriptor>'
    ```
 
    The native session and local workspace can differ from the host's runtime,
    repository, branch, or paths. `--repo PATH` selects the guest's workspace
-   explicitly; `--service-file PATH` selects its **local** Service discovery
-   file. Do not copy the host's Service file or local filesystem paths.
+   explicitly. The invitation supplies the remote endpoint and pin; do not pass
+   `--service-file` or copy a Service file from the host. `preflight --join` is
+   read-only and does not require a local Service. It checks CLI, workspace,
+   session eligibility and hook installation; native hook approval remains the
+   user's decision.
 4. Join returns `status: pending` and a public `receipt`. Send that exact
    receipt to the host through the colleagues' existing trusted communication
    channel. The host checks the receipt, then accepts it in the Room's LAN panel
@@ -60,21 +71,25 @@ semantics; [Security](../SECURITY.md) owns the trust and network boundaries.
    confirmed local binding and prints the final bootstrap with the actual
    runtime-derived mention handles. Later, `pairroom relay bind` resumes that
    same association. Normal `send`, `wait`, `exchange`, Stop publication,
-   `status`, and `history` commands work through the guest's local Service.
+   `status`, and `history` commands connect directly to the recorded host.
+   Ordinary `preflight` now resolves this bound session's remote transport
+   without consulting a local Service endpoint.
 
 The invitation expires after ten minutes by default. A host can use
 `pairroom relay invite` to issue a fresh invitation while awaiting a peer. For
-an expired pending join, use the new invitation in the same guest session. Its
-local Service settles the old request before renewing the request ID and keeps
-the per-Room private key. A confirmed member reconnects with its existing key
-and generation after a network interruption or Service restart, without another
-invitation or repeated owner approval.
+an expired pending join, use the new invitation in the same guest session. The
+client settles the old request before renewing its request ID and keeps the
+per-Room private key. A confirmed member reconnects with its existing key and
+generation after a network interruption, CLI restart or host Service restart,
+without another invitation or repeated owner approval. Revocation and archive
+do not authorize an automatic new join.
 
 A shared Room is created explicitly with `--share lan`. An existing local Room
-cannot be silently converted to shared history. Both agents may queue explicit
-messages while awaiting a peer; automatic mention routing becomes available
-when the actual peer Runtime is admitted. The native harness still owns when
-and how it executes any received input.
+cannot be silently converted to shared history. The host can queue explicit
+messages while its peer slot awaits admission; a pending guest cannot read or
+publish Room content. Automatic mention routing becomes available when the
+actual peer Runtime is admitted. The native harness still owns when and how it
+executes any received input.
 
 ## Share a useful bug report
 
@@ -105,17 +120,19 @@ claiming an incoming message, the guest downloads and verifies its attachments
 into a protected local cache and renders those local paths. The delivery lease
 starts only after that preparation. Slow or interrupted downloads do not claim
 an unprepared message, and a changed queue head is checked again before claim.
-Both owners can download shared evidence from their local Room view. Unselected
-local files, directory listings, transcripts, and provider settings are not
-automatically exposed by the attachment API. Explicit text, `--ref`, and review
+The host Room view and the guest's optional **Joined Rooms** dashboard can also
+download shared evidence. Unselected local files, directory listings, transcripts,
+and provider settings are not automatically exposed by the attachment API.
+Explicit text, `--ref`, and review
 observations may contain paths selected by the sender; sharing them is a local
 decision, not automatic transport metadata collection.
 
 ## Shared humans and local authority
 
-Both human owners can view the shared Room's history, including `@user`
-escalations, and contribute a human message to either agent slot. Human
-messages retain authenticated author provenance: host owner or joined owner.
+Both human owners can inspect the shared Room's history, including `@user`
+escalations. The host Room view and the guest's optional local dashboard support
+human messages to either agent slot. Human messages retain authenticated author
+provenance: host owner or joined owner.
 This does not add another agent slot or make a colleague a local administrator.
 The author shown in a message is separate from the local native harness's
 permission and approval decisions.
@@ -128,11 +145,14 @@ protects transport, not content from the host itself.
 
 ## Observe and recover
 
-The guest Service keeps a private transport registration and publication
-recovery state; it does not create a second authoritative Room inbox. `room` in
-guest CLI output is an opaque local routing ID derived from the host key and
-remote Room ID, so equal Room IDs on different hosts cannot collide. Usually
-let native session discovery select it instead of copying IDs manually.
+The guest keeps its certificate, admission and transport recovery journal in a
+private per-user client store, separate from Service data roots. Its exact
+native session association and publication state remain local. There is no
+second authoritative Room inbox. `room` in guest CLI output is an opaque local
+routing ID derived from the host key and remote Room ID, so equal Room IDs on
+different hosts cannot collide. Let native session discovery select it instead
+of copying IDs manually. Changing cwd or a local Service configuration never
+retargets that binding.
 
 | Observation | Meaning and recovery |
 |---|---|
@@ -140,38 +160,104 @@ let native session discovery select it instead of copying IDs manually.
 | `accepted`, then reconnect | The same private Room key and accepted generation reconnect. No fresh owner approval is needed. Repeat `join` only if local promotion was interrupted. |
 | Invitation expired before approval | Ask for a fresh invitation and run `join` in the same original guest session/workspace. A new key is unnecessary. |
 | Host offline | Messages remain in the host's durable queue. The guest cannot claim a second local copy. Resume when the host returns. |
-| Guest offline | New messages stay queued at the host. A returning guest collects them under the original membership. |
+| Guest CLI/hooks are not running | New messages stay queued at the host. A returning collector uses the original membership; opening a new native session does not inherit it. |
+| Optional local Service stopped | Direct `join`, `send`, `wait`, `exchange` and hooks remain usable. The local dashboard and its optional wake observation are unavailable. |
 | Publication response lost | Reuse the original `--id` with identical body and evidence. Stop publications retain their original sequence in the local outbox. Do not invent another ID. |
 | Collector stdout written | `handed_off` means delivery to CLI/hook stdout, not model acceptance, execution, or success. |
-| Claim or acknowledgement uncertain | Inspect `history --pending` / `history --id ID`. Never automatically replay `unknown`. If the local collector already reported successful stdout, the guest may settle only that original ACK after reconnection; a claim alone never authorizes acknowledgement. |
+| Claim or acknowledgement uncertain | Inspect `history --pending` / `history --id ID`. Never automatically replay `unknown`. If the local collector already reported successful stdout, a later bind/resume or receive opportunity can settle only that original ACK after reconnection; a claim alone never authorizes acknowledgement. |
 | Evidence hash or metadata mismatch | Collection fails before claim. Inspect the original evidence and publish changed content with a new ID. |
 | Revoked or archived membership | New reads, writes, claims, wake reservations and downloads fail. Explicitly leave locally before reusing that native session elsewhere. Previously downloaded content cannot be recalled. |
 
-The guest's **connected** indicator reports network reachability. Collector
-activity, queue state, delivery receipts, native hook approval, and model
-acceptance are distinct observations. `relay doctor` checks the current local
-native capability and remote transport without sending a wake; a suspended
-host Room must be activated with `status` before doctor can inspect it.
+The optional dashboard reports its latest contact with the host. Saved
+membership, recent network contact, an active collector, native hook approval,
+and model acceptance are distinct observations. Without a live observer, a
+saved timestamp is not proof of current reachability. `relay doctor` checks
+the current local native capability and remote transport without sending a
+wake; a suspended host Room must be activated with `status` before doctor can
+inspect it.
 
 The private guest journal records original delivery receipts before returning an
 envelope locally. It records successful collector stdout before forwarding an
-ACK, so a lost ACK response can be reconciled after Service restart without
-claiming or printing the body again. A failed output writer leaves the original
-delivery uncertain. An explicit host Retry creates a new message ID and receipt;
-the original remains available for inspection. Unresolved receipt retention is
-bounded and fails closed instead of discarding uncertain delivery evidence.
+ACK, so a later bind/resume, collector or optional observer can reconcile a lost ACK
+response without claiming or printing the body again. A failed output writer
+leaves the original delivery uncertain. An explicit host Retry creates a new
+message ID and receipt; the original remains available for inspection.
+Unresolved receipt retention is bounded and fails closed instead of discarding
+uncertain delivery evidence.
 
-Automatic wake remains a fixed body-free Claude/Codex nudge. The host first
-persists a unique wake reservation; the guest persists its own spent receipt
-before attempting the local capability. Reserved effects are never retried
-automatically, including after a lost response or restart. A failed or uncertain
-wake leaves the inbox available to `relay wait`. The bounded local wake journal
-fails closed when full; it does not prevent foreground collection. Grok/Gemini
-retain their documented foreground/tracked-wait boundaries.
+Foreground `wait` / `exchange`, a tracked background `wait` whose completion the
+harness actually surfaces, and bounded Stop park provide direct receive paths.
+Keep one collector per slot. No running collector, hook, or optional local wake
+observer means new messages remain queued at the host until the next receive
+opportunity. The remote host cannot wake a native process on the guest machine
+by itself.
+
+To abandon a pending attempt or detach while its host is offline, run this
+inside the original native session, using the local Room ID printed by join:
+
+```bash
+pairroom relay unbind --local-only --room <local-room-id>
+```
+
+This makes the local association inactive and releases its local session
+reservation without contacting the host. It does not cancel a possibly
+accepted remote admission; ask the host owner to revoke it. The optional
+dashboard offers the same explicit **Detach locally** action. Neither path
+reconnects that association automatically. The original session can omit
+`--room` when its client catalog resolves a single association, including a
+pending admission after changing directories.
+
+Changing the native session for the **same** remote Room requires a fresh
+invitation and an explicit replacement after the host confirms the old
+membership is revoked, left, or expired:
+
+```bash
+pairroom relay join '<fresh-invitation>' --replace
+```
+
+Use the original workspace and host route. This starts a new request, whose
+exact receipt must be accepted again by the host. The old client record and
+receipts remain at `lan-clients/<lan-id>/retired/<local-bind-id>/client.json`;
+workspace publication state, credentials and the original join attempt remain
+under `.pairroom/retired/<local-bind-id>/`. These private archives are never
+replayed into the new binding. A plain `join` or `bind` only resumes
+its original association; it cannot replace retired membership. Renewing a
+never-admitted expired request in its original session/key remains the
+ordinary pending-request renewal described above. An archived Room must be
+restored or replaced by its host before it can admit anyone.
+
+An optional local Service can observe client bindings and perform supported
+Claude/Codex wake with a fixed body-free nudge. The host first persists a unique
+wake reservation; the local observer persists its spent receipt before using
+the local capability. Reserved effects are never retried automatically,
+including after a lost response or restart. Failed or uncertain wake leaves
+input available to `relay wait`. The bounded wake journal fails closed when
+full without preventing foreground collection. Grok/Gemini retain their
+documented foreground/tracked-wait boundaries.
+
+## Optional local dashboard
+
+If PairRoom Desktop or a local Service is already running, **Joined Rooms**
+projects bindings from the bounded client catalog belonging to that OS user.
+It appears alongside locally hosted Rooms and offers shared history, human
+messages, receipt checks, evidence downloads, Leave and **Detach locally**. Private keys stay in
+the client store and never enter the browser. The dashboard and CLI use the
+same client identity and recovery state, not a duplicate Room log or another
+binding. A different local Service data root does not change the remote host.
+
+Preserve both per-user stores, `pairroom/lan-clients` and
+`pairroom/native-identities`, with their matching workspace state when backing
+up this machine. The latter coordinates exact native-session ownership with
+locally hosted Rooms. See [Storage](STORAGE.md#direct-lan-client-state) for
+their authority and recovery boundaries.
+
+You may start a local Service for this dashboard or to host your own Rooms.
+It remains optional for participating in other Rooms: joining and normal Agent
+communication never wait for it, start it automatically, or require a daemon.
 
 The host owner can revoke the remote member with `pairroom relay revoke` or the
-Room LAN panel. The guest can use `pairroom relay unbind` or **Leave** in its
-local joined Room view. Those actions do not stop either vendor process.
+Room LAN panel. The guest can use `pairroom relay unbind` directly or **Leave**
+in its optional joined Room view. Those actions do not stop either vendor process.
 Management settings, arbitrary workspace browsing, process control, approval
 resolution, provider configuration and listener configuration are never LAN
 member operations.

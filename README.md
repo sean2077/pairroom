@@ -95,7 +95,7 @@ See [Security](SECURITY.md), [Concepts](docs/CONCEPTS.md), and [Storage](docs/ST
 
 ## Native host mode
 
-Before you start, make sure `pairroom` runs in both Agents' tool shells and one non-Mock Service is running for your data root. [Agent-assisted setup](docs/AGENT_SETUP.md#6-native-bind-two-existing-sessions) walks through both. Then, from the project worktree, install hooks for the Runtimes you use:
+For a Room hosted on your machine, make sure `pairroom` runs in both Agents' tool shells and one non-Mock Service is running for your data root. [Agent-assisted setup](docs/AGENT_SETUP.md#6-native-bind-two-existing-sessions) walks through both. To join a colleague's LAN Room, only the CLI and hooks are needed on your machine; follow the [LAN workflow](docs/LAN_NATIVE.md). From the project worktree, install hooks for the Runtimes you use:
 
 ```bash
 pairroom relay install --runtime claude,codex
@@ -119,7 +119,9 @@ After a turn ends, the Stop hook waits briefly for the peer's answer. Beyond tha
 
 ### Work with a teammate on the LAN
 
-Each colleague runs their own local Service and native session. Enable hosting once in **Settings → LAN collaboration**, then create a Native Room with **Invite a teammate over LAN**, or run `pairroom relay bind --create --share lan`. Send the returned join command to the colleague. Their Agent requests access from its own session; you accept the exact receipt they return through your existing trusted channel. Either Service can host a different Room. Both owners can read the shared conversation and send messages, while credentials, native sessions, workspaces, and tool permissions remain local. See [Native LAN collaboration](docs/LAN_NATIVE.md) for the short workflow, explicit evidence uploads, reconnection, and revocation.
+Only the Room's host needs a Service. Enable hosting once in **Settings → LAN collaboration**, then create a Native Room with **Invite a teammate over LAN**, or run `pairroom relay bind --create --share lan`. Send the returned join command to the colleague. Their Agent uses its own CLI/hooks and native session to connect directly; you accept the exact receipt they return through your existing trusted channel. One machine can host its own Rooms and join Rooms on other hosts at the same time through different native sessions. Each binding retains its own host, with no global server switch.
+
+Both owners can inspect shared history; an optional local Service also provides a **Joined Rooms** view and human messaging. The joining Agent's `send`, `wait`, `exchange`, and hooks work without that Service. Credentials, native sessions, workspaces, and tool permissions stay local. Without a live collector, hook, or optional local wake observer, incoming messages stay queued at the host. See [Native LAN collaboration](docs/LAN_NATIVE.md) for setup, explicit evidence uploads, reconnection, and revocation.
 
 ### Inspect and recover without replay
 

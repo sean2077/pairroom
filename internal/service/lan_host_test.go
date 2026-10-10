@@ -22,6 +22,7 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/privatefile"
 	"github.com/sean2077/pairroom/internal/relay"
+	"github.com/sean2077/pairroom/internal/relayclient"
 )
 
 type lanHostFixture struct {
@@ -76,11 +77,12 @@ func newLANHostFixture(t *testing.T) *lanHostFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := n.engine.Bind(model.ActorSlot1, relay.BindRequest{BindID: "host-binding", CredentialHash: relay.Digest("host-secret"), SessionID: "private-native-session"})
+	session := "private-native-session-" + relay.Digest(registry.Root())[:16]
+	b, err := n.engine.Bind(model.ActorSlot1, relay.BindRequest{BindID: "host-binding", CredentialHash: relay.Digest("host-secret"), SessionID: session})
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner := relay.Auth{Slot: b.Slot, BindID: b.BindID, Generation: b.Generation, SessionID: "private-native-session", Secret: "host-secret"}
+	owner := relay.Auth{Slot: b.Slot, BindID: b.BindID, Generation: b.Generation, SessionID: session, Secret: "host-secret"}
 	if _, err = n.engine.ConfirmSession(owner, owner.SessionID, "/private/native/transcript"); err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +194,7 @@ func (f *lanHostFixture) accept(t *testing.T, client *http.Client, pending lansh
 	return admitted
 }
 func TestLANHostRequiresExactAdmissionAndScopedMembership(t *testing.T) {
+	relayclient.IsolateNativeCaller(t)
 	f := newLANHostFixture(t)
 	client, pending, _ := f.join(t)
 	if pending.Status != "pending" || pending.Room != nil {
@@ -250,6 +253,7 @@ func TestLANHostRequiresExactAdmissionAndScopedMembership(t *testing.T) {
 	}
 }
 func TestLANSharedFilesRequireExplicitHistoryAndKeepBytes(t *testing.T) {
+	relayclient.IsolateNativeCaller(t)
 	f := newLANHostFixture(t)
 	client, pending, _ := f.join(t)
 	f.accept(t, client, pending)
@@ -326,6 +330,7 @@ func (w *lanBlockedWriter) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 func TestLANDownloadRevocationSerializesBoundedWrites(t *testing.T) {
+	relayclient.IsolateNativeCaller(t)
 	f := newLANHostFixture(t)
 	client, pending, identity := f.join(t)
 	f.accept(t, client, pending)
@@ -375,6 +380,7 @@ func TestLANDownloadRevocationSerializesBoundedWrites(t *testing.T) {
 }
 
 func TestLANListenerCloseBeforeHTTPServeStarts(t *testing.T) {
+	relayclient.IsolateNativeCaller(t)
 	for _, operation := range []string{"close", "disable"} {
 		t.Run(operation, func(t *testing.T) {
 			listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -412,6 +418,7 @@ func TestLANListenerCloseBeforeHTTPServeStarts(t *testing.T) {
 }
 
 func TestLANListenerOptInPersistedIdentityAndSafeRestart(t *testing.T) {
+	relayclient.IsolateNativeCaller(t)
 	f := newLANHostFixture(t)
 	h := f.management.lanHost
 	address := f.remote.Listener.Addr().String()
@@ -480,6 +487,7 @@ func TestLANListenerOptInPersistedIdentityAndSafeRestart(t *testing.T) {
 }
 
 func TestLANConfigurationRejectsUnsafeInterfacesAndMalformedIdentity(t *testing.T) {
+	relayclient.IsolateNativeCaller(t)
 	f := newLANHostFixture(t)
 	h := f.management.lanHost
 	before := h.status()
@@ -526,6 +534,7 @@ func TestLANConfigurationRejectsUnsafeInterfacesAndMalformedIdentity(t *testing.
 }
 
 func TestLANOwnerSettingsRouteAndRoomStateKeepCapabilitiesPrivate(t *testing.T) {
+	relayclient.IsolateNativeCaller(t)
 	f := newLANHostFixture(t)
 	_, pending, _ := f.join(t)
 	request := func(method, path, token string, body any) *httptest.ResponseRecorder {
@@ -568,6 +577,7 @@ func TestLANOwnerSettingsRouteAndRoomStateKeepCapabilitiesPrivate(t *testing.T) 
 }
 
 func TestLANMemberOperationsPreservePublicationAndHumanReceipts(t *testing.T) {
+	relayclient.IsolateNativeCaller(t)
 	f := newLANHostFixture(t)
 	client, pending, _ := f.join(t)
 	admitted := f.accept(t, client, pending)
@@ -643,6 +653,7 @@ func TestLANMemberOperationsPreservePublicationAndHumanReceipts(t *testing.T) {
 }
 
 func TestLANUnauthorizedRequestsCannotActivateSuspendedRooms(t *testing.T) {
+	relayclient.IsolateNativeCaller(t)
 	f := newLANHostFixture(t)
 	client, pending, _ := f.join(t)
 	admitted := f.accept(t, client, pending)

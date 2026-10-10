@@ -11,12 +11,20 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/sean2077/pairroom/internal/privatefile"
+	"github.com/sean2077/pairroom/internal/privatelock"
 	"github.com/sean2077/pairroom/internal/relay"
 )
 
 // A named, process-owned kernel mutex has no filesystem footprint and remains
 // stable when credentials/state are atomically replaced. Abandoned is acquired.
 func lockSlot(ctx context.Context, dir string) (func(), error) {
+	if directLANLockDirectory(dir) {
+		if err := privatefile.CheckDirectory(dir); err != nil {
+			return nil, err
+		}
+		return privatelock.Lock(ctx, dir)
+	}
 	name, err := windows.UTF16PtrFromString("Local\\PairRoomRelay-" + relay.Digest(strings.ToLower(filepath.Clean(dir))))
 	if err != nil {
 		return nil, err
@@ -47,4 +55,17 @@ func lockSlot(ctx context.Context, dir string) (func(), error) {
 			return nil, err
 		}
 	}
+}
+
+func directLANLockDirectory(dir string) bool {
+	dir = strings.ToLower(filepath.Clean(dir))
+	if !filepath.IsAbs(dir) {
+		return false
+	}
+	parent := filepath.Dir(dir)
+	if filepath.Base(parent) == "lan-joins" && strings.HasPrefix(filepath.Base(dir), "lan_") {
+		return filepath.Base(filepath.Dir(parent)) == ".pairroom"
+	}
+	room := filepath.Dir(parent)
+	return (filepath.Base(dir) == "slot1" || filepath.Base(dir) == "slot2") && filepath.Base(parent) == "slots" && strings.HasPrefix(filepath.Base(room), "lan_") && filepath.Base(filepath.Dir(room)) == "rooms" && filepath.Base(filepath.Dir(filepath.Dir(room))) == ".pairroom"
 }

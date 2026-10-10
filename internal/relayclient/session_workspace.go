@@ -72,7 +72,7 @@ func locatorFilename(s State) string {
 // Called only with confirmed local state, under the binding's slot lock. Each
 // binding has its own file, so concurrent sessions never rewrite a shared map.
 func rememberSession(s State) error {
-	if s.Schema != 2 || s.Generation == 0 || s.SessionID == "" || !safePart(s.BindID) || !safePart(s.Room) || !s.Slot.ValidParticipant() || !filepath.IsAbs(s.Workspace) {
+	if !validStateFormat(s) || s.Generation == 0 || s.SessionID == "" || !safePart(s.BindID) || !safePart(s.Room) || !s.Slot.ValidParticipant() || !filepath.IsAbs(s.Workspace) {
 		return errors.New("cannot index an unconfirmed relay binding")
 	}
 	dir, err := locatorDirectory(nativeCaller{runtime: s.Runtime, session: s.SessionID}, true)
@@ -180,11 +180,18 @@ func indexedSessions(caller nativeCaller) ([]State, error) {
 		} else if err != nil {
 			return nil, err
 		}
-		if s.Schema != 2 || s.Runtime != caller.runtime || s.SessionID != caller.session || locatorFor(s) != loc {
+		if !validStateFormat(s) || s.Runtime != caller.runtime || s.SessionID != caller.session || locatorFor(s) != loc {
 			continue // replaced/revoked identity: never follow the new session
 		}
 		if entry.Name() != locatorFilename(s) {
 			return nil, fmt.Errorf("native session locator %s does not match its confirmed binding; inspect or remove it before retrying", path)
+		}
+		current, err := currentDirectBinding(s)
+		if err != nil {
+			return nil, err
+		}
+		if !current {
+			continue
 		}
 		states = append(states, s)
 	}
@@ -228,11 +235,21 @@ func scanMatchingSessions(root string, caller nativeCaller, passive bool) ([]Sta
 			}
 			return nil, err
 		}
-		if s.Schema != 2 || s.Generation == 0 || s.Runtime != caller.runtime || s.SessionID != caller.session {
+		if !validStateFormat(s) || s.Generation == 0 || s.Runtime != caller.runtime || s.SessionID != caller.session {
 			continue
 		}
 		if !safePart(s.Room) || !s.Slot.ValidParticipant() || !safePart(s.BindID) || !sameWorkspace(s.Workspace, root) || filepath.Clean(path) != filepath.Join(root, ".pairroom", "rooms", s.Room, "slots", string(s.Slot), "state.json") {
 			return nil, errors.New("invalid local relay binding identity")
+		}
+		current, err := currentDirectBinding(s)
+		if err != nil {
+			if passive {
+				continue // an unassociated hook must not repair private client state
+			}
+			return nil, err
+		}
+		if !current {
+			continue
 		}
 		states = append(states, s)
 	}
@@ -387,6 +404,18 @@ func resolveSessionWorkspace(ctx context.Context, action string, o *options, cal
 			return "", err
 		}
 		states = append(states, matches...)
+	}
+	if len(states) == 0 && action != "hook" {
+		meta, err := directSessionMetadata(ctx, caller)
+		if err != nil {
+			return "", err
+		}
+		if meta != nil {
+			return selectDirectWorkspace(ctx, *meta, action, o)
+		}
+	}
+	if len(states) == 0 && !o.repoExplicit && action != "hook" && strings.HasPrefix(o.room, "lan_") {
+		return directRoomWorkspace(ctx, o.room, caller)
 	}
 	if len(states) == 0 && !o.repoExplicit && action != "hook" && !(action == "unbind" && o.localOnly) {
 		states, err = discoverSessions(ctx, caller, o.endpoint)

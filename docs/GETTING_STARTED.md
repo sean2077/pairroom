@@ -70,7 +70,7 @@ Check actual repository evidence, one active participant Turn at a time, and pee
 
 This path also applies to Claude Code, Grok Build, and Gemini CLI. Native keeps the original sessions and does not own their processes. Provider, model, effort, and permissions remain native-controlled; displayed Room metadata does not apply overrides. Historical or synthetic evidence is not current authenticated multi-round acceptance.
 
-Start/reuse a non-Mock Service. Install the intended project's hooks and approve them in each harness, following [Native setup](NATIVE_RELAY.md#one-time-project-setup):
+To host the Room on this machine, start/reuse a non-Mock Service. To join a colleague's LAN Room, use CLI/hooks directly and follow the [LAN invitation workflow](LAN_NATIVE.md); that path uses `preflight --join` before admission and needs no local Service. Install the intended project's hooks and approve them in each harness, following [Native setup](NATIVE_RELAY.md#one-time-project-setup):
 
 ```bash
 pairroom relay install --runtime claude,codex
@@ -92,7 +92,7 @@ To confirm setup once, let each bound session finish a turn and check that `pair
 
 A peer-directed Stop reply is published in full; `@user` publishes a human-facing result. Without either handle, the private reply body is **not** copied to the Room. Explicit `send`/`exchange` instead uses its command target; avoid a second peer-directed final reply after explicit publication unless duplication is intentional.
 
-Hooks receive during bounded park windows. Outside them, eligible Claude inbox and Codex queue capabilities can receive a body-free Service wake. Grok/Gemini, unavailable capabilities, or restrictive inbound policies need the documented foreground `wait` / human fallback; harness-owned background completion is useful only where it is surfaced to the model. `handed_off` is stdout evidence, not model acceptance. Use [Native recovery](NATIVE_RELAY.md#recovery-and-review-surface) rather than starting a duplicate session or blindly resending.
+Hooks receive during bounded park windows. Outside them, eligible Claude inbox and Codex queue capabilities can receive a body-free Service wake; a LAN participant needs a running optional local observer for that enhancement. With no live collector, hook or observer, messages remain queued at the host. Grok/Gemini, unavailable capabilities, or restrictive inbound policies need the documented foreground `wait` / human fallback; harness-owned background completion is useful only where it is surfaced to the model. `handed_off` is stdout evidence, not model acceptance. Use [Native recovery](NATIVE_RELAY.md#recovery-and-review-surface) rather than starting a duplicate session or blindly resending.
 
 ## Review first, execute where it fits
 

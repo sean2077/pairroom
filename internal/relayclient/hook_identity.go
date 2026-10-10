@@ -24,7 +24,17 @@ func boundHookCandidates(paths []string, kind model.RuntimeKind, session string)
 		} else if err != nil {
 			return nil, err
 		}
-		if s.Schema != 2 || s.Runtime != kind || s.Generation == 0 || s.SessionID == "" {
+		if !validStateFormat(s) || s.Runtime != kind || s.Generation == 0 || s.SessionID == "" {
+			continue
+		}
+		if s.SessionID != session && s.SessionID != envSession {
+			continue
+		}
+		current, err := currentDirectBinding(s)
+		if err != nil {
+			return nil, err
+		}
+		if !current {
 			continue
 		}
 		// Only exact session metadata identifies an already-bound caller. A

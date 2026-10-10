@@ -162,6 +162,7 @@ PairRoom passes that exact, unique `optionId` to ACP. `cancel` returns ACP's can
 The following method/path patterns are extracted from production HTTP registrations in `internal/server/` and `internal/service/`, including named constants. Test URLs, query examples, and rejected path-traversal inputs are not API routes. Patterns without a method are the same-origin surface gateway; their allowed operations are enforced by its handler.
 
 <!-- generated:routes -->
+
 - `/api/v1/rooms/{room}/surface`
 - `/api/v1/rooms/{room}/surface/{path...}`
 - `DELETE /api/v1/agent-pair-profiles/{profile}`
@@ -198,7 +199,6 @@ The following method/path patterns are extracted from production HTTP registrati
 - `POST /api/v1/approvals/{id}`
 - `POST /api/v1/attachments`
 - `POST /api/v1/diagnostics`
-- `POST /api/v1/lan/join`
 - `POST /api/v1/lan/joined/{room}/{action}`
 - `POST /api/v1/maintenance/room-deletions/retry`
 - `POST /api/v1/messages`
@@ -224,6 +224,7 @@ The following method/path patterns are extracted from production HTTP registrati
 - `PUT /api/v1/lan`
 - `PUT /api/v1/participants/{actor}/permissions`
 - `PUT /api/v1/settings`
+
 <!-- /generated:routes -->
 
 ## Client compatibility principles
@@ -311,7 +312,7 @@ identifies the observation independently of the bounded chat snapshot.
 
 ## Native LAN collaboration
 
-The local Management API owns listener settings, explicit shared-Room creation, and the human owner's controls. All routes in the following tables retain local Management bearer or browser-session/CSRF authentication. A relay setup credential may request a local guest join or create a Native Room through its existing scoped setup path; it cannot change the LAN listener or operate the joined human view. The workflow is documented in [Native LAN collaboration](LAN_NATIVE.md).
+The local Management API owns listener settings, explicit shared-Room creation, and the human owner's controls. All routes in the following tables retain local Management bearer or browser-session/CSRF authentication. A relay setup credential may create a Native Room through its existing scoped setup path; it cannot change the LAN listener or operate the joined human view. Guest admission is a direct CLI operation and uses no local setup credential or Management join endpoint. The workflow is documented in [Native LAN collaboration](LAN_NATIVE.md).
 
 | Method/path | Request and result |
 |---|---|
@@ -328,15 +329,15 @@ Shared creation adds `sharing:"lan"`, `owner_slot:"slot1"|"slot2"`, and only tha
 
 | Method/path | Request and result |
 |---|---|
-| `POST /api/v1/lan/join` | Native CLI setup request carrying the public invitation and local binding metadata; returns a pending receipt or confirmed local association |
-| `GET /api/v1/lan/joined` | `{rooms:[...]}` local guest registrations; the same summaries appear in `GET /api/v1/service` as `joined_rooms` |
+| `GET /api/v1/lan/joined` | `{rooms:[...]}` optional projection of this OS user's bounded direct-client catalog; the same summaries appear in `GET /api/v1/service` as `joined_rooms` |
 | `POST /api/v1/lan/joined/{room}/summary` | `{}` returns the remote Room's body-free relay summary |
 | `POST /api/v1/lan/joined/{room}/history` | `{id?,cursor?,limit?,pending?,since?}` returns a bounded relay history page |
 | `POST /api/v1/lan/joined/{room}/send` | `{id,to,text,attachment_ids?,quote_id?}` publishes as the authenticated joined human; the host derives author provenance |
 | `POST /api/v1/lan/joined/{room}/receipt` | `{id}` returns `{accepted,message?}` for the original joined-human publication ID |
 | `GET /api/v1/lan/joined/{room}/attachments/{attachment}` | Authorize against the host and validate shared metadata/bytes before downloading, including cached files |
 | `POST /api/v1/lan/joined/{room}/leave` | `{}` ends membership and clears its local active registration after the host response; already denied membership can also be left locally |
+| `POST /api/v1/lan/joined/{room}/detach` | `{}` explicitly retires an accepted or pending local client association and its observer without contacting the host; does not claim that the remote request or membership was revoked |
 
-Guest route IDs are local opaque identifiers derived from host identity and remote Room ID, not a second authoritative Room. Summaries carry `{id,remote_room_id,name,workspace,slot,runtime,status,connected,last_seen,host_pin,endpoint,generation}` without private keys, relay credentials, or native transcript/session paths. The workspace is the guest's own local path. `connected` describes transport observation, not native collector presence or model acceptance. A lost human publication response retains the original ID and immutable payload; checking its receipt does not publish again. An identical explicit retry returns the original receipt, while changed content under that ID is rejected.
+These guest routes are an optional local dashboard over the same per-user client store used by the CLI. Direct `join`, `send`, `wait`, `exchange` and hooks do not use these routes or require a local Service. Guest route IDs are local opaque identifiers derived from host identity and remote Room ID, not a second authoritative Room. Summaries carry `{id,remote_room_id,name,workspace,slot,runtime,status,connected,last_seen,host_pin,endpoint,generation}` without private keys, relay credentials, or native transcript/session paths. The workspace is the guest's own local path. `connected` describes this optional Service's latest transport observation, and `last_seen` is its last observed successful host contact; zero means none was observed. Saved admission alone proves neither present reachability nor collector/model activity. A lost human publication response retains the original ID and immutable payload; checking its receipt does not publish again. An identical explicit retry returns the original receipt, while changed content under that ID is rejected.
 
-The separate TLS listener implements only the fixed Native membership protocol; use the CLI/local Service bridge rather than opening it in a browser. Invitations pin the host key. A per-Room client certificate identifies the guest, and each admitted operation rechecks its bound slot, public key, bind ID and generation. It exposes no Management, workspace browsing, provider, process, approval or arbitrary proxy route. Shared human messages carry `author:"host_owner"` or `author:"lan:<fingerprint>"`; both owners can see `@user` publications. Native session IDs/transcript paths remain local. Evidence messages contain attachment IDs, filenames, media types, lengths and hashes; the receiver explicitly downloads bytes without treating them as permission to run a script.
+The separate TLS listener implements only the fixed Native membership protocol; guest CLI/hooks call it directly with the identity retained for that binding. It is not a browser Management endpoint. Invitations pin the host key. A per-Room client certificate identifies the guest, and each admitted operation rechecks its bound slot, public key, bind ID and generation. It exposes no Management, workspace browsing, provider, process, approval or arbitrary proxy route. Shared human messages carry `author:"host_owner"` or `author:"lan:<fingerprint>"`; both owners can see `@user` publications. Native session IDs/transcript paths remain local. Evidence messages contain attachment IDs, filenames, media types, lengths and hashes; the receiver explicitly downloads bytes without treating them as permission to run a script.

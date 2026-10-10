@@ -81,7 +81,7 @@ jobs:
       - name: Verify actual Go toolchain
         run: python scripts/check_go_versions.py minimum go.mod
       - name: Test native configuration, private LAN identities, Event Log, and daemon behavior
-        run: go test -count=1 ./internal/config ./internal/store ./internal/bus ./internal/daemon ./internal/relay ./internal/relayclient ./internal/claudewake ./internal/review ./internal/lanshare ./internal/privatefile ./internal/attachment
+        run: go test -count=1 ./internal/config ./internal/store ./internal/bus ./internal/daemon ./internal/relay ./internal/relayclient ./internal/claudewake ./internal/review ./internal/lanshare ./internal/lanclient ./internal/nativeidentity ./internal/privatelock ./internal/privatefile ./internal/attachment
       - name: Test adapter lifecycle, protocol, environment, and credential boundaries
         run: go test -count=1 ./internal/agent
       - name: Repeat blocked stdin cancellation on real pipes and child processes

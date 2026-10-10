@@ -246,6 +246,18 @@ func TestPreflightDetectsAnExistingBinding(t *testing.T) {
 	}
 }
 
+func TestPreflightJoinFromLocalBindingRequiresSeparateSessionWithoutServiceIO(t *testing.T) {
+	f := newPreflightFixture(t, "v"+version.Current, activeNativeRoom())
+	if err := editHooks(f.root, model.RuntimeClaude, false); err != nil {
+		t.Fatal(err)
+	}
+	callerState(t, f.root, "room1", "preflight-session", model.ActorSlot1, model.RuntimeClaude)
+	report, raw, err := runPreflightJSON(t, options{repo: f.root, joinCheck: true})
+	if !errors.Is(err, errPreflightNotReady) || report.Ready || report.Mode != "lan_join" || !strings.Contains(report.Service.Hint, "separate native session") || *f.requests != 0 {
+		t.Fatalf("join preflight followed an existing local Service: %s, %v, requests=%d", raw, err, *f.requests)
+	}
+}
+
 func TestPreflightIsReadOnly(t *testing.T) {
 	f := newPreflightFixture(t, "v"+version.Current, nil)
 	before := preflightTree(t, f.root)
@@ -410,5 +422,50 @@ func TestPreflightRejectsExplicitRuntimeConflictWithoutMutation(t *testing.T) {
 	}
 	if *f.requests != 1 {
 		t.Fatalf("preflight made %d requests, want one read", *f.requests)
+	}
+}
+
+func TestPreflightJoinNeedsNoLocalServiceAndDoesNotReadItsEndpoint(t *testing.T) {
+	f := newPreflightFixture(t, "v"+version.Current, nil)
+	if err := editHooks(f.root, model.RuntimeClaude, false); err != nil {
+		t.Fatal(err)
+	}
+	path, err := defaultEndpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A stale or corrupt local Service file must be irrelevant to a guest.
+	if err := os.WriteFile(path, []byte("unrelated broken local endpoint"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := preflightTree(t, f.root)
+	report, raw, err := runPreflightJSON(t, options{repo: f.root, joinCheck: true})
+	if err != nil || !report.Ready || report.Mode != "lan_join" || report.Service.Status != "not_required" || report.Service.EndpointPath != "" {
+		t.Fatalf("direct guest preflight required a Service: %s, %v", raw, err)
+	}
+	if *f.requests != 0 || !strings.Contains(strings.Join(report.NextSteps, "\n"), "relay join") {
+		t.Fatalf("guest preflight contacted local Service or suggested local bind: %s", raw)
+	}
+	if after := preflightTree(t, f.root); strings.Join(after, "\n") != strings.Join(before, "\n") {
+		t.Fatal("guest preflight changed workspace or created a binding")
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "unrelated broken local endpoint" {
+		t.Fatal("guest preflight repaired or replaced an unrelated endpoint")
+	}
+}
+
+func TestPreflightJoinFlagRejectsConflictingTargetsBeforeIO(t *testing.T) {
+	for _, args := range [][]string{
+		{"preflight", "--join", "--service-file", "missing.json"},
+		{"send", "--join"},
+		{"join", "pairroom://join/invalid", "--service-file", "missing.json"},
+	} {
+		var output bytes.Buffer
+		if err := Run(context.Background(), args, strings.NewReader(""), &output, &output); err == nil || strings.Contains(err.Error(), "workspace") {
+			t.Fatalf("conflicting target reached discovery: %v: %v", args, err)
+		}
 	}
 }

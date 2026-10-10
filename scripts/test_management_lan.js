@@ -95,6 +95,21 @@ async function main() {
   }
   {
     const f = fixture();
+    f.client.openJoined({ id: 'lan_pending', name: 'Pending admission', status: 'pending', connected: false, endpoint: 'https://192.168.1.2:8877' });
+    await flush();
+    assert.equal(f.writes.length, 0, 'opening a pending association must not read the host inbox');
+    assert.equal(f.button('room.lan.leave').hidden, true, 'pending admission cannot promise a confirmed remote leave');
+    assert.equal(f.button('room.lan.detach').hidden, false);
+    await f.button('room.lan.detach').click();
+    assert.equal(f.writes.length, 0, 'local detach needs its explicit confirmation');
+    assert.equal(f.confirmations.length, 1);
+    assert.equal(f.confirmations[0].message, 'room.lan.detachHelp');
+    await f.confirmations[0].action();
+    assert.deepEqual(f.writes, [{ path: '/api/v1/lan/joined/lan_pending/detach', method: 'POST', body: {} }]);
+    assert.equal(f.get('lan-room-dialog').open, false);
+  }
+  {
+    const f = fixture();
     let first = true, accepted;
     f.setHandler(request => {
       if (request.path.endsWith('/history')) return { messages: [] };
@@ -122,6 +137,6 @@ async function main() {
     assert.deepEqual(sends[1].body, sends[0].body, 'an explicit retry retains the exact client ID, body and target');
     assert.equal(f.storage.size, 0);
   }
-  console.log('LAN UI: explicit trusted receipts, single invite issuance, safe descriptors, session isolation and original-ID publication recovery: ok');
+  console.log('LAN UI: explicit trusted receipts, single invite issuance, safe descriptors, session isolation, pending local detach and original-ID publication recovery: ok');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

@@ -97,6 +97,14 @@ PairRoom does not own native processes. Owner Turn is advisory, not a workspace 
 
 ### Automatic idle-peer wake
 
+For a direct LAN participant, these external wake effects require an optional
+Service observer running on that participant's machine. The observer uses the
+same private client record as CLI/hooks, reserves permission at the host, and
+saves a local spent receipt before the effect. An absent or stopped observer
+does not prevent direct foreground/tracked `wait`, `exchange` or bounded Stop
+collection. With no live collector, hook or observer, input stays queued at the
+host; the host cannot start or nudge a remote native process on its own.
+
 A wake-enabled Room (default on; changeable only at an idle Room boundary through Management, never with relay credentials) may nudge an existing Claude Code or Codex session after a durably queued input. Delivering/unknown work must be reconciled before changing this setting. Runtime wake policy defines the supported transport and the observation that releases an outstanding wake: Claude uses its captured inbox, Codex uses `codex queue`, and other or missing runtime identities have no external wake capability. The Service selects an implemented transport handler before reservation; a transport without a handler is suppressed without borrowing another runtime's command. Only the immutable Room runtime selection identifies that capability; the binding's displayed runtime is a projection, and wake never guesses a runtime from the slot number.
 
 One burst produces at most one fixed body-free nudge after a two-second grace, rate-limited per Room (minimum interval 60 s per receiver, shared Room hourly cap 10), durably reserved by transport message ID before the effect and never automatically retried. An attempted message is never nudged again, including after restart or an unknown outcome. The oldest unattempted input after the newest attempted queue entry is the next candidate even while that attempted entry remains uncollected. Outstanding-wake and rate rules defer this candidate rather than hide it from maintenance; a later attempt always reserves the new message ID. The reservation rechecks the current binding generation, runtime policy, queue and live collectors under the Engine lock. A foreground/park collector or in-flight delivery suppresses wake; a collector arriving after reservation may make one nudge redundant. The FIFO alone determines message delivery.

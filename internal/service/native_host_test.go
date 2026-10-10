@@ -67,6 +67,11 @@ func nativeHTTPWith(t *testing.T, wakeConfig nativeWakerConfig, notifier *Notifi
 	}
 	server := httptest.NewServer(management.Handler())
 	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := management.Shutdown(stopCtx); err != nil {
+			t.Errorf("stop native fixture Management: %v", err)
+		}
+		stopCancel()
 		server.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()

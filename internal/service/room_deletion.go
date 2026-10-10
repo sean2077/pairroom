@@ -13,6 +13,9 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/nativeidentity"
 )
 
 var (
@@ -122,11 +125,12 @@ func (r *Registry) roomDeletionQuarantine(create bool) (bool, error) {
 }
 
 type roomDeletionIntent struct {
-	Schema     int       `json:"schema"`
-	RoomID     string    `json:"room_id"`
-	ProjectID  string    `json:"project_id"`
-	SourceBase string    `json:"source_base"`
-	CreatedAt  time.Time `json:"created_at"`
+	Schema       int                    `json:"schema"`
+	RoomID       string                 `json:"room_id"`
+	ProjectID    string                 `json:"project_id"`
+	SourceBase   string                 `json:"source_base"`
+	CreatedAt    time.Time              `json:"created_at"`
+	NativeClaims []nativeidentity.Claim `json:"native_claims,omitempty"`
 }
 
 type roomDeletionCommit struct {
@@ -287,10 +291,19 @@ func (r *Registry) RemoveRoom(ctx context.Context, roomID string) (RoomRemovalRe
 		}
 		return RoomRemovalResult{}, fmt.Errorf("persist Room %s removal: %w", room.ID, checkpointErr)
 	}
+	identityErr := r.releaseNativeIdentitiesLocked(ctx, room)
 	r.mu.Unlock()
 
 	result := RoomRemovalResult{RoomID: room.ID, ProjectID: room.ProjectID, DataDisposition: disposition}
+	if identityErr != nil {
+		result.CleanupDiagnostic = "Room removed but native session reservation requires reconciliation: " + identityErr.Error()
+	}
 	if staged != nil {
+		if identityErr != nil {
+			result.DataDisposition = RoomDataCleanupPending
+			r.setRoomDeletionCleanupDiagnostic(result.CleanupDiagnostic)
+			return result, nil
+		}
 		markerErr := r.markStagedManagedRoomCommitted(staged)
 		cleanupErr := r.deleteStagedManagedRoom(staged)
 		if cleanupErr != nil {
@@ -334,13 +347,20 @@ func (r *Registry) managedRoomPath(dataDir string) (bool, error) {
 func (r *Registry) stageManagedRoom(ctx context.Context, room Room) (*stagedManagedRoom, RoomDataDisposition, error) {
 	source := filepath.Clean(room.DataDir)
 	info, err := r.roomDeletionFS.lstat(source)
-	if errors.Is(err, os.ErrNotExist) {
+	missing := errors.Is(err, os.ErrNotExist)
+	var claims []nativeidentity.Claim
+	for _, slot := range model.SlotActors() {
+		if claim, ok := r.nativeClaims[nativeClaimKey(room.ID, slot)]; ok {
+			claims = append(claims, claim)
+		}
+	}
+	if missing && len(claims) == 0 {
 		return nil, RoomDataAlreadyMissing, nil
 	}
-	if err != nil {
+	if err != nil && !missing {
 		return nil, "", fmt.Errorf("inspect managed Room %s data: %w", room.ID, err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+	if !missing && (info.Mode()&os.ModeSymlink != 0 || !info.IsDir()) {
 		return nil, "", fmt.Errorf("managed Room %s data path is not a real directory: %s", room.ID, source)
 	}
 	if _, err := r.roomDeletionQuarantine(true); err != nil {
@@ -354,12 +374,20 @@ func (r *Registry) stageManagedRoom(ctx context.Context, room Room) (*stagedMana
 		source: source, container: container, data: filepath.Join(container, roomDeletionDataName),
 		intent: roomDeletionIntent{
 			Schema: roomDeletionManifestSchema, RoomID: room.ID, ProjectID: room.ProjectID,
-			SourceBase: filepath.Base(source), CreatedAt: r.now(),
+			SourceBase: filepath.Base(source), CreatedAt: r.now(), NativeClaims: claims,
 		},
 	}
 	if err := writeDurableJSONExclusive(filepath.Join(container, roomDeletionIntentName), staged.intent); err != nil {
 		_ = r.roomDeletionFS.removeAll(container)
 		return nil, "", fmt.Errorf("write Room %s deletion intent: %w", room.ID, err)
+	}
+	if missing {
+		// Even without Room files, retain an exact release intent until the
+		// removal checkpoint and per-user native ownership agree durably.
+		if err := errors.Join(ctx.Err(), syncDir(r.deletedRoomsRoot)); err != nil {
+			return nil, "", r.rollbackFailedRoomStaging(staged, err)
+		}
+		return staged, RoomDataAlreadyMissing, nil
 	}
 	if err := r.roomDeletionFS.rename(source, staged.data); err != nil {
 		_ = r.roomDeletionFS.removeAll(container)
@@ -543,6 +571,16 @@ func validateDeletionIntent(intent roomDeletionIntent) error {
 	if intent.CreatedAt.IsZero() {
 		return errors.New("creation time is required")
 	}
+	if len(intent.NativeClaims) > 2 {
+		return errors.New("invalid native deletion claims")
+	}
+	seen := map[string]bool{}
+	for _, claim := range intent.NativeClaims {
+		if !claim.Valid() || !strings.HasPrefix(claim.Association, "host:") || seen[claim.Association] {
+			return errors.New("invalid native deletion claim")
+		}
+		seen[claim.Association] = true
+	}
 	return nil
 }
 
@@ -611,25 +649,33 @@ func (r *Registry) inspectDeletionEntry(entry os.DirEntry) (inspectedDeletionEnt
 		known[child.Name()] = true
 	}
 	state.data = filepath.Join(state.path, roomDeletionDataName)
-	if !known[roomDeletionDataName] {
+	if known[roomDeletionDataName] {
+		dataInfo, err := r.roomDeletionFS.lstat(state.data)
+		if err != nil {
+			return state, fmt.Errorf("inspect quarantined data: %w", err)
+		}
+		if dataInfo.Mode()&os.ModeSymlink != 0 || !dataInfo.IsDir() {
+			return state, errors.New("quarantined data is not a real directory")
+		}
+		state.hasData = true
+		if !known[roomDeletionIntentName] {
+			return state, errors.New("quarantined Room data has no deletion intent")
+		}
+	} else if !known[roomDeletionIntentName] {
 		return state, nil
 	}
-	dataInfo, err := r.roomDeletionFS.lstat(state.data)
-	if err != nil {
-		return state, fmt.Errorf("inspect quarantined data: %w", err)
-	}
-	if dataInfo.Mode()&os.ModeSymlink != 0 || !dataInfo.IsDir() {
-		return state, errors.New("quarantined data is not a real directory")
-	}
-	state.hasData = true
-	if !known[roomDeletionIntentName] {
-		return state, errors.New("quarantined Room data has no deletion intent")
-	}
+	// A metadata-only intent can still own a pending native session release.
+	// Read it before deciding the container is disposable recovery metadata.
 	if err := decodeStrictJSON(filepath.Join(state.path, roomDeletionIntentName), &state.intent); err != nil {
 		return state, fmt.Errorf("decode deletion intent: %w", err)
 	}
 	if err := validateDeletionIntent(state.intent); err != nil {
 		return state, fmt.Errorf("validate deletion intent: %w", err)
+	}
+	for _, claim := range state.intent.NativeClaims {
+		if claim.Association != nativeidentity.Hosted(r.root, state.intent.RoomID, model.ActorSlot1) && claim.Association != nativeidentity.Hosted(r.root, state.intent.RoomID, model.ActorSlot2) {
+			return state, errors.New("native deletion claim belongs to another Room")
+		}
 	}
 	if known[roomDeletionCommittedName] {
 		var commit roomDeletionCommit
@@ -664,6 +710,15 @@ func (r *Registry) classifyQuarantinedRoomFacts(ctx context.Context, state inspe
 func (r *Registry) verifyQuarantinedRoomFacts(ctx context.Context, state inspectedDeletionEntry) error {
 	_, err := r.classifyQuarantinedRoomFacts(ctx, state)
 	return err
+}
+
+func (r *Registry) releaseDeletionNativeClaims(ctx context.Context, intent roomDeletionIntent) error {
+	for _, claim := range intent.NativeClaims {
+		if _, err := r.identities.ReleaseIfHeld(ctx, claim); err != nil {
+			return err
+		}
+	}
+	return r.releaseNativeIdentitiesLocked(ctx, Room{ID: intent.RoomID})
 }
 
 func (r *Registry) recoverMissingArchivedRoomsFromCheckpoint() error {
@@ -770,15 +825,17 @@ func (r *Registry) recoverRoomDeletionQuarantine(ctx context.Context) error {
 			fatal = append(fatal, fmt.Errorf("quarantine %s: %w", entry.Name(), inspectErr))
 			continue
 		}
-		if !state.hasData {
+		if !state.hasData && len(state.intent.NativeClaims) == 0 {
 			if removeErr := r.removeMetadataOnlyDeletionContainer(state.path); removeErr != nil {
 				cleanupFailures = append(cleanupFailures, fmt.Sprintf("%s: %v", state.name, removeErr))
 			}
 			continue
 		}
-		if verifyErr := r.verifyQuarantinedRoomFacts(ctx, state); verifyErr != nil {
-			fatal = append(fatal, fmt.Errorf("quarantine %s: %w", state.name, verifyErr))
-			continue
+		if state.hasData {
+			if verifyErr := r.verifyQuarantinedRoomFacts(ctx, state); verifyErr != nil {
+				fatal = append(fatal, fmt.Errorf("quarantine %s: %w", state.name, verifyErr))
+				continue
+			}
 		}
 
 		deleteData := state.committed
@@ -796,8 +853,20 @@ func (r *Registry) recoverRoomDeletionQuarantine(ctx context.Context) error {
 		}
 
 		if deleteData {
+			if err := r.releaseDeletionNativeClaims(ctx, state.intent); err != nil {
+				cleanupFailures = append(cleanupFailures, fmt.Sprintf("%s native identity: %v", state.name, err))
+				continue
+			}
 			if removeErr := r.roomDeletionFS.removeAll(state.path); removeErr != nil {
 				cleanupFailures = append(cleanupFailures, fmt.Sprintf("%s: %v", state.name, removeErr))
+			}
+			continue
+		}
+		if !state.hasData {
+			if !checkpointTrusted {
+				fatal = append(fatal, fmt.Errorf("quarantine %s: native release requires a trusted checkpoint before recovery", state.name))
+			} else if err := r.removeMetadataOnlyDeletionContainer(state.path); err != nil {
+				cleanupFailures = append(cleanupFailures, fmt.Sprintf("%s: %v", state.name, err))
 			}
 			continue
 		}
@@ -845,15 +914,17 @@ func (r *Registry) retryRoomDeletionCleanup(ctx context.Context) {
 			failures = append(failures, fmt.Sprintf("%s: %v", entry.Name(), inspectErr))
 			continue
 		}
-		if !state.hasData {
+		if !state.hasData && len(state.intent.NativeClaims) == 0 {
 			if err := r.removeMetadataOnlyDeletionContainer(state.path); err != nil {
 				failures = append(failures, fmt.Sprintf("%s: %v", state.name, err))
 			}
 			continue
 		}
-		if err := r.verifyQuarantinedRoomFacts(ctx, state); err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", state.name, err))
-			continue
+		if state.hasData {
+			if err := r.verifyQuarantinedRoomFacts(ctx, state); err != nil {
+				failures = append(failures, fmt.Sprintf("%s: %v", state.name, err))
+				continue
+			}
 		}
 		r.mu.RLock()
 		_, roomStillOwned := r.rooms[state.intent.RoomID]
@@ -865,6 +936,10 @@ func (r *Registry) retryRoomDeletionCleanup(ctx context.Context) {
 				reason = "prepared deletion is retained while the Registry is fail-closed"
 			}
 			failures = append(failures, fmt.Sprintf("%s: %s", state.name, reason))
+			continue
+		}
+		if err := r.releaseDeletionNativeClaims(ctx, state.intent); err != nil {
+			failures = append(failures, fmt.Sprintf("%s native identity: %v", state.name, err))
 			continue
 		}
 		if err := r.roomDeletionFS.removeAll(state.path); err != nil {

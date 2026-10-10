@@ -1019,7 +1019,7 @@ func scopedRelaySetupRoute(method, path string) bool {
 	switch {
 	case method == http.MethodGet && (path == "/api/v1/service" || path == "/api/v1/agent-pair-profiles" || path == "/api/v1/agent-catalog"):
 		return true
-	case method == http.MethodPost && (path == "/api/v1/projects" || path == "/api/v1/lan/join"):
+	case method == http.MethodPost && path == "/api/v1/projects":
 		return true
 	}
 	if rest, ok := strings.CutPrefix(path, "/api/v1/projects/"); ok && method == http.MethodPost {

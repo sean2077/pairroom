@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/nativeidentity"
 	"github.com/sean2077/pairroom/internal/relay"
 	"github.com/sean2077/pairroom/internal/version"
 )
@@ -38,12 +39,14 @@ type RegistryConfig struct {
 	Root     string
 	Resolver *ProjectResolver
 	Now      func() time.Time
+	// NativeIdentityRoot injects an isolated coordination store in tests.
+	// Production uses the per-user store shared by all local Services/clients.
+	NativeIdentityRoot string
 }
 
 type Registry struct {
-	joinedIdentityCheck func(string, model.ActorID, model.RuntimeKind, string) error
-	mu                  sync.RWMutex
-	provisionMu         sync.Mutex
+	mu          sync.RWMutex
+	provisionMu sync.Mutex
 
 	root             string
 	roomsRoot        string
@@ -57,6 +60,9 @@ type Registry struct {
 	rooms         map[string]Room
 	bindingOwners map[string]string
 	poisoned      error
+	identities    *nativeidentity.Store
+	nativeClaims  map[string]nativeidentity.Claim
+	nativeRetired map[nativeidentity.Claim]struct{}
 
 	roomDeletionFS                roomDeletionFS
 	roomDeletionCleanupDiagnostic string
@@ -86,6 +92,16 @@ func OpenRegistry(ctx context.Context, cfg RegistryConfig) (*Registry, error) {
 	if err != nil {
 		return nil, err
 	}
+	identities, err := nativeidentity.Open()
+	if cfg.NativeIdentityRoot != "" {
+		identities, err = nativeidentity.OpenAt(cfg.NativeIdentityRoot)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := identities.Validate(ctx); err != nil {
+		return nil, fmt.Errorf("unsupported or invalid native identity state; data was not modified: %w", err)
+	}
 	if err := preflightRegistryRoot(root); err != nil {
 		return nil, err
 	}
@@ -110,6 +126,9 @@ func OpenRegistry(ctx context.Context, cfg RegistryConfig) (*Registry, error) {
 		projectByRoot:    make(map[string]string),
 		rooms:            make(map[string]Room),
 		bindingOwners:    make(map[string]string),
+		identities:       identities,
+		nativeClaims:     make(map[string]nativeidentity.Claim),
+		nativeRetired:    make(map[nativeidentity.Claim]struct{}),
 		roomDeletionFS:   defaultRoomDeletionFS(),
 	}
 	// Validate a current checkpoint before creating a root/rooms directory or
@@ -143,6 +162,9 @@ func OpenRegistry(ctx context.Context, cfg RegistryConfig) (*Registry, error) {
 		return nil, fmt.Errorf("recover archived Rooms with missing data: %w", err)
 	}
 	if err := registry.scanRooms(ctx); err != nil {
+		return nil, err
+	}
+	if err := registry.reserveNativeIdentities(ctx); err != nil {
 		return nil, err
 	}
 	registry.refreshProjectAvailability(ctx)
@@ -717,6 +739,7 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 	var provisioned *roomProvisionedPayload
 	materializedBindings := make(map[model.ActorID]Binding, 2)
 	nativeBindings := make(map[model.ActorID]relay.Binding, 2)
+	var retiredNativeBindings []relay.Binding
 	var meta model.RoomMeta
 	var lifecycle = RoomActive
 	var renamed string
@@ -846,6 +869,9 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 			prior := nativeBindings[b.Slot]
 			if b.Generation < prior.Generation || (b.Generation == prior.Generation && prior.BindID != "" && b.BindID != prior.BindID) {
 				return Room{}, Project{}, false, errors.New("native binding generation regressed")
+			}
+			if prior.Active && (prior.SessionID != b.SessionID || prior.BindID != b.BindID || prior.Generation != b.Generation || !b.Active) {
+				retiredNativeBindings = append(retiredNativeBindings, prior)
 			}
 			nativeBindings[b.Slot] = b
 		case EventRoomBindingMaterialized:
@@ -1008,6 +1034,18 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 	}
 	if err := room.Validate(); err != nil {
 		return Room{}, Project{}, false, err
+	}
+	for slot, b := range nativeBindings {
+		if c := r.nativeIdentityClaim(room, b); c != nil {
+			r.nativeClaims[nativeClaimKey(room.ID, slot)] = *c
+		}
+	}
+	for _, b := range retiredNativeBindings {
+		if claim := r.nativeIdentityClaim(room, b); claim != nil {
+			if current, ok := r.nativeClaims[nativeClaimKey(room.ID, b.Slot)]; !ok || current != *claim {
+				r.nativeRetired[*claim] = struct{}{}
+			}
+		}
 	}
 	return room, payload.Project, true, nil
 }

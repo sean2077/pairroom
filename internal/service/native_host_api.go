@@ -100,9 +100,6 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 		nativeResult(w, nil, relay.ErrAuth)
 		return
 	}
-	if s.serveLANJoinedRelay(w, r, auth) {
-		return
-	}
 	durable, ok := s.registry.Room(r.PathValue("room"))
 	if !ok || durable.HostMode != model.HostNative || durable.Archived() {
 		nativeResult(w, nil, relay.ErrAuth)

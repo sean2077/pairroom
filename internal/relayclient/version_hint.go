@@ -35,6 +35,15 @@ type serviceObservation struct {
 	// explains: an unknown route/operation, a request shape the strict decoder
 	// refuses, or an authentication format it does not accept.
 	rejected bool
+	direct   bool
+}
+
+func noteLANTransport(ctx context.Context) {
+	if observed := observationFrom(ctx); observed != nil {
+		observed.mu.Lock()
+		observed.direct = true
+		observed.mu.Unlock()
+	}
 }
 
 // Binding lookups that an older or newer CLI resolves differently. They fail
@@ -105,7 +114,7 @@ func (o *serviceObservation) skewShapedLocked(err error) bool {
 func (o *serviceObservation) needsProbe(err error) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.release == "" && o.skewShapedLocked(err)
+	return !o.direct && o.release == "" && o.skewShapedLocked(err)
 }
 
 func (o *serviceObservation) endpointPath() string {

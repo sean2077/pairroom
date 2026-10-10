@@ -127,14 +127,21 @@ func applyCallerDefaults(root, action string, o *options) error {
 		if err := readPrivate(path, &s); err != nil {
 			return err
 		}
-		if s.Schema != 2 || s.Generation == 0 || s.SessionID != caller.session || s.Runtime != caller.runtime {
+		if !validStateFormat(s) || s.Generation == 0 || s.SessionID != caller.session || s.Runtime != caller.runtime {
+			continue
+		}
+		if !safePart(s.Room) || !s.Slot.ValidParticipant() || filepath.Base(filepath.Dir(path)) != string(s.Slot) || filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(path)))) != s.Room {
+			return errors.New("invalid local relay binding identity")
+		}
+		current, err := currentDirectBinding(s)
+		if err != nil {
+			return err
+		}
+		if !current {
 			continue
 		}
 		if action == "bind" && o.create {
 			return errors.New("this native session is already associated; use pairroom relay bind to resume it, not bind --create")
-		}
-		if !safePart(s.Room) || !s.Slot.ValidParticipant() || filepath.Base(filepath.Dir(path)) != string(s.Slot) || filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(path)))) != s.Room {
-			return errors.New("invalid local relay binding identity")
 		}
 		if (o.room != "" && o.room != s.Room) || (o.slot != "" && o.slot != string(s.Slot)) {
 			continue
