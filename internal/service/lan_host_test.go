@@ -86,12 +86,32 @@ func newLANHostFixture(t *testing.T) *lanHostFixture {
 	}
 	f := &lanHostFixture{management: s, local: local, remote: remote, room: room, native: n, owner: owner}
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = s.Shutdown(ctx)
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.Shutdown(stopCtx); err != nil {
+			t.Errorf("stop LAN fixture Service: %v", err)
+		}
+		stopCancel()
 		remote.Close()
 		local.Close()
-		_ = manager.Shutdown(ctx)
+		// Fault tests deliberately leave claimed input without an ACK. Normal
+		// manager shutdown preserves that busy runtime, so teardown must close
+		// its current test-owned instance explicitly. This persists unknown
+		// receipts and closes the Event Log without inventing collector stdout.
+		// Resolve the current instance because a test may have reopened it.
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if current, err := manager.runtimeForCompletion(room.ID); err == nil {
+			if err := current.Close(closeCtx); err != nil {
+				t.Errorf("close LAN fixture runtime: %v", err)
+			}
+		} else if !errors.Is(err, ErrRuntimeNotReady) {
+			t.Errorf("resolve LAN fixture runtime during cleanup: %v", err)
+		}
+		closeCancel()
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer drainCancel()
+		if err := manager.Shutdown(drainCtx); err != nil {
+			t.Errorf("stop LAN fixture RuntimeManager: %v", err)
+		}
 	})
 	var issued struct {
 		Invite string `json:"invite"`

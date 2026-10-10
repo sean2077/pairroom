@@ -171,7 +171,11 @@ func joinLANBridgeFixture(t *testing.T, local, host *lanHostFixture, name string
 		t.Fatal("accepted guest changed its original receipt or private identity")
 	}
 	for _, private := range []string{credential.Secret, local.management.Token(), host.management.Token(), f.guest.record.Identity.PrivateKeyPEM, host.owner.SessionID, host.room.DataDir} {
-		if bytes.Contains(data, []byte(private)) {
+		encoded, err := json.Marshal(private)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(data, []byte(private)) || bytes.Contains(data, encoded[1:len(encoded)-1]) {
 			t.Fatalf("join output exposed private peer identity or credentials: %q", private)
 		}
 	}
@@ -274,8 +278,12 @@ func TestLANTwoServicesCLIAndSharedOwnerEvidence(t *testing.T) {
 				t.Fatalf("host local collector did not receive the guest evidence: %d", status)
 			}
 			metadata, hostPath, err := f.host.native.media.Resolve(accepted.Attachments[0].ID)
-			if err != nil || metadata.Kind != "file" || !strings.Contains(hostDelivery.Claim.Envelope, hostPath) || strings.Contains(hostDelivery.Claim.Envelope, f.project.Root) {
+			if err != nil || metadata.Kind != "file" || metadata.SHA256 != relay.Digest(body) || !lanEnvelopeHasLocalPath(hostDelivery.Claim.Envelope, hostPath) || lanEnvelopeHasPathPrefix(hostDelivery.Claim.Envelope, f.project.Root) {
 				t.Fatal("host received a guest filesystem path instead of a verified local artifact")
+			}
+			hostBytes, err := os.ReadFile(hostPath)
+			if err != nil || string(hostBytes) != body {
+				t.Fatal("host evidence bytes changed across the LAN")
 			}
 			if status := lanLocalRelayCall(t, f.host, f.host.room.ID, f.host.owner, "ack", map[string]string{"id": hostDelivery.Claim.ID, "receipt": hostDelivery.Claim.Receipt}, nil); status != 200 {
 				t.Fatal("host stdout receipt failed")
@@ -300,8 +308,8 @@ func TestLANTwoServicesCLIAndSharedOwnerEvidence(t *testing.T) {
 			if err := f.run(t, stdout, "wait", "--timeout", "1"); err == nil || !strings.Contains(err.Error(), "stdout written") {
 				t.Fatalf("lost ACK response did not distinguish delivered stdout: %v", err)
 			}
-			_, guestPath, err := f.guest.media.Resolve(metadata.ID)
-			if err != nil || !strings.Contains(stdout.String(), guestPath) || strings.Contains(stdout.String(), f.host.room.DataDir) || strings.Contains(stdout.String(), body) {
+			guestMetadata, guestPath, err := f.guest.media.Resolve(metadata.ID)
+			if err != nil || guestMetadata != metadata || !lanEnvelopeHasLocalPath(stdout.String(), guestPath) || lanEnvelopeHasPathPrefix(stdout.String(), f.host.room.DataDir) || strings.Contains(stdout.String(), body) {
 				t.Fatal("guest stdout did not carry its verified inert local artifact")
 			}
 			bytesOnDisk, err := os.ReadFile(guestPath)

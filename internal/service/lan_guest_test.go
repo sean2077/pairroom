@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +22,18 @@ import (
 	"github.com/sean2077/pairroom/internal/privatefile"
 	"github.com/sean2077/pairroom/internal/relay"
 )
+
+// Attachment fields use quoted Go strings so Windows separators, quotes and
+// control characters cannot introduce another envelope field. Assert the exact
+// canonical path field, not an unescaped substring of the rendered envelope.
+func lanEnvelopeHasLocalPath(envelope, path string) bool {
+	return strings.Contains(envelope, "; path: "+strconv.Quote(path)+"\n")
+}
+
+func lanEnvelopeHasPathPrefix(envelope, prefix string) bool {
+	quoted := strconv.Quote(prefix)
+	return strings.Contains(envelope, prefix) || strings.Contains(envelope, quoted[1:len(quoted)-1])
+}
 
 func lanGuestTestService(t *testing.T) (*ManagementServer, Project) {
 	t.Helper()
@@ -165,12 +178,12 @@ func TestLANGuestPrefetchFinishesBeforeClaimAndRendersPrivateLocalPath(t *testin
 	if err := json.Unmarshal(output.Body.Bytes(), &result); err != nil || result.Claim == nil || result.Claim.Receipt != "original-receipt" {
 		t.Fatalf("original receipt was not forwarded: %s %v", output.Body.String(), err)
 	}
-	_, localPath, err := guest.media.Resolve(metadata.ID)
-	if err != nil {
-		t.Fatal(err)
+	resolved, localPath, err := guest.media.Resolve(metadata.ID)
+	if err != nil || resolved != metadata || resolved.SHA256 != relay.Digest(evidence) {
+		t.Fatalf("guest evidence does not match the accepted manifest: %+v, %v", resolved, err)
 	}
 	actual, err := os.ReadFile(localPath)
-	if err != nil || string(actual) != evidence || !strings.Contains(result.Claim.Envelope, localPath) || strings.Contains(result.Claim.Envelope, hostDir) {
+	if err != nil || string(actual) != evidence || !lanEnvelopeHasLocalPath(result.Claim.Envelope, localPath) || lanEnvelopeHasPathPrefix(result.Claim.Envelope, hostDir) {
 		t.Fatal("guest did not render verified actual bytes at its own private path")
 	}
 	mu.Lock()
