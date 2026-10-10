@@ -91,3 +91,24 @@ func TestLANWorkspaceDirectoriesAreCreatedOwnerPrivate(t *testing.T) {
 		t.Fatalf("shared LAN directory was accepted: %v", err)
 	}
 }
+
+func TestLANWorkspacePrivacyRecognitionKeepsOrdinaryProjectNames(t *testing.T) {
+	for _, parent := range []string{"rooms", "lan-joins"} {
+		t.Run(parent, func(t *testing.T) {
+			// A user's checkout can have the same names as LAN state without
+			// being below .pairroom. Its ordinary local Room paths keep their
+			// existing directory policy, including pre-existing shared parents.
+			root := filepath.Join(t.TempDir(), parent, "lan_project")
+			stateRoot := filepath.Join(root, ".pairroom")
+			if err := os.MkdirAll(stateRoot, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(stateRoot, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := secureDir(root, ".pairroom", "rooms", "room-local", "slots", "slot1"); err != nil {
+				t.Fatalf("ordinary local Room inherited LAN directory rules from the checkout name: %v", err)
+			}
+		})
+	}
+}

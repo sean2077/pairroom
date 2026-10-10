@@ -294,10 +294,11 @@ func TestLANGuestReadinessRefreshKeepsLocalWakerAndDoesNotConsumeInbox(t *testin
 // user's own commands: its period grows with the number of joined Rooms, and a
 // failed pass backs off instead of retrying on every tick.
 func TestObserverSpreadAndBackoffKeepTheForegroundBudgetUsable(t *testing.T) {
-	if got := observerInterval(0); got != observerPollInterval {
+	if got := observerInterval(nil); got != observerPollInterval {
 		t.Fatalf("no joined Rooms = %s", got)
 	}
-	if got := observerInterval(4); got != 4*observerPollInterval {
+	rooms := []lanGuestSummary{{Status: "pending"}, {Status: "accepted"}, {Status: "accepted"}, {Status: "accepted"}}
+	if got := observerInterval(rooms); got != 4*observerPollInterval {
 		t.Fatalf("four joined Rooms = %s", got)
 	}
 	guest := &lanGuest{}
@@ -322,5 +323,35 @@ func TestObserverSpreadAndBackoffKeepTheForegroundBudgetUsable(t *testing.T) {
 	guest.schedule(observerPollInterval)
 	if guest.pollDelay != 0 {
 		t.Fatalf("recovered pass kept a delay: %s", guest.pollDelay)
+	}
+}
+
+func TestObserverTerminalRoomsDoNotDelayLiveRooms(t *testing.T) {
+	rooms := []lanGuestSummary{{Status: "accepted"}, {Status: "pending"}}
+	for i := 0; i < 64; i++ {
+		for _, status := range []string{"left", "detached", "revoked", "expired"} {
+			rooms = append(rooms, lanGuestSummary{Status: status})
+		}
+	}
+	if got := observerInterval(rooms); got != 4*time.Second {
+		t.Fatalf("retired records delayed two live Rooms: %s", got)
+	}
+	if got := observerInterval(rooms[2:]); got != 2*time.Second {
+		t.Fatalf("terminal-only catalog changed the base period: %s", got)
+	}
+}
+
+func TestObserverFailureNeverPollsFasterThanHealthyPeriod(t *testing.T) {
+	// Sixty-four live Rooms already require a period longer than the ordinary
+	// one-minute failure cap. Repeated failures cannot increase that traffic.
+	base := 128 * time.Second
+	guest := &lanGuest{}
+	previous := base
+	for i := 0; i < 5; i++ {
+		guest.backoff(base)
+		if guest.pollDelay < previous {
+			t.Fatalf("failure %d shortened the healthy/backoff period from %s to %s", i+1, previous, guest.pollDelay)
+		}
+		previous = guest.pollDelay
 	}
 }

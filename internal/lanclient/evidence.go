@@ -90,13 +90,13 @@ func (c *Client) cachedEvidence(ctx context.Context, r record, expected model.At
 // joinedRoomQuotaError names this machine's verified-evidence cache as the
 // exhausted store. It keeps the shared-quota identity for callers, but gives the
 // guest an actionable local remedy instead of the host-only "start a new Room"
-// advice, and it deliberately carries no private cache path. The hosting Room
-// still owns the authoritative bytes and re-verifies every download, so removed
-// files are simply fetched again.
+// advice, and it deliberately carries no private cache path. Content and its
+// manifest must be moved together; a partial cache must not bypass verification.
+// Fetching another verified copy still requires host authorization.
 type joinedRoomQuotaError struct{}
 
 func (joinedRoomQuotaError) Error() string {
-	return "the joined Room's verified-evidence cache on this machine reached the 100 MiB bound; inspect and remove cached evidence you no longer need, then retry (the hosting Room's own storage is separate)"
+	return "the joined Room's verified-evidence cache on this machine reached the 100 MiB bound; stop collection and any optional observer, then move the complete evidence subdirectory (content and manifests together) to a backup, keeping the parent client record and journals intact; retry with authorized host access"
 }
 
 func (joinedRoomQuotaError) Is(target error) bool { return target == attachment.ErrSharedQuota }

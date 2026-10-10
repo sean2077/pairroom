@@ -157,6 +157,9 @@ func (c *Client) prepareEnvelope(ctx context.Context, r record, m relay.Message)
 		}
 	}
 	input := model.AgentInput{From: m.From, To: m.To, FromHandle: handle, Text: m.Text, Quote: m.Quote}
+	if m.From == model.ActorUser && m.Author == "host_owner" {
+		input.Text += "\n" + protocol.SharedRoomEnvelopeNotice
+	}
 	if m.Review != nil {
 		input.Text += m.Review.Envelope()
 	}

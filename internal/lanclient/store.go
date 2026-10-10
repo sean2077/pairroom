@@ -85,26 +85,13 @@ func (s *Store) List(ctx context.Context) ([]Snapshot, error) {
 	} else if err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(s.root)
+	entries, err := readClientDirectories(s.root)
 	if err != nil {
 		return nil, err
 	}
-	if len(entries) > maxClients {
-		return nil, errors.New("LAN joined Room limit exceeded")
-	}
 	var result []Snapshot
 	for _, e := range entries {
-		name := e.Name()
-		if strings.HasPrefix(name, ".") || !lanshare.ValidID(name) || !strings.HasPrefix(name, "lan_") {
-			// Only an entry that names a LAN client can be a joined-Room record.
-			// Unrelated files in this private catalog (OS or sync metadata such
-			// as Thumbs.db) must not fail every LAN surface.
-			continue
-		}
-		if !e.IsDir() || e.Type()&os.ModeSymlink != 0 {
-			return nil, ErrInvalidState
-		}
-		c, err := s.client(name)
+		c, err := s.client(e.Name())
 		if err != nil {
 			return nil, err
 		}
@@ -119,6 +106,32 @@ func (s *Store) List(ctx context.Context) ([]Snapshot, error) {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, nil
+}
+
+// Discovery and admission count the same client directories. Unrelated OS or
+// sync metadata cannot consume Room capacity; client-shaped files and symlinks
+// still fail the private-record boundary. An interrupted first mkdir retains
+// its capacity reservation even before client.json is committed.
+func readClientDirectories(root string) ([]os.DirEntry, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	var clients []os.DirEntry
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") || !lanshare.ValidID(name) || !strings.HasPrefix(name, "lan_") {
+			continue
+		}
+		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			return nil, ErrInvalidState
+		}
+		clients = append(clients, entry)
+		if len(clients) > maxClients {
+			return nil, errors.New("LAN joined Room limit exceeded")
+		}
+	}
+	return clients, nil
 }
 
 func (s *Store) Close() {

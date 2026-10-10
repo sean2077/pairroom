@@ -88,7 +88,7 @@ func (s *Store) prepare(ctx context.Context, invite lanshare.Invite, options Joi
 		return nil, err
 	}
 	if _, err := os.Lstat(c.dir); errors.Is(err, os.ErrNotExist) {
-		entries, err := os.ReadDir(s.root)
+		entries, err := readClientDirectories(s.root)
 		if err != nil {
 			return nil, err
 		}

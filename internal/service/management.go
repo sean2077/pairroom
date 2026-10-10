@@ -848,11 +848,12 @@ func (s *ManagementServer) archiveRoomByID(ctx context.Context, roomID string) (
 	if room.Archived() {
 		return room, true, nil
 	}
+	revokeOffline := false
 	if room.Sharing == "lan" {
 		// Retire the admitted member before the lifecycle barrier when the Room's
-		// Runtime can be opened. A Runtime that cannot start (for example a
-		// missing Project) must not block archiving — and therefore deleting —
-		// the Room: the archive itself closes every LAN surface for it.
+		// Runtime can be opened. If it cannot start, perform the same durable
+		// revocation directly in the Event Log after acquiring the barrier.
+		// Restoring the Room must never restore the previous guest's admission.
 		n, err := s.sharedNativeRuntime(ctx, roomID)
 		if err == nil {
 			release := n.acquire()
@@ -863,6 +864,8 @@ func (s *ManagementServer) archiveRoomByID(ctx context.Context, roomID string) (
 			}
 		} else if !lanRevokeUnavailable(s.runtimes.Status(roomID).Phase, err) {
 			return Room{}, false, err
+		} else {
+			revokeOffline = true
 		}
 	}
 	// Archive stops active work by default: it closes the Room mutation gate,
@@ -876,6 +879,11 @@ func (s *ManagementServer) archiveRoomByID(ctx context.Context, roomID string) (
 		return Room{}, false, err
 	}
 	defer release()
+	if revokeOffline {
+		if err := s.revokeLANMemberOffline(ctx, roomID); err != nil {
+			return Room{}, false, err
+		}
+	}
 	archived, err := s.registry.ArchiveRoom(ctx, roomID)
 	if err != nil {
 		return Room{}, false, err
@@ -883,11 +891,9 @@ func (s *ManagementServer) archiveRoomByID(ctx context.Context, roomID string) (
 	return archived, false, nil
 }
 
-// lanRevokeUnavailable reports whether a LAN Room's member revoke was skipped
-// because its Runtime could not be opened: the Runtime failed to start, or it
-// was never activated. The archive then proceeds without a live revoke; every
-// LAN request for an archived Room is rejected independently of the membership
-// fact, so an unavailable Runtime must not make the Room unarchivable.
+// lanRevokeUnavailable reports whether a LAN Room's member revoke needs the
+// offline Event Log path because its Runtime could not be opened. It does not
+// permit skipping durable revocation or ignoring Event Log integrity errors.
 func lanRevokeUnavailable(phase RuntimePhase, err error) bool {
 	return phase == RuntimeFailed || errors.Is(err, ErrRuntimeNotReady)
 }

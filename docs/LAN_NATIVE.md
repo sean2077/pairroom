@@ -128,10 +128,16 @@ the existing reclamation rule for host uploads that no message references.
 Uploads to local-only Rooms do not inherit these LAN storage quotas.
 
 The guest's copies live in that joined client's `evidence` directory under the
-user configuration directory's `pairroom/lan-clients/<lan-id>`. A download
-refused at the bound names that directory; freeing it is a deliberate operator
-action, and any removed file is fetched and re-verified again on the next
-access.
+user configuration directory's `pairroom/lan-clients/<lan-id>`. Freeing this
+cache is a deliberate operator action. Stop collection and any optional local
+Service observer, then move the **complete `evidence` subdirectory**, including
+content and manifest files together, to a backup outside the client directory.
+Keep the parent client directory, its private identity and all delivery and
+publication journals intact. Do not remove individual content files while
+leaving their manifests. Retain the backup for evidence still in use or involved
+in an uncertain delivery; deleting it is an explicit choice after inspection.
+The next access fetches and verifies a fresh copy only while the host still
+authorizes that membership and retains the evidence.
 
 `--ref` retains its existing meaning: it sends a path, size, and SHA-256 pointer,
 not file contents. A reference to a host-local path is not automatically readable
@@ -202,7 +208,7 @@ snapshot behavior.
 | Collector stdout written | `handed_off` means delivery to CLI/hook stdout, not model acceptance, execution, or success. |
 | Claim or acknowledgement uncertain | Inspect `history --pending` / `history --id ID`. Never automatically replay `unknown`. If the local collector already reported successful stdout, a later bind/resume or receive opportunity can settle only that original ACK after reconnection; a claim alone never authorizes acknowledgement. |
 | Evidence hash or metadata mismatch | Collection fails before claim. Inspect the original evidence and publish changed content with a new ID. |
-| Evidence cache at its bound | The receiver's 100 MiB bound covers this machine's verified copies, not the hosting Room's storage. Inspect `evidence` in that joined client's directory under the user configuration directory's `pairroom/lan-clients/<lan-id>`, move or delete cached files you no longer need, then retry the download; the hosting Room still owns and re-verifies the bytes, so a later access downloads them again. Nothing removes cached evidence silently. |
+| Evidence cache at its bound | This machine's verified copies reached 100 MiB. Stop collection and any optional observer, then move the complete joined-client `evidence` subdirectory, content and manifests together, to a backup. Preserve the parent private client record and all delivery/publication journals. A later access downloads and verifies a fresh copy only if the host still authorizes access and retains it. Keep the backup for needed or uncertain-delivery evidence; no automatic removal occurs. |
 | Revoked or archived membership | New reads, writes, claims, wake reservations and downloads fail. Explicitly leave locally before reusing that native session elsewhere. Previously downloaded content cannot be recalled. |
 
 The optional dashboard reports its latest contact with the host. An HTTP

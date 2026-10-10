@@ -51,9 +51,9 @@ def fixture_html(isolated: bool = False) -> str:
       inspect:'Inspect', sent:'Queued', send:'Queue message', retrySend:'Retry original send',
       noItems:'No pending items', pendingTitle:'Pending items',
       empty:'No published messages yet.', placeholder:'Queue a message for a native session…',
-      awaitingPeer:'Awaiting teammate', awaitingPeerHelp:'No runtime selected for the teammate.',
-      remoteBindingHelp:'Managed by the teammate on their own machine.', member:'LAN member',
-      remoteHuman:'Teammate', hostHuman:'Host owner'
+      awaitingPeer:'Awaiting the other side', awaitingPeerHelp:'Other slot: awaiting the other side. No Runtime or native session is selected for them.',
+      remoteBindingHelp:'The other side uses CLI/hooks directly from their native session. They need no local Service. Native session paths, permissions and credentials remain on their machine.', member:'LAN member',
+      remoteHuman:'Other side', hostHuman:'Host owner'
     };
     window.PairRoomI18n={lang:'en',apply(){},t(key){return labels[key.split('.').pop()]||key;}};
     window.__message = (id,from='slot1',state='handed_off',text='Review '+id) => ({
@@ -285,15 +285,16 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
               __snapshot.relay.bindings.slot2={};__update();
             }""")
             peer_card = page.locator('#bindings [data-slot="slot2"]')
-            await expect(peer_card.locator('.binding-state')).to_have_text('Awaiting teammate')
+            await expect(peer_card.locator('.binding-state')).to_have_text('Awaiting the other side')
             assert await peer_card.locator('details, .binding-park, .agent-config').count() == 0
-            assert '@grok1' not in await peer_card.inner_text(), 'pending teammate inherited a runtime handle'
+            assert '@grok1' not in await peer_card.inner_text(), 'pending peer inherited a runtime handle'
             await page.evaluate("""() => {
               __snapshot.room.agents.slot2={runtime:'codex'};
               __snapshot.identities.slot2={MentionHandle:'@codex'};
               __snapshot.relay.bindings.slot2={active:true,remote_key:'b'.repeat(64),generation:2};
               __snapshot.relay.messages=[{...__message('lan-file','user','queued','Shared reproduction'),author:'lan:'+ 'b'.repeat(64),
-                attachments:[{id:'evidence-file',kind:'file',media_type:'text/plain',name:'repro <img onerror=alert(1)>.txt',size:48,sha256:'c'.repeat(64)}]}];
+                attachments:[{id:'evidence-file',kind:'file',media_type:'text/plain',name:'repro <img onerror=alert(1)>.txt',size:48,sha256:'c'.repeat(64)}]},
+                {...__message('lan-host','user','queued','I will check the reproduction.'),author:'host_owner'}];
               delete __snapshot.relay.total_messages;__update();
             }""")
             await expect(peer_card.locator('.binding-state')).to_have_text('LAN member')
@@ -304,7 +305,8 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
             await expect(file_message.locator('a.attachment-file')).to_have_attribute('href','api/v1/attachments/evidence-file')
             await expect(file_message.locator('a.attachment-file')).to_contain_text('repro <img onerror=alert(1)>.txt')
             assert await file_message.locator('img').count() == 0, 'text evidence rendered as an image or filename markup'
-            await expect(file_message).to_contain_text('Teammate')
+            await expect(file_message.locator('.message-author')).to_have_text('You · Other side')
+            await expect(page.locator('#messages [data-message-id="lan-host"] .message-author')).to_have_text('You · Host owner')
             await page.evaluate('__snapshot=__beforeLAN;__update()')
             # Locale changes retranslate handles/state without replacing input.
             await page.locator('#message-text').fill('仍保留草稿')

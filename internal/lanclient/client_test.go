@@ -454,9 +454,21 @@ func TestListIgnoresUnrelatedCatalogEntriesAndKeepsClientShapedOnesStrict(t *tes
 			t.Fatal(err)
 		}
 	}
+	// A full catalog's worth of unrelated entries still consumes no Room slots.
+	for i := 0; i < maxClients; i++ {
+		if err := os.WriteFile(filepath.Join(s.Root(), fmt.Sprintf("metadata-%04d.tmp", i)), []byte("metadata"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	snapshots, err := s.List(ctx)
 	if err != nil || len(snapshots) != 1 || snapshots[0].ID != c.id {
 		t.Fatalf("unrelated catalog entries broke List: %+v %v", snapshots, err)
+	}
+	second := newRemote(t)
+	options := second.options(t)
+	options.SessionID, options.BindID = "second-native-session", "second-local-binding"
+	if _, result, err := s.Join(ctx, options); err != nil || result.Binding == nil {
+		t.Fatalf("unrelated catalog entries consumed admission capacity: %+v %v", result, err)
 	}
 	// An entry whose name does claim to be a client is a client record or nothing.
 	if err := os.WriteFile(filepath.Join(s.Root(), "lan_"+strings.Repeat("a", 32)), []byte("junk"), 0o600); err != nil {
@@ -464,5 +476,41 @@ func TestListIgnoresUnrelatedCatalogEntriesAndKeepsClientShapedOnesStrict(t *tes
 	}
 	if _, err := s.List(ctx); !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("client-shaped file was not rejected: %v", err)
+	}
+	third := newRemote(t)
+	options = third.options(t)
+	options.SessionID, options.BindID = "third-native-session", "third-local-binding"
+	if _, _, err := s.Join(ctx, options); !errors.Is(err, ErrInvalidState) || len(third.actions()) != 0 {
+		t.Fatalf("admission ignored a malformed client-shaped entry: %v", err)
+	}
+}
+
+func TestClientDirectoryCapacityStillBoundsAdmissionAndDiscovery(t *testing.T) {
+	ctx := context.Background()
+	s, f := newStore(t), newRemote(t)
+	if err := os.MkdirAll(filepath.Dir(s.Root()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := privatefile.Mkdir(s.Root()); err != nil {
+		t.Fatal(err)
+	}
+	// Interrupted admissions retain their directory slots; ignoring unrelated
+	// entries must not turn the bound into an unlimited pending-client store.
+	for i := 0; i < maxClients; i++ {
+		if err := privatefile.Mkdir(filepath.Join(s.Root(), fmt.Sprintf("lan_%032x", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := s.Join(ctx, f.options(t)); err == nil || err.Error() != "LAN joined Room limit exceeded" {
+		t.Fatalf("admission exceeded the client-directory bound: %v", err)
+	}
+	if len(f.actions()) != 0 {
+		t.Fatal("capacity refusal contacted the host")
+	}
+	if err := privatefile.Mkdir(filepath.Join(s.Root(), fmt.Sprintf("lan_%032x", maxClients))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.List(ctx); err == nil || err.Error() != "LAN joined Room limit exceeded" {
+		t.Fatalf("discovery accepted an over-capacity client catalog: %v", err)
 	}
 }

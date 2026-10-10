@@ -33,7 +33,8 @@ type lanGuest struct {
 	polling  bool
 	nextPoll time.Time
 	// pollDelay is the current backoff after a failed observation pass; it grows
-	// to observerMaxBackoff and clears on the next successful pass.
+	// to the larger of the healthy period and observerMaxBackoff, and clears
+	// on the next successful pass.
 	pollDelay time.Duration
 }
 

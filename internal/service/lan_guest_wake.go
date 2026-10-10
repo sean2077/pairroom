@@ -19,7 +19,8 @@ import (
 const (
 	// observerPollInterval is the per-Room polling period with one joined Room.
 	observerPollInterval = 2 * time.Second
-	// observerMaxBackoff bounds one guest's delay after repeated failures.
+	// observerMaxBackoff caps failure backoff unless the healthy per-Room
+	// period is already longer; failures must never accelerate that schedule.
 	observerMaxBackoff = 60 * time.Second
 )
 
@@ -38,7 +39,7 @@ func (g *lanGuestManager) maintain() {
 		if err != nil {
 			continue
 		}
-		interval := observerInterval(len(snapshots))
+		interval := observerInterval(snapshots)
 		now := time.Now()
 		for _, snapshot := range snapshots {
 			if snapshot.Status != "pending" && snapshot.Status != "accepted" {
@@ -77,13 +78,17 @@ func (g *lanGuestManager) maintain() {
 }
 
 // observerInterval spreads the observer's aggregate request rate across the
-// joined Rooms: one Room polls at the base period, and every additional Room
-// lengthens the per-Room period so the total stays near that of a single Room.
-func observerInterval(rooms int) time.Duration {
-	if rooms < 1 {
-		rooms = 1
+// pending/accepted Rooms: one Room polls at the base period, and every additional
+// live Room lengthens the period so the total stays near that of a single Room.
+// Terminal records are retained for recovery, but generate no observer traffic.
+func observerInterval(rooms []lanGuestSummary) time.Duration {
+	live := 0
+	for _, room := range rooms {
+		if room.Status == "pending" || room.Status == "accepted" {
+			live++
+		}
 	}
-	return observerPollInterval * time.Duration(rooms)
+	return observerPollInterval * time.Duration(max(1, live))
 }
 
 // schedule records the next poll after a successful pass and clears any backoff.
@@ -95,15 +100,15 @@ func (guest *lanGuest) schedule(delay time.Duration) {
 }
 
 // backoff lengthens the next poll after a failed pass, bounded by
-// observerMaxBackoff, so a rate-limited or unreachable host is not retried on
-// every tick while the membership lasts.
+// the larger of observerMaxBackoff and the healthy base period, so a failed
+// host cannot be polled faster than a healthy one as the Room count grows.
 func (guest *lanGuest) backoff(base time.Duration) {
 	guest.mu.Lock()
 	defer guest.mu.Unlock()
 	if guest.pollDelay < base {
 		guest.pollDelay = base
 	} else {
-		guest.pollDelay = min(2*guest.pollDelay, observerMaxBackoff)
+		guest.pollDelay = min(2*guest.pollDelay, max(base, observerMaxBackoff))
 	}
 	guest.nextPoll = time.Now().Add(guest.pollDelay)
 }

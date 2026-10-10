@@ -107,7 +107,12 @@ func newLANHostFixture(t *testing.T) *lanHostFixture {
 				t.Errorf("close LAN fixture runtime: %v", err)
 			}
 		} else if !errors.Is(err, ErrRuntimeNotReady) {
-			t.Errorf("resolve LAN fixture runtime during cleanup: %v", err)
+			// Integrity fault tests may poison the Registry after releasing the
+			// writer. Only that already-suspended case has no runtime to close.
+			status := manager.Status(room.ID)
+			if !errors.Is(err, ErrRegistryFailClosed) || status.Phase != RuntimeSuspended || status.OccupiesCapacity {
+				t.Errorf("resolve LAN fixture runtime during cleanup: %v", err)
+			}
 		}
 		closeCancel()
 		drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
