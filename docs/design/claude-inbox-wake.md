@@ -3,6 +3,11 @@
 Implemented against the documentation checked on 2026-09-21. Synthetic local
 transport and binding tests are not authenticated Claude acceptance evidence.
 
+This transport is local to the bound Claude session. For a direct LAN guest,
+an optional observer on the guest machine uses the local capability; the Room's
+remote host never receives the socket address, token or native session ID.
+[Native LAN collaboration](../LAN_NATIVE.md#observe-and-recover) owns that path.
+
 ## Use
 
 Update the Service and CLI together. In the existing Claude Code session, run

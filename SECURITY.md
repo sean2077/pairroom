@@ -54,7 +54,7 @@ The hosting Service and both admitted owners can read shared history, human esca
 
 Projects use absolute paths explicitly entered by the user, canonicalized through symlink and Git worktree-root resolution. PairRoom does not discover repositories by scanning common development directories or provide a general server filesystem browser. The Desktop host may offer the operating system's own folder dialog and fill the field with the chosen path, but the choice stays the user's, the path is validated as an absolute path before it is returned, and the Service still receives only that explicitly chosen path.
 
-Room provisioning is private until atomically published. The Service enforces Binding uniqueness by durable slot and native session ID; archive does not release ownership. An existing Binding must resume exactly. A deferred new Binding materializes only after real native input acceptance. Event/checkpoint/uniqueness failures fail closed rather than creating another owner.
+Room provisioning is private until atomically published. The Service enforces local Binding uniqueness by Runtime/session identity; archive does not release that ownership. Native's per-user identity reservations also prevent a local Service binding from colliding with a direct LAN association, including a pending admission. A guest's native identity stays on its own machine; the host binds its admitted certificate key to one Room/slot/generation. An existing local Binding must resume exactly. A deferred new Embedded Binding materializes only after real native input acceptance. Event/checkpoint/uniqueness failures fail closed rather than creating another owner.
 
 The Binding's `agent` is the stable slot (`slot1`/`slot2`), not an assumption about its selected Runtime. PairRoom does not import the vendor transcript from before the Binding.
 
@@ -67,6 +67,8 @@ Attachments and manifests use opaque IDs and conservative permissions. Resolve c
 The API/transcript carries verified metadata, not an absolute host attachment path. Adapter-local resolution occurs only at the native boundary. Browser object URLs are transient, not persistent public links. Image validation cannot detect whether a screenshot visibly contains a secret; inspect content before sending or sharing.
 
 ## 5. Runtime and approvals
+
+This section describes Embedded adapters. Native sessions retain their own harness approval and tool-permission controls; shared Room instructions do not replace them.
 
 Embedded runtimes are started without a shell. On Windows a `.cmd`/`.bat` launcher is the exception, because `cmd.exe` re-parses its command line: arguments containing `cmd.exe` metacharacters fail closed, and the Room-derived Claude session name is neutralized, so Room names and selection values cannot run commands. [Configuration](docs/CONFIGURATION.md#agent-slots-and-runtimes) lists the rejected characters.
 
@@ -86,11 +88,17 @@ Unspecified Provider/model/effort/native-policy overrides retain native inherita
 
 PairRoom advertises `terminal=false`, retaining native tool execution. Permission choices retain the vendor's exact option identities; cancellation is cancelled, not remembered authorization. Unknown high-privilege reverse requests fail closed.
 
-### 5.4 Approval lifecycle
+### 5.4 Gemini CLI
+
+Gemini uses negotiated official ACP methods and native authentication. PairRoom never calls the settings-mutating `authenticate` RPC or writes global login state. Exact ACP resume fails closed without a reliable replay-completion boundary and preserves the existing Binding. Native Provider configuration is required; unsupported effort or CC Switch selections fail validation. Explicit sandbox choices affect only the selected child environment; empty choices retain native settings, and plan mode does not disable an inherited sandbox. Approval choices retain the vendor's option identities, while unsupported privileged requests fail closed. See [Configuration](docs/CONFIGURATION.md#agent-slots-and-runtimes) and [Gemini protocol boundaries](docs/PROTOCOL.md#gemini-hook-and-acp-boundaries).
+
+<a id="54-approval-lifecycle"></a>
+
+### 5.5 Approval lifecycle
 
 Interrupt, stop/restart, terminal failure or confirmed exit, permission replacement, and PairRoom restart expire pending requests that cannot safely be reused. A stale browser decision must not authorize a new vendor request. Invalid or incomplete answers remain answerable rather than consuming the request.
 
-Modern permission changes require an idle Room, empty FIFO, and no pending approval. Intent precedes effects; the old adapter stops before the effective policy is committed and the replacement starts. Failure cannot grant broader fallback access. Collaboration instructions and native session identity remain intact. Role mutation is not supported. Exact wire semantics are in [API reference](docs/API_REFERENCE.md#native-approval-responses).
+Effective Embedded permission changes require an idle Room, empty FIFO, and no pending approval. Intent precedes effects; the old adapter stops before the effective policy is committed and the replacement starts. Failure cannot grant broader fallback access. Collaboration instructions and native session identity remain intact. Role mutation is not supported. Exact wire semantics are in [API reference](docs/API_REFERENCE.md#native-approval-responses).
 
 ## 6. Workspace and responsibility boundaries
 
@@ -134,7 +142,14 @@ Supported CC Switch references are read-only and re-resolved at creation/activat
 
 PairRoom does not automatically load remote Markdown images. Opening an ordinary external link deliberately sends the browser to that site; the site then receives a normal network request. Review remote content and native tools with the same trust assumptions as other project inputs.
 
-Desktop's **Check for updates** setting is off by default. Only after the user enables it does Desktop send an unauthenticated `GET` to the GitHub latest-release API for `sean2077/pairroom`, at most once a day plus explicit checks, with a short timeout and a `PairRoom-Desktop/<version>` User-Agent as its only identifying value. GitHub sees the request's IP address and time. The response selects no URL, file, or command: Desktop parses only a stable version tag, opens a release page built from it only when the user asks, and never downloads or installs updates. The setting lives in the Desktop preference directory, not the Service data root. See [Desktop development](desktop/README.md#check-for-updates).
+Automatic update checks are off by default in both the browser and Desktop. The two paths keep independent consent and do not run duplicate checks inside the Desktop WebView:
+
+| Entry point | Preference and request boundary |
+|---|---|
+| Browser **Software updates** | Browser-origin preference; an authenticated `GET /api/v1/updates` asks the Service to check the fixed GitHub latest-release endpoint. The scoped relay setup token is not admitted. Browser credentials, workspace paths and Room content are not forwarded; the outbound User-Agent is `PairRoom-update-check`. |
+| Desktop **Check for updates** | Native Desktop preference outside the Service root; opt-in checks run at most once a day plus explicit checks. Desktop calls the fixed GitHub latest-release API directly with `PairRoom-Desktop/<version>`. |
+
+GitHub receives ordinary network metadata, including IP address, request time and User-Agent. Both paths accept only validated stable-version metadata and construct the release-page URL themselves; response content cannot select an arbitrary download URL, file or command. Opening the page requires the user's action. Neither checker downloads, installs or restarts PairRoom. [Upgrading](docs/UPGRADING.md#update-reminders) owns browser timing and failure behavior; [Desktop development](desktop/README.md#check-for-updates) owns the native setting.
 
 ## 12. Recommended practice
 
@@ -148,17 +163,23 @@ If no private channel is available, first open a public Issue without exploit de
 
 ## Native relay credentials and evidence
 
-Native hosting never owns or interrupts the user's vendor processes. Project hook installation is explicit; PairRoom does not grant project trust or approve its own hook. Association captures the official session ID from the harness environment at bind, run inside the native session; the approved Stop hook re-confirms the same identity before publication or collection and fails closed on mismatch. Relay authorization requires the slot's secret, generation and associated native identity together; management/browser credentials do not authorize that channel. Replacement revokes old credentials but cannot stop work already running.
+Native hosting never owns or interrupts the user's vendor processes. Project hook installation is explicit; PairRoom does not grant project trust or approve its own hook. Association captures the official session ID from the native caller at bind: Claude/Codex/Grok supply environment metadata, while Gemini uses its approved BeforeTool observation. Approved response hooks (Stop or Gemini AfterAgent) re-confirm the same identity before publication or collection and fail closed on mismatch. Local relay authorization requires the slot's secret, generation and associated native identity together; management/browser credentials do not authorize that channel. Direct LAN requests use the admitted per-Room certificate and generation without exporting the guest's native session identity. Replacement revokes old credentials but cannot stop work already running.
+
+### Local binding credentials
 
 Local Room relay secrets remain in owner-only workspace `credentials` files; their hashes, not secrets, are persisted for service authentication. The Service's owner-only `relay-endpoint.json` contains current local endpoint discovery and a scoped relay-setup token — not the full Management bearer — and must not be exported. That token admits exactly `GET /api/v1/service`, `GET /api/v1/agent-pair-profiles`, `GET /api/v1/agent-catalog`, `POST /api/v1/projects`, `POST /api/v1/projects/{project}/rooms` for Native Rooms only, and `POST /api/v1/rooms/{room}/native-bindings/{slot1|slot2}`. It cannot join a remote Room, unbind, activate, archive, delete, open a surface, change policy, or bootstrap a browser session. Direct LAN joining uses the public invitation and its own per-Room key, with no Service endpoint file or setup token. The Service snapshot that the setup token can read includes Project roots, Room metadata and the data-root path, but no Room or Management bearer. Both files are sensitive. The owner-only `bind-attempt.json` also contains relay credentials and must never be exported. Intentional session-environment overrides by the same OS user are outside this isolation claim. Model-visible bind output carries only public identifiers. This protects against accidental cross-binding and stale ownership; it does not claim isolation from arbitrary file reads by another process running as the same OS user. POSIX 0600 checks are not a Windows ACL isolation claim.
+
+### Direct LAN client and ownership records
 
 Guest LAN transport identities live in a private per-user client store separate from every Service data root; host listener keys remain in the hosting Service root. Client private files are created atomically with POSIX owner-only permissions or a protected current-user DACL on Windows, and are checked before use. Direct requests do not export the guest's native session or transcript identity, workspace path, relay secret, private key or local wake capability. Explicitly shared message text, `--ref` pointers and review evidence may contain sender-local paths; those paths confer no remote read authority. Guest claim/acknowledgement and wake journals retain only recovery state for the original operation, with the same bounded locking and persistence boundary for CLI/hooks and an optional local Service observer. They do not create another authoritative Room inbox. Unknown, corrupt or insufficiently private identity files fail closed instead of generating a replacement key. The separate per-user `pairroom/native-identities` store preserves exact Runtime/session ownership across local hosting and remote clients; it is durable authority, not disposable discovery. Back up both per-user stores with the matching workspace state and Service roots while their writers are stopped, never in an invitation or shared bug report.
 
 A running local Service can project a bounded catalog of client bindings owned by the same OS user and offer joined-human history, messages, downloads and Leave under normal local Management authentication and CSRF. It shares the original client identity; the browser receives no private certificate or native session paths. Joining and Agent relay do not depend on this observer or start it automatically. Supported idle wake needs a live local observer; without a collector, hook or observer, messages remain at the host. Revocation or archive never permits automatic rejoin or replay.
 
+### Wake capability and delivery evidence
+
 Claude external wake additionally stores `claude-inbox.json` (and any crash-left `.claude-inbox-*` temporary files) in the bound workspace slot directory. It contains the official local inbox address/token and exact binding identity; never export or paste it. Bind and confirmed Stop refresh it; missing/invalid environment removes stale capability, and generation matching prevents reuse after replacement. The Service reads only a bounded regular private file, not vendor registries/transcripts. Unix checks owner-only files/directories and an owned non-world-writable socket; Windows creates and verifies a protected owner-only DACL and accepts only local named pipes owned by the same OS user with anonymous SQOS. This does not isolate hostile processes running as the same OS user. Credentials never enter Event Log, API/browser projections, command arguments or diagnostics. Socket submission is not vendor acceptance; `crossSessionInbound` remains authoritative and is never rewritten.
 
-Native relay displays `handed_off` only for confirmed CLI stdout. It cannot prove model acceptance. Delivery without acknowledgement is `unknown`, never automatically replayed; explicit Retry may duplicate work. Unpublished interrupted replies or pre-atomic-write crashes can be undetectably lost. Synthetic hook/HTTP/browser tests do not establish authenticated Claude Code/Codex/Grok Build E2E. Grok hook readiness never claims or acknowledges inbox content; the associated foreground command must deliver it. A clipped Grok Stop reply is not published as complete. Inspect histories and workspace effects before recovery and redact private message text before sharing audit evidence.
+Native relay displays `handed_off` only for confirmed CLI stdout. It cannot prove model acceptance. Delivery without acknowledgement is `unknown`, never automatically replayed; explicit Retry may duplicate work. Unpublished interrupted replies or pre-atomic-write crashes can be undetectably lost. Synthetic hook/HTTP/browser tests do not establish authenticated Claude Code/Codex/Grok Build/Gemini CLI E2E. Grok hook readiness never claims or acknowledges inbox content; the associated foreground command must deliver it. A clipped Grok Stop reply is not published as complete. Inspect histories and workspace effects before recovery and redact private message text before sharing audit evidence.
 
 ### Native browser recovery and review observations
 

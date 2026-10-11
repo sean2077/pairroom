@@ -1,6 +1,6 @@
 # Native host mode
 
-Status: implemented; Native is the default and recommended host mode. This records design rationale, not a setup sequence or pending phase plan. Current contracts live in [Architecture](../ARCHITECTURE.md), [Protocol](../PROTOCOL.md#native-host-protocol-v8), and [Storage](../STORAGE.md#native-relay-state). [Native relay](../NATIVE_RELAY.md) owns the operator workflow.
+Status: implemented; Native is the default and recommended host mode. This records the original local-session design rationale, not a setup sequence or pending phase plan. Current contracts live in [Architecture](../ARCHITECTURE.md), [Protocol](../PROTOCOL.md#native-host-protocol-v8), and [Storage](../STORAGE.md#native-relay-state). [Native relay](../NATIVE_RELAY.md) owns the operator workflow. Later Gemini support and one-host LAN collaboration are described in the [runtime guide](../NATIVE_RELAY.md#gemini-cli) and [LAN guide](../LAN_NATIVE.md); the original local identity and Service assumptions below do not specify the direct guest transport.
 
 ## Decisions
 

@@ -4,13 +4,14 @@
 
 | Kind | Examples | After restart |
 |---|---|---|
-| Durable | Room metadata, Message, FIFO delivery / processing projection, collaboration instructions, permission profile, Turn summary, resolved approval, Binding, attachment metadata | Replayed from the Event Log / registry |
-| User configuration | Named Agent pairs and default ID | Read from `agent-pair-profiles.json` under the Service data root, independently of Registry-index rebuild |
+| Durable Room facts | Room metadata, Message, FIFO delivery / processing projection, collaboration instructions, permission profile, Turn summary, resolved approval, Binding, attachment metadata | Replayed from the Event Log; the Room Registry projection is derived |
+| Service user preferences | Named Agent pairs/default ID and navigation order | Read from `agent-pair-profiles.json` and `navigation-order.json`, independently of Registry-index rebuild |
+| LAN host identity/settings | Listener opt-in/address and persistent host certificate/key | Read from private `<service data root>/lan/host.json`; disabling the listener preserves identity |
 | Direct LAN client state | Per-Room certificate, admission, original delivery/wake receipts and verified evidence cache | Read from the private per-user client store, independently of any local Service |
 | Native session ownership | Exact Runtime/session reservation across hosted and direct Room associations | Preserve the private per-user identity store; it is not a disposable locator index |
 | Ephemeral | native process, current stdout connection, vendor request ID, active owner, transient text delta | Not restored |
 
-Room-owned FIFO entries are persistent only while PairRoom can prove they did not cross the native submission boundary. Any input that may already have produced side effects without a confirmed ownership result is not executed again automatically.
+Embedded rebuilds its Room-owned FIFO only for entries that did not cross the native submission boundary. Native rebuilds per-slot queues and delivery receipts as described in [Native relay state](#native-relay-state). Neither mode automatically repeats input that may already have produced side effects.
 
 ## Event Log
 
@@ -20,6 +21,9 @@ The current writer and bounded read-compatibility window are:
 |---|---|---|
 | Room Store / provisioning | 13/6 | 12/5 |
 | Registry checkpoint | 4 | 3 |
+| Local Native workspace state | 2 | 2 |
+| Direct LAN workspace state | 3 | Not a local-state migration |
+| Agent pair profiles | 2 | 2 |
 
 A Room uses an append-only JSONL store. Metadata schema is checked before Event Log replay, then current-schema events are replayed in order to rebuild the projection. Readers accept the explicit pairs **Store 12/provisioning 5** for existing local Rooms and **Store 13/provisioning 6** for new Rooms. Schema ≤11 remains retired and future formats fail before replay, repair, or mutation. A Service provisions new Rooms as schema 13/provisioning 6 with explicit `host_mode`; a Room created by standalone `pairroom serve`, outside any Service registry, writes Room metadata schema 13 only, with no provisioning fact and no `host_mode`, and a Service refuses to adopt such a store. LAN sharing and its awaiting-peer selection require 13/6; the older local pair cannot contain LAN permissions. Existing local event logs and metadata are read unchanged. Registry checkpoint 3 remains readable; newly written derived checkpoints use 4. Missing metadata is not inferred for a published Room. Mismatched pairs and illegal or retired-actor events fail explicitly instead of guessing a repair.
 
@@ -52,21 +56,17 @@ The seven-day grace exceeds the upload-then-send window by far, because a Native
 
 ## Backup and Restore
 
-Stop or archive the related Room before backup, so “the files were copied” is not mistaken for “external side effects completed”. Restore should verify:
+Stop/drain the relevant PairRoom owner and separately pause Native work before copying state. **Archiving a LAN Room revokes guest membership**, so use Service shutdown when the backup must preserve that membership. A completed copy does not establish that external side effects stopped or completed.
 
-- manifest / checksum;
-- that the Project path still exists;
-- that the Binding's native session can be resumed;
-- that the Event Log can replay completely;
-- that the Room schema is exactly supported by the current release.
+`pairroom backup` verifies the source and validates the completed archive before publishing its output. `pairroom restore` verifies the declared file set, hashes, full compressed container, supported schema and replay before publishing the target. These are Room-data checks: the operator must separately verify the Project workspace, native session availability and side effects before reconnecting a restored Room. See [Operations backup](OPERATIONS.md#backup) for commands and the complete set of Service, per-user and workspace state to preserve.
 
-Restoring a current-schema backup may restart Room-owned FIFO entries that never crossed the native submission boundary. Accepted or uncertain native work is never replayed automatically.
+Restore itself does not start a Runtime. Later activation may rebuild Embedded FIFO entries that never crossed native submission, or retain Native queued input for collection. Accepted or uncertain work is not automatically replayed.
 
 Agent pair profiles are not part of a Room backup or restore. Preserve the Service's `agent-pair-profiles.json` separately when migrating its user configuration. Writes use a private temporary file, file sync, rename, and directory sync where supported. Reads reject non-regular/symlinked files, oversized data, unknown schemas/fields, invalid pairs, and dangling defaults; profile operations fail closed without replacing the damaged file. Copy it before repair. Explicit full Room selections remain independent of profile-file health.
 
 ## Corruption handling
 
-Do not edit production JSONL directly. Copy the data directory first, keep the original failure evidence, then use diagnostics / backup verification to locate the first invalid event. A Room that cannot be migrated safely should be rebuilt, not continued after skipping middle events.
+Do not edit production JSONL directly. Copy the data directory first, keep the original failure evidence, then use diagnostics / backup verification to locate the first invalid event. A Room that cannot be recovered safely should be recreated with its original data preserved for inspection; never continue it after skipping middle events.
 
 ## Native relay state
 

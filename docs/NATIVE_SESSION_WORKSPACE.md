@@ -8,8 +8,9 @@ directory does not change the bound Room, participant slot or credentials.
 
 ## Resolution and setup
 
-Foreground relay commands and approved Stop/StopFailure hooks first locate the
-exact `(runtime, session_id)` binding and read its original `State.Workspace`.
+Foreground relay commands and approved response hooks (Stop/StopFailure, or
+Gemini AfterAgent) first locate the exact `(runtime, session_id)` binding and
+read its original `State.Workspace`.
 Explicit `--repo`, `--room` and `--slot` are selectors, not permission to switch
 an already-bound session to a different target. `--service-file` selects a local
 hosting Service; a LAN client retains its own host endpoint and pin and does
@@ -37,12 +38,15 @@ does not acquire multiple active identities by switching a global server.
 the intended project or pass `--repo`. Hook installation and native consent are
 unchanged. Finding a binding does not cause a harness to load hooks it has not
 approved, and no global hooks, directory-change hooks or vendor transcript scans
-are introduced.
+are introduced. Gemini's approved BeforeTool hook supplies its official session
+identity to the next `run_shell_command` relay call; it has a separate private
+caller record and a two-minute freshness boundary. It does not make cwd or a
+shared `node` PID sufficient identity. See [Gemini setup](NATIVE_RELAY.md#native-setup).
 
 ## Passive hook boundary
 
 Installing hooks does not bind every session in a project. A valid unbound
-Stop/StopFailure invocation returns only the neutral `{}` hook result, with no
+response-hook invocation returns only the neutral `{}` hook result, with no
 state or credential writes, slot/collector lock, publication,
 collection, park wait, or Service startup. It writes one stderr line only when
 this workspace holds a confirmed binding for the same Runtime that belongs to
@@ -50,6 +54,9 @@ another session (see [upgrade and recovery](#upgrade-and-recovery)). It does not
 or make HTTP requests, even when that endpoint is missing, malformed, stale, or
 points to a stopped Service. This also applies to Grok reusing the Claude hook.
 A shared or reused harness PID is not evidence that a fresh session is bound.
+Gemini BeforeTool is a setup exception: a relay shell call records the official
+session/process observation needed for bind, without publishing, collecting or
+contacting a Service. Unrelated Gemini shell calls remain inert.
 
 Cold hook discovery ignores unreadable workspace candidates and refuses unsafe
 walks without using partial results; it never follows a symlink or borrows another
@@ -144,7 +151,7 @@ credentials or copy `.pairroom` into a task worktree as a path workaround.
 
 ## File and permission boundaries
 
-Discovery never calls `chdir`. Relative `--text-file`, `--ref`, `--attach`,
+Discovery never calls `chdir`. Relative `--text-file`, `--ref`, `--attach`, `--file`,
 `--output-file` and explicit `--service-file` paths are interpreted relative to
 the actual command invocation, not the binding workspace. A session can therefore
 publish evidence from a task checkout while continuing in its original Room.
@@ -152,7 +159,7 @@ File access remains subject to native harness permissions and existing PairRoom
 validation. Different worktrees are not merged through `git --git-common-dir`.
 A fresh session in the same directory never inherits a prior session's binding.
 
-The regression tests cover three runtime identities, directory/worktree drift,
+The regression tests cover native runtime identities, directory/worktree drift,
 explicit conflicts, cold lookup, custom Services, stale generation/replacement,
 private/symlink checks, CLI relative files and a synthetic Stop publish/collect
 cycle. These are deterministic tests, not authenticated vendor-runtime E2E.

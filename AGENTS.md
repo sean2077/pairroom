@@ -2,7 +2,7 @@
 
 ## Project boundary
 
-PairRoom is a local Go coordination layer for Claude Code, Codex, Grok Build, and Gemini CLI. Each Room has two stable slots, independently selecting a supported Runtime. Embedded owns adapters; Native relays between user-owned sessions. Neither replaces the vendor model/tool loop, credentials, or session store.
+PairRoom is a local-first Go coordination layer for Claude Code, Codex, Grok Build, and Gemini CLI. Each Room has two stable slots. Native is the default and relays between user-owned sessions; Embedded owns local adapters. A LAN Room needs one hosting Service, while the guest uses CLI/hooks directly. Different sessions on one machine may host local Rooms and join remote Rooms concurrently. Neither mode replaces the vendor model/tool loop, credentials, or session store.
 
 Read the applicable nested contract and [terminology](CONTEXT.md), then the owner of the surface being changed in the [documentation map](docs/README.md). Current code and verified contracts outrank historical plans; a plan is not evidence of implementation or new authorization.
 

@@ -87,7 +87,7 @@ _Equivalent (zh-CN)_: Provider 名称
 ## Hosting and transport
 
 **Host mode**:
-The immutable Room choice between PairRoom-owned adapters (`embedded`) and user-owned sessions (`native`). A desktop-owned embedded Service can serve either Room mode.
+The immutable Room choice between user-owned sessions (`native`, the default for new Rooms) and PairRoom-owned adapters (`embedded`). A desktop-owned embedded Service can serve either Room mode.
 _Equivalent (zh-CN)_: 宿主模式
 
 **Native host mode**:
@@ -95,7 +95,7 @@ A Room that relays and audits messages while users retain their original harness
 _Equivalent (zh-CN)_: Native 宿主模式
 
 **Park window**:
-The bounded interval in which an approved Stop hook waits for inbox work before the native response ends; not an indefinite idle-wake guarantee.
+The bounded interval in which an approved response hook (`Stop`, or Gemini `AfterAgent`) waits for inbox work before the native response ends; not an indefinite idle-wake guarantee.
 _Equivalent (zh-CN)_: Park 等待窗口
 
 **Foreground exchange**:
@@ -121,11 +121,11 @@ The reserved other slot of a LAN Room before admission (`awaiting_peer`): no Run
 _Equivalent (zh-CN)_: 等待对方加入
 
 **Remote key**:
-The admitted member's public certificate fingerprint on a LAN member binding (`remote_key`); it identifies the member's machine, never a vendor session identity.
+The admitted guest's public-key fingerprint on a LAN member binding (`remote_key`), authenticated by its per-Room client certificate. It identifies that membership key, not a global machine identity or a vendor session.
 _Equivalent (zh-CN)_: 对方密钥
 
 **Join request and receipt**:
-A LAN invitation permits only a request to join; the host owner admits the exact request/key receipt supplied through a trusted channel, and that admitted key becomes the member binding's generation.
+A LAN invitation permits only a request to join; the host owner admits the exact request/key receipt supplied through a trusted channel. Approval binds that key to the Room's reserved slot and membership generation.
 _Equivalent (zh-CN)_: 加入请求与加入回执
 
 **Joined Room**:

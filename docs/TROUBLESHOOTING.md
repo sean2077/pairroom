@@ -44,7 +44,7 @@ Native activity is observational. Inspect the original harness and relay diagnos
 
 Embedded Waiting is expected while another participant owns the Turn. Native `queued` instead needs the bound receiver to collect: check park/foreground wait, capability/inbound policy, and wake observations. A queued message does not prove that a model has been awakened.
 
-Automatic relay needs the exact current peer handle (`@claude`, `@codex`, `@grok`, or the displayed duplicate-runtime suffix). Role aliases and control markers do not route. A handle may end a sentence (`@codex.`) or touch Chinese/Japanese text (`请@codex审查`), but a directly attached Latin letter, digit or `_`, or a `.`/`-` followed by one (`@codex.dev`), makes a different token; [Protocol](PROTOCOL.md#output-routing) owns the exact rules. A peer handle wins over `@user`; do not include one merely to acknowledge a final answer.
+Automatic relay needs the exact current peer handle (`@claude`, `@codex`, `@grok`, `@gemini`, or the displayed duplicate-runtime suffix). Role aliases and control markers do not route. A handle may end a sentence (`@codex.`) or touch Chinese/Japanese text (`请@codex审查`), but a directly attached Latin letter, digit or `_`, or a `.`/`-` followed by one (`@codex.dev`), makes a different token; [Protocol](PROTOCOL.md#output-routing) owns the exact rules. A peer handle wins over `@user`; do not include one merely to acknowledge a final answer.
 
 An unaddressed Embedded answer remains visible in the Room. An unaddressed **Native Stop** records only a publication receipt, not its private body. Use `@user` for a Native result intended for the Room/human. Explicit `send`/`exchange` uses its command target rather than body mentions; explicit send followed by peer-directed Stop may produce two messages. [Native publication rules](NATIVE_RELAY.md#what-is-published) explain this distinction.
 
@@ -62,7 +62,8 @@ A lost **publication response** is different from retrying execution: retain the
 
 CLI failures print on stderr as `pairroom: <message>`, and Stop-hook notes as `PairRoom: <message>`. Below, `<...>` marks variable parts. Pick the check for your stage:
 
-- **Before binding**, from any shell in the Project, run `pairroom relay preflight`. It changes nothing, prints JSON, and exits nonzero until `ready`. Read `next_steps` even when `ready` is `true`: a Service version mismatch, or a `pairroom` on PATH that is a different file, only warns.
+- **Before binding locally**, from any shell in the Project, run `pairroom relay preflight`. It creates no Room, binding or hook configuration, prints JSON, and exits nonzero until `ready`. Read `next_steps` even when `ready` is `true`: a local Service version mismatch, or a `pairroom` on PATH that is a different file, only warns.
+- **Before a LAN join**, run `pairroom relay preflight --join` in the intended Agent session. It checks local readiness without a guest Service. After admission, ordinary preflight checks the saved host's contact/admission; it can activate that Room and does not compare host versions.
 - **After binding**, run `pairroom relay doctor` inside the bound session. It is read-only and shows `local.hook_installation`, `last_hook_at`, and version/protocol matches; while no Stop hook has run since bind, it and `status` add `local.hook_hint`. Use `pairroom relay status --brief` for queue, unknown-delivery, and pending-publication counts. Unlike doctor, `status` may reconcile a pending Stop publication under its original sequence.
 
 [Native relay](NATIVE_RELAY.md) owns the workflow, [CLI reference](CLI_REFERENCE.md#native-relay-commands) owns the flags, and [Protocol](PROTOCOL.md#native-host-protocol-v8) owns delivery semantics.
@@ -89,25 +90,45 @@ starting a local Service does not repair that binding.
 
 Start or reuse the one Service that owns the intended data root; see [Desktop, daemon, and service.lock conflict](#desktop-daemon-and-servicelock-conflict). The first bind to a custom data root needs `--service-file <root>/relay-endpoint.json` as a path. If you stop the Service mid-session, each Stop hook saves its reply before contacting it, up to eight replies in order (fewer only when they are very long; the saved state stays under about 1.9 MiB). Once it is back, `relay status` reports any reply still waiting as `held_publications`. The next hook, `pairroom relay status` or `pairroom relay reconcile` publishes them in order under their original sequences; `relay doctor` and `relay history` inspect without publishing. A ninth reply is refused with `PairRoom: this reply was NOT retained ...`; run `relay reconcile` once the Service is back, then send that reply explicitly with `relay send` if it matters.
 
-After a Service restart or `--idle-timeout` (15 minutes by default) of inactivity, a Native Room stays suspended until a relay call or opening it in Management activates it. Until then, `relay doctor` fails with `room runtime is not active: the Native Room is suspended ... and doctor never activates it. Run pairroom relay status --brief --room <room> --slot <slot>, which activates it, ...`. Run that command, then rerun doctor.
+After a Service restart or `--idle-timeout` (15 minutes by default) of inactivity, a Native Room stays suspended until an activating relay call or opening it in Management resumes it. `history`, `peer` and direct bound preflight can activate the Room even though they do not publish or collect. `doctor` deliberately cannot. For local bindings its error names `pairroom relay status --brief`; direct LAN doctor may instead report `lan_host_unavailable`, preserving the admission. Run `pairroom relay status --brief` inside the original session, then repeat doctor. Activation resumes the Room's configured wake processing.
 
 ### Bind reports a missing session identity
 
 - `<VAR> is missing; run bind as a tool call inside your native <runtime> session, not a plain terminal`, where `<VAR>` is `CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`, or `GROK_SESSION_ID`
 - `GROK_SESSION_ID is missing; run bind as an agent tool call inside your native grok session, not a plain terminal or Grok shell mode (!)`
+- `Gemini BeforeTool session metadata is missing or stale; ...` or `Gemini BeforeTool session metadata is stale or missing; run relay as a fresh standalone run_shell_command tool call`
 - `bind requires --slot 1|2 (Agent 1/2) outside a recognized native session`, or `run bind as a tool call inside your native session; use --runtime when the harness cannot be identified`
 - `conflicting native session metadata; run the command in the intended native session without inherited outer-session variables`
 - Hook: `PairRoom: this bound harness reported a different session identity; no reply was published or collected. ...`
 
-Ask the Agent to run the command as its own tool call inside the intended session. In Grok, paste the command as a normal prompt; `!` shell mode receives no `GROK_SESSION_ID` and does not run the Stop hook. Never set or copy a session variable by hand. Preflight's `caller` shows which harness and session it detected. If an explicit `--runtime` disagrees with that harness, preflight fails with an actionable `caller.hint` even when that Runtime's hook is installed. Omit `--runtime` to check this session, or rerun preflight from the intended harness; do not copy session variables to force a match. See [Grok Build Native](CLI_REFERENCE.md#grok-build-native).
+Ask the Agent to run the command as its own tool call inside the intended session. In Grok, paste the command as a normal prompt; `!` shell mode receives no `GROK_SESSION_ID` and does not run the Stop hook. Never set or copy a session variable by hand. Preflight's `caller` reports the detected Runtime, identity source and whether this session is bound; it does not print the raw native session ID. If an explicit `--runtime` disagrees with that harness, preflight fails with an actionable `caller.hint` even when that Runtime's hook is installed. Omit `--runtime` to check this session, or rerun preflight from the intended harness; do not copy session variables to force a match. See [Grok Build Native](CLI_REFERENCE.md#grok-build-native).
+
+Gemini supplies identity through its approved **BeforeTool** hook, not a
+`GEMINI_SESSION_ID` environment variable. Install with
+`pairroom relay install --runtime gemini`, approve/reload both BeforeTool and AfterAgent in `/hooks`, then ask
+Gemini to run bind as a fresh standalone `run_shell_command` call. A shell script
+that waits more than two minutes before bind can outlive the caller observation;
+run the relay command in a new tool call. See [Gemini setup](NATIVE_RELAY.md#native-setup).
 
 ### Bind rejected because the Stop hook is missing
 
 - `no PairRoom Stop hook is installed for <runtime>: run pairroom relay install --runtime <runtime>, approve it (<where>), then bind again. Bind checks installation only; an unapproved hook never publishes Stop replies` (Grok's variant also suggests the reused Claude Code hook)
 - `hooks are disabled; native association requires an approved Stop hook`, when the hook file sets `disableAllHooks`
+- `Gemini BeforeTool and AfterAgent hooks are required: run pairroom relay install --runtime gemini, approve/reload both in /hooks, then bind again`
 - Preflight `hooks.<runtime>.status` is `missing`, `disabled`, or `error`
 
-Bind checks only that the hook is **installed**; PairRoom cannot see approval. Run `pairroom relay install --runtime <runtime>` in the Project's worktree, then approve the exact definition: Codex `/hooks`, Claude Code project hook consent, Grok `/hooks` (press `r` to reload) plus folder trust. Review again after reinstalling or editing the file. An installed but unapproved hook lets bind, send, and wait succeed, but Stop replies never publish, `last_hook_at` stays empty after a finished turn, and doctor/status keep showing `local.hook_hint`. See [one-time project setup](NATIVE_RELAY.md#one-time-project-setup).
+Bind checks that the hooks are **installed**; PairRoom cannot inspect native approval. Run `pairroom relay install --runtime <runtime>` in the intended worktree, then approve the exact definitions: Codex `/hooks`, Claude Code project hook consent, Grok `/hooks` (press `r` to reload) plus folder trust, or Gemini BeforeTool and AfterAgent in `/hooks` plus workspace trust. Review again after reinstalling or editing. An unapproved response hook leaves Stop/AfterAgent publication inactive and `last_hook_at` empty after a finished turn; doctor/status retain `local.hook_hint`. For Gemini, an unapproved BeforeTool additionally blocks bind-time identity capture. See [one-time project setup](NATIVE_RELAY.md#one-time-project-setup).
+
+### Gemini stops automatic continuation
+
+`PairRoom: Gemini response boundary stopped: ...`, a missing/mismatched
+continuation cursor, or the ambiguous `[no response text]` marker means PairRoom
+could not safely isolate a complete new reply. Its successful `continue:false`
+hook decision ends the automatic chain and leaves unclaimed inbox messages
+queued. Inspect the original publication before sending any missing complete
+new reply with `relay send`, then start a fresh user turn or use foreground
+`relay wait`. Do not manually alter the cursor or repeat an already confirmed
+publication. [Gemini Native](NATIVE_RELAY.md#native-setup) owns this boundary.
 
 ### No matching binding, or an ambiguous Room or slot
 
@@ -142,7 +163,7 @@ For a workspace that moved, was deleted, or has a broken locator, follow [worksp
 - Collection: `stdout written but acknowledgement unavailable; inspect Room delivery state, never automatically replay`. The acknowledgement was missing or was not `handed_off: true`.
 - Collection: `wait response missing claim; outcome uncertain, collection stopped`, or `publication <id> confirmed; collection failed: ...`
 
-Run `pairroom relay status --brief` for unknown counts and recovery IDs, and use read-only `relay history --id <id>` or `--pending`. Recover an uncertain send by rerunning the same command with the same `--id` and unchanged body and target. A new ID is a new message. A same-ID `--attach` retry matches the original when the re-uploaded images have the same bytes, names, and order. `--ref` or `--review` after the file or checkout changed hits the payload conflict above. When stdout was written, the envelope is already in the tool output; read it and inspect workspace side effects before any explicit Retry. `relay reconcile --resend` or `--discard` decides an unknown Stop publication explicitly. See [delivery evidence](NATIVE_RELAY.md#delivery-evidence-remains-conservative) and [A message did not resume after restart](#a-message-did-not-resume-after-restart).
+Run `pairroom relay status --brief` for unknown counts and recovery IDs, and use `relay history --id <id>` or `--pending` to read message evidence without publishing or collecting it. Recover an uncertain send by rerunning the same command with the same `--id` and unchanged body and target. A new ID is a new message. A same-ID `--attach` or `--file` retry matches the original when the ordered uploads retain their kind, bytes, media types and names. `--ref` or `--review` after the file or checkout changed hits the payload conflict above. When stdout was written, the envelope is already in the tool output; read it and inspect workspace side effects before any explicit Retry. `relay reconcile --resend` or `--discard` decides an unknown Stop publication explicitly. See [delivery evidence](NATIVE_RELAY.md#delivery-evidence-remains-conservative) and [A message did not resume after restart](#a-message-did-not-resume-after-restart).
 
 ### Another collector is active
 
@@ -164,6 +185,14 @@ The one-hour default is a PairRoom budget; the harness's own tool timeout can en
 - `relay doctor` `local.service_version_match` or `protocol_match` is `false`.
 - Any relay command: `PairRoom: the Service runs release <x> but this CLI is <y>; run pairroom relay preflight ...`, or after a 400/401/404 or no-binding failure `PairRoom: this failure may come from a release mismatch: ...`. A Service older than this hint does not stamp every response; the CLI then learns its release only from the Service snapshot that bind and session discovery read, or from one probe after such a failure. Preflight reports a mismatch in its JSON rather than on stderr.
 - Grok hook: `Grok hook received a claim instead of readiness; update CLI and Service together; acknowledgement withheld`
+
+The automatic stderr release hint and preflight Service version comparison
+above apply to local Management transport. Direct LAN commands do not receive
+that version header. For an admitted guest, compare `relay doctor`'s
+`service_version`, `protocol`, `local.service_version_match` and
+`local.protocol_match`; activate a suspended host Room with `status --brief`
+first if needed. An absent warning or a successful direct preflight does not
+establish a version match.
 
 Use the CLI from the Service's release, such as the one bundled with Desktop, and restart the harness sessions. Update CLI, Service, and the relay skill together; see [Upgrading](UPGRADING.md).
 

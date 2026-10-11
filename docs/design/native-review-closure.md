@@ -15,6 +15,13 @@ resolution: history, doctor and review follow the existing session binding acros
 cwd changes. Review evidence still uses the bound workspace unless the operator
 selects a different trusted checkout with `--review-repo`.
 
+The behavior and measurements below describe that recorded revision. Later wake
+changes, Gemini support, and LAN guests have their current contracts in
+[Protocol](../PROTOCOL.md), [Native relay](../NATIVE_RELAY.md), and
+[Native LAN collaboration](../LAN_NATIVE.md). The current Protocol explains when
+later unattempted messages remain eligible for wake even while an attempted
+message is still queued.
+
 ## User path
 
 Bind normally. Use the native conversation for decisions and readable Markdown/code;

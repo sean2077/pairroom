@@ -6,7 +6,7 @@
 |---|---|
 | Desktop | Native window/tray host; reuses a daemon or owns an embedded Service |
 | `pairroom service` | Multi-Project/multi-Room Management Service |
-| `pairroom serve` | Current-format standalone Room for development/diagnostics |
+| `pairroom serve` | Explicit standalone Embedded Room for development/diagnostics; not a multi-Room Service |
 | `pairroom daemon` | Explicit OS background-Service management |
 | `--mock` | Deterministic verification without vendor CLIs |
 
@@ -18,7 +18,16 @@ Service lock acquisition, stale recovery, and release are serialized across curr
 
 Management, standalone and ordinary Room listeners require numeric loopback addresses. A token does not allow LAN, wildcard, or hostname binds on those surfaces. Deliberate remote access to the full local interface uses protected SSH local forwarding; treat access to that endpoint/bootstrap token as access to repositories, Agent credentials, and attachments.
 
-Native is the default and recommended Room mode. For colleague collaboration, the Room's host enables the separate **LAN sharing** listener in Service Settings and creates a Native LAN Room. Select a numeric private address assigned to the intended interface, allow the selected port in the host firewall, and exchange the invitation and exact join receipt through the colleagues' trusted channel. The guest needs CLI/hooks and outbound reachability; joining and relaying require no local Service or inbound listener. The same machine may host local Rooms and join other hosts through different native sessions, with the host fixed per binding. A running local Service can optionally display joined client bindings and provide human actions and supported wake observation. Stopping that optional Service leaves direct CLI/hooks usable; when no collector, hook, or wake observer is alive, messages remain in the host's queue. See [Native LAN collaboration](LAN_NATIVE.md). Disabling the host listener preserves its private key and Room history for later reconnection. It does not stop either native harness.
+## LAN hosting and joined Rooms
+
+Native is the default and recommended Room mode. For colleague collaboration, the Room's host enables the separate **LAN sharing** listener in Service Settings and creates a Native LAN Room. Select a numeric private address assigned to the intended interface, allow the selected port in the host firewall, and exchange the invitation and exact join receipt through the colleagues' trusted channel.
+
+| Participant | Required | Optional |
+|---|---|---|
+| Host | One Service, the LAN listener and the owner's native session with CLI/hooks | Desktop/browser Management |
+| Guest | Native session with CLI/hooks and outbound reachability to the host | Same-user local Service for Joined Rooms, human actions and supported wake observation |
+
+The same machine may host local Rooms and join other hosts through different native sessions, with the host fixed per binding. Stopping the guest's optional Service leaves direct CLI/hooks usable. When no collector, hook or wake observer is alive, messages remain in the host's queue. Disabling the host listener preserves its private key and Room history for later reconnection and does not stop either harness. Keep the invited address/port stable; bindings do not migrate to a different endpoint automatically. [Native LAN collaboration](LAN_NATIVE.md) owns admission, reconnect, Leave and local detach.
 
 ## Desktop lifecycle
 
@@ -48,8 +57,6 @@ A quiet Runtime may be running a long command, compacting context, or performing
 
 ## Project, Archive, Delete
 
-Management uses the desktop application icon in navigation and sign-in. The Project/Room list fills the sidebar above Service status and scrolls independently when it overflows. Primary actions use green buttons in light and dark themes across Management and Room views.
-
 The Room context menu separates rename, **Close Room tab**, ordering, and confirmed **Archive Room**. It is available from Room rows/sidebar/tabs and through keyboard context-menu access. Closing a view and archiving are deliberately different operations.
 
 | Action | Boundary |
@@ -76,9 +83,29 @@ In **Runtimes**, a retryable failure offers **Retry cleanup**; an attempt in pro
 
 ## Backup
 
-Back up before incompatible upgrades, permanent deletion, data-root moves, manual integrity repair, or binding-policy changes. Stop/drain the relevant PairRoom owner. For Native consistency, also stop work explicitly in the original harnesses: archive/backup cannot do that for you.
+Back up before incompatible upgrades, permanent deletion, data-root moves, manual integrity repair, or binding-policy changes. Stop/drain the relevant PairRoom owner. For Native consistency, also pause work in the original harnesses and stop CLI/hook/observer writers before copying their state. **Use Service shutdown to preserve a LAN membership during backup: Archive Room revokes it.** Neither archive nor backup stops user-owned native work.
 
-`pairroom backup` / `restore` operate on **one Room data directory**, not the multi-Room Service root. For complete rollback, preserve the entire stopped Service root separately, including Agent pair profiles, navigation preferences and the private LAN host identity, plus explicitly imported Room directories outside that root. Also preserve the private per-user `pairroom/lan-clients` and `pairroom/native-identities` stores with matching workspace state while all writers are stopped; these are outside every Service root. The Git repository, vendor session stores, and Native workspace credentials/capability sidecars are separate and are not included in a Room archive. A single Room archive does not transfer a host's TLS identity or a guest's membership key; do not regenerate keys to bypass a failed identity check. Preserve owner-only permissions when restoring the full root.
+`pairroom backup` / `restore` operate on **one Room data directory**. Complete rollback requires a consistent set beyond that archive:
+
+| State | Preserve |
+|---|---|
+| Room archive | `events.jsonl`, `metadata.json`, attachment manifests and their named content |
+| Stopped Service root | All Rooms, Registry, Agent pair profiles, navigation preferences, and private `lan/host.json` host identity/settings; also retain any previously registered Room directories outside the root |
+| Per-user client and ownership stores | `pairroom/lan-clients` and `pairroom/native-identities` under the OS user configuration directory, outside every Service root |
+| Workspace and native session state | Matching `.pairroom` binding/publication state, credentials and capability sidecars; the Git workspace and vendor session stores remain separate |
+| Matching software | PairRoom binary/configuration and the recorded native CLI versions |
+
+Preserve owner-only permissions and original identities across the set. A Room archive does not transfer a host's TLS identity or a guest's membership key, and restoring files cannot reverse a revocation recorded by a remote host. Do not regenerate keys to bypass a failed identity check.
+
+For a stopped Room, replace these placeholders with the source directory and separate backup/restore destinations:
+
+```bash
+pairroom verify --data-dir "<room-data-directory>"
+pairroom backup --data-dir "<room-data-directory>" --output "<backup-file.tar.gz>"
+pairroom restore --input "<backup-file.tar.gz>" --data-dir "<new-empty-room-directory>"
+```
+
+Restore verifies data before publishing its target and does not start a Room. Inspect the verification result, native sessions and workspace effects before reopening restored state. [CLI reference](CLI_REFERENCE.md#common-entry-points) owns the command options.
 
 Verification warns about each stored attachment no message references. Active Rooms reclaim such uploads after seven days ([Storage](STORAGE.md#attachment)), so these warnings normally describe recent unsent uploads; the backup still includes them.
 

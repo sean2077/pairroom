@@ -1,24 +1,23 @@
 # Architecture
 
-PairRoom coordinates native coding harnesses without replacing their model/tool loops, credentials, or session stores. Ownership depends on **Room host mode**, not whether the Management Service happens to be embedded in Desktop. [Concepts](CONCEPTS.md) defines user-facing behavior; this page owns component and state boundaries.
+PairRoom coordinates native coding harnesses without replacing their model/tool loops, credentials, or session stores. **Native is the default Room host mode**; Embedded remains available for PairRoom-owned adapters. Ownership depends on the Room's immutable host mode, not whether the Management Service happens to be embedded in Desktop. [Concepts](CONCEPTS.md) defines user-facing behavior; this page owns component and state boundaries.
 
 ## Components and ownership
 
-```text
-Desktop or browser
-        |
-Management Service ---- Project registry / Room lifecycle / user preferences
-        |
-        +---- Embedded Room HTTP/SSE ---- Room Engine ---- native adapters
-        |                                      |          Claude / Codex / Grok / Gemini
-        |                                Room Event Log
-        |
-        +---- Native HTTP/SSE ---- relay Engine ---- per-slot inboxes
-                                       |                   |
-                                 Room Event Log       CLI / approved hooks
-                                                           |
-                                                   user-owned sessions
+```mermaid
+flowchart TD
+    UI["Desktop / browser"] --> Management["Local Management Service"]
+    Management --> Embedded["Embedded Room engine"]
+    Management --> Native["Native relay engine"]
+    Embedded --> Adapters["Vendor adapters"]
+    Embedded --> EmbeddedLog["Embedded Room Event Log"]
+    Native --> NativeLog["Native Room Event Log"]
+    Local["Host CLI / approved hooks"] --> Native
+    Guest["Guest CLI / approved hooks"] --> LAN["Optional Native LAN listener"]
+    LAN --> Native
 ```
+
+Each Room has one authoritative Event Log on its host. A LAN guest connects directly to that host; an optional Service on the guest machine observes the existing client binding for its local dashboard and supported wake, without hosting a second copy of the Room. Both Native participants retain their own sessions and execution permissions.
 
 | Component | Source | Owns |
 |---|---|---|
@@ -28,6 +27,8 @@ Management Service ---- Project registry / Room lifecycle / user preferences
 | Embedded adapters | `internal/agent/` | Vendor processes/session transport, typed steering/submission, native events |
 | Native relay | `internal/relay/` | Durable publication, per-slot FIFO, receipts, generation authentication, audit and replay-built indexes |
 | Native client/hooks | `internal/relayclient/` | Session/workspace discovery, private local state, publication reconciliation and collection |
+| LAN transport and client | `internal/lanshare/`, `internal/lanclient/` | Pinned TLS, direct guest membership, evidence cache and original delivery/wake receipt recovery |
+| Native identity ownership | `internal/nativeidentity/` | Same-user Runtime/session reservations across local Services and direct LAN bindings |
 | Wake and review evidence | `internal/claudewake/`, `internal/review/` | Private Claude inbox transport and bounded opt-in Git observations; neither grants execution authority |
 | Protocol and prompts | `internal/protocol/`, `internal/prompt/` | Versioned contracts, stable instructions, dynamic envelopes |
 | Configuration | `internal/config/`, `internal/model/`, `internal/ccswitch/` | Strict selection/configuration and read-only supported Provider resolution |
@@ -53,7 +54,7 @@ Project/per-Project Room display order lives in `navigation-order.json`, not Roo
 
 A Project is a canonical Git workspace, not a copied checkout. Provisioning builds privately and publishes only when complete. `service.lock` protects one Service writer per data root, separately from Embedded Turn ownership.
 
-Native Runtime/session identity is globally unique across Bindings, including archived Rooms. Embedded deferred new Bindings materialize only on real acceptance; existing Bindings must resume exactly, and a runtime that reports a different session during a bound Turn (for example in Claude Code `system/init` or `result`) fails that Turn and is stopped rather than replacing the bound ID. Native binds associate immediately from official tool-call session metadata, with generation-scoped credentials and later hook confirmation. Checkpoint/event/uniqueness failure cannot authorize a second owner or silently substitute a session.
+For Native, exact Runtime/session identity cannot belong to two associations for the same OS user, including archived hosted Rooms and pending direct LAN admissions. The guest retains its native identity locally; the hosting Service binds the admitted remote key, Runtime, slot and generation without receiving the guest's vendor session ID. Embedded deferred new Bindings materialize only on real acceptance; existing Bindings must resume exactly, and a runtime that reports a different session during a bound Turn (for example in Claude Code `system/init` or `result`) fails that Turn and is stopped rather than replacing the bound ID. Native binds associate immediately from official caller metadata, with generation-scoped credentials and later hook confirmation. Checkpoint/event/uniqueness failure cannot authorize a second owner or silently substitute a session.
 
 Durable actors are `slot1`/`slot2`; RuntimeKind independently selects Claude Code, Codex, Grok Build, or Gemini CLI. Routing, policy projection, resume, and events must use that selection, not infer a vendor from a slot. `claude`/`codex` remain relay CLI input aliases only.
 
@@ -150,9 +151,9 @@ Project-name links navigate to Project pages; disclosure expands Rooms separatel
 
 ## Native host mode
 
-`internal/relay/` serializes durable appends before publishing projections. Each slot has its own FIFO; different original sessions may run independently. Binding generation authenticates publication/collection; unbind/replacement revokes old credentials without stopping accepted native work. Archive retains ownership and fails closed on missing Native data. Archive and rename hold a Runtime admission barrier from suspension through their lifecycle commit, so relay traffic cannot reactivate the Room in between, and a Service lifecycle append refuses while any Runtime still owns the Room's Event Log.
+`internal/relay/` serializes durable appends before publishing projections. Each slot has its own FIFO; different original sessions may run independently. Binding generation authenticates publication/collection; unbind/replacement revokes old credentials without stopping accepted native work. Archive retains local session ownership, revokes LAN membership when present, and fails closed on missing Native data. Archive and rename hold a Runtime admission barrier from suspension through their lifecycle commit, so relay traffic cannot reactivate the Room in between, and a Service lifecycle append refuses while any Runtime still owns the Room's Event Log.
 
-`internal/relayclient/` associates from `CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`, or `GROK_SESSION_ID` at bind. Approved hooks re-confirm that identity and may record a transcript reference, but never parse vendor transcripts or implicitly rebind. Session/workspace hints grant neither trust nor file access. Private unconfirmed attempts cannot overwrite active credentials before confirmation. Same-user process access is outside the isolation claim.
+`internal/relayclient/` associates from `CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`, or `GROK_SESSION_ID` at bind. Gemini instead uses its approved BeforeTool hook's official session metadata, scoped to the live harness process; it has no shell-variable fallback. Approved Stop hooks, or Gemini AfterAgent, re-confirm that identity and may record a transcript reference, but never parse vendor transcripts or implicitly rebind. Session/workspace hints grant neither trust nor file access. Private unconfirmed attempts cannot overwrite active credentials before confirmation. Same-user process access is outside the isolation claim.
 
 Stop publication and receive-side park are independent. Local pending sequence/body is saved atomically and reconciled by its original key after ambiguous results. Collection persists `delivering` before stdout and acknowledges only after output; unknown delivery is not automatically replayed. Grok readiness feedback never contains a claimed envelope, and clipped replies require explicit full-text publication.
 
