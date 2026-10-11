@@ -4,6 +4,8 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+## [v5.15.0] — 2026-10-11
+
 ### Added
 
 - Guide an unbound Native Room from its own page: while a slot this machine owns has no confirmed session, the main view shows each Agent's Runtime and observed binding state with the exact `pairroom relay bind --room <id> --slot N` command the hosting Service renders — including `--service-file` when its data root is not the CLI default — and a copy button that falls back to selecting the command for manual copy. The guide follows the observed binding state, so it returns whenever a locally owned slot is unassociated again, and a LAN guest slot is never offered a local bind because it joins through its invitation.
